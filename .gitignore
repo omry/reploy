@@ -1,0 +1,7 @@
+dist/
+/reploy
+/reploy.exe
+__pycache__/
+*.pyc
+.coverage
+.pytest_cache/

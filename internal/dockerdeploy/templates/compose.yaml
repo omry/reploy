@@ -1,0 +1,180 @@
+services:
+  app:
+    image: ${REPLOY_IMAGE:-{{DEFAULT_IMAGE}}}
+    container_name: ${REPLOY_CONTAINER_NAME:-{{DEFAULT_CONTAINER_NAME}}}
+    user: ${REPLOY_CONTAINER_USER:-{{DEFAULT_CONTAINER_USER}}}
+    restart: ${REPLOY_RESTART:-{{DEFAULT_RESTART}}}
+    environment:
+      REPLOY_CONTAINER_HOST: ${REPLOY_CONTAINER_HOST:-{{DEFAULT_CONTAINER_HOST}}}
+      REPLOY_HOST_BIND: ${REPLOY_HOST_BIND:-{{DEFAULT_HOST_BIND}}}
+      REPLOY_HOST_PORT: ${REPLOY_HOST_PORT:-{{DEFAULT_HOST_PORT}}}
+      REPLOY_CONTAINER_PORT: ${REPLOY_CONTAINER_PORT:-{{DEFAULT_CONTAINER_PORT}}}
+      REPLOY_PUBLIC_SCHEME: ${REPLOY_PUBLIC_SCHEME:-{{DEFAULT_PUBLIC_SCHEME}}}
+      REPLOY_PUBLIC_BASE_URL: ${REPLOY_PUBLIC_BASE_URL:-{{DEFAULT_PUBLIC_BASE_URL}}}
+      REPLOY_RUNTIME_ROOT: ${REPLOY_RUNTIME_ROOT:-{{DEFAULT_RUNTIME_ROOT}}}
+      REPLOY_PIP_VERBOSE: ${REPLOY_PIP_VERBOSE:-}
+      HOME: ${REPLOY_CONTAINER_HOME:-{{DEFAULT_CONTAINER_HOME}}}
+{{APP_ENVIRONMENT}}
+    volumes:
+      - ${REPLOY_CONFIG_DIR:?set REPLOY_CONFIG_DIR}:/config:${REPLOY_CONFIG_MOUNT:-ro}
+      - ${REPLOY_REQUIREMENTS_FILE:?set REPLOY_REQUIREMENTS_FILE}:/requirements.txt:ro
+      - ${REPLOY_BUNDLE_DIR:?set REPLOY_BUNDLE_DIR}:/bundle:ro
+      - ${REPLOY_RUNTIME_DIR:-./.reploy/runtime}:/reploy-runtime
+{{LOCAL_SOURCE_VOLUMES}}
+      - ${REPLOY_DATA_DIR:?set REPLOY_DATA_DIR}:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${REPLOY_HOST_BIND:-{{DEFAULT_HOST_BIND}}}:${REPLOY_HOST_PORT:-{{DEFAULT_HOST_PORT}}}:${REPLOY_CONTAINER_PORT:-{{DEFAULT_CONTAINER_PORT}}}"
+    networks:
+      - reploy
+    command: >
+      sh -lc
+      '{{CONTAINER_COMMANDS}}
+      reploy_status_start() {
+        reploy_status_label="$$1";
+        reploy_status_pid="";
+        reploy_status_plain="";
+        if [ -t 1 ]; then
+          (
+            while :; do
+              printf "\r| %s" "$$reploy_status_label"; sleep 0.12;
+              printf "\r/ %s" "$$reploy_status_label"; sleep 0.12;
+              printf "\r- %s" "$$reploy_status_label"; sleep 0.12;
+              printf "\r\\ %s" "$$reploy_status_label"; sleep 0.12;
+            done
+          ) &
+          reploy_status_pid="$$!";
+        else
+          reploy_status_plain=1;
+          echo "$$reploy_status_label...";
+        fi;
+      };
+      reploy_status_stop() {
+        reploy_status_result="$$1";
+        if [ -n "$${reploy_status_pid:-}" ]; then
+          kill "$$reploy_status_pid" 2>/dev/null || true;
+          wait "$$reploy_status_pid" 2>/dev/null || true;
+          if [ "$$reploy_status_result" = 0 ]; then
+            printf "\r%s... done\n" "$$reploy_status_label";
+          else
+            printf "\r%s... failed\n" "$$reploy_status_label";
+          fi;
+        elif [ -n "$${reploy_status_plain:-}" ]; then
+          if [ "$$reploy_status_result" = 0 ]; then
+            echo "$$reploy_status_label... done";
+          else
+            echo "$$reploy_status_label... failed";
+          fi;
+        fi;
+        reploy_status_label="";
+        reploy_status_pid="";
+        reploy_status_plain="";
+      };
+      run_pip_install() {
+        if [ -n "$${REPLOY_PIP_VERBOSE:-}" ]; then
+          "$$venv_python" -m pip --disable-pip-version-check install "$$@";
+        elif "$$venv_python" -m pip --disable-pip-version-check install -q "$$@" >"$$pip_log" 2>&1; then
+          rm -f "$$pip_log";
+        else
+          cat "$$pip_log" >&2;
+          return 1;
+        fi;
+      };
+      prepare_python_runtime() {
+        if [ "$$bundle_has_wheels" = 1 ]; then mkdir -p "$$runtime_root"; fi &&
+        rm -rf "$$runtime_venv" &&
+        python -m venv "$$runtime_venv" &&
+        venv_python="$$runtime_venv/bin/python" &&
+        PATH="$$runtime_venv/bin:$$PATH" &&
+        export PATH &&
+        if grep -Eq "^[[:space:]]*/source/app(/|$)" /requirements.txt; then
+          cp /requirements.txt /tmp/reploy-requirements.txt &&
+          awk "!/^[[:space:]]*(#|$)/ && !/^[[:space:]]*\\/source\\/app(\\/|$)/ { print }" /tmp/reploy-requirements.txt > /tmp/reploy-requirements.pinned &&
+          awk "/^[[:space:]]*\\/source\\/app(\\/|$)/ { sub(/^[[:space:]]*/, \"\"); sub(/[[:space:]]*$/, \"\"); print }" /tmp/reploy-requirements.txt > /tmp/reploy-requirements.editable &&
+          if [ -s /tmp/reploy-requirements.pinned ]; then
+            if [ "$$bundle_has_wheels" = 1 ]; then
+              run_pip_install --no-cache-dir --no-index --find-links /bundle -r /tmp/reploy-requirements.pinned;
+            else
+              run_pip_install --no-cache-dir -r /tmp/reploy-requirements.pinned;
+            fi;
+          fi &&
+          while IFS= read -r requirement; do
+            if [ "$$bundle_has_wheels" = 1 ]; then
+              run_pip_install --no-cache-dir --no-index --find-links /bundle --no-deps --no-build-isolation -e "$$requirement" || return 1;
+            else
+              run_pip_install --no-cache-dir --no-deps --no-build-isolation -e "$$requirement" || return 1;
+            fi;
+          done < /tmp/reploy-requirements.editable;
+        elif [ "$$bundle_has_wheels" = 1 ]; then
+          run_pip_install --no-cache-dir --no-index --find-links /bundle -r /requirements.txt;
+        else
+          run_pip_install --no-cache-dir -r /requirements.txt;
+        fi &&
+        touch "$$runtime_ready";
+      };
+
+      runtime_root="$${REPLOY_RUNTIME_ROOT:-{{DEFAULT_RUNTIME_ROOT}}}" &&
+      case "$$runtime_root" in /reploy-runtime/python-venv|/reploy-runtime/python-venv/*) ;; *) echo "error: REPLOY_RUNTIME_ROOT must stay under /reploy-runtime/python-venv" >&2; exit 1;; esac &&
+      case "$$runtime_root" in *..*) echo "error: REPLOY_RUNTIME_ROOT must not contain .." >&2; exit 1;; esac &&
+      case "$$HOME" in /tmp/*) ;; *) echo "error: HOME must stay under /tmp" >&2; exit 1;; esac &&
+      case "$$HOME" in *..*) echo "error: HOME must not contain .." >&2; exit 1;; esac &&
+      bundle_has_wheels=0 &&
+      if [ -d /bundle ] && find /bundle -maxdepth 1 -name "*.whl" -print -quit | grep -q .; then bundle_has_wheels=1; fi &&
+      if [ "$$bundle_has_wheels" = 1 ]; then
+        bundle_fingerprint="$$( { python -VV 2>&1; cat /requirements.txt; find /bundle -maxdepth 1 -type f -name "*.whl" -print | sort | while IFS= read -r wheel; do basename "$$wheel"; sha256sum "$$wheel"; done; } | sha256sum | cut -d " " -f 1 )" &&
+        runtime_venv="$$runtime_root/$$bundle_fingerprint";
+      else
+        bundle_fingerprint="" &&
+        runtime_venv="/tmp/reploy-venv";
+      fi &&
+      mkdir -p "$$HOME" &&
+      pip_log=/tmp/reploy-pip-install.log &&
+      runtime_ready="$$runtime_venv/.reploy-installed" &&
+      if [ ! -f "$$runtime_ready" ]; then
+        reploy_status_start "Preparing Python runtime" &&
+        if prepare_python_runtime; then
+          reploy_status_stop 0;
+        else
+          reploy_status_stop 1;
+          exit 1;
+        fi;
+      fi &&
+      venv_python="$$runtime_venv/bin/python" &&
+      PATH="$$runtime_venv/bin:$$PATH" &&
+      export PATH &&
+      set -- &&
+      if [ "$${REPLOY_INCLUDE_RUNTIME_OVERRIDES:-1}" != 0 ]; then
+        reploy_public_host="$${REPLOY_HOST_BIND:-{{DEFAULT_HOST_BIND}}}" &&
+        case "$$reploy_public_host" in 0.0.0.0) reploy_public_host=127.0.0.1;; *:*) reploy_public_host="[$$reploy_public_host]";; esac &&
+        export REPLOY_PUBLIC_HOST="$$reploy_public_host" &&
+{{RUNTIME_OVERRIDES}}
+        if [ -n "$${REPLOY_CONFIG_OVERRIDES_FILE:-}" ]; then
+          while IFS= read -r override; do set -- "$$@" "$$override"; done < "$$REPLOY_CONFIG_OVERRIDES_FILE";
+        fi;
+      fi &&
+      forwarded_index="$${REPLOY_FORWARDED_ARGC:-0}" &&
+      while [ "$$forwarded_index" -gt 0 ]; do
+        forwarded_index=$$((forwarded_index - 1));
+        forwarded_name="REPLOY_FORWARDED_ARG_$${forwarded_index}";
+        forwarded_arg="$$(printenv "$$forwarded_name")" || exit 1;
+        set -- "$$forwarded_arg" "$$@";
+      done &&
+      config_check_log=/tmp/reploy-config-check.log &&
+      if [ "$${REPLOY_CONTAINER_COMMAND:-{{DEFAULT_CONTAINER_COMMAND}}}" != {{DEFAULT_CONTAINER_COMMAND}} ]; then
+        run_reploy_container_command "$$@";
+        exit $$?;
+      elif {{CONFIG_CHECK_COMMAND_FUNCTION}} "$$@" >"$$config_check_log" 2>&1; then
+        rm -f "$$config_check_log";
+      else
+        cat "$$config_check_log" >&2;
+        echo "configuration check failed; app will not start until the config passes" >&2;
+        echo "run ./reploy app config check from the deployment directory" >&2;
+        exit 0;
+      fi &&
+      {{DEFAULT_CONTAINER_COMMAND_FUNCTION}} "$$@"'
+
+networks:
+  reploy:
+    name: ${REPLOY_DOCKER_NETWORK_NAME:-{{DEFAULT_NETWORK_NAME}}}
+    driver: bridge

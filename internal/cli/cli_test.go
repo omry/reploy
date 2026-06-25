@@ -1,0 +1,1583 @@
+package cli
+
+import (
+	"archive/zip"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/dockerdeploy"
+)
+
+func runCLI(args ...string) (int, string, string) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Main(args, &stdout, &stderr)
+	return code, stdout.String(), stderr.String()
+}
+
+func setCLITestPackIndex(t *testing.T) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "reploy-blueprint-index.json")
+	content := `{
+  "schema_version": 1,
+  "blueprints": {
+    "arbiter-server": {
+      "ref": "pypi:arbiter-server//arbiter_server/reploy",
+      "versioned_ref": "pypi:arbiter-server=={version}//arbiter_server/reploy"
+    },
+    "arbiter-suite": {
+      "ref": "pypi:arbiter-suite//arbiter_suite/reploy",
+      "versioned_ref": "pypi:arbiter-suite=={version}//arbiter_suite/reploy"
+    }
+  }
+}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(packIndexURLEnv, "file:"+path)
+}
+
+func TestHelp(t *testing.T) {
+	code, stdout, stderr := runCLI("--help")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if !strings.Contains(stdout, "Usage: reploy [--docker] COMMAND") {
+		t.Fatalf("stdout did not contain usage:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "blueprint-index") {
+		t.Fatalf("stdout did not contain blueprint-index command:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestVersion(t *testing.T) {
+	code, stdout, stderr := runCLI("--version")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if stdout != "reploy dev\n" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestPackIndexRefreshLoadsFileIndex(t *testing.T) {
+	indexPath := filepath.Join(t.TempDir(), "reploy-blueprint-index.json")
+	if err := os.WriteFile(indexPath, []byte(`{"schema_version":1,"blueprints":{"demo":{"ref":"pypi:demo-pkg//demo_pkg/reploy","versioned_ref":"pypi:demo-pkg=={version}//demo_pkg/reploy"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := runCLI("blueprint-index", "refresh", "--url", "file:"+indexPath)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "loaded blueprint index from file:"+indexPath) || !strings.Contains(stdout, "1 shorthands") {
+		t.Fatalf("stdout did not describe file index load:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestPackIndexRefreshDownloadsAndCachesHTTPIndex(t *testing.T) {
+	indexContent := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi:demo-pkg//demo_pkg/reploy","versioned_ref":"pypi:demo-pkg=={version}//demo_pkg/reploy"}}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, indexContent)
+	}))
+	defer server.Close()
+	cacheDir := filepath.Join(t.TempDir(), "cache")
+	t.Setenv("REPLOY_CACHE_DIR", cacheDir)
+
+	code, stdout, stderr := runCLI("blueprint-index", "refresh", "--url", server.URL+"/index.json")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "cached blueprint index from "+server.URL+"/index.json") || !strings.Contains(stdout, "1 shorthands") {
+		t.Fatalf("stdout did not describe cached index:\n%s", stdout)
+	}
+	if _, err := os.Stat(packIndexCachePath(server.URL + "/index.json")); err != nil {
+		t.Fatalf("missing cached index: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerHelp(t *testing.T) {
+	code, stdout, stderr := runCLI("--help")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if !strings.Contains(stdout, "Usage: reploy [--docker] COMMAND") {
+		t.Fatalf("stdout did not contain deployment usage:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "--docker") || !strings.Contains(stdout, "--aws") {
+		t.Fatalf("stdout did not contain target options:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "smoke") {
+		t.Fatalf("stdout should not contain premature smoke command:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "Arbiter health endpoint") || !strings.Contains(stdout, "blueprint-configured app health endpoint") {
+		t.Fatalf("stdout did not describe generic health probe:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "Bundle:") || !strings.Contains(stdout, "add-source") || !strings.Contains(stdout, "upgrade") {
+		t.Fatalf("stdout did not contain bundle command tree:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "list") || !strings.Contains(stdout, "all") || !strings.Contains(stdout, "list-options") {
+		t.Fatalf("stdout did not contain bundle list commands:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "--preinstall") || !strings.Contains(stdout, "--quiet") {
+		t.Fatalf("stdout did not contain doctor options:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "--follow") || !strings.Contains(stdout, "Follow logs instead of exiting after current output") {
+		t.Fatalf("stdout did not contain logs follow option:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "--wait") || !strings.Contains(stdout, "--timeout DURATION") {
+		t.Fatalf("stdout did not contain expected test timeout options:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "install") || !strings.Contains(stdout, "--to DIR") || !strings.Contains(stdout, "--dry-run") {
+		t.Fatalf("stdout did not contain install command/options:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "app") {
+		t.Fatalf("stdout did not contain app command:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "bootstrap arbiter") || strings.Contains(stdout, "imap account") {
+		t.Fatalf("stdout contained app-specific examples in generic help:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerTargetOptionUsesDefaultDeploymentCommands(t *testing.T) {
+	code, stdout, stderr := runCLI("--docker", "--help")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if !strings.Contains(stdout, "Usage: reploy [--docker] COMMAND") || !strings.Contains(stdout, "bundle") {
+		t.Fatalf("stdout did not contain deployment help:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestAppHelp(t *testing.T) {
+	code, stdout, stderr := runCLI("app", "--help")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if !strings.Contains(stdout, "Usage: reploy app COMMAND") {
+		t.Fatalf("stdout did not contain app usage:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "deployment bundle, not a host executable from") {
+		t.Fatalf("stdout did not explain deployed app runtime:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "Show this deployment's app subcommands") || !strings.Contains(stdout, "reploy app COMMAND") {
+		t.Fatalf("stdout did not contain generic app command guidance:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "Arbiter") || strings.Contains(stdout, "bootstrap plugin PLUGIN account NAME") {
+		t.Fatalf("stdout contained app-specific help:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestParseDockerAppOptionsPreservesAppArgs(t *testing.T) {
+	options, err := parseDockerAppOptions([]string{"--dir", "deployment", "bootstrap", "plugin", "imap", "account", "primary", "--force"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Dir != "deployment" {
+		t.Fatalf("dir = %q", options.Dir)
+	}
+	if got := strings.Join(options.CommandArgs, " "); got != "bootstrap plugin imap account primary --force" {
+		t.Fatalf("command args = %q", got)
+	}
+}
+
+func TestAppShowsAppIDAndPackSubcommands(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("app", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("app failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	expected := "app: arbiter\napp subcommands:\n  bootstrap server\n  bootstrap plugin\n  config activate\n  config check\n  config show\n  env bootstrap\n  env check\n"
+	if stdout != expected {
+		t.Fatalf("stdout = %q, want %q", stdout, expected)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestAppListIsNotSpecial(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("app", "list", "--dir", deployDir)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "no app command matches: list") {
+		t.Fatalf("stderr did not show pack-command miss:\n%s", stderr)
+	}
+}
+
+func TestAppCommandSuggestsForwardedFlagTypo(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	workDir := t.TempDir()
+	t.Chdir(workDir)
+	code, stdout, stderr := runCLI("init", "--blueprint", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("app", "bootstrap", "server", "--foce")
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "unknown forwarded flag: --foce") || !strings.Contains(stderr, "did you mean --force?") {
+		t.Fatalf("stderr did not suggest --force:\n%s", stderr)
+	}
+}
+
+func TestAWSTargetOptionIsReserved(t *testing.T) {
+	code, stdout, stderr := runCLI("--aws", "up")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "deployment target aws is not supported yet") {
+		t.Fatalf("stderr missing unsupported target message:\n%s", stderr)
+	}
+}
+
+func TestDockerUpdateHelp(t *testing.T) {
+	code, stdout, stderr := runCLI("update", "--help")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if !strings.Contains(stdout, "Usage: reploy [--docker] update [OPTIONS]") {
+		t.Fatalf("stdout did not contain update usage:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "--dir DIR") || !strings.Contains(stdout, "Deployment directory to update, default reploy-staging") {
+		t.Fatalf("stdout did not describe update directory option:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "--force") || !strings.Contains(stdout, "--blueprint REF") {
+		t.Fatalf("stdout did not describe update options:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerLogsFollowOptionParses(t *testing.T) {
+	options, err := parseDockerRuntimeOptions([]string{"--dir", "deployment", "--follow"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Dir != "deployment" {
+		t.Fatalf("dir = %q", options.Dir)
+	}
+	if !options.Follow {
+		t.Fatal("follow = false, want true")
+	}
+}
+
+func TestDockerRuntimeRejectsFollowOutsideLogs(t *testing.T) {
+	code, stdout, stderr := runCLI("ps", "--follow")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "--follow is only supported with logs") {
+		t.Fatalf("stderr missing follow validation message:\n%s", stderr)
+	}
+}
+
+func TestDockerTestTimeoutOptionParses(t *testing.T) {
+	options, err := parseDockerTestOptions([]string{"--dir", "deployment", "--timeout", "2s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Dir != "deployment" {
+		t.Fatalf("dir = %q", options.Dir)
+	}
+	if options.Timeout != 2*time.Second {
+		t.Fatalf("timeout = %s", options.Timeout)
+	}
+}
+
+func TestDockerTestRejectsWaitOption(t *testing.T) {
+	code, stdout, stderr := runCLI("test", "--wait")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "unknown option: --wait") {
+		t.Fatalf("stderr missing wait validation message:\n%s", stderr)
+	}
+}
+
+func TestDockerInitWritesDeployment(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "updated "+filepath.Join(deployDir, dockerdeploy.ComposeFileName)) {
+		t.Fatalf("stdout did not include compose write:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "created staging directory for arbiter: "+deployDir) {
+		t.Fatalf("stdout did not include staging summary:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(deployDir, dockerdeploy.StateFileName)); err != nil {
+		t.Fatalf("missing state: %v", err)
+	}
+}
+
+func TestDockerInitUsesDefaultDeploymentDir(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	workDir := t.TempDir()
+	t.Chdir(workDir)
+
+	code, stdout, stderr := runCLI("init", "--blueprint", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	deployDir := filepath.Join(workDir, "reploy-staging")
+	if _, err := os.Stat(filepath.Join(deployDir, dockerdeploy.StateFileName)); err != nil {
+		t.Fatalf("missing state in default deployment dir: %v", err)
+	}
+	if !strings.Contains(stdout, "updated "+filepath.Join("reploy-staging", dockerdeploy.ComposeFileName)) {
+		t.Fatalf("stdout did not include default compose write:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "created staging directory for arbiter: reploy-staging") {
+		t.Fatalf("stdout did not include default staging summary:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerInitExistingDefaultDeploymentSuggestsUpdate(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	workDir := t.TempDir()
+	t.Chdir(workDir)
+
+	code, stdout, stderr := runCLI("init", "--blueprint", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("initial init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("init", "--blueprint", "file:"+packDir)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "deployment directory already exists at reploy-staging") {
+		t.Fatalf("stderr missing existing deployment message:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, `run "reploy update" to update it`) {
+		t.Fatalf("stderr missing update hint:\n%s", stderr)
+	}
+}
+
+func TestDockerInitRequiresPack(t *testing.T) {
+	code, stdout, stderr := runCLI("init")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "--blueprint is required") {
+		t.Fatalf("stderr did not contain required blueprint message:\n%s", stderr)
+	}
+}
+
+func TestDockerInitValidatesPack(t *testing.T) {
+	code, stdout, stderr := runCLI("init", "--blueprint", "oci:example")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "unsupported blueprint reference scheme: oci") {
+		t.Fatalf("stderr did not contain blueprint validation message:\n%s", stderr)
+	}
+}
+
+func TestDockerInitAcceptsExplicitRequirements(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+
+	code, stdout, stderr := runCLI(
+		"init",
+		"--dir",
+		deployDir,
+		"--blueprint",
+		"file:"+packDir,
+		"--requirement",
+		"arbiter-server==1.2.3",
+		"--requirement=arbiter-imap==1.2.3",
+	)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	requirements, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.RequirementsFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(requirements) != "arbiter-server==1.2.3\narbiter-imap==1.2.3\n" {
+		t.Fatalf("requirements = %q", requirements)
+	}
+}
+
+func TestParseDockerCommandOptionsExpandsArbiterSuitePackAlias(t *testing.T) {
+	setCLITestPackIndex(t)
+
+	options, err := parseDockerCommandOptions([]string{"--blueprint", "arbiter-suite"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Pack.Raw != "arbiter-suite" {
+		t.Fatalf("raw = %q", options.Pack.Raw)
+	}
+	if options.Pack.Scheme != "pypi" {
+		t.Fatalf("scheme = %q", options.Pack.Scheme)
+	}
+	if options.Pack.Source != "arbiter-suite" {
+		t.Fatalf("source = %q", options.Pack.Source)
+	}
+	if options.Pack.Subdir != "arbiter_suite/reploy" {
+		t.Fatalf("subdir = %q", options.Pack.Subdir)
+	}
+	if options.Pack.IsPinned {
+		t.Fatal("latest alias should not be pinned")
+	}
+}
+
+func TestParseDockerCommandOptionsExpandsPinnedArbiterSuitePackAlias(t *testing.T) {
+	setCLITestPackIndex(t)
+
+	options, err := parseDockerCommandOptions([]string{"--blueprint=arbiter-suite==1.2.3"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Pack.Raw != "arbiter-suite==1.2.3" {
+		t.Fatalf("raw = %q", options.Pack.Raw)
+	}
+	if options.Pack.Source != "arbiter-suite==1.2.3" {
+		t.Fatalf("source = %q", options.Pack.Source)
+	}
+	if options.Pack.Subdir != "arbiter_suite/reploy" {
+		t.Fatalf("subdir = %q", options.Pack.Subdir)
+	}
+	if !options.Pack.IsPinned {
+		t.Fatal("pinned alias should be pinned")
+	}
+}
+
+func TestParseDockerCommandOptionsExpandsArbiterServerPackAlias(t *testing.T) {
+	setCLITestPackIndex(t)
+
+	options, err := parseDockerCommandOptions([]string{"--blueprint", "arbiter-server"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Pack.Raw != "arbiter-server" {
+		t.Fatalf("raw = %q", options.Pack.Raw)
+	}
+	if options.Pack.Scheme != "pypi" {
+		t.Fatalf("scheme = %q", options.Pack.Scheme)
+	}
+	if options.Pack.Source != "arbiter-server" {
+		t.Fatalf("source = %q", options.Pack.Source)
+	}
+	if options.Pack.Subdir != "arbiter_server/reploy" {
+		t.Fatalf("subdir = %q", options.Pack.Subdir)
+	}
+	if options.Pack.IsPinned {
+		t.Fatal("latest alias should not be pinned")
+	}
+}
+
+func TestParseDockerCommandOptionsExpandsPinnedArbiterServerPackAlias(t *testing.T) {
+	setCLITestPackIndex(t)
+
+	options, err := parseDockerCommandOptions([]string{"--blueprint=arbiter-server==1.2.3"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Pack.Raw != "arbiter-server==1.2.3" {
+		t.Fatalf("raw = %q", options.Pack.Raw)
+	}
+	if options.Pack.Source != "arbiter-server==1.2.3" {
+		t.Fatalf("source = %q", options.Pack.Source)
+	}
+	if options.Pack.Subdir != "arbiter_server/reploy" {
+		t.Fatalf("subdir = %q", options.Pack.Subdir)
+	}
+	if !options.Pack.IsPinned {
+		t.Fatal("pinned alias should be pinned")
+	}
+}
+
+func TestParseDockerCommandOptionsPreservesArbiterSuitePackAliasQuery(t *testing.T) {
+	setCLITestPackIndex(t)
+
+	options, err := parseDockerCommandOptions([]string{"--blueprint", "arbiter-suite?index-url=http://example.test"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Pack.Raw != "arbiter-suite?index-url=http://example.test" {
+		t.Fatalf("raw = %q", options.Pack.Raw)
+	}
+	if options.Pack.Query.Get("index-url") != "http://example.test" {
+		t.Fatalf("index-url query = %q", options.Pack.Query.Get("index-url"))
+	}
+}
+
+func TestParseDockerCommandOptionsRejectsDuplicatePack(t *testing.T) {
+	setCLITestPackIndex(t)
+
+	_, err := parseDockerCommandOptions([]string{"--blueprint", "arbiter-suite", "--blueprint", "file:deploy/arbiter.blueprint.yaml"}, true)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "--blueprint may only be provided once") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseDockerCommandOptionsRejectsBareArbiterPackAlias(t *testing.T) {
+	_, err := parseDockerCommandOptions([]string{"--blueprint", "arbiter"}, true)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "unknown blueprint shorthand") || !strings.Contains(err.Error(), "Reploy blueprint index") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseDockerCommandOptionsLoadsPackIndexFromHTTPAndCache(t *testing.T) {
+	indexContent := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi:demo-pkg//demo_pkg/reploy","versioned_ref":"pypi:demo-pkg=={version}//demo_pkg/reploy"}}}`
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, indexContent)
+	}))
+	cacheDir := filepath.Join(t.TempDir(), "cache")
+	t.Setenv("REPLOY_CACHE_DIR", cacheDir)
+	t.Setenv(packIndexURLEnv, server.URL+"/index.json")
+
+	options, err := parseDockerCommandOptions([]string{"--blueprint", "demo==1.2.3"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Pack.Source != "demo-pkg==1.2.3" || options.Pack.Subdir != "demo_pkg/reploy" {
+		t.Fatalf("pack = %#v", options.Pack)
+	}
+	server.Close()
+
+	options, err = parseDockerCommandOptions([]string{"--blueprint", "demo"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Pack.Source != "demo-pkg" {
+		t.Fatalf("source = %q", options.Pack.Source)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+}
+
+func TestParseDockerCommandOptionsRequiresVersionPlaceholderForPinnedShorthand(t *testing.T) {
+	indexPath := filepath.Join(t.TempDir(), "blueprint-index.json")
+	content := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi:demo-pkg//demo_pkg/reploy","versioned_ref":"pypi:demo-pkg//demo_pkg/reploy"}}}`
+	if err := os.WriteFile(indexPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(packIndexURLEnv, "file:"+indexPath)
+
+	_, err := parseDockerCommandOptions([]string{"--blueprint", "demo==1.2.3"}, true)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "must contain {version}") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDockerInitLoadsPyPIPackAndRecordsResolvedArtifact(t *testing.T) {
+	version := "4.5.6"
+	subdir := "demo_pkg/reploy"
+	wheel := makeCLITestPackWheel(t, subdir, version)
+	indexURL := makeCLITestPyPIIndex(t, wheel, version)
+	cacheDir := filepath.Join(t.TempDir(), "cache")
+	t.Setenv("REPLOY_CACHE_DIR", cacheDir)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	packRef := "pypi:demo-pkg//" + subdir + "?index-url=" + indexURL
+
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", packRef)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "updated "+filepath.Join(deployDir, dockerdeploy.ComposeFileName)) {
+		t.Fatalf("stdout did not include compose write:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	requirements, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.RequirementsFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(requirements) != "demo-pkg==4.5.6\n" {
+		t.Fatalf("requirements = %q", requirements)
+	}
+
+	stateContent, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.StateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state deploy.DeploymentState
+	if err := json.Unmarshal(stateContent, &state); err != nil {
+		t.Fatal(err)
+	}
+	expectedResolvedRef := "pypi:demo-pkg==" + version + "//" + subdir
+	if state.Blueprint.Raw != expectedResolvedRef {
+		t.Fatalf("state blueprint raw = %q, want %q", state.Blueprint.Raw, expectedResolvedRef)
+	}
+	if !state.Blueprint.IsPinned {
+		t.Fatalf("state blueprint was not pinned: %+v", state.Blueprint)
+	}
+	if state.RequestedBlueprintRef != packRef {
+		t.Fatalf("requested blueprint ref = %q, want %q", state.RequestedBlueprintRef, packRef)
+	}
+	if state.ResolvedArtifact == nil {
+		t.Fatal("missing resolved artifact")
+	}
+	artifact := *state.ResolvedArtifact
+	expectedFilename := fmt.Sprintf("demo_pkg-%s-py3-none-any.whl", version)
+	if artifact.Scheme != "pypi" {
+		t.Fatalf("artifact scheme = %q, want pypi", artifact.Scheme)
+	}
+	if artifact.Package != "demo-pkg" {
+		t.Fatalf("artifact package = %q, want demo-pkg", artifact.Package)
+	}
+	if artifact.Version != version {
+		t.Fatalf("artifact version = %q, want %q", artifact.Version, version)
+	}
+	if artifact.Filename != expectedFilename {
+		t.Fatalf("artifact filename = %q, want %q", artifact.Filename, expectedFilename)
+	}
+	if artifact.SHA256 != deploy.HashBytes(wheel) {
+		t.Fatalf("artifact sha256 = %q, want %q", artifact.SHA256, deploy.HashBytes(wheel))
+	}
+	if artifact.Subdir != subdir {
+		t.Fatalf("artifact subdir = %q, want %q", artifact.Subdir, subdir)
+	}
+	if !strings.HasPrefix(artifact.CachePath, cacheDir) {
+		t.Fatalf("artifact cache path = %q, want under %q", artifact.CachePath, cacheDir)
+	}
+	if !strings.HasPrefix(artifact.BlueprintPath, cacheDir) {
+		t.Fatalf("artifact blueprint path = %q, want under %q", artifact.BlueprintPath, cacheDir)
+	}
+	if _, err := os.Stat(artifact.CachePath); err != nil {
+		t.Fatalf("missing cached wheel: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(artifact.BlueprintPath, "arbiter.blueprint.yaml")); err != nil {
+		t.Fatalf("missing extracted blueprint: %v", err)
+	}
+}
+
+func TestDockerUpdateRejectsExplicitRequirements(t *testing.T) {
+	code, stdout, stderr := runCLI("update", "--requirement", "arbiter-suite")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "--requirement is only supported with init") {
+		t.Fatalf("stderr did not contain requirement message:\n%s", stderr)
+	}
+}
+
+func TestUnknownCommand(t *testing.T) {
+	code, stdout, stderr := runCLI("wat")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "unknown command: wat") {
+		t.Fatalf("stderr did not contain unknown command:\n%s", stderr)
+	}
+}
+
+func TestBootstrapCommandIsNotPublicSurface(t *testing.T) {
+	code, stdout, stderr := runCLI("bootstrap")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "unknown command: bootstrap") {
+		t.Fatalf("stderr did not contain unknown command:\n%s", stderr)
+	}
+}
+
+func TestSmokeCommandIsNotPublicSurface(t *testing.T) {
+	code, stdout, stderr := runCLI("smoke")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "unknown command: smoke") {
+		t.Fatalf("stderr did not contain unknown command:\n%s", stderr)
+	}
+}
+
+func TestTopLevelConfigCommandIsNotAppConfigSurface(t *testing.T) {
+	code, stdout, stderr := runCLI("config", "check")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "unknown command: config") {
+		t.Fatalf("stderr did not contain unknown command:\n%s", stderr)
+	}
+}
+
+func TestDockerUpdateUsesExistingState(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("update", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("update failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "up_to_date\n" {
+		t.Fatalf("stdout = %q, want one up_to_date line", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerBundleListShowsStateRoots(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("bundle", "list", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("bundle list failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "arbiter-suite\n" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerBundleListReportsMissingRequirementsProjection(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if err := os.Remove(filepath.Join(deployDir, dockerdeploy.RequirementsFileName)); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr = runCLI("bundle", "list", "--dir", deployDir)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "requirements projection is missing") || !strings.Contains(stderr, "reploy update --dir "+deployDir) {
+		t.Fatalf("stderr missing update hint:\n%s", stderr)
+	}
+}
+
+func TestDockerBundleAddAndRemoveUpdateRequirements(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("bundle", "add", "arbiter-imap==1.2.3", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("bundle add failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "updated "+filepath.Join(deployDir, dockerdeploy.RequirementsFileName)) {
+		t.Fatalf("stdout missing requirements update:\n%s", stdout)
+	}
+	requirements, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.RequirementsFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(requirements) != "arbiter-suite\narbiter-imap==1.2.3\n" {
+		t.Fatalf("requirements = %q", requirements)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+
+	code, stdout, stderr = runCLI("bundle", "remove", "arbiter-imap==1.2.3", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("bundle remove failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	requirements, err = os.ReadFile(filepath.Join(deployDir, dockerdeploy.RequirementsFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(requirements) != "arbiter-suite\n" {
+		t.Fatalf("requirements = %q", requirements)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerBundleAddAndRemoveAcceptMultipleRoots(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI(
+		"init",
+		"--dir",
+		deployDir,
+		"--blueprint",
+		"file:"+packDir,
+		"--requirement",
+		"arbiter-server==1.2.3",
+	)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("bundle", "add", "--name", "imap,smtp", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("bundle add failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if strings.Count(stdout, "requirements.txt") != 1 {
+		t.Fatalf("stdout should show one requirements update:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "selected Python packages: arbiter-imap, arbiter-smtp (dependencies included by bundle build)") {
+		t.Fatalf("stdout missing selected package summary:\n%s", stdout)
+	}
+	requirements, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.RequirementsFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(requirements) != "arbiter-server==1.2.3\narbiter-imap\narbiter-smtp\n" {
+		t.Fatalf("requirements = %q", requirements)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+
+	code, stdout, stderr = runCLI("bundle", "add", "--name", "imap,smtp", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("second bundle add failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "already selected Python packages: arbiter-imap, arbiter-smtp (dependencies included by bundle build)") {
+		t.Fatalf("stdout missing already-selected package summary:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "up_to_date") {
+		t.Fatalf("stdout missing up_to_date:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+
+	code, stdout, stderr = runCLI("bundle", "remove", "imap,smtp", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("bundle remove failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	requirements, err = os.ReadFile(filepath.Join(deployDir, dockerdeploy.RequirementsFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(requirements) != "arbiter-server==1.2.3\n" {
+		t.Fatalf("requirements = %q", requirements)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerBundleAddWithoutRootsShowsUsefulHint(t *testing.T) {
+	code, stdout, stderr := runCLI("bundle", "add")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "bundle add expects a package root or --name NAME") ||
+		!strings.Contains(stderr, "reploy bundle add --name imap,smtp") ||
+		!strings.Contains(stderr, "reploy bundle add PACKAGE[==VERSION]") {
+		t.Fatalf("stderr missing useful hint:\n%s", stderr)
+	}
+}
+
+func TestDockerBundleAddRejectsLikelyOptionTypoWithoutWriting(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI(
+		"init",
+		"--dir",
+		deployDir,
+		"--blueprint",
+		"file:"+packDir,
+		"--requirement",
+		"arbiter-server==1.2.3",
+	)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("bundle", "add", "--name", "imap,smtpa", "--dir", deployDir)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, `unknown bundle option "smtpa"`) || !strings.Contains(stderr, `did you mean "smtp"`) || !strings.Contains(stderr, "--force") {
+		t.Fatalf("stderr missing validation message:\n%s", stderr)
+	}
+	requirements, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.RequirementsFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(requirements) != "arbiter-server==1.2.3\n" {
+		t.Fatalf("requirements were partially updated: %q", requirements)
+	}
+}
+
+func TestDockerBundleAddUnknownOptionListsOptionsOnSeparateLines(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI(
+		"init",
+		"--dir",
+		deployDir,
+		"--blueprint",
+		"file:"+packDir,
+		"--requirement",
+		"arbiter-server==1.2.3",
+	)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("bundle", "add", "--name", "foo", "--dir", deployDir)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "use one of:\n  arbiter-suite\n  imap\n  smtp") {
+		t.Fatalf("stderr did not list options on separate lines:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, `unknown bundle option "foo"`) || !strings.Contains(stderr, "--force") {
+		t.Fatalf("stderr missing validation message:\n%s", stderr)
+	}
+}
+
+func TestDockerBundleAddAcceptsUnknownUnpinnedPackage(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI(
+		"init",
+		"--dir",
+		deployDir,
+		"--blueprint",
+		"file:"+packDir,
+		"--requirement",
+		"arbiter-server==1.2.3",
+	)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("bundle", "add", "aa", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("bundle add failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	requirements, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.RequirementsFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(requirements) != "arbiter-server==1.2.3\naa\n" {
+		t.Fatalf("requirements = %q", requirements)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerBundleAddForceTreatsUnknownNameAsPackage(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI(
+		"init",
+		"--dir",
+		deployDir,
+		"--blueprint",
+		"file:"+packDir,
+		"--requirement",
+		"arbiter-server==1.2.3",
+	)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("bundle", "add", "--name", "smtpa", "--force", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("bundle add failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	requirements, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.RequirementsFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(requirements) != "arbiter-server==1.2.3\nsmtpa\n" {
+		t.Fatalf("requirements = %q", requirements)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerBundleListOptions(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("bundle", "list-options", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("bundle list-options failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "imap\tReceive email through IMAP.") {
+		t.Fatalf("stdout missing imap option:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerBundleAddWheel(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	wheel := filepath.Join(t.TempDir(), "demo-1.0.0-py3-none-any.whl")
+	if err := os.WriteFile(wheel, []byte("wheel content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr = runCLI("bundle", "add-wheel", wheel, "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("bundle add-wheel failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "updated "+filepath.Join(deployDir, dockerdeploy.BundleDirName, filepath.Base(wheel))) {
+		t.Fatalf("stdout missing wheel update:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerBundleCheckDryRun(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("bundle", "check", "--dry-run", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("bundle check failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "would validate installation bundle:") || !strings.Contains(stdout, "docker run --rm") {
+		t.Fatalf("stdout missing dry-run command:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerBundlePrepareDryRun(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("bundle", "build", "--dry-run", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("bundle build failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "would build installation bundle:") || !strings.Contains(stdout, "docker run --rm") {
+		t.Fatalf("stdout missing dry-run command:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerBundleWithoutCommandShowsSubcommands(t *testing.T) {
+	code, stdout, stderr := runCLI("bundle")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "Usage: reploy bundle COMMAND") ||
+		!strings.Contains(stderr, "build") ||
+		!strings.Contains(stderr, "clean") ||
+		!strings.Contains(stderr, "list-options") {
+		t.Fatalf("stderr missing bundle subcommands:\n%s", stderr)
+	}
+}
+
+func TestDockerBundleHelpShowsSubcommands(t *testing.T) {
+	code, stdout, stderr := runCLI("bundle", "--help")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if !strings.Contains(stdout, "Usage: reploy bundle COMMAND") ||
+		!strings.Contains(stdout, "build") ||
+		!strings.Contains(stdout, "clean") ||
+		!strings.Contains(stdout, "--verbose") {
+		t.Fatalf("stdout missing bundle help:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerBundleCleanRemovesBuiltWheels(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	builtWheel := filepath.Join(deployDir, dockerdeploy.BundleDirName, "arbiter_suite-1.2.3-py3-none-any.whl")
+	if err := os.WriteFile(builtWheel, []byte("wheel\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr = runCLI("bundle", "clean", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("bundle clean failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want quiet clean", stdout)
+	}
+	if _, err := os.Stat(builtWheel); !os.IsNotExist(err) {
+		t.Fatalf("built wheel still exists: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerBundleCleanVerboseReportsRemovedWheels(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	builtWheel := filepath.Join(deployDir, dockerdeploy.BundleDirName, "arbiter_suite-1.2.3-py3-none-any.whl")
+	if err := os.WriteFile(builtWheel, []byte("wheel\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr = runCLI("bundle", "clean", "--verbose", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("bundle clean failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "removed "+builtWheel) {
+		t.Fatalf("stdout missing removed wheel:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestStartSpinnerPrintsCompletion(t *testing.T) {
+	var stderr bytes.Buffer
+	stop := startSpinner(&stderr, "building installation bundle")
+	stop(true)
+	if !strings.Contains(stderr.String(), "building installation bundle... done") {
+		t.Fatalf("spinner did not print completion:\n%q", stderr.String())
+	}
+}
+
+func TestDockerBundleCheckRejectsPyPIOnly(t *testing.T) {
+	code, stdout, stderr := runCLI("bundle", "check", "--pypi-only")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "unknown option: --pypi-only") {
+		t.Fatalf("stderr missing option error:\n%s", stderr)
+	}
+}
+
+func TestPrintUpdateResultsShowsOnlyActionablePaths(t *testing.T) {
+	var stdout bytes.Buffer
+	printUpdateResults(&stdout, []dockerdeploy.UpdateResult{
+		{Path: "deployment/compose.yaml", Status: deploy.UpdateStatusUpToDate},
+		{Path: "deployment/reploy", Status: deploy.UpdateStatusUpdated},
+		{Path: "deployment/docker.env", Status: deploy.UpdateStatusSkipped},
+	})
+
+	expected := "updated deployment/reploy\nskipped deployment/docker.env\n"
+	if stdout.String() != expected {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), expected)
+	}
+}
+
+func TestDockerInfoShowsDeploymentState(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("info", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("info failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "target: docker") || !strings.Contains(stdout, "phase: staged") {
+		t.Fatalf("stdout missing target/phase:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func makeCLITestPack(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "arbiter.blueprint.yaml"), []byte(cliTestPackManifest()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func makeCLITestPackWheel(t *testing.T, subdir string, version string) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	files := map[string]string{
+		subdir + "/arbiter.blueprint.yaml":                     cliTestPackManifest(),
+		fmt.Sprintf("demo_pkg-%s.dist-info/WHEEL", version):    "Wheel-Version: 1.0\nGenerator: reploy-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+		fmt.Sprintf("demo_pkg-%s.dist-info/METADATA", version): "Metadata-Version: 2.1\nName: demo-pkg\nVersion: " + version + "\n",
+	}
+	for path, content := range files {
+		file, err := writer.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buffer.Bytes()
+}
+
+func makeCLITestPyPIIndex(t *testing.T, wheel []byte, version string) string {
+	t.Helper()
+	filename := fmt.Sprintf("demo_pkg-%s-py3-none-any.whl", version)
+	sha256 := deploy.HashBytes(wheel)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/pypi/demo-pkg/json":
+			w.Header().Set("Content-Type", "application/json")
+			wheelURL := "http://" + r.Host + "/files/" + filename
+			response := map[string]any{
+				"info": map[string]string{"version": version},
+				"releases": map[string]any{
+					version: []map[string]any{{
+						"filename":    filename,
+						"url":         wheelURL,
+						"packagetype": "bdist_wheel",
+						"digests":     map[string]string{"sha256": sha256},
+					}},
+				},
+				"urls": []any{},
+			}
+			if err := json.NewEncoder(w).Encode(response); err != nil {
+				t.Logf("write pypi response: %v", err)
+			}
+		case "/files/" + filename:
+			w.Header().Set("Content-Type", "application/octet-stream")
+			if _, err := w.Write(wheel); err != nil {
+				t.Logf("write wheel response: %v", err)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server.URL
+}
+
+func cliTestPackManifest() string {
+	return `blueprint:
+  schema: 1
+  version: 0.1.0
+  requires_reploy: ">=0.1.0"
+
+app:
+  id: arbiter
+  provider:
+    type: python
+    identifier: arbiter-suite
+  terminal:
+    color_env: ARBITER_COLOR
+
+bundle:
+  options:
+    arbiter-suite:
+      identifier: arbiter-suite
+      group: meta
+      description: Install the full Arbiter suite.
+    imap:
+      identifier: arbiter-imap
+      group: plugins
+      description: Receive email through IMAP.
+    smtp:
+      identifier: arbiter-smtp
+      group: plugins
+      description: Send email through SMTP.
+
+docker:
+  deployment_dirs:
+    config: conf
+    bundle: .reploy/bundle
+    data: data
+  health:
+    scheme_env: REPLOY_PUBLIC_SCHEME
+    host_env: REPLOY_HOST_BIND
+    port_env: REPLOY_HOST_PORT
+    default_scheme: https
+    default_host: 127.0.0.1
+    default_port: "18075"
+    path: /_health_
+    tls_verify: false
+  default_command: serve
+  commands:
+    serve:
+      container:
+        argv:
+          - arbiter-server
+          - --config-dir
+          - /config
+          - --config-name
+          - ${ARBITER_CONFIG_NAME}
+          - serve
+    config_check:
+      trigger:
+        - config
+        - check
+      app_command: true
+      forward_flags:
+        - --live
+      container:
+        argv:
+          - arbiter-server
+          - --config-dir
+          - /config
+          - --config-name
+          - ${ARBITER_CONFIG_NAME}
+          - config
+          - check
+    bootstrap_server:
+      trigger:
+        - bootstrap
+        - server
+      app_command: true
+      forward_flags:
+        - --force
+      container:
+        argv:
+          - arbiter-server
+          - --config-dir
+          - /config
+          - --config-name
+          - ${ARBITER_CONFIG_NAME}
+          - bootstrap
+          - arbiter
+    bootstrap_plugin:
+      trigger:
+        - bootstrap
+        - plugin
+      app_command: true
+      forward_args: true
+      container:
+        argv:
+          - arbiter-server
+          - --config-dir
+          - /config
+          - --config-name
+          - ${ARBITER_CONFIG_NAME}
+          - bootstrap
+          - plugin
+    config_activate:
+      trigger:
+        - config
+        - activate
+      app_command: true
+      forward_args: true
+      container:
+        argv:
+          - arbiter-server
+          - --config-dir
+          - /config
+          - --config-name
+          - ${ARBITER_CONFIG_NAME}
+          - config
+          - activate
+    config_show:
+      trigger:
+        - config
+        - show
+      app_command: true
+      forward_args: true
+      container:
+        argv:
+          - arbiter-server
+          - --config-dir
+          - /config
+          - --config-name
+          - ${ARBITER_CONFIG_NAME}
+          - config
+          - show
+    env_bootstrap:
+      trigger:
+        - env
+        - bootstrap
+      app_command: true
+      forward_args: true
+      container:
+        argv:
+          - arbiter-server
+          - --config-dir
+          - /config
+          - --config-name
+          - ${ARBITER_CONFIG_NAME}
+          - env
+          - bootstrap
+    env_check:
+      trigger:
+        - env
+        - check
+      app_command: true
+      forward_args: true
+      container:
+        argv:
+          - arbiter-server
+          - --config-dir
+          - /config
+          - --config-name
+          - ${ARBITER_CONFIG_NAME}
+          - env
+          - check
+`
+}

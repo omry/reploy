@@ -1,0 +1,201 @@
+from __future__ import annotations
+
+import os
+import platform
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import sys
+from typing import Any
+
+from hatchling.builders.hooks.plugin.interface import BuildHookInterface
+
+
+TARGETS = {
+    "linux-amd64": ("reploy", "manylinux_2_17_x86_64"),
+    "linux-arm64": ("reploy", "manylinux_2_17_aarch64"),
+    "darwin-amd64": ("reploy", "macosx_11_0_x86_64"),
+    "darwin-arm64": ("reploy", "macosx_11_0_arm64"),
+    "windows-amd64": ("reploy.exe", "win_amd64"),
+    "windows-arm64": ("reploy.exe", "win_arm64"),
+}
+
+
+def _repo_root(project_root: str) -> Path:
+    path = Path(project_root).resolve()
+    if path.is_file():
+        path = path.parent
+    for candidate in (path, *path.parents):
+        if (candidate / "go.mod").is_file() and (
+            candidate / "cmd" / "reploy" / "main.go"
+        ).is_file():
+            return candidate
+    raise RuntimeError(f"could not find Reploy repository root from {project_root}")
+
+
+def reploy_version() -> str:
+    version = os.environ.get("REPLOY_VERSION", "").strip()
+    if version:
+        return version
+
+    pyproject = _repo_root(__file__) / "pyproject.toml"
+    match = re.search(
+        r'^version = "([^"]+)"$',
+        pyproject.read_text(encoding="utf-8"),
+        flags=re.MULTILINE,
+    )
+    if match is None:
+        raise RuntimeError(f"could not read Reploy version from {pyproject}")
+    return match.group(1)
+
+
+def current_target() -> str:
+    system = sys.platform
+    machine = platform.machine().lower()
+    arch_by_machine = {
+        "amd64": "amd64",
+        "x86_64": "amd64",
+        "arm64": "arm64",
+        "aarch64": "arm64",
+    }
+    os_by_platform = {
+        "darwin": "darwin",
+        "linux": "linux",
+        "win32": "windows",
+        "cygwin": "windows",
+        "msys": "windows",
+    }
+    try:
+        target_os = os_by_platform[system]
+        target_arch = arch_by_machine[machine]
+    except KeyError as exc:
+        raise RuntimeError(
+            f"could not infer REPLOY_TARGET from platform "
+            f"{system!r}/{machine!r}; set REPLOY_TARGET explicitly"
+        ) from exc
+    return f"{target_os}-{target_arch}"
+
+
+def _editable_launcher(
+    *,
+    build_dir: Path,
+    target: str,
+    binary: Path,
+    binary_name: str,
+) -> tuple[Path, str]:
+    launcher_dir = build_dir / "reploy-editable" / target
+    launcher_dir.mkdir(parents=True, exist_ok=True)
+
+    if binary_name.endswith(".exe"):
+        launcher = launcher_dir / "reploy.cmd"
+        quoted_binary = str(binary).replace('"', '""')
+        launcher.write_bytes(f'@echo off\r\n"{quoted_binary}" %*\r\n'.encode("utf-8"))
+        return launcher, launcher.name
+
+    launcher = launcher_dir / binary_name
+    launcher.write_text(
+        f'#!/usr/bin/env sh\nexec {shlex.quote(str(binary))} "$@"\n',
+        encoding="utf-8",
+    )
+    launcher.chmod(0o755)
+    return launcher, binary_name
+
+
+def _script_for_build(
+    *,
+    version: str,
+    build_dir: Path,
+    target: str,
+    binary: Path,
+    binary_name: str,
+) -> tuple[Path, str]:
+    if version == "editable":
+        return _editable_launcher(
+            build_dir=build_dir,
+            target=target,
+            binary=binary,
+            binary_name=binary_name,
+        )
+    return binary, binary_name
+
+
+def _go_env_for_target(target: str) -> dict[str, str]:
+    goos, goarch = target.split("-", 1)
+    env = os.environ.copy()
+    env.update({"GOOS": goos, "GOARCH": goarch})
+    return env
+
+
+def _build_reploy_binary(*, repo_root: Path, target: str, binary: Path) -> None:
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "go",
+            "build",
+            "-buildvcs=false",
+            "-o",
+            str(binary),
+            "./cmd/reploy",
+        ],
+        cwd=repo_root,
+        env=_go_env_for_target(target),
+        check=True,
+    )
+
+
+def _ensure_reploy_binary(*, repo_root: Path, target: str, binary_name: str) -> Path:
+    binary = repo_root / "dist" / target / binary_name
+    if binary.is_file():
+        return binary
+
+    _build_reploy_binary(repo_root=repo_root, target=target, binary=binary)
+    if binary.is_file():
+        return binary
+
+    raise RuntimeError(f"missing Reploy binary for {target}: {binary}")
+
+
+class ReployBuildHook(BuildHookInterface):
+    def initialize(self, version: str, build_data: dict[str, Any]) -> None:
+        target = os.environ.get("REPLOY_TARGET", "").strip()
+        if not target:
+            target = current_target()
+        try:
+            binary_name, platform_tag = TARGETS[target]
+        except KeyError as exc:
+            expected = ", ".join(sorted(TARGETS))
+            raise RuntimeError(
+                f"unsupported REPLOY_TARGET {target!r}; expected one of: {expected}"
+            ) from exc
+
+        binary_override = os.environ.get("REPLOY_BINARY")
+        if binary_override:
+            binary = Path(binary_override).resolve()
+            if not binary.is_file():
+                raise RuntimeError(
+                    f"REPLOY_BINARY does not exist or is not a file: {binary}"
+                )
+        else:
+            repo_root = _repo_root(self.root)
+            binary = _ensure_reploy_binary(
+                repo_root=repo_root,
+                target=target,
+                binary_name=binary_name,
+            )
+
+        build_data["pure_python"] = False
+        build_data["tag"] = f"py3-none-{platform_tag}"
+        script_source, script_name = _script_for_build(
+            version=version,
+            build_dir=Path(self.directory),
+            target=target,
+            binary=binary,
+            binary_name=binary_name,
+        )
+        build_data["shared_scripts"] = {str(script_source): script_name}
+        build_data["force_include"] = {str(script_source): "reploy/bin/reploy"}
+
+
+def get_build_hook() -> type[ReployBuildHook]:
+    return ReployBuildHook

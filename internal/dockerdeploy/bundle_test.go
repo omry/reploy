@@ -1,0 +1,1060 @@
+package dockerdeploy
+
+import (
+	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/providers/python"
+)
+
+func TestInitRecordsBundleRootsInState(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	state := readDeploymentState(t, deployDir)
+	if len(state.Bundle.Roots) != 1 {
+		t.Fatalf("bundle roots = %#v", state.Bundle.Roots)
+	}
+	root := state.Bundle.Roots[0]
+	if root.Provider != "python" || root.Kind != "package" || root.Source != "arbiter-suite" {
+		t.Fatalf("bundle root = %#v", root)
+	}
+}
+
+func TestBundleAddRemoveUpdatesStateAndRequirements(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := BundleAdd(BundleRootOptions{Dir: deployDir, Source: "arbiter-imap==1.2.3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertResultStatus(t, results, filepath.Join(deployDir, StateFileName), deploy.UpdateStatusUpdated)
+	assertResultStatus(t, results, filepath.Join(deployDir, RequirementsFileName), deploy.UpdateStatusUpdated)
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-suite\narbiter-imap==1.2.3\n" {
+		t.Fatalf("requirements = %q", got)
+	}
+
+	roots, err := BundleList(BundleListOptions{Dir: deployDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roots) != 2 || roots[1].Source != "arbiter-imap==1.2.3" {
+		t.Fatalf("bundle roots = %#v", roots)
+	}
+
+	results, err = BundleRemove(BundleRootOptions{Dir: deployDir, Source: "arbiter-imap==1.2.3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertResultStatus(t, results, filepath.Join(deployDir, StateFileName), deploy.UpdateStatusUpdated)
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-suite\n" {
+		t.Fatalf("requirements = %q", got)
+	}
+}
+
+func TestBundleListRejectsMissingRequirementsProjection(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(deployDir, RequirementsFileName)); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = BundleList(BundleListOptions{Dir: deployDir})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "requirements projection is missing") || !strings.Contains(err.Error(), "reploy update --dir "+deployDir) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBundleListRejectsStaleRequirementsProjection(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deployDir, RequirementsFileName), []byte("stale\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = BundleList(BundleListOptions{Dir: deployDir})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "requirements projection is out of date") || !strings.Contains(err.Error(), "reploy update --dir "+deployDir) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBundleListAllShowsRootAndTransitiveWheels(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{
+		Dir:          deployDir,
+		Pack:         ref,
+		Requirements: []string{"arbiter-server==1.2.3"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	bundleDir := filepath.Join(deployDir, BundleDirName)
+	for _, name := range []string{"arbiter_server-1.2.3-py3-none-any.whl", "h11-0.16.0-py3-none-any.whl"} {
+		if err := os.WriteFile(filepath.Join(bundleDir, name), []byte("wheel\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	packages, err := BundleListAll(BundleListOptions{Dir: deployDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []BundleResolvedPackage{
+		{Kind: "root", Requirement: "arbiter-server==1.2.3"},
+		{Kind: "transitive", Requirement: "h11==0.16.0"},
+	}
+	if !reflect.DeepEqual(packages, want) {
+		t.Fatalf("packages = %#v, want %#v", packages, want)
+	}
+}
+
+func TestBundleOptionsListsBlueprintOptions(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	options, err := BundleOptions(BundleListOptions{Dir: deployDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(options) != 3 {
+		t.Fatalf("options = %#v", options)
+	}
+	if options[0].Name != "arbiter-suite" || options[0].Identifier != "arbiter-suite" || options[0].Group != "meta" || options[0].Description == "" {
+		t.Fatalf("first option = %#v", options[0])
+	}
+}
+
+func TestProviderIdentifierRootRejectsUnsupportedProvider(t *testing.T) {
+	_, err := providerIdentifierRoot("demo", "demo-component")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), `provider "demo" does not support bundle option identifiers`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBundleAddOptionUsesBlueprintIdentifier(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{
+		Dir:          deployDir,
+		Pack:         ref,
+		Requirements: []string{"arbiter-server==1.2.3"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := BundleAddMany(BundleRootsOptions{Dir: deployDir, Names: []string{"imap"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-server==1.2.3\narbiter-imap\n" {
+		t.Fatalf("requirements = %q", got)
+	}
+}
+
+func TestBundleAddManyRejectsInvalidRootWithoutWriting(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{
+		Dir:          deployDir,
+		Pack:         ref,
+		Requirements: []string{"arbiter-server==1.2.3"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = BundleAddMany(BundleRootsOptions{Dir: deployDir, Sources: []string{"imap", "not valid"}})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-server==1.2.3\n" {
+		t.Fatalf("requirements were partially updated: %q", got)
+	}
+}
+
+func TestBundleAddManyAcceptsUnknownUnpinnedPackage(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{
+		Dir:          deployDir,
+		Pack:         ref,
+		Requirements: []string{"arbiter-server==1.2.3"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := BundleAddMany(BundleRootsOptions{Dir: deployDir, Names: []string{"imap"}, Sources: []string{"aa"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-server==1.2.3\narbiter-imap\naa\n" {
+		t.Fatalf("requirements = %q", got)
+	}
+}
+
+func TestBundleAddManyRejectsLikelyOptionTypoWithoutWriting(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{
+		Dir:          deployDir,
+		Pack:         ref,
+		Requirements: []string{"arbiter-server==1.2.3"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = BundleAddMany(BundleRootsOptions{Dir: deployDir, Names: []string{"imap", "smtpa"}})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), `unknown bundle option "smtpa"`) || !strings.Contains(err.Error(), `did you mean "smtp"`) || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-server==1.2.3\n" {
+		t.Fatalf("requirements were partially updated: %q", got)
+	}
+}
+
+func TestBundleAddManyForceTreatsUnknownNameAsPackageRoot(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{
+		Dir:          deployDir,
+		Pack:         ref,
+		Requirements: []string{"arbiter-server==1.2.3"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := BundleAddMany(BundleRootsOptions{Dir: deployDir, Names: []string{"smtpa"}, Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-server==1.2.3\nsmtpa\n" {
+		t.Fatalf("requirements = %q", got)
+	}
+}
+
+func TestBundleRemoveOptionUsesBlueprintIdentifier(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{
+		Dir:          deployDir,
+		Pack:         ref,
+		Requirements: []string{"arbiter-server==1.2.3"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BundleAddMany(BundleRootsOptions{Dir: deployDir, Names: []string{"imap"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := BundleRemove(BundleRootOptions{Dir: deployDir, Source: "imap"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-server==1.2.3\n" {
+		t.Fatalf("requirements = %q", got)
+	}
+}
+
+func TestBundleAddMetaOptionUsesBlueprintIdentifier(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{
+		Dir:          deployDir,
+		Pack:         ref,
+		Requirements: []string{"arbiter-server==1.2.3"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := BundleAddMany(BundleRootsOptions{Dir: deployDir, Names: []string{"arbiter-suite"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-server==1.2.3\narbiter-suite\n" {
+		t.Fatalf("requirements = %q", got)
+	}
+}
+
+func TestBundleAddWheelCopiesWheelIntoDeploymentBundle(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	sourceWheel := filepath.Join(t.TempDir(), "demo-1.0.0-py3-none-any.whl")
+	if err := os.WriteFile(sourceWheel, []byte("wheel content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := BundleAddWheel(BundleRootOptions{Dir: deployDir, Source: sourceWheel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetWheel := filepath.Join(deployDir, BundleDirName, filepath.Base(sourceWheel))
+	assertResultStatus(t, results, targetWheel, deploy.UpdateStatusUpdated)
+	assertResultStatus(t, results, filepath.Join(deployDir, StateFileName), deploy.UpdateStatusUpdated)
+	if got := readFile(t, targetWheel); got != "wheel content\n" {
+		t.Fatalf("copied wheel = %q", got)
+	}
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-suite\n/bundle/demo-1.0.0-py3-none-any.whl\n" {
+		t.Fatalf("requirements = %q", got)
+	}
+}
+
+func TestBundleCheckCommandValidatesPreparedWheelhouse(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	spec, bundleDir, err := BundleCheckCommand(deployDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bundleDir != filepath.Join(deployDir, BundleDirName) {
+		t.Fatalf("bundle dir = %q", bundleDir)
+	}
+	if spec.Name != "docker" {
+		t.Fatalf("name = %q", spec.Name)
+	}
+	wantSuffix := []string{
+		"python",
+		"-m",
+		"pip",
+		"--disable-pip-version-check",
+		"install",
+		"--no-cache-dir",
+		"--target",
+		"/tmp/reploy-wheelhouse-check",
+		"--no-index",
+		"--find-links",
+		"/bundle",
+		"-r",
+		"/requirements.txt",
+	}
+	if !reflect.DeepEqual(spec.Args[len(spec.Args)-len(wantSuffix):], wantSuffix) {
+		t.Fatalf("suffix = %#v", spec.Args[len(spec.Args)-len(wantSuffix):])
+	}
+}
+
+func TestBundleCheckDryRunPrintsCommand(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	if err := BundleCheck(BundleCheckOptions{Dir: deployDir, DryRun: true, Stdout: &stdout}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "would validate installation bundle:") || !strings.Contains(stdout.String(), "docker run --rm") {
+		t.Fatalf("stdout missing dry-run command:\n%s", stdout.String())
+	}
+}
+
+func TestBundlePrepareCommandBuildsWheelhouse(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	wheelhouseDir := filepath.Join(t.TempDir(), "wheelhouse")
+
+	spec, err := BundlePrepareCommand(deployDir, wheelhouseDir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Name != "docker" {
+		t.Fatalf("name = %q", spec.Name)
+	}
+	wantSuffix := []string{
+		"python",
+		"-m",
+		"pip",
+		"--disable-pip-version-check",
+		"wheel",
+		"--no-cache-dir",
+		"--find-links",
+		"/bundle",
+		"--wheel-dir",
+		"/wheelhouse",
+		"-r",
+		"/requirements.txt",
+	}
+	if !reflect.DeepEqual(spec.Args[len(spec.Args)-len(wantSuffix):], wantSuffix) {
+		t.Fatalf("suffix = %#v", spec.Args[len(spec.Args)-len(wantSuffix):])
+	}
+}
+
+func TestBundlePreparePyPIOnlySkipsExistingWheelhouse(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	spec, err := BundlePrepareCommand(deployDir, filepath.Join(t.TempDir(), "wheelhouse"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, arg := range spec.Args {
+		if arg == "--find-links" || strings.Contains(arg, ":/bundle:ro") {
+			t.Fatalf("pypi-only command included existing wheelhouse arg: %#v", spec.Args)
+		}
+	}
+}
+
+func TestBundleAddSourceBuildsWheelIntoDeploymentBundle(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	sourceDir := filepath.Join(t.TempDir(), "source")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "pyproject.toml"), []byte("[build-system]\nrequires = [\"setuptools>=68\", \"wheel\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var specs []CommandSpec
+	restore := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
+		specs = append(specs, spec)
+		wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
+		return os.WriteFile(filepath.Join(wheelhouse, "demo-1.0.0-py3-none-any.whl"), []byte("wheel content\n"), 0o644)
+	})
+	defer restore()
+
+	results, err := BundleAddSource(BundleRootOptions{Dir: deployDir, Source: sourceDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("ran %d commands, want 1", len(specs))
+	}
+	if !containsInOrder(specs[0].Args, []string{"python", "-m", "pip", "--disable-pip-version-check", "wheel", "--no-deps", "--no-build-isolation", "--wheel-dir", "/wheelhouse", "/source"}) {
+		t.Fatalf("source wheel command missing expected pip args: %#v", specs[0].Args)
+	}
+	targetWheel := filepath.Join(deployDir, BundleDirName, "demo-1.0.0-py3-none-any.whl")
+	assertResultStatus(t, results, targetWheel, deploy.UpdateStatusUpdated)
+	if got := readFile(t, targetWheel); got != "wheel content\n" {
+		t.Fatalf("copied wheel = %q", got)
+	}
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-suite\n/bundle/demo-1.0.0-py3-none-any.whl\n" {
+		t.Fatalf("requirements = %q", got)
+	}
+}
+
+func TestBundleUpgradeResolvesPackageRootsAndPreparesBundle(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{
+		Dir:          deployDir,
+		Pack:         ref,
+		Requirements: []string{"arbiter-server==1.2.3", "arbiter-imap==1.2.3"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var specs []CommandSpec
+	restore := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
+		specs = append(specs, spec)
+		switch {
+		case containsInOrder(spec.Args, []string{"install", "--dry-run", "--ignore-installed"}):
+			workDir := hostPathForContainerMount(t, spec.Args, "/work")
+			report := `{"install":[{"metadata":{"name":"arbiter-server","version":"1.2.4"}},{"metadata":{"name":"arbiter-imap","version":"1.2.5"}}]}`
+			return os.WriteFile(filepath.Join(workDir, "report.json"), []byte(report), 0o644)
+		case containsInOrder(spec.Args, []string{"wheel", "--no-cache-dir"}):
+			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
+			if err := os.WriteFile(filepath.Join(wheelhouse, "arbiter_server-1.2.4-py3-none-any.whl"), []byte("server\n"), 0o644); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(wheelhouse, "arbiter_imap-1.2.5-py3-none-any.whl"), []byte("imap\n"), 0o644)
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+			return nil
+		default:
+			t.Fatalf("unexpected bundle command: %#v", spec.Args)
+			return nil
+		}
+	})
+	defer restore()
+
+	results, err := BundleUpgrade(BundleUpgradeOptions{Dir: deployDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(specs) != 3 {
+		t.Fatalf("ran %d commands, want resolve, build, check", len(specs))
+	}
+	assertResultStatus(t, results, filepath.Join(deployDir, StateFileName), deploy.UpdateStatusUpdated)
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-server==1.2.4\narbiter-imap==1.2.5\n" {
+		t.Fatalf("requirements = %q", got)
+	}
+}
+
+func TestBundleUpgradeTargetExactPin(t *testing.T) {
+	roots := []deploy.ArtifactRoot{
+		{Provider: python.ProviderName, Kind: "package", Source: "arbiter-server==1.2.3"},
+		{Provider: python.ProviderName, Kind: "package", Source: "arbiter-imap==1.2.3"},
+	}
+	input, _, err := python.BundleUpgradeInput(roots, "arbiter-imap==1.2.9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"arbiter-server==1.2.3", "arbiter-imap==1.2.9"}
+	if !reflect.DeepEqual(input, want) {
+		t.Fatalf("input = %#v, want %#v", input, want)
+	}
+}
+
+func TestBundleUpgradeRejectsWheelRoots(t *testing.T) {
+	roots := []deploy.ArtifactRoot{{Provider: python.ProviderName, Kind: "wheel", Source: "/bundle/demo-1.0.0-py3-none-any.whl"}}
+	_, _, err := python.BundleUpgradeInput(roots, "")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "only supports package roots") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBundlePreparePyPIOnlyResolvesUnpinnedRoots(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	var specs []CommandSpec
+	restore := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
+		specs = append(specs, spec)
+		switch {
+		case containsInOrder(spec.Args, []string{"install", "--dry-run", "--ignore-installed"}):
+			workDir := hostPathForContainerMount(t, spec.Args, "/work")
+			report := `{"install":[{"metadata":{"name":"arbiter-suite","version":"1.2.4"}}]}`
+			return os.WriteFile(filepath.Join(workDir, "report.json"), []byte(report), 0o644)
+		case containsInOrder(spec.Args, []string{"wheel", "--no-cache-dir"}):
+			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
+			return os.WriteFile(filepath.Join(wheelhouse, "arbiter_suite-1.2.4-py3-none-any.whl"), []byte("suite\n"), 0o644)
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+			return nil
+		default:
+			t.Fatalf("unexpected bundle command: %#v", spec.Args)
+			return nil
+		}
+	})
+	defer restore()
+
+	if err := BundlePrepare(BundlePrepareOptions{Dir: deployDir, PyPIOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(specs) != 3 {
+		t.Fatalf("ran %d commands, want resolve, build, check", len(specs))
+	}
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-suite==1.2.4\n" {
+		t.Fatalf("requirements = %q", got)
+	}
+}
+
+func TestBundlePrepareUsesPackLocalSourcesForFilePacks(t *testing.T) {
+	packDir := makeTestPackWithManifest(t, strings.Replace(testPackManifest(), "    identifier: arbiter-suite\n", "    identifier: arbiter-suite\n    local_sources:\n      demo-pkg: local/demo-pkg\n", 1))
+	sourceDir := filepath.Join(packDir, "local", "demo-pkg")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "pyproject.toml"), []byte("[build-system]\nrequires = [\"setuptools>=68\", \"wheel\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref, Requirements: []string{"demo-pkg==1.2.3", "other-pkg==1.2.3"}}); err != nil {
+		t.Fatal(err)
+	}
+	expectedRuntimeRequirements := "setuptools>=68\nwheel\ndemo-pkg==1.2.3\n/source/app/demo-pkg\nother-pkg==1.2.3\n"
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != expectedRuntimeRequirements {
+		t.Fatalf("persistent requirements after init = %q", got)
+	}
+	compose := readFile(t, filepath.Join(deployDir, ComposeFileName))
+	if !strings.Contains(compose, sourceDir+":/source/app/demo-pkg:rw") {
+		t.Fatalf("compose did not mount local source:\n%s", compose)
+	}
+	if !strings.Contains(compose, "--no-index --find-links /bundle --no-deps --no-build-isolation -e") {
+		t.Fatalf("compose did not install bundle-backed editable sources hermetically:\n%s", compose)
+	}
+	if !strings.Contains(compose, "--no-cache-dir --no-deps --no-build-isolation -e") {
+		t.Fatalf("compose did not install editable sources without resolving dependencies:\n%s", compose)
+	}
+	checkSpec, _, err := BundleCheckCommand(deployDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkSourceMount := hostPathForContainerMount(t, checkSpec.Args, "/source/app/demo-pkg"); checkSourceMount != sourceDir {
+		t.Fatalf("check source mount = %q, want %q", checkSourceMount, sourceDir)
+	}
+
+	var buildRequirements string
+	var checkRequirements string
+	var sourceMount string
+	restore := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
+		switch {
+		case containsInOrder(spec.Args, []string{"sh", "-c"}):
+			requirementsPath := hostPathForContainerMount(t, spec.Args, "/requirements.txt")
+			content, err := os.ReadFile(requirementsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			buildRequirements = string(content)
+			sourceMount = hostPathForContainerMount(t, spec.Args, "/source/demo-pkg")
+			if !strings.Contains(spec.Args[len(spec.Args)-1], "cp -a /source/demo-pkg /wheelhouse/.source/demo-pkg") {
+				t.Fatalf("local source prepare script missing copy:\n%s", spec.Args[len(spec.Args)-1])
+			}
+			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
+			if err := os.WriteFile(filepath.Join(wheelhouse, "demo_pkg-1.2.3-py3-none-any.whl"), []byte("demo\n"), 0o644); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(wheelhouse, "other_pkg-1.2.3-py3-none-any.whl"), []byte("other\n"), 0o644)
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+			requirementsPath := hostPathForContainerMount(t, spec.Args, "/requirements.txt")
+			content, err := os.ReadFile(requirementsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkRequirements = string(content)
+			return nil
+		default:
+			t.Fatalf("unexpected bundle command: %#v", spec.Args)
+			return nil
+		}
+	})
+	defer restore()
+
+	if err := BundlePrepare(BundlePrepareOptions{Dir: deployDir}); err != nil {
+		t.Fatal(err)
+	}
+	if buildRequirements != "setuptools>=68\nwheel\n/wheelhouse/.source/demo-pkg\nother-pkg==1.2.3\n" {
+		t.Fatalf("build requirements = %q", buildRequirements)
+	}
+	if checkRequirements != "demo-pkg==1.2.3\nother-pkg==1.2.3\n" {
+		t.Fatalf("check requirements = %q", checkRequirements)
+	}
+	if sourceMount != sourceDir {
+		t.Fatalf("source mount = %q, want %q", sourceMount, sourceDir)
+	}
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != expectedRuntimeRequirements {
+		t.Fatalf("persistent requirements = %q", got)
+	}
+}
+
+func TestBundlePrepareDryRunPrintsCommand(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	if err := BundlePrepare(BundlePrepareOptions{Dir: deployDir, DryRun: true, Stdout: &stdout}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "would build installation bundle:") || !strings.Contains(stdout.String(), "docker run --rm") {
+		t.Fatalf("stdout missing dry-run command:\n%s", stdout.String())
+	}
+}
+
+func TestBundlePrepareSuppressesCommandOutputByDefault(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	var runOptions []RunOptions
+	restore := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
+		runOptions = append(runOptions, options)
+		switch {
+		case containsInOrder(spec.Args, []string{"wheel", "--no-cache-dir"}):
+			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
+			return os.WriteFile(filepath.Join(wheelhouse, "arbiter_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+			return nil
+		default:
+			t.Fatalf("unexpected bundle command: %#v", spec.Args)
+			return nil
+		}
+	})
+	defer restore()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := BundlePrepare(BundlePrepareOptions{Dir: deployDir, Stdout: &stdout, Stderr: &stderr}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runOptions) != 2 {
+		t.Fatalf("ran %d commands, want build and check", len(runOptions))
+	}
+	for _, options := range runOptions {
+		if options.Context == nil {
+			t.Fatalf("run options should include an interruptible context: %#v", options)
+		}
+		if options.Stdout != nil || options.Stderr != nil {
+			t.Fatalf("run options should suppress output by default: %#v", options)
+		}
+	}
+	if stdout.String() != "" || stderr.String() != "" {
+		t.Fatalf("stdout=%q stderr=%q, want quiet", stdout.String(), stderr.String())
+	}
+}
+
+func TestBundlePrepareVerboseStreamsCommandOutput(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var runOptions []RunOptions
+	restore := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
+		runOptions = append(runOptions, options)
+		switch {
+		case containsInOrder(spec.Args, []string{"wheel", "--no-cache-dir"}):
+			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
+			return os.WriteFile(filepath.Join(wheelhouse, "arbiter_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+			return nil
+		default:
+			t.Fatalf("unexpected bundle command: %#v", spec.Args)
+			return nil
+		}
+	})
+	defer restore()
+
+	if err := BundlePrepare(BundlePrepareOptions{Dir: deployDir, Verbose: true, Stdout: &stdout, Stderr: &stderr}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runOptions) != 2 {
+		t.Fatalf("ran %d commands, want build and check", len(runOptions))
+	}
+	for _, options := range runOptions {
+		if options.Context == nil {
+			t.Fatalf("run options should include an interruptible context: %#v", options)
+		}
+		if options.Stdout != &stdout || options.Stderr != &stderr {
+			t.Fatalf("run options should stream verbose output: %#v", options)
+		}
+	}
+	if !strings.Contains(stdout.String(), "built installation bundle:") {
+		t.Fatalf("stdout missing verbose build message:\n%s", stdout.String())
+	}
+}
+
+func TestBundleCleanRemovesBuiltWheelsAndKeepsSelectedBundleWheels(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	sourceWheel := filepath.Join(t.TempDir(), "demo-1.0.0-py3-none-any.whl")
+	if err := os.WriteFile(sourceWheel, []byte("selected\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BundleAddWheel(BundleRootOptions{Dir: deployDir, Source: sourceWheel}); err != nil {
+		t.Fatal(err)
+	}
+	selectedWheel := filepath.Join(deployDir, BundleDirName, filepath.Base(sourceWheel))
+	builtWheel := filepath.Join(deployDir, BundleDirName, "arbiter_suite-1.2.3-py3-none-any.whl")
+	if err := os.WriteFile(builtWheel, []byte("built\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := BundleClean(BundleCleanOptions{Dir: deployDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertResultStatus(t, results, builtWheel, deploy.UpdateStatusRemoved)
+	if _, err := os.Stat(builtWheel); !os.IsNotExist(err) {
+		t.Fatalf("built wheel still exists: %v", err)
+	}
+	if got := readFile(t, selectedWheel); got != "selected\n" {
+		t.Fatalf("selected wheel = %q", got)
+	}
+}
+
+func TestBundleCleanMissingWheelhouseIsUpToDate(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(deployDir, BundleDirName)); err != nil {
+		t.Fatal(err)
+	}
+	results, err := BundleClean(BundleCleanOptions{Dir: deployDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("results = %#v, want none", results)
+	}
+}
+
+func TestBundleAddAcceptsWheelAndSourceRoots(t *testing.T) {
+	for _, source := range []string{"/opt/wheels/arbiter.whl", "/source/app/server"} {
+		t.Run(source, func(t *testing.T) {
+			root, err := classifyBundleRoot(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if root.Provider != "python" || root.Source != source {
+				t.Fatalf("root = %#v", root)
+			}
+		})
+	}
+}
+
+func TestBundleAddAcceptsUnpinnedPackageRoot(t *testing.T) {
+	root, err := classifyBundleRoot("arbiter-imap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root.Kind != "package" || root.Source != "arbiter-imap" {
+		t.Fatalf("root = %#v", root)
+	}
+}
+
+func TestBundleAddRejectsInvalidRelativePathRoot(t *testing.T) {
+	_, err := classifyBundleRoot("dist/arbiter.whl")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "package name") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBundleRemoveSupportsUnpinnedPackRoots(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := BundleRemove(BundleRootOptions{Dir: deployDir, Source: "arbiter-suite"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "\n" {
+		t.Fatalf("requirements = %q", got)
+	}
+}
+
+func TestUpdateInfersBundleRootsForOldState(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	state := readDeploymentState(t, deployDir)
+	state.Bundle = deploy.BundleState{}
+	content, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deployDir, StateFileName), append(content, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Update(UpdateOptions{Dir: deployDir}); err != nil {
+		t.Fatal(err)
+	}
+	state = readDeploymentState(t, deployDir)
+	if len(state.Bundle.Roots) != 1 || state.Bundle.Roots[0].Source != "arbiter-suite" {
+		t.Fatalf("bundle roots = %#v", state.Bundle.Roots)
+	}
+}
+
+func readDeploymentState(t *testing.T, dir string) deploy.DeploymentState {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(dir, StateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state deploy.DeploymentState
+	if err := json.Unmarshal(content, &state); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func stubBundleRunner(run func(CommandSpec, RunOptions) error) func() {
+	previous := runBundleCommand
+	runBundleCommand = run
+	return func() {
+		runBundleCommand = previous
+	}
+}
+
+func hostPathForContainerMount(t *testing.T, args []string, containerPath string) string {
+	t.Helper()
+	for index := 0; index < len(args)-1; index++ {
+		if args[index] != "-v" {
+			continue
+		}
+		host, rest, ok := strings.Cut(args[index+1], ":")
+		if !ok {
+			continue
+		}
+		mount, _, _ := strings.Cut(rest, ":")
+		if mount == containerPath {
+			return host
+		}
+	}
+	t.Fatalf("container mount %s not found in %#v", containerPath, args)
+	return ""
+}
