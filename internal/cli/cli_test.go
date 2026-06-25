@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	reploy "github.com/omry/reploy"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/dockerdeploy"
 )
@@ -31,12 +32,12 @@ func setCLITestPackIndex(t *testing.T) {
   "schema_version": 1,
   "blueprints": {
     "arbiter-server": {
-      "ref": "pypi:arbiter-server//arbiter_server/reploy",
-      "versioned_ref": "pypi:arbiter-server=={version}//arbiter_server/reploy"
+      "ref": "pypi:arbiter-server",
+      "versioned_ref": "pypi:arbiter-server=={version}"
     },
     "arbiter-suite": {
-      "ref": "pypi:arbiter-suite//arbiter_suite/reploy",
-      "versioned_ref": "pypi:arbiter-suite=={version}//arbiter_suite/reploy"
+      "ref": "pypi:arbiter-suite",
+      "versioned_ref": "pypi:arbiter-suite=={version}"
     }
   }
 }
@@ -68,7 +69,7 @@ func TestVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	if stdout != "reploy dev\n" {
+	if stdout != "reploy "+reploy.Version+"\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	if stderr != "" {
@@ -480,6 +481,28 @@ func TestDockerInitAcceptsExplicitRequirements(t *testing.T) {
 	}
 	if string(requirements) != "arbiter-server==1.2.3\narbiter-imap==1.2.3\n" {
 		t.Fatalf("requirements = %q", requirements)
+	}
+}
+
+func TestParseDockerCommandOptionsAcceptsExplicitPyPIPackageRef(t *testing.T) {
+	options, err := parseDockerCommandOptions([]string{"--blueprint", "pypi:arbiter-suite==1.2.3"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Pack.Raw != "pypi:arbiter-suite==1.2.3" {
+		t.Fatalf("raw = %q", options.Pack.Raw)
+	}
+	if options.Pack.Scheme != "pypi" {
+		t.Fatalf("scheme = %q", options.Pack.Scheme)
+	}
+	if options.Pack.Source != "arbiter-suite==1.2.3" {
+		t.Fatalf("source = %q", options.Pack.Source)
+	}
+	if options.Pack.Subdir != "arbiter_suite/reploy" {
+		t.Fatalf("subdir = %q", options.Pack.Subdir)
+	}
+	if !options.Pack.IsPinned {
+		t.Fatal("pinned pypi ref should be pinned")
 	}
 }
 

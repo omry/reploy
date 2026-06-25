@@ -17,21 +17,19 @@ Current scope:
 
 ## Build
 
+The release version lives in `VERSION`. The native binary embeds that value, and
+Python wheel metadata reads the same file.
+
 Build the current platform binary:
 
 ```bash
-go build -o dist/$(go env GOOS)-$(go env GOARCH)/reploy ./cmd/reploy
+tools/build_reploy
 ```
 
-Build all release targets by setting `GOOS` and `GOARCH` for each target:
+The binary is written under `dist/GOOS-GOARCH/`. Build all release targets:
 
 ```bash
-GOOS=linux GOARCH=amd64 go build -o dist/linux-amd64/reploy ./cmd/reploy
-GOOS=linux GOARCH=arm64 go build -o dist/linux-arm64/reploy ./cmd/reploy
-GOOS=darwin GOARCH=amd64 go build -o dist/darwin-amd64/reploy ./cmd/reploy
-GOOS=darwin GOARCH=arm64 go build -o dist/darwin-arm64/reploy ./cmd/reploy
-GOOS=windows GOARCH=amd64 go build -o dist/windows-amd64/reploy.exe ./cmd/reploy
-GOOS=windows GOARCH=arm64 go build -o dist/windows-arm64/reploy.exe ./cmd/reploy
+tools/build_reploy --all
 ```
 
 ## Python Package
@@ -43,16 +41,32 @@ and also includes the binary at `reploy/bin/reploy` inside the wheel.
 For local development:
 
 ```bash
-python -m pip install -e .
+python -m pip install -e packaging/python
 reploy --version
 ```
 
-The package build infers the host `GOOS-GOARCH` target and runs `go build` if the
-matching binary is missing. Set `REPLOY_TARGET` to build a specific target, such
-as `darwin-arm64` or `windows-amd64`. Set `REPLOY_BINARY` to package an explicit
-prebuilt binary. Editable installs use a small launcher that execs the binary in
-`dist`, so rebuilding Reploy updates the installed `reploy` command without
-reinstalling the package.
+Build the wheel from the repository root:
+
+```bash
+python -m build packaging/python --wheel
+```
+
+Build all release wheels, following the same native-client packaging shape as
+`arbiter-client`:
+
+```bash
+tools/build_release_dists --clean
+```
+
+Use `--no-isolation` when rehearsing release builds in an environment that
+already has the Python build dependencies installed and cannot reach PyPI.
+
+The package build infers the host `GOOS-GOARCH` target and runs
+`tools/build_reploy` if the matching binary is missing. Set `REPLOY_TARGET` to
+build a specific target, such as `darwin-arm64` or `windows-amd64`. Set
+`REPLOY_BINARY` to package an explicit prebuilt binary. Editable installs use a
+small launcher that execs the binary in `dist`, so rebuilding Reploy updates the
+installed `reploy` command without reinstalling the package.
 
 ## Test
 
@@ -89,11 +103,17 @@ reploy init --blueprint arbiter-suite
 ```
 
 Use `arbiter-suite==VERSION` or `arbiter-server==VERSION` to pin a release. The
-shorthands expand to wheel-hosted app blueprints, for example:
+shorthands expand to wheel-hosted app blueprints. Without the index, use an
+explicit PyPI package ref:
 
 ```bash
-reploy init --blueprint pypi:arbiter-suite//arbiter_suite/reploy
+reploy init --blueprint pypi:arbiter-suite
 ```
+
+PyPI package refs default to the `package_name/reploy` blueprint convention, so
+`pypi:arbiter-suite` looks for `arbiter_suite/reploy` in the wheel. Use
+`pypi:PACKAGE//PATH` only when a package stores its Reploy blueprint somewhere
+else.
 
 For unpublished or local app blueprints, use an explicit file reference:
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import platform
 from pathlib import Path
-import re
 import shlex
 import subprocess
 import sys
@@ -39,15 +38,11 @@ def reploy_version() -> str:
     if version:
         return version
 
-    pyproject = _repo_root(__file__) / "pyproject.toml"
-    match = re.search(
-        r'^version = "([^"]+)"$',
-        pyproject.read_text(encoding="utf-8"),
-        flags=re.MULTILINE,
-    )
-    if match is None:
-        raise RuntimeError(f"could not read Reploy version from {pyproject}")
-    return match.group(1)
+    version_file = _repo_root(__file__) / "VERSION"
+    version = version_file.read_text(encoding="utf-8").strip()
+    if not version:
+        raise RuntimeError(f"could not read Reploy version from {version_file}")
+    return version
 
 
 def current_target() -> str:
@@ -120,26 +115,16 @@ def _script_for_build(
     return binary, binary_name
 
 
-def _go_env_for_target(target: str) -> dict[str, str]:
-    goos, goarch = target.split("-", 1)
-    env = os.environ.copy()
-    env.update({"GOOS": goos, "GOARCH": goarch})
-    return env
-
-
-def _build_reploy_binary(*, repo_root: Path, target: str, binary: Path) -> None:
-    binary.parent.mkdir(parents=True, exist_ok=True)
+def _build_reploy_binary(*, repo_root: Path, target: str) -> None:
     subprocess.run(
         [
-            "go",
-            "build",
-            "-buildvcs=false",
-            "-o",
-            str(binary),
-            "./cmd/reploy",
+            sys.executable,
+            str(repo_root / "tools" / "build_reploy"),
+            "--root",
+            str(repo_root),
+            "--target",
+            target,
         ],
-        cwd=repo_root,
-        env=_go_env_for_target(target),
         check=True,
     )
 
@@ -149,11 +134,14 @@ def _ensure_reploy_binary(*, repo_root: Path, target: str, binary_name: str) -> 
     if binary.is_file():
         return binary
 
-    _build_reploy_binary(repo_root=repo_root, target=target, binary=binary)
+    _build_reploy_binary(repo_root=repo_root, target=target)
     if binary.is_file():
         return binary
 
-    raise RuntimeError(f"missing Reploy binary for {target}: {binary}")
+    raise RuntimeError(
+        f"missing Reploy binary for {target}: {binary}; "
+        f"automatic tools/build_reploy --target {target} did not create it"
+    )
 
 
 class ReployBuildHook(BuildHookInterface):

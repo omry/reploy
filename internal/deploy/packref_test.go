@@ -47,7 +47,7 @@ func TestParseSaplingPackRefWithRevision(t *testing.T) {
 	}
 }
 
-func TestParsePyPIPackRefRequiresSubdir(t *testing.T) {
+func TestParsePyPIPackRefWithExplicitSubdir(t *testing.T) {
 	ref, err := ParsePackRef("pypi:arbiter-suite==0.1.0//arbiter_suite/reploy")
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +63,7 @@ func TestParsePyPIPackRefRequiresSubdir(t *testing.T) {
 	}
 }
 
-func TestParsePyPIPackRefAllowsLatest(t *testing.T) {
+func TestParsePyPIPackRefAllowsLatestWithExplicitSubdir(t *testing.T) {
 	ref, err := ParsePackRef("pypi:arbiter-suite//arbiter_suite/reploy")
 	if err != nil {
 		t.Fatal(err)
@@ -79,10 +79,35 @@ func TestParsePyPIPackRefAllowsLatest(t *testing.T) {
 	}
 }
 
-func TestParsePyPIPackRefRejectsMissingSubdir(t *testing.T) {
-	_, err := ParsePackRef("pypi:arbiter-suite==0.1.0")
-	if err == nil {
-		t.Fatal("expected error")
+func TestParsePyPIPackRefDefaultsSubdirFromPackageName(t *testing.T) {
+	ref, err := ParsePackRef("pypi:Arbiter.Suite==0.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Source != "Arbiter.Suite==0.1.0" {
+		t.Fatalf("source = %q", ref.Source)
+	}
+	if ref.Subdir != "arbiter_suite/reploy" {
+		t.Fatalf("subdir = %q", ref.Subdir)
+	}
+	if !ref.IsPinned {
+		t.Fatalf("pypi exact package ref should be pinned")
+	}
+}
+
+func TestParsePyPIPackRefDefaultsSubdirForLatest(t *testing.T) {
+	ref, err := ParsePackRef("pypi:arbiter-suite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Source != "arbiter-suite" {
+		t.Fatalf("source = %q", ref.Source)
+	}
+	if ref.Subdir != "arbiter_suite/reploy" {
+		t.Fatalf("subdir = %q", ref.Subdir)
+	}
+	if ref.IsPinned {
+		t.Fatalf("unpinned pypi ref should request latest, not be considered pinned")
 	}
 }
 

@@ -1,6 +1,8 @@
 package deploy
 
-const ToolVersion = "dev"
+import reploy "github.com/omry/reploy"
+
+var ToolVersion = reploy.Version
 
 type Phase string
 

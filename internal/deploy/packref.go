@@ -46,7 +46,11 @@ func ParsePackRef(raw string) (PackRef, error) {
 		return PackRef{}, fmt.Errorf("blueprint reference source must not be empty")
 	}
 	if scheme == "pypi" && subdir == "" {
-		return PackRef{}, fmt.Errorf("pypi blueprint references require a package-internal path")
+		packageName, _, err := parsePyPISource(source)
+		if err != nil {
+			return PackRef{}, err
+		}
+		subdir = defaultPyPIBlueprintSubdir(packageName)
 	}
 
 	query, err := url.ParseQuery(rawQuery)
@@ -62,6 +66,11 @@ func ParsePackRef(raw string) (PackRef, error) {
 		Query:    query,
 		IsPinned: packRefIsPinned(scheme, source, query),
 	}, nil
+}
+
+func defaultPyPIBlueprintSubdir(packageName string) string {
+	moduleName := strings.ReplaceAll(normalizePackageName(packageName), "-", "_")
+	return moduleName + "/reploy"
 }
 
 func isSupportedPackScheme(scheme string) bool {

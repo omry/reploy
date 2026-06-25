@@ -3,5 +3,7 @@ dist/
 /reploy.exe
 __pycache__/
 *.pyc
+*.swp
 .coverage
 .pytest_cache/
+.venv/

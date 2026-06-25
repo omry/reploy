@@ -13,11 +13,10 @@ import (
 	"strings"
 	"time"
 
+	reploy "github.com/omry/reploy"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/dockerdeploy"
 )
-
-const Version = "dev"
 
 const defaultPackIndexURL = "https://raw.githubusercontent.com/omry/reploy/main/blueprint-index.json"
 const packIndexURLEnv = "REPLOY_BLUEPRINT_INDEX_URL"
@@ -47,7 +46,7 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 		printHelp(stdout)
 		return 0
 	case "--version", "version":
-		fmt.Fprintf(stdout, "reploy %s\n", Version)
+		fmt.Fprintf(stdout, "reploy %s\n", reploy.Version)
 		return 0
 	case "blueprint-index":
 		return runPackIndex(args[1:], stdout, stderr)
@@ -1095,7 +1094,7 @@ func parseDockerCommandOptions(args []string, requirePack bool) (dockerCommandOp
 		}
 	}
 	if requirePack && options.Pack.Raw == "" {
-		return dockerCommandOptions{}, fmt.Errorf("--blueprint is required; use a blueprint shorthand from the Reploy blueprint index or an explicit ref such as file:PATH or pypi:PACKAGE//PATH")
+		return dockerCommandOptions{}, fmt.Errorf("--blueprint is required; use a blueprint shorthand from the Reploy blueprint index or an explicit ref such as file:PATH or pypi:PACKAGE")
 	}
 	return options, nil
 }
@@ -1135,7 +1134,7 @@ func initUpdateCommandHint(dir string) string {
 func parsePackRefArgument(value string) (deploy.PackRef, error) {
 	original := strings.TrimSpace(value)
 	if oldArbiterPackAlias(original) {
-		return deploy.PackRef{}, fmt.Errorf("unknown blueprint shorthand %q; use a shorthand from the Reploy blueprint index or an explicit ref such as file:PATH or pypi:PACKAGE//PATH", original)
+		return deploy.PackRef{}, fmt.Errorf("unknown blueprint shorthand %q; use a shorthand from the Reploy blueprint index or an explicit ref such as file:PATH or pypi:PACKAGE", original)
 	}
 	expanded := original
 	if !hasPackRefScheme(original) {
@@ -1144,7 +1143,7 @@ func parsePackRefArgument(value string) (deploy.PackRef, error) {
 			return deploy.PackRef{}, err
 		}
 		if !found {
-			return deploy.PackRef{}, fmt.Errorf("unknown blueprint shorthand %q in Reploy blueprint index %s; use an explicit ref such as file:PATH or pypi:PACKAGE//PATH", packShorthandName(original), packIndexURL())
+			return deploy.PackRef{}, fmt.Errorf("unknown blueprint shorthand %q in Reploy blueprint index %s; use an explicit ref such as file:PATH or pypi:PACKAGE", packShorthandName(original), packIndexURL())
 		}
 		expanded = indexExpanded
 	}
@@ -1413,7 +1412,7 @@ Deployment options:
   --dir DIR    Deployment directory, default reploy-staging
   --blueprint REF
               App blueprint reference, required for init
-              Use an indexed shorthand, file:PATH, or pypi:PACKAGE//PATH.
+              Use an indexed shorthand, file:PATH, or pypi:PACKAGE.
               Add ==VERSION to an indexed shorthand to pin a release.
   --requirement REQ
               Exact package pin or absolute container path for requirements.txt
@@ -1577,7 +1576,7 @@ Options:
   --dir DIR    Deployment directory, default reploy-staging
   --blueprint REF
               App blueprint reference, required for init
-              Use an indexed shorthand, file:PATH, or pypi:PACKAGE//PATH.
+              Use an indexed shorthand, file:PATH, or pypi:PACKAGE.
               Add ==VERSION to an indexed shorthand to pin a release.
   --requirement REQ
               Exact package pin or absolute container path for requirements.txt
@@ -1619,7 +1618,7 @@ Options:
   --dir DIR    Deployment directory to update, default reploy-staging
   --blueprint REF
               App blueprint reference to update from; defaults to saved state
-              Use an indexed shorthand, file:PATH, or pypi:PACKAGE//PATH.
+              Use an indexed shorthand, file:PATH, or pypi:PACKAGE.
               Add ==VERSION to an indexed shorthand to pin a release.
   --force      Overwrite locally edited generated files
   -h, --help   Show update help
