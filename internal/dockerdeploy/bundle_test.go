@@ -29,7 +29,7 @@ func TestInitRecordsBundleRootsInState(t *testing.T) {
 		t.Fatalf("bundle roots = %#v", state.Bundle.Roots)
 	}
 	root := state.Bundle.Roots[0]
-	if root.Provider != "python" || root.Kind != "package" || root.Source != "arbiter-suite" {
+	if root.Provider != "python" || root.Kind != "package" || root.Source != "demo-suite" {
 		t.Fatalf("bundle root = %#v", root)
 	}
 }
@@ -45,13 +45,13 @@ func TestBundleAddRemoveUpdatesStateAndRequirements(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, err := BundleAdd(BundleRootOptions{Dir: deployDir, Source: "arbiter-imap==1.2.3"})
+	results, err := BundleAdd(BundleRootOptions{Dir: deployDir, Source: "demo-imap==1.2.3"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertResultStatus(t, results, filepath.Join(deployDir, StateFileName), deploy.UpdateStatusUpdated)
 	assertResultStatus(t, results, filepath.Join(deployDir, RequirementsFileName), deploy.UpdateStatusUpdated)
-	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-suite\narbiter-imap==1.2.3\n" {
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-suite\ndemo-imap==1.2.3\n" {
 		t.Fatalf("requirements = %q", got)
 	}
 
@@ -59,16 +59,16 @@ func TestBundleAddRemoveUpdatesStateAndRequirements(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(roots) != 2 || roots[1].Source != "arbiter-imap==1.2.3" {
+	if len(roots) != 2 || roots[1].Source != "demo-imap==1.2.3" {
 		t.Fatalf("bundle roots = %#v", roots)
 	}
 
-	results, err = BundleRemove(BundleRootOptions{Dir: deployDir, Source: "arbiter-imap==1.2.3"})
+	results, err = BundleRemove(BundleRootOptions{Dir: deployDir, Source: "demo-imap==1.2.3"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertResultStatus(t, results, filepath.Join(deployDir, StateFileName), deploy.UpdateStatusUpdated)
-	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-suite\n" {
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-suite\n" {
 		t.Fatalf("requirements = %q", got)
 	}
 }
@@ -129,12 +129,12 @@ func TestBundleListAllShowsRootAndTransitiveWheels(t *testing.T) {
 	if _, err := Init(InitOptions{
 		Dir:          deployDir,
 		Pack:         ref,
-		Requirements: []string{"arbiter-server==1.2.3"},
+		Requirements: []string{"demo-server==1.2.3"},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	bundleDir := filepath.Join(deployDir, BundleDirName)
-	for _, name := range []string{"arbiter_server-1.2.3-py3-none-any.whl", "h11-0.16.0-py3-none-any.whl"} {
+	for _, name := range []string{"demo_server-1.2.3-py3-none-any.whl", "h11-0.16.0-py3-none-any.whl"} {
 		if err := os.WriteFile(filepath.Join(bundleDir, name), []byte("wheel\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -145,7 +145,7 @@ func TestBundleListAllShowsRootAndTransitiveWheels(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []BundleResolvedPackage{
-		{Kind: "root", Requirement: "arbiter-server==1.2.3"},
+		{Kind: "root", Requirement: "demo-server==1.2.3"},
 		{Kind: "transitive", Requirement: "h11==0.16.0"},
 	}
 	if !reflect.DeepEqual(packages, want) {
@@ -171,7 +171,7 @@ func TestBundleOptionsListsBlueprintOptions(t *testing.T) {
 	if len(options) != 3 {
 		t.Fatalf("options = %#v", options)
 	}
-	if options[0].Name != "arbiter-suite" || options[0].Identifier != "arbiter-suite" || options[0].Group != "meta" || options[0].Description == "" {
+	if options[0].Name != "demo-suite" || options[0].Identifier != "demo-suite" || options[0].Group != "meta" || options[0].Description == "" {
 		t.Fatalf("first option = %#v", options[0])
 	}
 }
@@ -196,7 +196,7 @@ func TestBundleAddOptionUsesBlueprintIdentifier(t *testing.T) {
 	if _, err := Init(InitOptions{
 		Dir:          deployDir,
 		Pack:         ref,
-		Requirements: []string{"arbiter-server==1.2.3"},
+		Requirements: []string{"demo-server==1.2.3"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestBundleAddOptionUsesBlueprintIdentifier(t *testing.T) {
 	if _, err := BundleAddMany(BundleRootsOptions{Dir: deployDir, Names: []string{"imap"}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-server==1.2.3\narbiter-imap\n" {
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-server==1.2.3\ndemo-imap\n" {
 		t.Fatalf("requirements = %q", got)
 	}
 }
@@ -219,7 +219,7 @@ func TestBundleAddManyRejectsInvalidRootWithoutWriting(t *testing.T) {
 	if _, err := Init(InitOptions{
 		Dir:          deployDir,
 		Pack:         ref,
-		Requirements: []string{"arbiter-server==1.2.3"},
+		Requirements: []string{"demo-server==1.2.3"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestBundleAddManyRejectsInvalidRootWithoutWriting(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-server==1.2.3\n" {
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-server==1.2.3\n" {
 		t.Fatalf("requirements were partially updated: %q", got)
 	}
 }
@@ -243,7 +243,7 @@ func TestBundleAddManyAcceptsUnknownUnpinnedPackage(t *testing.T) {
 	if _, err := Init(InitOptions{
 		Dir:          deployDir,
 		Pack:         ref,
-		Requirements: []string{"arbiter-server==1.2.3"},
+		Requirements: []string{"demo-server==1.2.3"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestBundleAddManyAcceptsUnknownUnpinnedPackage(t *testing.T) {
 	if _, err := BundleAddMany(BundleRootsOptions{Dir: deployDir, Names: []string{"imap"}, Sources: []string{"aa"}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-server==1.2.3\narbiter-imap\naa\n" {
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-server==1.2.3\ndemo-imap\naa\n" {
 		t.Fatalf("requirements = %q", got)
 	}
 }
@@ -266,7 +266,7 @@ func TestBundleAddManyRejectsLikelyOptionTypoWithoutWriting(t *testing.T) {
 	if _, err := Init(InitOptions{
 		Dir:          deployDir,
 		Pack:         ref,
-		Requirements: []string{"arbiter-server==1.2.3"},
+		Requirements: []string{"demo-server==1.2.3"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestBundleAddManyRejectsLikelyOptionTypoWithoutWriting(t *testing.T) {
 	if !strings.Contains(err.Error(), `unknown bundle option "smtpa"`) || !strings.Contains(err.Error(), `did you mean "smtp"`) || !strings.Contains(err.Error(), "--force") {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-server==1.2.3\n" {
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-server==1.2.3\n" {
 		t.Fatalf("requirements were partially updated: %q", got)
 	}
 }
@@ -293,7 +293,7 @@ func TestBundleAddManyForceTreatsUnknownNameAsPackageRoot(t *testing.T) {
 	if _, err := Init(InitOptions{
 		Dir:          deployDir,
 		Pack:         ref,
-		Requirements: []string{"arbiter-server==1.2.3"},
+		Requirements: []string{"demo-server==1.2.3"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func TestBundleAddManyForceTreatsUnknownNameAsPackageRoot(t *testing.T) {
 	if _, err := BundleAddMany(BundleRootsOptions{Dir: deployDir, Names: []string{"smtpa"}, Force: true}); err != nil {
 		t.Fatal(err)
 	}
-	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-server==1.2.3\nsmtpa\n" {
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-server==1.2.3\nsmtpa\n" {
 		t.Fatalf("requirements = %q", got)
 	}
 }
@@ -316,7 +316,7 @@ func TestBundleRemoveOptionUsesBlueprintIdentifier(t *testing.T) {
 	if _, err := Init(InitOptions{
 		Dir:          deployDir,
 		Pack:         ref,
-		Requirements: []string{"arbiter-server==1.2.3"},
+		Requirements: []string{"demo-server==1.2.3"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +327,7 @@ func TestBundleRemoveOptionUsesBlueprintIdentifier(t *testing.T) {
 	if _, err := BundleRemove(BundleRootOptions{Dir: deployDir, Source: "imap"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-server==1.2.3\n" {
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-server==1.2.3\n" {
 		t.Fatalf("requirements = %q", got)
 	}
 }
@@ -342,15 +342,15 @@ func TestBundleAddMetaOptionUsesBlueprintIdentifier(t *testing.T) {
 	if _, err := Init(InitOptions{
 		Dir:          deployDir,
 		Pack:         ref,
-		Requirements: []string{"arbiter-server==1.2.3"},
+		Requirements: []string{"demo-server==1.2.3"},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := BundleAddMany(BundleRootsOptions{Dir: deployDir, Names: []string{"arbiter-suite"}}); err != nil {
+	if _, err := BundleAddMany(BundleRootsOptions{Dir: deployDir, Names: []string{"demo-suite"}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-server==1.2.3\narbiter-suite\n" {
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-server==1.2.3\ndemo-suite\n" {
 		t.Fatalf("requirements = %q", got)
 	}
 }
@@ -380,7 +380,7 @@ func TestBundleAddWheelCopiesWheelIntoDeploymentBundle(t *testing.T) {
 	if got := readFile(t, targetWheel); got != "wheel content\n" {
 		t.Fatalf("copied wheel = %q", got)
 	}
-	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-suite\n/bundle/demo-1.0.0-py3-none-any.whl\n" {
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-suite\n/bundle/demo-1.0.0-py3-none-any.whl\n" {
 		t.Fatalf("requirements = %q", got)
 	}
 }
@@ -547,7 +547,7 @@ func TestBundleAddSourceBuildsWheelIntoDeploymentBundle(t *testing.T) {
 	if got := readFile(t, targetWheel); got != "wheel content\n" {
 		t.Fatalf("copied wheel = %q", got)
 	}
-	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-suite\n/bundle/demo-1.0.0-py3-none-any.whl\n" {
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-suite\n/bundle/demo-1.0.0-py3-none-any.whl\n" {
 		t.Fatalf("requirements = %q", got)
 	}
 }
@@ -562,7 +562,7 @@ func TestBundleUpgradeResolvesPackageRootsAndPreparesBundle(t *testing.T) {
 	if _, err := Init(InitOptions{
 		Dir:          deployDir,
 		Pack:         ref,
-		Requirements: []string{"arbiter-server==1.2.3", "arbiter-imap==1.2.3"},
+		Requirements: []string{"demo-server==1.2.3", "demo-imap==1.2.3"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -573,14 +573,14 @@ func TestBundleUpgradeResolvesPackageRootsAndPreparesBundle(t *testing.T) {
 		switch {
 		case containsInOrder(spec.Args, []string{"install", "--dry-run", "--ignore-installed"}):
 			workDir := hostPathForContainerMount(t, spec.Args, "/work")
-			report := `{"install":[{"metadata":{"name":"arbiter-server","version":"1.2.4"}},{"metadata":{"name":"arbiter-imap","version":"1.2.5"}}]}`
+			report := `{"install":[{"metadata":{"name":"demo-server","version":"1.2.4"}},{"metadata":{"name":"demo-imap","version":"1.2.5"}}]}`
 			return os.WriteFile(filepath.Join(workDir, "report.json"), []byte(report), 0o644)
 		case containsInOrder(spec.Args, []string{"wheel", "--no-cache-dir"}):
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
-			if err := os.WriteFile(filepath.Join(wheelhouse, "arbiter_server-1.2.4-py3-none-any.whl"), []byte("server\n"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(wheelhouse, "demo_server-1.2.4-py3-none-any.whl"), []byte("server\n"), 0o644); err != nil {
 				return err
 			}
-			return os.WriteFile(filepath.Join(wheelhouse, "arbiter_imap-1.2.5-py3-none-any.whl"), []byte("imap\n"), 0o644)
+			return os.WriteFile(filepath.Join(wheelhouse, "demo_imap-1.2.5-py3-none-any.whl"), []byte("imap\n"), 0o644)
 		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
 			return nil
 		default:
@@ -598,21 +598,21 @@ func TestBundleUpgradeResolvesPackageRootsAndPreparesBundle(t *testing.T) {
 		t.Fatalf("ran %d commands, want resolve, build, check", len(specs))
 	}
 	assertResultStatus(t, results, filepath.Join(deployDir, StateFileName), deploy.UpdateStatusUpdated)
-	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-server==1.2.4\narbiter-imap==1.2.5\n" {
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-server==1.2.4\ndemo-imap==1.2.5\n" {
 		t.Fatalf("requirements = %q", got)
 	}
 }
 
 func TestBundleUpgradeTargetExactPin(t *testing.T) {
 	roots := []deploy.ArtifactRoot{
-		{Provider: python.ProviderName, Kind: "package", Source: "arbiter-server==1.2.3"},
-		{Provider: python.ProviderName, Kind: "package", Source: "arbiter-imap==1.2.3"},
+		{Provider: python.ProviderName, Kind: "package", Source: "demo-server==1.2.3"},
+		{Provider: python.ProviderName, Kind: "package", Source: "demo-imap==1.2.3"},
 	}
-	input, _, err := python.BundleUpgradeInput(roots, "arbiter-imap==1.2.9")
+	input, _, err := python.BundleUpgradeInput(roots, "demo-imap==1.2.9")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"arbiter-server==1.2.3", "arbiter-imap==1.2.9"}
+	want := []string{"demo-server==1.2.3", "demo-imap==1.2.9"}
 	if !reflect.DeepEqual(input, want) {
 		t.Fatalf("input = %#v, want %#v", input, want)
 	}
@@ -646,11 +646,11 @@ func TestBundlePreparePyPIOnlyResolvesUnpinnedRoots(t *testing.T) {
 		switch {
 		case containsInOrder(spec.Args, []string{"install", "--dry-run", "--ignore-installed"}):
 			workDir := hostPathForContainerMount(t, spec.Args, "/work")
-			report := `{"install":[{"metadata":{"name":"arbiter-suite","version":"1.2.4"}}]}`
+			report := `{"install":[{"metadata":{"name":"demo-suite","version":"1.2.4"}}]}`
 			return os.WriteFile(filepath.Join(workDir, "report.json"), []byte(report), 0o644)
 		case containsInOrder(spec.Args, []string{"wheel", "--no-cache-dir"}):
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
-			return os.WriteFile(filepath.Join(wheelhouse, "arbiter_suite-1.2.4-py3-none-any.whl"), []byte("suite\n"), 0o644)
+			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.4-py3-none-any.whl"), []byte("suite\n"), 0o644)
 		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
 			return nil
 		default:
@@ -666,13 +666,13 @@ func TestBundlePreparePyPIOnlyResolvesUnpinnedRoots(t *testing.T) {
 	if len(specs) != 3 {
 		t.Fatalf("ran %d commands, want resolve, build, check", len(specs))
 	}
-	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-suite==1.2.4\n" {
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-suite==1.2.4\n" {
 		t.Fatalf("requirements = %q", got)
 	}
 }
 
 func TestBundlePrepareUsesPackLocalSourcesForFilePacks(t *testing.T) {
-	packDir := makeTestPackWithManifest(t, strings.Replace(testPackManifest(), "    identifier: arbiter-suite\n", "    identifier: arbiter-suite\n    local_sources:\n      demo-pkg: local/demo-pkg\n", 1))
+	packDir := makeTestPackWithManifest(t, strings.Replace(testPackManifest(), "    identifier: demo-suite\n", "    identifier: demo-suite\n    local_sources:\n      demo-pkg: local/demo-pkg\n", 1))
 	sourceDir := filepath.Join(packDir, "local", "demo-pkg")
 	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -800,7 +800,7 @@ func TestBundlePrepareSuppressesCommandOutputByDefault(t *testing.T) {
 		switch {
 		case containsInOrder(spec.Args, []string{"wheel", "--no-cache-dir"}):
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
-			return os.WriteFile(filepath.Join(wheelhouse, "arbiter_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
+			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
 		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
 			return nil
 		default:
@@ -850,7 +850,7 @@ func TestBundlePrepareVerboseStreamsCommandOutput(t *testing.T) {
 		switch {
 		case containsInOrder(spec.Args, []string{"wheel", "--no-cache-dir"}):
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
-			return os.WriteFile(filepath.Join(wheelhouse, "arbiter_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
+			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
 		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
 			return nil
 		default:
@@ -897,7 +897,7 @@ func TestBundleCleanRemovesBuiltWheelsAndKeepsSelectedBundleWheels(t *testing.T)
 		t.Fatal(err)
 	}
 	selectedWheel := filepath.Join(deployDir, BundleDirName, filepath.Base(sourceWheel))
-	builtWheel := filepath.Join(deployDir, BundleDirName, "arbiter_suite-1.2.3-py3-none-any.whl")
+	builtWheel := filepath.Join(deployDir, BundleDirName, "demo_suite-1.2.3-py3-none-any.whl")
 	if err := os.WriteFile(builtWheel, []byte("built\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -938,7 +938,7 @@ func TestBundleCleanMissingWheelhouseIsUpToDate(t *testing.T) {
 }
 
 func TestBundleAddAcceptsWheelAndSourceRoots(t *testing.T) {
-	for _, source := range []string{"/opt/wheels/arbiter.whl", "/source/app/server"} {
+	for _, source := range []string{"/opt/wheels/demo.whl", "/source/app/server"} {
 		t.Run(source, func(t *testing.T) {
 			root, err := classifyBundleRoot(source)
 			if err != nil {
@@ -952,17 +952,17 @@ func TestBundleAddAcceptsWheelAndSourceRoots(t *testing.T) {
 }
 
 func TestBundleAddAcceptsUnpinnedPackageRoot(t *testing.T) {
-	root, err := classifyBundleRoot("arbiter-imap")
+	root, err := classifyBundleRoot("demo-imap")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if root.Kind != "package" || root.Source != "arbiter-imap" {
+	if root.Kind != "package" || root.Source != "demo-imap" {
 		t.Fatalf("root = %#v", root)
 	}
 }
 
 func TestBundleAddRejectsInvalidRelativePathRoot(t *testing.T) {
-	_, err := classifyBundleRoot("dist/arbiter.whl")
+	_, err := classifyBundleRoot("dist/demo.whl")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -982,7 +982,7 @@ func TestBundleRemoveSupportsUnpinnedPackRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := BundleRemove(BundleRootOptions{Dir: deployDir, Source: "arbiter-suite"}); err != nil {
+	if _, err := BundleRemove(BundleRootOptions{Dir: deployDir, Source: "demo-suite"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "\n" {
@@ -1014,7 +1014,7 @@ func TestUpdateInfersBundleRootsForOldState(t *testing.T) {
 		t.Fatal(err)
 	}
 	state = readDeploymentState(t, deployDir)
-	if len(state.Bundle.Roots) != 1 || state.Bundle.Roots[0].Source != "arbiter-suite" {
+	if len(state.Bundle.Roots) != 1 || state.Bundle.Roots[0].Source != "demo-suite" {
 		t.Fatalf("bundle roots = %#v", state.Bundle.Roots)
 	}
 }

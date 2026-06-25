@@ -31,13 +31,13 @@ func setCLITestPackIndex(t *testing.T) {
 	content := `{
   "schema_version": 1,
   "blueprints": {
-    "arbiter-server": {
-      "ref": "pypi:arbiter-server",
-      "versioned_ref": "pypi:arbiter-server=={version}"
+    "demo-server": {
+      "ref": "pypi:demo-server",
+      "versioned_ref": "pypi:demo-server=={version}"
     },
-    "arbiter-suite": {
-      "ref": "pypi:arbiter-suite",
-      "versioned_ref": "pypi:arbiter-suite=={version}"
+    "demo-suite": {
+      "ref": "pypi:demo-suite",
+      "versioned_ref": "pypi:demo-suite=={version}"
     }
   }
 }
@@ -134,7 +134,7 @@ func TestDockerHelp(t *testing.T) {
 	if strings.Contains(stdout, "smoke") {
 		t.Fatalf("stdout should not contain premature smoke command:\n%s", stdout)
 	}
-	if strings.Contains(stdout, "Arbiter health endpoint") || !strings.Contains(stdout, "blueprint-configured app health endpoint") {
+	if strings.Contains(stdout, "Demo health endpoint") || !strings.Contains(stdout, "blueprint-configured app health endpoint") {
 		t.Fatalf("stdout did not describe generic health probe:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "Bundle:") || !strings.Contains(stdout, "add-source") || !strings.Contains(stdout, "upgrade") {
@@ -158,7 +158,7 @@ func TestDockerHelp(t *testing.T) {
 	if !strings.Contains(stdout, "app") {
 		t.Fatalf("stdout did not contain app command:\n%s", stdout)
 	}
-	if strings.Contains(stdout, "bootstrap arbiter") || strings.Contains(stdout, "imap account") {
+	if strings.Contains(stdout, "bootstrap demo") || strings.Contains(stdout, "imap account") {
 		t.Fatalf("stdout contained app-specific examples in generic help:\n%s", stdout)
 	}
 	if stderr != "" {
@@ -193,7 +193,7 @@ func TestAppHelp(t *testing.T) {
 	if !strings.Contains(stdout, "Show this deployment's app subcommands") || !strings.Contains(stdout, "reploy app COMMAND") {
 		t.Fatalf("stdout did not contain generic app command guidance:\n%s", stdout)
 	}
-	if strings.Contains(stdout, "Arbiter") || strings.Contains(stdout, "bootstrap plugin PLUGIN account NAME") {
+	if strings.Contains(stdout, "Demo") || strings.Contains(stdout, "bootstrap plugin PLUGIN account NAME") {
 		t.Fatalf("stdout contained app-specific help:\n%s", stdout)
 	}
 	if stderr != "" {
@@ -227,7 +227,7 @@ func TestAppShowsAppIDAndPackSubcommands(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("app failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	expected := "app: arbiter\napp subcommands:\n  bootstrap server\n  bootstrap plugin\n  config activate\n  config check\n  config show\n  env bootstrap\n  env check\n"
+	expected := "app: demo\napp subcommands:\n  bootstrap server\n  bootstrap plugin\n  config activate\n  config check\n  config show\n  env bootstrap\n  env check\n"
 	if stdout != expected {
 		t.Fatalf("stdout = %q, want %q", stdout, expected)
 	}
@@ -372,7 +372,7 @@ func TestDockerInitWritesDeployment(t *testing.T) {
 	if !strings.Contains(stdout, "updated "+filepath.Join(deployDir, dockerdeploy.ComposeFileName)) {
 		t.Fatalf("stdout did not include compose write:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "created staging directory for arbiter: "+deployDir) {
+	if !strings.Contains(stdout, "created staging directory for demo: "+deployDir) {
 		t.Fatalf("stdout did not include staging summary:\n%s", stdout)
 	}
 	if stderr != "" {
@@ -399,7 +399,7 @@ func TestDockerInitUsesDefaultDeploymentDir(t *testing.T) {
 	if !strings.Contains(stdout, "updated "+filepath.Join("reploy-staging", dockerdeploy.ComposeFileName)) {
 		t.Fatalf("stdout did not include default compose write:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "created staging directory for arbiter: reploy-staging") {
+	if !strings.Contains(stdout, "created staging directory for demo: reploy-staging") {
 		t.Fatalf("stdout did not include default staging summary:\n%s", stdout)
 	}
 	if stderr != "" {
@@ -469,8 +469,8 @@ func TestDockerInitAcceptsExplicitRequirements(t *testing.T) {
 		"--blueprint",
 		"file:"+packDir,
 		"--requirement",
-		"arbiter-server==1.2.3",
-		"--requirement=arbiter-imap==1.2.3",
+		"demo-server==1.2.3",
+		"--requirement=demo-imap==1.2.3",
 	)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
@@ -479,26 +479,26 @@ func TestDockerInitAcceptsExplicitRequirements(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(requirements) != "arbiter-server==1.2.3\narbiter-imap==1.2.3\n" {
+	if string(requirements) != "demo-server==1.2.3\ndemo-imap==1.2.3\n" {
 		t.Fatalf("requirements = %q", requirements)
 	}
 }
 
 func TestParseDockerCommandOptionsAcceptsExplicitPyPIPackageRef(t *testing.T) {
-	options, err := parseDockerCommandOptions([]string{"--blueprint", "pypi:arbiter-suite==1.2.3"}, true)
+	options, err := parseDockerCommandOptions([]string{"--blueprint", "pypi:demo-suite==1.2.3"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.Pack.Raw != "pypi:arbiter-suite==1.2.3" {
+	if options.Pack.Raw != "pypi:demo-suite==1.2.3" {
 		t.Fatalf("raw = %q", options.Pack.Raw)
 	}
 	if options.Pack.Scheme != "pypi" {
 		t.Fatalf("scheme = %q", options.Pack.Scheme)
 	}
-	if options.Pack.Source != "arbiter-suite==1.2.3" {
+	if options.Pack.Source != "demo-suite==1.2.3" {
 		t.Fatalf("source = %q", options.Pack.Source)
 	}
-	if options.Pack.Subdir != "arbiter_suite/reploy" {
+	if options.Pack.Subdir != "demo_suite/reploy" {
 		t.Fatalf("subdir = %q", options.Pack.Subdir)
 	}
 	if !options.Pack.IsPinned {
@@ -506,23 +506,23 @@ func TestParseDockerCommandOptionsAcceptsExplicitPyPIPackageRef(t *testing.T) {
 	}
 }
 
-func TestParseDockerCommandOptionsExpandsArbiterSuitePackAlias(t *testing.T) {
+func TestParseDockerCommandOptionsExpandsDemoSuitePackAlias(t *testing.T) {
 	setCLITestPackIndex(t)
 
-	options, err := parseDockerCommandOptions([]string{"--blueprint", "arbiter-suite"}, true)
+	options, err := parseDockerCommandOptions([]string{"--blueprint", "demo-suite"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.Pack.Raw != "arbiter-suite" {
+	if options.Pack.Raw != "demo-suite" {
 		t.Fatalf("raw = %q", options.Pack.Raw)
 	}
 	if options.Pack.Scheme != "pypi" {
 		t.Fatalf("scheme = %q", options.Pack.Scheme)
 	}
-	if options.Pack.Source != "arbiter-suite" {
+	if options.Pack.Source != "demo-suite" {
 		t.Fatalf("source = %q", options.Pack.Source)
 	}
-	if options.Pack.Subdir != "arbiter_suite/reploy" {
+	if options.Pack.Subdir != "demo_suite/reploy" {
 		t.Fatalf("subdir = %q", options.Pack.Subdir)
 	}
 	if options.Pack.IsPinned {
@@ -530,20 +530,20 @@ func TestParseDockerCommandOptionsExpandsArbiterSuitePackAlias(t *testing.T) {
 	}
 }
 
-func TestParseDockerCommandOptionsExpandsPinnedArbiterSuitePackAlias(t *testing.T) {
+func TestParseDockerCommandOptionsExpandsPinnedDemoSuitePackAlias(t *testing.T) {
 	setCLITestPackIndex(t)
 
-	options, err := parseDockerCommandOptions([]string{"--blueprint=arbiter-suite==1.2.3"}, true)
+	options, err := parseDockerCommandOptions([]string{"--blueprint=demo-suite==1.2.3"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.Pack.Raw != "arbiter-suite==1.2.3" {
+	if options.Pack.Raw != "demo-suite==1.2.3" {
 		t.Fatalf("raw = %q", options.Pack.Raw)
 	}
-	if options.Pack.Source != "arbiter-suite==1.2.3" {
+	if options.Pack.Source != "demo-suite==1.2.3" {
 		t.Fatalf("source = %q", options.Pack.Source)
 	}
-	if options.Pack.Subdir != "arbiter_suite/reploy" {
+	if options.Pack.Subdir != "demo_suite/reploy" {
 		t.Fatalf("subdir = %q", options.Pack.Subdir)
 	}
 	if !options.Pack.IsPinned {
@@ -551,23 +551,23 @@ func TestParseDockerCommandOptionsExpandsPinnedArbiterSuitePackAlias(t *testing.
 	}
 }
 
-func TestParseDockerCommandOptionsExpandsArbiterServerPackAlias(t *testing.T) {
+func TestParseDockerCommandOptionsExpandsDemoServerPackAlias(t *testing.T) {
 	setCLITestPackIndex(t)
 
-	options, err := parseDockerCommandOptions([]string{"--blueprint", "arbiter-server"}, true)
+	options, err := parseDockerCommandOptions([]string{"--blueprint", "demo-server"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.Pack.Raw != "arbiter-server" {
+	if options.Pack.Raw != "demo-server" {
 		t.Fatalf("raw = %q", options.Pack.Raw)
 	}
 	if options.Pack.Scheme != "pypi" {
 		t.Fatalf("scheme = %q", options.Pack.Scheme)
 	}
-	if options.Pack.Source != "arbiter-server" {
+	if options.Pack.Source != "demo-server" {
 		t.Fatalf("source = %q", options.Pack.Source)
 	}
-	if options.Pack.Subdir != "arbiter_server/reploy" {
+	if options.Pack.Subdir != "demo_server/reploy" {
 		t.Fatalf("subdir = %q", options.Pack.Subdir)
 	}
 	if options.Pack.IsPinned {
@@ -575,20 +575,20 @@ func TestParseDockerCommandOptionsExpandsArbiterServerPackAlias(t *testing.T) {
 	}
 }
 
-func TestParseDockerCommandOptionsExpandsPinnedArbiterServerPackAlias(t *testing.T) {
+func TestParseDockerCommandOptionsExpandsPinnedDemoServerPackAlias(t *testing.T) {
 	setCLITestPackIndex(t)
 
-	options, err := parseDockerCommandOptions([]string{"--blueprint=arbiter-server==1.2.3"}, true)
+	options, err := parseDockerCommandOptions([]string{"--blueprint=demo-server==1.2.3"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.Pack.Raw != "arbiter-server==1.2.3" {
+	if options.Pack.Raw != "demo-server==1.2.3" {
 		t.Fatalf("raw = %q", options.Pack.Raw)
 	}
-	if options.Pack.Source != "arbiter-server==1.2.3" {
+	if options.Pack.Source != "demo-server==1.2.3" {
 		t.Fatalf("source = %q", options.Pack.Source)
 	}
-	if options.Pack.Subdir != "arbiter_server/reploy" {
+	if options.Pack.Subdir != "demo_server/reploy" {
 		t.Fatalf("subdir = %q", options.Pack.Subdir)
 	}
 	if !options.Pack.IsPinned {
@@ -596,14 +596,14 @@ func TestParseDockerCommandOptionsExpandsPinnedArbiterServerPackAlias(t *testing
 	}
 }
 
-func TestParseDockerCommandOptionsPreservesArbiterSuitePackAliasQuery(t *testing.T) {
+func TestParseDockerCommandOptionsPreservesDemoSuitePackAliasQuery(t *testing.T) {
 	setCLITestPackIndex(t)
 
-	options, err := parseDockerCommandOptions([]string{"--blueprint", "arbiter-suite?index-url=http://example.test"}, true)
+	options, err := parseDockerCommandOptions([]string{"--blueprint", "demo-suite?index-url=http://example.test"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.Pack.Raw != "arbiter-suite?index-url=http://example.test" {
+	if options.Pack.Raw != "demo-suite?index-url=http://example.test" {
 		t.Fatalf("raw = %q", options.Pack.Raw)
 	}
 	if options.Pack.Query.Get("index-url") != "http://example.test" {
@@ -614,21 +614,11 @@ func TestParseDockerCommandOptionsPreservesArbiterSuitePackAliasQuery(t *testing
 func TestParseDockerCommandOptionsRejectsDuplicatePack(t *testing.T) {
 	setCLITestPackIndex(t)
 
-	_, err := parseDockerCommandOptions([]string{"--blueprint", "arbiter-suite", "--blueprint", "file:deploy/arbiter.blueprint.yaml"}, true)
+	_, err := parseDockerCommandOptions([]string{"--blueprint", "demo-suite", "--blueprint", "file:deploy/demo.blueprint.yaml"}, true)
 	if err == nil {
 		t.Fatal("expected error")
 	}
 	if !strings.Contains(err.Error(), "--blueprint may only be provided once") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestParseDockerCommandOptionsRejectsBareArbiterPackAlias(t *testing.T) {
-	_, err := parseDockerCommandOptions([]string{"--blueprint", "arbiter"}, true)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !strings.Contains(err.Error(), "unknown blueprint shorthand") || !strings.Contains(err.Error(), "Reploy blueprint index") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -761,13 +751,13 @@ func TestDockerInitLoadsPyPIPackAndRecordsResolvedArtifact(t *testing.T) {
 	if _, err := os.Stat(artifact.CachePath); err != nil {
 		t.Fatalf("missing cached wheel: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(artifact.BlueprintPath, "arbiter.blueprint.yaml")); err != nil {
+	if _, err := os.Stat(filepath.Join(artifact.BlueprintPath, "demo.blueprint.yaml")); err != nil {
 		t.Fatalf("missing extracted blueprint: %v", err)
 	}
 }
 
 func TestDockerUpdateRejectsExplicitRequirements(t *testing.T) {
-	code, stdout, stderr := runCLI("update", "--requirement", "arbiter-suite")
+	code, stdout, stderr := runCLI("update", "--requirement", "demo-suite")
 	if code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
@@ -863,7 +853,7 @@ func TestDockerBundleListShowsStateRoots(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("bundle list failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if stdout != "arbiter-suite\n" {
+	if stdout != "demo-suite\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	if stderr != "" {
@@ -902,7 +892,7 @@ func TestDockerBundleAddAndRemoveUpdateRequirements(t *testing.T) {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
-	code, stdout, stderr = runCLI("bundle", "add", "arbiter-imap==1.2.3", "--dir", deployDir)
+	code, stdout, stderr = runCLI("bundle", "add", "demo-imap==1.2.3", "--dir", deployDir)
 	if code != 0 {
 		t.Fatalf("bundle add failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -913,14 +903,14 @@ func TestDockerBundleAddAndRemoveUpdateRequirements(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(requirements) != "arbiter-suite\narbiter-imap==1.2.3\n" {
+	if string(requirements) != "demo-suite\ndemo-imap==1.2.3\n" {
 		t.Fatalf("requirements = %q", requirements)
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
 	}
 
-	code, stdout, stderr = runCLI("bundle", "remove", "arbiter-imap==1.2.3", "--dir", deployDir)
+	code, stdout, stderr = runCLI("bundle", "remove", "demo-imap==1.2.3", "--dir", deployDir)
 	if code != 0 {
 		t.Fatalf("bundle remove failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -928,7 +918,7 @@ func TestDockerBundleAddAndRemoveUpdateRequirements(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(requirements) != "arbiter-suite\n" {
+	if string(requirements) != "demo-suite\n" {
 		t.Fatalf("requirements = %q", requirements)
 	}
 	if stderr != "" {
@@ -946,7 +936,7 @@ func TestDockerBundleAddAndRemoveAcceptMultipleRoots(t *testing.T) {
 		"--blueprint",
 		"file:"+packDir,
 		"--requirement",
-		"arbiter-server==1.2.3",
+		"demo-server==1.2.3",
 	)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
@@ -959,14 +949,14 @@ func TestDockerBundleAddAndRemoveAcceptMultipleRoots(t *testing.T) {
 	if strings.Count(stdout, "requirements.txt") != 1 {
 		t.Fatalf("stdout should show one requirements update:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "selected Python packages: arbiter-imap, arbiter-smtp (dependencies included by bundle build)") {
+	if !strings.Contains(stdout, "selected Python packages: demo-imap, demo-smtp (dependencies included by bundle build)") {
 		t.Fatalf("stdout missing selected package summary:\n%s", stdout)
 	}
 	requirements, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.RequirementsFileName))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(requirements) != "arbiter-server==1.2.3\narbiter-imap\narbiter-smtp\n" {
+	if string(requirements) != "demo-server==1.2.3\ndemo-imap\ndemo-smtp\n" {
 		t.Fatalf("requirements = %q", requirements)
 	}
 	if stderr != "" {
@@ -977,7 +967,7 @@ func TestDockerBundleAddAndRemoveAcceptMultipleRoots(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("second bundle add failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "already selected Python packages: arbiter-imap, arbiter-smtp (dependencies included by bundle build)") {
+	if !strings.Contains(stdout, "already selected Python packages: demo-imap, demo-smtp (dependencies included by bundle build)") {
 		t.Fatalf("stdout missing already-selected package summary:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "up_to_date") {
@@ -995,7 +985,7 @@ func TestDockerBundleAddAndRemoveAcceptMultipleRoots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(requirements) != "arbiter-server==1.2.3\n" {
+	if string(requirements) != "demo-server==1.2.3\n" {
 		t.Fatalf("requirements = %q", requirements)
 	}
 	if stderr != "" {
@@ -1028,7 +1018,7 @@ func TestDockerBundleAddRejectsLikelyOptionTypoWithoutWriting(t *testing.T) {
 		"--blueprint",
 		"file:"+packDir,
 		"--requirement",
-		"arbiter-server==1.2.3",
+		"demo-server==1.2.3",
 	)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
@@ -1048,7 +1038,7 @@ func TestDockerBundleAddRejectsLikelyOptionTypoWithoutWriting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(requirements) != "arbiter-server==1.2.3\n" {
+	if string(requirements) != "demo-server==1.2.3\n" {
 		t.Fatalf("requirements were partially updated: %q", requirements)
 	}
 }
@@ -1063,7 +1053,7 @@ func TestDockerBundleAddUnknownOptionListsOptionsOnSeparateLines(t *testing.T) {
 		"--blueprint",
 		"file:"+packDir,
 		"--requirement",
-		"arbiter-server==1.2.3",
+		"demo-server==1.2.3",
 	)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
@@ -1076,7 +1066,7 @@ func TestDockerBundleAddUnknownOptionListsOptionsOnSeparateLines(t *testing.T) {
 	if stdout != "" {
 		t.Fatalf("stdout = %q, want empty", stdout)
 	}
-	if !strings.Contains(stderr, "use one of:\n  arbiter-suite\n  imap\n  smtp") {
+	if !strings.Contains(stderr, "use one of:\n  demo-suite\n  imap\n  smtp") {
 		t.Fatalf("stderr did not list options on separate lines:\n%s", stderr)
 	}
 	if !strings.Contains(stderr, `unknown bundle option "foo"`) || !strings.Contains(stderr, "--force") {
@@ -1094,7 +1084,7 @@ func TestDockerBundleAddAcceptsUnknownUnpinnedPackage(t *testing.T) {
 		"--blueprint",
 		"file:"+packDir,
 		"--requirement",
-		"arbiter-server==1.2.3",
+		"demo-server==1.2.3",
 	)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
@@ -1108,7 +1098,7 @@ func TestDockerBundleAddAcceptsUnknownUnpinnedPackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(requirements) != "arbiter-server==1.2.3\naa\n" {
+	if string(requirements) != "demo-server==1.2.3\naa\n" {
 		t.Fatalf("requirements = %q", requirements)
 	}
 	if stderr != "" {
@@ -1126,7 +1116,7 @@ func TestDockerBundleAddForceTreatsUnknownNameAsPackage(t *testing.T) {
 		"--blueprint",
 		"file:"+packDir,
 		"--requirement",
-		"arbiter-server==1.2.3",
+		"demo-server==1.2.3",
 	)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
@@ -1140,7 +1130,7 @@ func TestDockerBundleAddForceTreatsUnknownNameAsPackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(requirements) != "arbiter-server==1.2.3\nsmtpa\n" {
+	if string(requirements) != "demo-server==1.2.3\nsmtpa\n" {
 		t.Fatalf("requirements = %q", requirements)
 	}
 	if stderr != "" {
@@ -1271,7 +1261,7 @@ func TestDockerBundleCleanRemovesBuiltWheels(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	builtWheel := filepath.Join(deployDir, dockerdeploy.BundleDirName, "arbiter_suite-1.2.3-py3-none-any.whl")
+	builtWheel := filepath.Join(deployDir, dockerdeploy.BundleDirName, "demo_suite-1.2.3-py3-none-any.whl")
 	if err := os.WriteFile(builtWheel, []byte("wheel\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1298,7 +1288,7 @@ func TestDockerBundleCleanVerboseReportsRemovedWheels(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	builtWheel := filepath.Join(deployDir, dockerdeploy.BundleDirName, "arbiter_suite-1.2.3-py3-none-any.whl")
+	builtWheel := filepath.Join(deployDir, dockerdeploy.BundleDirName, "demo_suite-1.2.3-py3-none-any.whl")
 	if err := os.WriteFile(builtWheel, []byte("wheel\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1374,7 +1364,7 @@ func TestDockerInfoShowsDeploymentState(t *testing.T) {
 func makeCLITestPack(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "arbiter.blueprint.yaml"), []byte(cliTestPackManifest()), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "demo.blueprint.yaml"), []byte(cliTestPackManifest()), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -1385,7 +1375,7 @@ func makeCLITestPackWheel(t *testing.T, subdir string, version string) []byte {
 	var buffer bytes.Buffer
 	writer := zip.NewWriter(&buffer)
 	files := map[string]string{
-		subdir + "/arbiter.blueprint.yaml":                     cliTestPackManifest(),
+		subdir + "/demo.blueprint.yaml":                        cliTestPackManifest(),
 		fmt.Sprintf("demo_pkg-%s.dist-info/WHEEL", version):    "Wheel-Version: 1.0\nGenerator: reploy-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
 		fmt.Sprintf("demo_pkg-%s.dist-info/METADATA", version): "Metadata-Version: 2.1\nName: demo-pkg\nVersion: " + version + "\n",
 	}
@@ -1448,25 +1438,25 @@ func cliTestPackManifest() string {
   requires_reploy: ">=0.1.0"
 
 app:
-  id: arbiter
+  id: demo
   provider:
     type: python
-    identifier: arbiter-suite
+    identifier: demo-suite
   terminal:
-    color_env: ARBITER_COLOR
+    color_env: DEMO_COLOR
 
 bundle:
   options:
-    arbiter-suite:
-      identifier: arbiter-suite
+    demo-suite:
+      identifier: demo-suite
       group: meta
-      description: Install the full Arbiter suite.
+      description: Install the full Demo suite.
     imap:
-      identifier: arbiter-imap
+      identifier: demo-imap
       group: plugins
       description: Receive email through IMAP.
     smtp:
-      identifier: arbiter-smtp
+      identifier: demo-smtp
       group: plugins
       description: Send email through SMTP.
 
@@ -1489,11 +1479,11 @@ docker:
     serve:
       container:
         argv:
-          - arbiter-server
+          - demo-server
           - --config-dir
           - /config
           - --config-name
-          - ${ARBITER_CONFIG_NAME}
+          - ${DEMO_CONFIG_NAME}
           - serve
     config_check:
       trigger:
@@ -1504,11 +1494,11 @@ docker:
         - --live
       container:
         argv:
-          - arbiter-server
+          - demo-server
           - --config-dir
           - /config
           - --config-name
-          - ${ARBITER_CONFIG_NAME}
+          - ${DEMO_CONFIG_NAME}
           - config
           - check
     bootstrap_server:
@@ -1520,13 +1510,13 @@ docker:
         - --force
       container:
         argv:
-          - arbiter-server
+          - demo-server
           - --config-dir
           - /config
           - --config-name
-          - ${ARBITER_CONFIG_NAME}
+          - ${DEMO_CONFIG_NAME}
           - bootstrap
-          - arbiter
+          - demo
     bootstrap_plugin:
       trigger:
         - bootstrap
@@ -1535,11 +1525,11 @@ docker:
       forward_args: true
       container:
         argv:
-          - arbiter-server
+          - demo-server
           - --config-dir
           - /config
           - --config-name
-          - ${ARBITER_CONFIG_NAME}
+          - ${DEMO_CONFIG_NAME}
           - bootstrap
           - plugin
     config_activate:
@@ -1550,11 +1540,11 @@ docker:
       forward_args: true
       container:
         argv:
-          - arbiter-server
+          - demo-server
           - --config-dir
           - /config
           - --config-name
-          - ${ARBITER_CONFIG_NAME}
+          - ${DEMO_CONFIG_NAME}
           - config
           - activate
     config_show:
@@ -1565,11 +1555,11 @@ docker:
       forward_args: true
       container:
         argv:
-          - arbiter-server
+          - demo-server
           - --config-dir
           - /config
           - --config-name
-          - ${ARBITER_CONFIG_NAME}
+          - ${DEMO_CONFIG_NAME}
           - config
           - show
     env_bootstrap:
@@ -1580,11 +1570,11 @@ docker:
       forward_args: true
       container:
         argv:
-          - arbiter-server
+          - demo-server
           - --config-dir
           - /config
           - --config-name
-          - ${ARBITER_CONFIG_NAME}
+          - ${DEMO_CONFIG_NAME}
           - env
           - bootstrap
     env_check:
@@ -1595,11 +1585,11 @@ docker:
       forward_args: true
       container:
         argv:
-          - arbiter-server
+          - demo-server
           - --config-dir
           - /config
           - --config-name
-          - ${ARBITER_CONFIG_NAME}
+          - ${DEMO_CONFIG_NAME}
           - env
           - check
 `

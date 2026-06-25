@@ -51,8 +51,7 @@ Build the wheel from the repository root:
 python -m build packaging/python --wheel
 ```
 
-Build all release wheels, following the same native-client packaging shape as
-`arbiter-client`:
+Build all release wheels, following the same native-client packaging shape:
 
 ```bash
 tools/build_release_dists --clean
@@ -84,8 +83,9 @@ GOCACHE=/tmp/reploy-go-cache go build -buildvcs=false ./cmd/reploy
 
 ## Blueprints
 
-Blueprint shorthands are resolved from a Reploy blueprint index. By default
-Reploy downloads the index from this repository and caches it locally. Set
+Blueprint shorthands are resolved from a Reploy blueprint index. The default
+index in this repository is app-neutral; app providers can publish their own
+index entries, and users can point Reploy at those indexes. Set
 `REPLOY_BLUEPRINT_INDEX_URL` to point at another HTTP(S) or `file:` index while
 developing or testing.
 
@@ -95,23 +95,17 @@ Validate and cache the index explicitly:
 reploy blueprint-index refresh
 ```
 
-The default index currently contains Arbiter blueprints:
+Shorthands expand to wheel-hosted app blueprints and can be pinned with
+`name==VERSION` when the index entry provides a versioned ref. Without an index,
+use an explicit PyPI package ref:
 
 ```bash
-reploy init --blueprint arbiter-server
-reploy init --blueprint arbiter-suite
-```
-
-Use `arbiter-suite==VERSION` or `arbiter-server==VERSION` to pin a release. The
-shorthands expand to wheel-hosted app blueprints. Without the index, use an
-explicit PyPI package ref:
-
-```bash
-reploy init --blueprint pypi:arbiter-suite
+reploy init --blueprint pypi:example-app
+reploy init --blueprint pypi:example-app==1.2.3
 ```
 
 PyPI package refs default to the `package_name/reploy` blueprint convention, so
-`pypi:arbiter-suite` looks for `arbiter_suite/reploy` in the wheel. Use
+`pypi:example-app` looks for `example_app/reploy` in the wheel. Use
 `pypi:PACKAGE//PATH` only when a package stores its Reploy blueprint somewhere
 else.
 
@@ -139,7 +133,7 @@ package_name/reploy/
   outbound.blueprint.yaml
 ```
 
-Use the app id as the filename, such as `arbiter.blueprint.yaml`. The blueprint
+Use the app id as the filename, such as `example.blueprint.yaml`. The blueprint
 contains the provider identifier and bundle options directly, which keeps the
 single-blueprint case shallow while making multi-blueprint packages obvious.
 
@@ -156,8 +150,8 @@ The generated deployment directory includes:
 Useful commands:
 
 ```bash
-reploy init --blueprint arbiter-server
-reploy init --blueprint arbiter-suite
+reploy init --blueprint pypi:example-app
+reploy init --blueprint file:path/to/app/reploy
 reploy update
 reploy info
 reploy doctor

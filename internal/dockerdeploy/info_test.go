@@ -29,7 +29,7 @@ func TestInfoReportsStateAndBundle(t *testing.T) {
 		"phase: staged",
 		"blueprint: file:" + packDir,
 		"bundle roots:",
-		"  - python package arbiter-suite",
+		"  - python package demo-suite",
 		"bundle prepared:",
 		"  not built",
 		"files:",
@@ -56,7 +56,7 @@ func TestInfoReportsPreparedBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 	bundleDir := filepath.Join(deployDir, BundleDirName)
-	if err := os.WriteFile(filepath.Join(bundleDir, "arbiter_suite-1.2.3-py3-none-any.whl"), []byte("wheel\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(bundleDir, "demo_suite-1.2.3-py3-none-any.whl"), []byte("wheel\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(bundleDir, "hydra_core-1.3.2-py3-none-any.whl"), []byte("wheel\n"), 0o644); err != nil {
@@ -69,7 +69,7 @@ func TestInfoReportsPreparedBundle(t *testing.T) {
 	}
 	for _, want := range []string{
 		"bundle prepared:",
-		"  - root arbiter-suite==1.2.3",
+		"  - root demo-suite==1.2.3",
 		"  - transitive hydra-core==1.3.2",
 	} {
 		if !strings.Contains(info, want) {

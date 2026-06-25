@@ -1,13 +1,4 @@
 {
   "schema_version": 1,
-  "blueprints": {
-    "arbiter-server": {
-      "ref": "pypi:arbiter-server",
-      "versioned_ref": "pypi:arbiter-server=={version}"
-    },
-    "arbiter-suite": {
-      "ref": "pypi:arbiter-suite",
-      "versioned_ref": "pypi:arbiter-suite=={version}"
-    }
-  }
+  "blueprints": {}
 }

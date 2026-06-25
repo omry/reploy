@@ -1133,9 +1133,6 @@ func initUpdateCommandHint(dir string) string {
 
 func parsePackRefArgument(value string) (deploy.PackRef, error) {
 	original := strings.TrimSpace(value)
-	if oldArbiterPackAlias(original) {
-		return deploy.PackRef{}, fmt.Errorf("unknown blueprint shorthand %q; use a shorthand from the Reploy blueprint index or an explicit ref such as file:PATH or pypi:PACKAGE", original)
-	}
 	expanded := original
 	if !hasPackRefScheme(original) {
 		indexExpanded, found, err := expandPackShorthand(original)
@@ -1155,11 +1152,6 @@ func parsePackRefArgument(value string) (deploy.PackRef, error) {
 		ref.Raw = original
 	}
 	return ref, nil
-}
-
-func oldArbiterPackAlias(value string) bool {
-	body, _, _ := strings.Cut(value, "?")
-	return body == "arbiter" || strings.HasPrefix(body, "arbiter==")
 }
 
 func hasPackRefScheme(value string) bool {

@@ -39,7 +39,7 @@ func TestLoadPackFromPinnedPyPIWheel(t *testing.T) {
 	if !strings.Contains(pack.ResolvedArtifact.CachePath, "demo-pkg") {
 		t.Fatalf("cache path = %q", pack.ResolvedArtifact.CachePath)
 	}
-	if pack.App.Provider.Identifier != "arbiter-server" {
+	if pack.App.Provider.Identifier != "demo-server" {
 		t.Fatalf("provider identifier = %q", pack.App.Provider.Identifier)
 	}
 }
@@ -71,7 +71,7 @@ func TestLoadPackFromLatestPyPIWheelResolvesExactVersion(t *testing.T) {
 func TestLoadPackFromSimplePyPIWheelWithoutPackFiles(t *testing.T) {
 	subdir := "demo_pkg/reploy"
 	wheel := testPackWheelWithFiles(t, map[string]string{
-		subdir + "/arbiter.blueprint.yaml": simplePackTestManifest(),
+		subdir + "/demo.blueprint.yaml": simplePackTestManifest(),
 	})
 	indexURL := testPyPIIndex(t, wheel, "2.1.0")
 	t.Setenv("REPLOY_CACHE_DIR", filepath.Join(t.TempDir(), "cache"))
@@ -97,7 +97,7 @@ func TestLoadPackFromSimplePyPIWheelWithoutPackFiles(t *testing.T) {
 
 func TestLoadPackFromPyPIWheelReportsMissingBlueprintPathWithResolvedVersion(t *testing.T) {
 	wheel := testPackWheelWithFiles(t, map[string]string{
-		"demo_pkg/other/arbiter.blueprint.yaml": simplePackTestManifest(),
+		"demo_pkg/other/demo.blueprint.yaml": simplePackTestManifest(),
 	})
 	indexURL := testPyPIIndex(t, wheel, "2.2.0")
 	t.Setenv("REPLOY_CACHE_DIR", filepath.Join(t.TempDir(), "cache"))
@@ -143,7 +143,7 @@ func TestLoadResolvedPackUsesCachedBlueprintPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cachedPack.App.Provider.Identifier != "arbiter-server" {
+	if cachedPack.App.Provider.Identifier != "demo-server" {
 		t.Fatalf("provider identifier = %q", cachedPack.App.Provider.Identifier)
 	}
 }
@@ -180,7 +180,7 @@ func testPyPIIndex(t *testing.T, wheel []byte, version string) string {
 func testPackWheel(t *testing.T, subdir string) []byte {
 	t.Helper()
 	return testPackWheelWithFiles(t, map[string]string{
-		subdir + "/arbiter.blueprint.yaml": packTestManifest(),
+		subdir + "/demo.blueprint.yaml": packTestManifest(),
 	})
 }
 

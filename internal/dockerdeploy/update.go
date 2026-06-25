@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/omry/reploy/internal/deploy"
 )
@@ -212,72 +211,8 @@ func updateDockerEnvFile(dir string, pack deploy.AppPack, results *[]UpdateResul
 		*results = append(*results, UpdateResult{Path: path, Status: deploy.UpdateStatusUpToDate, Ownership: "local", Reason: "Docker environment already matches current defaults"})
 		return nil
 	}
-	if isOldGeneratedDockerEnv(current) {
-		if err := os.WriteFile(path, desired, 0o644); err != nil {
-			return err
-		}
-		*results = append(*results, UpdateResult{Path: path, Status: deploy.UpdateStatusUpdated, Ownership: "local", Reason: "migrated old unreleased Docker environment defaults"})
-		return nil
-	}
-	cleaned := removeObsoleteDockerEnvKeys(current)
-	if string(cleaned) != string(current) {
-		if err := os.WriteFile(path, cleaned, 0o644); err != nil {
-			return err
-		}
-		*results = append(*results, UpdateResult{Path: path, Status: deploy.UpdateStatusUpdated, Ownership: "local", Reason: "removed obsolete Docker environment keys"})
-		return nil
-	}
 	*results = append(*results, UpdateResult{Path: path, Status: deploy.UpdateStatusUpToDate, Ownership: "local", Reason: "preserved operator-edited Docker environment"})
 	return nil
-}
-
-func isOldGeneratedDockerEnv(content []byte) bool {
-	text := string(content)
-	return strings.Contains(text, "# Docker Compose settings for the Arbiter deployment.") &&
-		strings.Contains(text, "ARBITER_IMAGE=")
-}
-
-func removeObsoleteDockerEnvKeys(content []byte) []byte {
-	obsolete := map[string]bool{
-		"ARBITER_APP_ENV_FILE":        true,
-		"ARBITER_IMAGE":               true,
-		"ARBITER_CONTAINER_NAME":      true,
-		"ARBITER_CONTAINER_USER":      true,
-		"ARBITER_RESTART":             true,
-		"ARBITER_CONFIG_DIR":          true,
-		"ARBITER_REQUIREMENTS_FILE":   true,
-		"ARBITER_BUNDLE_DIR":          true,
-		"ARBITER_RUNTIME_DIR":         true,
-		"ARBITER_DATA_DIR":            true,
-		"ARBITER_HOST_BIND":           true,
-		"ARBITER_HOST_PORT":           true,
-		"ARBITER_CONTAINER_PORT":      true,
-		"ARBITER_PUBLIC_SCHEME":       true,
-		"ARBITER_PUBLIC_BASE_URL":     true,
-		"ARBITER_DOCKER_NETWORK_NAME": true,
-		"ARBITER_RUNTIME_ROOT":        true,
-		"ARBITER_PIP_VERBOSE":         true,
-		"ARBITER_CONFIG_MOUNT":        true,
-	}
-	lines := strings.Split(string(content), "\n")
-	kept := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			kept = append(kept, line)
-			continue
-		}
-		key, _, ok := strings.Cut(trimmed, "=")
-		if ok && obsolete[strings.TrimSpace(key)] {
-			continue
-		}
-		kept = append(kept, line)
-	}
-	cleaned := strings.Join(kept, "\n")
-	if len(content) > 0 && content[len(content)-1] == '\n' && !strings.HasSuffix(cleaned, "\n") {
-		cleaned += "\n"
-	}
-	return []byte(cleaned)
 }
 
 func ensureDeploymentDirs(dir string, deploymentDirs deploy.DockerDeploymentDirs, results *[]UpdateResult) error {

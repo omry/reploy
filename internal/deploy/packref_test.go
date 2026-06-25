@@ -3,11 +3,11 @@ package deploy
 import "testing"
 
 func TestParseFilePackRef(t *testing.T) {
-	ref, err := ParsePackRef("file:./arbiter.blueprint.yaml")
+	ref, err := ParsePackRef("file:./demo.blueprint.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ref.Scheme != "file" || ref.Source != "./arbiter.blueprint.yaml" || ref.Subdir != "" {
+	if ref.Scheme != "file" || ref.Source != "./demo.blueprint.yaml" || ref.Subdir != "" {
 		t.Fatalf("unexpected ref: %#v", ref)
 	}
 	if ref.IsPinned {
@@ -16,7 +16,7 @@ func TestParseFilePackRef(t *testing.T) {
 }
 
 func TestParseGitPackRefWithHTTPSAndSubdir(t *testing.T) {
-	ref, err := ParsePackRef("git:https://github.com/omry/reploy.git//deploy/arbiter.blueprint.yaml?ref=v1.2.3")
+	ref, err := ParsePackRef("git:https://github.com/omry/reploy.git//deploy/demo.blueprint.yaml?ref=v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func TestParseGitPackRefWithHTTPSAndSubdir(t *testing.T) {
 	if ref.Source != "https://github.com/omry/reploy.git" {
 		t.Fatalf("source = %q", ref.Source)
 	}
-	if ref.Subdir != "deploy/arbiter.blueprint.yaml" {
+	if ref.Subdir != "deploy/demo.blueprint.yaml" {
 		t.Fatalf("subdir = %q", ref.Subdir)
 	}
 	if ref.Query.Get("ref") != "v1.2.3" {
@@ -38,7 +38,7 @@ func TestParseGitPackRefWithHTTPSAndSubdir(t *testing.T) {
 }
 
 func TestParseSaplingPackRefWithRevision(t *testing.T) {
-	ref, err := ParsePackRef("sl:https://github.com/omry/reploy.git//deploy/arbiter.blueprint.yaml?rev=abc123")
+	ref, err := ParsePackRef("sl:https://github.com/omry/reploy.git//deploy/demo.blueprint.yaml?rev=abc123")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,14 +48,14 @@ func TestParseSaplingPackRefWithRevision(t *testing.T) {
 }
 
 func TestParsePyPIPackRefWithExplicitSubdir(t *testing.T) {
-	ref, err := ParsePackRef("pypi:arbiter-suite==0.1.0//arbiter_suite/reploy")
+	ref, err := ParsePackRef("pypi:demo-suite==0.1.0//demo_suite/reploy")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ref.Source != "arbiter-suite==0.1.0" {
+	if ref.Source != "demo-suite==0.1.0" {
 		t.Fatalf("source = %q", ref.Source)
 	}
-	if ref.Subdir != "arbiter_suite/reploy" {
+	if ref.Subdir != "demo_suite/reploy" {
 		t.Fatalf("subdir = %q", ref.Subdir)
 	}
 	if !ref.IsPinned {
@@ -64,14 +64,14 @@ func TestParsePyPIPackRefWithExplicitSubdir(t *testing.T) {
 }
 
 func TestParsePyPIPackRefAllowsLatestWithExplicitSubdir(t *testing.T) {
-	ref, err := ParsePackRef("pypi:arbiter-suite//arbiter_suite/reploy")
+	ref, err := ParsePackRef("pypi:demo-suite//demo_suite/reploy")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ref.Source != "arbiter-suite" {
+	if ref.Source != "demo-suite" {
 		t.Fatalf("source = %q", ref.Source)
 	}
-	if ref.Subdir != "arbiter_suite/reploy" {
+	if ref.Subdir != "demo_suite/reploy" {
 		t.Fatalf("subdir = %q", ref.Subdir)
 	}
 	if ref.IsPinned {
@@ -80,14 +80,14 @@ func TestParsePyPIPackRefAllowsLatestWithExplicitSubdir(t *testing.T) {
 }
 
 func TestParsePyPIPackRefDefaultsSubdirFromPackageName(t *testing.T) {
-	ref, err := ParsePackRef("pypi:Arbiter.Suite==0.1.0")
+	ref, err := ParsePackRef("pypi:Demo.Suite==0.1.0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ref.Source != "Arbiter.Suite==0.1.0" {
+	if ref.Source != "Demo.Suite==0.1.0" {
 		t.Fatalf("source = %q", ref.Source)
 	}
-	if ref.Subdir != "arbiter_suite/reploy" {
+	if ref.Subdir != "demo_suite/reploy" {
 		t.Fatalf("subdir = %q", ref.Subdir)
 	}
 	if !ref.IsPinned {
@@ -96,14 +96,14 @@ func TestParsePyPIPackRefDefaultsSubdirFromPackageName(t *testing.T) {
 }
 
 func TestParsePyPIPackRefDefaultsSubdirForLatest(t *testing.T) {
-	ref, err := ParsePackRef("pypi:arbiter-suite")
+	ref, err := ParsePackRef("pypi:demo-suite")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ref.Source != "arbiter-suite" {
+	if ref.Source != "demo-suite" {
 		t.Fatalf("source = %q", ref.Source)
 	}
-	if ref.Subdir != "arbiter_suite/reploy" {
+	if ref.Subdir != "demo_suite/reploy" {
 		t.Fatalf("subdir = %q", ref.Subdir)
 	}
 	if ref.IsPinned {

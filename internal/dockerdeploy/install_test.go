@@ -26,7 +26,7 @@ func TestInstallDryRunPrintsPlan(t *testing.T) {
 	if err := Install(InstallOptions{
 		Dir:     deployDir,
 		Target:  target,
-		Service: "arbiter-test",
+		Service: "demo-test",
 		Start:   true,
 		DryRun:  true,
 		Stdout:  &stdout,
@@ -36,11 +36,11 @@ func TestInstallDryRunPrintsPlan(t *testing.T) {
 	for _, want := range []string{
 		"would install deployment:",
 		"target: " + target,
-		"service: arbiter-test",
-		"would write systemd unit: /etc/systemd/system/arbiter-test.service",
+		"service: demo-test",
+		"would write systemd unit: /etc/systemd/system/demo-test.service",
 		"would run: systemctl daemon-reload",
-		"would run: systemctl enable arbiter-test.service",
-		"would run: systemctl restart arbiter-test.service",
+		"would run: systemctl enable demo-test.service",
+		"would run: systemctl restart demo-test.service",
 		"would run: " + filepath.Join(target, "reploy") + " test",
 		"would run: " + filepath.Join(target, "reploy") + " app config check --live",
 	} {
@@ -120,16 +120,16 @@ func TestCopyDeploymentTreeProtectedRejectsSymlinks(t *testing.T) {
 
 func TestSystemdUnitIncludesComposeOverrideWhenPresent(t *testing.T) {
 	unit := systemdUnit(installPlan{
-		TargetDir:       "/srv/arbiter",
-		Service:         "arbiter-prod",
+		TargetDir:       "/srv/demo",
+		Service:         "demo-prod",
 		ComposeOverride: true,
 	}, "/usr/bin/docker", true)
 	for _, want := range []string{
 		"Requires=docker.service",
 		"After=docker.service",
-		"WorkingDirectory=/srv/arbiter",
-		"ExecStart=/usr/bin/docker compose --env-file /srv/arbiter/.reploy/docker.env --project-directory /srv/arbiter -f /srv/arbiter/.reploy/compose.yaml -f /srv/arbiter/.reploy/compose.override.yaml up",
-		"ExecStop=/usr/bin/docker compose --env-file /srv/arbiter/.reploy/docker.env --project-directory /srv/arbiter -f /srv/arbiter/.reploy/compose.yaml -f /srv/arbiter/.reploy/compose.override.yaml down",
+		"WorkingDirectory=/srv/demo",
+		"ExecStart=/usr/bin/docker compose --env-file /srv/demo/.reploy/docker.env --project-directory /srv/demo -f /srv/demo/.reploy/compose.yaml -f /srv/demo/.reploy/compose.override.yaml up",
+		"ExecStop=/usr/bin/docker compose --env-file /srv/demo/.reploy/docker.env --project-directory /srv/demo -f /srv/demo/.reploy/compose.yaml -f /srv/demo/.reploy/compose.override.yaml down",
 		"WantedBy=multi-user.target",
 	} {
 		if !strings.Contains(unit, want) {
@@ -209,7 +209,7 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	if err := Install(InstallOptions{
 		Dir:     deployDir,
 		Target:  target,
-		Service: "arbiter-apply",
+		Service: "demo-apply",
 		Start:   true,
 	}); err != nil {
 		t.Fatal(err)
@@ -224,7 +224,7 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	if state.Phase != deploy.PhaseInstalled {
 		t.Fatalf("phase = %s, want %s", state.Phase, deploy.PhaseInstalled)
 	}
-	unit, err := os.ReadFile(filepath.Join(unitDir, "arbiter-apply.service"))
+	unit, err := os.ReadFile(filepath.Join(unitDir, "demo-apply.service"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,8 +234,8 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	for _, want := range []string{
 		"/bin/systemctl cat docker.service",
 		"/bin/systemctl daemon-reload",
-		"/bin/systemctl enable arbiter-apply.service",
-		"/bin/systemctl restart arbiter-apply.service",
+		"/bin/systemctl enable demo-apply.service",
+		"/bin/systemctl restart demo-apply.service",
 		filepath.Join(target, "reploy") + " test",
 		filepath.Join(target, "reploy") + " app config check --live",
 	} {

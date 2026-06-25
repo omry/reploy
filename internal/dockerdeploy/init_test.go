@@ -43,16 +43,16 @@ func TestInitWritesDeploymentDirectory(t *testing.T) {
 		}
 	}
 	requirements := readFile(t, filepath.Join(deployDir, RequirementsFileName))
-	if requirements != "arbiter-suite\n" {
+	if requirements != "demo-suite\n" {
 		t.Fatalf("requirements = %q", requirements)
 	}
 	dockerEnv := readFile(t, filepath.Join(deployDir, DockerEnvFileName))
-	for _, unexpected := range []string{"ARBITER_DOCKER_SUBNET", "ARBITER_DOCKER_BRIDGE_NAME"} {
+	for _, unexpected := range []string{"DEMO_DOCKER_SUBNET", "DEMO_DOCKER_BRIDGE_NAME"} {
 		if strings.Contains(dockerEnv, unexpected) {
 			t.Fatalf("docker.env should not pin network internals with %s:\n%s", unexpected, dockerEnv)
 		}
 	}
-	if strings.Contains(dockerEnv, "ARBITER_APP_ENV_FILE") {
+	if strings.Contains(dockerEnv, "DEMO_APP_ENV_FILE") {
 		t.Fatalf("docker.env should not point at app env files:\n%s", dockerEnv)
 	}
 	compose := readFile(t, filepath.Join(deployDir, ComposeFileName))
@@ -191,7 +191,7 @@ docker:
 			t.Fatalf("docker.env missing %q:\n%s", expected, dockerEnv)
 		}
 	}
-	for _, unexpected := range []string{"ARBITER_", "arbiter-staging"} {
+	for _, unexpected := range []string{"DEMO_", "demo-staging"} {
 		if strings.Contains(dockerEnv, unexpected) {
 			t.Fatalf("docker.env leaked %s:\n%s", unexpected, dockerEnv)
 		}
@@ -210,7 +210,7 @@ docker:
 			t.Fatalf("compose missing %q:\n%s", expected, compose)
 		}
 	}
-	for _, unexpected := range []string{"ARBITER_", "arbiter-staging", "  arbiter:", "/source/arbiter"} {
+	for _, unexpected := range []string{"DEMO_", "demo-staging", "  demo:", "/source/demo"} {
 		if strings.Contains(compose, unexpected) {
 			t.Fatalf("compose leaked %s:\n%s", unexpected, compose)
 		}
@@ -224,10 +224,10 @@ func TestInitUsesPackDeclaredDockerLayout(t *testing.T) {
   requires_reploy: ">=0.1.0"
 
 app:
-  id: arbiter
+  id: demo
   provider:
     type: python
-    identifier: arbiter-server
+    identifier: demo-server
 
 docker:
   deployment_dirs:
@@ -250,7 +250,7 @@ docker:
         argv:
           - custom-serve
           - --name
-          - ${ARBITER_CONFIG_NAME}
+          - ${DEMO_CONFIG_NAME}
     config_check:
       trigger:
         - config
@@ -261,7 +261,7 @@ docker:
         argv:
           - custom-check
           - --name
-          - ${ARBITER_CONFIG_NAME}
+          - ${DEMO_CONFIG_NAME}
     config_show:
       trigger:
         - config
@@ -272,7 +272,7 @@ docker:
         argv:
           - custom-show
           - --name
-          - ${ARBITER_CONFIG_NAME}
+          - ${DEMO_CONFIG_NAME}
 `)
 	ref, err := deploy.ParsePackRef("file:" + packDir)
 	if err != nil {
@@ -300,13 +300,13 @@ docker:
 		}
 	}
 	compose := readFile(t, filepath.Join(deployDir, ComposeFileName))
-	if !strings.Contains(compose, `container_command_config_check() { "custom-check" "--name" "$${ARBITER_CONFIG_NAME}" "$$@"; };`) {
+	if !strings.Contains(compose, `container_command_config_check() { "custom-check" "--name" "$${DEMO_CONFIG_NAME}" "$$@"; };`) {
 		t.Fatalf("compose did not render pack config_check command:\n%s", compose)
 	}
-	if !strings.Contains(compose, `container_command_serve() { "custom-serve" "--name" "$${ARBITER_CONFIG_NAME}" "$$@"; };`) {
+	if !strings.Contains(compose, `container_command_serve() { "custom-serve" "--name" "$${DEMO_CONFIG_NAME}" "$$@"; };`) {
 		t.Fatalf("compose did not render pack serve command:\n%s", compose)
 	}
-	if !strings.Contains(compose, `container_command_config_show() { "custom-show" "--name" "$${ARBITER_CONFIG_NAME}" "$$@"; };`) {
+	if !strings.Contains(compose, `container_command_config_show() { "custom-show" "--name" "$${DEMO_CONFIG_NAME}" "$$@"; };`) {
 		t.Fatalf("compose did not render pack app config_show command:\n%s", compose)
 	}
 	if !strings.Contains(compose, `config_check) container_command_config_check "$$@" ;;`) {
@@ -396,12 +396,12 @@ func TestInitAcceptsExplicitRequirements(t *testing.T) {
 	_, err = Init(InitOptions{
 		Dir:          deployDir,
 		Pack:         ref,
-		Requirements: []string{"arbiter-server==1.2.3", "arbiter-smtp==1.2.3"},
+		Requirements: []string{"demo-server==1.2.3", "demo-smtp==1.2.3"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "arbiter-server==1.2.3\narbiter-smtp==1.2.3\n" {
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-server==1.2.3\ndemo-smtp==1.2.3\n" {
 		t.Fatalf("requirements = %q", got)
 	}
 }
@@ -516,7 +516,7 @@ func TestInitRejectsUnpinnedExplicitRequirement(t *testing.T) {
 	_, err = Init(InitOptions{
 		Dir:          deployDir,
 		Pack:         ref,
-		Requirements: []string{"arbiter-server"},
+		Requirements: []string{"demo-server"},
 	})
 	if err == nil {
 		t.Fatal("expected error")
@@ -618,38 +618,6 @@ func TestUpdatePreservesLocallyEditedDockerEnv(t *testing.T) {
 	}
 }
 
-func TestUpdateRemovesObsoleteDockerEnvKeys(t *testing.T) {
-	packDir := makeTestPack(t)
-	ref, err := deploy.ParsePackRef("file:" + packDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	deployDir := filepath.Join(t.TempDir(), "deployment")
-	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
-		t.Fatal(err)
-	}
-	dockerEnvPath := filepath.Join(deployDir, DockerEnvFileName)
-	content := readFile(t, dockerEnvPath)
-	content = strings.Replace(content, "REPLOY_CONFIG_DIR=./conf\n", "ARBITER_APP_ENV_FILE=./conf/.env\nREPLOY_CONFIG_DIR=./conf\n", 1)
-	if err := os.WriteFile(dockerEnvPath, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	results, err := Update(UpdateOptions{Dir: deployDir})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	assertResultStatus(t, results, dockerEnvPath, deploy.UpdateStatusUpdated)
-	dockerEnv := readFile(t, dockerEnvPath)
-	if strings.Contains(dockerEnv, "ARBITER_APP_ENV_FILE") {
-		t.Fatalf("docker.env still contains obsolete app env key:\n%s", dockerEnv)
-	}
-	if !strings.Contains(dockerEnv, "REPLOY_CONFIG_DIR=./conf\n") {
-		t.Fatalf("docker.env lost current config dir key:\n%s", dockerEnv)
-	}
-}
-
 func TestUpdateReportsMetadataUpToDateWhenUnchanged(t *testing.T) {
 	packDir := makeTestPack(t)
 	ref, err := deploy.ParsePackRef("file:" + packDir)
@@ -710,7 +678,7 @@ func makeTestPack(t *testing.T) string {
 func makeTestPackWithManifest(t *testing.T, manifest string) string {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "arbiter.blueprint.yaml"), []byte(manifest), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "demo.blueprint.yaml"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -723,25 +691,25 @@ func testPackManifest() string {
   requires_reploy: ">=0.1.0"
 
 app:
-  id: arbiter
+  id: demo
   provider:
     type: python
-    identifier: arbiter-suite
+    identifier: demo-suite
   terminal:
-    color_env: ARBITER_COLOR
+    color_env: DEMO_COLOR
 
 bundle:
   options:
-    arbiter-suite:
-      identifier: arbiter-suite
+    demo-suite:
+      identifier: demo-suite
       group: meta
-      description: Install the full Arbiter suite.
+      description: Install the full Demo suite.
     imap:
-      identifier: arbiter-imap
+      identifier: demo-imap
       group: plugins
       description: Receive email through IMAP.
     smtp:
-      identifier: arbiter-smtp
+      identifier: demo-smtp
       group: plugins
       description: Send email through SMTP.
 
@@ -764,11 +732,11 @@ docker:
     serve:
       container:
         argv:
-          - arbiter-server
+          - demo-server
           - --config-dir
           - /config
           - --config-name
-          - ${ARBITER_CONFIG_NAME}
+          - ${DEMO_CONFIG_NAME}
           - serve
     config_check:
       trigger:
@@ -778,11 +746,11 @@ docker:
         - --live
       container:
         argv:
-          - arbiter-server
+          - demo-server
           - --config-dir
           - /config
           - --config-name
-          - ${ARBITER_CONFIG_NAME}
+          - ${DEMO_CONFIG_NAME}
           - config
           - check
 `

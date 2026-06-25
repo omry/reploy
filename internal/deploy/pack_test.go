@@ -10,7 +10,7 @@ import (
 
 func TestLoadPack(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "arbiter.blueprint.yaml"), []byte(packTestManifest()), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "demo.blueprint.yaml"), []byte(packTestManifest()), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	ref, err := ParsePackRef("file:" + dir)
@@ -22,7 +22,7 @@ func TestLoadPack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pack.AppID != "arbiter" {
+	if pack.AppID != "demo" {
 		t.Fatalf("app id = %q", pack.AppID)
 	}
 	if pack.Docker.DeploymentDirs.Bundle != "bundle" {
@@ -41,16 +41,16 @@ func TestParsePackManifestReadsDockerLayout(t *testing.T) {
 	if manifest.App.Provider.Type != "python" {
 		t.Fatalf("provider type = %q", manifest.App.Provider.Type)
 	}
-	if manifest.App.Provider.Identifier != "arbiter-server" {
+	if manifest.App.Provider.Identifier != "demo-server" {
 		t.Fatalf("provider identifier = %q", manifest.App.Provider.Identifier)
 	}
-	if manifest.App.Provider.LocalSources["arbiter-server"] != "../../server" {
+	if manifest.App.Provider.LocalSources["demo-server"] != "../../server" {
 		t.Fatalf("local sources = %#v", manifest.App.Provider.LocalSources)
 	}
-	if manifest.Bundle.Options["imap"].Identifier != "arbiter-imap" {
+	if manifest.Bundle.Options["imap"].Identifier != "demo-imap" {
 		t.Fatalf("bundle options = %#v", manifest.Bundle.Options)
 	}
-	if manifest.App.Terminal.ColorEnv != "ARBITER_COLOR" {
+	if manifest.App.Terminal.ColorEnv != "DEMO_COLOR" {
 		t.Fatalf("app terminal color env = %q", manifest.App.Terminal.ColorEnv)
 	}
 	if manifest.Pack.Schema != 1 || manifest.Pack.Version != "0.1.0" || manifest.Pack.RequiresReploy != ">=0.1.0" {
@@ -72,7 +72,7 @@ func TestParsePackManifestReadsDockerLayout(t *testing.T) {
 	if !command.AppCommand {
 		t.Fatal("config_check was not marked as app command")
 	}
-	if got := strings.Join(command.Container.Argv, " "); got != "arbiter-server --config-dir /config --config-name ${ARBITER_CONFIG_NAME} config check" {
+	if got := strings.Join(command.Container.Argv, " "); got != "demo-server --config-dir /config --config-name ${DEMO_CONFIG_NAME} config check" {
 		t.Fatalf("config check argv = %q", got)
 	}
 	serverBootstrap := dockerCommandByName(t, manifest, "bootstrap_server")
@@ -385,14 +385,14 @@ func TestParsePackManifestRejectsEscapingDeploymentDir(t *testing.T) {
   requires_reploy: ">=0.1.0"
 
 app:
-  id: arbiter
+  id: demo
   provider:
     type: python
-    identifier: arbiter-server
+    identifier: demo-server
     local_sources:
-      arbiter-server: ../../server
+      demo-server: ../../server
   terminal:
-    color_env: ARBITER_COLOR
+    color_env: DEMO_COLOR
 
 docker:
   deployment_dirs:
@@ -404,7 +404,7 @@ docker:
     serve:
       container:
         argv:
-          - arbiter-server
+          - demo-server
           - serve
     config_check:
       trigger:
@@ -414,11 +414,11 @@ docker:
         - --live
       container:
         argv:
-          - arbiter-server
+          - demo-server
           - --config-dir
           - /config
           - --config-name
-          - ${ARBITER_CONFIG_NAME}
+          - ${DEMO_CONFIG_NAME}
           - config
           - check
 `)
@@ -432,7 +432,7 @@ docker:
 
 func TestLoadPackRejectsMissingAppID(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "arbiter.blueprint.yaml"), []byte("blueprint:\n  schema: 1\n  version: 0.1.0\n  requires_reploy: \">=0.1.0\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "demo.blueprint.yaml"), []byte("blueprint:\n  schema: 1\n  version: 0.1.0\n  requires_reploy: \">=0.1.0\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	ref, err := ParsePackRef("file:" + dir)
@@ -453,19 +453,19 @@ func packTestManifest() string {
   requires_reploy: ">=0.1.0"
 
 app:
-  id: arbiter
+  id: demo
   provider:
     type: python
-    identifier: arbiter-server
+    identifier: demo-server
     local_sources:
-      arbiter-server: ../../server
+      demo-server: ../../server
   terminal:
-    color_env: ARBITER_COLOR
+    color_env: DEMO_COLOR
 
 bundle:
   options:
     imap:
-      identifier: arbiter-imap
+      identifier: demo-imap
       group: plugins
       description: Receive email through IMAP.
 
@@ -479,11 +479,11 @@ docker:
     serve:
       container:
         argv:
-          - arbiter-server
+          - demo-server
           - --config-dir
           - /config
           - --config-name
-          - ${ARBITER_CONFIG_NAME}
+          - ${DEMO_CONFIG_NAME}
           - serve
     config_check:
       trigger:
@@ -495,11 +495,11 @@ docker:
         - --profile
       container:
         argv:
-          - arbiter-server
+          - demo-server
           - --config-dir
           - /config
           - --config-name
-          - ${ARBITER_CONFIG_NAME}
+          - ${DEMO_CONFIG_NAME}
           - config
           - check
     bootstrap_server:
@@ -511,13 +511,13 @@ docker:
         - --force
       container:
         argv:
-          - arbiter-server
+          - demo-server
           - --config-dir
           - /config
           - --config-name
-          - ${ARBITER_CONFIG_NAME}
+          - ${DEMO_CONFIG_NAME}
           - bootstrap
-          - arbiter
+          - demo
     bootstrap_plugin:
       trigger:
         - bootstrap
@@ -526,11 +526,11 @@ docker:
       forward_args: true
       container:
         argv:
-          - arbiter-server
+          - demo-server
           - --config-dir
           - /config
           - --config-name
-          - ${ARBITER_CONFIG_NAME}
+          - ${DEMO_CONFIG_NAME}
           - bootstrap
           - plugin
     config_activate:
@@ -541,11 +541,11 @@ docker:
       forward_args: true
       container:
         argv:
-          - arbiter-server
+          - demo-server
           - --config-dir
           - /config
           - --config-name
-          - ${ARBITER_CONFIG_NAME}
+          - ${DEMO_CONFIG_NAME}
           - config
           - activate
     config_show:
@@ -556,11 +556,11 @@ docker:
       forward_args: true
       container:
         argv:
-          - arbiter-server
+          - demo-server
           - --config-dir
           - /config
           - --config-name
-          - ${ARBITER_CONFIG_NAME}
+          - ${DEMO_CONFIG_NAME}
           - config
           - show
 `

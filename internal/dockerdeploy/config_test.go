@@ -234,7 +234,7 @@ func TestAppCommandListShowsPackDeclaredAppCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.AppID != "arbiter" {
+	if result.AppID != "demo" {
 		t.Fatalf("app id = %q", result.AppID)
 	}
 	if strings.Join(result.Commands, "\n") != "bootstrap plugin\nconfig check" {
@@ -269,7 +269,7 @@ func TestAppCommandRunsConfigCheck(t *testing.T) {
 func TestAppCommandPassesPackDeclaredColorEnv(t *testing.T) {
 	deployDir := makeAppCommandDeployment(t)
 	t.Setenv("REPLOY_COLOR", "always")
-	unsetEnv(t, "ARBITER_COLOR")
+	unsetEnv(t, "DEMO_COLOR")
 	var specs []CommandSpec
 	restore := stubAppCommandRunner(func(spec CommandSpec, options RunOptions) error {
 		specs = append(specs, spec)
@@ -284,7 +284,7 @@ func TestAppCommandPassesPackDeclaredColorEnv(t *testing.T) {
 	if len(specs) != 1 {
 		t.Fatalf("ran %d commands, want one-off run", len(specs))
 	}
-	if !containsAdjacent(specs[0].Args, "-e", "ARBITER_COLOR=always") {
+	if !containsAdjacent(specs[0].Args, "-e", "DEMO_COLOR=always") {
 		t.Fatalf("first command did not pass blueprint-declared color env: %#v", specs[0].Args)
 	}
 }
@@ -292,7 +292,7 @@ func TestAppCommandPassesPackDeclaredColorEnv(t *testing.T) {
 func TestAppCommandHonorsExplicitPackDeclaredColorEnv(t *testing.T) {
 	deployDir := makeAppCommandDeployment(t)
 	t.Setenv("REPLOY_COLOR", "always")
-	t.Setenv("ARBITER_COLOR", "never")
+	t.Setenv("DEMO_COLOR", "never")
 	var specs []CommandSpec
 	restore := stubAppCommandRunner(func(spec CommandSpec, options RunOptions) error {
 		specs = append(specs, spec)
@@ -307,7 +307,7 @@ func TestAppCommandHonorsExplicitPackDeclaredColorEnv(t *testing.T) {
 	if len(specs) != 1 {
 		t.Fatalf("ran %d commands, want one-off run", len(specs))
 	}
-	if !containsAdjacent(specs[0].Args, "-e", "ARBITER_COLOR=never") {
+	if !containsAdjacent(specs[0].Args, "-e", "DEMO_COLOR=never") {
 		t.Fatalf("first command did not preserve explicit blueprint-declared color env: %#v", specs[0].Args)
 	}
 }
@@ -419,8 +419,8 @@ func makeAppCommandDeployment(t *testing.T) string {
 	t.Helper()
 	manifest := strings.Replace(
 		testPackManifest(),
-		"    config_check:\n      trigger:\n        - config\n        - check\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - arbiter-server\n          - --config-dir\n          - /config\n          - --config-name\n          - ${ARBITER_CONFIG_NAME}\n          - config\n          - check\n",
-		"    config_check:\n      trigger:\n        - config\n        - check\n      app_command: true\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - arbiter-server\n          - --config-dir\n          - /config\n          - --config-name\n          - ${ARBITER_CONFIG_NAME}\n          - config\n          - check\n    bootstrap_plugin:\n      trigger:\n        - bootstrap\n        - plugin\n      app_command: true\n      forward_args: true\n      container:\n        argv:\n          - arbiter-server\n          - --config-dir\n          - /config\n          - --config-name\n          - ${ARBITER_CONFIG_NAME}\n          - bootstrap\n          - plugin\n",
+		"    config_check:\n      trigger:\n        - config\n        - check\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /config\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n",
+		"    config_check:\n      trigger:\n        - config\n        - check\n      app_command: true\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /config\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n    bootstrap_plugin:\n      trigger:\n        - bootstrap\n        - plugin\n      app_command: true\n      forward_args: true\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /config\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - bootstrap\n          - plugin\n",
 		1,
 	)
 	packDir := makeTestPackWithManifest(t, manifest)
