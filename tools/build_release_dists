@@ -12,10 +12,12 @@ from pathlib import Path
 REPLOY_TARGETS = (
     "linux-amd64",
     "linux-arm64",
-    "darwin-amd64",
-    "darwin-arm64",
-    "windows-amd64",
-    "windows-arm64",
+    # Formal macOS support is deferred.
+    # "darwin-amd64",
+    # "darwin-arm64",
+    # Formal Windows support is deferred.
+    # "windows-amd64",
+    # "windows-arm64",
 )
 
 

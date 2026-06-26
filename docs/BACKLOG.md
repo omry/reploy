@@ -58,4 +58,23 @@ This file is the day-to-day queue for design and implementation gaps.
       title, navbar, footer, and custom domain; and add a local docs build check
       to the normal validation path.
 
+- [ ] `P2` Define and validate formal Windows support.
+      Reploy should have explicit Windows behavior instead of accidental
+      partial support. Acceptance checks: publish a support matrix for Windows
+      staging/development commands versus permanent install/uninstall; build
+      and smoke-test `reploy.exe` for init/update/info/bundle/app flows with
+      Docker Desktop where applicable; make Linux-only commands such as
+      systemd-based install/uninstall fail with clear platform errors; and
+      decide whether a Windows service backend is in scope or explicitly
+      deferred.
+
+- [ ] `P2` Define and validate formal macOS support.
+      Reploy should have explicit macOS behavior instead of assuming Linux-like
+      service management. Acceptance checks: publish a support matrix for macOS
+      staging/development commands versus permanent install/uninstall; build
+      and smoke-test macOS binaries for init/update/info/bundle/app flows with
+      Docker Desktop where applicable; make systemd-based install/uninstall fail
+      with clear platform errors on macOS; and decide whether a launchd backend
+      is in scope or explicitly deferred.
+
 ## Post-v1

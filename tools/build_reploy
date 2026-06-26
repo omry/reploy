@@ -30,11 +30,15 @@ class Target:
 DEFAULT_TARGETS = (
     Target("linux", "amd64"),
     Target("linux", "arm64"),
-    Target("darwin", "amd64"),
-    Target("darwin", "arm64"),
-    Target("windows", "amd64"),
-    Target("windows", "arm64"),
+    # Formal macOS support is deferred.
+    # Target("darwin", "amd64"),
+    # Target("darwin", "arm64"),
+    # Formal Windows support is deferred.
+    # Target("windows", "amd64"),
+    # Target("windows", "arm64"),
 )
+
+ACTIVE_TARGET_LABELS = {target.label for target in DEFAULT_TARGETS}
 
 
 def current_target() -> Target | None:
@@ -154,7 +158,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--all",
         action="store_true",
-        help="build all supported release targets",
+        help="build all active release targets",
     )
     parser.add_argument(
         "--clean",
@@ -185,10 +189,26 @@ def selected_targets(args: argparse.Namespace) -> tuple[Target, ...]:
     if args.all:
         return DEFAULT_TARGETS
     if args.target:
-        return tuple(args.target)
+        targets = tuple(args.target)
+        unsupported = [
+            target.label for target in targets if target.label not in ACTIVE_TARGET_LABELS
+        ]
+        if unsupported:
+            raise ValueError(
+                "unsupported build target(s): "
+                + ", ".join(unsupported)
+                + "; active targets: "
+                + ", ".join(sorted(ACTIVE_TARGET_LABELS))
+            )
+        return targets
     target = current_target()
     if target is None:
         raise ValueError("could not infer current target; pass --target or --all")
+    if target.label not in ACTIVE_TARGET_LABELS:
+        raise ValueError(
+            f"current target {target.label} is not active; pass one of: "
+            + ", ".join(sorted(ACTIVE_TARGET_LABELS))
+        )
     return (target,)
 
 

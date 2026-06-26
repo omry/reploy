@@ -26,7 +26,8 @@ Build the current platform binary:
 tools/build_reploy
 ```
 
-The binary is written under `dist/GOOS-GOARCH/`. Build all release targets:
+The binary is written under `dist/GOOS-GOARCH/`. Build all active release
+targets:
 
 ```bash
 tools/build_reploy --all
@@ -34,9 +35,10 @@ tools/build_reploy --all
 
 ## Python Package
 
-Reploy is packaged as platform-specific Python wheels. The distribution contains
-no Python wrapper; installing it places the native `reploy` executable on `PATH`
-and also includes the binary at `reploy/bin/reploy` inside the wheel.
+Reploy is packaged as platform-specific Python wheels. Active release wheels are
+Linux-only for now. The distribution contains no Python wrapper; installing it
+places the native `reploy` executable on `PATH` and also includes the binary at
+`reploy/bin/reploy` inside the wheel.
 
 For local development:
 
@@ -62,10 +64,11 @@ already has the Python build dependencies installed and cannot reach PyPI.
 
 The package build infers the host `GOOS-GOARCH` target and runs
 `tools/build_reploy` if the matching binary is missing. Set `REPLOY_TARGET` to
-build a specific target, such as `darwin-arm64` or `windows-amd64`. Set
+build a specific active target, such as `linux-amd64` or `linux-arm64`. Set
 `REPLOY_BINARY` to package an explicit prebuilt binary. Editable installs use a
 small launcher that execs the binary in `dist`, so rebuilding Reploy updates the
-installed `reploy` command without reinstalling the package.
+installed `reploy` command without reinstalling the package. Formal macOS and
+Windows support is tracked in the backlog.
 
 ## Test
 

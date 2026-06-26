@@ -14,10 +14,12 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 TARGETS = {
     "linux-amd64": ("reploy", "manylinux_2_17_x86_64"),
     "linux-arm64": ("reploy", "manylinux_2_17_aarch64"),
-    "darwin-amd64": ("reploy", "macosx_11_0_x86_64"),
-    "darwin-arm64": ("reploy", "macosx_11_0_arm64"),
-    "windows-amd64": ("reploy.exe", "win_amd64"),
-    "windows-arm64": ("reploy.exe", "win_arm64"),
+    # Formal macOS support is deferred.
+    # "darwin-amd64": ("reploy", "macosx_11_0_x86_64"),
+    # "darwin-arm64": ("reploy", "macosx_11_0_arm64"),
+    # Formal Windows support is deferred.
+    # "windows-amd64": ("reploy.exe", "win_amd64"),
+    # "windows-arm64": ("reploy.exe", "win_arm64"),
 }
 
 
