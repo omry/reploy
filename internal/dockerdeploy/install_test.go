@@ -1221,11 +1221,13 @@ docker:
 	oldGeteuid := installGeteuid
 	oldLookPath := installLookPath
 	oldRunCommand := installRunCommand
+	oldChown := installChown
 	oldSystemdUnitDir := installSystemdUnitDir
 	t.Cleanup(func() {
 		installGeteuid = oldGeteuid
 		installLookPath = oldLookPath
 		installRunCommand = oldRunCommand
+		installChown = oldChown
 		installSystemdUnitDir = oldSystemdUnitDir
 	})
 	installGeteuid = func() int { return 0 }
@@ -1241,6 +1243,7 @@ docker:
 		}
 	}
 	installRunCommand = func(name string, args ...string) error { return nil }
+	installChown = func(path string, uid int, gid int) error { return nil }
 
 	if err := Install(InstallOptions{
 		Dir:     deployDir,
