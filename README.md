@@ -70,6 +70,20 @@ small launcher that execs the binary in `dist`, so rebuilding Reploy updates the
 installed `reploy` command without reinstalling the package. Formal macOS and
 Windows support is tracked in the backlog.
 
+## Publish
+
+Publishing is manual and must be run from `main` after CI is green. The workflow
+publishes Linux wheels to PyPI, then creates a GitHub Release containing only
+Linux binary assets:
+
+```bash
+gh workflow run publish.yml --ref main
+```
+
+The PyPI project must be configured for GitHub trusted publishing for
+`omry/reploy` and `.github/workflows/publish.yml`; leave the PyPI trusted
+publisher environment field blank.
+
 ## Test
 
 ```bash
