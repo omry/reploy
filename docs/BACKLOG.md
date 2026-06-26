@@ -26,16 +26,15 @@ This file is the day-to-day queue for design and implementation gaps.
 ## Now
 
 - [ ] `P1` Support uninstall for installed Reploy deployments.
-      Operators need a first-class cleanup path both when the installed target
-      directory still exists and when it has already been deleted. Acceptance
-      checks: add an uninstall command with dry-run output; when the target
-      exists, stop the systemd service, run deployment cleanup from the target,
-      disable and remove the unit, reload systemd, and optionally remove the
-      target directory; when the target is missing, clean up the service setup
-      from the service name and clearly report any Docker resources that could
-      not be verified or removed; record enough install metadata to make future
-      uninstall reliable; and add tests for both target-present and
-      target-missing flows.
+      Implemented foundation: `reploy uninstall` accepts `--from`,
+      `--service-name`, `--list-services`, `--remove-dir`, and `--dry-run`;
+      target-present uninstall reads installed state, runs Compose cleanup,
+      disables/removes the systemd unit, reloads systemd, and optionally removes
+      the target directory; target-missing uninstall can recover the Compose
+      project from the systemd unit and remove Docker containers/networks by
+      Compose labels.
+      Remaining acceptance checks: validate on a real installed Arbiter service
+      for both target-present and manually-deleted target flows.
 
 - [ ] `P1` Complete side-by-side install validation and docs.
       Implemented foundation: staging Docker identity is derived from the
@@ -46,7 +45,17 @@ This file is the day-to-day queue for design and implementation gaps.
       host validation proved `/opt/arbiter2` and `/opt/arbiter3` can run
       concurrently with separate service names, containers, and ports alongside
       the existing install and staging deployment.
-      Remaining acceptance checks: document the side-by-side install flow and
-      connect the recorded install metadata to the uninstall flow.
+      Remaining acceptance checks: document the side-by-side install/uninstall
+      flow and validate uninstall against the recorded install metadata on a
+      real host.
+
+- [ ] `P2` Create a Docusaurus documentation site.
+      Build a dedicated docs website for Reploy and publish it at
+      `reploy.yadan.net`. Acceptance checks: scaffold Docusaurus in the repo
+      without disrupting the Go module or Python packaging; move or mirror the
+      operator-facing README material into structured docs; add install,
+      bundle, side-by-side install, and uninstall pages; configure the site
+      title, navbar, footer, and custom domain; and add a local docs build check
+      to the normal validation path.
 
 ## Post-v1

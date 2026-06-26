@@ -399,6 +399,10 @@ func systemdUnit(plan installPlan, dockerBin string, includeDockerUnit bool) str
 	}
 	return fmt.Sprintf(`[Unit]
 Description=Reploy Docker service (%s)
+# Managed-By: reploy
+# Reploy-Service: %s
+# Reploy-Target: %s
+# Reploy-Compose-Project: %s
 %s
 [Service]
 Type=simple
@@ -412,7 +416,7 @@ TimeoutStartSec=180
 
 [Install]
 WantedBy=multi-user.target
-`, plan.Service, dockerUnitLines, plan.TargetDir, dockerBin, dockerBin, filepath.Join(plan.TargetDir, DockerEnvFileName), composeFiles, dockerBin, filepath.Join(plan.TargetDir, DockerEnvFileName), composeFiles)
+`, plan.Service, plan.Service, plan.TargetDir, plan.ComposeProject, dockerUnitLines, plan.TargetDir, dockerBin, dockerBin, filepath.Join(plan.TargetDir, DockerEnvFileName), composeFiles, dockerBin, filepath.Join(plan.TargetDir, DockerEnvFileName), composeFiles)
 }
 
 func writeInstalledState(plan installPlan) error {

@@ -176,15 +176,27 @@ reploy logs --follow
 reploy test
 reploy install --to /srv/my-app --dry-run
 reploy install --to /srv/my-app2 --service my-app2 --port http=18082 --dry-run
+reploy uninstall --list-services
+reploy uninstall --from /srv/my-app2 --dry-run
+reploy uninstall --service-name my-app2 --dry-run
 ```
 
-The runtime, doctor, and install commands are still early migrations. Install
-currently supports install-readiness checks, dry-run planning, guarded copy into
-the target directory, installed-state marking, and systemd unit enable/restart.
+The runtime, doctor, install, and uninstall commands are still early migrations.
+Install currently supports install-readiness checks, dry-run planning, guarded
+copy into the target directory, installed-state marking, and systemd unit
+enable/restart.
 Install derives collision-resistant Docker identity from the service name and
 install target path. Apps with multiple public ports should expose named
 blueprint ports; install accepts repeated `--port NAME=HOST_PORT` overrides,
 while single-port apps may use `--port HOST_PORT`.
+Uninstall uses `--from DIR` to read installed state, stop the systemd service,
+remove Docker Compose resources, disable and remove the unit, and reload
+systemd. If the target directory was manually deleted, use
+`--service-name NAME`; Reploy recovers the Compose project from the systemd unit
+when possible and removes Docker containers and networks by Compose labels.
+Use `--list-services` to list Reploy-managed systemd services before choosing a
+service-only uninstall. The installed target directory is kept unless
+`--remove-dir` is set.
 When installing from a file-backed blueprint with local source packages, install
 rebuilds those wheels in the copied target deployment before starting the
 service, so editable checkout changes are captured without mutating the staging

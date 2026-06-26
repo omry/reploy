@@ -431,6 +431,70 @@ func TestDockerInstallPortOptionsParse(t *testing.T) {
 	}
 }
 
+func TestDockerUninstallOptionsParse(t *testing.T) {
+	options, err := parseDockerUninstallOptions([]string{
+		"--from", "/opt/demo2",
+		"--service-name", "demo2",
+		"--remove-dir",
+		"--dry-run",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.From != "/opt/demo2" || options.ServiceName != "demo2" {
+		t.Fatalf("from/service-name = %q/%q", options.From, options.ServiceName)
+	}
+	if !options.RemoveDir || !options.DryRun {
+		t.Fatalf("remove-dir/dry-run = %v/%v", options.RemoveDir, options.DryRun)
+	}
+
+	options, err = parseDockerUninstallOptions([]string{"--from=/opt/demo3", "--service-name=demo3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.From != "/opt/demo3" || options.ServiceName != "demo3" {
+		t.Fatalf("from/service-name = %q/%q", options.From, options.ServiceName)
+	}
+
+	options, err = parseDockerUninstallOptions([]string{"--list-services"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !options.ListServices {
+		t.Fatalf("list-services = false")
+	}
+
+	_, err = parseDockerUninstallOptions([]string{"--list-services", "--service-name", "demo3"})
+	if err == nil || !strings.Contains(err.Error(), "--list-services cannot be combined") {
+		t.Fatalf("expected list-services conflict, got %v", err)
+	}
+}
+
+func TestDockerUninstallRequiresRootBeforeSpinner(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root test environment cannot exercise non-root CLI path")
+	}
+	code, stdout, stderr := runCLI("uninstall", "--service-name", "demo")
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	for _, want := range []string{
+		"root privileges are required",
+		"rerun with sudo",
+		"--dry-run",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr)
+		}
+	}
+	if strings.Contains(stderr, "uninstalling deployment") {
+		t.Fatalf("stderr should not contain spinner output:\n%s", stderr)
+	}
+}
+
 func TestDockerInitWritesDeployment(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")

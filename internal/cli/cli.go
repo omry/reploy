@@ -62,7 +62,7 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func isDeploymentCommand(command string) bool {
 	switch command {
-	case "init", "update", "info", "app", "bundle", "up", "restart", "down", "ps", "status", "logs", "test", "doctor", "install":
+	case "init", "update", "info", "app", "bundle", "up", "restart", "down", "ps", "status", "logs", "test", "doctor", "install", "uninstall":
 		return true
 	default:
 		return false
@@ -220,6 +220,8 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runDockerDoctor(args[1:], stdout, stderr)
 	case "install":
 		return runDockerInstall(args[1:], stdout, stderr)
+	case "uninstall":
+		return runDockerUninstall(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "reploy usage error: unknown command: %s\n", args[0])
 		printDockerShortUsage(stderr)
@@ -853,6 +855,44 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	return 0
 }
 
+func runDockerUninstall(args []string, stdout io.Writer, stderr io.Writer) int {
+	options, err := parseDockerUninstallOptions(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
+		printDockerShortUsage(stderr)
+		return 2
+	}
+	stopSpinner := func(bool) {}
+	if options.ListServices {
+		if err := dockerdeploy.PrintReploySystemdServices(stdout); err != nil {
+			fmt.Fprintf(stderr, "reploy uninstall error: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if dockerdeploy.UninstallNeedsRoot(dockerdeploy.UninstallOptions{DryRun: options.DryRun}) && os.Geteuid() != 0 {
+		fmt.Fprintln(stderr, "reploy uninstall error: root privileges are required to stop systemd services and remove Docker resources")
+		fmt.Fprintln(stderr, "rerun with sudo, or add --dry-run to inspect the uninstall plan")
+		return 1
+	}
+	if !options.DryRun {
+		stopSpinner = startSpinner(stderr, "uninstalling deployment")
+	}
+	if err := dockerdeploy.Uninstall(dockerdeploy.UninstallOptions{
+		From:        options.From,
+		ServiceName: options.ServiceName,
+		RemoveDir:   options.RemoveDir,
+		DryRun:      options.DryRun,
+		Stdout:      stdout,
+	}); err != nil {
+		stopSpinner(false)
+		fmt.Fprintf(stderr, "reploy uninstall error: %v\n", err)
+		return 1
+	}
+	stopSpinner(true)
+	return 0
+}
+
 type dockerInstallOptions struct {
 	Dir           string
 	DirExplicit   bool
@@ -861,6 +901,14 @@ type dockerInstallOptions struct {
 	PortOverrides []dockerdeploy.PortOverride
 	Start         bool
 	DryRun        bool
+}
+
+type dockerUninstallOptions struct {
+	From         string
+	ServiceName  string
+	RemoveDir    bool
+	DryRun       bool
+	ListServices bool
 }
 
 func parseDockerInstallOptions(args []string) (dockerInstallOptions, error) {
@@ -930,6 +978,65 @@ func parseDockerInstallOptions(args []string) (dockerInstallOptions, error) {
 	}
 	if options.Dir == "" {
 		return dockerInstallOptions{}, fmt.Errorf("--dir must not be empty")
+	}
+	return options, nil
+}
+
+func parseDockerUninstallOptions(args []string) (dockerUninstallOptions, error) {
+	var options dockerUninstallOptions
+	fromSet := false
+	serviceNameSet := false
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		switch arg {
+		case "--dry-run":
+			options.DryRun = true
+		case "--remove-dir":
+			options.RemoveDir = true
+		case "--list-services":
+			options.ListServices = true
+		case "--from":
+			value, ok := optionValue(args, &index)
+			if !ok {
+				return dockerUninstallOptions{}, fmt.Errorf("%s requires a value", arg)
+			}
+			options.From = value
+			fromSet = true
+		case "--service-name":
+			value, ok := optionValue(args, &index)
+			if !ok {
+				return dockerUninstallOptions{}, fmt.Errorf("%s requires a value", arg)
+			}
+			options.ServiceName = value
+			serviceNameSet = true
+		default:
+			if strings.HasPrefix(arg, "--from=") {
+				options.From = strings.TrimPrefix(arg, "--from=")
+				fromSet = true
+				continue
+			}
+			if strings.HasPrefix(arg, "--service-name=") {
+				options.ServiceName = strings.TrimPrefix(arg, "--service-name=")
+				serviceNameSet = true
+				continue
+			}
+			return dockerUninstallOptions{}, fmt.Errorf("unknown option: %s", arg)
+		}
+	}
+	if strings.TrimSpace(options.From) != options.From {
+		return dockerUninstallOptions{}, fmt.Errorf("--from must not contain leading or trailing whitespace")
+	}
+	if strings.TrimSpace(options.ServiceName) != options.ServiceName {
+		return dockerUninstallOptions{}, fmt.Errorf("--service-name must not contain leading or trailing whitespace")
+	}
+	if options.From == "" && fromSet {
+		return dockerUninstallOptions{}, fmt.Errorf("--from must not be empty")
+	}
+	if options.ServiceName == "" && serviceNameSet {
+		return dockerUninstallOptions{}, fmt.Errorf("--service-name must not be empty")
+	}
+	if options.ListServices && (fromSet || serviceNameSet || options.RemoveDir || options.DryRun) {
+		return dockerUninstallOptions{}, fmt.Errorf("--list-services cannot be combined with uninstall action options")
 	}
 	return options, nil
 }
@@ -1496,6 +1603,7 @@ Commands:
   test         Probe the blueprint-configured app health endpoint
   doctor       Check deployment files and generated-file drift
   install      Plan or apply installation into a host service directory
+  uninstall    Remove an installed host service and Docker resources
   blueprint-index
                Manage the cached blueprint shorthand index
   version      Print version information
@@ -1531,13 +1639,19 @@ Deployment options:
   --preinstall Run install-readiness doctor checks
   --quiet      Suppress passing doctor checks
   --to DIR     Install target directory
+  --from DIR   Installed service directory to uninstall
   --service NAME
                Installed systemd service name, default app id
+  --service-name NAME
+               Existing systemd service name for uninstall when --from is gone
+  --list-services
+               List Reploy-managed systemd services for uninstall
   --port PORT  Installed host port override for single-port apps
   --port NAME=PORT
               Installed host port override for a named blueprint port; repeat
               for multiple ports
-  --dry-run    Print the install plan without changing the host
+  --dry-run    Print the install/uninstall plan without changing the host
+  --remove-dir Remove the installed target directory during uninstall
   --start      Start after install, default
   --no-start   Install without starting the service
   --verbose    Show bundle check/build command output
@@ -1671,6 +1785,7 @@ Commands:
   test         Probe the blueprint-configured app health endpoint
   doctor       Check deployment files and generated-file drift
   install      Plan or apply installation into a host service directory
+  uninstall    Remove an installed host service and Docker resources
 
 Bundle:
   list         List selected installation artifact roots
@@ -1699,13 +1814,19 @@ Options:
   --preinstall Run install-readiness doctor checks
   --quiet      Suppress passing doctor checks
   --to DIR     Install target directory
+  --from DIR   Installed service directory to uninstall
   --service NAME
                Installed systemd service name, default app id
+  --service-name NAME
+               Existing systemd service name for uninstall when --from is gone
+  --list-services
+               List Reploy-managed systemd services for uninstall
   --port PORT  Installed host port override for single-port apps
   --port NAME=PORT
               Installed host port override for a named blueprint port; repeat
               for multiple ports
-  --dry-run    Print the install plan without changing the host
+  --dry-run    Print the install/uninstall plan without changing the host
+  --remove-dir Remove the installed target directory during uninstall
   --start      Start after install, default
   --no-start   Install without starting the service
   --verbose    Show bundle check/build command output
