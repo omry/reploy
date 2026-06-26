@@ -816,12 +816,13 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
 	if err := dockerdeploy.Install(dockerdeploy.InstallOptions{
-		Dir:     options.Dir,
-		Target:  options.Target,
-		Service: options.Service,
-		Start:   options.Start,
-		DryRun:  options.DryRun,
-		Stdout:  stdout,
+		Dir:           options.Dir,
+		Target:        options.Target,
+		Service:       options.Service,
+		PortOverrides: options.PortOverrides,
+		Start:         options.Start,
+		DryRun:        options.DryRun,
+		Stdout:        stdout,
 	}); err != nil {
 		fmt.Fprintf(stderr, "reploy install error: %v\n", err)
 		return 1
@@ -830,12 +831,13 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 type dockerInstallOptions struct {
-	Dir         string
-	DirExplicit bool
-	Target      string
-	Service     string
-	Start       bool
-	DryRun      bool
+	Dir           string
+	DirExplicit   bool
+	Target        string
+	Service       string
+	PortOverrides []dockerdeploy.PortOverride
+	Start         bool
+	DryRun        bool
 }
 
 func parseDockerInstallOptions(args []string) (dockerInstallOptions, error) {
@@ -868,6 +870,16 @@ func parseDockerInstallOptions(args []string) (dockerInstallOptions, error) {
 				return dockerInstallOptions{}, fmt.Errorf("%s requires a value", arg)
 			}
 			options.Service = value
+		case "--port":
+			value, ok := optionValue(args, &index)
+			if !ok {
+				return dockerInstallOptions{}, fmt.Errorf("%s requires a value", arg)
+			}
+			override, err := parseInstallPortOverride(value)
+			if err != nil {
+				return dockerInstallOptions{}, err
+			}
+			options.PortOverrides = append(options.PortOverrides, override)
 		default:
 			if strings.HasPrefix(arg, "--dir=") {
 				options.Dir = strings.TrimPrefix(arg, "--dir=")
@@ -882,6 +894,14 @@ func parseDockerInstallOptions(args []string) (dockerInstallOptions, error) {
 				options.Service = strings.TrimPrefix(arg, "--service=")
 				continue
 			}
+			if strings.HasPrefix(arg, "--port=") {
+				override, err := parseInstallPortOverride(strings.TrimPrefix(arg, "--port="))
+				if err != nil {
+					return dockerInstallOptions{}, err
+				}
+				options.PortOverrides = append(options.PortOverrides, override)
+				continue
+			}
 			return dockerInstallOptions{}, fmt.Errorf("unknown option: %s", arg)
 		}
 	}
@@ -889,6 +909,26 @@ func parseDockerInstallOptions(args []string) (dockerInstallOptions, error) {
 		return dockerInstallOptions{}, fmt.Errorf("--dir must not be empty")
 	}
 	return options, nil
+}
+
+func parseInstallPortOverride(value string) (dockerdeploy.PortOverride, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return dockerdeploy.PortOverride{}, fmt.Errorf("--port must not be empty")
+	}
+	name, hostPort, ok := strings.Cut(value, "=")
+	if !ok {
+		return dockerdeploy.PortOverride{HostPort: value}, nil
+	}
+	name = strings.TrimSpace(name)
+	hostPort = strings.TrimSpace(hostPort)
+	if name == "" {
+		return dockerdeploy.PortOverride{}, fmt.Errorf("--port name must not be empty")
+	}
+	if hostPort == "" {
+		return dockerdeploy.PortOverride{}, fmt.Errorf("--port host port must not be empty")
+	}
+	return dockerdeploy.PortOverride{Name: name, HostPort: hostPort}, nil
 }
 
 type dockerDoctorOptions struct {
@@ -1470,6 +1510,10 @@ Deployment options:
   --to DIR     Install target directory
   --service NAME
                Installed systemd service name, default app id
+  --port PORT  Installed host port override for single-port apps
+  --port NAME=PORT
+              Installed host port override for a named blueprint port; repeat
+              for multiple ports
   --dry-run    Print the install plan without changing the host
   --start      Start after install, default
   --no-start   Install without starting the service
@@ -1634,6 +1678,10 @@ Options:
   --to DIR     Install target directory
   --service NAME
                Installed systemd service name, default app id
+  --port PORT  Installed host port override for single-port apps
+  --port NAME=PORT
+              Installed host port override for a named blueprint port; repeat
+              for multiple ports
   --dry-run    Print the install plan without changing the host
   --start      Start after install, default
   --no-start   Install without starting the service

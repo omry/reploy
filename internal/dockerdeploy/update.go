@@ -35,6 +35,8 @@ func Update(options UpdateOptions) ([]UpdateResult, error) {
 		}
 		state = loadedState
 		ref = state.Blueprint
+	} else if loadedState, err := loadState(options.Dir); err == nil {
+		state = loadedState
 	}
 	if ref.Raw == "" {
 		return nil, fmt.Errorf("blueprint reference is required")
@@ -61,7 +63,11 @@ func Update(options UpdateOptions) ([]UpdateResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	compose, err := renderComposeTemplate(pack, bundle.Roots)
+	dockerIdentity, err := deploymentDockerIdentity(pack, state, options.Dir)
+	if err != nil {
+		return nil, err
+	}
+	compose, err := renderComposeTemplate(pack, bundle.Roots, dockerIdentity)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +99,7 @@ func Update(options UpdateOptions) ([]UpdateResult, error) {
 	if err := pruneRemovedGeneratedFiles(options.Dir, currentGenerated, &manifest, &results); err != nil {
 		return nil, err
 	}
-	if err := updateDockerEnvFile(options.Dir, pack, &results); err != nil {
+	if err := updateDockerEnvFile(options.Dir, pack, dockerIdentity, &results); err != nil {
 		return nil, err
 	}
 	requirements, err := runtimeRequirementsContent(pack, bundle.Roots)
@@ -111,7 +117,7 @@ func Update(options UpdateOptions) ([]UpdateResult, error) {
 	if err := ensureLocalDir(options.Dir, RuntimeDirName, &results); err != nil {
 		return nil, err
 	}
-	stateStatus, err := writeStateIfChanged(options.Dir, pack, bundle)
+	stateStatus, err := writeUpdatedStateIfChanged(options.Dir, pack, bundle, state)
 	if err != nil {
 		return nil, err
 	}
@@ -193,9 +199,9 @@ func writeMissingLocalFileMode(dir string, relativePath string, content []byte, 
 	return nil
 }
 
-func updateDockerEnvFile(dir string, pack deploy.AppPack, results *[]UpdateResult) error {
+func updateDockerEnvFile(dir string, pack deploy.AppPack, dockerIdentity string, results *[]UpdateResult) error {
 	path := filepath.Join(dir, DockerEnvFileName)
-	desired := []byte(defaultDockerEnv(pack))
+	desired := []byte(defaultDockerEnv(pack, dockerIdentity))
 	current, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -209,6 +215,19 @@ func updateDockerEnvFile(dir string, pack deploy.AppPack, results *[]UpdateResul
 	}
 	if string(current) == string(desired) {
 		*results = append(*results, UpdateResult{Path: path, Status: deploy.UpdateStatusUpToDate, Ownership: "local", Reason: "Docker environment already matches current defaults"})
+		return nil
+	}
+	service := dockerServiceDefaults(pack, dockerIdentity)
+	updates := map[string]string{
+		"REPLOY_CONTAINER_NAME":      service.ContainerName,
+		"REPLOY_DOCKER_NETWORK_NAME": service.NetworkName,
+	}
+	changed, err := updateExistingDockerEnvValues(dir, updates)
+	if err != nil {
+		return err
+	}
+	if changed {
+		*results = append(*results, UpdateResult{Path: path, Status: deploy.UpdateStatusUpdated, Ownership: "local", Reason: "updated Reploy-managed Docker identity"})
 		return nil
 	}
 	*results = append(*results, UpdateResult{Path: path, Status: deploy.UpdateStatusUpToDate, Ownership: "local", Reason: "preserved operator-edited Docker environment"})

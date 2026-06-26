@@ -74,6 +74,14 @@ func runInterruptibleCommand(run commandRunner, spec CommandSpec, options RunOpt
 	}
 }
 
+func deploymentComposeProjectName(dir string) string {
+	state, err := loadState(dir)
+	if err != nil || state.Install == nil {
+		return ""
+	}
+	return state.Install.ComposeProject
+}
+
 func composeCommand(dir string, args ...string) CommandSpec {
 	return composeCommandWithProject(dir, "", args...)
 }

@@ -68,9 +68,10 @@ func ConfigCheck(options ConfigCheckOptions) error {
 		return err
 	}
 	configDisplayDir := appConfigDisplayDir(options.Dir, pack)
+	projectName := installComposeProjectName(state)
 	return runTemporaryComposeCommand(
 		runConfigCheckCommand,
-		ConfigCheckCommandForProject(options.Dir, command.Name, forwardedArgs, "", configDisplayDir),
+		ConfigCheckCommandForProject(options.Dir, command.Name, forwardedArgs, projectName, configDisplayDir),
 		CommandSpec{},
 		runOptions,
 	)
@@ -105,7 +106,8 @@ func AppCommand(options AppCommandOptions) error {
 		return err
 	}
 	configDisplayDir := appConfigDisplayDir(options.Dir, pack)
-	spec := AppCommandForProject(options.Dir, command.Name, forwardedArgs, "", configDisplayDir)
+	projectName := installComposeProjectName(state)
+	spec := AppCommandForProject(options.Dir, command.Name, forwardedArgs, projectName, configDisplayDir)
 	spec = withAppTerminalEnv(spec, pack.App.Terminal, output)
 	err = runTemporaryComposeCommand(
 		runAppCommand,
@@ -117,6 +119,13 @@ func AppCommand(options AppCommandOptions) error {
 		return appCommandError(err)
 	}
 	return nil
+}
+
+func installComposeProjectName(state deploy.DeploymentState) string {
+	if state.Install == nil {
+		return ""
+	}
+	return state.Install.ComposeProject
 }
 
 func appCommandStdin(output io.Writer) io.Reader {

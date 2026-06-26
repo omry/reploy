@@ -24,19 +24,29 @@ func TestInstallDryRunPrintsPlan(t *testing.T) {
 
 	var stdout strings.Builder
 	if err := Install(InstallOptions{
-		Dir:     deployDir,
-		Target:  target,
-		Service: "demo-test",
-		Start:   true,
-		DryRun:  true,
-		Stdout:  &stdout,
+		Dir:           deployDir,
+		Target:        target,
+		Service:       "demo-test",
+		PortOverrides: []PortOverride{{HostPort: "18082"}},
+		Start:         true,
+		DryRun:        true,
+		Stdout:        &stdout,
 	}); err != nil {
+		t.Fatal(err)
+	}
+	instanceID, err := installedInstanceID("demo-test", target)
+	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
 		"would install deployment:",
 		"target: " + target,
 		"service: demo-test",
+		"instance id: " + instanceID,
+		"compose project: " + instanceID,
+		"container: " + instanceID,
+		"network: " + instanceID,
+		"port default: 127.0.0.1:18082 -> 8080",
 		"would write systemd unit: /etc/systemd/system/demo-test.service",
 		"would run: systemctl daemon-reload",
 		"would run: systemctl enable demo-test.service",
@@ -149,7 +159,22 @@ func TestWriteInstalledStateMarksDeploymentInstalled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := writeInstalledState(deployDir); err != nil {
+	plan := installPlan{
+		TargetDir:      deployDir,
+		Service:        "demo",
+		UnitPath:       "/etc/systemd/system/demo.service",
+		InstanceID:     "demo-12345678",
+		ComposeProject: "demo-12345678",
+		ContainerName:  "demo-12345678",
+		NetworkName:    "demo-12345678",
+		Ports: []dockerPortBinding{{
+			Name:          "default",
+			HostBind:      "127.0.0.1",
+			HostPort:      "18080",
+			ContainerPort: "8080",
+		}},
+	}
+	if err := writeInstalledState(plan); err != nil {
 		t.Fatal(err)
 	}
 	state, err := loadState(deployDir)
@@ -161,6 +186,9 @@ func TestWriteInstalledStateMarksDeploymentInstalled(t *testing.T) {
 	}
 	if len(state.Bundle.Roots) == 0 {
 		t.Fatal("bundle roots were not preserved")
+	}
+	if state.Install == nil || state.Install.InstanceID != "demo-12345678" {
+		t.Fatalf("install state = %#v", state.Install)
 	}
 }
 
@@ -207,15 +235,30 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	}
 
 	if err := Install(InstallOptions{
-		Dir:     deployDir,
-		Target:  target,
-		Service: "demo-apply",
-		Start:   true,
+		Dir:           deployDir,
+		Target:        target,
+		Service:       "demo-apply",
+		PortOverrides: []PortOverride{{HostPort: "18082"}},
+		Start:         true,
 	}); err != nil {
+		t.Fatal(err)
+	}
+	instanceID, err := installedInstanceID("demo-apply", target)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(target, ComposeFileName)); err != nil {
 		t.Fatalf("missing copied compose: %v", err)
+	}
+	dockerEnv := readFile(t, filepath.Join(target, DockerEnvFileName))
+	for _, want := range []string{
+		"REPLOY_CONTAINER_NAME=" + instanceID,
+		"REPLOY_DOCKER_NETWORK_NAME=" + instanceID,
+		"REPLOY_HOST_PORT=18082",
+	} {
+		if !strings.Contains(dockerEnv, want) {
+			t.Fatalf("installed docker.env missing %q:\n%s", want, dockerEnv)
+		}
 	}
 	state, err := loadState(target)
 	if err != nil {
@@ -224,12 +267,24 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	if state.Phase != deploy.PhaseInstalled {
 		t.Fatalf("phase = %s, want %s", state.Phase, deploy.PhaseInstalled)
 	}
+	if state.Install == nil {
+		t.Fatal("missing install state")
+	}
+	if state.Install.InstanceID != instanceID || state.Install.ComposeProject != instanceID || state.Install.ContainerName != instanceID || state.Install.NetworkName != instanceID {
+		t.Fatalf("install state = %#v, want instance %s", state.Install, instanceID)
+	}
+	if state.Install.Ports["default"].HostPort != "18082" {
+		t.Fatalf("install ports = %#v", state.Install.Ports)
+	}
 	unit, err := os.ReadFile(filepath.Join(unitDir, "demo-apply.service"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(unit), "ExecStart=/usr/bin/docker compose --env-file "+filepath.Join(target, DockerEnvFileName)) {
 		t.Fatalf("unit does not point at target docker.env:\n%s", unit)
+	}
+	if !strings.Contains(string(unit), "--project-name "+instanceID) {
+		t.Fatalf("unit does not use install compose project:\n%s", unit)
 	}
 	for _, want := range []string{
 		"/bin/systemctl cat docker.service",
@@ -242,6 +297,123 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 		if !containsString(commands, want) {
 			t.Fatalf("commands missing %q: %#v", want, commands)
 		}
+	}
+}
+
+func TestInstallAppliesNamedPortOverrides(t *testing.T) {
+	packDir := makeTestPackWithManifest(t, `blueprint:
+  schema: 1
+  version: 0.1.0
+  requires_reploy: ">=0.1.0"
+
+app:
+  id: demo
+  provider:
+    type: python
+    identifier: demo-server
+
+docker:
+  deployment_dirs:
+    config: conf
+    bundle: .reploy/bundle
+    data: data
+  ports:
+    http:
+      host_bind: 127.0.0.1
+      host_port: "18080"
+      container_port: "8080"
+    metrics:
+      host_bind: 127.0.0.1
+      host_port: "19090"
+      container_port: "9090"
+  health:
+    scheme_env: REPLOY_PUBLIC_SCHEME
+    host_env: REPLOY_PORT_HTTP_HOST_BIND
+    port_env: REPLOY_PORT_HTTP_HOST_PORT
+    default_scheme: http
+    default_host: 127.0.0.1
+    default_port: "18080"
+    path: /health
+  default_command: serve
+  commands:
+    serve:
+      container:
+        argv:
+          - demo-server
+          - serve
+    config_check:
+      trigger:
+        - config
+        - check
+      container:
+        argv:
+          - demo-server
+          - config
+          - check
+`)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "installed")
+	unitDir := t.TempDir()
+
+	oldGeteuid := installGeteuid
+	oldLookPath := installLookPath
+	oldRunCommand := installRunCommand
+	oldSystemdUnitDir := installSystemdUnitDir
+	t.Cleanup(func() {
+		installGeteuid = oldGeteuid
+		installLookPath = oldLookPath
+		installRunCommand = oldRunCommand
+		installSystemdUnitDir = oldSystemdUnitDir
+	})
+	installGeteuid = func() int { return 0 }
+	installSystemdUnitDir = unitDir
+	installLookPath = func(name string) (string, error) {
+		switch name {
+		case "docker":
+			return "/usr/bin/docker", nil
+		case "systemctl":
+			return "/bin/systemctl", nil
+		default:
+			return "", errors.New("not found")
+		}
+	}
+	installRunCommand = func(name string, args ...string) error { return nil }
+
+	if err := Install(InstallOptions{
+		Dir:     deployDir,
+		Target:  target,
+		Service: "demo2",
+		PortOverrides: []PortOverride{
+			{Name: "http", HostPort: "18082"},
+			{Name: "metrics", HostPort: "19092"},
+		},
+		Start: false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dockerEnv := readFile(t, filepath.Join(target, DockerEnvFileName))
+	for _, want := range []string{
+		"REPLOY_HOST_PORT=18082",
+		"REPLOY_PORT_HTTP_HOST_PORT=18082",
+		"REPLOY_PORT_METRICS_HOST_PORT=19092",
+	} {
+		if !strings.Contains(dockerEnv, want) {
+			t.Fatalf("installed docker.env missing %q:\n%s", want, dockerEnv)
+		}
+	}
+	state, err := loadState(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Install.Ports["http"].HostPort != "18082" || state.Install.Ports["metrics"].HostPort != "19092" {
+		t.Fatalf("install ports = %#v", state.Install.Ports)
 	}
 }
 

@@ -1136,7 +1136,11 @@ func syncBundleState(dir string, state deploy.DeploymentState) ([]UpdateResult, 
 	if err != nil {
 		return nil, err
 	}
-	compose, err := renderComposeTemplate(pack, state.Bundle.Roots)
+	dockerIdentity, err := deploymentDockerIdentity(pack, state, dir)
+	if err != nil {
+		return nil, err
+	}
+	compose, err := renderComposeTemplate(pack, state.Bundle.Roots, dockerIdentity)
 	if err != nil {
 		return nil, err
 	}

@@ -175,8 +175,13 @@ reploy logs
 reploy logs --follow
 reploy test
 reploy install --to /srv/my-app --dry-run
+reploy install --to /srv/my-app2 --service my-app2 --port http=18082 --dry-run
 ```
 
 The runtime, doctor, and install commands are still early migrations. Install
 currently supports install-readiness checks, dry-run planning, guarded copy into
 the target directory, installed-state marking, and systemd unit enable/restart.
+Install derives collision-resistant Docker identity from the service name and
+install target path. Apps with multiple public ports should expose named
+blueprint ports; install accepts repeated `--port NAME=HOST_PORT` overrides,
+while single-port apps may use `--port HOST_PORT`.

@@ -1,10 +1,13 @@
 package dockerdeploy
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/omry/reploy/internal/deploy"
 )
 
 func TestRuntimeCommandActions(t *testing.T) {
@@ -43,6 +46,35 @@ func TestRuntimeCommandCanFollowLogs(t *testing.T) {
 	suffix := []string{"logs", "--timestamps", "-f"}
 	if !reflect.DeepEqual(spec.Args[len(spec.Args)-len(suffix):], suffix) {
 		t.Fatalf("suffix = %#v, want %#v", spec.Args[len(spec.Args)-len(suffix):], suffix)
+	}
+}
+
+func TestRuntimeCommandUsesInstalledComposeProject(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ReployInternalDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := deploy.DeploymentState{
+		SchemaVersion: 1,
+		Phase:         deploy.PhaseInstalled,
+		Install: &deploy.InstallState{
+			ComposeProject: "demo-12345678",
+		},
+	}
+	content, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, StateFileName), append(content, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	spec, err := RuntimeCommandWithOptions(dir, "ps", RuntimeCommandOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsAdjacent(spec.Args, "--project-name", "demo-12345678") {
+		t.Fatalf("args did not include installed compose project: %#v", spec.Args)
 	}
 }
 

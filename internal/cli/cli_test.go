@@ -152,7 +152,7 @@ func TestDockerHelp(t *testing.T) {
 	if strings.Contains(stdout, "--wait") || !strings.Contains(stdout, "--timeout DURATION") {
 		t.Fatalf("stdout did not contain expected test timeout options:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "install") || !strings.Contains(stdout, "--to DIR") || !strings.Contains(stdout, "--dry-run") {
+	if !strings.Contains(stdout, "install") || !strings.Contains(stdout, "--to DIR") || !strings.Contains(stdout, "--port NAME=PORT") || !strings.Contains(stdout, "--dry-run") {
 		t.Fatalf("stdout did not contain install command/options:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "app") {
@@ -173,6 +173,19 @@ func TestDockerTargetOptionUsesDefaultDeploymentCommands(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "Usage: reploy [--docker] COMMAND") || !strings.Contains(stdout, "bundle") {
 		t.Fatalf("stdout did not contain deployment help:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerInstallHelpShowsPortOptions(t *testing.T) {
+	code, stdout, stderr := runCLI("install", "--help")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if !strings.Contains(stdout, "--port PORT") || !strings.Contains(stdout, "--port NAME=PORT") {
+		t.Fatalf("stdout did not contain install port options:\n%s", stdout)
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
@@ -382,6 +395,39 @@ func TestDockerTestRejectsWaitOption(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "unknown option: --wait") {
 		t.Fatalf("stderr missing wait validation message:\n%s", stderr)
+	}
+}
+
+func TestDockerInstallPortOptionsParse(t *testing.T) {
+	options, err := parseDockerInstallOptions([]string{
+		"--dir", "deployment",
+		"--to", "/opt/demo2",
+		"--service", "demo2",
+		"--port", "http=18082",
+		"--port=metrics=19092",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Target != "/opt/demo2" || options.Service != "demo2" {
+		t.Fatalf("target/service = %q/%q", options.Target, options.Service)
+	}
+	if len(options.PortOverrides) != 2 {
+		t.Fatalf("port overrides = %#v", options.PortOverrides)
+	}
+	if options.PortOverrides[0].Name != "http" || options.PortOverrides[0].HostPort != "18082" {
+		t.Fatalf("first override = %#v", options.PortOverrides[0])
+	}
+	if options.PortOverrides[1].Name != "metrics" || options.PortOverrides[1].HostPort != "19092" {
+		t.Fatalf("second override = %#v", options.PortOverrides[1])
+	}
+
+	options, err = parseDockerInstallOptions([]string{"--to", "/opt/demo2", "--port", "18082"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(options.PortOverrides) != 1 || options.PortOverrides[0].Name != "" || options.PortOverrides[0].HostPort != "18082" {
+		t.Fatalf("shorthand override = %#v", options.PortOverrides)
 	}
 }
 

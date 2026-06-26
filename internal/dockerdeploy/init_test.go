@@ -177,14 +177,19 @@ docker:
 	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
 		t.Fatal(err)
 	}
+	hash, err := pathIdentityHash(deployDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagingID := "mailhub-staging-" + hash
 
 	dockerEnv := readFile(t, filepath.Join(deployDir, DockerEnvFileName))
 	for _, expected := range []string{
-		"REPLOY_CONTAINER_NAME=mailhub-staging",
+		"REPLOY_CONTAINER_NAME=" + stagingID,
 		"REPLOY_CONTAINER_PORT=2525",
 		"REPLOY_HOST_PORT=12525",
 		"REPLOY_PUBLIC_SCHEME=http",
-		"REPLOY_DOCKER_NETWORK_NAME=mailhub-staging",
+		"REPLOY_DOCKER_NETWORK_NAME=" + stagingID,
 		"MAILHUB_CONFIG_NAME=mailhub",
 	} {
 		if !strings.Contains(dockerEnv, expected) {
@@ -204,7 +209,7 @@ docker:
 		`set -- "$$@" "mailhub.bind.host=$${REPLOY_CONTAINER_HOST}" &&`,
 		`set -- "$$@" "mailhub.public.host=$${REPLOY_PUBLIC_HOST}" &&`,
 		`if [ -n "$${REPLOY_PUBLIC_BASE_URL:-}" ]; then set -- "$$@" "mailhub.public.base_url=$${REPLOY_PUBLIC_BASE_URL}"; fi &&`,
-		"name: ${REPLOY_DOCKER_NETWORK_NAME:-mailhub-staging}",
+		"name: ${REPLOY_DOCKER_NETWORK_NAME:-" + stagingID + "}",
 	} {
 		if !strings.Contains(compose, expected) {
 			t.Fatalf("compose missing %q:\n%s", expected, compose)
@@ -329,6 +334,121 @@ docker:
 	}
 }
 
+func TestInitRendersNamedDockerPorts(t *testing.T) {
+	packDir := makeTestPackWithManifest(t, `blueprint:
+  schema: 1
+  version: 0.1.0
+  requires_reploy: ">=0.1.0"
+
+app:
+  id: demo
+  provider:
+    type: python
+    identifier: demo-server
+
+docker:
+  deployment_dirs:
+    config: conf
+    bundle: .reploy/bundle
+    data: data
+  ports:
+    http:
+      host_bind: 127.0.0.1
+      host_port: "18080"
+      container_port: "8080"
+    metrics:
+      host_bind: 127.0.0.1
+      host_port: "19090"
+      container_port: "9090"
+  health:
+    scheme_env: REPLOY_PUBLIC_SCHEME
+    host_env: REPLOY_PORT_HTTP_HOST_BIND
+    port_env: REPLOY_PORT_HTTP_HOST_PORT
+    default_scheme: http
+    default_host: 127.0.0.1
+    default_port: "18080"
+    path: /health
+  default_command: serve
+  commands:
+    serve:
+      container:
+        argv:
+          - demo-server
+          - serve
+    config_check:
+      trigger:
+        - config
+        - check
+      container:
+        argv:
+          - demo-server
+          - config
+          - check
+`)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	dockerEnv := readFile(t, filepath.Join(deployDir, DockerEnvFileName))
+	for _, expected := range []string{
+		"REPLOY_HOST_PORT=18080",
+		"REPLOY_CONTAINER_PORT=8080",
+		"REPLOY_PORT_HTTP_HOST_BIND=127.0.0.1",
+		"REPLOY_PORT_HTTP_HOST_PORT=18080",
+		"REPLOY_PORT_HTTP_CONTAINER_PORT=8080",
+		"REPLOY_PORT_METRICS_HOST_BIND=127.0.0.1",
+		"REPLOY_PORT_METRICS_HOST_PORT=19090",
+		"REPLOY_PORT_METRICS_CONTAINER_PORT=9090",
+	} {
+		if !strings.Contains(dockerEnv, expected) {
+			t.Fatalf("docker.env missing %q:\n%s", expected, dockerEnv)
+		}
+	}
+	compose := readFile(t, filepath.Join(deployDir, ComposeFileName))
+	for _, expected := range []string{
+		`      - "${REPLOY_PORT_HTTP_HOST_BIND:-127.0.0.1}:${REPLOY_PORT_HTTP_HOST_PORT:-18080}:${REPLOY_PORT_HTTP_CONTAINER_PORT:-8080}"`,
+		`      - "${REPLOY_PORT_METRICS_HOST_BIND:-127.0.0.1}:${REPLOY_PORT_METRICS_HOST_PORT:-19090}:${REPLOY_PORT_METRICS_CONTAINER_PORT:-9090}"`,
+	} {
+		if !strings.Contains(compose, expected) {
+			t.Fatalf("compose missing %q:\n%s", expected, compose)
+		}
+	}
+}
+
+func TestInitRejectsNamedDockerPortEnvironmentSuffixCollision(t *testing.T) {
+	manifest := strings.Replace(testPackManifest(), "  health:\n", `  ports:
+    api-port:
+      host_bind: 127.0.0.1
+      host_port: "18080"
+      container_port: "8080"
+    api_port:
+      host_bind: 127.0.0.1
+      host_port: "18081"
+      container_port: "8081"
+  health:
+`, 1)
+	packDir := makeTestPackWithManifest(t, manifest)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+
+	_, err = Init(InitOptions{Dir: deployDir, Pack: ref})
+	if err == nil {
+		t.Fatal("expected port suffix collision error")
+	}
+	if !strings.Contains(err.Error(), "both map to environment suffix") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRenderedComposeCommandIsShellParseable(t *testing.T) {
 	packDir := makeTestPack(t)
 	ref, err := deploy.ParsePackRef("file:" + packDir)
@@ -339,7 +459,7 @@ func TestRenderedComposeCommandIsShellParseable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	compose, err := renderComposeTemplate(pack, nil)
+	compose, err := renderComposeTemplate(pack, nil, "demo-staging-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -615,6 +735,101 @@ func TestUpdatePreservesLocallyEditedDockerEnv(t *testing.T) {
 	assertResultStatus(t, results, filepath.Join(deployDir, DockerEnvFileName), deploy.UpdateStatusUpToDate)
 	if got := readFile(t, filepath.Join(deployDir, DockerEnvFileName)); got != localDockerEnv {
 		t.Fatalf("docker.env was not preserved: %q", got)
+	}
+}
+
+func TestUpdateMigratesExistingDockerIdentityKeys(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	localDockerEnv := strings.Join([]string{
+		"# local docker env",
+		"REPLOY_CONTAINER_NAME=demo-staging",
+		"REPLOY_DOCKER_NETWORK_NAME=demo-staging",
+		"REPLOY_BUNDLE_DIR=./custom-bundle",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(deployDir, DockerEnvFileName), []byte(localDockerEnv), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hash, err := pathIdentityHash(deployDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagingID := "demo-staging-" + hash
+
+	results, err := Update(UpdateOptions{Dir: deployDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertResultStatus(t, results, filepath.Join(deployDir, DockerEnvFileName), deploy.UpdateStatusUpdated)
+	dockerEnv := readFile(t, filepath.Join(deployDir, DockerEnvFileName))
+	for _, expected := range []string{
+		"REPLOY_CONTAINER_NAME=" + stagingID,
+		"REPLOY_DOCKER_NETWORK_NAME=" + stagingID,
+		"REPLOY_BUNDLE_DIR=./custom-bundle",
+	} {
+		if !strings.Contains(dockerEnv, expected) {
+			t.Fatalf("docker.env missing %q:\n%s", expected, dockerEnv)
+		}
+	}
+}
+
+func TestUpdatePreservesInstalledState(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	plan := installPlan{
+		TargetDir:      deployDir,
+		Service:        "demo2",
+		UnitPath:       "/etc/systemd/system/demo2.service",
+		InstanceID:     "demo2-12345678",
+		ComposeProject: "demo2-12345678",
+		ContainerName:  "demo2-12345678",
+		NetworkName:    "demo2-12345678",
+		Ports: []dockerPortBinding{{
+			Name:          "default",
+			HostBind:      "127.0.0.1",
+			HostPort:      "18082",
+			ContainerPort: "8080",
+		}},
+	}
+	if err := writeInstalledState(plan); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Update(UpdateOptions{Dir: deployDir}); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := loadState(deployDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Phase != deploy.PhaseInstalled {
+		t.Fatalf("phase = %s, want %s", state.Phase, deploy.PhaseInstalled)
+	}
+	if state.Install == nil {
+		t.Fatal("missing install state")
+	}
+	if state.Install.ComposeProject != "demo2-12345678" || state.Install.ContainerName != "demo2-12345678" || state.Install.NetworkName != "demo2-12345678" {
+		t.Fatalf("install state = %#v", state.Install)
+	}
+	if state.Install.Ports["default"].HostPort != "18082" {
+		t.Fatalf("install ports = %#v", state.Install.Ports)
 	}
 }
 

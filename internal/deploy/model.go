@@ -31,6 +31,7 @@ type DeploymentState struct {
 	RequestedBlueprintRef string                `json:"requested_blueprint_ref,omitempty"`
 	ResolvedArtifact      *ResolvedPackArtifact `json:"resolved_artifact,omitempty"`
 	Bundle                BundleState           `json:"bundle,omitempty"`
+	Install               *InstallState         `json:"install,omitempty"`
 }
 
 type ResolvedPackArtifact struct {
@@ -52,4 +53,21 @@ type ArtifactRoot struct {
 	Provider string `json:"provider"`
 	Kind     string `json:"kind"`
 	Source   string `json:"source"`
+}
+
+type InstallState struct {
+	TargetDir      string                        `json:"target_dir"`
+	Service        string                        `json:"service"`
+	UnitPath       string                        `json:"unit_path"`
+	InstanceID     string                        `json:"instance_id"`
+	ComposeProject string                        `json:"compose_project"`
+	ContainerName  string                        `json:"container_name"`
+	NetworkName    string                        `json:"network_name"`
+	Ports          map[string]InstallPortBinding `json:"ports,omitempty"`
+}
+
+type InstallPortBinding struct {
+	HostBind      string `json:"host_bind"`
+	HostPort      string `json:"host_port"`
+	ContainerPort string `json:"container_port"`
 }

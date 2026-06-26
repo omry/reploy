@@ -13,12 +13,13 @@ import (
 )
 
 type InstallOptions struct {
-	Dir     string
-	Target  string
-	Service string
-	Start   bool
-	DryRun  bool
-	Stdout  io.Writer
+	Dir           string
+	Target        string
+	Service       string
+	PortOverrides []PortOverride
+	Start         bool
+	DryRun        bool
+	Stdout        io.Writer
 }
 
 type installPlan struct {
@@ -26,6 +27,11 @@ type installPlan struct {
 	TargetDir       string
 	Service         string
 	UnitPath        string
+	InstanceID      string
+	ComposeProject  string
+	ContainerName   string
+	NetworkName     string
+	Ports           []dockerPortBinding
 	Start           bool
 	ComposeOverride bool
 }
@@ -85,6 +91,27 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 	if options.Service != "" && !validServiceName(options.Service) {
 		return installPlan{}, fmt.Errorf("--service contains unsupported characters: %s", options.Service)
 	}
+	state, err := loadState(options.Dir)
+	if err != nil {
+		return installPlan{}, err
+	}
+	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
+	if err != nil {
+		return installPlan{}, err
+	}
+	instanceID, err := installedInstanceID(options.Service, target)
+	if err != nil {
+		return installPlan{}, err
+	}
+	service := dockerServiceDefaults(pack, instanceID)
+	ports, err := dockerPortBindings(pack, service)
+	if err != nil {
+		return installPlan{}, err
+	}
+	ports, err = applyPortOverrides(ports, options.PortOverrides)
+	if err != nil {
+		return installPlan{}, err
+	}
 	absoluteDir, err := filepath.Abs(options.Dir)
 	if err != nil {
 		return installPlan{}, err
@@ -98,6 +125,11 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 		TargetDir:       target,
 		Service:         options.Service,
 		UnitPath:        filepath.Join(installSystemdUnitDir, options.Service+".service"),
+		InstanceID:      instanceID,
+		ComposeProject:  instanceID,
+		ContainerName:   service.ContainerName,
+		NetworkName:     service.NetworkName,
+		Ports:           ports,
 		Start:           options.Start,
 		ComposeOverride: overrideErr == nil,
 	}, nil
@@ -126,6 +158,13 @@ func printInstallDryRun(stdout io.Writer, plan installPlan) {
 	fmt.Fprintf(stdout, "would install deployment: %s\n", plan.SourceDir)
 	fmt.Fprintf(stdout, "target: %s\n", plan.TargetDir)
 	fmt.Fprintf(stdout, "service: %s\n", plan.Service)
+	fmt.Fprintf(stdout, "instance id: %s\n", plan.InstanceID)
+	fmt.Fprintf(stdout, "compose project: %s\n", plan.ComposeProject)
+	fmt.Fprintf(stdout, "container: %s\n", plan.ContainerName)
+	fmt.Fprintf(stdout, "network: %s\n", plan.NetworkName)
+	for _, port := range plan.Ports {
+		fmt.Fprintf(stdout, "port %s: %s:%s -> %s\n", port.Name, port.HostBind, port.HostPort, port.ContainerPort)
+	}
 	fmt.Fprintf(stdout, "would write systemd unit: %s\n", plan.UnitPath)
 	fmt.Fprintln(stdout, "would run: systemctl daemon-reload")
 	fmt.Fprintf(stdout, "would run: systemctl enable %s.service\n", plan.Service)
@@ -222,6 +261,9 @@ func systemdUnit(plan installPlan, dockerBin string, includeDockerUnit bool) str
 		dockerUnitLines = "Requires=docker.service\nAfter=docker.service\n"
 	}
 	composeFiles := "--project-directory " + plan.TargetDir + " -f " + filepath.Join(plan.TargetDir, ComposeFileName)
+	if plan.ComposeProject != "" {
+		composeFiles = "--project-name " + plan.ComposeProject + " " + composeFiles
+	}
 	if plan.ComposeOverride {
 		composeFiles += " -f " + filepath.Join(plan.TargetDir, ComposeOverrideFileName)
 	}
@@ -243,28 +285,49 @@ WantedBy=multi-user.target
 `, plan.Service, dockerUnitLines, plan.TargetDir, dockerBin, dockerBin, filepath.Join(plan.TargetDir, DockerEnvFileName), composeFiles, dockerBin, filepath.Join(plan.TargetDir, DockerEnvFileName), composeFiles)
 }
 
-func writeInstalledState(dir string) error {
-	state, err := loadState(dir)
+func writeInstalledState(plan installPlan) error {
+	state, err := loadState(plan.TargetDir)
 	if err != nil {
 		return err
 	}
-	state, err = withInferredBundleState(dir, state)
+	state, err = withInferredBundleState(plan.TargetDir, state)
 	if err != nil {
 		return err
 	}
 	state.Phase = deploy.PhaseInstalled
+	state.Install = &deploy.InstallState{
+		TargetDir:      plan.TargetDir,
+		Service:        plan.Service,
+		UnitPath:       plan.UnitPath,
+		InstanceID:     plan.InstanceID,
+		ComposeProject: plan.ComposeProject,
+		ContainerName:  plan.ContainerName,
+		NetworkName:    plan.NetworkName,
+		Ports:          installPortState(plan.Ports),
+	}
 	content, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, StateFileName), append(content, '\n'), 0o644)
+	return os.WriteFile(filepath.Join(plan.TargetDir, StateFileName), append(content, '\n'), 0o644)
+}
+
+func writeInstalledDockerEnv(plan installPlan) error {
+	updates := dockerEnvPortUpdates(plan.Ports)
+	updates["REPLOY_CONTAINER_NAME"] = plan.ContainerName
+	updates["REPLOY_DOCKER_NETWORK_NAME"] = plan.NetworkName
+	_, err := upsertDockerEnvValues(plan.TargetDir, updates)
+	return err
 }
 
 func applyInstallPlan(plan installPlan) error {
 	if err := copyDeploymentTreeProtected(plan.SourceDir, plan.TargetDir); err != nil {
 		return fmt.Errorf("copy deployment: %w", err)
 	}
-	if err := writeInstalledState(plan.TargetDir); err != nil {
+	if err := writeInstalledDockerEnv(plan); err != nil {
+		return fmt.Errorf("write installed docker env: %w", err)
+	}
+	if err := writeInstalledState(plan); err != nil {
 		return fmt.Errorf("mark deployment installed: %w", err)
 	}
 	dockerBin, err := installLookPath("docker")

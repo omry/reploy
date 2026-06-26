@@ -69,13 +69,14 @@ type AppCommandConfig struct {
 }
 
 type DockerPackConfig struct {
-	DeploymentDirs DockerDeploymentDirs  `yaml:"deployment_dirs"`
-	Service        DockerServiceConfig   `yaml:"service"`
-	Environment    map[string]string     `yaml:"environment"`
-	Runtime        DockerRuntimeConfig   `yaml:"runtime"`
-	DefaultCommand string                `yaml:"default_command"`
-	Health         DockerHealthConfig    `yaml:"health"`
-	Commands       []DockerCommandConfig `yaml:"-"`
+	DeploymentDirs DockerDeploymentDirs        `yaml:"deployment_dirs"`
+	Service        DockerServiceConfig         `yaml:"service"`
+	Ports          map[string]DockerPortConfig `yaml:"ports"`
+	Environment    map[string]string           `yaml:"environment"`
+	Runtime        DockerRuntimeConfig         `yaml:"runtime"`
+	DefaultCommand string                      `yaml:"default_command"`
+	Health         DockerHealthConfig          `yaml:"health"`
+	Commands       []DockerCommandConfig       `yaml:"-"`
 }
 
 type DockerServiceConfig struct {
@@ -92,6 +93,12 @@ type DockerServiceConfig struct {
 	NetworkName   string `yaml:"network_name"`
 	RuntimeRoot   string `yaml:"runtime_root"`
 	ContainerHome string `yaml:"container_home"`
+}
+
+type DockerPortConfig struct {
+	HostBind      string `yaml:"host_bind"`
+	HostPort      string `yaml:"host_port"`
+	ContainerPort string `yaml:"container_port"`
 }
 
 type DockerRuntimeConfig struct {
@@ -276,6 +283,7 @@ func ParsePackManifest(content string) (PackManifest, error) {
 		Docker: DockerPackConfig{
 			DeploymentDirs: raw.Docker.DeploymentDirs,
 			Service:        raw.Docker.Service,
+			Ports:          raw.Docker.Ports,
 			Environment:    raw.Docker.Environment,
 			Runtime:        raw.Docker.Runtime,
 			DefaultCommand: raw.Docker.DefaultCommand,
@@ -357,6 +365,27 @@ func ParsePackManifest(content string) (PackManifest, error) {
 	}
 	if manifest.Docker.Environment == nil {
 		manifest.Docker.Environment = map[string]string{}
+	}
+	if manifest.Docker.Ports == nil {
+		manifest.Docker.Ports = map[string]DockerPortConfig{}
+	}
+	for name, port := range manifest.Docker.Ports {
+		if strings.TrimSpace(name) == "" {
+			return PackManifest{}, fmt.Errorf("docker.ports contains an empty port name")
+		}
+		if containsLineOrFieldBreak(name) {
+			return PackManifest{}, fmt.Errorf("docker.ports contains an invalid port name: %q", name)
+		}
+		for field, value := range map[string]string{
+			"host_bind":      port.HostBind,
+			"host_port":      port.HostPort,
+			"container_port": port.ContainerPort,
+		} {
+			if containsLineOrFieldBreak(value) {
+				return PackManifest{}, fmt.Errorf("docker.ports.%s.%s must not contain tabs or newlines", name, field)
+			}
+		}
+		manifest.Docker.Ports[name] = port
 	}
 	for name, value := range manifest.Docker.Environment {
 		if !isEnvironmentVariableName(name) {
@@ -442,6 +471,7 @@ type rawPackManifest struct {
 type rawDockerPackConfig struct {
 	DeploymentDirs DockerDeploymentDirs           `yaml:"deployment_dirs"`
 	Service        DockerServiceConfig            `yaml:"service"`
+	Ports          map[string]DockerPortConfig    `yaml:"ports"`
 	Environment    map[string]string              `yaml:"environment"`
 	Runtime        DockerRuntimeConfig            `yaml:"runtime"`
 	DefaultCommand string                         `yaml:"default_command"`

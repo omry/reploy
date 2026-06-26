@@ -25,7 +25,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${REPLOY_HOST_BIND:-{{DEFAULT_HOST_BIND}}}:${REPLOY_HOST_PORT:-{{DEFAULT_HOST_PORT}}}:${REPLOY_CONTAINER_PORT:-{{DEFAULT_CONTAINER_PORT}}}"
+{{PORT_BINDINGS}}
     networks:
       - reploy
     command: >

@@ -84,7 +84,11 @@ func Init(options InitOptions) ([]UpdateResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	compose, err := renderComposeTemplate(pack, bundleRoots)
+	stagingID, err := stagingInstanceID(pack, options.Dir)
+	if err != nil {
+		return nil, err
+	}
+	compose, err := renderComposeTemplate(pack, bundleRoots, stagingID)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +127,7 @@ func Init(options InitOptions) ([]UpdateResult, error) {
 	if err := writeGenerated(ComposeFileName, []byte(compose), false); err != nil {
 		return nil, err
 	}
-	if err := writeLocal(DockerEnvFileName, []byte(defaultDockerEnv(pack)), 0o644); err != nil {
+	if err := writeLocal(DockerEnvFileName, []byte(defaultDockerEnv(pack, stagingID)), 0o644); err != nil {
 		return nil, err
 	}
 	if err := writeLocal(RequirementsFileName, ensureTrailingNewline(requirements), 0o644); err != nil {
@@ -170,6 +174,14 @@ func writeStateIfChanged(dir string, pack deploy.AppPack, bundle deploy.BundleSt
 	return deploy.WriteFileIfChanged(filepath.Join(dir, StateFileName), content, 0o644)
 }
 
+func writeUpdatedStateIfChanged(dir string, pack deploy.AppPack, bundle deploy.BundleState, existing deploy.DeploymentState) (deploy.UpdateStatus, error) {
+	content, err := updatedStateContent(pack, bundle, existing)
+	if err != nil {
+		return "", err
+	}
+	return deploy.WriteFileIfChanged(filepath.Join(dir, StateFileName), content, 0o644)
+}
+
 func stateContent(pack deploy.AppPack, bundle deploy.BundleState) ([]byte, error) {
 	state := deploy.DeploymentState{
 		SchemaVersion:         1,
@@ -181,6 +193,28 @@ func stateContent(pack deploy.AppPack, bundle deploy.BundleState) ([]byte, error
 		ResolvedArtifact:      pack.ResolvedArtifact,
 		Bundle:                bundle,
 	}
+	return marshalState(state)
+}
+
+func updatedStateContent(pack deploy.AppPack, bundle deploy.BundleState, existing deploy.DeploymentState) ([]byte, error) {
+	state := deploy.DeploymentState{
+		SchemaVersion:         1,
+		ToolVersion:           deploy.ToolVersion,
+		Target:                "docker",
+		Phase:                 deploy.PhaseStaged,
+		Blueprint:             pack.Ref,
+		RequestedBlueprintRef: pack.RequestedRef.Raw,
+		ResolvedArtifact:      pack.ResolvedArtifact,
+		Bundle:                bundle,
+	}
+	if existing.Phase != "" {
+		state.Phase = existing.Phase
+	}
+	state.Install = existing.Install
+	return marshalState(state)
+}
+
+func marshalState(state deploy.DeploymentState) ([]byte, error) {
 	content, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return nil, err
@@ -262,9 +296,20 @@ func ensureTrailingNewline(content []byte) []byte {
 	return append(content, '\n')
 }
 
-func defaultDockerEnv(pack deploy.AppPack) string {
+func defaultDockerEnv(pack deploy.AppPack, dockerIdentity string) string {
 	dirs := pack.Docker.DeploymentDirs
-	service := dockerServiceDefaults(pack)
+	service := dockerServiceDefaults(pack, dockerIdentity)
+	ports, err := dockerPortBindings(pack, service)
+	if err != nil {
+		ports = []dockerPortBinding{{
+			Name:          "default",
+			EnvSuffix:     "DEFAULT",
+			HostBind:      service.HostBind,
+			HostPort:      service.HostPort,
+			ContainerPort: service.ContainerPort,
+		}}
+	}
+	primaryPort := ports[0]
 	lines := []string{
 		"# Docker Compose settings for the Reploy deployment.",
 		"# These values control the container wrapper, not app runtime config.",
@@ -279,15 +324,26 @@ func defaultDockerEnv(pack deploy.AppPack) string {
 		"REPLOY_RUNTIME_DIR=./" + RuntimeDirName,
 		fmt.Sprintf("REPLOY_DATA_DIR=./%s", dirs.Data),
 		fmt.Sprintf("REPLOY_CONTAINER_HOST=%s", service.ContainerHost),
-		fmt.Sprintf("REPLOY_HOST_BIND=%s", service.HostBind),
-		fmt.Sprintf("REPLOY_HOST_PORT=%s", service.HostPort),
-		fmt.Sprintf("REPLOY_CONTAINER_PORT=%s", service.ContainerPort),
+		fmt.Sprintf("REPLOY_HOST_BIND=%s", primaryPort.HostBind),
+		fmt.Sprintf("REPLOY_HOST_PORT=%s", primaryPort.HostPort),
+		fmt.Sprintf("REPLOY_CONTAINER_PORT=%s", primaryPort.ContainerPort),
 		fmt.Sprintf("REPLOY_PUBLIC_SCHEME=%s", service.PublicScheme),
 		fmt.Sprintf("REPLOY_PUBLIC_BASE_URL=%s", service.PublicBaseURL),
 		fmt.Sprintf("REPLOY_DOCKER_NETWORK_NAME=%s", service.NetworkName),
 		fmt.Sprintf("REPLOY_RUNTIME_ROOT=%s", service.RuntimeRoot),
 		fmt.Sprintf("REPLOY_CONTAINER_HOME=%s", service.ContainerHome),
 		"REPLOY_PIP_VERBOSE=",
+	}
+	if hasNamedPortBindings(ports) {
+		lines = append(lines, "", "# Named Docker port bindings declared by the blueprint.")
+		for _, port := range ports {
+			hostBindEnv, hostPortEnv, containerPortEnv := portEnvNames(port)
+			lines = append(lines,
+				fmt.Sprintf("%s=%s", hostBindEnv, port.HostBind),
+				fmt.Sprintf("%s=%s", hostPortEnv, port.HostPort),
+				fmt.Sprintf("%s=%s", containerPortEnv, port.ContainerPort),
+			)
+		}
 	}
 	if len(pack.Docker.Environment) > 0 {
 		lines = append(lines, "", "# App environment defaults declared by the blueprint.")
@@ -312,7 +368,7 @@ func defaultContainerUser() string {
 	return fmt.Sprintf("%d:%d", uid, gid)
 }
 
-func renderComposeTemplate(pack deploy.AppPack, roots []deploy.ArtifactRoot) (string, error) {
+func renderComposeTemplate(pack deploy.AppPack, roots []deploy.ArtifactRoot, dockerIdentity string) (string, error) {
 	containerCommands, err := shellContainerCommands(pack.Docker.Commands, pack.Docker.DefaultCommand)
 	if err != nil {
 		return "", err
@@ -329,7 +385,12 @@ func renderComposeTemplate(pack deploy.AppPack, roots []deploy.ArtifactRoot) (st
 	if err != nil {
 		return "", err
 	}
-	service := dockerServiceDefaults(pack)
+	service := dockerServiceDefaults(pack, dockerIdentity)
+	ports, err := dockerPortBindings(pack, service)
+	if err != nil {
+		return "", err
+	}
+	portBindings := renderComposePortBindings(ports)
 	appEnvironment := renderComposeAppEnvironment(pack.Docker.Environment)
 	runtimeOverrides, err := renderRuntimeOverrides(pack.Docker.Runtime)
 	if err != nil {
@@ -340,6 +401,7 @@ func renderComposeTemplate(pack deploy.AppPack, roots []deploy.ArtifactRoot) (st
 	rendered = strings.ReplaceAll(rendered, "{{DEFAULT_CONTAINER_COMMAND_FUNCTION}}", defaultCommandName)
 	rendered = strings.ReplaceAll(rendered, "{{CONFIG_CHECK_COMMAND_FUNCTION}}", configCheckFunction)
 	rendered = strings.ReplaceAll(rendered, "{{LOCAL_SOURCE_VOLUMES}}", sourceVolumes)
+	rendered = strings.ReplaceAll(rendered, "{{PORT_BINDINGS}}", portBindings)
 	rendered = strings.ReplaceAll(rendered, "{{APP_ENVIRONMENT}}", appEnvironment)
 	rendered = strings.ReplaceAll(rendered, "{{RUNTIME_OVERRIDES}}", runtimeOverrides)
 	rendered = strings.ReplaceAll(rendered, "{{DEFAULT_IMAGE}}", service.Image)
@@ -360,6 +422,7 @@ func renderComposeTemplate(pack deploy.AppPack, roots []deploy.ArtifactRoot) (st
 		strings.Contains(rendered, "{{DEFAULT_CONTAINER_COMMAND_FUNCTION}}") ||
 		strings.Contains(rendered, "{{CONFIG_CHECK_COMMAND_FUNCTION}}") ||
 		strings.Contains(rendered, "{{LOCAL_SOURCE_VOLUMES}}") ||
+		strings.Contains(rendered, "{{PORT_BINDINGS}}") ||
 		strings.Contains(rendered, "{{APP_ENVIRONMENT}}") ||
 		strings.Contains(rendered, "{{RUNTIME_OVERRIDES}}") ||
 		strings.Contains(rendered, "{{DEFAULT_") {
@@ -386,11 +449,15 @@ func localSourceComposeVolumes(pack deploy.AppPack, roots []deploy.ArtifactRoot)
 	return strings.Join(lines, "\n"), nil
 }
 
-func dockerServiceDefaults(pack deploy.AppPack) deploy.DockerServiceConfig {
+func dockerServiceDefaults(pack deploy.AppPack, dockerIdentity string) deploy.DockerServiceConfig {
 	slug := dockerNameSlug(pack.AppID, "app")
 	service := pack.Docker.Service
 	service.Image = defaultString(service.Image, "python:3.11-slim")
-	service.ContainerName = defaultString(service.ContainerName, slug+"-staging")
+	if dockerIdentity != "" {
+		service.ContainerName = dockerIdentity
+	} else {
+		service.ContainerName = defaultString(service.ContainerName, slug+"-staging")
+	}
 	service.ContainerUser = defaultString(service.ContainerUser, defaultContainerUser())
 	service.Restart = defaultString(service.Restart, "on-failure")
 	service.ContainerHost = defaultString(service.ContainerHost, "0.0.0.0")
@@ -398,7 +465,11 @@ func dockerServiceDefaults(pack deploy.AppPack) deploy.DockerServiceConfig {
 	service.HostBind = defaultString(service.HostBind, "127.0.0.1")
 	service.HostPort = defaultString(service.HostPort, "18080")
 	service.PublicScheme = defaultString(service.PublicScheme, "http")
-	service.NetworkName = defaultString(service.NetworkName, slug+"-staging")
+	if dockerIdentity != "" {
+		service.NetworkName = dockerIdentity
+	} else {
+		service.NetworkName = defaultString(service.NetworkName, slug+"-staging")
+	}
 	service.RuntimeRoot = defaultString(service.RuntimeRoot, "/reploy-runtime/python-venv")
 	service.ContainerHome = defaultString(service.ContainerHome, "/tmp/reploy-home")
 	return service

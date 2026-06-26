@@ -37,18 +37,14 @@ This file is the day-to-day queue for design and implementation gaps.
       uninstall reliable; and add tests for both target-present and
       target-missing flows.
 
-- [ ] `P1` Support side-by-side installs with distinct service identity and
-      ports. Operators should be able to install multiple instances from the
-      same blueprint without container, network, unit, or port collisions.
-      Acceptance checks: make install accept or preserve an explicit service
-      name and host port; derive staging Docker identity from the deployment
-      path, using a stable slug/hash instead of the raw full path; use the
-      install service name plus target path as the installed instance identity
-      for the default systemd unit, compose project, container name, and network
-      name unless explicitly overridden; write install-specific Docker
-      environment overrides without corrupting generated defaults; record
-      service, target, unit path, container name, network name, and host port in
-      install state; prove two installed instances can coexist; and document the
-      side-by-side install and uninstall flow.
+- [ ] `P1` Complete side-by-side install validation and docs.
+      Implemented foundation: staging Docker identity is derived from the
+      deployment path using a stable slug/hash; installed Docker identity is
+      derived from service name plus target path; install accepts single-port
+      and named `--port` overrides; installed docker.env and state record the
+      resolved compose project, container name, network name, and ports.
+      Remaining acceptance checks: prove two installed instances can coexist on
+      a real host; document the side-by-side install flow; and connect the
+      recorded install metadata to the uninstall flow.
 
 ## Post-v1

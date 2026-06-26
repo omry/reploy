@@ -36,21 +36,22 @@ func RuntimeCommand(dir string, action string) (CommandSpec, error) {
 }
 
 func RuntimeCommandWithOptions(dir string, action string, options RuntimeCommandOptions) (CommandSpec, error) {
+	projectName := deploymentComposeProjectName(dir)
 	switch action {
 	case "up":
-		return composeCommand(dir, "up", "-d"), nil
+		return composeCommandWithProject(dir, projectName, "up", "-d"), nil
 	case "restart":
-		return composeCommand(dir, "up", "-d", "--force-recreate"), nil
+		return composeCommandWithProject(dir, projectName, "up", "-d", "--force-recreate"), nil
 	case "down":
-		return composeCommand(dir, "down", "--remove-orphans"), nil
+		return composeCommandWithProject(dir, projectName, "down", "--remove-orphans"), nil
 	case "ps", "status":
-		return composeCommand(dir, "ps"), nil
+		return composeCommandWithProject(dir, projectName, "ps"), nil
 	case "logs":
 		args := []string{"logs", "--timestamps"}
 		if options.Follow {
 			args = append(args, "-f")
 		}
-		return composeCommand(dir, args...), nil
+		return composeCommandWithProject(dir, projectName, args...), nil
 	default:
 		return CommandSpec{}, fmt.Errorf("unsupported runtime action: %s", action)
 	}
