@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smoke-suite"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[project.scripts]
+smoke-server = "smoke_suite.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

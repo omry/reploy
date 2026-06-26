@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+"""Exercise the Reploy CLI against a real temporary deployment."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--reploy",
+        required=True,
+        help="Path to the reploy binary to exercise.",
+    )
+    parser.add_argument(
+        "--keep-workdir",
+        action="store_true",
+        help="Keep the temporary smoke work directory for debugging.",
+    )
+    parser.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="Skip the Docker-backed bundle build/check and only exercise CLI planning.",
+    )
+    return parser.parse_args()
+
+
+def run(argv: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    print("+ " + " ".join(argv), flush=True)
+    completed = subprocess.run(
+        argv,
+        cwd=cwd,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.stdout:
+        print(completed.stdout, end="")
+    if completed.stderr:
+        print(completed.stderr, end="", file=sys.stderr)
+    if completed.returncode != 0:
+        raise SystemExit(f"command failed with exit code {completed.returncode}: {' '.join(argv)}")
+    return completed
+
+
+def require_contains(output: str, needle: str, context: str) -> None:
+    if needle not in output:
+        raise SystemExit(f"{context} did not contain {needle!r}\n--- output ---\n{output}")
+
+
+def run_smoke(reploy: Path, workdir: Path, *, plan_only: bool) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    pack_dir = repo_root / "tests" / "e2e" / "python" / "packages" / "smoke-blueprint"
+    deploy_dir = workdir / "deployment"
+    install_dir = workdir / "installed"
+    if not (pack_dir / "smoke.blueprint.yaml").is_file():
+        raise SystemExit(f"missing e2e smoke blueprint: {pack_dir}")
+
+    env = os.environ.copy()
+    env["NO_COLOR"] = "1"
+
+    init = run(
+        [str(reploy), "init", "--dir", str(deploy_dir), "--blueprint", "file:" + str(pack_dir)],
+        cwd=workdir,
+        env=env,
+    )
+    require_contains(init.stdout, "created", "init output")
+
+    update = run([str(reploy), "update", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+    if "up_to_date" not in update.stdout and ".reploy/state.json" not in update.stdout:
+        raise SystemExit(
+            "update output did not report an unchanged or updated deployment"
+            f"\n--- output ---\n{update.stdout}"
+        )
+
+    info = run([str(reploy), "info", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+    require_contains(info.stdout, "phase: staged", "info output")
+    require_contains(info.stdout, "python package smoke-suite", "info output")
+
+    options = run(
+        [str(reploy), "bundle", "list-options", "--dir", str(deploy_dir)],
+        cwd=workdir,
+        env=env,
+    )
+    require_contains(options.stdout, "imap\tInstall the smoke IMAP plugin.", "bundle options")
+
+    add = run(
+        [str(reploy), "bundle", "add", "--name", "imap", "--dir", str(deploy_dir)],
+        cwd=workdir,
+        env=env,
+    )
+    require_contains(add.stdout, "updated", "bundle add output")
+
+    bundle_list = run([str(reploy), "bundle", "list", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+    require_contains(bundle_list.stdout, "smoke-suite", "bundle list")
+    require_contains(bundle_list.stdout, "smoke-imap", "bundle list")
+
+    if plan_only:
+        bundle_build = run(
+            [str(reploy), "bundle", "build", "--dry-run", "--dir", str(deploy_dir)],
+            cwd=workdir,
+            env=env,
+        )
+        require_contains(bundle_build.stdout, "would build installation bundle:", "bundle build dry-run")
+        require_contains(bundle_build.stdout, "docker run --rm", "bundle build dry-run")
+    else:
+        bundle_build = run(
+            [str(reploy), "bundle", "build", "--verbose", "--dir", str(deploy_dir)],
+            cwd=workdir,
+            env=env,
+        )
+        require_contains(bundle_build.stdout, "built installation bundle:", "bundle build")
+        bundle_check = run(
+            [str(reploy), "bundle", "check", "--verbose", "--dir", str(deploy_dir)],
+            cwd=workdir,
+            env=env,
+        )
+        require_contains(bundle_check.stdout, "bundle check passed", "bundle check")
+        bundle_all = run(
+            [str(reploy), "bundle", "list", "all", "--dir", str(deploy_dir)],
+            cwd=workdir,
+            env=env,
+        )
+        require_contains(bundle_all.stdout, "root\tsmoke-suite==0.1.0", "bundle list all")
+        require_contains(bundle_all.stdout, "root\tsmoke-imap==0.1.0", "bundle list all")
+
+    doctor = run([str(reploy), "doctor", "--preinstall", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+    require_contains(doctor.stdout, "ok: preinstall checks passed", "preinstall doctor")
+
+    install = run(
+        [
+            str(reploy),
+            "install",
+            "--dir",
+            str(deploy_dir),
+            "--to",
+            str(install_dir),
+            "--service",
+            "smoke-e2e",
+            "--port",
+            "18082",
+            "--dry-run",
+        ],
+        cwd=workdir,
+        env=env,
+    )
+    require_contains(install.stdout, "would install deployment:", "install dry-run")
+    require_contains(install.stdout, "service: smoke-e2e", "install dry-run")
+    require_contains(install.stdout, "port default: 127.0.0.1:18082 -> 8080", "install dry-run")
+    require_contains(
+        install.stdout,
+        "would rebuild local source bundle: smoke-imap, smoke-suite",
+        "install dry-run",
+    )
+    require_contains(install.stdout, "would run before start hook: app config check", "install dry-run")
+    require_contains(install.stdout, "would run after start hook: health check --wait", "install dry-run")
+    require_contains(install.stdout, "would print success line: server url: ${server_url}", "install dry-run")
+
+    if not plan_only:
+        clean = run(
+            [str(reploy), "bundle", "clean", "--verbose", "--dir", str(deploy_dir)],
+            cwd=workdir,
+            env=env,
+        )
+        require_contains(clean.stdout, ".reploy/bundle", "bundle clean")
+
+    run([str(reploy), "uninstall", "--list-services"], cwd=workdir, env=env)
+
+
+def main() -> int:
+    args = parse_args()
+    reploy = Path(args.reploy).resolve()
+    if not reploy.is_file():
+        raise SystemExit(f"missing reploy binary: {reploy}")
+    if not os.access(reploy, os.X_OK):
+        raise SystemExit(f"reploy binary is not executable: {reploy}")
+
+    if args.keep_workdir:
+        workdir = Path(tempfile.mkdtemp(prefix="reploy-e2e-smoke-"))
+        print(f"workdir: {workdir}")
+        run_smoke(reploy, workdir, plan_only=args.plan_only)
+    else:
+        workdir = Path(tempfile.mkdtemp(prefix="reploy-e2e-smoke-"))
+        try:
+            run_smoke(reploy, workdir, plan_only=args.plan_only)
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

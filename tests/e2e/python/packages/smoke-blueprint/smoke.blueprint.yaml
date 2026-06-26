@@ -1,0 +1,82 @@
+blueprint:
+  schema: 1
+  version: 0.1.0
+  requires_reploy: ">=0.1.0"
+
+app:
+  id: smoke-app
+  provider:
+    type: python
+    identifier: smoke-suite
+    local_sources:
+      smoke-suite: ../smoke-suite
+      smoke-imap: ../smoke-imap
+  terminal:
+    color_env: SMOKE_COLOR
+
+bundle:
+  options:
+    imap:
+      identifier: smoke-imap
+      group: plugins
+      description: Install the smoke IMAP plugin.
+
+docker:
+  deployment_dirs:
+    config: conf
+    bundle: .reploy/bundle
+    data: data
+  service:
+    image: python:3.11-slim
+    install_owner: "1000:1000"
+    host_bind: 127.0.0.1
+    host_port: "18075"
+    container_port: "8080"
+    public_scheme: https
+  health:
+    scheme_env: REPLOY_PUBLIC_SCHEME
+    host_env: REPLOY_HOST_BIND
+    port_env: REPLOY_HOST_PORT
+    default_scheme: https
+    default_host: 127.0.0.1
+    default_port: "18075"
+    path: /_health_
+    tls_verify: false
+  install:
+    hooks:
+      before_start:
+        - app:
+            - config
+            - check
+      after_start:
+        - health_check:
+            wait: true
+        - app:
+            - config
+            - check
+            - --live
+    success:
+      vars:
+        server_url:
+          server_url: true
+      lines:
+        - "server url: ${server_url}"
+  default_command: serve
+  commands:
+    serve:
+      container:
+        argv:
+          - smoke-server
+          - serve
+    config_check:
+      trigger:
+        - config
+        - check
+      app_command: true
+      forward_flags:
+        - --live
+      container:
+        argv:
+          - smoke-server
+          - config
+          - check

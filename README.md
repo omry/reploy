@@ -76,6 +76,21 @@ Windows support is tracked in the backlog.
 go test ./...
 ```
 
+Exercise the CLI against the fixture blueprint and packages under
+`tests/e2e/python/packages/`. This path uses Docker to build and check the
+Python bundle:
+
+```bash
+tools/build_reploy --target linux-amd64 --outdir /tmp/reploy-smoke-bin
+python tools/e2e_smoke --reploy /tmp/reploy-smoke-bin/linux-amd64/reploy
+```
+
+For a fast planning-only loop that skips Docker-backed bundle builds:
+
+```bash
+python tools/e2e_smoke --plan-only --reploy /tmp/reploy-smoke-bin/linux-amd64/reploy
+```
+
 When running in a sandbox where the default Go build cache is not writable, set
 `GOCACHE` to a writable directory:
 

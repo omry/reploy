@@ -25,17 +25,6 @@ This file is the day-to-day queue for design and implementation gaps.
 
 ## Now
 
-- [ ] `P1` Support uninstall for installed Reploy deployments.
-      Implemented foundation: `reploy uninstall` accepts `--from`,
-      `--service-name`, `--list-services`, `--remove-dir`, and `--dry-run`;
-      target-present uninstall reads installed state, runs Compose cleanup,
-      disables/removes the systemd unit, reloads systemd, and optionally removes
-      the target directory; target-missing uninstall can recover the Compose
-      project from the systemd unit and remove Docker containers/networks by
-      Compose labels.
-      Remaining acceptance checks: validate on a real installed Arbiter service
-      for both target-present and manually-deleted target flows.
-
 - [ ] `P1` Complete side-by-side install validation and docs.
       Implemented foundation: staging Docker identity is derived from the
       deployment path using a stable slug/hash; installed Docker identity is
@@ -44,10 +33,12 @@ This file is the day-to-day queue for design and implementation gaps.
       resolved compose project, container name, network name, and ports. Real
       host validation proved `/opt/arbiter2` and `/opt/arbiter3` can run
       concurrently with separate service names, containers, and ports alongside
-      the existing install and staging deployment.
+      the existing install and staging deployment. Uninstall is implemented for
+      target-present and target-missing flows through `reploy uninstall --from`,
+      `--service-name`, `--list-services`, `--remove-dir`, and `--dry-run`.
       Remaining acceptance checks: document the side-by-side install/uninstall
-      flow and validate uninstall against the recorded install metadata on a
-      real host.
+      flow and validate uninstall against the recorded install metadata on real
+      installed services.
 
 - [ ] `P2` Create a Docusaurus documentation site.
       Build a dedicated docs website for Reploy and publish it at
