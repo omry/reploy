@@ -74,12 +74,23 @@ func runInterruptibleCommand(run commandRunner, spec CommandSpec, options RunOpt
 	}
 }
 
-func deploymentComposeProjectName(dir string) string {
-	state, err := loadState(dir)
-	if err != nil || state.Install == nil {
-		return ""
+func deploymentComposeProjectName(dir string) (string, error) {
+	if state, err := loadState(dir); err == nil {
+		if state.Install != nil && state.Install.ComposeProject != "" {
+			return state.Install.ComposeProject, nil
+		}
 	}
-	return state.Install.ComposeProject
+	values, err := readDockerEnv(dir)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", DockerEnvFileName, err)
+	}
+	if projectName := envValue(values, "REPLOY_CONTAINER_NAME", ""); projectName != "" {
+		return projectName, nil
+	}
+	if projectName := envValue(values, "REPLOY_DOCKER_NETWORK_NAME", ""); projectName != "" {
+		return projectName, nil
+	}
+	return "", nil
 }
 
 func composeCommand(dir string, args ...string) CommandSpec {

@@ -446,6 +446,83 @@ func TestBundleCheckDryRunPrintsCommand(t *testing.T) {
 	}
 }
 
+func TestBundleCheckSuppressesCommandOutputByDefault(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(deployDir, BundleDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var runOptions []RunOptions
+	restore := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
+		runOptions = append(runOptions, options)
+		return nil
+	})
+	defer restore()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := BundleCheck(BundleCheckOptions{Dir: deployDir, Stdout: &stdout, Stderr: &stderr}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runOptions) != 1 {
+		t.Fatalf("ran %d commands, want check", len(runOptions))
+	}
+	if runOptions[0].Context == nil {
+		t.Fatalf("run options should include an interruptible context: %#v", runOptions[0])
+	}
+	if runOptions[0].Stdout != nil || runOptions[0].Stderr != nil {
+		t.Fatalf("run options should suppress output by default: %#v", runOptions[0])
+	}
+	if stdout.String() != "" || stderr.String() != "" {
+		t.Fatalf("stdout=%q stderr=%q, want quiet", stdout.String(), stderr.String())
+	}
+}
+
+func TestBundleCheckVerboseStreamsCommandOutput(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(deployDir, BundleDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var runOptions []RunOptions
+	restore := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
+		runOptions = append(runOptions, options)
+		return nil
+	})
+	defer restore()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := BundleCheck(BundleCheckOptions{Dir: deployDir, Verbose: true, Stdout: &stdout, Stderr: &stderr}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runOptions) != 1 {
+		t.Fatalf("ran %d commands, want check", len(runOptions))
+	}
+	if runOptions[0].Context == nil {
+		t.Fatalf("run options should include an interruptible context: %#v", runOptions[0])
+	}
+	if runOptions[0].Stdout != &stdout || runOptions[0].Stderr != &stderr {
+		t.Fatalf("run options should stream verbose output: %#v", runOptions[0])
+	}
+}
+
 func TestBundlePrepareCommandBuildsWheelhouse(t *testing.T) {
 	packDir := makeTestPack(t)
 	ref, err := deploy.ParsePackRef("file:" + packDir)

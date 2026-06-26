@@ -42,10 +42,11 @@ type BundleRootsOptions struct {
 }
 
 type BundleCheckOptions struct {
-	Dir    string
-	DryRun bool
-	Stdout io.Writer
-	Stderr io.Writer
+	Dir     string
+	DryRun  bool
+	Verbose bool
+	Stdout  io.Writer
+	Stderr  io.Writer
 }
 
 type BundlePrepareOptions struct {
@@ -361,6 +362,12 @@ func BundleCheck(options BundleCheckOptions) error {
 	if options.Dir == "" {
 		options.Dir = DefaultDeploymentDir
 	}
+	stdout := options.Stdout
+	stderr := options.Stderr
+	if !options.Verbose && !options.DryRun {
+		stdout = nil
+		stderr = nil
+	}
 	state, err := loadState(options.Dir)
 	if err != nil {
 		return err
@@ -396,7 +403,7 @@ func BundleCheck(options BundleCheckOptions) error {
 	if err := requireBundleCheckInputs(options.Dir, bundleDir); err != nil {
 		return err
 	}
-	return runInterruptibleCommand(runBundleCommand, spec, RunOptions{Stdout: options.Stdout, Stderr: options.Stderr})
+	return runInterruptibleCommand(runBundleCommand, spec, RunOptions{Stdout: stdout, Stderr: stderr})
 }
 
 func BundlePrepare(options BundlePrepareOptions) error {
@@ -510,7 +517,7 @@ func BundlePrepare(options BundlePrepareOptions) error {
 	if options.Verbose && options.Stdout != nil {
 		fmt.Fprintf(options.Stdout, "built installation bundle: %s\n", bundleDir)
 	}
-	return BundleCheck(BundleCheckOptions{Dir: options.Dir, Stdout: stdout, Stderr: stderr})
+	return BundleCheck(BundleCheckOptions{Dir: options.Dir, Verbose: options.Verbose, Stdout: stdout, Stderr: stderr})
 }
 
 func BundleClean(options BundleCleanOptions) ([]UpdateResult, error) {

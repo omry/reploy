@@ -11,6 +11,7 @@ import (
 )
 
 func TestRuntimeCommandActions(t *testing.T) {
+	dir, projectName := makeRuntimeDeployment(t)
 	cases := []struct {
 		action string
 		suffix []string
@@ -24,12 +25,15 @@ func TestRuntimeCommandActions(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.action, func(t *testing.T) {
-			spec, err := RuntimeCommand("deployment", tc.action)
+			spec, err := RuntimeCommand(dir, tc.action)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if spec.Name != "docker" {
 				t.Fatalf("name = %q", spec.Name)
+			}
+			if !containsAdjacent(spec.Args, "--project-name", projectName) {
+				t.Fatalf("args did not include staging compose project: %#v", spec.Args)
 			}
 			if !reflect.DeepEqual(spec.Args[len(spec.Args)-len(tc.suffix):], tc.suffix) {
 				t.Fatalf("suffix = %#v, want %#v", spec.Args[len(spec.Args)-len(tc.suffix):], tc.suffix)
@@ -39,14 +43,43 @@ func TestRuntimeCommandActions(t *testing.T) {
 }
 
 func TestRuntimeCommandCanFollowLogs(t *testing.T) {
-	spec, err := RuntimeCommandWithOptions("deployment", "logs", RuntimeCommandOptions{Follow: true})
+	dir, projectName := makeRuntimeDeployment(t)
+	spec, err := RuntimeCommandWithOptions(dir, "logs", RuntimeCommandOptions{Follow: true})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !containsAdjacent(spec.Args, "--project-name", projectName) {
+		t.Fatalf("args did not include staging compose project: %#v", spec.Args)
 	}
 	suffix := []string{"logs", "--timestamps", "-f"}
 	if !reflect.DeepEqual(spec.Args[len(spec.Args)-len(suffix):], suffix) {
 		t.Fatalf("suffix = %#v, want %#v", spec.Args[len(spec.Args)-len(suffix):], suffix)
 	}
+}
+
+func makeRuntimeDeployment(t *testing.T) (string, string) {
+	t.Helper()
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: dir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	values, err := readDockerEnv(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectName := envValue(values, "REPLOY_CONTAINER_NAME", "")
+	if projectName == "" {
+		t.Fatal("missing REPLOY_CONTAINER_NAME")
+	}
+	if err := os.RemoveAll(packDir); err != nil {
+		t.Fatal(err)
+	}
+	return dir, projectName
 }
 
 func TestRuntimeCommandUsesInstalledComposeProject(t *testing.T) {
@@ -79,7 +112,8 @@ func TestRuntimeCommandUsesInstalledComposeProject(t *testing.T) {
 }
 
 func TestRuntimeCommandRejectsUnknownAction(t *testing.T) {
-	_, err := RuntimeCommand("deployment", "explode")
+	dir, _ := makeRuntimeDeployment(t)
+	_, err := RuntimeCommand(dir, "explode")
 	if err == nil {
 		t.Fatal("expected error")
 	}

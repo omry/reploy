@@ -36,7 +36,10 @@ func RuntimeCommand(dir string, action string) (CommandSpec, error) {
 }
 
 func RuntimeCommandWithOptions(dir string, action string, options RuntimeCommandOptions) (CommandSpec, error) {
-	projectName := deploymentComposeProjectName(dir)
+	projectName, err := deploymentComposeProjectName(dir)
+	if err != nil {
+		return CommandSpec{}, err
+	}
 	switch action {
 	case "up":
 		return composeCommandWithProject(dir, projectName, "up", "-d"), nil

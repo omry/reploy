@@ -426,7 +426,7 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 		RequireRoot:   action != "list" && action != "list-options" && action != "check" && action != "build" && action != "clean",
 		AllowDryRun:   action == "check" || action == "build",
 		AllowPyPIOnly: action == "build",
-		AllowVerbose:  action == "build" || action == "clean",
+		AllowVerbose:  action == "check" || action == "build" || action == "clean",
 		AllowMultiple: action == "add" || action == "remove",
 		AllowNames:    action == "add",
 		AllowForce:    action == "add",
@@ -485,16 +485,27 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 		printUpdateResults(stdout, results)
 		return 0
 	case "check":
+		stopSpinner := func(bool) {}
+		if !options.DryRun && !options.Verbose {
+			stopSpinner = startSpinner(stderr, "validating installation bundle")
+		}
 		if err := dockerdeploy.BundleCheck(dockerdeploy.BundleCheckOptions{
-			Dir:    options.Dir,
-			DryRun: options.DryRun,
-			Stdout: stdout,
-			Stderr: stderr,
+			Dir:     options.Dir,
+			DryRun:  options.DryRun,
+			Verbose: options.Verbose,
+			Stdout:  stdout,
+			Stderr:  stderr,
 		}); err != nil {
-			fmt.Fprintf(stderr, "reploy bundle check error: %v\n", err)
+			stopSpinner(false)
+			if options.DryRun || options.Verbose {
+				fmt.Fprintf(stderr, "reploy bundle check error: %v\n", err)
+			} else {
+				fmt.Fprintf(stderr, "reploy bundle check error: %v; rerun with --verbose for command output\n", err)
+			}
 			return 1
 		}
-		if !options.DryRun {
+		stopSpinner(true)
+		if !options.DryRun && options.Verbose {
 			fmt.Fprintln(stdout, "bundle check passed")
 		}
 		return 0
@@ -1517,7 +1528,7 @@ Deployment options:
   --dry-run    Print the install plan without changing the host
   --start      Start after install, default
   --no-start   Install without starting the service
-  --verbose    Show bundle build command output
+  --verbose    Show bundle check/build command output
   --follow     Follow logs instead of exiting after current output
   --timeout DURATION
               With test, readiness timeout for running services
@@ -1567,7 +1578,7 @@ Options:
   --force      With bundle add --name, treat unknown names as package roots
   --dry-run    Print build/check commands without changing the deployment
   --pypi-only  Build or upgrade using only PyPI package roots
-  --verbose    Show bundle build command output
+  --verbose    Show bundle check/build command output
   -h, --help   Show bundle help
 `, "\n"))
 }
@@ -1685,7 +1696,7 @@ Options:
   --dry-run    Print the install plan without changing the host
   --start      Start after install, default
   --no-start   Install without starting the service
-  --verbose    Show bundle build command output
+  --verbose    Show bundle check/build command output
   --follow     Follow logs instead of exiting after current output
   --timeout DURATION
               With test, readiness timeout for running services

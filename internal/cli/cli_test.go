@@ -1272,6 +1272,26 @@ func TestDockerBundleCheckDryRun(t *testing.T) {
 	}
 }
 
+func TestDockerBundleCheckVerboseDryRun(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("bundle", "check", "--verbose", "--dry-run", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("bundle check failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "would validate installation bundle:") || !strings.Contains(stdout, "docker run --rm") {
+		t.Fatalf("stdout missing dry-run command:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
 func TestDockerBundlePrepareDryRun(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
