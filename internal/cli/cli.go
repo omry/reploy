@@ -845,6 +845,11 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 1
 	}
 	stopSpinner(true)
+	if !options.DryRun {
+		if err := dockerdeploy.PrintInstallSuccess(options.Target, stdout); err != nil {
+			fmt.Fprintf(stderr, "reploy install warning: success output: %v\n", err)
+		}
+	}
 	return 0
 }
 

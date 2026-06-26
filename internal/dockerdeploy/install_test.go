@@ -60,8 +60,6 @@ func TestInstallDryRunPrintsPlan(t *testing.T) {
 		"would run: systemctl daemon-reload",
 		"would run: systemctl enable demo-test.service",
 		"would run: systemctl restart demo-test.service",
-		"would run: " + filepath.Join(target, "reploy") + " test",
-		"would run: " + filepath.Join(target, "reploy") + " app config check --live",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
@@ -626,12 +624,134 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 		"/bin/systemctl daemon-reload",
 		"/bin/systemctl enable demo-apply.service",
 		"/bin/systemctl restart demo-apply.service",
-		filepath.Join(target, "reploy") + " test",
-		filepath.Join(target, "reploy") + " app config check --live",
 	} {
 		if !containsString(commands, want) {
 			t.Fatalf("commands missing %q: %#v", want, commands)
 		}
+	}
+}
+
+func TestInstallRunsConfiguredHooksAroundServiceStart(t *testing.T) {
+	manifest := strings.Replace(testPackManifest(), "  health:\n", `  install:
+    hooks:
+      before_start:
+        - app: [config, check]
+      after_start:
+        - health_check:
+            wait: true
+        - app: [config, check, --live]
+  health:
+`, 1)
+	packDir := makeTestPackWithManifest(t, manifest)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_INSTALL_OWNER": "1000:1000"}); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "installed")
+	unitDir := t.TempDir()
+
+	var dryRun strings.Builder
+	if err := Install(InstallOptions{
+		Dir:     deployDir,
+		Target:  filepath.Join(t.TempDir(), "dry-run-target"),
+		Service: "demo-hooks",
+		Start:   true,
+		DryRun:  true,
+		Stdout:  &dryRun,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"would run before start hook: app config check",
+		"would run after start hook: health check --wait",
+		"would run after start hook: app config check --live",
+	} {
+		if !strings.Contains(dryRun.String(), want) {
+			t.Fatalf("dry-run missing %q:\n%s", want, dryRun.String())
+		}
+	}
+
+	oldGeteuid := installGeteuid
+	oldLookPath := installLookPath
+	oldRunCommand := installRunCommand
+	oldRunCommandOutput := installRunCommandOutput
+	oldToolBinaryContent := installToolBinaryContent
+	oldChown := installChown
+	oldRunTestCommandOutput := runTestCommandOutput
+	oldServicePollInterval := installServicePollInterval
+	oldSystemdUnitDir := installSystemdUnitDir
+	t.Cleanup(func() {
+		installGeteuid = oldGeteuid
+		installLookPath = oldLookPath
+		installRunCommand = oldRunCommand
+		installRunCommandOutput = oldRunCommandOutput
+		installToolBinaryContent = oldToolBinaryContent
+		installChown = oldChown
+		runTestCommandOutput = oldRunTestCommandOutput
+		installServicePollInterval = oldServicePollInterval
+		installSystemdUnitDir = oldSystemdUnitDir
+	})
+
+	installGeteuid = func() int { return 0 }
+	installSystemdUnitDir = unitDir
+	installToolBinaryContent = func() ([]byte, error) { return []byte("current reploy\n"), nil }
+	installChown = func(path string, uid int, gid int) error { return nil }
+	installServicePollInterval = time.Millisecond
+	installLookPath = func(name string) (string, error) {
+		switch name {
+		case "docker":
+			return "/usr/bin/docker", nil
+		case "systemctl":
+			return "/bin/systemctl", nil
+		default:
+			return "", errors.New("not found")
+		}
+	}
+	commands := []string{}
+	installRunCommand = func(name string, args ...string) error {
+		commands = append(commands, name+" "+strings.Join(args, " "))
+		return nil
+	}
+	installRunCommandOutput = func(name string, args ...string) ([]byte, error) {
+		commands = append(commands, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+	runTestCommandOutput = func(spec CommandSpec) ([]byte, error) {
+		return []byte(`[{"State":"running"}]`), nil
+	}
+
+	if err := Install(InstallOptions{
+		Dir:     deployDir,
+		Target:  target,
+		Service: "demo-hooks",
+		Start:   true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	wantOrder := []string{
+		filepath.Join(target, "reploy") + " app config check",
+		"/bin/systemctl restart demo-hooks.service",
+		filepath.Join(target, "reploy") + " test",
+		filepath.Join(target, "reploy") + " app config check --live",
+	}
+	lastIndex := -1
+	for _, want := range wantOrder {
+		index := indexOfString(commands, want)
+		if index == -1 {
+			t.Fatalf("commands missing %q: %#v", want, commands)
+		}
+		if index <= lastIndex {
+			t.Fatalf("command %q ran out of order: %#v", want, commands)
+		}
+		lastIndex = index
 	}
 }
 
@@ -849,28 +969,24 @@ func makeWaitInstallDeployment(t *testing.T) string {
 	return dir
 }
 
-func TestInstalledPostStartCheckIncludesCommandOutput(t *testing.T) {
+func TestInstallAppHookIncludesCommandOutput(t *testing.T) {
 	oldRunCommandOutput := installRunCommandOutput
-	oldRunTestCommandOutput := runTestCommandOutput
 	t.Cleanup(func() {
 		installRunCommandOutput = oldRunCommandOutput
-		runTestCommandOutput = oldRunTestCommandOutput
 	})
 
 	dir := makeWaitInstallDeployment(t)
-	runTestCommandOutput = func(spec CommandSpec) ([]byte, error) {
-		return []byte(`[{"State":"running"}]`), nil
-	}
 	installRunCommandOutput = func(name string, args ...string) ([]byte, error) {
 		return []byte("docker compose ps failed\npermission denied\n"), errors.New("exit status 1")
 	}
 
-	err := runInstalledPostStartChecks(installPlan{TargetDir: dir})
+	err := runInstallHooks(installPlan{TargetDir: dir}, "before start", []deploy.DockerInstallHookConfig{{App: []string{"config", "check"}}})
 	if err == nil {
 		t.Fatal("expected error")
 	}
 	for _, want := range []string{
-		"installed server test: exit status 1",
+		"install hook before start app config check",
+		"installed app hook: exit status 1",
 		"docker compose ps failed",
 		"permission denied",
 	} {
@@ -880,14 +996,17 @@ func TestInstalledPostStartCheckIncludesCommandOutput(t *testing.T) {
 	}
 }
 
-func TestInstalledPostStartCheckIncludesLogsWhenServiceDoesNotStart(t *testing.T) {
+func TestInstallHealthHookIncludesLogsWhenServiceDoesNotStart(t *testing.T) {
 	oldRunCommandOutput := installRunCommandOutput
 	oldRunTestCommandOutput := runTestCommandOutput
+	oldTerminalStateGrace := installServiceTerminalStateGrace
 	t.Cleanup(func() {
 		installRunCommandOutput = oldRunCommandOutput
 		runTestCommandOutput = oldRunTestCommandOutput
+		installServiceTerminalStateGrace = oldTerminalStateGrace
 	})
 
+	installServiceTerminalStateGrace = time.Millisecond
 	dir := makeWaitInstallDeployment(t)
 	runTestCommandOutput = func(spec CommandSpec) ([]byte, error) {
 		return []byte(`[{"State":"exited"}]`), nil
@@ -899,11 +1018,12 @@ func TestInstalledPostStartCheckIncludesLogsWhenServiceDoesNotStart(t *testing.T
 		return []byte("app failed during startup\nconfiguration check failed\n"), nil
 	}
 
-	err := runInstalledPostStartChecks(installPlan{TargetDir: dir})
+	err := runInstallHooks(installPlan{TargetDir: dir}, "after start", []deploy.DockerInstallHookConfig{{HealthCheck: &deploy.DockerInstallHealthCheckConfig{Wait: true}}})
 	if err == nil {
 		t.Fatal("expected error")
 	}
 	for _, want := range []string{
+		"install hook after start health check --wait",
 		"installed service start: service is not running; current state: exited",
 		"installed service logs:",
 		"app failed during startup",
@@ -1160,4 +1280,13 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func indexOfString(values []string, want string) int {
+	for index, value := range values {
+		if value == want {
+			return index
+		}
+	}
+	return -1
 }

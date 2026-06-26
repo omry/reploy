@@ -72,6 +72,7 @@ type DockerPackConfig struct {
 	DeploymentDirs DockerDeploymentDirs        `yaml:"deployment_dirs"`
 	Service        DockerServiceConfig         `yaml:"service"`
 	Ports          map[string]DockerPortConfig `yaml:"ports"`
+	Install        DockerInstallConfig         `yaml:"install"`
 	Environment    map[string]string           `yaml:"environment"`
 	Runtime        DockerRuntimeConfig         `yaml:"runtime"`
 	DefaultCommand string                      `yaml:"default_command"`
@@ -105,6 +106,35 @@ type DockerPortConfig struct {
 type DockerRuntimeConfig struct {
 	Overrides            []string          `yaml:"overrides"`
 	OptionalEnvOverrides map[string]string `yaml:"optional_env_overrides"`
+}
+
+type DockerInstallConfig struct {
+	Hooks   DockerInstallHooksConfig   `yaml:"hooks"`
+	Success DockerInstallSuccessConfig `yaml:"success"`
+}
+
+type DockerInstallHooksConfig struct {
+	BeforeStart []DockerInstallHookConfig `yaml:"before_start"`
+	AfterStart  []DockerInstallHookConfig `yaml:"after_start"`
+}
+
+type DockerInstallHookConfig struct {
+	App         []string                        `yaml:"app,omitempty"`
+	HealthCheck *DockerInstallHealthCheckConfig `yaml:"health_check,omitempty"`
+}
+
+type DockerInstallHealthCheckConfig struct {
+	Wait bool `yaml:"wait"`
+}
+
+type DockerInstallSuccessConfig struct {
+	Vars  map[string]DockerInstallSuccessVarConfig `yaml:"vars"`
+	Lines []string                                 `yaml:"lines"`
+}
+
+type DockerInstallSuccessVarConfig struct {
+	App       []string `yaml:"app,omitempty"`
+	ServerURL bool     `yaml:"server_url,omitempty"`
 }
 
 type DockerCommandConfig struct {
@@ -285,6 +315,7 @@ func ParsePackManifest(content string) (PackManifest, error) {
 			DeploymentDirs: raw.Docker.DeploymentDirs,
 			Service:        raw.Docker.Service,
 			Ports:          raw.Docker.Ports,
+			Install:        raw.Docker.Install,
 			Environment:    raw.Docker.Environment,
 			Runtime:        raw.Docker.Runtime,
 			DefaultCommand: raw.Docker.DefaultCommand,
@@ -418,6 +449,12 @@ func ParsePackManifest(content string) (PackManifest, error) {
 			return PackManifest{}, fmt.Errorf("docker.runtime.optional_env_overrides.%s must not contain tabs or newlines", envName)
 		}
 	}
+	if err := validateInstallHooks(manifest.Docker.Install.Hooks); err != nil {
+		return PackManifest{}, err
+	}
+	if err := validateInstallSuccess(manifest.Docker.Install.Success, manifest.Docker.Health); err != nil {
+		return PackManifest{}, err
+	}
 	if len(manifest.Docker.Commands) == 0 {
 		return PackManifest{}, fmt.Errorf("missing docker.commands")
 	}
@@ -443,6 +480,110 @@ func ParsePackManifest(content string) (PackManifest, error) {
 		return PackManifest{}, fmt.Errorf("docker.health.path must start with /")
 	}
 	return manifest, nil
+}
+
+func validateInstallHooks(hooks DockerInstallHooksConfig) error {
+	for phase, phaseHooks := range map[string][]DockerInstallHookConfig{
+		"before_start": hooks.BeforeStart,
+		"after_start":  hooks.AfterStart,
+	} {
+		for index, hook := range phaseHooks {
+			actionCount := 0
+			if len(hook.App) > 0 {
+				actionCount++
+				for argIndex, arg := range hook.App {
+					if strings.TrimSpace(arg) == "" {
+						return fmt.Errorf("docker.install.hooks.%s[%d].app[%d] must not be empty", phase, index, argIndex)
+					}
+					if containsLineOrFieldBreak(arg) {
+						return fmt.Errorf("docker.install.hooks.%s[%d].app[%d] must not contain tabs or newlines", phase, index, argIndex)
+					}
+				}
+			}
+			if hook.HealthCheck != nil {
+				actionCount++
+				if !hook.HealthCheck.Wait {
+					return fmt.Errorf("docker.install.hooks.%s[%d].health_check.wait must be true", phase, index)
+				}
+			}
+			if actionCount != 1 {
+				return fmt.Errorf("docker.install.hooks.%s[%d] must declare exactly one action", phase, index)
+			}
+		}
+	}
+	return nil
+}
+
+func validateInstallSuccess(success DockerInstallSuccessConfig, _ DockerHealthConfig) error {
+	for name, variable := range success.Vars {
+		if !isInstallSuccessVariableName(name) {
+			return fmt.Errorf("docker.install.success.vars contains invalid variable name: %s", name)
+		}
+		actionCount := 0
+		if len(variable.App) > 0 {
+			actionCount++
+			for argIndex, arg := range variable.App {
+				if strings.TrimSpace(arg) == "" {
+					return fmt.Errorf("docker.install.success.vars.%s.app[%d] must not be empty", name, argIndex)
+				}
+				if containsLineOrFieldBreak(arg) {
+					return fmt.Errorf("docker.install.success.vars.%s.app[%d] must not contain tabs or newlines", name, argIndex)
+				}
+			}
+		}
+		if variable.ServerURL {
+			actionCount++
+		}
+		if actionCount != 1 {
+			return fmt.Errorf("docker.install.success.vars.%s must declare exactly one source", name)
+		}
+	}
+	for index, line := range success.Lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return fmt.Errorf("docker.install.success.lines[%d] must not be empty", index)
+		}
+		if containsLineOrFieldBreak(line) {
+			return fmt.Errorf("docker.install.success.lines[%d] must not contain tabs or newlines", index)
+		}
+		for _, name := range installSuccessLineVariables(line) {
+			if _, ok := success.Vars[name]; !ok {
+				return fmt.Errorf("docker.install.success.lines[%d] references unknown variable: %s", index, name)
+			}
+		}
+	}
+	return nil
+}
+
+func isInstallSuccessVariableName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for index, r := range name {
+		if r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || index > 0 && r >= '0' && r <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func installSuccessLineVariables(line string) []string {
+	var names []string
+	remaining := line
+	for {
+		start := strings.Index(remaining, "${")
+		if start < 0 {
+			return names
+		}
+		remaining = remaining[start+2:]
+		end := strings.Index(remaining, "}")
+		if end < 0 {
+			return names
+		}
+		names = append(names, remaining[:end])
+		remaining = remaining[end+1:]
+	}
 }
 
 func containsLineOrFieldBreak(value string) bool {
@@ -473,6 +614,7 @@ type rawDockerPackConfig struct {
 	DeploymentDirs DockerDeploymentDirs           `yaml:"deployment_dirs"`
 	Service        DockerServiceConfig            `yaml:"service"`
 	Ports          map[string]DockerPortConfig    `yaml:"ports"`
+	Install        DockerInstallConfig            `yaml:"install"`
 	Environment    map[string]string              `yaml:"environment"`
 	Runtime        DockerRuntimeConfig            `yaml:"runtime"`
 	DefaultCommand string                         `yaml:"default_command"`

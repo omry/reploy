@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -36,6 +37,8 @@ type installPlan struct {
 	ContainerName   string
 	NetworkName     string
 	Ports           []dockerPortBinding
+	Hooks           deploy.DockerInstallHooksConfig
+	Success         deploy.DockerInstallSuccessConfig
 	Start           bool
 	ComposeOverride bool
 	Progress        io.Writer
@@ -163,6 +166,8 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 		ContainerName:   service.ContainerName,
 		NetworkName:     service.NetworkName,
 		Ports:           ports,
+		Hooks:           pack.Docker.Install.Hooks,
+		Success:         pack.Docker.Install.Success,
 		Start:           options.Start,
 		ComposeOverride: overrideErr == nil,
 		Progress:        options.Progress,
@@ -214,11 +219,27 @@ func printInstallDryRun(stdout io.Writer, plan installPlan) {
 	fmt.Fprintln(stdout, "would run: systemctl daemon-reload")
 	fmt.Fprintf(stdout, "would run: systemctl enable %s.service\n", plan.Service)
 	if plan.Start {
+		for _, hook := range plan.Hooks.BeforeStart {
+			fmt.Fprintf(stdout, "would run before start hook: %s\n", installHookDescription(hook))
+		}
 		fmt.Fprintf(stdout, "would run: systemctl restart %s.service\n", plan.Service)
-		fmt.Fprintf(stdout, "would run: %s test\n", filepath.Join(plan.TargetDir, "reploy"))
-		fmt.Fprintf(stdout, "would run: %s app config check --live\n", filepath.Join(plan.TargetDir, "reploy"))
+		for _, hook := range plan.Hooks.AfterStart {
+			fmt.Fprintf(stdout, "would run after start hook: %s\n", installHookDescription(hook))
+		}
 	} else {
 		fmt.Fprintln(stdout, "start: no")
+	}
+	successVarNames := make([]string, 0, len(plan.Success.Vars))
+	for name := range plan.Success.Vars {
+		successVarNames = append(successVarNames, name)
+	}
+	sort.Strings(successVarNames)
+	for _, name := range successVarNames {
+		variable := plan.Success.Vars[name]
+		fmt.Fprintf(stdout, "would resolve success var %s: %s\n", name, installSuccessVarDescription(variable))
+	}
+	for _, line := range plan.Success.Lines {
+		fmt.Fprintf(stdout, "would print success line: %s\n", line)
 	}
 }
 
@@ -624,28 +645,71 @@ func applyInstallPlan(plan installPlan) error {
 		return fmt.Errorf("systemctl enable %s.service: %w", plan.Service, err)
 	}
 	if plan.Start {
+		if err := runInstallHooks(plan, "before start", plan.Hooks.BeforeStart); err != nil {
+			return err
+		}
 		if err := installRunCommand(systemctlBin, "restart", plan.Service+".service"); err != nil {
 			return fmt.Errorf("systemctl restart %s.service: %w", plan.Service, err)
 		}
-		if err := runInstalledPostStartChecks(plan); err != nil {
+		if err := runInstallHooks(plan, "after start", plan.Hooks.AfterStart); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func runInstalledPostStartChecks(plan installPlan) error {
-	helper := filepath.Join(plan.TargetDir, "reploy")
-	if err := waitInstalledServiceRunning(plan.TargetDir, installServiceStartTimeout, plan.Progress); err != nil {
-		return installedServiceStartError(plan, err)
-	}
-	if err := runInstallCheckCommand("installed server test", helper, "test"); err != nil {
-		return err
-	}
-	if err := runInstallCheckCommand("installed live config check", helper, "app", "config", "check", "--live"); err != nil {
-		return err
+func runInstallHooks(plan installPlan, phase string, hooks []deploy.DockerInstallHookConfig) error {
+	for _, hook := range hooks {
+		if err := runInstallHook(plan, hook); err != nil {
+			return fmt.Errorf("install hook %s %s: %w", phase, installHookDescription(hook), err)
+		}
 	}
 	return nil
+}
+
+func runInstallHook(plan installPlan, hook deploy.DockerInstallHookConfig) error {
+	helper := filepath.Join(plan.TargetDir, "reploy")
+	if len(hook.App) > 0 {
+		args := append([]string{"app"}, hook.App...)
+		return runInstallCheckCommand("installed app hook", helper, args...)
+	}
+	if hook.HealthCheck != nil {
+		return runInstallHealthCheckHook(plan, hook.HealthCheck)
+	}
+	return fmt.Errorf("empty install hook")
+}
+
+func runInstallHealthCheckHook(plan installPlan, healthCheck *deploy.DockerInstallHealthCheckConfig) error {
+	helper := filepath.Join(plan.TargetDir, "reploy")
+	if healthCheck.Wait {
+		if err := waitInstalledServiceRunning(plan.TargetDir, installServiceStartTimeout, plan.Progress); err != nil {
+			return installedServiceStartError(plan, err)
+		}
+	}
+	return runInstallCheckCommand("installed health check", helper, "test")
+}
+
+func installHookDescription(hook deploy.DockerInstallHookConfig) string {
+	if len(hook.App) > 0 {
+		return "app " + strings.Join(hook.App, " ")
+	}
+	if hook.HealthCheck != nil {
+		if hook.HealthCheck.Wait {
+			return "health check --wait"
+		}
+		return "health check"
+	}
+	return "empty hook"
+}
+
+func installSuccessVarDescription(variable deploy.DockerInstallSuccessVarConfig) string {
+	if len(variable.App) > 0 {
+		return "app " + strings.Join(variable.App, " ")
+	}
+	if variable.ServerURL {
+		return "server_url"
+	}
+	return "empty variable"
 }
 
 func rebuildInstalledBundleIfLocalSources(plan installPlan) error {

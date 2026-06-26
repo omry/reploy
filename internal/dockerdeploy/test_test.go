@@ -26,6 +26,175 @@ func TestServerURLFromDockerEnv(t *testing.T) {
 	}
 }
 
+func TestInstallSuccessLinesResolveAppVars(t *testing.T) {
+	manifest := strings.Replace(testPackManifest(), "  health:\n", `  install:
+    success:
+      vars:
+        server_url:
+          app: [config, show, --resolve, --package, demo.server.public.base_url, --value]
+      lines:
+        - "server url: ${server_url}"
+        - "client command: demo-client --url=${server_url} info"
+  health:
+`, 1)
+	packDir := makeTestPackWithManifest(t, manifest)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	oldRunCommandOutput := installRunCommandOutput
+	t.Cleanup(func() {
+		installRunCommandOutput = oldRunCommandOutput
+	})
+	installRunCommandOutput = func(name string, args ...string) ([]byte, error) {
+		if name != filepath.Join(deployDir, "reploy") {
+			t.Fatalf("command name = %q", name)
+		}
+		if got := strings.Join(args, " "); got != "app config show --resolve --package demo.server.public.base_url --value" {
+			t.Fatalf("args = %q", got)
+		}
+		return []byte("https://arbiter.example.com\n"), nil
+	}
+
+	lines, err := InstallSuccessLines(deployDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"server url: https://arbiter.example.com",
+		"client command: demo-client --url=https://arbiter.example.com info",
+	}
+	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("success lines = %#v, want %#v", lines, want)
+	}
+}
+
+func TestInstallSuccessLinesResolveServerURLVar(t *testing.T) {
+	manifest := strings.Replace(testPackManifest(), "  health:\n", `  install:
+    success:
+      vars:
+        server_url:
+          server_url: true
+      lines:
+        - "server url: ${server_url}"
+        - "client command: demo-client --url=${server_url} info"
+  health:
+`, 1)
+	packDir := makeTestPackWithManifest(t, manifest)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{
+		"REPLOY_PUBLIC_SCHEME": "https",
+		"REPLOY_HOST_BIND":     "127.0.0.1",
+		"REPLOY_HOST_PORT":     "8083",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	lines, err := InstallSuccessLines(deployDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"server url: https://127.0.0.1:8083",
+		"client command: demo-client --url=https://127.0.0.1:8083 info",
+	}
+	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("success lines = %#v, want %#v", lines, want)
+	}
+}
+
+func TestInstallSuccessLinesReportsAppVarFailures(t *testing.T) {
+	manifest := strings.Replace(testPackManifest(), "  health:\n", `  install:
+    success:
+      vars:
+        server_url:
+          app: [config, show, --value]
+      lines:
+        - "server url: ${server_url}"
+  health:
+`, 1)
+	packDir := makeTestPackWithManifest(t, manifest)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	oldRunCommandOutput := installRunCommandOutput
+	t.Cleanup(func() {
+		installRunCommandOutput = oldRunCommandOutput
+	})
+	installRunCommandOutput = func(name string, args ...string) ([]byte, error) {
+		return []byte("config failed\n"), errors.New("exit status 1")
+	}
+
+	_, err = InstallSuccessLines(deployDir)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	for _, want := range []string{
+		"success variable server_url",
+		"installed success app output: exit status 1",
+		"config failed",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q:\n%v", want, err)
+		}
+	}
+}
+
+func TestInstallSuccessLinesRejectsMultilineAppVarOutput(t *testing.T) {
+	manifest := strings.Replace(testPackManifest(), "  health:\n", `  install:
+    success:
+      vars:
+        server_url:
+          app: [config, show, --value]
+      lines:
+        - "server url: ${server_url}"
+  health:
+`, 1)
+	packDir := makeTestPackWithManifest(t, manifest)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	oldRunCommandOutput := installRunCommandOutput
+	t.Cleanup(func() {
+		installRunCommandOutput = oldRunCommandOutput
+	})
+	installRunCommandOutput = func(name string, args ...string) ([]byte, error) {
+		return []byte("https://arbiter.example.com\nextra output\n"), nil
+	}
+
+	_, err = InstallSuccessLines(deployDir)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "success variable server_url: app output must be a single line") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestServerURLRequiresPackHealthProbe(t *testing.T) {
 	packDir := makeTestPackWithManifest(t, strings.ReplaceAll(testPackManifest(), "  health:\n    scheme_env: REPLOY_PUBLIC_SCHEME\n    host_env: REPLOY_HOST_BIND\n    port_env: REPLOY_HOST_PORT\n    default_scheme: https\n    default_host: 127.0.0.1\n    default_port: \"18075\"\n    path: /_health_\n", ""))
 	ref, err := deploy.ParsePackRef("file:" + packDir)

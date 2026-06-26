@@ -189,6 +189,15 @@ When installing from a file-backed blueprint with local source packages, install
 rebuilds those wheels in the copied target deployment before starting the
 service, so editable checkout changes are captured without mutating the staging
 deployment.
+Blueprints may declare install lifecycle hooks under
+`docker.install.hooks.before_start` and `docker.install.hooks.after_start`.
+Hooks support app commands, such as `app: [config, check]`, and health checks,
+such as `health_check: {wait: true}`.
+Blueprints may also declare post-install success hints under
+`docker.install.success`. Success variables can capture app command output, and
+success lines can expand those variables after install hooks complete. Use
+`server_url: true` for a variable that should expand to the installed service's
+externally mapped base URL.
 
 Permanent installs require an explicit non-root install owner. Blueprints can
 declare `docker.service.install_owner`, and operators can override it with

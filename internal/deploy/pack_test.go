@@ -191,6 +191,174 @@ docker:
 	}
 }
 
+func TestParsePackManifestReadsInstallHooks(t *testing.T) {
+	manifest, err := ParsePackManifest(strings.Replace(packTestManifest(), "  default_command: serve\n", `  install:
+    hooks:
+      before_start:
+        - app: [config, check]
+      after_start:
+        - health_check:
+            wait: true
+        - app: [config, check, --live]
+  default_command: serve
+`, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := manifest.Docker.Install.Hooks.BeforeStart
+	if len(before) != 1 || strings.Join(before[0].App, " ") != "config check" {
+		t.Fatalf("before hooks = %#v", before)
+	}
+	after := manifest.Docker.Install.Hooks.AfterStart
+	if len(after) != 2 {
+		t.Fatalf("after hooks = %#v", after)
+	}
+	if after[0].HealthCheck == nil || !after[0].HealthCheck.Wait {
+		t.Fatalf("health check hook = %#v", after[0])
+	}
+	if strings.Join(after[1].App, " ") != "config check --live" {
+		t.Fatalf("live check hook = %#v", after[1])
+	}
+}
+
+func TestParsePackManifestReadsInstallSuccess(t *testing.T) {
+	manifest, err := ParsePackManifest(strings.Replace(packTestManifest(), "  default_command: serve\n", `  install:
+    success:
+      vars:
+        server_url:
+          server_url: true
+      lines:
+        - "server url: ${server_url}"
+        - "client command: demo-client --url=${server_url} info"
+  default_command: serve
+`, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	success := manifest.Docker.Install.Success
+	serverURL := success.Vars["server_url"]
+	if !serverURL.ServerURL {
+		t.Fatalf("server_url var = %#v", serverURL)
+	}
+	wantLines := []string{
+		"server url: ${server_url}",
+		"client command: demo-client --url=${server_url} info",
+	}
+	if strings.Join(success.Lines, "\n") != strings.Join(wantLines, "\n") {
+		t.Fatalf("success lines = %#v", success.Lines)
+	}
+}
+
+func TestParsePackManifestRejectsInvalidInstallHooks(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		hook string
+		want string
+	}{
+		{
+			name: "mixed actions",
+			hook: `        - app: [config, check]
+          health_check:
+            wait: true
+`,
+			want: "must declare exactly one action",
+		},
+		{
+			name: "empty app arg",
+			hook: `        - app: [config, ""]
+`,
+			want: "must not be empty",
+		},
+		{
+			name: "health check without wait",
+			hook: `        - health_check:
+            wait: false
+`,
+			want: "health_check.wait must be true",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParsePackManifest(strings.Replace(packTestManifest(), "  default_command: serve\n", "  install:\n    hooks:\n      before_start:\n"+tc.hook+"  default_command: serve\n", 1))
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestParsePackManifestRejectsInvalidInstallSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		success string
+		want    string
+	}{
+		{
+			name: "empty line",
+			success: `      lines:
+        - ""
+`,
+			want: "must not be empty",
+		},
+		{
+			name:    "line with field break",
+			success: "      lines:\n        - \"demo\tclient\"\n",
+			want:    "must not contain tabs or newlines",
+		},
+		{
+			name: "invalid variable name",
+			success: `      vars:
+        server-url:
+          app: [config, show]
+`,
+			want: "invalid variable name",
+		},
+		{
+			name: "variable without source",
+			success: `      vars:
+        server_url: {}
+`,
+			want: "must declare exactly one source",
+		},
+		{
+			name: "mixed variable sources",
+			success: `      vars:
+        server_url:
+          app: [config, show]
+          server_url: true
+`,
+			want: "must declare exactly one source",
+		},
+		{
+			name: "empty app arg",
+			success: `      vars:
+        server_url:
+          app: [config, ""]
+`,
+			want: "must not be empty",
+		},
+		{
+			name: "line references unknown variable",
+			success: `      lines:
+        - "client command: demo-client --url=${server_url} info"
+`,
+			want: "references unknown variable: server_url",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParsePackManifest(strings.Replace(packTestManifest(), "  default_command: serve\n", "  install:\n    success:\n"+tc.success+"  default_command: serve\n", 1))
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestParsePackManifestRejectsInvalidTerminalColorEnv(t *testing.T) {
 	_, err := ParsePackManifest(`blueprint:
   schema: 1

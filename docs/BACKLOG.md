@@ -42,9 +42,11 @@ This file is the day-to-day queue for design and implementation gaps.
       deployment path using a stable slug/hash; installed Docker identity is
       derived from service name plus target path; install accepts single-port
       and named `--port` overrides; installed docker.env and state record the
-      resolved compose project, container name, network name, and ports.
-      Remaining acceptance checks: prove two installed instances can coexist on
-      a real host; document the side-by-side install flow; and connect the
-      recorded install metadata to the uninstall flow.
+      resolved compose project, container name, network name, and ports. Real
+      host validation proved `/opt/arbiter2` and `/opt/arbiter3` can run
+      concurrently with separate service names, containers, and ports alongside
+      the existing install and staging deployment.
+      Remaining acceptance checks: document the side-by-side install flow and
+      connect the recorded install metadata to the uninstall flow.
 
 ## Post-v1
