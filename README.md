@@ -15,6 +15,18 @@ Current scope:
 - app command execution inside the deployment runtime
 - Docker lifecycle commands and native health probe
 
+## Install
+
+Install the latest release binary from GitHub:
+
+```bash
+curl -fsSL https://reploy.yadan.net/install.sh | sh
+```
+
+By default the installer script installs `reploy` to
+`$HOME/.local/bin/reploy` and prints the download URL, target path, installed
+version, and a PATH hint when needed.
+
 ## Build
 
 The release version lives in `VERSION`. The native binary embeds that value, and
@@ -116,8 +128,9 @@ GOCACHE=/tmp/reploy-go-cache go build -buildvcs=false ./cmd/reploy
 ## Blueprints
 
 Blueprint shorthands are resolved from a Reploy blueprint index. The default
-index in this repository is app-neutral; app providers can publish their own
-index entries, and users can point Reploy at those indexes. Set
+index is served from this repository and publishes known app blueprint
+shorthands such as `arbiter-server`. App providers can also publish their own
+indexes, and users can point Reploy at those indexes. Set
 `REPLOY_BLUEPRINT_INDEX_URL` to point at another HTTP(S) or `file:` index while
 developing or testing.
 
@@ -127,14 +140,16 @@ Validate and cache the index explicitly:
 reploy blueprint-index refresh
 ```
 
-Shorthands expand to wheel-hosted app blueprints and can be pinned with
-`name==VERSION` when the index entry provides a versioned ref. Without an index,
-use an explicit PyPI package ref:
+Shorthands expand to wheel-hosted app blueprints. The index is not versioned;
+when an entry includes a version template, `name==VERSION` substitutes that
+version into the resolved package ref:
 
 ```bash
-reploy init --blueprint pypi:example-app
-reploy init --blueprint pypi:example-app==1.2.3
+reploy init --blueprint arbiter-server
+reploy init --blueprint arbiter-server==0.9.3.dev1
 ```
+
+Without an index, use an explicit PyPI package ref.
 
 PyPI package refs default to the `package_name/reploy` blueprint convention, so
 `pypi:example-app` looks for `example_app/reploy` in the wheel. Use

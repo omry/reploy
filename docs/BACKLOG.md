@@ -44,10 +44,10 @@ This file is the day-to-day queue for design and implementation gaps.
       Build a dedicated docs website for Reploy and publish it at
       `reploy.yadan.net`. Acceptance checks: scaffold Docusaurus in the repo
       without disrupting the Go module or Python packaging; move or mirror the
-      operator-facing README material into structured docs; add install,
-      bundle, side-by-side install, and uninstall pages; configure the site
-      title, navbar, footer, and custom domain; and add a local docs build check
-      to the normal validation path.
+      operator-facing README material into structured docs; add install docs
+      with side-by-side install notes, plus bundle and uninstall pages; configure
+      the site title, navbar, footer, and custom domain; and add a local docs
+      build check to the normal validation path.
 
 - [ ] `P2` Define and validate formal Windows support.
       Reploy should have explicit Windows behavior instead of accidental

@@ -86,3 +86,32 @@ jobs:
 
       - name: Build active release distributions
         run: tools/build_release_dists --outdir dist-ci --clean --no-isolation
+
+  docs-build:
+    name: Docs build
+    runs-on: ubuntu-latest
+    env:
+      NO_UPDATE_NOTIFIER: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install docs dependencies
+        working-directory: website
+        run: npm ci --no-audit --no-fund
+
+      - name: Check hosted installer
+        working-directory: website
+        run: |
+          npm run sync:install
+          cmp ../tools/install.sh static/install.sh
+          sh -n static/install.sh
+
+      - name: Build docs site
+        working-directory: website
+        run: npm run build

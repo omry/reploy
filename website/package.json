@@ -1,0 +1,24 @@
+{
+  "name": "reploy-docs",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "sync:install": "node scripts/sync-install-script.mjs",
+    "prestart": "npm run sync:install",
+    "start": "docusaurus start --port 4201",
+    "prebuild": "npm run sync:install",
+    "build": "docusaurus build",
+    "serve": "docusaurus serve",
+    "clear": "docusaurus clear"
+  },
+  "dependencies": {
+    "@docusaurus/core": "^3.7.0",
+    "@docusaurus/preset-classic": "^3.7.0",
+    "@mdx-js/react": "^3.0.0",
+    "clsx": "^2.1.1",
+    "prism-react-renderer": "^2.4.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {}
+}
