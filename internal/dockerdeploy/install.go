@@ -81,6 +81,21 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 	if strings.ContainsAny(target, " \t\n") {
 		return installPlan{}, fmt.Errorf("--to must not contain whitespace: %s", target)
 	}
+	absoluteDir, err := filepath.Abs(options.Dir)
+	if err != nil {
+		return installPlan{}, err
+	}
+	canonicalSourceDir, err := canonicalIdentityPath(absoluteDir)
+	if err != nil {
+		return installPlan{}, err
+	}
+	canonicalTargetDir, err := canonicalIdentityPath(target)
+	if err != nil {
+		return installPlan{}, err
+	}
+	if installPathsOverlap(canonicalSourceDir, canonicalTargetDir) {
+		return installPlan{}, fmt.Errorf("--to must not overlap deployment directory: %s overlaps %s", target, absoluteDir)
+	}
 	if options.Service == "" {
 		service, err := defaultInstallService(options.Dir)
 		if err != nil {
@@ -109,10 +124,6 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 		return installPlan{}, err
 	}
 	ports, err = applyPortOverrides(ports, options.PortOverrides)
-	if err != nil {
-		return installPlan{}, err
-	}
-	absoluteDir, err := filepath.Abs(options.Dir)
 	if err != nil {
 		return installPlan{}, err
 	}
@@ -194,6 +205,20 @@ func validServiceName(name string) bool {
 	return true
 }
 
+func installPathsOverlap(sourceDir string, targetDir string) bool {
+	sourceDir = filepath.Clean(sourceDir)
+	targetDir = filepath.Clean(targetDir)
+	return sourceDir == targetDir || pathContains(sourceDir, targetDir) || pathContains(targetDir, sourceDir)
+}
+
+func pathContains(parent string, child string) bool {
+	relative, err := filepath.Rel(parent, child)
+	if err != nil || relative == "." {
+		return false
+	}
+	return relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))
+}
+
 func copyDeploymentTreeProtected(sourceDir string, targetDir string) error {
 	sourceDir, err := filepath.Abs(sourceDir)
 	if err != nil {
@@ -207,16 +232,22 @@ func copyDeploymentTreeProtected(sourceDir string, targetDir string) error {
 		if walkErr != nil {
 			return walkErr
 		}
+		relativePath, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return err
+		}
+		if installCopySkips(relativePath) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		info, err := os.Lstat(path)
 		if err != nil {
 			return err
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("refusing to copy symlink: %s", path)
-		}
-		relativePath, err := filepath.Rel(sourceDir, path)
-		if err != nil {
-			return err
 		}
 		targetPath := filepath.Join(targetDir, relativePath)
 		if relativePath == "." {
@@ -230,6 +261,10 @@ func copyDeploymentTreeProtected(sourceDir string, targetDir string) error {
 		}
 		return copyInstallFile(path, targetPath, info.Mode().Perm())
 	})
+}
+
+func installCopySkips(relativePath string) bool {
+	return filepath.ToSlash(relativePath) == RuntimeDirName
 }
 
 func copyInstallFile(sourcePath string, targetPath string, mode os.FileMode) error {
@@ -323,6 +358,13 @@ func writeInstalledDockerEnv(plan installPlan) error {
 func applyInstallPlan(plan installPlan) error {
 	if err := copyDeploymentTreeProtected(plan.SourceDir, plan.TargetDir); err != nil {
 		return fmt.Errorf("copy deployment: %w", err)
+	}
+	runtimeDir := filepath.Join(plan.TargetDir, RuntimeDirName)
+	if err := os.RemoveAll(runtimeDir); err != nil {
+		return fmt.Errorf("remove install runtime dir: %w", err)
+	}
+	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+		return fmt.Errorf("create install runtime dir: %w", err)
 	}
 	if err := writeInstalledDockerEnv(plan); err != nil {
 		return fmt.Errorf("write installed docker env: %w", err)

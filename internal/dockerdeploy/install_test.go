@@ -80,6 +80,40 @@ func TestInstallRejectsInvalidServiceName(t *testing.T) {
 	}
 }
 
+func TestInstallRejectsOverlappingTarget(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := t.TempDir()
+	deployDir := filepath.Join(parent, "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	targetLink := filepath.Join(parent, "deployment-link")
+	if err := os.Symlink(deployDir, targetLink); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, target := range []string{
+		deployDir,
+		filepath.Join(deployDir, "installed"),
+		parent,
+		targetLink,
+	} {
+		t.Run(target, func(t *testing.T) {
+			err := Install(InstallOptions{Dir: deployDir, Target: target, Service: "demo-test", DryRun: true})
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), "--to must not overlap deployment directory") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestCopyDeploymentTreeProtectedCopiesRegularFiles(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "source")
 	target := filepath.Join(t.TempDir(), "target")
@@ -125,6 +159,33 @@ func TestCopyDeploymentTreeProtectedRejectsSymlinks(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "refusing to copy symlink") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCopyDeploymentTreeProtectedSkipsRuntimeDirectory(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "source")
+	target := filepath.Join(t.TempDir(), "target")
+	if err := os.MkdirAll(filepath.Join(source, RuntimeDirName, "python-venv", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(source, BundleDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/usr/bin/python3", filepath.Join(source, RuntimeDirName, "python-venv", "bin", "python")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, BundleDirName, "demo-1.0.0-py3-none-any.whl"), []byte("wheel\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyDeploymentTreeProtected(source, target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(target, RuntimeDirName)); !os.IsNotExist(err) {
+		t.Fatalf("runtime dir copied: err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, BundleDirName, "demo-1.0.0-py3-none-any.whl")); err != nil {
+		t.Fatalf("bundle file was not copied: %v", err)
 	}
 }
 
@@ -202,7 +263,19 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(deployDir, RuntimeDirName, "python-venv", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/usr/bin/python3", filepath.Join(deployDir, RuntimeDirName, "python-venv", "bin", "python")); err != nil {
+		t.Fatal(err)
+	}
 	target := filepath.Join(t.TempDir(), "installed")
+	if err := os.MkdirAll(filepath.Join(target, RuntimeDirName, "python-venv"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, RuntimeDirName, "python-venv", "stale"), []byte("stale\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	unitDir := t.TempDir()
 
 	oldGeteuid := installGeteuid
@@ -249,6 +322,12 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(target, ComposeFileName)); err != nil {
 		t.Fatalf("missing copied compose: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(target, RuntimeDirName)); err != nil || !info.IsDir() {
+		t.Fatalf("missing fresh runtime dir: info=%v err=%v", info, err)
+	}
+	if _, err := os.Stat(filepath.Join(target, RuntimeDirName, "python-venv")); !os.IsNotExist(err) {
+		t.Fatalf("source runtime venv copied: err=%v", err)
 	}
 	dockerEnv := readFile(t, filepath.Join(target, DockerEnvFileName))
 	for _, want := range []string{
