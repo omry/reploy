@@ -116,10 +116,14 @@ func serviceStatesContain(states []string, expected string) bool {
 }
 
 func composeServiceStates(dir string) ([]string, error) {
-	spec := composeCommand(dir, "ps", "--format", "json")
+	projectName, err := deploymentComposeProjectName(dir)
+	if err != nil {
+		return nil, err
+	}
+	spec := composeCommandWithProject(dir, projectName, "ps", "--format", "json")
 	output, err := runTestCommandOutput(spec)
 	if err != nil {
-		return nil, fmt.Errorf("docker compose ps: %w", err)
+		return nil, commandErrorWithOutput("docker compose ps", output, err)
 	}
 	return parseComposeServiceStates(output)
 }
@@ -227,5 +231,15 @@ func healthTLSVerify(health deploy.DockerHealthConfig) bool {
 func commandOutput(spec CommandSpec) ([]byte, error) {
 	command := exec.Command(spec.Name, spec.Args...)
 	command.Dir = spec.Dir
-	return command.Output()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
+	if err == nil {
+		return stdout.Bytes(), nil
+	}
+	output := append([]byte{}, stdout.Bytes()...)
+	output = append(output, stderr.Bytes()...)
+	return output, err
 }

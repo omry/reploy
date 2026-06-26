@@ -43,6 +43,9 @@ var installLookPath = exec.LookPath
 var installRunCommand = func(name string, args ...string) error {
 	return exec.Command(name, args...).Run()
 }
+var installRunCommandOutput = func(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).CombinedOutput()
+}
 var installSystemdUnitDir = defaultSystemdUnitDir
 
 func Install(options InstallOptions) error {
@@ -410,11 +413,27 @@ func applyInstallPlan(plan installPlan) error {
 
 func runInstalledPostStartChecks(plan installPlan) error {
 	helper := filepath.Join(plan.TargetDir, "reploy")
-	if err := installRunCommand(helper, "test"); err != nil {
-		return fmt.Errorf("installed server test: %w", err)
+	if err := runInstallCheckCommand("installed server test", helper, "test"); err != nil {
+		return err
 	}
-	if err := installRunCommand(helper, "app", "config", "check", "--live"); err != nil {
-		return fmt.Errorf("installed live config check: %w", err)
+	if err := runInstallCheckCommand("installed live config check", helper, "app", "config", "check", "--live"); err != nil {
+		return err
 	}
 	return nil
+}
+
+func runInstallCheckCommand(label string, name string, args ...string) error {
+	output, err := installRunCommandOutput(name, args...)
+	if err == nil {
+		return nil
+	}
+	return commandErrorWithOutput(label, output, err)
+}
+
+func commandErrorWithOutput(label string, output []byte, err error) error {
+	trimmedOutput := strings.TrimSpace(string(output))
+	if trimmedOutput == "" {
+		return fmt.Errorf("%s: %w", label, err)
+	}
+	return fmt.Errorf("%s: %w\n%s", label, err, trimmedOutput)
 }

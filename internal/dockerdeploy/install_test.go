@@ -281,11 +281,13 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	oldGeteuid := installGeteuid
 	oldLookPath := installLookPath
 	oldRunCommand := installRunCommand
+	oldRunCommandOutput := installRunCommandOutput
 	oldSystemdUnitDir := installSystemdUnitDir
 	t.Cleanup(func() {
 		installGeteuid = oldGeteuid
 		installLookPath = oldLookPath
 		installRunCommand = oldRunCommand
+		installRunCommandOutput = oldRunCommandOutput
 		installSystemdUnitDir = oldSystemdUnitDir
 	})
 
@@ -305,6 +307,10 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	installRunCommand = func(name string, args ...string) error {
 		commands = append(commands, name+" "+strings.Join(args, " "))
 		return nil
+	}
+	installRunCommandOutput = func(name string, args ...string) ([]byte, error) {
+		commands = append(commands, name+" "+strings.Join(args, " "))
+		return nil, nil
 	}
 
 	if err := Install(InstallOptions{
@@ -375,6 +381,31 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	} {
 		if !containsString(commands, want) {
 			t.Fatalf("commands missing %q: %#v", want, commands)
+		}
+	}
+}
+
+func TestInstalledPostStartCheckIncludesCommandOutput(t *testing.T) {
+	oldRunCommandOutput := installRunCommandOutput
+	t.Cleanup(func() {
+		installRunCommandOutput = oldRunCommandOutput
+	})
+
+	installRunCommandOutput = func(name string, args ...string) ([]byte, error) {
+		return []byte("docker compose ps failed\npermission denied\n"), errors.New("exit status 1")
+	}
+
+	err := runInstalledPostStartChecks(installPlan{TargetDir: "/srv/demo"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	for _, want := range []string{
+		"installed server test: exit status 1",
+		"docker compose ps failed",
+		"permission denied",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q:\n%v", want, err)
 		}
 	}
 }

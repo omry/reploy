@@ -1,6 +1,8 @@
 package dockerdeploy
 
 import (
+	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -182,6 +184,93 @@ func TestTestServerWaitFailsImmediatelyWhenServiceIsAbsent(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "service is not started") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestTestServerComposeFailureIncludesCommandOutput(t *testing.T) {
+	restore := stubTestCommandOutput([]byte("permission denied while trying to connect to docker\n"), errors.New("exit status 1"))
+	defer restore()
+
+	dir := makeTestDeploymentWithDockerEnv(t, "REPLOY_PUBLIC_SCHEME=https\nREPLOY_HOST_BIND=127.0.0.1\nREPLOY_HOST_PORT=1\n")
+	err := TestServer(TestOptions{Dir: dir, Timeout: time.Minute})
+	if err == nil {
+		t.Fatal("expected compose failure")
+	}
+	for _, want := range []string{
+		"docker compose ps: exit status 1",
+		"permission denied while trying to connect to docker",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q:\n%v", want, err)
+		}
+	}
+}
+
+func TestCommandOutputKeepsStderrOutOfSuccessfulOutput(t *testing.T) {
+	output, err := commandOutput(CommandSpec{
+		Name: "sh",
+		Args: []string{"-c", "printf stdout; printf stderr >&2"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(output) != "stdout" {
+		t.Fatalf("output = %q", output)
+	}
+}
+
+func TestCommandOutputIncludesStderrOnFailure(t *testing.T) {
+	output, err := commandOutput(CommandSpec{
+		Name: "sh",
+		Args: []string{"-c", "printf stdout; printf stderr >&2; exit 7"},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	for _, want := range []string{"stdout", "stderr"} {
+		if !strings.Contains(string(output), want) {
+			t.Fatalf("output missing %q: %q", want, output)
+		}
+	}
+}
+
+func TestComposeServiceStatesUsesInstalledComposeProject(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ReployInternalDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := deploy.DeploymentState{
+		SchemaVersion: 1,
+		Phase:         deploy.PhaseInstalled,
+		Install: &deploy.InstallState{
+			ComposeProject: "demo-12345678",
+		},
+	}
+	content, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, StateFileName), append(content, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	original := runTestCommandOutput
+	t.Cleanup(func() {
+		runTestCommandOutput = original
+	})
+	runTestCommandOutput = func(spec CommandSpec) ([]byte, error) {
+		if !containsAdjacent(spec.Args, "--project-name", "demo-12345678") {
+			t.Fatalf("args did not include installed compose project: %#v", spec.Args)
+		}
+		return []byte(`[{"State":"running"}]`), nil
+	}
+
+	states, err := composeServiceStates(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(states, ",") != "running" {
+		t.Fatalf("states = %#v", states)
 	}
 }
 
