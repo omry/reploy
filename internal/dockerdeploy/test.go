@@ -120,7 +120,7 @@ func composeServiceStates(dir string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	spec := composeCommandWithProject(dir, projectName, "ps", "--format", "json")
+	spec := composeCommandWithProject(dir, projectName, "ps", "--all", "--format", "json")
 	output, err := runTestCommandOutput(spec)
 	if err != nil {
 		return nil, commandErrorWithOutput("docker compose ps", output, err)

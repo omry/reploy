@@ -107,6 +107,11 @@ func doctorFindings(dir string, preinstall bool) []DoctorFinding {
 		return findings
 	}
 	for relativePath, entry := range manifest.Files {
+		if doctorSkipsGeneratedFileDrift(relativePath, preinstall) {
+			path := filepath.Join(dir, filepath.FromSlash(relativePath))
+			findings = append(findings, DoctorFinding{Status: "ok", Message: "generated file drift ignored for preinstall; install overwrites target: " + path})
+			continue
+		}
 		path := filepath.Join(dir, filepath.FromSlash(relativePath))
 		hash, err := deploy.HashFile(path)
 		if err != nil {
@@ -123,6 +128,10 @@ func doctorFindings(dir string, preinstall bool) []DoctorFinding {
 		findings = append(findings, doctorPreinstallFindings(dir)...)
 	}
 	return findings
+}
+
+func doctorSkipsGeneratedFileDrift(relativePath string, preinstall bool) bool {
+	return preinstall && filepath.ToSlash(relativePath) == ToolBinaryFileName
 }
 
 func doctorPreinstallFindings(dir string) []DoctorFinding {
@@ -152,11 +161,11 @@ func doctorPreinstallFindings(dir string) []DoctorFinding {
 			findings = append(findings, DoctorFinding{Status: "ok", Message: "install runtime path is relative: " + key})
 		}
 	}
-	containerUser := envValue(values, "REPLOY_CONTAINER_USER", defaultContainerUser())
-	if containerUser == "0" || containerUser == "0:0" || strings.HasPrefix(containerUser, "0:") {
-		findings = append(findings, DoctorFinding{Status: "fail", Message: "container user must not be root for install: REPLOY_CONTAINER_USER=" + containerUser})
+	owner, err := resolveInstallOwner(values)
+	if err != nil {
+		findings = append(findings, DoctorFinding{Status: "fail", Message: "install owner must resolve to a non-root uid:gid: " + err.Error()})
 	} else {
-		findings = append(findings, DoctorFinding{Status: "ok", Message: "container user is non-root"})
+		findings = append(findings, DoctorFinding{Status: "ok", Message: fmt.Sprintf("install owner resolves to %s (%d:%d)", owner.Spec, owner.UID, owner.GID)})
 	}
 	state, err := loadState(dir)
 	if err != nil {

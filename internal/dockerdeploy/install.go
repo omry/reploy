@@ -6,8 +6,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/omry/reploy/internal/deploy"
 )
@@ -20,6 +23,7 @@ type InstallOptions struct {
 	Start         bool
 	DryRun        bool
 	Stdout        io.Writer
+	Progress      io.Writer
 }
 
 type installPlan struct {
@@ -34,6 +38,7 @@ type installPlan struct {
 	Ports           []dockerPortBinding
 	Start           bool
 	ComposeOverride bool
+	Progress        io.Writer
 }
 
 const defaultSystemdUnitDir = "/etc/systemd/system"
@@ -46,14 +51,28 @@ var installRunCommand = func(name string, args ...string) error {
 var installRunCommandOutput = func(name string, args ...string) ([]byte, error) {
 	return exec.Command(name, args...).CombinedOutput()
 }
+var installToolBinaryContent = currentExecutableContent
+var installChown = os.Lchown
+var installLookupUser = user.Lookup
+var installLookupGroup = user.LookupGroup
+var installServiceStartTimeout = 30 * time.Second
+var installServicePollInterval = time.Second
+var installServiceTerminalStateGrace = 5 * time.Second
 var installSystemdUnitDir = defaultSystemdUnitDir
+
+type resolvedInstallOwner struct {
+	Spec          string
+	UID           int
+	GID           int
+	ContainerUser string
+}
 
 func Install(options InstallOptions) error {
 	plan, err := newInstallPlan(options)
 	if err != nil {
 		return err
 	}
-	doctorCode := Doctor(DoctorOptions{Dir: options.Dir, Preinstall: true})
+	doctorCode := Doctor(DoctorOptions{Dir: options.Dir, Preinstall: true, Quiet: true, Stdout: options.Stdout})
 	if doctorCode != 0 {
 		return fmt.Errorf("preinstall doctor failed")
 	}
@@ -146,6 +165,7 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 		Ports:           ports,
 		Start:           options.Start,
 		ComposeOverride: overrideErr == nil,
+		Progress:        options.Progress,
 	}, nil
 }
 
@@ -176,9 +196,20 @@ func printInstallDryRun(stdout io.Writer, plan installPlan) {
 	fmt.Fprintf(stdout, "compose project: %s\n", plan.ComposeProject)
 	fmt.Fprintf(stdout, "container: %s\n", plan.ContainerName)
 	fmt.Fprintf(stdout, "network: %s\n", plan.NetworkName)
+	if containerUser, err := installContainerUser(plan.SourceDir); err == nil {
+		fmt.Fprintf(stdout, "container user: %s\n", containerUser)
+	}
+	if owner, err := installOwnerForDir(plan.SourceDir); err == nil {
+		fmt.Fprintf(stdout, "install owner: %s (%d:%d)\n", owner.Spec, owner.UID, owner.GID)
+		fmt.Fprintf(stdout, "installed container user: %s\n", owner.ContainerUser)
+	}
 	for _, port := range plan.Ports {
 		fmt.Fprintf(stdout, "port %s: %s:%s -> %s\n", port.Name, port.HostBind, port.HostPort, port.ContainerPort)
 	}
+	if sources, err := localBundleSourcesForDir(plan.SourceDir); err == nil && len(sources) > 0 {
+		fmt.Fprintf(stdout, "would rebuild local source bundle: %s\n", installBundleSourceNames(sources))
+	}
+	fmt.Fprintln(stdout, "would set installed deployment ownership")
 	fmt.Fprintf(stdout, "would write systemd unit: %s\n", plan.UnitPath)
 	fmt.Fprintln(stdout, "would run: systemctl daemon-reload")
 	fmt.Fprintf(stdout, "would run: systemctl enable %s.service\n", plan.Service)
@@ -267,7 +298,8 @@ func copyDeploymentTreeProtected(sourceDir string, targetDir string) error {
 }
 
 func installCopySkips(relativePath string) bool {
-	return filepath.ToSlash(relativePath) == RuntimeDirName
+	slashPath := filepath.ToSlash(relativePath)
+	return slashPath == RuntimeDirName || slashPath == ToolBinaryFileName
 }
 
 func copyInstallFile(sourcePath string, targetPath string, mode os.FileMode) error {
@@ -291,6 +323,45 @@ func copyInstallFile(sourcePath string, targetPath string, mode os.FileMode) err
 		return err
 	}
 	return os.Chmod(targetPath, mode)
+}
+
+func writeInstalledToolBinary(targetDir string) error {
+	content, err := installToolBinaryContent()
+	if err != nil {
+		return err
+	}
+	targetPath := filepath.Join(targetDir, ToolBinaryFileName)
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return err
+	}
+	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.WriteFile(targetPath, content, 0o755); err != nil {
+		return err
+	}
+	if err := os.Chmod(targetPath, 0o755); err != nil {
+		return err
+	}
+	info, err := os.Lstat(targetPath)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("installed reploy binary must not be a symlink: %s", targetPath)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("installed reploy binary must be a regular file: %s", targetPath)
+	}
+	manifest, err := loadManifestOrNew(targetDir)
+	if err != nil {
+		return err
+	}
+	manifest.Files[filepath.ToSlash(ToolBinaryFileName)] = deploy.GeneratedFile{
+		Kind:   "template",
+		SHA256: deploy.HashBytes(content),
+	}
+	return deploy.WriteDeploymentManifest(filepath.Join(targetDir, ManifestFileName), manifest)
 }
 
 func systemdUnit(plan installPlan, dockerBin string, includeDockerUnit bool) string {
@@ -351,16 +422,157 @@ func writeInstalledState(plan installPlan) error {
 }
 
 func writeInstalledDockerEnv(plan installPlan) error {
+	values, err := readDockerEnv(plan.TargetDir)
+	if err != nil {
+		return err
+	}
+	owner, err := resolveInstallOwner(values)
+	if err != nil {
+		return err
+	}
 	updates := dockerEnvPortUpdates(plan.Ports)
 	updates["REPLOY_CONTAINER_NAME"] = plan.ContainerName
 	updates["REPLOY_DOCKER_NETWORK_NAME"] = plan.NetworkName
-	_, err := upsertDockerEnvValues(plan.TargetDir, updates)
+	updates["REPLOY_CONTAINER_USER"] = owner.ContainerUser
+	updates["REPLOY_INSTALL_OWNER"] = owner.Spec
+	_, err = upsertDockerEnvValues(plan.TargetDir, updates)
 	return err
+}
+
+func installContainerUser(dir string) (string, error) {
+	values, err := readDockerEnv(dir)
+	if err != nil {
+		return "", err
+	}
+	return envValue(values, "REPLOY_CONTAINER_USER", defaultContainerUser()), nil
+}
+
+func installOwnerForDir(dir string) (resolvedInstallOwner, error) {
+	values, err := readDockerEnv(dir)
+	if err != nil {
+		return resolvedInstallOwner{}, err
+	}
+	return resolveInstallOwner(values)
+}
+
+func chownInstalledDeployment(targetDir string) error {
+	values, err := readDockerEnv(targetDir)
+	if err != nil {
+		return err
+	}
+	owner, err := resolveInstallOwner(values)
+	if err != nil {
+		return err
+	}
+	return chownInstallPath(targetDir, owner.UID, owner.GID)
+}
+
+func chownInstallPath(path string, uid int, gid int) error {
+	return filepath.WalkDir(path, func(currentPath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		return installChown(currentPath, uid, gid)
+	})
+}
+
+func resolveInstallOwner(values map[string]string) (resolvedInstallOwner, error) {
+	spec := strings.TrimSpace(values["REPLOY_INSTALL_OWNER"])
+	if spec == "" {
+		return resolvedInstallOwner{}, fmt.Errorf("REPLOY_INSTALL_OWNER is required for install; set it in the blueprint as docker.service.install_owner or in %s", DockerEnvFileName)
+	}
+	uid, gid, err := parseInstallOwner(spec)
+	if err != nil {
+		return resolvedInstallOwner{}, err
+	}
+	return resolvedInstallOwner{
+		Spec:          spec,
+		UID:           uid,
+		GID:           gid,
+		ContainerUser: fmt.Sprintf("%d:%d", uid, gid),
+	}, nil
+}
+
+func parseInstallOwner(value string) (int, int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, 0, fmt.Errorf("REPLOY_INSTALL_OWNER must not be empty")
+	}
+	userPart, groupPart, hasGroup := strings.Cut(value, ":")
+	uid, primaryGID, err := resolveInstallOwnerUser(userPart, value)
+	if err != nil {
+		return 0, 0, err
+	}
+	gid := primaryGID
+	if hasGroup {
+		gid, err = resolveInstallOwnerGroup(groupPart, value)
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	if uid == 0 || gid == 0 {
+		return 0, 0, fmt.Errorf("REPLOY_INSTALL_OWNER must not resolve to root: %s", value)
+	}
+	return uid, gid, nil
+}
+
+func resolveInstallOwnerUser(value string, original string) (int, int, error) {
+	if value == "" {
+		return 0, 0, fmt.Errorf("REPLOY_INSTALL_OWNER has empty user: %s", original)
+	}
+	if id, ok := parseNumericInstallID(value); ok {
+		return id, id, nil
+	}
+	lookedUpUser, err := installLookupUser(value)
+	if err != nil {
+		return 0, 0, fmt.Errorf("resolve REPLOY_INSTALL_OWNER user %q: %w", value, err)
+	}
+	uid, ok := parseNumericInstallID(lookedUpUser.Uid)
+	if !ok {
+		return 0, 0, fmt.Errorf("resolved REPLOY_INSTALL_OWNER user has non-numeric uid: %s=%s", value, lookedUpUser.Uid)
+	}
+	gid, ok := parseNumericInstallID(lookedUpUser.Gid)
+	if !ok {
+		return 0, 0, fmt.Errorf("resolved REPLOY_INSTALL_OWNER user has non-numeric gid: %s=%s", value, lookedUpUser.Gid)
+	}
+	return uid, gid, nil
+}
+
+func resolveInstallOwnerGroup(value string, original string) (int, error) {
+	if value == "" {
+		return 0, fmt.Errorf("REPLOY_INSTALL_OWNER has empty group: %s", original)
+	}
+	if id, ok := parseNumericInstallID(value); ok {
+		return id, nil
+	}
+	lookedUpGroup, err := installLookupGroup(value)
+	if err != nil {
+		return 0, fmt.Errorf("resolve REPLOY_INSTALL_OWNER group %q: %w", value, err)
+	}
+	gid, ok := parseNumericInstallID(lookedUpGroup.Gid)
+	if !ok {
+		return 0, fmt.Errorf("resolved REPLOY_INSTALL_OWNER group has non-numeric gid: %s=%s", value, lookedUpGroup.Gid)
+	}
+	return gid, nil
+}
+
+func parseNumericInstallID(value string) (int, bool) {
+	if value == "" {
+		return 0, false
+	}
+	id, err := strconv.Atoi(value)
+	if err != nil || id < 0 {
+		return 0, false
+	}
+	return id, true
 }
 
 func applyInstallPlan(plan installPlan) error {
 	if err := copyDeploymentTreeProtected(plan.SourceDir, plan.TargetDir); err != nil {
 		return fmt.Errorf("copy deployment: %w", err)
+	}
+	if err := writeInstalledToolBinary(plan.TargetDir); err != nil {
+		return fmt.Errorf("write installed reploy binary: %w", err)
 	}
 	runtimeDir := filepath.Join(plan.TargetDir, RuntimeDirName)
 	if err := os.RemoveAll(runtimeDir); err != nil {
@@ -374,6 +586,17 @@ func applyInstallPlan(plan installPlan) error {
 	}
 	if err := writeInstalledState(plan); err != nil {
 		return fmt.Errorf("mark deployment installed: %w", err)
+	}
+	if err := rebuildInstalledBundleIfLocalSources(plan); err != nil {
+		return fmt.Errorf("rebuild installed bundle: %w", err)
+	}
+	if owner, err := installOwnerForDir(plan.TargetDir); err == nil {
+		installProgress(plan.Progress, fmt.Sprintf("setting installed ownership to %s (%d:%d)", owner.Spec, owner.UID, owner.GID))
+	} else {
+		installProgress(plan.Progress, "setting installed ownership")
+	}
+	if err := chownInstalledDeployment(plan.TargetDir); err != nil {
+		return fmt.Errorf("set installed ownership: %w", err)
 	}
 	dockerBin, err := installLookPath("docker")
 	if err != nil {
@@ -413,6 +636,9 @@ func applyInstallPlan(plan installPlan) error {
 
 func runInstalledPostStartChecks(plan installPlan) error {
 	helper := filepath.Join(plan.TargetDir, "reploy")
+	if err := waitInstalledServiceRunning(plan.TargetDir, installServiceStartTimeout, plan.Progress); err != nil {
+		return installedServiceStartError(plan, err)
+	}
 	if err := runInstallCheckCommand("installed server test", helper, "test"); err != nil {
 		return err
 	}
@@ -420,6 +646,54 @@ func runInstalledPostStartChecks(plan installPlan) error {
 		return err
 	}
 	return nil
+}
+
+func rebuildInstalledBundleIfLocalSources(plan installPlan) error {
+	sources, err := localBundleSourcesForDir(plan.TargetDir)
+	if err != nil {
+		return err
+	}
+	if len(sources) == 0 {
+		return nil
+	}
+	installProgress(plan.Progress, "rebuilding local source bundle")
+	return BundlePrepare(BundlePrepareOptions{Dir: plan.TargetDir})
+}
+
+func localBundleSourcesForDir(dir string) ([]bundleBuildSource, error) {
+	state, err := loadState(dir)
+	if err != nil {
+		return nil, err
+	}
+	state, err = withInferredBundleState(dir, state)
+	if err != nil {
+		return nil, err
+	}
+	return localBundleBuildSources(state)
+}
+
+func installBundleSourceNames(sources []bundleBuildSource) string {
+	names := make([]string, 0, len(sources))
+	for _, source := range sources {
+		names = append(names, source.Name)
+	}
+	return strings.Join(names, ", ")
+}
+
+func installedServiceStartError(plan installPlan, startErr error) error {
+	helper := filepath.Join(plan.TargetDir, "reploy")
+	output, logsErr := installRunCommandOutput(helper, "logs")
+	trimmedOutput := strings.TrimSpace(string(output))
+	switch {
+	case logsErr == nil && trimmedOutput != "":
+		return fmt.Errorf("installed service start: %w\ninstalled service logs:\n%s", startErr, trimmedOutput)
+	case logsErr == nil:
+		return fmt.Errorf("installed service start: %w\ninstalled service logs are empty", startErr)
+	case trimmedOutput != "":
+		return fmt.Errorf("installed service start: %w\ninstalled service logs failed: %v\n%s", startErr, logsErr, trimmedOutput)
+	default:
+		return fmt.Errorf("installed service start: %w\ninstalled service logs failed: %v", startErr, logsErr)
+	}
 }
 
 func runInstallCheckCommand(label string, name string, args ...string) error {
@@ -436,4 +710,76 @@ func commandErrorWithOutput(label string, output []byte, err error) error {
 		return fmt.Errorf("%s: %w", label, err)
 	}
 	return fmt.Errorf("%s: %w\n%s", label, err, trimmedOutput)
+}
+
+func waitInstalledServiceRunning(dir string, timeout time.Duration, stdout io.Writer) error {
+	installProgress(stdout, "waiting for installed service to start")
+	deadline := time.Now().Add(timeout)
+	lastState := ""
+	var terminalObservedAt time.Time
+	for {
+		now := time.Now()
+		states, err := composeServiceStates(dir)
+		if err != nil {
+			return err
+		}
+		stateSummary := installServiceStateSummary(states)
+		if stateSummary != lastState {
+			installProgress(stdout, "installed service state: "+stateSummary)
+			lastState = stateSummary
+			terminalObservedAt = time.Time{}
+		}
+		if serviceStatesContain(states, "running") {
+			installProgress(stdout, "installed service is running")
+			return nil
+		}
+		if !installServiceMayStillStart(states) {
+			if terminalObservedAt.IsZero() {
+				terminalObservedAt = now
+			}
+			if installServiceTerminalStateGrace <= 0 || now.Sub(terminalObservedAt) >= installServiceTerminalStateGrace {
+				if len(states) == 0 {
+					return fmt.Errorf("service is not started")
+				}
+				return fmt.Errorf("service is not running; current state: %s", strings.Join(states, ", "))
+			}
+		} else {
+			terminalObservedAt = time.Time{}
+		}
+		if !now.Before(deadline) {
+			if len(states) == 0 {
+				return fmt.Errorf("service did not start before timeout")
+			}
+			return fmt.Errorf("service did not start before timeout; current state: %s", strings.Join(states, ", "))
+		}
+		time.Sleep(installServicePollInterval)
+	}
+}
+
+func installProgress(stdout io.Writer, message string) {
+	if stdout == nil {
+		return
+	}
+	fmt.Fprintln(stdout, message)
+}
+
+func installServiceStateSummary(states []string) string {
+	if len(states) == 0 {
+		return "not created yet"
+	}
+	return strings.Join(states, ", ")
+}
+
+func installServiceMayStillStart(states []string) bool {
+	if len(states) == 0 {
+		return true
+	}
+	for _, state := range states {
+		switch strings.ToLower(strings.TrimSpace(state)) {
+		case "created", "restarting", "starting":
+		default:
+			return false
+		}
+	}
+	return true
 }

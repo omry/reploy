@@ -262,6 +262,9 @@ func TestComposeServiceStatesUsesInstalledComposeProject(t *testing.T) {
 		if !containsAdjacent(spec.Args, "--project-name", "demo-12345678") {
 			t.Fatalf("args did not include installed compose project: %#v", spec.Args)
 		}
+		if !containsString(spec.Args, "--all") {
+			t.Fatalf("args did not include --all: %#v", spec.Args)
+		}
 		return []byte(`[{"State":"running"}]`), nil
 	}
 

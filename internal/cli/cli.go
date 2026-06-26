@@ -826,6 +826,10 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 2
 	}
 	options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
+	stopSpinner := func(bool) {}
+	if !options.DryRun {
+		stopSpinner = startSpinner(stderr, "installing deployment")
+	}
 	if err := dockerdeploy.Install(dockerdeploy.InstallOptions{
 		Dir:           options.Dir,
 		Target:        options.Target,
@@ -834,10 +838,13 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 		Start:         options.Start,
 		DryRun:        options.DryRun,
 		Stdout:        stdout,
+		Progress:      nil,
 	}); err != nil {
+		stopSpinner(false)
 		fmt.Fprintf(stderr, "reploy install error: %v\n", err)
 		return 1
 	}
+	stopSpinner(true)
 	return 0
 }
 

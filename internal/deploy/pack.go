@@ -81,8 +81,9 @@ type DockerPackConfig struct {
 
 type DockerServiceConfig struct {
 	Image         string `yaml:"image"`
-	ContainerName string `yaml:"container_name"`
+	ContainerName string `yaml:"-"`
 	ContainerUser string `yaml:"container_user"`
+	InstallOwner  string `yaml:"install_owner"`
 	Restart       string `yaml:"restart"`
 	ContainerHost string `yaml:"container_host"`
 	ContainerPort string `yaml:"container_port"`
@@ -90,7 +91,7 @@ type DockerServiceConfig struct {
 	HostPort      string `yaml:"host_port"`
 	PublicScheme  string `yaml:"public_scheme"`
 	PublicBaseURL string `yaml:"public_base_url"`
-	NetworkName   string `yaml:"network_name"`
+	NetworkName   string `yaml:"-"`
 	RuntimeRoot   string `yaml:"runtime_root"`
 	ContainerHome string `yaml:"container_home"`
 }

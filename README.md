@@ -185,3 +185,14 @@ Install derives collision-resistant Docker identity from the service name and
 install target path. Apps with multiple public ports should expose named
 blueprint ports; install accepts repeated `--port NAME=HOST_PORT` overrides,
 while single-port apps may use `--port HOST_PORT`.
+When installing from a file-backed blueprint with local source packages, install
+rebuilds those wheels in the copied target deployment before starting the
+service, so editable checkout changes are captured without mutating the staging
+deployment.
+
+Permanent installs require an explicit non-root install owner. Blueprints can
+declare `docker.service.install_owner`, and operators can override it with
+`REPLOY_INSTALL_OWNER` in `.reploy/docker.env`. Values may be numeric
+`UID:GID` or host names such as `arbiter:arbiter`; install resolves the owner,
+rejects root, owns the installed deployment tree with it, and writes the
+installed container user as the resolved numeric UID:GID.

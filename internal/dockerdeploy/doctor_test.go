@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -56,6 +57,71 @@ func TestDoctorFailsForEditedGeneratedFile(t *testing.T) {
 	}
 }
 
+func TestDoctorPreinstallIgnoresToolBinaryDrift(t *testing.T) {
+	disableDoctorColor(t)
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_INSTALL_OWNER": "1000:1000"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deployDir, ToolBinaryFileName), []byte("new running reploy\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var normalStdout strings.Builder
+	normalCode := Doctor(DoctorOptions{Dir: deployDir, Stdout: &normalStdout})
+	if normalCode != 1 {
+		t.Fatalf("normal doctor exit = %d\n%s", normalCode, normalStdout.String())
+	}
+	if !strings.Contains(normalStdout.String(), "fail: generated file has local edits:") {
+		t.Fatalf("normal doctor stdout missing local edit failure:\n%s", normalStdout.String())
+	}
+
+	var preinstallStdout strings.Builder
+	preinstallCode := Doctor(DoctorOptions{Dir: deployDir, Preinstall: true, Stdout: &preinstallStdout})
+	if preinstallCode != 0 {
+		t.Fatalf("preinstall doctor exit = %d\n%s", preinstallCode, preinstallStdout.String())
+	}
+	if !strings.Contains(preinstallStdout.String(), "ok: generated file drift ignored for preinstall; install overwrites target:") {
+		t.Fatalf("preinstall doctor stdout missing install overwrite note:\n%s", preinstallStdout.String())
+	}
+}
+
+func TestDoctorPreinstallStillFailsForEditedGeneratedFile(t *testing.T) {
+	disableDoctorColor(t)
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_INSTALL_OWNER": "1000:1000"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deployDir, ComposeFileName), []byte("local edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout strings.Builder
+	code := Doctor(DoctorOptions{Dir: deployDir, Preinstall: true, Stdout: &stdout})
+	if code != 1 {
+		t.Fatalf("doctor exit = %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "fail: generated file has local edits:") {
+		t.Fatalf("stdout missing local edit failure:\n%s", stdout.String())
+	}
+}
+
 func TestDoctorPreinstallPassesForInitializedDeployment(t *testing.T) {
 	disableDoctorColor(t)
 	packDir := makeTestPack(t)
@@ -67,6 +133,9 @@ func TestDoctorPreinstallPassesForInitializedDeployment(t *testing.T) {
 	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_INSTALL_OWNER": "1000:1000"}); err != nil {
+		t.Fatal(err)
+	}
 
 	var stdout strings.Builder
 	code := Doctor(DoctorOptions{Dir: deployDir, Preinstall: true, Stdout: &stdout})
@@ -75,6 +144,9 @@ func TestDoctorPreinstallPassesForInitializedDeployment(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "ok: preinstall checks passed") {
 		t.Fatalf("stdout missing preinstall success:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "ok: install owner resolves to 1000:1000 (1000:1000)") {
+		t.Fatalf("stdout missing install owner success:\n%s", stdout.String())
 	}
 }
 
@@ -87,6 +159,9 @@ func TestDoctorPreinstallFailsForMissingBundleWheel(t *testing.T) {
 	}
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_INSTALL_OWNER": "1000:1000"}); err != nil {
 		t.Fatal(err)
 	}
 	sourceWheel := filepath.Join(t.TempDir(), "demo-1.0.0-py3-none-any.whl")
@@ -107,6 +182,96 @@ func TestDoctorPreinstallFailsForMissingBundleWheel(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "fail: wheel root is missing from deployment bundle:") {
 		t.Fatalf("stdout missing wheel failure:\n%s", stdout.String())
+	}
+}
+
+func TestDoctorPreinstallRejectsUnresolvedInstallOwner(t *testing.T) {
+	disableDoctorColor(t)
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_INSTALL_OWNER": "appuser"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout strings.Builder
+	code := Doctor(DoctorOptions{Dir: deployDir, Preinstall: true, Stdout: &stdout})
+	if code != 1 {
+		t.Fatalf("doctor exit = %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `fail: install owner must resolve to a non-root uid:gid: resolve REPLOY_INSTALL_OWNER user "appuser"`) {
+		t.Fatalf("stdout missing install owner failure:\n%s", stdout.String())
+	}
+}
+
+func TestDoctorPreinstallRejectsMissingInstallOwner(t *testing.T) {
+	disableDoctorColor(t)
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout strings.Builder
+	code := Doctor(DoctorOptions{Dir: deployDir, Preinstall: true, Stdout: &stdout})
+	if code != 1 {
+		t.Fatalf("doctor exit = %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "fail: install owner must resolve to a non-root uid:gid: REPLOY_INSTALL_OWNER is required for install") {
+		t.Fatalf("stdout missing install owner failure:\n%s", stdout.String())
+	}
+}
+
+func TestDoctorPreinstallAcceptsNamedInstallOwner(t *testing.T) {
+	disableDoctorColor(t)
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_INSTALL_OWNER": "appuser:appgroup"}); err != nil {
+		t.Fatal(err)
+	}
+	oldLookupUser := installLookupUser
+	oldLookupGroup := installLookupGroup
+	t.Cleanup(func() {
+		installLookupUser = oldLookupUser
+		installLookupGroup = oldLookupGroup
+	})
+	installLookupUser = func(name string) (*user.User, error) {
+		if name != "appuser" {
+			t.Fatalf("unexpected user lookup: %s", name)
+		}
+		return &user.User{Username: "appuser", Uid: "997", Gid: "988"}, nil
+	}
+	installLookupGroup = func(name string) (*user.Group, error) {
+		if name != "appgroup" {
+			t.Fatalf("unexpected group lookup: %s", name)
+		}
+		return &user.Group{Name: "appgroup", Gid: "988"}, nil
+	}
+
+	var stdout strings.Builder
+	code := Doctor(DoctorOptions{Dir: deployDir, Preinstall: true, Stdout: &stdout})
+	if code != 0 {
+		t.Fatalf("doctor exit = %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "ok: install owner resolves to appuser:appgroup (997:988)") {
+		t.Fatalf("stdout missing install owner success:\n%s", stdout.String())
 	}
 }
 

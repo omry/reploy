@@ -334,6 +334,9 @@ func defaultDockerEnv(pack deploy.AppPack, dockerIdentity string) string {
 		fmt.Sprintf("REPLOY_CONTAINER_HOME=%s", service.ContainerHome),
 		"REPLOY_PIP_VERBOSE=",
 	}
+	if service.InstallOwner != "" {
+		lines = append(lines, fmt.Sprintf("REPLOY_INSTALL_OWNER=%s", service.InstallOwner))
+	}
 	if hasNamedPortBindings(ports) {
 		lines = append(lines, "", "# Named Docker port bindings declared by the blueprint.")
 		for _, port := range ports {
@@ -453,11 +456,7 @@ func dockerServiceDefaults(pack deploy.AppPack, dockerIdentity string) deploy.Do
 	slug := dockerNameSlug(pack.AppID, "app")
 	service := pack.Docker.Service
 	service.Image = defaultString(service.Image, "python:3.11-slim")
-	if dockerIdentity != "" {
-		service.ContainerName = dockerIdentity
-	} else {
-		service.ContainerName = defaultString(service.ContainerName, slug+"-staging")
-	}
+	service.ContainerName = defaultString(dockerIdentity, slug+"-staging")
 	service.ContainerUser = defaultString(service.ContainerUser, defaultContainerUser())
 	service.Restart = defaultString(service.Restart, "on-failure")
 	service.ContainerHost = defaultString(service.ContainerHost, "0.0.0.0")
@@ -465,11 +464,7 @@ func dockerServiceDefaults(pack deploy.AppPack, dockerIdentity string) deploy.Do
 	service.HostBind = defaultString(service.HostBind, "127.0.0.1")
 	service.HostPort = defaultString(service.HostPort, "18080")
 	service.PublicScheme = defaultString(service.PublicScheme, "http")
-	if dockerIdentity != "" {
-		service.NetworkName = dockerIdentity
-	} else {
-		service.NetworkName = defaultString(service.NetworkName, slug+"-staging")
-	}
+	service.NetworkName = defaultString(dockerIdentity, slug+"-staging")
 	service.RuntimeRoot = defaultString(service.RuntimeRoot, "/reploy-runtime/python-venv")
 	service.ContainerHome = defaultString(service.ContainerHome, "/tmp/reploy-home")
 	return service

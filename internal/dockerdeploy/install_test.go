@@ -3,9 +3,11 @@ package dockerdeploy
 import (
 	"errors"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/omry/reploy/internal/deploy"
 )
@@ -18,6 +20,9 @@ func TestInstallDryRunPrintsPlan(t *testing.T) {
 	}
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_INSTALL_OWNER": "1000:1000"}); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(t.TempDir(), "installed")
@@ -46,7 +51,11 @@ func TestInstallDryRunPrintsPlan(t *testing.T) {
 		"compose project: " + instanceID,
 		"container: " + instanceID,
 		"network: " + instanceID,
+		"container user: 1000:1000",
+		"install owner: 1000:1000 (1000:1000)",
+		"installed container user: 1000:1000",
 		"port default: 127.0.0.1:18082 -> 8080",
+		"would set installed deployment ownership",
 		"would write systemd unit: /etc/systemd/system/demo-test.service",
 		"would run: systemctl daemon-reload",
 		"would run: systemctl enable demo-test.service",
@@ -57,6 +66,72 @@ func TestInstallDryRunPrintsPlan(t *testing.T) {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
 		}
+	}
+}
+
+func TestInstallPrintsPreinstallFailures(t *testing.T) {
+	disableDoctorColor(t)
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_INSTALL_OWNER": "missing-user"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout strings.Builder
+	err = Install(InstallOptions{
+		Dir:    deployDir,
+		Target: filepath.Join(t.TempDir(), "installed"),
+		DryRun: true,
+		Stdout: &stdout,
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "preinstall doctor failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `fail: install owner must resolve to a non-root uid:gid: resolve REPLOY_INSTALL_OWNER user "missing-user"`) {
+		t.Fatalf("stdout missing preinstall failure:\n%s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "ok:") {
+		t.Fatalf("stdout should only show failing findings during install:\n%s", stdout.String())
+	}
+}
+
+func TestInstallRequiresExplicitInstallOwner(t *testing.T) {
+	disableDoctorColor(t)
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout strings.Builder
+	err = Install(InstallOptions{
+		Dir:    deployDir,
+		Target: filepath.Join(t.TempDir(), "installed"),
+		DryRun: true,
+		Stdout: &stdout,
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "preinstall doctor failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "fail: install owner must resolve to a non-root uid:gid: REPLOY_INSTALL_OWNER is required for install") {
+		t.Fatalf("stdout missing install owner failure:\n%s", stdout.String())
 	}
 }
 
@@ -189,6 +264,30 @@ func TestCopyDeploymentTreeProtectedSkipsRuntimeDirectory(t *testing.T) {
 	}
 }
 
+func TestCopyDeploymentTreeProtectedSkipsToolBinary(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "source")
+	target := filepath.Join(t.TempDir(), "target")
+	if err := os.MkdirAll(filepath.Join(source, filepath.Dir(ToolBinaryFileName)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/usr/bin/reploy", filepath.Join(source, ToolBinaryFileName)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "reploy"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyDeploymentTreeProtected(source, target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(target, ToolBinaryFileName)); !os.IsNotExist(err) {
+		t.Fatalf("tool binary copied: err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "reploy")); err != nil {
+		t.Fatalf("helper was not copied: %v", err)
+	}
+}
+
 func TestSystemdUnitIncludesComposeOverrideWhenPresent(t *testing.T) {
 	unit := systemdUnit(installPlan{
 		TargetDir:       "/srv/demo",
@@ -263,6 +362,20 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_INSTALL_OWNER": "appuser:appgroup"}); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := deploy.LoadDeploymentManifest(filepath.Join(deployDir, ManifestFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldSourceToolBinary := []byte("old source reploy\n")
+	if err := deploy.WriteGeneratedFile(deployDir, ToolBinaryFileName, oldSourceToolBinary, true, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := deploy.WriteDeploymentManifest(filepath.Join(deployDir, ManifestFileName), manifest); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(deployDir, RuntimeDirName, "python-venv", "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -276,21 +389,68 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(target, RuntimeDirName, "python-venv", "stale"), []byte("stale\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(target, filepath.Dir(ToolBinaryFileName)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	staleTargetBinary := filepath.Join(t.TempDir(), "stale-reploy")
+	if err := os.WriteFile(staleTargetBinary, []byte("stale target reploy\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(staleTargetBinary, filepath.Join(target, ToolBinaryFileName)); err != nil {
+		t.Fatal(err)
+	}
 	unitDir := t.TempDir()
 
 	oldGeteuid := installGeteuid
 	oldLookPath := installLookPath
 	oldRunCommand := installRunCommand
 	oldRunCommandOutput := installRunCommandOutput
+	oldToolBinaryContent := installToolBinaryContent
+	oldChown := installChown
+	oldLookupUser := installLookupUser
+	oldLookupGroup := installLookupGroup
+	oldRunTestCommandOutput := runTestCommandOutput
+	oldServiceStartTimeout := installServiceStartTimeout
+	oldServicePollInterval := installServicePollInterval
 	oldSystemdUnitDir := installSystemdUnitDir
 	t.Cleanup(func() {
 		installGeteuid = oldGeteuid
 		installLookPath = oldLookPath
 		installRunCommand = oldRunCommand
 		installRunCommandOutput = oldRunCommandOutput
+		installToolBinaryContent = oldToolBinaryContent
+		installChown = oldChown
+		installLookupUser = oldLookupUser
+		installLookupGroup = oldLookupGroup
+		runTestCommandOutput = oldRunTestCommandOutput
+		installServiceStartTimeout = oldServiceStartTimeout
+		installServicePollInterval = oldServicePollInterval
 		installSystemdUnitDir = oldSystemdUnitDir
 	})
 
+	installServiceStartTimeout = time.Second
+	installServicePollInterval = time.Millisecond
+	currentToolBinary := []byte("current installed reploy\n")
+	installToolBinaryContent = func() ([]byte, error) {
+		return currentToolBinary, nil
+	}
+	chownedPaths := map[string][2]int{}
+	installChown = func(path string, uid int, gid int) error {
+		chownedPaths[path] = [2]int{uid, gid}
+		return nil
+	}
+	installLookupUser = func(name string) (*user.User, error) {
+		if name != "appuser" {
+			return nil, errors.New("missing user")
+		}
+		return &user.User{Username: "appuser", Uid: "997", Gid: "988"}, nil
+	}
+	installLookupGroup = func(name string) (*user.Group, error) {
+		if name != "appgroup" {
+			return nil, errors.New("missing group")
+		}
+		return &user.Group{Name: "appgroup", Gid: "988"}, nil
+	}
 	installGeteuid = func() int { return 0 }
 	installSystemdUnitDir = unitDir
 	installLookPath = func(name string) (string, error) {
@@ -312,6 +472,12 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 		commands = append(commands, name+" "+strings.Join(args, " "))
 		return nil, nil
 	}
+	runTestCommandOutput = func(spec CommandSpec) ([]byte, error) {
+		if !containsString(spec.Args, "--project-name") {
+			t.Fatalf("service probe args did not use install project: %#v", spec.Args)
+		}
+		return []byte(`[{"State":"running"}]`), nil
+	}
 
 	if err := Install(InstallOptions{
 		Dir:           deployDir,
@@ -329,6 +495,88 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(target, ComposeFileName)); err != nil {
 		t.Fatalf("missing copied compose: %v", err)
 	}
+	targetToolBinary := filepath.Join(target, ToolBinaryFileName)
+	installedToolBinary, err := os.ReadFile(targetToolBinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(installedToolBinary) != string(currentToolBinary) {
+		t.Fatalf("installed reploy binary = %q, want %q", installedToolBinary, currentToolBinary)
+	}
+	info, err := os.Lstat(targetToolBinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("installed reploy binary is a symlink: %s", targetToolBinary)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("installed reploy binary is not regular: %s mode=%s", targetToolBinary, info.Mode())
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("installed reploy binary is not executable: mode=%s", info.Mode())
+	}
+	targetManifest, err := deploy.LoadDeploymentManifest(filepath.Join(target, ManifestFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetBinaryManifestEntry, ok := targetManifest.Files[filepath.ToSlash(ToolBinaryFileName)]
+	if !ok {
+		t.Fatalf("installed manifest missing %s", ToolBinaryFileName)
+	}
+	if targetBinaryManifestEntry.SHA256 != deploy.HashBytes(currentToolBinary) {
+		t.Fatalf("installed manifest binary hash = %s, want %s", targetBinaryManifestEntry.SHA256, deploy.HashBytes(currentToolBinary))
+	}
+	for _, path := range []string{
+		target,
+		filepath.Join(target, "conf"),
+		filepath.Join(target, "data"),
+		filepath.Join(target, BundleDirName),
+		filepath.Join(target, RuntimeDirName),
+		filepath.Join(target, RequirementsFileName),
+		filepath.Join(target, ToolBinaryFileName),
+		filepath.Join(target, StateFileName),
+	} {
+		owner, ok := chownedPaths[path]
+		if !ok {
+			t.Fatalf("path was not chowned: %s", path)
+		}
+		if owner != [2]int{997, 988} {
+			t.Fatalf("owner for %s = %#v, want 997:988", path, owner)
+		}
+	}
+	sourceToolBinary, err := os.ReadFile(filepath.Join(deployDir, ToolBinaryFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(sourceToolBinary) != string(oldSourceToolBinary) {
+		t.Fatalf("source reploy binary changed: %q", sourceToolBinary)
+	}
+	currentToolBinary = []byte("newer installed reploy\n")
+	if err := Install(InstallOptions{
+		Dir:           deployDir,
+		Target:        target,
+		Service:       "demo-apply",
+		PortOverrides: []PortOverride{{HostPort: "18082"}},
+		Start:         true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	installedToolBinary, err = os.ReadFile(targetToolBinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(installedToolBinary) != string(currentToolBinary) {
+		t.Fatalf("reinstalled reploy binary = %q, want %q", installedToolBinary, currentToolBinary)
+	}
+	targetManifest, err = deploy.LoadDeploymentManifest(filepath.Join(target, ManifestFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetBinaryManifestEntry = targetManifest.Files[filepath.ToSlash(ToolBinaryFileName)]
+	if targetBinaryManifestEntry.SHA256 != deploy.HashBytes(currentToolBinary) {
+		t.Fatalf("reinstalled manifest binary hash = %s, want %s", targetBinaryManifestEntry.SHA256, deploy.HashBytes(currentToolBinary))
+	}
 	if info, err := os.Stat(filepath.Join(target, RuntimeDirName)); err != nil || !info.IsDir() {
 		t.Fatalf("missing fresh runtime dir: info=%v err=%v", info, err)
 	}
@@ -338,6 +586,8 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	dockerEnv := readFile(t, filepath.Join(target, DockerEnvFileName))
 	for _, want := range []string{
 		"REPLOY_CONTAINER_NAME=" + instanceID,
+		"REPLOY_CONTAINER_USER=997:988",
+		"REPLOY_INSTALL_OWNER=appuser:appgroup",
 		"REPLOY_DOCKER_NETWORK_NAME=" + instanceID,
 		"REPLOY_HOST_PORT=18082",
 	} {
@@ -385,17 +635,237 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	}
 }
 
-func TestInstalledPostStartCheckIncludesCommandOutput(t *testing.T) {
-	oldRunCommandOutput := installRunCommandOutput
+func TestParseInstallOwner(t *testing.T) {
+	oldLookupUser := installLookupUser
+	oldLookupGroup := installLookupGroup
 	t.Cleanup(func() {
-		installRunCommandOutput = oldRunCommandOutput
+		installLookupUser = oldLookupUser
+		installLookupGroup = oldLookupGroup
 	})
 
+	installLookupUser = func(name string) (*user.User, error) {
+		switch name {
+		case "appuser":
+			return &user.User{Username: "appuser", Uid: "997", Gid: "988"}, nil
+		case "baduser":
+			return &user.User{Username: "baduser", Uid: "not-a-uid", Gid: "988"}, nil
+		default:
+			return nil, errors.New("missing user")
+		}
+	}
+	installLookupGroup = func(name string) (*user.Group, error) {
+		switch name {
+		case "appgroup":
+			return &user.Group{Name: "appgroup", Gid: "989"}, nil
+		case "badgroup":
+			return &user.Group{Name: "badgroup", Gid: "not-a-gid"}, nil
+		default:
+			return nil, errors.New("missing group")
+		}
+	}
+
+	cases := []struct {
+		value string
+		uid   int
+		gid   int
+	}{
+		{value: "997:988", uid: 997, gid: 988},
+		{value: "997", uid: 997, gid: 997},
+		{value: "appuser", uid: 997, gid: 988},
+		{value: "appuser:appgroup", uid: 997, gid: 989},
+		{value: "appuser:988", uid: 997, gid: 988},
+		{value: "997:appgroup", uid: 997, gid: 989},
+	}
+	for _, tc := range cases {
+		t.Run(tc.value, func(t *testing.T) {
+			uid, gid, err := parseInstallOwner(tc.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if uid != tc.uid || gid != tc.gid {
+				t.Fatalf("owner = %d:%d, want %d:%d", uid, gid, tc.uid, tc.gid)
+			}
+		})
+	}
+}
+
+func TestParseInstallOwnerRejectsUnsupportedValues(t *testing.T) {
+	oldLookupUser := installLookupUser
+	oldLookupGroup := installLookupGroup
+	t.Cleanup(func() {
+		installLookupUser = oldLookupUser
+		installLookupGroup = oldLookupGroup
+	})
+
+	installLookupUser = func(name string) (*user.User, error) {
+		switch name {
+		case "rootish":
+			return &user.User{Username: "rootish", Uid: "0", Gid: "0"}, nil
+		case "baduser":
+			return &user.User{Username: "baduser", Uid: "not-a-uid", Gid: "988"}, nil
+		default:
+			return nil, errors.New("missing user")
+		}
+	}
+	installLookupGroup = func(name string) (*user.Group, error) {
+		if name == "badgroup" {
+			return &user.Group{Name: "badgroup", Gid: "not-a-gid"}, nil
+		}
+		return nil, errors.New("missing group")
+	}
+
+	for _, value := range []string{"", ":", "rootish", "0:1000", "1000:0", "-1:1000", "missing-user", "1000:missing-group", "baduser", "1000:badgroup"} {
+		t.Run(value, func(t *testing.T) {
+			_, _, err := parseInstallOwner(value)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
+func TestWaitInstalledServiceRunningWaitsForServiceRows(t *testing.T) {
+	dir := makeWaitInstallDeployment(t)
+	oldRunTestCommandOutput := runTestCommandOutput
+	oldServicePollInterval := installServicePollInterval
+	t.Cleanup(func() {
+		runTestCommandOutput = oldRunTestCommandOutput
+		installServicePollInterval = oldServicePollInterval
+	})
+
+	installServicePollInterval = time.Millisecond
+	outputs := [][]byte{
+		[]byte(`[]`),
+		[]byte(`[{"State":"created"}]`),
+		[]byte(`[{"State":"running"}]`),
+	}
+	index := 0
+	runTestCommandOutput = func(spec CommandSpec) ([]byte, error) {
+		if index >= len(outputs) {
+			return outputs[len(outputs)-1], nil
+		}
+		output := outputs[index]
+		index++
+		return output, nil
+	}
+
+	var stdout strings.Builder
+	if err := waitInstalledServiceRunning(dir, time.Second, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	if index != len(outputs) {
+		t.Fatalf("probes = %d, want %d", index, len(outputs))
+	}
+	for _, want := range []string{
+		"waiting for installed service to start",
+		"installed service state: not created yet",
+		"installed service state: created",
+		"installed service state: running",
+		"installed service is running",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
+func TestWaitInstalledServiceRunningToleratesTransientExitedService(t *testing.T) {
+	dir := makeWaitInstallDeployment(t)
+	oldRunTestCommandOutput := runTestCommandOutput
+	oldServicePollInterval := installServicePollInterval
+	oldTerminalStateGrace := installServiceTerminalStateGrace
+	t.Cleanup(func() {
+		runTestCommandOutput = oldRunTestCommandOutput
+		installServicePollInterval = oldServicePollInterval
+		installServiceTerminalStateGrace = oldTerminalStateGrace
+	})
+
+	installServicePollInterval = time.Millisecond
+	installServiceTerminalStateGrace = time.Second
+	outputs := [][]byte{
+		[]byte(`[{"State":"exited"}]`),
+		[]byte(`[{"State":"running"}]`),
+	}
+	index := 0
+	runTestCommandOutput = func(spec CommandSpec) ([]byte, error) {
+		if index >= len(outputs) {
+			return outputs[len(outputs)-1], nil
+		}
+		output := outputs[index]
+		index++
+		return output, nil
+	}
+
+	var stdout strings.Builder
+	if err := waitInstalledServiceRunning(dir, time.Second, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	if index != len(outputs) {
+		t.Fatalf("probes = %d, want %d", index, len(outputs))
+	}
+	for _, want := range []string{
+		"installed service state: exited",
+		"installed service state: running",
+		"installed service is running",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
+func TestWaitInstalledServiceRunningFailsForExitedService(t *testing.T) {
+	dir := makeWaitInstallDeployment(t)
+	oldServicePollInterval := installServicePollInterval
+	oldTerminalStateGrace := installServiceTerminalStateGrace
+	restoreCommandOutput := stubTestCommandOutput([]byte(`[{"State":"exited"}]`), nil)
+	t.Cleanup(func() {
+		restoreCommandOutput()
+		installServicePollInterval = oldServicePollInterval
+		installServiceTerminalStateGrace = oldTerminalStateGrace
+	})
+
+	installServicePollInterval = time.Millisecond
+	installServiceTerminalStateGrace = time.Millisecond
+
+	err := waitInstalledServiceRunning(dir, time.Second, nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "service is not running; current state: exited") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func makeWaitInstallDeployment(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ReployInternalDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, DockerEnvFileName), []byte("REPLOY_CONTAINER_NAME=demo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestInstalledPostStartCheckIncludesCommandOutput(t *testing.T) {
+	oldRunCommandOutput := installRunCommandOutput
+	oldRunTestCommandOutput := runTestCommandOutput
+	t.Cleanup(func() {
+		installRunCommandOutput = oldRunCommandOutput
+		runTestCommandOutput = oldRunTestCommandOutput
+	})
+
+	dir := makeWaitInstallDeployment(t)
+	runTestCommandOutput = func(spec CommandSpec) ([]byte, error) {
+		return []byte(`[{"State":"running"}]`), nil
+	}
 	installRunCommandOutput = func(name string, args ...string) ([]byte, error) {
 		return []byte("docker compose ps failed\npermission denied\n"), errors.New("exit status 1")
 	}
 
-	err := runInstalledPostStartChecks(installPlan{TargetDir: "/srv/demo"})
+	err := runInstalledPostStartChecks(installPlan{TargetDir: dir})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -407,6 +877,159 @@ func TestInstalledPostStartCheckIncludesCommandOutput(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error missing %q:\n%v", want, err)
 		}
+	}
+}
+
+func TestInstalledPostStartCheckIncludesLogsWhenServiceDoesNotStart(t *testing.T) {
+	oldRunCommandOutput := installRunCommandOutput
+	oldRunTestCommandOutput := runTestCommandOutput
+	t.Cleanup(func() {
+		installRunCommandOutput = oldRunCommandOutput
+		runTestCommandOutput = oldRunTestCommandOutput
+	})
+
+	dir := makeWaitInstallDeployment(t)
+	runTestCommandOutput = func(spec CommandSpec) ([]byte, error) {
+		return []byte(`[{"State":"exited"}]`), nil
+	}
+	installRunCommandOutput = func(name string, args ...string) ([]byte, error) {
+		if len(args) != 1 || args[0] != "logs" {
+			t.Fatalf("unexpected command: %s %#v", name, args)
+		}
+		return []byte("app failed during startup\nconfiguration check failed\n"), nil
+	}
+
+	err := runInstalledPostStartChecks(installPlan{TargetDir: dir})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	for _, want := range []string{
+		"installed service start: service is not running; current state: exited",
+		"installed service logs:",
+		"app failed during startup",
+		"configuration check failed",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q:\n%v", want, err)
+		}
+	}
+}
+
+func TestInstallRebuildsLocalSourceBundleInTarget(t *testing.T) {
+	manifest := strings.Replace(testPackManifest(), "    identifier: demo-suite\n", "    identifier: demo-suite\n    local_sources:\n      demo-server: local/demo-server\n", 1)
+	packDir := makeTestPackWithManifest(t, manifest)
+	sourceDir := filepath.Join(packDir, "local", "demo-server")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "pyproject.toml"), []byte("[build-system]\nrequires = [\"setuptools>=68\", \"wheel\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref, Requirements: []string{"demo-server==1.2.3"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_INSTALL_OWNER": "1000:1000"}); err != nil {
+		t.Fatal(err)
+	}
+	sourceWheel := filepath.Join(deployDir, BundleDirName, "demo_server-1.2.3-py3-none-any.whl")
+	if err := os.MkdirAll(filepath.Dir(sourceWheel), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourceWheel, []byte("stale\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var dryRun strings.Builder
+	if err := Install(InstallOptions{
+		Dir:     deployDir,
+		Target:  filepath.Join(t.TempDir(), "dry-run-target"),
+		Service: "demo-install",
+		DryRun:  true,
+		Stdout:  &dryRun,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(dryRun.String(), "would rebuild local source bundle: demo-server") {
+		t.Fatalf("dry-run missing local source rebuild:\n%s", dryRun.String())
+	}
+
+	target := filepath.Join(t.TempDir(), "installed")
+	unitDir := t.TempDir()
+	oldGeteuid := installGeteuid
+	oldLookPath := installLookPath
+	oldRunCommand := installRunCommand
+	oldToolBinaryContent := installToolBinaryContent
+	oldChown := installChown
+	oldSystemdUnitDir := installSystemdUnitDir
+	oldRunBundleCommand := runBundleCommand
+	t.Cleanup(func() {
+		installGeteuid = oldGeteuid
+		installLookPath = oldLookPath
+		installRunCommand = oldRunCommand
+		installToolBinaryContent = oldToolBinaryContent
+		installChown = oldChown
+		installSystemdUnitDir = oldSystemdUnitDir
+		runBundleCommand = oldRunBundleCommand
+	})
+
+	installGeteuid = func() int { return 0 }
+	installSystemdUnitDir = unitDir
+	installToolBinaryContent = func() ([]byte, error) { return []byte("current reploy\n"), nil }
+	installChown = func(path string, uid int, gid int) error { return nil }
+	installLookPath = func(name string) (string, error) {
+		switch name {
+		case "docker":
+			return "/usr/bin/docker", nil
+		case "systemctl":
+			return "/bin/systemctl", nil
+		default:
+			return "", errors.New("not found")
+		}
+	}
+	installRunCommand = func(name string, args ...string) error { return nil }
+
+	var specs []CommandSpec
+	runBundleCommand = func(spec CommandSpec, options RunOptions) error {
+		specs = append(specs, spec)
+		if spec.Dir != target {
+			t.Fatalf("bundle rebuild ran in %q, want target %q", spec.Dir, target)
+		}
+		switch {
+		case containsInOrder(spec.Args, []string{"sh", "-c"}):
+			if mount := hostPathForContainerMount(t, spec.Args, "/source/demo-server"); mount != sourceDir {
+				t.Fatalf("source mount = %q, want %q", mount, sourceDir)
+			}
+			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
+			return os.WriteFile(filepath.Join(wheelhouse, "demo_server-1.2.3-py3-none-any.whl"), []byte("fresh\n"), 0o644)
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+			return nil
+		default:
+			t.Fatalf("unexpected bundle command: %#v", spec.Args)
+			return nil
+		}
+	}
+
+	if err := Install(InstallOptions{
+		Dir:     deployDir,
+		Target:  target,
+		Service: "demo-install",
+		Start:   false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(specs) != 2 {
+		t.Fatalf("bundle commands = %d, want build and check", len(specs))
+	}
+	targetWheel := filepath.Join(target, BundleDirName, "demo_server-1.2.3-py3-none-any.whl")
+	if got := readFile(t, targetWheel); got != "fresh\n" {
+		t.Fatalf("installed wheel = %q, want fresh", got)
+	}
+	if got := readFile(t, sourceWheel); got != "stale\n" {
+		t.Fatalf("source deployment wheel was mutated: %q", got)
 	}
 }
 
@@ -467,6 +1090,9 @@ docker:
 	}
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_INSTALL_OWNER": "1000:1000"}); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(t.TempDir(), "installed")

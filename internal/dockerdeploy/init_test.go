@@ -55,6 +55,9 @@ func TestInitWritesDeploymentDirectory(t *testing.T) {
 	if strings.Contains(dockerEnv, "DEMO_APP_ENV_FILE") {
 		t.Fatalf("docker.env should not point at app env files:\n%s", dockerEnv)
 	}
+	if strings.Contains(dockerEnv, "REPLOY_INSTALL_OWNER=") {
+		t.Fatalf("docker.env should not default install owner to the current user:\n%s", dockerEnv)
+	}
 	compose := readFile(t, filepath.Join(deployDir, ComposeFileName))
 	for _, unexpected := range []string{"ipam:", "com.docker.network.bridge.name", "env_file:"} {
 		if strings.Contains(compose, unexpected) {
@@ -125,11 +128,12 @@ docker:
     bundle: .reploy/bundle
     data: data
   service:
-    container_name: mailhub-staging
+    container_name: ignored-blueprint-container
+    install_owner: mailhub:mailhub
     container_port: "2525"
     host_port: "12525"
     public_scheme: http
-    network_name: mailhub-staging
+    network_name: ignored-blueprint-network
   environment:
     MAILHUB_CONFIG_NAME: mailhub
   runtime:
@@ -190,13 +194,14 @@ docker:
 		"REPLOY_HOST_PORT=12525",
 		"REPLOY_PUBLIC_SCHEME=http",
 		"REPLOY_DOCKER_NETWORK_NAME=" + stagingID,
+		"REPLOY_INSTALL_OWNER=mailhub:mailhub",
 		"MAILHUB_CONFIG_NAME=mailhub",
 	} {
 		if !strings.Contains(dockerEnv, expected) {
 			t.Fatalf("docker.env missing %q:\n%s", expected, dockerEnv)
 		}
 	}
-	for _, unexpected := range []string{"DEMO_", "demo-staging"} {
+	for _, unexpected := range []string{"DEMO_", "demo-staging", "ignored-blueprint-container", "ignored-blueprint-network"} {
 		if strings.Contains(dockerEnv, unexpected) {
 			t.Fatalf("docker.env leaked %s:\n%s", unexpected, dockerEnv)
 		}
@@ -215,7 +220,7 @@ docker:
 			t.Fatalf("compose missing %q:\n%s", expected, compose)
 		}
 	}
-	for _, unexpected := range []string{"DEMO_", "demo-staging", "  demo:", "/source/demo"} {
+	for _, unexpected := range []string{"DEMO_", "demo-staging", "ignored-blueprint-container", "ignored-blueprint-network", "  demo:", "/source/demo"} {
 		if strings.Contains(compose, unexpected) {
 			t.Fatalf("compose leaked %s:\n%s", unexpected, compose)
 		}
