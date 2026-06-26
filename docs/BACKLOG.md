@@ -41,12 +41,14 @@ This file is the day-to-day queue for design and implementation gaps.
       ports. Operators should be able to install multiple instances from the
       same blueprint without container, network, unit, or port collisions.
       Acceptance checks: make install accept or preserve an explicit service
-      name and host port; use the install service name to derive default
-      systemd unit, compose project, container name, and network name unless
-      explicitly overridden; write install-specific Docker environment
-      overrides without corrupting generated defaults; record service, target,
-      unit path, container name, network name, and host port in install state;
-      prove two installed instances can coexist; and document the side-by-side
-      install and uninstall flow.
+      name and host port; derive staging Docker identity from the deployment
+      path, using a stable slug/hash instead of the raw full path; use the
+      install service name plus target path as the installed instance identity
+      for the default systemd unit, compose project, container name, and network
+      name unless explicitly overridden; write install-specific Docker
+      environment overrides without corrupting generated defaults; record
+      service, target, unit path, container name, network name, and host port in
+      install state; prove two installed instances can coexist; and document the
+      side-by-side install and uninstall flow.
 
 ## Post-v1
