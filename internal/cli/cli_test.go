@@ -236,6 +236,30 @@ func TestAppShowsAppIDAndPackSubcommands(t *testing.T) {
 	}
 }
 
+func TestAppUsesCurrentDeploymentDirByDefault(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	t.Chdir(deployDir)
+
+	code, stdout, stderr = runCLI("app")
+	if code != 0 {
+		t.Fatalf("app failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	expected := "app: demo\napp subcommands:\n  bootstrap server\n  bootstrap plugin\n  config activate\n  config check\n  config show\n  env bootstrap\n  env check\n"
+	if stdout != expected {
+		t.Fatalf("stdout = %q, want %q", stdout, expected)
+	}
+	expectedStderr := "reploy: using deployment in current directory: " + deployDir + "\n"
+	if stderr != expectedStderr {
+		t.Fatalf("stderr = %q, want %q", stderr, expectedStderr)
+	}
+}
+
 func TestAppListIsNotSpecial(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
@@ -298,7 +322,7 @@ func TestDockerUpdateHelp(t *testing.T) {
 	if !strings.Contains(stdout, "Usage: reploy [--docker] update [OPTIONS]") {
 		t.Fatalf("stdout did not contain update usage:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "--dir DIR") || !strings.Contains(stdout, "Deployment directory to update, default reploy-staging") {
+	if !strings.Contains(stdout, "--dir DIR") || !strings.Contains(stdout, "Deployment directory to update, default current deployment or reploy-staging") {
 		t.Fatalf("stdout did not describe update directory option:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "--force") || !strings.Contains(stdout, "--blueprint REF") {

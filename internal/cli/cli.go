@@ -185,6 +185,7 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
 			printDockerShortUsage(stderr)
 			return 2
 		}
+		options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
 		results, err := dockerdeploy.Update(dockerdeploy.UpdateOptions{
 			Dir:   options.Dir,
 			Pack:  options.Pack,
@@ -203,6 +204,7 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
 			printDockerShortUsage(stderr)
 			return 2
 		}
+		options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
 		info, err := dockerdeploy.Info(dockerdeploy.InfoOptions{Dir: options.Dir})
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy info error: %v\n", err)
@@ -239,6 +241,7 @@ func runDockerApp(args []string, stdout io.Writer, stderr io.Writer) int {
 		printAppShortUsage(stderr)
 		return 2
 	}
+	options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
 	if err := dockerdeploy.AppCommand(dockerdeploy.AppCommandOptions{
 		Dir:         options.Dir,
 		CommandArgs: options.CommandArgs,
@@ -258,6 +261,7 @@ func runDockerAppSummary(args []string, stdout io.Writer, stderr io.Writer) int 
 		printAppShortUsage(stderr)
 		return 2
 	}
+	options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
 	result, err := dockerdeploy.AppCommandList(dockerdeploy.AppCommandListOptions{Dir: options.Dir})
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy app error: %v\n", err)
@@ -275,11 +279,13 @@ func runDockerAppSummary(args []string, stdout io.Writer, stderr io.Writer) int 
 
 type dockerAppOptions struct {
 	Dir         string
+	DirExplicit bool
 	CommandArgs []string
 }
 
 type dockerAppSummaryOptions struct {
-	Dir string
+	Dir         string
+	DirExplicit bool
 }
 
 func parseDockerAppOptions(args []string) (dockerAppOptions, error) {
@@ -293,9 +299,11 @@ func parseDockerAppOptions(args []string) (dockerAppOptions, error) {
 				return dockerAppOptions{}, fmt.Errorf("%s requires a value", arg)
 			}
 			options.Dir = value
+			options.DirExplicit = true
 		default:
 			if strings.HasPrefix(arg, "--dir=") {
 				options.Dir = strings.TrimPrefix(arg, "--dir=")
+				options.DirExplicit = true
 				continue
 			}
 			options.CommandArgs = append(options.CommandArgs, arg)
@@ -321,9 +329,11 @@ func parseDockerAppSummaryOptions(args []string) (dockerAppSummaryOptions, error
 				return dockerAppSummaryOptions{}, fmt.Errorf("%s requires a value", arg)
 			}
 			options.Dir = value
+			options.DirExplicit = true
 		default:
 			if strings.HasPrefix(arg, "--dir=") {
 				options.Dir = strings.TrimPrefix(arg, "--dir=")
+				options.DirExplicit = true
 				continue
 			}
 			return dockerAppSummaryOptions{}, fmt.Errorf("unknown option: %s", arg)
@@ -344,6 +354,23 @@ func isHelpArg(arg string) bool {
 	}
 }
 
+func resolveImplicitDeploymentDir(dir string, explicit bool, output io.Writer) string {
+	if explicit || dir != dockerdeploy.DefaultDeploymentDir {
+		return dir
+	}
+	if _, err := os.Stat(dockerdeploy.StateFileName); err != nil {
+		return dir
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+	if output != nil {
+		fmt.Fprintf(output, "reploy: using deployment in current directory: %s\n", cwd)
+	}
+	return "."
+}
+
 func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "reploy usage error: expected bundle command")
@@ -362,6 +389,7 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 			printBundleShortUsage(stderr)
 			return 2
 		}
+		options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
 		results, err := dockerdeploy.BundleUpgrade(dockerdeploy.BundleUpgradeOptions{
 			Dir:      options.Dir,
 			Target:   options.Root,
@@ -383,6 +411,7 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 			printBundleShortUsage(stderr)
 			return 2
 		}
+		options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
 		packages, err := dockerdeploy.BundleListAll(dockerdeploy.BundleListOptions{Dir: options.Dir})
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy bundle list all error: %v\n", err)
@@ -407,6 +436,7 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 		printBundleShortUsage(stderr)
 		return 2
 	}
+	options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
 	switch action {
 	case "list":
 		roots, err := dockerdeploy.BundleList(dockerdeploy.BundleListOptions{Dir: options.Dir})
@@ -517,14 +547,15 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 type dockerBundleOptions struct {
-	Dir      string
-	Root     string
-	Roots    []string
-	Names    []string
-	Force    bool
-	DryRun   bool
-	PyPIOnly bool
-	Verbose  bool
+	Dir         string
+	DirExplicit bool
+	Root        string
+	Roots       []string
+	Names       []string
+	Force       bool
+	DryRun      bool
+	PyPIOnly    bool
+	Verbose     bool
 }
 
 type dockerBundleParseOptions struct {
@@ -550,9 +581,11 @@ func parseDockerBundleUpgradeOptions(args []string) (dockerBundleOptions, error)
 				return dockerBundleOptions{}, fmt.Errorf("%s requires a value", arg)
 			}
 			options.Dir = value
+			options.DirExplicit = true
 		default:
 			if strings.HasPrefix(arg, "--dir=") {
 				options.Dir = strings.TrimPrefix(arg, "--dir=")
+				options.DirExplicit = true
 				continue
 			}
 			if strings.HasPrefix(arg, "--") {
@@ -601,6 +634,7 @@ func parseDockerBundleOptions(args []string, parseOptions dockerBundleParseOptio
 				return dockerBundleOptions{}, fmt.Errorf("%s requires a value", arg)
 			}
 			options.Dir = value
+			options.DirExplicit = true
 		case "--name":
 			if !parseOptions.AllowNames {
 				return dockerBundleOptions{}, fmt.Errorf("unknown option: %s", arg)
@@ -617,6 +651,7 @@ func parseDockerBundleOptions(args []string, parseOptions dockerBundleParseOptio
 		default:
 			if strings.HasPrefix(arg, "--dir=") {
 				options.Dir = strings.TrimPrefix(arg, "--dir=")
+				options.DirExplicit = true
 				continue
 			}
 			if strings.HasPrefix(arg, "--name=") {
@@ -763,6 +798,7 @@ func runDockerDoctor(args []string, stdout io.Writer, stderr io.Writer) int {
 		printDockerShortUsage(stderr)
 		return 2
 	}
+	options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
 	return dockerdeploy.Doctor(dockerdeploy.DoctorOptions{
 		Dir:        options.Dir,
 		Preinstall: options.Preinstall,
@@ -778,6 +814,7 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 		printDockerShortUsage(stderr)
 		return 2
 	}
+	options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
 	if err := dockerdeploy.Install(dockerdeploy.InstallOptions{
 		Dir:     options.Dir,
 		Target:  options.Target,
@@ -793,11 +830,12 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 type dockerInstallOptions struct {
-	Dir     string
-	Target  string
-	Service string
-	Start   bool
-	DryRun  bool
+	Dir         string
+	DirExplicit bool
+	Target      string
+	Service     string
+	Start       bool
+	DryRun      bool
 }
 
 func parseDockerInstallOptions(args []string) (dockerInstallOptions, error) {
@@ -817,6 +855,7 @@ func parseDockerInstallOptions(args []string) (dockerInstallOptions, error) {
 				return dockerInstallOptions{}, fmt.Errorf("%s requires a value", arg)
 			}
 			options.Dir = value
+			options.DirExplicit = true
 		case "--to":
 			value, ok := optionValue(args, &index)
 			if !ok {
@@ -832,6 +871,7 @@ func parseDockerInstallOptions(args []string) (dockerInstallOptions, error) {
 		default:
 			if strings.HasPrefix(arg, "--dir=") {
 				options.Dir = strings.TrimPrefix(arg, "--dir=")
+				options.DirExplicit = true
 				continue
 			}
 			if strings.HasPrefix(arg, "--to=") {
@@ -852,9 +892,10 @@ func parseDockerInstallOptions(args []string) (dockerInstallOptions, error) {
 }
 
 type dockerDoctorOptions struct {
-	Dir        string
-	Preinstall bool
-	Quiet      bool
+	Dir         string
+	DirExplicit bool
+	Preinstall  bool
+	Quiet       bool
 }
 
 func parseDockerDoctorOptions(args []string) (dockerDoctorOptions, error) {
@@ -872,9 +913,11 @@ func parseDockerDoctorOptions(args []string) (dockerDoctorOptions, error) {
 				return dockerDoctorOptions{}, fmt.Errorf("%s requires a value", arg)
 			}
 			options.Dir = value
+			options.DirExplicit = true
 		default:
 			if strings.HasPrefix(arg, "--dir=") {
 				options.Dir = strings.TrimPrefix(arg, "--dir=")
+				options.DirExplicit = true
 				continue
 			}
 			return dockerDoctorOptions{}, fmt.Errorf("unknown option: %s", arg)
@@ -893,6 +936,7 @@ func runDockerTest(args []string, stdout io.Writer, stderr io.Writer) int {
 		printDockerShortUsage(stderr)
 		return 2
 	}
+	options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
 	if err := dockerdeploy.TestServer(dockerdeploy.TestOptions{
 		Dir:     options.Dir,
 		Timeout: options.Timeout,
@@ -905,8 +949,9 @@ func runDockerTest(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 type dockerTestOptions struct {
-	Dir     string
-	Timeout time.Duration
+	Dir         string
+	DirExplicit bool
+	Timeout     time.Duration
 }
 
 func parseDockerTestOptions(args []string) (dockerTestOptions, error) {
@@ -930,9 +975,11 @@ func parseDockerTestOptions(args []string) (dockerTestOptions, error) {
 				return dockerTestOptions{}, fmt.Errorf("%s requires a value", arg)
 			}
 			options.Dir = value
+			options.DirExplicit = true
 		default:
 			if strings.HasPrefix(arg, "--dir=") {
 				options.Dir = strings.TrimPrefix(arg, "--dir=")
+				options.DirExplicit = true
 				continue
 			}
 			if strings.HasPrefix(arg, "--timeout=") {
@@ -963,6 +1010,7 @@ func runDockerRuntime(action string, args []string, stdout io.Writer, stderr io.
 		printDockerShortUsage(stderr)
 		return 2
 	}
+	options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
 	if options.Follow && action != "logs" {
 		fmt.Fprintln(stderr, "reploy usage error: --follow is only supported with logs")
 		printDockerShortUsage(stderr)
@@ -982,8 +1030,9 @@ func runDockerRuntime(action string, args []string, stdout io.Writer, stderr io.
 }
 
 type dockerRuntimeOptions struct {
-	Dir    string
-	Follow bool
+	Dir         string
+	DirExplicit bool
+	Follow      bool
 }
 
 func parseDockerRuntimeOptions(args []string) (dockerRuntimeOptions, error) {
@@ -999,9 +1048,11 @@ func parseDockerRuntimeOptions(args []string) (dockerRuntimeOptions, error) {
 				return dockerRuntimeOptions{}, fmt.Errorf("%s requires a value", arg)
 			}
 			options.Dir = value
+			options.DirExplicit = true
 		default:
 			if strings.HasPrefix(arg, "--dir=") {
 				options.Dir = strings.TrimPrefix(arg, "--dir=")
+				options.DirExplicit = true
 				continue
 			}
 			return dockerRuntimeOptions{}, fmt.Errorf("unknown option: %s", arg)
@@ -1015,6 +1066,7 @@ func parseDockerRuntimeOptions(args []string) (dockerRuntimeOptions, error) {
 
 type dockerCommandOptions struct {
 	Dir          string
+	DirExplicit  bool
 	Pack         deploy.PackRef
 	Force        bool
 	Requirements []string
@@ -1034,6 +1086,7 @@ func parseDockerCommandOptions(args []string, requirePack bool) (dockerCommandOp
 				return dockerCommandOptions{}, fmt.Errorf("%s requires a value", arg)
 			}
 			options.Dir = value
+			options.DirExplicit = true
 		case "--blueprint", "--fcd":
 			if packSet {
 				return dockerCommandOptions{}, fmt.Errorf("--blueprint may only be provided once")
@@ -1057,6 +1110,7 @@ func parseDockerCommandOptions(args []string, requirePack bool) (dockerCommandOp
 		default:
 			if strings.HasPrefix(arg, "--dir=") {
 				options.Dir = strings.TrimPrefix(arg, "--dir=")
+				options.DirExplicit = true
 				continue
 			}
 			if strings.HasPrefix(arg, "--blueprint=") || strings.HasPrefix(arg, "--fcd=") {
@@ -1401,7 +1455,7 @@ Target options:
   --aws        Reserved for a future AWS deployment target
 
 Deployment options:
-  --dir DIR    Deployment directory, default reploy-staging
+  --dir DIR    Deployment directory, default current deployment or reploy-staging
   --blueprint REF
               App blueprint reference, required for init
               Use an indexed shorthand, file:PATH, or pypi:PACKAGE.
@@ -1464,7 +1518,7 @@ Usage: reploy bundle COMMAND
 	fmt.Fprint(output, strings.TrimLeft(`
 
 Options:
-  --dir DIR    Deployment directory, default reploy-staging
+  --dir DIR    Deployment directory, default current deployment or reploy-staging
   --name NAME  Bundle option name for bundle add; accepts comma-separated names
   --force      With bundle add --name, treat unknown names as package roots
   --dry-run    Print build/check commands without changing the deployment
@@ -1511,7 +1565,7 @@ PATH.
 	fmt.Fprint(output, strings.TrimLeft(`
 
 Options:
-  --dir DIR    Deployment directory, default reploy-staging
+  --dir DIR    Deployment directory, default current deployment or reploy-staging
   -h, --help   Show app command help
 `, "\n"))
 }
@@ -1565,7 +1619,7 @@ Bundle:
   upgrade      Upgrade package roots and rebuild installation bundle artifacts
 
 Options:
-  --dir DIR    Deployment directory, default reploy-staging
+  --dir DIR    Deployment directory, default current deployment or reploy-staging
   --blueprint REF
               App blueprint reference, required for init
               Use an indexed shorthand, file:PATH, or pypi:PACKAGE.
@@ -1607,7 +1661,7 @@ Usage: reploy [--docker] update [OPTIONS]
 Update generated files in a Docker deployment directory.
 
 Options:
-  --dir DIR    Deployment directory to update, default reploy-staging
+  --dir DIR    Deployment directory to update, default current deployment or reploy-staging
   --blueprint REF
               App blueprint reference to update from; defaults to saved state
               Use an indexed shorthand, file:PATH, or pypi:PACKAGE.
