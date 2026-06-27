@@ -105,6 +105,9 @@ func AppCommand(options AppCommandOptions) error {
 	if err != nil {
 		return err
 	}
+	if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: options.Dir, Stdout: options.Stdout, Stderr: options.Stderr}); err != nil {
+		return fmt.Errorf("prepare installation bundle: %w", err)
+	}
 	configDisplayDir := appConfigDisplayDir(options.Dir, pack)
 	projectName := installComposeProjectName(state)
 	spec := AppCommandForProject(options.Dir, command.Name, forwardedArgs, projectName, configDisplayDir)

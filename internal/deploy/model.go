@@ -46,7 +46,8 @@ type ResolvedPackArtifact struct {
 }
 
 type BundleState struct {
-	Roots []ArtifactRoot `json:"roots,omitempty"`
+	Roots               []ArtifactRoot `json:"roots,omitempty"`
+	PreparedFingerprint string         `json:"prepared_fingerprint,omitempty"`
 }
 
 type ArtifactRoot struct {

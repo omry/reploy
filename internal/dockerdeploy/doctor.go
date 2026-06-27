@@ -185,7 +185,7 @@ func doctorPreinstallFindings(dir string) []DoctorFinding {
 		}
 		switch root.Kind {
 		case "source":
-			findings = append(findings, DoctorFinding{Status: "fail", Message: "persistent source roots are not installable; use bundle add-source: " + root.Source})
+			findings = append(findings, DoctorFinding{Status: "fail", Message: "persistent source roots are not installable; add a package or wheel artifact instead: " + root.Source})
 		case "wheel":
 			if !strings.HasPrefix(root.Source, "/bundle/") {
 				findings = append(findings, DoctorFinding{Status: "fail", Message: "wheel root must live in deployment bundle for install: " + root.Source})

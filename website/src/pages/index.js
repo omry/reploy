@@ -51,7 +51,6 @@ function HomepageHeader() {
           <pre>
             <code>{`curl -fsSL https://reploy.yadan.net/install.sh | sh
 reploy stage <app-blueprint-ref>
-reploy bundle build
 reploy up
 reploy test`}</code>
           </pre>

@@ -956,6 +956,99 @@ func TestBundlePrepareVerboseStreamsCommandOutput(t *testing.T) {
 	}
 }
 
+func TestEnsureBundlePreparedBuildsOnceAndBundleAddInvalidates(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	commands := []string{}
+	restore := stubSuccessfulBundlePrepare(t, &commands)
+	defer restore()
+
+	built, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: deployDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !built {
+		t.Fatal("first ensure should build")
+	}
+	if len(commands) != 2 {
+		t.Fatalf("ran %d commands, want build and check", len(commands))
+	}
+	state := readDeploymentState(t, deployDir)
+	if state.Bundle.PreparedFingerprint == "" {
+		t.Fatal("prepared fingerprint was not recorded")
+	}
+
+	built, err = EnsureBundlePrepared(BundleEnsureOptions{Dir: deployDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if built {
+		t.Fatal("second ensure should reuse prepared bundle")
+	}
+	if len(commands) != 2 {
+		t.Fatalf("ran %d commands after cached ensure, want 2", len(commands))
+	}
+
+	if _, err := BundleAdd(BundleRootOptions{Dir: deployDir, Source: "demo-imap==1.2.3"}); err != nil {
+		t.Fatal(err)
+	}
+	state = readDeploymentState(t, deployDir)
+	if state.Bundle.PreparedFingerprint != "" {
+		t.Fatalf("prepared fingerprint should be cleared after bundle add: %q", state.Bundle.PreparedFingerprint)
+	}
+
+	built, err = EnsureBundlePrepared(BundleEnsureOptions{Dir: deployDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !built {
+		t.Fatal("ensure after bundle add should rebuild")
+	}
+	if len(commands) != 4 {
+		t.Fatalf("ran %d commands after invalidation, want 4", len(commands))
+	}
+}
+
+func TestBundleCleanInvalidatesPreparedBundle(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	commands := []string{}
+	restore := stubSuccessfulBundlePrepare(t, &commands)
+	defer restore()
+
+	if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: deployDir}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readDeploymentState(t, deployDir).Bundle.PreparedFingerprint; got == "" {
+		t.Fatal("prepared fingerprint was not recorded")
+	}
+
+	results, err := BundleClean(BundleCleanOptions{Dir: deployDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertResultStatus(t, results, filepath.Join(deployDir, StateFileName), deploy.UpdateStatusUpdated)
+	if got := readDeploymentState(t, deployDir).Bundle.PreparedFingerprint; got != "" {
+		t.Fatalf("prepared fingerprint should be cleared after clean: %q", got)
+	}
+}
+
 func TestBundleCleanRemovesBuiltWheelsAndKeepsSelectedBundleWheels(t *testing.T) {
 	packDir := makeTestPack(t)
 	ref, err := deploy.ParsePackRef("file:" + packDir)
@@ -1114,6 +1207,40 @@ func stubBundleRunner(run func(CommandSpec, RunOptions) error) func() {
 	runBundleCommand = run
 	return func() {
 		runBundleCommand = previous
+	}
+}
+
+func stubSuccessfulBundlePrepare(t *testing.T, commands *[]string) func() {
+	t.Helper()
+	return stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
+		switch {
+		case containsInOrder(spec.Args, []string{"wheel", "--no-cache-dir"}):
+			*commands = append(*commands, "build")
+			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
+			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+			*commands = append(*commands, "check")
+			return nil
+		default:
+			t.Fatalf("unexpected bundle command: %#v", spec.Args)
+			return nil
+		}
+	})
+}
+
+func markTestBundlePrepared(t *testing.T, dir string) {
+	t.Helper()
+	bundleDir := filepath.Join(dir, BundleDirName)
+	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundleDir, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	state := readDeploymentState(t, dir)
+	state.Bundle.PreparedFingerprint = bundlePreparedFingerprint(state)
+	if _, err := writeDeploymentStateIfChanged(dir, state); err != nil {
+		t.Fatal(err)
 	}
 }
 

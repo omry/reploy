@@ -14,13 +14,21 @@ List available bundle options:
 reploy bundle list-options
 ```
 
-Build the selected bundle:
+Reploy prepares the selected bundle automatically when a staging command needs
+it, such as `reploy up`, `reploy app ...`, or `reploy bundle check`. Adding,
+removing, cleaning, or updating bundle inputs marks the prepared bundle out of
+date.
+
+Install expects the staging bundle to already be current. If the bundle is out
+of date, run `reploy bundle build`, retest staging, then install again.
+
+Explicitly build the selected bundle when you want an early preflight:
 
 ```bash
 reploy bundle build
 ```
 
-Check that the bundle can be prepared:
+Check that the bundle can be prepared. This builds first when needed:
 
 ```bash
 reploy bundle check

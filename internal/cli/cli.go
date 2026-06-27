@@ -519,6 +519,11 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		return 0
 	}
+	if !isDockerBundleCommand(action) {
+		fmt.Fprintf(stderr, "reploy usage error: unknown bundle command: %s\n", action)
+		printBundleShortUsage(stderr)
+		return 2
+	}
 	options, err := parseDockerBundleOptions(args[1:], dockerBundleParseOptions{
 		RequireRoot:   action != "list" && action != "list-options" && action != "check" && action != "build" && action != "clean",
 		AllowDryRun:   action == "check" || action == "build",
@@ -569,34 +574,30 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 		printBundleAddSummary(stdout, options, beforeRoots, beforeErr)
 		printUpdateResults(stdout, results)
 		return 0
-	case "add-wheel":
-		results, err := dockerdeploy.BundleAddWheel(dockerdeploy.BundleRootOptions{Dir: options.Dir, Source: options.Root})
-		if err != nil {
-			fmt.Fprintf(stderr, "reploy bundle add-wheel error: %v\n", err)
-			return 1
-		}
-		printUpdateResults(stdout, results)
-		return 0
-	case "add-source":
-		results, err := dockerdeploy.BundleAddSource(dockerdeploy.BundleRootOptions{Dir: options.Dir, Source: options.Root})
-		if err != nil {
-			fmt.Fprintf(stderr, "reploy bundle add-source error: %v\n", err)
-			return 1
-		}
-		printUpdateResults(stdout, results)
-		return 0
 	case "check":
 		stopSpinner := func(bool) {}
 		if !options.DryRun && !options.Verbose {
 			stopSpinner = startSpinner(stderr, "validating installation bundle")
 		}
-		if err := dockerdeploy.BundleCheck(dockerdeploy.BundleCheckOptions{
-			Dir:     options.Dir,
-			DryRun:  options.DryRun,
-			Verbose: options.Verbose,
-			Stdout:  stdout,
-			Stderr:  stderr,
-		}); err != nil {
+		built := false
+		if !options.DryRun {
+			built, err = dockerdeploy.EnsureBundlePrepared(dockerdeploy.BundleEnsureOptions{
+				Dir:     options.Dir,
+				Verbose: options.Verbose,
+				Stdout:  stdout,
+				Stderr:  stderr,
+			})
+		}
+		if err == nil && !built {
+			err = dockerdeploy.BundleCheck(dockerdeploy.BundleCheckOptions{
+				Dir:     options.Dir,
+				DryRun:  options.DryRun,
+				Verbose: options.Verbose,
+				Stdout:  stdout,
+				Stderr:  stderr,
+			})
+		}
+		if err != nil {
 			stopSpinner(false)
 			if options.DryRun || options.Verbose {
 				fmt.Fprintf(stderr, "reploy bundle check error: %v\n", err)
@@ -655,6 +656,15 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "reploy usage error: unknown bundle command: %s\n", action)
 		printBundleShortUsage(stderr)
 		return 2
+	}
+}
+
+func isDockerBundleCommand(action string) bool {
+	switch action {
+	case "list", "list-options", "add", "remove", "check", "build", "clean":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -866,7 +876,7 @@ func printBundleAddSummary(output io.Writer, options dockerBundleOptions, before
 
 func printBundleRootSummary(output io.Writer, verb string, roots []string) {
 	if allPythonPackageRoots(roots) {
-		fmt.Fprintf(output, "%s Python packages: %s (dependencies included by bundle build)\n", verb, strings.Join(roots, ", "))
+		fmt.Fprintf(output, "%s Python packages: %s (dependencies included when the bundle is prepared)\n", verb, strings.Join(roots, ", "))
 		return
 	}
 	fmt.Fprintf(output, "%s installation roots: %s\n", verb, strings.Join(roots, ", "))
@@ -1777,11 +1787,9 @@ Bundle:
     all        List root and transitive built installation artifacts
   list-options List blueprint-declared bundle options
   add          Add installation artifact roots
-  add-wheel    Copy a wheel into the bundle and add it as a root
-  add-source   Build a source directory wheel into the bundle and add it
   remove       Remove installation artifact roots
-  check        Validate built installation artifacts
-  build        Build and validate installation bundle artifacts
+  check        Build if needed and validate installation artifacts
+  build        Explicitly build and validate installation bundle artifacts
   clean        Remove built installation artifacts
   upgrade      Upgrade package roots and rebuild installation bundle artifacts
 
@@ -1895,11 +1903,9 @@ Commands:
     all        List root and transitive built installation artifacts
   list-options List blueprint-declared bundle options
   add          Add installation artifact roots
-  add-wheel    Copy a wheel into the bundle and add it as a root
-  add-source   Build a source directory wheel into the bundle and add it
   remove       Remove installation artifact roots
-  check        Validate built installation artifacts
-  build        Build and validate installation bundle artifacts
+  check        Build if needed and validate installation artifacts
+  build        Explicitly build and validate installation bundle artifacts
   clean        Remove built installation artifacts
   upgrade      Upgrade package roots and rebuild installation bundle artifacts
 `, "\n")
@@ -1970,11 +1976,9 @@ Bundle:
     all        List root and transitive built installation artifacts
   list-options List blueprint-declared bundle options
   add          Add installation artifact roots
-  add-wheel    Copy a wheel into the bundle and add it as a root
-  add-source   Build a source directory wheel into the bundle and add it
   remove       Remove installation artifact roots
-  check        Validate built installation artifacts
-  build        Build and validate installation bundle artifacts
+  check        Build if needed and validate installation artifacts
+  build        Explicitly build and validate installation bundle artifacts
   clean        Remove built installation artifacts
   upgrade      Upgrade package roots and rebuild installation bundle artifacts
 

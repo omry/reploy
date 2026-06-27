@@ -55,13 +55,16 @@ reploy info
 
 Use `--dir` when you want a different staging directory for this app instance.
 
-## 4. Build and Test Staging
+## 4. Start and Test Staging
 
 ```bash
-reploy bundle build
 reploy up
 reploy test
 ```
+
+`reploy up` prepares the selected bundle automatically when the bundle is
+missing or out of date. Use `reploy bundle build` when you want to force that
+preparation step before starting the service.
 
 If the app exposes configuration commands, run those through `reploy app`. The
 exact commands are app-specific.

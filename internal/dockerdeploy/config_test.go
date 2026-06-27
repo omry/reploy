@@ -412,6 +412,7 @@ func makeConfigCheckDeployment(t *testing.T) string {
 	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
 		t.Fatal(err)
 	}
+	markTestBundlePrepared(t, deployDir)
 	return deployDir
 }
 
@@ -432,6 +433,7 @@ func makeAppCommandDeployment(t *testing.T) string {
 	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
 		t.Fatal(err)
 	}
+	markTestBundlePrepared(t, deployDir)
 	return deployDir
 }
 

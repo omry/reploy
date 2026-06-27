@@ -209,11 +209,9 @@ reploy bundle list
 reploy bundle list all
 reploy bundle list-options
 reploy bundle add --name imap,smtp
-reploy bundle add-wheel ./dist/my_component-1.0.0-py3-none-any.whl
-reploy bundle add-source ../my_component
 reploy bundle remove imap,smtp
 reploy bundle upgrade
-reploy bundle build
+reploy bundle build   # explicit preflight before install; up builds as needed
 reploy bundle check
 reploy app config check
 reploy app config check --live

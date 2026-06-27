@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -56,6 +57,14 @@ type BundlePrepareOptions struct {
 	Verbose  bool
 	Stdout   io.Writer
 	Stderr   io.Writer
+}
+
+type BundleEnsureOptions struct {
+	Dir     string
+	DryRun  bool
+	Verbose bool
+	Stdout  io.Writer
+	Stderr  io.Writer
 }
 
 type BundleCleanOptions struct {
@@ -517,7 +526,30 @@ func BundlePrepare(options BundlePrepareOptions) error {
 	if options.Verbose && options.Stdout != nil {
 		fmt.Fprintf(options.Stdout, "built installation bundle: %s\n", bundleDir)
 	}
-	return BundleCheck(BundleCheckOptions{Dir: options.Dir, Verbose: options.Verbose, Stdout: stdout, Stderr: stderr})
+	if err := BundleCheck(BundleCheckOptions{Dir: options.Dir, Verbose: options.Verbose, Stdout: stdout, Stderr: stderr}); err != nil {
+		return err
+	}
+	return markBundlePrepared(options.Dir)
+}
+
+func EnsureBundlePrepared(options BundleEnsureOptions) (bool, error) {
+	if options.Dir == "" {
+		options.Dir = DefaultDeploymentDir
+	}
+	prepared, err := bundlePrepared(options.Dir)
+	if err != nil {
+		return false, err
+	}
+	if prepared {
+		return false, nil
+	}
+	return true, BundlePrepare(BundlePrepareOptions{
+		Dir:     options.Dir,
+		DryRun:  options.DryRun,
+		Verbose: options.Verbose,
+		Stdout:  options.Stdout,
+		Stderr:  options.Stderr,
+	})
 }
 
 func BundleClean(options BundleCleanOptions) ([]UpdateResult, error) {
@@ -557,6 +589,13 @@ func BundleClean(options BundleCleanOptions) ([]UpdateResult, error) {
 			return nil, err
 		}
 		results = append(results, UpdateResult{Path: path, Status: deploy.UpdateStatusRemoved})
+	}
+	if len(results) > 0 {
+		status, err := markBundleUnprepared(options.Dir)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, UpdateResult{Path: filepath.Join(options.Dir, StateFileName), Status: status, Ownership: "state", Reason: "marked installation bundle stale"})
 	}
 	return results, nil
 }
@@ -1115,6 +1154,7 @@ func BundleOptions(options BundleListOptions) ([]BundleOption, error) {
 }
 
 func syncBundleState(dir string, state deploy.DeploymentState) ([]UpdateResult, error) {
+	state.Bundle.PreparedFingerprint = ""
 	stateContent, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return nil, err
@@ -1162,6 +1202,92 @@ func syncBundleState(dir string, state deploy.DeploymentState) ([]UpdateResult, 
 	}
 	results = append(results, UpdateResult{Path: filepath.Join(dir, ManifestFileName), Status: manifestStatus, Ownership: "state", Reason: "recorded generated file hashes"})
 	return results, nil
+}
+
+func bundlePrepared(dir string) (bool, error) {
+	state, err := loadState(dir)
+	if err != nil {
+		return false, err
+	}
+	state, err = withInferredBundleState(dir, state)
+	if err != nil {
+		return false, err
+	}
+	if state.Bundle.PreparedFingerprint == "" || state.Bundle.PreparedFingerprint != bundlePreparedFingerprint(state) {
+		return false, nil
+	}
+	bundleDir, err := deploymentBundleDir(dir)
+	if err != nil {
+		return false, err
+	}
+	return bundleDirHasWheels(bundleDir)
+}
+
+func bundleDirHasWheels(bundleDir string) (bool, error) {
+	entries, err := os.ReadDir(bundleDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".whl") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func markBundlePrepared(dir string) error {
+	state, err := loadState(dir)
+	if err != nil {
+		return err
+	}
+	state, err = withInferredBundleState(dir, state)
+	if err != nil {
+		return err
+	}
+	state.Bundle.PreparedFingerprint = bundlePreparedFingerprint(state)
+	_, err = writeDeploymentStateIfChanged(dir, state)
+	return err
+}
+
+func markBundleUnprepared(dir string) (deploy.UpdateStatus, error) {
+	state, err := loadState(dir)
+	if err != nil {
+		return "", err
+	}
+	state.Bundle.PreparedFingerprint = ""
+	return writeDeploymentStateIfChanged(dir, state)
+}
+
+func writeDeploymentStateIfChanged(dir string, state deploy.DeploymentState) (deploy.UpdateStatus, error) {
+	content, err := marshalState(state)
+	if err != nil {
+		return "", err
+	}
+	return deploy.WriteFileIfChanged(filepath.Join(dir, StateFileName), content, 0o644)
+}
+
+func bundlePreparedFingerprint(state deploy.DeploymentState) string {
+	input := struct {
+		Blueprint             deploy.PackRef               `json:"blueprint"`
+		RequestedBlueprintRef string                       `json:"requested_blueprint_ref,omitempty"`
+		ResolvedArtifact      *deploy.ResolvedPackArtifact `json:"resolved_artifact,omitempty"`
+		Roots                 []deploy.ArtifactRoot        `json:"roots,omitempty"`
+	}{
+		Blueprint:             state.Blueprint,
+		RequestedBlueprintRef: state.RequestedBlueprintRef,
+		ResolvedArtifact:      state.ResolvedArtifact,
+		Roots:                 state.Bundle.Roots,
+	}
+	content, err := json.Marshal(input)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(content)
+	return fmt.Sprintf("%x", sum[:])
 }
 
 func validateBundleRequirementsProjection(dir string, state deploy.DeploymentState) error {

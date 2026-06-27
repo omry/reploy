@@ -13,6 +13,8 @@ type RuntimeOptions struct {
 	Stderr io.Writer
 }
 
+var runRuntimeCommand = runCommand
+
 func Runtime(options RuntimeOptions) error {
 	if options.Dir == "" {
 		options.Dir = DefaultDeploymentDir
@@ -20,11 +22,20 @@ func Runtime(options RuntimeOptions) error {
 	if err := validateRuntimeInputs(options.Dir); err != nil {
 		return err
 	}
+	if runtimeActionNeedsBundle(options.Action) {
+		if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: options.Dir, Stdout: options.Stdout, Stderr: options.Stderr}); err != nil {
+			return fmt.Errorf("prepare installation bundle: %w", err)
+		}
+	}
 	spec, err := RuntimeCommandWithOptions(options.Dir, options.Action, RuntimeCommandOptions{Follow: options.Follow})
 	if err != nil {
 		return err
 	}
-	return runCommand(spec, RunOptions{Stdout: options.Stdout, Stderr: options.Stderr})
+	return runRuntimeCommand(spec, RunOptions{Stdout: options.Stdout, Stderr: options.Stderr})
+}
+
+func runtimeActionNeedsBundle(action string) bool {
+	return action == "up" || action == "restart"
 }
 
 type RuntimeCommandOptions struct {

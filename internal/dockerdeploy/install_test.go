@@ -25,6 +25,7 @@ func TestInstallDryRunPrintsPlan(t *testing.T) {
 	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
 		t.Fatal(err)
 	}
+	markTestBundlePrepared(t, deployDir)
 	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_INSTALL_OWNER": "1000:1000"}); err != nil {
 		t.Fatal(err)
 	}
@@ -146,6 +147,45 @@ func TestInstallRequiresAbsoluteTarget(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--to must be an absolute path") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInstallRequiresCurrentStagingBundle(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	oldGeteuid := installGeteuid
+	oldRunBundleCommand := runBundleCommand
+	t.Cleanup(func() {
+		installGeteuid = oldGeteuid
+		runBundleCommand = oldRunBundleCommand
+	})
+	installGeteuid = func() int { return 0 }
+	runBundleCommand = func(spec CommandSpec, options RunOptions) error {
+		t.Fatalf("install should not build an existing staging bundle: %#v", spec.Args)
+		return nil
+	}
+
+	err = Install(InstallOptions{
+		Dir:    deployDir,
+		Target: filepath.Join(t.TempDir(), "installed"),
+		Start:  false,
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "staging bundle is outdated") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "retest the staging environment") {
+		t.Fatalf("error should tell user to retest staging: %v", err)
 	}
 }
 
@@ -398,6 +438,7 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
 		t.Fatal(err)
 	}
+	markTestBundlePrepared(t, deployDir)
 	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_INSTALL_OWNER": "appuser:appgroup"}); err != nil {
 		t.Fatal(err)
 	}
@@ -717,6 +758,7 @@ func TestDirectInstallAppliesViaTemporaryStaging(t *testing.T) {
 	oldLookPath := installLookPath
 	oldRunCommand := installRunCommand
 	oldRunCommandOutput := installRunCommandOutput
+	oldRunBundleCommand := runBundleCommand
 	oldChown := installChown
 	oldSystemdUnitDir := installSystemdUnitDir
 	t.Cleanup(func() {
@@ -724,6 +766,7 @@ func TestDirectInstallAppliesViaTemporaryStaging(t *testing.T) {
 		installLookPath = oldLookPath
 		installRunCommand = oldRunCommand
 		installRunCommandOutput = oldRunCommandOutput
+		runBundleCommand = oldRunBundleCommand
 		installChown = oldChown
 		installSystemdUnitDir = oldSystemdUnitDir
 	})
@@ -746,6 +789,21 @@ func TestDirectInstallAppliesViaTemporaryStaging(t *testing.T) {
 	}
 	installRunCommand = func(name string, args ...string) error {
 		return nil
+	}
+	runBundleCommand = func(spec CommandSpec, options RunOptions) error {
+		if !containsAdjacent(spec.Args, "--user", defaultContainerUser()) {
+			t.Fatalf("bundle command did not run container as default user: %#v", spec.Args)
+		}
+		switch {
+		case containsInOrder(spec.Args, []string{"wheel", "--no-cache-dir"}):
+			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
+			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+			return nil
+		default:
+			t.Fatalf("unexpected bundle command: %#v", spec.Args)
+			return nil
+		}
 	}
 
 	installedTarget, err := DirectInstall(DirectInstallOptions{
@@ -826,6 +884,7 @@ func TestInstallRunsConfiguredHooksAroundServiceStart(t *testing.T) {
 	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
 		t.Fatal(err)
 	}
+	markTestBundlePrepared(t, deployDir)
 	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_INSTALL_OWNER": "1000:1000"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1517,6 +1576,9 @@ func TestInstallRebuildsLocalSourceBundleInTarget(t *testing.T) {
 	var specs []CommandSpec
 	runBundleCommand = func(spec CommandSpec, options RunOptions) error {
 		specs = append(specs, spec)
+		if !containsAdjacent(spec.Args, "--user", defaultContainerUser()) {
+			t.Fatalf("bundle rebuild did not run container as default user: %#v", spec.Args)
+		}
 		if spec.Dir != target {
 			t.Fatalf("bundle rebuild ran in %q, want target %q", spec.Dir, target)
 		}
@@ -1627,6 +1689,7 @@ docker:
 	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
 		t.Fatal(err)
 	}
+	markTestBundlePrepared(t, deployDir)
 	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_INSTALL_OWNER": "1000:1000"}); err != nil {
 		t.Fatal(err)
 	}

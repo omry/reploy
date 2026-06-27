@@ -108,6 +108,11 @@ func Install(options InstallOptions) error {
 	if err != nil {
 		return err
 	}
+	if !options.DryRun {
+		if err := installRequireCurrentBundle(plan); err != nil {
+			return err
+		}
+	}
 	doctorCode := Doctor(DoctorOptions{Dir: options.Dir, Preinstall: true, Quiet: true, Stdout: options.Stdout})
 	if doctorCode != 0 {
 		return fmt.Errorf("preinstall doctor failed")
@@ -120,6 +125,32 @@ func Install(options InstallOptions) error {
 		return fmt.Errorf("install requires root unless --dry-run is set")
 	}
 	return applyInstallPlan(plan)
+}
+
+func installShouldPrepareSourceBundle(dir string) (bool, error) {
+	sources, err := localBundleSourcesForDir(dir)
+	if err != nil {
+		return false, err
+	}
+	return len(sources) == 0, nil
+}
+
+func installRequireCurrentBundle(plan installPlan) error {
+	prepare, err := installShouldPrepareSourceBundle(plan.SourceDir)
+	if err != nil {
+		return fmt.Errorf("inspect installation bundle: %w", err)
+	}
+	if !prepare {
+		return nil
+	}
+	prepared, err := bundlePrepared(plan.SourceDir)
+	if err != nil {
+		return err
+	}
+	if prepared {
+		return nil
+	}
+	return fmt.Errorf("staging bundle is outdated; run `reploy bundle build`, retest the staging environment, then install again")
 }
 
 func DirectInstall(options DirectInstallOptions) (string, error) {
@@ -141,6 +172,9 @@ func DirectInstall(options DirectInstallOptions) (string, error) {
 		}
 		if _, err := Init(InitOptions{Dir: target, Pack: pack.Ref}); err != nil {
 			return "", err
+		}
+		if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: target, Stdout: options.Stdout}); err != nil {
+			return "", fmt.Errorf("prepare direct install bundle: %w", err)
 		}
 		return target, Install(InstallOptions{
 			Dir:           target,
@@ -168,6 +202,11 @@ func directInstallViaTemporaryStaging(target string, options DirectInstallOption
 	stagingDir := filepath.Join(tempDir, "staging")
 	if _, err := Init(InitOptions{Dir: stagingDir, Pack: options.Pack}); err != nil {
 		return err
+	}
+	if !options.DryRun {
+		if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: stagingDir, Stdout: options.Stdout}); err != nil {
+			return fmt.Errorf("prepare direct install bundle: %w", err)
+		}
 	}
 	return Install(InstallOptions{
 		Dir:           stagingDir,

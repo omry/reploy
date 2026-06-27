@@ -58,6 +58,7 @@ func Update(options UpdateOptions) ([]UpdateResult, error) {
 			return nil, err
 		}
 	}
+	bundle.PreparedFingerprint = ""
 
 	manifest, err := loadManifestOrNew(options.Dir)
 	if err != nil {

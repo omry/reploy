@@ -145,7 +145,7 @@ func WheelFilenameRequirement(filename string) (string, bool) {
 func RejectPersistentSourceRoots(roots []deploy.ArtifactRoot, action string) error {
 	for _, root := range roots {
 		if root.Provider == ProviderName && root.Kind == "source" {
-			return fmt.Errorf("%s does not support persistent source roots: %s; use bundle add-source to build a wheel into the deployment bundle", action, root.Source)
+			return fmt.Errorf("%s does not support persistent source roots: %s; add a package or wheel artifact instead", action, root.Source)
 		}
 	}
 	return nil

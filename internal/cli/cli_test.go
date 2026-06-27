@@ -238,8 +238,11 @@ func TestDockerHelp(t *testing.T) {
 	if strings.Contains(stdout, "Demo health endpoint") || !strings.Contains(stdout, "staging app health endpoint") {
 		t.Fatalf("stdout did not describe generic health probe:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "Bundle:") || !strings.Contains(stdout, "add-source") || !strings.Contains(stdout, "upgrade") {
+	if !strings.Contains(stdout, "Bundle:") || !strings.Contains(stdout, "add") || !strings.Contains(stdout, "upgrade") {
 		t.Fatalf("stdout did not contain bundle command tree:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "add-wheel") || strings.Contains(stdout, "add-source") {
+		t.Fatalf("stdout exposed internal bundle artifact helpers:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "list") || !strings.Contains(stdout, "all") || !strings.Contains(stdout, "list-options") {
 		t.Fatalf("stdout did not contain bundle list commands:\n%s", stdout)
@@ -1382,7 +1385,7 @@ func TestDockerBundleAddAndRemoveAcceptMultipleRoots(t *testing.T) {
 	if strings.Count(stdout, "requirements.txt") != 1 {
 		t.Fatalf("stdout should show one requirements update:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "selected Python packages: demo-imap, demo-smtp (dependencies included by bundle build)") {
+	if !strings.Contains(stdout, "selected Python packages: demo-imap, demo-smtp (dependencies included when the bundle is prepared)") {
 		t.Fatalf("stdout missing selected package summary:\n%s", stdout)
 	}
 	requirements, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.RequirementsFileName))
@@ -1400,7 +1403,7 @@ func TestDockerBundleAddAndRemoveAcceptMultipleRoots(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("second bundle add failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "already selected Python packages: demo-imap, demo-smtp (dependencies included by bundle build)") {
+	if !strings.Contains(stdout, "already selected Python packages: demo-imap, demo-smtp (dependencies included when the bundle is prepared)") {
 		t.Fatalf("stdout missing already-selected package summary:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "up_to_date") {
@@ -1587,7 +1590,23 @@ func TestDockerBundleListOptions(t *testing.T) {
 	}
 }
 
-func TestDockerBundleAddWheel(t *testing.T) {
+func TestDockerBundleArtifactHelpersAreNotPublicSurface(t *testing.T) {
+	for _, command := range []string{"add-wheel", "add-source"} {
+		code, stdout, stderr := runCLI("bundle", command, "foo")
+		if code != 2 {
+			t.Fatalf("%s exit code = %d, want 2\nstdout:\n%s\nstderr:\n%s", command, code, stdout, stderr)
+		}
+		if stdout != "" {
+			t.Fatalf("%s stdout = %q, want empty", command, stdout)
+		}
+		if !strings.Contains(stderr, "unknown bundle command: "+command) {
+			t.Fatalf("%s stderr missing unknown command:\n%s", command, stderr)
+		}
+		if strings.Contains(stderr, "state.json") || strings.Contains(stderr, "reploy-staging") {
+			t.Fatalf("%s stderr should reject helper before resolving staging:\n%s", command, stderr)
+		}
+	}
+
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
@@ -1600,14 +1619,25 @@ func TestDockerBundleAddWheel(t *testing.T) {
 	}
 
 	code, stdout, stderr = runCLI("bundle", "add-wheel", wheel, "--dir", deployDir)
-	if code != 0 {
-		t.Fatalf("bundle add-wheel failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "updated "+filepath.Join(deployDir, dockerdeploy.BundleDirName, filepath.Base(wheel))) {
-		t.Fatalf("stdout missing wheel update:\n%s", stdout)
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
 	}
-	if stderr != "" {
-		t.Fatalf("stderr = %q, want empty", stderr)
+	if !strings.Contains(stderr, "unknown bundle command: add-wheel") {
+		t.Fatalf("stderr missing unknown command:\n%s", stderr)
+	}
+
+	code, stdout, stderr = runCLI("bundle", "add-source", filepath.Dir(wheel), "--dir", deployDir)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "unknown bundle command: add-source") {
+		t.Fatalf("stderr missing unknown command:\n%s", stderr)
 	}
 }
 
@@ -1685,6 +1715,9 @@ func TestDockerBundleWithoutCommandShowsSubcommands(t *testing.T) {
 		!strings.Contains(stderr, "list-options") {
 		t.Fatalf("stderr missing bundle subcommands:\n%s", stderr)
 	}
+	if strings.Contains(stderr, "add-wheel") || strings.Contains(stderr, "add-source") {
+		t.Fatalf("stderr exposed internal artifact helpers:\n%s", stderr)
+	}
 }
 
 func TestDockerBundleHelpShowsSubcommands(t *testing.T) {
@@ -1697,6 +1730,9 @@ func TestDockerBundleHelpShowsSubcommands(t *testing.T) {
 		!strings.Contains(stdout, "clean") ||
 		!strings.Contains(stdout, "--verbose") {
 		t.Fatalf("stdout missing bundle help:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "add-wheel") || strings.Contains(stdout, "add-source") {
+		t.Fatalf("stdout exposed internal artifact helpers:\n%s", stdout)
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)

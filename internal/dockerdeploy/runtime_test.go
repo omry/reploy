@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/omry/reploy/internal/deploy"
@@ -54,6 +55,66 @@ func TestRuntimeCommandCanFollowLogs(t *testing.T) {
 	suffix := []string{"logs", "--timestamps", "-f"}
 	if !reflect.DeepEqual(spec.Args[len(spec.Args)-len(suffix):], suffix) {
 		t.Fatalf("suffix = %#v, want %#v", spec.Args[len(spec.Args)-len(suffix):], suffix)
+	}
+}
+
+func TestRuntimeUpAutomaticallyPreparesBundle(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: dir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	commands := []string{}
+	restoreBundle := stubSuccessfulBundlePrepare(t, &commands)
+	defer restoreBundle()
+	restoreRuntime := stubRuntimeRunner(func(spec CommandSpec, options RunOptions) error {
+		commands = append(commands, strings.Join(spec.Args[len(spec.Args)-2:], " "))
+		return nil
+	})
+	defer restoreRuntime()
+
+	if err := Runtime(RuntimeOptions{Dir: dir, Action: "up"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"build", "check", "up -d"}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestRuntimeStatusDoesNotPrepareBundle(t *testing.T) {
+	dir, _ := makeRuntimeDeployment(t)
+	commands := []string{}
+	restoreBundle := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
+		commands = append(commands, "bundle")
+		return nil
+	})
+	defer restoreBundle()
+	restoreRuntime := stubRuntimeRunner(func(spec CommandSpec, options RunOptions) error {
+		commands = append(commands, spec.Args[len(spec.Args)-1])
+		return nil
+	})
+	defer restoreRuntime()
+
+	if err := Runtime(RuntimeOptions{Dir: dir, Action: "status"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"ps"}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}
+
+func stubRuntimeRunner(run func(CommandSpec, RunOptions) error) func() {
+	previous := runRuntimeCommand
+	runRuntimeCommand = run
+	return func() {
+		runRuntimeCommand = previous
 	}
 }
 
