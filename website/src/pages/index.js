@@ -50,7 +50,7 @@ function HomepageHeader() {
           </div>
           <pre>
             <code>{`curl -fsSL https://reploy.yadan.net/install.sh | sh
-reploy init --blueprint <app-blueprint-ref>
+reploy init <app-blueprint-ref>
 reploy bundle build
 reploy up
 reploy test`}</code>

@@ -15,7 +15,7 @@ func TestLoadPackFromPinnedPyPIWheel(t *testing.T) {
 	wheel := testPackWheel(t, "demo_pkg/reploy")
 	indexURL := testPyPIIndex(t, wheel, "1.2.3")
 	t.Setenv("REPLOY_CACHE_DIR", filepath.Join(t.TempDir(), "cache"))
-	ref, err := ParsePackRef("pypi:demo-pkg==1.2.3//demo_pkg/reploy?index-url=" + indexURL)
+	ref, err := ParsePackRef("pypi:demo-pkg==1.2.3#demo_pkg/reploy?index-url=" + indexURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestLoadPackFromPinnedPyPIWheel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pack.Ref.Raw != "pypi:demo-pkg==1.2.3//demo_pkg/reploy" {
+	if pack.Ref.Raw != "pypi:demo-pkg==1.2.3#demo_pkg/reploy" {
 		t.Fatalf("resolved ref = %q", pack.Ref.Raw)
 	}
 	if pack.RequestedRef.Raw != ref.Raw {
@@ -48,7 +48,7 @@ func TestLoadPackFromLatestPyPIWheelResolvesExactVersion(t *testing.T) {
 	wheel := testPackWheel(t, "demo_pkg/reploy")
 	indexURL := testPyPIIndex(t, wheel, "2.0.0")
 	t.Setenv("REPLOY_CACHE_DIR", filepath.Join(t.TempDir(), "cache"))
-	ref, err := ParsePackRef("pypi:demo-pkg//demo_pkg/reploy?index-url=" + indexURL)
+	ref, err := ParsePackRef("pypi:demo-pkg#demo_pkg/reploy?index-url=" + indexURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestLoadPackFromLatestPyPIWheelResolvesExactVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pack.Ref.Raw != "pypi:demo-pkg==2.0.0//demo_pkg/reploy" {
+	if pack.Ref.Raw != "pypi:demo-pkg==2.0.0#demo_pkg/reploy" {
 		t.Fatalf("resolved ref = %q", pack.Ref.Raw)
 	}
 	if !pack.Ref.IsPinned {
@@ -75,7 +75,7 @@ func TestLoadPackFromSimplePyPIWheelWithoutPackFiles(t *testing.T) {
 	})
 	indexURL := testPyPIIndex(t, wheel, "2.1.0")
 	t.Setenv("REPLOY_CACHE_DIR", filepath.Join(t.TempDir(), "cache"))
-	ref, err := ParsePackRef("pypi:demo-pkg//" + subdir + "?index-url=" + indexURL)
+	ref, err := ParsePackRef("pypi:demo-pkg#" + subdir + "?index-url=" + indexURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestLoadPackFromPyPIWheelReportsMissingBlueprintPathWithResolvedVersion(t *
 	})
 	indexURL := testPyPIIndex(t, wheel, "2.2.0")
 	t.Setenv("REPLOY_CACHE_DIR", filepath.Join(t.TempDir(), "cache"))
-	ref, err := ParsePackRef("pypi:demo-pkg//demo_pkg/reploy?index-url=" + indexURL)
+	ref, err := ParsePackRef("pypi:demo-pkg#demo_pkg/reploy?index-url=" + indexURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestLoadResolvedPackUsesCachedBlueprintPath(t *testing.T) {
 	wheel := testPackWheel(t, "demo_pkg/reploy")
 	indexURL := testPyPIIndex(t, wheel, "3.0.0")
 	t.Setenv("REPLOY_CACHE_DIR", filepath.Join(t.TempDir(), "cache"))
-	ref, err := ParsePackRef("pypi:demo-pkg//demo_pkg/reploy?index-url=" + indexURL)
+	ref, err := ParsePackRef("pypi:demo-pkg#demo_pkg/reploy?index-url=" + indexURL)
 	if err != nil {
 		t.Fatal(err)
 	}

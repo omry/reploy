@@ -626,10 +626,10 @@ docker:
 `)
 	pack := deploy.AppPack{
 		Ref: deploy.PackRef{
-			Raw:    "pypi:demo-pkg==1.2.3//demo/reploy",
+			Raw:    "pypi:demo-pkg==1.2.3#demo/reploy",
 			Scheme: "pypi",
 		},
-		RequestedRef: deploy.PackRef{Raw: "pypi:demo-pkg//demo/reploy"},
+		RequestedRef: deploy.PackRef{Raw: "pypi:demo-pkg#demo/reploy"},
 		ResolvedArtifact: &deploy.ResolvedPackArtifact{
 			Package: "demo-pkg",
 			Version: "1.2.3",

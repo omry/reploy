@@ -27,7 +27,7 @@ Start with the app author's blueprint ref:
 
 ```bash
 curl -fsSL https://reploy.yadan.net/install.sh | sh
-reploy init --blueprint <app-blueprint-ref>
+reploy init <app-blueprint-ref>
 reploy bundle build
 reploy up
 reploy test

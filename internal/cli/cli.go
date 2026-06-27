@@ -92,16 +92,12 @@ func runPackIndex(commandName string, args []string, stdout io.Writer, stderr io
 			printPackIndexShortUsage(commandName, stderr)
 			return 2
 		}
-		index, cachePath, err := refreshPackIndex(options.URL)
+		_, _, err = refreshPackIndex(options.URL)
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy %s update error: %v\n", commandName, err)
 			return 1
 		}
-		if cachePath == "" {
-			fmt.Fprintf(stdout, "loaded blueprint index from %s (%d shorthands)\n", options.URL, len(index.Blueprints))
-		} else {
-			fmt.Fprintf(stdout, "cached blueprint index from %s at %s (%d shorthands)\n", options.URL, cachePath, len(index.Blueprints))
-		}
+		fmt.Fprintln(stdout, "updated blueprint index")
 		return 0
 	case "search":
 		query, err := parsePackIndexQuery(args[1:])
@@ -1434,20 +1430,6 @@ func parseDockerCommandOptions(args []string, requirePack bool) (dockerCommandOp
 			}
 			options.Dir = value
 			options.DirExplicit = true
-		case "--blueprint":
-			if packSet {
-				return dockerCommandOptions{}, fmt.Errorf("--blueprint may only be provided once")
-			}
-			value, ok := optionValue(args, &index)
-			if !ok {
-				return dockerCommandOptions{}, fmt.Errorf("%s requires a value", arg)
-			}
-			ref, err := parsePackRefArgument(value)
-			if err != nil {
-				return dockerCommandOptions{}, err
-			}
-			options.Pack = ref
-			packSet = true
 		case "--requirement":
 			value, ok := optionValue(args, &index)
 			if !ok {
@@ -1460,21 +1442,20 @@ func parseDockerCommandOptions(args []string, requirePack bool) (dockerCommandOp
 				options.DirExplicit = true
 				continue
 			}
-			if strings.HasPrefix(arg, "--blueprint=") {
+			if strings.HasPrefix(arg, "--requirement=") {
+				options.Requirements = append(options.Requirements, strings.TrimPrefix(arg, "--requirement="))
+				continue
+			}
+			if requirePack && !strings.HasPrefix(arg, "-") {
 				if packSet {
-					return dockerCommandOptions{}, fmt.Errorf("--blueprint may only be provided once")
+					return dockerCommandOptions{}, fmt.Errorf("APP_REF may only be provided once")
 				}
-				_, value, _ := strings.Cut(arg, "=")
-				ref, err := parsePackRefArgument(value)
+				ref, err := parsePackRefArgument(arg)
 				if err != nil {
 					return dockerCommandOptions{}, err
 				}
 				options.Pack = ref
 				packSet = true
-				continue
-			}
-			if strings.HasPrefix(arg, "--requirement=") {
-				options.Requirements = append(options.Requirements, strings.TrimPrefix(arg, "--requirement="))
 				continue
 			}
 			return dockerCommandOptions{}, fmt.Errorf("unknown option: %s", arg)
@@ -1495,7 +1476,7 @@ func parseDockerCommandOptions(args []string, requirePack bool) (dockerCommandOp
 		}
 	}
 	if requirePack && options.Pack.Raw == "" {
-		return dockerCommandOptions{}, fmt.Errorf("--blueprint is required; use a blueprint shorthand from the Reploy blueprint index or an explicit ref such as file:PATH or pypi:PACKAGE")
+		return dockerCommandOptions{}, fmt.Errorf("APP_REF is required; use a blueprint shorthand from the Reploy blueprint index or an explicit ref such as file:PATH or pypi:PACKAGE")
 	}
 	return options, nil
 }
@@ -1545,7 +1526,6 @@ func parsePackRefArgument(value string) (deploy.PackRef, error) {
 		}
 		expanded = indexExpanded
 	}
-	expanded = normalizePackRefPathSyntax(expanded)
 	ref, err := deploy.ParsePackRef(expanded)
 	if err != nil {
 		return deploy.PackRef{}, err
@@ -1554,22 +1534,6 @@ func parsePackRefArgument(value string) (deploy.PackRef, error) {
 		ref.Raw = original
 	}
 	return ref, nil
-}
-
-func normalizePackRefPathSyntax(value string) string {
-	if !strings.HasPrefix(value, "pypi:") {
-		return value
-	}
-	body, query, hasQuery := strings.Cut(value, "?")
-	source, path, hasPath := strings.Cut(body, "#")
-	if !hasPath {
-		return value
-	}
-	normalized := source + "//" + strings.TrimPrefix(path, "/")
-	if hasQuery {
-		normalized += "?" + query
-	}
-	return normalized
 }
 
 func hasPackRefScheme(value string) bool {
@@ -1774,8 +1738,15 @@ func startSpinner(output io.Writer, label string) func(bool) {
 }
 
 func printShortUsage(output io.Writer) {
+	fmt.Fprintf(output, "reploy %s\n\n", reploy.Version)
 	fmt.Fprintln(output, "Usage: reploy COMMAND")
-	fmt.Fprintln(output, "Run 'reploy --help' for help.")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Next steps:")
+	fmt.Fprintln(output, "  reploy init APP_REF")
+	fmt.Fprintln(output, "  reploy install APP_REF")
+	fmt.Fprintln(output, "  reploy index search QUERY")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Run 'reploy --help' for all commands.")
 }
 
 func printHelp(output io.Writer) {
@@ -1818,12 +1789,13 @@ Target options:
   --docker     Use the Docker deployment target, default
   --aws        Reserved for a future AWS deployment target
 
-Staging options:
-  --dir DIR    Staging directory, default current staging dir or reploy-staging
-  --blueprint REF
-              App blueprint reference, required for init
+App refs:
+  APP_REF     App blueprint reference for init.
               Use an indexed shorthand, file:PATH, or pypi:PACKAGE.
               Add ==VERSION to an indexed shorthand to pin a release.
+
+Staging options:
+  --dir DIR    Staging directory, default current staging dir or reploy-staging
   --requirement REQ
               Exact package pin or absolute container path for requirements.txt
   --name NAME  Bundle option name for bundle add; accepts comma-separated names
@@ -1866,6 +1838,12 @@ Options:
 
 func printPackIndexShortUsage(commandName string, output io.Writer) {
 	fmt.Fprintf(output, "Usage: reploy %s COMMAND\n", commandName)
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Next steps:")
+	fmt.Fprintf(output, "  reploy %s update\n", commandName)
+	fmt.Fprintf(output, "  reploy %s search QUERY\n", commandName)
+	fmt.Fprintf(output, "  reploy %s show NAME\n", commandName)
+	fmt.Fprintln(output)
 	fmt.Fprintf(output, "Run 'reploy %s --help' for blueprint index help.\n", commandName)
 }
 
@@ -2000,12 +1978,13 @@ Bundle:
   clean        Remove built installation artifacts
   upgrade      Upgrade package roots and rebuild installation bundle artifacts
 
-Options:
-  --dir DIR    Staging directory, default current staging dir or reploy-staging
-  --blueprint REF
-              App blueprint reference, required for init
+App refs:
+  APP_REF     App blueprint reference for init.
               Use an indexed shorthand, file:PATH, or pypi:PACKAGE.
               Add ==VERSION to an indexed shorthand to pin a release.
+
+Options:
+  --dir DIR    Staging directory, default current staging dir or reploy-staging
   --requirement REQ
               Exact package pin or absolute container path for requirements.txt
   --name NAME  Bundle option name for bundle add; accepts comma-separated names
@@ -2045,11 +2024,31 @@ Options:
 
 func printDockerCommandHelp(command string, output io.Writer) {
 	switch command {
+	case "init":
+		printDockerInitHelp(output)
 	case "update":
 		printDockerUpdateHelp(output)
 	default:
 		printDockerHelp(output)
 	}
+}
+
+func printDockerInitHelp(output io.Writer) {
+	fmt.Fprint(output, strings.TrimLeft(`
+Usage: reploy [--docker] init APP_REF [OPTIONS]
+
+Create a staging directory from an app blueprint reference.
+
+APP_REF:
+  Use an indexed shorthand, file:PATH, or pypi:PACKAGE.
+  Add ==VERSION to an indexed shorthand to pin a release.
+
+Options:
+  --dir DIR    Staging directory to create, default reploy-staging
+  --requirement REQ
+              Exact package pin or absolute container path for requirements.txt
+  -h, --help   Show init help
+`, "\n"))
 }
 
 func printDockerUpdateHelp(output io.Writer) {
@@ -2060,10 +2059,6 @@ Update generated files in a staging directory.
 
 Options:
   --dir DIR    Staging directory to update, default current staging dir or reploy-staging
-  --blueprint REF
-              App blueprint reference to update from; defaults to saved state
-              Use an indexed shorthand, file:PATH, or pypi:PACKAGE.
-              Add ==VERSION to an indexed shorthand to pin a release.
   --force      Overwrite locally edited generated files
   -h, --help   Show update help
 `, "\n"))

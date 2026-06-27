@@ -44,7 +44,7 @@ staging.
 files there.
 
 ```bash
-reploy init --blueprint <app-blueprint-ref>
+reploy init <app-blueprint-ref>
 ```
 
 From this point on, commands run against `reploy-staging/` by default:

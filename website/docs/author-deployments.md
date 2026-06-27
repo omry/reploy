@@ -120,7 +120,7 @@ For a working reference, see the fixture under
 Blueprint refs can be local files while developing:
 
 ```bash
-reploy init --blueprint file:./example.blueprint.yaml
+reploy init file:./example.blueprint.yaml
 reploy install file:./example.blueprint.yaml --dry-run
 ```
 
@@ -128,7 +128,7 @@ For users, publish the blueprint inside the app package and give them the
 package ref:
 
 ```bash
-reploy init --blueprint pypi:example-app
+reploy init pypi:example-app
 reploy install pypi:example-app
 ```
 
@@ -136,6 +136,6 @@ If the blueprint is not stored in the package's conventional `example_app/reploy
 path, include the explicit path:
 
 ```bash
-reploy init --blueprint pypi:example-app//custom/path
+reploy init pypi:example-app#custom/path
 reploy install pypi:example-app#custom/path
 ```

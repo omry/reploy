@@ -15,40 +15,8 @@ func TestParseFilePackRef(t *testing.T) {
 	}
 }
 
-func TestParseGitPackRefWithHTTPSAndSubdir(t *testing.T) {
-	ref, err := ParsePackRef("git:https://github.com/omry/reploy.git//deploy/demo.blueprint.yaml?ref=v1.2.3")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ref.Scheme != "git" {
-		t.Fatalf("scheme = %q", ref.Scheme)
-	}
-	if ref.Source != "https://github.com/omry/reploy.git" {
-		t.Fatalf("source = %q", ref.Source)
-	}
-	if ref.Subdir != "deploy/demo.blueprint.yaml" {
-		t.Fatalf("subdir = %q", ref.Subdir)
-	}
-	if ref.Query.Get("ref") != "v1.2.3" {
-		t.Fatalf("ref query = %q", ref.Query.Get("ref"))
-	}
-	if !ref.IsPinned {
-		t.Fatalf("git ref with ref query should be pinned")
-	}
-}
-
-func TestParseSaplingPackRefWithRevision(t *testing.T) {
-	ref, err := ParsePackRef("sl:https://github.com/omry/reploy.git//deploy/demo.blueprint.yaml?rev=abc123")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ref.Scheme != "sl" || ref.Query.Get("rev") != "abc123" || !ref.IsPinned {
-		t.Fatalf("unexpected ref: %#v", ref)
-	}
-}
-
 func TestParsePyPIPackRefWithExplicitSubdir(t *testing.T) {
-	ref, err := ParsePackRef("pypi:demo-suite==0.1.0//demo_suite/reploy")
+	ref, err := ParsePackRef("pypi:demo-suite==0.1.0#demo_suite/reploy")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +32,7 @@ func TestParsePyPIPackRefWithExplicitSubdir(t *testing.T) {
 }
 
 func TestParsePyPIPackRefAllowsLatestWithExplicitSubdir(t *testing.T) {
-	ref, err := ParsePackRef("pypi:demo-suite//demo_suite/reploy")
+	ref, err := ParsePackRef("pypi:demo-suite#demo_suite/reploy")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,9 +79,18 @@ func TestParsePyPIPackRefDefaultsSubdirForLatest(t *testing.T) {
 	}
 }
 
-func TestParsePackRefRejectsUnsupportedScheme(t *testing.T) {
-	_, err := ParsePackRef("oci:example")
+func TestParsePyPIPackRefRejectsDoubleSlashSubdir(t *testing.T) {
+	_, err := ParsePackRef("pypi:demo-suite//demo_suite/reploy")
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestParsePackRefRejectsUnsupportedScheme(t *testing.T) {
+	for _, ref := range []string{"oci:example", "git:https://github.com/omry/reploy.git", "sl:https://github.com/omry/reploy"} {
+		_, err := ParsePackRef(ref)
+		if err == nil {
+			t.Fatalf("expected error for %s", ref)
+		}
 	}
 }

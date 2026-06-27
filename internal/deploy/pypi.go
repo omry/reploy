@@ -70,7 +70,7 @@ func loadPyPIPack(ref PackRef) (AppPack, error) {
 	}
 	resolvedRef := ref
 	resolvedRef.Source = packageName + "==" + version
-	resolvedRef.Raw = "pypi:" + resolvedRef.Source + "//" + ref.Subdir
+	resolvedRef.Raw = "pypi:" + resolvedRef.Source + "#" + ref.Subdir
 	resolvedRef.IsPinned = true
 	resolvedRef.Query = nil
 

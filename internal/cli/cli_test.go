@@ -81,9 +81,32 @@ func TestVersion(t *testing.T) {
 	}
 }
 
+func TestNoArgsShowsVersionAndNextSteps(t *testing.T) {
+	code, stdout, stderr := runCLI()
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	for _, want := range []string{
+		"reploy " + reploy.Version,
+		"Usage: reploy COMMAND",
+		"Next steps:",
+		"reploy init APP_REF",
+		"reploy install APP_REF",
+		"reploy index search QUERY",
+		"Run 'reploy --help' for all commands.",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr)
+		}
+	}
+}
+
 func TestPackIndexRefreshLoadsFileIndex(t *testing.T) {
 	indexPath := filepath.Join(t.TempDir(), "reploy-blueprint-index.json")
-	if err := os.WriteFile(indexPath, []byte(`{"schema_version":1,"blueprints":{"demo":{"ref":"pypi:demo-pkg//demo_pkg/reploy","versioned_ref":"pypi:demo-pkg=={version}//demo_pkg/reploy"}}}`), 0o644); err != nil {
+	if err := os.WriteFile(indexPath, []byte(`{"schema_version":1,"blueprints":{"demo":{"ref":"pypi:demo-pkg#demo_pkg/reploy","versioned_ref":"pypi:demo-pkg=={version}#demo_pkg/reploy"}}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -91,8 +114,11 @@ func TestPackIndexRefreshLoadsFileIndex(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "loaded blueprint index from file:"+indexPath) || !strings.Contains(stdout, "1 shorthands") {
-		t.Fatalf("stdout did not describe file index load:\n%s", stdout)
+	if stdout != "updated blueprint index\n" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if strings.Contains(stdout, indexPath) || strings.Contains(stdout, "shorthands") {
+		t.Fatalf("stdout leaked cache details:\n%s", stdout)
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
@@ -112,9 +138,32 @@ func TestRemovedBlueprintIndexAliasIsUnknown(t *testing.T) {
 	}
 }
 
+func TestPackIndexNoArgsShowsNextSteps(t *testing.T) {
+	code, stdout, stderr := runCLI("index")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	for _, want := range []string{
+		"reploy index usage error: expected command",
+		"Usage: reploy index COMMAND",
+		"Next steps:",
+		"reploy index update",
+		"reploy index search QUERY",
+		"reploy index show NAME",
+		"Run 'reploy index --help' for blueprint index help.",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr)
+		}
+	}
+}
+
 func TestPackIndexSearchAndShow(t *testing.T) {
 	indexPath := filepath.Join(t.TempDir(), "reploy-blueprint-index.json")
-	if err := os.WriteFile(indexPath, []byte(`{"schema_version":1,"blueprints":{"arbiter-server":{"ref":"pypi:arbiter-server","versioned_ref":"pypi:arbiter-server=={version}"},"demo":{"ref":"pypi:demo-pkg//demo_pkg/reploy"}}}`), 0o644); err != nil {
+	if err := os.WriteFile(indexPath, []byte(`{"schema_version":1,"blueprints":{"arbiter-server":{"ref":"pypi:arbiter-server","versioned_ref":"pypi:arbiter-server=={version}"},"demo":{"ref":"pypi:demo-pkg#demo_pkg/reploy"}}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(packIndexURLEnv, "file:"+indexPath)
@@ -145,7 +194,7 @@ func TestPackIndexSearchAndShow(t *testing.T) {
 }
 
 func TestPackIndexRefreshDownloadsAndCachesHTTPIndex(t *testing.T) {
-	indexContent := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi:demo-pkg//demo_pkg/reploy","versioned_ref":"pypi:demo-pkg=={version}//demo_pkg/reploy"}}}`
+	indexContent := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi:demo-pkg#demo_pkg/reploy","versioned_ref":"pypi:demo-pkg=={version}#demo_pkg/reploy"}}}`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, indexContent)
@@ -158,8 +207,11 @@ func TestPackIndexRefreshDownloadsAndCachesHTTPIndex(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "cached blueprint index from "+server.URL+"/index.json") || !strings.Contains(stdout, "1 shorthands") {
-		t.Fatalf("stdout did not describe cached index:\n%s", stdout)
+	if stdout != "updated blueprint index\n" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if strings.Contains(stdout, server.URL) || strings.Contains(stdout, "shorthands") {
+		t.Fatalf("stdout leaked cache details:\n%s", stdout)
 	}
 	if _, err := os.Stat(packIndexCachePath(server.URL + "/index.json")); err != nil {
 		t.Fatalf("missing cached index: %v", err)
@@ -287,7 +339,7 @@ func TestAppShowsAppIDAndPackSubcommands(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -309,7 +361,7 @@ func TestAppUsesCurrentDeploymentDirByDefault(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -332,7 +384,7 @@ func TestAppUsesCurrentDeploymentDirByDefault(t *testing.T) {
 func TestStagingCommandsRejectInstalledDeploymentDir(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -368,7 +420,7 @@ func TestStagingCommandsRejectInstalledDeploymentDir(t *testing.T) {
 func TestAppListIsNotSpecial(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -389,7 +441,7 @@ func TestAppCommandSuggestsForwardedFlagTypo(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	workDir := t.TempDir()
 	t.Chdir(workDir)
-	code, stdout, stderr := runCLI("init", "--blueprint", "file:"+packDir)
+	code, stdout, stderr := runCLI("init", "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -430,7 +482,7 @@ func TestDockerUpdateHelp(t *testing.T) {
 	if !strings.Contains(stdout, "--dir DIR") || !strings.Contains(stdout, "Staging directory to update, default current staging dir or reploy-staging") {
 		t.Fatalf("stdout did not describe update directory option:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "--force") || !strings.Contains(stdout, "--blueprint REF") {
+	if !strings.Contains(stdout, "--force") || strings.Contains(stdout, "--blueprint") {
 		t.Fatalf("stdout did not describe update options:\n%s", stdout)
 	}
 	if stderr != "" {
@@ -683,7 +735,7 @@ func TestDockerInitWritesDeployment(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -706,7 +758,7 @@ func TestDockerInitUsesDefaultDeploymentDir(t *testing.T) {
 	workDir := t.TempDir()
 	t.Chdir(workDir)
 
-	code, stdout, stderr := runCLI("init", "--blueprint", "file:"+packDir)
+	code, stdout, stderr := runCLI("init", "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -730,12 +782,12 @@ func TestDockerInitExistingDefaultDeploymentSuggestsUpdate(t *testing.T) {
 	workDir := t.TempDir()
 	t.Chdir(workDir)
 
-	code, stdout, stderr := runCLI("init", "--blueprint", "file:"+packDir)
+	code, stdout, stderr := runCLI("init", "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("initial init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
-	code, stdout, stderr = runCLI("init", "--blueprint", "file:"+packDir)
+	code, stdout, stderr = runCLI("init", "file:"+packDir)
 	if code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
@@ -758,13 +810,13 @@ func TestDockerInitRequiresPack(t *testing.T) {
 	if stdout != "" {
 		t.Fatalf("stdout = %q, want empty", stdout)
 	}
-	if !strings.Contains(stderr, "--blueprint is required") {
+	if !strings.Contains(stderr, "APP_REF is required") {
 		t.Fatalf("stderr did not contain required blueprint message:\n%s", stderr)
 	}
 }
 
 func TestDockerInitValidatesPack(t *testing.T) {
-	code, stdout, stderr := runCLI("init", "--blueprint", "oci:example")
+	code, stdout, stderr := runCLI("init", "oci:example")
 	if code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
@@ -776,6 +828,19 @@ func TestDockerInitValidatesPack(t *testing.T) {
 	}
 }
 
+func TestDockerInitRejectsRemovedBlueprintFlag(t *testing.T) {
+	code, stdout, stderr := runCLI("init", "--blueprint", "demo-suite")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "unknown option: --blueprint") {
+		t.Fatalf("stderr did not reject removed --blueprint flag:\n%s", stderr)
+	}
+}
+
 func TestDockerInitAcceptsExplicitRequirements(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
@@ -784,7 +849,6 @@ func TestDockerInitAcceptsExplicitRequirements(t *testing.T) {
 		"init",
 		"--dir",
 		deployDir,
-		"--blueprint",
 		"file:"+packDir,
 		"--requirement",
 		"demo-server==1.2.3",
@@ -803,7 +867,7 @@ func TestDockerInitAcceptsExplicitRequirements(t *testing.T) {
 }
 
 func TestParseDockerCommandOptionsAcceptsExplicitPyPIPackageRef(t *testing.T) {
-	options, err := parseDockerCommandOptions([]string{"--blueprint", "pypi:demo-suite==1.2.3"}, true)
+	options, err := parseDockerCommandOptions([]string{"pypi:demo-suite==1.2.3"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -842,7 +906,7 @@ func TestParseDockerCommandOptionsRejectsRemovedFCDOption(t *testing.T) {
 func TestParseDockerCommandOptionsExpandsDemoSuitePackAlias(t *testing.T) {
 	setCLITestPackIndex(t)
 
-	options, err := parseDockerCommandOptions([]string{"--blueprint", "demo-suite"}, true)
+	options, err := parseDockerCommandOptions([]string{"demo-suite"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -866,7 +930,7 @@ func TestParseDockerCommandOptionsExpandsDemoSuitePackAlias(t *testing.T) {
 func TestParseDockerCommandOptionsExpandsPinnedDemoSuitePackAlias(t *testing.T) {
 	setCLITestPackIndex(t)
 
-	options, err := parseDockerCommandOptions([]string{"--blueprint=demo-suite==1.2.3"}, true)
+	options, err := parseDockerCommandOptions([]string{"demo-suite==1.2.3"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -887,7 +951,7 @@ func TestParseDockerCommandOptionsExpandsPinnedDemoSuitePackAlias(t *testing.T) 
 func TestParseDockerCommandOptionsExpandsDemoServerPackAlias(t *testing.T) {
 	setCLITestPackIndex(t)
 
-	options, err := parseDockerCommandOptions([]string{"--blueprint", "demo-server"}, true)
+	options, err := parseDockerCommandOptions([]string{"demo-server"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -911,7 +975,7 @@ func TestParseDockerCommandOptionsExpandsDemoServerPackAlias(t *testing.T) {
 func TestParseDockerCommandOptionsExpandsPinnedDemoServerPackAlias(t *testing.T) {
 	setCLITestPackIndex(t)
 
-	options, err := parseDockerCommandOptions([]string{"--blueprint=demo-server==1.2.3"}, true)
+	options, err := parseDockerCommandOptions([]string{"demo-server==1.2.3"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -932,7 +996,7 @@ func TestParseDockerCommandOptionsExpandsPinnedDemoServerPackAlias(t *testing.T)
 func TestParseDockerCommandOptionsPreservesDemoSuitePackAliasQuery(t *testing.T) {
 	setCLITestPackIndex(t)
 
-	options, err := parseDockerCommandOptions([]string{"--blueprint", "demo-suite?index-url=http://example.test"}, true)
+	options, err := parseDockerCommandOptions([]string{"demo-suite?index-url=http://example.test"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -947,17 +1011,17 @@ func TestParseDockerCommandOptionsPreservesDemoSuitePackAliasQuery(t *testing.T)
 func TestParseDockerCommandOptionsRejectsDuplicatePack(t *testing.T) {
 	setCLITestPackIndex(t)
 
-	_, err := parseDockerCommandOptions([]string{"--blueprint", "demo-suite", "--blueprint", "file:deploy/demo.blueprint.yaml"}, true)
+	_, err := parseDockerCommandOptions([]string{"demo-suite", "file:deploy/demo.blueprint.yaml"}, true)
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "--blueprint may only be provided once") {
+	if !strings.Contains(err.Error(), "APP_REF may only be provided once") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestParseDockerCommandOptionsLoadsPackIndexFromHTTPAndCache(t *testing.T) {
-	indexContent := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi:demo-pkg//demo_pkg/reploy","versioned_ref":"pypi:demo-pkg=={version}//demo_pkg/reploy"}}}`
+	indexContent := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi:demo-pkg#demo_pkg/reploy","versioned_ref":"pypi:demo-pkg=={version}#demo_pkg/reploy"}}}`
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
@@ -968,7 +1032,7 @@ func TestParseDockerCommandOptionsLoadsPackIndexFromHTTPAndCache(t *testing.T) {
 	t.Setenv("REPLOY_CACHE_DIR", cacheDir)
 	t.Setenv(packIndexURLEnv, server.URL+"/index.json")
 
-	options, err := parseDockerCommandOptions([]string{"--blueprint", "demo==1.2.3"}, true)
+	options, err := parseDockerCommandOptions([]string{"demo==1.2.3"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -977,7 +1041,7 @@ func TestParseDockerCommandOptionsLoadsPackIndexFromHTTPAndCache(t *testing.T) {
 	}
 	server.Close()
 
-	options, err = parseDockerCommandOptions([]string{"--blueprint", "demo"}, true)
+	options, err = parseDockerCommandOptions([]string{"demo"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -991,13 +1055,13 @@ func TestParseDockerCommandOptionsLoadsPackIndexFromHTTPAndCache(t *testing.T) {
 
 func TestParseDockerCommandOptionsRequiresVersionPlaceholderForPinnedShorthand(t *testing.T) {
 	indexPath := filepath.Join(t.TempDir(), "blueprint-index.json")
-	content := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi:demo-pkg//demo_pkg/reploy","versioned_ref":"pypi:demo-pkg//demo_pkg/reploy"}}}`
+	content := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi:demo-pkg#demo_pkg/reploy","versioned_ref":"pypi:demo-pkg#demo_pkg/reploy"}}}`
 	if err := os.WriteFile(indexPath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(packIndexURLEnv, "file:"+indexPath)
 
-	_, err := parseDockerCommandOptions([]string{"--blueprint", "demo==1.2.3"}, true)
+	_, err := parseDockerCommandOptions([]string{"demo==1.2.3"}, true)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -1014,9 +1078,9 @@ func TestDockerInitLoadsPyPIPackAndRecordsResolvedArtifact(t *testing.T) {
 	cacheDir := filepath.Join(t.TempDir(), "cache")
 	t.Setenv("REPLOY_CACHE_DIR", cacheDir)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	packRef := "pypi:demo-pkg//" + subdir + "?index-url=" + indexURL
+	packRef := "pypi:demo-pkg#" + subdir + "?index-url=" + indexURL
 
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", packRef)
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, packRef)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1042,7 +1106,7 @@ func TestDockerInitLoadsPyPIPackAndRecordsResolvedArtifact(t *testing.T) {
 	if err := json.Unmarshal(stateContent, &state); err != nil {
 		t.Fatal(err)
 	}
-	expectedResolvedRef := "pypi:demo-pkg==" + version + "//" + subdir
+	expectedResolvedRef := "pypi:demo-pkg==" + version + "#" + subdir
 	if state.Blueprint.Raw != expectedResolvedRef {
 		t.Fatalf("state blueprint raw = %q, want %q", state.Blueprint.Raw, expectedResolvedRef)
 	}
@@ -1157,7 +1221,7 @@ func TestTopLevelConfigCommandIsNotAppConfigSurface(t *testing.T) {
 func TestDockerUpdateUsesExistingState(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1177,7 +1241,7 @@ func TestDockerUpdateUsesExistingState(t *testing.T) {
 func TestDockerBundleListShowsStateRoots(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1197,7 +1261,7 @@ func TestDockerBundleListShowsStateRoots(t *testing.T) {
 func TestDockerBundleListReportsMissingRequirementsProjection(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1220,7 +1284,7 @@ func TestDockerBundleListReportsMissingRequirementsProjection(t *testing.T) {
 func TestDockerBundleAddAndRemoveUpdateRequirements(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1266,7 +1330,6 @@ func TestDockerBundleAddAndRemoveAcceptMultipleRoots(t *testing.T) {
 		"init",
 		"--dir",
 		deployDir,
-		"--blueprint",
 		"file:"+packDir,
 		"--requirement",
 		"demo-server==1.2.3",
@@ -1348,7 +1411,6 @@ func TestDockerBundleAddRejectsLikelyOptionTypoWithoutWriting(t *testing.T) {
 		"init",
 		"--dir",
 		deployDir,
-		"--blueprint",
 		"file:"+packDir,
 		"--requirement",
 		"demo-server==1.2.3",
@@ -1383,7 +1445,6 @@ func TestDockerBundleAddUnknownOptionListsOptionsOnSeparateLines(t *testing.T) {
 		"init",
 		"--dir",
 		deployDir,
-		"--blueprint",
 		"file:"+packDir,
 		"--requirement",
 		"demo-server==1.2.3",
@@ -1414,7 +1475,6 @@ func TestDockerBundleAddAcceptsUnknownUnpinnedPackage(t *testing.T) {
 		"init",
 		"--dir",
 		deployDir,
-		"--blueprint",
 		"file:"+packDir,
 		"--requirement",
 		"demo-server==1.2.3",
@@ -1446,7 +1506,6 @@ func TestDockerBundleAddForceTreatsUnknownNameAsPackage(t *testing.T) {
 		"init",
 		"--dir",
 		deployDir,
-		"--blueprint",
 		"file:"+packDir,
 		"--requirement",
 		"demo-server==1.2.3",
@@ -1474,7 +1533,7 @@ func TestDockerBundleAddForceTreatsUnknownNameAsPackage(t *testing.T) {
 func TestDockerBundleListOptions(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1494,7 +1553,7 @@ func TestDockerBundleListOptions(t *testing.T) {
 func TestDockerBundleAddWheel(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1518,7 +1577,7 @@ func TestDockerBundleAddWheel(t *testing.T) {
 func TestDockerBundleCheckDryRun(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1538,7 +1597,7 @@ func TestDockerBundleCheckDryRun(t *testing.T) {
 func TestDockerBundleCheckVerboseDryRun(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1558,7 +1617,7 @@ func TestDockerBundleCheckVerboseDryRun(t *testing.T) {
 func TestDockerBundlePrepareDryRun(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1610,7 +1669,7 @@ func TestDockerBundleHelpShowsSubcommands(t *testing.T) {
 func TestDockerBundleCleanRemovesBuiltWheels(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1637,7 +1696,7 @@ func TestDockerBundleCleanRemovesBuiltWheels(t *testing.T) {
 func TestDockerBundleCleanVerboseReportsRemovedWheels(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1697,7 +1756,7 @@ func TestPrintUpdateResultsShowsOnlyActionablePaths(t *testing.T) {
 func TestDockerInfoShowsDeploymentState(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}

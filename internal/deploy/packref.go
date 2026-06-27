@@ -36,10 +36,16 @@ func ParsePackRef(raw string) (PackRef, error) {
 
 	source := body
 	subdir := ""
-	if scheme != "file" {
-		if index := packSubdirDelimiter(body); index >= 0 {
-			source = body[:index]
-			subdir = strings.TrimPrefix(body[index+2:], "/")
+	if scheme == "pypi" {
+		if strings.Contains(body, "//") {
+			return PackRef{}, fmt.Errorf("pypi blueprint paths use #PATH, not //PATH")
+		}
+		if splitSource, path, hasPath := strings.Cut(body, "#"); hasPath {
+			source = splitSource
+			subdir = strings.TrimPrefix(path, "/")
+			if subdir == "" {
+				return PackRef{}, fmt.Errorf("pypi blueprint path must not be empty")
+			}
 		}
 	}
 	if source == "" {
@@ -75,25 +81,10 @@ func defaultPyPIBlueprintSubdir(packageName string) string {
 
 func isSupportedPackScheme(scheme string) bool {
 	switch scheme {
-	case "file", "git", "sl", "pypi":
+	case "file", "pypi":
 		return true
 	default:
 		return false
-	}
-}
-
-func packSubdirDelimiter(body string) int {
-	offset := 0
-	for {
-		index := strings.Index(body[offset:], "//")
-		if index < 0 {
-			return -1
-		}
-		index += offset
-		if index == 0 || body[index-1] != ':' {
-			return index
-		}
-		offset = index + 2
 	}
 }
 
@@ -103,10 +94,6 @@ func packRefIsPinned(scheme string, source string, query url.Values) bool {
 		return false
 	case "pypi":
 		return strings.Contains(source, "==")
-	case "git":
-		return query.Get("ref") != ""
-	case "sl":
-		return query.Get("rev") != ""
 	default:
 		return false
 	}

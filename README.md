@@ -149,7 +149,7 @@ when an entry includes a version template, `name==VERSION` substitutes that
 version into the resolved package ref:
 
 ```bash
-reploy init --blueprint arbiter-server
+reploy init arbiter-server
 reploy install arbiter-server --dry-run
 ```
 
@@ -157,13 +157,13 @@ Without an index, use an explicit PyPI package ref.
 
 PyPI package refs default to the `package_name/reploy` blueprint convention, so
 `pypi:example-app` looks for `example_app/reploy` in the wheel. Use
-`pypi:PACKAGE//PATH` only when a package stores its Reploy blueprint somewhere
+`pypi:PACKAGE#PATH` only when a package stores its Reploy blueprint somewhere
 else.
 
 For unpublished or local app blueprints, use an explicit file reference:
 
 ```bash
-reploy init --blueprint file:path/to/app/reploy
+reploy init file:path/to/app/reploy
 reploy install file:path/to/app/reploy --dry-run
 ```
 
@@ -200,8 +200,8 @@ directory, `--dir DIR`, or the default `reploy-staging` directory.
 Useful staging commands:
 
 ```bash
-reploy init --blueprint pypi:example-app
-reploy init --blueprint file:path/to/app/reploy
+reploy init pypi:example-app
+reploy init file:path/to/app/reploy
 reploy update
 reploy info
 reploy doctor
