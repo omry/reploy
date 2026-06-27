@@ -29,6 +29,15 @@ No active backlog items.
 
 ## Post-v1
 
+- [ ] `P2` Find a convincing Reploy demo app.
+      Identify a useful Python service that is genuinely awkward to run well
+      with plain Docker, and use it to show why Reploy's staging, bundle,
+      install, and control-script flow helps. Acceptance checks: shortlist a
+      few candidate services; pick one with realistic configuration,
+      dependencies, persistence, and operational commands; define the demo
+      storyline from stage to install to operate; and capture what docs/video
+      assets the demo should produce.
+
 - [ ] `P2` Define and validate formal Windows support.
       Reploy should have explicit Windows behavior instead of accidental
       partial support. Acceptance checks: publish a support matrix for Windows
