@@ -7,7 +7,7 @@ Draft design note for the Reploy CLI redesign.
 Reploy should support two install paths: direct install from blueprint defaults,
 and staged install for configured services. Any bundle can be directly
 installed, but some services will not be useful out of the box without the
-staging stage. Staging is the full Reploy workspace where users initialize,
+staging stage. Staging is the full Reploy workspace where users stage,
 configure, bundle, run app commands, operate, test, and update the app before
 touching the installed service.
 
@@ -44,7 +44,7 @@ flowchart LR
   S[Staging]
   D[Deployed]
 
-  B -->|initialize| S
+  B -->|stage| S
   S -->|install / update| D
   B -->|direct install| D
 ```
@@ -56,7 +56,7 @@ install path are available.
 
 Expected staging operations:
 
-- initialize from a blueprint ref
+- create staging from a blueprint ref
 - update generated staging files from the blueprint
 - inspect staging state
 - select bundle options
@@ -78,7 +78,7 @@ Direct install is the default-only path. It creates an installed deployment
 directly from a blueprint ref without a persistent staging directory.
 
 By default, direct install should create a temporary internal staging-like
-workspace, run the same default init/update/bundle/install pipeline used by the
+workspace, run the same default stage/update/bundle/install pipeline used by the
 staged path, and remove that temporary workspace when the install succeeds. The
 temporary workspace is an implementation detail, not a user-managed staging
 environment.

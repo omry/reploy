@@ -96,7 +96,7 @@ artifacts in the staging directory before install/update.
 Possible refs:
 
 ```text
-reploy init github:org/repo
+reploy stage github:org/repo
 reploy install github:org/repo
 ```
 
@@ -146,7 +146,7 @@ flowchart LR
   P[Install profile]
   D[Deployed]
 
-  B -->|initialize| S
+  B -->|stage| S
   S -->|export| P
   P -->|direct install| D
 ```

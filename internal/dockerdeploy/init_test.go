@@ -23,7 +23,7 @@ func TestInitWritesDeploymentDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(results) == 0 {
-		t.Fatal("expected init results")
+		t.Fatal("expected stage results")
 	}
 	assertResultStatus(t, results, filepath.Join(deployDir, ComposeFileName), deploy.UpdateStatusUpdated)
 	for _, relativePath := range []string{

@@ -97,7 +97,7 @@ func Init(options InitOptions) ([]UpdateResult, error) {
 		return nil, err
 	}
 
-	manifest := deploy.NewDeploymentManifest("reploy init")
+	manifest := deploy.NewDeploymentManifest("reploy stage")
 	results := []UpdateResult{}
 	writeGenerated := func(relativePath string, content []byte, executable bool) error {
 		if err := deploy.WriteGeneratedFile(options.Dir, relativePath, content, executable, &manifest); err != nil {

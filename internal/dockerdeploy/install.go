@@ -658,7 +658,7 @@ func controlScriptBuiltins() map[string]bool {
 		"disable": true,
 		"health":  true,
 		"help":    true,
-		"init":    true,
+		"stage":   true,
 		"update":  true,
 		"install": true,
 		"bundle":  true,

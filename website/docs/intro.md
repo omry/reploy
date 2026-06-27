@@ -27,7 +27,7 @@ Start with the app author's blueprint ref:
 
 ```bash
 curl -fsSL https://reploy.yadan.net/install.sh | sh
-reploy init <app-blueprint-ref>
+reploy stage <app-blueprint-ref>
 reploy bundle build
 reploy up
 reploy test
@@ -52,7 +52,7 @@ For publishing app blueprints, see the [App Author docs](/docs/author-deployment
 
 ## Deployment Directory
 
-`reploy init` creates a `reploy-staging/` deployment directory by default.
+`reploy stage` creates a `reploy-staging/` deployment directory by default.
 Generated config, bundle artifacts, Docker files, local state, and staging
 helpers live there. Use `--dir` when you want a different staging directory for
 an app instance.

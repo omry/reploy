@@ -8,7 +8,7 @@ This page is for app authors who want app users to install their app through
 Reploy.
 
 Your job is to publish a blueprint that describes the app-specific pieces.
-Reploy handles the generic lifecycle around that blueprint: initializing a
+Reploy handles the generic lifecycle around that blueprint: creating a staging
 deployment directory, preparing bundles, generating Docker runtime files,
 running health checks, installing or updating the service, and generating the
 local app control script for installed deployments.
@@ -120,7 +120,7 @@ For a working reference, see the fixture under
 Blueprint refs can be local files while developing:
 
 ```bash
-reploy init file:./example.blueprint.yaml
+reploy stage file:./example.blueprint.yaml
 reploy install file:./example.blueprint.yaml --dry-run
 ```
 
@@ -128,7 +128,7 @@ For users, publish the blueprint inside the app package and give them the
 package ref:
 
 ```bash
-reploy init pypi:example-app
+reploy stage pypi:example-app
 reploy install pypi:example-app
 ```
 
@@ -136,6 +136,6 @@ If the blueprint is not stored in the package's conventional `example_app/reploy
 path, include the explicit path:
 
 ```bash
-reploy init pypi:example-app#custom/path
+reploy stage pypi:example-app#custom/path
 reploy install pypi:example-app#custom/path
 ```

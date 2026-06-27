@@ -8,7 +8,7 @@ and Docker defaults while Reploy owns the generic deployment machinery.
 
 Current scope:
 
-- Docker deployment init/update/info/doctor
+- Docker deployment stage/update/info/doctor
 - staging-local `reploy` workflow
 - blueprint shorthands through a JSON blueprint index
 - Python-provider bundle roots, wheel builds, and runtime installation bundles
@@ -149,7 +149,7 @@ when an entry includes a version template, `name==VERSION` substitutes that
 version into the resolved package ref:
 
 ```bash
-reploy init arbiter-server
+reploy stage arbiter-server
 reploy install arbiter-server --dry-run
 ```
 
@@ -163,7 +163,7 @@ else.
 For unpublished or local app blueprints, use an explicit file reference:
 
 ```bash
-reploy init file:path/to/app/reploy
+reploy stage file:path/to/app/reploy
 reploy install file:path/to/app/reploy --dry-run
 ```
 
@@ -200,8 +200,8 @@ directory, `--dir DIR`, or the default `reploy-staging` directory.
 Useful staging commands:
 
 ```bash
-reploy init pypi:example-app
-reploy init file:path/to/app/reploy
+reploy stage pypi:example-app
+reploy stage file:path/to/app/reploy
 reploy update
 reploy info
 reploy doctor

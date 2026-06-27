@@ -13,8 +13,8 @@ Blueprints can be referenced in three common ways.
 ## Indexed Shorthand
 
 ```bash
-reploy init arbiter-server
-reploy init arbiter-server==0.9.3.dev1
+reploy stage arbiter-server
+reploy stage arbiter-server==0.9.3.dev1
 reploy install arbiter-server
 ```
 
@@ -25,8 +25,8 @@ substitutes that version into the resolved package ref.
 ## PyPI Package
 
 ```bash
-reploy init pypi:example-app
-reploy init pypi:example-app==1.2.3
+reploy stage pypi:example-app
+reploy stage pypi:example-app==1.2.3
 reploy install pypi:example-app
 ```
 
@@ -39,7 +39,7 @@ example_app/reploy
 Use an explicit path when a package stores the blueprint elsewhere:
 
 ```bash
-reploy init pypi:example-app#custom/path
+reploy stage pypi:example-app#custom/path
 reploy install pypi:example-app#custom/path
 ```
 
@@ -49,7 +49,7 @@ package.
 ## Local File
 
 ```bash
-reploy init file:./path/to/app.blueprint.yaml
+reploy stage file:./path/to/app.blueprint.yaml
 reploy install file:./path/to/app.blueprint.yaml
 ```
 

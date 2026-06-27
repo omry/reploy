@@ -40,11 +40,11 @@ staging.
 
 ## 3. Create a Staging Deployment
 
-`reploy init` creates `reploy-staging/` by default and writes the deployment
+`reploy stage` creates `reploy-staging/` by default and writes the deployment
 files there.
 
 ```bash
-reploy init <app-blueprint-ref>
+reploy stage <app-blueprint-ref>
 ```
 
 From this point on, commands run against `reploy-staging/` by default:

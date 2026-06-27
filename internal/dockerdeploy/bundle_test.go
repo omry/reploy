@@ -767,7 +767,7 @@ func TestBundlePrepareUsesPackLocalSourcesForFilePacks(t *testing.T) {
 	}
 	expectedRuntimeRequirements := "setuptools>=68\nwheel\ndemo-pkg==1.2.3\n/source/app/demo-pkg\nother-pkg==1.2.3\n"
 	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != expectedRuntimeRequirements {
-		t.Fatalf("persistent requirements after init = %q", got)
+		t.Fatalf("persistent requirements after stage = %q", got)
 	}
 	compose := readFile(t, filepath.Join(deployDir, ComposeFileName))
 	if !strings.Contains(compose, sourceDir+":/source/app/demo-pkg:rw") {

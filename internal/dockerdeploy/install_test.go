@@ -1067,6 +1067,21 @@ func TestInstalledControlScriptRunsDeployedAppCommand(t *testing.T) {
 	}
 }
 
+func TestValidateDeployedControlCommandsRejectsStageBuiltin(t *testing.T) {
+	err := validateDeployedControlCommands([]deploy.DockerCommandConfig{{
+		Name:       "stage_app",
+		Trigger:    []string{"stage"},
+		AppCommand: true,
+		Deployed:   true,
+	}})
+	if err == nil {
+		t.Fatal("expected stage command conflict")
+	}
+	if !strings.Contains(err.Error(), `conflicts with built-in control command "stage"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestInstalledControlScriptRejectsUndeployedAppCommandFlag(t *testing.T) {
 	target := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(target, ReployInternalDir), 0o755); err != nil {

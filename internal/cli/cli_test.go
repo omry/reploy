@@ -93,7 +93,7 @@ func TestNoArgsShowsVersionAndNextSteps(t *testing.T) {
 		"reploy " + reploy.Version,
 		"Usage: reploy COMMAND",
 		"Next steps:",
-		"reploy init APP_REF",
+		"reploy stage APP_REF",
 		"reploy install APP_REF",
 		"reploy index search QUERY",
 		"Run 'reploy --help' for all commands.",
@@ -339,9 +339,9 @@ func TestAppShowsAppIDAndPackSubcommands(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
 	code, stdout, stderr = runCLI("app", "--dir", deployDir)
@@ -361,9 +361,9 @@ func TestAppUsesCurrentDeploymentDirByDefault(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 	t.Chdir(deployDir)
 
@@ -384,9 +384,9 @@ func TestAppUsesCurrentDeploymentDirByDefault(t *testing.T) {
 func TestStagingCommandsRejectInstalledDeploymentDir(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 	markCLITestDeploymentInstalled(t, deployDir)
 
@@ -420,9 +420,9 @@ func TestStagingCommandsRejectInstalledDeploymentDir(t *testing.T) {
 func TestAppListIsNotSpecial(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
 	code, stdout, stderr = runCLI("app", "list", "--dir", deployDir)
@@ -441,9 +441,9 @@ func TestAppCommandSuggestsForwardedFlagTypo(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	workDir := t.TempDir()
 	t.Chdir(workDir)
-	code, stdout, stderr := runCLI("init", "file:"+packDir)
+	code, stdout, stderr := runCLI("stage", "file:"+packDir)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
 	code, stdout, stderr = runCLI("app", "bootstrap", "server", "--foce")
@@ -468,6 +468,43 @@ func TestAWSTargetOptionIsReserved(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "deployment target aws is not supported yet") {
 		t.Fatalf("stderr missing unsupported target message:\n%s", stderr)
+	}
+}
+
+func TestRemovedInitCommandIsUnknown(t *testing.T) {
+	code, stdout, stderr := runCLI("init", "demo-suite")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "unknown command: init") {
+		t.Fatalf("stderr did not reject removed init command:\n%s", stderr)
+	}
+}
+
+func TestDockerStageHelp(t *testing.T) {
+	code, stdout, stderr := runCLI("stage", "--help")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	for _, want := range []string{
+		"Usage: reploy [--docker] stage APP_REF [OPTIONS]",
+		"Create a staging directory from an app blueprint reference.",
+		"--dir DIR",
+		"--requirement REQ",
+		"Show stage help",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout)
+		}
+	}
+	if strings.Contains(stdout, "init") {
+		t.Fatalf("stage help contained old init wording:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
 	}
 }
 
@@ -735,7 +772,7 @@ func TestDockerInitWritesDeployment(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -758,7 +795,7 @@ func TestDockerInitUsesDefaultDeploymentDir(t *testing.T) {
 	workDir := t.TempDir()
 	t.Chdir(workDir)
 
-	code, stdout, stderr := runCLI("init", "file:"+packDir)
+	code, stdout, stderr := runCLI("stage", "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -782,12 +819,12 @@ func TestDockerInitExistingDefaultDeploymentSuggestsUpdate(t *testing.T) {
 	workDir := t.TempDir()
 	t.Chdir(workDir)
 
-	code, stdout, stderr := runCLI("init", "file:"+packDir)
+	code, stdout, stderr := runCLI("stage", "file:"+packDir)
 	if code != 0 {
-		t.Fatalf("initial init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("initial stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
-	code, stdout, stderr = runCLI("init", "file:"+packDir)
+	code, stdout, stderr = runCLI("stage", "file:"+packDir)
 	if code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
@@ -803,7 +840,7 @@ func TestDockerInitExistingDefaultDeploymentSuggestsUpdate(t *testing.T) {
 }
 
 func TestDockerInitRequiresPack(t *testing.T) {
-	code, stdout, stderr := runCLI("init")
+	code, stdout, stderr := runCLI("stage")
 	if code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
@@ -816,7 +853,7 @@ func TestDockerInitRequiresPack(t *testing.T) {
 }
 
 func TestDockerInitValidatesPack(t *testing.T) {
-	code, stdout, stderr := runCLI("init", "oci:example")
+	code, stdout, stderr := runCLI("stage", "oci:example")
 	if code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
@@ -829,7 +866,7 @@ func TestDockerInitValidatesPack(t *testing.T) {
 }
 
 func TestDockerInitRejectsRemovedBlueprintFlag(t *testing.T) {
-	code, stdout, stderr := runCLI("init", "--blueprint", "demo-suite")
+	code, stdout, stderr := runCLI("stage", "--blueprint", "demo-suite")
 	if code != 2 {
 		t.Fatalf("exit code = %d, want 2\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -846,7 +883,7 @@ func TestDockerInitAcceptsExplicitRequirements(t *testing.T) {
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 
 	code, stdout, stderr := runCLI(
-		"init",
+		"stage",
 		"--dir",
 		deployDir,
 		"file:"+packDir,
@@ -1080,7 +1117,7 @@ func TestDockerInitLoadsPyPIPackAndRecordsResolvedArtifact(t *testing.T) {
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 	packRef := "pypi:demo-pkg#" + subdir + "?index-url=" + indexURL
 
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, packRef)
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, packRef)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1161,7 +1198,7 @@ func TestDockerUpdateRejectsExplicitRequirements(t *testing.T) {
 	if stdout != "" {
 		t.Fatalf("stdout = %q, want empty", stdout)
 	}
-	if !strings.Contains(stderr, "--requirement is only supported with init") {
+	if !strings.Contains(stderr, "--requirement is only supported with stage") {
 		t.Fatalf("stderr did not contain requirement message:\n%s", stderr)
 	}
 }
@@ -1221,9 +1258,9 @@ func TestTopLevelConfigCommandIsNotAppConfigSurface(t *testing.T) {
 func TestDockerUpdateUsesExistingState(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
 	code, stdout, stderr = runCLI("update", "--dir", deployDir)
@@ -1241,9 +1278,9 @@ func TestDockerUpdateUsesExistingState(t *testing.T) {
 func TestDockerBundleListShowsStateRoots(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
 	code, stdout, stderr = runCLI("bundle", "list", "--dir", deployDir)
@@ -1261,9 +1298,9 @@ func TestDockerBundleListShowsStateRoots(t *testing.T) {
 func TestDockerBundleListReportsMissingRequirementsProjection(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 	if err := os.Remove(filepath.Join(deployDir, dockerdeploy.RequirementsFileName)); err != nil {
 		t.Fatal(err)
@@ -1284,9 +1321,9 @@ func TestDockerBundleListReportsMissingRequirementsProjection(t *testing.T) {
 func TestDockerBundleAddAndRemoveUpdateRequirements(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
 	code, stdout, stderr = runCLI("bundle", "add", "demo-imap==1.2.3", "--dir", deployDir)
@@ -1327,7 +1364,7 @@ func TestDockerBundleAddAndRemoveAcceptMultipleRoots(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 	code, stdout, stderr := runCLI(
-		"init",
+		"stage",
 		"--dir",
 		deployDir,
 		"file:"+packDir,
@@ -1335,7 +1372,7 @@ func TestDockerBundleAddAndRemoveAcceptMultipleRoots(t *testing.T) {
 		"demo-server==1.2.3",
 	)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
 	code, stdout, stderr = runCLI("bundle", "add", "--name", "imap,smtp", "--dir", deployDir)
@@ -1408,7 +1445,7 @@ func TestDockerBundleAddRejectsLikelyOptionTypoWithoutWriting(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 	code, stdout, stderr := runCLI(
-		"init",
+		"stage",
 		"--dir",
 		deployDir,
 		"file:"+packDir,
@@ -1416,7 +1453,7 @@ func TestDockerBundleAddRejectsLikelyOptionTypoWithoutWriting(t *testing.T) {
 		"demo-server==1.2.3",
 	)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
 	code, stdout, stderr = runCLI("bundle", "add", "--name", "imap,smtpa", "--dir", deployDir)
@@ -1442,7 +1479,7 @@ func TestDockerBundleAddUnknownOptionListsOptionsOnSeparateLines(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 	code, stdout, stderr := runCLI(
-		"init",
+		"stage",
 		"--dir",
 		deployDir,
 		"file:"+packDir,
@@ -1450,7 +1487,7 @@ func TestDockerBundleAddUnknownOptionListsOptionsOnSeparateLines(t *testing.T) {
 		"demo-server==1.2.3",
 	)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
 	code, stdout, stderr = runCLI("bundle", "add", "--name", "foo", "--dir", deployDir)
@@ -1472,7 +1509,7 @@ func TestDockerBundleAddAcceptsUnknownUnpinnedPackage(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 	code, stdout, stderr := runCLI(
-		"init",
+		"stage",
 		"--dir",
 		deployDir,
 		"file:"+packDir,
@@ -1480,7 +1517,7 @@ func TestDockerBundleAddAcceptsUnknownUnpinnedPackage(t *testing.T) {
 		"demo-server==1.2.3",
 	)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
 	code, stdout, stderr = runCLI("bundle", "add", "aa", "--dir", deployDir)
@@ -1503,7 +1540,7 @@ func TestDockerBundleAddForceTreatsUnknownNameAsPackage(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 	code, stdout, stderr := runCLI(
-		"init",
+		"stage",
 		"--dir",
 		deployDir,
 		"file:"+packDir,
@@ -1511,7 +1548,7 @@ func TestDockerBundleAddForceTreatsUnknownNameAsPackage(t *testing.T) {
 		"demo-server==1.2.3",
 	)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
 	code, stdout, stderr = runCLI("bundle", "add", "--name", "smtpa", "--force", "--dir", deployDir)
@@ -1533,9 +1570,9 @@ func TestDockerBundleAddForceTreatsUnknownNameAsPackage(t *testing.T) {
 func TestDockerBundleListOptions(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
 	code, stdout, stderr = runCLI("bundle", "list-options", "--dir", deployDir)
@@ -1553,9 +1590,9 @@ func TestDockerBundleListOptions(t *testing.T) {
 func TestDockerBundleAddWheel(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 	wheel := filepath.Join(t.TempDir(), "demo-1.0.0-py3-none-any.whl")
 	if err := os.WriteFile(wheel, []byte("wheel content\n"), 0o644); err != nil {
@@ -1577,9 +1614,9 @@ func TestDockerBundleAddWheel(t *testing.T) {
 func TestDockerBundleCheckDryRun(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
 	code, stdout, stderr = runCLI("bundle", "check", "--dry-run", "--dir", deployDir)
@@ -1597,9 +1634,9 @@ func TestDockerBundleCheckDryRun(t *testing.T) {
 func TestDockerBundleCheckVerboseDryRun(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
 	code, stdout, stderr = runCLI("bundle", "check", "--verbose", "--dry-run", "--dir", deployDir)
@@ -1617,9 +1654,9 @@ func TestDockerBundleCheckVerboseDryRun(t *testing.T) {
 func TestDockerBundlePrepareDryRun(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
 	code, stdout, stderr = runCLI("bundle", "build", "--dry-run", "--dir", deployDir)
@@ -1669,9 +1706,9 @@ func TestDockerBundleHelpShowsSubcommands(t *testing.T) {
 func TestDockerBundleCleanRemovesBuiltWheels(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 	builtWheel := filepath.Join(deployDir, dockerdeploy.BundleDirName, "demo_suite-1.2.3-py3-none-any.whl")
 	if err := os.WriteFile(builtWheel, []byte("wheel\n"), 0o644); err != nil {
@@ -1696,9 +1733,9 @@ func TestDockerBundleCleanRemovesBuiltWheels(t *testing.T) {
 func TestDockerBundleCleanVerboseReportsRemovedWheels(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 	builtWheel := filepath.Join(deployDir, dockerdeploy.BundleDirName, "demo_suite-1.2.3-py3-none-any.whl")
 	if err := os.WriteFile(builtWheel, []byte("wheel\n"), 0o644); err != nil {
@@ -1756,9 +1793,9 @@ func TestPrintUpdateResultsShowsOnlyActionablePaths(t *testing.T) {
 func TestDockerInfoShowsDeploymentState(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("init", "--dir", deployDir, "file:"+packDir)
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
-		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
 	code, stdout, stderr = runCLI("info", "--dir", deployDir)

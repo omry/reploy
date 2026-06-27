@@ -67,7 +67,7 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func isDeploymentCommand(command string) bool {
 	switch command {
-	case "init", "update", "info", "app", "bundle", "up", "restart", "down", "ps", "status", "logs", "test", "doctor", "install", "uninstall":
+	case "stage", "update", "info", "app", "bundle", "up", "restart", "down", "ps", "status", "logs", "test", "doctor", "install", "uninstall":
 		return true
 	default:
 		return false
@@ -217,7 +217,7 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
 	case "-h", "--help", "help":
 		printDockerHelp(stdout)
 		return 0
-	case "init":
+	case "stage":
 		options, err := parseDockerCommandOptions(args[1:], true)
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
@@ -232,10 +232,10 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
 		if err != nil {
 			var existingFileError dockerdeploy.ExistingDeploymentFileError
 			if errors.As(err, &existingFileError) {
-				fmt.Fprintf(stderr, "reploy init error: staging directory already exists at %s (found %s); run \"%s\" to update it\n", options.Dir, existingFileError.Path, initUpdateCommandHint(options.Dir))
+				fmt.Fprintf(stderr, "reploy stage error: staging directory already exists at %s (found %s); run \"%s\" to update it\n", options.Dir, existingFileError.Path, stageUpdateCommandHint(options.Dir))
 				return 1
 			}
-			fmt.Fprintf(stderr, "reploy init error: %v\n", err)
+			fmt.Fprintf(stderr, "reploy stage error: %v\n", err)
 			return 1
 		}
 		fmt.Fprintf(stdout, "created staging directory for %s: %s\n", packDisplayName(options.Pack), options.Dir)
@@ -1468,7 +1468,7 @@ func parseDockerCommandOptions(args []string, requirePack bool) (dockerCommandOp
 		return dockerCommandOptions{}, fmt.Errorf("--force is only supported with update")
 	}
 	if !requirePack && len(options.Requirements) > 0 {
-		return dockerCommandOptions{}, fmt.Errorf("--requirement is only supported with init")
+		return dockerCommandOptions{}, fmt.Errorf("--requirement is only supported with stage")
 	}
 	for _, requirement := range options.Requirements {
 		if strings.TrimSpace(requirement) == "" {
@@ -1506,7 +1506,7 @@ func packDisplayName(ref deploy.PackRef) string {
 	return source
 }
 
-func initUpdateCommandHint(dir string) string {
+func stageUpdateCommandHint(dir string) string {
 	if dir == dockerdeploy.DefaultDeploymentDir {
 		return "reploy update"
 	}
@@ -1742,7 +1742,7 @@ func printShortUsage(output io.Writer) {
 	fmt.Fprintln(output, "Usage: reploy COMMAND")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Next steps:")
-	fmt.Fprintln(output, "  reploy init APP_REF")
+	fmt.Fprintln(output, "  reploy stage APP_REF")
 	fmt.Fprintln(output, "  reploy install APP_REF")
 	fmt.Fprintln(output, "  reploy index search QUERY")
 	fmt.Fprintln(output)
@@ -1754,7 +1754,7 @@ func printHelp(output io.Writer) {
 Usage: reploy [--docker] COMMAND
 
 Commands:
-  init         Create a staging directory
+  stage        Create a staging directory
   update       Update generated files in a staging directory
   info         Show staging state and bundle contents
   app          Run a blueprint-declared app command inside staging
@@ -1790,7 +1790,7 @@ Target options:
   --aws        Reserved for a future AWS deployment target
 
 App refs:
-  APP_REF     App blueprint reference for init.
+  APP_REF     App blueprint reference for stage.
               Use an indexed shorthand, file:PATH, or pypi:PACKAGE.
               Add ==VERSION to an indexed shorthand to pin a release.
 
@@ -1949,7 +1949,7 @@ func printDockerHelp(output io.Writer) {
 Usage: reploy [--docker] COMMAND
 
 Commands:
-  init         Create a staging directory
+  stage        Create a staging directory
   update       Update generated files in a staging directory
   info         Show staging state and bundle contents
   app          Run a blueprint-declared app command inside staging
@@ -1979,7 +1979,7 @@ Bundle:
   upgrade      Upgrade package roots and rebuild installation bundle artifacts
 
 App refs:
-  APP_REF     App blueprint reference for init.
+  APP_REF     App blueprint reference for stage.
               Use an indexed shorthand, file:PATH, or pypi:PACKAGE.
               Add ==VERSION to an indexed shorthand to pin a release.
 
@@ -2024,8 +2024,8 @@ Options:
 
 func printDockerCommandHelp(command string, output io.Writer) {
 	switch command {
-	case "init":
-		printDockerInitHelp(output)
+	case "stage":
+		printDockerStageHelp(output)
 	case "update":
 		printDockerUpdateHelp(output)
 	default:
@@ -2033,9 +2033,9 @@ func printDockerCommandHelp(command string, output io.Writer) {
 	}
 }
 
-func printDockerInitHelp(output io.Writer) {
+func printDockerStageHelp(output io.Writer) {
 	fmt.Fprint(output, strings.TrimLeft(`
-Usage: reploy [--docker] init APP_REF [OPTIONS]
+Usage: reploy [--docker] stage APP_REF [OPTIONS]
 
 Create a staging directory from an app blueprint reference.
 
@@ -2047,7 +2047,7 @@ Options:
   --dir DIR    Staging directory to create, default reploy-staging
   --requirement REQ
               Exact package pin or absolute container path for requirements.txt
-  -h, --help   Show init help
+  -h, --help   Show stage help
 `, "\n"))
 }
 
