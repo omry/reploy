@@ -323,19 +323,30 @@ Staging-exported install profiles are out of scope for this core redesign. Keep
 that idea in `docs/FUTURE_DIRECTIONS.md` until the direct/staged install model
 is stable.
 
-## Open Design Questions
+## Resolved Design Decisions
 
-- What should the blueprint schema names be for installed target defaults,
-  staging port defaults, deployed port defaults, and upgrade artifact policy?
+- Canonical install defaults live under top-level `install`, not under
+  Docker-specific fields.
+- `app.id` is required and drives default target path, service identity, and the
+  generated app control script name.
+- Direct install accepts positional app refs: indexed names, `file:` refs, and
+  explicit `pypi:` refs.
+- The normal `reploy ...` command surface is staging-oriented. Installed
+  deployments expose only the generated app control script.
+- Direct install uses a temporary internal staging-like workspace by default.
+  `--in-place` is available only as a low-prominence disk-space escape hatch.
+- App-owned artifacts are preserved by default. Operators can replace named
+  artifacts with `--replace ARTIFACT`, replace all app-owned artifacts with
+  `--replace all`, or request clean reinstall behavior with `--clean`.
+- `.reploy/` is Reploy-owned generated state and can be replaced at will.
+- Side-by-side installs remain supported through target, service, port, and
+  owner overrides plus recorded installed state.
 
-## Redesign Work Items
+## Deferred Scope
 
-- Implement staging directory detection for the default `reploy ...` staging
-  command surface.
-- Define direct install behavior and document that it uses defaults only.
-- Define the generated app control script and deployed control command menu.
-- Define install/update semantics and dry-run output.
-- Add blueprint upgrade policy schema and validation.
-- Replace hardcoded config replacement flags with blueprint-declared artifact
-  overrides.
-- Update docs, CLI help, and tests around the direct/staged install model.
+- Install profiles exported from staging remain in
+  `docs/FUTURE_DIRECTIONS.md`.
+- Alternate deployment backends, richer OS support, and additional bundle
+  providers remain future directions.
+- Direct install-time interactive configuration is intentionally out of scope
+  for now; staging is the configured path.

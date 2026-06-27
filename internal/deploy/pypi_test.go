@@ -215,6 +215,9 @@ app:
     type: python
     identifier: demo
 
+install:
+` + packTestInstallBlock() + `
+
 docker:
   deployment_dirs:
     config: conf

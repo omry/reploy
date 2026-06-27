@@ -53,6 +53,24 @@ func TestParsePackManifestReadsDockerLayout(t *testing.T) {
 	if manifest.App.Terminal.ColorEnv != "DEMO_COLOR" {
 		t.Fatalf("app terminal color env = %q", manifest.App.Terminal.ColorEnv)
 	}
+	if manifest.Install.Target.DefaultPath != "/opt/{{ app.id }}" {
+		t.Fatalf("install target default path = %q", manifest.Install.Target.DefaultPath)
+	}
+	if manifest.Install.Owner.User != "demo" || manifest.Install.Owner.Group != "demo" {
+		t.Fatalf("install owner = %#v", manifest.Install.Owner)
+	}
+	if manifest.Install.Ports.Deployed["http"].HostPort != 8080 {
+		t.Fatalf("deployed install ports = %#v", manifest.Install.Ports.Deployed)
+	}
+	if manifest.Install.Ports.Staging["http"].HostPort != 18080 {
+		t.Fatalf("staging install ports = %#v", manifest.Install.Ports.Staging)
+	}
+	if manifest.Install.Ports.Deployed["http"].ContainerPort != 8080 {
+		t.Fatalf("defaulted deployed container port = %#v", manifest.Install.Ports.Deployed["http"])
+	}
+	if manifest.Install.Upgrade.Artifacts["config"].Default != "preserve" {
+		t.Fatalf("install artifact policy = %#v", manifest.Install.Upgrade.Artifacts)
+	}
 	if manifest.Pack.Schema != 1 || manifest.Pack.Version != "0.1.0" || manifest.Pack.RequiresReploy != ">=0.1.0" {
 		t.Fatalf("pack metadata = %#v", manifest.Pack)
 	}
@@ -166,6 +184,20 @@ app:
   provider:
     type: python
     identifier: demo
+
+install:
+  owner:
+    user: demo
+    group: demo
+  ports:
+    deployed:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 8080
+    staging:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 18080
 
 docker:
   deployment_dirs:
@@ -359,6 +391,129 @@ func TestParsePackManifestRejectsInvalidInstallSuccess(t *testing.T) {
 	}
 }
 
+func TestParsePackManifestRejectsInvalidInstallConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		install string
+		want    string
+	}{
+		{
+			name: "relative target path",
+			install: `  target:
+    default_path: var/demo
+  owner:
+    user: demo
+    group: demo
+  ports:
+    deployed:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 8080
+    staging:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 18080
+`,
+			want: "install.target.default_path must be absolute",
+		},
+		{
+			name: "missing owner",
+			install: `  ports:
+    deployed:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 8080
+    staging:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 18080
+`,
+			want: "install.owner.user is required",
+		},
+		{
+			name: "root owner",
+			install: `  owner:
+    user: root
+    group: demo
+  ports:
+    deployed:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 8080
+    staging:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 18080
+`,
+			want: "install.owner.user must not be root",
+		},
+		{
+			name: "missing deployed ports",
+			install: `  owner:
+    user: demo
+    group: demo
+  ports:
+    staging:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 18080
+`,
+			want: "install.ports.deployed must declare at least one port",
+		},
+		{
+			name: "invalid host port",
+			install: `  owner:
+    user: demo
+    group: demo
+  ports:
+    deployed:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 70000
+    staging:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 18080
+`,
+			want: "install.ports.deployed.http.host_port must be between 1 and 65535",
+		},
+		{
+			name: "reploy owned artifact",
+			install: `  owner:
+    user: demo
+    group: demo
+  ports:
+    deployed:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 8080
+    staging:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 18080
+  upgrade:
+    artifacts:
+      generated:
+        default: replace
+        paths:
+          - .reploy/bundle
+`,
+			want: "must not include .reploy",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manifest := strings.Replace(packTestManifest(), "install:\n"+packTestInstallBlock(), "install:\n"+tc.install, 1)
+			_, err := ParsePackManifest(manifest)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestParsePackManifestRejectsInvalidTerminalColorEnv(t *testing.T) {
 	_, err := ParsePackManifest(`blueprint:
   schema: 1
@@ -406,6 +561,20 @@ app:
     type: python
     identifier: demo
 
+install:
+  owner:
+    user: demo
+    group: demo
+  ports:
+    deployed:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 8080
+    staging:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 18080
+
 bundle:
   options:
     imap:
@@ -430,6 +599,37 @@ docker:
 		t.Fatal("expected error")
 	}
 	if !strings.Contains(err.Error(), "bundle.options.imap.identifier must not contain tabs or newlines") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParsePackManifestRejectsLegacyDockerServiceInstallFields(t *testing.T) {
+	manifest := strings.Replace(packTestManifest(), "  default_command: serve\n", `  service:
+    install_owner: demo:demo
+  default_command: serve
+`, 1)
+	_, err := ParsePackManifest(manifest)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "docker.service.install_owner has moved to install.*") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParsePackManifestRejectsLegacyDockerPorts(t *testing.T) {
+	manifest := strings.Replace(packTestManifest(), "  default_command: serve\n", `  ports:
+    http:
+      host_bind: 127.0.0.1
+      host_port: "18080"
+      container_port: "8080"
+  default_command: serve
+`, 1)
+	_, err := ParsePackManifest(manifest)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "docker.ports has moved to install.ports") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -524,6 +724,20 @@ func TestAppCommandMatchingAcceptsConfigCheck(t *testing.T) {
 	}
 }
 
+func TestDeployedCommandsOnlyReturnsExplicitDeployedCommands(t *testing.T) {
+	manifest, err := ParsePackManifest(packTestManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := manifest.Docker.DeployedCommands()
+	if len(commands) != 1 {
+		t.Fatalf("deployed commands = %#v", commands)
+	}
+	if got := strings.Join(commands[0].Trigger, " "); got != "config check" {
+		t.Fatalf("deployed command trigger = %q", got)
+	}
+}
+
 func TestAppCommandsListsOnlyAppCommands(t *testing.T) {
 	manifest, err := ParsePackManifest(packTestManifest())
 	if err != nil {
@@ -561,6 +775,20 @@ app:
       demo-server: ../../server
   terminal:
     color_env: DEMO_COLOR
+
+install:
+  owner:
+    user: demo
+    group: demo
+  ports:
+    deployed:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 8080
+    staging:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 18080
 
 docker:
   deployment_dirs:
@@ -630,6 +858,9 @@ app:
   terminal:
     color_env: DEMO_COLOR
 
+install:
+` + packTestInstallBlock() + `
+
 bundle:
   options:
     imap:
@@ -658,6 +889,7 @@ docker:
         - config
         - check
       app_command: true
+      deployed_command: true
       forward_flags:
         - --live
         - --profile
@@ -731,6 +963,28 @@ docker:
           - ${DEMO_CONFIG_NAME}
           - config
           - show
+`
+}
+
+func packTestInstallBlock() string {
+	return `  owner:
+    user: demo
+    group: demo
+  ports:
+    deployed:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 8080
+    staging:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 18080
+  upgrade:
+    artifacts:
+      config:
+        default: preserve
+        paths:
+          - conf/
 `
 }
 

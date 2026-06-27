@@ -3,6 +3,8 @@ package dockerdeploy
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -47,18 +49,19 @@ func TestInstallSuccessLinesResolveAppVars(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	oldRunCommandOutput := installRunCommandOutput
+	oldRunInstallAppCommand := runInstallAppCommand
 	t.Cleanup(func() {
-		installRunCommandOutput = oldRunCommandOutput
+		runInstallAppCommand = oldRunInstallAppCommand
 	})
-	installRunCommandOutput = func(name string, args ...string) ([]byte, error) {
-		if name != filepath.Join(deployDir, "reploy") {
-			t.Fatalf("command name = %q", name)
+	runInstallAppCommand = func(dir string, args []string, stdout io.Writer, stderr io.Writer) error {
+		if dir != deployDir {
+			t.Fatalf("dir = %q", dir)
 		}
-		if got := strings.Join(args, " "); got != "app config show --resolve --package demo.server.public.base_url --value" {
+		if got := strings.Join(args, " "); got != "config show --resolve --package demo.server.public.base_url --value" {
 			t.Fatalf("args = %q", got)
 		}
-		return []byte("https://arbiter.example.com\n"), nil
+		fmt.Fprintln(stdout, "https://arbiter.example.com")
+		return nil
 	}
 
 	lines, err := InstallSuccessLines(deployDir)
@@ -135,12 +138,13 @@ func TestInstallSuccessLinesReportsAppVarFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	oldRunCommandOutput := installRunCommandOutput
+	oldRunInstallAppCommand := runInstallAppCommand
 	t.Cleanup(func() {
-		installRunCommandOutput = oldRunCommandOutput
+		runInstallAppCommand = oldRunInstallAppCommand
 	})
-	installRunCommandOutput = func(name string, args ...string) ([]byte, error) {
-		return []byte("config failed\n"), errors.New("exit status 1")
+	runInstallAppCommand = func(dir string, args []string, stdout io.Writer, stderr io.Writer) error {
+		fmt.Fprintln(stderr, "config failed")
+		return errors.New("exit status 1")
 	}
 
 	_, err = InstallSuccessLines(deployDir)
@@ -178,12 +182,14 @@ func TestInstallSuccessLinesRejectsMultilineAppVarOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	oldRunCommandOutput := installRunCommandOutput
+	oldRunInstallAppCommand := runInstallAppCommand
 	t.Cleanup(func() {
-		installRunCommandOutput = oldRunCommandOutput
+		runInstallAppCommand = oldRunInstallAppCommand
 	})
-	installRunCommandOutput = func(name string, args ...string) ([]byte, error) {
-		return []byte("https://arbiter.example.com\nextra output\n"), nil
+	runInstallAppCommand = func(dir string, args []string, stdout io.Writer, stderr io.Writer) error {
+		fmt.Fprintln(stdout, "https://arbiter.example.com")
+		fmt.Fprintln(stdout, "extra output")
+		return nil
 	}
 
 	_, err = InstallSuccessLines(deployDir)

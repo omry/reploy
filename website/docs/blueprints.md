@@ -15,6 +15,7 @@ Blueprints can be referenced in three common ways.
 ```bash
 reploy init --blueprint arbiter-server
 reploy init --blueprint arbiter-server==0.9.3.dev1
+reploy install arbiter-server
 ```
 
 Shorthands are resolved through the Reploy blueprint index. The index is not
@@ -26,6 +27,7 @@ substitutes that version into the resolved package ref.
 ```bash
 reploy init --blueprint pypi:example-app
 reploy init --blueprint pypi:example-app==1.2.3
+reploy install pypi:example-app
 ```
 
 By convention, `pypi:example-app` looks for a blueprint under:
@@ -38,14 +40,18 @@ Use an explicit path when a package stores the blueprint elsewhere:
 
 ```bash
 reploy init --blueprint pypi:example-app//custom/path
+reploy install pypi:example-app#custom/path
 ```
 
-The `//` separates the package ref from the path inside the package.
+For staging refs, `//` separates the package ref from the path inside the
+package. Direct install also accepts `#path/inside/package` for an explicit
+blueprint path.
 
 ## Local File
 
 ```bash
 reploy init --blueprint file:./path/to/app.blueprint.yaml
+reploy install file:./path/to/app.blueprint.yaml
 ```
 
 Local file refs are useful while developing an app blueprint before publishing

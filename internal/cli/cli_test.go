@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -56,8 +57,11 @@ func TestHelp(t *testing.T) {
 	if !strings.Contains(stdout, "Usage: reploy [--docker] COMMAND") {
 		t.Fatalf("stdout did not contain usage:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "blueprint-index") {
-		t.Fatalf("stdout did not contain blueprint-index command:\n%s", stdout)
+	if !strings.Contains(stdout, "index        Manage the cached blueprint shorthand index") {
+		t.Fatalf("stdout did not contain index command:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "blueprint-index") {
+		t.Fatalf("stdout contained removed blueprint-index alias:\n%s", stdout)
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
@@ -83,12 +87,57 @@ func TestPackIndexRefreshLoadsFileIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	code, stdout, stderr := runCLI("blueprint-index", "refresh", "--url", "file:"+indexPath)
+	code, stdout, stderr := runCLI("index", "update", "--url", "file:"+indexPath)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 	if !strings.Contains(stdout, "loaded blueprint index from file:"+indexPath) || !strings.Contains(stdout, "1 shorthands") {
 		t.Fatalf("stdout did not describe file index load:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestRemovedBlueprintIndexAliasIsUnknown(t *testing.T) {
+	code, stdout, stderr := runCLI("blueprint-index", "refresh")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "unknown command: blueprint-index") {
+		t.Fatalf("stderr did not reject removed alias:\n%s", stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+}
+
+func TestPackIndexSearchAndShow(t *testing.T) {
+	indexPath := filepath.Join(t.TempDir(), "reploy-blueprint-index.json")
+	if err := os.WriteFile(indexPath, []byte(`{"schema_version":1,"blueprints":{"arbiter-server":{"ref":"pypi:arbiter-server","versioned_ref":"pypi:arbiter-server=={version}"},"demo":{"ref":"pypi:demo-pkg//demo_pkg/reploy"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(packIndexURLEnv, "file:"+indexPath)
+
+	code, stdout, stderr := runCLI("index", "search", "arbiter")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "arbiter-server\tpypi:arbiter-server\n" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+
+	code, stdout, stderr = runCLI("index", "show", "arbiter-server")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	for _, want := range []string{"name: arbiter-server", "ref: pypi:arbiter-server", "versioned_ref: pypi:arbiter-server=={version}"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout)
+		}
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
@@ -105,7 +154,7 @@ func TestPackIndexRefreshDownloadsAndCachesHTTPIndex(t *testing.T) {
 	cacheDir := filepath.Join(t.TempDir(), "cache")
 	t.Setenv("REPLOY_CACHE_DIR", cacheDir)
 
-	code, stdout, stderr := runCLI("blueprint-index", "refresh", "--url", server.URL+"/index.json")
+	code, stdout, stderr := runCLI("index", "update", "--url", server.URL+"/index.json")
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -134,7 +183,7 @@ func TestDockerHelp(t *testing.T) {
 	if strings.Contains(stdout, "smoke") {
 		t.Fatalf("stdout should not contain premature smoke command:\n%s", stdout)
 	}
-	if strings.Contains(stdout, "Demo health endpoint") || !strings.Contains(stdout, "blueprint-configured app health endpoint") {
+	if strings.Contains(stdout, "Demo health endpoint") || !strings.Contains(stdout, "staging app health endpoint") {
 		t.Fatalf("stdout did not describe generic health probe:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "Bundle:") || !strings.Contains(stdout, "add-source") || !strings.Contains(stdout, "upgrade") {
@@ -152,7 +201,12 @@ func TestDockerHelp(t *testing.T) {
 	if strings.Contains(stdout, "--wait") || !strings.Contains(stdout, "--timeout DURATION") {
 		t.Fatalf("stdout did not contain expected test timeout options:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "install") || !strings.Contains(stdout, "--to DIR") || !strings.Contains(stdout, "--port NAME=PORT") || !strings.Contains(stdout, "--dry-run") {
+	for _, want := range []string{"install      Install or update a deployed host service", "--to DIR", "--port NAME=PORT", "--replace ARTIFACT", "--clean", "--in-place", "--dry-run"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing install help %q:\n%s", want, stdout)
+		}
+	}
+	if strings.Contains(stdout, "Install or update a deployed host service from staging") {
 		t.Fatalf("stdout did not contain install command/options:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "app") {
@@ -184,8 +238,10 @@ func TestDockerInstallHelpShowsPortOptions(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	if !strings.Contains(stdout, "--port PORT") || !strings.Contains(stdout, "--port NAME=PORT") {
-		t.Fatalf("stdout did not contain install port options:\n%s", stdout)
+	for _, want := range []string{"--port PORT", "--port NAME=PORT", "--replace ARTIFACT", "--clean", "--in-place"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout did not contain install option %q:\n%s", want, stdout)
+		}
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
@@ -200,10 +256,10 @@ func TestAppHelp(t *testing.T) {
 	if !strings.Contains(stdout, "Usage: reploy app COMMAND") {
 		t.Fatalf("stdout did not contain app usage:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "deployment bundle, not a host executable from") {
-		t.Fatalf("stdout did not explain deployed app runtime:\n%s", stdout)
+	if !strings.Contains(stdout, "staging bundle, not a host executable from") {
+		t.Fatalf("stdout did not explain staging app runtime:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "Show this deployment's app subcommands") || !strings.Contains(stdout, "reploy app COMMAND") {
+	if !strings.Contains(stdout, "Show this staging directory's app subcommands") || !strings.Contains(stdout, "reploy app COMMAND") {
 		t.Fatalf("stdout did not contain generic app command guidance:\n%s", stdout)
 	}
 	if strings.Contains(stdout, "Demo") || strings.Contains(stdout, "bootstrap plugin PLUGIN account NAME") {
@@ -267,9 +323,45 @@ func TestAppUsesCurrentDeploymentDirByDefault(t *testing.T) {
 	if stdout != expected {
 		t.Fatalf("stdout = %q, want %q", stdout, expected)
 	}
-	expectedStderr := "reploy: using deployment in current directory: " + deployDir + "\n"
+	expectedStderr := "reploy: using staging directory in current directory: " + deployDir + "\n"
 	if stderr != expectedStderr {
 		t.Fatalf("stderr = %q, want %q", stderr, expectedStderr)
+	}
+}
+
+func TestStagingCommandsRejectInstalledDeploymentDir(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("init", "--dir", deployDir, "--blueprint", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("init failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	markCLITestDeploymentInstalled(t, deployDir)
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "info", args: []string{"info", "--dir", deployDir}},
+		{name: "app", args: []string{"app", "--dir", deployDir}},
+		{name: "bundle", args: []string{"bundle", "list", "--dir", deployDir}},
+		{name: "status", args: []string{"status", "--dir", deployDir}},
+		{name: "test", args: []string{"test", "--dir", deployDir}},
+		{name: "doctor", args: []string{"doctor", "--dir", deployDir}},
+		{name: "install", args: []string{"install", "--dir", deployDir, "--to", filepath.Join(t.TempDir(), "target"), "--dry-run"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, stdout, stderr := runCLI(tc.args...)
+			if code != 1 {
+				t.Fatalf("exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+			}
+			if stdout != "" {
+				t.Fatalf("stdout = %q, want empty", stdout)
+			}
+			if !strings.Contains(stderr, "is an installed deployment") || !strings.Contains(stderr, "generated app control script") {
+				t.Fatalf("stderr did not explain installed deployment rejection:\n%s", stderr)
+			}
+		})
 	}
 }
 
@@ -335,7 +427,7 @@ func TestDockerUpdateHelp(t *testing.T) {
 	if !strings.Contains(stdout, "Usage: reploy [--docker] update [OPTIONS]") {
 		t.Fatalf("stdout did not contain update usage:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "--dir DIR") || !strings.Contains(stdout, "Deployment directory to update, default current deployment or reploy-staging") {
+	if !strings.Contains(stdout, "--dir DIR") || !strings.Contains(stdout, "Staging directory to update, default current staging dir or reploy-staging") {
 		t.Fatalf("stdout did not describe update directory option:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "--force") || !strings.Contains(stdout, "--blueprint REF") {
@@ -428,6 +520,98 @@ func TestDockerInstallPortOptionsParse(t *testing.T) {
 	}
 	if len(options.PortOverrides) != 1 || options.PortOverrides[0].Name != "" || options.PortOverrides[0].HostPort != "18082" {
 		t.Fatalf("shorthand override = %#v", options.PortOverrides)
+	}
+
+	options, err = parseDockerInstallOptions([]string{"pypi:demo-server", "--dry-run", "--in-place", "--replace", "config", "--replace=env", "--clean"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Pack.Raw != "pypi:demo-server" || !options.DryRun || !options.InPlace || !options.Clean {
+		t.Fatalf("direct install options = %#v", options)
+	}
+	if strings.Join(options.Replace, ",") != "config,env" {
+		t.Fatalf("replace = %#v", options.Replace)
+	}
+}
+
+func TestParsePackRefArgumentSupportsPyPIHashBlueprintPath(t *testing.T) {
+	ref, err := parsePackRefArgument("pypi:demo-pkg#demo_pkg/reploy/app.blueprint.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Scheme != "pypi" || ref.Source != "demo-pkg" || ref.Subdir != "demo_pkg/reploy/app.blueprint.yaml" {
+		t.Fatalf("ref = %#v", ref)
+	}
+}
+
+func TestDirectInstallFileRefDryRunUsesBlueprintDefaults(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	code, stdout, stderr := runCLI("install", "file:"+packDir, "--dry-run", "--no-start")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	for _, want := range []string{
+		"would install deployment:",
+		"target: /opt/demo",
+		"service: demo",
+		"port https: 127.0.0.1:8075 -> 8075",
+		"start: no",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout)
+		}
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDirectInstallInPlaceDryRunUsesRequestedTarget(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	target := filepath.Join(t.TempDir(), "installed")
+	code, stdout, stderr := runCLI("install", "file:"+packDir, "--to", target, "--in-place", "--dry-run", "--no-start")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "target: "+target) || !strings.Contains(stdout, "start: no") {
+		t.Fatalf("stdout did not show requested target dry-run:\n%s", stdout)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("dry-run should not create in-place target, stat err=%v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDirectInstallPrintsSuccessFromResolvedDefaultTarget(t *testing.T) {
+	oldDirectInstall := dockerDirectInstall
+	oldPrintInstallSuccess := dockerPrintInstallSuccess
+	t.Cleanup(func() {
+		dockerDirectInstall = oldDirectInstall
+		dockerPrintInstallSuccess = oldPrintInstallSuccess
+	})
+
+	dockerDirectInstall = func(options dockerdeploy.DirectInstallOptions) (string, error) {
+		if options.Target != "" {
+			t.Fatalf("target option = %q, want empty default target", options.Target)
+		}
+		return "/opt/demo", nil
+	}
+	dockerPrintInstallSuccess = func(dir string, stdout io.Writer) error {
+		if dir != "/opt/demo" {
+			t.Fatalf("success dir = %q, want resolved default target", dir)
+		}
+		fmt.Fprintln(stdout, "installed at "+dir)
+		return nil
+	}
+
+	code, stdout, _ := runCLI("install", "file:/does/not/need/to/exist")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s", code, stdout)
+	}
+	if !strings.Contains(stdout, "installed at /opt/demo") {
+		t.Fatalf("stdout missing success output:\n%s", stdout)
 	}
 }
 
@@ -558,7 +742,7 @@ func TestDockerInitExistingDefaultDeploymentSuggestsUpdate(t *testing.T) {
 	if stdout != "" {
 		t.Fatalf("stdout = %q, want empty", stdout)
 	}
-	if !strings.Contains(stderr, "deployment directory already exists at reploy-staging") {
+	if !strings.Contains(stderr, "staging directory already exists at reploy-staging") {
 		t.Fatalf("stderr missing existing deployment message:\n%s", stderr)
 	}
 	if !strings.Contains(stderr, `run "reploy update" to update it`) {
@@ -637,6 +821,21 @@ func TestParseDockerCommandOptionsAcceptsExplicitPyPIPackageRef(t *testing.T) {
 	}
 	if !options.Pack.IsPinned {
 		t.Fatal("pinned pypi ref should be pinned")
+	}
+}
+
+func TestParseDockerCommandOptionsRejectsRemovedFCDOption(t *testing.T) {
+	for _, args := range [][]string{
+		{"--fcd", "pypi:demo-suite"},
+		{"--fcd=pypi:demo-suite"},
+	} {
+		_, err := parseDockerCommandOptions(args, true)
+		if err == nil {
+			t.Fatalf("expected error for %v", args)
+		}
+		if !strings.Contains(err.Error(), "unknown option: --fcd") {
+			t.Fatalf("unexpected error for %v: %v", args, err)
+		}
 	}
 }
 
@@ -1524,6 +1723,28 @@ func makeCLITestPack(t *testing.T) string {
 	return dir
 }
 
+func markCLITestDeploymentInstalled(t *testing.T, dir string) {
+	t.Helper()
+	path := filepath.Join(dir, dockerdeploy.StateFileName)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state deploy.DeploymentState
+	if err := json.Unmarshal(content, &state); err != nil {
+		t.Fatal(err)
+	}
+	state.Phase = deploy.PhaseInstalled
+	state.Install = &deploy.InstallState{TargetDir: dir, Service: "demo"}
+	content, err = json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(content, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func makeCLITestPackWheel(t *testing.T, subdir string, version string) []byte {
 	t.Helper()
 	var buffer bytes.Buffer
@@ -1598,6 +1819,26 @@ app:
     identifier: demo-suite
   terminal:
     color_env: DEMO_COLOR
+
+install:
+  owner:
+    user: "1000"
+    group: "1000"
+  ports:
+    deployed:
+      https:
+        host_bind: 127.0.0.1
+        host_port: 8075
+    staging:
+      https:
+        host_bind: 127.0.0.1
+        host_port: 18075
+  upgrade:
+    artifacts:
+      config:
+        default: preserve
+        paths:
+          - conf/
 
 bundle:
   options:

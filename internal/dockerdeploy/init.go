@@ -127,7 +127,11 @@ func Init(options InitOptions) ([]UpdateResult, error) {
 	if err := writeGenerated(ComposeFileName, []byte(compose), false); err != nil {
 		return nil, err
 	}
-	if err := writeLocal(DockerEnvFileName, []byte(defaultDockerEnv(pack, stagingID)), 0o644); err != nil {
+	dockerEnv, err := defaultDockerEnv(pack, stagingID)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeLocal(DockerEnvFileName, []byte(dockerEnv), 0o644); err != nil {
 		return nil, err
 	}
 	if err := writeLocal(RequirementsFileName, ensureTrailingNewline(requirements), 0o644); err != nil {
@@ -296,19 +300,14 @@ func ensureTrailingNewline(content []byte) []byte {
 	return append(content, '\n')
 }
 
-func defaultDockerEnv(pack deploy.AppPack, dockerIdentity string) string {
+func defaultDockerEnv(pack deploy.AppPack, dockerIdentity string) (string, error) {
 	dirs := pack.Docker.DeploymentDirs
 	service := dockerServiceDefaults(pack, dockerIdentity)
-	ports, err := dockerPortBindings(pack, service)
+	ports, err := stagingPortBindings(pack)
 	if err != nil {
-		ports = []dockerPortBinding{{
-			Name:          "default",
-			EnvSuffix:     "DEFAULT",
-			HostBind:      service.HostBind,
-			HostPort:      service.HostPort,
-			ContainerPort: service.ContainerPort,
-		}}
+		return "", err
 	}
+	applyPrimaryPortDefaults(&service, ports)
 	primaryPort := ports[0]
 	lines := []string{
 		"# Docker Compose settings for the Reploy deployment.",
@@ -359,7 +358,7 @@ func defaultDockerEnv(pack deploy.AppPack, dockerIdentity string) string {
 			lines = append(lines, name+"="+pack.Docker.Environment[name])
 		}
 	}
-	return strings.Join(lines, "\n") + "\n"
+	return strings.Join(lines, "\n") + "\n", nil
 }
 
 func defaultContainerUser() string {
@@ -389,10 +388,11 @@ func renderComposeTemplate(pack deploy.AppPack, roots []deploy.ArtifactRoot, doc
 		return "", err
 	}
 	service := dockerServiceDefaults(pack, dockerIdentity)
-	ports, err := dockerPortBindings(pack, service)
+	ports, err := stagingPortBindings(pack)
 	if err != nil {
 		return "", err
 	}
+	applyPrimaryPortDefaults(&service, ports)
 	portBindings := renderComposePortBindings(ports)
 	appEnvironment := renderComposeAppEnvironment(pack.Docker.Environment)
 	runtimeOverrides, err := renderRuntimeOverrides(pack.Docker.Runtime)
@@ -463,11 +463,32 @@ func dockerServiceDefaults(pack deploy.AppPack, dockerIdentity string) deploy.Do
 	service.ContainerPort = defaultString(service.ContainerPort, "8080")
 	service.HostBind = defaultString(service.HostBind, "127.0.0.1")
 	service.HostPort = defaultString(service.HostPort, "18080")
+	service.InstallOwner = installOwnerSpec(pack.Install.Owner)
 	service.PublicScheme = defaultString(service.PublicScheme, "http")
 	service.NetworkName = defaultString(dockerIdentity, slug+"-staging")
 	service.RuntimeRoot = defaultString(service.RuntimeRoot, "/reploy-runtime/python-venv")
 	service.ContainerHome = defaultString(service.ContainerHome, "/tmp/reploy-home")
 	return service
+}
+
+func stagingPortBindings(pack deploy.AppPack) ([]dockerPortBinding, error) {
+	ports, err := installPortBindings(pack.Install.Ports.Staging)
+	if err != nil {
+		return nil, err
+	}
+	if len(ports) == 0 {
+		return nil, fmt.Errorf("install.ports.staging must declare at least one port")
+	}
+	return ports, nil
+}
+
+func applyPrimaryPortDefaults(service *deploy.DockerServiceConfig, ports []dockerPortBinding) {
+	if primary := installPrimaryPort(ports); primary.Name != "" {
+		service.HostBind = primary.HostBind
+		service.HostPort = primary.HostPort
+		service.ContainerPort = primary.ContainerPort
+		service.PublicScheme = defaultString(publicSchemeForPortName(primary.Name), service.PublicScheme)
+	}
 }
 
 func dockerNameSlug(value string, fallback string) string {

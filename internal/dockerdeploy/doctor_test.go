@@ -21,6 +21,9 @@ func TestDoctorPassesForInitializedDeployment(t *testing.T) {
 	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_INSTALL_OWNER": ""}); err != nil {
+		t.Fatal(err)
+	}
 
 	var stdout strings.Builder
 	code := Doctor(DoctorOptions{Dir: deployDir, Stdout: &stdout})
@@ -219,6 +222,9 @@ func TestDoctorPreinstallRejectsMissingInstallOwner(t *testing.T) {
 	}
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_INSTALL_OWNER": ""}); err != nil {
 		t.Fatal(err)
 	}
 

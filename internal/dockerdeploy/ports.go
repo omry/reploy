@@ -23,56 +23,55 @@ type dockerPortBinding struct {
 	Named         bool
 }
 
-func dockerPortBindings(pack deploy.AppPack, service deploy.DockerServiceConfig) ([]dockerPortBinding, error) {
-	if len(pack.Docker.Ports) == 0 {
-		return []dockerPortBinding{{
-			Name:          "default",
-			EnvSuffix:     "DEFAULT",
-			HostBind:      service.HostBind,
-			HostPort:      service.HostPort,
-			ContainerPort: service.ContainerPort,
-		}}, nil
-	}
-	names := make([]string, 0, len(pack.Docker.Ports))
-	for name := range pack.Docker.Ports {
+func installPortBindings(ports map[string]deploy.InstallPortConfig) ([]dockerPortBinding, error) {
+	names := make([]string, 0, len(ports))
+	for name := range ports {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	ports := make([]dockerPortBinding, 0, len(names))
+	resolved := make([]dockerPortBinding, 0, len(names))
 	envSuffixes := map[string]string{}
 	for _, name := range names {
-		config := pack.Docker.Ports[name]
+		config := ports[name]
 		envSuffix, err := portEnvSuffix(name)
 		if err != nil {
 			return nil, err
 		}
 		if previousName, ok := envSuffixes[envSuffix]; ok {
-			return nil, fmt.Errorf("docker port names %q and %q both map to environment suffix %q", previousName, name, envSuffix)
+			return nil, fmt.Errorf("install port names %q and %q both map to environment suffix %q", previousName, name, envSuffix)
 		}
 		envSuffixes[envSuffix] = name
-		hostBind := defaultString(config.HostBind, service.HostBind)
-		hostPort := config.HostPort
-		containerPort := config.ContainerPort
-		if len(names) == 1 {
-			hostPort = defaultString(hostPort, service.HostPort)
-			containerPort = defaultString(containerPort, service.ContainerPort)
-		}
-		if hostPort == "" {
-			return nil, fmt.Errorf("docker.ports.%s.host_port is required when multiple ports are declared", name)
-		}
-		if containerPort == "" {
-			return nil, fmt.Errorf("docker.ports.%s.container_port is required when multiple ports are declared", name)
-		}
-		ports = append(ports, dockerPortBinding{
+		resolved = append(resolved, dockerPortBinding{
 			Name:          name,
 			EnvSuffix:     envSuffix,
-			HostBind:      hostBind,
-			HostPort:      hostPort,
-			ContainerPort: containerPort,
+			HostBind:      config.HostBind,
+			HostPort:      strconv.Itoa(config.HostPort),
+			ContainerPort: strconv.Itoa(config.ContainerPort),
 			Named:         true,
 		})
 	}
-	return ports, nil
+	return resolved, nil
+}
+
+func installPrimaryPort(ports []dockerPortBinding) dockerPortBinding {
+	for _, port := range ports {
+		if port.Name == "https" || port.Name == "http" {
+			return port
+		}
+	}
+	if len(ports) > 0 {
+		return ports[0]
+	}
+	return dockerPortBinding{}
+}
+
+func publicSchemeForPortName(name string) string {
+	switch name {
+	case "http", "https":
+		return name
+	default:
+		return ""
+	}
 }
 
 func applyPortOverrides(ports []dockerPortBinding, overrides []PortOverride) ([]dockerPortBinding, error) {

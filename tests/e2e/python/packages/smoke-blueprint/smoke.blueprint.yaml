@@ -14,6 +14,28 @@ app:
   terminal:
     color_env: SMOKE_COLOR
 
+install:
+  target:
+    default_path: /opt/{{ app.id }}
+  owner:
+    user: "1000"
+    group: "1000"
+  ports:
+    deployed:
+      https:
+        host_bind: 127.0.0.1
+        host_port: 8075
+    staging:
+      https:
+        host_bind: 127.0.0.1
+        host_port: 18075
+  upgrade:
+    artifacts:
+      config:
+        default: preserve
+        paths:
+          - conf/
+
 bundle:
   options:
     imap:
@@ -28,11 +50,6 @@ docker:
     data: data
   service:
     image: python:3.11-slim
-    install_owner: "1000:1000"
-    host_bind: 127.0.0.1
-    host_port: "18075"
-    container_port: "8080"
-    public_scheme: https
   health:
     scheme_env: REPLOY_PUBLIC_SCHEME
     host_env: REPLOY_HOST_BIND
@@ -73,6 +90,7 @@ docker:
         - config
         - check
       app_command: true
+      deployed_command: true
       forward_flags:
         - --live
       container:

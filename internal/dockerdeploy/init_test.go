@@ -55,10 +55,16 @@ func TestInitWritesDeploymentDirectory(t *testing.T) {
 	if strings.Contains(dockerEnv, "DEMO_APP_ENV_FILE") {
 		t.Fatalf("docker.env should not point at app env files:\n%s", dockerEnv)
 	}
-	if strings.Contains(dockerEnv, "REPLOY_INSTALL_OWNER=") {
-		t.Fatalf("docker.env should not default install owner to the current user:\n%s", dockerEnv)
+	if !strings.Contains(dockerEnv, "REPLOY_INSTALL_OWNER=1000:1000") {
+		t.Fatalf("docker.env should include blueprint install owner:\n%s", dockerEnv)
+	}
+	if !strings.Contains(dockerEnv, "REPLOY_HOST_PORT=18075") || !strings.Contains(dockerEnv, "REPLOY_CONTAINER_PORT=18075") {
+		t.Fatalf("docker.env should use install.ports.staging defaults:\n%s", dockerEnv)
 	}
 	compose := readFile(t, filepath.Join(deployDir, ComposeFileName))
+	if !strings.Contains(compose, `"${REPLOY_PORT_HTTPS_HOST_BIND:-127.0.0.1}:${REPLOY_PORT_HTTPS_HOST_PORT:-18075}:${REPLOY_PORT_HTTPS_CONTAINER_PORT:-18075}"`) {
+		t.Fatalf("compose should use install.ports.staging defaults:\n%s", compose)
+	}
 	for _, unexpected := range []string{"ipam:", "com.docker.network.bridge.name", "env_file:"} {
 		if strings.Contains(compose, unexpected) {
 			t.Fatalf("compose contains unexpected deployment coupling %s:\n%s", unexpected, compose)
@@ -122,18 +128,27 @@ app:
     type: python
     identifier: mailhub-server
 
+install:
+  owner:
+    user: mailhub
+    group: mailhub
+  ports:
+    deployed:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 2525
+    staging:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 12525
+
 docker:
   deployment_dirs:
     config: config
     bundle: .reploy/bundle
     data: data
   service:
-    container_name: ignored-blueprint-container
-    install_owner: mailhub:mailhub
-    container_port: "2525"
-    host_port: "12525"
-    public_scheme: http
-    network_name: ignored-blueprint-network
+    image: python:3.11-slim
   environment:
     MAILHUB_CONFIG_NAME: mailhub
   runtime:
@@ -190,7 +205,7 @@ docker:
 	dockerEnv := readFile(t, filepath.Join(deployDir, DockerEnvFileName))
 	for _, expected := range []string{
 		"REPLOY_CONTAINER_NAME=" + stagingID,
-		"REPLOY_CONTAINER_PORT=2525",
+		"REPLOY_CONTAINER_PORT=12525",
 		"REPLOY_HOST_PORT=12525",
 		"REPLOY_PUBLIC_SCHEME=http",
 		"REPLOY_DOCKER_NETWORK_NAME=" + stagingID,
@@ -238,6 +253,20 @@ app:
   provider:
     type: python
     identifier: demo-server
+
+install:
+  owner:
+    user: "1000"
+    group: "1000"
+  ports:
+    deployed:
+      https:
+        host_bind: 127.0.0.1
+        host_port: 8075
+    staging:
+      https:
+        host_bind: 127.0.0.1
+        host_port: 18075
 
 docker:
   deployment_dirs:
@@ -351,20 +380,33 @@ app:
     type: python
     identifier: demo-server
 
+install:
+  owner:
+    user: "1000"
+    group: "1000"
+  ports:
+    deployed:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 8080
+      metrics:
+        host_bind: 127.0.0.1
+        host_port: 9090
+    staging:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 18080
+        container_port: 8080
+      metrics:
+        host_bind: 127.0.0.1
+        host_port: 19090
+        container_port: 9090
+
 docker:
   deployment_dirs:
     config: conf
     bundle: .reploy/bundle
     data: data
-  ports:
-    http:
-      host_bind: 127.0.0.1
-      host_port: "18080"
-      container_port: "8080"
-    metrics:
-      host_bind: 127.0.0.1
-      host_port: "19090"
-      container_port: "9090"
   health:
     scheme_env: REPLOY_PUBLIC_SCHEME
     host_env: REPLOY_PORT_HTTP_HOST_BIND
@@ -426,17 +468,18 @@ docker:
 	}
 }
 
-func TestInitRejectsNamedDockerPortEnvironmentSuffixCollision(t *testing.T) {
-	manifest := strings.Replace(testPackManifest(), "  health:\n", `  ports:
-    api-port:
-      host_bind: 127.0.0.1
-      host_port: "18080"
-      container_port: "8080"
-    api_port:
-      host_bind: 127.0.0.1
-      host_port: "18081"
-      container_port: "8081"
-  health:
+func TestInitRejectsNamedInstallPortEnvironmentSuffixCollision(t *testing.T) {
+	manifest := strings.Replace(testPackManifest(), `    staging:
+      https:
+        host_bind: 127.0.0.1
+        host_port: 18075
+`, `    staging:
+      api-port:
+        host_bind: 127.0.0.1
+        host_port: 18080
+      api_port:
+        host_bind: 127.0.0.1
+        host_port: 18081
 `, 1)
 	packDir := makeTestPackWithManifest(t, manifest)
 	ref, err := deploy.ParsePackRef("file:" + packDir)
@@ -833,7 +876,7 @@ func TestUpdatePreservesInstalledState(t *testing.T) {
 	if state.Install.ComposeProject != "demo2-12345678" || state.Install.ContainerName != "demo2-12345678" || state.Install.NetworkName != "demo2-12345678" {
 		t.Fatalf("install state = %#v", state.Install)
 	}
-	if state.Install.Ports["default"].HostPort != "18082" {
+	if state.Install.Ports["default"].HostPort != "18082" || state.Install.Ports["default"].ContainerPort != "8080" {
 		t.Fatalf("install ports = %#v", state.Install.Ports)
 	}
 }
@@ -917,6 +960,26 @@ app:
     identifier: demo-suite
   terminal:
     color_env: DEMO_COLOR
+
+install:
+  owner:
+    user: "1000"
+    group: "1000"
+  ports:
+    deployed:
+      https:
+        host_bind: 127.0.0.1
+        host_port: 8075
+    staging:
+      https:
+        host_bind: 127.0.0.1
+        host_port: 18075
+  upgrade:
+    artifacts:
+      config:
+        default: preserve
+        paths:
+          - conf/
 
 bundle:
   options:

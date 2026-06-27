@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,6 +21,10 @@ import (
 
 const defaultPackIndexURL = "https://raw.githubusercontent.com/omry/reploy/main/blueprint-index.json"
 const packIndexURLEnv = "REPLOY_BLUEPRINT_INDEX_URL"
+
+var dockerDirectInstall = dockerdeploy.DirectInstall
+var dockerInstall = dockerdeploy.Install
+var dockerPrintInstallSuccess = dockerdeploy.PrintInstallSuccess
 
 func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -48,8 +53,8 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 	case "--version", "version":
 		fmt.Fprintf(stdout, "reploy %s\n", reploy.Version)
 		return 0
-	case "blueprint-index":
-		return runPackIndex(args[1:], stdout, stderr)
+	case "index":
+		return runPackIndex(args[0], args[1:], stdout, stderr)
 	default:
 		if target == "docker" && isDeploymentCommand(args[0]) {
 			return runDocker(args, stdout, stderr)
@@ -69,27 +74,27 @@ func isDeploymentCommand(command string) bool {
 	}
 }
 
-func runPackIndex(args []string, stdout io.Writer, stderr io.Writer) int {
+func runPackIndex(commandName string, args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "reploy blueprint-index usage error: expected command")
-		printPackIndexShortUsage(stderr)
+		fmt.Fprintf(stderr, "reploy %s usage error: expected command\n", commandName)
+		printPackIndexShortUsage(commandName, stderr)
 		return 2
 	}
 	if isHelpArg(args[0]) {
-		printPackIndexHelp(stdout)
+		printPackIndexHelp(commandName, stdout)
 		return 0
 	}
 	switch args[0] {
-	case "refresh", "update":
+	case "update":
 		options, err := parsePackIndexRefreshOptions(args[1:])
 		if err != nil {
-			fmt.Fprintf(stderr, "reploy blueprint-index usage error: %v\n", err)
-			printPackIndexShortUsage(stderr)
+			fmt.Fprintf(stderr, "reploy %s usage error: %v\n", commandName, err)
+			printPackIndexShortUsage(commandName, stderr)
 			return 2
 		}
 		index, cachePath, err := refreshPackIndex(options.URL)
 		if err != nil {
-			fmt.Fprintf(stderr, "reploy blueprint-index refresh error: %v\n", err)
+			fmt.Fprintf(stderr, "reploy %s update error: %v\n", commandName, err)
 			return 1
 		}
 		if cachePath == "" {
@@ -98,11 +103,73 @@ func runPackIndex(args []string, stdout io.Writer, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "cached blueprint index from %s at %s (%d shorthands)\n", options.URL, cachePath, len(index.Blueprints))
 		}
 		return 0
+	case "search":
+		query, err := parsePackIndexQuery(args[1:])
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy %s usage error: %v\n", commandName, err)
+			printPackIndexShortUsage(commandName, stderr)
+			return 2
+		}
+		index, err := loadPackIndex(packIndexURL())
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy %s search error: %v\n", commandName, err)
+			return 1
+		}
+		for _, name := range matchingPackIndexNames(index, query) {
+			entry := index.Blueprints[name]
+			fmt.Fprintf(stdout, "%s\t%s\n", name, entry.Ref)
+		}
+		return 0
+	case "show":
+		name, err := parsePackIndexQuery(args[1:])
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy %s usage error: %v\n", commandName, err)
+			printPackIndexShortUsage(commandName, stderr)
+			return 2
+		}
+		index, err := loadPackIndex(packIndexURL())
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy %s show error: %v\n", commandName, err)
+			return 1
+		}
+		entry, ok := index.Blueprints[name]
+		if !ok {
+			fmt.Fprintf(stderr, "reploy %s show error: unknown blueprint shorthand %q\n", commandName, name)
+			return 1
+		}
+		fmt.Fprintf(stdout, "name: %s\nref: %s\n", name, entry.Ref)
+		if strings.TrimSpace(entry.VersionedRef) != "" {
+			fmt.Fprintf(stdout, "versioned_ref: %s\n", entry.VersionedRef)
+		}
+		return 0
 	default:
-		fmt.Fprintf(stderr, "reploy blueprint-index usage error: unknown command: %s\n", args[0])
-		printPackIndexShortUsage(stderr)
+		fmt.Fprintf(stderr, "reploy %s usage error: unknown command: %s\n", commandName, args[0])
+		printPackIndexShortUsage(commandName, stderr)
 		return 2
 	}
+}
+
+func parsePackIndexQuery(args []string) (string, error) {
+	if len(args) != 1 {
+		return "", fmt.Errorf("expected exactly one query")
+	}
+	query := strings.TrimSpace(args[0])
+	if query == "" {
+		return "", fmt.Errorf("query must not be empty")
+	}
+	return query, nil
+}
+
+func matchingPackIndexNames(index packIndex, query string) []string {
+	query = strings.ToLower(query)
+	names := make([]string, 0, len(index.Blueprints))
+	for name, entry := range index.Blueprints {
+		if strings.Contains(strings.ToLower(name), query) || strings.Contains(strings.ToLower(entry.Ref), query) {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 type packIndexRefreshOptions struct {
@@ -169,7 +236,7 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
 		if err != nil {
 			var existingFileError dockerdeploy.ExistingDeploymentFileError
 			if errors.As(err, &existingFileError) {
-				fmt.Fprintf(stderr, "reploy init error: deployment directory already exists at %s (found %s); run \"%s\" to update it\n", options.Dir, existingFileError.Path, initUpdateCommandHint(options.Dir))
+				fmt.Fprintf(stderr, "reploy init error: staging directory already exists at %s (found %s); run \"%s\" to update it\n", options.Dir, existingFileError.Path, initUpdateCommandHint(options.Dir))
 				return 1
 			}
 			fmt.Fprintf(stderr, "reploy init error: %v\n", err)
@@ -185,7 +252,11 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
 			printDockerShortUsage(stderr)
 			return 2
 		}
-		options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
+		options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy update error: %v\n", err)
+			return 1
+		}
 		results, err := dockerdeploy.Update(dockerdeploy.UpdateOptions{
 			Dir:   options.Dir,
 			Pack:  options.Pack,
@@ -204,7 +275,11 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
 			printDockerShortUsage(stderr)
 			return 2
 		}
-		options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
+		options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy info error: %v\n", err)
+			return 1
+		}
 		info, err := dockerdeploy.Info(dockerdeploy.InfoOptions{Dir: options.Dir})
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy info error: %v\n", err)
@@ -243,7 +318,11 @@ func runDockerApp(args []string, stdout io.Writer, stderr io.Writer) int {
 		printAppShortUsage(stderr)
 		return 2
 	}
-	options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
+	options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy app error: %v\n", err)
+		return 1
+	}
 	if err := dockerdeploy.AppCommand(dockerdeploy.AppCommandOptions{
 		Dir:         options.Dir,
 		CommandArgs: options.CommandArgs,
@@ -263,7 +342,11 @@ func runDockerAppSummary(args []string, stdout io.Writer, stderr io.Writer) int 
 		printAppShortUsage(stderr)
 		return 2
 	}
-	options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
+	options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy app error: %v\n", err)
+		return 1
+	}
 	result, err := dockerdeploy.AppCommandList(dockerdeploy.AppCommandListOptions{Dir: options.Dir})
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy app error: %v\n", err)
@@ -368,9 +451,17 @@ func resolveImplicitDeploymentDir(dir string, explicit bool, output io.Writer) s
 		cwd = "."
 	}
 	if output != nil {
-		fmt.Fprintf(output, "reploy: using deployment in current directory: %s\n", cwd)
+		fmt.Fprintf(output, "reploy: using staging directory in current directory: %s\n", cwd)
 	}
 	return "."
+}
+
+func resolveImplicitStagingDeploymentDir(dir string, explicit bool, output io.Writer) (string, error) {
+	dir = resolveImplicitDeploymentDir(dir, explicit, output)
+	if err := dockerdeploy.RequireStagingDeployment(dir); err != nil {
+		return "", err
+	}
+	return dir, nil
 }
 
 func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -391,7 +482,11 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 			printBundleShortUsage(stderr)
 			return 2
 		}
-		options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
+		options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy bundle upgrade error: %v\n", err)
+			return 1
+		}
 		results, err := dockerdeploy.BundleUpgrade(dockerdeploy.BundleUpgradeOptions{
 			Dir:      options.Dir,
 			Target:   options.Root,
@@ -413,7 +508,11 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 			printBundleShortUsage(stderr)
 			return 2
 		}
-		options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
+		options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy bundle list all error: %v\n", err)
+			return 1
+		}
 		packages, err := dockerdeploy.BundleListAll(dockerdeploy.BundleListOptions{Dir: options.Dir})
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy bundle list all error: %v\n", err)
@@ -438,7 +537,11 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 		printBundleShortUsage(stderr)
 		return 2
 	}
-	options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
+	options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy bundle %s error: %v\n", action, err)
+		return 1
+	}
 	switch action {
 	case "list":
 		roots, err := dockerdeploy.BundleList(dockerdeploy.BundleListOptions{Dir: options.Dir})
@@ -811,7 +914,11 @@ func runDockerDoctor(args []string, stdout io.Writer, stderr io.Writer) int {
 		printDockerShortUsage(stderr)
 		return 2
 	}
-	options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
+	options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy doctor error: %v\n", err)
+		return 1
+	}
 	return dockerdeploy.Doctor(dockerdeploy.DoctorOptions{
 		Dir:        options.Dir,
 		Preinstall: options.Preinstall,
@@ -827,28 +934,56 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 		printDockerShortUsage(stderr)
 		return 2
 	}
-	options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
 	stopSpinner := func(bool) {}
 	if !options.DryRun {
-		stopSpinner = startSpinner(stderr, "installing deployment")
+		if options.Pack.Raw != "" {
+			stopSpinner = startSpinner(stderr, "installing app")
+		} else {
+			stopSpinner = startSpinner(stderr, "installing from staging")
+		}
 	}
-	if err := dockerdeploy.Install(dockerdeploy.InstallOptions{
-		Dir:           options.Dir,
-		Target:        options.Target,
-		Service:       options.Service,
-		PortOverrides: options.PortOverrides,
-		Start:         options.Start,
-		DryRun:        options.DryRun,
-		Stdout:        stdout,
-		Progress:      nil,
-	}); err != nil {
+	installTarget := ""
+	if options.Pack.Raw != "" {
+		installTarget, err = dockerDirectInstall(dockerdeploy.DirectInstallOptions{
+			Pack:          options.Pack,
+			Target:        options.Target,
+			Service:       options.Service,
+			PortOverrides: options.PortOverrides,
+			Replace:       options.Replace,
+			Clean:         options.Clean,
+			InPlace:       options.InPlace,
+			Start:         options.Start,
+			DryRun:        options.DryRun,
+			Stdout:        stdout,
+			Progress:      nil,
+		})
+	} else {
+		installTarget = options.Target
+		options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+		if err == nil {
+			err = dockerInstall(dockerdeploy.InstallOptions{
+				Dir:           options.Dir,
+				Target:        options.Target,
+				Service:       options.Service,
+				PortOverrides: options.PortOverrides,
+				Replace:       options.Replace,
+				Clean:         options.Clean,
+				InPlace:       options.InPlace,
+				Start:         options.Start,
+				DryRun:        options.DryRun,
+				Stdout:        stdout,
+				Progress:      nil,
+			})
+		}
+	}
+	if err != nil {
 		stopSpinner(false)
 		fmt.Fprintf(stderr, "reploy install error: %v\n", err)
 		return 1
 	}
 	stopSpinner(true)
-	if !options.DryRun {
-		if err := dockerdeploy.PrintInstallSuccess(options.Target, stdout); err != nil {
+	if !options.DryRun && installTarget != "" {
+		if err := dockerPrintInstallSuccess(installTarget, stdout); err != nil {
 			fmt.Fprintf(stderr, "reploy install warning: success output: %v\n", err)
 		}
 	}
@@ -896,9 +1031,13 @@ func runDockerUninstall(args []string, stdout io.Writer, stderr io.Writer) int {
 type dockerInstallOptions struct {
 	Dir           string
 	DirExplicit   bool
+	Pack          deploy.PackRef
 	Target        string
 	Service       string
 	PortOverrides []dockerdeploy.PortOverride
+	Replace       []string
+	Clean         bool
+	InPlace       bool
 	Start         bool
 	DryRun        bool
 }
@@ -918,6 +1057,10 @@ func parseDockerInstallOptions(args []string) (dockerInstallOptions, error) {
 		switch arg {
 		case "--dry-run":
 			options.DryRun = true
+		case "--clean":
+			options.Clean = true
+		case "--in-place":
+			options.InPlace = true
 		case "--start":
 			options.Start = true
 		case "--no-start":
@@ -951,6 +1094,12 @@ func parseDockerInstallOptions(args []string) (dockerInstallOptions, error) {
 				return dockerInstallOptions{}, err
 			}
 			options.PortOverrides = append(options.PortOverrides, override)
+		case "--replace":
+			value, ok := optionValue(args, &index)
+			if !ok {
+				return dockerInstallOptions{}, fmt.Errorf("%s requires a value", arg)
+			}
+			options.Replace = append(options.Replace, value)
 		default:
 			if strings.HasPrefix(arg, "--dir=") {
 				options.Dir = strings.TrimPrefix(arg, "--dir=")
@@ -973,11 +1122,31 @@ func parseDockerInstallOptions(args []string) (dockerInstallOptions, error) {
 				options.PortOverrides = append(options.PortOverrides, override)
 				continue
 			}
-			return dockerInstallOptions{}, fmt.Errorf("unknown option: %s", arg)
+			if strings.HasPrefix(arg, "--replace=") {
+				options.Replace = append(options.Replace, strings.TrimPrefix(arg, "--replace="))
+				continue
+			}
+			if strings.HasPrefix(arg, "-") {
+				return dockerInstallOptions{}, fmt.Errorf("unknown option: %s", arg)
+			}
+			if options.Pack.Raw != "" {
+				return dockerInstallOptions{}, fmt.Errorf("install app ref may only be provided once")
+			}
+			ref, err := parsePackRefArgument(arg)
+			if err != nil {
+				return dockerInstallOptions{}, err
+			}
+			options.Pack = ref
 		}
 	}
 	if options.Dir == "" {
 		return dockerInstallOptions{}, fmt.Errorf("--dir must not be empty")
+	}
+	if options.Pack.Raw != "" && options.DirExplicit {
+		return dockerInstallOptions{}, fmt.Errorf("--dir is only supported when installing from an existing staging directory")
+	}
+	if options.InPlace && options.Pack.Raw == "" {
+		return dockerInstallOptions{}, fmt.Errorf("--in-place is only supported with direct app install")
 	}
 	return options, nil
 }
@@ -1106,7 +1275,11 @@ func runDockerTest(args []string, stdout io.Writer, stderr io.Writer) int {
 		printDockerShortUsage(stderr)
 		return 2
 	}
-	options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
+	options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy test error: %v\n", err)
+		return 1
+	}
 	if err := dockerdeploy.TestServer(dockerdeploy.TestOptions{
 		Dir:     options.Dir,
 		Timeout: options.Timeout,
@@ -1180,11 +1353,15 @@ func runDockerRuntime(action string, args []string, stdout io.Writer, stderr io.
 		printDockerShortUsage(stderr)
 		return 2
 	}
-	options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
 	if options.Follow && action != "logs" {
 		fmt.Fprintln(stderr, "reploy usage error: --follow is only supported with logs")
 		printDockerShortUsage(stderr)
 		return 2
+	}
+	options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy %s error: %v\n", action, err)
+		return 1
 	}
 	if err := dockerdeploy.Runtime(dockerdeploy.RuntimeOptions{
 		Dir:    options.Dir,
@@ -1257,7 +1434,7 @@ func parseDockerCommandOptions(args []string, requirePack bool) (dockerCommandOp
 			}
 			options.Dir = value
 			options.DirExplicit = true
-		case "--blueprint", "--fcd":
+		case "--blueprint":
 			if packSet {
 				return dockerCommandOptions{}, fmt.Errorf("--blueprint may only be provided once")
 			}
@@ -1283,7 +1460,7 @@ func parseDockerCommandOptions(args []string, requirePack bool) (dockerCommandOp
 				options.DirExplicit = true
 				continue
 			}
-			if strings.HasPrefix(arg, "--blueprint=") || strings.HasPrefix(arg, "--fcd=") {
+			if strings.HasPrefix(arg, "--blueprint=") {
 				if packSet {
 					return dockerCommandOptions{}, fmt.Errorf("--blueprint may only be provided once")
 				}
@@ -1368,6 +1545,7 @@ func parsePackRefArgument(value string) (deploy.PackRef, error) {
 		}
 		expanded = indexExpanded
 	}
+	expanded = normalizePackRefPathSyntax(expanded)
 	ref, err := deploy.ParsePackRef(expanded)
 	if err != nil {
 		return deploy.PackRef{}, err
@@ -1376,6 +1554,22 @@ func parsePackRefArgument(value string) (deploy.PackRef, error) {
 		ref.Raw = original
 	}
 	return ref, nil
+}
+
+func normalizePackRefPathSyntax(value string) string {
+	if !strings.HasPrefix(value, "pypi:") {
+		return value
+	}
+	body, query, hasQuery := strings.Cut(value, "?")
+	source, path, hasPath := strings.Cut(body, "#")
+	if !hasPath {
+		return value
+	}
+	normalized := source + "//" + strings.TrimPrefix(path, "/")
+	if hasQuery {
+		normalized += "?" + query
+	}
+	return normalized
 }
 
 func hasPackRefScheme(value string) bool {
@@ -1589,23 +1783,22 @@ func printHelp(output io.Writer) {
 Usage: reploy [--docker] COMMAND
 
 Commands:
-  init         Create a Docker deployment directory
-  update       Update generated files in a deployment directory
-  info         Show deployment state and bundle contents
-  app          Run a blueprint-declared app command inside the deployment runtime
-  bundle       Manage installation bundle contents
-  up           Start or update the Compose service
-  restart      Recreate the Compose service
-  down         Stop and remove the Compose service
-  ps           Show Compose service status
-  status       Show Compose service status
-  logs         Show Compose logs with timestamps
-  test         Probe the blueprint-configured app health endpoint
-  doctor       Check deployment files and generated-file drift
-  install      Plan or apply installation into a host service directory
+  init         Create a staging directory
+  update       Update generated files in a staging directory
+  info         Show staging state and bundle contents
+  app          Run a blueprint-declared app command inside staging
+  bundle       Manage staging bundle contents
+  up           Start or update the staging Compose service
+  restart      Recreate the staging Compose service
+  down         Stop and remove the staging Compose service
+  ps           Show staging Compose service status
+  status       Show staging Compose service status
+  logs         Show staging Compose logs with timestamps
+  test         Probe the staging app health endpoint
+  doctor       Check staging files and generated-file drift
+  install      Install or update a deployed host service
   uninstall    Remove an installed host service and Docker resources
-  blueprint-index
-               Manage the cached blueprint shorthand index
+  index        Manage the cached blueprint shorthand index
   version      Print version information
 
 Bundle:
@@ -1625,8 +1818,8 @@ Target options:
   --docker     Use the Docker deployment target, default
   --aws        Reserved for a future AWS deployment target
 
-Deployment options:
-  --dir DIR    Deployment directory, default current deployment or reploy-staging
+Staging options:
+  --dir DIR    Staging directory, default current staging dir or reploy-staging
   --blueprint REF
               App blueprint reference, required for init
               Use an indexed shorthand, file:PATH, or pypi:PACKAGE.
@@ -1650,6 +1843,12 @@ Deployment options:
   --port NAME=PORT
               Installed host port override for a named blueprint port; repeat
               for multiple ports
+  --replace ARTIFACT
+              Replace a preserved app-owned artifact during install/update;
+              use --replace all to replace every app-owned artifact
+  --clean     Equivalent to replacing all app-owned artifacts
+  --in-place  Direct install into the target path instead of a temporary
+              staging-like workspace
   --dry-run    Print the install/uninstall plan without changing the host
   --remove-dir Remove the installed target directory during uninstall
   --start      Start after install, default
@@ -1665,17 +1864,19 @@ Options:
 `, "\n"))
 }
 
-func printPackIndexShortUsage(output io.Writer) {
-	fmt.Fprintln(output, "Usage: reploy blueprint-index COMMAND")
-	fmt.Fprintln(output, "Run 'reploy blueprint-index --help' for blueprint index help.")
+func printPackIndexShortUsage(commandName string, output io.Writer) {
+	fmt.Fprintf(output, "Usage: reploy %s COMMAND\n", commandName)
+	fmt.Fprintf(output, "Run 'reploy %s --help' for blueprint index help.\n", commandName)
 }
 
-func printPackIndexHelp(output io.Writer) {
+func printPackIndexHelp(commandName string, output io.Writer) {
+	fmt.Fprintf(output, "Usage: reploy %s COMMAND\n\n", commandName)
 	fmt.Fprint(output, strings.TrimLeft(`
-Usage: reploy blueprint-index COMMAND
 
 Commands:
-  refresh      Download, validate, and cache the blueprint shorthand index
+  update       Download, validate, and cache the blueprint shorthand index
+  search       Search cached or remote blueprint shorthands
+  show         Show one blueprint shorthand
 
 Options:
   --url URL    Index URL, default from REPLOY_BLUEPRINT_INDEX_URL or built-in default
@@ -1699,10 +1900,10 @@ Usage: reploy bundle COMMAND
 	fmt.Fprint(output, strings.TrimLeft(`
 
 Options:
-  --dir DIR    Deployment directory, default current deployment or reploy-staging
+  --dir DIR    Staging directory, default current staging dir or reploy-staging
   --name NAME  Bundle option name for bundle add; accepts comma-separated names
   --force      With bundle add --name, treat unknown names as package roots
-  --dry-run    Print build/check commands without changing the deployment
+  --dry-run    Print build/check commands without changing staging
   --pypi-only  Build or upgrade using only PyPI package roots
   --verbose    Show bundle check/build command output
   -h, --help   Show bundle help
@@ -1737,23 +1938,22 @@ func printAppHelp(output io.Writer) {
 	fmt.Fprint(output, strings.TrimLeft(`
 Usage: reploy app COMMAND
 
-Run a blueprint-declared app command inside the deployment runtime. App commands use
-the application installed in the deployment bundle, not a host executable from
-PATH.
+Run a blueprint-declared app command inside staging. App commands use the
+application installed in the staging bundle, not a host executable from PATH.
 
 `, "\n"))
 	fmt.Fprint(output, appCommandSummary())
 	fmt.Fprint(output, strings.TrimLeft(`
 
 Options:
-  --dir DIR    Deployment directory, default current deployment or reploy-staging
+  --dir DIR    Staging directory, default current staging dir or reploy-staging
   -h, --help   Show app command help
 `, "\n"))
 }
 
 func appCommandSummary() string {
 	return strings.TrimLeft(`
-Show this deployment's app subcommands with:
+Show this staging directory's app subcommands with:
   reploy app
 
 Run an app subcommand with:
@@ -1763,7 +1963,7 @@ Run an app subcommand with:
 
 func printDockerShortUsage(output io.Writer) {
 	fmt.Fprintln(output, "Usage: reploy [--docker] COMMAND")
-	fmt.Fprintln(output, "Run 'reploy --help' for deployment help.")
+	fmt.Fprintln(output, "Run 'reploy --help' for help.")
 }
 
 func printDockerHelp(output io.Writer) {
@@ -1771,20 +1971,20 @@ func printDockerHelp(output io.Writer) {
 Usage: reploy [--docker] COMMAND
 
 Commands:
-  init         Create a Docker deployment directory
-  update       Update generated files in a Docker deployment directory
-  info         Show deployment state and bundle contents
-  app          Run a blueprint-declared app command inside the deployment runtime
-  bundle       Manage installation bundle contents
-  up           Start or update the Compose service
-  restart      Recreate the Compose service
-  down         Stop and remove the Compose service
-  ps           Show Compose service status
-  status       Show Compose service status
-  logs         Show Compose logs with timestamps
-  test         Probe the blueprint-configured app health endpoint
-  doctor       Check deployment files and generated-file drift
-  install      Plan or apply installation into a host service directory
+  init         Create a staging directory
+  update       Update generated files in a staging directory
+  info         Show staging state and bundle contents
+  app          Run a blueprint-declared app command inside staging
+  bundle       Manage staging bundle contents
+  up           Start or update the staging Compose service
+  restart      Recreate the staging Compose service
+  down         Stop and remove the staging Compose service
+  ps           Show staging Compose service status
+  status       Show staging Compose service status
+  logs         Show staging Compose logs with timestamps
+  test         Probe the staging app health endpoint
+  doctor       Check staging files and generated-file drift
+  install      Install or update a deployed host service
   uninstall    Remove an installed host service and Docker resources
 
 Bundle:
@@ -1801,7 +2001,7 @@ Bundle:
   upgrade      Upgrade package roots and rebuild installation bundle artifacts
 
 Options:
-  --dir DIR    Deployment directory, default current deployment or reploy-staging
+  --dir DIR    Staging directory, default current staging dir or reploy-staging
   --blueprint REF
               App blueprint reference, required for init
               Use an indexed shorthand, file:PATH, or pypi:PACKAGE.
@@ -1825,6 +2025,12 @@ Options:
   --port NAME=PORT
               Installed host port override for a named blueprint port; repeat
               for multiple ports
+  --replace ARTIFACT
+              Replace a preserved app-owned artifact during install/update;
+              use --replace all to replace every app-owned artifact
+  --clean     Equivalent to replacing all app-owned artifacts
+  --in-place  Direct install into the target path instead of a temporary
+              staging-like workspace
   --dry-run    Print the install/uninstall plan without changing the host
   --remove-dir Remove the installed target directory during uninstall
   --start      Start after install, default
@@ -1833,7 +2039,7 @@ Options:
   --follow     Follow logs instead of exiting after current output
   --timeout DURATION
               With test, readiness timeout for running services
-  -h, --help   Show deployment help
+  -h, --help   Show help
 `, "\n"))
 }
 
@@ -1850,10 +2056,10 @@ func printDockerUpdateHelp(output io.Writer) {
 	fmt.Fprint(output, strings.TrimLeft(`
 Usage: reploy [--docker] update [OPTIONS]
 
-Update generated files in a Docker deployment directory.
+Update generated files in a staging directory.
 
 Options:
-  --dir DIR    Deployment directory to update, default current deployment or reploy-staging
+  --dir DIR    Staging directory to update, default current staging dir or reploy-staging
   --blueprint REF
               App blueprint reference to update from; defaults to saved state
               Use an indexed shorthand, file:PATH, or pypi:PACKAGE.

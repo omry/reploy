@@ -25,66 +25,9 @@ This file is the day-to-day queue for design and implementation gaps.
 
 ## Now
 
-- [ ] `P1` Redesign the direct/staged install and update CLI shape.
-      Reploy should support direct install from blueprint defaults for any
-      bundle and a staging environment as the configured full app workflow
-      surface. Some services may install directly but still not work usefully
-      without staging-time configuration. Deployment should be an installed
-      runtime created directly from blueprint defaults or installed/updated
-      from staging, with only a narrow service-control surface exposed through
-      a generated app control script such as `arbiterctl`; the full Reploy
-      binary should not be included in the deployment. Design note:
-      `docs/STAGING_DEPLOYMENT_DESIGN.md`.
+No active backlog items.
 
-      Acceptance checks: define direct install behavior as available for every
-      bundle through positional app refs such as `reploy install APP_REF`,
-      default-only, with no install-time user configuration for now, and with
-      optional blueprint-declared default automation such as bundle defaults
-      and non-interactive app commands; implement direct install through a
-      temporary internal staging-like workspace by default, with a
-      low-prominence `--in-place` flag for conserving peak disk space;
-      keep the normal `reploy ...` command surface as staging-only, resolved by
-      cwd detection, explicit `--dir`, or the default staging directory; add
-      blueprint-declared defaults for the installed target path, deployed port
-      bindings, staging port bindings, and installed owner user/group, with
-      operator overrides preserved; define generated app control script naming
-      and the deployed control command menu; define install/update semantics
-      for first install, updating an existing deployment, side-by-side installs,
-      dry-run planning, and
-      Linux/root/systemd requirements; add blueprint-declared upgrade policy
-      for named app-owned artifact classes; preserve installed config/artifacts
-      by default; treat `.reploy/` as fully Reploy-owned generated state that
-      can be replaced at will; replace hardcoded config replacement flags with
-      artifact overrides such as `--replace ARTIFACT`, `--replace all`, and
-      `--clean`, where `--clean` behaves like deleting the deployment directory
-      and installing fresh; keep normal install/update output concise while
-      showing detailed artifact plans for `--dry-run`, `--verbose`,
-      `--replace`, and `--clean`; add indexed search output; and update docs,
-      CLI help, and tests to match.
-
-- [ ] `P1` Complete side-by-side install validation and docs.
-      Implemented foundation: staging Docker identity is derived from the
-      deployment path using a stable slug/hash; installed Docker identity is
-      derived from service name plus target path; install accepts single-port
-      and named `--port` overrides; installed docker.env and state record the
-      resolved compose project, container name, network name, and ports. Real
-      host validation proved `/opt/arbiter2` and `/opt/arbiter3` can run
-      concurrently with separate service names, containers, and ports alongside
-      the existing install and staging deployment. Uninstall is implemented for
-      target-present and target-missing flows through `reploy uninstall --from`,
-      `--service-name`, `--list-services`, `--remove-dir`, and `--dry-run`.
-      Remaining acceptance checks: document the side-by-side install/uninstall
-      flow and validate uninstall against the recorded install metadata on real
-      installed services.
-
-- [ ] `P2` Create a Docusaurus documentation site.
-      Build a dedicated docs website for Reploy and publish it at
-      `reploy.yadan.net`. Acceptance checks: scaffold Docusaurus in the repo
-      without disrupting the Go module or Python packaging; move or mirror the
-      operator-facing README material into structured docs; add install docs
-      with side-by-side install notes, plus bundle and uninstall pages; configure
-      the site title, navbar, footer, and custom domain; and add a local docs
-      build check to the normal validation path.
+## Post-v1
 
 - [ ] `P2` Define and validate formal Windows support.
       Reploy should have explicit Windows behavior instead of accidental
@@ -104,5 +47,3 @@ This file is the day-to-day queue for design and implementation gaps.
       Docker Desktop where applicable; make systemd-based install/uninstall fail
       with clear platform errors on macOS; and decide whether a launchd backend
       is in scope or explicitly deferred.
-
-## Post-v1

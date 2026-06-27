@@ -22,12 +22,41 @@ app:
     type: python
     identifier: example-suite
 
+install:
+  target:
+    default_path: /opt/{{ app.id }}
+  owner:
+    user: example
+    group: example
+  ports:
+    deployed:
+      https:
+        host_bind: 127.0.0.1
+        host_port: 8075
+    staging:
+      https:
+        host_bind: 127.0.0.1
+        host_port: 18075
+  upgrade:
+    artifacts:
+      config:
+        default: preserve
+        paths:
+          - conf/
+
 bundle:
   options: {}
 
 docker:
   service: {}
-  health: {}
+  health:
+    scheme_env: REPLOY_PUBLIC_SCHEME
+    host_env: REPLOY_HOST_BIND
+    port_env: REPLOY_HOST_PORT
+    default_scheme: https
+    default_host: 127.0.0.1
+    default_port: "18075"
+    path: /_health_
   default_command: serve
   commands: {}
 ```
@@ -37,6 +66,10 @@ minimum Reploy version expected by the app.
 
 `app` names the deployment and declares the app provider. The first supported
 provider is `python`, where `identifier` is the required root package.
+
+`install` declares host install defaults: target path, non-root installed
+owner, deployed and staging port defaults, and app-owned artifact upgrade
+policy.
 
 `bundle` declares optional package selections that an app user can add to the
 deployment bundle.
@@ -65,19 +98,17 @@ and `reploy bundle add`.
 
 ## Docker Service
 
-The service section defines the default container runtime:
+The service section defines the default container runtime. Host install
+defaults live in `install`, not in Docker-specific fields.
 
 ```yaml
 docker:
   service:
     image: python:3.11-slim
-    install_owner: "1000:1000"
-    host_bind: 127.0.0.1
-    host_port: "18075"
-    container_port: "8080"
 ```
 
-Use `docker.ports` when the app exposes more than one named public port.
+Use `install.ports.deployed` and `install.ports.staging` when the app exposes
+more than one named public port.
 
 ## App Commands
 
@@ -97,6 +128,7 @@ docker:
         - config
         - check
       app_command: true
+      deployed_command: true
       forward_flags:
         - --live
       container:
@@ -108,7 +140,8 @@ docker:
 
 `trigger` is the command path after `reploy app`. `forward_flags` and
 `forward_args` control what user input is passed through to the container
-command.
+command. Set `deployed_command: true` only for app commands that are safe to
+expose through the installed app control script, such as live validation.
 
 ## Install Hooks
 

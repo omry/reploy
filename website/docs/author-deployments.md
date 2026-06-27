@@ -10,7 +10,8 @@ Reploy.
 Your job is to publish a blueprint that describes the app-specific pieces.
 Reploy handles the generic lifecycle around that blueprint: initializing a
 deployment directory, preparing bundles, generating Docker runtime files,
-running health checks, and installing or uninstalling the service.
+running health checks, installing or updating the service, and generating the
+local app control script for installed deployments.
 
 ## What the Blueprint Owns
 
@@ -19,7 +20,9 @@ A blueprint answers these questions:
 - Which app backend provides the deployable packages?
 - Which bundle options can users select?
 - Which runtime commands should Reploy expose?
-- Which Docker image, ports, and directories should the app use?
+- Which install target, owner, staging ports, and deployed ports should be the
+  defaults?
+- Which Docker image and directories should the app use?
 - Which health check proves the service is up?
 - Which app-specific hooks should run during install?
 
@@ -54,14 +57,38 @@ bundle:
       group: plugins
       description: Install the example IMAP plugin.
 
+install:
+  target:
+    default_path: /opt/{{ app.id }}
+  owner:
+    user: example
+    group: example
+  ports:
+    deployed:
+      https:
+        host_bind: 127.0.0.1
+        host_port: 8075
+    staging:
+      https:
+        host_bind: 127.0.0.1
+        host_port: 18075
+  upgrade:
+    artifacts:
+      config:
+        default: preserve
+        paths:
+          - conf/
+
 docker:
   service:
     image: python:3.11-slim
-    install_owner: "example:example"
-    host_bind: 127.0.0.1
-    host_port: "18075"
-    container_port: "8080"
   health:
+    scheme_env: REPLOY_PUBLIC_SCHEME
+    host_env: REPLOY_HOST_BIND
+    port_env: REPLOY_HOST_PORT
+    default_scheme: https
+    default_host: 127.0.0.1
+    default_port: "18075"
     path: /_health_
   default_command: serve
   commands:
@@ -70,6 +97,19 @@ docker:
         argv:
           - example-server
           - serve
+    config_check:
+      trigger:
+        - config
+        - check
+      app_command: true
+      deployed_command: true
+      forward_flags:
+        - --live
+      container:
+        argv:
+          - example-server
+          - config
+          - check
 ```
 
 For a working reference, see the fixture under
@@ -81,6 +121,7 @@ Blueprint refs can be local files while developing:
 
 ```bash
 reploy init --blueprint file:./example.blueprint.yaml
+reploy install file:./example.blueprint.yaml --dry-run
 ```
 
 For users, publish the blueprint inside the app package and give them the
@@ -88,6 +129,7 @@ package ref:
 
 ```bash
 reploy init --blueprint pypi:example-app
+reploy install pypi:example-app
 ```
 
 If the blueprint is not stored in the package's conventional `example_app/reploy`
@@ -95,4 +137,5 @@ path, include the explicit path:
 
 ```bash
 reploy init --blueprint pypi:example-app//custom/path
+reploy install pypi:example-app#custom/path
 ```

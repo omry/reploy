@@ -166,6 +166,23 @@ func loadState(dir string) (deploy.DeploymentState, error) {
 	return state, nil
 }
 
+func RequireStagingDeployment(dir string) error {
+	state, err := loadState(dir)
+	if err != nil {
+		return err
+	}
+	switch state.Phase {
+	case deploy.PhaseStaged:
+		return nil
+	case deploy.PhaseInstalled:
+		return fmt.Errorf("%s is an installed deployment; use the generated app control script for deployed operation", dir)
+	case "":
+		return fmt.Errorf("%s is missing deployment phase; expected staged", dir)
+	default:
+		return fmt.Errorf("%s has unsupported deployment phase %q; expected staged", dir, state.Phase)
+	}
+}
+
 func loadManifestOrNew(dir string) (deploy.DeploymentManifest, error) {
 	manifest, err := deploy.LoadDeploymentManifest(filepath.Join(dir, ManifestFileName))
 	if err == nil {
@@ -201,7 +218,11 @@ func writeMissingLocalFileMode(dir string, relativePath string, content []byte, 
 
 func updateDockerEnvFile(dir string, pack deploy.AppPack, dockerIdentity string, results *[]UpdateResult) error {
 	path := filepath.Join(dir, DockerEnvFileName)
-	desired := []byte(defaultDockerEnv(pack, dockerIdentity))
+	dockerEnv, err := defaultDockerEnv(pack, dockerIdentity)
+	if err != nil {
+		return err
+	}
+	desired := []byte(dockerEnv)
 	current, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {

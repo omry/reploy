@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -21,15 +22,17 @@ type AppPack struct {
 	Pack             PackMetadata
 	AppID            string
 	App              AppPackConfig
+	Install          InstallPackConfig
 	Bundle           BundlePackConfig
 	Docker           DockerPackConfig
 }
 
 type PackManifest struct {
-	Pack   PackMetadata     `yaml:"blueprint"`
-	App    AppPackConfig    `yaml:"app"`
-	Bundle BundlePackConfig `yaml:"bundle"`
-	Docker DockerPackConfig `yaml:"docker"`
+	Pack    PackMetadata      `yaml:"blueprint"`
+	App     AppPackConfig     `yaml:"app"`
+	Install InstallPackConfig `yaml:"install"`
+	Bundle  BundlePackConfig  `yaml:"bundle"`
+	Docker  DockerPackConfig  `yaml:"docker"`
 }
 
 type PackMetadata struct {
@@ -54,6 +57,47 @@ type AppProviderConfig struct {
 	LocalSources map[string]string `yaml:"local_sources"`
 }
 
+type InstallPackConfig struct {
+	Target  InstallTargetConfig  `yaml:"target"`
+	Owner   InstallOwnerConfig   `yaml:"owner"`
+	Ports   InstallPortsConfig   `yaml:"ports"`
+	Upgrade InstallUpgradeConfig `yaml:"upgrade"`
+}
+
+type InstallTargetConfig struct {
+	DefaultPath string `yaml:"default_path"`
+}
+
+type InstallOwnerConfig struct {
+	User    string                    `yaml:"user"`
+	Group   string                    `yaml:"group"`
+	Windows InstallWindowsOwnerConfig `yaml:"windows"`
+}
+
+type InstallWindowsOwnerConfig struct {
+	Account string `yaml:"account"`
+}
+
+type InstallPortsConfig struct {
+	Deployed map[string]InstallPortConfig `yaml:"deployed"`
+	Staging  map[string]InstallPortConfig `yaml:"staging"`
+}
+
+type InstallPortConfig struct {
+	HostBind      string `yaml:"host_bind"`
+	HostPort      int    `yaml:"host_port"`
+	ContainerPort int    `yaml:"container_port,omitempty"`
+}
+
+type InstallUpgradeConfig struct {
+	Artifacts map[string]InstallArtifactPolicyConfig `yaml:"artifacts"`
+}
+
+type InstallArtifactPolicyConfig struct {
+	Default string   `yaml:"default"`
+	Paths   []string `yaml:"paths"`
+}
+
 type BundlePackConfig struct {
 	Options map[string]BundleOptionConfig `yaml:"options"`
 }
@@ -69,38 +113,31 @@ type AppCommandConfig struct {
 }
 
 type DockerPackConfig struct {
-	DeploymentDirs DockerDeploymentDirs        `yaml:"deployment_dirs"`
-	Service        DockerServiceConfig         `yaml:"service"`
-	Ports          map[string]DockerPortConfig `yaml:"ports"`
-	Install        DockerInstallConfig         `yaml:"install"`
-	Environment    map[string]string           `yaml:"environment"`
-	Runtime        DockerRuntimeConfig         `yaml:"runtime"`
-	DefaultCommand string                      `yaml:"default_command"`
-	Health         DockerHealthConfig          `yaml:"health"`
-	Commands       []DockerCommandConfig       `yaml:"-"`
+	DeploymentDirs DockerDeploymentDirs  `yaml:"deployment_dirs"`
+	Service        DockerServiceConfig   `yaml:"service"`
+	Install        DockerInstallConfig   `yaml:"install"`
+	Environment    map[string]string     `yaml:"environment"`
+	Runtime        DockerRuntimeConfig   `yaml:"runtime"`
+	DefaultCommand string                `yaml:"default_command"`
+	Health         DockerHealthConfig    `yaml:"health"`
+	Commands       []DockerCommandConfig `yaml:"-"`
 }
 
 type DockerServiceConfig struct {
 	Image         string `yaml:"image"`
 	ContainerName string `yaml:"-"`
 	ContainerUser string `yaml:"container_user"`
-	InstallOwner  string `yaml:"install_owner"`
 	Restart       string `yaml:"restart"`
 	ContainerHost string `yaml:"container_host"`
-	ContainerPort string `yaml:"container_port"`
-	HostBind      string `yaml:"host_bind"`
-	HostPort      string `yaml:"host_port"`
-	PublicScheme  string `yaml:"public_scheme"`
 	PublicBaseURL string `yaml:"public_base_url"`
 	NetworkName   string `yaml:"-"`
 	RuntimeRoot   string `yaml:"runtime_root"`
 	ContainerHome string `yaml:"container_home"`
-}
-
-type DockerPortConfig struct {
-	HostBind      string `yaml:"host_bind"`
-	HostPort      string `yaml:"host_port"`
-	ContainerPort string `yaml:"container_port"`
+	InstallOwner  string `yaml:"-"`
+	ContainerPort string `yaml:"-"`
+	HostBind      string `yaml:"-"`
+	HostPort      string `yaml:"-"`
+	PublicScheme  string `yaml:"-"`
 }
 
 type DockerRuntimeConfig struct {
@@ -141,6 +178,7 @@ type DockerCommandConfig struct {
 	Name         string           `yaml:"-"`
 	Trigger      []string         `yaml:"trigger"`
 	AppCommand   bool             `yaml:"app_command"`
+	Deployed     bool             `yaml:"deployed_command"`
 	ForwardArgs  bool             `yaml:"forward_args"`
 	ForwardFlags []string         `yaml:"forward_flags"`
 	Container    AppCommandConfig `yaml:"container"`
@@ -258,6 +296,7 @@ func loadFilePack(ref PackRef) (AppPack, error) {
 		Pack:         manifest.Pack,
 		AppID:        manifest.App.ID,
 		App:          manifest.App,
+		Install:      manifest.Install,
 		Bundle:       manifest.Bundle,
 		Docker:       manifest.Docker,
 	}, nil
@@ -307,14 +346,20 @@ func ParsePackManifest(content string) (PackManifest, error) {
 	if err := yaml.Unmarshal([]byte(content), &raw); err != nil {
 		return PackManifest{}, err
 	}
+	if legacyFields := raw.Docker.Service.legacyFields(); len(legacyFields) > 0 {
+		return PackManifest{}, fmt.Errorf("%s has moved to install.*", strings.Join(legacyFields, ", "))
+	}
+	if raw.Docker.Ports != nil {
+		return PackManifest{}, fmt.Errorf("docker.ports has moved to install.ports")
+	}
 	manifest := PackManifest{
-		Pack:   raw.Pack,
-		App:    raw.App,
-		Bundle: raw.Bundle,
+		Pack:    raw.Pack,
+		App:     raw.App,
+		Install: raw.Install,
+		Bundle:  raw.Bundle,
 		Docker: DockerPackConfig{
 			DeploymentDirs: raw.Docker.DeploymentDirs,
-			Service:        raw.Docker.Service,
-			Ports:          raw.Docker.Ports,
+			Service:        raw.Docker.Service.config(),
 			Install:        raw.Docker.Install,
 			Environment:    raw.Docker.Environment,
 			Runtime:        raw.Docker.Runtime,
@@ -335,6 +380,10 @@ func ParsePackManifest(content string) (PackManifest, error) {
 	if err := validateRequiresReploy(manifest.Pack.RequiresReploy, ToolVersion); err != nil {
 		return PackManifest{}, err
 	}
+	manifest.App.ID = strings.TrimSpace(manifest.App.ID)
+	if manifest.App.ID == "" {
+		return PackManifest{}, fmt.Errorf("missing app.id")
+	}
 	manifest.App.Provider.Type = strings.TrimSpace(manifest.App.Provider.Type)
 	if manifest.App.Provider.Type == "" {
 		return PackManifest{}, fmt.Errorf("missing app.provider.type")
@@ -346,6 +395,9 @@ func ParsePackManifest(content string) (PackManifest, error) {
 	manifest.App.Terminal.ColorEnv = strings.TrimSpace(manifest.App.Terminal.ColorEnv)
 	if manifest.App.Terminal.ColorEnv != "" && !isEnvironmentVariableName(manifest.App.Terminal.ColorEnv) {
 		return PackManifest{}, fmt.Errorf("app.terminal.color_env must be an environment variable name")
+	}
+	if err := normalizeAndValidateInstallConfig(&manifest); err != nil {
+		return PackManifest{}, err
 	}
 	required := map[string]string{
 		"docker.deployment_dirs.config": manifest.Docker.DeploymentDirs.Config,
@@ -397,27 +449,6 @@ func ParsePackManifest(content string) (PackManifest, error) {
 	}
 	if manifest.Docker.Environment == nil {
 		manifest.Docker.Environment = map[string]string{}
-	}
-	if manifest.Docker.Ports == nil {
-		manifest.Docker.Ports = map[string]DockerPortConfig{}
-	}
-	for name, port := range manifest.Docker.Ports {
-		if strings.TrimSpace(name) == "" {
-			return PackManifest{}, fmt.Errorf("docker.ports contains an empty port name")
-		}
-		if containsLineOrFieldBreak(name) {
-			return PackManifest{}, fmt.Errorf("docker.ports contains an invalid port name: %q", name)
-		}
-		for field, value := range map[string]string{
-			"host_bind":      port.HostBind,
-			"host_port":      port.HostPort,
-			"container_port": port.ContainerPort,
-		} {
-			if containsLineOrFieldBreak(value) {
-				return PackManifest{}, fmt.Errorf("docker.ports.%s.%s must not contain tabs or newlines", name, field)
-			}
-		}
-		manifest.Docker.Ports[name] = port
 	}
 	for name, value := range manifest.Docker.Environment {
 		if !isEnvironmentVariableName(name) {
@@ -480,6 +511,166 @@ func ParsePackManifest(content string) (PackManifest, error) {
 		return PackManifest{}, fmt.Errorf("docker.health.path must start with /")
 	}
 	return manifest, nil
+}
+
+func normalizeAndValidateInstallConfig(manifest *PackManifest) error {
+	if manifest.Install.Target.DefaultPath == "" {
+		manifest.Install.Target.DefaultPath = defaultInstallTargetPath()
+	}
+	if err := validateInstallTargetDefaultPath(manifest.Install.Target.DefaultPath); err != nil {
+		return err
+	}
+	manifest.Install.Owner.User = strings.TrimSpace(manifest.Install.Owner.User)
+	manifest.Install.Owner.Group = strings.TrimSpace(manifest.Install.Owner.Group)
+	manifest.Install.Owner.Windows.Account = strings.TrimSpace(manifest.Install.Owner.Windows.Account)
+	if err := validateInstallOwner(manifest.Install.Owner); err != nil {
+		return err
+	}
+	if manifest.Install.Ports.Deployed == nil {
+		manifest.Install.Ports.Deployed = map[string]InstallPortConfig{}
+	}
+	if manifest.Install.Ports.Staging == nil {
+		manifest.Install.Ports.Staging = map[string]InstallPortConfig{}
+	}
+	if len(manifest.Install.Ports.Deployed) == 0 {
+		return fmt.Errorf("install.ports.deployed must declare at least one port")
+	}
+	if len(manifest.Install.Ports.Staging) == 0 {
+		return fmt.Errorf("install.ports.staging must declare at least one port")
+	}
+	if err := normalizeAndValidateInstallPorts("deployed", manifest.Install.Ports.Deployed); err != nil {
+		return err
+	}
+	if err := normalizeAndValidateInstallPorts("staging", manifest.Install.Ports.Staging); err != nil {
+		return err
+	}
+	if manifest.Install.Upgrade.Artifacts == nil {
+		manifest.Install.Upgrade.Artifacts = map[string]InstallArtifactPolicyConfig{}
+	}
+	if err := normalizeAndValidateInstallArtifacts(manifest.Install.Upgrade.Artifacts); err != nil {
+		return err
+	}
+	return nil
+}
+
+func defaultInstallTargetPath() string {
+	switch runtime.GOOS {
+	case "windows":
+		return `%ProgramFiles%\{{ app.id }}`
+	default:
+		return "/opt/{{ app.id }}"
+	}
+}
+
+func validateInstallTargetDefaultPath(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("install.target.default_path must not be empty")
+	}
+	if containsLineOrFieldBreak(path) {
+		return fmt.Errorf("install.target.default_path must not contain tabs or newlines")
+	}
+	rendered := strings.ReplaceAll(path, "{{ app.id }}", "app")
+	switch {
+	case filepath.IsAbs(rendered):
+		return nil
+	case strings.HasPrefix(rendered, `%ProgramFiles%\`) || strings.HasPrefix(rendered, `%ProgramFiles(x86)%\`):
+		return nil
+	default:
+		return fmt.Errorf("install.target.default_path must be absolute or use a supported platform root: %s", path)
+	}
+}
+
+func validateInstallOwner(owner InstallOwnerConfig) error {
+	if owner.User == "" {
+		return fmt.Errorf("install.owner.user is required")
+	}
+	if owner.Group == "" {
+		return fmt.Errorf("install.owner.group is required")
+	}
+	if containsLineOrFieldBreak(owner.User) {
+		return fmt.Errorf("install.owner.user must not contain tabs or newlines")
+	}
+	if containsLineOrFieldBreak(owner.Group) {
+		return fmt.Errorf("install.owner.group must not contain tabs or newlines")
+	}
+	if containsLineOrFieldBreak(owner.Windows.Account) {
+		return fmt.Errorf("install.owner.windows.account must not contain tabs or newlines")
+	}
+	if owner.User == "root" || owner.User == "0" {
+		return fmt.Errorf("install.owner.user must not be root")
+	}
+	if owner.Group == "root" || owner.Group == "0" {
+		return fmt.Errorf("install.owner.group must not be root")
+	}
+	return nil
+}
+
+func normalizeAndValidateInstallPorts(environment string, ports map[string]InstallPortConfig) error {
+	for name, port := range ports {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("install.ports.%s contains an empty port name", environment)
+		}
+		if containsLineOrFieldBreak(name) {
+			return fmt.Errorf("install.ports.%s contains an invalid port name: %q", environment, name)
+		}
+		if containsLineOrFieldBreak(port.HostBind) {
+			return fmt.Errorf("install.ports.%s.%s.host_bind must not contain tabs or newlines", environment, name)
+		}
+		if strings.TrimSpace(port.HostBind) == "" {
+			return fmt.Errorf("install.ports.%s.%s.host_bind is required", environment, name)
+		}
+		if !validTCPPort(port.HostPort) {
+			return fmt.Errorf("install.ports.%s.%s.host_port must be between 1 and 65535", environment, name)
+		}
+		if port.ContainerPort == 0 {
+			port.ContainerPort = port.HostPort
+		}
+		if !validTCPPort(port.ContainerPort) {
+			return fmt.Errorf("install.ports.%s.%s.container_port must be between 1 and 65535", environment, name)
+		}
+		ports[name] = port
+	}
+	return nil
+}
+
+func validTCPPort(port int) bool {
+	return port >= 1 && port <= 65535
+}
+
+func normalizeAndValidateInstallArtifacts(artifacts map[string]InstallArtifactPolicyConfig) error {
+	for name, artifact := range artifacts {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("install.upgrade.artifacts contains an empty artifact name")
+		}
+		if containsLineOrFieldBreak(name) {
+			return fmt.Errorf("install.upgrade.artifacts contains an invalid artifact name: %q", name)
+		}
+		artifact.Default = strings.TrimSpace(artifact.Default)
+		switch artifact.Default {
+		case "preserve", "replace":
+		default:
+			return fmt.Errorf("install.upgrade.artifacts.%s.default must be preserve or replace", name)
+		}
+		if len(artifact.Paths) == 0 {
+			return fmt.Errorf("install.upgrade.artifacts.%s.paths must not be empty", name)
+		}
+		for index, path := range artifact.Paths {
+			if strings.TrimSpace(path) == "" {
+				return fmt.Errorf("install.upgrade.artifacts.%s.paths[%d] must not be empty", name, index)
+			}
+			if containsLineOrFieldBreak(path) {
+				return fmt.Errorf("install.upgrade.artifacts.%s.paths[%d] must not contain tabs or newlines", name, index)
+			}
+			if err := validateRelativeBlueprintPath(path); err != nil {
+				return fmt.Errorf("install.upgrade.artifacts.%s.paths[%d]: %w", name, index, err)
+			}
+			if path == ".reploy" || strings.HasPrefix(filepath.ToSlash(path), ".reploy/") {
+				return fmt.Errorf("install.upgrade.artifacts.%s.paths[%d] must not include .reploy; .reploy is Reploy-owned", name, index)
+			}
+		}
+		artifacts[name] = artifact
+	}
+	return nil
 }
 
 func validateInstallHooks(hooks DockerInstallHooksConfig) error {
@@ -604,22 +795,70 @@ func isEnvironmentVariableName(name string) bool {
 }
 
 type rawPackManifest struct {
-	Pack   PackMetadata        `yaml:"blueprint"`
-	App    AppPackConfig       `yaml:"app"`
-	Bundle BundlePackConfig    `yaml:"bundle"`
-	Docker rawDockerPackConfig `yaml:"docker"`
+	Pack    PackMetadata        `yaml:"blueprint"`
+	App     AppPackConfig       `yaml:"app"`
+	Install InstallPackConfig   `yaml:"install"`
+	Bundle  BundlePackConfig    `yaml:"bundle"`
+	Docker  rawDockerPackConfig `yaml:"docker"`
 }
 
 type rawDockerPackConfig struct {
 	DeploymentDirs DockerDeploymentDirs           `yaml:"deployment_dirs"`
-	Service        DockerServiceConfig            `yaml:"service"`
-	Ports          map[string]DockerPortConfig    `yaml:"ports"`
+	Service        rawDockerServiceConfig         `yaml:"service"`
+	Ports          map[string]any                 `yaml:"ports"`
 	Install        DockerInstallConfig            `yaml:"install"`
 	Environment    map[string]string              `yaml:"environment"`
 	Runtime        DockerRuntimeConfig            `yaml:"runtime"`
 	DefaultCommand string                         `yaml:"default_command"`
 	Health         DockerHealthConfig             `yaml:"health"`
 	Commands       map[string]DockerCommandConfig `yaml:"commands"`
+}
+
+type rawDockerServiceConfig struct {
+	Image         string `yaml:"image"`
+	ContainerUser string `yaml:"container_user"`
+	Restart       string `yaml:"restart"`
+	ContainerHost string `yaml:"container_host"`
+	PublicBaseURL string `yaml:"public_base_url"`
+	RuntimeRoot   string `yaml:"runtime_root"`
+	ContainerHome string `yaml:"container_home"`
+	InstallOwner  string `yaml:"install_owner"`
+	ContainerPort string `yaml:"container_port"`
+	HostBind      string `yaml:"host_bind"`
+	HostPort      string `yaml:"host_port"`
+	PublicScheme  string `yaml:"public_scheme"`
+}
+
+func (service rawDockerServiceConfig) config() DockerServiceConfig {
+	return DockerServiceConfig{
+		Image:         service.Image,
+		ContainerUser: service.ContainerUser,
+		Restart:       service.Restart,
+		ContainerHost: service.ContainerHost,
+		PublicBaseURL: service.PublicBaseURL,
+		RuntimeRoot:   service.RuntimeRoot,
+		ContainerHome: service.ContainerHome,
+	}
+}
+
+func (service rawDockerServiceConfig) legacyFields() []string {
+	fields := []string{}
+	if service.InstallOwner != "" {
+		fields = append(fields, "docker.service.install_owner")
+	}
+	if service.ContainerPort != "" {
+		fields = append(fields, "docker.service.container_port")
+	}
+	if service.HostBind != "" {
+		fields = append(fields, "docker.service.host_bind")
+	}
+	if service.HostPort != "" {
+		fields = append(fields, "docker.service.host_port")
+	}
+	if service.PublicScheme != "" {
+		fields = append(fields, "docker.service.public_scheme")
+	}
+	return fields
 }
 
 func parseDockerCommands(commands map[string]DockerCommandConfig) []DockerCommandConfig {
@@ -700,6 +939,19 @@ func (docker DockerPackConfig) AppCommands() []DockerCommandConfig {
 	commands := []DockerCommandConfig{}
 	for _, command := range docker.Commands {
 		if command.AppCommand && len(command.Trigger) > 0 {
+			commands = append(commands, command)
+		}
+	}
+	sort.SliceStable(commands, func(left int, right int) bool {
+		return appCommandSortKey(commands[left]) < appCommandSortKey(commands[right])
+	})
+	return commands
+}
+
+func (docker DockerPackConfig) DeployedCommands() []DockerCommandConfig {
+	commands := []DockerCommandConfig{}
+	for _, command := range docker.Commands {
+		if command.Deployed && len(command.Trigger) > 0 {
 			commands = append(commands, command)
 		}
 	}

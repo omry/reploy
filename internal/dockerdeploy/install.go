@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/omry/reploy/internal/deploy"
@@ -21,6 +23,23 @@ type InstallOptions struct {
 	Target        string
 	Service       string
 	PortOverrides []PortOverride
+	Replace       []string
+	Clean         bool
+	InPlace       bool
+	Start         bool
+	DryRun        bool
+	Stdout        io.Writer
+	Progress      io.Writer
+}
+
+type DirectInstallOptions struct {
+	Pack          deploy.PackRef
+	Target        string
+	Service       string
+	PortOverrides []PortOverride
+	Replace       []string
+	Clean         bool
+	InPlace       bool
 	Start         bool
 	DryRun        bool
 	Stdout        io.Writer
@@ -28,20 +47,29 @@ type InstallOptions struct {
 }
 
 type installPlan struct {
-	SourceDir       string
-	TargetDir       string
-	Service         string
-	UnitPath        string
-	InstanceID      string
-	ComposeProject  string
-	ContainerName   string
-	NetworkName     string
-	Ports           []dockerPortBinding
-	Hooks           deploy.DockerInstallHooksConfig
-	Success         deploy.DockerInstallSuccessConfig
-	Start           bool
-	ComposeOverride bool
-	Progress        io.Writer
+	SourceDir        string
+	TargetDir        string
+	AppID            string
+	Service          string
+	ControlScript    string
+	UnitPath         string
+	InstanceID       string
+	ComposeProject   string
+	ContainerName    string
+	NetworkName      string
+	Ports            []dockerPortBinding
+	Health           deploy.DockerHealthConfig
+	ConfigDir        string
+	DeployedCommands []deploy.DockerCommandConfig
+	Hooks            deploy.DockerInstallHooksConfig
+	Success          deploy.DockerInstallSuccessConfig
+	PreservePaths    []string
+	Replace          []string
+	Clean            bool
+	Start            bool
+	ComposeOverride  bool
+	InPlace          bool
+	Progress         io.Writer
 }
 
 const defaultSystemdUnitDir = "/etc/systemd/system"
@@ -54,7 +82,6 @@ var installRunCommand = func(name string, args ...string) error {
 var installRunCommandOutput = func(name string, args ...string) ([]byte, error) {
 	return exec.Command(name, args...).CombinedOutput()
 }
-var installToolBinaryContent = currentExecutableContent
 var installChown = os.Lchown
 var installLookupUser = user.Lookup
 var installLookupGroup = user.LookupGroup
@@ -62,6 +89,12 @@ var installServiceStartTimeout = 30 * time.Second
 var installServicePollInterval = time.Second
 var installServiceTerminalStateGrace = 5 * time.Second
 var installSystemdUnitDir = defaultSystemdUnitDir
+var runInstallAppCommand = func(dir string, args []string, stdout io.Writer, stderr io.Writer) error {
+	return AppCommand(AppCommandOptions{Dir: dir, CommandArgs: args, Stdout: stdout, Stderr: stderr})
+}
+var runInstallHealthCheck = func(dir string, stdout io.Writer, stderr io.Writer) error {
+	return TestServer(TestOptions{Dir: dir, Stdout: stdout})
+}
 
 type resolvedInstallOwner struct {
 	Spec          string
@@ -87,6 +120,67 @@ func Install(options InstallOptions) error {
 		return fmt.Errorf("install requires root unless --dry-run is set")
 	}
 	return applyInstallPlan(plan)
+}
+
+func DirectInstall(options DirectInstallOptions) (string, error) {
+	pack, err := deploy.LoadPack(options.Pack)
+	if err != nil {
+		return "", err
+	}
+	target := options.Target
+	if strings.TrimSpace(target) == "" {
+		target, err = defaultInstallTarget(pack)
+		if err != nil {
+			return "", err
+		}
+	}
+	options.Pack = pack.Ref
+	if options.InPlace {
+		if options.DryRun {
+			return target, directInstallViaTemporaryStaging(target, options)
+		}
+		if _, err := Init(InitOptions{Dir: target, Pack: pack.Ref}); err != nil {
+			return "", err
+		}
+		return target, Install(InstallOptions{
+			Dir:           target,
+			Target:        target,
+			Service:       options.Service,
+			PortOverrides: options.PortOverrides,
+			Replace:       options.Replace,
+			Clean:         options.Clean,
+			InPlace:       true,
+			Start:         options.Start,
+			DryRun:        options.DryRun,
+			Stdout:        options.Stdout,
+			Progress:      options.Progress,
+		})
+	}
+	return target, directInstallViaTemporaryStaging(target, options)
+}
+
+func directInstallViaTemporaryStaging(target string, options DirectInstallOptions) error {
+	tempDir, err := os.MkdirTemp("", "reploy-direct-install-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tempDir)
+	stagingDir := filepath.Join(tempDir, "staging")
+	if _, err := Init(InitOptions{Dir: stagingDir, Pack: options.Pack}); err != nil {
+		return err
+	}
+	return Install(InstallOptions{
+		Dir:           stagingDir,
+		Target:        target,
+		Service:       options.Service,
+		PortOverrides: options.PortOverrides,
+		Replace:       options.Replace,
+		Clean:         options.Clean,
+		Start:         options.Start,
+		DryRun:        options.DryRun,
+		Stdout:        options.Stdout,
+		Progress:      options.Progress,
+	})
 }
 
 func newInstallPlan(options InstallOptions) (installPlan, error) {
@@ -118,8 +212,11 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 	if err != nil {
 		return installPlan{}, err
 	}
-	if installPathsOverlap(canonicalSourceDir, canonicalTargetDir) {
+	if installPathsOverlap(canonicalSourceDir, canonicalTargetDir) && !options.InPlace {
 		return installPlan{}, fmt.Errorf("--to must not overlap deployment directory: %s overlaps %s", target, absoluteDir)
+	}
+	if options.InPlace && canonicalSourceDir != canonicalTargetDir {
+		return installPlan{}, fmt.Errorf("--in-place requires deployment directory and target to be the same path")
 	}
 	if options.Service == "" {
 		service, err := defaultInstallService(options.Dir)
@@ -144,12 +241,24 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 		return installPlan{}, err
 	}
 	service := dockerServiceDefaults(pack, instanceID)
-	ports, err := dockerPortBindings(pack, service)
+	ports, err := installPortBindings(pack.Install.Ports.Deployed)
 	if err != nil {
 		return installPlan{}, err
 	}
+	if len(ports) == 0 {
+		return installPlan{}, fmt.Errorf("install.ports.deployed must declare at least one port")
+	}
+	applyPrimaryPortDefaults(&service, ports)
 	ports, err = applyPortOverrides(ports, options.PortOverrides)
 	if err != nil {
+		return installPlan{}, err
+	}
+	preservePaths, err := installPreservePaths(pack.Install.Upgrade.Artifacts, options.Replace, options.Clean)
+	if err != nil {
+		return installPlan{}, err
+	}
+	deployedCommands := pack.Docker.DeployedCommands()
+	if err := validateDeployedControlCommands(deployedCommands); err != nil {
 		return installPlan{}, err
 	}
 	_, overrideErr := os.Stat(filepath.Join(absoluteDir, ComposeOverrideFileName))
@@ -157,20 +266,29 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 		return installPlan{}, overrideErr
 	}
 	return installPlan{
-		SourceDir:       absoluteDir,
-		TargetDir:       target,
-		Service:         options.Service,
-		UnitPath:        filepath.Join(installSystemdUnitDir, options.Service+".service"),
-		InstanceID:      instanceID,
-		ComposeProject:  instanceID,
-		ContainerName:   service.ContainerName,
-		NetworkName:     service.NetworkName,
-		Ports:           ports,
-		Hooks:           pack.Docker.Install.Hooks,
-		Success:         pack.Docker.Install.Success,
-		Start:           options.Start,
-		ComposeOverride: overrideErr == nil,
-		Progress:        options.Progress,
+		SourceDir:        absoluteDir,
+		TargetDir:        target,
+		AppID:            pack.AppID,
+		Service:          options.Service,
+		ControlScript:    controlScriptName(pack.AppID),
+		UnitPath:         filepath.Join(installSystemdUnitDir, options.Service+".service"),
+		InstanceID:       instanceID,
+		ComposeProject:   instanceID,
+		ContainerName:    service.ContainerName,
+		NetworkName:      service.NetworkName,
+		Ports:            ports,
+		Health:           pack.Docker.Health,
+		ConfigDir:        pack.Docker.DeploymentDirs.Config,
+		DeployedCommands: deployedCommands,
+		Hooks:            pack.Docker.Install.Hooks,
+		Success:          pack.Docker.Install.Success,
+		PreservePaths:    preservePaths,
+		Replace:          append([]string(nil), options.Replace...),
+		Clean:            options.Clean,
+		Start:            options.Start,
+		ComposeOverride:  overrideErr == nil,
+		InPlace:          options.InPlace,
+		Progress:         options.Progress,
 	}, nil
 }
 
@@ -188,6 +306,30 @@ func defaultInstallService(dir string) (string, error) {
 		return "", fmt.Errorf("app id cannot be used as a systemd service name: %s", pack.AppID)
 	}
 	return service, nil
+}
+
+func defaultInstallTarget(pack deploy.AppPack) (string, error) {
+	path := strings.TrimSpace(pack.Install.Target.DefaultPath)
+	if path == "" {
+		return "", fmt.Errorf("install.target.default_path is required")
+	}
+	path = strings.ReplaceAll(path, "{{ app.id }}", pack.AppID)
+	if strings.Contains(path, "{{") || strings.Contains(path, "}}") {
+		return "", fmt.Errorf("install.target.default_path contains unsupported template expression: %s", pack.Install.Target.DefaultPath)
+	}
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("install.target.default_path must resolve to an absolute path: %s", path)
+	}
+	return path, nil
+}
+
+func installOwnerSpec(owner deploy.InstallOwnerConfig) string {
+	user := strings.TrimSpace(owner.User)
+	group := strings.TrimSpace(owner.Group)
+	if user == "" || group == "" {
+		return ""
+	}
+	return user + ":" + group
 }
 
 func printInstallDryRun(stdout io.Writer, plan installPlan) {
@@ -214,6 +356,16 @@ func printInstallDryRun(stdout io.Writer, plan installPlan) {
 	if sources, err := localBundleSourcesForDir(plan.SourceDir); err == nil && len(sources) > 0 {
 		fmt.Fprintf(stdout, "would rebuild local source bundle: %s\n", installBundleSourceNames(sources))
 	}
+	for _, path := range plan.PreservePaths {
+		fmt.Fprintf(stdout, "would preserve installed artifact: %s\n", path)
+	}
+	for _, artifact := range plan.Replace {
+		fmt.Fprintf(stdout, "would replace installed artifact: %s\n", artifact)
+	}
+	if plan.Clean {
+		fmt.Fprintln(stdout, "would clean app-owned installed artifacts")
+	}
+	fmt.Fprintf(stdout, "would write control script: %s\n", filepath.Join(plan.TargetDir, plan.ControlScript))
 	fmt.Fprintln(stdout, "would set installed deployment ownership")
 	fmt.Fprintf(stdout, "would write systemd unit: %s\n", plan.UnitPath)
 	fmt.Fprintln(stdout, "would run: systemctl daemon-reload")
@@ -241,6 +393,52 @@ func printInstallDryRun(stdout io.Writer, plan installPlan) {
 	for _, line := range plan.Success.Lines {
 		fmt.Fprintf(stdout, "would print success line: %s\n", line)
 	}
+}
+
+func installPreservePaths(artifacts map[string]deploy.InstallArtifactPolicyConfig, replace []string, clean bool) ([]string, error) {
+	if clean {
+		return nil, nil
+	}
+	replaceAll := false
+	replaced := map[string]bool{}
+	for _, name := range replace {
+		name = strings.TrimSpace(name)
+		switch {
+		case name == "":
+			return nil, fmt.Errorf("--replace must not be empty")
+		case name == "all":
+			replaceAll = true
+		default:
+			if _, ok := artifacts[name]; !ok {
+				return nil, fmt.Errorf("unknown install artifact %q; declared artifacts: %s", name, strings.Join(installArtifactNames(artifacts), ", "))
+			}
+			replaced[name] = true
+		}
+	}
+	if replaceAll {
+		return nil, nil
+	}
+	paths := []string{}
+	names := installArtifactNames(artifacts)
+	for _, name := range names {
+		artifact := artifacts[name]
+		if artifact.Default != "preserve" || replaced[name] {
+			continue
+		}
+		for _, path := range artifact.Paths {
+			paths = append(paths, filepath.ToSlash(filepath.Clean(path)))
+		}
+	}
+	return paths, nil
+}
+
+func installArtifactNames(artifacts map[string]deploy.InstallArtifactPolicyConfig) []string {
+	names := make([]string, 0, len(artifacts))
+	for name := range artifacts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func validServiceName(name string) bool {
@@ -274,7 +472,7 @@ func pathContains(parent string, child string) bool {
 	return relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))
 }
 
-func copyDeploymentTreeProtected(sourceDir string, targetDir string) error {
+func copyDeploymentTreeProtected(sourceDir string, targetDir string, preservePaths []string) error {
 	sourceDir, err := filepath.Abs(sourceDir)
 	if err != nil {
 		return err
@@ -291,7 +489,14 @@ func copyDeploymentTreeProtected(sourceDir string, targetDir string) error {
 		if err != nil {
 			return err
 		}
+		targetPath := filepath.Join(targetDir, relativePath)
 		if installCopySkips(relativePath) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if installCopyPreserves(relativePath, targetPath, preservePaths) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
@@ -304,11 +509,16 @@ func copyDeploymentTreeProtected(sourceDir string, targetDir string) error {
 		if info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("refusing to copy symlink: %s", path)
 		}
-		targetPath := filepath.Join(targetDir, relativePath)
 		if relativePath == "." {
+			if err := rejectInstallTargetSymlink(targetPath); err != nil {
+				return err
+			}
 			return os.MkdirAll(targetPath, info.Mode().Perm())
 		}
 		if entry.IsDir() {
+			if err := rejectInstallTargetSymlink(targetPath); err != nil {
+				return err
+			}
 			return os.MkdirAll(targetPath, info.Mode().Perm())
 		}
 		if !info.Mode().IsRegular() {
@@ -318,13 +528,37 @@ func copyDeploymentTreeProtected(sourceDir string, targetDir string) error {
 	})
 }
 
+func installCopyPreserves(relativePath string, targetPath string, preservePaths []string) bool {
+	if relativePath == "." {
+		return false
+	}
+	slashPath := filepath.ToSlash(filepath.Clean(relativePath))
+	if slashPath == ".reploy" || strings.HasPrefix(slashPath, ".reploy/") {
+		return false
+	}
+	for _, preservePath := range preservePaths {
+		preservePath = strings.TrimSuffix(filepath.ToSlash(filepath.Clean(preservePath)), "/")
+		if slashPath != preservePath && !strings.HasPrefix(slashPath, preservePath+"/") {
+			continue
+		}
+		if _, err := os.Lstat(targetPath); err == nil {
+			return true
+		}
+		return false
+	}
+	return false
+}
+
 func installCopySkips(relativePath string) bool {
 	slashPath := filepath.ToSlash(relativePath)
-	return slashPath == RuntimeDirName || slashPath == ToolBinaryFileName
+	return slashPath == "reploy" || slashPath == RuntimeDirName || slashPath == ToolBinaryFileName
 }
 
 func copyInstallFile(sourcePath string, targetPath string, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return err
+	}
+	if err := rejectInstallTargetSymlink(targetPath); err != nil {
 		return err
 	}
 	source, err := os.Open(sourcePath)
@@ -332,7 +566,7 @@ func copyInstallFile(sourcePath string, targetPath string, mode os.FileMode) err
 		return err
 	}
 	defer source.Close()
-	target, err := os.OpenFile(targetPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	target, err := openInstallTargetNoFollow(targetPath, mode)
 	if err != nil {
 		return err
 	}
@@ -340,49 +574,451 @@ func copyInstallFile(sourcePath string, targetPath string, mode os.FileMode) err
 		target.Close()
 		return err
 	}
+	if err := target.Chmod(mode); err != nil {
+		target.Close()
+		return err
+	}
 	if err := target.Close(); err != nil {
 		return err
 	}
-	return os.Chmod(targetPath, mode)
+	return nil
 }
 
-func writeInstalledToolBinary(targetDir string) error {
-	content, err := installToolBinaryContent()
+func rejectInstallTargetSymlink(path string) error {
+	info, err := os.Lstat(path)
 	if err != nil {
-		return err
-	}
-	targetPath := filepath.Join(targetDir, ToolBinaryFileName)
-	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
-		return err
-	}
-	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	if err := os.WriteFile(targetPath, content, 0o755); err != nil {
-		return err
-	}
-	if err := os.Chmod(targetPath, 0o755); err != nil {
-		return err
-	}
-	info, err := os.Lstat(targetPath)
-	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("installed reploy binary must not be a symlink: %s", targetPath)
+		return fmt.Errorf("refusing to overwrite target symlink: %s", path)
 	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("installed reploy binary must be a regular file: %s", targetPath)
+	return nil
+}
+
+func openInstallTargetNoFollow(path string, mode os.FileMode) (*os.File, error) {
+	return os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|syscall.O_NOFOLLOW, mode)
+}
+
+func writeInstallFileNoFollow(path string, content []byte, mode os.FileMode) error {
+	if err := rejectInstallTargetSymlink(path); err != nil {
+		return err
 	}
-	manifest, err := loadManifestOrNew(targetDir)
+	target, err := openInstallTargetNoFollow(path, mode)
 	if err != nil {
 		return err
 	}
-	manifest.Files[filepath.ToSlash(ToolBinaryFileName)] = deploy.GeneratedFile{
+	if _, err := target.Write(content); err != nil {
+		target.Close()
+		return err
+	}
+	if err := target.Chmod(mode); err != nil {
+		target.Close()
+		return err
+	}
+	return target.Close()
+}
+
+func controlScriptName(appID string) string {
+	return dockerNameSlug(appID, "app") + "ctl"
+}
+
+func validateDeployedControlCommands(commands []deploy.DockerCommandConfig) error {
+	seen := map[string]bool{}
+	for _, command := range commands {
+		if !command.AppCommand {
+			return fmt.Errorf("deployed command %s must also set app_command: true", command.Name)
+		}
+		if len(command.Trigger) == 0 {
+			return fmt.Errorf("deployed command %s must declare a trigger", command.Name)
+		}
+		first := command.Trigger[0]
+		if controlScriptBuiltins()[first] {
+			return fmt.Errorf("deployed command %q conflicts with built-in control command %q", strings.Join(command.Trigger, " "), first)
+		}
+		trigger := strings.Join(command.Trigger, " ")
+		if seen[trigger] {
+			return fmt.Errorf("duplicate deployed command trigger: %s", trigger)
+		}
+		seen[trigger] = true
+	}
+	return nil
+}
+
+func controlScriptBuiltins() map[string]bool {
+	return map[string]bool{
+		"up": true, "start": true,
+		"down": true, "stop": true,
+		"restart": true,
+		"status":  true,
+		"logs":    true,
+		"enable":  true,
+		"disable": true,
+		"health":  true,
+		"help":    true,
+		"init":    true,
+		"update":  true,
+		"install": true,
+		"bundle":  true,
+	}
+}
+
+func writeInstalledControlScript(plan installPlan) error {
+	if err := removeInstalledReployEntrypoints(plan.TargetDir); err != nil {
+		return err
+	}
+	content := []byte(controlScriptContent(plan))
+	relativePath := plan.ControlScript
+	targetPath := filepath.Join(plan.TargetDir, relativePath)
+	if err := writeInstallFileNoFollow(targetPath, content, 0o755); err != nil {
+		return err
+	}
+	manifest, err := loadManifestOrNew(plan.TargetDir)
+	if err != nil {
+		return err
+	}
+	manifest.Files[filepath.ToSlash(relativePath)] = deploy.GeneratedFile{
 		Kind:   "template",
 		SHA256: deploy.HashBytes(content),
 	}
+	return deploy.WriteDeploymentManifest(filepath.Join(plan.TargetDir, ManifestFileName), manifest)
+}
+
+func removeInstalledReployEntrypoints(targetDir string) error {
+	manifest, manifestErr := loadManifestOrNew(targetDir)
+	for _, relativePath := range []string{ToolBinaryFileName, "reploy"} {
+		path := filepath.Join(targetDir, relativePath)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if manifestErr == nil {
+			delete(manifest.Files, filepath.ToSlash(relativePath))
+		}
+	}
+	if manifestErr != nil {
+		return nil
+	}
 	return deploy.WriteDeploymentManifest(filepath.Join(targetDir, ManifestFileName), manifest)
+}
+
+func controlScriptContent(plan installPlan) string {
+	serviceUnit := plan.Service + ".service"
+	composeFile := filepath.Join(plan.TargetDir, ComposeFileName)
+	composeOverrideFile := ""
+	if plan.ComposeOverride {
+		composeOverrideFile = filepath.Join(plan.TargetDir, ComposeOverrideFileName)
+	}
+	dockerEnv := filepath.Join(plan.TargetDir, DockerEnvFileName)
+	configDisplayDir := filepath.Join(plan.TargetDir, plan.ConfigDir)
+	health := plan.Health
+	insecureFlag := ""
+	wgetInsecureFlag := ""
+	if !healthTLSVerify(health) {
+		insecureFlag = "--insecure"
+		wgetInsecureFlag = "--no-check-certificate"
+	}
+	return fmt.Sprintf(`#!/bin/sh
+set -eu
+
+target_dir=%q
+service=%q
+compose_project=%q
+compose_file=%q
+compose_override_file=%q
+docker_env=%q
+config_display_dir=%q
+health_scheme_env=%q
+health_host_env=%q
+health_port_env=%q
+health_default_scheme=%q
+health_default_host=%q
+health_default_port=%q
+health_path=%q
+curl_insecure_flag=%q
+wget_insecure_flag=%q
+
+usage() {
+  echo "usage: %s COMMAND [ARGS...]" >&2
+  echo "commands:" >&2
+  echo "  up" >&2
+  echo "  down" >&2
+  echo "  restart" >&2
+  echo "  status" >&2
+  echo "  logs" >&2
+  echo "  enable" >&2
+  echo "  disable" >&2
+  echo "  health" >&2
+%s
+}
+
+env_value() {
+  key="$1"
+  default="$2"
+  value="$(awk -v key="$key" -F= '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$docker_env" 2>/dev/null || true)"
+  if [ -n "$value" ]; then
+    printf '%%s\n' "$value"
+  else
+    printf '%%s\n' "$default"
+  fi
+}
+
+quote_for_shell() {
+  printf "'"
+  printf '%%s' "$1" | sed "s/'/'\\\\''/g"
+  printf "'"
+}
+
+append_shell_arg() {
+  shell_command="${shell_command} $(quote_for_shell "$1")"
+}
+
+validate_forwarded_args() {
+  mode="$1"
+  allowed_flags="$2"
+  shift 2
+  if [ "$mode" = "args" ]; then
+    return 0
+  fi
+  while [ "$#" -gt 0 ]; do
+    arg="$1"
+    shift
+    case "$arg" in
+      --*=*) flag="${arg%%=*}" ;;
+      --?*) flag="$arg" ;;
+      *)
+        echo "unexpected positional argument after app command trigger: $arg" >&2
+        return 2
+        ;;
+    esac
+    found=0
+    for allowed_flag in $allowed_flags; do
+      if [ "$flag" = "$allowed_flag" ]; then
+        found=1
+      fi
+    done
+    if [ "$found" -ne 1 ]; then
+      echo "unknown forwarded flag: $flag" >&2
+      return 2
+    fi
+  done
+}
+
+run_as_install_owner() {
+  command="$1"
+  owner="$(env_value REPLOY_INSTALL_OWNER "")"
+  if [ "$(id -u)" != "0" ] || [ -z "$owner" ]; then
+    exec sh -c "$command"
+  fi
+  owner_user="${owner%%:*}"
+  owner_group="$owner_user"
+  case "$owner" in
+    *:*) owner_group="${owner#*:}" ;;
+  esac
+  case "$owner_user:$owner_group" in
+    *[!0123456789:]*)
+      if command -v runuser >/dev/null 2>&1; then
+        exec runuser -u "$owner_user" -- sh -c "$command"
+      fi
+      ;;
+    *)
+      if command -v setpriv >/dev/null 2>&1; then
+        exec setpriv --reuid "$owner_user" --regid "$owner_group" --clear-groups -- sh -c "$command"
+      fi
+      ;;
+  esac
+  echo "setpriv or runuser is required to run deployed app commands as $owner" >&2
+  exit 1
+}
+
+run_app_command() {
+  command_name="$1"
+  shift
+  forwarded_count="$#"
+  shell_command="COMPOSE_PROGRESS=quiet COMPOSE_ANSI=never docker compose"
+  if [ -n "$compose_project" ]; then
+    append_shell_arg "--project-name"
+    append_shell_arg "$compose_project"
+  fi
+  append_shell_arg "--project-directory"
+  append_shell_arg "$target_dir"
+  append_shell_arg "--env-file"
+  append_shell_arg "$docker_env"
+  append_shell_arg "-f"
+  append_shell_arg "$compose_file"
+  if [ -n "$compose_override_file" ]; then
+    append_shell_arg "-f"
+    append_shell_arg "$compose_override_file"
+  fi
+  append_shell_arg "run"
+  append_shell_arg "--rm"
+  append_shell_arg "--no-deps"
+  append_shell_arg "-e"
+  append_shell_arg "REPLOY_CONTAINER_COMMAND=$command_name"
+  append_shell_arg "-e"
+  append_shell_arg "REPLOY_FORWARDED_ARGC=$forwarded_count"
+  forwarded_index=0
+  for forwarded_arg in "$@"; do
+    append_shell_arg "-e"
+    append_shell_arg "REPLOY_FORWARDED_ARG_${forwarded_index}=$forwarded_arg"
+    forwarded_index=$((forwarded_index + 1))
+  done
+  append_shell_arg "-e"
+  append_shell_arg "REPLOY_CONFIG_CONTAINER_DIR=/config"
+  append_shell_arg "-e"
+  append_shell_arg "REPLOY_CONFIG_DISPLAY_DIR=$config_display_dir"
+  append_shell_arg "-e"
+  append_shell_arg "REPLOY_INCLUDE_RUNTIME_OVERRIDES=0"
+  append_shell_arg "-e"
+  append_shell_arg "REPLOY_CONFIG_MOUNT=rw"
+  append_shell_arg "-e"
+  append_shell_arg "REPLOY_APP_COMMAND_PREFIX=%s"
+  append_shell_arg "app"
+  run_as_install_owner "$shell_command"
+}
+
+health_url() {
+  if [ -z "$health_path" ] || [ -z "$health_scheme_env" ] || [ -z "$health_host_env" ] || [ -z "$health_port_env" ]; then
+    echo "health check is not declared by this blueprint" >&2
+    exit 1
+  fi
+  scheme="$(env_value "$health_scheme_env" "$health_default_scheme")"
+  host="$(env_value "$health_host_env" "$health_default_host")"
+  port="$(env_value "$health_port_env" "$health_default_port")"
+  if [ -z "$port" ]; then
+    echo "health check port is not configured" >&2
+    exit 1
+  fi
+  if [ "$host" = "0.0.0.0" ]; then
+    host="127.0.0.1"
+  fi
+  printf '%%s://%%s:%%s%%s\n' "$scheme" "$host" "$port" "$health_path"
+}
+
+cmd="${1:-}"
+if [ "$#" -gt 0 ]; then
+  shift
+fi
+
+case "$cmd" in
+  up|start)
+    exec systemctl start "$service"
+    ;;
+  down|stop)
+    exec systemctl stop "$service"
+    ;;
+  restart)
+    exec systemctl restart "$service"
+    ;;
+  status)
+    exec systemctl status "$service"
+    ;;
+  logs)
+    exec journalctl -u "$service" "$@"
+    ;;
+  enable)
+    exec systemctl enable "$service"
+    ;;
+  disable)
+    exec systemctl disable "$service"
+    ;;
+  health)
+    url="$(health_url)"
+    if command -v curl >/dev/null 2>&1; then
+      if [ -n "$curl_insecure_flag" ]; then
+        exec curl -fsS "$curl_insecure_flag" "$url"
+      fi
+      exec curl -fsS "$url"
+    fi
+    if command -v wget >/dev/null 2>&1; then
+      if [ -n "$wget_insecure_flag" ]; then
+        exec wget -qO- "$wget_insecure_flag" "$url"
+      fi
+      exec wget -qO- "$url"
+    fi
+    echo "curl or wget is required for health checks" >&2
+    exit 1
+    ;;
+  ""|-h|--help|help)
+    usage
+    exit 0
+    ;;
+%s
+  *)
+    usage
+    echo "unknown command: $cmd" >&2
+    exit 2
+    ;;
+esac
+	`, plan.TargetDir, serviceUnit, plan.ComposeProject, composeFile, composeOverrideFile, dockerEnv, configDisplayDir, health.SchemeEnv, health.HostEnv, health.PortEnv, defaultString(health.DefaultScheme, "https"), defaultString(health.DefaultHost, "127.0.0.1"), health.DefaultPort, health.Path, insecureFlag, wgetInsecureFlag, plan.ControlScript, controlScriptUsageCommands(plan.DeployedCommands), plan.ControlScript, controlScriptAppCommandCases(plan.DeployedCommands))
+}
+
+func controlScriptUsageCommands(commands []deploy.DockerCommandConfig) string {
+	if len(commands) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	for _, command := range commands {
+		builder.WriteString("  printf '%s\\n' ")
+		builder.WriteString(shellSingleQuote("  " + strings.Join(command.Trigger, " ")))
+		builder.WriteString(" >&2\n")
+	}
+	return builder.String()
+}
+
+func controlScriptAppCommandCases(commands []deploy.DockerCommandConfig) string {
+	if len(commands) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	builder.WriteString("  *)\n")
+	for _, command := range commands {
+		builder.WriteString("    if ")
+		for index, part := range command.Trigger {
+			if index > 0 {
+				builder.WriteString(" && ")
+			}
+			if index == 0 {
+				builder.WriteString("[ \"$cmd\" = ")
+			} else {
+				builder.WriteString(fmt.Sprintf("[ \"${%d:-}\" = ", index))
+			}
+			builder.WriteString(shellSingleQuote(part))
+			builder.WriteString(" ]")
+		}
+		builder.WriteString("; then\n")
+		for index := 1; index < len(command.Trigger); index++ {
+			_ = index
+			builder.WriteString("      shift\n")
+		}
+		mode := "flags"
+		allowedFlags := strings.Join(command.ForwardFlags, " ")
+		if command.ForwardArgs {
+			mode = "args"
+			allowedFlags = ""
+		}
+		builder.WriteString("      if ! validate_forwarded_args ")
+		builder.WriteString(shellSingleQuote(mode))
+		builder.WriteString(" ")
+		builder.WriteString(shellSingleQuote(allowedFlags))
+		builder.WriteString(" \"$@\"; then\n")
+		builder.WriteString("        exit 2\n")
+		builder.WriteString("      fi\n")
+		builder.WriteString("      run_app_command ")
+		builder.WriteString(shellSingleQuote(command.Name))
+		builder.WriteString(" \"$@\"\n")
+		builder.WriteString("    fi\n")
+	}
+	builder.WriteString("    usage\n")
+	builder.WriteString("    echo \"unknown command: $cmd\" >&2\n")
+	builder.WriteString("    exit 2\n")
+	builder.WriteString("    ;;\n")
+	return builder.String()
+}
+
+func shellSingleQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func systemdUnit(plan installPlan, dockerBin string, includeDockerUnit bool) string {
@@ -504,7 +1140,7 @@ func chownInstallPath(path string, uid int, gid int) error {
 func resolveInstallOwner(values map[string]string) (resolvedInstallOwner, error) {
 	spec := strings.TrimSpace(values["REPLOY_INSTALL_OWNER"])
 	if spec == "" {
-		return resolvedInstallOwner{}, fmt.Errorf("REPLOY_INSTALL_OWNER is required for install; set it in the blueprint as docker.service.install_owner or in %s", DockerEnvFileName)
+		return resolvedInstallOwner{}, fmt.Errorf("REPLOY_INSTALL_OWNER is required for install; set it in the blueprint as install.owner or in %s", DockerEnvFileName)
 	}
 	uid, gid, err := parseInstallOwner(spec)
 	if err != nil {
@@ -593,11 +1229,13 @@ func parseNumericInstallID(value string) (int, bool) {
 }
 
 func applyInstallPlan(plan installPlan) error {
-	if err := copyDeploymentTreeProtected(plan.SourceDir, plan.TargetDir); err != nil {
-		return fmt.Errorf("copy deployment: %w", err)
+	if !plan.InPlace {
+		if err := copyDeploymentTreeProtected(plan.SourceDir, plan.TargetDir, plan.PreservePaths); err != nil {
+			return fmt.Errorf("copy deployment: %w", err)
+		}
 	}
-	if err := writeInstalledToolBinary(plan.TargetDir); err != nil {
-		return fmt.Errorf("write installed reploy binary: %w", err)
+	if err := writeInstalledControlScript(plan); err != nil {
+		return fmt.Errorf("write installed control script: %w", err)
 	}
 	runtimeDir := filepath.Join(plan.TargetDir, RuntimeDirName)
 	if err := os.RemoveAll(runtimeDir); err != nil {
@@ -672,10 +1310,12 @@ func runInstallHooks(plan installPlan, phase string, hooks []deploy.DockerInstal
 }
 
 func runInstallHook(plan installPlan, hook deploy.DockerInstallHookConfig) error {
-	helper := filepath.Join(plan.TargetDir, "reploy")
 	if len(hook.App) > 0 {
-		args := append([]string{"app"}, hook.App...)
-		return runInstallCheckCommand("installed app hook", helper, args...)
+		var stderr bytes.Buffer
+		if err := runInstallAppCommand(plan.TargetDir, hook.App, nil, &stderr); err != nil {
+			return commandErrorWithOutput("installed app hook", stderr.Bytes(), err)
+		}
+		return nil
 	}
 	if hook.HealthCheck != nil {
 		return runInstallHealthCheckHook(plan, hook.HealthCheck)
@@ -684,13 +1324,12 @@ func runInstallHook(plan installPlan, hook deploy.DockerInstallHookConfig) error
 }
 
 func runInstallHealthCheckHook(plan installPlan, healthCheck *deploy.DockerInstallHealthCheckConfig) error {
-	helper := filepath.Join(plan.TargetDir, "reploy")
 	if healthCheck.Wait {
 		if err := waitInstalledServiceRunning(plan.TargetDir, installServiceStartTimeout, plan.Progress); err != nil {
 			return installedServiceStartError(plan, err)
 		}
 	}
-	return runInstallCheckCommand("installed health check", helper, "test")
+	return runInstallHealthCheck(plan.TargetDir, nil, nil)
 }
 
 func installHookDescription(hook deploy.DockerInstallHookConfig) string {
@@ -749,8 +1388,8 @@ func installBundleSourceNames(sources []bundleBuildSource) string {
 }
 
 func installedServiceStartError(plan installPlan, startErr error) error {
-	helper := filepath.Join(plan.TargetDir, "reploy")
-	output, logsErr := installRunCommandOutput(helper, "logs")
+	controlScript := filepath.Join(plan.TargetDir, plan.ControlScript)
+	output, logsErr := installRunCommandOutput(controlScript, "logs")
 	trimmedOutput := strings.TrimSpace(string(output))
 	switch {
 	case logsErr == nil && trimmedOutput != "":

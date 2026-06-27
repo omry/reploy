@@ -9,11 +9,13 @@ and Docker defaults while Reploy owns the generic deployment machinery.
 Current scope:
 
 - Docker deployment init/update/info/doctor
-- deployment-local `reploy` helper
+- staging-local `reploy` workflow
 - blueprint shorthands through a JSON blueprint index
 - Python-provider bundle roots, wheel builds, and runtime installation bundles
-- app command execution inside the deployment runtime
+- app command execution inside the staging runtime
 - Docker lifecycle commands and native health probe
+- direct install from blueprint defaults and staged install/update into a
+  deployed host service
 
 ## Install
 
@@ -137,7 +139,9 @@ developing or testing.
 Validate and cache the index explicitly:
 
 ```bash
-reploy blueprint-index refresh
+reploy index update
+reploy index search arbiter
+reploy index show arbiter-server
 ```
 
 Shorthands expand to wheel-hosted app blueprints. The index is not versioned;
@@ -146,7 +150,7 @@ version into the resolved package ref:
 
 ```bash
 reploy init --blueprint arbiter-server
-reploy init --blueprint arbiter-server==0.9.3.dev1
+reploy install arbiter-server --dry-run
 ```
 
 Without an index, use an explicit PyPI package ref.
@@ -160,6 +164,7 @@ For unpublished or local app blueprints, use an explicit file reference:
 
 ```bash
 reploy init --blueprint file:path/to/app/reploy
+reploy install file:path/to/app/reploy --dry-run
 ```
 
 ### Blueprint Layout Convention
@@ -184,17 +189,15 @@ Use the app id as the filename, such as `example.blueprint.yaml`. The blueprint
 contains the provider identifier and bundle options directly, which keeps the
 single-blueprint case shallow while making multi-blueprint packages obvious.
 
-## Deployment Shape
+## Staging and Install Flow
 
-The generated deployment directory includes:
+Staging is the full Reploy workspace. Use it when an app needs bundle
+selection, generated configuration review, app commands, or pre-install
+testing before touching the installed service. The normal `reploy ...` command
+surface operates on staging and resolves the staging directory from the current
+directory, `--dir DIR`, or the default `reploy-staging` directory.
 
-- `reploy`, a deployment-local wrapper that prefers the vendored tool
-- `.reploy/`, Reploy-managed files including Compose config, Docker env, the
-  vendored binary, state, manifest, generated runtime requirements projection,
-  and installation bundle
-- app config and data directories declared by the blueprint
-
-Useful commands:
+Useful staging commands:
 
 ```bash
 reploy init --blueprint pypi:example-app
@@ -222,7 +225,46 @@ reploy logs
 reploy logs --follow
 reploy test
 reploy install --to /srv/my-app --dry-run
-reploy install --to /srv/my-app2 --service my-app2 --port http=18082 --dry-run
+reploy install --to /srv/my-app --replace config --dry-run
+reploy install --to /srv/my-app --clean --dry-run
+```
+
+Direct install skips the persistent staging workspace and installs from
+blueprint defaults. It is useful for simple services and dry-run planning:
+
+```bash
+reploy install arbiter-server --dry-run
+reploy install file:./app.blueprint.yaml --dry-run
+reploy install pypi:example-app --dry-run
+reploy install pypi:example-app#example_app/reploy/example.blueprint.yaml --dry-run
+```
+
+By default, direct install uses a temporary internal staging-like workspace.
+`--in-place` installs directly into the destination to conserve peak disk
+space; it is an escape hatch, not the normal path.
+
+Install/update preserves app-owned artifacts declared by the blueprint unless
+the operator asks to replace them. `.reploy/` is Reploy-owned generated state
+and may be replaced during install/update.
+
+The installed deployment exposes a generated app control script under the
+target directory, such as `/opt/arbiter/arbiterctl`, not a full deployed
+`reploy` CLI. The control script is for local service operations:
+
+```bash
+/opt/arbiter/arbiterctl up
+/opt/arbiter/arbiterctl down
+/opt/arbiter/arbiterctl restart
+/opt/arbiter/arbiterctl status
+/opt/arbiter/arbiterctl logs
+/opt/arbiter/arbiterctl enable
+/opt/arbiter/arbiterctl disable
+/opt/arbiter/arbiterctl health
+```
+
+Uninstall remains a Reploy host operation:
+
+```bash
 reploy uninstall --list-services
 reploy uninstall --from /srv/my-app2 --dry-run
 reploy uninstall --service-name my-app2 --dry-run
@@ -244,10 +286,10 @@ when possible and removes Docker containers and networks by Compose labels.
 Use `--list-services` to list Reploy-managed systemd services before choosing a
 service-only uninstall. The installed target directory is kept unless
 `--remove-dir` is set.
-When installing from a file-backed blueprint with local source packages, install
-rebuilds those wheels in the copied target deployment before starting the
-service, so editable checkout changes are captured without mutating the staging
-deployment.
+When installing from a file-backed blueprint with local source packages, staged
+install rebuilds those wheels in the copied target deployment before starting
+the service, so editable checkout changes are captured without mutating the
+staging deployment.
 Blueprints may declare install lifecycle hooks under
 `docker.install.hooks.before_start` and `docker.install.hooks.after_start`.
 Hooks support app commands, such as `app: [config, check]`, and health checks,
@@ -258,9 +300,9 @@ success lines can expand those variables after install hooks complete. Use
 `server_url: true` for a variable that should expand to the installed service's
 externally mapped base URL.
 
-Permanent installs require an explicit non-root install owner. Blueprints can
-declare `docker.service.install_owner`, and operators can override it with
-`REPLOY_INSTALL_OWNER` in `.reploy/docker.env`. Values may be numeric
-`UID:GID` or host names such as `arbiter:arbiter`; install resolves the owner,
-rejects root, owns the installed deployment tree with it, and writes the
+Permanent installs require a non-root install owner. Blueprints declare the
+default under `install.owner.user` and `install.owner.group`, and operators can
+override it with `REPLOY_INSTALL_OWNER` in `.reploy/docker.env`. Values may be
+numeric `UID:GID` or host names such as `arbiter:arbiter`; install resolves the
+owner, rejects root, owns the installed deployment tree with it, and writes the
 installed container user as the resolved numeric UID:GID.

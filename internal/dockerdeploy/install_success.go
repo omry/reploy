@@ -1,10 +1,10 @@
 package dockerdeploy
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/url"
-	"path/filepath"
 	"strings"
 
 	"github.com/omry/reploy/internal/deploy"
@@ -69,13 +69,12 @@ func resolveInstallSuccessVars(dir string, vars map[string]deploy.DockerInstallS
 
 func resolveInstallSuccessVar(dir string, variable deploy.DockerInstallSuccessVarConfig) (string, error) {
 	if len(variable.App) > 0 {
-		helper := filepath.Join(dir, "reploy")
-		args := append([]string{"app"}, variable.App...)
-		output, err := installRunCommandOutput(helper, args...)
-		if err != nil {
-			return "", commandErrorWithOutput("installed success app output", output, err)
+		var output bytes.Buffer
+		var stderr bytes.Buffer
+		if err := runInstallAppCommand(dir, variable.App, &output, &stderr); err != nil {
+			return "", commandErrorWithOutput("installed success app output", stderr.Bytes(), err)
 		}
-		value := strings.TrimSpace(string(output))
+		value := strings.TrimSpace(output.String())
 		if value == "" {
 			return "", fmt.Errorf("app output is empty")
 		}
