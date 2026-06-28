@@ -81,7 +81,6 @@ func outputColorEnabled(output io.Writer) bool {
 
 func doctorFindings(dir string, preinstall bool) []DoctorFinding {
 	required := []string{
-		"reploy",
 		ComposeFileName,
 		DockerEnvFileName,
 		RequirementsFileName,
@@ -107,11 +106,6 @@ func doctorFindings(dir string, preinstall bool) []DoctorFinding {
 		return findings
 	}
 	for relativePath, entry := range manifest.Files {
-		if doctorSkipsGeneratedFileDrift(relativePath, preinstall) {
-			path := filepath.Join(dir, filepath.FromSlash(relativePath))
-			findings = append(findings, DoctorFinding{Status: "ok", Message: "generated file drift ignored for preinstall; install overwrites target: " + path})
-			continue
-		}
 		path := filepath.Join(dir, filepath.FromSlash(relativePath))
 		hash, err := deploy.HashFile(path)
 		if err != nil {
@@ -128,10 +122,6 @@ func doctorFindings(dir string, preinstall bool) []DoctorFinding {
 		findings = append(findings, doctorPreinstallFindings(dir)...)
 	}
 	return findings
-}
-
-func doctorSkipsGeneratedFileDrift(relativePath string, preinstall bool) bool {
-	return preinstall && filepath.ToSlash(relativePath) == ToolBinaryFileName
 }
 
 func doctorPreinstallFindings(dir string) []DoctorFinding {

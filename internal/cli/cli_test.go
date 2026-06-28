@@ -1818,11 +1818,11 @@ func TestPrintUpdateResultsShowsOnlyActionablePaths(t *testing.T) {
 	var stdout bytes.Buffer
 	printUpdateResults(&stdout, []dockerdeploy.UpdateResult{
 		{Path: "deployment/compose.yaml", Status: deploy.UpdateStatusUpToDate},
-		{Path: "deployment/reploy", Status: deploy.UpdateStatusUpdated},
+		{Path: "deployment/democtl", Status: deploy.UpdateStatusUpdated},
 		{Path: "deployment/docker.env", Status: deploy.UpdateStatusSkipped},
 	})
 
-	expected := "updated deployment/reploy\nskipped deployment/docker.env\n"
+	expected := "updated deployment/democtl\nskipped deployment/docker.env\n"
 	if stdout.String() != expected {
 		t.Fatalf("stdout = %q, want %q", stdout.String(), expected)
 	}

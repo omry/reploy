@@ -53,6 +53,14 @@ From this point on, commands run against `reploy-staging/` by default:
 reploy info
 ```
 
+The staging directory also contains an app-named control script, such as
+`examplectl`, for local runtime and app commands:
+
+```bash
+./reploy-staging/examplectl status
+./reploy-staging/examplectl config check --live
+```
+
 Use `--dir` when you want a different staging directory for this app instance.
 
 ## 4. Start and Test Staging

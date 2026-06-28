@@ -28,8 +28,7 @@ func TestInitWritesDeploymentDirectory(t *testing.T) {
 	assertResultStatus(t, results, filepath.Join(deployDir, ComposeFileName), deploy.UpdateStatusUpdated)
 	for _, relativePath := range []string{
 		ComposeFileName,
-		"reploy",
-		ToolBinaryFileName,
+		"democtl",
 		DockerEnvFileName,
 		RequirementsFileName,
 		ManifestFileName,
@@ -86,18 +85,28 @@ func TestInitWritesDeploymentDirectory(t *testing.T) {
 	if strings.Contains(manifest, `"requirements.txt"`) {
 		t.Fatalf("requirements should be operator-owned local state:\n%s", manifest)
 	}
-	if !strings.Contains(manifest, `"reploy"`) {
-		t.Fatalf("manifest did not track helper:\n%s", manifest)
+	if !strings.Contains(manifest, `"democtl"`) {
+		t.Fatalf("manifest did not track staging control script:\n%s", manifest)
 	}
-	if !strings.Contains(manifest, `"`+ToolBinaryFileName+`"`) {
-		t.Fatalf("manifest did not track vendored binary:\n%s", manifest)
+	if strings.Contains(manifest, `"`+ToolBinaryFileName+`"`) {
+		t.Fatalf("manifest should not track a vendored reploy binary:\n%s", manifest)
 	}
 	if strings.Contains(manifest, `".env"`) {
 		t.Fatalf("app env file should be operator-owned local state:\n%s", manifest)
 	}
-	helper := readFile(t, filepath.Join(deployDir, "reploy"))
-	if !strings.Contains(helper, `vendored_reploy="$deploy_dir/.reploy/bin/reploy"`) || !strings.Contains(helper, `exec "$reploy_bin" "$@" --dir "$deploy_dir"`) {
-		t.Fatalf("helper does not invoke the root command surface:\n%s", helper)
+	helper := readFile(t, filepath.Join(deployDir, "democtl"))
+	for _, want := range []string{
+		`docker compose`,
+		`run_compose up -d`,
+		`run_app_command()`,
+		`REPLOY_APP_COMMAND_PREFIX=democtl`,
+	} {
+		if !strings.Contains(helper, want) {
+			t.Fatalf("staging control script missing %q:\n%s", want, helper)
+		}
+	}
+	if strings.Contains(helper, `command -v reploy`) || strings.Contains(helper, `exec reploy`) {
+		t.Fatalf("staging control script should not invoke reploy:\n%s", helper)
 	}
 	if strings.Contains(helper, `"$reploy_bin" docker`) || strings.Contains(helper, `if [ "${1:-}" = "docker" ]`) {
 		t.Fatalf("helper still accepts the old docker command prefix:\n%s", helper)
@@ -105,6 +114,98 @@ func TestInitWritesDeploymentDirectory(t *testing.T) {
 	state := readFile(t, filepath.Join(deployDir, StateFileName))
 	if !strings.Contains(state, `"target": "docker"`) || !strings.Contains(state, `"phase": "staged"`) {
 		t.Fatalf("state missing target/phase:\n%s", state)
+	}
+}
+
+func TestStagingControlScriptRunsComposeLifecycleAndAppCommands(t *testing.T) {
+	manifest := strings.Replace(testPackManifest(), "      forward_flags:\n", "      app_command: true\n      deployed_command: true\n      forward_flags:\n", 1)
+	packDir := makeTestPackWithManifest(t, manifest)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(deployDir, "democtl")
+
+	fakeBin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dockerArgs := filepath.Join(t.TempDir(), "docker.args")
+	fakeDocker := filepath.Join(fakeBin, "docker")
+	if err := os.WriteFile(fakeDocker, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$DOCKER_ARGS_FILE\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := append(os.Environ(),
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"DOCKER_ARGS_FILE="+dockerArgs,
+	)
+
+	statusCommand := exec.Command(script, "status")
+	statusCommand.Env = env
+	statusOutput, err := statusCommand.CombinedOutput()
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, statusOutput)
+	}
+	statusArgs := readFile(t, dockerArgs)
+	for _, want := range []string{
+		"compose\n",
+		"--project-name\n",
+		"--project-directory\n",
+		deployDir + "\n",
+		"ps\n",
+	} {
+		if !strings.Contains(statusArgs, want) {
+			t.Fatalf("status docker args missing %q:\n%s", want, statusArgs)
+		}
+	}
+
+	appCommand := exec.Command(script, "config", "check", "--live")
+	appCommand.Env = env
+	appOutput, err := appCommand.CombinedOutput()
+	if err != nil {
+		t.Fatalf("app command failed: %v\n%s", err, appOutput)
+	}
+	appArgs := readFile(t, dockerArgs)
+	for _, want := range []string{
+		"run\n",
+		"--rm\n",
+		"--no-deps\n",
+		"REPLOY_CONTAINER_COMMAND=config_check\n",
+		"REPLOY_FORWARDED_ARGC=1\n",
+		"REPLOY_FORWARDED_ARG_0=--live\n",
+		"REPLOY_APP_COMMAND_PREFIX=democtl\n",
+		"app\n",
+	} {
+		if !strings.Contains(appArgs, want) {
+			t.Fatalf("app command docker args missing %q:\n%s", want, appArgs)
+		}
+	}
+}
+
+func TestStagingControlScriptDoesNotEvaluateConfigDirAsShell(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "marker")
+	manifest := strings.Replace(testPackManifest(), "    config: conf\n", "    config: 'conf/$(touch "+marker+")'\n", 1)
+	packDir := makeTestPackWithManifest(t, manifest)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	command := exec.Command(filepath.Join(deployDir, "democtl"), "--help")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("help failed: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("staging control script evaluated config dir command substitution: err=%v", err)
 	}
 }
 

@@ -72,11 +72,10 @@ func Update(options UpdateOptions) ([]UpdateResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	toolBinary, err := currentExecutableContent()
-	if err != nil {
+	deployedCommands := pack.Docker.DeployedCommands()
+	if err := validateDeployedControlCommands(deployedCommands); err != nil {
 		return nil, err
 	}
-
 	results := []UpdateResult{}
 	currentGenerated := map[string]bool{}
 	updateGenerated := func(relativePath string, content []byte, executable bool) error {
@@ -91,10 +90,7 @@ func Update(options UpdateOptions) ([]UpdateResult, error) {
 	if err := updateGenerated(ComposeFileName, []byte(compose), false); err != nil {
 		return nil, err
 	}
-	if err := updateGenerated("reploy", []byte(helperTemplate()), true); err != nil {
-		return nil, err
-	}
-	if err := updateGenerated(ToolBinaryFileName, toolBinary, true); err != nil {
+	if err := updateGenerated(controlScriptName(pack.AppID), []byte(stagingControlScriptContent(pack, deployedCommands)), true); err != nil {
 		return nil, err
 	}
 	if err := pruneRemovedGeneratedFiles(options.Dir, currentGenerated, &manifest, &results); err != nil {

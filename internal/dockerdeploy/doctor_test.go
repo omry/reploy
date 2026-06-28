@@ -61,7 +61,7 @@ func TestDoctorFailsForEditedGeneratedFile(t *testing.T) {
 	}
 }
 
-func TestDoctorPreinstallIgnoresToolBinaryDrift(t *testing.T) {
+func TestDoctorPreinstallReportsGeneratedControlScriptDrift(t *testing.T) {
 	disableDoctorColor(t)
 	packDir := makeTestPack(t)
 	ref, err := deploy.ParsePackRef("file:" + packDir)
@@ -75,7 +75,7 @@ func TestDoctorPreinstallIgnoresToolBinaryDrift(t *testing.T) {
 	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_INSTALL_OWNER": "1000:1000"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(deployDir, ToolBinaryFileName), []byte("new running reploy\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(deployDir, "democtl"), []byte("#!/bin/sh\necho edited\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -90,11 +90,11 @@ func TestDoctorPreinstallIgnoresToolBinaryDrift(t *testing.T) {
 
 	var preinstallStdout strings.Builder
 	preinstallCode := Doctor(DoctorOptions{Dir: deployDir, Preinstall: true, Stdout: &preinstallStdout})
-	if preinstallCode != 0 {
+	if preinstallCode != 1 {
 		t.Fatalf("preinstall doctor exit = %d\n%s", preinstallCode, preinstallStdout.String())
 	}
-	if !strings.Contains(preinstallStdout.String(), "ok: generated file drift ignored for preinstall; install overwrites target:") {
-		t.Fatalf("preinstall doctor stdout missing install overwrite note:\n%s", preinstallStdout.String())
+	if !strings.Contains(preinstallStdout.String(), "fail: generated file has local edits:") {
+		t.Fatalf("preinstall doctor stdout missing local edit failure:\n%s", preinstallStdout.String())
 	}
 }
 

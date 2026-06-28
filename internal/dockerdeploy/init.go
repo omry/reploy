@@ -65,8 +65,7 @@ func Init(options InitOptions) ([]UpdateResult, error) {
 	}
 
 	initPaths := []string{
-		"reploy",
-		ToolBinaryFileName,
+		controlScriptName(pack.AppID),
 		ComposeFileName,
 		DockerEnvFileName,
 		RequirementsFileName,
@@ -98,11 +97,10 @@ func Init(options InitOptions) ([]UpdateResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	toolBinary, err := currentExecutableContent()
-	if err != nil {
+	deployedCommands := pack.Docker.DeployedCommands()
+	if err := validateDeployedControlCommands(deployedCommands); err != nil {
 		return nil, err
 	}
-
 	manifest := deploy.NewDeploymentManifest("reploy stage")
 	results := []UpdateResult{}
 	writeGenerated := func(relativePath string, content []byte, executable bool) error {
@@ -124,10 +122,7 @@ func Init(options InitOptions) ([]UpdateResult, error) {
 		return nil
 	}
 
-	if err := writeGenerated("reploy", []byte(helperTemplate()), true); err != nil {
-		return nil, err
-	}
-	if err := writeGenerated(ToolBinaryFileName, toolBinary, true); err != nil {
+	if err := writeGenerated(controlScriptName(pack.AppID), []byte(stagingControlScriptContent(pack, deployedCommands)), true); err != nil {
 		return nil, err
 	}
 	if err := writeGenerated(ComposeFileName, []byte(compose), false); err != nil {
@@ -285,18 +280,6 @@ func resolvedPackRequirement(pack deploy.AppPack) (string, bool, error) {
 
 func validateExplicitRequirement(requirement string) error {
 	return python.ValidateExplicitRequirement(requirement)
-}
-
-func currentExecutableContent() ([]byte, error) {
-	path, err := os.Executable()
-	if err != nil {
-		return nil, fmt.Errorf("locate current reploy executable: %w", err)
-	}
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read current reploy executable %s: %w", path, err)
-	}
-	return content, nil
 }
 
 func ensureTrailingNewline(content []byte) []byte {
@@ -715,33 +698,4 @@ func envPlaceholder(value string) (string, bool) {
 		}
 	}
 	return name, true
-}
-
-func helperTemplate() string {
-	return `#!/usr/bin/env sh
-set -eu
-
-deploy_dir="${REPLOY_DEPLOY_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}"
-vendored_reploy="$deploy_dir/.reploy/bin/reploy"
-
-reploy_bin=""
-if [ -x "$vendored_reploy" ]; then
-  reploy_bin="$vendored_reploy"
-elif command -v reploy >/dev/null 2>&1; then
-  reploy_bin="$(command -v reploy)"
-  if [ "$reploy_bin" = "$deploy_dir/reploy" ]; then
-    echo "error: vendored reploy is missing and PATH resolves to this deployment wrapper: $deploy_dir/reploy" >&2
-    exit 127
-  fi
-else
-  echo "error: vendored reploy is missing and reploy is not on PATH: $vendored_reploy" >&2
-  exit 127
-fi
-
-if [ "$#" -eq 0 ]; then
-  exec "$reploy_bin" --help
-fi
-
-exec "$reploy_bin" "$@" --dir "$deploy_dir"
-`
 }

@@ -338,7 +338,7 @@ func TestCopyDeploymentTreeProtectedCopiesRegularFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := copyDeploymentTreeProtected(source, target, nil); err != nil {
+	if err := copyDeploymentTreeProtected(source, target, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	content, err := os.ReadFile(filepath.Join(target, "conf", "config.yaml"))
@@ -367,7 +367,7 @@ func TestCopyDeploymentTreeProtectedRejectsSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := copyDeploymentTreeProtected(source, target, nil)
+	err := copyDeploymentTreeProtected(source, target, nil, "")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -396,7 +396,7 @@ func TestCopyDeploymentTreeProtectedRejectsTargetSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := copyDeploymentTreeProtected(source, target, nil)
+	err := copyDeploymentTreeProtected(source, target, nil, "")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -424,7 +424,7 @@ func TestCopyDeploymentTreeProtectedSkipsRuntimeDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := copyDeploymentTreeProtected(source, target, nil); err != nil {
+	if err := copyDeploymentTreeProtected(source, target, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(target, RuntimeDirName)); !os.IsNotExist(err) {
@@ -435,7 +435,7 @@ func TestCopyDeploymentTreeProtectedSkipsRuntimeDirectory(t *testing.T) {
 	}
 }
 
-func TestCopyDeploymentTreeProtectedSkipsToolBinary(t *testing.T) {
+func TestCopyDeploymentTreeProtectedSkipsReployEntrypoints(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "source")
 	target := filepath.Join(t.TempDir(), "target")
 	if err := os.MkdirAll(filepath.Join(source, filepath.Dir(ToolBinaryFileName)), 0o755); err != nil {
@@ -447,8 +447,11 @@ func TestCopyDeploymentTreeProtectedSkipsToolBinary(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(source, "reploy"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(source, "democtl"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
-	if err := copyDeploymentTreeProtected(source, target, nil); err != nil {
+	if err := copyDeploymentTreeProtected(source, target, nil, "democtl"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(filepath.Join(target, ToolBinaryFileName)); !os.IsNotExist(err) {
@@ -456,6 +459,9 @@ func TestCopyDeploymentTreeProtectedSkipsToolBinary(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(target, "reploy")); !os.IsNotExist(err) {
 		t.Fatalf("helper copied: err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "democtl")); !os.IsNotExist(err) {
+		t.Fatalf("staging control script copied: err=%v", err)
 	}
 }
 
@@ -1274,6 +1280,58 @@ func TestInstalledControlScriptRejectsUndeployedAppCommandFlag(t *testing.T) {
 	}
 }
 
+func TestInstalledControlScriptAcceptsForwardedFlagValueWithEquals(t *testing.T) {
+	target := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(target, ReployInternalDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	owner := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
+	if err := os.WriteFile(filepath.Join(target, DockerEnvFileName), []byte("REPLOY_INSTALL_OWNER="+owner+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(target, "democtl")
+	content := controlScriptContent(installPlan{
+		TargetDir:     target,
+		Service:       "demo",
+		ControlScript: "democtl",
+		ConfigDir:     "conf",
+		DeployedCommands: []deploy.DockerCommandConfig{{
+			Name:         "config_check",
+			Trigger:      []string{"config", "check"},
+			AppCommand:   true,
+			Deployed:     true,
+			ForwardFlags: []string{"--set"},
+		}},
+	})
+	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeBin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dockerArgs := filepath.Join(t.TempDir(), "docker.args")
+	fakeDocker := filepath.Join(fakeBin, "docker")
+	if err := os.WriteFile(fakeDocker, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$DOCKER_ARGS_FILE\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	command := exec.Command(script, "config", "check", "--set=a=b")
+	command.Env = append(os.Environ(),
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"DOCKER_ARGS_FILE="+dockerArgs,
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("deployed command failed: %v\n%s", err, output)
+	}
+	args := readFile(t, dockerArgs)
+	if !strings.Contains(args, "REPLOY_FORWARDED_ARG_0=--set=a=b\n") {
+		t.Fatalf("docker args missing forwarded flag value:\n%s", args)
+	}
+}
+
 func TestInstalledControlScriptRejectsForwardedFlagPositionals(t *testing.T) {
 	target := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(target, ReployInternalDir), 0o755); err != nil {
@@ -2070,7 +2128,7 @@ func TestInstallPreservesAppOwnedArtifactsByDefault(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(target, "conf", "app.conf"), []byte("installed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyDeploymentTreeProtected(source, target, []string{"conf"}); err != nil {
+	if err := copyDeploymentTreeProtected(source, target, []string{"conf"}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := readFile(t, filepath.Join(target, "conf", "app.conf")); got != "installed\n" {
@@ -2093,7 +2151,7 @@ func TestInstallReplaceArtifactOverwritesPreservedPath(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(target, "conf", "app.conf"), []byte("installed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyDeploymentTreeProtected(source, target, nil); err != nil {
+	if err := copyDeploymentTreeProtected(source, target, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := readFile(t, filepath.Join(target, "conf", "app.conf")); got != "source\n" {
@@ -2116,7 +2174,7 @@ func TestInstallAlwaysReplacesReployOwnedState(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(target, ".reploy", "state.json"), []byte("installed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyDeploymentTreeProtected(source, target, []string{".reploy"}); err != nil {
+	if err := copyDeploymentTreeProtected(source, target, []string{".reploy"}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := readFile(t, filepath.Join(target, ".reploy", "state.json")); got != "source\n" {

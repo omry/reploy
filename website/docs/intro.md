@@ -53,8 +53,9 @@ For publishing app blueprints, see the [App Author docs](/docs/author-deployment
 
 `reploy stage` creates a `reploy-staging/` deployment directory by default.
 Generated config, bundle artifacts, Docker files, local state, and staging
-helpers live there. Use `--dir` when you want a different staging directory for
-an app instance.
+helpers live there. Staging also writes an app-named control script, such as
+`arbiterctl`, for local runtime and app commands. Use `--dir` when you want a
+different staging directory for an app instance.
 
 The installed deployment is narrower. It contains generated service wiring and
 an app control script such as `arbiterctl`, not the full Reploy CLI.

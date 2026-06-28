@@ -9,7 +9,7 @@ and Docker defaults while Reploy owns the generic deployment machinery.
 Current scope:
 
 - Docker deployment stage/update/info/doctor
-- staging-local `reploy` workflow
+- staging-local Reploy workflow with an app-named control script
 - blueprint shorthands through a JSON blueprint index
 - Python-provider bundle roots, wheel builds, and runtime installation bundles
 - app command execution inside the staging runtime
@@ -193,15 +193,20 @@ single-blueprint case shallow while making multi-blueprint packages obvious.
 
 Staging is the full Reploy workspace. Use it when an app needs bundle
 selection, generated configuration review, app commands, or pre-install
-testing before touching the installed service. The normal `reploy ...` command
-surface operates on staging and resolves the staging directory from the current
-directory, `--dir DIR`, or the default `reploy-staging` directory.
+testing before touching the installed service. Reploy also writes an app-named
+control script into the staging directory, such as `arbiterctl`, so operators
+can learn the app-local entrypoint before install. The script uses the staging
+Docker Compose files directly for runtime and app-control commands; Reploy
+still owns staging management such as bundle changes, updates, doctor checks,
+and install.
 
 Useful staging commands:
 
 ```bash
 reploy stage pypi:example-app
 reploy stage file:path/to/app/reploy
+./reploy-staging/examplectl status
+./reploy-staging/examplectl config check --live
 reploy update
 reploy info
 reploy doctor

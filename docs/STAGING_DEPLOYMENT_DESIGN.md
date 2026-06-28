@@ -66,11 +66,19 @@ Expected staging operations:
 - read logs/status
 - run health checks and doctor checks
 
-Staging uses the normal `reploy ...` command surface. Commands such as
-`bundle`, `app`, `up`, `down`, `status`, `logs`, `test`, and `doctor` operate
-on staging, not on the installed deployment. `reploy` should resolve the staging
-directory by detecting when it is called from inside one, by an explicit
+Staging uses the normal `reploy ...` command surface underneath. Commands such
+as `bundle`, `app`, `up`, `down`, `status`, `logs`, `test`, and `doctor`
+operate on staging, not on the installed deployment. `reploy` should resolve the
+staging directory by detecting when it is called from inside one, by an explicit
 `--dir DIR`, or by the default staging directory when neither applies.
+
+Staging should also generate the app-named control script, such as `arbiterctl`,
+so users learn the local app entrypoint before permanent install. The staging
+script should have the same local-control responsibilities as the installed
+control script, backed by staging Docker Compose instead of systemd. It should
+not vendor or require a private Reploy binary. General staging management such
+as `update`, `bundle`, `doctor`, and `install` remains the responsibility of
+the installed `reploy` command.
 
 ## Direct Install
 
@@ -332,8 +340,10 @@ is stable.
   generated app control script name.
 - Direct install accepts positional app refs: indexed names, `file:` refs, and
   explicit `pypi:` refs.
-- The normal `reploy ...` command surface is staging-oriented. Installed
-  deployments expose only the generated app control script.
+- The normal `reploy ...` command surface manages staging. Staging also writes
+  an app-named control script for local runtime/app operations, backed by
+  Docker Compose. Installed deployments expose only the generated app control
+  script.
 - Direct install uses a temporary internal staging-like workspace by default.
   `--in-place` is available only as a low-prominence disk-space escape hatch.
 - App-owned artifacts are preserved by default. Operators can replace named
