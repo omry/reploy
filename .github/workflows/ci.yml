@@ -11,48 +11,8 @@ permissions:
   contents: read
 
 jobs:
-  go-test:
-    name: Go tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24.x"
-          cache: true
-
-      - name: Run tests
-        run: go test ./...
-
-  cli-smoke:
-    name: CLI end-to-end smoke
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24.x"
-          cache: true
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Build Linux CLI
-        run: tools/build_reploy --target linux-amd64 --outdir dist-ci/bin
-
-      - name: Run CLI smoke
-        run: python tools/e2e_smoke --reploy dist-ci/bin/linux-amd64/reploy
-
-  release-build-smoke:
-    name: Linux release build smoke
+  ci:
+    name: CI checks
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -70,48 +30,17 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install Python build dependencies
-        run: python -m pip install --upgrade pip build hatchling editables
-
-      - name: Check helper syntax
-        run: >-
-          python -m py_compile
-          tools/build_reploy
-          tools/build_release_dists
-          tools/e2e_smoke
-          packaging/python/hatch_build.py
-          tests/e2e/python/packages/smoke-suite/src/smoke_suite/cli.py
-          tests/e2e/python/packages/smoke-suite/src/smoke_suite/__init__.py
-          tests/e2e/python/packages/smoke-imap/src/smoke_imap/__init__.py
-
-      - name: Build active release distributions
-        run: tools/build_release_dists --outdir dist-ci --clean --no-isolation
-
-  docs-build:
-    name: Docs build
-    runs-on: ubuntu-latest
-    env:
-      NO_UPDATE_NOTIFIER: "1"
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Install docs dependencies
-        working-directory: website
-        run: npm ci --no-audit --no-fund
-
-      - name: Check hosted installer
-        working-directory: website
+      - name: Install maintainer tooling
         run: |
-          npm run sync:install
-          cmp ../tools/install.sh static/install.sh
-          sh -n static/install.sh
+          python -m pip install --upgrade pip
+          python -m pip install nox
 
-      - name: Build docs site
-        working-directory: website
-        run: npm run build
+      - name: Run CI checks
+        env:
+          NO_UPDATE_NOTIFIER: "1"
+        run: nox -s ci

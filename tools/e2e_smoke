@@ -69,13 +69,17 @@ def run_smoke(reploy: Path, workdir: Path, *, plan_only: bool) -> None:
     env["NO_COLOR"] = "1"
 
     init = run(
-        [str(reploy), "init", "--dir", str(deploy_dir), "--blueprint", "file:" + str(pack_dir)],
+        [str(reploy), "stage", "file:" + str(pack_dir), "--dir", str(deploy_dir)],
         cwd=workdir,
         env=env,
     )
-    require_contains(init.stdout, "created", "init output")
+    require_contains(init.stdout, "created staging directory", "stage output")
 
-    update = run([str(reploy), "update", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+    update = run(
+        [str(reploy), "stage", "--update", "--dir", str(deploy_dir)],
+        cwd=workdir,
+        env=env,
+    )
     if "up_to_date" not in update.stdout and ".reploy/state.json" not in update.stdout:
         raise SystemExit(
             "update output did not report an unchanged or updated deployment"
@@ -155,7 +159,7 @@ def run_smoke(reploy: Path, workdir: Path, *, plan_only: bool) -> None:
     )
     require_contains(install.stdout, "would install deployment:", "install dry-run")
     require_contains(install.stdout, "service: smoke-e2e", "install dry-run")
-    require_contains(install.stdout, "port default: 127.0.0.1:18082 -> 8080", "install dry-run")
+    require_contains(install.stdout, "port https: 127.0.0.1:18082 -> 8075", "install dry-run")
     require_contains(
         install.stdout,
         "would rebuild local source bundle: smoke-imap, smoke-suite",

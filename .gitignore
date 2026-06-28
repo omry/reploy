@@ -6,6 +6,7 @@ __pycache__/
 *.swp
 .coverage
 .pytest_cache/
+.nox/
 .venv/
 temp/
 reploy-staging/

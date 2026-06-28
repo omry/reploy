@@ -100,6 +100,15 @@ publisher environment field blank.
 
 ## Test
 
+Run the same check suite used by CI:
+
+```bash
+nox -s ci
+```
+
+See [`docs/MAINTAINING.md`](docs/MAINTAINING.md) for local maintainer
+environment setup.
+
 ```bash
 go test ./...
 ```
