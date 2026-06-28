@@ -92,12 +92,16 @@ func runPackIndex(commandName string, args []string, stdout io.Writer, stderr io
 			printPackIndexShortUsage(commandName, stderr)
 			return 2
 		}
-		_, _, err = refreshPackIndex(options.URL)
+		_, cachePath, err := refreshPackIndex(options.URL)
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy %s update error: %v\n", commandName, err)
 			return 1
 		}
-		fmt.Fprintln(stdout, "updated blueprint index")
+		if cachePath != "" {
+			fmt.Fprintf(stdout, "updated blueprint index: %s\n", filepath.Dir(cachePath))
+		} else {
+			fmt.Fprintln(stdout, "updated blueprint index")
+		}
 		return 0
 	case "search":
 		query, err := parsePackIndexQuery(args[1:])

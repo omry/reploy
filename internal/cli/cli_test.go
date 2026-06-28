@@ -117,7 +117,7 @@ func TestPackIndexRefreshLoadsFileIndex(t *testing.T) {
 	if stdout != "updated blueprint index\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
-	if strings.Contains(stdout, indexPath) || strings.Contains(stdout, "shorthands") {
+	if strings.Contains(stdout, indexPath) || strings.Contains(stdout, "blueprint-index") || strings.Contains(stdout, "shorthands") {
 		t.Fatalf("stdout leaked cache details:\n%s", stdout)
 	}
 	if stderr != "" {
@@ -207,13 +207,15 @@ func TestPackIndexRefreshDownloadsAndCachesHTTPIndex(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if stdout != "updated blueprint index\n" {
+	cachePath := packIndexCachePath(server.URL + "/index.json")
+	expectedCacheDir := filepath.Dir(cachePath)
+	if stdout != "updated blueprint index: "+expectedCacheDir+"\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	if strings.Contains(stdout, server.URL) || strings.Contains(stdout, "shorthands") {
 		t.Fatalf("stdout leaked cache details:\n%s", stdout)
 	}
-	if _, err := os.Stat(packIndexCachePath(server.URL + "/index.json")); err != nil {
+	if _, err := os.Stat(cachePath); err != nil {
 		t.Fatalf("missing cached index: %v", err)
 	}
 	if stderr != "" {
