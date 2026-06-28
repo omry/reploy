@@ -5,7 +5,7 @@
 Reploy's maintainer workflow uses Go, Python, Node, and Docker-backed smoke
 tests. Match CI as closely as practical:
 
-- Go 1.24.x
+- Go 1.25.x
 - Python 3.12
 - Node 22
 - Docker, for the full CLI smoke path

@@ -38,13 +38,15 @@ func ParsePackRef(raw string) (PackRef, error) {
 	subdir := ""
 	if scheme == "pypi" {
 		if strings.Contains(body, "//") {
-			return PackRef{}, fmt.Errorf("pypi blueprint paths use #PATH, not //PATH")
+			return PackRef{}, fmt.Errorf("%s blueprint paths use #PATH, not //PATH", scheme)
 		}
+	}
+	if scheme == "pypi" || scheme == "source" || scheme == "git" {
 		if splitSource, path, hasPath := strings.Cut(body, "#"); hasPath {
 			source = splitSource
 			subdir = strings.TrimPrefix(path, "/")
 			if subdir == "" {
-				return PackRef{}, fmt.Errorf("pypi blueprint path must not be empty")
+				return PackRef{}, fmt.Errorf("%s blueprint path must not be empty", scheme)
 			}
 		}
 	}
@@ -81,7 +83,7 @@ func defaultPyPIBlueprintSubdir(packageName string) string {
 
 func isSupportedPackScheme(scheme string) bool {
 	switch scheme {
-	case "file", "pypi":
+	case "file", "pypi", "source", "git":
 		return true
 	default:
 		return false
@@ -90,10 +92,12 @@ func isSupportedPackScheme(scheme string) bool {
 
 func packRefIsPinned(scheme string, source string, query url.Values) bool {
 	switch scheme {
-	case "file":
+	case "file", "source":
 		return false
 	case "pypi":
 		return strings.Contains(source, "==")
+	case "git":
+		return isFullGitHash(query.Get("ref"))
 	default:
 		return false
 	}

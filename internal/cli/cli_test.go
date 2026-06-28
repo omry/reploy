@@ -6,14 +6,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	reploy "github.com/omry/reploy"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/dockerdeploy"
@@ -647,6 +653,19 @@ func TestParsePackRefArgumentSupportsPyPIHashBlueprintPath(t *testing.T) {
 	}
 }
 
+func TestParsePackRefArgumentSupportsGitHTTPSRef(t *testing.T) {
+	ref, err := parsePackRefArgument("git:https://github.com/acme/demo.git#demo_pkg/reploy?ref=main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Scheme != "git" || ref.Source != "https://github.com/acme/demo.git" || ref.Subdir != "demo_pkg/reploy" {
+		t.Fatalf("ref = %#v", ref)
+	}
+	if ref.Query.Get("ref") != "main" {
+		t.Fatalf("query = %#v", ref.Query)
+	}
+}
+
 func TestDirectInstallFileRefDryRunUsesBlueprintDefaults(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	code, stdout, stderr := runCLI("install", "file:"+packDir, "--dry-run", "--no-start")
@@ -914,6 +933,80 @@ func TestDockerInitAcceptsExplicitRequirements(t *testing.T) {
 	}
 	if string(requirements) != "demo-server==1.2.3\ndemo-imap==1.2.3\n" {
 		t.Fatalf("requirements = %q", requirements)
+	}
+}
+
+func TestDockerStageAcceptsSourcePackRef(t *testing.T) {
+	sourceDir := makeCLITestSourcePack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "source:"+sourceDir)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	requirements, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.RequirementsFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(requirements) != "demo-suite\n/source/app/demo-suite\n" {
+		t.Fatalf("requirements = %q", requirements)
+	}
+	compose, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.ComposeFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(compose), sourceDir+":/source/app/demo-suite:rw") {
+		t.Fatalf("compose did not mount source checkout:\n%s", compose)
+	}
+}
+
+func TestDockerStageAcceptsGitPackRef(t *testing.T) {
+	sourceDir, commit := makeCLITestGitSourcePack(t)
+	cacheDir := filepath.Join(t.TempDir(), "cache")
+	t.Setenv("REPLOY_CACHE_DIR", cacheDir)
+	sourceURL := (&url.URL{Scheme: "file", Path: filepath.ToSlash(sourceDir)}).String()
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "git:"+sourceURL+"?ref=main")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	requirements, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.RequirementsFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(requirements) != "setuptools>=68\nwheel\ngit-source-app\n/source/app/git-source-app\n" {
+		t.Fatalf("requirements = %q", requirements)
+	}
+	stateContent, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.StateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state deploy.DeploymentState
+	if err := json.Unmarshal(stateContent, &state); err != nil {
+		t.Fatal(err)
+	}
+	expectedRequestedRef := "git:" + sourceURL + "?ref=main"
+	expectedResolvedRef := "git:" + sourceURL + "#git_source_app/reploy?ref=" + commit
+	if state.RequestedBlueprintRef != expectedRequestedRef {
+		t.Fatalf("requested blueprint ref = %q, want %q", state.RequestedBlueprintRef, expectedRequestedRef)
+	}
+	if state.Blueprint.Raw != expectedResolvedRef || !state.Blueprint.IsPinned {
+		t.Fatalf("state blueprint = %#v, want pinned %q", state.Blueprint, expectedResolvedRef)
+	}
+	if state.ResolvedArtifact == nil || state.ResolvedArtifact.Scheme != "git" || state.ResolvedArtifact.Version != commit {
+		t.Fatalf("resolved artifact = %#v", state.ResolvedArtifact)
+	}
+	if !strings.HasPrefix(state.ResolvedArtifact.CachePath, cacheDir) {
+		t.Fatalf("cache path = %q, want under %q", state.ResolvedArtifact.CachePath, cacheDir)
+	}
+	compose, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.ComposeFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedMount := state.ResolvedArtifact.CachePath + ":/source/app/git-source-app:rw"
+	if !strings.Contains(string(compose), expectedMount) {
+		t.Fatalf("compose did not mount cached git checkout %q:\n%s", expectedMount, compose)
 	}
 }
 
@@ -1942,6 +2035,109 @@ func TestDockerInfoShowsDeploymentState(t *testing.T) {
 func makeCLITestPack(t *testing.T) string {
 	t.Helper()
 	return makeCLITestPackWithManifest(t, cliTestPackManifest())
+}
+
+func makeCLITestSourcePack(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte("[project]\nname = \"demo-suite\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	blueprintDir := filepath.Join(dir, "demo_suite", "reploy")
+	if err := os.MkdirAll(blueprintDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blueprintDir, "demo.blueprint.yaml"), []byte(cliTestPackManifest()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func makeCLITestGitSourcePack(t *testing.T) (string, string) {
+	t.Helper()
+	sourceDir := filepath.Join(t.TempDir(), "git-source-app")
+	copyCLITestTree(t, filepath.Join(cliTestRepoRoot(t), "tests", "e2e", "python", "packages", "git-source-app"), sourceDir)
+	repository, err := git.PlainInit(sourceDir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.NewBranchReferenceName("main"))); err != nil {
+		t.Fatal(err)
+	}
+	worktree, err := repository.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := filepath.WalkDir(sourceDir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		relativePath, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return err
+		}
+		_, err = worktree.Add(filepath.ToSlash(relativePath))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	hash, err := worktree.Commit("add git source app fixture", &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  "Reploy Test",
+			Email: "test@example.com",
+			When:  time.Unix(1, 0),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sourceDir, hash.String()
+}
+
+func copyCLITestTree(t *testing.T, sourceDir string, targetDir string) {
+	t.Helper()
+	if err := filepath.WalkDir(sourceDir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relativePath, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return err
+		}
+		targetPath := filepath.Join(targetDir, relativePath)
+		if entry.IsDir() {
+			return os.MkdirAll(targetPath, 0o755)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(targetPath, content, info.Mode().Perm())
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func cliTestRepoRoot(t *testing.T) string {
+	t.Helper()
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate cli test file")
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(filename), "..", ".."))
 }
 
 func makeCLITestPackWithManifest(t *testing.T, manifest string) string {

@@ -212,6 +212,10 @@ func LoadPack(ref PackRef) (AppPack, error) {
 		return loadFilePack(ref)
 	case "pypi":
 		return loadPyPIPack(ref)
+	case "source":
+		return loadSourcePack(ref)
+	case "git":
+		return loadGitPack(ref)
 	default:
 		return AppPack{}, fmt.Errorf("blueprint scheme is not implemented yet: %s", ref.Scheme)
 	}
@@ -301,6 +305,119 @@ func loadFilePack(ref PackRef) (AppPack, error) {
 		Bundle:       manifest.Bundle,
 		Docker:       manifest.Docker,
 	}, nil
+}
+
+func loadSourcePack(ref PackRef) (AppPack, error) {
+	if ref.Scheme != "source" {
+		return AppPack{}, fmt.Errorf("blueprint scheme is not source: %s", ref.Scheme)
+	}
+	sourceRoot := ref.Source
+	if !filepath.IsAbs(sourceRoot) {
+		absolute, err := filepath.Abs(sourceRoot)
+		if err != nil {
+			return AppPack{}, err
+		}
+		sourceRoot = absolute
+	}
+	info, err := os.Stat(sourceRoot)
+	if err != nil {
+		return AppPack{}, err
+	}
+	if !info.IsDir() {
+		return AppPack{}, fmt.Errorf("source blueprint reference must point at a directory: %s", ref.Source)
+	}
+	pack, subdir, err := loadSourceCheckout(sourceRoot, ref.Subdir)
+	if err != nil {
+		return AppPack{}, err
+	}
+	resolvedRef := ref
+	resolvedRef.Source = sourceRoot
+	resolvedRef.Subdir = filepath.ToSlash(subdir)
+	resolvedRef.Raw = "source:" + sourceRoot + "#" + filepath.ToSlash(subdir)
+	pack.Ref = resolvedRef
+	pack.RequestedRef = ref
+	pack.App.Provider.LocalSources = sourceLocalSources(pack, sourceRoot)
+	return pack, nil
+}
+
+func loadSourceCheckout(sourceRoot string, requestedSubdir string) (AppPack, string, error) {
+	subdir := strings.Trim(requestedSubdir, "/")
+	if subdir == "" {
+		projectName, err := sourceProjectName(sourceRoot)
+		if err != nil {
+			return AppPack{}, "", err
+		}
+		subdir = defaultPyPIBlueprintSubdir(projectName)
+	}
+	blueprintDir := filepath.Join(sourceRoot, filepath.FromSlash(subdir))
+	fileRef := PackRef{Raw: "file:" + blueprintDir, Scheme: "file", Source: blueprintDir}
+	pack, err := loadFilePack(fileRef)
+	if err != nil {
+		return AppPack{}, "", err
+	}
+	pack.App.Provider.LocalSources = sourceLocalSources(pack, sourceRoot)
+	return pack, filepath.ToSlash(subdir), nil
+}
+
+func sourceProjectName(sourceRoot string) (string, error) {
+	content, err := os.ReadFile(filepath.Join(sourceRoot, "pyproject.toml"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("source blueprint ref without #PATH requires pyproject.toml with [project].name: %s", sourceRoot)
+		}
+		return "", err
+	}
+	inProject := false
+	for _, line := range strings.Split(string(content), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			inProject = trimmed == "[project]"
+			continue
+		}
+		if !inProject || !strings.HasPrefix(trimmed, "name") {
+			continue
+		}
+		key, value, ok := strings.Cut(trimmed, "=")
+		if !ok || strings.TrimSpace(key) != "name" {
+			continue
+		}
+		name := strings.Trim(strings.TrimSpace(value), `"'`)
+		if name != "" {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("source blueprint ref without #PATH requires pyproject.toml with [project].name: %s", sourceRoot)
+}
+
+func sourceLocalSources(pack AppPack, sourceRoot string) map[string]string {
+	localSources := map[string]string{}
+	for name, source := range pack.App.Provider.LocalSources {
+		localSources[name] = source
+	}
+	identifier := strings.TrimSpace(pack.App.Provider.Identifier)
+	if identifier == "" {
+		return localSources
+	}
+	identifierName, _, _ := strings.Cut(identifier, "==")
+	identifierName, _, _ = strings.Cut(identifierName, "[")
+	normalizedIdentifier := normalizePackageName(identifierName)
+	for name := range localSources {
+		if normalizePackageName(name) == normalizedIdentifier {
+			return localSources
+		}
+	}
+	if _, ok := localSources[identifier]; ok {
+		return localSources
+	}
+	relativeSource, err := filepath.Rel(pack.Dir, sourceRoot)
+	if err != nil {
+		return localSources
+	}
+	localSources[identifier] = filepath.ToSlash(relativeSource)
+	return localSources
 }
 
 func findBlueprintManifest(dir string) (string, error) {

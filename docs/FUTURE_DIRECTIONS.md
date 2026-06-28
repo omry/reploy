@@ -89,21 +89,25 @@ one-off install modes.
 
 ### Source Provider
 
-Reploy could support source repositories such as GitHub as a provider. This
-would include fetching source, resolving the blueprint, and building needed
-artifacts in the staging directory before install/update.
+Reploy now has an initial generic Git source provider for HTTPS repositories.
+It fetches source with a built-in Git client, resolves branch and tag refs to a
+commit hash in staging state, locates the blueprint by the Python
+`package_name/reploy` convention unless `#PATH` is supplied, and builds the
+provider package from the checked-out source.
 
-Possible refs:
+Current refs:
 
 ```text
-reploy stage github:org/repo
-reploy install github:org/repo
+reploy stage git:https://github.com/org/repo.git?ref=main
+reploy install git:https://github.com/org/repo.git#package_name/reploy?ref=v1.2.3
 ```
 
 Open questions:
 
-- How are revisions pinned?
-- Where does the blueprint live inside the source tree?
+- Should a future blueprint index map Reploy versions or app versions to
+  upstream commit hashes?
+- Should GitHub-specific shorthand such as `github:org/repo` exist, or should
+  the generic `git:https://...` form remain the only source-repo spelling?
 - Which build steps are blueprint-declared versus provider-specific?
 - What build dependencies are required, and how are they declared?
 - What build environment is used?

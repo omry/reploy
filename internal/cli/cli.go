@@ -1560,13 +1560,13 @@ func parseDockerCommandOptions(args []string, requirePack bool, configs ...docke
 		}
 	}
 	if requirePack && !options.Update && options.Pack.Raw == "" {
-		return dockerCommandOptions{}, fmt.Errorf("APP_REF is required; use a blueprint shorthand from the Reploy blueprint index or an explicit ref such as file:PATH or pypi:PACKAGE")
+		return dockerCommandOptions{}, fmt.Errorf("APP_REF is required; use a blueprint shorthand from the Reploy blueprint index or an explicit ref such as git:https://HOST/REPO.git, source:PATH, file:PATH, or pypi:PACKAGE")
 	}
 	return options, nil
 }
 
 func packDisplayName(ref deploy.PackRef) string {
-	if ref.Scheme == "file" {
+	if ref.Scheme == "file" || ref.Scheme == "source" {
 		if pack, err := deploy.LoadPack(ref); err == nil && strings.TrimSpace(pack.App.ID) != "" {
 			return pack.App.ID
 		}
@@ -1599,7 +1599,7 @@ func parsePackRefArgument(value string) (deploy.PackRef, error) {
 			return deploy.PackRef{}, err
 		}
 		if !found {
-			return deploy.PackRef{}, fmt.Errorf("unknown blueprint shorthand %q in Reploy blueprint index %s; use an explicit ref such as file:PATH or pypi:PACKAGE", packShorthandName(original), packIndexURL())
+			return deploy.PackRef{}, fmt.Errorf("unknown blueprint shorthand %q in Reploy blueprint index %s; use an explicit ref such as git:https://HOST/REPO.git, source:PATH, file:PATH, or pypi:PACKAGE", packShorthandName(original), packIndexURL())
 		}
 		expanded = indexExpanded
 	}
@@ -1865,7 +1865,7 @@ Target options:
 
 App refs:
   APP_REF     App blueprint reference for stage.
-              Use an indexed shorthand, file:PATH, or pypi:PACKAGE.
+              Use an indexed shorthand, git:https://HOST/REPO.git, source:PATH, file:PATH, or pypi:PACKAGE.
               Add ==VERSION to an indexed shorthand to pin a release.
 
 Staging options:
@@ -2047,7 +2047,7 @@ Bundle:
 
 App refs:
   APP_REF     App blueprint reference for stage.
-              Use an indexed shorthand, file:PATH, or pypi:PACKAGE.
+              Use an indexed shorthand, git:https://HOST/REPO.git, source:PATH, file:PATH, or pypi:PACKAGE.
               Add ==VERSION to an indexed shorthand to pin a release.
 
 Options:
@@ -2106,7 +2106,7 @@ Create a staging directory from an app blueprint reference.
 Use --update to refresh an existing staging directory, optionally from a new ref.
 
 APP_REF:
-  Use an indexed shorthand, file:PATH, or pypi:PACKAGE.
+  Use an indexed shorthand, git:https://HOST/REPO.git, source:PATH, file:PATH, or pypi:PACKAGE.
   Add ==VERSION to an indexed shorthand to pin a release.
 
 Options:

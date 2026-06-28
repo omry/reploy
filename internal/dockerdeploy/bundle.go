@@ -894,7 +894,7 @@ func localBundleBuildSources(state deploy.DeploymentState) ([]bundleBuildSource,
 }
 
 func selectedPackLocalSources(pack deploy.AppPack, roots []deploy.ArtifactRoot, containerRoot string) ([]bundleBuildSource, error) {
-	if pack.Ref.Scheme != "file" || len(pack.App.Provider.LocalSources) == 0 {
+	if (pack.Ref.Scheme != "file" && pack.Ref.Scheme != "source" && pack.Ref.Scheme != "git") || len(pack.App.Provider.LocalSources) == 0 {
 		return nil, nil
 	}
 	containerRoot = strings.TrimRight(containerRoot, "/")

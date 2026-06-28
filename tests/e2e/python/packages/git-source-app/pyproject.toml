@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "git-source-app"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[project.scripts]
+git-source-app = "git_source_app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

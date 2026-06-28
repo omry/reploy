@@ -33,6 +33,39 @@ func TestLoadPack(t *testing.T) {
 	}
 }
 
+func TestLoadSourcePackUsesProjectConventionAndLocalSource(t *testing.T) {
+	sourceRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceRoot, "pyproject.toml"), []byte("[project]\nname = \"demo-server\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	blueprintDir := filepath.Join(sourceRoot, "demo_server", "reploy")
+	if err := os.MkdirAll(blueprintDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := strings.Replace(packTestManifest(), "    local_sources:\n      demo-server: ../../server\n", "", 1)
+	if err := os.WriteFile(filepath.Join(blueprintDir, "demo.blueprint.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := ParsePackRef("source:" + sourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pack, err := LoadPack(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pack.Ref.Scheme != "source" || pack.Ref.Source != sourceRoot || pack.Ref.Subdir != "demo_server/reploy" {
+		t.Fatalf("resolved ref = %#v", pack.Ref)
+	}
+	if pack.RequestedRef.Raw != "source:"+sourceRoot {
+		t.Fatalf("requested ref = %#v", pack.RequestedRef)
+	}
+	if pack.App.Provider.LocalSources["demo-server"] != "../.." {
+		t.Fatalf("local sources = %#v", pack.App.Provider.LocalSources)
+	}
+}
+
 func TestParsePackManifestReadsDockerLayout(t *testing.T) {
 	manifest, err := ParsePackManifest(packTestManifest())
 	if err != nil {

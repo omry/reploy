@@ -162,12 +162,32 @@ reploy stage arbiter-server
 reploy install arbiter-server --dry-run
 ```
 
-Without an index, use an explicit PyPI package ref.
+Without an index, use an explicit Git, source, file, or PyPI ref.
+
+Git refs clone a source checkout with Reploy's built-in Git client, so the
+machine running Reploy does not need a `git` executable. `?ref=` accepts a
+branch, tag, or commit hash. Reploy resolves moving refs such as `main` to a
+commit hash in staging state.
+
+```bash
+reploy stage git:https://github.com/org/example-app.git?ref=main
+reploy stage git:https://github.com/org/example-app.git#example_app/reploy?ref=v0.1.0
+```
 
 PyPI package refs default to the `package_name/reploy` blueprint convention, so
 `pypi:example-app` looks for `example_app/reploy` in the wheel. Use
 `pypi:PACKAGE#PATH` only when a package stores its Reploy blueprint somewhere
 else.
+
+For local Python source checkouts, use a source ref. `source:path/to/app` reads
+`pyproject.toml`, applies the same `package_name/reploy` blueprint convention,
+and builds the provider package from the checkout instead of PyPI. Use
+`source:PATH#PATH` only when the blueprint lives somewhere else in the checkout.
+
+```bash
+reploy stage source:path/to/app
+reploy install source:path/to/app --dry-run
+```
 
 For unpublished or local app blueprints, use an explicit file reference:
 
@@ -213,6 +233,8 @@ Useful staging commands:
 
 ```bash
 reploy stage pypi:example-app
+reploy stage git:https://github.com/org/example-app.git?ref=main
+reploy stage source:path/to/app
 reploy stage file:path/to/app/reploy
 ./reploy-staging/examplectl status
 ./reploy-staging/examplectl config check --live
@@ -246,6 +268,7 @@ blueprint defaults. It is useful for simple services and dry-run planning:
 
 ```bash
 reploy install arbiter-server --dry-run
+reploy install source:path/to/app --dry-run
 reploy install file:./app.blueprint.yaml --dry-run
 reploy install pypi:example-app --dry-run
 reploy install pypi:example-app#example_app/reploy/example.blueprint.yaml --dry-run
@@ -298,10 +321,10 @@ when possible and removes Docker containers and networks by Compose labels.
 Use `--list-services` to list Reploy-managed systemd services before choosing a
 service-only uninstall. The installed target directory is kept unless
 `--remove-dir` is set.
-When installing from a file-backed blueprint with local source packages, staged
-install rebuilds those wheels in the copied target deployment before starting
-the service, so editable checkout changes are captured without mutating the
-staging deployment.
+When installing from a file-, source-, or git-backed blueprint with local
+source packages, staged install rebuilds those wheels in the copied target
+deployment before starting the service, so editable checkout changes are
+captured without mutating the staging deployment.
 Blueprints may declare install lifecycle hooks under
 `docker.install.hooks.before_start` and `docker.install.hooks.after_start`.
 Hooks support app commands, such as `app: [config, check]`, and health checks,
