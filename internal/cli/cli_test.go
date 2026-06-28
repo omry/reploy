@@ -837,7 +837,7 @@ func TestDockerInitExistingDefaultDeploymentSuggestsUpdate(t *testing.T) {
 	if !strings.Contains(stderr, "staging directory already exists at reploy-staging") {
 		t.Fatalf("stderr missing existing deployment message:\n%s", stderr)
 	}
-	if !strings.Contains(stderr, `run "reploy stage --update file:`+packDir+`" to update it`) {
+	if !strings.Contains(stderr, "use --update to update it") {
 		t.Fatalf("stderr missing update hint:\n%s", stderr)
 	}
 }

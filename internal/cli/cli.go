@@ -254,7 +254,7 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
 		if err != nil {
 			var existingFileError dockerdeploy.ExistingDeploymentFileError
 			if errors.As(err, &existingFileError) {
-				fmt.Fprintf(stderr, "reploy stage error: staging directory already exists at %s (found %s); run \"%s\" to update it\n", options.Dir, existingFileError.Path, stageUpdateCommandHint(options.Dir, options.Pack))
+				fmt.Fprintf(stderr, "reploy stage error: staging directory already exists at %s (found %s). use --update to update it\n", options.Dir, existingFileError.Path)
 				return 1
 			}
 			fmt.Fprintf(stderr, "reploy stage error: %v\n", err)
@@ -1533,21 +1533,6 @@ func packDisplayName(ref deploy.PackRef) string {
 		return parts[len(parts)-1]
 	}
 	return source
-}
-
-func stageUpdateCommandHint(dir string, ref deploy.PackRef) string {
-	args := []string{"reploy", "stage", "--update"}
-	if dir == dockerdeploy.DefaultDeploymentDir {
-		if ref.Raw != "" {
-			args = append(args, ref.Raw)
-		}
-		return strings.Join(args, " ")
-	}
-	args = append(args, "--dir", dir)
-	if ref.Raw != "" {
-		args = append(args, ref.Raw)
-	}
-	return strings.Join(args, " ")
 }
 
 func parsePackRefArgument(value string) (deploy.PackRef, error) {
