@@ -38,6 +38,14 @@ No active backlog items.
       storyline from stage to install to operate; and capture what docs/video
       assets the demo should produce.
 
+- [ ] `P2` Consider an app-author blueprint template UX.
+      Explore a command or documented flow that generates an initial blueprint
+      skeleton for app authors. Acceptance checks: define the target command
+      shape, inputs, generated files, and defaults; include a minimal Python
+      service example; decide how much app/runtime detection is appropriate;
+      and make the generated blueprint usable as a starting point without
+      implying it is production-ready.
+
 - [ ] `P2` Define and validate formal Windows support.
       Reploy should have explicit Windows behavior instead of accidental
       partial support. Acceptance checks: publish a support matrix for Windows
