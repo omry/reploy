@@ -222,7 +222,7 @@ reploy doctor
 reploy bundle list
 reploy bundle list all
 reploy bundle list-options
-reploy bundle add --name imap,smtp
+reploy bundle add imap,smtp
 reploy bundle remove imap,smtp
 reploy bundle upgrade
 reploy bundle build   # explicit preflight before install; up builds as needed

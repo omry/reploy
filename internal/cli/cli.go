@@ -529,8 +529,9 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 		AllowPyPIOnly: action == "build",
 		AllowVerbose:  action == "check" || action == "build" || action == "clean",
 		AllowMultiple: action == "add" || action == "remove",
-		AllowNames:    action == "add",
-		AllowForce:    action == "add",
+		AllowNames:    action == "add" || action == "remove",
+		AllowExtra:    action == "add" || action == "remove",
+		Command:       action,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
@@ -565,7 +566,7 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 0
 	case "add":
 		beforeRoots, beforeErr := dockerdeploy.BundleList(dockerdeploy.BundleListOptions{Dir: options.Dir})
-		results, err := dockerdeploy.BundleAddMany(dockerdeploy.BundleRootsOptions{Dir: options.Dir, Sources: options.Roots, Names: options.Names, Force: options.Force})
+		results, err := dockerdeploy.BundleAddMany(dockerdeploy.BundleRootsOptions{Dir: options.Dir, Sources: options.Extras, Names: options.Names})
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy bundle add error: %v\n", err)
 			return 1
@@ -644,7 +645,7 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		return 0
 	case "remove":
-		results, err := dockerdeploy.BundleRemoveMany(dockerdeploy.BundleRootsOptions{Dir: options.Dir, Sources: options.Roots})
+		results, err := dockerdeploy.BundleRemoveMany(dockerdeploy.BundleRootsOptions{Dir: options.Dir, Sources: options.Extras, Names: options.Names})
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy bundle remove error: %v\n", err)
 			return 1
@@ -673,7 +674,7 @@ type dockerBundleOptions struct {
 	Root        string
 	Roots       []string
 	Names       []string
-	Force       bool
+	Extras      []string
 	DryRun      bool
 	PyPIOnly    bool
 	Verbose     bool
@@ -686,7 +687,8 @@ type dockerBundleParseOptions struct {
 	AllowVerbose  bool
 	AllowMultiple bool
 	AllowNames    bool
-	AllowForce    bool
+	AllowExtra    bool
+	Command       string
 }
 
 func parseDockerBundleUpgradeOptions(args []string) (dockerBundleOptions, error) {
@@ -729,11 +731,19 @@ func parseDockerBundleOptions(args []string, parseOptions dockerBundleParseOptio
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
 		switch arg {
-		case "--force":
-			if !parseOptions.AllowForce {
+		case "--extra":
+			if !parseOptions.AllowExtra {
 				return dockerBundleOptions{}, fmt.Errorf("unknown option: %s", arg)
 			}
-			options.Force = true
+			value, ok := optionValue(args, &index)
+			if !ok {
+				return dockerBundleOptions{}, fmt.Errorf("%s requires a value", arg)
+			}
+			extras := splitBundleRoots(value)
+			if len(extras) == 0 {
+				return dockerBundleOptions{}, fmt.Errorf("bundle extra root must not be empty")
+			}
+			options.Extras = append(options.Extras, extras...)
 		case "--dry-run":
 			if !parseOptions.AllowDryRun {
 				return dockerBundleOptions{}, fmt.Errorf("unknown option: %s", arg)
@@ -786,6 +796,17 @@ func parseDockerBundleOptions(args []string, parseOptions dockerBundleParseOptio
 				options.Names = append(options.Names, names...)
 				continue
 			}
+			if strings.HasPrefix(arg, "--extra=") {
+				if !parseOptions.AllowExtra {
+					return dockerBundleOptions{}, fmt.Errorf("unknown option: --extra")
+				}
+				extras := splitBundleRoots(strings.TrimPrefix(arg, "--extra="))
+				if len(extras) == 0 {
+					return dockerBundleOptions{}, fmt.Errorf("bundle extra root must not be empty")
+				}
+				options.Extras = append(options.Extras, extras...)
+				continue
+			}
 			if strings.HasPrefix(arg, "--") {
 				return dockerBundleOptions{}, fmt.Errorf("unknown option: %s", arg)
 			}
@@ -799,19 +820,27 @@ func parseDockerBundleOptions(args []string, parseOptions dockerBundleParseOptio
 			if options.Root == "" {
 				options.Root = roots[0]
 			}
-			options.Roots = append(options.Roots, roots...)
+			if parseOptions.AllowNames {
+				options.Names = append(options.Names, roots...)
+			} else {
+				options.Roots = append(options.Roots, roots...)
+			}
 		}
 	}
 	if options.Dir == "" {
 		return dockerBundleOptions{}, fmt.Errorf("--dir must not be empty")
 	}
-	if parseOptions.RequireRoot && len(options.Roots) == 0 && len(options.Names) == 0 {
+	if parseOptions.RequireRoot && len(options.Roots) == 0 && len(options.Names) == 0 && len(options.Extras) == 0 {
 		if parseOptions.AllowNames {
-			return dockerBundleOptions{}, fmt.Errorf("bundle add expects a package root or --name NAME; examples: reploy bundle add --name imap,smtp; reploy bundle add PACKAGE[==VERSION]")
+			command := parseOptions.Command
+			if command == "" {
+				command = "command"
+			}
+			return dockerBundleOptions{}, fmt.Errorf("bundle %s expects option names or --extra ROOT; examples: reploy bundle %s imap,smtp; reploy bundle %s --extra PACKAGE[==VERSION]", command, command, command)
 		}
 		return dockerBundleOptions{}, fmt.Errorf("expected bundle root")
 	}
-	if !parseOptions.RequireRoot && (len(options.Roots) > 0 || len(options.Names) > 0) {
+	if !parseOptions.RequireRoot && (len(options.Roots) > 0 || len(options.Names) > 0 || len(options.Extras) > 0) {
 		return dockerBundleOptions{}, fmt.Errorf("bundle list does not accept a root")
 	}
 	return options, nil
@@ -882,10 +911,6 @@ func printBundleRootSummary(output io.Writer, verb string, roots []string) {
 }
 
 func selectedBundleRoots(options dockerBundleOptions) []string {
-	roots := append([]string{}, options.Roots...)
-	if len(options.Names) == 0 {
-		return roots
-	}
 	bundleOptions, err := dockerdeploy.BundleOptions(dockerdeploy.BundleListOptions{Dir: options.Dir})
 	byName := map[string]string{}
 	if err == nil {
@@ -893,6 +918,8 @@ func selectedBundleRoots(options dockerBundleOptions) []string {
 			byName[option.Name] = option.Identifier
 		}
 	}
+	roots := []string{}
+	roots = append(roots, options.Extras...)
 	for _, name := range options.Names {
 		if root := byName[name]; root != "" {
 			roots = append(roots, root)
@@ -1369,13 +1396,17 @@ func runDockerRuntime(action string, args []string, stdout io.Writer, stderr io.
 		return 1
 	}
 	if err := dockerdeploy.Runtime(dockerdeploy.RuntimeOptions{
-		Dir:    options.Dir,
-		Action: action,
-		Follow: options.Follow,
-		Stdout: stdout,
-		Stderr: stderr,
+		Dir:     options.Dir,
+		Action:  action,
+		Follow:  options.Follow,
+		Verbose: options.Verbose,
+		Stdout:  stdout,
+		Stderr:  stderr,
 	}); err != nil {
 		fmt.Fprintf(stderr, "reploy %s error: %v\n", action, err)
+		if runtimeBundlePrepareFailed(err) && !options.Verbose {
+			fmt.Fprintf(stderr, "next step: run `%s` to inspect and fix the bundle build, then rerun `reploy %s`.\n", runtimeBundleBuildVerboseCommand(options.Dir, options.DirExplicit), action)
+		}
 		return 1
 	}
 	return 0
@@ -1385,6 +1416,7 @@ type dockerRuntimeOptions struct {
 	Dir         string
 	DirExplicit bool
 	Follow      bool
+	Verbose     bool
 }
 
 func parseDockerRuntimeOptions(args []string) (dockerRuntimeOptions, error) {
@@ -1394,6 +1426,8 @@ func parseDockerRuntimeOptions(args []string) (dockerRuntimeOptions, error) {
 		switch arg {
 		case "--follow", "-f":
 			options.Follow = true
+		case "--verbose":
+			options.Verbose = true
 		case "--dir":
 			value, ok := optionValue(args, &index)
 			if !ok {
@@ -1414,6 +1448,27 @@ func parseDockerRuntimeOptions(args []string) (dockerRuntimeOptions, error) {
 		return dockerRuntimeOptions{}, fmt.Errorf("--dir must not be empty")
 	}
 	return options, nil
+}
+
+func runtimeBundlePrepareFailed(err error) bool {
+	return strings.HasPrefix(err.Error(), "prepare installation bundle:")
+}
+
+func runtimeBundleBuildVerboseCommand(dir string, dirExplicit bool) string {
+	if !dirExplicit || dir == dockerdeploy.DefaultDeploymentDir {
+		return "reploy bundle build --verbose"
+	}
+	return "reploy bundle build --verbose --dir " + shellQuoteArg(dir)
+}
+
+func shellQuoteArg(value string) string {
+	if value == "" {
+		return "''"
+	}
+	if !strings.ContainsAny(value, " \t\n'\"\\$`;&|<>*?()[]{}!") {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 type dockerCommandOptions struct {
@@ -1817,9 +1872,8 @@ Staging options:
   --dir DIR    Staging directory, default current staging dir or reploy-staging
   --requirement REQ
               Exact package pin or absolute container path for requirements.txt
-  --name NAME  Bundle option name for bundle add; accepts comma-separated names
-  --force      With stage --update, overwrite generated files; with bundle add --name,
-              treat unknown names as package roots
+  --extra ROOT Add/remove an explicit bundle root; accepts comma-separated roots
+  --force      With stage --update, overwrite generated files
   --preinstall Run install-readiness doctor checks
   --quiet      Suppress passing doctor checks
   --to DIR     Install target directory
@@ -1898,8 +1952,7 @@ Usage: reploy bundle COMMAND
 
 Options:
   --dir DIR    Staging directory, default current staging dir or reploy-staging
-  --name NAME  Bundle option name for bundle add; accepts comma-separated names
-  --force      With bundle add --name, treat unknown names as package roots
+  --extra ROOT Add/remove an explicit bundle root; accepts comma-separated roots
   --dry-run    Print build/check commands without changing staging
   --pypi-only  Build or upgrade using only PyPI package roots
   --verbose    Show bundle check/build command output
@@ -2001,9 +2054,8 @@ Options:
   --dir DIR    Staging directory, default current staging dir or reploy-staging
   --requirement REQ
               Exact package pin or absolute container path for requirements.txt
-  --name NAME  Bundle option name for bundle add; accepts comma-separated names
-  --force      With stage --update, overwrite generated files; with bundle add --name,
-              treat unknown names as package roots
+  --extra ROOT Add/remove an explicit bundle root; accepts comma-separated roots
+  --force      With stage --update, overwrite generated files
   --preinstall Run install-readiness doctor checks
   --quiet      Suppress passing doctor checks
   --to DIR     Install target directory

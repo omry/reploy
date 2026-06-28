@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -79,6 +80,53 @@ func TestRuntimeUpAutomaticallyPreparesBundle(t *testing.T) {
 	defer restoreRuntime()
 
 	if err := Runtime(RuntimeOptions{Dir: dir, Action: "up"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"build", "check", "up -d"}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestRuntimeUpVerboseStreamsBundlePrepareOutput(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: dir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	commands := []string{}
+	restoreBundle := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
+		if options.Stdout != &stdout || options.Stderr != &stderr {
+			t.Fatalf("bundle prepare should stream verbose output: %#v", options)
+		}
+		switch {
+		case containsInOrder(spec.Args, []string{"wheel", "--no-cache-dir"}):
+			commands = append(commands, "build")
+			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
+			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+			commands = append(commands, "check")
+			return nil
+		default:
+			t.Fatalf("unexpected bundle command: %#v", spec.Args)
+			return nil
+		}
+	})
+	defer restoreBundle()
+	restoreRuntime := stubRuntimeRunner(func(spec CommandSpec, options RunOptions) error {
+		commands = append(commands, strings.Join(spec.Args[len(spec.Args)-2:], " "))
+		return nil
+	})
+	defer restoreRuntime()
+
+	if err := Runtime(RuntimeOptions{Dir: dir, Action: "up", Verbose: true, Stdout: &stdout, Stderr: &stderr}); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"build", "check", "up -d"}

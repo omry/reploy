@@ -259,6 +259,29 @@ func TestBundleAddOptionUsesBlueprintIdentifier(t *testing.T) {
 	}
 }
 
+func TestBundleAddManyOptionsUseBlueprintIdentifiers(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{
+		Dir:          deployDir,
+		Pack:         ref,
+		Requirements: []string{"demo-server==1.2.3"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := BundleAddMany(BundleRootsOptions{Dir: deployDir, Names: []string{"imap", "smtp"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-server==1.2.3\ndemo-imap\ndemo-smtp\n" {
+		t.Fatalf("requirements = %q", got)
+	}
+}
+
 func TestBundleAddManyRejectsInvalidRootWithoutWriting(t *testing.T) {
 	packDir := makeTestPack(t)
 	ref, err := deploy.ParsePackRef("file:" + packDir)
@@ -325,7 +348,7 @@ func TestBundleAddManyRejectsLikelyOptionTypoWithoutWriting(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), `unknown bundle option "smtpa"`) || !strings.Contains(err.Error(), `did you mean "smtp"`) || !strings.Contains(err.Error(), "--force") {
+	if !strings.Contains(err.Error(), `unknown bundle option "smtpa"`) || !strings.Contains(err.Error(), `did you mean "smtp"`) || !strings.Contains(err.Error(), "--extra") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-server==1.2.3\n" {
@@ -333,7 +356,7 @@ func TestBundleAddManyRejectsLikelyOptionTypoWithoutWriting(t *testing.T) {
 	}
 }
 
-func TestBundleAddManyForceTreatsUnknownNameAsPackageRoot(t *testing.T) {
+func TestBundleAddManySourcesAreExplicitRoots(t *testing.T) {
 	packDir := makeTestPack(t)
 	ref, err := deploy.ParsePackRef("file:" + packDir)
 	if err != nil {
@@ -348,10 +371,59 @@ func TestBundleAddManyForceTreatsUnknownNameAsPackageRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := BundleAddMany(BundleRootsOptions{Dir: deployDir, Names: []string{"smtpa"}, Force: true}); err != nil {
+	if _, err := BundleAddMany(BundleRootsOptions{Dir: deployDir, Sources: []string{"smtpa"}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-server==1.2.3\nsmtpa\n" {
+		t.Fatalf("requirements = %q", got)
+	}
+}
+
+func TestBundleAddManySourcesCanOverlapOptionNames(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{
+		Dir:          deployDir,
+		Pack:         ref,
+		Requirements: []string{"demo-server==1.2.3"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := BundleAddMany(BundleRootsOptions{Dir: deployDir, Sources: []string{"imap"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-server==1.2.3\nimap\n" {
+		t.Fatalf("requirements = %q", got)
+	}
+}
+
+func TestBundleRemoveSourcesRemoveExplicitRoots(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{
+		Dir:          deployDir,
+		Pack:         ref,
+		Requirements: []string{"demo-server==1.2.3"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BundleAddMany(BundleRootsOptions{Dir: deployDir, Sources: []string{"imap", "smtp"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := BundleRemoveMany(BundleRootsOptions{Dir: deployDir, Sources: []string{"imap", "smtp"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-server==1.2.3\n" {
 		t.Fatalf("requirements = %q", got)
 	}
 }
@@ -374,7 +446,7 @@ func TestBundleRemoveOptionUsesBlueprintIdentifier(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := BundleRemove(BundleRootOptions{Dir: deployDir, Source: "imap"}); err != nil {
+	if _, err := BundleRemoveMany(BundleRootsOptions{Dir: deployDir, Names: []string{"imap"}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-server==1.2.3\n" {
@@ -493,6 +565,25 @@ func TestBundleCheckDryRunPrintsCommand(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "would validate installation bundle:") || !strings.Contains(stdout.String(), "docker run --rm") {
 		t.Fatalf("stdout missing dry-run command:\n%s", stdout.String())
+	}
+}
+
+func TestCommandLineQuotesShellSensitiveArgs(t *testing.T) {
+	got := commandLine(CommandSpec{
+		Name: "reploy",
+		Args: []string{"bundle", "build", "--dir", "/tmp/reploy staging/it's live;rm"},
+	})
+	want := `reploy bundle build --dir '/tmp/reploy staging/it'"'"'s live;rm'`
+	if got != want {
+		t.Fatalf("command = %q, want %q", got, want)
+	}
+}
+
+func TestStageUpdateCommandQuotesShellSensitiveDir(t *testing.T) {
+	got := stageUpdateCommand("/tmp/reploy staging/it's live;rm")
+	want := `reploy stage --update --dir '/tmp/reploy staging/it'"'"'s live;rm'`
+	if got != want {
+		t.Fatalf("command = %q, want %q", got, want)
 	}
 }
 

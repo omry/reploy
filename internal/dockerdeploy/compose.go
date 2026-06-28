@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 )
 
@@ -25,6 +27,8 @@ type RunOptions struct {
 	Stderr  io.Writer
 }
 
+const commandOutputErrorLimit = 4000
+
 func runCommand(spec CommandSpec, options RunOptions) error {
 	ctx := options.Context
 	if ctx == nil {
@@ -36,12 +40,29 @@ func runCommand(spec CommandSpec, options RunOptions) error {
 		command.Env = append(os.Environ(), spec.Env...)
 	}
 	command.Stdin = options.Stdin
-	command.Stdout = options.Stdout
-	command.Stderr = options.Stderr
+	var capturedOutput bytes.Buffer
+	if options.Stdout == nil && options.Stderr == nil {
+		command.Stdout = &capturedOutput
+		command.Stderr = &capturedOutput
+	} else {
+		command.Stdout = options.Stdout
+		command.Stderr = options.Stderr
+	}
 	if err := command.Run(); err != nil {
+		if output := trimmedCommandOutput(capturedOutput.String()); output != "" {
+			return fmt.Errorf("%s failed: %w\ncommand output:\n%s", spec.Name, err, output)
+		}
 		return fmt.Errorf("%s failed: %w", spec.Name, err)
 	}
 	return nil
+}
+
+func trimmedCommandOutput(output string) string {
+	output = strings.TrimSpace(output)
+	if len(output) <= commandOutputErrorLimit {
+		return output
+	}
+	return "[last 4000 bytes]\n" + output[len(output)-commandOutputErrorLimit:]
 }
 
 type commandRunner func(CommandSpec, RunOptions) error

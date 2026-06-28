@@ -6,11 +6,12 @@ import (
 )
 
 type RuntimeOptions struct {
-	Dir    string
-	Action string
-	Follow bool
-	Stdout io.Writer
-	Stderr io.Writer
+	Dir     string
+	Action  string
+	Follow  bool
+	Verbose bool
+	Stdout  io.Writer
+	Stderr  io.Writer
 }
 
 var runRuntimeCommand = runCommand
@@ -23,7 +24,7 @@ func Runtime(options RuntimeOptions) error {
 		return err
 	}
 	if runtimeActionNeedsBundle(options.Action) {
-		if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: options.Dir, Stdout: options.Stdout, Stderr: options.Stderr}); err != nil {
+		if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: options.Dir, Verbose: options.Verbose, Stdout: options.Stdout, Stderr: options.Stderr}); err != nil {
 			return fmt.Errorf("prepare installation bundle: %w", err)
 		}
 	}

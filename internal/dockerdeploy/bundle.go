@@ -39,7 +39,6 @@ type BundleRootsOptions struct {
 	Dir     string
 	Sources []string
 	Names   []string
-	Force   bool
 }
 
 type BundleCheckOptions struct {
@@ -171,7 +170,7 @@ func BundleAddMany(options BundleRootsOptions) ([]UpdateResult, error) {
 	}
 	roots := make([]deploy.ArtifactRoot, 0, len(options.Names)+len(options.Sources))
 	for _, name := range options.Names {
-		root, err := resolveBundleOptionRoot(options.Dir, name, options.Force)
+		root, err := resolveBundleOptionRoot(options.Dir, name)
 		if err != nil {
 			return nil, err
 		}
@@ -207,7 +206,7 @@ func BundleRemoveMany(options BundleRootsOptions) ([]UpdateResult, error) {
 	if options.Dir == "" {
 		options.Dir = DefaultDeploymentDir
 	}
-	if len(options.Sources) == 0 {
+	if len(options.Sources) == 0 && len(options.Names) == 0 {
 		return nil, fmt.Errorf("expected bundle root")
 	}
 	state, err := loadState(options.Dir)
@@ -219,14 +218,20 @@ func BundleRemoveMany(options BundleRootsOptions) ([]UpdateResult, error) {
 		return nil, err
 	}
 	sources := map[string]bool{}
+	for _, name := range options.Names {
+		root, err := resolveBundleOptionRoot(options.Dir, name)
+		if err != nil {
+			return nil, err
+		}
+		if !bundleRootSourceSelected(state.Bundle.Roots, root.Source) {
+			return nil, fmt.Errorf("bundle root is not selected: %s", root.Source)
+		}
+		sources[root.Source] = true
+	}
 	for _, source := range options.Sources {
 		source = strings.TrimSpace(source)
 		if source == "" {
 			return nil, fmt.Errorf("bundle root must not be empty")
-		}
-		source, err = resolveBundleRemoveSource(options.Dir, source)
-		if err != nil {
-			return nil, err
 		}
 		if !bundleRootSourceSelected(state.Bundle.Roots, source) {
 			return nil, fmt.Errorf("bundle root is not selected: %s", source)
@@ -251,23 +256,6 @@ func bundleRootSourceSelected(roots []deploy.ArtifactRoot, source string) bool {
 		}
 	}
 	return false
-}
-
-func resolveBundleRemoveSource(dir string, source string) (string, error) {
-	pack, options, err := loadBundleOptionsWithPack(dir)
-	if err != nil {
-		return "", err
-	}
-	for _, option := range options {
-		if option.Name == source {
-			root, err := providerIdentifierRoot(pack.App.Provider.Type, option.Identifier)
-			if err != nil {
-				return "", err
-			}
-			return root.Source, nil
-		}
-	}
-	return source, nil
 }
 
 func BundleAddWheel(options BundleRootOptions) ([]UpdateResult, error) {
@@ -1295,14 +1283,18 @@ func validateBundleRequirementsProjection(dir string, state deploy.DeploymentSta
 	content, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("bundle requirements projection is missing: %s; run reploy stage --update --dir %s", path, dir)
+			return fmt.Errorf("bundle requirements projection is missing: %s; run %s", path, stageUpdateCommand(dir))
 		}
 		return err
 	}
 	if string(content) != string(requirements) {
-		return fmt.Errorf("bundle requirements projection is out of date: %s; run reploy stage --update --dir %s", path, dir)
+		return fmt.Errorf("bundle requirements projection is out of date: %s; run %s", path, stageUpdateCommand(dir))
 	}
 	return nil
+}
+
+func stageUpdateCommand(dir string) string {
+	return "reploy stage --update --dir " + shellQuote(dir)
 }
 
 func deploymentBundleDir(dir string) (string, error) {
@@ -1360,13 +1352,13 @@ func shellQuote(value string) string {
 	if value == "" {
 		return "''"
 	}
-	if !strings.ContainsAny(value, " \t\n'\"\\$`") {
+	if !strings.ContainsAny(value, " \t\n'\"\\$`;&|<>*?()[]{}!") {
 		return value
 	}
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
-func resolveBundleOptionRoot(dir string, name string, force bool) (deploy.ArtifactRoot, error) {
+func resolveBundleOptionRoot(dir string, name string) (deploy.ArtifactRoot, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return deploy.ArtifactRoot{}, fmt.Errorf("bundle option name must not be empty")
@@ -1380,9 +1372,6 @@ func resolveBundleOptionRoot(dir string, name string, force bool) (deploy.Artifa
 			continue
 		}
 		return providerIdentifierRoot(pack.App.Provider.Type, option.Identifier)
-	}
-	if force {
-		return classifyBundleRoot(name)
 	}
 	return deploy.ArtifactRoot{}, unknownBundleOptionError(name, options)
 }
@@ -1398,12 +1387,12 @@ func unknownBundleOptionError(name string, options []BundleOption) error {
 	}
 	sort.Strings(names)
 	if suggestion != "" {
-		return fmt.Errorf("unknown bundle option %q\ndid you mean %q?\nuse --force to add %q as a bundle root", name, suggestion, name)
+		return fmt.Errorf("unknown bundle option %q\ndid you mean %q?\nuse --extra to add %q as an explicit bundle root", name, suggestion, name)
 	}
 	if len(names) == 0 {
-		return fmt.Errorf("unknown bundle option %q\nthis blueprint does not declare bundle options\nuse --force to add it as a bundle root", name)
+		return fmt.Errorf("unknown bundle option %q\nthis blueprint does not declare bundle options\nuse --extra to add it as an explicit bundle root", name)
 	}
-	return fmt.Errorf("unknown bundle option %q\nuse one of:\n  %s\nuse --force to add it as a bundle root", name, strings.Join(names, "\n  "))
+	return fmt.Errorf("unknown bundle option %q\nuse one of:\n  %s\nuse --extra to add it as an explicit bundle root", name, strings.Join(names, "\n  "))
 }
 
 func editDistanceAtMostOne(left string, right string) bool {

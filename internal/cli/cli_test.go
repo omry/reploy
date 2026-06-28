@@ -531,7 +531,7 @@ func TestDockerUpdateCommandRemoved(t *testing.T) {
 }
 
 func TestDockerLogsFollowOptionParses(t *testing.T) {
-	options, err := parseDockerRuntimeOptions([]string{"--dir", "deployment", "--follow"})
+	options, err := parseDockerRuntimeOptions([]string{"--dir", "deployment", "--follow", "--verbose"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,6 +540,17 @@ func TestDockerLogsFollowOptionParses(t *testing.T) {
 	}
 	if !options.Follow {
 		t.Fatal("follow = false, want true")
+	}
+	if !options.Verbose {
+		t.Fatal("verbose = false, want true")
+	}
+}
+
+func TestRuntimeBundleBuildVerboseCommandQuotesExplicitDir(t *testing.T) {
+	got := runtimeBundleBuildVerboseCommand("/tmp/reploy staging/it's live", true)
+	want := `reploy bundle build --verbose --dir '/tmp/reploy staging/it'"'"'s live'`
+	if got != want {
+		t.Fatalf("command = %q, want %q", got, want)
 	}
 }
 
@@ -1411,7 +1422,7 @@ func TestDockerBundleAddAndRemoveUpdateRequirements(t *testing.T) {
 		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
-	code, stdout, stderr = runCLI("bundle", "add", "demo-imap==1.2.3", "--dir", deployDir)
+	code, stdout, stderr = runCLI("bundle", "add", "--extra", "demo-imap==1.2.3", "--dir", deployDir)
 	if code != 0 {
 		t.Fatalf("bundle add failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1429,7 +1440,7 @@ func TestDockerBundleAddAndRemoveUpdateRequirements(t *testing.T) {
 		t.Fatalf("stderr = %q, want empty", stderr)
 	}
 
-	code, stdout, stderr = runCLI("bundle", "remove", "demo-imap==1.2.3", "--dir", deployDir)
+	code, stdout, stderr = runCLI("bundle", "remove", "--extra", "demo-imap==1.2.3", "--dir", deployDir)
 	if code != 0 {
 		t.Fatalf("bundle remove failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1460,7 +1471,7 @@ func TestDockerBundleAddAndRemoveAcceptMultipleRoots(t *testing.T) {
 		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
-	code, stdout, stderr = runCLI("bundle", "add", "--name", "imap,smtp", "--dir", deployDir)
+	code, stdout, stderr = runCLI("bundle", "add", "imap,smtp", "--dir", deployDir)
 	if code != 0 {
 		t.Fatalf("bundle add failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1481,7 +1492,7 @@ func TestDockerBundleAddAndRemoveAcceptMultipleRoots(t *testing.T) {
 		t.Fatalf("stderr = %q, want empty", stderr)
 	}
 
-	code, stdout, stderr = runCLI("bundle", "add", "--name", "imap,smtp", "--dir", deployDir)
+	code, stdout, stderr = runCLI("bundle", "add", "imap,smtp", "--dir", deployDir)
 	if code != 0 {
 		t.Fatalf("second bundle add failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1519,9 +1530,9 @@ func TestDockerBundleAddWithoutRootsShowsUsefulHint(t *testing.T) {
 	if stdout != "" {
 		t.Fatalf("stdout = %q, want empty", stdout)
 	}
-	if !strings.Contains(stderr, "bundle add expects a package root or --name NAME") ||
-		!strings.Contains(stderr, "reploy bundle add --name imap,smtp") ||
-		!strings.Contains(stderr, "reploy bundle add PACKAGE[==VERSION]") {
+	if !strings.Contains(stderr, "bundle add expects option names or --extra ROOT") ||
+		!strings.Contains(stderr, "reploy bundle add imap,smtp") ||
+		!strings.Contains(stderr, "reploy bundle add --extra PACKAGE[==VERSION]") {
 		t.Fatalf("stderr missing useful hint:\n%s", stderr)
 	}
 }
@@ -1541,14 +1552,14 @@ func TestDockerBundleAddRejectsLikelyOptionTypoWithoutWriting(t *testing.T) {
 		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
-	code, stdout, stderr = runCLI("bundle", "add", "--name", "imap,smtpa", "--dir", deployDir)
+	code, stdout, stderr = runCLI("bundle", "add", "imap,smtpa", "--dir", deployDir)
 	if code != 1 {
 		t.Fatalf("exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 	if stdout != "" {
 		t.Fatalf("stdout = %q, want empty", stdout)
 	}
-	if !strings.Contains(stderr, `unknown bundle option "smtpa"`) || !strings.Contains(stderr, `did you mean "smtp"`) || !strings.Contains(stderr, "--force") {
+	if !strings.Contains(stderr, `unknown bundle option "smtpa"`) || !strings.Contains(stderr, `did you mean "smtp"`) || !strings.Contains(stderr, "--extra") {
 		t.Fatalf("stderr missing validation message:\n%s", stderr)
 	}
 	requirements, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.RequirementsFileName))
@@ -1575,7 +1586,7 @@ func TestDockerBundleAddUnknownOptionListsOptionsOnSeparateLines(t *testing.T) {
 		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
-	code, stdout, stderr = runCLI("bundle", "add", "--name", "foo", "--dir", deployDir)
+	code, stdout, stderr = runCLI("bundle", "add", "foo", "--dir", deployDir)
 	if code != 1 {
 		t.Fatalf("exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1585,12 +1596,12 @@ func TestDockerBundleAddUnknownOptionListsOptionsOnSeparateLines(t *testing.T) {
 	if !strings.Contains(stderr, "use one of:\n  demo-suite\n  imap\n  smtp") {
 		t.Fatalf("stderr did not list options on separate lines:\n%s", stderr)
 	}
-	if !strings.Contains(stderr, `unknown bundle option "foo"`) || !strings.Contains(stderr, "--force") {
+	if !strings.Contains(stderr, `unknown bundle option "foo"`) || !strings.Contains(stderr, "--extra") {
 		t.Fatalf("stderr missing validation message:\n%s", stderr)
 	}
 }
 
-func TestDockerBundleAddAcceptsUnknownUnpinnedPackage(t *testing.T) {
+func TestDockerBundleAddExtraAcceptsUnknownUnpinnedPackage(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 	code, stdout, stderr := runCLI(
@@ -1605,7 +1616,7 @@ func TestDockerBundleAddAcceptsUnknownUnpinnedPackage(t *testing.T) {
 		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
-	code, stdout, stderr = runCLI("bundle", "add", "aa", "--dir", deployDir)
+	code, stdout, stderr = runCLI("bundle", "add", "--extra", "aa", "--dir", deployDir)
 	if code != 0 {
 		t.Fatalf("bundle add failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1621,7 +1632,7 @@ func TestDockerBundleAddAcceptsUnknownUnpinnedPackage(t *testing.T) {
 	}
 }
 
-func TestDockerBundleAddForceTreatsUnknownNameAsPackage(t *testing.T) {
+func TestDockerBundleAddExtraTreatsUnknownNameAsPackage(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 	code, stdout, stderr := runCLI(
@@ -1636,7 +1647,7 @@ func TestDockerBundleAddForceTreatsUnknownNameAsPackage(t *testing.T) {
 		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
-	code, stdout, stderr = runCLI("bundle", "add", "--name", "smtpa", "--force", "--dir", deployDir)
+	code, stdout, stderr = runCLI("bundle", "add", "--extra", "smtpa", "--dir", deployDir)
 	if code != 0 {
 		t.Fatalf("bundle add failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
