@@ -28,6 +28,7 @@ install:
   owner:
     user: example
     group: example
+    on_missing: create
   ports:
     deployed:
       https:
@@ -68,8 +69,8 @@ minimum Reploy version expected by the app.
 provider is `python`, where `identifier` is the required root package.
 
 `install` declares host install defaults: target path, non-root installed
-owner, deployed and staging port defaults, and app-owned artifact upgrade
-policy.
+owner, whether Reploy creates that system owner when missing, deployed and
+staging port defaults, and app-owned artifact upgrade policy.
 
 `bundle` declares optional package selections that an app user can add to the
 deployment bundle.

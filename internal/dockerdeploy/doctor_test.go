@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"errors"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -210,6 +211,127 @@ func TestDoctorPreinstallRejectsUnresolvedInstallOwner(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `fail: install owner must resolve to a non-root uid:gid: resolve REPLOY_INSTALL_OWNER user "appuser"`) {
 		t.Fatalf("stdout missing install owner failure:\n%s", stdout.String())
+	}
+}
+
+func TestDoctorPreinstallAcceptsMissingOwnerWithCreatePolicy(t *testing.T) {
+	disableDoctorColor(t)
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{
+		"REPLOY_INSTALL_OWNER":            "appuser:appgroup",
+		"REPLOY_INSTALL_OWNER_ON_MISSING": "create",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oldLookupUser := installLookupUser
+	oldLookupGroup := installLookupGroup
+	t.Cleanup(func() {
+		installLookupUser = oldLookupUser
+		installLookupGroup = oldLookupGroup
+	})
+	installLookupUser = func(name string) (*user.User, error) {
+		return nil, user.UnknownUserError(name)
+	}
+	installLookupGroup = func(name string) (*user.Group, error) {
+		return nil, user.UnknownGroupError(name)
+	}
+
+	var stdout strings.Builder
+	code := Doctor(DoctorOptions{Dir: deployDir, Preinstall: true, Stdout: &stdout})
+	if code != 0 {
+		t.Fatalf("doctor exit = %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "ok: install owner will be created if missing: appuser:appgroup") {
+		t.Fatalf("stdout missing install owner creation plan:\n%s", stdout.String())
+	}
+}
+
+func TestDoctorPreinstallRejectsAmbiguousOwnerLookupWithCreatePolicy(t *testing.T) {
+	disableDoctorColor(t)
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{
+		"REPLOY_INSTALL_OWNER":            "appuser:appgroup",
+		"REPLOY_INSTALL_OWNER_ON_MISSING": "create",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oldLookupUser := installLookupUser
+	oldLookupGroup := installLookupGroup
+	t.Cleanup(func() {
+		installLookupUser = oldLookupUser
+		installLookupGroup = oldLookupGroup
+	})
+	installLookupUser = func(name string) (*user.User, error) {
+		return nil, errors.New("nss backend unavailable")
+	}
+	installLookupGroup = func(name string) (*user.Group, error) {
+		t.Fatalf("group lookup should not run after user lookup failure: %s", name)
+		return nil, nil
+	}
+
+	var stdout strings.Builder
+	code := Doctor(DoctorOptions{Dir: deployDir, Preinstall: true, Stdout: &stdout})
+	if code == 0 {
+		t.Fatalf("doctor exit = %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `fail: install owner must resolve to a non-root uid:gid: resolve REPLOY_INSTALL_OWNER user "appuser": nss backend unavailable`) {
+		t.Fatalf("stdout missing ambiguous lookup failure:\n%s", stdout.String())
+	}
+}
+
+func TestDoctorPreinstallRejectsAmbiguousGroupLookupWithMissingUser(t *testing.T) {
+	disableDoctorColor(t)
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{
+		"REPLOY_INSTALL_OWNER":            "appuser:appgroup",
+		"REPLOY_INSTALL_OWNER_ON_MISSING": "create",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oldLookupUser := installLookupUser
+	oldLookupGroup := installLookupGroup
+	t.Cleanup(func() {
+		installLookupUser = oldLookupUser
+		installLookupGroup = oldLookupGroup
+	})
+	installLookupUser = func(name string) (*user.User, error) {
+		return nil, user.UnknownUserError(name)
+	}
+	installLookupGroup = func(name string) (*user.Group, error) {
+		return nil, errors.New("nss backend unavailable")
+	}
+
+	var stdout strings.Builder
+	code := Doctor(DoctorOptions{Dir: deployDir, Preinstall: true, Stdout: &stdout})
+	if code == 0 {
+		t.Fatalf("doctor exit = %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `fail: install owner must resolve to a non-root uid:gid: lookup install owner group "appgroup": nss backend unavailable`) {
+		t.Fatalf("stdout missing group lookup failure:\n%s", stdout.String())
 	}
 }
 

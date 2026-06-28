@@ -163,7 +163,11 @@ func doctorPreinstallFindings(dir string) []DoctorFinding {
 	}
 	owner, err := resolveInstallOwner(values)
 	if err != nil {
-		findings = append(findings, DoctorFinding{Status: "fail", Message: "install owner must resolve to a non-root uid:gid: " + err.Error()})
+		if spec, createErr := installOwnerCreationSpecForResolveError(values, err); createErr == nil {
+			findings = append(findings, DoctorFinding{Status: "ok", Message: "install owner will be created if missing: " + spec})
+		} else {
+			findings = append(findings, DoctorFinding{Status: "fail", Message: "install owner must resolve to a non-root uid:gid: " + createErr.Error()})
+		}
 	} else {
 		findings = append(findings, DoctorFinding{Status: "ok", Message: fmt.Sprintf("install owner resolves to %s (%d:%d)", owner.Spec, owner.UID, owner.GID)})
 	}

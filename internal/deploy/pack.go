@@ -69,9 +69,10 @@ type InstallTargetConfig struct {
 }
 
 type InstallOwnerConfig struct {
-	User    string                    `yaml:"user"`
-	Group   string                    `yaml:"group"`
-	Windows InstallWindowsOwnerConfig `yaml:"windows"`
+	User      string                    `yaml:"user"`
+	Group     string                    `yaml:"group"`
+	OnMissing string                    `yaml:"on_missing"`
+	Windows   InstallWindowsOwnerConfig `yaml:"windows"`
 }
 
 type InstallWindowsOwnerConfig struct {
@@ -525,7 +526,15 @@ func normalizeAndValidateInstallConfig(manifest *PackManifest) error {
 	}
 	manifest.Install.Owner.User = strings.TrimSpace(manifest.Install.Owner.User)
 	manifest.Install.Owner.Group = strings.TrimSpace(manifest.Install.Owner.Group)
+	manifest.Install.Owner.OnMissing = strings.TrimSpace(manifest.Install.Owner.OnMissing)
 	manifest.Install.Owner.Windows.Account = strings.TrimSpace(manifest.Install.Owner.Windows.Account)
+	if manifest.Install.Owner.OnMissing == "" {
+		if installOwnerPartIsNumeric(manifest.Install.Owner.User) || installOwnerPartIsNumeric(manifest.Install.Owner.Group) {
+			manifest.Install.Owner.OnMissing = "fail"
+		} else {
+			manifest.Install.Owner.OnMissing = "create"
+		}
+	}
 	if err := validateInstallOwner(manifest.Install.Owner); err != nil {
 		return err
 	}
@@ -596,8 +605,25 @@ func validateInstallOwner(owner InstallOwnerConfig) error {
 	if containsLineOrFieldBreak(owner.Group) {
 		return fmt.Errorf("install.owner.group must not contain tabs or newlines")
 	}
+	if containsLineOrFieldBreak(owner.OnMissing) {
+		return fmt.Errorf("install.owner.on_missing must not contain tabs or newlines")
+	}
 	if containsLineOrFieldBreak(owner.Windows.Account) {
 		return fmt.Errorf("install.owner.windows.account must not contain tabs or newlines")
+	}
+	switch owner.OnMissing {
+	case "create", "fail":
+	default:
+		return fmt.Errorf("install.owner.on_missing must be create or fail")
+	}
+	if owner.OnMissing == "create" && (installOwnerPartIsNumeric(owner.User) || installOwnerPartIsNumeric(owner.Group)) {
+		return fmt.Errorf("install.owner.on_missing=create requires named user and group")
+	}
+	if owner.OnMissing == "create" && !IsInstallSystemAccountName(owner.User) {
+		return fmt.Errorf("install.owner.user must be a safe system account name when install.owner.on_missing=create")
+	}
+	if owner.OnMissing == "create" && !IsInstallSystemAccountName(owner.Group) {
+		return fmt.Errorf("install.owner.group must be a safe system account name when install.owner.on_missing=create")
 	}
 	if owner.User == "root" || owner.User == "0" {
 		return fmt.Errorf("install.owner.user must not be root")
@@ -606,6 +632,40 @@ func validateInstallOwner(owner InstallOwnerConfig) error {
 		return fmt.Errorf("install.owner.group must not be root")
 	}
 	return nil
+}
+
+func installOwnerPartIsNumeric(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func IsInstallSystemAccountName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index, r := range value {
+		switch {
+		case index == 0:
+			if r < 'a' || r > 'z' {
+				return r == '_'
+			}
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '_', r == '-':
+		case r == '$':
+			return index == len(value)-1
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeAndValidateInstallPorts(environment string, ports map[string]InstallPortConfig) error {

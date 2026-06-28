@@ -299,8 +299,12 @@ success lines can expand those variables after install hooks complete. Use
 externally mapped base URL.
 
 Permanent installs require a non-root install owner. Blueprints declare the
-default under `install.owner.user` and `install.owner.group`, and operators can
-override it with `REPLOY_INSTALL_OWNER` in `.reploy/docker.env`. Values may be
+default under `install.owner.user` and `install.owner.group`, plus
+`install.owner.on_missing` to choose whether Reploy creates a missing system
+owner or fails. Operators can override these with `REPLOY_INSTALL_OWNER` and
+`REPLOY_INSTALL_OWNER_ON_MISSING` in `.reploy/docker.env`. Owner values may be
 numeric `UID:GID` or host names such as `arbiter:arbiter`; install resolves the
-owner, rejects root, owns the installed deployment tree with it, and writes the
-installed container user as the resolved numeric UID:GID.
+owner, rejects root, creates named system owners when requested, owns the
+installed deployment tree with it, and writes the installed container user as
+the resolved numeric UID:GID. Owners created by Reploy must use conservative
+Linux system account names such as `arbiter` or `arbiter_server`.

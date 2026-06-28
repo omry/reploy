@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -102,6 +103,11 @@ type resolvedInstallOwner struct {
 	GID           int
 	ContainerUser string
 }
+
+const (
+	installOwnerOnMissingCreate = "create"
+	installOwnerOnMissingFail   = "fail"
+)
 
 func Install(options InstallOptions) error {
 	plan, err := newInstallPlan(options)
@@ -388,6 +394,10 @@ func printInstallDryRun(stdout io.Writer, plan installPlan) {
 	if owner, err := installOwnerForDir(plan.SourceDir); err == nil {
 		fmt.Fprintf(stdout, "install owner: %s (%d:%d)\n", owner.Spec, owner.UID, owner.GID)
 		fmt.Fprintf(stdout, "installed container user: %s\n", owner.ContainerUser)
+	} else if spec, err := installOwnerCreationSpecForDir(plan.SourceDir, err); err == nil {
+		fmt.Fprintf(stdout, "install owner: %s (will create system user/group)\n", spec)
+	} else {
+		fmt.Fprintf(stdout, "install owner: unresolved (%v)\n", err)
 	}
 	for _, port := range plan.Ports {
 		fmt.Fprintf(stdout, "port %s: %s:%s -> %s\n", port.Name, port.HostBind, port.HostPort, port.ContainerPort)
@@ -1156,6 +1166,14 @@ func installOwnerForDir(dir string) (resolvedInstallOwner, error) {
 	return resolveInstallOwner(values)
 }
 
+func installOwnerCreationSpecForDir(dir string, resolveErr error) (string, error) {
+	values, err := readDockerEnv(dir)
+	if err != nil {
+		return "", err
+	}
+	return installOwnerCreationSpecForResolveError(values, resolveErr)
+}
+
 func chownInstalledDeployment(targetDir string) error {
 	values, err := readDockerEnv(targetDir)
 	if err != nil {
@@ -1178,7 +1196,7 @@ func chownInstallPath(path string, uid int, gid int) error {
 }
 
 func resolveInstallOwner(values map[string]string) (resolvedInstallOwner, error) {
-	spec := strings.TrimSpace(values["REPLOY_INSTALL_OWNER"])
+	spec := strings.TrimSpace(values[reployInstallOwnerEnv])
 	if spec == "" {
 		return resolvedInstallOwner{}, fmt.Errorf("REPLOY_INSTALL_OWNER is required for install; set it in the blueprint as install.owner or in %s", DockerEnvFileName)
 	}
@@ -1192,6 +1210,153 @@ func resolveInstallOwner(values map[string]string) (resolvedInstallOwner, error)
 		GID:           gid,
 		ContainerUser: fmt.Sprintf("%d:%d", uid, gid),
 	}, nil
+}
+
+func ensureInstallOwnerForDir(dir string) error {
+	values, err := readDockerEnv(dir)
+	if err != nil {
+		return err
+	}
+	if _, err := resolveInstallOwner(values); err == nil {
+		return nil
+	} else if installOwnerOnMissingPolicy(values) != installOwnerOnMissingCreate {
+		return err
+	} else if _, createErr := installOwnerCreationSpecForResolveError(values, err); createErr != nil {
+		return createErr
+	}
+	if err := createMissingInstallOwner(values); err != nil {
+		return err
+	}
+	_, err = resolveInstallOwner(values)
+	return err
+}
+
+func installOwnerOnMissingPolicy(values map[string]string) string {
+	switch strings.TrimSpace(values[reployInstallOwnerOnMissing]) {
+	case installOwnerOnMissingCreate:
+		return installOwnerOnMissingCreate
+	default:
+		return installOwnerOnMissingFail
+	}
+}
+
+func installOwnerCreationSpec(values map[string]string) (string, error) {
+	userPart, groupPart, err := installOwnerNamedParts(values)
+	if err != nil {
+		return "", err
+	}
+	return userPart + ":" + groupPart, nil
+}
+
+func installOwnerCreationSpecForResolveError(values map[string]string, resolveErr error) (string, error) {
+	if installOwnerOnMissingPolicy(values) != installOwnerOnMissingCreate {
+		return "", resolveErr
+	}
+	if !isUnknownInstallOwnerLookupError(resolveErr) {
+		return "", resolveErr
+	}
+	return installOwnerCreationReadiness(values)
+}
+
+func installOwnerCreationReadiness(values map[string]string) (string, error) {
+	userPart, groupPart, err := installOwnerNamedParts(values)
+	if err != nil {
+		return "", err
+	}
+	if _, err := installLookupUser(userPart); err != nil && !isUnknownUserError(err) {
+		return "", fmt.Errorf("lookup install owner user %q: %w", userPart, err)
+	}
+	if _, err := installLookupGroup(groupPart); err != nil && !isUnknownGroupError(err) {
+		return "", fmt.Errorf("lookup install owner group %q: %w", groupPart, err)
+	}
+	return userPart + ":" + groupPart, nil
+}
+
+func installOwnerNamedParts(values map[string]string) (string, string, error) {
+	if installOwnerOnMissingPolicy(values) != installOwnerOnMissingCreate {
+		return "", "", fmt.Errorf("%s is not %s", reployInstallOwnerOnMissing, installOwnerOnMissingCreate)
+	}
+	spec := strings.TrimSpace(values[reployInstallOwnerEnv])
+	if spec == "" {
+		return "", "", fmt.Errorf("REPLOY_INSTALL_OWNER is required for install")
+	}
+	userPart, groupPart, hasGroup := strings.Cut(spec, ":")
+	userPart = strings.TrimSpace(userPart)
+	groupPart = strings.TrimSpace(groupPart)
+	if !hasGroup {
+		groupPart = userPart
+	}
+	if userPart == "" || groupPart == "" {
+		return "", "", fmt.Errorf("REPLOY_INSTALL_OWNER must name both user and group for account creation: %s", spec)
+	}
+	if strings.Contains(groupPart, ":") {
+		return "", "", fmt.Errorf("REPLOY_INSTALL_OWNER must not contain more than one separator for account creation: %s", spec)
+	}
+	if _, ok := parseNumericInstallID(userPart); ok {
+		return "", "", fmt.Errorf("REPLOY_INSTALL_OWNER user must be named for account creation: %s", spec)
+	}
+	if _, ok := parseNumericInstallID(groupPart); ok {
+		return "", "", fmt.Errorf("REPLOY_INSTALL_OWNER group must be named for account creation: %s", spec)
+	}
+	if userPart == "root" || groupPart == "root" {
+		return "", "", fmt.Errorf("REPLOY_INSTALL_OWNER must not create root-owned deployments: %s", spec)
+	}
+	if !deploy.IsInstallSystemAccountName(userPart) {
+		return "", "", fmt.Errorf("REPLOY_INSTALL_OWNER user must be a safe system account name for account creation: %s", spec)
+	}
+	if !deploy.IsInstallSystemAccountName(groupPart) {
+		return "", "", fmt.Errorf("REPLOY_INSTALL_OWNER group must be a safe system account name for account creation: %s", spec)
+	}
+	return userPart, groupPart, nil
+}
+
+func createMissingInstallOwner(values map[string]string) error {
+	userPart, groupPart, err := installOwnerNamedParts(values)
+	if err != nil {
+		return err
+	}
+	if _, err := installLookupGroup(groupPart); err != nil {
+		if !isUnknownGroupError(err) {
+			return fmt.Errorf("lookup install owner group %q: %w", groupPart, err)
+		}
+		if err := runInstallAccountCommand("groupadd", "--system", groupPart); err != nil {
+			return err
+		}
+	}
+	if _, err := installLookupUser(userPart); err != nil {
+		if !isUnknownUserError(err) {
+			return fmt.Errorf("lookup install owner user %q: %w", userPart, err)
+		}
+		if err := runInstallAccountCommand("useradd", "--system", "--gid", groupPart, "--home-dir", "/nonexistent", "--no-create-home", "--shell", "/usr/sbin/nologin", userPart); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isUnknownInstallOwnerLookupError(err error) bool {
+	return isUnknownUserError(err) || isUnknownGroupError(err)
+}
+
+func isUnknownUserError(err error) bool {
+	var unknown user.UnknownUserError
+	return errors.As(err, &unknown)
+}
+
+func isUnknownGroupError(err error) bool {
+	var unknown user.UnknownGroupError
+	return errors.As(err, &unknown)
+}
+
+func runInstallAccountCommand(name string, args ...string) error {
+	output, err := installRunCommandOutput(name, args...)
+	if err == nil {
+		return nil
+	}
+	if trimmed := strings.TrimSpace(string(output)); trimmed != "" {
+		return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, trimmed)
+	}
+	return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
 }
 
 func parseInstallOwner(value string) (int, int, error) {
@@ -1283,6 +1448,9 @@ func applyInstallPlan(plan installPlan) error {
 	}
 	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
 		return fmt.Errorf("create install runtime dir: %w", err)
+	}
+	if err := ensureInstallOwnerForDir(plan.TargetDir); err != nil {
+		return fmt.Errorf("ensure install owner: %w", err)
 	}
 	if err := writeInstalledDockerEnv(plan); err != nil {
 		return fmt.Errorf("write installed docker env: %w", err)

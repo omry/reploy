@@ -71,6 +71,101 @@ func TestInstallDryRunPrintsPlan(t *testing.T) {
 	}
 }
 
+func TestInstallDryRunPrintsMissingOwnerCreation(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	markTestBundlePrepared(t, deployDir)
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{
+		"REPLOY_INSTALL_OWNER":            "appuser:appgroup",
+		"REPLOY_INSTALL_OWNER_ON_MISSING": "create",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oldLookupUser := installLookupUser
+	oldLookupGroup := installLookupGroup
+	t.Cleanup(func() {
+		installLookupUser = oldLookupUser
+		installLookupGroup = oldLookupGroup
+	})
+	installLookupUser = func(name string) (*user.User, error) {
+		return nil, user.UnknownUserError(name)
+	}
+	installLookupGroup = func(name string) (*user.Group, error) {
+		return nil, user.UnknownGroupError(name)
+	}
+
+	var stdout strings.Builder
+	if err := Install(InstallOptions{
+		Dir:    deployDir,
+		Target: filepath.Join(t.TempDir(), "installed"),
+		DryRun: true,
+		Stdout: &stdout,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "install owner: appuser:appgroup (will create system user/group)") {
+		t.Fatalf("stdout missing owner creation plan:\n%s", stdout.String())
+	}
+}
+
+func TestInstallDryRunRejectsAmbiguousGroupLookupWithMissingUser(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	markTestBundlePrepared(t, deployDir)
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{
+		"REPLOY_INSTALL_OWNER":            "appuser:appgroup",
+		"REPLOY_INSTALL_OWNER_ON_MISSING": "create",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oldLookupUser := installLookupUser
+	oldLookupGroup := installLookupGroup
+	t.Cleanup(func() {
+		installLookupUser = oldLookupUser
+		installLookupGroup = oldLookupGroup
+	})
+	installLookupUser = func(name string) (*user.User, error) {
+		return nil, user.UnknownUserError(name)
+	}
+	installLookupGroup = func(name string) (*user.Group, error) {
+		return nil, errors.New("nss backend unavailable")
+	}
+
+	var stdout strings.Builder
+	err = Install(InstallOptions{
+		Dir:    deployDir,
+		Target: filepath.Join(t.TempDir(), "installed"),
+		DryRun: true,
+		Stdout: &stdout,
+	})
+	if err == nil {
+		t.Fatal("expected preinstall failure")
+	}
+	if !strings.Contains(err.Error(), "preinstall doctor failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(stdout.String(), "will create system user/group") {
+		t.Fatalf("stdout should not claim owner creation is ready:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `fail: install owner must resolve to a non-root uid:gid: lookup install owner group "appgroup": nss backend unavailable`) {
+		t.Fatalf("stdout missing owner lookup failure:\n%s", stdout.String())
+	}
+}
+
 func TestInstallPrintsPreinstallFailures(t *testing.T) {
 	disableDoctorColor(t)
 	packDir := makeTestPack(t)
@@ -1265,6 +1360,208 @@ func TestParseInstallOwner(t *testing.T) {
 			}
 			if uid != tc.uid || gid != tc.gid {
 				t.Fatalf("owner = %d:%d, want %d:%d", uid, gid, tc.uid, tc.gid)
+			}
+		})
+	}
+}
+
+func TestEnsureInstallOwnerCreatesMissingSystemOwner(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ReployInternalDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, DockerEnvFileName), []byte("REPLOY_INSTALL_OWNER=appuser:appgroup\nREPLOY_INSTALL_OWNER_ON_MISSING=create\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldLookupUser := installLookupUser
+	oldLookupGroup := installLookupGroup
+	oldRunCommandOutput := installRunCommandOutput
+	t.Cleanup(func() {
+		installLookupUser = oldLookupUser
+		installLookupGroup = oldLookupGroup
+		installRunCommandOutput = oldRunCommandOutput
+	})
+	userCreated := false
+	groupCreated := false
+	commands := []string{}
+	installLookupUser = func(name string) (*user.User, error) {
+		if name == "appuser" && userCreated {
+			return &user.User{Username: "appuser", Uid: "997", Gid: "988"}, nil
+		}
+		return nil, user.UnknownUserError(name)
+	}
+	installLookupGroup = func(name string) (*user.Group, error) {
+		if name == "appgroup" && groupCreated {
+			return &user.Group{Name: "appgroup", Gid: "988"}, nil
+		}
+		return nil, user.UnknownGroupError(name)
+	}
+	installRunCommandOutput = func(name string, args ...string) ([]byte, error) {
+		commands = append(commands, name+" "+strings.Join(args, " "))
+		switch name {
+		case "groupadd":
+			groupCreated = true
+		case "useradd":
+			userCreated = true
+		default:
+			t.Fatalf("unexpected command: %s %v", name, args)
+		}
+		return nil, nil
+	}
+
+	if err := ensureInstallOwnerForDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"groupadd --system appgroup",
+		"useradd --system --gid appgroup --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin appuser",
+	}
+	if strings.Join(commands, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestEnsureInstallOwnerDoesNotCreateAfterAmbiguousResolveError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ReployInternalDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, DockerEnvFileName), []byte("REPLOY_INSTALL_OWNER=appuser:appgroup\nREPLOY_INSTALL_OWNER_ON_MISSING=create\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldLookupUser := installLookupUser
+	oldLookupGroup := installLookupGroup
+	oldRunCommandOutput := installRunCommandOutput
+	t.Cleanup(func() {
+		installLookupUser = oldLookupUser
+		installLookupGroup = oldLookupGroup
+		installRunCommandOutput = oldRunCommandOutput
+	})
+	installLookupUser = func(name string) (*user.User, error) {
+		return nil, errors.New("nss backend unavailable")
+	}
+	installLookupGroup = func(name string) (*user.Group, error) {
+		t.Fatalf("group lookup should not run after user lookup failure: %s", name)
+		return nil, nil
+	}
+	installRunCommandOutput = func(name string, args ...string) ([]byte, error) {
+		t.Fatalf("account creation command should not run after ambiguous owner resolve failure: %s %v", name, args)
+		return nil, nil
+	}
+
+	err := ensureInstallOwnerForDir(dir)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), `resolve REPLOY_INSTALL_OWNER user "appuser": nss backend unavailable`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCreateMissingInstallOwnerFailsOnAmbiguousLookupError(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		lookupUser  func(string) (*user.User, error)
+		lookupGroup func(string) (*user.Group, error)
+		want        string
+	}{
+		{
+			name: "group lookup",
+			lookupUser: func(name string) (*user.User, error) {
+				t.Fatalf("user lookup should not run after group lookup failure: %s", name)
+				return nil, nil
+			},
+			lookupGroup: func(name string) (*user.Group, error) {
+				return nil, errors.New("nss backend unavailable")
+			},
+			want: `lookup install owner group "appgroup": nss backend unavailable`,
+		},
+		{
+			name: "user lookup",
+			lookupUser: func(name string) (*user.User, error) {
+				return nil, errors.New("nss backend unavailable")
+			},
+			lookupGroup: func(name string) (*user.Group, error) {
+				return &user.Group{Name: "appgroup", Gid: "988"}, nil
+			},
+			want: `lookup install owner user "appuser": nss backend unavailable`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldLookupUser := installLookupUser
+			oldLookupGroup := installLookupGroup
+			oldRunCommandOutput := installRunCommandOutput
+			t.Cleanup(func() {
+				installLookupUser = oldLookupUser
+				installLookupGroup = oldLookupGroup
+				installRunCommandOutput = oldRunCommandOutput
+			})
+			installLookupUser = tc.lookupUser
+			installLookupGroup = tc.lookupGroup
+			installRunCommandOutput = func(name string, args ...string) ([]byte, error) {
+				t.Fatalf("account creation command should not run after ambiguous lookup failure: %s %v", name, args)
+				return nil, nil
+			}
+
+			err := createMissingInstallOwner(map[string]string{
+				reployInstallOwnerEnv:       "appuser:appgroup",
+				reployInstallOwnerOnMissing: "create",
+			})
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestEnsureInstallOwnerRejectsUnsafeCreateOwner(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  string
+		want string
+	}{
+		{
+			name: "flag user",
+			env:  "REPLOY_INSTALL_OWNER=--bad:appgroup\nREPLOY_INSTALL_OWNER_ON_MISSING=create\n",
+			want: "REPLOY_INSTALL_OWNER user must be a safe system account name",
+		},
+		{
+			name: "space group",
+			env:  "REPLOY_INSTALL_OWNER=appuser:bad group\nREPLOY_INSTALL_OWNER_ON_MISSING=create\n",
+			want: "REPLOY_INSTALL_OWNER group must be a safe system account name",
+		},
+		{
+			name: "extra separator",
+			env:  "REPLOY_INSTALL_OWNER=appuser:appgroup:extra\nREPLOY_INSTALL_OWNER_ON_MISSING=create\n",
+			want: "REPLOY_INSTALL_OWNER must not contain more than one separator",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, ReployInternalDir), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, DockerEnvFileName), []byte(tc.env), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			oldRunCommandOutput := installRunCommandOutput
+			t.Cleanup(func() {
+				installRunCommandOutput = oldRunCommandOutput
+			})
+			installRunCommandOutput = func(name string, args ...string) ([]byte, error) {
+				t.Fatalf("account creation command should not run for unsafe owner: %s %v", name, args)
+				return nil, nil
+			}
+
+			err := ensureInstallOwnerForDir(dir)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("unexpected error: %v", err)
 			}
 		})
 	}

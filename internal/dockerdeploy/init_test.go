@@ -58,6 +58,9 @@ func TestInitWritesDeploymentDirectory(t *testing.T) {
 	if !strings.Contains(dockerEnv, "REPLOY_INSTALL_OWNER=1000:1000") {
 		t.Fatalf("docker.env should include blueprint install owner:\n%s", dockerEnv)
 	}
+	if !strings.Contains(dockerEnv, "REPLOY_INSTALL_OWNER_ON_MISSING=fail") {
+		t.Fatalf("docker.env should fail on missing numeric owner:\n%s", dockerEnv)
+	}
 	if !strings.Contains(dockerEnv, "REPLOY_DEPLOYMENT_SCOPE=staging") {
 		t.Fatalf("docker.env should identify staging scope:\n%s", dockerEnv)
 	}
@@ -216,6 +219,7 @@ docker:
 		"REPLOY_PUBLIC_SCHEME=http",
 		"REPLOY_DOCKER_NETWORK_NAME=" + stagingID,
 		"REPLOY_INSTALL_OWNER=mailhub:mailhub",
+		"REPLOY_INSTALL_OWNER_ON_MISSING=create",
 		"MAILHUB_CONFIG_NAME=mailhub",
 	} {
 		if !strings.Contains(dockerEnv, expected) {

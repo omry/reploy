@@ -59,6 +59,9 @@ func TestParsePackManifestReadsDockerLayout(t *testing.T) {
 	if manifest.Install.Owner.User != "demo" || manifest.Install.Owner.Group != "demo" {
 		t.Fatalf("install owner = %#v", manifest.Install.Owner)
 	}
+	if manifest.Install.Owner.OnMissing != "create" {
+		t.Fatalf("install owner on_missing = %q", manifest.Install.Owner.OnMissing)
+	}
 	if manifest.Install.Ports.Deployed["http"].HostPort != 8080 {
 		t.Fatalf("deployed install ports = %#v", manifest.Install.Ports.Deployed)
 	}
@@ -446,6 +449,78 @@ func TestParsePackManifestRejectsInvalidInstallConfig(t *testing.T) {
         host_port: 18080
 `,
 			want: "install.owner.user must not be root",
+		},
+		{
+			name: "invalid owner on_missing",
+			install: `  owner:
+    user: demo
+    group: demo
+    on_missing: prompt
+  ports:
+    deployed:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 8080
+    staging:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 18080
+`,
+			want: "install.owner.on_missing must be create or fail",
+		},
+		{
+			name: "create owner with numeric user",
+			install: `  owner:
+    user: "1000"
+    group: "1000"
+    on_missing: create
+  ports:
+    deployed:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 8080
+    staging:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 18080
+`,
+			want: "install.owner.on_missing=create requires named user and group",
+		},
+		{
+			name: "create owner with unsafe user",
+			install: `  owner:
+    user: --flag
+    group: demo
+    on_missing: create
+  ports:
+    deployed:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 8080
+    staging:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 18080
+`,
+			want: "install.owner.user must be a safe system account name",
+		},
+		{
+			name: "create owner with unsafe group",
+			install: `  owner:
+    user: demo
+    group: "bad group"
+    on_missing: create
+  ports:
+    deployed:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 8080
+    staging:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 18080
+`,
+			want: "install.owner.group must be a safe system account name",
 		},
 		{
 			name: "missing deployed ports",

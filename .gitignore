@@ -7,7 +7,8 @@ __pycache__/
 .coverage
 .pytest_cache/
 .venv/
-/temp/
+temp/
+reploy-staging/
 website/build/
 website/.docusaurus/
 website/node_modules/

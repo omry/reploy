@@ -33,6 +33,8 @@ const (
 	reployDeploymentScopeEnv      = "REPLOY_DEPLOYMENT_SCOPE"
 	reployDeploymentScopeStaging  = "staging"
 	reployDeploymentScopeDeployed = "deployed"
+	reployInstallOwnerEnv         = "REPLOY_INSTALL_OWNER"
+	reployInstallOwnerOnMissing   = "REPLOY_INSTALL_OWNER_ON_MISSING"
 )
 
 type InitOptions struct {
@@ -339,7 +341,10 @@ func defaultDockerEnv(pack deploy.AppPack, dockerIdentity string) (string, error
 		"REPLOY_PIP_VERBOSE=",
 	}
 	if service.InstallOwner != "" {
-		lines = append(lines, fmt.Sprintf("REPLOY_INSTALL_OWNER=%s", service.InstallOwner))
+		lines = append(lines,
+			fmt.Sprintf("%s=%s", reployInstallOwnerEnv, service.InstallOwner),
+			fmt.Sprintf("%s=%s", reployInstallOwnerOnMissing, pack.Install.Owner.OnMissing),
+		)
 	}
 	if hasNamedPortBindings(ports) {
 		lines = append(lines, "", "# Named Docker port bindings declared by the blueprint.")
