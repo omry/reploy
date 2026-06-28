@@ -1143,6 +1143,9 @@ func applyInstallPlan(plan installPlan) error {
 	if err := rebuildInstalledBundleIfLocalSources(plan); err != nil {
 		return fmt.Errorf("rebuild installed bundle: %w", err)
 	}
+	if _, err := materializeRuntimeCompose(plan.TargetDir); err != nil {
+		return fmt.Errorf("materialize runtime compose: %w", err)
+	}
 	if owner, err := installOwnerForDir(plan.TargetDir); err == nil {
 		installProgress(plan.Progress, fmt.Sprintf("setting installed ownership to %s (%d:%d)", owner.Spec, owner.UID, owner.GID))
 	} else {

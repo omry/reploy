@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/omry/reploy/internal/deploy"
 )
@@ -20,6 +21,12 @@ type UpdateResult struct {
 	Status    deploy.UpdateStatus
 	Ownership string
 	Reason    string
+}
+
+type generatedUpdate struct {
+	RelativePath string
+	Content      []byte
+	Executable   bool
 }
 
 func Update(options UpdateOptions) ([]UpdateResult, error) {
@@ -68,16 +75,32 @@ func Update(options UpdateOptions) ([]UpdateResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	compose, err := renderComposeTemplate(pack, bundle.Roots, dockerIdentity)
-	if err != nil {
-		return nil, err
-	}
 	deployedCommands := pack.Docker.DeployedCommands()
 	if err := validateDeployedControlCommands(deployedCommands); err != nil {
 		return nil, err
 	}
-	results := []UpdateResult{}
+	generatedUpdates := []generatedUpdate{
+		{RelativePath: controlScriptName(pack.AppID), Content: []byte(stagingControlScriptContent(pack, deployedCommands)), Executable: true},
+	}
 	currentGenerated := map[string]bool{}
+	for _, generated := range generatedUpdates {
+		currentGenerated[filepath.ToSlash(generated.RelativePath)] = true
+	}
+	if !options.Force {
+		conflicts, err := locallyModifiedGeneratedFiles(options.Dir, generatedUpdates, manifest)
+		if err != nil {
+			return nil, err
+		}
+		removedConflicts, err := locallyModifiedRemovedGeneratedFiles(options.Dir, currentGenerated, manifest)
+		if err != nil {
+			return nil, err
+		}
+		conflicts = append(conflicts, removedConflicts...)
+		if len(conflicts) > 0 {
+			return nil, fmt.Errorf("refusing to overwrite locally modified generated files: %s; rerun with --force to overwrite", strings.Join(conflicts, ", "))
+		}
+	}
+	results := []UpdateResult{}
 	updateGenerated := func(relativePath string, content []byte, executable bool) error {
 		currentGenerated[filepath.ToSlash(relativePath)] = true
 		status, err := deploy.UpdateGeneratedFile(options.Dir, relativePath, content, executable, &manifest, options.Force)
@@ -87,13 +110,12 @@ func Update(options UpdateOptions) ([]UpdateResult, error) {
 		results = append(results, UpdateResult{Path: filepath.Join(options.Dir, relativePath), Status: status, Ownership: "generated", Reason: "synced from blueprint and reploy templates"})
 		return nil
 	}
-	if err := updateGenerated(ComposeFileName, []byte(compose), false); err != nil {
-		return nil, err
+	for _, generated := range generatedUpdates {
+		if err := updateGenerated(generated.RelativePath, generated.Content, generated.Executable); err != nil {
+			return nil, err
+		}
 	}
-	if err := updateGenerated(controlScriptName(pack.AppID), []byte(stagingControlScriptContent(pack, deployedCommands)), true); err != nil {
-		return nil, err
-	}
-	if err := pruneRemovedGeneratedFiles(options.Dir, currentGenerated, &manifest, &results); err != nil {
+	if err := pruneRemovedGeneratedFiles(options.Dir, currentGenerated, &manifest, options.Force, &results); err != nil {
 		return nil, err
 	}
 	if err := updateDockerEnvFile(options.Dir, pack, dockerIdentity, &results); err != nil {
@@ -114,6 +136,11 @@ func Update(options UpdateOptions) ([]UpdateResult, error) {
 	if err := ensureLocalDir(options.Dir, RuntimeDirName, &results); err != nil {
 		return nil, err
 	}
+	composeResult, err := writeRuntimeCompose(options.Dir, pack, bundle.Roots, dockerIdentity)
+	if err != nil {
+		return nil, err
+	}
+	results = append(results, composeResult)
 	stateStatus, err := writeUpdatedStateIfChanged(options.Dir, pack, bundle, state)
 	if err != nil {
 		return nil, err
@@ -127,7 +154,96 @@ func Update(options UpdateOptions) ([]UpdateResult, error) {
 	return results, nil
 }
 
-func pruneRemovedGeneratedFiles(dir string, current map[string]bool, manifest *deploy.DeploymentManifest, results *[]UpdateResult) error {
+func materializeRuntimeCompose(dir string) (UpdateResult, error) {
+	state, err := loadState(dir)
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	state, err = withInferredBundleState(dir, state)
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	dockerIdentity, err := deploymentDockerIdentity(pack, state, dir)
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	return writeRuntimeCompose(dir, pack, state.Bundle.Roots, dockerIdentity)
+}
+
+func ensureRuntimeCompose(dir string) error {
+	if _, err := os.Stat(filepath.Join(dir, ComposeFileName)); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	_, err := materializeRuntimeCompose(dir)
+	return err
+}
+
+func writeRuntimeCompose(dir string, pack deploy.AppPack, roots []deploy.ArtifactRoot, dockerIdentity string) (UpdateResult, error) {
+	compose, err := renderComposeTemplate(pack, roots, dockerIdentity)
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	path := filepath.Join(dir, ComposeFileName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return UpdateResult{}, err
+	}
+	status, err := deploy.WriteFileIfChanged(path, []byte(compose), 0o644)
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	return UpdateResult{Path: path, Status: status, Ownership: "runtime", Reason: "materialized Docker Compose runtime file"}, nil
+}
+
+func locallyModifiedGeneratedFiles(dir string, updates []generatedUpdate, manifest deploy.DeploymentManifest) ([]string, error) {
+	var conflicts []string
+	for _, update := range updates {
+		relativePath := filepath.ToSlash(update.RelativePath)
+		path := filepath.Join(dir, filepath.FromSlash(relativePath))
+		currentHash, err := deploy.HashFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		if currentHash == deploy.HashBytes(update.Content) {
+			continue
+		}
+		previous, ok := manifest.Files[relativePath]
+		if !ok || previous.SHA256 != currentHash {
+			conflicts = append(conflicts, path)
+		}
+	}
+	return conflicts, nil
+}
+
+func locallyModifiedRemovedGeneratedFiles(dir string, current map[string]bool, manifest deploy.DeploymentManifest) ([]string, error) {
+	var conflicts []string
+	for relativePath, entry := range manifest.Files {
+		if current[relativePath] {
+			continue
+		}
+		path := filepath.Join(dir, filepath.FromSlash(relativePath))
+		currentHash, err := deploy.HashFile(path)
+		switch {
+		case err == nil && currentHash != entry.SHA256:
+			conflicts = append(conflicts, path)
+		case err == nil:
+		case os.IsNotExist(err):
+		default:
+			return nil, err
+		}
+	}
+	return conflicts, nil
+}
+
+func pruneRemovedGeneratedFiles(dir string, current map[string]bool, manifest *deploy.DeploymentManifest, force bool, results *[]UpdateResult) error {
 	for relativePath, entry := range manifest.Files {
 		if current[relativePath] {
 			continue
@@ -141,7 +257,13 @@ func pruneRemovedGeneratedFiles(dir string, current map[string]bool, manifest *d
 			}
 			*results = append(*results, UpdateResult{Path: path, Status: deploy.UpdateStatusRemoved, Ownership: "generated", Reason: "removed file no longer generated by current blueprint"})
 		case err == nil:
-			*results = append(*results, UpdateResult{Path: path, Status: deploy.UpdateStatusSkipped, Ownership: "local", Reason: "left locally edited file no longer generated by current blueprint"})
+			if !force {
+				return fmt.Errorf("refusing to remove locally modified generated files: %s; rerun with --force to remove", path)
+			}
+			if err := os.Remove(path); err != nil {
+				return err
+			}
+			*results = append(*results, UpdateResult{Path: path, Status: deploy.UpdateStatusRemoved, Ownership: "generated", Reason: "removed locally edited file no longer generated by current blueprint"})
 		case os.IsNotExist(err):
 		default:
 			return err
@@ -186,7 +308,7 @@ func loadManifestOrNew(dir string) (deploy.DeploymentManifest, error) {
 		return manifest, nil
 	}
 	if os.IsNotExist(err) {
-		return deploy.NewDeploymentManifest("reploy update"), nil
+		return deploy.NewDeploymentManifest("reploy stage --update"), nil
 	}
 	return deploy.DeploymentManifest{}, err
 }

@@ -67,7 +67,7 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func isDeploymentCommand(command string) bool {
 	switch command {
-	case "stage", "update", "info", "app", "bundle", "up", "restart", "down", "ps", "status", "logs", "test", "doctor", "install", "uninstall":
+	case "stage", "info", "app", "bundle", "up", "restart", "down", "ps", "status", "logs", "test", "doctor", "install", "uninstall":
 		return true
 	default:
 		return false
@@ -222,11 +222,29 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
 		printDockerHelp(stdout)
 		return 0
 	case "stage":
-		options, err := parseDockerCommandOptions(args[1:], true)
+		options, err := parseDockerCommandOptions(args[1:], true, dockerCommandParseConfig{AllowUpdate: true})
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
 			printDockerShortUsage(stderr)
 			return 2
+		}
+		if options.Update {
+			options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+			if err != nil {
+				fmt.Fprintf(stderr, "reploy stage --update error: %v\n", err)
+				return 1
+			}
+			results, err := dockerdeploy.Update(dockerdeploy.UpdateOptions{
+				Dir:   options.Dir,
+				Pack:  options.Pack,
+				Force: options.Force,
+			})
+			if err != nil {
+				fmt.Fprintf(stderr, "reploy stage --update error: %v\n", err)
+				return 1
+			}
+			printUpdateResults(stdout, results)
+			return 0
 		}
 		results, err := dockerdeploy.Init(dockerdeploy.InitOptions{
 			Dir:          options.Dir,
@@ -236,36 +254,13 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
 		if err != nil {
 			var existingFileError dockerdeploy.ExistingDeploymentFileError
 			if errors.As(err, &existingFileError) {
-				fmt.Fprintf(stderr, "reploy stage error: staging directory already exists at %s (found %s); run \"%s\" to update it\n", options.Dir, existingFileError.Path, stageUpdateCommandHint(options.Dir))
+				fmt.Fprintf(stderr, "reploy stage error: staging directory already exists at %s (found %s); run \"%s\" to update it\n", options.Dir, existingFileError.Path, stageUpdateCommandHint(options.Dir, options.Pack))
 				return 1
 			}
 			fmt.Fprintf(stderr, "reploy stage error: %v\n", err)
 			return 1
 		}
 		fmt.Fprintf(stdout, "created staging directory for %s: %s\n", packDisplayName(options.Pack), options.Dir)
-		printUpdateResults(stdout, results)
-		return 0
-	case "update":
-		options, err := parseDockerCommandOptions(args[1:], false)
-		if err != nil {
-			fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
-			printDockerShortUsage(stderr)
-			return 2
-		}
-		options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
-		if err != nil {
-			fmt.Fprintf(stderr, "reploy update error: %v\n", err)
-			return 1
-		}
-		results, err := dockerdeploy.Update(dockerdeploy.UpdateOptions{
-			Dir:   options.Dir,
-			Pack:  options.Pack,
-			Force: options.Force,
-		})
-		if err != nil {
-			fmt.Fprintf(stderr, "reploy update error: %v\n", err)
-			return 1
-		}
 		printUpdateResults(stdout, results)
 		return 0
 	case "info":
@@ -1426,10 +1421,19 @@ type dockerCommandOptions struct {
 	DirExplicit  bool
 	Pack         deploy.PackRef
 	Force        bool
+	Update       bool
 	Requirements []string
 }
 
-func parseDockerCommandOptions(args []string, requirePack bool) (dockerCommandOptions, error) {
+type dockerCommandParseConfig struct {
+	AllowUpdate bool
+}
+
+func parseDockerCommandOptions(args []string, requirePack bool, configs ...dockerCommandParseConfig) (dockerCommandOptions, error) {
+	config := dockerCommandParseConfig{}
+	if len(configs) > 0 {
+		config = configs[0]
+	}
 	options := dockerCommandOptions{Dir: dockerdeploy.DefaultDeploymentDir}
 	packSet := false
 	for index := 0; index < len(args); index++ {
@@ -1437,6 +1441,11 @@ func parseDockerCommandOptions(args []string, requirePack bool) (dockerCommandOp
 		switch arg {
 		case "--force":
 			options.Force = true
+		case "--update":
+			if !config.AllowUpdate {
+				return dockerCommandOptions{}, fmt.Errorf("unknown option: %s", arg)
+			}
+			options.Update = true
 		case "--dir":
 			value, ok := optionValue(args, &index)
 			if !ok {
@@ -1472,24 +1481,30 @@ func parseDockerCommandOptions(args []string, requirePack bool) (dockerCommandOp
 				packSet = true
 				continue
 			}
+			if !requirePack && !strings.HasPrefix(arg, "-") {
+				return dockerCommandOptions{}, fmt.Errorf("APP_REF is only supported with stage or stage --update")
+			}
 			return dockerCommandOptions{}, fmt.Errorf("unknown option: %s", arg)
 		}
 	}
 	if options.Dir == "" {
 		return dockerCommandOptions{}, fmt.Errorf("--dir must not be empty")
 	}
-	if requirePack && options.Force {
-		return dockerCommandOptions{}, fmt.Errorf("--force is only supported with update")
+	if requirePack && options.Force && !options.Update {
+		return dockerCommandOptions{}, fmt.Errorf("--force is only supported with stage --update")
 	}
 	if !requirePack && len(options.Requirements) > 0 {
 		return dockerCommandOptions{}, fmt.Errorf("--requirement is only supported with stage")
+	}
+	if options.Update && len(options.Requirements) > 0 {
+		return dockerCommandOptions{}, fmt.Errorf("--requirement is only supported when creating a staging directory")
 	}
 	for _, requirement := range options.Requirements {
 		if strings.TrimSpace(requirement) == "" {
 			return dockerCommandOptions{}, fmt.Errorf("--requirement must not be empty")
 		}
 	}
-	if requirePack && options.Pack.Raw == "" {
+	if requirePack && !options.Update && options.Pack.Raw == "" {
 		return dockerCommandOptions{}, fmt.Errorf("APP_REF is required; use a blueprint shorthand from the Reploy blueprint index or an explicit ref such as file:PATH or pypi:PACKAGE")
 	}
 	return options, nil
@@ -1520,11 +1535,19 @@ func packDisplayName(ref deploy.PackRef) string {
 	return source
 }
 
-func stageUpdateCommandHint(dir string) string {
+func stageUpdateCommandHint(dir string, ref deploy.PackRef) string {
+	args := []string{"reploy", "stage", "--update"}
 	if dir == dockerdeploy.DefaultDeploymentDir {
-		return "reploy update"
+		if ref.Raw != "" {
+			args = append(args, ref.Raw)
+		}
+		return strings.Join(args, " ")
 	}
-	return fmt.Sprintf("reploy update --dir %s", dir)
+	args = append(args, "--dir", dir)
+	if ref.Raw != "" {
+		args = append(args, ref.Raw)
+	}
+	return strings.Join(args, " ")
 }
 
 func parsePackRefArgument(value string) (deploy.PackRef, error) {
@@ -1769,7 +1792,6 @@ Usage: reploy [--docker] COMMAND
 
 Commands:
   stage        Create a staging directory
-  update       Update generated files in a staging directory
   info         Show staging state and bundle contents
   app          Run a blueprint-declared app command inside staging
   bundle       Manage staging bundle contents
@@ -1811,7 +1833,7 @@ Staging options:
   --requirement REQ
               Exact package pin or absolute container path for requirements.txt
   --name NAME  Bundle option name for bundle add; accepts comma-separated names
-  --force      Overwrite generated files during update; with bundle add --name,
+  --force      With stage --update, overwrite generated files; with bundle add --name,
               treat unknown names as package roots
   --preinstall Run install-readiness doctor checks
   --quiet      Suppress passing doctor checks
@@ -1960,7 +1982,6 @@ Usage: reploy [--docker] COMMAND
 
 Commands:
   stage        Create a staging directory
-  update       Update generated files in a staging directory
   info         Show staging state and bundle contents
   app          Run a blueprint-declared app command inside staging
   bundle       Manage staging bundle contents
@@ -1996,7 +2017,7 @@ Options:
   --requirement REQ
               Exact package pin or absolute container path for requirements.txt
   --name NAME  Bundle option name for bundle add; accepts comma-separated names
-  --force      Overwrite generated files during update; with bundle add --name,
+  --force      With stage --update, overwrite generated files; with bundle add --name,
               treat unknown names as package roots
   --preinstall Run install-readiness doctor checks
   --quiet      Suppress passing doctor checks
@@ -2034,8 +2055,6 @@ func printDockerCommandHelp(command string, output io.Writer) {
 	switch command {
 	case "stage":
 		printDockerStageHelp(output)
-	case "update":
-		printDockerUpdateHelp(output)
 	default:
 		printDockerHelp(output)
 	}
@@ -2044,8 +2063,10 @@ func printDockerCommandHelp(command string, output io.Writer) {
 func printDockerStageHelp(output io.Writer) {
 	fmt.Fprint(output, strings.TrimLeft(`
 Usage: reploy [--docker] stage APP_REF [OPTIONS]
+       reploy [--docker] stage --update [APP_REF] [OPTIONS]
 
 Create a staging directory from an app blueprint reference.
+Use --update to refresh an existing staging directory, optionally from a new ref.
 
 APP_REF:
   Use an indexed shorthand, file:PATH, or pypi:PACKAGE.
@@ -2053,21 +2074,10 @@ APP_REF:
 
 Options:
   --dir DIR    Staging directory to create, default reploy-staging
+  --update     Update an existing staging directory instead of creating one
+  --force      With --update, overwrite locally edited generated files
   --requirement REQ
               Exact package pin or absolute container path for requirements.txt
   -h, --help   Show stage help
-`, "\n"))
-}
-
-func printDockerUpdateHelp(output io.Writer) {
-	fmt.Fprint(output, strings.TrimLeft(`
-Usage: reploy [--docker] update [OPTIONS]
-
-Update generated files in a staging directory.
-
-Options:
-  --dir DIR    Staging directory to update, default current staging dir or reploy-staging
-  --force      Overwrite locally edited generated files
-  -h, --help   Show update help
 `, "\n"))
 }

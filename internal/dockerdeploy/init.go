@@ -19,10 +19,10 @@ var composeTemplate string
 
 const (
 	ReployInternalDir       = ".reploy"
-	ComposeFileName         = ".reploy/compose.yaml"
 	DockerEnvFileName       = ".reploy/docker.env"
 	BundleDirName           = ".reploy/bundle"
 	RuntimeDirName          = ".reploy/runtime"
+	ComposeFileName         = RuntimeDirName + "/compose.yaml"
 	ComposeOverrideFileName = ".reploy/compose.override.yaml"
 	ManifestFileName        = ".reploy/manifest.json"
 	StateFileName           = ".reploy/state.json"
@@ -66,7 +66,6 @@ func Init(options InitOptions) ([]UpdateResult, error) {
 
 	initPaths := []string{
 		controlScriptName(pack.AppID),
-		ComposeFileName,
 		DockerEnvFileName,
 		RequirementsFileName,
 		ManifestFileName,
@@ -90,10 +89,6 @@ func Init(options InitOptions) ([]UpdateResult, error) {
 		return nil, err
 	}
 	stagingID, err := stagingInstanceID(pack, options.Dir)
-	if err != nil {
-		return nil, err
-	}
-	compose, err := renderComposeTemplate(pack, bundleRoots, stagingID)
 	if err != nil {
 		return nil, err
 	}
@@ -125,9 +120,6 @@ func Init(options InitOptions) ([]UpdateResult, error) {
 	if err := writeGenerated(controlScriptName(pack.AppID), []byte(stagingControlScriptContent(pack, deployedCommands)), true); err != nil {
 		return nil, err
 	}
-	if err := writeGenerated(ComposeFileName, []byte(compose), false); err != nil {
-		return nil, err
-	}
 	dockerEnv, err := defaultDockerEnv(pack, stagingID)
 	if err != nil {
 		return nil, err
@@ -155,6 +147,11 @@ func Init(options InitOptions) ([]UpdateResult, error) {
 		return nil, err
 	}
 	results = append(results, initResults...)
+	composeResult, err := writeRuntimeCompose(options.Dir, pack, bundleRoots, stagingID)
+	if err != nil {
+		return nil, err
+	}
+	results = append(results, composeResult)
 
 	return results, nil
 }

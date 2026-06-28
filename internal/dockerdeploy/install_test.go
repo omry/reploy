@@ -475,8 +475,8 @@ func TestSystemdUnitIncludesComposeOverrideWhenPresent(t *testing.T) {
 		"Requires=docker.service",
 		"After=docker.service",
 		"WorkingDirectory=/srv/demo",
-		"ExecStart=/usr/bin/docker compose --env-file /srv/demo/.reploy/docker.env --project-directory /srv/demo -f /srv/demo/.reploy/compose.yaml -f /srv/demo/.reploy/compose.override.yaml up",
-		"ExecStop=/usr/bin/docker compose --env-file /srv/demo/.reploy/docker.env --project-directory /srv/demo -f /srv/demo/.reploy/compose.yaml -f /srv/demo/.reploy/compose.override.yaml down",
+		"ExecStart=/usr/bin/docker compose --env-file /srv/demo/.reploy/docker.env --project-directory /srv/demo -f /srv/demo/.reploy/runtime/compose.yaml -f /srv/demo/.reploy/compose.override.yaml up",
+		"ExecStop=/usr/bin/docker compose --env-file /srv/demo/.reploy/docker.env --project-directory /srv/demo -f /srv/demo/.reploy/runtime/compose.yaml -f /srv/demo/.reploy/compose.override.yaml down",
 		"WantedBy=multi-user.target",
 	} {
 		if !strings.Contains(unit, want) {

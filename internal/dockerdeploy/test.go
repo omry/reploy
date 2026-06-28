@@ -41,6 +41,9 @@ func TestServer(options TestOptions) error {
 	if err != nil {
 		return err
 	}
+	if err := ensureRuntimeCompose(options.Dir); err != nil {
+		return fmt.Errorf("ensure runtime compose: %w", err)
+	}
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 		Transport: &http.Transport{

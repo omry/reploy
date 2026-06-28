@@ -41,6 +41,6 @@ reploy bundle check --verbose
 reploy bundle build --verbose
 ```
 
-For deployments staged from PyPI package refs, `reploy update` refreshes
+For deployments staged from PyPI package refs, `reploy stage --update` refreshes
 the blueprint source according to the pinning rules recorded in the deployment
 manifest.

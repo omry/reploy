@@ -1187,15 +1187,11 @@ func syncBundleState(dir string, state deploy.DeploymentState) ([]UpdateResult, 
 	if err != nil {
 		return nil, err
 	}
-	compose, err := renderComposeTemplate(pack, state.Bundle.Roots, dockerIdentity)
+	composeResult, err := writeRuntimeCompose(dir, pack, state.Bundle.Roots, dockerIdentity)
 	if err != nil {
 		return nil, err
 	}
-	composeStatus, err := deploy.UpdateGeneratedFile(dir, ComposeFileName, []byte(compose), false, &manifest, false)
-	if err != nil {
-		return nil, err
-	}
-	results = append(results, UpdateResult{Path: filepath.Join(dir, ComposeFileName), Status: composeStatus, Ownership: "generated", Reason: "synced local source mounts for selected bundle roots"})
+	results = append(results, composeResult)
 	manifestStatus, err := deploy.WriteDeploymentManifestIfChanged(filepath.Join(dir, ManifestFileName), manifest)
 	if err != nil {
 		return nil, err
@@ -1299,12 +1295,12 @@ func validateBundleRequirementsProjection(dir string, state deploy.DeploymentSta
 	content, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("bundle requirements projection is missing: %s; run reploy update --dir %s", path, dir)
+			return fmt.Errorf("bundle requirements projection is missing: %s; run reploy stage --update --dir %s", path, dir)
 		}
 		return err
 	}
 	if string(content) != string(requirements) {
-		return fmt.Errorf("bundle requirements projection is out of date: %s; run reploy update --dir %s", path, dir)
+		return fmt.Errorf("bundle requirements projection is out of date: %s; run reploy stage --update --dir %s", path, dir)
 	}
 	return nil
 }

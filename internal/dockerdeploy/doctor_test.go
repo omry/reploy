@@ -47,7 +47,7 @@ func TestDoctorFailsForEditedGeneratedFile(t *testing.T) {
 	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(deployDir, ComposeFileName), []byte("local edit\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(deployDir, "democtl"), []byte("local edit\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -112,7 +112,7 @@ func TestDoctorPreinstallStillFailsForEditedGeneratedFile(t *testing.T) {
 	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_INSTALL_OWNER": "1000:1000"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(deployDir, ComposeFileName), []byte("local edit\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(deployDir, "democtl"), []byte("local edit\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 

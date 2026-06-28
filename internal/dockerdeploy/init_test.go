@@ -79,8 +79,8 @@ func TestInitWritesDeploymentDirectory(t *testing.T) {
 		}
 	}
 	manifest := readFile(t, filepath.Join(deployDir, ManifestFileName))
-	if !strings.Contains(manifest, `"`+ComposeFileName+`"`) {
-		t.Fatalf("manifest did not track compose.yaml:\n%s", manifest)
+	if strings.Contains(manifest, `"`+ComposeFileName+`"`) {
+		t.Fatalf("manifest should not track runtime compose:\n%s", manifest)
 	}
 	if strings.Contains(manifest, `"requirements.txt"`) {
 		t.Fatalf("requirements should be operator-owned local state:\n%s", manifest)
@@ -652,7 +652,7 @@ func TestInitRefusesExistingDeploymentFile(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(deployDir, ReployInternalDir), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(deployDir, ComposeFileName), []byte("existing\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(deployDir, DockerEnvFileName), []byte("existing\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1012,7 +1012,7 @@ func TestUpdateReportsMetadataUpToDateWhenUnchanged(t *testing.T) {
 	assertResultStatus(t, results, filepath.Join(deployDir, ManifestFileName), deploy.UpdateStatusUpToDate)
 }
 
-func TestUpdateSkipsLocallyEditedGeneratedFile(t *testing.T) {
+func TestUpdateRejectsLocallyEditedGeneratedFileWithoutForce(t *testing.T) {
 	packDir := makeTestPack(t)
 	ref, err := deploy.ParsePackRef("file:" + packDir)
 	if err != nil {
@@ -1022,25 +1022,70 @@ func TestUpdateSkipsLocallyEditedGeneratedFile(t *testing.T) {
 	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(deployDir, ComposeFileName), []byte("local edit\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(deployDir, "democtl"), []byte("local edit\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	results, err := Update(UpdateOptions{Dir: deployDir})
+	_, err = Update(UpdateOptions{Dir: deployDir})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "refusing to overwrite locally modified generated files") || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := readFile(t, filepath.Join(deployDir, "democtl")); got != "local edit\n" {
+		t.Fatalf("control script was not preserved: %q", got)
+	}
+
+	results, err := Update(UpdateOptions{Dir: deployDir, Force: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var composeStatus deploy.UpdateStatus
-	for _, result := range results {
-		if result.Path == filepath.Join(deployDir, ComposeFileName) {
-			composeStatus = result.Status
-		}
+	assertResultStatus(t, results, filepath.Join(deployDir, "democtl"), deploy.UpdateStatusUpdated)
+	if got := readFile(t, filepath.Join(deployDir, "democtl")); got == "local edit\n" {
+		t.Fatal("control script was not overwritten with force")
 	}
-	if composeStatus != deploy.UpdateStatusSkipped {
-		t.Fatalf("compose status = %q", composeStatus)
+}
+
+func TestUpdateRejectsLocallyEditedRemovedGeneratedFileWithoutForce(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := readFile(t, filepath.Join(deployDir, ComposeFileName)); got != "local edit\n" {
-		t.Fatalf("compose was not preserved: %q", got)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	oldScript := filepath.Join(deployDir, "democtl")
+	if err := os.WriteFile(oldScript, []byte("local edit\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	updatedPackDir := makeTestPackWithManifest(t, strings.Replace(testPackManifest(), "  id: demo\n", "  id: renamed\n", 1))
+	updatedRef, err := deploy.ParsePackRef("file:" + updatedPackDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Update(UpdateOptions{Dir: deployDir, Pack: updatedRef})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "refusing to overwrite locally modified generated files") || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := readFile(t, oldScript); got != "local edit\n" {
+		t.Fatalf("old control script was not preserved: %q", got)
+	}
+
+	results, err := Update(UpdateOptions{Dir: deployDir, Pack: updatedRef, Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertResultStatus(t, results, oldScript, deploy.UpdateStatusRemoved)
+	assertResultStatus(t, results, filepath.Join(deployDir, "renamedctl"), deploy.UpdateStatusUpdated)
+	if _, err := os.Stat(oldScript); !os.IsNotExist(err) {
+		t.Fatalf("old control script still exists: %v", err)
 	}
 }
 

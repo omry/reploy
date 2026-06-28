@@ -496,8 +496,12 @@ func TestDockerStageHelp(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Usage: reploy [--docker] stage APP_REF [OPTIONS]",
+		"reploy [--docker] stage --update [APP_REF] [OPTIONS]",
 		"Create a staging directory from an app blueprint reference.",
+		"Use --update to refresh an existing staging directory",
 		"--dir DIR",
+		"--update",
+		"--force",
 		"--requirement REQ",
 		"Show stage help",
 	} {
@@ -513,22 +517,16 @@ func TestDockerStageHelp(t *testing.T) {
 	}
 }
 
-func TestDockerUpdateHelp(t *testing.T) {
-	code, stdout, stderr := runCLI("update", "--help")
-	if code != 0 {
-		t.Fatalf("exit code = %d, want 0", code)
+func TestDockerUpdateCommandRemoved(t *testing.T) {
+	code, stdout, stderr := runCLI("update")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
 	}
-	if !strings.Contains(stdout, "Usage: reploy [--docker] update [OPTIONS]") {
-		t.Fatalf("stdout did not contain update usage:\n%s", stdout)
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
 	}
-	if !strings.Contains(stdout, "--dir DIR") || !strings.Contains(stdout, "Staging directory to update, default current staging dir or reploy-staging") {
-		t.Fatalf("stdout did not describe update directory option:\n%s", stdout)
-	}
-	if !strings.Contains(stdout, "--force") || strings.Contains(stdout, "--blueprint") {
-		t.Fatalf("stdout did not describe update options:\n%s", stdout)
-	}
-	if stderr != "" {
-		t.Fatalf("stderr = %q, want empty", stderr)
+	if !strings.Contains(stderr, "unknown command: update") {
+		t.Fatalf("stderr did not reject removed update command:\n%s", stderr)
 	}
 }
 
@@ -839,7 +837,7 @@ func TestDockerInitExistingDefaultDeploymentSuggestsUpdate(t *testing.T) {
 	if !strings.Contains(stderr, "staging directory already exists at reploy-staging") {
 		t.Fatalf("stderr missing existing deployment message:\n%s", stderr)
 	}
-	if !strings.Contains(stderr, `run "reploy update" to update it`) {
+	if !strings.Contains(stderr, `run "reploy stage --update file:`+packDir+`" to update it`) {
 		t.Fatalf("stderr missing update hint:\n%s", stderr)
 	}
 }
@@ -1195,15 +1193,15 @@ func TestDockerInitLoadsPyPIPackAndRecordsResolvedArtifact(t *testing.T) {
 	}
 }
 
-func TestDockerUpdateRejectsExplicitRequirements(t *testing.T) {
-	code, stdout, stderr := runCLI("update", "--requirement", "demo-suite")
+func TestDockerStageUpdateRejectsExplicitRequirements(t *testing.T) {
+	code, stdout, stderr := runCLI("stage", "--update", "--requirement", "demo-suite")
 	if code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
 	if stdout != "" {
 		t.Fatalf("stdout = %q, want empty", stdout)
 	}
-	if !strings.Contains(stderr, "--requirement is only supported with stage") {
+	if !strings.Contains(stderr, "--requirement is only supported when creating a staging directory") {
 		t.Fatalf("stderr did not contain requirement message:\n%s", stderr)
 	}
 }
@@ -1260,7 +1258,7 @@ func TestTopLevelConfigCommandIsNotAppConfigSurface(t *testing.T) {
 	}
 }
 
-func TestDockerUpdateUsesExistingState(t *testing.T) {
+func TestDockerStageUpdateUsesExistingState(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
@@ -1268,12 +1266,94 @@ func TestDockerUpdateUsesExistingState(t *testing.T) {
 		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
-	code, stdout, stderr = runCLI("update", "--dir", deployDir)
+	code, stdout, stderr = runCLI("stage", "--update", "--dir", deployDir)
 	if code != 0 {
-		t.Fatalf("update failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("stage --update failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 	if stdout != "up_to_date\n" {
 		t.Fatalf("stdout = %q, want one up_to_date line", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerStageUpdateAcceptsPackRef(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	updatedPackDir := makeCLITestPackWithManifest(t, strings.ReplaceAll(cliTestPackManifest(), "color_env: DEMO_COLOR", "color_env: UPDATED_COLOR"))
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("stage", "--update", "--dir", deployDir, "file:"+updatedPackDir)
+	if code != 0 {
+		t.Fatalf("stage --update failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "updated "+filepath.Join(deployDir, dockerdeploy.StateFileName)) {
+		t.Fatalf("stdout missing state update:\n%s", stdout)
+	}
+	stateContent, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.StateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state deploy.DeploymentState
+	if err := json.Unmarshal(stateContent, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.RequestedBlueprintRef != "file:"+updatedPackDir {
+		t.Fatalf("requested blueprint ref = %q", state.RequestedBlueprintRef)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerStageUpdateForceOverwritesLocalGeneratedEdits(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	controlScriptPath := filepath.Join(deployDir, "democtl")
+	localEdit := []byte("locally edited compose\n")
+	if err := os.WriteFile(controlScriptPath, localEdit, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr = runCLI("stage", "--update", "--dir", deployDir)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "refusing to overwrite locally modified generated files") || !strings.Contains(stderr, "--force") {
+		t.Fatalf("stderr missing refusal and force hint:\n%s", stderr)
+	}
+	content, err := os.ReadFile(controlScriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != string(localEdit) {
+		t.Fatalf("control script content changed without force: %q", content)
+	}
+
+	code, stdout, stderr = runCLI("stage", "--update", "--force", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("stage --update --force failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "updated "+controlScriptPath) {
+		t.Fatalf("stdout missing forced control script update:\n%s", stdout)
+	}
+	content, err = os.ReadFile(controlScriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) == string(localEdit) {
+		t.Fatalf("control script content was not overwritten with --force")
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
@@ -1318,7 +1398,7 @@ func TestDockerBundleListReportsMissingRequirementsProjection(t *testing.T) {
 	if stdout != "" {
 		t.Fatalf("stdout = %q, want empty", stdout)
 	}
-	if !strings.Contains(stderr, "requirements projection is missing") || !strings.Contains(stderr, "reploy update --dir "+deployDir) {
+	if !strings.Contains(stderr, "requirements projection is missing") || !strings.Contains(stderr, "reploy stage --update --dir "+deployDir) {
 		t.Fatalf("stderr missing update hint:\n%s", stderr)
 	}
 }
@@ -1850,8 +1930,13 @@ func TestDockerInfoShowsDeploymentState(t *testing.T) {
 
 func makeCLITestPack(t *testing.T) string {
 	t.Helper()
+	return makeCLITestPackWithManifest(t, cliTestPackManifest())
+}
+
+func makeCLITestPackWithManifest(t *testing.T, manifest string) string {
+	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "demo.blueprint.yaml"), []byte(cliTestPackManifest()), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "demo.blueprint.yaml"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return dir

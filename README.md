@@ -207,7 +207,7 @@ reploy stage pypi:example-app
 reploy stage file:path/to/app/reploy
 ./reploy-staging/examplectl status
 ./reploy-staging/examplectl config check --live
-reploy update
+reploy stage --update
 reploy info
 reploy doctor
 reploy bundle list

@@ -73,6 +73,56 @@ func TestBundleAddRemoveUpdatesStateAndRequirements(t *testing.T) {
 	}
 }
 
+func TestBundleAddOverwritesRuntimeCompose(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	composePath := filepath.Join(deployDir, ComposeFileName)
+	if err := os.WriteFile(composePath, []byte("local runtime edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := BundleAdd(BundleRootOptions{Dir: deployDir, Source: "demo-imap==1.2.3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertResultStatus(t, results, composePath, deploy.UpdateStatusUpdated)
+	if got := readFile(t, composePath); got == "local runtime edit\n" {
+		t.Fatal("runtime compose was not overwritten")
+	}
+}
+
+func TestBundleAddRecreatesMissingRuntimeComposeDir(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(deployDir, RuntimeDirName)); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := BundleAdd(BundleRootOptions{Dir: deployDir, Source: "demo-imap==1.2.3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	composePath := filepath.Join(deployDir, ComposeFileName)
+	assertResultStatus(t, results, composePath, deploy.UpdateStatusUpdated)
+	if _, err := os.Stat(composePath); err != nil {
+		t.Fatalf("missing regenerated runtime compose: %v", err)
+	}
+}
+
 func TestBundleListRejectsMissingRequirementsProjection(t *testing.T) {
 	packDir := makeTestPack(t)
 	ref, err := deploy.ParsePackRef("file:" + packDir)
@@ -91,7 +141,7 @@ func TestBundleListRejectsMissingRequirementsProjection(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "requirements projection is missing") || !strings.Contains(err.Error(), "reploy update --dir "+deployDir) {
+	if !strings.Contains(err.Error(), "requirements projection is missing") || !strings.Contains(err.Error(), "reploy stage --update --dir "+deployDir) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -114,7 +164,7 @@ func TestBundleListRejectsStaleRequirementsProjection(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "requirements projection is out of date") || !strings.Contains(err.Error(), "reploy update --dir "+deployDir) {
+	if !strings.Contains(err.Error(), "requirements projection is out of date") || !strings.Contains(err.Error(), "reploy stage --update --dir "+deployDir) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

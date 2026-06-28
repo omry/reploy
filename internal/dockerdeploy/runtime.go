@@ -27,6 +27,9 @@ func Runtime(options RuntimeOptions) error {
 			return fmt.Errorf("prepare installation bundle: %w", err)
 		}
 	}
+	if err := ensureRuntimeCompose(options.Dir); err != nil {
+		return fmt.Errorf("ensure runtime compose: %w", err)
+	}
 	spec, err := RuntimeCommandWithOptions(options.Dir, options.Action, RuntimeCommandOptions{Follow: options.Follow})
 	if err != nil {
 		return err

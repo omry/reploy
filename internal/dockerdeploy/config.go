@@ -63,6 +63,9 @@ func ConfigCheck(options ConfigCheckOptions) error {
 	if err := ensureOneOffCommandDirs(options.Dir, pack); err != nil {
 		return err
 	}
+	if err := ensureRuntimeCompose(options.Dir); err != nil {
+		return fmt.Errorf("ensure runtime compose: %w", err)
+	}
 	command, forwardedArgs, err := pack.Docker.MatchCommand(options.CommandArgs)
 	if err != nil {
 		return err
@@ -107,6 +110,9 @@ func AppCommand(options AppCommandOptions) error {
 	}
 	if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: options.Dir, Stdout: options.Stdout, Stderr: options.Stderr}); err != nil {
 		return fmt.Errorf("prepare installation bundle: %w", err)
+	}
+	if err := ensureRuntimeCompose(options.Dir); err != nil {
+		return fmt.Errorf("ensure runtime compose: %w", err)
 	}
 	configDisplayDir := appConfigDisplayDir(options.Dir, pack)
 	projectName := installComposeProjectName(state)
@@ -162,7 +168,12 @@ func ensureWritableRuntimeDir(path string) error {
 		return os.Remove(probe)
 	}
 	if err := os.RemoveAll(path); err != nil {
-		return err
+		if chmodErr := os.Chmod(path, 0o755); chmodErr != nil {
+			return err
+		}
+		if retryErr := os.RemoveAll(path); retryErr != nil {
+			return err
+		}
 	}
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		return err
