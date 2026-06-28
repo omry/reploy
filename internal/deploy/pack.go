@@ -454,6 +454,9 @@ func ParsePackManifest(content string) (PackManifest, error) {
 		if !isEnvironmentVariableName(name) {
 			return PackManifest{}, fmt.Errorf("docker.environment contains invalid environment variable name: %s", name)
 		}
+		if name == "REPLOY_DEPLOYMENT_SCOPE" {
+			return PackManifest{}, fmt.Errorf("docker.environment.%s is reserved by Reploy", name)
+		}
 		if containsLineOrFieldBreak(value) {
 			return PackManifest{}, fmt.Errorf("docker.environment.%s must not contain tabs or newlines", name)
 		}

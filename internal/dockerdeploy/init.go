@@ -29,6 +29,10 @@ const (
 	RequirementsFileName    = ".reploy/requirements.txt"
 	ToolBinaryFileName      = ".reploy/bin/reploy"
 	DefaultDeploymentDir    = "reploy-staging"
+
+	reployDeploymentScopeEnv      = "REPLOY_DEPLOYMENT_SCOPE"
+	reployDeploymentScopeStaging  = "staging"
+	reployDeploymentScopeDeployed = "deployed"
 )
 
 type InitOptions struct {
@@ -315,6 +319,7 @@ func defaultDockerEnv(pack deploy.AppPack, dockerIdentity string) (string, error
 		"",
 		fmt.Sprintf("REPLOY_IMAGE=%s", service.Image),
 		fmt.Sprintf("REPLOY_CONTAINER_NAME=%s", service.ContainerName),
+		fmt.Sprintf("%s=%s", reployDeploymentScopeEnv, reployDeploymentScopeStaging),
 		fmt.Sprintf("REPLOY_CONTAINER_USER=%s", service.ContainerUser),
 		fmt.Sprintf("REPLOY_RESTART=%s", service.Restart),
 		fmt.Sprintf("REPLOY_CONFIG_DIR=./%s", dirs.Config),

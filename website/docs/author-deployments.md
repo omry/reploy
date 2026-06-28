@@ -34,6 +34,11 @@ Docker. The first permanent install target is Linux with systemd.
 That means the current authoring path is strongest for apps that can publish
 Python packages and run inside a Docker container.
 
+Reploy exposes `REPLOY_DEPLOYMENT_SCOPE` inside the app container. The value is
+`staging` while running from a staging directory and `deployed` after a
+permanent install. Apps can use this for logs, diagnostics, and support output
+without hard-coding their own staging/deployed marker in the blueprint.
+
 ## Minimal Shape
 
 The local end-to-end fixture in this repository is a good starting point:

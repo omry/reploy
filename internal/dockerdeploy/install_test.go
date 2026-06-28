@@ -672,6 +672,7 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	dockerEnv := readFile(t, filepath.Join(target, DockerEnvFileName))
 	for _, want := range []string{
 		"REPLOY_CONTAINER_NAME=" + instanceID,
+		"REPLOY_DEPLOYMENT_SCOPE=deployed",
 		"REPLOY_CONTAINER_USER=997:988",
 		"REPLOY_INSTALL_OWNER=appuser:appgroup",
 		"REPLOY_DOCKER_NETWORK_NAME=" + instanceID,

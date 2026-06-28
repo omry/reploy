@@ -603,6 +603,20 @@ docker:
 	}
 }
 
+func TestParsePackManifestRejectsReservedDeploymentScopeEnv(t *testing.T) {
+	manifest := strings.Replace(packTestManifest(), "  default_command: serve\n", `  environment:
+    REPLOY_DEPLOYMENT_SCOPE: staging
+  default_command: serve
+`, 1)
+	_, err := ParsePackManifest(manifest)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "docker.environment.REPLOY_DEPLOYMENT_SCOPE is reserved by Reploy") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestParsePackManifestRejectsLegacyDockerServiceInstallFields(t *testing.T) {
 	manifest := strings.Replace(packTestManifest(), "  default_command: serve\n", `  service:
     install_owner: demo:demo

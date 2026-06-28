@@ -1132,6 +1132,7 @@ func writeInstalledDockerEnv(plan installPlan) error {
 	}
 	updates := dockerEnvPortUpdates(plan.Ports)
 	updates["REPLOY_CONTAINER_NAME"] = plan.ContainerName
+	updates[reployDeploymentScopeEnv] = reployDeploymentScopeDeployed
 	updates["REPLOY_DOCKER_NETWORK_NAME"] = plan.NetworkName
 	updates["REPLOY_CONTAINER_USER"] = owner.ContainerUser
 	updates["REPLOY_INSTALL_OWNER"] = owner.Spec

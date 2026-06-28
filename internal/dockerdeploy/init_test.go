@@ -58,10 +58,16 @@ func TestInitWritesDeploymentDirectory(t *testing.T) {
 	if !strings.Contains(dockerEnv, "REPLOY_INSTALL_OWNER=1000:1000") {
 		t.Fatalf("docker.env should include blueprint install owner:\n%s", dockerEnv)
 	}
+	if !strings.Contains(dockerEnv, "REPLOY_DEPLOYMENT_SCOPE=staging") {
+		t.Fatalf("docker.env should identify staging scope:\n%s", dockerEnv)
+	}
 	if !strings.Contains(dockerEnv, "REPLOY_HOST_PORT=18075") || !strings.Contains(dockerEnv, "REPLOY_CONTAINER_PORT=18075") {
 		t.Fatalf("docker.env should use install.ports.staging defaults:\n%s", dockerEnv)
 	}
 	compose := readFile(t, filepath.Join(deployDir, ComposeFileName))
+	if !strings.Contains(compose, "REPLOY_DEPLOYMENT_SCOPE: ${REPLOY_DEPLOYMENT_SCOPE:-staging}") {
+		t.Fatalf("compose should expose deployment scope to the app:\n%s", compose)
+	}
 	if !strings.Contains(compose, `"${REPLOY_PORT_HTTPS_HOST_BIND:-127.0.0.1}:${REPLOY_PORT_HTTPS_HOST_PORT:-18075}:${REPLOY_PORT_HTTPS_CONTAINER_PORT:-18075}"`) {
 		t.Fatalf("compose should use install.ports.staging defaults:\n%s", compose)
 	}
