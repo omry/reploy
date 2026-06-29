@@ -35,6 +35,13 @@
   color: #dce9e2;
   font-size: 1.28rem;
   line-height: 1.55;
+  margin-bottom: 0.75rem;
+}
+
+.heroAvailability {
+  color: #b9cbc2;
+  font-size: 1rem;
+  line-height: 1.55;
   margin-bottom: 1.8rem;
 }
 

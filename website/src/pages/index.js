@@ -14,6 +14,10 @@ function HomepageHeader() {
             {siteConfig.title}
           </Heading>
           <p className={styles.heroSubtitle}>{siteConfig.tagline}</p>
+          <p className={styles.heroAvailability}>
+            Reploy is currently available on Linux only. Other operating
+            systems may be added later.
+          </p>
           <div className={styles.heroActions}>
             <Link className="button button--primary button--lg" to="/docs/">
               Read the docs
