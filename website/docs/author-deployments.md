@@ -130,18 +130,17 @@ reploy stage file:./example.blueprint.yaml
 reploy install file:./example.blueprint.yaml --dry-run
 ```
 
-For users, publish the blueprint inside the app package and give them the
-package ref:
+For users, publish the blueprint inside the app package and give them an indexed
+shortcut:
 
 ```bash
-reploy stage pypi:example-app
-reploy install pypi:example-app
+reploy stage example-app
+reploy install example-app
 ```
 
-If the blueprint is not stored in the package's conventional `example_app/reploy`
-path, include the explicit path:
+Direct PyPI refs remain available when an exact package path is useful:
 
 ```bash
-reploy stage pypi:example-app#custom/path
-reploy install pypi:example-app#custom/path
+reploy stage pypi://example-app/example_app/reploy/example.blueprint.yaml
+reploy install pypi://example-app/example_app/reploy/example.blueprint.yaml
 ```

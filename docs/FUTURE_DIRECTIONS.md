@@ -108,6 +108,12 @@ Open questions:
   upstream commit hashes?
 - Should GitHub-specific shorthand such as `github:org/repo` exist, or should
   the generic `git:https://...` form remain the only source-repo spelling?
+- Should additional provider schemes be added for GitLab or Bitbucket after
+  there are fixtures and parser tests for their URL layouts?
+- If GitLab is supported, how should Reploy handle nested groups without
+  confusing the project path with the blueprint file path?
+- If Bitbucket is supported, should it accept a path-style provider ref like
+  GitHub, or require an explicit `path=` query parameter?
 - Which build steps are blueprint-declared versus provider-specific?
 - What build dependencies are required, and how are they declared?
 - What build environment is used?

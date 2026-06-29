@@ -18,33 +18,21 @@ reploy stage arbiter-server==0.9.3.dev1
 reploy install arbiter-server
 ```
 
-Shorthands are resolved through the Reploy blueprint index. The index is not
-versioned; when an entry includes a version template, `name==VERSION`
-substitutes that version into the resolved package ref.
+Shorthands are resolved through the Reploy blueprint index. The index entry is
+a single ref template. When it contains `{version}`, `name==VERSION`
+substitutes that version, while unpinned `name` substitutes `latest`.
 
 ## PyPI Package
 
 ```bash
-reploy stage pypi:example-app
-reploy stage pypi:example-app==1.2.3
-reploy install pypi:example-app
+reploy stage pypi://example-app/example_app/reploy/example.blueprint.yaml
+reploy stage pypi://example-app/example_app/reploy/example.blueprint.yaml?version=1.2.3
+reploy install pypi://example-app/example_app/reploy/example.blueprint.yaml
 ```
 
-By convention, `pypi:example-app` looks for a blueprint under:
-
-```text
-example_app/reploy
-```
-
-Use an explicit path when a package stores the blueprint elsewhere:
-
-```bash
-reploy stage pypi:example-app#custom/path
-reploy install pypi:example-app#custom/path
-```
-
-Use `#path/inside/package` for an explicit blueprint path inside a PyPI
-package.
+Direct PyPI refs include the exact blueprint file path inside the package. Use
+the Reploy blueprint index when users should be able to type a short app name
+instead of the full package path.
 
 ## Local File
 

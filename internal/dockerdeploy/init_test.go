@@ -737,10 +737,10 @@ docker:
 `)
 	pack := deploy.AppPack{
 		Ref: deploy.PackRef{
-			Raw:    "pypi:demo-pkg==1.2.3#demo/reploy",
+			Raw:    "pypi://demo-pkg/demo/reploy/demo.blueprint.yaml?version=1.2.3",
 			Scheme: "pypi",
 		},
-		RequestedRef: deploy.PackRef{Raw: "pypi:demo-pkg#demo/reploy"},
+		RequestedRef: deploy.PackRef{Raw: "pypi:demo-pkg#demo/reploy/demo.blueprint.yaml"},
 		ResolvedArtifact: &deploy.ResolvedPackArtifact{
 			Package: "demo-pkg",
 			Version: "1.2.3",

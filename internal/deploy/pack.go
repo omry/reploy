@@ -347,7 +347,7 @@ func loadSourceCheckout(sourceRoot string, requestedSubdir string) (AppPack, str
 		if err != nil {
 			return AppPack{}, "", err
 		}
-		subdir = defaultPyPIBlueprintSubdir(projectName)
+		subdir = defaultSourceBlueprintSubdir(projectName)
 	}
 	blueprintDir := filepath.Join(sourceRoot, filepath.FromSlash(subdir))
 	fileRef := PackRef{Raw: "file:" + blueprintDir, Scheme: "file", Source: blueprintDir}

@@ -16,14 +16,14 @@ func TestParseFilePackRef(t *testing.T) {
 }
 
 func TestParsePyPIPackRefWithExplicitSubdir(t *testing.T) {
-	ref, err := ParsePackRef("pypi:demo-suite==0.1.0#demo_suite/reploy")
+	ref, err := ParsePackRef("pypi:demo-suite==0.1.0#demo_suite/reploy/demo.blueprint.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ref.Source != "demo-suite==0.1.0" {
 		t.Fatalf("source = %q", ref.Source)
 	}
-	if ref.Subdir != "demo_suite/reploy" {
+	if ref.Subdir != "demo_suite/reploy/demo.blueprint.yaml" {
 		t.Fatalf("subdir = %q", ref.Subdir)
 	}
 	if !ref.IsPinned {
@@ -32,14 +32,14 @@ func TestParsePyPIPackRefWithExplicitSubdir(t *testing.T) {
 }
 
 func TestParsePyPIPackRefAllowsLatestWithExplicitSubdir(t *testing.T) {
-	ref, err := ParsePackRef("pypi:demo-suite#demo_suite/reploy")
+	ref, err := ParsePackRef("pypi:demo-suite#demo_suite/reploy/demo.blueprint.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ref.Source != "demo-suite" {
 		t.Fatalf("source = %q", ref.Source)
 	}
-	if ref.Subdir != "demo_suite/reploy" {
+	if ref.Subdir != "demo_suite/reploy/demo.blueprint.yaml" {
 		t.Fatalf("subdir = %q", ref.Subdir)
 	}
 	if ref.IsPinned {
@@ -47,15 +47,22 @@ func TestParsePyPIPackRefAllowsLatestWithExplicitSubdir(t *testing.T) {
 	}
 }
 
-func TestParsePyPIPackRefDefaultsSubdirFromPackageName(t *testing.T) {
-	ref, err := ParsePackRef("pypi:Demo.Suite==0.1.0")
+func TestParsePyPIPackRefRequiresExplicitBlueprintPath(t *testing.T) {
+	_, err := ParsePackRef("pypi:Demo.Suite==0.1.0")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestParsePyPIURLPackRef(t *testing.T) {
+	ref, err := ParsePackRef("pypi://demo-suite/demo_suite/reploy/demo.blueprint.yaml?version=0.1.0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ref.Source != "Demo.Suite==0.1.0" {
+	if ref.Source != "demo-suite==0.1.0" {
 		t.Fatalf("source = %q", ref.Source)
 	}
-	if ref.Subdir != "demo_suite/reploy" {
+	if ref.Subdir != "demo_suite/reploy/demo.blueprint.yaml" {
 		t.Fatalf("subdir = %q", ref.Subdir)
 	}
 	if !ref.IsPinned {
@@ -63,19 +70,28 @@ func TestParsePyPIPackRefDefaultsSubdirFromPackageName(t *testing.T) {
 	}
 }
 
-func TestParsePyPIPackRefDefaultsSubdirForLatest(t *testing.T) {
-	ref, err := ParsePackRef("pypi:demo-suite")
+func TestParsePyPIURLPackRefLatestIsUnpinned(t *testing.T) {
+	ref, err := ParsePackRef("pypi://demo-suite/demo_suite/reploy/demo.blueprint.yaml?version=latest")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ref.Source != "demo-suite" {
 		t.Fatalf("source = %q", ref.Source)
 	}
-	if ref.Subdir != "demo_suite/reploy" {
+	if ref.Subdir != "demo_suite/reploy/demo.blueprint.yaml" {
 		t.Fatalf("subdir = %q", ref.Subdir)
 	}
 	if ref.IsPinned {
-		t.Fatalf("unpinned pypi ref should request latest, not be considered pinned")
+		t.Fatalf("latest pypi ref should not be considered pinned")
+	}
+}
+
+func TestParsePyPIURLPackRefRequiresExplicitBlueprintPath(t *testing.T) {
+	for _, raw := range []string{"pypi://demo-suite", "pypi://demo-suite/demo_suite/reploy"} {
+		_, err := ParsePackRef(raw)
+		if err == nil {
+			t.Fatalf("expected error for %s", raw)
+		}
 	}
 }
 

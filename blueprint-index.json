@@ -2,8 +2,7 @@
   "schema_version": 1,
   "blueprints": {
     "arbiter-server": {
-      "ref": "pypi:arbiter-server",
-      "versioned_ref": "pypi:arbiter-server=={version}"
+      "ref": "pypi://arbiter-server/arbiter_server/reploy/arbiter.blueprint.yaml?version={version}"
     }
   }
 }

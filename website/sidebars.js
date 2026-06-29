@@ -6,7 +6,11 @@ const sidebars = {
     'intro',
     {
       type: 'category',
-      label: 'Install',
+      label: 'Install Reploy',
+      link: {
+        type: 'doc',
+        id: 'install-reploy',
+      },
       items: ['install-script', 'install-pypi'],
     },
     {

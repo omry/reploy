@@ -12,10 +12,11 @@ import (
 )
 
 func TestLoadPackFromPinnedPyPIWheel(t *testing.T) {
-	wheel := testPackWheel(t, "demo_pkg/reploy")
+	blueprintPath := "demo_pkg/reploy/demo.blueprint.yaml"
+	wheel := testPackWheel(t, blueprintPath)
 	indexURL := testPyPIIndex(t, wheel, "1.2.3")
 	t.Setenv("REPLOY_CACHE_DIR", filepath.Join(t.TempDir(), "cache"))
-	ref, err := ParsePackRef("pypi:demo-pkg==1.2.3#demo_pkg/reploy?index-url=" + indexURL)
+	ref, err := ParsePackRef("pypi:demo-pkg==1.2.3#" + blueprintPath + "?index-url=" + indexURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +25,7 @@ func TestLoadPackFromPinnedPyPIWheel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pack.Ref.Raw != "pypi:demo-pkg==1.2.3#demo_pkg/reploy" {
+	if pack.Ref.Raw != "pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml?version=1.2.3" {
 		t.Fatalf("resolved ref = %q", pack.Ref.Raw)
 	}
 	if pack.RequestedRef.Raw != ref.Raw {
@@ -45,10 +46,11 @@ func TestLoadPackFromPinnedPyPIWheel(t *testing.T) {
 }
 
 func TestLoadPackFromLatestPyPIWheelResolvesExactVersion(t *testing.T) {
-	wheel := testPackWheel(t, "demo_pkg/reploy")
+	blueprintPath := "demo_pkg/reploy/demo.blueprint.yaml"
+	wheel := testPackWheel(t, blueprintPath)
 	indexURL := testPyPIIndex(t, wheel, "2.0.0")
 	t.Setenv("REPLOY_CACHE_DIR", filepath.Join(t.TempDir(), "cache"))
-	ref, err := ParsePackRef("pypi:demo-pkg#demo_pkg/reploy?index-url=" + indexURL)
+	ref, err := ParsePackRef("pypi:demo-pkg#" + blueprintPath + "?index-url=" + indexURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +59,7 @@ func TestLoadPackFromLatestPyPIWheelResolvesExactVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pack.Ref.Raw != "pypi:demo-pkg==2.0.0#demo_pkg/reploy" {
+	if pack.Ref.Raw != "pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml?version=2.0.0" {
 		t.Fatalf("resolved ref = %q", pack.Ref.Raw)
 	}
 	if !pack.Ref.IsPinned {
@@ -69,13 +71,13 @@ func TestLoadPackFromLatestPyPIWheelResolvesExactVersion(t *testing.T) {
 }
 
 func TestLoadPackFromSimplePyPIWheelWithoutPackFiles(t *testing.T) {
-	subdir := "demo_pkg/reploy"
+	blueprintPath := "demo_pkg/reploy/demo.blueprint.yaml"
 	wheel := testPackWheelWithFiles(t, map[string]string{
-		subdir + "/demo.blueprint.yaml": simplePackTestManifest(),
+		blueprintPath: simplePackTestManifest(),
 	})
 	indexURL := testPyPIIndex(t, wheel, "2.1.0")
 	t.Setenv("REPLOY_CACHE_DIR", filepath.Join(t.TempDir(), "cache"))
-	ref, err := ParsePackRef("pypi:demo-pkg#" + subdir + "?index-url=" + indexURL)
+	ref, err := ParsePackRef("pypi:demo-pkg#" + blueprintPath + "?index-url=" + indexURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,12 +98,13 @@ func TestLoadPackFromSimplePyPIWheelWithoutPackFiles(t *testing.T) {
 }
 
 func TestLoadPackFromPyPIWheelReportsMissingBlueprintPathWithResolvedVersion(t *testing.T) {
+	blueprintPath := "demo_pkg/reploy/demo.blueprint.yaml"
 	wheel := testPackWheelWithFiles(t, map[string]string{
 		"demo_pkg/other/demo.blueprint.yaml": simplePackTestManifest(),
 	})
 	indexURL := testPyPIIndex(t, wheel, "2.2.0")
 	t.Setenv("REPLOY_CACHE_DIR", filepath.Join(t.TempDir(), "cache"))
-	ref, err := ParsePackRef("pypi:demo-pkg#demo_pkg/reploy?index-url=" + indexURL)
+	ref, err := ParsePackRef("pypi:demo-pkg#" + blueprintPath + "?index-url=" + indexURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +116,7 @@ func TestLoadPackFromPyPIWheelReportsMissingBlueprintPathWithResolvedVersion(t *
 	for _, want := range []string{
 		"blueprint path not found in PyPI wheel demo-pkg==2.2.0",
 		"demo_pkg-2.2.0-py3-none-any.whl",
-		"demo_pkg/reploy",
+		blueprintPath,
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error missing %q: %v", want, err)
@@ -122,10 +125,11 @@ func TestLoadPackFromPyPIWheelReportsMissingBlueprintPathWithResolvedVersion(t *
 }
 
 func TestLoadResolvedPackUsesCachedBlueprintPath(t *testing.T) {
-	wheel := testPackWheel(t, "demo_pkg/reploy")
+	blueprintPath := "demo_pkg/reploy/demo.blueprint.yaml"
+	wheel := testPackWheel(t, blueprintPath)
 	indexURL := testPyPIIndex(t, wheel, "3.0.0")
 	t.Setenv("REPLOY_CACHE_DIR", filepath.Join(t.TempDir(), "cache"))
-	ref, err := ParsePackRef("pypi:demo-pkg#demo_pkg/reploy?index-url=" + indexURL)
+	ref, err := ParsePackRef("pypi:demo-pkg#" + blueprintPath + "?index-url=" + indexURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,10 +181,10 @@ func testPyPIIndex(t *testing.T, wheel []byte, version string) string {
 	return baseURL
 }
 
-func testPackWheel(t *testing.T, subdir string) []byte {
+func testPackWheel(t *testing.T, blueprintPath string) []byte {
 	t.Helper()
 	return testPackWheelWithFiles(t, map[string]string{
-		subdir + "/demo.blueprint.yaml": packTestManifest(),
+		blueprintPath: packTestManifest(),
 	})
 }
 

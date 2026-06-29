@@ -109,8 +109,8 @@ Expected direct install constraints:
   # local blueprint file
   reploy install file:./app.blueprint.yaml
 
-  # explicit PyPI package; may include a blueprint path inside the package
-  reploy install pypi:app-package
+  # explicit PyPI package blueprint file
+  reploy install pypi://app-package/app_package/reploy/app.blueprint.yaml
   ```
 - no compatibility alias such as `reploy install --blueprint APP_REF` is
   required
@@ -339,7 +339,7 @@ is stable.
 - `app.id` is required and drives default target path, service identity, and the
   generated app control script name.
 - Direct install accepts positional app refs: indexed names, `file:` refs, and
-  explicit `pypi:` refs.
+  explicit `pypi://` refs.
 - The normal `reploy ...` command surface manages staging. Staging also writes
   an app-named control script for local runtime/app operations, backed by
   Docker Compose. Installed deployments expose only the generated app control

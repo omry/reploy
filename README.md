@@ -153,9 +153,9 @@ reploy index search arbiter
 reploy index show arbiter-server
 ```
 
-Shorthands expand to wheel-hosted app blueprints. The index is not versioned;
-when an entry includes a version template, `name==VERSION` substitutes that
-version into the resolved package ref:
+Shorthands expand to wheel-hosted app blueprints. The index entry is a single
+ref template. When it contains `{version}`, `name==VERSION` substitutes that
+version, while unpinned `name` substitutes `latest`:
 
 ```bash
 reploy stage arbiter-server
@@ -174,10 +174,13 @@ reploy stage git:https://github.com/org/example-app.git?ref=main
 reploy stage git:https://github.com/org/example-app.git#example_app/reploy?ref=v0.1.0
 ```
 
-PyPI package refs default to the `package_name/reploy` blueprint convention, so
-`pypi:example-app` looks for `example_app/reploy` in the wheel. Use
-`pypi:PACKAGE#PATH` only when a package stores its Reploy blueprint somewhere
-else.
+Direct PyPI refs must include the exact blueprint file path inside the wheel.
+Use the blueprint index for user-facing shortcuts:
+
+```bash
+reploy stage pypi://example-app/example_app/reploy/example.blueprint.yaml
+reploy stage pypi://example-app/example_app/reploy/example.blueprint.yaml?version=1.2.3
+```
 
 For local Python source checkouts, use a source ref. `source:path/to/app` reads
 `pyproject.toml`, applies the same `package_name/reploy` blueprint convention,
@@ -232,7 +235,7 @@ and install.
 Useful staging commands:
 
 ```bash
-reploy stage pypi:example-app
+reploy stage arbiter-server
 reploy stage git:https://github.com/org/example-app.git?ref=main
 reploy stage source:path/to/app
 reploy stage file:path/to/app/reploy
@@ -270,8 +273,7 @@ blueprint defaults. It is useful for simple services and dry-run planning:
 reploy install arbiter-server --dry-run
 reploy install source:path/to/app --dry-run
 reploy install file:./app.blueprint.yaml --dry-run
-reploy install pypi:example-app --dry-run
-reploy install pypi:example-app#example_app/reploy/example.blueprint.yaml --dry-run
+reploy install pypi://example-app/example_app/reploy/example.blueprint.yaml --dry-run
 ```
 
 By default, direct install uses a temporary internal staging-like workspace.

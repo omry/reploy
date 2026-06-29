@@ -39,12 +39,10 @@ func setCLITestPackIndex(t *testing.T) {
   "schema_version": 1,
   "blueprints": {
     "demo-server": {
-      "ref": "pypi:demo-server",
-      "versioned_ref": "pypi:demo-server=={version}"
+      "ref": "pypi://demo-server/demo_server/reploy/demo-server.blueprint.yaml?version={version}"
     },
     "demo-suite": {
-      "ref": "pypi:demo-suite",
-      "versioned_ref": "pypi:demo-suite=={version}"
+      "ref": "pypi://demo-suite/demo_suite/reploy/demo-suite.blueprint.yaml?version={version}"
     }
   }
 }
@@ -112,7 +110,7 @@ func TestNoArgsShowsVersionAndNextSteps(t *testing.T) {
 
 func TestPackIndexRefreshLoadsFileIndex(t *testing.T) {
 	indexPath := filepath.Join(t.TempDir(), "reploy-blueprint-index.json")
-	if err := os.WriteFile(indexPath, []byte(`{"schema_version":1,"blueprints":{"demo":{"ref":"pypi:demo-pkg#demo_pkg/reploy","versioned_ref":"pypi:demo-pkg=={version}#demo_pkg/reploy"}}}`), 0o644); err != nil {
+	if err := os.WriteFile(indexPath, []byte(`{"schema_version":1,"blueprints":{"demo":{"ref":"pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml?version={version}"}}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -169,7 +167,7 @@ func TestPackIndexNoArgsShowsNextSteps(t *testing.T) {
 
 func TestPackIndexSearchAndShow(t *testing.T) {
 	indexPath := filepath.Join(t.TempDir(), "reploy-blueprint-index.json")
-	if err := os.WriteFile(indexPath, []byte(`{"schema_version":1,"blueprints":{"arbiter-server":{"ref":"pypi:arbiter-server","versioned_ref":"pypi:arbiter-server=={version}"},"demo":{"ref":"pypi:demo-pkg#demo_pkg/reploy"}}}`), 0o644); err != nil {
+	if err := os.WriteFile(indexPath, []byte(`{"schema_version":1,"blueprints":{"arbiter-server":{"ref":"pypi://arbiter-server/arbiter_server/reploy/arbiter.blueprint.yaml?version={version}"},"demo":{"ref":"pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml"}}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(packIndexURLEnv, "file:"+indexPath)
@@ -178,7 +176,7 @@ func TestPackIndexSearchAndShow(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if stdout != "arbiter-server\tpypi:arbiter-server\n" {
+	if stdout != "arbiter-server\tpypi://arbiter-server/arbiter_server/reploy/arbiter.blueprint.yaml?version={version}\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	if stderr != "" {
@@ -189,7 +187,7 @@ func TestPackIndexSearchAndShow(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	for _, want := range []string{"name: arbiter-server", "ref: pypi:arbiter-server", "versioned_ref: pypi:arbiter-server=={version}"} {
+	for _, want := range []string{"name: arbiter-server", "ref: pypi://arbiter-server/arbiter_server/reploy/arbiter.blueprint.yaml?version={version}"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout)
 		}
@@ -200,7 +198,7 @@ func TestPackIndexSearchAndShow(t *testing.T) {
 }
 
 func TestPackIndexRefreshDownloadsAndCachesHTTPIndex(t *testing.T) {
-	indexContent := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi:demo-pkg#demo_pkg/reploy","versioned_ref":"pypi:demo-pkg=={version}#demo_pkg/reploy"}}}`
+	indexContent := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml?version={version}"}}}`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, indexContent)
@@ -631,11 +629,11 @@ func TestDockerInstallPortOptionsParse(t *testing.T) {
 		t.Fatalf("shorthand override = %#v", options.PortOverrides)
 	}
 
-	options, err = parseDockerInstallOptions([]string{"pypi:demo-server", "--dry-run", "--in-place", "--replace", "config", "--replace=env", "--clean"})
+	options, err = parseDockerInstallOptions([]string{"pypi:demo-server#demo_server/reploy/demo-server.blueprint.yaml", "--dry-run", "--in-place", "--replace", "config", "--replace=env", "--clean"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.Pack.Raw != "pypi:demo-server" || !options.DryRun || !options.InPlace || !options.Clean {
+	if options.Pack.Raw != "pypi:demo-server#demo_server/reploy/demo-server.blueprint.yaml" || !options.DryRun || !options.InPlace || !options.Clean {
 		t.Fatalf("direct install options = %#v", options)
 	}
 	if strings.Join(options.Replace, ",") != "config,env" {
@@ -1011,11 +1009,11 @@ func TestDockerStageAcceptsGitPackRef(t *testing.T) {
 }
 
 func TestParseDockerCommandOptionsAcceptsExplicitPyPIPackageRef(t *testing.T) {
-	options, err := parseDockerCommandOptions([]string{"pypi:demo-suite==1.2.3"}, true)
+	options, err := parseDockerCommandOptions([]string{"pypi:demo-suite==1.2.3#demo_suite/reploy/demo-suite.blueprint.yaml"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.Pack.Raw != "pypi:demo-suite==1.2.3" {
+	if options.Pack.Raw != "pypi:demo-suite==1.2.3#demo_suite/reploy/demo-suite.blueprint.yaml" {
 		t.Fatalf("raw = %q", options.Pack.Raw)
 	}
 	if options.Pack.Scheme != "pypi" {
@@ -1024,7 +1022,7 @@ func TestParseDockerCommandOptionsAcceptsExplicitPyPIPackageRef(t *testing.T) {
 	if options.Pack.Source != "demo-suite==1.2.3" {
 		t.Fatalf("source = %q", options.Pack.Source)
 	}
-	if options.Pack.Subdir != "demo_suite/reploy" {
+	if options.Pack.Subdir != "demo_suite/reploy/demo-suite.blueprint.yaml" {
 		t.Fatalf("subdir = %q", options.Pack.Subdir)
 	}
 	if !options.Pack.IsPinned {
@@ -1063,7 +1061,7 @@ func TestParseDockerCommandOptionsExpandsDemoSuitePackAlias(t *testing.T) {
 	if options.Pack.Source != "demo-suite" {
 		t.Fatalf("source = %q", options.Pack.Source)
 	}
-	if options.Pack.Subdir != "demo_suite/reploy" {
+	if options.Pack.Subdir != "demo_suite/reploy/demo-suite.blueprint.yaml" {
 		t.Fatalf("subdir = %q", options.Pack.Subdir)
 	}
 	if options.Pack.IsPinned {
@@ -1084,7 +1082,7 @@ func TestParseDockerCommandOptionsExpandsPinnedDemoSuitePackAlias(t *testing.T) 
 	if options.Pack.Source != "demo-suite==1.2.3" {
 		t.Fatalf("source = %q", options.Pack.Source)
 	}
-	if options.Pack.Subdir != "demo_suite/reploy" {
+	if options.Pack.Subdir != "demo_suite/reploy/demo-suite.blueprint.yaml" {
 		t.Fatalf("subdir = %q", options.Pack.Subdir)
 	}
 	if !options.Pack.IsPinned {
@@ -1108,7 +1106,7 @@ func TestParseDockerCommandOptionsExpandsDemoServerPackAlias(t *testing.T) {
 	if options.Pack.Source != "demo-server" {
 		t.Fatalf("source = %q", options.Pack.Source)
 	}
-	if options.Pack.Subdir != "demo_server/reploy" {
+	if options.Pack.Subdir != "demo_server/reploy/demo-server.blueprint.yaml" {
 		t.Fatalf("subdir = %q", options.Pack.Subdir)
 	}
 	if options.Pack.IsPinned {
@@ -1129,7 +1127,7 @@ func TestParseDockerCommandOptionsExpandsPinnedDemoServerPackAlias(t *testing.T)
 	if options.Pack.Source != "demo-server==1.2.3" {
 		t.Fatalf("source = %q", options.Pack.Source)
 	}
-	if options.Pack.Subdir != "demo_server/reploy" {
+	if options.Pack.Subdir != "demo_server/reploy/demo-server.blueprint.yaml" {
 		t.Fatalf("subdir = %q", options.Pack.Subdir)
 	}
 	if !options.Pack.IsPinned {
@@ -1147,8 +1145,17 @@ func TestParseDockerCommandOptionsPreservesDemoSuitePackAliasQuery(t *testing.T)
 	if options.Pack.Raw != "demo-suite?index-url=http://example.test" {
 		t.Fatalf("raw = %q", options.Pack.Raw)
 	}
+	if options.Pack.Source != "demo-suite" {
+		t.Fatalf("source = %q", options.Pack.Source)
+	}
+	if options.Pack.Subdir != "demo_suite/reploy/demo-suite.blueprint.yaml" {
+		t.Fatalf("subdir = %q", options.Pack.Subdir)
+	}
 	if options.Pack.Query.Get("index-url") != "http://example.test" {
 		t.Fatalf("index-url query = %q", options.Pack.Query.Get("index-url"))
+	}
+	if options.Pack.IsPinned {
+		t.Fatal("latest alias with query should not be pinned")
 	}
 }
 
@@ -1165,7 +1172,7 @@ func TestParseDockerCommandOptionsRejectsDuplicatePack(t *testing.T) {
 }
 
 func TestParseDockerCommandOptionsLoadsPackIndexFromHTTPAndCache(t *testing.T) {
-	indexContent := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi:demo-pkg#demo_pkg/reploy","versioned_ref":"pypi:demo-pkg=={version}#demo_pkg/reploy"}}}`
+	indexContent := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml?version={version}"}}}`
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
@@ -1180,7 +1187,7 @@ func TestParseDockerCommandOptionsLoadsPackIndexFromHTTPAndCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.Pack.Source != "demo-pkg==1.2.3" || options.Pack.Subdir != "demo_pkg/reploy" {
+	if options.Pack.Source != "demo-pkg==1.2.3" || options.Pack.Subdir != "demo_pkg/reploy/demo.blueprint.yaml" {
 		t.Fatalf("pack = %#v", options.Pack)
 	}
 	server.Close()
@@ -1199,7 +1206,7 @@ func TestParseDockerCommandOptionsLoadsPackIndexFromHTTPAndCache(t *testing.T) {
 
 func TestParseDockerCommandOptionsRequiresVersionPlaceholderForPinnedShorthand(t *testing.T) {
 	indexPath := filepath.Join(t.TempDir(), "blueprint-index.json")
-	content := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi:demo-pkg#demo_pkg/reploy","versioned_ref":"pypi:demo-pkg#demo_pkg/reploy"}}}`
+	content := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml"}}}`
 	if err := os.WriteFile(indexPath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1216,13 +1223,13 @@ func TestParseDockerCommandOptionsRequiresVersionPlaceholderForPinnedShorthand(t
 
 func TestDockerInitLoadsPyPIPackAndRecordsResolvedArtifact(t *testing.T) {
 	version := "4.5.6"
-	subdir := "demo_pkg/reploy"
-	wheel := makeCLITestPackWheel(t, subdir, version)
+	blueprintPath := "demo_pkg/reploy/demo.blueprint.yaml"
+	wheel := makeCLITestPackWheel(t, "demo_pkg/reploy", version)
 	indexURL := makeCLITestPyPIIndex(t, wheel, version)
 	cacheDir := filepath.Join(t.TempDir(), "cache")
 	t.Setenv("REPLOY_CACHE_DIR", cacheDir)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	packRef := "pypi:demo-pkg#" + subdir + "?index-url=" + indexURL
+	packRef := "pypi:demo-pkg#" + blueprintPath + "?index-url=" + indexURL
 
 	code, stdout, stderr := runCLI("stage", "--dir", deployDir, packRef)
 	if code != 0 {
@@ -1250,7 +1257,7 @@ func TestDockerInitLoadsPyPIPackAndRecordsResolvedArtifact(t *testing.T) {
 	if err := json.Unmarshal(stateContent, &state); err != nil {
 		t.Fatal(err)
 	}
-	expectedResolvedRef := "pypi:demo-pkg==" + version + "#" + subdir
+	expectedResolvedRef := "pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml?version=" + version
 	if state.Blueprint.Raw != expectedResolvedRef {
 		t.Fatalf("state blueprint raw = %q, want %q", state.Blueprint.Raw, expectedResolvedRef)
 	}
@@ -1280,8 +1287,8 @@ func TestDockerInitLoadsPyPIPackAndRecordsResolvedArtifact(t *testing.T) {
 	if artifact.SHA256 != deploy.HashBytes(wheel) {
 		t.Fatalf("artifact sha256 = %q, want %q", artifact.SHA256, deploy.HashBytes(wheel))
 	}
-	if artifact.Subdir != subdir {
-		t.Fatalf("artifact subdir = %q, want %q", artifact.Subdir, subdir)
+	if artifact.Subdir != blueprintPath {
+		t.Fatalf("artifact subdir = %q, want %q", artifact.Subdir, blueprintPath)
 	}
 	if !strings.HasPrefix(artifact.CachePath, cacheDir) {
 		t.Fatalf("artifact cache path = %q, want under %q", artifact.CachePath, cacheDir)
@@ -1292,7 +1299,7 @@ func TestDockerInitLoadsPyPIPackAndRecordsResolvedArtifact(t *testing.T) {
 	if _, err := os.Stat(artifact.CachePath); err != nil {
 		t.Fatalf("missing cached wheel: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(artifact.BlueprintPath, "demo.blueprint.yaml")); err != nil {
+	if _, err := os.Stat(artifact.BlueprintPath); err != nil {
 		t.Fatalf("missing extracted blueprint: %v", err)
 	}
 }

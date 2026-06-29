@@ -5,35 +5,65 @@ slug: /
 
 # Reploy
 
-Reploy is an experimental deployment lifecycle tool for apps that publish
-portable deployment blueprints. It is meant to separate two jobs that are often
-blurred together:
+Experimental, repeatable app deployments from portable blueprints.
 
-- **App Users** receive a blueprint ref and use it to create, configure,
-  test, install, update, and uninstall a deployment.
-- **App Authors** publish the blueprint, bundle metadata, runtime commands,
-  health checks, and install hooks that make the app deployable.
+Reploy is an experimental deployment lifecycle tool for services.
+A blueprint is a portable description of how a service should be staged,
+tested, installed, and operated. Reploy handles the generic lifecycle around
+that blueprint: stage, test, install, update, and uninstall.
 
-The Reploy CLI is distributed as a statically linked native binary, so the
-executable itself does not need separate runtime libraries.
+## Lifecycle
 
-Docker is the first supported runtime target. Python is the first supported app
-bundle backend. Linux with systemd is the first supported permanent install
-target.
+```mermaid
+flowchart LR
+  B[Blueprint]
+  S[Staging]
+  D[Deployed]
 
-## App User
+  B -->|stage| S
+  S -->|install / update| D
+  B -->|direct install| D
+```
+
+A blueprint is the portable source of deployment intent. Staging is a
+user-owned deployment directory where a service can be inspected, configured,
+started, tested, and prepared before it becomes permanent. A deployed install is
+the system-owned service created from the selected staging state.
+The staging directory is self-contained and contains everything needed to run
+the service in staging.
+
+For services that do not require customization, Reploy can also install
+directly from the blueprint and skip the persistent staging directory.
+
+## Quickstart
 
 Start with the app author's blueprint ref:
 
 ```bash
+# Install the Reploy CLI.
 curl -fsSL https://reploy.yadan.net/install.sh | sh
+
+# Create a staging workspace for the service. The default is reploy-staging/.
 reploy stage <app-blueprint-ref>
+
+# Configure the app in the staging directory before starting it.
+vim reploy-staging/conf/
+
+# Start the staged service.
 reploy up
+
+# Run the blueprint-defined checks against staging.
 reploy test
 ```
 
-Then follow the app-specific commands exposed by the blueprint. Reploy owns the
-deployment lifecycle; the app provider owns the app configuration experience.
+Then install from the tested staging state:
+
+```bash
+sudo reploy install
+```
+
+The blueprint defines default install values such as the target path and
+service name. The install guide covers overriding those values.
 
 Simple services can also be installed directly from blueprint defaults:
 
@@ -41,21 +71,24 @@ Simple services can also be installed directly from blueprint defaults:
 sudo reploy install <app-blueprint-ref>
 ```
 
-Direct install skips the persistent staging directory. Use staging when you
-need to select bundle options, run app configuration commands, or test before
-installing.
+Use staging when you need to select bundle options, run app configuration
+commands, inspect generated files, or test before installing.
 
-## App Author
+## Blueprint Refs
 
-For publishing app blueprints, see the [App Author docs](/docs/author-deployments).
+Blueprints can be referenced from packages, source repositories, or local files:
 
-## Deployment Directory
+```bash
+reploy stage example-app
+reploy stage git:https://github.com/org/example-app.git?ref=v1.2.3
+reploy stage file:./example.blueprint.yaml
+```
 
-`reploy stage` creates a `reploy-staging/` deployment directory by default.
-Generated config, bundle artifacts, Docker files, local state, and staging
-helpers live there. Staging also writes an app-named control script, such as
-`arbiterctl`, for local runtime and app commands. Use `--dir` when you want a
-different staging directory for an app instance.
+The first supported app backend is Python. The first supported runtime is
+Docker. The first permanent install target is Linux with systemd.
 
-The installed deployment is narrower. It contains generated service wiring and
-an app control script such as `arbiterctl`, not the full Reploy CLI.
+## Read Next
+
+- [Install an app](/docs/install-an-app)
+- [Publish app blueprints](/docs/author-deployments)
+- [Blueprint structure](/docs/blueprint-structure)

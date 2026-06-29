@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -64,17 +65,17 @@ func loadPyPIPack(ref PackRef) (AppPack, error) {
 	if err != nil {
 		return AppPack{}, err
 	}
-	packDir, err := extractPackFromWheel(cacheRoot, packageName, version, sha256, wheelPath, ref.Subdir)
+	blueprintPath, err := extractPackFromWheel(cacheRoot, packageName, version, sha256, wheelPath, ref.Subdir)
 	if err != nil {
 		return AppPack{}, err
 	}
 	resolvedRef := ref
 	resolvedRef.Source = packageName + "==" + version
-	resolvedRef.Raw = "pypi:" + resolvedRef.Source + "#" + ref.Subdir
+	resolvedRef.Raw = formatPyPIRef(packageName, version, ref.Subdir)
 	resolvedRef.IsPinned = true
 	resolvedRef.Query = nil
 
-	pack, err := loadCachedPack(resolvedRef, ref, packDir, &ResolvedPackArtifact{
+	pack, err := loadCachedPack(resolvedRef, ref, blueprintPath, &ResolvedPackArtifact{
 		Scheme:        "pypi",
 		Package:       packageName,
 		Version:       version,
@@ -82,12 +83,24 @@ func loadPyPIPack(ref PackRef) (AppPack, error) {
 		SHA256:        sha256,
 		Subdir:        ref.Subdir,
 		CachePath:     wheelPath,
-		BlueprintPath: packDir,
+		BlueprintPath: blueprintPath,
 	})
 	if err != nil {
 		return AppPack{}, err
 	}
 	return pack, nil
+}
+
+func formatPyPIRef(packageName string, version string, blueprintPath string) string {
+	ref := url.URL{
+		Scheme: "pypi",
+		Host:   packageName,
+		Path:   "/" + blueprintPath,
+	}
+	query := ref.Query()
+	query.Set("version", version)
+	ref.RawQuery = query.Encode()
+	return ref.String()
 }
 
 func parsePyPISource(source string) (string, string, error) {
@@ -217,17 +230,27 @@ func pypiWheelCachePath(cacheRoot string, packageName string, version string, sh
 	return filepath.Join(cacheRoot, "pypi", normalizePackageName(packageName), version, sha256, filename)
 }
 
-func extractPackFromWheel(cacheRoot string, packageName string, version string, sha256 string, wheelPath string, subdir string) (string, error) {
-	cleanSubdir, err := cleanArchiveSubdir(subdir)
+func extractPackFromWheel(cacheRoot string, packageName string, version string, sha256 string, wheelPath string, blueprintPath string) (string, error) {
+	cleanBlueprintPath, err := cleanArchiveSubdir(blueprintPath)
 	if err != nil {
 		return "", err
 	}
-	targetDir := filepath.Join(cacheRoot, "blueprints", "pypi", normalizePackageName(packageName), version, sha256, filepath.FromSlash(cleanSubdir))
+	if !isBlueprintManifestPath(cleanBlueprintPath) {
+		return "", fmt.Errorf("pypi blueprint path must point to a %s file: %s", BlueprintManifestGlob, blueprintPath)
+	}
+	archiveDir := filepath.ToSlash(filepath.Dir(cleanBlueprintPath))
+	cacheDir := archiveDir
+	if cacheDir == "." {
+		cacheDir = "_root"
+	}
+	blueprintFilename := filepath.Base(cleanBlueprintPath)
+	targetDir := filepath.Join(cacheRoot, "blueprints", "pypi", normalizePackageName(packageName), version, sha256, filepath.FromSlash(cacheDir))
+	targetBlueprintPath := filepath.Join(targetDir, blueprintFilename)
 	if _, err := os.Stat(targetDir); err == nil {
-		if _, err := findBlueprintManifest(targetDir); err != nil {
+		if _, err := os.Stat(targetBlueprintPath); err != nil {
 			return "", err
 		}
-		return targetDir, nil
+		return targetBlueprintPath, nil
 	} else if !os.IsNotExist(err) {
 		return "", err
 	}
@@ -245,15 +268,27 @@ func extractPackFromWheel(cacheRoot string, packageName string, version string, 
 		return "", err
 	}
 	defer os.RemoveAll(tempDir)
-	found := false
-	prefix := cleanSubdir + "/"
+	foundBlueprint := false
+	prefix := ""
+	if archiveDir != "." {
+		prefix = archiveDir + "/"
+	}
 	for _, file := range reader.File {
-		if file.Name != cleanSubdir && !strings.HasPrefix(file.Name, prefix) {
+		if file.Name == archiveDir {
 			continue
 		}
-		relativePath := strings.TrimPrefix(file.Name, prefix)
+		if prefix != "" && file.Name != archiveDir && !strings.HasPrefix(file.Name, prefix) {
+			continue
+		}
+		relativePath := file.Name
+		if prefix != "" {
+			relativePath = strings.TrimPrefix(file.Name, prefix)
+		}
 		if relativePath == "" {
 			continue
+		}
+		if file.Name == cleanBlueprintPath {
+			foundBlueprint = true
 		}
 		cleanRelativePath, err := cleanArchiveSubdir(relativePath)
 		if err != nil {
@@ -290,27 +325,24 @@ func extractPackFromWheel(cacheRoot string, packageName string, version string, 
 		if err := out.Close(); err != nil {
 			return "", err
 		}
-		found = true
 	}
-	if !found {
-		return "", fmt.Errorf("blueprint path not found in PyPI wheel %s==%s (%s): %s", packageName, version, filepath.Base(wheelPath), subdir)
+	if !foundBlueprint {
+		return "", fmt.Errorf("blueprint path not found in PyPI wheel %s==%s (%s): %s", packageName, version, filepath.Base(wheelPath), blueprintPath)
 	}
-	if _, err := findBlueprintManifest(tempDir); err != nil {
-		if os.IsNotExist(err) || strings.Contains(err.Error(), "not found") {
-			return "", fmt.Errorf("blueprint path does not contain exactly one %s file: %s", BlueprintManifestGlob, subdir)
-		}
-		return "", err
+	tempBlueprintPath := filepath.Join(tempDir, blueprintFilename)
+	if _, err := os.Stat(tempBlueprintPath); err != nil {
+		return "", fmt.Errorf("blueprint path not found in PyPI wheel %s==%s (%s): %s", packageName, version, filepath.Base(wheelPath), blueprintPath)
 	}
 	if err := os.MkdirAll(filepath.Dir(targetDir), 0o755); err != nil {
 		return "", err
 	}
 	if err := os.Rename(tempDir, targetDir); err != nil {
-		if _, statErr := findBlueprintManifest(targetDir); statErr == nil {
-			return targetDir, nil
+		if _, statErr := os.Stat(targetBlueprintPath); statErr == nil {
+			return targetBlueprintPath, nil
 		}
 		return "", err
 	}
-	return targetDir, nil
+	return targetBlueprintPath, nil
 }
 
 func cleanArchiveSubdir(path string) (string, error) {
