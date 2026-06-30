@@ -7,6 +7,18 @@ sidebar_position: 7
 The release version lives in the repository `VERSION` file. The native binary
 embeds that value, and Python wheel metadata reads the same source of truth.
 
+Reploy uses Changie fragments for release notes. Before a final release, batch
+the unreleased fragments into `CHANGELOG.md`:
+
+```bash
+changie batch "$(tr -d '[:space:]' < VERSION)"
+changie merge
+```
+
+Commit the updated `CHANGELOG.md`, the new `.changes/<version>.md`, and the
+removed unreleased fragments before publishing. Dev releases do not need to
+consume fragments.
+
 Build release distributions locally:
 
 ```bash

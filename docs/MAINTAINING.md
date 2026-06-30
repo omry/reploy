@@ -46,3 +46,24 @@ smoke helper's plan-only flag through nox:
 ```bash
 nox -s cli-smoke -- --plan-only
 ```
+
+## Changelog Fragments
+
+Reploy uses [Changie](https://github.com/miniscruff/changie) for release-note
+fragments. Install it with Go:
+
+```bash
+go install github.com/miniscruff/changie@v1.25.0
+```
+
+Add a fragment for user-facing changes:
+
+```bash
+changie new --kind Added --body "Added support for example behavior."
+```
+
+Use one of the configured kinds: `Added`, `Changed`, `Deprecated`, `Removed`,
+`Fixed`, `Security`, or `Docs`.
+
+Pure refactors, test-only changes, and internal cleanup do not need fragments
+unless they affect the maintainer or release workflow.
