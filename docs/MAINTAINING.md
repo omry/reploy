@@ -67,3 +67,7 @@ Use one of the configured kinds: `Added`, `Changed`, `Deprecated`, `Removed`,
 
 Pure refactors, test-only changes, and internal cleanup do not need fragments
 unless they affect the maintainer or release workflow.
+
+Dev releases include the current unreleased fragments in GitHub Release notes
+without consuming them. Final releases batch and merge the fragments into
+`CHANGELOG.md`.

@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+
+KIND_ORDER = (
+    "Added",
+    "Changed",
+    "Deprecated",
+    "Removed",
+    "Fixed",
+    "Security",
+    "Docs",
+)
+
+
+@dataclass(frozen=True)
+class Fragment:
+    path: Path
+    kind: str
+    body: str
+    time: str
+
+
+def _read_changelog_section(root: Path, version: str) -> str | None:
+    changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+    match = re.search(
+        rf"^## {re.escape(version)}(?:\s|$).*?(?=^## |\Z)",
+        changelog,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    if match is None:
+        return None
+    return match.group(0).strip()
+
+
+def _decode_scalar(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
+def _read_block(lines: list[str], start: int, style: str) -> tuple[str, int]:
+    block: list[str] = []
+    indent: int | None = None
+    index = start
+    while index < len(lines):
+        line = lines[index]
+        if line.strip() == "":
+            block.append("")
+            index += 1
+            continue
+
+        line_indent = len(line) - len(line.lstrip(" "))
+        if line_indent == 0:
+            break
+        if indent is None:
+            indent = line_indent
+        block.append(line[indent:])
+        index += 1
+
+    if style == ">":
+        return " ".join(part.strip() for part in block if part.strip()), index
+    return "\n".join(block).strip(), index
+
+
+def _parse_fragment(path: Path) -> Fragment:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    values: dict[str, str] = {}
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if not line.strip() or line.lstrip().startswith("#") or line.startswith(" "):
+            index += 1
+            continue
+
+        match = re.match(r"^([^:]+):(?:\s*(.*))?$", line)
+        if match is None:
+            index += 1
+            continue
+
+        key = match.group(1).strip()
+        value = (match.group(2) or "").strip()
+        if value and value[0] in {"|", ">"}:
+            values[key], index = _read_block(lines, index + 1, value[0])
+            continue
+
+        values[key] = _decode_scalar(value)
+        index += 1
+
+    body = values.get("body", "").strip()
+    if not body:
+        raise ValueError(f"missing body in {path}")
+    return Fragment(
+        path=path,
+        kind=values.get("kind", "Changed").strip() or "Changed",
+        body=body,
+        time=values.get("time", "").strip(),
+    )
+
+
+def _unreleased_fragments(root: Path) -> list[Fragment]:
+    directory = root / ".changes" / "unreleased"
+    if not directory.exists():
+        return []
+    fragments = [
+        _parse_fragment(path)
+        for path in sorted(directory.iterdir())
+        if path.suffix in {".yaml", ".yml"}
+    ]
+    return sorted(fragments, key=lambda fragment: (fragment.time, fragment.path.name))
+
+
+def _bullet(body: str) -> list[str]:
+    lines = body.splitlines() or [body]
+    result = [f"- {lines[0]}"]
+    result.extend(f"  {line}" for line in lines[1:])
+    return result
+
+
+def _render_unreleased_fragments(root: Path) -> str:
+    fragments = _unreleased_fragments(root)
+    lines = ["Unreleased fragments since the last release:"]
+    if not fragments:
+        lines.extend(["", "No unreleased change fragments."])
+        return "\n".join(lines)
+
+    grouped: dict[str, list[Fragment]] = {}
+    for fragment in fragments:
+        grouped.setdefault(fragment.kind, []).append(fragment)
+
+    ordered_kinds = list(KIND_ORDER)
+    ordered_kinds.extend(kind for kind in sorted(grouped) if kind not in KIND_ORDER)
+    for kind in ordered_kinds:
+        kind_fragments = grouped.get(kind, [])
+        if not kind_fragments:
+            continue
+        lines.extend(["", f"### {kind}"])
+        for fragment in kind_fragments:
+            lines.extend(_bullet(fragment.body))
+    return "\n".join(lines)
+
+
+def build_release_notes(*, root: Path, version: str, prerelease: bool) -> str:
+    if prerelease:
+        release_notes = f"Reploy {version}\n\n{_render_unreleased_fragments(root)}"
+    else:
+        release_notes = _read_changelog_section(root, version)
+        if release_notes is None:
+            raise ValueError(
+                f"CHANGELOG.md does not contain release notes for {version}; "
+                "run changie batch and changie merge before publishing."
+            )
+
+    release_notes += f"""
+
+PyPI:
+- reploy=={version}
+
+Binaries:
+- reploy-linux-amd64
+- reploy-linux-arm64
+"""
+    return release_notes.strip() + "\n"
+
+
+def _parse_bool(value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes"}:
+        return True
+    if normalized in {"0", "false", "no"}:
+        return False
+    raise argparse.ArgumentTypeError("expected true or false")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Build GitHub Release notes.")
+    parser.add_argument("--root", default=".", help=argparse.SUPPRESS)
+    parser.add_argument("--version", required=True, help="release version")
+    parser.add_argument(
+        "--prerelease",
+        required=True,
+        type=_parse_bool,
+        help="whether this release is a prerelease",
+    )
+    parser.add_argument("--out", required=True, help="output markdown file")
+    namespace = parser.parse_args(argv)
+
+    try:
+        notes = build_release_notes(
+            root=Path(namespace.root).resolve(),
+            version=namespace.version,
+            prerelease=namespace.prerelease,
+        )
+        Path(namespace.out).write_text(notes, encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        print(f"build_release_notes: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

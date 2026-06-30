@@ -16,8 +16,10 @@ changie merge
 ```
 
 Commit the updated `CHANGELOG.md`, the new `.changes/<version>.md`, and the
-removed unreleased fragments before publishing. Dev releases do not need to
-consume fragments.
+removed unreleased fragments before publishing.
+
+Dev releases do not consume fragments. Their GitHub Release notes include a raw
+list of the current unreleased fragments since the last final release.
 
 Build release distributions locally:
 

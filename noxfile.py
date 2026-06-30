@@ -20,6 +20,7 @@ BUILD_DEPENDENCIES = (
 PY_COMPILE_FILES = (
     "tools/build_reploy",
     "tools/build_release_dists",
+    "tools/build_release_notes",
     "tools/e2e_smoke",
     "packaging/python/hatch_build.py",
     "tests/e2e/python/packages/smoke-suite/src/smoke_suite/cli.py",

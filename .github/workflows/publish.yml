@@ -90,41 +90,10 @@ jobs:
           mkdir -p release-assets
           install -m 0755 dist-publish/linux-amd64/reploy release-assets/reploy-linux-amd64
           install -m 0755 dist-publish/linux-arm64/reploy release-assets/reploy-linux-arm64
-          python - <<'PY'
-          from __future__ import annotations
-
-          import os
-          import re
-          from pathlib import Path
-
-          version = os.environ["VERSION"]
-          prerelease = os.environ["PRERELEASE"] == "true"
-          changelog = Path("CHANGELOG.md").read_text()
-          match = re.search(
-              rf"^## {re.escape(version)}(?:\s|$).*?(?=^## |\Z)",
-              changelog,
-              flags=re.MULTILINE | re.DOTALL,
-          )
-          if match:
-              release_notes = match.group(0).strip()
-          elif prerelease:
-              release_notes = f"Reploy {version}"
-          else:
-              raise SystemExit(
-                  f"CHANGELOG.md does not contain release notes for {version}; "
-                  "run changie batch and changie merge before publishing."
-              )
-          release_notes += f"""
-
-          PyPI:
-          - reploy=={version}
-
-          Binaries:
-          - reploy-linux-amd64
-          - reploy-linux-arm64
-          """
-          Path("release-notes.md").write_text(release_notes.strip() + "\n")
-          PY
+          python tools/build_release_notes \
+            --version "$VERSION" \
+            --prerelease "$PRERELEASE" \
+            --out release-notes.md
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
