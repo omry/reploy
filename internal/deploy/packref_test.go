@@ -140,6 +140,82 @@ func TestParseGitPackRefWithCommitHashIsPinned(t *testing.T) {
 	}
 }
 
+func TestParseGitHubPackRefDefaultsToHTTPS(t *testing.T) {
+	raw := "github://omry/arbiter/server/src/arbiter_server/reploy/arbiter.blueprint.yaml?ref=main"
+	ref, err := ParsePackRef(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Raw != raw {
+		t.Fatalf("raw = %q", ref.Raw)
+	}
+	if ref.Scheme != "git" {
+		t.Fatalf("scheme = %q", ref.Scheme)
+	}
+	if ref.Source != "https://github.com/omry/arbiter.git" {
+		t.Fatalf("source = %q", ref.Source)
+	}
+	if ref.Subdir != "server/src/arbiter_server/reploy/arbiter.blueprint.yaml" {
+		t.Fatalf("subdir = %q", ref.Subdir)
+	}
+	if ref.Query.Get("ref") != "main" {
+		t.Fatalf("query = %#v", ref.Query)
+	}
+	if ref.IsPinned {
+		t.Fatalf("branch github refs should resolve before being considered pinned")
+	}
+}
+
+func TestParseGitHubPackRefSupportsSSHTransport(t *testing.T) {
+	ref, err := ParsePackRef("github://omry/arbiter/server/src/arbiter_server/reploy/arbiter.blueprint.yaml?ref=main&transport=ssh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Source != "ssh://git@github.com/omry/arbiter.git" {
+		t.Fatalf("source = %q", ref.Source)
+	}
+	if ref.Query.Get("transport") != "" {
+		t.Fatalf("transport leaked into git query: %#v", ref.Query)
+	}
+	if err := validateGitPackRef(ref); err != nil {
+		t.Fatalf("ssh git ref did not validate: %v", err)
+	}
+}
+
+func TestParseGitHubPackRefRequiresExplicitBlueprintFilePath(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want string
+	}{
+		{
+			raw:  "github://omry/arbiter?ref=main",
+			want: "github blueprint refs must include an explicit blueprint file path",
+		},
+		{
+			raw:  "github://omry/arbiter/server/src/arbiter_server/reploy?ref=main",
+			want: "github blueprint path must point to a *.blueprint.yaml file: server/src/arbiter_server/reploy",
+		},
+	} {
+		_, err := ParsePackRef(tc.raw)
+		if err == nil {
+			t.Fatalf("expected error for %s", tc.raw)
+		}
+		if err.Error() != tc.want {
+			t.Fatalf("err for %s = %v", tc.raw, err)
+		}
+	}
+}
+
+func TestParseGitHubPackRefRejectsUnsupportedQuery(t *testing.T) {
+	_, err := ParsePackRef("github://omry/arbiter/server/src/arbiter_server/reploy/arbiter.blueprint.yaml?path=demo")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if err.Error() != "unsupported github blueprint query parameter: path" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestParsePyPIPackRefRejectsDoubleSlashSubdir(t *testing.T) {
 	_, err := ParsePackRef("pypi:demo-suite//demo_suite/reploy")
 	if err == nil {

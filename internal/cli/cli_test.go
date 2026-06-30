@@ -504,10 +504,28 @@ func TestDockerStageHelp(t *testing.T) {
 		"reploy [--docker] stage --update [APP_REF] [OPTIONS]",
 		"Create a staging directory from an app blueprint reference.",
 		"Use --update to refresh an existing staging directory",
+		"Indexed shorthand from the Reploy blueprint index:",
+		"arbiter-server==0.4.2",
+		"Local filesystem refs:",
+		"./PATH",
+		"../PATH",
+		"/ABS/PATH",
+		"file:PATH",
+		"Python provider refs:",
+		"pypi://PACKAGE/PATH/APP.blueprint.yaml",
+		"pypi://PACKAGE/PATH/APP.blueprint.yaml?version=VERSION",
+		"Git provider refs:",
+		"github://ORG/REPO/PATH/APP.blueprint.yaml?ref=REF",
+		"github://ORG/REPO/PATH/APP.blueprint.yaml?ref=REF&transport=ssh",
+		"Local paths without file: must start with . or /.",
+		"PyPI paths must point to the blueprint file inside the package.",
+		"GitHub paths must point to the blueprint file inside the repository.",
 		"--dir DIR",
 		"--update",
 		"--force",
+		"Python provider options:",
 		"--requirement REQ",
+		"Exact Python package pin or absolute container path for requirements.txt",
 		"Show stage help",
 	} {
 		if !strings.Contains(stdout, want) {
@@ -516,6 +534,11 @@ func TestDockerStageHelp(t *testing.T) {
 	}
 	if strings.Contains(stdout, "init") {
 		t.Fatalf("stage help contained old init wording:\n%s", stdout)
+	}
+	for _, hidden := range []string{"git:https://HOST/REPO.git", "git:https://github.com"} {
+		if strings.Contains(stdout, hidden) {
+			t.Fatalf("stage help exposed hidden git ref %q:\n%s", hidden, stdout)
+		}
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
@@ -852,6 +875,60 @@ func TestParsePackRefArgumentSupportsPyPIHashBlueprintPath(t *testing.T) {
 	}
 }
 
+func TestParsePackRefArgumentSupportsBareLocalPaths(t *testing.T) {
+	absolutePath := filepath.Join(t.TempDir(), "demo.blueprint.yaml")
+	for _, value := range []string{"./demo.blueprint.yaml", "../demo", absolutePath} {
+		ref, err := parsePackRefArgument(value)
+		if err != nil {
+			t.Fatalf("parse %q: %v", value, err)
+		}
+		if ref.Scheme != "file" || ref.Source != value || ref.Raw != value {
+			t.Fatalf("ref for %q = %#v", value, ref)
+		}
+	}
+}
+
+func TestParsePackRefArgumentDoesNotGuessPlainPath(t *testing.T) {
+	indexPath := filepath.Join(t.TempDir(), "reploy-blueprint-index.json")
+	if err := os.WriteFile(indexPath, []byte(`{"schema_version":1,"blueprints":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(packIndexURLEnv, "file:"+indexPath)
+
+	_, err := parsePackRefArgument("demo/path")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), `unknown blueprint shorthand "demo/path"`) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestParseDockerCommandOptionsWarnsWhenShorthandMatchesLocalPath(t *testing.T) {
+	workDir := t.TempDir()
+	t.Chdir(workDir)
+	if err := os.Mkdir("demo-server", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setCLITestPackIndex(t)
+
+	options, err := parseDockerCommandOptions([]string{"demo-server"}, true, dockerCommandParseConfig{AllowUpdate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(options.Warnings) != 1 {
+		t.Fatalf("warnings = %#v", options.Warnings)
+	}
+	for _, want := range []string{`APP_REF "demo-server" also exists as a local path`, "treating it as a blueprint shorthand", "Use ./demo-server or file:demo-server"} {
+		if !strings.Contains(options.Warnings[0], want) {
+			t.Fatalf("warning missing %q:\n%s", want, options.Warnings[0])
+		}
+	}
+	if options.Pack.Raw != "demo-server" || options.Pack.Scheme != "pypi" {
+		t.Fatalf("pack = %#v", options.Pack)
+	}
+}
+
 func TestParsePackRefArgumentSupportsGitHTTPSRef(t *testing.T) {
 	ref, err := parsePackRefArgument("git:https://github.com/acme/demo.git#demo_pkg/reploy?ref=main")
 	if err != nil {
@@ -862,6 +939,43 @@ func TestParsePackRefArgumentSupportsGitHTTPSRef(t *testing.T) {
 	}
 	if ref.Query.Get("ref") != "main" {
 		t.Fatalf("query = %#v", ref.Query)
+	}
+}
+
+func TestParsePackRefArgumentSupportsGitHubRef(t *testing.T) {
+	raw := "github://acme/demo/demo_pkg/reploy/demo.blueprint.yaml?ref=main"
+	ref, err := parsePackRefArgument(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Raw != raw || ref.Scheme != "git" || ref.Source != "https://github.com/acme/demo.git" || ref.Subdir != "demo_pkg/reploy/demo.blueprint.yaml" {
+		t.Fatalf("ref = %#v", ref)
+	}
+	if ref.Query.Get("ref") != "main" {
+		t.Fatalf("query = %#v", ref.Query)
+	}
+}
+
+func TestDockerStageGitHubRefErrorDoesNotExposeInternalGitRef(t *testing.T) {
+	code, stdout, stderr := runCLI("stage", "github://acme/demo/demo_pkg/reploy?ref=main")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "github blueprint path must point to a *.blueprint.yaml file") {
+		t.Fatalf("stderr did not contain github-facing error:\n%s", stderr)
+	}
+	for _, leaked := range []string{
+		"git:",
+		"https://github.com/acme/demo.git",
+		"ssh://git@github.com/acme/demo.git",
+		"git blueprint",
+	} {
+		if strings.Contains(stderr, leaked) {
+			t.Fatalf("stderr exposed internal git representation %q:\n%s", leaked, stderr)
+		}
 	}
 }
 
@@ -1046,6 +1160,53 @@ func TestDockerInitUsesDefaultDeploymentDir(t *testing.T) {
 	}
 }
 
+func TestDockerInitAcceptsBareDotRelativePath(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	t.Chdir(packDir)
+
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, ".")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(deployDir, dockerdeploy.StateFileName)); err != nil {
+		t.Fatalf("missing state: %v", err)
+	}
+	if !strings.Contains(stdout, "created staging directory for demo: "+deployDir) {
+		t.Fatalf("stdout did not include staging summary:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerInitWarnsWhenShorthandMatchesLocalPath(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	workDir := t.TempDir()
+	t.Chdir(workDir)
+	if err := os.Mkdir("demo", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(t.TempDir(), "reploy-blueprint-index.json")
+	indexContent := fmt.Sprintf(`{"schema_version":1,"blueprints":{"demo":{"ref":%q}}}`, "file:"+packDir)
+	if err := os.WriteFile(indexPath, []byte(indexContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(packIndexURLEnv, "file:"+indexPath)
+
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "demo")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stderr, `reploy warning: APP_REF "demo" also exists as a local path`) {
+		t.Fatalf("stderr missing shorthand/local path warning:\n%s", stderr)
+	}
+	if !strings.Contains(stdout, "created staging directory for demo: "+deployDir) {
+		t.Fatalf("stdout did not include staging summary:\n%s", stdout)
+	}
+}
+
 func TestDockerInitExistingDefaultDeploymentSuggestsUpdate(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	workDir := t.TempDir()
@@ -1081,6 +1242,26 @@ func TestDockerInitRequiresPack(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "APP_REF is required") {
 		t.Fatalf("stderr did not contain required blueprint message:\n%s", stderr)
+	}
+	for _, want := range []string{
+		"Usage: reploy [--docker] stage APP_REF [OPTIONS]",
+		"arbiter-server==VERSION",
+		"pypi://PACKAGE/PATH/APP.blueprint.yaml",
+		"pypi://PACKAGE/PATH/APP.blueprint.yaml?version=VERSION",
+		"github://ORG/REPO/PATH/APP.blueprint.yaml?ref=REF",
+		"./PATH",
+		"/ABS/PATH",
+		"file:PATH",
+		"GitHub paths must point to the blueprint file inside the repository.",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr)
+		}
+	}
+	for _, stale := range []string{"source:PATH"} {
+		if strings.Contains(stderr, stale) {
+			t.Fatalf("stderr contains stale ref guidance %q:\n%s", stale, stderr)
+		}
 	}
 }
 

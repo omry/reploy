@@ -25,6 +25,9 @@ func ParsePackRef(raw string) (PackRef, error) {
 	if !ok || scheme == "" || rest == "" {
 		return PackRef{}, fmt.Errorf("blueprint reference must use scheme:value syntax")
 	}
+	if scheme == "github" {
+		return parseGitHubURLPackRef(raw)
+	}
 	if !isSupportedPackScheme(scheme) {
 		return PackRef{}, fmt.Errorf("unsupported blueprint reference scheme: %s", scheme)
 	}
@@ -79,6 +82,69 @@ func ParsePackRef(raw string) (PackRef, error) {
 		Subdir:   subdir,
 		Query:    query,
 		IsPinned: packRefIsPinned(scheme, source, query),
+	}, nil
+}
+
+func parseGitHubURLPackRef(raw string) (PackRef, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return PackRef{}, fmt.Errorf("invalid github blueprint reference: %w", err)
+	}
+	owner := parsed.Host
+	if owner == "" {
+		return PackRef{}, fmt.Errorf("github blueprint reference owner must not be empty")
+	}
+	pathParts := strings.Split(strings.TrimPrefix(parsed.Path, "/"), "/")
+	if len(pathParts) == 0 || strings.TrimSpace(pathParts[0]) == "" {
+		return PackRef{}, fmt.Errorf("github blueprint reference repo must not be empty")
+	}
+	repo := strings.TrimSuffix(pathParts[0], ".git")
+	if strings.TrimSpace(repo) == "" {
+		return PackRef{}, fmt.Errorf("github blueprint reference repo must not be empty")
+	}
+
+	blueprintPath := strings.Join(pathParts[1:], "/")
+	if blueprintPath == "" {
+		return PackRef{}, fmt.Errorf("github blueprint refs must include an explicit blueprint file path")
+	}
+	if !isBlueprintManifestPath(blueprintPath) {
+		return PackRef{}, fmt.Errorf("github blueprint path must point to a %s file: %s", BlueprintManifestGlob, blueprintPath)
+	}
+	query := parsed.Query()
+	for key := range query {
+		if key != "ref" && key != "transport" {
+			return PackRef{}, fmt.Errorf("unsupported github blueprint query parameter: %s", key)
+		}
+	}
+	if len(query["ref"]) > 1 {
+		return PackRef{}, fmt.Errorf("github blueprint ref query must be specified at most once")
+	}
+	if len(query["transport"]) > 1 {
+		return PackRef{}, fmt.Errorf("github blueprint transport query must be specified at most once")
+	}
+	transport := query.Get("transport")
+	if transport == "" {
+		transport = "https"
+	}
+	query.Del("transport")
+
+	source := ""
+	switch transport {
+	case "https":
+		source = "https://github.com/" + owner + "/" + repo + ".git"
+	case "ssh":
+		source = "ssh://git@github.com/" + owner + "/" + repo + ".git"
+	default:
+		return PackRef{}, fmt.Errorf("unsupported github blueprint transport: %s", transport)
+	}
+
+	return PackRef{
+		Raw:      raw,
+		Scheme:   "git",
+		Source:   source,
+		Subdir:   blueprintPath,
+		Query:    query,
+		IsPinned: packRefIsPinned("git", source, query),
 	}, nil
 }
 

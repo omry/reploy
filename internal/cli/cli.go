@@ -21,6 +21,7 @@ import (
 
 const defaultPackIndexURL = "https://raw.githubusercontent.com/omry/reploy/main/blueprint-index.json"
 const packIndexURLEnv = "REPLOY_BLUEPRINT_INDEX_URL"
+const appRefUsageHint = "use an indexed shorthand such as arbiter-server or arbiter-server==VERSION, a provider ref such as pypi://PACKAGE/PATH/APP.blueprint.yaml or github://ORG/REPO/PATH/APP.blueprint.yaml?ref=REF, or a local path starting with . or /"
 
 var dockerDirectInstall = dockerdeploy.DirectInstall
 var dockerInstall = dockerdeploy.Install
@@ -224,9 +225,10 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
 		options, err := parseDockerCommandOptions(args[1:], true, dockerCommandParseConfig{AllowUpdate: true})
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
-			printDockerShortUsage(stderr)
+			printDockerStageHelp(stderr)
 			return 2
 		}
+		printWarnings(stderr, options.Warnings)
 		if options.Update {
 			options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
 			if err != nil {
@@ -1011,6 +1013,7 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 		printDockerShortUsage(stderr)
 		return 2
 	}
+	printWarnings(stderr, options.Warnings)
 	stopSpinner := func(bool) {}
 	if !options.DryRun {
 		if options.Pack.Raw != "" {
@@ -1109,6 +1112,7 @@ type dockerInstallOptions struct {
 	Dir           string
 	DirExplicit   bool
 	Pack          deploy.PackRef
+	Warnings      []string
 	Target        string
 	Service       string
 	PortOverrides []dockerdeploy.PortOverride
@@ -1209,11 +1213,14 @@ func parseDockerInstallOptions(args []string) (dockerInstallOptions, error) {
 			if options.Pack.Raw != "" {
 				return dockerInstallOptions{}, fmt.Errorf("install app ref may only be provided once")
 			}
-			ref, err := parsePackRefArgument(arg)
+			ref, warning, err := parsePackRefArgumentWithWarning(arg)
 			if err != nil {
 				return dockerInstallOptions{}, err
 			}
 			options.Pack = ref
+			if warning != "" {
+				options.Warnings = append(options.Warnings, warning)
+			}
 		}
 	}
 	if options.Dir == "" {
@@ -1594,6 +1601,7 @@ type dockerCommandOptions struct {
 	Dir          string
 	DirExplicit  bool
 	Pack         deploy.PackRef
+	Warnings     []string
 	Force        bool
 	Update       bool
 	Requirements []string
@@ -1647,11 +1655,14 @@ func parseDockerCommandOptions(args []string, requirePack bool, configs ...docke
 				if packSet {
 					return dockerCommandOptions{}, fmt.Errorf("APP_REF may only be provided once")
 				}
-				ref, err := parsePackRefArgument(arg)
+				ref, warning, err := parsePackRefArgumentWithWarning(arg)
 				if err != nil {
 					return dockerCommandOptions{}, err
 				}
 				options.Pack = ref
+				if warning != "" {
+					options.Warnings = append(options.Warnings, warning)
+				}
 				packSet = true
 				continue
 			}
@@ -1679,7 +1690,7 @@ func parseDockerCommandOptions(args []string, requirePack bool, configs ...docke
 		}
 	}
 	if requirePack && !options.Update && options.Pack.Raw == "" {
-		return dockerCommandOptions{}, fmt.Errorf("APP_REF is required; use a blueprint shorthand from the Reploy blueprint index or an explicit ref such as git:https://HOST/REPO.git, source:PATH, file:PATH, or pypi://PACKAGE/PATH/APP.blueprint.yaml")
+		return dockerCommandOptions{}, fmt.Errorf("APP_REF is required; %s", appRefUsageHint)
 	}
 	return options, nil
 }
@@ -1710,26 +1721,63 @@ func packDisplayName(ref deploy.PackRef) string {
 }
 
 func parsePackRefArgument(value string) (deploy.PackRef, error) {
+	ref, _, err := parsePackRefArgumentWithWarning(value)
+	return ref, err
+}
+
+func parsePackRefArgumentWithWarning(value string) (deploy.PackRef, string, error) {
 	original := strings.TrimSpace(value)
 	expanded := original
+	warning := ""
 	if !hasPackRefScheme(original) {
-		indexExpanded, found, err := expandPackShorthand(original)
-		if err != nil {
-			return deploy.PackRef{}, err
+		if localRef, ok := localPathPackRef(original); ok {
+			expanded = localRef
+		} else {
+			warning = shorthandLocalPathWarning(original)
+			indexExpanded, found, err := expandPackShorthand(original)
+			if err != nil {
+				return deploy.PackRef{}, "", err
+			}
+			if !found {
+				return deploy.PackRef{}, "", fmt.Errorf("unknown blueprint shorthand %q in Reploy blueprint index %s; %s", packShorthandName(original), packIndexURL(), appRefUsageHint)
+			}
+			expanded = indexExpanded
 		}
-		if !found {
-			return deploy.PackRef{}, fmt.Errorf("unknown blueprint shorthand %q in Reploy blueprint index %s; use an explicit ref such as git:https://HOST/REPO.git, source:PATH, file:PATH, or pypi://PACKAGE/PATH/APP.blueprint.yaml", packShorthandName(original), packIndexURL())
-		}
-		expanded = indexExpanded
 	}
 	ref, err := deploy.ParsePackRef(expanded)
 	if err != nil {
-		return deploy.PackRef{}, err
+		return deploy.PackRef{}, "", err
 	}
 	if expanded != original {
 		ref.Raw = original
 	}
-	return ref, nil
+	return ref, warning, nil
+}
+
+func localPathPackRef(value string) (string, bool) {
+	if value == "" {
+		return "", false
+	}
+	if filepath.IsAbs(value) || strings.HasPrefix(value, ".") {
+		return "file:" + value, true
+	}
+	return "", false
+}
+
+func shorthandLocalPathWarning(value string) string {
+	if value == "" {
+		return ""
+	}
+	if _, err := os.Stat(value); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("APP_REF %q also exists as a local path; treating it as a blueprint shorthand. Use %s or %s for the local path.", value, shellQuoteArg("./"+value), shellQuoteArg("file:"+value))
+}
+
+func printWarnings(output io.Writer, warnings []string) {
+	for _, warning := range warnings {
+		fmt.Fprintf(output, "reploy warning: %s\n", warning)
+	}
 }
 
 func hasPackRefScheme(value string) bool {
@@ -1985,13 +2033,13 @@ Target options:
 
 App refs:
   APP_REF     App blueprint reference for stage.
-              Use an indexed shorthand, git:https://HOST/REPO.git, source:PATH, file:PATH, or pypi://PACKAGE/PATH/APP.blueprint.yaml.
-              Add ==VERSION to an indexed shorthand to pin a release.
+              Indexed shorthand: arbiter-server or arbiter-server==VERSION.
+              Local development refs such as ./PATH, /ABS/PATH, or file:PATH are also accepted.
+              Python provider refs use pypi://PACKAGE/PATH/APP.blueprint.yaml.
+              Git provider refs use github://ORG/REPO/PATH/APP.blueprint.yaml?ref=REF.
 
 Staging options:
   --dir DIR    Staging directory, default current staging dir or reploy-staging
-  --requirement REQ
-              Exact package pin or absolute container path for requirements.txt
   --extra ROOT Add/remove an explicit bundle root; accepts comma-separated roots
   --force      With stage --update, overwrite generated files
   --preinstall Run install-readiness doctor checks
@@ -2023,6 +2071,10 @@ Staging options:
   --tail N     Show only the last N log lines
   --timeout DURATION
               With test, readiness timeout for running services
+
+Python provider options:
+  --requirement REQ
+              Exact Python package pin or absolute container path for requirements.txt
 
 Options:
   -h, --help   Show help
@@ -2168,13 +2220,13 @@ Bundle:
 
 App refs:
   APP_REF     App blueprint reference for stage.
-              Use an indexed shorthand, git:https://HOST/REPO.git, source:PATH, file:PATH, or pypi://PACKAGE/PATH/APP.blueprint.yaml.
-              Add ==VERSION to an indexed shorthand to pin a release.
+              Indexed shorthand: arbiter-server or arbiter-server==VERSION.
+              Local development refs such as ./PATH, /ABS/PATH, or file:PATH are also accepted.
+              Python provider refs use pypi://PACKAGE/PATH/APP.blueprint.yaml.
+              Git provider refs use github://ORG/REPO/PATH/APP.blueprint.yaml?ref=REF.
 
 Options:
   --dir DIR    Staging directory, default current staging dir or reploy-staging
-  --requirement REQ
-              Exact package pin or absolute container path for requirements.txt
   --extra ROOT Add/remove an explicit bundle root; accepts comma-separated roots
   --force      With stage --update, overwrite generated files
   --preinstall Run install-readiness doctor checks
@@ -2206,6 +2258,10 @@ Options:
   --tail N     Show only the last N log lines
   --timeout DURATION
               With test, readiness timeout for running services
+
+Python provider options:
+  --requirement REQ
+              Exact Python package pin or absolute container path for requirements.txt
   -h, --help   Show help
 `, "\n"))
 }
@@ -2230,15 +2286,36 @@ Create a staging directory from an app blueprint reference.
 Use --update to refresh an existing staging directory, optionally from a new ref.
 
 APP_REF:
-  Use an indexed shorthand, git:https://HOST/REPO.git, source:PATH, file:PATH, or pypi://PACKAGE/PATH/APP.blueprint.yaml.
-  Add ==VERSION to an indexed shorthand to pin a release.
+  Indexed shorthand from the Reploy blueprint index:
+    arbiter-server
+    arbiter-server==0.4.2
+
+  Local filesystem refs:
+    ./PATH
+    ../PATH
+    /ABS/PATH
+    file:PATH
+
+  Python provider refs:
+    pypi://PACKAGE/PATH/APP.blueprint.yaml
+    pypi://PACKAGE/PATH/APP.blueprint.yaml?version=VERSION
+
+  Git provider refs:
+    github://ORG/REPO/PATH/APP.blueprint.yaml?ref=REF
+    github://ORG/REPO/PATH/APP.blueprint.yaml?ref=REF&transport=ssh
+
+  Local paths without file: must start with . or /.
+  PyPI paths must point to the blueprint file inside the package.
+  GitHub paths must point to the blueprint file inside the repository.
 
 Options:
   --dir DIR    Staging directory to create, default reploy-staging
   --update     Update an existing staging directory instead of creating one
   --force      With --update, overwrite locally edited generated files
+
+Python provider options:
   --requirement REQ
-              Exact package pin or absolute container path for requirements.txt
+              Exact Python package pin or absolute container path for requirements.txt
   -h, --help   Show stage help
 `, "\n"))
 }

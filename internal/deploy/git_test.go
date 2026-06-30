@@ -61,6 +61,47 @@ func TestLoadGitPackResolvesBranchToCachedCommit(t *testing.T) {
 	}
 }
 
+func TestValidateGitPackRefUsesGitHubFacingErrors(t *testing.T) {
+	err := validateGitPackRef(PackRef{
+		Raw:    "github://acme/demo/demo_pkg/reploy/demo.blueprint.yaml?ref=main",
+		Scheme: "git",
+		Source: "ftp://github.com/acme/demo.git",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "github blueprint source must use https, ssh, or file") {
+		t.Fatalf("err = %v", err)
+	}
+	for _, leaked := range []string{
+		"git:",
+		"ftp://github.com/acme/demo.git",
+		"git blueprint",
+	} {
+		if strings.Contains(err.Error(), leaked) {
+			t.Fatalf("error exposed internal git representation %q: %v", leaked, err)
+		}
+	}
+}
+
+func TestValidateGitPackRefUsesGitHubFacingErrorsForShorthand(t *testing.T) {
+	err := validateGitPackRef(PackRef{
+		Raw:    "demo-server",
+		Scheme: "git",
+		Source: "https://github.com/acme/demo.git",
+		Query:  url.Values{"path": []string{"demo_pkg/reploy/demo.blueprint.yaml"}},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "unsupported github blueprint query parameter: path") {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), "git blueprint") || strings.Contains(err.Error(), "git:") {
+		t.Fatalf("error exposed internal git representation: %v", err)
+	}
+}
+
 func testGitSourcePack(t *testing.T) (string, string) {
 	t.Helper()
 	sourceRoot := t.TempDir()

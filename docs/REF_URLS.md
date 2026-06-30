@@ -57,8 +57,7 @@ ssh://git@github.com/org/repo.git?ref=v1.2.3&path=path/to/app.blueprint.yaml
 ```
 
 `ref` may be a branch, tag, or commit hash. `path` points to the blueprint file
-inside the repository. If `path` is omitted, Reploy uses the provider
-convention for locating the blueprint.
+inside the repository.
 
 ## Provider Schemes
 
@@ -80,17 +79,20 @@ github://omry/arbiter/server/src/arbiter_server/reploy/arbiter.blueprint.yaml?re
 The `transport` query parameter selects the Git transport. It defaults to
 `https`; use `transport=ssh` when the checkout should use SSH credentials.
 
-The default HTTPS transport normalizes to:
+The default HTTPS transport maps to the existing Git provider:
 
 ```text
-https://github.com/omry/arbiter.git?ref=main&path=server/src/arbiter_server/reploy/arbiter.blueprint.yaml
+git:https://github.com/omry/arbiter.git#server/src/arbiter_server/reploy/arbiter.blueprint.yaml?ref=main
 ```
 
-The SSH transport normalizes to:
+The SSH transport maps to:
 
 ```text
-ssh://git@github.com/omry/arbiter.git?ref=main&path=server/src/arbiter_server/reploy/arbiter.blueprint.yaml
+git:ssh://git@github.com/omry/arbiter.git#server/src/arbiter_server/reploy/arbiter.blueprint.yaml?ref=main
 ```
+
+The `github://` path is required and points to the blueprint file. Reploy loads
+that exact file from the checked-out repository.
 
 Reploy may also accept the browser URL users copy from GitHub as input sugar:
 
@@ -109,13 +111,13 @@ structure for arbitrary `https://` hosts.
 
 ## Filesystem
 
-Filesystem refs can be ordinary paths or `file://` URLs. Explicit filesystem
-paths should point to a blueprint file.
+Filesystem refs can be `file://` URLs, absolute paths, or relative paths that
+start with `.`. Explicit filesystem paths should point to a blueprint file.
 
 ```text
 file:///abs/path/to/app.blueprint.yaml
 /abs/path/to/app.blueprint.yaml
-relative/path/to/app.blueprint.yaml
+./relative/path/to/app.blueprint.yaml
 ```
 
 Directory refs may remain useful as compatibility or development shortcuts, but

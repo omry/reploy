@@ -95,25 +95,24 @@ own part of the environment contract.
 
 ### Source Provider
 
-Reploy now has an initial generic Git source provider for HTTPS repositories.
-It fetches source with a built-in Git client, resolves branch and tag refs to a
-commit hash in staging state, locates the blueprint by the Python
-`package_name/reploy` convention unless `#PATH` is supplied, and builds the
-provider package from the checked-out source.
+Reploy now has an initial generic Git source provider for HTTPS and SSH
+repositories. It fetches source with a built-in Git client, resolves branch and
+tag refs to a commit hash in staging state, loads an explicitly selected
+blueprint file when supplied, and builds the provider package from the
+checked-out source.
 
 Current refs:
 
 ```text
-reploy stage git:https://github.com/org/repo.git?ref=main
-reploy install git:https://github.com/org/repo.git#package_name/reploy?ref=v1.2.3
+reploy stage github://org/repo/package_name/reploy/app.blueprint.yaml?ref=main
+reploy stage git:https://github.com/org/repo.git#package_name/reploy/app.blueprint.yaml?ref=main
+reploy install git:https://github.com/org/repo.git#package_name/reploy/app.blueprint.yaml?ref=v1.2.3
 ```
 
 Open questions:
 
 - Should a future blueprint index map Reploy versions or app versions to
   upstream commit hashes?
-- Should GitHub-specific shorthand such as `github:org/repo` exist, or should
-  the generic `git:https://...` form remain the only source-repo spelling?
 - Should additional provider schemes be added for GitLab or Bitbucket after
   there are fixtures and parser tests for their URL layouts?
 - If GitLab is supported, how should Reploy handle nested groups without

@@ -66,6 +66,42 @@ func TestLoadSourcePackUsesProjectConventionAndLocalSource(t *testing.T) {
 	}
 }
 
+func TestLoadSourcePackUsesExplicitBlueprintFile(t *testing.T) {
+	sourceRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceRoot, "pyproject.toml"), []byte("[project]\nname = \"demo-server\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	blueprintDir := filepath.Join(sourceRoot, "demo_server", "reploy")
+	if err := os.MkdirAll(blueprintDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blueprintDir, "other.blueprint.yaml"), []byte(packTestManifest()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	selectedManifest := strings.Replace(packTestManifest(), "id: demo\n", "id: selected\n", 1)
+	if err := os.WriteFile(filepath.Join(blueprintDir, "selected.blueprint.yaml"), []byte(selectedManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := ParsePackRef("source:" + sourceRoot + "#demo_server/reploy/selected.blueprint.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pack, err := LoadPack(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pack.AppID != "selected" {
+		t.Fatalf("app id = %q", pack.AppID)
+	}
+	if pack.Ref.Subdir != "demo_server/reploy/selected.blueprint.yaml" {
+		t.Fatalf("resolved ref = %#v", pack.Ref)
+	}
+	if filepath.Base(pack.ManifestPath) != "selected.blueprint.yaml" {
+		t.Fatalf("manifest path = %q", pack.ManifestPath)
+	}
+}
+
 func TestParsePackManifestReadsDockerLayout(t *testing.T) {
 	manifest, err := ParsePackManifest(packTestManifest())
 	if err != nil {

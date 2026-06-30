@@ -51,28 +51,63 @@ func loadGitPack(ref PackRef) (AppPack, error) {
 }
 
 func validateGitPackRef(ref PackRef) error {
+	label := gitPackRefLabel(ref)
+	sourceForError := ref.Source
+	if isGitHubPackRef(ref) && ref.Raw != "" {
+		sourceForError = ref.Raw
+	}
 	parsed, err := url.Parse(ref.Source)
 	if err != nil || parsed.Scheme == "" {
-		return fmt.Errorf("git blueprint source must be a URL: %s", ref.Source)
+		return fmt.Errorf("%s blueprint source must be a URL: %s", label, sourceForError)
 	}
 	if parsed.Scheme == "https" && parsed.Host == "" {
-		return fmt.Errorf("git blueprint source must be a URL: %s", ref.Source)
+		return fmt.Errorf("%s blueprint source must be a URL: %s", label, sourceForError)
 	}
 	if parsed.Scheme == "file" && parsed.Path == "" {
-		return fmt.Errorf("git blueprint source must be a URL: %s", ref.Source)
+		return fmt.Errorf("%s blueprint source must be a URL: %s", label, sourceForError)
 	}
-	if parsed.Scheme != "https" && parsed.Scheme != "file" {
-		return fmt.Errorf("git blueprint source must use https: %s", ref.Source)
+	if parsed.Scheme == "ssh" && parsed.Host == "" {
+		return fmt.Errorf("%s blueprint source must be a URL: %s", label, sourceForError)
+	}
+	if parsed.Scheme != "https" && parsed.Scheme != "ssh" && parsed.Scheme != "file" {
+		return fmt.Errorf("%s blueprint source must use https, ssh, or file: %s", label, sourceForError)
 	}
 	for key := range ref.Query {
 		if key != "ref" {
-			return fmt.Errorf("unsupported git blueprint query parameter: %s", key)
+			return fmt.Errorf("unsupported %s blueprint query parameter: %s", label, key)
 		}
 	}
 	if len(ref.Query["ref"]) > 1 {
-		return fmt.Errorf("git blueprint ref query must be specified at most once")
+		return fmt.Errorf("%s blueprint ref query must be specified at most once", label)
 	}
 	return nil
+}
+
+func gitPackRefLabel(ref PackRef) string {
+	if isGitHubPackRef(ref) {
+		return "github"
+	}
+	return "git"
+}
+
+func isGitHubPackRef(ref PackRef) bool {
+	if strings.HasPrefix(ref.Raw, "github:") {
+		return true
+	}
+	if packRefRawHasScheme(ref.Raw) {
+		return false
+	}
+	parsed, err := url.Parse(ref.Source)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(parsed.Host, "github.com")
+}
+
+func packRefRawHasScheme(raw string) bool {
+	body, _, _ := strings.Cut(raw, "?")
+	scheme, _, ok := strings.Cut(body, ":")
+	return ok && scheme != ""
 }
 
 func cacheGitCheckout(sourceURL string, revision string) (string, string, error) {

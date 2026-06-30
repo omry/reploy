@@ -341,22 +341,22 @@ func loadSourcePack(ref PackRef) (AppPack, error) {
 }
 
 func loadSourceCheckout(sourceRoot string, requestedSubdir string) (AppPack, string, error) {
-	subdir := strings.Trim(requestedSubdir, "/")
-	if subdir == "" {
+	blueprintPath := strings.Trim(requestedSubdir, "/")
+	if blueprintPath == "" {
 		projectName, err := sourceProjectName(sourceRoot)
 		if err != nil {
 			return AppPack{}, "", err
 		}
-		subdir = defaultSourceBlueprintSubdir(projectName)
+		blueprintPath = defaultSourceBlueprintSubdir(projectName)
 	}
-	blueprintDir := filepath.Join(sourceRoot, filepath.FromSlash(subdir))
-	fileRef := PackRef{Raw: "file:" + blueprintDir, Scheme: "file", Source: blueprintDir}
+	blueprintSource := filepath.Join(sourceRoot, filepath.FromSlash(blueprintPath))
+	fileRef := PackRef{Raw: "file:" + blueprintSource, Scheme: "file", Source: blueprintSource}
 	pack, err := loadFilePack(fileRef)
 	if err != nil {
 		return AppPack{}, "", err
 	}
 	pack.App.Provider.LocalSources = sourceLocalSources(pack, sourceRoot)
-	return pack, filepath.ToSlash(subdir), nil
+	return pack, filepath.ToSlash(blueprintPath), nil
 }
 
 func sourceProjectName(sourceRoot string) (string, error) {
