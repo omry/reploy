@@ -1,0 +1,3 @@
+kind: Fixed
+body: Warn when the install script writes `reploy` but another `reploy` command is first on `PATH`.
+time: 2026-06-30T21:00:00+08:00

@@ -1,0 +1,3 @@
+kind: Changed
+body: Stop showing download progress bars from the install script.
+time: 2026-06-30T20:54:00+08:00

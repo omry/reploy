@@ -85,11 +85,11 @@ download() {
     url="$1"
     dest="$2"
     if command -v curl >/dev/null 2>&1; then
-        curl -fL --progress-bar "$url" -o "$dest"
+        curl -fsSL "$url" -o "$dest"
         return
     fi
     if command -v wget >/dev/null 2>&1; then
-        wget -O "$dest" "$url"
+        wget -nv -O "$dest" "$url"
         return
     fi
     echo "install.sh: missing required command: curl or wget" >&2
@@ -108,6 +108,21 @@ fetch() {
     fi
     echo "install.sh: missing required command: curl or wget" >&2
     exit 1
+}
+
+canonical_path() {
+    path="$1"
+    dir="${path%/*}"
+    base="${path##*/}"
+    if [ "$dir" = "$path" ]; then
+        dir="."
+    fi
+    (cd "$dir" 2>/dev/null && printf '%s/%s\n' "$(pwd -P)" "$base") || printf '%s\n' "$path"
+}
+
+print_path_hint() {
+    echo "Add $install_dir to PATH before other Reploy installations, for example:"
+    echo "  export PATH=\"$install_dir:\$PATH\""
 }
 
 need uname
@@ -171,12 +186,21 @@ echo "  $target_path"
 echo
 "$target_path" --version || true
 
-case ":$PATH:" in
-    *":$install_dir:"*) ;;
-    *)
+resolved_reploy="$(command -v reploy 2>/dev/null || true)"
+if [ -z "$resolved_reploy" ]; then
+    echo
+    echo "reploy is not on PATH."
+    print_path_hint
+else
+    canonical_target="$(canonical_path "$target_path")"
+    canonical_resolved="$(canonical_path "$resolved_reploy")"
+    if [ "$canonical_resolved" != "$canonical_target" ]; then
         echo
-        echo "$install_dir is not on PATH."
-        echo "Add this to your shell profile:"
-        echo "  export PATH=\"$install_dir:\$PATH\""
-        ;;
-esac
+        echo "The installed reploy is not the first reploy on PATH."
+        echo "Installed:"
+        echo "  $target_path"
+        echo "Found on PATH:"
+        echo "  $resolved_reploy"
+        print_path_hint
+    fi
+fi
