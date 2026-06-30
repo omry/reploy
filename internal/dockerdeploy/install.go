@@ -796,6 +796,9 @@ func writeInstalledState(plan installPlan) error {
 		return err
 	}
 	state.Phase = deploy.PhaseInstalled
+	if state.AppID == "" {
+		state.AppID = plan.AppID
+	}
 	state.Install = &deploy.InstallState{
 		TargetDir:      plan.TargetDir,
 		Service:        plan.Service,

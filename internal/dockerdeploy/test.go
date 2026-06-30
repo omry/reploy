@@ -32,6 +32,12 @@ func TestServer(options TestOptions) error {
 	if options.Timeout == 0 {
 		options.Timeout = 30 * time.Second
 	}
+	state, err := loadState(options.Dir)
+	if err != nil {
+		return err
+	}
+	stdout, _ := deploymentOutputWritersForDeployment(options.Dir, state, options.Stdout, nil)
+	options.Stdout = stdout
 	serverURL, err := ServerURL(options.Dir)
 	if err != nil {
 		return err

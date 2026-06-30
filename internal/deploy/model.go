@@ -27,6 +27,7 @@ type DeploymentState struct {
 	ToolVersion           string                `json:"tool_version"`
 	Target                string                `json:"target"`
 	Phase                 Phase                 `json:"phase"`
+	AppID                 string                `json:"app_id,omitempty"`
 	Blueprint             PackRef               `json:"blueprint"`
 	RequestedBlueprintRef string                `json:"requested_blueprint_ref,omitempty"`
 	ResolvedArtifact      *ResolvedPackArtifact `json:"resolved_artifact,omitempty"`

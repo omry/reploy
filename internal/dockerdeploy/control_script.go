@@ -18,6 +18,7 @@ const (
 type controlScriptSpec struct {
 	Mode             controlScriptMode
 	TargetDir        string
+	AppID            string
 	Service          string
 	ComposeProject   string
 	ComposeOverride  bool
@@ -30,6 +31,7 @@ type controlScriptSpec struct {
 func stagingControlScriptContent(pack deploy.AppPack, deployedCommands []deploy.DockerCommandConfig) string {
 	return renderControlScript(controlScriptSpec{
 		Mode:             controlScriptModeStaged,
+		AppID:            pack.AppID,
 		ControlScript:    controlScriptName(pack.AppID),
 		ConfigDir:        pack.Docker.DeploymentDirs.Config,
 		Health:           pack.Docker.Health,
@@ -41,6 +43,7 @@ func controlScriptContent(plan installPlan) string {
 	return renderControlScript(controlScriptSpec{
 		Mode:             controlScriptModeDeployed,
 		TargetDir:        plan.TargetDir,
+		AppID:            plan.AppID,
 		Service:          plan.Service,
 		ComposeProject:   plan.ComposeProject,
 		ComposeOverride:  plan.ComposeOverride,
@@ -105,6 +108,8 @@ quote_for_shell() {
 append_shell_arg() {
   shell_command="${shell_command} $(quote_for_shell "$1")"
 }
+
+%s
 
 %s
 
@@ -199,16 +204,26 @@ case "$cmd" in
   health)
     url="$(health_url)"
     if command -v curl >/dev/null 2>&1; then
+      shell_command=""
+      append_shell_arg "curl"
+      append_shell_arg "-fsS"
       if [ -n "$curl_insecure_flag" ]; then
-        exec curl -fsS "$curl_insecure_flag" "$url"
+        append_shell_arg "$curl_insecure_flag"
       fi
-      exec curl -fsS "$url"
+      append_shell_arg "$url"
+      %s
+      exit $?
     fi
     if command -v wget >/dev/null 2>&1; then
+      shell_command=""
+      append_shell_arg "wget"
+      append_shell_arg "-qO-"
       if [ -n "$wget_insecure_flag" ]; then
-        exec wget -qO- "$wget_insecure_flag" "$url"
+        append_shell_arg "$wget_insecure_flag"
       fi
-      exec wget -qO- "$url"
+      append_shell_arg "$url"
+      %s
+      exit $?
     fi
     echo "curl or wget is required for health checks" >&2
     exit 1
@@ -224,7 +239,7 @@ case "$cmd" in
     exit 2
     ;;
 esac
-`, controlScriptAssignments(spec), health.SchemeEnv, health.HostEnv, health.PortEnv, defaultString(health.DefaultScheme, "https"), defaultString(health.DefaultHost, "127.0.0.1"), health.DefaultPort, health.Path, insecureFlag, wgetInsecureFlag, spec.ControlScript, controlScriptServiceUsage(spec), controlScriptUsageCommands(spec.DeployedCommands), controlScriptComposeFunctions(spec), spec.ControlScript, controlScriptAppCommandRunner(spec), controlScriptLifecycleCases(spec), controlScriptAppCommandCases(spec.DeployedCommands))
+`, controlScriptAssignments(spec), health.SchemeEnv, health.HostEnv, health.PortEnv, defaultString(health.DefaultScheme, "https"), defaultString(health.DefaultHost, "127.0.0.1"), health.DefaultPort, health.Path, insecureFlag, wgetInsecureFlag, spec.ControlScript, controlScriptServiceUsage(spec), controlScriptUsageCommands(spec.DeployedCommands), controlScriptOutputPrefixFunctions(spec), controlScriptComposeFunctions(spec), spec.ControlScript, controlScriptAppCommandRunner(spec), controlScriptLifecycleCases(spec), controlScriptHealthCommandRunner(spec), controlScriptHealthCommandRunner(spec), controlScriptAppCommandCases(spec.DeployedCommands))
 }
 
 func controlScriptAssignments(spec controlScriptSpec) string {
@@ -264,6 +279,58 @@ func controlScriptServiceUsage(spec controlScriptSpec) string {
 `
 }
 
+func controlScriptOutputPrefixFunctions(spec controlScriptSpec) string {
+	color := "208"
+	label := controlScriptOutputLabel(spec.AppID)
+	return fmt.Sprintf(`
+control_output_prefix() {
+  case "${REPLOY_COLOR:-auto}" in
+    always)
+      printf '\033[38;5;%sm%s\033[0m'
+      ;;
+    never)
+      printf '%s'
+      ;;
+    *)
+      if [ -n "${NO_COLOR:-}" ] || [ ! -t 1 ]; then
+        printf '%s'
+      else
+        printf '\033[38;5;%sm%s\033[0m'
+      fi
+      ;;
+  esac
+}
+
+run_control_shell_command() {
+  reploy_control_command="$1"
+  reploy_control_prefix="$(control_output_prefix)"
+  reploy_control_status_file="$(mktemp "${TMPDIR:-/tmp}/reploy-output-prefix.XXXXXX")" || return 1
+  (
+    set +e
+    sh -c "$reploy_control_command"
+    reploy_control_status="$?"
+    printf '%%s\n' "$reploy_control_status" > "$reploy_control_status_file"
+    exit 0
+  ) 2>&1 | while IFS= read -r reploy_control_line || [ -n "$reploy_control_line" ]; do
+    printf '%%s %%s\n' "$reploy_control_prefix" "$reploy_control_line"
+  done
+  if [ -r "$reploy_control_status_file" ]; then
+    IFS= read -r reploy_control_status < "$reploy_control_status_file"
+    rm -f "$reploy_control_status_file"
+    return "$reploy_control_status"
+  fi
+  return 1
+}`, color, label, label, label, color, label)
+}
+
+func controlScriptOutputLabel(appID string) string {
+	appID = strings.TrimSpace(appID)
+	if appID == "" {
+		return "[reploy]"
+	}
+	return "[" + appID + "]"
+}
+
 func controlScriptComposeFunctions(spec controlScriptSpec) string {
 	projectLines := `  if [ -n "$compose_project" ]; then
     append_shell_arg "--project-name"
@@ -288,7 +355,7 @@ run_compose() {
   for compose_arg in "$@"; do
     append_shell_arg "$compose_arg"
   done
-  exec sh -c "$shell_command"
+  run_control_shell_command "$shell_command"
 }`
 	}
 	return fmt.Sprintf(`append_compose_base() {
@@ -317,7 +384,8 @@ run_as_install_owner() {
   command="$1"
   owner="$(env_value REPLOY_INSTALL_OWNER "")"
   if [ "$(id -u)" != "0" ] || [ -z "$owner" ]; then
-    exec sh -c "$command"
+    sh -c "$command"
+    return $?
   fi
   owner_user="${owner%%:*}"
   owner_group="$owner_user"
@@ -327,25 +395,52 @@ run_as_install_owner() {
   case "$owner_user:$owner_group" in
     *[!0123456789:]*)
       if command -v runuser >/dev/null 2>&1; then
-        exec runuser -u "$owner_user" -- sh -c "$command"
+        runuser -u "$owner_user" -- sh -c "$command"
+        return $?
       fi
       ;;
     *)
       if command -v setpriv >/dev/null 2>&1; then
-        exec setpriv --reuid "$owner_user" --regid "$owner_group" --clear-groups -- sh -c "$command"
+        setpriv --reuid "$owner_user" --regid "$owner_group" --clear-groups -- sh -c "$command"
+        return $?
       fi
       ;;
   esac
   echo "setpriv or runuser is required to run deployed app commands as $owner" >&2
-  exit 1
+  return 1
+}
+
+run_control_owner_command() {
+  reploy_control_command="$1"
+  reploy_control_prefix="$(control_output_prefix)"
+  reploy_control_status_file="$(mktemp "${TMPDIR:-/tmp}/reploy-output-prefix.XXXXXX")" || return 1
+  (
+    set +e
+    run_as_install_owner "$reploy_control_command"
+    reploy_control_status="$?"
+    printf '%s\n' "$reploy_control_status" > "$reploy_control_status_file"
+    exit 0
+  ) 2>&1 | while IFS= read -r reploy_control_line || [ -n "$reploy_control_line" ]; do
+    printf '%s %s\n' "$reploy_control_prefix" "$reploy_control_line"
+  done
+  if [ -r "$reploy_control_status_file" ]; then
+    IFS= read -r reploy_control_status < "$reploy_control_status_file"
+    rm -f "$reploy_control_status_file"
+    return "$reploy_control_status"
+  fi
+  return 1
 }`
 }
 
 func controlScriptAppCommandRunner(spec controlScriptSpec) string {
 	if spec.Mode == controlScriptModeDeployed {
-		return `run_as_install_owner "$shell_command"`
+		return `run_control_owner_command "$shell_command"`
 	}
-	return `exec sh -c "$shell_command"`
+	return `run_control_shell_command "$shell_command"`
+}
+
+func controlScriptHealthCommandRunner(spec controlScriptSpec) string {
+	return `run_control_shell_command "$shell_command"`
 }
 
 func controlScriptLifecycleCases(spec controlScriptSpec) string {
@@ -368,25 +463,56 @@ func controlScriptLifecycleCases(spec controlScriptSpec) string {
 `
 	}
 	return `  up|start)
-    exec systemctl start "$service"
+    shell_command=""
+    append_shell_arg "systemctl"
+    append_shell_arg "start"
+    append_shell_arg "$service"
+    run_control_shell_command "$shell_command"
     ;;
   down|stop)
-    exec systemctl stop "$service"
+    shell_command=""
+    append_shell_arg "systemctl"
+    append_shell_arg "stop"
+    append_shell_arg "$service"
+    run_control_shell_command "$shell_command"
     ;;
   restart)
-    exec systemctl restart "$service"
+    shell_command=""
+    append_shell_arg "systemctl"
+    append_shell_arg "restart"
+    append_shell_arg "$service"
+    run_control_shell_command "$shell_command"
     ;;
   status)
-    exec systemctl status "$service"
+    shell_command=""
+    append_shell_arg "systemctl"
+    append_shell_arg "status"
+    append_shell_arg "$service"
+    run_control_shell_command "$shell_command"
     ;;
   logs)
-    exec journalctl -u "$service" "$@"
+    shell_command=""
+    append_shell_arg "journalctl"
+    append_shell_arg "-u"
+    append_shell_arg "$service"
+    for log_arg in "$@"; do
+      append_shell_arg "$log_arg"
+    done
+    run_control_shell_command "$shell_command"
     ;;
   enable)
-    exec systemctl enable "$service"
+    shell_command=""
+    append_shell_arg "systemctl"
+    append_shell_arg "enable"
+    append_shell_arg "$service"
+    run_control_shell_command "$shell_command"
     ;;
   disable)
-    exec systemctl disable "$service"
+    shell_command=""
+    append_shell_arg "systemctl"
+    append_shell_arg "disable"
+    append_shell_arg "$service"
+    run_control_shell_command "$shell_command"
     ;;
 `
 }
@@ -445,6 +571,7 @@ func controlScriptAppCommandCases(commands []deploy.DockerCommandConfig) string 
 		builder.WriteString("      run_app_command ")
 		builder.WriteString(shellSingleQuote(command.Name))
 		builder.WriteString(" \"$@\"\n")
+		builder.WriteString("      exit $?\n")
 		builder.WriteString("    fi\n")
 	}
 	builder.WriteString("    usage\n")

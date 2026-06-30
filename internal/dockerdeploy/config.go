@@ -48,13 +48,14 @@ func ConfigCheck(options ConfigCheckOptions) error {
 	if options.Dir == "" {
 		options.Dir = DefaultDeploymentDir
 	}
-	runOptions := RunOptions{
-		Stdout: options.Stdout,
-		Stderr: options.Stderr,
-	}
 	state, err := loadState(options.Dir)
 	if err != nil {
 		return err
+	}
+	stdout, stderr := deploymentOutputWritersForDeployment(options.Dir, state, options.Stdout, options.Stderr)
+	runOptions := RunOptions{
+		Stdout: stdout,
+		Stderr: stderr,
 	}
 	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
 	if err != nil {
@@ -84,18 +85,19 @@ func AppCommand(options AppCommandOptions) error {
 	if options.Dir == "" {
 		options.Dir = DefaultDeploymentDir
 	}
-	output := options.Stdout
-	if output == nil {
-		output = os.Stdout
-	}
-	runOptions := RunOptions{
-		Stdin:  appCommandStdin(output),
-		Stdout: options.Stdout,
-		Stderr: options.Stderr,
+	terminalOutput := options.Stdout
+	if terminalOutput == nil {
+		terminalOutput = os.Stdout
 	}
 	state, err := loadState(options.Dir)
 	if err != nil {
 		return err
+	}
+	stdout, stderr := deploymentOutputWritersForDeployment(options.Dir, state, options.Stdout, options.Stderr)
+	runOptions := RunOptions{
+		Stdin:  appCommandStdin(terminalOutput),
+		Stdout: stdout,
+		Stderr: stderr,
 	}
 	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
 	if err != nil {
@@ -117,7 +119,7 @@ func AppCommand(options AppCommandOptions) error {
 	configDisplayDir := appConfigDisplayDir(options.Dir, pack)
 	projectName := installComposeProjectName(state)
 	spec := AppCommandForProject(options.Dir, command.Name, forwardedArgs, projectName, configDisplayDir)
-	spec = withAppTerminalEnv(spec, pack.App.Terminal, output)
+	spec = withAppTerminalEnv(spec, pack.App.Terminal, terminalOutput)
 	err = runTemporaryComposeCommand(
 		runAppCommand,
 		spec,

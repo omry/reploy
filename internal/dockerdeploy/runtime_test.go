@@ -88,7 +88,31 @@ func TestRuntimeUpAutomaticallyPreparesBundle(t *testing.T) {
 	}
 }
 
+func TestRuntimeLifecycleOutputRequiresVerbose(t *testing.T) {
+	dir, _ := makeRuntimeDeployment(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	restoreRuntime := stubRuntimeRunner(func(spec CommandSpec, options RunOptions) error {
+		if options.Stdout != nil || options.Stderr != nil {
+			t.Fatalf("non-verbose lifecycle command should capture output internally: %#v", options)
+		}
+		return nil
+	})
+	defer restoreRuntime()
+
+	if err := Runtime(RuntimeOptions{Dir: dir, Action: "down", Stdout: &stdout, Stderr: &stderr}); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "" {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
 func TestRuntimeUpVerboseStreamsBundlePrepareOutput(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
 	packDir := makeTestPack(t)
 	ref, err := deploy.ParsePackRef("file:" + packDir)
 	if err != nil {
@@ -103,16 +127,22 @@ func TestRuntimeUpVerboseStreamsBundlePrepareOutput(t *testing.T) {
 	var stderr bytes.Buffer
 	commands := []string{}
 	restoreBundle := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
-		if options.Stdout != &stdout || options.Stderr != &stderr {
+		if options.Stdout == nil || options.Stderr == nil {
 			t.Fatalf("bundle prepare should stream verbose output: %#v", options)
 		}
 		switch {
 		case containsInOrder(spec.Args, []string{"wheel", "--no-cache-dir"}):
 			commands = append(commands, "build")
+			if _, err := options.Stdout.Write([]byte("build output\n")); err != nil {
+				return err
+			}
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
 		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
 			commands = append(commands, "check")
+			if _, err := options.Stderr.Write([]byte("check output\n")); err != nil {
+				return err
+			}
 			return nil
 		default:
 			t.Fatalf("unexpected bundle command: %#v", spec.Args)
@@ -122,6 +152,9 @@ func TestRuntimeUpVerboseStreamsBundlePrepareOutput(t *testing.T) {
 	defer restoreBundle()
 	restoreRuntime := stubRuntimeRunner(func(spec CommandSpec, options RunOptions) error {
 		commands = append(commands, strings.Join(spec.Args[len(spec.Args)-2:], " "))
+		if _, err := options.Stdout.Write([]byte("compose output\n")); err != nil {
+			return err
+		}
 		return nil
 	})
 	defer restoreRuntime()
@@ -132,6 +165,15 @@ func TestRuntimeUpVerboseStreamsBundlePrepareOutput(t *testing.T) {
 	want := []string{"build", "check", "up -d"}
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+	if !strings.Contains(stdout.String(), "[STAGING : demo] build output\n") {
+		t.Fatalf("stdout missing staging prefix: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "[STAGING : demo] check output\n") {
+		t.Fatalf("stderr missing staging prefix: %q", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "[STAGING : demo] compose output\n") {
+		t.Fatalf("stdout missing verbose compose output: %q", stdout.String())
 	}
 }
 
@@ -155,6 +197,60 @@ func TestRuntimeStatusDoesNotPrepareBundle(t *testing.T) {
 	want := []string{"ps"}
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestRuntimePrefixesStagedOutput(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	dir, _ := makeRuntimeDeployment(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	restoreRuntime := stubRuntimeRunner(func(spec CommandSpec, options RunOptions) error {
+		if _, err := options.Stdout.Write([]byte("compose out\n")); err != nil {
+			return err
+		}
+		if _, err := options.Stderr.Write([]byte("compose err\n")); err != nil {
+			return err
+		}
+		return nil
+	})
+	defer restoreRuntime()
+
+	if err := Runtime(RuntimeOptions{Dir: dir, Action: "status", Stdout: &stdout, Stderr: &stderr}); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "[STAGING : demo] compose out\n" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	if stderr.String() != "[STAGING : demo] compose err\n" {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestRuntimeLogsUseRawComposeOutput(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	dir, _ := makeRuntimeDeployment(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	restoreRuntime := stubRuntimeRunner(func(spec CommandSpec, options RunOptions) error {
+		if _, err := options.Stdout.Write([]byte("app | log out\n")); err != nil {
+			return err
+		}
+		if _, err := options.Stderr.Write([]byte("app | log err\n")); err != nil {
+			return err
+		}
+		return nil
+	})
+	defer restoreRuntime()
+
+	if err := Runtime(RuntimeOptions{Dir: dir, Action: "logs", Stdout: &stdout, Stderr: &stderr}); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "app | log out\n" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	if stderr.String() != "app | log err\n" {
+		t.Fatalf("stderr = %q", stderr.String())
 	}
 }
 

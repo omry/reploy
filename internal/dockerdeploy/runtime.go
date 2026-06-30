@@ -23,8 +23,19 @@ func Runtime(options RuntimeOptions) error {
 	if err := validateRuntimeInputs(options.Dir); err != nil {
 		return err
 	}
+	state, err := loadState(options.Dir)
+	if err != nil {
+		return err
+	}
+	stdout, stderr := deploymentOutputWritersForDeployment(options.Dir, state, options.Stdout, options.Stderr)
+	commandStdout := stdout
+	commandStderr := stderr
+	if runtimeActionUsesRawOutput(options.Action) {
+		commandStdout = options.Stdout
+		commandStderr = options.Stderr
+	}
 	if runtimeActionNeedsBundle(options.Action) {
-		if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: options.Dir, Verbose: options.Verbose, Stdout: options.Stdout, Stderr: options.Stderr}); err != nil {
+		if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: options.Dir, Verbose: options.Verbose, Stdout: stdout, Stderr: stderr}); err != nil {
 			return fmt.Errorf("prepare installation bundle: %w", err)
 		}
 	}
@@ -35,11 +46,23 @@ func Runtime(options RuntimeOptions) error {
 	if err != nil {
 		return err
 	}
-	return runRuntimeCommand(spec, RunOptions{Stdout: options.Stdout, Stderr: options.Stderr})
+	if !options.Verbose && !runtimeActionStreamsOutput(options.Action) {
+		commandStdout = nil
+		commandStderr = nil
+	}
+	return runRuntimeCommand(spec, RunOptions{Stdout: commandStdout, Stderr: commandStderr})
 }
 
 func runtimeActionNeedsBundle(action string) bool {
 	return action == "up" || action == "restart"
+}
+
+func runtimeActionStreamsOutput(action string) bool {
+	return action == "ps" || action == "status" || action == "logs"
+}
+
+func runtimeActionUsesRawOutput(action string) bool {
+	return action == "logs"
 }
 
 type RuntimeCommandOptions struct {

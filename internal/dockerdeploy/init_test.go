@@ -136,12 +136,13 @@ func TestStagingControlScriptRunsComposeLifecycleAndAppCommands(t *testing.T) {
 	}
 	dockerArgs := filepath.Join(t.TempDir(), "docker.args")
 	fakeDocker := filepath.Join(fakeBin, "docker")
-	if err := os.WriteFile(fakeDocker, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$DOCKER_ARGS_FILE\"\n"), 0o755); err != nil {
+	if err := os.WriteFile(fakeDocker, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$DOCKER_ARGS_FILE\"\nprintf 'docker output\\n'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	env := append(os.Environ(),
 		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"DOCKER_ARGS_FILE="+dockerArgs,
+		"REPLOY_COLOR=never",
 	)
 
 	statusCommand := exec.Command(script, "status")
@@ -149,6 +150,9 @@ func TestStagingControlScriptRunsComposeLifecycleAndAppCommands(t *testing.T) {
 	statusOutput, err := statusCommand.CombinedOutput()
 	if err != nil {
 		t.Fatalf("status failed: %v\n%s", err, statusOutput)
+	}
+	if !strings.Contains(string(statusOutput), "[demo] docker output\n") {
+		t.Fatalf("status output missing script prefix:\n%s", statusOutput)
 	}
 	statusArgs := readFile(t, dockerArgs)
 	for _, want := range []string{
@@ -169,6 +173,9 @@ func TestStagingControlScriptRunsComposeLifecycleAndAppCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("app command failed: %v\n%s", err, appOutput)
 	}
+	if !strings.Contains(string(appOutput), "[demo] docker output\n") {
+		t.Fatalf("app output missing script prefix:\n%s", appOutput)
+	}
 	appArgs := readFile(t, dockerArgs)
 	for _, want := range []string{
 		"run\n",
@@ -183,6 +190,81 @@ func TestStagingControlScriptRunsComposeLifecycleAndAppCommands(t *testing.T) {
 		if !strings.Contains(appArgs, want) {
 			t.Fatalf("app command docker args missing %q:\n%s", want, appArgs)
 		}
+	}
+}
+
+func TestStagingControlScriptPrefixesHealthOutput(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeBin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	curlArgs := filepath.Join(t.TempDir(), "curl.args")
+	fakeCurl := filepath.Join(fakeBin, "curl")
+	if err := os.WriteFile(fakeCurl, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CURL_ARGS_FILE\"\nprintf 'health ok\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	command := exec.Command(filepath.Join(deployDir, "democtl"), "health")
+	command.Env = append(os.Environ(),
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"CURL_ARGS_FILE="+curlArgs,
+		"REPLOY_COLOR=never",
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("health failed: %v\n%s", err, output)
+	}
+	if string(output) != "[demo] health ok\n" {
+		t.Fatalf("health output = %q", output)
+	}
+	args := readFile(t, curlArgs)
+	want := "-fsS\n--insecure\nhttps://127.0.0.1:18075/_health_\n"
+	if args != want {
+		t.Fatalf("curl args = %q, want %q", args, want)
+	}
+}
+
+func TestStagingControlScriptPrefixesOutputWithoutTrailingNewline(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeBin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeDocker := filepath.Join(fakeBin, "docker")
+	if err := os.WriteFile(fakeDocker, []byte("#!/bin/sh\nprintf partial"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	command := exec.Command(filepath.Join(deployDir, "democtl"), "status")
+	command.Env = append(os.Environ(),
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"REPLOY_COLOR=never",
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, output)
+	}
+	if string(output) != "[demo] partial\n" {
+		t.Fatalf("status output = %q", output)
 	}
 }
 
@@ -468,7 +550,7 @@ docker:
 	if !strings.Contains(compose, "run_reploy_container_command \"$$@\";\n        exit $$?;") {
 		t.Fatalf("compose app command path did not exit before default command:\n%s", compose)
 	}
-	if !strings.Contains(compose, "reploy_status_start()") || !strings.Contains(compose, `printf "\r| %s" "$$reploy_status_label"`) {
+	if !strings.Contains(compose, "reploy_status_start()") || !strings.Contains(compose, `printf "\r%s |" "$$reploy_status_label"`) {
 		t.Fatalf("compose did not render reusable status spinner:\n%s", compose)
 	}
 	if strings.Contains(compose, "load_reploy_app_env_file") || strings.Contains(compose, "done < /config/.env;") {

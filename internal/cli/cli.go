@@ -25,6 +25,8 @@ const packIndexURLEnv = "REPLOY_BLUEPRINT_INDEX_URL"
 var dockerDirectInstall = dockerdeploy.DirectInstall
 var dockerInstall = dockerdeploy.Install
 var dockerPrintInstallSuccess = dockerdeploy.PrintInstallSuccess
+var dockerRuntime = dockerdeploy.Runtime
+var dockerTestServer = dockerdeploy.TestServer
 
 func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -231,6 +233,11 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
 				fmt.Fprintf(stderr, "reploy stage --update error: %v\n", err)
 				return 1
 			}
+			stdout, stderr, err = dockerdeploy.DeploymentOutputWriters(options.Dir, stdout, stderr)
+			if err != nil {
+				fmt.Fprintf(stderr, "reploy stage --update error: %v\n", err)
+				return 1
+			}
 			results, err := dockerdeploy.Update(dockerdeploy.UpdateOptions{
 				Dir:   options.Dir,
 				Pack:  options.Pack,
@@ -257,6 +264,11 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "reploy stage error: %v\n", err)
 			return 1
 		}
+		stdout, stderr, err = dockerdeploy.DeploymentOutputWriters(options.Dir, stdout, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy stage error: %v\n", err)
+			return 1
+		}
 		fmt.Fprintf(stdout, "created staging directory for %s: %s\n", packDisplayName(options.Pack), options.Dir)
 		printUpdateResults(stdout, results)
 		return 0
@@ -268,6 +280,11 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 2
 		}
 		options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy info error: %v\n", err)
+			return 1
+		}
+		stdout, stderr, err = dockerdeploy.DeploymentOutputWriters(options.Dir, stdout, stderr)
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy info error: %v\n", err)
 			return 1
@@ -335,6 +352,11 @@ func runDockerAppSummary(args []string, stdout io.Writer, stderr io.Writer) int 
 		return 2
 	}
 	options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy app error: %v\n", err)
+		return 1
+	}
+	stdout, stderr, err = dockerdeploy.DeploymentOutputWriters(options.Dir, stdout, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy app error: %v\n", err)
 		return 1
@@ -479,6 +501,11 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "reploy bundle upgrade error: %v\n", err)
 			return 1
 		}
+		stdout, stderr, err = dockerdeploy.DeploymentOutputWriters(options.Dir, stdout, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy bundle upgrade error: %v\n", err)
+			return 1
+		}
 		results, err := dockerdeploy.BundleUpgrade(dockerdeploy.BundleUpgradeOptions{
 			Dir:      options.Dir,
 			Target:   options.Root,
@@ -501,6 +528,11 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 2
 		}
 		options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy bundle list all error: %v\n", err)
+			return 1
+		}
+		stdout, stderr, err = dockerdeploy.DeploymentOutputWriters(options.Dir, stdout, stderr)
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy bundle list all error: %v\n", err)
 			return 1
@@ -540,6 +572,12 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "reploy bundle %s error: %v\n", action, err)
 		return 1
 	}
+	spinnerStderr := stderr
+	stdout, stderr, err = dockerdeploy.DeploymentOutputWriters(options.Dir, stdout, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy bundle %s error: %v\n", action, err)
+		return 1
+	}
 	switch action {
 	case "list":
 		roots, err := dockerdeploy.BundleList(dockerdeploy.BundleListOptions{Dir: options.Dir})
@@ -574,7 +612,12 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 	case "check":
 		stopSpinner := func(bool) {}
 		if !options.DryRun && !options.Verbose {
-			stopSpinner = startSpinner(stderr, "validating installation bundle")
+			label, err := deploymentSpinnerLabel(options.Dir, "validating installation bundle", spinnerStderr)
+			if err != nil {
+				fmt.Fprintf(stderr, "reploy bundle check error: %v\n", err)
+				return 1
+			}
+			stopSpinner = startSpinner(spinnerStderr, label)
 		}
 		built := false
 		if !options.DryRun {
@@ -611,7 +654,12 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 	case "build":
 		stopSpinner := func(bool) {}
 		if !options.DryRun && !options.Verbose {
-			stopSpinner = startSpinner(stderr, "building installation bundle")
+			label, err := deploymentSpinnerLabel(options.Dir, "building installation bundle", spinnerStderr)
+			if err != nil {
+				fmt.Fprintf(stderr, "reploy bundle build error: %v\n", err)
+				return 1
+			}
+			stopSpinner = startSpinner(spinnerStderr, label)
 		}
 		if err := dockerdeploy.BundlePrepare(dockerdeploy.BundlePrepareOptions{
 			Dir:      options.Dir,
@@ -1309,12 +1357,17 @@ func runDockerTest(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "reploy test error: %v\n", err)
 		return 1
 	}
-	if err := dockerdeploy.TestServer(dockerdeploy.TestOptions{
+	errorStderr, err := deploymentErrorWriter(options.Dir, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy test error: %v\n", err)
+		return 1
+	}
+	if err := dockerTestServer(dockerdeploy.TestOptions{
 		Dir:     options.Dir,
 		Timeout: options.Timeout,
 		Stdout:  stdout,
 	}); err != nil {
-		fmt.Fprintf(stderr, "reploy test error: %v\n", err)
+		fmt.Fprintf(errorStderr, "reploy test error: %v\n", err)
 		return 1
 	}
 	return 0
@@ -1392,7 +1445,21 @@ func runDockerRuntime(action string, args []string, stdout io.Writer, stderr io.
 		fmt.Fprintf(stderr, "reploy %s error: %v\n", action, err)
 		return 1
 	}
-	if err := dockerdeploy.Runtime(dockerdeploy.RuntimeOptions{
+	errorStderr, err := deploymentErrorWriter(options.Dir, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy %s error: %v\n", action, err)
+		return 1
+	}
+	stopSpinner := func(bool) {}
+	if runtimeActionShowsSpinner(action, options.Verbose) {
+		label, err := runtimeSpinnerLabel(options.Dir, action, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy %s error: %v\n", action, err)
+			return 1
+		}
+		stopSpinner = startSpinner(stderr, label)
+	}
+	if err := dockerRuntime(dockerdeploy.RuntimeOptions{
 		Dir:     options.Dir,
 		Action:  action,
 		Follow:  options.Follow,
@@ -1400,13 +1467,45 @@ func runDockerRuntime(action string, args []string, stdout io.Writer, stderr io.
 		Stdout:  stdout,
 		Stderr:  stderr,
 	}); err != nil {
-		fmt.Fprintf(stderr, "reploy %s error: %v\n", action, err)
+		stopSpinner(false)
+		fmt.Fprintf(errorStderr, "reploy %s error: %v\n", action, err)
 		if runtimeBundlePrepareFailed(err) && !options.Verbose {
-			fmt.Fprintf(stderr, "next step: run `%s` to inspect and fix the bundle build, then rerun `reploy %s`.\n", runtimeBundleBuildVerboseCommand(options.Dir, options.DirExplicit), action)
+			fmt.Fprintf(errorStderr, "next step: run `%s` to inspect and fix the bundle build, then rerun `reploy %s`.\n", runtimeBundleBuildVerboseCommand(options.Dir, options.DirExplicit), action)
 		}
 		return 1
 	}
+	stopSpinner(true)
 	return 0
+}
+
+func runtimeActionShowsSpinner(action string, verbose bool) bool {
+	if verbose {
+		return false
+	}
+	return action == "up" || action == "restart" || action == "down"
+}
+
+func deploymentErrorWriter(dir string, stderr io.Writer) (io.Writer, error) {
+	_, wrappedStderr, err := dockerdeploy.DeploymentOutputWriters(dir, nil, stderr)
+	if err != nil {
+		return nil, err
+	}
+	return wrappedStderr, nil
+}
+
+func runtimeSpinnerLabel(dir string, action string, output io.Writer) (string, error) {
+	return deploymentSpinnerLabel(dir, action, output)
+}
+
+func deploymentSpinnerLabel(dir string, label string, output io.Writer) (string, error) {
+	prefix, err := dockerdeploy.DeploymentOutputPrefix(dir, output)
+	if err != nil {
+		return "", err
+	}
+	if prefix == "" {
+		return label, nil
+	}
+	return prefix + " " + label, nil
 }
 
 type dockerRuntimeOptions struct {
@@ -1789,7 +1888,7 @@ func startSpinner(output io.Writer, label string) func(bool) {
 		ticker := time.NewTicker(120 * time.Millisecond)
 		defer ticker.Stop()
 		index := 0
-		fmt.Fprintf(output, "\r%s %s", frames[index], label)
+		fmt.Fprintf(output, "\r%s %s", label, frames[index])
 		for {
 			select {
 			case ok := <-done:
@@ -1802,7 +1901,7 @@ func startSpinner(output io.Writer, label string) func(bool) {
 				return
 			case <-ticker.C:
 				index = (index + 1) % len(frames)
-				fmt.Fprintf(output, "\r%s %s", frames[index], label)
+				fmt.Fprintf(output, "\r%s %s", label, frames[index])
 			}
 		}
 	}()
@@ -2090,6 +2189,8 @@ func printDockerCommandHelp(command string, output io.Writer) {
 	switch command {
 	case "stage":
 		printDockerStageHelp(output)
+	case "logs":
+		printDockerLogsHelp(output)
 	default:
 		printDockerHelp(output)
 	}
@@ -2114,5 +2215,19 @@ Options:
   --requirement REQ
               Exact package pin or absolute container path for requirements.txt
   -h, --help   Show stage help
+`, "\n"))
+}
+
+func printDockerLogsHelp(output io.Writer) {
+	fmt.Fprint(output, strings.TrimLeft(`
+Usage: reploy [--docker] logs [OPTIONS]
+
+Show staging Compose logs with timestamps.
+
+Options:
+  --dir DIR    Staging directory, default current staging dir or reploy-staging
+  --follow, -f
+              Follow logs instead of exiting after current output
+  -h, --help   Show logs help
 `, "\n"))
 }

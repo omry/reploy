@@ -266,6 +266,34 @@ func TestAppCommandRunsConfigCheck(t *testing.T) {
 	}
 }
 
+func TestAppCommandPrefixesStagedOutput(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	deployDir := makeAppCommandDeployment(t)
+	var stdout strings.Builder
+	var stderr strings.Builder
+	restore := stubAppCommandRunner(func(spec CommandSpec, options RunOptions) error {
+		if _, err := options.Stdout.Write([]byte("app out\n")); err != nil {
+			return err
+		}
+		if _, err := options.Stderr.Write([]byte("app err\n")); err != nil {
+			return err
+		}
+		return nil
+	})
+	defer restore()
+
+	err := AppCommand(AppCommandOptions{Dir: deployDir, CommandArgs: []string{"config", "check"}, Stdout: &stdout, Stderr: &stderr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "[STAGING : demo] app out\n" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	if stderr.String() != "[STAGING : demo] app err\n" {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
 func TestAppCommandPassesPackDeclaredColorEnv(t *testing.T) {
 	deployDir := makeAppCommandDeployment(t)
 	t.Setenv("REPLOY_COLOR", "always")

@@ -39,10 +39,10 @@ services:
         if [ -t 1 ]; then
           (
             while :; do
-              printf "\r| %s" "$$reploy_status_label"; sleep 0.12;
-              printf "\r/ %s" "$$reploy_status_label"; sleep 0.12;
-              printf "\r- %s" "$$reploy_status_label"; sleep 0.12;
-              printf "\r\\ %s" "$$reploy_status_label"; sleep 0.12;
+              printf "\r%s |" "$$reploy_status_label"; sleep 0.12;
+              printf "\r%s /" "$$reploy_status_label"; sleep 0.12;
+              printf "\r%s -" "$$reploy_status_label"; sleep 0.12;
+              printf "\r%s \\" "$$reploy_status_label"; sleep 0.12;
             done
           ) &
           reploy_status_pid="$$!";

@@ -1111,6 +1111,7 @@ func TestInstalledControlScriptHealthUsesDeclaredHealthProbe(t *testing.T) {
 	tlsVerify := false
 	script := filepath.Join(target, "democtl")
 	content := controlScriptContent(installPlan{
+		AppID:          "demo",
 		TargetDir:      target,
 		Service:        "demo",
 		ComposeProject: "demo",
@@ -1135,7 +1136,7 @@ func TestInstalledControlScriptHealthUsesDeclaredHealthProbe(t *testing.T) {
 	}
 	curlArgs := filepath.Join(t.TempDir(), "curl.args")
 	fakeCurl := filepath.Join(fakeBin, "curl")
-	if err := os.WriteFile(fakeCurl, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CURL_ARGS_FILE\"\n"), 0o755); err != nil {
+	if err := os.WriteFile(fakeCurl, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CURL_ARGS_FILE\"\nprintf 'health ok\\n'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1143,15 +1144,43 @@ func TestInstalledControlScriptHealthUsesDeclaredHealthProbe(t *testing.T) {
 	command.Env = append(os.Environ(),
 		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"CURL_ARGS_FILE="+curlArgs,
+		"REPLOY_COLOR=never",
 	)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("health command failed: %v\n%s", err, output)
 	}
+	if string(output) != "[demo] health ok\n" {
+		t.Fatalf("health output = %q", output)
+	}
 	args := readFile(t, curlArgs)
 	want := "-fsS\n--insecure\nhttps://127.0.0.1:18075/_health_\n"
 	if args != want {
 		t.Fatalf("curl args = %q, want %q", args, want)
+	}
+}
+
+func TestControlScriptOutputLabelUsesAppIDOnly(t *testing.T) {
+	if got := controlScriptOutputLabel("demo"); got != "[demo]" {
+		t.Fatalf("label = %q", got)
+	}
+	if got := controlScriptOutputLabel(""); got != "[reploy]" {
+		t.Fatalf("fallback label = %q", got)
+	}
+}
+
+func TestControlScriptUsesSafeStatusFileAndPreservesPartialLines(t *testing.T) {
+	content := controlScriptContent(installPlan{
+		AppID:         "demo",
+		TargetDir:     t.TempDir(),
+		Service:       "demo",
+		ControlScript: "democtl",
+	})
+	if !strings.Contains(content, `mktemp "${TMPDIR:-/tmp}/reploy-output-prefix.XXXXXX"`) {
+		t.Fatalf("control script does not use mktemp for status handoff:\n%s", content)
+	}
+	if !strings.Contains(content, `read -r reploy_control_line || [ -n "$reploy_control_line" ]`) {
+		t.Fatalf("control script does not preserve final unterminated output line:\n%s", content)
 	}
 }
 
@@ -1166,6 +1195,7 @@ func TestInstalledControlScriptRunsDeployedAppCommand(t *testing.T) {
 	}
 	script := filepath.Join(target, "democtl")
 	content := controlScriptContent(installPlan{
+		AppID:          "demo",
 		TargetDir:      target,
 		Service:        "demo",
 		ComposeProject: "demo-project",
@@ -1198,7 +1228,7 @@ func TestInstalledControlScriptRunsDeployedAppCommand(t *testing.T) {
 	}
 	dockerArgs := filepath.Join(t.TempDir(), "docker.args")
 	fakeDocker := filepath.Join(fakeBin, "docker")
-	if err := os.WriteFile(fakeDocker, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$DOCKER_ARGS_FILE\"\n"), 0o755); err != nil {
+	if err := os.WriteFile(fakeDocker, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$DOCKER_ARGS_FILE\"\nprintf 'docker output\\n'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1206,10 +1236,14 @@ func TestInstalledControlScriptRunsDeployedAppCommand(t *testing.T) {
 	command.Env = append(os.Environ(),
 		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"DOCKER_ARGS_FILE="+dockerArgs,
+		"REPLOY_COLOR=never",
 	)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("deployed command failed: %v\n%s", err, output)
+	}
+	if string(output) != "[demo] docker output\n" {
+		t.Fatalf("deployed command output = %q", output)
 	}
 	args := readFile(t, dockerArgs)
 	for _, want := range []string{
@@ -1225,6 +1259,55 @@ func TestInstalledControlScriptRunsDeployedAppCommand(t *testing.T) {
 		if !strings.Contains(args, want) {
 			t.Fatalf("docker args missing %q:\n%s", want, args)
 		}
+	}
+}
+
+func TestInstalledControlScriptPrefixesSystemdOutput(t *testing.T) {
+	target := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(target, ReployInternalDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, DockerEnvFileName), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(target, "democtl")
+	content := controlScriptContent(installPlan{
+		AppID:         "demo",
+		TargetDir:     target,
+		Service:       "demo",
+		ControlScript: "democtl",
+	})
+	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeBin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	systemctlArgs := filepath.Join(t.TempDir(), "systemctl.args")
+	fakeSystemctl := filepath.Join(fakeBin, "systemctl")
+	if err := os.WriteFile(fakeSystemctl, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$SYSTEMCTL_ARGS_FILE\"\nprintf 'systemd output\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	command := exec.Command(script, "status")
+	command.Env = append(os.Environ(),
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"SYSTEMCTL_ARGS_FILE="+systemctlArgs,
+		"REPLOY_COLOR=never",
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, output)
+	}
+	if string(output) != "[demo] systemd output\n" {
+		t.Fatalf("status output = %q", output)
+	}
+	args := readFile(t, systemctlArgs)
+	want := "status\ndemo.service\n"
+	if args != want {
+		t.Fatalf("systemctl args = %q, want %q", args, want)
 	}
 }
 
@@ -1254,6 +1337,7 @@ func TestInstalledControlScriptRejectsUndeployedAppCommandFlag(t *testing.T) {
 	}
 	script := filepath.Join(target, "democtl")
 	content := controlScriptContent(installPlan{
+		AppID:         "demo",
 		TargetDir:     target,
 		Service:       "demo",
 		ControlScript: "democtl",
@@ -1291,6 +1375,7 @@ func TestInstalledControlScriptAcceptsForwardedFlagValueWithEquals(t *testing.T)
 	}
 	script := filepath.Join(target, "democtl")
 	content := controlScriptContent(installPlan{
+		AppID:         "demo",
 		TargetDir:     target,
 		Service:       "demo",
 		ControlScript: "democtl",
@@ -1343,6 +1428,7 @@ func TestInstalledControlScriptRejectsForwardedFlagPositionals(t *testing.T) {
 	}
 	script := filepath.Join(target, "democtl")
 	content := controlScriptContent(installPlan{
+		AppID:         "demo",
 		TargetDir:     target,
 		Service:       "demo",
 		ControlScript: "democtl",

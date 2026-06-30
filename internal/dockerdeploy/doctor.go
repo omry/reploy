@@ -27,8 +27,12 @@ func Doctor(options DoctorOptions) int {
 	if options.Dir == "" {
 		options.Dir = DefaultDeploymentDir
 	}
-	findings := doctorFindings(options.Dir, options.Preinstall)
 	colors := doctorStatusColors(options.Stdout)
+	if state, err := loadState(options.Dir); err == nil {
+		stdout, _ := deploymentOutputWritersForDeployment(options.Dir, state, options.Stdout, nil)
+		options.Stdout = stdout
+	}
+	findings := doctorFindings(options.Dir, options.Preinstall)
 	exitCode := 0
 	for _, finding := range findings {
 		if finding.Status == "fail" {

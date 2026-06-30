@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -357,7 +358,7 @@ func TestAppShowsAppIDAndPackSubcommands(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("app failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	expected := "app: demo\napp subcommands:\n  bootstrap server\n  bootstrap plugin\n  config activate\n  config check\n  config show\n  env bootstrap\n  env check\n"
+	expected := "[STAGING : demo] app: demo\n[STAGING : demo] app subcommands:\n[STAGING : demo]   bootstrap server\n[STAGING : demo]   bootstrap plugin\n[STAGING : demo]   config activate\n[STAGING : demo]   config check\n[STAGING : demo]   config show\n[STAGING : demo]   env bootstrap\n[STAGING : demo]   env check\n"
 	if stdout != expected {
 		t.Fatalf("stdout = %q, want %q", stdout, expected)
 	}
@@ -380,7 +381,7 @@ func TestAppUsesCurrentDeploymentDirByDefault(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("app failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	expected := "app: demo\napp subcommands:\n  bootstrap server\n  bootstrap plugin\n  config activate\n  config check\n  config show\n  env bootstrap\n  env check\n"
+	expected := "[STAGING : demo] app: demo\n[STAGING : demo] app subcommands:\n[STAGING : demo]   bootstrap server\n[STAGING : demo]   bootstrap plugin\n[STAGING : demo]   config activate\n[STAGING : demo]   config check\n[STAGING : demo]   config show\n[STAGING : demo]   env bootstrap\n[STAGING : demo]   env check\n"
 	if stdout != expected {
 		t.Fatalf("stdout = %q, want %q", stdout, expected)
 	}
@@ -521,6 +522,25 @@ func TestDockerStageHelp(t *testing.T) {
 	}
 }
 
+func TestDockerLogsHelp(t *testing.T) {
+	code, stdout, stderr := runCLI("logs", "--help")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if !strings.Contains(stdout, "Usage: reploy [--docker] logs [OPTIONS]") {
+		t.Fatalf("stdout did not contain logs usage:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "--follow, -f") || !strings.Contains(stdout, "Follow logs instead of exiting after current output") {
+		t.Fatalf("stdout did not contain logs follow option:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "Commands:") || strings.Contains(stdout, "bundle       Manage staging bundle contents") {
+		t.Fatalf("stdout showed global help instead of logs help:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
 func TestDockerUpdateCommandRemoved(t *testing.T) {
 	code, stdout, stderr := runCLI("update")
 	if code != 2 {
@@ -547,6 +567,160 @@ func TestDockerLogsFollowOptionParses(t *testing.T) {
 	}
 	if !options.Verbose {
 		t.Fatal("verbose = false, want true")
+	}
+}
+
+func TestRuntimeLifecycleActionsShowSpinnerWhenNotVerbose(t *testing.T) {
+	for _, action := range []string{"up", "restart", "down"} {
+		if !runtimeActionShowsSpinner(action, false) {
+			t.Fatalf("%s should show a spinner when not verbose", action)
+		}
+		if runtimeActionShowsSpinner(action, true) {
+			t.Fatalf("%s should not show a spinner when verbose", action)
+		}
+	}
+	for _, action := range []string{"ps", "status", "logs"} {
+		if runtimeActionShowsSpinner(action, false) {
+			t.Fatalf("%s should stream output instead of showing a spinner", action)
+		}
+	}
+}
+
+func TestRuntimeSpinnerLabelUsesDeploymentPrefix(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	label, err := runtimeSpinnerLabel(deployDir, "up", &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if label != "[STAGING : demo] up" {
+		t.Fatalf("label = %q", label)
+	}
+}
+
+func TestDeploymentSpinnerLabelUsesDeploymentPrefix(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	label, err := deploymentSpinnerLabel(deployDir, "validating installation bundle", &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if label != "[STAGING : demo] validating installation bundle" {
+		t.Fatalf("label = %q", label)
+	}
+}
+
+func TestPhaseKnownTestErrorUsesDeploymentPrefix(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	oldTestServer := dockerTestServer
+	t.Cleanup(func() {
+		dockerTestServer = oldTestServer
+	})
+	dockerTestServer = func(options dockerdeploy.TestOptions) error {
+		if options.Dir != deployDir {
+			t.Fatalf("dir = %q, want %q", options.Dir, deployDir)
+		}
+		return errors.New("service is not started; run reploy up before testing health")
+	}
+
+	code, stdout, stderr = runCLI("test", "--dir", deployDir)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "[STAGING : demo] reploy test error: service is not started; run reploy up before testing health") {
+		t.Fatalf("stderr missing staging-prefixed test error:\n%s", stderr)
+	}
+}
+
+func TestPhaseKnownRuntimeErrorUsesDeploymentPrefix(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	oldRuntime := dockerRuntime
+	t.Cleanup(func() {
+		dockerRuntime = oldRuntime
+	})
+	dockerRuntime = func(options dockerdeploy.RuntimeOptions) error {
+		if options.Action != "status" {
+			t.Fatalf("action = %q, want status", options.Action)
+		}
+		return errors.New("runtime exploded")
+	}
+
+	code, stdout, stderr = runCLI("status", "--dir", deployDir)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "[STAGING : demo] reploy status error: runtime exploded") {
+		t.Fatalf("stderr missing staging-prefixed runtime error:\n%s", stderr)
+	}
+}
+
+func TestPhaseKnownRuntimePrepareHintUsesDeploymentPrefix(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	oldRuntime := dockerRuntime
+	t.Cleanup(func() {
+		dockerRuntime = oldRuntime
+	})
+	dockerRuntime = func(options dockerdeploy.RuntimeOptions) error {
+		if options.Action != "up" {
+			t.Fatalf("action = %q, want up", options.Action)
+		}
+		return errors.New("prepare installation bundle: docker failed: exit status 1")
+	}
+
+	code, stdout, stderr = runCLI("up", "--dir", deployDir)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	for _, want := range []string{
+		"[STAGING : demo] up",
+		"[STAGING : demo] reploy up error: prepare installation bundle: docker failed: exit status 1",
+		"[STAGING : demo] next step: run `reploy bundle build --verbose --dir " + shellQuoteArg(deployDir) + "` to inspect and fix the bundle build, then rerun `reploy up`.",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr)
+		}
 	}
 }
 
@@ -1381,7 +1555,7 @@ func TestDockerStageUpdateUsesExistingState(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("stage --update failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if stdout != "up_to_date\n" {
+	if stdout != "[STAGING : demo] up_to_date\n" {
 		t.Fatalf("stdout = %q, want one up_to_date line", stdout)
 	}
 	if stderr != "" {
@@ -1483,7 +1657,7 @@ func TestDockerBundleListShowsStateRoots(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("bundle list failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if stdout != "demo-suite\n" {
+	if stdout != "[STAGING : demo] demo-suite\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	if stderr != "" {
@@ -1693,7 +1867,7 @@ func TestDockerBundleAddUnknownOptionListsOptionsOnSeparateLines(t *testing.T) {
 	if stdout != "" {
 		t.Fatalf("stdout = %q, want empty", stdout)
 	}
-	if !strings.Contains(stderr, "use one of:\n  demo-suite\n  imap\n  smtp") {
+	if !strings.Contains(stderr, "[STAGING : demo] use one of:\n[STAGING : demo]   demo-suite\n[STAGING : demo]   imap\n[STAGING : demo]   smtp") {
 		t.Fatalf("stderr did not list options on separate lines:\n%s", stderr)
 	}
 	if !strings.Contains(stderr, `unknown bundle option "foo"`) || !strings.Contains(stderr, "--extra") {
@@ -1987,6 +2161,9 @@ func TestStartSpinnerPrintsCompletion(t *testing.T) {
 	var stderr bytes.Buffer
 	stop := startSpinner(&stderr, "building installation bundle")
 	stop(true)
+	if !strings.Contains(stderr.String(), "building installation bundle |") {
+		t.Fatalf("spinner did not print label before frame:\n%q", stderr.String())
+	}
 	if !strings.Contains(stderr.String(), "building installation bundle... done") {
 		t.Fatalf("spinner did not print completion:\n%q", stderr.String())
 	}
