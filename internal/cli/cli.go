@@ -30,8 +30,8 @@ var dockerTestServer = dockerdeploy.TestServer
 
 func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		printShortUsage(stderr)
-		return 2
+		printShortUsage(stdout)
+		return 0
 	}
 
 	target := "docker"

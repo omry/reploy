@@ -1,0 +1,3 @@
+kind: Fixed
+body: Make `reploy` without arguments print its short help to stdout and exit successfully.
+time: 2026-06-30T20:27:47+08:00

@@ -88,11 +88,8 @@ func TestVersion(t *testing.T) {
 
 func TestNoArgsShowsVersionAndNextSteps(t *testing.T) {
 	code, stdout, stderr := runCLI()
-	if code != 2 {
-		t.Fatalf("exit code = %d, want 2\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
-	}
-	if stdout != "" {
-		t.Fatalf("stdout = %q, want empty", stdout)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 	for _, want := range []string{
 		"reploy " + reploy.Version,
@@ -103,9 +100,12 @@ func TestNoArgsShowsVersionAndNextSteps(t *testing.T) {
 		"reploy index search QUERY",
 		"Run 'reploy --help' for all commands.",
 	} {
-		if !strings.Contains(stderr, want) {
-			t.Fatalf("stderr missing %q:\n%s", want, stderr)
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout)
 		}
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
 	}
 }
 
