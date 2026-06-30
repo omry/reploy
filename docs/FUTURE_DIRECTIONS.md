@@ -87,6 +87,12 @@ The current provider direction starts with Python/PyPI. Source repositories and
 system packages should be treated as additional bundle providers, not separate
 one-off install modes.
 
+Portable runtime environments make mixed providers more useful. A realistic
+service environment may need Python packages, system packages, source-built
+components, and image references in the same staged runtime. In that model, each
+provider is responsible for resolving, materializing, and later restoring its
+own part of the environment contract.
+
 ### Source Provider
 
 Reploy now has an initial generic Git source provider for HTTPS repositories.
@@ -142,10 +148,17 @@ Open questions:
 - How does this interact with non-Debian deployment targets?
 - How is the package target OS and architecture represented?
 
-## Install Profiles
+## Portable Stages
 
-A future workflow may allow a staging environment to export a portable install
-profile that can later be directly installed on another system.
+A portable stage may become the shared primitive for turning a prepared staging
+workspace into a transferable file. It is not a separate blueprint or profile;
+it is the exported form of staging state. The same stage can later be consumed
+by direct install, import, or remote/development execution flows.
+
+"Portable" should not imply architecture-independent. A portable stage can move
+between compatible systems, but it will usually be tied to the target OS,
+architecture, runtime backend, and provider locks used when the environment was
+resolved.
 
 Conceptual flow:
 
@@ -153,28 +166,143 @@ Conceptual flow:
 flowchart LR
   B[Blueprint]
   S[Staging]
-  P[Install profile]
+  A[Portable stage]
+  S2[Imported staging]
   D[Deployed]
+  R[Execution]
 
   B -->|stage| S
-  S -->|export| P
-  P -->|direct install| D
+  S -->|export| A
+  A -->|direct install| D
+  A -->|import| S2
+  S2 -->|run / app / test| R
 ```
 
 This should not be treated as rewriting the app-owned blueprint. A blueprint is
-owned by the app author; a profile exported from staging would be an
-operator-prepared install source derived from that blueprint.
+owned by the app author; a portable stage would be an operator-prepared source
+derived from that blueprint. It should preserve local
+decisions made in staging without pretending to be the upstream app blueprint.
 
-An install profile might include:
+Possible commands:
 
-- base blueprint ref and version
-- selected bundle options
-- resolved package or artifact versions
+```text
+reploy stage --export arbiter.stage.tgz
+reploy stage --import arbiter.stage.tgz
+reploy install --stage arbiter.stage.tgz
+reploy run pytest -q
+```
+
+`reploy stage --export` and `reploy stage --import` make export/import part of
+the staging lifecycle. `reploy install --stage` keeps portable stages distinct
+from app refs while still allowing direct install from a prepared stage.
+
+`reploy app` should remain the app-command surface for blueprint-declared
+commands. A future `reploy run` or `reploy exec` would be the lower-level
+primitive for running an ad hoc command inside the staged environment.
+
+A portable stage should be useful for both deployment transfer and runtime
+transfer:
+
+- direct install on another system
+- importing a prepared staging workspace on another host
+- stable development environments for agents moving across operating systems
+- remote execution systems that need to import a known environment, run a
+  command, collect outputs, and discard or preserve the result
+- CI-like validation where the staged runtime is the unit of work
+
+A portable stage should be efficient logical environment transfer, not a blind
+archive of every file in staging. It should preserve the parts that cannot be
+reliably restored elsewhere, such as:
+
+- staging state and the resolved blueprint ref
+- selected bundle roots and app options
+- user configuration and local overrides
+- lock or materialization metadata, such as package versions, source commits,
+  image digests, and checksums
+- provider-specific resolved identities, such as PyPI distributions, dpkg
+  packages, source commits, and image digests
 - portable generated configuration
-- default direct-install automation
-- upgrade policy metadata
+- install/update policy metadata
 - generated control script metadata
+- explicitly selected local artifacts
 
-It should exclude secrets and host-specific state by default. Any future support
-for including sensitive or host-specific values needs explicit policy and clear
-reporting.
+A portable stage may include locally generated bundle objects when they are the
+thing to install, such as locally built packages or generated deployment assets.
+It should still avoid copying data that can be restored from public or declared
+sources, such as PyPI dependencies, Docker image layers, build caches, logs,
+temporary files, and generated runtime output. Import can then rehydrate the
+workspace by restoring local decisions, installing included bundle objects, and
+refetching external dependencies from locked refs.
+
+Mixed providers are especially important for this direction. Export should
+record the resolved identity of each provider item rather than flattening the
+environment into bytes. Import can then ask the Python provider to restore
+Python requirements, the system package provider to restore `dpkg` or apt
+packages, the source provider to restore checked-out commits, and an image
+provider to restore image digests.
+
+Export should exclude secrets and host-specific state by default. Any future
+support for including sensitive or host-specific values needs explicit policy
+and clear reporting.
+
+Open questions:
+
+- What is the portable stage format and versioning policy?
+- How should target OS, architecture, runtime backend, and provider compatibility
+  be recorded and checked?
+- Which files are always included, excluded, or opt-in?
+- How should secrets and host-specific paths be represented or redacted?
+- Should direct install consume the same portable stage as import, or should it
+  consume a narrower projection generated from the stage?
+- Should import verify reconstructed dependencies against recorded hashes or
+  digests?
+- Should `run` require the environment to be started, or should it run inside a
+  one-shot container/runtime prepared from staging?
+
+## Snapshots
+
+Real snapshots are separate from portable stages. A portable stage is a logical
+transfer format that reconstructs or installs an environment. A snapshot should
+capture filesystem or backend state so that Reploy can restore exact bytes from
+a point in time.
+
+Possible commands:
+
+```text
+reploy snapshot create arbiter.snapshot.tgz
+reploy snapshot restore arbiter.snapshot.tgz
+```
+
+Snapshots could be useful for:
+
+- save/restore backups of Reploy-owned state
+- retrying risky operations from the same state, with a cheap reset after each
+  failure
+- handing off an in-progress environment to another host or agent
+- hibernating a task and resuming it later
+- preserving incident reproduction, demo, or training environments where exact
+  local state matters more than small artifact size
+
+Snapshotting may need app or backend hooks to bring the system into a quiet
+state before capture. Examples include syncing pending writes, flushing queues,
+pausing workers, holding new requests in a queue, or marking the service
+temporarily read-only. Restore should also be explicit about which Reploy-owned
+paths, volumes, containers, or backend resources will be replaced.
+
+Restoring from a snapshot should bring services back to the same lifecycle state
+recorded by the snapshot. A service that was running should be restored running,
+a stopped service should remain stopped, and multi-service environments need a
+defined ordering for stop, restore, and start operations.
+
+Open questions:
+
+- Which backends can provide real snapshots: filesystem archive, Docker volume
+  export, Docker image save/load, btrfs/zfs/LVM, VM or microVM disk snapshots?
+- How should snapshot hooks be declared, ordered, timed out, and verified?
+- How should Reploy prevent secrets, logs, and runtime data from being captured
+  accidentally?
+- Should snapshots be allowed for deployed services, staging environments, or
+  only explicitly stopped runtimes?
+- How should service lifecycle state, dependency ordering, and health checks be
+  recorded and restored?
+- How should restore handle partial failures after replacing some state?
