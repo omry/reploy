@@ -46,14 +46,14 @@ func TestRuntimeCommandActions(t *testing.T) {
 
 func TestRuntimeCommandCanFollowLogs(t *testing.T) {
 	dir, projectName := makeRuntimeDeployment(t)
-	spec, err := RuntimeCommandWithOptions(dir, "logs", RuntimeCommandOptions{Follow: true})
+	spec, err := RuntimeCommandWithOptions(dir, "logs", RuntimeCommandOptions{Follow: true, Tail: "100"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !containsAdjacent(spec.Args, "--project-name", projectName) {
 		t.Fatalf("args did not include staging compose project: %#v", spec.Args)
 	}
-	suffix := []string{"logs", "--timestamps", "-f"}
+	suffix := []string{"logs", "--timestamps", "--tail", "100", "-f"}
 	if !reflect.DeepEqual(spec.Args[len(spec.Args)-len(suffix):], suffix) {
 		t.Fatalf("suffix = %#v, want %#v", spec.Args[len(spec.Args)-len(suffix):], suffix)
 	}

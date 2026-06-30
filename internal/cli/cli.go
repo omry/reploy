@@ -1440,6 +1440,11 @@ func runDockerRuntime(action string, args []string, stdout io.Writer, stderr io.
 		printDockerShortUsage(stderr)
 		return 2
 	}
+	if options.Tail != "" && action != "logs" {
+		fmt.Fprintln(stderr, "reploy usage error: --tail is only supported with logs")
+		printDockerShortUsage(stderr)
+		return 2
+	}
 	options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy %s error: %v\n", action, err)
@@ -1463,6 +1468,7 @@ func runDockerRuntime(action string, args []string, stdout io.Writer, stderr io.
 		Dir:     options.Dir,
 		Action:  action,
 		Follow:  options.Follow,
+		Tail:    options.Tail,
 		Verbose: options.Verbose,
 		Stdout:  stdout,
 		Stderr:  stderr,
@@ -1512,6 +1518,7 @@ type dockerRuntimeOptions struct {
 	Dir         string
 	DirExplicit bool
 	Follow      bool
+	Tail        string
 	Verbose     bool
 }
 
@@ -1522,6 +1529,15 @@ func parseDockerRuntimeOptions(args []string) (dockerRuntimeOptions, error) {
 		switch arg {
 		case "--follow", "-f":
 			options.Follow = true
+		case "--tail":
+			value, ok := optionValue(args, &index)
+			if !ok {
+				return dockerRuntimeOptions{}, fmt.Errorf("%s requires a value", arg)
+			}
+			if value == "" {
+				return dockerRuntimeOptions{}, fmt.Errorf("%s requires a value", arg)
+			}
+			options.Tail = value
 		case "--verbose":
 			options.Verbose = true
 		case "--dir":
@@ -1535,6 +1551,13 @@ func parseDockerRuntimeOptions(args []string) (dockerRuntimeOptions, error) {
 			if strings.HasPrefix(arg, "--dir=") {
 				options.Dir = strings.TrimPrefix(arg, "--dir=")
 				options.DirExplicit = true
+				continue
+			}
+			if strings.HasPrefix(arg, "--tail=") {
+				options.Tail = strings.TrimPrefix(arg, "--tail=")
+				if options.Tail == "" {
+					return dockerRuntimeOptions{}, fmt.Errorf("--tail requires a value")
+				}
 				continue
 			}
 			return dockerRuntimeOptions{}, fmt.Errorf("unknown option: %s", arg)
@@ -1997,6 +2020,7 @@ Staging options:
   --no-start   Install without starting the service
   --verbose    Show bundle check/build command output
   --follow     Follow logs instead of exiting after current output
+  --tail N     Show only the last N log lines
   --timeout DURATION
               With test, readiness timeout for running services
 
@@ -2179,6 +2203,7 @@ Options:
   --no-start   Install without starting the service
   --verbose    Show bundle check/build command output
   --follow     Follow logs instead of exiting after current output
+  --tail N     Show only the last N log lines
   --timeout DURATION
               With test, readiness timeout for running services
   -h, --help   Show help
@@ -2226,6 +2251,7 @@ Show staging Compose logs with timestamps.
 
 Options:
   --dir DIR    Staging directory, default current staging dir or reploy-staging
+  --tail N     Show only the last N log lines
   --follow, -f
               Follow logs instead of exiting after current output
   -h, --help   Show logs help

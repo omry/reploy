@@ -1311,6 +1311,55 @@ func TestInstalledControlScriptPrefixesSystemdOutput(t *testing.T) {
 	}
 }
 
+func TestInstalledControlScriptLogsUsesReployOptions(t *testing.T) {
+	target := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(target, ReployInternalDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, DockerEnvFileName), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(target, "democtl")
+	content := controlScriptContent(installPlan{
+		AppID:         "demo",
+		TargetDir:     target,
+		Service:       "demo",
+		ControlScript: "democtl",
+	})
+	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeBin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	journalctlArgs := filepath.Join(t.TempDir(), "journalctl.args")
+	fakeJournalctl := filepath.Join(fakeBin, "journalctl")
+	if err := os.WriteFile(fakeJournalctl, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$JOURNALCTL_ARGS_FILE\"\nprintf 'journal output\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	command := exec.Command(script, "logs", "--tail=100", "--follow")
+	command.Env = append(os.Environ(),
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"JOURNALCTL_ARGS_FILE="+journalctlArgs,
+		"REPLOY_COLOR=never",
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("logs failed: %v\n%s", err, output)
+	}
+	if string(output) != "[demo] journal output\n" {
+		t.Fatalf("logs output = %q", output)
+	}
+	args := readFile(t, journalctlArgs)
+	want := "-u\ndemo.service\n-n\n100\n-f\n"
+	if args != want {
+		t.Fatalf("journalctl args = %q, want %q", args, want)
+	}
+}
+
 func TestValidateDeployedControlCommandsRejectsStageBuiltin(t *testing.T) {
 	err := validateDeployedControlCommands([]deploy.DockerCommandConfig{{
 		Name:       "stage_app",

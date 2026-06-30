@@ -445,7 +445,7 @@ func controlScriptHealthCommandRunner(spec controlScriptSpec) string {
 
 func controlScriptLifecycleCases(spec controlScriptSpec) string {
 	if spec.Mode == controlScriptModeStaged {
-		return `  up|start)
+		return fmt.Sprintf(`  up|start)
     run_compose up -d
     ;;
   down|stop)
@@ -458,11 +458,51 @@ func controlScriptLifecycleCases(spec controlScriptSpec) string {
     run_compose ps
     ;;
   logs)
-    run_compose logs --timestamps "$@"
+    shell_command=""
+    append_compose_base
+    append_shell_arg "logs"
+    append_shell_arg "--timestamps"
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --follow|-f)
+          append_shell_arg "-f"
+          shift
+          ;;
+        --tail)
+          shift
+          if [ "$#" -eq 0 ]; then
+            echo "logs: --tail requires a value" >&2
+            exit 2
+          fi
+          append_shell_arg "--tail"
+          append_shell_arg "$1"
+          shift
+          ;;
+        --tail=*)
+          tail_value="${1#--tail=}"
+          if [ -z "$tail_value" ]; then
+            echo "logs: --tail requires a value" >&2
+            exit 2
+          fi
+          append_shell_arg "--tail"
+          append_shell_arg "$tail_value"
+          shift
+          ;;
+        --help|-h)
+          echo "usage: %s logs [--tail N] [--follow]" >&2
+          exit 0
+          ;;
+        *)
+          echo "logs: unknown option: $1" >&2
+          exit 2
+          ;;
+      esac
+    done
+    run_control_shell_command "$shell_command"
     ;;
-`
+`, spec.ControlScript)
 	}
-	return `  up|start)
+	return fmt.Sprintf(`  up|start)
     shell_command=""
     append_shell_arg "systemctl"
     append_shell_arg "start"
@@ -495,8 +535,41 @@ func controlScriptLifecycleCases(spec controlScriptSpec) string {
     append_shell_arg "journalctl"
     append_shell_arg "-u"
     append_shell_arg "$service"
-    for log_arg in "$@"; do
-      append_shell_arg "$log_arg"
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --follow|-f)
+          append_shell_arg "-f"
+          shift
+          ;;
+        --tail)
+          shift
+          if [ "$#" -eq 0 ]; then
+            echo "logs: --tail requires a value" >&2
+            exit 2
+          fi
+          append_shell_arg "-n"
+          append_shell_arg "$1"
+          shift
+          ;;
+        --tail=*)
+          tail_value="${1#--tail=}"
+          if [ -z "$tail_value" ]; then
+            echo "logs: --tail requires a value" >&2
+            exit 2
+          fi
+          append_shell_arg "-n"
+          append_shell_arg "$tail_value"
+          shift
+          ;;
+        --help|-h)
+          echo "usage: %s logs [--tail N] [--follow]" >&2
+          exit 0
+          ;;
+        *)
+          echo "logs: unknown option: $1" >&2
+          exit 2
+          ;;
+      esac
     done
     run_control_shell_command "$shell_command"
     ;;
@@ -514,7 +587,7 @@ func controlScriptLifecycleCases(spec controlScriptSpec) string {
     append_shell_arg "$service"
     run_control_shell_command "$shell_command"
     ;;
-`
+`, spec.ControlScript)
 }
 
 func controlScriptUsageCommands(commands []deploy.DockerCommandConfig) string {

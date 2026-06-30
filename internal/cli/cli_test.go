@@ -533,6 +533,9 @@ func TestDockerLogsHelp(t *testing.T) {
 	if !strings.Contains(stdout, "--follow, -f") || !strings.Contains(stdout, "Follow logs instead of exiting after current output") {
 		t.Fatalf("stdout did not contain logs follow option:\n%s", stdout)
 	}
+	if !strings.Contains(stdout, "--tail N") || !strings.Contains(stdout, "Show only the last N log lines") {
+		t.Fatalf("stdout did not contain logs tail option:\n%s", stdout)
+	}
 	if strings.Contains(stdout, "Commands:") || strings.Contains(stdout, "bundle       Manage staging bundle contents") {
 		t.Fatalf("stdout showed global help instead of logs help:\n%s", stdout)
 	}
@@ -554,8 +557,8 @@ func TestDockerUpdateCommandRemoved(t *testing.T) {
 	}
 }
 
-func TestDockerLogsFollowOptionParses(t *testing.T) {
-	options, err := parseDockerRuntimeOptions([]string{"--dir", "deployment", "--follow", "--verbose"})
+func TestDockerLogsOptionsParse(t *testing.T) {
+	options, err := parseDockerRuntimeOptions([]string{"--dir", "deployment", "--tail", "100", "--follow", "--verbose"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -565,8 +568,19 @@ func TestDockerLogsFollowOptionParses(t *testing.T) {
 	if !options.Follow {
 		t.Fatal("follow = false, want true")
 	}
+	if options.Tail != "100" {
+		t.Fatalf("tail = %q, want 100", options.Tail)
+	}
 	if !options.Verbose {
 		t.Fatal("verbose = false, want true")
+	}
+
+	options, err = parseDockerRuntimeOptions([]string{"--tail=25"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Tail != "25" {
+		t.Fatalf("tail = %q, want 25", options.Tail)
 	}
 }
 
@@ -742,6 +756,19 @@ func TestDockerRuntimeRejectsFollowOutsideLogs(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "--follow is only supported with logs") {
 		t.Fatalf("stderr missing follow validation message:\n%s", stderr)
+	}
+}
+
+func TestDockerRuntimeRejectsTailOutsideLogs(t *testing.T) {
+	code, stdout, stderr := runCLI("ps", "--tail", "100")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "--tail is only supported with logs") {
+		t.Fatalf("stderr missing tail validation message:\n%s", stderr)
 	}
 }
 

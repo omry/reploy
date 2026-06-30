@@ -9,6 +9,7 @@ type RuntimeOptions struct {
 	Dir     string
 	Action  string
 	Follow  bool
+	Tail    string
 	Verbose bool
 	Stdout  io.Writer
 	Stderr  io.Writer
@@ -42,7 +43,7 @@ func Runtime(options RuntimeOptions) error {
 	if err := ensureRuntimeCompose(options.Dir); err != nil {
 		return fmt.Errorf("ensure runtime compose: %w", err)
 	}
-	spec, err := RuntimeCommandWithOptions(options.Dir, options.Action, RuntimeCommandOptions{Follow: options.Follow})
+	spec, err := RuntimeCommandWithOptions(options.Dir, options.Action, RuntimeCommandOptions{Follow: options.Follow, Tail: options.Tail})
 	if err != nil {
 		return err
 	}
@@ -67,6 +68,7 @@ func runtimeActionUsesRawOutput(action string) bool {
 
 type RuntimeCommandOptions struct {
 	Follow bool
+	Tail   string
 }
 
 func RuntimeCommand(dir string, action string) (CommandSpec, error) {
@@ -89,6 +91,9 @@ func RuntimeCommandWithOptions(dir string, action string, options RuntimeCommand
 		return composeCommandWithProject(dir, projectName, "ps"), nil
 	case "logs":
 		args := []string{"logs", "--timestamps"}
+		if options.Tail != "" {
+			args = append(args, "--tail", options.Tail)
+		}
 		if options.Follow {
 			args = append(args, "-f")
 		}
