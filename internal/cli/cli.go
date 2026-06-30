@@ -53,7 +53,7 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 		printHelp(stdout)
 		return 0
 	case "--version", "version":
-		fmt.Fprintf(stdout, "reploy %s\n", reploy.Version)
+		fmt.Fprintf(stdout, "reploy %s\n", reploy.DisplayVersion())
 		return 0
 	case "index":
 		return runPackIndex(args[0], args[1:], stdout, stderr)
@@ -1912,7 +1912,7 @@ func startSpinner(output io.Writer, label string) func(bool) {
 }
 
 func printShortUsage(output io.Writer) {
-	fmt.Fprintf(output, "reploy %s\n\n", reploy.Version)
+	fmt.Fprintf(output, "reploy %s\n\n", reploy.DisplayVersion())
 	fmt.Fprintln(output, "Usage: reploy COMMAND")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Next steps:")

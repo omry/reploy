@@ -78,7 +78,7 @@ func TestVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	if stdout != "reploy "+reploy.Version+"\n" {
+	if stdout != "reploy "+reploy.DisplayVersion()+"\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	if stderr != "" {

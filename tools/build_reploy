@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import os
 import platform
 import shutil
@@ -121,6 +122,75 @@ def reploy_version(root: Path) -> str:
     if not version:
         raise ValueError(f"could not read Reploy version from {version_file}")
     return version
+
+
+def is_development_version(version: str) -> bool:
+    return "dev" in version.strip().lower()
+
+
+def git_output(root: Path, *args: str) -> str:
+    if shutil.which("git") is None:
+        return ""
+    result = subprocess.run(
+        ["git", *args],
+        cwd=root,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def git_dirty(root: Path) -> bool:
+    if shutil.which("git") is None:
+        return False
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=root,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    return result.returncode == 0 and result.stdout.strip() != ""
+
+
+def build_timestamp() -> str:
+    timestamp = datetime.now().astimezone().replace(microsecond=0)
+    timezone_name = timestamp.strftime("%Z") or timestamp.strftime("%z")
+    return f"{timestamp:%Y-%m-%d %H:%M:%S} {timezone_name}".strip()
+
+
+def ldflag_safe_timestamp(timestamp: str) -> str:
+    return "_".join(timestamp.split())
+
+
+def dev_build_ldflags(root: Path, version: str) -> list[str]:
+    if not is_development_version(version):
+        return []
+
+    commit = os.environ.get("REPLOY_COMMIT", "").strip()
+    if not commit:
+        commit = git_output(root, "rev-parse", "--short=10", "HEAD")
+
+    dirty = os.environ.get("REPLOY_DIRTY", "").strip()
+    if not dirty:
+        dirty = "true" if git_dirty(root) else "false"
+
+    timestamp = os.environ.get("REPLOY_BUILD_TIMESTAMP", "").strip()
+    if not timestamp:
+        timestamp = build_timestamp()
+    timestamp = ldflag_safe_timestamp(timestamp)
+
+    ldflags = []
+    if commit:
+        ldflags.append(f"-X github.com/omry/reploy.BuildCommit={commit}")
+    ldflags.append(f"-X github.com/omry/reploy.BuildDirty={dirty}")
+    ldflags.append(f"-X github.com/omry/reploy.BuildTimestamp={timestamp}")
+    return ldflags
 
 
 def display_path(path: Path, *, root: Path) -> str:
@@ -263,6 +333,7 @@ def build_targets(
             "-trimpath",
         ]
         ldflags = [f"-X github.com/omry/reploy.Version={version}"]
+        ldflags.extend(dev_build_ldflags(root, version))
         if strip:
             ldflags.extend(["-s", "-w"])
         command.extend(["-ldflags", " ".join(ldflags)])
