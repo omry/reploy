@@ -1,0 +1,3 @@
+kind: Changed
+body: Make `reploy stage` output concise by default and show generated file update details only with `--verbose`.
+time: 2026-07-01T15:21:10+08:00

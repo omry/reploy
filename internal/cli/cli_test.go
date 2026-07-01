@@ -522,6 +522,8 @@ func TestDockerStageHelp(t *testing.T) {
 		"--dir DIR",
 		"--update",
 		"--force",
+		"--verbose",
+		"Show generated file update details",
 		"Python provider options:",
 		"--requirement REQ",
 		"Exact Python package pin or absolute container path for requirements.txt",
@@ -1121,17 +1123,36 @@ func TestDockerInitWritesDeployment(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "updated "+filepath.Join(deployDir, dockerdeploy.ComposeFileName)) {
-		t.Fatalf("stdout did not include compose write:\n%s", stdout)
-	}
 	if !strings.Contains(stdout, "created staging directory for demo: "+deployDir) {
 		t.Fatalf("stdout did not include staging summary:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "updated ") {
+		t.Fatalf("stdout should not include generated file updates without --verbose:\n%s", stdout)
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
 	}
 	if _, err := os.Stat(filepath.Join(deployDir, dockerdeploy.StateFileName)); err != nil {
 		t.Fatalf("missing state: %v", err)
+	}
+}
+
+func TestDockerInitVerboseReportsGeneratedFiles(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+
+	code, stdout, stderr := runCLI("stage", "--verbose", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "created staging directory for demo: "+deployDir) {
+		t.Fatalf("stdout did not include staging summary:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "updated "+filepath.Join(deployDir, dockerdeploy.ComposeFileName)) {
+		t.Fatalf("stdout did not include compose write:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
 	}
 }
 
@@ -1148,11 +1169,11 @@ func TestDockerInitUsesDefaultDeploymentDir(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(deployDir, dockerdeploy.StateFileName)); err != nil {
 		t.Fatalf("missing state in default deployment dir: %v", err)
 	}
-	if !strings.Contains(stdout, "updated "+filepath.Join("reploy-staging", dockerdeploy.ComposeFileName)) {
-		t.Fatalf("stdout did not include default compose write:\n%s", stdout)
-	}
 	if !strings.Contains(stdout, "created staging directory for demo: reploy-staging") {
 		t.Fatalf("stdout did not include default staging summary:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "updated ") {
+		t.Fatalf("stdout should not include generated file updates without --verbose:\n%s", stdout)
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
@@ -1616,8 +1637,11 @@ func TestDockerInitLoadsPyPIPackAndRecordsResolvedArtifact(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "updated "+filepath.Join(deployDir, dockerdeploy.ComposeFileName)) {
-		t.Fatalf("stdout did not include compose write:\n%s", stdout)
+	if !strings.Contains(stdout, "created staging directory for demo.blueprint.yaml: "+deployDir) {
+		t.Fatalf("stdout did not include staging summary:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "updated ") {
+		t.Fatalf("stdout should not include generated file updates without --verbose:\n%s", stdout)
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
@@ -1783,8 +1807,11 @@ func TestDockerStageUpdateAcceptsPackRef(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("stage --update failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "updated "+filepath.Join(deployDir, dockerdeploy.StateFileName)) {
-		t.Fatalf("stdout missing state update:\n%s", stdout)
+	if !strings.Contains(stdout, "updated staging directory: "+deployDir) {
+		t.Fatalf("stdout missing staging update summary:\n%s", stdout)
+	}
+	if strings.Contains(stdout, filepath.Join(deployDir, dockerdeploy.StateFileName)) {
+		t.Fatalf("stdout should not include generated file updates without --verbose:\n%s", stdout)
 	}
 	stateContent, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.StateFileName))
 	if err != nil {
@@ -1833,7 +1860,7 @@ func TestDockerStageUpdateForceOverwritesLocalGeneratedEdits(t *testing.T) {
 		t.Fatalf("control script content changed without force: %q", content)
 	}
 
-	code, stdout, stderr = runCLI("stage", "--update", "--force", "--dir", deployDir)
+	code, stdout, stderr = runCLI("stage", "--update", "--verbose", "--force", "--dir", deployDir)
 	if code != 0 {
 		t.Fatalf("stage --update --force failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}

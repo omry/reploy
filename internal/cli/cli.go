@@ -222,7 +222,10 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
 		printDockerHelp(stdout)
 		return 0
 	case "stage":
-		options, err := parseDockerCommandOptions(args[1:], true, dockerCommandParseConfig{AllowUpdate: true})
+		options, err := parseDockerCommandOptions(args[1:], true, dockerCommandParseConfig{
+			AllowUpdate:  true,
+			AllowVerbose: true,
+		})
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
 			printDockerStageHelp(stderr)
@@ -249,7 +252,7 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
 				fmt.Fprintf(stderr, "reploy stage --update error: %v\n", err)
 				return 1
 			}
-			printUpdateResults(stdout, results)
+			printStageUpdateResults(stdout, options.Dir, results, options.Verbose)
 			return 0
 		}
 		results, err := dockerdeploy.Init(dockerdeploy.InitOptions{
@@ -272,7 +275,9 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 1
 		}
 		fmt.Fprintf(stdout, "created staging directory for %s: %s\n", packDisplayName(options.Pack), options.Dir)
-		printUpdateResults(stdout, results)
+		if options.Verbose {
+			printUpdateResults(stdout, results)
+		}
 		return 0
 	case "info":
 		options, err := parseDockerCommandOptions(args[1:], false)
@@ -916,6 +921,24 @@ func printUpdateResults(output io.Writer, results []dockerdeploy.UpdateResult) {
 	}
 	if !anyAction {
 		fmt.Fprintln(output, deploy.UpdateStatusUpToDate)
+	}
+}
+
+func printStageUpdateResults(output io.Writer, dir string, results []dockerdeploy.UpdateResult, verbose bool) {
+	allUpToDate := true
+	for _, result := range results {
+		if result.Status != deploy.UpdateStatusUpToDate {
+			allUpToDate = false
+			break
+		}
+	}
+	if allUpToDate {
+		fmt.Fprintln(output, deploy.UpdateStatusUpToDate)
+		return
+	}
+	fmt.Fprintf(output, "updated staging directory: %s\n", dir)
+	if verbose {
+		printUpdateResults(output, results)
 	}
 }
 
@@ -1604,11 +1627,13 @@ type dockerCommandOptions struct {
 	Warnings     []string
 	Force        bool
 	Update       bool
+	Verbose      bool
 	Requirements []string
 }
 
 type dockerCommandParseConfig struct {
-	AllowUpdate bool
+	AllowUpdate  bool
+	AllowVerbose bool
 }
 
 func parseDockerCommandOptions(args []string, requirePack bool, configs ...dockerCommandParseConfig) (dockerCommandOptions, error) {
@@ -1628,6 +1653,11 @@ func parseDockerCommandOptions(args []string, requirePack bool, configs ...docke
 				return dockerCommandOptions{}, fmt.Errorf("unknown option: %s", arg)
 			}
 			options.Update = true
+		case "--verbose":
+			if !config.AllowVerbose {
+				return dockerCommandOptions{}, fmt.Errorf("unknown option: %s", arg)
+			}
+			options.Verbose = true
 		case "--dir":
 			value, ok := optionValue(args, &index)
 			if !ok {
@@ -2311,6 +2341,7 @@ Options:
   --dir DIR    Staging directory to create, default reploy-staging
   --update     Update an existing staging directory instead of creating one
   --force      With --update, overwrite locally edited generated files
+  --verbose    Show generated file update details
 
 Python provider options:
   --requirement REQ
