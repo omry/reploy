@@ -1,0 +1,3 @@
+kind: Changed
+body: Prefer Sapling as the local client for repository workflow guidance and build metadata collection.
+time: 2026-07-01T16:03:00+08:00

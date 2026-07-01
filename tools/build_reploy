@@ -128,11 +128,11 @@ def is_development_version(version: str) -> bool:
     return "dev" in version.strip().lower()
 
 
-def git_output(root: Path, *args: str) -> str:
-    if shutil.which("git") is None:
+def source_control_output(root: Path, *args: str) -> str:
+    if shutil.which("sl") is None:
         return ""
     result = subprocess.run(
-        ["git", *args],
+        ["sl", *args],
         cwd=root,
         check=False,
         text=True,
@@ -144,11 +144,11 @@ def git_output(root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def git_dirty(root: Path) -> bool:
-    if shutil.which("git") is None:
+def source_control_dirty(root: Path) -> bool:
+    if shutil.which("sl") is None:
         return False
     result = subprocess.run(
-        ["git", "status", "--porcelain"],
+        ["sl", "status"],
         cwd=root,
         check=False,
         text=True,
@@ -156,6 +156,15 @@ def git_dirty(root: Path) -> bool:
         stderr=subprocess.DEVNULL,
     )
     return result.returncode == 0 and result.stdout.strip() != ""
+
+
+def source_commit(root: Path) -> str:
+    for name in ("REPLOY_COMMIT", "GITHUB_SHA"):
+        commit = os.environ.get(name, "").strip()
+        if commit:
+            return commit[:10]
+    commit = source_control_output(root, "log", "-r", ".", "-T", "{node}\n")
+    return commit[:10]
 
 
 def build_timestamp() -> str:
@@ -172,13 +181,11 @@ def dev_build_ldflags(root: Path, version: str) -> list[str]:
     if not is_development_version(version):
         return []
 
-    commit = os.environ.get("REPLOY_COMMIT", "").strip()
-    if not commit:
-        commit = git_output(root, "rev-parse", "--short=10", "HEAD")
+    commit = source_commit(root)
 
     dirty = os.environ.get("REPLOY_DIRTY", "").strip()
     if not dirty:
-        dirty = "true" if git_dirty(root) else "false"
+        dirty = "true" if source_control_dirty(root) else "false"
 
     timestamp = os.environ.get("REPLOY_BUILD_TIMESTAMP", "").strip()
     if not timestamp:
