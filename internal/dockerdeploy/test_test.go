@@ -53,18 +53,21 @@ func TestInstallSuccessLinesResolveAppVars(t *testing.T) {
 	t.Cleanup(func() {
 		runInstallAppCommand = oldRunInstallAppCommand
 	})
-	runInstallAppCommand = func(dir string, args []string, stdout io.Writer, stderr io.Writer) error {
+	runInstallAppCommand = func(dir string, args []string, stdout io.Writer, stderr io.Writer, dockerPreflightTimeout time.Duration) error {
 		if dir != deployDir {
 			t.Fatalf("dir = %q", dir)
 		}
 		if got := strings.Join(args, " "); got != "config show --resolve --package demo.server.public.base_url --value" {
 			t.Fatalf("args = %q", got)
 		}
+		if dockerPreflightTimeout != 2*time.Second {
+			t.Fatalf("docker preflight timeout = %s, want 2s", dockerPreflightTimeout)
+		}
 		fmt.Fprintln(stdout, "https://arbiter.example.com")
 		return nil
 	}
 
-	lines, err := InstallSuccessLines(deployDir)
+	lines, err := InstallSuccessLines(deployDir, 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +108,7 @@ func TestInstallSuccessLinesResolveServerURLVar(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	lines, err := InstallSuccessLines(deployDir)
+	lines, err := InstallSuccessLines(deployDir, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,12 +145,12 @@ func TestInstallSuccessLinesReportsAppVarFailures(t *testing.T) {
 	t.Cleanup(func() {
 		runInstallAppCommand = oldRunInstallAppCommand
 	})
-	runInstallAppCommand = func(dir string, args []string, stdout io.Writer, stderr io.Writer) error {
+	runInstallAppCommand = func(dir string, args []string, stdout io.Writer, stderr io.Writer, dockerPreflightTimeout time.Duration) error {
 		fmt.Fprintln(stderr, "config failed")
 		return errors.New("exit status 1")
 	}
 
-	_, err = InstallSuccessLines(deployDir)
+	_, err = InstallSuccessLines(deployDir, 0)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -186,13 +189,13 @@ func TestInstallSuccessLinesRejectsMultilineAppVarOutput(t *testing.T) {
 	t.Cleanup(func() {
 		runInstallAppCommand = oldRunInstallAppCommand
 	})
-	runInstallAppCommand = func(dir string, args []string, stdout io.Writer, stderr io.Writer) error {
+	runInstallAppCommand = func(dir string, args []string, stdout io.Writer, stderr io.Writer, dockerPreflightTimeout time.Duration) error {
 		fmt.Fprintln(stdout, "https://arbiter.example.com")
 		fmt.Fprintln(stdout, "extra output")
 		return nil
 	}
 
-	_, err = InstallSuccessLines(deployDir)
+	_, err = InstallSuccessLines(deployDir, 0)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -385,7 +388,7 @@ func TestCommandOutputKeepsStderrOutOfSuccessfulOutput(t *testing.T) {
 	output, err := commandOutput(CommandSpec{
 		Name: "sh",
 		Args: []string{"-c", "printf stdout; printf stderr >&2"},
-	})
+	}, RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +401,7 @@ func TestCommandOutputIncludesStderrOnFailure(t *testing.T) {
 	output, err := commandOutput(CommandSpec{
 		Name: "sh",
 		Args: []string{"-c", "printf stdout; printf stderr >&2; exit 7"},
-	})
+	}, RunOptions{})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -433,7 +436,7 @@ func TestComposeServiceStatesUsesInstalledComposeProject(t *testing.T) {
 	t.Cleanup(func() {
 		runTestCommandOutput = original
 	})
-	runTestCommandOutput = func(spec CommandSpec) ([]byte, error) {
+	runTestCommandOutput = func(spec CommandSpec, options RunOptions) ([]byte, error) {
 		if !containsAdjacent(spec.Args, "--project-name", "demo-12345678") {
 			t.Fatalf("args did not include installed compose project: %#v", spec.Args)
 		}
@@ -443,7 +446,7 @@ func TestComposeServiceStatesUsesInstalledComposeProject(t *testing.T) {
 		return []byte(`[{"State":"running"}]`), nil
 	}
 
-	states, err := composeServiceStates(dir)
+	states, err := composeServiceStates(dir, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -500,7 +503,7 @@ func makeTestDeploymentWithDockerEnv(t *testing.T, env string) string {
 
 func stubTestCommandOutput(output []byte, err error) func() {
 	original := runTestCommandOutput
-	runTestCommandOutput = func(spec CommandSpec) ([]byte, error) {
+	runTestCommandOutput = func(spec CommandSpec, options RunOptions) ([]byte, error) {
 		return output, err
 	}
 	return func() {
@@ -512,7 +515,7 @@ func stubTestCommandOutputSequence(t *testing.T, outputs [][]byte) func() {
 	t.Helper()
 	original := runTestCommandOutput
 	index := 0
-	runTestCommandOutput = func(spec CommandSpec) ([]byte, error) {
+	runTestCommandOutput = func(spec CommandSpec, options RunOptions) ([]byte, error) {
 		if index >= len(outputs) {
 			return outputs[len(outputs)-1], nil
 		}

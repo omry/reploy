@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/omry/reploy/internal/deploy"
 )
@@ -19,6 +20,8 @@ type UninstallOptions struct {
 	RemoveDir   bool
 	DryRun      bool
 	Stdout      io.Writer
+
+	DockerPreflightTimeout time.Duration
 }
 
 type uninstallPlan struct {
@@ -30,6 +33,8 @@ type uninstallPlan struct {
 	ContainerName  string
 	NetworkName    string
 	RemoveDir      bool
+
+	DockerPreflightTimeout time.Duration
 }
 
 type ReploySystemdService struct {
@@ -46,6 +51,12 @@ var uninstallRunCommand = func(name string, args ...string) error {
 }
 var uninstallRunCommandOutput = func(name string, args ...string) ([]byte, error) {
 	return exec.Command(name, args...).CombinedOutput()
+}
+var uninstallRunDockerCommand = func(spec CommandSpec, dockerPreflightTimeout time.Duration) error {
+	return runCommand(spec, RunOptions{DockerPreflightTimeout: dockerPreflightTimeout})
+}
+var uninstallRunDockerCommandOutput = func(spec CommandSpec, dockerPreflightTimeout time.Duration) ([]byte, error) {
+	return commandOutput(spec, RunOptions{DockerPreflightTimeout: dockerPreflightTimeout})
 }
 var uninstallRemove = os.Remove
 var uninstallRemoveAll = os.RemoveAll
@@ -80,7 +91,7 @@ func newUninstallPlan(options UninstallOptions) (uninstallPlan, error) {
 		if strings.TrimSpace(options.ServiceName) == "" {
 			return uninstallPlan{}, fmt.Errorf("--from is required unless --service-name is set or the current directory is an installed deployment")
 		}
-		return serviceOnlyUninstallPlan(options.ServiceName, options.RemoveDir)
+		return serviceOnlyUninstallPlan(options.ServiceName, options.RemoveDir, options.DockerPreflightTimeout)
 	}
 	from, err := filepath.Abs(options.From)
 	if err != nil {
@@ -92,7 +103,7 @@ func newUninstallPlan(options UninstallOptions) (uninstallPlan, error) {
 			if strings.TrimSpace(options.ServiceName) == "" {
 				return uninstallPlan{}, fmt.Errorf("--service-name is required when --from is missing: %s", from)
 			}
-			plan, err := serviceOnlyUninstallPlan(options.ServiceName, options.RemoveDir)
+			plan, err := serviceOnlyUninstallPlan(options.ServiceName, options.RemoveDir, options.DockerPreflightTimeout)
 			if err != nil {
 				return uninstallPlan{}, err
 			}
@@ -119,18 +130,19 @@ func newUninstallPlan(options UninstallOptions) (uninstallPlan, error) {
 		return uninstallPlan{}, fmt.Errorf("--service-name %q does not match installed service %q", options.ServiceName, install.Service)
 	}
 	return uninstallPlan{
-		TargetDir:      from,
-		TargetExists:   true,
-		ServiceName:    install.Service,
-		UnitPath:       defaultString(install.UnitPath, filepath.Join(uninstallSystemdUnitDir, install.Service+".service")),
-		ComposeProject: install.ComposeProject,
-		ContainerName:  install.ContainerName,
-		NetworkName:    install.NetworkName,
-		RemoveDir:      options.RemoveDir,
+		TargetDir:              from,
+		TargetExists:           true,
+		ServiceName:            install.Service,
+		UnitPath:               defaultString(install.UnitPath, filepath.Join(uninstallSystemdUnitDir, install.Service+".service")),
+		ComposeProject:         install.ComposeProject,
+		ContainerName:          install.ContainerName,
+		NetworkName:            install.NetworkName,
+		RemoveDir:              options.RemoveDir,
+		DockerPreflightTimeout: options.DockerPreflightTimeout,
 	}, nil
 }
 
-func serviceOnlyUninstallPlan(serviceName string, removeDir bool) (uninstallPlan, error) {
+func serviceOnlyUninstallPlan(serviceName string, removeDir bool, dockerPreflightTimeout time.Duration) (uninstallPlan, error) {
 	serviceName = strings.TrimSpace(serviceName)
 	if serviceName == "" {
 		return uninstallPlan{}, fmt.Errorf("--service-name must not be empty")
@@ -150,12 +162,13 @@ func serviceOnlyUninstallPlan(serviceName string, removeDir bool) (uninstallPlan
 		return uninstallPlan{}, err
 	}
 	return uninstallPlan{
-		TargetDir:      identity.TargetDir,
-		TargetExists:   false,
-		ServiceName:    serviceName,
-		UnitPath:       unitPath,
-		ComposeProject: identity.ComposeProject,
-		RemoveDir:      removeDir,
+		TargetDir:              identity.TargetDir,
+		TargetExists:           false,
+		ServiceName:            serviceName,
+		UnitPath:               unitPath,
+		ComposeProject:         identity.ComposeProject,
+		RemoveDir:              removeDir,
+		DockerPreflightTimeout: dockerPreflightTimeout,
 	}, nil
 }
 
@@ -385,7 +398,7 @@ func applyUninstallPlan(plan uninstallPlan, stdout io.Writer) error {
 func runUninstallDockerCleanup(plan uninstallPlan, stdout io.Writer) error {
 	if plan.TargetExists {
 		spec := composeCommandWithProject(plan.TargetDir, plan.ComposeProject, "down", "--remove-orphans")
-		if err := uninstallRunCommand(spec.Name, spec.Args...); err == nil {
+		if err := uninstallRunDockerCommand(spec, plan.DockerPreflightTimeout); err == nil {
 			return nil
 		} else if plan.ComposeProject == "" {
 			return err
@@ -396,35 +409,38 @@ func runUninstallDockerCleanup(plan uninstallPlan, stdout io.Writer) error {
 	if plan.ComposeProject == "" {
 		return nil
 	}
-	return removeDockerComposeProjectByLabel(plan.ComposeProject)
+	return removeDockerComposeProjectByLabel(plan.ComposeProject, plan.DockerPreflightTimeout)
 }
 
-func removeDockerComposeProjectByLabel(project string) error {
-	containerIDs, err := dockerIDsByLabel("ps", "-a", project)
+func removeDockerComposeProjectByLabel(project string, dockerPreflightTimeout time.Duration) error {
+	containerIDs, err := dockerIDsByLabel("ps", "-a", project, dockerPreflightTimeout)
 	if err != nil {
 		return err
 	}
 	if len(containerIDs) > 0 {
 		args := append([]string{"rm", "-f"}, containerIDs...)
-		if err := uninstallRunCommand("docker", args...); err != nil {
+		if err := uninstallRunDockerCommand(CommandSpec{Name: "docker", Args: args}, dockerPreflightTimeout); err != nil {
 			return err
 		}
 	}
-	networkIDs, err := dockerIDsByLabel("network", "ls", project)
+	networkIDs, err := dockerIDsByLabel("network", "ls", project, dockerPreflightTimeout)
 	if err != nil {
 		return err
 	}
 	if len(networkIDs) > 0 {
 		args := append([]string{"network", "rm"}, networkIDs...)
-		if err := uninstallRunCommand("docker", args...); err != nil {
+		if err := uninstallRunDockerCommand(CommandSpec{Name: "docker", Args: args}, dockerPreflightTimeout); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func dockerIDsByLabel(first string, second string, project string) ([]string, error) {
-	output, err := uninstallRunCommandOutput("docker", first, second, "--filter", "label=com.docker.compose.project="+project, "--format", "{{.ID}}")
+func dockerIDsByLabel(first string, second string, project string, dockerPreflightTimeout time.Duration) ([]string, error) {
+	output, err := uninstallRunDockerCommandOutput(CommandSpec{
+		Name: "docker",
+		Args: []string{first, second, "--filter", "label=com.docker.compose.project=" + project, "--format", "{{.ID}}"},
+	}, dockerPreflightTimeout)
 	if err != nil {
 		return nil, err
 	}

@@ -36,19 +36,18 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	target := "docker"
-	switch args[0] {
-	case "--docker":
-		args = args[1:]
-	case "--aws":
-		fmt.Fprintln(stderr, "reploy usage error: deployment target aws is not supported yet")
+	globalOptions, remainingArgs, err := parseGlobalDeploymentOptions(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
 		printShortUsage(stderr)
 		return 2
 	}
+	args = remainingArgs
+	target = globalOptions.Target
 	if len(args) == 0 {
 		printShortUsage(stderr)
 		return 2
 	}
-
 	switch args[0] {
 	case "-h", "--help", "help":
 		printHelp(stdout)
@@ -60,12 +59,67 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runPackIndex(args[0], args[1:], stdout, stderr)
 	default:
 		if target == "docker" && isDeploymentCommand(args[0]) {
-			return runDocker(args, stdout, stderr)
+			return runDocker(args, stdout, stderr, globalOptions)
 		}
 		fmt.Fprintf(stderr, "reploy usage error: unknown command: %s\n", args[0])
 		printShortUsage(stderr)
 		return 2
 	}
+}
+
+type globalDeploymentOptions struct {
+	Target           string
+	DockerTimeout    time.Duration
+	DockerTimeoutSet bool
+}
+
+func parseGlobalDeploymentOptions(args []string) (globalDeploymentOptions, []string, error) {
+	options := globalDeploymentOptions{Target: "docker"}
+	for len(args) > 0 {
+		arg := args[0]
+		switch arg {
+		case "--docker":
+			options.Target = "docker"
+			args = args[1:]
+		case "--aws":
+			return globalDeploymentOptions{}, nil, fmt.Errorf("deployment target aws is not supported yet")
+		case "--docker-timeout":
+			if len(args) < 2 {
+				return globalDeploymentOptions{}, nil, fmt.Errorf("%s requires a value", arg)
+			}
+			timeout, err := parseDockerTimeout(args[1])
+			if err != nil {
+				return globalDeploymentOptions{}, nil, err
+			}
+			options.DockerTimeout = timeout
+			options.DockerTimeoutSet = true
+			args = args[2:]
+		default:
+			if strings.HasPrefix(arg, "--docker-timeout=") {
+				timeout, err := parseDockerTimeout(strings.TrimPrefix(arg, "--docker-timeout="))
+				if err != nil {
+					return globalDeploymentOptions{}, nil, err
+				}
+				options.DockerTimeout = timeout
+				options.DockerTimeoutSet = true
+				args = args[1:]
+				continue
+			}
+			return options, args, nil
+		}
+	}
+	return options, args, nil
+}
+
+func parseDockerTimeout(value string) (time.Duration, error) {
+	timeout, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid --docker-timeout duration: %s", value)
+	}
+	if timeout <= 0 {
+		return 0, fmt.Errorf("--docker-timeout must be greater than zero")
+	}
+	return timeout, nil
 }
 
 func isDeploymentCommand(command string) bool {
@@ -201,16 +255,16 @@ func parsePackIndexRefreshOptions(args []string) (packIndexRefreshOptions, error
 	return options, nil
 }
 
-func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
+func runDocker(args []string, stdout io.Writer, stderr io.Writer, globalOptions globalDeploymentOptions) int {
 	if len(args) == 0 {
 		printDockerShortUsage(stderr)
 		return 2
 	}
 	if args[0] == "bundle" {
-		return runDockerBundle(args[1:], stdout, stderr)
+		return runDockerBundle(args[1:], stdout, stderr, globalOptions)
 	}
 	if args[0] == "app" {
-		return runDockerApp(args[1:], stdout, stderr)
+		return runDockerApp(args[1:], stdout, stderr, globalOptions)
 	}
 	if len(args) > 1 && isHelpArg(args[1]) {
 		printDockerCommandHelp(args[0], stdout)
@@ -304,15 +358,15 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprint(stdout, info)
 		return 0
 	case "up", "restart", "down", "ps", "status", "logs":
-		return runDockerRuntime(args[0], args[1:], stdout, stderr)
+		return runDockerRuntime(args[0], args[1:], stdout, stderr, globalOptions)
 	case "test":
-		return runDockerTest(args[1:], stdout, stderr)
+		return runDockerTest(args[1:], stdout, stderr, globalOptions)
 	case "doctor":
 		return runDockerDoctor(args[1:], stdout, stderr)
 	case "install":
-		return runDockerInstall(args[1:], stdout, stderr)
+		return runDockerInstall(args[1:], stdout, stderr, globalOptions)
 	case "uninstall":
-		return runDockerUninstall(args[1:], stdout, stderr)
+		return runDockerUninstall(args[1:], stdout, stderr, globalOptions)
 	default:
 		fmt.Fprintf(stderr, "reploy usage error: unknown command: %s\n", args[0])
 		printDockerShortUsage(stderr)
@@ -320,7 +374,7 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 }
 
-func runDockerApp(args []string, stdout io.Writer, stderr io.Writer) int {
+func runDockerApp(args []string, stdout io.Writer, stderr io.Writer, globalOptions globalDeploymentOptions) int {
 	if len(args) > 0 && isHelpArg(args[0]) {
 		printAppHelp(stdout)
 		return 0
@@ -340,10 +394,11 @@ func runDockerApp(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 1
 	}
 	if err := dockerdeploy.AppCommand(dockerdeploy.AppCommandOptions{
-		Dir:         options.Dir,
-		CommandArgs: options.CommandArgs,
-		Stdout:      stdout,
-		Stderr:      stderr,
+		Dir:                    options.Dir,
+		CommandArgs:            options.CommandArgs,
+		Stdout:                 stdout,
+		Stderr:                 stderr,
+		DockerPreflightTimeout: globalOptions.DockerTimeout,
 	}); err != nil {
 		fmt.Fprintf(stderr, "reploy app error: %v\n", err)
 		return 1
@@ -485,7 +540,7 @@ func resolveImplicitStagingDeploymentDir(dir string, explicit bool, output io.Wr
 	return dir, nil
 }
 
-func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
+func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer, globalOptions globalDeploymentOptions) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "reploy usage error: expected bundle command")
 		printBundleShortUsage(stderr)
@@ -514,11 +569,12 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 1
 		}
 		results, err := dockerdeploy.BundleUpgrade(dockerdeploy.BundleUpgradeOptions{
-			Dir:      options.Dir,
-			Target:   options.Root,
-			PyPIOnly: options.PyPIOnly,
-			Stdout:   stdout,
-			Stderr:   stderr,
+			Dir:                    options.Dir,
+			Target:                 options.Root,
+			PyPIOnly:               options.PyPIOnly,
+			Stdout:                 stdout,
+			Stderr:                 stderr,
+			DockerPreflightTimeout: globalOptions.DockerTimeout,
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy bundle upgrade error: %v\n", err)
@@ -629,24 +685,28 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 		built := false
 		if !options.DryRun {
 			built, err = dockerdeploy.EnsureBundlePrepared(dockerdeploy.BundleEnsureOptions{
-				Dir:     options.Dir,
-				Verbose: options.Verbose,
-				Stdout:  stdout,
-				Stderr:  stderr,
+				Dir:                    options.Dir,
+				Verbose:                options.Verbose,
+				Stdout:                 stdout,
+				Stderr:                 stderr,
+				DockerPreflightTimeout: globalOptions.DockerTimeout,
 			})
 		}
 		if err == nil && !built {
 			err = dockerdeploy.BundleCheck(dockerdeploy.BundleCheckOptions{
-				Dir:     options.Dir,
-				DryRun:  options.DryRun,
-				Verbose: options.Verbose,
-				Stdout:  stdout,
-				Stderr:  stderr,
+				Dir:                    options.Dir,
+				DryRun:                 options.DryRun,
+				Verbose:                options.Verbose,
+				Stdout:                 stdout,
+				Stderr:                 stderr,
+				DockerPreflightTimeout: globalOptions.DockerTimeout,
 			})
 		}
 		if err != nil {
 			stopSpinner(false)
 			if options.DryRun || options.Verbose {
+				fmt.Fprintf(stderr, "reploy bundle check error: %v\n", err)
+			} else if bundleErrorHasEnoughOutput(err) {
 				fmt.Fprintf(stderr, "reploy bundle check error: %v\n", err)
 			} else {
 				fmt.Fprintf(stderr, "reploy bundle check error: %v; rerun with --verbose for command output\n", err)
@@ -669,15 +729,18 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer) int {
 			stopSpinner = startSpinner(spinnerStderr, label)
 		}
 		if err := dockerdeploy.BundlePrepare(dockerdeploy.BundlePrepareOptions{
-			Dir:      options.Dir,
-			DryRun:   options.DryRun,
-			PyPIOnly: options.PyPIOnly,
-			Verbose:  options.Verbose,
-			Stdout:   stdout,
-			Stderr:   stderr,
+			Dir:                    options.Dir,
+			DryRun:                 options.DryRun,
+			PyPIOnly:               options.PyPIOnly,
+			Verbose:                options.Verbose,
+			Stdout:                 stdout,
+			Stderr:                 stderr,
+			DockerPreflightTimeout: globalOptions.DockerTimeout,
 		}); err != nil {
 			stopSpinner(false)
 			if options.DryRun || options.Verbose {
+				fmt.Fprintf(stderr, "reploy bundle build error: %v\n", err)
+			} else if bundleErrorHasEnoughOutput(err) {
 				fmt.Fprintf(stderr, "reploy bundle build error: %v\n", err)
 			} else {
 				fmt.Fprintf(stderr, "reploy bundle build error: %v; rerun with --verbose for command output\n", err)
@@ -1029,7 +1092,7 @@ func runDockerDoctor(args []string, stdout io.Writer, stderr io.Writer) int {
 	})
 }
 
-func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer) int {
+func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer, globalOptions globalDeploymentOptions) int {
 	options, err := parseDockerInstallOptions(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
@@ -1048,34 +1111,36 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	installTarget := ""
 	if options.Pack.Raw != "" {
 		installTarget, err = dockerDirectInstall(dockerdeploy.DirectInstallOptions{
-			Pack:          options.Pack,
-			Target:        options.Target,
-			Service:       options.Service,
-			PortOverrides: options.PortOverrides,
-			Replace:       options.Replace,
-			Clean:         options.Clean,
-			InPlace:       options.InPlace,
-			Start:         options.Start,
-			DryRun:        options.DryRun,
-			Stdout:        stdout,
-			Progress:      nil,
+			Pack:                   options.Pack,
+			Target:                 options.Target,
+			Service:                options.Service,
+			PortOverrides:          options.PortOverrides,
+			Replace:                options.Replace,
+			Clean:                  options.Clean,
+			InPlace:                options.InPlace,
+			Start:                  options.Start,
+			DryRun:                 options.DryRun,
+			Stdout:                 stdout,
+			Progress:               nil,
+			DockerPreflightTimeout: globalOptions.DockerTimeout,
 		})
 	} else {
 		installTarget = options.Target
 		options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
 		if err == nil {
 			err = dockerInstall(dockerdeploy.InstallOptions{
-				Dir:           options.Dir,
-				Target:        options.Target,
-				Service:       options.Service,
-				PortOverrides: options.PortOverrides,
-				Replace:       options.Replace,
-				Clean:         options.Clean,
-				InPlace:       options.InPlace,
-				Start:         options.Start,
-				DryRun:        options.DryRun,
-				Stdout:        stdout,
-				Progress:      nil,
+				Dir:                    options.Dir,
+				Target:                 options.Target,
+				Service:                options.Service,
+				PortOverrides:          options.PortOverrides,
+				Replace:                options.Replace,
+				Clean:                  options.Clean,
+				InPlace:                options.InPlace,
+				Start:                  options.Start,
+				DryRun:                 options.DryRun,
+				Stdout:                 stdout,
+				Progress:               nil,
+				DockerPreflightTimeout: globalOptions.DockerTimeout,
 			})
 		}
 	}
@@ -1086,14 +1151,14 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	stopSpinner(true)
 	if !options.DryRun && installTarget != "" {
-		if err := dockerPrintInstallSuccess(installTarget, stdout); err != nil {
+		if err := dockerPrintInstallSuccess(installTarget, stdout, globalOptions.DockerTimeout); err != nil {
 			fmt.Fprintf(stderr, "reploy install warning: success output: %v\n", err)
 		}
 	}
 	return 0
 }
 
-func runDockerUninstall(args []string, stdout io.Writer, stderr io.Writer) int {
+func runDockerUninstall(args []string, stdout io.Writer, stderr io.Writer, globalOptions globalDeploymentOptions) int {
 	options, err := parseDockerUninstallOptions(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
@@ -1117,11 +1182,12 @@ func runDockerUninstall(args []string, stdout io.Writer, stderr io.Writer) int {
 		stopSpinner = startSpinner(stderr, "uninstalling deployment")
 	}
 	if err := dockerdeploy.Uninstall(dockerdeploy.UninstallOptions{
-		From:        options.From,
-		ServiceName: options.ServiceName,
-		RemoveDir:   options.RemoveDir,
-		DryRun:      options.DryRun,
-		Stdout:      stdout,
+		From:                   options.From,
+		ServiceName:            options.ServiceName,
+		RemoveDir:              options.RemoveDir,
+		DryRun:                 options.DryRun,
+		Stdout:                 stdout,
+		DockerPreflightTimeout: globalOptions.DockerTimeout,
 	}); err != nil {
 		stopSpinner(false)
 		fmt.Fprintf(stderr, "reploy uninstall error: %v\n", err)
@@ -1375,7 +1441,7 @@ func parseDockerDoctorOptions(args []string) (dockerDoctorOptions, error) {
 	return options, nil
 }
 
-func runDockerTest(args []string, stdout io.Writer, stderr io.Writer) int {
+func runDockerTest(args []string, stdout io.Writer, stderr io.Writer, globalOptions globalDeploymentOptions) int {
 	options, err := parseDockerTestOptions(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
@@ -1393,9 +1459,10 @@ func runDockerTest(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 1
 	}
 	if err := dockerTestServer(dockerdeploy.TestOptions{
-		Dir:     options.Dir,
-		Timeout: options.Timeout,
-		Stdout:  stdout,
+		Dir:                    options.Dir,
+		Timeout:                options.Timeout,
+		Stdout:                 stdout,
+		DockerPreflightTimeout: globalOptions.DockerTimeout,
 	}); err != nil {
 		fmt.Fprintf(errorStderr, "reploy test error: %v\n", err)
 		return 1
@@ -1458,7 +1525,7 @@ func parseDockerTestOptions(args []string) (dockerTestOptions, error) {
 	return options, nil
 }
 
-func runDockerRuntime(action string, args []string, stdout io.Writer, stderr io.Writer) int {
+func runDockerRuntime(action string, args []string, stdout io.Writer, stderr io.Writer, globalOptions globalDeploymentOptions) int {
 	options, err := parseDockerRuntimeOptions(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
@@ -1495,13 +1562,14 @@ func runDockerRuntime(action string, args []string, stdout io.Writer, stderr io.
 		stopSpinner = startSpinner(stderr, label)
 	}
 	if err := dockerRuntime(dockerdeploy.RuntimeOptions{
-		Dir:     options.Dir,
-		Action:  action,
-		Follow:  options.Follow,
-		Tail:    options.Tail,
-		Verbose: options.Verbose,
-		Stdout:  stdout,
-		Stderr:  stderr,
+		Dir:                    options.Dir,
+		Action:                 action,
+		Follow:                 options.Follow,
+		Tail:                   options.Tail,
+		Verbose:                options.Verbose,
+		Stdout:                 stdout,
+		Stderr:                 stderr,
+		DockerPreflightTimeout: globalOptions.DockerTimeout,
 	}); err != nil {
 		stopSpinner(false)
 		fmt.Fprintf(errorStderr, "reploy %s error: %v\n", action, err)
@@ -1601,6 +1669,12 @@ func parseDockerRuntimeOptions(args []string) (dockerRuntimeOptions, error) {
 
 func runtimeBundlePrepareFailed(err error) bool {
 	return strings.HasPrefix(err.Error(), "prepare installation bundle:")
+}
+
+func bundleErrorHasEnoughOutput(err error) bool {
+	message := err.Error()
+	return strings.Contains(message, "docker daemon check failed") ||
+		strings.Contains(message, "docker daemon did not respond")
 }
 
 func runtimeBundleBuildVerboseCommand(dir string, dirExplicit bool) string {
@@ -1993,11 +2067,11 @@ func startSpinner(output io.Writer, label string) func(bool) {
 		for {
 			select {
 			case ok := <-done:
+				suffix := "... failed"
 				if ok {
-					fmt.Fprintf(output, "\r%s... done\n", label)
-				} else {
-					fmt.Fprintf(output, "\r%s... failed\n", label)
+					suffix = "... done"
 				}
+				fmt.Fprintf(output, "\r%s%s\n", label, suffix)
 				close(finished)
 				return
 			case <-ticker.C:
@@ -2026,7 +2100,7 @@ func printShortUsage(output io.Writer) {
 
 func printHelp(output io.Writer) {
 	fmt.Fprint(output, strings.TrimLeft(`
-Usage: reploy [--docker] COMMAND
+Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND
 
 Commands:
   stage        Create a staging directory
@@ -2059,6 +2133,8 @@ Bundle:
 
 Target options:
   --docker     Use the Docker deployment target, default
+  --docker-timeout DURATION
+              Docker daemon responsiveness timeout, default 5s
   --aws        Reserved for a future AWS deployment target
 
 App refs:
@@ -2139,7 +2215,7 @@ Options:
 }
 
 func printBundleShortUsage(output io.Writer) {
-	fmt.Fprintln(output, "Usage: reploy bundle COMMAND")
+	fmt.Fprintln(output, "Usage: reploy [--docker-timeout DURATION] bundle COMMAND")
 	fmt.Fprintln(output, "Run 'reploy bundle --help' for bundle help.")
 	fmt.Fprintln(output)
 	fmt.Fprint(output, bundleCommandSummary())
@@ -2147,7 +2223,7 @@ func printBundleShortUsage(output io.Writer) {
 
 func printBundleHelp(output io.Writer) {
 	fmt.Fprint(output, strings.TrimLeft(`
-Usage: reploy bundle COMMAND
+Usage: reploy [--docker-timeout DURATION] bundle COMMAND
 
 `, "\n"))
 	fmt.Fprint(output, bundleCommandSummary())
@@ -2179,7 +2255,7 @@ Commands:
 }
 
 func printAppShortUsage(output io.Writer) {
-	fmt.Fprintln(output, "Usage: reploy app COMMAND")
+	fmt.Fprintln(output, "Usage: reploy [--docker-timeout DURATION] app COMMAND")
 	fmt.Fprintln(output, "Run 'reploy app --help' for app command help.")
 	fmt.Fprintln(output)
 	fmt.Fprint(output, appCommandSummary())
@@ -2187,7 +2263,7 @@ func printAppShortUsage(output io.Writer) {
 
 func printAppHelp(output io.Writer) {
 	fmt.Fprint(output, strings.TrimLeft(`
-Usage: reploy app COMMAND
+Usage: reploy [--docker-timeout DURATION] app COMMAND
 
 Run a blueprint-declared app command inside staging. App commands use the
 application installed in the staging bundle, not a host executable from PATH.
@@ -2213,13 +2289,13 @@ Run an app subcommand with:
 }
 
 func printDockerShortUsage(output io.Writer) {
-	fmt.Fprintln(output, "Usage: reploy [--docker] COMMAND")
+	fmt.Fprintln(output, "Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND")
 	fmt.Fprintln(output, "Run 'reploy --help' for help.")
 }
 
 func printDockerHelp(output io.Writer) {
 	fmt.Fprint(output, strings.TrimLeft(`
-Usage: reploy [--docker] COMMAND
+Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND
 
 Commands:
   stage        Create a staging directory
@@ -2256,6 +2332,8 @@ App refs:
               Git provider refs use github://ORG/REPO/PATH/APP.blueprint.yaml?ref=REF.
 
 Options:
+  --docker-timeout DURATION
+              Docker daemon responsiveness timeout, default 5s
   --dir DIR    Staging directory, default current staging dir or reploy-staging
   --extra ROOT Add/remove an explicit bundle root; accepts comma-separated roots
   --force      With stage --update, overwrite generated files
@@ -2309,8 +2387,8 @@ func printDockerCommandHelp(command string, output io.Writer) {
 
 func printDockerStageHelp(output io.Writer) {
 	fmt.Fprint(output, strings.TrimLeft(`
-Usage: reploy [--docker] stage APP_REF [OPTIONS]
-       reploy [--docker] stage --update [APP_REF] [OPTIONS]
+Usage: reploy [--docker] [--docker-timeout DURATION] stage APP_REF [OPTIONS]
+       reploy [--docker] [--docker-timeout DURATION] stage --update [APP_REF] [OPTIONS]
 
 Create a staging directory from an app blueprint reference.
 Use --update to refresh an existing staging directory, optionally from a new ref.

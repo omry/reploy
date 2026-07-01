@@ -59,8 +59,11 @@ func TestHelp(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	if !strings.Contains(stdout, "Usage: reploy [--docker] COMMAND") {
+	if !strings.Contains(stdout, "Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND") {
 		t.Fatalf("stdout did not contain usage:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "--docker-timeout DURATION") {
+		t.Fatalf("stdout did not contain Docker timeout option:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "index        Manage the cached blueprint shorthand index") {
 		t.Fatalf("stdout did not contain index command:\n%s", stdout)
@@ -70,6 +73,46 @@ func TestHelp(t *testing.T) {
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestParseGlobalDeploymentOptionsDockerTimeout(t *testing.T) {
+	options, args, err := parseGlobalDeploymentOptions([]string{"--docker-timeout", "12s", "bundle", "build"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Target != "docker" {
+		t.Fatalf("target = %q, want docker", options.Target)
+	}
+	if !options.DockerTimeoutSet || options.DockerTimeout != 12*time.Second {
+		t.Fatalf("docker timeout = %s set=%v, want 12s set", options.DockerTimeout, options.DockerTimeoutSet)
+	}
+	if strings.Join(args, " ") != "bundle build" {
+		t.Fatalf("args = %#v", args)
+	}
+
+	options, args, err = parseGlobalDeploymentOptions([]string{"--docker-timeout=250ms", "status"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !options.DockerTimeoutSet || options.DockerTimeout != 250*time.Millisecond {
+		t.Fatalf("docker timeout = %s set=%v, want 250ms set", options.DockerTimeout, options.DockerTimeoutSet)
+	}
+	if strings.Join(args, " ") != "status" {
+		t.Fatalf("args = %#v", args)
+	}
+}
+
+func TestParseGlobalDeploymentOptionsRejectsInvalidDockerTimeout(t *testing.T) {
+	for _, args := range [][]string{
+		{"--docker-timeout"},
+		{"--docker-timeout", "nope"},
+		{"--docker-timeout", "0"},
+		{"--docker-timeout", "-1s"},
+	} {
+		if _, _, err := parseGlobalDeploymentOptions(args); err == nil {
+			t.Fatalf("parseGlobalDeploymentOptions(%#v) err = nil, want error", args)
+		}
 	}
 }
 
@@ -233,10 +276,10 @@ func TestDockerHelp(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	if !strings.Contains(stdout, "Usage: reploy [--docker] COMMAND") {
+	if !strings.Contains(stdout, "Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND") {
 		t.Fatalf("stdout did not contain deployment usage:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "--docker") || !strings.Contains(stdout, "--aws") {
+	if !strings.Contains(stdout, "--docker") || !strings.Contains(stdout, "--docker-timeout DURATION") || !strings.Contains(stdout, "--aws") {
 		t.Fatalf("stdout did not contain target options:\n%s", stdout)
 	}
 	if strings.Contains(stdout, "smoke") {
@@ -287,7 +330,7 @@ func TestDockerTargetOptionUsesDefaultDeploymentCommands(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	if !strings.Contains(stdout, "Usage: reploy [--docker] COMMAND") || !strings.Contains(stdout, "bundle") {
+	if !strings.Contains(stdout, "Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND") || !strings.Contains(stdout, "bundle") {
 		t.Fatalf("stdout did not contain deployment help:\n%s", stdout)
 	}
 	if stderr != "" {
@@ -315,7 +358,7 @@ func TestAppHelp(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	if !strings.Contains(stdout, "Usage: reploy app COMMAND") {
+	if !strings.Contains(stdout, "Usage: reploy [--docker-timeout DURATION] app COMMAND") {
 		t.Fatalf("stdout did not contain app usage:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "staging bundle, not a host executable from") {
@@ -500,8 +543,8 @@ func TestDockerStageHelp(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
 	for _, want := range []string{
-		"Usage: reploy [--docker] stage APP_REF [OPTIONS]",
-		"reploy [--docker] stage --update [APP_REF] [OPTIONS]",
+		"Usage: reploy [--docker] [--docker-timeout DURATION] stage APP_REF [OPTIONS]",
+		"reploy [--docker] [--docker-timeout DURATION] stage --update [APP_REF] [OPTIONS]",
 		"Create a staging directory from an app blueprint reference.",
 		"Use --update to refresh an existing staging directory",
 		"Indexed shorthand from the Reploy blueprint index:",
@@ -770,6 +813,45 @@ func TestRuntimeBundleBuildVerboseCommandQuotesExplicitDir(t *testing.T) {
 	}
 }
 
+func TestDockerTimeoutAppliesDuringDockerCommand(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	oldRuntime := dockerRuntime
+	t.Cleanup(func() {
+		dockerRuntime = oldRuntime
+	})
+	dockerRuntime = func(options dockerdeploy.RuntimeOptions) error {
+		if options.Action != "status" {
+			t.Fatalf("action = %q, want status", options.Action)
+		}
+		if got := options.DockerPreflightTimeout; got != 11*time.Second {
+			t.Fatalf("DockerPreflightTimeout = %s, want 11s", got)
+		}
+		return nil
+	}
+
+	code, stdout, stderr = runCLI("--docker-timeout", "11s", "status", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("status failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+}
+
+func TestBundleErrorHasEnoughOutputForDockerPreflight(t *testing.T) {
+	for _, err := range []error{
+		errors.New("docker daemon did not respond within 5s"),
+		errors.New("docker daemon check failed: exit status 1"),
+	} {
+		if !bundleErrorHasEnoughOutput(err) {
+			t.Fatalf("%v should not suggest rerunning with --verbose", err)
+		}
+	}
+}
+
 func TestDockerRuntimeRejectsFollowOutsideLogs(t *testing.T) {
 	code, stdout, stderr := runCLI("ps", "--follow")
 	if code != 2 {
@@ -1034,15 +1116,18 @@ func TestDirectInstallPrintsSuccessFromResolvedDefaultTarget(t *testing.T) {
 		}
 		return "/opt/demo", nil
 	}
-	dockerPrintInstallSuccess = func(dir string, stdout io.Writer) error {
+	dockerPrintInstallSuccess = func(dir string, stdout io.Writer, dockerPreflightTimeout time.Duration) error {
 		if dir != "/opt/demo" {
 			t.Fatalf("success dir = %q, want resolved default target", dir)
+		}
+		if dockerPreflightTimeout != time.Second {
+			t.Fatalf("success docker timeout = %s, want 1s", dockerPreflightTimeout)
 		}
 		fmt.Fprintln(stdout, "installed at "+dir)
 		return nil
 	}
 
-	code, stdout, _ := runCLI("install", "file:/does/not/need/to/exist")
+	code, stdout, _ := runCLI("--docker-timeout", "1s", "install", "file:/does/not/need/to/exist")
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s", code, stdout)
 	}
@@ -1264,7 +1349,7 @@ func TestDockerInitRequiresPack(t *testing.T) {
 		t.Fatalf("stderr did not contain required blueprint message:\n%s", stderr)
 	}
 	for _, want := range []string{
-		"Usage: reploy [--docker] stage APP_REF [OPTIONS]",
+		"Usage: reploy [--docker] [--docker-timeout DURATION] stage APP_REF [OPTIONS]",
 		"arbiter-server==VERSION",
 		"pypi://PACKAGE/PATH/APP.blueprint.yaml",
 		"pypi://PACKAGE/PATH/APP.blueprint.yaml?version=VERSION",
@@ -2310,7 +2395,7 @@ func TestDockerBundleWithoutCommandShowsSubcommands(t *testing.T) {
 	if stdout != "" {
 		t.Fatalf("stdout = %q, want empty", stdout)
 	}
-	if !strings.Contains(stderr, "Usage: reploy bundle COMMAND") ||
+	if !strings.Contains(stderr, "Usage: reploy [--docker-timeout DURATION] bundle COMMAND") ||
 		!strings.Contains(stderr, "build") ||
 		!strings.Contains(stderr, "clean") ||
 		!strings.Contains(stderr, "list-options") {
@@ -2326,7 +2411,7 @@ func TestDockerBundleHelpShowsSubcommands(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	if !strings.Contains(stdout, "Usage: reploy bundle COMMAND") ||
+	if !strings.Contains(stdout, "Usage: reploy [--docker-timeout DURATION] bundle COMMAND") ||
 		!strings.Contains(stdout, "build") ||
 		!strings.Contains(stdout, "clean") ||
 		!strings.Contains(stdout, "--verbose") {
@@ -2383,8 +2468,8 @@ func TestDockerBundleCleanVerboseReportsRemovedWheels(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("bundle clean failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "removed "+builtWheel) {
-		t.Fatalf("stdout missing removed wheel:\n%s", stdout)
+	if !strings.Contains(stdout, "removed "+filepath.Join(deployDir, dockerdeploy.BundleDirName)) {
+		t.Fatalf("stdout missing removed bundle dir:\n%s", stdout)
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)

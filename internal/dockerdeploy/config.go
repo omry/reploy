@@ -17,17 +17,19 @@ import (
 )
 
 type ConfigCheckOptions struct {
-	Dir         string
-	CommandArgs []string
-	Stdout      io.Writer
-	Stderr      io.Writer
+	Dir                    string
+	CommandArgs            []string
+	Stdout                 io.Writer
+	Stderr                 io.Writer
+	DockerPreflightTimeout time.Duration
 }
 
 type AppCommandOptions struct {
-	Dir         string
-	CommandArgs []string
-	Stdout      io.Writer
-	Stderr      io.Writer
+	Dir                    string
+	CommandArgs            []string
+	Stdout                 io.Writer
+	Stderr                 io.Writer
+	DockerPreflightTimeout time.Duration
 }
 
 type AppCommandListOptions struct {
@@ -54,8 +56,9 @@ func ConfigCheck(options ConfigCheckOptions) error {
 	}
 	stdout, stderr := deploymentOutputWritersForDeployment(options.Dir, state, options.Stdout, options.Stderr)
 	runOptions := RunOptions{
-		Stdout: stdout,
-		Stderr: stderr,
+		Stdout:                 stdout,
+		Stderr:                 stderr,
+		DockerPreflightTimeout: options.DockerPreflightTimeout,
 	}
 	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
 	if err != nil {
@@ -95,9 +98,10 @@ func AppCommand(options AppCommandOptions) error {
 	}
 	stdout, stderr := deploymentOutputWritersForDeployment(options.Dir, state, options.Stdout, options.Stderr)
 	runOptions := RunOptions{
-		Stdin:  appCommandStdin(terminalOutput),
-		Stdout: stdout,
-		Stderr: stderr,
+		Stdin:                  appCommandStdin(terminalOutput),
+		Stdout:                 stdout,
+		Stderr:                 stderr,
+		DockerPreflightTimeout: options.DockerPreflightTimeout,
 	}
 	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
 	if err != nil {
@@ -110,7 +114,7 @@ func AppCommand(options AppCommandOptions) error {
 	if err != nil {
 		return err
 	}
-	if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: options.Dir, Stdout: options.Stdout, Stderr: options.Stderr}); err != nil {
+	if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: options.Dir, Stdout: options.Stdout, Stderr: options.Stderr, DockerPreflightTimeout: options.DockerPreflightTimeout}); err != nil {
 		return fmt.Errorf("prepare installation bundle: %w", err)
 	}
 	if err := ensureRuntimeCompose(options.Dir); err != nil {

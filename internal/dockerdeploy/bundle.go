@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers/python"
@@ -31,8 +32,9 @@ type BundleResolvedPackage struct {
 }
 
 type BundleRootOptions struct {
-	Dir    string
-	Source string
+	Dir                    string
+	Source                 string
+	DockerPreflightTimeout time.Duration
 }
 
 type BundleRootsOptions struct {
@@ -42,28 +44,87 @@ type BundleRootsOptions struct {
 }
 
 type BundleCheckOptions struct {
-	Dir     string
-	DryRun  bool
-	Verbose bool
-	Stdout  io.Writer
-	Stderr  io.Writer
+	Dir                    string
+	DryRun                 bool
+	Verbose                bool
+	Stdout                 io.Writer
+	Stderr                 io.Writer
+	DockerPreflightTimeout time.Duration
 }
 
 type BundlePrepareOptions struct {
-	Dir      string
-	DryRun   bool
-	PyPIOnly bool
-	Verbose  bool
-	Stdout   io.Writer
-	Stderr   io.Writer
+	Dir                    string
+	DryRun                 bool
+	PyPIOnly               bool
+	Verbose                bool
+	Stdout                 io.Writer
+	Stderr                 io.Writer
+	DockerPreflightTimeout time.Duration
+}
+
+func bundleDockerRunOptions(stdout io.Writer, stderr io.Writer, dockerPreflightTimeout time.Duration) RunOptions {
+	return RunOptions{
+		Stdout:                 stdout,
+		Stderr:                 stderr,
+		DockerPreflightTimeout: dockerPreflightTimeout,
+	}
+}
+
+type bundleTimingStep struct {
+	Name     string
+	Duration time.Duration
+}
+
+type bundleTimer struct {
+	enabled bool
+	output  io.Writer
+	start   time.Time
+	steps   []bundleTimingStep
+}
+
+func newBundleTimer(enabled bool, output io.Writer) *bundleTimer {
+	return &bundleTimer{enabled: enabled, output: output, start: time.Now()}
+}
+
+func (timer *bundleTimer) Measure(name string, run func() error) error {
+	if !timer.enabled {
+		return run()
+	}
+	if timer.output != nil {
+		fmt.Fprintf(timer.output, "bundle build: %s...\n", name)
+	}
+	start := time.Now()
+	err := run()
+	timer.steps = append(timer.steps, bundleTimingStep{Name: name, Duration: time.Since(start)})
+	return err
+}
+
+func (timer *bundleTimer) Print(output io.Writer) {
+	if !timer.enabled || output == nil {
+		return
+	}
+	total := time.Since(timer.start)
+	fmt.Fprintln(output, "bundle build timing:")
+	for _, step := range timer.steps {
+		fmt.Fprintf(output, "  %s: %s\n", step.Name, formatDuration(step.Duration))
+	}
+	fmt.Fprintf(output, "  total: %s\n", formatDuration(total))
+}
+
+func formatDuration(duration time.Duration) string {
+	if duration < time.Second {
+		return duration.Round(time.Millisecond).String()
+	}
+	return duration.Round(100 * time.Millisecond).String()
 }
 
 type BundleEnsureOptions struct {
-	Dir     string
-	DryRun  bool
-	Verbose bool
-	Stdout  io.Writer
-	Stderr  io.Writer
+	Dir                    string
+	DryRun                 bool
+	Verbose                bool
+	Stdout                 io.Writer
+	Stderr                 io.Writer
+	DockerPreflightTimeout time.Duration
 }
 
 type BundleCleanOptions struct {
@@ -71,11 +132,12 @@ type BundleCleanOptions struct {
 }
 
 type BundleUpgradeOptions struct {
-	Dir      string
-	Target   string
-	PyPIOnly bool
-	Stdout   io.Writer
-	Stderr   io.Writer
+	Dir                    string
+	Target                 string
+	PyPIOnly               bool
+	Stdout                 io.Writer
+	Stderr                 io.Writer
+	DockerPreflightTimeout time.Duration
 }
 
 type bundleBuildSource struct {
@@ -334,7 +396,7 @@ func BundleAddSource(options BundleRootOptions) ([]UpdateResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := runInterruptibleCommand(runBundleCommand, spec, RunOptions{}); err != nil {
+	if err := runInterruptibleCommand(runBundleCommand, spec, bundleDockerRunOptions(nil, nil, options.DockerPreflightTimeout)); err != nil {
 		return nil, err
 	}
 	wheelPath, err := singleWheelInDir(tmpDir)
@@ -361,7 +423,8 @@ func BundleCheck(options BundleCheckOptions) error {
 	}
 	stdout := options.Stdout
 	stderr := options.Stderr
-	if !options.Verbose && !options.DryRun {
+	quiet := !options.Verbose && !options.DryRun
+	if quiet {
 		stdout = nil
 		stderr = nil
 	}
@@ -400,7 +463,7 @@ func BundleCheck(options BundleCheckOptions) error {
 	if err := requireBundleCheckInputs(options.Dir, bundleDir); err != nil {
 		return err
 	}
-	return runInterruptibleCommand(runBundleCommand, spec, RunOptions{Stdout: stdout, Stderr: stderr})
+	return runInterruptibleCommand(runBundleCommand, spec, bundleDockerRunOptions(stdout, stderr, options.DockerPreflightTimeout))
 }
 
 func BundlePrepare(options BundlePrepareOptions) error {
@@ -409,20 +472,25 @@ func BundlePrepare(options BundlePrepareOptions) error {
 	}
 	stdout := options.Stdout
 	stderr := options.Stderr
-	if !options.Verbose && !options.DryRun {
+	quiet := !options.Verbose && !options.DryRun
+	if quiet {
 		stdout = nil
 		stderr = nil
 	}
+	timer := newBundleTimer(options.Verbose && options.Stdout != nil, options.Stdout)
 	if options.PyPIOnly && !options.DryRun {
-		state, err := loadState(options.Dir)
-		if err != nil {
+		if err := timer.Measure("resolve package roots", func() error {
+			state, err := loadState(options.Dir)
+			if err != nil {
+				return err
+			}
+			state, err = withInferredBundleState(options.Dir, state)
+			if err != nil {
+				return err
+			}
+			_, _, err = resolveBundlePackageRoots(options.Dir, state, "", true, stdout, stderr, options.DockerPreflightTimeout)
 			return err
-		}
-		state, err = withInferredBundleState(options.Dir, state)
-		if err != nil {
-			return err
-		}
-		if _, _, err := resolveBundlePackageRoots(options.Dir, state, "", true, stdout, stderr); err != nil {
+		}); err != nil {
 			return err
 		}
 	}
@@ -457,19 +525,25 @@ func BundlePrepare(options BundlePrepareOptions) error {
 		}
 		return nil
 	}
-	if err := requireBundlePrepareInputs(options.Dir, bundleDir); err != nil {
+	var tmpDir string
+	if err := timer.Measure("prepare workspace", func() error {
+		if err := requireBundlePrepareInputs(options.Dir, bundleDir); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+			return err
+		}
+		var err error
+		tmpDir, err = os.MkdirTemp("", "reploy-wheelhouse-*")
 		return err
-	}
-	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
-		return err
-	}
-	tmpDir, err := os.MkdirTemp("", "reploy-wheelhouse-*")
-	if err != nil {
+	}); err != nil {
 		return err
 	}
 	defer os.RemoveAll(tmpDir)
 	if !options.PyPIOnly {
-		if err := copyWheelhouse(bundleDir, tmpDir); err != nil {
+		if err := timer.Measure("copy existing bundle", func() error {
+			return copyWheelhouse(bundleDir, tmpDir)
+		}); err != nil {
 			return err
 		}
 	}
@@ -477,20 +551,25 @@ func BundlePrepare(options BundlePrepareOptions) error {
 	findLinksDir := ""
 	buildSources := []bundleBuildSource{}
 	if !options.PyPIOnly {
-		buildSources, err = localBundleBuildSources(state)
-		if err != nil {
-			return err
-		}
-		if len(buildSources) > 0 {
-			requirementsPath = filepath.Join(tmpDir, "requirements.local.txt")
-			requirements, err := localBuildRequirements(state.Bundle.Roots, buildSources)
+		if err := timer.Measure("prepare local sources", func() error {
+			buildSources, err = localBundleBuildSources(state)
 			if err != nil {
 				return err
 			}
-			if err := os.WriteFile(requirementsPath, requirements, 0o644); err != nil {
-				return err
+			if len(buildSources) > 0 {
+				requirementsPath = filepath.Join(tmpDir, "requirements.local.txt")
+				requirements, err := localBuildRequirements(state.Bundle.Roots, buildSources)
+				if err != nil {
+					return err
+				}
+				if err := os.WriteFile(requirementsPath, requirements, 0o644); err != nil {
+					return err
+				}
+				findLinksDir = tmpDir
 			}
-			findLinksDir = tmpDir
+			return nil
+		}); err != nil {
+			return err
 		}
 	}
 	spec, err = bundlePrepareCommand(bundlePrepareCommandOptions{
@@ -505,18 +584,27 @@ func BundlePrepare(options BundlePrepareOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := runInterruptibleCommand(runBundleCommand, spec, RunOptions{Stdout: stdout, Stderr: stderr}); err != nil {
+	runStdout := stdout
+	runStderr := stderr
+	if err := timer.Measure("build wheelhouse", func() error {
+		return runInterruptibleCommand(runBundleCommand, spec, bundleDockerRunOptions(runStdout, runStderr, options.DockerPreflightTimeout))
+	}); err != nil {
 		return err
 	}
-	if err := replaceWheelhouse(tmpDir, bundleDir); err != nil {
+	if err := timer.Measure("replace bundle", func() error {
+		return replaceWheelhouse(tmpDir, bundleDir)
+	}); err != nil {
 		return err
 	}
 	if options.Verbose && options.Stdout != nil {
 		fmt.Fprintf(options.Stdout, "built installation bundle: %s\n", bundleDir)
 	}
-	if err := BundleCheck(BundleCheckOptions{Dir: options.Dir, Verbose: options.Verbose, Stdout: stdout, Stderr: stderr}); err != nil {
+	if err := timer.Measure("validate bundle", func() error {
+		return BundleCheck(BundleCheckOptions{Dir: options.Dir, Verbose: options.Verbose, Stdout: stdout, Stderr: stderr, DockerPreflightTimeout: options.DockerPreflightTimeout})
+	}); err != nil {
 		return err
 	}
+	timer.Print(options.Stdout)
 	return markBundlePrepared(options.Dir)
 }
 
@@ -532,11 +620,12 @@ func EnsureBundlePrepared(options BundleEnsureOptions) (bool, error) {
 		return false, nil
 	}
 	return true, BundlePrepare(BundlePrepareOptions{
-		Dir:     options.Dir,
-		DryRun:  options.DryRun,
-		Verbose: options.Verbose,
-		Stdout:  options.Stdout,
-		Stderr:  options.Stderr,
+		Dir:                    options.Dir,
+		DryRun:                 options.DryRun,
+		Verbose:                options.Verbose,
+		Stdout:                 options.Stdout,
+		Stderr:                 options.Stderr,
+		DockerPreflightTimeout: options.DockerPreflightTimeout,
 	})
 }
 
@@ -556,35 +645,28 @@ func BundleClean(options BundleCleanOptions) ([]UpdateResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(bundleDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
+	info, err := os.Stat(bundleDir)
+	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
-	preserved := selectedBundleWheelFiles(state.Bundle.Roots)
 	results := []UpdateResult{}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".whl") {
-			continue
+	if err == nil {
+		if !info.IsDir() {
+			return nil, fmt.Errorf("bundle path is not a directory: %s", bundleDir)
 		}
-		if preserved[entry.Name()] {
-			continue
-		}
-		path := filepath.Join(bundleDir, entry.Name())
-		if err := os.Remove(path); err != nil {
+		if err := os.RemoveAll(bundleDir); err != nil {
 			return nil, err
 		}
-		results = append(results, UpdateResult{Path: path, Status: deploy.UpdateStatusRemoved})
+		results = append(results, UpdateResult{Path: bundleDir, Status: deploy.UpdateStatusRemoved})
 	}
-	if len(results) > 0 {
-		status, err := markBundleUnprepared(options.Dir)
-		if err != nil {
-			return nil, err
-		}
-		results = append(results, UpdateResult{Path: filepath.Join(options.Dir, StateFileName), Status: status, Ownership: "state", Reason: "marked installation bundle stale"})
+	if len(results) == 0 && state.Bundle.PreparedFingerprint == "" {
+		return nil, nil
 	}
+	status, err := markBundleUnprepared(options.Dir)
+	if err != nil {
+		return nil, err
+	}
+	results = append(results, UpdateResult{Path: filepath.Join(options.Dir, StateFileName), Status: status, Ownership: "state", Reason: "marked installation bundle stale"})
 	return results, nil
 }
 
@@ -600,22 +682,23 @@ func BundleUpgrade(options BundleUpgradeOptions) ([]UpdateResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, results, err := resolveBundlePackageRoots(options.Dir, state, options.Target, options.PyPIOnly, options.Stdout, options.Stderr)
+	_, results, err := resolveBundlePackageRoots(options.Dir, state, options.Target, options.PyPIOnly, options.Stdout, options.Stderr, options.DockerPreflightTimeout)
 	if err != nil {
 		return nil, err
 	}
 	if err := BundlePrepare(BundlePrepareOptions{
-		Dir:      options.Dir,
-		PyPIOnly: options.PyPIOnly,
-		Stdout:   options.Stdout,
-		Stderr:   options.Stderr,
+		Dir:                    options.Dir,
+		PyPIOnly:               options.PyPIOnly,
+		Stdout:                 options.Stdout,
+		Stderr:                 options.Stderr,
+		DockerPreflightTimeout: options.DockerPreflightTimeout,
 	}); err != nil {
 		return nil, err
 	}
 	return results, nil
 }
 
-func resolveBundlePackageRoots(dir string, state deploy.DeploymentState, target string, pypiOnly bool, stdout io.Writer, stderr io.Writer) (deploy.DeploymentState, []UpdateResult, error) {
+func resolveBundlePackageRoots(dir string, state deploy.DeploymentState, target string, pypiOnly bool, stdout io.Writer, stderr io.Writer, dockerPreflightTimeout time.Duration) (deploy.DeploymentState, []UpdateResult, error) {
 	input, roots, err := python.BundleUpgradeInput(state.Bundle.Roots, target)
 	if err != nil {
 		return deploy.DeploymentState{}, nil, err
@@ -632,7 +715,7 @@ func resolveBundlePackageRoots(dir string, state deploy.DeploymentState, target 
 	if err != nil {
 		return deploy.DeploymentState{}, nil, err
 	}
-	if err := runInterruptibleCommand(runBundleCommand, spec, RunOptions{Stdout: stdout, Stderr: stderr}); err != nil {
+	if err := runInterruptibleCommand(runBundleCommand, spec, bundleDockerRunOptions(stdout, stderr, dockerPreflightTimeout)); err != nil {
 		return deploy.DeploymentState{}, nil, err
 	}
 	resolvedRoots, err := python.ResolvedUpgradeRoots(filepath.Join(tmpDir, "report.json"), roots)
@@ -786,11 +869,13 @@ func bundlePrepareCommand(options bundlePrepareCommandOptions) (CommandSpec, err
 	args := []string{
 		"run",
 		"--rm",
+	}
+	args = append(args,
 		"--user",
 		defaultContainerUser(),
 		"-v",
-		absoluteRequirementsPath + ":/requirements.txt:ro",
-	}
+		absoluteRequirementsPath+":/requirements.txt:ro",
+	)
 	if !options.PyPIOnly {
 		args = append(args, "-v", absoluteFindLinksDir+":/bundle:ro")
 	}
@@ -1474,18 +1559,6 @@ func providerIdentifierRoot(providerType string, identifier string) (deploy.Arti
 
 func bundleRootPackageName(root deploy.ArtifactRoot) string {
 	return python.RootPackageName(root)
-}
-
-func selectedBundleWheelFiles(roots []deploy.ArtifactRoot) map[string]bool {
-	selected := map[string]bool{}
-	for _, root := range roots {
-		source := strings.TrimSpace(root.Source)
-		if !strings.HasPrefix(source, "/bundle/") || !strings.HasSuffix(source, ".whl") {
-			continue
-		}
-		selected[filepath.Base(source)] = true
-	}
-	return selected
 }
 
 func classifyBundleRoot(source string) (deploy.ArtifactRoot, error) {

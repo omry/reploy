@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1016,7 +1017,7 @@ func TestBundlePrepareSuppressesCommandOutputByDefault(t *testing.T) {
 	restore := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
 		runOptions = append(runOptions, options)
 		switch {
-		case containsInOrder(spec.Args, []string{"wheel", "--no-cache-dir"}):
+		case containsInOrder(spec.Args, []string{"python", "-m", "pip", "--disable-pip-version-check", "wheel", "--no-cache-dir"}):
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
 		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
@@ -1066,14 +1067,20 @@ func TestBundlePrepareVerboseStreamsCommandOutput(t *testing.T) {
 	restore := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
 		runOptions = append(runOptions, options)
 		switch {
-		case containsInOrder(spec.Args, []string{"wheel", "--no-cache-dir"}):
+		case containsInOrder(spec.Args, []string{"python", "-m", "pip", "--disable-pip-version-check", "wheel", "--no-cache-dir"}):
+			command := strings.Join(spec.Args, " ")
+			if strings.Contains(command, "--progress-bar raw") || strings.Contains(command, "reploy-bundle-pip") {
+				return fmt.Errorf("verbose build command should not enable raw progress:\n%s", command)
+			}
+			if options.Stdout != &stdout || options.Stderr != &stderr {
+				t.Fatalf("build command should stream verbose output: %#v", options)
+			}
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
 		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
 			return nil
 		default:
-			t.Fatalf("unexpected bundle command: %#v", spec.Args)
-			return nil
+			return fmt.Errorf("unexpected bundle command: %#v", spec.Args)
 		}
 	})
 	defer restore()
@@ -1094,6 +1101,22 @@ func TestBundlePrepareVerboseStreamsCommandOutput(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "built installation bundle:") {
 		t.Fatalf("stdout missing verbose build message:\n%s", stdout.String())
+	}
+	for _, expected := range []string{
+		"bundle build: prepare workspace...",
+		"bundle build: build wheelhouse...",
+		"bundle build timing:",
+		"prepare workspace:",
+		"copy existing bundle:",
+		"prepare local sources:",
+		"build wheelhouse:",
+		"replace bundle:",
+		"validate bundle:",
+		"total:",
+	} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Fatalf("stdout missing timing line %q:\n%s", expected, stdout.String())
+		}
 	}
 }
 
@@ -1190,7 +1213,7 @@ func TestBundleCleanInvalidatesPreparedBundle(t *testing.T) {
 	}
 }
 
-func TestBundleCleanRemovesBuiltWheelsAndKeepsSelectedBundleWheels(t *testing.T) {
+func TestBundleCleanRemovesBundleDirectory(t *testing.T) {
 	packDir := makeTestPack(t)
 	ref, err := deploy.ParsePackRef("file:" + packDir)
 	if err != nil {
@@ -1200,16 +1223,17 @@ func TestBundleCleanRemovesBuiltWheelsAndKeepsSelectedBundleWheels(t *testing.T)
 	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
 		t.Fatal(err)
 	}
-	sourceWheel := filepath.Join(t.TempDir(), "demo-1.0.0-py3-none-any.whl")
-	if err := os.WriteFile(sourceWheel, []byte("selected\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := BundleAddWheel(BundleRootOptions{Dir: deployDir, Source: sourceWheel}); err != nil {
-		t.Fatal(err)
-	}
-	selectedWheel := filepath.Join(deployDir, BundleDirName, filepath.Base(sourceWheel))
+	bundleDir := filepath.Join(deployDir, BundleDirName)
 	builtWheel := filepath.Join(deployDir, BundleDirName, "demo_suite-1.2.3-py3-none-any.whl")
 	if err := os.WriteFile(builtWheel, []byte("built\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	generatedMetadata := filepath.Join(deployDir, BundleDirName, "pip-report.json")
+	if err := os.WriteFile(generatedMetadata, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	generatedDir := filepath.Join(deployDir, BundleDirName, ".source")
+	if err := os.MkdirAll(generatedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1217,12 +1241,9 @@ func TestBundleCleanRemovesBuiltWheelsAndKeepsSelectedBundleWheels(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertResultStatus(t, results, builtWheel, deploy.UpdateStatusRemoved)
-	if _, err := os.Stat(builtWheel); !os.IsNotExist(err) {
-		t.Fatalf("built wheel still exists: %v", err)
-	}
-	if got := readFile(t, selectedWheel); got != "selected\n" {
-		t.Fatalf("selected wheel = %q", got)
+	assertResultStatus(t, results, bundleDir, deploy.UpdateStatusRemoved)
+	if _, err := os.Stat(bundleDir); !os.IsNotExist(err) {
+		t.Fatalf("bundle dir still exists: %v", err)
 	}
 }
 

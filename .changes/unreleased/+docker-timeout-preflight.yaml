@@ -1,0 +1,3 @@
+kind: Added
+body: Add a user-configurable `--docker-timeout` for Docker daemon responsiveness checks and apply it to bundle, app, runtime, test, install success, and uninstall Docker operations.
+time: 2026-07-01T21:34:19+08:00

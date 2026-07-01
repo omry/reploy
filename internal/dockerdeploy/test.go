@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -20,9 +21,10 @@ import (
 var runTestCommandOutput = commandOutput
 
 type TestOptions struct {
-	Dir     string
-	Timeout time.Duration
-	Stdout  io.Writer
+	Dir                    string
+	Timeout                time.Duration
+	Stdout                 io.Writer
+	DockerPreflightTimeout time.Duration
 }
 
 func TestServer(options TestOptions) error {
@@ -56,7 +58,7 @@ func TestServer(options TestOptions) error {
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: !healthTLSVerify(health)},
 		},
 	}
-	if err := requireComposeServiceRunning(options.Dir); err != nil {
+	if err := requireComposeServiceRunning(options.Dir, options.DockerPreflightTimeout); err != nil {
 		return err
 	}
 	check := func() error {
@@ -84,7 +86,7 @@ func TestServer(options TestOptions) error {
 			return fmt.Errorf("server health check failed: %w", lastErr)
 		}
 		time.Sleep(1 * time.Second)
-		if err := requireComposeServiceRunning(options.Dir); err != nil {
+		if err := requireComposeServiceRunning(options.Dir, options.DockerPreflightTimeout); err != nil {
 			return err
 		}
 		lastErr = check()
@@ -94,8 +96,8 @@ func TestServer(options TestOptions) error {
 	}
 }
 
-func requireComposeServiceRunning(dir string) error {
-	states, err := composeServiceStates(dir)
+func requireComposeServiceRunning(dir string, dockerPreflightTimeout time.Duration) error {
+	states, err := composeServiceStates(dir, dockerPreflightTimeout)
 	if err != nil {
 		return err
 	}
@@ -124,13 +126,13 @@ func serviceStatesContain(states []string, expected string) bool {
 	return false
 }
 
-func composeServiceStates(dir string) ([]string, error) {
+func composeServiceStates(dir string, dockerPreflightTimeout time.Duration) ([]string, error) {
 	projectName, err := deploymentComposeProjectName(dir)
 	if err != nil {
 		return nil, err
 	}
 	spec := composeCommandWithProject(dir, projectName, "ps", "--all", "--format", "json")
-	output, err := runTestCommandOutput(spec)
+	output, err := runTestCommandOutput(spec, RunOptions{DockerPreflightTimeout: dockerPreflightTimeout})
 	if err != nil {
 		return nil, commandErrorWithOutput("docker compose ps", output, err)
 	}
@@ -237,8 +239,17 @@ func healthTLSVerify(health deploy.DockerHealthConfig) bool {
 	return *health.TLSVerify
 }
 
-func commandOutput(spec CommandSpec) ([]byte, error) {
-	command := exec.Command(spec.Name, spec.Args...)
+func commandOutput(spec CommandSpec, options RunOptions) ([]byte, error) {
+	ctx := options.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if spec.Name == "docker" {
+		if err := dockerPreflight(ctx, spec, effectiveDockerPreflightTimeout(options.DockerPreflightTimeout)); err != nil {
+			return nil, err
+		}
+	}
+	command := exec.CommandContext(ctx, spec.Name, spec.Args...)
 	command.Dir = spec.Dir
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

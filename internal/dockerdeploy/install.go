@@ -20,57 +20,60 @@ import (
 )
 
 type InstallOptions struct {
-	Dir           string
-	Target        string
-	Service       string
-	PortOverrides []PortOverride
-	Replace       []string
-	Clean         bool
-	InPlace       bool
-	Start         bool
-	DryRun        bool
-	Stdout        io.Writer
-	Progress      io.Writer
+	Dir                    string
+	Target                 string
+	Service                string
+	PortOverrides          []PortOverride
+	Replace                []string
+	Clean                  bool
+	InPlace                bool
+	Start                  bool
+	DryRun                 bool
+	Stdout                 io.Writer
+	Progress               io.Writer
+	DockerPreflightTimeout time.Duration
 }
 
 type DirectInstallOptions struct {
-	Pack          deploy.PackRef
-	Target        string
-	Service       string
-	PortOverrides []PortOverride
-	Replace       []string
-	Clean         bool
-	InPlace       bool
-	Start         bool
-	DryRun        bool
-	Stdout        io.Writer
-	Progress      io.Writer
+	Pack                   deploy.PackRef
+	Target                 string
+	Service                string
+	PortOverrides          []PortOverride
+	Replace                []string
+	Clean                  bool
+	InPlace                bool
+	Start                  bool
+	DryRun                 bool
+	Stdout                 io.Writer
+	Progress               io.Writer
+	DockerPreflightTimeout time.Duration
 }
 
 type installPlan struct {
-	SourceDir        string
-	TargetDir        string
-	AppID            string
-	Service          string
-	ControlScript    string
-	UnitPath         string
-	InstanceID       string
-	ComposeProject   string
-	ContainerName    string
-	NetworkName      string
-	Ports            []dockerPortBinding
-	Health           deploy.DockerHealthConfig
-	ConfigDir        string
-	DeployedCommands []deploy.DockerCommandConfig
-	Hooks            deploy.DockerInstallHooksConfig
-	Success          deploy.DockerInstallSuccessConfig
-	PreservePaths    []string
-	Replace          []string
-	Clean            bool
-	Start            bool
-	ComposeOverride  bool
-	InPlace          bool
-	Progress         io.Writer
+	SourceDir              string
+	TargetDir              string
+	AppID                  string
+	Service                string
+	ControlScript          string
+	UnitPath               string
+	InstanceID             string
+	ComposeProject         string
+	ContainerName          string
+	NetworkName            string
+	Ports                  []dockerPortBinding
+	Health                 deploy.DockerHealthConfig
+	ConfigDir              string
+	DeployedCommands       []deploy.DockerCommandConfig
+	Hooks                  deploy.DockerInstallHooksConfig
+	Success                deploy.DockerInstallSuccessConfig
+	PreservePaths          []string
+	Replace                []string
+	Clean                  bool
+	Start                  bool
+	ComposeOverride        bool
+	InPlace                bool
+	Progress               io.Writer
+	DockerPreflightTimeout time.Duration
 }
 
 const defaultSystemdUnitDir = "/etc/systemd/system"
@@ -90,11 +93,11 @@ var installServiceStartTimeout = 30 * time.Second
 var installServicePollInterval = time.Second
 var installServiceTerminalStateGrace = 5 * time.Second
 var installSystemdUnitDir = defaultSystemdUnitDir
-var runInstallAppCommand = func(dir string, args []string, stdout io.Writer, stderr io.Writer) error {
-	return AppCommand(AppCommandOptions{Dir: dir, CommandArgs: args, Stdout: stdout, Stderr: stderr})
+var runInstallAppCommand = func(dir string, args []string, stdout io.Writer, stderr io.Writer, dockerPreflightTimeout time.Duration) error {
+	return AppCommand(AppCommandOptions{Dir: dir, CommandArgs: args, Stdout: stdout, Stderr: stderr, DockerPreflightTimeout: dockerPreflightTimeout})
 }
-var runInstallHealthCheck = func(dir string, stdout io.Writer, stderr io.Writer) error {
-	return TestServer(TestOptions{Dir: dir, Stdout: stdout})
+var runInstallHealthCheck = func(dir string, stdout io.Writer, stderr io.Writer, dockerPreflightTimeout time.Duration) error {
+	return TestServer(TestOptions{Dir: dir, Stdout: stdout, DockerPreflightTimeout: dockerPreflightTimeout})
 }
 
 type resolvedInstallOwner struct {
@@ -179,21 +182,22 @@ func DirectInstall(options DirectInstallOptions) (string, error) {
 		if _, err := Init(InitOptions{Dir: target, Pack: pack.Ref}); err != nil {
 			return "", err
 		}
-		if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: target, Stdout: options.Stdout}); err != nil {
+		if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: target, Stdout: options.Stdout, DockerPreflightTimeout: options.DockerPreflightTimeout}); err != nil {
 			return "", fmt.Errorf("prepare direct install bundle: %w", err)
 		}
 		return target, Install(InstallOptions{
-			Dir:           target,
-			Target:        target,
-			Service:       options.Service,
-			PortOverrides: options.PortOverrides,
-			Replace:       options.Replace,
-			Clean:         options.Clean,
-			InPlace:       true,
-			Start:         options.Start,
-			DryRun:        options.DryRun,
-			Stdout:        options.Stdout,
-			Progress:      options.Progress,
+			Dir:                    target,
+			Target:                 target,
+			Service:                options.Service,
+			PortOverrides:          options.PortOverrides,
+			Replace:                options.Replace,
+			Clean:                  options.Clean,
+			InPlace:                true,
+			Start:                  options.Start,
+			DryRun:                 options.DryRun,
+			Stdout:                 options.Stdout,
+			Progress:               options.Progress,
+			DockerPreflightTimeout: options.DockerPreflightTimeout,
 		})
 	}
 	return target, directInstallViaTemporaryStaging(target, options)
@@ -210,21 +214,22 @@ func directInstallViaTemporaryStaging(target string, options DirectInstallOption
 		return err
 	}
 	if !options.DryRun {
-		if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: stagingDir, Stdout: options.Stdout}); err != nil {
+		if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: stagingDir, Stdout: options.Stdout, DockerPreflightTimeout: options.DockerPreflightTimeout}); err != nil {
 			return fmt.Errorf("prepare direct install bundle: %w", err)
 		}
 	}
 	return Install(InstallOptions{
-		Dir:           stagingDir,
-		Target:        target,
-		Service:       options.Service,
-		PortOverrides: options.PortOverrides,
-		Replace:       options.Replace,
-		Clean:         options.Clean,
-		Start:         options.Start,
-		DryRun:        options.DryRun,
-		Stdout:        options.Stdout,
-		Progress:      options.Progress,
+		Dir:                    stagingDir,
+		Target:                 target,
+		Service:                options.Service,
+		PortOverrides:          options.PortOverrides,
+		Replace:                options.Replace,
+		Clean:                  options.Clean,
+		Start:                  options.Start,
+		DryRun:                 options.DryRun,
+		Stdout:                 options.Stdout,
+		Progress:               options.Progress,
+		DockerPreflightTimeout: options.DockerPreflightTimeout,
 	})
 }
 
@@ -311,29 +316,30 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 		return installPlan{}, overrideErr
 	}
 	return installPlan{
-		SourceDir:        absoluteDir,
-		TargetDir:        target,
-		AppID:            pack.AppID,
-		Service:          options.Service,
-		ControlScript:    controlScriptName(pack.AppID),
-		UnitPath:         filepath.Join(installSystemdUnitDir, options.Service+".service"),
-		InstanceID:       instanceID,
-		ComposeProject:   instanceID,
-		ContainerName:    service.ContainerName,
-		NetworkName:      service.NetworkName,
-		Ports:            ports,
-		Health:           pack.Docker.Health,
-		ConfigDir:        pack.Docker.DeploymentDirs.Config,
-		DeployedCommands: deployedCommands,
-		Hooks:            pack.Docker.Install.Hooks,
-		Success:          pack.Docker.Install.Success,
-		PreservePaths:    preservePaths,
-		Replace:          append([]string(nil), options.Replace...),
-		Clean:            options.Clean,
-		Start:            options.Start,
-		ComposeOverride:  overrideErr == nil,
-		InPlace:          options.InPlace,
-		Progress:         options.Progress,
+		SourceDir:              absoluteDir,
+		TargetDir:              target,
+		AppID:                  pack.AppID,
+		Service:                options.Service,
+		ControlScript:          controlScriptName(pack.AppID),
+		UnitPath:               filepath.Join(installSystemdUnitDir, options.Service+".service"),
+		InstanceID:             instanceID,
+		ComposeProject:         instanceID,
+		ContainerName:          service.ContainerName,
+		NetworkName:            service.NetworkName,
+		Ports:                  ports,
+		Health:                 pack.Docker.Health,
+		ConfigDir:              pack.Docker.DeploymentDirs.Config,
+		DeployedCommands:       deployedCommands,
+		Hooks:                  pack.Docker.Install.Hooks,
+		Success:                pack.Docker.Install.Success,
+		PreservePaths:          preservePaths,
+		Replace:                append([]string(nil), options.Replace...),
+		Clean:                  options.Clean,
+		Start:                  options.Start,
+		ComposeOverride:        overrideErr == nil,
+		InPlace:                options.InPlace,
+		Progress:               options.Progress,
+		DockerPreflightTimeout: options.DockerPreflightTimeout,
 	}, nil
 }
 
@@ -1208,7 +1214,7 @@ func runInstallHooks(plan installPlan, phase string, hooks []deploy.DockerInstal
 func runInstallHook(plan installPlan, hook deploy.DockerInstallHookConfig) error {
 	if len(hook.App) > 0 {
 		var stderr bytes.Buffer
-		if err := runInstallAppCommand(plan.TargetDir, hook.App, nil, &stderr); err != nil {
+		if err := runInstallAppCommand(plan.TargetDir, hook.App, nil, &stderr, plan.DockerPreflightTimeout); err != nil {
 			return commandErrorWithOutput("installed app hook", stderr.Bytes(), err)
 		}
 		return nil
@@ -1221,11 +1227,11 @@ func runInstallHook(plan installPlan, hook deploy.DockerInstallHookConfig) error
 
 func runInstallHealthCheckHook(plan installPlan, healthCheck *deploy.DockerInstallHealthCheckConfig) error {
 	if healthCheck.Wait {
-		if err := waitInstalledServiceRunning(plan.TargetDir, installServiceStartTimeout, plan.Progress); err != nil {
+		if err := waitInstalledServiceRunning(plan.TargetDir, installServiceStartTimeout, plan.Progress, plan.DockerPreflightTimeout); err != nil {
 			return installedServiceStartError(plan, err)
 		}
 	}
-	return runInstallHealthCheck(plan.TargetDir, nil, nil)
+	return runInstallHealthCheck(plan.TargetDir, nil, nil, plan.DockerPreflightTimeout)
 }
 
 func installHookDescription(hook deploy.DockerInstallHookConfig) string {
@@ -1260,7 +1266,7 @@ func rebuildInstalledBundleIfLocalSources(plan installPlan) error {
 		return nil
 	}
 	installProgress(plan.Progress, "rebuilding local source bundle")
-	return BundlePrepare(BundlePrepareOptions{Dir: plan.TargetDir})
+	return BundlePrepare(BundlePrepareOptions{Dir: plan.TargetDir, DockerPreflightTimeout: plan.DockerPreflightTimeout})
 }
 
 func localBundleSourcesForDir(dir string) ([]bundleBuildSource, error) {
@@ -1315,14 +1321,14 @@ func commandErrorWithOutput(label string, output []byte, err error) error {
 	return fmt.Errorf("%s: %w\n%s", label, err, trimmedOutput)
 }
 
-func waitInstalledServiceRunning(dir string, timeout time.Duration, stdout io.Writer) error {
+func waitInstalledServiceRunning(dir string, timeout time.Duration, stdout io.Writer, dockerPreflightTimeout time.Duration) error {
 	installProgress(stdout, "waiting for installed service to start")
 	deadline := time.Now().Add(timeout)
 	lastState := ""
 	var terminalObservedAt time.Time
 	for {
 		now := time.Now()
-		states, err := composeServiceStates(dir)
+		states, err := composeServiceStates(dir, dockerPreflightTimeout)
 		if err != nil {
 			return err
 		}

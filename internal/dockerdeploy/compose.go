@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 )
 
 type CommandSpec struct {
@@ -21,18 +23,27 @@ type CommandSpec struct {
 }
 
 type RunOptions struct {
-	Context context.Context
-	Stdin   io.Reader
-	Stdout  io.Writer
-	Stderr  io.Writer
+	Context                context.Context
+	Stdin                  io.Reader
+	Stdout                 io.Writer
+	Stderr                 io.Writer
+	DockerPreflightTimeout time.Duration
 }
 
 const commandOutputErrorLimit = 4000
+const defaultDockerPreflightTimeout = 5 * time.Second
+
+var dockerPreflight = checkDockerResponsive
 
 func runCommand(spec CommandSpec, options RunOptions) error {
 	ctx := options.Context
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if spec.Name == "docker" {
+		if err := dockerPreflight(ctx, spec, effectiveDockerPreflightTimeout(options.DockerPreflightTimeout)); err != nil {
+			return err
+		}
 	}
 	command := exec.CommandContext(ctx, spec.Name, spec.Args...)
 	command.Dir = spec.Dir
@@ -53,6 +64,37 @@ func runCommand(spec CommandSpec, options RunOptions) error {
 			return fmt.Errorf("%s failed: %w\ncommand output:\n%s", spec.Name, err, output)
 		}
 		return fmt.Errorf("%s failed: %w", spec.Name, err)
+	}
+	return nil
+}
+
+func effectiveDockerPreflightTimeout(timeout time.Duration) time.Duration {
+	if timeout > 0 {
+		return timeout
+	}
+	return defaultDockerPreflightTimeout
+}
+
+func checkDockerResponsive(ctx context.Context, spec CommandSpec, timeout time.Duration) error {
+	preflightCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	command := exec.CommandContext(preflightCtx, spec.Name, "version", "--format", "{{.Server.Version}}")
+	command.Dir = spec.Dir
+	if len(spec.Env) > 0 {
+		command.Env = append(os.Environ(), spec.Env...)
+	}
+	var output bytes.Buffer
+	command.Stdout = &output
+	command.Stderr = &output
+	if err := command.Run(); err != nil {
+		if errors.Is(preflightCtx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("docker daemon did not respond within %s", timeout)
+		}
+		if output := trimmedCommandOutput(output.String()); output != "" {
+			return fmt.Errorf("docker daemon check failed: %w\ncommand output:\n%s", err, output)
+		}
+		return fmt.Errorf("docker daemon check failed: %w", err)
 	}
 	return nil
 }

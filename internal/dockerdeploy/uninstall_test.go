@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/omry/reploy/internal/deploy"
 )
@@ -127,6 +128,26 @@ func TestUninstallFromInstalledTargetRunsCleanupInOrder(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "uninstalled service: demo-test") {
 		t.Fatalf("stdout missing success:\n%s", stdout.String())
+	}
+}
+
+func TestUninstallPassesDockerPreflightTimeout(t *testing.T) {
+	target := makeInstalledDeploymentForUninstall(t, "demo-test", "demo-test-abcd")
+	restore := stubUninstallHost(t)
+	defer restore()
+
+	timeout := 1200 * time.Millisecond
+	var gotTimeout time.Duration
+	uninstallRunDockerCommand = func(spec CommandSpec, dockerPreflightTimeout time.Duration) error {
+		gotTimeout = dockerPreflightTimeout
+		return nil
+	}
+
+	if err := Uninstall(UninstallOptions{From: target, DockerPreflightTimeout: timeout}); err != nil {
+		t.Fatal(err)
+	}
+	if gotTimeout != timeout {
+		t.Fatalf("docker preflight timeout = %s, want %s", gotTimeout, timeout)
 	}
 }
 
@@ -313,6 +334,8 @@ func stubUninstallHost(t *testing.T) func() {
 	oldLookPath := uninstallLookPath
 	oldRunCommand := uninstallRunCommand
 	oldRunCommandOutput := uninstallRunCommandOutput
+	oldRunDockerCommand := uninstallRunDockerCommand
+	oldRunDockerCommandOutput := uninstallRunDockerCommandOutput
 	oldRemove := uninstallRemove
 	oldRemoveAll := uninstallRemoveAll
 	oldSystemdUnitDir := uninstallSystemdUnitDir
@@ -326,11 +349,19 @@ func stubUninstallHost(t *testing.T) func() {
 	uninstallRunCommandOutput = func(name string, args ...string) ([]byte, error) {
 		return nil, nil
 	}
+	uninstallRunDockerCommand = func(spec CommandSpec, dockerPreflightTimeout time.Duration) error {
+		return uninstallRunCommand(spec.Name, spec.Args...)
+	}
+	uninstallRunDockerCommandOutput = func(spec CommandSpec, dockerPreflightTimeout time.Duration) ([]byte, error) {
+		return uninstallRunCommandOutput(spec.Name, spec.Args...)
+	}
 	return func() {
 		uninstallGeteuid = oldGeteuid
 		uninstallLookPath = oldLookPath
 		uninstallRunCommand = oldRunCommand
 		uninstallRunCommandOutput = oldRunCommandOutput
+		uninstallRunDockerCommand = oldRunDockerCommand
+		uninstallRunDockerCommandOutput = oldRunDockerCommandOutput
 		uninstallRemove = oldRemove
 		uninstallRemoveAll = oldRemoveAll
 		uninstallSystemdUnitDir = oldSystemdUnitDir

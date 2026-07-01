@@ -3,16 +3,18 @@ package dockerdeploy
 import (
 	"fmt"
 	"io"
+	"time"
 )
 
 type RuntimeOptions struct {
-	Dir     string
-	Action  string
-	Follow  bool
-	Tail    string
-	Verbose bool
-	Stdout  io.Writer
-	Stderr  io.Writer
+	Dir                    string
+	Action                 string
+	Follow                 bool
+	Tail                   string
+	Verbose                bool
+	Stdout                 io.Writer
+	Stderr                 io.Writer
+	DockerPreflightTimeout time.Duration
 }
 
 var runRuntimeCommand = runCommand
@@ -36,7 +38,7 @@ func Runtime(options RuntimeOptions) error {
 		commandStderr = options.Stderr
 	}
 	if runtimeActionNeedsBundle(options.Action) {
-		if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: options.Dir, Verbose: options.Verbose, Stdout: stdout, Stderr: stderr}); err != nil {
+		if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: options.Dir, Verbose: options.Verbose, Stdout: stdout, Stderr: stderr, DockerPreflightTimeout: options.DockerPreflightTimeout}); err != nil {
 			return fmt.Errorf("prepare installation bundle: %w", err)
 		}
 	}
@@ -51,7 +53,7 @@ func Runtime(options RuntimeOptions) error {
 		commandStdout = nil
 		commandStderr = nil
 	}
-	return runRuntimeCommand(spec, RunOptions{Stdout: commandStdout, Stderr: commandStderr})
+	return runRuntimeCommand(spec, RunOptions{Stdout: commandStdout, Stderr: commandStderr, DockerPreflightTimeout: options.DockerPreflightTimeout})
 }
 
 func runtimeActionNeedsBundle(action string) bool {

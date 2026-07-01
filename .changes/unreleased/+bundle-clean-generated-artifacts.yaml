@@ -1,0 +1,3 @@
+kind: Changed
+body: Make `reploy bundle clean` remove the Reploy-owned bundle directory so the next build starts from a clean slate.
+time: 2026-07-01T00:00:00+08:00

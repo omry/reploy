@@ -644,7 +644,7 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 		commands = append(commands, name+" "+strings.Join(args, " "))
 		return nil, nil
 	}
-	runTestCommandOutput = func(spec CommandSpec) ([]byte, error) {
+	runTestCommandOutput = func(spec CommandSpec, options RunOptions) ([]byte, error) {
 		if !containsString(spec.Args, "--project-name") {
 			t.Fatalf("service probe args did not use install project: %#v", spec.Args)
 		}
@@ -1060,14 +1060,14 @@ func TestInstallRunsConfiguredHooksAroundServiceStart(t *testing.T) {
 		commands = append(commands, name+" "+strings.Join(args, " "))
 		return nil, nil
 	}
-	runTestCommandOutput = func(spec CommandSpec) ([]byte, error) {
+	runTestCommandOutput = func(spec CommandSpec, options RunOptions) ([]byte, error) {
 		return []byte(`[{"State":"running"}]`), nil
 	}
-	runInstallAppCommand = func(dir string, args []string, stdout io.Writer, stderr io.Writer) error {
+	runInstallAppCommand = func(dir string, args []string, stdout io.Writer, stderr io.Writer, dockerPreflightTimeout time.Duration) error {
 		commands = append(commands, "app "+strings.Join(args, " "))
 		return nil
 	}
-	runInstallHealthCheck = func(dir string, stdout io.Writer, stderr io.Writer) error {
+	runInstallHealthCheck = func(dir string, stdout io.Writer, stderr io.Writer, dockerPreflightTimeout time.Duration) error {
 		commands = append(commands, "health")
 		return nil
 	}
@@ -1811,7 +1811,7 @@ func TestWaitInstalledServiceRunningWaitsForServiceRows(t *testing.T) {
 		[]byte(`[{"State":"running"}]`),
 	}
 	index := 0
-	runTestCommandOutput = func(spec CommandSpec) ([]byte, error) {
+	runTestCommandOutput = func(spec CommandSpec, options RunOptions) ([]byte, error) {
 		if index >= len(outputs) {
 			return outputs[len(outputs)-1], nil
 		}
@@ -1821,7 +1821,7 @@ func TestWaitInstalledServiceRunningWaitsForServiceRows(t *testing.T) {
 	}
 
 	var stdout strings.Builder
-	if err := waitInstalledServiceRunning(dir, time.Second, &stdout); err != nil {
+	if err := waitInstalledServiceRunning(dir, time.Second, &stdout, 0); err != nil {
 		t.Fatal(err)
 	}
 	if index != len(outputs) {
@@ -1858,7 +1858,7 @@ func TestWaitInstalledServiceRunningToleratesTransientExitedService(t *testing.T
 		[]byte(`[{"State":"running"}]`),
 	}
 	index := 0
-	runTestCommandOutput = func(spec CommandSpec) ([]byte, error) {
+	runTestCommandOutput = func(spec CommandSpec, options RunOptions) ([]byte, error) {
 		if index >= len(outputs) {
 			return outputs[len(outputs)-1], nil
 		}
@@ -1868,7 +1868,7 @@ func TestWaitInstalledServiceRunningToleratesTransientExitedService(t *testing.T
 	}
 
 	var stdout strings.Builder
-	if err := waitInstalledServiceRunning(dir, time.Second, &stdout); err != nil {
+	if err := waitInstalledServiceRunning(dir, time.Second, &stdout, 0); err != nil {
 		t.Fatal(err)
 	}
 	if index != len(outputs) {
@@ -1899,7 +1899,7 @@ func TestWaitInstalledServiceRunningFailsForExitedService(t *testing.T) {
 	installServicePollInterval = time.Millisecond
 	installServiceTerminalStateGrace = time.Millisecond
 
-	err := waitInstalledServiceRunning(dir, time.Second, nil)
+	err := waitInstalledServiceRunning(dir, time.Second, nil, 0)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -1927,7 +1927,7 @@ func TestInstallAppHookIncludesCommandOutput(t *testing.T) {
 	})
 
 	dir := makeWaitInstallDeployment(t)
-	runInstallAppCommand = func(dir string, args []string, stdout io.Writer, stderr io.Writer) error {
+	runInstallAppCommand = func(dir string, args []string, stdout io.Writer, stderr io.Writer, dockerPreflightTimeout time.Duration) error {
 		if stderr != nil {
 			fmt.Fprintln(stderr, "docker compose ps failed")
 			fmt.Fprintln(stderr, "permission denied")
@@ -1963,7 +1963,7 @@ func TestInstallHealthHookIncludesLogsWhenServiceDoesNotStart(t *testing.T) {
 
 	installServiceTerminalStateGrace = time.Millisecond
 	dir := makeWaitInstallDeployment(t)
-	runTestCommandOutput = func(spec CommandSpec) ([]byte, error) {
+	runTestCommandOutput = func(spec CommandSpec, options RunOptions) ([]byte, error) {
 		return []byte(`[{"State":"exited"}]`), nil
 	}
 	installRunCommandOutput = func(name string, args ...string) ([]byte, error) {

@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -131,7 +132,11 @@ func TestRuntimeUpVerboseStreamsBundlePrepareOutput(t *testing.T) {
 			t.Fatalf("bundle prepare should stream verbose output: %#v", options)
 		}
 		switch {
-		case containsInOrder(spec.Args, []string{"wheel", "--no-cache-dir"}):
+		case containsInOrder(spec.Args, []string{"python", "-m", "pip", "--disable-pip-version-check", "wheel", "--no-cache-dir"}):
+			command := strings.Join(spec.Args, " ")
+			if strings.Contains(command, "--progress-bar raw") || strings.Contains(command, "reploy-bundle-pip") {
+				return fmt.Errorf("verbose bundle prepare command should not enable raw progress:\n%s", command)
+			}
 			commands = append(commands, "build")
 			if _, err := options.Stdout.Write([]byte("build output\n")); err != nil {
 				return err
@@ -145,8 +150,7 @@ func TestRuntimeUpVerboseStreamsBundlePrepareOutput(t *testing.T) {
 			}
 			return nil
 		default:
-			t.Fatalf("unexpected bundle command: %#v", spec.Args)
-			return nil
+			return fmt.Errorf("unexpected bundle command: %#v", spec.Args)
 		}
 	})
 	defer restoreBundle()
