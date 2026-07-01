@@ -508,7 +508,6 @@ func TestDockerStageHelp(t *testing.T) {
 		"arbiter-server==0.4.2",
 		"Local filesystem refs:",
 		"./PATH",
-		"../PATH",
 		"/ABS/PATH",
 		"file:PATH",
 		"Python provider refs:",

@@ -2292,7 +2292,6 @@ APP_REF:
 
   Local filesystem refs:
     ./PATH
-    ../PATH
     /ABS/PATH
     file:PATH
 
