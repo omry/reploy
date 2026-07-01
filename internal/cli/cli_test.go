@@ -428,9 +428,8 @@ func TestAppUsesCurrentDeploymentDirByDefault(t *testing.T) {
 	if stdout != expected {
 		t.Fatalf("stdout = %q, want %q", stdout, expected)
 	}
-	expectedStderr := "reploy: using staging directory in current directory: " + deployDir + "\n"
-	if stderr != expectedStderr {
-		t.Fatalf("stderr = %q, want %q", stderr, expectedStderr)
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
 	}
 }
 

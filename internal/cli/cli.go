@@ -515,19 +515,12 @@ func isHelpArg(arg string) bool {
 	}
 }
 
-func resolveImplicitDeploymentDir(dir string, explicit bool, output io.Writer) string {
+func resolveImplicitDeploymentDir(dir string, explicit bool, _ io.Writer) string {
 	if explicit || dir != dockerdeploy.DefaultDeploymentDir {
 		return dir
 	}
 	if _, err := os.Stat(dockerdeploy.StateFileName); err != nil {
 		return dir
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		cwd = "."
-	}
-	if output != nil {
-		fmt.Fprintf(output, "reploy: using staging directory in current directory: %s\n", cwd)
 	}
 	return "."
 }
