@@ -25,6 +25,7 @@ type controlScriptSpec struct {
 	ControlScript    string
 	ConfigDir        string
 	Health           deploy.DockerHealthConfig
+	Terminal         deploy.AppTerminalConfig
 	DeployedCommands []deploy.DockerCommandConfig
 }
 
@@ -35,6 +36,7 @@ func stagingControlScriptContent(pack deploy.AppPack, deployedCommands []deploy.
 		ControlScript:    controlScriptName(pack.AppID),
 		ConfigDir:        pack.Docker.DeploymentDirs.Config,
 		Health:           pack.Docker.Health,
+		Terminal:         pack.App.Terminal,
 		DeployedCommands: deployedCommands,
 	})
 }
@@ -50,6 +52,7 @@ func controlScriptContent(plan installPlan) string {
 		ControlScript:    plan.ControlScript,
 		ConfigDir:        plan.ConfigDir,
 		Health:           plan.Health,
+		Terminal:         plan.Terminal,
 		DeployedCommands: plan.DeployedCommands,
 	})
 }
@@ -141,6 +144,7 @@ run_app_command() {
   append_shell_arg "REPLOY_CONFIG_MOUNT=rw"
   append_shell_arg "-e"
   append_shell_arg "REPLOY_APP_COMMAND_PREFIX=%s"
+  append_terminal_env
   append_shell_arg "app"
   %s
 }
@@ -280,9 +284,13 @@ func controlScriptServiceUsage(spec controlScriptSpec) string {
 }
 
 func controlScriptOutputPrefixFunctions(spec controlScriptSpec) string {
-	color := "208"
-	label := controlScriptOutputLabel(spec.AppID)
+	color, label := controlScriptOutputStyle(spec)
 	return fmt.Sprintf(`
+reploy_control_stdout_is_tty=0
+if [ -t 1 ]; then
+  reploy_control_stdout_is_tty=1
+fi
+
 control_output_prefix() {
   case "${REPLOY_COLOR:-auto}" in
     always)
@@ -292,7 +300,7 @@ control_output_prefix() {
       printf '%s'
       ;;
     *)
-      if [ -n "${NO_COLOR:-}" ] || [ ! -t 1 ]; then
+      if [ -n "${NO_COLOR:-}" ] || [ "$reploy_control_stdout_is_tty" != 1 ]; then
         printf '%s'
       else
         printf '\033[38;5;%sm%s\033[0m'
@@ -321,6 +329,13 @@ run_control_shell_command() {
   fi
   return 1
 }`, color, label, label, label, color, label)
+}
+
+func controlScriptOutputStyle(spec controlScriptSpec) (string, string) {
+	if spec.Mode == controlScriptModeStaged {
+		return stagingOutputColor, deploymentOutputLabel(stagingOutputPhase, spec.AppID)
+	}
+	return deployedOutputColor, controlScriptOutputLabel(spec.AppID)
 }
 
 func controlScriptOutputLabel(appID string) string {
@@ -371,7 +386,61 @@ run_compose() {
     append_shell_arg "-f"
     append_shell_arg "$compose_override_file"
   fi
-}%s%s`, projectLines, runCompose, controlScriptRunAsOwnerFunction(spec))
+}%s%s%s`, projectLines, controlScriptTerminalEnvFunctions(spec), runCompose, controlScriptRunAsOwnerFunction(spec))
+}
+
+func controlScriptTerminalEnvFunctions(spec controlScriptSpec) string {
+	colorEnv := strings.TrimSpace(spec.Terminal.ColorEnv)
+	colorBlock := ""
+	if colorEnv != "" {
+		colorBlock = fmt.Sprintf(`
+  reploy_terminal_color_set=""
+  reploy_terminal_color_value=""
+  eval "reploy_terminal_color_set=\${%s+set}"
+  if [ -n "$reploy_terminal_color_set" ]; then
+    eval "reploy_terminal_color_value=\${%s-}"
+  else
+    reploy_terminal_color_value="$(env_value %s "")"
+  fi
+  if [ -z "$reploy_terminal_color_value" ] && [ -z "$reploy_terminal_color_set" ]; then
+    reploy_color_mode="$(printf '%%s' "${REPLOY_COLOR:-auto}" | tr '[:upper:]' '[:lower:]')"
+    case "$reploy_color_mode" in
+      always)
+        reploy_terminal_color_value="always"
+        ;;
+      never)
+        reploy_terminal_color_value="never"
+        ;;
+      ""|auto)
+        if [ -n "${NO_COLOR:-}" ]; then
+          reploy_terminal_color_value="never"
+        elif [ "$reploy_control_stdout_is_tty" = 1 ]; then
+          case "${TERM:-}" in
+            ""|dumb) ;;
+            *) reploy_terminal_color_value="always" ;;
+          esac
+        fi
+        ;;
+      *) ;;
+    esac
+  fi
+  if [ -n "$reploy_terminal_color_value" ] || [ -n "$reploy_terminal_color_set" ]; then
+    append_shell_arg "-e"
+    append_shell_arg "%s=$reploy_terminal_color_value"
+  fi`, colorEnv, colorEnv, shellSingleQuote(colorEnv), colorEnv)
+	}
+	return fmt.Sprintf(`
+append_terminal_env() {%s
+  case "${COLUMNS:-}" in
+    ""|*[!0123456789]*) ;;
+    *)
+      if [ "$COLUMNS" -ge 20 ] && [ "$COLUMNS" -le 1000 ]; then
+        append_shell_arg "-e"
+        append_shell_arg "COLUMNS=$COLUMNS"
+      fi
+      ;;
+  esac
+}`, colorBlock)
 }
 
 func controlScriptRunAsOwnerFunction(spec controlScriptSpec) string {

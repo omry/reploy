@@ -62,6 +62,7 @@ type installPlan struct {
 	NetworkName            string
 	Ports                  []dockerPortBinding
 	Health                 deploy.DockerHealthConfig
+	Terminal               deploy.AppTerminalConfig
 	ConfigDir              string
 	DeployedCommands       []deploy.DockerCommandConfig
 	Hooks                  deploy.DockerInstallHooksConfig
@@ -328,6 +329,7 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 		NetworkName:            service.NetworkName,
 		Ports:                  ports,
 		Health:                 pack.Docker.Health,
+		Terminal:               pack.App.Terminal,
 		ConfigDir:              pack.Docker.DeploymentDirs.Config,
 		DeployedCommands:       deployedCommands,
 		Hooks:                  pack.Docker.Install.Hooks,

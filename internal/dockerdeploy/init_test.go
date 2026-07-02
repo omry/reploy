@@ -151,7 +151,7 @@ func TestStagingControlScriptRunsComposeLifecycleAndAppCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status failed: %v\n%s", err, statusOutput)
 	}
-	if !strings.Contains(string(statusOutput), "[demo] docker output\n") {
+	if !strings.Contains(string(statusOutput), "[STAGING : demo] docker output\n") {
 		t.Fatalf("status output missing script prefix:\n%s", statusOutput)
 	}
 	statusArgs := readFile(t, dockerArgs)
@@ -173,7 +173,7 @@ func TestStagingControlScriptRunsComposeLifecycleAndAppCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("app command failed: %v\n%s", err, appOutput)
 	}
-	if !strings.Contains(string(appOutput), "[demo] docker output\n") {
+	if !strings.Contains(string(appOutput), "[STAGING : demo] docker output\n") {
 		t.Fatalf("app output missing script prefix:\n%s", appOutput)
 	}
 	appArgs := readFile(t, dockerArgs)
@@ -190,6 +190,94 @@ func TestStagingControlScriptRunsComposeLifecycleAndAppCommands(t *testing.T) {
 		if !strings.Contains(appArgs, want) {
 			t.Fatalf("app command docker args missing %q:\n%s", want, appArgs)
 		}
+	}
+
+	colorEnv := withoutEnvKey(os.Environ(), "DEMO_COLOR")
+	colorCommand := exec.Command(script, "config", "check")
+	colorCommand.Env = append(colorEnv,
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"DOCKER_ARGS_FILE="+dockerArgs,
+		"REPLOY_COLOR=always",
+		"TERM=xterm-256color",
+		"COLUMNS=120",
+	)
+	colorOutput, err := colorCommand.CombinedOutput()
+	if err != nil {
+		t.Fatalf("color app command failed: %v\n%s", err, colorOutput)
+	}
+	if !strings.Contains(string(colorOutput), "\x1b[38;5;117m[STAGING : demo]\x1b[0m docker output\n") {
+		t.Fatalf("color app output missing colored staging prefix:\n%q", colorOutput)
+	}
+	colorArgs := readFile(t, dockerArgs)
+	for _, want := range []string{
+		"DEMO_COLOR=always\n",
+		"COLUMNS=120\n",
+	} {
+		if !strings.Contains(colorArgs, want) {
+			t.Fatalf("color app command docker args missing %q:\n%s", want, colorArgs)
+		}
+	}
+
+	explicitColorCommand := exec.Command(script, "config", "check")
+	explicitColorCommand.Env = append(colorEnv,
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"DOCKER_ARGS_FILE="+dockerArgs,
+		"REPLOY_COLOR=always",
+		"DEMO_COLOR=never",
+	)
+	explicitColorOutput, err := explicitColorCommand.CombinedOutput()
+	if err != nil {
+		t.Fatalf("explicit color app command failed: %v\n%s", err, explicitColorOutput)
+	}
+	explicitColorArgs := readFile(t, dockerArgs)
+	if !strings.Contains(explicitColorArgs, "DEMO_COLOR=never\n") {
+		t.Fatalf("explicit color app command did not preserve DEMO_COLOR:\n%s", explicitColorArgs)
+	}
+
+	neverColorCommand := exec.Command(script, "config", "check")
+	neverColorCommand.Env = append(colorEnv,
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"DOCKER_ARGS_FILE="+dockerArgs,
+		"REPLOY_COLOR=never",
+	)
+	neverColorOutput, err := neverColorCommand.CombinedOutput()
+	if err != nil {
+		t.Fatalf("never color app command failed: %v\n%s", err, neverColorOutput)
+	}
+	neverColorArgs := readFile(t, dockerArgs)
+	if !strings.Contains(neverColorArgs, "DEMO_COLOR=never\n") {
+		t.Fatalf("never color app command did not pass DEMO_COLOR=never:\n%s", neverColorArgs)
+	}
+
+	uppercaseColorCommand := exec.Command(script, "config", "check")
+	uppercaseColorCommand.Env = append(colorEnv,
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"DOCKER_ARGS_FILE="+dockerArgs,
+		"REPLOY_COLOR=NEVER",
+	)
+	uppercaseColorOutput, err := uppercaseColorCommand.CombinedOutput()
+	if err != nil {
+		t.Fatalf("uppercase color app command failed: %v\n%s", err, uppercaseColorOutput)
+	}
+	uppercaseColorArgs := readFile(t, dockerArgs)
+	if !strings.Contains(uppercaseColorArgs, "DEMO_COLOR=never\n") {
+		t.Fatalf("uppercase color app command did not normalize REPLOY_COLOR:\n%s", uppercaseColorArgs)
+	}
+
+	unknownColorCommand := exec.Command(script, "config", "check")
+	unknownColorCommand.Env = append(colorEnv,
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"DOCKER_ARGS_FILE="+dockerArgs,
+		"REPLOY_COLOR=unknown",
+		"NO_COLOR=1",
+	)
+	unknownColorOutput, err := unknownColorCommand.CombinedOutput()
+	if err != nil {
+		t.Fatalf("unknown color app command failed: %v\n%s", err, unknownColorOutput)
+	}
+	unknownColorArgs := readFile(t, dockerArgs)
+	if strings.Contains(unknownColorArgs, "DEMO_COLOR=") {
+		t.Fatalf("unknown REPLOY_COLOR should not derive DEMO_COLOR:\n%s", unknownColorArgs)
 	}
 }
 
@@ -224,7 +312,7 @@ func TestStagingControlScriptPrefixesHealthOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("health failed: %v\n%s", err, output)
 	}
-	if string(output) != "[demo] health ok\n" {
+	if string(output) != "[STAGING : demo] health ok\n" {
 		t.Fatalf("health output = %q", output)
 	}
 	args := readFile(t, curlArgs)
@@ -263,7 +351,7 @@ func TestStagingControlScriptPrefixesOutputWithoutTrailingNewline(t *testing.T) 
 	if err != nil {
 		t.Fatalf("status failed: %v\n%s", err, output)
 	}
-	if string(output) != "[demo] partial\n" {
+	if string(output) != "[STAGING : demo] partial\n" {
 		t.Fatalf("status output = %q", output)
 	}
 }
@@ -1306,4 +1394,16 @@ func readFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(content)
+}
+
+func withoutEnvKey(values []string, key string) []string {
+	prefix := key + "="
+	filtered := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.HasPrefix(value, prefix) {
+			continue
+		}
+		filtered = append(filtered, value)
+	}
+	return filtered
 }
