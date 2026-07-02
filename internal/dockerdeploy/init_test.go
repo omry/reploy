@@ -97,7 +97,7 @@ func TestInitWritesDeploymentDirectory(t *testing.T) {
 	helper := readFile(t, filepath.Join(deployDir, "democtl"))
 	for _, want := range []string{
 		`docker compose`,
-		`run_compose up -d`,
+		`run_compose_up`,
 		`run_app_command()`,
 		`REPLOY_APP_COMMAND_PREFIX=democtl`,
 	} {
@@ -278,6 +278,80 @@ func TestStagingControlScriptRunsComposeLifecycleAndAppCommands(t *testing.T) {
 	unknownColorArgs := readFile(t, dockerArgs)
 	if strings.Contains(unknownColorArgs, "DEMO_COLOR=") {
 		t.Fatalf("unknown REPLOY_COLOR should not derive DEMO_COLOR:\n%s", unknownColorArgs)
+	}
+}
+
+func TestStagingControlScriptUpRecoversStaleDockerNetwork(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(deployDir, "democtl")
+
+	fakeBin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dockerArgs := filepath.Join(t.TempDir(), "docker.args")
+	upCount := filepath.Join(t.TempDir(), "up.count")
+	fakeDocker := filepath.Join(fakeBin, "docker")
+	if err := os.WriteFile(fakeDocker, []byte(`#!/bin/sh
+{
+  printf '%s\n' '---'
+  printf '%s\n' "$@"
+} >> "$DOCKER_ARGS_FILE"
+is_up=0
+for arg in "$@"; do
+  if [ "$arg" = "up" ]; then
+    is_up=1
+  fi
+done
+if [ "$is_up" = 1 ]; then
+  count=0
+  if [ -f "$DOCKER_UP_COUNT_FILE" ]; then
+    count="$(cat "$DOCKER_UP_COUNT_FILE")"
+  fi
+  count=$((count + 1))
+  printf '%s\n' "$count" > "$DOCKER_UP_COUNT_FILE"
+  if [ "$count" = 1 ]; then
+    echo "Error response from daemon: failed to set up container networking: network b2f601ad24f6dbb403c8f25b418d314854c35d7fc33ac351355b45d12937cbb3 not found" >&2
+    exit 1
+  fi
+fi
+printf 'docker output\n'
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	command := exec.Command(script, "up")
+	command.Env = append(os.Environ(),
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"DOCKER_ARGS_FILE="+dockerArgs,
+		"DOCKER_UP_COUNT_FILE="+upCount,
+		"REPLOY_COLOR=never",
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("up failed: %v\n%s", err, output)
+	}
+	text := string(output)
+	if !strings.Contains(text, "network b2f601ad24f6dbb403c8f25b418d314854c35d7fc33ac351355b45d12937cbb3 not found") {
+		t.Fatalf("up output did not include original stale network error:\n%s", output)
+	}
+	if !strings.Contains(text, "[STAGING : demo] detected stale Docker network state; running down --remove-orphans and retrying up\n") {
+		t.Fatalf("up output did not explain stale network recovery:\n%s", output)
+	}
+	args := readFile(t, dockerArgs)
+	if strings.Count(args, "\nup\n") != 2 {
+		t.Fatalf("up did not retry compose up once:\n%s", args)
+	}
+	if !strings.Contains(args, "\ndown\n--remove-orphans\n") {
+		t.Fatalf("up did not clean stale compose state before retry:\n%s", args)
 	}
 }
 

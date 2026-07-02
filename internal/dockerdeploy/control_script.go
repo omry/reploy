@@ -309,10 +309,14 @@ control_output_prefix() {
   esac
 }
 
-run_control_shell_command() {
+run_control_shell_command_recorded() {
   reploy_control_command="$1"
   reploy_control_prefix="$(control_output_prefix)"
   reploy_control_status_file="$(mktemp "${TMPDIR:-/tmp}/reploy-output-prefix.XXXXXX")" || return 1
+  reploy_control_output_file="$(mktemp "${TMPDIR:-/tmp}/reploy-output-prefix.XXXXXX")" || {
+    rm -f "$reploy_control_status_file"
+    return 1
+  }
   (
     set +e
     sh -c "$reploy_control_command"
@@ -320,6 +324,7 @@ run_control_shell_command() {
     printf '%%s\n' "$reploy_control_status" > "$reploy_control_status_file"
     exit 0
   ) 2>&1 | while IFS= read -r reploy_control_line || [ -n "$reploy_control_line" ]; do
+    printf '%%s\n' "$reploy_control_line" >> "$reploy_control_output_file"
     printf '%%s %%s\n' "$reploy_control_prefix" "$reploy_control_line"
   done
   if [ -r "$reploy_control_status_file" ]; then
@@ -328,6 +333,19 @@ run_control_shell_command() {
     return "$reploy_control_status"
   fi
   return 1
+}
+
+run_control_shell_command() {
+  reploy_control_output_file=""
+  if run_control_shell_command_recorded "$1"; then
+    reploy_control_result=0
+  else
+    reploy_control_result="$?"
+  fi
+  if [ -n "$reploy_control_output_file" ]; then
+    rm -f "$reploy_control_output_file"
+  fi
+  return "$reploy_control_result"
 }`, color, label, label, label, color, label)
 }
 
@@ -371,6 +389,51 @@ run_compose() {
     append_shell_arg "$compose_arg"
   done
   run_control_shell_command "$shell_command"
+}
+
+run_compose_up() {
+  shell_command=""
+  append_compose_base
+  append_shell_arg "up"
+  append_shell_arg "-d"
+  for compose_arg in "$@"; do
+    append_shell_arg "$compose_arg"
+  done
+  if run_control_shell_command_recorded "$shell_command"; then
+    reploy_up_status=0
+  else
+    reploy_up_status="$?"
+  fi
+  reploy_up_output_file="$reploy_control_output_file"
+  if [ "$reploy_up_status" -eq 0 ]; then
+    rm -f "$reploy_up_output_file"
+    return 0
+  fi
+  if [ -r "$reploy_up_output_file" ] && grep -E 'network .+ not found' "$reploy_up_output_file" >/dev/null 2>&1; then
+    rm -f "$reploy_up_output_file"
+    printf '%s detected stale Docker network state; running down --remove-orphans and retrying up\n' "$(control_output_prefix)"
+    shell_command=""
+    append_compose_base
+    append_shell_arg "down"
+    append_shell_arg "--remove-orphans"
+    if ! run_control_shell_command "$shell_command"; then
+      return 1
+    fi
+    shell_command=""
+    append_compose_base
+    append_shell_arg "up"
+    append_shell_arg "-d"
+    for compose_arg in "$@"; do
+      append_shell_arg "$compose_arg"
+    done
+    if run_control_shell_command "$shell_command"; then
+      return 0
+    else
+      return $?
+    fi
+  fi
+  rm -f "$reploy_up_output_file"
+  return "$reploy_up_status"
 }`
 	}
 	return fmt.Sprintf(`append_compose_base() {
@@ -515,13 +578,13 @@ func controlScriptHealthCommandRunner(spec controlScriptSpec) string {
 func controlScriptLifecycleCases(spec controlScriptSpec) string {
 	if spec.Mode == controlScriptModeStaged {
 		return fmt.Sprintf(`  up|start)
-    run_compose up -d
+    run_compose_up
     ;;
   down|stop)
     run_compose down --remove-orphans
     ;;
   restart)
-    run_compose up -d --force-recreate
+    run_compose_up --force-recreate
     ;;
   status|ps)
     run_compose ps
