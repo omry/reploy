@@ -33,6 +33,13 @@ func runCLI(args ...string) (int, string, string) {
 	return code, stdout.String(), stderr.String()
 }
 
+func requireLinuxHost(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux/systemd-specific CLI behavior is covered by Linux CI")
+	}
+}
+
 func setCLITestPackIndex(t *testing.T) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "reploy-blueprint-index.json")
@@ -1062,6 +1069,7 @@ func TestDockerStageGitHubRefErrorDoesNotExposeInternalGitRef(t *testing.T) {
 }
 
 func TestDirectInstallFileRefDryRunUsesBlueprintDefaults(t *testing.T) {
+	requireLinuxHost(t)
 	packDir := makeCLITestPack(t)
 	code, stdout, stderr := runCLI("install", "file:"+packDir, "--dry-run", "--no-start")
 	if code != 0 {
@@ -1084,6 +1092,7 @@ func TestDirectInstallFileRefDryRunUsesBlueprintDefaults(t *testing.T) {
 }
 
 func TestDirectInstallInPlaceDryRunUsesRequestedTarget(t *testing.T) {
+	requireLinuxHost(t)
 	packDir := makeCLITestPack(t)
 	target := filepath.Join(t.TempDir(), "installed")
 	code, stdout, stderr := runCLI("install", "file:"+packDir, "--to", target, "--in-place", "--dry-run", "--no-start")
@@ -1175,6 +1184,7 @@ func TestDockerUninstallOptionsParse(t *testing.T) {
 }
 
 func TestDockerUninstallRequiresRootBeforeSpinner(t *testing.T) {
+	requireLinuxHost(t)
 	if os.Geteuid() == 0 {
 		t.Skip("root test environment cannot exercise non-root CLI path")
 	}
