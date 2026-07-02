@@ -9,6 +9,13 @@ import (
 	"time"
 )
 
+func TestMain(m *testing.M) {
+	detectHostPlatform = func() hostPlatform {
+		return hostPlatform{GOOS: "linux"}
+	}
+	os.Exit(m.Run())
+}
+
 func TestHostPlatformInstallBackend(t *testing.T) {
 	tests := []struct {
 		goos string
