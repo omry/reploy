@@ -58,9 +58,11 @@ No active backlog items.
 
 - [ ] `P2` Define and validate formal macOS support.
       Reploy should have explicit macOS behavior instead of assuming Linux-like
-      service management. Acceptance checks: publish a support matrix for macOS
-      staging/development commands versus permanent install/uninstall; build
-      and smoke-test macOS binaries for stage/update/info/bundle/app flows with
-      Docker Desktop where applicable; make systemd-based install/uninstall fail
-      with clear platform errors on macOS; and decide whether a launchd backend
-      is in scope or explicitly deferred.
+      service management. Acceptance checks: publish a support matrix that
+      positions macOS as a development/staging host; build and smoke-test macOS
+      binaries for stage/update/info/bundle/app/runtime/test flows with Docker
+      Desktop where applicable; define and smoke-test normal install/uninstall
+      as a development-host persistence feature with a warning about weaker
+      macOS/Windows Docker-runtime security; make Linux-only system install
+      guarantees clear; and keep launchd system install as a future design
+      topic. Planning details live in `docs/MACOS_PORT.md`.

@@ -1,0 +1,3 @@
+kind: Docs
+body: Add a macOS port plan that positions macOS as a Docker-backed development, staging, and persistent-install host.
+time: 2026-07-02T00:00:00+08:00
