@@ -1,0 +1,3 @@
+kind: Changed
+body: Warm the generated Python runtime cache during `reploy bundle build` so the first app command does not pay that setup cost.
+time: 2026-07-02T15:45:00+08:00

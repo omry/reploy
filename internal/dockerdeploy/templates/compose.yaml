@@ -141,6 +141,9 @@ services:
           exit 1;
         fi;
       fi &&
+      if [ "$${REPLOY_CONTAINER_COMMAND:-{{DEFAULT_CONTAINER_COMMAND}}}" = __reploy_runtime_warmup ]; then
+        exit 0;
+      fi &&
       venv_python="$$runtime_venv/bin/python" &&
       PATH="$$runtime_venv/bin:$$PATH" &&
       export PATH &&

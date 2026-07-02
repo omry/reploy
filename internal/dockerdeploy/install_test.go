@@ -893,14 +893,19 @@ func TestDirectInstallAppliesViaTemporaryStaging(t *testing.T) {
 		return nil
 	}
 	runBundleCommand = func(spec CommandSpec, options RunOptions) error {
-		if !containsAdjacent(spec.Args, "--user", defaultContainerUser()) {
-			t.Fatalf("bundle command did not run container as default user: %#v", spec.Args)
-		}
 		switch {
 		case containsInOrder(spec.Args, []string{"wheel", "--no-cache-dir"}):
+			if !containsAdjacent(spec.Args, "--user", defaultContainerUser()) {
+				t.Fatalf("bundle command did not run container as default user: %#v", spec.Args)
+			}
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
 		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+			if !containsAdjacent(spec.Args, "--user", defaultContainerUser()) {
+				t.Fatalf("bundle command did not run container as default user: %#v", spec.Args)
+			}
+			return nil
+		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
 			return nil
 		default:
 			t.Fatalf("unexpected bundle command: %#v", spec.Args)
@@ -2051,7 +2056,16 @@ func TestInstallRebuildsLocalSourceBundleInTarget(t *testing.T) {
 
 	installGeteuid = func() int { return 0 }
 	installSystemdUnitDir = unitDir
-	installChown = func(path string, uid int, gid int) error { return nil }
+	runtimeChowned := false
+	installChown = func(path string, uid int, gid int) error {
+		if path == filepath.Join(target, RuntimeDirName) {
+			if uid != 1000 || gid != 1000 {
+				t.Fatalf("runtime chown = %d:%d, want 1000:1000", uid, gid)
+			}
+			runtimeChowned = true
+		}
+		return nil
+	}
 	installLookPath = func(name string) (string, error) {
 		switch name {
 		case "docker":
@@ -2067,20 +2081,31 @@ func TestInstallRebuildsLocalSourceBundleInTarget(t *testing.T) {
 	var specs []CommandSpec
 	runBundleCommand = func(spec CommandSpec, options RunOptions) error {
 		specs = append(specs, spec)
-		if !containsAdjacent(spec.Args, "--user", defaultContainerUser()) {
-			t.Fatalf("bundle rebuild did not run container as default user: %#v", spec.Args)
-		}
 		if spec.Dir != target {
 			t.Fatalf("bundle rebuild ran in %q, want target %q", spec.Dir, target)
 		}
 		switch {
 		case containsInOrder(spec.Args, []string{"sh", "-c"}):
+			if !containsAdjacent(spec.Args, "--user", defaultContainerUser()) {
+				t.Fatalf("bundle rebuild did not run container as default user: %#v", spec.Args)
+			}
 			if mount := hostPathForContainerMount(t, spec.Args, "/source/demo-server"); mount != sourceDir {
 				t.Fatalf("source mount = %q, want %q", mount, sourceDir)
 			}
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_server-1.2.3-py3-none-any.whl"), []byte("fresh\n"), 0o644)
 		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+			if !containsAdjacent(spec.Args, "--user", defaultContainerUser()) {
+				t.Fatalf("bundle rebuild did not run container as default user: %#v", spec.Args)
+			}
+			return nil
+		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
+			if _, err := os.Stat(filepath.Join(target, ComposeFileName)); err != nil {
+				t.Fatalf("runtime compose was not materialized before bundle warmup: %v", err)
+			}
+			if !runtimeChowned {
+				t.Fatalf("runtime dir was not chowned before bundle warmup")
+			}
 			return nil
 		default:
 			t.Fatalf("unexpected bundle command: %#v", spec.Args)
@@ -2096,8 +2121,8 @@ func TestInstallRebuildsLocalSourceBundleInTarget(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(specs) != 2 {
-		t.Fatalf("bundle commands = %d, want build and check", len(specs))
+	if len(specs) != 3 {
+		t.Fatalf("bundle commands = %d, want build, check, and warm runtime", len(specs))
 	}
 	targetWheel := filepath.Join(target, BundleDirName, "demo_server-1.2.3-py3-none-any.whl")
 	if got := readFile(t, targetWheel); got != "fresh\n" {

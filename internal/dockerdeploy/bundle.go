@@ -56,6 +56,7 @@ type BundlePrepareOptions struct {
 	Dir                    string
 	DryRun                 bool
 	PyPIOnly               bool
+	NoWarmRuntime          bool
 	Verbose                bool
 	Stdout                 io.Writer
 	Stderr                 io.Writer
@@ -604,8 +605,71 @@ func BundlePrepare(options BundlePrepareOptions) error {
 	}); err != nil {
 		return err
 	}
+	if !options.NoWarmRuntime {
+		if err := timer.Measure("warm Python runtime", func() error {
+			return BundleWarmRuntime(BundleWarmRuntimeOptions{Dir: options.Dir, Verbose: options.Verbose, Stdout: stdout, Stderr: stderr, DockerPreflightTimeout: options.DockerPreflightTimeout})
+		}); err != nil {
+			return err
+		}
+	}
 	timer.Print(options.Stdout)
 	return markBundlePrepared(options.Dir)
+}
+
+type BundleWarmRuntimeOptions struct {
+	Dir                    string
+	Verbose                bool
+	Stdout                 io.Writer
+	Stderr                 io.Writer
+	DockerPreflightTimeout time.Duration
+}
+
+func BundleWarmRuntime(options BundleWarmRuntimeOptions) error {
+	if options.Dir == "" {
+		options.Dir = DefaultDeploymentDir
+	}
+	state, err := loadState(options.Dir)
+	if err != nil {
+		return err
+	}
+	state, err = withInferredBundleState(options.Dir, state)
+	if err != nil {
+		return err
+	}
+	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
+	if err != nil {
+		return err
+	}
+	if err := ensureOneOffCommandDirs(options.Dir, pack); err != nil {
+		return err
+	}
+	if _, err := materializeRuntimeCompose(options.Dir); err != nil {
+		return fmt.Errorf("materialize runtime compose: %w", err)
+	}
+	projectName, err := deploymentComposeProjectName(options.Dir)
+	if err != nil {
+		return err
+	}
+	spec := BundleWarmRuntimeCommand(options.Dir, projectName)
+	stdout := options.Stdout
+	stderr := options.Stderr
+	if !options.Verbose {
+		stdout = nil
+		stderr = nil
+	}
+	return runInterruptibleCommand(runBundleCommand, spec, bundleDockerRunOptions(stdout, stderr, options.DockerPreflightTimeout))
+}
+
+func BundleWarmRuntimeCommand(dir string, projectName string) CommandSpec {
+	args := []string{
+		"run",
+		"--rm",
+		"--no-deps",
+		"-e",
+		"REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup",
+		"app",
+	}
+	return quietComposeCommand(composeCommandWithProject(dir, projectName, args...))
 }
 
 func EnsureBundlePrepared(options BundleEnsureOptions) (bool, error) {
@@ -658,6 +722,23 @@ func BundleClean(options BundleCleanOptions) ([]UpdateResult, error) {
 			return nil, err
 		}
 		results = append(results, UpdateResult{Path: bundleDir, Status: deploy.UpdateStatusRemoved})
+	}
+	runtimeCacheDir, err := deploymentRuntimePythonVenvDir(options.Dir)
+	if err != nil {
+		return nil, err
+	}
+	cacheInfo, cacheErr := os.Stat(runtimeCacheDir)
+	if cacheErr != nil && !os.IsNotExist(cacheErr) {
+		return nil, cacheErr
+	}
+	if cacheErr == nil {
+		if !cacheInfo.IsDir() {
+			return nil, fmt.Errorf("runtime cache path is not a directory: %s", runtimeCacheDir)
+		}
+		if err := os.RemoveAll(runtimeCacheDir); err != nil {
+			return nil, err
+		}
+		results = append(results, UpdateResult{Path: runtimeCacheDir, Status: deploy.UpdateStatusRemoved, Ownership: "generated", Reason: "removed warmed Python runtime cache"})
 	}
 	if len(results) == 0 && state.Bundle.PreparedFingerprint == "" {
 		return nil, nil
@@ -1392,6 +1473,26 @@ func deploymentBundleDir(dir string) (string, error) {
 		return bundlePath, nil
 	}
 	return filepath.Join(dir, bundlePath), nil
+}
+
+func deploymentRuntimeDir(dir string) (string, error) {
+	values, err := readDockerEnv(dir)
+	if err != nil {
+		return "", err
+	}
+	runtimePath := envValue(values, "REPLOY_RUNTIME_DIR", "./"+RuntimeDirName)
+	if filepath.IsAbs(runtimePath) {
+		return runtimePath, nil
+	}
+	return filepath.Join(dir, runtimePath), nil
+}
+
+func deploymentRuntimePythonVenvDir(dir string) (string, error) {
+	runtimeDir, err := deploymentRuntimeDir(dir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(runtimeDir, "python-venv"), nil
 }
 
 func copyFileIfDifferent(sourcePath string, targetPath string) (deploy.UpdateStatus, error) {

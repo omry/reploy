@@ -879,6 +879,18 @@ func chownInstalledDeployment(targetDir string) error {
 	return chownInstallPath(targetDir, owner.UID, owner.GID)
 }
 
+func chownInstalledRuntimeDir(targetDir string) error {
+	values, err := readDockerEnv(targetDir)
+	if err != nil {
+		return err
+	}
+	owner, err := resolveInstallOwner(values)
+	if err != nil {
+		return err
+	}
+	return chownInstallPath(filepath.Join(targetDir, RuntimeDirName), owner.UID, owner.GID)
+}
+
 func chownInstallPath(path string, uid int, gid int) error {
 	return filepath.WalkDir(path, func(currentPath string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -1151,11 +1163,14 @@ func applyInstallPlan(plan installPlan) error {
 	if err := writeInstalledState(plan); err != nil {
 		return fmt.Errorf("mark deployment installed: %w", err)
 	}
-	if err := rebuildInstalledBundleIfLocalSources(plan); err != nil {
-		return fmt.Errorf("rebuild installed bundle: %w", err)
-	}
 	if _, err := materializeRuntimeCompose(plan.TargetDir); err != nil {
 		return fmt.Errorf("materialize runtime compose: %w", err)
+	}
+	if err := chownInstalledRuntimeDir(plan.TargetDir); err != nil {
+		return fmt.Errorf("set install runtime ownership: %w", err)
+	}
+	if err := rebuildInstalledBundleIfLocalSources(plan); err != nil {
+		return fmt.Errorf("rebuild installed bundle: %w", err)
 	}
 	if owner, err := installOwnerForDir(plan.TargetDir); err == nil {
 		installProgress(plan.Progress, fmt.Sprintf("setting installed ownership to %s (%d:%d)", owner.Spec, owner.UID, owner.GID))
