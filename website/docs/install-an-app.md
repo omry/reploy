@@ -61,9 +61,6 @@ The staging directory also contains an app-named control script, such as
 ./reploy-staging/examplectl config check --live
 ```
 
-Live config checks refuse to run while the app service is already running.
-Restart the service first so edited config is loaded before Reploy tests it.
-
 Use `--dir` when you want a different staging directory for this app instance.
 
 ## 4. Start and Test Staging

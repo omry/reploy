@@ -8,7 +8,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/omry/reploy/internal/deploy"
 )
@@ -252,13 +251,6 @@ func TestAppCommandRunsConfigCheck(t *testing.T) {
 		return nil
 	})
 	defer restore()
-	restoreStates := stubAppCommandServiceStates(func(dir string, dockerPreflightTimeout time.Duration) ([]string, error) {
-		if dir != deployDir {
-			t.Fatalf("service state check used dir %q, want %q", dir, deployDir)
-		}
-		return nil, nil
-	})
-	defer restoreStates()
 
 	err := AppCommand(AppCommandOptions{Dir: deployDir, CommandArgs: []string{"config", "check", "--live"}})
 	if err != nil {
@@ -272,27 +264,6 @@ func TestAppCommandRunsConfigCheck(t *testing.T) {
 	}
 	if !containsInOrder(specs[0].Args, []string{"-e", "REPLOY_FORWARDED_ARG_0=--live"}) {
 		t.Fatalf("first command did not forward --live: %#v", specs[0].Args)
-	}
-}
-
-func TestAppCommandRefusesLiveConfigCheckWhileServiceRuns(t *testing.T) {
-	deployDir := makeAppCommandDeployment(t)
-	restore := stubAppCommandRunner(func(spec CommandSpec, options RunOptions) error {
-		t.Fatalf("app command should not run while service is running: %#v", spec.Args)
-		return nil
-	})
-	defer restore()
-	restoreStates := stubAppCommandServiceStates(func(dir string, dockerPreflightTimeout time.Duration) ([]string, error) {
-		return []string{"running"}, nil
-	})
-	defer restoreStates()
-
-	err := AppCommand(AppCommandOptions{Dir: deployDir, CommandArgs: []string{"config", "check", "--live"}})
-	if err == nil {
-		t.Fatal("expected live config check refusal")
-	}
-	if !strings.Contains(err.Error(), "restart the service so config changes take effect") {
-		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -509,14 +480,6 @@ func stubAppCommandRunner(run func(CommandSpec, RunOptions) error) func() {
 	runAppCommand = run
 	return func() {
 		runAppCommand = previous
-	}
-}
-
-func stubAppCommandServiceStates(run func(string, time.Duration) ([]string, error)) func() {
-	previous := appCommandServiceStates
-	appCommandServiceStates = run
-	return func() {
-		appCommandServiceStates = previous
 	}
 }
 

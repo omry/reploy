@@ -1,3 +1,0 @@
-kind: Fixed
-body: Refuse `reploy app config check --live` while the app service is already running so operators restart before testing changed config.
-time: 2026-07-02T13:45:00+08:00

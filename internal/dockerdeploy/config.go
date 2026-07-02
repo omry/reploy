@@ -43,7 +43,6 @@ type AppCommandListResult struct {
 
 var runConfigCheckCommand = runCommand
 var runAppCommand = runCommand
-var appCommandServiceStates = composeServiceStates
 
 type temporaryComposeRunner func(CommandSpec, RunOptions) error
 
@@ -129,17 +128,6 @@ func AppCommand(options AppCommandOptions) error {
 	if err != nil {
 		return err
 	}
-	if command.Name == "config_check" && containsForwardedFlag(forwardedArgs, "--live") {
-		states, err := appCommandServiceStates(options.Dir, options.DockerPreflightTimeout)
-		if err != nil {
-			return fmt.Errorf("check running service before live config check: %w", err)
-		}
-		if serviceStatesContain(states, "running") {
-			return fmt.Errorf(
-				"refusing live config check while the service is running; restart the service so config changes take effect before testing them",
-			)
-		}
-	}
 	spec := AppCommandForProject(options.Dir, command.Name, forwardedArgs, projectName, configDisplayDir)
 	spec = withAppTerminalEnv(spec, pack.App.Terminal, terminalOutput)
 	err = runTemporaryComposeCommand(
@@ -152,15 +140,6 @@ func AppCommand(options AppCommandOptions) error {
 		return appCommandError(err)
 	}
 	return nil
-}
-
-func containsForwardedFlag(args []string, flag string) bool {
-	for _, arg := range args {
-		if arg == flag || strings.HasPrefix(arg, flag+"=") {
-			return true
-		}
-	}
-	return false
 }
 
 func appCommandStdin(output io.Writer) io.Reader {
