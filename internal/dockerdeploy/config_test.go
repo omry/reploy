@@ -146,8 +146,9 @@ func TestAppCommandRunsOneOffOnDeploymentProject(t *testing.T) {
 	if runOptions[0].Stdin != nil {
 		t.Fatalf("captured app command should not attach stdin: %#v", runOptions[0].Stdin)
 	}
-	if containsValue(specs[0].Args, "--project-name") {
-		t.Fatalf("app command should use deployment project, got args: %#v", specs[0].Args)
+	projectName := mustDeploymentComposeProjectName(t, deployDir)
+	if !containsAdjacent(specs[0].Args, "--project-name", projectName) {
+		t.Fatalf("app command should use deployment project %q, got args: %#v", projectName, specs[0].Args)
 	}
 	if !containsInOrder(specs[0].Args, []string{"-e", "REPLOY_CONTAINER_COMMAND=bootstrap_plugin"}) {
 		t.Fatalf("first command did not select bootstrap_plugin: %#v", specs[0].Args)
@@ -394,8 +395,9 @@ func TestConfigCheckRunsOneOffOnDeploymentProject(t *testing.T) {
 	if len(specs) != 1 {
 		t.Fatalf("ran %d commands, want one-off run", len(specs))
 	}
-	if containsValue(specs[0].Args, "--project-name") {
-		t.Fatalf("config check should use deployment project, got args: %#v", specs[0].Args)
+	projectName := mustDeploymentComposeProjectName(t, deployDir)
+	if !containsAdjacent(specs[0].Args, "--project-name", projectName) {
+		t.Fatalf("config check should use deployment project %q, got args: %#v", projectName, specs[0].Args)
 	}
 	if !containsInOrder(specs[0].Args, []string{"run", "--rm", "--no-deps"}) {
 		t.Fatalf("first command was not config check run: %#v", specs[0].Args)
@@ -479,6 +481,18 @@ func stubAppCommandRunner(run func(CommandSpec, RunOptions) error) func() {
 	return func() {
 		runAppCommand = previous
 	}
+}
+
+func mustDeploymentComposeProjectName(t *testing.T, dir string) string {
+	t.Helper()
+	projectName, err := deploymentComposeProjectName(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projectName == "" {
+		t.Fatal("missing deployment compose project name")
+	}
+	return projectName
 }
 
 func containsEnvValue(values []string, expected string) bool {

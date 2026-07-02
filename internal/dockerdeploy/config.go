@@ -75,7 +75,10 @@ func ConfigCheck(options ConfigCheckOptions) error {
 		return err
 	}
 	configDisplayDir := appConfigDisplayDir(options.Dir, pack)
-	projectName := installComposeProjectName(state)
+	projectName, err := deploymentComposeProjectName(options.Dir)
+	if err != nil {
+		return err
+	}
 	return runTemporaryComposeCommand(
 		runConfigCheckCommand,
 		ConfigCheckCommandForProject(options.Dir, command.Name, forwardedArgs, projectName, configDisplayDir),
@@ -121,7 +124,10 @@ func AppCommand(options AppCommandOptions) error {
 		return fmt.Errorf("ensure runtime compose: %w", err)
 	}
 	configDisplayDir := appConfigDisplayDir(options.Dir, pack)
-	projectName := installComposeProjectName(state)
+	projectName, err := deploymentComposeProjectName(options.Dir)
+	if err != nil {
+		return err
+	}
 	spec := AppCommandForProject(options.Dir, command.Name, forwardedArgs, projectName, configDisplayDir)
 	spec = withAppTerminalEnv(spec, pack.App.Terminal, terminalOutput)
 	err = runTemporaryComposeCommand(
@@ -134,13 +140,6 @@ func AppCommand(options AppCommandOptions) error {
 		return appCommandError(err)
 	}
 	return nil
-}
-
-func installComposeProjectName(state deploy.DeploymentState) string {
-	if state.Install == nil {
-		return ""
-	}
-	return state.Install.ComposeProject
 }
 
 func appCommandStdin(output io.Writer) io.Reader {
