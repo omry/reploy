@@ -12,9 +12,8 @@ from pathlib import Path
 REPLOY_TARGETS = (
     "linux-amd64",
     "linux-arm64",
-    # Formal macOS support is deferred.
-    # "darwin-amd64",
-    # "darwin-arm64",
+    "darwin-amd64",
+    "darwin-arm64",
     # Formal Windows support is deferred.
     # "windows-amd64",
     # "windows-arm64",
@@ -53,6 +52,12 @@ def _reploy_version(root: Path) -> str:
     return version
 
 
+def _binary_name(target: str) -> str:
+    if target.startswith("windows-"):
+        return "reploy.exe"
+    return "reploy"
+
+
 def build_distributions(
     *,
     root: Path,
@@ -88,6 +93,7 @@ def build_distributions(
             {
                 "REPLOY_VERSION": version,
                 "REPLOY_TARGET": target,
+                "REPLOY_BINARY": str(outdir / target / _binary_name(target)),
             }
         )
         command = [

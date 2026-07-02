@@ -21,6 +21,11 @@ The installer script prints the requested version, detected platform, download
 URL, target path, installed binary version, and a PATH hint when
 `$HOME/.local/bin` is not already on `PATH`.
 
+On macOS, initial Reploy release binaries may be unsigned and unnotarized. If
+macOS blocks first launch, use the standard Gatekeeper approval flow for a
+trusted downloaded command-line tool. Developer ID signing and notarization are
+planned as release hardening work.
+
 ## Parameters
 
 Use `--to DIR` to choose the directory where the `reploy` executable is

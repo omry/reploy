@@ -80,7 +80,7 @@ Expected first milestone:
 | `up`, `restart`, `down`, `ps`, `status`, `logs` | supported | Docker Desktop-backed staging runtime. |
 | `test` | supported | Docker Desktop-backed staging runtime. |
 | `doctor` | supported | Should distinguish staging readiness from Linux install readiness. |
-| `install`, `uninstall` | planned | Persistent development install using Docker/Compose restart policy; warn that macOS/Windows Docker-runtime security is weaker than Linux. |
+| `install`, `uninstall` | supported for persistent development install | Uses Docker/Compose restart policy; warns that macOS/Windows Docker-runtime security is weaker than Linux. |
 | launchd/system install | unsupported initially | Future design topic, not exposed as the first macOS install mode. |
 
 Unsupported operations should fail before doing partial work.
@@ -95,9 +95,15 @@ Add Darwin targets to build and release workflows:
 - `darwin-amd64`
 
 The install script and release docs should understand macOS archive names,
-checksums, and platform detection. Codesigning, notarization, and Homebrew can
-be separate follow-up decisions, but the plan should record whether they are
-required before claiming official support.
+checksums, and platform detection. The first macOS milestone may ship unsigned
+and unnotarized artifacts, but that limitation must be documented because users
+may see Gatekeeper friction. Apple-native distribution, using Developer ID
+signing and notarization, is a follow-up release-hardening milestone.
+
+Developer ID signing requires Apple Developer Program membership. Apple offers
+fee waivers for eligible legal entities such as nonprofit organizations,
+accredited educational institutions, and government entities; it does not offer
+a general open-source-project waiver for individual maintainers.
 
 ### 2. Platform Detection
 
@@ -147,10 +153,14 @@ Open design points:
   the same service-user isolation. If Docker Desktop is confidently detected,
   mention it by name; otherwise do not skip the warning.
 - generated Compose restart policy, likely `unless-stopped`
-- reboot resistance: validate Docker Desktop login startup when possible; when
-  it cannot be validated, document manual validation and remediation steps
+- reboot resistance: set a Compose restart policy and document that Docker
+  Desktop must be configured by the user to start at login. Do not make the
+  first milestone depend on automatic Docker Desktop login-start detection.
 - installed state and generated artifacts remain under the project-local
   Reploy directory
+- installed Docker identity reuses the existing installed identity model:
+  service name plus canonical target path derive the instance id, compose
+  project, container name, and network name recorded in installed state.
 - how `uninstall` removes containers, networks, volumes, generated files, and
   installed metadata
 - how control scripts and `reploy status/logs/down/restart` distinguish staged
@@ -220,6 +230,12 @@ Add validation layers:
 
 The macOS smoke should verify that generated artifacts clean up normally and
 that failed Docker Desktop checks fail quickly with useful messages.
+
+Until macOS CI or a real macOS validation host is available, implementation may
+continue using Linux automation, cross-compilation, and release artifact checks.
+Those checks do not satisfy the real macOS smoke requirements. Record the
+macOS staging, Docker Desktop runtime, and persistent-install smokes as
+deferred, and complete them before claiming release readiness.
 
 ## Suggested Milestones
 
@@ -338,6 +354,9 @@ Record the settled product contract before coding install behavior:
 - normal `install` and `uninstall` command surface remains the user interface
 - no Docker Desktop backend name is exposed as a target
 - generated state and metadata remain project-local
+- installed Docker identity reuses the existing installed identity model:
+  service name plus canonical target path derive the instance id, compose
+  project, container name, and network name recorded in installed state
 - Compose restart policy is explicit, likely `unless-stopped`
 - installed Docker-backed control script behavior is distinct from staging
   behavior
@@ -347,8 +366,8 @@ Record the settled product contract before coding install behavior:
   installed metadata
 - reboot resistance means containers can restart after Docker Desktop starts at
   user login
-- Docker Desktop login startup is validated when possible; otherwise docs
-  provide manual validation and remediation
+- Docker Desktop login startup is documented as a user-managed prerequisite for
+  reboot resistance; docs provide manual validation and remediation
 - install output warns that Docker Desktop-backed install is for development
   persistence and does not provide Linux service-user isolation
 
@@ -367,8 +386,9 @@ new target triples cleanly:
 - generate and publish checksums
 - update install script platform mapping
 - update release documentation
-- decide whether unsigned, unnotarized binaries are acceptable for the first
-  macOS support milestone
+- document that first macOS artifacts may be unsigned and unnotarized
+- leave Developer ID signing, notarization, and related Apple Developer Program
+  setup as a follow-up release-hardening milestone
 
 #### Real macOS Smoke Checklists
 

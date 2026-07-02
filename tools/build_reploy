@@ -31,9 +31,8 @@ class Target:
 DEFAULT_TARGETS = (
     Target("linux", "amd64"),
     Target("linux", "arm64"),
-    # Formal macOS support is deferred.
-    # Target("darwin", "amd64"),
-    # Target("darwin", "arm64"),
+    Target("darwin", "amd64"),
+    Target("darwin", "arm64"),
     # Formal Windows support is deferred.
     # Target("windows", "amd64"),
     # Target("windows", "arm64"),

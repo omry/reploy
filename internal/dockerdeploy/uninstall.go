@@ -33,6 +33,7 @@ type uninstallPlan struct {
 	ContainerName  string
 	NetworkName    string
 	RemoveDir      bool
+	Backend        installBackend
 
 	DockerPreflightTimeout time.Duration
 }
@@ -71,14 +72,14 @@ func Uninstall(options UninstallOptions) error {
 		printUninstallDryRun(options.Stdout, plan)
 		return nil
 	}
-	if uninstallGeteuid() != 0 {
+	if plan.Backend == installBackendLinuxSystemd && uninstallGeteuid() != 0 {
 		return fmt.Errorf("uninstall requires root unless --dry-run is set")
 	}
 	return applyUninstallPlan(plan, options.Stdout)
 }
 
 func UninstallNeedsRoot(options UninstallOptions) bool {
-	return !options.DryRun
+	return !options.DryRun && currentHostPlatform().installBackend() == installBackendLinuxSystemd
 }
 
 func newUninstallPlan(options UninstallOptions) (uninstallPlan, error) {
@@ -91,6 +92,9 @@ func newUninstallPlan(options UninstallOptions) (uninstallPlan, error) {
 		if strings.TrimSpace(options.ServiceName) == "" {
 			return uninstallPlan{}, fmt.Errorf("--from is required unless --service-name is set or the current directory is an installed deployment")
 		}
+		if currentHostPlatform().installBackend() == installBackendDockerDesktop {
+			return uninstallPlan{}, fmt.Errorf("--from is required for Docker Desktop-backed uninstall")
+		}
 		return serviceOnlyUninstallPlan(options.ServiceName, options.RemoveDir, options.DockerPreflightTimeout)
 	}
 	from, err := filepath.Abs(options.From)
@@ -102,6 +106,9 @@ func newUninstallPlan(options UninstallOptions) (uninstallPlan, error) {
 		if os.IsNotExist(err) {
 			if strings.TrimSpace(options.ServiceName) == "" {
 				return uninstallPlan{}, fmt.Errorf("--service-name is required when --from is missing: %s", from)
+			}
+			if currentHostPlatform().installBackend() == installBackendDockerDesktop {
+				return uninstallPlan{}, fmt.Errorf("Docker Desktop-backed uninstall requires an installed deployment state at --from: %s", from)
 			}
 			plan, err := serviceOnlyUninstallPlan(options.ServiceName, options.RemoveDir, options.DockerPreflightTimeout)
 			if err != nil {
@@ -129,15 +136,21 @@ func newUninstallPlan(options UninstallOptions) (uninstallPlan, error) {
 	if options.ServiceName != "" && options.ServiceName != install.Service {
 		return uninstallPlan{}, fmt.Errorf("--service-name %q does not match installed service %q", options.ServiceName, install.Service)
 	}
+	backend := currentHostPlatform().installBackend()
+	unitPath := install.UnitPath
+	if backend == installBackendLinuxSystemd {
+		unitPath = defaultString(unitPath, filepath.Join(uninstallSystemdUnitDir, install.Service+".service"))
+	}
 	return uninstallPlan{
 		TargetDir:              from,
 		TargetExists:           true,
 		ServiceName:            install.Service,
-		UnitPath:               defaultString(install.UnitPath, filepath.Join(uninstallSystemdUnitDir, install.Service+".service")),
+		UnitPath:               unitPath,
 		ComposeProject:         install.ComposeProject,
 		ContainerName:          install.ContainerName,
 		NetworkName:            install.NetworkName,
 		RemoveDir:              options.RemoveDir,
+		Backend:                backend,
 		DockerPreflightTimeout: options.DockerPreflightTimeout,
 	}, nil
 }
@@ -168,6 +181,7 @@ func serviceOnlyUninstallPlan(serviceName string, removeDir bool, dockerPrefligh
 		UnitPath:               unitPath,
 		ComposeProject:         identity.ComposeProject,
 		RemoveDir:              removeDir,
+		Backend:                installBackendLinuxSystemd,
 		DockerPreflightTimeout: dockerPreflightTimeout,
 	}, nil
 }
@@ -330,7 +344,11 @@ func printUninstallDryRun(stdout io.Writer, plan uninstallPlan) {
 	} else {
 		fmt.Fprintln(stdout, "target: not available")
 	}
-	fmt.Fprintf(stdout, "unit: %s\n", plan.UnitPath)
+	if plan.Backend == installBackendLinuxSystemd {
+		fmt.Fprintf(stdout, "unit: %s\n", plan.UnitPath)
+	} else {
+		fmt.Fprintln(stdout, "persistent install backend: Docker Desktop-backed Compose")
+	}
 	if plan.ComposeProject != "" {
 		fmt.Fprintf(stdout, "compose project: %s\n", plan.ComposeProject)
 	}
@@ -340,7 +358,9 @@ func printUninstallDryRun(stdout io.Writer, plan uninstallPlan) {
 	if plan.NetworkName != "" {
 		fmt.Fprintf(stdout, "network: %s\n", plan.NetworkName)
 	}
-	fmt.Fprintf(stdout, "would run: systemctl stop %s.service\n", plan.ServiceName)
+	if plan.Backend == installBackendLinuxSystemd {
+		fmt.Fprintf(stdout, "would run: systemctl stop %s.service\n", plan.ServiceName)
+	}
 	if plan.TargetExists {
 		spec := composeCommandWithProject(plan.TargetDir, plan.ComposeProject, "down", "--remove-orphans")
 		fmt.Fprintf(stdout, "would run: %s\n", formatCommand(spec.Name, spec.Args...))
@@ -350,9 +370,11 @@ func printUninstallDryRun(stdout io.Writer, plan uninstallPlan) {
 	} else {
 		fmt.Fprintln(stdout, "docker cleanup: skipped (no compose project recovered)")
 	}
-	fmt.Fprintf(stdout, "would run: systemctl disable %s.service\n", plan.ServiceName)
-	fmt.Fprintf(stdout, "would remove: %s\n", plan.UnitPath)
-	fmt.Fprintln(stdout, "would run: systemctl daemon-reload")
+	if plan.Backend == installBackendLinuxSystemd {
+		fmt.Fprintf(stdout, "would run: systemctl disable %s.service\n", plan.ServiceName)
+		fmt.Fprintf(stdout, "would remove: %s\n", plan.UnitPath)
+		fmt.Fprintln(stdout, "would run: systemctl daemon-reload")
+	}
 	if plan.RemoveDir {
 		if plan.TargetExists {
 			fmt.Fprintf(stdout, "would remove target directory: %s\n", plan.TargetDir)
@@ -365,6 +387,12 @@ func printUninstallDryRun(stdout io.Writer, plan uninstallPlan) {
 }
 
 func applyUninstallPlan(plan uninstallPlan, stdout io.Writer) error {
+	if plan.Backend == installBackendDockerDesktop {
+		return applyDockerDesktopUninstallPlan(plan, stdout)
+	}
+	if plan.Backend != installBackendLinuxSystemd {
+		return currentHostPlatform().unsupportedPersistentInstallError("uninstall")
+	}
 	systemctlBin, err := uninstallLookPath("systemctl")
 	if err != nil {
 		return fmt.Errorf("systemctl command not found: %w", err)
@@ -383,6 +411,21 @@ func applyUninstallPlan(plan uninstallPlan, stdout io.Writer) error {
 	}
 	if err := uninstallRunCommand(systemctlBin, "daemon-reload"); err != nil {
 		uninstallWarn(stdout, "systemctl daemon-reload failed: %v", err)
+	}
+	if plan.RemoveDir && plan.TargetExists {
+		if err := uninstallRemoveAll(plan.TargetDir); err != nil {
+			return fmt.Errorf("remove target directory: %w", err)
+		}
+	}
+	if stdout != nil {
+		fmt.Fprintf(stdout, "uninstalled service: %s\n", plan.ServiceName)
+	}
+	return nil
+}
+
+func applyDockerDesktopUninstallPlan(plan uninstallPlan, stdout io.Writer) error {
+	if err := runUninstallDockerCleanup(plan, stdout); err != nil {
+		uninstallWarn(stdout, "docker cleanup failed: %v", err)
 	}
 	if plan.RemoveDir && plan.TargetExists {
 		if err := uninstallRemoveAll(plan.TargetDir); err != nil {

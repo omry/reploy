@@ -38,6 +38,35 @@ func TestUninstallDryRunFromInstalledTarget(t *testing.T) {
 	}
 }
 
+func TestUninstallDryRunOnDarwinPrintsDockerDesktopPlan(t *testing.T) {
+	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "darwin"})
+	defer restorePlatform()
+	target := makeInstalledDeploymentForUninstall(t, "demo-test", "demo-test-abcd")
+
+	var stdout strings.Builder
+	if err := Uninstall(UninstallOptions{From: target, DryRun: true, Stdout: &stdout}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"would uninstall service: demo-test",
+		"target: " + target,
+		"persistent install backend: Docker Desktop-backed Compose",
+		"compose project: demo-test-abcd",
+		"container: demo-test-abcd",
+		"network: demo-test-abcd",
+		"would run: docker compose --project-name demo-test-abcd",
+		"down --remove-orphans",
+		"target directory: kept",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "systemctl") || strings.Contains(stdout.String(), "unit:") {
+		t.Fatalf("darwin uninstall dry-run should not mention systemd:\n%s", stdout.String())
+	}
+}
+
 func TestListReploySystemdServices(t *testing.T) {
 	unitDir := t.TempDir()
 	oldSystemdUnitDir := uninstallSystemdUnitDir
@@ -125,6 +154,48 @@ func TestUninstallFromInstalledTargetRunsCleanupInOrder(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(target, "demo-test.service")); !os.IsNotExist(err) {
 		t.Fatalf("unit was not removed: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "uninstalled service: demo-test") {
+		t.Fatalf("stdout missing success:\n%s", stdout.String())
+	}
+}
+
+func TestUninstallFromInstalledTargetOnDarwinUsesDockerDesktopCleanup(t *testing.T) {
+	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "darwin"})
+	defer restorePlatform()
+	target := makeInstalledDeploymentForUninstall(t, "demo-test", "demo-test-abcd")
+	restoreHost := stubUninstallHost(t)
+	defer restoreHost()
+
+	commands := []string{}
+	uninstallRunDockerCommand = func(spec CommandSpec, dockerPreflightTimeout time.Duration) error {
+		commands = append(commands, formatCommand(spec.Name, spec.Args...))
+		return nil
+	}
+	uninstallRunCommand = func(name string, args ...string) error {
+		commands = append(commands, formatCommand(name, args...))
+		return nil
+	}
+
+	var stdout strings.Builder
+	if err := Uninstall(UninstallOptions{From: target, RemoveDir: true, Stdout: &stdout}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"docker compose --project-name demo-test-abcd",
+		"down --remove-orphans",
+	} {
+		if !containsCommand(commands, want) {
+			t.Fatalf("commands missing %q: %#v", want, commands)
+		}
+	}
+	for _, forbidden := range []string{"systemctl stop", "systemctl disable", "systemctl daemon-reload"} {
+		if containsCommand(commands, forbidden) {
+			t.Fatalf("darwin uninstall should not run %q: %#v", forbidden, commands)
+		}
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("target was not removed: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "uninstalled service: demo-test") {
 		t.Fatalf("stdout missing success:\n%s", stdout.String())

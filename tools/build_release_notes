@@ -166,6 +166,9 @@ PyPI:
 Binaries:
 - reploy-linux-amd64
 - reploy-linux-arm64
+- reploy-darwin-amd64
+- reploy-darwin-arm64
+- SHA256SUMS
 """
     return release_notes.strip() + "\n"
 

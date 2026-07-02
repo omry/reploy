@@ -34,15 +34,21 @@ manager Reploy can use.
 | Host | CLI binary | Staging Docker lifecycle | Permanent install/uninstall |
 | --- | --- | --- | --- |
 | Linux | Supported | Supported | Supported with systemd |
-| macOS | Deferred | Planned | Deferred; launchd support is undecided |
+| macOS | Release artifacts for `darwin-arm64` and `darwin-amd64` | Docker Desktop support is being validated | Initial Docker Desktop-backed development persistence implementation; not a production system install |
 | Windows | Deferred | Planned | Deferred; Windows service support is undecided |
 
 ## Current Supported Path
 
-The fully supported path today is:
+The production permanent-install path is:
 
 ```text
 Python app backend + Docker runtime + Linux host with systemd
 ```
 
-Formal macOS and Windows behavior is tracked in the Reploy backlog.
+macOS support is being validated as a development and staging host with Docker
+Desktop. Docker Desktop-backed macOS installs use Docker Compose restart policy
+and depend on Docker Desktop being configured by the user to start at login for
+reboot resistance. They do not provide the same service-user isolation as
+Linux/systemd installs.
+
+Formal Windows behavior is tracked in the Reploy backlog.

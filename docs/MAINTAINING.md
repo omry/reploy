@@ -47,6 +47,13 @@ smoke helper's plan-only flag through nox:
 nox -s cli-smoke -- --plan-only
 ```
 
+For host CLI checks that must avoid Docker and preinstall semantics entirely,
+such as macOS CI without Docker Desktop, use:
+
+```bash
+nox -s cli-smoke -- --cli-only
+```
+
 ## Changelog Fragments
 
 Reploy uses [Changie](https://github.com/miniscruff/changie) for release-note

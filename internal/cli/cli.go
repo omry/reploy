@@ -362,7 +362,7 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer, globalOptions 
 	case "test":
 		return runDockerTest(args[1:], stdout, stderr, globalOptions)
 	case "doctor":
-		return runDockerDoctor(args[1:], stdout, stderr)
+		return runDockerDoctor(args[1:], stdout, stderr, globalOptions)
 	case "install":
 		return runDockerInstall(args[1:], stdout, stderr, globalOptions)
 	case "uninstall":
@@ -1074,7 +1074,7 @@ func allPythonPackageRoots(roots []string) bool {
 	return true
 }
 
-func runDockerDoctor(args []string, stdout io.Writer, stderr io.Writer) int {
+func runDockerDoctor(args []string, stdout io.Writer, stderr io.Writer, globalOptions globalDeploymentOptions) int {
 	options, err := parseDockerDoctorOptions(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
@@ -1087,10 +1087,11 @@ func runDockerDoctor(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 1
 	}
 	return dockerdeploy.Doctor(dockerdeploy.DoctorOptions{
-		Dir:        options.Dir,
-		Preinstall: options.Preinstall,
-		Quiet:      options.Quiet,
-		Stdout:     stdout,
+		Dir:                    options.Dir,
+		Preinstall:             options.Preinstall,
+		Quiet:                  options.Quiet,
+		Stdout:                 stdout,
+		DockerPreflightTimeout: globalOptions.DockerTimeout,
 	})
 }
 
@@ -2155,11 +2156,11 @@ Staging options:
   --to DIR     Install target directory
   --from DIR   Installed service directory to uninstall
   --service NAME
-               Installed systemd service name, default app id
+               Installed service identity, default app id
   --service-name NAME
-               Existing systemd service name for uninstall when --from is gone
+               Linux/systemd service name for uninstall when --from is gone
   --list-services
-               List Reploy-managed systemd services for uninstall
+               List Reploy-managed Linux/systemd services for uninstall
   --port PORT  Installed host port override for single-port apps
   --port NAME=PORT
               Installed host port override for a named blueprint port; repeat
@@ -2346,11 +2347,11 @@ Options:
   --to DIR     Install target directory
   --from DIR   Installed service directory to uninstall
   --service NAME
-               Installed systemd service name, default app id
+               Installed service identity, default app id
   --service-name NAME
-               Existing systemd service name for uninstall when --from is gone
+               Linux/systemd service name for uninstall when --from is gone
   --list-services
-               List Reploy-managed systemd services for uninstall
+               List Reploy-managed Linux/systemd services for uninstall
   --port PORT  Installed host port override for single-port apps
   --port NAME=PORT
               Installed host port override for a named blueprint port; repeat

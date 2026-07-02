@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -68,6 +69,114 @@ func TestInstallDryRunPrintsPlan(t *testing.T) {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
 		}
+	}
+}
+
+func TestInstallDryRunOnDarwinPrintsDockerDesktopPlan(t *testing.T) {
+	disableDoctorColor(t)
+	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "darwin"})
+	defer restorePlatform()
+	previousDetector := detectDockerRuntimeForDoctor
+	t.Cleanup(func() {
+		detectDockerRuntimeForDoctor = previousDetector
+	})
+	detectDockerRuntimeForDoctor = func(context.Context, CommandSpec, time.Duration) (dockerRuntimeInfo, error) {
+		return dockerRuntimeInfo{Runtime: dockerRuntimeDockerDesktop, OperatingSystem: "Docker Desktop"}, nil
+	}
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	markTestBundlePrepared(t, deployDir)
+	target := filepath.Join(t.TempDir(), "installed")
+
+	var stdout strings.Builder
+	if err := Install(InstallOptions{
+		Dir:     deployDir,
+		Target:  target,
+		Service: "demo-test",
+		Start:   true,
+		DryRun:  true,
+		Stdout:  &stdout,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		dockerDesktopSecurityWarning(),
+		"persistent install backend: Docker Desktop-backed Compose",
+		"reboot resistance: enable Docker Desktop start-at-login",
+		"would run: docker compose --project-name",
+		"up -d",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "systemctl") || strings.Contains(stdout.String(), "systemd unit") {
+		t.Fatalf("darwin dry-run should not mention systemd:\n%s", stdout.String())
+	}
+}
+
+func TestInstallOnDarwinWritesDockerDesktopDeployment(t *testing.T) {
+	disableDoctorColor(t)
+	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "darwin"})
+	defer restorePlatform()
+	previousDetector := detectDockerRuntimeForDoctor
+	t.Cleanup(func() {
+		detectDockerRuntimeForDoctor = previousDetector
+	})
+	detectDockerRuntimeForDoctor = func(context.Context, CommandSpec, time.Duration) (dockerRuntimeInfo, error) {
+		return dockerRuntimeInfo{Runtime: dockerRuntimeDockerDesktop, OperatingSystem: "Docker Desktop"}, nil
+	}
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	markTestBundlePrepared(t, deployDir)
+	target := filepath.Join(t.TempDir(), "installed")
+
+	if err := Install(InstallOptions{
+		Dir:     deployDir,
+		Target:  target,
+		Service: "demo-test",
+		Stdout:  io.Discard,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := loadState(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Install == nil {
+		t.Fatal("missing installed state")
+	}
+	if state.Install.UnitPath != "" {
+		t.Fatalf("unit path = %q, want empty", state.Install.UnitPath)
+	}
+	values, err := readDockerEnv(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["REPLOY_RESTART"] != "unless-stopped" {
+		t.Fatalf("REPLOY_RESTART = %q, want unless-stopped", values["REPLOY_RESTART"])
+	}
+	script := readFile(t, filepath.Join(target, controlScriptName("demo")))
+	if strings.Contains(script, "systemctl") || strings.Contains(script, "journalctl") {
+		t.Fatalf("Docker Desktop control script should not use systemd:\n%s", script)
+	}
+	if !strings.Contains(script, "docker compose") || !strings.Contains(script, "up") {
+		t.Fatalf("Docker Desktop control script should use compose lifecycle:\n%s", script)
 	}
 }
 

@@ -67,6 +67,7 @@ type installPlan struct {
 	DeployedCommands       []deploy.DockerCommandConfig
 	Hooks                  deploy.DockerInstallHooksConfig
 	Success                deploy.DockerInstallSuccessConfig
+	Backend                installBackend
 	PreservePaths          []string
 	Replace                []string
 	Clean                  bool
@@ -123,7 +124,7 @@ func Install(options InstallOptions) error {
 			return err
 		}
 	}
-	doctorCode := Doctor(DoctorOptions{Dir: options.Dir, Preinstall: true, Quiet: true, Stdout: options.Stdout})
+	doctorCode := Doctor(DoctorOptions{Dir: options.Dir, Preinstall: true, Quiet: true, Stdout: options.Stdout, DockerPreflightTimeout: options.DockerPreflightTimeout})
 	if doctorCode != 0 {
 		return fmt.Errorf("preinstall doctor failed")
 	}
@@ -131,7 +132,7 @@ func Install(options InstallOptions) error {
 		printInstallDryRun(options.Stdout, plan)
 		return nil
 	}
-	if installGeteuid() != 0 {
+	if plan.Backend == installBackendLinuxSystemd && installGeteuid() != 0 {
 		return fmt.Errorf("install requires root unless --dry-run is set")
 	}
 	return applyInstallPlan(plan)
@@ -316,13 +317,21 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 	if overrideErr != nil && !os.IsNotExist(overrideErr) {
 		return installPlan{}, overrideErr
 	}
+	backend := currentHostPlatform().installBackend()
+	if backend == installBackendUnsupported {
+		return installPlan{}, currentHostPlatform().unsupportedPersistentInstallError("install")
+	}
+	unitPath := ""
+	if backend == installBackendLinuxSystemd {
+		unitPath = filepath.Join(installSystemdUnitDir, options.Service+".service")
+	}
 	return installPlan{
 		SourceDir:              absoluteDir,
 		TargetDir:              target,
 		AppID:                  pack.AppID,
 		Service:                options.Service,
 		ControlScript:          controlScriptName(pack.AppID),
-		UnitPath:               filepath.Join(installSystemdUnitDir, options.Service+".service"),
+		UnitPath:               unitPath,
 		InstanceID:             instanceID,
 		ComposeProject:         instanceID,
 		ContainerName:          service.ContainerName,
@@ -334,6 +343,7 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 		DeployedCommands:       deployedCommands,
 		Hooks:                  pack.Docker.Install.Hooks,
 		Success:                pack.Docker.Install.Success,
+		Backend:                backend,
 		PreservePaths:          preservePaths,
 		Replace:                append([]string(nil), options.Replace...),
 		Clean:                  options.Clean,
@@ -396,16 +406,23 @@ func printInstallDryRun(stdout io.Writer, plan installPlan) {
 	fmt.Fprintf(stdout, "compose project: %s\n", plan.ComposeProject)
 	fmt.Fprintf(stdout, "container: %s\n", plan.ContainerName)
 	fmt.Fprintf(stdout, "network: %s\n", plan.NetworkName)
+	if plan.Backend == installBackendDockerDesktop {
+		fmt.Fprintln(stdout, dockerDesktopSecurityWarning())
+		fmt.Fprintln(stdout, "persistent install backend: Docker Desktop-backed Compose")
+		fmt.Fprintln(stdout, "reboot resistance: enable Docker Desktop start-at-login")
+	}
 	if containerUser, err := installContainerUser(plan.SourceDir); err == nil {
 		fmt.Fprintf(stdout, "container user: %s\n", containerUser)
 	}
-	if owner, err := installOwnerForDir(plan.SourceDir); err == nil {
-		fmt.Fprintf(stdout, "install owner: %s (%d:%d)\n", owner.Spec, owner.UID, owner.GID)
-		fmt.Fprintf(stdout, "installed container user: %s\n", owner.ContainerUser)
-	} else if spec, err := installOwnerCreationSpecForDir(plan.SourceDir, err); err == nil {
-		fmt.Fprintf(stdout, "install owner: %s (will create system user/group)\n", spec)
-	} else {
-		fmt.Fprintf(stdout, "install owner: unresolved (%v)\n", err)
+	if plan.Backend == installBackendLinuxSystemd {
+		if owner, err := installOwnerForDir(plan.SourceDir); err == nil {
+			fmt.Fprintf(stdout, "install owner: %s (%d:%d)\n", owner.Spec, owner.UID, owner.GID)
+			fmt.Fprintf(stdout, "installed container user: %s\n", owner.ContainerUser)
+		} else if spec, err := installOwnerCreationSpecForDir(plan.SourceDir, err); err == nil {
+			fmt.Fprintf(stdout, "install owner: %s (will create system user/group)\n", spec)
+		} else {
+			fmt.Fprintf(stdout, "install owner: unresolved (%v)\n", err)
+		}
 	}
 	for _, port := range plan.Ports {
 		fmt.Fprintf(stdout, "port %s: %s:%s -> %s\n", port.Name, port.HostBind, port.HostPort, port.ContainerPort)
@@ -423,15 +440,22 @@ func printInstallDryRun(stdout io.Writer, plan installPlan) {
 		fmt.Fprintln(stdout, "would clean app-owned installed artifacts")
 	}
 	fmt.Fprintf(stdout, "would write control script: %s\n", filepath.Join(plan.TargetDir, plan.ControlScript))
-	fmt.Fprintln(stdout, "would set installed deployment ownership")
-	fmt.Fprintf(stdout, "would write systemd unit: %s\n", plan.UnitPath)
-	fmt.Fprintln(stdout, "would run: systemctl daemon-reload")
-	fmt.Fprintf(stdout, "would run: systemctl enable %s.service\n", plan.Service)
+	if plan.Backend == installBackendLinuxSystemd {
+		fmt.Fprintln(stdout, "would set installed deployment ownership")
+		fmt.Fprintf(stdout, "would write systemd unit: %s\n", plan.UnitPath)
+		fmt.Fprintln(stdout, "would run: systemctl daemon-reload")
+		fmt.Fprintf(stdout, "would run: systemctl enable %s.service\n", plan.Service)
+	}
 	if plan.Start {
 		for _, hook := range plan.Hooks.BeforeStart {
 			fmt.Fprintf(stdout, "would run before start hook: %s\n", installHookDescription(hook))
 		}
-		fmt.Fprintf(stdout, "would run: systemctl restart %s.service\n", plan.Service)
+		if plan.Backend == installBackendLinuxSystemd {
+			fmt.Fprintf(stdout, "would run: systemctl restart %s.service\n", plan.Service)
+		} else {
+			spec := composeCommandWithProject(plan.TargetDir, plan.ComposeProject, "up", "-d")
+			fmt.Fprintf(stdout, "would run: %s\n", formatCommand(spec.Name, spec.Args...))
+		}
 		for _, hook := range plan.Hooks.AfterStart {
 			fmt.Fprintf(stdout, "would run after start hook: %s\n", installHookDescription(hook))
 		}
@@ -829,16 +853,21 @@ func writeInstalledDockerEnv(plan installPlan) error {
 	if err != nil {
 		return err
 	}
-	owner, err := resolveInstallOwner(values)
-	if err != nil {
-		return err
-	}
 	updates := dockerEnvPortUpdates(plan.Ports)
 	updates["REPLOY_CONTAINER_NAME"] = plan.ContainerName
 	updates[reployDeploymentScopeEnv] = reployDeploymentScopeDeployed
 	updates["REPLOY_DOCKER_NETWORK_NAME"] = plan.NetworkName
-	updates["REPLOY_CONTAINER_USER"] = owner.ContainerUser
-	updates["REPLOY_INSTALL_OWNER"] = owner.Spec
+	if plan.Backend == installBackendLinuxSystemd {
+		owner, err := resolveInstallOwner(values)
+		if err != nil {
+			return err
+		}
+		updates["REPLOY_CONTAINER_USER"] = owner.ContainerUser
+		updates["REPLOY_INSTALL_OWNER"] = owner.Spec
+	}
+	if plan.Backend == installBackendDockerDesktop {
+		updates["REPLOY_RESTART"] = "unless-stopped"
+	}
 	_, err = upsertDockerEnvValues(plan.TargetDir, updates)
 	return err
 }
@@ -1139,6 +1168,17 @@ func parseNumericInstallID(value string) (int, bool) {
 }
 
 func applyInstallPlan(plan installPlan) error {
+	switch plan.Backend {
+	case installBackendLinuxSystemd:
+		return applyLinuxSystemdInstallPlan(plan)
+	case installBackendDockerDesktop:
+		return applyDockerDesktopInstallPlan(plan)
+	default:
+		return currentHostPlatform().unsupportedPersistentInstallError("install")
+	}
+}
+
+func prepareInstalledDeployment(plan installPlan) error {
 	if !plan.InPlace {
 		if err := copyDeploymentTreeProtected(plan.SourceDir, plan.TargetDir, plan.PreservePaths, plan.ControlScript); err != nil {
 			return fmt.Errorf("copy deployment: %w", err)
@@ -1154,8 +1194,10 @@ func applyInstallPlan(plan installPlan) error {
 	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
 		return fmt.Errorf("create install runtime dir: %w", err)
 	}
-	if err := ensureInstallOwnerForDir(plan.TargetDir); err != nil {
-		return fmt.Errorf("ensure install owner: %w", err)
+	if plan.Backend == installBackendLinuxSystemd {
+		if err := ensureInstallOwnerForDir(plan.TargetDir); err != nil {
+			return fmt.Errorf("ensure install owner: %w", err)
+		}
 	}
 	if err := writeInstalledDockerEnv(plan); err != nil {
 		return fmt.Errorf("write installed docker env: %w", err)
@@ -1166,19 +1208,30 @@ func applyInstallPlan(plan installPlan) error {
 	if _, err := materializeRuntimeCompose(plan.TargetDir); err != nil {
 		return fmt.Errorf("materialize runtime compose: %w", err)
 	}
-	if err := chownInstalledRuntimeDir(plan.TargetDir); err != nil {
-		return fmt.Errorf("set install runtime ownership: %w", err)
+	if plan.Backend == installBackendLinuxSystemd {
+		if err := chownInstalledRuntimeDir(plan.TargetDir); err != nil {
+			return fmt.Errorf("set install runtime ownership: %w", err)
+		}
 	}
 	if err := rebuildInstalledBundleIfLocalSources(plan); err != nil {
 		return fmt.Errorf("rebuild installed bundle: %w", err)
 	}
-	if owner, err := installOwnerForDir(plan.TargetDir); err == nil {
-		installProgress(plan.Progress, fmt.Sprintf("setting installed ownership to %s (%d:%d)", owner.Spec, owner.UID, owner.GID))
-	} else {
-		installProgress(plan.Progress, "setting installed ownership")
+	if plan.Backend == installBackendLinuxSystemd {
+		if owner, err := installOwnerForDir(plan.TargetDir); err == nil {
+			installProgress(plan.Progress, fmt.Sprintf("setting installed ownership to %s (%d:%d)", owner.Spec, owner.UID, owner.GID))
+		} else {
+			installProgress(plan.Progress, "setting installed ownership")
+		}
+		if err := chownInstalledDeployment(plan.TargetDir); err != nil {
+			return fmt.Errorf("set installed ownership: %w", err)
+		}
 	}
-	if err := chownInstalledDeployment(plan.TargetDir); err != nil {
-		return fmt.Errorf("set installed ownership: %w", err)
+	return nil
+}
+
+func applyLinuxSystemdInstallPlan(plan installPlan) error {
+	if err := prepareInstalledDeployment(plan); err != nil {
+		return err
 	}
 	dockerBin, err := installLookPath("docker")
 	if err != nil {
@@ -1211,6 +1264,28 @@ func applyInstallPlan(plan installPlan) error {
 		}
 		if err := installRunCommand(systemctlBin, "restart", plan.Service+".service"); err != nil {
 			return fmt.Errorf("systemctl restart %s.service: %w", plan.Service, err)
+		}
+		if err := runInstallHooks(plan, "after start", plan.Hooks.AfterStart); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyDockerDesktopInstallPlan(plan installPlan) error {
+	if err := prepareInstalledDeployment(plan); err != nil {
+		return err
+	}
+	if plan.Start {
+		if err := runInstallHooks(plan, "before start", plan.Hooks.BeforeStart); err != nil {
+			return err
+		}
+		spec := composeCommandWithProject(plan.TargetDir, plan.ComposeProject, "up", "-d")
+		if err := runCommand(spec, RunOptions{DockerPreflightTimeout: plan.DockerPreflightTimeout}); err != nil {
+			return fmt.Errorf("docker compose up: %w", err)
+		}
+		if err := waitInstalledServiceRunning(plan.TargetDir, installServiceStartTimeout, plan.Progress, plan.DockerPreflightTimeout); err != nil {
+			return err
 		}
 		if err := runInstallHooks(plan, "after start", plan.Hooks.AfterStart); err != nil {
 			return err

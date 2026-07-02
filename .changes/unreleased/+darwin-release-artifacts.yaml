@@ -1,0 +1,3 @@
+kind: Added
+body: Add Darwin amd64 and arm64 release artifacts, Python wheel targets, installer platform support, and release checksums.
+time: 2026-07-02T00:00:00+08:00

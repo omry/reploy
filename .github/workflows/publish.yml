@@ -90,6 +90,9 @@ jobs:
           mkdir -p release-assets
           install -m 0755 dist-publish/linux-amd64/reploy release-assets/reploy-linux-amd64
           install -m 0755 dist-publish/linux-arm64/reploy release-assets/reploy-linux-arm64
+          install -m 0755 dist-publish/darwin-amd64/reploy release-assets/reploy-darwin-amd64
+          install -m 0755 dist-publish/darwin-arm64/reploy release-assets/reploy-darwin-arm64
+          (cd release-assets && sha256sum reploy-* > SHA256SUMS)
           python tools/build_release_notes \
             --version "$VERSION" \
             --prerelease "$PRERELEASE" \
@@ -113,6 +116,9 @@ jobs:
             "$TAG"
             release-assets/reploy-linux-amd64
             release-assets/reploy-linux-arm64
+            release-assets/reploy-darwin-amd64
+            release-assets/reploy-darwin-arm64
+            release-assets/SHA256SUMS
             --target "$GITHUB_SHA"
             --title "Reploy $VERSION"
             --notes-file release-notes.md

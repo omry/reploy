@@ -34,6 +34,9 @@ For simple services that work from blueprint defaults, install directly:
 sudo reploy install <app-blueprint-ref>
 ```
 
+On macOS, omit `sudo` and choose a user-writable absolute target path when the
+blueprint default points at a system directory.
+
 Direct install does not ask install-time configuration questions yet. If the
 app needs bundle selection, configuration commands, or pre-install testing, use
 staging.
@@ -81,13 +84,28 @@ exact commands are app-specific.
 reploy app
 ```
 
-## 5. Install or Update Permanently
+## 5. Install or Update
 
-Permanent install is currently a Linux/systemd flow.
+Linux installs are systemd-backed and are the production permanent-install
+path:
 
 ```bash
 sudo reploy install --to /opt/example --service example
 ```
+
+macOS Docker Desktop-backed development installs are being validated. They use
+the same command surface, but should target a user-writable project-local
+directory:
+
+```bash
+reploy install --to "$PWD/example-installed" --service example
+```
+
+When Reploy detects Docker Desktop, install output warns that macOS and Windows
+Docker Desktop installs provide weaker isolation than Linux/systemd installs.
+For reboot resistance on macOS, enable Docker Desktop start-at-login; Reploy
+sets a Compose restart policy for the app containers, but Docker Desktop itself
+is a user-session dependency.
 
 Installing over an existing deployment updates it from the current staging
 state. App-owned artifacts declared by the blueprint are preserved by default.
@@ -121,7 +139,14 @@ inside the target directory, such as `/opt/example/examplectl`:
 sudo reploy uninstall --from /opt/example
 ```
 
-If the target directory was deleted manually, uninstall by service name:
+On macOS, uninstall from the installed target without `sudo`:
+
+```bash
+reploy uninstall --from "$PWD/example-installed"
+```
+
+On Linux, if the target directory was deleted manually, uninstall by service
+name:
 
 ```bash
 sudo reploy uninstall --service-name example

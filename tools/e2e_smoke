@@ -29,6 +29,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip the Docker-backed bundle build/check and only exercise CLI planning.",
     )
+    parser.add_argument(
+        "--cli-only",
+        action="store_true",
+        help="Exercise staging and bundle planning without preinstall or install checks.",
+    )
     return parser.parse_args()
 
 
@@ -57,7 +62,7 @@ def require_contains(output: str, needle: str, context: str) -> None:
         raise SystemExit(f"{context} did not contain {needle!r}\n--- output ---\n{output}")
 
 
-def run_smoke(reploy: Path, workdir: Path, *, plan_only: bool) -> None:
+def run_smoke(reploy: Path, workdir: Path, *, plan_only: bool, cli_only: bool) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     pack_dir = repo_root / "tests" / "e2e" / "python" / "packages" / "smoke-blueprint"
     deploy_dir = workdir / "deployment"
@@ -108,7 +113,7 @@ def run_smoke(reploy: Path, workdir: Path, *, plan_only: bool) -> None:
     require_contains(bundle_list.stdout, "smoke-suite", "bundle list")
     require_contains(bundle_list.stdout, "smoke-imap", "bundle list")
 
-    if plan_only:
+    if plan_only or cli_only:
         bundle_build = run(
             [str(reploy), "bundle", "build", "--dry-run", "--dir", str(deploy_dir)],
             cwd=workdir,
@@ -136,6 +141,9 @@ def run_smoke(reploy: Path, workdir: Path, *, plan_only: bool) -> None:
         )
         require_contains(bundle_all.stdout, "root\tsmoke-suite==0.1.0", "bundle list all")
         require_contains(bundle_all.stdout, "root\tsmoke-imap==0.1.0", "bundle list all")
+
+    if cli_only:
+        return
 
     doctor = run([str(reploy), "doctor", "--preinstall", "--dir", str(deploy_dir)], cwd=workdir, env=env)
     require_contains(doctor.stdout, "ok: preinstall checks passed", "preinstall doctor")
@@ -191,11 +199,11 @@ def main() -> int:
     if args.keep_workdir:
         workdir = Path(tempfile.mkdtemp(prefix="reploy-e2e-smoke-"))
         print(f"workdir: {workdir}")
-        run_smoke(reploy, workdir, plan_only=args.plan_only)
+        run_smoke(reploy, workdir, plan_only=args.plan_only, cli_only=args.cli_only)
     else:
         workdir = Path(tempfile.mkdtemp(prefix="reploy-e2e-smoke-"))
         try:
-            run_smoke(reploy, workdir, plan_only=args.plan_only)
+            run_smoke(reploy, workdir, plan_only=args.plan_only, cli_only=args.cli_only)
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
     return 0

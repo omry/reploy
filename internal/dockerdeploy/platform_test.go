@@ -1,0 +1,99 @@
+package dockerdeploy
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestHostPlatformInstallBackend(t *testing.T) {
+	tests := []struct {
+		goos string
+		want installBackend
+	}{
+		{goos: "linux", want: installBackendLinuxSystemd},
+		{goos: "darwin", want: installBackendDockerDesktop},
+		{goos: "windows", want: installBackendUnsupported},
+		{goos: "plan9", want: installBackendUnsupported},
+	}
+	for _, test := range tests {
+		if got := (hostPlatform{GOOS: test.goos}).installBackend(); got != test.want {
+			t.Fatalf("install backend for %s = %s, want %s", test.goos, got, test.want)
+		}
+	}
+}
+
+func TestUnsupportedPersistentInstallError(t *testing.T) {
+	err := (hostPlatform{GOOS: "windows"}).unsupportedPersistentInstallError("uninstall")
+	if err == nil || !strings.Contains(err.Error(), "Windows persistent uninstall is not supported by this build") {
+		t.Fatalf("unexpected windows uninstall error: %v", err)
+	}
+	err = (hostPlatform{GOOS: "plan9"}).unsupportedPersistentInstallError("install")
+	if err == nil || !strings.Contains(err.Error(), "install is not supported on plan9") {
+		t.Fatalf("unexpected plan9 install error: %v", err)
+	}
+}
+
+func TestDetectDockerRuntimeDetectsDockerDesktop(t *testing.T) {
+	dir := t.TempDir()
+	dockerPath := filepath.Join(dir, "docker")
+	script := "#!/bin/sh\nprintf '{\"OperatingSystem\":\"Docker Desktop\",\"ServerVersion\":\"29.5.3\"}\\n'\n"
+	if err := os.WriteFile(dockerPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	info, err := detectDockerRuntime(context.Background(), CommandSpec{Name: dockerPath}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Runtime != dockerRuntimeDockerDesktop {
+		t.Fatalf("runtime = %s, want %s", info.Runtime, dockerRuntimeDockerDesktop)
+	}
+	if info.ServerVersion != "29.5.3" {
+		t.Fatalf("server version = %q", info.ServerVersion)
+	}
+}
+
+func TestDetectDockerRuntimeDetectsLinuxEngine(t *testing.T) {
+	dir := t.TempDir()
+	dockerPath := filepath.Join(dir, "docker")
+	script := "#!/bin/sh\nprintf '{\"OperatingSystem\":\"Ubuntu 24.04\",\"ServerVersion\":\"29.5.3\"}\\n'\n"
+	if err := os.WriteFile(dockerPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	info, err := detectDockerRuntime(context.Background(), CommandSpec{Name: dockerPath}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Runtime != dockerRuntimeLinuxEngine {
+		t.Fatalf("runtime = %s, want %s", info.Runtime, dockerRuntimeLinuxEngine)
+	}
+}
+
+func TestUninstallNeedsRootDependsOnPlatform(t *testing.T) {
+	restore := stubHostPlatform(t, hostPlatform{GOOS: "darwin"})
+	defer restore()
+	if UninstallNeedsRoot(UninstallOptions{}) {
+		t.Fatal("darwin Docker Desktop uninstall should not require root")
+	}
+	restore()
+
+	restore = stubHostPlatform(t, hostPlatform{GOOS: "linux"})
+	defer restore()
+	if !UninstallNeedsRoot(UninstallOptions{}) {
+		t.Fatal("linux systemd uninstall should require root")
+	}
+}
+
+func stubHostPlatform(t *testing.T, platform hostPlatform) func() {
+	t.Helper()
+	previous := detectHostPlatform
+	detectHostPlatform = func() hostPlatform {
+		return platform
+	}
+	return func() {
+		detectHostPlatform = previous
+	}
+}

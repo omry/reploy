@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import platform
 from pathlib import Path
+import sys
 
 import nox
 
@@ -9,7 +11,6 @@ import nox
 nox.options.sessions = ["ci"]
 
 DIST_CI = Path("dist-ci")
-LINUX_AMD64_REPLOY = DIST_CI / "bin" / "linux-amd64" / "reploy"
 
 BUILD_DEPENDENCIES = (
     "build",
@@ -34,12 +35,39 @@ def _go_test(session: nox.Session) -> None:
     session.run("go", "test", "./...", env=env, external=True)
 
 
+def _current_target_label() -> str:
+    goos_by_platform = {
+        "darwin": "darwin",
+        "linux": "linux",
+        "win32": "windows",
+        "cygwin": "windows",
+        "msys": "windows",
+    }
+    goarch_by_machine = {
+        "amd64": "amd64",
+        "x86_64": "amd64",
+        "aarch64": "arm64",
+        "arm64": "arm64",
+    }
+    goos = goos_by_platform.get(sys.platform)
+    goarch = goarch_by_machine.get(platform.machine().lower())
+    if goos is None or goarch is None:
+        raise RuntimeError(
+            f"could not infer current Reploy target from "
+            f"{sys.platform!r}/{platform.machine()!r}"
+        )
+    return f"{goos}-{goarch}"
+
+
+def _host_reploy_binary() -> Path:
+    binary_name = "reploy.exe" if sys.platform.startswith(("win32", "cygwin", "msys")) else "reploy"
+    return DIST_CI / "bin" / _current_target_label() / binary_name
+
+
 def _cli_smoke(session: nox.Session, *extra_args: str) -> None:
     session.run(
         "python",
         "tools/build_reploy",
-        "--target",
-        "linux-amd64",
         "--outdir",
         str(DIST_CI / "bin"),
     )
@@ -47,7 +75,7 @@ def _cli_smoke(session: nox.Session, *extra_args: str) -> None:
         "python",
         "tools/e2e_smoke",
         "--reploy",
-        str(LINUX_AMD64_REPLOY),
+        str(_host_reploy_binary()),
         *extra_args,
     )
 

@@ -1,21 +1,24 @@
 package dockerdeploy
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers/python"
 )
 
 type DoctorOptions struct {
-	Dir        string
-	Preinstall bool
-	Quiet      bool
-	Stdout     io.Writer
+	Dir                    string
+	Preinstall             bool
+	Quiet                  bool
+	Stdout                 io.Writer
+	DockerPreflightTimeout time.Duration
 }
 
 type DoctorFinding struct {
@@ -32,7 +35,7 @@ func Doctor(options DoctorOptions) int {
 		stdout, _ := deploymentOutputWritersForDeployment(options.Dir, state, options.Stdout, nil)
 		options.Stdout = stdout
 	}
-	findings := doctorFindings(options.Dir, options.Preinstall)
+	findings := doctorFindings(options.Dir, options.Preinstall, options.DockerPreflightTimeout)
 	exitCode := 0
 	for _, finding := range findings {
 		if finding.Status == "fail" {
@@ -62,6 +65,8 @@ func (colors doctorColors) status(status string) string {
 		return "\x1b[32mok\x1b[0m"
 	case "fail":
 		return "\x1b[31mfail\x1b[0m"
+	case "warn":
+		return "\x1b[33mwarn\x1b[0m"
 	default:
 		return status
 	}
@@ -83,7 +88,7 @@ func outputColorEnabled(output io.Writer) bool {
 	return writerLooksTerminal(output)
 }
 
-func doctorFindings(dir string, preinstall bool) []DoctorFinding {
+func doctorFindings(dir string, preinstall bool, dockerPreflightTimeout time.Duration) []DoctorFinding {
 	required := []string{
 		ComposeFileName,
 		DockerEnvFileName,
@@ -123,12 +128,12 @@ func doctorFindings(dir string, preinstall bool) []DoctorFinding {
 		findings = append(findings, DoctorFinding{Status: "ok", Message: "generated file matches manifest: " + path})
 	}
 	if preinstall {
-		findings = append(findings, doctorPreinstallFindings(dir)...)
+		findings = append(findings, doctorPreinstallFindings(dir, dockerPreflightTimeout)...)
 	}
 	return findings
 }
 
-func doctorPreinstallFindings(dir string) []DoctorFinding {
+func doctorPreinstallFindings(dir string, dockerPreflightTimeout time.Duration) []DoctorFinding {
 	findings := []DoctorFinding{}
 	values, err := readDockerEnv(dir)
 	if err != nil {
@@ -155,15 +160,31 @@ func doctorPreinstallFindings(dir string) []DoctorFinding {
 			findings = append(findings, DoctorFinding{Status: "ok", Message: "install runtime path is relative: " + key})
 		}
 	}
-	owner, err := resolveInstallOwner(values)
-	if err != nil {
-		if spec, createErr := installOwnerCreationSpecForResolveError(values, err); createErr == nil {
-			findings = append(findings, DoctorFinding{Status: "ok", Message: "install owner will be created if missing: " + spec})
+	switch backend := currentHostPlatform().installBackend(); backend {
+	case installBackendLinuxSystemd:
+		owner, err := resolveInstallOwner(values)
+		if err != nil {
+			if spec, createErr := installOwnerCreationSpecForResolveError(values, err); createErr == nil {
+				findings = append(findings, DoctorFinding{Status: "ok", Message: "install owner will be created if missing: " + spec})
+			} else {
+				findings = append(findings, DoctorFinding{Status: "fail", Message: "install owner must resolve to a non-root uid:gid: " + createErr.Error()})
+			}
 		} else {
-			findings = append(findings, DoctorFinding{Status: "fail", Message: "install owner must resolve to a non-root uid:gid: " + createErr.Error()})
+			findings = append(findings, DoctorFinding{Status: "ok", Message: fmt.Sprintf("install owner resolves to %s (%d:%d)", owner.Spec, owner.UID, owner.GID)})
 		}
-	} else {
-		findings = append(findings, DoctorFinding{Status: "ok", Message: fmt.Sprintf("install owner resolves to %s (%d:%d)", owner.Spec, owner.UID, owner.GID)})
+	case installBackendDockerDesktop:
+		findings = append(findings, DoctorFinding{Status: "warn", Message: dockerDesktopSecurityWarning()})
+		runtimeInfo, err := detectDockerRuntimeForDoctor(context.Background(), CommandSpec{Name: "docker", Dir: dir}, dockerPreflightTimeout)
+		if err != nil {
+			findings = append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("Docker Desktop runtime is required for persistent development install: %v", err)})
+		} else if runtimeInfo.Runtime == dockerRuntimeDockerDesktop {
+			findings = append(findings, DoctorFinding{Status: "ok", Message: "Docker Desktop runtime detected: " + runtimeInfo.OperatingSystem})
+		} else {
+			findings = append(findings, DoctorFinding{Status: "warn", Message: "Docker runtime was not identified as Docker Desktop; persistent install still has weaker isolation than Linux/systemd"})
+		}
+		findings = append(findings, DoctorFinding{Status: "warn", Message: "enable Docker Desktop start-at-login for reboot-resistant persistent development installs"})
+	default:
+		findings = append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("persistent install is not supported on %s", currentHostPlatform().GOOS)})
 	}
 	state, err := loadState(dir)
 	if err != nil {

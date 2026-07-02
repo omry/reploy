@@ -11,8 +11,9 @@ import (
 type controlScriptMode string
 
 const (
-	controlScriptModeStaged   controlScriptMode = "staged"
-	controlScriptModeDeployed controlScriptMode = "deployed"
+	controlScriptModeStaged        controlScriptMode = "staged"
+	controlScriptModeDeployed      controlScriptMode = "deployed"
+	controlScriptModeDockerDesktop controlScriptMode = "docker-desktop"
 )
 
 type controlScriptSpec struct {
@@ -42,8 +43,12 @@ func stagingControlScriptContent(pack deploy.AppPack, deployedCommands []deploy.
 }
 
 func controlScriptContent(plan installPlan) string {
+	mode := controlScriptModeDeployed
+	if plan.Backend == installBackendDockerDesktop {
+		mode = controlScriptModeDockerDesktop
+	}
 	return renderControlScript(controlScriptSpec{
-		Mode:             controlScriptModeDeployed,
+		Mode:             mode,
 		TargetDir:        plan.TargetDir,
 		AppID:            plan.AppID,
 		Service:          plan.Service,
@@ -380,7 +385,7 @@ func controlScriptComposeFunctions(spec controlScriptSpec) string {
   fi`
 	}
 	runCompose := ""
-	if spec.Mode == controlScriptModeStaged {
+	if spec.Mode == controlScriptModeStaged || spec.Mode == controlScriptModeDockerDesktop {
 		runCompose = `
 
 run_compose() {
@@ -576,7 +581,7 @@ func controlScriptHealthCommandRunner(spec controlScriptSpec) string {
 }
 
 func controlScriptLifecycleCases(spec controlScriptSpec) string {
-	if spec.Mode == controlScriptModeStaged {
+	if spec.Mode == controlScriptModeStaged || spec.Mode == controlScriptModeDockerDesktop {
 		return fmt.Sprintf(`  up|start)
     run_compose_up
     ;;
