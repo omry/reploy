@@ -245,6 +245,168 @@ that failed Docker Desktop checks fail quickly with useful messages.
    Document requirements, support matrix, known limitations, and
    troubleshooting for Docker Desktop.
 
+## Detailed AWD Execution Plan
+
+The high-level milestones above are not detailed enough for implementation on
+their own. Use this AWD plan as the executable port shape:
+
+```text
+(inventory macOS port plan and current Reploy platform assumptions
+-> record agreed macOS support contract and command matrix
+-> (review support contract against settled decisions !> support contract matches settled decisions)
+-> design platform capability layer and Docker Desktop runtime detection
+-> implement platform support decisions and unsupported-command errors
+-> ((run platform unit tests + run CLI smoke for Linux behavior) !> platform checks pass)
+-> add Darwin release artifacts and installer platform detection
+-> ((run darwin-arm64 cross compile + run darwin-amd64 cross compile + verify release archive naming and checksums) !> release artifact checks pass)
+-> implement macOS Docker Desktop preflight and doctor checks
+-> ((run doctor unit tests + run Docker timeout and responsiveness tests) !> doctor checks pass)
+-> (validate CLI-only macOS staging on real macOS !> CLI-only macOS staging smoke passes)
+-> (validate Docker Desktop staging runtime on real macOS !> Docker Desktop staging smoke passes)
+-> record agreed persistent development install semantics for macOS
+-> (review persistent install design against settled decisions !> persistent install design matches settled decisions)
+-> implement Docker Desktop-backed persistent development install and uninstall
+-> ((run focused install tests + run generated control script tests + run uninstall cleanup tests) !> persistent install automated checks pass)
+-> (validate persistent development install on real macOS with Docker Desktop !> persistent install macOS smoke passes)
+-> publish macOS user docs and troubleshooting
+-> (review launchd future-design boundary remains explicit !> docs and scope review pass)
+-> (release readiness review with evidence bundle ?> approve macOS support milestone))
+```
+
+### Expanded Planning Steps
+
+Before implementation, expand the following chunky steps into small design
+artifacts and checks.
+
+The main product decisions are already settled:
+
+- macOS is a development and staging host, not a production permanent-install
+  target.
+- macOS uses Docker Desktop and Linux containers.
+- The normal `install` command is allowed on macOS as a Docker Desktop-backed
+  persistent development install.
+- macOS system install through launchd is out of scope for the first milestone.
+- Reploy state and generated artifacts remain project-local.
+- Docker Desktop-backed install must warn about weaker isolation than
+  Linux/systemd install.
+- Reboot resistance means Docker Desktop starts when the user signs in and
+  Reploy-managed containers use a restart policy.
+
+The review gates in the AWD plan are therefore consistency gates. They should
+verify that design artifacts and implementation match these decisions, not
+reopen the product direction.
+
+#### Platform Capability Layer
+
+Define this API before coding platform branches:
+
+- host OS and architecture detection
+- command support by OS
+- command groups that require Docker
+- command groups that require Docker Desktop specifically
+- install semantics by OS
+- unsupported-command error messages
+- Linux/systemd-only support boundaries
+- Docker Desktop security warning policy
+
+The output should be a decision table and a small internal API. The API should
+keep staging and Docker Compose code portable while making Linux system install
+behavior explicit.
+
+#### Docker Desktop Detection And Preflight
+
+Split Docker Desktop compatibility into separately testable checks:
+
+- Docker CLI exists
+- Docker Compose is available
+- daemon responds within the configured timeout
+- runtime appears to be Docker Desktop or an unknown Docker runtime
+- Docker context/socket is reachable from the user's shell
+- bind mount smoke works from a project-local staging directory
+- port binding smoke works for `127.0.0.1` and any supported public bind
+- installed-but-not-running failure message is quick and useful
+- unsupported or surprising Docker context failure message is quick and useful
+
+Docker Desktop detection should trigger the macOS/Windows weaker-security
+warning. Failure to prove Docker Desktop should not skip the warning when the
+host platform still has weaker Docker-runtime isolation than Linux.
+
+#### Persistent Development Install
+
+Record the settled product contract before coding install behavior:
+
+- normal `install` and `uninstall` command surface remains the user interface
+- no Docker Desktop backend name is exposed as a target
+- generated state and metadata remain project-local
+- Compose restart policy is explicit, likely `unless-stopped`
+- installed Docker-backed control script behavior is distinct from staging
+  behavior
+- `status`, `logs`, `down`, `restart`, and `uninstall` operate on the
+  installed Docker/Compose project
+- uninstall cleanup covers containers, networks, volumes, generated files, and
+  installed metadata
+- reboot resistance means containers can restart after Docker Desktop starts at
+  user login
+- Docker Desktop login startup is validated when possible; otherwise docs
+  provide manual validation and remediation
+- install output warns that Docker Desktop-backed install is for development
+  persistence and does not provide Linux service-user isolation
+
+This design should be reviewed before implementation because it records the
+settled meaning of `install` on macOS. The review should check consistency with
+the agreed product contract rather than reopen the direction.
+
+#### Release Artifacts
+
+Expand release work if the existing release automation does not already model
+new target triples cleanly:
+
+- add `darwin-arm64`
+- add `darwin-amd64`
+- define archive names
+- generate and publish checksums
+- update install script platform mapping
+- update release documentation
+- decide whether unsigned, unnotarized binaries are acceptable for the first
+  macOS support milestone
+
+#### Real macOS Smoke Checklists
+
+Create runnable smoke checklists with expected output for each manual or
+machine-backed validation pass:
+
+- CLI-only staging smoke: `stage`, `stage --update`, `info`, and unsupported
+  Linux-only command failures
+- Docker Desktop staging smoke: `bundle build`, `bundle check`, app command,
+  `up`, `status`, `logs`, `test`, and `down`
+- Docker Desktop failure smoke: Docker installed but not running, daemon
+  timeout, bind mount failure, and port conflict
+- persistent install smoke: `install`, warning output, restart/status/logs,
+  reboot/login persistence expectation, and `uninstall`
+- cleanup smoke: generated artifacts, containers, networks, and volumes are
+  removed or preserved according to the install contract
+
+Each smoke should record host architecture, macOS version, Docker Desktop
+version, Docker context, exact commands, expected outputs, and cleanup steps.
+
+### Per-Phase Commit Loop
+
+Use a small commit loop for each implementation phase:
+
+```text
+(select one macOS port phase
+-> review selected phase scope ?>
+   (((implement phase changes -> run focused tests + run relevant validation)
+     *3 until pass: phase checks pass)
+    !> compose phase commit message
+    -> commit selected phase
+    -> verify no unintended changes remain))
+```
+
+This keeps platform support, release artifacts, Docker Desktop behavior,
+persistent install semantics, and documentation as reviewable slices instead of
+one large port commit.
+
 ## Future: System launchd Permanent Install
 
 macOS system permanent install is intentionally outside the first support
