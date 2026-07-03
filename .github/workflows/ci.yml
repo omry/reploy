@@ -86,7 +86,7 @@ jobs:
           NO_UPDATE_NOTIFIER: "1"
         run: nox -s go-test
 
-      - name: Run host CLI plan smoke
+      - name: Run host smoke
         env:
           NO_UPDATE_NOTIFIER: "1"
-        run: nox -s cli-smoke -- --cli-only
+        run: nox -s cli-smoke -- --docker-mode optional

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -33,6 +34,12 @@ def parse_args() -> argparse.Namespace:
         "--cli-only",
         action="store_true",
         help="Exercise staging and bundle planning without preinstall or install checks.",
+    )
+    parser.add_argument(
+        "--docker-mode",
+        choices=("required", "optional", "skip"),
+        default="required",
+        help="Control Docker-backed smoke phases. Defaults to required.",
     )
     return parser.parse_args()
 
@@ -62,7 +69,102 @@ def require_contains(output: str, needle: str, context: str) -> None:
         raise SystemExit(f"{context} did not contain {needle!r}\n--- output ---\n{output}")
 
 
-def run_smoke(reploy: Path, workdir: Path, *, plan_only: bool, cli_only: bool) -> None:
+def docker_available(env: dict[str, str], cwd: Path) -> tuple[bool, str]:
+    if shutil.which("docker") is None:
+        return False, "docker command not found"
+    try:
+        completed = subprocess.run(
+            ["docker", "info"],
+            cwd=cwd,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=20,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "docker info timed out"
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        if detail:
+            return False, detail
+        return False, f"docker info failed with exit code {completed.returncode}"
+    return True, ""
+
+
+def free_local_port() -> str:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return str(listener.getsockname()[1])
+
+
+def update_env_file(path: Path, updates: dict[str, str]) -> None:
+    lines = path.read_text().splitlines()
+    remaining = dict(updates)
+    rewritten: list[str] = []
+    for line in lines:
+        key, separator, _ = line.partition("=")
+        if separator and key in remaining:
+            rewritten.append(f"{key}={remaining.pop(key)}")
+        else:
+            rewritten.append(line)
+    for key, value in remaining.items():
+        rewritten.append(f"{key}={value}")
+    path.write_text("\n".join(rewritten) + "\n")
+
+
+def run_runtime_smoke(reploy: Path, deploy_dir: Path, workdir: Path, env: dict[str, str]) -> None:
+    host_port = free_local_port()
+    update_env_file(
+        deploy_dir / ".reploy" / "docker.env",
+        {
+            "REPLOY_HOST_BIND": "127.0.0.1",
+            "REPLOY_HOST_PORT": host_port,
+            "REPLOY_PORT_HTTPS_HOST_BIND": "127.0.0.1",
+            "REPLOY_PORT_HTTPS_HOST_PORT": host_port,
+            "REPLOY_PUBLIC_SCHEME": "https",
+        },
+    )
+
+    app_check = run(
+        [str(reploy), "app", "config", "check", "--live", "--dir", str(deploy_dir)],
+        cwd=workdir,
+        env=env,
+    )
+    require_contains(app_check.stdout, '"check": "pass"', "live config check")
+
+    started = False
+    try:
+        run([str(reploy), "up", "--verbose", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+        started = True
+
+        health = run(
+            [str(reploy), "test", "--timeout", "30s", "--dir", str(deploy_dir)],
+            cwd=workdir,
+            env=env,
+        )
+        require_contains(health.stdout, f"ok: https://127.0.0.1:{host_port}/_health_", "health check")
+
+        logs = run(
+            [str(reploy), "logs", "--tail", "50", "--dir", str(deploy_dir)],
+            cwd=workdir,
+            env=env,
+        )
+        require_contains(logs.stdout, "smoke-suite serving HTTPS", "runtime logs")
+    finally:
+        if started:
+            run([str(reploy), "down", "--verbose", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+
+
+def run_smoke(
+    reploy: Path,
+    workdir: Path,
+    *,
+    plan_only: bool,
+    cli_only: bool,
+    docker_mode: str,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     pack_dir = repo_root / "tests" / "e2e" / "python" / "packages" / "smoke-blueprint"
     deploy_dir = workdir / "deployment"
@@ -72,6 +174,16 @@ def run_smoke(reploy: Path, workdir: Path, *, plan_only: bool, cli_only: bool) -
 
     env = os.environ.copy()
     env["NO_COLOR"] = "1"
+    if docker_mode == "skip":
+        cli_only = True
+    if not plan_only and not cli_only:
+        available, reason = docker_available(env, workdir)
+        if not available:
+            if docker_mode == "optional":
+                print(f"skipping Docker-backed smoke phases: {reason}", file=sys.stderr)
+                cli_only = True
+            else:
+                raise SystemExit(f"Docker is required for this smoke test: {reason}")
 
     init = run(
         [str(reploy), "stage", "file:" + str(pack_dir), "--dir", str(deploy_dir)],
@@ -141,6 +253,7 @@ def run_smoke(reploy: Path, workdir: Path, *, plan_only: bool, cli_only: bool) -
         )
         require_contains(bundle_all.stdout, "root\tsmoke-suite==0.1.0", "bundle list all")
         require_contains(bundle_all.stdout, "root\tsmoke-imap==0.1.0", "bundle list all")
+        run_runtime_smoke(reploy, deploy_dir, workdir, env)
 
     if cli_only:
         return
@@ -199,11 +312,23 @@ def main() -> int:
     if args.keep_workdir:
         workdir = Path(tempfile.mkdtemp(prefix="reploy-e2e-smoke-"))
         print(f"workdir: {workdir}")
-        run_smoke(reploy, workdir, plan_only=args.plan_only, cli_only=args.cli_only)
+        run_smoke(
+            reploy,
+            workdir,
+            plan_only=args.plan_only,
+            cli_only=args.cli_only,
+            docker_mode=args.docker_mode,
+        )
     else:
         workdir = Path(tempfile.mkdtemp(prefix="reploy-e2e-smoke-"))
         try:
-            run_smoke(reploy, workdir, plan_only=args.plan_only, cli_only=args.cli_only)
+            run_smoke(
+                reploy,
+                workdir,
+                plan_only=args.plan_only,
+                cli_only=args.cli_only,
+                docker_mode=args.docker_mode,
+            )
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
     return 0

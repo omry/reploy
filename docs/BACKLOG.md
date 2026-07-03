@@ -64,7 +64,7 @@ No active backlog items.
       Docker Desktop where applicable; make Linux-only commands such as
       systemd-based install/uninstall fail with clear platform errors; and
       decide whether a Windows service backend is in scope or explicitly
-      deferred.
+      deferred. Planning details live in `docs/WINDOWS_PORT.md`.
 
 - [ ] `P2` Define and validate formal macOS support.
       Reploy should have explicit macOS behavior instead of assuming Linux-like
