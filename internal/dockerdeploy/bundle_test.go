@@ -961,11 +961,14 @@ func TestBundlePrepareUsesPackLocalSourcesForFilePacks(t *testing.T) {
 
 	var buildRequirements string
 	var checkRequirements string
+	var buildRequirementsPath string
+	var wheelhouseMount string
 	var sourceMount string
 	restore := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
 		switch {
 		case containsInOrder(spec.Args, []string{"sh", "-c"}):
 			requirementsPath := hostPathForContainerMount(t, spec.Args, "/requirements.txt")
+			buildRequirementsPath = requirementsPath
 			content, err := os.ReadFile(requirementsPath)
 			if err != nil {
 				t.Fatal(err)
@@ -976,6 +979,7 @@ func TestBundlePrepareUsesPackLocalSourcesForFilePacks(t *testing.T) {
 				t.Fatalf("local source prepare script missing copy:\n%s", spec.Args[len(spec.Args)-1])
 			}
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
+			wheelhouseMount = wheelhouse
 			if err := os.WriteFile(filepath.Join(wheelhouse, "demo_pkg-1.2.3-py3-none-any.whl"), []byte("demo\n"), 0o644); err != nil {
 				return err
 			}
@@ -1008,6 +1012,12 @@ func TestBundlePrepareUsesPackLocalSourcesForFilePacks(t *testing.T) {
 	}
 	if sourceMount != sourceDir {
 		t.Fatalf("source mount = %q, want %q", sourceMount, sourceDir)
+	}
+	if !strings.HasPrefix(buildRequirementsPath, filepath.Join(deployDir, ".reploy")+string(filepath.Separator)) {
+		t.Fatalf("build requirements path = %q, want under deployment .reploy", buildRequirementsPath)
+	}
+	if !strings.HasPrefix(wheelhouseMount, filepath.Join(deployDir, ".reploy")+string(filepath.Separator)) {
+		t.Fatalf("wheelhouse mount = %q, want under deployment .reploy", wheelhouseMount)
 	}
 	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != expectedRuntimeRequirements {
 		t.Fatalf("persistent requirements = %q", got)

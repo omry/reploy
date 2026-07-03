@@ -535,7 +535,7 @@ func BundlePrepare(options BundlePrepareOptions) error {
 			return err
 		}
 		var err error
-		tmpDir, err = os.MkdirTemp("", "reploy-wheelhouse-*")
+		tmpDir, err = os.MkdirTemp(filepath.Dir(bundleDir), ".wheelhouse-*")
 		return err
 	}); err != nil {
 		return err

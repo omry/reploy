@@ -41,9 +41,8 @@ jobs:
           python -m pip install nox
 
       - name: Install Docker runtime
-        env:
-          HOMEBREW_NO_AUTO_UPDATE: "1"
         run: |
+          brew update
           brew install docker docker-compose colima qemu
           mkdir -p ~/.docker/cli-plugins
           ln -sf "$(brew --prefix docker-compose)/bin/docker-compose" ~/.docker/cli-plugins/docker-compose
