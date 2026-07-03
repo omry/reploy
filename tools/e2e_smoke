@@ -114,6 +114,10 @@ def update_env_file(path: Path, updates: dict[str, str]) -> None:
     path.write_text("\n".join(rewritten) + "\n")
 
 
+def make_workdir() -> Path:
+    return Path(tempfile.mkdtemp(prefix=".reploy-e2e-smoke-", dir=Path.cwd()))
+
+
 def run_runtime_smoke(reploy: Path, deploy_dir: Path, workdir: Path, env: dict[str, str]) -> None:
     host_port = free_local_port()
     update_env_file(
@@ -310,7 +314,7 @@ def main() -> int:
         raise SystemExit(f"reploy binary is not executable: {reploy}")
 
     if args.keep_workdir:
-        workdir = Path(tempfile.mkdtemp(prefix="reploy-e2e-smoke-"))
+        workdir = make_workdir()
         print(f"workdir: {workdir}")
         run_smoke(
             reploy,
@@ -320,7 +324,7 @@ def main() -> int:
             docker_mode=args.docker_mode,
         )
     else:
-        workdir = Path(tempfile.mkdtemp(prefix="reploy-e2e-smoke-"))
+        workdir = make_workdir()
         try:
             run_smoke(
                 reploy,
