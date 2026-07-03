@@ -18,7 +18,7 @@ jobs:
   smoke:
     name: Docker smoke on ${{ inputs.runner }}
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 35
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -43,12 +43,19 @@ jobs:
       - name: Install Docker runtime
         run: |
           brew update
-          brew install docker docker-compose colima qemu
+          brew install docker docker-compose colima
           mkdir -p ~/.docker/cli-plugins
           ln -sf "$(brew --prefix docker-compose)/bin/docker-compose" ~/.docker/cli-plugins/docker-compose
-          colima start --runtime docker --vm-type qemu --cpu 2 --memory 4 --disk 20
+          sw_vers
+          uname -a
+          sysctl -n kern.hv_support || true
+          colima version
+          limactl --version
+          colima start --runtime docker --vm-type vz --mount-type virtiofs --cpu 2 --memory 4 --disk 20
+          colima status
           docker info
           docker compose version
+          docker run --rm -v "$PWD:/workspace:ro" alpine:3.22 test -f /workspace/go.mod
 
       - name: Run Docker-backed smoke
         env:
