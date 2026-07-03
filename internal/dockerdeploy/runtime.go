@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"time"
+
+	"github.com/omry/reploy/internal/deploy"
 )
 
 type RuntimeOptions struct {
@@ -38,6 +40,13 @@ func Runtime(options RuntimeOptions) error {
 		commandStderr = options.Stderr
 	}
 	if runtimeActionNeedsBundle(options.Action) {
+		pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
+		if err != nil {
+			return err
+		}
+		if err := ensureConfigArtifactFileMounts(options.Dir, pack); err != nil {
+			return err
+		}
 		if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: options.Dir, Verbose: options.Verbose, Stdout: stdout, Stderr: stderr, DockerPreflightTimeout: options.DockerPreflightTimeout}); err != nil {
 			return fmt.Errorf("prepare installation bundle: %w", err)
 		}

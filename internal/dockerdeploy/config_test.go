@@ -179,6 +179,86 @@ func TestAppCommandRunsOneOffOnDeploymentProject(t *testing.T) {
 	}
 }
 
+func TestAppCommandUsesConfigArtifactRootWhenSingleFileArtifactIsMounted(t *testing.T) {
+	deployDir := makeSingleFileConfigAppCommandDeployment(t)
+	if err := os.WriteFile(filepath.Join(deployDir, ".arbiter.env"), []byte("ARB=my-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var specs []CommandSpec
+	restore := stubAppCommandRunner(func(spec CommandSpec, options RunOptions) error {
+		specs = append(specs, spec)
+		return nil
+	})
+	defer restore()
+
+	err := AppCommand(AppCommandOptions{Dir: deployDir, CommandArgs: []string{"bootstrap", "plugin", "imap"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("ran %d commands, want one-off run", len(specs))
+	}
+	if !containsAdjacent(specs[0].Args, "-e", "REPLOY_CONFIG_CONTAINER_DIR=/config/conf") {
+		t.Fatalf("app command did not set nested config container dir: %#v", specs[0].Args)
+	}
+}
+
+func TestAppCommandCreatesMissingSingleFileConfigArtifactPlaceholder(t *testing.T) {
+	deployDir := makeSingleFileConfigAppCommandDeployment(t)
+	called := false
+	restore := stubAppCommandRunner(func(spec CommandSpec, options RunOptions) error {
+		called = true
+		return nil
+	})
+	defer restore()
+
+	err := AppCommand(AppCommandOptions{Dir: deployDir, CommandArgs: []string{"bootstrap", "plugin", "imap"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("app command did not invoke Docker after creating config artifact placeholder")
+	}
+	path := filepath.Join(deployDir, ".arbiter.env")
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		t.Fatalf("app command did not create .arbiter.env placeholder: %v", statErr)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf(".arbiter.env placeholder is not a regular file: %s", info.Mode())
+	}
+	if info.Size() != 0 {
+		t.Fatalf(".arbiter.env placeholder should start empty, size=%d", info.Size())
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Fatalf(".arbiter.env placeholder mode = %s, want 0600", mode)
+	}
+}
+
+func TestAppCommandDoesNotCreateConfigArtifactPlaceholderForUnknownCommand(t *testing.T) {
+	deployDir := makeSingleFileConfigAppCommandDeployment(t)
+	called := false
+	restore := stubAppCommandRunner(func(spec CommandSpec, options RunOptions) error {
+		called = true
+		return nil
+	})
+	defer restore()
+
+	err := AppCommand(AppCommandOptions{Dir: deployDir, CommandArgs: []string{"not-a-command"}})
+	if err == nil {
+		t.Fatal("expected unknown app command error")
+	}
+	if called {
+		t.Fatal("app command invoked Docker for unknown command")
+	}
+	if !strings.Contains(err.Error(), "no app command matches") {
+		t.Fatalf("error did not explain unknown command: %v", err)
+	}
+	if info, statErr := os.Stat(filepath.Join(deployDir, ".arbiter.env")); !os.IsNotExist(statErr) || info != nil {
+		t.Fatalf("unknown command should not create .arbiter.env: info=%v err=%v", info, statErr)
+	}
+}
+
 func TestAppCommandRecreatesRequiredWritableDirs(t *testing.T) {
 	deployDir := makeAppCommandDeployment(t)
 	if err := os.RemoveAll(filepath.Join(deployDir, "conf")); err != nil {
@@ -452,6 +532,27 @@ func makeAppCommandDeployment(t *testing.T) string {
 		testPackManifest(),
 		"    config_check:\n      trigger:\n        - config\n        - check\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /config\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n",
 		"    config_check:\n      trigger:\n        - config\n        - check\n      app_command: true\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /config\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n    bootstrap_plugin:\n      trigger:\n        - bootstrap\n        - plugin\n      app_command: true\n      forward_args: true\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /config\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - bootstrap\n          - plugin\n",
+		1,
+	)
+	packDir := makeTestPackWithManifest(t, manifest)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	markTestBundlePrepared(t, deployDir)
+	return deployDir
+}
+
+func makeSingleFileConfigAppCommandDeployment(t *testing.T) string {
+	t.Helper()
+	manifest := strings.Replace(
+		testPackManifestWithSingleFileConfigArtifact(),
+		"    config_check:\n      trigger:\n        - config\n        - check\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /config/conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n",
+		"    config_check:\n      trigger:\n        - config\n        - check\n      app_command: true\n      deployed_command: true\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /config/conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n    bootstrap_plugin:\n      trigger:\n        - bootstrap\n        - plugin\n      app_command: true\n      deployed_command: true\n      forward_args: true\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /config/conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - bootstrap\n          - plugin\n",
 		1,
 	)
 	packDir := makeTestPackWithManifest(t, manifest)

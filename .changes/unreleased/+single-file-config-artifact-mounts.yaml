@@ -1,0 +1,2 @@
+kind: Fixed
+body: Mount single-file config artifacts into Docker runtimes alongside the configured config directory, and let writable app commands create missing file artifacts during bootstrap.

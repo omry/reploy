@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -177,6 +178,30 @@ func TestInstallOnDarwinWritesDockerDesktopDeployment(t *testing.T) {
 	}
 	if !strings.Contains(script, "docker compose") || !strings.Contains(script, "up") {
 		t.Fatalf("Docker Desktop control script should use compose lifecycle:\n%s", script)
+	}
+}
+
+func TestDockerDesktopInstallStartFailsClearlyWhenConfigArtifactFileIsMissing(t *testing.T) {
+	deployDir := makeSingleFileConfigAppCommandDeployment(t)
+	err := applyDockerDesktopInstallPlan(installPlan{
+		SourceDir:              deployDir,
+		TargetDir:              deployDir,
+		AppID:                  "demo",
+		ControlScript:          "democtl",
+		ConfigDir:              "conf",
+		ConfigContainerDir:     "/config/conf",
+		ConfigArtifactFiles:    []string{".arbiter.env"},
+		ComposeProject:         "demo-project",
+		Backend:                installBackendDockerDesktop,
+		InPlace:                true,
+		Start:                  true,
+		DockerPreflightTimeout: time.Second,
+	})
+	if err == nil {
+		t.Fatal("expected missing config artifact file error")
+	}
+	if !strings.Contains(err.Error(), "config artifact file is missing") || !strings.Contains(err.Error(), ".arbiter.env") {
+		t.Fatalf("missing config artifact error was not clear: %v", err)
 	}
 }
 
@@ -591,6 +616,24 @@ func TestSystemdUnitIncludesComposeOverrideWhenPresent(t *testing.T) {
 		if !strings.Contains(unit, want) {
 			t.Fatalf("unit missing %q:\n%s", want, unit)
 		}
+	}
+}
+
+func TestSystemdUnitPreflightsConfigArtifactFiles(t *testing.T) {
+	unit := systemdUnit(installPlan{
+		TargetDir:           "/srv/demo",
+		Service:             "demo-prod",
+		ConfigArtifactFiles: []string{".arbiter.env", "secrets/app #1.env"},
+	}, "/usr/bin/docker", false)
+	for _, relativePath := range []string{".arbiter.env", "secrets/app #1.env"} {
+		path := filepath.Join("/srv/demo", filepath.FromSlash(relativePath))
+		want := "ExecStartPre=/bin/sh -c '[ -f \"$1\" ] || { echo \"config artifact file is missing: $1\" >&2; exit 1; }' reploy-config-artifact " + strconv.Quote(path)
+		if !strings.Contains(unit, want) {
+			t.Fatalf("unit missing config artifact preflight %q:\n%s", want, unit)
+		}
+	}
+	if strings.Index(unit, "config artifact file is missing") > strings.Index(unit, "Docker API did not become ready") {
+		t.Fatalf("config artifact preflight should run before Docker readiness check:\n%s", unit)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -278,6 +279,105 @@ func TestStagingControlScriptRunsComposeLifecycleAndAppCommands(t *testing.T) {
 	unknownColorArgs := readFile(t, dockerArgs)
 	if strings.Contains(unknownColorArgs, "DEMO_COLOR=") {
 		t.Fatalf("unknown REPLOY_COLOR should not derive DEMO_COLOR:\n%s", unknownColorArgs)
+	}
+}
+
+func TestStagingControlScriptCreatesMissingSingleFileConfigArtifactForAppCommand(t *testing.T) {
+	deployDir := makeSingleFileConfigAppCommandDeployment(t)
+	script := filepath.Join(deployDir, "democtl")
+
+	fakeBin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dockerArgs := filepath.Join(t.TempDir(), "docker.args")
+	fakeDocker := filepath.Join(fakeBin, "docker")
+	if err := os.WriteFile(fakeDocker, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$DOCKER_ARGS_FILE\"\nprintf 'docker output\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	command := exec.Command(script, "bootstrap", "plugin", "imap")
+	command.Env = append(os.Environ(),
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"DOCKER_ARGS_FILE="+dockerArgs,
+		"REPLOY_COLOR=never",
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("app command failed: %v\n%s", err, output)
+	}
+	path := filepath.Join(deployDir, ".arbiter.env")
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		t.Fatalf("control script did not create .arbiter.env placeholder: %v", statErr)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf(".arbiter.env placeholder is not a regular file: %s", info.Mode())
+	}
+	if info.Size() != 0 {
+		t.Fatalf(".arbiter.env placeholder should start empty, size=%d", info.Size())
+	}
+	appArgs := readFile(t, dockerArgs)
+	for _, want := range []string{
+		"run\n",
+		"REPLOY_CONTAINER_COMMAND=bootstrap_plugin\n",
+		"REPLOY_CONFIG_CONTAINER_DIR=/config/conf\n",
+		"REPLOY_CONFIG_MOUNT=rw\n",
+		"app\n",
+	} {
+		if !strings.Contains(appArgs, want) {
+			t.Fatalf("app command docker args missing %q:\n%s", want, appArgs)
+		}
+	}
+}
+
+func TestStagingControlScriptChownsCreatedConfigArtifactPlaceholderWhenRunAsRoot(t *testing.T) {
+	deployDir := makeSingleFileConfigAppCommandDeployment(t)
+	script := filepath.Join(deployDir, "democtl")
+	envValues, err := readDockerEnv(deployDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	containerUser := envValues["REPLOY_CONTAINER_USER"]
+	if containerUser == "" {
+		t.Fatal("missing REPLOY_CONTAINER_USER")
+	}
+
+	fakeBin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dockerArgs := filepath.Join(t.TempDir(), "docker.args")
+	chownArgs := filepath.Join(t.TempDir(), "chown.args")
+	if err := os.WriteFile(filepath.Join(fakeBin, "docker"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$DOCKER_ARGS_FILE\"\nprintf 'docker output\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fakeBin, "id"), []byte("#!/bin/sh\nprintf '0\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fakeBin, "chown"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CHOWN_ARGS_FILE\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	command := exec.Command(script, "bootstrap", "plugin", "imap")
+	command.Env = append(os.Environ(),
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"DOCKER_ARGS_FILE="+dockerArgs,
+		"CHOWN_ARGS_FILE="+chownArgs,
+		"REPLOY_COLOR=never",
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("app command failed: %v\n%s", err, output)
+	}
+	args := readFile(t, chownArgs)
+	for _, want := range []string{
+		containerUser + "\n",
+		filepath.Join(deployDir, ".arbiter.env") + "\n",
+	} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("chown args missing %q:\n%s", want, args)
+		}
 	}
 }
 
@@ -723,6 +823,71 @@ docker:
 	}
 	if !strings.Contains(compose, "__reploy_runtime_warmup") || !strings.Contains(compose, "exit 0;\n      fi &&\n      venv_python=") {
 		t.Fatalf("compose did not expose runtime warmup command before app dispatch:\n%s", compose)
+	}
+}
+
+func TestInitRendersSingleFileConfigArtifactMounts(t *testing.T) {
+	packDir := makeTestPackWithManifest(t, testPackManifestWithSingleFileConfigArtifact())
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	dockerEnv := readFile(t, filepath.Join(deployDir, DockerEnvFileName))
+	if !strings.Contains(dockerEnv, "REPLOY_CONFIG_DIR=./conf") {
+		t.Fatalf("docker.env should keep conf as the host config dir:\n%s", dockerEnv)
+	}
+	compose := readFile(t, filepath.Join(deployDir, ComposeFileName))
+	for _, want := range []string{
+		`      - "${REPLOY_CONFIG_DIR:?set REPLOY_CONFIG_DIR}:/config/conf:${REPLOY_CONFIG_MOUNT:-ro}"`,
+		`      - "./.arbiter.env:/config/.arbiter.env:${REPLOY_CONFIG_MOUNT:-ro}"`,
+		`container_command_config_check() { "demo-server" "--config-dir" "/config/conf" "--config-name" "$${DEMO_CONFIG_NAME}" "config" "check" "$$@"; };`,
+	} {
+		if !strings.Contains(compose, want) {
+			t.Fatalf("compose missing %q:\n%s", want, compose)
+		}
+	}
+	if strings.Contains(compose, "      - ${REPLOY_CONFIG_DIR:?set REPLOY_CONFIG_DIR}:/config:${REPLOY_CONFIG_MOUNT:-ro}") ||
+		strings.Contains(compose, `      - "${REPLOY_CONFIG_DIR:?set REPLOY_CONFIG_DIR}:/config:${REPLOY_CONFIG_MOUNT:-ro}"`) {
+		t.Fatalf("compose should not mount conf directly at /config when sibling config files are declared:\n%s", compose)
+	}
+	helper := readFile(t, filepath.Join(deployDir, "democtl"))
+	for _, want := range []string{
+		"REPLOY_CONFIG_CONTAINER_DIR=/config/conf",
+		"validate_config_artifact_files",
+		"ensure_config_artifact_files",
+		"config artifact path must be a file: $target_dir/",
+		"config artifact file is missing: $target_dir/",
+		".arbiter.env",
+	} {
+		if !strings.Contains(helper, want) {
+			t.Fatalf("staging control script missing %q:\n%s", want, helper)
+		}
+	}
+}
+
+func TestInitQuotesSingleFileConfigArtifactVolumePaths(t *testing.T) {
+	manifest := strings.Replace(testPackManifestWithSingleFileConfigArtifact(), "- .arbiter.env", "- '.arbiter #1.env'", 1)
+	packDir := makeTestPackWithManifest(t, manifest)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	compose := readFile(t, filepath.Join(deployDir, ComposeFileName))
+	want := "      - " + strconv.Quote("./.arbiter #1.env:/config/.arbiter #1.env:${REPLOY_CONFIG_MOUNT:-ro}")
+	if !strings.Contains(compose, want) {
+		t.Fatalf("compose did not quote special config artifact volume %q:\n%s", want, compose)
 	}
 }
 
@@ -1440,6 +1605,11 @@ docker:
           - config
           - check
 `
+}
+
+func testPackManifestWithSingleFileConfigArtifact() string {
+	manifest := strings.Replace(testPackManifest(), "          - conf/\n", "          - conf/\n          - .arbiter.env\n", 1)
+	return strings.ReplaceAll(manifest, "          - /config\n", "          - /config/conf\n")
 }
 
 func assertResultStatus(t *testing.T, results []UpdateResult, path string, expected deploy.UpdateStatus) {

@@ -75,13 +75,14 @@ func ConfigCheck(options ConfigCheckOptions) error {
 		return err
 	}
 	configDisplayDir := appConfigDisplayDir(options.Dir, pack)
+	configContainerDir := configMountLayoutForPack(pack).ContainerConfigDir
 	projectName, err := deploymentComposeProjectName(options.Dir)
 	if err != nil {
 		return err
 	}
 	return runTemporaryComposeCommand(
 		runConfigCheckCommand,
-		ConfigCheckCommandForProject(options.Dir, command.Name, forwardedArgs, projectName, configDisplayDir),
+		ConfigCheckCommandForProject(options.Dir, command.Name, forwardedArgs, projectName, configDisplayDir, configContainerDir),
 		CommandSpec{},
 		runOptions,
 	)
@@ -110,11 +111,11 @@ func AppCommand(options AppCommandOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := ensureOneOffCommandDirs(options.Dir, pack); err != nil {
-		return err
-	}
 	command, forwardedArgs, err := pack.Docker.MatchAppCommand(options.CommandArgs)
 	if err != nil {
+		return err
+	}
+	if err := ensureAppCommandDirs(options.Dir, pack); err != nil {
 		return err
 	}
 	if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: options.Dir, Stdout: options.Stdout, Stderr: options.Stderr, DockerPreflightTimeout: options.DockerPreflightTimeout}); err != nil {
@@ -128,7 +129,7 @@ func AppCommand(options AppCommandOptions) error {
 	if err != nil {
 		return err
 	}
-	spec := AppCommandForProject(options.Dir, command.Name, forwardedArgs, projectName, configDisplayDir)
+	spec := AppCommandForProject(options.Dir, command.Name, forwardedArgs, projectName, configDisplayDir, configMountLayoutForPack(pack).ContainerConfigDir)
 	spec = withAppTerminalEnv(spec, pack.App.Terminal, terminalOutput)
 	err = runTemporaryComposeCommand(
 		runAppCommand,
@@ -159,6 +160,19 @@ func appCommandError(err error) error {
 
 func ensureOneOffCommandDirs(dir string, pack deploy.AppPack) error {
 	if err := os.MkdirAll(filepath.Join(dir, pack.Docker.DeploymentDirs.Config), 0o700); err != nil {
+		return err
+	}
+	if err := ensureConfigArtifactFileMounts(dir, pack); err != nil {
+		return err
+	}
+	return ensureWritableRuntimeDir(filepath.Join(dir, RuntimeDirName))
+}
+
+func ensureAppCommandDirs(dir string, pack deploy.AppPack) error {
+	if err := os.MkdirAll(filepath.Join(dir, pack.Docker.DeploymentDirs.Config), 0o700); err != nil {
+		return err
+	}
+	if err := ensureConfigArtifactFileMountPlaceholders(dir, pack); err != nil {
 		return err
 	}
 	return ensureWritableRuntimeDir(filepath.Join(dir, RuntimeDirName))
@@ -283,7 +297,11 @@ func ConfigCheckCommandForProject(dir string, commandName string, forwardedArgs 
 		args = append(args, "-e", fmt.Sprintf("REPLOY_FORWARDED_ARG_%d=%s", index, arg))
 	}
 	if len(configDisplayDir) > 0 && strings.TrimSpace(configDisplayDir[0]) != "" {
-		args = append(args, "-e", "REPLOY_CONFIG_CONTAINER_DIR=/config")
+		configContainerDir := "/config"
+		if len(configDisplayDir) > 1 && strings.TrimSpace(configDisplayDir[1]) != "" {
+			configContainerDir = configDisplayDir[1]
+		}
+		args = append(args, "-e", fmt.Sprintf("REPLOY_CONFIG_CONTAINER_DIR=%s", configContainerDir))
 		args = append(args, "-e", fmt.Sprintf("REPLOY_CONFIG_DISPLAY_DIR=%s", configDisplayDir[0]))
 	}
 	args = append(args, "app")

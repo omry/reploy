@@ -386,6 +386,7 @@ func renderComposeTemplate(pack deploy.AppPack, roots []deploy.ArtifactRoot, doc
 	}
 	applyPrimaryPortDefaults(&service, ports)
 	portBindings := renderComposePortBindings(ports)
+	configVolumes := renderConfigComposeVolumes(pack)
 	appEnvironment := renderComposeAppEnvironment(pack.Docker.Environment)
 	runtimeOverrides, err := renderRuntimeOverrides(pack.Docker.Runtime)
 	if err != nil {
@@ -397,6 +398,7 @@ func renderComposeTemplate(pack deploy.AppPack, roots []deploy.ArtifactRoot, doc
 	rendered = strings.ReplaceAll(rendered, "{{CONFIG_CHECK_COMMAND_FUNCTION}}", configCheckFunction)
 	rendered = strings.ReplaceAll(rendered, "{{LOCAL_SOURCE_VOLUMES}}", sourceVolumes)
 	rendered = strings.ReplaceAll(rendered, "{{PORT_BINDINGS}}", portBindings)
+	rendered = strings.ReplaceAll(rendered, "{{CONFIG_VOLUMES}}", configVolumes)
 	rendered = strings.ReplaceAll(rendered, "{{APP_ENVIRONMENT}}", appEnvironment)
 	rendered = strings.ReplaceAll(rendered, "{{RUNTIME_OVERRIDES}}", runtimeOverrides)
 	rendered = strings.ReplaceAll(rendered, "{{DEFAULT_IMAGE}}", service.Image)
@@ -418,12 +420,24 @@ func renderComposeTemplate(pack deploy.AppPack, roots []deploy.ArtifactRoot, doc
 		strings.Contains(rendered, "{{CONFIG_CHECK_COMMAND_FUNCTION}}") ||
 		strings.Contains(rendered, "{{LOCAL_SOURCE_VOLUMES}}") ||
 		strings.Contains(rendered, "{{PORT_BINDINGS}}") ||
+		strings.Contains(rendered, "{{CONFIG_VOLUMES}}") ||
 		strings.Contains(rendered, "{{APP_ENVIRONMENT}}") ||
 		strings.Contains(rendered, "{{RUNTIME_OVERRIDES}}") ||
 		strings.Contains(rendered, "{{DEFAULT_") {
 		return "", fmt.Errorf("compose template still contains command placeholder")
 	}
 	return rendered, nil
+}
+
+func renderConfigComposeVolumes(pack deploy.AppPack) string {
+	layout := configMountLayoutForPack(pack)
+	lines := []string{
+		fmt.Sprintf("      - %s", strconv.Quote(fmt.Sprintf("${REPLOY_CONFIG_DIR:?set REPLOY_CONFIG_DIR}:%s:${REPLOY_CONFIG_MOUNT:-ro}", layout.ContainerConfigDir))),
+	}
+	for _, mount := range layout.FileMounts {
+		lines = append(lines, fmt.Sprintf("      - %s", strconv.Quote(fmt.Sprintf("./%s:%s:${REPLOY_CONFIG_MOUNT:-ro}", mount.HostRelative, mount.ContainerPath))))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func localSourceComposeVolumes(pack deploy.AppPack, roots []deploy.ArtifactRoot) (string, error) {

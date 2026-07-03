@@ -64,6 +64,8 @@ type installPlan struct {
 	Health                 deploy.DockerHealthConfig
 	Terminal               deploy.AppTerminalConfig
 	ConfigDir              string
+	ConfigContainerDir     string
+	ConfigArtifactFiles    []string
 	DeployedCommands       []deploy.DockerCommandConfig
 	Hooks                  deploy.DockerInstallHooksConfig
 	Success                deploy.DockerInstallSuccessConfig
@@ -317,6 +319,7 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 	if overrideErr != nil && !os.IsNotExist(overrideErr) {
 		return installPlan{}, overrideErr
 	}
+	configLayout := configMountLayoutForPack(pack)
 	backend := currentHostPlatform().installBackend()
 	if backend == installBackendUnsupported {
 		return installPlan{}, currentHostPlatform().unsupportedPersistentInstallError("install")
@@ -340,6 +343,8 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 		Health:                 pack.Docker.Health,
 		Terminal:               pack.App.Terminal,
 		ConfigDir:              pack.Docker.DeploymentDirs.Config,
+		ConfigContainerDir:     configLayout.ContainerConfigDir,
+		ConfigArtifactFiles:    configArtifactFilePaths(configLayout.FileMounts),
 		DeployedCommands:       deployedCommands,
 		Hooks:                  pack.Docker.Install.Hooks,
 		Success:                pack.Docker.Install.Success,
@@ -789,6 +794,7 @@ func systemdUnit(plan installPlan, dockerBin string, includeDockerUnit bool) str
 	if includeDockerUnit {
 		dockerUnitLines = "Requires=docker.service\nAfter=docker.service\n"
 	}
+	configArtifactPreflights := systemdConfigArtifactPreflights(plan)
 	composeFiles := "--project-directory " + plan.TargetDir + " -f " + filepath.Join(plan.TargetDir, ComposeFileName)
 	if plan.ComposeProject != "" {
 		composeFiles = "--project-name " + plan.ComposeProject + " " + composeFiles
@@ -806,7 +812,7 @@ Description=Reploy Docker service (%s)
 [Service]
 Type=simple
 WorkingDirectory=%s
-ExecStartPre=/bin/sh -c 'i=0; while [ "$i" -lt 120 ]; do [ -x "$1" ] && "$1" info >/dev/null 2>&1 && exit 0; i=$((i + 1)); sleep 1; done; echo "error: Docker API did not become ready for Reploy" >&2; exit 1' reploy-docker-ready %s
+%sExecStartPre=/bin/sh -c 'i=0; while [ "$i" -lt 120 ]; do [ -x "$1" ] && "$1" info >/dev/null 2>&1 && exit 0; i=$((i + 1)); sleep 1; done; echo "error: Docker API did not become ready for Reploy" >&2; exit 1' reploy-docker-ready %s
 ExecStart=%s compose --env-file %s %s up
 ExecStop=%s compose --env-file %s %s down
 Restart=on-failure
@@ -815,7 +821,19 @@ TimeoutStartSec=180
 
 [Install]
 WantedBy=multi-user.target
-`, plan.Service, plan.Service, plan.TargetDir, plan.ComposeProject, dockerUnitLines, plan.TargetDir, dockerBin, dockerBin, filepath.Join(plan.TargetDir, DockerEnvFileName), composeFiles, dockerBin, filepath.Join(plan.TargetDir, DockerEnvFileName), composeFiles)
+`, plan.Service, plan.Service, plan.TargetDir, plan.ComposeProject, dockerUnitLines, plan.TargetDir, configArtifactPreflights, dockerBin, dockerBin, filepath.Join(plan.TargetDir, DockerEnvFileName), composeFiles, dockerBin, filepath.Join(plan.TargetDir, DockerEnvFileName), composeFiles)
+}
+
+func systemdConfigArtifactPreflights(plan installPlan) string {
+	if len(plan.ConfigArtifactFiles) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(plan.ConfigArtifactFiles))
+	for _, relativePath := range plan.ConfigArtifactFiles {
+		path := filepath.Join(plan.TargetDir, filepath.FromSlash(relativePath))
+		lines = append(lines, "ExecStartPre=/bin/sh -c '[ -f \"$1\" ] || { echo \"config artifact file is missing: $1\" >&2; exit 1; }' reploy-config-artifact "+strconv.Quote(path))
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
 func writeInstalledState(plan installPlan) error {
@@ -1259,6 +1277,9 @@ func applyLinuxSystemdInstallPlan(plan installPlan) error {
 		return fmt.Errorf("systemctl enable %s.service: %w", plan.Service, err)
 	}
 	if plan.Start {
+		if err := ensureConfigArtifactFiles(plan.TargetDir, plan.ConfigArtifactFiles); err != nil {
+			return err
+		}
 		if err := runInstallHooks(plan, "before start", plan.Hooks.BeforeStart); err != nil {
 			return err
 		}
@@ -1277,6 +1298,9 @@ func applyDockerDesktopInstallPlan(plan installPlan) error {
 		return err
 	}
 	if plan.Start {
+		if err := ensureConfigArtifactFiles(plan.TargetDir, plan.ConfigArtifactFiles); err != nil {
+			return err
+		}
 		if err := runInstallHooks(plan, "before start", plan.Hooks.BeforeStart); err != nil {
 			return err
 		}

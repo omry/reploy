@@ -17,7 +17,7 @@ services:
       HOME: ${REPLOY_CONTAINER_HOME:-{{DEFAULT_CONTAINER_HOME}}}
 {{APP_ENVIRONMENT}}
     volumes:
-      - ${REPLOY_CONFIG_DIR:?set REPLOY_CONFIG_DIR}:/config:${REPLOY_CONFIG_MOUNT:-ro}
+{{CONFIG_VOLUMES}}
       - ${REPLOY_REQUIREMENTS_FILE:?set REPLOY_REQUIREMENTS_FILE}:/requirements.txt:ro
       - ${REPLOY_BUNDLE_DIR:?set REPLOY_BUNDLE_DIR}:/bundle:ro
       - ${REPLOY_RUNTIME_DIR:-./.reploy/runtime}:/reploy-runtime
