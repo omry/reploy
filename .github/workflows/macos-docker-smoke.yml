@@ -43,10 +43,10 @@ jobs:
       - name: Install Docker runtime
         run: |
           brew update
-          brew install docker docker-compose colima
+          brew install docker docker-compose colima qemu
           mkdir -p ~/.docker/cli-plugins
           ln -sf "$(brew --prefix docker-compose)/bin/docker-compose" ~/.docker/cli-plugins/docker-compose
-          colima start --runtime docker --cpu 2 --memory 4 --disk 20
+          colima start --runtime docker --vm-type qemu --cpu 2 --memory 4 --disk 20
           docker info
           docker compose version
 
@@ -54,6 +54,12 @@ jobs:
         env:
           NO_UPDATE_NOTIFIER: "1"
         run: nox -s cli-smoke
+
+      - name: Dump Docker runtime logs
+        if: failure()
+        run: |
+          find ~/.colima -maxdepth 5 -type f -name "*.log" -print -exec tail -n 200 {} \; || true
+          find ~/.lima -maxdepth 5 -type f -name "*.log" -print -exec tail -n 200 {} \; || true
 
       - name: Stop Docker runtime
         if: always()
