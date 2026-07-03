@@ -441,7 +441,11 @@ func BundleCheck(options BundleCheckOptions) error {
 	if err != nil {
 		return err
 	}
-	tmpDir, err := os.MkdirTemp("", "reploy-bundle-check-*")
+	tmpBaseDir := filepath.Join(options.Dir, ReployInternalDir)
+	if err := os.MkdirAll(tmpBaseDir, 0o755); err != nil {
+		return err
+	}
+	tmpDir, err := os.MkdirTemp(tmpBaseDir, ".bundle-check-*")
 	if err != nil {
 		return err
 	}

@@ -962,6 +962,7 @@ func TestBundlePrepareUsesPackLocalSourcesForFilePacks(t *testing.T) {
 	var buildRequirements string
 	var checkRequirements string
 	var buildRequirementsPath string
+	var checkRequirementsPath string
 	var wheelhouseMount string
 	var sourceMount string
 	restore := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
@@ -986,6 +987,7 @@ func TestBundlePrepareUsesPackLocalSourcesForFilePacks(t *testing.T) {
 			return os.WriteFile(filepath.Join(wheelhouse, "other_pkg-1.2.3-py3-none-any.whl"), []byte("other\n"), 0o644)
 		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
 			requirementsPath := hostPathForContainerMount(t, spec.Args, "/requirements.txt")
+			checkRequirementsPath = requirementsPath
 			content, err := os.ReadFile(requirementsPath)
 			if err != nil {
 				t.Fatal(err)
@@ -1015,6 +1017,9 @@ func TestBundlePrepareUsesPackLocalSourcesForFilePacks(t *testing.T) {
 	}
 	if !strings.HasPrefix(buildRequirementsPath, filepath.Join(deployDir, ".reploy")+string(filepath.Separator)) {
 		t.Fatalf("build requirements path = %q, want under deployment .reploy", buildRequirementsPath)
+	}
+	if !strings.HasPrefix(checkRequirementsPath, filepath.Join(deployDir, ".reploy")+string(filepath.Separator)) {
+		t.Fatalf("check requirements path = %q, want under deployment .reploy", checkRequirementsPath)
 	}
 	if !strings.HasPrefix(wheelhouseMount, filepath.Join(deployDir, ".reploy")+string(filepath.Separator)) {
 		t.Fatalf("wheelhouse mount = %q, want under deployment .reploy", wheelhouseMount)
