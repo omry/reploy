@@ -701,6 +701,32 @@ func TestBundlePrepareCommandBuildsWheelhouse(t *testing.T) {
 	if !reflect.DeepEqual(spec.Args[len(spec.Args)-len(wantSuffix):], wantSuffix) {
 		t.Fatalf("suffix = %#v", spec.Args[len(spec.Args)-len(wantSuffix):])
 	}
+	if !containsAdjacent(spec.Args, "--user", defaultContainerUser()) {
+		t.Fatalf("linux bundle command did not run as host user: %#v", spec.Args)
+	}
+}
+
+func TestBundlePrepareCommandOmitsHostUserOnDarwin(t *testing.T) {
+	restore := stubHostPlatform(t, hostPlatform{GOOS: "darwin"})
+	defer restore()
+
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	spec, err := BundlePrepareCommand(deployDir, filepath.Join(t.TempDir(), "wheelhouse"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsArg(spec.Args, "--user") {
+		t.Fatalf("darwin bundle command should let Docker use its default user: %#v", spec.Args)
+	}
 }
 
 func TestBundlePreparePyPIOnlySkipsExistingWheelhouse(t *testing.T) {
@@ -1531,4 +1557,13 @@ func hostPathForContainerMount(t *testing.T, args []string, containerPath string
 	}
 	t.Fatalf("container mount %s not found in %#v", containerPath, args)
 	return ""
+}
+
+func containsArg(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
 }

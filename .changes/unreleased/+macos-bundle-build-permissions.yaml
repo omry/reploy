@@ -1,0 +1,2 @@
+kind: Fixed
+body: Let macOS Docker bundle-build helpers use the Docker runtime default user so VM-backed bind mounts remain writable.

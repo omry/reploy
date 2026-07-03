@@ -861,13 +861,14 @@ func bundleCheckCommand(dir string, requirementsPath string) (CommandSpec, strin
 	args := []string{
 		"run",
 		"--rm",
-		"--user",
-		defaultContainerUser(),
-		"-v",
-		absoluteRequirementsPath + ":/requirements.txt:ro",
-		"-v",
-		bundleDir + ":/bundle:ro",
 	}
+	args = append(args, bundleDockerUserArgs()...)
+	args = append(args,
+		"-v",
+		absoluteRequirementsPath+":/requirements.txt:ro",
+		"-v",
+		bundleDir+":/bundle:ro",
+	)
 	for _, source := range sources {
 		args = append(args, "-v", source.HostDir+":"+source.ContainerDir+":ro")
 	}
@@ -951,12 +952,8 @@ func bundlePrepareCommand(options bundlePrepareCommandOptions) (CommandSpec, err
 		"run",
 		"--rm",
 	}
-	args = append(args,
-		"--user",
-		defaultContainerUser(),
-		"-v",
-		absoluteRequirementsPath+":/requirements.txt:ro",
-	)
+	args = append(args, bundleDockerUserArgs()...)
+	args = append(args, "-v", absoluteRequirementsPath+":/requirements.txt:ro")
 	if !options.PyPIOnly {
 		args = append(args, "-v", absoluteFindLinksDir+":/bundle:ro")
 	}
@@ -1000,16 +997,24 @@ func BundleSourceWheelCommand(dir string, sourceDir string, wheelhouseDir string
 	args := []string{
 		"run",
 		"--rm",
-		"--user",
-		defaultContainerUser(),
-		"-v",
-		absoluteSourceDir + ":/source:ro",
-		"-v",
-		absoluteWheelhouseDir + ":/wheelhouse",
-		image,
 	}
+	args = append(args, bundleDockerUserArgs()...)
+	args = append(args,
+		"-v",
+		absoluteSourceDir+":/source:ro",
+		"-v",
+		absoluteWheelhouseDir+":/wheelhouse",
+		image,
+	)
 	args = append(args, python.SourceWheelArgv()...)
 	return CommandSpec{Name: "docker", Args: args, Dir: absoluteDir}, nil
+}
+
+func bundleDockerUserArgs() []string {
+	if currentHostPlatform().GOOS != "linux" {
+		return nil
+	}
+	return []string{"--user", defaultContainerUser()}
 }
 
 func BundleUpgradeResolveCommand(dir string, workDir string, pypiOnly bool) (CommandSpec, error) {
@@ -1036,11 +1041,9 @@ func BundleUpgradeResolveCommand(dir string, workDir string, pypiOnly bool) (Com
 	args := []string{
 		"run",
 		"--rm",
-		"--user",
-		defaultContainerUser(),
-		"-v",
-		absoluteWorkDir + ":/work",
 	}
+	args = append(args, bundleDockerUserArgs()...)
+	args = append(args, "-v", absoluteWorkDir+":/work")
 	if !pypiOnly {
 		args = append(args, "-v", bundleDir+":/bundle:ro")
 	}
