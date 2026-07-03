@@ -1,0 +1,2 @@
+kind: Added
+body: Add Docker command defaults, argv prefix/suffix composition, and inferred command triggers for more compact blueprint command definitions.

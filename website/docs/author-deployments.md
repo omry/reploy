@@ -99,25 +99,19 @@ docker:
     default_port: "18075"
     path: /_health_
   default_command: serve
+  command_defaults:
+    app_command: true
+    deployed_command: true
+    container:
+      argv_prefix: [example-server, --config-dir, "${REPLOY_CONFIG_CONTAINER_DIR}"]
   commands:
     serve:
       container:
-        argv:
-          - example-server
-          - serve
+        argv_suffix: [serve]
     config_check:
-      trigger:
-        - config
-        - check
-      app_command: true
-      deployed_command: true
-      forward_flags:
-        - --live
+      forward_flags: [--live]
       container:
-        argv:
-          - example-server
-          - config
-          - check
+        argv_suffix: [config, check]
 ```
 
 For a working reference, see the fixture under

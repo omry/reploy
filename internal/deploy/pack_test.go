@@ -205,6 +205,102 @@ func TestParsePackManifestReadsDockerLayout(t *testing.T) {
 	}
 }
 
+func TestParsePackManifestAppliesDockerCommandDefaults(t *testing.T) {
+	manifest, err := ParsePackManifest(`blueprint:
+  schema: 1
+  version: 0.1.0
+  requires_reploy: ">=0.1.0"
+
+app:
+  id: demo
+  provider:
+    type: python
+    identifier: demo-server
+
+install:
+` + packTestInstallBlock() + `
+
+docker:
+  deployment_dirs:
+    config: conf
+    bundle: bundle
+    data: data
+  default_command: serve
+  command_defaults:
+    app_command: true
+    deployed_command: true
+    container:
+      argv_prefix: [demo-server, --config-dir, "${REPLOY_CONFIG_CONTAINER_DIR}", --config-name, "${DEMO_CONFIG_NAME}"]
+  commands:
+    serve:
+      container:
+        argv_suffix: [serve]
+    config_check:
+      forward_flags: [--live]
+      container:
+        argv_suffix: [config, check]
+    bootstrap_plugin:
+      deployed_command: false
+      forward_args: true
+      container:
+        argv_suffix: [bootstrap, plugin]
+    special_trigger:
+      trigger: ["odd-command", check]
+      container:
+        argv_suffix: ["odd-command", check]
+    different_tool:
+      trigger: [debug, other-tool]
+      container:
+        argv: [other-tool, inspect]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	serve := dockerCommandByName(t, manifest, "serve")
+	if len(serve.Trigger) != 0 {
+		t.Fatalf("default command trigger = %#v", serve.Trigger)
+	}
+	if got := strings.Join(serve.Container.Argv, " "); got != "demo-server --config-dir ${REPLOY_CONFIG_CONTAINER_DIR} --config-name ${DEMO_CONFIG_NAME} serve" {
+		t.Fatalf("serve argv = %q", got)
+	}
+	if !serve.AppCommand || !serve.Deployed {
+		t.Fatalf("serve inherited booleans = app:%t deployed:%t", serve.AppCommand, serve.Deployed)
+	}
+
+	configCheck := dockerCommandByName(t, manifest, "config_check")
+	if got := strings.Join(configCheck.Trigger, " "); got != "config check" {
+		t.Fatalf("config_check trigger = %q", got)
+	}
+	if got := strings.Join(configCheck.Container.Argv, " "); got != "demo-server --config-dir ${REPLOY_CONFIG_CONTAINER_DIR} --config-name ${DEMO_CONFIG_NAME} config check" {
+		t.Fatalf("config_check argv = %q", got)
+	}
+	if !configCheck.AppCommand || !configCheck.Deployed {
+		t.Fatalf("config_check inherited booleans = app:%t deployed:%t", configCheck.AppCommand, configCheck.Deployed)
+	}
+
+	pluginBootstrap := dockerCommandByName(t, manifest, "bootstrap_plugin")
+	if got := strings.Join(pluginBootstrap.Trigger, " "); got != "bootstrap plugin" {
+		t.Fatalf("bootstrap_plugin trigger = %q", got)
+	}
+	if !pluginBootstrap.AppCommand || pluginBootstrap.Deployed {
+		t.Fatalf("bootstrap_plugin booleans = app:%t deployed:%t", pluginBootstrap.AppCommand, pluginBootstrap.Deployed)
+	}
+	if !pluginBootstrap.ForwardArgs {
+		t.Fatal("bootstrap_plugin did not allow forwarded args")
+	}
+
+	special := dockerCommandByName(t, manifest, "special_trigger")
+	if got := strings.Join(special.Trigger, " "); got != "odd-command check" {
+		t.Fatalf("special trigger = %q", got)
+	}
+
+	differentTool := dockerCommandByName(t, manifest, "different_tool")
+	if got := strings.Join(differentTool.Container.Argv, " "); got != "other-tool inspect" {
+		t.Fatalf("different_tool argv = %q", got)
+	}
+}
+
 func TestParsePackManifestRequiresPackMetadata(t *testing.T) {
 	_, err := ParsePackManifest(`app:
   id: demo

@@ -113,6 +113,12 @@ type AppCommandConfig struct {
 	Argv []string `yaml:"argv"`
 }
 
+type rawAppCommandConfig struct {
+	Argv       []string `yaml:"argv"`
+	ArgvPrefix []string `yaml:"argv_prefix"`
+	ArgvSuffix []string `yaml:"argv_suffix"`
+}
+
 type DockerPackConfig struct {
 	DeploymentDirs DockerDeploymentDirs  `yaml:"deployment_dirs"`
 	Service        DockerServiceConfig   `yaml:"service"`
@@ -183,6 +189,21 @@ type DockerCommandConfig struct {
 	ForwardArgs  bool             `yaml:"forward_args"`
 	ForwardFlags []string         `yaml:"forward_flags"`
 	Container    AppCommandConfig `yaml:"container"`
+}
+
+type rawDockerCommandConfig struct {
+	Trigger      []string            `yaml:"trigger"`
+	AppCommand   *bool               `yaml:"app_command"`
+	Deployed     *bool               `yaml:"deployed_command"`
+	ForwardArgs  bool                `yaml:"forward_args"`
+	ForwardFlags []string            `yaml:"forward_flags"`
+	Container    rawAppCommandConfig `yaml:"container"`
+}
+
+type rawDockerCommandDefaultsConfig struct {
+	AppCommand *bool               `yaml:"app_command"`
+	Deployed   *bool               `yaml:"deployed_command"`
+	Container  rawAppCommandConfig `yaml:"container"`
 }
 
 type DockerDeploymentDirs struct {
@@ -483,7 +504,7 @@ func ParsePackManifest(content string) (PackManifest, error) {
 			Runtime:        raw.Docker.Runtime,
 			DefaultCommand: raw.Docker.DefaultCommand,
 			Health:         raw.Docker.Health,
-			Commands:       parseDockerCommands(raw.Docker.Commands),
+			Commands:       parseDockerCommands(raw.Docker.Commands, raw.Docker.CommandDefaults, raw.Docker.DefaultCommand),
 		},
 	}
 	if manifest.Pack.Schema == 0 {
@@ -987,15 +1008,16 @@ type rawPackManifest struct {
 }
 
 type rawDockerPackConfig struct {
-	DeploymentDirs DockerDeploymentDirs           `yaml:"deployment_dirs"`
-	Service        rawDockerServiceConfig         `yaml:"service"`
-	Ports          map[string]any                 `yaml:"ports"`
-	Install        DockerInstallConfig            `yaml:"install"`
-	Environment    map[string]string              `yaml:"environment"`
-	Runtime        DockerRuntimeConfig            `yaml:"runtime"`
-	DefaultCommand string                         `yaml:"default_command"`
-	Health         DockerHealthConfig             `yaml:"health"`
-	Commands       map[string]DockerCommandConfig `yaml:"commands"`
+	DeploymentDirs  DockerDeploymentDirs              `yaml:"deployment_dirs"`
+	Service         rawDockerServiceConfig            `yaml:"service"`
+	Ports           map[string]any                    `yaml:"ports"`
+	Install         DockerInstallConfig               `yaml:"install"`
+	Environment     map[string]string                 `yaml:"environment"`
+	Runtime         DockerRuntimeConfig               `yaml:"runtime"`
+	DefaultCommand  string                            `yaml:"default_command"`
+	CommandDefaults rawDockerCommandDefaultsConfig    `yaml:"command_defaults"`
+	Health          DockerHealthConfig                `yaml:"health"`
+	Commands        map[string]rawDockerCommandConfig `yaml:"commands"`
 }
 
 type rawDockerServiceConfig struct {
@@ -1045,7 +1067,7 @@ func (service rawDockerServiceConfig) legacyFields() []string {
 	return fields
 }
 
-func parseDockerCommands(commands map[string]DockerCommandConfig) []DockerCommandConfig {
+func parseDockerCommands(commands map[string]rawDockerCommandConfig, defaults rawDockerCommandDefaultsConfig, defaultCommand string) []DockerCommandConfig {
 	names := make([]string, 0, len(commands))
 	for name := range commands {
 		names = append(names, name)
@@ -1053,11 +1075,52 @@ func parseDockerCommands(commands map[string]DockerCommandConfig) []DockerComman
 	sort.Strings(names)
 	result := make([]DockerCommandConfig, 0, len(names))
 	for _, name := range names {
-		command := commands[name]
-		command.Name = name
+		command := normalizeDockerCommand(name, commands[name], defaults, defaultCommand)
 		result = append(result, command)
 	}
 	return result
+}
+
+func normalizeDockerCommand(name string, raw rawDockerCommandConfig, defaults rawDockerCommandDefaultsConfig, defaultCommand string) DockerCommandConfig {
+	command := DockerCommandConfig{
+		Name:         name,
+		Trigger:      raw.Trigger,
+		AppCommand:   boolDefault(raw.AppCommand, defaults.AppCommand),
+		Deployed:     boolDefault(raw.Deployed, defaults.Deployed),
+		ForwardArgs:  raw.ForwardArgs,
+		ForwardFlags: raw.ForwardFlags,
+		Container: AppCommandConfig{
+			Argv: effectiveDockerCommandArgv(raw.Container, defaults.Container),
+		},
+	}
+	if len(command.Trigger) == 0 && name != defaultCommand {
+		command.Trigger = strings.Split(name, "_")
+	}
+	return command
+}
+
+func boolDefault(value *bool, defaultValue *bool) bool {
+	if value != nil {
+		return *value
+	}
+	if defaultValue != nil {
+		return *defaultValue
+	}
+	return false
+}
+
+func effectiveDockerCommandArgv(command rawAppCommandConfig, defaults rawAppCommandConfig) []string {
+	if len(command.Argv) > 0 {
+		return command.Argv
+	}
+	prefix := command.ArgvPrefix
+	if len(prefix) == 0 {
+		prefix = defaults.ArgvPrefix
+	}
+	argv := make([]string, 0, len(prefix)+len(command.ArgvSuffix))
+	argv = append(argv, prefix...)
+	argv = append(argv, command.ArgvSuffix...)
+	return argv
 }
 
 func validateRequiresReploy(requirement string, toolVersion string) error {
