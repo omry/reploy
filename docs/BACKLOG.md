@@ -66,3 +66,10 @@ No active backlog items.
       macOS/Windows Docker-runtime security; make Linux-only system install
       guarantees clear; and keep launchd system install as a future design
       topic. Planning details live in `docs/MACOS_PORT.md`.
+
+- [ ] `P2` Add a Homebrew release path for macOS.
+      Make Reploy installable through Homebrew once macOS artifacts are ready.
+      Acceptance checks: decide whether to use a tap or submit to homebrew-core;
+      define formula ownership and update flow; wire checksums to GitHub Release
+      artifacts; document the install command; and smoke-test install, upgrade,
+      and uninstall on both Apple Silicon and Intel macOS where practical.
