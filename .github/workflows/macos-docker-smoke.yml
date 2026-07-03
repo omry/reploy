@@ -6,10 +6,10 @@ on:
       runner:
         description: GitHub-hosted macOS runner to probe.
         type: choice
-        default: macos-15
+        default: macos-15-intel
         options:
-          - macos-15
           - macos-15-intel
+          - macos-15
 
 permissions:
   contents: read
