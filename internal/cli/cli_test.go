@@ -1923,6 +1923,32 @@ func TestDockerStageUpdateAcceptsPackRef(t *testing.T) {
 	}
 }
 
+func TestDockerStageUpdateReportsFriendlyDeploymentDirError(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	invalidPackDir := makeCLITestPackWithManifest(t, strings.Replace(cliTestPackManifest(), "    config: conf\n", "    config: .\n", 1))
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("stage", "--update", "--dir", deployDir, "file:"+invalidPackDir)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	for _, want := range []string{
+		"reploy stage --update error: parse blueprint manifest: docker.deployment_dirs.config:",
+		`must name a subdirectory under the deployment root, not "."; use a value like "conf"`,
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr)
+		}
+	}
+}
+
 func TestDockerStageUpdateForceOverwritesLocalGeneratedEdits(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")

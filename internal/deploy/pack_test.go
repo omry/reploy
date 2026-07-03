@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -981,6 +982,38 @@ docker:
 	}
 	if !strings.Contains(err.Error(), "docker.deployment_dirs.config") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), `must stay inside the deployment root, got "../conf"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParsePackManifestRejectsDeploymentRootDir(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		oldLine string
+		newLine string
+		field   string
+		example string
+	}{
+		{name: "config", oldLine: "    config: conf\n", newLine: "    config: .\n", field: "docker.deployment_dirs.config", example: "conf"},
+		{name: "bundle", oldLine: "    bundle: bundle\n", newLine: "    bundle: .\n", field: "docker.deployment_dirs.bundle", example: ".reploy/bundle"},
+		{name: "data", oldLine: "    data: data\n", newLine: "    data: .\n", field: "docker.deployment_dirs.data", example: "data"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manifest := strings.Replace(packTestManifest(), tc.oldLine, tc.newLine, 1)
+			_, err := ParsePackManifest(manifest)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tc.field) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			want := fmt.Sprintf(`must name a subdirectory under the deployment root, not "."; use a value like %q`, tc.example)
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 

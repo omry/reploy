@@ -517,17 +517,21 @@ func ParsePackManifest(content string) (PackManifest, error) {
 	if err := normalizeAndValidateInstallConfig(&manifest); err != nil {
 		return PackManifest{}, err
 	}
-	required := map[string]string{
-		"docker.deployment_dirs.config": manifest.Docker.DeploymentDirs.Config,
-		"docker.deployment_dirs.bundle": manifest.Docker.DeploymentDirs.Bundle,
-		"docker.deployment_dirs.data":   manifest.Docker.DeploymentDirs.Data,
+	required := []struct {
+		key     string
+		value   string
+		example string
+	}{
+		{key: "docker.deployment_dirs.config", value: manifest.Docker.DeploymentDirs.Config, example: "conf"},
+		{key: "docker.deployment_dirs.bundle", value: manifest.Docker.DeploymentDirs.Bundle, example: ".reploy/bundle"},
+		{key: "docker.deployment_dirs.data", value: manifest.Docker.DeploymentDirs.Data, example: "data"},
 	}
-	for key, value := range required {
-		if value == "" {
-			return PackManifest{}, fmt.Errorf("missing %s", key)
+	for _, field := range required {
+		if field.value == "" {
+			return PackManifest{}, fmt.Errorf("missing %s", field.key)
 		}
-		if err := validateRelativeBlueprintPath(value); err != nil {
-			return PackManifest{}, fmt.Errorf("%s: %w", key, err)
+		if err := validateDeploymentDir(field.value, field.example); err != nil {
+			return PackManifest{}, fmt.Errorf("%s: %w", field.key, err)
 		}
 	}
 	for name, value := range manifest.App.Provider.LocalSources {
@@ -1294,4 +1298,18 @@ func validateRelativeBlueprintPath(relativePath string) error {
 		return fmt.Errorf("path escapes blueprint or deployment root: %s", relativePath)
 	}
 	return nil
+}
+
+func validateDeploymentDir(relativePath string, example string) error {
+	if filepath.IsAbs(relativePath) {
+		return fmt.Errorf("must be a relative path under the deployment root, got %q", relativePath)
+	}
+	clean := filepath.Clean(relativePath)
+	if clean == "." {
+		return fmt.Errorf("must name a subdirectory under the deployment root, not %q; use a value like %q", relativePath, example)
+	}
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("must stay inside the deployment root, got %q", relativePath)
+	}
+	return validateRelativeBlueprintPath(relativePath)
 }
