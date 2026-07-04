@@ -32,7 +32,8 @@ PY_COMPILE_FILES = (
 
 
 def _go_test(session: nox.Session) -> None:
-    env = {"GOCACHE": os.environ.get("GOCACHE", "/tmp/reploy-go-cache")}
+    default_go_cache = Path(tempfile.gettempdir()) / "reploy-go-cache"
+    env = {"GOCACHE": os.environ.get("GOCACHE", str(default_go_cache))}
     session.run("go", "test", "./...", env=env, external=True)
 
 

@@ -27,6 +27,38 @@ This file is the day-to-day queue for design and implementation gaps.
 
 No active backlog items.
 
+## Pre-release
+
+- [ ] `P1` Make bundle-build pip bootstrap progress bounded and useful.
+      `reploy bundle build` can sit at `upgrading pip` while preparing the
+      build container, with no clear progress and no quick failure if the pip
+      bootstrap is blocked by network or index behavior. Acceptance checks:
+      decide whether upgrading pip belongs in every bundle build or should be
+      cached/pinned; show useful quiet-mode progress for pip bootstrap and
+      wheelhouse build without dumping raw Docker output; add a bounded timeout
+      or similarly actionable failure path; keep verbose timing breakdowns for
+      bootstrap versus wheelhouse work; and verify the behavior on a clean
+      Docker image with uncached Python dependencies.
+
+- [ ] `P2` Remove old verbose Docker command argv compatibility.
+      Reploy currently supports both full `container.argv` commands and the
+      newer `command_defaults.container.argv_prefix` plus per-command
+      `container.argv_suffix` form. Before release, choose the compact command
+      schema as the only supported authoring style or define the narrow
+      exception for full command overrides. Acceptance checks: update parser
+      validation and errors; update blueprint docs and examples; migrate local
+      fixtures and known app blueprints; and keep tests that prove the chosen
+      schema produces the same generated runtime commands.
+
+- [ ] `P2` Audit the macOS port-plan appendix.
+      The macOS port is already implemented, so post-implementation corrections
+      should not rewrite the historical design plan as if it were still being
+      designed. Acceptance checks: keep the original macOS port plan body as
+      historical design context; put settled terminology and status corrections
+      in a clearly labeled appendix; make current user-facing docs use
+      "Docker-managed permanent install" and "OS service install" consistently;
+      and avoid duplicating the same correction across multiple doc surfaces.
+
 ## Post-v1
 
 - [ ] `P2` Document blueprint structure and feature semantics.
