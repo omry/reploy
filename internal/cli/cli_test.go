@@ -137,6 +137,8 @@ func TestVersion(t *testing.T) {
 }
 
 func TestNoArgsShowsVersionAndNextSteps(t *testing.T) {
+	t.Chdir(t.TempDir())
+
 	code, stdout, stderr := runCLI()
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
@@ -156,6 +158,132 @@ func TestNoArgsShowsVersionAndNextSteps(t *testing.T) {
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestUsageErrorsDoNotShowGlobalOnboarding(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	tests := []struct {
+		name        string
+		args        []string
+		wantError   string
+		wantUsage   string
+		forbidExtra []string
+	}{
+		{
+			name:      "unknown top-level short option",
+			args:      []string{"-fd"},
+			wantError: "reploy usage error: unknown option: -fd",
+			wantUsage: "Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND",
+			forbidExtra: []string{
+				"Next steps:",
+			},
+		},
+		{
+			name:      "unknown top-level long option",
+			args:      []string{"--wat"},
+			wantError: "reploy usage error: unknown option: --wat",
+			wantUsage: "Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND",
+			forbidExtra: []string{
+				"Next steps:",
+			},
+		},
+		{
+			name:      "global target without command",
+			args:      []string{"--docker"},
+			wantError: "reploy usage error: expected command",
+			wantUsage: "Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND",
+			forbidExtra: []string{
+				"Next steps:",
+			},
+		},
+		{
+			name:      "global timeout without command",
+			args:      []string{"--docker-timeout", "5s"},
+			wantError: "reploy usage error: expected command",
+			wantUsage: "Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND",
+			forbidExtra: []string{
+				"Next steps:",
+			},
+		},
+		{
+			name:      "global timeout missing value",
+			args:      []string{"--docker-timeout"},
+			wantError: "reploy usage error: --docker-timeout requires a value",
+			wantUsage: "Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND",
+			forbidExtra: []string{
+				"Next steps:",
+			},
+		},
+		{
+			name:      "unknown top-level command",
+			args:      []string{"wat"},
+			wantError: "reploy usage error: unknown command: wat",
+			wantUsage: "Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND",
+			forbidExtra: []string{
+				"Next steps:",
+			},
+		},
+		{
+			name:      "index command slot option",
+			args:      []string{"index", "-fd"},
+			wantError: "reploy index usage error: unknown option: -fd",
+			wantUsage: "Usage: reploy index COMMAND",
+		},
+		{
+			name:      "bundle command slot option",
+			args:      []string{"bundle", "-fd"},
+			wantError: "reploy usage error: unknown option: -fd",
+			wantUsage: "Usage: reploy [--docker-timeout DURATION] bundle COMMAND",
+		},
+		{
+			name:      "bundle action short option",
+			args:      []string{"bundle", "build", "-fd"},
+			wantError: "reploy usage error: unknown option: -fd",
+			wantUsage: "Usage: reploy [--docker-timeout DURATION] bundle COMMAND",
+		},
+		{
+			name:      "app command slot option",
+			args:      []string{"app", "-fd"},
+			wantError: "reploy usage error: unknown option: -fd",
+			wantUsage: "Usage: reploy [--docker-timeout DURATION] app COMMAND",
+		},
+		{
+			name:      "app option after explicit dir before command",
+			args:      []string{"app", "--dir", "deployment", "-fd"},
+			wantError: "reploy usage error: unknown option: -fd",
+			wantUsage: "Usage: reploy [--docker-timeout DURATION] app COMMAND",
+		},
+	}
+
+	globalOnboarding := []string{
+		"reploy " + reploy.Version,
+		"Usage: reploy COMMAND",
+		"reploy stage APP_REF",
+		"reploy install APP_REF",
+		"Run 'reploy --help' for all commands.",
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			code, stdout, stderr := runCLI(tc.args...)
+			if code != 2 {
+				t.Fatalf("exit code = %d, want 2\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+			}
+			if stdout != "" {
+				t.Fatalf("stdout = %q, want empty", stdout)
+			}
+			for _, want := range []string{tc.wantError, tc.wantUsage} {
+				if !strings.Contains(stderr, want) {
+					t.Fatalf("stderr missing %q:\n%s", want, stderr)
+				}
+			}
+			for _, unexpected := range append(globalOnboarding, tc.forbidExtra...) {
+				if strings.Contains(stderr, unexpected) {
+					t.Fatalf("stderr contained onboarding text %q:\n%s", unexpected, stderr)
+				}
+			}
+		})
 	}
 }
 
@@ -393,6 +521,29 @@ func TestParseDockerAppOptionsPreservesAppArgs(t *testing.T) {
 	if got := strings.Join(options.CommandArgs, " "); got != "bootstrap plugin imap account primary --force" {
 		t.Fatalf("command args = %q", got)
 	}
+
+	options, err = parseDockerAppOptions([]string{"--dir", "deployment", "config", "check"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Dir != "deployment" {
+		t.Fatalf("dir = %q", options.Dir)
+	}
+	if got := strings.Join(options.CommandArgs, " "); got != "config check" {
+		t.Fatalf("command args = %q", got)
+	}
+}
+
+func expectedDemoAppSummary() string {
+	return "[STAGING : demo] app: demo\n" +
+		"[STAGING : demo] app subcommands:\n" +
+		"[STAGING : demo]   bootstrap server\n" +
+		"[STAGING : demo]   bootstrap plugin\n" +
+		"[STAGING : demo]   config activate\n" +
+		"[STAGING : demo]   config check\n" +
+		"[STAGING : demo]   config show\n" +
+		"[STAGING : demo]   env bootstrap\n" +
+		"[STAGING : demo]   env check\n"
 }
 
 func TestAppShowsAppIDAndPackSubcommands(t *testing.T) {
@@ -408,7 +559,7 @@ func TestAppShowsAppIDAndPackSubcommands(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("app failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	expected := "[STAGING : demo] app: demo\n[STAGING : demo] app subcommands:\n[STAGING : demo]   bootstrap server\n[STAGING : demo]   bootstrap plugin\n[STAGING : demo]   config activate\n[STAGING : demo]   config check\n[STAGING : demo]   config show\n[STAGING : demo]   env bootstrap\n[STAGING : demo]   env check\n"
+	expected := expectedDemoAppSummary()
 	if stdout != expected {
 		t.Fatalf("stdout = %q, want %q", stdout, expected)
 	}
@@ -431,7 +582,53 @@ func TestAppUsesCurrentDeploymentDirByDefault(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("app failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	expected := "[STAGING : demo] app: demo\n[STAGING : demo] app subcommands:\n[STAGING : demo]   bootstrap server\n[STAGING : demo]   bootstrap plugin\n[STAGING : demo]   config activate\n[STAGING : demo]   config check\n[STAGING : demo]   config show\n[STAGING : demo]   env bootstrap\n[STAGING : demo]   env check\n"
+	expected := expectedDemoAppSummary()
+	if stdout != expected {
+		t.Fatalf("stdout = %q, want %q", stdout, expected)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestNoArgsUsesDefaultStagingDirByDefault(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	workDir := t.TempDir()
+	t.Chdir(workDir)
+
+	code, stdout, stderr := runCLI("stage", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI()
+	if code != 0 {
+		t.Fatalf("no-args failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	expected := expectedDemoAppSummary()
+	if stdout != expected {
+		t.Fatalf("stdout = %q, want %q", stdout, expected)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestNoArgsUsesCurrentDeploymentDirByDefault(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	t.Chdir(deployDir)
+
+	code, stdout, stderr = runCLI()
+	if code != 0 {
+		t.Fatalf("no-args failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	expected := expectedDemoAppSummary()
 	if stdout != expected {
 		t.Fatalf("stdout = %q, want %q", stdout, expected)
 	}

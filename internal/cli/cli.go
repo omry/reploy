@@ -30,23 +30,17 @@ var dockerRuntime = dockerdeploy.Runtime
 var dockerTestServer = dockerdeploy.TestServer
 
 func Main(args []string, stdout io.Writer, stderr io.Writer) int {
-	if len(args) == 0 {
-		printShortUsage(stdout)
-		return 0
-	}
-
-	target := "docker"
+	bare := len(args) == 0
 	globalOptions, remainingArgs, err := parseGlobalDeploymentOptions(args)
 	if err != nil {
-		fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
-		printShortUsage(stderr)
-		return 2
+		return printTopLevelUsageError(stderr, "%v", err)
 	}
 	args = remainingArgs
-	target = globalOptions.Target
 	if len(args) == 0 {
-		printShortUsage(stderr)
-		return 2
+		if !bare {
+			return printTopLevelUsageError(stderr, "expected command")
+		}
+		return runNoCommand(globalOptions.Target, stdout, stderr)
 	}
 	switch args[0] {
 	case "-h", "--help", "help":
@@ -58,13 +52,28 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 	case "index":
 		return runPackIndex(args[0], args[1:], stdout, stderr)
 	default:
-		if target == "docker" && isDeploymentCommand(args[0]) {
+		if globalOptions.Target == "docker" && isDeploymentCommand(args[0]) {
 			return runDocker(args, stdout, stderr, globalOptions)
 		}
-		fmt.Fprintf(stderr, "reploy usage error: unknown command: %s\n", args[0])
-		printShortUsage(stderr)
-		return 2
+		if strings.HasPrefix(args[0], "-") {
+			return printTopLevelUsageError(stderr, "unknown option: %s", args[0])
+		}
+		return printTopLevelUsageError(stderr, "unknown command: %s", args[0])
 	}
+}
+
+func printTopLevelUsageError(stderr io.Writer, format string, values ...any) int {
+	fmt.Fprintf(stderr, "reploy usage error: "+format+"\n", values...)
+	printDockerShortUsage(stderr)
+	return 2
+}
+
+func runNoCommand(target string, stdout io.Writer, stderr io.Writer) int {
+	if target == "docker" && implicitDeploymentStateExists(dockerdeploy.DefaultDeploymentDir, false) {
+		return runDockerAppSummary(nil, stdout, stderr)
+	}
+	printShortUsage(stdout)
+	return 0
 }
 
 type globalDeploymentOptions struct {
@@ -197,6 +206,11 @@ func runPackIndex(commandName string, args []string, stdout io.Writer, stderr io
 		fmt.Fprintf(stdout, "name: %s\nref: %s\n", name, entry.Ref)
 		return 0
 	default:
+		if strings.HasPrefix(args[0], "-") {
+			fmt.Fprintf(stderr, "reploy %s usage error: unknown option: %s\n", commandName, args[0])
+			printPackIndexShortUsage(commandName, stderr)
+			return 2
+		}
 		fmt.Fprintf(stderr, "reploy %s usage error: unknown command: %s\n", commandName, args[0])
 		printPackIndexShortUsage(commandName, stderr)
 		return 2
@@ -368,6 +382,11 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer, globalOptions 
 	case "uninstall":
 		return runDockerUninstall(args[1:], stdout, stderr, globalOptions)
 	default:
+		if strings.HasPrefix(args[0], "-") {
+			fmt.Fprintf(stderr, "reploy usage error: unknown option: %s\n", args[0])
+			printDockerShortUsage(stderr)
+			return 2
+		}
 		fmt.Fprintf(stderr, "reploy usage error: unknown command: %s\n", args[0])
 		printDockerShortUsage(stderr)
 		return 2
@@ -379,12 +398,20 @@ func runDockerApp(args []string, stdout io.Writer, stderr io.Writer, globalOptio
 		printAppHelp(stdout)
 		return 0
 	}
-	if len(args) == 0 || args[0] == "--dir" || strings.HasPrefix(args[0], "--dir=") {
-		return runDockerAppSummary(args, stdout, stderr)
-	}
 	options, err := parseDockerAppOptions(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
+		printAppShortUsage(stderr)
+		return 2
+	}
+	if len(options.CommandArgs) == 0 {
+		return runDockerAppSummaryForOptions(dockerAppSummaryOptions{
+			Dir:         options.Dir,
+			DirExplicit: options.DirExplicit,
+		}, stdout, stderr)
+	}
+	if strings.HasPrefix(options.CommandArgs[0], "-") {
+		fmt.Fprintf(stderr, "reploy usage error: unknown option: %s\n", options.CommandArgs[0])
 		printAppShortUsage(stderr)
 		return 2
 	}
@@ -413,6 +440,11 @@ func runDockerAppSummary(args []string, stdout io.Writer, stderr io.Writer) int 
 		printAppShortUsage(stderr)
 		return 2
 	}
+	return runDockerAppSummaryForOptions(options, stdout, stderr)
+}
+
+func runDockerAppSummaryForOptions(options dockerAppSummaryOptions, stdout io.Writer, stderr io.Writer) int {
+	var err error
 	options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy app error: %v\n", err)
@@ -473,9 +505,6 @@ func parseDockerAppOptions(args []string) (dockerAppOptions, error) {
 	if options.Dir == "" {
 		return dockerAppOptions{}, fmt.Errorf("--dir must not be empty")
 	}
-	if len(options.CommandArgs) == 0 {
-		return dockerAppOptions{}, fmt.Errorf("expected app command")
-	}
 	return options, nil
 }
 
@@ -525,6 +554,12 @@ func resolveImplicitDeploymentDir(dir string, explicit bool, _ io.Writer) string
 	return "."
 }
 
+func implicitDeploymentStateExists(dir string, explicit bool) bool {
+	dir = resolveImplicitDeploymentDir(dir, explicit, io.Discard)
+	_, err := os.Stat(filepath.Join(dir, dockerdeploy.StateFileName))
+	return err == nil || !os.IsNotExist(err)
+}
+
 func resolveImplicitStagingDeploymentDir(dir string, explicit bool, output io.Writer) (string, error) {
 	dir = resolveImplicitDeploymentDir(dir, explicit, output)
 	if err := dockerdeploy.RequireStagingDeployment(dir); err != nil {
@@ -543,6 +578,11 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer, globalOp
 	if isHelpArg(action) {
 		printBundleHelp(stdout)
 		return 0
+	}
+	if strings.HasPrefix(action, "-") {
+		fmt.Fprintf(stderr, "reploy usage error: unknown option: %s\n", action)
+		printBundleShortUsage(stderr)
+		return 2
 	}
 	if action == "upgrade" {
 		options, err := parseDockerBundleUpgradeOptions(args[1:])
@@ -823,7 +863,7 @@ func parseDockerBundleUpgradeOptions(args []string) (dockerBundleOptions, error)
 				options.DirExplicit = true
 				continue
 			}
-			if strings.HasPrefix(arg, "--") {
+			if strings.HasPrefix(arg, "-") {
 				return dockerBundleOptions{}, fmt.Errorf("unknown option: %s", arg)
 			}
 			if options.Root != "" {
@@ -924,7 +964,7 @@ func parseDockerBundleOptions(args []string, parseOptions dockerBundleParseOptio
 				options.Extras = append(options.Extras, extras...)
 				continue
 			}
-			if strings.HasPrefix(arg, "--") {
+			if strings.HasPrefix(arg, "-") {
 				return dockerBundleOptions{}, fmt.Errorf("unknown option: %s", arg)
 			}
 			roots := splitBundleRoots(arg)

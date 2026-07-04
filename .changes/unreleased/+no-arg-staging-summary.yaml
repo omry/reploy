@@ -1,0 +1,2 @@
+kind: Fixed
+body: Make bare `reploy` show the current staging app command summary when a staging directory is detected, and make invalid CLI options print terse command usage instead of onboarding help.
