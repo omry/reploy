@@ -33,9 +33,8 @@ DEFAULT_TARGETS = (
     Target("linux", "arm64"),
     Target("darwin", "amd64"),
     Target("darwin", "arm64"),
-    # Formal Windows support is deferred.
-    # Target("windows", "amd64"),
-    # Target("windows", "arm64"),
+    Target("windows", "amd64"),
+    Target("windows", "arm64"),
 )
 
 ACTIVE_TARGET_LABELS = {target.label for target in DEFAULT_TARGETS}

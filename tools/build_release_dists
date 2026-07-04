@@ -14,9 +14,8 @@ REPLOY_TARGETS = (
     "linux-arm64",
     "darwin-amd64",
     "darwin-arm64",
-    # Formal Windows support is deferred.
-    # "windows-amd64",
-    # "windows-arm64",
+    "windows-amd64",
+    "windows-arm64",
 )
 
 

@@ -1,0 +1,2 @@
+kind: Added
+body: Add Windows amd64 and arm64 release artifact targets while keeping native Windows install/runtime support behind the port plan.

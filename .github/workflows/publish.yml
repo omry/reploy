@@ -99,6 +99,8 @@ jobs:
           install -m 0755 dist-publish/linux-arm64/reploy release-assets/reploy-linux-arm64
           install -m 0755 dist-publish/darwin-amd64/reploy release-assets/reploy-darwin-amd64
           install -m 0755 dist-publish/darwin-arm64/reploy release-assets/reploy-darwin-arm64
+          install -m 0755 dist-publish/windows-amd64/reploy.exe release-assets/reploy-windows-amd64.exe
+          install -m 0755 dist-publish/windows-arm64/reploy.exe release-assets/reploy-windows-arm64.exe
           (cd release-assets && sha256sum reploy-* > SHA256SUMS)
           python tools/build_release_notes \
             --version "$VERSION" \
@@ -125,6 +127,8 @@ jobs:
             release-assets/reploy-linux-arm64
             release-assets/reploy-darwin-amd64
             release-assets/reploy-darwin-arm64
+            release-assets/reploy-windows-amd64.exe
+            release-assets/reploy-windows-arm64.exe
             release-assets/SHA256SUMS
             --target "$GITHUB_SHA"
             --title "Reploy $VERSION"

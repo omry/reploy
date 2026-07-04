@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/omry/reploy/internal/deploy"
@@ -679,10 +678,6 @@ func rejectInstallTargetSymlink(path string) error {
 		return fmt.Errorf("refusing to overwrite target symlink: %s", path)
 	}
 	return nil
-}
-
-func openInstallTargetNoFollow(path string, mode os.FileMode) (*os.File, error) {
-	return os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|syscall.O_NOFOLLOW, mode)
 }
 
 func writeInstallFileNoFollow(path string, content []byte, mode os.FileMode) error {
