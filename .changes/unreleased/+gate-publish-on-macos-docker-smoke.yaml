@@ -1,0 +1,2 @@
+kind: Changed
+body: Gate the publish workflow on the explicit macOS Docker smoke test without adding that expensive check to normal CI.
