@@ -2,6 +2,20 @@ name: Integration
 
 on:
   workflow_dispatch:
+    inputs:
+      macos_runner:
+        description: GitHub-hosted macOS runner for Docker integration.
+        type: choice
+        default: macos-15-intel
+        options:
+          - macos-15-intel
+          - macos-15
+  workflow_call:
+    inputs:
+      macos_runner:
+        description: GitHub-hosted macOS runner for Docker integration.
+        type: string
+        default: macos-15-intel
 
 concurrency:
   group: integration-${{ github.ref }}
@@ -12,8 +26,17 @@ permissions:
 
 jobs:
   cli-integration:
-    name: CLI runtime integration
-    runs-on: ubuntu-latest
+    name: CLI runtime integration (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            runner: ubuntu-latest
+          - name: macOS
+            runner: ${{ inputs.macos_runner || 'macos-15-intel' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -35,7 +58,35 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install nox
 
+      - name: Install Docker runtime on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install docker docker-compose colima
+          mkdir -p ~/.docker/cli-plugins
+          ln -sf "$(brew --prefix docker-compose)/bin/docker-compose" ~/.docker/cli-plugins/docker-compose
+          sw_vers
+          uname -a
+          sysctl -n kern.hv_support || true
+          colima version
+          limactl --version
+          colima start --runtime docker --vm-type vz --mount-type virtiofs --cpu 2 --memory 4 --disk 20
+          colima status
+          docker info
+          docker compose version
+          docker run --rm -v "$PWD:/workspace:ro" alpine:3.22 test -f /workspace/go.mod
+
       - name: Run CLI runtime integration
         env:
           NO_UPDATE_NOTIFIER: "1"
         run: nox -s cli-integration
+
+      - name: Dump macOS Docker runtime logs
+        if: failure() && runner.os == 'macOS'
+        run: |
+          find ~/.colima -maxdepth 5 -type f -name "*.log" -print -exec tail -n 200 {} \; || true
+          find ~/.lima -maxdepth 5 -type f -name "*.log" -print -exec tail -n 200 {} \; || true
+
+      - name: Stop macOS Docker runtime
+        if: always() && runner.os == 'macOS'
+        run: colima delete --force || true

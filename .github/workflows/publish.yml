@@ -12,15 +12,15 @@ permissions:
   id-token: write
 
 jobs:
-  macos-docker-smoke:
-    name: macOS Docker smoke gate
-    uses: ./.github/workflows/macos-docker-smoke.yml
+  integration:
+    name: Integration smoke gate
+    uses: ./.github/workflows/integration.yml
     with:
-      runner: macos-15-intel
+      macos_runner: macos-15-intel
 
   publish:
     name: Publish PyPI and GitHub Release
-    needs: macos-docker-smoke
+    needs: integration
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
