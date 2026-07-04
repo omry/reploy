@@ -233,6 +233,54 @@ func TestDoctorPreinstallOnDarwinFailsWhenDockerRuntimeUnavailable(t *testing.T)
 	}
 }
 
+func TestDoctorPreinstallOnWindowsRunsDockerDesktopChecksButKeepsInstallDisabled(t *testing.T) {
+	disableDoctorColor(t)
+	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "windows"})
+	defer restorePlatform()
+	previousDetector := detectDockerRuntimeForDoctor
+	t.Cleanup(func() {
+		detectDockerRuntimeForDoctor = previousDetector
+	})
+	detectDockerRuntimeForDoctor = func(_ context.Context, _ CommandSpec, timeout time.Duration) (dockerRuntimeInfo, error) {
+		if timeout != 3*time.Second {
+			t.Fatalf("docker timeout = %s, want 3s", timeout)
+		}
+		return dockerRuntimeInfo{Runtime: dockerRuntimeDockerDesktop, OperatingSystem: "Docker Desktop", ServerVersion: "29.5.3"}, nil
+	}
+
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout strings.Builder
+	code := Doctor(DoctorOptions{Dir: deployDir, Preinstall: true, Stdout: &stdout, DockerPreflightTimeout: 3 * time.Second})
+	if code != 1 {
+		t.Fatalf("doctor exit = %d\n%s", code, stdout.String())
+	}
+	for _, want := range []string{
+		"warn: " + dockerDesktopSecurityWarning(),
+		"ok: Docker Desktop runtime detected: Docker Desktop",
+		"warn: enable Docker Desktop start-at-login",
+		"fail: Windows persistent install is planned as a Docker-managed permanent install but is not supported by this build",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "ok: preinstall checks passed") {
+		t.Fatalf("windows doctor should not pass while install is disabled:\n%s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "install owner resolves") {
+		t.Fatalf("windows doctor should not require Linux install owner:\n%s", stdout.String())
+	}
+}
+
 func TestDoctorPreinstallFailsForMissingBundleWheel(t *testing.T) {
 	disableDoctorColor(t)
 	packDir := makeTestPack(t)
