@@ -28,12 +28,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--plan-only",
         action="store_true",
-        help="Skip the Docker-backed bundle build/check and only exercise CLI planning.",
+        help=(
+            "Skip the Docker-backed bundle build/check/list-all while still "
+            "running preinstall and install dry-run checks."
+        ),
     )
     parser.add_argument(
-        "--cli-only",
+        "--no-docker",
         action="store_true",
-        help="Exercise staging and bundle planning without preinstall or install checks.",
+        help="Exercise staging and bundle planning without executing Docker, preinstall, or install checks.",
+    )
+    parser.add_argument(
+        "--runtime",
+        action="store_true",
+        help="Include the live staging runtime lifecycle: up/status/logs/test/down.",
     )
     parser.add_argument(
         "--docker-mode",
@@ -41,7 +49,16 @@ def parse_args() -> argparse.Namespace:
         default="required",
         help="Control Docker-backed smoke phases. Defaults to required.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.no_docker:
+        if args.docker_mode != "required":
+            parser.error("--no-docker cannot be combined with --docker-mode")
+        args.docker_mode = "skip"
+    if args.runtime and args.plan_only:
+        parser.error("--runtime cannot be combined with --plan-only")
+    if args.runtime and args.docker_mode != "required":
+        parser.error("--runtime requires Docker and cannot be combined with --no-docker or optional Docker mode")
+    return args
 
 
 def run(argv: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -67,6 +84,64 @@ def run(argv: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.Comple
 def require_contains(output: str, needle: str, context: str) -> None:
     if needle not in output:
         raise SystemExit(f"{context} did not contain {needle!r}\n--- output ---\n{output}")
+
+
+ALWAYS_NOT_COVERED_CHECKS = (
+    "real persistent install/start/uninstall (install is dry-run only)",
+)
+
+
+def mode_skipped_checks(*, plan_only: bool, docker_enabled: bool, runtime: bool) -> list[str]:
+    if not docker_enabled:
+        return [
+            "Docker-backed bundle build/check/list-all (covered by bundle build --dry-run)",
+            "live staging runtime lifecycle: up/status/logs/test/down",
+            "live app command execution",
+            "preinstall doctor checks",
+            "install dry-run checks",
+            "bundle clean verification",
+            "installed service listing",
+        ]
+    skipped: list[str] = []
+    if plan_only:
+        skipped.extend(
+            [
+                "Docker-backed bundle build/check/list-all (covered by bundle build --dry-run)",
+                "bundle clean verification",
+            ]
+        )
+    if not runtime:
+        skipped.extend(
+            [
+                "live staging runtime lifecycle: up/status/logs/test/down",
+                "live app command execution",
+            ]
+        )
+    return skipped
+
+
+def print_smoke_mode(*, plan_only: bool, docker_enabled: bool, runtime: bool, docker_skip_reason: str) -> None:
+    if not docker_enabled:
+        mode = "no-docker"
+    elif plan_only:
+        mode = "plan-only"
+    elif runtime:
+        mode = "runtime"
+    else:
+        mode = "bundle"
+    print(f"smoke mode: {mode}", flush=True)
+    if docker_skip_reason:
+        print(f"Docker-backed smoke phases skipped: {docker_skip_reason}", flush=True)
+    skipped = mode_skipped_checks(plan_only=plan_only, docker_enabled=docker_enabled, runtime=runtime)
+    if not skipped:
+        print("mode-skipped smoke checks: none", flush=True)
+    else:
+        print("mode-skipped smoke checks:", flush=True)
+        for check in skipped:
+            print(f"  - {check}", flush=True)
+    print("not covered by cli-smoke:", flush=True)
+    for check in ALWAYS_NOT_COVERED_CHECKS:
+        print(f"  - {check}", flush=True)
 
 
 def docker_available(env: dict[str, str], cwd: Path) -> tuple[bool, str]:
@@ -131,18 +206,20 @@ def run_runtime_smoke(reploy: Path, deploy_dir: Path, workdir: Path, env: dict[s
         },
     )
 
-    app_check = run(
-        [str(reploy), "app", "config", "check", "--live", "--dir", str(deploy_dir)],
-        cwd=workdir,
-        env=env,
-    )
-    require_contains(app_check.stdout, '"check": "pass"', "live config check")
-
+    primary_error: BaseException | None = None
     started = False
     try:
-        run([str(reploy), "up", "--verbose", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+        app_check = run(
+            [str(reploy), "app", "config", "check", "--dir", str(deploy_dir)],
+            cwd=workdir,
+            env=env,
+        )
+        require_contains(app_check.stdout, '"check": "pass"', "config check")
+
+        run([str(reploy), "up", "--dir", str(deploy_dir)], cwd=workdir, env=env)
         started = True
 
+        run([str(reploy), "status", "--dir", str(deploy_dir)], cwd=workdir, env=env)
         health = run(
             [str(reploy), "test", "--timeout", "30s", "--dir", str(deploy_dir)],
             cwd=workdir,
@@ -156,9 +233,24 @@ def run_runtime_smoke(reploy: Path, deploy_dir: Path, workdir: Path, env: dict[s
             env=env,
         )
         require_contains(logs.stdout, "smoke-suite serving HTTPS", "runtime logs")
+
+        live_check = run(
+            [str(reploy), "app", "config", "check", "--live", "--dir", str(deploy_dir)],
+            cwd=workdir,
+            env=env,
+        )
+        require_contains(live_check.stdout, '"check": "pass"', "live config check")
+    except BaseException as error:
+        primary_error = error
+        raise
     finally:
         if started:
-            run([str(reploy), "down", "--verbose", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+            try:
+                run([str(reploy), "down", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+            except BaseException as cleanup_error:
+                if primary_error is None:
+                    raise
+                print(f"warning: runtime cleanup failed after earlier error: {cleanup_error}", file=sys.stderr)
 
 
 def run_smoke(
@@ -166,7 +258,7 @@ def run_smoke(
     workdir: Path,
     *,
     plan_only: bool,
-    cli_only: bool,
+    runtime: bool,
     docker_mode: str,
 ) -> None:
     repo_root = Path(__file__).resolve().parents[1]
@@ -178,16 +270,24 @@ def run_smoke(
 
     env = os.environ.copy()
     env["NO_COLOR"] = "1"
-    if docker_mode == "skip":
-        cli_only = True
-    if not plan_only and not cli_only:
+    env["TERM"] = "dumb"
+
+    docker_enabled = docker_mode != "skip"
+    docker_skip_reason = ""
+    if docker_enabled and not plan_only:
         available, reason = docker_available(env, workdir)
         if not available:
             if docker_mode == "optional":
-                print(f"skipping Docker-backed smoke phases: {reason}", file=sys.stderr)
-                cli_only = True
+                docker_enabled = False
+                docker_skip_reason = reason
             else:
                 raise SystemExit(f"Docker is required for this smoke test: {reason}")
+    print_smoke_mode(
+        plan_only=plan_only,
+        docker_enabled=docker_enabled,
+        runtime=runtime,
+        docker_skip_reason=docker_skip_reason,
+    )
 
     init = run(
         [str(reploy), "stage", "file:" + str(pack_dir), "--dir", str(deploy_dir)],
@@ -229,7 +329,7 @@ def run_smoke(
     require_contains(bundle_list.stdout, "smoke-suite", "bundle list")
     require_contains(bundle_list.stdout, "smoke-imap", "bundle list")
 
-    if plan_only or cli_only:
+    if plan_only or not docker_enabled:
         bundle_build = run(
             [str(reploy), "bundle", "build", "--dry-run", "--dir", str(deploy_dir)],
             cwd=workdir,
@@ -257,9 +357,10 @@ def run_smoke(
         )
         require_contains(bundle_all.stdout, "root\tsmoke-suite==0.1.0", "bundle list all")
         require_contains(bundle_all.stdout, "root\tsmoke-imap==0.1.0", "bundle list all")
-        run_runtime_smoke(reploy, deploy_dir, workdir, env)
+        if runtime:
+            run_runtime_smoke(reploy, deploy_dir, workdir, env)
 
-    if cli_only:
+    if not docker_enabled:
         return
 
     doctor = run([str(reploy), "doctor", "--preinstall", "--dir", str(deploy_dir)], cwd=workdir, env=env)
@@ -320,7 +421,7 @@ def main() -> int:
             reploy,
             workdir,
             plan_only=args.plan_only,
-            cli_only=args.cli_only,
+            runtime=args.runtime,
             docker_mode=args.docker_mode,
         )
     else:
@@ -330,7 +431,7 @@ def main() -> int:
                 reploy,
                 workdir,
                 plan_only=args.plan_only,
-                cli_only=args.cli_only,
+                runtime=args.runtime,
                 docker_mode=args.docker_mode,
             )
         finally:

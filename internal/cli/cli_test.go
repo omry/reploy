@@ -2512,6 +2512,8 @@ func TestDockerBundleCleanVerboseReportsRemovedWheels(t *testing.T) {
 }
 
 func TestStartSpinnerPrintsCompletion(t *testing.T) {
+	t.Setenv("CI", "")
+	t.Setenv("TERM", "xterm-256color")
 	var stderr bytes.Buffer
 	stop := startSpinner(&stderr, "building installation bundle")
 	stop(true)
@@ -2520,6 +2522,28 @@ func TestStartSpinnerPrintsCompletion(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "building installation bundle... done") {
 		t.Fatalf("spinner did not print completion:\n%q", stderr.String())
+	}
+}
+
+func TestStartSpinnerUsesPlainProgressInCI(t *testing.T) {
+	t.Setenv("CI", "true")
+	t.Setenv("TERM", "xterm-256color")
+	var stderr bytes.Buffer
+	stop := startSpinner(&stderr, "building installation bundle")
+	stop(true)
+	if got, want := stderr.String(), "building installation bundle...\nbuilding installation bundle... done\n"; got != want {
+		t.Fatalf("stderr = %q, want %q", got, want)
+	}
+}
+
+func TestStartSpinnerUsesPlainProgressForDumbTerminal(t *testing.T) {
+	t.Setenv("CI", "")
+	t.Setenv("TERM", "dumb")
+	var stderr bytes.Buffer
+	stop := startSpinner(&stderr, "building installation bundle")
+	stop(false)
+	if got, want := stderr.String(), "building installation bundle...\nbuilding installation bundle... failed\n"; got != want {
+		t.Fatalf("stderr = %q, want %q", got, want)
 	}
 }
 

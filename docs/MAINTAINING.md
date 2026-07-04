@@ -8,7 +8,7 @@ tests. Match CI as closely as practical:
 - Go 1.25.x
 - Python 3.12
 - Node 22
-- Docker, for the full CLI smoke path
+- Docker, for the full CLI integration path
 
 Create the local Python environment from the repository root:
 
@@ -36,22 +36,41 @@ Useful targeted sessions:
 ```bash
 nox -s go-test
 nox -s cli-smoke
+nox -s cli-integration
 nox -s release-build-smoke
 nox -s docs-build
 ```
 
-For a faster CLI smoke loop that skips the Docker-backed bundle build, pass the
-smoke helper's plan-only flag through nox:
+For the full local CLI integration test, including Docker-backed bundle checks
+and the live staging runtime lifecycle (`up`, `status`, `logs`, `test`, and
+`down`), run:
+
+```bash
+nox -s cli-integration
+```
+
+This integration test is intentionally outside the default CI session. It runs
+before publishing and can be triggered manually from the Integration workflow.
+
+For a faster CLI smoke loop that skips the Docker-backed bundle build/check
+but still runs preinstall and install dry-run checks, pass the smoke helper's
+plan-only flag through nox:
 
 ```bash
 nox -s cli-smoke -- --plan-only
 ```
 
-For host CLI checks that must avoid Docker and preinstall semantics entirely,
-such as macOS CI without Docker Desktop, use:
+For host CLI checks that may use Docker when it is available but should keep
+going without it, use:
 
 ```bash
-nox -s cli-smoke -- --cli-only
+nox -s cli-smoke -- --docker-mode optional
+```
+
+For host CLI checks that must avoid executing Docker entirely, use:
+
+```bash
+nox -s cli-smoke -- --no-docker
 ```
 
 ## Changelog Fragments

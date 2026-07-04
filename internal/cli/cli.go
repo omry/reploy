@@ -2059,6 +2059,16 @@ func startSpinner(output io.Writer, label string) func(bool) {
 	if output == nil {
 		return func(bool) {}
 	}
+	if !terminalAnimationsEnabled() {
+		fmt.Fprintf(output, "%s...\n", label)
+		return func(ok bool) {
+			suffix := "... failed"
+			if ok {
+				suffix = "... done"
+			}
+			fmt.Fprintf(output, "%s%s\n", label, suffix)
+		}
+	}
 	done := make(chan bool, 1)
 	finished := make(chan struct{})
 	go func() {
@@ -2086,6 +2096,26 @@ func startSpinner(output io.Writer, label string) func(bool) {
 	return func(ok bool) {
 		done <- ok
 		<-finished
+	}
+}
+
+func terminalAnimationsEnabled() bool {
+	if envBool("CI") {
+		return false
+	}
+	return strings.TrimSpace(os.Getenv("TERM")) != "dumb"
+}
+
+func envBool(name string) bool {
+	value, ok := os.LookupEnv(name)
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "0", "false", "no", "off":
+		return false
+	default:
+		return true
 	}
 }
 

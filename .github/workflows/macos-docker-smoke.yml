@@ -63,10 +63,10 @@ jobs:
           docker compose version
           docker run --rm -v "$PWD:/workspace:ro" alpine:3.22 test -f /workspace/go.mod
 
-      - name: Run Docker-backed smoke
+      - name: Run Docker-backed integration smoke
         env:
           NO_UPDATE_NOTIFIER: "1"
-        run: nox -s cli-smoke
+        run: nox -s cli-integration
 
       - name: Dump Docker runtime logs
         if: failure()

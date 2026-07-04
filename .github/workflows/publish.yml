@@ -78,8 +78,8 @@ jobs:
       - name: Build release distributions
         run: tools/build_release_dists --outdir dist-publish --clean --no-isolation
 
-      - name: Run CLI smoke
-        run: python tools/e2e_smoke --reploy dist-publish/linux-amd64/reploy
+      - name: Run CLI integration smoke
+        run: python tools/e2e_smoke --runtime --reploy dist-publish/linux-amd64/reploy
 
       - name: Stage PyPI distributions
         run: |

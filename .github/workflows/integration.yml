@@ -1,0 +1,41 @@
+name: Integration
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  cli-integration:
+    name: CLI runtime integration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install maintainer tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install nox
+
+      - name: Run CLI runtime integration
+        env:
+          NO_UPDATE_NOTIFIER: "1"
+        run: nox -s cli-integration

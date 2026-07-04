@@ -4,6 +4,7 @@ import os
 import platform
 from pathlib import Path
 import sys
+import tempfile
 
 import nox
 
@@ -59,25 +60,29 @@ def _current_target_label() -> str:
     return f"{goos}-{goarch}"
 
 
-def _host_reploy_binary() -> Path:
+def _host_reploy_binary(bin_dir: Path) -> Path:
     binary_name = "reploy.exe" if sys.platform.startswith(("win32", "cygwin", "msys")) else "reploy"
-    return DIST_CI / "bin" / _current_target_label() / binary_name
+    return bin_dir / _current_target_label() / binary_name
 
 
 def _cli_smoke(session: nox.Session, *extra_args: str) -> None:
-    session.run(
-        "python",
-        "tools/build_reploy",
-        "--outdir",
-        str(DIST_CI / "bin"),
-    )
-    session.run(
-        "python",
-        "tools/e2e_smoke",
-        "--reploy",
-        str(_host_reploy_binary()),
-        *extra_args,
-    )
+    with tempfile.TemporaryDirectory(prefix="reploy-cli-smoke-build-") as temp_dir:
+        bin_dir = Path(temp_dir) / "bin"
+        session.run(
+            sys.executable,
+            "tools/build_reploy",
+            "--outdir",
+            str(bin_dir),
+            external=True,
+        )
+        session.run(
+            sys.executable,
+            "tools/e2e_smoke",
+            "--reploy",
+            str(_host_reploy_binary(bin_dir)),
+            *extra_args,
+            external=True,
+        )
 
 
 def _install_release_build_dependencies(session: nox.Session) -> None:
@@ -110,9 +115,14 @@ def go_test(session: nox.Session) -> None:
     _go_test(session)
 
 
-@nox.session(name="cli-smoke", python="3.12")
+@nox.session(name="cli-smoke", python=False)
 def cli_smoke(session: nox.Session) -> None:
     _cli_smoke(session, *session.posargs)
+
+
+@nox.session(name="cli-integration", python=False)
+def cli_integration(session: nox.Session) -> None:
+    _cli_smoke(session, "--runtime", *session.posargs)
 
 
 @nox.session(name="release-build-smoke", python="3.12")
