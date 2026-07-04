@@ -1,6 +1,6 @@
 ---
 status: Draft
-updated: 2026-07-04
+updated: 2026-07-05
 summary: Draft Windows support plan for staging and Docker-managed permanent installs.
 ---
 
@@ -149,24 +149,53 @@ The support contract should therefore say:
 
 ## Support Matrix
 
-The detailed design should publish a command-level support matrix.
+This matrix is the first native Windows support contract to implement. It is
+not a claim about the current build. Current code still treats Windows
+persistent install as unsupported until this plan is implemented.
 
-Expected first milestone:
+Native Windows means:
 
-| Command group | Windows support | Notes |
-| --- | --- | --- |
-| `stage`, `stage --update` | supported | CLI-only except provider fetch/build behavior. |
-| `info` | supported | Should inspect staging state normally. |
-| `bundle` | supported | Requires Docker Desktop for build/check. |
-| `app` | supported | Requires Docker Desktop and a prepared bundle/runtime. |
-| `up`, `restart`, `down`, `ps`, `status`, `logs` | supported | Docker Desktop-backed staging runtime. |
-| `test` | supported | Docker Desktop-backed staging runtime. |
-| `doctor` | supported | Should distinguish staging readiness from Linux install readiness. |
-| `install`, `uninstall` | supported for Docker-managed permanent install | Uses Docker/Compose restart policy; warns that macOS/Windows Docker-runtime security is weaker than Linux. |
-| WSL | supported through Linux path | Uses Linux `reploy`, Linux paths, and POSIX-style control scripts inside WSL; not a native Windows backend. |
-| Windows Service/OS service install | unsupported initially | Future design topic, not exposed as the first Windows install mode. |
+- `reploy.exe` is run from PowerShell or `cmd.exe`
+- Docker work uses Docker Desktop reachable from that Windows shell
+- app containers are Linux containers
+- installed app controls use a PowerShell-native surface such as
+  `<app-id>ctl.ps1`
+- WSL remains the Linux support path, not the native Windows support path
+
+| Command or surface | First Windows milestone | Docker Desktop required | Notes |
+| --- | --- | --- | --- |
+| `--help`, `help`, `--version`, `version` | supported | no | Pure CLI behavior. |
+| `index update`, `index search`, `index show` | supported | no | Network/index behavior should be platform-neutral. |
+| `stage APP_REF` | supported | no for file/source staging; maybe for provider workflows that build/check artifacts | Must support Windows drive-letter paths and paths with spaces. |
+| `stage --update [APP_REF]` | supported | no for generated-file refresh; maybe for provider workflows that build/check artifacts | Must preserve staging as project-local state, not `%LOCALAPPDATA%`. |
+| `info` | supported | no | Reads staging state and bundle metadata. |
+| `bundle list`, `bundle list all`, `bundle list-options` | supported | no | Metadata-only bundle inspection. |
+| `bundle add`, `bundle remove`, `bundle clean` | supported | no | Mutates staging bundle selection or generated bundle artifacts. |
+| `bundle check`, `bundle build`, `bundle upgrade` | supported | yes | Uses Docker Desktop with Linux containers to prepare and validate bundle artifacts. |
+| `app` summary | supported | no | Listing blueprint-declared app commands should not require Docker. |
+| `app COMMAND` | supported | yes | Runs app command through the staging Docker/Compose runtime. |
+| `up`, `restart`, `down` | supported | yes | Operates the staging Docker/Compose runtime through Docker Desktop. |
+| `ps`, `status`, `logs` | supported | yes | Reads staging Docker/Compose state and logs through Docker Desktop. |
+| `test` | supported | yes | Probes the staging app health endpoint. |
+| `doctor` for staging files and generated-file drift | supported | no | Should still report Docker Desktop readiness separately when relevant. |
+| `doctor --preinstall` and install-readiness checks | supported | yes | Must distinguish Docker Desktop-backed install readiness from Linux/systemd readiness. |
+| `install APP_REF` direct install | supported as Docker-managed permanent install | yes | Uses a temporary staging-like workspace, Docker/Compose restart policy, and a Docker Desktop security warning. |
+| `install --dir DIR` staged install | supported as Docker-managed permanent install | yes | Installs from existing staging state into a Windows install target. |
+| `install --dry-run` | supported | no for plan rendering; yes if preinstall checks are requested | Must render Windows paths and Docker-managed install semantics. |
+| `uninstall --from DIR` | supported for Docker-managed permanent install | yes unless `--dry-run` can render from state only | Removes installed Docker resources and installed metadata for the selected target. |
+| `uninstall --service-name NAME` | deferred unless mapped to recorded Docker-managed installed state | maybe | Linux currently uses service names for systemd discovery. Windows should not invent service semantics. |
+| `uninstall --list-services` | unsupported for native Windows in first milestone | no | This is Linux/systemd service discovery. Use installed state or explicit target paths for Windows. |
+| generated `<app-id>ctl.ps1` | supported | yes for runtime operations | Native Windows installed control surface. Must not require `sh`, Git Bash, MSYS2, Cygwin, or WSL. |
+| generated POSIX-style `<app-id>ctl` beside a Windows install | optional/deferred | yes if supported | Only for WSL/Linux-like access. Must be clearly documented as Linux-path behavior. |
+| Windows Service install | unsupported | no | Future design topic; not exposed as a first-milestone backend. |
+| WSL using Linux `reploy` | supported through Linux path | depends on Linux path | Not native Windows support. Uses Linux binary, Linux paths, and Linux control scripts. |
 
 Unsupported operations should fail before doing partial work.
+
+For implementation, "supported" means the command has explicit platform
+behavior, tests or smoke coverage appropriate to the risk, and user-facing
+errors for missing prerequisites. "Unsupported" means the command fails before
+mutating state and explains the Windows support boundary.
 
 ## Major Work Areas
 

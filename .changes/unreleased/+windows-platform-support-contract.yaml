@@ -1,0 +1,2 @@
+kind: Changed
+body: Clarify the Windows permanent-install boundary as planned Docker-managed support while keeping it disabled in the current build.

@@ -35,12 +35,176 @@ func TestHostPlatformInstallBackend(t *testing.T) {
 
 func TestUnsupportedPersistentInstallError(t *testing.T) {
 	err := (hostPlatform{GOOS: "windows"}).unsupportedPersistentInstallError("uninstall")
-	if err == nil || !strings.Contains(err.Error(), "Windows persistent uninstall is not supported by this build") {
+	if err == nil || !strings.Contains(err.Error(), "Windows persistent uninstall is planned as a Docker-managed permanent install but is not supported by this build") {
 		t.Fatalf("unexpected windows uninstall error: %v", err)
 	}
 	err = (hostPlatform{GOOS: "plan9"}).unsupportedPersistentInstallError("install")
 	if err == nil || !strings.Contains(err.Error(), "install is not supported on plan9") {
 		t.Fatalf("unexpected plan9 install error: %v", err)
+	}
+}
+
+func TestWindowsCommandSupport(t *testing.T) {
+	platform := hostPlatform{GOOS: "windows"}
+	tests := []struct {
+		name                string
+		command             platformCommand
+		wantStatus          platformSupportStatus
+		wantDockerDesktop   bool
+		wantReasonSubstring string
+	}{
+		{
+			name:       "metadata commands are native",
+			command:    platformCommandStage,
+			wantStatus: platformSupportSupported,
+		},
+		{
+			name:              "docker bundle requires Docker Desktop",
+			command:           platformCommandBundleDocker,
+			wantStatus:        platformSupportSupported,
+			wantDockerDesktop: true,
+		},
+		{
+			name:              "preinstall doctor requires Docker Desktop",
+			command:           platformCommandDoctorPreinstall,
+			wantStatus:        platformSupportSupported,
+			wantDockerDesktop: true,
+		},
+		{
+			name:                "install is planned but not enabled",
+			command:             platformCommandInstall,
+			wantStatus:          platformSupportPlanned,
+			wantDockerDesktop:   true,
+			wantReasonSubstring: "planned for native Windows Docker-managed permanent install",
+		},
+		{
+			name:                "uninstall from install directory is planned but not enabled",
+			command:             platformCommandUninstallFrom,
+			wantStatus:          platformSupportPlanned,
+			wantDockerDesktop:   true,
+			wantReasonSubstring: "planned for native Windows Docker-managed permanent install",
+		},
+		{
+			name:                "PowerShell control is planned but not enabled",
+			command:             platformCommandInstalledPowerShell,
+			wantStatus:          platformSupportPlanned,
+			wantDockerDesktop:   true,
+			wantReasonSubstring: "planned for native Windows Docker-managed permanent install",
+		},
+		{
+			name:                "POSIX control is deferred",
+			command:             platformCommandInstalledPOSIX,
+			wantStatus:          platformSupportDeferred,
+			wantDockerDesktop:   true,
+			wantReasonSubstring: "optional WSL/Linux-like access",
+		},
+		{
+			name:                "service name uninstall is deferred",
+			command:             platformCommandUninstallServiceName,
+			wantStatus:          platformSupportDeferred,
+			wantReasonSubstring: "must not imply Windows Service semantics",
+		},
+		{
+			name:                "service list uninstall stays unsupported",
+			command:             platformCommandUninstallList,
+			wantStatus:          platformSupportUnsupported,
+			wantReasonSubstring: "Linux/systemd service discovery",
+		},
+		{
+			name:                "Windows Service install stays unsupported",
+			command:             platformCommandWindowsService,
+			wantStatus:          platformSupportUnsupported,
+			wantReasonSubstring: "future design topic",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := platform.commandSupport(test.command)
+			if got.Status != test.wantStatus {
+				t.Fatalf("status = %s, want %s", got.Status, test.wantStatus)
+			}
+			if got.RequiresDockerDesktop != test.wantDockerDesktop {
+				t.Fatalf("requires Docker Desktop = %v, want %v", got.RequiresDockerDesktop, test.wantDockerDesktop)
+			}
+			if test.wantReasonSubstring != "" && !strings.Contains(got.Reason, test.wantReasonSubstring) {
+				t.Fatalf("reason = %q, want substring %q", got.Reason, test.wantReasonSubstring)
+			}
+		})
+	}
+}
+
+func TestPlatformCommandSupportSelectedNonWindowsContracts(t *testing.T) {
+	tests := []struct {
+		name                string
+		platform            hostPlatform
+		command             platformCommand
+		wantStatus          platformSupportStatus
+		wantDockerDesktop   bool
+		wantReasonSubstring string
+	}{
+		{
+			name:       "linux install remains systemd supported",
+			platform:   hostPlatform{GOOS: "linux"},
+			command:    platformCommandInstall,
+			wantStatus: platformSupportSupported,
+		},
+		{
+			name:       "linux POSIX installed control is supported",
+			platform:   hostPlatform{GOOS: "linux"},
+			command:    platformCommandInstalledPOSIX,
+			wantStatus: platformSupportSupported,
+		},
+		{
+			name:                "linux PowerShell control is unsupported",
+			platform:            hostPlatform{GOOS: "linux"},
+			command:             platformCommandInstalledPowerShell,
+			wantStatus:          platformSupportUnsupported,
+			wantReasonSubstring: "Linux support path",
+		},
+		{
+			name:              "macOS install requires Docker Desktop",
+			platform:          hostPlatform{GOOS: "darwin"},
+			command:           platformCommandInstall,
+			wantStatus:        platformSupportSupported,
+			wantDockerDesktop: true,
+		},
+		{
+			name:              "macOS runtime commands require Docker Desktop",
+			platform:          hostPlatform{GOOS: "darwin"},
+			command:           platformCommandStagingRuntime,
+			wantStatus:        platformSupportSupported,
+			wantDockerDesktop: true,
+		},
+		{
+			name:                "macOS list uninstall is unsupported",
+			platform:            hostPlatform{GOOS: "darwin"},
+			command:             platformCommandUninstallList,
+			wantStatus:          platformSupportUnsupported,
+			wantReasonSubstring: "Linux/systemd service discovery",
+		},
+		{
+			name:                "unknown platforms are unsupported",
+			platform:            hostPlatform{GOOS: "plan9"},
+			command:             platformCommandStage,
+			wantStatus:          platformSupportUnsupported,
+			wantReasonSubstring: "unsupported host platform",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := test.platform.commandSupport(test.command)
+			if got.Status != test.wantStatus {
+				t.Fatalf("status = %s, want %s", got.Status, test.wantStatus)
+			}
+			if got.RequiresDockerDesktop != test.wantDockerDesktop {
+				t.Fatalf("requires Docker Desktop = %v, want %v", got.RequiresDockerDesktop, test.wantDockerDesktop)
+			}
+			if test.wantReasonSubstring != "" && !strings.Contains(got.Reason, test.wantReasonSubstring) {
+				t.Fatalf("reason = %q, want substring %q", got.Reason, test.wantReasonSubstring)
+			}
+		})
 	}
 }
 

@@ -17,6 +17,8 @@ type hostPlatform struct {
 }
 
 type installBackend string
+type platformCommand string
+type platformSupportStatus string
 
 const (
 	installBackendLinuxSystemd       installBackend = "linux-systemd"
@@ -28,12 +30,49 @@ const (
 	dockerDesktopSecurityWarningText                = "warning: Docker-managed permanent installs on macOS and Windows provide weaker isolation than Linux/systemd OS service installs"
 )
 
+const (
+	platformSupportSupported   platformSupportStatus = "supported"
+	platformSupportPlanned     platformSupportStatus = "planned"
+	platformSupportDeferred    platformSupportStatus = "deferred"
+	platformSupportUnsupported platformSupportStatus = "unsupported"
+)
+
+const (
+	platformCommandHelp                 platformCommand = "help"
+	platformCommandIndex                platformCommand = "index"
+	platformCommandStage                platformCommand = "stage"
+	platformCommandStageUpdate          platformCommand = "stage-update"
+	platformCommandInfo                 platformCommand = "info"
+	platformCommandBundleMetadata       platformCommand = "bundle-metadata"
+	platformCommandBundleMutation       platformCommand = "bundle-mutation"
+	platformCommandBundleDocker         platformCommand = "bundle-docker"
+	platformCommandAppSummary           platformCommand = "app-summary"
+	platformCommandAppCommand           platformCommand = "app-command"
+	platformCommandStagingRuntime       platformCommand = "staging-runtime"
+	platformCommandTest                 platformCommand = "test"
+	platformCommandDoctorStaging        platformCommand = "doctor-staging"
+	platformCommandDoctorPreinstall     platformCommand = "doctor-preinstall"
+	platformCommandInstall              platformCommand = "install"
+	platformCommandUninstallFrom        platformCommand = "uninstall-from"
+	platformCommandUninstallServiceName platformCommand = "uninstall-service-name"
+	platformCommandUninstallList        platformCommand = "uninstall-list"
+	platformCommandInstalledPowerShell  platformCommand = "installed-powershell-control"
+	platformCommandInstalledPOSIX       platformCommand = "installed-posix-control"
+	platformCommandWindowsService       platformCommand = "windows-service"
+)
+
 type dockerRuntime string
 
 type dockerRuntimeInfo struct {
 	Runtime         dockerRuntime
 	OperatingSystem string
 	ServerVersion   string
+}
+
+type platformCommandSupport struct {
+	Status                platformSupportStatus
+	RequiresDockerDesktop bool
+	Reason                string
 }
 
 var detectHostPlatform = func() hostPlatform {
@@ -57,9 +96,149 @@ func (platform hostPlatform) installBackend() installBackend {
 	}
 }
 
+func (platform hostPlatform) commandSupport(command platformCommand) platformCommandSupport {
+	switch platform.GOOS {
+	case "linux":
+		return linuxCommandSupport(command)
+	case "darwin":
+		return dockerDesktopCommandSupport(command)
+	case "windows":
+		return windowsCommandSupport(command)
+	default:
+		return unsupportedCommandSupport("unsupported host platform")
+	}
+}
+
+func linuxCommandSupport(command platformCommand) platformCommandSupport {
+	switch command {
+	case platformCommandHelp,
+		platformCommandIndex,
+		platformCommandStage,
+		platformCommandStageUpdate,
+		platformCommandInfo,
+		platformCommandBundleMetadata,
+		platformCommandBundleMutation,
+		platformCommandBundleDocker,
+		platformCommandAppSummary,
+		platformCommandAppCommand,
+		platformCommandStagingRuntime,
+		platformCommandTest,
+		platformCommandDoctorStaging,
+		platformCommandDoctorPreinstall,
+		platformCommandInstall,
+		platformCommandUninstallFrom,
+		platformCommandUninstallServiceName,
+		platformCommandUninstallList:
+		return supportedCommandSupport(false)
+	case platformCommandInstalledPOSIX:
+		return supportedCommandSupport(false)
+	case platformCommandInstalledPowerShell,
+		platformCommandWindowsService:
+		return unsupportedCommandSupport("not part of the Linux support path")
+	default:
+		return unsupportedCommandSupport("unknown command surface")
+	}
+}
+
+func dockerDesktopCommandSupport(command platformCommand) platformCommandSupport {
+	switch command {
+	case platformCommandHelp,
+		platformCommandIndex,
+		platformCommandStage,
+		platformCommandStageUpdate,
+		platformCommandInfo,
+		platformCommandBundleMetadata,
+		platformCommandBundleMutation,
+		platformCommandAppSummary,
+		platformCommandDoctorStaging,
+		platformCommandUninstallFrom,
+		platformCommandInstalledPOSIX:
+		return supportedCommandSupport(false)
+	case platformCommandBundleDocker,
+		platformCommandAppCommand,
+		platformCommandStagingRuntime,
+		platformCommandTest,
+		platformCommandDoctorPreinstall,
+		platformCommandInstall:
+		return supportedCommandSupport(true)
+	case platformCommandUninstallServiceName,
+		platformCommandUninstallList:
+		return unsupportedCommandSupport("Linux/systemd service discovery is not part of Docker-managed install")
+	case platformCommandInstalledPowerShell,
+		platformCommandWindowsService:
+		return unsupportedCommandSupport("not part of the macOS Docker Desktop support path")
+	default:
+		return unsupportedCommandSupport("unknown command surface")
+	}
+}
+
+func windowsCommandSupport(command platformCommand) platformCommandSupport {
+	switch command {
+	case platformCommandHelp,
+		platformCommandIndex,
+		platformCommandStage,
+		platformCommandStageUpdate,
+		platformCommandInfo,
+		platformCommandBundleMetadata,
+		platformCommandBundleMutation,
+		platformCommandAppSummary,
+		platformCommandDoctorStaging:
+		return supportedCommandSupport(false)
+	case platformCommandBundleDocker,
+		platformCommandAppCommand,
+		platformCommandStagingRuntime,
+		platformCommandTest,
+		platformCommandDoctorPreinstall:
+		return supportedCommandSupport(true)
+	case platformCommandInstall,
+		platformCommandUninstallFrom,
+		platformCommandInstalledPowerShell:
+		return plannedCommandSupport(true, "planned for native Windows Docker-managed permanent install")
+	case platformCommandInstalledPOSIX:
+		return platformCommandSupport{
+			Status:                platformSupportDeferred,
+			RequiresDockerDesktop: true,
+			Reason:                "optional WSL/Linux-like access to a native Windows install",
+		}
+	case platformCommandUninstallServiceName:
+		return platformCommandSupport{
+			Status: platformSupportDeferred,
+			Reason: "requires mapping to recorded Docker-managed installed state; must not imply Windows Service semantics",
+		}
+	case platformCommandUninstallList:
+		return unsupportedCommandSupport("Linux/systemd service discovery is not part of native Windows support")
+	case platformCommandWindowsService:
+		return unsupportedCommandSupport("Windows Service install is a future design topic")
+	default:
+		return unsupportedCommandSupport("unknown command surface")
+	}
+}
+
+func supportedCommandSupport(requiresDockerDesktop bool) platformCommandSupport {
+	return platformCommandSupport{
+		Status:                platformSupportSupported,
+		RequiresDockerDesktop: requiresDockerDesktop,
+	}
+}
+
+func plannedCommandSupport(requiresDockerDesktop bool, reason string) platformCommandSupport {
+	return platformCommandSupport{
+		Status:                platformSupportPlanned,
+		RequiresDockerDesktop: requiresDockerDesktop,
+		Reason:                reason,
+	}
+}
+
+func unsupportedCommandSupport(reason string) platformCommandSupport {
+	return platformCommandSupport{
+		Status: platformSupportUnsupported,
+		Reason: reason,
+	}
+}
+
 func (platform hostPlatform) unsupportedPersistentInstallError(action string) error {
 	if platform.GOOS == "windows" {
-		return fmt.Errorf("Windows persistent %s is not supported by this build", action)
+		return fmt.Errorf("Windows persistent %s is planned as a Docker-managed permanent install but is not supported by this build", action)
 	}
 	return fmt.Errorf("%s is not supported on %s", action, platform.GOOS)
 }
