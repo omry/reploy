@@ -1,3 +1,9 @@
+---
+status: Active
+updated: 2026-07-04
+summary: Current maintainer workflow for local checks, release notes, and publishing.
+---
+
 # Maintaining Reploy
 
 ## Local Environment

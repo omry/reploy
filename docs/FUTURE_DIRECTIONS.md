@@ -1,3 +1,9 @@
+---
+status: Active
+updated: 2026-07-04
+summary: Current parking lot for longer-term product directions outside the near-term release path.
+---
+
 # Future Directions
 
 Ideas that are intentionally outside the current direct/staged install

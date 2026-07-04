@@ -1,3 +1,13 @@
+---
+status: Archived
+updated: 2026-07-04
+summary: Historical macOS port plan retained after the first macOS support path was implemented.
+---
+
+> Archived note: the first macOS support path is implemented. Keep this plan as
+> historical design context; use current user-facing docs and release workflow
+> docs for supported behavior.
+
 # macOS Port Plan
 
 This document defines the work needed to make macOS an explicit Reploy support

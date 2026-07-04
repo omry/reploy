@@ -1,3 +1,9 @@
+---
+status: Active
+updated: 2026-07-04
+summary: Active planning surface for Reploy design and implementation gaps.
+---
+
 # Reploy Backlog
 
 ## Agent instructions

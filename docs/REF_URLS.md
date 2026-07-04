@@ -1,3 +1,13 @@
+---
+status: Archived
+updated: 2026-07-04
+summary: Historical blueprint reference URL design retained after implementation.
+---
+
+> Archived note: the blueprint reference URL design is implemented. Keep this
+> document as historical design context; use current CLI help and user-facing
+> docs for supported reference forms.
+
 # Blueprint Ref URLs
 
 This document describes the intended URL-shaped blueprint reference format.

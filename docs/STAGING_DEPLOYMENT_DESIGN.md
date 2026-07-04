@@ -1,3 +1,13 @@
+---
+status: Archived
+updated: 2026-07-04
+summary: Historical staging and deployment redesign retained after the model was implemented.
+---
+
+> Archived note: the staging/direct-install/deployed-control model is
+> implemented. Keep this document as historical design context; use current
+> user-facing docs and maintainer docs for supported behavior.
+
 # Staging and Deployment Design
 
 Draft design note for the Reploy CLI redesign.

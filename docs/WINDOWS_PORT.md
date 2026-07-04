@@ -1,3 +1,9 @@
+---
+status: Draft
+updated: 2026-07-04
+summary: Draft Windows support plan for staging and Docker-managed permanent installs.
+---
+
 # Windows Port Plan
 
 This document defines the work needed to make Windows an explicit Reploy
