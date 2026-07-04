@@ -109,7 +109,7 @@ func TestInstallDryRunOnDarwinPrintsDockerDesktopPlan(t *testing.T) {
 	}
 	for _, want := range []string{
 		dockerDesktopSecurityWarning(),
-		"persistent install backend: Docker Desktop-backed Compose",
+		"permanent install backend: Docker-managed Compose",
 		"reboot resistance: enable Docker Desktop start-at-login",
 		"would run: docker compose --project-name",
 		"up -d",

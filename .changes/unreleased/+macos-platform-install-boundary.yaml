@@ -1,3 +1,3 @@
 kind: Added
-body: Add initial macOS Docker Desktop-backed persistent development install and uninstall implementation with explicit Linux/systemd production-install boundaries.
+body: Add initial macOS Docker-managed permanent install and uninstall implementation with explicit Linux/systemd OS service boundaries.
 time: 2026-07-02T00:00:00+08:00

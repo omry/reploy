@@ -93,9 +93,8 @@ path:
 sudo reploy install --to /opt/example --service example
 ```
 
-macOS Docker Desktop-backed development installs are being validated. They use
-the same command surface, but should target a user-writable project-local
-directory:
+macOS Docker-managed permanent installs use Docker Desktop. They use the same
+command surface, but should target a user-writable project-local directory:
 
 ```bash
 reploy install --to "$PWD/example-installed" --service example

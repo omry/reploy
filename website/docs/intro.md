@@ -86,8 +86,8 @@ reploy stage file:./example.blueprint.yaml
 
 The first supported app backend is Python. The first supported runtime is
 Docker. Linux is the production permanent-install target with systemd. macOS
-development and staging support is being validated with Docker Desktop,
-including Docker Desktop-backed persistent development installs.
+development and staging support is available with Docker Desktop, including
+Docker-managed permanent installs.
 
 ## Read Next
 

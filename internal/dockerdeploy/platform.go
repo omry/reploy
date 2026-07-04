@@ -25,7 +25,7 @@ const (
 	dockerRuntimeUnknown             dockerRuntime  = "unknown"
 	dockerRuntimeLinuxEngine         dockerRuntime  = "linux-engine"
 	dockerRuntimeDockerDesktop       dockerRuntime  = "docker-desktop"
-	dockerDesktopSecurityWarningText                = "warning: Docker Desktop-backed installs on macOS and Windows provide weaker isolation than Linux/systemd installs"
+	dockerDesktopSecurityWarningText                = "warning: Docker-managed permanent installs on macOS and Windows provide weaker isolation than Linux/systemd OS service installs"
 )
 
 type dockerRuntime string

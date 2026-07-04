@@ -457,3 +457,20 @@ persistent development install.
   install for untrusted local agents.
 - Release artifacts may imply broader support than the support matrix actually
   promises.
+
+## Appendix: Post-Port Terminology
+
+The macOS port is now implemented. This plan remains useful as historical
+design context, but current user-facing docs should use the settled terms below
+instead of rewriting the original plan in place.
+
+- "persistent development install" is now called "Docker-managed permanent
+  install".
+- "system permanent install" is now called "launchd OS service install" or
+  "OS service install".
+- "Docker-managed permanent install" means the normal `install` command creates
+  installed Docker/Compose state with restart policy and app control commands.
+- "OS service install" means integration with a host service manager such as
+  launchd or systemd. macOS launchd support remains future work.
+- Staging remains project-local. Installed state and generated runtime files
+  belong under the install target.

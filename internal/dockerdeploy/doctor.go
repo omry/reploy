@@ -176,13 +176,13 @@ func doctorPreinstallFindings(dir string, dockerPreflightTimeout time.Duration) 
 		findings = append(findings, DoctorFinding{Status: "warn", Message: dockerDesktopSecurityWarning()})
 		runtimeInfo, err := detectDockerRuntimeForDoctor(context.Background(), CommandSpec{Name: "docker", Dir: dir}, dockerPreflightTimeout)
 		if err != nil {
-			findings = append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("Docker Desktop runtime is required for persistent development install: %v", err)})
+			findings = append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("Docker Desktop runtime is required for Docker-managed permanent install: %v", err)})
 		} else if runtimeInfo.Runtime == dockerRuntimeDockerDesktop {
 			findings = append(findings, DoctorFinding{Status: "ok", Message: "Docker Desktop runtime detected: " + runtimeInfo.OperatingSystem})
 		} else {
-			findings = append(findings, DoctorFinding{Status: "warn", Message: "Docker runtime was not identified as Docker Desktop; persistent install still has weaker isolation than Linux/systemd"})
+			findings = append(findings, DoctorFinding{Status: "warn", Message: "Docker runtime was not identified as Docker Desktop; Docker-managed permanent install still has weaker isolation than Linux/systemd OS service installs"})
 		}
-		findings = append(findings, DoctorFinding{Status: "warn", Message: "enable Docker Desktop start-at-login for reboot-resistant persistent development installs"})
+		findings = append(findings, DoctorFinding{Status: "warn", Message: "enable Docker Desktop start-at-login for reboot-resistant Docker-managed permanent installs"})
 	default:
 		findings = append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("persistent install is not supported on %s", currentHostPlatform().GOOS)})
 	}

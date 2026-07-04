@@ -93,7 +93,7 @@ func newUninstallPlan(options UninstallOptions) (uninstallPlan, error) {
 			return uninstallPlan{}, fmt.Errorf("--from is required unless --service-name is set or the current directory is an installed deployment")
 		}
 		if currentHostPlatform().installBackend() == installBackendDockerDesktop {
-			return uninstallPlan{}, fmt.Errorf("--from is required for Docker Desktop-backed uninstall")
+			return uninstallPlan{}, fmt.Errorf("--from is required for Docker-managed uninstall")
 		}
 		return serviceOnlyUninstallPlan(options.ServiceName, options.RemoveDir, options.DockerPreflightTimeout)
 	}
@@ -108,7 +108,7 @@ func newUninstallPlan(options UninstallOptions) (uninstallPlan, error) {
 				return uninstallPlan{}, fmt.Errorf("--service-name is required when --from is missing: %s", from)
 			}
 			if currentHostPlatform().installBackend() == installBackendDockerDesktop {
-				return uninstallPlan{}, fmt.Errorf("Docker Desktop-backed uninstall requires an installed deployment state at --from: %s", from)
+				return uninstallPlan{}, fmt.Errorf("Docker-managed uninstall requires an installed deployment state at --from: %s", from)
 			}
 			plan, err := serviceOnlyUninstallPlan(options.ServiceName, options.RemoveDir, options.DockerPreflightTimeout)
 			if err != nil {
@@ -347,7 +347,7 @@ func printUninstallDryRun(stdout io.Writer, plan uninstallPlan) {
 	if plan.Backend == installBackendLinuxSystemd {
 		fmt.Fprintf(stdout, "unit: %s\n", plan.UnitPath)
 	} else {
-		fmt.Fprintln(stdout, "persistent install backend: Docker Desktop-backed Compose")
+		fmt.Fprintln(stdout, "permanent install backend: Docker-managed Compose")
 	}
 	if plan.ComposeProject != "" {
 		fmt.Fprintf(stdout, "compose project: %s\n", plan.ComposeProject)

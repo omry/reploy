@@ -13,8 +13,8 @@ When the deployment directory still exists, uninstall from the directory:
 sudo reploy uninstall --from /opt/example
 ```
 
-On macOS, Docker Desktop-backed development installs are uninstalled from the
-installed target without `sudo`:
+On macOS, Docker-managed permanent installs are uninstalled from the installed
+target without `sudo`:
 
 ```bash
 reploy uninstall --from "$PWD/example-installed"

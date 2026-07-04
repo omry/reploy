@@ -50,7 +50,7 @@ func TestUninstallDryRunOnDarwinPrintsDockerDesktopPlan(t *testing.T) {
 	for _, want := range []string{
 		"would uninstall service: demo-test",
 		"target: " + target,
-		"persistent install backend: Docker Desktop-backed Compose",
+		"permanent install backend: Docker-managed Compose",
 		"compose project: demo-test-abcd",
 		"container: demo-test-abcd",
 		"network: demo-test-abcd",

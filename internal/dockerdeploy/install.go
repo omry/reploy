@@ -413,7 +413,7 @@ func printInstallDryRun(stdout io.Writer, plan installPlan) {
 	fmt.Fprintf(stdout, "network: %s\n", plan.NetworkName)
 	if plan.Backend == installBackendDockerDesktop {
 		fmt.Fprintln(stdout, dockerDesktopSecurityWarning())
-		fmt.Fprintln(stdout, "persistent install backend: Docker Desktop-backed Compose")
+		fmt.Fprintln(stdout, "permanent install backend: Docker-managed Compose")
 		fmt.Fprintln(stdout, "reboot resistance: enable Docker Desktop start-at-login")
 	}
 	if containerUser, err := installContainerUser(plan.SourceDir); err == nil {

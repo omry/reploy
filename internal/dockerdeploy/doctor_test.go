@@ -228,7 +228,7 @@ func TestDoctorPreinstallOnDarwinFailsWhenDockerRuntimeUnavailable(t *testing.T)
 	if code != 1 {
 		t.Fatalf("doctor exit = %d\n%s", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "fail: Docker Desktop runtime is required for persistent development install: docker is not running") {
+	if !strings.Contains(stdout.String(), "fail: Docker Desktop runtime is required for Docker-managed permanent install: docker is not running") {
 		t.Fatalf("stdout missing Docker Desktop failure:\n%s", stdout.String())
 	}
 }
