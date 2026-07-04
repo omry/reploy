@@ -822,9 +822,6 @@ docker:
 	if !strings.Contains(compose, `reploy_status_start "Preparing Python runtime" &&`) || !strings.Contains(compose, "reploy_status_stop 0") {
 		t.Fatalf("compose did not use Python runtime spinner around preparation:\n%s", compose)
 	}
-	if !strings.Contains(compose, "__reploy_runtime_warmup") || !strings.Contains(compose, "exit 0;\n      fi &&\n      venv_python=") {
-		t.Fatalf("compose did not expose runtime warmup command before app dispatch:\n%s", compose)
-	}
 }
 
 func TestInitRendersManagedFileMounts(t *testing.T) {

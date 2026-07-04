@@ -649,15 +649,14 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer, globalOp
 		return 2
 	}
 	options, err := parseDockerBundleOptions(args[1:], dockerBundleParseOptions{
-		RequireRoot:        action != "list" && action != "list-options" && action != "check" && action != "build" && action != "clean",
-		AllowDryRun:        action == "check" || action == "build",
-		AllowPyPIOnly:      action == "build",
-		AllowNoWarmRuntime: action == "build",
-		AllowVerbose:       action == "check" || action == "build" || action == "clean",
-		AllowMultiple:      action == "add" || action == "remove",
-		AllowNames:         action == "add" || action == "remove",
-		AllowExtra:         action == "add" || action == "remove",
-		Command:            action,
+		RequireRoot:   action != "list" && action != "list-options" && action != "check" && action != "build" && action != "clean",
+		AllowDryRun:   action == "check" || action == "build",
+		AllowPyPIOnly: action == "build",
+		AllowVerbose:  action == "check" || action == "build" || action == "clean",
+		AllowMultiple: action == "add" || action == "remove",
+		AllowNames:    action == "add" || action == "remove",
+		AllowExtra:    action == "add" || action == "remove",
+		Command:       action,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
@@ -766,7 +765,6 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer, globalOp
 			Dir:                    options.Dir,
 			DryRun:                 options.DryRun,
 			PyPIOnly:               options.PyPIOnly,
-			NoWarmRuntime:          options.NoWarmRuntime,
 			Verbose:                options.Verbose,
 			Stdout:                 stdout,
 			Stderr:                 stderr,
@@ -819,28 +817,26 @@ func isDockerBundleCommand(action string) bool {
 }
 
 type dockerBundleOptions struct {
-	Dir           string
-	DirExplicit   bool
-	Root          string
-	Roots         []string
-	Names         []string
-	Extras        []string
-	DryRun        bool
-	PyPIOnly      bool
-	NoWarmRuntime bool
-	Verbose       bool
+	Dir         string
+	DirExplicit bool
+	Root        string
+	Roots       []string
+	Names       []string
+	Extras      []string
+	DryRun      bool
+	PyPIOnly    bool
+	Verbose     bool
 }
 
 type dockerBundleParseOptions struct {
-	RequireRoot        bool
-	AllowDryRun        bool
-	AllowPyPIOnly      bool
-	AllowNoWarmRuntime bool
-	AllowVerbose       bool
-	AllowMultiple      bool
-	AllowNames         bool
-	AllowExtra         bool
-	Command            string
+	RequireRoot   bool
+	AllowDryRun   bool
+	AllowPyPIOnly bool
+	AllowVerbose  bool
+	AllowMultiple bool
+	AllowNames    bool
+	AllowExtra    bool
+	Command       string
 }
 
 func parseDockerBundleUpgradeOptions(args []string) (dockerBundleOptions, error) {
@@ -906,11 +902,6 @@ func parseDockerBundleOptions(args []string, parseOptions dockerBundleParseOptio
 				return dockerBundleOptions{}, fmt.Errorf("unknown option: %s", arg)
 			}
 			options.PyPIOnly = true
-		case "--no-warm-runtime":
-			if !parseOptions.AllowNoWarmRuntime {
-				return dockerBundleOptions{}, fmt.Errorf("unknown option: %s", arg)
-			}
-			options.NoWarmRuntime = true
 		case "--verbose":
 			if !parseOptions.AllowVerbose {
 				return dockerBundleOptions{}, fmt.Errorf("unknown option: %s", arg)
@@ -2307,8 +2298,6 @@ Options:
   --extra ROOT Add/remove an explicit bundle root; accepts comma-separated roots
   --dry-run    Print build/check commands without changing staging
   --pypi-only  Build or upgrade using only PyPI package roots
-  --no-warm-runtime
-              Skip bundle build's Python runtime warmup phase
   --verbose    Show bundle check/build command output
   -h, --help   Show bundle help
 `, "\n"))

@@ -1057,8 +1057,6 @@ func TestDirectInstallAppliesViaTemporaryStaging(t *testing.T) {
 				t.Fatalf("bundle command did not run container as default user: %#v", spec.Args)
 			}
 			return nil
-		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
-			return nil
 		default:
 			t.Fatalf("unexpected bundle command: %#v", spec.Args)
 			return nil
@@ -2208,13 +2206,11 @@ func TestInstallRebuildsLocalSourceBundleInTarget(t *testing.T) {
 
 	installGeteuid = func() int { return 0 }
 	installSystemdUnitDir = unitDir
-	runtimeChowned := false
 	installChown = func(path string, uid int, gid int) error {
 		if path == filepath.Join(target, RuntimeDirName) {
 			if uid != 1000 || gid != 1000 {
 				t.Fatalf("runtime chown = %d:%d, want 1000:1000", uid, gid)
 			}
-			runtimeChowned = true
 		}
 		return nil
 	}
@@ -2251,14 +2247,6 @@ func TestInstallRebuildsLocalSourceBundleInTarget(t *testing.T) {
 				t.Fatalf("bundle rebuild did not run container as default user: %#v", spec.Args)
 			}
 			return nil
-		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
-			if _, err := os.Stat(filepath.Join(target, ComposeFileName)); err != nil {
-				t.Fatalf("runtime compose was not materialized before bundle warmup: %v", err)
-			}
-			if !runtimeChowned {
-				t.Fatalf("runtime dir was not chowned before bundle warmup")
-			}
-			return nil
 		default:
 			t.Fatalf("unexpected bundle command: %#v", spec.Args)
 			return nil
@@ -2273,8 +2261,8 @@ func TestInstallRebuildsLocalSourceBundleInTarget(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(specs) != 3 {
-		t.Fatalf("bundle commands = %d, want build, check, and warm runtime", len(specs))
+	if len(specs) != 2 {
+		t.Fatalf("bundle commands = %d, want build and check", len(specs))
 	}
 	targetWheel := filepath.Join(target, BundleDirName, "demo_server-1.2.3-py3-none-any.whl")
 	if got := readFile(t, targetWheel); got != "fresh\n" {

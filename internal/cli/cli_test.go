@@ -2757,28 +2757,8 @@ func TestDockerBundleCheckRejectsPyPIOnly(t *testing.T) {
 	}
 }
 
-func TestDockerBundleBuildAcceptsNoWarmRuntime(t *testing.T) {
-	packDir := makeCLITestPack(t)
-	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
-	if code != 0 {
-		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
-	}
-
-	code, stdout, stderr = runCLI("bundle", "build", "--dry-run", "--no-warm-runtime", "--dir", deployDir)
-	if code != 0 {
-		t.Fatalf("bundle build failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
-	}
-	if !strings.Contains(stdout, "would build installation bundle:") {
-		t.Fatalf("stdout missing dry-run output:\n%s", stdout)
-	}
-	if stderr != "" {
-		t.Fatalf("stderr = %q, want empty", stderr)
-	}
-}
-
-func TestDockerBundleCheckRejectsNoWarmRuntime(t *testing.T) {
-	code, stdout, stderr := runCLI("bundle", "check", "--no-warm-runtime")
+func TestDockerBundleRejectsNoWarmRuntime(t *testing.T) {
+	code, stdout, stderr := runCLI("bundle", "build", "--no-warm-runtime")
 	if code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}

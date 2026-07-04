@@ -28,11 +28,9 @@ Explicitly build the selected bundle when you want an early preflight:
 reploy bundle build
 ```
 
-Bundle build also warms the generated Python runtime cache in the target
-runtime image. That moves Python virtualenv setup and bundle installation into
-the build step so the first app command does not pay that cost. Use
-`--no-warm-runtime` when you only want to build and validate the bundle
-artifacts and leave runtime setup to the next app command.
+Bundle build only prepares and validates dependency artifacts. Runtime files,
+managed config mounts, and app startup checks are handled by runtime and install
+commands.
 
 Check that the bundle can be prepared. This builds first when needed:
 
