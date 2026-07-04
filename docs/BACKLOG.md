@@ -64,9 +64,9 @@ No active backlog items.
 - [ ] `P2` Document blueprint structure and feature semantics.
       Make the blueprint authoring docs cover the actual supported structure,
       not only examples. Acceptance checks: document top-level sections,
-      install owner/ports/artifacts, bundle options, Docker service/runtime
-      settings, commands, app/deployed command exposure, config artifact
-      directories and single-file artifacts, generated mount paths, bootstrap
+      install owner/ports/managed paths, bundle options, Docker service/runtime
+      settings, commands, app/deployed command exposure, managed config
+      directories and single-file paths, generated mount paths, bootstrap
       creation behavior for writable app commands, and strict start/install
       preflights; include a realistic blueprint example and cross-check the
       docs against parser validation and generated Compose behavior.

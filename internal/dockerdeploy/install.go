@@ -65,7 +65,7 @@ type installPlan struct {
 	Terminal               deploy.AppTerminalConfig
 	ConfigDir              string
 	ConfigContainerDir     string
-	ConfigArtifactFiles    []string
+	ManagedFiles           []string
 	DeployedCommands       []deploy.DockerCommandConfig
 	Hooks                  deploy.DockerInstallHooksConfig
 	Success                deploy.DockerInstallSuccessConfig
@@ -307,7 +307,7 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 	if err != nil {
 		return installPlan{}, err
 	}
-	preservePaths, err := installPreservePaths(pack.Install.Upgrade.Artifacts, options.Replace, options.Clean)
+	preservePaths, err := installPreservePaths(pack.Install.ManagedPaths, options.Replace, options.Clean)
 	if err != nil {
 		return installPlan{}, err
 	}
@@ -344,7 +344,7 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 		Terminal:               pack.App.Terminal,
 		ConfigDir:              pack.Docker.DeploymentDirs.Config,
 		ConfigContainerDir:     configLayout.ContainerConfigDir,
-		ConfigArtifactFiles:    configArtifactFilePaths(configLayout.FileMounts),
+		ManagedFiles:           append([]string(nil), configLayout.FileMounts...),
 		DeployedCommands:       deployedCommands,
 		Hooks:                  pack.Docker.Install.Hooks,
 		Success:                pack.Docker.Install.Success,
@@ -436,13 +436,13 @@ func printInstallDryRun(stdout io.Writer, plan installPlan) {
 		fmt.Fprintf(stdout, "would rebuild local source bundle: %s\n", installBundleSourceNames(sources))
 	}
 	for _, path := range plan.PreservePaths {
-		fmt.Fprintf(stdout, "would preserve installed artifact: %s\n", path)
+		fmt.Fprintf(stdout, "would preserve installed managed path: %s\n", path)
 	}
-	for _, artifact := range plan.Replace {
-		fmt.Fprintf(stdout, "would replace installed artifact: %s\n", artifact)
+	for _, path := range plan.Replace {
+		fmt.Fprintf(stdout, "would replace installed managed path: %s\n", path)
 	}
 	if plan.Clean {
-		fmt.Fprintln(stdout, "would clean app-owned installed artifacts")
+		fmt.Fprintln(stdout, "would clean app-owned managed paths")
 	}
 	fmt.Fprintf(stdout, "would write control script: %s\n", filepath.Join(plan.TargetDir, plan.ControlScript))
 	if plan.Backend == installBackendLinuxSystemd {
@@ -481,22 +481,26 @@ func printInstallDryRun(stdout io.Writer, plan installPlan) {
 	}
 }
 
-func installPreservePaths(artifacts map[string]deploy.InstallArtifactPolicyConfig, replace []string, clean bool) ([]string, error) {
+func installPreservePaths(managedPaths deploy.InstallManagedPathsConfig, replace []string, clean bool) ([]string, error) {
 	if clean {
 		return nil, nil
 	}
 	replaceAll := false
 	replaced := map[string]bool{}
+	declared := map[string]bool{}
+	for _, name := range managedPathNames(managedPaths) {
+		declared[name] = true
+	}
 	for _, name := range replace {
-		name = strings.TrimSpace(name)
+		name = cleanManifestPath(name)
 		switch {
-		case name == "":
+		case name == ".":
 			return nil, fmt.Errorf("--replace must not be empty")
 		case name == "all":
 			replaceAll = true
 		default:
-			if _, ok := artifacts[name]; !ok {
-				return nil, fmt.Errorf("unknown install artifact %q; declared artifacts: %s", name, strings.Join(installArtifactNames(artifacts), ", "))
+			if !declared[name] {
+				return nil, fmt.Errorf("unknown managed install path %q; declared managed paths: %s", name, strings.Join(managedPathNames(managedPaths), ", "))
 			}
 			replaced[name] = true
 		}
@@ -505,26 +509,19 @@ func installPreservePaths(artifacts map[string]deploy.InstallArtifactPolicyConfi
 		return nil, nil
 	}
 	paths := []string{}
-	names := installArtifactNames(artifacts)
-	for _, name := range names {
-		artifact := artifacts[name]
-		if artifact.Default != "preserve" || replaced[name] {
+	entries := append([]deploy.InstallManagedPathConfig{}, managedPaths.Files...)
+	entries = append(entries, managedPaths.Dirs...)
+	sort.Slice(entries, func(i int, j int) bool {
+		return cleanManifestPath(entries[i].Path) < cleanManifestPath(entries[j].Path)
+	})
+	for _, entry := range entries {
+		path := cleanManifestPath(entry.Path)
+		if entry.Update != "preserve" || replaced[path] {
 			continue
 		}
-		for _, path := range artifact.Paths {
-			paths = append(paths, filepath.ToSlash(filepath.Clean(path)))
-		}
+		paths = append(paths, path)
 	}
 	return paths, nil
-}
-
-func installArtifactNames(artifacts map[string]deploy.InstallArtifactPolicyConfig) []string {
-	names := make([]string, 0, len(artifacts))
-	for name := range artifacts {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
 }
 
 func validServiceName(name string) bool {
@@ -794,7 +791,7 @@ func systemdUnit(plan installPlan, dockerBin string, includeDockerUnit bool) str
 	if includeDockerUnit {
 		dockerUnitLines = "Requires=docker.service\nAfter=docker.service\n"
 	}
-	configArtifactPreflights := systemdConfigArtifactPreflights(plan)
+	managedFilePreflights := systemdManagedFilePreflights(plan)
 	composeFiles := "--project-directory " + plan.TargetDir + " -f " + filepath.Join(plan.TargetDir, ComposeFileName)
 	if plan.ComposeProject != "" {
 		composeFiles = "--project-name " + plan.ComposeProject + " " + composeFiles
@@ -821,17 +818,17 @@ TimeoutStartSec=180
 
 [Install]
 WantedBy=multi-user.target
-`, plan.Service, plan.Service, plan.TargetDir, plan.ComposeProject, dockerUnitLines, plan.TargetDir, configArtifactPreflights, dockerBin, dockerBin, filepath.Join(plan.TargetDir, DockerEnvFileName), composeFiles, dockerBin, filepath.Join(plan.TargetDir, DockerEnvFileName), composeFiles)
+`, plan.Service, plan.Service, plan.TargetDir, plan.ComposeProject, dockerUnitLines, plan.TargetDir, managedFilePreflights, dockerBin, dockerBin, filepath.Join(plan.TargetDir, DockerEnvFileName), composeFiles, dockerBin, filepath.Join(plan.TargetDir, DockerEnvFileName), composeFiles)
 }
 
-func systemdConfigArtifactPreflights(plan installPlan) string {
-	if len(plan.ConfigArtifactFiles) == 0 {
+func systemdManagedFilePreflights(plan installPlan) string {
+	if len(plan.ManagedFiles) == 0 {
 		return ""
 	}
-	lines := make([]string, 0, len(plan.ConfigArtifactFiles))
-	for _, relativePath := range plan.ConfigArtifactFiles {
+	lines := make([]string, 0, len(plan.ManagedFiles))
+	for _, relativePath := range plan.ManagedFiles {
 		path := filepath.Join(plan.TargetDir, filepath.FromSlash(relativePath))
-		lines = append(lines, "ExecStartPre=/bin/sh -c '[ -f \"$1\" ] || { echo \"config artifact file is missing: $1\" >&2; exit 1; }' reploy-config-artifact "+strconv.Quote(path))
+		lines = append(lines, "ExecStartPre=/bin/sh -c '[ -f \"$1\" ] || { echo \"managed file is missing: $1\" >&2; exit 1; }' reploy-managed-file "+strconv.Quote(path))
 	}
 	return strings.Join(lines, "\n") + "\n"
 }
@@ -1277,7 +1274,7 @@ func applyLinuxSystemdInstallPlan(plan installPlan) error {
 		return fmt.Errorf("systemctl enable %s.service: %w", plan.Service, err)
 	}
 	if plan.Start {
-		if err := ensureConfigArtifactFiles(plan.TargetDir, plan.ConfigArtifactFiles); err != nil {
+		if err := ensureManagedFiles(plan.TargetDir, plan.ManagedFiles); err != nil {
 			return err
 		}
 		if err := runInstallHooks(plan, "before start", plan.Hooks.BeforeStart); err != nil {
@@ -1298,7 +1295,7 @@ func applyDockerDesktopInstallPlan(plan installPlan) error {
 		return err
 	}
 	if plan.Start {
-		if err := ensureConfigArtifactFiles(plan.TargetDir, plan.ConfigArtifactFiles); err != nil {
+		if err := ensureManagedFiles(plan.TargetDir, plan.ManagedFiles); err != nil {
 			return err
 		}
 		if err := runInstallHooks(plan, "before start", plan.Hooks.BeforeStart); err != nil {

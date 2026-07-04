@@ -22,7 +22,6 @@ services:
       - ${REPLOY_BUNDLE_DIR:?set REPLOY_BUNDLE_DIR}:/bundle:ro
       - ${REPLOY_RUNTIME_DIR:-./.reploy/runtime}:/reploy-runtime
 {{LOCAL_SOURCE_VOLUMES}}
-      - ${REPLOY_DATA_DIR:?set REPLOY_DATA_DIR}:/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

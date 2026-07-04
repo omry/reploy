@@ -80,12 +80,14 @@ install:
       https:
         host_bind: 127.0.0.1
         host_port: 18075
-  upgrade:
-    artifacts:
-      config:
-        default: preserve
-        paths:
-          - conf/
+  managed_paths:
+    dirs:
+      - path: conf
+        update: preserve
+        mount: /{{ path }}
+      - path: data
+        update: preserve
+        mount: /{{ path }}
 
 docker:
   service:

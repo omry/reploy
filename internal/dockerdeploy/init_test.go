@@ -26,6 +26,7 @@ func TestInitWritesDeploymentDirectory(t *testing.T) {
 	if len(results) == 0 {
 		t.Fatal("expected stage results")
 	}
+	assertUniqueResultPaths(t, results)
 	assertResultStatus(t, results, filepath.Join(deployDir, ComposeFileName), deploy.UpdateStatusUpdated)
 	for _, relativePath := range []string{
 		ComposeFileName,
@@ -282,7 +283,7 @@ func TestStagingControlScriptRunsComposeLifecycleAndAppCommands(t *testing.T) {
 	}
 }
 
-func TestStagingControlScriptCreatesMissingSingleFileConfigArtifactForAppCommand(t *testing.T) {
+func TestStagingControlScriptCreatesMissingManagedFileForAppCommand(t *testing.T) {
 	deployDir := makeSingleFileConfigAppCommandDeployment(t)
 	script := filepath.Join(deployDir, "democtl")
 
@@ -321,7 +322,7 @@ func TestStagingControlScriptCreatesMissingSingleFileConfigArtifactForAppCommand
 	for _, want := range []string{
 		"run\n",
 		"REPLOY_CONTAINER_COMMAND=bootstrap_plugin\n",
-		"REPLOY_CONFIG_CONTAINER_DIR=/config/conf\n",
+		"REPLOY_CONFIG_CONTAINER_DIR=/conf\n",
 		"REPLOY_CONFIG_MOUNT=rw\n",
 		"app\n",
 	} {
@@ -331,7 +332,7 @@ func TestStagingControlScriptCreatesMissingSingleFileConfigArtifactForAppCommand
 	}
 }
 
-func TestStagingControlScriptChownsCreatedConfigArtifactPlaceholderWhenRunAsRoot(t *testing.T) {
+func TestStagingControlScriptChownsCreatedManagedFilePlaceholderWhenRunAsRoot(t *testing.T) {
 	deployDir := makeSingleFileConfigAppCommandDeployment(t)
 	script := filepath.Join(deployDir, "democtl")
 	envValues, err := readDockerEnv(deployDir)
@@ -815,7 +816,7 @@ docker:
 	if !strings.Contains(compose, "reploy_status_start()") || !strings.Contains(compose, `printf "\r%s |" "$$reploy_status_label"`) {
 		t.Fatalf("compose did not render reusable status spinner:\n%s", compose)
 	}
-	if strings.Contains(compose, "load_reploy_app_env_file") || strings.Contains(compose, "done < /config/.env;") {
+	if strings.Contains(compose, "load_reploy_app_env_file") || strings.Contains(compose, "done < /conf/.env;") {
 		t.Fatalf("compose should not parse app env files; the app owns its env parser:\n%s", compose)
 	}
 	if !strings.Contains(compose, `reploy_status_start "Preparing Python runtime" &&`) || !strings.Contains(compose, "reploy_status_stop 0") {
@@ -826,8 +827,8 @@ docker:
 	}
 }
 
-func TestInitRendersSingleFileConfigArtifactMounts(t *testing.T) {
-	packDir := makeTestPackWithManifest(t, testPackManifestWithSingleFileConfigArtifact())
+func TestInitRendersManagedFileMounts(t *testing.T) {
+	packDir := makeTestPackWithManifest(t, testPackManifestWithManagedFile())
 	ref, err := deploy.ParsePackRef("file:" + packDir)
 	if err != nil {
 		t.Fatal(err)
@@ -844,25 +845,25 @@ func TestInitRendersSingleFileConfigArtifactMounts(t *testing.T) {
 	}
 	compose := readFile(t, filepath.Join(deployDir, ComposeFileName))
 	for _, want := range []string{
-		`      - "${REPLOY_CONFIG_DIR:?set REPLOY_CONFIG_DIR}:/config/conf:${REPLOY_CONFIG_MOUNT:-ro}"`,
-		`      - "./.arbiter.env:/config/.arbiter.env:${REPLOY_CONFIG_MOUNT:-ro}"`,
-		`container_command_config_check() { "demo-server" "--config-dir" "/config/conf" "--config-name" "$${DEMO_CONFIG_NAME}" "config" "check" "$$@"; };`,
+		`      - "./.arbiter.env:/.arbiter.env:${REPLOY_CONFIG_MOUNT:-ro}"`,
+		`      - "./conf:/conf:${REPLOY_CONFIG_MOUNT:-ro}"`,
+		`      - "./data:/data:${REPLOY_CONFIG_MOUNT:-ro}"`,
+		`container_command_config_check() { "demo-server" "--config-dir" "/conf" "--config-name" "$${DEMO_CONFIG_NAME}" "config" "check" "$$@"; };`,
 	} {
 		if !strings.Contains(compose, want) {
 			t.Fatalf("compose missing %q:\n%s", want, compose)
 		}
 	}
-	if strings.Contains(compose, "      - ${REPLOY_CONFIG_DIR:?set REPLOY_CONFIG_DIR}:/config:${REPLOY_CONFIG_MOUNT:-ro}") ||
-		strings.Contains(compose, `      - "${REPLOY_CONFIG_DIR:?set REPLOY_CONFIG_DIR}:/config:${REPLOY_CONFIG_MOUNT:-ro}"`) {
-		t.Fatalf("compose should not mount conf directly at /config when sibling config files are declared:\n%s", compose)
+	if strings.Contains(compose, "REPLOY_CONFIG_DIR:?set REPLOY_CONFIG_DIR") {
+		t.Fatalf("compose should use explicit managed path mounts, not REPLOY_CONFIG_DIR:\n%s", compose)
 	}
 	helper := readFile(t, filepath.Join(deployDir, "democtl"))
 	for _, want := range []string{
-		"REPLOY_CONFIG_CONTAINER_DIR=/config/conf",
-		"validate_config_artifact_files",
-		"ensure_config_artifact_files",
-		"config artifact path must be a file: $target_dir/",
-		"config artifact file is missing: $target_dir/",
+		"REPLOY_CONFIG_CONTAINER_DIR=/conf",
+		"validate_managed_files",
+		"ensure_managed_files",
+		"managed path must be a file: $target_dir/",
+		"managed file is missing: $target_dir/",
 		".arbiter.env",
 	} {
 		if !strings.Contains(helper, want) {
@@ -871,8 +872,8 @@ func TestInitRendersSingleFileConfigArtifactMounts(t *testing.T) {
 	}
 }
 
-func TestInitQuotesSingleFileConfigArtifactVolumePaths(t *testing.T) {
-	manifest := strings.Replace(testPackManifestWithSingleFileConfigArtifact(), "- .arbiter.env", "- '.arbiter #1.env'", 1)
+func TestInitQuotesManagedFileVolumePaths(t *testing.T) {
+	manifest := strings.Replace(testPackManifestWithManagedFile(), "path: .arbiter.env", "path: '.arbiter #1.env'", 1)
 	packDir := makeTestPackWithManifest(t, manifest)
 	ref, err := deploy.ParsePackRef("file:" + packDir)
 	if err != nil {
@@ -885,9 +886,9 @@ func TestInitQuotesSingleFileConfigArtifactVolumePaths(t *testing.T) {
 	}
 
 	compose := readFile(t, filepath.Join(deployDir, ComposeFileName))
-	want := "      - " + strconv.Quote("./.arbiter #1.env:/config/.arbiter #1.env:${REPLOY_CONFIG_MOUNT:-ro}")
+	want := "      - " + strconv.Quote("./.arbiter #1.env:/.arbiter #1.env:${REPLOY_CONFIG_MOUNT:-ro}")
 	if !strings.Contains(compose, want) {
-		t.Fatalf("compose did not quote special config artifact volume %q:\n%s", want, compose)
+		t.Fatalf("compose did not quote special managed path volume %q:\n%s", want, compose)
 	}
 }
 
@@ -1542,12 +1543,14 @@ install:
       https:
         host_bind: 127.0.0.1
         host_port: 18075
-  upgrade:
-    artifacts:
-      config:
-        default: preserve
-        paths:
-          - conf/
+  managed_paths:
+    dirs:
+      - path: conf
+        update: preserve
+        mount: /{{ path }}
+      - path: data
+        update: preserve
+        mount: /{{ path }}
 
 bundle:
   options:
@@ -1585,7 +1588,7 @@ docker:
         argv:
           - demo-server
           - --config-dir
-          - /config
+          - /conf
           - --config-name
           - ${DEMO_CONFIG_NAME}
           - serve
@@ -1599,7 +1602,7 @@ docker:
         argv:
           - demo-server
           - --config-dir
-          - /config
+          - /conf
           - --config-name
           - ${DEMO_CONFIG_NAME}
           - config
@@ -1607,9 +1610,8 @@ docker:
 `
 }
 
-func testPackManifestWithSingleFileConfigArtifact() string {
-	manifest := strings.Replace(testPackManifest(), "          - conf/\n", "          - conf/\n          - .arbiter.env\n", 1)
-	return strings.ReplaceAll(manifest, "          - /config\n", "          - /config/conf\n")
+func testPackManifestWithManagedFile() string {
+	return strings.Replace(testPackManifest(), "  managed_paths:\n    dirs:\n", "  managed_paths:\n    files:\n      - path: .arbiter.env\n        update: preserve\n        mount: /{{ path }}\n    dirs:\n", 1)
 }
 
 func assertResultStatus(t *testing.T, results []UpdateResult, path string, expected deploy.UpdateStatus) {
@@ -1623,6 +1625,17 @@ func assertResultStatus(t *testing.T, results []UpdateResult, path string, expec
 		}
 	}
 	t.Fatalf("missing result for %s", path)
+}
+
+func assertUniqueResultPaths(t *testing.T, results []UpdateResult) {
+	t.Helper()
+	seen := map[string]bool{}
+	for _, result := range results {
+		if seen[result.Path] {
+			t.Fatalf("duplicate result path: %s", result.Path)
+		}
+		seen[result.Path] = true
+	}
 }
 
 func assertResultMissing(t *testing.T, results []UpdateResult, path string) {

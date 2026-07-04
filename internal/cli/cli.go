@@ -2235,10 +2235,10 @@ Staging options:
   --port NAME=PORT
               Installed host port override for a named blueprint port; repeat
               for multiple ports
-  --replace ARTIFACT
-              Replace a preserved app-owned artifact during install/update;
-              use --replace all to replace every app-owned artifact
-  --clean     Equivalent to replacing all app-owned artifacts
+  --replace PATH
+              Replace a preserved managed path during install/update;
+              use --replace all to replace every managed path
+  --clean     Equivalent to replacing all managed paths
   --in-place  Direct install into the target path instead of a temporary
               staging-like workspace
   --dry-run    Print the install/uninstall plan without changing the host
@@ -2426,10 +2426,10 @@ Options:
   --port NAME=PORT
               Installed host port override for a named blueprint port; repeat
               for multiple ports
-  --replace ARTIFACT
-              Replace a preserved app-owned artifact during install/update;
-              use --replace all to replace every app-owned artifact
-  --clean     Equivalent to replacing all app-owned artifacts
+  --replace PATH
+              Replace a preserved managed path during install/update;
+              use --replace all to replace every managed path
+  --clean     Equivalent to replacing all managed paths
   --in-place  Direct install into the target path instead of a temporary
               staging-like workspace
   --dry-run    Print the install/uninstall plan without changing the host

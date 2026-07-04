@@ -17,33 +17,33 @@ const (
 )
 
 type controlScriptSpec struct {
-	Mode                controlScriptMode
-	TargetDir           string
-	AppID               string
-	Service             string
-	ComposeProject      string
-	ComposeOverride     bool
-	ControlScript       string
-	ConfigDir           string
-	Health              deploy.DockerHealthConfig
-	Terminal            deploy.AppTerminalConfig
-	DeployedCommands    []deploy.DockerCommandConfig
-	ConfigContainerDir  string
-	ConfigArtifactFiles []string
+	Mode               controlScriptMode
+	TargetDir          string
+	AppID              string
+	Service            string
+	ComposeProject     string
+	ComposeOverride    bool
+	ControlScript      string
+	ConfigDir          string
+	Health             deploy.DockerHealthConfig
+	Terminal           deploy.AppTerminalConfig
+	DeployedCommands   []deploy.DockerCommandConfig
+	ConfigContainerDir string
+	ManagedFiles       []string
 }
 
 func stagingControlScriptContent(pack deploy.AppPack, deployedCommands []deploy.DockerCommandConfig) string {
 	configLayout := configMountLayoutForPack(pack)
 	return renderControlScript(controlScriptSpec{
-		Mode:                controlScriptModeStaged,
-		AppID:               pack.AppID,
-		ControlScript:       controlScriptName(pack.AppID),
-		ConfigDir:           pack.Docker.DeploymentDirs.Config,
-		Health:              pack.Docker.Health,
-		Terminal:            pack.App.Terminal,
-		DeployedCommands:    deployedCommands,
-		ConfigContainerDir:  configLayout.ContainerConfigDir,
-		ConfigArtifactFiles: configArtifactFilePaths(configLayout.FileMounts),
+		Mode:               controlScriptModeStaged,
+		AppID:              pack.AppID,
+		ControlScript:      controlScriptName(pack.AppID),
+		ConfigDir:          pack.Docker.DeploymentDirs.Config,
+		Health:             pack.Docker.Health,
+		Terminal:           pack.App.Terminal,
+		DeployedCommands:   deployedCommands,
+		ConfigContainerDir: configLayout.ContainerConfigDir,
+		ManagedFiles:       append([]string(nil), configLayout.FileMounts...),
 	})
 }
 
@@ -53,19 +53,19 @@ func controlScriptContent(plan installPlan) string {
 		mode = controlScriptModeDockerDesktop
 	}
 	return renderControlScript(controlScriptSpec{
-		Mode:                mode,
-		TargetDir:           plan.TargetDir,
-		AppID:               plan.AppID,
-		Service:             plan.Service,
-		ComposeProject:      plan.ComposeProject,
-		ComposeOverride:     plan.ComposeOverride,
-		ControlScript:       plan.ControlScript,
-		ConfigDir:           plan.ConfigDir,
-		Health:              plan.Health,
-		Terminal:            plan.Terminal,
-		DeployedCommands:    plan.DeployedCommands,
-		ConfigContainerDir:  plan.ConfigContainerDir,
-		ConfigArtifactFiles: append([]string(nil), plan.ConfigArtifactFiles...),
+		Mode:               mode,
+		TargetDir:          plan.TargetDir,
+		AppID:              plan.AppID,
+		Service:            plan.Service,
+		ComposeProject:     plan.ComposeProject,
+		ComposeOverride:    plan.ComposeOverride,
+		ControlScript:      plan.ControlScript,
+		ConfigDir:          plan.ConfigDir,
+		Health:             plan.Health,
+		Terminal:           plan.Terminal,
+		DeployedCommands:   plan.DeployedCommands,
+		ConfigContainerDir: plan.ConfigContainerDir,
+		ManagedFiles:       append([]string(nil), plan.ManagedFiles...),
 	})
 }
 
@@ -138,7 +138,7 @@ run_app_command() {
   command_name="$1"
   shift
   forwarded_count="$#"
-  ensure_config_artifact_files
+  ensure_managed_files
   append_compose_base
   append_shell_arg "run"
   append_shell_arg "--rm"
@@ -262,7 +262,7 @@ case "$cmd" in
     exit 2
     ;;
 esac
-`, controlScriptAssignments(spec), health.SchemeEnv, health.HostEnv, health.PortEnv, defaultString(health.DefaultScheme, "https"), defaultString(health.DefaultHost, "127.0.0.1"), health.DefaultPort, health.Path, insecureFlag, wgetInsecureFlag, spec.ControlScript, controlScriptServiceUsage(spec), controlScriptUsageCommands(spec.DeployedCommands), controlScriptOutputPrefixFunctions(spec), controlScriptConfigArtifactValidation(spec), controlScriptComposeFunctions(spec), configContainerDir, spec.ControlScript, controlScriptAppCommandRunner(spec), controlScriptLifecycleCases(spec), controlScriptHealthCommandRunner(spec), controlScriptHealthCommandRunner(spec), controlScriptAppCommandCases(spec.DeployedCommands))
+`, controlScriptAssignments(spec), health.SchemeEnv, health.HostEnv, health.PortEnv, defaultString(health.DefaultScheme, "https"), defaultString(health.DefaultHost, "127.0.0.1"), health.DefaultPort, health.Path, insecureFlag, wgetInsecureFlag, spec.ControlScript, controlScriptServiceUsage(spec), controlScriptUsageCommands(spec.DeployedCommands), controlScriptOutputPrefixFunctions(spec), controlScriptManagedFileValidation(spec), controlScriptComposeFunctions(spec), configContainerDir, spec.ControlScript, controlScriptAppCommandRunner(spec), controlScriptLifecycleCases(spec), controlScriptHealthCommandRunner(spec), controlScriptHealthCommandRunner(spec), controlScriptAppCommandCases(spec.DeployedCommands))
 }
 
 func controlScriptAssignments(spec controlScriptSpec) string {
@@ -383,33 +383,33 @@ func controlScriptOutputLabel(appID string) string {
 	return "[" + appID + "]"
 }
 
-func controlScriptConfigArtifactValidation(spec controlScriptSpec) string {
-	if len(spec.ConfigArtifactFiles) == 0 {
-		return `validate_config_artifact_files() {
+func controlScriptManagedFileValidation(spec controlScriptSpec) string {
+	if len(spec.ManagedFiles) == 0 {
+		return `validate_managed_files() {
   return 0
 }
 
-ensure_config_artifact_files() {
+ensure_managed_files() {
   return 0
 }`
 	}
-	lines := []string{`validate_config_artifact_files() {`}
-	for _, relativePath := range spec.ConfigArtifactFiles {
+	lines := []string{`validate_managed_files() {`}
+	for _, relativePath := range spec.ManagedFiles {
 		lines = append(lines,
 			fmt.Sprintf(`  if [ ! -f "$target_dir"/%s ]; then`, shellSingleQuote(relativePath)),
-			fmt.Sprintf(`    printf '%%s%%s\n' "config artifact file is missing: $target_dir/" %s >&2`, shellSingleQuote(relativePath)),
+			fmt.Sprintf(`    printf '%%s%%s\n' "managed file is missing: $target_dir/" %s >&2`, shellSingleQuote(relativePath)),
 			`    return 1`,
 			`  fi`,
 		)
 	}
 	lines = append(lines, `}`)
-	lines = append(lines, ``, `ensure_config_artifact_files() {`)
-	for _, relativePath := range spec.ConfigArtifactFiles {
+	lines = append(lines, ``, `ensure_managed_files() {`)
+	for _, relativePath := range spec.ManagedFiles {
 		quotedPath := shellSingleQuote(relativePath)
 		lines = append(lines,
 			fmt.Sprintf(`  if [ -e "$target_dir"/%s ] || [ -L "$target_dir"/%s ]; then`, quotedPath, quotedPath),
 			fmt.Sprintf(`    if [ ! -f "$target_dir"/%s ]; then`, quotedPath),
-			fmt.Sprintf(`      printf '%%s%%s\n' "config artifact path must be a file: $target_dir/" %s >&2`, quotedPath),
+			fmt.Sprintf(`      printf '%%s%%s\n' "managed path must be a file: $target_dir/" %s >&2`, quotedPath),
 			`      return 1`,
 			`    fi`,
 			`  else`,
@@ -453,7 +453,7 @@ run_compose() {
 }
 
 run_compose_up() {
-  validate_config_artifact_files
+  validate_managed_files
   shell_command=""
   append_compose_base
   append_shell_arg "up"

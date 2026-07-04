@@ -181,7 +181,7 @@ func TestInstallOnDarwinWritesDockerDesktopDeployment(t *testing.T) {
 	}
 }
 
-func TestDockerDesktopInstallStartFailsClearlyWhenConfigArtifactFileIsMissing(t *testing.T) {
+func TestDockerDesktopInstallStartFailsClearlyWhenManagedFileIsMissing(t *testing.T) {
 	deployDir := makeSingleFileConfigAppCommandDeployment(t)
 	err := applyDockerDesktopInstallPlan(installPlan{
 		SourceDir:              deployDir,
@@ -189,8 +189,8 @@ func TestDockerDesktopInstallStartFailsClearlyWhenConfigArtifactFileIsMissing(t 
 		AppID:                  "demo",
 		ControlScript:          "democtl",
 		ConfigDir:              "conf",
-		ConfigContainerDir:     "/config/conf",
-		ConfigArtifactFiles:    []string{".arbiter.env"},
+		ConfigContainerDir:     "/conf",
+		ManagedFiles:           []string{".arbiter.env"},
 		ComposeProject:         "demo-project",
 		Backend:                installBackendDockerDesktop,
 		InPlace:                true,
@@ -198,10 +198,10 @@ func TestDockerDesktopInstallStartFailsClearlyWhenConfigArtifactFileIsMissing(t 
 		DockerPreflightTimeout: time.Second,
 	})
 	if err == nil {
-		t.Fatal("expected missing config artifact file error")
+		t.Fatal("expected missing managed file error")
 	}
-	if !strings.Contains(err.Error(), "config artifact file is missing") || !strings.Contains(err.Error(), ".arbiter.env") {
-		t.Fatalf("missing config artifact error was not clear: %v", err)
+	if !strings.Contains(err.Error(), "managed file is missing") || !strings.Contains(err.Error(), ".arbiter.env") {
+		t.Fatalf("missing managed file error was not clear: %v", err)
 	}
 }
 
@@ -619,21 +619,21 @@ func TestSystemdUnitIncludesComposeOverrideWhenPresent(t *testing.T) {
 	}
 }
 
-func TestSystemdUnitPreflightsConfigArtifactFiles(t *testing.T) {
+func TestSystemdUnitPreflightsManagedFiles(t *testing.T) {
 	unit := systemdUnit(installPlan{
-		TargetDir:           "/srv/demo",
-		Service:             "demo-prod",
-		ConfigArtifactFiles: []string{".arbiter.env", "secrets/app #1.env"},
+		TargetDir:    "/srv/demo",
+		Service:      "demo-prod",
+		ManagedFiles: []string{".arbiter.env", "secrets/app #1.env"},
 	}, "/usr/bin/docker", false)
 	for _, relativePath := range []string{".arbiter.env", "secrets/app #1.env"} {
 		path := filepath.Join("/srv/demo", filepath.FromSlash(relativePath))
-		want := "ExecStartPre=/bin/sh -c '[ -f \"$1\" ] || { echo \"config artifact file is missing: $1\" >&2; exit 1; }' reploy-config-artifact " + strconv.Quote(path)
+		want := "ExecStartPre=/bin/sh -c '[ -f \"$1\" ] || { echo \"managed file is missing: $1\" >&2; exit 1; }' reploy-managed-file " + strconv.Quote(path)
 		if !strings.Contains(unit, want) {
-			t.Fatalf("unit missing config artifact preflight %q:\n%s", want, unit)
+			t.Fatalf("unit missing managed file preflight %q:\n%s", want, unit)
 		}
 	}
-	if strings.Index(unit, "config artifact file is missing") > strings.Index(unit, "Docker API did not become ready") {
-		t.Fatalf("config artifact preflight should run before Docker readiness check:\n%s", unit)
+	if strings.Index(unit, "managed file is missing") > strings.Index(unit, "Docker API did not become ready") {
+		t.Fatalf("managed file preflight should run before Docker readiness check:\n%s", unit)
 	}
 }
 
@@ -2422,7 +2422,7 @@ docker:
 	}
 }
 
-func TestInstallPreservesAppOwnedArtifactsByDefault(t *testing.T) {
+func TestInstallPreservesAppOwnedManagedPathsByDefault(t *testing.T) {
 	source := t.TempDir()
 	target := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(source, "conf"), 0o755); err != nil {
@@ -2448,7 +2448,7 @@ func TestInstallPreservesAppOwnedArtifactsByDefault(t *testing.T) {
 	}
 }
 
-func TestInstallReplaceArtifactOverwritesPreservedPath(t *testing.T) {
+func TestInstallReplaceManagedPathOverwritesPreservedPath(t *testing.T) {
 	source := t.TempDir()
 	target := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(source, "conf"), 0o755); err != nil {
@@ -2495,34 +2495,38 @@ func TestInstallAlwaysReplacesReployOwnedState(t *testing.T) {
 }
 
 func TestInstallPreservePathsHonorReplaceAndClean(t *testing.T) {
-	artifacts := map[string]deploy.InstallArtifactPolicyConfig{
-		"config": {Default: "preserve", Paths: []string{"conf/"}},
-		"env":    {Default: "preserve", Paths: []string{".env"}},
+	managedPaths := deploy.InstallManagedPathsConfig{
+		Files: []deploy.InstallManagedPathConfig{
+			{Path: ".env", Update: "preserve"},
+		},
+		Dirs: []deploy.InstallManagedPathConfig{
+			{Path: "conf", Update: "preserve"},
+		},
 	}
-	paths, err := installPreservePaths(artifacts, []string{"config"}, false)
+	paths, err := installPreservePaths(managedPaths, []string{"conf"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(paths, ",") != ".env" {
 		t.Fatalf("preserve paths = %#v", paths)
 	}
-	paths, err = installPreservePaths(artifacts, []string{"all"}, false)
+	paths, err = installPreservePaths(managedPaths, []string{"all"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(paths) != 0 {
 		t.Fatalf("replace all preserve paths = %#v", paths)
 	}
-	paths, err = installPreservePaths(artifacts, nil, true)
+	paths, err = installPreservePaths(managedPaths, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(paths) != 0 {
 		t.Fatalf("clean preserve paths = %#v", paths)
 	}
-	_, err = installPreservePaths(artifacts, []string{"missing"}, false)
-	if err == nil || !strings.Contains(err.Error(), "unknown install artifact") {
-		t.Fatalf("expected unknown artifact error, got %v", err)
+	_, err = installPreservePaths(managedPaths, []string{"missing"}, false)
+	if err == nil || !strings.Contains(err.Error(), "unknown managed install path") {
+		t.Fatalf("expected unknown managed path error, got %v", err)
 	}
 }
 

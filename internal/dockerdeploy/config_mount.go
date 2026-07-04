@@ -10,57 +10,71 @@ import (
 	"github.com/omry/reploy/internal/deploy"
 )
 
-type configArtifactFileMount struct {
+type managedPathMount struct {
 	HostRelative  string
 	ContainerPath string
 }
 
 type configMountLayout struct {
 	ContainerConfigDir string
-	FileMounts         []configArtifactFileMount
+	Mounts             []managedPathMount
+	FileMounts         []string
 }
 
 func configMountLayoutForPack(pack deploy.AppPack) configMountLayout {
-	fileMounts := configArtifactFileMounts(pack)
-	containerConfigDir := "/config"
-	if len(fileMounts) > 0 {
-		containerConfigDir = "/config/" + cleanManifestPath(pack.Docker.DeploymentDirs.Config)
-	}
-	return configMountLayout{ContainerConfigDir: containerConfigDir, FileMounts: fileMounts}
-}
-
-func configArtifactFileMounts(pack deploy.AppPack) []configArtifactFileMount {
-	artifact, ok := pack.Install.Upgrade.Artifacts["config"]
-	if !ok {
-		return nil
-	}
 	configDir := cleanManifestPath(pack.Docker.DeploymentDirs.Config)
-	mounts := []configArtifactFileMount{}
-	for _, rawPath := range artifact.Paths {
-		trimmed := strings.TrimSpace(rawPath)
-		if strings.HasSuffix(filepath.ToSlash(trimmed), "/") {
+	layout := configMountLayout{ContainerConfigDir: "/config"}
+	for _, dir := range pack.Install.ManagedPaths.Dirs {
+		mount := strings.TrimSpace(dir.Mount)
+		if mount == "" {
 			continue
 		}
-		relativePath := cleanManifestPath(trimmed)
-		if relativePath == configDir || strings.HasPrefix(relativePath, configDir+"/") {
-			continue
+		relativePath := cleanManifestPath(dir.Path)
+		if relativePath == configDir {
+			layout.ContainerConfigDir = mount
 		}
-		mounts = append(mounts, configArtifactFileMount{
+		layout.Mounts = append(layout.Mounts, managedPathMount{
 			HostRelative:  relativePath,
-			ContainerPath: "/config/" + relativePath,
+			ContainerPath: mount,
 		})
 	}
-	sort.Slice(mounts, func(i int, j int) bool {
-		return mounts[i].HostRelative < mounts[j].HostRelative
+	for _, file := range pack.Install.ManagedPaths.Files {
+		relativePath := cleanManifestPath(file.Path)
+		layout.FileMounts = append(layout.FileMounts, relativePath)
+		mount := strings.TrimSpace(file.Mount)
+		if mount == "" {
+			continue
+		}
+		layout.Mounts = append(layout.Mounts, managedPathMount{
+			HostRelative:  relativePath,
+			ContainerPath: mount,
+		})
+	}
+	sort.Slice(layout.Mounts, func(i int, j int) bool {
+		return layout.Mounts[i].HostRelative < layout.Mounts[j].HostRelative
 	})
-	return mounts
+	sort.Strings(layout.FileMounts)
+	return layout
 }
 
-func configArtifactFilePaths(mounts []configArtifactFileMount) []string {
-	paths := make([]string, 0, len(mounts))
-	for _, mount := range mounts {
-		paths = append(paths, mount.HostRelative)
+func managedPathNames(managedPaths deploy.InstallManagedPathsConfig) []string {
+	names := make([]string, 0, len(managedPaths.Files)+len(managedPaths.Dirs))
+	for _, file := range managedPaths.Files {
+		names = append(names, cleanManifestPath(file.Path))
 	}
+	for _, dir := range managedPaths.Dirs {
+		names = append(names, cleanManifestPath(dir.Path))
+	}
+	sort.Strings(names)
+	return names
+}
+
+func managedDirPaths(managedPaths deploy.InstallManagedPathsConfig) []string {
+	paths := make([]string, 0, len(managedPaths.Dirs))
+	for _, dir := range managedPaths.Dirs {
+		paths = append(paths, cleanManifestPath(dir.Path))
+	}
+	sort.Strings(paths)
 	return paths
 }
 
@@ -68,68 +82,68 @@ func cleanManifestPath(path string) string {
 	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(strings.TrimSpace(path))))
 }
 
-func ensureConfigArtifactFileMounts(dir string, pack deploy.AppPack) error {
-	return ensureConfigArtifactFiles(dir, configArtifactFilePaths(configArtifactFileMounts(pack)))
+func ensureManagedFileMountsForPack(dir string, pack deploy.AppPack) error {
+	return ensureManagedFiles(dir, configMountLayoutForPack(pack).FileMounts)
 }
 
-func ensureConfigArtifactFileMountPlaceholders(dir string, pack deploy.AppPack) error {
-	return ensureConfigArtifactFilePlaceholders(dir, configArtifactFilePaths(configArtifactFileMounts(pack)))
+func ensureManagedFilePlaceholdersForPack(dir string, pack deploy.AppPack) error {
+	return ensureManagedFilePlaceholders(dir, configMountLayoutForPack(pack).FileMounts)
 }
 
-func ensureConfigArtifactFiles(dir string, relativePaths []string) error {
+func ensureManagedFiles(dir string, relativePaths []string) error {
 	for _, relativePath := range relativePaths {
 		path := filepath.Join(dir, filepath.FromSlash(relativePath))
 		info, err := os.Stat(path)
 		if os.IsNotExist(err) {
-			return fmt.Errorf("config artifact file is missing: %s", path)
+			return fmt.Errorf("managed file is missing: %s", path)
 		}
 		if err != nil {
-			return fmt.Errorf("inspect config artifact file %s: %w", path, err)
+			return fmt.Errorf("inspect managed file %s: %w", path, err)
 		}
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("config artifact path must be a file: %s", path)
+			return fmt.Errorf("managed path must be a file: %s", path)
 		}
 	}
 	return nil
 }
 
-func ensureConfigArtifactFilePlaceholders(dir string, relativePaths []string) error {
+func ensureManagedFilePlaceholders(dir string, relativePaths []string) error {
 	for _, relativePath := range relativePaths {
 		path := filepath.Join(dir, filepath.FromSlash(relativePath))
 		info, err := os.Stat(path)
 		if err == nil {
 			if !info.Mode().IsRegular() {
-				return fmt.Errorf("config artifact path must be a file: %s", path)
+				return fmt.Errorf("managed path must be a file: %s", path)
 			}
 			continue
 		}
 		if !os.IsNotExist(err) {
-			return fmt.Errorf("inspect config artifact file %s: %w", path, err)
+			return fmt.Errorf("inspect managed file %s: %w", path, err)
 		}
 		if _, lstatErr := os.Lstat(path); lstatErr == nil {
-			return fmt.Errorf("config artifact path must be a file: %s", path)
+			return fmt.Errorf("managed path must be a file: %s", path)
 		} else if !os.IsNotExist(lstatErr) {
-			return fmt.Errorf("inspect config artifact file %s: %w", path, lstatErr)
+			return fmt.Errorf("inspect managed file %s: %w", path, lstatErr)
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			return fmt.Errorf("create config artifact file parent %s: %w", filepath.Dir(path), err)
+			return fmt.Errorf("create managed file parent %s: %w", filepath.Dir(path), err)
 		}
 		file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 		if err != nil {
 			if os.IsExist(err) {
 				info, statErr := os.Stat(path)
 				if statErr != nil {
-					return fmt.Errorf("inspect config artifact file %s: %w", path, statErr)
+					return fmt.Errorf("inspect managed file %s: %w", path, statErr)
 				}
 				if !info.Mode().IsRegular() {
-					return fmt.Errorf("config artifact path must be a file: %s", path)
+					return fmt.Errorf("managed path must be a file: %s", path)
 				}
 				continue
 			}
-			return fmt.Errorf("create config artifact file placeholder %s: %w", path, err)
+			return fmt.Errorf("create managed file placeholder %s: %w", path, err)
 		}
 		if err := file.Close(); err != nil {
-			return fmt.Errorf("create config artifact file placeholder %s: %w", path, err)
+			return fmt.Errorf("create managed file placeholder %s: %w", path, err)
 		}
 	}
 	return nil

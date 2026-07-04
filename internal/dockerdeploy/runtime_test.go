@@ -190,8 +190,8 @@ func TestRuntimeUpVerboseStreamsBundlePrepareOutput(t *testing.T) {
 	}
 }
 
-func TestRuntimeUpFailsClearlyWhenSingleFileConfigArtifactIsMissing(t *testing.T) {
-	packDir := makeTestPackWithManifest(t, testPackManifestWithSingleFileConfigArtifact())
+func TestRuntimeUpFailsClearlyWhenManagedFileIsMissing(t *testing.T) {
+	packDir := makeTestPackWithManifest(t, testPackManifestWithManagedFile())
 	ref, err := deploy.ParsePackRef("file:" + packDir)
 	if err != nil {
 		t.Fatal(err)
@@ -209,13 +209,13 @@ func TestRuntimeUpFailsClearlyWhenSingleFileConfigArtifactIsMissing(t *testing.T
 
 	err = Runtime(RuntimeOptions{Dir: dir, Action: "up"})
 	if err == nil {
-		t.Fatal("expected missing config artifact file error")
+		t.Fatal("expected missing managed file error")
 	}
 	if called {
-		t.Fatal("runtime invoked Docker despite missing config artifact")
+		t.Fatal("runtime invoked Docker despite missing managed file")
 	}
-	if !strings.Contains(err.Error(), "config artifact file is missing") || !strings.Contains(err.Error(), ".arbiter.env") {
-		t.Fatalf("missing config artifact error was not clear: %v", err)
+	if !strings.Contains(err.Error(), "managed file is missing") || !strings.Contains(err.Error(), ".arbiter.env") {
+		t.Fatalf("missing managed file error was not clear: %v", err)
 	}
 }
 

@@ -31,9 +31,9 @@ The boundary into deployment is install/update:
 - staged install creates the deployment from staging
 - direct install creates the deployment from blueprint defaults
 - later update brings the deployment back in sync with staging
-- installed config and app-owned artifacts are preserved by default
-- blueprints declare upgrade policy for app-owned artifacts
-- operators can override the policy to replace selected artifacts or force a
+- installed config and app-owned managed paths are preserved by default
+- blueprints declare update policy for app-owned managed paths
+- operators can override the policy to replace selected paths or force a
   clean install
 
 ## Lifecycle
@@ -145,7 +145,7 @@ The same conceptual boundary should cover:
 - dry-run planning
 - root/systemd requirements on Linux
 - installed state metadata
-- upgrade policy for preserving or replacing installed artifacts
+- update policy for preserving or replacing app-owned managed paths
 
 Side-by-side identity is mostly an existing install behavior, not a new design
 hole. Current install requires an explicit absolute target path, defaults the
@@ -211,67 +211,72 @@ install:
       https:
         host_bind: 127.0.0.1
         host_port: 18075
-  upgrade:
-    artifacts:
-      config:
-        default: preserve
-        paths:
-          - conf/
-      env:
-        default: preserve
-        paths:
-          - .env
-      generated:
-        default: replace
-        paths:
-          - generated/
+  managed_paths:
+    files:
+      - path: .env
+        update: preserve
+        mount: /{{ path }}
+    dirs:
+      - path: conf
+        update: preserve
+        mount: /{{ path }}
+      - path: data
+        update: preserve
+        mount: /{{ path }}
+      - path: generated
+        update: replace
 ```
 
 The container port is the port inside the container. It should default to the
 same value as the declared host port and only appear when an app author needs
 to override it.
 
-By default, installed app config and app-owned artifacts are preserved during an
-update. A blueprint should declare artifact classes or paths and their upgrade
-policy. Operators should be able to override that policy for a specific update.
-The policy should be organized around named artifact classes for operator UX,
-with paths underneath each class. Raw paths should not be the primary operator
-interface.
+By default, installed app config and app-owned managed paths are preserved
+during an update when their policy is `preserve`. A blueprint should declare
+managed files and directories directly under `install.managed_paths`, with
+update policy on each path and optional runtime mount targets. Operators can
+override preservation for a specific update by replacing a declared path.
 
-Example policy shape inside `install.upgrade`:
+Example policy shape inside `install.managed_paths`:
 
 ```yaml
 install:
-  upgrade:
-    artifacts:
-      config:
-        default: preserve
-        paths:
-          - conf/
-      env:
-        default: preserve
-        paths:
-          - .env
-      generated:
-        default: replace
-        paths:
-          - generated/
+  managed_paths:
+    files:
+      - path: .env
+        update: preserve
+        mount: /{{ path }}
+    dirs:
+      - path: conf
+        update: preserve
+        mount: /{{ path }}
+      - path: data
+        update: preserve
+        mount: /{{ path }}
+      - path: generated
+        update: replace
 ```
+
+Managed path mounts use Reploy's blueprint-time template style. `{{ path }}`
+expands to the entry's normalized relative path, so `mount: /{{ path }}` maps
+`conf` to `/conf`, `.env` to `/.env`, and `data` to `/data`. `${...}` remains
+reserved for runtime/container environment placeholders. Reploy accepts compact
+`{{path}}` placeholders too, but examples should prefer the spaced form.
 
 The `.reploy/` directory is fully Reploy-owned generated state. Reploy may
 replace anything under `.reploy/` during install/update without treating it as
-an app-owned artifact.
+an app-owned managed path.
 
 Possible override shape:
 
 ```text
---replace ARTIFACT
+--replace PATH
 --replace all
 --clean
 ```
 
-`ARTIFACT` names should come from the blueprint instead of being hardcoded app
-concepts such as `conf` or `env`.
+`PATH` values should match declared managed paths such as `conf`, `.env`, or
+`data`.
 
 `--clean` should mean "as if the operator deleted the deployment directory and
 installed fresh from the selected source." From an implementation standpoint,
@@ -281,7 +286,7 @@ deployment contents.
 
 Install/update reporting should stay quiet by default. Normal output should
 summarize the result and the important policy decisions, such as preserved
-installed config and replaced generated runtime. Detailed artifact plans belong
+installed config and replaced generated runtime. Detailed managed path plans belong
 in `--dry-run` output, `--verbose` output, and operations where the operator
 explicitly requests replacement with `--replace` or `--clean`.
 
@@ -346,8 +351,8 @@ is stable.
   script.
 - Direct install uses a temporary internal staging-like workspace by default.
   `--in-place` is available only as a low-prominence disk-space escape hatch.
-- App-owned artifacts are preserved by default. Operators can replace named
-  artifacts with `--replace ARTIFACT`, replace all app-owned artifacts with
+- App-owned managed paths are preserved by default. Operators can replace a
+  declared path with `--replace PATH`, replace all managed paths with
   `--replace all`, or request clean reinstall behavior with `--clean`.
 - `.reploy/` is Reploy-owned generated state and can be replaced at will.
 - Side-by-side installs remain supported through target, service, port, and

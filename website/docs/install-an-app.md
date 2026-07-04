@@ -107,12 +107,12 @@ sets a Compose restart policy for the app containers, but Docker Desktop itself
 is a user-session dependency.
 
 Installing over an existing deployment updates it from the current staging
-state. App-owned artifacts declared by the blueprint are preserved by default.
-Use named replacement only when you intentionally want a fresh copy of an
-artifact:
+state. Managed paths declared by the blueprint are preserved by default when
+their update policy is `preserve`. Replace a path only when you intentionally
+want a fresh copy:
 
 ```bash
-sudo reploy install --to /opt/example --replace config
+sudo reploy install --to /opt/example --replace conf
 sudo reploy install --to /opt/example --clean
 ```
 

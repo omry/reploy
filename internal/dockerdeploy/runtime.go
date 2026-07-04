@@ -44,7 +44,7 @@ func Runtime(options RuntimeOptions) error {
 		if err != nil {
 			return err
 		}
-		if err := ensureConfigArtifactFileMounts(options.Dir, pack); err != nil {
+		if err := ensureManagedFileMountsForPack(options.Dir, pack); err != nil {
 			return err
 		}
 		if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: options.Dir, Verbose: options.Verbose, Stdout: stdout, Stderr: stderr, DockerPreflightTimeout: options.DockerPreflightTimeout}); err != nil {

@@ -441,7 +441,7 @@ func TestDockerHelp(t *testing.T) {
 	if strings.Contains(stdout, "--wait") || !strings.Contains(stdout, "--timeout DURATION") {
 		t.Fatalf("stdout did not contain expected test timeout options:\n%s", stdout)
 	}
-	for _, want := range []string{"install      Install or update a deployed host service", "--to DIR", "--port NAME=PORT", "--replace ARTIFACT", "--clean", "--in-place", "--dry-run"} {
+	for _, want := range []string{"install      Install or update a deployed host service", "--to DIR", "--port NAME=PORT", "--replace PATH", "--clean", "--in-place", "--dry-run"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout missing install help %q:\n%s", want, stdout)
 		}
@@ -478,7 +478,7 @@ func TestDockerInstallHelpShowsPortOptions(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	for _, want := range []string{"--port PORT", "--port NAME=PORT", "--replace ARTIFACT", "--clean", "--in-place"} {
+	for _, want := range []string{"--port PORT", "--port NAME=PORT", "--replace PATH", "--clean", "--in-place"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout did not contain install option %q:\n%s", want, stdout)
 		}
@@ -1139,14 +1139,14 @@ func TestDockerInstallPortOptionsParse(t *testing.T) {
 		t.Fatalf("shorthand override = %#v", options.PortOverrides)
 	}
 
-	options, err = parseDockerInstallOptions([]string{"pypi:demo-server#demo_server/reploy/demo-server.blueprint.yaml", "--dry-run", "--in-place", "--replace", "config", "--replace=env", "--clean"})
+	options, err = parseDockerInstallOptions([]string{"pypi:demo-server#demo_server/reploy/demo-server.blueprint.yaml", "--dry-run", "--in-place", "--replace", "conf", "--replace=.env", "--clean"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if options.Pack.Raw != "pypi:demo-server#demo_server/reploy/demo-server.blueprint.yaml" || !options.DryRun || !options.InPlace || !options.Clean {
 		t.Fatalf("direct install options = %#v", options)
 	}
-	if strings.Join(options.Replace, ",") != "config,env" {
+	if strings.Join(options.Replace, ",") != "conf,.env" {
 		t.Fatalf("replace = %#v", options.Replace)
 	}
 }
@@ -3051,12 +3051,14 @@ install:
       https:
         host_bind: 127.0.0.1
         host_port: 18075
-  upgrade:
-    artifacts:
-      config:
-        default: preserve
-        paths:
-          - conf/
+  managed_paths:
+    dirs:
+      - path: conf
+        update: preserve
+        mount: /{{ path }}
+      - path: data
+        update: preserve
+        mount: /{{ path }}
 
 bundle:
   options:
@@ -3094,7 +3096,7 @@ docker:
         argv:
           - demo-server
           - --config-dir
-          - /config
+          - /conf
           - --config-name
           - ${DEMO_CONFIG_NAME}
           - serve
@@ -3109,7 +3111,7 @@ docker:
         argv:
           - demo-server
           - --config-dir
-          - /config
+          - /conf
           - --config-name
           - ${DEMO_CONFIG_NAME}
           - config
@@ -3125,7 +3127,7 @@ docker:
         argv:
           - demo-server
           - --config-dir
-          - /config
+          - /conf
           - --config-name
           - ${DEMO_CONFIG_NAME}
           - bootstrap
@@ -3140,7 +3142,7 @@ docker:
         argv:
           - demo-server
           - --config-dir
-          - /config
+          - /conf
           - --config-name
           - ${DEMO_CONFIG_NAME}
           - bootstrap
@@ -3155,7 +3157,7 @@ docker:
         argv:
           - demo-server
           - --config-dir
-          - /config
+          - /conf
           - --config-name
           - ${DEMO_CONFIG_NAME}
           - config
@@ -3170,7 +3172,7 @@ docker:
         argv:
           - demo-server
           - --config-dir
-          - /config
+          - /conf
           - --config-name
           - ${DEMO_CONFIG_NAME}
           - config
@@ -3185,7 +3187,7 @@ docker:
         argv:
           - demo-server
           - --config-dir
-          - /config
+          - /conf
           - --config-name
           - ${DEMO_CONFIG_NAME}
           - env
@@ -3200,7 +3202,7 @@ docker:
         argv:
           - demo-server
           - --config-dir
-          - /config
+          - /conf
           - --config-name
           - ${DEMO_CONFIG_NAME}
           - env

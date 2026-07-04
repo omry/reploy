@@ -1,0 +1,2 @@
+kind: Changed
+body: Replace the old preservation model with managed install paths that declare file and directory update policy plus optional runtime mount targets, including blueprint-time `{{ path }}` mount interpolation.

@@ -38,12 +38,18 @@ install:
       https:
         host_bind: 127.0.0.1
         host_port: 18075
-  upgrade:
-    artifacts:
-      config:
-        default: preserve
-        paths:
-          - conf/
+  managed_paths:
+    files:
+      - path: .example.env
+        update: preserve
+        mount: /{{ path }}
+    dirs:
+      - path: conf
+        update: preserve
+        mount: /{{ path }}
+      - path: data
+        update: preserve
+        mount: /{{ path }}
 
 bundle:
   options: {}
@@ -70,7 +76,15 @@ provider is `python`, where `identifier` is the required root package.
 
 `install` declares host install defaults: target path, non-root installed
 owner, whether Reploy creates that system owner when missing, deployed and
-staging port defaults, and app-owned artifact upgrade policy.
+staging port defaults, and managed app-owned paths with update policy and
+optional runtime mounts.
+
+Managed path mounts may use the blueprint-time `{{ path }}` placeholder, which
+expands to the entry's normalized relative path. For example,
+`mount: /{{ path }}` mounts `conf` at `/conf` and `.example.env` at
+`/.example.env`. The compact `{{path}}` form is accepted, but `{{ path }}` is
+the canonical style. Use `${...}` placeholders only for container/runtime
+environment values.
 
 `bundle` declares optional package selections that an app user can add to the
 deployment bundle.

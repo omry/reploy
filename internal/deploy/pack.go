@@ -3,6 +3,7 @@ package deploy
 import (
 	"fmt"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -58,10 +59,10 @@ type AppProviderConfig struct {
 }
 
 type InstallPackConfig struct {
-	Target  InstallTargetConfig  `yaml:"target"`
-	Owner   InstallOwnerConfig   `yaml:"owner"`
-	Ports   InstallPortsConfig   `yaml:"ports"`
-	Upgrade InstallUpgradeConfig `yaml:"upgrade"`
+	Target       InstallTargetConfig       `yaml:"target"`
+	Owner        InstallOwnerConfig        `yaml:"owner"`
+	Ports        InstallPortsConfig        `yaml:"ports"`
+	ManagedPaths InstallManagedPathsConfig `yaml:"managed_paths"`
 }
 
 type InstallTargetConfig struct {
@@ -90,13 +91,15 @@ type InstallPortConfig struct {
 	ContainerPort int    `yaml:"container_port,omitempty"`
 }
 
-type InstallUpgradeConfig struct {
-	Artifacts map[string]InstallArtifactPolicyConfig `yaml:"artifacts"`
+type InstallManagedPathsConfig struct {
+	Files []InstallManagedPathConfig `yaml:"files"`
+	Dirs  []InstallManagedPathConfig `yaml:"dirs"`
 }
 
-type InstallArtifactPolicyConfig struct {
-	Default string   `yaml:"default"`
-	Paths   []string `yaml:"paths"`
+type InstallManagedPathConfig struct {
+	Path   string `yaml:"path"`
+	Update string `yaml:"update"`
+	Mount  string `yaml:"mount,omitempty"`
 }
 
 type BundlePackConfig struct {
@@ -698,10 +701,7 @@ func normalizeAndValidateInstallConfig(manifest *PackManifest) error {
 	if err := normalizeAndValidateInstallPorts("staging", manifest.Install.Ports.Staging); err != nil {
 		return err
 	}
-	if manifest.Install.Upgrade.Artifacts == nil {
-		manifest.Install.Upgrade.Artifacts = map[string]InstallArtifactPolicyConfig{}
-	}
-	if err := normalizeAndValidateInstallArtifacts(manifest.Install.Upgrade.Artifacts); err != nil {
+	if err := normalizeAndValidateManagedPaths(&manifest.Install.ManagedPaths); err != nil {
 		return err
 	}
 	return nil
@@ -842,40 +842,115 @@ func validTCPPort(port int) bool {
 	return port >= 1 && port <= 65535
 }
 
-func normalizeAndValidateInstallArtifacts(artifacts map[string]InstallArtifactPolicyConfig) error {
-	for name, artifact := range artifacts {
-		if strings.TrimSpace(name) == "" {
-			return fmt.Errorf("install.upgrade.artifacts contains an empty artifact name")
-		}
-		if containsLineOrFieldBreak(name) {
-			return fmt.Errorf("install.upgrade.artifacts contains an invalid artifact name: %q", name)
-		}
-		artifact.Default = strings.TrimSpace(artifact.Default)
-		switch artifact.Default {
-		case "preserve", "replace":
-		default:
-			return fmt.Errorf("install.upgrade.artifacts.%s.default must be preserve or replace", name)
-		}
-		if len(artifact.Paths) == 0 {
-			return fmt.Errorf("install.upgrade.artifacts.%s.paths must not be empty", name)
-		}
-		for index, path := range artifact.Paths {
-			if strings.TrimSpace(path) == "" {
-				return fmt.Errorf("install.upgrade.artifacts.%s.paths[%d] must not be empty", name, index)
-			}
-			if containsLineOrFieldBreak(path) {
-				return fmt.Errorf("install.upgrade.artifacts.%s.paths[%d] must not contain tabs or newlines", name, index)
-			}
-			if err := validateRelativeBlueprintPath(path); err != nil {
-				return fmt.Errorf("install.upgrade.artifacts.%s.paths[%d]: %w", name, index, err)
-			}
-			if path == ".reploy" || strings.HasPrefix(filepath.ToSlash(path), ".reploy/") {
-				return fmt.Errorf("install.upgrade.artifacts.%s.paths[%d] must not include .reploy; .reploy is Reploy-owned", name, index)
-			}
-		}
-		artifacts[name] = artifact
+func cleanManifestPath(path string) string {
+	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(strings.TrimSpace(path))))
+}
+
+func normalizeAndValidateManagedPaths(managedPaths *InstallManagedPathsConfig) error {
+	seenPaths := map[string]string{}
+	seenMounts := map[string]string{}
+	if err := normalizeAndValidateManagedPathEntries("files", managedPaths.Files, seenPaths, seenMounts); err != nil {
+		return err
+	}
+	if err := normalizeAndValidateManagedPathEntries("dirs", managedPaths.Dirs, seenPaths, seenMounts); err != nil {
+		return err
 	}
 	return nil
+}
+
+func normalizeAndValidateManagedPathEntries(kind string, entries []InstallManagedPathConfig, seenPaths map[string]string, seenMounts map[string]string) error {
+	for index, entry := range entries {
+		field := fmt.Sprintf("install.managed_paths.%s[%d]", kind, index)
+		entry.Path = cleanManifestPath(entry.Path)
+		entry.Update = strings.TrimSpace(entry.Update)
+		entry.Mount = strings.TrimSpace(entry.Mount)
+		if entry.Path == "." {
+			return fmt.Errorf("%s.path must not be empty", field)
+		}
+		if containsLineOrFieldBreak(entry.Path) {
+			return fmt.Errorf("%s.path must not contain tabs or newlines", field)
+		}
+		if err := validateRelativeBlueprintPath(entry.Path); err != nil {
+			return fmt.Errorf("%s.path: %w", field, err)
+		}
+		if entry.Path == ".reploy" || strings.HasPrefix(filepath.ToSlash(entry.Path), ".reploy/") {
+			return fmt.Errorf("%s.path must not include .reploy; .reploy is Reploy-owned", field)
+		}
+		switch entry.Update {
+		case "preserve", "replace":
+		default:
+			return fmt.Errorf("%s.update must be preserve or replace", field)
+		}
+		if containsLineOrFieldBreak(entry.Mount) {
+			return fmt.Errorf("%s.mount must not contain tabs or newlines", field)
+		}
+		renderedMount, err := renderManagedPathMount(entry.Mount, entry.Path)
+		if err != nil {
+			return fmt.Errorf("%s.mount: %w", field, err)
+		}
+		entry.Mount, err = normalizeAndValidateManagedPathMount(field, renderedMount)
+		if err != nil {
+			return err
+		}
+		if entry.Mount != "" && strings.Contains(entry.Path, ":") {
+			return fmt.Errorf("%s.path must not contain ':' when mount is set", field)
+		}
+		if previous, ok := seenPaths[entry.Path]; ok {
+			return fmt.Errorf("%s.path duplicates %s.path: %s", field, previous, entry.Path)
+		}
+		for previousPath, previousField := range seenPaths {
+			if managedPathOverlaps(previousPath, entry.Path) {
+				return fmt.Errorf("%s.path overlaps %s.path: %s overlaps %s", field, previousField, entry.Path, previousPath)
+			}
+		}
+		if entry.Mount != "" {
+			if previous, ok := seenMounts[entry.Mount]; ok {
+				return fmt.Errorf("%s.mount duplicates %s.mount: %s", field, previous, entry.Mount)
+			}
+			seenMounts[entry.Mount] = field
+		}
+		seenPaths[entry.Path] = field
+		entries[index] = entry
+	}
+	return nil
+}
+
+func normalizeAndValidateManagedPathMount(field string, mount string) (string, error) {
+	if mount == "" {
+		return "", nil
+	}
+	if strings.Contains(mount, ":") {
+		return "", fmt.Errorf("%s.mount must not contain ':'", field)
+	}
+	if !strings.HasPrefix(mount, "/") {
+		return "", fmt.Errorf("%s.mount must start with /", field)
+	}
+	for _, segment := range strings.Split(mount, "/") {
+		if segment == ".." {
+			return "", fmt.Errorf("%s.mount must not contain .. path segments", field)
+		}
+	}
+	cleaned := pathpkg.Clean(mount)
+	if cleaned == "/" {
+		return "", fmt.Errorf("%s.mount must not be /", field)
+	}
+	return cleaned, nil
+}
+
+func managedPathOverlaps(left string, right string) bool {
+	return strings.HasPrefix(left, right+"/") || strings.HasPrefix(right, left+"/")
+}
+
+func renderManagedPathMount(mount string, path string) (string, error) {
+	if mount == "" {
+		return "", nil
+	}
+	rendered := strings.ReplaceAll(mount, "{{ path }}", path)
+	rendered = strings.ReplaceAll(rendered, "{{path}}", path)
+	if strings.Contains(rendered, "{{") || strings.Contains(rendered, "}}") {
+		return "", fmt.Errorf("contains unsupported template expression: %s", mount)
+	}
+	return rendered, nil
 }
 
 func validateInstallHooks(hooks DockerInstallHooksConfig) error {

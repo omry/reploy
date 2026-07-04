@@ -140,10 +140,7 @@ func Init(options InitOptions) ([]UpdateResult, error) {
 	results = append(results, UpdateResult{Path: filepath.Join(options.Dir, ManifestFileName), Status: deploy.UpdateStatusUpdated, Ownership: "state", Reason: "recorded generated file hashes"})
 
 	initResults := []UpdateResult{}
-	if err := ensureDeploymentDirs(options.Dir, pack.Docker.DeploymentDirs, &initResults); err != nil {
-		return nil, err
-	}
-	if err := ensureLocalDir(options.Dir, RuntimeDirName, &initResults); err != nil {
+	if err := ensureInstallDirs(options.Dir, pack.Docker.DeploymentDirs, pack.Install.ManagedPaths, &initResults); err != nil {
 		return nil, err
 	}
 	results = append(results, initResults...)
@@ -431,10 +428,8 @@ func renderComposeTemplate(pack deploy.AppPack, roots []deploy.ArtifactRoot, doc
 
 func renderConfigComposeVolumes(pack deploy.AppPack) string {
 	layout := configMountLayoutForPack(pack)
-	lines := []string{
-		fmt.Sprintf("      - %s", strconv.Quote(fmt.Sprintf("${REPLOY_CONFIG_DIR:?set REPLOY_CONFIG_DIR}:%s:${REPLOY_CONFIG_MOUNT:-ro}", layout.ContainerConfigDir))),
-	}
-	for _, mount := range layout.FileMounts {
+	lines := []string{}
+	for _, mount := range layout.Mounts {
 		lines = append(lines, fmt.Sprintf("      - %s", strconv.Quote(fmt.Sprintf("./%s:%s:${REPLOY_CONFIG_MOUNT:-ro}", mount.HostRelative, mount.ContainerPath))))
 	}
 	return strings.Join(lines, "\n")

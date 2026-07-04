@@ -162,7 +162,7 @@ func ensureOneOffCommandDirs(dir string, pack deploy.AppPack) error {
 	if err := os.MkdirAll(filepath.Join(dir, pack.Docker.DeploymentDirs.Config), 0o700); err != nil {
 		return err
 	}
-	if err := ensureConfigArtifactFileMounts(dir, pack); err != nil {
+	if err := ensureManagedFileMountsForPack(dir, pack); err != nil {
 		return err
 	}
 	return ensureWritableRuntimeDir(filepath.Join(dir, RuntimeDirName))
@@ -172,7 +172,7 @@ func ensureAppCommandDirs(dir string, pack deploy.AppPack) error {
 	if err := os.MkdirAll(filepath.Join(dir, pack.Docker.DeploymentDirs.Config), 0o700); err != nil {
 		return err
 	}
-	if err := ensureConfigArtifactFileMountPlaceholders(dir, pack); err != nil {
+	if err := ensureManagedFilePlaceholdersForPack(dir, pack); err != nil {
 		return err
 	}
 	return ensureWritableRuntimeDir(filepath.Join(dir, RuntimeDirName))

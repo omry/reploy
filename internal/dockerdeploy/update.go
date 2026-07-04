@@ -130,10 +130,7 @@ func Update(options UpdateOptions) ([]UpdateResult, error) {
 		return nil, err
 	}
 	results = append(results, UpdateResult{Path: filepath.Join(options.Dir, RequirementsFileName), Status: requirementsStatus, Ownership: "local", Reason: "projected selected bundle roots for Docker runtime"})
-	if err := ensureDeploymentDirs(options.Dir, pack.Docker.DeploymentDirs, &results); err != nil {
-		return nil, err
-	}
-	if err := ensureLocalDir(options.Dir, RuntimeDirName, &results); err != nil {
+	if err := ensureInstallDirs(options.Dir, pack.Docker.DeploymentDirs, pack.Install.ManagedPaths, &results); err != nil {
 		return nil, err
 	}
 	composeResult, err := writeRuntimeCompose(options.Dir, pack, bundle.Roots, dockerIdentity)
@@ -374,11 +371,32 @@ func updateDockerEnvFile(dir string, pack deploy.AppPack, dockerIdentity string,
 	return nil
 }
 
-func ensureDeploymentDirs(dir string, deploymentDirs deploy.DockerDeploymentDirs, results *[]UpdateResult) error {
+func ensureInstallDirs(dir string, deploymentDirs deploy.DockerDeploymentDirs, managedPaths deploy.InstallManagedPathsConfig, results *[]UpdateResult) error {
+	seen := map[string]bool{}
 	for _, relativeDir := range deploymentDirs.All() {
-		if err := ensureLocalDir(dir, relativeDir, results); err != nil {
+		if err := ensureLocalDirOnce(dir, relativeDir, results, seen); err != nil {
 			return err
 		}
+	}
+	for _, relativeDir := range managedDirPaths(managedPaths) {
+		if err := ensureLocalDirOnce(dir, relativeDir, results, seen); err != nil {
+			return err
+		}
+	}
+	if err := ensureLocalDirOnce(dir, RuntimeDirName, results, seen); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureLocalDirOnce(dir string, relativeDir string, results *[]UpdateResult, seen map[string]bool) error {
+	relativeDir = cleanManifestPath(relativeDir)
+	if seen[relativeDir] {
+		return nil
+	}
+	seen[relativeDir] = true
+	if err := ensureLocalDir(dir, relativeDir, results); err != nil {
+		return err
 	}
 	return nil
 }

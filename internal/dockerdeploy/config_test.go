@@ -75,7 +75,7 @@ func TestConfigCheckCommandUsesTemporaryProject(t *testing.T) {
 }
 
 func TestAppCommandUsesWritableConfigAndNoRuntimeOverrides(t *testing.T) {
-	spec := AppCommandForProject("deployment", "bootstrap_plugin", []string{"imap", "account", "primary"}, "reploy-app-command-test", "deployment/conf")
+	spec := AppCommandForProject("deployment", "bootstrap_plugin", []string{"imap", "account", "primary"}, "reploy-app-command-test", "deployment/conf", "/conf")
 	if !containsAdjacent(spec.Args, "--project-name", "reploy-app-command-test") {
 		t.Fatalf("args did not include project name: %#v", spec.Args)
 	}
@@ -86,7 +86,7 @@ func TestAppCommandUsesWritableConfigAndNoRuntimeOverrides(t *testing.T) {
 		{"-e", "REPLOY_FORWARDED_ARG_0=imap"},
 		{"-e", "REPLOY_FORWARDED_ARG_1=account"},
 		{"-e", "REPLOY_FORWARDED_ARG_2=primary"},
-		{"-e", "REPLOY_CONFIG_CONTAINER_DIR=/config"},
+		{"-e", "REPLOY_CONFIG_CONTAINER_DIR=/conf"},
 		{"-e", "REPLOY_CONFIG_DISPLAY_DIR=deployment/conf"},
 		{"-e", "REPLOY_APP_COMMAND_PREFIX=reploy app"},
 	} {
@@ -159,7 +159,7 @@ func TestAppCommandRunsOneOffOnDeploymentProject(t *testing.T) {
 	if !containsAdjacent(specs[0].Args, "-e", "REPLOY_INCLUDE_RUNTIME_OVERRIDES=0") {
 		t.Fatalf("first command did not disable runtime overrides inside container: %#v", specs[0].Args)
 	}
-	if !containsAdjacent(specs[0].Args, "-e", "REPLOY_CONFIG_CONTAINER_DIR=/config") {
+	if !containsAdjacent(specs[0].Args, "-e", "REPLOY_CONFIG_CONTAINER_DIR=/conf") {
 		t.Fatalf("first command did not set config container dir: %#v", specs[0].Args)
 	}
 	if !containsAdjacent(specs[0].Args, "-e", "REPLOY_APP_COMMAND_PREFIX=reploy app") {
@@ -179,7 +179,7 @@ func TestAppCommandRunsOneOffOnDeploymentProject(t *testing.T) {
 	}
 }
 
-func TestAppCommandUsesConfigArtifactRootWhenSingleFileArtifactIsMounted(t *testing.T) {
+func TestAppCommandUsesManagedFileRootWhenSingleFileArtifactIsMounted(t *testing.T) {
 	deployDir := makeSingleFileConfigAppCommandDeployment(t)
 	if err := os.WriteFile(filepath.Join(deployDir, ".arbiter.env"), []byte("ARB=my-secret\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -198,12 +198,12 @@ func TestAppCommandUsesConfigArtifactRootWhenSingleFileArtifactIsMounted(t *test
 	if len(specs) != 1 {
 		t.Fatalf("ran %d commands, want one-off run", len(specs))
 	}
-	if !containsAdjacent(specs[0].Args, "-e", "REPLOY_CONFIG_CONTAINER_DIR=/config/conf") {
+	if !containsAdjacent(specs[0].Args, "-e", "REPLOY_CONFIG_CONTAINER_DIR=/conf") {
 		t.Fatalf("app command did not set nested config container dir: %#v", specs[0].Args)
 	}
 }
 
-func TestAppCommandCreatesMissingSingleFileConfigArtifactPlaceholder(t *testing.T) {
+func TestAppCommandCreatesMissingManagedFilePlaceholder(t *testing.T) {
 	deployDir := makeSingleFileConfigAppCommandDeployment(t)
 	called := false
 	restore := stubAppCommandRunner(func(spec CommandSpec, options RunOptions) error {
@@ -217,7 +217,7 @@ func TestAppCommandCreatesMissingSingleFileConfigArtifactPlaceholder(t *testing.
 		t.Fatal(err)
 	}
 	if !called {
-		t.Fatal("app command did not invoke Docker after creating config artifact placeholder")
+		t.Fatal("app command did not invoke Docker after creating managed file placeholder")
 	}
 	path := filepath.Join(deployDir, ".arbiter.env")
 	info, statErr := os.Stat(path)
@@ -235,7 +235,7 @@ func TestAppCommandCreatesMissingSingleFileConfigArtifactPlaceholder(t *testing.
 	}
 }
 
-func TestAppCommandDoesNotCreateConfigArtifactPlaceholderForUnknownCommand(t *testing.T) {
+func TestAppCommandDoesNotCreateManagedFilePlaceholderForUnknownCommand(t *testing.T) {
 	deployDir := makeSingleFileConfigAppCommandDeployment(t)
 	called := false
 	restore := stubAppCommandRunner(func(spec CommandSpec, options RunOptions) error {
@@ -530,8 +530,8 @@ func makeAppCommandDeployment(t *testing.T) string {
 	t.Helper()
 	manifest := strings.Replace(
 		testPackManifest(),
-		"    config_check:\n      trigger:\n        - config\n        - check\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /config\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n",
-		"    config_check:\n      trigger:\n        - config\n        - check\n      app_command: true\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /config\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n    bootstrap_plugin:\n      trigger:\n        - bootstrap\n        - plugin\n      app_command: true\n      forward_args: true\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /config\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - bootstrap\n          - plugin\n",
+		"    config_check:\n      trigger:\n        - config\n        - check\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n",
+		"    config_check:\n      trigger:\n        - config\n        - check\n      app_command: true\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n    bootstrap_plugin:\n      trigger:\n        - bootstrap\n        - plugin\n      app_command: true\n      forward_args: true\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - bootstrap\n          - plugin\n",
 		1,
 	)
 	packDir := makeTestPackWithManifest(t, manifest)
@@ -550,9 +550,9 @@ func makeAppCommandDeployment(t *testing.T) string {
 func makeSingleFileConfigAppCommandDeployment(t *testing.T) string {
 	t.Helper()
 	manifest := strings.Replace(
-		testPackManifestWithSingleFileConfigArtifact(),
-		"    config_check:\n      trigger:\n        - config\n        - check\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /config/conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n",
-		"    config_check:\n      trigger:\n        - config\n        - check\n      app_command: true\n      deployed_command: true\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /config/conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n    bootstrap_plugin:\n      trigger:\n        - bootstrap\n        - plugin\n      app_command: true\n      deployed_command: true\n      forward_args: true\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /config/conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - bootstrap\n          - plugin\n",
+		testPackManifestWithManagedFile(),
+		"    config_check:\n      trigger:\n        - config\n        - check\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n",
+		"    config_check:\n      trigger:\n        - config\n        - check\n      app_command: true\n      deployed_command: true\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n    bootstrap_plugin:\n      trigger:\n        - bootstrap\n        - plugin\n      app_command: true\n      deployed_command: true\n      forward_args: true\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - bootstrap\n          - plugin\n",
 		1,
 	)
 	packDir := makeTestPackWithManifest(t, manifest)
