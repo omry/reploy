@@ -11,7 +11,8 @@ Reploy is distributed as a native command-line executable. Today there are two
 supported installation methods:
 
 - [Install with the script](/docs/install-script) downloads the release binary
-  directly and installs it into a user-owned bin directory.
+  directly and installs it into a user-owned bin directory. Use the shell
+  script on Linux/macOS and the PowerShell installer on Windows.
 - [Install from PyPI](/docs/install-pypi) installs a platform-specific wheel
   into a Python environment and exposes the same native `reploy` executable.
 

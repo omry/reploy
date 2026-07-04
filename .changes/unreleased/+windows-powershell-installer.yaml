@@ -1,0 +1,2 @@
+kind: Added
+body: Add a native PowerShell installer for Windows release binaries with an explicit user PATH update option.
