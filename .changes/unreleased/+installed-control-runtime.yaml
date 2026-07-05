@@ -1,0 +1,2 @@
+kind: Fixed
+body: Allow generated control scripts to run runtime commands from Docker-managed installed deployments.

@@ -167,7 +167,7 @@ func runEmbeddedControlRuntime(
 	}
 	runtimeArgs := append([]string{}, args...)
 	runtimeArgs = append(runtimeArgs, "--dir", context.Dir)
-	return runDockerRuntime(action, runtimeArgs, stdout, stderr, globalOptions)
+	return runDockerRuntimeControl(action, runtimeArgs, stdout, stderr, globalOptions)
 }
 
 func runEmbeddedControlHealth(context embeddedControlUsageContext, stdout io.Writer, stderr io.Writer) int {

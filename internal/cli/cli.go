@@ -1715,6 +1715,14 @@ func parseDockerTestOptions(args []string) (dockerTestOptions, error) {
 }
 
 func runDockerRuntime(action string, args []string, stdout io.Writer, stderr io.Writer, globalOptions globalDeploymentOptions) int {
+	return runDockerRuntimeCommand(action, args, stdout, stderr, globalOptions, false)
+}
+
+func runDockerRuntimeControl(action string, args []string, stdout io.Writer, stderr io.Writer, globalOptions globalDeploymentOptions) int {
+	return runDockerRuntimeCommand(action, args, stdout, stderr, globalOptions, true)
+}
+
+func runDockerRuntimeCommand(action string, args []string, stdout io.Writer, stderr io.Writer, globalOptions globalDeploymentOptions, allowInstalledDir bool) int {
 	options, err := parseDockerRuntimeOptions(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
@@ -1731,10 +1739,12 @@ func runDockerRuntime(action string, args []string, stdout io.Writer, stderr io.
 		printDockerShortUsage(stderr)
 		return 2
 	}
-	options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
-	if err != nil {
-		fmt.Fprintf(stderr, "reploy %s error: %v\n", action, err)
-		return 1
+	if !allowInstalledDir {
+		options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy %s error: %v\n", action, err)
+			return 1
+		}
 	}
 	errorStderr, err := deploymentErrorWriter(options.Dir, stderr)
 	if err != nil {

@@ -754,6 +754,41 @@ func TestEmbeddedControlRunsDeployedAppCommandWithScriptPrefix(t *testing.T) {
 	}
 }
 
+func TestEmbeddedControlRuntimeAcceptsInstalledDeploymentDir(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	installDir := filepath.Join(t.TempDir(), "installed")
+	writeCLITestInstalledState(t, installDir, "demo", "demo-service")
+	if err := os.WriteFile(filepath.Join(installDir, dockerdeploy.DockerEnvFileName), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldRuntime := dockerRuntime
+	t.Cleanup(func() {
+		dockerRuntime = oldRuntime
+	})
+	dockerRuntime = func(options dockerdeploy.RuntimeOptions) error {
+		if options.Dir != installDir {
+			t.Fatalf("dir = %q, want %q", options.Dir, installDir)
+		}
+		if options.Action != "status" {
+			t.Fatalf("action = %q, want status", options.Action)
+		}
+		fmt.Fprintln(options.Stdout, "installed status")
+		return nil
+	}
+
+	code, stdout, stderr := runCLI("_control", "--dir", installDir, "--script-name", "democtl", "status")
+	if code != 0 {
+		t.Fatalf("_control status failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "installed status\n" {
+		t.Fatalf("stdout = %q, want installed status", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
 func TestEmbeddedControlHealthRejectsUnexpectedArgs(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
