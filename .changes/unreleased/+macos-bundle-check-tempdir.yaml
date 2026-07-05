@@ -1,2 +1,0 @@
-kind: Fixed
-body: Keep bundle-check temporary requirements files under the deployment tree so Colima-backed macOS Docker runs can bind-mount them.

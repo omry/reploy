@@ -1,2 +1,0 @@
-kind: Fixed
-body: Let macOS Docker bundle-build helpers use VM-friendly bind mounts and users so wheelhouse builds can write generated files.

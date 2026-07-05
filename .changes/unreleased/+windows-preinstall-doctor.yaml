@@ -1,2 +1,0 @@
-kind: Changed
-body: Make Windows preinstall doctor checks report Docker Desktop readiness while still failing clearly until Windows install support is enabled.

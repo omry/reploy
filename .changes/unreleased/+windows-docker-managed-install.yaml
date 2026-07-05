@@ -1,2 +1,0 @@
-kind: Added
-body: Enable Windows persistent installs through the Docker-managed Docker Desktop backend, including PowerShell control-script generation.
