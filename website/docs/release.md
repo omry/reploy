@@ -33,18 +33,21 @@ Publish from GitHub Actions after CI is green:
 gh workflow run publish.yml --ref main
 ```
 
-The publish workflow reads `VERSION`, builds active Linux and macOS wheels,
-publishes the wheel artifacts to PyPI, and creates a GitHub Release containing
-direct binary assets plus checksums:
+The publish workflow reads `VERSION`, builds active Linux, macOS, and Windows
+wheels, publishes the wheel artifacts to PyPI, and creates a GitHub Release
+containing direct binary assets plus checksums:
 
 - `reploy-linux-amd64`
 - `reploy-linux-arm64`
 - `reploy-darwin-amd64`
 - `reploy-darwin-arm64`
+- `reploy-windows-amd64.exe`
+- `reploy-windows-arm64.exe`
 - `SHA256SUMS`
 
 Initial macOS binaries may be unsigned and unnotarized. Developer ID signing
-and notarization are separate release-hardening work.
+and notarization are separate release-hardening work. Initial Windows binaries
+may be unsigned until Authenticode signing is added.
 
 The PyPI project must be configured for GitHub trusted publishing for
 `omry/reploy` and `.github/workflows/publish.yml`.

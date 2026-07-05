@@ -1,0 +1,2 @@
+kind: Fixed
+body: Make the Windows installer compatible with stock Windows PowerShell, report missing release assets cleanly, and document the `cmd.exe` invocation.

@@ -11,8 +11,9 @@ Reploy is an experimental deployment lifecycle tool for services.
 
 It creates a self-contained staging workspace from an app-provided blueprint,
 lets you configure and test the app there, and can install the result as a
-deployed host service. Linux is the only supported operating system for now;
-Docker is the first supported deployment target.
+deployed host service. Docker is the first supported deployment runtime.
+Linux is the production permanent-install host with systemd; macOS and Windows
+support Docker Desktop-backed staging and Docker-managed permanent installs.
 
 ## Install
 
@@ -20,6 +21,18 @@ Install the latest release binary:
 
 ```bash
 curl -fsSL https://reploy.yadan.net/install.sh | sh
+```
+
+On Windows, use the PowerShell installer:
+
+```powershell
+irm https://reploy.yadan.net/install.ps1 | iex
+```
+
+From `cmd.exe`, invoke PowerShell explicitly:
+
+```batch
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://reploy.yadan.net/install.ps1 | iex"
 ```
 
 See the [installation docs](https://reploy.yadan.net/docs/install-reploy) for

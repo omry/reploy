@@ -29,13 +29,25 @@ Options:
 }
 
 function Get-TargetArch {
-    switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
+    $windowsArch = [Environment]::GetEnvironmentVariable("PROCESSOR_ARCHITEW6432")
+    if ([string]::IsNullOrWhiteSpace($windowsArch)) {
+        $windowsArch = [Environment]::GetEnvironmentVariable("PROCESSOR_ARCHITECTURE")
+    }
+    if ([string]::IsNullOrWhiteSpace($windowsArch)) {
+        throw "could not determine Windows architecture"
+    }
+    switch ($windowsArch.Trim().ToUpperInvariant()) {
+        "AMD64" { return "amd64" }
         "X64" { return "amd64" }
-        "Arm64" { return "arm64" }
+        "ARM64" { return "arm64" }
         default {
-            throw "unsupported Windows architecture: $([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)"
+            throw "unsupported Windows architecture: $windowsArch"
         }
     }
+}
+
+function Test-NativeWindows {
+    return [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
 }
 
 function Get-ReployVersion {
@@ -55,6 +67,32 @@ function Get-Tag {
         return $ResolvedVersion
     }
     return "v$ResolvedVersion"
+}
+
+function Save-ReleaseAsset {
+    param(
+        [string]$Url,
+        [string]$OutFile,
+        [string]$Tag,
+        [string]$Asset
+    )
+
+    try {
+        Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
+    } catch {
+        $statusCode = $null
+        if ($null -ne $_.Exception.Response) {
+            try {
+                $statusCode = [int]$_.Exception.Response.StatusCode
+            } catch {
+                $statusCode = $null
+            }
+        }
+        if ($statusCode -eq 404) {
+            throw "Reploy release asset was not found: $Asset in $Tag. This release may not include this Windows target yet: $Url"
+        }
+        throw "failed to download Reploy release asset: $Url. $($_.Exception.Message)"
+    }
 }
 
 function Get-CanonicalPath {
@@ -127,7 +165,7 @@ if ($AddToPath -and $NoPathUpdate) {
     throw "-AddToPath and -NoPathUpdate cannot be used together"
 }
 
-if (-not [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
+if (-not (Test-NativeWindows)) {
     throw "install.ps1 supports native Windows hosts only"
 }
 
@@ -163,7 +201,7 @@ Test-InstallDirectoryWritable -Directory $To
 New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
 
 try {
-    Invoke-WebRequest -Uri $sourceUrl -OutFile $tmpFile -UseBasicParsing
+    Save-ReleaseAsset -Url $sourceUrl -OutFile $tmpFile -Tag $tag -Asset $asset
     Move-Item -LiteralPath $tmpFile -Destination $targetPath -Force
 } finally {
     Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction SilentlyContinue

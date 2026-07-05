@@ -2,6 +2,9 @@
 sidebar_position: 1
 ---
 
+import PlatformTabs from '@site/src/components/PlatformTabs';
+import TabItem from '@theme/TabItem';
+
 # App User
 
 This page is for the person installing and managing an app with Reploy. You
@@ -19,12 +22,45 @@ the app is still being developed.
 
 ## 1. Install Reploy
 
+<PlatformTabs>
+  <TabItem value="linux">
+
 ```bash
 curl -fsSL https://reploy.yadan.net/install.sh | sh
 ```
 
 The installer places `reploy` in `$HOME/.local/bin/reploy` by default and
 prints a PATH hint when needed.
+
+  </TabItem>
+  <TabItem value="windows">
+
+```powershell
+irm https://reploy.yadan.net/install.ps1 | iex
+```
+
+From `cmd.exe`, invoke PowerShell explicitly:
+
+```batch
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://reploy.yadan.net/install.ps1 | iex"
+```
+
+The installer places `reploy.exe` in
+`%LOCALAPPDATA%\Programs\Reploy\bin\reploy.exe` by default and prints a PATH
+hint when needed.
+
+  </TabItem>
+  <TabItem value="macos">
+
+```bash
+curl -fsSL https://reploy.yadan.net/install.sh | sh
+```
+
+The installer places `reploy` in `$HOME/.local/bin/reploy` by default and
+prints a PATH hint when needed.
+
+  </TabItem>
+</PlatformTabs>
 
 ## 2. Choose Direct or Staged Install
 
@@ -108,9 +144,9 @@ reploy install --to "$PWD/example-installed" --service example
 
 When Reploy detects Docker Desktop, install output warns that macOS and Windows
 Docker Desktop installs provide weaker isolation than Linux/systemd installs.
-For reboot resistance on macOS, enable Docker Desktop start-at-login; Reploy
-sets a Compose restart policy for the app containers, but Docker Desktop itself
-is a user-session dependency.
+For reboot resistance on macOS and Windows, enable Docker Desktop
+start-at-login; Reploy sets a Compose restart policy for the app containers,
+but Docker Desktop itself is a user-session dependency.
 
 Installing over an existing deployment updates it from the current staging
 state. Managed paths declared by the blueprint are preserved by default when
@@ -147,7 +183,7 @@ the installed control script.
 sudo reploy uninstall --from /opt/example
 ```
 
-On macOS, uninstall from the installed target without `sudo`:
+On macOS and Windows, uninstall from the installed target without `sudo`:
 
 ```bash
 reploy uninstall --from "$PWD/example-installed"

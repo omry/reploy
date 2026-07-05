@@ -2,34 +2,61 @@
 sidebar_label: Script
 ---
 
+import PlatformTabs from '@site/src/components/PlatformTabs';
+import TabItem from '@theme/TabItem';
+
 # Install with the Script
 
 The install scripts download a release binary from GitHub and place it in a
 user-owned bin directory.
 
-On Linux and macOS:
+<PlatformTabs>
+  <TabItem value="linux">
 
 ```bash
 curl -fsSL https://reploy.yadan.net/install.sh | sh
 ```
 
-On Windows, run PowerShell:
-
-```powershell
-irm https://reploy.yadan.net/install.ps1 | iex
-```
-
-By default the Linux/macOS script installs to:
+By default this installs to:
 
 ```text
 $HOME/.local/bin/reploy
 ```
 
-By default the Windows installer installs to:
+  </TabItem>
+  <TabItem value="windows">
+
+```powershell
+irm https://reploy.yadan.net/install.ps1 | iex
+```
+
+From `cmd.exe`, invoke PowerShell explicitly:
+
+```batch
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://reploy.yadan.net/install.ps1 | iex"
+```
+
+By default this installs to:
 
 ```text
 %LOCALAPPDATA%\Programs\Reploy\bin\reploy.exe
 ```
+
+  </TabItem>
+  <TabItem value="macos">
+
+```bash
+curl -fsSL https://reploy.yadan.net/install.sh | sh
+```
+
+By default this installs to:
+
+```text
+$HOME/.local/bin/reploy
+```
+
+  </TabItem>
+</PlatformTabs>
 
 The installer prints the requested version, detected platform, download URL,
 target path, installed binary version, and a PATH hint when the installed
@@ -57,6 +84,10 @@ run the command in the privilege context you intend to use.
 Use `--version VERSION` on Linux/macOS or `-Version VERSION` on Windows to
 install a specific Reploy release. When no version is provided, the installer
 reads `VERSION` from the `main` branch and downloads the matching release
+asset.
+
+If the matching GitHub Release does not include an asset for your platform yet,
+the installer stops before writing `reploy` and reports the missing release
 asset.
 
 ## Example

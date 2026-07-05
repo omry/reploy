@@ -176,7 +176,11 @@ if [ ! -w "$install_dir" ]; then
     exit 1
 fi
 
-download "$source_url" "$tmp_file"
+if ! download "$source_url" "$tmp_file"; then
+    echo "install.sh: Reploy release asset was not found or could not be downloaded: $asset in $tag" >&2
+    echo "install.sh: this release may not include this target yet: $source_url" >&2
+    exit 1
+fi
 chmod 0755 "$tmp_file"
 mv "$tmp_file" "$target_path"
 
