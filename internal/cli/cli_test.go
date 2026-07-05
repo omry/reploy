@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1828,7 +1829,7 @@ func TestDockerStageAcceptsSourcePackRef(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(compose), sourceDir+":/source/app/demo-suite:rw") {
+	if !strings.Contains(string(compose), strconv.Quote(sourceDir+":/source/app/demo-suite:rw")) {
 		t.Fatalf("compose did not mount source checkout:\n%s", compose)
 	}
 }
@@ -1877,7 +1878,7 @@ func TestDockerStageAcceptsGitPackRef(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expectedMount := state.ResolvedArtifact.CachePath + ":/source/app/git-source-app:rw"
+	expectedMount := strconv.Quote(state.ResolvedArtifact.CachePath + ":/source/app/git-source-app:rw")
 	if !strings.Contains(string(compose), expectedMount) {
 		t.Fatalf("compose did not mount cached git checkout %q:\n%s", expectedMount, compose)
 	}

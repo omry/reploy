@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -942,7 +943,7 @@ func TestBundlePrepareUsesPackLocalSourcesForFilePacks(t *testing.T) {
 		t.Fatalf("persistent requirements after stage = %q", got)
 	}
 	compose := readFile(t, filepath.Join(deployDir, ComposeFileName))
-	if !strings.Contains(compose, sourceDir+":/source/app/demo-pkg:rw") {
+	if !strings.Contains(compose, strconv.Quote(sourceDir+":/source/app/demo-pkg:rw")) {
 		t.Fatalf("compose did not mount local source:\n%s", compose)
 	}
 	if !strings.Contains(compose, "--no-index --find-links /bundle --no-deps --no-build-isolation -e") {

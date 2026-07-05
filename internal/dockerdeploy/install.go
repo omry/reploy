@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -399,7 +400,7 @@ func defaultInstallTarget(pack deploy.AppPack) (string, error) {
 	case "windows":
 		return windowsDockerManagedDefaultInstallTarget(os.Getenv("LOCALAPPDATA"), pack.AppID)
 	case "macos":
-		return filepath.Join(roots.ReployInstallRoot, pack.AppID), nil
+		return path.Join(roots.ReployInstallRoot, pack.AppID), nil
 	default:
 		target, _, _, err := deploy.ResolveInstallTargetDefault(
 			deploy.InstallTargetConfig{DefaultPath: "/opt/{{ app.id }}"},
@@ -438,13 +439,13 @@ func installTargetRoots(goos string) (deploy.InstallTargetRoots, error) {
 		if strings.TrimSpace(home) == "" {
 			return deploy.InstallTargetRoots{}, fmt.Errorf("home directory is required for the default macOS install target; pass --to to choose an install directory")
 		}
-		userData := filepath.Join(home, "Library", "Application Support")
+		userData := path.Join(home, "Library", "Application Support")
 		return deploy.InstallTargetRoots{
 			UserHome:          home,
 			UserData:          userData,
 			UserLocalData:     userData,
-			SystemData:        filepath.Join(string(filepath.Separator), "Library", "Application Support"),
-			ReployInstallRoot: filepath.Join(userData, "Reploy", "installs"),
+			SystemData:        path.Join("/", "Library", "Application Support"),
+			ReployInstallRoot: path.Join(userData, "Reploy", "installs"),
 		}, nil
 	default:
 		if strings.TrimSpace(home) == "" {
@@ -452,10 +453,10 @@ func installTargetRoots(goos string) (deploy.InstallTargetRoots, error) {
 		}
 		return deploy.InstallTargetRoots{
 			UserHome:          home,
-			UserData:          filepath.Join(home, ".local", "share"),
-			UserLocalData:     filepath.Join(home, ".local", "share"),
-			SystemData:        filepath.Join(string(filepath.Separator), "var", "lib"),
-			ReployInstallRoot: filepath.Join(string(filepath.Separator), "opt"),
+			UserData:          path.Join(home, ".local", "share"),
+			UserLocalData:     path.Join(home, ".local", "share"),
+			SystemData:        path.Join("/", "var", "lib"),
+			ReployInstallRoot: path.Join("/", "opt"),
 		}, nil
 	}
 }
@@ -907,13 +908,14 @@ func systemdUnit(plan installPlan, dockerBin string, includeDockerUnit bool) str
 		dockerUnitLines = "Requires=docker.service\nAfter=docker.service\n"
 	}
 	managedFilePreflights := systemdManagedFilePreflights(plan)
-	composeFiles := "--project-directory " + plan.TargetDir + " -f " + filepath.Join(plan.TargetDir, ComposeFileName)
+	composeFiles := "--project-directory " + systemdPath(plan.TargetDir) + " -f " + systemdPath(plan.TargetDir, ComposeFileName)
 	if plan.ComposeProject != "" {
 		composeFiles = "--project-name " + plan.ComposeProject + " " + composeFiles
 	}
 	if plan.ComposeOverride {
-		composeFiles += " -f " + filepath.Join(plan.TargetDir, ComposeOverrideFileName)
+		composeFiles += " -f " + systemdPath(plan.TargetDir, ComposeOverrideFileName)
 	}
+	targetDir := systemdPath(plan.TargetDir)
 	return fmt.Sprintf(`[Unit]
 Description=Reploy Docker service (%s)
 # Managed-By: reploy
@@ -933,7 +935,7 @@ TimeoutStartSec=180
 
 [Install]
 WantedBy=multi-user.target
-`, plan.Service, plan.Service, plan.TargetDir, plan.ComposeProject, dockerUnitLines, plan.TargetDir, managedFilePreflights, dockerBin, dockerBin, filepath.Join(plan.TargetDir, DockerEnvFileName), composeFiles, dockerBin, filepath.Join(plan.TargetDir, DockerEnvFileName), composeFiles)
+`, plan.Service, plan.Service, targetDir, plan.ComposeProject, dockerUnitLines, targetDir, managedFilePreflights, dockerBin, dockerBin, systemdPath(plan.TargetDir, DockerEnvFileName), composeFiles, dockerBin, systemdPath(plan.TargetDir, DockerEnvFileName), composeFiles)
 }
 
 func systemdManagedFilePreflights(plan installPlan) string {
@@ -942,10 +944,14 @@ func systemdManagedFilePreflights(plan installPlan) string {
 	}
 	lines := make([]string, 0, len(plan.ManagedFiles))
 	for _, relativePath := range plan.ManagedFiles {
-		path := filepath.Join(plan.TargetDir, filepath.FromSlash(relativePath))
+		path := systemdPath(plan.TargetDir, relativePath)
 		lines = append(lines, "ExecStartPre=/bin/sh -c '[ -f \"$1\" ] || { echo \"managed file is missing: $1\" >&2; exit 1; }' reploy-managed-file "+strconv.Quote(path))
 	}
 	return strings.Join(lines, "\n") + "\n"
+}
+
+func systemdPath(elements ...string) string {
+	return path.Join(elements...)
 }
 
 func writeInstalledState(plan installPlan) error {
@@ -1080,6 +1086,11 @@ func ensureInstallOwnerForDir(dir string) error {
 	values, err := readDockerEnv(dir)
 	if err != nil {
 		return err
+	}
+	if installOwnerOnMissingPolicy(values) == installOwnerOnMissingCreate {
+		if _, _, err := installOwnerNamedParts(values); err != nil {
+			return err
+		}
 	}
 	if _, err := resolveInstallOwner(values); err == nil {
 		return nil
