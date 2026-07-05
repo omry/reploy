@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-04
+updated: 2026-07-06
 summary: Current parking lot for longer-term product directions outside the near-term release path.
 ---
 
@@ -59,33 +59,38 @@ Open questions:
 The current redesign focuses on local host deployment, initially Linux/systemd.
 Other deployment environments may become useful later.
 
-### AWS
+The most realistic expansion path is probably not a generic cloud or
+orchestrator layer. Reploy's current model fits best where it can own a
+portable runtime boundary, stage dependencies, generate local state, and expose
+an app-scoped control surface. That points first at container or VM runtimes
+near the Docker abstraction level.
 
-AWS support could mean several different things: EC2/systemd installs, ECS,
-Lambda-style workers, or generated infrastructure. Those are materially
-different products and should not be hidden behind a vague `--aws` flag.
+### Container and VM Runtime Backends
 
-### Kubernetes
+Likely future backends are systems that can run a Reploy-managed service from
+the same blueprint/runtime model without changing the product into a cloud
+provisioner:
 
-Kubernetes overlaps with Reploy but does not replace it. Kubernetes is a runtime
-orchestration platform; Reploy's value is packaging an app-owned blueprint into
-a repeatable install/update experience with staging, bundle selection, app
-commands, generated config, and operator-safe controls.
+- Docker Engine and Docker Desktop Linux-container mode
+- Colima/Lima-style Linux VMs on macOS and possibly Windows
+- Podman or containerd-compatible runtimes if the lifecycle semantics line up
+- explicit VM backends such as KVM, VirtualBox, or VMware when Reploy can
+  provision or target a known guest runtime
 
-A Kubernetes backend could make Reploy generate and apply Kubernetes resources
-from the same blueprint model. In that world, "deployment" might mean a
-namespace, Helm-like release, or generated manifests instead of a systemd
-service. The generated control surface would likely wrap `kubectl`-level
-operations such as status, logs, restart/rollout, and health checks.
+These keep Reploy focused on installing and operating an app-owned runtime
+environment rather than generating infrastructure. The main abstraction remains
+"prepare this app and operate this local runtime," not "manage a fleet."
 
 Open questions:
 
-- Is Kubernetes a backend for the same blueprint model, or a separate
-  integration layer?
-- Should Reploy generate raw manifests, Helm charts, Kustomize overlays, or use
-  a native API client?
-- How do staging and direct install map to Kubernetes namespaces or clusters?
-- What is the equivalent of the generated `<app-id>ctl` script for Kubernetes?
+- Which container runtimes are close enough to Docker Compose to share one
+  backend contract?
+- Should VM support mean "install into an existing guest" or "create/manage the
+  guest runtime"?
+- How should host/guest file sharing, ports, persistence, and secrets be
+  represented in staging state?
+- Can the generated app control script stay identical across Docker Engine,
+  Docker Desktop, Colima/Lima, and VM-backed runtimes?
 
 ## Additional Bundle Providers
 
