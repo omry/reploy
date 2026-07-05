@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -43,6 +44,7 @@ type AppCommandListResult struct {
 
 var runConfigCheckCommand = runCommand
 var runAppCommand = runCommand
+var colorRuntimeGOOS = runtime.GOOS
 
 type temporaryComposeRunner func(CommandSpec, RunOptions) error
 
@@ -372,7 +374,10 @@ func reployColorValue() string {
 
 func terminalLooksColorCapable() bool {
 	term := strings.TrimSpace(os.Getenv("TERM"))
-	return term != "" && term != "dumb"
+	if term == "dumb" {
+		return false
+	}
+	return term != "" || colorRuntimeGOOS == "windows"
 }
 
 func terminalColumnsEnv(output io.Writer) string {
@@ -411,6 +416,9 @@ func validTerminalColumns(value string) string {
 }
 
 func writerLooksTerminal(output io.Writer) bool {
+	if passthrough, ok := output.(interface{ TerminalOutput() io.Writer }); ok {
+		return writerLooksTerminal(passthrough.TerminalOutput())
+	}
 	file, ok := output.(*os.File)
 	if !ok {
 		return false

@@ -982,6 +982,33 @@ func TestDeploymentSpinnerLabelUsesDeploymentPrefix(t *testing.T) {
 	}
 }
 
+func TestDeploymentSpinnerLabelUsesInstalledPrefix(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	installDir := filepath.Join(t.TempDir(), "installed")
+	writeCLITestInstalledState(t, installDir, "demo", "demo-service")
+
+	label, err := deploymentSpinnerLabel(installDir, "uninstalling", &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if label != "[DEPLOYED : demo] uninstalling" {
+		t.Fatalf("label = %q", label)
+	}
+}
+
+func TestDeploymentStdoutOrFallbackPrefixesInstalledOutput(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	installDir := filepath.Join(t.TempDir(), "installed")
+	writeCLITestInstalledState(t, installDir, "demo", "demo-service")
+
+	var stdout bytes.Buffer
+	writer := deploymentStdoutOrFallback(installDir, &stdout)
+	fmt.Fprintln(writer, "server url: https://127.0.0.1:8075")
+	if got, want := stdout.String(), "[DEPLOYED : demo] server url: https://127.0.0.1:8075\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
 func TestPhaseKnownTestErrorUsesDeploymentPrefix(t *testing.T) {
 	t.Setenv("REPLOY_COLOR", "never")
 	packDir := makeCLITestPack(t)
@@ -1417,6 +1444,40 @@ func TestDirectInstallPrintsSuccessFromResolvedDefaultTarget(t *testing.T) {
 	}
 }
 
+func TestStagedInstallSpinnerUsesDeploymentPrefix(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	t.Setenv("TERM", "xterm-256color")
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	oldDockerInstall := dockerInstall
+	t.Cleanup(func() {
+		dockerInstall = oldDockerInstall
+	})
+	dockerInstall = func(options dockerdeploy.InstallOptions) error {
+		if options.Dir != deployDir {
+			t.Fatalf("install dir = %q, want %q", options.Dir, deployDir)
+		}
+		fmt.Fprintln(options.Progress, "running before start hook: app config check")
+		return nil
+	}
+
+	code, _, stderr = runCLI("install", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("install failed: code=%d\nstderr:\n%s", code, stderr)
+	}
+	if !strings.Contains(stderr, "[STAGING : demo] installing") {
+		t.Fatalf("stderr missing deployment-scoped install spinner:\n%s", stderr)
+	}
+	if strings.Contains(stderr, "installing from staging") {
+		t.Fatalf("stderr should not use generic staged install label:\n%s", stderr)
+	}
+}
+
 func TestDockerUninstallOptionsParse(t *testing.T) {
 	options, err := parseDockerUninstallOptions([]string{
 		"--from", "/opt/demo2",
@@ -1479,6 +1540,51 @@ func TestDockerUninstallRequiresRootBeforeSpinner(t *testing.T) {
 	}
 	if strings.Contains(stderr, "uninstalling deployment") {
 		t.Fatalf("stderr should not contain spinner output:\n%s", stderr)
+	}
+}
+
+func TestDockerUninstallAnimatedSpinnerKeepsDeploymentOutputSeparate(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	t.Setenv("CI", "")
+	t.Setenv("TERM", "xterm-256color")
+	installDir := filepath.Join(t.TempDir(), "installed")
+	writeCLITestInstalledState(t, installDir, "demo", "demo-service")
+
+	oldDockerUninstall := dockerUninstall
+	oldDockerUninstallNeedsRoot := dockerUninstallNeedsRoot
+	t.Cleanup(func() {
+		dockerUninstall = oldDockerUninstall
+		dockerUninstallNeedsRoot = oldDockerUninstallNeedsRoot
+	})
+	dockerUninstallNeedsRoot = func(dockerdeploy.UninstallOptions) bool {
+		return false
+	}
+	dockerUninstall = func(options dockerdeploy.UninstallOptions) error {
+		if options.From != installDir {
+			t.Fatalf("from = %q, want %q", options.From, installDir)
+		}
+		fmt.Fprintln(options.Stdout, "uninstalled service: demo")
+		return nil
+	}
+
+	code, stdout, stderr := runCLI("uninstall", "--from", installDir, "--remove-dir")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty while animated spinner owns uninstall output", stdout)
+	}
+	if !strings.Contains(stderr, "[DEPLOYED : demo] uninstalled service: demo\n") {
+		t.Fatalf("stderr missing deployed uninstall output:\n%q", stderr)
+	}
+	if !strings.Contains(stderr, "[DEPLOYED : demo] uninstalling... done") {
+		t.Fatalf("stderr missing spinner completion:\n%q", stderr)
+	}
+	if strings.Contains(stderr, "\\[DEPLOYED") ||
+		strings.Contains(stderr, "/[DEPLOYED") ||
+		strings.Contains(stderr, "|[DEPLOYED") ||
+		strings.Contains(stderr, "-[DEPLOYED") {
+		t.Fatalf("spinner frame collided with deployment output:\n%q", stderr)
 	}
 }
 
@@ -2790,6 +2896,9 @@ func TestStartSpinnerPrintsCompletion(t *testing.T) {
 	var stderr bytes.Buffer
 	stop := startSpinner(&stderr, "building installation bundle")
 	stop(true)
+	if !strings.Contains(stderr.String(), "\x1b[?25l") || !strings.Contains(stderr.String(), "\x1b[?25h") {
+		t.Fatalf("spinner did not hide and restore cursor:\n%q", stderr.String())
+	}
 	if !strings.Contains(stderr.String(), "building installation bundle |") {
 		t.Fatalf("spinner did not print label before frame:\n%q", stderr.String())
 	}
@@ -2816,6 +2925,74 @@ func TestStartSpinnerUsesPlainProgressForDumbTerminal(t *testing.T) {
 	stop := startSpinner(&stderr, "building installation bundle")
 	stop(false)
 	if got, want := stderr.String(), "building installation bundle...\nbuilding installation bundle... failed\n"; got != want {
+		t.Fatalf("stderr = %q, want %q", got, want)
+	}
+}
+
+func TestStartProgressSpinnerUpdatesAnimatedLabel(t *testing.T) {
+	t.Setenv("CI", "")
+	t.Setenv("TERM", "xterm-256color")
+	var stderr bytes.Buffer
+	stop, progress := startProgressSpinner(&stderr, "installing from staging")
+	fmt.Fprintln(progress, "copying staged deployment")
+	time.Sleep(20 * time.Millisecond)
+	stop(true)
+	if !strings.Contains(stderr.String(), "installing from staging: copying staged deployment") {
+		t.Fatalf("spinner did not update label:\n%q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "installing from staging... done") {
+		t.Fatalf("spinner did not print completion:\n%q", stderr.String())
+	}
+}
+
+func TestStartProgressSpinnerWithLogsKeepsLogLinesSeparate(t *testing.T) {
+	t.Setenv("CI", "")
+	t.Setenv("TERM", "xterm-256color")
+	var stderr bytes.Buffer
+	stop, progress, logs := startProgressSpinnerWithLogs(&stderr, "installing from staging")
+	terminalOutput, ok := logs.(interface{ TerminalOutput() io.Writer })
+	if !ok {
+		t.Fatalf("spinner log writer does not expose terminal output")
+	}
+	if terminalOutput.TerminalOutput() != &stderr {
+		t.Fatalf("terminal output = %#v, want stderr", terminalOutput.TerminalOutput())
+	}
+	fmt.Fprintln(progress, "running before start hook: app config check")
+	fmt.Fprint(logs, "[STAGING : smoke-app] warn: warning")
+	fmt.Fprint(logs, ": Docker-managed install\n")
+	time.Sleep(20 * time.Millisecond)
+	stop(true)
+	got := stderr.String()
+	if !strings.Contains(got, "[STAGING : smoke-app] warn: warning: Docker-managed install\n") {
+		t.Fatalf("spinner log writer did not keep prefixed log line intact:\n%q", got)
+	}
+	if strings.Contains(got, "/[STAGING") || strings.Contains(got, "|[STAGING") || strings.Contains(got, "-[STAGING") || strings.Contains(got, "\\[STAGING") {
+		t.Fatalf("spinner frame collided with log line:\n%q", got)
+	}
+	if !strings.Contains(got, "installing from staging: running before start hook: app config check") {
+		t.Fatalf("spinner did not keep progress label:\n%q", got)
+	}
+	if !strings.Contains(got, "installing from staging... done") {
+		t.Fatalf("spinner did not print completion:\n%q", got)
+	}
+}
+
+func TestStartProgressSpinnerUsesPlainProgressInCI(t *testing.T) {
+	t.Setenv("CI", "true")
+	t.Setenv("TERM", "xterm-256color")
+	var stderr bytes.Buffer
+	stop, progress := startProgressSpinner(&stderr, "installing from staging")
+	fmt.Fprintln(progress, "copying staged deployment")
+	fmt.Fprintln(progress, "starting Docker-managed app")
+	stop(true)
+	want := strings.Join([]string{
+		"installing from staging...",
+		"installing from staging: copying staged deployment",
+		"installing from staging: starting Docker-managed app",
+		"installing from staging... done",
+		"",
+	}, "\n")
+	if got := stderr.String(); got != want {
 		t.Fatalf("stderr = %q, want %q", got, want)
 	}
 }
@@ -3041,6 +3218,34 @@ func makeCLITestPackWheel(t *testing.T, subdir string, version string) []byte {
 		t.Fatal(err)
 	}
 	return buffer.Bytes()
+}
+
+func writeCLITestInstalledState(t *testing.T, dir string, appID string, service string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, dockerdeploy.ReployInternalDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := deploy.DeploymentState{
+		SchemaVersion: 1,
+		ToolVersion:   "test",
+		Target:        "docker",
+		Phase:         deploy.PhaseInstalled,
+		AppID:         appID,
+		Install: &deploy.InstallState{
+			TargetDir:      dir,
+			Service:        service,
+			ComposeProject: service,
+			ContainerName:  service,
+			NetworkName:    service,
+		},
+	}
+	content, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, dockerdeploy.StateFileName), append(content, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func makeCLITestPyPIIndex(t *testing.T, wheel []byte, version string) string {

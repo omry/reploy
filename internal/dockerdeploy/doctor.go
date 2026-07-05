@@ -17,6 +17,7 @@ type DoctorOptions struct {
 	Dir                    string
 	Preinstall             bool
 	Quiet                  bool
+	SuppressWarnings       bool
 	Stdout                 io.Writer
 	DockerPreflightTimeout time.Duration
 }
@@ -41,11 +42,21 @@ func Doctor(options DoctorOptions) int {
 		if finding.Status == "fail" {
 			exitCode = 1
 		}
-		if options.Stdout != nil && !(options.Quiet && finding.Status == "ok") {
+		if options.Stdout != nil && shouldPrintDoctorFinding(finding, options) {
 			fmt.Fprintf(options.Stdout, "%s: %s\n", colors.status(finding.Status), finding.Message)
 		}
 	}
 	return exitCode
+}
+
+func shouldPrintDoctorFinding(finding DoctorFinding, options DoctorOptions) bool {
+	if options.Quiet && finding.Status == "ok" {
+		return false
+	}
+	if options.SuppressWarnings && finding.Status == "warn" {
+		return false
+	}
+	return true
 }
 
 type doctorColors struct {

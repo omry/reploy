@@ -398,6 +398,22 @@ func TestAppCommandPassesPackDeclaredColorEnv(t *testing.T) {
 	}
 }
 
+func TestTerminalLooksColorCapableOnWindowsWithoutTerm(t *testing.T) {
+	oldGOOS := colorRuntimeGOOS
+	t.Cleanup(func() {
+		colorRuntimeGOOS = oldGOOS
+	})
+	colorRuntimeGOOS = "windows"
+	t.Setenv("TERM", "")
+	if !terminalLooksColorCapable() {
+		t.Fatal("Windows terminal should be color-capable without TERM")
+	}
+	t.Setenv("TERM", "dumb")
+	if terminalLooksColorCapable() {
+		t.Fatal("TERM=dumb should disable color even on Windows")
+	}
+}
+
 func TestAppCommandHonorsExplicitPackDeclaredColorEnv(t *testing.T) {
 	deployDir := makeAppCommandDeployment(t)
 	t.Setenv("REPLOY_COLOR", "always")

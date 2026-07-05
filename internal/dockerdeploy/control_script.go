@@ -75,16 +75,24 @@ func powerShellControlScriptName(appID string) string {
 
 func powerShellDockerDesktopControlScriptContent(plan installPlan) string {
 	return renderPowerShellDockerDesktopControlScript(controlScriptSpec{
-		Mode:           controlScriptModeDockerDesktop,
-		TargetDir:      plan.TargetDir,
-		AppID:          plan.AppID,
-		ComposeProject: plan.ComposeProject,
-		ControlScript:  powerShellControlScriptName(plan.AppID),
-		ManagedFiles:   append([]string(nil), plan.ManagedFiles...),
+		Mode:               controlScriptModeDockerDesktop,
+		TargetDir:          plan.TargetDir,
+		AppID:              plan.AppID,
+		ComposeProject:     plan.ComposeProject,
+		ControlScript:      powerShellControlScriptName(plan.AppID),
+		ConfigDir:          plan.ConfigDir,
+		Terminal:           plan.Terminal,
+		DeployedCommands:   plan.DeployedCommands,
+		ConfigContainerDir: plan.ConfigContainerDir,
+		ManagedFiles:       append([]string(nil), plan.ManagedFiles...),
 	})
 }
 
 func renderPowerShellDockerDesktopControlScript(spec controlScriptSpec) string {
+	configContainerDir := spec.ConfigContainerDir
+	if configContainerDir == "" {
+		configContainerDir = "/config"
+	}
 	return fmt.Sprintf(`[CmdletBinding()]
 param(
     [Parameter(Position = 0)]
@@ -99,7 +107,11 @@ $TargetDir = %s
 $ComposeProject = %s
 $ComposeFile = Join-Path $TargetDir %s
 $DockerEnv = Join-Path $TargetDir %s
+$ConfigDisplayDir = Join-Path $TargetDir %s
+$ConfigContainerDir = %s
 $ManagedFiles = @(%s)
+$ReployControlLabel = %s
+$ReployControlColor = %s
 
 function Write-Usage {
     Write-Error @'
@@ -110,8 +122,35 @@ commands:
   restart
   status
   logs
+%s
   help
 '@
+}
+
+function Get-ReployControlOutputPrefix {
+    $ColorMode = [Environment]::GetEnvironmentVariable('REPLOY_COLOR')
+    if ([string]::IsNullOrWhiteSpace($ColorMode)) {
+        $ColorMode = 'auto'
+    }
+    $ColorMode = $ColorMode.ToLowerInvariant()
+
+    $UseColor = $false
+    if ($ColorMode -eq 'always') {
+        $UseColor = $true
+    } elseif ($ColorMode -ne 'never' -and -not (Test-Path Env:NO_COLOR)) {
+        $OutputIsTerminal = -not [Console]::IsOutputRedirected
+        $SupportsVT = $false
+        if ($Host -and $Host.UI) {
+            $SupportsVT = [bool]$Host.UI.SupportsVirtualTerminal
+        }
+        $UseColor = $OutputIsTerminal -and $SupportsVT
+    }
+
+    if ($UseColor) {
+        $Esc = [char]27
+        return "${Esc}[38;5;${ReployControlColor}m${ReployControlLabel}${Esc}[0m"
+    }
+    return $ReployControlLabel
 }
 
 function Test-ManagedFiles {
@@ -128,7 +167,106 @@ function Invoke-ReployCompose {
         [Parameter(ValueFromRemainingArguments = $true)]
         [string[]]$ComposeArgs
     )
-    & docker compose --project-name $ComposeProject --project-directory $TargetDir --env-file $DockerEnv -f $ComposeFile @ComposeArgs
+    $Prefix = Get-ReployControlOutputPrefix
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & docker compose --project-name $ComposeProject --project-directory $TargetDir --env-file $DockerEnv -f $ComposeFile @ComposeArgs 2>&1 | ForEach-Object {
+            if ($null -eq $_) {
+                $Line = ''
+            } else {
+                $Line = $_.ToString()
+            }
+            if ($Line.StartsWith(' ')) {
+                Write-Output "$Prefix$Line"
+            } else {
+                Write-Output "$Prefix $Line"
+            }
+        }
+        $ExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $PreviousErrorActionPreference
+    }
+    if ($ExitCode -ne 0) {
+        exit $ExitCode
+    }
+}
+
+function Test-ForwardedArgs {
+    param(
+        [string]$Mode,
+        [string[]]$AllowedFlags,
+        [string[]]$Args
+    )
+    if ($Mode -eq 'args') {
+        return
+    }
+    foreach ($Arg in $Args) {
+        if ($Arg -match '^(--[^=]+)=') {
+            $Flag = $Matches[1]
+        } elseif ($Arg -match '^(--.+)$') {
+            $Flag = $Matches[1]
+        } else {
+            throw "unexpected positional argument after app command trigger: $Arg"
+        }
+        if ($AllowedFlags -notcontains $Flag) {
+            throw "unknown forwarded flag: $Flag"
+        }
+    }
+}
+
+function Invoke-AppCommand {
+    param(
+        [string]$CommandName,
+        [string[]]$ForwardedArgs
+    )
+    Test-ManagedFiles
+    $ComposeArgs = @(
+        'run',
+        '--rm',
+        '--no-deps',
+        '-e',
+        "REPLOY_CONTAINER_COMMAND=$CommandName",
+        '-e',
+        "REPLOY_FORWARDED_ARGC=$($ForwardedArgs.Count)"
+    )
+    for ($Index = 0; $Index -lt $ForwardedArgs.Count; $Index++) {
+        $ComposeArgs += '-e'
+        $ComposeArgs += "REPLOY_FORWARDED_ARG_$Index=$($ForwardedArgs[$Index])"
+    }
+    $ComposeArgs += @(
+        '-e',
+        "REPLOY_CONFIG_CONTAINER_DIR=$ConfigContainerDir",
+        '-e',
+        "REPLOY_CONFIG_DISPLAY_DIR=$ConfigDisplayDir",
+        '-e',
+        'REPLOY_INCLUDE_RUNTIME_OVERRIDES=0',
+        '-e',
+        'REPLOY_CONFIG_MOUNT=rw',
+        '-e',
+        'REPLOY_APP_COMMAND_PREFIX=reploy app'
+    )
+    if ($env:COLUMNS -match '^\d+$') {
+        $Columns = [int]$env:COLUMNS
+        if ($Columns -ge 20 -and $Columns -le 1000) {
+            $ComposeArgs += '-e'
+            $ComposeArgs += "COLUMNS=$Columns"
+        }
+    }
+%s
+    $ComposeArgs += 'app'
+    Invoke-ReployCompose @ComposeArgs
+}
+
+function Select-ForwardedArgs {
+    param(
+        [string[]]$Args,
+        [int]$Skip
+    )
+    if ($Args.Count -le $Skip) {
+        return @()
+    }
+    return @($Args | Select-Object -Skip $Skip)
 }
 
 switch ($Command) {
@@ -152,12 +290,13 @@ switch ($Command) {
     { $_ -in @('', '-h', '--help', 'help') } {
         Write-Usage
     }
+%s
     default {
         Write-Usage
         throw "unknown command: $Command"
     }
 }
-`, powerShellSingleQuote(spec.TargetDir), powerShellSingleQuote(spec.ComposeProject), powerShellSingleQuote(filepath.FromSlash(ComposeFileName)), powerShellSingleQuote(filepath.FromSlash(DockerEnvFileName)), powerShellArrayLiteral(spec.ManagedFiles), spec.ControlScript)
+`, powerShellSingleQuote(spec.TargetDir), powerShellSingleQuote(spec.ComposeProject), powerShellSingleQuote(filepath.FromSlash(ComposeFileName)), powerShellSingleQuote(filepath.FromSlash(DockerEnvFileName)), powerShellSingleQuote(filepath.FromSlash(spec.ConfigDir)), powerShellSingleQuote(configContainerDir), powerShellArrayLiteral(spec.ManagedFiles), powerShellSingleQuote(controlScriptOutputLabel(spec.AppID)), powerShellSingleQuote(deployedOutputColor), spec.ControlScript, powerShellUsageCommands(spec.DeployedCommands), powerShellTerminalEnv(spec.Terminal), powerShellAppCommandCases(spec.DeployedCommands))
 }
 
 func renderControlScript(spec controlScriptSpec) string {
@@ -936,6 +1075,108 @@ func controlScriptAppCommandCases(commands []deploy.DockerCommandConfig) string 
 	builder.WriteString("    echo \"unknown command: $cmd\" >&2\n")
 	builder.WriteString("    exit 2\n")
 	builder.WriteString("    ;;\n")
+	return builder.String()
+}
+
+func powerShellUsageCommands(commands []deploy.DockerCommandConfig) string {
+	if len(commands) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	for _, command := range commands {
+		builder.WriteString("  ")
+		builder.WriteString(strings.Join(command.Trigger, " "))
+		builder.WriteByte('\n')
+	}
+	return strings.TrimRight(builder.String(), "\n")
+}
+
+func powerShellTerminalEnv(terminal deploy.AppTerminalConfig) string {
+	colorEnv := strings.TrimSpace(terminal.ColorEnv)
+	if colorEnv == "" {
+		return ""
+	}
+	return fmt.Sprintf(`    $ColorEnvName = %s
+    $ColorValue = [Environment]::GetEnvironmentVariable($ColorEnvName)
+    $ColorWasSet = Test-Path ("Env:" + $ColorEnvName)
+    if (-not $ColorWasSet) {
+        $ReployColorMode = [Environment]::GetEnvironmentVariable('REPLOY_COLOR')
+        if ([string]::IsNullOrWhiteSpace($ReployColorMode)) {
+            $ReployColorMode = 'auto'
+        }
+        switch ($ReployColorMode.Trim().ToLowerInvariant()) {
+            'always' {
+                $ColorValue = 'always'
+            }
+            'never' {
+                $ColorValue = 'never'
+            }
+            'auto' {
+                if (Test-Path Env:NO_COLOR) {
+                    $ColorValue = 'never'
+                } else {
+                    $OutputIsTerminal = $true
+                    try {
+                        $OutputIsTerminal = -not [Console]::IsOutputRedirected
+                    } catch {
+                        $OutputIsTerminal = $true
+                    }
+                    $SupportsVirtualTerminal = $false
+                    try {
+                        $SupportsVirtualTerminal = [bool]$Host.UI.SupportsVirtualTerminal
+                    } catch {
+                        $SupportsVirtualTerminal = $false
+                    }
+                    if ($OutputIsTerminal -and $SupportsVirtualTerminal) {
+                        $ColorValue = 'always'
+                    }
+                }
+            }
+        }
+    }
+    if ($ColorWasSet -or -not [string]::IsNullOrEmpty($ColorValue)) {
+        $ComposeArgs += '-e'
+        $ComposeArgs += "$ColorEnvName=$ColorValue"
+    }
+`, powerShellSingleQuote(colorEnv))
+}
+
+func powerShellAppCommandCases(commands []deploy.DockerCommandConfig) string {
+	if len(commands) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	for _, command := range commands {
+		builder.WriteString("    { ")
+		for index, part := range command.Trigger {
+			if index > 0 {
+				builder.WriteString(" -and ")
+			}
+			if index == 0 {
+				builder.WriteString("$Command -eq ")
+			} else {
+				builder.WriteString(fmt.Sprintf("$RemainingArgs.Count -ge %d -and $RemainingArgs[%d] -eq ", index, index-1))
+			}
+			builder.WriteString(powerShellSingleQuote(part))
+		}
+		builder.WriteString(" } {\n")
+		mode := "flags"
+		allowedFlags := command.ForwardFlags
+		if command.ForwardArgs {
+			mode = "args"
+			allowedFlags = nil
+		}
+		builder.WriteString(fmt.Sprintf("        $ForwardedArgs = Select-ForwardedArgs -Args $RemainingArgs -Skip %d\n", len(command.Trigger)-1))
+		builder.WriteString("        Test-ForwardedArgs -Mode ")
+		builder.WriteString(powerShellSingleQuote(mode))
+		builder.WriteString(" -AllowedFlags @(")
+		builder.WriteString(powerShellArrayLiteral(allowedFlags))
+		builder.WriteString(") -Args $ForwardedArgs\n")
+		builder.WriteString("        Invoke-AppCommand -CommandName ")
+		builder.WriteString(powerShellSingleQuote(command.Name))
+		builder.WriteString(" -ForwardedArgs $ForwardedArgs\n")
+		builder.WriteString("    }\n")
+	}
 	return builder.String()
 }
 

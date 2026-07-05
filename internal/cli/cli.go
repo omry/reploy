@@ -27,6 +27,8 @@ const appRefUsageHint = "use an indexed shorthand such as arbiter-server or arbi
 var dockerDirectInstall = dockerdeploy.DirectInstall
 var dockerInstall = dockerdeploy.Install
 var dockerPrintInstallSuccess = dockerdeploy.PrintInstallSuccess
+var dockerUninstall = dockerdeploy.Uninstall
+var dockerUninstallNeedsRoot = dockerdeploy.UninstallNeedsRoot
 var dockerRuntime = dockerdeploy.Runtime
 var dockerTestServer = dockerdeploy.TestServer
 
@@ -1166,15 +1168,15 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer, globalO
 	}
 	printWarnings(stderr, options.Warnings)
 	stopSpinner := func(bool) {}
-	if !options.DryRun {
-		if options.Pack.Raw != "" {
-			stopSpinner = startSpinner(stderr, "installing app")
-		} else {
-			stopSpinner = startSpinner(stderr, "installing from staging")
-		}
-	}
+	progress := io.Discard
+	installStdout := stdout
 	installTarget := ""
 	if options.Pack.Raw != "" {
+		if !options.DryRun {
+			var logOutput io.Writer
+			stopSpinner, progress, logOutput = startProgressSpinnerWithLogs(stderr, "installing app")
+			installStdout = logOutput
+		}
 		installTarget, err = dockerDirectInstall(dockerdeploy.DirectInstallOptions{
 			Pack:                   options.Pack,
 			Target:                 options.Target,
@@ -1185,13 +1187,24 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer, globalO
 			InPlace:                options.InPlace,
 			Start:                  options.Start,
 			DryRun:                 options.DryRun,
-			Stdout:                 stdout,
-			Progress:               nil,
+			Stdout:                 installStdout,
+			Progress:               progress,
 			DockerPreflightTimeout: globalOptions.DockerTimeout,
 		})
 	} else {
 		installTarget = options.Target
 		options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+		if err == nil {
+			if !options.DryRun {
+				var label string
+				label, err = deploymentSpinnerLabel(options.Dir, "installing", stderr)
+				if err == nil {
+					var logOutput io.Writer
+					stopSpinner, progress, logOutput = startProgressSpinnerWithLogs(stderr, label)
+					installStdout = logOutput
+				}
+			}
+		}
 		if err == nil {
 			err = dockerInstall(dockerdeploy.InstallOptions{
 				Dir:                    options.Dir,
@@ -1203,8 +1216,8 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer, globalO
 				InPlace:                options.InPlace,
 				Start:                  options.Start,
 				DryRun:                 options.DryRun,
-				Stdout:                 stdout,
-				Progress:               nil,
+				Stdout:                 installStdout,
+				Progress:               progress,
 				DockerPreflightTimeout: globalOptions.DockerTimeout,
 			})
 		}
@@ -1216,7 +1229,8 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer, globalO
 	}
 	stopSpinner(true)
 	if !options.DryRun && installTarget != "" {
-		if err := dockerPrintInstallSuccess(installTarget, stdout, globalOptions.DockerTimeout); err != nil {
+		successStdout := deploymentStdoutOrFallback(installTarget, stdout)
+		if err := dockerPrintInstallSuccess(installTarget, successStdout, globalOptions.DockerTimeout); err != nil {
 			fmt.Fprintf(stderr, "reploy install warning: success output: %v\n", err)
 		}
 	}
@@ -1238,20 +1252,34 @@ func runDockerUninstall(args []string, stdout io.Writer, stderr io.Writer, globa
 		}
 		return 0
 	}
-	if dockerdeploy.UninstallNeedsRoot(dockerdeploy.UninstallOptions{DryRun: options.DryRun}) && os.Geteuid() != 0 {
+	if dockerUninstallNeedsRoot(dockerdeploy.UninstallOptions{DryRun: options.DryRun}) && os.Geteuid() != 0 {
 		fmt.Fprintln(stderr, "reploy uninstall error: root privileges are required to stop systemd services and remove Docker resources")
 		fmt.Fprintln(stderr, "rerun with sudo, or add --dry-run to inspect the uninstall plan")
 		return 1
 	}
-	if !options.DryRun {
-		stopSpinner = startSpinner(stderr, "uninstalling deployment")
+	uninstallStdout := stdout
+	uninstallDir := options.From
+	if strings.TrimSpace(uninstallDir) == "" {
+		uninstallDir = "."
 	}
-	if err := dockerdeploy.Uninstall(dockerdeploy.UninstallOptions{
+	if !options.DryRun {
+		uninstallStdout = deploymentStdoutOrFallback(uninstallDir, stdout)
+		label := "uninstalling deployment"
+		if prefixedLabel, err := deploymentSpinnerLabel(uninstallDir, "uninstalling", stderr); err == nil {
+			label = prefixedLabel
+		}
+		var logOutput io.Writer
+		stopSpinner, _, logOutput = startProgressSpinnerWithLogs(stderr, label)
+		if terminalAnimationsEnabled() {
+			uninstallStdout = deploymentStdoutOrFallback(uninstallDir, logOutput)
+		}
+	}
+	if err := dockerUninstall(dockerdeploy.UninstallOptions{
 		From:                   options.From,
 		ServiceName:            options.ServiceName,
 		RemoveDir:              options.RemoveDir,
 		DryRun:                 options.DryRun,
-		Stdout:                 stdout,
+		Stdout:                 uninstallStdout,
 		DockerPreflightTimeout: globalOptions.DockerTimeout,
 	}); err != nil {
 		stopSpinner(false)
@@ -1260,6 +1288,14 @@ func runDockerUninstall(args []string, stdout io.Writer, stderr io.Writer, globa
 	}
 	stopSpinner(true)
 	return 0
+}
+
+func deploymentStdoutOrFallback(dir string, stdout io.Writer) io.Writer {
+	wrappedStdout, _, err := dockerdeploy.DeploymentOutputWriters(dir, stdout, nil)
+	if err != nil {
+		return stdout
+	}
+	return wrappedStdout
 }
 
 type dockerInstallOptions struct {
@@ -2118,47 +2154,158 @@ func optionValue(args []string, index *int) (string, bool) {
 }
 
 func startSpinner(output io.Writer, label string) func(bool) {
+	stop, _ := startProgressSpinner(output, label)
+	return stop
+}
+
+func startProgressSpinner(output io.Writer, label string) (func(bool), io.Writer) {
+	stop, progress, _ := startProgressSpinnerWithLogs(output, label)
+	return stop, progress
+}
+
+func startProgressSpinnerWithLogs(output io.Writer, label string) (func(bool), io.Writer, io.Writer) {
 	if output == nil {
-		return func(bool) {}
+		return func(bool) {}, io.Discard, io.Discard
 	}
 	if !terminalAnimationsEnabled() {
 		fmt.Fprintf(output, "%s...\n", label)
+		progress := progressWriter{write: func(message string) {
+			fmt.Fprintf(output, "%s: %s\n", label, message)
+		}}
 		return func(ok bool) {
 			suffix := "... failed"
 			if ok {
 				suffix = "... done"
 			}
 			fmt.Fprintf(output, "%s%s\n", label, suffix)
-		}
+		}, progress, output
 	}
 	done := make(chan bool, 1)
+	updates := make(chan string, 16)
+	logs := make(chan string, 16)
 	finished := make(chan struct{})
 	go func() {
+		const hideCursor = "\x1b[?25l"
+		const showCursor = "\x1b[?25h"
 		frames := []string{"|", "/", "-", "\\"}
 		ticker := time.NewTicker(120 * time.Millisecond)
 		defer ticker.Stop()
 		index := 0
-		fmt.Fprintf(output, "\r%s %s", label, frames[index])
+		currentLabel := label
+		lastLen := 0
+		fmt.Fprint(output, hideCursor)
+		render := func(text string) {
+			line := fmt.Sprintf("\r%s %s", text, frames[index])
+			if len(line) < lastLen {
+				line += strings.Repeat(" ", lastLen-len(line))
+			}
+			fmt.Fprint(output, line)
+			lastLen = len(line)
+		}
+		clear := func() {
+			if lastLen > 0 {
+				fmt.Fprintf(output, "\r%s\r", strings.Repeat(" ", lastLen))
+				lastLen = 0
+			}
+		}
+		render(currentLabel)
 		for {
 			select {
 			case ok := <-done:
+				for {
+					select {
+					case line := <-logs:
+						clear()
+						fmt.Fprintln(output, line)
+					default:
+						goto finish
+					}
+				}
+			finish:
 				suffix := "... failed"
 				if ok {
 					suffix = "... done"
 				}
-				fmt.Fprintf(output, "\r%s%s\n", label, suffix)
+				line := "\r" + label + suffix
+				if len(line) < lastLen {
+					line += strings.Repeat(" ", lastLen-len(line))
+				}
+				fmt.Fprintln(output, line+showCursor)
 				close(finished)
 				return
+			case line := <-logs:
+				clear()
+				fmt.Fprintln(output, line)
+				render(currentLabel)
+			case update := <-updates:
+				currentLabel = label + ": " + update
+				render(currentLabel)
 			case <-ticker.C:
 				index = (index + 1) % len(frames)
-				fmt.Fprintf(output, "\r%s %s", label, frames[index])
+				render(currentLabel)
 			}
 		}
 	}()
+	progress := progressWriter{write: func(message string) {
+		updates <- message
+	}}
+	logOutput := &spinnerLogWriter{write: func(line string) {
+		logs <- line
+	}, terminal: output}
 	return func(ok bool) {
+		logOutput.Flush()
 		done <- ok
 		<-finished
+	}, progress, logOutput
+}
+
+type progressWriter struct {
+	write func(string)
+}
+
+func (writer progressWriter) Write(content []byte) (int, error) {
+	text := strings.ReplaceAll(string(content), "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		writer.write(line)
 	}
+	return len(content), nil
+}
+
+type spinnerLogWriter struct {
+	buffer   strings.Builder
+	write    func(string)
+	terminal io.Writer
+}
+
+func (writer *spinnerLogWriter) TerminalOutput() io.Writer {
+	return writer.terminal
+}
+
+func (writer *spinnerLogWriter) Write(content []byte) (int, error) {
+	text := strings.ReplaceAll(string(content), "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	for _, char := range text {
+		if char == '\n' {
+			writer.write(writer.buffer.String())
+			writer.buffer.Reset()
+			continue
+		}
+		writer.buffer.WriteRune(char)
+	}
+	return len(content), nil
+}
+
+func (writer *spinnerLogWriter) Flush() {
+	if writer.buffer.Len() == 0 {
+		return
+	}
+	writer.write(writer.buffer.String())
+	writer.buffer.Reset()
 }
 
 func terminalAnimationsEnabled() bool {

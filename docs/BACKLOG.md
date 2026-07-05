@@ -35,6 +35,34 @@ No active backlog items.
 
 ## Pre-release
 
+- [ ] `P1` Embed a hidden Reploy runtime for generated control scripts.
+      Reploy originally experimented with shipping a local Reploy entrypoint in
+      deployments, then removed it; the direction is now to include a pinned
+      `.reploy/bin/reploy` runtime again while still exposing only the narrow
+      generated `<app>ctl` control surface. Acceptance checks: make generated
+      control scripts small launchers that delegate to the embedded runtime;
+      ensure the embedded command path exposes only lifecycle, health, logs, and
+      blueprint-declared deployed app commands; have `stage`, `stage --update`,
+      direct install, and install/update write or refresh `.reploy/bin/reploy`
+      as Reploy-owned generated runtime state; record expected runtime
+      version/hash in deployment state; keep app-owned artifact policies from
+      governing `.reploy/`; provide a clear repair path or explicit system
+      Reploy escape hatch when the embedded runtime is missing or invalid; and
+      update docs/tests that currently say no Reploy binary belongs inside a
+      deployment to instead say no full Reploy CLI surface is exposed.
+
+- [ ] `P1` Add Docker command interruption integration coverage.
+      Reploy should explicitly test what happens when long-running Docker and
+      Docker Compose commands are interrupted, especially on Windows Docker
+      Desktop where Ctrl+C can leave the parent CLI waiting or one-off
+      containers behind. Acceptance checks: add an opt-in integration test that
+      starts a unique Compose project with a long-lived one-off command, sends
+      an interrupt, measures time to return, inspects for leftover containers
+      and networks, and always runs idempotent cleanup; cover
+      `docker compose run --rm --no-deps` as used by app commands, compare
+      `docker compose up` if useful, and document the Windows PowerShell versus
+      Linux shell behavior observed by the test.
+
 - [ ] `P1` Make bundle-build pip bootstrap progress bounded and useful.
       `reploy bundle build` can sit at `upgrading pip` while preparing the
       build container, with no clear progress and no quick failure if the pip
@@ -45,6 +73,15 @@ No active backlog items.
       or similarly actionable failure path; keep verbose timing breakdowns for
       bootstrap versus wheelhouse work; and verify the behavior on a clean
       Docker image with uncached Python dependencies.
+
+- [ ] `P1` Add useful progress for Python runtime preparation.
+      `reploy app config check`, install hooks, and first service start can
+      sit at `Preparing Python runtime...` while the generated Compose command
+      creates a venv and installs requirements inside the container. Acceptance
+      checks: decide whether this should be a spinner, bounded step progress,
+      or both; keep quiet mode readable without dumping pip logs; preserve
+      verbose mode for raw command output; avoid speculative per-package noise;
+      and verify the experience on Windows Docker Desktop and Linux.
 
 - [ ] `P2` Remove old verbose Docker command argv compatibility.
       Reploy currently supports both full `container.argv` commands and the

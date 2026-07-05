@@ -125,7 +125,7 @@ func Install(options InstallOptions) error {
 			return err
 		}
 	}
-	doctorCode := Doctor(DoctorOptions{Dir: options.Dir, Preinstall: true, Quiet: true, Stdout: options.Stdout, DockerPreflightTimeout: options.DockerPreflightTimeout})
+	doctorCode := Doctor(DoctorOptions{Dir: options.Dir, Preinstall: true, Quiet: true, SuppressWarnings: true, Stdout: options.Stdout, DockerPreflightTimeout: options.DockerPreflightTimeout})
 	if doctorCode != 0 {
 		return fmt.Errorf("preinstall doctor failed")
 	}
@@ -250,8 +250,11 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 	if !filepath.IsAbs(options.Target) {
 		return installPlan{}, fmt.Errorf("--to must be an absolute path: %s", options.Target)
 	}
-	if strings.ContainsAny(target, " \t\n") {
-		return installPlan{}, fmt.Errorf("--to must not contain whitespace: %s", target)
+	if strings.ContainsAny(target, "\t\r\n") {
+		return installPlan{}, fmt.Errorf("--to must not contain tabs or newlines: %s", target)
+	}
+	if strings.Contains(target, " ") && currentHostPlatform().installBackend() == installBackendLinuxSystemd {
+		return installPlan{}, fmt.Errorf("--to must not contain spaces for Linux/systemd installs: %s", target)
 	}
 	absoluteDir, err := filepath.Abs(options.Dir)
 	if err != nil {
@@ -493,9 +496,7 @@ func printInstallDryRun(stdout io.Writer, plan installPlan) {
 	fmt.Fprintf(stdout, "container: %s\n", plan.ContainerName)
 	fmt.Fprintf(stdout, "network: %s\n", plan.NetworkName)
 	if plan.Backend == installBackendDockerDesktop {
-		fmt.Fprintln(stdout, dockerDesktopSecurityWarning())
 		fmt.Fprintln(stdout, "permanent install backend: Docker-managed Compose")
-		fmt.Fprintln(stdout, "reboot resistance: enable Docker Desktop start-at-login")
 	}
 	if containerUser, err := installContainerUser(plan.SourceDir); err == nil {
 		fmt.Fprintf(stdout, "container user: %s\n", containerUser)
@@ -1309,13 +1310,18 @@ func applyInstallPlan(plan installPlan) error {
 
 func prepareInstalledDeployment(plan installPlan) error {
 	if !plan.InPlace {
+		installProgress(plan.Progress, "copying staged deployment")
 		if err := copyDeploymentTreeProtected(plan.SourceDir, plan.TargetDir, plan.PreservePaths, plan.ControlScript); err != nil {
 			return fmt.Errorf("copy deployment: %w", err)
 		}
+	} else {
+		installProgress(plan.Progress, "using staging directory in place")
 	}
+	installProgress(plan.Progress, "writing installed control scripts")
 	if err := writeInstalledControlScripts(plan); err != nil {
 		return fmt.Errorf("write installed control script: %w", err)
 	}
+	installProgress(plan.Progress, "preparing installed runtime directory")
 	runtimeDir := filepath.Join(plan.TargetDir, RuntimeDirName)
 	if err := os.RemoveAll(runtimeDir); err != nil {
 		return fmt.Errorf("remove install runtime dir: %w", err)
@@ -1331,9 +1337,11 @@ func prepareInstalledDeployment(plan installPlan) error {
 	if err := writeInstalledDockerEnv(plan); err != nil {
 		return fmt.Errorf("write installed docker env: %w", err)
 	}
+	installProgress(plan.Progress, "writing installed deployment state")
 	if err := writeInstalledState(plan); err != nil {
 		return fmt.Errorf("mark deployment installed: %w", err)
 	}
+	installProgress(plan.Progress, "materializing runtime compose")
 	if _, err := materializeRuntimeCompose(plan.TargetDir); err != nil {
 		return fmt.Errorf("materialize runtime compose: %w", err)
 	}
@@ -1355,6 +1363,7 @@ func prepareInstalledDeployment(plan installPlan) error {
 			return fmt.Errorf("set installed ownership: %w", err)
 		}
 	}
+	installProgress(plan.Progress, "installed deployment prepared")
 	return nil
 }
 
@@ -1388,12 +1397,14 @@ func applyLinuxSystemdInstallPlan(plan installPlan) error {
 		return fmt.Errorf("systemctl enable %s.service: %w", plan.Service, err)
 	}
 	if plan.Start {
+		installProgress(plan.Progress, "checking managed files")
 		if err := ensureManagedFiles(plan.TargetDir, plan.ManagedFiles); err != nil {
 			return err
 		}
 		if err := runInstallHooks(plan, "before start", plan.Hooks.BeforeStart); err != nil {
 			return err
 		}
+		installProgress(plan.Progress, "restarting systemd service")
 		if err := installRunCommand(systemctlBin, "restart", plan.Service+".service"); err != nil {
 			return fmt.Errorf("systemctl restart %s.service: %w", plan.Service, err)
 		}
@@ -1409,12 +1420,14 @@ func applyDockerDesktopInstallPlan(plan installPlan) error {
 		return err
 	}
 	if plan.Start {
+		installProgress(plan.Progress, "checking managed files")
 		if err := ensureManagedFiles(plan.TargetDir, plan.ManagedFiles); err != nil {
 			return err
 		}
 		if err := runInstallHooks(plan, "before start", plan.Hooks.BeforeStart); err != nil {
 			return err
 		}
+		installProgress(plan.Progress, "starting Docker-managed app")
 		spec := composeCommandWithProject(plan.TargetDir, plan.ComposeProject, "up", "-d")
 		if err := runCommand(spec, RunOptions{DockerPreflightTimeout: plan.DockerPreflightTimeout}); err != nil {
 			return fmt.Errorf("docker compose up: %w", err)
@@ -1431,6 +1444,7 @@ func applyDockerDesktopInstallPlan(plan installPlan) error {
 
 func runInstallHooks(plan installPlan, phase string, hooks []deploy.DockerInstallHookConfig) error {
 	for _, hook := range hooks {
+		installProgress(plan.Progress, fmt.Sprintf("running %s hook: %s", phase, installHookDescription(hook)))
 		if err := runInstallHook(plan, hook); err != nil {
 			return fmt.Errorf("install hook %s %s: %w", phase, installHookDescription(hook), err)
 		}

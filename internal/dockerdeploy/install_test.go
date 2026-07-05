@@ -94,7 +94,7 @@ func TestInstallDryRunOnDarwinPrintsDockerDesktopPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	markTestBundlePrepared(t, deployDir)
-	target := filepath.Join(t.TempDir(), "installed")
+	target := filepath.Join(t.TempDir(), "installed app")
 
 	var stdout strings.Builder
 	if err := Install(InstallOptions{
@@ -108,14 +108,20 @@ func TestInstallDryRunOnDarwinPrintsDockerDesktopPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		dockerDesktopSecurityWarning(),
 		"permanent install backend: Docker-managed Compose",
-		"reboot resistance: enable Docker Desktop start-at-login",
 		"would run: docker compose --project-name",
 		"up -d",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	for _, unwanted := range []string{
+		dockerDesktopSecurityWarning(),
+		"reboot resistance: enable Docker Desktop start-at-login",
+	} {
+		if strings.Contains(stdout.String(), unwanted) {
+			t.Fatalf("darwin dry-run should not include advisory %q:\n%s", unwanted, stdout.String())
 		}
 	}
 	if strings.Contains(stdout.String(), "systemctl") || strings.Contains(stdout.String(), "systemd unit") {
@@ -158,15 +164,21 @@ func TestInstallDryRunOnWindowsPrintsDockerManagedPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		dockerDesktopSecurityWarning(),
 		"permanent install backend: Docker-managed Compose",
-		"reboot resistance: enable Docker Desktop start-at-login",
 		"would write PowerShell control script: " + filepath.Join(target, "democtl.ps1"),
 		"would run: docker compose --project-name",
 		"up -d",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	for _, unwanted := range []string{
+		dockerDesktopSecurityWarning(),
+		"reboot resistance: enable Docker Desktop start-at-login",
+	} {
+		if strings.Contains(stdout.String(), unwanted) {
+			t.Fatalf("windows dry-run should not include advisory %q:\n%s", unwanted, stdout.String())
 		}
 	}
 	if strings.Contains(stdout.String(), "systemctl") || strings.Contains(stdout.String(), "systemd unit") {
@@ -1383,11 +1395,13 @@ func TestInstallRunsConfiguredHooksAroundServiceStart(t *testing.T) {
 		return nil
 	}
 
+	var progress strings.Builder
 	if err := Install(InstallOptions{
-		Dir:     deployDir,
-		Target:  target,
-		Service: "demo-hooks",
-		Start:   true,
+		Dir:      deployDir,
+		Target:   target,
+		Service:  "demo-hooks",
+		Start:    true,
+		Progress: &progress,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1408,6 +1422,22 @@ func TestInstallRunsConfiguredHooksAroundServiceStart(t *testing.T) {
 			t.Fatalf("command %q ran out of order: %#v", want, commands)
 		}
 		lastIndex = index
+	}
+	for _, want := range []string{
+		"copying staged deployment",
+		"writing installed control scripts",
+		"materializing runtime compose",
+		"checking managed files",
+		"running before start hook: app config check",
+		"restarting systemd service",
+		"running after start hook: health check --wait",
+		"waiting for installed service to start",
+		"installed service is running",
+		"running after start hook: app config check --live",
+	} {
+		if !strings.Contains(progress.String(), want) {
+			t.Fatalf("progress missing %q:\n%s", want, progress.String())
+		}
 	}
 }
 
@@ -1482,18 +1512,51 @@ func TestControlScriptOutputLabelUsesAppIDOnly(t *testing.T) {
 
 func TestPowerShellDockerDesktopControlScriptContent(t *testing.T) {
 	content := powerShellDockerDesktopControlScriptContent(installPlan{
-		AppID:          "demo",
-		TargetDir:      `C:\Users\alice\AppData\Local\Reploy\installs\demo`,
-		ComposeProject: "demo-project",
-		ManagedFiles:   []string{`.arbiter.env`, `conf\settings.toml`},
+		AppID:              "demo",
+		TargetDir:          `C:\Users\alice\AppData\Local\Reploy\installs\demo app`,
+		ComposeProject:     "demo-project",
+		ConfigDir:          "conf",
+		ConfigContainerDir: "/conf",
+		Terminal:           deploy.AppTerminalConfig{ColorEnv: "DEMO_COLOR"},
+		ManagedFiles:       []string{`.arbiter.env`, `conf\settings.toml`},
+		DeployedCommands: []deploy.DockerCommandConfig{{
+			Name:         "config_check",
+			Trigger:      []string{"config", "check"},
+			AppCommand:   true,
+			Deployed:     true,
+			ForwardFlags: []string{"--live"},
+		}},
 	})
 	for _, want := range []string{
 		"[CmdletBinding()]",
-		"$TargetDir = 'C:\\Users\\alice\\AppData\\Local\\Reploy\\installs\\demo'",
+		"$TargetDir = 'C:\\Users\\alice\\AppData\\Local\\Reploy\\installs\\demo app'",
 		"$ComposeProject = 'demo-project'",
 		"& docker compose --project-name $ComposeProject --project-directory $TargetDir --env-file $DockerEnv -f $ComposeFile @ComposeArgs",
+		"$ReployControlLabel = '[demo]'",
+		"$ReployControlColor = '208'",
+		"Get-ReployControlOutputPrefix",
+		"$PreviousErrorActionPreference = $ErrorActionPreference",
+		"$ErrorActionPreference = 'Continue'",
+		"$ErrorActionPreference = $PreviousErrorActionPreference",
+		"$Line.StartsWith(' ')",
+		"Write-Output \"$Prefix$Line\"",
+		"Write-Output \"$Prefix $Line\"",
 		"Test-ManagedFiles",
 		"managed file is missing: $ManagedFile",
+		"config check",
+		"Test-ForwardedArgs -Mode 'flags' -AllowedFlags @('--live') -Args $ForwardedArgs",
+		"Invoke-AppCommand -CommandName 'config_check' -ForwardedArgs $ForwardedArgs",
+		"REPLOY_CONTAINER_COMMAND=$CommandName",
+		"REPLOY_CONFIG_CONTAINER_DIR=$ConfigContainerDir",
+		"REPLOY_CONFIG_DISPLAY_DIR=$ConfigDisplayDir",
+		"REPLOY_INCLUDE_RUNTIME_OVERRIDES=0",
+		"REPLOY_CONFIG_MOUNT=rw",
+		"REPLOY_APP_COMMAND_PREFIX=reploy app",
+		"$ColorEnvName = 'DEMO_COLOR'",
+		"$ReployColorMode = [Environment]::GetEnvironmentVariable('REPLOY_COLOR')",
+		"Test-Path Env:NO_COLOR",
+		"[Console]::IsOutputRedirected",
+		"$Host.UI.SupportsVirtualTerminal",
 		"Invoke-ReployCompose up -d @RemainingArgs",
 		"Invoke-ReployCompose logs @RemainingArgs",
 	} {

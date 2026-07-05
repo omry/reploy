@@ -549,6 +549,41 @@ func TestDoctorQuietSuppressesPassingChecks(t *testing.T) {
 	}
 }
 
+func TestDoctorSuppressWarningsKeepsFailures(t *testing.T) {
+	disableDoctorColor(t)
+	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "darwin"})
+	previousDetector := detectDockerRuntimeForDoctor
+	t.Cleanup(func() {
+		restorePlatform()
+		detectDockerRuntimeForDoctor = previousDetector
+	})
+	detectDockerRuntimeForDoctor = func(context.Context, CommandSpec, time.Duration) (dockerRuntimeInfo, error) {
+		return dockerRuntimeInfo{}, errors.New("docker unavailable")
+	}
+
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout strings.Builder
+	code := Doctor(DoctorOptions{Dir: deployDir, Preinstall: true, Quiet: true, SuppressWarnings: true, Stdout: &stdout})
+	if code != 1 {
+		t.Fatalf("doctor exit = %d\n%s", code, stdout.String())
+	}
+	if strings.Contains(stdout.String(), "warn:") {
+		t.Fatalf("stdout should suppress warnings:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "fail: Docker Desktop runtime is required") {
+		t.Fatalf("stdout should keep failures:\n%s", stdout.String())
+	}
+}
+
 func TestDoctorStatusColors(t *testing.T) {
 	colors := doctorColors{enabled: true}
 	if got := colors.status("ok"); got != "\x1b[32mok\x1b[0m" {
