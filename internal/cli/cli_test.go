@@ -1629,6 +1629,24 @@ func TestStagedInstallDryRunUsesDeploymentPrefix(t *testing.T) {
 		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
+	oldDockerInstall := dockerInstall
+	t.Cleanup(func() {
+		dockerInstall = oldDockerInstall
+	})
+	dockerInstall = func(options dockerdeploy.InstallOptions) error {
+		if options.Dir != deployDir {
+			t.Fatalf("install dir = %q, want %q", options.Dir, deployDir)
+		}
+		if options.Target != targetDir {
+			t.Fatalf("install target = %q, want %q", options.Target, targetDir)
+		}
+		if !options.DryRun {
+			t.Fatal("install should be dry-run")
+		}
+		fmt.Fprintln(options.Stdout, "would install deployment: "+options.Dir)
+		return nil
+	}
+
 	code, stdout, stderr = runCLI("install", "--dir", deployDir, "--to", targetDir, "--dry-run", "--no-start")
 	if code != 0 {
 		t.Fatalf("install dry-run failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
