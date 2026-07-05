@@ -23,7 +23,7 @@ func TestHostPlatformInstallBackend(t *testing.T) {
 	}{
 		{goos: "linux", want: installBackendLinuxSystemd},
 		{goos: "darwin", want: installBackendDockerDesktop},
-		{goos: "windows", want: installBackendUnsupported},
+		{goos: "windows", want: installBackendDockerDesktop},
 		{goos: "plan9", want: installBackendUnsupported},
 	}
 	for _, test := range tests {
@@ -71,25 +71,22 @@ func TestWindowsCommandSupport(t *testing.T) {
 			wantDockerDesktop: true,
 		},
 		{
-			name:                "install is planned but not enabled",
-			command:             platformCommandInstall,
-			wantStatus:          platformSupportPlanned,
-			wantDockerDesktop:   true,
-			wantReasonSubstring: "planned for native Windows Docker-managed permanent install",
+			name:              "install requires Docker Desktop",
+			command:           platformCommandInstall,
+			wantStatus:        platformSupportSupported,
+			wantDockerDesktop: true,
 		},
 		{
-			name:                "uninstall from install directory is planned but not enabled",
-			command:             platformCommandUninstallFrom,
-			wantStatus:          platformSupportPlanned,
-			wantDockerDesktop:   true,
-			wantReasonSubstring: "planned for native Windows Docker-managed permanent install",
+			name:              "uninstall from install directory requires Docker Desktop",
+			command:           platformCommandUninstallFrom,
+			wantStatus:        platformSupportSupported,
+			wantDockerDesktop: true,
 		},
 		{
-			name:                "PowerShell control is planned but not enabled",
-			command:             platformCommandInstalledPowerShell,
-			wantStatus:          platformSupportPlanned,
-			wantDockerDesktop:   true,
-			wantReasonSubstring: "planned for native Windows Docker-managed permanent install",
+			name:              "PowerShell control requires Docker Desktop",
+			command:           platformCommandInstalledPowerShell,
+			wantStatus:        platformSupportSupported,
+			wantDockerDesktop: true,
 		},
 		{
 			name:                "POSIX control is deferred",

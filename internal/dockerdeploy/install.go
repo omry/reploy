@@ -462,6 +462,9 @@ func printInstallDryRun(stdout io.Writer, plan installPlan) {
 		fmt.Fprintln(stdout, "would clean app-owned managed paths")
 	}
 	fmt.Fprintf(stdout, "would write control script: %s\n", filepath.Join(plan.TargetDir, plan.ControlScript))
+	if shouldWriteWindowsPowerShellControlScript(plan) {
+		fmt.Fprintf(stdout, "would write PowerShell control script: %s\n", filepath.Join(plan.TargetDir, powerShellControlScriptName(plan.AppID)))
+	}
 	if plan.Backend == installBackendLinuxSystemd {
 		fmt.Fprintln(stdout, "would set installed deployment ownership")
 		fmt.Fprintf(stdout, "would write systemd unit: %s\n", plan.UnitPath)

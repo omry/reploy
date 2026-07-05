@@ -123,6 +123,57 @@ func TestInstallDryRunOnDarwinPrintsDockerDesktopPlan(t *testing.T) {
 	}
 }
 
+func TestInstallDryRunOnWindowsPrintsDockerManagedPlan(t *testing.T) {
+	disableDoctorColor(t)
+	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "windows"})
+	defer restorePlatform()
+	previousDetector := detectDockerRuntimeForDoctor
+	t.Cleanup(func() {
+		detectDockerRuntimeForDoctor = previousDetector
+	})
+	detectDockerRuntimeForDoctor = func(context.Context, CommandSpec, time.Duration) (dockerRuntimeInfo, error) {
+		return dockerRuntimeInfo{Runtime: dockerRuntimeDockerDesktop, OperatingSystem: "Docker Desktop"}, nil
+	}
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	markTestBundlePrepared(t, deployDir)
+	target := filepath.Join(t.TempDir(), "installed")
+
+	var stdout strings.Builder
+	if err := Install(InstallOptions{
+		Dir:     deployDir,
+		Target:  target,
+		Service: "demo-test",
+		Start:   true,
+		DryRun:  true,
+		Stdout:  &stdout,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		dockerDesktopSecurityWarning(),
+		"permanent install backend: Docker-managed Compose",
+		"reboot resistance: enable Docker Desktop start-at-login",
+		"would write PowerShell control script: " + filepath.Join(target, "democtl.ps1"),
+		"would run: docker compose --project-name",
+		"up -d",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "systemctl") || strings.Contains(stdout.String(), "systemd unit") {
+		t.Fatalf("windows dry-run should not mention systemd:\n%s", stdout.String())
+	}
+}
+
 func TestInstallOnDarwinWritesDockerDesktopDeployment(t *testing.T) {
 	disableDoctorColor(t)
 	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "darwin"})

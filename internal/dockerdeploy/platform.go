@@ -89,7 +89,7 @@ func (platform hostPlatform) installBackend() installBackend {
 	switch platform.GOOS {
 	case "linux":
 		return installBackendLinuxSystemd
-	case "darwin":
+	case "darwin", "windows":
 		return installBackendDockerDesktop
 	default:
 		return installBackendUnsupported
@@ -193,7 +193,7 @@ func windowsCommandSupport(command platformCommand) platformCommandSupport {
 	case platformCommandInstall,
 		platformCommandUninstallFrom,
 		platformCommandInstalledPowerShell:
-		return plannedCommandSupport(true, "planned for native Windows Docker-managed permanent install")
+		return supportedCommandSupport(true)
 	case platformCommandInstalledPOSIX:
 		return platformCommandSupport{
 			Status:                platformSupportDeferred,

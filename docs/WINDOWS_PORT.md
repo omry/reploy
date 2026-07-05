@@ -150,8 +150,8 @@ The support contract should therefore say:
 ## Support Matrix
 
 This matrix is the first native Windows support contract to implement. It is
-not a claim about the current build. Current code still treats Windows
-persistent install as unsupported until this plan is implemented.
+implemented incrementally; automated checks and real Windows smoke evidence
+are tracked separately from the support contract.
 
 Native Windows means:
 
