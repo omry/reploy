@@ -628,7 +628,7 @@ Create runnable smoke checklists with expected output for each validation pass:
 
 - CLI-only staging smoke: run the normal target smoke matrix in CI. This builds
   and exercises `windows-amd64` on `windows-2025` and `windows-arm64` on
-  `windows-11-arm`, runs Go tests, and runs `tools/e2e_smoke` through
+  `windows-11-arm`, runs Go tests, and runs `tools/e2e/smoke` through
   `nox -s cli-smoke` with Docker optional. The covered command set includes
   `stage`, `stage --update`, `info`, bundle metadata/planning commands, and
   generated staging file validation from PowerShell.

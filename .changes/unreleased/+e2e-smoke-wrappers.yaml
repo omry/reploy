@@ -1,0 +1,2 @@
+kind: Added
+body: Add Unix and Windows wrapper scripts for running e2e smoke tests against already built host binaries.

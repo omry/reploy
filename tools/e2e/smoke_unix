@@ -1,0 +1,42 @@
+#!/usr/bin/env sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
+
+case "$(uname -s)" in
+  Linux)
+    goos=linux
+    ;;
+  Darwin)
+    goos=darwin
+    ;;
+  *)
+    echo "unsupported smoke host OS: $(uname -s)" >&2
+    exit 2
+    ;;
+esac
+
+case "$(uname -m)" in
+  x86_64|amd64)
+    goarch=amd64
+    ;;
+  arm64|aarch64)
+    goarch=arm64
+    ;;
+  *)
+    echo "unsupported smoke host architecture: $(uname -m)" >&2
+    exit 2
+    ;;
+esac
+
+reploy="$repo_root/dist/$goos-$goarch/reploy"
+if [ ! -x "$reploy" ]; then
+  echo "missing built reploy binary: $reploy" >&2
+  echo "build it first with: tools/build_reploy --target $goos-$goarch" >&2
+  exit 1
+fi
+
+export PYTHONIOENCODING="${PYTHONIOENCODING:-utf-8:replace}"
+echo "+ python3 $repo_root/tools/e2e/smoke --reploy $reploy --color --runtime --persistent-install $*"
+exec python3 "$repo_root/tools/e2e/smoke" --reploy "$reploy" --color --runtime --persistent-install "$@"

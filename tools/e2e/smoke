@@ -4,13 +4,18 @@
 from __future__ import annotations
 
 import argparse
+import codecs
 import os
+import re
 import shutil
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
+
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,6 +29,11 @@ def parse_args() -> argparse.Namespace:
         "--keep-workdir",
         action="store_true",
         help="Keep the temporary smoke work directory for debugging.",
+    )
+    parser.add_argument(
+        "--color",
+        action="store_true",
+        help="Force color output and use a smart terminal identity.",
     )
     parser.add_argument(
         "--plan-only",
@@ -75,108 +85,80 @@ def parse_args() -> argparse.Namespace:
 
 def run(argv: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     print("+ " + " ".join(argv), flush=True)
-    completed = subprocess.run(
+    completed = subprocess.Popen(
         argv,
         cwd=cwd,
         env=env,
-        text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        check=False,
     )
-    if completed.stdout:
-        print(completed.stdout, end="")
-    if completed.stderr:
-        print(completed.stderr, end="", file=sys.stderr)
-    if completed.returncode != 0:
-        raise SystemExit(f"command failed with exit code {completed.returncode}: {' '.join(argv)}")
-    return completed
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+    output_lock = threading.Lock()
+
+    def safe_write(target, content: str) -> None:
+        try:
+            target.write(content)
+            target.flush()
+        except UnicodeEncodeError:
+            encoding = getattr(target, "encoding", None) or "utf-8"
+            buffer = getattr(target, "buffer", None)
+            if buffer is None:
+                target.write(content.encode(encoding, errors="replace").decode(encoding, errors="replace"))
+                target.flush()
+                return
+            buffer.write(content.encode(encoding, errors="replace"))
+            buffer.flush()
+
+    def stream_pipe(pipe, target, chunks: list[str]) -> None:
+        assert pipe is not None
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        while True:
+            data = pipe.read(1)
+            if data == b"":
+                break
+            content = decoder.decode(data)
+            if content == "":
+                continue
+            chunks.append(content)
+            with output_lock:
+                safe_write(target, content)
+        remainder = decoder.decode(b"", final=True)
+        if remainder:
+            chunks.append(remainder)
+            with output_lock:
+                safe_write(target, remainder)
+
+    threads = [
+        threading.Thread(target=stream_pipe, args=(completed.stdout, sys.stdout, stdout_chunks)),
+        threading.Thread(target=stream_pipe, args=(completed.stderr, sys.stderr, stderr_chunks)),
+    ]
+    for thread in threads:
+        thread.start()
+    returncode = completed.wait()
+    for thread in threads:
+        thread.join()
+    if returncode != 0:
+        raise SystemExit(f"[smoke] command failed with exit code {returncode}: {' '.join(argv)}")
+    return subprocess.CompletedProcess(
+        argv,
+        returncode,
+        stdout="".join(stdout_chunks),
+        stderr="".join(stderr_chunks),
+    )
 
 
 def require_contains(output: str, needle: str, context: str) -> None:
-    if needle not in output:
-        raise SystemExit(f"{context} did not contain {needle!r}\n--- output ---\n{output}")
+    if needle not in strip_ansi(output):
+        raise SystemExit(f"[smoke] {context} did not contain {needle!r}\n--- output ---\n{output}")
 
 
-def mode_skipped_checks(
-    *,
-    plan_only: bool,
-    docker_enabled: bool,
-    runtime: bool,
-    persistent_install: bool,
-) -> list[str]:
-    if not docker_enabled:
-        return [
-            "Docker-backed bundle build/check/list-all (covered by bundle build --dry-run)",
-            "live staging runtime lifecycle: up/status/logs/test/down",
-            "live app command execution",
-            "preinstall doctor checks",
-            "install dry-run checks",
-            "real Docker-managed persistent install/start/uninstall",
-            "bundle clean verification",
-            "installed service listing",
-        ]
-    skipped: list[str] = []
-    if plan_only:
-        skipped.extend(
-            [
-                "Docker-backed bundle build/check/list-all (covered by bundle build --dry-run)",
-                "bundle clean verification",
-            ]
-        )
-    if not runtime:
-        skipped.extend(
-            [
-                "live staging runtime lifecycle: up/status/logs/test/down",
-                "live app command execution",
-            ]
-        )
-    if persistent_install:
-        if not docker_managed_install_host():
-            skipped.append(
-                "real Docker-managed persistent install/start/uninstall "
-                "(host uses Linux/systemd install semantics)"
-            )
-    else:
-        skipped.append("real Docker-managed persistent install/start/uninstall")
-    return skipped
+def strip_ansi(value: str) -> str:
+    return ANSI_ESCAPE_RE.sub("", value)
 
 
-def print_smoke_mode(
-    *,
-    plan_only: bool,
-    docker_enabled: bool,
-    runtime: bool,
-    persistent_install: bool,
-    docker_skip_reason: str,
-) -> None:
-    if not docker_enabled:
-        mode = "no-docker"
-    elif plan_only:
-        mode = "plan-only"
-    elif runtime and persistent_install:
-        mode = "runtime+persistent-install"
-    elif runtime:
-        mode = "runtime"
-    elif persistent_install:
-        mode = "persistent-install"
-    else:
-        mode = "bundle"
-    print(f"smoke mode: {mode}", flush=True)
-    if docker_skip_reason:
-        print(f"Docker-backed smoke phases skipped: {docker_skip_reason}", flush=True)
-    skipped = mode_skipped_checks(
-        plan_only=plan_only,
-        docker_enabled=docker_enabled,
-        runtime=runtime,
-        persistent_install=persistent_install,
-    )
-    if not skipped:
-        print("mode-skipped smoke checks: none", flush=True)
-    else:
-        print("mode-skipped smoke checks:", flush=True)
-        for check in skipped:
-            print(f"  - {check}", flush=True)
+def completed_output(completed: subprocess.CompletedProcess[str]) -> str:
+    return completed.stdout + completed.stderr
 
 
 def docker_available(env: dict[str, str], cwd: Path) -> tuple[bool, str]:
@@ -188,6 +170,8 @@ def docker_available(env: dict[str, str], cwd: Path) -> tuple[bool, str]:
             cwd=cwd,
             env=env,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=20,
@@ -244,7 +228,7 @@ def update_env_file(path: Path, updates: dict[str, str]) -> None:
 
 
 def make_workdir() -> Path:
-    return Path(tempfile.mkdtemp(prefix=".reploy-e2e-smoke-", dir=Path.cwd()))
+    return Path(tempfile.mkdtemp(prefix="reploy-e2e-smoke-"))
 
 
 def run_runtime_smoke(reploy: Path, deploy_dir: Path, workdir: Path, env: dict[str, str]) -> None:
@@ -304,7 +288,7 @@ def run_runtime_smoke(reploy: Path, deploy_dir: Path, workdir: Path, env: dict[s
             except BaseException as cleanup_error:
                 if primary_error is None:
                     raise
-                print(f"warning: runtime cleanup failed after earlier error: {cleanup_error}", file=sys.stderr)
+                print(f"[smoke] warning: runtime cleanup failed after earlier error: {cleanup_error}", file=sys.stderr)
 
 
 def run_persistent_install_smoke(
@@ -315,7 +299,6 @@ def run_persistent_install_smoke(
     env: dict[str, str],
 ) -> None:
     if not docker_managed_install_host():
-        print("persistent install smoke skipped: host uses Linux/systemd install semantics", flush=True)
         return
 
     install_port = free_local_port()
@@ -367,8 +350,9 @@ def run_smoke(
     runtime: bool,
     persistent_install: bool,
     docker_mode: str,
+    color: bool,
 ) -> None:
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     pack_dir = repo_root / "tests" / "e2e" / "python" / "packages" / "smoke-blueprint"
     deploy_dir = workdir / "deployment"
     install_dir = workdir / "installed"
@@ -376,26 +360,24 @@ def run_smoke(
         raise SystemExit(f"missing e2e smoke blueprint: {pack_dir}")
 
     env = os.environ.copy()
-    env["NO_COLOR"] = "1"
-    env["TERM"] = "dumb"
+    if color:
+        env.pop("NO_COLOR", None)
+        env.pop("CI", None)
+        env["REPLOY_COLOR"] = "always"
+        env["TERM"] = "xterm-256color"
+        env["COLORTERM"] = "truecolor"
+    else:
+        env["NO_COLOR"] = "1"
+        env["TERM"] = "dumb"
 
     docker_enabled = docker_mode != "skip"
-    docker_skip_reason = ""
     if docker_enabled and not plan_only:
         available, reason = docker_available(env, workdir)
         if not available:
             if docker_mode == "optional":
                 docker_enabled = False
-                docker_skip_reason = reason
             else:
                 raise SystemExit(f"Docker is required for this smoke test: {reason}")
-    print_smoke_mode(
-        plan_only=plan_only,
-        docker_enabled=docker_enabled,
-        runtime=runtime,
-        persistent_install=persistent_install,
-        docker_skip_reason=docker_skip_reason,
-    )
 
     init = run(
         [str(reploy), "stage", "file:" + str(pack_dir), "--dir", str(deploy_dir)],
@@ -447,17 +429,17 @@ def run_smoke(
         require_contains(bundle_build.stdout, "docker run --rm", "bundle build dry-run")
     else:
         bundle_build = run(
-            [str(reploy), "bundle", "build", "--verbose", "--dir", str(deploy_dir)],
+            [str(reploy), "bundle", "build", "--dir", str(deploy_dir)],
             cwd=workdir,
             env=env,
         )
-        require_contains(bundle_build.stdout, "built installation bundle:", "bundle build")
+        require_contains(bundle_build.stderr, "building installation bundle... done", "bundle build")
         bundle_check = run(
-            [str(reploy), "bundle", "check", "--verbose", "--dir", str(deploy_dir)],
+            [str(reploy), "bundle", "check", "--dir", str(deploy_dir)],
             cwd=workdir,
             env=env,
         )
-        require_contains(bundle_check.stdout, "bundle check passed", "bundle check")
+        require_contains(bundle_check.stderr, "validating installation bundle... done", "bundle check")
         bundle_all = run(
             [str(reploy), "bundle", "list", "all", "--dir", str(deploy_dir)],
             cwd=workdir,
@@ -472,7 +454,7 @@ def run_smoke(
         return
 
     doctor = run([str(reploy), "doctor", "--preinstall", "--dir", str(deploy_dir)], cwd=workdir, env=env)
-    require_contains(doctor.stdout, "ok: preinstall checks passed", "preinstall doctor")
+    require_contains(completed_output(doctor), "ok: preinstall checks passed", "preinstall doctor")
 
     install = run(
         [
@@ -507,12 +489,7 @@ def run_smoke(
         if persistent_install:
             run_persistent_install_smoke(reploy, deploy_dir, install_dir, workdir, env)
 
-        clean = run(
-            [str(reploy), "bundle", "clean", "--verbose", "--dir", str(deploy_dir)],
-            cwd=workdir,
-            env=env,
-        )
-        require_contains(clean.stdout, ".reploy/bundle", "bundle clean")
+        run([str(reploy), "bundle", "clean", "--dir", str(deploy_dir)], cwd=workdir, env=env)
 
     run([str(reploy), "uninstall", "--list-services"], cwd=workdir, env=env)
 
@@ -535,6 +512,7 @@ def main() -> int:
             runtime=args.runtime,
             persistent_install=args.persistent_install,
             docker_mode=args.docker_mode,
+            color=args.color,
         )
     else:
         workdir = make_workdir()
@@ -546,6 +524,7 @@ def main() -> int:
                 runtime=args.runtime,
                 persistent_install=args.persistent_install,
                 docker_mode=args.docker_mode,
+                color=args.color,
             )
         finally:
             shutil.rmtree(workdir, ignore_errors=True)

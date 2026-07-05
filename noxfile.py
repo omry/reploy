@@ -23,7 +23,7 @@ PY_COMPILE_FILES = (
     "tools/build_reploy",
     "tools/build_release_dists",
     "tools/build_release_notes",
-    "tools/e2e_smoke",
+    "tools/e2e/smoke",
     "packaging/python/hatch_build.py",
     "tests/e2e/python/packages/smoke-suite/src/smoke_suite/cli.py",
     "tests/e2e/python/packages/smoke-suite/src/smoke_suite/__init__.py",
@@ -78,7 +78,7 @@ def _cli_smoke(session: nox.Session, *extra_args: str) -> None:
         )
         session.run(
             sys.executable,
-            "tools/e2e_smoke",
+            "tools/e2e/smoke",
             "--reploy",
             str(_host_reploy_binary(bin_dir)),
             *extra_args,
