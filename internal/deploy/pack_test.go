@@ -1220,7 +1220,7 @@ func TestAppCommandMatchingAcceptsConfigCheck(t *testing.T) {
 	}
 }
 
-func TestDeployedCommandsOnlyReturnsExplicitDeployedCommands(t *testing.T) {
+func TestDeployedCommandsReturnsResolvedDeployedCommands(t *testing.T) {
 	manifest, err := ParsePackManifest(packTestManifest())
 	if err != nil {
 		t.Fatal(err)
@@ -1234,7 +1234,41 @@ func TestDeployedCommandsOnlyReturnsExplicitDeployedCommands(t *testing.T) {
 	}
 }
 
-func TestDeployedCommandsIgnoreInheritedCommandDefault(t *testing.T) {
+func TestDeployedCommandMatchingHonorsInheritedCommandDefault(t *testing.T) {
+	manifest := manifestWithInheritedDeployedCommands(t)
+	command, forwarded, err := manifest.Docker.MatchDeployedCommand([]string{"env", "bootstrap", "--force"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command.Name != "env_bootstrap" {
+		t.Fatalf("command = %q, want env_bootstrap", command.Name)
+	}
+	if got := strings.Join(forwarded, " "); got != "--force" {
+		t.Fatalf("forwarded args = %q, want --force", got)
+	}
+}
+
+func TestDeployedCommandsHonorsInheritedCommandDefault(t *testing.T) {
+	manifest := manifestWithInheritedDeployedCommands(t)
+	envBootstrap := dockerCommandByName(t, manifest, "env_bootstrap")
+	if !envBootstrap.Deployed {
+		t.Fatal("env_bootstrap should still inherit deployed flag for manifest compatibility")
+	}
+	commands := manifest.Docker.DeployedCommands()
+	if len(commands) != 2 {
+		t.Fatalf("deployed commands = %#v, want explicit and inherited commands", commands)
+	}
+	triggers := make([]string, 0, len(commands))
+	for _, command := range commands {
+		triggers = append(triggers, strings.Join(command.Trigger, " "))
+	}
+	if got := strings.Join(triggers, "\n"); got != "config check\nenv bootstrap" {
+		t.Fatalf("deployed command triggers = %q, want config check and env bootstrap", got)
+	}
+}
+
+func manifestWithInheritedDeployedCommands(t *testing.T) PackManifest {
+	t.Helper()
 	manifest, err := ParsePackManifest(`blueprint:
   schema: 1
   version: 0.1.0
@@ -1262,6 +1296,7 @@ docker:
       argv_prefix: [demo-server]
   commands:
     serve:
+      deployed_command: false
       container:
         argv_suffix: [serve]
     config_check:
@@ -1269,23 +1304,14 @@ docker:
       container:
         argv_suffix: [config, check]
     env_bootstrap:
+      forward_flags: [--force]
       container:
         argv_suffix: [env, bootstrap]
 `)
 	if err != nil {
 		t.Fatal(err)
 	}
-	envBootstrap := dockerCommandByName(t, manifest, "env_bootstrap")
-	if !envBootstrap.Deployed {
-		t.Fatal("env_bootstrap should still inherit deployed flag for manifest compatibility")
-	}
-	commands := manifest.Docker.DeployedCommands()
-	if len(commands) != 1 {
-		t.Fatalf("deployed commands = %#v, want only explicit command", commands)
-	}
-	if got := strings.Join(commands[0].Trigger, " "); got != "config check" {
-		t.Fatalf("deployed command trigger = %q, want config check", got)
-	}
+	return manifest
 }
 
 func TestAppCommandsListsOnlyAppCommands(t *testing.T) {

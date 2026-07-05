@@ -1,2 +1,2 @@
 kind: Fixed
-body: Limit generated control-script app commands to commands explicitly marked as deployed.
+body: Limit generated control-script app commands to commands resolved as deployed, including commands that inherit `command_defaults.deployed_command`.
