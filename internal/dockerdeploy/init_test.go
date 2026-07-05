@@ -803,7 +803,7 @@ docker:
 			t.Fatalf("docker.env missing %q:\n%s", line, dockerEnv)
 		}
 	}
-	compose := readFile(t, filepath.Join(deployDir, ComposeFileName))
+	compose := strings.ReplaceAll(readFile(t, filepath.Join(deployDir, ComposeFileName)), "\r\n", "\n")
 	if !strings.Contains(compose, `container_command_config_check() { "custom-check" "--name" "$${DEMO_CONFIG_NAME}" "$$@"; };`) {
 		t.Fatalf("compose did not render pack config_check command:\n%s", compose)
 	}

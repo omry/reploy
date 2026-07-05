@@ -794,7 +794,7 @@ func TestSystemdUnitPreflightsManagedFiles(t *testing.T) {
 		ManagedFiles: []string{".arbiter.env", "secrets/app #1.env"},
 	}, "/usr/bin/docker", false)
 	for _, relativePath := range []string{".arbiter.env", "secrets/app #1.env"} {
-		path := filepath.Join("/srv/demo", filepath.FromSlash(relativePath))
+		path := systemdPath("/srv/demo", relativePath)
 		want := "ExecStartPre=/bin/sh -c '[ -f \"$1\" ] || { echo \"managed file is missing: $1\" >&2; exit 1; }' reploy-managed-file " + strconv.Quote(path)
 		if !strings.Contains(unit, want) {
 			t.Fatalf("unit missing managed file preflight %q:\n%s", want, unit)
@@ -1123,7 +1123,7 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(unit), "ExecStart=/usr/bin/docker compose --env-file "+filepath.Join(target, DockerEnvFileName)) {
+	if !strings.Contains(string(unit), "ExecStart=/usr/bin/docker compose --env-file "+systemdPath(target, DockerEnvFileName)) {
 		t.Fatalf("unit does not point at target docker.env:\n%s", unit)
 	}
 	if !strings.Contains(string(unit), "--project-name "+instanceID) {

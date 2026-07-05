@@ -329,7 +329,7 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 	}
 	unitPath := ""
 	if backend == installBackendLinuxSystemd {
-		unitPath = filepath.Join(installSystemdUnitDir, options.Service+".service")
+		unitPath = systemdPath(installSystemdUnitDir, options.Service+".service")
 	}
 	return installPlan{
 		SourceDir:              absoluteDir,
@@ -413,7 +413,7 @@ func defaultInstallTarget(pack deploy.AppPack) (string, error) {
 }
 
 func installTargetRoots(goos string) (deploy.InstallTargetRoots, error) {
-	home, _ := os.UserHomeDir()
+	home := installTargetHome(goos)
 	switch deploy.InstallTargetHostKey(goos) {
 	case "windows":
 		localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
@@ -474,6 +474,16 @@ func windowsDockerManagedDefaultInstallTarget(localAppData string, appID string)
 		return "", fmt.Errorf("app id cannot be used in the default Windows install target: %s", appID)
 	}
 	return strings.TrimRight(root, `\/`) + `\Reploy\installs\` + appID, nil
+}
+
+func installTargetHome(goos string) string {
+	if deploy.InstallTargetHostKey(goos) != "windows" {
+		if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
+			return home
+		}
+	}
+	home, _ := os.UserHomeDir()
+	return home
 }
 
 func installOwnerSpec(owner deploy.InstallOwnerConfig) string {
@@ -951,7 +961,11 @@ func systemdManagedFilePreflights(plan installPlan) string {
 }
 
 func systemdPath(elements ...string) string {
-	return path.Join(elements...)
+	normalized := make([]string, 0, len(elements))
+	for _, element := range elements {
+		normalized = append(normalized, strings.ReplaceAll(element, `\`, "/"))
+	}
+	return path.Join(normalized...)
 }
 
 func writeInstalledState(plan installPlan) error {
