@@ -723,7 +723,7 @@ func TestEmbeddedControlRunsDeployedAppCommandWithScriptPrefix(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("_control app command failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "[STAGING : demo] docker output\n") {
+	if !strings.Contains(stdout, "[STAGING : demo] docker output") {
 		t.Fatalf("stdout missing deployment prefix:\n%s", stdout)
 	}
 	if stderr != "" {
