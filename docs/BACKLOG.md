@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-04
+updated: 2026-07-05
 summary: Active planning surface for Reploy design and implementation gaps.
 ---
 
@@ -64,6 +64,18 @@ No active backlog items.
       in a clearly labeled appendix; make current user-facing docs use
       "Docker-managed permanent install" and "OS service install" consistently;
       and avoid duplicating the same correction across multiple doc surfaces.
+
+- [ ] `P1` Reposition the homepage and intro around Reploy as a cross-platform
+      app installer.
+      Reploy's differentiator is not merely running Docker or installing the
+      Reploy CLI; it is a portable app-install contract that maps one blueprint
+      onto host-appropriate staging, dependencies, config, ports, lifecycle
+      controls, health checks, install targets, and success output. Acceptance
+      checks: update the homepage and intro to say this plainly; describe
+      blueprints as semantic app intent rather than Unix path templates; align
+      Linux, macOS, and Windows positioning with the current support matrix; and
+      avoid implying that package managers such as Homebrew, winget, or Scoop
+      solve the same problem.
 
 ## Post-v1
 
