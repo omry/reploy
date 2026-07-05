@@ -136,6 +136,82 @@ func TestVersion(t *testing.T) {
 	}
 }
 
+func TestWindowsWSLBoundaryError(t *testing.T) {
+	tests := []struct {
+		name string
+		goos string
+		env  map[string]string
+		cwd  string
+		want bool
+	}{
+		{
+			name: "windows process launched from WSL distro",
+			goos: "windows",
+			env:  map[string]string{"WSL_DISTRO_NAME": "Ubuntu"},
+			want: true,
+		},
+		{
+			name: "windows process launched with WSL interop marker",
+			goos: "windows",
+			env:  map[string]string{"WSL_INTEROP": "/run/WSL/1_interop"},
+			want: true,
+		},
+		{
+			name: "windows process in WSL localhost filesystem",
+			goos: "windows",
+			cwd:  `\\wsl.localhost\Ubuntu\home\omry\dev\reploy`,
+			want: true,
+		},
+		{
+			name: "windows process in legacy WSL filesystem",
+			goos: "windows",
+			cwd:  `\\wsl$\Ubuntu\home\omry\dev\reploy`,
+			want: true,
+		},
+		{
+			name: "windows process in extended WSL filesystem path",
+			goos: "windows",
+			cwd:  `\\?\UNC\wsl.localhost\Ubuntu\home\omry\dev\reploy`,
+			want: true,
+		},
+		{
+			name: "native windows shell with WSLENV only in windows filesystem",
+			goos: "windows",
+			env:  map[string]string{"WSLENV": "REPLOY_HOME/p"},
+			cwd:  `C:\Users\omry\dev\reploy`,
+			want: false,
+		},
+		{
+			name: "linux host is not native windows",
+			goos: "linux",
+			env:  map[string]string{"WSL_DISTRO_NAME": "Ubuntu"},
+			cwd:  "/home/omry/dev/reploy",
+			want: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := windowsWSLBoundaryError(
+				test.goos,
+				func(name string) (string, bool) {
+					value, ok := test.env[name]
+					return value, ok
+				},
+				func() (string, error) {
+					return test.cwd, nil
+				},
+			)
+			if (got != "") != test.want {
+				t.Fatalf("windowsWSLBoundaryError() = %q, want present=%v", got, test.want)
+			}
+			if got != "" && !strings.Contains(got, "use the Linux reploy binary inside WSL") {
+				t.Fatalf("error does not explain WSL Linux binary path: %q", got)
+			}
+		})
+	}
+}
+
 func TestNoArgsShowsVersionAndNextSteps(t *testing.T) {
 	t.Chdir(t.TempDir())
 

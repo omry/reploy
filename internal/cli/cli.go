@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -30,6 +31,11 @@ var dockerRuntime = dockerdeploy.Runtime
 var dockerTestServer = dockerdeploy.TestServer
 
 func Main(args []string, stdout io.Writer, stderr io.Writer) int {
+	if message := windowsWSLBoundaryError(runtime.GOOS, os.LookupEnv, os.Getwd); message != "" {
+		fmt.Fprintln(stderr, message)
+		return 1
+	}
+
 	bare := len(args) == 0
 	globalOptions, remainingArgs, err := parseGlobalDeploymentOptions(args)
 	if err != nil {
@@ -60,6 +66,31 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		return printTopLevelUsageError(stderr, "unknown command: %s", args[0])
 	}
+}
+
+func windowsWSLBoundaryError(goos string, lookupEnv func(string) (string, bool), getwd func() (string, error)) string {
+	if goos != "windows" {
+		return ""
+	}
+	for _, name := range []string{"WSL_DISTRO_NAME", "WSL_INTEROP"} {
+		if value, ok := lookupEnv(name); ok && strings.TrimSpace(value) != "" {
+			return windowsWSLBoundaryMessage
+		}
+	}
+	if cwd, err := getwd(); err == nil && isWSLWindowsPath(cwd) {
+		return windowsWSLBoundaryMessage
+	}
+	return ""
+}
+
+const windowsWSLBoundaryMessage = "reploy error: reploy.exe is running from WSL or a WSL filesystem; run reploy.exe from PowerShell or cmd.exe in a Windows path, or use the Linux reploy binary inside WSL"
+
+func isWSLWindowsPath(path string) bool {
+	normalized := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(path)), "/", `\`)
+	return strings.HasPrefix(normalized, `\\wsl.localhost\`) ||
+		strings.HasPrefix(normalized, `\\wsl$\`) ||
+		strings.HasPrefix(normalized, `\\?\unc\wsl.localhost\`) ||
+		strings.HasPrefix(normalized, `\\?\unc\wsl$\`)
 }
 
 func printTopLevelUsageError(stderr io.Writer, format string, values ...any) int {

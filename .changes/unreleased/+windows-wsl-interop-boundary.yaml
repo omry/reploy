@@ -1,0 +1,2 @@
+kind: Fixed
+body: Detect Windows `reploy.exe` launched through WSL interop or from a WSL filesystem path and fail with guidance to use PowerShell/cmd.exe in a Windows path or the Linux binary inside WSL.

@@ -105,6 +105,13 @@ the Linux `reploy` binary inside WSL, use Linux paths, and get Linux-style
 control scripts such as `<app-id>ctl`. WSL is not a native Windows backend and
 does not use the `reploy.exe` support contract.
 
+If `reploy.exe` is launched from WSL or from a WSL filesystem path and the
+Windows process starts, Reploy should fail early with a clear message directing
+the user to PowerShell/`cmd.exe` in a Windows path for native Windows support or
+to the Linux binary inside WSL. Some WSL interop failures happen before the
+Windows process exists, such as WSL `accept4`/vsock errors; those cannot be
+caught by Reploy itself.
+
 For the first native Windows milestone, the primary promise is:
 
 - users run `reploy.exe` from PowerShell or `cmd.exe`
