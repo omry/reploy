@@ -230,7 +230,7 @@ func TestAppCommandCreatesMissingManagedFilePlaceholder(t *testing.T) {
 	if info.Size() != 0 {
 		t.Fatalf(".arbiter.env placeholder should start empty, size=%d", info.Size())
 	}
-	if mode := info.Mode().Perm(); mode != 0o600 {
+	if mode := info.Mode().Perm(); hasPOSIXPermissionBits() && mode != 0o600 {
 		t.Fatalf(".arbiter.env placeholder mode = %s, want 0600", mode)
 	}
 }

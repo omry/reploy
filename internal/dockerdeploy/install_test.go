@@ -654,7 +654,7 @@ func TestCopyDeploymentTreeProtectedCopiesRegularFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o640 {
+	if hasPOSIXPermissionBits() && info.Mode().Perm() != 0o640 {
 		t.Fatalf("mode = %v", info.Mode().Perm())
 	}
 }
@@ -794,7 +794,7 @@ func TestSystemdUnitPreflightsManagedFiles(t *testing.T) {
 		ManagedFiles: []string{".arbiter.env", "secrets/app #1.env"},
 	}, "/usr/bin/docker", false)
 	for _, relativePath := range []string{".arbiter.env", "secrets/app #1.env"} {
-		path := filepath.Join("/srv/demo", filepath.FromSlash(relativePath))
+		path := systemdPath("/srv/demo", relativePath)
 		want := "ExecStartPre=/bin/sh -c '[ -f \"$1\" ] || { echo \"managed file is missing: $1\" >&2; exit 1; }' reploy-managed-file " + strconv.Quote(path)
 		if !strings.Contains(unit, want) {
 			t.Fatalf("unit missing managed file preflight %q:\n%s", want, unit)
@@ -1019,7 +1019,7 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	if !info.Mode().IsRegular() {
 		t.Fatalf("installed control script is not regular: %s mode=%s", controlScript, info.Mode())
 	}
-	if info.Mode().Perm()&0o111 == 0 {
+	if hasPOSIXPermissionBits() && info.Mode().Perm()&0o111 == 0 {
 		t.Fatalf("installed control script is not executable: mode=%s", info.Mode())
 	}
 	targetManifest, err := deploy.LoadDeploymentManifest(filepath.Join(target, ManifestFileName))
@@ -1123,7 +1123,7 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(unit), "ExecStart=/usr/bin/docker compose --env-file "+filepath.Join(target, DockerEnvFileName)) {
+	if !strings.Contains(string(unit), "ExecStart=/usr/bin/docker compose --env-file "+systemdPath(target, DockerEnvFileName)) {
 		t.Fatalf("unit does not point at target docker.env:\n%s", unit)
 	}
 	if !strings.Contains(string(unit), "--project-name "+instanceID) {
@@ -1442,6 +1442,7 @@ func TestInstallRunsConfiguredHooksAroundServiceStart(t *testing.T) {
 }
 
 func TestInstalledControlScriptHealthUsesDeclaredHealthProbe(t *testing.T) {
+	requirePOSIXControlScriptHost(t)
 	target := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(target, ReployInternalDir), 0o755); err != nil {
 		t.Fatal(err)
@@ -1634,6 +1635,7 @@ func TestControlScriptUsesSafeStatusFileAndPreservesPartialLines(t *testing.T) {
 }
 
 func TestInstalledControlScriptRunsDeployedAppCommand(t *testing.T) {
+	requirePOSIXControlScriptHost(t)
 	target := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(target, ReployInternalDir), 0o755); err != nil {
 		t.Fatal(err)
@@ -1712,6 +1714,7 @@ func TestInstalledControlScriptRunsDeployedAppCommand(t *testing.T) {
 }
 
 func TestInstalledControlScriptPrefixesSystemdOutput(t *testing.T) {
+	requirePOSIXControlScriptHost(t)
 	target := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(target, ReployInternalDir), 0o755); err != nil {
 		t.Fatal(err)
@@ -1761,6 +1764,7 @@ func TestInstalledControlScriptPrefixesSystemdOutput(t *testing.T) {
 }
 
 func TestInstalledControlScriptLogsUsesReployOptions(t *testing.T) {
+	requirePOSIXControlScriptHost(t)
 	target := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(target, ReployInternalDir), 0o755); err != nil {
 		t.Fatal(err)
@@ -1825,6 +1829,7 @@ func TestValidateDeployedControlCommandsRejectsStageBuiltin(t *testing.T) {
 }
 
 func TestInstalledControlScriptRejectsUndeployedAppCommandFlag(t *testing.T) {
+	requirePOSIXControlScriptHost(t)
 	target := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(target, ReployInternalDir), 0o755); err != nil {
 		t.Fatal(err)
@@ -1863,6 +1868,7 @@ func TestInstalledControlScriptRejectsUndeployedAppCommandFlag(t *testing.T) {
 }
 
 func TestInstalledControlScriptAcceptsForwardedFlagValueWithEquals(t *testing.T) {
+	requirePOSIXControlScriptHost(t)
 	target := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(target, ReployInternalDir), 0o755); err != nil {
 		t.Fatal(err)
@@ -1916,6 +1922,7 @@ func TestInstalledControlScriptAcceptsForwardedFlagValueWithEquals(t *testing.T)
 }
 
 func TestInstalledControlScriptRejectsForwardedFlagPositionals(t *testing.T) {
+	requirePOSIXControlScriptHost(t)
 	target := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(target, ReployInternalDir), 0o755); err != nil {
 		t.Fatal(err)

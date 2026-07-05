@@ -1,9 +1,11 @@
 package dockerdeploy
 
 import (
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -120,6 +122,7 @@ func TestInitWritesDeploymentDirectory(t *testing.T) {
 }
 
 func TestStagingControlScriptRunsComposeLifecycleAndAppCommands(t *testing.T) {
+	requirePOSIXControlScriptHost(t)
 	manifest := strings.Replace(testPackManifest(), "      forward_flags:\n", "      app_command: true\n      deployed_command: true\n      forward_flags:\n", 1)
 	packDir := makeTestPackWithManifest(t, manifest)
 	ref, err := deploy.ParsePackRef("file:" + packDir)
@@ -284,6 +287,7 @@ func TestStagingControlScriptRunsComposeLifecycleAndAppCommands(t *testing.T) {
 }
 
 func TestStagingControlScriptCreatesMissingManagedFileForAppCommand(t *testing.T) {
+	requirePOSIXControlScriptHost(t)
 	deployDir := makeSingleFileConfigAppCommandDeployment(t)
 	script := filepath.Join(deployDir, "democtl")
 
@@ -333,6 +337,7 @@ func TestStagingControlScriptCreatesMissingManagedFileForAppCommand(t *testing.T
 }
 
 func TestStagingControlScriptChownsCreatedManagedFilePlaceholderWhenRunAsRoot(t *testing.T) {
+	requirePOSIXControlScriptHost(t)
 	deployDir := makeSingleFileConfigAppCommandDeployment(t)
 	script := filepath.Join(deployDir, "democtl")
 	envValues, err := readDockerEnv(deployDir)
@@ -383,6 +388,7 @@ func TestStagingControlScriptChownsCreatedManagedFilePlaceholderWhenRunAsRoot(t 
 }
 
 func TestStagingControlScriptUpRecoversStaleDockerNetwork(t *testing.T) {
+	requirePOSIXControlScriptHost(t)
 	packDir := makeTestPack(t)
 	ref, err := deploy.ParsePackRef("file:" + packDir)
 	if err != nil {
@@ -457,6 +463,7 @@ printf 'docker output\n'
 }
 
 func TestStagingControlScriptPrefixesHealthOutput(t *testing.T) {
+	requirePOSIXControlScriptHost(t)
 	packDir := makeTestPack(t)
 	ref, err := deploy.ParsePackRef("file:" + packDir)
 	if err != nil {
@@ -498,6 +505,7 @@ func TestStagingControlScriptPrefixesHealthOutput(t *testing.T) {
 }
 
 func TestStagingControlScriptPrefixesOutputWithoutTrailingNewline(t *testing.T) {
+	requirePOSIXControlScriptHost(t)
 	packDir := makeTestPack(t)
 	ref, err := deploy.ParsePackRef("file:" + packDir)
 	if err != nil {
@@ -532,6 +540,7 @@ func TestStagingControlScriptPrefixesOutputWithoutTrailingNewline(t *testing.T) 
 }
 
 func TestStagingControlScriptDoesNotEvaluateConfigDirAsShell(t *testing.T) {
+	requirePOSIXControlScriptHost(t)
 	marker := filepath.Join(t.TempDir(), "marker")
 	manifest := strings.Replace(testPackManifest(), "    config: conf\n", "    config: 'conf/$(touch "+marker+")'\n", 1)
 	packDir := makeTestPackWithManifest(t, manifest)
@@ -794,7 +803,7 @@ docker:
 			t.Fatalf("docker.env missing %q:\n%s", line, dockerEnv)
 		}
 	}
-	compose := readFile(t, filepath.Join(deployDir, ComposeFileName))
+	compose := strings.ReplaceAll(readFile(t, filepath.Join(deployDir, ComposeFileName)), "\r\n", "\n")
 	if !strings.Contains(compose, `container_command_config_check() { "custom-check" "--name" "$${DEMO_CONFIG_NAME}" "$$@"; };`) {
 		t.Fatalf("compose did not render pack config_check command:\n%s", compose)
 	}
@@ -1019,6 +1028,7 @@ func TestInitRejectsNamedInstallPortEnvironmentSuffixCollision(t *testing.T) {
 }
 
 func TestRenderedComposeCommandIsShellParseable(t *testing.T) {
+	requirePOSIXControlScriptHost(t)
 	packDir := makeTestPack(t)
 	ref, err := deploy.ParsePackRef("file:" + packDir)
 	if err != nil {
@@ -1651,6 +1661,33 @@ func readFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(content)
+}
+
+func requirePOSIXControlScriptHost(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX control script execution is covered by Unix hosts; Windows uses PowerShell control scripts")
+	}
+}
+
+func hasPOSIXPermissionBits() bool {
+	return runtime.GOOS != "windows"
+}
+
+func writeFakeCommand(t *testing.T, dir string, name string, posixScript string, windowsScript string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	content := posixScript
+	mode := fs.FileMode(0o755)
+	if runtime.GOOS == "windows" {
+		path += ".cmd"
+		content = windowsScript
+		mode = 0o644
+	}
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func withoutEnvKey(values []string, key string) []string {

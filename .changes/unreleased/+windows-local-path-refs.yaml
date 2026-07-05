@@ -1,0 +1,3 @@
+kind: Fixed
+body: Accept Windows absolute local paths as app blueprint references.
+time: 2026-07-05T16:27:03+08:00
