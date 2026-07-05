@@ -376,21 +376,85 @@ func defaultInstallService(dir string) (string, error) {
 }
 
 func defaultInstallTarget(pack deploy.AppPack) (string, error) {
-	if currentHostPlatform().GOOS == "windows" {
+	platform := currentHostPlatform()
+	roots, err := installTargetRoots(platform.GOOS)
+	if err != nil {
+		return "", err
+	}
+	target, _, ok, err := deploy.ResolveInstallTargetDefault(pack.Install.Target, pack.AppID, platform.GOOS, roots)
+	if err != nil {
+		return "", err
+	}
+	if ok {
+		if deploy.InstallTargetHostKey(platform.GOOS) == "windows" {
+			target = strings.ReplaceAll(target, "/", `\`)
+		}
+		return target, nil
+	}
+
+	switch deploy.InstallTargetHostKey(platform.GOOS) {
+	case "windows":
 		return windowsDockerManagedDefaultInstallTarget(os.Getenv("LOCALAPPDATA"), pack.AppID)
+	case "macos":
+		return filepath.Join(roots.ReployInstallRoot, pack.AppID), nil
+	default:
+		target, _, _, err := deploy.ResolveInstallTargetDefault(
+			deploy.InstallTargetConfig{DefaultPath: "/opt/{{ app.id }}"},
+			pack.AppID,
+			platform.GOOS,
+			roots,
+		)
+		return target, err
 	}
-	path := strings.TrimSpace(pack.Install.Target.DefaultPath)
-	if path == "" {
-		return "", fmt.Errorf("install.target.default_path is required")
+}
+
+func installTargetRoots(goos string) (deploy.InstallTargetRoots, error) {
+	home, _ := os.UserHomeDir()
+	switch deploy.InstallTargetHostKey(goos) {
+	case "windows":
+		localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
+		if localAppData == "" {
+			return deploy.InstallTargetRoots{}, fmt.Errorf("LOCALAPPDATA is required for the default Windows install target; pass --to to choose an install directory")
+		}
+		userData := strings.TrimSpace(os.Getenv("APPDATA"))
+		if userData == "" {
+			userData = localAppData
+		}
+		systemData := strings.TrimSpace(os.Getenv("ProgramData"))
+		if systemData == "" {
+			systemData = `C:\ProgramData`
+		}
+		return deploy.InstallTargetRoots{
+			UserHome:          home,
+			UserData:          userData,
+			UserLocalData:     localAppData,
+			SystemData:        systemData,
+			ReployInstallRoot: strings.TrimRight(localAppData, `\/`) + `\Reploy\installs`,
+		}, nil
+	case "macos":
+		if strings.TrimSpace(home) == "" {
+			return deploy.InstallTargetRoots{}, fmt.Errorf("home directory is required for the default macOS install target; pass --to to choose an install directory")
+		}
+		userData := filepath.Join(home, "Library", "Application Support")
+		return deploy.InstallTargetRoots{
+			UserHome:          home,
+			UserData:          userData,
+			UserLocalData:     userData,
+			SystemData:        filepath.Join(string(filepath.Separator), "Library", "Application Support"),
+			ReployInstallRoot: filepath.Join(userData, "Reploy", "installs"),
+		}, nil
+	default:
+		if strings.TrimSpace(home) == "" {
+			home = "/home"
+		}
+		return deploy.InstallTargetRoots{
+			UserHome:          home,
+			UserData:          filepath.Join(home, ".local", "share"),
+			UserLocalData:     filepath.Join(home, ".local", "share"),
+			SystemData:        filepath.Join(string(filepath.Separator), "var", "lib"),
+			ReployInstallRoot: filepath.Join(string(filepath.Separator), "opt"),
+		}, nil
 	}
-	path = strings.ReplaceAll(path, "{{ app.id }}", pack.AppID)
-	if strings.Contains(path, "{{") || strings.Contains(path, "}}") {
-		return "", fmt.Errorf("install.target.default_path contains unsupported template expression: %s", pack.Install.Target.DefaultPath)
-	}
-	if !filepath.IsAbs(path) {
-		return "", fmt.Errorf("install.target.default_path must resolve to an absolute path: %s", path)
-	}
-	return path, nil
 }
 
 func windowsDockerManagedDefaultInstallTarget(localAppData string, appID string) (string, error) {

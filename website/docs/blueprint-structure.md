@@ -2,6 +2,9 @@
 sidebar_position: 2
 ---
 
+import PlatformTabs from '@site/src/components/PlatformTabs';
+import TabItem from '@theme/TabItem';
+
 # Blueprint Structure
 
 A blueprint is a YAML manifest owned by the app author. It describes the
@@ -23,8 +26,7 @@ app:
     identifier: example-suite
 
 install:
-  target:
-    default_path: /opt/{{ app.id }}
+  target: {}
   owner:
     user: example
     group: example
@@ -74,10 +76,10 @@ minimum Reploy version expected by the app.
 `app` names the deployment and declares the app provider. The first supported
 provider is `python`, where `identifier` is the required root package.
 
-`install` declares host install defaults: target path, non-root installed
-owner, whether Reploy creates that system owner when missing, deployed and
-staging port defaults, and managed app-owned paths with update policy and
-optional runtime mounts.
+`install` declares host install defaults: target path selection, non-root
+installed owner, whether Reploy creates that system owner when missing,
+deployed and staging port defaults, and managed app-owned paths with update
+policy and optional runtime mounts.
 
 Managed path mounts may use the blueprint-time `{{ path }}` placeholder, which
 expands to the entry's normalized relative path. For example,
@@ -91,6 +93,125 @@ deployment bundle.
 
 `docker` declares the runtime shape: image, ports, deployment directories,
 health checks, app commands, and install hooks.
+
+## Install Target
+
+`install.target` controls the default permanent install directory. If the
+blueprint omits target defaults, Reploy chooses a built-in host default:
+
+<PlatformTabs>
+  <TabItem value="linux">
+
+| Field | Value |
+| --- | --- |
+| Host/backend | Linux systemd |
+| Built-in default | `/opt/{{ app.id }}` |
+| For `app.id: example-app` | `/opt/example-app` |
+
+  </TabItem>
+  <TabItem value="windows">
+
+| Field | Value |
+| --- | --- |
+| Host/backend | Windows Docker Desktop |
+| Built-in default | `{{ user.local_data }}/Reploy/installs/{{ app.id }}` |
+| For `app.id: example-app` | `%LOCALAPPDATA%\Reploy\installs\example-app` |
+
+  </TabItem>
+  <TabItem value="macos">
+
+| Field | Value |
+| --- | --- |
+| Host/backend | Mac Docker Desktop |
+| Built-in default | `{{ user.data }}/Reploy/installs/{{ app.id }}` |
+| For `app.id: example-app` | `$HOME/Library/Application Support/Reploy/installs/example-app` |
+
+  </TabItem>
+</PlatformTabs>
+
+Users can always override the resolved target with `reploy install --to DIR`.
+
+Blueprints may provide one global default:
+
+```yaml
+install:
+  target:
+    default_path: "{{ reploy.install_root }}/{{ app.id }}"
+```
+
+Blueprints may also provide per-OS defaults:
+
+```yaml
+install:
+  target:
+    default_paths:
+      linux: /opt/{{ app.id }}
+      macos: "{{ user.data }}/Acme/{{ app.id }}"
+      windows: "{{ user.local_data }}/Acme/{{ app.id }}"
+```
+
+Resolution order is:
+
+1. `reploy install --to DIR`
+2. `install.target.default_paths.<host_os>`
+3. `install.target.default_path`
+4. Reploy's built-in default for the host/backend
+
+Supported `default_paths` OS keys are `linux`, `macos`, and `windows`.
+Inactive per-OS paths may use that OS's path syntax. For example,
+`default_paths.linux: /opt/{{ app.id }}` is valid in a blueprint used on
+Windows because it is not the active Windows default.
+
+Supported install-target template variables and default root values are:
+
+<PlatformTabs>
+  <TabItem value="linux">
+
+| Variable | Meaning | Linux default |
+| --- | --- | --- |
+| `{{ app.id }}` | Blueprint app id | App-specific |
+| `{{ user.home }}` | Current user's home directory | `$HOME` |
+| `{{ user.data }}` | Per-user application data root | `$HOME/.local/share` |
+| `{{ user.local_data }}` | Per-user local data root | `$HOME/.local/share` |
+| `{{ system.data }}` | System-wide application data root | `/var/lib` |
+| `{{ reploy.install_root }}` | Reploy's default install root for this host/backend | `/opt` |
+| Built-in install target | Target used when the blueprint omits target defaults | `/opt/{{ app.id }}` |
+
+  </TabItem>
+  <TabItem value="windows">
+
+| Variable | Meaning | Windows default |
+| --- | --- | --- |
+| `{{ app.id }}` | Blueprint app id | App-specific |
+| `{{ user.home }}` | Current user's home directory | `%USERPROFILE%` |
+| `{{ user.data }}` | Per-user application data root | `%APPDATA%` |
+| `{{ user.local_data }}` | Per-user local data root | `%LOCALAPPDATA%` |
+| `{{ system.data }}` | System-wide application data root | `%ProgramData%` |
+| `{{ reploy.install_root }}` | Reploy's default install root for this host/backend | `%LOCALAPPDATA%\Reploy\installs` |
+| Built-in install target | Target used when the blueprint omits target defaults | `%LOCALAPPDATA%\Reploy\installs\{{ app.id }}` |
+
+  </TabItem>
+  <TabItem value="macos">
+
+| Variable | Meaning | Mac default |
+| --- | --- | --- |
+| `{{ app.id }}` | Blueprint app id | App-specific |
+| `{{ user.home }}` | Current user's home directory | `$HOME` |
+| `{{ user.data }}` | Per-user application data root | `$HOME/Library/Application Support` |
+| `{{ user.local_data }}` | Per-user local data root | `$HOME/Library/Application Support` |
+| `{{ system.data }}` | System-wide application data root | `/Library/Application Support` |
+| `{{ reploy.install_root }}` | Reploy's default install root for this host/backend | `$HOME/Library/Application Support/Reploy/installs` |
+| Built-in install target | Target used when the blueprint omits target defaults | `$HOME/Library/Application Support/Reploy/installs/{{ app.id }}` |
+
+  </TabItem>
+</PlatformTabs>
+
+On Windows, `{{ user.data }}` falls back to `%LOCALAPPDATA%` if `%APPDATA%`
+is not set.
+
+These variables choose the one install directory for the app. Reploy keeps
+managed paths such as `conf`, `data`, bundle state, and runtime state localized
+under that install directory.
 
 ## Bundle Options
 

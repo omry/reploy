@@ -438,13 +438,58 @@ func TestDefaultInstallTargetOnWindowsUsesLocalAppData(t *testing.T) {
 	target, err := defaultInstallTarget(deploy.AppPack{
 		AppID: "demo-app",
 		Install: deploy.InstallPackConfig{
-			Target: deploy.InstallTargetConfig{DefaultPath: "/opt/{{ app.id }}"},
+			Target: deploy.InstallTargetConfig{},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := `C:\Users\alice\AppData\Local\Reploy\installs\demo-app`
+	if target != want {
+		t.Fatalf("target = %q, want %q", target, want)
+	}
+}
+
+func TestDefaultInstallTargetOnWindowsUsesPerOSOverride(t *testing.T) {
+	restore := stubHostPlatform(t, hostPlatform{GOOS: "windows"})
+	defer restore()
+	t.Setenv("LOCALAPPDATA", `C:\Users\alice\AppData\Local`)
+
+	target, err := defaultInstallTarget(deploy.AppPack{
+		AppID: "demo-app",
+		Install: deploy.InstallPackConfig{
+			Target: deploy.InstallTargetConfig{
+				DefaultPath: "/opt/{{ app.id }}",
+				DefaultPaths: map[string]string{
+					"windows": `{{ user.local_data }}\Acme\{{ app.id }}`,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `C:\Users\alice\AppData\Local\Acme\demo-app`
+	if target != want {
+		t.Fatalf("target = %q, want %q", target, want)
+	}
+}
+
+func TestDefaultInstallTargetOnDarwinUsesUserData(t *testing.T) {
+	restore := stubHostPlatform(t, hostPlatform{GOOS: "darwin"})
+	defer restore()
+	t.Setenv("HOME", `/Users/alice`)
+
+	target, err := defaultInstallTarget(deploy.AppPack{
+		AppID: "demo-app",
+		Install: deploy.InstallPackConfig{
+			Target: deploy.InstallTargetConfig{},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `/Users/alice/Library/Application Support/Reploy/installs/demo-app`
 	if target != want {
 		t.Fatalf("target = %q, want %q", target, want)
 	}

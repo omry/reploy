@@ -123,8 +123,8 @@ func TestParsePackManifestReadsDockerLayout(t *testing.T) {
 	if manifest.App.Terminal.ColorEnv != "DEMO_COLOR" {
 		t.Fatalf("app terminal color env = %q", manifest.App.Terminal.ColorEnv)
 	}
-	if manifest.Install.Target.DefaultPath != "/opt/{{ app.id }}" {
-		t.Fatalf("install target default path = %q", manifest.Install.Target.DefaultPath)
+	if manifest.Install.Target.DefaultPath != "" || len(manifest.Install.Target.DefaultPaths) != 0 {
+		t.Fatalf("install target defaults = %#v", manifest.Install.Target)
 	}
 	if manifest.Install.Owner.User != "demo" || manifest.Install.Owner.Group != "demo" {
 		t.Fatalf("install owner = %#v", manifest.Install.Owner)
@@ -591,7 +591,7 @@ func TestParsePackManifestRejectsInvalidInstallConfig(t *testing.T) {
         host_bind: 127.0.0.1
         host_port: 18080
 `,
-			want: "install.target.default_path must be absolute",
+			want: "install.target.default_path must resolve to an absolute path",
 		},
 		{
 			name: "missing owner",
@@ -896,6 +896,103 @@ func TestParsePackManifestRejectsInvalidInstallConfig(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestParsePackManifestAcceptsInstallTargetDefaultPaths(t *testing.T) {
+	manifestText := strings.Replace(packTestManifest(), "install:\n"+packTestInstallBlock(), `install:
+  target:
+    default_path: "{{ user.data }}/Acme/{{ app.id }}"
+    default_paths:
+      linux: /opt/{{ app.id }}
+      macos: "{{ user.data }}/Acme/{{ app.id }}"
+      windows: "{{ user.local_data }}/Acme/{{ app.id }}"
+`+packTestInstallBlock(), 1)
+	manifest, err := ParsePackManifest(manifestText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Install.Target.DefaultPath != "{{ user.data }}/Acme/{{ app.id }}" {
+		t.Fatalf("default path = %q", manifest.Install.Target.DefaultPath)
+	}
+	if manifest.Install.Target.DefaultPaths["linux"] != "/opt/{{ app.id }}" {
+		t.Fatalf("default paths = %#v", manifest.Install.Target.DefaultPaths)
+	}
+}
+
+func TestResolveInstallTargetDefaultUsesPerOSBeforeGlobal(t *testing.T) {
+	target, source, ok, err := ResolveInstallTargetDefault(
+		InstallTargetConfig{
+			DefaultPath: "{{ user.data }}/Global/{{ app.id }}",
+			DefaultPaths: map[string]string{
+				"windows": "{{ user.local_data }}/Windows/{{ app.id }}",
+			},
+		},
+		"demo",
+		"windows",
+		sampleInstallTargetRoots("windows"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected install target default")
+	}
+	if source != "install.target.default_paths.windows" {
+		t.Fatalf("source = %q", source)
+	}
+	want := `C:\Users\app\AppData\Local/Windows/demo`
+	if target != want {
+		t.Fatalf("target = %q, want %q", target, want)
+	}
+}
+
+func TestResolveInstallTargetDefaultIgnoresInactivePlatformPath(t *testing.T) {
+	target, source, ok, err := ResolveInstallTargetDefault(
+		InstallTargetConfig{
+			DefaultPaths: map[string]string{
+				"linux": "/opt/{{ app.id }}",
+			},
+		},
+		"demo",
+		"windows",
+		sampleInstallTargetRoots("windows"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok || target != "" || source != "" {
+		t.Fatalf("target = %q source=%q ok=%v, want no active default", target, source, ok)
+	}
+}
+
+func TestResolveInstallTargetDefaultRejectsActiveNonNativePath(t *testing.T) {
+	_, _, _, err := ResolveInstallTargetDefault(
+		InstallTargetConfig{DefaultPath: "/opt/{{ app.id }}"},
+		"demo",
+		"windows",
+		sampleInstallTargetRoots("windows"),
+	)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "must resolve to an absolute path on windows") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveInstallTargetDefaultRejectsUnknownTemplate(t *testing.T) {
+	_, _, _, err := ResolveInstallTargetDefault(
+		InstallTargetConfig{DefaultPath: "{{ user.config }}/{{ app.id }}"},
+		"demo",
+		"linux",
+		sampleInstallTargetRoots("linux"),
+	)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "unsupported template expression") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

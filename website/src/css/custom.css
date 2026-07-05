@@ -18,3 +18,8 @@
 .theme-doc-markdown h1 {
   letter-spacing: 0;
 }
+
+.platform-tabs table {
+  table-layout: fixed;
+  width: 100%;
+}

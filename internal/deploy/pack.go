@@ -5,6 +5,7 @@ import (
 	"os"
 	pathpkg "path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -66,7 +67,8 @@ type InstallPackConfig struct {
 }
 
 type InstallTargetConfig struct {
-	DefaultPath string `yaml:"default_path"`
+	DefaultPath  string            `yaml:"default_path"`
+	DefaultPaths map[string]string `yaml:"default_paths"`
 }
 
 type InstallOwnerConfig struct {
@@ -663,10 +665,7 @@ func ParsePackManifest(content string) (PackManifest, error) {
 }
 
 func normalizeAndValidateInstallConfig(manifest *PackManifest) error {
-	if manifest.Install.Target.DefaultPath == "" {
-		manifest.Install.Target.DefaultPath = defaultInstallTargetPath()
-	}
-	if err := validateInstallTargetDefaultPath(manifest.Install.Target.DefaultPath); err != nil {
+	if err := validateInstallTargetConfig(manifest.Install.Target, runtime.GOOS); err != nil {
 		return err
 	}
 	manifest.Install.Owner.User = strings.TrimSpace(manifest.Install.Owner.User)
@@ -707,31 +706,181 @@ func normalizeAndValidateInstallConfig(manifest *PackManifest) error {
 	return nil
 }
 
-func defaultInstallTargetPath() string {
-	switch runtime.GOOS {
-	case "windows":
-		return `%ProgramFiles%\{{ app.id }}`
+var installTargetTemplatePattern = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
+
+type InstallTargetRoots struct {
+	UserHome          string
+	UserData          string
+	UserLocalData     string
+	SystemData        string
+	ReployInstallRoot string
+}
+
+func InstallTargetHostKey(goos string) string {
+	switch goos {
+	case "darwin":
+		return "macos"
 	default:
-		return "/opt/{{ app.id }}"
+		return goos
 	}
 }
 
-func validateInstallTargetDefaultPath(path string) error {
+func ResolveInstallTargetDefault(target InstallTargetConfig, appID string, goos string, roots InstallTargetRoots) (string, string, bool, error) {
+	hostKey := InstallTargetHostKey(goos)
+	if path := strings.TrimSpace(target.DefaultPaths[hostKey]); path != "" {
+		resolved, err := RenderInstallTargetPath(path, appID, roots)
+		if err != nil {
+			return "", "", false, fmt.Errorf("install.target.default_paths.%s: %w", hostKey, err)
+		}
+		if !installTargetPathIsAbs(resolved, goos) {
+			return "", "", false, fmt.Errorf("install.target.default_paths.%s must resolve to an absolute path: %s", hostKey, resolved)
+		}
+		return resolved, "install.target.default_paths." + hostKey, true, nil
+	}
+	if path := strings.TrimSpace(target.DefaultPath); path != "" {
+		resolved, err := RenderInstallTargetPath(path, appID, roots)
+		if err != nil {
+			return "", "", false, fmt.Errorf("install.target.default_path: %w", err)
+		}
+		if !installTargetPathIsAbs(resolved, goos) {
+			return "", "", false, fmt.Errorf("install.target.default_path must resolve to an absolute path on %s: %s", InstallTargetHostKey(goos), resolved)
+		}
+		return resolved, "install.target.default_path", true, nil
+	}
+	return "", "", false, nil
+}
+
+func RenderInstallTargetPath(template string, appID string, roots InstallTargetRoots) (string, error) {
+	var firstError error
+	rendered := installTargetTemplatePattern.ReplaceAllStringFunc(template, func(match string) string {
+		if firstError != nil {
+			return match
+		}
+		submatches := installTargetTemplatePattern.FindStringSubmatch(match)
+		if len(submatches) != 2 {
+			firstError = fmt.Errorf("contains unsupported template expression: %s", match)
+			return match
+		}
+		value, ok := installTargetTemplateValue(strings.TrimSpace(submatches[1]), appID, roots)
+		if !ok {
+			firstError = fmt.Errorf("contains unsupported template expression: %s", match)
+			return match
+		}
+		if strings.TrimSpace(value) == "" {
+			firstError = fmt.Errorf("template expression has no value: %s", match)
+			return match
+		}
+		return value
+	})
+	if firstError != nil {
+		return "", firstError
+	}
+	if strings.Contains(rendered, "{{") || strings.Contains(rendered, "}}") {
+		return "", fmt.Errorf("contains unsupported template expression: %s", template)
+	}
+	return rendered, nil
+}
+
+func installTargetTemplateValue(name string, appID string, roots InstallTargetRoots) (string, bool) {
+	switch name {
+	case "app.id":
+		return appID, true
+	case "user.home":
+		return roots.UserHome, true
+	case "user.data":
+		return roots.UserData, true
+	case "user.local_data":
+		return roots.UserLocalData, true
+	case "system.data":
+		return roots.SystemData, true
+	case "reploy.install_root":
+		return roots.ReployInstallRoot, true
+	default:
+		return "", false
+	}
+}
+
+func validateInstallTargetConfig(target InstallTargetConfig, goos string) error {
+	if strings.TrimSpace(target.DefaultPath) != "" {
+		if err := validateInstallTargetPathSyntax("install.target.default_path", target.DefaultPath); err != nil {
+			return err
+		}
+	}
+	for osName, path := range target.DefaultPaths {
+		if !supportedInstallTargetOS(osName) {
+			return fmt.Errorf("install.target.default_paths contains unsupported OS: %s", osName)
+		}
+		if err := validateInstallTargetPathSyntax("install.target.default_paths."+osName, path); err != nil {
+			return err
+		}
+	}
+	_, _, _, err := ResolveInstallTargetDefault(target, "app", goos, sampleInstallTargetRoots(goos))
+	return err
+}
+
+func validateInstallTargetPathSyntax(field string, path string) error {
 	if strings.TrimSpace(path) == "" {
-		return fmt.Errorf("install.target.default_path must not be empty")
+		return fmt.Errorf("%s must not be empty", field)
 	}
 	if containsLineOrFieldBreak(path) {
-		return fmt.Errorf("install.target.default_path must not contain tabs or newlines")
+		return fmt.Errorf("%s must not contain tabs or newlines", field)
 	}
-	rendered := strings.ReplaceAll(path, "{{ app.id }}", "app")
-	switch {
-	case filepath.IsAbs(rendered):
-		return nil
-	case strings.HasPrefix(rendered, `%ProgramFiles%\`) || strings.HasPrefix(rendered, `%ProgramFiles(x86)%\`):
-		return nil
+	if _, err := RenderInstallTargetPath(path, "app", sampleInstallTargetRoots("linux")); err != nil {
+		return fmt.Errorf("%s %w", field, err)
+	}
+	return nil
+}
+
+func supportedInstallTargetOS(osName string) bool {
+	switch osName {
+	case "linux", "macos", "windows":
+		return true
 	default:
-		return fmt.Errorf("install.target.default_path must be absolute or use a supported platform root: %s", path)
+		return false
 	}
+}
+
+func sampleInstallTargetRoots(goos string) InstallTargetRoots {
+	switch InstallTargetHostKey(goos) {
+	case "windows":
+		return InstallTargetRoots{
+			UserHome:          `C:\Users\app`,
+			UserData:          `C:\Users\app\AppData\Roaming`,
+			UserLocalData:     `C:\Users\app\AppData\Local`,
+			SystemData:        `C:\ProgramData`,
+			ReployInstallRoot: `C:\Users\app\AppData\Local\Reploy\installs`,
+		}
+	case "macos":
+		return InstallTargetRoots{
+			UserHome:          "/Users/app",
+			UserData:          "/Users/app/Library/Application Support",
+			UserLocalData:     "/Users/app/Library/Application Support",
+			SystemData:        "/Library/Application Support",
+			ReployInstallRoot: "/Users/app/Library/Application Support/Reploy/installs",
+		}
+	default:
+		return InstallTargetRoots{
+			UserHome:          "/home/app",
+			UserData:          "/home/app/.local/share",
+			UserLocalData:     "/home/app/.local/share",
+			SystemData:        "/var/lib",
+			ReployInstallRoot: "/opt",
+		}
+	}
+}
+
+func installTargetPathIsAbs(path string, goos string) bool {
+	if InstallTargetHostKey(goos) != "windows" {
+		return pathpkg.IsAbs(path)
+	}
+	if len(path) >= 3 && path[1] == ':' && isWindowsPathSeparator(path[2]) {
+		return true
+	}
+	return len(path) >= 2 && isWindowsPathSeparator(path[0]) && isWindowsPathSeparator(path[1])
+}
+
+func isWindowsPathSeparator(char byte) bool {
+	return char == '\\' || char == '/'
 }
 
 func validateInstallOwner(owner InstallOwnerConfig) error {

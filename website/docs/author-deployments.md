@@ -20,8 +20,8 @@ A blueprint answers these questions:
 - Which app backend provides the deployable packages?
 - Which bundle options can users select?
 - Which runtime commands should Reploy expose?
-- Which install target, owner, staging ports, and deployed ports should be the
-  defaults?
+- Which install target overrides, owner, staging ports, and deployed ports
+  should be the defaults?
 - Which Docker image and directories should the app use?
 - Which health check proves the service is up?
 - Which app-specific hooks should run during install?
@@ -65,8 +65,7 @@ bundle:
       description: Install the example IMAP plugin.
 
 install:
-  target:
-    default_path: /opt/{{ app.id }}
+  target: {}
   owner:
     user: example
     group: example

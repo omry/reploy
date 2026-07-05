@@ -1,7 +1,7 @@
 ---
 status: Draft
 updated: 2026-07-05
-summary: Mini design for platform-aware install target defaults and semantic install-root variables.
+summary: Mini design for platform-aware install target defaults, install scope, and semantic install-root variables.
 ---
 
 # Cross-Platform Install Locations
@@ -36,18 +36,88 @@ per OS.
 - Do not add separate host-global config, data, cache, or state placement for
   installed apps in this design. Those remain inside the install target.
 
+## Install Scope
+
+Install scope is first-class user intent. It is not inferred from a path.
+
+The install command should accept:
+
+```bash
+reploy install APP_REF --scope default
+reploy install APP_REF --scope user
+reploy install APP_REF --scope system
+```
+
+Omitting `--scope` is the same as `--scope default`.
+
+Scope meanings:
+
+| Scope | Meaning |
+| --- | --- |
+| `default` | Reploy's documented default for the current host/backend. |
+| `user` | Current-user install. It must not require root/admin semantics. |
+| `system` | Machine/system install. It requires a backend with real system semantics and root/admin privilege. |
+
+Initial `default` mapping:
+
+| Host/backend | `default` scope resolves to |
+| --- | --- |
+| Linux systemd | `system` |
+| Windows Docker Desktop | `user` |
+| Mac Docker Desktop | `user` |
+
+`default` is a stable documented policy. It is intentionally not named `auto`;
+`auto` can be reserved for a future mode that inspects the host and chooses the
+best available supported scope.
+
+Requested scopes must be validated against backend capabilities:
+
+- Linux `system` uses the Linux/systemd backend and requires root. If the user
+  is not root, Reploy should escalate through the supported privilege path or
+  fail with a clear sudo/root instruction.
+- Linux `user` should mean a real per-user install, such as
+  `{{ user.data }}/Reploy/installs/{{ app.id }}` plus a user-level lifecycle
+  backend. For Docker-managed user installs, Docker restart policies may be
+  enough to restart app containers after the Docker daemon starts. If a
+  non-Docker or host-process lifecycle is needed, candidate mechanisms include
+  `systemd --user`; crontab `@reboot` is only startup glue and is not
+  equivalent to a service manager for status, restart, logs, dependency
+  ordering, or health supervision. Until a user lifecycle backend exists,
+  `--scope user` on Linux should fail clearly instead of silently installing
+  under `/opt` or a user-writable path with system semantics.
+- Mac `user` uses the Docker Desktop-backed install path. Docker restart
+  policies can restart app containers after Docker Desktop starts, but Reploy
+  still depends on Docker Desktop itself being configured to start at login or
+  started by the user.
+- Windows `user` uses the Docker Desktop-backed install path. Docker restart
+  policies can restart app containers after Docker Desktop starts, but Reploy
+  still depends on Docker Desktop itself being configured to start at login or
+  started by the user.
+- Windows and Mac `system` should fail until Reploy has a backend that provides
+  real system semantics. A system-looking path such as `%ProgramData%` or
+  `/Library/Application Support` is not enough.
+
+Do not combine Docker restart policies with a host-level process manager for
+the same containers. Use a host lifecycle mechanism only for host processes
+outside Docker, such as starting Docker Desktop when the platform does not do
+that already.
+
+The installed state should record both the requested scope and the resolved
+scope so later `info`, `upgrade`, and `uninstall` operations can explain and
+validate the install mode.
+
 ## Built-In Defaults
 
 If a blueprint does not provide an install target default, Reploy chooses the
-default for the current host and install backend.
+default for the current host, install backend, and resolved scope.
 
 Initial defaults:
 
-| Host/backend | Default install root |
+| Host/backend | Scope | Default install root |
 | --- | --- |
-| Linux systemd install | `/opt/{{ app.id }}` |
-| macOS Docker-managed install | `{{ user.data }}/Reploy/installs/{{ app.id }}` |
-| Windows Docker-managed install | `{{ user.local_data }}/Reploy/installs/{{ app.id }}` |
+| Linux systemd install | `system` | `/opt/{{ app.id }}` |
+| Mac Docker Desktop | `user` | `{{ user.data }}/Reploy/installs/{{ app.id }}` |
+| Windows Docker Desktop | `user` | `{{ user.local_data }}/Reploy/installs/{{ app.id }}` |
 
 The concrete resolved examples are:
 
@@ -101,9 +171,15 @@ install:
 Install target resolution should use:
 
 1. CLI `--to`
-2. `install.target.default_paths.<host_os>`
-3. `install.target.default_path`
-4. Reploy built-in default for the host and install backend
+2. resolved install scope
+3. `install.target.default_paths.<host_os>`
+4. `install.target.default_path`
+5. Reploy built-in default for the host, install backend, and resolved scope
+
+`--to` chooses the path only. It must not downgrade or upgrade the install
+scope. For example, `--scope system --to SOME_USER_WRITABLE_PATH` is still a
+system-scope request and must satisfy system-scope backend and privilege
+requirements.
 
 `default_paths` keys should use product-facing OS names:
 

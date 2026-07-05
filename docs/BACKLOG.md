@@ -78,6 +78,19 @@ No active backlog items.
       solve the same problem. Cross-platform install location design lives in
       `docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md`.
 
+- [ ] `P2` Add first-class install scope and per-scope target defaults.
+      After the Windows port is stable, make `default`, `user`, and `system`
+      install scope explicit instead of inferring intent from paths. Acceptance
+      checks: define the CLI and installed-state shape for requested versus
+      resolved scope; validate requested scope against backend capabilities;
+      add per-scope, per-OS target defaults such as
+      `install.target.default_paths.user.windows` and
+      `install.target.default_paths.system.linux`; preserve the simple
+      platform-aware default path behavior for blueprints that do not need
+      scope-specific overrides; require root/admin or a clear escalation path
+      for system scope; and document unsupported combinations with actionable
+      errors. Design notes live in `docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md`.
+
 ## Post-v1
 
 - [ ] `P2` Document blueprint structure and feature semantics.

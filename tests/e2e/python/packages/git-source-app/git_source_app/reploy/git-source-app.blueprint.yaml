@@ -10,8 +10,6 @@ app:
     identifier: git-source-app
 
 install:
-  target:
-    default_path: /opt/{{ app.id }}
   owner:
     user: "1000"
     group: "1000"

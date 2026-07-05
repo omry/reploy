@@ -1,0 +1,2 @@
+kind: Added
+body: Add platform-aware blueprint install target defaults with per-OS overrides and semantic install-root variables.

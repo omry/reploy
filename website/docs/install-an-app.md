@@ -34,8 +34,9 @@ For simple services that work from blueprint defaults, install directly:
 sudo reploy install <app-blueprint-ref>
 ```
 
-On macOS, omit `sudo` and choose a user-writable absolute target path when the
-blueprint default points at a system directory.
+On macOS and Windows, omit `sudo`. Reploy uses a host-appropriate per-user
+default install directory unless the blueprint or `--to` provides another
+target.
 
 Direct install does not ask install-time configuration questions yet. If the
 app needs bundle selection, configuration commands, or pre-install testing, use
@@ -93,8 +94,9 @@ path:
 sudo reploy install --to /opt/example --service example
 ```
 
-macOS Docker-managed permanent installs use Docker Desktop. They use the same
-command surface, but should target a user-writable project-local directory:
+macOS and Windows Docker-managed permanent installs use Docker Desktop. They
+use the same command surface and default to a per-user Reploy install
+directory. Use `--to` when you want a specific target:
 
 ```bash
 reploy install --to "$PWD/example-installed" --service example

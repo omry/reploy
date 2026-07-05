@@ -15,8 +15,6 @@ app:
     color_env: SMOKE_COLOR
 
 install:
-  target:
-    default_path: /opt/{{ app.id }}
   owner:
     user: "1000"
     group: "1000"
