@@ -142,7 +142,9 @@ func TestBundleListRejectsMissingRequirementsProjection(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "requirements projection is missing") || !strings.Contains(err.Error(), "reploy stage --update --dir "+deployDir) {
+	if !strings.Contains(err.Error(), "requirements projection is missing") ||
+		!strings.Contains(err.Error(), "reploy stage --update --dir") ||
+		!strings.Contains(err.Error(), deployDir) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -165,7 +167,9 @@ func TestBundleListRejectsStaleRequirementsProjection(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "requirements projection is out of date") || !strings.Contains(err.Error(), "reploy stage --update --dir "+deployDir) {
+	if !strings.Contains(err.Error(), "requirements projection is out of date") ||
+		!strings.Contains(err.Error(), "reploy stage --update --dir") ||
+		!strings.Contains(err.Error(), deployDir) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -1508,17 +1512,22 @@ func hostPathForContainerMount(t *testing.T, args []string, containerPath string
 		if args[index] != "-v" {
 			continue
 		}
-		host, rest, ok := strings.Cut(args[index+1], ":")
-		if !ok {
-			continue
-		}
-		mount, _, _ := strings.Cut(rest, ":")
-		if mount == containerPath {
-			return host
+		spec := args[index+1]
+		for _, suffix := range []string{":" + containerPath, ":" + containerPath + ":ro", ":" + containerPath + ":rw"} {
+			if strings.HasSuffix(spec, suffix) {
+				return strings.TrimSuffix(spec, suffix)
+			}
 		}
 	}
 	t.Fatalf("container mount %s not found in %#v", containerPath, args)
 	return ""
+}
+
+func TestHostPathForContainerMountAcceptsWindowsDrivePath(t *testing.T) {
+	args := []string{"run", "-v", `C:\Users\runner\AppData\Local\Temp:/wheelhouse`, "python:3.11-slim"}
+	if got := hostPathForContainerMount(t, args, "/wheelhouse"); got != `C:\Users\runner\AppData\Local\Temp` {
+		t.Fatalf("host mount = %q", got)
+	}
 }
 
 func containsArg(args []string, want string) bool {

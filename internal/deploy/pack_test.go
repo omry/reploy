@@ -29,7 +29,7 @@ func TestLoadPack(t *testing.T) {
 	if pack.Docker.DeploymentDirs.Bundle != "bundle" {
 		t.Fatalf("bundle dir = %q", pack.Docker.DeploymentDirs.Bundle)
 	}
-	if !filepath.IsAbs(pack.Ref.Source) || !strings.HasPrefix(pack.Ref.Raw, "file:/") {
+	if !filepath.IsAbs(pack.Ref.Source) || !strings.HasPrefix(pack.Ref.Raw, "file:") {
 		t.Fatalf("blueprint ref was not resolved to an absolute file ref: %#v", pack.Ref)
 	}
 }

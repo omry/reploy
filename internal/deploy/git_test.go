@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +18,7 @@ func TestLoadGitPackResolvesBranchToCachedCommit(t *testing.T) {
 	sourceRoot, commit := testGitSourcePack(t)
 	cacheRoot := filepath.Join(t.TempDir(), "cache")
 	t.Setenv("REPLOY_CACHE_DIR", cacheRoot)
-	sourceURL := (&url.URL{Scheme: "file", Path: filepath.ToSlash(sourceRoot)}).String()
+	sourceURL := localFileURL(sourceRoot)
 	ref, err := ParsePackRef("git:" + sourceURL + "?ref=main")
 	if err != nil {
 		t.Fatal(err)
@@ -59,6 +60,14 @@ func TestLoadGitPackResolvesBranchToCachedCommit(t *testing.T) {
 	if cachedPack.App.Provider.Identifier != "demo-server" {
 		t.Fatalf("provider identifier = %q", cachedPack.App.Provider.Identifier)
 	}
+}
+
+func localFileURL(path string) string {
+	slashed := filepath.ToSlash(path)
+	if runtime.GOOS == "windows" && len(slashed) >= 2 && slashed[1] == ':' {
+		slashed = "/" + slashed
+	}
+	return (&url.URL{Scheme: "file", Path: slashed}).String()
 }
 
 func TestValidateGitPackRefUsesGitHubFacingErrors(t *testing.T) {

@@ -3,6 +3,7 @@ package deploy
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -40,6 +41,9 @@ func TestWriteGeneratedFileRecordsManifestHash(t *testing.T) {
 	info, err := os.Stat(filepath.Join(dir, "bin", "tool"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		return
 	}
 	if info.Mode()&0o111 == 0 {
 		t.Fatalf("expected executable bit on %s", info.Mode())

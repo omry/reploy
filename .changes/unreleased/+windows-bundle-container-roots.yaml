@@ -1,0 +1,3 @@
+kind: Fixed
+body: Accept container-absolute bundle roots such as `/bundle/*.whl` when staging bundles on Windows.
+time: 2026-07-05T15:20:45+08:00

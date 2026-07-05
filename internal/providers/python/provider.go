@@ -42,9 +42,9 @@ func ClassifyRoot(source string) (deploy.ArtifactRoot, error) {
 	switch {
 	case packageRequirementPattern.MatchString(source):
 		return PackageRoot(source), nil
-	case filepath.IsAbs(source) && strings.HasSuffix(source, ".whl"):
+	case isAbsoluteRootPath(source) && strings.HasSuffix(source, ".whl"):
 		return WheelRoot(source), nil
-	case filepath.IsAbs(source):
+	case isAbsoluteRootPath(source):
 		return SourceRoot(source), nil
 	default:
 		return deploy.ArtifactRoot{}, fmt.Errorf("bundle root must be a package name, exact package pin, absolute wheel path, or absolute source path: %s", source)
@@ -52,13 +52,17 @@ func ClassifyRoot(source string) (deploy.ArtifactRoot, error) {
 }
 
 func ClassifyPackRoot(source string) deploy.ArtifactRoot {
-	if filepath.IsAbs(source) && strings.HasSuffix(source, ".whl") {
+	if isAbsoluteRootPath(source) && strings.HasSuffix(source, ".whl") {
 		return WheelRoot(source)
 	}
-	if filepath.IsAbs(source) {
+	if isAbsoluteRootPath(source) {
 		return SourceRoot(source)
 	}
 	return PackageRoot(source)
+}
+
+func isAbsoluteRootPath(source string) bool {
+	return filepath.IsAbs(source) || strings.HasPrefix(source, "/")
 }
 
 func PackageRoot(source string) deploy.ArtifactRoot {

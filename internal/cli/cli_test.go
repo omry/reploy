@@ -1837,7 +1837,7 @@ func TestDockerStageAcceptsGitPackRef(t *testing.T) {
 	sourceDir, commit := makeCLITestGitSourcePack(t)
 	cacheDir := filepath.Join(t.TempDir(), "cache")
 	t.Setenv("REPLOY_CACHE_DIR", cacheDir)
-	sourceURL := (&url.URL{Scheme: "file", Path: filepath.ToSlash(sourceDir)}).String()
+	sourceURL := localFileURL(sourceDir)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 
 	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "git:"+sourceURL+"?ref=main")
@@ -2416,7 +2416,9 @@ func TestDockerBundleListReportsMissingRequirementsProjection(t *testing.T) {
 	if stdout != "" {
 		t.Fatalf("stdout = %q, want empty", stdout)
 	}
-	if !strings.Contains(stderr, "requirements projection is missing") || !strings.Contains(stderr, "reploy stage --update --dir "+deployDir) {
+	if !strings.Contains(stderr, "requirements projection is missing") ||
+		!strings.Contains(stderr, "reploy stage --update --dir") ||
+		!strings.Contains(stderr, deployDir) {
 		t.Fatalf("stderr missing update hint:\n%s", stderr)
 	}
 }
@@ -3123,6 +3125,14 @@ func makeCLITestGitSourcePack(t *testing.T) (string, string) {
 		t.Fatal(err)
 	}
 	return sourceDir, hash.String()
+}
+
+func localFileURL(path string) string {
+	slashed := filepath.ToSlash(path)
+	if runtime.GOOS == "windows" && len(slashed) >= 2 && slashed[1] == ':' {
+		slashed = "/" + slashed
+	}
+	return (&url.URL{Scheme: "file", Path: slashed}).String()
 }
 
 func copyCLITestTree(t *testing.T, sourceDir string, targetDir string) {
