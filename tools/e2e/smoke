@@ -491,7 +491,8 @@ def run_smoke(
 
         run([str(reploy), "bundle", "clean", "--dir", str(deploy_dir)], cwd=workdir, env=env)
 
-    run([str(reploy), "services", "list"], cwd=workdir, env=env)
+    if not docker_managed_install_host():
+        run([str(reploy), "services", "list"], cwd=workdir, env=env)
 
 
 def main() -> int:
