@@ -1934,20 +1934,18 @@ func parsePackRefArgumentWithWarning(value string) (deploy.PackRef, string, erro
 	original := strings.TrimSpace(value)
 	expanded := original
 	warning := ""
-	if !hasPackRefScheme(original) {
-		if localRef, ok := localPathPackRef(original); ok {
-			expanded = localRef
-		} else {
-			warning = shorthandLocalPathWarning(original)
-			indexExpanded, found, err := expandPackShorthand(original)
-			if err != nil {
-				return deploy.PackRef{}, "", err
-			}
-			if !found {
-				return deploy.PackRef{}, "", fmt.Errorf("unknown blueprint shorthand %q in Reploy blueprint index %s; %s", packShorthandName(original), packIndexURL(), appRefUsageHint)
-			}
-			expanded = indexExpanded
+	if localRef, ok := localPathPackRef(original); ok {
+		expanded = localRef
+	} else if !hasPackRefScheme(original) {
+		warning = shorthandLocalPathWarning(original)
+		indexExpanded, found, err := expandPackShorthand(original)
+		if err != nil {
+			return deploy.PackRef{}, "", err
 		}
+		if !found {
+			return deploy.PackRef{}, "", fmt.Errorf("unknown blueprint shorthand %q in Reploy blueprint index %s; %s", packShorthandName(original), packIndexURL(), appRefUsageHint)
+		}
+		expanded = indexExpanded
 	}
 	ref, err := deploy.ParsePackRef(expanded)
 	if err != nil {

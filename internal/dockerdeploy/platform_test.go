@@ -3,7 +3,6 @@ package dockerdeploy
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -207,11 +206,13 @@ func TestPlatformCommandSupportSelectedNonWindowsContracts(t *testing.T) {
 
 func TestDetectDockerRuntimeDetectsDockerDesktop(t *testing.T) {
 	dir := t.TempDir()
-	dockerPath := filepath.Join(dir, "docker")
-	script := "#!/bin/sh\nprintf '{\"OperatingSystem\":\"Docker Desktop\",\"ServerVersion\":\"29.5.3\"}\\n'\n"
-	if err := os.WriteFile(dockerPath, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dockerPath := writeFakeCommand(
+		t,
+		dir,
+		"docker",
+		"#!/bin/sh\nprintf '{\"OperatingSystem\":\"Docker Desktop\",\"ServerVersion\":\"29.5.3\"}\\n'\n",
+		"@echo off\r\necho {\"OperatingSystem\":\"Docker Desktop\",\"ServerVersion\":\"29.5.3\"}\r\n",
+	)
 	info, err := detectDockerRuntime(context.Background(), CommandSpec{Name: dockerPath}, time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -226,11 +227,13 @@ func TestDetectDockerRuntimeDetectsDockerDesktop(t *testing.T) {
 
 func TestDetectDockerRuntimeDetectsLinuxEngine(t *testing.T) {
 	dir := t.TempDir()
-	dockerPath := filepath.Join(dir, "docker")
-	script := "#!/bin/sh\nprintf '{\"OperatingSystem\":\"Ubuntu 24.04\",\"ServerVersion\":\"29.5.3\"}\\n'\n"
-	if err := os.WriteFile(dockerPath, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dockerPath := writeFakeCommand(
+		t,
+		dir,
+		"docker",
+		"#!/bin/sh\nprintf '{\"OperatingSystem\":\"Ubuntu 24.04\",\"ServerVersion\":\"29.5.3\"}\\n'\n",
+		"@echo off\r\necho {\"OperatingSystem\":\"Ubuntu 24.04\",\"ServerVersion\":\"29.5.3\"}\r\n",
+	)
 	info, err := detectDockerRuntime(context.Background(), CommandSpec{Name: dockerPath}, time.Second)
 	if err != nil {
 		t.Fatal(err)

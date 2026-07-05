@@ -51,7 +51,7 @@ jobs:
         run: nox -s ci
 
   target-smoke:
-    name: Target smoke (${{ matrix.target }})
+    name: ${{ matrix.job_name }} (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     strategy:
@@ -60,16 +60,28 @@ jobs:
         include:
           - target: linux-amd64
             runner: ubuntu-latest
+            job_name: Target smoke
+            smoke_args: --docker-mode optional
           - target: linux-arm64
             runner: ubuntu-24.04-arm
+            job_name: Target smoke
+            smoke_args: --docker-mode optional
           - target: darwin-arm64
             runner: macos-15
+            job_name: Target smoke
+            smoke_args: --docker-mode optional
           - target: darwin-amd64
             runner: macos-15-intel
+            job_name: Target smoke
+            smoke_args: --docker-mode optional
           - target: windows-amd64
             runner: windows-2025
+            job_name: Windows host smoke
+            smoke_args: --docker-mode skip
           - target: windows-arm64
             runner: windows-11-arm
+            job_name: Windows host smoke
+            smoke_args: --docker-mode skip
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -99,4 +111,4 @@ jobs:
       - name: Run host smoke
         env:
           NO_UPDATE_NOTIFIER: "1"
-        run: nox -s cli-smoke -- --docker-mode optional
+        run: nox -s cli-smoke -- ${{ matrix.smoke_args }}

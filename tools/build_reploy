@@ -8,6 +8,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -108,7 +109,7 @@ def run(
 
 
 def default_go_cache() -> str:
-    return os.environ.get("GOCACHE", "/tmp/reploy-go-cache")
+    return os.environ.get("GOCACHE", str(Path(tempfile.gettempdir()) / "reploy-go-cache"))
 
 
 def reploy_version(root: Path) -> str:

@@ -102,11 +102,13 @@ func TestRunCommandPassesDockerPreflightTimeout(t *testing.T) {
 func TestCheckDockerResponsiveUsesServerVersion(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "argv.log")
-	dockerPath := filepath.Join(dir, "docker")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$DOCKER_ARGV_LOG\"\nprintf '29.5.3\\n'\n"
-	if err := os.WriteFile(dockerPath, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dockerPath := writeFakeCommand(
+		t,
+		dir,
+		"docker",
+		"#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$DOCKER_ARGV_LOG\"\nprintf '29.5.3\\n'\n",
+		"@echo off\r\necho %* > \"%DOCKER_ARGV_LOG%\"\r\necho 29.5.3\r\n",
+	)
 
 	err := checkDockerResponsive(
 		context.Background(),
