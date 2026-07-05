@@ -67,6 +67,33 @@ func TestUninstallDryRunOnDarwinPrintsDockerDesktopPlan(t *testing.T) {
 	}
 }
 
+func TestUninstallDryRunOnWindowsPrintsDockerDesktopPlan(t *testing.T) {
+	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "windows"})
+	defer restorePlatform()
+	target := makeInstalledDeploymentForUninstall(t, "demo-test", "demo-test-abcd")
+
+	var stdout strings.Builder
+	if err := Uninstall(UninstallOptions{From: target, DryRun: true, Stdout: &stdout}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"would uninstall service: demo-test",
+		"target: " + target,
+		"permanent install backend: Docker-managed Compose",
+		"compose project: demo-test-abcd",
+		"would run: docker compose --project-name demo-test-abcd",
+		"down --remove-orphans",
+		"target directory: kept",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "systemctl") || strings.Contains(stdout.String(), "unit:") {
+		t.Fatalf("windows uninstall dry-run should not mention systemd:\n%s", stdout.String())
+	}
+}
+
 func TestListReploySystemdServices(t *testing.T) {
 	unitDir := t.TempDir()
 	oldSystemdUnitDir := uninstallSystemdUnitDir
@@ -117,6 +144,19 @@ func TestListReploySystemdServices(t *testing.T) {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
 		}
+	}
+}
+
+func TestPrintReploySystemdServicesRejectsDockerManagedPlatforms(t *testing.T) {
+	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "windows"})
+	defer restorePlatform()
+	var stdout strings.Builder
+	err := PrintReploySystemdServices(&stdout)
+	if err == nil || !strings.Contains(err.Error(), "Linux/systemd-only") || !strings.Contains(err.Error(), "--from") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stdout.String() != "" {
+		t.Fatalf("stdout should be empty: %q", stdout.String())
 	}
 }
 
@@ -192,6 +232,48 @@ func TestUninstallFromInstalledTargetOnDarwinUsesDockerDesktopCleanup(t *testing
 	for _, forbidden := range []string{"systemctl stop", "systemctl disable", "systemctl daemon-reload"} {
 		if containsCommand(commands, forbidden) {
 			t.Fatalf("darwin uninstall should not run %q: %#v", forbidden, commands)
+		}
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("target was not removed: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "uninstalled service: demo-test") {
+		t.Fatalf("stdout missing success:\n%s", stdout.String())
+	}
+}
+
+func TestUninstallFromInstalledTargetOnWindowsUsesDockerDesktopCleanup(t *testing.T) {
+	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "windows"})
+	defer restorePlatform()
+	target := makeInstalledDeploymentForUninstall(t, "demo-test", "demo-test-abcd")
+	restoreHost := stubUninstallHost(t)
+	defer restoreHost()
+
+	commands := []string{}
+	uninstallRunDockerCommand = func(spec CommandSpec, dockerPreflightTimeout time.Duration) error {
+		commands = append(commands, formatCommand(spec.Name, spec.Args...))
+		return nil
+	}
+	uninstallRunCommand = func(name string, args ...string) error {
+		commands = append(commands, formatCommand(name, args...))
+		return nil
+	}
+
+	var stdout strings.Builder
+	if err := Uninstall(UninstallOptions{From: target, RemoveDir: true, Stdout: &stdout}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"docker compose --project-name demo-test-abcd",
+		"down --remove-orphans",
+	} {
+		if !containsCommand(commands, want) {
+			t.Fatalf("commands missing %q: %#v", want, commands)
+		}
+	}
+	for _, forbidden := range []string{"systemctl stop", "systemctl disable", "systemctl daemon-reload"} {
+		if containsCommand(commands, forbidden) {
+			t.Fatalf("windows uninstall should not run %q: %#v", forbidden, commands)
 		}
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
@@ -345,6 +427,15 @@ func TestUninstallServiceOnlyRequiresExistingUnit(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error missing %q: %v", want, err)
 		}
+	}
+}
+
+func TestUninstallServiceOnlyOnWindowsRequiresFrom(t *testing.T) {
+	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "windows"})
+	defer restorePlatform()
+	err := Uninstall(UninstallOptions{ServiceName: "demo", DryRun: true})
+	if err == nil || !strings.Contains(err.Error(), "--from is required for Docker-managed uninstall") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

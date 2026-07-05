@@ -190,6 +190,9 @@ func PrintReploySystemdServices(stdout io.Writer) error {
 	if stdout == nil {
 		return nil
 	}
+	if currentHostPlatform().installBackend() != installBackendLinuxSystemd {
+		return fmt.Errorf("uninstall --list-services is Linux/systemd-only; use --from for Docker-managed installs")
+	}
 	services, err := ListReploySystemdServices()
 	if err != nil {
 		return err

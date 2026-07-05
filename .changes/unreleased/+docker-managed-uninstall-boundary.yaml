@@ -1,0 +1,2 @@
+kind: Changed
+body: Keep `reploy uninstall --list-services` Linux/systemd-only and require `--from` for Docker-managed uninstall on macOS and Windows.
