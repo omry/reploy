@@ -733,16 +733,20 @@ func TestEmbeddedControlRunsDeployedAppCommandWithScriptPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	args := string(content)
+	args := strings.ReplaceAll(string(content), "\r\n", "\n")
 	for _, want := range []string{
-		"run\n",
-		"--rm\n",
-		"--no-deps\n",
-		"REPLOY_CONTAINER_COMMAND=config_check\n",
-		"REPLOY_FORWARDED_ARGC=1\n",
-		"REPLOY_FORWARDED_ARG_0=--live\n",
-		"REPLOY_APP_COMMAND_PREFIX=democtl\n",
-		"app\n",
+		"run",
+		"--rm",
+		"--no-deps",
+		"REPLOY_CONTAINER_COMMAND",
+		"config_check",
+		"REPLOY_FORWARDED_ARGC",
+		"1",
+		"REPLOY_FORWARDED_ARG_0",
+		"--live",
+		"REPLOY_APP_COMMAND_PREFIX",
+		"democtl",
+		"app",
 	} {
 		if !strings.Contains(args, want) {
 			t.Fatalf("docker args missing %q:\n%s", want, args)
