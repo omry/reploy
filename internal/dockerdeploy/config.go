@@ -28,18 +28,27 @@ type ConfigCheckOptions struct {
 type AppCommandOptions struct {
 	Dir                    string
 	CommandArgs            []string
+	DeployedOnly           bool
 	Stdout                 io.Writer
 	Stderr                 io.Writer
 	DockerPreflightTimeout time.Duration
 }
 
 type AppCommandListOptions struct {
-	Dir string
+	Dir          string
+	DeployedOnly bool
 }
 
 type AppCommandListResult struct {
-	AppID    string
-	Commands []string
+	AppID    string                `json:"app_id"`
+	Commands []AppCommandListEntry `json:"commands"`
+}
+
+type AppCommandListEntry struct {
+	Trigger      []string `json:"trigger"`
+	Name         string   `json:"name"`
+	ForwardArgs  bool     `json:"forward_args"`
+	ForwardFlags []string `json:"forward_flags,omitempty"`
 }
 
 var runConfigCheckCommand = runCommand
@@ -102,6 +111,11 @@ func AppCommand(options AppCommandOptions) error {
 	if err != nil {
 		return err
 	}
+	if options.DeployedOnly {
+		if err := validateEmbeddedRuntimeForControl(options.Dir); err != nil {
+			return err
+		}
+	}
 	stdout, stderr := deploymentOutputWritersForDeployment(options.Dir, state, options.Stdout, options.Stderr)
 	runOptions := RunOptions{
 		Stdin:                  appCommandStdin(terminalOutput),
@@ -113,7 +127,7 @@ func AppCommand(options AppCommandOptions) error {
 	if err != nil {
 		return err
 	}
-	command, forwardedArgs, err := pack.Docker.MatchAppCommand(options.CommandArgs)
+	command, forwardedArgs, err := matchAppCommandForOptions(pack, options.CommandArgs, options.DeployedOnly)
 	if err != nil {
 		return err
 	}
@@ -132,6 +146,7 @@ func AppCommand(options AppCommandOptions) error {
 		return err
 	}
 	spec := AppCommandForProject(options.Dir, command.Name, forwardedArgs, projectName, configDisplayDir, configMountLayoutForPack(pack).ContainerConfigDir)
+	spec = withAppCommandPrefixEnv(spec)
 	spec = withAppTerminalEnv(spec, pack.App.Terminal, terminalOutput)
 	err = runTemporaryComposeCommand(
 		runAppCommand,
@@ -143,6 +158,22 @@ func AppCommand(options AppCommandOptions) error {
 		return appCommandError(err)
 	}
 	return nil
+}
+
+func withAppCommandPrefixEnv(spec CommandSpec) CommandSpec {
+	prefix := strings.TrimSpace(os.Getenv("REPLOY_APP_COMMAND_PREFIX"))
+	if prefix == "" {
+		return spec
+	}
+	spec.Args = appendComposeRunEnv(spec.Args, "REPLOY_APP_COMMAND_PREFIX="+prefix)
+	return spec
+}
+
+func matchAppCommandForOptions(pack deploy.AppPack, args []string, deployedOnly bool) (deploy.DockerCommandConfig, []string, error) {
+	if deployedOnly {
+		return pack.Docker.MatchDeployedCommand(args)
+	}
+	return pack.Docker.MatchAppCommand(args)
 }
 
 func appCommandStdin(output io.Writer) io.Reader {
@@ -275,11 +306,23 @@ func AppCommandList(options AppCommandListOptions) (AppCommandListResult, error)
 	if err != nil {
 		return AppCommandListResult{}, err
 	}
-	commands := []string{}
-	for _, command := range pack.Docker.AppCommands() {
-		commands = append(commands, strings.Join(command.Trigger, " "))
+	commands := []AppCommandListEntry{}
+	for _, command := range appCommandsForList(pack, options.DeployedOnly) {
+		commands = append(commands, AppCommandListEntry{
+			Trigger:      append([]string(nil), command.Trigger...),
+			Name:         command.Name,
+			ForwardArgs:  command.ForwardArgs,
+			ForwardFlags: append([]string(nil), command.ForwardFlags...),
+		})
 	}
 	return AppCommandListResult{AppID: pack.AppID, Commands: commands}, nil
+}
+
+func appCommandsForList(pack deploy.AppPack, deployedOnly bool) []deploy.DockerCommandConfig {
+	if deployedOnly {
+		return pack.Docker.DeployedCommands()
+	}
+	return pack.Docker.AppCommands()
 }
 
 func ConfigCheckCommand(dir string, commandName string, forwardedArgs []string) CommandSpec {

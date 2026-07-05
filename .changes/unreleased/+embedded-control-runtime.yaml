@@ -1,0 +1,2 @@
+kind: Changed
+body: Delegate generated control-script app commands through an embedded Reploy runtime and add JSON metadata for deployed app commands.

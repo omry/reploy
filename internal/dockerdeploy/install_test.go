@@ -239,8 +239,11 @@ func TestInstallOnDarwinWritesDockerDesktopDeployment(t *testing.T) {
 	if strings.Contains(script, "systemctl") || strings.Contains(script, "journalctl") {
 		t.Fatalf("Docker Desktop control script should not use systemd:\n%s", script)
 	}
-	if !strings.Contains(script, "docker compose") || !strings.Contains(script, "up") {
-		t.Fatalf("Docker Desktop control script should use compose lifecycle:\n%s", script)
+	if !strings.Contains(script, `exec "$reploy_bin" _control --dir "$target_dir" --script-name "$control_script" "$@"`) {
+		t.Fatalf("Docker Desktop control script should delegate to embedded Reploy:\n%s", script)
+	}
+	if strings.Contains(script, "docker compose") || strings.Contains(script, "up|start") {
+		t.Fatalf("Docker Desktop control script should not own compose lifecycle:\n%s", script)
 	}
 }
 
@@ -987,9 +990,9 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(target, ComposeFileName)); err != nil {
 		t.Fatalf("missing copied compose: %v", err)
 	}
-	targetToolBinary := filepath.Join(target, ToolBinaryFileName)
-	if _, err := os.Lstat(targetToolBinary); !os.IsNotExist(err) {
-		t.Fatalf("installed reploy binary should be absent: err=%v", err)
+	targetRuntime := filepath.Join(target, embeddedRuntimeFileName())
+	if _, err := os.Lstat(targetRuntime); err != nil {
+		t.Fatalf("installed embedded runtime should be present: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(target, "reploy")); !os.IsNotExist(err) {
 		t.Fatalf("installed reploy helper should be absent: err=%v", err)
@@ -1000,13 +1003,16 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		`service="demo-apply.service"`,
-		`up|start)`,
-		`disable)`,
-		`health)`,
+		`reploy_bin="` + targetRuntime + `"`,
+		`exec "$reploy_bin" _control --dir "$target_dir" --script-name "$control_script" "$@"`,
 	} {
 		if !strings.Contains(string(installedControlScript), want) {
 			t.Fatalf("control script missing %q:\n%s", want, installedControlScript)
+		}
+	}
+	for _, forbidden := range []string{`systemctl`, `journalctl`, `docker compose`, `health)`, `up|start)`} {
+		if strings.Contains(string(installedControlScript), forbidden) {
+			t.Fatalf("control script should delegate %q to embedded Reploy:\n%s", forbidden, installedControlScript)
 		}
 	}
 	info, err := os.Lstat(controlScript)
@@ -1067,15 +1073,16 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Lstat(targetToolBinary); !os.IsNotExist(err) {
-		t.Fatalf("reinstalled reploy binary should be absent: err=%v", err)
+	targetRuntime = filepath.Join(target, embeddedRuntimeFileName())
+	if _, err := os.Lstat(targetRuntime); err != nil {
+		t.Fatalf("reinstalled embedded runtime should be present: %v", err)
 	}
 	targetManifest, err = deploy.LoadDeploymentManifest(filepath.Join(target, ManifestFileName))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := targetManifest.Files[filepath.ToSlash(ToolBinaryFileName)]; ok {
-		t.Fatalf("installed manifest still tracks %s", ToolBinaryFileName)
+	if entry, ok := targetManifest.Files[filepath.ToSlash(embeddedRuntimeFileName())]; !ok || entry.Kind != "runtime" {
+		t.Fatalf("installed manifest should track embedded runtime, got %#v", targetManifest.Files)
 	}
 	reinstalledControlScript, err := os.ReadFile(controlScript)
 	if err != nil {
@@ -1472,20 +1479,13 @@ func TestInstalledControlScriptHealthUsesDeclaredHealthProbe(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fakeBin := filepath.Join(t.TempDir(), "bin")
-	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	curlArgs := filepath.Join(t.TempDir(), "curl.args")
-	fakeCurl := filepath.Join(fakeBin, "curl")
-	if err := os.WriteFile(fakeCurl, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CURL_ARGS_FILE\"\nprintf 'health ok\\n'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeFakeEmbeddedReploy(t, target)
+	reployArgs := filepath.Join(t.TempDir(), "reploy.args")
 
 	command := exec.Command(script, "health")
 	command.Env = append(os.Environ(),
-		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"CURL_ARGS_FILE="+curlArgs,
+		"REPLOY_ARGS_FILE="+reployArgs,
+		"REPLOY_FAKE_OUTPUT=[demo] health ok\n",
 		"REPLOY_COLOR=never",
 	)
 	output, err := command.CombinedOutput()
@@ -1495,10 +1495,10 @@ func TestInstalledControlScriptHealthUsesDeclaredHealthProbe(t *testing.T) {
 	if string(output) != "[demo] health ok\n" {
 		t.Fatalf("health output = %q", output)
 	}
-	args := readFile(t, curlArgs)
-	want := "-fsS\n--insecure\nhttps://127.0.0.1:18075/_health_\n"
+	args := readFile(t, reployArgs)
+	want := "_control\n--dir\n" + target + "\n--script-name\ndemoctl\nhealth\n"
 	if args != want {
-		t.Fatalf("curl args = %q, want %q", args, want)
+		t.Fatalf("embedded reploy args = %q, want %q", args, want)
 	}
 }
 
@@ -1531,41 +1531,14 @@ func TestPowerShellDockerDesktopControlScriptContent(t *testing.T) {
 	for _, want := range []string{
 		"[CmdletBinding()]",
 		"$TargetDir = 'C:\\Users\\alice\\AppData\\Local\\Reploy\\installs\\demo app'",
-		"$ComposeProject = 'demo-project'",
-		"& docker compose --project-name $ComposeProject --project-directory $TargetDir --env-file $DockerEnv -f $ComposeFile @ComposeArgs",
-		"$ReployControlLabel = '[demo]'",
-		"$ReployControlColor = '208'",
-		"Get-ReployControlOutputPrefix",
-		"$PreviousErrorActionPreference = $ErrorActionPreference",
-		"$ErrorActionPreference = 'Continue'",
-		"$ErrorActionPreference = $PreviousErrorActionPreference",
-		"$Line.StartsWith(' ')",
-		"Write-Output \"$Prefix$Line\"",
-		"Write-Output \"$Prefix $Line\"",
-		"Test-ManagedFiles",
-		"managed file is missing: $ManagedFile",
-		"config check",
-		"Test-ForwardedArgs -Mode 'flags' -AllowedFlags @('--live') -Args $ForwardedArgs",
-		"Invoke-AppCommand -CommandName 'config_check' -ForwardedArgs $ForwardedArgs",
-		"REPLOY_CONTAINER_COMMAND=$CommandName",
-		"REPLOY_CONFIG_CONTAINER_DIR=$ConfigContainerDir",
-		"REPLOY_CONFIG_DISPLAY_DIR=$ConfigDisplayDir",
-		"REPLOY_INCLUDE_RUNTIME_OVERRIDES=0",
-		"REPLOY_CONFIG_MOUNT=rw",
-		"REPLOY_APP_COMMAND_PREFIX=reploy app",
-		"$ColorEnvName = 'DEMO_COLOR'",
-		"$ReployColorMode = [Environment]::GetEnvironmentVariable('REPLOY_COLOR')",
-		"Test-Path Env:NO_COLOR",
-		"[Console]::IsOutputRedirected",
-		"$Host.UI.SupportsVirtualTerminal",
-		"Invoke-ReployCompose up -d @RemainingArgs",
-		"Invoke-ReployCompose logs @RemainingArgs",
+		"$ControlScript = 'democtl.ps1'",
+		"& $ReployBin _control --dir $TargetDir --script-name $ControlScript @RemainingArgs",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("PowerShell control script missing %q:\n%s", want, content)
 		}
 	}
-	for _, forbidden := range []string{"sh -c", "systemctl", "journalctl"} {
+	for _, forbidden := range []string{"sh -c", "systemctl", "journalctl", "docker compose", "Get-ReployControlOutputPrefix", "Test-ManagedFiles", "Invoke-ReployCompose"} {
 		if strings.Contains(content, forbidden) {
 			t.Fatalf("PowerShell control script should not contain %q:\n%s", forbidden, content)
 		}
@@ -1605,7 +1578,7 @@ func TestWriteInstalledControlScriptsOnWindowsWritesPowerShellScript(t *testing.
 		}
 	}
 	powerShellContent := readFile(t, filepath.Join(target, "democtl.ps1"))
-	if !strings.Contains(powerShellContent, "docker compose") || strings.Contains(powerShellContent, "systemctl") {
+	if !strings.Contains(powerShellContent, "_control") || strings.Contains(powerShellContent, "docker compose") || strings.Contains(powerShellContent, "systemctl") {
 		t.Fatalf("unexpected PowerShell control content:\n%s", powerShellContent)
 	}
 	manifest, err := deploy.LoadDeploymentManifest(filepath.Join(target, ManifestFileName))
@@ -1619,18 +1592,26 @@ func TestWriteInstalledControlScriptsOnWindowsWritesPowerShellScript(t *testing.
 	}
 }
 
-func TestControlScriptUsesSafeStatusFileAndPreservesPartialLines(t *testing.T) {
+func TestInstalledControlScriptDelegatesToEmbeddedReploy(t *testing.T) {
+	target := t.TempDir()
 	content := controlScriptContent(installPlan{
 		AppID:         "demo",
-		TargetDir:     t.TempDir(),
+		TargetDir:     target,
 		Service:       "demo",
 		ControlScript: "democtl",
 	})
-	if !strings.Contains(content, `mktemp "${TMPDIR:-/tmp}/reploy-output-prefix.XXXXXX"`) {
-		t.Fatalf("control script does not use mktemp for status handoff:\n%s", content)
+	for _, want := range []string{
+		`reploy_bin="` + filepath.Join(target, embeddedRuntimeFileName()) + `"`,
+		`exec "$reploy_bin" _control --dir "$target_dir" --script-name "$control_script" "$@"`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("control script missing %q:\n%s", want, content)
+		}
 	}
-	if !strings.Contains(content, `read -r reploy_control_line || [ -n "$reploy_control_line" ]`) {
-		t.Fatalf("control script does not preserve final unterminated output line:\n%s", content)
+	for _, forbidden := range []string{"mktemp", "docker compose", "systemctl", "journalctl", "curl ", "wget "} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("control script should not own runtime/control logic %q:\n%s", forbidden, content)
+		}
 	}
 }
 
@@ -1663,8 +1644,14 @@ func TestInstalledControlScriptRunsDeployedAppCommand(t *testing.T) {
 	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeFakeEmbeddedReploy(t, target)
 
 	helpCommand := exec.Command(script, "--help")
+	reployArgs := filepath.Join(t.TempDir(), "reploy.args")
+	helpCommand.Env = append(os.Environ(),
+		"REPLOY_ARGS_FILE="+reployArgs,
+		"REPLOY_FAKE_OUTPUT=usage: democtl COMMAND [ARGS...]\ncommands:\n  config check\n",
+	)
 	helpOutput, err := helpCommand.CombinedOutput()
 	if err != nil {
 		t.Fatalf("help failed: %v\n%s", err, helpOutput)
@@ -1673,43 +1660,32 @@ func TestInstalledControlScriptRunsDeployedAppCommand(t *testing.T) {
 		t.Fatalf("help output did not include deployed command:\n%s", helpOutput)
 	}
 
-	fakeBin := filepath.Join(t.TempDir(), "bin")
-	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	dockerArgs := filepath.Join(t.TempDir(), "docker.args")
-	fakeDocker := filepath.Join(fakeBin, "docker")
-	if err := os.WriteFile(fakeDocker, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$DOCKER_ARGS_FILE\"\nprintf 'docker output\\n'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
 	command := exec.Command(script, "config", "check", "--live")
 	command.Env = append(os.Environ(),
-		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"DOCKER_ARGS_FILE="+dockerArgs,
-		"REPLOY_COLOR=never",
+		"REPLOY_ARGS_FILE="+reployArgs,
+		"REPLOY_FAKE_OUTPUT=[demo] app output\n",
 	)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("deployed command failed: %v\n%s", err, output)
 	}
-	if string(output) != "[demo] docker output\n" {
+	if string(output) != "[demo] app output\n" {
 		t.Fatalf("deployed command output = %q", output)
 	}
-	args := readFile(t, dockerArgs)
-	for _, want := range []string{
-		"compose\n",
-		"--project-name\n",
-		"demo-project\n",
-		"REPLOY_CONTAINER_COMMAND=config_check\n",
-		"REPLOY_FORWARDED_ARGC=1\n",
-		"REPLOY_FORWARDED_ARG_0=--live\n",
-		"REPLOY_APP_COMMAND_PREFIX=democtl\n",
-		"app\n",
-	} {
-		if !strings.Contains(args, want) {
-			t.Fatalf("docker args missing %q:\n%s", want, args)
-		}
+	args := readFile(t, reployArgs)
+	want := strings.Join([]string{
+		"_control",
+		"--dir",
+		target,
+		"--script-name",
+		"democtl",
+		"config",
+		"check",
+		"--live",
+		"",
+	}, "\n")
+	if args != want {
+		t.Fatalf("embedded reploy args = %q, want %q", args, want)
 	}
 }
 
@@ -1732,22 +1708,13 @@ func TestInstalledControlScriptPrefixesSystemdOutput(t *testing.T) {
 	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
 		t.Fatal(err)
 	}
-
-	fakeBin := filepath.Join(t.TempDir(), "bin")
-	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	systemctlArgs := filepath.Join(t.TempDir(), "systemctl.args")
-	fakeSystemctl := filepath.Join(fakeBin, "systemctl")
-	if err := os.WriteFile(fakeSystemctl, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$SYSTEMCTL_ARGS_FILE\"\nprintf 'systemd output\\n'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeFakeEmbeddedReploy(t, target)
+	reployArgs := filepath.Join(t.TempDir(), "reploy.args")
 
 	command := exec.Command(script, "status")
 	command.Env = append(os.Environ(),
-		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"SYSTEMCTL_ARGS_FILE="+systemctlArgs,
-		"REPLOY_COLOR=never",
+		"REPLOY_ARGS_FILE="+reployArgs,
+		"REPLOY_FAKE_OUTPUT=[demo] systemd output\n",
 	)
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -1756,10 +1723,10 @@ func TestInstalledControlScriptPrefixesSystemdOutput(t *testing.T) {
 	if string(output) != "[demo] systemd output\n" {
 		t.Fatalf("status output = %q", output)
 	}
-	args := readFile(t, systemctlArgs)
-	want := "status\ndemo.service\n"
+	args := readFile(t, reployArgs)
+	want := "_control\n--dir\n" + target + "\n--script-name\ndemoctl\nstatus\n"
 	if args != want {
-		t.Fatalf("systemctl args = %q, want %q", args, want)
+		t.Fatalf("embedded reploy args = %q, want %q", args, want)
 	}
 }
 
@@ -1782,22 +1749,13 @@ func TestInstalledControlScriptLogsUsesReployOptions(t *testing.T) {
 	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
 		t.Fatal(err)
 	}
-
-	fakeBin := filepath.Join(t.TempDir(), "bin")
-	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	journalctlArgs := filepath.Join(t.TempDir(), "journalctl.args")
-	fakeJournalctl := filepath.Join(fakeBin, "journalctl")
-	if err := os.WriteFile(fakeJournalctl, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$JOURNALCTL_ARGS_FILE\"\nprintf 'journal output\\n'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeFakeEmbeddedReploy(t, target)
+	reployArgs := filepath.Join(t.TempDir(), "reploy.args")
 
 	command := exec.Command(script, "logs", "--tail=100", "--follow")
 	command.Env = append(os.Environ(),
-		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"JOURNALCTL_ARGS_FILE="+journalctlArgs,
-		"REPLOY_COLOR=never",
+		"REPLOY_ARGS_FILE="+reployArgs,
+		"REPLOY_FAKE_OUTPUT=[demo] journal output\n",
 	)
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -1806,10 +1764,10 @@ func TestInstalledControlScriptLogsUsesReployOptions(t *testing.T) {
 	if string(output) != "[demo] journal output\n" {
 		t.Fatalf("logs output = %q", output)
 	}
-	args := readFile(t, journalctlArgs)
-	want := "-u\ndemo.service\n-n\n100\n-f\n"
+	args := readFile(t, reployArgs)
+	want := "_control\n--dir\n" + target + "\n--script-name\ndemoctl\nlogs\n--tail=100\n--follow\n"
 	if args != want {
-		t.Fatalf("journalctl args = %q, want %q", args, want)
+		t.Fatalf("embedded reploy args = %q, want %q", args, want)
 	}
 }
 
@@ -1856,8 +1814,13 @@ func TestInstalledControlScriptRejectsUndeployedAppCommandFlag(t *testing.T) {
 	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeFakeEmbeddedReploy(t, target)
 
 	command := exec.Command(script, "config", "check", "--unsafe")
+	command.Env = append(os.Environ(),
+		"REPLOY_FAKE_OUTPUT=reploy app error: unknown forwarded flag: --unsafe\n",
+		"REPLOY_FAKE_EXIT=1",
+	)
 	output, err := command.CombinedOutput()
 	if err == nil {
 		t.Fatal("expected error")
@@ -1895,6 +1858,7 @@ func TestInstalledControlScriptAcceptsForwardedFlagValueWithEquals(t *testing.T)
 	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeFakeEmbeddedRuntime(t, target)
 
 	fakeBin := filepath.Join(t.TempDir(), "bin")
 	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
@@ -1949,8 +1913,13 @@ func TestInstalledControlScriptRejectsForwardedFlagPositionals(t *testing.T) {
 	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeFakeEmbeddedReploy(t, target)
 
 	command := exec.Command(script, "config", "check", "--live", "extra")
+	command.Env = append(os.Environ(),
+		"REPLOY_FAKE_OUTPUT=reploy app error: unexpected positional argument after app command trigger: extra\n",
+		"REPLOY_FAKE_EXIT=1",
+	)
 	output, err := command.CombinedOutput()
 	if err == nil {
 		t.Fatal("expected error")
@@ -2816,6 +2785,25 @@ func TestInstallPreservePathsHonorReplaceAndClean(t *testing.T) {
 	_, err = installPreservePaths(managedPaths, []string{"missing"}, false)
 	if err == nil || !strings.Contains(err.Error(), "unknown managed install path") {
 		t.Fatalf("expected unknown managed path error, got %v", err)
+	}
+}
+
+func writeFakeEmbeddedRuntime(t *testing.T, target string) {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(target, embeddedRuntimeFileName())
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, content, 0o755); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -102,7 +102,6 @@ docker:
   default_command: serve
   command_defaults:
     app_command: true
-    deployed_command: true
     container:
       argv_prefix: [example-server, --config-dir, "${REPLOY_CONFIG_CONTAINER_DIR}"]
   commands:
@@ -110,6 +109,7 @@ docker:
       container:
         argv_suffix: [serve]
     config_check:
+      deployed_command: true
       forward_flags: [--live]
       container:
         argv_suffix: [config, check]

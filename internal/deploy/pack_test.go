@@ -1234,6 +1234,60 @@ func TestDeployedCommandsOnlyReturnsExplicitDeployedCommands(t *testing.T) {
 	}
 }
 
+func TestDeployedCommandsIgnoreInheritedCommandDefault(t *testing.T) {
+	manifest, err := ParsePackManifest(`blueprint:
+  schema: 1
+  version: 0.1.0
+  requires_reploy: ">=0.1.0"
+
+app:
+  id: demo
+  provider:
+    type: python
+    identifier: demo-server
+
+install:
+` + packTestInstallBlock() + `
+
+docker:
+  deployment_dirs:
+    config: conf
+    bundle: bundle
+    data: data
+  default_command: serve
+  command_defaults:
+    app_command: true
+    deployed_command: true
+    container:
+      argv_prefix: [demo-server]
+  commands:
+    serve:
+      container:
+        argv_suffix: [serve]
+    config_check:
+      deployed_command: true
+      container:
+        argv_suffix: [config, check]
+    env_bootstrap:
+      container:
+        argv_suffix: [env, bootstrap]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envBootstrap := dockerCommandByName(t, manifest, "env_bootstrap")
+	if !envBootstrap.Deployed {
+		t.Fatal("env_bootstrap should still inherit deployed flag for manifest compatibility")
+	}
+	commands := manifest.Docker.DeployedCommands()
+	if len(commands) != 1 {
+		t.Fatalf("deployed commands = %#v, want only explicit command", commands)
+	}
+	if got := strings.Join(commands[0].Trigger, " "); got != "config check" {
+		t.Fatalf("deployed command trigger = %q, want config check", got)
+	}
+}
+
 func TestAppCommandsListsOnlyAppCommands(t *testing.T) {
 	manifest, err := ParsePackManifest(packTestManifest())
 	if err != nil {

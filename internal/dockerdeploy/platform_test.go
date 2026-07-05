@@ -2,17 +2,220 @@ package dockerdeploy
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == "_control" {
+		os.Exit(runFakeEmbeddedReployControl(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "app" {
+		os.Exit(runFakeEmbeddedReployApp(os.Args[2:]))
+	}
 	detectHostPlatform = func() hostPlatform {
 		return hostPlatform{GOOS: "linux"}
 	}
 	os.Exit(m.Run())
+}
+
+func runFakeEmbeddedReployControl(args []string) int {
+	dir := "."
+	scriptName := "democtl"
+	commandArgs := []string{}
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		switch arg {
+		case "--dir":
+			index++
+			if index < len(args) {
+				dir = args[index]
+			}
+		case "--script-name":
+			index++
+			if index < len(args) {
+				scriptName = args[index]
+			}
+		default:
+			commandArgs = append(commandArgs, args[index:]...)
+			index = len(args)
+		}
+	}
+	if len(commandArgs) == 0 || commandArgs[0] == "--help" || commandArgs[0] == "help" {
+		fmt.Printf("usage: %s COMMAND [ARGS...]\ncommands:\n  config check\n", scriptName)
+		return 0
+	}
+	switch commandArgs[0] {
+	case "status", "ps":
+		if path := os.Getenv("DOCKER_ARGS_FILE"); path != "" {
+			_ = os.WriteFile(path, []byte(strings.Join([]string{
+				"compose",
+				"--project-name",
+				"demo-project",
+				"--project-directory",
+				dir,
+				"ps",
+			}, "\n")+"\n"), 0o644)
+		}
+		fmt.Printf("%s docker output\n", fakeEmbeddedOutputPrefix(dir))
+		return 0
+	case "up":
+		return runFakeEmbeddedReployControlUp(dir)
+	}
+	if len(commandArgs) >= 2 && commandArgs[0] == "bootstrap" && commandArgs[1] == "plugin" {
+		ensureFakeManagedFile(dir)
+	}
+	if len(commandArgs) >= 2 && commandArgs[0] == "config" && commandArgs[1] == "check" || len(commandArgs) >= 2 && commandArgs[0] == "bootstrap" && commandArgs[1] == "plugin" {
+		previous, hadPrevious := os.LookupEnv("REPLOY_APP_COMMAND_PREFIX")
+		_ = os.Setenv("REPLOY_APP_COMMAND_PREFIX", scriptName)
+		code := runFakeEmbeddedReployApp(append([]string{"--deployed-only", "--dir", dir}, commandArgs...))
+		if hadPrevious {
+			_ = os.Setenv("REPLOY_APP_COMMAND_PREFIX", previous)
+		} else {
+			_ = os.Unsetenv("REPLOY_APP_COMMAND_PREFIX")
+		}
+		return code
+	}
+	fmt.Fprintf(os.Stderr, "unknown command: %s\n", commandArgs[0])
+	return 2
+}
+
+func runFakeEmbeddedReployControlUp(dir string) int {
+	if path := os.Getenv("DOCKER_ARGS_FILE"); path != "" {
+		_ = os.WriteFile(path, []byte(strings.Join([]string{
+			"---",
+			"compose",
+			"up",
+			"---",
+			"compose",
+			"down",
+			"--remove-orphans",
+			"---",
+			"compose",
+			"up",
+		}, "\n")+"\n"), 0o644)
+	}
+	fmt.Fprintln(os.Stderr, "Error response from daemon: failed to set up container networking: network b2f601ad24f6dbb403c8f25b418d314854c35d7fc33ac351355b45d12937cbb3 not found")
+	fmt.Printf("%s detected stale Docker network state; running down --remove-orphans and retrying up\n", fakeEmbeddedOutputPrefix(dir))
+	fmt.Println("docker output")
+	return 0
+}
+
+func ensureFakeManagedFile(dir string) {
+	path := filepath.Join(dir, ".arbiter.env")
+	if _, err := os.Stat(path); err != nil && os.IsNotExist(err) {
+		_ = os.WriteFile(path, []byte{}, 0o600)
+	}
+	if os.Getenv("CHOWN_ARGS_FILE") == "" {
+		return
+	}
+	containerUser := ""
+	if content, err := os.ReadFile(filepath.Join(dir, DockerEnvFileName)); err == nil {
+		for _, line := range strings.Split(string(content), "\n") {
+			if strings.HasPrefix(line, "REPLOY_CONTAINER_USER=") {
+				containerUser = strings.TrimPrefix(line, "REPLOY_CONTAINER_USER=")
+			}
+		}
+	}
+	if containerUser != "" {
+		_ = os.WriteFile(os.Getenv("CHOWN_ARGS_FILE"), []byte(containerUser+"\n"+path+"\n"), 0o644)
+	}
+}
+
+func runFakeEmbeddedReployApp(args []string) int {
+	dir := "."
+	commandArgs := []string{}
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		switch arg {
+		case "--deployed-only":
+		case "--dir":
+			index++
+			if index < len(args) {
+				dir = args[index]
+			}
+		default:
+			if strings.HasPrefix(arg, "--dir=") {
+				dir = strings.TrimPrefix(arg, "--dir=")
+				continue
+			}
+			commandArgs = append(commandArgs, arg)
+		}
+	}
+	if path := os.Getenv("DOCKER_ARGS_FILE"); path != "" {
+		_ = os.WriteFile(path, []byte(strings.Join(fakeEmbeddedDockerArgs(dir, commandArgs), "\n")+"\n"), 0o644)
+	}
+	fmt.Printf("%s docker output\n", fakeEmbeddedOutputPrefix(dir))
+	return 0
+}
+
+func fakeEmbeddedDockerArgs(dir string, commandArgs []string) []string {
+	commandName := "config_check"
+	forwarded := []string{}
+	if len(commandArgs) >= 2 && commandArgs[0] == "bootstrap" && commandArgs[1] == "plugin" {
+		commandName = "bootstrap_plugin"
+		if len(commandArgs) > 2 {
+			forwarded = commandArgs[2:]
+		}
+	} else if len(commandArgs) >= 2 && commandArgs[0] == "config" && commandArgs[1] == "check" {
+		forwarded = commandArgs[2:]
+	}
+	result := []string{
+		"compose",
+		"--project-name",
+		"demo-project",
+		"--project-directory",
+		dir,
+		"run",
+		"--rm",
+		"--no-deps",
+		"REPLOY_CONTAINER_COMMAND=" + commandName,
+		fmt.Sprintf("REPLOY_FORWARDED_ARGC=%d", len(forwarded)),
+	}
+	for index, arg := range forwarded {
+		result = append(result, fmt.Sprintf("REPLOY_FORWARDED_ARG_%d=%s", index, arg))
+	}
+	result = append(result,
+		"REPLOY_CONFIG_CONTAINER_DIR=/conf",
+		"REPLOY_CONFIG_MOUNT=rw",
+		"REPLOY_APP_COMMAND_PREFIX="+defaultString(os.Getenv("REPLOY_APP_COMMAND_PREFIX"), "reploy app"),
+	)
+	if color := fakeEmbeddedDemoColor(); color != "" {
+		result = append(result, "DEMO_COLOR="+color)
+	}
+	if columns := os.Getenv("COLUMNS"); columns != "" {
+		result = append(result, "COLUMNS="+columns)
+	}
+	return append(result, "app")
+}
+
+func fakeEmbeddedDemoColor() string {
+	if value, ok := os.LookupEnv("DEMO_COLOR"); ok {
+		return value
+	}
+	switch strings.ToLower(os.Getenv("REPLOY_COLOR")) {
+	case "always":
+		return "always"
+	case "never":
+		return "never"
+	default:
+		return ""
+	}
+}
+
+func fakeEmbeddedOutputPrefix(dir string) string {
+	label := "[demo]"
+	if content, err := os.ReadFile(filepath.Join(dir, StateFileName)); err == nil && strings.Contains(string(content), `"phase": "staged"`) {
+		label = "[STAGING : demo]"
+	}
+	if strings.EqualFold(os.Getenv("REPLOY_COLOR"), "always") {
+		return "\x1b[38;5;117m" + label + "\x1b[0m"
+	}
+	return label
 }
 
 func TestHostPlatformInstallBackend(t *testing.T) {

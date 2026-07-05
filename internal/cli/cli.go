@@ -57,6 +57,8 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 	case "--version", "version":
 		fmt.Fprintf(stdout, "reploy %s\n", reploy.DisplayVersion())
 		return 0
+	case "_control":
+		return runEmbeddedControl(args[1:], stdout, stderr, globalOptions)
 	case "index":
 		return runPackIndex(args[0], args[1:], stdout, stderr)
 	default:
@@ -437,10 +439,29 @@ func runDockerApp(args []string, stdout io.Writer, stderr io.Writer, globalOptio
 		printAppShortUsage(stderr)
 		return 2
 	}
+	if options.Format != "" && !options.Commands {
+		fmt.Fprintln(stderr, "reploy usage error: --format is only supported with --commands")
+		printAppShortUsage(stderr)
+		return 2
+	}
+	if options.Commands {
+		if len(options.CommandArgs) != 0 {
+			fmt.Fprintln(stderr, "reploy usage error: --commands does not accept app command arguments")
+			printAppShortUsage(stderr)
+			return 2
+		}
+		return runDockerAppSummaryForOptions(dockerAppSummaryOptions{
+			Dir:          options.Dir,
+			DirExplicit:  options.DirExplicit,
+			DeployedOnly: options.DeployedOnly,
+			Format:       options.Format,
+		}, stdout, stderr)
+	}
 	if len(options.CommandArgs) == 0 {
 		return runDockerAppSummaryForOptions(dockerAppSummaryOptions{
-			Dir:         options.Dir,
-			DirExplicit: options.DirExplicit,
+			Dir:          options.Dir,
+			DirExplicit:  options.DirExplicit,
+			DeployedOnly: options.DeployedOnly,
 		}, stdout, stderr)
 	}
 	if strings.HasPrefix(options.CommandArgs[0], "-") {
@@ -448,14 +469,19 @@ func runDockerApp(args []string, stdout io.Writer, stderr io.Writer, globalOptio
 		printAppShortUsage(stderr)
 		return 2
 	}
-	options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
-	if err != nil {
-		fmt.Fprintf(stderr, "reploy app error: %v\n", err)
-		return 1
+	if options.DeployedOnly {
+		options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
+	} else {
+		options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy app error: %v\n", err)
+			return 1
+		}
 	}
 	if err := dockerdeploy.AppCommand(dockerdeploy.AppCommandOptions{
 		Dir:                    options.Dir,
 		CommandArgs:            options.CommandArgs,
+		DeployedOnly:           options.DeployedOnly,
 		Stdout:                 stdout,
 		Stderr:                 stderr,
 		DockerPreflightTimeout: globalOptions.DockerTimeout,
@@ -478,40 +504,60 @@ func runDockerAppSummary(args []string, stdout io.Writer, stderr io.Writer) int 
 
 func runDockerAppSummaryForOptions(options dockerAppSummaryOptions, stdout io.Writer, stderr io.Writer) int {
 	var err error
-	options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+	if options.DeployedOnly {
+		options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
+	} else {
+		options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy app error: %v\n", err)
+			return 1
+		}
+	}
+	if options.Format != "json" {
+		stdout, stderr, err = dockerdeploy.DeploymentOutputWriters(options.Dir, stdout, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy app error: %v\n", err)
+			return 1
+		}
+	}
+	result, err := dockerdeploy.AppCommandList(dockerdeploy.AppCommandListOptions{Dir: options.Dir, DeployedOnly: options.DeployedOnly})
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy app error: %v\n", err)
 		return 1
 	}
-	stdout, stderr, err = dockerdeploy.DeploymentOutputWriters(options.Dir, stdout, stderr)
-	if err != nil {
-		fmt.Fprintf(stderr, "reploy app error: %v\n", err)
-		return 1
-	}
-	result, err := dockerdeploy.AppCommandList(dockerdeploy.AppCommandListOptions{Dir: options.Dir})
-	if err != nil {
-		fmt.Fprintf(stderr, "reploy app error: %v\n", err)
-		return 1
+	if options.Format == "json" {
+		content, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy app error: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, string(content))
+		return 0
 	}
 	if result.AppID != "" {
 		fmt.Fprintf(stdout, "app: %s\n", result.AppID)
 	}
 	fmt.Fprintln(stdout, "app subcommands:")
 	for _, command := range result.Commands {
-		fmt.Fprintf(stdout, "  %s\n", command)
+		fmt.Fprintf(stdout, "  %s\n", strings.Join(command.Trigger, " "))
 	}
 	return 0
 }
 
 type dockerAppOptions struct {
-	Dir         string
-	DirExplicit bool
-	CommandArgs []string
+	Dir          string
+	DirExplicit  bool
+	Commands     bool
+	DeployedOnly bool
+	Format       string
+	CommandArgs  []string
 }
 
 type dockerAppSummaryOptions struct {
-	Dir         string
-	DirExplicit bool
+	Dir          string
+	DirExplicit  bool
+	DeployedOnly bool
+	Format       string
 }
 
 func parseDockerAppOptions(args []string) (dockerAppOptions, error) {
@@ -526,10 +572,24 @@ func parseDockerAppOptions(args []string) (dockerAppOptions, error) {
 			}
 			options.Dir = value
 			options.DirExplicit = true
+		case "--commands":
+			options.Commands = true
+		case "--deployed-only":
+			options.DeployedOnly = true
+		case "--format":
+			value, ok := optionValue(args, &index)
+			if !ok {
+				return dockerAppOptions{}, fmt.Errorf("%s requires a value", arg)
+			}
+			options.Format = value
 		default:
 			if strings.HasPrefix(arg, "--dir=") {
 				options.Dir = strings.TrimPrefix(arg, "--dir=")
 				options.DirExplicit = true
+				continue
+			}
+			if strings.HasPrefix(arg, "--format=") {
+				options.Format = strings.TrimPrefix(arg, "--format=")
 				continue
 			}
 			options.CommandArgs = append(options.CommandArgs, arg)
@@ -537,6 +597,9 @@ func parseDockerAppOptions(args []string) (dockerAppOptions, error) {
 	}
 	if options.Dir == "" {
 		return dockerAppOptions{}, fmt.Errorf("--dir must not be empty")
+	}
+	if options.Format != "" && options.Format != "json" {
+		return dockerAppOptions{}, fmt.Errorf("unsupported --format: %s", options.Format)
 	}
 	return options, nil
 }
@@ -1203,6 +1266,8 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer, globalO
 					stopSpinner, progress, logOutput = startProgressSpinnerWithLogs(stderr, label)
 					installStdout = logOutput
 				}
+			} else {
+				installStdout = deploymentStdoutOrFallback(options.Dir, stdout)
 			}
 		}
 		if err == nil {

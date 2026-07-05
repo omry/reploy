@@ -130,7 +130,12 @@ func Init(options InitOptions) ([]UpdateResult, error) {
 	if err := writeLocal(RequirementsFileName, ensureTrailingNewline(requirements), 0o644); err != nil {
 		return nil, err
 	}
-	if err := writeState(options.Dir, pack, deploy.BundleState{Roots: bundleRoots}); err != nil {
+	runtimeState, err := writeEmbeddedRuntime(options.Dir, &manifest)
+	if err != nil {
+		return nil, err
+	}
+	results = append(results, UpdateResult{Path: filepath.Join(options.Dir, runtimeState.Path), Status: deploy.UpdateStatusUpdated, Ownership: "runtime", Reason: "embedded Reploy runtime for generated control scripts"})
+	if err := writeState(options.Dir, pack, deploy.BundleState{Roots: bundleRoots}, &runtimeState); err != nil {
 		return nil, err
 	}
 	results = append(results, UpdateResult{Path: filepath.Join(options.Dir, StateFileName), Status: deploy.UpdateStatusUpdated, Ownership: "state", Reason: "recorded resolved deployment state"})
@@ -153,8 +158,8 @@ func Init(options InitOptions) ([]UpdateResult, error) {
 	return results, nil
 }
 
-func writeState(dir string, pack deploy.AppPack, bundle deploy.BundleState) error {
-	content, err := stateContent(pack, bundle)
+func writeState(dir string, pack deploy.AppPack, bundle deploy.BundleState, runtimeState *deploy.RuntimeState) error {
+	content, err := stateContent(pack, bundle, runtimeState)
 	if err != nil {
 		return err
 	}
@@ -166,7 +171,11 @@ func writeState(dir string, pack deploy.AppPack, bundle deploy.BundleState) erro
 }
 
 func writeStateIfChanged(dir string, pack deploy.AppPack, bundle deploy.BundleState) (deploy.UpdateStatus, error) {
-	content, err := stateContent(pack, bundle)
+	runtimeState, err := embeddedRuntimeStateForDir(dir)
+	if err != nil {
+		return "", err
+	}
+	content, err := stateContent(pack, bundle, runtimeState)
 	if err != nil {
 		return "", err
 	}
@@ -181,7 +190,7 @@ func writeUpdatedStateIfChanged(dir string, pack deploy.AppPack, bundle deploy.B
 	return deploy.WriteFileIfChanged(filepath.Join(dir, StateFileName), content, 0o644)
 }
 
-func stateContent(pack deploy.AppPack, bundle deploy.BundleState) ([]byte, error) {
+func stateContent(pack deploy.AppPack, bundle deploy.BundleState, runtimeState *deploy.RuntimeState) ([]byte, error) {
 	state := deploy.DeploymentState{
 		SchemaVersion:         1,
 		ToolVersion:           deploy.ToolVersion,
@@ -191,6 +200,7 @@ func stateContent(pack deploy.AppPack, bundle deploy.BundleState) ([]byte, error
 		Blueprint:             pack.Ref,
 		RequestedBlueprintRef: pack.RequestedRef.Raw,
 		ResolvedArtifact:      pack.ResolvedArtifact,
+		Runtime:               runtimeState,
 		Bundle:                bundle,
 	}
 	return marshalState(state)
@@ -206,6 +216,7 @@ func updatedStateContent(pack deploy.AppPack, bundle deploy.BundleState, existin
 		Blueprint:             pack.Ref,
 		RequestedBlueprintRef: pack.RequestedRef.Raw,
 		ResolvedArtifact:      pack.ResolvedArtifact,
+		Runtime:               existing.Runtime,
 		Bundle:                bundle,
 	}
 	if existing.Phase != "" {

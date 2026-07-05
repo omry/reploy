@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/omry/reploy/internal/deploy"
@@ -62,7 +63,26 @@ func Runtime(options RuntimeOptions) error {
 		commandStdout = nil
 		commandStderr = nil
 	}
-	return runRuntimeCommand(spec, RunOptions{Stdout: commandStdout, Stderr: commandStderr, DockerPreflightTimeout: options.DockerPreflightTimeout})
+	err = runRuntimeCommand(spec, RunOptions{Stdout: commandStdout, Stderr: commandStderr, DockerPreflightTimeout: options.DockerPreflightTimeout})
+	if err != nil && options.Action == "up" && isStaleDockerNetworkError(err) {
+		if stderr != nil {
+			fmt.Fprintf(stderr, "%v\n", err)
+			fmt.Fprintln(stderr, "detected stale Docker network state; running down --remove-orphans and retrying up")
+		}
+		downSpec, downErr := RuntimeCommand(options.Dir, "down")
+		if downErr != nil {
+			return downErr
+		}
+		if downErr := runRuntimeCommand(downSpec, RunOptions{DockerPreflightTimeout: options.DockerPreflightTimeout}); downErr != nil {
+			return fmt.Errorf("recover stale Docker network state: %w", downErr)
+		}
+		return runRuntimeCommand(spec, RunOptions{Stdout: commandStdout, Stderr: commandStderr, DockerPreflightTimeout: options.DockerPreflightTimeout})
+	}
+	return err
+}
+
+func isStaleDockerNetworkError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "network ") && strings.Contains(err.Error(), " not found")
 }
 
 func runtimeActionNeedsBundle(action string) bool {

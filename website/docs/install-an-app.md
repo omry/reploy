@@ -65,6 +65,10 @@ The staging directory also contains an app-named control script, such as
 ./reploy-staging/examplectl config check --live
 ```
 
+For app-specific commands, the control script delegates to the Reploy runtime
+embedded in the deployment. This keeps the control script small while preserving
+the same command validation and Docker behavior as `reploy app`.
+
 Use `--dir` when you want a different staging directory for this app instance.
 
 ## 4. Start and Test Staging
@@ -133,6 +137,9 @@ inside the target directory, such as `/opt/example/examplectl`:
 /opt/example/examplectl logs
 /opt/example/examplectl restart
 ```
+
+Only commands marked as deployed commands in the blueprint are exposed through
+the installed control script.
 
 ## 6. Uninstall
 

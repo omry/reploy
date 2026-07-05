@@ -255,7 +255,6 @@ docker:
   default_command: serve
   command_defaults:
     app_command: true
-    deployed_command: true
     container:
       argv_prefix: [example-server, --config-dir, "${REPLOY_CONFIG_CONTAINER_DIR}"]
   commands:
@@ -263,12 +262,12 @@ docker:
       container:
         argv_suffix: [serve]
     config_check:
+      deployed_command: true
       forward_flags: [--live]
       container:
         argv_suffix: [config, check]
     external_status:
       trigger: [status, external]
-      deployed_command: false
       container:
         argv: [example-status-tool, inspect]
 ```
@@ -279,10 +278,15 @@ it from the command key by splitting underscores, so `config_check` becomes
 internal unless it declares an explicit trigger.
 
 Use `command_defaults` for repeated command settings. `app_command` exposes a
-command through `reploy app`; `deployed_command` also exposes it through the
-installed app control script. Individual commands can override these defaults.
-Set `deployed_command: true` only for app commands that are safe to expose
-there, such as live validation.
+command through `reploy app`. Set `deployed_command: true` on individual app
+commands that are safe to expose through the installed app control script, such
+as live validation.
+
+Tools can inspect the deployed app-command surface with:
+
+```bash
+reploy app --commands --deployed-only --format json --dir DIR
+```
 
 For container arguments, `argv_prefix` plus `argv_suffix` produces the final
 command. A command-level `container.argv` is a full override and does not use

@@ -730,7 +730,7 @@ func installCopyPreserves(relativePath string, targetPath string, preservePaths 
 
 func installCopySkips(relativePath string, controlScript string) bool {
 	slashPath := filepath.ToSlash(relativePath)
-	return slashPath == "reploy" || slashPath == RuntimeDirName || slashPath == ToolBinaryFileName || (controlScript != "" && slashPath == filepath.ToSlash(controlScript))
+	return slashPath == "reploy" || slashPath == RuntimeDirName || slashPath == ToolBinaryFileName || slashPath == embeddedRuntimeFileName() || (controlScript != "" && slashPath == filepath.ToSlash(controlScript))
 }
 
 func copyInstallFile(sourcePath string, targetPath string, mode os.FileMode) error {
@@ -981,6 +981,11 @@ func writeInstalledState(plan installPlan) error {
 	if state.AppID == "" {
 		state.AppID = plan.AppID
 	}
+	runtimeState, err := embeddedRuntimeStateForDir(plan.TargetDir)
+	if err != nil {
+		return err
+	}
+	state.Runtime = runtimeState
 	state.Install = &deploy.InstallState{
 		TargetDir:      plan.TargetDir,
 		Service:        plan.Service,
@@ -1345,6 +1350,10 @@ func prepareInstalledDeployment(plan installPlan) error {
 	installProgress(plan.Progress, "writing installed control scripts")
 	if err := writeInstalledControlScripts(plan); err != nil {
 		return fmt.Errorf("write installed control script: %w", err)
+	}
+	installProgress(plan.Progress, "writing embedded Reploy runtime")
+	if _, err := writeInstalledEmbeddedRuntime(plan); err != nil {
+		return fmt.Errorf("write embedded Reploy runtime: %w", err)
 	}
 	installProgress(plan.Progress, "preparing installed runtime directory")
 	runtimeDir := filepath.Join(plan.TargetDir, RuntimeDirName)

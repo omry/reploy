@@ -92,28 +92,25 @@ func TestInitWritesDeploymentDirectory(t *testing.T) {
 	if !strings.Contains(manifest, `"democtl"`) {
 		t.Fatalf("manifest did not track staging control script:\n%s", manifest)
 	}
-	if strings.Contains(manifest, `"`+ToolBinaryFileName+`"`) {
-		t.Fatalf("manifest should not track a vendored reploy binary:\n%s", manifest)
+	if !strings.Contains(manifest, `"`+embeddedRuntimeFileName()+`"`) || !strings.Contains(manifest, `"kind": "runtime"`) {
+		t.Fatalf("manifest should track embedded runtime:\n%s", manifest)
 	}
 	if strings.Contains(manifest, `".env"`) {
 		t.Fatalf("app env file should be operator-owned local state:\n%s", manifest)
 	}
 	helper := readFile(t, filepath.Join(deployDir, "democtl"))
 	for _, want := range []string{
-		`docker compose`,
-		`run_compose_up`,
-		`run_app_command()`,
-		`REPLOY_APP_COMMAND_PREFIX=democtl`,
+		`reploy_bin="$target_dir"/.reploy/bin/reploy`,
+		`exec "$reploy_bin" _control --dir "$target_dir" --script-name "$control_script" "$@"`,
 	} {
 		if !strings.Contains(helper, want) {
 			t.Fatalf("staging control script missing %q:\n%s", want, helper)
 		}
 	}
-	if strings.Contains(helper, `command -v reploy`) || strings.Contains(helper, `exec reploy`) {
-		t.Fatalf("staging control script should not invoke reploy:\n%s", helper)
-	}
-	if strings.Contains(helper, `"$reploy_bin" docker`) || strings.Contains(helper, `if [ "${1:-}" = "docker" ]`) {
-		t.Fatalf("helper still accepts the old docker command prefix:\n%s", helper)
+	for _, forbidden := range []string{`docker compose`, `run_app_command()`, `REPLOY_APP_COMMAND_PREFIX="$control_script"`} {
+		if strings.Contains(helper, forbidden) {
+			t.Fatalf("staging control script should delegate %q to embedded Reploy:\n%s", forbidden, helper)
+		}
 	}
 	state := readFile(t, filepath.Join(deployDir, StateFileName))
 	if !strings.Contains(state, `"target": "docker"`) || !strings.Contains(state, `"phase": "staged"`) {
@@ -474,20 +471,13 @@ func TestStagingControlScriptPrefixesHealthOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fakeBin := filepath.Join(t.TempDir(), "bin")
-	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	curlArgs := filepath.Join(t.TempDir(), "curl.args")
-	fakeCurl := filepath.Join(fakeBin, "curl")
-	if err := os.WriteFile(fakeCurl, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CURL_ARGS_FILE\"\nprintf 'health ok\\n'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeFakeEmbeddedReploy(t, deployDir)
+	reployArgs := filepath.Join(t.TempDir(), "reploy.args")
 
 	command := exec.Command(filepath.Join(deployDir, "democtl"), "health")
 	command.Env = append(os.Environ(),
-		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"CURL_ARGS_FILE="+curlArgs,
+		"REPLOY_ARGS_FILE="+reployArgs,
+		"REPLOY_FAKE_OUTPUT=[STAGING : demo] health ok\n",
 		"REPLOY_COLOR=never",
 	)
 	output, err := command.CombinedOutput()
@@ -497,10 +487,10 @@ func TestStagingControlScriptPrefixesHealthOutput(t *testing.T) {
 	if string(output) != "[STAGING : demo] health ok\n" {
 		t.Fatalf("health output = %q", output)
 	}
-	args := readFile(t, curlArgs)
-	want := "-fsS\n--insecure\nhttps://127.0.0.1:18075/_health_\n"
+	args := readFile(t, reployArgs)
+	want := "_control\n--dir\n" + deployDir + "\n--script-name\ndemoctl\nhealth\n"
 	if args != want {
-		t.Fatalf("curl args = %q, want %q", args, want)
+		t.Fatalf("embedded reploy args = %q, want %q", args, want)
 	}
 }
 
@@ -516,18 +506,13 @@ func TestStagingControlScriptPrefixesOutputWithoutTrailingNewline(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	fakeBin := filepath.Join(t.TempDir(), "bin")
-	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	fakeDocker := filepath.Join(fakeBin, "docker")
-	if err := os.WriteFile(fakeDocker, []byte("#!/bin/sh\nprintf partial"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeFakeEmbeddedReploy(t, deployDir)
+	reployArgs := filepath.Join(t.TempDir(), "reploy.args")
 
 	command := exec.Command(filepath.Join(deployDir, "democtl"), "status")
 	command.Env = append(os.Environ(),
-		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"REPLOY_ARGS_FILE="+reployArgs,
+		"REPLOY_FAKE_OUTPUT=[STAGING : demo] partial\n",
 		"REPLOY_COLOR=never",
 	)
 	output, err := command.CombinedOutput()
@@ -536,6 +521,11 @@ func TestStagingControlScriptPrefixesOutputWithoutTrailingNewline(t *testing.T) 
 	}
 	if string(output) != "[STAGING : demo] partial\n" {
 		t.Fatalf("status output = %q", output)
+	}
+	args := readFile(t, reployArgs)
+	want := "_control\n--dir\n" + deployDir + "\n--script-name\ndemoctl\nstatus\n"
+	if args != want {
+		t.Fatalf("embedded reploy args = %q, want %q", args, want)
 	}
 }
 
@@ -552,6 +542,7 @@ func TestStagingControlScriptDoesNotEvaluateConfigDirAsShell(t *testing.T) {
 	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
 		t.Fatal(err)
 	}
+	writeFakeEmbeddedReploy(t, deployDir)
 
 	command := exec.Command(filepath.Join(deployDir, "democtl"), "--help")
 	output, err := command.CombinedOutput()
@@ -865,15 +856,15 @@ func TestInitRendersManagedFileMounts(t *testing.T) {
 	}
 	helper := readFile(t, filepath.Join(deployDir, "democtl"))
 	for _, want := range []string{
-		"REPLOY_CONFIG_CONTAINER_DIR=/conf",
-		"validate_managed_files",
-		"ensure_managed_files",
-		"managed path must be a file: $target_dir/",
-		"managed file is missing: $target_dir/",
-		".arbiter.env",
+		`exec "$reploy_bin" _control --dir "$target_dir" --script-name "$control_script" "$@"`,
 	} {
 		if !strings.Contains(helper, want) {
 			t.Fatalf("staging control script missing %q:\n%s", want, helper)
+		}
+	}
+	for _, forbidden := range []string{"validate_managed_files", "ensure_managed_files", "managed path must be a file: $target_dir/", "managed file is missing: $target_dir/"} {
+		if strings.Contains(helper, forbidden) {
+			t.Fatalf("staging control script should delegate managed path validation to embedded Reploy:\n%s", helper)
 		}
 	}
 }
@@ -1464,6 +1455,42 @@ func TestUpdateRejectsLocallyEditedGeneratedFileWithoutForce(t *testing.T) {
 	assertResultStatus(t, results, filepath.Join(deployDir, "democtl"), deploy.UpdateStatusUpdated)
 	if got := readFile(t, filepath.Join(deployDir, "democtl")); got == "local edit\n" {
 		t.Fatal("control script was not overwritten with force")
+	}
+}
+
+func TestUpdateRejectsLocallyEditedEmbeddedRuntimeWithoutForce(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	runtimePath := filepath.Join(deployDir, embeddedRuntimeFileName())
+	if err := os.WriteFile(runtimePath, []byte("local runtime edit\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Update(UpdateOptions{Dir: deployDir})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "refusing to overwrite locally modified generated files") || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := readFile(t, runtimePath); got != "local runtime edit\n" {
+		t.Fatalf("embedded runtime was not preserved: %q", got)
+	}
+
+	results, err := Update(UpdateOptions{Dir: deployDir, Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertResultStatus(t, results, runtimePath, deploy.UpdateStatusUpdated)
+	if got := readFile(t, runtimePath); got == "local runtime edit\n" {
+		t.Fatal("embedded runtime was not overwritten with force")
 	}
 }
 

@@ -89,6 +89,56 @@ func TestRuntimeUpAutomaticallyPreparesBundle(t *testing.T) {
 	}
 }
 
+func TestRuntimeUpRecoversStaleDockerNetwork(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: dir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	commands := []string{}
+	upCount := 0
+	restoreBundle := stubSuccessfulBundlePrepare(t, &commands)
+	defer restoreBundle()
+	restoreRuntime := stubRuntimeRunner(func(spec CommandSpec, options RunOptions) error {
+		action := spec.Args[len(spec.Args)-1]
+		if action == "-d" && len(spec.Args) >= 2 && spec.Args[len(spec.Args)-2] == "up" {
+			action = "up"
+		}
+		if action == "--remove-orphans" && len(spec.Args) >= 2 && spec.Args[len(spec.Args)-2] == "down" {
+			action = "down"
+		}
+		commands = append(commands, action)
+		if action == "up" {
+			upCount++
+			if upCount == 1 {
+				return fmt.Errorf("docker failed: exit status 1\ncommand output:\nnetwork b2f601ad24f6dbb403c8f25b418d314854c35d7fc33ac351355b45d12937cbb3 not found")
+			}
+		}
+		return nil
+	})
+	defer restoreRuntime()
+
+	var stderr bytes.Buffer
+	if err := Runtime(RuntimeOptions{Dir: dir, Action: "up", Stderr: &stderr}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"build", "check", "up", "down", "up"}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+	if !strings.Contains(stderr.String(), "network b2f601ad24f6dbb403c8f25b418d314854c35d7fc33ac351355b45d12937cbb3 not found") {
+		t.Fatalf("stderr missing original stale network error:\n%s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "[STAGING : demo] detected stale Docker network state; running down --remove-orphans and retrying up\n") {
+		t.Fatalf("stderr missing stale network recovery message:\n%s", stderr.String())
+	}
+}
+
 func TestRuntimeLifecycleOutputRequiresVerbose(t *testing.T) {
 	dir, _ := makeRuntimeDeployment(t)
 	var stdout bytes.Buffer

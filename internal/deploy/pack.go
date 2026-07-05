@@ -187,13 +187,14 @@ type DockerInstallSuccessVarConfig struct {
 }
 
 type DockerCommandConfig struct {
-	Name         string           `yaml:"-"`
-	Trigger      []string         `yaml:"trigger"`
-	AppCommand   bool             `yaml:"app_command"`
-	Deployed     bool             `yaml:"deployed_command"`
-	ForwardArgs  bool             `yaml:"forward_args"`
-	ForwardFlags []string         `yaml:"forward_flags"`
-	Container    AppCommandConfig `yaml:"container"`
+	Name             string           `yaml:"-"`
+	Trigger          []string         `yaml:"trigger"`
+	AppCommand       bool             `yaml:"app_command"`
+	Deployed         bool             `yaml:"deployed_command"`
+	DeployedExplicit bool             `yaml:"-"`
+	ForwardArgs      bool             `yaml:"forward_args"`
+	ForwardFlags     []string         `yaml:"forward_flags"`
+	Container        AppCommandConfig `yaml:"container"`
 }
 
 type rawDockerCommandConfig struct {
@@ -1307,12 +1308,13 @@ func parseDockerCommands(commands map[string]rawDockerCommandConfig, defaults ra
 
 func normalizeDockerCommand(name string, raw rawDockerCommandConfig, defaults rawDockerCommandDefaultsConfig, defaultCommand string) DockerCommandConfig {
 	command := DockerCommandConfig{
-		Name:         name,
-		Trigger:      raw.Trigger,
-		AppCommand:   boolDefault(raw.AppCommand, defaults.AppCommand),
-		Deployed:     boolDefault(raw.Deployed, defaults.Deployed),
-		ForwardArgs:  raw.ForwardArgs,
-		ForwardFlags: raw.ForwardFlags,
+		Name:             name,
+		Trigger:          raw.Trigger,
+		AppCommand:       boolDefault(raw.AppCommand, defaults.AppCommand),
+		Deployed:         boolDefault(raw.Deployed, defaults.Deployed),
+		DeployedExplicit: raw.Deployed != nil && *raw.Deployed,
+		ForwardArgs:      raw.ForwardArgs,
+		ForwardFlags:     raw.ForwardFlags,
 		Container: AppCommandConfig{
 			Argv: effectiveDockerCommandArgv(raw.Container, defaults.Container),
 		},
@@ -1406,6 +1408,16 @@ func (docker DockerPackConfig) MatchAppCommand(args []string) (DockerCommandConf
 	return docker.matchCommand(args, true)
 }
 
+func (docker DockerPackConfig) MatchDeployedCommand(args []string) (DockerCommandConfig, []string, error) {
+	var filtered DockerPackConfig
+	for _, command := range docker.Commands {
+		if command.DeployedExplicit {
+			filtered.Commands = append(filtered.Commands, command)
+		}
+	}
+	return filtered.matchCommand(args, true)
+}
+
 func (docker DockerPackConfig) AppCommands() []DockerCommandConfig {
 	commands := []DockerCommandConfig{}
 	for _, command := range docker.Commands {
@@ -1422,7 +1434,7 @@ func (docker DockerPackConfig) AppCommands() []DockerCommandConfig {
 func (docker DockerPackConfig) DeployedCommands() []DockerCommandConfig {
 	commands := []DockerCommandConfig{}
 	for _, command := range docker.Commands {
-		if command.Deployed && len(command.Trigger) > 0 {
+		if command.DeployedExplicit && len(command.Trigger) > 0 {
 			commands = append(commands, command)
 		}
 	}

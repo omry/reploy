@@ -86,6 +86,7 @@ func Update(options UpdateOptions) ([]UpdateResult, error) {
 	for _, generated := range generatedUpdates {
 		currentGenerated[filepath.ToSlash(generated.RelativePath)] = true
 	}
+	currentGenerated[filepath.ToSlash(embeddedRuntimeFileName())] = true
 	if !options.Force {
 		conflicts, err := locallyModifiedGeneratedFiles(options.Dir, generatedUpdates, manifest)
 		if err != nil {
@@ -115,6 +116,12 @@ func Update(options UpdateOptions) ([]UpdateResult, error) {
 			return nil, err
 		}
 	}
+	runtimeState, runtimeStatus, err := updateEmbeddedRuntime(options.Dir, &manifest, options.Force)
+	if err != nil {
+		return nil, err
+	}
+	state.Runtime = &runtimeState
+	results = append(results, UpdateResult{Path: filepath.Join(options.Dir, runtimeState.Path), Status: runtimeStatus, Ownership: "runtime", Reason: "embedded Reploy runtime for generated control scripts"})
 	if err := pruneRemovedGeneratedFiles(options.Dir, currentGenerated, &manifest, options.Force, &results); err != nil {
 		return nil, err
 	}
@@ -280,6 +287,10 @@ func loadState(dir string) (deploy.DeploymentState, error) {
 		return deploy.DeploymentState{}, fmt.Errorf("parse deployment state: %w", err)
 	}
 	return state, nil
+}
+
+func LoadState(dir string) (deploy.DeploymentState, error) {
+	return loadState(dir)
 }
 
 func RequireStagingDeployment(dir string) error {

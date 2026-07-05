@@ -1,0 +1,2 @@
+kind: Fixed
+body: Limit generated control-script app commands to commands explicitly marked as deployed.

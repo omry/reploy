@@ -318,8 +318,70 @@ func TestAppCommandListShowsPackDeclaredAppCommands(t *testing.T) {
 	if result.AppID != "demo" {
 		t.Fatalf("app id = %q", result.AppID)
 	}
-	if strings.Join(result.Commands, "\n") != "bootstrap plugin\nconfig check" {
+	triggers := []string{}
+	for _, command := range result.Commands {
+		triggers = append(triggers, strings.Join(command.Trigger, " "))
+	}
+	if strings.Join(triggers, "\n") != "bootstrap plugin\nconfig check" {
 		t.Fatalf("commands = %#v", result.Commands)
+	}
+}
+
+func TestAppCommandListDeployedOnlyFiltersPackCommands(t *testing.T) {
+	deployDir := makeMixedDeployedAppCommandDeployment(t)
+	result, err := AppCommandList(AppCommandListOptions{Dir: deployDir, DeployedOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AppID != "demo" {
+		t.Fatalf("app id = %q", result.AppID)
+	}
+	if len(result.Commands) != 1 {
+		t.Fatalf("commands = %#v, want one deployed command", result.Commands)
+	}
+	if got := strings.Join(result.Commands[0].Trigger, " "); got != "config check" {
+		t.Fatalf("deployed command trigger = %q, want config check", got)
+	}
+}
+
+func TestAppCommandDeployedOnlyRejectsNonDeployedCommand(t *testing.T) {
+	deployDir := makeMixedDeployedAppCommandDeployment(t)
+	called := false
+	restore := stubAppCommandRunner(func(spec CommandSpec, options RunOptions) error {
+		called = true
+		return nil
+	})
+	defer restore()
+
+	err := AppCommand(AppCommandOptions{Dir: deployDir, CommandArgs: []string{"bootstrap", "plugin", "imap"}, DeployedOnly: true})
+	if err == nil {
+		t.Fatal("expected unknown deployed app command error")
+	}
+	if called {
+		t.Fatal("app command invoked Docker for non-deployed command")
+	}
+	if !strings.Contains(err.Error(), "no app command matches") {
+		t.Fatalf("error did not explain command miss: %v", err)
+	}
+}
+
+func TestAppCommandDeployedOnlyRunsDeployedCommand(t *testing.T) {
+	deployDir := makeMixedDeployedAppCommandDeployment(t)
+	var specs []CommandSpec
+	restore := stubAppCommandRunner(func(spec CommandSpec, options RunOptions) error {
+		specs = append(specs, spec)
+		return nil
+	})
+	defer restore()
+
+	if err := AppCommand(AppCommandOptions{Dir: deployDir, CommandArgs: []string{"config", "check", "--live"}, DeployedOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("ran %d commands, want one", len(specs))
+	}
+	if !containsInOrder(specs[0].Args, []string{"-e", "REPLOY_CONTAINER_COMMAND=config_check"}) {
+		t.Fatalf("deployed command did not select config_check: %#v", specs[0].Args)
 	}
 }
 
@@ -548,6 +610,27 @@ func makeAppCommandDeployment(t *testing.T) string {
 		testPackManifest(),
 		"    config_check:\n      trigger:\n        - config\n        - check\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n",
 		"    config_check:\n      trigger:\n        - config\n        - check\n      app_command: true\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n    bootstrap_plugin:\n      trigger:\n        - bootstrap\n        - plugin\n      app_command: true\n      forward_args: true\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - bootstrap\n          - plugin\n",
+		1,
+	)
+	packDir := makeTestPackWithManifest(t, manifest)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	markTestBundlePrepared(t, deployDir)
+	return deployDir
+}
+
+func makeMixedDeployedAppCommandDeployment(t *testing.T) string {
+	t.Helper()
+	manifest := strings.Replace(
+		testPackManifest(),
+		"    config_check:\n      trigger:\n        - config\n        - check\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n",
+		"    config_check:\n      trigger:\n        - config\n        - check\n      app_command: true\n      deployed_command: true\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n    bootstrap_plugin:\n      trigger:\n        - bootstrap\n        - plugin\n      app_command: true\n      forward_args: true\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - bootstrap\n          - plugin\n",
 		1,
 	)
 	packDir := makeTestPackWithManifest(t, manifest)

@@ -645,6 +645,145 @@ func TestAppShowsAppIDAndPackSubcommands(t *testing.T) {
 	}
 }
 
+func TestAppCommandsDeployedOnlyJSON(t *testing.T) {
+	manifest := strings.Replace(
+		cliTestPackManifest(),
+		"      app_command: true\n      forward_flags:\n        - --live\n",
+		"      app_command: true\n      deployed_command: true\n      forward_flags:\n        - --live\n",
+		1,
+	)
+	packDir := makeCLITestPackWithManifest(t, manifest)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("app", "--commands", "--deployed-only", "--format", "json", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("app --commands failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if strings.Contains(stdout, "[STAGING") {
+		t.Fatalf("json stdout should not be status-prefixed:\n%s", stdout)
+	}
+	var result dockerdeploy.AppCommandListResult
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+	if result.AppID != "demo" {
+		t.Fatalf("app id = %q, want demo", result.AppID)
+	}
+	if len(result.Commands) != 1 {
+		t.Fatalf("commands = %#v, want one deployed command", result.Commands)
+	}
+	if got := strings.Join(result.Commands[0].Trigger, " "); got != "config check" {
+		t.Fatalf("deployed trigger = %q, want config check", got)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestEmbeddedControlRunsDeployedAppCommandWithScriptPrefix(t *testing.T) {
+	manifest := strings.Replace(
+		cliTestPackManifest(),
+		"      app_command: true\n      forward_flags:\n        - --live\n",
+		"      app_command: true\n      deployed_command: true\n      forward_flags:\n        - --live\n",
+		1,
+	)
+	packDir := makeCLITestPackWithManifest(t, manifest)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	fakeBin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dockerArgs := filepath.Join(t.TempDir(), "docker.args")
+	fakeDocker := filepath.Join(fakeBin, "docker")
+	if err := os.WriteFile(fakeDocker, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$DOCKER_ARGS_FILE\"\nprintf 'docker output\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("DOCKER_ARGS_FILE", dockerArgs)
+	t.Setenv("REPLOY_COLOR", "never")
+
+	code, stdout, stderr = runCLI("_control", "--dir", deployDir, "--script-name", "democtl", "config", "check", "--live")
+	if code != 0 {
+		t.Fatalf("_control app command failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "[STAGING : demo] docker output\n") {
+		t.Fatalf("stdout missing deployment prefix:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	content, err := os.ReadFile(dockerArgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := string(content)
+	for _, want := range []string{
+		"run\n",
+		"--rm\n",
+		"--no-deps\n",
+		"REPLOY_CONTAINER_COMMAND=config_check\n",
+		"REPLOY_FORWARDED_ARGC=1\n",
+		"REPLOY_FORWARDED_ARG_0=--live\n",
+		"REPLOY_APP_COMMAND_PREFIX=democtl\n",
+		"app\n",
+	} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("docker args missing %q:\n%s", want, args)
+		}
+	}
+}
+
+func TestEmbeddedControlHealthRejectsUnexpectedArgs(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("_control", "--dir", deployDir, "--script-name", "democtl", "health", "extra")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "health: unexpected argument: extra") {
+		t.Fatalf("stderr missing unexpected argument error:\n%s", stderr)
+	}
+}
+
+func TestAppFormatRequiresCommands(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("app", "--format", "json", "--dir", deployDir)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "--format is only supported with --commands") {
+		t.Fatalf("stderr did not explain --format requirement:\n%s", stderr)
+	}
+}
+
 func TestAppUsesCurrentDeploymentDirByDefault(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
@@ -1476,6 +1615,29 @@ func TestStagedInstallSpinnerUsesDeploymentPrefix(t *testing.T) {
 	}
 	if strings.Contains(stderr, "installing from staging") {
 		t.Fatalf("stderr should not use generic staged install label:\n%s", stderr)
+	}
+}
+
+func TestStagedInstallDryRunUsesDeploymentPrefix(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	packDir := makeCLITestPack(t)
+	tempDir := t.TempDir()
+	deployDir := filepath.Join(tempDir, "deployment")
+	targetDir := filepath.Join(tempDir, "installed")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("install", "--dir", deployDir, "--to", targetDir, "--dry-run", "--no-start")
+	if code != 0 {
+		t.Fatalf("install dry-run failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "[STAGING : demo] would install deployment: "+deployDir) {
+		t.Fatalf("stdout missing deployment-prefixed dry-run plan:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "\nwould install deployment:") {
+		t.Fatalf("stdout contains unprefixed dry-run line:\n%s", stdout)
 	}
 }
 

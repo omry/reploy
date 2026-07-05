@@ -31,8 +31,15 @@ type DeploymentState struct {
 	Blueprint             PackRef               `json:"blueprint"`
 	RequestedBlueprintRef string                `json:"requested_blueprint_ref,omitempty"`
 	ResolvedArtifact      *ResolvedPackArtifact `json:"resolved_artifact,omitempty"`
+	Runtime               *RuntimeState         `json:"runtime,omitempty"`
 	Bundle                BundleState           `json:"bundle,omitempty"`
 	Install               *InstallState         `json:"install,omitempty"`
+}
+
+type RuntimeState struct {
+	Path        string `json:"path"`
+	ToolVersion string `json:"tool_version"`
+	SHA256      string `json:"sha256"`
 }
 
 type ResolvedPackArtifact struct {
