@@ -410,28 +410,26 @@ Doctor output should distinguish:
 
 Add validation layers:
 
-- cross-compile checks for `windows-amd64`
-- cross-compile checks for `windows-arm64`
-- Windows CI tests for non-Docker command behavior
-- GitHub Actions Windows CI matrix matching the host-check pattern used for
-  macOS: `windows-amd64` on `windows-2025` and `windows-arm64` on
+- explicit GitHub Actions target smoke coverage for all release targets:
+  `linux-amd64`, `linux-arm64`, `darwin-amd64`, `darwin-arm64`,
+  `windows-amd64`, and `windows-arm64`
+- Windows CI tests for non-Docker command behavior on `windows-2025` and
   `windows-11-arm`, running Go tests plus the CLI smoke with Docker optional.
-- documented manual Docker Desktop smoke tests for staging/runtime
-- real Windows smoke covering stage, bundle build/check, app command, up,
-  status, logs, test, and down from PowerShell
-- real Windows smoke covering Docker Desktop-backed install, reboot/login
-  expectation documentation, restart, status, logs, and uninstall
+- Windows integration in the shared Integration workflow, matching the macOS
+  flow: bundle build/check, app command, up, status, logs, test, down, and
+  Docker Desktop-backed persistent install/control/uninstall from PowerShell.
+- documented manual Docker Desktop smoke tests for staging/runtime as a backup
+  to machine-backed validation, not as a separate primary workflow.
 
 The Windows smoke should verify that generated artifacts clean up normally,
 that failed Docker Desktop checks fail quickly with useful messages, and that
 paths with spaces do not break generated Compose or runtime behavior.
 
-Until Windows CI or a real Windows validation host is available,
-implementation may continue using Linux automation, cross-compilation, and
-release artifact checks. Those checks do not satisfy the real Windows smoke
-requirements. Record the Windows staging, Docker Desktop runtime, and
-persistent-install smokes as deferred, and complete them before claiming
-release readiness.
+Until Windows CI or a real Windows validation host is green, implementation may
+continue using Linux automation, cross-compilation, and release artifact checks.
+Those checks do not satisfy the real Windows smoke requirements. Record the
+Windows staging, Docker Desktop runtime, and persistent-install smokes as
+deferred, and complete them before claiming release readiness.
 
 ## Suggested Milestones
 
@@ -443,16 +441,17 @@ release readiness.
    Build Windows binaries and update install/release docs.
 
 3. **Validate Windows staging without Docker.**
-   Run CLI-only staging, update, and info checks on Windows.
+   Run CLI-only staging, update, and info checks on Windows through the normal
+   Windows host-check job in CI.
 
 4. **Validate Docker Desktop staging runtime.**
    Run bundle, app, runtime, and test smoke checks with Docker Desktop using
-   Linux containers.
+   Linux containers through the shared Integration workflow.
 
 5. **Validate Docker-managed permanent install.**
    Smoke-test normal install, restart/status/logs, and uninstall against
-   Docker Desktop, including the Docker Desktop security warning and
-   reboot-resistance validation path.
+   Docker Desktop through the shared Integration workflow, including the Docker
+   Desktop reboot-resistance validation path.
 
 6. **Publish Windows docs.**
    Document requirements, support matrix, known limitations, and
@@ -625,17 +624,23 @@ new target triples cleanly:
 
 #### Real Windows Smoke Checklists
 
-Create runnable smoke checklists with expected output for each manual or
-machine-backed validation pass:
+Create runnable smoke checklists with expected output for each validation pass:
 
-- CLI-only staging smoke: `stage`, `stage --update`, `info`, and unsupported
-  Linux-only command failures from PowerShell
-- Docker Desktop staging smoke: `bundle build`, `bundle check`, app command,
-  `up`, `status`, `logs`, `test`, and `down`
+- CLI-only staging smoke: run the normal target smoke matrix in CI. This builds
+  and exercises `windows-amd64` on `windows-2025` and `windows-arm64` on
+  `windows-11-arm`, runs Go tests, and runs `tools/e2e_smoke` through
+  `nox -s cli-smoke` with Docker optional. The covered command set includes
+  `stage`, `stage --update`, `info`, bundle metadata/planning commands, and
+  generated staging file validation from PowerShell.
+- Docker Desktop staging smoke: run the shared Integration workflow on Windows.
+  It covers `bundle build`, `bundle check`, app command, `up`, `status`,
+  `logs`, `test`, and `down`.
 - Docker Desktop failure smoke: Docker installed but not running, daemon
   timeout, Linux-container mode missing, bind mount failure, and port conflict
-- persistent install smoke: `install`, warning output, restart/status/logs,
-  reboot/login persistence expectation, and `uninstall`
+- persistent install smoke: run the shared Integration workflow on Windows with
+  `--persistent-install`. It covers `install`, control script
+  status/logs/live check/down, reboot/login persistence expectation, and
+  `uninstall`
 - path smoke: project directory with spaces, Windows drive-letter path, and any
   supported UNC or symlink/junction behavior
 - PowerShell control smoke: `<app-id>ctl.ps1` invocation, execution-policy

@@ -5,17 +5,25 @@ on:
     inputs:
       macos_runner:
         description: GitHub-hosted macOS runner for Docker integration.
-        type: choice
+        type: string
         default: macos-15-intel
+      windows_runner:
+        description: GitHub-hosted Windows runner for Docker integration.
+        type: choice
+        default: windows-2025
         options:
-          - macos-15-intel
-          - macos-15
+          - windows-2025
+          - windows-latest
   workflow_call:
     inputs:
       macos_runner:
         description: GitHub-hosted macOS runner for Docker integration.
         type: string
         default: macos-15-intel
+      windows_runner:
+        description: GitHub-hosted Windows runner for Docker integration.
+        type: string
+        default: windows-2025
 
 concurrency:
   group: integration-${{ github.ref }}
@@ -33,10 +41,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Linux
+          - name: Linux amd64
             runner: ubuntu-latest
-          - name: macOS
+            persistent_install: false
+          - name: Linux arm64
+            runner: ubuntu-24.04-arm
+            persistent_install: false
+          - name: macOS amd64
             runner: ${{ inputs.macos_runner || 'macos-15-intel' }}
+            persistent_install: true
+          - name: Windows amd64
+            runner: ${{ inputs.windows_runner || 'windows-2025' }}
+            persistent_install: true
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -76,10 +92,25 @@ jobs:
           docker compose version
           docker run --rm -v "$PWD:/workspace:ro" alpine:3.22 test -f /workspace/go.mod
 
+      - name: Inspect Docker runtime on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          docker version
+          docker info
+          docker compose version
+
       - name: Run CLI runtime integration
+        if: ${{ matrix.persistent_install == false }}
         env:
           NO_UPDATE_NOTIFIER: "1"
         run: nox -s cli-integration
+
+      - name: Run CLI runtime and persistent install integration
+        if: ${{ matrix.persistent_install == true }}
+        env:
+          NO_UPDATE_NOTIFIER: "1"
+        run: nox -s cli-integration -- --persistent-install
 
       - name: Dump macOS Docker runtime logs
         if: failure() && runner.os == 'macOS'

@@ -1,2 +1,2 @@
 kind: Added
-body: Release macOS support for Docker-backed staging and Docker-managed persistent installs, plus Windows release artifacts, installer, smoke workflow, and Docker Desktop-backed staging and persistent-install support.
+body: Release macOS support for Docker-backed staging and Docker-managed persistent installs, plus Windows release artifacts, installer, and normalized six-target CI plus Docker Desktop integration coverage for staging and persistent-install support.

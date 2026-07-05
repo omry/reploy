@@ -34,7 +34,7 @@ PY_COMPILE_FILES = (
 def _go_test(session: nox.Session) -> None:
     default_go_cache = Path(tempfile.gettempdir()) / "reploy-go-cache"
     env = {"GOCACHE": os.environ.get("GOCACHE", str(default_go_cache))}
-    session.run("go", "test", "./...", env=env, external=True)
+    session.run("go", "test", "-timeout", "2m", "./...", env=env, external=True)
 
 
 def _current_target_label() -> str:

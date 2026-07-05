@@ -44,6 +44,11 @@ def parse_args() -> argparse.Namespace:
         help="Include the live staging runtime lifecycle: up/status/logs/test/down.",
     )
     parser.add_argument(
+        "--persistent-install",
+        action="store_true",
+        help="Include Docker-managed persistent install/control/uninstall checks.",
+    )
+    parser.add_argument(
         "--docker-mode",
         choices=("required", "optional", "skip"),
         default="required",
@@ -58,6 +63,13 @@ def parse_args() -> argparse.Namespace:
         parser.error("--runtime cannot be combined with --plan-only")
     if args.runtime and args.docker_mode != "required":
         parser.error("--runtime requires Docker and cannot be combined with --no-docker or optional Docker mode")
+    if args.persistent_install and args.plan_only:
+        parser.error("--persistent-install cannot be combined with --plan-only")
+    if args.persistent_install and args.docker_mode != "required":
+        parser.error(
+            "--persistent-install requires Docker and cannot be combined "
+            "with --no-docker or optional Docker mode"
+        )
     return args
 
 
@@ -86,12 +98,13 @@ def require_contains(output: str, needle: str, context: str) -> None:
         raise SystemExit(f"{context} did not contain {needle!r}\n--- output ---\n{output}")
 
 
-ALWAYS_NOT_COVERED_CHECKS = (
-    "real persistent install/start/uninstall (install is dry-run only)",
-)
-
-
-def mode_skipped_checks(*, plan_only: bool, docker_enabled: bool, runtime: bool) -> list[str]:
+def mode_skipped_checks(
+    *,
+    plan_only: bool,
+    docker_enabled: bool,
+    runtime: bool,
+    persistent_install: bool,
+) -> list[str]:
     if not docker_enabled:
         return [
             "Docker-backed bundle build/check/list-all (covered by bundle build --dry-run)",
@@ -99,6 +112,7 @@ def mode_skipped_checks(*, plan_only: bool, docker_enabled: bool, runtime: bool)
             "live app command execution",
             "preinstall doctor checks",
             "install dry-run checks",
+            "real Docker-managed persistent install/start/uninstall",
             "bundle clean verification",
             "installed service listing",
         ]
@@ -117,31 +131,52 @@ def mode_skipped_checks(*, plan_only: bool, docker_enabled: bool, runtime: bool)
                 "live app command execution",
             ]
         )
+    if persistent_install:
+        if not docker_managed_install_host():
+            skipped.append(
+                "real Docker-managed persistent install/start/uninstall "
+                "(host uses Linux/systemd install semantics)"
+            )
+    else:
+        skipped.append("real Docker-managed persistent install/start/uninstall")
     return skipped
 
 
-def print_smoke_mode(*, plan_only: bool, docker_enabled: bool, runtime: bool, docker_skip_reason: str) -> None:
+def print_smoke_mode(
+    *,
+    plan_only: bool,
+    docker_enabled: bool,
+    runtime: bool,
+    persistent_install: bool,
+    docker_skip_reason: str,
+) -> None:
     if not docker_enabled:
         mode = "no-docker"
     elif plan_only:
         mode = "plan-only"
+    elif runtime and persistent_install:
+        mode = "runtime+persistent-install"
     elif runtime:
         mode = "runtime"
+    elif persistent_install:
+        mode = "persistent-install"
     else:
         mode = "bundle"
     print(f"smoke mode: {mode}", flush=True)
     if docker_skip_reason:
         print(f"Docker-backed smoke phases skipped: {docker_skip_reason}", flush=True)
-    skipped = mode_skipped_checks(plan_only=plan_only, docker_enabled=docker_enabled, runtime=runtime)
+    skipped = mode_skipped_checks(
+        plan_only=plan_only,
+        docker_enabled=docker_enabled,
+        runtime=runtime,
+        persistent_install=persistent_install,
+    )
     if not skipped:
         print("mode-skipped smoke checks: none", flush=True)
     else:
         print("mode-skipped smoke checks:", flush=True)
         for check in skipped:
             print(f"  - {check}", flush=True)
-    print("not covered by cli-smoke:", flush=True)
-    for check in ALWAYS_NOT_COVERED_CHECKS:
-        print(f"  - {check}", flush=True)
 
 
 def docker_available(env: dict[str, str], cwd: Path) -> tuple[bool, str]:
@@ -172,6 +207,25 @@ def free_local_port() -> str:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind(("127.0.0.1", 0))
         return str(listener.getsockname()[1])
+
+
+def docker_managed_install_host() -> bool:
+    return sys.platform.startswith(("darwin", "win32", "cygwin", "msys"))
+
+
+def control_script_command(install_dir: Path, *args: str) -> list[str]:
+    if sys.platform.startswith(("win32", "cygwin", "msys")):
+        script = install_dir / "smoke-appctl.ps1"
+        return [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            *args,
+        ]
+    return [str(install_dir / "smoke-appctl"), *args]
 
 
 def update_env_file(path: Path, updates: dict[str, str]) -> None:
@@ -253,12 +307,65 @@ def run_runtime_smoke(reploy: Path, deploy_dir: Path, workdir: Path, env: dict[s
                 print(f"warning: runtime cleanup failed after earlier error: {cleanup_error}", file=sys.stderr)
 
 
+def run_persistent_install_smoke(
+    reploy: Path,
+    deploy_dir: Path,
+    install_dir: Path,
+    workdir: Path,
+    env: dict[str, str],
+) -> None:
+    if not docker_managed_install_host():
+        print("persistent install smoke skipped: host uses Linux/systemd install semantics", flush=True)
+        return
+
+    install_port = free_local_port()
+    installed = False
+    try:
+        install = run(
+            [
+                str(reploy),
+                "install",
+                "--dir",
+                str(deploy_dir),
+                "--to",
+                str(install_dir),
+                "--port",
+                install_port,
+            ],
+            cwd=workdir,
+            env=env,
+        )
+        installed = True
+        require_contains(install.stdout, f"server url: https://127.0.0.1:{install_port}", "install output")
+
+        status = run(control_script_command(install_dir, "status"), cwd=workdir, env=env)
+        require_contains(status.stdout, "smoke-app", "installed control status")
+
+        logs = run(control_script_command(install_dir, "logs"), cwd=workdir, env=env)
+        require_contains(logs.stdout, "smoke-suite serving HTTPS", "installed control logs")
+
+        live_check = run(control_script_command(install_dir, "config", "check", "--live"), cwd=workdir, env=env)
+        require_contains(live_check.stdout, '"check": "pass"', "installed live config check")
+
+        run(control_script_command(install_dir, "down"), cwd=workdir, env=env)
+    finally:
+        if installed or install_dir.exists():
+            run(
+                [str(reploy), "uninstall", "--from", str(install_dir), "--remove-dir"],
+                cwd=workdir,
+                env=env,
+            )
+        if install_dir.exists():
+            raise SystemExit(f"persistent install cleanup left target directory behind: {install_dir}")
+
+
 def run_smoke(
     reploy: Path,
     workdir: Path,
     *,
     plan_only: bool,
     runtime: bool,
+    persistent_install: bool,
     docker_mode: str,
 ) -> None:
     repo_root = Path(__file__).resolve().parents[1]
@@ -286,6 +393,7 @@ def run_smoke(
         plan_only=plan_only,
         docker_enabled=docker_enabled,
         runtime=runtime,
+        persistent_install=persistent_install,
         docker_skip_reason=docker_skip_reason,
     )
 
@@ -396,6 +504,9 @@ def run_smoke(
     require_contains(install.stdout, "would print success line: server url: ${server_url}", "install dry-run")
 
     if not plan_only:
+        if persistent_install:
+            run_persistent_install_smoke(reploy, deploy_dir, install_dir, workdir, env)
+
         clean = run(
             [str(reploy), "bundle", "clean", "--verbose", "--dir", str(deploy_dir)],
             cwd=workdir,
@@ -422,6 +533,7 @@ def main() -> int:
             workdir,
             plan_only=args.plan_only,
             runtime=args.runtime,
+            persistent_install=args.persistent_install,
             docker_mode=args.docker_mode,
         )
     else:
@@ -432,6 +544,7 @@ def main() -> int:
                 workdir,
                 plan_only=args.plan_only,
                 runtime=args.runtime,
+                persistent_install=args.persistent_install,
                 docker_mode=args.docker_mode,
             )
         finally:

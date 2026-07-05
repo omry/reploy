@@ -49,17 +49,26 @@ jobs:
           NO_UPDATE_NOTIFIER: "1"
         run: nox -s ci
 
-  macos:
-    name: macOS host checks (${{ matrix.target }})
+  target-smoke:
+    name: Target smoke (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
+          - target: linux-amd64
+            runner: ubuntu-latest
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
           - target: darwin-arm64
             runner: macos-15
           - target: darwin-amd64
             runner: macos-15-intel
+          - target: windows-amd64
+            runner: windows-2025
+          - target: windows-arm64
+            runner: windows-11-arm
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
