@@ -75,7 +75,8 @@ No active backlog items.
       blueprints as semantic app intent rather than Unix path templates; align
       Linux, macOS, and Windows positioning with the current support matrix; and
       avoid implying that package managers such as Homebrew, winget, or Scoop
-      solve the same problem.
+      solve the same problem. Cross-platform install location design lives in
+      `docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md`.
 
 ## Post-v1
 
