@@ -69,6 +69,97 @@ func controlScriptContent(plan installPlan) string {
 	})
 }
 
+func powerShellControlScriptName(appID string) string {
+	return controlScriptName(appID) + ".ps1"
+}
+
+func powerShellDockerDesktopControlScriptContent(plan installPlan) string {
+	return renderPowerShellDockerDesktopControlScript(controlScriptSpec{
+		Mode:           controlScriptModeDockerDesktop,
+		TargetDir:      plan.TargetDir,
+		AppID:          plan.AppID,
+		ComposeProject: plan.ComposeProject,
+		ControlScript:  powerShellControlScriptName(plan.AppID),
+		ManagedFiles:   append([]string(nil), plan.ManagedFiles...),
+	})
+}
+
+func renderPowerShellDockerDesktopControlScript(spec controlScriptSpec) string {
+	return fmt.Sprintf(`[CmdletBinding()]
+param(
+    [Parameter(Position = 0)]
+    [string]$Command = 'help',
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$RemainingArgs
+)
+
+$ErrorActionPreference = 'Stop'
+
+$TargetDir = %s
+$ComposeProject = %s
+$ComposeFile = Join-Path $TargetDir %s
+$DockerEnv = Join-Path $TargetDir %s
+$ManagedFiles = @(%s)
+
+function Write-Usage {
+    Write-Error @'
+usage: %s COMMAND [ARGS...]
+commands:
+  up
+  down
+  restart
+  status
+  logs
+  help
+'@
+}
+
+function Test-ManagedFiles {
+    foreach ($ManagedFile in $ManagedFiles) {
+        $Path = Join-Path $TargetDir $ManagedFile
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+            throw "managed file is missing: $ManagedFile"
+        }
+    }
+}
+
+function Invoke-ReployCompose {
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$ComposeArgs
+    )
+    & docker compose --project-name $ComposeProject --project-directory $TargetDir --env-file $DockerEnv -f $ComposeFile @ComposeArgs
+}
+
+switch ($Command) {
+    'up' {
+        Test-ManagedFiles
+        Invoke-ReployCompose up -d @RemainingArgs
+    }
+    'down' {
+        Invoke-ReployCompose down @RemainingArgs
+    }
+    'restart' {
+        Test-ManagedFiles
+        Invoke-ReployCompose restart @RemainingArgs
+    }
+    'status' {
+        Invoke-ReployCompose ps @RemainingArgs
+    }
+    'logs' {
+        Invoke-ReployCompose logs @RemainingArgs
+    }
+    { $_ -in @('', '-h', '--help', 'help') } {
+        Write-Usage
+    }
+    default {
+        Write-Usage
+        throw "unknown command: $Command"
+    }
+}
+`, powerShellSingleQuote(spec.TargetDir), powerShellSingleQuote(spec.ComposeProject), powerShellSingleQuote(filepath.FromSlash(ComposeFileName)), powerShellSingleQuote(filepath.FromSlash(DockerEnvFileName)), powerShellArrayLiteral(spec.ManagedFiles), spec.ControlScript)
+}
+
 func renderControlScript(spec controlScriptSpec) string {
 	health := spec.Health
 	insecureFlag := ""
@@ -850,4 +941,19 @@ func controlScriptAppCommandCases(commands []deploy.DockerCommandConfig) string 
 
 func shellSingleQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func powerShellSingleQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
+func powerShellArrayLiteral(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		quoted = append(quoted, powerShellSingleQuote(value))
+	}
+	return strings.Join(quoted, ", ")
 }

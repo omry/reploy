@@ -1384,6 +1384,46 @@ func TestControlScriptOutputLabelUsesAppIDOnly(t *testing.T) {
 	}
 }
 
+func TestPowerShellDockerDesktopControlScriptContent(t *testing.T) {
+	content := powerShellDockerDesktopControlScriptContent(installPlan{
+		AppID:          "demo",
+		TargetDir:      `C:\Users\alice\AppData\Local\Reploy\installs\demo`,
+		ComposeProject: "demo-project",
+		ManagedFiles:   []string{`.arbiter.env`, `conf\settings.toml`},
+	})
+	for _, want := range []string{
+		"[CmdletBinding()]",
+		"$TargetDir = 'C:\\Users\\alice\\AppData\\Local\\Reploy\\installs\\demo'",
+		"$ComposeProject = 'demo-project'",
+		"& docker compose --project-name $ComposeProject --project-directory $TargetDir --env-file $DockerEnv -f $ComposeFile @ComposeArgs",
+		"Test-ManagedFiles",
+		"managed file is missing: $ManagedFile",
+		"Invoke-ReployCompose up -d @RemainingArgs",
+		"Invoke-ReployCompose logs @RemainingArgs",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("PowerShell control script missing %q:\n%s", want, content)
+		}
+	}
+	for _, forbidden := range []string{"sh -c", "systemctl", "journalctl"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("PowerShell control script should not contain %q:\n%s", forbidden, content)
+		}
+	}
+}
+
+func TestPowerShellControlScriptName(t *testing.T) {
+	if got := powerShellControlScriptName("demo"); got != "democtl.ps1" {
+		t.Fatalf("PowerShell control script name = %q", got)
+	}
+}
+
+func TestPowerShellSingleQuoteEscapesSingleQuotes(t *testing.T) {
+	if got := powerShellSingleQuote(`C:\Users\O'Malley\Demo`); got != `'C:\Users\O''Malley\Demo'` {
+		t.Fatalf("quoted = %q", got)
+	}
+}
+
 func TestControlScriptUsesSafeStatusFileAndPreservesPartialLines(t *testing.T) {
 	content := controlScriptContent(installPlan{
 		AppID:         "demo",
