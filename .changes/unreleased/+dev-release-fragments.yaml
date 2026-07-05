@@ -1,3 +1,0 @@
-kind: Changed
-body: Include unreleased change fragments in prerelease GitHub Release notes without consuming them.
-time: 2026-06-30T18:40:55+08:00
