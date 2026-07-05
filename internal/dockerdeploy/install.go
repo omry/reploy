@@ -761,14 +761,48 @@ func controlScriptBuiltins() map[string]bool {
 	}
 }
 
-func writeInstalledControlScript(plan installPlan) error {
+func writeInstalledControlScripts(plan installPlan) error {
 	if err := removeInstalledReployEntrypoints(plan.TargetDir); err != nil {
 		return err
 	}
+	if err := writeInstalledControlScript(plan); err != nil {
+		return err
+	}
+	if shouldWriteWindowsPowerShellControlScript(plan) {
+		if err := writeInstalledPowerShellControlScript(plan); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func shouldWriteWindowsPowerShellControlScript(plan installPlan) bool {
+	return plan.Backend == installBackendDockerDesktop && currentHostPlatform().GOOS == "windows"
+}
+
+func writeInstalledControlScript(plan installPlan) error {
 	content := []byte(controlScriptContent(plan))
 	relativePath := plan.ControlScript
 	targetPath := filepath.Join(plan.TargetDir, relativePath)
 	if err := writeInstallFileNoFollow(targetPath, content, 0o755); err != nil {
+		return err
+	}
+	manifest, err := loadManifestOrNew(plan.TargetDir)
+	if err != nil {
+		return err
+	}
+	manifest.Files[filepath.ToSlash(relativePath)] = deploy.GeneratedFile{
+		Kind:   "template",
+		SHA256: deploy.HashBytes(content),
+	}
+	return deploy.WriteDeploymentManifest(filepath.Join(plan.TargetDir, ManifestFileName), manifest)
+}
+
+func writeInstalledPowerShellControlScript(plan installPlan) error {
+	content := []byte(powerShellDockerDesktopControlScriptContent(plan))
+	relativePath := powerShellControlScriptName(plan.AppID)
+	targetPath := filepath.Join(plan.TargetDir, relativePath)
+	if err := writeInstallFileNoFollow(targetPath, content, 0o644); err != nil {
 		return err
 	}
 	manifest, err := loadManifestOrNew(plan.TargetDir)
@@ -1212,7 +1246,7 @@ func prepareInstalledDeployment(plan installPlan) error {
 			return fmt.Errorf("copy deployment: %w", err)
 		}
 	}
-	if err := writeInstalledControlScript(plan); err != nil {
+	if err := writeInstalledControlScripts(plan); err != nil {
 		return fmt.Errorf("write installed control script: %w", err)
 	}
 	runtimeDir := filepath.Join(plan.TargetDir, RuntimeDirName)

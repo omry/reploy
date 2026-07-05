@@ -1424,6 +1424,41 @@ func TestPowerShellSingleQuoteEscapesSingleQuotes(t *testing.T) {
 	}
 }
 
+func TestWriteInstalledControlScriptsOnWindowsWritesPowerShellScript(t *testing.T) {
+	restore := stubHostPlatform(t, hostPlatform{GOOS: "windows"})
+	defer restore()
+	target := t.TempDir()
+	plan := installPlan{
+		AppID:          "demo",
+		TargetDir:      target,
+		Backend:        installBackendDockerDesktop,
+		ControlScript:  "democtl",
+		ComposeProject: "demo-project",
+		ManagedFiles:   []string{".arbiter.env"},
+	}
+	if err := writeInstalledControlScripts(plan); err != nil {
+		t.Fatal(err)
+	}
+	for _, relativePath := range []string{"democtl", "democtl.ps1"} {
+		if _, err := os.Stat(filepath.Join(target, relativePath)); err != nil {
+			t.Fatalf("missing %s: %v", relativePath, err)
+		}
+	}
+	powerShellContent := readFile(t, filepath.Join(target, "democtl.ps1"))
+	if !strings.Contains(powerShellContent, "docker compose") || strings.Contains(powerShellContent, "systemctl") {
+		t.Fatalf("unexpected PowerShell control content:\n%s", powerShellContent)
+	}
+	manifest, err := deploy.LoadDeploymentManifest(filepath.Join(target, ManifestFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, relativePath := range []string{"democtl", "democtl.ps1"} {
+		if _, ok := manifest.Files[relativePath]; !ok {
+			t.Fatalf("manifest missing %s: %#v", relativePath, manifest.Files)
+		}
+	}
+}
+
 func TestControlScriptUsesSafeStatusFileAndPreservesPartialLines(t *testing.T) {
 	content := controlScriptContent(installPlan{
 		AppID:         "demo",
