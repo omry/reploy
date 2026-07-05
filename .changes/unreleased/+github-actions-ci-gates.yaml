@@ -1,0 +1,3 @@
+kind: Changed
+body: Gate GitHub Pages deployment and publish workflows behind the full CI matrix.
+time: 2026-07-05T15:40:32+08:00

@@ -12,8 +12,13 @@ permissions:
   id-token: write
 
 jobs:
+  ci:
+    name: CI gate
+    uses: ./.github/workflows/ci.yml
+
   integration:
     name: Integration smoke gate
+    needs: ci
     uses: ./.github/workflows/integration.yml
     with:
       macos_runner: macos-15-intel

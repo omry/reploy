@@ -1,14 +1,13 @@
 name: Pages
 
 on:
-  push:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
     branches:
       - main
-    paths:
-      - "website/**"
-      - "tools/install.sh"
-      - ".github/workflows/pages.yml"
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -22,12 +21,15 @@ concurrency:
 jobs:
   build:
     name: Build Pages artifact
+    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     env:
       NO_UPDATE_NOTIFIER: "1"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -53,6 +55,7 @@ jobs:
   deploy:
     name: Deploy Pages
     needs: build
+    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
