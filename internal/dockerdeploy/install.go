@@ -376,6 +376,9 @@ func defaultInstallService(dir string) (string, error) {
 }
 
 func defaultInstallTarget(pack deploy.AppPack) (string, error) {
+	if currentHostPlatform().GOOS == "windows" {
+		return windowsDockerManagedDefaultInstallTarget(os.Getenv("LOCALAPPDATA"), pack.AppID)
+	}
 	path := strings.TrimSpace(pack.Install.Target.DefaultPath)
 	if path == "" {
 		return "", fmt.Errorf("install.target.default_path is required")
@@ -388,6 +391,21 @@ func defaultInstallTarget(pack deploy.AppPack) (string, error) {
 		return "", fmt.Errorf("install.target.default_path must resolve to an absolute path: %s", path)
 	}
 	return path, nil
+}
+
+func windowsDockerManagedDefaultInstallTarget(localAppData string, appID string) (string, error) {
+	root := strings.TrimSpace(localAppData)
+	if root == "" {
+		return "", fmt.Errorf("LOCALAPPDATA is required for the default Windows install target; pass --to to choose an install directory")
+	}
+	appID = strings.TrimSpace(appID)
+	if appID == "" {
+		return "", fmt.Errorf("app id is required for the default Windows install target")
+	}
+	if appID == "." || appID == ".." || strings.ContainsAny(appID, `<>:"/\|?*`) {
+		return "", fmt.Errorf("app id cannot be used in the default Windows install target: %s", appID)
+	}
+	return strings.TrimRight(root, `\/`) + `\Reploy\installs\` + appID, nil
 }
 
 func installOwnerSpec(owner deploy.InstallOwnerConfig) string {

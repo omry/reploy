@@ -379,6 +379,66 @@ func TestInstallRequiresAbsoluteTarget(t *testing.T) {
 	}
 }
 
+func TestDefaultInstallTargetOnWindowsUsesLocalAppData(t *testing.T) {
+	restore := stubHostPlatform(t, hostPlatform{GOOS: "windows"})
+	defer restore()
+	t.Setenv("LOCALAPPDATA", `C:\Users\alice\AppData\Local`)
+
+	target, err := defaultInstallTarget(deploy.AppPack{
+		AppID: "demo-app",
+		Install: deploy.InstallPackConfig{
+			Target: deploy.InstallTargetConfig{DefaultPath: "/opt/{{ app.id }}"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `C:\Users\alice\AppData\Local\Reploy\installs\demo-app`
+	if target != want {
+		t.Fatalf("target = %q, want %q", target, want)
+	}
+}
+
+func TestWindowsDockerManagedDefaultInstallTargetValidatesInputs(t *testing.T) {
+	tests := []struct {
+		name         string
+		localAppData string
+		appID        string
+		wantError    string
+	}{
+		{
+			name:      "missing local app data",
+			appID:     "demo",
+			wantError: "LOCALAPPDATA is required",
+		},
+		{
+			name:         "missing app id",
+			localAppData: `C:\Users\alice\AppData\Local`,
+			wantError:    "app id is required",
+		},
+		{
+			name:         "path separator in app id",
+			localAppData: `C:\Users\alice\AppData\Local`,
+			appID:        `demo\bad`,
+			wantError:    "cannot be used",
+		},
+		{
+			name:         "parent directory app id",
+			localAppData: `C:\Users\alice\AppData\Local`,
+			appID:        "..",
+			wantError:    "cannot be used",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := windowsDockerManagedDefaultInstallTarget(test.localAppData, test.appID)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("error = %v, want substring %q", err, test.wantError)
+			}
+		})
+	}
+}
+
 func TestInstallRequiresCurrentStagingBundle(t *testing.T) {
 	packDir := makeTestPack(t)
 	ref, err := deploy.ParsePackRef("file:" + packDir)
