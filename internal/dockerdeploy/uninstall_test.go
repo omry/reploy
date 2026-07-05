@@ -422,7 +422,7 @@ func TestUninstallServiceOnlyRequiresExistingUnit(t *testing.T) {
 	for _, want := range []string{
 		"service unit not found",
 		"missing.service",
-		"reploy uninstall --list-services",
+		"reploy services list",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error missing %q: %v", want, err)

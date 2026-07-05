@@ -1666,17 +1666,32 @@ func TestDockerUninstallOptionsParse(t *testing.T) {
 		t.Fatalf("from/service-name = %q/%q", options.From, options.ServiceName)
 	}
 
-	options, err = parseDockerUninstallOptions([]string{"--list-services"})
-	if err != nil {
-		t.Fatal(err)
+	_, err = parseDockerUninstallOptions([]string{"--list-services"})
+	if err == nil || !strings.Contains(err.Error(), "unknown option: --list-services") {
+		t.Fatalf("expected unknown list-services option, got %v", err)
 	}
-	if !options.ListServices {
-		t.Fatalf("list-services = false")
+}
+
+func TestServicesListRunsSystemdServiceInventory(t *testing.T) {
+	oldPrint := printReploySystemdServices
+	t.Cleanup(func() {
+		printReploySystemdServices = oldPrint
+	})
+	printReploySystemdServices = func(stdout io.Writer) error {
+		fmt.Fprintln(stdout, "SERVICE\tTARGET")
+		fmt.Fprintln(stdout, "demo\t/opt/demo")
+		return nil
 	}
 
-	_, err = parseDockerUninstallOptions([]string{"--list-services", "--service-name", "demo3"})
-	if err == nil || !strings.Contains(err.Error(), "--list-services cannot be combined") {
-		t.Fatalf("expected list-services conflict, got %v", err)
+	code, stdout, stderr := runCLI("services", "list")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "demo\t/opt/demo") {
+		t.Fatalf("stdout missing services list:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
 	}
 }
 

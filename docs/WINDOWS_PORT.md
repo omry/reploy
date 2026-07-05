@@ -191,7 +191,7 @@ Native Windows means:
 | `install --dry-run` | supported | no for plan rendering; yes if preinstall checks are requested | Must render Windows paths and Docker-managed install semantics. |
 | `uninstall --from DIR` | supported for Docker-managed permanent install | yes unless `--dry-run` can render from state only | Removes installed Docker resources and installed metadata for the selected target. |
 | `uninstall --service-name NAME` | deferred unless mapped to recorded Docker-managed installed state | maybe | Linux currently uses service names for systemd discovery. Windows should not invent service semantics. |
-| `uninstall --list-services` | unsupported for native Windows in first milestone | no | This is Linux/systemd service discovery. Use installed state or explicit target paths for Windows. |
+| `services list` | unsupported for native Windows in first milestone | no | This is Linux/systemd service discovery. Use installed state or explicit target paths for Windows. |
 | generated `<app-id>ctl.ps1` | supported | yes for runtime operations | Native Windows installed control surface. Must not require `sh`, Git Bash, MSYS2, Cygwin, or WSL. |
 | generated POSIX-style `<app-id>ctl` beside a Windows install | optional/deferred | yes if supported | Only for WSL/Linux-like access. Must be clearly documented as Linux-path behavior. |
 | Windows Service install | unsupported | no | Future design topic; not exposed as a first-milestone backend. |

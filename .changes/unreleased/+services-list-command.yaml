@@ -1,0 +1,2 @@
+kind: Changed
+body: Replace `reploy uninstall --list-services` with `reploy services list`.

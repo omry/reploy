@@ -491,7 +491,7 @@ def run_smoke(
 
         run([str(reploy), "bundle", "clean", "--dir", str(deploy_dir)], cwd=workdir, env=env)
 
-    run([str(reploy), "uninstall", "--list-services"], cwd=workdir, env=env)
+    run([str(reploy), "services", "list"], cwd=workdir, env=env)
 
 
 def main() -> int:

@@ -28,6 +28,7 @@ var dockerDirectInstall = dockerdeploy.DirectInstall
 var dockerInstall = dockerdeploy.Install
 var dockerPrintInstallSuccess = dockerdeploy.PrintInstallSuccess
 var dockerUninstall = dockerdeploy.Uninstall
+var printReploySystemdServices = dockerdeploy.PrintReploySystemdServices
 var dockerUninstallNeedsRoot = dockerdeploy.UninstallNeedsRoot
 var dockerRuntime = dockerdeploy.Runtime
 var dockerTestServer = dockerdeploy.TestServer
@@ -61,6 +62,8 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runEmbeddedControl(args[1:], stdout, stderr, globalOptions)
 	case "index":
 		return runPackIndex(args[0], args[1:], stdout, stderr)
+	case "services":
+		return runServices(args[1:], stdout, stderr)
 	default:
 		if globalOptions.Target == "docker" && isDeploymentCommand(args[0]) {
 			return runDocker(args, stdout, stderr, globalOptions)
@@ -248,6 +251,39 @@ func runPackIndex(commandName string, args []string, stdout io.Writer, stderr io
 		}
 		fmt.Fprintf(stderr, "reploy %s usage error: unknown command: %s\n", commandName, args[0])
 		printPackIndexShortUsage(commandName, stderr)
+		return 2
+	}
+}
+
+func runServices(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "reploy services usage error: expected command")
+		printServicesShortUsage(stderr)
+		return 2
+	}
+	if isHelpArg(args[0]) {
+		printServicesHelp(stdout)
+		return 0
+	}
+	switch args[0] {
+	case "list":
+		if len(args) > 1 {
+			if isHelpArg(args[1]) {
+				fmt.Fprintln(stdout, "Usage: reploy services list")
+				return 0
+			}
+			fmt.Fprintf(stderr, "reploy services list usage error: unknown option: %s\n", args[1])
+			printServicesShortUsage(stderr)
+			return 2
+		}
+		if err := printReploySystemdServices(stdout); err != nil {
+			fmt.Fprintf(stderr, "reploy services list error: %v\n", err)
+			return 1
+		}
+		return 0
+	default:
+		fmt.Fprintf(stderr, "reploy services usage error: unknown command: %s\n", args[0])
+		printServicesShortUsage(stderr)
 		return 2
 	}
 }
@@ -1310,13 +1346,6 @@ func runDockerUninstall(args []string, stdout io.Writer, stderr io.Writer, globa
 		return 2
 	}
 	stopSpinner := func(bool) {}
-	if options.ListServices {
-		if err := dockerdeploy.PrintReploySystemdServices(stdout); err != nil {
-			fmt.Fprintf(stderr, "reploy uninstall error: %v\n", err)
-			return 1
-		}
-		return 0
-	}
 	if dockerUninstallNeedsRoot(dockerdeploy.UninstallOptions{DryRun: options.DryRun}) && os.Geteuid() != 0 {
 		fmt.Fprintln(stderr, "reploy uninstall error: root privileges are required to stop systemd services and remove Docker resources")
 		fmt.Fprintln(stderr, "rerun with sudo, or add --dry-run to inspect the uninstall plan")
@@ -1379,11 +1408,10 @@ type dockerInstallOptions struct {
 }
 
 type dockerUninstallOptions struct {
-	From         string
-	ServiceName  string
-	RemoveDir    bool
-	DryRun       bool
-	ListServices bool
+	From        string
+	ServiceName string
+	RemoveDir   bool
+	DryRun      bool
 }
 
 func parseDockerInstallOptions(args []string) (dockerInstallOptions, error) {
@@ -1501,8 +1529,6 @@ func parseDockerUninstallOptions(args []string) (dockerUninstallOptions, error) 
 			options.DryRun = true
 		case "--remove-dir":
 			options.RemoveDir = true
-		case "--list-services":
-			options.ListServices = true
 		case "--from":
 			value, ok := optionValue(args, &index)
 			if !ok {
@@ -1542,9 +1568,6 @@ func parseDockerUninstallOptions(args []string) (dockerUninstallOptions, error) 
 	}
 	if options.ServiceName == "" && serviceNameSet {
 		return dockerUninstallOptions{}, fmt.Errorf("--service-name must not be empty")
-	}
-	if options.ListServices && (fromSet || serviceNameSet || options.RemoveDir || options.DryRun) {
-		return dockerUninstallOptions{}, fmt.Errorf("--list-services cannot be combined with uninstall action options")
 	}
 	return options, nil
 }
@@ -2422,6 +2445,7 @@ Commands:
   doctor       Check staging files and generated-file drift
   install      Install or update a deployed host service
   uninstall    Remove an installed host service and Docker resources
+  services     List Reploy-managed services
   index        Manage the cached blueprint shorthand index
   version      Print version information
 
@@ -2461,8 +2485,6 @@ Staging options:
                Installed service identity, default app id
   --service-name NAME
                Linux/systemd service name for uninstall when --from is gone
-  --list-services
-               List Reploy-managed Linux/systemd services for uninstall
   --port PORT  Installed host port override for single-port apps
   --port NAME=PORT
               Installed host port override for a named blueprint port; repeat
@@ -2593,6 +2615,32 @@ Run an app subcommand with:
 `, "\n")
 }
 
+func printServicesShortUsage(output io.Writer) {
+	fmt.Fprintln(output, "Usage: reploy services COMMAND")
+	fmt.Fprintln(output, "Run 'reploy services --help' for services help.")
+	fmt.Fprintln(output)
+	fmt.Fprint(output, servicesCommandSummary())
+}
+
+func printServicesHelp(output io.Writer) {
+	fmt.Fprint(output, strings.TrimLeft(`
+Usage: reploy services COMMAND
+
+Commands:
+  list         List Reploy-managed Linux/systemd services
+
+Options:
+  -h, --help   Show services help
+`, "\n"))
+}
+
+func servicesCommandSummary() string {
+	return strings.TrimLeft(`
+Commands:
+  list         List Reploy-managed Linux/systemd services
+`, "\n")
+}
+
 func printDockerShortUsage(output io.Writer) {
 	fmt.Fprintln(output, "Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND")
 	fmt.Fprintln(output, "Run 'reploy --help' for help.")
@@ -2607,6 +2655,7 @@ Commands:
   info         Show staging state and bundle contents
   app          Run a blueprint-declared app command inside staging
   bundle       Manage staging bundle contents
+  services     List Reploy-managed services
   up           Start or update the staging Compose service
   restart      Recreate the staging Compose service
   down         Stop and remove the staging Compose service
@@ -2650,8 +2699,6 @@ Options:
                Installed service identity, default app id
   --service-name NAME
                Linux/systemd service name for uninstall when --from is gone
-  --list-services
-               List Reploy-managed Linux/systemd services for uninstall
   --port PORT  Installed host port override for single-port apps
   --port NAME=PORT
               Installed host port override for a named blueprint port; repeat

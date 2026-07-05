@@ -29,7 +29,7 @@ sudo reploy uninstall --service-name example
 List known Reploy services:
 
 ```bash
-reploy uninstall --list-services
+reploy services list
 ```
 
 Preview without making changes:

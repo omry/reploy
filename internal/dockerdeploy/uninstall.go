@@ -166,7 +166,7 @@ func serviceOnlyUninstallPlan(serviceName string, removeDir bool, dockerPrefligh
 	unitPath := filepath.Join(uninstallSystemdUnitDir, serviceName+".service")
 	if _, err := os.Stat(unitPath); err != nil {
 		if os.IsNotExist(err) {
-			return uninstallPlan{}, fmt.Errorf("service unit not found for --service-name %s at %s; run reploy uninstall --list-services", serviceName, unitPath)
+			return uninstallPlan{}, fmt.Errorf("service unit not found for --service-name %s at %s; run reploy services list", serviceName, unitPath)
 		}
 		return uninstallPlan{}, err
 	}
@@ -191,7 +191,7 @@ func PrintReploySystemdServices(stdout io.Writer) error {
 		return nil
 	}
 	if currentHostPlatform().installBackend() != installBackendLinuxSystemd {
-		return fmt.Errorf("uninstall --list-services is Linux/systemd-only; use --from for Docker-managed installs")
+		return fmt.Errorf("services list is Linux/systemd-only; use uninstall --from for Docker-managed installs")
 	}
 	services, err := ListReploySystemdServices()
 	if err != nil {
