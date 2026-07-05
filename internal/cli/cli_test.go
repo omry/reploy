@@ -705,8 +705,14 @@ func TestEmbeddedControlRunsDeployedAppCommandWithScriptPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	dockerArgs := filepath.Join(t.TempDir(), "docker.args")
-	fakeDocker := filepath.Join(fakeBin, "docker")
-	if err := os.WriteFile(fakeDocker, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$DOCKER_ARGS_FILE\"\nprintf 'docker output\\n'\n"), 0o755); err != nil {
+	fakeDockerName := "docker"
+	fakeDockerContent := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$DOCKER_ARGS_FILE\"\nprintf 'docker output\\n'\n"
+	if runtime.GOOS == "windows" {
+		fakeDockerName = "docker.cmd"
+		fakeDockerContent = "@echo off\r\nbreak > \"%DOCKER_ARGS_FILE%\"\r\n:loop\r\nif \"%~1\"==\"\" goto done\r\n>> \"%DOCKER_ARGS_FILE%\" echo %~1\r\nshift\r\ngoto loop\r\n:done\r\necho docker output\r\n"
+	}
+	fakeDocker := filepath.Join(fakeBin, fakeDockerName)
+	if err := os.WriteFile(fakeDocker, []byte(fakeDockerContent), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))

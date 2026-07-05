@@ -1003,7 +1003,7 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		`reploy_bin="` + targetRuntime + `"`,
+		`reploy_bin=` + fmt.Sprintf("%q", targetRuntime),
 		`exec "$reploy_bin" _control --dir "$target_dir" --script-name "$control_script" "$@"`,
 	} {
 		if !strings.Contains(string(installedControlScript), want) {
@@ -1601,7 +1601,7 @@ func TestInstalledControlScriptDelegatesToEmbeddedReploy(t *testing.T) {
 		ControlScript: "democtl",
 	})
 	for _, want := range []string{
-		`reploy_bin="` + filepath.Join(target, embeddedRuntimeFileName()) + `"`,
+		`reploy_bin=` + fmt.Sprintf("%q", filepath.Join(target, embeddedRuntimeFileName())),
 		`exec "$reploy_bin" _control --dir "$target_dir" --script-name "$control_script" "$@"`,
 	} {
 		if !strings.Contains(content, want) {
