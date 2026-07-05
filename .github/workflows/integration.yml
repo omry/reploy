@@ -82,12 +82,14 @@ jobs:
         if: ${{ matrix.persistent_install == false }}
         env:
           NO_UPDATE_NOTIFIER: "1"
+          TMPDIR: ${{ runner.temp }}/
         run: nox -s cli-integration
 
       - name: Run CLI runtime and persistent install integration
         if: ${{ matrix.persistent_install == true }}
         env:
           NO_UPDATE_NOTIFIER: "1"
+          TMPDIR: ${{ runner.temp }}/
         run: nox -s cli-integration -- --persistent-install
 
       - name: Dump macOS Docker runtime logs
