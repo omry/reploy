@@ -3105,8 +3105,30 @@ func TestDockerBundlePrepareDryRun(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("bundle build failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "would build installation bundle:") || !strings.Contains(stdout, "docker run --rm") {
-		t.Fatalf("stdout missing dry-run command:\n%s", stdout)
+	for _, want := range []string{"would build installation bundle:", "would warm Python runtime:", "__reploy_runtime_warmup"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing dry-run output %q:\n%s", want, stdout)
+		}
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestDockerBundleWarmRuntimeDryRun(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("bundle", "warm-runtime", "--dry-run", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("bundle warm-runtime failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "would warm Python runtime:") || !strings.Contains(stdout, "__reploy_runtime_warmup") {
+		t.Fatalf("stdout missing warm-runtime dry-run command:\n%s", stdout)
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
@@ -3124,6 +3146,7 @@ func TestDockerBundleWithoutCommandShowsSubcommands(t *testing.T) {
 	if !strings.Contains(stderr, "Usage: reploy [--docker-timeout DURATION] bundle COMMAND") ||
 		!strings.Contains(stderr, "build") ||
 		!strings.Contains(stderr, "clean") ||
+		!strings.Contains(stderr, "warm-runtime") ||
 		!strings.Contains(stderr, "list-options") {
 		t.Fatalf("stderr missing bundle subcommands:\n%s", stderr)
 	}
@@ -3140,6 +3163,7 @@ func TestDockerBundleHelpShowsSubcommands(t *testing.T) {
 	if !strings.Contains(stdout, "Usage: reploy [--docker-timeout DURATION] bundle COMMAND") ||
 		!strings.Contains(stdout, "build") ||
 		!strings.Contains(stdout, "clean") ||
+		!strings.Contains(stdout, "warm-runtime") ||
 		!strings.Contains(stdout, "--verbose") {
 		t.Fatalf("stdout missing bundle help:\n%s", stdout)
 	}

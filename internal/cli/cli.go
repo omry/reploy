@@ -781,10 +781,10 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer, globalOp
 		return 2
 	}
 	options, err := parseDockerBundleOptions(args[1:], dockerBundleParseOptions{
-		RequireRoot:   action != "list" && action != "list-options" && action != "check" && action != "build" && action != "clean",
-		AllowDryRun:   action == "check" || action == "build",
+		RequireRoot:   action != "list" && action != "list-options" && action != "check" && action != "build" && action != "clean" && action != "warm-runtime",
+		AllowDryRun:   action == "check" || action == "build" || action == "warm-runtime",
 		AllowPyPIOnly: action == "build",
-		AllowVerbose:  action == "check" || action == "build" || action == "clean",
+		AllowVerbose:  action == "check" || action == "build" || action == "clean" || action == "warm-runtime",
 		AllowMultiple: action == "add" || action == "remove",
 		AllowNames:    action == "add" || action == "remove",
 		AllowExtra:    action == "add" || action == "remove",
@@ -914,6 +914,36 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer, globalOp
 		}
 		stopSpinner(true)
 		return 0
+	case "warm-runtime":
+		stopSpinner := func(bool) {}
+		if !options.DryRun && !options.Verbose {
+			label, err := deploymentSpinnerLabel(options.Dir, "warming Python runtime", spinnerStderr)
+			if err != nil {
+				fmt.Fprintf(stderr, "reploy bundle warm-runtime error: %v\n", err)
+				return 1
+			}
+			stopSpinner = startSpinner(spinnerStderr, label)
+		}
+		if err := dockerdeploy.BundleWarmRuntime(dockerdeploy.BundleWarmRuntimeOptions{
+			Dir:                    options.Dir,
+			DryRun:                 options.DryRun,
+			Verbose:                options.Verbose,
+			Stdout:                 stdout,
+			Stderr:                 stderr,
+			DockerPreflightTimeout: globalOptions.DockerTimeout,
+		}); err != nil {
+			stopSpinner(false)
+			if options.DryRun || options.Verbose {
+				fmt.Fprintf(stderr, "reploy bundle warm-runtime error: %v\n", err)
+			} else if bundleErrorHasEnoughOutput(err) {
+				fmt.Fprintf(stderr, "reploy bundle warm-runtime error: %v\n", err)
+			} else {
+				fmt.Fprintf(stderr, "reploy bundle warm-runtime error: %v; rerun with --verbose for command output\n", err)
+			}
+			return 1
+		}
+		stopSpinner(true)
+		return 0
 	case "clean":
 		results, err := dockerdeploy.BundleClean(dockerdeploy.BundleCleanOptions{Dir: options.Dir})
 		if err != nil {
@@ -941,7 +971,7 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer, globalOp
 
 func isDockerBundleCommand(action string) bool {
 	switch action {
-	case "list", "list-options", "add", "remove", "check", "build", "clean":
+	case "list", "list-options", "add", "remove", "check", "build", "warm-runtime", "clean":
 		return true
 	default:
 		return false
@@ -2519,6 +2549,7 @@ Bundle:
   remove       Remove installation artifact roots
   check        Build if needed and validate installation artifacts
   build        Explicitly build and validate installation bundle artifacts
+  warm-runtime Build if needed and warm the staging Python runtime
   clean        Remove built installation artifacts
   upgrade      Upgrade package roots and rebuild installation bundle artifacts
 
@@ -2563,7 +2594,7 @@ Staging options:
   --remove-dir Remove the installed target directory during uninstall
   --start      Start after install, default
   --no-start   Install without starting the service
-  --verbose    Show bundle check/build command output
+  --verbose    Show bundle check/build/warm-runtime command output
   --follow     Follow logs instead of exiting after current output
   --tail N     Show only the last N log lines
   --timeout DURATION
@@ -2623,9 +2654,9 @@ Usage: reploy [--docker-timeout DURATION] bundle COMMAND
 Options:
   --dir DIR    Staging directory, default current staging dir or reploy-staging
   --extra ROOT Add/remove an explicit bundle root; accepts comma-separated roots
-  --dry-run    Print build/check commands without changing staging
+  --dry-run    Print build/check/warm-runtime commands without changing staging
   --pypi-only  Build or upgrade using only PyPI package roots
-  --verbose    Show bundle check/build command output
+  --verbose    Show bundle check/build/warm-runtime command output
   -h, --help   Show bundle help
 `, "\n"))
 }
@@ -2640,6 +2671,7 @@ Commands:
   remove       Remove installation artifact roots
   check        Build if needed and validate installation artifacts
   build        Explicitly build and validate installation bundle artifacts
+  warm-runtime Build if needed and warm the staging Python runtime
   clean        Remove built installation artifacts
   upgrade      Upgrade package roots and rebuild installation bundle artifacts
 `, "\n")
@@ -2779,7 +2811,7 @@ Options:
   --remove-dir Remove the installed target directory during uninstall
   --start      Start after install, default
   --no-start   Install without starting the service
-  --verbose    Show bundle check/build command output
+  --verbose    Show bundle check/build/warm-runtime command output
   --follow     Follow logs instead of exiting after current output
   --tail N     Show only the last N log lines
   --timeout DURATION

@@ -833,6 +833,8 @@ func TestBundleUpgradeResolvesPackageRootsAndPreparesBundle(t *testing.T) {
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_imap-1.2.5-py3-none-any.whl"), []byte("imap\n"), 0o644)
 		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
 			return nil
+		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
+			return nil
 		default:
 			t.Fatalf("unexpected bundle command: %#v", spec.Args)
 			return nil
@@ -844,8 +846,8 @@ func TestBundleUpgradeResolvesPackageRootsAndPreparesBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(specs) != 3 {
-		t.Fatalf("ran %d commands, want resolve, build, and check", len(specs))
+	if len(specs) != 4 {
+		t.Fatalf("ran %d commands, want resolve, build, check, and warm runtime", len(specs))
 	}
 	assertResultStatus(t, results, filepath.Join(deployDir, StateFileName), deploy.UpdateStatusUpdated)
 	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-server==1.2.4\ndemo-imap==1.2.5\n" {
@@ -903,6 +905,8 @@ func TestBundlePreparePyPIOnlyResolvesUnpinnedRoots(t *testing.T) {
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.4-py3-none-any.whl"), []byte("suite\n"), 0o644)
 		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
 			return nil
+		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
+			return nil
 		default:
 			t.Fatalf("unexpected bundle command: %#v", spec.Args)
 			return nil
@@ -913,8 +917,8 @@ func TestBundlePreparePyPIOnlyResolvesUnpinnedRoots(t *testing.T) {
 	if err := BundlePrepare(BundlePrepareOptions{Dir: deployDir, PyPIOnly: true}); err != nil {
 		t.Fatal(err)
 	}
-	if len(specs) != 3 {
-		t.Fatalf("ran %d commands, want resolve, build, and check", len(specs))
+	if len(specs) != 4 {
+		t.Fatalf("ran %d commands, want resolve, build, check, and warm runtime", len(specs))
 	}
 	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != "demo-suite==1.2.4\n" {
 		t.Fatalf("requirements = %q", got)
@@ -995,6 +999,8 @@ func TestBundlePrepareUsesPackLocalSourcesForFilePacks(t *testing.T) {
 			}
 			checkRequirements = string(content)
 			return nil
+		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
+			return nil
 		default:
 			t.Fatalf("unexpected bundle command: %#v", spec.Args)
 			return nil
@@ -1043,8 +1049,10 @@ func TestBundlePrepareDryRunPrintsCommand(t *testing.T) {
 	if err := BundlePrepare(BundlePrepareOptions{Dir: deployDir, DryRun: true, Stdout: &stdout}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), "would build installation bundle:") || !strings.Contains(stdout.String(), "docker run --rm") {
-		t.Fatalf("stdout missing dry-run command:\n%s", stdout.String())
+	for _, want := range []string{"would build installation bundle:", "would warm Python runtime:", "__reploy_runtime_warmup"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing dry-run output %q:\n%s", want, stdout.String())
+		}
 	}
 }
 
@@ -1068,6 +1076,8 @@ func TestBundlePrepareSuppressesCommandOutputByDefault(t *testing.T) {
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
 		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
 			return nil
+		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
+			return nil
 		default:
 			t.Fatalf("unexpected bundle command: %#v", spec.Args)
 			return nil
@@ -1080,8 +1090,8 @@ func TestBundlePrepareSuppressesCommandOutputByDefault(t *testing.T) {
 	if err := BundlePrepare(BundlePrepareOptions{Dir: deployDir, Stdout: &stdout, Stderr: &stderr}); err != nil {
 		t.Fatal(err)
 	}
-	if len(runOptions) != 2 {
-		t.Fatalf("ran %d commands, want build and check", len(runOptions))
+	if len(runOptions) != 3 {
+		t.Fatalf("ran %d commands, want build, check, and warm runtime", len(runOptions))
 	}
 	for _, options := range runOptions {
 		if options.Context == nil {
@@ -1125,6 +1135,11 @@ func TestBundlePrepareVerboseStreamsCommandOutput(t *testing.T) {
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
 		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
 			return nil
+		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
+			if options.Stdout != &stdout || options.Stderr != &stderr {
+				t.Fatalf("warmup command should stream verbose output: %#v", options)
+			}
+			return nil
 		default:
 			return fmt.Errorf("unexpected bundle command: %#v", spec.Args)
 		}
@@ -1134,8 +1149,8 @@ func TestBundlePrepareVerboseStreamsCommandOutput(t *testing.T) {
 	if err := BundlePrepare(BundlePrepareOptions{Dir: deployDir, Verbose: true, Stdout: &stdout, Stderr: &stderr}); err != nil {
 		t.Fatal(err)
 	}
-	if len(runOptions) != 2 {
-		t.Fatalf("ran %d commands, want build and check", len(runOptions))
+	if len(runOptions) != 3 {
+		t.Fatalf("ran %d commands, want build, check, and warm runtime", len(runOptions))
 	}
 	for _, options := range runOptions {
 		if options.Context == nil {
@@ -1158,6 +1173,7 @@ func TestBundlePrepareVerboseStreamsCommandOutput(t *testing.T) {
 		"build wheelhouse:",
 		"replace bundle:",
 		"validate bundle:",
+		"warm Python runtime:",
 		"total:",
 	} {
 		if !strings.Contains(stdout.String(), expected) {
@@ -1166,7 +1182,7 @@ func TestBundlePrepareVerboseStreamsCommandOutput(t *testing.T) {
 	}
 }
 
-func TestBundlePrepareDoesNotWarmRuntimeOrRequireManagedFiles(t *testing.T) {
+func TestBundlePrepareWarmRuntimeCreatesManagedFilePlaceholders(t *testing.T) {
 	packDir := makeTestPackWithManifest(t, testPackManifestWithManagedFile())
 	ref, err := deploy.ParsePackRef("file:" + packDir)
 	if err != nil {
@@ -1188,7 +1204,7 @@ func TestBundlePrepareDoesNotWarmRuntimeOrRequireManagedFiles(t *testing.T) {
 			commands = append(commands, "check")
 			return nil
 		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
-			t.Fatalf("warmup command should be skipped: %#v", spec.Args)
+			commands = append(commands, "warm runtime")
 			return nil
 		default:
 			t.Fatalf("unexpected bundle command: %#v", spec.Args)
@@ -1200,12 +1216,84 @@ func TestBundlePrepareDoesNotWarmRuntimeOrRequireManagedFiles(t *testing.T) {
 	if err := BundlePrepare(BundlePrepareOptions{Dir: deployDir}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(deployDir, ".arbiter.env")); !os.IsNotExist(err) {
-		t.Fatalf("bundle prepare should not create or require managed file placeholder: %v", err)
+	if info, err := os.Stat(filepath.Join(deployDir, ".arbiter.env")); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("bundle prepare should create managed file placeholder for warmup: info=%v err=%v", info, err)
 	}
-	want := []string{"build", "check"}
+	want := []string{"build", "check", "warm runtime"}
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestBundleWarmRuntimeBuildsIfNeededAndRunsWarmup(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	commands := []string{}
+	restore := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
+		switch {
+		case containsInOrder(spec.Args, []string{"wheel", "--no-cache-dir"}):
+			commands = append(commands, "build")
+			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
+			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+			commands = append(commands, "check")
+			return nil
+		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
+			commands = append(commands, "warm runtime")
+			compose := readFile(t, filepath.Join(deployDir, ComposeFileName))
+			if !strings.Contains(compose, "__reploy_runtime_warmup") {
+				t.Fatalf("runtime compose missing warmup exit path:\n%s", compose)
+			}
+			return nil
+		default:
+			t.Fatalf("unexpected bundle command: %#v", spec.Args)
+			return nil
+		}
+	})
+	defer restore()
+
+	if err := BundleWarmRuntime(BundleWarmRuntimeOptions{Dir: deployDir}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"build", "check", "warm runtime"}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestBundleWarmRuntimeDryRunDoesNotMaterializeRuntimeCompose(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deployDir, ComposeFileName), []byte("stale compose\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout strings.Builder
+	if err := BundleWarmRuntime(BundleWarmRuntimeOptions{Dir: deployDir, DryRun: true, Stdout: &stdout}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"would build installation bundle:", "would warm Python runtime:", "__reploy_runtime_warmup"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	if got := readFile(t, filepath.Join(deployDir, ComposeFileName)); got != "stale compose\n" {
+		t.Fatalf("dry-run rewrote compose:\n%s", got)
 	}
 }
 
@@ -1231,8 +1319,8 @@ func TestEnsureBundlePreparedBuildsOnceAndBundleAddInvalidates(t *testing.T) {
 	if !built {
 		t.Fatal("first ensure should build")
 	}
-	if len(commands) != 2 {
-		t.Fatalf("ran %d commands, want build and check", len(commands))
+	if len(commands) != 3 {
+		t.Fatalf("ran %d commands, want build, check, and warm runtime", len(commands))
 	}
 	state := readDeploymentState(t, deployDir)
 	if state.Bundle.PreparedFingerprint == "" {
@@ -1246,8 +1334,8 @@ func TestEnsureBundlePreparedBuildsOnceAndBundleAddInvalidates(t *testing.T) {
 	if built {
 		t.Fatal("second ensure should reuse prepared bundle")
 	}
-	if len(commands) != 2 {
-		t.Fatalf("ran %d commands after cached ensure, want 2", len(commands))
+	if len(commands) != 3 {
+		t.Fatalf("ran %d commands after cached ensure, want 3", len(commands))
 	}
 
 	if _, err := BundleAdd(BundleRootOptions{Dir: deployDir, Source: "demo-imap==1.2.3"}); err != nil {
@@ -1265,8 +1353,8 @@ func TestEnsureBundlePreparedBuildsOnceAndBundleAddInvalidates(t *testing.T) {
 	if !built {
 		t.Fatal("ensure after bundle add should rebuild")
 	}
-	if len(commands) != 4 {
-		t.Fatalf("ran %d commands after invalidation, want 4", len(commands))
+	if len(commands) != 6 {
+		t.Fatalf("ran %d commands after invalidation, want 6", len(commands))
 	}
 }
 
@@ -1483,6 +1571,9 @@ func stubSuccessfulBundlePrepare(t *testing.T, commands *[]string) func() {
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
 		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
 			*commands = append(*commands, "check")
+			return nil
+		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
+			*commands = append(*commands, "warm runtime")
 			return nil
 		default:
 			t.Fatalf("unexpected bundle command: %#v", spec.Args)

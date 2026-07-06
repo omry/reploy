@@ -1,3 +1,0 @@
-kind: Fixed
-body: Keep `reploy bundle build` focused on dependency artifacts instead of warming runtime state or requiring managed runtime config files.
-time: 2026-07-04T22:33:30+08:00

@@ -83,7 +83,7 @@ func TestRuntimeUpAutomaticallyPreparesBundle(t *testing.T) {
 	if err := Runtime(RuntimeOptions{Dir: dir, Action: "up"}); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"build", "check", "up -d"}
+	want := []string{"build", "check", "warm runtime", "up -d"}
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatalf("commands = %#v, want %#v", commands, want)
 	}
@@ -127,7 +127,7 @@ func TestRuntimeUpRecoversStaleDockerNetwork(t *testing.T) {
 	if err := Runtime(RuntimeOptions{Dir: dir, Action: "up", Stderr: &stderr}); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"build", "check", "up", "down", "up"}
+	want := []string{"build", "check", "warm runtime", "up", "down", "up"}
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatalf("commands = %#v, want %#v", commands, want)
 	}
@@ -199,6 +199,12 @@ func TestRuntimeUpVerboseStreamsBundlePrepareOutput(t *testing.T) {
 				return err
 			}
 			return nil
+		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
+			commands = append(commands, "warm runtime")
+			if _, err := options.Stdout.Write([]byte("warm output\n")); err != nil {
+				return err
+			}
+			return nil
 		default:
 			return fmt.Errorf("unexpected bundle command: %#v", spec.Args)
 		}
@@ -216,7 +222,7 @@ func TestRuntimeUpVerboseStreamsBundlePrepareOutput(t *testing.T) {
 	if err := Runtime(RuntimeOptions{Dir: dir, Action: "up", Verbose: true, Stdout: &stdout, Stderr: &stderr}); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"build", "check", "up -d"}
+	want := []string{"build", "check", "warm runtime", "up -d"}
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatalf("commands = %#v, want %#v", commands, want)
 	}
@@ -225,6 +231,9 @@ func TestRuntimeUpVerboseStreamsBundlePrepareOutput(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "[STAGING : demo] check output\n") {
 		t.Fatalf("stderr missing staging prefix: %q", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "[STAGING : demo] warm output\n") {
+		t.Fatalf("stdout missing staging warmup output: %q", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), "[STAGING : demo] compose output\n") {
 		t.Fatalf("stdout missing verbose compose output: %q", stdout.String())

@@ -56,6 +56,16 @@ type BundlePrepareOptions struct {
 	Dir                    string
 	DryRun                 bool
 	PyPIOnly               bool
+	SkipWarmRuntime        bool
+	Verbose                bool
+	Stdout                 io.Writer
+	Stderr                 io.Writer
+	DockerPreflightTimeout time.Duration
+}
+
+type BundleWarmRuntimeOptions struct {
+	Dir                    string
+	DryRun                 bool
 	Verbose                bool
 	Stdout                 io.Writer
 	Stderr                 io.Writer
@@ -121,6 +131,7 @@ func formatDuration(duration time.Duration) string {
 type BundleEnsureOptions struct {
 	Dir                    string
 	DryRun                 bool
+	SkipWarmRuntime        bool
 	Verbose                bool
 	Stdout                 io.Writer
 	Stderr                 io.Writer
@@ -526,6 +537,11 @@ func BundlePrepare(options BundlePrepareOptions) error {
 		if options.Stdout != nil {
 			fmt.Fprintf(options.Stdout, "would build installation bundle: %s\n", bundleDir)
 			fmt.Fprintln(options.Stdout, commandLine(spec))
+			if !options.SkipWarmRuntime {
+				if err := warmPreparedPythonRuntime(BundleWarmRuntimeOptions{Dir: options.Dir, DryRun: true, Stdout: options.Stdout}); err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	}
@@ -608,8 +624,88 @@ func BundlePrepare(options BundlePrepareOptions) error {
 	}); err != nil {
 		return err
 	}
+	if !options.SkipWarmRuntime {
+		if err := timer.Measure("warm Python runtime", func() error {
+			return warmPreparedPythonRuntime(BundleWarmRuntimeOptions{Dir: options.Dir, Verbose: options.Verbose, Stdout: stdout, Stderr: stderr, DockerPreflightTimeout: options.DockerPreflightTimeout})
+		}); err != nil {
+			return err
+		}
+	}
 	timer.Print(options.Stdout)
 	return markBundlePrepared(options.Dir)
+}
+
+func BundleWarmRuntime(options BundleWarmRuntimeOptions) error {
+	if options.Dir == "" {
+		options.Dir = DefaultDeploymentDir
+	}
+	if _, err := EnsureBundlePrepared(BundleEnsureOptions{
+		Dir:                    options.Dir,
+		DryRun:                 options.DryRun,
+		SkipWarmRuntime:        true,
+		Verbose:                options.Verbose,
+		Stdout:                 options.Stdout,
+		Stderr:                 options.Stderr,
+		DockerPreflightTimeout: options.DockerPreflightTimeout,
+	}); err != nil {
+		return fmt.Errorf("prepare installation bundle: %w", err)
+	}
+	return warmPreparedPythonRuntime(options)
+}
+
+func warmPreparedPythonRuntime(options BundleWarmRuntimeOptions) error {
+	if options.Dir == "" {
+		options.Dir = DefaultDeploymentDir
+	}
+	projectName, err := deploymentComposeProjectName(options.Dir)
+	if err != nil {
+		return err
+	}
+	spec := BundleWarmRuntimeCommand(options.Dir, projectName)
+	if options.DryRun {
+		if options.Stdout != nil {
+			fmt.Fprintf(options.Stdout, "would warm Python runtime: %s\n", options.Dir)
+			fmt.Fprintln(options.Stdout, commandLine(spec))
+		}
+		return nil
+	}
+	state, err := loadState(options.Dir)
+	if err != nil {
+		return err
+	}
+	state, err = withInferredBundleState(options.Dir, state)
+	if err != nil {
+		return err
+	}
+	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
+	if err != nil {
+		return err
+	}
+	if err := ensureAppCommandDirs(options.Dir, pack); err != nil {
+		return err
+	}
+	if _, err := materializeRuntimeCompose(options.Dir); err != nil {
+		return fmt.Errorf("materialize runtime compose: %w", err)
+	}
+	runStdout := options.Stdout
+	runStderr := options.Stderr
+	if !options.Verbose {
+		runStdout = nil
+		runStderr = nil
+	}
+	return runInterruptibleCommand(runBundleCommand, spec, bundleDockerRunOptions(runStdout, runStderr, options.DockerPreflightTimeout))
+}
+
+func BundleWarmRuntimeCommand(dir string, projectName string) CommandSpec {
+	args := []string{
+		"run",
+		"--rm",
+		"--no-deps",
+		"-e",
+		"REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup",
+		"app",
+	}
+	return quietComposeCommand(composeCommandWithProject(dir, projectName, args...))
 }
 
 func EnsureBundlePrepared(options BundleEnsureOptions) (bool, error) {
@@ -626,6 +722,7 @@ func EnsureBundlePrepared(options BundleEnsureOptions) (bool, error) {
 	return true, BundlePrepare(BundlePrepareOptions{
 		Dir:                    options.Dir,
 		DryRun:                 options.DryRun,
+		SkipWarmRuntime:        options.SkipWarmRuntime,
 		Verbose:                options.Verbose,
 		Stdout:                 options.Stdout,
 		Stderr:                 options.Stderr,

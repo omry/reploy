@@ -1,0 +1,2 @@
+kind: Added
+body: Restore Python runtime warmup during `reploy bundle build` and add explicit `reploy bundle warm-runtime`.

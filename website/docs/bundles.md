@@ -28,9 +28,20 @@ Explicitly build the selected bundle when you want an early preflight:
 reploy bundle build
 ```
 
-Bundle build only prepares and validates dependency artifacts. Runtime files,
-managed config mounts, and app startup checks are handled by runtime and install
-commands.
+Bundle build prepares and validates dependency artifacts, then warms the staging
+Python runtime so the virtual environment is ready before the app starts.
+App startup checks are still handled by runtime and install commands.
+When a blueprint declares mounted managed files, warmup may create empty
+placeholders for missing files so Docker can mount them.
+
+You can also warm the staging Python runtime directly:
+
+```bash
+reploy bundle warm-runtime
+```
+
+This builds the selected bundle first when needed, materializes runtime Compose,
+and exits after the Python runtime is ready.
 
 Check that the bundle can be prepared. This builds first when needed:
 
@@ -43,6 +54,7 @@ Use verbose output when diagnosing build or dependency resolver behavior:
 ```bash
 reploy bundle check --verbose
 reploy bundle build --verbose
+reploy bundle warm-runtime --verbose
 ```
 
 For deployments staged from PyPI package refs, `reploy stage --update` refreshes
