@@ -20,8 +20,8 @@ A blueprint answers these questions:
 - Which app backend provides the deployable packages?
 - Which bundle options can users select?
 - Which runtime commands should Reploy expose?
-- Which install target overrides, owner, staging ports, and deployed ports
-  should be the defaults?
+- Which install target overrides, system run-as account, staging ports, and
+  deployed ports should be the defaults?
 - Which Docker image and directories should the app use?
 - Which health check proves the service is up?
 - Which app-specific hooks should run during install?
@@ -29,9 +29,9 @@ A blueprint answers these questions:
 ## Current Backend and Runtime
 
 The first supported app backend is Python. The first supported runtime is
-Docker. Linux is the production permanent-install target with systemd. macOS
-and Windows support development, staging, and Docker-managed permanent installs
-with Docker Desktop.
+Docker. Linux supports current-user Docker-managed installs and system-scope
+systemd installs. macOS and Windows support development, staging, and
+Docker-managed user-scope permanent installs with Docker Desktop.
 
 That means the current authoring path is strongest for apps that can publish
 Python packages and run inside a Docker container.
@@ -66,10 +66,11 @@ bundle:
 
 install:
   target: {}
-  owner:
-    user: example
-    group: example
-    on_missing: create
+  system:
+    run_as:
+      user: example
+      group: example
+      on_missing: create
   ports:
     deployed:
       https:

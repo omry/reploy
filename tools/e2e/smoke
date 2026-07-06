@@ -209,14 +209,12 @@ def free_local_port() -> str:
         return str(listener.getsockname()[1])
 
 
-def docker_managed_install_host() -> bool:
-    return sys.platform.startswith(("darwin", "win32", "cygwin", "msys"))
-
-
 def install_scope() -> str:
-    if docker_managed_install_host():
-        return "user"
-    return "system"
+    return "user"
+
+
+def docker_managed_install() -> bool:
+    return install_scope() == "user"
 
 
 def control_script_command(install_dir: Path, *args: str) -> list[str]:
@@ -344,7 +342,7 @@ def run_persistent_install_smoke(
 
         status = run(control_script_command(install_dir, "status"), cwd=workdir, env=env)
         require_contains(completed_output(status), "smoke-app", "installed control status")
-        if docker_managed_install_host():
+        if docker_managed_install():
             require_contains(status.stdout, "[DEPLOYED : smoke-app] NAME", "installed control status")
         else:
             require_contains(completed_output(status), "[DEPLOYED : smoke-app]", "installed control status")
@@ -359,7 +357,7 @@ def run_persistent_install_smoke(
         require_not_contains(completed_output(live_check), "[smoke-app]", "installed live config check")
 
         down = run(control_script_command(install_dir, "down"), cwd=workdir, env=env)
-        if docker_managed_install_host():
+        if docker_managed_install():
             require_contains(completed_output(down), "[DEPLOYED : smoke-app] down... done", "installed control down")
         require_not_contains(completed_output(down), "[smoke-app]", "installed control down")
     finally:
@@ -484,7 +482,11 @@ def run_smoke(
     if not docker_enabled:
         return
 
-    doctor = run([str(reploy), "doctor", "--preinstall", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+    doctor = run(
+        [str(reploy), "doctor", "--preinstall", "--scope", install_scope(), "--dir", str(deploy_dir)],
+        cwd=workdir,
+        env=env,
+    )
     require_contains(completed_output(doctor), "ok: preinstall checks passed", "preinstall doctor")
 
     install = run(
@@ -510,7 +512,7 @@ def run_smoke(
     require_prefixed_lines(install.stdout, "[STAGING : smoke-app] ", "install dry-run")
     require_contains(install.stdout, "[STAGING : smoke-app] would install deployment:", "install dry-run")
     require_contains(install.stdout, "service: smoke-e2e", "install dry-run")
-    require_contains(install.stdout, "port https: 127.0.0.1:18082 -> 8075", "install dry-run")
+    require_contains(install.stdout, "port https: 127.0.0.1:18082 -> 19075", "install dry-run")
     require_contains(
         install.stdout,
         "would rebuild local source bundle: smoke-imap, smoke-suite",
@@ -526,7 +528,7 @@ def run_smoke(
 
         run([str(reploy), "bundle", "clean", "--dir", str(deploy_dir)], cwd=workdir, env=env)
 
-    if not docker_managed_install_host():
+    if not docker_managed_install():
         run([str(reploy), "services", "list"], cwd=workdir, env=env)
 
 

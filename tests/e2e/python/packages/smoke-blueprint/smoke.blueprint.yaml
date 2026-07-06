@@ -15,14 +15,11 @@ app:
     color_env: SMOKE_COLOR
 
 install:
-  owner:
-    user: "1000"
-    group: "1000"
   ports:
     deployed:
       https:
         host_bind: 127.0.0.1
-        host_port: 8075
+        host_port: 19075
     staging:
       https:
         host_bind: 127.0.0.1

@@ -143,10 +143,10 @@ func validateInstallScopeForBackend(scope InstallScope, backend installBackend, 
 	switch scope {
 	case InstallScopeUser:
 		switch backend {
-		case installBackendDockerDesktop:
+		case installBackendDockerDesktop, installBackendDockerManaged:
 			return nil
 		case installBackendLinuxSystemd:
-			return fmt.Errorf("--scope user is not supported on Linux yet; no user lifecycle backend is available")
+			return fmt.Errorf("--scope user requires a Docker-managed backend on Linux")
 		default:
 			return platform.unsupportedPersistentInstallError("install")
 		}
@@ -175,7 +175,7 @@ func Install(options InstallOptions) error {
 			return err
 		}
 	}
-	doctorCode := Doctor(DoctorOptions{Dir: options.Dir, Preinstall: true, Quiet: true, SuppressWarnings: true, Stdout: options.Stdout, DockerPreflightTimeout: options.DockerPreflightTimeout})
+	doctorCode := Doctor(DoctorOptions{Dir: options.Dir, Preinstall: true, Scope: plan.Scope, Quiet: true, SuppressWarnings: true, Stdout: options.Stdout, DockerPreflightTimeout: options.DockerPreflightTimeout})
 	if doctorCode != 0 {
 		return fmt.Errorf("preinstall doctor failed")
 	}
@@ -235,7 +235,7 @@ func DirectInstall(options DirectInstallOptions) (string, error) {
 		return "", err
 	}
 	platform := currentHostPlatform()
-	backend := platform.installBackend()
+	backend := platform.installBackendForScope(scope)
 	if err := validateInstallScopeForBackend(scope, backend, platform); err != nil {
 		return "", err
 	}
@@ -401,7 +401,7 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 	}
 	configLayout := configMountLayoutForPack(pack)
 	platform := currentHostPlatform()
-	backend := platform.installBackend()
+	backend := platform.installBackendForScope(scope)
 	if backend == installBackendUnsupported {
 		return installPlan{}, platform.unsupportedPersistentInstallError("install")
 	}
@@ -463,7 +463,7 @@ func defaultInstallService(dir string) (string, error) {
 
 func defaultInstallTarget(pack deploy.AppPack, scope InstallScope) (string, error) {
 	platform := currentHostPlatform()
-	backend := platform.installBackend()
+	backend := platform.installBackendForScope(scope)
 	if err := validateInstallScopeForBackend(scope, backend, platform); err != nil {
 		return "", err
 	}
@@ -601,7 +601,7 @@ func printInstallDryRun(stdout io.Writer, plan installPlan) {
 	fmt.Fprintf(stdout, "compose project: %s\n", plan.ComposeProject)
 	fmt.Fprintf(stdout, "container: %s\n", plan.ContainerName)
 	fmt.Fprintf(stdout, "network: %s\n", plan.NetworkName)
-	if plan.Backend == installBackendDockerDesktop {
+	if isDockerManagedInstallBackend(plan.Backend) {
 		fmt.Fprintln(stdout, "permanent install backend: Docker-managed Compose")
 	}
 	if containerUser, err := installContainerUser(plan.SourceDir); err == nil {
@@ -1116,7 +1116,7 @@ func writeInstalledDockerEnv(plan installPlan) error {
 		updates["REPLOY_CONTAINER_USER"] = owner.ContainerUser
 		updates["REPLOY_INSTALL_OWNER"] = owner.Spec
 	}
-	if plan.Backend == installBackendDockerDesktop {
+	if isDockerManagedInstallBackend(plan.Backend) {
 		updates["REPLOY_RESTART"] = "unless-stopped"
 	}
 	_, err = upsertDockerEnvValues(plan.TargetDir, updates)
@@ -1183,7 +1183,7 @@ func chownInstallPath(path string, uid int, gid int) error {
 func resolveInstallOwner(values map[string]string) (resolvedInstallOwner, error) {
 	spec := strings.TrimSpace(values[reployInstallOwnerEnv])
 	if spec == "" {
-		return resolvedInstallOwner{}, fmt.Errorf("REPLOY_INSTALL_OWNER is required for install; set it in the blueprint as install.owner or in %s", DockerEnvFileName)
+		return resolvedInstallOwner{}, fmt.Errorf("REPLOY_INSTALL_OWNER is required for system install; set it in the blueprint as install.system.run_as or in %s", DockerEnvFileName)
 	}
 	uid, gid, err := parseInstallOwner(spec)
 	if err != nil {
@@ -1427,7 +1427,7 @@ func applyInstallPlan(plan installPlan) error {
 	switch plan.Backend {
 	case installBackendLinuxSystemd:
 		return applyLinuxSystemdInstallPlan(plan)
-	case installBackendDockerDesktop:
+	case installBackendDockerDesktop, installBackendDockerManaged:
 		return applyDockerDesktopInstallPlan(plan)
 	default:
 		return currentHostPlatform().unsupportedPersistentInstallError("install")

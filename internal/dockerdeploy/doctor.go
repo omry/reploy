@@ -16,6 +16,7 @@ import (
 type DoctorOptions struct {
 	Dir                    string
 	Preinstall             bool
+	Scope                  InstallScope
 	Quiet                  bool
 	SuppressWarnings       bool
 	Stdout                 io.Writer
@@ -36,7 +37,7 @@ func Doctor(options DoctorOptions) int {
 		stdout, _ := deploymentOutputWritersForDeployment(options.Dir, state, options.Stdout, nil)
 		options.Stdout = stdout
 	}
-	findings := doctorFindings(options.Dir, options.Preinstall, options.DockerPreflightTimeout)
+	findings := doctorFindings(options.Dir, options.Preinstall, options.Scope, options.DockerPreflightTimeout)
 	exitCode := 0
 	for _, finding := range findings {
 		if finding.Status == "fail" {
@@ -99,7 +100,7 @@ func outputColorEnabled(output io.Writer) bool {
 	return writerLooksTerminal(output)
 }
 
-func doctorFindings(dir string, preinstall bool, dockerPreflightTimeout time.Duration) []DoctorFinding {
+func doctorFindings(dir string, preinstall bool, scope InstallScope, dockerPreflightTimeout time.Duration) []DoctorFinding {
 	required := []string{
 		ComposeFileName,
 		DockerEnvFileName,
@@ -139,12 +140,12 @@ func doctorFindings(dir string, preinstall bool, dockerPreflightTimeout time.Dur
 		findings = append(findings, DoctorFinding{Status: "ok", Message: "generated file matches manifest: " + path})
 	}
 	if preinstall {
-		findings = append(findings, doctorPreinstallFindings(dir, dockerPreflightTimeout)...)
+		findings = append(findings, doctorPreinstallFindings(dir, scope, dockerPreflightTimeout)...)
 	}
 	return findings
 }
 
-func doctorPreinstallFindings(dir string, dockerPreflightTimeout time.Duration) []DoctorFinding {
+func doctorPreinstallFindings(dir string, scope InstallScope, dockerPreflightTimeout time.Duration) []DoctorFinding {
 	findings := []DoctorFinding{}
 	values, err := readDockerEnv(dir)
 	if err != nil {
@@ -171,7 +172,14 @@ func doctorPreinstallFindings(dir string, dockerPreflightTimeout time.Duration) 
 			findings = append(findings, DoctorFinding{Status: "ok", Message: "install runtime path is relative: " + key})
 		}
 	}
-	switch backend := currentHostPlatform().installBackend(); backend {
+	platform := currentHostPlatform()
+	backend := platform.installBackend()
+	if scope != "" {
+		if parsedScope, err := ParseInstallScope(string(scope)); err == nil {
+			backend = platform.installBackendForScope(parsedScope)
+		}
+	}
+	switch backend {
 	case installBackendLinuxSystemd:
 		owner, err := resolveInstallOwner(values)
 		if err != nil {
@@ -185,8 +193,9 @@ func doctorPreinstallFindings(dir string, dockerPreflightTimeout time.Duration) 
 		}
 	case installBackendDockerDesktop:
 		findings = append(findings, dockerDesktopPreinstallFindings(dir, dockerPreflightTimeout)...)
+	case installBackendDockerManaged:
+		findings = append(findings, dockerManagedPreinstallFindings(dir, dockerPreflightTimeout)...)
 	default:
-		platform := currentHostPlatform()
 		if platform.GOOS == "windows" {
 			findings = append(findings, dockerDesktopPreinstallFindings(dir, dockerPreflightTimeout)...)
 			findings = append(findings, DoctorFinding{Status: "fail", Message: platform.unsupportedPersistentInstallError("install").Error()})
@@ -232,6 +241,17 @@ func doctorPreinstallFindings(dir string, dockerPreflightTimeout time.Duration) 
 	}
 	if !hasDoctorFailure(findings) {
 		findings = append(findings, DoctorFinding{Status: "ok", Message: "preinstall checks passed"})
+	}
+	return findings
+}
+
+func dockerManagedPreinstallFindings(dir string, dockerPreflightTimeout time.Duration) []DoctorFinding {
+	findings := []DoctorFinding{}
+	runtimeInfo, err := detectDockerRuntimeForDoctor(context.Background(), CommandSpec{Name: "docker", Dir: dir}, dockerPreflightTimeout)
+	if err != nil {
+		findings = append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("Docker runtime is required for Docker-managed permanent install: %v", err)})
+	} else {
+		findings = append(findings, DoctorFinding{Status: "ok", Message: "Docker runtime detected: " + runtimeInfo.OperatingSystem})
 	}
 	return findings
 }

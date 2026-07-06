@@ -333,7 +333,7 @@ func defaultDockerEnv(pack deploy.AppPack, dockerIdentity string) (string, error
 	if service.InstallOwner != "" {
 		lines = append(lines,
 			fmt.Sprintf("%s=%s", reployInstallOwnerEnv, service.InstallOwner),
-			fmt.Sprintf("%s=%s", reployInstallOwnerOnMissing, pack.Install.Owner.OnMissing),
+			fmt.Sprintf("%s=%s", reployInstallOwnerOnMissing, pack.Install.System.RunAs.OnMissing),
 		)
 	}
 	if hasNamedPortBindings(ports) {
@@ -475,7 +475,7 @@ func dockerServiceDefaults(pack deploy.AppPack, dockerIdentity string) deploy.Do
 	service.ContainerPort = defaultString(service.ContainerPort, "8080")
 	service.HostBind = defaultString(service.HostBind, "127.0.0.1")
 	service.HostPort = defaultString(service.HostPort, "18080")
-	service.InstallOwner = installOwnerSpec(pack.Install.Owner)
+	service.InstallOwner = installOwnerSpec(pack.Install.System.RunAs)
 	service.PublicScheme = defaultString(service.PublicScheme, "http")
 	service.NetworkName = defaultString(dockerIdentity, slug+"-staging")
 	service.RuntimeRoot = defaultString(service.RuntimeRoot, "/reploy-runtime/python-venv")

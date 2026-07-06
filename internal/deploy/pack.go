@@ -61,9 +61,14 @@ type AppProviderConfig struct {
 
 type InstallPackConfig struct {
 	Target       InstallTargetConfig       `yaml:"target"`
+	System       InstallSystemConfig       `yaml:"system"`
 	Owner        InstallOwnerConfig        `yaml:"owner"`
 	Ports        InstallPortsConfig        `yaml:"ports"`
 	ManagedPaths InstallManagedPathsConfig `yaml:"managed_paths"`
+}
+
+type InstallSystemConfig struct {
+	RunAs InstallOwnerConfig `yaml:"run_as"`
 }
 
 type InstallTargetConfig struct {
@@ -668,19 +673,31 @@ func normalizeAndValidateInstallConfig(manifest *PackManifest) error {
 	if err := validateInstallTargetConfig(manifest.Install.Target, runtime.GOOS); err != nil {
 		return err
 	}
-	manifest.Install.Owner.User = strings.TrimSpace(manifest.Install.Owner.User)
-	manifest.Install.Owner.Group = strings.TrimSpace(manifest.Install.Owner.Group)
-	manifest.Install.Owner.OnMissing = strings.TrimSpace(manifest.Install.Owner.OnMissing)
-	manifest.Install.Owner.Windows.Account = strings.TrimSpace(manifest.Install.Owner.Windows.Account)
-	if manifest.Install.Owner.OnMissing == "" {
-		if installOwnerPartIsNumeric(manifest.Install.Owner.User) || installOwnerPartIsNumeric(manifest.Install.Owner.Group) {
-			manifest.Install.Owner.OnMissing = "fail"
-		} else {
-			manifest.Install.Owner.OnMissing = "create"
-		}
+	owner := normalizeInstallRunAs(manifest.Install.Owner)
+	runAs := normalizeInstallRunAs(manifest.Install.System.RunAs)
+	ownerSet := installRunAsIsSet(owner)
+	runAsSet := installRunAsIsSet(runAs)
+	if ownerSet && runAsSet {
+		return fmt.Errorf("install.owner has moved to install.system.run_as; do not set both")
 	}
-	if err := validateInstallOwner(manifest.Install.Owner); err != nil {
-		return err
+	switch {
+	case ownerSet:
+		owner = defaultInstallRunAs(owner)
+		if err := validateInstallRunAs(owner, "install.owner"); err != nil {
+			return err
+		}
+		manifest.Install.Owner = owner
+		manifest.Install.System.RunAs = owner
+	case runAsSet:
+		runAs = defaultInstallRunAs(runAs)
+		if err := validateInstallRunAs(runAs, "install.system.run_as"); err != nil {
+			return err
+		}
+		manifest.Install.System.RunAs = runAs
+		manifest.Install.Owner = runAs
+	default:
+		manifest.Install.Owner = InstallOwnerConfig{}
+		manifest.Install.System.RunAs = InstallOwnerConfig{}
 	}
 	if manifest.Install.Ports.Deployed == nil {
 		manifest.Install.Ports.Deployed = map[string]InstallPortConfig{}
@@ -914,44 +931,74 @@ func isWindowsPathSeparator(char byte) bool {
 	return char == '\\' || char == '/'
 }
 
+func normalizeInstallRunAs(owner InstallOwnerConfig) InstallOwnerConfig {
+	owner.User = strings.TrimSpace(owner.User)
+	owner.Group = strings.TrimSpace(owner.Group)
+	owner.OnMissing = strings.TrimSpace(owner.OnMissing)
+	owner.Windows.Account = strings.TrimSpace(owner.Windows.Account)
+	return owner
+}
+
+func installRunAsIsSet(owner InstallOwnerConfig) bool {
+	return owner.User != "" || owner.Group != "" || owner.OnMissing != "" || owner.Windows.Account != ""
+}
+
+func defaultInstallRunAs(owner InstallOwnerConfig) InstallOwnerConfig {
+	if owner.OnMissing == "" {
+		if installOwnerPartIsNumeric(owner.User) || installOwnerPartIsNumeric(owner.Group) {
+			owner.OnMissing = "fail"
+		} else {
+			owner.OnMissing = "create"
+		}
+	}
+	return owner
+}
+
 func validateInstallOwner(owner InstallOwnerConfig) error {
+	return validateInstallRunAs(owner, "install.owner")
+}
+
+func validateInstallRunAs(owner InstallOwnerConfig, field string) error {
+	if !installRunAsIsSet(owner) {
+		return nil
+	}
 	if owner.User == "" {
-		return fmt.Errorf("install.owner.user is required")
+		return fmt.Errorf("%s.user is required", field)
 	}
 	if owner.Group == "" {
-		return fmt.Errorf("install.owner.group is required")
+		return fmt.Errorf("%s.group is required", field)
 	}
 	if containsLineOrFieldBreak(owner.User) {
-		return fmt.Errorf("install.owner.user must not contain tabs or newlines")
+		return fmt.Errorf("%s.user must not contain tabs or newlines", field)
 	}
 	if containsLineOrFieldBreak(owner.Group) {
-		return fmt.Errorf("install.owner.group must not contain tabs or newlines")
+		return fmt.Errorf("%s.group must not contain tabs or newlines", field)
 	}
 	if containsLineOrFieldBreak(owner.OnMissing) {
-		return fmt.Errorf("install.owner.on_missing must not contain tabs or newlines")
+		return fmt.Errorf("%s.on_missing must not contain tabs or newlines", field)
 	}
 	if containsLineOrFieldBreak(owner.Windows.Account) {
-		return fmt.Errorf("install.owner.windows.account must not contain tabs or newlines")
+		return fmt.Errorf("%s.windows.account must not contain tabs or newlines", field)
 	}
 	switch owner.OnMissing {
 	case "create", "fail":
 	default:
-		return fmt.Errorf("install.owner.on_missing must be create or fail")
+		return fmt.Errorf("%s.on_missing must be create or fail", field)
 	}
 	if owner.OnMissing == "create" && (installOwnerPartIsNumeric(owner.User) || installOwnerPartIsNumeric(owner.Group)) {
-		return fmt.Errorf("install.owner.on_missing=create requires named user and group")
+		return fmt.Errorf("%s.on_missing=create requires named user and group", field)
 	}
 	if owner.OnMissing == "create" && !IsInstallSystemAccountName(owner.User) {
-		return fmt.Errorf("install.owner.user must be a safe system account name when install.owner.on_missing=create")
+		return fmt.Errorf("%s.user must be a safe system account name when %s.on_missing=create", field, field)
 	}
 	if owner.OnMissing == "create" && !IsInstallSystemAccountName(owner.Group) {
-		return fmt.Errorf("install.owner.group must be a safe system account name when install.owner.on_missing=create")
+		return fmt.Errorf("%s.group must be a safe system account name when %s.on_missing=create", field, field)
 	}
 	if owner.User == "root" || owner.User == "0" {
-		return fmt.Errorf("install.owner.user must not be root")
+		return fmt.Errorf("%s.user must not be root", field)
 	}
 	if owner.Group == "root" || owner.Group == "0" {
-		return fmt.Errorf("install.owner.group must not be root")
+		return fmt.Errorf("%s.group must not be root", field)
 	}
 	return nil
 }

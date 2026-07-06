@@ -35,7 +35,7 @@ flowchart LR
 A blueprint is the portable source of deployment intent. Staging is a
 user-owned deployment directory where a service can be inspected, configured,
 started, tested, and prepared before it becomes permanent. A deployed install is
-the system-owned service created from the selected staging state.
+the permanent service created from the selected staging state.
 The staging directory is self-contained and contains everything needed to run
 the service in staging.
 
@@ -75,7 +75,7 @@ service name. The install guide covers overriding those values.
 Simple services can also be installed directly from blueprint defaults:
 
 ```bash
-sudo reploy install <app-blueprint-ref> --scope system
+reploy install <app-blueprint-ref> --scope user
 ```
 
 Use staging when you need to select bundle options, run app configuration
@@ -92,9 +92,9 @@ reploy stage file:./example.blueprint.yaml
 ```
 
 The first supported app backend is Python. The first supported runtime is
-Docker. Linux is the production permanent-install target with systemd. macOS
-and Windows support development, staging, and Docker-managed permanent installs
-with Docker Desktop.
+Docker. Linux supports current-user Docker-managed installs and system-scope
+systemd installs. macOS and Windows support development, staging, and
+Docker-managed user-scope permanent installs with Docker Desktop.
 
 ## Read Next
 

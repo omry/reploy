@@ -62,18 +62,17 @@ Explicit scopes must be validated against backend capabilities:
 - Linux `system` uses the Linux/systemd backend and requires root. If the user
   is not root, Reploy should escalate through the supported privilege path or
   fail with a clear sudo/root instruction.
-  Existing `install.owner` handling is an ownership/container-user policy
-  inside this system install, not a separate dedicated app-user runtime scope.
-- Linux `user` should mean a real per-user install, such as
-  `{{ user.data }}/Reploy/installs/{{ app.id }}` plus a user-level lifecycle
-  backend. For Docker-managed user installs, Docker restart policies may be
-  enough to restart app containers after the Docker daemon starts. If a
-  non-Docker or host-process lifecycle is needed, candidate mechanisms include
-  `systemd --user`; crontab `@reboot` is only startup glue and is not
-  equivalent to a service manager for status, restart, logs, dependency
-  ordering, or health supervision. Until a user lifecycle backend exists,
-  `--scope user` on Linux should fail clearly instead of silently installing
-  under `/opt` or a user-writable path with system semantics.
+  `install.system.run_as` is an ownership/container-user policy inside this
+  system install, not a separate dedicated app-user runtime scope.
+- Linux `user` means a real per-user install owned by the invoking user, such
+  as `{{ user.data }}/Reploy/installs/{{ app.id }}`. Reploy uses a
+  Docker-managed Compose backend for this scope and does not create systemd
+  units, chown installed files, or create/use an app account such as `arbiter`.
+  Docker restart policies may be enough to restart app containers after the
+  Docker daemon starts. If a non-Docker or host-process lifecycle is needed,
+  candidate mechanisms include `systemd --user`; crontab `@reboot` is only
+  startup glue and is not equivalent to a service manager for status, restart,
+  logs, dependency ordering, or health supervision.
 - Mac `user` uses the Docker Desktop-backed install path. Docker restart
   policies can restart app containers after Docker Desktop starts, but Reploy
   still depends on Docker Desktop itself being configured to start at login or
@@ -113,6 +112,7 @@ Initial target defaults:
 | Host/backend | Scope | Default install root |
 | --- | --- |
 | Linux systemd install | `system` | `/opt/{{ app.id }}` |
+| Linux Docker-managed install | `user` | `{{ user.data }}/Reploy/installs/{{ app.id }}` |
 | Mac Docker Desktop | `user` | `{{ user.data }}/Reploy/installs/{{ app.id }}` |
 | Windows Docker Desktop | `user` | `{{ user.local_data }}/Reploy/installs/{{ app.id }}` |
 
@@ -132,6 +132,23 @@ The shortest portable form is to omit the target default:
 install:
   target: {}
 ```
+
+System installs may declare the app account used for installed file ownership
+and the container process:
+
+```yaml
+install:
+  system:
+    run_as:
+      user: arbiter
+      group: arbiter
+      on_missing: create
+```
+
+This field applies only to system-scope installs. User-scope installs run as
+the invoking user at the host install/lifecycle layer and do not create or
+chown to this account. The older `install.owner` key is a compatibility alias
+for `install.system.run_as`.
 
 Blueprints may provide one global default:
 

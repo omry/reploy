@@ -94,6 +94,29 @@ func TestUninstallDryRunOnWindowsPrintsDockerDesktopPlan(t *testing.T) {
 	}
 }
 
+func TestUninstallNeedsRootUsesInstalledUserScopeFromTarget(t *testing.T) {
+	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "linux"})
+	defer restorePlatform()
+	target := makeInstalledDeploymentForUninstall(t, "demo-test", "demo-test-abcd")
+	setInstalledScopeForUninstall(t, target, InstallScopeUser)
+
+	if UninstallNeedsRoot(UninstallOptions{From: target}) {
+		t.Fatal("linux user-scope uninstall should not require root")
+	}
+}
+
+func TestUninstallNeedsRootUsesCurrentInstalledUserScope(t *testing.T) {
+	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "linux"})
+	defer restorePlatform()
+	target := makeInstalledDeploymentForUninstall(t, "demo-test", "demo-test-abcd")
+	setInstalledScopeForUninstall(t, target, InstallScopeUser)
+	t.Chdir(target)
+
+	if UninstallNeedsRoot(UninstallOptions{}) {
+		t.Fatal("linux user-scope uninstall from current deployment should not require root")
+	}
+}
+
 func TestListReploySystemdServices(t *testing.T) {
 	unitDir := t.TempDir()
 	oldSystemdUnitDir := uninstallSystemdUnitDir
@@ -274,6 +297,49 @@ func TestUninstallFromInstalledTargetOnWindowsUsesDockerDesktopCleanup(t *testin
 	for _, forbidden := range []string{"systemctl stop", "systemctl disable", "systemctl daemon-reload"} {
 		if containsCommand(commands, forbidden) {
 			t.Fatalf("windows uninstall should not run %q: %#v", forbidden, commands)
+		}
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("target was not removed: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "uninstalled service: demo-test") {
+		t.Fatalf("stdout missing success:\n%s", stdout.String())
+	}
+}
+
+func TestUninstallFromLinuxUserScopeInstalledTargetUsesDockerManagedCleanup(t *testing.T) {
+	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "linux"})
+	defer restorePlatform()
+	target := makeInstalledDeploymentForUninstall(t, "demo-test", "demo-test-abcd")
+	setInstalledScopeForUninstall(t, target, InstallScopeUser)
+	restoreHost := stubUninstallHost(t)
+	defer restoreHost()
+
+	commands := []string{}
+	uninstallRunDockerCommand = func(spec CommandSpec, dockerPreflightTimeout time.Duration) error {
+		commands = append(commands, formatCommand(spec.Name, spec.Args...))
+		return nil
+	}
+	uninstallRunCommand = func(name string, args ...string) error {
+		commands = append(commands, formatCommand(name, args...))
+		return nil
+	}
+
+	var stdout strings.Builder
+	if err := Uninstall(UninstallOptions{From: target, RemoveDir: true, Stdout: &stdout}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"docker compose --project-name demo-test-abcd",
+		"down --remove-orphans",
+	} {
+		if !containsCommand(commands, want) {
+			t.Fatalf("commands missing %q: %#v", want, commands)
+		}
+	}
+	for _, forbidden := range []string{"systemctl stop", "systemctl disable", "systemctl daemon-reload"} {
+		if containsCommand(commands, forbidden) {
+			t.Fatalf("linux user-scope uninstall should not run %q: %#v", forbidden, commands)
 		}
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
@@ -488,6 +554,25 @@ func makeInstalledDeploymentForUninstall(t *testing.T, service string, project s
 		t.Fatal(err)
 	}
 	return dir
+}
+
+func setInstalledScopeForUninstall(t *testing.T, dir string, scope InstallScope) {
+	t.Helper()
+	state, err := loadState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Install == nil {
+		t.Fatal("test deployment is missing install state")
+	}
+	state.Install.Scope = string(scope)
+	content, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, StateFileName), append(content, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func stubUninstallHost(t *testing.T) func() {

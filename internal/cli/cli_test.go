@@ -1398,6 +1398,36 @@ func TestDockerTestRejectsWaitOption(t *testing.T) {
 	}
 }
 
+func TestDockerDoctorScopeOptionsParse(t *testing.T) {
+	options, err := parseDockerDoctorOptions([]string{
+		"--preinstall",
+		"--scope",
+		"user",
+		"--dir",
+		"deployment",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !options.Preinstall || options.Scope != dockerdeploy.InstallScopeUser || options.Dir != "deployment" {
+		t.Fatalf("doctor options = %#v", options)
+	}
+
+	options, err = parseDockerDoctorOptions([]string{"--preinstall", "--scope=system"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Scope != dockerdeploy.InstallScopeSystem {
+		t.Fatalf("scope = %q, want system", options.Scope)
+	}
+}
+
+func TestDockerDoctorScopeRequiresPreinstall(t *testing.T) {
+	if _, err := parseDockerDoctorOptions([]string{"--scope", "user"}); err == nil || !strings.Contains(err.Error(), "--scope requires --preinstall") {
+		t.Fatalf("error = %v, want scope/preinstall validation", err)
+	}
+}
+
 func TestDockerInstallPortOptionsParse(t *testing.T) {
 	options, err := parseDockerInstallOptions([]string{
 		"--dir", "deployment",

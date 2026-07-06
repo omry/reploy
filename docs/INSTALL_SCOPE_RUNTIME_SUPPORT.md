@@ -125,8 +125,10 @@ service-user isolation.
 - Linux `system` scope can continue to use root/systemd plus Docker.
 - Current Linux Docker/systemd installs provide non-root install ownership and
   container UID/GID selection, not a dedicated app-user runtime.
-- Linux `current-user` scope is possible with rootless Docker or rootless
-  Podman, but it does not isolate from the invoking user's files.
+- Linux `current-user` scope can be implemented with Docker-managed Compose
+  under the invoking user. This avoids root and systemd, but it does not
+  isolate from the invoking user's files and depends on the user's Docker
+  runtime/session for persistence.
 - Linux `dedicated app user` scope is most promising with rootless Podman plus
   user systemd/Quadlet. It requires privileged setup, then unprivileged runtime
   under the app account.

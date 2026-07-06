@@ -1252,6 +1252,7 @@ func runDockerDoctor(args []string, stdout io.Writer, stderr io.Writer, globalOp
 	return dockerdeploy.Doctor(dockerdeploy.DoctorOptions{
 		Dir:                    options.Dir,
 		Preinstall:             options.Preinstall,
+		Scope:                  options.Scope,
 		Quiet:                  options.Quiet,
 		Stdout:                 stdout,
 		DockerPreflightTimeout: globalOptions.DockerTimeout,
@@ -1348,7 +1349,12 @@ func runDockerUninstall(args []string, stdout io.Writer, stderr io.Writer, globa
 		return 2
 	}
 	stopSpinner := func(bool) {}
-	if dockerUninstallNeedsRoot(dockerdeploy.UninstallOptions{DryRun: options.DryRun}) && os.Geteuid() != 0 {
+	if dockerUninstallNeedsRoot(dockerdeploy.UninstallOptions{
+		From:        options.From,
+		ServiceName: options.ServiceName,
+		RemoveDir:   options.RemoveDir,
+		DryRun:      options.DryRun,
+	}) && os.Geteuid() != 0 {
 		fmt.Fprintln(stderr, "reploy uninstall error: root privileges are required to stop systemd services and remove Docker resources")
 		fmt.Fprintln(stderr, "rerun with sudo, or add --dry-run to inspect the uninstall plan")
 		return 1
@@ -1620,6 +1626,7 @@ type dockerDoctorOptions struct {
 	Dir         string
 	DirExplicit bool
 	Preinstall  bool
+	Scope       dockerdeploy.InstallScope
 	Quiet       bool
 }
 
@@ -1630,6 +1637,16 @@ func parseDockerDoctorOptions(args []string) (dockerDoctorOptions, error) {
 		switch arg {
 		case "--preinstall":
 			options.Preinstall = true
+		case "--scope":
+			value, ok := optionValue(args, &index)
+			if !ok {
+				return dockerDoctorOptions{}, fmt.Errorf("%s requires a value", arg)
+			}
+			scope, err := dockerdeploy.ParseInstallScope(value)
+			if err != nil {
+				return dockerDoctorOptions{}, err
+			}
+			options.Scope = scope
 		case "--quiet":
 			options.Quiet = true
 		case "--dir":
@@ -1645,11 +1662,22 @@ func parseDockerDoctorOptions(args []string) (dockerDoctorOptions, error) {
 				options.DirExplicit = true
 				continue
 			}
+			if strings.HasPrefix(arg, "--scope=") {
+				scope, err := dockerdeploy.ParseInstallScope(strings.TrimPrefix(arg, "--scope="))
+				if err != nil {
+					return dockerDoctorOptions{}, err
+				}
+				options.Scope = scope
+				continue
+			}
 			return dockerDoctorOptions{}, fmt.Errorf("unknown option: %s", arg)
 		}
 	}
 	if options.Dir == "" {
 		return dockerDoctorOptions{}, fmt.Errorf("--dir must not be empty")
+	}
+	if options.Scope != "" && !options.Preinstall {
+		return dockerDoctorOptions{}, fmt.Errorf("--scope requires --preinstall")
 	}
 	return options, nil
 }
@@ -2515,7 +2543,7 @@ Staging options:
   --quiet      Suppress passing doctor checks
   --to DIR     Install target directory
   --scope user|system
-              Required install scope
+              Required install scope; also applies to doctor --preinstall
   --from DIR   Installed service directory to uninstall
   --service NAME
                Installed service identity, default app id
@@ -2731,7 +2759,7 @@ Options:
   --quiet      Suppress passing doctor checks
   --to DIR     Install target directory
   --scope user|system
-              Required install scope
+              Required install scope; also applies to doctor --preinstall
   --from DIR   Installed service directory to uninstall
   --service NAME
                Installed service identity, default app id

@@ -1,0 +1,2 @@
+kind: Added
+body: Support Linux `reploy install --scope user` as an invoking-user Docker-managed install and add `install.system.run_as` as the system-scope app account field.

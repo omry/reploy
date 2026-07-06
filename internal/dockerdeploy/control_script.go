@@ -49,7 +49,7 @@ func stagingControlScriptContent(pack deploy.AppPack, deployedCommands []deploy.
 
 func controlScriptContent(plan installPlan) string {
 	mode := controlScriptModeDeployed
-	if plan.Backend == installBackendDockerDesktop {
+	if isDockerManagedInstallBackend(plan.Backend) {
 		mode = controlScriptModeDockerDesktop
 	}
 	return renderControlScript(controlScriptSpec{

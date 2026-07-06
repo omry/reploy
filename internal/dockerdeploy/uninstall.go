@@ -79,7 +79,25 @@ func Uninstall(options UninstallOptions) error {
 }
 
 func UninstallNeedsRoot(options UninstallOptions) bool {
-	return !options.DryRun && currentHostPlatform().installBackend() == installBackendLinuxSystemd
+	if options.DryRun {
+		return false
+	}
+	from := strings.TrimSpace(options.From)
+	if from == "" {
+		if state, err := loadState("."); err == nil && state.Phase == deploy.PhaseInstalled && state.Install != nil {
+			from = "."
+		}
+	}
+	if from != "" {
+		if state, err := loadState(from); err == nil && state.Install != nil {
+			backend := currentHostPlatform().installBackend()
+			if scope, scopeErr := ParseInstallScope(state.Install.Scope); scopeErr == nil {
+				backend = currentHostPlatform().installBackendForScope(scope)
+			}
+			return backend == installBackendLinuxSystemd
+		}
+	}
+	return currentHostPlatform().installBackend() == installBackendLinuxSystemd
 }
 
 func newUninstallPlan(options UninstallOptions) (uninstallPlan, error) {
@@ -137,6 +155,9 @@ func newUninstallPlan(options UninstallOptions) (uninstallPlan, error) {
 		return uninstallPlan{}, fmt.Errorf("--service-name %q does not match installed service %q", options.ServiceName, install.Service)
 	}
 	backend := currentHostPlatform().installBackend()
+	if scope, scopeErr := ParseInstallScope(install.Scope); scopeErr == nil {
+		backend = currentHostPlatform().installBackendForScope(scope)
+	}
 	unitPath := install.UnitPath
 	if backend == installBackendLinuxSystemd {
 		unitPath = defaultString(unitPath, filepath.Join(uninstallSystemdUnitDir, install.Service+".service"))
@@ -390,7 +411,7 @@ func printUninstallDryRun(stdout io.Writer, plan uninstallPlan) {
 }
 
 func applyUninstallPlan(plan uninstallPlan, stdout io.Writer) error {
-	if plan.Backend == installBackendDockerDesktop {
+	if isDockerManagedInstallBackend(plan.Backend) {
 		return applyDockerDesktopUninstallPlan(plan, stdout)
 	}
 	if plan.Backend != installBackendLinuxSystemd {

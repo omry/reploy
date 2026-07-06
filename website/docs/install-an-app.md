@@ -67,12 +67,13 @@ prints a PATH hint when needed.
 For simple services that work from blueprint defaults, install directly:
 
 ```bash
-sudo reploy install <app-blueprint-ref> --scope system
+reploy install <app-blueprint-ref> --scope user
 ```
 
-On macOS and Windows, omit `sudo` and use `--scope user`. Reploy uses a
-host-appropriate per-user default install directory unless the blueprint or
-`--to` provides another target.
+Use `--scope user` when you want the install owned by your current user. Reploy
+uses a host-appropriate per-user default install directory unless the blueprint
+or `--to` provides another target. Use `--scope system` with root/admin
+authority when you want a Linux systemd-backed install.
 
 Direct install does not ask install-time configuration questions yet. If the
 app needs bundle selection, configuration commands, or pre-install testing, use
@@ -127,26 +128,27 @@ reploy app
 
 ## 5. Install or Update
 
-Linux installs are systemd-backed and are the production permanent-install
-path:
+Linux system-scope installs are systemd-backed and are the strongest
+production permanent-install path:
 
 ```bash
 sudo reploy install --scope system --to /opt/example --service example
 ```
 
-macOS and Windows Docker-managed permanent installs use Docker Desktop. They
-use the same command surface and default to a per-user Reploy install
-directory. Use `--to` when you want a specific target:
+User-scope permanent installs are Docker-managed. On macOS and Windows they use
+Docker Desktop; on Linux they use the invoking user's Docker runtime. They use
+the same command surface and default to a per-user Reploy install directory.
+Use `--to` when you want a specific target:
 
 ```bash
 reploy install --scope user --to "$PWD/example-installed" --service example
 ```
 
-macOS and Windows Docker Desktop installs provide weaker isolation than
-Linux/systemd installs.
-For reboot resistance on macOS and Windows, enable Docker Desktop
-start-at-login; Reploy sets a Compose restart policy for the app containers,
-but Docker Desktop itself is a user-session dependency.
+Linux, macOS, and Windows user-scope installs are Docker-managed Compose
+installs. They provide weaker isolation than Linux/systemd installs.
+For reboot resistance, the Docker runtime itself must start outside Reploy;
+Reploy sets a Compose restart policy for the app containers, but Docker
+Desktop or a user Docker session is still an external dependency.
 
 Installing over an existing deployment updates it from the current staging
 state. Managed paths declared by the blueprint are preserved by default when

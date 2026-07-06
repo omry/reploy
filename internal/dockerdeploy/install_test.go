@@ -85,7 +85,10 @@ func TestInstallDryRunOnDarwinPrintsDockerDesktopPlan(t *testing.T) {
 	detectDockerRuntimeForDoctor = func(context.Context, CommandSpec, time.Duration) (dockerRuntimeInfo, error) {
 		return dockerRuntimeInfo{Runtime: dockerRuntimeDockerDesktop, OperatingSystem: "Docker Desktop"}, nil
 	}
-	packDir := makeTestPack(t)
+	packDir := makeTestPackWithManifest(t, strings.Replace(testPackManifest(), `  owner:
+    user: "1000"
+    group: "1000"
+`, "", 1))
 	ref, err := deploy.ParsePackRef("file:" + packDir)
 	if err != nil {
 		t.Fatal(err)
@@ -128,6 +131,57 @@ func TestInstallDryRunOnDarwinPrintsDockerDesktopPlan(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "systemctl") || strings.Contains(stdout.String(), "systemd unit") {
 		t.Fatalf("darwin dry-run should not mention systemd:\n%s", stdout.String())
+	}
+}
+
+func TestInstallDryRunOnLinuxUserScopeUsesDockerManagedPlan(t *testing.T) {
+	disableDoctorColor(t)
+	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "linux"})
+	defer restorePlatform()
+	previousDetector := detectDockerRuntimeForDoctor
+	t.Cleanup(func() {
+		detectDockerRuntimeForDoctor = previousDetector
+	})
+	detectDockerRuntimeForDoctor = func(context.Context, CommandSpec, time.Duration) (dockerRuntimeInfo, error) {
+		return dockerRuntimeInfo{Runtime: dockerRuntimeLinuxEngine, OperatingSystem: "Ubuntu 24.04"}, nil
+	}
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	markTestBundlePrepared(t, deployDir)
+	target := filepath.Join(t.TempDir(), "installed")
+
+	var stdout strings.Builder
+	if err := Install(InstallOptions{Scope: InstallScopeUser,
+		Dir:     deployDir,
+		Target:  target,
+		Service: "demo-test",
+		Start:   true,
+		DryRun:  true,
+		Stdout:  &stdout,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"permanent install backend: Docker-managed Compose",
+		"scope: user",
+		"would run: docker compose --project-name",
+		"up -d",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	for _, unwanted := range []string{"systemctl", "systemd unit", "install owner:", "would set installed deployment ownership"} {
+		if strings.Contains(stdout.String(), unwanted) {
+			t.Fatalf("stdout unexpectedly contained %q:\n%s", unwanted, stdout.String())
+		}
 	}
 }
 
@@ -433,7 +487,7 @@ func TestInstallRequiresExplicitInstallOwner(t *testing.T) {
 	if !strings.Contains(err.Error(), "preinstall doctor failed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "fail: install owner must resolve to a non-root uid:gid: REPLOY_INSTALL_OWNER is required for install") {
+	if !strings.Contains(stdout.String(), "fail: install owner must resolve to a non-root uid:gid: REPLOY_INSTALL_OWNER is required for system install") {
 		t.Fatalf("stdout missing install owner failure:\n%s", stdout.String())
 	}
 }
@@ -532,6 +586,26 @@ func TestDefaultInstallTargetOnLinuxSystemUsesOpt(t *testing.T) {
 	}
 }
 
+func TestDefaultInstallTargetOnLinuxUserUsesUserData(t *testing.T) {
+	restore := stubHostPlatform(t, hostPlatform{GOOS: "linux"})
+	defer restore()
+	t.Setenv("HOME", `/home/alice`)
+
+	target, err := defaultInstallTarget(deploy.AppPack{
+		AppID: "demo-app",
+		Install: deploy.InstallPackConfig{
+			Target: deploy.InstallTargetConfig{},
+		},
+	}, InstallScopeUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "/home/alice/.local/share/Reploy/installs/demo-app"
+	if target != want {
+		t.Fatalf("target = %q, want %q", target, want)
+	}
+}
+
 func TestDefaultInstallTargetUsesScopeSpecificOverride(t *testing.T) {
 	restore := stubHostPlatform(t, hostPlatform{GOOS: "windows"})
 	defer restore()
@@ -558,8 +632,11 @@ func TestDefaultInstallTargetUsesScopeSpecificOverride(t *testing.T) {
 }
 
 func TestInstallScopeValidationRejectsUnsupportedCombinations(t *testing.T) {
-	if err := validateInstallScopeForBackend(InstallScopeUser, installBackendLinuxSystemd, hostPlatform{GOOS: "linux"}); err == nil || !strings.Contains(err.Error(), "--scope user is not supported on Linux yet") {
-		t.Fatalf("linux user error = %v", err)
+	if got := (hostPlatform{GOOS: "linux"}).installBackendForScope(InstallScopeUser); got != installBackendDockerManaged {
+		t.Fatalf("linux user backend = %s, want %s", got, installBackendDockerManaged)
+	}
+	if err := validateInstallScopeForBackend(InstallScopeUser, installBackendDockerManaged, hostPlatform{GOOS: "linux"}); err != nil {
+		t.Fatalf("linux user docker-managed error = %v", err)
 	}
 	if err := validateInstallScopeForBackend(InstallScopeSystem, installBackendDockerDesktop, hostPlatform{GOOS: "darwin"}); err == nil || !strings.Contains(err.Error(), "--scope system is not supported on macos with Docker Desktop") {
 		t.Fatalf("macos system error = %v", err)

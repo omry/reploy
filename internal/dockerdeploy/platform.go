@@ -23,6 +23,7 @@ type platformSupportStatus string
 const (
 	installBackendLinuxSystemd       installBackend = "linux-systemd"
 	installBackendDockerDesktop      installBackend = "docker-desktop"
+	installBackendDockerManaged      installBackend = "docker-managed"
 	installBackendUnsupported        installBackend = "unsupported"
 	dockerRuntimeUnknown             dockerRuntime  = "unknown"
 	dockerRuntimeLinuxEngine         dockerRuntime  = "linux-engine"
@@ -93,6 +94,22 @@ func (platform hostPlatform) installBackend() installBackend {
 		return installBackendDockerDesktop
 	default:
 		return installBackendUnsupported
+	}
+}
+
+func (platform hostPlatform) installBackendForScope(scope InstallScope) installBackend {
+	if platform.GOOS == "linux" && scope == InstallScopeUser {
+		return installBackendDockerManaged
+	}
+	return platform.installBackend()
+}
+
+func isDockerManagedInstallBackend(backend installBackend) bool {
+	switch backend {
+	case installBackendDockerDesktop, installBackendDockerManaged:
+		return true
+	default:
+		return false
 	}
 }
 

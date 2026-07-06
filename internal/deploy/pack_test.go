@@ -126,11 +126,11 @@ func TestParsePackManifestReadsDockerLayout(t *testing.T) {
 	if manifest.Install.Target.DefaultPath != "" || len(manifest.Install.Target.DefaultPaths) != 0 {
 		t.Fatalf("install target defaults = %#v", manifest.Install.Target)
 	}
-	if manifest.Install.Owner.User != "demo" || manifest.Install.Owner.Group != "demo" {
-		t.Fatalf("install owner = %#v", manifest.Install.Owner)
+	if manifest.Install.System.RunAs.User != "demo" || manifest.Install.System.RunAs.Group != "demo" {
+		t.Fatalf("install system run_as = %#v", manifest.Install.System.RunAs)
 	}
-	if manifest.Install.Owner.OnMissing != "create" {
-		t.Fatalf("install owner on_missing = %q", manifest.Install.Owner.OnMissing)
+	if manifest.Install.System.RunAs.OnMissing != "create" {
+		t.Fatalf("install system run_as on_missing = %q", manifest.Install.System.RunAs.OnMissing)
 	}
 	if manifest.Install.Ports.Deployed["http"].HostPort != 8080 {
 		t.Fatalf("deployed install ports = %#v", manifest.Install.Ports.Deployed)
@@ -594,8 +594,11 @@ func TestParsePackManifestRejectsInvalidInstallConfig(t *testing.T) {
 			want: "install.target.default_path must resolve to an absolute path",
 		},
 		{
-			name: "missing owner",
-			install: `  ports:
+			name: "partial system run_as",
+			install: `  system:
+    run_as:
+      user: demo
+  ports:
     deployed:
       http:
         host_bind: 127.0.0.1
@@ -605,7 +608,7 @@ func TestParsePackManifestRejectsInvalidInstallConfig(t *testing.T) {
         host_bind: 127.0.0.1
         host_port: 18080
 `,
-			want: "install.owner.user is required",
+			want: "install.system.run_as.group is required",
 		},
 		{
 			name: "root owner",
@@ -1607,9 +1610,10 @@ docker:
 }
 
 func packTestInstallBlock() string {
-	return `  owner:
-    user: demo
-    group: demo
+	return `  system:
+    run_as:
+      user: demo
+      group: demo
   ports:
     deployed:
       http:

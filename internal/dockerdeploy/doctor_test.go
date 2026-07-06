@@ -516,7 +516,7 @@ func TestDoctorPreinstallRejectsMissingInstallOwner(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("doctor exit = %d\n%s", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "fail: install owner must resolve to a non-root uid:gid: REPLOY_INSTALL_OWNER is required for install") {
+	if !strings.Contains(stdout.String(), "fail: install owner must resolve to a non-root uid:gid: REPLOY_INSTALL_OWNER is required for system install") {
 		t.Fatalf("stdout missing install owner failure:\n%s", stdout.String())
 	}
 }

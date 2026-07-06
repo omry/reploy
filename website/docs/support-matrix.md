@@ -33,7 +33,7 @@ which permanent-install semantics Reploy can promise.
 
 | Host | CLI binary | Staging Docker lifecycle | Permanent install/uninstall |
 | --- | --- | --- | --- |
-| Linux | Supported | Supported | Supported with systemd |
+| Linux | Supported | Supported | Supported as user-scope Docker-managed install or system-scope systemd install |
 | Windows | Supported with `windows-amd64` and `windows-arm64` release artifacts | Supported with Docker Desktop and Linux containers | Supported as a Docker-managed install; not a Windows Service install |
 | macOS | Supported with `darwin-amd64` and `darwin-arm64` release artifacts | Supported with Docker Desktop | Supported as a Docker-managed install; not a launchd or Linux/systemd OS service install |
 
@@ -44,17 +44,17 @@ installed control scripts.
 
 ## Current Supported Path
 
-The production permanent-install path is:
+The strongest production permanent-install path is:
 
 ```text
 Python app backend + Docker runtime + Linux host with systemd
 ```
 
-macOS and Windows support are available for development, staging, and
-Docker-managed permanent installs with Docker Desktop. Docker-managed permanent
-installs use Docker Compose restart policy and depend on Docker Desktop being
-configured by the user to start at login for reboot resistance. They do not
-provide the same service-user isolation as Linux/systemd OS service installs.
+Linux user-scope installs, macOS installs, and Windows installs are
+Docker-managed permanent installs. They use Docker Compose restart policy and
+depend on the user's Docker runtime or Docker Desktop being started for reboot
+resistance. They do not provide the same service-user isolation as
+Linux/systemd OS service installs.
 
 The supported ways to install the Reploy command itself are the release install
 scripts and the platform-specific PyPI package. Package-manager formulas such

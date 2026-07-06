@@ -12,8 +12,9 @@ Reploy is an experimental deployment lifecycle tool for services.
 It creates a self-contained staging workspace from an app-provided blueprint,
 lets you configure and test the app there, and can install the result as a
 deployed host service. Docker is the first supported deployment runtime.
-Linux is the production permanent-install host with systemd; macOS and Windows
-support Docker Desktop-backed staging and Docker-managed permanent installs.
+Linux supports both current-user Docker-managed installs and system-scope
+systemd installs; macOS and Windows support Docker Desktop-backed staging and
+Docker-managed user-scope permanent installs.
 
 ## Install
 

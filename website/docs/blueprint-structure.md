@@ -27,10 +27,11 @@ app:
 
 install:
   target: {}
-  owner:
-    user: example
-    group: example
-    on_missing: create
+  system:
+    run_as:
+      user: example
+      group: example
+      on_missing: create
   ports:
     deployed:
       https:
@@ -76,10 +77,14 @@ minimum Reploy version expected by the app.
 `app` names the deployment and declares the app provider. The first supported
 provider is `python`, where `identifier` is the required root package.
 
-`install` declares host install defaults: target path selection, non-root
-installed owner, whether Reploy creates that system owner when missing,
+`install` declares host install defaults: target path selection, system-scope
+app account, whether Reploy creates that system account when missing,
 deployed and staging port defaults, and managed app-owned paths with update
 policy and optional runtime mounts.
+
+`install.system.run_as` applies only to system installs. User-scope installs
+are owned by the invoking user and do not create or chown files to this account.
+The older `install.owner` key is accepted as a compatibility alias.
 
 Managed path mounts may use the blueprint-time `{{ path }}` placeholder, which
 expands to the entry's normalized relative path. For example,
@@ -104,7 +109,7 @@ blueprint omits target defaults, Reploy chooses a built-in host default:
 
 | Field | Value |
 | --- | --- |
-| Host/backend | Linux systemd |
+| Host/backend | Linux system scope |
 | Built-in default | `/opt/{{ app.id }}` |
 | For `app.id: example-app` | `/opt/example-app` |
 
