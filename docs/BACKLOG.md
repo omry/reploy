@@ -35,19 +35,6 @@ No active backlog items.
 
 ## Pre-release
 
-- [ ] `P1` Record Windows PowerShell Docker interrupt probe evidence.
-      Reploy now has `nox -s docker-interrupts` coverage for interrupted
-      long-running Compose app-command shapes and targeted one-off container
-      cleanup, with Linux/WSL2 evidence recorded in `docs/MAINTAINING.md`.
-      Before release, run the same probe from Windows PowerShell with Docker
-      Desktop and record the summary lines. Acceptance checks: run
-      `nox -s docker-interrupts` and, if useful,
-      `nox -s docker-interrupts -- --include-raw-compose --include-up`; verify
-      the Reploy-style named run leaves zero containers after targeted cleanup;
-      record raw Compose and `compose up` behavior if observed; and keep any
-      Windows-specific support-boundary notes with the release validation
-      evidence.
-
 - [ ] `P1` Make bundle-build pip bootstrap progress bounded and useful.
       `reploy bundle build` can sit at `upgrading pip` while preparing the
       build container, with no clear progress and no quick failure if the pip

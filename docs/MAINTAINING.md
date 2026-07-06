@@ -75,15 +75,22 @@ Compose takes to return, force-removes the named one-off container, inspects
 leftover project containers and networks, and performs best-effort cleanup.
 Pass `-- --include-raw-compose` to record the underlying Docker Compose
 behavior without Reploy-style targeted cleanup, and pass `-- --include-up` to
-also compare `docker compose up` behavior. Before release, run this once from
-a Linux shell and once from Windows PowerShell with Docker Desktop, then keep
-the summary lines with the release validation notes.
+also compare `docker compose up` behavior. Before release, keep the summary
+lines with the release validation notes.
 
 Observed Linux/WSL2 behavior on 2026-07-06 from `zsh`: raw
 `docker compose run --rm --no-deps` returned quickly after `SIGINT` but left
 the one-off container running; the Reploy-style named run removed the container
 with targeted cleanup; `docker compose up` returned quickly but left an exited
 service container until `compose down` cleanup.
+
+Observed Windows Docker Desktop behavior on 2026-07-06 from Windows
+PowerShell, running from the WSL UNC checkout with Python from
+`C:\Users\omry\miniconda3\envs\reploy\python.exe`: the Reploy-style named run
+returned after interrupt in 0.31 seconds with exit code 130, Docker Compose had
+already removed the one-off container before targeted cleanup, and the final
+summary reported `containers_before=0 containers_after=0 networks_before=1
+networks_after=1`.
 
 For a faster CLI smoke loop that skips the Docker-backed bundle build/check
 but still runs preinstall and install dry-run checks, pass the smoke helper's
