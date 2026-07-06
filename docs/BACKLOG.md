@@ -92,6 +92,17 @@ No active backlog items.
       solve the same problem. Cross-platform install location design lives in
       `docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md`.
 
+- [ ] `P2` Improve bare `reploy` output when an app is installed.
+      The current no-argument output is almost entirely an app command listing,
+      which hides general Reploy affordances such as `--version`, help,
+      install/stage/info commands, and the distinction between Reploy itself
+      and the installed app surface. Acceptance checks: design a shorter
+      installed-app summary that identifies the active app and install/staging
+      context; show the most useful general Reploy commands alongside a small
+      app-command sample or pointer; keep full app command discovery available
+      through an explicit command; and update tests/docs so bare `reploy`
+      reads as a Reploy entry point, not only as an app command menu.
+
 - [ ] `P2` Add Windows path and Docker Desktop failure-mode smoke follow-ups.
       Core Windows Docker Desktop staging and Docker-managed persistent-install
       evidence is recorded in `docs/archive/WINDOWS_PORT.md`. Remaining
