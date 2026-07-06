@@ -94,14 +94,14 @@ No active backlog items.
 
 - [ ] `P2` Add Windows path and Docker Desktop failure-mode smoke follow-ups.
       Core Windows Docker Desktop staging and Docker-managed persistent-install
-      evidence is recorded in `docs/WINDOWS_PORT.md`. Remaining follow-up
-      coverage should target cases not proven by the successful PowerShell
-      smoke: project paths with spaces, normal drive-letter project paths,
-      Docker Desktop unavailable or wrong-container-mode failures, bind-mount
-      failures, and port conflicts. Acceptance checks: keep these as focused
-      follow-up smokes rather than blocking the core Windows Docker-managed
-      install evidence; record any support-boundary changes in the Windows port
-      appendix or support matrix.
+      evidence is recorded in `docs/archive/WINDOWS_PORT.md`. Remaining
+      follow-up coverage should target cases not proven by the successful
+      PowerShell smoke: project paths with spaces, normal drive-letter project
+      paths, Docker Desktop unavailable or wrong-container-mode failures,
+      bind-mount failures, and port conflicts. Acceptance checks: keep these as
+      focused follow-up smokes rather than blocking the core Windows
+      Docker-managed install evidence; record any support-boundary changes in
+      the archived Windows port appendix or support matrix.
 
 - [ ] `P2` Add first-class install scope and per-scope target defaults.
       Make `default`, `user`, and `system` install scope explicit instead of

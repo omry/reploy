@@ -55,7 +55,8 @@ That can live in:
 - a short note near the top of the file
 
 Archived docs are historical only. They should use `status: Archived` in
-frontmatter and a short archive note near the top of the file.
+frontmatter, live under `docs/archive/`, and include a short archive note near
+the top of the file.
 
 They should not be treated as current guidance unless a newer doc points back
 to them for context.
