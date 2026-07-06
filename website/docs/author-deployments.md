@@ -49,7 +49,7 @@ The local end-to-end fixture in this repository is a good starting point:
 blueprint:
   schema: 1
   version: 0.1.0
-  requires_reploy: ">=0.1.0"
+  requires_reploy: ">=0.4.8.dev1"
 
 app:
   id: example-app
@@ -88,6 +88,7 @@ install:
       - path: data
         update: preserve
         mount: /{{ path }}
+        runtime_readonly: false
 
 docker:
   service:

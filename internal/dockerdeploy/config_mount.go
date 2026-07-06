@@ -13,6 +13,7 @@ import (
 type managedPathMount struct {
 	HostRelative  string
 	ContainerPath string
+	Mode          string
 }
 
 type configMountLayout struct {
@@ -36,6 +37,7 @@ func configMountLayoutForPack(pack deploy.AppPack) configMountLayout {
 		layout.Mounts = append(layout.Mounts, managedPathMount{
 			HostRelative:  relativePath,
 			ContainerPath: mount,
+			Mode:          managedPathMountMode(dir),
 		})
 	}
 	for _, file := range pack.Install.ManagedPaths.Files {
@@ -48,6 +50,7 @@ func configMountLayoutForPack(pack deploy.AppPack) configMountLayout {
 		layout.Mounts = append(layout.Mounts, managedPathMount{
 			HostRelative:  relativePath,
 			ContainerPath: mount,
+			Mode:          managedPathMountMode(file),
 		})
 	}
 	sort.Slice(layout.Mounts, func(i int, j int) bool {
@@ -55,6 +58,13 @@ func configMountLayoutForPack(pack deploy.AppPack) configMountLayout {
 	})
 	sort.Strings(layout.FileMounts)
 	return layout
+}
+
+func managedPathMountMode(entry deploy.InstallManagedPathConfig) string {
+	if entry.RuntimeReadonly != nil && !*entry.RuntimeReadonly {
+		return "rw"
+	}
+	return "${REPLOY_CONFIG_MOUNT:-ro}"
 }
 
 func managedPathNames(managedPaths deploy.InstallManagedPathsConfig) []string {

@@ -17,7 +17,7 @@ runtime files, expose app commands, and install the service.
 blueprint:
   schema: 1
   version: 0.1.0
-  requires_reploy: ">=0.1.0"
+  requires_reploy: ">=0.4.8.dev1"
 
 app:
   id: example-app
@@ -53,6 +53,7 @@ install:
       - path: data
         update: preserve
         mount: /{{ path }}
+        runtime_readonly: false
 
 bundle:
   options: {}
@@ -92,6 +93,11 @@ expands to the entry's normalized relative path. For example,
 `/.example.env`. The compact `{{path}}` form is accepted, but `{{ path }}` is
 the canonical style. Use `${...}` placeholders only for container/runtime
 environment values.
+
+Mounted managed paths are read-only at runtime by default. Set
+`runtime_readonly: false` on a mounted managed path when the app needs to write
+through that mount while the service is running, such as persistent runtime
+data. The field only applies to entries that also set `mount`.
 
 `bundle` declares optional package selections that an app user can add to the
 deployment bundle.

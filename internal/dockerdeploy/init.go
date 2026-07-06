@@ -441,7 +441,7 @@ func renderConfigComposeVolumes(pack deploy.AppPack) string {
 	layout := configMountLayoutForPack(pack)
 	lines := []string{}
 	for _, mount := range layout.Mounts {
-		lines = append(lines, fmt.Sprintf("      - %s", strconv.Quote(fmt.Sprintf("./%s:%s:${REPLOY_CONFIG_MOUNT:-ro}", mount.HostRelative, mount.ContainerPath))))
+		lines = append(lines, fmt.Sprintf("      - %s", strconv.Quote(fmt.Sprintf("./%s:%s:%s", mount.HostRelative, mount.ContainerPath, mount.Mode))))
 	}
 	return strings.Join(lines, "\n")
 }

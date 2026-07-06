@@ -144,6 +144,9 @@ func TestParsePackManifestReadsDockerLayout(t *testing.T) {
 	if len(manifest.Install.ManagedPaths.Dirs) != 1 || manifest.Install.ManagedPaths.Dirs[0].Path != "conf" || manifest.Install.ManagedPaths.Dirs[0].Update != "preserve" || manifest.Install.ManagedPaths.Dirs[0].Mount != "/conf" {
 		t.Fatalf("managed install paths = %#v", manifest.Install.ManagedPaths)
 	}
+	if manifest.Install.ManagedPaths.Dirs[0].RuntimeReadonly != nil {
+		t.Fatalf("managed install path runtime_readonly = %#v, want omitted", manifest.Install.ManagedPaths.Dirs[0].RuntimeReadonly)
+	}
 	compactMountManifest := strings.Replace(packTestManifest(), "mount: /{{ path }}", "mount: /{{path}}", 1)
 	manifest, err = ParsePackManifest(compactMountManifest)
 	if err != nil {
@@ -151,6 +154,14 @@ func TestParsePackManifestReadsDockerLayout(t *testing.T) {
 	}
 	if manifest.Install.ManagedPaths.Dirs[0].Mount != "/conf" {
 		t.Fatalf("compact managed path mount = %#v", manifest.Install.ManagedPaths.Dirs[0])
+	}
+	writableMountManifest := strings.Replace(packTestManifest(), "mount: /{{ path }}", "mount: /{{ path }}\n        runtime_readonly: false", 1)
+	manifest, err = ParsePackManifest(writableMountManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Install.ManagedPaths.Dirs[0].RuntimeReadonly == nil || *manifest.Install.ManagedPaths.Dirs[0].RuntimeReadonly {
+		t.Fatalf("managed install path runtime_readonly = %#v, want false", manifest.Install.ManagedPaths.Dirs[0].RuntimeReadonly)
 	}
 	if manifest.Pack.Schema != 1 || manifest.Pack.Version != "0.1.0" || manifest.Pack.RequiresReploy != ">=0.1.0" {
 		t.Fatalf("pack metadata = %#v", manifest.Pack)
@@ -865,6 +876,28 @@ func TestParsePackManifestRejectsInvalidInstallConfig(t *testing.T) {
         mount: /conf:rw
 `,
 			want: "mount must not contain ':'",
+		},
+		{
+			name: "managed path runtime_readonly without mount",
+			install: `  owner:
+    user: demo
+    group: demo
+  ports:
+    deployed:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 8080
+    staging:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 18080
+  managed_paths:
+    dirs:
+      - path: conf
+        update: preserve
+        runtime_readonly: false
+`,
+			want: "runtime_readonly requires mount",
 		},
 		{
 			name: "mounted managed path contains colon",

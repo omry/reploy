@@ -847,7 +847,7 @@ func TestInitRendersManagedFileMounts(t *testing.T) {
 	for _, want := range []string{
 		`      - "./.arbiter.env:/.arbiter.env:${REPLOY_CONFIG_MOUNT:-ro}"`,
 		`      - "./conf:/conf:${REPLOY_CONFIG_MOUNT:-ro}"`,
-		`      - "./data:/data:${REPLOY_CONFIG_MOUNT:-ro}"`,
+		`      - "./data:/data:rw"`,
 		`container_command_config_check() { "demo-server" "--config-dir" "/conf" "--config-name" "$${DEMO_CONFIG_NAME}" "config" "check" "$$@"; };`,
 	} {
 		if !strings.Contains(compose, want) {
@@ -889,6 +889,47 @@ func TestInitQuotesManagedFileVolumePaths(t *testing.T) {
 	want := "      - " + strconv.Quote("./.arbiter #1.env:/.arbiter #1.env:${REPLOY_CONFIG_MOUNT:-ro}")
 	if !strings.Contains(compose, want) {
 		t.Fatalf("compose did not quote special managed path volume %q:\n%s", want, compose)
+	}
+}
+
+func TestConfigMountLayoutUsesExplicitRuntimeReadonly(t *testing.T) {
+	runtimeWritable := false
+	pack := deploy.AppPack{
+		Docker: deploy.DockerPackConfig{
+			DeploymentDirs: deploy.DockerDeploymentDirs{
+				Config: "conf",
+				Bundle: BundleDirName,
+				Data:   "data",
+			},
+		},
+		Install: deploy.InstallPackConfig{
+			ManagedPaths: deploy.InstallManagedPathsConfig{
+				Files: []deploy.InstallManagedPathConfig{
+					{Path: ".app.env", Mount: "/.app.env"},
+				},
+				Dirs: []deploy.InstallManagedPathConfig{
+					{Path: "conf", Mount: "/conf"},
+					{Path: "data", Mount: "/data"},
+					{Path: "cache", Mount: "/cache", RuntimeReadonly: &runtimeWritable},
+				},
+			},
+		},
+	}
+
+	layout := configMountLayoutForPack(pack)
+	modes := map[string]string{}
+	for _, mount := range layout.Mounts {
+		modes[mount.HostRelative] = mount.Mode
+	}
+	for path, want := range map[string]string{
+		".app.env": "${REPLOY_CONFIG_MOUNT:-ro}",
+		"cache":    "rw",
+		"conf":     "${REPLOY_CONFIG_MOUNT:-ro}",
+		"data":     "${REPLOY_CONFIG_MOUNT:-ro}",
+	} {
+		if modes[path] != want {
+			t.Fatalf("mount mode for %s = %q, want %q (all modes: %#v)", path, modes[path], want, modes)
+		}
 	}
 }
 
@@ -1588,6 +1629,7 @@ install:
       - path: data
         update: preserve
         mount: /{{ path }}
+        runtime_readonly: false
 
 bundle:
   options:

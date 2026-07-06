@@ -104,9 +104,10 @@ type InstallManagedPathsConfig struct {
 }
 
 type InstallManagedPathConfig struct {
-	Path   string `yaml:"path"`
-	Update string `yaml:"update"`
-	Mount  string `yaml:"mount,omitempty"`
+	Path            string `yaml:"path"`
+	Update          string `yaml:"update"`
+	Mount           string `yaml:"mount,omitempty"`
+	RuntimeReadonly *bool  `yaml:"runtime_readonly,omitempty"`
 }
 
 type BundlePackConfig struct {
@@ -1121,6 +1122,9 @@ func normalizeAndValidateManagedPathEntries(kind string, entries []InstallManage
 		}
 		if entry.Mount != "" && strings.Contains(entry.Path, ":") {
 			return fmt.Errorf("%s.path must not contain ':' when mount is set", field)
+		}
+		if entry.RuntimeReadonly != nil && entry.Mount == "" {
+			return fmt.Errorf("%s.runtime_readonly requires mount", field)
 		}
 		if previous, ok := seenPaths[entry.Path]; ok {
 			return fmt.Errorf("%s.path duplicates %s.path: %s", field, previous, entry.Path)
