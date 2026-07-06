@@ -1566,7 +1566,7 @@ func TestInstallRunsConfiguredHooksAroundServiceStart(t *testing.T) {
 		commands = append(commands, "app "+strings.Join(args, " "))
 		return nil
 	}
-	runInstallHealthCheck = func(dir string, stdout io.Writer, stderr io.Writer, dockerPreflightTimeout time.Duration) error {
+	runInstallHealthCheck = func(dir string, stdout io.Writer, stderr io.Writer, restartingDiagnostics string, dockerPreflightTimeout time.Duration) error {
 		commands = append(commands, "health")
 		return nil
 	}
@@ -2572,6 +2572,119 @@ func TestInstallHealthHookIncludesLogsWhenServiceDoesNotStart(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error missing %q:\n%v", want, err)
 		}
+	}
+}
+
+func TestInstallHealthHookRestartingServiceSuggestsPreservedPathDrift(t *testing.T) {
+	restore := stubTestCommandOutputSequence(t, [][]byte{
+		[]byte(`[{"State":"running"}]`),
+		[]byte(`[{"State":"restarting"}]`),
+	})
+	defer restore()
+
+	sourceDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(sourceDir, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "config", "app.yaml"), []byte("staging\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	targetDir := makeTestDeploymentWithDockerEnv(t, "REPLOY_PUBLIC_SCHEME=https\nREPLOY_HOST_BIND=127.0.0.1\nREPLOY_HOST_PORT=1\n")
+	if err := os.MkdirAll(filepath.Join(targetDir, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "config", "app.yaml"), []byte("installed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runInstallHooks(installPlan{SourceDir: sourceDir, TargetDir: targetDir, ControlScript: "democtl", PreservePaths: []string{"config"}}, "after start", []deploy.DockerInstallHookConfig{{HealthCheck: &deploy.DockerInstallHealthCheckConfig{Wait: true}}})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	controlScript := filepath.Join(targetDir, "democtl")
+	for _, want := range []string{
+		"install hook after start health check --wait",
+		"service is restarting; current state: restarting",
+		"next steps:\n",
+		"  run " + commandLine(CommandSpec{Name: controlScript, Args: []string{"logs"}}),
+		"\n  preserved installed paths differ from staging: config",
+		"\n  replace only the paths you intend to refresh, for example --replace config",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q:\n%v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "reploy logs") || strings.Contains(err.Error(), "reploy app config check") {
+		t.Fatalf("install hook error should not suggest staging commands:\n%v", err)
+	}
+}
+
+func TestInstallHealthHookRestartingServiceWithoutPreservedDriftSuggestsLogsOnly(t *testing.T) {
+	restore := stubTestCommandOutputSequence(t, [][]byte{
+		[]byte(`[{"State":"running"}]`),
+		[]byte(`[{"State":"restarting"}]`),
+	})
+	defer restore()
+
+	sourceDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(sourceDir, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "config", "app.yaml"), []byte("same\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	targetDir := makeTestDeploymentWithDockerEnv(t, "REPLOY_PUBLIC_SCHEME=https\nREPLOY_HOST_BIND=127.0.0.1\nREPLOY_HOST_PORT=1\n")
+	if err := os.MkdirAll(filepath.Join(targetDir, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "config", "app.yaml"), []byte("same\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runInstallHooks(installPlan{SourceDir: sourceDir, TargetDir: targetDir, ControlScript: "democtl", PreservePaths: []string{"config"}}, "after start", []deploy.DockerInstallHookConfig{{HealthCheck: &deploy.DockerInstallHealthCheckConfig{Wait: true}}})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	controlScript := filepath.Join(targetDir, "democtl")
+	logsCommand := commandLine(CommandSpec{Name: controlScript, Args: []string{"logs"}})
+	if !strings.Contains(err.Error(), "next steps:\n  run "+logsCommand) {
+		t.Fatalf("error missing logs hint:\n%v", err)
+	}
+	if strings.Contains(err.Error(), "--replace") || strings.Contains(err.Error(), "preserved installed paths differ from staging") {
+		t.Fatalf("error should not suggest replacement without drift:\n%v", err)
+	}
+}
+
+func TestInstallHealthHookRestartingServiceWithOnlyEnvDriftDoesNotSuggestEnvReplace(t *testing.T) {
+	restore := stubTestCommandOutputSequence(t, [][]byte{
+		[]byte(`[{"State":"running"}]`),
+		[]byte(`[{"State":"restarting"}]`),
+	})
+	defer restore()
+
+	sourceDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceDir, ".env"), []byte("staging\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	targetDir := makeTestDeploymentWithDockerEnv(t, "REPLOY_PUBLIC_SCHEME=https\nREPLOY_HOST_BIND=127.0.0.1\nREPLOY_HOST_PORT=1\n")
+	if err := os.WriteFile(filepath.Join(targetDir, ".env"), []byte("installed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runInstallHooks(installPlan{SourceDir: sourceDir, TargetDir: targetDir, ControlScript: "democtl", PreservePaths: []string{".env"}}, "after start", []deploy.DockerInstallHookConfig{{HealthCheck: &deploy.DockerInstallHealthCheckConfig{Wait: true}}})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	for _, want := range []string{
+		"preserved installed paths differ from staging: .env",
+		"replace only the paths you intend to refresh",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q:\n%v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "--replace .env") || strings.Contains(err.Error(), "for example") {
+		t.Fatalf("error should not suggest env replacement example:\n%v", err)
 	}
 }
 

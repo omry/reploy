@@ -103,8 +103,8 @@ var installSystemdUnitDir = defaultSystemdUnitDir
 var runInstallAppCommand = func(dir string, args []string, stdout io.Writer, stderr io.Writer, dockerPreflightTimeout time.Duration) error {
 	return AppCommand(AppCommandOptions{Dir: dir, CommandArgs: args, Stdout: stdout, Stderr: stderr, DockerPreflightTimeout: dockerPreflightTimeout})
 }
-var runInstallHealthCheck = func(dir string, stdout io.Writer, stderr io.Writer, dockerPreflightTimeout time.Duration) error {
-	return TestServer(TestOptions{Dir: dir, Stdout: stdout, DockerPreflightTimeout: dockerPreflightTimeout})
+var runInstallHealthCheck = func(dir string, stdout io.Writer, stderr io.Writer, restartingDiagnostics string, dockerPreflightTimeout time.Duration) error {
+	return TestServer(TestOptions{Dir: dir, Stdout: stdout, RestartingDiagnostics: restartingDiagnostics, DockerPreflightTimeout: dockerPreflightTimeout})
 }
 
 type resolvedInstallOwner struct {
@@ -1602,7 +1602,138 @@ func runInstallHealthCheckHook(plan installPlan, healthCheck *deploy.DockerInsta
 			return installedServiceStartError(plan, err)
 		}
 	}
-	return runInstallHealthCheck(plan.TargetDir, nil, nil, plan.DockerPreflightTimeout)
+	return runInstallHealthCheck(plan.TargetDir, nil, nil, installedServiceRestartingDiagnostics(plan), plan.DockerPreflightTimeout)
+}
+
+func installedServiceRestartingDiagnostics(plan installPlan) string {
+	controlScript := filepath.Join(plan.TargetDir, plan.ControlScript)
+	logsCommand := commandLine(CommandSpec{Name: controlScript, Args: []string{"logs"}})
+	lines := []string{
+		"next steps:",
+		"  run " + logsCommand,
+	}
+	driftedPaths, err := preservedInstallPathDrift(plan)
+	if err != nil || len(driftedPaths) == 0 {
+		return strings.Join(lines, "\n")
+	}
+	lines = append(lines,
+		"  preserved installed paths differ from staging: "+strings.Join(driftedPaths, ", "),
+	)
+	if examplePath, ok := installReplaceExamplePath(driftedPaths); ok {
+		lines = append(lines, "  replace only the paths you intend to refresh, for example --replace "+shellQuote(examplePath))
+	} else {
+		lines = append(lines, "  replace only the paths you intend to refresh")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func preservedInstallPathDrift(plan installPlan) ([]string, error) {
+	drifted := []string{}
+	for _, relativePath := range plan.PreservePaths {
+		relativePath = filepath.ToSlash(filepath.Clean(relativePath))
+		differs, err := installPathsDiffer(
+			filepath.Join(plan.SourceDir, filepath.FromSlash(relativePath)),
+			filepath.Join(plan.TargetDir, filepath.FromSlash(relativePath)),
+		)
+		if err != nil {
+			return nil, err
+		}
+		if differs {
+			drifted = append(drifted, relativePath)
+		}
+	}
+	sort.Strings(drifted)
+	return drifted, nil
+}
+
+func installReplaceExamplePath(paths []string) (string, bool) {
+	for _, candidate := range []string{"config", "conf"} {
+		for _, path := range paths {
+			if path == candidate || strings.Contains(path, "/"+candidate+"/") || strings.HasPrefix(path, candidate+"/") {
+				return path, true
+			}
+		}
+	}
+	for _, path := range paths {
+		base := strings.ToLower(filepath.Base(path))
+		if base == "env" || strings.HasSuffix(base, ".env") {
+			continue
+		}
+		return path, true
+	}
+	return "", false
+}
+
+func installPathsDiffer(sourcePath string, targetPath string) (bool, error) {
+	sourceSnapshot, err := installPathSnapshot(sourcePath)
+	if err != nil {
+		return false, err
+	}
+	targetSnapshot, err := installPathSnapshot(targetPath)
+	if err != nil {
+		return false, err
+	}
+	if len(sourceSnapshot) != len(targetSnapshot) {
+		return true, nil
+	}
+	for path, sourceEntry := range sourceSnapshot {
+		targetEntry, ok := targetSnapshot[path]
+		if !ok || targetEntry != sourceEntry {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+type installPathSnapshotEntry struct {
+	Kind   string
+	SHA256 string
+}
+
+func installPathSnapshot(root string) (map[string]installPathSnapshotEntry, error) {
+	entries := map[string]installPathSnapshotEntry{}
+	if _, err := os.Lstat(root); err != nil {
+		if os.IsNotExist(err) {
+			return entries, nil
+		}
+		return nil, err
+	}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relativePath, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		relativePath = filepath.ToSlash(relativePath)
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			entries[relativePath] = installPathSnapshotEntry{Kind: "symlink"}
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+		case info.IsDir():
+			entries[relativePath] = installPathSnapshotEntry{Kind: "dir"}
+		case info.Mode().IsRegular():
+			hash, err := deploy.HashFile(path)
+			if err != nil {
+				return err
+			}
+			entries[relativePath] = installPathSnapshotEntry{Kind: "file", SHA256: hash}
+		default:
+			entries[relativePath] = installPathSnapshotEntry{Kind: info.Mode().Type().String()}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return entries, nil
 }
 
 func installHookDescription(hook deploy.DockerInstallHookConfig) string {

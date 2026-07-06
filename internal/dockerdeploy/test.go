@@ -24,6 +24,7 @@ type TestOptions struct {
 	Dir                    string
 	Timeout                time.Duration
 	Stdout                 io.Writer
+	RestartingDiagnostics  string
 	DockerPreflightTimeout time.Duration
 }
 
@@ -58,7 +59,7 @@ func TestServer(options TestOptions) error {
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: !healthTLSVerify(health)},
 		},
 	}
-	if err := requireComposeServiceRunning(options.Dir, options.DockerPreflightTimeout); err != nil {
+	if err := requireComposeServiceRunning(options.Dir, options.RestartingDiagnostics, options.DockerPreflightTimeout); err != nil {
 		return err
 	}
 	check := func() error {
@@ -86,7 +87,7 @@ func TestServer(options TestOptions) error {
 			return fmt.Errorf("server health check failed: %w", lastErr)
 		}
 		time.Sleep(1 * time.Second)
-		if err := requireComposeServiceRunning(options.Dir, options.DockerPreflightTimeout); err != nil {
+		if err := requireComposeServiceRunning(options.Dir, options.RestartingDiagnostics, options.DockerPreflightTimeout); err != nil {
 			return err
 		}
 		lastErr = check()
@@ -96,7 +97,7 @@ func TestServer(options TestOptions) error {
 	}
 }
 
-func requireComposeServiceRunning(dir string, dockerPreflightTimeout time.Duration) error {
+func requireComposeServiceRunning(dir string, restartingDiagnostics string, dockerPreflightTimeout time.Duration) error {
 	states, err := composeServiceStates(dir, dockerPreflightTimeout)
 	if err != nil {
 		return err
@@ -112,7 +113,10 @@ func requireComposeServiceRunning(dir string, dockerPreflightTimeout time.Durati
 	}
 	stateList := strings.Join(states, ", ")
 	if serviceStatesContain(states, "restarting") {
-		return fmt.Errorf("service is restarting; current state: %s; run reploy logs and reploy app config check", stateList)
+		if restartingDiagnostics == "" {
+			return fmt.Errorf("service is restarting; current state: %s; run reploy logs and reploy app config check", stateList)
+		}
+		return fmt.Errorf("service is restarting; current state: %s\n%s", stateList, restartingDiagnostics)
 	}
 	return fmt.Errorf("service is not running; current state: %s", stateList)
 }
