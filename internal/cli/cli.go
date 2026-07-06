@@ -71,6 +71,11 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 		if strings.HasPrefix(args[0], "-") {
 			return printTopLevelUsageError(stderr, "unknown option: %s", args[0])
 		}
+		if globalOptions.Target == "docker" {
+			if suggestion := topLevelAppCommandSuggestion(args); suggestion != "" {
+				return printTopLevelUsageError(stderr, "unknown command: %s; did you mean `%s`?", args[0], suggestion)
+			}
+		}
 		return printTopLevelUsageError(stderr, "unknown command: %s", args[0])
 	}
 }
@@ -112,6 +117,33 @@ func runNoCommand(target string, stdout io.Writer, stderr io.Writer) int {
 	}
 	printShortUsage(stdout)
 	return 0
+}
+
+func topLevelAppCommandSuggestion(args []string) string {
+	dir, err := resolveImplicitStagingDeploymentDir(dockerdeploy.DefaultDeploymentDir, false, io.Discard)
+	if err != nil {
+		return ""
+	}
+	result, err := dockerdeploy.AppCommandList(dockerdeploy.AppCommandListOptions{Dir: dir})
+	if err != nil {
+		return ""
+	}
+	for _, command := range result.Commands {
+		if len(command.Trigger) == 0 || len(args) < len(command.Trigger) {
+			continue
+		}
+		match := true
+		for index, trigger := range command.Trigger {
+			if args[index] != trigger {
+				match = false
+				break
+			}
+		}
+		if match {
+			return "reploy app " + strings.Join(args, " ")
+		}
+	}
+	return ""
 }
 
 type globalDeploymentOptions struct {

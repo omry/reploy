@@ -2557,6 +2557,27 @@ func TestTopLevelConfigCommandIsNotAppConfigSurface(t *testing.T) {
 	}
 }
 
+func TestTopLevelAppCommandSuggestsAppPrefix(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	workDir := t.TempDir()
+	t.Chdir(workDir)
+	code, stdout, stderr := runCLI("stage", "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runCLI("config", "check")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "unknown command: config") || !strings.Contains(stderr, "did you mean `reploy app config check`?") {
+		t.Fatalf("stderr did not suggest app prefix:\n%s", stderr)
+	}
+}
+
 func TestDockerStageUpdateUsesExistingState(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
