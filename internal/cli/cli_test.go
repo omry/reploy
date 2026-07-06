@@ -792,6 +792,150 @@ func TestEmbeddedControlRuntimeAcceptsInstalledDeploymentDir(t *testing.T) {
 	}
 }
 
+func TestEmbeddedControlLogsHelp(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	installDir := filepath.Join(t.TempDir(), "installed")
+	writeCLITestInstalledState(t, installDir, "demo", "demo-service")
+
+	code, stdout, stderr := runCLI("_control", "--dir", installDir, "--script-name", "democtl", "logs", "--help")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Usage: democtl logs [OPTIONS]") {
+		t.Fatalf("stdout did not contain control logs usage:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "--tail N") || !strings.Contains(stdout, "default: 100") {
+		t.Fatalf("stdout did not contain bounded tail help:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "--tail all") || !strings.Contains(stdout, "complete available log") {
+		t.Fatalf("stdout did not contain full log help:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "--follow, -f") {
+		t.Fatalf("stdout did not contain follow help:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestEmbeddedControlLogsDefaultsToBoundedTail(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	installDir := filepath.Join(t.TempDir(), "installed")
+	writeCLITestInstalledState(t, installDir, "demo", "demo-service")
+	if err := os.WriteFile(filepath.Join(installDir, dockerdeploy.DockerEnvFileName), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldRuntime := dockerRuntime
+	t.Cleanup(func() {
+		dockerRuntime = oldRuntime
+	})
+	dockerRuntime = func(options dockerdeploy.RuntimeOptions) error {
+		if options.Action != "logs" {
+			t.Fatalf("action = %q, want logs", options.Action)
+		}
+		if options.Dir != installDir {
+			t.Fatalf("dir = %q, want %q", options.Dir, installDir)
+		}
+		if options.Tail != "100" {
+			t.Fatalf("tail = %q, want 100", options.Tail)
+		}
+		if !options.Follow {
+			t.Fatal("follow = false, want true")
+		}
+		fmt.Fprintln(options.Stdout, "installed logs")
+		return nil
+	}
+
+	code, stdout, stderr := runCLI("_control", "--dir", installDir, "--script-name", "democtl", "logs", "--follow")
+	if code != 0 {
+		t.Fatalf("_control logs failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "installed logs\n" {
+		t.Fatalf("stdout = %q, want installed logs", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestEmbeddedControlLogsTailAllDisablesBoundedTail(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	installDir := filepath.Join(t.TempDir(), "installed")
+	writeCLITestInstalledState(t, installDir, "demo", "demo-service")
+	if err := os.WriteFile(filepath.Join(installDir, dockerdeploy.DockerEnvFileName), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldRuntime := dockerRuntime
+	t.Cleanup(func() {
+		dockerRuntime = oldRuntime
+	})
+	dockerRuntime = func(options dockerdeploy.RuntimeOptions) error {
+		if options.Tail != "" {
+			t.Fatalf("tail = %q, want empty full-log tail", options.Tail)
+		}
+		if !options.Follow {
+			t.Fatal("follow = false, want true")
+		}
+		return nil
+	}
+
+	code, stdout, stderr := runCLI("_control", "--dir", installDir, "--script-name", "democtl", "logs", "--tail", "all", "--follow")
+	if code != 0 {
+		t.Fatalf("_control logs failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestEmbeddedControlLogsTailAllUsesLastTailValue(t *testing.T) {
+	args := embeddedControlLogsArgs([]string{"--tail", "25", "--tail=all", "--follow"})
+	if got, want := strings.Join(args, " "), "--follow"; got != want {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+
+	args = embeddedControlLogsArgs([]string{"--tail=all", "--tail", "25", "--follow"})
+	if got, want := strings.Join(args, " "), "--tail=all --tail 25 --follow"; got != want {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+}
+
+func TestEmbeddedControlLogsPreservesExplicitTail(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	installDir := filepath.Join(t.TempDir(), "installed")
+	writeCLITestInstalledState(t, installDir, "demo", "demo-service")
+	if err := os.WriteFile(filepath.Join(installDir, dockerdeploy.DockerEnvFileName), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldRuntime := dockerRuntime
+	t.Cleanup(func() {
+		dockerRuntime = oldRuntime
+	})
+	dockerRuntime = func(options dockerdeploy.RuntimeOptions) error {
+		if options.Tail != "25" {
+			t.Fatalf("tail = %q, want 25", options.Tail)
+		}
+		return nil
+	}
+
+	code, stdout, stderr := runCLI("_control", "--dir", installDir, "--script-name", "democtl", "logs", "--tail=25")
+	if code != 0 {
+		t.Fatalf("_control logs failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
 func TestEmbeddedControlHealthRejectsUnexpectedArgs(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")

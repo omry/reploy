@@ -1,0 +1,2 @@
+kind: Changed
+body: Make generated control-script `logs` show command help, default to the last 100 lines, and accept `--tail all` for the complete available log.

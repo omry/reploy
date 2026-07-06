@@ -17,6 +17,8 @@ type embeddedControlOptions struct {
 	Command    []string
 }
 
+const embeddedControlDefaultLogsTail = "100"
+
 func runEmbeddedControl(args []string, stdout io.Writer, stderr io.Writer, globalOptions globalDeploymentOptions) int {
 	options, err := parseEmbeddedControlOptions(args)
 	if err != nil {
@@ -50,6 +52,10 @@ func runEmbeddedControl(args []string, stdout io.Writer, stderr io.Writer, globa
 	case "status", "ps":
 		return runEmbeddedControlRuntime(context, "status", rest, stdout, stderr, globalOptions)
 	case "logs":
+		if embeddedControlLogsHelpRequested(rest) {
+			printEmbeddedControlLogsHelp(stdout, context)
+			return 0
+		}
 		return runEmbeddedControlRuntime(context, "logs", rest, stdout, stderr, globalOptions)
 	case "health":
 		if len(rest) > 0 && isHelpArg(rest[0]) {
@@ -144,6 +150,20 @@ func printEmbeddedControlUsage(output io.Writer, context embeddedControlUsageCon
 	fmt.Fprintln(output, "  help")
 }
 
+func printEmbeddedControlLogsHelp(output io.Writer, context embeddedControlUsageContext) {
+	scriptName := embeddedControlDefaultString(context.ScriptName, "reployctl")
+	fmt.Fprintf(output, "Usage: %s logs [OPTIONS]\n", scriptName)
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Show deployed service logs with timestamps.")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Options:")
+	fmt.Fprintf(output, "  --tail N     Show only the last N log lines (default: %s)\n", embeddedControlDefaultLogsTail)
+	fmt.Fprintln(output, "  --tail all   Show the complete available log")
+	fmt.Fprintln(output, "  --follow, -f")
+	fmt.Fprintln(output, "              Follow logs instead of exiting after current output")
+	fmt.Fprintln(output, "  -h, --help   Show logs help")
+}
+
 func runEmbeddedControlRuntime(
 	context embeddedControlUsageContext,
 	action string,
@@ -152,6 +172,9 @@ func runEmbeddedControlRuntime(
 	stderr io.Writer,
 	globalOptions globalDeploymentOptions,
 ) int {
+	if action == "logs" {
+		args = embeddedControlLogsArgs(args)
+	}
 	if embeddedControlUsesSystemd(context.State) {
 		switch action {
 		case "up":
@@ -167,6 +190,62 @@ func runEmbeddedControlRuntime(
 	runtimeArgs := append([]string{}, args...)
 	runtimeArgs = append(runtimeArgs, "--dir", context.Dir)
 	return runDockerRuntimeControl(action, runtimeArgs, stdout, stderr, globalOptions)
+}
+
+func embeddedControlLogsHelpRequested(args []string) bool {
+	return len(args) > 0 && isHelpArg(args[0])
+}
+
+func embeddedControlLogsArgs(args []string) []string {
+	if withoutTailAll, ok := embeddedControlLogsWithoutTailAll(args); ok {
+		return withoutTailAll
+	}
+	if embeddedControlLogsTailSpecified(args) {
+		return args
+	}
+	withDefault := append([]string{}, args...)
+	return append(withDefault, "--tail", embeddedControlDefaultLogsTail)
+}
+
+func embeddedControlLogsTailSpecified(args []string) bool {
+	for _, arg := range args {
+		if arg == "--tail" || strings.HasPrefix(arg, "--tail=") {
+			return true
+		}
+	}
+	return false
+}
+
+func embeddedControlLogsWithoutTailAll(args []string) ([]string, bool) {
+	finalTail := ""
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if strings.HasPrefix(arg, "--tail=") {
+			finalTail = strings.TrimSpace(strings.TrimPrefix(arg, "--tail="))
+			continue
+		}
+		if arg == "--tail" && index+1 < len(args) {
+			finalTail = strings.TrimSpace(args[index+1])
+			index++
+		}
+	}
+	if finalTail != "all" {
+		return nil, false
+	}
+
+	normalized := make([]string, 0, len(args))
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if strings.HasPrefix(arg, "--tail=") {
+			continue
+		}
+		if arg == "--tail" && index+1 < len(args) {
+			index++
+			continue
+		}
+		normalized = append(normalized, arg)
+	}
+	return normalized, true
 }
 
 func runEmbeddedControlHealth(context embeddedControlUsageContext, stdout io.Writer, stderr io.Writer) int {
