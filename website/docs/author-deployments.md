@@ -124,7 +124,7 @@ Blueprint refs can be local files while developing:
 
 ```bash
 reploy stage file:./example.blueprint.yaml
-reploy install file:./example.blueprint.yaml --dry-run
+reploy install file:./example.blueprint.yaml --scope <user|system> --dry-run
 ```
 
 For users, publish the blueprint inside the app package and give them an indexed
@@ -132,12 +132,12 @@ shortcut:
 
 ```bash
 reploy stage example-app
-reploy install example-app
+reploy install example-app --scope <user|system>
 ```
 
 Direct PyPI refs remain available when an exact package path is useful:
 
 ```bash
 reploy stage pypi://example-app/example_app/reploy/example.blueprint.yaml
-reploy install pypi://example-app/example_app/reploy/example.blueprint.yaml
+reploy install pypi://example-app/example_app/reploy/example.blueprint.yaml --scope <user|system>
 ```

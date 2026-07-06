@@ -104,17 +104,18 @@ No active backlog items.
       the archived Windows port appendix or support matrix.
 
 - [ ] `P2` Add first-class install scope and per-scope target defaults.
-      Make `default`, `user`, and `system` install scope explicit instead of
-      inferring intent only from paths. Acceptance checks: define the CLI and
-      installed-state shape for requested versus resolved scope; validate
-      requested scope against backend capabilities; add per-scope, per-OS target
-      defaults such as
+      Make `user` and `system` install scope an explicit required choice
+      instead of inferring intent from paths, host platform, backend, or
+      privileges. Acceptance checks: define the CLI and installed-state shape
+      for the explicit scope; validate that explicit scope against backend
+      capabilities; add per-scope, per-OS target defaults such as
       `install.target.default_paths.user.windows` and
       `install.target.default_paths.system.linux`; preserve the simple
       platform-aware default path behavior for blueprints that do not need
-      scope-specific overrides; require root/admin or a clear escalation path
-      for system scope; and document unsupported combinations with actionable
-      errors. Design notes live in `docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md`.
+      scope-specific overrides; require root/admin or a clear privilege path
+      for every supported system scope; and document unsupported combinations
+      with actionable errors. Design notes live in
+      `docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md`.
 
 ## Post-v1
 

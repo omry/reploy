@@ -59,7 +59,7 @@ reploy up
 reploy test
 
 # Install the tested staging workspace.
-sudo "$(command -v reploy)" install --to /srv/arbiter
+sudo "$(command -v reploy)" install --scope system --to /srv/arbiter
 
 # Tail logs through the installed app control script.
 /srv/arbiter/arbiterctl logs --tail=100

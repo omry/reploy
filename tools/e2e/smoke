@@ -213,6 +213,12 @@ def docker_managed_install_host() -> bool:
     return sys.platform.startswith(("darwin", "win32", "cygwin", "msys"))
 
 
+def install_scope() -> str:
+    if docker_managed_install_host():
+        return "user"
+    return "system"
+
+
 def control_script_command(install_dir: Path, *args: str) -> list[str]:
     if sys.platform.startswith(("win32", "cygwin", "msys")):
         script = install_dir / "smoke-appctl.ps1"
@@ -325,6 +331,8 @@ def run_persistent_install_smoke(
                 str(deploy_dir),
                 "--to",
                 str(install_dir),
+                "--scope",
+                install_scope(),
                 "--port",
                 install_port,
             ],
@@ -487,6 +495,8 @@ def run_smoke(
             str(deploy_dir),
             "--to",
             str(install_dir),
+            "--scope",
+            install_scope(),
             "--service",
             "smoke-e2e",
             "--port",

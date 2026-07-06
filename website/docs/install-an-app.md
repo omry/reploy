@@ -67,12 +67,12 @@ prints a PATH hint when needed.
 For simple services that work from blueprint defaults, install directly:
 
 ```bash
-sudo reploy install <app-blueprint-ref>
+sudo reploy install <app-blueprint-ref> --scope system
 ```
 
-On macOS and Windows, omit `sudo`. Reploy uses a host-appropriate per-user
-default install directory unless the blueprint or `--to` provides another
-target.
+On macOS and Windows, omit `sudo` and use `--scope user`. Reploy uses a
+host-appropriate per-user default install directory unless the blueprint or
+`--to` provides another target.
 
 Direct install does not ask install-time configuration questions yet. If the
 app needs bundle selection, configuration commands, or pre-install testing, use
@@ -131,7 +131,7 @@ Linux installs are systemd-backed and are the production permanent-install
 path:
 
 ```bash
-sudo reploy install --to /opt/example --service example
+sudo reploy install --scope system --to /opt/example --service example
 ```
 
 macOS and Windows Docker-managed permanent installs use Docker Desktop. They
@@ -139,7 +139,7 @@ use the same command surface and default to a per-user Reploy install
 directory. Use `--to` when you want a specific target:
 
 ```bash
-reploy install --to "$PWD/example-installed" --service example
+reploy install --scope user --to "$PWD/example-installed" --service example
 ```
 
 macOS and Windows Docker Desktop installs provide weaker isolation than
@@ -154,15 +154,15 @@ their update policy is `preserve`. Replace a path only when you intentionally
 want a fresh copy:
 
 ```bash
-sudo reploy install --to /opt/example --replace conf
-sudo reploy install --to /opt/example --clean
+sudo reploy install --scope system --to /opt/example --replace conf
+sudo reploy install --scope system --to /opt/example --clean
 ```
 
 For side-by-side installs, use a different target directory, service name, and
 port.
 
 ```bash
-sudo reploy install --to /opt/example2 --service example2 --port 8082
+sudo reploy install --scope system --to /opt/example2 --service example2 --port 8082
 ```
 
 After install, operate the service through the generated app control script

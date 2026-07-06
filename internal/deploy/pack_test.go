@@ -930,6 +930,7 @@ func TestResolveInstallTargetDefaultUsesPerOSBeforeGlobal(t *testing.T) {
 		},
 		"demo",
 		"windows",
+		"",
 		sampleInstallTargetRoots("windows"),
 	)
 	if err != nil {
@@ -947,6 +948,34 @@ func TestResolveInstallTargetDefaultUsesPerOSBeforeGlobal(t *testing.T) {
 	}
 }
 
+func TestResolveInstallTargetDefaultUsesScopePerOSBeforePerOS(t *testing.T) {
+	target, source, ok, err := ResolveInstallTargetDefault(
+		InstallTargetConfig{
+			DefaultPaths: map[string]string{
+				"windows":      "{{ user.local_data }}/Windows/{{ app.id }}",
+				"user.windows": "{{ user.local_data }}/User/{{ app.id }}",
+			},
+		},
+		"demo",
+		"windows",
+		"user",
+		sampleInstallTargetRoots("windows"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected install target default")
+	}
+	if source != "install.target.default_paths.user.windows" {
+		t.Fatalf("source = %q", source)
+	}
+	want := `C:\Users\app\AppData\Local/User/demo`
+	if target != want {
+		t.Fatalf("target = %q, want %q", target, want)
+	}
+}
+
 func TestResolveInstallTargetDefaultIgnoresInactivePlatformPath(t *testing.T) {
 	target, source, ok, err := ResolveInstallTargetDefault(
 		InstallTargetConfig{
@@ -956,6 +985,7 @@ func TestResolveInstallTargetDefaultIgnoresInactivePlatformPath(t *testing.T) {
 		},
 		"demo",
 		"windows",
+		"",
 		sampleInstallTargetRoots("windows"),
 	)
 	if err != nil {
@@ -971,6 +1001,7 @@ func TestResolveInstallTargetDefaultRejectsActiveNonNativePath(t *testing.T) {
 		InstallTargetConfig{DefaultPath: "/opt/{{ app.id }}"},
 		"demo",
 		"windows",
+		"",
 		sampleInstallTargetRoots("windows"),
 	)
 	if err == nil {
@@ -986,6 +1017,7 @@ func TestResolveInstallTargetDefaultRejectsUnknownTemplate(t *testing.T) {
 		InstallTargetConfig{DefaultPath: "{{ user.config }}/{{ app.id }}"},
 		"demo",
 		"linux",
+		"",
 		sampleInstallTargetRoots("linux"),
 	)
 	if err == nil {

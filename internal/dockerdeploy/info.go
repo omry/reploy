@@ -35,6 +35,9 @@ func Info(options InfoOptions) (string, error) {
 	if state.RequestedBlueprintRef != "" && state.RequestedBlueprintRef != state.Blueprint.Raw {
 		lines = append(lines, fmt.Sprintf("requested blueprint: %s", state.RequestedBlueprintRef))
 	}
+	if state.Install != nil && state.Install.Scope != "" {
+		lines = append(lines, fmt.Sprintf("install scope: %s", state.Install.Scope))
+	}
 	lines = append(lines, "bundle roots:")
 	if len(state.Bundle.Roots) == 0 {
 		lines = append(lines, "  (none)")

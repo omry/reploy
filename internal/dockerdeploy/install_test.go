@@ -34,7 +34,7 @@ func TestInstallDryRunPrintsPlan(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "installed")
 
 	var stdout strings.Builder
-	if err := Install(InstallOptions{
+	if err := Install(InstallOptions{Scope: InstallScopeSystem,
 		Dir:           deployDir,
 		Target:        target,
 		Service:       "demo-test",
@@ -52,6 +52,7 @@ func TestInstallDryRunPrintsPlan(t *testing.T) {
 	for _, want := range []string{
 		"would install deployment:",
 		"target: " + target,
+		"scope: system",
 		"service: demo-test",
 		"instance id: " + instanceID,
 		"compose project: " + instanceID,
@@ -97,7 +98,7 @@ func TestInstallDryRunOnDarwinPrintsDockerDesktopPlan(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "installed app")
 
 	var stdout strings.Builder
-	if err := Install(InstallOptions{
+	if err := Install(InstallOptions{Scope: InstallScopeUser,
 		Dir:     deployDir,
 		Target:  target,
 		Service: "demo-test",
@@ -109,6 +110,7 @@ func TestInstallDryRunOnDarwinPrintsDockerDesktopPlan(t *testing.T) {
 	}
 	for _, want := range []string{
 		"permanent install backend: Docker-managed Compose",
+		"scope: user",
 		"would run: docker compose --project-name",
 		"up -d",
 	} {
@@ -153,7 +155,7 @@ func TestInstallDryRunOnWindowsPrintsDockerManagedPlan(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "installed")
 
 	var stdout strings.Builder
-	if err := Install(InstallOptions{
+	if err := Install(InstallOptions{Scope: InstallScopeUser,
 		Dir:     deployDir,
 		Target:  target,
 		Service: "demo-test",
@@ -165,6 +167,7 @@ func TestInstallDryRunOnWindowsPrintsDockerManagedPlan(t *testing.T) {
 	}
 	for _, want := range []string{
 		"permanent install backend: Docker-managed Compose",
+		"scope: user",
 		"would write PowerShell control script: " + filepath.Join(target, "democtl.ps1"),
 		"would run: docker compose --project-name",
 		"up -d",
@@ -209,7 +212,7 @@ func TestInstallOnDarwinWritesDockerDesktopDeployment(t *testing.T) {
 	markTestBundlePrepared(t, deployDir)
 	target := filepath.Join(t.TempDir(), "installed")
 
-	if err := Install(InstallOptions{
+	if err := Install(InstallOptions{Scope: InstallScopeUser,
 		Dir:     deployDir,
 		Target:  target,
 		Service: "demo-test",
@@ -302,7 +305,7 @@ func TestInstallDryRunPrintsMissingOwnerCreation(t *testing.T) {
 	}
 
 	var stdout strings.Builder
-	if err := Install(InstallOptions{
+	if err := Install(InstallOptions{Scope: InstallScopeSystem,
 		Dir:    deployDir,
 		Target: filepath.Join(t.TempDir(), "installed"),
 		DryRun: true,
@@ -346,7 +349,7 @@ func TestInstallDryRunRejectsAmbiguousGroupLookupWithMissingUser(t *testing.T) {
 	}
 
 	var stdout strings.Builder
-	err = Install(InstallOptions{
+	err = Install(InstallOptions{Scope: InstallScopeSystem,
 		Dir:    deployDir,
 		Target: filepath.Join(t.TempDir(), "installed"),
 		DryRun: true,
@@ -382,7 +385,7 @@ func TestInstallPrintsPreinstallFailures(t *testing.T) {
 	}
 
 	var stdout strings.Builder
-	err = Install(InstallOptions{
+	err = Install(InstallOptions{Scope: InstallScopeSystem,
 		Dir:    deployDir,
 		Target: filepath.Join(t.TempDir(), "installed"),
 		DryRun: true,
@@ -418,7 +421,7 @@ func TestInstallRequiresExplicitInstallOwner(t *testing.T) {
 	}
 
 	var stdout strings.Builder
-	err = Install(InstallOptions{
+	err = Install(InstallOptions{Scope: InstallScopeSystem,
 		Dir:    deployDir,
 		Target: filepath.Join(t.TempDir(), "installed"),
 		DryRun: true,
@@ -436,7 +439,7 @@ func TestInstallRequiresExplicitInstallOwner(t *testing.T) {
 }
 
 func TestInstallRequiresAbsoluteTarget(t *testing.T) {
-	err := Install(InstallOptions{Dir: "deployment", Target: "relative", DryRun: true})
+	err := Install(InstallOptions{Scope: InstallScopeSystem, Dir: "deployment", Target: "relative", DryRun: true})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -455,7 +458,7 @@ func TestDefaultInstallTargetOnWindowsUsesLocalAppData(t *testing.T) {
 		Install: deploy.InstallPackConfig{
 			Target: deploy.InstallTargetConfig{},
 		},
-	})
+	}, InstallScopeUser)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,7 +483,7 @@ func TestDefaultInstallTargetOnWindowsUsesPerOSOverride(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, InstallScopeUser)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -500,13 +503,66 @@ func TestDefaultInstallTargetOnDarwinUsesUserData(t *testing.T) {
 		Install: deploy.InstallPackConfig{
 			Target: deploy.InstallTargetConfig{},
 		},
-	})
+	}, InstallScopeUser)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := `/Users/alice/Library/Application Support/Reploy/installs/demo-app`
 	if target != want {
 		t.Fatalf("target = %q, want %q", target, want)
+	}
+}
+
+func TestDefaultInstallTargetOnLinuxSystemUsesOpt(t *testing.T) {
+	restore := stubHostPlatform(t, hostPlatform{GOOS: "linux"})
+	defer restore()
+	t.Setenv("HOME", `/home/alice`)
+
+	target, err := defaultInstallTarget(deploy.AppPack{
+		AppID: "demo-app",
+		Install: deploy.InstallPackConfig{
+			Target: deploy.InstallTargetConfig{},
+		},
+	}, InstallScopeSystem)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != "/opt/demo-app" {
+		t.Fatalf("target = %q, want /opt/demo-app", target)
+	}
+}
+
+func TestDefaultInstallTargetUsesScopeSpecificOverride(t *testing.T) {
+	restore := stubHostPlatform(t, hostPlatform{GOOS: "windows"})
+	defer restore()
+	t.Setenv("LOCALAPPDATA", `C:\Users\alice\AppData\Local`)
+
+	target, err := defaultInstallTarget(deploy.AppPack{
+		AppID: "demo-app",
+		Install: deploy.InstallPackConfig{
+			Target: deploy.InstallTargetConfig{
+				DefaultPaths: map[string]string{
+					"windows":      `{{ user.local_data }}\Fallback\{{ app.id }}`,
+					"user.windows": `{{ user.local_data }}\User\{{ app.id }}`,
+				},
+			},
+		},
+	}, InstallScopeUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `C:\Users\alice\AppData\Local\User\demo-app`
+	if target != want {
+		t.Fatalf("target = %q, want %q", target, want)
+	}
+}
+
+func TestInstallScopeValidationRejectsUnsupportedCombinations(t *testing.T) {
+	if err := validateInstallScopeForBackend(InstallScopeUser, installBackendLinuxSystemd, hostPlatform{GOOS: "linux"}); err == nil || !strings.Contains(err.Error(), "--scope user is not supported on Linux yet") {
+		t.Fatalf("linux user error = %v", err)
+	}
+	if err := validateInstallScopeForBackend(InstallScopeSystem, installBackendDockerDesktop, hostPlatform{GOOS: "darwin"}); err == nil || !strings.Contains(err.Error(), "--scope system is not supported on macos with Docker Desktop") {
+		t.Fatalf("macos system error = %v", err)
 	}
 }
 
@@ -573,7 +629,7 @@ func TestInstallRequiresCurrentStagingBundle(t *testing.T) {
 		return nil
 	}
 
-	err = Install(InstallOptions{
+	err = Install(InstallOptions{Scope: InstallScopeSystem,
 		Dir:    deployDir,
 		Target: filepath.Join(t.TempDir(), "installed"),
 		Start:  false,
@@ -590,7 +646,7 @@ func TestInstallRequiresCurrentStagingBundle(t *testing.T) {
 }
 
 func TestInstallRejectsInvalidServiceName(t *testing.T) {
-	err := Install(InstallOptions{Dir: "deployment", Target: filepath.Join(t.TempDir(), "installed"), Service: "bad/name", DryRun: true})
+	err := Install(InstallOptions{Scope: InstallScopeSystem, Dir: "deployment", Target: filepath.Join(t.TempDir(), "installed"), Service: "bad/name", DryRun: true})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -622,7 +678,7 @@ func TestInstallRejectsOverlappingTarget(t *testing.T) {
 		targetLink,
 	} {
 		t.Run(target, func(t *testing.T) {
-			err := Install(InstallOptions{Dir: deployDir, Target: target, Service: "demo-test", DryRun: true})
+			err := Install(InstallOptions{Scope: InstallScopeSystem, Dir: deployDir, Target: target, Service: "demo-test", DryRun: true})
 			if err == nil {
 				t.Fatal("expected error")
 			}
@@ -821,6 +877,7 @@ func TestWriteInstalledStateMarksDeploymentInstalled(t *testing.T) {
 
 	plan := installPlan{
 		TargetDir:      deployDir,
+		Scope:          InstallScopeSystem,
 		Service:        "demo",
 		UnitPath:       "/etc/systemd/system/demo.service",
 		InstanceID:     "demo-12345678",
@@ -847,7 +904,7 @@ func TestWriteInstalledStateMarksDeploymentInstalled(t *testing.T) {
 	if len(state.Bundle.Roots) == 0 {
 		t.Fatal("bundle roots were not preserved")
 	}
-	if state.Install == nil || state.Install.InstanceID != "demo-12345678" {
+	if state.Install == nil || state.Install.InstanceID != "demo-12345678" || state.Install.Scope != string(InstallScopeSystem) {
 		t.Fatalf("install state = %#v", state.Install)
 	}
 }
@@ -974,7 +1031,7 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 		return []byte(`[{"State":"running"}]`), nil
 	}
 
-	if err := Install(InstallOptions{
+	if err := Install(InstallOptions{Scope: InstallScopeSystem,
 		Dir:           deployDir,
 		Target:        target,
 		Service:       "demo-apply",
@@ -1064,7 +1121,7 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	if string(sourceToolBinary) != string(oldSourceToolBinary) {
 		t.Fatalf("source reploy binary changed: %q", sourceToolBinary)
 	}
-	if err := Install(InstallOptions{
+	if err := Install(InstallOptions{Scope: InstallScopeSystem,
 		Dir:           deployDir,
 		Target:        target,
 		Service:       "demo-apply",
@@ -1238,7 +1295,7 @@ func TestDirectInstallAppliesViaTemporaryStaging(t *testing.T) {
 		}
 	}
 
-	installedTarget, err := DirectInstall(DirectInstallOptions{
+	installedTarget, err := DirectInstall(DirectInstallOptions{Scope: InstallScopeSystem,
 		Pack:   ref,
 		Target: target,
 		Start:  false,
@@ -1264,6 +1321,39 @@ func TestDirectInstallAppliesViaTemporaryStaging(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(unitDir, "demo.service")); err != nil {
 		t.Fatalf("missing systemd unit: %v", err)
+	}
+}
+
+func TestDirectInstallSystemScopeRequiresRootBeforePreparingTarget(t *testing.T) {
+	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "linux"})
+	defer restorePlatform()
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "installed")
+
+	oldGeteuid := installGeteuid
+	t.Cleanup(func() {
+		installGeteuid = oldGeteuid
+	})
+	installGeteuid = func() int { return 1000 }
+
+	_, err = DirectInstall(DirectInstallOptions{
+		Pack:    ref,
+		Target:  target,
+		Scope:   InstallScopeSystem,
+		InPlace: true,
+	})
+	if err == nil {
+		t.Fatal("expected root requirement error")
+	}
+	if !strings.Contains(err.Error(), "install requires root unless --dry-run is set") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		t.Fatalf("target should not be prepared before root check, stat err=%v", statErr)
 	}
 }
 
@@ -1324,7 +1414,7 @@ func TestInstallRunsConfiguredHooksAroundServiceStart(t *testing.T) {
 	unitDir := t.TempDir()
 
 	var dryRun strings.Builder
-	if err := Install(InstallOptions{
+	if err := Install(InstallOptions{Scope: InstallScopeSystem,
 		Dir:     deployDir,
 		Target:  filepath.Join(t.TempDir(), "dry-run-target"),
 		Service: "demo-hooks",
@@ -1403,7 +1493,7 @@ func TestInstallRunsConfiguredHooksAroundServiceStart(t *testing.T) {
 	}
 
 	var progress strings.Builder
-	if err := Install(InstallOptions{
+	if err := Install(InstallOptions{Scope: InstallScopeSystem,
 		Dir:      deployDir,
 		Target:   target,
 		Service:  "demo-hooks",
@@ -2435,7 +2525,7 @@ func TestInstallRebuildsLocalSourceBundleInTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	var dryRun strings.Builder
-	if err := Install(InstallOptions{
+	if err := Install(InstallOptions{Scope: InstallScopeSystem,
 		Dir:     deployDir,
 		Target:  filepath.Join(t.TempDir(), "dry-run-target"),
 		Service: "demo-install",
@@ -2514,7 +2604,7 @@ func TestInstallRebuildsLocalSourceBundleInTarget(t *testing.T) {
 		}
 	}
 
-	if err := Install(InstallOptions{
+	if err := Install(InstallOptions{Scope: InstallScopeSystem,
 		Dir:     deployDir,
 		Target:  target,
 		Service: "demo-install",
@@ -2640,7 +2730,7 @@ docker:
 	installRunCommand = func(name string, args ...string) error { return nil }
 	installChown = func(path string, uid int, gid int) error { return nil }
 
-	if err := Install(InstallOptions{
+	if err := Install(InstallOptions{Scope: InstallScopeSystem,
 		Dir:     deployDir,
 		Target:  target,
 		Service: "demo2",

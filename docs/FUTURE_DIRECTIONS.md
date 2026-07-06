@@ -151,7 +151,7 @@ Current refs:
 ```text
 reploy stage github://org/repo/package_name/reploy/app.blueprint.yaml?ref=main
 reploy stage git:https://github.com/org/repo.git#package_name/reploy/app.blueprint.yaml?ref=main
-reploy install git:https://github.com/org/repo.git#package_name/reploy/app.blueprint.yaml?ref=v1.2.3
+reploy install git:https://github.com/org/repo.git#package_name/reploy/app.blueprint.yaml?ref=v1.2.3 --scope <user|system>
 ```
 
 Open questions:
@@ -232,13 +232,14 @@ Possible commands:
 ```text
 reploy stage --export arbiter.stage.tgz
 reploy stage --import arbiter.stage.tgz
-reploy install --stage arbiter.stage.tgz
+reploy install --stage arbiter.stage.tgz --scope <user|system>
 reploy run pytest -q
 ```
 
 `reploy stage --export` and `reploy stage --import` make export/import part of
-the staging lifecycle. `reploy install --stage` keeps portable stages distinct
-from app refs while still allowing direct install from a prepared stage.
+the staging lifecycle. `reploy install --stage ... --scope user|system` keeps
+portable stages distinct from app refs while still allowing direct install from
+a prepared stage.
 
 `reploy app` should remain the app-command surface for blueprint-declared
 commands. A future `reploy run` or `reploy exec` would be the lower-level

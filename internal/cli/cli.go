@@ -1279,6 +1279,7 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer, globalO
 		installTarget, err = dockerDirectInstall(dockerdeploy.DirectInstallOptions{
 			Pack:                   options.Pack,
 			Target:                 options.Target,
+			Scope:                  options.Scope,
 			Service:                options.Service,
 			PortOverrides:          options.PortOverrides,
 			Replace:                options.Replace,
@@ -1310,6 +1311,7 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer, globalO
 			err = dockerInstall(dockerdeploy.InstallOptions{
 				Dir:                    options.Dir,
 				Target:                 options.Target,
+				Scope:                  options.Scope,
 				Service:                options.Service,
 				PortOverrides:          options.PortOverrides,
 				Replace:                options.Replace,
@@ -1398,6 +1400,7 @@ type dockerInstallOptions struct {
 	Pack          deploy.PackRef
 	Warnings      []string
 	Target        string
+	Scope         dockerdeploy.InstallScope
 	Service       string
 	PortOverrides []dockerdeploy.PortOverride
 	Replace       []string
@@ -1442,6 +1445,16 @@ func parseDockerInstallOptions(args []string) (dockerInstallOptions, error) {
 				return dockerInstallOptions{}, fmt.Errorf("%s requires a value", arg)
 			}
 			options.Target = value
+		case "--scope":
+			value, ok := optionValue(args, &index)
+			if !ok {
+				return dockerInstallOptions{}, fmt.Errorf("%s requires a value", arg)
+			}
+			scope, err := dockerdeploy.ParseInstallScope(value)
+			if err != nil {
+				return dockerInstallOptions{}, err
+			}
+			options.Scope = scope
 		case "--service":
 			value, ok := optionValue(args, &index)
 			if !ok {
@@ -1472,6 +1485,14 @@ func parseDockerInstallOptions(args []string) (dockerInstallOptions, error) {
 			}
 			if strings.HasPrefix(arg, "--to=") {
 				options.Target = strings.TrimPrefix(arg, "--to=")
+				continue
+			}
+			if strings.HasPrefix(arg, "--scope=") {
+				scope, err := dockerdeploy.ParseInstallScope(strings.TrimPrefix(arg, "--scope="))
+				if err != nil {
+					return dockerInstallOptions{}, err
+				}
+				options.Scope = scope
 				continue
 			}
 			if strings.HasPrefix(arg, "--service=") {
@@ -1508,6 +1529,9 @@ func parseDockerInstallOptions(args []string) (dockerInstallOptions, error) {
 	}
 	if options.Dir == "" {
 		return dockerInstallOptions{}, fmt.Errorf("--dir must not be empty")
+	}
+	if options.Scope == "" {
+		return dockerInstallOptions{}, fmt.Errorf("--scope is required and must be user or system")
 	}
 	if options.Pack.Raw != "" && options.DirExplicit {
 		return dockerInstallOptions{}, fmt.Errorf("--dir is only supported when installing from an existing staging directory")
@@ -2430,7 +2454,7 @@ func printShortUsage(output io.Writer) {
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Next steps:")
 	fmt.Fprintln(output, "  reploy stage APP_REF")
-	fmt.Fprintln(output, "  reploy install APP_REF")
+	fmt.Fprintln(output, "  reploy install APP_REF --scope user|system")
 	fmt.Fprintln(output, "  reploy index search QUERY")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Run 'reploy --help' for all commands.")
@@ -2490,6 +2514,8 @@ Staging options:
   --preinstall Run install-readiness doctor checks
   --quiet      Suppress passing doctor checks
   --to DIR     Install target directory
+  --scope user|system
+              Required install scope
   --from DIR   Installed service directory to uninstall
   --service NAME
                Installed service identity, default app id
@@ -2704,6 +2730,8 @@ Options:
   --preinstall Run install-readiness doctor checks
   --quiet      Suppress passing doctor checks
   --to DIR     Install target directory
+  --scope user|system
+              Required install scope
   --from DIR   Installed service directory to uninstall
   --service NAME
                Installed service identity, default app id

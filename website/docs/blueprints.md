@@ -15,7 +15,7 @@ Blueprints can be referenced in three common ways.
 ```bash
 reploy stage arbiter-server
 reploy stage arbiter-server==0.9.3.dev1
-reploy install arbiter-server
+reploy install arbiter-server --scope <user|system>
 ```
 
 Shorthands are resolved through the Reploy blueprint index. The index entry is
@@ -27,7 +27,7 @@ substitutes that version, while unpinned `name` substitutes `latest`.
 ```bash
 reploy stage pypi://example-app/example_app/reploy/example.blueprint.yaml
 reploy stage pypi://example-app/example_app/reploy/example.blueprint.yaml?version=1.2.3
-reploy install pypi://example-app/example_app/reploy/example.blueprint.yaml
+reploy install pypi://example-app/example_app/reploy/example.blueprint.yaml --scope <user|system>
 ```
 
 Direct PyPI refs include the exact blueprint file path inside the package. Use
@@ -38,7 +38,7 @@ instead of the full package path.
 
 ```bash
 reploy stage file:./path/to/app.blueprint.yaml
-reploy install file:./path/to/app.blueprint.yaml
+reploy install file:./path/to/app.blueprint.yaml --scope <user|system>
 ```
 
 Local file refs are useful while developing an app blueprint before publishing

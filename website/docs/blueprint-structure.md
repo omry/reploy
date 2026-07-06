@@ -129,7 +129,8 @@ blueprint omits target defaults, Reploy chooses a built-in host default:
   </TabItem>
 </PlatformTabs>
 
-Users can always override the resolved target with `reploy install --to DIR`.
+Users can always override the resolved target with
+`reploy install --scope user|system --to DIR`.
 
 Blueprints may provide one global default:
 
@@ -150,17 +151,31 @@ install:
       windows: "{{ user.local_data }}/Acme/{{ app.id }}"
 ```
 
+Blueprints may provide per-scope, per-OS defaults using
+`<scope>.<host_os>` keys:
+
+```yaml
+install:
+  target:
+    default_paths:
+      system.linux: /opt/{{ app.id }}
+      user.windows: "{{ user.local_data }}/Acme/{{ app.id }}"
+```
+
 Resolution order is:
 
-1. `reploy install --to DIR`
-2. `install.target.default_paths.<host_os>`
-3. `install.target.default_path`
-4. Reploy's built-in default for the host/backend
+1. `reploy install --scope user|system --to DIR`
+2. explicit install scope
+3. `install.target.default_paths.<scope>.<host_os>`
+4. `install.target.default_paths.<host_os>`
+5. `install.target.default_path`
+6. Reploy's built-in target default for the host/backend/scope
 
 Supported `default_paths` OS keys are `linux`, `macos`, and `windows`.
+Supported scope-qualified keys are `user.<host_os>` and `system.<host_os>`.
 Inactive per-OS paths may use that OS's path syntax. For example,
-`default_paths.linux: /opt/{{ app.id }}` is valid in a blueprint used on
-Windows because it is not the active Windows default.
+`default_paths.system.linux: /opt/{{ app.id }}` is valid in a blueprint used
+on Windows because it is not the active Windows default.
 
 Supported install-target template variables and default root values are:
 

@@ -43,38 +43,27 @@ Install scope is first-class user intent. It is not inferred from a path.
 The install command should accept:
 
 ```bash
-reploy install APP_REF --scope default
 reploy install APP_REF --scope user
 reploy install APP_REF --scope system
 ```
 
-Omitting `--scope` is the same as `--scope default`.
+`--scope` is required. Reploy should fail clearly when it is omitted instead
+of guessing from the host, backend, path, or privilege level.
 
 Scope meanings:
 
 | Scope | Meaning |
 | --- | --- |
-| `default` | Reploy's documented default for the current host/backend. |
 | `user` | Current-user install. It must not require root/admin semantics. |
 | `system` | Machine/system install. It requires a backend with real system semantics and root/admin privilege. |
 
-Initial `default` mapping:
-
-| Host/backend | `default` scope resolves to |
-| --- | --- |
-| Linux systemd | `system` |
-| Windows Docker Desktop | `user` |
-| Mac Docker Desktop | `user` |
-
-`default` is a stable documented policy. It is intentionally not named `auto`;
-`auto` can be reserved for a future mode that inspects the host and chooses the
-best available supported scope.
-
-Requested scopes must be validated against backend capabilities:
+Explicit scopes must be validated against backend capabilities:
 
 - Linux `system` uses the Linux/systemd backend and requires root. If the user
   is not root, Reploy should escalate through the supported privilege path or
   fail with a clear sudo/root instruction.
+  Existing `install.owner` handling is an ownership/container-user policy
+  inside this system install, not a separate dedicated app-user runtime scope.
 - Linux `user` should mean a real per-user install, such as
   `{{ user.data }}/Reploy/installs/{{ app.id }}` plus a user-level lifecycle
   backend. For Docker-managed user installs, Docker restart policies may be
@@ -96,22 +85,30 @@ Requested scopes must be validated against backend capabilities:
 - Windows and Mac `system` should fail until Reploy has a backend that provides
   real system semantics. A system-looking path such as `%ProgramData%` or
   `/Library/Application Support` is not enough.
+- Every supported `system` scope requires root/admin authority or a clear
+  privilege path. Reploy should not silently downgrade `system` to `user` when
+  that authority is missing.
 
 Do not combine Docker restart policies with a host-level process manager for
 the same containers. Use a host lifecycle mechanism only for host processes
 outside Docker, such as starting Docker Desktop when the platform does not do
 that already.
 
-The installed state should record both the requested scope and the resolved
-scope so later `info`, `upgrade`, and `uninstall` operations can explain and
-validate the install mode.
+The installed state should record the explicit install scope so later `info`,
+`upgrade`, and `uninstall` operations can explain and validate the install
+mode.
+
+The OS and container-runtime substrate for these scope decisions is tracked in
+`docs/INSTALL_SCOPE_RUNTIME_SUPPORT.md`.
 
 ## Built-In Defaults
 
 If a blueprint does not provide an install target default, Reploy chooses the
-default for the current host, install backend, and resolved scope.
+default for the current host, install backend, and explicit scope.
+These are target-path defaults only; they do not imply a default install
+scope.
 
-Initial defaults:
+Initial target defaults:
 
 | Host/backend | Scope | Default install root |
 | --- | --- |
@@ -155,6 +152,17 @@ install:
       windows: "{{ user.local_data }}/Acme/{{ app.id }}"
 ```
 
+Blueprints may provide per-scope, per-OS defaults using
+`<scope>.<host_os>` keys:
+
+```yaml
+install:
+  target:
+    default_paths:
+      system.linux: /opt/{{ app.id }}
+      user.windows: "{{ user.local_data }}/Acme/{{ app.id }}"
+```
+
 Blueprints may combine both. The per-OS default wins on matching hosts:
 
 ```yaml
@@ -171,21 +179,24 @@ install:
 Install target resolution should use:
 
 1. CLI `--to`
-2. resolved install scope
-3. `install.target.default_paths.<host_os>`
-4. `install.target.default_path`
-5. Reploy built-in default for the host, install backend, and resolved scope
+2. explicit install scope
+3. `install.target.default_paths.<scope>.<host_os>`
+4. `install.target.default_paths.<host_os>`
+5. `install.target.default_path`
+6. Reploy built-in default for the host, install backend, and explicit scope
 
 `--to` chooses the path only. It must not downgrade or upgrade the install
 scope. For example, `--scope system --to SOME_USER_WRITABLE_PATH` is still a
 system-scope request and must satisfy system-scope backend and privilege
 requirements.
 
-`default_paths` keys should use product-facing OS names:
+`default_paths` OS keys should use product-facing OS names:
 
 - `linux`
 - `macos`
 - `windows`
+
+Scope-qualified keys should use `user.<host_os>` or `system.<host_os>`.
 
 ## Semantic Install-Root Variables
 
@@ -220,12 +231,13 @@ state stay inside that tree.
 
 ## Validation
 
-- `default_path` and the active `default_paths.<host_os>` must resolve to an
-  absolute path for the current host.
+- `default_path`, the active `default_paths.<scope>.<host_os>`, and the active
+  `default_paths.<host_os>` must resolve to an absolute path for the current
+  host.
 - Inactive `default_paths` entries should be syntax-checked for known variables
   and template safety, but should not be rejected because they use another
   platform's absolute-path syntax.
-- Unknown OS keys should fail clearly.
+- Unknown OS keys or scope-qualified keys should fail clearly.
 - Unknown template variables should fail clearly.
 - Newlines, tabs, and unsafe path traversal in app-derived path components
   should fail clearly.

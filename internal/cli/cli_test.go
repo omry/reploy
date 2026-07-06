@@ -225,7 +225,7 @@ func TestNoArgsShowsVersionAndNextSteps(t *testing.T) {
 		"Usage: reploy COMMAND",
 		"Next steps:",
 		"reploy stage APP_REF",
-		"reploy install APP_REF",
+		"reploy install APP_REF --scope user|system",
 		"reploy index search QUERY",
 		"Run 'reploy --help' for all commands.",
 	} {
@@ -338,7 +338,7 @@ func TestUsageErrorsDoNotShowGlobalOnboarding(t *testing.T) {
 		"reploy " + reploy.Version,
 		"Usage: reploy COMMAND",
 		"reploy stage APP_REF",
-		"reploy install APP_REF",
+		"reploy install APP_REF --scope user|system",
 		"Run 'reploy --help' for all commands.",
 	}
 	for _, tc := range tests {
@@ -518,7 +518,7 @@ func TestDockerHelp(t *testing.T) {
 	if strings.Contains(stdout, "--wait") || !strings.Contains(stdout, "--timeout DURATION") {
 		t.Fatalf("stdout did not contain expected test timeout options:\n%s", stdout)
 	}
-	for _, want := range []string{"install      Install or update a deployed host service", "--to DIR", "--port NAME=PORT", "--replace PATH", "--clean", "--in-place", "--dry-run"} {
+	for _, want := range []string{"install      Install or update a deployed host service", "--to DIR", "--scope user|system", "--port NAME=PORT", "--replace PATH", "--clean", "--in-place", "--dry-run"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout missing install help %q:\n%s", want, stdout)
 		}
@@ -555,7 +555,7 @@ func TestDockerInstallHelpShowsPortOptions(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	for _, want := range []string{"--port PORT", "--port NAME=PORT", "--replace PATH", "--clean", "--in-place"} {
+	for _, want := range []string{"--scope user|system", "--port PORT", "--port NAME=PORT", "--replace PATH", "--clean", "--in-place"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout did not contain install option %q:\n%s", want, stdout)
 		}
@@ -920,7 +920,7 @@ func TestStagingCommandsRejectInstalledDeploymentDir(t *testing.T) {
 		{name: "status", args: []string{"status", "--dir", deployDir}},
 		{name: "test", args: []string{"test", "--dir", deployDir}},
 		{name: "doctor", args: []string{"doctor", "--dir", deployDir}},
-		{name: "install", args: []string{"install", "--dir", deployDir, "--to", filepath.Join(t.TempDir(), "target"), "--dry-run"}},
+		{name: "install", args: []string{"install", "--dir", deployDir, "--to", filepath.Join(t.TempDir(), "target"), "--scope", "system", "--dry-run"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			code, stdout, stderr := runCLI(tc.args...)
@@ -1402,6 +1402,7 @@ func TestDockerInstallPortOptionsParse(t *testing.T) {
 	options, err := parseDockerInstallOptions([]string{
 		"--dir", "deployment",
 		"--to", "/opt/demo2",
+		"--scope", "system",
 		"--service", "demo2",
 		"--port", "http=18082",
 		"--port=metrics=19092",
@@ -1411,6 +1412,9 @@ func TestDockerInstallPortOptionsParse(t *testing.T) {
 	}
 	if options.Target != "/opt/demo2" || options.Service != "demo2" {
 		t.Fatalf("target/service = %q/%q", options.Target, options.Service)
+	}
+	if options.Scope != dockerdeploy.InstallScopeSystem {
+		t.Fatalf("scope = %q, want system", options.Scope)
 	}
 	if len(options.PortOverrides) != 2 {
 		t.Fatalf("port overrides = %#v", options.PortOverrides)
@@ -1422,7 +1426,7 @@ func TestDockerInstallPortOptionsParse(t *testing.T) {
 		t.Fatalf("second override = %#v", options.PortOverrides[1])
 	}
 
-	options, err = parseDockerInstallOptions([]string{"--to", "/opt/demo2", "--port", "18082"})
+	options, err = parseDockerInstallOptions([]string{"--to", "/opt/demo2", "--scope", "system", "--port", "18082"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1430,15 +1434,38 @@ func TestDockerInstallPortOptionsParse(t *testing.T) {
 		t.Fatalf("shorthand override = %#v", options.PortOverrides)
 	}
 
-	options, err = parseDockerInstallOptions([]string{"pypi:demo-server#demo_server/reploy/demo-server.blueprint.yaml", "--dry-run", "--in-place", "--replace", "conf", "--replace=.env", "--clean"})
+	options, err = parseDockerInstallOptions([]string{"pypi:demo-server#demo_server/reploy/demo-server.blueprint.yaml", "--scope=user", "--dry-run", "--in-place", "--replace", "conf", "--replace=.env", "--clean"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if options.Pack.Raw != "pypi:demo-server#demo_server/reploy/demo-server.blueprint.yaml" || !options.DryRun || !options.InPlace || !options.Clean {
 		t.Fatalf("direct install options = %#v", options)
 	}
+	if options.Scope != dockerdeploy.InstallScopeUser {
+		t.Fatalf("scope = %q, want user", options.Scope)
+	}
 	if strings.Join(options.Replace, ",") != "conf,.env" {
 		t.Fatalf("replace = %#v", options.Replace)
+	}
+}
+
+func TestDockerInstallScopeIsRequired(t *testing.T) {
+	_, err := parseDockerInstallOptions([]string{"--to", "/opt/demo"})
+	if err == nil {
+		t.Fatal("expected missing scope error")
+	}
+	if !strings.Contains(err.Error(), "--scope is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDockerInstallRejectsInvalidScope(t *testing.T) {
+	_, err := parseDockerInstallOptions([]string{"--to", "/opt/demo", "--scope", "default"})
+	if err == nil {
+		t.Fatal("expected invalid scope error")
+	}
+	if !strings.Contains(err.Error(), "--scope must be user or system") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -1559,7 +1586,7 @@ func TestDockerStageGitHubRefErrorDoesNotExposeInternalGitRef(t *testing.T) {
 func TestDirectInstallFileRefDryRunUsesBlueprintDefaults(t *testing.T) {
 	requireLinuxHost(t)
 	packDir := makeCLITestPack(t)
-	code, stdout, stderr := runCLI("install", "file:"+packDir, "--dry-run", "--no-start")
+	code, stdout, stderr := runCLI("install", "file:"+packDir, "--scope", "system", "--dry-run", "--no-start")
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1583,7 +1610,7 @@ func TestDirectInstallInPlaceDryRunUsesRequestedTarget(t *testing.T) {
 	requireLinuxHost(t)
 	packDir := makeCLITestPack(t)
 	target := filepath.Join(t.TempDir(), "installed")
-	code, stdout, stderr := runCLI("install", "file:"+packDir, "--to", target, "--in-place", "--dry-run", "--no-start")
+	code, stdout, stderr := runCLI("install", "file:"+packDir, "--to", target, "--scope", "system", "--in-place", "--dry-run", "--no-start")
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -1610,6 +1637,9 @@ func TestDirectInstallPrintsSuccessFromResolvedDefaultTarget(t *testing.T) {
 		if options.Target != "" {
 			t.Fatalf("target option = %q, want empty default target", options.Target)
 		}
+		if options.Scope != dockerdeploy.InstallScopeSystem {
+			t.Fatalf("scope = %q, want system", options.Scope)
+		}
 		return "/opt/demo", nil
 	}
 	dockerPrintInstallSuccess = func(dir string, stdout io.Writer, dockerPreflightTimeout time.Duration) error {
@@ -1623,7 +1653,7 @@ func TestDirectInstallPrintsSuccessFromResolvedDefaultTarget(t *testing.T) {
 		return nil
 	}
 
-	code, stdout, _ := runCLI("--docker-timeout", "1s", "install", "file:/does/not/need/to/exist")
+	code, stdout, _ := runCLI("--docker-timeout", "1s", "install", "file:/does/not/need/to/exist", "--scope", "system")
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s", code, stdout)
 	}
@@ -1650,11 +1680,14 @@ func TestStagedInstallSpinnerUsesDeploymentPrefix(t *testing.T) {
 		if options.Dir != deployDir {
 			t.Fatalf("install dir = %q, want %q", options.Dir, deployDir)
 		}
+		if options.Scope != dockerdeploy.InstallScopeSystem {
+			t.Fatalf("scope = %q, want system", options.Scope)
+		}
 		fmt.Fprintln(options.Progress, "running before start hook: app config check")
 		return nil
 	}
 
-	code, _, stderr = runCLI("install", "--dir", deployDir)
+	code, _, stderr = runCLI("install", "--dir", deployDir, "--scope", "system")
 	if code != 0 {
 		t.Fatalf("install failed: code=%d\nstderr:\n%s", code, stderr)
 	}
@@ -1688,6 +1721,9 @@ func TestStagedInstallDryRunUsesDeploymentPrefix(t *testing.T) {
 		if options.Target != targetDir {
 			t.Fatalf("install target = %q, want %q", options.Target, targetDir)
 		}
+		if options.Scope != dockerdeploy.InstallScopeSystem {
+			t.Fatalf("scope = %q, want system", options.Scope)
+		}
 		if !options.DryRun {
 			t.Fatal("install should be dry-run")
 		}
@@ -1695,7 +1731,7 @@ func TestStagedInstallDryRunUsesDeploymentPrefix(t *testing.T) {
 		return nil
 	}
 
-	code, stdout, stderr = runCLI("install", "--dir", deployDir, "--to", targetDir, "--dry-run", "--no-start")
+	code, stdout, stderr = runCLI("install", "--dir", deployDir, "--to", targetDir, "--scope", "system", "--dry-run", "--no-start")
 	if code != 0 {
 		t.Fatalf("install dry-run failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}

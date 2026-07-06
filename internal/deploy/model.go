@@ -66,6 +66,7 @@ type ArtifactRoot struct {
 
 type InstallState struct {
 	TargetDir      string                        `json:"target_dir"`
+	Scope          string                        `json:"scope"`
 	Service        string                        `json:"service"`
 	UnitPath       string                        `json:"unit_path"`
 	InstanceID     string                        `json:"instance_id"`

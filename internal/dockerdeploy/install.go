@@ -22,6 +22,7 @@ import (
 type InstallOptions struct {
 	Dir                    string
 	Target                 string
+	Scope                  InstallScope
 	Service                string
 	PortOverrides          []PortOverride
 	Replace                []string
@@ -37,6 +38,7 @@ type InstallOptions struct {
 type DirectInstallOptions struct {
 	Pack                   deploy.PackRef
 	Target                 string
+	Scope                  InstallScope
 	Service                string
 	PortOverrides          []PortOverride
 	Replace                []string
@@ -52,6 +54,7 @@ type DirectInstallOptions struct {
 type installPlan struct {
 	SourceDir              string
 	TargetDir              string
+	Scope                  InstallScope
 	AppID                  string
 	Service                string
 	ControlScript          string
@@ -116,6 +119,52 @@ const (
 	installOwnerOnMissingFail   = "fail"
 )
 
+type InstallScope string
+
+const (
+	InstallScopeUser   InstallScope = "user"
+	InstallScopeSystem InstallScope = "system"
+)
+
+func ParseInstallScope(value string) (InstallScope, error) {
+	switch InstallScope(strings.TrimSpace(value)) {
+	case InstallScopeUser:
+		return InstallScopeUser, nil
+	case InstallScopeSystem:
+		return InstallScopeSystem, nil
+	case "":
+		return "", fmt.Errorf("--scope is required and must be user or system")
+	default:
+		return "", fmt.Errorf("--scope must be user or system: %s", value)
+	}
+}
+
+func validateInstallScopeForBackend(scope InstallScope, backend installBackend, platform hostPlatform) error {
+	switch scope {
+	case InstallScopeUser:
+		switch backend {
+		case installBackendDockerDesktop:
+			return nil
+		case installBackendLinuxSystemd:
+			return fmt.Errorf("--scope user is not supported on Linux yet; no user lifecycle backend is available")
+		default:
+			return platform.unsupportedPersistentInstallError("install")
+		}
+	case InstallScopeSystem:
+		switch backend {
+		case installBackendLinuxSystemd:
+			return nil
+		case installBackendDockerDesktop:
+			return fmt.Errorf("--scope system is not supported on %s with Docker Desktop; no native system service backend is available", deploy.InstallTargetHostKey(platform.GOOS))
+		default:
+			return platform.unsupportedPersistentInstallError("install")
+		}
+	default:
+		_, err := ParseInstallScope(string(scope))
+		return err
+	}
+}
+
 func Install(options InstallOptions) error {
 	plan, err := newInstallPlan(options)
 	if err != nil {
@@ -134,10 +183,20 @@ func Install(options InstallOptions) error {
 		printInstallDryRun(options.Stdout, plan)
 		return nil
 	}
-	if plan.Backend == installBackendLinuxSystemd && installGeteuid() != 0 {
-		return fmt.Errorf("install requires root unless --dry-run is set")
+	if err := requireInstallPrivileges(plan.Backend, options.DryRun); err != nil {
+		return err
 	}
 	return applyInstallPlan(plan)
+}
+
+func requireInstallPrivileges(backend installBackend, dryRun bool) error {
+	if dryRun {
+		return nil
+	}
+	if backend == installBackendLinuxSystemd && installGeteuid() != 0 {
+		return fmt.Errorf("install requires root unless --dry-run is set")
+	}
+	return nil
 }
 
 func installShouldPrepareSourceBundle(dir string) (bool, error) {
@@ -171,12 +230,24 @@ func DirectInstall(options DirectInstallOptions) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	scope, err := ParseInstallScope(string(options.Scope))
+	if err != nil {
+		return "", err
+	}
+	platform := currentHostPlatform()
+	backend := platform.installBackend()
+	if err := validateInstallScopeForBackend(scope, backend, platform); err != nil {
+		return "", err
+	}
 	target := options.Target
 	if strings.TrimSpace(target) == "" {
-		target, err = defaultInstallTarget(pack)
+		target, err = defaultInstallTarget(pack, scope)
 		if err != nil {
 			return "", err
 		}
+	}
+	if err := requireInstallPrivileges(backend, options.DryRun); err != nil {
+		return "", err
 	}
 	options.Pack = pack.Ref
 	if options.InPlace {
@@ -192,6 +263,7 @@ func DirectInstall(options DirectInstallOptions) (string, error) {
 		return target, Install(InstallOptions{
 			Dir:                    target,
 			Target:                 target,
+			Scope:                  scope,
 			Service:                options.Service,
 			PortOverrides:          options.PortOverrides,
 			Replace:                options.Replace,
@@ -225,6 +297,7 @@ func directInstallViaTemporaryStaging(target string, options DirectInstallOption
 	return Install(InstallOptions{
 		Dir:                    stagingDir,
 		Target:                 target,
+		Scope:                  options.Scope,
 		Service:                options.Service,
 		PortOverrides:          options.PortOverrides,
 		Replace:                options.Replace,
@@ -240,6 +313,10 @@ func directInstallViaTemporaryStaging(target string, options DirectInstallOption
 func newInstallPlan(options InstallOptions) (installPlan, error) {
 	if options.Dir == "" {
 		options.Dir = DefaultDeploymentDir
+	}
+	scope, err := ParseInstallScope(string(options.Scope))
+	if err != nil {
+		return installPlan{}, err
 	}
 	if strings.TrimSpace(options.Target) == "" {
 		return installPlan{}, fmt.Errorf("--to is required")
@@ -323,9 +400,13 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 		return installPlan{}, overrideErr
 	}
 	configLayout := configMountLayoutForPack(pack)
-	backend := currentHostPlatform().installBackend()
+	platform := currentHostPlatform()
+	backend := platform.installBackend()
 	if backend == installBackendUnsupported {
-		return installPlan{}, currentHostPlatform().unsupportedPersistentInstallError("install")
+		return installPlan{}, platform.unsupportedPersistentInstallError("install")
+	}
+	if err := validateInstallScopeForBackend(scope, backend, platform); err != nil {
+		return installPlan{}, err
 	}
 	unitPath := ""
 	if backend == installBackendLinuxSystemd {
@@ -334,6 +415,7 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 	return installPlan{
 		SourceDir:              absoluteDir,
 		TargetDir:              target,
+		Scope:                  scope,
 		AppID:                  pack.AppID,
 		Service:                options.Service,
 		ControlScript:          controlScriptName(pack.AppID),
@@ -379,13 +461,17 @@ func defaultInstallService(dir string) (string, error) {
 	return service, nil
 }
 
-func defaultInstallTarget(pack deploy.AppPack) (string, error) {
+func defaultInstallTarget(pack deploy.AppPack, scope InstallScope) (string, error) {
 	platform := currentHostPlatform()
+	backend := platform.installBackend()
+	if err := validateInstallScopeForBackend(scope, backend, platform); err != nil {
+		return "", err
+	}
 	roots, err := installTargetRoots(platform.GOOS)
 	if err != nil {
 		return "", err
 	}
-	target, _, ok, err := deploy.ResolveInstallTargetDefault(pack.Install.Target, pack.AppID, platform.GOOS, roots)
+	target, _, ok, err := deploy.ResolveInstallTargetDefault(pack.Install.Target, pack.AppID, platform.GOOS, string(scope), roots)
 	if err != nil {
 		return "", err
 	}
@@ -396,19 +482,27 @@ func defaultInstallTarget(pack deploy.AppPack) (string, error) {
 		return target, nil
 	}
 
-	switch deploy.InstallTargetHostKey(platform.GOOS) {
-	case "windows":
-		return windowsDockerManagedDefaultInstallTarget(os.Getenv("LOCALAPPDATA"), pack.AppID)
-	case "macos":
-		return path.Join(roots.ReployInstallRoot, pack.AppID), nil
-	default:
+	switch scope {
+	case InstallScopeUser:
+		switch deploy.InstallTargetHostKey(platform.GOOS) {
+		case "windows":
+			return windowsDockerManagedDefaultInstallTarget(os.Getenv("LOCALAPPDATA"), pack.AppID)
+		case "macos":
+			return path.Join(roots.ReployInstallRoot, pack.AppID), nil
+		default:
+			return path.Join(roots.UserData, "Reploy", "installs", pack.AppID), nil
+		}
+	case InstallScopeSystem:
 		target, _, _, err := deploy.ResolveInstallTargetDefault(
 			deploy.InstallTargetConfig{DefaultPath: "/opt/{{ app.id }}"},
 			pack.AppID,
 			platform.GOOS,
+			string(scope),
 			roots,
 		)
 		return target, err
+	default:
+		return "", fmt.Errorf("--scope must be user or system: %s", scope)
 	}
 }
 
@@ -501,6 +595,7 @@ func printInstallDryRun(stdout io.Writer, plan installPlan) {
 	}
 	fmt.Fprintf(stdout, "would install deployment: %s\n", plan.SourceDir)
 	fmt.Fprintf(stdout, "target: %s\n", plan.TargetDir)
+	fmt.Fprintf(stdout, "scope: %s\n", plan.Scope)
 	fmt.Fprintf(stdout, "service: %s\n", plan.Service)
 	fmt.Fprintf(stdout, "instance id: %s\n", plan.InstanceID)
 	fmt.Fprintf(stdout, "compose project: %s\n", plan.ComposeProject)
@@ -988,6 +1083,7 @@ func writeInstalledState(plan installPlan) error {
 	state.Runtime = runtimeState
 	state.Install = &deploy.InstallState{
 		TargetDir:      plan.TargetDir,
+		Scope:          string(plan.Scope),
 		Service:        plan.Service,
 		UnitPath:       plan.UnitPath,
 		InstanceID:     plan.InstanceID,

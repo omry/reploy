@@ -66,7 +66,7 @@ reploy test
 Then install from the tested staging state:
 
 ```bash
-sudo reploy install
+sudo reploy install --scope system --to /opt/example
 ```
 
 The blueprint defines default install values such as the target path and
@@ -75,7 +75,7 @@ service name. The install guide covers overriding those values.
 Simple services can also be installed directly from blueprint defaults:
 
 ```bash
-sudo reploy install <app-blueprint-ref>
+sudo reploy install <app-blueprint-ref> --scope system
 ```
 
 Use staging when you need to select bundle options, run app configuration

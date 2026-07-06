@@ -725,8 +725,22 @@ func InstallTargetHostKey(goos string) string {
 	}
 }
 
-func ResolveInstallTargetDefault(target InstallTargetConfig, appID string, goos string, roots InstallTargetRoots) (string, string, bool, error) {
+func ResolveInstallTargetDefault(target InstallTargetConfig, appID string, goos string, scope string, roots InstallTargetRoots) (string, string, bool, error) {
 	hostKey := InstallTargetHostKey(goos)
+	scope = strings.TrimSpace(scope)
+	if scope != "" {
+		scopedKey := scope + "." + hostKey
+		if path := strings.TrimSpace(target.DefaultPaths[scopedKey]); path != "" {
+			resolved, err := RenderInstallTargetPath(path, appID, roots)
+			if err != nil {
+				return "", "", false, fmt.Errorf("install.target.default_paths.%s: %w", scopedKey, err)
+			}
+			if !installTargetPathIsAbs(resolved, goos) {
+				return "", "", false, fmt.Errorf("install.target.default_paths.%s must resolve to an absolute path: %s", scopedKey, resolved)
+			}
+			return resolved, "install.target.default_paths." + scopedKey, true, nil
+		}
+	}
 	if path := strings.TrimSpace(target.DefaultPaths[hostKey]); path != "" {
 		resolved, err := RenderInstallTargetPath(path, appID, roots)
 		if err != nil {
@@ -807,14 +821,14 @@ func validateInstallTargetConfig(target InstallTargetConfig, goos string) error 
 		}
 	}
 	for osName, path := range target.DefaultPaths {
-		if !supportedInstallTargetOS(osName) {
+		if !supportedInstallTargetDefaultPathKey(osName) {
 			return fmt.Errorf("install.target.default_paths contains unsupported OS: %s", osName)
 		}
 		if err := validateInstallTargetPathSyntax("install.target.default_paths."+osName, path); err != nil {
 			return err
 		}
 	}
-	_, _, _, err := ResolveInstallTargetDefault(target, "app", goos, sampleInstallTargetRoots(goos))
+	_, _, _, err := ResolveInstallTargetDefault(target, "app", goos, "", sampleInstallTargetRoots(goos))
 	return err
 }
 
@@ -838,6 +852,23 @@ func supportedInstallTargetOS(osName string) bool {
 	default:
 		return false
 	}
+}
+
+func supportedInstallTargetScope(scope string) bool {
+	switch scope {
+	case "user", "system":
+		return true
+	default:
+		return false
+	}
+}
+
+func supportedInstallTargetDefaultPathKey(key string) bool {
+	if supportedInstallTargetOS(key) {
+		return true
+	}
+	scope, osName, ok := strings.Cut(key, ".")
+	return ok && supportedInstallTargetScope(scope) && supportedInstallTargetOS(osName)
 }
 
 func sampleInstallTargetRoots(goos string) InstallTargetRoots {

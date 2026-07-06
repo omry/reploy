@@ -1,0 +1,2 @@
+kind: Changed
+body: Require explicit install scope with `reploy install --scope user|system`, validate scope against the host backend, and record the chosen scope in installed state.
