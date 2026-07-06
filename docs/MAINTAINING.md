@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-04
+updated: 2026-07-06
 summary: Current maintainer workflow for local checks, release notes, and publishing.
 ---
 
@@ -43,6 +43,7 @@ Useful targeted sessions:
 nox -s go-test
 nox -s cli-smoke
 nox -s cli-integration
+nox -s docker-interrupts
 nox -s release-build-smoke
 nox -s docs-build
 ```
@@ -60,6 +61,29 @@ before publishing and can be triggered manually from the Integration workflow.
 On Linux, it covers the real-Docker staging runtime path. On macOS, and on
 Windows when run through `tools/e2e/smoke_windows.ps1`, it also covers the
 Docker-managed persistent install path with generated control scripts.
+
+For Docker interruption behavior, run the opt-in Compose probe:
+
+```bash
+nox -s docker-interrupts
+```
+
+The probe starts a unique Compose project, runs the same
+`docker compose run --rm --no-deps --name ...` shape used by app commands,
+sends an interrupt to the Docker Compose process group, measures how long
+Compose takes to return, force-removes the named one-off container, inspects
+leftover project containers and networks, and performs best-effort cleanup.
+Pass `-- --include-raw-compose` to record the underlying Docker Compose
+behavior without Reploy-style targeted cleanup, and pass `-- --include-up` to
+also compare `docker compose up` behavior. Before release, run this once from
+a Linux shell and once from Windows PowerShell with Docker Desktop, then keep
+the summary lines with the release validation notes.
+
+Observed Linux/WSL2 behavior on 2026-07-06 from `zsh`: raw
+`docker compose run --rm --no-deps` returned quickly after `SIGINT` but left
+the one-off container running; the Reploy-style named run removed the container
+with targeted cleanup; `docker compose up` returned quickly but left an exited
+service container until `compose down` cleanup.
 
 For a faster CLI smoke loop that skips the Docker-backed bundle build/check
 but still runs preinstall and install dry-run checks, pass the smoke helper's

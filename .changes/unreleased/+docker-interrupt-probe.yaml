@@ -1,0 +1,2 @@
+kind: Added
+body: Add an opt-in Docker Compose interruption probe for release validation of long-running app-command behavior.

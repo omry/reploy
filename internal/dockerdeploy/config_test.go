@@ -150,6 +150,9 @@ func TestAppCommandRunsOneOffOnDeploymentProject(t *testing.T) {
 	if !containsAdjacent(specs[0].Args, "--project-name", projectName) {
 		t.Fatalf("app command should use deployment project %q, got args: %#v", projectName, specs[0].Args)
 	}
+	if !containsAdjacent(specs[0].Args, "--name", composeRunName(specs[0].Args)) {
+		t.Fatalf("app command should name the one-off container for targeted cleanup: %#v", specs[0].Args)
+	}
 	if !containsInOrder(specs[0].Args, []string{"-e", "REPLOY_CONTAINER_COMMAND=bootstrap_plugin"}) {
 		t.Fatalf("first command did not select bootstrap_plugin: %#v", specs[0].Args)
 	}
@@ -524,6 +527,9 @@ func TestAppCommandPassesTerminalColumns(t *testing.T) {
 func TestAppCommandReportsAppCommandFailure(t *testing.T) {
 	deployDir := makeAppCommandDeployment(t)
 	restore := stubAppCommandRunner(func(spec CommandSpec, options RunOptions) error {
+		if spec.Name == "docker" && containsInOrder(spec.Args, []string{"container", "rm", "-f"}) {
+			return nil
+		}
 		return fmt.Errorf("docker failed: exit status 2")
 	})
 	defer restore()
@@ -560,6 +566,9 @@ func TestConfigCheckRunsOneOffOnDeploymentProject(t *testing.T) {
 	if !containsInOrder(specs[0].Args, []string{"run", "--rm", "--no-deps"}) {
 		t.Fatalf("first command was not config check run: %#v", specs[0].Args)
 	}
+	if !containsAdjacent(specs[0].Args, "--name", composeRunName(specs[0].Args)) {
+		t.Fatalf("config check should name the one-off container for targeted cleanup: %#v", specs[0].Args)
+	}
 	if !containsInOrder(specs[0].Args, []string{"-e", "REPLOY_FORWARDED_ARG_0=--live"}) {
 		t.Fatalf("first command did not forward --live: %#v", specs[0].Args)
 	}
@@ -586,6 +595,45 @@ func TestTemporaryComposeCommandReportsCleanupFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "check boom") || !strings.Contains(err.Error(), "cleanup failed: cleanup boom") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestTemporaryComposeCommandSkipsCleanupAfterSuccess(t *testing.T) {
+	var specs []CommandSpec
+	err := runTemporaryComposeCommand(
+		func(spec CommandSpec, options RunOptions) error {
+			specs = append(specs, spec)
+			return nil
+		},
+		CommandSpec{Name: "run"},
+		CommandSpec{Name: "cleanup"},
+		RunOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(specs) != 1 || specs[0].Name != "run" {
+		t.Fatalf("ran specs = %#v, want only run spec", specs)
+	}
+}
+
+func TestTemporaryComposeCommandIgnoresMissingContainerCleanup(t *testing.T) {
+	err := runTemporaryComposeCommand(
+		func(spec CommandSpec, options RunOptions) error {
+			if spec.Name == "docker" {
+				return errors.New("docker failed: exit status 1\ncommand output:\nError response from daemon: No such container: demo-oneoff")
+			}
+			return errors.New("check boom")
+		},
+		CommandSpec{Name: "run"},
+		TemporaryContainerCleanupCommand("demo-oneoff"),
+		RunOptions{},
+	)
+	if err == nil {
+		t.Fatal("expected run error")
+	}
+	if err.Error() != "check boom" {
+		t.Fatalf("error = %q, want original run error only", err.Error())
 	}
 }
 
@@ -720,6 +768,15 @@ func containsAdjacent(values []string, first string, second string) bool {
 		}
 	}
 	return false
+}
+
+func composeRunName(values []string) string {
+	for index := 0; index+1 < len(values); index++ {
+		if values[index] == "--name" {
+			return values[index+1]
+		}
+	}
+	return ""
 }
 
 func containsInOrder(values []string, sequence []string) bool {

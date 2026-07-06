@@ -91,10 +91,13 @@ func ConfigCheck(options ConfigCheckOptions) error {
 	if err != nil {
 		return err
 	}
+	oneOffContainerName := temporaryOneOffContainerName(projectName, "config-check")
+	spec := ConfigCheckCommandForProject(options.Dir, command.Name, forwardedArgs, projectName, configDisplayDir, configContainerDir)
+	spec = withComposeRunName(spec, oneOffContainerName)
 	return runTemporaryComposeCommand(
 		runConfigCheckCommand,
-		ConfigCheckCommandForProject(options.Dir, command.Name, forwardedArgs, projectName, configDisplayDir, configContainerDir),
-		CommandSpec{},
+		spec,
+		TemporaryContainerCleanupCommand(oneOffContainerName),
 		runOptions,
 	)
 }
@@ -145,13 +148,15 @@ func AppCommand(options AppCommandOptions) error {
 	if err != nil {
 		return err
 	}
+	oneOffContainerName := temporaryOneOffContainerName(projectName, "app-command")
 	spec := AppCommandForProject(options.Dir, command.Name, forwardedArgs, projectName, configDisplayDir, configMountLayoutForPack(pack).ContainerConfigDir)
 	spec = withAppCommandPrefixEnv(spec)
 	spec = withAppTerminalEnv(spec, pack.App.Terminal, terminalOutput)
+	spec = withComposeRunName(spec, oneOffContainerName)
 	err = runTemporaryComposeCommand(
 		runAppCommand,
 		spec,
-		CommandSpec{},
+		TemporaryContainerCleanupCommand(oneOffContainerName),
 		runOptions,
 	)
 	if err != nil {
@@ -282,8 +287,11 @@ func runTemporaryComposeCommand(run temporaryComposeRunner, runSpec CommandSpec,
 	}
 
 	var cleanupErr error
-	if cleanupSpec.Name != "" {
+	if cleanupSpec.Name != "" && runErr != nil {
 		cleanupErr = run(cleanupSpec, runOptions)
+		if cleanupErr != nil && isMissingContainerCleanupError(cleanupErr) {
+			cleanupErr = nil
+		}
 	}
 	if runErr != nil && cleanupErr != nil {
 		return fmt.Errorf("%w; cleanup failed: %v", runErr, cleanupErr)
@@ -500,6 +508,27 @@ func TemporaryComposeCleanupCommand(dir string, projectName string) CommandSpec 
 	return quietComposeCommand(composeCommandWithProject(dir, projectName, "down", "--remove-orphans", "--volumes", "--timeout", "0"))
 }
 
+func TemporaryContainerCleanupCommand(containerName string) CommandSpec {
+	return CommandSpec{Name: "docker", Args: []string{"container", "rm", "-f", containerName}}
+}
+
+func withComposeRunName(spec CommandSpec, containerName string) CommandSpec {
+	spec.Args = appendComposeRunOption(spec.Args, "--name", containerName)
+	return spec
+}
+
+func appendComposeRunOption(args []string, values ...string) []string {
+	serviceIndex := len(args) - 1
+	if serviceIndex < 0 {
+		return args
+	}
+	withOption := make([]string, 0, len(args)+len(values))
+	withOption = append(withOption, args[:serviceIndex]...)
+	withOption = append(withOption, values...)
+	withOption = append(withOption, args[serviceIndex:]...)
+	return withOption
+}
+
 func appendComposeRunEnv(args []string, values ...string) []string {
 	serviceIndex := len(args) - 1
 	if serviceIndex < 0 {
@@ -525,4 +554,19 @@ func temporaryConfigCheckProjectName() string {
 
 func temporaryAppCommandProjectName() string {
 	return fmt.Sprintf("reploy-app-command-%d-%d", os.Getpid(), time.Now().UnixNano())
+}
+
+func temporaryOneOffContainerName(projectName string, label string) string {
+	projectName = strings.TrimSpace(projectName)
+	if projectName == "" {
+		projectName = "reploy"
+	}
+	return fmt.Sprintf("%s-%s-%d-%d", projectName, label, os.Getpid(), time.Now().UnixNano())
+}
+
+func isMissingContainerCleanupError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "no such container")
 }

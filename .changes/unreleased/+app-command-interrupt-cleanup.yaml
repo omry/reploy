@@ -1,0 +1,2 @@
+kind: Fixed
+body: Clean up named one-off app/config command containers after interrupted Docker Compose runs.

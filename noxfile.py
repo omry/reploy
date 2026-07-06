@@ -24,6 +24,7 @@ PY_COMPILE_FILES = (
     "tools/build_release_dists",
     "tools/build_release_notes",
     "tools/e2e/smoke",
+    "tools/e2e/docker_interrupts.py",
     "packaging/python/hatch_build.py",
     "tests/e2e/python/packages/smoke-suite/src/smoke_suite/cli.py",
     "tests/e2e/python/packages/smoke-suite/src/smoke_suite/__init__.py",
@@ -124,6 +125,11 @@ def cli_smoke(session: nox.Session) -> None:
 @nox.session(name="cli-integration", python=False)
 def cli_integration(session: nox.Session) -> None:
     _cli_smoke(session, "--runtime", *session.posargs)
+
+
+@nox.session(name="docker-interrupts", python=False)
+def docker_interrupts(session: nox.Session) -> None:
+    session.run(sys.executable, "tools/e2e/docker_interrupts.py", *session.posargs, external=True)
 
 
 @nox.session(name="release-build-smoke", python="3.12")

@@ -35,17 +35,18 @@ No active backlog items.
 
 ## Pre-release
 
-- [ ] `P1` Add Docker command interruption integration coverage.
-      Reploy should explicitly test what happens when long-running Docker and
-      Docker Compose commands are interrupted, especially on Windows Docker
-      Desktop where Ctrl+C can leave the parent CLI waiting or one-off
-      containers behind. Acceptance checks: add an opt-in integration test that
-      starts a unique Compose project with a long-lived one-off command, sends
-      an interrupt, measures time to return, inspects for leftover containers
-      and networks, and always runs idempotent cleanup; cover
-      `docker compose run --rm --no-deps` as used by app commands, compare
-      `docker compose up` if useful, and document the Windows PowerShell versus
-      Linux shell behavior observed by the test.
+- [ ] `P1` Record Windows PowerShell Docker interrupt probe evidence.
+      Reploy now has `nox -s docker-interrupts` coverage for interrupted
+      long-running Compose app-command shapes and targeted one-off container
+      cleanup, with Linux/WSL2 evidence recorded in `docs/MAINTAINING.md`.
+      Before release, run the same probe from Windows PowerShell with Docker
+      Desktop and record the summary lines. Acceptance checks: run
+      `nox -s docker-interrupts` and, if useful,
+      `nox -s docker-interrupts -- --include-raw-compose --include-up`; verify
+      the Reploy-style named run leaves zero containers after targeted cleanup;
+      record raw Compose and `compose up` behavior if observed; and keep any
+      Windows-specific support-boundary notes with the release validation
+      evidence.
 
 - [ ] `P1` Make bundle-build pip bootstrap progress bounded and useful.
       `reploy bundle build` can sit at `upgrading pip` while preparing the
