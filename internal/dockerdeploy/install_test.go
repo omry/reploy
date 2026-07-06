@@ -1485,29 +1485,20 @@ func TestInstalledControlScriptHealthUsesDeclaredHealthProbe(t *testing.T) {
 	command := exec.Command(script, "health")
 	command.Env = append(os.Environ(),
 		"REPLOY_ARGS_FILE="+reployArgs,
-		"REPLOY_FAKE_OUTPUT=[demo] health ok\n",
+		"REPLOY_FAKE_OUTPUT=[DEPLOYED : demo] health ok\n",
 		"REPLOY_COLOR=never",
 	)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("health command failed: %v\n%s", err, output)
 	}
-	if string(output) != "[demo] health ok\n" {
+	if string(output) != "[DEPLOYED : demo] health ok\n" {
 		t.Fatalf("health output = %q", output)
 	}
 	args := readFile(t, reployArgs)
 	want := "_control\n--dir\n" + target + "\n--script-name\ndemoctl\nhealth\n"
 	if args != want {
 		t.Fatalf("embedded reploy args = %q, want %q", args, want)
-	}
-}
-
-func TestControlScriptOutputLabelUsesAppIDOnly(t *testing.T) {
-	if got := controlScriptOutputLabel("demo"); got != "[demo]" {
-		t.Fatalf("label = %q", got)
-	}
-	if got := controlScriptOutputLabel(""); got != "[reploy]" {
-		t.Fatalf("fallback label = %q", got)
 	}
 }
 
@@ -1663,13 +1654,13 @@ func TestInstalledControlScriptRunsDeployedAppCommand(t *testing.T) {
 	command := exec.Command(script, "config", "check", "--live")
 	command.Env = append(os.Environ(),
 		"REPLOY_ARGS_FILE="+reployArgs,
-		"REPLOY_FAKE_OUTPUT=[demo] app output\n",
+		"REPLOY_FAKE_OUTPUT=[DEPLOYED : demo] app output\n",
 	)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("deployed command failed: %v\n%s", err, output)
 	}
-	if string(output) != "[demo] app output\n" {
+	if string(output) != "[DEPLOYED : demo] app output\n" {
 		t.Fatalf("deployed command output = %q", output)
 	}
 	args := readFile(t, reployArgs)
@@ -1714,13 +1705,13 @@ func TestInstalledControlScriptPrefixesSystemdOutput(t *testing.T) {
 	command := exec.Command(script, "status")
 	command.Env = append(os.Environ(),
 		"REPLOY_ARGS_FILE="+reployArgs,
-		"REPLOY_FAKE_OUTPUT=[demo] systemd output\n",
+		"REPLOY_FAKE_OUTPUT=[DEPLOYED : demo] systemd output\n",
 	)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("status failed: %v\n%s", err, output)
 	}
-	if string(output) != "[demo] systemd output\n" {
+	if string(output) != "[DEPLOYED : demo] systemd output\n" {
 		t.Fatalf("status output = %q", output)
 	}
 	args := readFile(t, reployArgs)
@@ -1755,13 +1746,13 @@ func TestInstalledControlScriptLogsUsesReployOptions(t *testing.T) {
 	command := exec.Command(script, "logs", "--tail=100", "--follow")
 	command.Env = append(os.Environ(),
 		"REPLOY_ARGS_FILE="+reployArgs,
-		"REPLOY_FAKE_OUTPUT=[demo] journal output\n",
+		"REPLOY_FAKE_OUTPUT=[DEPLOYED : demo] journal output\n",
 	)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("logs failed: %v\n%s", err, output)
 	}
-	if string(output) != "[demo] journal output\n" {
+	if string(output) != "[DEPLOYED : demo] journal output\n" {
 		t.Fatalf("logs output = %q", output)
 	}
 	args := readFile(t, reployArgs)

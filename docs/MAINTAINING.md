@@ -56,8 +56,10 @@ nox -s cli-integration
 ```
 
 This integration test is intentionally outside the default CI session. It runs
-before publishing and can be triggered manually from the Integration workflow,
-which covers Linux and macOS real-Docker runtime paths.
+before publishing and can be triggered manually from the Integration workflow.
+On Linux, it covers the real-Docker staging runtime path. On macOS, and on
+Windows when run through `tools/e2e/smoke_windows.ps1`, it also covers the
+Docker-managed persistent install path with generated control scripts.
 
 For a faster CLI smoke loop that skips the Docker-backed bundle build/check
 but still runs preinstall and install dry-run checks, pass the smoke helper's

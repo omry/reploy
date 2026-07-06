@@ -1,8 +1,13 @@
 ---
-status: Draft
-updated: 2026-07-05
-summary: Draft Windows support plan for staging and Docker-managed permanent installs.
+status: Archived
+updated: 2026-07-06
+summary: Historical Windows port plan retained after the first Windows support path was implemented.
 ---
+
+> Archived note: the first Windows support path is implemented. Keep this plan
+> as historical design context; use current user-facing docs, support matrix,
+> release workflow docs, and `docs/BACKLOG.md` follow-up items for supported
+> behavior and remaining validation work.
 
 # Windows Port Plan
 
@@ -48,9 +53,9 @@ semantics.
 - Make Windows install reboot resistant when Docker Desktop is configured to
   start when the user signs in.
 - Make Linux/systemd OS service guarantees clearly out of scope for Windows.
-- Warn during Windows install when the detected Docker runtime is Docker
-  Desktop, because the security offered on macOS and Windows is weaker than
-  Linux.
+- Document that Docker Desktop-backed installs on macOS and Windows do not
+  provide Linux/systemd service-user isolation, without adding non-actionable
+  advisory warnings to successful install output.
 - Document which commands require Docker Desktop and which commands remain
   Linux-only.
 - Keep future Windows Service work visible without making it part of the
@@ -186,7 +191,7 @@ Native Windows means:
 | `test` | supported | yes | Probes the staging app health endpoint. |
 | `doctor` for staging files and generated-file drift | supported | no | Should still report Docker Desktop readiness separately when relevant. |
 | `doctor --preinstall` and install-readiness checks | supported | yes | Must distinguish Docker Desktop-backed install readiness from Linux/systemd readiness. |
-| `install APP_REF` direct install | supported as Docker-managed permanent install | yes | Uses a temporary staging-like workspace, Docker/Compose restart policy, and a Docker Desktop security warning. |
+| `install APP_REF` direct install | supported as Docker-managed permanent install | yes | Uses a temporary staging-like workspace and Docker/Compose restart policy; docs explain Docker Desktop isolation limits. |
 | `install --dir DIR` staged install | supported as Docker-managed permanent install | yes | Installs from existing staging state into a Windows install target. |
 | `install --dry-run` | supported | no for plan rendering; yes if preinstall checks are requested | Must render Windows paths and Docker-managed install semantics. |
 | `uninstall --from DIR` | supported for Docker-managed permanent install | yes unless `--dry-run` can render from state only | Removes installed Docker resources and installed metadata for the selected target. |
@@ -300,10 +305,9 @@ Open design points:
 
 - command shape: use the normal `install` and `uninstall` commands; do not
   expose Docker Desktop as a user-facing target or backend
-- install-time warning: tell users that macOS and Windows installs have weaker
-  security than Linux installs because the Docker runtime model does not
-  provide the same service-user isolation. If Docker Desktop is confidently
-  detected, mention it by name; otherwise do not skip the warning.
+- install output: keep successful output focused on actionable install state;
+  document separately that macOS and Windows Docker Desktop-backed installs do
+  not provide Linux service-user isolation.
 - generated Compose restart policy, likely `unless-stopped`
 - reboot resistance: set a Compose restart policy and document that Docker
   Desktop must be configured by the user to start at login. Do not make the
@@ -502,8 +506,9 @@ The main product decisions are already settled:
 - Reploy staging state and generated artifacts remain project-local.
 - Native Windows Docker-managed installs default to
   `%LOCALAPPDATA%\Reploy\installs\<app-id>` for user installs.
-- Docker Desktop-backed install must warn about weaker isolation than
-  Linux/systemd install.
+- Docker Desktop-backed install docs must explain weaker isolation than
+  Linux/systemd install, while successful command output stays focused on
+  actionable checks and results.
 - Installed control commands include a native Windows/PowerShell surface backed
   by `reploy.exe` and Docker Desktop. A matching POSIX-style control script may
   also exist for WSL/Linux-like access, but WSL is not required for native
@@ -529,7 +534,7 @@ Define this API before coding platform branches:
 - install semantics by OS
 - unsupported-command error messages
 - Linux/systemd-only support boundaries
-- Docker Desktop security warning policy
+- Docker Desktop support-boundary documentation policy
 - Windows executable-name, path, shell, and line-ending handling
 
 The output should be a decision table and a small internal API. The API should
@@ -553,9 +558,9 @@ Split Docker Desktop compatibility into separately testable checks:
 - installed-but-not-running failure message is quick and useful
 - unsupported or surprising Docker context failure message is quick and useful
 
-Docker Desktop detection should trigger the macOS/Windows weaker-security
-warning. Failure to prove Docker Desktop should not skip the warning when the
-host platform still has weaker Docker-runtime isolation than Linux.
+Docker Desktop detection should be used for actionable readiness failures and
+support-boundary documentation. Successful preinstall output should not emit a
+generic weaker-isolation advisory.
 
 #### Docker-Managed Permanent Install
 
@@ -591,8 +596,8 @@ Record the settled product contract before coding install behavior:
   user login
 - Docker Desktop login startup is documented as a user-managed prerequisite for
   reboot resistance; docs provide manual validation and remediation
-- install output warns that Docker Desktop-backed install is a Docker-managed
-  permanent install and does not provide Linux service-user isolation
+- install output identifies the Docker-managed permanent install; docs explain
+  that it does not provide Linux service-user isolation
 
 This design should be reviewed before implementation because it records the
 settled meaning of `install` on Windows. The review should check consistency
@@ -651,6 +656,53 @@ Create runnable smoke checklists with expected output for each validation pass:
 Each smoke should record host architecture, Windows version, Docker Desktop
 version, Docker context, Docker Desktop backend, exact commands, expected
 outputs, and cleanup steps.
+
+#### Recorded Windows Smoke Evidence
+
+Evidence captured so far:
+
+- 2026-07-05 UTC, CI run
+  `https://github.com/omry/reploy/actions/runs/28757758429`: passed
+  `Windows host smoke (windows-amd64)` on `windows-2025` and
+  `Windows host smoke (windows-arm64)` on `windows-11-arm`. These jobs ran Go
+  tests and `nox -s cli-smoke` with Docker skipped, so they validate native
+  Windows CLI staging, update, info, bundle planning, install dry-run, and
+  PowerShell host behavior that does not require Docker.
+- 2026-07-05 UTC, Publish run
+  `https://github.com/omry/reploy/actions/runs/28757761734`: passed the CI
+  gate including the same two Windows host smoke jobs, and passed Linux/macOS
+  runtime integration. This release gate does not yet include Windows Docker
+  Desktop runtime or persistent-install integration.
+- 2026-07-06 UTC, manual PowerShell smoke on Windows with Docker Desktop:
+  ran `tools/e2e/smoke_windows.ps1`, which invoked native
+  `dist\windows-amd64\reploy.exe` from PowerShell with `--runtime` and
+  `--persistent-install`. The smoke covered staging from a Windows shell,
+  `bundle build`, `bundle check`, app config checks, `up`, `status`, `logs`,
+  `test`, `down`, `doctor --preinstall`, install dry-run, real install,
+  generated `smoke-appctl.ps1 status`, `logs`, live `config check`, `down`,
+  `uninstall --remove-dir`, and `bundle clean`. `doctor --preinstall` detected
+  Docker Desktop without non-actionable advisory warnings, install dry-run
+  output stayed under `[STAGING : smoke-app]`, and installed control-script
+  output stayed under `[DEPLOYED : smoke-app]`.
+
+Still deferred as follow-up coverage beyond the core Windows Docker Desktop
+smoke:
+
+- Docker Desktop failure-mode smoke for daemon unavailable, daemon timeout,
+  Linux-container mode missing, bind mount failure, and port conflict.
+- Path smoke for project paths with spaces, normal drive-letter project paths,
+  and any additional UNC or symlink/junction behavior that Reploy intends to
+  support. The 2026-07-06 manual smoke used a WSL UNC project path from
+  PowerShell and Windows temp install paths, so it is evidence for the native
+  PowerShell/Docker Desktop flow but not for every path variant.
+
+Candidate hosted-runner note: the 2026-06-28 `windows-2025` runner image
+manifest lists Docker 29.1.5, Docker Compose 2.40.3, and WSLv2. That makes
+`windows-2025` the first candidate for an automated Windows Docker smoke probe,
+but it is not evidence of Reploy's Docker Desktop path until the smoke itself
+passes. The 2026-06-29 Windows 11 Arm64 runner manifest does not list Docker,
+so Windows Arm64 Docker Desktop evidence will likely need a different runner or
+manual validation host.
 
 ### Per-Phase Commit Loop
 

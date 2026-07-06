@@ -101,10 +101,6 @@ $TargetDir = %s
 $ControlScript = %s
 $ReployBin = Join-Path $TargetDir %s
 
-if (-not (Test-Path -LiteralPath $ReployBin -PathType Leaf)) {
-    throw "embedded Reploy runtime is missing: $ReployBin; repair this deployment with reploy stage --update --force or reinstall the app"
-}
-
 & $ReployBin _control --dir $TargetDir --script-name $ControlScript @RemainingArgs
 exit $LASTEXITCODE
 `, powerShellSingleQuote(spec.TargetDir), powerShellSingleQuote(spec.ControlScript), powerShellSingleQuote(filepath.FromSlash(embeddedRuntimeFileName())))
@@ -115,11 +111,6 @@ func renderControlScript(spec controlScriptSpec) string {
 set -eu
 
 %s
-
-if [ ! -x "$reploy_bin" ]; then
-  echo "embedded Reploy runtime is missing: $reploy_bin; repair this deployment with reploy stage --update --force or reinstall the app" >&2
-  exit 1
-fi
 
 exec "$reploy_bin" _control --dir "$target_dir" --script-name "$control_script" "$@"
 `, controlScriptWrapperAssignments(spec))
@@ -135,14 +126,6 @@ reploy_bin="$target_dir"/%s`, controlScript, embeddedRuntimeFileName())
 	return fmt.Sprintf(`target_dir=%q
 control_script=%q
 reploy_bin=%q`, spec.TargetDir, controlScript, filepath.Join(spec.TargetDir, embeddedRuntimeFileName()))
-}
-
-func controlScriptOutputLabel(appID string) string {
-	appID = strings.TrimSpace(appID)
-	if appID == "" {
-		return "[reploy]"
-	}
-	return "[" + appID + "]"
 }
 
 func powerShellSingleQuote(value string) string {

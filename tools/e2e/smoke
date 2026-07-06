@@ -153,6 +153,22 @@ def require_contains(output: str, needle: str, context: str) -> None:
         raise SystemExit(f"[smoke] {context} did not contain {needle!r}\n--- output ---\n{output}")
 
 
+def require_not_contains(output: str, needle: str, context: str) -> None:
+    if needle in strip_ansi(output):
+        raise SystemExit(f"[smoke] {context} unexpectedly contained {needle!r}\n--- output ---\n{output}")
+
+
+def require_prefixed_lines(output: str, prefix: str, context: str) -> None:
+    stripped = strip_ansi(output)
+    unprefixed = [line for line in stripped.splitlines() if line.strip() and not line.startswith(prefix)]
+    if unprefixed:
+        detail = "\n".join(unprefixed[:5])
+        raise SystemExit(
+            f"[smoke] {context} contained unprefixed line(s); expected {prefix!r}\n"
+            f"--- unprefixed ---\n{detail}\n--- output ---\n{output}"
+        )
+
+
 def strip_ansi(value: str) -> str:
     return ANSI_ESCAPE_RE.sub("", value)
 
@@ -298,9 +314,6 @@ def run_persistent_install_smoke(
     workdir: Path,
     env: dict[str, str],
 ) -> None:
-    if not docker_managed_install_host():
-        return
-
     install_port = free_local_port()
     installed = False
     try:
@@ -322,15 +335,25 @@ def run_persistent_install_smoke(
         require_contains(install.stdout, f"server url: https://127.0.0.1:{install_port}", "install output")
 
         status = run(control_script_command(install_dir, "status"), cwd=workdir, env=env)
-        require_contains(status.stdout, "smoke-app", "installed control status")
+        require_contains(completed_output(status), "smoke-app", "installed control status")
+        if docker_managed_install_host():
+            require_contains(status.stdout, "[DEPLOYED : smoke-app] NAME", "installed control status")
+        else:
+            require_contains(completed_output(status), "[DEPLOYED : smoke-app]", "installed control status")
+        require_not_contains(completed_output(status), "[smoke-app]", "installed control status")
 
         logs = run(control_script_command(install_dir, "logs"), cwd=workdir, env=env)
-        require_contains(logs.stdout, "smoke-suite serving HTTPS", "installed control logs")
+        require_contains(completed_output(logs), "smoke-suite serving HTTPS", "installed control logs")
+        require_not_contains(completed_output(logs), "[smoke-app]", "installed control logs")
 
         live_check = run(control_script_command(install_dir, "config", "check", "--live"), cwd=workdir, env=env)
-        require_contains(live_check.stdout, '"check": "pass"', "installed live config check")
+        require_contains(completed_output(live_check), '"check": "pass"', "installed live config check")
+        require_not_contains(completed_output(live_check), "[smoke-app]", "installed live config check")
 
-        run(control_script_command(install_dir, "down"), cwd=workdir, env=env)
+        down = run(control_script_command(install_dir, "down"), cwd=workdir, env=env)
+        if docker_managed_install_host():
+            require_contains(completed_output(down), "[DEPLOYED : smoke-app] down... done", "installed control down")
+        require_not_contains(completed_output(down), "[smoke-app]", "installed control down")
     finally:
         if installed or install_dir.exists():
             run(
@@ -474,6 +497,8 @@ def run_smoke(
         env=env,
     )
     require_contains(install.stdout, "would install deployment:", "install dry-run")
+    require_prefixed_lines(install.stdout, "[STAGING : smoke-app] ", "install dry-run")
+    require_contains(install.stdout, "[STAGING : smoke-app] would install deployment:", "install dry-run")
     require_contains(install.stdout, "service: smoke-e2e", "install dry-run")
     require_contains(install.stdout, "port https: 127.0.0.1:18082 -> 8075", "install dry-run")
     require_contains(

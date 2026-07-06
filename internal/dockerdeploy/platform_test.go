@@ -70,15 +70,7 @@ func runFakeEmbeddedReployControl(args []string) int {
 		ensureFakeManagedFile(dir)
 	}
 	if len(commandArgs) >= 2 && commandArgs[0] == "config" && commandArgs[1] == "check" || len(commandArgs) >= 2 && commandArgs[0] == "bootstrap" && commandArgs[1] == "plugin" {
-		previous, hadPrevious := os.LookupEnv("REPLOY_APP_COMMAND_PREFIX")
-		_ = os.Setenv("REPLOY_APP_COMMAND_PREFIX", scriptName)
-		code := runFakeEmbeddedReployApp(append([]string{"--deployed-only", "--dir", dir}, commandArgs...))
-		if hadPrevious {
-			_ = os.Setenv("REPLOY_APP_COMMAND_PREFIX", previous)
-		} else {
-			_ = os.Unsetenv("REPLOY_APP_COMMAND_PREFIX")
-		}
-		return code
+		return runFakeEmbeddedReployApp(append([]string{"--deployed-only", "--dir", dir}, commandArgs...))
 	}
 	fmt.Fprintf(os.Stderr, "unknown command: %s\n", commandArgs[0])
 	return 2
@@ -208,7 +200,7 @@ func fakeEmbeddedDemoColor() string {
 }
 
 func fakeEmbeddedOutputPrefix(dir string) string {
-	label := "[demo]"
+	label := "[DEPLOYED : demo]"
 	if content, err := os.ReadFile(filepath.Join(dir, StateFileName)); err == nil && strings.Contains(string(content), `"phase": "staged"`) {
 		label = "[STAGING : demo]"
 	}

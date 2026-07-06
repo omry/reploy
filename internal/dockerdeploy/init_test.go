@@ -186,12 +186,15 @@ func TestStagingControlScriptRunsComposeLifecycleAndAppCommands(t *testing.T) {
 		"REPLOY_CONTAINER_COMMAND=config_check\n",
 		"REPLOY_FORWARDED_ARGC=1\n",
 		"REPLOY_FORWARDED_ARG_0=--live\n",
-		"REPLOY_APP_COMMAND_PREFIX=democtl\n",
+		"REPLOY_APP_COMMAND_PREFIX=reploy app\n",
 		"app\n",
 	} {
 		if !strings.Contains(appArgs, want) {
 			t.Fatalf("app command docker args missing %q:\n%s", want, appArgs)
 		}
+	}
+	if strings.Contains(appArgs, "democtl") {
+		t.Fatalf("control script leaked script name into app command docker args:\n%s", appArgs)
 	}
 
 	colorEnv := withoutEnvKey(os.Environ(), "DEMO_COLOR")

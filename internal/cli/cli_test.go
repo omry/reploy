@@ -745,12 +745,15 @@ func TestEmbeddedControlRunsDeployedAppCommandWithScriptPrefix(t *testing.T) {
 		"REPLOY_FORWARDED_ARG_0",
 		"--live",
 		"REPLOY_APP_COMMAND_PREFIX",
-		"democtl",
+		"reploy app",
 		"app",
 	} {
 		if !strings.Contains(args, want) {
 			t.Fatalf("docker args missing %q:\n%s", want, args)
 		}
+	}
+	if strings.Contains(args, "democtl") {
+		t.Fatalf("_control leaked control script name into app command args:\n%s", args)
 	}
 }
 

@@ -187,14 +187,15 @@ func TestDoctorPreinstallOnDarwinRequiresDockerDesktopRuntime(t *testing.T) {
 		t.Fatalf("doctor exit = %d\n%s", code, stdout.String())
 	}
 	for _, want := range []string{
-		"warn: " + dockerDesktopSecurityWarning(),
 		"ok: Docker Desktop runtime detected: Docker Desktop",
-		"warn: enable Docker Desktop start-at-login",
 		"ok: preinstall checks passed",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
 		}
+	}
+	if strings.Contains(stdout.String(), "warn:") {
+		t.Fatalf("darwin doctor should not print Docker Desktop advisory warnings:\n%s", stdout.String())
 	}
 	if strings.Contains(stdout.String(), "install owner resolves") {
 		t.Fatalf("darwin doctor should not require Linux install owner:\n%s", stdout.String())
@@ -233,6 +234,41 @@ func TestDoctorPreinstallOnDarwinFailsWhenDockerRuntimeUnavailable(t *testing.T)
 	}
 }
 
+func TestDoctorPreinstallOnDarwinFailsWhenRuntimeIsNotDockerDesktop(t *testing.T) {
+	disableDoctorColor(t)
+	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "darwin"})
+	defer restorePlatform()
+	previousDetector := detectDockerRuntimeForDoctor
+	t.Cleanup(func() {
+		detectDockerRuntimeForDoctor = previousDetector
+	})
+	detectDockerRuntimeForDoctor = func(context.Context, CommandSpec, time.Duration) (dockerRuntimeInfo, error) {
+		return dockerRuntimeInfo{Runtime: dockerRuntimeLinuxEngine, OperatingSystem: "Ubuntu 24.04", ServerVersion: "29.5.3"}, nil
+	}
+
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout strings.Builder
+	code := Doctor(DoctorOptions{Dir: deployDir, Preinstall: true, Stdout: &stdout})
+	if code != 1 {
+		t.Fatalf("doctor exit = %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "fail: Docker Desktop runtime is required for Docker-managed permanent install; detected: Ubuntu 24.04") {
+		t.Fatalf("stdout missing Docker Desktop runtime failure:\n%s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "warn:") {
+		t.Fatalf("wrong runtime should fail without advisory warnings:\n%s", stdout.String())
+	}
+}
+
 func TestDoctorPreinstallOnWindowsUsesDockerDesktopInstallChecks(t *testing.T) {
 	disableDoctorColor(t)
 	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "windows"})
@@ -264,14 +300,15 @@ func TestDoctorPreinstallOnWindowsUsesDockerDesktopInstallChecks(t *testing.T) {
 		t.Fatalf("doctor exit = %d\n%s", code, stdout.String())
 	}
 	for _, want := range []string{
-		"warn: " + dockerDesktopSecurityWarning(),
 		"ok: Docker Desktop runtime detected: Docker Desktop",
-		"warn: enable Docker Desktop start-at-login",
 		"ok: preinstall checks passed",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
 		}
+	}
+	if strings.Contains(stdout.String(), "warn:") {
+		t.Fatalf("windows doctor should not print Docker Desktop advisory warnings:\n%s", stdout.String())
 	}
 	if strings.Contains(stdout.String(), "install owner resolves") {
 		t.Fatalf("windows doctor should not require Linux install owner:\n%s", stdout.String())

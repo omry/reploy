@@ -1,0 +1,2 @@
+kind: Changed
+body: Remove non-actionable Docker Desktop advisory warnings from successful preinstall doctor output while keeping Docker Desktop runtime failures explicit.

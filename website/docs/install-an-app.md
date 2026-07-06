@@ -142,8 +142,8 @@ directory. Use `--to` when you want a specific target:
 reploy install --to "$PWD/example-installed" --service example
 ```
 
-When Reploy detects Docker Desktop, install output warns that macOS and Windows
-Docker Desktop installs provide weaker isolation than Linux/systemd installs.
+macOS and Windows Docker Desktop installs provide weaker isolation than
+Linux/systemd installs.
 For reboot resistance on macOS and Windows, enable Docker Desktop
 start-at-login; Reploy sets a Compose restart policy for the app containers,
 but Docker Desktop itself is a user-session dependency.

@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -189,17 +188,7 @@ func runEmbeddedControlAppCommand(
 	stderr io.Writer,
 	globalOptions globalDeploymentOptions,
 ) int {
-	previous, hadPrevious := os.LookupEnv("REPLOY_APP_COMMAND_PREFIX")
-	if context.ScriptName != "" {
-		_ = os.Setenv("REPLOY_APP_COMMAND_PREFIX", context.ScriptName)
-	}
-	code := runDockerApp(args, stdout, stderr, globalOptions)
-	if hadPrevious {
-		_ = os.Setenv("REPLOY_APP_COMMAND_PREFIX", previous)
-	} else {
-		_ = os.Unsetenv("REPLOY_APP_COMMAND_PREFIX")
-	}
-	return code
+	return runDockerApp(args, stdout, stderr, globalOptions)
 }
 
 func runEmbeddedControlSystemd(

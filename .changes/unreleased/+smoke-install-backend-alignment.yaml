@@ -1,0 +1,2 @@
+kind: Changed
+body: Keep Unix and Windows smoke install/control/uninstall coverage aligned while failing on stale unprefixed install dry-run or generated control-script labels.

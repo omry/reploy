@@ -92,16 +92,16 @@ No active backlog items.
       solve the same problem. Cross-platform install location design lives in
       `docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md`.
 
-- [ ] `P1` Capture remaining Windows Docker Desktop smoke evidence.
-      Windows support is now explicitly defined as native `reploy.exe`,
-      PowerShell or `cmd.exe`, Docker Desktop, and Docker-managed permanent
-      install rather than Windows Service install. Acceptance checks: run and
-      record CLI-only Windows staging evidence; run Docker Desktop staging and
-      persistent-install smokes where available; cover project paths with
-      spaces and normal drive-letter paths; verify generated PowerShell control
-      script behavior; confirm cleanup of generated artifacts, containers,
-      networks, and volumes; and update the support matrix or Windows port
-      appendix only for gaps found by the smoke pass.
+- [ ] `P2` Add Windows path and Docker Desktop failure-mode smoke follow-ups.
+      Core Windows Docker Desktop staging and Docker-managed persistent-install
+      evidence is recorded in `docs/WINDOWS_PORT.md`. Remaining follow-up
+      coverage should target cases not proven by the successful PowerShell
+      smoke: project paths with spaces, normal drive-letter project paths,
+      Docker Desktop unavailable or wrong-container-mode failures, bind-mount
+      failures, and port conflicts. Acceptance checks: keep these as focused
+      follow-up smokes rather than blocking the core Windows Docker-managed
+      install evidence; record any support-boundary changes in the Windows port
+      appendix or support matrix.
 
 - [ ] `P2` Add first-class install scope and per-scope target defaults.
       Make `default`, `user`, and `system` install scope explicit instead of
@@ -151,3 +151,14 @@ No active backlog items.
       define formula ownership and update flow; wire checksums to GitHub Release
       artifacts; document the install command; and smoke-test install, upgrade,
       and uninstall on both Apple Silicon and Intel macOS where practical.
+
+- [ ] `P2` Evaluate Podman as a uniform userland backend.
+      Investigate whether rootless Podman on Linux plus Podman Machine on macOS
+      and Windows can provide a shared user-scope install/control/uninstall
+      backend with better cross-platform smoke parity. Acceptance checks:
+      compare Quadlet/user systemd, `podman generate systemd`, and
+      `podman compose`; define required Linux rootless preflights such as user
+      namespaces, subuid/subgid, cgroup v2, rootless networking, user systemd,
+      and linger; document VM-backed host semantics on macOS and Windows; and
+      decide whether this belongs as a first-class backend beside Docker.
+      Design notes live in `docs/FUTURE_DIRECTIONS.md`.

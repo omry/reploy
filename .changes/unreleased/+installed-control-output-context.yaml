@@ -1,0 +1,2 @@
+kind: Fixed
+body: Keep generated installed control-script output in Reploy's deployed-context labeling instead of using the control script name as the app-command prefix.

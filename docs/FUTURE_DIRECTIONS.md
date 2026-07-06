@@ -92,6 +92,40 @@ Open questions:
 - Can the generated app control script stay identical across Docker Engine,
   Docker Desktop, Colima/Lima, and VM-backed runtimes?
 
+### Podman Userland Backend
+
+Evaluate Podman as a uniform user-scope backend for Reploy. Podman is
+interesting because rootless Linux plus user systemd/Quadlet could provide a
+real non-root Linux install path, while Podman Machine offers a local
+VM-backed runtime on macOS and Windows. That could let the smoke contract stay
+closer across platforms: stage, build, run, install, generated control script,
+and uninstall would all exercise installed-app behavior without requiring
+Linux root/systemd system services for the common user-scope case.
+
+This should be evaluated as a backend option, not assumed as a replacement for
+the current Docker/systemd and Docker Desktop paths. On macOS and Windows,
+Podman containers still run on the host machine inside a Linux VM, so the
+security and lifecycle promises are VM-backed userland promises rather than
+native OS service promises. On Linux, rootless Podman depends on host
+capabilities such as user namespaces, subuid/subgid mappings, cgroup v2,
+rootless networking, user systemd, and possibly linger for reboot-without-login
+persistence.
+
+Open questions:
+
+- Can one Podman backend cover Linux, macOS, and Windows with the same Reploy
+  install/control/uninstall contract?
+- Should Reploy use Quadlet/user systemd directly, `podman generate systemd`,
+  or a Compose-compatible provider through `podman compose`?
+- How should Reploy represent Podman Machine readiness, VM lifecycle, file
+  sharing, port publishing, and host path behavior on macOS and Windows?
+- What preflight checks are required for rootless Linux: user namespaces,
+  subuid/subgid, cgroup v2, network backend, user systemd, and linger?
+- Does the Podman path improve cross-platform smoke parity enough to justify a
+  first-class backend beside Docker?
+- How should support docs explain "runs on the host inside a Linux VM" for
+  macOS and Windows without implying native OS service semantics?
+
 ## Additional Bundle Providers
 
 The current provider direction starts with Python/PyPI. Source repositories and
