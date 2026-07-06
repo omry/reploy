@@ -1,0 +1,2 @@
+kind: Fixed
+body: Make the E2E smoke harness exit cleanly on Ctrl+C without printing Python tracebacks.

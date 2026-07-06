@@ -14,8 +14,16 @@ import sys
 import tempfile
 import threading
 from pathlib import Path
+from typing import NamedTuple
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+INTERRUPT_EXIT_CODE = 130
+
+
+class StreamCapture(NamedTuple):
+    stdout_chunks: list[str]
+    stderr_chunks: list[str]
+    threads: list[threading.Thread]
 
 
 def parse_args() -> argparse.Namespace:
@@ -135,9 +143,14 @@ def run(argv: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.Comple
     ]
     for thread in threads:
         thread.start()
-    returncode = completed.wait()
-    for thread in threads:
-        thread.join()
+    capture = StreamCapture(stdout_chunks, stderr_chunks, threads)
+    try:
+        returncode = completed.wait()
+    except KeyboardInterrupt:
+        terminate_child(completed)
+        join_streams(capture)
+        raise SmokeInterrupted(f"interrupted while running: {' '.join(argv)}") from None
+    join_streams(capture)
     if returncode != 0:
         raise SystemExit(f"[smoke] command failed with exit code {returncode}: {' '.join(argv)}")
     return subprocess.CompletedProcess(
@@ -146,6 +159,26 @@ def run(argv: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.Comple
         stdout="".join(stdout_chunks),
         stderr="".join(stderr_chunks),
     )
+
+
+class SmokeInterrupted(Exception):
+    pass
+
+
+def terminate_child(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+
+def join_streams(capture: StreamCapture) -> None:
+    for thread in capture.threads:
+        thread.join(timeout=5)
 
 
 def require_contains(output: str, needle: str, context: str) -> None:
@@ -570,4 +603,11 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except SmokeInterrupted as error:
+        print(f"[smoke] {error}", file=sys.stderr)
+        raise SystemExit(INTERRUPT_EXIT_CODE) from None
+    except KeyboardInterrupt:
+        print("[smoke] interrupted", file=sys.stderr)
+        raise SystemExit(INTERRUPT_EXIT_CODE) from None
