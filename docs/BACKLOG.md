@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-05
+updated: 2026-07-06
 summary: Active planning surface for Reploy design and implementation gaps.
 ---
 
@@ -35,22 +35,6 @@ No active backlog items.
 
 ## Pre-release
 
-- [ ] `P1` Embed a hidden Reploy runtime for generated control scripts.
-      Reploy originally experimented with shipping a local Reploy entrypoint in
-      deployments, then removed it; the direction is now to include a pinned
-      `.reploy/bin/reploy` runtime again while still exposing only the narrow
-      generated `<app>ctl` control surface. Acceptance checks: make generated
-      control scripts small launchers that delegate to the embedded runtime;
-      ensure the embedded command path exposes only lifecycle, health, logs, and
-      blueprint-declared deployed app commands; have `stage`, `stage --update`,
-      direct install, and install/update write or refresh `.reploy/bin/reploy`
-      as Reploy-owned generated runtime state; record expected runtime
-      version/hash in deployment state; keep app-owned artifact policies from
-      governing `.reploy/`; provide a clear repair path or explicit system
-      Reploy escape hatch when the embedded runtime is missing or invalid; and
-      update docs/tests that currently say no Reploy binary belongs inside a
-      deployment to instead say no full Reploy CLI surface is exposed.
-
 - [ ] `P1` Add Docker command interruption integration coverage.
       Reploy should explicitly test what happens when long-running Docker and
       Docker Compose commands are interrupted, especially on Windows Docker
@@ -74,14 +58,16 @@ No active backlog items.
       bootstrap versus wheelhouse work; and verify the behavior on a clean
       Docker image with uncached Python dependencies.
 
-- [ ] `P1` Add useful progress for Python runtime preparation.
+- [ ] `P1` Add bounded and actionable progress for Python runtime preparation.
       `reploy app config check`, install hooks, and first service start can
       sit at `Preparing Python runtime...` while the generated Compose command
-      creates a venv and installs requirements inside the container. Acceptance
-      checks: decide whether this should be a spinner, bounded step progress,
-      or both; keep quiet mode readable without dumping pip logs; preserve
-      verbose mode for raw command output; avoid speculative per-package noise;
-      and verify the experience on Windows Docker Desktop and Linux.
+      creates a venv and installs requirements inside the container. Reploy now
+      shows a quiet-mode spinner for runtime actions, but the slow path still
+      needs bounded, diagnosable behavior. Acceptance checks: keep quiet mode
+      readable without dumping pip logs; add a timeout or similarly actionable
+      failure path for blocked runtime preparation; preserve verbose mode for
+      raw command output; avoid speculative per-package noise; and verify the
+      experience on Windows Docker Desktop and Linux.
 
 - [ ] `P2` Remove old verbose Docker command argv compatibility.
       Reploy currently supports both full `container.argv` commands and the
@@ -92,15 +78,6 @@ No active backlog items.
       validation and errors; update blueprint docs and examples; migrate local
       fixtures and known app blueprints; and keep tests that prove the chosen
       schema produces the same generated runtime commands.
-
-- [ ] `P2` Audit the macOS port-plan appendix.
-      The macOS port is already implemented, so post-implementation corrections
-      should not rewrite the historical design plan as if it were still being
-      designed. Acceptance checks: keep the original macOS port plan body as
-      historical design context; put settled terminology and status corrections
-      in a clearly labeled appendix; make current user-facing docs use
-      "Docker-managed permanent install" and "OS service install" consistently;
-      and avoid duplicating the same correction across multiple doc surfaces.
 
 - [ ] `P1` Reposition the homepage and intro around Reploy as a cross-platform
       app installer.
@@ -115,12 +92,23 @@ No active backlog items.
       solve the same problem. Cross-platform install location design lives in
       `docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md`.
 
+- [ ] `P1` Capture remaining Windows Docker Desktop smoke evidence.
+      Windows support is now explicitly defined as native `reploy.exe`,
+      PowerShell or `cmd.exe`, Docker Desktop, and Docker-managed permanent
+      install rather than Windows Service install. Acceptance checks: run and
+      record CLI-only Windows staging evidence; run Docker Desktop staging and
+      persistent-install smokes where available; cover project paths with
+      spaces and normal drive-letter paths; verify generated PowerShell control
+      script behavior; confirm cleanup of generated artifacts, containers,
+      networks, and volumes; and update the support matrix or Windows port
+      appendix only for gaps found by the smoke pass.
+
 - [ ] `P2` Add first-class install scope and per-scope target defaults.
-      After the Windows port is stable, make `default`, `user`, and `system`
-      install scope explicit instead of inferring intent from paths. Acceptance
-      checks: define the CLI and installed-state shape for requested versus
-      resolved scope; validate requested scope against backend capabilities;
-      add per-scope, per-OS target defaults such as
+      Make `default`, `user`, and `system` install scope explicit instead of
+      inferring intent only from paths. Acceptance checks: define the CLI and
+      installed-state shape for requested versus resolved scope; validate
+      requested scope against backend capabilities; add per-scope, per-OS target
+      defaults such as
       `install.target.default_paths.user.windows` and
       `install.target.default_paths.system.linux`; preserve the simple
       platform-aware default path behavior for blueprints that do not need
@@ -131,14 +119,14 @@ No active backlog items.
 ## Post-v1
 
 - [ ] `P2` Document blueprint structure and feature semantics.
-      Make the blueprint authoring docs cover the actual supported structure,
-      not only examples. Acceptance checks: document top-level sections,
-      install owner/ports/managed paths, bundle options, Docker service/runtime
-      settings, commands, app/deployed command exposure, managed config
-      directories and single-file paths, generated mount paths, bootstrap
-      creation behavior for writable app commands, and strict start/install
-      preflights; include a realistic blueprint example and cross-check the
-      docs against parser validation and generated Compose behavior.
+      Audit the current blueprint authoring docs against parser validation and
+      generated Compose behavior, then close concrete gaps. Acceptance checks:
+      cross-check top-level sections, install owner/ports/managed paths, bundle
+      options, Docker service/runtime settings, commands, app/deployed command
+      exposure, managed config directories and single-file paths, generated
+      mount paths, bootstrap creation behavior for writable app commands, and
+      strict start/install preflights; update the realistic blueprint example;
+      and remove or correct any docs that describe obsolete schema behavior.
 
 - [ ] `P2` Find a convincing Reploy demo app.
       Identify a useful Python service that is genuinely awkward to run well
@@ -156,30 +144,6 @@ No active backlog items.
       service example; decide how much app/runtime detection is appropriate;
       and make the generated blueprint usable as a starting point without
       implying it is production-ready.
-
-- [ ] `P2` Define and validate formal Windows support.
-      Reploy should have explicit Windows behavior instead of accidental
-      partial support. Acceptance checks: publish a support matrix for Windows
-      staging/development commands versus permanent install/uninstall; build
-      and smoke-test `reploy.exe` for stage/update/info/bundle/app flows with
-      Docker Desktop where applicable; make Linux-only commands such as
-      systemd-based install/uninstall fail with clear platform errors; and
-      decide whether a Windows service backend is in scope or explicitly
-      deferred; document WSL as officially supported through the Linux path,
-      not as a native Windows backend; and distinguish Docker-managed permanent
-      install from Windows Service install. Planning details live in
-      `docs/WINDOWS_PORT.md`.
-
-- [ ] `P2` Define and validate formal macOS support.
-      Reploy should have explicit macOS behavior instead of assuming Linux-like
-      service management. Acceptance checks: publish a support matrix that
-      positions macOS as a development/staging host; build and smoke-test macOS
-      binaries for stage/update/info/bundle/app/runtime/test flows with Docker
-      Desktop where applicable; define and smoke-test normal install/uninstall
-      as a Docker-managed permanent install with a warning about weaker
-      macOS/Windows Docker-runtime security; make Linux/systemd OS service
-      guarantees clear; and keep launchd OS service install as a future design
-      topic. Planning details live in `docs/MACOS_PORT.md`.
 
 - [ ] `P2` Add a Homebrew release path for macOS.
       Make Reploy installable through Homebrew once macOS artifacts are ready.
