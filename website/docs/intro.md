@@ -15,14 +15,21 @@ that blueprint: stage, test, install, update, and uninstall.
 ## Lifecycle
 
 ```mermaid
+---
+config:
+  layout: elk
+  themeVariables:
+    edgeLabelBackground: "#1b1b1d"
+---
 flowchart LR
   B[Blueprint]
   S[Staging]
   D[Deployed]
 
-  B -->|stage| S
-  S -->|install / update| D
-  B -->|direct install| D
+  B -->|Stage| S
+  S -->|Configure + Test| S
+  S -->|Install / Update| D
+  B ---->|Direct Install / Update| D
 ```
 
 A blueprint is the portable source of deployment intent. Staging is a
