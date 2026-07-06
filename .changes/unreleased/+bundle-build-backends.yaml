@@ -1,0 +1,2 @@
+kind: Changed
+body: Add explicit bundle wheelhouse/build backends, defaulting Reploy-managed local source wheel builds to uv while keeping raw pip wheelhouse builds available.

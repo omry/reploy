@@ -111,6 +111,24 @@ func TestParseGlobalDeploymentOptionsDockerTimeout(t *testing.T) {
 	}
 }
 
+func TestParseDockerBundleOptionsBuildBackends(t *testing.T) {
+	options, err := parseDockerBundleOptions([]string{"--wheelhouse-backend", "pip", "--build-backend=uv", "--dir", "stage"}, dockerBundleParseOptions{
+		AllowWheelhouseBackend: true,
+		AllowBuildBackend:     true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.WheelhouseBackend != "pip" || options.BuildBackend != "uv" || options.Dir != "stage" {
+		t.Fatalf("options = %#v", options)
+	}
+
+	_, err = parseDockerBundleOptions([]string{"--wheelhouse-backend", "pip"}, dockerBundleParseOptions{})
+	if err == nil || !strings.Contains(err.Error(), "unknown option: --wheelhouse-backend") {
+		t.Fatalf("err = %v, want unknown wheelhouse backend option", err)
+	}
+}
+
 func TestParseGlobalDeploymentOptionsRejectsInvalidDockerTimeout(t *testing.T) {
 	for _, args := range [][]string{
 		{"--docker-timeout"},

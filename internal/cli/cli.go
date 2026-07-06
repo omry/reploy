@@ -813,14 +813,16 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer, globalOp
 		return 2
 	}
 	options, err := parseDockerBundleOptions(args[1:], dockerBundleParseOptions{
-		RequireRoot:   action != "list" && action != "list-options" && action != "check" && action != "build" && action != "clean" && action != "warm-runtime",
-		AllowDryRun:   action == "check" || action == "build" || action == "warm-runtime",
-		AllowPyPIOnly: action == "build",
-		AllowVerbose:  action == "check" || action == "build" || action == "clean" || action == "warm-runtime",
-		AllowMultiple: action == "add" || action == "remove",
-		AllowNames:    action == "add" || action == "remove",
-		AllowExtra:    action == "add" || action == "remove",
-		Command:       action,
+		RequireRoot:            action != "list" && action != "list-options" && action != "check" && action != "build" && action != "clean" && action != "warm-runtime",
+		AllowDryRun:            action == "check" || action == "build" || action == "warm-runtime",
+		AllowPyPIOnly:          action == "build",
+		AllowWheelhouseBackend: action == "check" || action == "build",
+		AllowBuildBackend:      action == "check" || action == "build",
+		AllowVerbose:           action == "check" || action == "build" || action == "clean" || action == "warm-runtime",
+		AllowMultiple:          action == "add" || action == "remove",
+		AllowNames:             action == "add" || action == "remove",
+		AllowExtra:             action == "add" || action == "remove",
+		Command:                action,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
@@ -883,6 +885,8 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer, globalOp
 		if !options.DryRun {
 			built, err = dockerdeploy.EnsureBundlePrepared(dockerdeploy.BundleEnsureOptions{
 				Dir:                    options.Dir,
+				WheelhouseBackend:      options.WheelhouseBackend,
+				BuildBackend:           options.BuildBackend,
 				Verbose:                options.Verbose,
 				Stdout:                 stdout,
 				Stderr:                 stderr,
@@ -929,6 +933,8 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer, globalOp
 			Dir:                    options.Dir,
 			DryRun:                 options.DryRun,
 			PyPIOnly:               options.PyPIOnly,
+			WheelhouseBackend:      options.WheelhouseBackend,
+			BuildBackend:           options.BuildBackend,
 			Verbose:                options.Verbose,
 			Stdout:                 stdout,
 			Stderr:                 stderr,
@@ -1011,26 +1017,30 @@ func isDockerBundleCommand(action string) bool {
 }
 
 type dockerBundleOptions struct {
-	Dir         string
-	DirExplicit bool
-	Root        string
-	Roots       []string
-	Names       []string
-	Extras      []string
-	DryRun      bool
-	PyPIOnly    bool
-	Verbose     bool
+	Dir               string
+	DirExplicit       bool
+	Root              string
+	Roots             []string
+	Names             []string
+	Extras            []string
+	DryRun            bool
+	PyPIOnly          bool
+	WheelhouseBackend string
+	BuildBackend      string
+	Verbose           bool
 }
 
 type dockerBundleParseOptions struct {
-	RequireRoot   bool
-	AllowDryRun   bool
-	AllowPyPIOnly bool
-	AllowVerbose  bool
-	AllowMultiple bool
-	AllowNames    bool
-	AllowExtra    bool
-	Command       string
+	RequireRoot            bool
+	AllowDryRun            bool
+	AllowPyPIOnly          bool
+	AllowWheelhouseBackend bool
+	AllowBuildBackend      bool
+	AllowVerbose           bool
+	AllowMultiple          bool
+	AllowNames             bool
+	AllowExtra             bool
+	Command                string
 }
 
 func parseDockerBundleUpgradeOptions(args []string) (dockerBundleOptions, error) {
@@ -1096,6 +1106,24 @@ func parseDockerBundleOptions(args []string, parseOptions dockerBundleParseOptio
 				return dockerBundleOptions{}, fmt.Errorf("unknown option: %s", arg)
 			}
 			options.PyPIOnly = true
+		case "--wheelhouse-backend":
+			if !parseOptions.AllowWheelhouseBackend {
+				return dockerBundleOptions{}, fmt.Errorf("unknown option: %s", arg)
+			}
+			value, ok := optionValue(args, &index)
+			if !ok {
+				return dockerBundleOptions{}, fmt.Errorf("%s requires a value", arg)
+			}
+			options.WheelhouseBackend = value
+		case "--build-backend":
+			if !parseOptions.AllowBuildBackend {
+				return dockerBundleOptions{}, fmt.Errorf("unknown option: %s", arg)
+			}
+			value, ok := optionValue(args, &index)
+			if !ok {
+				return dockerBundleOptions{}, fmt.Errorf("%s requires a value", arg)
+			}
+			options.BuildBackend = value
 		case "--verbose":
 			if !parseOptions.AllowVerbose {
 				return dockerBundleOptions{}, fmt.Errorf("unknown option: %s", arg)
@@ -1147,6 +1175,20 @@ func parseDockerBundleOptions(args []string, parseOptions dockerBundleParseOptio
 					return dockerBundleOptions{}, fmt.Errorf("bundle extra root must not be empty")
 				}
 				options.Extras = append(options.Extras, extras...)
+				continue
+			}
+			if strings.HasPrefix(arg, "--wheelhouse-backend=") {
+				if !parseOptions.AllowWheelhouseBackend {
+					return dockerBundleOptions{}, fmt.Errorf("unknown option: --wheelhouse-backend")
+				}
+				options.WheelhouseBackend = strings.TrimPrefix(arg, "--wheelhouse-backend=")
+				continue
+			}
+			if strings.HasPrefix(arg, "--build-backend=") {
+				if !parseOptions.AllowBuildBackend {
+					return dockerBundleOptions{}, fmt.Errorf("unknown option: --build-backend")
+				}
+				options.BuildBackend = strings.TrimPrefix(arg, "--build-backend=")
 				continue
 			}
 			if strings.HasPrefix(arg, "-") {
@@ -2684,12 +2726,14 @@ Usage: reploy [--docker-timeout DURATION] bundle COMMAND
 	fmt.Fprint(output, strings.TrimLeft(`
 
 Options:
-  --dir DIR    Staging directory, default current staging dir or reploy-staging
-  --extra ROOT Add/remove an explicit bundle root; accepts comma-separated roots
-  --dry-run    Print build/check/warm-runtime commands without changing staging
-  --pypi-only  Build or upgrade using only PyPI package roots
-  --verbose    Show bundle check/build/warm-runtime command output
-  -h, --help   Show bundle help
+  --dir DIR                  Staging directory, default current staging dir or reploy-staging
+  --extra ROOT               Add/remove an explicit bundle root; accepts comma-separated roots
+  --dry-run                  Print build/check/warm-runtime commands without changing staging
+  --pypi-only                Build or upgrade using only PyPI package roots
+  --wheelhouse-backend NAME  Wheelhouse backend for build/check: reploy (default) or pip
+  --build-backend NAME       Local source wheel build backend for reploy wheelhouse: uv (default) or pip
+  --verbose                  Show bundle check/build/warm-runtime command output
+  -h, --help                 Show bundle help
 `, "\n"))
 }
 

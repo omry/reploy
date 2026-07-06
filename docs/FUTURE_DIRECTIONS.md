@@ -138,6 +138,50 @@ components, and image references in the same staged runtime. In that model, each
 provider is responsible for resolving, materializing, and later restoring its
 own part of the environment contract.
 
+### uv Python Bundle Backend
+
+Evaluate deeper `uv` integration as a possible future Python bundle backend. uv
+is an active Rust-based Python package manager with a pip-compatible interface,
+aggressive caching, fast installs, and good Docker integration. Reploy already
+uses uv as the default build backend for local source wheels in the
+Reploy-managed wheelhouse path, while pip still prepares and validates the
+wheelhouse itself.
+
+Replacing the wheelhouse backend itself should remain exploratory and out of the
+near-term release path. Reploy's current Python bundle contract is still a pip
+wheelhouse:
+
+```text
+pip wheel --wheel-dir /wheelhouse -r /requirements.txt
+pip install --no-index --find-links /bundle -r /requirements.txt
+```
+
+uv can build project wheels and install quickly, but it does not currently look
+like a direct replacement for `pip wheel -r ... --wheel-dir ...` that emits a
+portable wheelhouse for a whole requirements set. Offline uv workflows also
+appear to be cache-oriented rather than wheelhouse-oriented; for example,
+astral-sh/uv#15519 discusses friction around `uv sync --frozen --no-index
+--find-links` and maintainers point toward copying uv cache state plus
+`--offline` instead of treating a wheelhouse as the primary artifact.
+
+Open questions:
+
+- Is there a uv workflow that can preserve Reploy's current offline wheelhouse
+  artifact contract without depending on private cache internals?
+- If not, what alternate Python bundle artifact would uv imply: installed
+  target tree, virtual environment, uv cache snapshot, or generated image layer?
+- How do uv's resolver, index-priority, config/environment, build-isolation,
+  and offline semantics differ from pip in ways that matter to Reploy
+  blueprints?
+- Can uv handle local source packages, editable-like workflows, private
+  indexes, `--find-links`, and cross-platform smoke packages with the same
+  reproducibility expectations as the pip wheelhouse path?
+- Would runtime images need uv installed, or can uv remain only a staging/build
+  tool?
+- Does uv materially improve bundle build latency for Arbiter and the smoke
+  package once cold cache, warm cache, and offline deployment cases are all
+  measured?
+
 ### Source Provider
 
 Reploy now has an initial generic Git source provider for HTTPS and SSH

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -56,6 +57,8 @@ type BundlePrepareOptions struct {
 	Dir                    string
 	DryRun                 bool
 	PyPIOnly               bool
+	WheelhouseBackend      string
+	BuildBackend           string
 	SkipWarmRuntime        bool
 	Verbose                bool
 	Stdout                 io.Writer
@@ -131,6 +134,8 @@ func formatDuration(duration time.Duration) string {
 type BundleEnsureOptions struct {
 	Dir                    string
 	DryRun                 bool
+	WheelhouseBackend      string
+	BuildBackend           string
 	SkipWarmRuntime        bool
 	Verbose                bool
 	Stdout                 io.Writer
@@ -146,9 +151,71 @@ type BundleUpgradeOptions struct {
 	Dir                    string
 	Target                 string
 	PyPIOnly               bool
+	WheelhouseBackend      string
+	BuildBackend           string
 	Stdout                 io.Writer
 	Stderr                 io.Writer
 	DockerPreflightTimeout time.Duration
+}
+
+type WheelhouseBackend string
+
+const (
+	WheelhouseBackendPip    WheelhouseBackend = "pip"
+	WheelhouseBackendReploy WheelhouseBackend = "reploy"
+)
+
+type PythonBuildBackend string
+
+const (
+	PythonBuildBackendPip PythonBuildBackend = "pip"
+	PythonBuildBackendUV  PythonBuildBackend = "uv"
+)
+
+const uvBuildBackendRequirement = "uv==0.11.26"
+
+func normalizeBundleBackends(wheelhouseValue string, buildValue string) (WheelhouseBackend, PythonBuildBackend, error) {
+	wheelhouseBackend, err := normalizeWheelhouseBackend(wheelhouseValue)
+	if err != nil {
+		return "", "", err
+	}
+	buildBackend, err := normalizePythonBuildBackend(buildValue, wheelhouseBackend)
+	if err != nil {
+		return "", "", err
+	}
+	if wheelhouseBackend == WheelhouseBackendPip && buildBackend != PythonBuildBackendPip {
+		return "", "", fmt.Errorf("--build-backend=%s is incompatible with --wheelhouse-backend=%s; pip wheelhouse builds are owned by pip", buildBackend, wheelhouseBackend)
+	}
+	return wheelhouseBackend, buildBackend, nil
+}
+
+func normalizeWheelhouseBackend(value string) (WheelhouseBackend, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return WheelhouseBackendReploy, nil
+	}
+	switch WheelhouseBackend(value) {
+	case WheelhouseBackendPip, WheelhouseBackendReploy:
+		return WheelhouseBackend(value), nil
+	default:
+		return "", fmt.Errorf("unsupported wheelhouse backend %q; expected pip or reploy", value)
+	}
+}
+
+func normalizePythonBuildBackend(value string, wheelhouseBackend WheelhouseBackend) (PythonBuildBackend, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		if wheelhouseBackend == WheelhouseBackendPip {
+			return PythonBuildBackendPip, nil
+		}
+		return PythonBuildBackendUV, nil
+	}
+	switch PythonBuildBackend(value) {
+	case PythonBuildBackendPip, PythonBuildBackendUV:
+		return PythonBuildBackend(value), nil
+	default:
+		return "", fmt.Errorf("unsupported build backend %q; expected pip or uv", value)
+	}
 }
 
 type bundleBuildSource struct {
@@ -157,6 +224,19 @@ type bundleBuildSource struct {
 	ContainerDir      string
 	BuildDir          string
 	BuildRequirements []string
+}
+
+const wheelhouseManifestName = "reploy-wheelhouse.json"
+
+type wheelhouseManifest struct {
+	SchemaVersion           int                                 `json:"schema_version"`
+	RequirementsFingerprint string                              `json:"requirements_fingerprint"`
+	LocalSources            map[string]wheelhouseManifestSource `json:"local_sources,omitempty"`
+}
+
+type wheelhouseManifestSource struct {
+	Fingerprint string `json:"fingerprint"`
+	Wheel       string `json:"wheel"`
 }
 
 var runBundleCommand = runCommand
@@ -485,6 +565,10 @@ func BundlePrepare(options BundlePrepareOptions) error {
 	if options.Dir == "" {
 		options.Dir = DefaultDeploymentDir
 	}
+	wheelhouseBackend, buildBackend, err := normalizeBundleBackends(options.WheelhouseBackend, options.BuildBackend)
+	if err != nil {
+		return err
+	}
 	stdout := options.Stdout
 	stderr := options.Stderr
 	quiet := !options.Verbose && !options.DryRun
@@ -529,6 +613,7 @@ func BundlePrepare(options BundlePrepareOptions) error {
 		WheelhouseDir: bundleDir,
 		PyPIOnly:      options.PyPIOnly,
 		State:         state,
+		BuildBackend:  buildBackend,
 	})
 	if err != nil {
 		return err
@@ -570,6 +655,10 @@ func BundlePrepare(options BundlePrepareOptions) error {
 	requirementsPath := ""
 	findLinksDir := ""
 	buildSources := []bundleBuildSource{}
+	sourcesForCommand := []bundleBuildSource{}
+	noIndex := false
+	skipWheelhouseBuild := false
+	var nextWheelhouseManifest *wheelhouseManifest
 	if !options.PyPIOnly {
 		if err := timer.Measure("prepare local sources", func() error {
 			buildSources, err = localBundleBuildSources(state)
@@ -577,8 +666,30 @@ func BundlePrepare(options BundlePrepareOptions) error {
 				return err
 			}
 			if len(buildSources) > 0 {
+				sourceBuildNames := map[string]bool{}
+				switch wheelhouseBackend {
+				case WheelhouseBackendPip:
+					sourcesForCommand = buildSources
+					for _, source := range buildSources {
+						sourceBuildNames[source.Name] = true
+					}
+				case WheelhouseBackendReploy:
+					plan, err := planLocalWheelhouseBuild(state.Bundle.Roots, buildSources, bundleDir, tmpDir)
+					if err != nil {
+						return err
+					}
+					nextWheelhouseManifest = plan.Manifest
+					sourcesForCommand = plan.StaleSources
+					noIndex = plan.NoIndex
+					skipWheelhouseBuild = plan.SkipBuild
+					if buildBackend == PythonBuildBackendPip {
+						sourceBuildNames = plan.StaleSourceNames
+					}
+				default:
+					return fmt.Errorf("unsupported wheelhouse backend: %s", wheelhouseBackend)
+				}
 				requirementsPath = filepath.Join(tmpDir, "requirements.local.txt")
-				requirements, err := localBuildRequirements(state.Bundle.Roots, buildSources)
+				requirements, err := localBuildRequirements(state.Bundle.Roots, buildSources, sourceBuildNames)
 				if err != nil {
 					return err
 				}
@@ -599,22 +710,40 @@ func BundlePrepare(options BundlePrepareOptions) error {
 		State:            state,
 		RequirementsPath: requirementsPath,
 		FindLinksDir:     findLinksDir,
-		Sources:          buildSources,
+		Sources:          sourcesForCommand,
+		NoIndex:          noIndex,
+		BuildBackend:     buildBackend,
 	})
 	if err != nil {
 		return err
 	}
 	runStdout := stdout
 	runStderr := stderr
-	if err := timer.Measure("build wheelhouse", func() error {
-		return runInterruptibleCommand(runBundleCommand, spec, bundleDockerRunOptions(runStdout, runStderr, options.DockerPreflightTimeout))
-	}); err != nil {
-		return err
+	if skipWheelhouseBuild {
+		if err := timer.Measure("build wheelhouse", func() error {
+			if options.Verbose && options.Stdout != nil {
+				fmt.Fprintln(options.Stdout, "bundle build: reusing unchanged wheelhouse")
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	} else {
+		if err := timer.Measure("build wheelhouse", func() error {
+			return runInterruptibleCommand(runBundleCommand, spec, bundleDockerRunOptions(runStdout, runStderr, options.DockerPreflightTimeout))
+		}); err != nil {
+			return err
+		}
 	}
 	if err := timer.Measure("replace bundle", func() error {
 		return replaceWheelhouse(tmpDir, bundleDir)
 	}); err != nil {
 		return err
+	}
+	if nextWheelhouseManifest != nil {
+		if err := writeWheelhouseManifest(bundleDir, *nextWheelhouseManifest); err != nil {
+			return err
+		}
 	}
 	if options.Verbose && options.Stdout != nil {
 		fmt.Fprintf(options.Stdout, "built installation bundle: %s\n", bundleDir)
@@ -722,6 +851,8 @@ func EnsureBundlePrepared(options BundleEnsureOptions) (bool, error) {
 	return true, BundlePrepare(BundlePrepareOptions{
 		Dir:                    options.Dir,
 		DryRun:                 options.DryRun,
+		WheelhouseBackend:      options.WheelhouseBackend,
+		BuildBackend:           options.BuildBackend,
 		SkipWarmRuntime:        options.SkipWarmRuntime,
 		Verbose:                options.Verbose,
 		Stdout:                 options.Stdout,
@@ -807,6 +938,8 @@ func BundleUpgrade(options BundleUpgradeOptions) ([]UpdateResult, error) {
 	if err := BundlePrepare(BundlePrepareOptions{
 		Dir:                    options.Dir,
 		PyPIOnly:               options.PyPIOnly,
+		WheelhouseBackend:      options.WheelhouseBackend,
+		BuildBackend:           options.BuildBackend,
 		Stdout:                 options.Stdout,
 		Stderr:                 options.Stderr,
 		DockerPreflightTimeout: options.DockerPreflightTimeout,
@@ -918,6 +1051,8 @@ type bundlePrepareCommandOptions struct {
 	Dir              string
 	WheelhouseDir    string
 	PyPIOnly         bool
+	NoIndex          bool
+	BuildBackend     PythonBuildBackend
 	State            deploy.DeploymentState
 	RequirementsPath string
 	FindLinksDir     string
@@ -929,6 +1064,7 @@ func BundlePrepareCommand(dir string, wheelhouseDir string, pypiOnly bool) (Comm
 		Dir:           dir,
 		WheelhouseDir: wheelhouseDir,
 		PyPIOnly:      pypiOnly,
+		BuildBackend:  PythonBuildBackendPip,
 	})
 }
 
@@ -985,6 +1121,10 @@ func bundlePrepareCommand(options bundlePrepareCommandOptions) (CommandSpec, err
 		return CommandSpec{}, err
 	}
 	image := envValue(values, "REPLOY_IMAGE", "python:3.11-slim")
+	buildBackend := options.BuildBackend
+	if buildBackend == "" {
+		buildBackend = PythonBuildBackendPip
+	}
 	args := []string{
 		"run",
 		"--rm",
@@ -1003,9 +1143,9 @@ func bundlePrepareCommand(options bundlePrepareCommandOptions) (CommandSpec, err
 		image,
 	)
 	if len(options.Sources) > 0 {
-		args = append(args, "sh", "-c", localSourcePrepareScript(options.Sources, options.PyPIOnly))
+		args = append(args, "sh", "-c", localSourcePrepareScript(options.Sources, options.PyPIOnly, options.NoIndex, buildBackend))
 	} else {
-		args = append(args, python.PrepareWheelhouseArgv(options.PyPIOnly)...)
+		args = append(args, prepareWheelhouseArgv(options.PyPIOnly, options.NoIndex)...)
 	}
 	return CommandSpec{Name: "docker", Args: args, Dir: absoluteDir}, nil
 }
@@ -1150,7 +1290,208 @@ func selectedPackLocalSources(pack deploy.AppPack, roots []deploy.ArtifactRoot, 
 	return sources, nil
 }
 
-func localBuildRequirements(roots []deploy.ArtifactRoot, sources []bundleBuildSource) ([]byte, error) {
+type localWheelhouseBuildPlan struct {
+	Manifest         *wheelhouseManifest
+	StaleSources     []bundleBuildSource
+	StaleSourceNames map[string]bool
+	NoIndex          bool
+	SkipBuild        bool
+}
+
+func planLocalWheelhouseBuild(roots []deploy.ArtifactRoot, sources []bundleBuildSource, previousBundleDir string, workingBundleDir string) (localWheelhouseBuildPlan, error) {
+	manifest := wheelhouseManifest{
+		SchemaVersion:           1,
+		RequirementsFingerprint: wheelhouseRequirementsFingerprint(roots, sources),
+		LocalSources:            map[string]wheelhouseManifestSource{},
+	}
+	sourceFingerprints := map[string]string{}
+	for _, source := range sources {
+		fingerprint, err := localSourceFingerprint(source.HostDir)
+		if err != nil {
+			return localWheelhouseBuildPlan{}, fmt.Errorf("fingerprint local source %s: %w", source.Name, err)
+		}
+		sourceFingerprints[source.Name] = fingerprint
+		manifest.LocalSources[source.Name] = wheelhouseManifestSource{Fingerprint: fingerprint}
+	}
+
+	previous, err := readWheelhouseManifest(previousBundleDir)
+	if err != nil {
+		return localWheelhouseBuildPlan{}, err
+	}
+	stale := sources
+	staleNames := map[string]bool{}
+	for _, source := range sources {
+		staleNames[source.Name] = true
+	}
+	if previous != nil && previous.SchemaVersion == 1 && previous.RequirementsFingerprint == manifest.RequirementsFingerprint {
+		stale = nil
+		staleNames = map[string]bool{}
+		for _, source := range sources {
+			previousSource, ok := previous.LocalSources[source.Name]
+			if !ok || previousSource.Fingerprint != sourceFingerprints[source.Name] || previousSource.Wheel == "" {
+				stale = append(stale, source)
+				staleNames[source.Name] = true
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(workingBundleDir, previousSource.Wheel)); err != nil {
+				if os.IsNotExist(err) {
+					stale = append(stale, source)
+					staleNames[source.Name] = true
+					continue
+				}
+				return localWheelhouseBuildPlan{}, err
+			}
+			manifest.LocalSources[source.Name] = previousSource
+		}
+	}
+	if previous != nil {
+		for _, source := range stale {
+			previousSource := previous.LocalSources[source.Name]
+			if previousSource.Wheel == "" {
+				continue
+			}
+			if err := os.Remove(filepath.Join(workingBundleDir, previousSource.Wheel)); err != nil && !os.IsNotExist(err) {
+				return localWheelhouseBuildPlan{}, err
+			}
+		}
+	}
+	return localWheelhouseBuildPlan{
+		Manifest:         &manifest,
+		StaleSources:     stale,
+		StaleSourceNames: staleNames,
+		NoIndex:          previous != nil && previous.SchemaVersion == 1 && previous.RequirementsFingerprint == manifest.RequirementsFingerprint,
+		SkipBuild:        len(stale) == 0,
+	}, nil
+}
+
+func wheelhouseRequirementsFingerprint(roots []deploy.ArtifactRoot, sources []bundleBuildSource) string {
+	input := struct {
+		Roots             []deploy.ArtifactRoot `json:"roots,omitempty"`
+		BuildRequirements []string              `json:"build_requirements,omitempty"`
+	}{
+		Roots:             roots,
+		BuildRequirements: localBuildRequirementLines(sources),
+	}
+	content, err := json.Marshal(input)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(content)
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func readWheelhouseManifest(bundleDir string) (*wheelhouseManifest, error) {
+	content, err := os.ReadFile(filepath.Join(bundleDir, wheelhouseManifestName))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var manifest wheelhouseManifest
+	if err := json.Unmarshal(content, &manifest); err != nil {
+		return nil, nil
+	}
+	return &manifest, nil
+}
+
+func writeWheelhouseManifest(bundleDir string, manifest wheelhouseManifest) error {
+	wheelsByName, err := wheelFilesByNormalizedName(bundleDir)
+	if err != nil {
+		return err
+	}
+	for name, source := range manifest.LocalSources {
+		wheel := source.Wheel
+		if wheel == "" {
+			wheel = wheelsByName[name]
+		}
+		if wheel == "" {
+			return fmt.Errorf("built wheelhouse is missing local source wheel for %s", name)
+		}
+		source.Wheel = wheel
+		manifest.LocalSources[name] = source
+	}
+	content, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	content = append(content, '\n')
+	_, err = deploy.WriteFileIfChanged(filepath.Join(bundleDir, wheelhouseManifestName), content, 0o644)
+	return err
+}
+
+func wheelFilesByNormalizedName(dir string) (map[string]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]string{}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".whl") {
+			continue
+		}
+		name := normalizedWheelDistributionName(entry.Name())
+		if name == "" {
+			continue
+		}
+		result[name] = entry.Name()
+	}
+	return result, nil
+}
+
+func normalizedWheelDistributionName(filename string) string {
+	base := strings.TrimSuffix(filename, ".whl")
+	name, _, ok := strings.Cut(base, "-")
+	if !ok {
+		return ""
+	}
+	return python.NormalizeRequirementName(strings.ReplaceAll(name, "_", "-"))
+}
+
+func localSourceFingerprint(dir string) (string, error) {
+	hash := sha256.New()
+	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		name := entry.Name()
+		if entry.IsDir() {
+			switch name {
+			case ".git", ".hg", ".mypy_cache", ".nox", ".pytest_cache", ".ruff_cache", ".sl", ".tox", ".venv", "__pycache__", "node_modules":
+				return filepath.SkipDir
+			}
+			if strings.HasSuffix(name, ".egg-info") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !entry.Type().IsRegular() || strings.HasSuffix(name, ".pyc") || strings.HasSuffix(name, ".pyo") {
+			return nil
+		}
+		relative, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(hash, "%s\n%d\n", filepath.ToSlash(relative), len(content))
+		if _, err := hash.Write(content); err != nil {
+			return err
+		}
+		if _, err := hash.Write([]byte{'\n'}); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil)), nil
+}
+
+func localBuildRequirements(roots []deploy.ArtifactRoot, sources []bundleBuildSource, sourceBuildNames map[string]bool) ([]byte, error) {
 	byName := map[string]string{}
 	for _, source := range sources {
 		byName[source.Name] = source.BuildDir
@@ -1162,7 +1503,8 @@ func localBuildRequirements(roots []deploy.ArtifactRoot, sources []bundleBuildSo
 		}
 		line := root.Source
 		if name := python.RootPackageName(root); name != "" {
-			if sourcePath, ok := byName[python.NormalizeRequirementName(name)]; ok {
+			normalized := python.NormalizeRequirementName(name)
+			if sourcePath, ok := byName[normalized]; ok && sourceBuildNames[normalized] {
 				line = sourcePath
 			}
 		}
@@ -1225,7 +1567,7 @@ func parseInlineStringArray(value string) []string {
 	return requirements
 }
 
-func localSourcePrepareScript(sources []bundleBuildSource, pypiOnly bool) string {
+func localSourcePrepareScript(sources []bundleBuildSource, pypiOnly bool, noIndex bool, buildBackend PythonBuildBackend) string {
 	commands := []string{
 		"set -eu",
 		"rm -rf /wheelhouse/.source",
@@ -1234,8 +1576,56 @@ func localSourcePrepareScript(sources []bundleBuildSource, pypiOnly bool) string
 	for _, source := range sources {
 		commands = append(commands, "cp -a "+shellQuote(source.ContainerDir)+" "+shellQuote(source.BuildDir))
 	}
-	commands = append(commands, shellCommand(python.PrepareWheelhouseArgv(pypiOnly)))
+	if buildBackend == PythonBuildBackendUV {
+		commands = append(commands, uvBuildBackendBootstrapScript())
+		for _, source := range sources {
+			commands = append(commands, shellCommand(uvSourceWheelArgv(source.BuildDir, noIndex)))
+		}
+	}
+	commands = append(commands, shellCommand(prepareWheelhouseArgv(pypiOnly, noIndex)))
 	return strings.Join(commands, "\n")
+}
+
+func uvBuildBackendBootstrapScript() string {
+	return strings.Join([]string{
+		"export UV_CACHE_DIR=/tmp/reploy-uv-cache",
+		"export UV_PYTHON_DOWNLOADS=never",
+		"if ! command -v uv >/dev/null 2>&1; then",
+		"  python -m pip --disable-pip-version-check install --no-cache-dir --find-links /bundle --target /tmp/reploy-uv " + shellQuote(uvBuildBackendRequirement),
+		"  export PYTHONPATH=/tmp/reploy-uv${PYTHONPATH:+:$PYTHONPATH}",
+		"fi",
+		"reploy_uv() {",
+		"  if command -v uv >/dev/null 2>&1; then",
+		"    uv \"$@\"",
+		"  else",
+		"    python -m uv \"$@\"",
+		"  fi",
+		"}",
+	}, "\n")
+}
+
+func uvSourceWheelArgv(sourceDir string, noIndex bool) []string {
+	args := []string{
+		"reploy_uv",
+		"build",
+		"--no-progress",
+		"--wheel",
+		"--find-links",
+		"/bundle",
+	}
+	if noIndex {
+		args = append(args, "--no-index")
+	}
+	return append(args, "--out-dir", "/wheelhouse", sourceDir)
+}
+
+func prepareWheelhouseArgv(pypiOnly bool, noIndex bool) []string {
+	args := python.PrepareWheelhouseArgv(pypiOnly)
+	if noIndex && !pypiOnly {
+		insert := len(args) - 4
+		args = append(args[:insert], append([]string{"--no-index"}, args[insert:]...)...)
+	}
+	return args
 }
 
 func shellCommand(args []string) string {

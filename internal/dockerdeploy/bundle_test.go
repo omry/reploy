@@ -984,6 +984,12 @@ func TestBundlePrepareUsesPackLocalSourcesForFilePacks(t *testing.T) {
 			if !strings.Contains(spec.Args[len(spec.Args)-1], "cp -a /source/demo-pkg /wheelhouse/.source/demo-pkg") {
 				t.Fatalf("local source prepare script missing copy:\n%s", spec.Args[len(spec.Args)-1])
 			}
+			if !strings.Contains(spec.Args[len(spec.Args)-1], "reploy_uv build") || !strings.Contains(spec.Args[len(spec.Args)-1], "--out-dir /wheelhouse /wheelhouse/.source/demo-pkg") {
+				t.Fatalf("local source prepare script missing uv build:\n%s", spec.Args[len(spec.Args)-1])
+			}
+			if !strings.Contains(spec.Args[len(spec.Args)-1], uvBuildBackendRequirement) {
+				t.Fatalf("local source prepare script should install pinned uv build backend:\n%s", spec.Args[len(spec.Args)-1])
+			}
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
 			wheelhouseMount = wheelhouse
 			if err := os.WriteFile(filepath.Join(wheelhouse, "demo_pkg-1.2.3-py3-none-any.whl"), []byte("demo\n"), 0o644); err != nil {
@@ -1011,7 +1017,7 @@ func TestBundlePrepareUsesPackLocalSourcesForFilePacks(t *testing.T) {
 	if err := BundlePrepare(BundlePrepareOptions{Dir: deployDir}); err != nil {
 		t.Fatal(err)
 	}
-	if buildRequirements != "setuptools>=68\nwheel\n/wheelhouse/.source/demo-pkg\nother-pkg==1.2.3\n" {
+	if buildRequirements != "setuptools>=68\nwheel\ndemo-pkg==1.2.3\nother-pkg==1.2.3\n" {
 		t.Fatalf("build requirements = %q", buildRequirements)
 	}
 	if checkRequirements != "demo-pkg==1.2.3\nother-pkg==1.2.3\n" {
@@ -1223,6 +1229,249 @@ func TestBundlePrepareWarmRuntimeCreatesManagedFilePlaceholders(t *testing.T) {
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatalf("commands = %#v, want %#v", commands, want)
 	}
+}
+
+func TestPlanLocalWheelhouseBuildSkipsUnchangedSources(t *testing.T) {
+	previousBundle := t.TempDir()
+	workingBundle := t.TempDir()
+	sources := []bundleBuildSource{
+		makeWheelhousePlanSource(t, "demo-suite", "1.2.3"),
+		makeWheelhousePlanSource(t, "demo-imap", "1.2.3"),
+	}
+	roots := []deploy.ArtifactRoot{
+		python.PackageRoot("demo-suite==1.2.3"),
+		python.PackageRoot("demo-imap==1.2.3"),
+	}
+	manifest := wheelhouseManifest{
+		SchemaVersion:           1,
+		RequirementsFingerprint: wheelhouseRequirementsFingerprint(roots, sources),
+		LocalSources:            map[string]wheelhouseManifestSource{},
+	}
+	for _, source := range sources {
+		fingerprint, err := localSourceFingerprint(source.HostDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wheel := strings.ReplaceAll(source.Name, "-", "_") + "-1.2.3-py3-none-any.whl"
+		manifest.LocalSources[source.Name] = wheelhouseManifestSource{Fingerprint: fingerprint, Wheel: wheel}
+		if err := os.WriteFile(filepath.Join(previousBundle, wheel), []byte(source.Name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(workingBundle, wheel), []byte(source.Name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writeRawWheelhouseManifest(previousBundle, manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := planLocalWheelhouseBuild(roots, sources, previousBundle, workingBundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.SkipBuild || !plan.NoIndex || len(plan.StaleSources) != 0 {
+		t.Fatalf("plan = %#v", plan)
+	}
+	requirements, err := localBuildRequirements(roots, sources, plan.StaleSourceNames)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(requirements), "/wheelhouse/.source/") {
+		t.Fatalf("unchanged requirements should use existing wheel pins:\n%s", requirements)
+	}
+}
+
+func TestBundlePreparePipWheelhouseUsesPipForLocalSourceBuilds(t *testing.T) {
+	packDir := makeTestPackWithManifest(t, strings.Replace(testPackManifest(), "    identifier: demo-suite\n", "    identifier: demo-suite\n    local_sources:\n      demo-pkg: local/demo-pkg\n", 1))
+	sourceDir := filepath.Join(packDir, "local", "demo-pkg")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "pyproject.toml"), []byte("[build-system]\nrequires = [\"setuptools>=68\", \"wheel\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref, Requirements: []string{"demo-pkg==1.2.3"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	var buildRequirements string
+	var buildScript string
+	restore := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
+		switch {
+		case containsInOrder(spec.Args, []string{"sh", "-c"}):
+			requirementsPath := hostPathForContainerMount(t, spec.Args, "/requirements.txt")
+			content, err := os.ReadFile(requirementsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			buildRequirements = string(content)
+			buildScript = spec.Args[len(spec.Args)-1]
+			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
+			return os.WriteFile(filepath.Join(wheelhouse, "demo_pkg-1.2.3-py3-none-any.whl"), []byte("demo\n"), 0o644)
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+			return nil
+		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
+			return nil
+		default:
+			t.Fatalf("unexpected bundle command: %#v", spec.Args)
+			return nil
+		}
+	})
+	defer restore()
+
+	if err := BundlePrepare(BundlePrepareOptions{Dir: deployDir, WheelhouseBackend: string(WheelhouseBackendPip)}); err != nil {
+		t.Fatal(err)
+	}
+	if buildRequirements != "setuptools>=68\nwheel\n/wheelhouse/.source/demo-pkg\n" {
+		t.Fatalf("build requirements = %q", buildRequirements)
+	}
+	if strings.Contains(buildScript, "uv build") {
+		t.Fatalf("pip wheelhouse should not invoke uv:\n%s", buildScript)
+	}
+}
+
+func TestBundleBackendsRejectPipWheelhouseWithUVBuildBackend(t *testing.T) {
+	_, _, err := normalizeBundleBackends(string(WheelhouseBackendPip), string(PythonBuildBackendUV))
+	if err == nil {
+		t.Fatal("expected incompatible backend error")
+	}
+	if !strings.Contains(err.Error(), "incompatible") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestPlanLocalWheelhouseBuildRebuildsChangedSourceOnly(t *testing.T) {
+	previousBundle := t.TempDir()
+	workingBundle := t.TempDir()
+	sources := []bundleBuildSource{
+		makeWheelhousePlanSource(t, "demo-suite", "1.2.3"),
+		makeWheelhousePlanSource(t, "demo-imap", "1.2.3"),
+	}
+	roots := []deploy.ArtifactRoot{
+		python.PackageRoot("demo-suite==1.2.3"),
+		python.PackageRoot("demo-imap==1.2.3"),
+	}
+	manifest := wheelhouseManifest{
+		SchemaVersion:           1,
+		RequirementsFingerprint: wheelhouseRequirementsFingerprint(roots, sources),
+		LocalSources:            map[string]wheelhouseManifestSource{},
+	}
+	for _, source := range sources {
+		fingerprint, err := localSourceFingerprint(source.HostDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wheel := strings.ReplaceAll(source.Name, "-", "_") + "-1.2.3-py3-none-any.whl"
+		manifest.LocalSources[source.Name] = wheelhouseManifestSource{Fingerprint: fingerprint, Wheel: wheel}
+		if err := os.WriteFile(filepath.Join(previousBundle, wheel), []byte(source.Name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(workingBundle, wheel), []byte(source.Name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writeRawWheelhouseManifest(previousBundle, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sources[1].HostDir, "src", "changed.py"), []byte("changed = True\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := planLocalWheelhouseBuild(roots, sources, previousBundle, workingBundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.SkipBuild || !plan.NoIndex || len(plan.StaleSources) != 1 || plan.StaleSources[0].Name != "demo-imap" {
+		t.Fatalf("plan = %#v", plan)
+	}
+	if _, err := os.Stat(filepath.Join(workingBundle, "demo_imap-1.2.3-py3-none-any.whl")); !os.IsNotExist(err) {
+		t.Fatalf("stale local wheel should be removed before rebuild: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workingBundle, "demo_suite-1.2.3-py3-none-any.whl")); err != nil {
+		t.Fatalf("unchanged local wheel should remain: %v", err)
+	}
+	requirements, err := localBuildRequirements(roots, sources, plan.StaleSourceNames)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(requirements)
+	if strings.Contains(text, "/wheelhouse/.source/demo-suite") || !strings.Contains(text, "/wheelhouse/.source/demo-imap") {
+		t.Fatalf("requirements should rebuild only demo-imap:\n%s", text)
+	}
+}
+
+func TestLocalSourceFingerprintSkipsGeneratedDirectories(t *testing.T) {
+	source := makeWheelhousePlanSource(t, "demo-suite", "1.2.3")
+	before, err := localSourceFingerprint(source.HostDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generatedFiles := []string{
+		filepath.Join(source.HostDir, ".venv", "lib", "python3.11", "site-packages", "demo.py"),
+		filepath.Join(source.HostDir, ".nox", "tests", "tmp.py"),
+		filepath.Join(source.HostDir, "node_modules", "left-pad", "index.js"),
+		filepath.Join(source.HostDir, ".pytest_cache", "v", "cache", "nodeids"),
+	}
+	for _, path := range generatedFiles {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("generated\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after, err := localSourceFingerprint(source.HostDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("fingerprint changed after generated directories: before=%s after=%s", before, after)
+	}
+}
+
+func makeWheelhousePlanSource(t *testing.T, name string, version string) bundleBuildSource {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), name)
+	packageDir := filepath.Join(dir, "src", strings.ReplaceAll(name, "-", "_"))
+	if err := os.MkdirAll(packageDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pyproject := fmt.Sprintf(`[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = %q
+version = %q
+`, name, version)
+	if err := os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte(pyproject), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(packageDir, "__init__.py"), []byte("__version__ = "+strconv.Quote(version)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	normalized := python.NormalizeRequirementName(name)
+	return bundleBuildSource{
+		Name:              normalized,
+		HostDir:           dir,
+		ContainerDir:      "/source/" + normalized,
+		BuildDir:          "/wheelhouse/.source/" + normalized,
+		BuildRequirements: []string{"setuptools>=68", "wheel"},
+	}
+}
+
+func writeRawWheelhouseManifest(dir string, manifest wheelhouseManifest) error {
+	content, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	content = append(content, '\n')
+	return os.WriteFile(filepath.Join(dir, wheelhouseManifestName), content, 0o644)
 }
 
 func TestBundleWarmRuntimeBuildsIfNeededAndRunsWarmup(t *testing.T) {

@@ -1,0 +1,2 @@
+kind: Fixed
+body: Reuse unchanged local source wheels during bundle builds instead of rebuilding the whole local-source wheelhouse every time.
