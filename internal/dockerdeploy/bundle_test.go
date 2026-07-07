@@ -1119,6 +1119,50 @@ func TestBundlePrepareSuppressesCommandOutputByDefault(t *testing.T) {
 	}
 }
 
+func TestBundlePrepareReportsQuietProgressAndPhaseError(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	restore := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
+		if !containsInOrder(spec.Args, []string{"python", "-m", "pip", "--disable-pip-version-check", "wheel", "--no-cache-dir"}) {
+			t.Fatalf("unexpected bundle command: %#v", spec.Args)
+		}
+		return errors.New("docker failed: exit status 1")
+	})
+	defer restore()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var progress bytes.Buffer
+	err = BundlePrepare(BundlePrepareOptions{
+		Dir:      deployDir,
+		Stdout:   &stdout,
+		Stderr:   &stderr,
+		Progress: &progress,
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "build wheelhouse: docker failed: exit status 1") {
+		t.Fatalf("error missing phase context: %v", err)
+	}
+	if stdout.String() != "" || stderr.String() != "" {
+		t.Fatalf("stdout=%q stderr=%q, want quiet command output", stdout.String(), stderr.String())
+	}
+	for _, want := range []string{"prepare workspace", "copy existing bundle", "prepare local sources", "build wheelhouse"} {
+		if !strings.Contains(progress.String(), want) {
+			t.Fatalf("progress missing %q:\n%s", want, progress.String())
+		}
+	}
+}
+
 func TestBundlePrepareVerboseStreamsCommandOutput(t *testing.T) {
 	packDir := makeTestPack(t)
 	ref, err := deploy.ParsePackRef("file:" + packDir)

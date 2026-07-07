@@ -50,6 +50,7 @@ type BundleCheckOptions struct {
 	Verbose                bool
 	Stdout                 io.Writer
 	Stderr                 io.Writer
+	Progress               io.Writer
 	DockerPreflightTimeout time.Duration
 }
 
@@ -63,6 +64,7 @@ type BundlePrepareOptions struct {
 	Verbose                bool
 	Stdout                 io.Writer
 	Stderr                 io.Writer
+	Progress               io.Writer
 	DockerPreflightTimeout time.Duration
 }
 
@@ -72,6 +74,7 @@ type BundleWarmRuntimeOptions struct {
 	Verbose                bool
 	Stdout                 io.Writer
 	Stderr                 io.Writer
+	Progress               io.Writer
 	DockerPreflightTimeout time.Duration
 }
 
@@ -124,6 +127,16 @@ func (timer *bundleTimer) Print(output io.Writer) {
 	fmt.Fprintf(output, "  total: %s\n", formatDuration(total))
 }
 
+func measureBundlePhase(timer *bundleTimer, progress io.Writer, name string, run func() error) error {
+	if progress != nil {
+		fmt.Fprintln(progress, name)
+	}
+	if err := timer.Measure(name, run); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
 func formatDuration(duration time.Duration) string {
 	if duration < time.Second {
 		return duration.Round(time.Millisecond).String()
@@ -140,6 +153,7 @@ type BundleEnsureOptions struct {
 	Verbose                bool
 	Stdout                 io.Writer
 	Stderr                 io.Writer
+	Progress               io.Writer
 	DockerPreflightTimeout time.Duration
 }
 
@@ -559,7 +573,13 @@ func BundleCheck(options BundleCheckOptions) error {
 	if err := requireBundleCheckInputs(options.Dir, bundleDir); err != nil {
 		return err
 	}
-	return runInterruptibleCommand(runBundleCommand, spec, bundleDockerRunOptions(stdout, stderr, options.DockerPreflightTimeout))
+	if options.Progress != nil {
+		fmt.Fprintln(options.Progress, "validate bundle")
+	}
+	if err := runInterruptibleCommand(runBundleCommand, spec, bundleDockerRunOptions(stdout, stderr, options.DockerPreflightTimeout)); err != nil {
+		return fmt.Errorf("validate bundle: %w", err)
+	}
+	return nil
 }
 
 func BundlePrepare(options BundlePrepareOptions) error {
@@ -579,7 +599,7 @@ func BundlePrepare(options BundlePrepareOptions) error {
 	}
 	timer := newBundleTimer(options.Verbose && options.Stdout != nil, options.Stdout)
 	if options.PyPIOnly && !options.DryRun {
-		if err := timer.Measure("resolve package roots", func() error {
+		if err := measureBundlePhase(timer, options.Progress, "resolve package roots", func() error {
 			state, err := loadState(options.Dir)
 			if err != nil {
 				return err
@@ -632,7 +652,7 @@ func BundlePrepare(options BundlePrepareOptions) error {
 		return nil
 	}
 	var tmpDir string
-	if err := timer.Measure("prepare workspace", func() error {
+	if err := measureBundlePhase(timer, options.Progress, "prepare workspace", func() error {
 		if err := requireBundlePrepareInputs(options.Dir, bundleDir); err != nil {
 			return err
 		}
@@ -647,7 +667,7 @@ func BundlePrepare(options BundlePrepareOptions) error {
 	}
 	defer os.RemoveAll(tmpDir)
 	if !options.PyPIOnly {
-		if err := timer.Measure("copy existing bundle", func() error {
+		if err := measureBundlePhase(timer, options.Progress, "copy existing bundle", func() error {
 			return copyWheelhouse(bundleDir, tmpDir)
 		}); err != nil {
 			return err
@@ -661,7 +681,7 @@ func BundlePrepare(options BundlePrepareOptions) error {
 	skipWheelhouseBuild := false
 	var nextWheelhouseManifest *wheelhouseManifest
 	if !options.PyPIOnly {
-		if err := timer.Measure("prepare local sources", func() error {
+		if err := measureBundlePhase(timer, options.Progress, "prepare local sources", func() error {
 			buildSources, err = localBundleBuildSources(state)
 			if err != nil {
 				return err
@@ -721,7 +741,7 @@ func BundlePrepare(options BundlePrepareOptions) error {
 	runStdout := stdout
 	runStderr := stderr
 	if skipWheelhouseBuild {
-		if err := timer.Measure("build wheelhouse", func() error {
+		if err := measureBundlePhase(timer, options.Progress, "build wheelhouse", func() error {
 			if options.Verbose && options.Stdout != nil {
 				fmt.Fprintln(options.Stdout, "bundle build: reusing unchanged wheelhouse")
 			}
@@ -730,13 +750,13 @@ func BundlePrepare(options BundlePrepareOptions) error {
 			return err
 		}
 	} else {
-		if err := timer.Measure("build wheelhouse", func() error {
+		if err := measureBundlePhase(timer, options.Progress, "build wheelhouse", func() error {
 			return runInterruptibleCommand(runBundleCommand, spec, bundleDockerRunOptions(runStdout, runStderr, options.DockerPreflightTimeout))
 		}); err != nil {
 			return err
 		}
 	}
-	if err := timer.Measure("replace bundle", func() error {
+	if err := measureBundlePhase(timer, options.Progress, "replace bundle", func() error {
 		return replaceWheelhouse(tmpDir, bundleDir)
 	}); err != nil {
 		return err
@@ -750,13 +770,13 @@ func BundlePrepare(options BundlePrepareOptions) error {
 		fmt.Fprintf(options.Stdout, "built installation bundle: %s\n", bundleDir)
 	}
 	if err := timer.Measure("validate bundle", func() error {
-		return BundleCheck(BundleCheckOptions{Dir: options.Dir, Verbose: options.Verbose, Stdout: stdout, Stderr: stderr, DockerPreflightTimeout: options.DockerPreflightTimeout})
+		return BundleCheck(BundleCheckOptions{Dir: options.Dir, Verbose: options.Verbose, Stdout: stdout, Stderr: stderr, Progress: options.Progress, DockerPreflightTimeout: options.DockerPreflightTimeout})
 	}); err != nil {
 		return err
 	}
 	if !options.SkipWarmRuntime {
 		if err := timer.Measure("warm Python runtime", func() error {
-			return warmPreparedPythonRuntime(BundleWarmRuntimeOptions{Dir: options.Dir, Verbose: options.Verbose, Stdout: stdout, Stderr: stderr, DockerPreflightTimeout: options.DockerPreflightTimeout})
+			return warmPreparedPythonRuntime(BundleWarmRuntimeOptions{Dir: options.Dir, Verbose: options.Verbose, Stdout: stdout, Stderr: stderr, Progress: options.Progress, DockerPreflightTimeout: options.DockerPreflightTimeout})
 		}); err != nil {
 			return err
 		}
@@ -776,6 +796,7 @@ func BundleWarmRuntime(options BundleWarmRuntimeOptions) error {
 		Verbose:                options.Verbose,
 		Stdout:                 options.Stdout,
 		Stderr:                 options.Stderr,
+		Progress:               options.Progress,
 		DockerPreflightTimeout: options.DockerPreflightTimeout,
 	}); err != nil {
 		return fmt.Errorf("prepare installation bundle: %w", err)
@@ -814,11 +835,17 @@ func warmPreparedPythonRuntime(options BundleWarmRuntimeOptions) error {
 	if err := ensureAppCommandDirs(options.Dir, pack); err != nil {
 		return err
 	}
+	if options.Progress != nil {
+		fmt.Fprintln(options.Progress, "prepare runtime compose")
+	}
 	if _, err := materializeRuntimeCompose(options.Dir); err != nil {
 		return fmt.Errorf("materialize runtime compose: %w", err)
 	}
+	if options.Progress != nil {
+		fmt.Fprintln(options.Progress, "prepare runtime cache")
+	}
 	if err := ensureRuntimeNamedVolumeWritable(options.Dir, projectName, options.DockerPreflightTimeout); err != nil {
-		return err
+		return fmt.Errorf("prepare runtime cache: %w", err)
 	}
 	runStdout := options.Stdout
 	runStderr := options.Stderr
@@ -826,7 +853,13 @@ func warmPreparedPythonRuntime(options BundleWarmRuntimeOptions) error {
 		runStdout = nil
 		runStderr = nil
 	}
-	return runInterruptibleCommand(runBundleCommand, spec, bundleDockerRunOptions(runStdout, runStderr, options.DockerPreflightTimeout))
+	if options.Progress != nil {
+		fmt.Fprintln(options.Progress, "warm Python runtime")
+	}
+	if err := runInterruptibleCommand(runBundleCommand, spec, bundleDockerRunOptions(runStdout, runStderr, options.DockerPreflightTimeout)); err != nil {
+		return fmt.Errorf("warm Python runtime: %w", err)
+	}
+	return nil
 }
 
 func BundleWarmRuntimeCommand(dir string, projectName string) CommandSpec {
@@ -861,6 +894,7 @@ func EnsureBundlePrepared(options BundleEnsureOptions) (bool, error) {
 		Verbose:                options.Verbose,
 		Stdout:                 options.Stdout,
 		Stderr:                 options.Stderr,
+		Progress:               options.Progress,
 		DockerPreflightTimeout: options.DockerPreflightTimeout,
 	})
 }

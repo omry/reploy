@@ -35,28 +35,14 @@ No active backlog items.
 
 ## Pre-release
 
-- [ ] `P1` Make bundle-build bootstrap failures bounded and actionable.
-      `reploy bundle build` now has quieter pip output, verbose timing, uv build
-      backend support, and a Docker named-volume runtime cache, but bootstrap
-      and wheelhouse preparation can still block on network or index behavior
-      without a clear next action. Acceptance checks: decide what timeout or
-      failure boundary applies to pip/uv bootstrap and wheelhouse work; report
-      the phase that is blocked without dumping raw Docker output in quiet mode;
-      preserve verbose timing/output for diagnosis; and verify the behavior on a
-      clean Docker image with uncached Python dependencies.
-
-- [ ] `P1` Add bounded and actionable failure handling for Python runtime
-      preparation.
-      `reploy app config check`, install hooks, and first service start can
-      sit at `Preparing Python runtime...` while the generated Compose command
-      creates or reuses the named-volume venv and installs requirements inside
-      the container. Reploy now has a quiet-mode spinner and persistent Docker
-      runtime cache, but the first-prep slow path still needs bounded,
-      diagnosable failure behavior. Acceptance checks: keep quiet mode readable
-      without dumping pip logs; add a timeout or similarly actionable failure
-      path for blocked runtime preparation; preserve verbose mode for raw
-      command output; avoid speculative per-package noise; and verify the
-      experience on Windows Docker Desktop and Linux.
+- [ ] `P2` Record cross-platform Python prep progress evidence.
+      Bundle build and runtime prep now report quiet-mode phase progress and
+      phase-scoped failures without dumping raw pip/Docker output. Remaining
+      release evidence should prove the behavior against real Docker slow paths.
+      Acceptance checks: run a clean Linux Docker image with uncached Python
+      dependencies; record Windows Docker Desktop behavior for first runtime
+      prep; confirm verbose mode still exposes raw command output; and keep the
+      evidence focused on progress/failure UX rather than package performance.
 
 - [ ] `P2` Remove old verbose Docker command argv compatibility.
       Reploy currently supports both full `container.argv` commands and the

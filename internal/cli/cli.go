@@ -873,13 +873,14 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer, globalOp
 		return 0
 	case "check":
 		stopSpinner := func(bool) {}
+		progress := io.Discard
 		if !options.DryRun && !options.Verbose {
 			label, err := deploymentSpinnerLabel(options.Dir, "validating installation bundle", spinnerStderr)
 			if err != nil {
 				fmt.Fprintf(stderr, "reploy bundle check error: %v\n", err)
 				return 1
 			}
-			stopSpinner = startSpinner(spinnerStderr, label)
+			stopSpinner, progress = startProgressSpinner(spinnerStderr, label)
 		}
 		built := false
 		if !options.DryRun {
@@ -890,6 +891,7 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer, globalOp
 				Verbose:                options.Verbose,
 				Stdout:                 stdout,
 				Stderr:                 stderr,
+				Progress:               progress,
 				DockerPreflightTimeout: globalOptions.DockerTimeout,
 			})
 		}
@@ -900,6 +902,7 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer, globalOp
 				Verbose:                options.Verbose,
 				Stdout:                 stdout,
 				Stderr:                 stderr,
+				Progress:               progress,
 				DockerPreflightTimeout: globalOptions.DockerTimeout,
 			})
 		}
@@ -921,13 +924,14 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer, globalOp
 		return 0
 	case "build":
 		stopSpinner := func(bool) {}
+		progress := io.Discard
 		if !options.DryRun && !options.Verbose {
 			label, err := deploymentSpinnerLabel(options.Dir, "building installation bundle", spinnerStderr)
 			if err != nil {
 				fmt.Fprintf(stderr, "reploy bundle build error: %v\n", err)
 				return 1
 			}
-			stopSpinner = startSpinner(spinnerStderr, label)
+			stopSpinner, progress = startProgressSpinner(spinnerStderr, label)
 		}
 		if err := dockerdeploy.BundlePrepare(dockerdeploy.BundlePrepareOptions{
 			Dir:                    options.Dir,
@@ -938,6 +942,7 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer, globalOp
 			Verbose:                options.Verbose,
 			Stdout:                 stdout,
 			Stderr:                 stderr,
+			Progress:               progress,
 			DockerPreflightTimeout: globalOptions.DockerTimeout,
 		}); err != nil {
 			stopSpinner(false)
@@ -954,13 +959,14 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer, globalOp
 		return 0
 	case "warm-runtime":
 		stopSpinner := func(bool) {}
+		progress := io.Discard
 		if !options.DryRun && !options.Verbose {
 			label, err := deploymentSpinnerLabel(options.Dir, "warming Python runtime", spinnerStderr)
 			if err != nil {
 				fmt.Fprintf(stderr, "reploy bundle warm-runtime error: %v\n", err)
 				return 1
 			}
-			stopSpinner = startSpinner(spinnerStderr, label)
+			stopSpinner, progress = startProgressSpinner(spinnerStderr, label)
 		}
 		if err := dockerdeploy.BundleWarmRuntime(dockerdeploy.BundleWarmRuntimeOptions{
 			Dir:                    options.Dir,
@@ -968,6 +974,7 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer, globalOp
 			Verbose:                options.Verbose,
 			Stdout:                 stdout,
 			Stderr:                 stderr,
+			Progress:               progress,
 			DockerPreflightTimeout: globalOptions.DockerTimeout,
 		}); err != nil {
 			stopSpinner(false)
@@ -1908,13 +1915,14 @@ func runDockerRuntimeCommand(action string, args []string, stdout io.Writer, std
 		return 1
 	}
 	stopSpinner := func(bool) {}
+	progress := io.Discard
 	if runtimeActionShowsSpinner(action, options.Verbose) {
 		label, err := runtimeSpinnerLabel(options.Dir, action, stderr)
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy %s error: %v\n", action, err)
 			return 1
 		}
-		stopSpinner = startSpinner(stderr, label)
+		stopSpinner, progress = startProgressSpinner(stderr, label)
 	}
 	if err := dockerRuntime(dockerdeploy.RuntimeOptions{
 		Dir:                    options.Dir,
@@ -1924,6 +1932,7 @@ func runDockerRuntimeCommand(action string, args []string, stdout io.Writer, std
 		Verbose:                options.Verbose,
 		Stdout:                 stdout,
 		Stderr:                 stderr,
+		Progress:               progress,
 		DockerPreflightTimeout: globalOptions.DockerTimeout,
 	}); err != nil {
 		stopSpinner(false)

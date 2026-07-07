@@ -89,6 +89,46 @@ func TestRuntimeUpAutomaticallyPreparesBundle(t *testing.T) {
 	}
 }
 
+func TestRuntimeUpReportsPreparationProgress(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: dir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	commands := []string{}
+	restoreBundle := stubSuccessfulBundlePrepare(t, &commands)
+	defer restoreBundle()
+	restoreRuntime := stubRuntimeRunner(func(spec CommandSpec, options RunOptions) error {
+		commands = append(commands, strings.Join(spec.Args[len(spec.Args)-2:], " "))
+		return nil
+	})
+	defer restoreRuntime()
+
+	var progress bytes.Buffer
+	if err := Runtime(RuntimeOptions{Dir: dir, Action: "up", Progress: &progress}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"prepare installation bundle",
+		"prepare workspace",
+		"build wheelhouse",
+		"validate bundle",
+		"warm Python runtime",
+		"prepare runtime compose",
+		"prepare runtime cache",
+		"start app",
+	} {
+		if !strings.Contains(progress.String(), want) {
+			t.Fatalf("progress missing %q:\n%s", want, progress.String())
+		}
+	}
+}
+
 func TestRuntimeUpRecoversStaleDockerNetwork(t *testing.T) {
 	packDir := makeTestPack(t)
 	ref, err := deploy.ParsePackRef("file:" + packDir)

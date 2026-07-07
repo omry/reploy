@@ -17,6 +17,7 @@ type RuntimeOptions struct {
 	Verbose                bool
 	Stdout                 io.Writer
 	Stderr                 io.Writer
+	Progress               io.Writer
 	DockerPreflightTimeout time.Duration
 }
 
@@ -41,6 +42,9 @@ func Runtime(options RuntimeOptions) error {
 		commandStderr = options.Stderr
 	}
 	if runtimeActionNeedsBundle(options.Action) {
+		if options.Progress != nil {
+			fmt.Fprintln(options.Progress, "prepare installation bundle")
+		}
 		pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
 		if err != nil {
 			return err
@@ -48,9 +52,12 @@ func Runtime(options RuntimeOptions) error {
 		if err := ensureManagedFileMountsForPack(options.Dir, pack); err != nil {
 			return err
 		}
-		if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: options.Dir, Verbose: options.Verbose, Stdout: stdout, Stderr: stderr, DockerPreflightTimeout: options.DockerPreflightTimeout}); err != nil {
+		if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: options.Dir, Verbose: options.Verbose, Stdout: stdout, Stderr: stderr, Progress: options.Progress, DockerPreflightTimeout: options.DockerPreflightTimeout}); err != nil {
 			return fmt.Errorf("prepare installation bundle: %w", err)
 		}
+	}
+	if options.Progress != nil {
+		fmt.Fprintln(options.Progress, "prepare runtime compose")
 	}
 	if err := ensureRuntimeCompose(options.Dir); err != nil {
 		return fmt.Errorf("ensure runtime compose: %w", err)
@@ -60,8 +67,11 @@ func Runtime(options RuntimeOptions) error {
 		if err != nil {
 			return err
 		}
+		if options.Progress != nil {
+			fmt.Fprintln(options.Progress, "prepare runtime cache")
+		}
 		if err := ensureRuntimeNamedVolumeWritable(options.Dir, projectName, options.DockerPreflightTimeout); err != nil {
-			return err
+			return fmt.Errorf("prepare runtime cache: %w", err)
 		}
 	}
 	spec, err := RuntimeCommandWithOptions(options.Dir, options.Action, RuntimeCommandOptions{Follow: options.Follow, Tail: options.Tail})
@@ -71,6 +81,9 @@ func Runtime(options RuntimeOptions) error {
 	if !options.Verbose && !runtimeActionStreamsOutput(options.Action) {
 		commandStdout = nil
 		commandStderr = nil
+	}
+	if options.Progress != nil {
+		fmt.Fprintln(options.Progress, runtimeRunPhase(options.Action))
 	}
 	err = runRuntimeCommand(spec, RunOptions{Stdout: commandStdout, Stderr: commandStderr, DockerPreflightTimeout: options.DockerPreflightTimeout})
 	if err != nil && options.Action == "up" && isStaleDockerNetworkError(err) {
@@ -88,6 +101,19 @@ func Runtime(options RuntimeOptions) error {
 		return runRuntimeCommand(spec, RunOptions{Stdout: commandStdout, Stderr: commandStderr, DockerPreflightTimeout: options.DockerPreflightTimeout})
 	}
 	return err
+}
+
+func runtimeRunPhase(action string) string {
+	switch action {
+	case "up":
+		return "start app"
+	case "restart":
+		return "restart app"
+	case "down":
+		return "stop app"
+	default:
+		return "run " + action
+	}
 }
 
 func isStaleDockerNetworkError(err error) bool {
