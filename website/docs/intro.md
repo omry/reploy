@@ -5,12 +5,17 @@ slug: /
 
 # Reploy
 
-Experimental, repeatable app deployments from portable blueprints.
+Cross-platform app installs from portable blueprints.
 
-Reploy is an experimental deployment lifecycle tool for services.
-A blueprint is a portable description of how a service should be staged,
-tested, installed, and operated. Reploy handles the generic lifecycle around
-that blueprint: stage, test, install, update, and uninstall.
+Reploy is an experimental app installer built around portable blueprints. An
+app author writes one blueprint that describes install intent: package bundles,
+configuration paths, persistent data, ports, health checks, control commands,
+install targets, and success output. Reploy maps that blueprint onto the
+current host's staging, test, install, update, and uninstall flow.
+
+Package managers such as Homebrew, winget, Scoop, apt, or yum can install tools
+onto a host. Reploy solves a different problem: installing and operating an app
+instance from a semantic app blueprint across Linux, macOS, and Windows.
 
 ## Lifecycle
 
@@ -32,12 +37,12 @@ flowchart LR
   B ---->|Direct Install / Update| D
 ```
 
-A blueprint is the portable source of deployment intent. Staging is a
-user-owned deployment directory where a service can be inspected, configured,
-started, tested, and prepared before it becomes permanent. A deployed install is
-the permanent service created from the selected staging state.
-The staging directory is self-contained and contains everything needed to run
-the service in staging.
+A blueprint is the portable source of app intent. Staging is a user-owned
+deployment directory where the app can be inspected, configured, started,
+tested, and prepared before it becomes permanent. A deployed install is the
+permanent app instance created from the selected staging state. The staging
+directory is self-contained and contains everything needed to run the app in
+staging.
 
 For services that do not require customization, Reploy can also install
 directly from the blueprint and skip the persistent staging directory.
@@ -50,13 +55,13 @@ Start with the app author's blueprint ref:
 # Install the Reploy CLI.
 curl -fsSL https://reploy.yadan.net/install.sh | sh
 
-# Create a staging workspace for the service. The default is reploy-staging/.
+# Create a staging workspace for the app. The default is reploy-staging/.
 reploy stage <app-blueprint-ref>
 
 # Configure the app in the staging directory before starting it.
 vim reploy-staging/conf/
 
-# Start the staged service.
+# Start the staged app.
 reploy up
 
 # Run the blueprint-defined checks against staging.

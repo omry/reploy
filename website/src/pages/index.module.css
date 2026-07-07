@@ -53,7 +53,7 @@
 
 .heroActions :global(.button) {
   justify-content: center;
-  min-width: 11rem;
+  width: min(100%, 15.75rem);
 }
 
 .terminal {
@@ -100,11 +100,51 @@
   font-family: var(--ifm-font-family-monospace);
 }
 
+.main {
+  background: #0f1819;
+  color: #f6fbf8;
+}
+
+.contract {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0 auto;
+  max-width: 1120px;
+  padding: 1.35rem 1.5rem 2.75rem;
+}
+
+.contract > div {
+  background: #172223;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 1.35rem 1.45rem;
+}
+
+.contract h2 {
+  color: #f6fbf8;
+  font-size: 1.18rem;
+  letter-spacing: 0;
+  margin-bottom: 0.65rem;
+}
+
+.contract p {
+  color: #b9cbc2;
+  font-size: 0.98rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
 @media (max-width: 900px) {
   .heroInner {
     grid-template-columns: 1fr;
     min-height: auto;
     padding: 3.5rem 1.2rem;
+  }
+
+  .contract {
+    grid-template-columns: 1fr;
+    padding: 1.2rem 1.2rem 2.25rem;
   }
 
   .terminal pre {

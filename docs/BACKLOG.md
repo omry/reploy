@@ -68,20 +68,6 @@ No active backlog items.
       fixtures and known app blueprints; and keep tests that prove the chosen
       schema produces the same generated runtime commands.
 
-- [ ] `P1` Reposition the homepage and intro around Reploy as a cross-platform
-      app installer.
-      Reploy's differentiator is not merely running Docker or installing the
-      Reploy CLI; it is a portable app-install contract that maps one blueprint
-      onto host-appropriate staging, dependencies, config, ports, lifecycle
-      controls, health checks, install targets, and success output. Acceptance
-      checks: update the homepage so it no longer claims Linux-only support;
-      make the homepage and intro say the cross-platform app-installer contract
-      plainly; describe blueprints as semantic app intent rather than Unix path
-      templates; align Linux, macOS, and Windows positioning with the current
-      support matrix; and avoid implying that package managers such as Homebrew,
-      winget, or Scoop solve the same problem. Cross-platform install location
-      design lives in `docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md`.
-
 - [ ] `P2` Improve bare `reploy` output when an app is installed.
       Top-level unknown app commands now suggest `reploy app ...`, and generic
       short usage is better, but the no-argument app summary still centers the
@@ -91,6 +77,16 @@ No active backlog items.
       or pointer; keep full app command discovery available through explicit
       `reploy app`; and update tests/docs so bare `reploy` reads as a Reploy
       entry point, not only as an app command menu.
+
+- [ ] `P2` Create a neutral demo service blueprint.
+      Build or adopt a small Python service that can showcase Reploy without
+      anchoring the story to Arbiter or another domain-specific app. The demo
+      should be realistic enough to exercise staging, bundle preparation,
+      configuration, persistence, ports, health checks, install, status/logs,
+      update, and uninstall. Acceptance checks: pick the demo service shape;
+      define the blueprint and app commands; make the service useful as a docs
+      and smoke/demo target; and capture the stage-to-install-to-operate
+      storyline.
 
 - [ ] `P2` Add Windows path and Docker Desktop failure-mode smoke follow-ups.
       Core Windows Docker Desktop staging and Docker-managed persistent-install
@@ -114,15 +110,6 @@ No active backlog items.
       mount paths, bootstrap creation behavior for writable app commands, and
       strict start/install preflights; update the realistic blueprint example;
       and remove or correct any docs that describe obsolete schema behavior.
-
-- [ ] `P2` Find a convincing Reploy demo app.
-      Identify a useful Python service that is genuinely awkward to run well
-      with plain Docker, and use it to show why Reploy's staging, bundle,
-      install, and control-script flow helps. Acceptance checks: shortlist a
-      few candidate services; pick one with realistic configuration,
-      dependencies, persistence, and operational commands; define the demo
-      storyline from stage to install to operate; and capture what docs/video
-      assets the demo should produce.
 
 - [ ] `P2` Consider an app-author blueprint template UX.
       Explore a command or documented flow that generates an initial blueprint

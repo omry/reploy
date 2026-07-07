@@ -3,7 +3,7 @@
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: 'Reploy',
-  tagline: 'Repeatable app deployments from portable blueprints.',
+  tagline: 'Cross-platform app installs from portable blueprints.',
   favicon: 'img/reploy-mark.svg',
 
   url: 'https://reploy.yadan.net',
@@ -76,38 +76,6 @@ const config = {
       },
       footer: {
         style: 'dark',
-        links: [
-          {
-            title: 'Docs',
-            items: [
-              {
-                label: 'App User',
-                to: '/docs/install-an-app',
-              },
-              {
-                label: 'App Author',
-                to: '/docs/author-deployments',
-              },
-              {
-                label: 'Support',
-                to: '/docs/support-matrix',
-              },
-            ],
-          },
-          {
-            title: 'Project',
-            items: [
-              {
-                label: 'GitHub',
-                href: 'https://github.com/omry/reploy',
-              },
-              {
-                label: 'PyPI',
-                href: 'https://pypi.org/project/reploy/',
-              },
-            ],
-          },
-        ],
         copyright: `Copyright © ${new Date().getFullYear()} Omry Yadan.`,
       },
       prism: {
