@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omegaconf-inspector"
+version = "0.1.0"
+description = "Browser-based OmegaConf merge inspector demo for Reploy."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "omegaconf>=2.3",
+  "uvicorn>=0.30",
+]
+
+[project.scripts]
+omegaconf-inspector = "omegaconf_inspector.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+omegaconf_inspector = ["static/*"]

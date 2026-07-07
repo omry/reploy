@@ -1,0 +1,148 @@
+blueprint:
+  schema: 1
+  version: 0.1.0
+  requires_reploy: ">=0.4.8.dev1"
+
+app:
+  id: omegaconf-inspector
+  provider:
+    type: python
+    identifier: omegaconf-inspector
+    local_sources:
+      omegaconf-inspector: ..
+
+install:
+  ports:
+    deployed:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 19076
+        container_port: 8076
+        public_scheme: http
+    staging:
+      http:
+        host_bind: 127.0.0.1
+        host_port: 18076
+        container_port: 8076
+        public_scheme: http
+  managed_paths:
+    dirs:
+      - path: conf
+        update: preserve
+        mount: /conf
+      - path: data
+        update: preserve
+        mount: /data
+        writeable: true
+
+bundle:
+  options: {}
+
+docker:
+  deployment_dirs:
+    config: conf
+    bundle: .reploy/bundle
+    data: data
+  service:
+    image: python:3.11-slim
+    container_host: 0.0.0.0
+  health:
+    scheme_env: REPLOY_PUBLIC_SCHEME
+    host_env: REPLOY_HOST_BIND
+    port_env: REPLOY_HOST_PORT
+    default_scheme: http
+    default_host: 127.0.0.1
+    default_port: "18076"
+    path: /_health_
+  install:
+    hooks:
+      before_start:
+        - app:
+            - config
+            - check
+      after_start:
+        - health_check:
+            wait: true
+        - app:
+            - config
+            - check
+            - --live
+    success:
+      vars:
+        server_url:
+          server_url: true
+      lines:
+        - "inspector url: ${server_url}"
+  default_command: serve
+  command_defaults:
+    container:
+      argv_prefix:
+        - omegaconf-inspector
+  commands:
+    serve:
+      container:
+        argv_suffix:
+          - serve
+    config_init:
+      trigger:
+        - config
+        - init
+      app_command: true
+      deployed_command: false
+      forward_flags:
+        - --force
+      container:
+        argv_suffix:
+          - config
+          - init
+    config_check:
+      trigger:
+        - config
+        - check
+      app_command: true
+      deployed_command: true
+      forward_flags:
+        - --live
+      container:
+        argv_suffix:
+          - config
+          - check
+    config_show:
+      trigger:
+        - config
+        - show
+      app_command: true
+      deployed_command: true
+      container:
+        argv_suffix:
+          - config
+          - show
+    project_list:
+      trigger:
+        - project
+        - list
+      app_command: true
+      deployed_command: true
+      container:
+        argv_suffix:
+          - project
+          - list
+    project_show:
+      trigger:
+        - project
+        - show
+      app_command: true
+      deployed_command: true
+      forward_args: true
+      container:
+        argv_suffix:
+          - project
+          - show
+    version:
+      trigger:
+        - version
+      app_command: true
+      deployed_command: true
+      container:
+        argv_suffix:
+          - version

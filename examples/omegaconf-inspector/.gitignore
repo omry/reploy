@@ -1,0 +1,4 @@
+.venv*/
+conf/
+data/
+src/*.egg-info/

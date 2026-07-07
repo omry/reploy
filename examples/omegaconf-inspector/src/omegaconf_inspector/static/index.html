@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OmegaConf Inspector</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>OmegaConf Inspector</h1>
+        <p>Merge YAML config layers and inspect the OmegaConf result.</p>
+      </div>
+      <div class="health" id="health">checking...</div>
+    </header>
+
+    <main class="layout">
+      <section class="sidebar">
+        <div class="section-title">
+          <h2>Projects</h2>
+          <div class="button-row">
+            <button id="new-project" class="icon-button" title="New project" aria-label="New project">+</button>
+            <button id="delete-project" class="icon-button danger-button" title="Delete selected project" aria-label="Delete selected project">x</button>
+          </div>
+        </div>
+        <div class="project-rename">
+          <input id="project-name" placeholder="Project name" />
+          <button id="save-project">Save</button>
+        </div>
+        <div id="projects" class="list"></div>
+      </section>
+
+      <section class="workspace">
+        <div class="panels">
+          <section class="panel layers-panel">
+            <div class="section-title">
+              <h2>Input configs (Drag and drop tabs to reorder)</h2>
+              <div class="button-row">
+                <input id="file-picker" type="file" accept=".yaml,.yml,text/yaml,text/plain" multiple />
+                <input id="replace-file-picker" type="file" accept=".yaml,.yml,text/yaml,text/plain" hidden />
+              </div>
+            </div>
+            <div id="input-tabs" class="input-tabs"></div>
+            <div id="layer-editor" class="layers"></div>
+          </section>
+
+          <div class="merge-bridge">
+            <button id="merge" class="merge-primary" disabled>
+              <span class="merge-arrow">↓</span>
+              <span>Merge</span>
+            </button>
+          </div>
+
+          <section class="panel output-panel">
+            <div class="output-toolbar">
+              <div class="tabs">
+                <button class="tab active" data-tab="merged">Merged</button>
+                <button class="tab" data-tab="resolved">Resolved</button>
+              </div>
+              <div class="path-field">
+                <input id="path-query" placeholder="path lookup, e.g. server.port" />
+                <button id="clear-path" class="path-clear" type="button" title="Clear path lookup" aria-label="Clear path lookup">×</button>
+              </div>
+            </div>
+            <pre id="merged" class="output active"></pre>
+            <pre id="resolved" class="output"></pre>
+          </section>
+        </div>
+
+      </section>
+    </main>
+
+    <script src="/omegaconf-highlight.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>
