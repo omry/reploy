@@ -104,10 +104,10 @@ type InstallManagedPathsConfig struct {
 }
 
 type InstallManagedPathConfig struct {
-	Path            string `yaml:"path"`
-	Update          string `yaml:"update"`
-	Mount           string `yaml:"mount,omitempty"`
-	RuntimeReadonly *bool  `yaml:"runtime_readonly,omitempty"`
+	Path      string `yaml:"path"`
+	Update    string `yaml:"update"`
+	Mount     string `yaml:"mount,omitempty"`
+	Writeable *bool  `yaml:"writeable,omitempty"`
 }
 
 type BundlePackConfig struct {
@@ -492,6 +492,9 @@ func (pack AppPack) ReadFile(relativePath string) ([]byte, error) {
 }
 
 func ParsePackManifest(content string) (PackManifest, error) {
+	if err := rejectRemovedRuntimeReadonlyField(content); err != nil {
+		return PackManifest{}, err
+	}
 	var raw rawPackManifest
 	if err := yaml.Unmarshal([]byte(content), &raw); err != nil {
 		return PackManifest{}, err
@@ -668,6 +671,41 @@ func ParsePackManifest(content string) (PackManifest, error) {
 		return PackManifest{}, fmt.Errorf("docker.health.path must start with /")
 	}
 	return manifest, nil
+}
+
+func rejectRemovedRuntimeReadonlyField(content string) error {
+	var node yaml.Node
+	if err := yaml.Unmarshal([]byte(content), &node); err != nil {
+		return err
+	}
+	if yamlNodeContainsKey(&node, "runtime_readonly") {
+		return fmt.Errorf("runtime_readonly has been replaced by writeable: true")
+	}
+	return nil
+}
+
+func yamlNodeContainsKey(node *yaml.Node, key string) bool {
+	if node == nil {
+		return false
+	}
+	if node.Kind == yaml.MappingNode {
+		for index := 0; index+1 < len(node.Content); index += 2 {
+			keyNode := node.Content[index]
+			if keyNode != nil && keyNode.Value == key {
+				return true
+			}
+			if yamlNodeContainsKey(node.Content[index+1], key) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, child := range node.Content {
+		if yamlNodeContainsKey(child, key) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeAndValidateInstallConfig(manifest *PackManifest) error {
@@ -1123,8 +1161,8 @@ func normalizeAndValidateManagedPathEntries(kind string, entries []InstallManage
 		if entry.Mount != "" && strings.Contains(entry.Path, ":") {
 			return fmt.Errorf("%s.path must not contain ':' when mount is set", field)
 		}
-		if entry.RuntimeReadonly != nil && entry.Mount == "" {
-			return fmt.Errorf("%s.runtime_readonly requires mount", field)
+		if entry.Writeable != nil && entry.Mount == "" {
+			return fmt.Errorf("%s.writeable requires mount", field)
 		}
 		if previous, ok := seenPaths[entry.Path]; ok {
 			return fmt.Errorf("%s.path duplicates %s.path: %s", field, previous, entry.Path)

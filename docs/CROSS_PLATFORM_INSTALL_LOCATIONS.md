@@ -243,8 +243,10 @@ Initial mappings:
 These variables choose where the app install directory lives. They do not mean
 that Reploy will place app config, data, cache, or runtime files directly in
 those host roots. For now, installed apps remain localized under the resolved
-install target, and managed paths such as `conf`, `data`, and bundle/runtime
-state stay inside that tree.
+install target, and managed app paths such as `conf` and `data` plus generated
+bundle artifacts stay inside that tree. For Docker deployments, the generated
+Python runtime cache uses a Docker named volume by default; it only lives under
+the install target when `REPLOY_RUNTIME_DIR` is explicitly set to a host path.
 
 ## Validation
 

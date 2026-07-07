@@ -7,7 +7,9 @@ sidebar_position: 6
 Use `reploy uninstall` to remove installed service wiring and stop the Docker
 objects Reploy created for an installed deployment.
 For Docker-managed installs, uninstall also removes Reploy's generated Python
-runtime cache volume for that installed deployment.
+runtime cache volume for that installed deployment. If `REPLOY_RUNTIME_DIR` was
+overridden to a filesystem path under the install target, that bind-mounted
+cache is removed only when uninstall also removes the target directory.
 
 When the deployment directory still exists, uninstall from the directory:
 

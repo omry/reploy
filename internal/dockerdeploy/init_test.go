@@ -979,8 +979,8 @@ func TestInitQuotesManagedFileVolumePaths(t *testing.T) {
 	}
 }
 
-func TestConfigMountLayoutUsesExplicitRuntimeReadonly(t *testing.T) {
-	runtimeWritable := false
+func TestConfigMountLayoutUsesExplicitWriteable(t *testing.T) {
+	writeable := true
 	pack := deploy.AppPack{
 		Docker: deploy.DockerPackConfig{
 			DeploymentDirs: deploy.DockerDeploymentDirs{
@@ -997,7 +997,7 @@ func TestConfigMountLayoutUsesExplicitRuntimeReadonly(t *testing.T) {
 				Dirs: []deploy.InstallManagedPathConfig{
 					{Path: "conf", Mount: "/conf"},
 					{Path: "data", Mount: "/data"},
-					{Path: "cache", Mount: "/cache", RuntimeReadonly: &runtimeWritable},
+					{Path: "cache", Mount: "/cache", Writeable: &writeable},
 				},
 			},
 		},
@@ -1728,7 +1728,7 @@ install:
       - path: data
         update: preserve
         mount: /{{ path }}
-        runtime_readonly: false
+        writeable: true
 
 bundle:
   options:

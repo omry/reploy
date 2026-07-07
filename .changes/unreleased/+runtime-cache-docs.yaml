@@ -1,0 +1,2 @@
+kind: Docs
+body: Clarify that Docker runtime caches use named volumes by default while app managed paths and bundle artifacts remain under the install target.

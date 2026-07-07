@@ -88,7 +88,7 @@ install:
       - path: data
         update: preserve
         mount: /{{ path }}
-        runtime_readonly: false
+        writeable: true
 
 docker:
   service:

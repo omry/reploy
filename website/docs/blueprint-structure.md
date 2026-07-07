@@ -53,7 +53,7 @@ install:
       - path: data
         update: preserve
         mount: /{{ path }}
-        runtime_readonly: false
+        writeable: true
 
 bundle:
   options: {}
@@ -95,9 +95,9 @@ the canonical style. Use `${...}` placeholders only for container/runtime
 environment values.
 
 Mounted managed paths are read-only at runtime by default. Set
-`runtime_readonly: false` on a mounted managed path when the app needs to write
-through that mount while the service is running, such as persistent runtime
-data. The field only applies to entries that also set `mount`.
+`writeable: true` on a mounted managed path when the app needs to write through
+that mount while the service is running, such as persistent runtime data. The
+field only applies to entries that also set `mount`.
 
 `bundle` declares optional package selections that an app user can add to the
 deployment bundle.
@@ -236,8 +236,11 @@ On Windows, `{{ user.data }}` falls back to `%LOCALAPPDATA%` if `%APPDATA%`
 is not set.
 
 These variables choose the one install directory for the app. Reploy keeps
-managed paths such as `conf`, `data`, bundle state, and runtime state localized
-under that install directory.
+managed app paths such as `conf` and `data`, plus generated bundle artifacts,
+localized under that install directory. For Docker deployments, the generated
+Python runtime cache uses a Docker named volume by default; operators may
+override `REPLOY_RUNTIME_DIR` to a host path when they need a bind-mounted
+runtime cache.
 
 ## Bundle Options
 

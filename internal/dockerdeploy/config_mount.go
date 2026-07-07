@@ -61,7 +61,7 @@ func configMountLayoutForPack(pack deploy.AppPack) configMountLayout {
 }
 
 func managedPathMountMode(entry deploy.InstallManagedPathConfig) string {
-	if entry.RuntimeReadonly != nil && !*entry.RuntimeReadonly {
+	if entry.Writeable != nil && *entry.Writeable {
 		return "rw"
 	}
 	return "${REPLOY_CONFIG_MOUNT:-ro}"

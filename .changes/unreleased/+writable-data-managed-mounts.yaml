@@ -1,2 +1,2 @@
 kind: Fixed
-body: Allow blueprints to mark mounted managed paths writable at runtime with runtime_readonly: false while keeping mounted managed paths read-only by default.
+body: Allow blueprints to mark mounted managed paths writable at runtime with writeable: true while keeping mounted managed paths read-only by default.
