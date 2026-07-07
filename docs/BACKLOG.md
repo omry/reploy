@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-06
+updated: 2026-07-07
 summary: Active planning surface for Reploy design and implementation gaps.
 ---
 
@@ -35,26 +35,27 @@ No active backlog items.
 
 ## Pre-release
 
-- [ ] `P1` Make bundle-build pip bootstrap progress bounded and useful.
-      `reploy bundle build` can sit at `upgrading pip` while preparing the
-      build container, with no clear progress and no quick failure if the pip
-      bootstrap is blocked by network or index behavior. Acceptance checks:
-      decide whether upgrading pip belongs in every bundle build or should be
-      cached/pinned; show useful quiet-mode progress for pip bootstrap and
-      wheelhouse build without dumping raw Docker output; add a bounded timeout
-      or similarly actionable failure path; keep verbose timing breakdowns for
-      bootstrap versus wheelhouse work; and verify the behavior on a clean
-      Docker image with uncached Python dependencies.
+- [ ] `P1` Make bundle-build bootstrap failures bounded and actionable.
+      `reploy bundle build` now has quieter pip output, verbose timing, uv build
+      backend support, and a Docker named-volume runtime cache, but bootstrap
+      and wheelhouse preparation can still block on network or index behavior
+      without a clear next action. Acceptance checks: decide what timeout or
+      failure boundary applies to pip/uv bootstrap and wheelhouse work; report
+      the phase that is blocked without dumping raw Docker output in quiet mode;
+      preserve verbose timing/output for diagnosis; and verify the behavior on a
+      clean Docker image with uncached Python dependencies.
 
-- [ ] `P1` Add bounded and actionable progress for Python runtime preparation.
+- [ ] `P1` Add bounded and actionable failure handling for Python runtime
+      preparation.
       `reploy app config check`, install hooks, and first service start can
       sit at `Preparing Python runtime...` while the generated Compose command
-      creates a venv and installs requirements inside the container. Reploy now
-      shows a quiet-mode spinner for runtime actions, but the slow path still
-      needs bounded, diagnosable behavior. Acceptance checks: keep quiet mode
-      readable without dumping pip logs; add a timeout or similarly actionable
-      failure path for blocked runtime preparation; preserve verbose mode for
-      raw command output; avoid speculative per-package noise; and verify the
+      creates or reuses the named-volume venv and installs requirements inside
+      the container. Reploy now has a quiet-mode spinner and persistent Docker
+      runtime cache, but the first-prep slow path still needs bounded,
+      diagnosable failure behavior. Acceptance checks: keep quiet mode readable
+      without dumping pip logs; add a timeout or similarly actionable failure
+      path for blocked runtime preparation; preserve verbose mode for raw
+      command output; avoid speculative per-package noise; and verify the
       experience on Windows Docker Desktop and Linux.
 
 - [ ] `P2` Remove old verbose Docker command argv compatibility.
@@ -73,23 +74,23 @@ No active backlog items.
       Reploy CLI; it is a portable app-install contract that maps one blueprint
       onto host-appropriate staging, dependencies, config, ports, lifecycle
       controls, health checks, install targets, and success output. Acceptance
-      checks: update the homepage and intro to say this plainly; describe
-      blueprints as semantic app intent rather than Unix path templates; align
-      Linux, macOS, and Windows positioning with the current support matrix; and
-      avoid implying that package managers such as Homebrew, winget, or Scoop
-      solve the same problem. Cross-platform install location design lives in
-      `docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md`.
+      checks: update the homepage so it no longer claims Linux-only support;
+      make the homepage and intro say the cross-platform app-installer contract
+      plainly; describe blueprints as semantic app intent rather than Unix path
+      templates; align Linux, macOS, and Windows positioning with the current
+      support matrix; and avoid implying that package managers such as Homebrew,
+      winget, or Scoop solve the same problem. Cross-platform install location
+      design lives in `docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md`.
 
 - [ ] `P2` Improve bare `reploy` output when an app is installed.
-      The current no-argument output is almost entirely an app command listing,
-      which hides general Reploy affordances such as `--version`, help,
-      install/stage/info commands, and the distinction between Reploy itself
-      and the installed app surface. Acceptance checks: design a shorter
-      installed-app summary that identifies the active app and install/staging
-      context; show the most useful general Reploy commands alongside a small
-      app-command sample or pointer; keep full app command discovery available
-      through an explicit command; and update tests/docs so bare `reploy`
-      reads as a Reploy entry point, not only as an app command menu.
+      Top-level unknown app commands now suggest `reploy app ...`, and generic
+      short usage is better, but the no-argument app summary still centers the
+      full app subcommand list. Acceptance checks: design a shorter installed or
+      staged app summary that identifies the active app and context; show the
+      most useful general Reploy commands alongside a small app-command sample
+      or pointer; keep full app command discovery available through explicit
+      `reploy app`; and update tests/docs so bare `reploy` reads as a Reploy
+      entry point, not only as an app command menu.
 
 - [ ] `P2` Add Windows path and Docker Desktop failure-mode smoke follow-ups.
       Core Windows Docker Desktop staging and Docker-managed persistent-install
@@ -101,20 +102,6 @@ No active backlog items.
       focused follow-up smokes rather than blocking the core Windows
       Docker-managed install evidence; record any support-boundary changes in
       the archived Windows port appendix or support matrix.
-
-- [ ] `P2` Add first-class install scope and per-scope target defaults.
-      Make `user` and `system` install scope an explicit required choice
-      instead of inferring intent from paths, host platform, backend, or
-      privileges. Acceptance checks: define the CLI and installed-state shape
-      for the explicit scope; validate that explicit scope against backend
-      capabilities; add per-scope, per-OS target defaults such as
-      `install.target.default_paths.user.windows` and
-      `install.target.default_paths.system.linux`; preserve the simple
-      platform-aware default path behavior for blueprints that do not need
-      scope-specific overrides; require root/admin or a clear privilege path
-      for every supported system scope; and document unsupported combinations
-      with actionable errors. Design notes live in
-      `docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md`.
 
 ## Post-v1
 
