@@ -105,7 +105,8 @@ def _release_build_smoke(session: nox.Session) -> None:
 
 def _docs_build(session: nox.Session) -> None:
     with session.chdir("website"):
-        session.run("npm", "ci", "--no-audit", "--no-fund", external=True)
+        npm_install = "ci" if os.environ.get("CI") else "install"
+        session.run("npm", npm_install, "--no-audit", "--no-fund", external=True)
         session.run("npm", "run", "sync:install", external=True)
         session.run("cmp", "../tools/install.sh", "static/install.sh", external=True)
         session.run("sh", "-n", "static/install.sh", external=True)

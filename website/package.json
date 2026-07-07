@@ -5,7 +5,7 @@
   "scripts": {
     "sync:install": "node scripts/sync-install-script.mjs",
     "prestart": "npm run sync:install",
-    "start": "docusaurus start --port 4201",
+    "start": "docusaurus start --port 4201 --no-open",
     "prebuild": "npm run sync:install",
     "build": "docusaurus build",
     "serve": "docusaurus serve",
