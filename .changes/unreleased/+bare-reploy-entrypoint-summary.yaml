@@ -1,0 +1,2 @@
+kind: Changed
+body: Make bare `reploy` in a deployment directory show a concise Reploy entry-point summary with useful lifecycle commands and a small app-command sample instead of dumping every app command.

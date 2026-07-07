@@ -641,6 +641,40 @@ func expectedDemoAppSummary() string {
 		"[STAGING : demo]   env check\n"
 }
 
+func expectedBareDemoStagingSummary(dir string) string {
+	return "[STAGING : demo] app: demo\n" +
+		"[STAGING : demo] reploy: " + reploy.DisplayVersion() + "\n" +
+		"[STAGING : demo] context: staged deployment\n" +
+		"[STAGING : demo] directory: " + dir + "\n" +
+		"[STAGING : demo] useful commands:\n" +
+		"[STAGING : demo]   reploy info\n" +
+		"[STAGING : demo]   reploy bundle list\n" +
+		"[STAGING : demo]   reploy up|down|status\n" +
+		"[STAGING : demo]   reploy logs --tail 50\n" +
+		"[STAGING : demo]   reploy install --scope user --to DIR\n" +
+		"[STAGING : demo] app command examples:\n" +
+		"[STAGING : demo]   reploy app bootstrap server\n" +
+		"[STAGING : demo]   reploy app bootstrap plugin\n" +
+		"[STAGING : demo]   reploy app config activate\n" +
+		"[STAGING : demo]   reploy app ...\n" +
+		"[STAGING : demo] Run 'reploy app' for all app commands.\n"
+}
+
+func expectedBareDemoInstalledSummary(dir string) string {
+	return "[DEPLOYED : demo] app: demo\n" +
+		"[DEPLOYED : demo] reploy: " + reploy.DisplayVersion() + "\n" +
+		"[DEPLOYED : demo] context: installed deployment\n" +
+		"[DEPLOYED : demo] directory: " + dir + "\n" +
+		"[DEPLOYED : demo] useful commands:\n" +
+		"[DEPLOYED : demo]   reploy up|down|status\n" +
+		"[DEPLOYED : demo]   reploy logs --tail 100\n" +
+		"[DEPLOYED : demo]   reploy restart\n" +
+		"[DEPLOYED : demo]   reploy uninstall --from .\n" +
+		"[DEPLOYED : demo] app command examples:\n" +
+		"[DEPLOYED : demo]   reploy app --deployed-only config check\n" +
+		"[DEPLOYED : demo] Run 'reploy app --deployed-only' for all app commands.\n"
+}
+
 func TestAppShowsAppIDAndPackSubcommands(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
@@ -1031,7 +1065,7 @@ func TestNoArgsUsesDefaultStagingDirByDefault(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("no-args failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	expected := expectedDemoAppSummary()
+	expected := expectedBareDemoStagingSummary(filepath.Join(workDir, "reploy-staging"))
 	if stdout != expected {
 		t.Fatalf("stdout = %q, want %q", stdout, expected)
 	}
@@ -1054,7 +1088,37 @@ func TestNoArgsUsesCurrentDeploymentDirByDefault(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("no-args failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	expected := expectedDemoAppSummary()
+	expected := expectedBareDemoStagingSummary(deployDir)
+	if stdout != expected {
+		t.Fatalf("stdout = %q, want %q", stdout, expected)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestNoArgsUsesInstalledDeploymentDirByDefault(t *testing.T) {
+	manifest := strings.Replace(
+		cliTestPackManifest(),
+		"      app_command: true\n      forward_flags:\n        - --live\n",
+		"      app_command: true\n      deployed_command: true\n      forward_flags:\n        - --live\n",
+		1,
+	)
+	packDir := makeCLITestPackWithManifest(t, manifest)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	markCLITestDeploymentInstalled(t, deployDir)
+	t.Chdir(deployDir)
+
+	code, stdout, stderr = runCLI()
+	if code != 0 {
+		t.Fatalf("no-args failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	expected := expectedBareDemoInstalledSummary(deployDir)
 	if stdout != expected {
 		t.Fatalf("stdout = %q, want %q", stdout, expected)
 	}

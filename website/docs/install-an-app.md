@@ -94,6 +94,10 @@ From this point on, commands run against `reploy-staging/` by default:
 reploy info
 ```
 
+Run `reploy` with no arguments inside or beside a staging deployment to see the
+active app, useful lifecycle commands, and a small app-command sample. Use
+`reploy app` when you want the complete app-specific command list.
+
 The staging directory also contains an app-named control script, such as
 `examplectl`, for local runtime and app commands:
 

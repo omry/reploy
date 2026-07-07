@@ -35,25 +35,6 @@ No active backlog items.
 
 ## Pre-release
 
-- [ ] `P2` Record cross-platform Python prep progress evidence.
-      Bundle build and runtime prep now report quiet-mode phase progress and
-      phase-scoped failures without dumping raw pip/Docker output. Remaining
-      release evidence should prove the behavior against real Docker slow paths.
-      Acceptance checks: run a clean Linux Docker image with uncached Python
-      dependencies; record Windows Docker Desktop behavior for first runtime
-      prep; confirm verbose mode still exposes raw command output; and keep the
-      evidence focused on progress/failure UX rather than package performance.
-
-- [ ] `P2` Improve bare `reploy` output when an app is installed.
-      Top-level unknown app commands now suggest `reploy app ...`, and generic
-      short usage is better, but the no-argument app summary still centers the
-      full app subcommand list. Acceptance checks: design a shorter installed or
-      staged app summary that identifies the active app and context; show the
-      most useful general Reploy commands alongside a small app-command sample
-      or pointer; keep full app command discovery available through explicit
-      `reploy app`; and update tests/docs so bare `reploy` reads as a Reploy
-      entry point, not only as an app command menu.
-
 - [ ] `P2` Create a neutral demo service blueprint.
       Build or adopt a small Python service that can showcase Reploy without
       anchoring the story to Arbiter or another domain-specific app. The demo

@@ -113,10 +113,120 @@ func printTopLevelUsageError(stderr io.Writer, format string, values ...any) int
 
 func runNoCommand(target string, stdout io.Writer, stderr io.Writer) int {
 	if target == "docker" && implicitDeploymentStateExists(dockerdeploy.DefaultDeploymentDir, false) {
-		return runDockerAppSummary(nil, stdout, stderr)
+		return runDockerDeploymentSummary(stdout, stderr)
 	}
 	printShortUsage(stdout)
 	return 0
+}
+
+func runDockerDeploymentSummary(stdout io.Writer, stderr io.Writer) int {
+	dir := resolveImplicitDeploymentDir(dockerdeploy.DefaultDeploymentDir, false, io.Discard)
+	state, err := dockerdeploy.LoadState(dir)
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy error: %v\n", err)
+		return 1
+	}
+	stdout, stderr, err = dockerdeploy.DeploymentOutputWriters(dir, stdout, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy error: %v\n", err)
+		return 1
+	}
+	deployedOnly := state.Phase == deploy.PhaseInstalled
+	result, err := dockerdeploy.AppCommandList(dockerdeploy.AppCommandListOptions{Dir: dir, DeployedOnly: deployedOnly})
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy error: %v\n", err)
+		return 1
+	}
+	printDeploymentSummary(stdout, dir, state, result.Commands)
+	return 0
+}
+
+func printDeploymentSummary(output io.Writer, dir string, state deploy.DeploymentState, appCommands []dockerdeploy.AppCommandListEntry) {
+	appID := strings.TrimSpace(state.AppID)
+	if appID == "" {
+		appID = "unknown"
+	}
+	fmt.Fprintf(output, "app: %s\n", appID)
+	fmt.Fprintf(output, "reploy: %s\n", reploy.DisplayVersion())
+	fmt.Fprintf(output, "context: %s deployment\n", deploymentSummaryContext(state.Phase))
+	fmt.Fprintf(output, "directory: %s\n", deploymentSummaryDir(dir))
+	fmt.Fprintln(output, "useful commands:")
+	for _, command := range deploymentSummaryCommands(state) {
+		fmt.Fprintf(output, "  %s\n", command)
+	}
+	if len(appCommands) > 0 {
+		fmt.Fprintln(output, "app command examples:")
+		for _, command := range deploymentSummaryAppCommandExamples(state, appCommands) {
+			fmt.Fprintf(output, "  %s\n", command)
+		}
+	}
+	fmt.Fprintf(output, "Run '%s' for all app commands.\n", deploymentSummaryAppCommandListCommand(state))
+}
+
+func deploymentSummaryContext(phase deploy.Phase) string {
+	switch phase {
+	case deploy.PhaseInstalled:
+		return "installed"
+	case deploy.PhaseStaged:
+		return "staged"
+	default:
+		return string(phase)
+	}
+}
+
+func deploymentSummaryDir(dir string) string {
+	absolute, err := filepath.Abs(dir)
+	if err != nil {
+		return dir
+	}
+	return absolute
+}
+
+func deploymentSummaryCommands(state deploy.DeploymentState) []string {
+	switch state.Phase {
+	case deploy.PhaseInstalled:
+		return []string{
+			"reploy up|down|status",
+			"reploy logs --tail 100",
+			"reploy restart",
+			"reploy uninstall --from .",
+		}
+	default:
+		return []string{
+			"reploy info",
+			"reploy bundle list",
+			"reploy up|down|status",
+			"reploy logs --tail 50",
+			"reploy install --scope user --to DIR",
+		}
+	}
+}
+
+func deploymentSummaryAppCommandExamples(state deploy.DeploymentState, commands []dockerdeploy.AppCommandListEntry) []string {
+	prefix := deploymentSummaryAppCommandListCommand(state)
+	limit := 3
+	if len(commands) < limit {
+		limit = len(commands)
+	}
+	examples := make([]string, 0, limit+1)
+	for index := 0; index < limit; index++ {
+		trigger := strings.Join(commands[index].Trigger, " ")
+		if trigger == "" {
+			continue
+		}
+		examples = append(examples, prefix+" "+trigger)
+	}
+	if len(commands) > limit {
+		examples = append(examples, prefix+" ...")
+	}
+	return examples
+}
+
+func deploymentSummaryAppCommandListCommand(state deploy.DeploymentState) string {
+	if state.Phase == deploy.PhaseInstalled {
+		return "reploy app --deployed-only"
+	}
+	return "reploy app"
 }
 
 func topLevelAppCommandSuggestion(args []string) string {
