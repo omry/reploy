@@ -32,6 +32,7 @@ type uninstallPlan struct {
 	ComposeProject string
 	ContainerName  string
 	NetworkName    string
+	RuntimeVolume  string
 	RemoveDir      bool
 	Backend        installBackend
 
@@ -162,6 +163,10 @@ func newUninstallPlan(options UninstallOptions) (uninstallPlan, error) {
 	if backend == installBackendLinuxSystemd {
 		unitPath = defaultString(unitPath, filepath.Join(uninstallSystemdUnitDir, install.Service+".service"))
 	}
+	runtimeVolume, err := uninstallRuntimeVolumeName(from, install.ComposeProject)
+	if err != nil {
+		return uninstallPlan{}, err
+	}
 	return uninstallPlan{
 		TargetDir:              from,
 		TargetExists:           true,
@@ -170,6 +175,7 @@ func newUninstallPlan(options UninstallOptions) (uninstallPlan, error) {
 		ComposeProject:         install.ComposeProject,
 		ContainerName:          install.ContainerName,
 		NetworkName:            install.NetworkName,
+		RuntimeVolume:          runtimeVolume,
 		RemoveDir:              options.RemoveDir,
 		Backend:                backend,
 		DockerPreflightTimeout: options.DockerPreflightTimeout,
@@ -201,6 +207,7 @@ func serviceOnlyUninstallPlan(serviceName string, removeDir bool, dockerPrefligh
 		ServiceName:            serviceName,
 		UnitPath:               unitPath,
 		ComposeProject:         identity.ComposeProject,
+		RuntimeVolume:          dockerRuntimeVolumeName(identity.ComposeProject),
 		RemoveDir:              removeDir,
 		Backend:                installBackendLinuxSystemd,
 		DockerPreflightTimeout: dockerPreflightTimeout,
@@ -382,6 +389,9 @@ func printUninstallDryRun(stdout io.Writer, plan uninstallPlan) {
 	if plan.NetworkName != "" {
 		fmt.Fprintf(stdout, "network: %s\n", plan.NetworkName)
 	}
+	if plan.RuntimeVolume != "" {
+		fmt.Fprintf(stdout, "runtime volume: %s\n", plan.RuntimeVolume)
+	}
 	if plan.Backend == installBackendLinuxSystemd {
 		fmt.Fprintf(stdout, "would run: systemctl stop %s.service\n", plan.ServiceName)
 	}
@@ -393,6 +403,10 @@ func printUninstallDryRun(stdout io.Writer, plan uninstallPlan) {
 		fmt.Fprintf(stdout, "would remove Docker networks with label com.docker.compose.project=%s\n", plan.ComposeProject)
 	} else {
 		fmt.Fprintln(stdout, "docker cleanup: skipped (no compose project recovered)")
+	}
+	if plan.RuntimeVolume != "" {
+		spec := DockerVolumeRemoveCommand(plan.RuntimeVolume)
+		fmt.Fprintf(stdout, "would run: %s\n", formatCommand(spec.Name, spec.Args...))
 	}
 	if plan.Backend == installBackendLinuxSystemd {
 		fmt.Fprintf(stdout, "would run: systemctl disable %s.service\n", plan.ServiceName)
@@ -463,20 +477,51 @@ func applyDockerDesktopUninstallPlan(plan uninstallPlan, stdout io.Writer) error
 }
 
 func runUninstallDockerCleanup(plan uninstallPlan, stdout io.Writer) error {
+	var cleanupErr error
 	if plan.TargetExists {
 		spec := composeCommandWithProject(plan.TargetDir, plan.ComposeProject, "down", "--remove-orphans")
 		if err := uninstallRunDockerCommand(spec, plan.DockerPreflightTimeout); err == nil {
+			if volumeErr := removeUninstallRuntimeVolume(plan); volumeErr != nil {
+				return volumeErr
+			}
 			return nil
 		} else if plan.ComposeProject == "" {
-			return err
+			cleanupErr = err
 		} else {
 			uninstallWarn(stdout, "compose cleanup failed; falling back to Docker labels for project %s: %v", plan.ComposeProject, err)
 		}
 	}
-	if plan.ComposeProject == "" {
+	if cleanupErr == nil && plan.ComposeProject != "" {
+		cleanupErr = removeDockerComposeProjectByLabel(plan.ComposeProject, plan.DockerPreflightTimeout)
+	}
+	if volumeErr := removeUninstallRuntimeVolume(plan); volumeErr != nil {
+		if cleanupErr != nil {
+			return fmt.Errorf("%v; remove runtime volume: %w", cleanupErr, volumeErr)
+		}
+		return volumeErr
+	}
+	return cleanupErr
+}
+
+func uninstallRuntimeVolumeName(dir string, composeProject string) (string, error) {
+	volumeName, _, ok, err := runtimeNamedVolumeConfig(dir)
+	if err != nil {
+		if strings.TrimSpace(composeProject) == "" {
+			return "", nil
+		}
+		return dockerRuntimeVolumeName(composeProject), nil
+	}
+	if ok {
+		return volumeName, nil
+	}
+	return "", nil
+}
+
+func removeUninstallRuntimeVolume(plan uninstallPlan) error {
+	if plan.RuntimeVolume == "" {
 		return nil
 	}
-	return removeDockerComposeProjectByLabel(plan.ComposeProject, plan.DockerPreflightTimeout)
+	return uninstallRunDockerCommand(DockerVolumeRemoveCommand(plan.RuntimeVolume), plan.DockerPreflightTimeout)
 }
 
 func removeDockerComposeProjectByLabel(project string, dockerPreflightTimeout time.Duration) error {

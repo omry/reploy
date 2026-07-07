@@ -193,7 +193,7 @@ func TestRuntimeUpVerboseStreamsBundlePrepareOutput(t *testing.T) {
 			}
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
-		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--progress-bar", "off", "--root-user-action", "ignore", "--target"}):
 			commands = append(commands, "check")
 			if _, err := options.Stderr.Write([]byte("check output\n")); err != nil {
 				return err
@@ -347,10 +347,13 @@ func TestRuntimeLogsUseRawComposeOutput(t *testing.T) {
 }
 
 func stubRuntimeRunner(run func(CommandSpec, RunOptions) error) func() {
-	previous := runRuntimeCommand
+	previousRuntime := runRuntimeCommand
+	previousRuntimeVolumeInit := runRuntimeVolumeInitCommand
 	runRuntimeCommand = run
+	runRuntimeVolumeInitCommand = func(CommandSpec, RunOptions) error { return nil }
 	return func() {
-		runRuntimeCommand = previous
+		runRuntimeCommand = previousRuntime
+		runRuntimeVolumeInitCommand = previousRuntimeVolumeInit
 	}
 }
 

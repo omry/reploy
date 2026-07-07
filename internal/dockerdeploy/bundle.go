@@ -240,6 +240,7 @@ type wheelhouseManifestSource struct {
 }
 
 var runBundleCommand = runCommand
+var runBundleCleanDockerCommand = runCommand
 
 func BundleList(options BundleListOptions) ([]deploy.ArtifactRoot, error) {
 	if options.Dir == "" {
@@ -816,6 +817,9 @@ func warmPreparedPythonRuntime(options BundleWarmRuntimeOptions) error {
 	if _, err := materializeRuntimeCompose(options.Dir); err != nil {
 		return fmt.Errorf("materialize runtime compose: %w", err)
 	}
+	if err := ensureRuntimeNamedVolumeWritable(options.Dir, projectName, options.DockerPreflightTimeout); err != nil {
+		return err
+	}
 	runStdout := options.Stdout
 	runStderr := options.Stderr
 	if !options.Verbose {
@@ -882,7 +886,39 @@ func BundleClean(options BundleCleanOptions) ([]UpdateResult, error) {
 		return nil, err
 	}
 	results := []UpdateResult{}
-	if err == nil {
+	bundleExists := err == nil
+	shouldCleanRuntime := bundleExists || state.Bundle.PreparedFingerprint != ""
+	if shouldCleanRuntime {
+		volumeName, _, hasRuntimeVolume, err := runtimeNamedVolumeConfig(options.Dir)
+		if err != nil {
+			return nil, err
+		}
+		if hasRuntimeVolume {
+			if err := runBundleCleanDockerCommand(DockerVolumeRemoveCommand(volumeName), RunOptions{}); err != nil {
+				return nil, fmt.Errorf("remove runtime volume: %w", err)
+			}
+			results = append(results, UpdateResult{Path: volumeName, Status: deploy.UpdateStatusRemoved, Ownership: "generated", Reason: "removed generated Python runtime cache volume"})
+		} else {
+			runtimeCacheDir, err := deploymentRuntimePythonVenvDir(options.Dir)
+			if err != nil {
+				return nil, err
+			}
+			cacheInfo, cacheErr := os.Stat(runtimeCacheDir)
+			if cacheErr != nil && !os.IsNotExist(cacheErr) {
+				return nil, cacheErr
+			}
+			if cacheErr == nil {
+				if !cacheInfo.IsDir() {
+					return nil, fmt.Errorf("runtime cache path is not a directory: %s", runtimeCacheDir)
+				}
+				if err := os.RemoveAll(runtimeCacheDir); err != nil {
+					return nil, err
+				}
+				results = append(results, UpdateResult{Path: runtimeCacheDir, Status: deploy.UpdateStatusRemoved, Ownership: "generated", Reason: "removed generated Python runtime cache"})
+			}
+		}
+	}
+	if bundleExists {
 		if !info.IsDir() {
 			return nil, fmt.Errorf("bundle path is not a directory: %s", bundleDir)
 		}
@@ -890,23 +926,6 @@ func BundleClean(options BundleCleanOptions) ([]UpdateResult, error) {
 			return nil, err
 		}
 		results = append(results, UpdateResult{Path: bundleDir, Status: deploy.UpdateStatusRemoved})
-	}
-	runtimeCacheDir, err := deploymentRuntimePythonVenvDir(options.Dir)
-	if err != nil {
-		return nil, err
-	}
-	cacheInfo, cacheErr := os.Stat(runtimeCacheDir)
-	if cacheErr != nil && !os.IsNotExist(cacheErr) {
-		return nil, cacheErr
-	}
-	if cacheErr == nil {
-		if !cacheInfo.IsDir() {
-			return nil, fmt.Errorf("runtime cache path is not a directory: %s", runtimeCacheDir)
-		}
-		if err := os.RemoveAll(runtimeCacheDir); err != nil {
-			return nil, err
-		}
-		results = append(results, UpdateResult{Path: runtimeCacheDir, Status: deploy.UpdateStatusRemoved, Ownership: "generated", Reason: "removed generated Python runtime cache"})
 	}
 	if len(results) == 0 && state.Bundle.PreparedFingerprint == "" {
 		return nil, nil
@@ -1591,7 +1610,7 @@ func uvBuildBackendBootstrapScript() string {
 		"export UV_CACHE_DIR=/tmp/reploy-uv-cache",
 		"export UV_PYTHON_DOWNLOADS=never",
 		"if ! command -v uv >/dev/null 2>&1; then",
-		"  python -m pip --disable-pip-version-check install --no-cache-dir --find-links /bundle --target /tmp/reploy-uv " + shellQuote(uvBuildBackendRequirement),
+		"  python -m pip --disable-pip-version-check install --no-cache-dir --progress-bar off --root-user-action ignore --find-links /bundle --target /tmp/reploy-uv " + shellQuote(uvBuildBackendRequirement),
 		"  export PYTHONPATH=/tmp/reploy-uv${PYTHONPATH:+:$PYTHONPATH}",
 		"fi",
 		"reploy_uv() {",

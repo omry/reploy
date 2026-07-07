@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -541,6 +542,10 @@ func TestBundleCheckCommandValidatesPreparedWheelhouse(t *testing.T) {
 		"--disable-pip-version-check",
 		"install",
 		"--no-cache-dir",
+		"--progress-bar",
+		"off",
+		"--root-user-action",
+		"ignore",
 		"--target",
 		"/tmp/reploy-wheelhouse-check",
 		"--no-index",
@@ -696,6 +701,8 @@ func TestBundlePrepareCommandBuildsWheelhouse(t *testing.T) {
 		"--disable-pip-version-check",
 		"wheel",
 		"--no-cache-dir",
+		"--progress-bar",
+		"off",
 		"--find-links",
 		"/bundle",
 		"--wheel-dir",
@@ -789,7 +796,7 @@ func TestBundleAddSourceBuildsWheelIntoDeploymentBundle(t *testing.T) {
 	if len(specs) != 1 {
 		t.Fatalf("ran %d commands, want 1", len(specs))
 	}
-	if !containsInOrder(specs[0].Args, []string{"python", "-m", "pip", "--disable-pip-version-check", "wheel", "--no-deps", "--no-build-isolation", "--wheel-dir", "/wheelhouse", "/source"}) {
+	if !containsInOrder(specs[0].Args, []string{"python", "-m", "pip", "--disable-pip-version-check", "wheel", "--progress-bar", "off", "--no-deps", "--no-build-isolation", "--wheel-dir", "/wheelhouse", "/source"}) {
 		t.Fatalf("source wheel command missing expected pip args: %#v", specs[0].Args)
 	}
 	targetWheel := filepath.Join(deployDir, BundleDirName, "demo-1.0.0-py3-none-any.whl")
@@ -821,7 +828,7 @@ func TestBundleUpgradeResolvesPackageRootsAndPreparesBundle(t *testing.T) {
 	restore := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
 		specs = append(specs, spec)
 		switch {
-		case containsInOrder(spec.Args, []string{"install", "--dry-run", "--ignore-installed"}):
+		case containsInOrder(spec.Args, []string{"install", "--progress-bar", "off", "--root-user-action", "ignore", "--dry-run", "--ignore-installed"}):
 			workDir := hostPathForContainerMount(t, spec.Args, "/work")
 			report := `{"install":[{"metadata":{"name":"demo-server","version":"1.2.4"}},{"metadata":{"name":"demo-imap","version":"1.2.5"}}]}`
 			return os.WriteFile(filepath.Join(workDir, "report.json"), []byte(report), 0o644)
@@ -831,7 +838,7 @@ func TestBundleUpgradeResolvesPackageRootsAndPreparesBundle(t *testing.T) {
 				return err
 			}
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_imap-1.2.5-py3-none-any.whl"), []byte("imap\n"), 0o644)
-		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--progress-bar", "off", "--root-user-action", "ignore", "--target"}):
 			return nil
 		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
 			return nil
@@ -896,14 +903,14 @@ func TestBundlePreparePyPIOnlyResolvesUnpinnedRoots(t *testing.T) {
 	restore := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
 		specs = append(specs, spec)
 		switch {
-		case containsInOrder(spec.Args, []string{"install", "--dry-run", "--ignore-installed"}):
+		case containsInOrder(spec.Args, []string{"install", "--progress-bar", "off", "--root-user-action", "ignore", "--dry-run", "--ignore-installed"}):
 			workDir := hostPathForContainerMount(t, spec.Args, "/work")
 			report := `{"install":[{"metadata":{"name":"demo-suite","version":"1.2.4"}}]}`
 			return os.WriteFile(filepath.Join(workDir, "report.json"), []byte(report), 0o644)
 		case containsInOrder(spec.Args, []string{"wheel", "--no-cache-dir"}):
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.4-py3-none-any.whl"), []byte("suite\n"), 0o644)
-		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--progress-bar", "off", "--root-user-action", "ignore", "--target"}):
 			return nil
 		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
 			return nil
@@ -996,7 +1003,7 @@ func TestBundlePrepareUsesPackLocalSourcesForFilePacks(t *testing.T) {
 				return err
 			}
 			return os.WriteFile(filepath.Join(wheelhouse, "other_pkg-1.2.3-py3-none-any.whl"), []byte("other\n"), 0o644)
-		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--progress-bar", "off", "--root-user-action", "ignore", "--target"}):
 			requirementsPath := hostPathForContainerMount(t, spec.Args, "/requirements.txt")
 			checkRequirementsPath = requirementsPath
 			content, err := os.ReadFile(requirementsPath)
@@ -1080,7 +1087,7 @@ func TestBundlePrepareSuppressesCommandOutputByDefault(t *testing.T) {
 		case containsInOrder(spec.Args, []string{"python", "-m", "pip", "--disable-pip-version-check", "wheel", "--no-cache-dir"}):
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
-		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--progress-bar", "off", "--root-user-action", "ignore", "--target"}):
 			return nil
 		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
 			return nil
@@ -1139,7 +1146,7 @@ func TestBundlePrepareVerboseStreamsCommandOutput(t *testing.T) {
 			}
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
-		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--progress-bar", "off", "--root-user-action", "ignore", "--target"}):
 			return nil
 		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
 			if options.Stdout != &stdout || options.Stderr != &stderr {
@@ -1206,7 +1213,7 @@ func TestBundlePrepareWarmRuntimeCreatesManagedFilePlaceholders(t *testing.T) {
 			commands = append(commands, "build")
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
-		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--progress-bar", "off", "--root-user-action", "ignore", "--target"}):
 			commands = append(commands, "check")
 			return nil
 		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
@@ -1313,7 +1320,7 @@ func TestBundlePreparePipWheelhouseUsesPipForLocalSourceBuilds(t *testing.T) {
 			buildScript = spec.Args[len(spec.Args)-1]
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_pkg-1.2.3-py3-none-any.whl"), []byte("demo\n"), 0o644)
-		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--progress-bar", "off", "--root-user-action", "ignore", "--target"}):
 			return nil
 		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
 			return nil
@@ -1492,7 +1499,7 @@ func TestBundleWarmRuntimeBuildsIfNeededAndRunsWarmup(t *testing.T) {
 			commands = append(commands, "build")
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
-		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--progress-bar", "off", "--root-user-action", "ignore", "--target"}):
 			commands = append(commands, "check")
 			return nil
 		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):
@@ -1515,6 +1522,59 @@ func TestBundleWarmRuntimeBuildsIfNeededAndRunsWarmup(t *testing.T) {
 	want := []string{"build", "check", "warm runtime"}
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestBundleWarmRuntimeInitializesNamedRuntimeVolume(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	markTestBundlePrepared(t, deployDir)
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{
+		"REPLOY_RUNTIME_DIR":    "reploy-runtime-test",
+		"REPLOY_CONTAINER_USER": "123:456",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var commands []string
+	restoreBundle := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
+		if containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}) {
+			commands = append(commands, "warm runtime")
+			return nil
+		}
+		t.Fatalf("unexpected bundle command: %#v", spec.Args)
+		return nil
+	})
+	defer restoreBundle()
+	oldRunRuntimeVolumeInitCommand := runRuntimeVolumeInitCommand
+	runRuntimeVolumeInitCommand = func(spec CommandSpec, options RunOptions) error {
+		if containsInOrder(spec.Args, []string{"volume", "create", "reploy-runtime-test"}) {
+			commands = append(commands, "create volume")
+			return nil
+		}
+		if !containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "--user", "0"}) {
+			t.Fatalf("runtime volume init args = %#v", spec.Args)
+		}
+		if !containsInOrder(spec.Args, []string{"-e", "REPLOY_RUNTIME_OWNER=123:456", "app"}) {
+			t.Fatalf("runtime volume init owner args = %#v", spec.Args)
+		}
+		commands = append(commands, "init")
+		return nil
+	}
+	defer func() { runRuntimeVolumeInitCommand = oldRunRuntimeVolumeInitCommand }()
+
+	if err := BundleWarmRuntime(BundleWarmRuntimeOptions{Dir: deployDir}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(commands, []string{"create volume", "init", "warm runtime"}) {
+		t.Fatalf("commands = %#v", commands)
 	}
 }
 
@@ -1629,6 +1689,10 @@ func TestBundleCleanInvalidatesPreparedBundle(t *testing.T) {
 		t.Fatal("prepared fingerprint was not recorded")
 	}
 
+	oldRunBundleCleanDockerCommand := runBundleCleanDockerCommand
+	runBundleCleanDockerCommand = func(CommandSpec, RunOptions) error { return nil }
+	defer func() { runBundleCleanDockerCommand = oldRunBundleCleanDockerCommand }()
+
 	results, err := BundleClean(BundleCleanOptions{Dir: deployDir})
 	if err != nil {
 		t.Fatal(err)
@@ -1663,25 +1727,70 @@ func TestBundleCleanRemovesBundleDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtimeCompose := filepath.Join(deployDir, ComposeFileName)
-	runtimeCache := filepath.Join(deployDir, RuntimeDirName, "python-venv")
-	if err := os.MkdirAll(filepath.Join(runtimeCache, "fingerprint"), 0o755); err != nil {
+	values, err := readDockerEnv(deployDir)
+	if err != nil {
 		t.Fatal(err)
 	}
+	runtimeVolume := values["REPLOY_RUNTIME_DIR"]
+	oldRunBundleCleanDockerCommand := runBundleCleanDockerCommand
+	var cleanCommands []CommandSpec
+	runBundleCleanDockerCommand = func(spec CommandSpec, options RunOptions) error {
+		if _, err := os.Stat(bundleDir); err != nil {
+			t.Fatalf("bundle dir should still exist while runtime volume is removed: %v", err)
+		}
+		cleanCommands = append(cleanCommands, spec)
+		return nil
+	}
+	defer func() { runBundleCleanDockerCommand = oldRunBundleCleanDockerCommand }()
 
 	results, err := BundleClean(BundleCleanOptions{Dir: deployDir})
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertResultStatus(t, results, bundleDir, deploy.UpdateStatusRemoved)
-	assertResultStatus(t, results, runtimeCache, deploy.UpdateStatusRemoved)
+	assertResultStatus(t, results, runtimeVolume, deploy.UpdateStatusRemoved)
 	if _, err := os.Stat(bundleDir); !os.IsNotExist(err) {
 		t.Fatalf("bundle dir still exists: %v", err)
 	}
-	if _, err := os.Stat(runtimeCache); !os.IsNotExist(err) {
-		t.Fatalf("runtime cache still exists: %v", err)
+	if len(cleanCommands) != 1 || !reflect.DeepEqual(cleanCommands[0].Args, []string{"volume", "rm", "-f", runtimeVolume}) {
+		t.Fatalf("runtime clean commands = %#v", cleanCommands)
 	}
 	if _, err := os.Stat(runtimeCompose); err != nil {
 		t.Fatalf("runtime compose should be preserved: %v", err)
+	}
+}
+
+func TestBundleCleanLeavesPreparedBundleWhenRuntimeVolumeRemovalFails(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	bundleDir := filepath.Join(deployDir, BundleDirName)
+	if err := os.WriteFile(filepath.Join(bundleDir, "demo_suite-1.2.3-py3-none-any.whl"), []byte("built\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	markTestBundlePrepared(t, deployDir)
+
+	oldRunBundleCleanDockerCommand := runBundleCleanDockerCommand
+	runBundleCleanDockerCommand = func(CommandSpec, RunOptions) error {
+		return errors.New("docker unavailable")
+	}
+	defer func() { runBundleCleanDockerCommand = oldRunBundleCleanDockerCommand }()
+
+	_, err = BundleClean(BundleCleanOptions{Dir: deployDir})
+	if err == nil || !strings.Contains(err.Error(), "remove runtime volume") {
+		t.Fatalf("BundleClean error = %v, want runtime volume cleanup failure", err)
+	}
+	if _, statErr := os.Stat(bundleDir); statErr != nil {
+		t.Fatalf("bundle dir should remain after failed runtime volume cleanup: %v", statErr)
+	}
+	if got := readDeploymentState(t, deployDir).Bundle.PreparedFingerprint; got == "" {
+		t.Fatal("prepared fingerprint should remain after failed runtime volume cleanup")
 	}
 }
 
@@ -1803,10 +1912,13 @@ func readDeploymentState(t *testing.T, dir string) deploy.DeploymentState {
 }
 
 func stubBundleRunner(run func(CommandSpec, RunOptions) error) func() {
-	previous := runBundleCommand
+	previousBundle := runBundleCommand
+	previousRuntimeVolumeInit := runRuntimeVolumeInitCommand
 	runBundleCommand = run
+	runRuntimeVolumeInitCommand = func(CommandSpec, RunOptions) error { return nil }
 	return func() {
-		runBundleCommand = previous
+		runBundleCommand = previousBundle
+		runRuntimeVolumeInitCommand = previousRuntimeVolumeInit
 	}
 }
 
@@ -1818,7 +1930,7 @@ func stubSuccessfulBundlePrepare(t *testing.T, commands *[]string) func() {
 			*commands = append(*commands, "build")
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
-		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--progress-bar", "off", "--root-user-action", "ignore", "--target"}):
 			*commands = append(*commands, "check")
 			return nil
 		case containsInOrder(spec.Args, []string{"run", "--rm", "--no-deps", "-e", "REPLOY_CONTAINER_COMMAND=__reploy_runtime_warmup", "app"}):

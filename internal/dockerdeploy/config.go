@@ -91,6 +91,9 @@ func ConfigCheck(options ConfigCheckOptions) error {
 	if err != nil {
 		return err
 	}
+	if err := ensureRuntimeNamedVolumeWritable(options.Dir, projectName, options.DockerPreflightTimeout); err != nil {
+		return err
+	}
 	oneOffContainerName := temporaryOneOffContainerName(projectName, "config-check")
 	spec := ConfigCheckCommandForProject(options.Dir, command.Name, forwardedArgs, projectName, configDisplayDir, configContainerDir)
 	spec = withComposeRunName(spec, oneOffContainerName)
@@ -146,6 +149,9 @@ func AppCommand(options AppCommandOptions) error {
 	configDisplayDir := appConfigDisplayDir(options.Dir, pack)
 	projectName, err := deploymentComposeProjectName(options.Dir)
 	if err != nil {
+		return err
+	}
+	if err := ensureRuntimeNamedVolumeWritable(options.Dir, projectName, options.DockerPreflightTimeout); err != nil {
 		return err
 	}
 	oneOffContainerName := temporaryOneOffContainerName(projectName, "app-command")

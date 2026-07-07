@@ -34,6 +34,11 @@ App startup checks are still handled by runtime and install commands.
 When a blueprint declares mounted managed files, warmup may create empty
 placeholders for missing files so Docker can mount them.
 
+For Docker deployments, the warmed Python runtime cache lives in a generated
+Docker named volume by default. Reploy names that volume from the Docker
+deployment identity, reuses it across staging commands, and removes it when
+`reploy bundle clean` cleans the bundle.
+
 You can also warm the staging Python runtime directly:
 
 ```bash

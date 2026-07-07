@@ -1,0 +1,2 @@
+kind: Changed
+body: Store Docker-managed Python runtime caches in Reploy-owned Docker named volumes by default, and add smoke-test timing probes for comparing runtime cache storage modes.

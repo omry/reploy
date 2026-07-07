@@ -1,0 +1,2 @@
+kind: Fixed
+body: Keep verbose Python bundle and runtime pip output line-oriented by disabling pip progress bars and suppressing expected root-user warnings in Reploy-owned container pip installs.

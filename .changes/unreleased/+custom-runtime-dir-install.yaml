@@ -1,0 +1,2 @@
+kind: Fixed
+body: Treat configured relative runtime directories as generated cache during install so warmed Python runtimes are not copied into installed deployments.

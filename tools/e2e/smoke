@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import NamedTuple
 
@@ -67,6 +68,21 @@ def parse_args() -> argparse.Namespace:
         help="Include Docker-managed persistent install/control/uninstall checks.",
     )
     parser.add_argument(
+        "--verbose-bundle",
+        action="store_true",
+        help="Run bundle build in verbose mode so Reploy prints its phase timing breakdown.",
+    )
+    parser.add_argument(
+        "--runtime-volume",
+        action="store_true",
+        help="Use a temporary Docker named volume for the generated Python runtime cache.",
+    )
+    parser.add_argument(
+        "--runtime-host-dir",
+        action="store_true",
+        help="Use a temporary explicit host directory for the generated Python runtime cache.",
+    )
+    parser.add_argument(
         "--docker-mode",
         choices=("required", "optional", "skip"),
         default="required",
@@ -88,11 +104,14 @@ def parse_args() -> argparse.Namespace:
             "--persistent-install requires Docker and cannot be combined "
             "with --no-docker or optional Docker mode"
         )
+    if args.runtime_volume and args.runtime_host_dir:
+        parser.error("--runtime-volume cannot be combined with --runtime-host-dir")
     return args
 
 
 def run(argv: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     print("+ " + " ".join(argv), flush=True)
+    started = time.monotonic()
     completed = subprocess.Popen(
         argv,
         cwd=cwd,
@@ -121,21 +140,38 @@ def run(argv: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.Comple
     def stream_pipe(pipe, target, chunks: list[str]) -> None:
         assert pipe is not None
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        display_buffer = ""
+
+        def display(content: str, *, final: bool = False) -> None:
+            nonlocal display_buffer
+            display_buffer += content
+            while True:
+                newline = display_buffer.find("\n")
+                if newline == -1:
+                    break
+                line = display_buffer[: newline + 1]
+                display_buffer = display_buffer[newline + 1 :]
+                with output_lock:
+                    safe_write(target, line)
+            if final and display_buffer:
+                with output_lock:
+                    safe_write(target, display_buffer)
+                display_buffer = ""
+
         while True:
-            data = pipe.read(1)
+            data = os.read(pipe.fileno(), 65536)
             if data == b"":
                 break
             content = decoder.decode(data)
             if content == "":
                 continue
             chunks.append(content)
-            with output_lock:
-                safe_write(target, content)
+            display(content)
         remainder = decoder.decode(b"", final=True)
         if remainder:
             chunks.append(remainder)
-            with output_lock:
-                safe_write(target, remainder)
+            display(remainder)
+        display("", final=True)
 
     threads = [
         threading.Thread(target=stream_pipe, args=(completed.stdout, sys.stdout, stdout_chunks)),
@@ -153,12 +189,19 @@ def run(argv: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.Comple
     join_streams(capture)
     if returncode != 0:
         raise SystemExit(f"[smoke] command failed with exit code {returncode}: {' '.join(argv)}")
+    print(f"[smoke] command elapsed: {format_duration(time.monotonic() - started)}", flush=True)
     return subprocess.CompletedProcess(
         argv,
         returncode,
         stdout="".join(stdout_chunks),
         stderr="".join(stderr_chunks),
     )
+
+
+def format_duration(seconds: float) -> str:
+    if seconds < 10:
+        return f"{seconds:.2f}s"
+    return f"{seconds:.1f}s"
 
 
 class SmokeInterrupted(Exception):
@@ -208,6 +251,96 @@ def strip_ansi(value: str) -> str:
 
 def completed_output(completed: subprocess.CompletedProcess[str]) -> str:
     return completed.stdout + completed.stderr
+
+
+def upsert_env_value(path: Path, key: str, value: str) -> None:
+    prefix = key + "="
+    lines = path.read_text(encoding="utf-8").splitlines()
+    updated = False
+    for index, line in enumerate(lines):
+        if line.startswith(prefix):
+            lines[index] = prefix + value
+            updated = True
+            break
+    if not updated:
+        lines.append(prefix + value)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def docker_volume_name(value: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-")
+    return normalized or "reploy-smoke-runtime"
+
+
+def is_docker_named_volume_reference(value: str) -> bool:
+    value = value.strip()
+    if value in {"", ".", ".."}:
+        return False
+    if value.startswith(".") or any(separator in value for separator in ("/", "\\", ":")):
+        return False
+    return re.fullmatch(r"[A-Za-z0-9_.-]+", value) is not None
+
+
+def runtime_volume_from_deployment(deploy_dir: Path) -> str:
+    docker_env = deploy_dir / ".reploy" / "docker.env"
+    if not docker_env.is_file():
+        return ""
+    prefix = "REPLOY_RUNTIME_DIR="
+    for line in docker_env.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith(prefix):
+            value = line[len(prefix) :].strip()
+            return value if is_docker_named_volume_reference(value) else ""
+    return ""
+
+
+def enable_runtime_volume(deploy_dir: Path, volume_name: str) -> None:
+    upsert_env_value(deploy_dir / ".reploy" / "docker.env", "REPLOY_RUNTIME_DIR", volume_name)
+    compose_path = deploy_dir / ".reploy" / "runtime" / "compose.yaml"
+    compose = compose_path.read_text(encoding="utf-8")
+    if "\nvolumes:\n" not in compose:
+        compose += "\nvolumes:\n"
+    if f"  {volume_name}:\n" not in compose:
+        compose += f"  {volume_name}:\n    name: {volume_name}\n    external: true\n"
+    compose_path.write_text(compose, encoding="utf-8")
+
+
+def enable_runtime_host_dir(deploy_dir: Path, runtime_dir: Path) -> None:
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    relative = runtime_dir.relative_to(deploy_dir)
+    upsert_env_value(deploy_dir / ".reploy" / "docker.env", "REPLOY_RUNTIME_DIR", "./" + relative.as_posix())
+
+
+def cleanup_docker_volume(name: str, *, cwd: Path, env: dict[str, str]) -> None:
+    if not name:
+        return
+    if shutil.which("docker") is None:
+        return
+    completed = subprocess.run(
+        ["docker", "volume", "rm", "-f", name],
+        cwd=cwd,
+        env=env,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        if "No such volume" not in detail:
+            print(f"[smoke] warning: failed to remove Docker volume {name}: {detail}", file=sys.stderr)
+
+
+def cleanup_runtime_volume_from_deployment(deploy_dir: Path, *, cwd: Path, env: dict[str, str]) -> None:
+    cleanup_docker_volume(runtime_volume_from_deployment(deploy_dir), cwd=cwd, env=env)
+
+
+def finish_smoke(reploy: Path, workdir: Path, deploy_dir: Path, env: dict[str, str], started: float) -> None:
+    run([str(reploy), "--version"], cwd=workdir, env=env)
+    print(f"[smoke] measured elapsed: {format_duration(time.monotonic() - started)}", flush=True)
+    cleanup_runtime_volume_from_deployment(deploy_dir, cwd=workdir, env=env)
 
 
 def docker_available(env: dict[str, str], cwd: Path) -> tuple[bool, str]:
@@ -413,9 +546,13 @@ def run_smoke(
     persistent_install: bool,
     docker_mode: str,
     color: bool,
+    verbose_bundle: bool,
+    runtime_volume: bool,
+    runtime_host_dir: bool,
 ) -> None:
     repo_root = Path(__file__).resolve().parents[2]
-    pack_dir = repo_root / "tests" / "e2e" / "python" / "packages" / "smoke-blueprint"
+    packages_dir = repo_root / "tests" / "e2e" / "python" / "packages"
+    pack_dir = packages_dir / "smoke-blueprint"
     deploy_dir = workdir / "deployment"
     install_dir = workdir / "installed"
     if not (pack_dir / "smoke.blueprint.yaml").is_file():
@@ -432,6 +569,16 @@ def run_smoke(
         env["NO_COLOR"] = "1"
         env["TERM"] = "dumb"
 
+    run([str(reploy), "--version"], cwd=workdir, env=env)
+
+    if sys.platform == "win32":
+        fixture_dir = workdir / "fixture-packages"
+        copy_started = time.monotonic()
+        shutil.copytree(packages_dir, fixture_dir)
+        print(f"[smoke] Windows fixture copy elapsed: {format_duration(time.monotonic() - copy_started)}", flush=True)
+        pack_dir = fixture_dir / "smoke-blueprint"
+    smoke_started = time.monotonic()
+
     docker_enabled = docker_mode != "skip"
     if docker_enabled and not plan_only:
         available, reason = docker_available(env, workdir)
@@ -440,6 +587,11 @@ def run_smoke(
                 docker_enabled = False
             else:
                 raise SystemExit(f"Docker is required for this smoke test: {reason}")
+
+    runtime_volume_name = ""
+    if runtime_volume:
+        runtime_volume_name = docker_volume_name(workdir.name + "-runtime")
+    runtime_host_path = deploy_dir / ".reploy" / "runtime-host" if runtime_host_dir else None
 
     init = run(
         [str(reploy), "stage", "file:" + str(pack_dir), "--dir", str(deploy_dir)],
@@ -476,6 +628,12 @@ def run_smoke(
         env=env,
     )
     require_contains(add.stdout, "updated", "bundle add output")
+    if runtime_volume_name:
+        enable_runtime_volume(deploy_dir, runtime_volume_name)
+        print(f"[smoke] Docker runtime volume: {runtime_volume_name}", flush=True)
+    if runtime_host_path is not None:
+        enable_runtime_host_dir(deploy_dir, runtime_host_path)
+        print(f"[smoke] host runtime mount: {runtime_host_path}", flush=True)
 
     bundle_list = run([str(reploy), "bundle", "list", "--dir", str(deploy_dir)], cwd=workdir, env=env)
     require_contains(bundle_list.stdout, "smoke-suite", "bundle list")
@@ -490,12 +648,18 @@ def run_smoke(
         require_contains(bundle_build.stdout, "would build installation bundle:", "bundle build dry-run")
         require_contains(bundle_build.stdout, "docker run --rm", "bundle build dry-run")
     else:
+        bundle_build_args = [str(reploy), "bundle", "build", "--dir", str(deploy_dir)]
+        if verbose_bundle:
+            bundle_build_args.insert(3, "--verbose")
         bundle_build = run(
-            [str(reploy), "bundle", "build", "--dir", str(deploy_dir)],
+            bundle_build_args,
             cwd=workdir,
             env=env,
         )
-        require_contains(bundle_build.stderr, "building installation bundle... done", "bundle build")
+        if verbose_bundle:
+            require_contains(completed_output(bundle_build), "bundle build timing:", "bundle build")
+        else:
+            require_contains(bundle_build.stderr, "building installation bundle... done", "bundle build")
         bundle_check = run(
             [str(reploy), "bundle", "check", "--dir", str(deploy_dir)],
             cwd=workdir,
@@ -513,6 +677,7 @@ def run_smoke(
             run_runtime_smoke(reploy, deploy_dir, workdir, env)
 
     if not docker_enabled:
+        finish_smoke(reploy, workdir, deploy_dir, env, smoke_started)
         return
 
     doctor = run(
@@ -563,6 +728,7 @@ def run_smoke(
 
     if not docker_managed_install():
         run([str(reploy), "services", "list"], cwd=workdir, env=env)
+    finish_smoke(reploy, workdir, deploy_dir, env, smoke_started)
 
 
 def main() -> int:
@@ -584,6 +750,9 @@ def main() -> int:
             persistent_install=args.persistent_install,
             docker_mode=args.docker_mode,
             color=args.color,
+            verbose_bundle=args.verbose_bundle,
+            runtime_volume=args.runtime_volume,
+            runtime_host_dir=args.runtime_host_dir,
         )
     else:
         workdir = make_workdir()
@@ -596,8 +765,12 @@ def main() -> int:
                 persistent_install=args.persistent_install,
                 docker_mode=args.docker_mode,
                 color=args.color,
+                verbose_bundle=args.verbose_bundle,
+                runtime_volume=args.runtime_volume,
+                runtime_host_dir=args.runtime_host_dir,
             )
         finally:
+            cleanup_runtime_volume_from_deployment(workdir / "deployment", cwd=workdir, env=os.environ.copy())
             shutil.rmtree(workdir, ignore_errors=True)
     return 0
 

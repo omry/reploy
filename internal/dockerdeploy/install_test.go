@@ -873,6 +873,98 @@ func TestCopyDeploymentTreeProtectedSkipsRuntimeDirectory(t *testing.T) {
 	}
 }
 
+func TestCopyDeploymentTreeProtectedSkipsConfiguredRuntimeDirectory(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "source")
+	target := filepath.Join(t.TempDir(), "target")
+	customRuntime := filepath.Join(".reploy", "runtime-host")
+	if err := os.MkdirAll(filepath.Join(source, customRuntime, "python-venv", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(source, BundleDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/usr/bin/python3", filepath.Join(source, customRuntime, "python-venv", "bin", "python")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, BundleDirName, "demo-1.0.0-py3-none-any.whl"), []byte("wheel\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyDeploymentTreeProtected(source, target, nil, "", customRuntime); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(target, customRuntime)); !os.IsNotExist(err) {
+		t.Fatalf("custom runtime dir copied: err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, BundleDirName, "demo-1.0.0-py3-none-any.whl")); err != nil {
+		t.Fatalf("bundle file was not copied: %v", err)
+	}
+}
+
+func TestInstallRuntimeRelativePathClassifiesRuntimeStorage(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "deployment")
+	if err := os.MkdirAll(filepath.Join(dir, ReployInternalDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeEnv := func(value string) {
+		t.Helper()
+		content := "REPLOY_RUNTIME_DIR=" + value + "\n"
+		if err := os.WriteFile(filepath.Join(dir, DockerEnvFileName), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	writeEnv("./.reploy/runtime-host")
+	runtimePath, err := installRuntimeRelativePath(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtimePath != filepath.Join(".reploy", "runtime-host") {
+		t.Fatalf("runtime path = %q", runtimePath)
+	}
+
+	writeEnv("reploy-runtime-volume")
+	runtimePath, err = installRuntimeRelativePath(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtimePath != RuntimeDirName {
+		t.Fatalf("named volume runtime path = %q, want %q", runtimePath, RuntimeDirName)
+	}
+}
+
+func TestChownInstalledRuntimeDirUsesConfiguredRuntimePath(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "installed")
+	customRuntime := filepath.Join(".reploy", "runtime-host")
+	if err := os.MkdirAll(filepath.Join(target, customRuntime, "python-venv"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, DockerEnvFileName), []byte("REPLOY_INSTALL_OWNER=1000:1000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldChown := installChown
+	t.Cleanup(func() { installChown = oldChown })
+	chowned := map[string]bool{}
+	installChown = func(path string, uid int, gid int) error {
+		if uid != 1000 || gid != 1000 {
+			t.Fatalf("runtime chown owner = %d:%d, want 1000:1000", uid, gid)
+		}
+		chowned[path] = true
+		return nil
+	}
+
+	if err := chownInstalledRuntimeDir(target, customRuntime); err != nil {
+		t.Fatal(err)
+	}
+	if !chowned[filepath.Join(target, customRuntime)] {
+		t.Fatalf("custom runtime dir was not chowned; paths=%#v", chowned)
+	}
+	if chowned[filepath.Join(target, RuntimeDirName)] {
+		t.Fatalf("default runtime dir was chowned instead of custom runtime; paths=%#v", chowned)
+	}
+}
+
 func TestCopyDeploymentTreeProtectedSkipsReployEntrypoints(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "source")
 	target := filepath.Join(t.TempDir(), "target")
@@ -1238,6 +1330,7 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 		"REPLOY_CONTAINER_USER=997:988",
 		"REPLOY_INSTALL_OWNER=appuser:appgroup",
 		"REPLOY_DOCKER_NETWORK_NAME=" + instanceID,
+		"REPLOY_RUNTIME_DIR=" + instanceID + "-runtime",
 		"REPLOY_HOST_PORT=18082",
 	} {
 		if !strings.Contains(dockerEnv, want) {
@@ -1322,6 +1415,7 @@ func TestDirectInstallAppliesViaTemporaryStaging(t *testing.T) {
 	oldRunCommand := installRunCommand
 	oldRunCommandOutput := installRunCommandOutput
 	oldRunBundleCommand := runBundleCommand
+	oldRunRuntimeVolumeInitCommand := runRuntimeVolumeInitCommand
 	oldChown := installChown
 	oldSystemdUnitDir := installSystemdUnitDir
 	t.Cleanup(func() {
@@ -1330,6 +1424,7 @@ func TestDirectInstallAppliesViaTemporaryStaging(t *testing.T) {
 		installRunCommand = oldRunCommand
 		installRunCommandOutput = oldRunCommandOutput
 		runBundleCommand = oldRunBundleCommand
+		runRuntimeVolumeInitCommand = oldRunRuntimeVolumeInitCommand
 		installChown = oldChown
 		installSystemdUnitDir = oldSystemdUnitDir
 	})
@@ -1353,6 +1448,7 @@ func TestDirectInstallAppliesViaTemporaryStaging(t *testing.T) {
 	installRunCommand = func(name string, args ...string) error {
 		return nil
 	}
+	runRuntimeVolumeInitCommand = func(CommandSpec, RunOptions) error { return nil }
 	runBundleCommand = func(spec CommandSpec, options RunOptions) error {
 		switch {
 		case containsInOrder(spec.Args, []string{"wheel", "--no-cache-dir"}):
@@ -1361,7 +1457,7 @@ func TestDirectInstallAppliesViaTemporaryStaging(t *testing.T) {
 			}
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_suite-1.2.3-py3-none-any.whl"), []byte("suite\n"), 0o644)
-		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--progress-bar", "off", "--root-user-action", "ignore", "--target"}):
 			if !containsAdjacent(spec.Args, "--user", defaultContainerUser()) {
 				t.Fatalf("bundle command did not run container as default user: %#v", spec.Args)
 			}
@@ -2738,6 +2834,7 @@ func TestInstallRebuildsLocalSourceBundleInTarget(t *testing.T) {
 	oldChown := installChown
 	oldSystemdUnitDir := installSystemdUnitDir
 	oldRunBundleCommand := runBundleCommand
+	oldRunRuntimeVolumeInitCommand := runRuntimeVolumeInitCommand
 	t.Cleanup(func() {
 		installGeteuid = oldGeteuid
 		installLookPath = oldLookPath
@@ -2745,6 +2842,7 @@ func TestInstallRebuildsLocalSourceBundleInTarget(t *testing.T) {
 		installChown = oldChown
 		installSystemdUnitDir = oldSystemdUnitDir
 		runBundleCommand = oldRunBundleCommand
+		runRuntimeVolumeInitCommand = oldRunRuntimeVolumeInitCommand
 	})
 
 	installGeteuid = func() int { return 0 }
@@ -2768,6 +2866,7 @@ func TestInstallRebuildsLocalSourceBundleInTarget(t *testing.T) {
 		}
 	}
 	installRunCommand = func(name string, args ...string) error { return nil }
+	runRuntimeVolumeInitCommand = func(CommandSpec, RunOptions) error { return nil }
 
 	var specs []CommandSpec
 	runBundleCommand = func(spec CommandSpec, options RunOptions) error {
@@ -2785,7 +2884,7 @@ func TestInstallRebuildsLocalSourceBundleInTarget(t *testing.T) {
 			}
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
 			return os.WriteFile(filepath.Join(wheelhouse, "demo_server-1.2.3-py3-none-any.whl"), []byte("fresh\n"), 0o644)
-		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--target"}):
+		case containsInOrder(spec.Args, []string{"install", "--no-cache-dir", "--progress-bar", "off", "--root-user-action", "ignore", "--target"}):
 			if !containsAdjacent(spec.Args, "--user", defaultContainerUser()) {
 				t.Fatalf("bundle rebuild did not run container as default user: %#v", spec.Args)
 			}

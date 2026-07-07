@@ -746,7 +746,7 @@ func pathContains(parent string, child string) bool {
 	return relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))
 }
 
-func copyDeploymentTreeProtected(sourceDir string, targetDir string, preservePaths []string, controlScript string) error {
+func copyDeploymentTreeProtected(sourceDir string, targetDir string, preservePaths []string, controlScript string, generatedSkipPaths ...string) error {
 	sourceDir, err := filepath.Abs(sourceDir)
 	if err != nil {
 		return err
@@ -764,7 +764,7 @@ func copyDeploymentTreeProtected(sourceDir string, targetDir string, preservePat
 			return err
 		}
 		targetPath := filepath.Join(targetDir, relativePath)
-		if installCopySkips(relativePath, controlScript) {
+		if installCopySkips(relativePath, controlScript, generatedSkipPaths) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
@@ -823,9 +823,21 @@ func installCopyPreserves(relativePath string, targetPath string, preservePaths 
 	return false
 }
 
-func installCopySkips(relativePath string, controlScript string) bool {
+func installCopySkips(relativePath string, controlScript string, generatedSkipPaths []string) bool {
 	slashPath := filepath.ToSlash(relativePath)
-	return slashPath == "reploy" || slashPath == RuntimeDirName || slashPath == ToolBinaryFileName || slashPath == embeddedRuntimeFileName() || (controlScript != "" && slashPath == filepath.ToSlash(controlScript))
+	if slashPath == "reploy" || slashPath == RuntimeDirName || slashPath == ToolBinaryFileName || slashPath == embeddedRuntimeFileName() || (controlScript != "" && slashPath == filepath.ToSlash(controlScript)) {
+		return true
+	}
+	for _, skipPath := range generatedSkipPaths {
+		skipPath = strings.TrimSuffix(filepath.ToSlash(filepath.Clean(skipPath)), "/")
+		if skipPath == "" || skipPath == "." {
+			continue
+		}
+		if slashPath == skipPath || strings.HasPrefix(slashPath, skipPath+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func copyInstallFile(sourcePath string, targetPath string, mode os.FileMode) error {
@@ -1105,9 +1117,14 @@ func writeInstalledDockerEnv(plan installPlan) error {
 		return err
 	}
 	updates := dockerEnvPortUpdates(plan.Ports)
+	sourceContainerName := envValue(values, "REPLOY_CONTAINER_NAME", "")
+	sourceNetworkName := envValue(values, "REPLOY_DOCKER_NETWORK_NAME", "")
 	updates["REPLOY_CONTAINER_NAME"] = plan.ContainerName
 	updates[reployDeploymentScopeEnv] = reployDeploymentScopeDeployed
 	updates["REPLOY_DOCKER_NETWORK_NAME"] = plan.NetworkName
+	if shouldUpdateInstalledRuntimeDir(values["REPLOY_RUNTIME_DIR"], sourceContainerName, sourceNetworkName) {
+		updates["REPLOY_RUNTIME_DIR"] = dockerRuntimeVolumeName(plan.ComposeProject)
+	}
 	if plan.Backend == installBackendLinuxSystemd {
 		owner, err := resolveInstallOwner(values)
 		if err != nil {
@@ -1121,6 +1138,19 @@ func writeInstalledDockerEnv(plan installPlan) error {
 	}
 	_, err = upsertDockerEnvValues(plan.TargetDir, updates)
 	return err
+}
+
+func shouldUpdateInstalledRuntimeDir(value string, sourceIdentities ...string) bool {
+	if shouldUpdateGeneratedRuntimeDir(value) {
+		return true
+	}
+	value = strings.TrimSpace(value)
+	for _, identity := range sourceIdentities {
+		if value == dockerRuntimeVolumeName(identity) {
+			return true
+		}
+	}
+	return false
 }
 
 func installContainerUser(dir string) (string, error) {
@@ -1159,7 +1189,7 @@ func chownInstalledDeployment(targetDir string) error {
 	return chownInstallPath(targetDir, owner.UID, owner.GID)
 }
 
-func chownInstalledRuntimeDir(targetDir string) error {
+func chownInstalledRuntimeDir(targetDir string, runtimeRelativePath string) error {
 	values, err := readDockerEnv(targetDir)
 	if err != nil {
 		return err
@@ -1168,7 +1198,7 @@ func chownInstalledRuntimeDir(targetDir string) error {
 	if err != nil {
 		return err
 	}
-	return chownInstallPath(filepath.Join(targetDir, RuntimeDirName), owner.UID, owner.GID)
+	return chownInstallPath(filepath.Join(targetDir, runtimeRelativePath), owner.UID, owner.GID)
 }
 
 func chownInstallPath(path string, uid int, gid int) error {
@@ -1435,9 +1465,13 @@ func applyInstallPlan(plan installPlan) error {
 }
 
 func prepareInstalledDeployment(plan installPlan) error {
+	runtimeRelativePath, err := installRuntimeRelativePath(plan.SourceDir)
+	if err != nil {
+		return err
+	}
 	if !plan.InPlace {
 		installProgress(plan.Progress, "copying staged deployment")
-		if err := copyDeploymentTreeProtected(plan.SourceDir, plan.TargetDir, plan.PreservePaths, plan.ControlScript); err != nil {
+		if err := copyDeploymentTreeProtected(plan.SourceDir, plan.TargetDir, plan.PreservePaths, plan.ControlScript, runtimeRelativePath); err != nil {
 			return fmt.Errorf("copy deployment: %w", err)
 		}
 	} else {
@@ -1452,7 +1486,7 @@ func prepareInstalledDeployment(plan installPlan) error {
 		return fmt.Errorf("write embedded Reploy runtime: %w", err)
 	}
 	installProgress(plan.Progress, "preparing installed runtime directory")
-	runtimeDir := filepath.Join(plan.TargetDir, RuntimeDirName)
+	runtimeDir := filepath.Join(plan.TargetDir, runtimeRelativePath)
 	if err := os.RemoveAll(runtimeDir); err != nil {
 		return fmt.Errorf("remove install runtime dir: %w", err)
 	}
@@ -1476,7 +1510,7 @@ func prepareInstalledDeployment(plan installPlan) error {
 		return fmt.Errorf("materialize runtime compose: %w", err)
 	}
 	if plan.Backend == installBackendLinuxSystemd {
-		if err := chownInstalledRuntimeDir(plan.TargetDir); err != nil {
+		if err := chownInstalledRuntimeDir(plan.TargetDir, runtimeRelativePath); err != nil {
 			return fmt.Errorf("set install runtime ownership: %w", err)
 		}
 	}
@@ -1545,6 +1579,25 @@ func applyLinuxSystemdInstallPlan(plan installPlan) error {
 	return nil
 }
 
+func installRuntimeRelativePath(dir string) (string, error) {
+	values, err := readDockerEnv(dir)
+	if err != nil {
+		return "", err
+	}
+	runtimeDir := envValue(values, "REPLOY_RUNTIME_DIR", "./"+RuntimeDirName)
+	if isDockerNamedVolumeReference(runtimeDir) {
+		return RuntimeDirName, nil
+	}
+	if filepath.IsAbs(runtimeDir) {
+		return "", fmt.Errorf("runtime path must be relative for install: REPLOY_RUNTIME_DIR=%s", runtimeDir)
+	}
+	clean := filepath.Clean(runtimeDir)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("runtime path must stay under deployment directory: REPLOY_RUNTIME_DIR=%s", runtimeDir)
+	}
+	return clean, nil
+}
+
 func applyDockerDesktopInstallPlan(plan installPlan) error {
 	if err := prepareInstalledDeployment(plan); err != nil {
 		return err
@@ -1558,6 +1611,9 @@ func applyDockerDesktopInstallPlan(plan installPlan) error {
 			return err
 		}
 		installProgress(plan.Progress, "starting Docker-managed app")
+		if err := ensureRuntimeNamedVolumeWritable(plan.TargetDir, plan.ComposeProject, plan.DockerPreflightTimeout); err != nil {
+			return err
+		}
 		spec := composeCommandWithProject(plan.TargetDir, plan.ComposeProject, "up", "-d")
 		if err := runCommand(spec, RunOptions{DockerPreflightTimeout: plan.DockerPreflightTimeout}); err != nil {
 			return fmt.Errorf("docker compose up: %w", err)

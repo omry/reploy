@@ -317,7 +317,7 @@ func defaultDockerEnv(pack deploy.AppPack, dockerIdentity string) (string, error
 		fmt.Sprintf("REPLOY_CONFIG_DIR=./%s", dirs.Config),
 		"REPLOY_REQUIREMENTS_FILE=./" + RequirementsFileName,
 		fmt.Sprintf("REPLOY_BUNDLE_DIR=./%s", dirs.Bundle),
-		"REPLOY_RUNTIME_DIR=./" + RuntimeDirName,
+		"REPLOY_RUNTIME_DIR=" + dockerRuntimeVolumeName(dockerIdentity),
 		fmt.Sprintf("REPLOY_DATA_DIR=./%s", dirs.Data),
 		fmt.Sprintf("REPLOY_CONTAINER_HOST=%s", service.ContainerHost),
 		fmt.Sprintf("REPLOY_HOST_BIND=%s", primaryPort.HostBind),
@@ -421,6 +421,7 @@ func renderComposeTemplate(pack deploy.AppPack, roots []deploy.ArtifactRoot, doc
 	rendered = strings.ReplaceAll(rendered, "{{DEFAULT_PUBLIC_BASE_URL}}", service.PublicBaseURL)
 	rendered = strings.ReplaceAll(rendered, "{{DEFAULT_NETWORK_NAME}}", service.NetworkName)
 	rendered = strings.ReplaceAll(rendered, "{{DEFAULT_RUNTIME_ROOT}}", service.RuntimeRoot)
+	rendered = strings.ReplaceAll(rendered, "{{DEFAULT_RUNTIME_DIR}}", dockerRuntimeVolumeName(dockerIdentity))
 	rendered = strings.ReplaceAll(rendered, "{{DEFAULT_CONTAINER_HOME}}", service.ContainerHome)
 	if strings.Contains(rendered, "{{CONTAINER_COMMANDS}}") ||
 		strings.Contains(rendered, "{{DEFAULT_CONTAINER_COMMAND}}") ||

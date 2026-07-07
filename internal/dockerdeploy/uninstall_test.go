@@ -26,9 +26,11 @@ func TestUninstallDryRunFromInstalledTarget(t *testing.T) {
 		"compose project: demo-test-abcd",
 		"container: demo-test-abcd",
 		"network: demo-test-abcd",
+		"runtime volume: demo-test-abcd-runtime",
 		"would run: systemctl stop demo-test.service",
 		"would run: docker compose --project-name demo-test-abcd",
 		"down --remove-orphans",
+		"would run: docker volume rm -f demo-test-abcd-runtime",
 		"would run: systemctl disable demo-test.service",
 		"target directory: kept",
 	} {
@@ -54,8 +56,10 @@ func TestUninstallDryRunOnDarwinPrintsDockerDesktopPlan(t *testing.T) {
 		"compose project: demo-test-abcd",
 		"container: demo-test-abcd",
 		"network: demo-test-abcd",
+		"runtime volume: demo-test-abcd-runtime",
 		"would run: docker compose --project-name demo-test-abcd",
 		"down --remove-orphans",
+		"would run: docker volume rm -f demo-test-abcd-runtime",
 		"target directory: kept",
 	} {
 		if !strings.Contains(stdout.String(), want) {
@@ -81,8 +85,10 @@ func TestUninstallDryRunOnWindowsPrintsDockerDesktopPlan(t *testing.T) {
 		"target: " + target,
 		"permanent install backend: Docker-managed Compose",
 		"compose project: demo-test-abcd",
+		"runtime volume: demo-test-abcd-runtime",
 		"would run: docker compose --project-name demo-test-abcd",
 		"down --remove-orphans",
+		"would run: docker volume rm -f demo-test-abcd-runtime",
 		"target directory: kept",
 	} {
 		if !strings.Contains(stdout.String(), want) {
@@ -201,6 +207,7 @@ func TestUninstallFromInstalledTargetRunsCleanupInOrder(t *testing.T) {
 	wantOrder := []string{
 		"/bin/systemctl stop demo-test.service",
 		"docker compose --project-name demo-test-abcd",
+		"docker volume rm -f demo-test-abcd-runtime",
 		"/bin/systemctl disable demo-test.service",
 		"/bin/systemctl daemon-reload",
 	}
@@ -247,6 +254,7 @@ func TestUninstallFromInstalledTargetOnDarwinUsesDockerDesktopCleanup(t *testing
 	for _, want := range []string{
 		"docker compose --project-name demo-test-abcd",
 		"down --remove-orphans",
+		"docker volume rm -f demo-test-abcd-runtime",
 	} {
 		if !containsCommand(commands, want) {
 			t.Fatalf("commands missing %q: %#v", want, commands)
@@ -289,6 +297,7 @@ func TestUninstallFromInstalledTargetOnWindowsUsesDockerDesktopCleanup(t *testin
 	for _, want := range []string{
 		"docker compose --project-name demo-test-abcd",
 		"down --remove-orphans",
+		"docker volume rm -f demo-test-abcd-runtime",
 	} {
 		if !containsCommand(commands, want) {
 			t.Fatalf("commands missing %q: %#v", want, commands)
@@ -332,6 +341,7 @@ func TestUninstallFromLinuxUserScopeInstalledTargetUsesDockerManagedCleanup(t *t
 	for _, want := range []string{
 		"docker compose --project-name demo-test-abcd",
 		"down --remove-orphans",
+		"docker volume rm -f demo-test-abcd-runtime",
 	} {
 		if !containsCommand(commands, want) {
 			t.Fatalf("commands missing %q: %#v", want, commands)
@@ -526,7 +536,11 @@ func makeInstalledDeploymentForUninstall(t *testing.T, service string, project s
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, relativePath)), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, relativePath), []byte("generated\n"), 0o644); err != nil {
+		content := "generated\n"
+		if relativePath == DockerEnvFileName {
+			content = "REPLOY_RUNTIME_DIR=" + dockerRuntimeVolumeName(project) + "\n"
+		}
+		if err := os.WriteFile(filepath.Join(dir, relativePath), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

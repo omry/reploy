@@ -716,18 +716,24 @@ func makeSingleFileConfigAppCommandDeployment(t *testing.T) string {
 }
 
 func stubConfigCheckRunner(run func(CommandSpec, RunOptions) error) func() {
-	previous := runConfigCheckCommand
+	previousConfigCheck := runConfigCheckCommand
+	previousRuntimeVolumeInit := runRuntimeVolumeInitCommand
 	runConfigCheckCommand = run
+	runRuntimeVolumeInitCommand = func(CommandSpec, RunOptions) error { return nil }
 	return func() {
-		runConfigCheckCommand = previous
+		runConfigCheckCommand = previousConfigCheck
+		runRuntimeVolumeInitCommand = previousRuntimeVolumeInit
 	}
 }
 
 func stubAppCommandRunner(run func(CommandSpec, RunOptions) error) func() {
-	previous := runAppCommand
+	previousAppCommand := runAppCommand
+	previousRuntimeVolumeInit := runRuntimeVolumeInitCommand
 	runAppCommand = run
+	runRuntimeVolumeInitCommand = func(CommandSpec, RunOptions) error { return nil }
 	return func() {
-		runAppCommand = previous
+		runAppCommand = previousAppCommand
+		runRuntimeVolumeInitCommand = previousRuntimeVolumeInit
 	}
 }
 

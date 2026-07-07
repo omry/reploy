@@ -67,6 +67,9 @@ func TestInitWritesDeploymentDirectory(t *testing.T) {
 	if !strings.Contains(dockerEnv, "REPLOY_DEPLOYMENT_SCOPE=staging") {
 		t.Fatalf("docker.env should identify staging scope:\n%s", dockerEnv)
 	}
+	if !strings.Contains(dockerEnv, "REPLOY_RUNTIME_DIR=demo-staging-") || !strings.Contains(dockerEnv, "-runtime") {
+		t.Fatalf("docker.env should default the runtime cache to a named Docker volume:\n%s", dockerEnv)
+	}
 	if !strings.Contains(dockerEnv, "REPLOY_HOST_PORT=18075") || !strings.Contains(dockerEnv, "REPLOY_CONTAINER_PORT=18075") {
 		t.Fatalf("docker.env should use install.ports.staging defaults:\n%s", dockerEnv)
 	}
@@ -115,6 +118,90 @@ func TestInitWritesDeploymentDirectory(t *testing.T) {
 	state := readFile(t, filepath.Join(deployDir, StateFileName))
 	if !strings.Contains(state, `"target": "docker"`) || !strings.Contains(state, `"phase": "staged"`) {
 		t.Fatalf("state missing target/phase:\n%s", state)
+	}
+}
+
+func TestMaterializeRuntimeComposeDeclaresNamedRuntimeVolume(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_RUNTIME_DIR": "reploy-runtime-test"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := materializeRuntimeCompose(deployDir); err != nil {
+		t.Fatal(err)
+	}
+	compose := readFile(t, filepath.Join(deployDir, ComposeFileName))
+	for _, want := range []string{
+		"- ${REPLOY_RUNTIME_DIR:-demo-staging",
+		"volumes:\n  reploy-runtime-test:\n    name: reploy-runtime-test\n    external: true\n",
+	} {
+		if !strings.Contains(compose, want) {
+			t.Fatalf("compose missing %q:\n%s", want, compose)
+		}
+	}
+}
+
+func TestRuntimeVolumeInitCommandUsesConfiguredContainerUser(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{
+		"REPLOY_RUNTIME_DIR":    "reploy-runtime-test",
+		"REPLOY_CONTAINER_USER": "123:456",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	spec, ok, err := RuntimeVolumeInitCommand(deployDir, "demo-project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected named runtime volume init command")
+	}
+	for _, want := range [][]string{
+		{"compose", "--project-name", "demo-project"},
+		{"run", "--rm", "--no-deps", "--user", "0"},
+		{"--entrypoint", "sh", "-e", "REPLOY_RUNTIME_OWNER=123:456", "app"},
+		{"-c", `mkdir -p /reploy-runtime && chown "$REPLOY_RUNTIME_OWNER" /reploy-runtime`},
+	} {
+		if !containsInOrder(spec.Args, want) {
+			t.Fatalf("runtime volume init args missing %q:\n%#v", want, spec.Args)
+		}
+	}
+}
+
+func TestRuntimeVolumeInitCommandIgnoresFilesystemRuntimeDir(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertDockerEnvValues(deployDir, map[string]string{"REPLOY_RUNTIME_DIR": "./.reploy/runtime"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok, err := RuntimeVolumeInitCommand(deployDir, "demo-project"); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatal("filesystem runtime dir should not need named volume init")
 	}
 }
 
@@ -1290,6 +1377,11 @@ func TestUpdateRefreshesGeneratedFilesAndPreservesLocalState(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(deployDir, DockerEnvFileName), []byte("LOCAL=1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	hash, err := pathIdentityHash(deployDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagingID := "demo-staging-" + hash
 
 	results, err := Update(UpdateOptions{Dir: deployDir})
 	if err != nil {
@@ -1298,8 +1390,9 @@ func TestUpdateRefreshesGeneratedFilesAndPreservesLocalState(t *testing.T) {
 	if len(results) == 0 {
 		t.Fatal("expected update results")
 	}
-	if got := readFile(t, filepath.Join(deployDir, DockerEnvFileName)); got != "LOCAL=1\n" {
-		t.Fatalf("docker.env was not preserved: %q", got)
+	wantDockerEnv := "LOCAL=1\n\nREPLOY_RUNTIME_DIR=" + stagingID + "-runtime\n"
+	if got := readFile(t, filepath.Join(deployDir, DockerEnvFileName)); got != wantDockerEnv {
+		t.Fatalf("docker.env = %q, want %q", got, wantDockerEnv)
 	}
 }
 
@@ -1340,15 +1433,21 @@ func TestUpdatePreservesLocallyEditedDockerEnv(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(deployDir, DockerEnvFileName), []byte(localDockerEnv), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	hash, err := pathIdentityHash(deployDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagingID := "demo-staging-" + hash
 
 	results, err := Update(UpdateOptions{Dir: deployDir})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	assertResultStatus(t, results, filepath.Join(deployDir, DockerEnvFileName), deploy.UpdateStatusUpToDate)
-	if got := readFile(t, filepath.Join(deployDir, DockerEnvFileName)); got != localDockerEnv {
-		t.Fatalf("docker.env was not preserved: %q", got)
+	assertResultStatus(t, results, filepath.Join(deployDir, DockerEnvFileName), deploy.UpdateStatusUpdated)
+	wantDockerEnv := localDockerEnv + "\nREPLOY_RUNTIME_DIR=" + stagingID + "-runtime\n"
+	if got := readFile(t, filepath.Join(deployDir, DockerEnvFileName)); got != wantDockerEnv {
+		t.Fatalf("docker.env = %q, want %q", got, wantDockerEnv)
 	}
 }
 

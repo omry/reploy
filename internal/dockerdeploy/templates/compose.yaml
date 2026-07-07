@@ -20,7 +20,7 @@ services:
 {{CONFIG_VOLUMES}}
       - ${REPLOY_REQUIREMENTS_FILE:?set REPLOY_REQUIREMENTS_FILE}:/requirements.txt:ro
       - ${REPLOY_BUNDLE_DIR:?set REPLOY_BUNDLE_DIR}:/bundle:ro
-      - ${REPLOY_RUNTIME_DIR:-./.reploy/runtime}:/reploy-runtime
+      - ${REPLOY_RUNTIME_DIR:-{{DEFAULT_RUNTIME_DIR}}}:/reploy-runtime
 {{LOCAL_SOURCE_VOLUMES}}
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -73,8 +73,8 @@ services:
       };
       run_pip_install() {
         if [ -n "$${REPLOY_PIP_VERBOSE:-}" ]; then
-          "$$venv_python" -m pip --disable-pip-version-check install "$$@";
-        elif "$$venv_python" -m pip --disable-pip-version-check install -q "$$@" >"$$pip_log" 2>&1; then
+          "$$venv_python" -m pip --disable-pip-version-check install --progress-bar off --root-user-action ignore "$$@";
+        elif "$$venv_python" -m pip --disable-pip-version-check install -q --progress-bar off --root-user-action ignore "$$@" >"$$pip_log" 2>&1; then
           rm -f "$$pip_log";
         else
           cat "$$pip_log" >&2;

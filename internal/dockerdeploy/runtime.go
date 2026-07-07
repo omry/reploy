@@ -55,6 +55,15 @@ func Runtime(options RuntimeOptions) error {
 	if err := ensureRuntimeCompose(options.Dir); err != nil {
 		return fmt.Errorf("ensure runtime compose: %w", err)
 	}
+	if runtimeActionNeedsBundle(options.Action) {
+		projectName, err := deploymentComposeProjectName(options.Dir)
+		if err != nil {
+			return err
+		}
+		if err := ensureRuntimeNamedVolumeWritable(options.Dir, projectName, options.DockerPreflightTimeout); err != nil {
+			return err
+		}
+	}
 	spec, err := RuntimeCommandWithOptions(options.Dir, options.Action, RuntimeCommandOptions{Follow: options.Follow, Tail: options.Tail})
 	if err != nil {
 		return err

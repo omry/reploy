@@ -193,6 +193,10 @@ func writeRuntimeCompose(dir string, pack deploy.AppPack, roots []deploy.Artifac
 	if err != nil {
 		return UpdateResult{}, err
 	}
+	compose, err = declareRuntimeVolumeIfNeeded(dir, compose)
+	if err != nil {
+		return UpdateResult{}, err
+	}
 	path := filepath.Join(dir, ComposeFileName)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return UpdateResult{}, err
@@ -202,6 +206,40 @@ func writeRuntimeCompose(dir string, pack deploy.AppPack, roots []deploy.Artifac
 		return UpdateResult{}, err
 	}
 	return UpdateResult{Path: path, Status: status, Ownership: "runtime", Reason: "materialized Docker Compose runtime file"}, nil
+}
+
+func declareRuntimeVolumeIfNeeded(dir string, compose string) (string, error) {
+	values, err := readDockerEnv(dir)
+	if err != nil {
+		return "", err
+	}
+	name := strings.TrimSpace(values["REPLOY_RUNTIME_DIR"])
+	if !isDockerNamedVolumeReference(name) {
+		return compose, nil
+	}
+	if !strings.Contains(compose, "\nvolumes:\n") {
+		compose += "\nvolumes:\n"
+	}
+	if strings.Contains(compose, "\n  "+name+":\n") {
+		return compose, nil
+	}
+	return compose + fmt.Sprintf("  %s:\n    name: %s\n    external: true\n", name, name), nil
+}
+
+func isDockerNamedVolumeReference(value string) bool {
+	if value == "" || value == "." || value == ".." {
+		return false
+	}
+	if strings.HasPrefix(value, ".") || filepath.IsAbs(value) || strings.ContainsAny(value, `/\:`) {
+		return false
+	}
+	for _, r := range value {
+		valid := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '.' || r == '-'
+		if !valid {
+			return false
+		}
+	}
+	return true
 }
 
 func locallyModifiedGeneratedFiles(dir string, updates []generatedUpdate, manifest deploy.DeploymentManifest) ([]string, error) {
@@ -370,9 +408,27 @@ func updateDockerEnvFile(dir string, pack deploy.AppPack, dockerIdentity string,
 		"REPLOY_CONTAINER_NAME":      service.ContainerName,
 		"REPLOY_DOCKER_NETWORK_NAME": service.NetworkName,
 	}
+	values, err := readDockerEnv(dir)
+	if err != nil {
+		return err
+	}
+	runtimeValue, runtimePresent := values["REPLOY_RUNTIME_DIR"]
+	if shouldUpdateGeneratedRuntimeDir(runtimeValue) {
+		updates["REPLOY_RUNTIME_DIR"] = dockerRuntimeVolumeName(dockerIdentity)
+	}
 	changed, err := updateExistingDockerEnvValues(dir, updates)
 	if err != nil {
 		return err
+	}
+	if !runtimePresent {
+		runtimeDir := updates["REPLOY_RUNTIME_DIR"]
+		if runtimeDir != "" {
+			appended, err := upsertDockerEnvValues(dir, map[string]string{"REPLOY_RUNTIME_DIR": runtimeDir})
+			if err != nil {
+				return err
+			}
+			changed = changed || appended
+		}
 	}
 	if changed {
 		*results = append(*results, UpdateResult{Path: path, Status: deploy.UpdateStatusUpdated, Ownership: "local", Reason: "updated Reploy-managed Docker identity"})
@@ -380,6 +436,11 @@ func updateDockerEnvFile(dir string, pack deploy.AppPack, dockerIdentity string,
 	}
 	*results = append(*results, UpdateResult{Path: path, Status: deploy.UpdateStatusUpToDate, Ownership: "local", Reason: "preserved operator-edited Docker environment"})
 	return nil
+}
+
+func shouldUpdateGeneratedRuntimeDir(value string) bool {
+	value = strings.TrimSpace(value)
+	return value == "" || value == "./"+RuntimeDirName || value == RuntimeDirName
 }
 
 func ensureInstallDirs(dir string, deploymentDirs deploy.DockerDeploymentDirs, managedPaths deploy.InstallManagedPathsConfig, results *[]UpdateResult) error {

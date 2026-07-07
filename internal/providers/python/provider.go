@@ -271,6 +271,10 @@ func InstallCheckArgv() []string {
 		"--disable-pip-version-check",
 		"install",
 		"--no-cache-dir",
+		"--progress-bar",
+		"off",
+		"--root-user-action",
+		"ignore",
 		"--target",
 		"/tmp/reploy-wheelhouse-check",
 		"--no-index",
@@ -289,6 +293,8 @@ func PrepareWheelhouseArgv(pypiOnly bool) []string {
 		"--disable-pip-version-check",
 		"wheel",
 		"--no-cache-dir",
+		"--progress-bar",
+		"off",
 	}
 	if !pypiOnly {
 		args = append(args, "--find-links", "/bundle")
@@ -303,6 +309,8 @@ func SourceWheelArgv() []string {
 		"pip",
 		"--disable-pip-version-check",
 		"wheel",
+		"--progress-bar",
+		"off",
 		"--no-deps",
 		"--no-build-isolation",
 		"--wheel-dir",
@@ -318,6 +326,10 @@ func UpgradeResolveArgv(pypiOnly bool) []string {
 		"pip",
 		"--disable-pip-version-check",
 		"install",
+		"--progress-bar",
+		"off",
+		"--root-user-action",
+		"ignore",
 		"--dry-run",
 		"--ignore-installed",
 	}
