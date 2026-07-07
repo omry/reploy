@@ -114,7 +114,7 @@ func TestParseGlobalDeploymentOptionsDockerTimeout(t *testing.T) {
 func TestParseDockerBundleOptionsBuildBackends(t *testing.T) {
 	options, err := parseDockerBundleOptions([]string{"--wheelhouse-backend", "pip", "--build-backend=uv", "--dir", "stage"}, dockerBundleParseOptions{
 		AllowWheelhouseBackend: true,
-		AllowBuildBackend:     true,
+		AllowBuildBackend:      true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -3365,6 +3365,7 @@ func TestDockerBundleCleanRemovesBuiltWheels(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
+	useFilesystemRuntimeCache(t, deployDir)
 	builtWheel := filepath.Join(deployDir, dockerdeploy.BundleDirName, "demo_suite-1.2.3-py3-none-any.whl")
 	if err := os.WriteFile(builtWheel, []byte("wheel\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -3392,6 +3393,7 @@ func TestDockerBundleCleanVerboseReportsRemovedWheels(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
+	useFilesystemRuntimeCache(t, deployDir)
 	builtWheel := filepath.Join(deployDir, dockerdeploy.BundleDirName, "demo_suite-1.2.3-py3-none-any.whl")
 	if err := os.WriteFile(builtWheel, []byte("wheel\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -3579,6 +3581,30 @@ func TestDockerInfoShowsDeploymentState(t *testing.T) {
 func makeCLITestPack(t *testing.T) string {
 	t.Helper()
 	return makeCLITestPackWithManifest(t, cliTestPackManifest())
+}
+
+func useFilesystemRuntimeCache(t *testing.T, deployDir string) {
+	t.Helper()
+	path := filepath.Join(deployDir, dockerdeploy.DockerEnvFileName)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(content), "\n"), "\n")
+	replaced := false
+	for index, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "REPLOY_RUNTIME_DIR=") {
+			lines[index] = "REPLOY_RUNTIME_DIR=./" + dockerdeploy.RuntimeDirName
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		lines = append(lines, "", "REPLOY_RUNTIME_DIR=./"+dockerdeploy.RuntimeDirName)
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func makeCLITestSourcePack(t *testing.T) string {
