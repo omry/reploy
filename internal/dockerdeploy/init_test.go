@@ -712,23 +712,23 @@ docker:
     default_port: "12525"
     path: /health
   default_command: serve
+  command_defaults:
+    container:
+      argv_prefix:
+        - mailhub-server
+        - --config
+        - ${MAILHUB_CONFIG_NAME}
   commands:
     serve:
       container:
-        argv:
-          - mailhub-server
-          - --config
-          - ${MAILHUB_CONFIG_NAME}
+        argv_suffix:
           - serve
     config_check:
       trigger:
         - config
         - check
       container:
-        argv:
-          - mailhub-server
-          - --config
-          - ${MAILHUB_CONFIG_NAME}
+        argv_suffix:
           - config
           - check
 `)
@@ -832,7 +832,7 @@ docker:
   commands:
     serve:
       container:
-        argv:
+        argv_override:
           - custom-serve
           - --name
           - ${DEMO_CONFIG_NAME}
@@ -843,7 +843,7 @@ docker:
       forward_flags:
         - --live
       container:
-        argv:
+        argv_override:
           - custom-check
           - --name
           - ${DEMO_CONFIG_NAME}
@@ -854,7 +854,7 @@ docker:
       app_command: true
       forward_args: true
       container:
-        argv:
+        argv_override:
           - custom-show
           - --name
           - ${DEMO_CONFIG_NAME}
@@ -1068,19 +1068,20 @@ docker:
     default_port: "18080"
     path: /health
   default_command: serve
+  command_defaults:
+    container:
+      argv_prefix: [demo-server]
   commands:
     serve:
       container:
-        argv:
-          - demo-server
+        argv_suffix:
           - serve
     config_check:
       trigger:
         - config
         - check
       container:
-        argv:
-          - demo-server
+        argv_suffix:
           - config
           - check
 `)
@@ -1270,11 +1271,13 @@ docker:
     path: /_health_
     tls_verify: false
   default_command: serve
+  command_defaults:
+    container:
+      argv_prefix: [demo]
   commands:
     serve:
       container:
-        argv:
-          - demo
+        argv_suffix:
           - serve
 `)
 	pack := deploy.AppPack{
@@ -1760,15 +1763,18 @@ docker:
     path: /_health_
     tls_verify: false
   default_command: serve
+  command_defaults:
+    container:
+      argv_prefix:
+        - demo-server
+        - --config-dir
+        - /conf
+        - --config-name
+        - ${DEMO_CONFIG_NAME}
   commands:
     serve:
       container:
-        argv:
-          - demo-server
-          - --config-dir
-          - /conf
-          - --config-name
-          - ${DEMO_CONFIG_NAME}
+        argv_suffix:
           - serve
     config_check:
       trigger:
@@ -1777,12 +1783,7 @@ docker:
       forward_flags:
         - --live
       container:
-        argv:
-          - demo-server
-          - --config-dir
-          - /conf
-          - --config-name
-          - ${DEMO_CONFIG_NAME}
+        argv_suffix:
           - config
           - check
 `

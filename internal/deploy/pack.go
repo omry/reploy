@@ -125,9 +125,9 @@ type AppCommandConfig struct {
 }
 
 type rawAppCommandConfig struct {
-	Argv       []string `yaml:"argv"`
-	ArgvPrefix []string `yaml:"argv_prefix"`
-	ArgvSuffix []string `yaml:"argv_suffix"`
+	ArgvOverride []string `yaml:"argv_override"`
+	ArgvPrefix   []string `yaml:"argv_prefix"`
+	ArgvSuffix   []string `yaml:"argv_suffix"`
 }
 
 type DockerPackConfig struct {
@@ -495,6 +495,9 @@ func ParsePackManifest(content string) (PackManifest, error) {
 	if err := rejectRemovedRuntimeReadonlyField(content); err != nil {
 		return PackManifest{}, err
 	}
+	if err := validateDockerCommandArgvFields(content); err != nil {
+		return PackManifest{}, err
+	}
 	var raw rawPackManifest
 	if err := yaml.Unmarshal([]byte(content), &raw); err != nil {
 		return PackManifest{}, err
@@ -661,7 +664,7 @@ func ParsePackManifest(content string) (PackManifest, error) {
 			return PackManifest{}, fmt.Errorf("missing docker.commands.%s.trigger", command.Name)
 		}
 		if len(command.Container.Argv) == 0 {
-			return PackManifest{}, fmt.Errorf("missing docker.commands.%s.container.argv", command.Name)
+			return PackManifest{}, fmt.Errorf("missing docker.commands.%s.container.argv_suffix, docker.commands.%s.container.argv_prefix, or docker.commands.%s.container.argv_override", command.Name, command.Name, command.Name)
 		}
 	}
 	if !foundDefaultCommand {
@@ -680,6 +683,33 @@ func rejectRemovedRuntimeReadonlyField(content string) error {
 	}
 	if yamlNodeContainsKey(&node, "runtime_readonly") {
 		return fmt.Errorf("runtime_readonly has been replaced by writeable: true")
+	}
+	return nil
+}
+
+func validateDockerCommandArgvFields(content string) error {
+	var node yaml.Node
+	if err := yaml.Unmarshal([]byte(content), &node); err != nil {
+		return err
+	}
+	if yamlMappingPathContainsKey(&node, []string{"docker", "command_defaults", "container"}, "argv") {
+		return fmt.Errorf("docker.command_defaults.container.argv is not supported; use docker.command_defaults.container.argv_prefix")
+	}
+	if yamlMappingPathContainsKey(&node, []string{"docker", "command_defaults", "container"}, "argv_override") {
+		return fmt.Errorf("docker.command_defaults.container.argv_override is not supported; use docker.command_defaults.container.argv_prefix")
+	}
+	commandNames := yamlMappingChildKeys(&node, []string{"docker", "commands"})
+	for _, name := range commandNames {
+		containerPath := []string{"docker", "commands", name, "container"}
+		if yamlMappingPathContainsKey(&node, containerPath, "argv") {
+			return fmt.Errorf("docker.commands.%s.container.argv has been replaced by command_defaults.container.argv_prefix plus docker.commands.%s.container.argv_suffix; use argv_override only for explicit full-command overrides", name, name)
+		}
+		if !yamlMappingPathContainsKey(&node, containerPath, "argv_override") {
+			continue
+		}
+		if yamlMappingPathContainsKey(&node, containerPath, "argv_prefix") || yamlMappingPathContainsKey(&node, containerPath, "argv_suffix") {
+			return fmt.Errorf("docker.commands.%s.container.argv_override cannot be combined with argv_prefix or argv_suffix", name)
+		}
 	}
 	return nil
 }
@@ -706,6 +736,61 @@ func yamlNodeContainsKey(node *yaml.Node, key string) bool {
 		}
 	}
 	return false
+}
+
+func yamlMappingPathContainsKey(node *yaml.Node, path []string, key string) bool {
+	mapping := yamlMappingAtPath(node, path)
+	if mapping == nil {
+		return false
+	}
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			return true
+		}
+	}
+	return false
+}
+
+func yamlMappingChildKeys(node *yaml.Node, path []string) []string {
+	mapping := yamlMappingAtPath(node, path)
+	if mapping == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(mapping.Content)/2)
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		keys = append(keys, mapping.Content[i].Value)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func yamlMappingAtPath(node *yaml.Node, path []string) *yaml.Node {
+	if node == nil {
+		return nil
+	}
+	if node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
+		node = node.Content[0]
+	}
+	for _, key := range path {
+		if node.Kind != yaml.MappingNode {
+			return nil
+		}
+		var next *yaml.Node
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			if node.Content[i].Value == key {
+				next = node.Content[i+1]
+				break
+			}
+		}
+		if next == nil {
+			return nil
+		}
+		node = next
+	}
+	if node.Kind != yaml.MappingNode {
+		return nil
+	}
+	return node
 }
 
 func normalizeAndValidateInstallConfig(manifest *PackManifest) error {
@@ -1454,8 +1539,8 @@ func boolDefault(value *bool, defaultValue *bool) bool {
 }
 
 func effectiveDockerCommandArgv(command rawAppCommandConfig, defaults rawAppCommandConfig) []string {
-	if len(command.Argv) > 0 {
-		return command.Argv
+	if len(command.ArgvOverride) > 0 {
+		return command.ArgvOverride
 	}
 	prefix := command.ArgvPrefix
 	if len(prefix) == 0 {

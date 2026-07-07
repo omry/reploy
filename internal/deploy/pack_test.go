@@ -270,7 +270,7 @@ docker:
     different_tool:
       trigger: [debug, other-tool]
       container:
-        argv: [other-tool, inspect]
+        argv_override: [other-tool, inspect]
 `)
 	if err != nil {
 		t.Fatal(err)
@@ -317,6 +317,28 @@ docker:
 	differentTool := dockerCommandByName(t, manifest, "different_tool")
 	if got := strings.Join(differentTool.Container.Argv, " "); got != "other-tool inspect" {
 		t.Fatalf("different_tool argv = %q", got)
+	}
+}
+
+func TestParsePackManifestRejectsRemovedDockerCommandArgv(t *testing.T) {
+	manifest := strings.Replace(packTestManifest(), "        argv_suffix:\n          - serve\n", "        argv:\n          - demo-server\n          - serve\n", 1)
+	_, err := ParsePackManifest(manifest)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "docker.commands.serve.container.argv has been replaced") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParsePackManifestRejectsMixedDockerArgvOverride(t *testing.T) {
+	manifest := strings.Replace(packTestManifest(), "        argv_suffix:\n          - serve\n", "        argv_override:\n          - other-tool\n          - serve\n        argv_suffix:\n          - serve\n", 1)
+	_, err := ParsePackManifest(manifest)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "docker.commands.serve.container.argv_override cannot be combined with argv_prefix or argv_suffix") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -393,11 +415,13 @@ docker:
     bundle: bundle
     data: data
   default_command: serve
+  command_defaults:
+    container:
+      argv_prefix: [demo]
   commands:
     serve:
       container:
-        argv:
-          - demo
+        argv_suffix:
           - serve
 `)
 	if err != nil {
@@ -1107,11 +1131,13 @@ docker:
     bundle: bundle
     data: data
   default_command: serve
+  command_defaults:
+    container:
+      argv_prefix: [demo]
   commands:
     serve:
       container:
-        argv:
-          - demo
+        argv_suffix:
           - serve
 `)
 	if err == nil {
@@ -1161,11 +1187,13 @@ docker:
     bundle: bundle
     data: data
   default_command: serve
+  command_defaults:
+    container:
+      argv_prefix: [demo]
   commands:
     serve:
       container:
-        argv:
-          - demo
+        argv_suffix:
           - serve
 `)
 	if err == nil {
@@ -1463,12 +1491,13 @@ docker:
     bundle: bundle
     data: data
   default_command: serve
+  command_defaults:
+    container:
+      argv_prefix: [demo-server]
   commands:
     serve:
       container:
-        argv:
-          - demo-server
-          - serve
+        argv_suffix: [serve]
     config_check:
       trigger:
         - config
@@ -1476,14 +1505,7 @@ docker:
       forward_flags:
         - --live
       container:
-        argv:
-          - demo-server
-          - --config-dir
-          - /conf
-          - --config-name
-          - ${DEMO_CONFIG_NAME}
-          - config
-          - check
+        argv_suffix: [--config-dir, /conf, --config-name, "${DEMO_CONFIG_NAME}", config, check]
 `)
 	if err == nil {
 		t.Fatal("expected error")
@@ -1573,15 +1595,18 @@ docker:
     bundle: bundle
     data: data
   default_command: serve
+  command_defaults:
+    container:
+      argv_prefix:
+        - demo-server
+        - --config-dir
+        - /conf
+        - --config-name
+        - ${DEMO_CONFIG_NAME}
   commands:
     serve:
       container:
-        argv:
-          - demo-server
-          - --config-dir
-          - /conf
-          - --config-name
-          - ${DEMO_CONFIG_NAME}
+        argv_suffix:
           - serve
     config_check:
       trigger:
@@ -1593,12 +1618,7 @@ docker:
         - --live
         - --profile
       container:
-        argv:
-          - demo-server
-          - --config-dir
-          - /conf
-          - --config-name
-          - ${DEMO_CONFIG_NAME}
+        argv_suffix:
           - config
           - check
     bootstrap_server:
@@ -1609,12 +1629,7 @@ docker:
       forward_flags:
         - --force
       container:
-        argv:
-          - demo-server
-          - --config-dir
-          - /conf
-          - --config-name
-          - ${DEMO_CONFIG_NAME}
+        argv_suffix:
           - bootstrap
           - demo
     bootstrap_plugin:
@@ -1624,12 +1639,7 @@ docker:
       app_command: true
       forward_args: true
       container:
-        argv:
-          - demo-server
-          - --config-dir
-          - /conf
-          - --config-name
-          - ${DEMO_CONFIG_NAME}
+        argv_suffix:
           - bootstrap
           - plugin
     config_activate:
@@ -1639,12 +1649,7 @@ docker:
       app_command: true
       forward_args: true
       container:
-        argv:
-          - demo-server
-          - --config-dir
-          - /conf
-          - --config-name
-          - ${DEMO_CONFIG_NAME}
+        argv_suffix:
           - config
           - activate
     config_show:
@@ -1654,12 +1659,7 @@ docker:
       app_command: true
       forward_args: true
       container:
-        argv:
-          - demo-server
-          - --config-dir
-          - /conf
-          - --config-name
-          - ${DEMO_CONFIG_NAME}
+        argv_suffix:
           - config
           - show
 `

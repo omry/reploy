@@ -31,11 +31,14 @@ docker:
   service:
     image: python:3.11-slim
   default_command: serve
+  command_defaults:
+    container:
+      argv_prefix:
+        - git-source-app
   commands:
     serve:
       container:
-        argv:
-          - git-source-app
+        argv_suffix: []
     config_check:
       trigger:
         - config
@@ -45,7 +48,6 @@ docker:
       forward_flags:
         - --live
       container:
-        argv:
-          - git-source-app
+        argv_suffix:
           - config
           - check

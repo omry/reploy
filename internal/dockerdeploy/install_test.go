@@ -2965,19 +2965,20 @@ docker:
     default_port: "18080"
     path: /health
   default_command: serve
+  command_defaults:
+    container:
+      argv_prefix: [demo-server]
   commands:
     serve:
       container:
-        argv:
-          - demo-server
+        argv_suffix:
           - serve
     config_check:
       trigger:
         - config
         - check
       container:
-        argv:
-          - demo-server
+        argv_suffix:
           - config
           - check
 `)

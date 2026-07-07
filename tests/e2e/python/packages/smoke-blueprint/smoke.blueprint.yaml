@@ -77,11 +77,14 @@ docker:
       lines:
         - "server url: ${server_url}"
   default_command: serve
+  command_defaults:
+    container:
+      argv_prefix:
+        - smoke-server
   commands:
     serve:
       container:
-        argv:
-          - smoke-server
+        argv_suffix:
           - serve
     config_check:
       trigger:
@@ -92,7 +95,6 @@ docker:
       forward_flags:
         - --live
       container:
-        argv:
-          - smoke-server
+        argv_suffix:
           - config
           - check

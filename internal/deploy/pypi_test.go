@@ -228,11 +228,13 @@ docker:
     bundle: .reploy/bundle
     data: data
   default_command: serve
+  command_defaults:
+    container:
+      argv_prefix: [demo]
   commands:
     serve:
       container:
-        argv:
-          - demo
+        argv_suffix:
           - serve
 `
 }

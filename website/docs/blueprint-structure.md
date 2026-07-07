@@ -298,7 +298,7 @@ docker:
     external_status:
       trigger: [status, external]
       container:
-        argv: [example-status-tool, inspect]
+        argv_override: [example-status-tool, inspect]
 ```
 
 `trigger` is the command path after `reploy app`. When omitted, Reploy derives
@@ -318,8 +318,10 @@ reploy app --commands --deployed-only --format json --dir DIR
 ```
 
 For container arguments, `argv_prefix` plus `argv_suffix` produces the final
-command. A command-level `container.argv` is a full override and does not use
-the prefix. Quote `${...}` placeholders inside flow-style YAML lists.
+command. Use command-level `container.argv_override` only as an explicit
+full-command escape hatch; it cannot be combined with `argv_prefix` or
+`argv_suffix` in the same `container` node. Quote `${...}` placeholders inside
+flow-style YAML lists.
 `forward_flags` and `forward_args` control what user input is passed through to
 the container command.
 

@@ -3904,15 +3904,18 @@ docker:
     path: /_health_
     tls_verify: false
   default_command: serve
+  command_defaults:
+    container:
+      argv_prefix:
+        - demo-server
+        - --config-dir
+        - /conf
+        - --config-name
+        - ${DEMO_CONFIG_NAME}
   commands:
     serve:
       container:
-        argv:
-          - demo-server
-          - --config-dir
-          - /conf
-          - --config-name
-          - ${DEMO_CONFIG_NAME}
+        argv_suffix:
           - serve
     config_check:
       trigger:
@@ -3922,12 +3925,7 @@ docker:
       forward_flags:
         - --live
       container:
-        argv:
-          - demo-server
-          - --config-dir
-          - /conf
-          - --config-name
-          - ${DEMO_CONFIG_NAME}
+        argv_suffix:
           - config
           - check
     bootstrap_server:
@@ -3938,12 +3936,7 @@ docker:
       forward_flags:
         - --force
       container:
-        argv:
-          - demo-server
-          - --config-dir
-          - /conf
-          - --config-name
-          - ${DEMO_CONFIG_NAME}
+        argv_suffix:
           - bootstrap
           - demo
     bootstrap_plugin:
@@ -3953,12 +3946,7 @@ docker:
       app_command: true
       forward_args: true
       container:
-        argv:
-          - demo-server
-          - --config-dir
-          - /conf
-          - --config-name
-          - ${DEMO_CONFIG_NAME}
+        argv_suffix:
           - bootstrap
           - plugin
     config_activate:
@@ -3968,12 +3956,7 @@ docker:
       app_command: true
       forward_args: true
       container:
-        argv:
-          - demo-server
-          - --config-dir
-          - /conf
-          - --config-name
-          - ${DEMO_CONFIG_NAME}
+        argv_suffix:
           - config
           - activate
     config_show:
@@ -3983,12 +3966,7 @@ docker:
       app_command: true
       forward_args: true
       container:
-        argv:
-          - demo-server
-          - --config-dir
-          - /conf
-          - --config-name
-          - ${DEMO_CONFIG_NAME}
+        argv_suffix:
           - config
           - show
     env_bootstrap:
@@ -3998,12 +3976,7 @@ docker:
       app_command: true
       forward_args: true
       container:
-        argv:
-          - demo-server
-          - --config-dir
-          - /conf
-          - --config-name
-          - ${DEMO_CONFIG_NAME}
+        argv_suffix:
           - env
           - bootstrap
     env_check:
@@ -4013,12 +3986,7 @@ docker:
       app_command: true
       forward_args: true
       container:
-        argv:
-          - demo-server
-          - --config-dir
-          - /conf
-          - --config-name
-          - ${DEMO_CONFIG_NAME}
+        argv_suffix:
           - env
           - check
 `

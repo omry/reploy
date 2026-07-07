@@ -656,8 +656,8 @@ func makeAppCommandDeployment(t *testing.T) string {
 	t.Helper()
 	manifest := strings.Replace(
 		testPackManifest(),
-		"    config_check:\n      trigger:\n        - config\n        - check\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n",
-		"    config_check:\n      trigger:\n        - config\n        - check\n      app_command: true\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n    bootstrap_plugin:\n      trigger:\n        - bootstrap\n        - plugin\n      app_command: true\n      forward_args: true\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - bootstrap\n          - plugin\n",
+		"    config_check:\n      trigger:\n        - config\n        - check\n      forward_flags:\n        - --live\n      container:\n        argv_suffix:\n          - config\n          - check\n",
+		"    config_check:\n      trigger:\n        - config\n        - check\n      app_command: true\n      forward_flags:\n        - --live\n      container:\n        argv_suffix:\n          - config\n          - check\n    bootstrap_plugin:\n      trigger:\n        - bootstrap\n        - plugin\n      app_command: true\n      forward_args: true\n      container:\n        argv_suffix:\n          - bootstrap\n          - plugin\n",
 		1,
 	)
 	packDir := makeTestPackWithManifest(t, manifest)
@@ -677,8 +677,8 @@ func makeMixedDeployedAppCommandDeployment(t *testing.T) string {
 	t.Helper()
 	manifest := strings.Replace(
 		testPackManifest(),
-		"    config_check:\n      trigger:\n        - config\n        - check\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n",
-		"    config_check:\n      trigger:\n        - config\n        - check\n      app_command: true\n      deployed_command: true\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n    bootstrap_plugin:\n      trigger:\n        - bootstrap\n        - plugin\n      app_command: true\n      forward_args: true\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - bootstrap\n          - plugin\n",
+		"    config_check:\n      trigger:\n        - config\n        - check\n      forward_flags:\n        - --live\n      container:\n        argv_suffix:\n          - config\n          - check\n",
+		"    config_check:\n      trigger:\n        - config\n        - check\n      app_command: true\n      deployed_command: true\n      forward_flags:\n        - --live\n      container:\n        argv_suffix:\n          - config\n          - check\n    bootstrap_plugin:\n      trigger:\n        - bootstrap\n        - plugin\n      app_command: true\n      forward_args: true\n      container:\n        argv_suffix:\n          - bootstrap\n          - plugin\n",
 		1,
 	)
 	packDir := makeTestPackWithManifest(t, manifest)
@@ -698,8 +698,8 @@ func makeSingleFileConfigAppCommandDeployment(t *testing.T) string {
 	t.Helper()
 	manifest := strings.Replace(
 		testPackManifestWithManagedFile(),
-		"    config_check:\n      trigger:\n        - config\n        - check\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n",
-		"    config_check:\n      trigger:\n        - config\n        - check\n      app_command: true\n      deployed_command: true\n      forward_flags:\n        - --live\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - config\n          - check\n    bootstrap_plugin:\n      trigger:\n        - bootstrap\n        - plugin\n      app_command: true\n      deployed_command: true\n      forward_args: true\n      container:\n        argv:\n          - demo-server\n          - --config-dir\n          - /conf\n          - --config-name\n          - ${DEMO_CONFIG_NAME}\n          - bootstrap\n          - plugin\n",
+		"    config_check:\n      trigger:\n        - config\n        - check\n      forward_flags:\n        - --live\n      container:\n        argv_suffix:\n          - config\n          - check\n",
+		"    config_check:\n      trigger:\n        - config\n        - check\n      app_command: true\n      deployed_command: true\n      forward_flags:\n        - --live\n      container:\n        argv_suffix:\n          - config\n          - check\n    bootstrap_plugin:\n      trigger:\n        - bootstrap\n        - plugin\n      app_command: true\n      deployed_command: true\n      forward_args: true\n      container:\n        argv_suffix:\n          - bootstrap\n          - plugin\n",
 		1,
 	)
 	packDir := makeTestPackWithManifest(t, manifest)

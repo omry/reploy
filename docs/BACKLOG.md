@@ -44,16 +44,6 @@ No active backlog items.
       prep; confirm verbose mode still exposes raw command output; and keep the
       evidence focused on progress/failure UX rather than package performance.
 
-- [ ] `P2` Remove old verbose Docker command argv compatibility.
-      Reploy currently supports both full `container.argv` commands and the
-      newer `command_defaults.container.argv_prefix` plus per-command
-      `container.argv_suffix` form. Before release, choose the compact command
-      schema as the only supported authoring style or define the narrow
-      exception for full command overrides. Acceptance checks: update parser
-      validation and errors; update blueprint docs and examples; migrate local
-      fixtures and known app blueprints; and keep tests that prove the chosen
-      schema produces the same generated runtime commands.
-
 - [ ] `P2` Improve bare `reploy` output when an app is installed.
       Top-level unknown app commands now suggest `reploy app ...`, and generic
       short usage is better, but the no-argument app summary still centers the
