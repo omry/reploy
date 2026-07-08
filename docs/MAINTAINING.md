@@ -62,6 +62,39 @@ On Linux, it covers the real-Docker staging runtime path. On macOS, and on
 Windows when run through `tools/e2e/smoke_windows.ps1`, it also covers the
 Docker-managed persistent install path with generated control scripts.
 
+For Windows release follow-up coverage, use the focused PowerShell wrapper:
+
+```powershell
+& '\\wsl$\ubuntu-24.04\home\omry\dev\reploy\tools\e2e\smoke_windows_followups.ps1'
+```
+
+By default it runs:
+
+- `PathSpaces`: full runtime and Docker-managed persistent-install smoke from a
+  normal Windows temp path whose directory name contains spaces.
+- `PortConflict`: starts the smoke app on an intentionally occupied localhost
+  port and expects `reploy up` to fail cleanly.
+
+Run an individual case with `-Case`:
+
+```powershell
+& '\\wsl$\ubuntu-24.04\home\omry\dev\reploy\tools\e2e\smoke_windows_followups.ps1' -Case PathSpaces
+& '\\wsl$\ubuntu-24.04\home\omry\dev\reploy\tools\e2e\smoke_windows_followups.ps1' -Case PortConflict
+```
+
+To check the Docker Desktop unavailable failure path, first stop Docker Desktop,
+then run:
+
+```powershell
+& '\\wsl$\ubuntu-24.04\home\omry\dev\reploy\tools\e2e\smoke_windows_followups.ps1' -Case DockerUnavailable
+```
+
+The follow-up wrapper records host, architecture, Docker command, Docker server
+metadata when available, the exact smoke case, and the per-case working
+directory. It defaults to non-color evidence output so PowerShell transcripts
+and `Tee-Object` logs do not expand progress spinner frames into repeated
+lines. Pass `-Color` only for interactive debugging.
+
 For Docker interruption behavior, run the opt-in Compose probe:
 
 ```bash

@@ -35,26 +35,7 @@ No active backlog items.
 
 ## Pre-release
 
-- [ ] `P2` Create a neutral demo service blueprint.
-      Build or adopt a small Python service that can showcase Reploy without
-      anchoring the story to Arbiter or another domain-specific app. The demo
-      should be realistic enough to exercise staging, bundle preparation,
-      configuration, persistence, ports, health checks, install, status/logs,
-      update, and uninstall. Acceptance checks: pick the demo service shape;
-      define the blueprint and app commands; make the service useful as a docs
-      and smoke/demo target; and capture the stage-to-install-to-operate
-      storyline.
-
-- [ ] `P2` Add Windows path and Docker Desktop failure-mode smoke follow-ups.
-      Core Windows Docker Desktop staging and Docker-managed persistent-install
-      evidence is recorded in `docs/archive/WINDOWS_PORT.md`. Remaining
-      follow-up coverage should target cases not proven by the successful
-      PowerShell smoke: project paths with spaces, normal drive-letter project
-      paths, Docker Desktop unavailable or wrong-container-mode failures,
-      bind-mount failures, and port conflicts. Acceptance checks: keep these as
-      focused follow-up smokes rather than blocking the core Windows
-      Docker-managed install evidence; record any support-boundary changes in
-      the archived Windows port appendix or support matrix.
+No active pre-release items.
 
 ## Post-v1
 

@@ -36,18 +36,30 @@ function Invoke-SmokePython {
     $Smoke = Join-Path $RepoRoot 'tools\e2e\smoke'
     $SmokeArgs = @($Smoke) + $PrefixArgs + @('--reploy', $Reploy, '--color', '--runtime', '--persistent-install') + $ScriptArgs
     Write-Host ('+ ' + $PythonPath + ' ' + ($SmokeArgs -join ' '))
-    & $PythonPath @SmokeArgs
-    exit $LASTEXITCODE
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & $PythonPath @SmokeArgs 2>&1 | ForEach-Object { Write-Host $_ }
+    $ExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $PreviousErrorActionPreference
+    return $ExitCode
 }
 
 $Python = Get-Command python -ErrorAction SilentlyContinue
 if ($null -ne $Python) {
-    Invoke-SmokePython -PythonPath $Python.Source
+    $ExitCode = Invoke-SmokePython -PythonPath $Python.Source
+    if ($ExitCode -ne 0) {
+        throw "smoke failed with exit code $ExitCode"
+    }
+    return
 }
 
 $Py = Get-Command py -ErrorAction SilentlyContinue
 if ($null -ne $Py) {
-    Invoke-SmokePython -PythonPath $Py.Source -PrefixArgs @('-3')
+    $ExitCode = Invoke-SmokePython -PythonPath $Py.Source -PrefixArgs @('-3')
+    if ($ExitCode -ne 0) {
+        throw "smoke failed with exit code $ExitCode"
+    }
+    return
 }
 
 throw 'python or py is required to run tools\e2e\smoke'

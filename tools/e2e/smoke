@@ -40,6 +40,13 @@ def parse_args() -> argparse.Namespace:
         help="Keep the temporary smoke work directory for debugging.",
     )
     parser.add_argument(
+        "--workdir",
+        help=(
+            "Use this work directory instead of creating a temporary one. "
+            "The directory must be absent or empty."
+        ),
+    )
+    parser.add_argument(
         "--color",
         action="store_true",
         help="Force color output and use a smart terminal identity.",
@@ -88,6 +95,16 @@ def parse_args() -> argparse.Namespace:
         default="required",
         help="Control Docker-backed smoke phases. Defaults to required.",
     )
+    parser.add_argument(
+        "--port-conflict-probe",
+        action="store_true",
+        help="After bundle build/check, verify a staging up fails cleanly when the host port is already occupied.",
+    )
+    parser.add_argument(
+        "--docker-unavailable-probe",
+        action="store_true",
+        help="Verify preinstall doctor fails cleanly when Docker Desktop is unavailable.",
+    )
     args = parser.parse_args()
     if args.no_docker:
         if args.docker_mode != "required":
@@ -106,6 +123,14 @@ def parse_args() -> argparse.Namespace:
         )
     if args.runtime_volume and args.runtime_host_dir:
         parser.error("--runtime-volume cannot be combined with --runtime-host-dir")
+    if args.port_conflict_probe and args.docker_unavailable_probe:
+        parser.error("--port-conflict-probe cannot be combined with --docker-unavailable-probe")
+    if args.port_conflict_probe and args.docker_mode != "required":
+        parser.error("--port-conflict-probe requires Docker and cannot be combined with --no-docker or optional Docker mode")
+    if args.docker_unavailable_probe and (args.runtime or args.persistent_install):
+        parser.error("--docker-unavailable-probe cannot be combined with --runtime or --persistent-install")
+    if args.docker_unavailable_probe and args.docker_mode != "required":
+        parser.error("--docker-unavailable-probe cannot be combined with --no-docker or optional Docker mode")
     return args
 
 
@@ -196,6 +221,42 @@ def run(argv: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.Comple
         stdout="".join(stdout_chunks),
         stderr="".join(stderr_chunks),
     )
+
+
+def run_expect_failure(
+    argv: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    context: str,
+) -> subprocess.CompletedProcess[str]:
+    print("+ " + " ".join(argv), flush=True)
+    started = time.monotonic()
+    completed = subprocess.run(
+        argv,
+        cwd=cwd,
+        env=env,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.stdout:
+        sys.stdout.write(completed.stdout)
+        sys.stdout.flush()
+    if completed.stderr:
+        sys.stderr.write(completed.stderr)
+        sys.stderr.flush()
+    if completed.returncode == 0:
+        raise SystemExit(f"[smoke] {context} unexpectedly succeeded: {' '.join(argv)}")
+    print(
+        f"[smoke] expected failure observed for {context}: "
+        f"exit {completed.returncode}, elapsed {format_duration(time.monotonic() - started)}",
+        flush=True,
+    )
+    return completed
 
 
 def format_duration(seconds: float) -> str:
@@ -316,6 +377,9 @@ def cleanup_docker_volume(name: str, *, cwd: Path, env: dict[str, str]) -> None:
         return
     if shutil.which("docker") is None:
         return
+    available, _ = docker_available(env, cwd)
+    if not available:
+        return
     completed = subprocess.run(
         ["docker", "volume", "rm", "-f", name],
         cwd=cwd,
@@ -413,8 +477,73 @@ def update_env_file(path: Path, updates: dict[str, str]) -> None:
     path.write_text("\n".join(rewritten) + "\n")
 
 
-def make_workdir() -> Path:
-    return Path(tempfile.mkdtemp(prefix="reploy-e2e-smoke-"))
+def make_workdir(path: str | None = None) -> Path:
+    if path is None:
+        return Path(tempfile.mkdtemp(prefix="reploy-e2e-smoke-"))
+    workdir = Path(path)
+    if workdir.exists() and any(workdir.iterdir()):
+        raise SystemExit(f"--workdir must be absent or empty: {workdir}")
+    workdir.mkdir(parents=True, exist_ok=True)
+    (workdir / ".reploy-smoke-workdir").write_text("created by tools/e2e/smoke\n", encoding="utf-8")
+    return workdir
+
+
+def cleanup_workdir(workdir: Path) -> None:
+    marker = workdir / ".reploy-smoke-workdir"
+    if marker.exists():
+        shutil.rmtree(workdir, ignore_errors=True)
+        return
+    if workdir.name.startswith("reploy-e2e-smoke-"):
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def run_docker_unavailable_probe(reploy: Path, deploy_dir: Path, workdir: Path, env: dict[str, str]) -> None:
+    doctor = run_expect_failure(
+        [str(reploy), "doctor", "--preinstall", "--scope", install_scope(), "--dir", str(deploy_dir)],
+        cwd=workdir,
+        env=env,
+        context="Docker unavailable preinstall doctor",
+    )
+    output = completed_output(doctor)
+    require_contains(output, "Docker Desktop runtime is required", "Docker unavailable preinstall doctor")
+
+
+def run_port_conflict_probe(reploy: Path, deploy_dir: Path, workdir: Path, env: dict[str, str]) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        occupied_port = str(listener.getsockname()[1])
+        update_env_file(
+            deploy_dir / ".reploy" / "docker.env",
+            {
+                "REPLOY_HOST_BIND": "127.0.0.1",
+                "REPLOY_HOST_PORT": occupied_port,
+                "REPLOY_PORT_HTTPS_HOST_BIND": "127.0.0.1",
+                "REPLOY_PORT_HTTPS_HOST_PORT": occupied_port,
+                "REPLOY_PUBLIC_SCHEME": "https",
+            },
+        )
+        try:
+            up = run_expect_failure(
+                [str(reploy), "up", "--dir", str(deploy_dir)],
+                cwd=workdir,
+                env=env,
+                context=f"port conflict on 127.0.0.1:{occupied_port}",
+            )
+        finally:
+            subprocess.run(
+                [str(reploy), "down", "--dir", str(deploy_dir)],
+                cwd=workdir,
+                env=env,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+    require_contains(completed_output(up).lower(), "port", "port conflict output")
 
 
 def run_runtime_smoke(reploy: Path, deploy_dir: Path, workdir: Path, env: dict[str, str]) -> None:
@@ -549,6 +678,8 @@ def run_smoke(
     verbose_bundle: bool,
     runtime_volume: bool,
     runtime_host_dir: bool,
+    port_conflict_probe: bool,
+    docker_unavailable_probe: bool,
 ) -> None:
     repo_root = Path(__file__).resolve().parents[2]
     packages_dir = repo_root / "tests" / "e2e" / "python" / "packages"
@@ -580,7 +711,9 @@ def run_smoke(
     smoke_started = time.monotonic()
 
     docker_enabled = docker_mode != "skip"
-    if docker_enabled and not plan_only:
+    if docker_unavailable_probe:
+        docker_enabled = True
+    if docker_enabled and not plan_only and not docker_unavailable_probe:
         available, reason = docker_available(env, workdir)
         if not available:
             if docker_mode == "optional":
@@ -610,6 +743,11 @@ def run_smoke(
             "update output did not report an unchanged or updated deployment"
             f"\n--- output ---\n{update.stdout}"
         )
+
+    if docker_unavailable_probe:
+        run_docker_unavailable_probe(reploy, deploy_dir, workdir, env)
+        finish_smoke(reploy, workdir, deploy_dir, env, smoke_started)
+        return
 
     info = run([str(reploy), "info", "--dir", str(deploy_dir)], cwd=workdir, env=env)
     require_contains(info.stdout, "phase: staged", "info output")
@@ -675,6 +813,10 @@ def run_smoke(
         require_contains(bundle_all.stdout, "root\tsmoke-imap==0.1.0", "bundle list all")
         if runtime:
             run_runtime_smoke(reploy, deploy_dir, workdir, env)
+        if port_conflict_probe:
+            run_port_conflict_probe(reploy, deploy_dir, workdir, env)
+            finish_smoke(reploy, workdir, deploy_dir, env, smoke_started)
+            return
 
     if not docker_enabled:
         finish_smoke(reploy, workdir, deploy_dir, env, smoke_started)
@@ -740,7 +882,7 @@ def main() -> int:
         raise SystemExit(f"reploy binary is not executable: {reploy}")
 
     if args.keep_workdir:
-        workdir = make_workdir()
+        workdir = make_workdir(args.workdir)
         print(f"workdir: {workdir}")
         run_smoke(
             reploy,
@@ -753,9 +895,11 @@ def main() -> int:
             verbose_bundle=args.verbose_bundle,
             runtime_volume=args.runtime_volume,
             runtime_host_dir=args.runtime_host_dir,
+            port_conflict_probe=args.port_conflict_probe,
+            docker_unavailable_probe=args.docker_unavailable_probe,
         )
     else:
-        workdir = make_workdir()
+        workdir = make_workdir(args.workdir)
         try:
             run_smoke(
                 reploy,
@@ -768,10 +912,12 @@ def main() -> int:
                 verbose_bundle=args.verbose_bundle,
                 runtime_volume=args.runtime_volume,
                 runtime_host_dir=args.runtime_host_dir,
+                port_conflict_probe=args.port_conflict_probe,
+                docker_unavailable_probe=args.docker_unavailable_probe,
             )
         finally:
             cleanup_runtime_volume_from_deployment(workdir / "deployment", cwd=workdir, env=os.environ.copy())
-            shutil.rmtree(workdir, ignore_errors=True)
+            cleanup_workdir(workdir)
     return 0
 
 

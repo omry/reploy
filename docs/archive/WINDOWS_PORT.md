@@ -685,16 +685,44 @@ Evidence captured so far:
   output stayed under `[STAGING : smoke-app]`, and installed control-script
   output stayed under `[DEPLOYED : smoke-app]`.
 
-Still deferred as follow-up coverage beyond the core Windows Docker Desktop
-smoke:
+Still useful as optional hardening beyond the core Windows Docker Desktop
+smoke and the recorded follow-up evidence:
 
 - Docker Desktop failure-mode smoke for daemon unavailable, daemon timeout,
-  Linux-container mode missing, bind mount failure, and port conflict.
-- Path smoke for project paths with spaces, normal drive-letter project paths,
-  and any additional UNC or symlink/junction behavior that Reploy intends to
-  support. The 2026-07-06 manual smoke used a WSL UNC project path from
-  PowerShell and Windows temp install paths, so it is evidence for the native
-  PowerShell/Docker Desktop flow but not for every path variant.
+  Linux-container mode missing, and bind mount failure.
+- Additional path smoke for any UNC, symlink, or junction behavior that Reploy
+  intends to support. The 2026-07-06 manual smoke used a WSL UNC project path
+  from PowerShell, and the 2026-07-08 follow-up smoke used a normal Windows temp
+  path with spaces.
+
+Follow-up harness added after the first smoke:
+
+- `tools/e2e/smoke_windows_followups.ps1 -Case PathSpaces` runs the full
+  Windows runtime and Docker-managed persistent-install smoke from a normal
+  Windows temp directory whose name contains spaces.
+- `tools/e2e/smoke_windows_followups.ps1 -Case PortConflict` runs a focused
+  Docker-backed probe that occupies a localhost port and expects `reploy up`
+  to fail cleanly.
+- `tools/e2e/smoke_windows_followups.ps1 -Case DockerUnavailable` is intended
+  to be run after Docker Desktop is stopped; it stages without Docker and
+  expects `doctor --preinstall --scope user` to fail with the Docker Desktop
+  support-boundary message.
+
+Recorded follow-up evidence:
+
+- 2026-07-08 UTC, manual PowerShell smoke on Windows 10.0.26200 with Docker
+  Desktop 4.80.0 / Docker Engine 29.6.1: ran
+  `tools/e2e/smoke_windows_followups.ps1` from PowerShell with output captured
+  through `Tee-Object`. The default `PathSpaces` case completed staging,
+  bundle build/check/list, runtime `up`/`status`/`test`/`logs`/`down`,
+  `doctor --preinstall --scope user`, install dry-run, real Docker-managed
+  user install, generated PowerShell control-script `status`, `logs`, live
+  `config check`, `down`, uninstall with `--remove-dir`, `bundle clean`, and
+  final version check from a normal Windows temp path whose name contained
+  spaces. The default `PortConflict` case occupied a localhost port and
+  observed the expected Docker bind failure from `reploy up`. The evidence
+  wrapper ran without color, spinner-frame transcript noise, or PowerShell
+  `NativeCommandError` records, and returned to the interactive prompt.
 
 Candidate hosted-runner note: the 2026-06-28 `windows-2025` runner image
 manifest lists Docker 29.1.5, Docker Compose 2.40.3, and WSLv2. That makes
