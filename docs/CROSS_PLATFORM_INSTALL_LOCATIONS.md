@@ -232,6 +232,16 @@ Core variables:
 | `{{ system.data }}` | System-wide application data root |
 | `{{ reploy.install_root }}` | Reploy's default install root for this host/backend |
 
+The host-root mappings should follow platform conventions rather than Reploy
+invention. Python's `platformdirs` project and Go packages such as `adrg/xdg`
+are useful prior art for these names and edge cases, even though Reploy should
+not depend on them at runtime. Their breadth is a reminder that platform data
+directories are policy, not just string constants: Windows roaming versus local
+data, macOS application support locations, XDG overrides, app author/vendor
+naming, and distro quirks all need deliberate handling. Reploy should keep the
+initial mapping small and explicit, then use projects like `platformdirs` and
+`adrg/xdg` as reference material when expanding the semantic variable set.
+
 Initial mappings:
 
 | Variable | Linux | macOS | Windows |
