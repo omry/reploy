@@ -71,7 +71,7 @@ merge inspection, and troubleshooting. That need is broader than this demo, so
 recording support should be treated as a future documentation/video workflow
 concern rather than part of the app implementation.
 
-The public Reploy blueprint index should include `omegaconf-inspector` and
+The public Reploy blueprint index should include `omegaconf-inspector-demo` and
 point at the canonical GitHub-hosted blueprint. The in-repo demo walkthrough
 should stage from the local blueprint path so development and documentation can
 be tested before publishing:
@@ -321,7 +321,7 @@ local operator tool, not a network service.
 The first implementation should be considered good enough when:
 
 - a user can stage and bundle the demo from `examples/omegaconf-inspector`
-- the Reploy blueprint index can expose `omegaconf-inspector` through a
+- the Reploy blueprint index can expose `omegaconf-inspector-demo` through a
   GitHub-backed blueprint reference
 - the bundle includes FastAPI, Uvicorn, OmegaConf, and packaged static assets
 - the service starts under Reploy and passes `/_health_`

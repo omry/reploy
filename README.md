@@ -41,29 +41,33 @@ script options and other installation methods.
 
 ## Quickstart
 
-Start with a blueprint ref from the app author:
+Try Reploy with the included OmegaConf Inspector demo:
+
+OmegaConf Inspector is a small browser app for merging YAML config layers and
+inspecting the OmegaConf result. It is useful as a Reploy demo because it has
+real Python dependencies, service config, a browser UI, health checks, logs,
+control commands, and writable project data, but stays neutral enough to try
+without learning a domain-specific app first.
 
 ```bash
-APP_REF=arbiter-server
+APP_REF=omegaconf-inspector-demo
 
 # Create a self-contained staging workspace in ./reploy-staging.
 reploy stage "$APP_REF"
 
-# Configure the staged app before starting it.
-vim reploy-staging/conf/
-
-# Run an app-specific config check exposed by the blueprint.
+# Create and validate the demo service config.
+reploy app config init
 reploy app config check
 
 # Start and test the staged service.
 reploy up
 reploy test
 
-# Install the tested staging workspace.
-sudo "$(command -v reploy)" install --scope system --to /srv/arbiter
+# Install the tested staging workspace for the current user.
+reploy install --scope user --to "$PWD/omegaconf-inspector-installed"
 
 # Tail logs through the installed app control script.
-/srv/arbiter/arbiterctl logs --tail=100
+./omegaconf-inspector-installed/omegaconf-inspectorctl logs --tail=100
 ```
 
 Read the [app installation guide](https://reploy.yadan.net/docs/install-an-app)

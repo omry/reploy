@@ -1,0 +1,2 @@
+kind: Changed
+body: Resolve indexed shorthand pins by provider scheme, appending PyPI versions or Git refs instead of requiring version placeholders in index entries.

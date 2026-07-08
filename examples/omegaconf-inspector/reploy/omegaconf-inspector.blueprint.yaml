@@ -9,6 +9,7 @@ app:
     type: python
     identifier: omegaconf-inspector
     local_sources:
+      # the Python project root is one level up.
       omegaconf-inspector: ..
 
 install:
@@ -26,14 +27,10 @@ install:
         container_port: 8076
         public_scheme: http
   managed_paths:
-    dirs:
-      - path: conf
-        update: preserve
-        mount: /conf
-      - path: data
-        update: preserve
-        mount: /data
-        writeable: true
+    dirs: [
+      {path: conf, update: preserve, mount: /conf},
+      {path: data, update: preserve, mount: /data, writeable: true},
+    ]
 
 bundle:
   options: {}
@@ -57,92 +54,59 @@ docker:
   install:
     hooks:
       before_start:
-        - app:
-            - config
-            - check
+        - app: [config, check]
       after_start:
-        - health_check:
-            wait: true
-        - app:
-            - config
-            - check
-            - --live
+        - health_check: {wait: true}
+        - app: [config, check, --live]
     success:
       vars:
         server_url:
           server_url: true
-      lines:
-        - "inspector url: ${server_url}"
+      lines: ["inspector url: ${server_url}"]
   default_command: serve
   command_defaults:
     container:
-      argv_prefix:
-        - omegaconf-inspector
+      argv_prefix: [omegaconf-inspector]
   commands:
     serve:
       container:
-        argv_suffix:
-          - serve
+        argv_suffix: [serve]
     config_init:
-      trigger:
-        - config
-        - init
+      trigger: [config, init]
       app_command: true
       deployed_command: false
-      forward_flags:
-        - --force
+      forward_flags: [--force]
       container:
-        argv_suffix:
-          - config
-          - init
+        argv_suffix: [config, init]
     config_check:
-      trigger:
-        - config
-        - check
+      trigger: [config, check]
       app_command: true
       deployed_command: true
-      forward_flags:
-        - --live
+      forward_flags: [--live]
       container:
-        argv_suffix:
-          - config
-          - check
+        argv_suffix: [config, check]
     config_show:
-      trigger:
-        - config
-        - show
+      trigger: [config, show]
       app_command: true
       deployed_command: true
       container:
-        argv_suffix:
-          - config
-          - show
+        argv_suffix: [config, show]
     project_list:
-      trigger:
-        - project
-        - list
+      trigger: [project, list]
       app_command: true
       deployed_command: true
       container:
-        argv_suffix:
-          - project
-          - list
+        argv_suffix: [project, list]
     project_show:
-      trigger:
-        - project
-        - show
+      trigger: [project, show]
       app_command: true
       deployed_command: true
       forward_args: true
       container:
-        argv_suffix:
-          - project
-          - show
+        argv_suffix: [project, show]
     version:
-      trigger:
-        - version
+      trigger: [version]
       app_command: true
       deployed_command: true
       container:
-        argv_suffix:
-          - version
+        argv_suffix: [version]

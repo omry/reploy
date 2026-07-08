@@ -13,14 +13,19 @@ Blueprints can be referenced in three common ways.
 ## Indexed Shorthand
 
 ```bash
+reploy stage omegaconf-inspector-demo
 reploy stage arbiter-server
 reploy stage arbiter-server==0.9.3.dev1
 reploy install arbiter-server --scope <user|system>
 ```
 
 Shorthands are resolved through the Reploy blueprint index. The index entry is
-a single ref template. When it contains `{version}`, `name==VERSION`
-substitutes that version, while unpinned `name` substitutes `latest`.
+a single blueprint ref. When the user writes `name==VERSION`, Reploy appends
+the scheme-appropriate pin: `version=VERSION` for PyPI refs and `ref=VERSION`
+for Git/GitHub refs. Unpinned names use the provider default, such as the latest
+PyPI release or the Git repository's default branch.
+`omegaconf-inspector-demo` is the neutral Reploy demo app and resolves to the
+example blueprint in this repository.
 
 ## PyPI Package
 

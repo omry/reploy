@@ -12,6 +12,16 @@ Arbiter or another domain-specific service.
 ## Local Demo Flow
 
 ```bash
+reploy stage omegaconf-inspector-demo --dir /tmp/reploy-omegaconf-inspector-demo
+reploy app config init --dir /tmp/reploy-omegaconf-inspector-demo
+reploy app config check --dir /tmp/reploy-omegaconf-inspector-demo
+reploy bundle build --dir /tmp/reploy-omegaconf-inspector-demo
+reploy up --dir /tmp/reploy-omegaconf-inspector-demo
+```
+
+When working on the in-repo example, stage the local blueprint instead:
+
+```bash
 reploy stage file:examples/omegaconf-inspector/reploy --dir /tmp/reploy-omegaconf-inspector-demo
 reploy app config init --dir /tmp/reploy-omegaconf-inspector-demo
 reploy app config check --dir /tmp/reploy-omegaconf-inspector-demo

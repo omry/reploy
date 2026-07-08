@@ -49,17 +49,24 @@ directly from the blueprint and skip the persistent staging directory.
 
 ## Quickstart
 
-Start with the app author's blueprint ref:
+Try the included OmegaConf Inspector demo:
+
+OmegaConf Inspector is a small browser app for merging YAML config layers and
+inspecting the OmegaConf result. It is useful as a Reploy demo because it has
+real Python dependencies, service config, a browser UI, health checks, logs,
+control commands, and writable project data, but stays neutral enough to try
+without learning a domain-specific app first.
 
 ```bash
 # Install the Reploy CLI.
 curl -fsSL https://reploy.yadan.net/install.sh | sh
 
-# Create a staging workspace for the app. The default is reploy-staging/.
-reploy stage <app-blueprint-ref>
+# Create a staging workspace for the demo. The default is reploy-staging/.
+reploy stage omegaconf-inspector-demo
 
-# Configure the app in the staging directory before starting it.
-vim reploy-staging/conf/
+# Create and validate the demo service config.
+reploy app config init
+reploy app config check
 
 # Start the staged app.
 reploy up
@@ -71,7 +78,7 @@ reploy test
 Then install from the tested staging state:
 
 ```bash
-sudo reploy install --scope system --to /opt/example
+reploy install --scope user --to "$PWD/omegaconf-inspector-installed"
 ```
 
 The blueprint defines default install values such as the target path and
@@ -91,6 +98,7 @@ commands, inspect generated files, or test before installing.
 Blueprints can be referenced from packages, source repositories, or local files:
 
 ```bash
+reploy stage omegaconf-inspector-demo
 reploy stage example-app
 reploy stage git:https://github.com/org/example-app.git?ref=v1.2.3
 reploy stage file:./example.blueprint.yaml

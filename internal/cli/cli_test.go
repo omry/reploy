@@ -48,10 +48,10 @@ func setCLITestPackIndex(t *testing.T) {
   "schema_version": 1,
   "blueprints": {
     "demo-server": {
-      "ref": "pypi://demo-server/demo_server/reploy/demo-server.blueprint.yaml?version={version}"
+      "ref": "pypi://demo-server/demo_server/reploy/demo-server.blueprint.yaml"
     },
     "demo-suite": {
-      "ref": "pypi://demo-suite/demo_suite/reploy/demo-suite.blueprint.yaml?version={version}"
+      "ref": "pypi://demo-suite/demo_suite/reploy/demo-suite.blueprint.yaml"
     }
   }
 }
@@ -384,7 +384,7 @@ func TestUsageErrorsDoNotShowGlobalOnboarding(t *testing.T) {
 
 func TestPackIndexRefreshLoadsFileIndex(t *testing.T) {
 	indexPath := filepath.Join(t.TempDir(), "reploy-blueprint-index.json")
-	if err := os.WriteFile(indexPath, []byte(`{"schema_version":1,"blueprints":{"demo":{"ref":"pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml?version={version}"}}}`), 0o644); err != nil {
+	if err := os.WriteFile(indexPath, []byte(`{"schema_version":1,"blueprints":{"demo":{"ref":"pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml"}}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -430,7 +430,7 @@ func TestPackIndexNoArgsShowsNextSteps(t *testing.T) {
 		"Next steps:",
 		"reploy index update",
 		"reploy index search QUERY",
-		"reploy index show NAME",
+		"reploy index show NAME[==PIN]",
 		"Run 'reploy index --help' for blueprint index help.",
 	} {
 		if !strings.Contains(stderr, want) {
@@ -441,7 +441,7 @@ func TestPackIndexNoArgsShowsNextSteps(t *testing.T) {
 
 func TestPackIndexSearchAndShow(t *testing.T) {
 	indexPath := filepath.Join(t.TempDir(), "reploy-blueprint-index.json")
-	if err := os.WriteFile(indexPath, []byte(`{"schema_version":1,"blueprints":{"arbiter-server":{"ref":"pypi://arbiter-server/arbiter_server/reploy/arbiter.blueprint.yaml?version={version}"},"demo":{"ref":"pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml"}}}`), 0o644); err != nil {
+	if err := os.WriteFile(indexPath, []byte(`{"schema_version":1,"blueprints":{"arbiter-server":{"ref":"pypi://arbiter-server/arbiter_server/reploy/arbiter.blueprint.yaml"},"demo":{"ref":"pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml"},"github-demo":{"ref":"github://acme/demo/demo_pkg/reploy/demo.blueprint.yaml"}}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(packIndexURLEnv, "file:"+indexPath)
@@ -450,7 +450,7 @@ func TestPackIndexSearchAndShow(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if stdout != "arbiter-server\tpypi://arbiter-server/arbiter_server/reploy/arbiter.blueprint.yaml?version={version}\n" {
+	if stdout != "arbiter-server\tpypi://arbiter-server/arbiter_server/reploy/arbiter.blueprint.yaml\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	if stderr != "" {
@@ -461,7 +461,44 @@ func TestPackIndexSearchAndShow(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	for _, want := range []string{"name: arbiter-server", "ref: pypi://arbiter-server/arbiter_server/reploy/arbiter.blueprint.yaml?version={version}"} {
+	for _, want := range []string{"name: arbiter-server", "ref: pypi://arbiter-server/arbiter_server/reploy/arbiter.blueprint.yaml"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout)
+		}
+	}
+	if strings.Contains(stdout, "resolved ref:") {
+		t.Fatalf("unpinned show should not print a resolved ref:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+
+	code, stdout, stderr = runCLI("index", "show", "arbiter-server==1.2.3")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	for _, want := range []string{
+		"name: arbiter-server",
+		"ref: pypi://arbiter-server/arbiter_server/reploy/arbiter.blueprint.yaml",
+		"resolved ref: pypi://arbiter-server/arbiter_server/reploy/arbiter.blueprint.yaml?version=1.2.3",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout)
+		}
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+
+	code, stdout, stderr = runCLI("index", "show", "github-demo==feature/demo")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	for _, want := range []string{
+		"name: github-demo",
+		"ref: github://acme/demo/demo_pkg/reploy/demo.blueprint.yaml",
+		"resolved ref: github://acme/demo/demo_pkg/reploy/demo.blueprint.yaml?ref=feature%2Fdemo",
+	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout)
 		}
@@ -472,7 +509,7 @@ func TestPackIndexSearchAndShow(t *testing.T) {
 }
 
 func TestPackIndexRefreshDownloadsAndCachesHTTPIndex(t *testing.T) {
-	indexContent := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml?version={version}"}}}`
+	indexContent := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml"}}}`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, indexContent)
@@ -2583,7 +2620,7 @@ func TestParseDockerCommandOptionsRejectsDuplicatePack(t *testing.T) {
 }
 
 func TestParseDockerCommandOptionsLoadsPackIndexFromHTTPAndCache(t *testing.T) {
-	indexContent := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml?version={version}"}}}`
+	indexContent := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml"}}}`
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
@@ -2615,9 +2652,9 @@ func TestParseDockerCommandOptionsLoadsPackIndexFromHTTPAndCache(t *testing.T) {
 	}
 }
 
-func TestParseDockerCommandOptionsRequiresVersionPlaceholderForPinnedShorthand(t *testing.T) {
+func TestParseDockerCommandOptionsRejectsPinnedShorthandWhenRefAlreadyHasVersion(t *testing.T) {
 	indexPath := filepath.Join(t.TempDir(), "blueprint-index.json")
-	content := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml"}}}`
+	content := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml?version=1.0.0"}}}`
 	if err := os.WriteFile(indexPath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -2627,8 +2664,51 @@ func TestParseDockerCommandOptionsRequiresVersionPlaceholderForPinnedShorthand(t
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "must contain {version}") {
+	if !strings.Contains(err.Error(), "already declares version") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseDockerCommandOptionsRejectsRemovedVersionPlaceholder(t *testing.T) {
+	indexPath := filepath.Join(t.TempDir(), "blueprint-index.json")
+	content := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml?version={version}"}}}`
+	if err := os.WriteFile(indexPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(packIndexURLEnv, "file:"+indexPath)
+
+	_, err := parseDockerCommandOptions([]string{"demo==1.2.3"}, true)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "must not use the removed {version} placeholder") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseDockerCommandOptionsAppendsGitRefForPinnedGitHubShorthand(t *testing.T) {
+	indexPath := filepath.Join(t.TempDir(), "blueprint-index.json")
+	content := `{"schema_version":1,"blueprints":{"demo":{"ref":"github://acme/demo/demo_pkg/reploy/demo.blueprint.yaml"}}}`
+	if err := os.WriteFile(indexPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(packIndexURLEnv, "file:"+indexPath)
+
+	options, err := parseDockerCommandOptions([]string{"demo==feature/demo"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Pack.Scheme != "git" {
+		t.Fatalf("scheme = %q", options.Pack.Scheme)
+	}
+	if options.Pack.Source != "https://github.com/acme/demo.git" {
+		t.Fatalf("source = %q", options.Pack.Source)
+	}
+	if options.Pack.Subdir != "demo_pkg/reploy/demo.blueprint.yaml" {
+		t.Fatalf("subdir = %q", options.Pack.Subdir)
+	}
+	if options.Pack.Query.Get("ref") != "feature/demo" {
+		t.Fatalf("ref query = %#v", options.Pack.Query)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -367,7 +368,7 @@ func runPackIndex(commandName string, args []string, stdout io.Writer, stderr io
 		}
 		return 0
 	case "show":
-		name, err := parsePackIndexQuery(args[1:])
+		shorthand, err := parsePackIndexQuery(args[1:])
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy %s usage error: %v\n", commandName, err)
 			printPackIndexShortUsage(commandName, stderr)
@@ -378,12 +379,21 @@ func runPackIndex(commandName string, args []string, stdout io.Writer, stderr io
 			fmt.Fprintf(stderr, "reploy %s show error: %v\n", commandName, err)
 			return 1
 		}
-		entry, ok := index.Blueprints[name]
-		if !ok {
+		resolvedRef, found, err := expandPackShorthandFromIndex(shorthand, index)
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy %s show error: %v\n", commandName, err)
+			return 1
+		}
+		name := packShorthandName(shorthand)
+		if !found {
 			fmt.Fprintf(stderr, "reploy %s show error: unknown blueprint shorthand %q\n", commandName, name)
 			return 1
 		}
+		entry := index.Blueprints[name]
 		fmt.Fprintf(stdout, "name: %s\nref: %s\n", name, entry.Ref)
+		if resolvedRef != entry.Ref {
+			fmt.Fprintf(stdout, "resolved ref: %s\n", resolvedRef)
+		}
 		return 0
 	default:
 		if strings.HasPrefix(args[0], "-") {
@@ -2371,6 +2381,14 @@ type packIndexEntry struct {
 }
 
 func expandPackShorthand(value string) (string, bool, error) {
+	index, err := loadPackIndex(packIndexURL())
+	if err != nil {
+		return "", false, fmt.Errorf("load Reploy blueprint index: %w", err)
+	}
+	return expandPackShorthandFromIndex(value, index)
+}
+
+func expandPackShorthandFromIndex(value string, index packIndex) (string, bool, error) {
 	body, rawQuery, hasQuery := strings.Cut(value, "?")
 	name, version, hasVersion := strings.Cut(body, "==")
 	if strings.TrimSpace(name) == "" {
@@ -2378,10 +2396,6 @@ func expandPackShorthand(value string) (string, bool, error) {
 	}
 	if hasVersion && strings.TrimSpace(version) == "" {
 		return "", false, fmt.Errorf("blueprint shorthand %q has an empty version", name)
-	}
-	index, err := loadPackIndex(packIndexURL())
-	if err != nil {
-		return "", false, fmt.Errorf("load Reploy blueprint index: %w", err)
 	}
 	entry, found := index.Blueprints[name]
 	if !found {
@@ -2391,15 +2405,15 @@ func expandPackShorthand(value string) (string, bool, error) {
 	if template == "" {
 		return "", false, fmt.Errorf("blueprint shorthand %q in Reploy blueprint index is missing ref", name)
 	}
-	if hasVersion && !strings.Contains(template, "{version}") {
-		return "", false, fmt.Errorf("ref for blueprint shorthand %q must contain {version} to support version pins", name)
-	}
 	if strings.Contains(template, "{version}") {
-		selectedVersion := "latest"
-		if hasVersion {
-			selectedVersion = version
+		return "", false, fmt.Errorf("ref for blueprint shorthand %q must not use the removed {version} placeholder", name)
+	}
+	if hasVersion {
+		var err error
+		template, err = appendPackShorthandVersion(name, template, version)
+		if err != nil {
+			return "", false, err
 		}
-		template = strings.ReplaceAll(template, "{version}", selectedVersion)
 	}
 	if hasQuery {
 		separator := "?"
@@ -2409,6 +2423,43 @@ func expandPackShorthand(value string) (string, bool, error) {
 		template += separator + rawQuery
 	}
 	return template, true, nil
+}
+
+func appendPackShorthandVersion(name string, ref string, version string) (string, error) {
+	parsed, err := deploy.ParsePackRef(ref)
+	if err != nil {
+		return "", fmt.Errorf("parse ref for blueprint shorthand %q: %w", name, err)
+	}
+	parameter := ""
+	switch parsed.Scheme {
+	case "pypi":
+		parameter = "version"
+	case "git":
+		parameter = "ref"
+	default:
+		return "", fmt.Errorf("blueprint shorthand %q does not support version pins for %s refs", name, parsed.Scheme)
+	}
+	if packShorthandRefHasParameter(ref, parameter) || parsed.Scheme == "pypi" && strings.Contains(parsed.Source, "==") {
+		return "", fmt.Errorf("ref for blueprint shorthand %q already declares %s and cannot also use ==VERSION", name, parameter)
+	}
+	separator := "?"
+	if strings.Contains(ref, "?") {
+		separator = "&"
+	}
+	return ref + separator + parameter + "=" + url.QueryEscape(version), nil
+}
+
+func packShorthandRefHasParameter(ref string, parameter string) bool {
+	_, rawQuery, hasQuery := strings.Cut(ref, "?")
+	if !hasQuery {
+		return false
+	}
+	query, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return false
+	}
+	_, exists := query[parameter]
+	return exists
 }
 
 func packShorthandName(value string) string {
@@ -2809,7 +2860,7 @@ func printPackIndexShortUsage(commandName string, output io.Writer) {
 	fmt.Fprintln(output, "Next steps:")
 	fmt.Fprintf(output, "  reploy %s update\n", commandName)
 	fmt.Fprintf(output, "  reploy %s search QUERY\n", commandName)
-	fmt.Fprintf(output, "  reploy %s show NAME\n", commandName)
+	fmt.Fprintf(output, "  reploy %s show NAME[==PIN]\n", commandName)
 	fmt.Fprintln(output)
 	fmt.Fprintf(output, "Run 'reploy %s --help' for blueprint index help.\n", commandName)
 }
@@ -2821,7 +2872,7 @@ func printPackIndexHelp(commandName string, output io.Writer) {
 Commands:
   update       Download, validate, and cache the blueprint shorthand index
   search       Search cached or remote blueprint shorthands
-  show         Show one blueprint shorthand
+  show         Show one blueprint shorthand, optionally resolved with NAME==PIN
 
 Options:
   --url URL    Index URL, default from REPLOY_BLUEPRINT_INDEX_URL or built-in default

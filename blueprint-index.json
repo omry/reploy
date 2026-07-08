@@ -2,7 +2,10 @@
   "schema_version": 1,
   "blueprints": {
     "arbiter-server": {
-      "ref": "pypi://arbiter-server/arbiter_server/reploy/arbiter.blueprint.yaml?version={version}"
+      "ref": "pypi://arbiter-server/arbiter_server/reploy/arbiter.blueprint.yaml"
+    },
+    "omegaconf-inspector-demo": {
+      "ref": "github://omry/reploy/examples/omegaconf-inspector/reploy/omegaconf-inspector.blueprint.yaml"
     }
   }
 }
