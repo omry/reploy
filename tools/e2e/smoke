@@ -822,45 +822,47 @@ def run_smoke(
         finish_smoke(reploy, workdir, deploy_dir, env, smoke_started)
         return
 
-    doctor = run(
-        [str(reploy), "doctor", "--preinstall", "--scope", install_scope(), "--dir", str(deploy_dir)],
-        cwd=workdir,
-        env=env,
-    )
-    require_contains(completed_output(doctor), "ok: preinstall checks passed", "preinstall doctor")
+    install_checks = plan_only or persistent_install or not runtime
+    if install_checks:
+        doctor = run(
+            [str(reploy), "doctor", "--preinstall", "--scope", install_scope(), "--dir", str(deploy_dir)],
+            cwd=workdir,
+            env=env,
+        )
+        require_contains(completed_output(doctor), "ok: preinstall checks passed", "preinstall doctor")
 
-    install = run(
-        [
-            str(reploy),
-            "install",
-            "--dir",
-            str(deploy_dir),
-            "--to",
-            str(install_dir),
-            "--scope",
-            install_scope(),
-            "--service",
-            "smoke-e2e",
-            "--port",
-            "18082",
-            "--dry-run",
-        ],
-        cwd=workdir,
-        env=env,
-    )
-    require_contains(install.stdout, "would install deployment:", "install dry-run")
-    require_prefixed_lines(install.stdout, "[STAGING : smoke-app] ", "install dry-run")
-    require_contains(install.stdout, "[STAGING : smoke-app] would install deployment:", "install dry-run")
-    require_contains(install.stdout, "service: smoke-e2e", "install dry-run")
-    require_contains(install.stdout, "port https: 127.0.0.1:18082 -> 19075", "install dry-run")
-    require_contains(
-        install.stdout,
-        "would rebuild local source bundle: smoke-imap, smoke-suite",
-        "install dry-run",
-    )
-    require_contains(install.stdout, "would run before start hook: app config check", "install dry-run")
-    require_contains(install.stdout, "would run after start hook: health check --wait", "install dry-run")
-    require_contains(install.stdout, "would print success line: server url: ${server_url}", "install dry-run")
+        install = run(
+            [
+                str(reploy),
+                "install",
+                "--dir",
+                str(deploy_dir),
+                "--to",
+                str(install_dir),
+                "--scope",
+                install_scope(),
+                "--service",
+                "smoke-e2e",
+                "--port",
+                "18082",
+                "--dry-run",
+            ],
+            cwd=workdir,
+            env=env,
+        )
+        require_contains(install.stdout, "would install deployment:", "install dry-run")
+        require_prefixed_lines(install.stdout, "[STAGING : smoke-app] ", "install dry-run")
+        require_contains(install.stdout, "[STAGING : smoke-app] would install deployment:", "install dry-run")
+        require_contains(install.stdout, "service: smoke-e2e", "install dry-run")
+        require_contains(install.stdout, "port https: 127.0.0.1:18082 -> 19075", "install dry-run")
+        require_contains(
+            install.stdout,
+            "would rebuild local source bundle: smoke-imap, smoke-suite",
+            "install dry-run",
+        )
+        require_contains(install.stdout, "would run before start hook: app config check", "install dry-run")
+        require_contains(install.stdout, "would run after start hook: health check --wait", "install dry-run")
+        require_contains(install.stdout, "would print success line: server url: ${server_url}", "install dry-run")
 
     if not plan_only:
         if persistent_install:
