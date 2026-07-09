@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -39,6 +40,18 @@ func requireLinuxHost(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux/systemd-specific CLI behavior is covered by Linux CI")
 	}
+}
+
+func newCLITestHTTPServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("loopback listener unavailable in this environment: %v", err)
+	}
+	server := httptest.NewUnstartedServer(handler)
+	server.Listener = listener
+	server.Start()
+	return server
 }
 
 func setCLITestPackIndex(t *testing.T) {
@@ -510,7 +523,7 @@ func TestPackIndexSearchAndShow(t *testing.T) {
 
 func TestPackIndexRefreshDownloadsAndCachesHTTPIndex(t *testing.T) {
 	indexContent := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml"}}}`
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newCLITestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, indexContent)
 	}))
@@ -2622,7 +2635,7 @@ func TestParseDockerCommandOptionsRejectsDuplicatePack(t *testing.T) {
 func TestParseDockerCommandOptionsLoadsPackIndexFromHTTPAndCache(t *testing.T) {
 	indexContent := `{"schema_version":1,"blueprints":{"demo":{"ref":"pypi://demo-pkg/demo_pkg/reploy/demo.blueprint.yaml"}}}`
 	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newCLITestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, indexContent)
@@ -3949,7 +3962,7 @@ func makeCLITestPyPIIndex(t *testing.T, wheel []byte, version string) string {
 	t.Helper()
 	filename := fmt.Sprintf("demo_pkg-%s-py3-none-any.whl", version)
 	sha256 := deploy.HashBytes(wheel)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newCLITestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/pypi/demo-pkg/json":
 			w.Header().Set("Content-Type", "application/json")
