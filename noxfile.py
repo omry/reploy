@@ -11,8 +11,6 @@ import nox
 
 nox.options.sessions = ["ci"]
 
-DIST_CI = Path("dist-ci")
-
 BUILD_DEPENDENCIES = (
     "build",
     "hatchling",
@@ -93,14 +91,15 @@ def _install_release_build_dependencies(session: nox.Session) -> None:
 
 def _release_build_smoke(session: nox.Session) -> None:
     session.run("python", "-m", "py_compile", *PY_COMPILE_FILES)
-    session.run(
-        "python",
-        "tools/build_release_dists",
-        "--outdir",
-        str(DIST_CI),
-        "--clean",
-        "--no-isolation",
-    )
+    with tempfile.TemporaryDirectory(prefix="reploy-release-build-smoke-") as temp_dir:
+        session.run(
+            "python",
+            "tools/build_release_dists",
+            "--outdir",
+            str(Path(temp_dir) / "dist"),
+            "--clean",
+            "--no-isolation",
+        )
 
 
 def _docs_build(session: nox.Session) -> None:
