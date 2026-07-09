@@ -31,7 +31,14 @@ This file is the day-to-day queue for design and implementation gaps.
 
 ## Now
 
-No active backlog items.
+- [ ] `P1` Redesign health checks and public URL handling.
+      Make service readiness an app-facing contract instead of a Reploy
+      environment-variable protocol leaked into blueprints. Acceptance checks:
+      define the app-owned health/readiness shape; unify or clearly separate
+      install and runtime health hook semantics; remove ignored or misleading
+      fields such as port-level `public_scheme`; preserve useful startup error
+      diagnostics; document the supported blueprint shape and minimum Reploy
+      version; and update the OmegaConf Inspector example and tests.
 
 ## Pre-release
 
