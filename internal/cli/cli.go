@@ -2063,7 +2063,19 @@ func runDockerRuntimeCommand(action string, args []string, stdout io.Writer, std
 		return 1
 	}
 	stopSpinner(true)
+	printRuntimeUpServiceURL(action, options.Dir, stdout)
 	return 0
+}
+
+func printRuntimeUpServiceURL(action string, dir string, stdout io.Writer) {
+	if action != "up" || stdout == nil {
+		return
+	}
+	serviceURL, err := dockerdeploy.InstallServerURL(dir)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(deploymentStdoutOrFallback(dir, stdout), "service url: %s\n", serviceURL)
 }
 
 func runtimeActionShowsSpinner(action string, verbose bool) bool {

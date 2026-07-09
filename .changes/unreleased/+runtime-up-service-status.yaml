@@ -1,0 +1,3 @@
+kind: Fixed
+body: Make `reploy up` verify the service stays running before printing the service URL, run configured runtime after-start health checks, reject unsupported runtime app hooks clearly, report config-check diagnostics and command-window startup log snippets when startup fails, and show exited services in `reploy status`.
+time: 2026-07-09T12:38:03Z

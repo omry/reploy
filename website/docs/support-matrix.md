@@ -6,6 +6,8 @@ sidebar_position: 8
 
 Reploy currently supports Docker-backed staging and installs.
 
+For feature support by Reploy release, see [Version Support](/docs/version-support).
+
 | Host OS | Release targets | Docker runtime | Staging | User install | System install |
 | --- | --- | --- | --- | --- | --- |
 | Linux | `linux-amd64`, `linux-arm64` | Docker Engine | ✅ | ✅ Docker-managed | ✅ systemd |

@@ -159,8 +159,22 @@ type DockerServiceConfig struct {
 }
 
 type DockerRuntimeConfig struct {
-	Overrides            []string          `yaml:"overrides"`
-	OptionalEnvOverrides map[string]string `yaml:"optional_env_overrides"`
+	Overrides            []string                 `yaml:"overrides"`
+	OptionalEnvOverrides map[string]string        `yaml:"optional_env_overrides"`
+	Hooks                DockerRuntimeHooksConfig `yaml:"hooks"`
+}
+
+type DockerRuntimeHooksConfig struct {
+	AfterStart []DockerRuntimeHookConfig `yaml:"after_start"`
+}
+
+type DockerRuntimeHookConfig struct {
+	App         []string                        `yaml:"app,omitempty"`
+	HealthCheck *DockerRuntimeHealthCheckConfig `yaml:"health_check,omitempty"`
+}
+
+type DockerRuntimeHealthCheckConfig struct {
+	Wait bool `yaml:"wait"`
 }
 
 type DockerInstallConfig struct {
@@ -642,6 +656,9 @@ func ParsePackManifest(content string) (PackManifest, error) {
 		if containsLineOrFieldBreak(overrideKey) {
 			return PackManifest{}, fmt.Errorf("docker.runtime.optional_env_overrides.%s must not contain tabs or newlines", envName)
 		}
+	}
+	if err := validateRuntimeHooks(manifest.Docker.Runtime.Hooks, manifest.Docker.Health); err != nil {
+		return PackManifest{}, err
 	}
 	if err := validateInstallHooks(manifest.Docker.Install.Hooks); err != nil {
 		return PackManifest{}, err
@@ -1334,6 +1351,37 @@ func validateInstallHooks(hooks DockerInstallHooksConfig) error {
 			if actionCount != 1 {
 				return fmt.Errorf("docker.install.hooks.%s[%d] must declare exactly one action", phase, index)
 			}
+		}
+	}
+	return nil
+}
+
+func validateRuntimeHooks(hooks DockerRuntimeHooksConfig, health DockerHealthConfig) error {
+	for index, hook := range hooks.AfterStart {
+		actionCount := 0
+		if hook.App != nil {
+			return fmt.Errorf("docker.runtime.hooks.after_start[%d].app is not supported; runtime hooks currently support health_check only", index)
+		}
+		if hook.HealthCheck != nil {
+			actionCount++
+			if !hook.HealthCheck.Wait {
+				return fmt.Errorf("docker.runtime.hooks.after_start[%d].health_check.wait must be true", index)
+			}
+			if health.Path == "" {
+				return fmt.Errorf("docker.runtime.hooks.after_start[%d].health_check requires docker.health.path", index)
+			}
+			if health.SchemeEnv == "" {
+				return fmt.Errorf("docker.runtime.hooks.after_start[%d].health_check requires docker.health.scheme_env", index)
+			}
+			if health.HostEnv == "" {
+				return fmt.Errorf("docker.runtime.hooks.after_start[%d].health_check requires docker.health.host_env", index)
+			}
+			if health.PortEnv == "" {
+				return fmt.Errorf("docker.runtime.hooks.after_start[%d].health_check requires docker.health.port_env", index)
+			}
+		}
+		if actionCount != 1 {
+			return fmt.Errorf("docker.runtime.hooks.after_start[%d] must declare exactly one action", index)
 		}
 	}
 	return nil

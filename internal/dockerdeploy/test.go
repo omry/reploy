@@ -106,8 +106,7 @@ func requireComposeServiceRunning(dir string, restartingDiagnostics string, dock
 		return fmt.Errorf("service is not started; run reploy up before testing health")
 	}
 	for _, state := range states {
-		normalized := strings.ToLower(strings.TrimSpace(state))
-		if normalized == "running" {
+		if serviceStateName(state) == "running" {
 			return nil
 		}
 	}
@@ -122,12 +121,21 @@ func requireComposeServiceRunning(dir string, restartingDiagnostics string, dock
 }
 
 func serviceStatesContain(states []string, expected string) bool {
+	expected = strings.ToLower(strings.TrimSpace(expected))
 	for _, state := range states {
-		if strings.EqualFold(strings.TrimSpace(state), expected) {
+		if serviceStateName(state) == expected {
 			return true
 		}
 	}
 	return false
+}
+
+func serviceStateName(state string) string {
+	state = strings.ToLower(strings.TrimSpace(state))
+	if before, _, ok := strings.Cut(state, " ("); ok {
+		state = strings.TrimSpace(before)
+	}
+	return state
 }
 
 func composeServiceStates(dir string, dockerPreflightTimeout time.Duration) ([]string, error) {
@@ -162,21 +170,33 @@ func parseComposeServiceStates(output []byte) ([]string, error) {
 		if err := json.Unmarshal(line, &row); err != nil {
 			return nil, fmt.Errorf("parse docker compose ps json: %w", err)
 		}
-		states = append(states, row.State)
+		states = append(states, composeRowState(row))
 	}
 	return states, nil
 }
 
 type composePSRow struct {
-	State string `json:"State"`
+	State    string `json:"State"`
+	ExitCode *int   `json:"ExitCode,omitempty"`
 }
 
 func composeRowsStates(rows []composePSRow) []string {
 	states := make([]string, 0, len(rows))
 	for _, row := range rows {
-		states = append(states, row.State)
+		states = append(states, composeRowState(row))
 	}
 	return states
+}
+
+func composeRowState(row composePSRow) string {
+	state := strings.TrimSpace(row.State)
+	if state == "" {
+		state = "unknown"
+	}
+	if row.ExitCode != nil && *row.ExitCode != 0 && serviceStateName(state) != "running" {
+		return fmt.Sprintf("%s (exit code %d)", state, *row.ExitCode)
+	}
+	return state
 }
 
 func ServerURL(dir string) (*url.URL, error) {

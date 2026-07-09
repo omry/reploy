@@ -17,7 +17,7 @@ runtime files, expose app commands, and install the service.
 blueprint:
   schema: 1
   version: 0.1.0
-  requires_reploy: ">=0.4.8.dev1"
+  requires_reploy: ">=0.5.1.dev1"
 
 app:
   id: example-app
@@ -68,6 +68,11 @@ docker:
     default_host: 127.0.0.1
     default_port: "18075"
     path: /_health_
+  runtime:
+    hooks:
+      after_start:
+        - health_check:
+            wait: true
   default_command: serve
   commands: {}
 ```
@@ -274,6 +279,26 @@ docker:
 
 Use `install.ports.deployed` and `install.ports.staging` when the app exposes
 more than one named public port.
+
+## Runtime After Start
+
+Runtime after-start checks control what `reploy up` verifies after Docker starts
+the service. Reploy always checks that the service is still running. Add a
+health check when the app should prove the declared health endpoint is reachable
+before `reploy up` succeeds.
+
+```yaml
+docker:
+  runtime:
+    hooks:
+      after_start:
+        - health_check:
+            wait: true
+```
+
+Runtime after-start hooks currently support `health_check` only. Runtime health
+checks require `docker.health`. Blueprints that use `docker.runtime.hooks`
+should set `blueprint.requires_reploy` to `>=0.5.1.dev1`.
 
 ## App Commands
 

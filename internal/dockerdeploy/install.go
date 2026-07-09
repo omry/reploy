@@ -1942,7 +1942,7 @@ func installServiceMayStillStart(states []string) bool {
 		return true
 	}
 	for _, state := range states {
-		switch strings.ToLower(strings.TrimSpace(state)) {
+		switch serviceStateName(state) {
 		case "created", "restarting", "starting":
 		default:
 			return false

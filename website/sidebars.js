@@ -34,7 +34,7 @@ const sidebars = {
     {
       type: 'category',
       label: 'Project',
-      items: ['support-matrix', 'release'],
+      items: ['support-matrix', 'version-support', 'release'],
     },
   ],
 };

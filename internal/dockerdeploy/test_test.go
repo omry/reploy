@@ -280,7 +280,7 @@ func TestTestServerWaitsWhenServiceIsRunning(t *testing.T) {
 }
 
 func TestTestServerWaitFailsImmediatelyWhenServiceIsDown(t *testing.T) {
-	restore := stubTestCommandOutput([]byte(`[{"State":"exited"}]`), nil)
+	restore := stubTestCommandOutput([]byte(`[{"State":"exited","ExitCode":1}]`), nil)
 	defer restore()
 
 	dir := makeTestDeploymentWithDockerEnv(t, "REPLOY_PUBLIC_SCHEME=https\nREPLOY_HOST_BIND=127.0.0.1\nREPLOY_HOST_PORT=1\n")
@@ -292,7 +292,7 @@ func TestTestServerWaitFailsImmediatelyWhenServiceIsDown(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("test did not fail fast: elapsed=%s err=%v", elapsed, err)
 	}
-	if !strings.Contains(err.Error(), "service is not running") {
+	if !strings.Contains(err.Error(), "service is not running") || !strings.Contains(err.Error(), "exited (exit code 1)") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -456,11 +456,11 @@ func TestComposeServiceStatesUsesInstalledComposeProject(t *testing.T) {
 }
 
 func TestParseComposeServiceStatesSupportsJSONLines(t *testing.T) {
-	states, err := parseComposeServiceStates([]byte("{\"State\":\"running\"}\n{\"State\":\"restarting\"}\n"))
+	states, err := parseComposeServiceStates([]byte("{\"State\":\"running\"}\n{\"State\":\"exited\",\"ExitCode\":2}\n{\"State\":\"exited\",\"ExitCode\":0}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(states, ",") != "running,restarting" {
+	if strings.Join(states, ",") != "running,exited (exit code 2),exited" {
 		t.Fatalf("states = %#v", states)
 	}
 }

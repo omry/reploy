@@ -43,13 +43,13 @@ without hard-coding their own staging/deployed marker in the blueprint.
 
 ## Minimal Shape
 
-The local end-to-end fixture in this repository is a good starting point:
+This example shape is a good starting point:
 
 ```yaml
 blueprint:
   schema: 1
   version: 0.1.0
-  requires_reploy: ">=0.4.8.dev1"
+  requires_reploy: ">=0.5.1.dev1"
 
 app:
   id: example-app
@@ -101,6 +101,11 @@ docker:
     default_host: 127.0.0.1
     default_port: "18075"
     path: /_health_
+  runtime:
+    hooks:
+      after_start:
+        - health_check:
+            wait: true
   default_command: serve
   command_defaults:
     app_command: true

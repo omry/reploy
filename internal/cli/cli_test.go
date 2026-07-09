@@ -1575,6 +1575,41 @@ func TestPhaseKnownRuntimePrepareHintUsesDeploymentPrefix(t *testing.T) {
 	}
 }
 
+func TestRuntimeUpPrintsServiceURLAfterSuccessfulStart(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	oldRuntime := dockerRuntime
+	t.Cleanup(func() {
+		dockerRuntime = oldRuntime
+	})
+	dockerRuntime = func(options dockerdeploy.RuntimeOptions) error {
+		if options.Action != "up" {
+			t.Fatalf("action = %q, want up", options.Action)
+		}
+		if options.Dir != deployDir {
+			t.Fatalf("dir = %q, want %q", options.Dir, deployDir)
+		}
+		return nil
+	}
+
+	code, stdout, stderr = runCLI("up", "--dir", deployDir)
+	if code != 0 {
+		t.Fatalf("up failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if got, want := stdout, "[STAGING : demo] service url: https://127.0.0.1:18075\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if !strings.Contains(stderr, "[STAGING : demo] up... done") {
+		t.Fatalf("stderr missing successful spinner:\n%s", stderr)
+	}
+}
+
 func TestRuntimeBundleBuildVerboseCommandQuotesExplicitDir(t *testing.T) {
 	got := runtimeBundleBuildVerboseCommand("/tmp/reploy staging/it's live", true)
 	want := `reploy bundle build --verbose --dir '/tmp/reploy staging/it'"'"'s live'`

@@ -465,6 +465,98 @@ func TestParsePackManifestReadsInstallHooks(t *testing.T) {
 	}
 }
 
+func TestParsePackManifestReadsRuntimeAfterStartHealthCheck(t *testing.T) {
+	manifest, err := ParsePackManifest(strings.Replace(packTestManifest(), "  default_command: serve\n", `  health:
+    scheme_env: REPLOY_PUBLIC_SCHEME
+    host_env: REPLOY_HOST_BIND
+    port_env: REPLOY_HOST_PORT
+    path: /_health_
+  runtime:
+    hooks:
+      after_start:
+        - health_check:
+            wait: true
+  default_command: serve
+`, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks := manifest.Docker.Runtime.Hooks.AfterStart
+	if len(hooks) != 1 {
+		t.Fatalf("runtime after_start hooks = %#v", hooks)
+	}
+	healthCheck := hooks[0].HealthCheck
+	if healthCheck == nil || !healthCheck.Wait {
+		t.Fatalf("runtime after_start health check = %#v", healthCheck)
+	}
+}
+
+func TestParsePackManifestRejectsInvalidRuntimeAfterStart(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		runtime string
+		health  string
+		want    string
+	}{
+		{
+			name: "health check without wait",
+			runtime: `  runtime:
+    hooks:
+      after_start:
+        - health_check:
+            wait: false
+`,
+			health: `  health:
+    scheme_env: REPLOY_PUBLIC_SCHEME
+    host_env: REPLOY_HOST_BIND
+    port_env: REPLOY_HOST_PORT
+    path: /_health_
+`,
+			want: "docker.runtime.hooks.after_start[0].health_check.wait must be true",
+		},
+		{
+			name: "health check without health probe",
+			runtime: `  runtime:
+    hooks:
+      after_start:
+        - health_check:
+            wait: true
+`,
+			want: "docker.runtime.hooks.after_start[0].health_check requires docker.health.path",
+		},
+		{
+			name: "empty hook",
+			runtime: `  runtime:
+    hooks:
+      after_start:
+        - {}
+`,
+			want: "docker.runtime.hooks.after_start[0] must declare exactly one action",
+		},
+		{
+			name: "app hook",
+			runtime: `  runtime:
+    hooks:
+      after_start:
+        - app:
+            - config
+            - check
+`,
+			want: "docker.runtime.hooks.after_start[0].app is not supported; runtime hooks currently support health_check only",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParsePackManifest(strings.Replace(packTestManifest(), "  default_command: serve\n", tc.health+tc.runtime+"  default_command: serve\n", 1))
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestParsePackManifestReadsInstallSuccess(t *testing.T) {
 	manifest, err := ParsePackManifest(strings.Replace(packTestManifest(), "  default_command: serve\n", `  install:
     success:

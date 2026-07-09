@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/omry/reploy/internal/deploy"
 )
@@ -23,7 +24,7 @@ func TestRuntimeCommandActions(t *testing.T) {
 		{action: "restart", suffix: []string{"up", "-d", "--force-recreate"}},
 		{action: "down", suffix: []string{"down", "--remove-orphans"}},
 		{action: "ps", suffix: []string{"ps"}},
-		{action: "status", suffix: []string{"ps"}},
+		{action: "status", suffix: []string{"ps", "--all"}},
 		{action: "logs", suffix: []string{"logs", "--timestamps"}},
 	}
 	for _, tc := range cases {
@@ -47,14 +48,18 @@ func TestRuntimeCommandActions(t *testing.T) {
 
 func TestRuntimeCommandCanFollowLogs(t *testing.T) {
 	dir, projectName := makeRuntimeDeployment(t)
-	spec, err := RuntimeCommandWithOptions(dir, "logs", RuntimeCommandOptions{Follow: true, Tail: "100"})
+	spec, err := RuntimeCommandWithOptions(dir, "logs", RuntimeCommandOptions{
+		Follow: true,
+		Tail:   "100",
+		Since:  "2026-07-09T00:00:00Z",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !containsAdjacent(spec.Args, "--project-name", projectName) {
 		t.Fatalf("args did not include staging compose project: %#v", spec.Args)
 	}
-	suffix := []string{"logs", "--timestamps", "--tail", "100", "-f"}
+	suffix := []string{"logs", "--timestamps", "--since", "2026-07-09T00:00:00Z", "--tail", "100", "-f"}
 	if !reflect.DeepEqual(spec.Args[len(spec.Args)-len(suffix):], suffix) {
 		t.Fatalf("suffix = %#v, want %#v", spec.Args[len(spec.Args)-len(suffix):], suffix)
 	}
@@ -79,6 +84,18 @@ func TestRuntimeUpAutomaticallyPreparesBundle(t *testing.T) {
 		return nil
 	})
 	defer restoreRuntime()
+	restoreRunning := stubRuntimePostStartServiceRunningCheck(func(gotDir string, restartingDiagnostics string, dockerPreflightTimeout time.Duration) error {
+		if gotDir != dir {
+			t.Fatalf("service state dir = %q, want %q", gotDir, dir)
+		}
+		return nil
+	})
+	defer restoreRunning()
+	restoreHealth := stubRuntimePostStartHealthCheck(func(options TestOptions) error {
+		t.Fatal("health check should not run without runtime after_start health_check")
+		return nil
+	})
+	defer restoreHealth()
 
 	if err := Runtime(RuntimeOptions{Dir: dir, Action: "up"}); err != nil {
 		t.Fatal(err)
@@ -108,6 +125,18 @@ func TestRuntimeUpReportsPreparationProgress(t *testing.T) {
 		return nil
 	})
 	defer restoreRuntime()
+	restoreRunning := stubRuntimePostStartServiceRunningCheck(func(gotDir string, restartingDiagnostics string, dockerPreflightTimeout time.Duration) error {
+		if gotDir != dir {
+			t.Fatalf("service state dir = %q, want %q", gotDir, dir)
+		}
+		return nil
+	})
+	defer restoreRunning()
+	restoreHealth := stubRuntimePostStartHealthCheck(func(options TestOptions) error {
+		t.Fatal("health check should not run without runtime after_start health_check")
+		return nil
+	})
+	defer restoreHealth()
 
 	var progress bytes.Buffer
 	if err := Runtime(RuntimeOptions{Dir: dir, Action: "up", Progress: &progress}); err != nil {
@@ -122,6 +151,7 @@ func TestRuntimeUpReportsPreparationProgress(t *testing.T) {
 		"prepare runtime compose",
 		"prepare runtime cache",
 		"start app",
+		"check app state",
 	} {
 		if !strings.Contains(progress.String(), want) {
 			t.Fatalf("progress missing %q:\n%s", want, progress.String())
@@ -162,6 +192,18 @@ func TestRuntimeUpRecoversStaleDockerNetwork(t *testing.T) {
 		return nil
 	})
 	defer restoreRuntime()
+	restoreRunning := stubRuntimePostStartServiceRunningCheck(func(gotDir string, restartingDiagnostics string, dockerPreflightTimeout time.Duration) error {
+		if gotDir != dir {
+			t.Fatalf("service state dir = %q, want %q", gotDir, dir)
+		}
+		return nil
+	})
+	defer restoreRunning()
+	restoreHealth := stubRuntimePostStartHealthCheck(func(options TestOptions) error {
+		t.Fatal("health check should not run without runtime after_start health_check")
+		return nil
+	})
+	defer restoreHealth()
 
 	var stderr bytes.Buffer
 	if err := Runtime(RuntimeOptions{Dir: dir, Action: "up", Stderr: &stderr}); err != nil {
@@ -176,6 +218,230 @@ func TestRuntimeUpRecoversStaleDockerNetwork(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "[STAGING : demo] detected stale Docker network state; running down --remove-orphans and retrying up\n") {
 		t.Fatalf("stderr missing stale network recovery message:\n%s", stderr.String())
+	}
+}
+
+func TestRuntimeUpFailsWhenServiceExitsAfterStart(t *testing.T) {
+	packDir := makeTestPack(t)
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: dir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	commands := []string{}
+	restoreBundle := stubSuccessfulBundlePrepare(t, &commands)
+	defer restoreBundle()
+	restoreRuntime := stubRuntimeRunner(func(spec CommandSpec, options RunOptions) error {
+		commands = append(commands, strings.Join(spec.Args[len(spec.Args)-2:], " "))
+		return nil
+	})
+	defer restoreRuntime()
+	logSince := time.Date(2026, 7, 9, 12, 36, 0, 0, time.UTC)
+	restoreLogSince := stubRuntimeLogSinceTime(logSince)
+	defer restoreLogSince()
+	restoreRunning := stubRuntimePostStartServiceRunningCheck(func(gotDir string, restartingDiagnostics string, dockerPreflightTimeout time.Duration) error {
+		if gotDir != dir {
+			t.Fatalf("service state dir = %q, want %q", gotDir, dir)
+		}
+		return fmt.Errorf("service is not running; current state: exited")
+	})
+	defer restoreRunning()
+	restoreHealth := stubRuntimePostStartHealthCheck(func(options TestOptions) error {
+		t.Fatal("health check should not run when the service is not running")
+		return nil
+	})
+	defer restoreHealth()
+	restoreLogs := stubRuntimeLogOutput(t, logSince, []byte(strings.Join([]string{
+		"demo | 2026-07-09T12:36:01Z reploy:event phase=config-check event=start",
+		"demo | 2026-07-09T12:36:02Z omegaconf-inspector error: missing config: /conf/inspector.yaml",
+		"demo | 2026-07-09T12:36:03Z configuration check failed; app will not start until the config passes",
+		"demo | 2026-07-09T12:36:04Z reploy:event phase=config-check event=end status=failed exit=1",
+		"",
+	}, "\n")))
+	defer restoreLogs()
+
+	err = Runtime(RuntimeOptions{Dir: dir, Action: "up"})
+	if err == nil {
+		t.Fatal("expected service state error")
+	}
+	for _, want := range []string{
+		"service failed after start",
+		"config check failed (exit code 1)",
+		"current state: exited",
+		"startup log snippet:",
+		"omegaconf-inspector error: missing config: /conf/inspector.yaml",
+		"configuration check failed; app will not start until the config passes",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q:\n%v", want, err)
+		}
+	}
+	for _, unwanted := range []string{
+		"recent logs:",
+		"current state: exited (exit code 0)",
+	} {
+		if strings.Contains(err.Error(), unwanted) {
+			t.Fatalf("error unexpectedly contained %q:\n%v", unwanted, err)
+		}
+	}
+	wantCommands := []string{"build", "check", "warm runtime", "up -d"}
+	if !reflect.DeepEqual(commands, wantCommands) {
+		t.Fatalf("commands = %#v, want %#v", commands, wantCommands)
+	}
+}
+
+func TestRuntimeUpRunsConfiguredAfterStartHealthCheck(t *testing.T) {
+	packDir := makeTestPackWithManifest(t, testPackManifestWithRuntimeAfterStartHealthCheck())
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: dir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	commands := []string{}
+	restoreBundle := stubSuccessfulBundlePrepare(t, &commands)
+	defer restoreBundle()
+	restoreRuntime := stubRuntimeRunner(func(spec CommandSpec, options RunOptions) error {
+		commands = append(commands, strings.Join(spec.Args[len(spec.Args)-2:], " "))
+		return nil
+	})
+	defer restoreRuntime()
+	restoreRunning := stubRuntimePostStartServiceRunningCheck(func(gotDir string, restartingDiagnostics string, dockerPreflightTimeout time.Duration) error {
+		if gotDir != dir {
+			t.Fatalf("service state dir = %q, want %q", gotDir, dir)
+		}
+		return nil
+	})
+	defer restoreRunning()
+	healthCalled := false
+	restoreHealth := stubRuntimePostStartHealthCheck(func(options TestOptions) error {
+		healthCalled = true
+		if options.Dir != dir {
+			t.Fatalf("health dir = %q, want %q", options.Dir, dir)
+		}
+		return nil
+	})
+	defer restoreHealth()
+
+	var progress bytes.Buffer
+	if err := Runtime(RuntimeOptions{Dir: dir, Action: "up", Progress: &progress}); err != nil {
+		t.Fatal(err)
+	}
+	if !healthCalled {
+		t.Fatal("expected configured after-start health check to run")
+	}
+	if !strings.Contains(progress.String(), "check app health") {
+		t.Fatalf("progress missing health check:\n%s", progress.String())
+	}
+	wantCommands := []string{"build", "check", "warm runtime", "up -d"}
+	if !reflect.DeepEqual(commands, wantCommands) {
+		t.Fatalf("commands = %#v, want %#v", commands, wantCommands)
+	}
+}
+
+func TestRuntimeUpFailsWhenConfiguredHealthCheckFails(t *testing.T) {
+	packDir := makeTestPackWithManifest(t, testPackManifestWithRuntimeAfterStartHealthCheck())
+	ref, err := deploy.ParsePackRef("file:" + packDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: dir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	commands := []string{}
+	restoreBundle := stubSuccessfulBundlePrepare(t, &commands)
+	defer restoreBundle()
+	restoreRuntime := stubRuntimeRunner(func(spec CommandSpec, options RunOptions) error {
+		commands = append(commands, strings.Join(spec.Args[len(spec.Args)-2:], " "))
+		return nil
+	})
+	defer restoreRuntime()
+	logSince := time.Date(2026, 7, 9, 12, 40, 0, 0, time.UTC)
+	restoreLogSince := stubRuntimeLogSinceTime(logSince)
+	defer restoreLogSince()
+	restoreRunning := stubRuntimePostStartServiceRunningCheck(func(gotDir string, restartingDiagnostics string, dockerPreflightTimeout time.Duration) error {
+		if gotDir != dir {
+			t.Fatalf("service state dir = %q, want %q", gotDir, dir)
+		}
+		return nil
+	})
+	defer restoreRunning()
+	restoreHealth := stubRuntimePostStartHealthCheck(func(options TestOptions) error {
+		if options.Dir != dir {
+			t.Fatalf("health dir = %q, want %q", options.Dir, dir)
+		}
+		return fmt.Errorf("server health check failed: connection refused")
+	})
+	defer restoreHealth()
+	restoreLogs := stubRuntimeLogOutput(t, logSince, []byte(strings.Join([]string{
+		"demo | 2026-07-09T12:40:01Z reploy:event phase=service event=start",
+		"demo | 2026-07-09T12:40:02Z application still warming up",
+		"",
+	}, "\n")))
+	defer restoreLogs()
+
+	err = Runtime(RuntimeOptions{Dir: dir, Action: "up"})
+	if err == nil {
+		t.Fatal("expected configured health error")
+	}
+	for _, want := range []string{
+		"service health check failed after start",
+		"server health check failed: connection refused",
+		"startup log snippet:",
+		"application still warming up",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q:\n%v", want, err)
+		}
+	}
+	wantCommands := []string{"build", "check", "warm runtime", "up -d"}
+	if !reflect.DeepEqual(commands, wantCommands) {
+		t.Fatalf("commands = %#v, want %#v", commands, wantCommands)
+	}
+}
+
+func TestExtractRuntimeStartupLogSnippetUsesOnlyMarkerWindows(t *testing.T) {
+	logs := strings.Join([]string{
+		"app | 2026-07-09T12:00:00Z before marker",
+		"app | 2026-07-09T12:00:04Z reploy:event phase=config-check event=start",
+		"app | 2026-07-09T12:00:05Z current config failure",
+		"app | 2026-07-09T12:00:06Z reploy:event phase=config-check event=end status=failed exit=2",
+		"app | 2026-07-09T12:00:07Z between phases",
+		"app | 2026-07-09T12:00:08Z reploy:event phase=service event=start",
+		"app | 2026-07-09T12:00:09Z current service failure",
+		"",
+	}, "\n")
+
+	diagnostics := extractRuntimeStartupLogDiagnostics(logs)
+	snippet := diagnostics.Snippet
+	if diagnostics.Failure != "config check failed (exit code 2)" {
+		t.Fatalf("failure = %q", diagnostics.Failure)
+	}
+	for _, want := range []string{
+		"current config failure",
+		"current service failure",
+	} {
+		if !strings.Contains(snippet, want) {
+			t.Fatalf("snippet missing %q:\n%s", want, snippet)
+		}
+	}
+	for _, unwanted := range []string{
+		"before marker",
+		"between phases",
+		"reploy:event",
+	} {
+		if strings.Contains(snippet, unwanted) {
+			t.Fatalf("snippet unexpectedly contained %q:\n%s", unwanted, snippet)
+		}
 	}
 }
 
@@ -258,6 +524,18 @@ func TestRuntimeUpVerboseStreamsBundlePrepareOutput(t *testing.T) {
 		return nil
 	})
 	defer restoreRuntime()
+	restoreRunning := stubRuntimePostStartServiceRunningCheck(func(gotDir string, restartingDiagnostics string, dockerPreflightTimeout time.Duration) error {
+		if gotDir != dir {
+			t.Fatalf("service state dir = %q, want %q", gotDir, dir)
+		}
+		return nil
+	})
+	defer restoreRunning()
+	restoreHealth := stubRuntimePostStartHealthCheck(func(options TestOptions) error {
+		t.Fatal("health check should not run without runtime after_start health_check")
+		return nil
+	})
+	defer restoreHealth()
 
 	if err := Runtime(RuntimeOptions{Dir: dir, Action: "up", Verbose: true, Stdout: &stdout, Stderr: &stderr}); err != nil {
 		t.Fatal(err)
@@ -318,7 +596,7 @@ func TestRuntimeStatusDoesNotPrepareBundle(t *testing.T) {
 	})
 	defer restoreBundle()
 	restoreRuntime := stubRuntimeRunner(func(spec CommandSpec, options RunOptions) error {
-		commands = append(commands, spec.Args[len(spec.Args)-1])
+		commands = append(commands, strings.Join(spec.Args[len(spec.Args)-2:], " "))
 		return nil
 	})
 	defer restoreRuntime()
@@ -326,7 +604,7 @@ func TestRuntimeStatusDoesNotPrepareBundle(t *testing.T) {
 	if err := Runtime(RuntimeOptions{Dir: dir, Action: "status"}); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"ps"}
+	want := []string{"ps --all"}
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatalf("commands = %#v, want %#v", commands, want)
 	}
@@ -397,6 +675,47 @@ func stubRuntimeRunner(run func(CommandSpec, RunOptions) error) func() {
 	}
 }
 
+func stubRuntimePostStartServiceRunningCheck(check func(string, string, time.Duration) error) func() {
+	previous := runRuntimePostStartServiceRunningCheck
+	runRuntimePostStartServiceRunningCheck = check
+	return func() {
+		runRuntimePostStartServiceRunningCheck = previous
+	}
+}
+
+func stubRuntimePostStartHealthCheck(check func(TestOptions) error) func() {
+	previous := runRuntimePostStartHealthCheck
+	runRuntimePostStartHealthCheck = check
+	return func() {
+		runRuntimePostStartHealthCheck = previous
+	}
+}
+
+func stubRuntimeLogSinceTime(since time.Time) func() {
+	previous := runtimeLogSinceTime
+	runtimeLogSinceTime = func() time.Time {
+		return since
+	}
+	return func() {
+		runtimeLogSinceTime = previous
+	}
+}
+
+func stubRuntimeLogOutput(t *testing.T, since time.Time, output []byte) func() {
+	t.Helper()
+	original := runTestCommandOutput
+	runTestCommandOutput = func(spec CommandSpec, options RunOptions) ([]byte, error) {
+		wantSince := since.UTC().Format(time.RFC3339Nano)
+		if !containsInOrder(spec.Args, []string{"logs", "--timestamps", "--since", wantSince, "--tail", runtimeLogSnippetTail}) {
+			t.Fatalf("logs command did not include startup snippet window: %#v", spec.Args)
+		}
+		return output, nil
+	}
+	return func() {
+		runTestCommandOutput = original
+	}
+}
+
 func makeRuntimeDeployment(t *testing.T) (string, string) {
 	t.Helper()
 	packDir := makeTestPack(t)
@@ -420,6 +739,16 @@ func makeRuntimeDeployment(t *testing.T) (string, string) {
 		t.Fatal(err)
 	}
 	return dir, projectName
+}
+
+func testPackManifestWithRuntimeAfterStartHealthCheck() string {
+	return strings.Replace(testPackManifest(), "  health:\n", `  runtime:
+    hooks:
+      after_start:
+        - health_check:
+            wait: true
+  health:
+`, 1)
 }
 
 func TestRuntimeCommandUsesInstalledComposeProject(t *testing.T) {

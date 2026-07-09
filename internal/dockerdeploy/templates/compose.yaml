@@ -71,6 +71,18 @@ services:
         reploy_status_pid="";
         reploy_status_plain="";
       };
+      reploy_log_event() {
+        if [ "$$#" -lt 2 ]; then return 0; fi;
+        reploy_log_phase="$$1";
+        reploy_log_event_name="$$2";
+        shift 2;
+        printf "reploy:event phase=%s event=%s" "$$reploy_log_phase" "$$reploy_log_event_name" >&2;
+        while [ "$$#" -gt 0 ]; do
+          printf " %s" "$$1" >&2;
+          shift;
+        done;
+        printf "\n" >&2;
+      };
       run_pip_install() {
         if [ -n "$${REPLOY_PIP_VERBOSE:-}" ]; then
           "$$venv_python" -m pip --disable-pip-version-check install --progress-bar off --root-user-action ignore "$$@";
@@ -167,15 +179,24 @@ services:
       if [ "$${REPLOY_CONTAINER_COMMAND:-{{DEFAULT_CONTAINER_COMMAND}}}" != {{DEFAULT_CONTAINER_COMMAND}} ]; then
         run_reploy_container_command "$$@";
         exit $$?;
-      elif {{CONFIG_CHECK_COMMAND_FUNCTION}} "$$@" >"$$config_check_log" 2>&1; then
+      fi &&
+      reploy_log_event config-check start &&
+      if {{CONFIG_CHECK_COMMAND_FUNCTION}} "$$@" >"$$config_check_log" 2>&1; then
         rm -f "$$config_check_log";
+        reploy_log_event config-check end status=pass;
       else
+        config_check_status="$$?";
         cat "$$config_check_log" >&2;
         echo "configuration check failed; app will not start until the config passes" >&2;
         echo "run ./reploy app config check from the deployment directory" >&2;
+        reploy_log_event config-check end status=failed exit="$$config_check_status";
         exit 0;
       fi &&
-      {{DEFAULT_CONTAINER_COMMAND_FUNCTION}} "$$@"'
+      reploy_log_event service start &&
+      {{DEFAULT_CONTAINER_COMMAND_FUNCTION}} "$$@";
+      service_status="$$?";
+      reploy_log_event service end status=exit exit="$$service_status";
+      exit "$$service_status"'
 
 networks:
   reploy:

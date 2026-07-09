@@ -912,6 +912,17 @@ docker:
 	if !strings.Contains(compose, `reploy_status_start "Preparing Python runtime" &&`) || !strings.Contains(compose, "reploy_status_stop 0") {
 		t.Fatalf("compose did not use Python runtime spinner around preparation:\n%s", compose)
 	}
+	for _, want := range []string{
+		"reploy_log_event()",
+		`printf "reploy:event phase=%s event=%s"`,
+		"reploy_log_event config-check start",
+		"reploy_log_event config-check end status=failed",
+		"reploy_log_event service start",
+	} {
+		if !strings.Contains(compose, want) {
+			t.Fatalf("compose missing log marker fragment %q:\n%s", want, compose)
+		}
+	}
 }
 
 func TestInitRendersManagedFileMounts(t *testing.T) {

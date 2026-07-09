@@ -22,6 +22,8 @@ type RuntimeOptions struct {
 }
 
 var runRuntimeCommand = runCommand
+var runRuntimePostStartServiceRunningCheck = requireComposeServiceRunning
+var runRuntimePostStartHealthCheck = TestServer
 
 func Runtime(options RuntimeOptions) error {
 	if options.Dir == "" {
@@ -41,11 +43,12 @@ func Runtime(options RuntimeOptions) error {
 		commandStdout = options.Stdout
 		commandStderr = options.Stderr
 	}
+	var pack deploy.AppPack
 	if runtimeActionNeedsBundle(options.Action) {
 		if options.Progress != nil {
 			fmt.Fprintln(options.Progress, "prepare installation bundle")
 		}
-		pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
+		pack, err = deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
 		if err != nil {
 			return err
 		}
@@ -78,6 +81,10 @@ func Runtime(options RuntimeOptions) error {
 	if err != nil {
 		return err
 	}
+	var logSince time.Time
+	if runtimeActionUsesStartupLogSnippet(options.Action) {
+		logSince = runtimeLogSinceTime()
+	}
 	if !options.Verbose && !runtimeActionStreamsOutput(options.Action) {
 		commandStdout = nil
 		commandStderr = nil
@@ -98,9 +105,60 @@ func Runtime(options RuntimeOptions) error {
 		if downErr := runRuntimeCommand(downSpec, RunOptions{DockerPreflightTimeout: options.DockerPreflightTimeout}); downErr != nil {
 			return fmt.Errorf("recover stale Docker network state: %w", downErr)
 		}
-		return runRuntimeCommand(spec, RunOptions{Stdout: commandStdout, Stderr: commandStderr, DockerPreflightTimeout: options.DockerPreflightTimeout})
+		err = runRuntimeCommand(spec, RunOptions{Stdout: commandStdout, Stderr: commandStderr, DockerPreflightTimeout: options.DockerPreflightTimeout})
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if options.Action == "up" {
+		if err := verifyRuntimeServiceAfterUp(options, logSince, pack); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func verifyRuntimeServiceAfterUp(options RuntimeOptions, logSince time.Time, pack deploy.AppPack) error {
+	if options.Progress != nil {
+		fmt.Fprintln(options.Progress, "check app state")
+	}
+	if err := runRuntimePostStartServiceRunningCheck(options.Dir, "", options.DockerPreflightTimeout); err != nil {
+		return runtimePostStartError("service failed after start", err, options, logSince)
+	}
+	if !runtimeAfterStartHealthCheckEnabled(pack) {
+		return nil
+	}
+	if options.Progress != nil {
+		fmt.Fprintln(options.Progress, "check app health")
+	}
+	err := runRuntimePostStartHealthCheck(TestOptions{
+		Dir:                    options.Dir,
+		DockerPreflightTimeout: options.DockerPreflightTimeout,
+	})
+	if err == nil {
+		return nil
+	}
+	return runtimePostStartError("service health check failed after start", err, options, logSince)
+}
+
+func runtimeAfterStartHealthCheckEnabled(pack deploy.AppPack) bool {
+	for _, hook := range pack.Docker.Runtime.Hooks.AfterStart {
+		if hook.HealthCheck != nil && hook.HealthCheck.Wait {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimePostStartError(message string, err error, options RuntimeOptions, logSince time.Time) error {
+	diagnostics := runtimeStartupLogDiagnosticsFor(options.Dir, logSince, options.DockerPreflightTimeout)
+	if diagnostics.Failure != "" {
+		message += ": " + diagnostics.Failure
+	}
+	if diagnostics.Snippet != "" {
+		return fmt.Errorf("%s: %w\nstartup log snippet:\n%s", message, err, diagnostics.Snippet)
+	}
+	return fmt.Errorf("%s: %w", message, err)
 }
 
 func runtimeRunPhase(action string) string {
@@ -135,6 +193,7 @@ func runtimeActionUsesRawOutput(action string) bool {
 type RuntimeCommandOptions struct {
 	Follow bool
 	Tail   string
+	Since  string
 }
 
 func RuntimeCommand(dir string, action string) (CommandSpec, error) {
@@ -153,10 +212,15 @@ func RuntimeCommandWithOptions(dir string, action string, options RuntimeCommand
 		return composeCommandWithProject(dir, projectName, "up", "-d", "--force-recreate"), nil
 	case "down":
 		return composeCommandWithProject(dir, projectName, "down", "--remove-orphans"), nil
-	case "ps", "status":
+	case "ps":
 		return composeCommandWithProject(dir, projectName, "ps"), nil
+	case "status":
+		return composeCommandWithProject(dir, projectName, "ps", "--all"), nil
 	case "logs":
 		args := []string{"logs", "--timestamps"}
+		if options.Since != "" {
+			args = append(args, "--since", options.Since)
+		}
 		if options.Tail != "" {
 			args = append(args, "--tail", options.Tail)
 		}
