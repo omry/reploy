@@ -15,7 +15,7 @@ supported runtime.
 | Host OS | Docker | Staging | User install | System install |
 | --- | --- | --- | --- | --- |
 | Linux | Docker Engine | ✅ | ✅ | ✅ |
-| macOS | Docker Desktop | ✅ | ✅ | — |
+| macOS | Docker-compatible | ✅ | ✅ | — |
 | Windows | Docker Desktop | ✅ | ✅ | — |
 
 ## Install

@@ -133,7 +133,7 @@ blueprint omits target defaults, Reploy chooses a built-in host default:
 
 | Field | Value |
 | --- | --- |
-| Host/backend | Mac Docker Desktop |
+| Host/backend | Mac Docker-managed runtime |
 | Built-in default | `{{ user.data }}/Reploy/installs/{{ app.id }}` |
 | For `app.id: example-app` | `$HOME/Library/Application Support/Reploy/installs/example-app` |
 

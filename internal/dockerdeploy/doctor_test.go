@@ -156,7 +156,7 @@ func TestDoctorPreinstallPassesForInitializedDeployment(t *testing.T) {
 	}
 }
 
-func TestDoctorPreinstallOnDarwinRequiresDockerDesktopRuntime(t *testing.T) {
+func TestDoctorPreinstallOnDarwinUserScopeAcceptsDockerRuntime(t *testing.T) {
 	disableDoctorColor(t)
 	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "darwin"})
 	defer restorePlatform()
@@ -168,7 +168,7 @@ func TestDoctorPreinstallOnDarwinRequiresDockerDesktopRuntime(t *testing.T) {
 		if timeout != 2*time.Second {
 			t.Fatalf("docker timeout = %s, want 2s", timeout)
 		}
-		return dockerRuntimeInfo{Runtime: dockerRuntimeDockerDesktop, OperatingSystem: "Docker Desktop", ServerVersion: "29.5.3"}, nil
+		return dockerRuntimeInfo{Runtime: dockerRuntimeLinuxEngine, OperatingSystem: "Colima", ServerVersion: "29.5.3"}, nil
 	}
 
 	packDir := makeTestPack(t)
@@ -182,12 +182,12 @@ func TestDoctorPreinstallOnDarwinRequiresDockerDesktopRuntime(t *testing.T) {
 	}
 
 	var stdout strings.Builder
-	code := Doctor(DoctorOptions{Dir: deployDir, Preinstall: true, Stdout: &stdout, DockerPreflightTimeout: 2 * time.Second})
+	code := Doctor(DoctorOptions{Dir: deployDir, Preinstall: true, Scope: InstallScopeUser, Stdout: &stdout, DockerPreflightTimeout: 2 * time.Second})
 	if code != 0 {
 		t.Fatalf("doctor exit = %d\n%s", code, stdout.String())
 	}
 	for _, want := range []string{
-		"ok: Docker Desktop runtime detected: Docker Desktop",
+		"ok: Docker runtime detected: Colima",
 		"ok: preinstall checks passed",
 	} {
 		if !strings.Contains(stdout.String(), want) {
@@ -225,16 +225,16 @@ func TestDoctorPreinstallOnDarwinFailsWhenDockerRuntimeUnavailable(t *testing.T)
 	}
 
 	var stdout strings.Builder
-	code := Doctor(DoctorOptions{Dir: deployDir, Preinstall: true, Stdout: &stdout})
+	code := Doctor(DoctorOptions{Dir: deployDir, Preinstall: true, Scope: InstallScopeUser, Stdout: &stdout})
 	if code != 1 {
 		t.Fatalf("doctor exit = %d\n%s", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "fail: Docker Desktop runtime is required for Docker-managed permanent install: docker is not running") {
-		t.Fatalf("stdout missing Docker Desktop failure:\n%s", stdout.String())
+	if !strings.Contains(stdout.String(), "fail: Docker runtime is required for Docker-managed permanent install: docker is not running") {
+		t.Fatalf("stdout missing Docker runtime failure:\n%s", stdout.String())
 	}
 }
 
-func TestDoctorPreinstallOnDarwinFailsWhenRuntimeIsNotDockerDesktop(t *testing.T) {
+func TestDoctorPreinstallOnDarwinUserScopeAcceptsNonDockerDesktopRuntime(t *testing.T) {
 	disableDoctorColor(t)
 	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "darwin"})
 	defer restorePlatform()
@@ -257,15 +257,18 @@ func TestDoctorPreinstallOnDarwinFailsWhenRuntimeIsNotDockerDesktop(t *testing.T
 	}
 
 	var stdout strings.Builder
-	code := Doctor(DoctorOptions{Dir: deployDir, Preinstall: true, Stdout: &stdout})
-	if code != 1 {
+	code := Doctor(DoctorOptions{Dir: deployDir, Preinstall: true, Scope: InstallScopeUser, Stdout: &stdout})
+	if code != 0 {
 		t.Fatalf("doctor exit = %d\n%s", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "fail: Docker Desktop runtime is required for Docker-managed permanent install; detected: Ubuntu 24.04") {
-		t.Fatalf("stdout missing Docker Desktop runtime failure:\n%s", stdout.String())
+	if !strings.Contains(stdout.String(), "ok: Docker runtime detected: Ubuntu 24.04") {
+		t.Fatalf("stdout missing Docker runtime success:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "ok: preinstall checks passed") {
+		t.Fatalf("stdout missing preinstall success:\n%s", stdout.String())
 	}
 	if strings.Contains(stdout.String(), "warn:") {
-		t.Fatalf("wrong runtime should fail without advisory warnings:\n%s", stdout.String())
+		t.Fatalf("non-Docker-Desktop runtime should pass without advisory warnings:\n%s", stdout.String())
 	}
 }
 

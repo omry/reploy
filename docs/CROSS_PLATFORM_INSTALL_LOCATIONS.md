@@ -73,10 +73,11 @@ Explicit scopes must be validated against backend capabilities:
   candidate mechanisms include `systemd --user`; crontab `@reboot` is only
   startup glue and is not equivalent to a service manager for status, restart,
   logs, dependency ordering, or health supervision.
-- Mac `user` uses the Docker Desktop-backed install path. Docker restart
-  policies can restart app containers after Docker Desktop starts, but Reploy
-  still depends on Docker Desktop itself being configured to start at login or
-  started by the user.
+- Mac `user` uses the Docker-managed Compose install path. Docker restart
+  policies can restart app containers after the Docker-compatible runtime
+  starts, but Reploy still depends on that runtime being configured to start at
+  login or started by the user. Hosted CI currently validates this path with
+  Colima; Docker Desktop remains the primary user-facing runtime.
 - Windows `user` uses the Docker Desktop-backed install path. Docker restart
   policies can restart app containers after Docker Desktop starts, but Reploy
   still depends on Docker Desktop itself being configured to start at login or
@@ -110,10 +111,10 @@ scope.
 Initial target defaults:
 
 | Host/backend | Scope | Default install root |
-| --- | --- |
+| --- | --- | --- |
 | Linux systemd install | `system` | `/opt/{{ app.id }}` |
 | Linux Docker-managed install | `user` | `{{ user.data }}/Reploy/installs/{{ app.id }}` |
-| Mac Docker Desktop | `user` | `{{ user.data }}/Reploy/installs/{{ app.id }}` |
+| Mac Docker-managed install | `user` | `{{ user.data }}/Reploy/installs/{{ app.id }}` |
 | Windows Docker Desktop | `user` | `{{ user.local_data }}/Reploy/installs/{{ app.id }}` |
 
 The concrete resolved examples are:
