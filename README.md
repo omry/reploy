@@ -1,7 +1,6 @@
 # Reploy
 
 [![CI](https://github.com/omry/reploy/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/omry/reploy/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/omry/reploy)](https://goreportcard.com/report/github.com/omry/reploy)
 [![Go version](https://img.shields.io/github/go-mod/go-version/omry/reploy)](go.mod)
 [![Release](https://img.shields.io/github/v/release/omry/reploy?include_prereleases)](https://github.com/omry/reploy/releases)
 [![Docs](https://img.shields.io/badge/docs-reploy.yadan.net-blue)](https://reploy.yadan.net/)
@@ -9,12 +8,15 @@
 
 Reploy is an experimental deployment lifecycle tool for services.
 
-It creates a self-contained staging workspace from an app-provided blueprint,
-lets you configure and test the app there, and can install the result as a
-deployed host service. Docker is the first supported deployment runtime.
-Linux supports both current-user Docker-managed installs and system-scope
-systemd installs; macOS and Windows support Docker Desktop-backed staging and
-Docker-managed user-scope permanent installs.
+Reploy turns an app-provided blueprint into a local staging workspace, lets you
+configure and test it, then installs it as a host service. Docker is the first
+supported runtime.
+
+| Host OS | Docker | Staging | User install | System install |
+| --- | --- | --- | --- | --- |
+| Linux | Docker Engine | ✅ | ✅ | ✅ |
+| macOS | Docker Desktop | ✅ | ✅ | — |
+| Windows | Docker Desktop | ✅ | ✅ | — |
 
 ## Install
 
