@@ -13,8 +13,9 @@ It creates a self-contained staging workspace from an app-provided blueprint,
 lets you configure and test the app there, and can install the result as a
 deployed host service. Docker is the first supported deployment runtime.
 Linux supports both current-user Docker-managed installs and system-scope
-systemd installs; macOS and Windows support Docker Desktop-backed staging and
-Docker-managed user-scope permanent installs.
+systemd installs; macOS supports Docker-compatible staging and Docker-managed
+user-scope permanent installs; Windows supports Docker Desktop-backed staging
+and Docker-managed user-scope permanent installs.
 
 ## Install
 

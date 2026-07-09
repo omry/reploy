@@ -103,7 +103,7 @@ and uninstall would all exercise installed-app behavior without requiring
 Linux root/systemd system services for the common user-scope case.
 
 This should be evaluated as a backend option, not assumed as a replacement for
-the current Docker/systemd and Docker Desktop paths. On macOS and Windows,
+the current Docker/systemd and Docker-managed paths. On macOS and Windows,
 Podman containers still run on the host machine inside a Linux VM, so the
 security and lifecycle promises are VM-backed userland promises rather than
 native OS service promises. On Linux, rootless Podman depends on host

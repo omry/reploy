@@ -1,0 +1,3 @@
+kind: Changed
+body: Exercise Docker-managed persistent installs in Linux and macOS integration, including hosted macOS through a Docker-compatible runtime.
+time: 2026-07-09T16:40:19+08:00

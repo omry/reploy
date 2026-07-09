@@ -98,7 +98,7 @@ func (platform hostPlatform) installBackend() installBackend {
 }
 
 func (platform hostPlatform) installBackendForScope(scope InstallScope) installBackend {
-	if platform.GOOS == "linux" && scope == InstallScopeUser {
+	if (platform.GOOS == "linux" || platform.GOOS == "darwin") && scope == InstallScopeUser {
 		return installBackendDockerManaged
 	}
 	return platform.installBackend()
@@ -118,7 +118,7 @@ func (platform hostPlatform) commandSupport(command platformCommand) platformCom
 	case "linux":
 		return linuxCommandSupport(command)
 	case "darwin":
-		return dockerDesktopCommandSupport(command)
+		return dockerManagedPOSIXCommandSupport(command)
 	case "windows":
 		return windowsCommandSupport(command)
 	default:
@@ -157,7 +157,7 @@ func linuxCommandSupport(command platformCommand) platformCommandSupport {
 	}
 }
 
-func dockerDesktopCommandSupport(command platformCommand) platformCommandSupport {
+func dockerManagedPOSIXCommandSupport(command platformCommand) platformCommandSupport {
 	switch command {
 	case platformCommandHelp,
 		platformCommandIndex,
@@ -177,13 +177,13 @@ func dockerDesktopCommandSupport(command platformCommand) platformCommandSupport
 		platformCommandTest,
 		platformCommandDoctorPreinstall,
 		platformCommandInstall:
-		return supportedCommandSupport(true)
+		return supportedCommandSupport(false)
 	case platformCommandUninstallServiceName,
 		platformCommandUninstallList:
 		return unsupportedCommandSupport("Linux/systemd service discovery is not part of Docker-managed install")
 	case platformCommandInstalledPowerShell,
 		platformCommandWindowsService:
-		return unsupportedCommandSupport("not part of the macOS Docker Desktop support path")
+		return unsupportedCommandSupport("not part of the macOS Docker-managed support path")
 	default:
 		return unsupportedCommandSupport("unknown command surface")
 	}

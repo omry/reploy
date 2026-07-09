@@ -35,7 +35,7 @@ which permanent-install semantics Reploy can promise.
 | --- | --- | --- | --- |
 | Linux | Supported | Supported | Supported as user-scope Docker-managed install or system-scope systemd install |
 | Windows | Supported with `windows-amd64` and `windows-arm64` release artifacts | Supported with Docker Desktop and Linux containers | Supported as a Docker-managed install; not a Windows Service install |
-| macOS | Supported with `darwin-amd64` and `darwin-arm64` release artifacts | Supported with Docker Desktop | Supported as a Docker-managed install; not a launchd or Linux/systemd OS service install |
+| macOS | Supported with `darwin-amd64` and `darwin-arm64` release artifacts | Supported with a Docker-compatible runtime | Supported as a Docker-managed install; not a launchd or Linux/systemd OS service install |
 
 WSL follows the Linux support path: use the Linux Reploy binary inside WSL with
 Linux paths and Linux-style control scripts. Native Windows support means
@@ -52,8 +52,8 @@ Python app backend + Docker runtime + Linux host with systemd
 
 Linux user-scope installs, macOS installs, and Windows installs are
 Docker-managed permanent installs. They use Docker Compose restart policy and
-depend on the user's Docker runtime or Docker Desktop being started for reboot
-resistance. They do not provide the same service-user isolation as
+depend on the user's Docker-compatible runtime or Docker Desktop being started
+for reboot resistance. They do not provide the same service-user isolation as
 Linux/systemd OS service installs.
 
 The supported ways to install the Reploy command itself are the release install

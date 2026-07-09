@@ -32,18 +32,13 @@ jobs:
         include:
           - name: Linux amd64
             runner: ubuntu-latest
-            persistent_install: false
+            persistent_install: true
           - name: Linux arm64
             runner: ubuntu-24.04-arm
-            persistent_install: false
+            persistent_install: true
           - name: macOS amd64
             runner: ${{ inputs.macos_runner || 'macos-15-intel' }}
-            # GitHub-hosted macOS runners use Colima, which provides a Linux
-            # Docker engine. Reploy's Docker-managed permanent install support
-            # on macOS is intentionally Docker Desktop-only, so this hosted
-            # gate validates the macOS staging/runtime path without claiming
-            # Docker Desktop install coverage.
-            persistent_install: false
+            persistent_install: true
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
