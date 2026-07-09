@@ -120,9 +120,55 @@ canonical_path() {
     (cd "$dir" 2>/dev/null && printf '%s/%s\n' "$(pwd -P)" "$base") || printf '%s\n' "$path"
 }
 
-print_path_hint() {
-    echo "Add $install_dir to PATH before other Reploy installations, for example:"
-    echo "  export PATH=\"$install_dir:\$PATH\""
+shell_quote() {
+    printf "'"
+    printf "%s" "$1" | sed "s/'/'\\\\''/g"
+    printf "'"
+}
+
+print_path_command() {
+    quoted_dir="$(shell_quote "$install_dir")"
+    echo "     export PATH=$quoted_dir:\$PATH"
+}
+
+print_uninstall_command() {
+    quoted_target="$(shell_quote "$target_path")"
+    echo "     rm -f $quoted_target"
+}
+
+print_uninstall_hint() {
+    echo "To uninstall this Reploy command:"
+    print_uninstall_command
+}
+
+reploy_install_mode() {
+    candidate="$1"
+    case "$candidate" in
+        "$HOME/.local/bin/reploy")
+            echo "script install default ($HOME/.local/bin)"
+            ;;
+        */.venv/bin/reploy|*/venv/bin/reploy)
+            echo "Python virtual environment (inferred from path)"
+            ;;
+        */pipx/venvs/*/bin/reploy|*/.local/pipx/venvs/*/bin/reploy)
+            echo "pipx environment (inferred from path)"
+            ;;
+        *)
+            echo ""
+            ;;
+    esac
+}
+
+print_reploy_details() {
+    candidate="$1"
+    mode="$(reploy_install_mode "$candidate")"
+    if [ -n "$mode" ]; then
+        echo "Found first installation mode:"
+        echo "  $mode"
+    fi
+    quoted_candidate="$(shell_quote "$candidate")"
+    echo "Inspect first command manually:"
+    echo "     $quoted_candidate --version"
 }
 
 need uname
@@ -189,12 +235,18 @@ echo "Installed:"
 echo "  $target_path"
 echo
 "$target_path" --version || true
+echo
+print_uninstall_hint
 
 resolved_reploy="$(command -v reploy 2>/dev/null || true)"
 if [ -z "$resolved_reploy" ]; then
     echo
     echo "reploy is not on PATH."
-    print_path_hint
+    echo "Options:"
+    echo "  1. Correct PATH so this install is found:"
+    print_path_command
+    echo "  2. Uninstall the command installed by this script:"
+    print_uninstall_command
 else
     canonical_target="$(canonical_path "$target_path")"
     canonical_resolved="$(canonical_path "$resolved_reploy")"
@@ -203,8 +255,13 @@ else
         echo "The installed reploy is not the first reploy on PATH."
         echo "Installed:"
         echo "  $target_path"
-        echo "Found on PATH:"
+        echo "Found first on PATH:"
         echo "  $resolved_reploy"
-        print_path_hint
+        print_reploy_details "$resolved_reploy"
+        echo "Options:"
+        echo "  1. Uninstall the command installed by this script:"
+        print_uninstall_command
+        echo "  2. Correct PATH so this install is used first:"
+        print_path_command
     fi
 fi

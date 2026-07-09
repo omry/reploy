@@ -105,6 +105,75 @@ function Get-CanonicalPath {
     }
 }
 
+function Format-PowerShellLiteral {
+    param([string]$Value)
+
+    return "'" + $Value.Replace("'", "''") + "'"
+}
+
+function Get-DefaultScriptInstallPath {
+    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        return ""
+    }
+    return Join-Path (Join-Path $env:LOCALAPPDATA "Programs\Reploy\bin") "reploy.exe"
+}
+
+function Write-UninstallCommand {
+    param([string]$Path)
+
+    Write-Output "     Remove-Item -LiteralPath $(Format-PowerShellLiteral $Path) -Force"
+}
+
+function Write-UninstallHint {
+    param([string]$Path)
+
+    Write-Output "To uninstall this Reploy command:"
+    Write-UninstallCommand -Path $Path
+}
+
+function Write-PathCommand {
+    param([string]$Directory)
+
+    Write-Output "     `$env:Path = $(Format-PowerShellLiteral "$Directory;") + `$env:Path"
+}
+
+function Get-ReployInstallMode {
+    param(
+        [string]$Path,
+        [string]$DefaultScriptInstallPath
+    )
+
+    $canonical = Get-CanonicalPath $Path
+    if (
+        -not [string]::IsNullOrWhiteSpace($DefaultScriptInstallPath) -and
+        $canonical -eq (Get-CanonicalPath $DefaultScriptInstallPath)
+    ) {
+        return "script install default ($DefaultScriptInstallPath)"
+    }
+    if ($canonical -match "\\\.venv\\scripts\\reploy(\.exe)?$" -or $canonical -match "\\venv\\scripts\\reploy(\.exe)?$") {
+        return "Python virtual environment (inferred from path)"
+    }
+    if ($canonical -match "\\pipx\\venvs\\.*\\scripts\\reploy(\.exe)?$") {
+        return "pipx environment (inferred from path)"
+    }
+    return ""
+}
+
+function Write-ReployDetails {
+    param(
+        [string]$Path,
+        [string]$DefaultScriptInstallPath
+    )
+
+    $mode = Get-ReployInstallMode -Path $Path -DefaultScriptInstallPath $DefaultScriptInstallPath
+    if (-not [string]::IsNullOrWhiteSpace($mode)) {
+        Write-Output "Found first installation mode:"
+        Write-Output "  $mode"
+    }
+    Write-Output "Inspect first command manually:"
+    Write-Output "     & $(Format-PowerShellLiteral $Path) --version"
+}
+
 function Test-PathEntry {
     param(
         [string]$PathValue,
@@ -176,6 +245,7 @@ if ([string]::IsNullOrWhiteSpace($To)) {
     $To = Join-Path $env:LOCALAPPDATA "Programs\Reploy\bin"
 }
 
+$defaultScriptInstallPath = Get-DefaultScriptInstallPath
 $arch = Get-TargetArch
 $target = "windows-$arch"
 $resolvedVersion = Get-ReployVersion -RequestedVersion $Version
@@ -218,27 +288,43 @@ try {
     Write-Warning "installed binary did not report a version: $_"
 }
 
+Write-Output ""
+Write-UninstallHint -Path $targetPath
+
 if ($AddToPath) {
     Add-UserPathEntry -Entry $To
     Write-Output ""
     Write-Output "Added install directory to the current user's PATH:"
     Write-Output "  $To"
     Write-Output "Restart already-open shells to pick up the user PATH update."
-} elseif (-not $NoPathUpdate) {
+}
+
+if (-not $NoPathUpdate) {
     $resolved = Get-Command "reploy.exe" -ErrorAction SilentlyContinue
     if ($null -eq $resolved) {
         Write-Output ""
         Write-Output "reploy.exe is not on PATH."
-        Write-Output "Rerun with -AddToPath or add this directory to the current user's PATH:"
-        Write-Output "  $To"
+        Write-Output "Options:"
+        Write-Output "  1. Correct PATH so this install is found:"
+        Write-Output "     Rerun with -AddToPath, or add this directory to the current user's PATH:"
+        Write-Output "     $To"
+        Write-Output "  2. Uninstall the command installed by this script:"
+        Write-UninstallCommand -Path $targetPath
     } elseif ((Get-CanonicalPath $resolved.Source) -ne (Get-CanonicalPath $targetPath)) {
         Write-Output ""
         Write-Output "The installed reploy.exe is not the first reploy.exe on PATH."
         Write-Output "Installed:"
         Write-Output "  $targetPath"
-        Write-Output "Found on PATH:"
+        Write-Output "Found first on PATH:"
         Write-Output "  $($resolved.Source)"
-        Write-Output "Move this directory earlier in the current user's PATH if needed:"
-        Write-Output "  $To"
+        Write-ReployDetails -Path $resolved.Source -DefaultScriptInstallPath $defaultScriptInstallPath
+        Write-Output "Options:"
+        Write-Output "  1. Uninstall the command installed by this script:"
+        Write-UninstallCommand -Path $targetPath
+        Write-Output "  2. Correct PATH so this install is used first:"
+        Write-Output "     Move this directory earlier in the current user's PATH:"
+        Write-Output "     $To"
+        Write-Output "     Or update this shell now:"
+        Write-PathCommand -Directory $To
     }
 }

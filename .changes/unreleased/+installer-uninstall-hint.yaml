@@ -1,0 +1,3 @@
+kind: Changed
+body: Print Reploy CLI uninstall commands from the install scripts and make PATH-shadowing guidance show safe inspection, uninstall, and PATH-correction options.
+time: 2026-07-09T17:42:07+08:00

@@ -60,7 +60,40 @@ $HOME/.local/bin/reploy
 
 The installer prints the requested version, detected platform, download URL,
 target path, installed binary version, and a PATH hint when the installed
-command is not already on `PATH`.
+command is not already on `PATH`. It also prints the command that removes the
+installed Reploy executable.
+
+## Uninstall the Reploy Command
+
+To undo the default script install, remove the installed executable:
+
+<PlatformTabs>
+  <TabItem value="linux">
+
+```bash
+rm -f "$HOME/.local/bin/reploy"
+```
+
+  </TabItem>
+  <TabItem value="windows">
+
+```powershell
+Remove-Item -LiteralPath "$env:LOCALAPPDATA\Programs\Reploy\bin\reploy.exe" -Force
+```
+
+  </TabItem>
+  <TabItem value="macos">
+
+```bash
+rm -f "$HOME/.local/bin/reploy"
+```
+
+  </TabItem>
+</PlatformTabs>
+
+If you used a custom install directory, use the exact uninstall command printed
+by the installer. This removes the Reploy CLI itself; apps installed by Reploy
+are removed with `reploy uninstall`.
 
 On macOS, initial Reploy release binaries may be unsigned and unnotarized. If
 macOS blocks first launch, use the standard Gatekeeper approval flow for a
