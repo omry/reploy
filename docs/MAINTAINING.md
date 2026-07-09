@@ -59,11 +59,11 @@ nox -s cli-integration
 This integration test is intentionally outside the default CI session. It runs
 before publishing and can be triggered manually from the Integration workflow.
 On Linux, it covers the real-Docker staging runtime path. On GitHub-hosted
-macOS runners, it covers the staging runtime path through Colima; macOS
-Docker-managed permanent install remains Docker Desktop-only and needs
-separate host evidence. On Windows, when run through `tools/e2e/smoke_windows.ps1`,
-it covers the Docker-managed persistent install path with generated control
-scripts.
+macOS runners, it also runs the persistent-install gate so a Colima-backed
+runner fails clearly at the Docker Desktop boundary instead of silently
+downgrading macOS coverage. On Windows, when run through
+`tools/e2e/smoke_windows.ps1`, it covers the Docker-managed persistent install
+path with generated control scripts.
 
 For Windows release follow-up coverage, use the focused PowerShell wrapper:
 
