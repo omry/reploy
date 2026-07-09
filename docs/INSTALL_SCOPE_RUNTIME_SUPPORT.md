@@ -41,6 +41,7 @@ unit, Compose project lifecycle, or host runtime authority belong to the
 | Linux | Podman rootful with systemd/Quadlet | Partial | Yes | Partial | Good system substrate. Can set container user IDs, but the runtime is still rootful unless the unit is installed in a rootless user path. |
 | Linux | Podman rootless with user systemd/Quadlet | Yes | No | Yes | Best candidate for a dedicated non-root app-user backend. Admin can create `arbiter`, place Quadlet files under the user's rootless unit path, and enable user-session persistence. |
 | macOS | Docker Desktop | Yes | No | No | Docker Desktop is a user-session/VM-backed runtime. It can need privileged setup for helper configuration, but app containers are not native macOS services or per-app macOS users. |
+| macOS | Colima/Lima Docker-compatible VM | Yes | No | Not as a host guarantee | Hosted CI validates this as a current-user Docker-managed install substrate. Reboot resistance depends on the VM/runtime startup policy outside Reploy. |
 | macOS | Podman Machine | Yes | No | Not as a host guarantee | Containers run on the Mac inside a Podman-managed Linux VM. Per-app users inside the VM are possible, but they are not native macOS service-user isolation. |
 | Windows | Docker Desktop per-user install | Yes | No | No | Per-user Docker Desktop can install/update without admin and uses WSL 2 for Linux containers. It is not a per-app Windows service-user model. |
 | Windows | Docker Desktop all-users install | Partial | No | No | All-users install requires admin and can use WSL 2 or Hyper-V. It has broader host privileges but still does not provide a clean per-app user install scope for Linux containers. |
@@ -92,14 +93,15 @@ Linux containers.
 Docker Desktop is a user-facing app backed by a Linux-container VM. It can be
 installed and operated for a user, and Docker documents privileged helper setup
 options, but this does not create a native macOS service-user boundary for each
-installed app. It is best modeled as `current-user` Docker-managed persistence,
-with reboot resistance depending on Docker Desktop starting at login.
+installed app. It is best modeled as one `current-user` Docker-managed
+persistence runtime, with reboot resistance depending on Docker Desktop
+starting at login.
 
-Podman Machine is similar from an install-scope perspective. It can provide a
-local user-owned Linux VM on the Mac. Containers run on the Mac inside that VM,
-not directly as macOS launchd services or macOS service users. A VM-internal
-app user may still be useful, but it is not the same host guarantee as a Linux
-dedicated app user.
+Colima, Podman Machine, and similar Docker-compatible VM runtimes are similar
+from an install-scope perspective. They can provide a local user-owned Linux VM
+on the Mac. Containers run on the Mac inside that VM, not directly as macOS
+launchd services or macOS service users. A VM-internal app user may still be
+useful, but it is not the same host guarantee as a Linux dedicated app user.
 
 ## Windows
 
@@ -132,8 +134,10 @@ service-user isolation.
 - Linux `dedicated app user` scope is most promising with rootless Podman plus
   user systemd/Quadlet. It requires privileged setup, then unprivileged runtime
   under the app account.
-- macOS and Windows Docker Desktop should be treated as `current-user`
+- macOS Docker-compatible VM runtimes should be treated as `current-user`
   Docker-managed installs, not native system installs.
+- Windows Docker Desktop should be treated as a `current-user` Docker-managed
+  install, not a native system install.
 - macOS and Windows Podman Machine may improve runtime uniformity, but their
   app-user isolation is VM-backed, not native host service-user isolation.
 

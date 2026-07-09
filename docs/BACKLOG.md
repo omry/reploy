@@ -31,14 +31,7 @@ This file is the day-to-day queue for design and implementation gaps.
 
 ## Now
 
-- [ ] `P0` Revert hosted macOS persistent-install CI policy change.
-      Revert the CI/docs change that downgraded hosted macOS integration to
-      runtime-only after the runner exposed a non-Docker-Desktop backend.
-      Acceptance checks: persistent-install coverage is restored or the workflow
-      fails clearly at the unsupported runner boundary; the remaining runtime
-      smoke fix is kept only if it still reflects the intended smoke contract;
-      and any decision to change macOS install coverage is made explicitly by
-      the maintainer, not hidden inside a fix.
+No active backlog items.
 
 ## Pre-release
 

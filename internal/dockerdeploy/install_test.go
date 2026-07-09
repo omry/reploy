@@ -74,7 +74,7 @@ func TestInstallDryRunPrintsPlan(t *testing.T) {
 	}
 }
 
-func TestInstallDryRunOnDarwinPrintsDockerDesktopPlan(t *testing.T) {
+func TestInstallDryRunOnDarwinPrintsDockerManagedPlan(t *testing.T) {
 	disableDoctorColor(t)
 	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "darwin"})
 	defer restorePlatform()
@@ -83,7 +83,7 @@ func TestInstallDryRunOnDarwinPrintsDockerDesktopPlan(t *testing.T) {
 		detectDockerRuntimeForDoctor = previousDetector
 	})
 	detectDockerRuntimeForDoctor = func(context.Context, CommandSpec, time.Duration) (dockerRuntimeInfo, error) {
-		return dockerRuntimeInfo{Runtime: dockerRuntimeDockerDesktop, OperatingSystem: "Docker Desktop"}, nil
+		return dockerRuntimeInfo{Runtime: dockerRuntimeLinuxEngine, OperatingSystem: "Colima"}, nil
 	}
 	packDir := makeTestPackWithManifest(t, strings.Replace(testPackManifest(), `  owner:
     user: "1000"
@@ -635,8 +635,14 @@ func TestInstallScopeValidationRejectsUnsupportedCombinations(t *testing.T) {
 	if got := (hostPlatform{GOOS: "linux"}).installBackendForScope(InstallScopeUser); got != installBackendDockerManaged {
 		t.Fatalf("linux user backend = %s, want %s", got, installBackendDockerManaged)
 	}
+	if got := (hostPlatform{GOOS: "darwin"}).installBackendForScope(InstallScopeUser); got != installBackendDockerManaged {
+		t.Fatalf("macos user backend = %s, want %s", got, installBackendDockerManaged)
+	}
 	if err := validateInstallScopeForBackend(InstallScopeUser, installBackendDockerManaged, hostPlatform{GOOS: "linux"}); err != nil {
 		t.Fatalf("linux user docker-managed error = %v", err)
+	}
+	if err := validateInstallScopeForBackend(InstallScopeUser, installBackendDockerManaged, hostPlatform{GOOS: "darwin"}); err != nil {
+		t.Fatalf("macos user docker-managed error = %v", err)
 	}
 	if err := validateInstallScopeForBackend(InstallScopeSystem, installBackendDockerDesktop, hostPlatform{GOOS: "darwin"}); err == nil || !strings.Contains(err.Error(), "--scope system is not supported on macos with Docker Desktop") {
 		t.Fatalf("macos system error = %v", err)
