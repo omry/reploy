@@ -1,0 +1,2 @@
+kind: Fixed
+body: Run environment after_install only after deployment files, mounts, runtime inputs, and backend service definitions are ready.

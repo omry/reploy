@@ -1,0 +1,2 @@
+kind: Fixed
+body: Execute environment before_start, readiness, and after_start through the native lifecycle plan during install with start.

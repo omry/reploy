@@ -26,6 +26,20 @@ func PrintInstallSuccess(dir string, stdout io.Writer, dockerPreflightTimeout ti
 }
 
 func InstallSuccessLines(dir string, dockerPreflightTimeout time.Duration) ([]string, error) {
+	state, stateErr := loadState(dir)
+	if stateErr == nil {
+		pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
+		if err != nil {
+			return nil, err
+		}
+		if pack.Environment != nil {
+			plan, err := ResolvedDockerExecutionPlan(dir, pack, state)
+			if err != nil {
+				return nil, err
+			}
+			return resolveInstallSuccessLines(*pack.Environment, plan)
+		}
+	}
 	success, err := installSuccessConfig(dir)
 	if err != nil {
 		return nil, err

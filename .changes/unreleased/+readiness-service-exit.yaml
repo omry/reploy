@@ -1,0 +1,2 @@
+kind: Fixed
+body: Stop readiness retries immediately when the environment workload leaves the running state.

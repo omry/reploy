@@ -1,0 +1,2 @@
+kind: Fixed
+body: Apply environment preserve, replace, unmanaged, --replace, and --clean path policies during installation.
