@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-11
+updated: 2026-07-14
 summary: Evidence-driven implementation plan for the blueprint environment and workload model.
 implements: docs/BLUEPRINT_ENVIRONMENT_MODEL.md
 ---
@@ -19,7 +19,10 @@ development installations.
 
 Initial scope:
 
-- Python components, optional components, and explicit development translations.
+- Blueprint-level platform compatibility and one required `base` root component
+  containing the starting OCI image and any explicitly declared outputs.
+- Python components, component-scoped options, and explicit development
+  translations.
 - Docker with a BuildKit-generated Python image.
 - At most one persistent service workload.
 - Native one-shot commands and built-in `reploy shell`.
@@ -148,8 +151,10 @@ Implement:
 - Portable `environment.id`; optional `control_script` defaults directly to ID.
   Reject unsafe/reserved filenames and native-trigger collisions with control
   operations.
-- Vars, translations, required/optional components, paths, executables,
-  commands, optional workload, `workload.runtime`, install, and Docker nodes.
+- Blueprint compatibility; the required `components.base` root; vars,
+  translations, provider components and component-scoped options, paths,
+  executables, commands, optional workload, `workload.runtime`, install, and
+  Docker runtime nodes including `additional_mount_roots`.
 - Install target defaults, semantic host variables, `system.run_as`, success
   lines, and current platform/scope validation.
 - Strict unknown-field rejection and explicit rejection of legacy top-level
@@ -171,7 +176,7 @@ Resolution order:
 
 Validation includes ports/durations, readiness paths, path/mount combinations,
 component/output references, command order and triggers, install target keys,
-and inactive optional components contributing no requirements or outputs.
+and disabled component options contributing no requirements or outputs.
 Missing referenced outputs fail at resolution/materialization or runtime
 preflight if installed state drifted.
 
@@ -186,25 +191,51 @@ Tests:
 
 Define a provider contract that:
 
-- validates all active same-type components together;
+- represents the required `base` component as the graph root, validates its
+  explicitly declared outputs against the selected immutable image, and gives
+  it no provider bundle or materialization transaction;
+- groups active components into provider nodes according to their
+  materialization semantics;
+- plans a structural graph containing the base root and explicit supplier
+  edges, rejects structural cycles before resolution, then freezes automatic
+  supplier selections from already initialized output catalogs immediately
+  before each consumer resolver runs;
 - resolves a closed checksummed artifact set for platform/base identity;
 - applies translations without turning them into install requests;
 - reports provider-owned executable outputs and final image paths;
 - emits a deterministic offline recipe with a recipe version;
+- distinguishes ordinary recipe data from typed executable operands and binds
+  each executable operand to its supplier/prerequisite, immutable upstream
+  image, invocation/link/terminal paths, file evidence, and capabilities;
+- separates pre-build declarations for provider-generated executables from
+  their post-materialization realized link/terminal/file evidence;
+- declares versioned provider-owned resolver/probe child environments with
+  closed stdin and no controlling terminal;
+- emits versioned canonical bundle locks containing only declarative metadata
+  and raw provider artifacts, and regenerates locked carrier code solely from
+  the exact locally trusted historical recipe implementation;
 - declares and validates tool/runtime prerequisites from the base image,
-  provider-owned builder, or an earlier provider DAG node.
+  provider-owned builder, or an earlier provider DAG node;
+- compiles backend and provider prerequisites into canonical versioned
+  exact-prefix requirement profiles whose evidence is keyed by immutable image
+  digest and profile digest.
 
 Python implementation:
 
-- Combine requirements from required and selected optional Python components.
-- Keep optional selections and direct package/source roots in deployment state;
-  inactive optional components contribute nothing.
+- Resolve each Python component independently from its own requirements,
+  enabled component options, and explicitly targeted direct package/source
+  additions.
+- Keep option selections and direct package/source roots in deployment state;
+  disabled options contribute nothing.
 - Normalize explicit distribution mappings, enforce translation-root boundaries,
   and give mappings precedence over index candidates including transitives.
 - Validate built metadata, constraints, duplicate normalized names, collisions,
   and unused mappings.
-- Preflight compatible Python in the selected base image; never install an
-  undeclared prerequisite implicitly.
+- Preflight compatible Python through a declared and validated `base` output;
+  never search the image or install an undeclared prerequisite implicitly.
+- Pass the selected interpreter to resolution and materialization only as a
+  typed validated executable operand; never use ordinary data or `PATH` to
+  select the command.
 - Install at a provider-owned fixed path and resolve console scripts absolutely.
 
 Adapt existing bundle options/add/remove/list/prepare/check/upgrade UX before
@@ -212,28 +243,71 @@ removing legacy bundle projection.
 
 Gate: provider unit tests cover closed resolution, option selection,
 translations, deterministic ordering, prerequisites, incompatibilities, and
-executable lookup.
+executable lookup. Graph tests cover base-first automatic selection,
+incompatible-base selection of an earlier provider output, explicit supplier
+override, no retroactive use of later nodes, observed incompatibility failure
+without fallback, and deterministic selected edges in the final lock.
 
-The Python-only implementation may use a single provider node. Implement the
-generalized provider DAG executor before enabling a second component provider.
+Retain the current single aggregated Python node only as a migration step.
+Implement the generalized provider DAG executor and component-scoped Python
+nodes before accepting multiple independently materialized Python environments
+or a second component provider.
 
 ## Phase 3: BuildKit Image Materialization
 
 Prototype first; complete only after the architecture review gate.
 
-- Resolve a mutable author image tag to an immutable digest at stage/update.
+- Resolve the mutable image reference from `components.base.image` to an
+  immutable platform-specific descriptor during `reploy build`.
+- Inspect and normalize the base-image configuration according to the model;
+  reject unsupported hidden build/runtime behavior before materialization.
 - Generate the build definition and invocation internally.
 - Mount the closed bundle read-only; install offline; retain only installed
   results in the generated image.
-- Define semantic identity from base digest, platform, closed artifacts,
-  translated-source content, provider recipe versions, and prerequisite inputs.
-- Exclude ports, mounts, phase/scope, runtime owner, lifecycle, readiness, and
-  restart policy from image identity.
-- Label images with directory identity and fingerprint. Record staging,
-  installed, and previous references safely.
+- Render each provider node as one explicit invocation of one read-only mounted,
+  provider-owned script and exactly one layer-producing BuildKit transaction.
+  Render every recipe field or reject it, run materialization without network,
+  and launch provider subprocesses under an exact versioned provider-owned
+  child-environment profile without inherited or blueprint-provided variables,
+  with stdin from `/dev/null` and no controlling terminal.
+- Permit command position only for provider-fixed absolute tools, typed
+  validated upstream executables, or recipe-declared generated executables
+  after validation; ordinary dynamic data remains arguments only. Bind generated
+  declarations to transaction identity and observed evidence to realized image
+  identity.
+- Distinguish semantic bundle identity, the broader order-dependent assembly
+  transaction identity, and realized image identity. Assembly additionally
+  binds the exact upstream image, script and runner, controlled environments,
+  execution policy, build mounts, and typed executable inputs; realized
+  identity adds the immutable image digest and observed output evidence.
+- Implement local `lock-v1` digest vectors for environment-build identity and
+  validation. Portable lock replay and environment export/import are deferred;
+  when added, they must reject unsupported compatibility data and never accept
+  carrier code from imported content.
+- Represent build mounts with directory-independent logical descriptors and
+  existing manifest/script digests. Atomically publish verified bundle roots,
+  late-bind physical backend paths, and do not rehash artifact bytes during
+  normal cache lookup or materialization.
+- Implement one bounded exact-prefix validation probe per immutable image and
+  requirement-profile pair. Validate carrier and provider tools, typed
+  executable evidence, and the absence of the fixed transient build-mount root
+  after each newly realized prefix and before it is consumed; cache
+  only exact matching evidence and block downstream work on failure.
+- Probe and enforce versioned provider argument-vector budgets against each
+  exact execution environment before rendering. Diagnose over-budget operations
+  before the affected resolver or BuildKit execution and do not silently chunk
+  one provider transaction.
+- Exclude runtime-only inputs such as published ports, runtime mounts,
+  phase/scope, runtime owner, lifecycle, readiness, and restart policy from
+  provider-node image identity.
+- Keep shareable image/cache identity independent of deployment directories.
+  Record environment-owned staging, installed, and previous references safely,
+  with canonical content-addressed references used only for cache lookup.
 - Reuse unchanged images/layers, invalidate changed DAG nodes and downstream
   nodes, and recover interrupted relinking from state.
-- Remove only directory-owned unreferenced resources; never globally prune.
+- Remove only environment-owned references during environment cleanup; handle
+  canonical cache references through explicit cache cleanup, never force-delete
+  an environment-used image, and never globally prune.
 
 Probe and document the supported Linux Engine and Docker Desktop BuildKit
 invocation. Fail preflight clearly when unavailable; do not add a classic-builder
@@ -254,6 +328,15 @@ installed scope, materialized image, and CLI install overrides.
 Paths and mounts:
 
 - Environment owns `container`, `writable` (default false), and `update`.
+- Reserve `/mnt` as the default runtime-mount root; require normal destinations
+  to be strict descendants, and admit other roots only through normalized,
+  non-overlapping `docker.additional_mount_roots` entries.
+- Against the exact immutable image, require every effective Reploy/blueprint
+  mount target to be absent or an empty real directory; reject files, symlinks,
+  mountpoints, non-empty directories, overlapping destinations, and every
+  protected provider/Reploy intersection without recursive filesystem scans.
+- Keep Docker-intrinsic kernel and resolver mounts outside the blueprint
+  allowlist while validating every Reploy-generated mount.
 - Enforce the model matrix:
   - managed-bind: preserve or replace;
   - named volume: preserve or replace, with replacement copied from the staging
@@ -277,17 +360,29 @@ Endpoints and readiness inputs:
 
 Ownership:
 
-- Staging runs as the invoking user but has no install scope.
-- Installed user scope uses the installing user's numeric UID/GID and warns when
-  overriding image `USER` or ignoring `system.run_as`.
+- Staging has no install scope and uses the backend's current-user container
+  identity policy.
+- On native Linux, staged and installed user containers use the invoking user's
+  numeric UID/GID.
+- On Docker Desktop, staged and installed user containers use a stable,
+  recorded Reploy-managed non-root Linux UID/GID inside the Desktop VM rather
+  than the macOS or Windows account's numeric identity.
+- User-scope operations warn when overriding image `USER` or ignoring
+  `system.run_as`.
 - Installed system scope uses the resolved service account.
 - Only writable paths and Reploy temporary home are writable.
+- Immediately before each workload or transient container, validate mount-source
+  usability and selected executable traversal/read/execute access under the
+  exact immutable image, effective mounts, numeric UID, primary GID, and
+  supplementary groups. Store the result only in deployment state.
 
 Regenerate Compose, backend env/state, dry-run, status, and control inputs from
 the plan. Use exec-form Compose commands, not `sh -c`.
 
 Gate: golden rendering/state tests plus Linux system/user and Docker Desktop
-current-user planning tests.
+current-user planning tests. Mount-policy tests cover `/mnt`, additional roots,
+no-shadow image inspection, protected intersections, intrinsic-mount exclusion,
+and runtime access evidence remaining outside shareable identities.
 
 ## Phase 5: Commands and Interactive Shell
 
