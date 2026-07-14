@@ -1,0 +1,2 @@
+kind: Fixed
+body: Make the bounded writable environment temporary directory available through TMPDIR so applications can create temporary files with a read-only container root.

@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -41,6 +42,9 @@ func TestServer(options TestOptions) error {
 	}
 	stdout, _ := deploymentOutputWritersForDeployment(options.Dir, state, options.Stdout, nil)
 	options.Stdout = stdout
+	if state.EnvironmentModel {
+		return testEnvironmentReadiness(options, state)
+	}
 	serverURL, err := ServerURL(options.Dir)
 	if err != nil {
 		return err
@@ -95,6 +99,51 @@ func TestServer(options TestOptions) error {
 			return nil
 		}
 	}
+}
+
+func testEnvironmentReadiness(options TestOptions, state deploy.DeploymentState) error {
+	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
+	if err != nil {
+		return err
+	}
+	plan, err := ResolvedDockerExecutionPlan(options.Dir, pack, state)
+	if err != nil {
+		return err
+	}
+	if plan.Workload == nil {
+		return fmt.Errorf("environment has no workload to test")
+	}
+	if err := ensureRuntimeCompose(options.Dir); err != nil {
+		return fmt.Errorf("ensure runtime compose: %w", err)
+	}
+	if err := requireComposeServiceRunning(options.Dir, options.RestartingDiagnostics, options.DockerPreflightTimeout); err != nil {
+		return err
+	}
+	names := make([]string, 0, len(plan.Workload.Endpoints))
+	for name, endpoint := range plan.Workload.Endpoints {
+		if endpoint.Readiness != nil {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return fmt.Errorf("environment workload has no readiness endpoint")
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		endpoint := plan.Workload.Endpoints[name]
+		readiness := *endpoint.Readiness
+		readiness.Timeout = options.Timeout
+		endpoint.Readiness = &readiness
+		if err := WaitForHTTPReadinessWithServiceCheck(context.Background(), endpoint, func(context.Context) error {
+			return requireComposeServiceRunning(options.Dir, options.RestartingDiagnostics, options.DockerPreflightTimeout)
+		}); err != nil {
+			return err
+		}
+		if options.Stdout != nil {
+			fmt.Fprintf(options.Stdout, "ok: %s\n", readinessTarget(endpoint))
+		}
+	}
+	return nil
 }
 
 func requireComposeServiceRunning(dir string, restartingDiagnostics string, dockerPreflightTimeout time.Duration) error {

@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -734,6 +735,20 @@ func stubAppCommandRunner(run func(CommandSpec, RunOptions) error) func() {
 	return func() {
 		runAppCommand = previousAppCommand
 		runRuntimeVolumeInitCommand = previousRuntimeVolumeInit
+	}
+}
+
+func TestShellCommandIOSupportsPipedStdin(t *testing.T) {
+	input := strings.NewReader("echo piped input\n")
+	actual, interactive, tty := shellCommandIO(input, io.Discard)
+	if actual != input {
+		t.Fatal("shell stdin was not preserved")
+	}
+	if !interactive {
+		t.Fatal("piped shell stdin must keep the container input stream open")
+	}
+	if tty {
+		t.Fatal("piped shell stdin must not allocate a TTY")
 	}
 }
 
