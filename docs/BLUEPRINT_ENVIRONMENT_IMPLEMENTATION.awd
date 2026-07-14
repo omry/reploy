@@ -1,0 +1,98 @@
+(
+  inventory legacy implementation and blueprint consumers
+  -> map every retained capability and intentional conflict
+  -> add missing characterization coverage
+  -> run focused baseline tests
+  -> baseline contract passes
+)
+!> (
+  create typed environment blueprint package
+  -> implement strict schema and legacy rejection
+  -> implement portable environment and control names
+  -> implement vars and reserved namespaces
+  -> implement lazy host phase scope workload and success resolution
+  -> implement prototype extends
+  -> implement install target and platform validation
+  -> add validation tables and resolved golden fixture
+  -> schema resolution gate passes
+)
+!> (
+  define provider prerequisite and materialization contracts
+  -> adapt required and optional Python components
+  -> adapt explicit development translations
+  -> adapt existing bundle UX and deployment selections
+  -> implement Python prerequisite and executable resolution
+  -> add provider contract tests
+  -> Python provider gate passes
+)
+!> (
+  (
+    prototype BuildKit generated image
+    -> probe Linux Engine and Docker Desktop capabilities
+    -> define semantic image and state identities
+    -> prototype reuse invalidation recovery and cleanup
+    -> add fake runner and real Docker evidence
+    -> review BuildKit architecture and safety evidence
+  )
+  ?> (
+    complete Python image materialization
+    -> generated image gate passes
+  )
+)
+!> (
+  implement resolved Docker execution plan
+  -> implement managed bind volume unmanaged bind and tmpfs mappings
+  -> implement semantic path update matrix and replacement safeguards
+  -> implement phase publication and retained port overrides
+  -> implement wildcard probe normalization inputs
+  -> implement staged user and installed user system ownership
+  -> regenerate Compose env state dry-run status and control inputs
+  -> add golden rendering and cross-platform planning tests
+  -> Docker execution plan gate passes
+)
+!> (
+  implement executable segment ordering and validation
+  -> implement trigger exposure and forwarding rules
+  -> enforce exec form invocation and injection protections
+  -> migrate one-shot commands to transient generated-image containers
+  -> implement built-in reploy shell
+  -> add command process and terminal tests
+  -> command and shell gate passes
+)
+!> (
+  implement environment install and workload runtime events
+  -> implement HTTP and HTTPS startup readiness
+  -> implement loopback wildcard IPv6 and TLS probe rules
+  -> compose install start stop and success output sequences
+  -> add event failure readiness and diagnostics tests
+  -> lifecycle and readiness gate passes
+)
+!> (
+  cut CLI state generated scripts and bundle operations to resolved plans
+  -> migrate repository blueprints
+  -> (
+    migrate and exercise Arbiter blueprint
+    | record external Arbiter validation as deferred
+  )
+  -> remove superseded schema protocols and startup installers
+  -> add Docs changelog and update blueprint documentation
+  -> run retained behavior and legacy rejection tests
+  -> cutover gate passes
+)
+!> (
+  run gofmt
+  -> run focused changed-package tests
+  -> focused verification passes
+)
+!> (
+  run full Go tests
+  + run CLI Docker integration smoke
+  + run release build smoke
+  + build website documentation
+  -> inspect generated artifacts Sapling diff release note and safety properties
+  -> final verification passes
+)
+!> (
+  review final implementation against normative model
+  ?> commit implementation
+)

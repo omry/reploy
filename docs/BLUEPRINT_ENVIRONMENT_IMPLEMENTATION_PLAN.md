@@ -1,0 +1,307 @@
+# Blueprint Environment Model Implementation Plan
+
+This document defines the work and evidence behind
+`BLUEPRINT_ENVIRONMENT_IMPLEMENTATION.awd`. The environment model is normative;
+this plan may choose implementation structure but must not invent public schema.
+
+## Scope and Compatibility
+
+Replace the existing unreleased schema-1 shape with the schema-1 environment
+model. Do not add a compatibility loader or automatic migration for existing
+development installations.
+
+Initial scope:
+
+- Python components, optional components, and explicit development translations.
+- Docker with a BuildKit-generated Python image.
+- At most one persistent service workload.
+- Native one-shot commands and built-in `reploy shell`.
+- Managed binds, named volumes, external unmanaged binds, and tmpfs mounts.
+- Staged and installed phases; user/system install scopes only where supported.
+- HTTP(S) startup readiness and the documented install/runtime events.
+
+Keep the model's private backlog out of the public schema. Existing Reploy CLI
+and deployment capabilities remain unless the model explicitly records a
+conflict. The intentional changes are the new schema, direct control-script
+default (`environment.id`, without `ctl`), generated-image materialization, and
+removal of private health/success-variable protocols.
+
+## Implementation Principles
+
+- Keep blueprint reference/artifact acquisition separate from schema decoding.
+- Add the resolved model beside legacy code; cut callers over only after the
+  replacement path passes its gate.
+- Resolve once into typed environment and Docker execution plans. Compose,
+  commands, lifecycle, install, status, dry-run, and cleanup consume those plans.
+- Keep generated bundle metadata, build definitions, layer graphs, and image
+  identities private.
+- Pass application invocations as argv arrays. Never construct shell command
+  text from blueprint or user arguments.
+- Preserve unrelated user changes and existing functionality in the dirty
+  worktree. Remove legacy code only after caller and test coverage is proven.
+- Use table tests for validation matrices, golden tests for resolved/rendered
+  plans, fake Docker runners for command construction, and focused real-Docker
+  tests for behavior fakes cannot establish.
+
+## Phase 0: Baseline and Contract Coverage
+
+Inventory and map:
+
+- `internal/deploy/pack.go`: schema, defaults, install locations, commands.
+- `internal/providers/python`: roots, resolution, executable discovery.
+- `internal/dockerdeploy`: bundle, runtime volume, Compose, paths, ports,
+  lifecycle, state, install/update, control scripts, commands, cleanup.
+- `internal/cli`: stage/install/bundle/app/runtime/shell-facing parsing and I/O.
+- Smoke, git-source, OmegaConf demo, and external Arbiter blueprints.
+
+Build a replacement table from every retained legacy surface to its new model,
+explicit removal, or backend-private equivalent. At minimum protect:
+
+- bundle options/add/remove/list/prepare/check/upgrade;
+- managed-path preserve/replace and `--replace`/`--clean`;
+- single and named `--port` overrides;
+- user/system ownership and cross-platform install targets;
+- one-shot stdout/stderr/exit propagation and command matching;
+- staged/installed state and installed scope persistence.
+
+Gate: focused parser, provider, Docker config/runtime/install, and CLI tests pass.
+
+## Phase 1: Schema, Validation, and Lazy Resolution
+
+Create `internal/blueprint` (or an equivalently focused package) with raw
+decoding internal and a typed resolved document public to callers.
+
+Implement:
+
+- Metadata and reserved interpolation roots: `blueprint`, `environment`,
+  `docker`, `reploy`, `user`, `system`.
+- Portable `environment.id`; optional `control_script` defaults directly to ID.
+  Reject unsafe/reserved filenames and native-trigger collisions with control
+  operations.
+- Vars, translations, required/optional components, paths, executables,
+  commands, optional workload, `workload.runtime`, install, and Docker nodes.
+- Install target defaults, semantic host variables, `system.run_as`, success
+  lines, and current platform/scope validation.
+- Strict unknown-field rejection and explicit rejection of legacy top-level
+  shapes after cutover.
+
+Resolution order:
+
+1. Decode and structurally validate while retaining expressions.
+2. Resolve global-variable dependencies; reject missing names and cycles.
+3. Resolve prototype `extends` only from environment path to Docker mount and
+   environment endpoint to Docker endpoint; reject field replacement/cross-kind
+   references.
+4. Resolve `user.*`/`system.*` from the active host/install context.
+5. Resolve `reploy.phase: staged|installed`; expose `reploy.scope: user|system`
+   only for installed environments. There is no system staging.
+6. Resolve `reploy.workload.*` after the Docker plan has effective bind and
+   publication values.
+7. Resolve install-success lines during install, then type-check consumed fields.
+
+Validation includes ports/durations, readiness paths, path/mount combinations,
+component/output references, command order and triggers, install target keys,
+and inactive optional components contributing no requirements or outputs.
+Missing referenced outputs fail at resolution/materialization or runtime
+preflight if installed state drifted.
+
+Tests:
+
+- Validation table for every rule and legacy rejection.
+- Var chains/cycles and phase/scope/host/workload availability.
+- Allowed/rejected `extends` and lazy copied expressions.
+- Golden resolved Arbiter-shaped document.
+
+## Phase 2: Component and Provider Contract
+
+Define a provider contract that:
+
+- validates all active same-type components together;
+- resolves a closed checksummed artifact set for platform/base identity;
+- applies translations without turning them into install requests;
+- reports provider-owned executable outputs and final image paths;
+- emits a deterministic offline recipe with a recipe version;
+- declares and validates tool/runtime prerequisites from the base image,
+  provider-owned builder, or an earlier provider DAG node.
+
+Python implementation:
+
+- Combine requirements from required and selected optional Python components.
+- Keep optional selections and direct package/source roots in deployment state;
+  inactive optional components contribute nothing.
+- Normalize explicit distribution mappings, enforce translation-root boundaries,
+  and give mappings precedence over index candidates including transitives.
+- Validate built metadata, constraints, duplicate normalized names, collisions,
+  and unused mappings.
+- Preflight compatible Python in the selected base image; never install an
+  undeclared prerequisite implicitly.
+- Install at a provider-owned fixed path and resolve console scripts absolutely.
+
+Adapt existing bundle options/add/remove/list/prepare/check/upgrade UX before
+removing legacy bundle projection.
+
+Gate: provider unit tests cover closed resolution, option selection,
+translations, deterministic ordering, prerequisites, incompatibilities, and
+executable lookup.
+
+## Phase 3: BuildKit Image Materialization
+
+Prototype first; complete only after the architecture review gate.
+
+- Resolve a mutable author image tag to an immutable digest at stage/update.
+- Generate the build definition and invocation internally.
+- Mount the closed bundle read-only; install offline; retain only installed
+  results in the generated image.
+- Define semantic identity from base digest, platform, closed artifacts,
+  translated-source content, provider recipe versions, and prerequisite inputs.
+- Exclude ports, mounts, phase/scope, runtime owner, lifecycle, readiness, and
+  restart policy from image identity.
+- Label images with directory identity and fingerprint. Record staging,
+  installed, and previous references safely.
+- Reuse unchanged images/layers, invalidate changed DAG nodes and downstream
+  nodes, and recover interrupted relinking from state.
+- Remove only directory-owned unreferenced resources; never globally prune.
+
+Probe and document the supported Linux Engine and Docker Desktop BuildKit
+invocation. Fail preflight clearly when unavailable; do not add a classic-builder
+fallback or user-authored Dockerfile.
+
+Review evidence:
+
+- Inspectable generated build input and fake-runner command tests.
+- Identity/invalidation/reuse/cleanup tests.
+- Real-Docker smoke proving offline install and execution.
+- Recorded Linux Engine and Docker Desktop capability results.
+
+## Phase 4: Resolved Docker Execution Plan
+
+Derive one plan from resolved blueprint, deployment identity, phase, optional
+installed scope, materialized image, and CLI install overrides.
+
+Paths and mounts:
+
+- Environment owns `container`, `writable` (default false), and `update`.
+- Enforce the model matrix:
+  - managed-bind: preserve or replace;
+  - named volume: preserve or replace, with replacement copied from the staging
+    volume (temporary staging-like volume for direct install);
+  - external bind: `unmanaged` only, existing absolute source, never changed by
+    Reploy or replacement flags;
+  - tmpfs: preserve/replace accepted as no-op update policies.
+- Enforce read-only mounts when `writable` is false.
+
+Endpoints and readiness inputs:
+
+- Environment scheme/container port is authoritative and inherited through
+  `extends`; Docker adds bind and required `staging`/`deployed` publication.
+  Persisted phase `staged` selects staging and `installed` selects deployed.
+- Preserve `--port PORT` for one endpoint and repeatable `--port NAME=PORT` for
+  named installed publications. Never change staging or container ports.
+- Reject unknown/duplicate/ambiguous overrides and record effective installed
+  address, published port, and container port.
+- Keep image, container endpoint, mounts, application configuration, and startup
+  behavior equivalent across phases except host identity needed for isolation.
+
+Ownership:
+
+- Staging runs as the invoking user but has no install scope.
+- Installed user scope uses the installing user's numeric UID/GID and warns when
+  overriding image `USER` or ignoring `system.run_as`.
+- Installed system scope uses the resolved service account.
+- Only writable paths and Reploy temporary home are writable.
+
+Regenerate Compose, backend env/state, dry-run, status, and control inputs from
+the plan. Use exec-form Compose commands, not `sh -c`.
+
+Gate: golden rendering/state tests plus Linux system/user and Docker Desktop
+current-user planning tests.
+
+## Phase 5: Commands and Interactive Shell
+
+Invocation segments are `binary`, `prefix`, `command`, `forwarded`, `suffix`.
+Executable `order` supplies the default; a command may replace it.
+
+- `binary` appears exactly once and first.
+- Every other segment appears zero or one time; reject duplicates.
+- If forwarded user arguments exist but `forwarded` is omitted, fail.
+- Triggers are unique and use longest matching trigger.
+- `native_command` and `deployed_command` default false; deployed requires native.
+- Before `--`, accept only declared `forward_flags`; after `--`, forward
+  application arguments as inert argv values. Suggest close declared flags.
+- Resolve provider binary and lazy workload values before constructing argv.
+- Invoke all commands directly as argv; prove shell metacharacters remain inert.
+
+One-shot commands run in transient generated-image containers with the same
+owner, configuration, and paths as the active workload, preserve separate
+stdout/stderr without a TTY, return the process status, and always clean up.
+
+`reploy shell` is an explicit built-in staging/management operation, not
+reachable through forwarding. Run `/bin/sh` in a transient container, attach
+streams, select TTY only for an interactive caller, support piped stdin, forward
+signals/resizes, restore terminal state, return status, and clean up.
+
+Gate: order/trigger/forwarding/injection tests plus streams, status, cleanup,
+TTY, signal, resize, and terminal restoration.
+
+## Phase 6: Install and Workload Runtime Events
+
+Implement ordered steps containing `requires`, `actions`, or both. Requirements
+precede actions; failures stop and skip later events.
+
+- `environment.install.after_install` follows materialization/deployment setup
+  and precedes any requested start.
+- `environment.workload.runtime` owns before/after start and stop.
+- Install with start: materialize, after-install, before-start, start, readiness,
+  after-start, success lines.
+- Install without start: materialize, after-install, success lines. Success
+  output may report planned publication but must not claim the service runs.
+- Standalone start/stop runs only workload runtime events.
+
+HTTP(S) readiness:
+
+- GET the active controlled publication until success or timeout (30s default,
+  1s interval default); only HTTP 200 succeeds, body ignored, no redirects.
+- Recommend loopback publication. Retain wildcards, but probe `0.0.0.0` through
+  `127.0.0.1` and `::` through `::1`; bracket IPv6 URLs.
+- Require readiness paths beginning `/`.
+- Default `tls_verify` false because Reploy probes its locally installed target;
+  allow explicit true for a trusted chain.
+- Fail early if service state leaves running and include bounded diagnostics.
+
+Gate: event ordering and short-circuit tests, install-without-start, success-line
+resolution, readiness retries/timeouts/status/TLS/wildcards/IPv6, service exit,
+and diagnostic bounds.
+
+## Phase 7: Cutover and Legacy Removal
+
+Cut CLI, state, generated scripts, status, dry-run, install/update, bundle,
+commands, and cleanup to resolved plans. Keep schema 1 but only the new shape.
+
+Migrate repository smoke, git-source, and OmegaConf demo blueprints. Migrate and
+exercise Arbiter when its checkout is available; otherwise record that external
+validation as deferred evidence.
+
+Only after all callers move, remove legacy app/provider structures, install
+port/managed-path schema, special success variables, Docker service/health
+protocol, startup virtualenv/runtime-volume installer, `REPLOY_DEPLOYMENT_SCOPE`
+blueprint coupling, duplicate endpoint/command reconstruction, and the `ctl`
+default. Preserve adapted bundle UX and other nonconflicting behavior.
+
+Add a `Docs` Changie fragment and update blueprint-facing docs/examples.
+
+Gate: repository migrations, explicit legacy rejection, retained CLI behavior,
+and focused end-to-end install/update/runtime tests pass.
+
+## Phase 8: Final Verification and Commit
+
+1. Run gofmt and focused changed-package tests.
+2. In parallel where safe, run:
+   - `GOCACHE=${GOCACHE:-/tmp/reploy-go-cache} go test -timeout 2m ./...`;
+   - `nox -s cli-integration`;
+   - `nox -s release-build-smoke`;
+   - `nox -s docs-build`.
+3. Verify generated artifacts, Sapling diff scope, release note, no secrets/local
+   paths/runtime state, directory-scoped cleanup, opt-in destructive updates,
+   and absence of deferred public schema.
+4. Review the final diff against the model. Commit only after approval; pushing
+   and publishing are outside this workflow.
