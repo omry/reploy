@@ -1,0 +1,2 @@
+kind: Added
+body: Retain the formerly deployed generated environment image as the directory-scoped previous image during updates.
