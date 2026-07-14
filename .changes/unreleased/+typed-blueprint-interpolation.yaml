@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve and validate the type of whole-value blueprint variables used in numeric and boolean fields.

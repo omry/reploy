@@ -1,0 +1,2 @@
+kind: Fixed
+body: Expand global blueprint variables consistently across all string-valued environment schema fields before field validation.

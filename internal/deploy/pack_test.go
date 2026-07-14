@@ -1203,6 +1203,16 @@ func TestResolveInstallTargetDefaultRejectsUnknownTemplate(t *testing.T) {
 	}
 }
 
+func TestResolveInstallTargetDefaultRejectsInterpolatedTraversal(t *testing.T) {
+	_, _, _, err := ResolveInstallTargetDefault(
+		InstallTargetConfig{DefaultPath: "/opt/{{ app.id }}"},
+		"../escape", "linux", "system", sampleInstallTargetRoots("linux"),
+	)
+	if err == nil || !strings.Contains(err.Error(), "parent-directory traversal") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestParsePackManifestRejectsInvalidTerminalColorEnv(t *testing.T) {
 	_, err := ParsePackManifest(`blueprint:
   schema: 1

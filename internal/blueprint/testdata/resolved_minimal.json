@@ -1,0 +1,40 @@
+{
+  "id": "demo",
+  "control_script": "demo",
+  "component": {
+    "Type": "python",
+    "Optional": null,
+    "Requirements": [
+      "demo-server"
+    ]
+  },
+  "path": {
+    "Container": "/data",
+    "Writable": true,
+    "Update": "preserve"
+  },
+  "executable": {
+    "Component": "application",
+    "Binary": "demo-server",
+    "Order": [
+      "binary",
+      "prefix",
+      "command",
+      "forwarded",
+      "suffix"
+    ],
+    "ArgvPrefix": null,
+    "ArgvSuffix": null
+  },
+  "endpoint": {
+    "Scheme": "http",
+    "Port": 8080,
+    "Readiness": null
+  },
+  "mount_mode": "managed-bind",
+  "publication": {
+    "Address": "127.0.0.1",
+    "Staging": 18080,
+    "Deployed": 8080
+  }
+}

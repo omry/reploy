@@ -1,0 +1,2 @@
+kind: Fixed
+body: Resolve environment default install targets through the typed host, scope, namespace, and blueprint-variable resolver.
