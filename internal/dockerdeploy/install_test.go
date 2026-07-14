@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 )
 
@@ -74,6 +75,69 @@ func TestInstallDryRunPrintsPlan(t *testing.T) {
 	}
 }
 
+func TestEnvironmentInstallDryRunUsesNativeLifecycleTerms(t *testing.T) {
+	var output strings.Builder
+	printInstallDryRun(&output, installPlan{
+		EnvironmentModel: true, AfterInstallSteps: 1, BeforeStartSteps: 2, AfterStartSteps: 3,
+		Start: true, Backend: installBackendDockerManaged,
+		Hooks: deploy.DockerInstallHooksConfig{
+			BeforeStart: []deploy.DockerInstallHookConfig{{App: []string{"legacy-before"}}},
+			AfterStart:  []deploy.DockerInstallHookConfig{{App: []string{"legacy-after"}}},
+		},
+	})
+	text := output.String()
+	for _, want := range []string{"after_install lifecycle: 1 step", "before_start lifecycle: 2 step", "after_start lifecycle: 3 step"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dry-run missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "hook") || strings.Contains(text, "legacy-before") || strings.Contains(text, "legacy-after") {
+		t.Fatalf("environment dry-run exposed projected legacy hooks:\n%s", text)
+	}
+}
+
+func TestDefaultInstallTargetUsesTypedEnvironmentResolver(t *testing.T) {
+	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "linux"})
+	defer restorePlatform()
+	t.Setenv("HOME", "/home/demo")
+	pack := deploy.AppPack{Environment: &blueprint.Document{Environment: blueprint.Environment{
+		ID: "demo", Vars: map[string]any{"channel": "preview"},
+		Install: blueprint.Install{Target: blueprint.InstallTarget{DefaultPath: "/srv/{{ channel }}/{{ environment.id }}"}},
+	}}}
+	target, err := defaultInstallTarget(pack, InstallScopeUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != "/srv/preview/demo" {
+		t.Fatalf("target = %q", target)
+	}
+}
+
+func TestInstalledTargetImagesRetainsDeployedAndPreviousState(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(StateFileName)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := deploy.DeploymentState{Phase: deploy.PhaseInstalled, Images: &deploy.GeneratedImagesState{
+		Deployed: &deploy.GeneratedImageState{Reference: "repo:deployed", ImageID: "new"},
+		Previous: &deploy.GeneratedImageState{Reference: "repo:previous", ImageID: "old"},
+	}}
+	content, err := marshalState(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, StateFileName), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	images, err := installedTargetImages(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if images == nil || images.Deployed.ImageID != "new" || images.Previous.ImageID != "old" {
+		t.Fatalf("images = %#v", images)
+	}
+}
+
 func TestInstallDryRunOnDarwinPrintsDockerManagedPlan(t *testing.T) {
 	disableDoctorColor(t)
 	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "darwin"})
@@ -131,6 +195,47 @@ func TestInstallDryRunOnDarwinPrintsDockerManagedPlan(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "systemctl") || strings.Contains(stdout.String(), "systemd unit") {
 		t.Fatalf("darwin dry-run should not mention systemd:\n%s", stdout.String())
+	}
+}
+
+func TestEnvironmentUserInstallWarnsBeforeDryRunPlan(t *testing.T) {
+	disableDoctorColor(t)
+	restorePlatform := stubHostPlatform(t, hostPlatform{GOOS: "darwin"})
+	defer restorePlatform()
+	previousDetector := detectDockerRuntimeForDoctor
+	t.Cleanup(func() { detectDockerRuntimeForDoctor = previousDetector })
+	detectDockerRuntimeForDoctor = func(context.Context, CommandSpec, time.Duration) (dockerRuntimeInfo, error) {
+		return dockerRuntimeInfo{Runtime: dockerRuntimeLinuxEngine, OperatingSystem: "Colima"}, nil
+	}
+	ref, err := deploy.ParsePackRef("file:../../examples/omegaconf-inspector/reploy/omegaconf-inspector.blueprint.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "staging")
+	if _, err := Init(InitOptions{Dir: dir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	var stdout strings.Builder
+	if err := Install(InstallOptions{
+		Dir: dir, Target: filepath.Join(t.TempDir(), "installed"), Scope: InstallScopeUser,
+		DryRun: true, Stdout: &stdout,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	warning := "warning: current-user install overrides the image user with UID/GID"
+	warningIndex := strings.Index(output, warning)
+	planIndex := strings.Index(output, "would install deployment:")
+	if warningIndex < 0 || planIndex < 0 || warningIndex > planIndex {
+		t.Fatalf("warning must precede install plan:\n%s", output)
+	}
+	for _, want := range []string{
+		"arbitrary non-root identity",
+		"persistently only to declared writable paths",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("warning missing %q:\n%s", want, output)
+		}
 	}
 }
 
@@ -1145,6 +1250,8 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 	oldServiceStartTimeout := installServiceStartTimeout
 	oldServicePollInterval := installServicePollInterval
 	oldSystemdUnitDir := installSystemdUnitDir
+	oldRunInstallAfterInstall := runInstallAfterInstall
+	oldRunInstallEnvironmentStart := runInstallEnvironmentStart
 	t.Cleanup(func() {
 		installGeteuid = oldGeteuid
 		installLookPath = oldLookPath
@@ -1157,6 +1264,8 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 		installServiceStartTimeout = oldServiceStartTimeout
 		installServicePollInterval = oldServicePollInterval
 		installSystemdUnitDir = oldSystemdUnitDir
+		runInstallAfterInstall = oldRunInstallAfterInstall
+		runInstallEnvironmentStart = oldRunInstallEnvironmentStart
 	})
 
 	installServiceStartTimeout = time.Second
@@ -1191,6 +1300,21 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 		}
 	}
 	commands := []string{}
+	runInstallAfterInstall = func(plan installPlan) error {
+		if _, err := os.Stat(plan.UnitPath); err != nil {
+			return fmt.Errorf("after_install ran before service definition: %w", err)
+		}
+		commands = append(commands, "environment after_install")
+		return nil
+	}
+	runInstallEnvironmentStart = func(_ installPlan, start func(context.Context) error) (bool, error) {
+		commands = append(commands, "environment before_start")
+		if err := start(context.Background()); err != nil {
+			return true, err
+		}
+		commands = append(commands, "environment after_start")
+		return true, nil
+	}
 	installRunCommand = func(name string, args ...string) error {
 		commands = append(commands, name+" "+strings.Join(args, " "))
 		return nil
@@ -1378,6 +1502,22 @@ func TestInstallApplyCopiesDeploymentWritesUnitAndRunsSystemctl(t *testing.T) {
 		if !containsString(commands, want) {
 			t.Fatalf("commands missing %q: %#v", want, commands)
 		}
+	}
+	commandIndex := func(want string) int {
+		for index, command := range commands {
+			if command == want {
+				return index
+			}
+		}
+		return -1
+	}
+	enableIndex := commandIndex("/bin/systemctl enable demo-apply.service")
+	afterInstallIndex := commandIndex("environment after_install")
+	beforeStartIndex := commandIndex("environment before_start")
+	restartIndex := commandIndex("/bin/systemctl restart demo-apply.service")
+	afterStartIndex := commandIndex("environment after_start")
+	if enableIndex < 0 || afterInstallIndex <= enableIndex || beforeStartIndex <= afterInstallIndex || restartIndex <= beforeStartIndex || afterStartIndex <= restartIndex {
+		t.Fatalf("service/after_install/start order = %#v", commands)
 	}
 }
 

@@ -77,3 +77,48 @@ func TestInfoReportsPreparedBundle(t *testing.T) {
 		}
 	}
 }
+
+func TestInfoReportsResolvedEnvironmentWithoutMaterializingIt(t *testing.T) {
+	ref, err := deploy.ParsePackRef("file:../../examples/omegaconf-inspector/reploy/omegaconf-inspector.blueprint.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := Info(InfoOptions{Dir: deployDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"environment: omegaconf-inspector",
+		"bundle identity: unresolved",
+		"bundle inputs changed: true",
+		"candidate bundle identity: unresolved",
+		"materialized image: unresolved",
+		"phase order:",
+		"  - resolve blueprint",
+		"  - materialize Docker environment",
+		"  - satisfy readiness requirements",
+		"commands:",
+		"  - config check [staging,deployed]:",
+		"endpoints:",
+		"  - http: http://127.0.0.1:18076 -> 0.0.0.0:8076 readiness=/_health_",
+		"backend files:",
+		filepath.Join(deployDir, StateFileName) + " [existing]",
+		filepath.Join(deployDir, ComposeFileName) + " [existing]",
+	} {
+		if !strings.Contains(info, want) {
+			t.Fatalf("info missing %q:\n%s", want, info)
+		}
+	}
+	state, err := loadState(deployDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Materialization != nil || state.Images != nil || state.Bundle.PreparedFingerprint != "" {
+		t.Fatalf("info mutated deployment state: %#v", state)
+	}
+}

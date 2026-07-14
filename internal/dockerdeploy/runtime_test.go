@@ -2,8 +2,10 @@ package dockerdeploy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 )
 
@@ -62,6 +65,62 @@ func TestRuntimeCommandCanFollowLogs(t *testing.T) {
 	suffix := []string{"logs", "--timestamps", "--since", "2026-07-09T00:00:00Z", "--tail", "100", "-f"}
 	if !reflect.DeepEqual(spec.Args[len(spec.Args)-len(suffix):], suffix) {
 		t.Fatalf("suffix = %#v, want %#v", spec.Args[len(spec.Args)-len(suffix):], suffix)
+	}
+}
+
+func TestExecuteEnvironmentRestartRunsCompleteStopStartLifecycle(t *testing.T) {
+	dir, _ := makeRuntimeDeployment(t)
+	commands := []string{}
+	restoreRuntime := stubRuntimeRunner(func(spec CommandSpec, options RunOptions) error {
+		switch {
+		case containsInOrder(spec.Args, []string{"down", "--remove-orphans"}):
+			commands = append(commands, "stop")
+		case containsInOrder(spec.Args, []string{"up", "-d"}):
+			commands = append(commands, "start")
+		default:
+			commands = append(commands, spec.Args[len(spec.Args)-1])
+		}
+		return nil
+	})
+	defer restoreRuntime()
+	restoreRunning := stubRuntimePostStartServiceRunningCheck(func(string, string, time.Duration) error { return nil })
+	defer restoreRunning()
+	restoreHealth := stubRuntimePostStartHealthCheck(func(TestOptions) error {
+		t.Fatal("health check should not run without a configured legacy health hook")
+		return nil
+	})
+	defer restoreHealth()
+
+	command := func(name string) *ResolvedEnvironmentCommand {
+		return &ResolvedEnvironmentCommand{Name: name, Argv: []string{"/bin/demo", name}}
+	}
+	lifecycle := LifecyclePlan{Operations: []LifecycleOperation{
+		{Kind: LifecycleCommand, Event: "before_stop", Command: command("before-stop")},
+		{Kind: LifecycleStop, Event: "stop"},
+		{Kind: LifecycleCommand, Event: "after_stop", Command: command("after-stop")},
+		{Kind: LifecycleCommand, Event: "before_start", Command: command("before-start")},
+		{Kind: LifecycleStart, Event: "start"},
+		{Kind: LifecycleCommand, Event: "after_start", Command: command("after-start")},
+	}}
+	plan := DockerExecutionPlan{Image: "demo:image", ContainerName: "demo", RuntimeUser: RuntimeUserPlan{DockerUser: "1000:1000"}}
+	if err := executeEnvironmentRestart(RuntimeOptions{Dir: dir, Action: "restart"}, deploy.AppPack{}, plan, lifecycle, nil, nil, nil, nil, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"before-stop", "stop", "after-stop", "before-start", "start", "after-start"}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestRequireRecordedEnvironmentImageDoesNotResolveMissingBundle(t *testing.T) {
+	dir, _ := makeRuntimeDeployment(t)
+	state, err := loadState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = requireRecordedEnvironmentImage(context.Background(), dir, blueprint.Document{}, state)
+	if err == nil || !strings.Contains(err.Error(), "restart requires a prepared installation bundle") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -607,6 +666,46 @@ func TestRuntimeStatusDoesNotPrepareBundle(t *testing.T) {
 	want := []string{"ps --all"}
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestEnvironmentRuntimeStatusIncludesReadOnlyInspection(t *testing.T) {
+	ref, err := deploy.ParsePackRef("file:../../examples/omegaconf-inspector/reploy/omegaconf-inspector.blueprint.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "deployment")
+	if _, err := Init(InitOptions{Dir: dir, Pack: ref}); err != nil {
+		t.Fatal(err)
+	}
+	restoreRuntime := stubRuntimeRunner(func(spec CommandSpec, options RunOptions) error {
+		_, err := io.WriteString(options.Stdout, "compose status\n")
+		return err
+	})
+	defer restoreRuntime()
+
+	var stdout bytes.Buffer
+	if err := Runtime(RuntimeOptions{Dir: dir, Action: "status", Stdout: &stdout}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"environment: omegaconf-inspector",
+		"candidate bundle identity: unresolved",
+		"commands:",
+		"endpoints:",
+		"backend files:",
+		"compose status",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("status missing %q:\n%s", want, stdout.String())
+		}
+	}
+	state, err := loadState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Materialization != nil || state.Images != nil || state.Bundle.PreparedFingerprint != "" {
+		t.Fatalf("status mutated deployment state: %#v", state)
 	}
 }
 

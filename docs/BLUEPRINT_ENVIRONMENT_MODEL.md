@@ -266,6 +266,10 @@ DAG, using stable component-name ordering where independent nodes need a
 tie-breaker. Independent artifact builds may run concurrently, while final image
 assembly follows a deterministic topological order.
 
+The initial Python-only implementation has a single provider node. A generalized
+DAG executor is deferred until provider expansion, but must be implemented before
+the schema or runtime accepts a second component provider.
+
 Every provider declares the tools and runtimes it requires for bundling and
 materialization. Reploy checks those prerequisites before executing the provider.
 A prerequisite may be supplied by the selected base image, a provider-owned
@@ -305,6 +309,10 @@ may reference other variables; Reploy resolves their dependency graph and
 rejects missing references or cycles. Global blueprint variables are distinct
 from process environment variables and do not implicitly read values from the
 invoking shell.
+
+"Globally" refers to lookup of blueprint variable names, not to availability of
+every dynamic namespace in every field. A dynamic namespace is available only
+when the field's consumer has established it.
 
 ### Lazy Interpolation
 
@@ -1156,3 +1164,6 @@ The following capabilities are intentionally deferred from the initial slice:
   configuration use case justifies adding the interface and omission semantics.
 - Finer-grained invocation templates if a concrete command needs to interleave
   arguments within a segment; initial `order` can only permute whole segments.
+- Delete the private legacy app-schema decoder and its characterization
+  fixtures before the first release. It remains temporary migration scaffolding,
+  is not part of the environment-model contract, and must not gain new callers.

@@ -511,19 +511,9 @@ def run_docker_unavailable_probe(reploy: Path, deploy_dir: Path, workdir: Path, 
 def run_port_conflict_probe(reploy: Path, deploy_dir: Path, workdir: Path, env: dict[str, str]) -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        listener.bind(("127.0.0.1", 0))
+        listener.bind(("127.0.0.1", 18075))
         listener.listen(1)
         occupied_port = str(listener.getsockname()[1])
-        update_env_file(
-            deploy_dir / ".reploy" / "docker.env",
-            {
-                "REPLOY_HOST_BIND": "127.0.0.1",
-                "REPLOY_HOST_PORT": occupied_port,
-                "REPLOY_PORT_HTTPS_HOST_BIND": "127.0.0.1",
-                "REPLOY_PORT_HTTPS_HOST_PORT": occupied_port,
-                "REPLOY_PUBLIC_SCHEME": "https",
-            },
-        )
         try:
             up = run_expect_failure(
                 [str(reploy), "up", "--dir", str(deploy_dir)],
@@ -547,21 +537,27 @@ def run_port_conflict_probe(reploy: Path, deploy_dir: Path, workdir: Path, env: 
 
 
 def run_runtime_smoke(reploy: Path, deploy_dir: Path, workdir: Path, env: dict[str, str]) -> None:
-    host_port = free_local_port()
-    update_env_file(
-        deploy_dir / ".reploy" / "docker.env",
-        {
-            "REPLOY_HOST_BIND": "127.0.0.1",
-            "REPLOY_HOST_PORT": host_port,
-            "REPLOY_PORT_HTTPS_HOST_BIND": "127.0.0.1",
-            "REPLOY_PORT_HTTPS_HOST_PORT": host_port,
-            "REPLOY_PUBLIC_SCHEME": "https",
-        },
-    )
+    # Staging publication is blueprint-owned in the environment model. Installed
+    # publication remains overridable through `reploy install --port` below.
+    host_port = "18075"
 
     primary_error: BaseException | None = None
     started = False
     try:
+        if os.name == "posix":
+            run(
+                [
+                    sys.executable,
+                    str(Path(__file__).with_name("shell_pty.py")),
+                    "--reploy",
+                    str(reploy),
+                    "--dir",
+                    str(deploy_dir),
+                ],
+                cwd=workdir,
+                env=env,
+            )
+
         app_check = run(
             [str(reploy), "app", "config", "check", "--dir", str(deploy_dir)],
             cwd=workdir,
@@ -593,6 +589,14 @@ def run_runtime_smoke(reploy: Path, deploy_dir: Path, workdir: Path, env: dict[s
             env=env,
         )
         require_contains(live_check.stdout, '"check": "pass"', "live config check")
+
+        run([str(reploy), "restart", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+        restarted_health = run(
+            [str(reploy), "test", "--timeout", "30s", "--dir", str(deploy_dir)],
+            cwd=workdir,
+            env=env,
+        )
+        require_contains(restarted_health.stdout, f"ok: https://127.0.0.1:{host_port}/_health_", "health check after restart")
     except BaseException as error:
         primary_error = error
         raise
@@ -738,7 +742,8 @@ def run_smoke(
         cwd=workdir,
         env=env,
     )
-    if "up_to_date" not in update.stdout and ".reploy/state.json" not in update.stdout:
+    update_markers = ("up_to_date", ".reploy/state.json", "updated staging directory")
+    if not any(marker in update.stdout for marker in update_markers):
         raise SystemExit(
             "update output did not report an unchanged or updated deployment"
             f"\n--- output ---\n{update.stdout}"
@@ -854,15 +859,18 @@ def run_smoke(
         require_prefixed_lines(install.stdout, "[STAGING : smoke-app] ", "install dry-run")
         require_contains(install.stdout, "[STAGING : smoke-app] would install deployment:", "install dry-run")
         require_contains(install.stdout, "service: smoke-e2e", "install dry-run")
-        require_contains(install.stdout, "port https: 127.0.0.1:18082 -> 19075", "install dry-run")
+        require_contains(install.stdout, "port https: 127.0.0.1:18082 -> 8075", "install dry-run")
         require_contains(
             install.stdout,
             "would rebuild local source bundle: smoke-imap, smoke-suite",
             "install dry-run",
         )
-        require_contains(install.stdout, "would run before start hook: app config check", "install dry-run")
-        require_contains(install.stdout, "would run after start hook: health check --wait", "install dry-run")
-        require_contains(install.stdout, "would print success line: server url: ${server_url}", "install dry-run")
+        require_contains(install.stdout, "would run environment before_start lifecycle: 1 step(s)", "install dry-run")
+        require_contains(
+            install.stdout,
+            "would satisfy readiness and run environment after_start lifecycle: 1 step(s)",
+            "install dry-run",
+        )
 
     if not plan_only:
         if persistent_install:

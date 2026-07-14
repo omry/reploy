@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import argparse
 import json
-import os
 import ssl
 import sys
 import tempfile
@@ -66,15 +66,19 @@ def main() -> int:
     if command == ["config", "check"] or command == ["config", "check", "--live"]:
         print(json.dumps({"app": "smoke-suite", "check": "pass"}))
         return 0
-    if command == ["serve"]:
-        return serve()
+    if command and command[0] == "serve":
+        return serve(command[1:])
     print(f"unsupported smoke-suite command: {' '.join(command)}", file=sys.stderr)
     return 2
 
 
-def serve() -> int:
-    host = os.environ.get("REPLOY_CONTAINER_HOST", "0.0.0.0")
-    port = int(os.environ.get("REPLOY_CONTAINER_PORT", "18075"))
+def serve(arguments: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="smoke-server serve")
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=8075)
+    options = parser.parse_args(arguments)
+    host = options.host
+    port = options.port
     server = ThreadingHTTPServer((host, port), SmokeHandler)
     with tempfile.TemporaryDirectory(prefix="smoke-suite-tls-") as cert_dir:
         cert_path = Path(cert_dir) / "cert.pem"

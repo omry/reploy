@@ -3,98 +3,106 @@ blueprint:
   version: 0.1.0
   requires_reploy: ">=0.4.8.dev1"
 
-app:
+environment:
   id: smoke-app
-  provider:
-    type: python
-    identifier: smoke-suite
-    local_sources:
-      smoke-suite: ../smoke-suite
-      smoke-imap: ../smoke-imap
+  vars:
+    project_root: ..
+  translations:
+    workspace:
+      type: python
+      scope: development
+      root: "{{ project_root }}"
+      mappings:
+        smoke-suite: smoke-suite
+        smoke-imap: smoke-imap
+  components:
+    application:
+      type: python
+      requirements: [smoke-suite]
+    imap:
+      type: python
+      optional:
+        group: plugins
+        description: Install the smoke IMAP plugin.
+      requirements: [smoke-imap]
   terminal:
     color_env: SMOKE_COLOR
-
-install:
-  ports:
-    deployed:
-      https:
-        host_bind: 127.0.0.1
-        host_port: 19075
-    staging:
-      https:
-        host_bind: 127.0.0.1
-        host_port: 18075
-  managed_paths:
-    dirs:
-      - path: conf
-        update: preserve
-        mount: /{{ path }}
-      - path: data
-        update: preserve
-        mount: /{{ path }}
-        writeable: true
-
-bundle:
-  options:
-    imap:
-      identifier: smoke-imap
-      group: plugins
-      description: Install the smoke IMAP plugin.
-
-docker:
-  deployment_dirs:
-    config: conf
-    bundle: .reploy/bundle
-    data: data
-  service:
-    image: python:3.11-slim
-  health:
-    scheme_env: REPLOY_PUBLIC_SCHEME
-    host_env: REPLOY_HOST_BIND
-    port_env: REPLOY_HOST_PORT
-    default_scheme: https
-    default_host: 127.0.0.1
-    default_port: "18075"
-    path: /_health_
-    tls_verify: false
-  install:
-    hooks:
-      before_start:
-        - app:
-            - config
-            - check
-      after_start:
-        - health_check:
-            wait: true
-        - app:
-            - config
-            - check
-            - --live
-    success:
-      vars:
-        server_url:
-          server_url: true
-      lines:
-        - "server url: ${server_url}"
-  default_command: serve
-  command_defaults:
-    container:
-      argv_prefix:
-        - smoke-server
+  paths:
+    config:
+      container: /conf
+      writable: true
+      update: preserve
+    data:
+      container: /data
+      writable: true
+      update: preserve
+  executables:
+    server:
+      component: application
+      binary: smoke-server
   commands:
     serve:
-      container:
-        argv_suffix:
-          - serve
+      executable: server
+      argv:
+        - serve
+        - --host
+        - "{{ reploy.workload.endpoints.https.bind.address }}"
+        - --port
+        - "{{ reploy.workload.endpoints.https.bind.port }}"
     config_check:
-      trigger:
-        - config
-        - check
-      app_command: true
+      executable: server
+      trigger: [config, check]
+      native_command: true
       deployed_command: true
-      forward_flags:
-        - --live
-      container:
-        argv_suffix:
-          - config
-          - check
+      forward_flags: [--live]
+      argv: [config, check]
+  workload:
+    command: serve
+    endpoints:
+      https:
+        scheme: https
+        port: 8075
+        readiness:
+          path: /_health_
+          tls_verify: false
+    runtime:
+      before_start:
+        - actions:
+            - environment: [config, check]
+      after_start:
+        - requires:
+            endpoints: [https]
+          actions:
+            - environment: [config, check, --live]
+      before_stop:
+        - actions:
+            - environment: [config, check, --live]
+      after_stop:
+        - actions:
+            - environment: [config, check]
+  install:
+    success:
+      lines:
+        - "server url: {{ environment.workload.endpoints.https.scheme }}://{{ reploy.workload.endpoints.https.publish.address }}:{{ reploy.workload.endpoints.https.publish.port }}"
+
+docker:
+  image: python:3.11-slim
+  mounts:
+    config:
+      extends: environment.paths.config
+      mode: managed-bind
+      source: conf
+    data:
+      extends: environment.paths.data
+      mode: managed-bind
+      source: data
+  workload:
+    endpoints:
+      https:
+        extends: environment.workload.endpoints.https
+        bind:
+          address: 0.0.0.0
+        publish:
+          address: 127.0.0.1
+          staging: 18075
+          deployed: 19075

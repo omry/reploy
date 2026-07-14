@@ -8,8 +8,8 @@
 
 Reploy is an experimental deployment lifecycle tool for services.
 
-Reploy turns an app-provided blueprint into a local staging workspace, lets you
-configure and test it, then installs it as a host service. Docker is the first
+Reploy turns an environment blueprint into a local staging workspace, lets you
+configure and test it, then installs its optional workload. Docker is the first
 supported runtime.
 
 | Host OS | Docker | Staging | User install | System install |
@@ -69,7 +69,7 @@ reploy test
 reploy install --scope user --to "$PWD/omegaconf-inspector-installed"
 
 # Tail logs through the installed app control script.
-./omegaconf-inspector-installed/omegaconf-inspectorctl logs --tail=100
+./omegaconf-inspector-installed/omegaconf-inspector logs --tail=100
 ```
 
 Read the [app installation guide](https://reploy.yadan.net/docs/install-an-app)

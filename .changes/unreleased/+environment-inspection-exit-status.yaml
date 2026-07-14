@@ -1,0 +1,2 @@
+kind: Changed
+body: Report resolved environment details from info, status, and install dry-runs, and preserve application command exit statuses.

@@ -1,3 +1,10 @@
+---
+status: Active
+updated: 2026-07-11
+summary: Evidence-driven implementation plan for the blueprint environment and workload model.
+implements: docs/BLUEPRINT_ENVIRONMENT_MODEL.md
+---
+
 # Blueprint Environment Model Implementation Plan
 
 This document defines the work and evidence behind
@@ -42,6 +49,69 @@ removal of private health/success-variable protocols.
 - Use table tests for validation matrices, golden tests for resolved/rendered
   plans, fake Docker runners for command construction, and focused real-Docker
   tests for behavior fakes cannot establish.
+
+## Implementation Flow
+
+```mermaid
+flowchart TD
+    P0["Phase 0<br/>Baseline and contract coverage"]
+    G0{{"Baseline contract passes"}}
+    P1["Phase 1<br/>Schema, validation, and lazy resolution"]
+    G1{{"Schema resolution gate passes"}}
+    P2["Phase 2<br/>Component and provider contract"]
+    G2{{"Python provider gate passes"}}
+
+    P3A["Phase 3 prototype<br/>BuildKit, identities, reuse, recovery, cleanup"]
+    R3{"Architecture and safety<br/>evidence approved?"}
+    P3B["Complete Python image materialization"]
+    G3{{"Generated image gate passes"}}
+
+    P4["Phase 4<br/>Resolved Docker execution plan"]
+    G4{{"Docker execution plan gate passes"}}
+    P5["Phase 5<br/>Commands and interactive shell"]
+    G5{{"Command and shell gate passes"}}
+    P6["Phase 6<br/>Install and workload runtime events"]
+    G6{{"Lifecycle and readiness gate passes"}}
+    P7["Phase 7<br/>Cutover and legacy removal"]
+    A7{"Arbiter checkout available?"}
+    A7Y["Migrate and exercise Arbiter"]
+    A7N["Record external validation as deferred"]
+    G7{{"Cutover gate passes"}}
+
+    F0["Format and focused changed-package tests"]
+    GF{{"Focused verification passes"}}
+    T1["Full Go tests"]
+    T2["CLI Docker integration smoke"]
+    T3["Release build and docs build"]
+    INSPECT["Inspect artifacts, Sapling diff,<br/>release note, and safety properties"]
+    GV{{"Final verification passes"}}
+    REVIEW{"Final implementation matches<br/>the normative model?"}
+    COMMIT["Commit implementation"]
+
+    P0 --> G0 --> P1 --> G1 --> P2 --> G2 --> P3A --> R3
+    R3 -- "revise" --> P3A
+    R3 -- "approved" --> P3B --> G3 --> P4 --> G4 --> P5 --> G5
+    G5 --> P6 --> G6 --> P7 --> A7
+    A7 -- "yes" --> A7Y --> G7
+    A7 -- "no" --> A7N --> G7
+    G7 --> F0 --> GF
+    GF --> T1
+    GF --> T2
+    GF --> T3
+    T1 --> INSPECT
+    T2 --> INSPECT
+    T3 --> INSPECT
+    INSPECT --> GV --> REVIEW
+    REVIEW -- "changes needed" --> P7
+    REVIEW -- "approved" --> COMMIT
+
+    classDef phase fill:#e8f1ff,stroke:#2563eb,color:#172554;
+    classDef gate fill:#ecfdf5,stroke:#059669,color:#064e3b;
+    classDef decision fill:#fff7ed,stroke:#ea580c,color:#7c2d12;
+    class P0,P1,P2,P3A,P3B,P4,P5,P6,P7,F0,T1,T2,T3,INSPECT,A7Y,A7N,COMMIT phase;
+    class G0,G1,G2,G3,G4,G5,G6,G7,GF,GV gate;
+    class R3,A7,REVIEW decision;
+```
 
 ## Phase 0: Baseline and Contract Coverage
 
@@ -143,6 +213,9 @@ removing legacy bundle projection.
 Gate: provider unit tests cover closed resolution, option selection,
 translations, deterministic ordering, prerequisites, incompatibilities, and
 executable lookup.
+
+The Python-only implementation may use a single provider node. Implement the
+generalized provider DAG executor before enabling a second component provider.
 
 ## Phase 3: BuildKit Image Materialization
 
@@ -291,6 +364,13 @@ Add a `Docs` Changie fragment and update blueprint-facing docs/examples.
 
 Gate: repository migrations, explicit legacy rejection, retained CLI behavior,
 and focused end-to-end install/update/runtime tests pass.
+
+Implementation note: repository and Arbiter blueprints now use the environment
+shape, and that path no longer emits or runs the startup virtualenv protocol.
+The old decoder remains temporarily isolated for the existing legacy
+characterization suite. Deleting that decoder and converting or retiring those
+fixtures is tracked in the model's private backlog and remains a pre-release
+requirement rather than a compatibility promise.
 
 ## Phase 8: Final Verification and Commit
 

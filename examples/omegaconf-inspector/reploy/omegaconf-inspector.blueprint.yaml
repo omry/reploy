@@ -3,114 +3,117 @@ blueprint:
   version: 0.1.0
   requires_reploy: ">=0.5.1.dev1"
 
-app:
+environment:
   id: omegaconf-inspector
-  provider:
-    type: python
-    identifier: omegaconf-inspector
-    local_sources:
-      # the Python project root is one level up.
-      omegaconf-inspector: ..
-
-install:
-  ports:
-    deployed:
-      http:
-        host_bind: 127.0.0.1
-        host_port: 19076
-        container_port: 8076
-        public_scheme: http
-    staging:
-      http:
-        host_bind: 127.0.0.1
-        host_port: 18076
-        container_port: 8076
-        public_scheme: http
-  managed_paths:
-    dirs: [
-      {path: conf, update: preserve, mount: /conf},
-      {path: data, update: preserve, mount: /data, writeable: true},
-    ]
-
-bundle:
-  options: {}
-
-docker:
-  deployment_dirs:
-    config: conf
-    bundle: .reploy/bundle
-    data: data
-  service:
-    image: python:3.11-slim
-    container_host: 0.0.0.0
-  health:
-    scheme_env: REPLOY_PUBLIC_SCHEME
-    host_env: REPLOY_HOST_BIND
-    port_env: REPLOY_HOST_PORT
-    default_scheme: http
-    default_host: 127.0.0.1
-    default_port: "18076"
-    path: /_health_
-  runtime:
-    hooks:
-      after_start:
-        - health_check: {wait: true}
-  install:
-    hooks:
-      before_start:
-        - app: [config, check]
-      after_start:
-        - health_check: {wait: true}
-        - app: [config, check, --live]
-    success:
-      vars:
-        server_url:
-          server_url: true
-      lines: ["inspector url: ${server_url}"]
-  default_command: serve
-  command_defaults:
-    container:
-      argv_prefix: [omegaconf-inspector]
+  vars:
+    project_root: ..
+  translations:
+    workspace:
+      type: python
+      scope: development
+      root: "{{ project_root }}"
+      mappings:
+        omegaconf-inspector: .
+  components:
+    application:
+      type: python
+      requirements: [omegaconf-inspector]
+  paths:
+    config:
+      container: /conf
+      writable: true
+      update: preserve
+    data:
+      container: /data
+      writable: true
+      update: preserve
+  executables:
+    inspector:
+      component: application
+      binary: omegaconf-inspector
   commands:
     serve:
-      container:
-        argv_suffix: [serve]
+      executable: inspector
+      argv: [serve]
     config_init:
+      executable: inspector
       trigger: [config, init]
-      app_command: true
-      deployed_command: false
+      native_command: true
       forward_flags: [--force]
-      container:
-        argv_suffix: [config, init]
+      argv: [config, init]
     config_check:
+      executable: inspector
       trigger: [config, check]
-      app_command: true
+      native_command: true
       deployed_command: true
       forward_flags: [--live]
-      container:
-        argv_suffix: [config, check]
+      argv: [config, check]
     config_show:
+      executable: inspector
       trigger: [config, show]
-      app_command: true
+      native_command: true
       deployed_command: true
-      container:
-        argv_suffix: [config, show]
+      argv: [config, show]
     project_list:
+      executable: inspector
       trigger: [project, list]
-      app_command: true
+      native_command: true
       deployed_command: true
-      container:
-        argv_suffix: [project, list]
+      argv: [project, list]
     project_show:
+      executable: inspector
       trigger: [project, show]
-      app_command: true
+      native_command: true
       deployed_command: true
-      forward_args: true
-      container:
-        argv_suffix: [project, show]
+      argv: [project, show]
     version:
+      executable: inspector
       trigger: [version]
-      app_command: true
+      native_command: true
       deployed_command: true
-      container:
-        argv_suffix: [version]
+      argv: [version]
+  workload:
+    command: serve
+    endpoints:
+      http:
+        scheme: http
+        port: 8076
+        readiness:
+          path: /_health_
+    runtime:
+      before_start:
+        - actions:
+            - environment: [config, check]
+      after_start:
+        - requires:
+            endpoints: [http]
+          actions:
+            - environment: [config, check, --live]
+  install:
+    target:
+      default_path: "{{ reploy.install_root }}/{{ environment.id }}"
+    success:
+      lines:
+        - "inspector url: {{ environment.workload.endpoints.http.scheme }}://{{ reploy.workload.endpoints.http.publish.address }}:{{ reploy.workload.endpoints.http.publish.port }}"
+
+docker:
+  image: python:3.11-slim
+  mounts:
+    config:
+      extends: environment.paths.config
+      mode: managed-bind
+      source: conf
+    data:
+      extends: environment.paths.data
+      mode: managed-bind
+      source: data
+  workload:
+    endpoints:
+      http:
+        extends: environment.workload.endpoints.http
+        bind:
+          address: 0.0.0.0
+        publish:
+          address: 127.0.0.1
+          staging: 18076
+          deployed: 19076

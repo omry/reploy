@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -856,6 +857,63 @@ func TestEmbeddedControlRunsDeployedAppCommandWithScriptPrefix(t *testing.T) {
 	}
 	if strings.Contains(args, "democtl") {
 		t.Fatalf("_control leaked control script name into app command args:\n%s", args)
+	}
+}
+
+func TestAppCommandPreservesContainerExitStatus(t *testing.T) {
+	packDir := makeCLITestPackWithManifest(t, cliTestPackManifest())
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	fakeBin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeDockerName := "docker"
+	fakeDockerContent := "#!/bin/sh\nexit 42\n"
+	if runtime.GOOS == "windows" {
+		fakeDockerName = "docker.cmd"
+		fakeDockerContent = "@exit /b 42\r\n"
+	}
+	if err := os.WriteFile(filepath.Join(fakeBin, fakeDockerName), []byte(fakeDockerContent), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("REPLOY_COLOR", "never")
+
+	code, _, stderr = runCLI("app", "--dir", deployDir, "config", "check")
+	if code != 42 {
+		t.Fatalf("app exit code = %d, want 42; stderr:\n%s", code, stderr)
+	}
+}
+
+func TestShellPreservesContainerExitStatus(t *testing.T) {
+	packDir := makeCLITestPackWithManifest(t, cliTestPackManifest())
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	previous := dockerShell
+	dockerShell = func(dockerdeploy.ShellOptions) error {
+		var command *exec.Cmd
+		if runtime.GOOS == "windows" {
+			command = exec.Command("cmd", "/c", "exit", "42")
+		} else {
+			command = exec.Command("sh", "-c", "exit 42")
+		}
+		return fmt.Errorf("wrapped shell failure: %w", command.Run())
+	}
+	t.Cleanup(func() { dockerShell = previous })
+
+	code, _, stderr = runCLI("shell", "--dir", deployDir)
+	if code != 42 {
+		t.Fatalf("shell exit code = %d, want 42; stderr:\n%s", code, stderr)
 	}
 }
 
@@ -2455,6 +2513,12 @@ func TestDockerStageAcceptsSourcePackRef(t *testing.T) {
 }
 
 func TestDockerStageAcceptsGitPackRef(t *testing.T) {
+	previousStageInit := dockerStageInit
+	dockerStageInit = func(options dockerdeploy.InitOptions) ([]dockerdeploy.UpdateResult, error) {
+		options.MaterializeEnvironment = false
+		return dockerdeploy.Init(options)
+	}
+	t.Cleanup(func() { dockerStageInit = previousStageInit })
 	sourceDir, commit := makeCLITestGitSourcePack(t)
 	cacheDir := filepath.Join(t.TempDir(), "cache")
 	t.Setenv("REPLOY_CACHE_DIR", cacheDir)
@@ -2498,9 +2562,11 @@ func TestDockerStageAcceptsGitPackRef(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expectedMount := strconv.Quote(state.ResolvedArtifact.CachePath + ":/source/app/git-source-app:rw")
-	if !strings.Contains(string(compose), expectedMount) {
-		t.Fatalf("compose did not mount cached git checkout %q:\n%s", expectedMount, compose)
+	if strings.Contains(string(compose), "/source/app") || strings.Contains(string(compose), "prepare_python_runtime") {
+		t.Fatalf("environment staging Compose retained legacy source mounts or startup installer:\n%s", compose)
+	}
+	if !strings.Contains(string(compose), "services: {}") {
+		t.Fatalf("environment staging Compose should remain empty until image materialization:\n%s", compose)
 	}
 }
 
@@ -3490,23 +3556,10 @@ func TestDockerBundlePrepareDryRun(t *testing.T) {
 	}
 }
 
-func TestDockerBundleWarmRuntimeDryRun(t *testing.T) {
-	packDir := makeCLITestPack(t)
-	deployDir := filepath.Join(t.TempDir(), "deployment")
-	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
-	if code != 0 {
-		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
-	}
-
-	code, stdout, stderr = runCLI("bundle", "warm-runtime", "--dry-run", "--dir", deployDir)
-	if code != 0 {
-		t.Fatalf("bundle warm-runtime failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
-	}
-	if !strings.Contains(stdout, "would warm Python runtime:") || !strings.Contains(stdout, "__reploy_runtime_warmup") {
-		t.Fatalf("stdout missing warm-runtime dry-run command:\n%s", stdout)
-	}
-	if stderr != "" {
-		t.Fatalf("stderr = %q, want empty", stderr)
+func TestDockerBundleWarmRuntimeIsRemoved(t *testing.T) {
+	code, stdout, stderr := runCLI("bundle", "warm-runtime")
+	if code != 2 || stdout != "" || !strings.Contains(stderr, "unknown bundle command: warm-runtime") {
+		t.Fatalf("warm-runtime result: code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
 
@@ -3521,7 +3574,6 @@ func TestDockerBundleWithoutCommandShowsSubcommands(t *testing.T) {
 	if !strings.Contains(stderr, "Usage: reploy [--docker-timeout DURATION] bundle COMMAND") ||
 		!strings.Contains(stderr, "build") ||
 		!strings.Contains(stderr, "clean") ||
-		!strings.Contains(stderr, "warm-runtime") ||
 		!strings.Contains(stderr, "list-options") {
 		t.Fatalf("stderr missing bundle subcommands:\n%s", stderr)
 	}
@@ -3538,7 +3590,6 @@ func TestDockerBundleHelpShowsSubcommands(t *testing.T) {
 	if !strings.Contains(stdout, "Usage: reploy [--docker-timeout DURATION] bundle COMMAND") ||
 		!strings.Contains(stdout, "build") ||
 		!strings.Contains(stdout, "clean") ||
-		!strings.Contains(stdout, "warm-runtime") ||
 		!strings.Contains(stdout, "--verbose") {
 		t.Fatalf("stdout missing bundle help:\n%s", stdout)
 	}
