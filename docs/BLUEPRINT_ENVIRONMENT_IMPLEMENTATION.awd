@@ -17,19 +17,26 @@
   -> schema resolution gate passes
 )
 !> (
-  define provider prerequisite and materialization contracts
-  -> adapt required and optional Python components
+  define provider prerequisite output and materialization contracts
+  -> adapt Python components and component-scoped options
   -> adapt explicit development translations
   -> adapt existing bundle UX and deployment selections
-  -> implement Python prerequisite and executable resolution
+  -> implement component-scoped Python nodes and typed interpreter resolution
   -> add provider contract tests
   -> Python provider gate passes
 )
 !> (
   (
     prototype BuildKit generated image
+    -> inspect and normalize base image configuration
+    -> prototype one-script one-transaction provider materialization
+    -> implement versioned provider child-environment and noninteractive I/O profiles
     -> probe Linux Engine and Docker Desktop capabilities
-    -> define semantic image and state identities
+    -> define semantic bundle assembly and realized image identities
+    -> implement versioned trusted bundle lock import
+    -> implement logical content-addressed build mounts
+    -> implement exact-prefix requirement profiles and cached validation evidence
+    -> implement measured provider argument-vector budgets
     -> prototype reuse invalidation recovery and cleanup
     -> add fake runner and real Docker evidence
     -> review BuildKit architecture and safety evidence
@@ -42,10 +49,11 @@
 !> (
   implement resolved Docker execution plan
   -> implement managed bind volume unmanaged bind and tmpfs mappings
+  -> reject runtime mounts that overlay protected provider content
   -> implement semantic path update matrix and replacement safeguards
   -> implement phase publication and retained port overrides
   -> implement wildcard probe normalization inputs
-  -> implement staged user and installed user system ownership
+  -> implement backend- and scope-specific runtime ownership
   -> regenerate Compose env state dry-run status and control inputs
   -> add golden rendering and cross-platform planning tests
   -> Docker execution plan gate passes

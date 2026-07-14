@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-07
+updated: 2026-07-14
 summary: Active planning surface for Reploy design and implementation gaps.
 ---
 
@@ -45,6 +45,13 @@ This file is the day-to-day queue for design and implementation gaps.
 No active pre-release items.
 
 ## Post-v1
+
+- [ ] `P2` Design portable environment export and import.
+      Separate exact offline transfer from instruction-based rebuilds and model
+      application configuration as opaque managed assets before promising a
+      portable staged application. Define boundaries for secrets, unmanaged
+      binds, persistent data, and user-edited preserved files; then settle the
+      archive, lock-replay, compatibility, and public CLI contracts.
 
 - [ ] `P2` Document blueprint structure and feature semantics.
       Audit the current blueprint authoring docs against parser validation and
