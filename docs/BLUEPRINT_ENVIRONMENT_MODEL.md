@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-14
+updated: 2026-07-15
 summary: Normative blueprint environment, workload, component, lifecycle, and Docker rendering model.
 supersedes: docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md
 ---
@@ -168,8 +168,7 @@ covered separately by the install-scope support matrix.
 After selection, Reploy uses one normalized platform record containing the OCI
 OS, architecture, optional variant, and selected base-manifest descriptor. It
 passes that platform explicitly to base resolution, every resolver and build
-container, BuildKit, probes, and runtime container creation. Any future portable
-import must bind the same record.
+container, BuildKit, probes, and runtime container creation.
 Provider bundles, locks, rendered transactions, validation profiles, assembly
 keys, and realized-image identities all bind the same record.
 
@@ -178,6 +177,15 @@ the immutable Dockerfile-frontend digest and every result-affecting backend
 capability. Reploy never relies on a floating Dockerfile syntax tag,
 `DOCKER_DEFAULT_PLATFORM`, or another backend default. A frontend or capability
 profile change creates a different rendered transaction and cache identity.
+
+APT compatibility is distribution-name and release-number independent. The
+initial provider selects its Debian/Ubuntu behavior profile when parsed
+`/etc/os-release` `ID` or one exact whitespace-delimited `ID_LIKE` token equals
+`debian` or `ubuntu`; substring matching is forbidden. It records the exact OS
+fields without using them as an allowlist and accepts past, future, or derived
+releases only when all required APT/dpkg schemas and runtime behavior probes
+pass. Representative release images belong to the CI matrix, not the blueprint
+schema or runtime acceptance table.
 
 Package providers map this selected OCI platform through a provider-owned,
 versioned architecture table. The initial APT provider supports
@@ -297,9 +305,9 @@ lowest node in the provider graph.
 
 `base.image` is a required nonempty OCI image reference. `base.exports` uses the
 common output-name grammar, but each base output must declare one normalized
-absolute `executable` path. Base outputs may carry a
-`logical_version_override`; they do not support `discover` because Reploy does
-not search an arbitrary image filesystem or its `PATH`. After selecting the
+absolute `executable` path. `discover` is not part of the output schema because
+Reploy does not search an arbitrary image filesystem, package contents, or
+`PATH`. After selecting the
 platform-specific immutable image, Reploy validates these declarations and
 publishes them under qualified identities such as `base.python`.
 
@@ -371,7 +379,7 @@ blueprint. A disabled option contributes nothing. A separate Python component
 always means a separate venv, including when such a component is used only in
 some blueprints or deployments.
 
-Direct package/source additions are also deployment-local provider inputs. When
+Direct package additions are also deployment-local provider inputs. When
 more than one component could accept an addition, the operation must name its
 target component; a direct addition does not create a public component or
 option object. The public commands are explicit so an addition cannot be
@@ -380,18 +388,13 @@ confused with an option selection:
 ```text
 reploy bundle add-package system jq
 reploy bundle add-package arbiter arbiter-debug==1.2.0
-reploy bundle add-source arbiter ./plugins/local-auth
 ```
 
 `add-package` accepts one target component followed by one or more
 provider-native root requirements and applies them atomically.
-`add-source` accepts one target component followed by one or more local source
-roots, validates each source's provider metadata, and reports the stable source
-identifier stored in the overlay. The corresponding `remove-package` and
-`remove-source` commands remove an exact normalized request or a source
-identifier reported by `reploy bundle list`. Package strings still use only
-the owning provider's public grammar; these commands do not expose raw package
-manager expressions.
+`remove-package` removes an exact normalized request. Package strings still use
+only the owning provider's public grammar; these commands do not expose raw
+package manager expressions.
 
 ### Deployment Request Overlay
 
@@ -404,12 +407,9 @@ that deployment requested.
 
 The canonical overlay contains fully qualified component/option selections and
 component-qualified typed provider additions. Entries are schema-normalized,
-deduplicated, and sorted; raw CLI strings and physical local-source paths are
-not canonical identity. Directory-scoped state may retain a local locator as an
-auxiliary field so a later stage can find the source; canonicalization replaces
-it with the resolved local-source record defined below. Every update validates
-the complete overlay against the current blueprint and applies atomically under
-the deployment operation lock.
+deduplicated, and sorted; raw CLI strings are not canonical identity. Every
+update validates the complete overlay against the current blueprint and applies
+atomically under the deployment operation lock.
 
 The effective request identity binds:
 
@@ -422,31 +422,30 @@ canonical blueprint fingerprint
 The local build lock contains the complete canonical overlay and its digest in
 addition to the blueprint fingerprint and selected platform.
 Component/provider identities include only the relevant overlay subset so an
-unrelated option does not invalidate every provider node. Adoption and
-replacement rules for a future portable import are deferred with that surface.
+unrelated option does not invalidate every provider node.
 
 ### Local Source-Derived Artifacts
 
-All providers use one common identity contract when a requested artifact is
-built from local source. A local locator is deployment input used to find the
-source, not portable identity. Before building, Reploy creates a canonical
-source manifest and digest under the provider's declared inclusion and ignore
-rules. The build input identity contains that digest, the versioned builder and
-toolchain profile, selected platform, and every relevant build setting.
+All providers use one common identity contract when a blueprint translation
+builds an artifact from local source. The translation root locates the source
+for the local build but is not content identity. Before building, Reploy
+creates a canonical source manifest and digest under the provider's declared
+inclusion and ignore rules. The build input identity contains that digest, the
+versioned builder and toolchain profile, selected platform, and every relevant
+build setting.
 
 The provider builds its normal raw artifact, validates its ecosystem metadata,
-and hashes the exact output bytes. The resolved overlay and lock omit the local
+and hashes the exact output bytes. The resolved request and lock omit the local
 path and record the logical source identity, source-manifest digest, build
-profile and settings, artifact metadata, and artifact digest. The portable
-bundle carries the resulting artifact, so import requires neither the original
-directory nor its build tools.
+profile and settings, artifact metadata, and artifact digest. The
+deployment-local provider store contains the resulting artifact, not the
+original directory or its build tools.
 
 This contract applies to locally built wheels, Go or Rust binaries, locally
 built `.deb` files, and future source-derived artifacts. A package version
 inside an artifact remains ecosystem dependency metadata; it is not a substitute
 for the source or artifact digest. Rebuilding unchanged source with different
-output bytes produces a different resolved bundle, while an exact imported
-bundle continues using its locked artifact bytes.
+output bytes produces a different resolved bundle.
 
 Any reference whose required component, output, executable, option-provided
 artifact, or installed artifact is absent is an error at the earliest phase
@@ -455,19 +454,17 @@ preflight if installed state has drifted.
 
 ### Provider Expansion Gate
 
-The APT/dpkg provider and cross-provider executable-output design is developed
-in [`APT_PROVIDER.md`](APT_PROVIDER.md). That document is a draft subdesign;
-this model remains authoritative until its open decisions are promoted here.
+The accepted APT/dpkg provider and cross-provider executable-output design is
+defined in [`APT_PROVIDER.md`](APT_PROVIDER.md) and is part of this model. APT is
+the first additional component provider after Python. Its public enablement is
+still gated on the common provider graph, bundle-to-image-layer pipeline, and
+APT-specific implementation evidence described in the detailed design.
 
-Python is the proving component provider. Before Reploy adds another component
-provider, it must first implement the common bundle-to-image-layer pipeline
-described below. New providers must contribute a closed bundle artifact set and
-a deterministic offline layer recipe; they must not introduce provider-specific
-runtime volumes, startup installers, or cache lifecycles.
-
-Go, Rust, and system-package examples in this document are future shapes used to
-test the generality of that contract. They are not commitments to implement
-those providers before the shared layer pipeline exists.
+Every additional provider must contribute a closed bundle artifact set and a
+deterministic offline layer recipe; it must not introduce provider-specific
+runtime volumes, startup installers, or cache lifecycles. Go, Rust, RPM/DNF,
+and Alpine/APK remain future shapes used to test the generality of that
+contract; they are not commitments for v1.
 
 System-package providers fit the same two-phase contract. An APT/dpkg provider
 may use APT during bundling to resolve a closed `.deb` dependency set, then
@@ -476,6 +473,28 @@ RPM/DNF and Alpine/APK providers would likewise bundle closed, checksummed
 package sets and install them offline in provider-owned layers. Package-manager
 databases and system files belong in the derived image, never in startup-time
 runtime caches.
+
+APT v1 performs no generic executable discovery. Its versioned well-known-tool
+profile recognizes exactly the `python3` root package request and publishes the
+logical `python` candidate at `/usr/bin/python3`; any other APT output requires
+an explicit normalized absolute path. The mapping is not proof that the path is
+Python or that it has a particular version. The consuming Python resolver
+checks the candidate inside its existing container against the exact immutable
+supplier prefix before network work. Failure identifies the mapping and shows
+the explicit `exports.python.executable` form. No path search or additional
+probe container is used.
+
+APT output ownership is validated after materialization against the complete
+locked APT node, which is one shared dpkg authority across all APT components.
+Reploy resolves only the already selected path and uses literal `dpkg-query -S`
+to identify its terminal's installed package key, whose exact status tuple must
+appear in the locked closure; it stores no per-root dependency graph. Ordinary
+unowned link hops fail. If the selected
+chain enters the alternatives directory, read-only `update-alternatives
+--query` must confirm the link group and selected value, and the terminal must
+still be owned by a locked package. Reploy does not enumerate or change
+alternatives. Failure may be avoided by explicitly declaring the direct
+terminal path when that path itself satisfies the ownership rule.
 
 Concise provider request strings are parsed into provider-owned typed records;
 they are never forwarded as package-manager expressions. The initial APT
@@ -496,12 +515,13 @@ order layers. Reploy first builds a deterministic structural graph containing
 the base root, provider nodes, and explicit supplier edges, and rejects cycles
 in those known edges. It uses stable component-name ordering where independent
 nodes need a tie-breaker. Immediately before resolving each consumer, Reploy
-selects unqualified requirements only from already initialized suppliers,
-freezes those selections, and adds the selected edges to the final graph.
-Automatic edges point to initialized nodes and therefore cannot create cycles.
-Independent artifact builds whose selections are already frozen may run
-concurrently, while final image assembly follows deterministic final-graph
-order.
+starts its resolver on the current immutable prefix. The resolver's first step
+validates unqualified candidates from already initialized suppliers in stable
+order, freezes the first compatible selection before network or source work,
+and adds that edge to the final graph. Automatic edges point to initialized
+nodes and therefore cannot create cycles. Independent artifact builds whose
+selections are already frozen may run concurrently, while final image assembly
+follows deterministic final-graph order.
 
 The current Python implementation has a single aggregated provider node. The
 generalized DAG executor and component-scoped Python nodes must be implemented
@@ -519,18 +539,21 @@ DAG. Reploy never installs an undeclared prerequisite automatically. Failures
 name the provider, missing or incompatible requirement, and selected image or
 build environment.
 
-For the initial Python-only implementation, the selected base image must already
-provide a compatible Python interpreter. Future Go or Rust providers may require
-a compatible toolchain or use a provider-owned builder environment. A system
-package provider requires a compatible base distribution and its package
-installation tooling.
+The existing Python-only prototype requires the selected base image to provide
+a compatible Python interpreter. The target v1 design removes that restriction:
+a Python component may select a compatible interpreter from the base or an
+earlier APT node. Future Go or Rust providers may require a compatible toolchain
+or use a provider-owned builder environment. A system-package provider requires
+a compatible base distribution and its package installation tooling.
 
 For every Python component, an omitted `interpreter` field normalizes to the
 logical requirement `{command: python}` with no version or supplier constraint.
 The normal base-first, then provider-graph supplier order selects it. An author
-declares `interpreter` only to constrain the logical version, select a supplier,
-or request a future nondefault interpreter capability. Failure to find a
-compatible `python` output remains an unsatisfied provider prerequisite.
+declares `interpreter` only to constrain the logical version or select a
+supplier. Failure to find a compatible `python` output remains an unsatisfied
+provider prerequisite. Command requirements have no generic capability-name
+list. Each provider validates the fixed prerequisites of its recipe; the Python
+provider proves `venv` support by creating the real component environment.
 
 At most one system-package provider (`apt`, `rpm`, or `alpine`) is allowed in
 an environment, and it must match the base image. Component names are unique
@@ -545,24 +568,28 @@ a dedicated root or exact leaf; before creating it Reploy validates the complete
 ancestor chain without following symlinks, requires the component leaf to be
 absent, and safely creates the root beneath a missing or previously verified
 Reploy-owned provider hierarchy. Its resulting layer may persist changes only
-inside that namespace. Python environments use this model.
+inside that namespace by provider recipe contract. V1 validates the declared
+root and outputs but does not export or scan the produced layer to prove write
+confinement. Python environments use this model.
 
 A shared system-package provider delegates path ownership, upgrades,
 replacement, conffiles, diversions, alternatives, and generated-file semantics
 to its native package manager. All component requirements handled by that
 provider participate in one authority domain; their blueprint names do not own
 individual system files. Reploy does not reconstruct dpkg, RPM, or APK collision
-rules. It rejects archive claims and actual resulting-layer changes beneath
-Reploy-protected namespaces, validates the package database and required
-capabilities, and otherwise accepts the package manager's successful resolved
-transaction. Two unrelated providers cannot share such a domain; providers
-outside it must use exclusive namespaces.
+rules. It rejects archive claims beneath Reploy-protected namespaces before
+installation, validates the package database
+and required fixed tool interfaces, and otherwise accepts the package manager's
+successful resolved transaction. Paths dynamically created by package scripts
+remain trusted package behavior in v1. Two unrelated providers cannot share
+such a domain; providers outside it must use exclusive namespaces.
 
 Symlinks are never followed during boundary checks. An exclusive-root ancestor
 cannot be a symlink, non-directory, or mountpoint, and a shared-authority
 symlink is interpreted by its native package manager rather than as a Reploy
-ownership claim. Provider artifact listings and disposable layer change lists
-may be streamed with safety limits; the model requires no global attribution of
+ownership claim. Provider artifact listings are streamed with bounded memory
+and actual format/backend constraints; Reploy does not scan produced layers or
+impose numeric processing quotas. The model requires no global attribution of
 every system file to a blueprint component.
 
 `translations` is separate from `components`. A translation does not request
@@ -572,7 +599,7 @@ distribution, use this local source instead of fetching it from an index." An
 unused mapping has no effect on the materialized environment. When a mapping is
 used, its root is an auxiliary local locator and the resulting wheel follows
 the source-manifest, builder-profile, and artifact-digest contract above; the
-physical root never enters the portable bundle identity.
+physical root never enters the resolved content identity.
 
 ## Blueprint Variables
 
@@ -926,15 +953,14 @@ enabled-source acquisition error as fatal, resolves only from that fresh index
 set, and discards it with resolver scratch. Offline materialization never
 refreshes or consults repository indexes.
 
-For each downloaded APT artifact, the provider verifies and records the exact
-chain from authenticated `Release`/`InRelease` metadata, through the signed
-checksum of the selected `Packages` index and exact package stanza, to the
-artifact's size and SHA-256. Base-origin packages remain bound by the immutable
-base-image digest. Repository provenance contains only a safely normalized
-public source coordinate or an opaque identifier derived from authenticated
-metadata; access credentials never participate in semantic identity or durable
-state. Raw source configuration and APT output are not persisted, and any
-displayed diagnostic is provider-redacted or replaced by a structured error.
+The immutable base image is the trust boundary for APT itself, its source and
+key configuration, credentials, and repository trust policy. Reploy runs update
+against fresh private indexes and treats any error APT reports as fatal, but it
+does not parse or rewrite source trust options or reconstruct a second
+release-to-index authentication chain. For each downloaded `.deb`, Reploy
+inspects package metadata and records its exact size and SHA-256. Raw source
+configuration and APT output are not persisted, and any displayed diagnostic is
+provider-redacted or replaced by a structured error.
 
 APT materialization requires a clean audited package database before changing
 it and snapshots the complete installed package state. After installation it
@@ -999,30 +1025,35 @@ plus the canonical digest of a requirement profile assembled from backend
 baseline requirements and the provider operation that will consume the prefix.
 For OCI images, the subject is the canonical digest of the ordered
 `rootfs.diff_ids` sequence. Other image configuration that affects execution is
-bound separately to transaction identity. On a cache miss, Reploy runs one
-bounded, read-only, networkless, noninteractive probe that validates the
-declared absolute tools and their complete link chains, executable terminals,
-file fingerprints, and capabilities. The profile also validates normalized
-mount descriptors syntactically and, without following links, requires the
-backend's fixed transient build-mount root to be absent. It does not scan the
-whole filesystem or rehash mounted artifact contents.
+bound separately to transaction identity. Reploy does not launch a standalone
+prerequisite-probe container. A resolver validates its declared tools, link
+chains, executable terminals, file fingerprints, and provider-specific fixed
+tool interfaces before network or source work. A materializer performs the
+same checks before its first persistent change. A fixed recipe prerequisite
+that is proven only by performing the real operation is validated there; Python
+proves `venv` by creating its real component environment, not by a generic
+capability probe. The operation also validates normalized mount
+descriptors syntactically and, without following links, requires the backend's
+fixed transient build-mount root to be absent. It does not scan the whole
+filesystem or rehash mounted artifact contents.
 
 Every uncached or lock-driven materialization creates a new exact prefix
-identity and must acquire a matching validation record before it is accepted or
-consumed. A record is a Reploy-generated observation, not a signature,
+identity. A record is a Reploy-generated observation, not a signature,
 package-trust proof, or attestation; it is trusted only under the initial
 design's trusted-local-container-backend assumption. A cached record is
 reusable only for the same immutable root-filesystem subject and complete
-profile version. A
-failed requirement blocks that node and all downstream nodes. Every executable
-requirement uses a private `compatible` or `unchanged` validation policy: the
+profile version. A failed requirement blocks that node and all downstream
+nodes. Every executable requirement uses a private `compatible` or `unchanged`
+validation policy: the
 former may acquire a new compatible record after a layer changes its
 implementation, while the latter must match the profile's named record.
 
-A provider prerequisite is validated on the immediate prefix before its
-consumer runs, and a later consumer validates again on its own immediate
-prefix. That consumer-scoped guarantee ends with the operation. Every output
-referenced by a command, directly or through `environment.executables`, is
+A provider prerequisite is validated on the immediate prefix as the first step
+inside its consumer, and a later consumer validates again inside its own
+operation. A cached-bundle mismatch exits before persistent changes, commits no
+layer, and causes resolution to rerun once against that fixed prefix. That
+consumer-scoped guarantee ends with the operation. Every output referenced by a
+command, directly or through `environment.executables`, is
 additionally validated on the final immutable environment image after all
 provider layers and before publication. An earlier prefix record cannot
 authorize final command exposure.
@@ -1033,7 +1064,7 @@ A private `ValidatedExecutableInput` may occupy command position only when the
 provider graph created it from a fixed provider prerequisite or a selected
 base/provider output already validated against the exact immutable upstream
 image. It records its recipe role, origin or supplier-qualified identity,
-upstream image digest, invocation path, complete bounded link chain, terminal
+upstream image digest, invocation path, complete cycle-checked link chain, terminal
 path, ownership and file digest, and typed compatibility evidence.
 
 The script receives the invocation path as one quoted positional value and may
@@ -1042,7 +1073,7 @@ execute it directly. It never performs a `PATH` lookup or passes it through
 declare a private `GeneratedExecutableOperand` with a recipe role, exact
 provider-derived invocation path beneath a protected provider-owned root, and a
 validation policy. The script may invoke it only after the generating operation
-and after validating its bounded link chain, regular executable terminal, and
+and after validating its cycle-checked link chain, regular executable terminal, and
 provider ownership. Its terminal may be a newly generated file or an already
 validated upstream executable such as the bootstrap interpreter. Arbitrary
 blueprint, package, artifact, and forwarded data can never become either kind of
@@ -1064,89 +1095,37 @@ they are known before the transaction runs.
 
 Build-mount identity is logical and content-addressed. It includes the mount's
 provider role, fixed container destination, access policy, and an existing
-artifact-manifest or script digest. It excludes physical host, cache,
-temporary, and deployment paths. Bundle creation or import verifies artifact
-bytes once, atomically publishes the resulting manifest-root object as
-immutable, and Reploy's normal identity/cache logic does not reread the bytes
-merely to recompute mount identity. The backend resolves the physical source
-only when rendering the operation and still performs whatever content I/O the
-actual build requires.
+resolved-bundle or script digest. The resolved bundle already binds the ordered
+artifact paths, kinds, sizes, and content digests; no parallel mount manifest is
+created. The identity excludes physical host, cache, temporary, and deployment
+paths. Bundle creation verifies artifact bytes once and atomically publishes the
+resolved-bundle manifest; Reploy's normal identity/cache logic does not reread
+the bytes merely to recompute mount identity. The backend resolves the physical
+source only when rendering the operation and still performs whatever content
+I/O the actual build requires.
 
 Every bundle resolver writes raw artifacts to one initially empty, private
 output mount that is its only writable host-backed path. Reploy stops the
 resolver container before host ingestion. A shared safe-artifact publisher then
 enumerates the output without following links, accepts only provider-accounted
-regular files with normalized portable names, rejects links, special files,
-aliases, and unaccounted entries, and enforces count, logical-byte, and path
-limits. It streams each artifact through provider metadata validation and
-content hashing into private temporary storage and atomically publishes the
-manifest root only after the entire set validates. Bundle import uses the same
-publication primitive after archive-specific framing checks. Resolver output
-can never supply Reploy carrier code.
+regular files with normalized canonical names, rejects links, special files,
+aliases, and unaccounted entries. It streams each artifact through provider
+metadata validation and content hashing into private temporary storage, rejects
+malformed data and overflow, obeys actual format/filesystem/backend constraints,
+and adds no numeric count, byte, path, or scratch quota. It atomically publishes
+the resolved-bundle manifest only after the entire set validates. Resolver
+output can never supply Reploy carrier code.
 
-Every rendered provider command has a versioned argument-vector budget checked
-before backend execution. The budget uses the exact encoded argv, the exact
-environment vector declared for that invocation (fixed child or inspected
-carrier), target pointer width, and the execution environment's probed kernel
-limit with provider-defined aggregate headroom and per-string limits. It is
-computed from typed metadata rather than artifact contents. An over-budget
-operation fails before materialization; a provider cannot silently split one
+Provider commands rely on the operating system's actual process-argument limit;
+Reploy does not probe it or impose a smaller predictive budget. A process
+creation failure reports the provider node, phase, operand count, and operating-
+system error without publishing output. A provider cannot silently split one
 declared transaction into several operations because doing so may change
 dependency and installer semantics.
 
-Portable environment export/import and reconstruction of application-level
-configuration are deferred from the initial environment model. The following
-portable-envelope constraints are retained as future design notes, not as an
-initial implementation or public-CLI commitment.
-
-Portable provider bundles contain declarative lock metadata, opaque,
-hash-verified raw provider artifacts, and the digest-addressed OCI image graph
-for the exact locked realization. The graph carries each required manifest,
-configuration, and layer blob once even when several prefix images share it.
-For a system-package closure, each exact package record has a tagged origin.
-`base` origin records package, version, architecture, and installed status but
-has no synthetic artifact hash; the lock-level immutable base-image digest
-already binds its package database and files. `bundle` origin additionally
-records the raw artifact path, size, and digest. A bundle upgrade records its
-exact base predecessor. Materialization verifies base-origin tuples before
-installing only bundle-origin artifacts and compares the final state with the
-complete mixed-origin closure.
-Outside those raw artifact and OCI bytes bundles never contain Reploy carrier
-scripts, generated build definitions, or provider-runner executables. A lock
-identifies its schema, transaction schema, canonical encoding, digest algorithm
-and script-content-digest rule, exact provider recipe/profile versions, and
-every base and realized prefix image descriptor. Import selects the matching
-historical generator only from locally installed trusted provider code,
-regenerates the script and transaction, and requires their digests to match the
-lock before accepting the corresponding image. It then reuses or loads those
-exact images; it never rebuilds them against a merely compatible upstream
-image. Missing compatibility code, a missing OCI object, or any digest mismatch
-fails import. Ordinary import never silently migrates a lock, accepts carrier
-code from the bundle, or substitutes a new realization. Rebuilding from the
-raw artifacts is a new bundle-build/re-lock operation with new identities.
-The initial identifiers and byte-level canonicalization and hashing rules in
-[the APT provider's bundle-lock contract](APT_PROVIDER.md#bundle-lock-manifest)
-are the initial cross-provider lock contract, not APT-specific behavior.
-
-The initial cross-provider archive envelope is `reploy-bundle-v1`: an
-uncompressed deterministic POSIX ustar stream. Its canonical lock is the first
-regular-file member and enumerates every remaining member's exact path, size,
-digest, kind, and owner. The only other members are canonical OCI layout
-metadata, digest-addressed OCI blobs, and digest-addressed raw provider
-artifacts. Each required object appears exactly once even when import finds the
-same digest locally; local presence may avoid publication but never makes the
-portable archive incomplete.
-
-Headers and order are canonical. Import rejects links, special and sparse
-files, extended headers, directory entries, duplicate or noncanonical paths,
-undeclared members, truncation, trailing data, and any count, size, metadata,
-or digest mismatch. It parses a bounded lock first, applies a versioned import
-profile to all declared counts and byte totals, then streams each expected
-member once into private quarantine while hashing it. Tar paths are never
-extracted into the destination. Reploy atomically publishes only after the
-complete archive, artifact metadata, OCI graph, and lock references validate;
-every failure discards quarantine. The precise paths and header values are
-defined by [the provider archive contract](APT_PROVIDER.md#reploy-bundle-v1-archive).
+Portable environment export/import is unsupported in v1. Any future transfer
+feature requires a separate design; the local lock and provider store do not
+reserve an archive envelope, compatibility loader, or import behavior.
 
 Bundle artifacts are exposed to a build step with a read-only BuildKit bind
 mount rather than copied permanently into the image. Only installed files remain
@@ -1167,9 +1146,9 @@ image's configured `USER`. Reploy supplies an explicit user for every container:
 
 Docker Desktop mediates explicitly shared host files through the Desktop user.
 The container identity still controls permissions inside the container, named
-volumes, and the container-visible mode of mounted paths. Reploy therefore
-preflights every declared mount for the selected runtime identity rather than
-assuming that host and container users correspond.
+volumes, and the container-visible mode of mounted paths. Reploy does not assume
+that host and container users correspond; Docker and the workload remain
+authoritative for runtime permission failures.
 
 Declared provider outputs satisfy a versioned portable-access profile before
 their realized image is accepted. For the initial Linux-container profile,
@@ -1183,18 +1162,15 @@ if its complete selected path cannot satisfy the same profile. Provider outputs
 contain no secrets, and only explicitly writable managed paths and Reploy's
 temporary home are writable.
 
-Portable access is the shareability rule, not the final runtime proof.
-Immediately before creating every workload or transient runtime container,
-Reploy first requires the selected immutable image's final-output record to
-match its current root-filesystem subject. It then performs a bounded access
-preflight under that container's exact numeric UID, primary GID, supplementary
-groups, immutable image, and effective mount plan. The preflight checks each
-executable output referenced by that runtime plan, including traversal of its
-invocation and recorded link/terminal paths, without executing package code.
-Failure names the selected identity and first inaccessible path and prevents
-container creation. The runtime access record is keyed by the runtime plan and
-stored in deployment state; it never enters the shareable provider image,
-bundle, transaction, or lock identity.
+During `reploy build`, final-image validation applies the portable-access rule
+to every runtime-exposed output and validates every compiled mount destination
+against the exact resulting image. A changed runtime plan makes the build stale.
+Immediately before container creation, Reploy performs only host-side checks
+for the matching recorded plan and declared mount-source existence, kind, and
+read/write policy. It creates no separate access-preflight container and stores
+no runtime-access record. Docker container creation and the workload report
+permission failures that depend on the actual runtime identity or mount
+implementation.
 
 Before a current-user install, Reploy reports the selected policy and numeric
 container UID/GID. On native Linux it identifies the invoking host user; on
@@ -1228,28 +1204,35 @@ boundary includes the exact upstream image identity in its profile. The
 parent-dependent assembly key still changes whenever the preceding image does.
 
 `reploy build` explicitly resolves provider bundles and materializes the
-environment image. `reploy up` and other runtime operations consume the recorded
+environment image without installing it. `reploy install` ensures its staged or
+temporary staging-like workspace has a current build by reusing a matching
+record or running that same build pipeline before it transfers and installs the
+result. Install help and progress expose that build work and its Docker/network
+requirements. `reploy up` and other runtime operations consume the recorded
 build and never hide resolution or image construction. `reploy build
---no-cache` bypasses resolver and realized-image cache lookups and reprobes and
-rematerializes every node, while verified immutable raw artifacts may remain
-reusable by digest. The bypass flag is execution policy, not blueprint state or
-semantic identity.
+--no-cache` bypasses the current deployment's build-lock reuse and the backend
+build cache, then reruns every resolver, rematerializes every node, and performs
+full final validation, while verified immutable raw artifacts in that
+deployment may remain reusable by digest. The bypass flag is execution policy,
+not blueprint state or semantic identity.
 
-On Docker and Podman, Reploy attaches each canonical executable-output
-validation record to the finalized prefix through reserved OCI image-config
-labels. The labels contain the record schema and contents plus a subject equal
-to the canonical digest of the ordered OCI `rootfs.diff_ids` sequence. The
-subject is not the image digest: image-config labels change the image digest
-without changing the root filesystem. The finalized image digest covers the
-labels and therefore binds the record into the realized prefix identity.
+On Docker and Podman, Reploy attaches fixed schema, root-filesystem-subject, and
+canonical-record-digest values to the finalized prefix through reserved OCI
+image-config labels. The complete canonical record is an immutable object in
+the deployment's provider store and is referenced by its build lock. The
+subject is the canonical digest of the ordered OCI `rootfs.diff_ids` sequence,
+not the image digest: image-config labels change the image digest without
+changing the root filesystem. The finalized image digest covers the fixed
+labels and therefore binds their record reference into the realized prefix
+identity.
 
-Docker or Podman stores and garbage-collects the labels with the image; Reploy
-defines and validates their meaning. Reploy keeps no separate machine-wide
-validation database. A child image may inherit a label, but a child filesystem
-layer changes the root-filesystem subject, making the inherited record
-inapplicable. Reploy must probe and attach a new record at every required
-consumer or final-image boundary. Once the backend garbage-collects the last
-image configuration carrying a record, rebuilding requires fresh validation.
+Reploy keeps no machine-wide validation database. A child image may inherit the
+labels, but a child filesystem layer changes the root-filesystem subject, making
+the inherited record inapplicable. Reploy must probe and attach new fixed labels
+at every required consumer or final-image boundary. If cleanup removes the
+deployment-store record, the committed image remains runnable because runtime
+can compare its labels with the build lock; a later build performs fresh
+validation and republishes the record.
 
 `unchanged` requires the selected path, complete link chain, terminal,
 ownership, file digest, and typed facts to match the named record. `compatible`
@@ -1261,34 +1244,60 @@ fields.
 
 Reploy owns its generated Docker containers and image references, while Docker
 and BuildKit own physical layer sharing and build-cache garbage collection.
-Environment cleanup removes only non-shared resources and image references
-owned by the relevant directory identity. Shared images and canonical cache
-references carry directory-independent content identity; canonical references
-provide cross-installation lookup and are never removed automatically in the
-initial design. Explicit Reploy cache cleanup may remove canonical cache
-references but never environment references or physical images forcibly.
-Existing environments therefore remain pinned while future installs lose only
-that Reploy cache hit. Reploy never performs a global Docker or BuildKit prune.
-These naming, tagging, and retention rules are backend implementation details
-rather than cross-backend blueprint protocol.
+Each Reploy temporary or generation reference is owned by one deployment
+directory, and environment cleanup removes only that directory's references.
+V1 creates no canonical Reploy image tag and performs no cross-installation
+completed-image lookup. Docker may still reuse and garbage-collect physical
+layers and build-cache entries under its own policies. Reploy never forcibly
+deletes physical images or performs a global Docker or BuildKit prune. These
+naming, tagging, and retention rules are backend implementation details rather
+than cross-backend blueprint protocol.
 
 State-changing operations for one deployment directory hold an exclusive
 directory operation lock. A build publishes under a unique temporary reference,
 captures and validates the backend-reported immutable image ID, creates a new
 unique environment generation reference, and writes a durable pending-operation
 record. Atomic replacement of deployment state with that generation and digest
-is the commit point. Only afterward may Reploy update the canonical shared cache
-hint and remove the prior generation and temporary reference. Runtime operations
-use the state-selected generation, never a mutable staging/deployed tag.
+is the commit point. Only afterward may Reploy remove the prior generation and
+temporary reference. Runtime operations use the state-selected generation,
+never a mutable staging/deployed tag.
+
+The prior generation exists only as pending cutover cleanup state. After
+successful publication or recovery, each deployment retains exactly the
+generation named by current state. V1 keeps no rollback generation and exposes
+no image-generation rollback command.
+
+Build locks use content-addressed filenames so the current and candidate locks
+can coexist during cutover. After successful publication or recovery, cleanup
+retains exactly the lock named by current state and its transitive local
+provider-store closure. A failed build removes candidate-only data and preserves
+the prior current lock and closure. The lock directory is not build history or
+a multi-generation artifact cache.
+
+An install also gives the installed deployment its own provider artifacts. It
+first ensures that the staged source has a current build, or builds in the
+private temporary staging-like workspace used by direct install. It then copies
+only the store objects transitively referenced by the selected current build
+lock, not the source deployment's complete store. The destination keeps no
+reference to that source. Objects are digest-verified and atomically published
+before installed state commits, so a failed build or transfer leaves the
+previous installed state active.
+
+Install holds the source workspace's operation lock from before that build check
+through the final source-object read. Direct install also locks its private
+temporary source for the same behavior. After the source build is current,
+install acquires the installed destination lock and holds both locks through
+verified transfer and installed-state commit, then releases destination before
+source. Source-before-destination is the only two-directory lock order;
+installed deployments never act as install sources, so another operation cannot
+form the reverse edge.
 
 Recovery under the same lock preserves the generation reachable from committed
-state and removes or completes only that directory's abandoned references. A
-canonical-cache reader resolves the hint once and validates and uses the
-resulting immutable digest, so a concurrent cache update cannot retarget the
-operation. Different deployment directories remain concurrent and retain their
-own generations. "Finalize" means completing this recoverable cutover; it does
-not push an image to a remote registry unless a separate explicit future
-operation requests it.
+state and removes or completes only that directory's abandoned references.
+Different deployment directories remain concurrent and retain their own
+generations. "Finalize" means completing this recoverable cutover; it does not
+push an image to a remote registry unless a separate explicit future operation
+requests it.
 
 An environment has one generated command surface, named by
 `environment.control_script`. The field is optional and defaults directly to
@@ -1322,30 +1331,31 @@ environment.
 
 Provider outputs use one model regardless of whether another provider consumes
 them, a command references them directly, `environment.executables` configures
-them, or several of these apply. A supplier output with explicit
-`discover: true` may be a bounded candidate set; each typed consumer records its
-own selected path and evidence without changing the supplier-qualified
-identity. An explicit path is a singleton candidate set. Empty output objects
-are invalid, and `discover` and `executable` are mutually exclusive. Producing
-an output does not expose it publicly. An
+them, or several of these apply. Every output names one candidate path, supplied
+by an explicit declaration, a narrowly versioned provider mapping, or exact
+ecosystem metadata such as a Python wheel's console-script entry point. Empty
+output objects are invalid, and a declared export requires `executable`.
+Producing an output does not expose it publicly. An
 unqualified provider requirement selects the first compatible output from lower
 to higher image layers among catalogs already published by initialized
 suppliers: base first, then provider nodes in deterministic initialization order
-with stable component-name ordering within a layer. Selection is frozen before
-the consumer resolver runs and is recorded as an edge in the final graph and
-local build lock. A provider requirement may set
+with stable component-name ordering within a layer. As the first step in the
+consumer's existing resolver container, the typed consumer inspects candidates'
+actual executables in that order and freezes the first compatible candidate
+before network or source work. Selection is recorded as an edge in the final
+graph and local build lock. A provider requirement may set
 `supplier` to an active component name or the required `base` component to
 override that precedence; dotted identities are diagnostic, not blueprint
 syntax. `base` cannot be replaced or reused for another component.
 Application executable outputs are matched by name only in the initial design;
 general application-output versioning is deferred.
 
-An author-supplied `logical_version_override` describes exactly one terminal
-executable group. It may accompany an explicit path or discovery that realizes
-one group; discovery of multiple groups makes the scalar override ambiguous and
-fails. When a later probe differs from provisional metadata, the typed consumer
-deterministically accepts it with a warning only when its compatibility rule
-passes, otherwise it fails; the accepted observed value becomes authoritative.
+Supplier output catalogs carry candidate paths and provenance, not provisional
+logical versions. A package version or author assertion does not stand in for a
+runtime version. The typed consumer determines the actual logical version from
+the executable, applies its version constraint before selection, and records
+the observed facts. An explicit `supplier` limits validation to that supplier
+and fails when its candidate is incompatible.
 
 Python components derive executable outputs from the console-script entry-point
 metadata of every exact wheel in their resolved closure. The catalog records
@@ -1359,9 +1369,7 @@ component venv and name that environment's interpreter in its immediate
 shebang.
 
 Neither a direct command reference nor `environment.executables` has a typed
-compatibility filter, so either may expose only a singleton provider output. A
-multi-candidate export must be refined through its supplying provider before
-command exposure.
+compatibility filter; each references the supplier output's one candidate path.
 
 The component reference selects the provider. In the example,
 `executables.arbiter_server.component: application` resolves
@@ -1977,28 +1985,21 @@ capabilities. Existing CLI and deployment behavior is retained unless it
 conflicts with an explicit decision in this model. Such conflicts must be
 called out and resolved deliberately rather than silently dropping the feature.
 
-The initial implementation supports Python components, Docker, at most one
-primary workload, native one-shot commands, and HTTP readiness. Image
-materialization uses deterministic, versioned recipes and input-addressed
-provider nodes. This promises stable identity for the same exact resolved
-inputs, not byte-identical image bytes after every uncached rebuild. Generated
-bundle manifests, layer graphs, and BuildKit integration are private
-implementation details rather than blueprint schema.
+The initial implementation supports base, Python, and APT components; Docker;
+cross-provider executable consumption; at most one primary workload; native
+one-shot commands; and HTTP readiness. APT becomes publicly usable only after
+its provider-graph, resolver, materializer, cross-provider Python, and public
+build gates pass. Image materialization uses deterministic, versioned recipes
+and input-addressed provider nodes. This promises stable identity for the same
+exact resolved inputs, not byte-identical image bytes after every uncached
+rebuild. Generated bundle manifests, layer graphs, and BuildKit integration are
+private implementation details rather than blueprint schema.
 
 ### Private Implementation Backlog
 
 The following capabilities are intentionally deferred from the initial slice:
 
-- Go, Rust, APT/dpkg, RPM, and Alpine component providers.
-- Redesign Python bootstrap-interpreter resolution before a system-package
-  provider can supply Python. The Python provider should declare a logical
-  command and version requirement without naming its source. The selected base
-  image and earlier provider layers may export candidate executables; Reploy
-  must validate candidates, apply documented lower-layer-first precedence or an
-  explicit supplier override, record the selected source, absolute path, and
-  logical version, then create the fixed Reploy-owned
-  virtual environment. The current Python provider assumes `python` is already
-  available on the base image's `PATH`.
+- Go, Rust, RPM, and Alpine component providers.
 - Multiple primary workloads or multi-service composition.
 - Configurable, named, or persistent interactive sessions.
 - General named checks beyond the initial HTTP readiness contract.

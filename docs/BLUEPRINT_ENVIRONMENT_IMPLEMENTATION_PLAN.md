@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-14
+updated: 2026-07-15
 summary: Evidence-driven implementation plan for the blueprint environment and workload model.
 implements: docs/BLUEPRINT_ENVIRONMENT_MODEL.md
 ---
@@ -128,9 +128,11 @@ Inventory and map:
 - Smoke, git-source, OmegaConf demo, and external Arbiter blueprints.
 
 Build a replacement table from every retained legacy surface to its new model,
-explicit removal, or backend-private equivalent. At minimum protect:
+explicit removal, or backend-private equivalent. At minimum account for:
 
-- bundle options/add/remove/list/prepare/check/upgrade;
+- bundle options/add/remove/list/prepare/check/upgrade, including explicit
+  removal of prepared-wheelhouse-only commands rather than compatibility
+  aliases;
 - managed-path preserve/replace and `--replace`/`--clean`;
 - single and named `--port` overrides;
 - user/system ownership and cross-platform install targets;
@@ -191,134 +193,181 @@ Tests:
 
 Define a provider contract that:
 
-- represents the required `base` component as the graph root, validates its
+- **P2-01:** represents the required `base` component as the graph root, validates its
   explicitly declared outputs against the selected immutable image, and gives
   it no provider bundle or materialization transaction;
-- groups active components into provider nodes according to their
+- **P2-02:** groups active components into provider nodes according to their
   materialization semantics;
-- plans a structural graph containing the base root and explicit supplier
-  edges, rejects structural cycles before resolution, then freezes automatic
-  supplier selections from already initialized output catalogs immediately
-  before each consumer resolver runs;
-- resolves a closed checksummed artifact set for platform/base identity;
-- applies translations without turning them into install requests;
-- reports provider-owned executable outputs and final image paths;
-- emits a deterministic offline recipe with a recipe version;
-- distinguishes ordinary recipe data from typed executable operands and binds
+- **P2-03:** plans a structural graph containing the base root and explicit supplier
+  edges and rejects structural cycles before resolution; each consumer
+  resolver then validates candidates from already initialized output catalogs
+  and freezes its automatic selection as the resolver's first step;
+- **P2-04:** resolves a closed checksummed artifact set for platform/base identity;
+- **P2-05:** applies translations without turning them into install requests;
+- **P2-06:** reports provider-owned executable outputs and final image paths;
+- **P2-07:** emits a deterministic offline recipe with a recipe version;
+- **P2-08:** distinguishes ordinary recipe data from typed executable operands and binds
   each executable operand to its supplier/prerequisite, immutable upstream
-  image, invocation/link/terminal paths, file evidence, and capabilities;
-- separates pre-build declarations for provider-generated executables from
+  image, invocation/link/terminal paths, file evidence, and provider-specific
+  observed facts;
+- **P2-09:** separates pre-build declarations for provider-generated executables from
   their post-materialization realized link/terminal/file evidence;
-- declares versioned provider-owned resolver/probe child environments with
+- **P2-10:** declares versioned provider-owned resolver/materializer child environments with
   closed stdin and no controlling terminal;
-- emits versioned canonical bundle locks containing only declarative metadata
-  and raw provider artifacts, and regenerates locked carrier code solely from
-  the exact locally trusted historical recipe implementation;
-- declares and validates tool/runtime prerequisites from the base image,
+- **P2-11:** emits versioned canonical bundle locks containing only declarative metadata
+  and raw provider artifacts, with exact recipe version and digest validation;
+- **P2-12:** declares tool/runtime prerequisites from the base image,
   provider-owned builder, or an earlier provider DAG node;
-- compiles backend and provider prerequisites into canonical versioned
+- **P2-13:** validates declared tools inside the resolver or materializer that
+  consumes them, before network work or persistent change;
+- **P2-14:** compiles backend and provider prerequisites into canonical versioned
   exact-prefix requirement profiles whose evidence is keyed by immutable image
   digest and profile digest.
+- **P2-15:** for APT, selects the Debian/Ubuntu behavior profile when exact parsed `ID` or
+  one exact `ID_LIKE` token is `debian` or `ubuntu`; forbid substring matching;
+  retain the exact OS fields for diagnostics; and gate actual use on the
+  supported configuration schemas and runtime APT/dpkg behavior probes. Keep
+  representative releases in CI rather than hard-coding derivative names or
+  release versions into runtime acceptance.
 
 Python implementation:
 
-- Resolve each Python component independently from its own requirements,
-  enabled component options, and explicitly targeted direct package/source
-  additions.
-- Keep option selections and direct package/source roots in deployment state;
+- **P2-16:** resolve each Python component independently from its own requirements,
+  enabled component options, and explicitly targeted direct package additions.
+- **P2-17:** keep option selections and direct package roots in deployment state;
   disabled options contribute nothing.
-- Normalize explicit distribution mappings, enforce translation-root boundaries,
+- **P2-18:** normalize explicit distribution mappings, enforce translation-root boundaries,
   and give mappings precedence over index candidates including transitives.
-- Validate built metadata, constraints, duplicate normalized names, collisions,
+- **P2-19:** validate built metadata, constraints, duplicate normalized names, collisions,
   and unused mappings.
-- Preflight compatible Python through a declared and validated `base` output;
+- **P2-20:** preflight compatible Python through a declared and validated `base` output;
   never search the image or install an undeclared prerequisite implicitly.
-- Pass the selected interpreter to resolution and materialization only as a
+- **P2-21:** pass the selected interpreter to resolution and materialization only as a
   typed validated executable operand; never use ordinary data or `PATH` to
   select the command.
-- Install at a provider-owned fixed path and resolve console scripts absolutely.
+- **P2-22:** install at a provider-owned fixed path and resolve console scripts absolutely.
 
-Adapt existing bundle options/add/remove/list/prepare/check/upgrade UX before
-removing legacy bundle projection.
+**P2-23:** Adapt the bundle UX to the final option/package overlay commands,
+top-level `reploy build`, install's explicit use of the same build pipeline,
+and provider-store cleanup before removing the legacy bundle projection.
 
-Gate: provider unit tests cover closed resolution, option selection,
-translations, deterministic ordering, prerequisites, incompatibilities, and
-executable lookup. Graph tests cover base-first automatic selection,
-incompatible-base selection of an earlier provider output, explicit supplier
-override, no retroactive use of later nodes, observed incompatibility failure
-without fallback, and deterministic selected edges in the final lock.
+Gate:
 
-Retain the current single aggregated Python node only as a migration step.
+- **P2-24:** provider unit tests cover closed resolution, option selection,
+  translations, deterministic ordering, prerequisites, incompatibilities, and
+  executable lookup.
+- **P2-25:** graph tests cover base-first automatic selection,
+  incompatible-base selection of an earlier provider output, explicit supplier
+  override, no retroactive use of later nodes, observed incompatibility failure
+  without fallback, and deterministic selected edges in the final lock.
+
+**P2-26:** Retain the current single aggregated Python node only as a migration step.
 Implement the generalized provider DAG executor and component-scoped Python
 nodes before accepting multiple independently materialized Python environments
 or a second component provider.
+
+**P2-27:** At the Phase 2 gate, delete the old `internal/providers.Provider`, aggregate
+request/prerequisite types, `providers.Bundle`/`Artifact`/`ExecutableOutput`,
+`ValidateBundle`, and their fingerprint/serialization tests. The temporary
+Python wheelhouse adapter returns the new `ResolvedBundle`; it does not keep the
+old provider contract alive.
 
 ## Phase 3: BuildKit Image Materialization
 
 Prototype first; complete only after the architecture review gate.
 
-- Resolve the mutable image reference from `components.base.image` to an
+- **P3-01:** resolve the mutable image reference from `components.base.image` to an
   immutable platform-specific descriptor during `reploy build`.
-- Inspect and normalize the base-image configuration according to the model;
+- **P3-02:** inspect and normalize the base-image configuration according to the model;
   reject unsupported hidden build/runtime behavior before materialization.
-- Generate the build definition and invocation internally.
-- Mount the closed bundle read-only; install offline; retain only installed
+- **P3-03:** generate the build definition and invocation internally.
+- **P3-04:** mount the closed bundle read-only; install offline; retain only installed
   results in the generated image.
-- Render each provider node as one explicit invocation of one read-only mounted,
+- **P3-05:** render each provider node as one explicit invocation of one read-only mounted,
   provider-owned script and exactly one layer-producing BuildKit transaction.
   Render every recipe field or reject it, run materialization without network,
   and launch provider subprocesses under an exact versioned provider-owned
   child-environment profile without inherited or blueprint-provided variables,
   with stdin from `/dev/null` and no controlling terminal.
-- Permit command position only for provider-fixed absolute tools, typed
+- **P3-06:** permit command position only for provider-fixed absolute tools, typed
   validated upstream executables, or recipe-declared generated executables
   after validation; ordinary dynamic data remains arguments only. Bind generated
   declarations to transaction identity and observed evidence to realized image
   identity.
-- Distinguish semantic bundle identity, the broader order-dependent assembly
+- **P3-07:** distinguish semantic bundle identity, the broader order-dependent assembly
   transaction identity, and realized image identity. Assembly additionally
   binds the exact upstream image, script and runner, controlled environments,
   execution policy, build mounts, and typed executable inputs; realized
   identity adds the immutable image digest and observed output evidence.
-- Implement local `lock-v1` digest vectors for environment-build identity and
-  validation. Portable lock replay and environment export/import are deferred;
-  when added, they must reject unsupported compatibility data and never accept
-  carrier code from imported content.
-- Represent build mounts with directory-independent logical descriptors and
+- **P3-08:** implement local `lock-v1` digest vectors for environment-build identity and
+  validation. Portable environment export/import is unsupported in v1; any
+  future transfer feature requires a separate design and is outside this plan.
+- **P3-09:** represent build mounts with directory-independent logical descriptors and
   existing manifest/script digests. Atomically publish verified bundle roots,
   late-bind physical backend paths, and do not rehash artifact bytes during
   normal cache lookup or materialization.
-- Implement one bounded exact-prefix validation probe per immutable image and
-  requirement-profile pair. Validate carrier and provider tools, typed
-  executable evidence, and the absence of the fixed transient build-mount root
-  after each newly realized prefix and before it is consumed; cache
-  only exact matching evidence and block downstream work on failure.
-- Probe and enforce versioned provider argument-vector budgets against each
-  exact execution environment before rendering. Diagnose over-budget operations
-  before the affected resolver or BuildKit execution and do not silently chunk
-  one provider transaction.
-- Exclude runtime-only inputs such as published ports, runtime mounts,
+- **P3-10:** validate carrier and provider tools, typed executable evidence, and the
+  absence of the fixed transient build-mount root as the first step inside the
+  consuming resolver or materializer. On a cached-bundle mismatch, commit no
+  layer, resolve once against the fixed current prefix, and materialize the
+  replacement. Create no standalone prerequisite-probe container; keep the
+  separate full final-image validation and optional `--validate-layers` runs.
+- **P3-11:** run each package-tool transaction unsplit and rely on the operating system's
+  actual process-argument limit. Report `E2BIG` with provider, phase, and
+  operand-count context; do not add a predictive budget or silently chunk one
+  provider transaction.
+- **P3-12:** exclude runtime-only inputs such as published ports, runtime mounts,
   phase/scope, runtime owner, lifecycle, readiness, and restart policy from
   provider-node image identity.
-- Keep shareable image/cache identity independent of deployment directories.
-  Record environment-owned staging, installed, and previous references safely,
-  with canonical content-addressed references used only for cache lookup.
-- Reuse unchanged images/layers, invalidate changed DAG nodes and downstream
-  nodes, and recover interrupted relinking from state.
-- Remove only environment-owned references during environment cleanup; handle
-  canonical cache references through explicit cache cleanup, never force-delete
-  an environment-used image, and never globally prune.
+- **P3-13:** keep semantic image identity independent of deployment directories. Record
+  each deployment's one committed generation plus temporary and pending-cutover
+  references safely; retain no previous generation after successful cleanup and
+  do not create a canonical Reploy image tag for cross-deployment lookup.
+- **P3-14:** reuse the current deployment's unchanged recorded image; allow the backend to
+  reuse its own layers and build cache; invalidate changed DAG nodes and
+  downstream nodes; and recover interrupted relinking from state.
+- **P3-15:** permit current and candidate content-addressed locks to coexist only during
+  publication or recovery. After state cutover, retain exactly the selected
+  lock and its transitive provider-store closure; on failure preserve the old
+  current closure and remove candidate-only data.
+- **P3-16:** for staged install, reuse a matching current staged build or run the
+  build pipeline there; for direct install, run it in the private temporary
+  staging-like workspace. Lock that source workspace first in both cases, then
+  acquire the installed destination lock after the source build is current, and
+  hold both through transfer and installed-state commit; installed deployments
+  never serve as install sources. Install calls a lock-aware internal build
+  routine rather than recursively acquiring the source lock. Then copy into the
+  installed deployment only the digest-verified provider-store objects
+  transitively referenced by the selected
+  current build lock; omit unreferenced objects and commit installed state only
+  after the destination objects publish atomically. A failed build or transfer
+  leaves the previous installed state active.
+- **P3-17:** remove only environment-owned references during environment cleanup, never
+  force-delete an image, and never globally prune.
 
-Probe and document the supported Linux Engine and Docker Desktop BuildKit
+**P3-18:** At the Phase 3 gate, delete `providers.Materialization`,
+`MaterializationStep`, the free-form generated-image renderer, and its frontend
+1.7 `generatedImageDockerfileSyntax` constant/tests. Only exhaustive
+`MaterializationTransaction` rendering and the pinned frontend 1.24.0 digest
+remain. Introduce the state/pending-owned
+generation-reference lifecycle here; do not extend the old
+staging/deployed/previous tag lifecycle.
+
+**P3-19:** Probe and document the supported Linux Engine and Docker Desktop BuildKit
 invocation. Fail preflight clearly when unavailable; do not add a classic-builder
 fallback or user-authored Dockerfile.
 
 Review evidence:
 
-- Inspectable generated build input and fake-runner command tests.
-- Identity/invalidation/reuse/cleanup tests.
-- Real-Docker smoke proving offline install and execution.
-- Recorded Linux Engine and Docker Desktop capability results.
+- **P3-20:** inspectable generated build input and fake-runner command tests.
+- **P3-21:** identity/invalidation/reuse/cleanup tests.
+- **P3-22:** real-Docker smoke proving offline install and execution.
+- **P3-23:** recorded Linux Engine and Docker Desktop capability results.
+
+The authoritative Phase 2/3-to-slice crosswalk is in
+`APT_PROVIDER_DETAIL_DESIGN.md`. Its coverage check compares the complete ID
+set in these two phases with the crosswalk, requires every ID exactly once, and
+requires every detailed-design slice to own at least one mapped task.
 
 ## Phase 4: Resolved Docker Execution Plan
 
@@ -371,10 +420,10 @@ Ownership:
   `system.run_as`.
 - Installed system scope uses the resolved service account.
 - Only writable paths and Reploy temporary home are writable.
-- Immediately before each workload or transient container, validate mount-source
-  usability and selected executable traversal/read/execute access under the
-  exact immutable image, effective mounts, numeric UID, primary GID, and
-  supplementary groups. Store the result only in deployment state.
+- During build, validate every compiled mount destination and runtime-exposed
+  executable against the exact final image. Before container creation, perform
+  only host-side mount-source existence, kind, and read/write-policy checks;
+  create no separate access-preflight container or runtime-access record.
 
 Regenerate Compose, backend env/state, dry-run, status, and control inputs from
 the plan. Use exec-form Compose commands, not `sh -c`.
@@ -382,7 +431,7 @@ the plan. Use exec-form Compose commands, not `sh -c`.
 Gate: golden rendering/state tests plus Linux system/user and Docker Desktop
 current-user planning tests. Mount-policy tests cover `/mnt`, additional roots,
 no-shadow image inspection, protected intersections, intrinsic-mount exclusion,
-and runtime access evidence remaining outside shareable identities.
+host-side source checks, and runtime permission-failure reporting.
 
 ## Phase 5: Commands and Interactive Shell
 
@@ -455,10 +504,46 @@ protocol, startup virtualenv/runtime-volume installer, `REPLOY_DEPLOYMENT_SCOPE`
 blueprint coupling, duplicate endpoint/command reconstruction, and the `ctl`
 default. Preserve adapted bundle UX and other nonconflicting behavior.
 
+The provider-state cutover has no backward-compatibility path. Loading the
+prototype integer-schema state containing `bundle`, `materialization`, or
+`images` fails `state.legacy_unsupported`, leaves the directory untouched, and
+instructs the user to recreate the deployment. Do not add a legacy provider-
+state decoder or infer target components from old roots.
+
+Provider cutover removal is explicit:
+
+- delete `BundleState`, `ArtifactRoot`, `SelectedComponents`,
+  `PreparedFingerprint`, `bundlePreparedFingerprint`, `MaterializationState`,
+  and every helper/test that computes or invalidates the prepared fingerprint;
+- delete `PreparedBundleResolver`, `reploy-wheelhouse.json`, `.reploy/bundle`,
+  `preparedBundleManifestName`, `copyWheelhouse`, `BundleAddWheel`,
+  `BundleAddSource`, `BundleDirName`, `REPLOY_BUNDLE_DIR`, configurable
+  `docker.deployment_dirs.bundle`, and their install/doctor/info fixtures;
+- delete `GeneratedImagesState`, `GeneratedImageState`,
+  `GeneratedImageIdentity`, the staging/deployed/previous tags, directory and
+  fingerprint labels, `promotePreviousEnvironmentImage`,
+  `promoteGeneratedImageState`, recovery-from-labels, `generatedImageCleanup*`,
+  and previous-generation retention tests; and
+- remove `bundle list-options`, `prepare`, `check`, and `upgrade` rather than
+  retaining aliases. Keep `bundle options`, overlay-oriented `list`, explicit
+  option/package mutations, `clean`, and top-level `reploy build`.
+
+The gate includes repository searches proving those symbols, serialized fields,
+paths, labels, tags, and commands are absent, plus an old-state fixture proving
+rejection without mutation. Prototype characterization tests are deleted or
+rewritten against the replacement contract; they are not compatibility tests.
+
 Add a `Docs` Changie fragment and update blueprint-facing docs/examples.
 
 Gate: repository migrations, explicit legacy rejection, retained CLI behavior,
-and focused end-to-end install/update/runtime tests pass.
+and focused end-to-end install/update/runtime tests pass. CLI tests prove that
+top-level build does not install, staged install reuses a matching build and
+builds a missing or stale one, direct install builds in its private temporary
+workspace, install help/progress exposes the build work, stage/overlay commands
+do not build, and runtime commands never invoke resolution or image
+construction. Install concurrency tests cover source-before-destination
+acquisition, direct source-workspace locking, exclusion of concurrent source
+cleanup/build during transfer, and release on every exit path.
 
 Implementation note: repository and Arbiter blueprints now use the environment
 shape, and that path no longer emits or runs the startup virtualenv protocol.
