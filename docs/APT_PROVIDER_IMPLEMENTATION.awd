@@ -1,0 +1,271 @@
+(
+  orient the runtime-backed implementation against docs/APT_PROVIDER_DETAIL_DESIGN.md /*
+  The six design slices are required gates and supersede the
+  APT/provider-materialization portions of
+  docs/BLUEPRINT_ENVIRONMENT_IMPLEMENTATION.awd. Loop bounds are execution
+  safety stops: exhaustion pauses for review and replanning; it never relaxes a
+  product requirement or silently defers a required lane.
+  */
+  -> confirm the Sapling working copy is clean or record the exact preexisting scope
+  -> read the normative environment model APT product design detailed design and implementation plan
+  -> verify the detailed-design completion criteria and Phase 2/3 crosswalk still agree
+  -> inventory the current provider bundle image state CLI and Docker implementation
+  -> map every prototype symbol path state field command and tag to its cutover-table replacement slice
+  -> identify the focused Go packages tests fixtures and Docker lanes owned by each design slice
+  -> run the current full Go test suite
+  -> run the current release build smoke
+  -> classify every baseline failure as accepted preexisting evidence or a blocker
+  -> verify the baseline is clean or has an exact accepted-failure record that forbids new regressions
+)
+!> (
+  (
+    select the next coherent Slice 1 implementation unit from the remaining checklist /*
+    Slice 1: canonical foundations and schema.
+    Phase IDs: P2-17.
+    Checklist:
+    - internal/canonical canonical-json-v1 values, envelopes, strict rejection,
+      domain-separated digests, and golden vectors;
+    - parsed OCI compatibility platforms, provider identifiers, and reserved
+      base-name rules;
+    - strict resolved base, Python, and APT component and option unions;
+    - scalar and structured APT package requests, exact-version conflicts,
+      executable exports, well-known Python mapping, and command requirements;
+    - overlay-v1 intent, canonical ordering, identity, and atomic mutation;
+    - Unix and Windows advisory operation locks without a PID-file protocol;
+    - overlay-oriented bundle option and package command parsing; and
+    - parser, normalization, lock, atomicity, and public-APT-rejection tests.
+    */
+    -> implement only the selected Slice 1 unit and its focused tests
+    -> global:review-commit()
+    -> continue if unimplemented Slice 1 checklist units remain
+    -> run gofmt and focused canonical blueprint deploy and CLI tests for the complete Slice 1 result
+    -> compile the operation-lock helpers for every supported host family
+    -> verify public APT remains rejected and overlay mutation never triggers a build
+    -> verify the complete Slice 1 diff contains no provider execution or state-cutover work
+    -> inspect Slice 1 gate failures and add one coherent repair unit for each unresolved cause
+  ) *20 until pass: Slice 1 checklist complete and integration gate passes
+)
+!> (
+  (
+    select the next coherent Slice 2 implementation unit from the remaining checklist /*
+    Slice 2: provider graph with existing Python behavior.
+    Phase IDs: P2-01, P2-02, P2-03, P2-04, P2-05, P2-06, P2-12,
+    P2-14, P2-18, P2-19, P2-20, P2-24, P2-25, P2-26, P2-27.
+    Checklist:
+    - backend-neutral provider request, node, requirement, output, bundle, and
+      graph records in the detailed-design ownership packages;
+    - schema, ordering, union, and package-import invariants;
+    - the required base graph root and explicit base-output validation;
+    - registry planning for shared APT authority and Python nodes while APT
+      remains publicly rejected;
+    - explicit supplier edges, cycle rejection, stable ordering, and graph
+      identity;
+    - resolver-time lower-layer-first candidate validation and frozen automatic
+      supplier selection;
+    - requirement profiles, validation evidence, cache keys, ResolvedBundle,
+      and output declarations;
+    - temporary prepared-Python-wheelhouse adaptation to ResolvedBundle;
+    - path-free Python translation identities and existing Python-only behavior
+      through the graph executor;
+    - synthetic selection, cycle, invalidation, drift, canonical round-trip,
+      and malformed-record tests; and
+    - deletion of the old Provider, request, prerequisite, Bundle, Artifact,
+      ExecutableOutput, ValidateBundle, fingerprint, and serialization paths.
+    */
+    -> implement only the selected Slice 2 unit and its focused tests
+    -> global:review-commit()
+    -> continue if unimplemented Slice 2 checklist units remain
+    -> run gofmt and focused provider Python graph deploy blueprint and CLI tests for the complete Slice 2 result
+    -> verify the package import graph matches the detailed-design ownership graph
+    -> verify existing Python behavior passes through the temporary adapter
+    -> verify public APT remains rejected and the legacy wheelhouse is only an isolated temporary detail
+    -> inspect Slice 2 gate failures and add one coherent repair unit for each unresolved cause
+  ) *20 until pass: Slice 2 checklist complete and integration gate passes
+)
+!> (
+  (
+    select the next coherent Slice 3 implementation unit from the remaining checklist /*
+    Slice 3: deployment-local artifact store and typed Docker transaction backend.
+    Phase IDs: P2-07, P2-08, P2-09, P2-10, P2-11, P2-13, P2-21,
+    P3-01, P3-02, P3-03, P3-04, P3-05, P3-06, P3-07, P3-08,
+    P3-09, P3-10, P3-11, P3-12, P3-13, P3-14, P3-15, P3-18,
+    P3-19, P3-20, P3-21, P3-22, P3-23.
+    Checklist:
+    - deployment-owned immutable provider store, quarantine verification,
+      atomic publication, content-derived manifest identity, load-time identity
+      verification, reachability, and cleanup;
+    - read-only digest-addressed Python wheels, separate resolver output, and
+      removal of whole-wheelhouse copying;
+    - exhaustive MaterializationTransaction arguments, environments,
+      identities, network, mounts, generated executables, and image policy;
+    - argv rendering without shell interpolation, predictive budgets, silent
+      chunking, or partial publication on E2BIG;
+    - exact Dockerfile frontend 1.24.0 digest;
+    - OCI platform selection, immutable base resolution, base-config
+      normalization, and reserved build-mount safety;
+    - prerequisite validation inside consumers and exactly one fresh
+      re-resolution on cached-bundle mismatch before persistent change;
+    - normal final validation, additive validate-layers behavior, fixed labels,
+      aggregate records, and rootfs subjects;
+    - assembly and realized-image identities, current and pending generation
+      publication, crash recovery, lock retention, and candidate cleanup;
+    - deployment-owned reference cleanup without a global Docker prune;
+    - fake-Docker, invalidation, corruption, interrupted publication, link,
+      drift, persistent-mismatch, final-validation, and recovery tests; and
+    - removal of old Materialization, free-form renderer, frontend 1.7, and
+      copyWheelhouse paths while isolating the prototype image lifecycle until
+      Slice 6.
+    */
+    -> implement only the selected Slice 3 unit and its focused tests
+    -> global:review-commit()
+    -> continue if unimplemented Slice 3 checklist units remain
+    -> run gofmt and focused providerstore providers dockerdeploy deploy and Python tests for the complete Slice 3 result
+    -> run fake-Docker command identity validation recovery invalidation and cleanup tests
+    -> run ordinary docker build smoke for a synthetic provider layer on minimum Engine 24.0
+    -> run ordinary docker build smoke on the current Docker Desktop-hosted Engine without a Desktop version rule
+    -> verify no code directly invokes Buildx and report an explicit dependency if that changes
+    -> verify public APT remains rejected and no machine-wide provider store or canonical Reploy image tag exists
+    -> inspect Slice 3 gate failures and add one coherent repair unit for each unresolved cause
+  ) *20 until pass: Slice 3 checklist complete and integration gate passes
+)
+!> (
+  (
+    select the next coherent Slice 4 implementation unit from the remaining checklist /*
+    Slice 4: internal APT resolver and offline materialization.
+    Phase IDs: P2-15.
+    Checklist:
+    - version-independent Debian and Ubuntu family profile selected by exact ID
+      or ID_LIKE tokens, with exact OS, APT, dpkg, required-tool, and
+      architecture facts retained only as evidence;
+    - required absolute tool and command-interface probes, mapped native
+      architecture, and foreign-architecture rejection;
+    - exact apt-resolve-v1 environment with private empty lists, archive cache,
+      scratch, and closed input;
+    - one error-on-any apt-get update on a resolver miss and one unsplit
+      download-only install without removals, recommendations, suggestions,
+      downgrades, trust overrides, or full upgrade;
+    - archive-cache seeding only from verified store objects, including reuse
+      and altered-object rejection tests;
+    - mixed base and bundle closure, exact upgrade predecessor, deb metadata,
+      size, digest, architecture, and normalized file-list inspection;
+    - protected-path, duplicate, unexpected-artifact, malformed-length,
+      architecture, E2BIG, and partial-publication rejection;
+    - canonical apt-bundle-v1 publication only after full inspection;
+    - offline no-network installation of bundle-origin packages followed by
+      dpkg audit, apt-get check, and exact final-state comparison;
+    - immutable-base source, key, credential, and trust handling plus redacted
+      diagnostics and operation-aware corrections; and
+    - unit and real-container coverage for base-only closure, downloads,
+      necessary upgrades, native and all architecture, update failure,
+      preserved prior bundle, repaired-base recovery, rollback, and
+      noninteractive behavior.
+    */
+    -> implement only the selected Slice 4 unit and its focused tests
+    -> global:review-commit()
+    -> continue if unimplemented Slice 4 checklist units remain
+    -> run gofmt and focused APT provider providerstore Docker and canonical tests for the complete Slice 4 result
+    -> run the Debian 12 Debian 13 Ubuntu 24.04 and Ubuntu 26.04 fixture suites where images publish the selected platform
+    -> run the amd64 arm64 and arm/v7 evidence lanes supported by the required backend environment
+    -> verify indexes refresh only on a bundle miss and no upgrade or full-upgrade command runs
+    -> verify failed update preserves the prior valid bundle and recovery requires a successfully updating immutable base
+    -> verify materialization has no network exports no image layers and scans no produced filesystem
+    -> verify public APT remains rejected throughout Slice 4
+    -> inspect Slice 4 gate failures and add one coherent repair unit for each unresolved cause
+  ) *20 until pass: Slice 4 checklist complete and integration gate passes
+)
+!> (
+  (
+    select the next coherent Slice 5 implementation unit from the remaining checklist /*
+    Slice 5: cross-provider Python and public APT enablement.
+    Phase IDs: P2-16, P2-22.
+    Checklist:
+    - APT output realization against the complete locked APT authority;
+    - literal dpkg-query ownership and exact locked-owner tuples;
+    - read-only update-alternatives query without enumeration or mutation;
+    - rejection and explicit-path guidance for unowned links, broken or
+      mismatched alternatives, cycles, escapes, and unowned terminals;
+    - Python candidate identity and observed-version validation before network
+      or source work;
+    - lower-layer-first compatible selection and explicit-supplier behavior;
+    - observed interpreter evidence without package-version or author-version
+      substitution;
+    - APT-before-Python ordering and one immediate-prefix drift rerun;
+    - one component-scoped Python node and fixed venv root per active component;
+    - exact console-script outputs and real venv creation; and
+    - ownership, alternatives, candidate, isolation, ordering, APT-supplied
+      Python, two-interpreter, and native-library-only test environments.
+    */
+    -> implement only the selected Slice 5 unit and its focused tests
+    -> global:review-commit()
+    -> continue if unimplemented Slice 5 checklist units remain
+    -> run gofmt and focused APT Python graph Docker and CLI tests for the complete internal Slice 5 result
+    -> run the APT-supplied Python two-interpreter and Python-base native-library Docker scenarios
+    -> add public APT enablement as the next coherent unit if all internal cases pass and enablement is not committed
+    -> run public APT schema acceptance and invalid-tool correction tests when enablement is committed
+    -> verify exactly one immediate-prefix retry occurs and persistent drift fails without switching suppliers
+    -> inspect Slice 5 gate failures and add one coherent repair unit for each unresolved cause
+  ) *20 until pass: Slice 5 checklist complete public APT enabled and integration gate passes
+)
+!> (
+  (
+    select the next coherent Slice 6 implementation unit from the remaining checklist /*
+    Slice 6: public build, install, runtime, and state cutover.
+    Phase IDs: P2-23, P3-16, P3-17.
+    Checklist:
+    - canonical top-level build without installation;
+    - staged install build reuse or internal ensure-build under the held source
+      lock, and direct install in a locked private temporary workspace;
+    - source-before-destination install locking, verified closure transfer,
+      atomic destination publication, and preservation of prior installed state;
+    - runtime rejection of missing or stale builds without hidden resolution or
+      image construction, plus explicit help, progress, and diagnostics;
+    - hard-cut state-v1, lock-v1, pending-build-v1, and one current generation;
+    - state.legacy_unsupported rejection without decoding or mutation;
+    - deployment-local clean, recovery, and lock retention;
+    - retained overlay commands and removal of list-options, prepare, check,
+      and upgrade without aliases;
+    - removal of prepared wheelhouse, unversioned bundle path, prototype bundle
+      state, generated-image state, old tags and labels, startup Python
+      preparation, and every non-build/non-install build path;
+    - final runtime-policy staleness, mnt namespace, explicit roots, no-shadow,
+      protected paths, host-side source checks, and Docker/workload permission
+      failure reporting without runtime access probes;
+    - structured redacted errors and operation-aware corrections;
+    - state, absence, build, install, transfer, interruption, recovery, cleanup,
+      mount, permission, and lock-concurrency tests; and
+    - final examples, CLI help, APT documentation, and Docs changelog fragment.
+    */
+    -> implement only the selected Slice 6 unit and its focused tests
+    -> global:review-commit()
+    -> continue if unimplemented Slice 6 checklist units remain
+    -> run gofmt and focused deploy CLI provider Docker state migration and documentation tests for the complete Slice 6 result
+    -> run full CLI Docker smoke for build staged install direct install runtime rejection and cleanup
+    -> run install concurrency tests for lock order source exclusion cancellation and release on every exit path
+    -> verify every hard-cut repository search is empty and old-state fixtures fail without mutation
+    -> verify help progress examples documentation and changelog describe only the implemented public surface
+    -> inspect Slice 6 gate failures and add one coherent repair unit for each unresolved cause
+  ) *20 until pass: Slice 6 checklist complete and integration gate passes
+)
+!> (
+  (
+    verify every Phase 2/3 task ID appears exactly once in this AWD plan and once in the detailed-design crosswalk
+    -> verify all six design-slice gates have evidence and no required lane was silently deferred
+    -> run gofmt across all changed Go files
+    -> run focused tests for every changed package
+    -> run the full Go test suite
+    -> run the release build smoke for every supported release target
+    -> run the final CLI Docker integration smoke on Engine 24.0 and the current available Engine
+    -> run the representative Debian Ubuntu and selected-platform APT evidence matrix
+    -> run documentation tests and validate local links examples and changelog formatting
+    -> inspect Sapling status diff commit stack generated artifacts and absence of unrelated changes
+    -> review the implementation against APT_PROVIDER.md APT_PROVIDER_DETAIL_DESIGN.md and BLUEPRINT_ENVIRONMENT_MODEL.md
+    -> continue if final verification passes
+    -> select one coherent final repair unit from the observed failures
+    -> implement only that repair and its focused regression tests
+    -> global:review-commit()
+  ) *10 until pass: final verification passes
+)
+!> (
+  summarize commit IDs checks platform evidence external-lane status and remaining worktree state
+  ?> approve the APT provider implementation as complete
+)
