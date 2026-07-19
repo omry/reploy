@@ -49,6 +49,7 @@ func materializationLayerFixture(t *testing.T) (providerstore.Store, Materializa
 
 func TestBuildMaterializationLayerReturnsUnacceptedImageID(t *testing.T) {
 	store, request := materializationLayerFixture(t)
+	stubMaterializationBuildBaseReference(t, request.Transaction.Upstream.ConfigDigest)
 	original := runMaterializationBuildCommand
 	t.Cleanup(func() { runMaterializationBuildCommand = original })
 	var workspace string
@@ -56,7 +57,7 @@ func TestBuildMaterializationLayerReturnsUnacceptedImageID(t *testing.T) {
 		if spec.Name != "docker" || len(spec.Args) == 0 || spec.Args[0] != "build" {
 			t.Fatalf("command = %#v", spec)
 		}
-		if base := commandOption(t, spec.Args, "--build-arg"); base != "REPLOY_BASE_IMAGE="+string(request.Transaction.Upstream.Digest) {
+		if base := commandOption(t, spec.Args, "--build-arg"); !strings.HasPrefix(base, "REPLOY_BASE_IMAGE="+temporaryBuildReferencePrefix) {
 			t.Fatalf("base build argument = %q", base)
 		}
 		iidPath := commandOption(t, spec.Args, "--iidfile")
@@ -92,6 +93,7 @@ func TestBuildMaterializationLayerReturnsUnacceptedImageID(t *testing.T) {
 
 func TestBuildMaterializationLayerReturnsNoIdentityOnFailure(t *testing.T) {
 	store, request := materializationLayerFixture(t)
+	stubMaterializationBuildBaseReference(t, request.Transaction.Upstream.ConfigDigest)
 	original := runMaterializationBuildCommand
 	t.Cleanup(func() { runMaterializationBuildCommand = original })
 	runMaterializationBuildCommand = func(CommandSpec, RunOptions) error { return errors.New("argument list too long") }
@@ -106,6 +108,7 @@ func TestBuildMaterializationLayerReturnsNoIdentityOnFailure(t *testing.T) {
 
 func TestBuildMaterializationLayerRejectsMalformedIID(t *testing.T) {
 	store, request := materializationLayerFixture(t)
+	stubMaterializationBuildBaseReference(t, request.Transaction.Upstream.ConfigDigest)
 	original := runMaterializationBuildCommand
 	t.Cleanup(func() { runMaterializationBuildCommand = original })
 	runMaterializationBuildCommand = func(spec CommandSpec, _ RunOptions) error {

@@ -2,6 +2,7 @@ package deploy
 
 import (
 	reploy "github.com/omry/reploy"
+	"github.com/omry/reploy/internal/legacyprovider"
 	"github.com/omry/reploy/internal/providers"
 )
 
@@ -82,9 +83,9 @@ type GeneratedImageState struct {
 }
 
 type MaterializationState struct {
-	BundleFingerprint string                                `json:"bundle_fingerprint"`
-	Bundles           []providers.Bundle                    `json:"bundles"`
-	Executables       map[string]providers.ExecutableOutput `json:"executables,omitempty"`
+	BundleFingerprint string                                     `json:"bundle_fingerprint"`
+	Bundles           []legacyprovider.Bundle                    `json:"bundles"`
+	Executables       map[string]legacyprovider.ExecutableOutput `json:"executables,omitempty"`
 }
 
 type InstallState struct {

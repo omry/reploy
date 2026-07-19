@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/omry/reploy/internal/blueprint"
-	"github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/legacyprovider"
 )
 
 func commandTestDocument() blueprint.Document {
@@ -23,7 +23,7 @@ func commandTestDocument() blueprint.Document {
 }
 
 func TestResolveEnvironmentCommandSegmentOrder(t *testing.T) {
-	resolved, err := ResolveEnvironmentCommand(commandTestDocument(), map[string]providers.ExecutableOutput{
+	resolved, err := ResolveEnvironmentCommand(commandTestDocument(), map[string]legacyprovider.ExecutableOutput{
 		"server": {Component: "application", Binary: "demo", ImagePath: "/opt/demo"},
 	}, "special", []string{"value"})
 	if err != nil {
@@ -51,7 +51,7 @@ func TestResolveEnvironmentCommandForPlanInterpolatesLateRuntimeValues(t *testin
 	plan := DockerExecutionPlan{Phase: blueprint.PhaseStaged, Workload: &WorkloadExecutionPlan{Endpoints: map[string]EndpointExecutionPlan{
 		"http": {BindAddress: "0.0.0.0", ContainerPort: 8080, PublishAddress: "127.0.0.1", PublishedPort: 18080},
 	}}}
-	resolved, err := ResolveEnvironmentCommandForPlan(document, map[string]providers.ExecutableOutput{
+	resolved, err := ResolveEnvironmentCommandForPlan(document, map[string]legacyprovider.ExecutableOutput{
 		"server": {Component: "application", Binary: "demo", ImagePath: "/opt/demo"},
 	}, plan, "serve", nil)
 	if err != nil {

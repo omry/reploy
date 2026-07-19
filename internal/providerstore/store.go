@@ -402,45 +402,92 @@ func (store Store) BlobPath(digest canonical.Digest) (string, error) {
 }
 
 func (store Store) VerifyArtifact(descriptor ArtifactDescriptor) error {
-	if err := descriptor.Validate(); err != nil {
-		return err
-	}
-	path, err := store.BlobPath(descriptor.SHA256)
+	path, err := store.InspectArtifactPath(descriptor)
 	if err != nil {
 		return err
 	}
-	hex := strings.TrimPrefix(string(descriptor.SHA256), "sha256:")
-	if err := store.requireDirectories("blobs", "sha256", hex[:2]); err != nil {
+	return VerifyArtifactFile(path, descriptor)
+}
+
+// VerifyArtifactFile validates one regular file against an immutable artifact
+// descriptor. Backends use it for same-filesystem staged links that will be
+// consumed directly by a resolver or materializer.
+func VerifyArtifactFile(path string, descriptor ArtifactDescriptor) error {
+	if err := InspectArtifactFile(path, descriptor); err != nil {
+		return err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open provider artifact file: %w", err)
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return fmt.Errorf("hash provider artifact file: %w", err)
+	}
+	got := canonical.Digest(fmt.Sprintf("sha256:%x", hash.Sum(nil)))
+	if got != descriptor.SHA256 {
+		return fmt.Errorf("provider artifact file digest is %s, want %s", got, descriptor.SHA256)
+	}
+	return nil
+}
+
+// InspectArtifactFile validates a staged artifact's path, type, and size
+// without hashing it. It is used only after the same exact staged file was
+// already verified or published during the current operation.
+func InspectArtifactFile(path string, descriptor ArtifactDescriptor) error {
+	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return fmt.Errorf("provider artifact file path must be absolute and clean")
+	}
+	if err := descriptor.Validate(); err != nil {
 		return err
 	}
 	info, err := os.Lstat(path)
 	if err != nil {
-		return fmt.Errorf("inspect provider store blob: %w", err)
+		return fmt.Errorf("inspect provider artifact file: %w", err)
 	}
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("provider store blob must be a regular file: %s", path)
+		return fmt.Errorf("provider artifact file must be regular: %s", path)
 	}
 	wantSize, err := strconv.ParseInt(descriptor.Size, 10, 64)
 	if err != nil {
 		return fmt.Errorf("parse artifact size: %w", err)
 	}
 	if info.Size() != wantSize {
-		return fmt.Errorf("provider store blob size is %d, want %d", info.Size(), wantSize)
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("open provider store blob: %w", err)
-	}
-	defer file.Close()
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return fmt.Errorf("hash provider store blob: %w", err)
-	}
-	got := canonical.Digest(fmt.Sprintf("sha256:%x", hash.Sum(nil)))
-	if got != descriptor.SHA256 {
-		return fmt.Errorf("provider store blob digest is %s, want %s", got, descriptor.SHA256)
+		return fmt.Errorf("provider artifact file size is %d, want %d", info.Size(), wantSize)
 	}
 	return nil
+}
+
+// InspectArtifactPath validates the immutable store layout, final file type,
+// and declared size without reading and hashing the file contents.
+func (store Store) InspectArtifactPath(descriptor ArtifactDescriptor) (string, error) {
+	if err := descriptor.Validate(); err != nil {
+		return "", err
+	}
+	path, err := store.BlobPath(descriptor.SHA256)
+	if err != nil {
+		return "", err
+	}
+	hex := strings.TrimPrefix(string(descriptor.SHA256), "sha256:")
+	if err := store.requireDirectories("blobs", "sha256", hex[:2]); err != nil {
+		return "", err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", fmt.Errorf("inspect provider store blob: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("provider store blob must be a regular file: %s", path)
+	}
+	wantSize, err := strconv.ParseInt(descriptor.Size, 10, 64)
+	if err != nil {
+		return "", fmt.Errorf("parse artifact size: %w", err)
+	}
+	if info.Size() != wantSize {
+		return "", fmt.Errorf("provider store blob size is %d, want %d", info.Size(), wantSize)
+	}
+	return path, nil
 }
 
 func validateArtifactName(logicalPath string, kind string) error {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
+	"github.com/omry/reploy/internal/legacyprovider"
 	providerapi "github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
 )
@@ -43,12 +44,11 @@ type InterpreterEvidenceResolver func(
 	blueprint.Platform,
 ) (providerapi.ExecutableEvidence, error)
 
-// PreparedNodeResolver is the temporary adapter from the retained wheelhouse
-// builder to the node-based provider graph. Physical wheelhouse paths remain
-// confined to this adapter and never enter canonical provider records.
-type PreparedNodeResolver struct {
-	Dir                string
+// WheelNodeResolver validates one interpreter, runs the backend-owned wheel
+// resolver, and ingests its closed output into canonical provider records.
+type WheelNodeResolver struct {
 	ResolveInterpreter InterpreterEvidenceResolver
+	PrepareWheels      func(context.Context, providerapi.ResolveInput, providerapi.ExecutableEvidence) (string, error)
 }
 
 type inspectedWheel struct {
@@ -60,18 +60,18 @@ type inspectedWheel struct {
 	ConsoleScripts map[string]string
 }
 
-func (PreparedNodeResolver) Type() blueprint.ComponentType { return blueprint.ComponentTypePython }
+func (WheelNodeResolver) Type() blueprint.ComponentType { return blueprint.ComponentTypePython }
 
-func (resolver PreparedNodeResolver) Resolve(
+func (resolver WheelNodeResolver) Resolve(
 	ctx context.Context,
 	input providerapi.ResolveInput,
 	sink providerapi.ArtifactSink,
 ) (providerapi.ResolveResult, error) {
-	if resolver.Dir == "" {
-		return providerapi.ResolveResult{}, fmt.Errorf("prepared Python bundle directory is required")
-	}
 	if resolver.ResolveInterpreter == nil {
 		return providerapi.ResolveResult{}, fmt.Errorf("prepared Python resolver requires interpreter validation")
+	}
+	if resolver.PrepareWheels == nil {
+		return providerapi.ResolveResult{}, fmt.Errorf("prepared Python resolver requires wheel preparation")
 	}
 	request, err := decodeCanonicalProviderRequestV1(input.Node.Request)
 	if err != nil {
@@ -93,6 +93,13 @@ func (resolver PreparedNodeResolver) Resolve(
 	if err != nil {
 		return providerapi.ResolveResult{}, fmt.Errorf("validate Python interpreter: %w", err)
 	}
+	dir, err := resolver.PrepareWheels(ctx, input, interpreter)
+	if err != nil {
+		return providerapi.ResolveResult{}, fmt.Errorf("prepare Python wheels: %w", err)
+	}
+	if dir == "" {
+		return providerapi.ResolveResult{}, fmt.Errorf("prepare Python wheels returned no output directory")
+	}
 	profile := providerapi.RequirementProfile{
 		Schema:              providerapi.RequirementProfileSchemaV1,
 		Declaration:         input.Node.Requirements,
@@ -106,12 +113,19 @@ func (resolver PreparedNodeResolver) Resolve(
 		return providerapi.ResolveResult{}, fmt.Errorf("build Python requirement profile: %w", err)
 	}
 
-	wheels, artifacts, outputs, err := resolver.publishPreparedWheels(ctx, sink, request, input.Sources)
+	wheels, artifacts, outputs, err := publishPreparedWheels(ctx, dir, sink, request, input.Sources)
 	if err != nil {
 		return providerapi.ResolveResult{}, err
 	}
+	script, err := publishMaterializationScript(ctx, sink)
+	if err != nil {
+		return providerapi.ResolveResult{}, err
+	}
+	artifacts = append(artifacts, script)
+	sort.Slice(artifacts, func(left int, right int) bool { return artifacts[left].LogicalPath < artifacts[right].LogicalPath })
 	bundleData, err := CanonicalBundleDataV1(request.Component, PythonBundleV1{
 		Interpreter: interpreter,
+		Script:      script,
 		Wheels:      wheels,
 		Outputs:     outputs,
 		Sources:     append([]providerapi.ResolvedSourceInput{}, input.Sources...),
@@ -157,13 +171,14 @@ func (resolver PreparedNodeResolver) Resolve(
 	return providerapi.ResolveResult{Bundle: bundle, Profile: profile, Evidence: evidence}, nil
 }
 
-func (resolver PreparedNodeResolver) publishPreparedWheels(
+func publishPreparedWheels(
 	ctx context.Context,
+	dir string,
 	sink providerapi.ArtifactSink,
 	request PythonProviderRequestV1,
 	sources []providerapi.ResolvedSourceInput,
 ) ([]PythonWheelV1, []providerstore.ArtifactDescriptor, []PythonConsoleScriptV1, error) {
-	entries, err := os.ReadDir(resolver.Dir)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -174,10 +189,17 @@ func (resolver PreparedNodeResolver) publishPreparedWheels(
 		if err := ctx.Err(); err != nil {
 			return nil, nil, nil, err
 		}
-		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".whl") {
-			continue
+		if entry.Type()&os.ModeSymlink != 0 || entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".whl") {
+			return nil, nil, nil, fmt.Errorf("Python resolver output contains unexpected entry %q", entry.Name())
 		}
-		wheel, err := inspectWheel(filepath.Join(resolver.Dir, entry.Name()))
+		info, err := entry.Info()
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("inspect Python resolver output %q: %w", entry.Name(), err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, nil, nil, fmt.Errorf("Python resolver output %q must be a regular wheel", entry.Name())
+		}
+		wheel, err := inspectWheel(filepath.Join(dir, entry.Name()))
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("inspect Python wheel %s: %w", entry.Name(), err)
 		}
@@ -194,12 +216,12 @@ func (resolver PreparedNodeResolver) publishPreparedWheels(
 		inspected = append(inspected, wheel)
 	}
 	if len(inspected) == 0 {
-		return nil, nil, nil, fmt.Errorf("prepared Python bundle contains no wheels: %s", resolver.Dir)
+		return nil, nil, nil, fmt.Errorf("prepared Python bundle contains no wheels: %s", dir)
 	}
 	if err := validateCanonicalRequestedDistributions(request, byDistribution); err != nil {
 		return nil, nil, nil, err
 	}
-	if err := validateResolvedSourceArtifacts(resolver.Dir, sources, byDistribution); err != nil {
+	if err := validateResolvedSourceArtifacts(sources, byDistribution); err != nil {
 		return nil, nil, nil, err
 	}
 	sort.Slice(inspected, func(left int, right int) bool { return inspected[left].Filename < inspected[right].Filename })
@@ -207,7 +229,7 @@ func (resolver PreparedNodeResolver) publishPreparedWheels(
 	artifacts := make([]providerstore.ArtifactDescriptor, 0, len(inspected))
 	outputs := []PythonConsoleScriptV1{}
 	for _, wheel := range inspected {
-		filename := filepath.Join(resolver.Dir, wheel.Filename)
+		filename := filepath.Join(dir, wheel.Filename)
 		file, err := os.Open(filename)
 		if err != nil {
 			return nil, nil, nil, err
@@ -264,8 +286,8 @@ func (resolver PreparedBundleResolver) ResolvePython(ctx context.Context, reques
 	if err != nil {
 		return ResolvedSet{}, err
 	}
-	artifacts := []providerapi.Artifact{}
-	byDistribution := map[string]providerapi.Artifact{}
+	artifacts := []legacyprovider.Artifact{}
+	byDistribution := map[string]legacyprovider.Artifact{}
 	consoleScripts := map[string]string{}
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
@@ -278,7 +300,7 @@ func (resolver PreparedBundleResolver) ResolvePython(ctx context.Context, reques
 		if err != nil {
 			return ResolvedSet{}, fmt.Errorf("inspect Python wheel %s: %w", entry.Name(), err)
 		}
-		artifact := providerapi.Artifact{
+		artifact := legacyprovider.Artifact{
 			Identifier: wheel.Distribution, Version: wheel.Version, Kind: "wheel",
 			Path: wheel.Filename, SHA256: wheel.SHA256,
 		}
@@ -518,13 +540,9 @@ func readPreparedBundleManifest(dir string) (preparedBundleManifest, error) {
 	return manifest, nil
 }
 
-func validateResolvedSourceArtifacts(dir string, sources []providerapi.ResolvedSourceInput, artifacts map[string]inspectedWheel) error {
+func validateResolvedSourceArtifacts(sources []providerapi.ResolvedSourceInput, artifacts map[string]inspectedWheel) error {
 	if len(sources) == 0 {
 		return nil
-	}
-	manifest, err := readPreparedBundleManifest(dir)
-	if err != nil {
-		return err
 	}
 	for _, source := range sources {
 		distribution := NormalizeDistributionName(source.LogicalPackage)
@@ -536,15 +554,11 @@ func validateResolvedSourceArtifacts(dir string, sources []providerapi.ResolvedS
 		if source.ArtifactDigest != wheelDigest {
 			return fmt.Errorf("prepared Python source wheel for %q has digest %q, want resolved artifact %q", source.LogicalPackage, wheelDigest, source.ArtifactDigest)
 		}
-		built, ok := manifest.LocalSources[distribution]
-		if !ok || built.Wheel != wheel.Filename {
-			return fmt.Errorf("Python source %q for component %q did not take precedence in the prepared bundle", source.LogicalPackage, source.Component)
-		}
 	}
 	return nil
 }
 
-func validateRequestedDistributions(request LegacyResolveRequest, artifacts map[string]providerapi.Artifact) error {
+func validateRequestedDistributions(request LegacyResolveRequest, artifacts map[string]legacyprovider.Artifact) error {
 	translated := map[string]bool{}
 	for _, translation := range request.Translations {
 		for distribution := range translation.Mappings {
@@ -602,7 +616,7 @@ func pythonRootName(root string) (string, error) {
 	return pythonRequirementName(root)
 }
 
-func validateTranslationArtifacts(dir string, request LegacyResolveRequest, artifacts map[string]providerapi.Artifact) error {
+func validateTranslationArtifacts(dir string, request LegacyResolveRequest, artifacts map[string]legacyprovider.Artifact) error {
 	manifest, err := readPreparedBundleManifest(dir)
 	if err != nil {
 		return err

@@ -5,24 +5,24 @@ import (
 	"testing"
 
 	"github.com/omry/reploy/internal/blueprint"
-	"github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/legacyprovider"
 )
 
 func TestGeneratedImageIdentityIsDirectoryKeyedAndSemantic(t *testing.T) {
-	bundle := providers.Bundle{
+	bundle := legacyprovider.Bundle{
 		Provider: blueprint.ComponentTypePython, RecipeVersion: "python-v1", Platform: "linux/amd64",
 		BaseIdentity: "python@sha256:base",
-		Artifacts:    []providers.Artifact{{Identifier: "demo", Kind: "wheel", Path: "demo.whl", SHA256: strings.Repeat("a", 64)}},
-		Executables:  map[string]providers.ExecutableOutput{},
+		Artifacts:    []legacyprovider.Artifact{{Identifier: "demo", Kind: "wheel", Path: "demo.whl", SHA256: strings.Repeat("a", 64)}},
+		Executables:  map[string]legacyprovider.ExecutableOutput{},
 	}
-	first, err := generatedImageIdentity("demo", t.TempDir(), GeneratedImageStaging, []providers.Bundle{bundle})
+	first, err := generatedImageIdentity("demo", t.TempDir(), GeneratedImageStaging, []legacyprovider.Bundle{bundle})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if first.Reference != first.Repository+":staging" || !strings.HasPrefix(first.Repository, "reploy/demo-") {
 		t.Fatalf("identity = %#v", first)
 	}
-	second, err := generatedImageIdentity("demo", t.TempDir(), GeneratedImageStaging, []providers.Bundle{bundle})
+	second, err := generatedImageIdentity("demo", t.TempDir(), GeneratedImageStaging, []legacyprovider.Bundle{bundle})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,20 +35,20 @@ func TestGeneratedImageIdentityIsDirectoryKeyedAndSemantic(t *testing.T) {
 }
 
 func TestGeneratedImageFingerprintIgnoresArtifactOrdering(t *testing.T) {
-	artifactA := providers.Artifact{Identifier: "a", Kind: "wheel", Path: "a.whl", SHA256: strings.Repeat("a", 64)}
-	artifactB := providers.Artifact{Identifier: "b", Kind: "wheel", Path: "b.whl", SHA256: strings.Repeat("b", 64)}
-	makeBundle := func(artifacts []providers.Artifact) providers.Bundle {
-		return providers.Bundle{
+	artifactA := legacyprovider.Artifact{Identifier: "a", Kind: "wheel", Path: "a.whl", SHA256: strings.Repeat("a", 64)}
+	artifactB := legacyprovider.Artifact{Identifier: "b", Kind: "wheel", Path: "b.whl", SHA256: strings.Repeat("b", 64)}
+	makeBundle := func(artifacts []legacyprovider.Artifact) legacyprovider.Bundle {
+		return legacyprovider.Bundle{
 			Provider: blueprint.ComponentTypePython, RecipeVersion: "python-v1", Platform: "linux/amd64",
 			BaseIdentity: "python@sha256:base", Artifacts: artifacts,
-			Executables: map[string]providers.ExecutableOutput{},
+			Executables: map[string]legacyprovider.ExecutableOutput{},
 		}
 	}
-	first, err := generatedImageFingerprint([]providers.Bundle{makeBundle([]providers.Artifact{artifactA, artifactB})})
+	first, err := generatedImageFingerprint([]legacyprovider.Bundle{makeBundle([]legacyprovider.Artifact{artifactA, artifactB})})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := generatedImageFingerprint([]providers.Bundle{makeBundle([]providers.Artifact{artifactB, artifactA})})
+	second, err := generatedImageFingerprint([]legacyprovider.Bundle{makeBundle([]legacyprovider.Artifact{artifactB, artifactA})})
 	if err != nil {
 		t.Fatal(err)
 	}

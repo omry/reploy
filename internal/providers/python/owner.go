@@ -117,6 +117,9 @@ func decodeProfileFactsV1(data providers.CanonicalProviderData) (string, []provi
 }
 
 func ValidateResolvedBundlePayloadV1(payload providers.ResolvedBundleIdentityV1) error {
+	if payload.RecipeVersion != RecipeVersion {
+		return fmt.Errorf("Python bundle recipe version must be %q", RecipeVersion)
+	}
 	request, err := decodeCanonicalProviderRequestV1(payload.Request)
 	if err != nil {
 		return fmt.Errorf("Python bundle request: %w", err)
@@ -128,7 +131,8 @@ func ValidateResolvedBundlePayloadV1(payload providers.ResolvedBundleIdentityV1)
 	if err != nil {
 		return err
 	}
-	artifacts := make([]providerstore.ArtifactDescriptor, 0, len(bundle.Wheels))
+	artifacts := make([]providerstore.ArtifactDescriptor, 0, len(bundle.Wheels)+1)
+	artifacts = append(artifacts, bundle.Script)
 	for _, wheel := range bundle.Wheels {
 		artifacts = append(artifacts, wheel.Artifact)
 	}
@@ -160,7 +164,7 @@ func ValidateResolvedBundlePayloadV1(payload providers.ResolvedBundleIdentityV1)
 }
 
 func DecodeCanonicalBundleDataV1(component string, data providers.CanonicalProviderData) (PythonBundleV1, error) {
-	if data.Schema != BundleSchemaV1 || len(data.Value) != 4 {
+	if data.Schema != BundleSchemaV1 || len(data.Value) != 5 {
 		return PythonBundleV1{}, fmt.Errorf("Python bundle data must use schema %q and the exact value shape", BundleSchemaV1)
 	}
 	type wheelWire struct {
@@ -176,10 +180,11 @@ func DecodeCanonicalBundleDataV1(component string, data providers.CanonicalProvi
 		Path         string `json:"path"`
 	}
 	var wire struct {
-		Interpreter providers.ExecutableEvidence    `json:"interpreter"`
-		Wheels      []wheelWire                     `json:"wheels"`
-		Outputs     []outputWire                    `json:"outputs"`
-		Sources     []providers.ResolvedSourceInput `json:"sources"`
+		Interpreter providers.ExecutableEvidence     `json:"interpreter"`
+		Script      providerstore.ArtifactDescriptor `json:"script"`
+		Wheels      []wheelWire                      `json:"wheels"`
+		Outputs     []outputWire                     `json:"outputs"`
+		Sources     []providers.ResolvedSourceInput  `json:"sources"`
 	}
 	encoded, err := canonical.Marshal(data.Value)
 	if err != nil {
@@ -195,6 +200,7 @@ func DecodeCanonicalBundleDataV1(component string, data providers.CanonicalProvi
 	}
 	bundle := PythonBundleV1{
 		Interpreter: wire.Interpreter,
+		Script:      wire.Script,
 		Wheels:      make([]PythonWheelV1, 0, len(wire.Wheels)),
 		Outputs:     make([]PythonConsoleScriptV1, 0, len(wire.Outputs)),
 		Sources:     wire.Sources,

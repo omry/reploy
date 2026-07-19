@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/omry/reploy/internal/blueprint"
-	"github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/legacyprovider"
 )
 
-func lifecycleTestInputs() (blueprint.Document, DockerExecutionPlan, map[string]providers.ExecutableOutput) {
+func lifecycleTestInputs() (blueprint.Document, DockerExecutionPlan, map[string]legacyprovider.ExecutableOutput) {
 	document := commandTestDocument()
 	document.Environment.Workload = &blueprint.Workload{
 		Command: "serve",
@@ -29,7 +29,7 @@ func lifecycleTestInputs() (blueprint.Document, DockerExecutionPlan, map[string]
 	document.Environment.ID = "demo"
 	readiness := &blueprint.Readiness{Path: "/ready", Timeout: time.Second, Interval: time.Millisecond}
 	plan := DockerExecutionPlan{Workload: &WorkloadExecutionPlan{Endpoints: map[string]EndpointExecutionPlan{"http": {Scheme: "http", ProbeHost: "127.0.0.1", PublishAddress: "127.0.0.1", PublishedPort: 8080, Readiness: readiness}}}}
-	outputs := map[string]providers.ExecutableOutput{"server": {Component: "application", Binary: "demo", ImagePath: "/opt/demo"}}
+	outputs := map[string]legacyprovider.ExecutableOutput{"server": {Component: "application", Binary: "demo", ImagePath: "/opt/demo"}}
 	return document, plan, outputs
 }
 

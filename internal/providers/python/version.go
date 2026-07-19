@@ -1,6 +1,7 @@
 package python
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -27,12 +28,33 @@ func requirementAllowsVersion(requirement string, version string) (bool, bool) {
 	if remainder == "" || strings.HasPrefix(remainder, "@") {
 		return true, true
 	}
+	return versionSpecifiersAllowVersion(remainder, version)
+}
 
+// InterpreterVersionSatisfies evaluates the normalized release specifiers
+// accepted for a Python interpreter requirement against an observed runtime
+// version.
+func InterpreterVersionSatisfies(constraint string, version string) (bool, error) {
+	constraint = strings.TrimSpace(constraint)
+	if constraint == "" {
+		if _, ok := parseReleaseVersion(version); !ok {
+			return false, fmt.Errorf("Python interpreter version %q is not a normalized release version", version)
+		}
+		return true, nil
+	}
+	matches, supported := versionSpecifiersAllowVersion(constraint, version)
+	if !supported {
+		return false, fmt.Errorf("Python interpreter version constraint %q is unsupported", constraint)
+	}
+	return matches, nil
+}
+
+func versionSpecifiersAllowVersion(specifiers string, version string) (bool, bool) {
 	actual, ok := parseReleaseVersion(version)
 	if !ok {
 		return false, false
 	}
-	for _, raw := range strings.Split(remainder, ",") {
+	for _, raw := range strings.Split(specifiers, ",") {
 		specifier := strings.TrimSpace(raw)
 		operator, expectedText, ok := splitVersionSpecifier(specifier)
 		if !ok {

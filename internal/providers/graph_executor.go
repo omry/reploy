@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/providerstore"
 )
 
@@ -15,13 +16,37 @@ type GraphNodeMaterializeRequest struct {
 }
 
 type GraphNodeMaterializeResult struct {
-	Image   RealizedImageV1
-	Outputs []RealizedOutput
+	Image                RealizedImageV1
+	TransactionDigest    canonical.Digest
+	GeneratedExecutables []RealizedGeneratedExecutable
+	Outputs              []RealizedOutput
 }
 
-type GraphNodeResolver func(context.Context, ResolveNodeRequest) (ResolveResult, error)
+type GraphConsumerValidation struct {
+	Carrier             ValidatedExecutableInput
+	EnvironmentLauncher ValidatedExecutableInput
+	FinalImageConfig    ImageConfigPolicy
+}
 
-type GraphConsumerValidator func(context.Context, ResolveNodeRequest, ResolveResult) error
+// GraphNodePrepareRequest gives one backend session both the current node
+// inputs and the optional prior result it may accept or replace.
+type GraphNodePrepareRequest struct {
+	Resolve          ResolveNodeRequest
+	CachedResolution *ResolveResult
+}
+
+// GraphNodePreparation binds a resolution to consumer evidence observed in
+// the same backend session. Refreshed is true only when a supplied cached
+// resolution was rejected and replaced once.
+type GraphNodePreparation struct {
+	Resolution ResolveResult
+	Consumer   GraphConsumerValidation
+	Refreshed  bool
+}
+
+// GraphNodePreparer validates cached state and, when needed, performs one
+// fresh resolution without opening a second backend session.
+type GraphNodePreparer func(context.Context, GraphNodePrepareRequest) (GraphNodePreparation, error)
 
 type GraphNodeMaterializer func(context.Context, GraphNodeMaterializeRequest) (GraphNodeMaterializeResult, error)
 
@@ -36,8 +61,7 @@ type GraphExecutionRequest struct {
 	ReusableArtifacts map[NodeID][]providerstore.StoreObjectRef
 	CachedResolutions map[NodeID]ResolveResult
 	Validators        GraphOwnerValidators
-	ResolveNode       GraphNodeResolver
-	ValidateConsumer  GraphConsumerValidator
+	PrepareNode       GraphNodePreparer
 	MaterializeNode   GraphNodeMaterializer
 }
 
@@ -48,6 +72,7 @@ type GraphExecutionResult struct {
 	Profiles           []RequirementProfile
 	ValidationEvidence []ValidationEvidence
 	PrefixImages       []RealizedImageV1
+	Materializations   []GraphNodeMaterializeResult
 	Catalog            []RealizedOutput
 }
 
@@ -95,14 +120,15 @@ func ExecuteProviderGraph(ctx context.Context, request GraphExecutionRequest) (G
 			return GraphExecutionResult{}, fmt.Errorf("cached resolution targets missing or non-resolving node %q", id)
 		}
 	}
-	if len(order) > 1 && (request.ResolveNode == nil || request.ValidateConsumer == nil || request.MaterializeNode == nil) {
-		return GraphExecutionResult{}, fmt.Errorf("provider graph node resolver, consumer validator, and materializer are required")
+	if len(order) > 1 && (request.PrepareNode == nil || request.MaterializeNode == nil) {
+		return GraphExecutionResult{}, fmt.Errorf("provider graph node preparer and materializer are required")
 	}
 
 	result := GraphExecutionResult{
 		Plan: request.Plan, SelectedEdges: []ProviderEdgeV1{}, Bundles: []ResolvedBundle{},
 		Profiles: []RequirementProfile{}, ValidationEvidence: []ValidationEvidence{},
-		PrefixImages: []RealizedImageV1{request.BaseImage}, Catalog: append([]RealizedOutput{}, request.BaseCatalog...),
+		PrefixImages: []RealizedImageV1{request.BaseImage}, Materializations: []GraphNodeMaterializeResult{},
+		Catalog: append([]RealizedOutput{}, request.BaseCatalog...),
 	}
 	currentImage := request.BaseImage
 	for _, id := range order {
@@ -126,33 +152,32 @@ func ExecuteProviderGraph(ctx context.Context, request GraphExecutionRequest) (G
 		if err != nil {
 			return GraphExecutionResult{}, err
 		}
-		validateResolution := func(ctx context.Context, resolution ResolveResult) error {
-			if err := ValidateResolveResult(input, resolution, validators.Profile, validators.Bundle); err != nil {
-				return fmt.Errorf("resolution contract: %w", err)
-			}
-			if err := request.ValidateConsumer(ctx, resolveRequest, resolution); err != nil {
-				return fmt.Errorf("consumer prerequisites: %w", err)
-			}
-			return nil
-		}
 		var cached *ResolveResult
 		if value, found := request.CachedResolutions[id]; found {
 			cached = &value
 		}
-		validated, err := ResolveCachedOrFresh(ctx, cached, validateResolution, func(ctx context.Context) (ResolveResult, error) {
-			return request.ResolveNode(ctx, resolveRequest)
-		})
+		prepared, err := request.PrepareNode(ctx, GraphNodePrepareRequest{Resolve: resolveRequest, CachedResolution: cached})
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return GraphExecutionResult{}, ctxErr
 			}
-			return GraphExecutionResult{}, fmt.Errorf("resolve provider node %q: %w", id, err)
+			return GraphExecutionResult{}, fmt.Errorf("prepare provider node %q: %w", id, err)
 		}
-		resolution := validated.Result
 		if err := ctx.Err(); err != nil {
 			return GraphExecutionResult{}, err
 		}
-		materializeInput := MaterializeInput{Bundle: resolution.Bundle, Profile: resolution.Profile, AssemblyParent: currentImage}
+		if prepared.Refreshed && cached == nil {
+			return GraphExecutionResult{}, fmt.Errorf("prepare provider node %q reported a cache refresh without a cached resolution", id)
+		}
+		resolution := prepared.Resolution
+		if err := ValidateResolveResult(input, resolution, validators.Profile, validators.Bundle); err != nil {
+			return GraphExecutionResult{}, fmt.Errorf("prepare provider node %q resolution contract: %w", id, err)
+		}
+		materializeInput := MaterializeInput{
+			Bundle: resolution.Bundle, Profile: resolution.Profile, AssemblyParent: currentImage,
+			Carrier: prepared.Consumer.Carrier, EnvironmentLauncher: prepared.Consumer.EnvironmentLauncher,
+			FinalImageConfig: prepared.Consumer.FinalImageConfig,
+		}
 		if err := ValidateMaterializeInput(materializeInput, validators.Profile, validators.Bundle); err != nil {
 			return GraphExecutionResult{}, fmt.Errorf("materialize provider node %q input: %w", id, err)
 		}
@@ -166,6 +191,12 @@ func ExecuteProviderGraph(ctx context.Context, request GraphExecutionRequest) (G
 		if err := materialized.Image.Validate(); err != nil {
 			return GraphExecutionResult{}, fmt.Errorf("materialize provider node %q image: %w", id, err)
 		}
+		if err := materialized.TransactionDigest.Validate(); err != nil {
+			return GraphExecutionResult{}, fmt.Errorf("materialize provider node %q transaction digest: %w", id, err)
+		}
+		if err := ValidateRealizedGeneratedExecutableCollection(materialized.GeneratedExecutables); err != nil {
+			return GraphExecutionResult{}, fmt.Errorf("materialize provider node %q generated executables: %w", id, err)
+		}
 		if err := validateRealizedNodeOutputs(resolution.Bundle, materialized.Outputs); err != nil {
 			return GraphExecutionResult{}, fmt.Errorf("materialize provider node %q outputs: %w", id, err)
 		}
@@ -178,6 +209,7 @@ func ExecuteProviderGraph(ctx context.Context, request GraphExecutionRequest) (G
 		result.Profiles = append(result.Profiles, resolution.Profile)
 		result.ValidationEvidence = append(result.ValidationEvidence, resolution.Evidence)
 		result.PrefixImages = append(result.PrefixImages, materialized.Image)
+		result.Materializations = append(result.Materializations, materialized)
 		result.Catalog = append(result.Catalog, materialized.Outputs...)
 		currentImage = materialized.Image
 	}
@@ -190,6 +222,12 @@ func ExecuteProviderGraph(ctx context.Context, request GraphExecutionRequest) (G
 		}
 	}
 	return result, nil
+}
+
+// ValidateRealizedBundleOutputs binds final exposure evidence to the exact
+// public output candidates declared by a resolved bundle.
+func ValidateRealizedBundleOutputs(bundle ResolvedBundle, outputs []RealizedOutput) error {
+	return validateRealizedNodeOutputs(bundle, outputs)
 }
 
 func validateBaseExecutionCatalog(plan ProviderPlanV1, catalog []RealizedOutput) error {

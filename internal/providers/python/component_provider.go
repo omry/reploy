@@ -8,13 +8,15 @@ import (
 	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/legacyprovider"
 	providerapi "github.com/omry/reploy/internal/providers"
 )
 
 const (
-	RecipeVersion = "python-v1"
-	InstallRoot   = "/opt/reploy/providers/python"
-	BundleMount   = "/reploy-bundle"
+	RecipeVersion                = "python-v1"
+	MaterializationRecipeVersion = "python-materialize-v1"
+	InstallRoot                  = "/opt/reploy/providers/python"
+	BundleMount                  = "/reploy-bundle"
 )
 
 // BundleResolver performs the network/source-aware phase and returns only
@@ -26,7 +28,7 @@ type BundleResolver interface {
 
 type ResolvedSet struct {
 	BaseIdentity   string
-	Artifacts      []providerapi.Artifact
+	Artifacts      []legacyprovider.Artifact
 	ConsoleScripts map[string]string // script name -> normalized distribution
 }
 
@@ -96,50 +98,50 @@ func (ComponentProvider) LegacyBaseProbes() []LegacyBaseProbe {
 	}
 }
 
-func (provider ComponentProvider) Resolve(ctx context.Context, request LegacyResolveRequest) (providerapi.Bundle, error) {
+func (provider ComponentProvider) Resolve(ctx context.Context, request LegacyResolveRequest) (legacyprovider.Bundle, error) {
 	if provider.Resolver == nil {
-		return providerapi.Bundle{}, fmt.Errorf("Python provider has no bundle resolver")
+		return legacyprovider.Bundle{}, fmt.Errorf("Python provider has no bundle resolver")
 	}
 	request = normalizeLegacyResolveRequest(request)
 	resolved, err := provider.Resolver.ResolvePython(ctx, request)
 	if err != nil {
-		return providerapi.Bundle{}, fmt.Errorf("resolve Python bundle: %w", err)
+		return legacyprovider.Bundle{}, fmt.Errorf("resolve Python bundle: %w", err)
 	}
-	artifacts := append([]providerapi.Artifact(nil), resolved.Artifacts...)
+	artifacts := append([]legacyprovider.Artifact(nil), resolved.Artifacts...)
 	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].Path < artifacts[j].Path })
-	bundle := providerapi.Bundle{
+	bundle := legacyprovider.Bundle{
 		Provider: blueprint.ComponentTypePython, RecipeVersion: RecipeVersion,
 		Platform: request.Platform, BaseIdentity: resolved.BaseIdentity,
-		Artifacts: artifacts, Executables: map[string]providerapi.ExecutableOutput{},
+		Artifacts: artifacts, Executables: map[string]legacyprovider.ExecutableOutput{},
 	}
 	for _, executable := range request.Executables {
 		if path.Base(executable.Binary) != executable.Binary || executable.Binary == "." || executable.Binary == ".." {
-			return providerapi.Bundle{}, fmt.Errorf("Python executable %q has invalid console script %q", executable.Name, executable.Binary)
+			return legacyprovider.Bundle{}, fmt.Errorf("Python executable %q has invalid console script %q", executable.Name, executable.Binary)
 		}
 		if _, exists := resolved.ConsoleScripts[executable.Binary]; !exists {
-			return providerapi.Bundle{}, fmt.Errorf("Python component %q does not provide console script %q for executable %q", executable.Component, executable.Binary, executable.Name)
+			return legacyprovider.Bundle{}, fmt.Errorf("Python component %q does not provide console script %q for executable %q", executable.Component, executable.Binary, executable.Name)
 		}
-		bundle.Executables[executable.Name] = providerapi.ExecutableOutput{
+		bundle.Executables[executable.Name] = legacyprovider.ExecutableOutput{
 			Component: executable.Component, Binary: executable.Binary,
 			ImagePath: path.Join(InstallRoot, "bin", executable.Binary),
 		}
 	}
-	if err := providerapi.ValidateBundle(bundle); err != nil {
-		return providerapi.Bundle{}, fmt.Errorf("invalid Python bundle: %w", err)
+	if err := legacyprovider.ValidateBundle(bundle); err != nil {
+		return legacyprovider.Bundle{}, fmt.Errorf("invalid Python bundle: %w", err)
 	}
 	return bundle, nil
 }
 
-func (ComponentProvider) Materialize(request providerapi.MaterializeRequest) (providerapi.Materialization, error) {
+func (ComponentProvider) LegacyMaterialize(request legacyprovider.MaterializeRequest) (legacyprovider.Materialization, error) {
 	bundle := request.Bundle
 	if bundle.Provider != blueprint.ComponentTypePython {
-		return providerapi.Materialization{}, fmt.Errorf("Python provider cannot materialize %q bundle", bundle.Provider)
+		return legacyprovider.Materialization{}, fmt.Errorf("Python provider cannot materialize %q bundle", bundle.Provider)
 	}
 	if bundle.RecipeVersion != RecipeVersion {
-		return providerapi.Materialization{}, fmt.Errorf("unsupported Python recipe version %q", bundle.RecipeVersion)
+		return legacyprovider.Materialization{}, fmt.Errorf("unsupported Python recipe version %q", bundle.RecipeVersion)
 	}
-	if err := providerapi.ValidateBundle(bundle); err != nil {
-		return providerapi.Materialization{}, fmt.Errorf("invalid Python bundle: %w", err)
+	if err := legacyprovider.ValidateBundle(bundle); err != nil {
+		return legacyprovider.Materialization{}, fmt.Errorf("invalid Python bundle: %w", err)
 	}
 	wheels := []string{}
 	for _, artifact := range bundle.Artifacts {
@@ -149,7 +151,7 @@ func (ComponentProvider) Materialize(request providerapi.MaterializeRequest) (pr
 		wheels = append(wheels, path.Join(BundleMount, artifact.Path))
 	}
 	if len(wheels) == 0 {
-		return providerapi.Materialization{}, fmt.Errorf("Python bundle contains no wheels")
+		return legacyprovider.Materialization{}, fmt.Errorf("Python bundle contains no wheels")
 	}
 	sort.Strings(wheels)
 	install := []string{
@@ -157,10 +159,10 @@ func (ComponentProvider) Materialize(request providerapi.MaterializeRequest) (pr
 		"--disable-pip-version-check", "install", "--no-index", "--no-deps", "--no-cache-dir",
 	}
 	install = append(install, wheels...)
-	return providerapi.Materialization{
+	return legacyprovider.Materialization{
 		Provider: blueprint.ComponentTypePython, Version: RecipeVersion, BundleMount: BundleMount,
-		Artifacts: append([]providerapi.Artifact(nil), bundle.Artifacts...),
-		Steps: []providerapi.MaterializationStep{
+		Artifacts: append([]legacyprovider.Artifact(nil), bundle.Artifacts...),
+		Steps: []legacyprovider.MaterializationStep{
 			{Argv: []string{"python", "-m", "venv", InstallRoot}},
 			{Argv: install},
 		},
@@ -176,8 +178,8 @@ func ValidatePythonVersion(output string) error {
 	return nil
 }
 
-func cloneExecutableOutputs(source map[string]providerapi.ExecutableOutput) map[string]providerapi.ExecutableOutput {
-	result := make(map[string]providerapi.ExecutableOutput, len(source))
+func cloneExecutableOutputs(source map[string]legacyprovider.ExecutableOutput) map[string]legacyprovider.ExecutableOutput {
+	result := make(map[string]legacyprovider.ExecutableOutput, len(source))
 	for name, output := range source {
 		result[name] = output
 	}

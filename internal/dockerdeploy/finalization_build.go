@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ type FinalizationBuildRequest struct {
 }
 
 var runFinalizationBuildCommand = runCommand
+var runFinalizationBuildReferenceDocker = runDockerOutput
 
 func FinalizationDockerfile(request FinalizationBuildRequest) ([]byte, error) {
 	if err := validateFinalizationBuildRequest(request); err != nil {
@@ -48,7 +50,7 @@ func FinalizationDockerfile(request FinalizationBuildRequest) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
-func BuildFinalizedImageCandidate(store providerstore.Store, request FinalizationBuildRequest, options RunOptions) (BuiltImageCandidate, error) {
+func BuildFinalizedImageCandidate(store providerstore.Store, request FinalizationBuildRequest, options RunOptions) (result BuiltImageCandidate, resultErr error) {
 	dockerfile, err := FinalizationDockerfile(request)
 	if err != nil {
 		return BuiltImageCandidate{}, err
@@ -58,6 +60,28 @@ func BuildFinalizedImageCandidate(store providerstore.Store, request Finalizatio
 		return BuiltImageCandidate{}, err
 	}
 	defer os.RemoveAll(workspace)
+	ctx := options.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	baseReference, cleanupBaseReference, err := prepareTemporaryBuildBaseReference(
+		ctx, store.Root(), workspace, request.Source.Image, runFinalizationBuildReferenceDocker,
+	)
+	if err != nil {
+		return BuiltImageCandidate{}, err
+	}
+	defer func() {
+		if cleanupErr := cleanupTemporaryBuildBaseReferenceAfterBuild(
+			context.WithoutCancel(ctx), cleanupBaseReference, result, runFinalizationBuildReferenceDocker,
+		); cleanupErr != nil {
+			if resultErr != nil {
+				resultErr = fmt.Errorf("%w; cleanup temporary build base reference: %v", resultErr, cleanupErr)
+			} else {
+				result = BuiltImageCandidate{}
+				resultErr = fmt.Errorf("cleanup temporary build base reference: %w", cleanupErr)
+			}
+		}
+	}()
 	contextDir := filepath.Join(workspace, "context")
 	if err := os.Mkdir(contextDir, 0o700); err != nil {
 		return BuiltImageCandidate{}, fmt.Errorf("create finalization build context: %w", err)
@@ -68,7 +92,7 @@ func BuildFinalizedImageCandidate(store providerstore.Store, request Finalizatio
 	}
 	iidPath := filepath.Join(workspace, "result.iid")
 	command, err := MaterializationBuildCommand(MaterializationBuildPlan{
-		BaseIdentity: string(request.Source.Image.Digest), Platform: request.Platform,
+		BaseReference: baseReference, Platform: request.Platform,
 		DockerfilePath: dockerfilePath, ContextDir: contextDir, IIDFile: iidPath,
 	})
 	if err != nil {

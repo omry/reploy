@@ -45,6 +45,17 @@ func runCommand(spec CommandSpec, options RunOptions) error {
 			return err
 		}
 	}
+	return runCommandWithoutDockerPreflight(spec, options)
+}
+
+// runCommandWithoutDockerPreflight is for follow-up commands in one
+// higher-level Docker operation whose first command already passed preflight.
+// Callers must not use it as the entry point to an independent operation.
+func runCommandWithoutDockerPreflight(spec CommandSpec, options RunOptions) error {
+	ctx := options.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	command := exec.CommandContext(ctx, spec.Name, spec.Args...)
 	command.Dir = spec.Dir
 	if len(spec.Env) > 0 {

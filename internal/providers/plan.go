@@ -307,8 +307,8 @@ func ValidateRequirementDeclaration(declaration RequirementDeclaration) error {
 
 func NormalizeProviderPlanV1(plan ProviderPlanV1) ProviderPlanV1 {
 	result := plan
-	result.Nodes = append([]NodeSpec(nil), plan.Nodes...)
-	result.Edges = append([]ProviderEdgeV1(nil), plan.Edges...)
+	result.Nodes = append([]NodeSpec{}, plan.Nodes...)
+	result.Edges = append([]ProviderEdgeV1{}, plan.Edges...)
 	sort.Slice(result.Nodes, func(left int, right int) bool { return result.Nodes[left].ID < result.Nodes[right].ID })
 	sort.Slice(result.Edges, func(left int, right int) bool {
 		return compareProviderEdges(result.Edges[left], result.Edges[right]) < 0

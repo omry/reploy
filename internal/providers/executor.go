@@ -61,10 +61,37 @@ func ResolveProviderNode(
 	if err := ctx.Err(); err != nil {
 		return ResolveResult{}, err
 	}
-	if err := ValidateResolveResult(input, result, validators.Profile, validators.Bundle); err != nil {
-		return ResolveResult{}, fmt.Errorf("validate provider node %q result: %w", node.ID, err)
+	if err := validateProviderNodeResolution(input, node.ID, result, validators); err != nil {
+		return ResolveResult{}, err
 	}
 	return result, nil
+}
+
+// ValidateProviderNodeResolution validates an existing result against the
+// exact graph node inputs without invoking its resolver. Consumers use this
+// before accepting a cached result.
+func ValidateProviderNodeResolution(
+	request ResolveNodeRequest,
+	result ResolveResult,
+	validators ProviderOwnerValidators,
+) error {
+	node, input, err := buildResolveInput(request)
+	if err != nil {
+		return err
+	}
+	return validateProviderNodeResolution(input, node.ID, result, validators)
+}
+
+func validateProviderNodeResolution(
+	input ResolveInput,
+	nodeID NodeID,
+	result ResolveResult,
+	validators ProviderOwnerValidators,
+) error {
+	if err := ValidateResolveResult(input, result, validators.Profile, validators.Bundle); err != nil {
+		return fmt.Errorf("validate provider node %q result: %w", nodeID, err)
+	}
+	return nil
 }
 
 func buildResolveInput(request ResolveNodeRequest) (NodeSpec, ResolveInput, error) {

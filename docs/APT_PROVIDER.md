@@ -1313,6 +1313,45 @@ path, validates its file type and executability, and uses `dpkg-query -S` to
 require every ordinary owned hop and the terminal to belong to exact tuples in
 the complete locked APT node.
 
+Reploy performs the low-level filesystem observation with a private native
+utility named `reploy-probe`. It resolves the declared absolute path, records
+the symlink chain, hashes the regular terminal, and records the modes and
+numeric ownership of every path needed for access validation. It contains no
+APT or Python policy and cannot run an arbitrary command. Reploy itself
+interprets the observations and invokes only separately typed provider tools.
+
+Reploy remains one distributed executable. Every release binary carries static
+`linux/amd64`, `linux/arm64`, and `linux/arm/v7` probe variants in a verified
+appended archive; the arm/v7 helper is built with `GOARM=7`, and all three use
+`CGO_ENABLED=0`. This matrix is included in Linux, macOS, and Windows Reploy
+distributions so the host distribution does not determine the target image
+platform. At use time Reploy verifies the archive manifest, size, CRC, and
+SHA-256, extracts only the selected variant as `reploy-probe` beneath the
+deployment's private `.reploy/provider-store/tmp/probe-*` workspace, and
+removes the complete workspace after the containing operation. There is no
+machine-wide helper cache or installation in the host, image, or `PATH`.
+
+Inside containers the complete workspace is mounted read-only at
+`/.reploy-validation`, making the fixed executable path
+`/.reploy-validation/reploy-probe`. A consumer invokes it as the first step in
+the consumer's existing resolver or materializer container; Reploy never
+creates a standalone prerequisite-probe container. Full final-image validation,
+and each additional layer validation requested by `--validate-layers`, instead
+uses its already-required validation container. Reploy creates that container
+from the exact immutable image with the selected platform, root user, `/`
+working directory, read-only root filesystem, no network, and no implicit image
+pull. The helper's fixed `hold` mode only keeps the container alive. Reploy then
+performs all currently required fixed checks in that one container and removes
+it explicitly on success, failure, or cancellation. The validation-session
+interface has no generic command-execution operation.
+
+All executable paths for one image are sent in one sorted canonical probe
+request and returned in one request-bound canonical response. There is no
+elapsed-time deadline or path-count limit. Cross-architecture validation uses
+ordinary Docker platform selection; if the host lacks the required binfmt/QEMU
+support, Reploy reports that requirement directly. This does not introduce a
+Buildx or Docker Desktop version dependency.
+
 When the selected chain enters the alternatives directory, Reploy derives the
 link-group name from that already selected chain and invokes read-only
 `update-alternatives --query`. The reported selected value must match the
@@ -1618,7 +1657,12 @@ wheel bundle, while changed evidence reruns the Python resolver.
 
 The Docker backend creates an environment-owned generation reference for each
 staged or installed environment. That reference and deployment state pin the
-exact image that one environment validated. V1 creates no canonical Reploy
+exact image that one environment validated. When an ordinary `docker build`
+needs to use a locally built image in `FROM`, Reploy also creates a unique
+deployment-scoped temporary base reference, verifies that it names the exact
+expected Docker config ID, and removes it when that individual build returns.
+This private reference is not configurable, published, stored in deployment
+state, or included in any content identity. V1 creates no canonical Reploy
 image tag or cross-installation completed-image lookup. Docker and its builder
 remain free to reuse physical layers and build-cache entries under Docker's own
 policies. Image configuration and Reploy-owned labels contain only content

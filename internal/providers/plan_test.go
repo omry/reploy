@@ -184,6 +184,19 @@ func TestNormalizeProviderPlanV1SortsWithoutMutatingInput(t *testing.T) {
 	}
 }
 
+func TestNormalizeProviderPlanV1PreservesEmptyCollections(t *testing.T) {
+	plan := ProviderPlanV1{
+		Schema: ProviderPlanSchemaV1, Nodes: []NodeSpec{basePlanNode()}, Edges: []ProviderEdgeV1{},
+	}
+	normalized := NormalizeProviderPlanV1(plan)
+	if normalized.Nodes == nil || normalized.Edges == nil {
+		t.Fatalf("normalized collections = nodes %#v, edges %#v", normalized.Nodes, normalized.Edges)
+	}
+	if err := ValidateProviderPlanV1(normalized); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestValidateNodeSpecRejectsReservedBaseComponent(t *testing.T) {
 	node := pythonPlanNode("base", ExecutableRequirement{})
 	if err := ValidateNodeSpec(node); err == nil || !strings.Contains(err.Error(), "reserved base") {

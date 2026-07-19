@@ -1,6 +1,6 @@
-// Package providers defines the backend-neutral contract between resolved
-// blueprint components and ecosystem-specific bundle implementations.
-package providers
+// Package legacyprovider contains the pre-graph provider records retained only
+// by the public Docker image lifecycle until the Slice 6 cutover.
+package legacyprovider
 
 import (
 	"fmt"
@@ -10,9 +10,6 @@ import (
 	"github.com/omry/reploy/internal/blueprint"
 )
 
-// Bundle is the closed, checksummed provider result recorded in deployment
-// state. Path is relative to the bundle root and is the only artifact location
-// visible to a materialization recipe.
 type Bundle struct {
 	Provider      blueprint.ComponentType
 	RecipeVersion string
@@ -40,8 +37,6 @@ type MaterializeRequest struct {
 	Bundle Bundle
 }
 
-// Materialization is an offline, deterministic recipe. BundleMount is
-// read-only; steps may reference only paths below it and declared fixed paths.
 type Materialization struct {
 	Provider    blueprint.ComponentType
 	Version     string
@@ -56,8 +51,6 @@ type MaterializationStep struct {
 	Env  map[string]string
 }
 
-// ValidateBundle rejects incomplete or unsafe provider results before they are
-// persisted or handed to a container backend.
 func ValidateBundle(bundle Bundle) error {
 	if bundle.Provider == "" || bundle.RecipeVersion == "" || bundle.Platform == "" || bundle.BaseIdentity == "" {
 		return fmt.Errorf("provider bundle identity is incomplete")

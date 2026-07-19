@@ -33,12 +33,14 @@ func (preparedTestSink) Publish(_ context.Context, logicalPath string, kind stri
 	}, nil
 }
 
-func TestPreparedNodeResolverReturnsCanonicalBundleThroughGraph(t *testing.T) {
+func TestWheelNodeResolverReturnsCanonicalBundleThroughGraph(t *testing.T) {
 	dir := t.TempDir()
 	writeTestWheel(t, dir, "demo_server-1.2.3-py3-none-any.whl", "Demo-Server", "1.2.3", map[string]string{"demo-server": "demo:main"})
 	plan, platform, upstream, catalog, selectedEvidence := preparedNodeTestPlan(t, "demo-server==1.2.3")
-	resolver := PreparedNodeResolver{
-		Dir: dir,
+	resolver := WheelNodeResolver{
+		PrepareWheels: func(context.Context, providerapi.ResolveInput, providerapi.ExecutableEvidence) (string, error) {
+			return dir, nil
+		},
 		ResolveInterpreter: func(_ context.Context, requirement providerapi.ExecutableRequirement, candidates []providerapi.RealizedOutput, gotUpstream providerapi.RealizedImageV1, gotPlatform blueprint.Platform) (providerapi.ExecutableEvidence, error) {
 			if requirement.ID != "interpreter" || len(candidates) != 1 || gotUpstream != upstream || gotPlatform != platform {
 				return providerapi.ExecutableEvidence{}, fmt.Errorf("unexpected interpreter validation input")
@@ -59,25 +61,30 @@ func TestPreparedNodeResolverReturnsCanonicalBundleThroughGraph(t *testing.T) {
 				Profile: ValidateRequirementProfileV1, Bundle: ValidateResolvedBundlePayloadV1,
 			}, nil
 		},
-		ResolveNode: func(ctx context.Context, request providerapi.ResolveNodeRequest) (providerapi.ResolveResult, error) {
-			return providerapi.ResolveProviderNode(ctx, request, resolver, preparedTestSink{}, providerapi.ProviderOwnerValidators{
+		PrepareNode: func(ctx context.Context, request providerapi.GraphNodePrepareRequest) (providerapi.GraphNodePreparation, error) {
+			resolution, err := providerapi.ResolveProviderNode(ctx, request.Resolve, resolver, preparedTestSink{}, providerapi.ProviderOwnerValidators{
 				Profile: ValidateRequirementProfileV1, Bundle: ValidateResolvedBundlePayloadV1,
 			})
+			if err != nil {
+				return providerapi.GraphNodePreparation{}, err
+			}
+			return providerapi.GraphNodePreparation{Resolution: resolution, Consumer: preparedTestConsumerValidation()}, nil
 		},
-		ValidateConsumer: func(context.Context, providerapi.ResolveNodeRequest, providerapi.ResolveResult) error { return nil },
 		MaterializeNode: func(_ context.Context, request providerapi.GraphNodeMaterializeRequest) (providerapi.GraphNodeMaterializeResult, error) {
 			return providerapi.GraphNodeMaterializeResult{
 				Image: providerapi.RealizedImageV1{
 					Digest: schemaTestDigest("d"), ConfigDigest: schemaTestDigest("e"), RootFSSubject: schemaTestDigest("f"),
 				},
-				Outputs: preparedTestRealizedOutputs(request.Input.Bundle),
+				TransactionDigest:    schemaTestDigest("9"),
+				GeneratedExecutables: []providerapi.RealizedGeneratedExecutable{},
+				Outputs:              preparedTestRealizedOutputs(request.Input.Bundle),
 			}, nil
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Bundles) != 1 || len(result.Profiles) != 1 || len(result.PrefixImages) != 2 || len(result.Catalog) != 2 {
+	if len(result.Bundles) != 1 || len(result.Profiles) != 1 || len(result.PrefixImages) != 2 || len(result.Materializations) != 1 || len(result.Catalog) != 2 {
 		t.Fatalf("graph result = %#v", result)
 	}
 	bundle, err := DecodeCanonicalBundleDataV1("application", result.Bundles[0].Payload.ProviderPayload)
@@ -87,11 +94,80 @@ func TestPreparedNodeResolverReturnsCanonicalBundleThroughGraph(t *testing.T) {
 	if len(bundle.Wheels) != 1 || len(bundle.Wheels[0].Tags) != 1 || bundle.Wheels[0].Tags[0] != "py3-none-any" {
 		t.Fatalf("wheels = %#v", bundle.Wheels)
 	}
+	if bundle.Script != materializationScriptDescriptor() || len(result.Bundles[0].Payload.Artifacts) != 2 {
+		t.Fatalf("script or artifacts = %#v; %#v", bundle.Script, result.Bundles[0].Payload.Artifacts)
+	}
 	if len(bundle.Outputs) != 1 || bundle.Outputs[0].EntryPoint != "demo:main" || bundle.Outputs[0].Path != "/opt/reploy/providers/python/application/bin/demo-server" {
 		t.Fatalf("outputs = %#v", bundle.Outputs)
 	}
 	if result.Profiles[0].SelectedExecutables[0].Facts.Value["version"] != "3.13.2" {
 		t.Fatalf("profile = %#v", result.Profiles[0])
+	}
+}
+
+func TestWheelNodeResolverRejectsUnexpectedOrLinkedOutput(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		write func(*testing.T, string)
+	}{
+		{name: "unexpected file", write: func(t *testing.T, dir string) {
+			if err := os.WriteFile(filepath.Join(dir, "resolver.log"), []byte("log"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "wheel symlink", write: func(t *testing.T, dir string) {
+			target := filepath.Join(t.TempDir(), "demo_server-1.2.3-py3-none-any.whl")
+			writeTestWheel(t, filepath.Dir(target), filepath.Base(target), "Demo-Server", "1.2.3", nil)
+			if err := os.Symlink(target, filepath.Join(dir, filepath.Base(target))); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			test.write(t, dir)
+			plan, platform, upstream, catalog, selectedEvidence := preparedNodeTestPlan(t, "demo-server==1.2.3")
+			resolver := WheelNodeResolver{
+				PrepareWheels: func(context.Context, providerapi.ResolveInput, providerapi.ExecutableEvidence) (string, error) {
+					return dir, nil
+				},
+				ResolveInterpreter: func(context.Context, providerapi.ExecutableRequirement, []providerapi.RealizedOutput, providerapi.RealizedImageV1, blueprint.Platform) (providerapi.ExecutableEvidence, error) {
+					return selectedEvidence, nil
+				},
+			}
+			_, err := providerapi.ResolveProviderNode(context.Background(), providerapi.ResolveNodeRequest{
+				Plan: plan, NodeID: "python/application", EarlierCatalog: catalog,
+				Platform: platform, Sources: []providerapi.ResolvedSourceInput{}, Upstream: upstream,
+				ReusableArtifacts: []providerstore.StoreObjectRef{},
+			}, resolver, preparedTestSink{}, providerapi.ProviderOwnerValidators{
+				Profile: ValidateRequirementProfileV1, Bundle: ValidateResolvedBundlePayloadV1,
+			})
+			if err == nil || !strings.Contains(err.Error(), "unexpected entry") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+func preparedTestConsumerValidation() providerapi.GraphConsumerValidation {
+	input := func(id string, role string, invocationPath string) providerapi.ValidatedExecutableInput {
+		evidence := schemaTestInterpreterEvidence()
+		evidence.RequirementID = id
+		evidence.Output = providerapi.QualifiedOutput{Component: "base", Name: id}
+		evidence.InvocationPath = invocationPath
+		evidence.Terminal.RequirementID = id
+		evidence.Terminal.Path = invocationPath
+		evidence.Access.Paths[0].Path = invocationPath
+		return providerapi.ValidatedExecutableInput{ID: id, Role: role, Policy: providerapi.ValidationPolicyCompatible, Evidence: evidence}
+	}
+	return providerapi.GraphConsumerValidation{
+		Carrier:             input("carrier", providerapi.ExecutableRoleCarrier, "/bin/sh"),
+		EnvironmentLauncher: input("cleanenv", providerapi.ExecutableRoleEnvironmentLauncher, "/usr/bin/env"),
+		FinalImageConfig: providerapi.ImageConfigPolicy{
+			User: "1000:1000", WorkingDir: "/work", Environment: []providerapi.EnvironmentVariable{},
+			Entrypoint: []string{}, Command: []string{}, Healthcheck: providerapi.ImageHealthcheckNone,
+			StopSignal: "SIGTERM", Labels: []providerapi.ImageLabel{},
+		},
 	}
 }
 
@@ -116,7 +192,7 @@ func preparedTestRealizedOutputs(bundle providerapi.ResolvedBundle) []providerap
 	return result
 }
 
-func TestPreparedNodeResolverRequiresResolvedSourcePrecedence(t *testing.T) {
+func TestWheelNodeResolverRequiresResolvedSourceArtifactDigest(t *testing.T) {
 	dir := t.TempDir()
 	wheel := "demo_server-1.2.3-py3-none-any.whl"
 	writeTestWheel(t, dir, wheel, "Demo-Server", "1.2.3", nil)
@@ -132,8 +208,10 @@ func TestPreparedNodeResolverRequiresResolvedSourcePrecedence(t *testing.T) {
 		EcosystemMetadata: providerapi.CanonicalProviderData{Schema: "python-source-metadata-v1", Value: canonical.Object{}},
 		ArtifactDigest:    canonical.Digest("sha256:" + wheelDigest),
 	}
-	resolver := PreparedNodeResolver{
-		Dir: dir,
+	resolver := WheelNodeResolver{
+		PrepareWheels: func(context.Context, providerapi.ResolveInput, providerapi.ExecutableEvidence) (string, error) {
+			return dir, nil
+		},
 		ResolveInterpreter: func(context.Context, providerapi.ExecutableRequirement, []providerapi.RealizedOutput, providerapi.RealizedImageV1, blueprint.Platform) (providerapi.ExecutableEvidence, error) {
 			return selectedEvidence, nil
 		},
@@ -144,20 +222,6 @@ func TestPreparedNodeResolverRequiresResolvedSourcePrecedence(t *testing.T) {
 		ReusableArtifacts: []providerstore.StoreObjectRef{},
 	}
 	validators := providerapi.ProviderOwnerValidators{Profile: ValidateRequirementProfileV1, Bundle: ValidateResolvedBundlePayloadV1}
-	if _, err := providerapi.ResolveProviderNode(context.Background(), request, resolver, preparedTestSink{}, validators); err == nil || !strings.Contains(err.Error(), "did not take precedence") {
-		t.Fatalf("missing source precedence error = %v", err)
-	}
-	manifest := map[string]any{
-		"schema_version": 1,
-		"local_sources":  map[string]any{"demo-server": map[string]any{"wheel": wheel, "fingerprint": "test"}},
-	}
-	content, err := json.Marshal(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, preparedBundleManifestName), content, 0o644); err != nil {
-		t.Fatal(err)
-	}
 	result, err := providerapi.ResolveProviderNode(context.Background(), request, resolver, preparedTestSink{}, validators)
 	if err != nil {
 		t.Fatal(err)
@@ -333,6 +397,31 @@ func TestRequirementAllowsVersion(t *testing.T) {
 		if !checked || got != test.want {
 			t.Errorf("requirementAllowsVersion(%q, %q) = (%v, %v), want (%v, true)", test.requirement, test.version, got, checked, test.want)
 		}
+	}
+}
+
+func TestInterpreterVersionSatisfiesObservedRuntime(t *testing.T) {
+	tests := []struct {
+		constraint string
+		version    string
+		want       bool
+	}{
+		{constraint: "", version: "3.13.2", want: true},
+		{constraint: ">=3.11", version: "3.13.2", want: true},
+		{constraint: ">=3.11,<3.13", version: "3.13.2", want: false},
+		{constraint: "~=3.12.0", version: "3.12.7", want: true},
+	}
+	for _, test := range tests {
+		got, err := InterpreterVersionSatisfies(test.constraint, test.version)
+		if err != nil {
+			t.Fatalf("InterpreterVersionSatisfies(%q, %q): %v", test.constraint, test.version, err)
+		}
+		if got != test.want {
+			t.Errorf("InterpreterVersionSatisfies(%q, %q) = %v, want %v", test.constraint, test.version, got, test.want)
+		}
+	}
+	if _, err := InterpreterVersionSatisfies("not-a-specifier", "3.13.2"); err == nil {
+		t.Fatal("unsupported interpreter constraint was accepted")
 	}
 }
 

@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/omry/reploy/internal/blueprint"
-	"github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/legacyprovider"
 )
 
 func TestGeneratedImageBuildKitIntegration(t *testing.T) {
@@ -43,10 +43,10 @@ func TestGeneratedImageBuildKitIntegration(t *testing.T) {
 	digestSum := sha256.Sum256(evidence)
 	plan := GeneratedImagePlan{
 		BaseImage: base, BaseIdentity: digest, Tag: tag, BundleDir: bundleDir,
-		Materialization: providers.Materialization{
+		Materialization: legacyprovider.Materialization{
 			Provider: blueprint.ComponentTypePython, Version: "integration-v1", BundleMount: "/reploy-bundle",
-			Artifacts: []providers.Artifact{{Identifier: "evidence", Kind: "fixture", Path: "evidence.txt", SHA256: fmt.Sprintf("%x", digestSum[:])}},
-			Steps: []providers.MaterializationStep{{Argv: []string{
+			Artifacts: []legacyprovider.Artifact{{Identifier: "evidence", Kind: "fixture", Path: "evidence.txt", SHA256: fmt.Sprintf("%x", digestSum[:])}},
+			Steps: []legacyprovider.MaterializationStep{{Argv: []string{
 				"sh", "-c", "test -f /reploy-bundle/evidence.txt && cp /reploy-bundle/evidence.txt /reploy-evidence.txt",
 			}}},
 		},

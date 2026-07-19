@@ -438,7 +438,7 @@ boundaries requires a schema/identity review:
 | `internal/canonical` | `Digest`, `Envelope`, and the validated canonical value/object implementation |
 | `internal/deploy` | `RequestOverlayV1`, `QualifiedOption`, `DirectPackageRequest`, `ImageDescriptor`, `BaseConfig`, `ConfigEnvironmentVariable`, `RuntimePolicyV1`, `ProtectedPathV1`, `RuntimePlanV1`, `RuntimeMountV1`, `StateV1`, `EnvironmentGenerationState`, `BuildLockV1`, `ProviderGraphLockV1`, `NodeLockV1`, `PendingBuildV1`, `PendingCandidateV1`, `CleanupItemV1` |
 | `internal/providerstore` | `ArtifactDescriptor`, `StoreObjectRef`, immutable publication and reachability |
-| `internal/providers` | `CanonicalProviderData`, `CanonicalProviderRequest`, `CanonicalPackageRequest`, `ResolvedSourceInput`, `Provider`, `ProviderPlanV1`, `PlanInput`, `ResolveInput`, `RequirementCandidatesV1`, `ResolveResult`, `MaterializeInput`, `ArtifactSink`, `NodeSpec`, `RequirementDeclaration`, `NodeID`, `ProviderEdgeV1`, `OutputDeclaration`, `ExecutableRequirement`, `FileRequirement`, `RequirementProfile`, `ValidationEvidence`, `ResolvedBundle`, `ResolvedBundleIdentityV1`, `ResolvedRequestV1`, `ResolvedComponentRequestV1`, `ResolverCacheKeyV1`, `AssemblyKeyV1`, `MaterializationTransaction`, `ValidatedExecutableInput`, `TypedArgument`, `ChildEnvironmentProfile`, `EnvironmentVariable`, `ContainerIdentity`, `NetworkPolicy`, `BuildMount`, `GeneratedExecutableDeclaration`, `ImageConfigPolicy`, `ImageLabel`, `ResolvedOutput`, `ExecutableCandidate`, `RealizedOutput`, `ExecutableEvidence`, `QualifiedOutput`, `LinkEvidence`, `OwnerEvidence`, `FileEvidence`, `PortableAccessEvidence`, `AccessPathEvidence`, `RealizedImageV1`, `BuildErrorV1`, `SafeErrorSubjectV1`, `CorrectionV1` |
+| `internal/providers` | `CanonicalProviderData`, `CanonicalProviderRequest`, `CanonicalPackageRequest`, `ResolvedSourceInput`, `Provider`, `ProviderPlanV1`, `PlanInput`, `ResolveInput`, `RequirementCandidatesV1`, `ResolveResult`, `MaterializeInput`, `ArtifactSink`, `NodeSpec`, `RequirementDeclaration`, `NodeID`, `ProviderEdgeV1`, `OutputDeclaration`, `ExecutableRequirement`, `FileRequirement`, `RequirementProfile`, `ValidationEvidence`, `ResolvedBundle`, `ResolvedBundleIdentityV1`, `ResolvedRequestV1`, `ResolvedComponentRequestV1`, `ResolverCacheKeyV1`, `AssemblyKeyV1`, `MaterializationTransaction`, `ValidatedExecutableInput`, `TypedArgument`, `ChildEnvironmentProfile`, `EnvironmentVariable`, `ContainerIdentity`, `NetworkPolicy`, `BuildMount`, `GeneratedExecutableDeclaration`, `RealizedGeneratedExecutable`, `GeneratedExecutableEvidence`, `GeneratedFileEvidence`, `ImageConfigPolicy`, `ImageLabel`, `ResolvedOutput`, `ExecutableCandidate`, `RealizedOutput`, `ExecutableEvidence`, `QualifiedOutput`, `LinkEvidence`, `OwnerEvidence`, `FileEvidence`, `PortableAccessEvidence`, `AccessPathEvidence`, `RealizedImageV1`, `BuildErrorV1`, `SafeErrorSubjectV1`, `CorrectionV1` |
 | `internal/providers/apt` | `DistributionProfile`, `APTProviderRequestV1`, `APTComponentRequestV1`, `BundleV1`, `PackageTuple`, `BasePackage`, `BundlePackage`, `ArchiveMemberV1`, `AlternativeEvidence`, `DpkgOwnerEvidence`, and APT-specific provenance payloads |
 | `internal/providers/python` | `PythonProviderRequestV1`, `PythonBundleV1`, `PythonWheelV1`, `PythonConsoleScriptV1`, and Python-specific facts/provenance payloads |
 | `internal/dockerdeploy` | `PrefixValidationV1`, label rendering, runtime-policy validation, and Docker inspection/rendering |
@@ -555,9 +555,12 @@ type ResolveResult struct {
 }
 
 type MaterializeInput struct {
-    Bundle        ResolvedBundle
-    Profile       RequirementProfile
-    AssemblyParent RealizedImageV1
+    Bundle              ResolvedBundle
+    Profile             RequirementProfile
+    AssemblyParent      RealizedImageV1
+    Carrier             ValidatedExecutableInput
+    EnvironmentLauncher ValidatedExecutableInput
+    FinalImageConfig    ImageConfigPolicy
 }
 
 type ArtifactSink interface {
@@ -615,6 +618,15 @@ after the resolver has exited and host-side provider inspection has accepted
 that output. It returns the verified descriptor and never exposes or accepts a
 physical store path. The executor publishes the returned `ResolvedBundle` as
 the sole manifest after validating its complete descriptor set.
+
+The existing consumer validation operation also validates the backend-owned
+carrier and clean-environment launcher against `AssemblyParent`. At that same
+backend boundary it computes the normalized final in-container image defaults,
+including user, working directory, environment, entrypoint, command,
+healthcheck, stop signal, and labels. It returns all three results to the graph
+coordinator, which passes them unchanged in `MaterializeInput`. The provider
+therefore does not invent fixed-path evidence, guess image defaults, or start a
+separate prerequisite-probe container before returning its closed transaction.
 
 `ResolveInput.Platform` is the already selected OCI target platform. The
 resolver still uses the exact selected image's native package tooling; this
@@ -1398,6 +1410,29 @@ type GeneratedExecutableDeclaration struct {
     ValidationPolicy   string
 }
 
+type RealizedGeneratedExecutable struct {
+    Declaration GeneratedExecutableDeclaration
+    Evidence    GeneratedExecutableEvidence
+}
+
+type GeneratedExecutableEvidence struct {
+    Schema         string
+    InvocationPath string
+    LinkChain      []LinkEvidence
+    Terminal       GeneratedFileEvidence
+    Access         PortableAccessEvidence
+    Facts          CanonicalProviderData
+}
+
+type GeneratedFileEvidence struct {
+    Path   string
+    Kind   string
+    Mode   string
+    Size   string
+    SHA256 canonical.Digest
+    Owner  *OwnerEvidence
+}
+
 type ImageConfigPolicy struct {
     User        string
     WorkingDir  string
@@ -1425,20 +1460,39 @@ typed inputs rather than one overloaded runner.
 `TypedArgument` is a strict union. Its `Kind` is exactly `literal`,
 `validated-executable`, `generated-executable`, or `mounted-artifact`, and only
 the corresponding fields may be nonempty. A `mounted-artifact` uses `MountID`
-plus a normalized relative path; no host path enters the record. The renderer
-rejects a `literal` in command position. A fixed trusted recipe may use a
-generated executable after its declared generating operation. The initial
+plus the artifact's normalized manifest logical path unchanged; no host path
+enters the record. The backend maps that pair back to the verified descriptor,
+rejects missing, repeated, or unused bundle artifacts, and resolves the physical
+store path only while staging the private build context. The renderer rejects a
+`literal` in command position. A fixed trusted recipe may use a generated
+executable after its declared generating operation. The initial
 Python case is the controlled venv interpreter entry: immediately before venv
 creation the selected base/APT executable is revalidated as Python and its
 actual compatible version is recorded; the venv entry is then a link or copy
 derived from that validated interpreter, not a separately sourced Python
 installation. The host backend does not pause the single `RUN`. It validates
-the completed layer and produces realized `ExecutableEvidence` before accepting
-the layer or exposing the generated path downstream.
+the completed layer and produces `RealizedGeneratedExecutable` evidence before
+accepting the layer or exposing the generated path downstream.
+
+Generated-executable evidence uses schema `generated-executable-evidence-v1`.
+It records the observed invocation/link/terminal/access/facts evidence beside
+the exact original declaration and is persisted in `NodeLockV1`. It deliberately
+has no `QualifiedOutput`: internal tools such as `venv_python` are not added to
+the public provider catalog. Public console-script outputs continue to use
+`RealizedOutput` and `ExecutableEvidence` independently.
 
 Environment names match `[A-Za-z_][A-Za-z0-9_]*`, are unique and sorted, and
 the profile always sets `InheritNone`. `Umask` is four lowercase octal digits.
 Secrets are not transaction fields.
+
+The initial Python transaction uses recipe `python-materialize-v1` and child
+environment `python-v1` with `InheritNone=true`, `Umask=0022`, and no variables.
+It runs as numeric root from `/` with `NetworkPolicy=none`. Its read-only script
+mount is keyed by the provider-owned script digest; its read-only wheel mount is
+keyed by the complete resolved-bundle identity. The selected interpreter is a
+validated input, while the component venv interpreter and console scripts are
+declared generated executables beneath the component's exclusive root.
+
 Container IDs are unsigned base-10 strings; supplementary GIDs are unique and
 numerically sorted. `NetworkPolicy` is `none` for every materialization
 transaction. Mount IDs are unique and sorted; destinations are normalized
@@ -1679,6 +1733,69 @@ discovery. A consuming operation validates the path against its exact immediate
 prefix before using it; final-image validation does the same for an output
 exposed at runtime.
 
+### Native validation helper
+
+Low-level filesystem observation is implemented by `reploy-probe`, a small
+native utility that resolves the requested absolute invocation paths, records
+their symlink chains, hashes each regular terminal, and reports modes plus
+numeric UID/GID for the complete access paths. Its closed canonical request and
+response schemas are `reploy-probe-request-v1` and
+`reploy-probe-response-v1`. It accepts no provider expressions, shell text, or
+arbitrary executable. A fixed `hold` argument only keeps a full-validation
+container alive; it performs no inspection or command dispatch. A request has
+no Reploy-defined path, chain, byte, or elapsed-time limit and remains subject
+to caller cancellation and ordinary operating-system resource failures.
+
+The release build compiles exactly three static helpers:
+
+| Target | Build settings |
+|---|---|
+| `linux/amd64` | `CGO_ENABLED=0` |
+| `linux/arm64` | `CGO_ENABLED=0` |
+| `linux/arm/v7` | `CGO_ENABLED=0`, `GOARM=7` |
+
+Every Linux, macOS, and Windows Reploy release binary contains all three in a
+deterministic appended ZIP with one canonical `reploy-probe-archive-v1`
+manifest. Appending preserves the main executable's normal launch and metadata
+inspection. Reploy verifies the archive's closed layout, entry names, sizes,
+CRC values, and SHA-256 values before use. It extracts only the selected helper
+as mode `0555` into an already-created private deployment workspace beneath:
+
+```text
+<deployment>/.reploy/provider-store/tmp/probe-*/reploy-probe
+```
+
+That directory is the complete read-only bind source at
+`/.reploy-validation`; the executable is therefore always
+`/.reploy-validation/reploy-probe`. The workspace is not a cache. It is removed
+after the containing operation, including failed extraction and cancelled or
+failed validation. Crash cleanup treats a retained `probe-*` directory as
+ordinary deployment-local temporary state. Reploy never installs a helper in
+the host or image, adds one to `PATH`, or creates a machine-wide helper store.
+
+Consumer prerequisite observation runs inside the already-required resolver or
+materializer as its first step. The selected helper workspace is mounted into
+that container and invoked there; no standalone prerequisite-probe container is
+created. Provider-specific logic remains in the main Reploy implementation:
+APT ownership and alternatives checks use fixed absolute package tools, and
+Python compatibility uses its typed fixed invocation.
+
+Full final-image validation and each additive `--validate-layers` check use one
+held validation container per image. Reploy creates it from the exact immutable
+reference with `--pull never`, the exact OCI platform, numeric user `0:0`, `/`
+as working directory, a read-only root filesystem, no network, the helper
+workspace mounted read-only, and the helper's fixed `hold` entrypoint. One
+Docker preflight covers the complete create/start/exec/remove session. All
+currently required executable observations are combined into one sorted probe
+request; additional provider-owned checks use only separately implemented fixed
+session operations, never a generic exec surface. Reploy removes the exact
+named container on completion, failure, or caller cancellation.
+
+Ordinary Docker platform selection supports a foreign target when the host has
+working binfmt/QEMU emulation. An unavailable emulator produces an explicit
+cross-architecture error. Reploy requires neither a separate Buildx command nor
+a Docker Desktop version for this mechanism.
+
 APT ownership validation resolves the selected path without searching for
 tools. For each ordinary path hop and the terminal, literal `dpkg-query -S`
 must return an installed package key; its exact `(name, version, architecture,
@@ -1720,10 +1837,13 @@ Python then resolves/builds wheels in a disposable resolver container based on
 that exact upstream prefix. An exact complete Python bundle hit skips the
 resolver. On a miss, compatible verified wheels are mounted read-only through
 `--find-links`; newly downloaded or built wheels go to a separate initially
-empty output. The resolver never copies the previous wheelhouse into its
-writable output. Downloaded wheel reuse requires compatible interpreter, ABI,
-platform, architecture, and tags; locally built wheel reuse also binds source
-and complete build identity.
+empty output. Reploy never seeds that output by copying the previous
+wheelhouse. The single resolver invocation may write its complete selected
+closure there, including temporary copies of selected reusable wheels. During
+ingestion, matching digests reuse the existing immutable store blobs, and the
+entire resolver workspace is then removed. Downloaded wheel reuse requires
+compatible interpreter, ABI, platform, architecture, and tags; locally built
+wheel reuse also binds source and complete build identity.
 
 Offline materialization creates its venv at:
 
@@ -2112,6 +2232,7 @@ type NodeLockV1 struct {
     TransactionDigest  canonical.Digest
     Upstream           RealizedImageV1
     Result             RealizedImageV1
+    GeneratedExecutables []RealizedGeneratedExecutable
     Outputs            []RealizedOutput
 }
 
@@ -2218,7 +2339,8 @@ directory.
 ## Image References and Publication
 
 Image contents and Reploy-owned labels contain no directory identity. Reploy
-uses two kinds of image references, both owned by one deployment directory:
+publishes two kinds of image references, both owned by one deployment
+directory:
 
 ```text
 temporary:   reploy/env/<slug>-<dirhash>:tmp-<random>
@@ -2228,6 +2350,14 @@ generation:  reploy/env/<slug>-<dirhash>:g-<random>
 V1 creates no canonical or shared Reploy image tag and performs no
 cross-deployment completed-image lookup. Docker and its builder may still reuse
 physical layers and build-cache entries under Docker's own policies.
+
+An individual materialization or finalization build may additionally create a
+unique deployment-scoped temporary base reference so an ordinary `docker
+build` can name an exact local image in `FROM`. Reploy verifies that reference
+against the expected Docker config ID immediately before the build and removes
+it on both success and failure. It is private backend state: it is not a
+blueprint option, a published environment reference, a cache key, deployment
+state, or content identity.
 
 The publication protocol is:
 

@@ -74,6 +74,7 @@ func TestFinalizationDockerfileAddsOnlyFixedValidationLabels(t *testing.T) {
 
 func TestBuildFinalizedImageCandidateUsesOrdinaryUntaggedBuild(t *testing.T) {
 	store, request := finalizationBuildFixture(t)
+	stubFinalizationBuildBaseReference(t, request.Source.Image.ConfigDigest)
 	original := runFinalizationBuildCommand
 	t.Cleanup(func() { runFinalizationBuildCommand = original })
 	var workspace string

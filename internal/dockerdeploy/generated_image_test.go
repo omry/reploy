@@ -6,15 +6,15 @@ import (
 	"testing"
 
 	"github.com/omry/reploy/internal/blueprint"
-	"github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/legacyprovider"
 )
 
 func TestGeneratedImagePrototypeUsesBuildKitReadOnlyMountAndExecArgv(t *testing.T) {
 	plan := GeneratedImagePlan{
 		BaseImage: "python:3.13-slim", BaseIdentity: "python@sha256:base", Tag: "reploy/demo:staging", BundleDir: t.TempDir(),
-		Materialization: providers.Materialization{
+		Materialization: legacyprovider.Materialization{
 			Provider: blueprint.ComponentTypePython, Version: "python-v1", BundleMount: "/reploy-bundle",
-			Steps: []providers.MaterializationStep{{Argv: []string{"python", "-m", "venv", "/opt/reploy/python"}}},
+			Steps: []legacyprovider.MaterializationStep{{Argv: []string{"python", "-m", "venv", "/opt/reploy/python"}}},
 		},
 		Labels: map[string]string{"io.reploy.environment": "demo", "io.reploy.state": "staging"},
 	}
@@ -67,9 +67,9 @@ func TestBuildGeneratedImageUsesInjectableRunner(t *testing.T) {
 	}
 	plan := GeneratedImagePlan{
 		BaseImage: "python:3.13", BaseIdentity: "python@sha256:base", Tag: "reploy/test:staging", BundleDir: t.TempDir(),
-		Materialization: providers.Materialization{
+		Materialization: legacyprovider.Materialization{
 			Provider: blueprint.ComponentTypePython, Version: "v1", BundleMount: "/bundle",
-			Steps: []providers.MaterializationStep{{Argv: []string{"python", "--version"}}},
+			Steps: []legacyprovider.MaterializationStep{{Argv: []string{"python", "--version"}}},
 		},
 	}
 	if err := BuildGeneratedImage(plan, RunOptions{}); err != nil {
@@ -85,7 +85,7 @@ func TestPrepareGeneratedBuildContextRejectsArtifactDrift(t *testing.T) {
 	if err := os.WriteFile(bundleDir+"/demo.whl", []byte("changed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, cleanup, err := prepareGeneratedBuildContext(bundleDir, []providers.Artifact{{
+	_, cleanup, err := prepareGeneratedBuildContext(bundleDir, []legacyprovider.Artifact{{
 		Identifier: "demo", Kind: "wheel", Path: "demo.whl", SHA256: strings.Repeat("a", 64),
 	}})
 	cleanup()
@@ -96,9 +96,9 @@ func TestPrepareGeneratedBuildContextRejectsArtifactDrift(t *testing.T) {
 
 func TestGeneratedImageDockerfileDoesNotInterpretProviderArgv(t *testing.T) {
 	plan := GeneratedImagePlan{
-		BaseImage: "python", Materialization: providers.Materialization{
+		BaseImage: "python", Materialization: legacyprovider.Materialization{
 			Provider: blueprint.ComponentTypePython, Version: "v1", BundleMount: "/bundle",
-			Steps: []providers.MaterializationStep{{Argv: []string{"tool", "$(touch /tmp/pwned)", ";rm -rf /"}}},
+			Steps: []legacyprovider.MaterializationStep{{Argv: []string{"tool", "$(touch /tmp/pwned)", ";rm -rf /"}}},
 		},
 	}
 	content, err := GeneratedImageDockerfile(plan)

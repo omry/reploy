@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/omry/reploy/internal/blueprint"
-	"github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/legacyprovider"
 )
 
 type LifecycleOperationKind string
@@ -31,7 +31,7 @@ type LifecyclePlan struct {
 	Operations []LifecycleOperation
 }
 
-func PlanInstallLifecycle(document blueprint.Document, dockerPlan DockerExecutionPlan, outputs map[string]providers.ExecutableOutput, start bool) (LifecyclePlan, error) {
+func PlanInstallLifecycle(document blueprint.Document, dockerPlan DockerExecutionPlan, outputs map[string]legacyprovider.ExecutableOutput, start bool) (LifecyclePlan, error) {
 	plan := LifecyclePlan{Operations: []LifecycleOperation{{Kind: LifecycleMaterialize, Event: "install"}}}
 	if err := appendLifecycleSteps(&plan, "after_install", document.Environment.Install.AfterInstall, document, dockerPlan, outputs); err != nil {
 		return LifecyclePlan{}, err
@@ -89,7 +89,7 @@ func resolveEnvironmentOperationStrings(document blueprint.Document, plan Docker
 	return blueprint.ResolveOperationStrings(values, document.Environment.Vars, plan.Phase, plan.Scope, roots)
 }
 
-func PlanStartLifecycle(document blueprint.Document, dockerPlan DockerExecutionPlan, outputs map[string]providers.ExecutableOutput) (LifecyclePlan, error) {
+func PlanStartLifecycle(document blueprint.Document, dockerPlan DockerExecutionPlan, outputs map[string]legacyprovider.ExecutableOutput) (LifecyclePlan, error) {
 	plan := LifecyclePlan{}
 	if err := appendStartLifecycle(&plan, document, dockerPlan, outputs); err != nil {
 		return LifecyclePlan{}, err
@@ -97,7 +97,7 @@ func PlanStartLifecycle(document blueprint.Document, dockerPlan DockerExecutionP
 	return plan, nil
 }
 
-func appendStartLifecycle(plan *LifecyclePlan, document blueprint.Document, dockerPlan DockerExecutionPlan, outputs map[string]providers.ExecutableOutput) error {
+func appendStartLifecycle(plan *LifecyclePlan, document blueprint.Document, dockerPlan DockerExecutionPlan, outputs map[string]legacyprovider.ExecutableOutput) error {
 	if document.Environment.Workload == nil || dockerPlan.Workload == nil {
 		return fmt.Errorf("environment has no workload to start")
 	}
@@ -108,7 +108,7 @@ func appendStartLifecycle(plan *LifecyclePlan, document blueprint.Document, dock
 	return appendLifecycleSteps(plan, "after_start", document.Environment.Workload.Runtime.AfterStart, document, dockerPlan, outputs)
 }
 
-func PlanStopLifecycle(document blueprint.Document, dockerPlan DockerExecutionPlan, outputs map[string]providers.ExecutableOutput) (LifecyclePlan, error) {
+func PlanStopLifecycle(document blueprint.Document, dockerPlan DockerExecutionPlan, outputs map[string]legacyprovider.ExecutableOutput) (LifecyclePlan, error) {
 	if document.Environment.Workload == nil || dockerPlan.Workload == nil {
 		return LifecyclePlan{}, fmt.Errorf("environment has no workload to stop")
 	}
@@ -123,7 +123,7 @@ func PlanStopLifecycle(document blueprint.Document, dockerPlan DockerExecutionPl
 	return plan, nil
 }
 
-func PlanRestartLifecycle(document blueprint.Document, dockerPlan DockerExecutionPlan, outputs map[string]providers.ExecutableOutput) (LifecyclePlan, error) {
+func PlanRestartLifecycle(document blueprint.Document, dockerPlan DockerExecutionPlan, outputs map[string]legacyprovider.ExecutableOutput) (LifecyclePlan, error) {
 	stop, err := PlanStopLifecycle(document, dockerPlan, outputs)
 	if err != nil {
 		return LifecyclePlan{}, err
@@ -135,7 +135,7 @@ func PlanRestartLifecycle(document blueprint.Document, dockerPlan DockerExecutio
 	return LifecyclePlan{Operations: append(stop.Operations, start.Operations...)}, nil
 }
 
-func appendLifecycleSteps(plan *LifecyclePlan, event string, steps []blueprint.Step, document blueprint.Document, dockerPlan DockerExecutionPlan, outputs map[string]providers.ExecutableOutput) error {
+func appendLifecycleSteps(plan *LifecyclePlan, event string, steps []blueprint.Step, document blueprint.Document, dockerPlan DockerExecutionPlan, outputs map[string]legacyprovider.ExecutableOutput) error {
 	for stepIndex, step := range steps {
 		for _, endpointName := range step.Requires.Endpoints {
 			if dockerPlan.Workload == nil {

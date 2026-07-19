@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/legacyprovider"
 )
 
 type GeneratedImagePlan struct {
@@ -19,7 +19,7 @@ type GeneratedImagePlan struct {
 	BaseIdentity    string
 	Tag             string
 	BundleDir       string
-	Materialization providers.Materialization
+	Materialization legacyprovider.Materialization
 	Labels          map[string]string
 }
 
@@ -60,7 +60,7 @@ func BuildGeneratedImage(plan GeneratedImagePlan, options RunOptions) error {
 	return nil
 }
 
-func prepareGeneratedBuildContext(bundleDir string, artifacts []providers.Artifact) (string, func(), error) {
+func prepareGeneratedBuildContext(bundleDir string, artifacts []legacyprovider.Artifact) (string, func(), error) {
 	if len(artifacts) == 0 {
 		return bundleDir, func() {}, nil
 	}

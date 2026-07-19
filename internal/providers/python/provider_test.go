@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/omry/reploy/internal/blueprint"
-	providerapi "github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/legacyprovider"
 )
 
 func TestClassifyRootAcceptsContainerAbsoluteWheel(t *testing.T) {
@@ -115,7 +115,7 @@ func (resolver fakeBundleResolver) ResolvePython(context.Context, LegacyResolveR
 func TestComponentProviderResolvesExecutableAndOfflineRecipe(t *testing.T) {
 	provider := ComponentProvider{Resolver: fakeBundleResolver{resolved: ResolvedSet{
 		BaseIdentity: "python@sha256:base",
-		Artifacts: []providerapi.Artifact{{
+		Artifacts: []legacyprovider.Artifact{{
 			Identifier: "demo-server", Version: "1.0", Kind: "wheel",
 			Path: "demo_server-1.0-py3-none-any.whl", SHA256: strings.Repeat("a", 64),
 		}},
@@ -132,7 +132,7 @@ func TestComponentProviderResolvesExecutableAndOfflineRecipe(t *testing.T) {
 	if got := bundle.Executables["server"].ImagePath; got != "/opt/reploy/providers/python/bin/demo-server" {
 		t.Fatalf("image path = %q", got)
 	}
-	materialization, err := provider.Materialize(providerapi.MaterializeRequest{Bundle: bundle})
+	materialization, err := provider.LegacyMaterialize(legacyprovider.MaterializeRequest{Bundle: bundle})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestComponentProviderResolvesExecutableAndOfflineRecipe(t *testing.T) {
 func TestComponentProviderRejectsMissingConsoleScript(t *testing.T) {
 	provider := ComponentProvider{Resolver: fakeBundleResolver{resolved: ResolvedSet{
 		BaseIdentity: "python@sha256:base",
-		Artifacts: []providerapi.Artifact{{
+		Artifacts: []legacyprovider.Artifact{{
 			Identifier: "demo", Kind: "wheel", Path: "demo.whl", SHA256: strings.Repeat("a", 64),
 		}},
 		ConsoleScripts: map[string]string{},
@@ -195,16 +195,16 @@ func TestComponentProviderContractIsDeterministic(t *testing.T) {
 	if len(prerequisites) != 2 || prerequisites[0].ProbeArgv[0] != "python" {
 		t.Fatalf("prerequisites = %#v", prerequisites)
 	}
-	bundle := providerapi.Bundle{
+	bundle := legacyprovider.Bundle{
 		Provider: blueprint.ComponentTypePython, RecipeVersion: RecipeVersion,
 		Platform: "linux/amd64", BaseIdentity: "python@sha256:base",
-		Artifacts: []providerapi.Artifact{
+		Artifacts: []legacyprovider.Artifact{
 			{Identifier: "z", Kind: "wheel", Path: "z.whl", SHA256: strings.Repeat("a", 64)},
 			{Identifier: "a", Kind: "wheel", Path: "a.whl", SHA256: strings.Repeat("b", 64)},
 		},
-		Executables: map[string]providerapi.ExecutableOutput{},
+		Executables: map[string]legacyprovider.ExecutableOutput{},
 	}
-	materialization, err := provider.Materialize(providerapi.MaterializeRequest{Bundle: bundle})
+	materialization, err := provider.LegacyMaterialize(legacyprovider.MaterializeRequest{Bundle: bundle})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func TestComponentProviderContractIsDeterministic(t *testing.T) {
 	if strings.Index(joined, "/reploy-bundle/a.whl") > strings.Index(joined, "/reploy-bundle/z.whl") {
 		t.Fatalf("wheel order is not deterministic: %s", joined)
 	}
-	if _, err := provider.Materialize(providerapi.MaterializeRequest{Bundle: providerapi.Bundle{
+	if _, err := provider.LegacyMaterialize(legacyprovider.MaterializeRequest{Bundle: legacyprovider.Bundle{
 		Provider: blueprint.ComponentTypePython, RecipeVersion: "python-v2",
 	}}); err == nil || !strings.Contains(err.Error(), "unsupported Python recipe") {
 		t.Fatalf("recipe error = %v", err)

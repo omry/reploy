@@ -15,6 +15,7 @@ import (
 type MaterializationMountFile struct {
 	RelativePath string
 	Artifact     providerstore.ArtifactDescriptor
+	verifiedPath string
 }
 
 type MaterializationMountInput struct {
@@ -79,14 +80,10 @@ func PrepareMaterializationContext(store providerstore.Store, transaction provid
 				cleanup()
 				return PreparedMaterializationContext{}, func() {}, fmt.Errorf("materialization mount %q: %w", mount.ID, err)
 			}
-			if err := store.VerifyArtifact(file.Artifact); err != nil {
-				cleanup()
-				return PreparedMaterializationContext{}, func() {}, fmt.Errorf("verify materialization mount %q file %q: %w", mount.ID, file.RelativePath, err)
-			}
-			source, err := store.BlobPath(file.Artifact.SHA256)
+			source, err := materializationArtifactSource(store, file)
 			if err != nil {
 				cleanup()
-				return PreparedMaterializationContext{}, func() {}, err
+				return PreparedMaterializationContext{}, func() {}, fmt.Errorf("verify materialization mount %q file %q: %w", mount.ID, file.RelativePath, err)
 			}
 			target := filepath.Join(mountDir, filepath.FromSlash(file.RelativePath))
 			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
@@ -101,6 +98,26 @@ func PrepareMaterializationContext(store providerstore.Store, transaction provid
 		prepared.Sources = append(prepared.Sources, MaterializationMountSource{ID: mount.ID, ContextPath: mountRelative})
 	}
 	return prepared, cleanup, nil
+}
+
+func materializationArtifactSource(store providerstore.Store, file MaterializationMountFile) (string, error) {
+	if file.verifiedPath == "" {
+		if err := store.VerifyArtifact(file.Artifact); err != nil {
+			return "", err
+		}
+		return store.BlobPath(file.Artifact.SHA256)
+	}
+	root := filepath.Join(store.Root(), "tmp")
+	relative, err := filepath.Rel(root, file.verifiedPath)
+	inTemporaryRoot := err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+	storePath, storePathErr := store.BlobPath(file.Artifact.SHA256)
+	if !inTemporaryRoot && (storePathErr != nil || file.verifiedPath != storePath) {
+		return "", fmt.Errorf("verified artifact path must be the exact store blob or beneath the provider-store temporary root")
+	}
+	if err := providerstore.InspectArtifactFile(file.verifiedPath, file.Artifact); err != nil {
+		return "", err
+	}
+	return file.verifiedPath, nil
 }
 
 func validateMaterializationMountFile(file MaterializationMountFile, files []MaterializationMountFile, index int) error {

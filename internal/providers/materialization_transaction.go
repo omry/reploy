@@ -6,8 +6,9 @@ import (
 )
 
 const (
-	MaterializationTransactionSchemaV1 = "materialization-transaction-v1"
-	ChildEnvironmentSchemaV1           = "child-environment-v1"
+	MaterializationTransactionSchemaV1  = "materialization-transaction-v1"
+	ChildEnvironmentSchemaV1            = "child-environment-v1"
+	GeneratedExecutableEvidenceSchemaV1 = "generated-executable-evidence-v1"
 
 	ExecutableRoleCarrier              = "carrier"
 	ExecutableRoleEnvironmentLauncher  = "environment-launcher"
@@ -98,6 +99,29 @@ type GeneratedExecutableDeclaration struct {
 	Path             string `json:"path"`
 	ExclusiveRoot    string `json:"exclusive_root"`
 	ValidationPolicy string `json:"validation_policy"`
+}
+
+type RealizedGeneratedExecutable struct {
+	Declaration GeneratedExecutableDeclaration `json:"declaration"`
+	Evidence    GeneratedExecutableEvidence    `json:"evidence"`
+}
+
+type GeneratedExecutableEvidence struct {
+	Schema         string                 `json:"schema"`
+	InvocationPath string                 `json:"invocation_path"`
+	LinkChain      []LinkEvidence         `json:"link_chain"`
+	Terminal       GeneratedFileEvidence  `json:"terminal"`
+	Access         PortableAccessEvidence `json:"access"`
+	Facts          CanonicalProviderData  `json:"facts"`
+}
+
+type GeneratedFileEvidence struct {
+	Path   string           `json:"path"`
+	Kind   string           `json:"kind"`
+	Mode   string           `json:"mode"`
+	Size   string           `json:"size"`
+	SHA256 canonical.Digest `json:"sha256"`
+	Owner  *OwnerEvidence   `json:"owner,omitempty"`
 }
 
 type ImageConfigPolicy struct {

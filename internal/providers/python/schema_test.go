@@ -14,6 +14,10 @@ func schemaTestDigest(char string) canonical.Digest {
 	return canonical.Digest("sha256:" + strings.Repeat(char, 64))
 }
 
+func schemaTestMaterializationScript() providerstore.ArtifactDescriptor {
+	return materializationScriptDescriptor()
+}
+
 func TestCanonicalProviderRequestV1SortsAndDeduplicatesPackages(t *testing.T) {
 	if _, err := CanonicalProviderRequestV1(PythonProviderRequestV1{
 		Component: "application", Interpreter: blueprint.CommandRequirement{Command: "python"},
@@ -51,6 +55,7 @@ func TestPythonBundleV1CanonicalPayload(t *testing.T) {
 	component := "application"
 	bundle := PythonBundleV1{
 		Interpreter: schemaTestInterpreterEvidence(),
+		Script:      schemaTestMaterializationScript(),
 		Wheels: []PythonWheelV1{{
 			Distribution: "demo", Version: "1.0", Tags: []string{"py3-none-any"},
 			Artifact: providerstore.ArtifactDescriptor{LogicalPath: "wheels/demo.whl", Kind: "wheel", Size: "100", SHA256: schemaTestDigest("a")},
@@ -77,6 +82,22 @@ func TestPythonBundleV1CanonicalPayload(t *testing.T) {
 	}
 	if len(decoded.Wheels) != 1 || decoded.Wheels[0].Distribution != "demo" || decoded.Outputs[0].EntryPoint != "demo:main" {
 		t.Fatalf("decoded bundle = %#v", decoded)
+	}
+	wrongScript := bundle
+	wrongScript.Script.SHA256 = schemaTestDigest("f")
+	if err := ValidateBundleV1(component, wrongScript); err == nil || !strings.Contains(err.Error(), "provider-owned script") {
+		t.Fatalf("script mismatch error = %v", err)
+	}
+	wrongWheelRoot := bundle
+	wrongWheelRoot.Wheels = append([]PythonWheelV1{}, bundle.Wheels...)
+	wrongWheelRoot.Wheels[0].Artifact.LogicalPath = "other/demo.whl"
+	if err := ValidateBundleV1(component, wrongWheelRoot); err == nil || !strings.Contains(err.Error(), "beneath wheels") {
+		t.Fatalf("wheel root error = %v", err)
+	}
+	withoutWheels := bundle
+	withoutWheels.Wheels = []PythonWheelV1{}
+	if err := ValidateBundleV1(component, withoutWheels); err == nil || !strings.Contains(err.Error(), "at least one wheel") {
+		t.Fatalf("empty wheel error = %v", err)
 	}
 	bundle.Outputs[0].Path = "/usr/local/bin/demo"
 	if err := ValidateBundleV1(component, bundle); err == nil || !strings.Contains(err.Error(), "component venv") {
@@ -121,6 +142,7 @@ func TestPythonOwnerValidatorsBindProfileAndBundlePayload(t *testing.T) {
 	artifact := providerstore.ArtifactDescriptor{LogicalPath: "wheels/demo.whl", Kind: "wheel", Size: "100", SHA256: schemaTestDigest("a")}
 	pythonBundle := PythonBundleV1{
 		Interpreter: interpreter,
+		Script:      schemaTestMaterializationScript(),
 		Wheels:      []PythonWheelV1{{Distribution: "demo", Version: "1.0", Tags: []string{"py3-none-any"}, Artifact: artifact}},
 		Outputs: []PythonConsoleScriptV1{{
 			Name: "demo", Distribution: "demo", EntryPoint: "demo:main", Path: "/opt/reploy/providers/python/application/bin/demo",
@@ -135,7 +157,7 @@ func TestPythonOwnerValidatorsBindProfileAndBundlePayload(t *testing.T) {
 		Schema: providers.ResolvedBundleSchemaV1, NodeID: "python/application", Provider: blueprint.ComponentTypePython,
 		Request: request, RequirementProfileDigest: profileDigest, RecipeVersion: RecipeVersion, Platform: platform,
 		Upstream:  providers.RealizedImageV1{Digest: schemaTestDigest("b"), ConfigDigest: schemaTestDigest("c"), RootFSSubject: schemaTestDigest("d")},
-		Artifacts: []providerstore.ArtifactDescriptor{artifact},
+		Artifacts: []providerstore.ArtifactDescriptor{schemaTestMaterializationScript(), artifact},
 		Outputs: []providers.ResolvedOutput{{
 			SupplierComponent: "application", SupplierNode: "python/application", Name: "demo",
 			Candidate: providers.ExecutableCandidate{
@@ -153,6 +175,11 @@ func TestPythonOwnerValidatorsBindProfileAndBundlePayload(t *testing.T) {
 	}
 	if err := providers.ValidateResolvedBundle(bundle, ValidateResolvedBundlePayloadV1); err != nil {
 		t.Fatal(err)
+	}
+	wrongRecipe := payload
+	wrongRecipe.RecipeVersion = "python-v2"
+	if err := ValidateResolvedBundlePayloadV1(wrongRecipe); err == nil || !strings.Contains(err.Error(), "recipe version") {
+		t.Fatalf("recipe mismatch error = %v", err)
 	}
 	payload.Outputs[0].Candidate.Provenance.Value["entry_point"] = "other:main"
 	if err := ValidateResolvedBundlePayloadV1(payload); err == nil || !strings.Contains(err.Error(), "outputs") {

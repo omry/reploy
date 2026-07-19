@@ -99,6 +99,33 @@ func TestRunCommandPassesDockerPreflightTimeout(t *testing.T) {
 	}
 }
 
+func TestRunCommandWithoutDockerPreflightRunsKnownFollowup(t *testing.T) {
+	dir := t.TempDir()
+	writeFakeCommand(
+		t,
+		dir,
+		"docker",
+		"#!/bin/sh\nprintf 'followup:%s\\n' \"$*\"\n",
+		"@echo off\r\necho followup:%*\r\n",
+	)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	restore := stubDockerPreflight(t, func(context.Context, CommandSpec, time.Duration) error {
+		t.Fatal("known Docker follow-up repeated preflight")
+		return nil
+	})
+	defer restore()
+	var stdout strings.Builder
+	if err := runCommandWithoutDockerPreflight(
+		CommandSpec{Name: "docker", Args: []string{"exec", "validation"}},
+		RunOptions{Stdout: &stdout},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(stdout.String()) != "followup:exec validation" {
+		t.Fatalf("follow-up output = %q", stdout.String())
+	}
+}
+
 func TestCheckDockerResponsiveUsesServerVersion(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "argv.log")

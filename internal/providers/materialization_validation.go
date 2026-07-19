@@ -343,6 +343,128 @@ func ValidateGeneratedExecutableDeclaration(declaration GeneratedExecutableDecla
 	return nil
 }
 
+func ValidateRealizedGeneratedExecutable(realized RealizedGeneratedExecutable) error {
+	if err := ValidateGeneratedExecutableDeclaration(realized.Declaration); err != nil {
+		return fmt.Errorf("realized generated executable declaration: %w", err)
+	}
+	evidence := realized.Evidence
+	if evidence.Schema != GeneratedExecutableEvidenceSchemaV1 {
+		return fmt.Errorf("generated executable evidence schema must be %q", GeneratedExecutableEvidenceSchemaV1)
+	}
+	if evidence.InvocationPath != realized.Declaration.Path {
+		return fmt.Errorf("generated executable evidence path %q does not match declaration %q", evidence.InvocationPath, realized.Declaration.Path)
+	}
+	if evidence.LinkChain == nil {
+		return fmt.Errorf("generated executable evidence link chain must use an array")
+	}
+	seenLinks := make(map[string]bool, len(evidence.LinkChain))
+	for index, link := range evidence.LinkChain {
+		if err := validateLinkEvidence(link); err != nil {
+			return fmt.Errorf("generated executable evidence: %w", err)
+		}
+		if seenLinks[link.Path] {
+			return fmt.Errorf("generated executable evidence contains duplicate link path %q", link.Path)
+		}
+		seenLinks[link.Path] = true
+		expectedResolvedPath := evidence.Terminal.Path
+		if index+1 < len(evidence.LinkChain) {
+			expectedResolvedPath = evidence.LinkChain[index+1].Path
+		}
+		if link.ResolvedPath != expectedResolvedPath {
+			return fmt.Errorf("generated executable link %q resolves to %q, want %q", link.Path, link.ResolvedPath, expectedResolvedPath)
+		}
+	}
+	expectedInvocation := evidence.Terminal.Path
+	if len(evidence.LinkChain) != 0 {
+		expectedInvocation = evidence.LinkChain[0].Path
+	}
+	if evidence.InvocationPath != expectedInvocation {
+		return fmt.Errorf("generated executable invocation path does not begin its recorded chain")
+	}
+	if err := validateGeneratedFileEvidence(evidence.Terminal); err != nil {
+		return err
+	}
+	if evidence.Terminal.Kind != "regular" {
+		return fmt.Errorf("generated executable terminal kind must be %q", "regular")
+	}
+	if err := validatePortableAccessEvidence(evidence.Access); err != nil {
+		return err
+	}
+	terminalAccess := false
+	for _, item := range evidence.Access.Paths {
+		if item.Path == evidence.Terminal.Path && item.Kind == "regular" && item.Required == "other-read-execute" {
+			terminalAccess = true
+			break
+		}
+	}
+	if !terminalAccess {
+		return fmt.Errorf("generated executable access record omits terminal %q", evidence.Terminal.Path)
+	}
+	return validateCanonicalProviderData("generated executable facts", evidence.Facts)
+}
+
+// ValidateRealizedGeneratedExecutableCollection validates the canonical
+// collection shape used by graph results and node locks. Matching the records
+// to a transaction's declarations is handled by
+// ValidateMaterializationGeneratedExecutables at the materialization boundary.
+func ValidateRealizedGeneratedExecutableCollection(realized []RealizedGeneratedExecutable) error {
+	if realized == nil {
+		return fmt.Errorf("realized generated executables must use an array")
+	}
+	for index, executable := range realized {
+		if index > 0 && realized[index-1].Declaration.ID >= executable.Declaration.ID {
+			return fmt.Errorf("realized generated executables must be unique and sorted by declaration ID")
+		}
+		if err := ValidateRealizedGeneratedExecutable(executable); err != nil {
+			return fmt.Errorf("realized generated executable %d: %w", index, err)
+		}
+	}
+	return nil
+}
+
+// ValidateMaterializationGeneratedExecutables binds accepted evidence to every
+// declaration in the exact transaction. Missing, additional, reordered, or
+// changed declarations reject the built layer.
+func ValidateMaterializationGeneratedExecutables(transaction MaterializationTransaction, realized []RealizedGeneratedExecutable) error {
+	if err := ValidateMaterializationTransaction(transaction); err != nil {
+		return err
+	}
+	if err := ValidateRealizedGeneratedExecutableCollection(realized); err != nil {
+		return err
+	}
+	if len(realized) != len(transaction.GeneratedExecutables) {
+		return fmt.Errorf("realized generated executables count is %d, want %d", len(realized), len(transaction.GeneratedExecutables))
+	}
+	for index, declaration := range transaction.GeneratedExecutables {
+		if realized[index].Declaration != declaration {
+			return fmt.Errorf("realized generated executable %d does not match declaration %q", index, declaration.ID)
+		}
+	}
+	return nil
+}
+
+func validateGeneratedFileEvidence(evidence GeneratedFileEvidence) error {
+	if err := validateAbsoluteLinuxPath("generated executable terminal path", evidence.Path); err != nil {
+		return err
+	}
+	if err := blueprint.ValidateProviderIdentifier("generated executable terminal kind", evidence.Kind); err != nil {
+		return err
+	}
+	if !isCanonicalMode(evidence.Mode) {
+		return fmt.Errorf("generated executable terminal mode %q must use four lowercase octal digits", evidence.Mode)
+	}
+	if !isCanonicalDecimal(evidence.Size) {
+		return fmt.Errorf("generated executable terminal size %q must be a nonnegative canonical decimal integer", evidence.Size)
+	}
+	if err := evidence.SHA256.Validate(); err != nil {
+		return fmt.Errorf("generated executable terminal digest: %w", err)
+	}
+	if evidence.Owner != nil {
+		return validateOwnerEvidence(*evidence.Owner)
+	}
+	return nil
+}
+
 func ValidateImageConfigPolicy(policy ImageConfigPolicy) error {
 	if !isNonemptyPlainString(policy.User) {
 		return fmt.Errorf("image config user must be nonempty valid text")

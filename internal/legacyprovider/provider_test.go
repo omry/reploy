@@ -1,4 +1,4 @@
-package providers
+package legacyprovider
 
 import (
 	"strings"

@@ -89,7 +89,7 @@ func TestPrepareMaterializationContextRejectsCorruptBlob(t *testing.T) {
 	if err := os.Chmod(mustBlobPath(t, store, wheel), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(mustBlobPath(t, store, wheel), []byte("corrupt"), 0o600); err != nil {
+	if err := os.WriteFile(mustBlobPath(t, store, wheel), []byte("bad content"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	transaction := rendererTransaction()
@@ -102,6 +102,86 @@ func TestPrepareMaterializationContextRejectsCorruptBlob(t *testing.T) {
 	if _, cleanup, err := PrepareMaterializationContext(store, transaction, inputs); err == nil || !strings.Contains(err.Error(), "verify") {
 		cleanup()
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestPrepareMaterializationContextUsesOperationVerifiedStagedFile(t *testing.T) {
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := store.Publish(context.Background(), "scripts/python-web.sh", "script", strings.NewReader("#!/bin/sh\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wheel, err := store.Publish(context.Background(), "wheels/demo.whl", "wheel", strings.NewReader("wheel bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := store.NewWorkspace("verified-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workspace)
+	verifiedPath := filepath.Join(workspace, "demo.whl")
+	if err := os.WriteFile(verifiedPath, []byte("wheel bytes"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(mustBlobPath(t, store, wheel)); err != nil {
+		t.Fatal(err)
+	}
+	transaction := rendererTransaction()
+	transaction.Script = script
+	transaction.Mounts[0].SourceDigest = script.SHA256
+	inputs := []MaterializationMountInput{
+		{ID: "script", SourceDigest: script.SHA256, Files: []MaterializationMountFile{{RelativePath: "python-web.sh", Artifact: script}}},
+		{ID: "wheels", SourceDigest: transaction.Mounts[1].SourceDigest, Files: []MaterializationMountFile{{RelativePath: "demo.whl", Artifact: wheel, verifiedPath: verifiedPath}}},
+	}
+	prepared, cleanup, err := PrepareMaterializationContext(store, transaction, inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	stagedInfo, err := os.Stat(verifiedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetInfo, err := os.Stat(filepath.Join(prepared.Dir, "mounts", "wheels", "demo.whl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(stagedInfo, targetInfo) {
+		t.Fatal("materialization did not use the operation-verified staged file")
+	}
+}
+
+func TestPrepareMaterializationContextRejectsVerifiedPathOutsideStore(t *testing.T) {
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := store.Publish(context.Background(), "scripts/python-web.sh", "script", strings.NewReader("#!/bin/sh\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wheel, err := store.Publish(context.Background(), "wheels/demo.whl", "wheel", strings.NewReader("wheel bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "demo.whl")
+	if err := os.WriteFile(outside, []byte("wheel bytes"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	transaction := rendererTransaction()
+	transaction.Script = script
+	transaction.Mounts[0].SourceDigest = script.SHA256
+	inputs := []MaterializationMountInput{
+		{ID: "script", SourceDigest: script.SHA256, Files: []MaterializationMountFile{{RelativePath: "python-web.sh", Artifact: script}}},
+		{ID: "wheels", SourceDigest: transaction.Mounts[1].SourceDigest, Files: []MaterializationMountFile{{RelativePath: "demo.whl", Artifact: wheel, verifiedPath: outside}}},
+	}
+	if _, cleanup, err := PrepareMaterializationContext(store, transaction, inputs); err == nil || !strings.Contains(err.Error(), "exact store blob") {
+		cleanup()
+		t.Fatalf("outside verified path error = %v", err)
 	}
 }
 

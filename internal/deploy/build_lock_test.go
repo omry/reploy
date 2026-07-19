@@ -76,10 +76,12 @@ func addValidAPTNode(t *testing.T, lock *BuildLockV1) {
 	lock.Nodes = []NodeLockV1{{
 		NodeID: "apt", Provider: blueprint.ComponentTypeAPT, PlanDigest: buildLockTestDigest("9"), ResolverCacheKey: buildLockTestDigest("a"),
 		RequirementProfile: profile, ValidationEvidence: evidence,
-		BundleManifest:    providerstore.StoreObjectRef{Kind: providerstore.BundleManifestKind, Digest: buildLockTestDigest("b")},
-		TransactionDigest: buildLockTestDigest("c"), Upstream: upstream,
-		Result:  result,
-		Outputs: []providers.RealizedOutput{},
+		BundleManifest:       providerstore.StoreObjectRef{Kind: providerstore.BundleManifestKind, Digest: buildLockTestDigest("b")},
+		TransactionDigest:    buildLockTestDigest("c"),
+		Upstream:             upstream,
+		Result:               result,
+		GeneratedExecutables: []providers.RealizedGeneratedExecutable{},
+		Outputs:              []providers.RealizedOutput{},
 	}}
 	lock.FinalImage.RootFSSubject = result.RootFSSubject
 }
@@ -117,6 +119,11 @@ func TestBuildLockV1AcceptsValidatedProviderNode(t *testing.T) {
 	if _, err := BuildLockDigestV1(lock, acceptBuildLockProfile); err != nil {
 		t.Fatal(err)
 	}
+	lock.Nodes[0].GeneratedExecutables = nil
+	if _, err := BuildLockDigestV1(lock, acceptBuildLockProfile); err == nil || !strings.Contains(err.Error(), "generated executables") {
+		t.Fatalf("generated executable collection error = %v", err)
+	}
+	lock.Nodes[0].GeneratedExecutables = []providers.RealizedGeneratedExecutable{}
 	lock.Nodes[0].ValidationEvidence.SubjectRootFS = buildLockTestDigest("f")
 	if _, err := BuildLockDigestV1(lock, acceptBuildLockProfile); err == nil || !strings.Contains(err.Error(), "upstream root filesystem") {
 		t.Fatalf("upstream evidence error = %v", err)

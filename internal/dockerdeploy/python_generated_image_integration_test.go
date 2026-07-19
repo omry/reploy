@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/legacyprovider"
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
 )
 
@@ -35,11 +35,11 @@ func TestPythonGeneratedImageIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	materialization, err := provider.Materialize(providers.MaterializeRequest{Bundle: bundle})
+	materialization, err := provider.LegacyMaterialize(legacyprovider.MaterializeRequest{Bundle: bundle})
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity, err := generatedImageIdentity("python-integration", t.TempDir(), GeneratedImageStaging, []providers.Bundle{bundle})
+	identity, err := generatedImageIdentity("python-integration", t.TempDir(), GeneratedImageStaging, []legacyprovider.Bundle{bundle})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -53,8 +53,9 @@ type InspectedImageCandidate struct {
 }
 
 var runMaterializationBuildCommand = runCommand
+var runMaterializationBuildReferenceDocker = runDockerOutput
 
-func BuildMaterializationLayer(store providerstore.Store, request MaterializationLayerRequest, options RunOptions) (MaterializationLayerCandidate, error) {
+func BuildMaterializationLayer(store providerstore.Store, request MaterializationLayerRequest, options RunOptions) (result MaterializationLayerCandidate, resultErr error) {
 	assemblyKey, assemblyKeyDigest, err := MaterializationAssemblyKey(request.Transaction, request.Platform)
 	if err != nil {
 		return MaterializationLayerCandidate{}, err
@@ -69,13 +70,35 @@ func BuildMaterializationLayer(store providerstore.Store, request Materializatio
 		return MaterializationLayerCandidate{}, err
 	}
 	workspace := filepath.Dir(prepared.Dir)
+	ctx := options.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	baseReference, cleanupBaseReference, err := prepareTemporaryBuildBaseReference(
+		ctx, store.Root(), workspace, request.Transaction.Upstream, runMaterializationBuildReferenceDocker,
+	)
+	if err != nil {
+		return MaterializationLayerCandidate{}, err
+	}
+	defer func() {
+		if cleanupErr := cleanupTemporaryBuildBaseReferenceAfterBuild(
+			context.WithoutCancel(ctx), cleanupBaseReference, result.Built, runMaterializationBuildReferenceDocker,
+		); cleanupErr != nil {
+			if resultErr != nil {
+				resultErr = fmt.Errorf("%w; cleanup temporary build base reference: %v", resultErr, cleanupErr)
+			} else {
+				result = MaterializationLayerCandidate{}
+				resultErr = fmt.Errorf("cleanup temporary build base reference: %w", cleanupErr)
+			}
+		}
+	}()
 	dockerfilePath := filepath.Join(workspace, "Dockerfile")
 	if err := os.WriteFile(dockerfilePath, dockerfile, 0o600); err != nil {
 		return MaterializationLayerCandidate{}, fmt.Errorf("write materialization Dockerfile: %w", err)
 	}
 	iidPath := filepath.Join(workspace, "result.iid")
 	command, err := MaterializationBuildCommand(MaterializationBuildPlan{
-		BaseIdentity: string(request.Transaction.Upstream.Digest), Platform: request.Platform,
+		BaseReference: baseReference, Platform: request.Platform,
 		DockerfilePath: dockerfilePath, ContextDir: prepared.Dir, IIDFile: iidPath,
 	})
 	if err != nil {

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/legacyprovider"
 )
 
 type GeneratedImageSlot string
@@ -35,7 +35,7 @@ type GeneratedImageIdentity struct {
 	Labels      map[string]string
 }
 
-func generatedImageIdentity(environmentID string, deploymentDir string, slot GeneratedImageSlot, bundles []providers.Bundle) (GeneratedImageIdentity, error) {
+func generatedImageIdentity(environmentID string, deploymentDir string, slot GeneratedImageSlot, bundles []legacyprovider.Bundle) (GeneratedImageIdentity, error) {
 	switch slot {
 	case GeneratedImageStaging, GeneratedImageDeployed, GeneratedImagePrevious:
 	default:
@@ -77,7 +77,7 @@ func generatedImageIdentity(environmentID string, deploymentDir string, slot Gen
 	}, nil
 }
 
-func generatedImageFingerprint(bundles []providers.Bundle) (string, error) {
+func generatedImageFingerprint(bundles []legacyprovider.Bundle) (string, error) {
 	type artifact struct {
 		Identifier string `json:"identifier"`
 		Version    string `json:"version,omitempty"`
@@ -95,7 +95,7 @@ func generatedImageFingerprint(bundles []providers.Bundle) (string, error) {
 	input := make([]bundle, len(bundles))
 	seenProviders := map[string]bool{}
 	for index, item := range bundles {
-		if err := providers.ValidateBundle(item); err != nil {
+		if err := legacyprovider.ValidateBundle(item); err != nil {
 			return "", fmt.Errorf("fingerprint provider bundle: %w", err)
 		}
 		if seenProviders[string(item.Provider)] {

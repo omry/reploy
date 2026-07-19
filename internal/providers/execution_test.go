@@ -55,9 +55,63 @@ func TestResolveContractBindsPlatformUpstreamAndProfile(t *testing.T) {
 	}
 	if err := ValidateMaterializeInput(MaterializeInput{
 		Bundle: result.Bundle, Profile: result.Profile,
-		AssemblyParent: RealizedImageV1{Digest: testDigest("a"), ConfigDigest: testDigest("b"), RootFSSubject: testDigest("c")},
+		AssemblyParent:      RealizedImageV1{Digest: testDigest("a"), ConfigDigest: testDigest("b"), RootFSSubject: testDigest("c")},
+		Carrier:             materializeTestExecutable("carrier", ExecutableRoleCarrier, "/bin/sh"),
+		EnvironmentLauncher: materializeTestExecutable("cleanenv", ExecutableRoleEnvironmentLauncher, "/usr/bin/env"),
+		FinalImageConfig:    materializeTestFinalImageConfig(),
 	}, validateTestProfileOwner, acceptTestBundleOwner); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func materializeTestFinalImageConfig() ImageConfigPolicy {
+	return ImageConfigPolicy{
+		User: "1000:1000", WorkingDir: "/work",
+		Environment: []EnvironmentVariable{}, Entrypoint: []string{}, Command: []string{},
+		Healthcheck: ImageHealthcheckNone, StopSignal: "SIGTERM", Labels: []ImageLabel{},
+	}
+}
+
+func materializeTestExecutable(id string, role string, invocationPath string) ValidatedExecutableInput {
+	return ValidatedExecutableInput{
+		ID: id, Role: role, Policy: ValidationPolicyCompatible,
+		Evidence: selectionEvidence(
+			ExecutableRequirement{ID: id},
+			catalogOutput("base", "base", id, invocationPath),
+		),
+	}
+}
+
+func TestMaterializeInputRequiresDistinctValidatedBackendExecutables(t *testing.T) {
+	_, result := validResolveContract(t)
+	valid := MaterializeInput{
+		Bundle: result.Bundle, Profile: result.Profile,
+		AssemblyParent:      RealizedImageV1{Digest: testDigest("a"), ConfigDigest: testDigest("b"), RootFSSubject: testDigest("c")},
+		Carrier:             materializeTestExecutable("carrier", ExecutableRoleCarrier, "/bin/sh"),
+		EnvironmentLauncher: materializeTestExecutable("cleanenv", ExecutableRoleEnvironmentLauncher, "/usr/bin/env"),
+		FinalImageConfig:    materializeTestFinalImageConfig(),
+	}
+	tests := []struct {
+		name   string
+		mutate func(*MaterializeInput)
+		want   string
+	}{
+		{name: "missing carrier", mutate: func(input *MaterializeInput) { input.Carrier = ValidatedExecutableInput{} }, want: "carrier"},
+		{name: "carrier role", mutate: func(input *MaterializeInput) { input.Carrier.Role = ExecutableRoleProviderPrerequisite }, want: "carrier role"},
+		{name: "launcher role", mutate: func(input *MaterializeInput) { input.EnvironmentLauncher.Role = ExecutableRoleProviderPrerequisite }, want: "environment launcher role"},
+		{name: "duplicate ID", mutate: func(input *MaterializeInput) {
+			input.EnvironmentLauncher = materializeTestExecutable("carrier", ExecutableRoleEnvironmentLauncher, "/usr/bin/env")
+		}, want: "IDs must differ"},
+		{name: "final image config", mutate: func(input *MaterializeInput) { input.FinalImageConfig.WorkingDir = "work" }, want: "final image config"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := valid
+			test.mutate(&candidate)
+			if err := ValidateMaterializeInput(candidate, validateTestProfileOwner, acceptTestBundleOwner); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 

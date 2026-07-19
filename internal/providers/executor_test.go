@@ -84,6 +84,26 @@ func TestResolveProviderNodeBuildsCandidatesAndValidatesResult(t *testing.T) {
 	}
 }
 
+func TestValidateProviderNodeResolutionChecksCachedResultAgainstExactInput(t *testing.T) {
+	input, result := validResolveContract(t)
+	request := ResolveNodeRequest{
+		Plan: testResolvePlan(input), NodeID: input.Node.ID,
+		EarlierCatalog:    []RealizedOutput{catalogOutput("base", "base", "python", "/usr/bin/python")},
+		Platform:          input.Platform,
+		Sources:           input.Sources,
+		Upstream:          input.Upstream,
+		ReusableArtifacts: input.ReusableArtifacts,
+	}
+	validators := ProviderOwnerValidators{Profile: validateTestProfileOwner, Bundle: acceptTestBundleOwner}
+	if err := ValidateProviderNodeResolution(request, result, validators); err != nil {
+		t.Fatal(err)
+	}
+	request.Upstream.RootFSSubject = testDigest("changed")
+	if err := ValidateProviderNodeResolution(request, result, validators); err == nil || !strings.Contains(err.Error(), "upstream") {
+		t.Fatalf("changed upstream error = %v", err)
+	}
+}
+
 func TestResolveProviderNodeRejectsWrongResolverAndResult(t *testing.T) {
 	input, result := validResolveContract(t)
 	plan := testResolvePlan(input)

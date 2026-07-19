@@ -13,7 +13,7 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
-	"github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/legacyprovider"
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
 )
 
@@ -89,7 +89,7 @@ func BuildEnvironmentImage(ctx context.Context, dir string, pack deploy.AppPack,
 	if err != nil {
 		return state, err
 	}
-	materialization, err := provider.Materialize(providers.MaterializeRequest{Bundle: bundle})
+	materialization, err := provider.LegacyMaterialize(legacyprovider.MaterializeRequest{Bundle: bundle})
 	if err != nil {
 		return state, err
 	}
@@ -101,7 +101,7 @@ func BuildEnvironmentImage(ctx context.Context, dir string, pack deploy.AppPack,
 			identityPath = state.Install.TargetDir
 		}
 	}
-	identity, err := generatedImageIdentity(document.Environment.ID, identityPath, slot, []providers.Bundle{bundle})
+	identity, err := generatedImageIdentity(document.Environment.ID, identityPath, slot, []legacyprovider.Bundle{bundle})
 	if err != nil {
 		return state, err
 	}
@@ -134,7 +134,7 @@ func BuildEnvironmentImage(ctx context.Context, dir string, pack deploy.AppPack,
 	} else {
 		state.Images.Deployed = imageState
 	}
-	state.Materialization = &deploy.MaterializationState{BundleFingerprint: state.Bundle.PreparedFingerprint, Bundles: []providers.Bundle{bundle}, Executables: bundle.Executables}
+	state.Materialization = &deploy.MaterializationState{BundleFingerprint: state.Bundle.PreparedFingerprint, Bundles: []legacyprovider.Bundle{bundle}, Executables: bundle.Executables}
 	return state, nil
 }
 

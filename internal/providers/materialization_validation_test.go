@@ -298,6 +298,71 @@ func TestValidateGeneratedExecutableDeclaration(t *testing.T) {
 	}
 }
 
+func validRealizedGeneratedExecutable() RealizedGeneratedExecutable {
+	path := "/opt/reploy/providers/python/app/bin/python"
+	return RealizedGeneratedExecutable{
+		Declaration: GeneratedExecutableDeclaration{
+			ID: "venv_python", Path: path, ExclusiveRoot: "/opt/reploy/providers/python/app",
+			ValidationPolicy: ValidationPolicyCompatible,
+		},
+		Evidence: GeneratedExecutableEvidence{
+			Schema: GeneratedExecutableEvidenceSchemaV1, InvocationPath: path, LinkChain: []LinkEvidence{},
+			Terminal: GeneratedFileEvidence{Path: path, Kind: "regular", Mode: "0755", Size: "100", SHA256: testDigest("a")},
+			Access: PortableAccessEvidence{
+				Schema: PortableAccessSchemaV1, Profile: PortableOutputAccessV1,
+				Paths: []AccessPathEvidence{{Path: path, Kind: "regular", Mode: "0755", Required: "other-read-execute"}},
+			},
+			Facts: providerData("python-generated-v1"),
+		},
+	}
+}
+
+func TestValidateRealizedGeneratedExecutable(t *testing.T) {
+	if err := ValidateRealizedGeneratedExecutable(validRealizedGeneratedExecutable()); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*RealizedGeneratedExecutable)
+		want   string
+	}{
+		{name: "schema", mutate: func(value *RealizedGeneratedExecutable) { value.Evidence.Schema = "generated-v2" }, want: "schema"},
+		{name: "declared path", mutate: func(value *RealizedGeneratedExecutable) { value.Evidence.InvocationPath = "/opt/other/bin/python" }, want: "does not match"},
+		{name: "nil chain", mutate: func(value *RealizedGeneratedExecutable) { value.Evidence.LinkChain = nil }, want: "array"},
+		{name: "terminal kind", mutate: func(value *RealizedGeneratedExecutable) { value.Evidence.Terminal.Kind = "directory" }, want: "terminal kind"},
+		{name: "terminal access", mutate: func(value *RealizedGeneratedExecutable) { value.Evidence.Access.Paths = []AccessPathEvidence{} }, want: "omits terminal"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := validRealizedGeneratedExecutable()
+			test.mutate(&candidate)
+			if err := ValidateRealizedGeneratedExecutable(candidate); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestValidateMaterializationGeneratedExecutablesRequiresExactDeclarations(t *testing.T) {
+	transaction := validMaterializationTransaction()
+	realized := validRealizedGeneratedExecutable()
+	transaction.GeneratedExecutables = []GeneratedExecutableDeclaration{realized.Declaration}
+	if err := ValidateMaterializationGeneratedExecutables(transaction, []RealizedGeneratedExecutable{realized}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateMaterializationGeneratedExecutables(transaction, []RealizedGeneratedExecutable{}); err == nil || !strings.Contains(err.Error(), "count") {
+		t.Fatalf("missing evidence error = %v", err)
+	}
+	changed := realized
+	changed.Declaration.ValidationPolicy = ValidationPolicyUnchanged
+	if err := ValidateMaterializationGeneratedExecutables(transaction, []RealizedGeneratedExecutable{changed}); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("changed declaration error = %v", err)
+	}
+	if err := ValidateRealizedGeneratedExecutableCollection(nil); err == nil || !strings.Contains(err.Error(), "array") {
+		t.Fatalf("nil collection error = %v", err)
+	}
+}
+
 func TestValidateImageConfigPolicy(t *testing.T) {
 	valid := ImageConfigPolicy{
 		User: "1000:1000", WorkingDir: "/work",

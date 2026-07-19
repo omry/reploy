@@ -14,7 +14,7 @@ func TestMaterializationBuildCommandUsesOrdinaryDockerBuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := MaterializationBuildPlan{
-		BaseIdentity: "debian@" + string(rendererDigest("a")), Platform: platform,
+		BaseReference: "debian@" + string(rendererDigest("a")), Platform: platform,
 		DockerfilePath: "/tmp/reploy/Dockerfile", ContextDir: "/tmp/reploy/context", IIDFile: "/tmp/reploy/result.iid",
 	}
 	command, err := MaterializationBuildCommand(plan)
@@ -26,7 +26,7 @@ func TestMaterializationBuildCommandUsesOrdinaryDockerBuild(t *testing.T) {
 		Args: []string{
 			"build", "--file", plan.DockerfilePath,
 			"--platform", "linux/arm/v7",
-			"--build-arg", "REPLOY_BASE_IMAGE=" + plan.BaseIdentity,
+			"--build-arg", "REPLOY_BASE_IMAGE=" + plan.BaseReference,
 			"--iidfile", plan.IIDFile,
 			plan.ContextDir,
 		},
@@ -47,7 +47,7 @@ func TestMaterializationBuildCommandRejectsMutableOrIncompleteInputs(t *testing.
 		t.Fatal(err)
 	}
 	valid := MaterializationBuildPlan{
-		BaseIdentity: "sha256:" + strings.Repeat("b", 64), Platform: platform,
+		BaseReference: "sha256:" + strings.Repeat("b", 64), Platform: platform,
 		DockerfilePath: "/tmp/Dockerfile", ContextDir: "/tmp/context", IIDFile: "/tmp/result.iid",
 	}
 	tests := []struct {
@@ -55,7 +55,7 @@ func TestMaterializationBuildCommandRejectsMutableOrIncompleteInputs(t *testing.
 		mutate func(*MaterializationBuildPlan)
 		want   string
 	}{
-		{name: "mutable base", mutate: func(value *MaterializationBuildPlan) { value.BaseIdentity = "debian:13" }, want: "immutable"},
+		{name: "mutable base", mutate: func(value *MaterializationBuildPlan) { value.BaseReference = "debian:13" }, want: "immutable"},
 		{name: "relative Dockerfile", mutate: func(value *MaterializationBuildPlan) { value.DockerfilePath = "Dockerfile" }, want: "absolute"},
 		{name: "relative context", mutate: func(value *MaterializationBuildPlan) { value.ContextDir = "context" }, want: "absolute"},
 		{name: "missing iid", mutate: func(value *MaterializationBuildPlan) { value.IIDFile = "" }, want: "absolute"},

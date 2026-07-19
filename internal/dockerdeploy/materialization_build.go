@@ -10,7 +10,7 @@ import (
 )
 
 type MaterializationBuildPlan struct {
-	BaseIdentity   string
+	BaseReference  string
 	Platform       blueprint.Platform
 	DockerfilePath string
 	ContextDir     string
@@ -18,7 +18,7 @@ type MaterializationBuildPlan struct {
 }
 
 func MaterializationBuildCommand(plan MaterializationBuildPlan) (CommandSpec, error) {
-	if err := validateImmutableDockerIdentity(plan.BaseIdentity); err != nil {
+	if err := validateDockerBuildBaseReference(plan.BaseReference); err != nil {
 		return CommandSpec{}, err
 	}
 	if err := plan.Platform.Validate(); err != nil {
@@ -44,26 +44,33 @@ func MaterializationBuildCommand(plan MaterializationBuildPlan) (CommandSpec, er
 		"build",
 		"--file", plan.DockerfilePath,
 		"--platform", plan.Platform.Canonical,
-		"--build-arg", "REPLOY_BASE_IMAGE=" + plan.BaseIdentity,
+		"--build-arg", "REPLOY_BASE_IMAGE=" + plan.BaseReference,
 		"--iidfile", plan.IIDFile,
 		plan.ContextDir,
 	}
 	return CommandSpec{Name: "docker", Args: args, Env: []string{"DOCKER_BUILDKIT=1"}}, nil
 }
 
-func validateImmutableDockerIdentity(identity string) error {
-	if identity == "" || strings.TrimSpace(identity) != identity {
-		return fmt.Errorf("materialization build requires an immutable base identity")
+func validateDockerBuildBaseReference(reference string) error {
+	if reference == "" || strings.TrimSpace(reference) != reference || strings.ContainsAny(reference, "\r\n\t") {
+		return fmt.Errorf("materialization build requires a safe base reference")
 	}
-	digest := identity
-	if repository, value, found := strings.Cut(identity, "@"); found {
+	if strings.HasPrefix(reference, temporaryBuildReferencePrefix) {
+		name, tag, found := strings.Cut(reference, ":")
+		if !found || name == temporaryBuildReferencePrefix || tag == "" || strings.Contains(tag, ":") {
+			return fmt.Errorf("materialization build temporary base reference is malformed")
+		}
+		return nil
+	}
+	digest := reference
+	if repository, value, found := strings.Cut(reference, "@"); found {
 		if repository == "" || strings.ContainsAny(repository, " \t\r\n") || strings.Contains(value, "@") {
-			return fmt.Errorf("materialization build base identity is malformed")
+			return fmt.Errorf("materialization build base reference is malformed")
 		}
 		digest = value
 	}
 	if err := canonical.Digest(digest).Validate(); err != nil {
-		return fmt.Errorf("materialization build base identity must contain an immutable sha256 digest: %w", err)
+		return fmt.Errorf("materialization build base reference must be a verified temporary reference or contain an immutable sha256 digest: %w", err)
 	}
 	return nil
 }

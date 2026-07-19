@@ -28,9 +28,12 @@ type ResolveResult struct {
 }
 
 type MaterializeInput struct {
-	Bundle         ResolvedBundle
-	Profile        RequirementProfile
-	AssemblyParent RealizedImageV1
+	Bundle              ResolvedBundle
+	Profile             RequirementProfile
+	AssemblyParent      RealizedImageV1
+	Carrier             ValidatedExecutableInput
+	EnvironmentLauncher ValidatedExecutableInput
+	FinalImageConfig    ImageConfigPolicy
 }
 
 type ArtifactSink interface {
@@ -233,6 +236,24 @@ func ValidateMaterializeInput(
 	}
 	if err := input.AssemblyParent.Validate(); err != nil {
 		return fmt.Errorf("materialize input assembly parent: %w", err)
+	}
+	if err := ValidateValidatedExecutableInput(input.Carrier); err != nil {
+		return fmt.Errorf("materialize input carrier: %w", err)
+	}
+	if input.Carrier.Role != ExecutableRoleCarrier {
+		return fmt.Errorf("materialize input carrier role must be %q", ExecutableRoleCarrier)
+	}
+	if err := ValidateValidatedExecutableInput(input.EnvironmentLauncher); err != nil {
+		return fmt.Errorf("materialize input environment launcher: %w", err)
+	}
+	if input.EnvironmentLauncher.Role != ExecutableRoleEnvironmentLauncher {
+		return fmt.Errorf("materialize input environment launcher role must be %q", ExecutableRoleEnvironmentLauncher)
+	}
+	if input.Carrier.ID == input.EnvironmentLauncher.ID {
+		return fmt.Errorf("materialize input carrier and environment launcher IDs must differ")
+	}
+	if err := ValidateImageConfigPolicy(input.FinalImageConfig); err != nil {
+		return fmt.Errorf("materialize input final image config: %w", err)
 	}
 	return nil
 }

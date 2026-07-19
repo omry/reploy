@@ -26,6 +26,7 @@ type PythonProviderRequestV1 struct {
 
 type PythonBundleV1 struct {
 	Interpreter providers.ExecutableEvidence
+	Script      providerstore.ArtifactDescriptor
 	Wheels      []PythonWheelV1
 	Outputs     []PythonConsoleScriptV1
 	Sources     []providers.ResolvedSourceInput
@@ -183,7 +184,8 @@ func CanonicalBundleDataV1(component string, bundle PythonBundleV1) (providers.C
 		sources = append(sources, sourceValue(source))
 	}
 	return providers.CanonicalProviderData{Schema: BundleSchemaV1, Value: canonical.Object{
-		"interpreter": executableEvidenceValue(bundle.Interpreter), "wheels": wheels, "outputs": outputs, "sources": sources,
+		"interpreter": executableEvidenceValue(bundle.Interpreter), "script": artifactValue(bundle.Script),
+		"wheels": wheels, "outputs": outputs, "sources": sources,
 	}}, nil
 }
 
@@ -199,8 +201,17 @@ func ValidateBundleV1(component string, bundle PythonBundleV1) error {
 	}); err != nil {
 		return fmt.Errorf("Python bundle interpreter: %w", err)
 	}
+	if err := bundle.Script.Validate(); err != nil {
+		return fmt.Errorf("Python materialization script is invalid: %w", err)
+	}
+	if bundle.Script != materializationScriptDescriptor() {
+		return fmt.Errorf("Python materialization script does not match the provider-owned script")
+	}
 	if bundle.Wheels == nil || bundle.Outputs == nil || bundle.Sources == nil {
 		return fmt.Errorf("Python bundle collections must use arrays")
+	}
+	if len(bundle.Wheels) == 0 {
+		return fmt.Errorf("Python bundle must contain at least one wheel")
 	}
 	for index, wheel := range bundle.Wheels {
 		if index > 0 && compareWheels(bundle.Wheels[index-1], wheel) >= 0 {
@@ -217,6 +228,9 @@ func ValidateBundleV1(component string, bundle PythonBundleV1) error {
 		}
 		if wheel.Artifact.Kind != "wheel" {
 			return fmt.Errorf("Python wheel artifact kind must be wheel")
+		}
+		if path.Dir(wheel.Artifact.LogicalPath) != "wheels" {
+			return fmt.Errorf("Python wheel artifact must be directly beneath wheels")
 		}
 	}
 	root := "/opt/reploy/providers/python/" + component + "/bin/"

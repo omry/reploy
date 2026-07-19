@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
-	"github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/legacyprovider"
 )
 
 type ResolvedEnvironmentCommand struct {
@@ -19,7 +19,7 @@ type ResolvedEnvironmentCommand struct {
 	Argv         []string
 }
 
-func ResolveEnvironmentCommand(document blueprint.Document, outputs map[string]providers.ExecutableOutput, name string, forwarded []string) (ResolvedEnvironmentCommand, error) {
+func ResolveEnvironmentCommand(document blueprint.Document, outputs map[string]legacyprovider.ExecutableOutput, name string, forwarded []string) (ResolvedEnvironmentCommand, error) {
 	command, exists := document.Environment.Commands[name]
 	if !exists {
 		return ResolvedEnvironmentCommand{}, fmt.Errorf("unknown environment command %q", name)
@@ -62,7 +62,7 @@ func ResolveEnvironmentCommand(document blueprint.Document, outputs map[string]p
 // ResolveEnvironmentCommandForPlan performs the operation-time interpolation
 // that depends on the selected phase, scope, mounts, and resolved endpoints.
 // The provider-resolved binary remains the first argv element.
-func ResolveEnvironmentCommandForPlan(document blueprint.Document, outputs map[string]providers.ExecutableOutput, plan DockerExecutionPlan, name string, forwarded []string) (ResolvedEnvironmentCommand, error) {
+func ResolveEnvironmentCommandForPlan(document blueprint.Document, outputs map[string]legacyprovider.ExecutableOutput, plan DockerExecutionPlan, name string, forwarded []string) (ResolvedEnvironmentCommand, error) {
 	command, err := ResolveEnvironmentCommand(document, outputs, name, forwarded)
 	if err != nil {
 		return ResolvedEnvironmentCommand{}, err

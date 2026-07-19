@@ -35,17 +35,18 @@ type ProviderGraphLockV1 struct {
 }
 
 type NodeLockV1 struct {
-	NodeID             providers.NodeID             `json:"node_id"`
-	Provider           blueprint.ComponentType      `json:"provider"`
-	PlanDigest         canonical.Digest             `json:"plan_digest"`
-	ResolverCacheKey   canonical.Digest             `json:"resolver_cache_key"`
-	RequirementProfile providers.RequirementProfile `json:"requirement_profile"`
-	ValidationEvidence providers.ValidationEvidence `json:"validation_evidence"`
-	BundleManifest     providerstore.StoreObjectRef `json:"bundle_manifest"`
-	TransactionDigest  canonical.Digest             `json:"transaction_digest"`
-	Upstream           providers.RealizedImageV1    `json:"upstream"`
-	Result             providers.RealizedImageV1    `json:"result"`
-	Outputs            []providers.RealizedOutput   `json:"outputs"`
+	NodeID               providers.NodeID                        `json:"node_id"`
+	Provider             blueprint.ComponentType                 `json:"provider"`
+	PlanDigest           canonical.Digest                        `json:"plan_digest"`
+	ResolverCacheKey     canonical.Digest                        `json:"resolver_cache_key"`
+	RequirementProfile   providers.RequirementProfile            `json:"requirement_profile"`
+	ValidationEvidence   providers.ValidationEvidence            `json:"validation_evidence"`
+	BundleManifest       providerstore.StoreObjectRef            `json:"bundle_manifest"`
+	TransactionDigest    canonical.Digest                        `json:"transaction_digest"`
+	Upstream             providers.RealizedImageV1               `json:"upstream"`
+	Result               providers.RealizedImageV1               `json:"result"`
+	GeneratedExecutables []providers.RealizedGeneratedExecutable `json:"generated_executables"`
+	Outputs              []providers.RealizedOutput              `json:"outputs"`
 }
 
 func BuildLockDigestV1(lock BuildLockV1, validateProfileOwner providers.RequirementProfileOwnerValidator) (canonical.Digest, error) {
@@ -296,8 +297,16 @@ func validateNodeLock(node NodeLockV1, platform blueprint.Platform, validateProf
 	if err := node.Result.Validate(); err != nil {
 		return fmt.Errorf("result image: %w", err)
 	}
-	if node.Outputs == nil {
-		return fmt.Errorf("outputs must use an array")
+	if node.GeneratedExecutables == nil || node.Outputs == nil {
+		return fmt.Errorf("generated executables and outputs must use arrays")
+	}
+	for index, generated := range node.GeneratedExecutables {
+		if index > 0 && node.GeneratedExecutables[index-1].Declaration.ID >= generated.Declaration.ID {
+			return fmt.Errorf("generated executables must be unique and sorted")
+		}
+		if err := providers.ValidateRealizedGeneratedExecutable(generated); err != nil {
+			return err
+		}
 	}
 	for index, output := range node.Outputs {
 		if output.SupplierNode != node.NodeID {
