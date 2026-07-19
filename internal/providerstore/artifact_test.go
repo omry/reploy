@@ -17,6 +17,13 @@ func TestArtifactDescriptorValidate(t *testing.T) {
 	if err := valid.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	reference, err := valid.StoreObjectRef()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reference != (StoreObjectRef{Kind: BlobKind, Digest: valid.SHA256}) {
+		t.Fatalf("store reference = %#v", reference)
+	}
 	tests := []struct {
 		name   string
 		mutate func(*ArtifactDescriptor)

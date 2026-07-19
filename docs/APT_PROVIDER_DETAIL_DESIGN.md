@@ -1426,9 +1426,15 @@ typed inputs rather than one overloaded runner.
 `validated-executable`, `generated-executable`, or `mounted-artifact`, and only
 the corresponding fields may be nonempty. A `mounted-artifact` uses `MountID`
 plus a normalized relative path; no host path enters the record. The renderer
-rejects a `literal` in command position. A generated executable may be used
-only after the backend has verified its declared path in the newly materialized
-prefix and produced realized `ExecutableEvidence` for it.
+rejects a `literal` in command position. A fixed trusted recipe may use a
+generated executable after its declared generating operation. The initial
+Python case is the controlled venv interpreter entry: immediately before venv
+creation the selected base/APT executable is revalidated as Python and its
+actual compatible version is recorded; the venv entry is then a link or copy
+derived from that validated interpreter, not a separately sourced Python
+installation. The host backend does not pause the single `RUN`. It validates
+the completed layer and produces realized `ExecutableEvidence` before accepting
+the layer or exposing the generated path downstream.
 
 Environment names match `[A-Za-z_][A-Za-z0-9_]*`, are unique and sorted, and
 the profile always sets `InheritNone`. `Umask` is four lowercase octal digits.
@@ -1440,13 +1446,16 @@ absolute descendants of `/.reploy-build`, are nonoverlapping, and use only
 `artifact`, `script`, or `private-output` source kinds. Digest is required for
 read-only artifact/script sources and empty for a newly created private output.
 
-`ImageConfigPolicy` is the complete post-transaction config, not a patch:
-empty entrypoint and command neutralize the base defaults, `Healthcheck` is
-`none`, and user/workdir/environment/stop signal carry the already resolved
-final policy. Labels are unique and sorted; provider layers may not write the
-reserved validation labels, which are added only by final validation. The
-backend renders each field exactly once or rejects the transaction. All lists
-are canonicalized before the transaction digest is computed.
+`ImageConfigPolicy` is the complete policy for the image-config values Reploy
+controls: empty entrypoint and command neutralize the base defaults,
+`Healthcheck` is `none`, and user/workdir/environment/stop signal carry the
+resolved required values. Labels are unique and sorted required values;
+unrelated labels and metadata such as `Shell` may remain inherited from the
+trusted base and are not interpreted by Reploy. Provider layers may not write
+the reserved validation labels, which are replaced only by final validation.
+The backend renders and inspects every controlled field or rejects the
+transaction. All lists are canonicalized before the transaction digest is
+computed.
 
 The backend renders every field or rejects the transaction. It never accepts
 provider-supplied Dockerfile text. Dynamic values are positional arguments,
@@ -1843,11 +1852,15 @@ type ConfigEnvironmentVariable struct {
 
 The schemas are `image-descriptor-v1` and `base-config-v1`. The immutable
 reference is a repo digest when Docker supplies one and otherwise the immutable
-local image ID; it must resolve to the exact manifest/config/rootfs tuple in the
-record. Manifest and config digests are required. Rootfs diff IDs retain layer
-order. Environment entries are reduced using Docker's last-entry-wins config
-semantics and the effective unique name/value pairs are sorted by name; volume
-paths are normalized and sorted. Other arrays retain execution order.
+local image ID. A registry-selected image requires `ManifestDigest`, and it must
+equal the digest in the immutable repo reference. An ordinary locally built
+image has no Docker repository manifest; its `ManifestDigest` is empty and its
+immutable local image ID must equal `ConfigDigest`. Reploy does not save/export
+the complete image merely to synthesize a manifest. Both forms require the
+ordered nonempty rootfs diff-ID list. Environment entries are reduced using
+Docker's last-entry-wins config semantics and the effective unique name/value
+pairs are sorted by name; volume paths are normalized and sorted. Other arrays
+retain execution order.
 
 `AuthorReference` is diagnostic/request identity and is passed through the safe
 reference renderer before display. Credentials are never accepted in it or

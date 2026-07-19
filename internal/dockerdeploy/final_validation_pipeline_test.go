@@ -1,0 +1,77 @@
+package dockerdeploy
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/providerstore"
+)
+
+func TestValidateAndFinalizeBuildUsesPublishedFinalEvidence(t *testing.T) {
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := fullValidationInput(t, "d")
+	validated := false
+	built := false
+	result, err := validateAndFinalizeBuild(
+		context.Background(), store, []FullImageValidationInput{}, final, false, acceptFullValidationProfile,
+		func(context.Context, FullImageValidationInput) ([]providers.ValidationEvidence, []providers.ExecutableEvidence, error) {
+			validated = true
+			return []providers.ValidationEvidence{}, []providers.ExecutableEvidence{}, nil
+		}, RunOptions{},
+		func(_ providerstore.Store, request FinalizationBuildRequest, _ RunOptions) (BuiltImageCandidate, error) {
+			if !validated || request.Source.Image != final.Image.Image || request.ValidationReference.Kind != providerstore.ValidationRecordKind {
+				t.Fatalf("finalization request = %#v", request)
+			}
+			built = true
+			return BuiltImageCandidate{ImageID: rendererDigest("e")}, nil
+		},
+		func(_ context.Context, candidate BuiltImageCandidate, request FinalizationBuildRequest) (InspectedImageCandidate, error) {
+			if !built || candidate.ImageID != rendererDigest("e") || request.ValidationReference.Kind != providerstore.ValidationRecordKind {
+				t.Fatalf("candidate = %#v, request = %#v", candidate, request)
+			}
+			image := final.Image
+			image.Image.Digest = candidate.ImageID
+			image.Image.ConfigDigest = candidate.ImageID
+			image.Descriptor.AuthorReference = string(candidate.ImageID)
+			image.Descriptor.ImmutableReference = string(candidate.ImageID)
+			image.Descriptor.ConfigDigest = candidate.ImageID
+			return image, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !validated || !built || result.Image.Image.Digest != rendererDigest("e") || result.Validation.Final.Reference.Kind != providerstore.ValidationRecordKind {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestValidateAndFinalizeBuildDoesNotBuildAfterValidationFailure(t *testing.T) {
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	built := false
+	_, err = validateAndFinalizeBuild(
+		context.Background(), store, []FullImageValidationInput{}, fullValidationInput(t, "f"), false, acceptFullValidationProfile,
+		func(context.Context, FullImageValidationInput) ([]providers.ValidationEvidence, []providers.ExecutableEvidence, error) {
+			return nil, nil, errors.New("validation failed")
+		}, RunOptions{},
+		func(providerstore.Store, FinalizationBuildRequest, RunOptions) (BuiltImageCandidate, error) {
+			built = true
+			return BuiltImageCandidate{}, nil
+		},
+		func(context.Context, BuiltImageCandidate, FinalizationBuildRequest) (InspectedImageCandidate, error) {
+			return InspectedImageCandidate{}, nil
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "validation failed") || built {
+		t.Fatalf("built = %v, error = %v", built, err)
+	}
+}

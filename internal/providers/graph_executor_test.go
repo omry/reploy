@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -9,6 +10,8 @@ import (
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/providerstore"
 )
+
+func acceptGraphConsumer(context.Context, ResolveNodeRequest, ResolveResult) error { return nil }
 
 func TestExecuteProviderGraphCarriesOnlyEarlierCatalogAndPrefix(t *testing.T) {
 	platform, err := blueprint.ParsePlatform("linux/amd64")
@@ -38,6 +41,7 @@ func TestExecuteProviderGraphCarriesOnlyEarlierCatalogAndPrefix(t *testing.T) {
 	result, err := ExecuteProviderGraph(context.Background(), GraphExecutionRequest{
 		Plan: plan, Platform: platform, Sources: []ResolvedSourceInput{}, BaseImage: baseImage, BaseCatalog: baseCatalog,
 		ReusableArtifacts: map[NodeID][]providerstore.StoreObjectRef{},
+		CachedResolutions: map[NodeID]ResolveResult{},
 		Validators: func(NodeSpec) (ProviderOwnerValidators, error) {
 			return ProviderOwnerValidators{Profile: func(RequirementProfile) error { return nil }, Bundle: acceptTestBundleOwner}, nil
 		},
@@ -47,6 +51,7 @@ func TestExecuteProviderGraphCarriesOnlyEarlierCatalogAndPrefix(t *testing.T) {
 			catalogSizes = append(catalogSizes, len(request.EarlierCatalog))
 			return graphTestResolution(t, request, platform), nil
 		},
+		ValidateConsumer: acceptGraphConsumer,
 		MaterializeNode: func(_ context.Context, request GraphNodeMaterializeRequest) (GraphNodeMaterializeResult, error) {
 			image := RealizedImageV1{
 				Digest: testDigest(string(nextDigest)), ConfigDigest: testDigest(string(nextDigest + 1)), RootFSSubject: testDigest(string(nextDigest + 2)),
@@ -80,12 +85,14 @@ func TestExecuteProviderGraphRejectsOutputDriftBeforePublishingCatalog(t *testin
 	_, err := ExecuteProviderGraph(context.Background(), GraphExecutionRequest{
 		Plan: plan, Platform: input.Platform, Sources: input.Sources, BaseImage: input.Upstream, BaseCatalog: baseCatalog,
 		ReusableArtifacts: map[NodeID][]providerstore.StoreObjectRef{input.Node.ID: input.ReusableArtifacts},
+		CachedResolutions: map[NodeID]ResolveResult{},
 		Validators: func(NodeSpec) (ProviderOwnerValidators, error) {
 			return ProviderOwnerValidators{Profile: validateTestProfileOwner, Bundle: acceptTestBundleOwner}, nil
 		},
 		ResolveNode: func(context.Context, ResolveNodeRequest) (ResolveResult, error) {
 			return resolution, nil
 		},
+		ValidateConsumer: acceptGraphConsumer,
 		MaterializeNode: func(context.Context, GraphNodeMaterializeRequest) (GraphNodeMaterializeResult, error) {
 			return GraphNodeMaterializeResult{Image: input.Upstream, Outputs: badOutputs}, nil
 		},
@@ -104,6 +111,7 @@ func TestExecuteProviderGraphRejectsNodeSuccessAfterCancellation(t *testing.T) {
 	_, err := ExecuteProviderGraph(ctx, GraphExecutionRequest{
 		Plan: plan, Platform: input.Platform, Sources: input.Sources, BaseImage: input.Upstream, BaseCatalog: baseCatalog,
 		ReusableArtifacts: map[NodeID][]providerstore.StoreObjectRef{input.Node.ID: input.ReusableArtifacts},
+		CachedResolutions: map[NodeID]ResolveResult{},
 		Validators: func(NodeSpec) (ProviderOwnerValidators, error) {
 			return ProviderOwnerValidators{Profile: validateTestProfileOwner, Bundle: acceptTestBundleOwner}, nil
 		},
@@ -111,6 +119,7 @@ func TestExecuteProviderGraphRejectsNodeSuccessAfterCancellation(t *testing.T) {
 			cancel()
 			return resolution, nil
 		},
+		ValidateConsumer: acceptGraphConsumer,
 		MaterializeNode: func(context.Context, GraphNodeMaterializeRequest) (GraphNodeMaterializeResult, error) {
 			t.Fatal("materialization ran after resolution cancellation")
 			return GraphNodeMaterializeResult{}, nil
@@ -135,12 +144,14 @@ func TestExecuteProviderGraphValidatesResolutionBeforeMaterialization(t *testing
 	_, err = ExecuteProviderGraph(context.Background(), GraphExecutionRequest{
 		Plan: plan, Platform: input.Platform, Sources: input.Sources, BaseImage: input.Upstream, BaseCatalog: baseCatalog,
 		ReusableArtifacts: map[NodeID][]providerstore.StoreObjectRef{input.Node.ID: input.ReusableArtifacts},
+		CachedResolutions: map[NodeID]ResolveResult{},
 		Validators: func(NodeSpec) (ProviderOwnerValidators, error) {
 			return ProviderOwnerValidators{Profile: validateTestProfileOwner, Bundle: acceptTestBundleOwner}, nil
 		},
 		ResolveNode: func(context.Context, ResolveNodeRequest) (ResolveResult, error) {
 			return resolution, nil
 		},
+		ValidateConsumer: acceptGraphConsumer,
 		MaterializeNode: func(context.Context, GraphNodeMaterializeRequest) (GraphNodeMaterializeResult, error) {
 			materialized = true
 			return GraphNodeMaterializeResult{}, nil
@@ -148,6 +159,81 @@ func TestExecuteProviderGraphValidatesResolutionBeforeMaterialization(t *testing
 	})
 	if err == nil || !strings.Contains(err.Error(), "platform") || materialized {
 		t.Fatalf("error = %v; materialized = %v", err, materialized)
+	}
+}
+
+func TestExecuteProviderGraphReresolvesCachedConsumerMismatchExactlyOnce(t *testing.T) {
+	input, resolution := validResolveContract(t)
+	plan := testResolvePlan(input)
+	baseCatalog := []RealizedOutput{catalogOutput("base", "base", "python", "/usr/bin/python")}
+	baseCatalog[0].Candidate.Provenance = plan.Nodes[0].OutputDeclarations[0].Provenance
+	validationCalls := 0
+	resolutionCalls := 0
+	materialized := false
+	_, err := ExecuteProviderGraph(context.Background(), GraphExecutionRequest{
+		Plan: plan, Platform: input.Platform, Sources: input.Sources, BaseImage: input.Upstream, BaseCatalog: baseCatalog,
+		ReusableArtifacts: map[NodeID][]providerstore.StoreObjectRef{input.Node.ID: input.ReusableArtifacts},
+		CachedResolutions: map[NodeID]ResolveResult{input.Node.ID: resolution},
+		Validators: func(NodeSpec) (ProviderOwnerValidators, error) {
+			return ProviderOwnerValidators{Profile: validateTestProfileOwner, Bundle: acceptTestBundleOwner}, nil
+		},
+		ResolveNode: func(context.Context, ResolveNodeRequest) (ResolveResult, error) {
+			resolutionCalls++
+			return resolution, nil
+		},
+		ValidateConsumer: func(context.Context, ResolveNodeRequest, ResolveResult) error {
+			validationCalls++
+			if validationCalls == 1 {
+				return errors.New("cached interpreter changed")
+			}
+			return nil
+		},
+		MaterializeNode: func(context.Context, GraphNodeMaterializeRequest) (GraphNodeMaterializeResult, error) {
+			materialized = true
+			return GraphNodeMaterializeResult{Image: input.Upstream, Outputs: graphTestRealizedOutputs(resolution.Bundle)}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validationCalls != 2 || resolutionCalls != 1 || !materialized {
+		t.Fatalf("validation calls = %d, resolution calls = %d, materialized = %v", validationCalls, resolutionCalls, materialized)
+	}
+}
+
+func TestExecuteProviderGraphRejectsPersistentCachedConsumerMismatchBeforeMaterialization(t *testing.T) {
+	input, resolution := validResolveContract(t)
+	plan := testResolvePlan(input)
+	baseCatalog := []RealizedOutput{catalogOutput("base", "base", "python", "/usr/bin/python")}
+	baseCatalog[0].Candidate.Provenance = plan.Nodes[0].OutputDeclarations[0].Provenance
+	validationCalls := 0
+	resolutionCalls := 0
+	materialized := false
+	_, err := ExecuteProviderGraph(context.Background(), GraphExecutionRequest{
+		Plan: plan, Platform: input.Platform, Sources: input.Sources, BaseImage: input.Upstream, BaseCatalog: baseCatalog,
+		ReusableArtifacts: map[NodeID][]providerstore.StoreObjectRef{input.Node.ID: input.ReusableArtifacts},
+		CachedResolutions: map[NodeID]ResolveResult{input.Node.ID: resolution},
+		Validators: func(NodeSpec) (ProviderOwnerValidators, error) {
+			return ProviderOwnerValidators{Profile: validateTestProfileOwner, Bundle: acceptTestBundleOwner}, nil
+		},
+		ResolveNode: func(context.Context, ResolveNodeRequest) (ResolveResult, error) {
+			resolutionCalls++
+			return resolution, nil
+		},
+		ValidateConsumer: func(context.Context, ResolveNodeRequest, ResolveResult) error {
+			validationCalls++
+			return errors.New("interpreter still does not match")
+		},
+		MaterializeNode: func(context.Context, GraphNodeMaterializeRequest) (GraphNodeMaterializeResult, error) {
+			materialized = true
+			return GraphNodeMaterializeResult{}, nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "fresh resolution still does not match") {
+		t.Fatalf("error = %v", err)
+	}
+	if validationCalls != 2 || resolutionCalls != 1 || materialized {
+		t.Fatalf("validation calls = %d, resolution calls = %d, materialized = %v", validationCalls, resolutionCalls, materialized)
 	}
 }
 

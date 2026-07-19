@@ -24,8 +24,8 @@ func validResolveContract(t *testing.T) (ResolveInput, ResolveResult) {
 		Sources:  []ResolvedSourceInput{},
 		Upstream: upstream,
 		ReusableArtifacts: []providerstore.StoreObjectRef{
-			{Kind: "artifact", Digest: testDigest("8")},
-			{Kind: "artifact", Digest: testDigest("9")},
+			{Kind: providerstore.BlobKind, Digest: testDigest("8")},
+			{Kind: providerstore.BlobKind, Digest: testDigest("9")},
 		},
 	}
 	profileDigest, err := RequirementProfileDigest(profile, validateTestProfileOwner)

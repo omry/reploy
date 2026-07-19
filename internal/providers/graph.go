@@ -26,22 +26,42 @@ func StableProviderInitializationOrder(plan ProviderPlanV1) ([]NodeID, error) {
 	if err := ValidateProviderPlanV1(plan); err != nil {
 		return nil, err
 	}
-	indegree := make(map[NodeID]int, len(plan.Nodes))
-	adjacency := make(map[NodeID][]NodeID, len(plan.Nodes))
-	for _, node := range plan.Nodes {
-		indegree[node.ID] = 0
+	nodes := make([]NodeID, len(plan.Nodes))
+	for index, node := range plan.Nodes {
+		nodes[index] = node.ID
 	}
-	for _, edge := range plan.Edges {
+	return StableProviderNodeOrder(nodes, plan.Edges)
+}
+
+// StableProviderNodeOrder returns the deterministic layer order for a
+// validated provider graph without requiring its provider-specific node
+// payloads. Build-lock validation uses the same ordering rule as execution.
+func StableProviderNodeOrder(nodes []NodeID, edges []ProviderEdgeV1) ([]NodeID, error) {
+	indegree := make(map[NodeID]int, len(nodes))
+	adjacency := make(map[NodeID][]NodeID, len(nodes))
+	for _, node := range nodes {
+		if _, found := indegree[node]; found {
+			return nil, fmt.Errorf("provider graph contains duplicate node %q", node)
+		}
+		indegree[node] = 0
+	}
+	for _, edge := range edges {
+		if _, found := indegree[edge.Supplier]; !found {
+			return nil, fmt.Errorf("provider graph edge supplier %q is missing", edge.Supplier)
+		}
+		if _, found := indegree[edge.Consumer]; !found {
+			return nil, fmt.Errorf("provider graph edge consumer %q is missing", edge.Consumer)
+		}
 		indegree[edge.Consumer]++
 		adjacency[edge.Supplier] = append(adjacency[edge.Supplier], edge.Consumer)
 	}
-	ready := make([]NodeID, 0, len(plan.Nodes))
+	ready := make([]NodeID, 0, len(nodes))
 	for node, count := range indegree {
 		if count == 0 {
 			ready = append(ready, node)
 		}
 	}
-	order := make([]NodeID, 0, len(plan.Nodes))
+	order := make([]NodeID, 0, len(nodes))
 	for len(ready) != 0 {
 		sort.Slice(ready, func(left int, right int) bool { return compareReadyNodes(ready[left], ready[right]) < 0 })
 		node := ready[0]
@@ -54,7 +74,7 @@ func StableProviderInitializationOrder(plan ProviderPlanV1) ([]NodeID, error) {
 			}
 		}
 	}
-	if len(order) != len(plan.Nodes) {
+	if len(order) != len(nodes) {
 		return nil, fmt.Errorf("provider plan has no complete initialization order")
 	}
 	return order, nil
@@ -235,6 +255,12 @@ func validateRealizedCatalogOutput(output RealizedOutput) error {
 		return fmt.Errorf("catalog output evidence must be final exposure evidence with no requirement ID")
 	}
 	return ValidateFinalExecutableEvidence(output.Evidence)
+}
+
+// ValidateRealizedOutput validates one final catalog output without requiring
+// the resolver bundle that originally declared it.
+func ValidateRealizedOutput(output RealizedOutput) error {
+	return validateRealizedCatalogOutput(output)
 }
 
 func validateFrozenEvidence(requirement ExecutableRequirement, output RealizedOutput, evidence ExecutableEvidence) error {

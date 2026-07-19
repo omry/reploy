@@ -13,6 +13,7 @@ const (
 	ResolvedSourceInputSchemaV1 = "resolved-source-input-v1"
 	ResolvedRequestSchemaV1     = "resolved-request-v1"
 	ResolverCacheKeySchemaV1    = "resolver-cache-key-v1"
+	AssemblyKeySchemaV1         = "assembly-key-v1"
 )
 
 type ResolvedSourceInput struct {
@@ -42,6 +43,15 @@ type ResolverCacheKeyV1 struct {
 	ProfileDigest  canonical.Digest   `json:"profile_digest"`
 	ResolverRecipe string             `json:"resolver_recipe"`
 	Platform       blueprint.Platform `json:"platform"`
+}
+
+type AssemblyKeyV1 struct {
+	Schema             string             `json:"schema"`
+	Parent             RealizedImageV1    `json:"parent"`
+	TransactionDigest  canonical.Digest   `json:"transaction_digest"`
+	RendererProfile    string             `json:"renderer_profile"`
+	DockerfileFrontend canonical.Digest   `json:"dockerfile_frontend"`
+	Platform           blueprint.Platform `json:"platform"`
 }
 
 type ResolvedRequestOwnerValidator func(ResolvedRequestV1) error
@@ -167,6 +177,28 @@ func ResolverCacheKeyDigest(key ResolverCacheKeyV1) (canonical.Digest, error) {
 		return "", fmt.Errorf("resolver cache platform: %w", err)
 	}
 	return canonical.Sum("resolver-cache-key", ResolverCacheKeySchemaV1, key)
+}
+
+func AssemblyKeyDigest(key AssemblyKeyV1) (canonical.Digest, error) {
+	if key.Schema != AssemblyKeySchemaV1 {
+		return "", fmt.Errorf("assembly key schema must be %q", AssemblyKeySchemaV1)
+	}
+	if err := key.Parent.Validate(); err != nil {
+		return "", fmt.Errorf("assembly key parent: %w", err)
+	}
+	if err := key.TransactionDigest.Validate(); err != nil {
+		return "", fmt.Errorf("assembly key transaction digest: %w", err)
+	}
+	if !isNonemptyPlainString(key.RendererProfile) {
+		return "", fmt.Errorf("assembly key renderer profile must be nonempty valid text")
+	}
+	if err := key.DockerfileFrontend.Validate(); err != nil {
+		return "", fmt.Errorf("assembly key Dockerfile frontend: %w", err)
+	}
+	if err := key.Platform.Validate(); err != nil {
+		return "", fmt.Errorf("assembly key platform: %w", err)
+	}
+	return canonical.Sum("assembly-key", AssemblyKeySchemaV1, key)
 }
 
 func compareResolvedSourceInputs(left ResolvedSourceInput, right ResolvedSourceInput) int {

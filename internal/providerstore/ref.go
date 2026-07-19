@@ -6,7 +6,11 @@ import (
 	"github.com/omry/reploy/internal/canonical"
 )
 
-const BundleManifestKind = "bundle-manifest"
+const (
+	BlobKind             = "blob"
+	BundleManifestKind   = "bundle-manifest"
+	ValidationRecordKind = "validation-record"
+)
 
 type StoreObjectRef struct {
 	Kind   string           `json:"kind"`
@@ -14,8 +18,10 @@ type StoreObjectRef struct {
 }
 
 func (reference StoreObjectRef) Validate() error {
-	if !isIdentifier(reference.Kind) {
-		return fmt.Errorf("store object kind %q must use the provider identifier grammar", reference.Kind)
+	switch reference.Kind {
+	case BlobKind, BundleManifestKind, ValidationRecordKind:
+	default:
+		return fmt.Errorf("store object kind %q must be blob, bundle-manifest, or validation-record", reference.Kind)
 	}
 	if err := reference.Digest.Validate(); err != nil {
 		return fmt.Errorf("store object digest: %w", err)

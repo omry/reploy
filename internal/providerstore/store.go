@@ -38,6 +38,27 @@ func NewStore(deploymentRoot string) (Store, error) {
 
 func (store Store) Root() string { return store.root }
 
+// NewWorkspace creates private same-filesystem scratch beneath the
+// deployment-owned store. Callers can therefore stage immutable blobs with
+// hardlinks instead of copying their bytes.
+func (store Store) NewWorkspace(pattern string) (string, error) {
+	if pattern == "" || filepath.Base(pattern) != pattern || strings.ContainsAny(pattern, `/\\`) {
+		return "", fmt.Errorf("provider store workspace pattern must be one path component")
+	}
+	if err := store.prepareBaseDirectories(); err != nil {
+		return "", err
+	}
+	workspace, err := os.MkdirTemp(filepath.Join(store.root, "tmp"), pattern)
+	if err != nil {
+		return "", fmt.Errorf("create provider store workspace: %w", err)
+	}
+	if err := os.Chmod(workspace, 0o700); err != nil {
+		_ = os.Remove(workspace)
+		return "", fmt.Errorf("protect provider store workspace: %w", err)
+	}
+	return workspace, nil
+}
+
 // Publish implements providers.ArtifactSink without importing the provider
 // package. It streams one raw artifact into private storage, then atomically
 // publishes it under its content digest without replacing an existing object.
@@ -95,62 +116,120 @@ func (store Store) PublishManifest(ctx context.Context, reference StoreObjectRef
 	if err := validateBundleManifestReference(reference); err != nil {
 		return err
 	}
-	temporary, err := store.writeTemporary(ctx, "manifest-*", bytes.NewReader(content))
+	return store.publishRecord(ctx, reference, content, "manifest")
+}
+
+func (store Store) PublishValidationRecord(ctx context.Context, reference StoreObjectRef, content []byte) error {
+	if err := validateValidationRecordReference(reference); err != nil {
+		return err
+	}
+	return store.publishRecord(ctx, reference, content, "validation record")
+}
+
+func (store Store) publishRecord(ctx context.Context, reference StoreObjectRef, content []byte, description string) error {
+	temporary, err := store.writeTemporary(ctx, strings.ReplaceAll(description, " ", "-")+"-*", bytes.NewReader(content))
 	if err != nil {
 		return err
 	}
 	defer os.Remove(temporary.path)
-	finalPath, err := store.ManifestPath(reference)
+	finalPath, err := store.recordPath(reference)
+	if err != nil {
+		return err
+	}
+	directory, err := recordDirectory(reference.Kind)
 	if err != nil {
 		return err
 	}
 	finalDir := filepath.Dir(finalPath)
-	if err := ensureRealDirectory(filepath.Join(store.root, "manifests")); err != nil {
+	if err := ensureRealDirectory(filepath.Join(store.root, directory)); err != nil {
 		return err
 	}
-	if err := ensureRealDirectory(filepath.Join(store.root, "manifests", "sha256")); err != nil {
+	if err := ensureRealDirectory(filepath.Join(store.root, directory, "sha256")); err != nil {
 		return err
 	}
 	if err := ensureRealDirectory(finalDir); err != nil {
 		return err
 	}
 	if err := publishTemporary(temporary.path, finalPath, func() error {
-		existing, err := readRegularFile(finalPath, "provider store manifest")
+		existing, err := readRegularFile(finalPath, "provider store "+description)
 		if err != nil {
 			return err
 		}
 		if !bytes.Equal(existing, content) {
-			return fmt.Errorf("existing provider store manifest content differs")
+			return fmt.Errorf("existing provider store %s content differs", description)
 		}
 		return nil
 	}); err != nil {
-		return fmt.Errorf("publish provider store manifest: %w", err)
+		return fmt.Errorf("publish provider store %s: %w", description, err)
 	}
 	return nil
 }
 
 func (store Store) LoadManifest(reference StoreObjectRef) ([]byte, error) {
-	path, err := store.ManifestPath(reference)
+	if err := validateBundleManifestReference(reference); err != nil {
+		return nil, err
+	}
+	return store.loadRecord(reference, "manifest")
+}
+
+func (store Store) LoadValidationRecord(reference StoreObjectRef) ([]byte, error) {
+	if err := validateValidationRecordReference(reference); err != nil {
+		return nil, err
+	}
+	return store.loadRecord(reference, "validation record")
+}
+
+func (store Store) loadRecord(reference StoreObjectRef, description string) ([]byte, error) {
+	path, err := store.recordPath(reference)
+	if err != nil {
+		return nil, err
+	}
+	directory, err := recordDirectory(reference.Kind)
 	if err != nil {
 		return nil, err
 	}
 	hex := strings.TrimPrefix(string(reference.Digest), "sha256:")
-	if err := store.requireDirectories("manifests", "sha256", hex[:2]); err != nil {
+	if err := store.requireDirectories(directory, "sha256", hex[:2]); err != nil {
 		return nil, err
 	}
-	content, err := readRegularFile(path, "provider store manifest")
-	if err != nil {
-		return nil, err
-	}
-	return content, nil
+	return readRegularFile(path, "provider store "+description)
 }
 
 func (store Store) ManifestPath(reference StoreObjectRef) (string, error) {
 	if err := validateBundleManifestReference(reference); err != nil {
 		return "", err
 	}
+	return store.recordPath(reference)
+}
+
+func (store Store) ValidationRecordPath(reference StoreObjectRef) (string, error) {
+	if err := validateValidationRecordReference(reference); err != nil {
+		return "", err
+	}
+	return store.recordPath(reference)
+}
+
+func (store Store) recordPath(reference StoreObjectRef) (string, error) {
+	if err := reference.Validate(); err != nil {
+		return "", err
+	}
+	directory, err := recordDirectory(reference.Kind)
+	if err != nil {
+		return "", err
+	}
 	hex := strings.TrimPrefix(string(reference.Digest), "sha256:")
-	return filepath.Join(store.root, "manifests", "sha256", hex[:2], hex+".json"), nil
+	return filepath.Join(store.root, directory, "sha256", hex[:2], hex+".json"), nil
+}
+
+func recordDirectory(kind string) (string, error) {
+	switch kind {
+	case BundleManifestKind:
+		return "manifests", nil
+	case ValidationRecordKind:
+		return "validation", nil
+	default:
+		return "", fmt.Errorf("provider store record kind %q is unsupported", kind)
+	}
 }
 
 func validateBundleManifestReference(reference StoreObjectRef) error {
@@ -159,6 +238,16 @@ func validateBundleManifestReference(reference StoreObjectRef) error {
 	}
 	if reference.Kind != BundleManifestKind {
 		return fmt.Errorf("provider store manifest reference kind must be %q", BundleManifestKind)
+	}
+	return nil
+}
+
+func validateValidationRecordReference(reference StoreObjectRef) error {
+	if err := reference.Validate(); err != nil {
+		return fmt.Errorf("provider store validation record reference: %w", err)
+	}
+	if reference.Kind != ValidationRecordKind {
+		return fmt.Errorf("provider store validation record reference kind must be %q", ValidationRecordKind)
 	}
 	return nil
 }

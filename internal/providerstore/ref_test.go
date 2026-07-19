@@ -12,12 +12,15 @@ func storeRefDigest(char string) canonical.Digest {
 }
 
 func TestStoreObjectRefValidation(t *testing.T) {
-	if err := (StoreObjectRef{Kind: "artifact", Digest: storeRefDigest("a")}).Validate(); err != nil {
-		t.Fatal(err)
+	for _, kind := range []string{BlobKind, BundleManifestKind, ValidationRecordKind} {
+		if err := (StoreObjectRef{Kind: kind, Digest: storeRefDigest("a")}).Validate(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, invalid := range []StoreObjectRef{
 		{Kind: "Artifact", Digest: storeRefDigest("a")},
-		{Kind: "artifact", Digest: "bad"},
+		{Kind: "artifact", Digest: storeRefDigest("a")},
+		{Kind: BlobKind, Digest: "bad"},
 	} {
 		if err := invalid.Validate(); err == nil {
 			t.Fatalf("invalid store reference was accepted: %#v", invalid)

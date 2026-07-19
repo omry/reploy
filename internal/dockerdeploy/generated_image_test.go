@@ -24,7 +24,7 @@ func TestGeneratedImagePrototypeUsesBuildKitReadOnlyMountAndExecArgv(t *testing.
 	}
 	text := string(dockerfile)
 	for _, want := range []string{
-		"# syntax=docker/dockerfile:1.7", "FROM ${REPLOY_BASE_IMAGE}",
+		"# syntax=" + MaterializationDockerfileSyntax, "FROM ${REPLOY_BASE_IMAGE}",
 		"RUN --mount=type=bind,target=/reploy-bundle,readonly [\"python\",\"-m\",\"venv\",\"/opt/reploy/python\"]",
 	} {
 		if !strings.Contains(text, want) {

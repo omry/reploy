@@ -50,6 +50,7 @@ func TestPreparedNodeResolverReturnsCanonicalBundleThroughGraph(t *testing.T) {
 		Plan: plan, Platform: platform, Sources: []providerapi.ResolvedSourceInput{},
 		BaseImage: upstream, BaseCatalog: catalog,
 		ReusableArtifacts: map[providerapi.NodeID][]providerstore.StoreObjectRef{},
+		CachedResolutions: map[providerapi.NodeID]providerapi.ResolveResult{},
 		Validators: func(node providerapi.NodeSpec) (providerapi.ProviderOwnerValidators, error) {
 			if node.Provider != blueprint.ComponentTypePython {
 				return providerapi.ProviderOwnerValidators{}, fmt.Errorf("unexpected provider %q", node.Provider)
@@ -63,6 +64,7 @@ func TestPreparedNodeResolverReturnsCanonicalBundleThroughGraph(t *testing.T) {
 				Profile: ValidateRequirementProfileV1, Bundle: ValidateResolvedBundlePayloadV1,
 			})
 		},
+		ValidateConsumer: func(context.Context, providerapi.ResolveNodeRequest, providerapi.ResolveResult) error { return nil },
 		MaterializeNode: func(_ context.Context, request providerapi.GraphNodeMaterializeRequest) (providerapi.GraphNodeMaterializeResult, error) {
 			return providerapi.GraphNodeMaterializeResult{
 				Image: providerapi.RealizedImageV1{

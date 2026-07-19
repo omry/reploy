@@ -17,6 +17,13 @@ type ArtifactDescriptor struct {
 	SHA256      canonical.Digest `json:"sha256"`
 }
 
+func (descriptor ArtifactDescriptor) StoreObjectRef() (StoreObjectRef, error) {
+	if err := descriptor.Validate(); err != nil {
+		return StoreObjectRef{}, err
+	}
+	return StoreObjectRef{Kind: BlobKind, Digest: descriptor.SHA256}, nil
+}
+
 func (descriptor ArtifactDescriptor) Validate() error {
 	if descriptor.LogicalPath == "" || path.IsAbs(descriptor.LogicalPath) || path.Clean(descriptor.LogicalPath) != descriptor.LogicalPath || strings.Contains(descriptor.LogicalPath, `\`) {
 		return fmt.Errorf("artifact logical path %q must be a normalized relative slash path", descriptor.LogicalPath)

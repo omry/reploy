@@ -13,6 +13,7 @@ func TestProbeBuildKitCapabilitiesLinuxAndDesktop(t *testing.T) {
 		ctx  string
 		kind DockerEngineKind
 	}{
+		{name: "minimum engine", info: "24.0.0\tlinux\tDebian GNU/Linux 12\n", ctx: "default\n", kind: DockerEngineLinux},
 		{name: "linux engine", info: "27.5.1\tlinux\tUbuntu 24.04 LTS\n", ctx: "default\n", kind: DockerEngineLinux},
 		{name: "desktop", info: "29.6.1\tlinux\tDocker Desktop\n", ctx: "desktop-linux\n", kind: DockerEngineDesktop},
 	}
@@ -39,7 +40,7 @@ func TestProbeBuildKitCapabilitiesLinuxAndDesktop(t *testing.T) {
 }
 
 func TestProbeBuildKitCapabilitiesRejectsUnsupportedDaemon(t *testing.T) {
-	tests := []string{"19.03.1\tlinux\tUbuntu", "29.0.0\twindows\tDocker Desktop"}
+	tests := []string{"23.0.6\tlinux\tUbuntu", "29.0.0\twindows\tDocker Desktop"}
 	for _, info := range tests {
 		run := func(_ context.Context, args ...string) (string, error) {
 			if args[0] == "info" {

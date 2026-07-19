@@ -694,19 +694,11 @@ func BundlePrepare(options BundlePrepareOptions) error {
 		return err
 	}
 	defer os.RemoveAll(tmpDir)
-	if !options.PyPIOnly {
-		if err := measureBundlePhase(timer, options.Progress, "copy existing bundle", func() error {
-			return copyWheelhouse(bundleDir, tmpDir)
-		}); err != nil {
-			return err
-		}
-	}
 	requirementsPath := ""
 	findLinksDir := ""
 	buildSources := []bundleBuildSource{}
 	sourcesForCommand := []bundleBuildSource{}
 	noIndex := false
-	skipWheelhouseBuild := false
 	var nextWheelhouseManifest *wheelhouseManifest
 	if !options.PyPIOnly {
 		if err := measureBundlePhase(timer, options.Progress, "prepare local sources", func() error {
@@ -723,14 +715,13 @@ func BundlePrepare(options BundlePrepareOptions) error {
 						sourceBuildNames[source.Name] = true
 					}
 				case WheelhouseBackendReploy:
-					plan, err := planLocalWheelhouseBuild(state.Bundle.Roots, buildSources, bundleDir, tmpDir)
+					plan, err := planLocalWheelhouseBuild(state.Bundle.Roots, buildSources, bundleDir)
 					if err != nil {
 						return err
 					}
 					nextWheelhouseManifest = plan.Manifest
 					sourcesForCommand = plan.StaleSources
 					noIndex = plan.NoIndex
-					skipWheelhouseBuild = plan.SkipBuild
 					if buildBackend == PythonBuildBackendPip {
 						sourceBuildNames = plan.StaleSourceNames
 					}
@@ -745,7 +736,7 @@ func BundlePrepare(options BundlePrepareOptions) error {
 				if err := os.WriteFile(requirementsPath, requirements, 0o644); err != nil {
 					return err
 				}
-				findLinksDir = tmpDir
+				findLinksDir = bundleDir
 			}
 			return nil
 		}); err != nil {
@@ -768,21 +759,10 @@ func BundlePrepare(options BundlePrepareOptions) error {
 	}
 	runStdout := stdout
 	runStderr := stderr
-	if skipWheelhouseBuild {
-		if err := measureBundlePhase(timer, options.Progress, "build wheelhouse", func() error {
-			if options.Verbose && options.Stdout != nil {
-				fmt.Fprintln(options.Stdout, "bundle build: reusing unchanged wheelhouse")
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-	} else {
-		if err := measureBundlePhase(timer, options.Progress, "build wheelhouse", func() error {
-			return runInterruptibleCommand(runBundleCommand, spec, bundleDockerRunOptions(runStdout, runStderr, options.DockerPreflightTimeout))
-		}); err != nil {
-			return err
-		}
+	if err := measureBundlePhase(timer, options.Progress, "build wheelhouse", func() error {
+		return runInterruptibleCommand(runBundleCommand, spec, bundleDockerRunOptions(runStdout, runStderr, options.DockerPreflightTimeout))
+	}); err != nil {
+		return err
 	}
 	if err := measureBundlePhase(timer, options.Progress, "replace bundle", func() error {
 		return replaceWheelhouse(tmpDir, bundleDir)
@@ -1376,10 +1356,9 @@ type localWheelhouseBuildPlan struct {
 	StaleSources     []bundleBuildSource
 	StaleSourceNames map[string]bool
 	NoIndex          bool
-	SkipBuild        bool
 }
 
-func planLocalWheelhouseBuild(roots []deploy.ArtifactRoot, sources []bundleBuildSource, previousBundleDir string, workingBundleDir string) (localWheelhouseBuildPlan, error) {
+func planLocalWheelhouseBuild(roots []deploy.ArtifactRoot, sources []bundleBuildSource, previousBundleDir string) (localWheelhouseBuildPlan, error) {
 	manifest := wheelhouseManifest{
 		SchemaVersion:           1,
 		RequirementsFingerprint: wheelhouseRequirementsFingerprint(roots, sources),
@@ -1414,7 +1393,7 @@ func planLocalWheelhouseBuild(roots []deploy.ArtifactRoot, sources []bundleBuild
 				staleNames[source.Name] = true
 				continue
 			}
-			if _, err := os.Stat(filepath.Join(workingBundleDir, previousSource.Wheel)); err != nil {
+			if _, err := os.Stat(filepath.Join(previousBundleDir, previousSource.Wheel)); err != nil {
 				if os.IsNotExist(err) {
 					stale = append(stale, source)
 					staleNames[source.Name] = true
@@ -1425,23 +1404,11 @@ func planLocalWheelhouseBuild(roots []deploy.ArtifactRoot, sources []bundleBuild
 			manifest.LocalSources[source.Name] = previousSource
 		}
 	}
-	if previous != nil {
-		for _, source := range stale {
-			previousSource := previous.LocalSources[source.Name]
-			if previousSource.Wheel == "" {
-				continue
-			}
-			if err := os.Remove(filepath.Join(workingBundleDir, previousSource.Wheel)); err != nil && !os.IsNotExist(err) {
-				return localWheelhouseBuildPlan{}, err
-			}
-		}
-	}
 	return localWheelhouseBuildPlan{
 		Manifest:         &manifest,
 		StaleSources:     stale,
 		StaleSourceNames: staleNames,
 		NoIndex:          previous != nil && previous.SchemaVersion == 1 && previous.RequirementsFingerprint == manifest.RequirementsFingerprint,
-		SkipBuild:        len(stale) == 0,
 	}, nil
 }
 
@@ -1745,25 +1712,6 @@ func requireBundlePrepareInputs(dir string, bundleDir string) error {
 	return nil
 }
 
-func copyWheelhouse(sourceDir string, targetDir string) error {
-	entries, err := os.ReadDir(sourceDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".whl") {
-			continue
-		}
-		if _, err := copyFileIfDifferent(filepath.Join(sourceDir, entry.Name()), filepath.Join(targetDir, entry.Name())); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func replaceWheelhouse(sourceDir string, targetDir string) error {
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		return err
@@ -1780,7 +1728,19 @@ func replaceWheelhouse(sourceDir string, targetDir string) error {
 			return err
 		}
 	}
-	return copyWheelhouse(sourceDir, targetDir)
+	entries, err = os.ReadDir(sourceDir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".whl") {
+			continue
+		}
+		if err := os.Rename(filepath.Join(sourceDir, entry.Name()), filepath.Join(targetDir, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func singleWheelInDir(dir string) (string, error) {

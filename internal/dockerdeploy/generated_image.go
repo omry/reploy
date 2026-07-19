@@ -14,8 +14,6 @@ import (
 	"github.com/omry/reploy/internal/providers"
 )
 
-const generatedImageDockerfileSyntax = "docker/dockerfile:1.7"
-
 type GeneratedImagePlan struct {
 	BaseImage       string
 	BaseIdentity    string
@@ -128,7 +126,7 @@ func GeneratedImageDockerfile(plan GeneratedImagePlan) ([]byte, error) {
 		return nil, fmt.Errorf("generated image bundle mount must be absolute")
 	}
 	var output bytes.Buffer
-	fmt.Fprintf(&output, "# syntax=%s\n", generatedImageDockerfileSyntax)
+	fmt.Fprintf(&output, "# syntax=%s\n", MaterializationDockerfileSyntax)
 	output.WriteString("ARG REPLOY_BASE_IMAGE\n")
 	output.WriteString("FROM ${REPLOY_BASE_IMAGE}\n")
 	for _, step := range materialization.Steps {

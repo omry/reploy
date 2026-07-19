@@ -976,6 +976,9 @@ func TestBundlePrepareUsesPackLocalSourcesForFilePacks(t *testing.T) {
 	var buildRequirementsPath string
 	var checkRequirementsPath string
 	var wheelhouseMount string
+	var bundleInputMount string
+	var bundleInputReadOnly bool
+	var wheelhouseOutputWritable bool
 	var sourceMount string
 	restore := stubBundleRunner(func(spec CommandSpec, options RunOptions) error {
 		switch {
@@ -999,6 +1002,9 @@ func TestBundlePrepareUsesPackLocalSourcesForFilePacks(t *testing.T) {
 			}
 			wheelhouse := hostPathForContainerMount(t, spec.Args, "/wheelhouse")
 			wheelhouseMount = wheelhouse
+			bundleInputMount = hostPathForContainerMount(t, spec.Args, "/bundle")
+			bundleInputReadOnly = containsInOrder(spec.Args, []string{"-v", bundleInputMount + ":/bundle:ro"})
+			wheelhouseOutputWritable = containsInOrder(spec.Args, []string{"-v", wheelhouseMount + ":/wheelhouse"})
 			if err := os.WriteFile(filepath.Join(wheelhouse, "demo_pkg-1.2.3-py3-none-any.whl"), []byte("demo\n"), 0o644); err != nil {
 				return err
 			}
@@ -1041,6 +1047,13 @@ func TestBundlePrepareUsesPackLocalSourcesForFilePacks(t *testing.T) {
 	}
 	if !strings.HasPrefix(wheelhouseMount, filepath.Join(deployDir, ".reploy")+string(filepath.Separator)) {
 		t.Fatalf("wheelhouse mount = %q, want under deployment .reploy", wheelhouseMount)
+	}
+	wantBundleInput, err := deploymentBundleDir(deployDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bundleInputMount != wantBundleInput || wheelhouseMount == bundleInputMount || !bundleInputReadOnly || !wheelhouseOutputWritable {
+		t.Fatalf("resolver input = %q (read-only %v), output = %q (writable %v), want separate read-only input %q", bundleInputMount, bundleInputReadOnly, wheelhouseMount, wheelhouseOutputWritable, wantBundleInput)
 	}
 	if got := readFile(t, filepath.Join(deployDir, RequirementsFileName)); got != expectedRuntimeRequirements {
 		t.Fatalf("persistent requirements = %q", got)
@@ -1156,7 +1169,7 @@ func TestBundlePrepareReportsQuietProgressAndPhaseError(t *testing.T) {
 	if stdout.String() != "" || stderr.String() != "" {
 		t.Fatalf("stdout=%q stderr=%q, want quiet command output", stdout.String(), stderr.String())
 	}
-	for _, want := range []string{"prepare workspace", "copy existing bundle", "prepare local sources", "build wheelhouse"} {
+	for _, want := range []string{"prepare workspace", "prepare local sources", "build wheelhouse"} {
 		if !strings.Contains(progress.String(), want) {
 			t.Fatalf("progress missing %q:\n%s", want, progress.String())
 		}
@@ -1225,7 +1238,6 @@ func TestBundlePrepareVerboseStreamsCommandOutput(t *testing.T) {
 		"bundle build: build wheelhouse...",
 		"bundle build timing:",
 		"prepare workspace:",
-		"copy existing bundle:",
 		"prepare local sources:",
 		"build wheelhouse:",
 		"replace bundle:",
@@ -1284,7 +1296,6 @@ func TestBundlePrepareWarmRuntimeCreatesManagedFilePlaceholders(t *testing.T) {
 
 func TestPlanLocalWheelhouseBuildSkipsUnchangedSources(t *testing.T) {
 	previousBundle := t.TempDir()
-	workingBundle := t.TempDir()
 	sources := []bundleBuildSource{
 		makeWheelhousePlanSource(t, "demo-suite", "1.2.3"),
 		makeWheelhousePlanSource(t, "demo-imap", "1.2.3"),
@@ -1308,19 +1319,16 @@ func TestPlanLocalWheelhouseBuildSkipsUnchangedSources(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(previousBundle, wheel), []byte(source.Name), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(workingBundle, wheel), []byte(source.Name), 0o644); err != nil {
-			t.Fatal(err)
-		}
 	}
 	if err := writeRawWheelhouseManifest(previousBundle, manifest); err != nil {
 		t.Fatal(err)
 	}
 
-	plan, err := planLocalWheelhouseBuild(roots, sources, previousBundle, workingBundle)
+	plan, err := planLocalWheelhouseBuild(roots, sources, previousBundle)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !plan.SkipBuild || !plan.NoIndex || len(plan.StaleSources) != 0 {
+	if !plan.NoIndex || len(plan.StaleSources) != 0 {
 		t.Fatalf("plan = %#v", plan)
 	}
 	requirements, err := localBuildRequirements(roots, sources, plan.StaleSourceNames)
@@ -1398,7 +1406,6 @@ func TestBundleBackendsRejectPipWheelhouseWithUVBuildBackend(t *testing.T) {
 
 func TestPlanLocalWheelhouseBuildRebuildsChangedSourceOnly(t *testing.T) {
 	previousBundle := t.TempDir()
-	workingBundle := t.TempDir()
 	sources := []bundleBuildSource{
 		makeWheelhousePlanSource(t, "demo-suite", "1.2.3"),
 		makeWheelhousePlanSource(t, "demo-imap", "1.2.3"),
@@ -1422,9 +1429,6 @@ func TestPlanLocalWheelhouseBuildRebuildsChangedSourceOnly(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(previousBundle, wheel), []byte(source.Name), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(workingBundle, wheel), []byte(source.Name), 0o644); err != nil {
-			t.Fatal(err)
-		}
 	}
 	if err := writeRawWheelhouseManifest(previousBundle, manifest); err != nil {
 		t.Fatal(err)
@@ -1433,18 +1437,15 @@ func TestPlanLocalWheelhouseBuildRebuildsChangedSourceOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	plan, err := planLocalWheelhouseBuild(roots, sources, previousBundle, workingBundle)
+	plan, err := planLocalWheelhouseBuild(roots, sources, previousBundle)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.SkipBuild || !plan.NoIndex || len(plan.StaleSources) != 1 || plan.StaleSources[0].Name != "demo-imap" {
+	if !plan.NoIndex || len(plan.StaleSources) != 1 || plan.StaleSources[0].Name != "demo-imap" {
 		t.Fatalf("plan = %#v", plan)
 	}
-	if _, err := os.Stat(filepath.Join(workingBundle, "demo_imap-1.2.3-py3-none-any.whl")); !os.IsNotExist(err) {
-		t.Fatalf("stale local wheel should be removed before rebuild: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(workingBundle, "demo_suite-1.2.3-py3-none-any.whl")); err != nil {
-		t.Fatalf("unchanged local wheel should remain: %v", err)
+	if _, err := os.Stat(filepath.Join(previousBundle, "demo_imap-1.2.3-py3-none-any.whl")); err != nil {
+		t.Fatalf("planning changed the read-only prior bundle: %v", err)
 	}
 	requirements, err := localBuildRequirements(roots, sources, plan.StaleSourceNames)
 	if err != nil {
@@ -1453,6 +1454,50 @@ func TestPlanLocalWheelhouseBuildRebuildsChangedSourceOnly(t *testing.T) {
 	text := string(requirements)
 	if strings.Contains(text, "/wheelhouse/.source/demo-suite") || !strings.Contains(text, "/wheelhouse/.source/demo-imap") {
 		t.Fatalf("requirements should rebuild only demo-imap:\n%s", text)
+	}
+}
+
+func TestReplaceWheelhouseMovesOnlySelectedOutputWheels(t *testing.T) {
+	parent := t.TempDir()
+	source := filepath.Join(parent, "resolver-output")
+	target := filepath.Join(parent, "bundle")
+	if err := os.Mkdir(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	selected := "selected-1.0-py3-none-any.whl"
+	stale := "stale-1.0-py3-none-any.whl"
+	if err := os.WriteFile(filepath.Join(source, selected), []byte("selected"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "resolver.log"), []byte("not published"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, stale), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, wheelhouseManifestName), []byte("manifest"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceWheelhouse(source, target); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(target, selected)); got != "selected" {
+		t.Fatalf("selected wheel = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(source, selected)); !os.IsNotExist(err) {
+		t.Fatalf("selected wheel was copied instead of moved: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, stale)); !os.IsNotExist(err) {
+		t.Fatalf("stale wheel remains: %v", err)
+	}
+	if got := readFile(t, filepath.Join(source, "resolver.log")); got != "not published" {
+		t.Fatalf("non-wheel resolver output changed: %q", got)
+	}
+	if got := readFile(t, filepath.Join(target, wheelhouseManifestName)); got != "manifest" {
+		t.Fatalf("existing manifest changed: %q", got)
 	}
 }
 

@@ -129,6 +129,58 @@ func TestStoreCancellationRemovesUnpublishedBlob(t *testing.T) {
 	}
 }
 
+func TestStoreRemoveTemporaryEntriesPreservesPublishedObjects(t *testing.T) {
+	deployment := t.TempDir()
+	store, err := NewStore(deployment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := store.Publish(context.Background(), "keep.deb", "deb", strings.NewReader("published"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := store.NewWorkspace("abandoned-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(workspace, "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "nested", "partial"), []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.Root(), "tmp", "partial-blob"), []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RemoveTemporaryEntries(); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(filepath.Join(store.Root(), "tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("temporary entries remain: %#v", entries)
+	}
+	if err := store.VerifyArtifact(descriptor); err != nil {
+		t.Fatalf("published object was changed: %v", err)
+	}
+}
+
+func TestStoreRemoveTemporaryEntriesDoesNotCreateMissingStore(t *testing.T) {
+	deployment := t.TempDir()
+	store, err := NewStore(deployment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RemoveTemporaryEntries(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(deployment, ".reploy")); !os.IsNotExist(err) {
+		t.Fatalf("cleanup created deployment state: %v", err)
+	}
+}
+
 func TestStoreRejectsSymlinkedStoreRoot(t *testing.T) {
 	deployment := t.TempDir()
 	outside := t.TempDir()
@@ -177,6 +229,145 @@ func TestStoreManifestPublicationReusesOnlyIdenticalContent(t *testing.T) {
 	if string(content) != "first" {
 		t.Fatalf("manifest was replaced: %q", content)
 	}
+}
+
+func TestStoreValidationRecordPublicationReusesOnlyIdenticalContent(t *testing.T) {
+	deployment := t.TempDir()
+	store, err := NewStore(deployment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := StoreObjectRef{Kind: ValidationRecordKind, Digest: storeRefDigest("d")}
+	if err := store.PublishValidationRecord(context.Background(), reference, []byte("validation")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PublishValidationRecord(context.Background(), reference, []byte("validation")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PublishValidationRecord(context.Background(), reference, []byte("other")); err == nil || !strings.Contains(err.Error(), "content differs") {
+		t.Fatalf("error = %v", err)
+	}
+	content, err := store.LoadValidationRecord(reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "validation" {
+		t.Fatalf("validation record was replaced: %q", content)
+	}
+}
+
+func TestStoreRemoveUnreachableKeepsExactClosure(t *testing.T) {
+	deployment := t.TempDir()
+	store, err := NewStore(deployment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keepBlob, err := store.Publish(context.Background(), "keep.deb", "deb", strings.NewReader("keep"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropBlob, err := store.Publish(context.Background(), "drop.deb", "deb", strings.NewReader("drop"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keepBlobRef, err := keepBlob.StoreObjectRef()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keepManifest := StoreObjectRef{Kind: BundleManifestKind, Digest: storeRefDigest("e")}
+	dropManifest := StoreObjectRef{Kind: BundleManifestKind, Digest: storeRefDigest("f")}
+	keepValidation := StoreObjectRef{Kind: ValidationRecordKind, Digest: storeRefDigest("1")}
+	dropValidation := StoreObjectRef{Kind: ValidationRecordKind, Digest: storeRefDigest("2")}
+	for _, item := range []struct {
+		reference StoreObjectRef
+		content   string
+	}{
+		{keepManifest, "keep manifest"}, {dropManifest, "drop manifest"},
+	} {
+		if err := store.PublishManifest(context.Background(), item.reference, []byte(item.content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, item := range []struct {
+		reference StoreObjectRef
+		content   string
+	}{
+		{keepValidation, "keep validation"}, {dropValidation, "drop validation"},
+	} {
+		if err := store.PublishValidationRecord(context.Background(), item.reference, []byte(item.content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reachable := []StoreObjectRef{keepBlobRef, keepManifest, keepValidation}
+	if err := store.RemoveUnreachable(reachable); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.VerifyArtifact(keepBlob); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadManifest(keepManifest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadValidationRecord(keepValidation); err != nil {
+		t.Fatal(err)
+	}
+	dropBlobPath, err := store.BlobPath(dropBlob.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		dropBlobPath,
+		mustManifestPath(t, store, dropManifest),
+		mustValidationRecordPath(t, store, dropValidation),
+	} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("unreachable object remains at %s: %v", path, err)
+		}
+	}
+}
+
+func TestStoreRemoveUnreachablePreflightsLayoutBeforeDeletion(t *testing.T) {
+	deployment := t.TempDir()
+	store, err := NewStore(deployment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := store.Publish(context.Background(), "keep.whl", "wheel", strings.NewReader("keep"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := StoreObjectRef{Kind: BundleManifestKind, Digest: storeRefDigest("3")}
+	if err := store.PublishManifest(context.Background(), manifest, []byte("manifest")); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := mustManifestPath(t, store, manifest)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(manifestPath), "unexpected"), []byte("unknown"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RemoveUnreachable([]StoreObjectRef{}); err == nil || !strings.Contains(err.Error(), "unrecognized object name") {
+		t.Fatalf("error = %v", err)
+	}
+	if err := store.VerifyArtifact(descriptor); err != nil {
+		t.Fatalf("recognized object was removed before layout validation: %v", err)
+	}
+}
+
+func mustManifestPath(t *testing.T, store Store, reference StoreObjectRef) string {
+	t.Helper()
+	path, err := store.ManifestPath(reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func mustValidationRecordPath(t *testing.T, store Store, reference StoreObjectRef) string {
+	t.Helper()
+	path, err := store.ValidationRecordPath(reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func TestStoreLoadManifestRejectsSymlink(t *testing.T) {

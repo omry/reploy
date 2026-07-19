@@ -1026,12 +1026,18 @@ path directly, without `PATH`, `eval`, `sh -c`, or source interpolation.
 
 A private `GeneratedExecutableOperand` declares a recipe role, exact
 provider-derived invocation path beneath a protected provider-owned root, and a
-validation policy before the transaction runs. The script may invoke it only
-after the generating operation and after verifying its cycle-checked link chain,
-regular executable terminal, and provider ownership. Its terminal may be a new
-generated file or an already validated upstream executable such as the
-bootstrap interpreter. No blueprint, package, artifact, or other ordinary data
-can select either an upstream or generated command.
+validation policy before the transaction runs. A fixed trusted recipe may use
+such a path after its fixed generating operation. In particular, a Python
+component first verifies that its selected base/APT executable is Python and
+records its actual compatible version, uses that interpreter to create the
+component venv, and may then use the venv's controlled interpreter entry to
+populate that same venv. This does not require the host backend to pause a
+single `RUN`: the venv entry is a link or copy derived from the already
+validated interpreter, not a separately sourced Python installation. Full
+link, terminal, ownership, file, and output evidence is collected from the
+completed layer before it is accepted or exposed downstream. No blueprint,
+package, artifact, or other ordinary data can select either an upstream or
+generated command.
 
 The script resets `IFS`, `PATH`, `umask`, and other provider-defined shell state
 before doing work. It invokes tools by validated absolute path through an
@@ -1370,12 +1376,14 @@ disposable container. A throwaway BuildKit stage may implement the same contract
 later. The resolver cannot modify the upstream image and remains an internal
 provider-graph operation rather than a public command.
 
-The materializer performs the equivalent checks before its first persistent
-change. Python does not create a temporary venv merely to prove `venv` support;
-creation of the real component venv is the authoritative fixed-recipe check.
-Failure commits no provider layer and identifies the selected interpreter so
-the author can supply a package set that provides `venv` or choose another
-supplier.
+The materializer performs the equivalent checks immediately before its first
+persistent change: the selected absolute executable must still be Python, its
+actual version must still be parseable and compatible, and its evidence must
+still match the exact prefix. Python does not create a temporary venv merely to
+prove `venv` support; creation of the real component venv is the authoritative
+fixed-recipe check. Failure commits no provider layer and identifies the
+selected interpreter so the author can supply a package set that provides
+`venv` or choose another supplier.
 
 The host creates the output directory as an empty, private Reploy temporary
 directory outside deployment and cache publication paths and confirms that it
@@ -1452,10 +1460,14 @@ The provider must:
    `/opt/reploy/providers/python/<component>`.
    Successful creation of this real environment proves the recipe's fixed
    `venv` prerequisite; there is no separate capability probe.
-10. Validate the generated environment interpreter at its declared path, then
-    use it as a provider-generated executable operand to install the closed
-    wheel bundle offline and record its realized link/terminal evidence.
-11. Derive the component output catalog from the exact wheels' console-script
+10. Use the controlled interpreter entry created in that venv to install the
+    closed wheel bundle offline. It is derived by the fixed `venv` operation
+    from the already validated selected interpreter; it is not a separately
+    sourced Python installation and does not require a host-side pause inside
+    the single layer build.
+11. After the layer completes, validate the venv interpreter's realized
+    link/terminal evidence before accepting the layer or exposing any output.
+12. Derive the component output catalog from the exact wheels' console-script
     entry-point metadata. For each output selected by a provider consumer,
     direct command reference, or `environment.executables` profile, verify that
     the generated wrapper exists and its immediate shebang names the interpreter

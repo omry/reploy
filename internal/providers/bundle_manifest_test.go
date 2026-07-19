@@ -93,7 +93,7 @@ func TestResolvedBundleManifestRejectsCorruptionAndNoncanonicalJSON(t *testing.T
 		{
 			name:      "reference kind",
 			content:   content,
-			reference: providerstore.StoreObjectRef{Kind: "artifact", Digest: bundle.Identity},
+			reference: providerstore.StoreObjectRef{Kind: providerstore.BlobKind, Digest: bundle.Identity},
 			want:      "reference kind",
 		},
 		{
