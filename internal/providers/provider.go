@@ -3,79 +3,12 @@
 package providers
 
 import (
-	"context"
 	"fmt"
 	"path"
-	"sort"
 	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
 )
-
-// Provider resolves every active component of one ecosystem as a unit. It
-// must produce a closed artifact set before image materialization begins.
-type Provider interface {
-	Type() blueprint.ComponentType
-	RecipeVersion() string
-	Prerequisites(ResolveRequest) []Prerequisite
-	Resolve(context.Context, ResolveRequest) (Bundle, error)
-	Materialize(MaterializeRequest) (Materialization, error)
-}
-
-// ResolveRequest contains provider inputs that can affect artifact resolution.
-// Components and translations are sorted by name before a provider is called.
-type ResolveRequest struct {
-	Platform     string
-	BaseImage    string
-	Components   []Component
-	Translations []Translation
-	DirectRoots  []string
-	Executables  []ExecutableRequest
-}
-
-type Component struct {
-	Name         string
-	Requirements []string
-}
-
-type Translation struct {
-	Name     string
-	Root     string
-	Mappings map[string]string
-}
-
-// ExecutableRequest asks the provider to prove that Binary is supplied by the
-// selected component set and to return its absolute final-image path.
-type ExecutableRequest struct {
-	Name      string
-	Component string
-	Binary    string
-}
-
-type PrerequisitePhase string
-
-const (
-	PrerequisiteResolve     PrerequisitePhase = "resolve"
-	PrerequisiteMaterialize PrerequisitePhase = "materialize"
-)
-
-type PrerequisiteSource string
-
-const (
-	PrerequisiteBaseImage PrerequisiteSource = "base-image"
-	PrerequisiteBuilder   PrerequisiteSource = "builder"
-	PrerequisiteProvider  PrerequisiteSource = "provider"
-)
-
-// Prerequisite is declarative. Reploy checks it in Source and never installs a
-// missing tool or runtime implicitly.
-type Prerequisite struct {
-	Name       string
-	Constraint string
-	Phase      PrerequisitePhase
-	Source     PrerequisiteSource
-	ProbeArgv  []string
-}
 
 // Bundle is the closed, checksummed provider result recorded in deployment
 // state. Path is relative to the bundle root and is the only artifact location
@@ -121,15 +54,6 @@ type Materialization struct {
 type MaterializationStep struct {
 	Argv []string
 	Env  map[string]string
-}
-
-// NormalizeResolveRequest makes provider execution and fingerprints stable.
-func NormalizeResolveRequest(request ResolveRequest) ResolveRequest {
-	sort.Slice(request.Components, func(i, j int) bool { return request.Components[i].Name < request.Components[j].Name })
-	sort.Slice(request.Translations, func(i, j int) bool { return request.Translations[i].Name < request.Translations[j].Name })
-	sort.Strings(request.DirectRoots)
-	sort.Slice(request.Executables, func(i, j int) bool { return request.Executables[i].Name < request.Executables[j].Name })
-	return request
 }
 
 // ValidateBundle rejects incomplete or unsafe provider results before they are

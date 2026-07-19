@@ -266,11 +266,14 @@ Implement the generalized provider DAG executor and component-scoped Python
 nodes before accepting multiple independently materialized Python environments
 or a second component provider.
 
-**P2-27:** At the Phase 2 gate, delete the old `internal/providers.Provider`, aggregate
-request/prerequisite types, `providers.Bundle`/`Artifact`/`ExecutableOutput`,
-`ValidateBundle`, and their fingerprint/serialization tests. The temporary
-Python wheelhouse adapter returns the new `ResolvedBundle`; it does not keep the
-old provider contract alive.
+**P2-27:** At the Phase 2 gate, delete the old `internal/providers.Provider` and
+aggregate request/prerequisite types. Keep the prototype
+`providers.Bundle`/`Artifact`/`ExecutableOutput` path isolated solely to the
+existing Python image builder until the replacement artifact store and typed
+Docker transaction backend pass. At the Phase 3 gate, delete those types,
+`ValidateBundle`, and their fingerprint/serialization paths. The temporary
+Python wheelhouse adapter returns the new `ResolvedBundle`; provider graph code
+does not depend on the isolated prototype contract.
 
 ## Phase 3: BuildKit Image Materialization
 

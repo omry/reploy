@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/providers"
 )
 
 const ProviderName = "python"
@@ -34,10 +34,10 @@ func ValidateExplicitRequirement(requirement string) error {
 	return fmt.Errorf("requirement must be an exact package pin or absolute container path: %s", requirement)
 }
 
-func ClassifyRoot(source string) (deploy.ArtifactRoot, error) {
+func ClassifyRoot(source string) (providers.ArtifactRoot, error) {
 	source = strings.TrimSpace(source)
 	if source == "" {
-		return deploy.ArtifactRoot{}, fmt.Errorf("bundle root must not be empty")
+		return providers.ArtifactRoot{}, fmt.Errorf("bundle root must not be empty")
 	}
 	switch {
 	case packageRequirementPattern.MatchString(source):
@@ -47,11 +47,11 @@ func ClassifyRoot(source string) (deploy.ArtifactRoot, error) {
 	case isAbsoluteRootPath(source):
 		return SourceRoot(source), nil
 	default:
-		return deploy.ArtifactRoot{}, fmt.Errorf("bundle root must be a package name, exact package pin, absolute wheel path, or absolute source path: %s", source)
+		return providers.ArtifactRoot{}, fmt.Errorf("bundle root must be a package name, exact package pin, absolute wheel path, or absolute source path: %s", source)
 	}
 }
 
-func ClassifyPackRoot(source string) deploy.ArtifactRoot {
+func ClassifyPackRoot(source string) providers.ArtifactRoot {
 	if isAbsoluteRootPath(source) && strings.HasSuffix(source, ".whl") {
 		return WheelRoot(source)
 	}
@@ -65,19 +65,19 @@ func isAbsoluteRootPath(source string) bool {
 	return filepath.IsAbs(source) || strings.HasPrefix(source, "/")
 }
 
-func PackageRoot(source string) deploy.ArtifactRoot {
-	return deploy.ArtifactRoot{Provider: ProviderName, Kind: "package", Source: source}
+func PackageRoot(source string) providers.ArtifactRoot {
+	return providers.ArtifactRoot{Provider: ProviderName, Kind: "package", Source: source}
 }
 
-func WheelRoot(source string) deploy.ArtifactRoot {
-	return deploy.ArtifactRoot{Provider: ProviderName, Kind: "wheel", Source: source}
+func WheelRoot(source string) providers.ArtifactRoot {
+	return providers.ArtifactRoot{Provider: ProviderName, Kind: "wheel", Source: source}
 }
 
-func SourceRoot(source string) deploy.ArtifactRoot {
-	return deploy.ArtifactRoot{Provider: ProviderName, Kind: "source", Source: source}
+func SourceRoot(source string) providers.ArtifactRoot {
+	return providers.ArtifactRoot{Provider: ProviderName, Kind: "source", Source: source}
 }
 
-func HasPackage(roots []deploy.ArtifactRoot, packageName string) bool {
+func HasPackage(roots []providers.ArtifactRoot, packageName string) bool {
 	_, ok := PackageVersion(roots, packageName)
 	if ok {
 		return true
@@ -90,7 +90,7 @@ func HasPackage(roots []deploy.ArtifactRoot, packageName string) bool {
 	return false
 }
 
-func RootPackageName(root deploy.ArtifactRoot) string {
+func RootPackageName(root providers.ArtifactRoot) string {
 	if root.Provider != ProviderName || root.Kind != "package" {
 		return ""
 	}
@@ -98,7 +98,7 @@ func RootPackageName(root deploy.ArtifactRoot) string {
 	return name
 }
 
-func PackageVersion(roots []deploy.ArtifactRoot, packageName string) (string, bool) {
+func PackageVersion(roots []providers.ArtifactRoot, packageName string) (string, bool) {
 	prefix := packageName + "=="
 	for _, root := range roots {
 		if root.Provider != ProviderName || root.Kind != "package" {
@@ -111,7 +111,7 @@ func PackageVersion(roots []deploy.ArtifactRoot, packageName string) (string, bo
 	return "", false
 }
 
-func RootRequirements(roots []deploy.ArtifactRoot) map[string]bool {
+func RootRequirements(roots []providers.ArtifactRoot) map[string]bool {
 	requirements := map[string]bool{}
 	for _, root := range roots {
 		if root.Provider != ProviderName {
@@ -146,7 +146,7 @@ func WheelFilenameRequirement(filename string) (string, bool) {
 	return NormalizeDistributionName(parts[0]) + "==" + parts[1], true
 }
 
-func RejectPersistentSourceRoots(roots []deploy.ArtifactRoot, action string) error {
+func RejectPersistentSourceRoots(roots []providers.ArtifactRoot, action string) error {
 	for _, root := range roots {
 		if root.Provider == ProviderName && root.Kind == "source" {
 			return fmt.Errorf("%s does not support persistent source roots: %s; add a package or wheel artifact instead", action, root.Source)
@@ -155,7 +155,7 @@ func RejectPersistentSourceRoots(roots []deploy.ArtifactRoot, action string) err
 	return nil
 }
 
-func BundleUpgradeInput(roots []deploy.ArtifactRoot, target string) ([]string, []UpgradeRoot, error) {
+func BundleUpgradeInput(roots []providers.ArtifactRoot, target string) ([]string, []UpgradeRoot, error) {
 	target = strings.TrimSpace(target)
 	mode := "all"
 	targetNormalized := ""
@@ -229,7 +229,7 @@ func BundleUpgradeInput(roots []deploy.ArtifactRoot, target string) ([]string, [
 	return input, upgradeRoots, nil
 }
 
-func ResolvedUpgradeRoots(reportPath string, roots []UpgradeRoot) ([]deploy.ArtifactRoot, error) {
+func ResolvedUpgradeRoots(reportPath string, roots []UpgradeRoot) ([]providers.ArtifactRoot, error) {
 	content, err := os.ReadFile(reportPath)
 	if err != nil {
 		return nil, err
@@ -252,7 +252,7 @@ func ResolvedUpgradeRoots(reportPath string, roots []UpgradeRoot) ([]deploy.Arti
 		}
 		versions[NormalizeDistributionName(entry.Metadata.Name)] = entry.Metadata.Version
 	}
-	resolved := make([]deploy.ArtifactRoot, len(roots))
+	resolved := make([]providers.ArtifactRoot, len(roots))
 	for _, root := range roots {
 		version := versions[root.Normalized]
 		if version == "" {

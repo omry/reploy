@@ -62,7 +62,7 @@ func BuildEnvironmentImage(ctx context.Context, dir string, pack deploy.AppPack,
 	if err != nil {
 		return state, err
 	}
-	selection := pythonprovider.SelectionFromBundleState(state.Bundle)
+	selection := pythonprovider.SelectionFromBundle(state.Bundle.SelectedComponents, state.Bundle.Roots)
 	request, err := pythonprovider.ResolveRequest(document, selection, "linux/"+runtime.GOARCH, document.Docker.Image)
 	if err != nil {
 		return state, err
@@ -72,10 +72,7 @@ func BuildEnvironmentImage(ctx context.Context, dir string, pack deploy.AppPack,
 		return state, err
 	}
 	provider := pythonprovider.ComponentProvider{Resolver: pythonprovider.PreparedBundleResolver{Dir: bundleDir, BaseIdentity: baseIdentity}}
-	for _, prerequisite := range provider.Prerequisites(request) {
-		if prerequisite.Source != providers.PrerequisiteBaseImage {
-			continue
-		}
+	for _, prerequisite := range provider.LegacyBaseProbes() {
 		args := []string{"run", "--rm", "--entrypoint", prerequisite.ProbeArgv[0], baseIdentity}
 		args = append(args, prerequisite.ProbeArgv[1:]...)
 		output, err := runDockerOutput(ctx, args...)

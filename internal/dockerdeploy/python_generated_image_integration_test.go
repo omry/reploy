@@ -25,10 +25,10 @@ func TestPythonGeneratedImageIntegration(t *testing.T) {
 	baseDigest := strings.TrimSpace(runDockerIntegration(t, ctx, "image", "inspect", "--format", "{{index .RepoDigests 0}}", base))
 	bundleDir := t.TempDir()
 	writePythonIntegrationWheel(t, filepath.Join(bundleDir, "demo_server-1.0-py3-none-any.whl"))
-	request := providers.ResolveRequest{
+	request := pythonprovider.LegacyResolveRequest{
 		Platform: "linux/amd64", BaseImage: base,
-		Components:  []providers.Component{{Name: "application", Requirements: []string{"demo-server==1.0"}}},
-		Executables: []providers.ExecutableRequest{{Name: "server", Component: "application", Binary: "demo-server"}},
+		Components:  []pythonprovider.LegacyComponent{{Name: "application", Requirements: []string{"demo-server==1.0"}}},
+		Executables: []pythonprovider.LegacyExecutableRequest{{Name: "server", Component: "application", Binary: "demo-server"}},
 	}
 	provider := pythonprovider.ComponentProvider{Resolver: pythonprovider.PreparedBundleResolver{Dir: bundleDir, BaseIdentity: baseDigest}}
 	bundle, err := provider.Resolve(ctx, request)

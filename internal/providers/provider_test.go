@@ -1,30 +1,11 @@
 package providers
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/omry/reploy/internal/blueprint"
 )
-
-func TestNormalizeResolveRequestIsDeterministic(t *testing.T) {
-	request := NormalizeResolveRequest(ResolveRequest{
-		Components:   []Component{{Name: "z"}, {Name: "a"}},
-		Translations: []Translation{{Name: "two"}, {Name: "one"}},
-		DirectRoots:  []string{"z", "a"},
-		Executables:  []ExecutableRequest{{Name: "server"}, {Name: "check"}},
-	})
-	if got := []string{request.Components[0].Name, request.Components[1].Name}; !reflect.DeepEqual(got, []string{"a", "z"}) {
-		t.Fatalf("components = %#v", got)
-	}
-	if !reflect.DeepEqual(request.DirectRoots, []string{"a", "z"}) {
-		t.Fatalf("roots = %#v", request.DirectRoots)
-	}
-	if got := []string{request.Executables[0].Name, request.Executables[1].Name}; !reflect.DeepEqual(got, []string{"check", "server"}) {
-		t.Fatalf("executables = %#v", got)
-	}
-}
 
 func TestValidateBundleRequiresClosedChecksummedArtifacts(t *testing.T) {
 	valid := Bundle{

@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/omry/reploy/internal/canonical"
 )
 
 func TestParsePlatform(t *testing.T) {
@@ -41,6 +43,21 @@ func TestPlatformValidateRejectsCanonicalDisagreement(t *testing.T) {
 	platform := Platform{OS: "linux", Architecture: "amd64", Canonical: "linux/arm64"}
 	if err := platform.Validate(); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestPlatformCanonicalEncodingUsesStableWireNames(t *testing.T) {
+	platform, err := ParsePlatform("linux/arm/v7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := canonical.Marshal(platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"architecture":"arm","canonical":"linux/arm/v7","os":"linux","variant":"v7"}`
+	if string(encoded) != want {
+		t.Fatalf("platform = %s, want %s", encoded, want)
 	}
 }
 

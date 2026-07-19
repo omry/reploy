@@ -5,7 +5,6 @@ import (
 	"sort"
 
 	"github.com/omry/reploy/internal/blueprint"
-	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 )
 
@@ -16,15 +15,15 @@ type Selection struct {
 	DirectRoots        []string
 }
 
-// SelectionFromBundleState bridges the retained deployment-local bundle UX to
-// the new component provider request. Blueprint requirements are intentionally
-// absent from Roots; they come from active components.
-func SelectionFromBundleState(state deploy.BundleState) Selection {
+// SelectionFromBundle bridges the retained bundle UX to the new component
+// provider request. Blueprint requirements are intentionally absent from
+// roots; they come from active components.
+func SelectionFromBundle(selectedComponents []string, roots []providers.ArtifactRoot) Selection {
 	selection := Selection{OptionalComponents: map[string]bool{}}
-	for _, name := range state.SelectedComponents {
+	for _, name := range selectedComponents {
 		selection.OptionalComponents[name] = true
 	}
-	for _, root := range state.Roots {
+	for _, root := range roots {
 		if root.Provider == ProviderName {
 			selection.DirectRoots = append(selection.DirectRoots, root.Source)
 		}
@@ -34,12 +33,12 @@ func SelectionFromBundleState(state deploy.BundleState) Selection {
 
 // ResolveRequest projects active Python components into the provider contract.
 // It does not resolve packages; that remains the provider's next operation.
-func ResolveRequest(document blueprint.Document, selection Selection, platform string, baseImage string) (providers.ResolveRequest, error) {
+func ResolveRequest(document blueprint.Document, selection Selection, platform string, baseImage string) (LegacyResolveRequest, error) {
 	if platform == "" {
-		return providers.ResolveRequest{}, fmt.Errorf("Python provider platform is required")
+		return LegacyResolveRequest{}, fmt.Errorf("Python provider platform is required")
 	}
 	if baseImage == "" {
-		return providers.ResolveRequest{}, fmt.Errorf("Python provider base image is required")
+		return LegacyResolveRequest{}, fmt.Errorf("Python provider base image is required")
 	}
 
 	componentNames := make([]string, 0, len(document.Environment.Components))
@@ -50,7 +49,7 @@ func ResolveRequest(document blueprint.Document, selection Selection, platform s
 
 	knownOptions := map[string]string{}
 	ambiguousOptions := map[string]bool{}
-	request := providers.ResolveRequest{
+	request := LegacyResolveRequest{
 		Platform:    platform,
 		BaseImage:   baseImage,
 		DirectRoots: append([]string(nil), selection.DirectRoots...),
@@ -61,7 +60,7 @@ func ResolveRequest(document blueprint.Document, selection Selection, platform s
 			continue
 		}
 		if component.Python == nil {
-			return providers.ResolveRequest{}, fmt.Errorf("Python component %q has no Python payload", name)
+			return LegacyResolveRequest{}, fmt.Errorf("Python component %q has no Python payload", name)
 		}
 		requirements := append([]string(nil), component.Python.Requirements...)
 		for _, optionName := range sortedOptionNames(component.Options) {
@@ -74,7 +73,7 @@ func ResolveRequest(document blueprint.Document, selection Selection, platform s
 				requirements = append(requirements, component.Options[optionName].PythonRequirements...)
 			}
 		}
-		request.Components = append(request.Components, providers.Component{
+		request.Components = append(request.Components, LegacyComponent{
 			Name:         name,
 			Requirements: normalizeRequirements(requirements),
 		})
@@ -84,10 +83,10 @@ func ResolveRequest(document blueprint.Document, selection Selection, platform s
 			continue
 		}
 		if ambiguousOptions[name] {
-			return providers.ResolveRequest{}, fmt.Errorf("selected Python option %q is ambiguous across components", name)
+			return LegacyResolveRequest{}, fmt.Errorf("selected Python option %q is ambiguous across components", name)
 		}
 		if _, exists := knownOptions[name]; !exists {
-			return providers.ResolveRequest{}, fmt.Errorf("selected Python option %q does not exist", name)
+			return LegacyResolveRequest{}, fmt.Errorf("selected Python option %q does not exist", name)
 		}
 	}
 	translationNames := make([]string, 0, len(document.Environment.Translations))
@@ -102,21 +101,21 @@ func ResolveRequest(document blueprint.Document, selection Selection, platform s
 			continue
 		}
 		if translation.Scope != blueprint.TranslationScopeDevelopment {
-			return providers.ResolveRequest{}, fmt.Errorf("Python translation %q must have development scope", name)
+			return LegacyResolveRequest{}, fmt.Errorf("Python translation %q must have development scope", name)
 		}
 		mappings := make(map[string]string, len(translation.Mappings))
 		for distribution, relativePath := range translation.Mappings {
 			normalized := NormalizeDistributionName(distribution)
 			if normalized == "" {
-				return providers.ResolveRequest{}, fmt.Errorf("Python translation %q has an empty distribution name", name)
+				return LegacyResolveRequest{}, fmt.Errorf("Python translation %q has an empty distribution name", name)
 			}
 			if owner, exists := translationOwners[normalized]; exists {
-				return providers.ResolveRequest{}, fmt.Errorf("Python translations %q and %q both map normalized distribution %q", owner, name, normalized)
+				return LegacyResolveRequest{}, fmt.Errorf("Python translations %q and %q both map normalized distribution %q", owner, name, normalized)
 			}
 			translationOwners[normalized] = name
 			mappings[normalized] = relativePath
 		}
-		request.Translations = append(request.Translations, providers.Translation{
+		request.Translations = append(request.Translations, LegacyTranslation{
 			Name: name, Root: translation.Root, Mappings: mappings,
 		})
 	}
@@ -132,12 +131,12 @@ func ResolveRequest(document blueprint.Document, selection Selection, platform s
 		if component.Type != blueprint.ComponentTypePython {
 			continue
 		}
-		request.Executables = append(request.Executables, providers.ExecutableRequest{
+		request.Executables = append(request.Executables, LegacyExecutableRequest{
 			Name: name, Component: executable.Component, Binary: executable.Binary,
 		})
 	}
 
-	return providers.NormalizeResolveRequest(request), nil
+	return normalizeLegacyResolveRequest(request), nil
 }
 
 func sortedOptionNames(options map[string]blueprint.ComponentOption) []string {

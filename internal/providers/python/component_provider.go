@@ -21,7 +21,7 @@ const (
 // closed artifacts plus console-script metadata. Image materialization never
 // calls it.
 type BundleResolver interface {
-	ResolvePython(context.Context, providerapi.ResolveRequest) (ResolvedSet, error)
+	ResolvePython(context.Context, LegacyResolveRequest) (ResolvedSet, error)
 }
 
 type ResolvedSet struct {
@@ -34,30 +34,73 @@ type ComponentProvider struct {
 	Resolver BundleResolver
 }
 
-var _ providerapi.Provider = ComponentProvider{}
+type LegacyBaseProbe struct {
+	Name      string
+	ProbeArgv []string
+}
 
 func (ComponentProvider) Type() blueprint.ComponentType { return blueprint.ComponentTypePython }
 
 func (ComponentProvider) RecipeVersion() string { return RecipeVersion }
 
-func (ComponentProvider) Prerequisites(providerapi.ResolveRequest) []providerapi.Prerequisite {
-	return []providerapi.Prerequisite{
-		{
-			Name: "python", Constraint: ">=3", Phase: providerapi.PrerequisiteMaterialize,
-			Source: providerapi.PrerequisiteBaseImage, ProbeArgv: []string{"python", "--version"},
-		},
-		{
-			Name: "python-venv", Phase: providerapi.PrerequisiteMaterialize,
-			Source: providerapi.PrerequisiteBaseImage, ProbeArgv: []string{"python", "-m", "venv", "--help"},
-		},
+func (ComponentProvider) Plan(input providerapi.PlanInput) ([]providerapi.NodeSpec, error) {
+	if err := input.BlueprintDigest.Validate(); err != nil {
+		return nil, fmt.Errorf("Python plan blueprint digest: %w", err)
+	}
+	if err := input.Platform.Validate(); err != nil {
+		return nil, fmt.Errorf("Python plan platform: %w", err)
+	}
+	components := append([]providerapi.ResolvedComponentRequestV1{}, input.Components...)
+	sort.Slice(components, func(left int, right int) bool { return components[left].Component < components[right].Component })
+	nodes := []providerapi.NodeSpec{}
+	for _, component := range components {
+		if component.Provider != blueprint.ComponentTypePython {
+			continue
+		}
+		request, err := decodeCanonicalProviderRequestV1(component.Request)
+		if err != nil {
+			return nil, fmt.Errorf("plan Python component %q: %w", component.Component, err)
+		}
+		if request.Component != component.Component {
+			return nil, fmt.Errorf("Python request component %q does not match resolved component %q", request.Component, component.Component)
+		}
+		node := providerapi.NodeSpec{
+			ID:                 providerapi.NodeID("python/" + component.Component),
+			Provider:           blueprint.ComponentTypePython,
+			Components:         []string{component.Component},
+			Request:            component.Request,
+			OutputDeclarations: []providerapi.OutputDeclaration{},
+			Requirements: providerapi.RequirementDeclaration{
+				Executables: []providerapi.ExecutableRequirement{{
+					ID: "interpreter", Command: request.Interpreter.Command, VersionConstraint: request.Interpreter.Version,
+					Supplier: request.Interpreter.Supplier, ValidationPolicy: providerapi.ValidationPolicyCompatible,
+				}},
+				Files: []providerapi.FileRequirement{},
+				ProviderData: providerapi.CanonicalProviderData{
+					Schema: component.Request.Schema, Value: component.Request.Value,
+				},
+			},
+		}
+		if err := providerapi.ValidateNodeSpec(node); err != nil {
+			return nil, fmt.Errorf("plan Python component %q: %w", component.Component, err)
+		}
+		nodes = append(nodes, node)
+	}
+	return nodes, nil
+}
+
+func (ComponentProvider) LegacyBaseProbes() []LegacyBaseProbe {
+	return []LegacyBaseProbe{
+		{Name: "python", ProbeArgv: []string{"python", "--version"}},
+		{Name: "python-venv", ProbeArgv: []string{"python", "-m", "venv", "--help"}},
 	}
 }
 
-func (provider ComponentProvider) Resolve(ctx context.Context, request providerapi.ResolveRequest) (providerapi.Bundle, error) {
+func (provider ComponentProvider) Resolve(ctx context.Context, request LegacyResolveRequest) (providerapi.Bundle, error) {
 	if provider.Resolver == nil {
 		return providerapi.Bundle{}, fmt.Errorf("Python provider has no bundle resolver")
 	}
-	request = providerapi.NormalizeResolveRequest(request)
+	request = normalizeLegacyResolveRequest(request)
 	resolved, err := provider.Resolver.ResolvePython(ctx, request)
 	if err != nil {
 		return providerapi.Bundle{}, fmt.Errorf("resolve Python bundle: %w", err)

@@ -66,11 +66,7 @@ type BundleState struct {
 	PreparedFingerprint string         `json:"prepared_fingerprint,omitempty"`
 }
 
-type ArtifactRoot struct {
-	Provider string `json:"provider"`
-	Kind     string `json:"kind"`
-	Source   string `json:"source"`
-}
+type ArtifactRoot = providers.ArtifactRoot
 
 type GeneratedImagesState struct {
 	Staging  *GeneratedImageState `json:"staging,omitempty"`

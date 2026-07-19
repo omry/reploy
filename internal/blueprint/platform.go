@@ -8,15 +8,15 @@ import (
 
 // Compatibility is the canonical target-platform set declared by a blueprint.
 type Compatibility struct {
-	Platforms []Platform
+	Platforms []Platform `json:"platforms"`
 }
 
 // Platform is one parsed OCI os/architecture[/variant] target.
 type Platform struct {
-	OS           string
-	Architecture string
-	Variant      string
-	Canonical    string
+	OS           string `json:"os"`
+	Architecture string `json:"architecture"`
+	Variant      string `json:"variant"`
+	Canonical    string `json:"canonical"`
 }
 
 // Validate rejects a record whose canonical value was not derived from its

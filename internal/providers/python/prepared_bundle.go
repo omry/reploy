@@ -14,7 +14,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/canonical"
 	providerapi "github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/providerstore"
 )
 
 const preparedBundleManifestName = "reploy-wheelhouse.json"
@@ -28,7 +31,229 @@ type PreparedBundleResolver struct {
 	BaseIdentity string
 }
 
-func (resolver PreparedBundleResolver) ResolvePython(ctx context.Context, request providerapi.ResolveRequest) (ResolvedSet, error) {
+// InterpreterEvidenceResolver validates one Python interpreter candidate
+// against the exact image prefix and returns the consuming Python node's
+// observed evidence. It must determine the runtime version rather than trust
+// supplier metadata.
+type InterpreterEvidenceResolver func(
+	context.Context,
+	providerapi.ExecutableRequirement,
+	[]providerapi.RealizedOutput,
+	providerapi.RealizedImageV1,
+	blueprint.Platform,
+) (providerapi.ExecutableEvidence, error)
+
+// PreparedNodeResolver is the temporary adapter from the retained wheelhouse
+// builder to the node-based provider graph. Physical wheelhouse paths remain
+// confined to this adapter and never enter canonical provider records.
+type PreparedNodeResolver struct {
+	Dir                string
+	ResolveInterpreter InterpreterEvidenceResolver
+}
+
+type inspectedWheel struct {
+	Distribution   string
+	Version        string
+	Filename       string
+	SHA256         string
+	Tags           []string
+	ConsoleScripts map[string]string
+}
+
+func (PreparedNodeResolver) Type() blueprint.ComponentType { return blueprint.ComponentTypePython }
+
+func (resolver PreparedNodeResolver) Resolve(
+	ctx context.Context,
+	input providerapi.ResolveInput,
+	sink providerapi.ArtifactSink,
+) (providerapi.ResolveResult, error) {
+	if resolver.Dir == "" {
+		return providerapi.ResolveResult{}, fmt.Errorf("prepared Python bundle directory is required")
+	}
+	if resolver.ResolveInterpreter == nil {
+		return providerapi.ResolveResult{}, fmt.Errorf("prepared Python resolver requires interpreter validation")
+	}
+	request, err := decodeCanonicalProviderRequestV1(input.Node.Request)
+	if err != nil {
+		return providerapi.ResolveResult{}, err
+	}
+	if len(input.Node.Components) != 1 || input.Node.Components[0] != request.Component {
+		return providerapi.ResolveResult{}, fmt.Errorf("Python node components do not match request component %q", request.Component)
+	}
+	if len(input.Node.Requirements.Executables) != 1 || len(input.Candidates) != 1 {
+		return providerapi.ResolveResult{}, fmt.Errorf("Python node must provide one interpreter requirement and candidate group")
+	}
+	interpreter, err := resolver.ResolveInterpreter(
+		ctx,
+		input.Node.Requirements.Executables[0],
+		append([]providerapi.RealizedOutput{}, input.Candidates[0].Outputs...),
+		input.Upstream,
+		input.Platform,
+	)
+	if err != nil {
+		return providerapi.ResolveResult{}, fmt.Errorf("validate Python interpreter: %w", err)
+	}
+	profile := providerapi.RequirementProfile{
+		Schema:              providerapi.RequirementProfileSchemaV1,
+		Declaration:         input.Node.Requirements,
+		SelectedExecutables: []providerapi.ExecutableEvidence{interpreter},
+		SelectedFiles:       []providerapi.FileEvidence{},
+		Platform:            input.Platform,
+		Facts:               CanonicalProfileFactsV1(request.Component, input.Sources),
+	}
+	profileDigest, err := providerapi.RequirementProfileDigest(profile, ValidateRequirementProfileV1)
+	if err != nil {
+		return providerapi.ResolveResult{}, fmt.Errorf("build Python requirement profile: %w", err)
+	}
+
+	wheels, artifacts, outputs, err := resolver.publishPreparedWheels(ctx, sink, request, input.Sources)
+	if err != nil {
+		return providerapi.ResolveResult{}, err
+	}
+	bundleData, err := CanonicalBundleDataV1(request.Component, PythonBundleV1{
+		Interpreter: interpreter,
+		Wheels:      wheels,
+		Outputs:     outputs,
+		Sources:     append([]providerapi.ResolvedSourceInput{}, input.Sources...),
+	})
+	if err != nil {
+		return providerapi.ResolveResult{}, fmt.Errorf("build Python bundle data: %w", err)
+	}
+	resolvedOutputs := make([]providerapi.ResolvedOutput, 0, len(outputs))
+	for _, output := range outputs {
+		resolvedOutputs = append(resolvedOutputs, providerapi.ResolvedOutput{
+			SupplierComponent: request.Component,
+			SupplierNode:      input.Node.ID,
+			Name:              output.Name,
+			Candidate: providerapi.ExecutableCandidate{
+				InvocationPath: output.Path,
+				Provenance: providerapi.CanonicalProviderData{
+					Schema: ConsoleScriptOutputSchemaV1,
+					Value:  canonical.Object{"distribution": output.Distribution, "entry_point": output.EntryPoint},
+				},
+			},
+		})
+	}
+	bundle, err := providerapi.NewResolvedBundle(providerapi.ResolvedBundleIdentityV1{
+		Schema:                   providerapi.ResolvedBundleSchemaV1,
+		NodeID:                   input.Node.ID,
+		Provider:                 blueprint.ComponentTypePython,
+		Request:                  input.Node.Request,
+		RequirementProfileDigest: profileDigest,
+		RecipeVersion:            RecipeVersion,
+		Platform:                 input.Platform,
+		Upstream:                 input.Upstream,
+		Artifacts:                artifacts,
+		Outputs:                  resolvedOutputs,
+		ProviderPayload:          bundleData,
+	}, ValidateResolvedBundlePayloadV1)
+	if err != nil {
+		return providerapi.ResolveResult{}, fmt.Errorf("build Python resolved bundle: %w", err)
+	}
+	evidence, err := providerapi.NewValidationEvidence(input.Upstream.RootFSSubject, profileDigest)
+	if err != nil {
+		return providerapi.ResolveResult{}, err
+	}
+	return providerapi.ResolveResult{Bundle: bundle, Profile: profile, Evidence: evidence}, nil
+}
+
+func (resolver PreparedNodeResolver) publishPreparedWheels(
+	ctx context.Context,
+	sink providerapi.ArtifactSink,
+	request PythonProviderRequestV1,
+	sources []providerapi.ResolvedSourceInput,
+) ([]PythonWheelV1, []providerstore.ArtifactDescriptor, []PythonConsoleScriptV1, error) {
+	entries, err := os.ReadDir(resolver.Dir)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	inspected := []inspectedWheel{}
+	byDistribution := map[string]inspectedWheel{}
+	scriptOwners := map[string]string{}
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, nil, err
+		}
+		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".whl") {
+			continue
+		}
+		wheel, err := inspectWheel(filepath.Join(resolver.Dir, entry.Name()))
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("inspect Python wheel %s: %w", entry.Name(), err)
+		}
+		if existing, exists := byDistribution[wheel.Distribution]; exists {
+			return nil, nil, nil, fmt.Errorf("Python bundle contains duplicate normalized distribution %q in %s and %s", wheel.Distribution, existing.Filename, wheel.Filename)
+		}
+		for script := range wheel.ConsoleScripts {
+			if owner, exists := scriptOwners[script]; exists {
+				return nil, nil, nil, fmt.Errorf("Python console script %q is provided by both %s and %s", script, owner, wheel.Distribution)
+			}
+			scriptOwners[script] = wheel.Distribution
+		}
+		byDistribution[wheel.Distribution] = wheel
+		inspected = append(inspected, wheel)
+	}
+	if len(inspected) == 0 {
+		return nil, nil, nil, fmt.Errorf("prepared Python bundle contains no wheels: %s", resolver.Dir)
+	}
+	if err := validateCanonicalRequestedDistributions(request, byDistribution); err != nil {
+		return nil, nil, nil, err
+	}
+	if err := validateResolvedSourceArtifacts(resolver.Dir, sources, byDistribution); err != nil {
+		return nil, nil, nil, err
+	}
+	sort.Slice(inspected, func(left int, right int) bool { return inspected[left].Filename < inspected[right].Filename })
+	wheels := make([]PythonWheelV1, 0, len(inspected))
+	artifacts := make([]providerstore.ArtifactDescriptor, 0, len(inspected))
+	outputs := []PythonConsoleScriptV1{}
+	for _, wheel := range inspected {
+		filename := filepath.Join(resolver.Dir, wheel.Filename)
+		file, err := os.Open(filename)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		descriptor, publishErr := sink.Publish(ctx, pathJoin("wheels", wheel.Filename), "wheel", file)
+		closeErr := file.Close()
+		if publishErr != nil {
+			return nil, nil, nil, fmt.Errorf("publish Python wheel %s: %w", wheel.Filename, publishErr)
+		}
+		if closeErr != nil {
+			return nil, nil, nil, closeErr
+		}
+		expectedDigest := canonical.Digest("sha256:" + wheel.SHA256)
+		if err := descriptor.Validate(); err != nil || descriptor.LogicalPath != pathJoin("wheels", wheel.Filename) || descriptor.Kind != "wheel" || descriptor.SHA256 != expectedDigest {
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("published Python wheel %s descriptor: %w", wheel.Filename, err)
+			}
+			return nil, nil, nil, fmt.Errorf("published Python wheel %s descriptor does not match inspected artifact", wheel.Filename)
+		}
+		wheels = append(wheels, PythonWheelV1{
+			Distribution: wheel.Distribution,
+			Version:      wheel.Version,
+			Tags:         append([]string{}, wheel.Tags...),
+			Artifact:     descriptor,
+		})
+		for name, entryPoint := range wheel.ConsoleScripts {
+			outputs = append(outputs, PythonConsoleScriptV1{
+				Name: name, Distribution: wheel.Distribution, EntryPoint: entryPoint,
+				Path: InstallRoot + "/" + request.Component + "/bin/" + name,
+			})
+		}
+	}
+	sort.Slice(wheels, func(left int, right int) bool { return compareWheels(wheels[left], wheels[right]) < 0 })
+	sort.Slice(outputs, func(left int, right int) bool { return outputs[left].Name < outputs[right].Name })
+	for _, wheel := range wheels {
+		artifacts = append(artifacts, wheel.Artifact)
+	}
+	sort.Slice(artifacts, func(left int, right int) bool { return artifacts[left].LogicalPath < artifacts[right].LogicalPath })
+	return wheels, artifacts, outputs, nil
+}
+
+func pathJoin(parts ...string) string {
+	return strings.Join(parts, "/")
+}
+
+func (resolver PreparedBundleResolver) ResolvePython(ctx context.Context, request LegacyResolveRequest) (ResolvedSet, error) {
 	if resolver.Dir == "" {
 		return ResolvedSet{}, fmt.Errorf("prepared Python bundle directory is required")
 	}
@@ -49,16 +274,20 @@ func (resolver PreparedBundleResolver) ResolvePython(ctx context.Context, reques
 		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".whl") {
 			continue
 		}
-		artifact, scripts, err := inspectWheel(filepath.Join(resolver.Dir, entry.Name()))
+		wheel, err := inspectWheel(filepath.Join(resolver.Dir, entry.Name()))
 		if err != nil {
 			return ResolvedSet{}, fmt.Errorf("inspect Python wheel %s: %w", entry.Name(), err)
+		}
+		artifact := providerapi.Artifact{
+			Identifier: wheel.Distribution, Version: wheel.Version, Kind: "wheel",
+			Path: wheel.Filename, SHA256: wheel.SHA256,
 		}
 		if existing, exists := byDistribution[artifact.Identifier]; exists {
 			return ResolvedSet{}, fmt.Errorf("Python bundle contains duplicate normalized distribution %q in %s and %s", artifact.Identifier, existing.Path, artifact.Path)
 		}
 		byDistribution[artifact.Identifier] = artifact
 		artifacts = append(artifacts, artifact)
-		for script := range scripts {
+		for script := range wheel.ConsoleScripts {
 			if owner, exists := consoleScripts[script]; exists {
 				return ResolvedSet{}, fmt.Errorf("Python console script %q is provided by both %s and %s", script, owner, artifact.Identifier)
 			}
@@ -78,53 +307,71 @@ func (resolver PreparedBundleResolver) ResolvePython(ctx context.Context, reques
 	return ResolvedSet{BaseIdentity: resolver.BaseIdentity, Artifacts: artifacts, ConsoleScripts: consoleScripts}, nil
 }
 
-func inspectWheel(filename string) (providerapi.Artifact, map[string]bool, error) {
+func inspectWheel(filename string) (inspectedWheel, error) {
 	archive, err := zip.OpenReader(filename)
 	if err != nil {
-		return providerapi.Artifact{}, nil, err
+		return inspectedWheel{}, err
 	}
 	defer archive.Close()
 	metadataFiles := []*zip.File{}
-	var entryPoints *zip.File
+	wheelFiles := []*zip.File{}
+	entryPointFiles := []*zip.File{}
 	for _, file := range archive.File {
 		if strings.Count(file.Name, "/") == 1 && strings.HasSuffix(file.Name, ".dist-info/METADATA") {
 			metadataFiles = append(metadataFiles, file)
 		}
+		if strings.Count(file.Name, "/") == 1 && strings.HasSuffix(file.Name, ".dist-info/WHEEL") {
+			wheelFiles = append(wheelFiles, file)
+		}
 		if strings.Count(file.Name, "/") == 1 && strings.HasSuffix(file.Name, ".dist-info/entry_points.txt") {
-			entryPoints = file
+			entryPointFiles = append(entryPointFiles, file)
 		}
 	}
 	if len(metadataFiles) != 1 {
-		return providerapi.Artifact{}, nil, fmt.Errorf("wheel must contain exactly one .dist-info/METADATA file")
+		return inspectedWheel{}, fmt.Errorf("wheel must contain exactly one .dist-info/METADATA file")
+	}
+	if len(wheelFiles) != 1 {
+		return inspectedWheel{}, fmt.Errorf("wheel must contain exactly one .dist-info/WHEEL file")
+	}
+	if len(entryPointFiles) > 1 {
+		return inspectedWheel{}, fmt.Errorf("wheel must contain at most one .dist-info/entry_points.txt file")
+	}
+	distInfo := strings.TrimSuffix(metadataFiles[0].Name, "METADATA")
+	if wheelFiles[0].Name != distInfo+"WHEEL" || len(entryPointFiles) == 1 && entryPointFiles[0].Name != distInfo+"entry_points.txt" {
+		return inspectedWheel{}, fmt.Errorf("wheel metadata files must belong to the same .dist-info directory")
 	}
 	name, version, err := readWheelMetadata(metadataFiles[0])
 	if err != nil {
-		return providerapi.Artifact{}, nil, err
+		return inspectedWheel{}, err
 	}
 	normalized := NormalizeDistributionName(name)
 	filenameRequirement, ok := WheelFilenameRequirement(filepath.Base(filename))
 	if !ok {
-		return providerapi.Artifact{}, nil, fmt.Errorf("invalid wheel filename")
+		return inspectedWheel{}, fmt.Errorf("invalid wheel filename")
 	}
 	wheelName, wheelVersion, _ := strings.Cut(filenameRequirement, "==")
 	if wheelName != normalized || wheelVersion != version {
-		return providerapi.Artifact{}, nil, fmt.Errorf("wheel filename identifies %s==%s but metadata identifies %s==%s", wheelName, wheelVersion, normalized, version)
+		return inspectedWheel{}, fmt.Errorf("wheel filename identifies %s==%s but metadata identifies %s==%s", wheelName, wheelVersion, normalized, version)
 	}
 	digest, err := fileSHA256(filename)
 	if err != nil {
-		return providerapi.Artifact{}, nil, err
+		return inspectedWheel{}, err
 	}
-	scripts := map[string]bool{}
-	if entryPoints != nil {
-		scripts, err = readConsoleScripts(entryPoints)
+	tags, err := readWheelTags(wheelFiles[0])
+	if err != nil {
+		return inspectedWheel{}, err
+	}
+	scripts := map[string]string{}
+	if len(entryPointFiles) == 1 {
+		scripts, err = readConsoleScripts(entryPointFiles[0])
 		if err != nil {
-			return providerapi.Artifact{}, nil, err
+			return inspectedWheel{}, err
 		}
 	}
-	return providerapi.Artifact{
-		Identifier: normalized, Version: version, Kind: "wheel",
-		Path: filepath.Base(filename), SHA256: digest,
-	}, scripts, nil
+	return inspectedWheel{
+		Distribution: normalized, Version: version, Filename: filepath.Base(filename), SHA256: digest,
+		Tags: tags, ConsoleScripts: scripts,
+	}, nil
 }
 
 func readWheelMetadata(file *zip.File) (string, string, error) {
@@ -157,13 +404,44 @@ func readWheelMetadata(file *zip.File) (string, string, error) {
 	return name, version, nil
 }
 
-func readConsoleScripts(file *zip.File) (map[string]bool, error) {
+func readWheelTags(file *zip.File) ([]string, error) {
 	reader, err := file.Open()
 	if err != nil {
 		return nil, err
 	}
 	defer reader.Close()
-	scripts := map[string]bool{}
+	seen := map[string]bool{}
+	tags := []string{}
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		if value, ok := strings.CutPrefix(scanner.Text(), "Tag:"); ok {
+			tag := strings.TrimSpace(value)
+			if tag == "" {
+				return nil, fmt.Errorf("wheel contains an empty compatibility tag")
+			}
+			if !seen[tag] {
+				seen[tag] = true
+				tags = append(tags, tag)
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if len(tags) == 0 {
+		return nil, fmt.Errorf("wheel metadata contains no compatibility tags")
+	}
+	sort.Strings(tags)
+	return tags, nil
+}
+
+func readConsoleScripts(file *zip.File) (map[string]string, error) {
+	reader, err := file.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	scripts := map[string]string{}
 	inConsoleScripts := false
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
@@ -175,17 +453,98 @@ func readConsoleScripts(file *zip.File) (map[string]bool, error) {
 		if !inConsoleScripts || line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		name, _, ok := strings.Cut(line, "=")
+		name, target, ok := strings.Cut(line, "=")
 		name = strings.TrimSpace(name)
-		if !ok || name == "" || strings.ContainsAny(name, `/\`) {
+		target = strings.TrimSpace(target)
+		if !ok || name == "" || target == "" || strings.ContainsAny(name, `/\`) {
 			return nil, fmt.Errorf("invalid console script entry %q", line)
 		}
-		scripts[name] = true
+		if _, duplicate := scripts[name]; duplicate {
+			return nil, fmt.Errorf("duplicate console script entry %q", name)
+		}
+		scripts[name] = target
 	}
 	return scripts, scanner.Err()
 }
 
-func validateRequestedDistributions(request providerapi.ResolveRequest, artifacts map[string]providerapi.Artifact) error {
+func validateCanonicalRequestedDistributions(request PythonProviderRequestV1, artifacts map[string]inspectedWheel) error {
+	for _, packageRequest := range request.Requirements {
+		if err := ValidateCanonicalPackageRequestV1(packageRequest); err != nil {
+			return err
+		}
+		requirement := packageRequest.Value["requirement"].(string)
+		name, err := pythonRequirementName(requirement)
+		if err != nil {
+			return fmt.Errorf("Python component %q requirement: %w", request.Component, err)
+		}
+		wheel, exists := artifacts[name]
+		if !exists {
+			return fmt.Errorf("prepared Python bundle is missing root distribution %q for component %q", name, request.Component)
+		}
+		if satisfied, checked := requirementAllowsVersion(requirement, wheel.Version); checked && !satisfied {
+			return fmt.Errorf("Python distribution %q version %s does not satisfy component %q requirement %q", name, wheel.Version, request.Component, requirement)
+		}
+	}
+	return nil
+}
+
+type preparedManifestSource struct {
+	Wheel string `json:"wheel"`
+}
+
+type preparedBundleManifest struct {
+	SchemaVersion int                               `json:"schema_version"`
+	LocalSources  map[string]preparedManifestSource `json:"local_sources"`
+}
+
+func readPreparedBundleManifest(dir string) (preparedBundleManifest, error) {
+	manifest := preparedBundleManifest{LocalSources: map[string]preparedManifestSource{}}
+	content, err := os.ReadFile(filepath.Join(dir, preparedBundleManifestName))
+	if os.IsNotExist(err) {
+		return manifest, nil
+	}
+	if err != nil {
+		return preparedBundleManifest{}, err
+	}
+	if err := json.Unmarshal(content, &manifest); err != nil {
+		return preparedBundleManifest{}, fmt.Errorf("decode %s: %w", preparedBundleManifestName, err)
+	}
+	if manifest.SchemaVersion != 1 {
+		return preparedBundleManifest{}, fmt.Errorf("unsupported %s schema %d", preparedBundleManifestName, manifest.SchemaVersion)
+	}
+	if manifest.LocalSources == nil {
+		manifest.LocalSources = map[string]preparedManifestSource{}
+	}
+	return manifest, nil
+}
+
+func validateResolvedSourceArtifacts(dir string, sources []providerapi.ResolvedSourceInput, artifacts map[string]inspectedWheel) error {
+	if len(sources) == 0 {
+		return nil
+	}
+	manifest, err := readPreparedBundleManifest(dir)
+	if err != nil {
+		return err
+	}
+	for _, source := range sources {
+		distribution := NormalizeDistributionName(source.LogicalPackage)
+		wheel, exists := artifacts[distribution]
+		if !exists {
+			return fmt.Errorf("prepared Python bundle is missing source distribution %q for component %q", distribution, source.Component)
+		}
+		wheelDigest := canonical.Digest("sha256:" + wheel.SHA256)
+		if source.ArtifactDigest != wheelDigest {
+			return fmt.Errorf("prepared Python source wheel for %q has digest %q, want resolved artifact %q", source.LogicalPackage, wheelDigest, source.ArtifactDigest)
+		}
+		built, ok := manifest.LocalSources[distribution]
+		if !ok || built.Wheel != wheel.Filename {
+			return fmt.Errorf("Python source %q for component %q did not take precedence in the prepared bundle", source.LogicalPackage, source.Component)
+		}
+	}
+	return nil
+}
+
+func validateRequestedDistributions(request LegacyResolveRequest, artifacts map[string]providerapi.Artifact) error {
 	translated := map[string]bool{}
 	for _, translation := range request.Translations {
 		for distribution := range translation.Mappings {
@@ -243,25 +602,10 @@ func pythonRootName(root string) (string, error) {
 	return pythonRequirementName(root)
 }
 
-func validateTranslationArtifacts(dir string, request providerapi.ResolveRequest, artifacts map[string]providerapi.Artifact) error {
-	type source struct {
-		Wheel string `json:"wheel"`
-	}
-	var manifest struct {
-		SchemaVersion int               `json:"schema_version"`
-		LocalSources  map[string]source `json:"local_sources"`
-	}
-	content, err := os.ReadFile(filepath.Join(dir, preparedBundleManifestName))
-	if err != nil && !os.IsNotExist(err) {
+func validateTranslationArtifacts(dir string, request LegacyResolveRequest, artifacts map[string]providerapi.Artifact) error {
+	manifest, err := readPreparedBundleManifest(dir)
+	if err != nil {
 		return err
-	}
-	if err == nil {
-		if err := json.Unmarshal(content, &manifest); err != nil {
-			return fmt.Errorf("decode %s: %w", preparedBundleManifestName, err)
-		}
-		if manifest.SchemaVersion != 1 {
-			return fmt.Errorf("unsupported %s schema %d", preparedBundleManifestName, manifest.SchemaVersion)
-		}
 	}
 	for _, translation := range request.Translations {
 		for distribution := range translation.Mappings {

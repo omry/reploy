@@ -537,6 +537,8 @@ type PlanInput struct {
 type ResolveInput struct {
     Node              NodeSpec
     Candidates        []RequirementCandidatesV1
+    Platform          blueprint.Platform
+    Sources           []ResolvedSourceInput
     Upstream          RealizedImageV1
     ReusableArtifacts []StoreObjectRef
 }
@@ -613,6 +615,20 @@ after the resolver has exited and host-side provider inspection has accepted
 that output. It returns the verified descriptor and never exposes or accepts a
 physical store path. The executor publishes the returned `ResolvedBundle` as
 the sole manifest after validating its complete descriptor set.
+
+`ResolveInput.Platform` is the already selected OCI target platform. The
+resolver still uses the exact selected image's native package tooling; this
+field does not override APT architecture selection. It lets the provider
+validate the observed native architecture and place the same platform in the
+requirement profile and resolved bundle. The executor rejects any result whose
+recorded platform differs from this input.
+
+`ResolveInput.Sources` contains the canonical resolved source identities whose
+target component belongs to the selected node. The executor validates the
+globally resolved source list and performs this filtering; a provider never
+receives source records for another node. These records identify already-built
+source artifacts and their build inputs. They do not contain checkout paths or
+grant a provider access to a physical source root.
 
 Candidate groups are sorted by requirement ID and their outputs in established
 lower-layer-first order. Planning filters an explicit supplier group to that
@@ -2343,7 +2359,7 @@ Removal is split only to keep intermediate implementation slices buildable:
 | Prototype surface | Replacement | Cutover slice | Required removal assertion |
 | --- | --- | --- | --- |
 | `internal/providers.Provider`, `ResolveRequest`, aggregate `Component`/`Translation`/`ExecutableRequest`, and `Prerequisite` | Node planning, `RequirementDeclaration`, `ResolveInput`, and exact profiles/evidence | Slice 2 | Delete the old interface/request/prerequisite types and normalization tests once the temporary Python node passes the graph gate; provider implementations no longer import deployment state |
-| `providers.Bundle`, `Artifact`, and `ExecutableOutput` | `ResolvedBundle`, provider payloads, `ArtifactDescriptor`, and realized output evidence | Slice 2 | Delete the old types, `ValidateBundle`, generated-image fingerprinting over them, and all serialized copies from deployment state |
+| `providers.Bundle`, `Artifact`, and `ExecutableOutput` | `ResolvedBundle`, provider payloads, `ArtifactDescriptor`, and realized output evidence | Slice 3, after the replacement artifact store and typed Docker transaction backend pass | Keep the old types isolated solely to the prototype Python image builder through Slice 2, then delete them, `ValidateBundle`, generated-image fingerprinting over them, and all serialized copies from deployment state |
 | `providers.MaterializeRequest`, `Materialization`, and `MaterializationStep`; `generated_image.go` free-form steps and `generatedImageDockerfileSyntax` frontend 1.7 | `MaterializationTransaction`, exhaustive typed rendering, and the pinned frontend 1.24.0 digest | Slice 3 | Delete the old renderer/types/tests; repository search finds no free-form materialization argv/env contract or frontend 1.7 constant |
 | `PreparedBundleResolver`, `preparedBundleManifestName`, `copyWheelhouse`, `BundleAddWheel`, `BundleAddSource`, `.reploy/bundle`, `BundleDirName`, `REPLOY_BUNDLE_DIR`, and configurable `docker.deployment_dirs.bundle` | Resolver output ingestion plus the fixed deployment-owned `.reploy/provider-store/` | Temporary adapter in Slice 2; provider-store ingestion and `copyWheelhouse` removal in Slice 3; delete the remaining legacy surface in Slice 6 | Slice 3 tests prove read-only store inputs plus initially empty resolver output and repository search finds no `copyWheelhouse`; Slice 6 deletes the adapter, direct wheel/source helpers, path/config/env surface, and wheelhouse-layout tests after provider-store build/install tests pass |
 | `BundleState`, `ArtifactRoot`, `SelectedComponents`, and `PreparedFingerprint`; `bundlePreparedFingerprint`; persisted `MaterializationState` | `RequestOverlayV1`, digest-named `BuildLockV1`, and `EnvironmentGenerationState` | Slice 6 | Delete all legacy state fields/helpers and fingerprint invalidation logic; old-state fixtures must fail `state.legacy_unsupported` without mutation rather than migrate |
@@ -2364,8 +2380,8 @@ The entry condition and produced result are explicit:
 | Slice | Entry condition | Parent contract made mandatory in this slice | Produced result |
 | --- | --- | --- | --- |
 | 1. Canonical foundations and schema | Accepted environment/APT public contracts and the working prototype baseline | Platform, base/component union, option/package overlay, identifier, and canonical-identity syntax | Canonical identity service, parsed/resolved base/Python/APT schema, and versioned overlay intent, with public APT still rejected |
-| 2. Provider graph with existing Python behavior | Slice 1 gate passes | Provider graph, exact requirement profiles, supplier selection, bundle/output identity, and Python translation semantics | Common provider DAG and `ResolvedBundle` contracts, temporary Python adapter, deterministic supplier selection, and removal of the old provider/bundle interfaces; legacy wheelhouse storage remains temporary |
-| 3. Artifact store and Docker transaction backend | Slice 2 gate passes with public APT rejected | Deployment-owned storage, exact child environments, typed materialization transactions and APT/Python executable operands, platform/base inspection, portable access, validation labels, and recovery | Provider store, resolver ingestion, read-only reusable wheel inputs, typed Docker transaction backend, validation records, and recoverable generation publication; old free-form materialization and `copyWheelhouse` are removed |
+| 2. Provider graph with existing Python behavior | Slice 1 gate passes | Provider graph, exact requirement profiles, supplier selection, bundle/output identity, and Python translation semantics | Common provider DAG and `ResolvedBundle` contracts, temporary Python adapter, deterministic supplier selection, and removal of the old provider/request/prerequisite interfaces; the prototype bundle/image path and legacy wheelhouse remain isolated temporarily |
+| 3. Artifact store and Docker transaction backend | Slice 2 gate passes with public APT rejected | Deployment-owned storage, exact child environments, typed materialization transactions and APT/Python executable operands, platform/base inspection, portable access, validation labels, and recovery | Provider store, resolver ingestion, read-only reusable wheel inputs, typed Docker transaction backend, validation records, and recoverable generation publication; old bundle/output serialization, free-form materialization, and `copyWheelhouse` are removed |
 | 4. APT resolver and offline layer | Slice 3 Docker/store gate passes and public APT remains rejected | Exact APT argv/environment, immutable-base trust policy, mixed-origin closure, `.deb` inspection, offline installation, and package-state validation | Internally complete APT resolver/materializer with representative distro/platform evidence; no public APT acceptance yet |
 | 5. Cross-provider Python | Slice 4 APT internal gate passes | APT output ownership/alternatives, consumer-observed Python identity/version, component-scoped venvs, and cross-provider ordering | Component-scoped Python nodes, real APT/base interpreter selection, independent venvs, and public `type: apt` acceptance after the complete cross-provider gate |
 | 6. Public build cutover | Slice 5 gate passes and every provider path uses the replacement contracts | Explicit build/install pipeline, runtime stale-build rejection, install transfer/locking, local state/store retention, and hard prototype cutover | Final build/install/runtime CLI and state cutover and deletion of all remaining prototype state, bundle, image-tag, and command surfaces |
@@ -2388,12 +2404,14 @@ identity tests pass.
 - Replace the ecosystem-wide provider interface with node planning.
 - Adapt the existing prepared wheelhouse resolver behind one temporary Python
   node that returns the new `ResolvedBundle`; do not preserve the old aggregate
-  provider request, `providers.Bundle`, or executable-output types around it.
+  provider request around it. The existing prototype image builder may retain
+  its isolated bundle/output records only until Slice 3's replacement backend
+  passes.
 - Add structural graph ordering, explicit-edge cycle detection, incremental
   frozen supplier selection, node-local invalidation, and typed executable
   requirements.
-- Delete the old provider interface/request/prerequisite/bundle types and their
-  normalization/fingerprint tests at this slice gate.
+- Delete the old provider interface/request/prerequisite types and their
+  normalization tests at this slice gate.
 
 Gate: existing Python-only behavior passes through the graph executor; no public
 blueprint resolves an APT component yet. Tests use a synthetic earlier-provider
@@ -2506,8 +2524,8 @@ passes; work done in an earlier slice is provisional until that one gate.
 | Detailed-design slice | Phase 2 task IDs | Phase 3 task IDs | Acceptance gate |
 | --- | --- | --- | --- |
 | Slice 1: Canonical foundations and schema | P2-17 | — | Parser, normalization, identifier, overlay atomicity, and canonical identity tests |
-| Slice 2: Provider graph with existing Python behavior | P2-01, P2-02, P2-03, P2-04, P2-05, P2-06, P2-12, P2-14, P2-18, P2-19, P2-20, P2-24, P2-25, P2-26, P2-27 | — | Existing Python through graph executor; synthetic supplier-selection graph tests; public APT still rejected |
-| Slice 3: Artifact store and Docker transaction backend | P2-07, P2-08, P2-09, P2-10, P2-11, P2-13, P2-21 | P3-01, P3-02, P3-03, P3-04, P3-05, P3-06, P3-07, P3-08, P3-09, P3-10, P3-11, P3-12, P3-13, P3-14, P3-15, P3-18, P3-19, P3-20, P3-21, P3-22, P3-23 | Fake-Docker command tests plus ordinary `docker build` on minimum Engine 24.0 and current Desktop-hosted Engine; no direct Buildx |
+| Slice 2: Provider graph with existing Python behavior | P2-01, P2-02, P2-03, P2-04, P2-05, P2-06, P2-12, P2-14, P2-18, P2-19, P2-20, P2-24, P2-25, P2-26 | — | Existing Python through graph executor; synthetic supplier-selection graph tests; public APT still rejected |
+| Slice 3: Artifact store and Docker transaction backend | P2-07, P2-08, P2-09, P2-10, P2-11, P2-13, P2-21, P2-27 | P3-01, P3-02, P3-03, P3-04, P3-05, P3-06, P3-07, P3-08, P3-09, P3-10, P3-11, P3-12, P3-13, P3-14, P3-15, P3-18, P3-19, P3-20, P3-21, P3-22, P3-23 | Fake-Docker command tests plus ordinary `docker build` on minimum Engine 24.0 and current Desktop-hosted Engine; no direct Buildx |
 | Slice 4: APT resolver and offline layer | P2-15 | — | APT schema and real-container resolver/materializer matrix; public APT remains rejected |
 | Slice 5: Cross-provider Python | P2-16, P2-22 | — | APT-supplied Python, two component interpreter/venv pairs, Python-base plus native APT libraries, then public APT enablement |
 | Slice 6: Public build cutover | P2-23 | P3-16, P3-17 | Full tests, CLI Docker smoke, install/store transfer, recovery, cleanup, mount/runtime failures, and legacy-removal assertions |

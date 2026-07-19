@@ -108,7 +108,7 @@ type fakeBundleResolver struct {
 	err      error
 }
 
-func (resolver fakeBundleResolver) ResolvePython(context.Context, providerapi.ResolveRequest) (ResolvedSet, error) {
+func (resolver fakeBundleResolver) ResolvePython(context.Context, LegacyResolveRequest) (ResolvedSet, error) {
 	return resolver.resolved, resolver.err
 }
 
@@ -121,10 +121,10 @@ func TestComponentProviderResolvesExecutableAndOfflineRecipe(t *testing.T) {
 		}},
 		ConsoleScripts: map[string]string{"demo-server": "demo-server"},
 	}}}
-	bundle, err := provider.Resolve(context.Background(), providerapi.ResolveRequest{
+	bundle, err := provider.Resolve(context.Background(), LegacyResolveRequest{
 		Platform: "linux/amd64", BaseImage: "python:3.13-slim",
-		Components:  []providerapi.Component{{Name: "application", Requirements: []string{"demo-server"}}},
-		Executables: []providerapi.ExecutableRequest{{Name: "server", Component: "application", Binary: "demo-server"}},
+		Components:  []LegacyComponent{{Name: "application", Requirements: []string{"demo-server"}}},
+		Executables: []LegacyExecutableRequest{{Name: "server", Component: "application", Binary: "demo-server"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -153,12 +153,30 @@ func TestComponentProviderRejectsMissingConsoleScript(t *testing.T) {
 		}},
 		ConsoleScripts: map[string]string{},
 	}}}
-	_, err := provider.Resolve(context.Background(), providerapi.ResolveRequest{
+	_, err := provider.Resolve(context.Background(), LegacyResolveRequest{
 		Platform: "linux/amd64", BaseImage: "python:3.13-slim",
-		Executables: []providerapi.ExecutableRequest{{Name: "server", Component: "application", Binary: "missing"}},
+		Executables: []LegacyExecutableRequest{{Name: "server", Component: "application", Binary: "missing"}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "does not provide console script") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestNormalizeLegacyResolveRequestIsDeterministic(t *testing.T) {
+	request := normalizeLegacyResolveRequest(LegacyResolveRequest{
+		Components:   []LegacyComponent{{Name: "z"}, {Name: "a"}},
+		Translations: []LegacyTranslation{{Name: "two"}, {Name: "one"}},
+		DirectRoots:  []string{"z", "a"},
+		Executables:  []LegacyExecutableRequest{{Name: "server"}, {Name: "check"}},
+	})
+	if got := []string{request.Components[0].Name, request.Components[1].Name}; !reflect.DeepEqual(got, []string{"a", "z"}) {
+		t.Fatalf("components = %#v", got)
+	}
+	if !reflect.DeepEqual(request.DirectRoots, []string{"a", "z"}) {
+		t.Fatalf("roots = %#v", request.DirectRoots)
+	}
+	if got := []string{request.Executables[0].Name, request.Executables[1].Name}; !reflect.DeepEqual(got, []string{"check", "server"}) {
+		t.Fatalf("executables = %#v", got)
 	}
 }
 
@@ -173,8 +191,8 @@ func TestValidatePythonVersion(t *testing.T) {
 
 func TestComponentProviderContractIsDeterministic(t *testing.T) {
 	provider := ComponentProvider{}
-	prerequisites := provider.Prerequisites(providerapi.ResolveRequest{})
-	if len(prerequisites) != 2 || prerequisites[0].Source != providerapi.PrerequisiteBaseImage || prerequisites[0].ProbeArgv[0] != "python" {
+	prerequisites := provider.LegacyBaseProbes()
+	if len(prerequisites) != 2 || prerequisites[0].ProbeArgv[0] != "python" {
 		t.Fatalf("prerequisites = %#v", prerequisites)
 	}
 	bundle := providerapi.Bundle{
