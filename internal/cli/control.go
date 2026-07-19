@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -325,13 +326,25 @@ func runEmbeddedControlExternal(dir string, stdout io.Writer, stderr io.Writer, 
 	command.Stdout = wrappedStdout
 	command.Stderr = wrappedStderr
 	if err := command.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return exitErr.ExitCode()
+		if code, ok := externalCommandExitCode(err); ok {
+			return code
 		}
 		fmt.Fprintf(wrappedStderr, "%s failed: %v\n", name, err)
 		return 1
 	}
 	return 0
+}
+
+func externalCommandExitCode(err error) (int, bool) {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return 0, false
+	}
+	code := exitErr.ExitCode()
+	if code < 0 {
+		return 0, false
+	}
+	return code, true
 }
 
 func embeddedControlMatchesAppCommand(dir string, args []string) bool {

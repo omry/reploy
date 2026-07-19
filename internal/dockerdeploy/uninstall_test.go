@@ -641,3 +641,32 @@ func indexOfCommandContaining(commands []string, want string) int {
 	}
 	return -1
 }
+
+func TestRemoveUninstallGeneratedImagesUsesOwnedDirectoryLabels(t *testing.T) {
+	oldOutput := uninstallRunDockerCommandOutput
+	oldRun := uninstallRunDockerCommand
+	t.Cleanup(func() {
+		uninstallRunDockerCommandOutput = oldOutput
+		uninstallRunDockerCommand = oldRun
+	})
+	identity := &GeneratedImageIdentity{DirectoryID: "abcd1234", Repository: "reploy/demo-abcd1234"}
+	uninstallRunDockerCommandOutput = func(spec CommandSpec, _ time.Duration) ([]byte, error) {
+		joined := strings.Join(spec.Args, " ")
+		if !strings.Contains(joined, "label="+generatedImageDirectoryLabel+"=abcd1234") {
+			t.Fatalf("cleanup discovery args = %#v", spec.Args)
+		}
+		return []byte("reploy/demo-abcd1234:deployed\nreploy/demo-abcd1234:previous\n"), nil
+	}
+	var removed []string
+	uninstallRunDockerCommand = func(spec CommandSpec, _ time.Duration) error {
+		removed = append([]string(nil), spec.Args...)
+		return nil
+	}
+	if err := removeUninstallGeneratedImages(uninstallPlan{GeneratedImage: identity}); err != nil {
+		t.Fatal(err)
+	}
+	want := "image rm reploy/demo-abcd1234:deployed reploy/demo-abcd1234:previous"
+	if strings.Join(removed, " ") != want {
+		t.Fatalf("cleanup command = %q, want %q", strings.Join(removed, " "), want)
+	}
+}

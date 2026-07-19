@@ -17,7 +17,7 @@ var runtimeLogSinceTime = func() time.Time {
 }
 
 func runtimeActionUsesStartupLogSnippet(action string) bool {
-	return action == "up"
+	return action == "up" || action == "restart"
 }
 
 type runtimeStartupLogDiagnostics struct {

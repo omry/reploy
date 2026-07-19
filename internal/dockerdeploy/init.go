@@ -1,14 +1,17 @@
 package dockerdeploy
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers/python"
@@ -38,9 +41,15 @@ const (
 )
 
 type InitOptions struct {
-	Dir          string
-	Pack         deploy.PackRef
-	Requirements []string
+	Dir                    string
+	Pack                   deploy.PackRef
+	Requirements           []string
+	MaterializeEnvironment bool
+	Verbose                bool
+	Stdout                 io.Writer
+	Stderr                 io.Writer
+	Progress               io.Writer
+	DockerPreflightTimeout time.Duration
 }
 
 type ExistingDeploymentFileError struct {
@@ -65,7 +74,7 @@ func Init(options InitOptions) ([]UpdateResult, error) {
 	}
 
 	initPaths := []string{
-		controlScriptName(pack.AppID),
+		controlScriptNameForPack(pack),
 		DockerEnvFileName,
 		RequirementsFileName,
 		ManifestFileName,
@@ -117,7 +126,7 @@ func Init(options InitOptions) ([]UpdateResult, error) {
 		return nil
 	}
 
-	if err := writeGenerated(controlScriptName(pack.AppID), []byte(stagingControlScriptContent(pack, deployedCommands)), true); err != nil {
+	if err := writeGenerated(controlScriptNameForPack(pack), []byte(stagingControlScriptContent(pack, deployedCommands)), true); err != nil {
 		return nil, err
 	}
 	dockerEnv, err := defaultDockerEnv(pack, stagingID)
@@ -154,6 +163,15 @@ func Init(options InitOptions) ([]UpdateResult, error) {
 		return nil, err
 	}
 	results = append(results, composeResult)
+	if options.MaterializeEnvironment && pack.Environment != nil {
+		materialized, err := materializeStagedEnvironmentForStage(
+			context.Background(), options.Dir, pack, options.Verbose, options.Stdout, options.Stderr, options.Progress, options.DockerPreflightTimeout,
+		)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, materialized...)
+	}
 
 	return results, nil
 }
@@ -196,6 +214,7 @@ func stateContent(pack deploy.AppPack, bundle deploy.BundleState, runtimeState *
 		ToolVersion:           deploy.ToolVersion,
 		Target:                "docker",
 		Phase:                 deploy.PhaseStaged,
+		EnvironmentModel:      pack.Environment != nil,
 		AppID:                 pack.AppID,
 		Blueprint:             pack.Ref,
 		RequestedBlueprintRef: pack.RequestedRef.Raw,
@@ -212,12 +231,15 @@ func updatedStateContent(pack deploy.AppPack, bundle deploy.BundleState, existin
 		ToolVersion:           deploy.ToolVersion,
 		Target:                "docker",
 		Phase:                 deploy.PhaseStaged,
+		EnvironmentModel:      pack.Environment != nil,
 		AppID:                 pack.AppID,
 		Blueprint:             pack.Ref,
 		RequestedBlueprintRef: pack.RequestedRef.Raw,
 		ResolvedArtifact:      pack.ResolvedArtifact,
 		Runtime:               existing.Runtime,
 		Bundle:                bundle,
+		Images:                existing.Images,
+		Materialization:       existing.Materialization,
 	}
 	if existing.Phase != "" {
 		state.Phase = existing.Phase
@@ -297,6 +319,14 @@ func ensureTrailingNewline(content []byte) []byte {
 }
 
 func defaultDockerEnv(pack deploy.AppPack, dockerIdentity string) (string, error) {
+	if pack.Environment != nil {
+		return strings.Join([]string{
+			"# Private Reploy runtime inputs; resolved values are written before execution.",
+			"REPLOY_ENVIRONMENT_ID=" + pack.Environment.Environment.ID,
+			"REPLOY_PHASE=staged",
+			"",
+		}, "\n"), nil
+	}
 	dirs := pack.Docker.DeploymentDirs
 	service := dockerServiceDefaults(pack, dockerIdentity)
 	ports, err := stagingPortBindings(pack)

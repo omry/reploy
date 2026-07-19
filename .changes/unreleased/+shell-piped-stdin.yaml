@@ -1,0 +1,2 @@
+kind: Fixed
+body: Forward piped standard input to reploy shell without allocating a TTY.

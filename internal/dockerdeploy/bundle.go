@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/omry/reploy/internal/deploy"
+	providerapi "github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providers/python"
 )
 
@@ -336,6 +337,16 @@ func BundleAddMany(options BundleRootsOptions) ([]UpdateResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
+	if err != nil {
+		return nil, err
+	}
+	if pack.Environment != nil {
+		state.Bundle.SelectedComponents, err = providerapi.SelectComponents(*pack.Environment, state.Bundle.SelectedComponents, options.Names, nil)
+		if err != nil {
+			return nil, err
+		}
+	}
 	roots := make([]deploy.ArtifactRoot, 0, len(options.Names)+len(options.Sources))
 	for _, name := range options.Names {
 		root, err := resolveBundleOptionRoot(options.Dir, name)
@@ -384,6 +395,16 @@ func BundleRemoveMany(options BundleRootsOptions) ([]UpdateResult, error) {
 	state, err = withInferredBundleState(options.Dir, state)
 	if err != nil {
 		return nil, err
+	}
+	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
+	if err != nil {
+		return nil, err
+	}
+	if pack.Environment != nil {
+		state.Bundle.SelectedComponents, err = providerapi.SelectComponents(*pack.Environment, state.Bundle.SelectedComponents, nil, options.Names)
+		if err != nil {
+			return nil, err
+		}
 	}
 	sources := map[string]bool{}
 	for _, name := range options.Names {
@@ -621,6 +642,13 @@ func BundlePrepare(options BundlePrepareOptions) error {
 	state, err = withInferredBundleState(options.Dir, state)
 	if err != nil {
 		return err
+	}
+	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
+	if err != nil {
+		return err
+	}
+	if pack.Environment != nil {
+		options.SkipWarmRuntime = true
 	}
 	if err := python.RejectPersistentSourceRoots(state.Bundle.Roots, "bundle build"); err != nil {
 		return err
@@ -1792,6 +1820,10 @@ func BundleOptions(options BundleListOptions) ([]BundleOption, error) {
 
 func syncBundleState(dir string, state deploy.DeploymentState) ([]UpdateResult, error) {
 	state.Bundle.PreparedFingerprint = ""
+	state.Materialization = nil
+	if state.Images != nil {
+		state.Images.Staging = nil
+	}
 	stateContent, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return nil, err

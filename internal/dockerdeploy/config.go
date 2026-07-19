@@ -39,6 +39,14 @@ type AppCommandListOptions struct {
 	DeployedOnly bool
 }
 
+type ShellOptions struct {
+	Dir                    string
+	Stdin                  io.Reader
+	Stdout                 io.Writer
+	Stderr                 io.Writer
+	DockerPreflightTimeout time.Duration
+}
+
 type AppCommandListResult struct {
 	AppID    string                `json:"app_id"`
 	Commands []AppCommandListEntry `json:"commands"`
@@ -56,6 +64,58 @@ var runAppCommand = runCommand
 var colorRuntimeGOOS = runtime.GOOS
 
 type temporaryComposeRunner func(CommandSpec, RunOptions) error
+
+func Shell(options ShellOptions) error {
+	if options.Dir == "" {
+		options.Dir = DefaultDeploymentDir
+	}
+	state, err := loadState(options.Dir)
+	if err != nil {
+		return err
+	}
+	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
+	if err != nil {
+		return err
+	}
+	if pack.Environment == nil {
+		return fmt.Errorf("reploy shell requires an environment-model blueprint")
+	}
+	if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: options.Dir, SkipWarmRuntime: true, Stdout: options.Stdout, Stderr: options.Stderr, DockerPreflightTimeout: options.DockerPreflightTimeout}); err != nil {
+		return err
+	}
+	state, err = loadState(options.Dir)
+	if err != nil {
+		return err
+	}
+	state, err = BuildEnvironmentImage(context.Background(), options.Dir, pack, state, RunOptions{Stdout: options.Stdout, Stderr: options.Stderr, DockerPreflightTimeout: options.DockerPreflightTimeout})
+	if err != nil {
+		return err
+	}
+	if _, err := WriteResolvedRuntimeInputs(options.Dir, pack, state); err != nil {
+		return err
+	}
+	if _, err := writeUpdatedStateIfChanged(options.Dir, pack, state.Bundle, state); err != nil {
+		return err
+	}
+	plan, err := ResolvedDockerExecutionPlan(options.Dir, pack, state)
+	if err != nil {
+		return err
+	}
+	terminalOutput := options.Stdout
+	if terminalOutput == nil {
+		terminalOutput = os.Stdout
+	}
+	stdin, interactive, tty := shellCommandIO(options.Stdin, terminalOutput)
+	spec := ShellCommandSpec(plan, interactive, tty)
+	return runAppCommand(spec, RunOptions{Stdin: stdin, Stdout: options.Stdout, Stderr: options.Stderr, DockerPreflightTimeout: options.DockerPreflightTimeout})
+}
+
+func shellCommandIO(input io.Reader, output io.Writer) (io.Reader, bool, bool) {
+	if input == nil {
+		input = os.Stdin
+	}
+	return input, true, readerLooksTerminal(input) && writerLooksTerminal(output)
+}
 
 func ConfigCheck(options ConfigCheckOptions) error {
 	if options.Dir == "" {
@@ -132,6 +192,49 @@ func AppCommand(options AppCommandOptions) error {
 	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
 	if err != nil {
 		return err
+	}
+	if pack.Environment != nil {
+		if _, err := EnsureBundlePrepared(BundleEnsureOptions{
+			Dir: options.Dir, SkipWarmRuntime: true, Stdout: options.Stdout, Stderr: options.Stderr,
+			DockerPreflightTimeout: options.DockerPreflightTimeout,
+		}); err != nil {
+			return fmt.Errorf("prepare installation bundle: %w", err)
+		}
+		state, err = loadState(options.Dir)
+		if err != nil {
+			return err
+		}
+		state, err = BuildEnvironmentImage(context.Background(), options.Dir, pack, state, runOptions)
+		if err != nil {
+			return fmt.Errorf("prepare generated environment image: %w", err)
+		}
+		if _, err := WriteResolvedRuntimeInputs(options.Dir, pack, state); err != nil {
+			return err
+		}
+		if _, err := writeUpdatedStateIfChanged(options.Dir, pack, state.Bundle, state); err != nil {
+			return err
+		}
+		name, forwarded, err := MatchEnvironmentCommand(*pack.Environment, options.CommandArgs, options.DeployedOnly)
+		if err != nil {
+			return err
+		}
+		plan, err := ResolvedDockerExecutionPlan(options.Dir, pack, state)
+		if err != nil {
+			return err
+		}
+		command, err := ResolveEnvironmentCommandForPlan(*pack.Environment, state.Materialization.Executables, plan, name, forwarded)
+		if err != nil {
+			return err
+		}
+		interactive := runOptions.Stdin != nil
+		spec, err := TransientCommandSpec(plan, command, interactive, interactive && writerLooksTerminal(terminalOutput))
+		if err != nil {
+			return err
+		}
+		if err := runAppCommand(spec, runOptions); err != nil {
+			return appCommandError(err)
+		}
+		return nil
 	}
 	command, forwardedArgs, err := matchAppCommandForOptions(pack, options.CommandArgs, options.DeployedOnly)
 	if err != nil {

@@ -1,0 +1,2 @@
+kind: Changed
+body: Show environment current-user UID/GID and writable-path warnings before installation changes and in dry-run output.

@@ -33,6 +33,7 @@ type uninstallPlan struct {
 	ContainerName  string
 	NetworkName    string
 	RuntimeVolume  string
+	GeneratedImage *GeneratedImageIdentity
 	RemoveDir      bool
 	Backend        installBackend
 
@@ -167,6 +168,17 @@ func newUninstallPlan(options UninstallOptions) (uninstallPlan, error) {
 	if err != nil {
 		return uninstallPlan{}, err
 	}
+	var generatedImage *GeneratedImageIdentity
+	if state.Images != nil {
+		directoryID, identityErr := pathIdentityHash(from)
+		if identityErr != nil {
+			return uninstallPlan{}, identityErr
+		}
+		generatedImage = &GeneratedImageIdentity{
+			DirectoryID: directoryID,
+			Repository:  "reploy/" + dockerNameSlug(state.AppID, "environment") + "-" + directoryID,
+		}
+	}
 	return uninstallPlan{
 		TargetDir:              from,
 		TargetExists:           true,
@@ -176,6 +188,7 @@ func newUninstallPlan(options UninstallOptions) (uninstallPlan, error) {
 		ContainerName:          install.ContainerName,
 		NetworkName:            install.NetworkName,
 		RuntimeVolume:          runtimeVolume,
+		GeneratedImage:         generatedImage,
 		RemoveDir:              options.RemoveDir,
 		Backend:                backend,
 		DockerPreflightTimeout: options.DockerPreflightTimeout,
@@ -392,6 +405,9 @@ func printUninstallDryRun(stdout io.Writer, plan uninstallPlan) {
 	if plan.RuntimeVolume != "" {
 		fmt.Fprintf(stdout, "runtime volume: %s\n", plan.RuntimeVolume)
 	}
+	if plan.GeneratedImage != nil {
+		fmt.Fprintf(stdout, "generated images: %s:{staging,deployed,previous}\n", plan.GeneratedImage.Repository)
+	}
 	if plan.Backend == installBackendLinuxSystemd {
 		fmt.Fprintf(stdout, "would run: systemctl stop %s.service\n", plan.ServiceName)
 	}
@@ -407,6 +423,9 @@ func printUninstallDryRun(stdout io.Writer, plan uninstallPlan) {
 	if plan.RuntimeVolume != "" {
 		spec := DockerVolumeRemoveCommand(plan.RuntimeVolume)
 		fmt.Fprintf(stdout, "would run: %s\n", formatCommand(spec.Name, spec.Args...))
+	}
+	if plan.GeneratedImage != nil {
+		fmt.Fprintf(stdout, "would remove Reploy-owned generated images for directory %s\n", plan.GeneratedImage.DirectoryID)
 	}
 	if plan.Backend == installBackendLinuxSystemd {
 		fmt.Fprintf(stdout, "would run: systemctl disable %s.service\n", plan.ServiceName)
@@ -481,10 +500,7 @@ func runUninstallDockerCleanup(plan uninstallPlan, stdout io.Writer) error {
 	if plan.TargetExists {
 		spec := composeCommandWithProject(plan.TargetDir, plan.ComposeProject, "down", "--remove-orphans")
 		if err := uninstallRunDockerCommand(spec, plan.DockerPreflightTimeout); err == nil {
-			if volumeErr := removeUninstallRuntimeVolume(plan); volumeErr != nil {
-				return volumeErr
-			}
-			return nil
+			return removeUninstallOwnedArtifacts(plan)
 		} else if plan.ComposeProject == "" {
 			cleanupErr = err
 		} else {
@@ -494,13 +510,42 @@ func runUninstallDockerCleanup(plan uninstallPlan, stdout io.Writer) error {
 	if cleanupErr == nil && plan.ComposeProject != "" {
 		cleanupErr = removeDockerComposeProjectByLabel(plan.ComposeProject, plan.DockerPreflightTimeout)
 	}
-	if volumeErr := removeUninstallRuntimeVolume(plan); volumeErr != nil {
+	if artifactErr := removeUninstallOwnedArtifacts(plan); artifactErr != nil {
 		if cleanupErr != nil {
-			return fmt.Errorf("%v; remove runtime volume: %w", cleanupErr, volumeErr)
+			return fmt.Errorf("%v; remove owned Docker artifacts: %w", cleanupErr, artifactErr)
 		}
-		return volumeErr
+		return artifactErr
 	}
 	return cleanupErr
+}
+
+func removeUninstallOwnedArtifacts(plan uninstallPlan) error {
+	if err := removeUninstallRuntimeVolume(plan); err != nil {
+		return fmt.Errorf("remove runtime volume: %w", err)
+	}
+	if err := removeUninstallGeneratedImages(plan); err != nil {
+		return fmt.Errorf("remove generated images: %w", err)
+	}
+	return nil
+}
+
+func removeUninstallGeneratedImages(plan uninstallPlan) error {
+	if plan.GeneratedImage == nil {
+		return nil
+	}
+	output, err := uninstallRunDockerCommandOutput(generatedImageCleanupListCommand(*plan.GeneratedImage), plan.DockerPreflightTimeout)
+	if err != nil {
+		return err
+	}
+	discovered := strings.Split(strings.TrimSpace(string(output)), "\n")
+	spec, err := generatedImageCleanupCommand(*plan.GeneratedImage, discovered)
+	if err != nil {
+		return err
+	}
+	if spec.Name == "" {
+		return nil
+	}
+	return uninstallRunDockerCommand(spec, plan.DockerPreflightTimeout)
 }
 
 func uninstallRuntimeVolumeName(dir string, composeProject string) (string, error) {

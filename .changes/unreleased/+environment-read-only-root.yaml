@@ -1,0 +1,2 @@
+kind: Security
+body: Run environment workload, one-shot, and shell containers with a read-only root filesystem and a dedicated temporary HOME tmpfs.

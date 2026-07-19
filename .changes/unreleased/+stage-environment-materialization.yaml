@@ -1,0 +1,2 @@
+kind: Changed
+body: Make environment stage and stage --update resolve the closed bundle, immutable base identity, generated image, and runtime inputs.

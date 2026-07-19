@@ -1,19 +1,28 @@
 package dockerdeploy
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/omry/reploy/internal/deploy"
 )
 
 type UpdateOptions struct {
-	Dir   string
-	Pack  deploy.PackRef
-	Force bool
+	Dir                    string
+	Pack                   deploy.PackRef
+	Force                  bool
+	MaterializeEnvironment bool
+	Verbose                bool
+	Stdout                 io.Writer
+	Stderr                 io.Writer
+	Progress               io.Writer
+	DockerPreflightTimeout time.Duration
 }
 
 type UpdateResult struct {
@@ -28,6 +37,8 @@ type generatedUpdate struct {
 	Content      []byte
 	Executable   bool
 }
+
+var materializeStagedEnvironmentForStage = materializeStagedEnvironment
 
 func Update(options UpdateOptions) ([]UpdateResult, error) {
 	if options.Dir == "" {
@@ -66,6 +77,10 @@ func Update(options UpdateOptions) ([]UpdateResult, error) {
 		}
 	}
 	bundle.PreparedFingerprint = ""
+	state.Materialization = nil
+	if state.Images != nil {
+		state.Images.Staging = nil
+	}
 
 	manifest, err := loadManifestOrNew(options.Dir)
 	if err != nil {
@@ -80,7 +95,7 @@ func Update(options UpdateOptions) ([]UpdateResult, error) {
 		return nil, err
 	}
 	generatedUpdates := []generatedUpdate{
-		{RelativePath: controlScriptName(pack.AppID), Content: []byte(stagingControlScriptContent(pack, deployedCommands)), Executable: true},
+		{RelativePath: controlScriptNameForPack(pack), Content: []byte(stagingControlScriptContent(pack, deployedCommands)), Executable: true},
 	}
 	currentGenerated := map[string]bool{}
 	for _, generated := range generatedUpdates {
@@ -155,6 +170,54 @@ func Update(options UpdateOptions) ([]UpdateResult, error) {
 		return nil, err
 	}
 	results = append(results, UpdateResult{Path: filepath.Join(options.Dir, ManifestFileName), Status: manifestStatus, Ownership: "state", Reason: "recorded generated file hashes"})
+	if options.MaterializeEnvironment && pack.Environment != nil {
+		materialized, err := materializeStagedEnvironmentForStage(
+			context.Background(), options.Dir, pack, options.Verbose, options.Stdout, options.Stderr, options.Progress, options.DockerPreflightTimeout,
+		)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, materialized...)
+	}
+	return results, nil
+}
+
+func materializeStagedEnvironment(ctx context.Context, dir string, pack deploy.AppPack, verbose bool, stdout io.Writer, stderr io.Writer, progress io.Writer, dockerPreflightTimeout time.Duration) ([]UpdateResult, error) {
+	built, err := EnsureBundlePrepared(BundleEnsureOptions{
+		Dir: dir, SkipWarmRuntime: true, Verbose: verbose, Stdout: stdout, Stderr: stderr, Progress: progress,
+		DockerPreflightTimeout: dockerPreflightTimeout,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("prepare staged environment bundle: %w", err)
+	}
+	state, err := loadState(dir)
+	if err != nil {
+		return nil, err
+	}
+	state, err = BuildEnvironmentImage(ctx, dir, pack, state, RunOptions{
+		Context: ctx, Stdout: stdout, Stderr: stderr, DockerPreflightTimeout: dockerPreflightTimeout,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("materialize staged environment image: %w", err)
+	}
+	results, err := WriteResolvedRuntimeInputs(dir, pack, state)
+	if err != nil {
+		return nil, fmt.Errorf("write staged environment runtime: %w", err)
+	}
+	stateStatus, err := writeUpdatedStateIfChanged(dir, pack, state.Bundle, state)
+	if err != nil {
+		return nil, err
+	}
+	results = append(results, UpdateResult{
+		Path: filepath.Join(dir, StateFileName), Status: stateStatus, Ownership: "state",
+		Reason: "recorded staged environment bundle and generated image",
+	})
+	if built {
+		results = append(results, UpdateResult{
+			Path: filepath.Join(dir, BundleDirName), Status: deploy.UpdateStatusUpdated, Ownership: "bundle",
+			Reason: "resolved closed environment bundle",
+		})
+	}
 	return results, nil
 }
 
@@ -189,6 +252,23 @@ func ensureRuntimeCompose(dir string) error {
 }
 
 func writeRuntimeCompose(dir string, pack deploy.AppPack, roots []deploy.ArtifactRoot, dockerIdentity string) (UpdateResult, error) {
+	if pack.Environment != nil {
+		path := filepath.Join(dir, ComposeFileName)
+		if _, err := os.Stat(path); err == nil {
+			return UpdateResult{Path: path, Status: deploy.UpdateStatusUpToDate, Ownership: "runtime", Reason: "preserved resolved Docker execution plan"}, nil
+		} else if !os.IsNotExist(err) {
+			return UpdateResult{}, err
+		}
+		content := []byte(fmt.Sprintf("name: %s\nservices: {}\n", dockerIdentity))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return UpdateResult{}, err
+		}
+		status, err := deploy.WriteFileIfChanged(path, content, 0o644)
+		if err != nil {
+			return UpdateResult{}, err
+		}
+		return UpdateResult{Path: path, Status: status, Ownership: "runtime", Reason: "created empty runtime plan pending materialization"}, nil
+	}
 	compose, err := renderComposeTemplate(pack, roots, dockerIdentity)
 	if err != nil {
 		return UpdateResult{}, err

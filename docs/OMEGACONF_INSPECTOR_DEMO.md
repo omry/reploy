@@ -1,6 +1,6 @@
 ---
 status: Draft
-updated: 2026-07-07
+updated: 2026-07-11
 summary: Design for a neutral OmegaConf Inspector demo service blueprint.
 ---
 
@@ -9,7 +9,7 @@ summary: Design for a neutral OmegaConf Inspector demo service blueprint.
 Reploy needs a neutral demo app that shows what Reploy does without tying the
 story to Arbiter or any other domain-specific application. The demo should be a
 small but realistic Python web service with dependencies, configuration,
-persistent data, ports, health checks, app commands, and an install lifecycle.
+persistent data, endpoints, readiness, environment commands, and an install lifecycle.
 
 The proposed demo is an OmegaConf Inspector: a browser-based workspace for
 loading multiple YAML configuration layers, merging them with OmegaConf, and
@@ -42,12 +42,12 @@ an app author:
 
 - stage a blueprint
 - prepare a bundle with real Python dependencies
-- warm up the runtime environment
+- build a closed Python bundle into a generated image
 - mount service config from `conf`
 - persist user projects in writable `data`
 - publish a local HTTP port
-- run health checks before and after install
-- expose useful app commands
+- gate startup on HTTP readiness
+- expose useful environment commands
 - inspect status and logs
 - update without losing project data
 - uninstall with clear runtime cleanup behavior
@@ -260,7 +260,7 @@ overwrite an existing config unless the user explicitly asks for that behavior.
 The user can edit the generated template before running `config check`,
 starting the service, or installing the app.
 
-## App Commands
+## Environment Commands
 
 Initial app commands:
 
@@ -293,23 +293,34 @@ The blueprint should demonstrate:
 - health check against `/_health_`
 - install hooks that check config before start and health after start
 - success output with the service URL
-- app commands for service config and persisted project inspection
+- environment commands for service config and persisted project inspection
 - localhost-only host port binding, because users may paste real configs or
   secrets into the inspector
 
 Managed paths should express the config/data split explicitly:
 
 ```yaml
-install:
-  managed_paths:
-    dirs:
-      - path: conf
-        update: preserve
-        mount: /conf
-      - path: data
-        update: preserve
-        mount: /data
-        writeable: true
+environment:
+  paths:
+    config:
+      container: /conf
+      writable: true
+      update: preserve
+    data:
+      container: /data
+      writable: true
+      update: preserve
+
+docker:
+  mounts:
+    config:
+      extends: environment.paths.config
+      mode: managed-bind
+      source: conf
+    data:
+      extends: environment.paths.data
+      mode: managed-bind
+      source: data
 ```
 
 The container can listen on `0.0.0.0`, but the host binding should be

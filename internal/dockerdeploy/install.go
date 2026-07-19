@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 )
 
@@ -74,6 +76,14 @@ type installPlan struct {
 	Success                deploy.DockerInstallSuccessConfig
 	Backend                installBackend
 	PreservePaths          []string
+	PathUpdates            []PathUpdateAction
+	PathUpdateImage        string
+	Warnings               []string
+	ExistingImages         *deploy.GeneratedImagesState
+	EnvironmentModel       bool
+	AfterInstallSteps      int
+	BeforeStartSteps       int
+	AfterStartSteps        int
 	Replace                []string
 	Clean                  bool
 	Start                  bool
@@ -106,6 +116,10 @@ var runInstallAppCommand = func(dir string, args []string, stdout io.Writer, std
 var runInstallHealthCheck = func(dir string, stdout io.Writer, stderr io.Writer, restartingDiagnostics string, dockerPreflightTimeout time.Duration) error {
 	return TestServer(TestOptions{Dir: dir, Stdout: stdout, RestartingDiagnostics: restartingDiagnostics, DockerPreflightTimeout: dockerPreflightTimeout})
 }
+var runInstallPathUpdateCommand = runCommand
+var runInstallPathUpdateOutput dockerOutputRunner = executeDockerOutput
+var runInstallAfterInstall = runEnvironmentAfterInstall
+var runInstallEnvironmentStart = runEnvironmentInstallStart
 
 type resolvedInstallOwner struct {
 	Spec          string
@@ -175,18 +189,39 @@ func Install(options InstallOptions) error {
 			return err
 		}
 	}
+	printInstallWarnings(options.Stdout, plan.Warnings)
 	doctorCode := Doctor(DoctorOptions{Dir: options.Dir, Preinstall: true, Scope: plan.Scope, Quiet: true, SuppressWarnings: true, Stdout: options.Stdout, DockerPreflightTimeout: options.DockerPreflightTimeout})
 	if doctorCode != 0 {
 		return fmt.Errorf("preinstall doctor failed")
 	}
 	if options.DryRun {
 		printInstallDryRun(options.Stdout, plan)
-		return nil
+		return printInstallEnvironmentInspection(options.Dir, options.Stdout)
 	}
 	if err := requireInstallPrivileges(plan.Backend, options.DryRun); err != nil {
 		return err
 	}
 	return applyInstallPlan(plan)
+}
+
+func printInstallEnvironmentInspection(dir string, stdout io.Writer) error {
+	if stdout == nil {
+		return nil
+	}
+	state, err := loadState(dir)
+	if err != nil {
+		return err
+	}
+	if !state.EnvironmentModel {
+		return nil
+	}
+	inspection, err := Info(InfoOptions{Dir: dir})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(stdout, "environment inspection:")
+	_, err = io.WriteString(stdout, inspection)
+	return err
 }
 
 func requireInstallPrivileges(backend installBackend, dryRun bool) error {
@@ -387,9 +422,12 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 	if err != nil {
 		return installPlan{}, err
 	}
-	preservePaths, err := installPreservePaths(pack.Install.ManagedPaths, options.Replace, options.Clean)
-	if err != nil {
-		return installPlan{}, err
+	preservePaths := []string{}
+	if pack.Environment == nil {
+		preservePaths, err = installPreservePaths(pack.Install.ManagedPaths, options.Replace, options.Clean)
+		if err != nil {
+			return installPlan{}, err
+		}
 	}
 	deployedCommands := pack.Docker.DeployedCommands()
 	if err := validateDeployedControlCommands(deployedCommands); err != nil {
@@ -408,6 +446,38 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 	if err := validateInstallScopeForBackend(scope, backend, platform); err != nil {
 		return installPlan{}, err
 	}
+	pathUpdates := []PathUpdateAction{}
+	pathUpdateImage := ""
+	if pack.Environment != nil {
+		pathUpdates, preservePaths, err = planEnvironmentInstallPathUpdates(*pack.Environment, absoluteDir, target, scope, options.Replace, options.Clean, platform.GOOS)
+		if err != nil {
+			return installPlan{}, err
+		}
+		if state.Images != nil && state.Images.Staging != nil {
+			pathUpdateImage = state.Images.Staging.Reference
+		}
+		for _, action := range pathUpdates {
+			if (action.Kind == PathPreserveVolume || action.Kind == PathReplaceVolume) && pathUpdateImage == "" {
+				return installPlan{}, fmt.Errorf("environment volume transfer requires a prepared staging image")
+			}
+		}
+	}
+	warnings := []string{}
+	if pack.Environment != nil && scope == InstallScopeUser {
+		userScope := blueprint.InstallScopeUser
+		userPlan, err := planRuntimeUser(*pack.Environment, DockerPlanContext{
+			Phase: blueprint.PhaseInstalled, Scope: &userScope, Host: blueprintHostForGOOS(platform.GOOS),
+			UID: os.Getuid(), GID: os.Getgid(),
+		})
+		if err != nil {
+			return installPlan{}, err
+		}
+		warnings = append(warnings, userPlan.Warnings...)
+	}
+	existingImages, err := installedTargetImages(target)
+	if err != nil {
+		return installPlan{}, err
+	}
 	unitPath := ""
 	if backend == installBackendLinuxSystemd {
 		unitPath = systemdPath(installSystemdUnitDir, options.Service+".service")
@@ -418,7 +488,7 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 		Scope:                  scope,
 		AppID:                  pack.AppID,
 		Service:                options.Service,
-		ControlScript:          controlScriptName(pack.AppID),
+		ControlScript:          controlScriptNameForPack(pack),
 		UnitPath:               unitPath,
 		InstanceID:             instanceID,
 		ComposeProject:         instanceID,
@@ -435,6 +505,14 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 		Success:                pack.Docker.Install.Success,
 		Backend:                backend,
 		PreservePaths:          preservePaths,
+		PathUpdates:            pathUpdates,
+		PathUpdateImage:        pathUpdateImage,
+		Warnings:               warnings,
+		ExistingImages:         existingImages,
+		EnvironmentModel:       pack.Environment != nil,
+		AfterInstallSteps:      environmentAfterInstallSteps(pack),
+		BeforeStartSteps:       environmentBeforeStartSteps(pack),
+		AfterStartSteps:        environmentAfterStartSteps(pack),
 		Replace:                append([]string(nil), options.Replace...),
 		Clean:                  options.Clean,
 		Start:                  options.Start,
@@ -443,6 +521,52 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 		Progress:               options.Progress,
 		DockerPreflightTimeout: options.DockerPreflightTimeout,
 	}, nil
+}
+
+func environmentAfterInstallSteps(pack deploy.AppPack) int {
+	if pack.Environment == nil {
+		return 0
+	}
+	return len(pack.Environment.Environment.Install.AfterInstall)
+}
+
+func environmentBeforeStartSteps(pack deploy.AppPack) int {
+	if pack.Environment == nil || pack.Environment.Environment.Workload == nil {
+		return 0
+	}
+	return len(pack.Environment.Environment.Workload.Runtime.BeforeStart)
+}
+
+func environmentAfterStartSteps(pack deploy.AppPack) int {
+	if pack.Environment == nil || pack.Environment.Environment.Workload == nil {
+		return 0
+	}
+	return len(pack.Environment.Environment.Workload.Runtime.AfterStart)
+}
+
+func installedTargetImages(target string) (*deploy.GeneratedImagesState, error) {
+	if _, err := os.Stat(filepath.Join(target, StateFileName)); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	state, err := loadState(target)
+	if err != nil {
+		return nil, fmt.Errorf("read installed target image state: %w", err)
+	}
+	if state.Phase != deploy.PhaseInstalled || state.Images == nil {
+		return nil, nil
+	}
+	content, err := json.Marshal(state.Images)
+	if err != nil {
+		return nil, err
+	}
+	var cloned deploy.GeneratedImagesState
+	if err := json.Unmarshal(content, &cloned); err != nil {
+		return nil, err
+	}
+	return &cloned, nil
 }
 
 func defaultInstallService(dir string) (string, error) {
@@ -470,6 +594,19 @@ func defaultInstallTarget(pack deploy.AppPack, scope InstallScope) (string, erro
 	roots, err := installTargetRoots(platform.GOOS)
 	if err != nil {
 		return "", err
+	}
+	if pack.Environment != nil {
+		return blueprint.ResolveInstallTarget(
+			pack.Environment.Environment.Install.Target,
+			pack.Environment.Environment.ID,
+			blueprint.InstallTargetContext{
+				Host: blueprintHostForGOOS(platform.GOOS), Scope: blueprint.InstallScope(scope),
+				Paths: blueprint.HostPaths{
+					Home: roots.UserHome, UserData: roots.UserData, LocalData: roots.UserLocalData, SystemData: roots.SystemData,
+				},
+				Variables: pack.Environment.Environment.Vars,
+			},
+		)
 	}
 	target, _, ok, err := deploy.ResolveInstallTargetDefault(pack.Install.Target, pack.AppID, platform.GOOS, string(scope), roots)
 	if err != nil {
@@ -629,6 +766,14 @@ func printInstallDryRun(stdout io.Writer, plan installPlan) {
 	for _, path := range plan.Replace {
 		fmt.Fprintf(stdout, "would replace installed managed path: %s\n", path)
 	}
+	for _, action := range plan.PathUpdates {
+		switch action.Kind {
+		case PathPreserveVolume:
+			fmt.Fprintf(stdout, "would preserve installed named volume: %s\n", action.Name)
+		case PathReplaceVolume:
+			fmt.Fprintf(stdout, "would replace installed named volume from staging: %s\n", action.Name)
+		}
+	}
 	if plan.Clean {
 		fmt.Fprintln(stdout, "would clean app-owned managed paths")
 	}
@@ -642,9 +787,18 @@ func printInstallDryRun(stdout io.Writer, plan installPlan) {
 		fmt.Fprintln(stdout, "would run: systemctl daemon-reload")
 		fmt.Fprintf(stdout, "would run: systemctl enable %s.service\n", plan.Service)
 	}
+	if plan.EnvironmentModel && plan.AfterInstallSteps > 0 {
+		fmt.Fprintf(stdout, "would run environment after_install lifecycle: %d step(s)\n", plan.AfterInstallSteps)
+	}
 	if plan.Start {
-		for _, hook := range plan.Hooks.BeforeStart {
-			fmt.Fprintf(stdout, "would run before start hook: %s\n", installHookDescription(hook))
+		if plan.EnvironmentModel {
+			if plan.BeforeStartSteps > 0 {
+				fmt.Fprintf(stdout, "would run environment before_start lifecycle: %d step(s)\n", plan.BeforeStartSteps)
+			}
+		} else {
+			for _, hook := range plan.Hooks.BeforeStart {
+				fmt.Fprintf(stdout, "would run before start hook: %s\n", installHookDescription(hook))
+			}
 		}
 		if plan.Backend == installBackendLinuxSystemd {
 			fmt.Fprintf(stdout, "would run: systemctl restart %s.service\n", plan.Service)
@@ -652,8 +806,14 @@ func printInstallDryRun(stdout io.Writer, plan installPlan) {
 			spec := composeCommandWithProject(plan.TargetDir, plan.ComposeProject, "up", "-d")
 			fmt.Fprintf(stdout, "would run: %s\n", formatCommand(spec.Name, spec.Args...))
 		}
-		for _, hook := range plan.Hooks.AfterStart {
-			fmt.Fprintf(stdout, "would run after start hook: %s\n", installHookDescription(hook))
+		if plan.EnvironmentModel {
+			if plan.AfterStartSteps > 0 {
+				fmt.Fprintf(stdout, "would satisfy readiness and run environment after_start lifecycle: %d step(s)\n", plan.AfterStartSteps)
+			}
+		} else {
+			for _, hook := range plan.Hooks.AfterStart {
+				fmt.Fprintf(stdout, "would run after start hook: %s\n", installHookDescription(hook))
+			}
 		}
 	} else {
 		fmt.Fprintln(stdout, "start: no")
@@ -669,6 +829,15 @@ func printInstallDryRun(stdout io.Writer, plan installPlan) {
 	}
 	for _, line := range plan.Success.Lines {
 		fmt.Fprintf(stdout, "would print success line: %s\n", line)
+	}
+}
+
+func printInstallWarnings(output io.Writer, warnings []string) {
+	if output == nil {
+		return
+	}
+	for _, warning := range warnings {
+		fmt.Fprintln(output, "warning: "+warning)
 	}
 }
 
@@ -713,6 +882,86 @@ func installPreservePaths(managedPaths deploy.InstallManagedPathsConfig, replace
 		paths = append(paths, path)
 	}
 	return paths, nil
+}
+
+func planEnvironmentInstallPathUpdates(document blueprint.Document, sourceDir string, targetDir string, scope InstallScope, replace []string, clean bool, goos string) ([]PathUpdateAction, []string, error) {
+	host := blueprintHostForGOOS(goos)
+	stagingMounts, err := planDockerMounts(document, DockerPlanContext{DeploymentDir: sourceDir, Phase: blueprint.PhaseStaged, Host: host})
+	if err != nil {
+		return nil, nil, err
+	}
+	installedScope := blueprint.InstallScope(scope)
+	installedMounts, err := planDockerMounts(document, DockerPlanContext{DeploymentDir: sourceDir, InstallTarget: targetDir, Phase: blueprint.PhaseInstalled, Scope: &installedScope, Host: host})
+	if err != nil {
+		return nil, nil, err
+	}
+	replaceAll := false
+	requested := []string{}
+	installedByName := mountPlansByName(installedMounts)
+	for _, value := range replace {
+		value = cleanManifestPath(value)
+		if value == "all" {
+			replaceAll = true
+			continue
+		}
+		name, err := environmentPathUpdateName(value, installedByName, targetDir)
+		if err != nil {
+			return nil, nil, err
+		}
+		requested = append(requested, name)
+	}
+	actions, err := PlanPathUpdates(
+		DockerExecutionPlan{Mounts: stagingMounts},
+		DockerExecutionPlan{Mounts: installedMounts},
+		targetDir,
+		PathUpdateOptions{ReplaceAll: replaceAll, Clean: clean, Replace: requested},
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	preserve := []string{}
+	for _, action := range actions {
+		if action.Kind != PathPreserveManagedBind {
+			continue
+		}
+		relative, err := filepath.Rel(targetDir, action.Target)
+		if err != nil {
+			return nil, nil, err
+		}
+		preserve = append(preserve, filepath.ToSlash(relative))
+	}
+	return actions, preserve, nil
+}
+
+func environmentPathUpdateName(value string, installed map[string]MountExecutionPlan, targetDir string) (string, error) {
+	if value == "." {
+		return "", fmt.Errorf("--replace must not be empty")
+	}
+	if _, ok := installed[value]; ok {
+		return value, nil
+	}
+	for name, mount := range installed {
+		if mount.Mode != blueprint.MountManagedBind {
+			continue
+		}
+		relative, err := filepath.Rel(targetDir, mount.Source)
+		if err == nil && cleanManifestPath(filepath.ToSlash(relative)) == value {
+			return name, nil
+		}
+	}
+	names := sortedMountPlanNames(installed)
+	return "", fmt.Errorf("unknown environment path %q; declared paths: %s", value, strings.Join(names, ", "))
+}
+
+func blueprintHostForGOOS(goos string) blueprint.HostOS {
+	switch goos {
+	case "darwin":
+		return blueprint.HostMacOS
+	case "windows":
+		return blueprint.HostWindows
+	default:
+		return blueprint.HostLinux
+	}
 }
 
 func validServiceName(name string) bool {
@@ -907,6 +1156,13 @@ func controlScriptName(appID string) string {
 	return dockerNameSlug(appID, "app") + "ctl"
 }
 
+func controlScriptNameForPack(pack deploy.AppPack) string {
+	if pack.Environment != nil {
+		return pack.Environment.Environment.ControlScript
+	}
+	return controlScriptName(pack.AppID)
+}
+
 func validateDeployedControlCommands(commands []deploy.DockerCommandConfig) error {
 	seen := map[string]bool{}
 	for _, command := range commands {
@@ -1093,6 +1349,13 @@ func writeInstalledState(plan installPlan) error {
 		return err
 	}
 	state.Runtime = runtimeState
+	if plan.ExistingImages != nil {
+		if state.Images == nil {
+			state.Images = &deploy.GeneratedImagesState{}
+		}
+		state.Images.Deployed = plan.ExistingImages.Deployed
+		state.Images.Previous = plan.ExistingImages.Previous
+	}
 	state.Install = &deploy.InstallState{
 		TargetDir:      plan.TargetDir,
 		Scope:          string(plan.Scope),
@@ -1469,6 +1732,9 @@ func prepareInstalledDeployment(plan installPlan) error {
 	if err != nil {
 		return err
 	}
+	if err := prepareEnvironmentPathUpdates(plan); err != nil {
+		return fmt.Errorf("prepare environment paths: %w", err)
+	}
 	if !plan.InPlace {
 		installProgress(plan.Progress, "copying staged deployment")
 		if err := copyDeploymentTreeProtected(plan.SourceDir, plan.TargetDir, plan.PreservePaths, plan.ControlScript, runtimeRelativePath); err != nil {
@@ -1505,17 +1771,41 @@ func prepareInstalledDeployment(plan installPlan) error {
 	if err := writeInstalledState(plan); err != nil {
 		return fmt.Errorf("mark deployment installed: %w", err)
 	}
-	installProgress(plan.Progress, "materializing runtime compose")
-	if _, err := materializeRuntimeCompose(plan.TargetDir); err != nil {
-		return fmt.Errorf("materialize runtime compose: %w", err)
+	installedState, err := loadState(plan.TargetDir)
+	if err != nil {
+		return err
+	}
+	installedPack, err := deploy.LoadResolvedPack(installedState.Blueprint, installedState.RequestedBlueprintRef, installedState.ResolvedArtifact)
+	if err != nil {
+		return err
+	}
+	if installedPack.Environment != nil {
+		installProgress(plan.Progress, "materializing installed environment image")
+		installedState, err = BuildEnvironmentImage(context.Background(), plan.TargetDir, installedPack, installedState, RunOptions{DockerPreflightTimeout: plan.DockerPreflightTimeout})
+		if err != nil {
+			return fmt.Errorf("materialize installed environment image: %w", err)
+		}
+		if _, err := WriteResolvedRuntimeInputs(plan.TargetDir, installedPack, installedState); err != nil {
+			return fmt.Errorf("materialize resolved runtime inputs: %w", err)
+		}
+		if _, err := writeUpdatedStateIfChanged(plan.TargetDir, installedPack, installedState.Bundle, installedState); err != nil {
+			return fmt.Errorf("record installed environment image: %w", err)
+		}
+	} else {
+		installProgress(plan.Progress, "materializing runtime compose")
+		if _, err := materializeRuntimeCompose(plan.TargetDir); err != nil {
+			return fmt.Errorf("materialize runtime compose: %w", err)
+		}
 	}
 	if plan.Backend == installBackendLinuxSystemd {
 		if err := chownInstalledRuntimeDir(plan.TargetDir, runtimeRelativePath); err != nil {
 			return fmt.Errorf("set install runtime ownership: %w", err)
 		}
 	}
-	if err := rebuildInstalledBundleIfLocalSources(plan); err != nil {
-		return fmt.Errorf("rebuild installed bundle: %w", err)
+	if installedPack.Environment == nil {
+		if err := rebuildInstalledBundleIfLocalSources(plan); err != nil {
+			return fmt.Errorf("rebuild installed bundle: %w", err)
+		}
 	}
 	if plan.Backend == installBackendLinuxSystemd {
 		if owner, err := installOwnerForDir(plan.TargetDir); err == nil {
@@ -1529,6 +1819,83 @@ func prepareInstalledDeployment(plan installPlan) error {
 	}
 	installProgress(plan.Progress, "installed deployment prepared")
 	return nil
+}
+
+func prepareEnvironmentPathUpdates(plan installPlan) error {
+	for _, action := range plan.PathUpdates {
+		switch action.Kind {
+		case PathReplaceManagedBind:
+			if err := os.RemoveAll(action.Target); err != nil {
+				return fmt.Errorf("replace managed path %q: %w", action.Name, err)
+			}
+		case PathValidateUnmanaged:
+			if _, err := os.Stat(action.Target); err != nil {
+				return fmt.Errorf("validate unmanaged path %q: %w", action.Name, err)
+			}
+		case PathPreserveVolume:
+			exists, err := installVolumeExists(action.Target)
+			if err != nil {
+				return fmt.Errorf("inspect preserved volume %q: %w", action.Name, err)
+			}
+			if exists {
+				continue
+			}
+			if err := replaceInstalledVolume(action, plan.PathUpdateImage, false, plan.DockerPreflightTimeout); err != nil {
+				return err
+			}
+		case PathReplaceVolume:
+			if err := replaceInstalledVolume(action, plan.PathUpdateImage, true, plan.DockerPreflightTimeout); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func installVolumeExists(name string) (bool, error) {
+	_, err := runInstallPathUpdateOutput(context.Background(), "volume", "inspect", name)
+	if err == nil {
+		return true, nil
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "no such volume") || strings.Contains(message, "not found") {
+		return false, nil
+	}
+	return false, err
+}
+
+func replaceInstalledVolume(action PathUpdateAction, image string, removeExisting bool, timeout time.Duration) error {
+	options := RunOptions{DockerPreflightTimeout: timeout}
+	sourceExists, err := installVolumeExists(action.Source)
+	if err != nil {
+		return fmt.Errorf("inspect staging volume %q: %w", action.Name, err)
+	}
+	if !sourceExists {
+		return fmt.Errorf("staging volume %q is unavailable: %s", action.Name, action.Source)
+	}
+	if removeExisting {
+		if err := runInstallPathUpdateCommand(DockerVolumeRemoveCommand(action.Target), options); err != nil {
+			return fmt.Errorf("remove installed volume %q: %w", action.Name, err)
+		}
+	}
+	if err := runInstallPathUpdateCommand(DockerVolumeCreateCommand(action.Target), options); err != nil {
+		return fmt.Errorf("create installed volume %q: %w", action.Name, err)
+	}
+	if err := runInstallPathUpdateCommand(VolumeCopyCommand(action.Source, action.Target, image), options); err != nil {
+		_ = runInstallPathUpdateCommand(DockerVolumeRemoveCommand(action.Target), options)
+		return fmt.Errorf("copy installed volume %q: %w", action.Name, err)
+	}
+	return nil
+}
+
+func VolumeCopyCommand(source string, target string, image string) CommandSpec {
+	return CommandSpec{Name: "docker", Args: []string{
+		"run", "--rm",
+		"--mount", "type=volume,source=" + source + ",target=/reploy-source,readonly",
+		"--mount", "type=volume,source=" + target + ",target=/reploy-target",
+		"--entrypoint", "/bin/sh", image,
+		"-c", "cp -a /reploy-source/. /reploy-target/",
+	}}
 }
 
 func applyLinuxSystemdInstallPlan(plan installPlan) error {
@@ -1560,10 +1927,26 @@ func applyLinuxSystemdInstallPlan(plan installPlan) error {
 	if err := installRunCommand(systemctlBin, "enable", plan.Service+".service"); err != nil {
 		return fmt.Errorf("systemctl enable %s.service: %w", plan.Service, err)
 	}
+	if err := runInstallAfterInstall(plan); err != nil {
+		return err
+	}
 	if plan.Start {
 		installProgress(plan.Progress, "checking managed files")
 		if err := ensureManagedFiles(plan.TargetDir, plan.ManagedFiles); err != nil {
 			return err
+		}
+		handled, err := runInstallEnvironmentStart(plan, func(context.Context) error {
+			installProgress(plan.Progress, "restarting systemd service")
+			if err := installRunCommand(systemctlBin, "restart", plan.Service+".service"); err != nil {
+				return fmt.Errorf("systemctl restart %s.service: %w", plan.Service, err)
+			}
+			return waitInstalledServiceRunning(plan.TargetDir, installServiceStartTimeout, plan.Progress, plan.DockerPreflightTimeout)
+		})
+		if err != nil {
+			return err
+		}
+		if handled {
+			return nil
 		}
 		if err := runInstallHooks(plan, "before start", plan.Hooks.BeforeStart); err != nil {
 			return err
@@ -1602,10 +1985,30 @@ func applyDockerDesktopInstallPlan(plan installPlan) error {
 	if err := prepareInstalledDeployment(plan); err != nil {
 		return err
 	}
+	if err := runInstallAfterInstall(plan); err != nil {
+		return err
+	}
 	if plan.Start {
 		installProgress(plan.Progress, "checking managed files")
 		if err := ensureManagedFiles(plan.TargetDir, plan.ManagedFiles); err != nil {
 			return err
+		}
+		handled, err := runInstallEnvironmentStart(plan, func(context.Context) error {
+			installProgress(plan.Progress, "starting Docker-managed app")
+			if err := ensureRuntimeNamedVolumeWritable(plan.TargetDir, plan.ComposeProject, plan.DockerPreflightTimeout); err != nil {
+				return err
+			}
+			spec := composeCommandWithProject(plan.TargetDir, plan.ComposeProject, "up", "-d")
+			if err := runCommand(spec, RunOptions{DockerPreflightTimeout: plan.DockerPreflightTimeout}); err != nil {
+				return fmt.Errorf("docker compose up: %w", err)
+			}
+			return waitInstalledServiceRunning(plan.TargetDir, installServiceStartTimeout, plan.Progress, plan.DockerPreflightTimeout)
+		})
+		if err != nil {
+			return err
+		}
+		if handled {
+			return nil
 		}
 		if err := runInstallHooks(plan, "before start", plan.Hooks.BeforeStart); err != nil {
 			return err
@@ -1626,6 +2029,72 @@ func applyDockerDesktopInstallPlan(plan installPlan) error {
 		}
 	}
 	return nil
+}
+
+func runEnvironmentInstallStart(plan installPlan, start func(context.Context) error) (bool, error) {
+	state, err := loadState(plan.TargetDir)
+	if err != nil {
+		return false, err
+	}
+	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
+	if err != nil {
+		return false, err
+	}
+	if pack.Environment == nil {
+		return false, nil
+	}
+	resolvedPlan, err := ResolvedDockerExecutionPlan(plan.TargetDir, pack, state)
+	if err != nil {
+		return true, err
+	}
+	lifecycle, err := PlanStartLifecycle(*pack.Environment, resolvedPlan, state.Materialization.Executables)
+	if err != nil {
+		return true, err
+	}
+	executor := environmentLifecycleExecutor(
+		RuntimeOptions{Dir: plan.TargetDir, DockerPreflightTimeout: plan.DockerPreflightTimeout}, resolvedPlan, nil, nil,
+	)
+	executor.Start = start
+	if err := ExecuteLifecycle(context.Background(), lifecycle, executor); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func runEnvironmentAfterInstall(plan installPlan) error {
+	state, err := loadState(plan.TargetDir)
+	if err != nil {
+		return err
+	}
+	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
+	if err != nil {
+		return err
+	}
+	if pack.Environment == nil {
+		return nil
+	}
+	resolvedPlan, err := ResolvedDockerExecutionPlan(plan.TargetDir, pack, state)
+	if err != nil {
+		return err
+	}
+	lifecycle, err := PlanInstallLifecycle(*pack.Environment, resolvedPlan, state.Materialization.Executables, false)
+	if err != nil {
+		return err
+	}
+	afterInstall := LifecyclePlan{}
+	for _, operation := range lifecycle.Operations {
+		if operation.Kind != LifecycleMaterialize && operation.Kind != LifecycleSuccess {
+			afterInstall.Operations = append(afterInstall.Operations, operation)
+		}
+	}
+	if len(afterInstall.Operations) == 0 {
+		return nil
+	}
+	installProgress(plan.Progress, "running environment after_install")
+	return ExecuteLifecycle(
+		context.Background(), afterInstall,
+		environmentLifecycleExecutor(RuntimeOptions{Dir: plan.TargetDir, DockerPreflightTimeout: plan.DockerPreflightTimeout}, resolvedPlan, nil, nil),
+	)
 }
 
 func runInstallHooks(plan installPlan, phase string, hooks []deploy.DockerInstallHookConfig) error {

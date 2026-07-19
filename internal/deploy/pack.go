@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	blueprintmodel "github.com/omry/reploy/internal/blueprint"
 	"gopkg.in/yaml.v3"
 )
 
@@ -27,6 +28,7 @@ type AppPack struct {
 	Install          InstallPackConfig
 	Bundle           BundlePackConfig
 	Docker           DockerPackConfig
+	Environment      *blueprintmodel.Document
 }
 
 type PackManifest struct {
@@ -329,7 +331,7 @@ func loadFilePack(ref PackRef) (AppPack, error) {
 	if err != nil {
 		return AppPack{}, fmt.Errorf("read blueprint manifest: %w", err)
 	}
-	manifest, err := ParsePackManifest(string(content))
+	manifest, environment, err := parseAnyPackManifest(content, dir)
 	if err != nil {
 		return AppPack{}, fmt.Errorf("parse blueprint manifest: %w", err)
 	}
@@ -350,6 +352,7 @@ func loadFilePack(ref PackRef) (AppPack, error) {
 		Install:      manifest.Install,
 		Bundle:       manifest.Bundle,
 		Docker:       manifest.Docker,
+		Environment:  environment,
 	}, nil
 }
 
@@ -950,7 +953,19 @@ func RenderInstallTargetPath(template string, appID string, roots InstallTargetR
 	if strings.Contains(rendered, "{{") || strings.Contains(rendered, "}}") {
 		return "", fmt.Errorf("contains unsupported template expression: %s", template)
 	}
+	if installTargetPathContainsTraversal(rendered) {
+		return "", fmt.Errorf("must not contain parent-directory traversal: %s", rendered)
+	}
 	return rendered, nil
+}
+
+func installTargetPathContainsTraversal(value string) bool {
+	for _, part := range strings.FieldsFunc(value, func(char rune) bool { return char == '/' || char == '\\' }) {
+		if part == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 func installTargetTemplateValue(name string, appID string, roots InstallTargetRoots) (string, bool) {

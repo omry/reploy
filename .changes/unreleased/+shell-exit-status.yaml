@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve the shell process exit status when reploy shell exits.

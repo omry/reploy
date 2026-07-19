@@ -37,7 +37,7 @@ func stagingControlScriptContent(pack deploy.AppPack, deployedCommands []deploy.
 	return renderControlScript(controlScriptSpec{
 		Mode:               controlScriptModeStaged,
 		AppID:              pack.AppID,
-		ControlScript:      controlScriptName(pack.AppID),
+		ControlScript:      controlScriptNameForPack(pack),
 		ConfigDir:          pack.Docker.DeploymentDirs.Config,
 		Health:             pack.Docker.Health,
 		Terminal:           pack.App.Terminal,

@@ -33,6 +33,9 @@ var printReploySystemdServices = dockerdeploy.PrintReploySystemdServices
 var dockerUninstallNeedsRoot = dockerdeploy.UninstallNeedsRoot
 var dockerRuntime = dockerdeploy.Runtime
 var dockerTestServer = dockerdeploy.TestServer
+var dockerShell = dockerdeploy.Shell
+var dockerStageInit = dockerdeploy.Init
+var dockerStageUpdate = dockerdeploy.Update
 
 func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 	if message := windowsWSLBoundaryError(runtime.GOOS, os.LookupEnv, os.Getwd); message != "" {
@@ -314,7 +317,7 @@ func parseDockerTimeout(value string) (time.Duration, error) {
 
 func isDeploymentCommand(command string) bool {
 	switch command {
-	case "stage", "info", "app", "bundle", "up", "restart", "down", "ps", "status", "logs", "test", "doctor", "install", "uninstall":
+	case "stage", "info", "app", "shell", "bundle", "up", "restart", "down", "ps", "status", "logs", "test", "doctor", "install", "uninstall":
 		return true
 	default:
 		return false
@@ -534,10 +537,11 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer, globalOptions 
 				fmt.Fprintf(stderr, "reploy stage --update error: %v\n", err)
 				return 1
 			}
-			results, err := dockerdeploy.Update(dockerdeploy.UpdateOptions{
-				Dir:   options.Dir,
-				Pack:  options.Pack,
-				Force: options.Force,
+			results, err := dockerStageUpdate(dockerdeploy.UpdateOptions{
+				Dir: options.Dir, Pack: options.Pack, Force: options.Force,
+				MaterializeEnvironment: true, Verbose: options.Verbose, Stdout: stdout, Stderr: stderr,
+				Progress:               stderr,
+				DockerPreflightTimeout: globalOptions.DockerTimeout,
 			})
 			if err != nil {
 				fmt.Fprintf(stderr, "reploy stage --update error: %v\n", err)
@@ -546,10 +550,16 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer, globalOptions 
 			printStageUpdateResults(stdout, options.Dir, results, options.Verbose)
 			return 0
 		}
-		results, err := dockerdeploy.Init(dockerdeploy.InitOptions{
-			Dir:          options.Dir,
-			Pack:         options.Pack,
-			Requirements: options.Requirements,
+		results, err := dockerStageInit(dockerdeploy.InitOptions{
+			Dir:                    options.Dir,
+			Pack:                   options.Pack,
+			Requirements:           options.Requirements,
+			MaterializeEnvironment: true,
+			Verbose:                options.Verbose,
+			Stdout:                 stdout,
+			Stderr:                 stderr,
+			Progress:               stderr,
+			DockerPreflightTimeout: globalOptions.DockerTimeout,
 		})
 		if err != nil {
 			var existingFileError dockerdeploy.ExistingDeploymentFileError
@@ -596,6 +606,25 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer, globalOptions 
 		return 0
 	case "up", "restart", "down", "ps", "status", "logs":
 		return runDockerRuntime(args[0], args[1:], stdout, stderr, globalOptions)
+	case "shell":
+		options, err := parseDockerRuntimeOptions(args[1:])
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
+			return 2
+		}
+		options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy shell error: %v\n", err)
+			return 1
+		}
+		if err := dockerShell(dockerdeploy.ShellOptions{Dir: options.Dir, Stdin: os.Stdin, Stdout: stdout, Stderr: stderr, DockerPreflightTimeout: globalOptions.DockerTimeout}); err != nil {
+			fmt.Fprintf(stderr, "reploy shell error: %v\n", err)
+			if code, ok := externalCommandExitCode(err); ok {
+				return code
+			}
+			return 1
+		}
+		return 0
 	case "test":
 		return runDockerTest(args[1:], stdout, stderr, globalOptions)
 	case "doctor":
@@ -675,6 +704,9 @@ func runDockerApp(args []string, stdout io.Writer, stderr io.Writer, globalOptio
 		DockerPreflightTimeout: globalOptions.DockerTimeout,
 	}); err != nil {
 		fmt.Fprintf(stderr, "reploy app error: %v\n", err)
+		if code, ok := externalCommandExitCode(err); ok {
+			return code
+		}
 		return 1
 	}
 	return 0
@@ -933,12 +965,12 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer, globalOp
 		return 2
 	}
 	options, err := parseDockerBundleOptions(args[1:], dockerBundleParseOptions{
-		RequireRoot:            action != "list" && action != "list-options" && action != "check" && action != "build" && action != "clean" && action != "warm-runtime",
-		AllowDryRun:            action == "check" || action == "build" || action == "warm-runtime",
+		RequireRoot:            action != "list" && action != "list-options" && action != "check" && action != "build" && action != "clean",
+		AllowDryRun:            action == "check" || action == "build",
 		AllowPyPIOnly:          action == "build",
 		AllowWheelhouseBackend: action == "check" || action == "build",
 		AllowBuildBackend:      action == "check" || action == "build",
-		AllowVerbose:           action == "check" || action == "build" || action == "clean" || action == "warm-runtime",
+		AllowVerbose:           action == "check" || action == "build" || action == "clean",
 		AllowMultiple:          action == "add" || action == "remove",
 		AllowNames:             action == "add" || action == "remove",
 		AllowExtra:             action == "add" || action == "remove",
@@ -1077,38 +1109,6 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer, globalOp
 		}
 		stopSpinner(true)
 		return 0
-	case "warm-runtime":
-		stopSpinner := func(bool) {}
-		progress := io.Discard
-		if !options.DryRun && !options.Verbose {
-			label, err := deploymentSpinnerLabel(options.Dir, "warming Python runtime", spinnerStderr)
-			if err != nil {
-				fmt.Fprintf(stderr, "reploy bundle warm-runtime error: %v\n", err)
-				return 1
-			}
-			stopSpinner, progress = startProgressSpinner(spinnerStderr, label)
-		}
-		if err := dockerdeploy.BundleWarmRuntime(dockerdeploy.BundleWarmRuntimeOptions{
-			Dir:                    options.Dir,
-			DryRun:                 options.DryRun,
-			Verbose:                options.Verbose,
-			Stdout:                 stdout,
-			Stderr:                 stderr,
-			Progress:               progress,
-			DockerPreflightTimeout: globalOptions.DockerTimeout,
-		}); err != nil {
-			stopSpinner(false)
-			if options.DryRun || options.Verbose {
-				fmt.Fprintf(stderr, "reploy bundle warm-runtime error: %v\n", err)
-			} else if bundleErrorHasEnoughOutput(err) {
-				fmt.Fprintf(stderr, "reploy bundle warm-runtime error: %v\n", err)
-			} else {
-				fmt.Fprintf(stderr, "reploy bundle warm-runtime error: %v; rerun with --verbose for command output\n", err)
-			}
-			return 1
-		}
-		stopSpinner(true)
-		return 0
 	case "clean":
 		results, err := dockerdeploy.BundleClean(dockerdeploy.BundleCleanOptions{Dir: options.Dir})
 		if err != nil {
@@ -1136,7 +1136,7 @@ func runDockerBundle(args []string, stdout io.Writer, stderr io.Writer, globalOp
 
 func isDockerBundleCommand(action string) bool {
 	switch action {
-	case "list", "list-options", "add", "remove", "check", "build", "warm-runtime", "clean":
+	case "list", "list-options", "add", "remove", "check", "build", "clean":
 		return true
 	default:
 		return false
@@ -2782,6 +2782,7 @@ Commands:
   stage        Create a staging directory
   info         Show staging state and bundle contents
   app          Run a blueprint-declared app command inside staging
+  shell        Open /bin/sh in a transient staging container
   bundle       Manage staging bundle contents
   up           Start or update the staging Compose service
   restart      Recreate the staging Compose service
@@ -2805,7 +2806,6 @@ Bundle:
   remove       Remove installation artifact roots
   check        Build if needed and validate installation artifacts
   build        Explicitly build and validate installation bundle artifacts
-  warm-runtime Build if needed and warm the staging Python runtime
   clean        Remove built installation artifacts
   upgrade      Upgrade package roots and rebuild installation bundle artifacts
 
@@ -2850,7 +2850,7 @@ Staging options:
   --remove-dir Remove the installed target directory during uninstall
   --start      Start after install, default
   --no-start   Install without starting the service
-  --verbose    Show bundle check/build/warm-runtime command output
+  --verbose    Show bundle check/build command output
   --follow     Follow logs instead of exiting after current output
   --tail N     Show only the last N log lines
   --timeout DURATION
@@ -2910,11 +2910,11 @@ Usage: reploy [--docker-timeout DURATION] bundle COMMAND
 Options:
   --dir DIR                  Staging directory, default current staging dir or reploy-staging
   --extra ROOT               Add/remove an explicit bundle root; accepts comma-separated roots
-  --dry-run                  Print build/check/warm-runtime commands without changing staging
+  --dry-run                  Print build/check commands without changing staging
   --pypi-only                Build or upgrade using only PyPI package roots
   --wheelhouse-backend NAME  Wheelhouse backend for build/check: reploy (default) or pip
   --build-backend NAME       Local source wheel build backend for reploy wheelhouse: uv (default) or pip
-  --verbose                  Show bundle check/build/warm-runtime command output
+  --verbose                  Show bundle check/build command output
   -h, --help                 Show bundle help
 `, "\n"))
 }
@@ -2929,7 +2929,6 @@ Commands:
   remove       Remove installation artifact roots
   check        Build if needed and validate installation artifacts
   build        Explicitly build and validate installation bundle artifacts
-  warm-runtime Build if needed and warm the staging Python runtime
   clean        Remove built installation artifacts
   upgrade      Upgrade package roots and rebuild installation bundle artifacts
 `, "\n")
@@ -3008,6 +3007,7 @@ Commands:
   stage        Create a staging directory
   info         Show staging state and bundle contents
   app          Run a blueprint-declared app command inside staging
+  shell        Open /bin/sh in a transient staging container
   bundle       Manage staging bundle contents
   services     List Reploy-managed services
   up           Start or update the staging Compose service
@@ -3069,7 +3069,7 @@ Options:
   --remove-dir Remove the installed target directory during uninstall
   --start      Start after install, default
   --no-start   Install without starting the service
-  --verbose    Show bundle check/build/warm-runtime command output
+  --verbose    Show bundle check/build command output
   --follow     Follow logs instead of exiting after current output
   --tail N     Show only the last N log lines
   --timeout DURATION

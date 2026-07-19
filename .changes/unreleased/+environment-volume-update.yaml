@@ -1,0 +1,2 @@
+kind: Added
+body: Preserve or replace installed environment named volumes according to their path update policy.

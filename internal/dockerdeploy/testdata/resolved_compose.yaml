@@ -1,0 +1,20 @@
+name: demo-staging-abcd
+services:
+    environment:
+        image: reploy/demo:staging
+        container_name: demo-staging-abcd
+        user: "501:20"
+        command: [/opt/reploy/python/bin/demo, serve]
+        volumes:
+            - type: bind
+              source: /tmp/demo/conf
+              target: /config
+              read_only: true
+        ports:
+            - 127.0.0.1:18080:8080
+        read_only: true
+        environment:
+            HOME: /tmp/reploy-home
+            TMPDIR: /tmp/reploy-home
+        tmpfs:
+            - /tmp/reploy-home:rw,noexec,nosuid,nodev,size=64m,mode=1777
