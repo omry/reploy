@@ -13,6 +13,7 @@ import (
 const (
 	ProviderRequestSchemaV1 = "apt-provider-request-v1"
 	ExplicitExportSchemaV1  = "explicit-apt-export-v1"
+	RecipeVersion           = "apt-v1"
 )
 
 type APTProviderRequestV1 struct {
@@ -194,10 +195,36 @@ func (ComponentProvider) Plan(input providers.PlanInput) ([]providers.NodeSpec, 
 		return nil, err
 	}
 	components := make([]string, 0, len(decoded.Components))
-	outputs := []providers.OutputDeclaration{}
-	seenOutputs := map[string]providers.OutputDeclaration{}
 	for _, component := range decoded.Components {
 		components = append(components, component.Component)
+	}
+	outputs, err := OutputDeclarationsV1(combined)
+	if err != nil {
+		return nil, err
+	}
+	node := providers.NodeSpec{
+		ID: "apt", Provider: blueprint.ComponentTypeAPT, Components: components, Request: combined, OutputDeclarations: outputs,
+		Requirements: providers.RequirementDeclaration{
+			Executables: []providers.ExecutableRequirement{}, Files: []providers.FileRequirement{},
+			ProviderData: providers.CanonicalProviderData{Schema: combined.Schema, Value: combined.Value},
+		},
+	}
+	if err := providers.ValidateNodeSpec(node); err != nil {
+		return nil, err
+	}
+	return []providers.NodeSpec{node}, nil
+}
+
+// OutputDeclarationsV1 derives the exact public candidates declared by one
+// canonical combined APT request. It performs no image or package ownership
+// observation.
+func OutputDeclarationsV1(request providers.CanonicalProviderRequest) ([]providers.OutputDeclaration, error) {
+	decoded, err := decodeCanonicalProviderRequestV1(request)
+	if err != nil {
+		return nil, err
+	}
+	seenOutputs := map[string]providers.OutputDeclaration{}
+	for _, component := range decoded.Components {
 		for _, pkg := range component.Packages {
 			mapping, mapped, err := ResolveWellKnownToolV1(pkg)
 			if err != nil {
@@ -228,6 +255,7 @@ func (ComponentProvider) Plan(input providers.PlanInput) ([]providers.NodeSpec, 
 			}
 		}
 	}
+	outputs := make([]providers.OutputDeclaration, 0, len(seenOutputs))
 	for _, output := range seenOutputs {
 		outputs = append(outputs, output)
 	}
@@ -237,17 +265,7 @@ func (ComponentProvider) Plan(input providers.PlanInput) ([]providers.NodeSpec, 
 		}
 		return outputs[left].Name < outputs[right].Name
 	})
-	node := providers.NodeSpec{
-		ID: "apt", Provider: blueprint.ComponentTypeAPT, Components: components, Request: combined, OutputDeclarations: outputs,
-		Requirements: providers.RequirementDeclaration{
-			Executables: []providers.ExecutableRequirement{}, Files: []providers.FileRequirement{},
-			ProviderData: providers.CanonicalProviderData{Schema: combined.Schema, Value: combined.Value},
-		},
-	}
-	if err := providers.ValidateNodeSpec(node); err != nil {
-		return nil, err
-	}
-	return []providers.NodeSpec{node}, nil
+	return outputs, nil
 }
 
 func decodePackageRequest(request providers.CanonicalPackageRequest) (blueprint.APTPackageRequest, error) {

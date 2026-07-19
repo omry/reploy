@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
@@ -22,6 +23,7 @@ type materializationExecutableCheck struct {
 }
 
 var collectMaterializationExecutableEvidence = CollectFullImageExecutableEvidence
+var collectAPTMaterializationExecutableEvidence = CollectAPTOutputEvidence
 
 // Run validates all generated and public executables from one completed layer
 // in a single image-validation container and returns only observed evidence.
@@ -70,7 +72,13 @@ func (runner ProviderMaterializationEvidenceRunner) Run(
 	for index := range checks {
 		probes[index] = checks[index].Probe
 	}
-	evidence, err := collectMaterializationExecutableEvidence(ctx, runner.Store, input.Candidate.Image.Descriptor, probes)
+	var evidence []providers.ExecutableEvidence
+	var err error
+	if input.Bundle.Payload.Provider == blueprint.ComponentTypeAPT {
+		evidence, err = collectAPTMaterializationExecutableEvidence(ctx, runner.Store, input.Candidate.Image.Descriptor, probes, input.Bundle)
+	} else {
+		evidence, err = collectMaterializationExecutableEvidence(ctx, runner.Store, input.Candidate.Image.Descriptor, probes)
+	}
 	if err != nil {
 		return nil, nil, err
 	}

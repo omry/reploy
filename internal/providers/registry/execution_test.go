@@ -74,17 +74,24 @@ func TestOwnerValidatorsForNodeDispatchesPython(t *testing.T) {
 	}
 }
 
-func TestExecutionDispatchRejectsProvidersWithoutSliceThreeExecution(t *testing.T) {
+func TestExecutionDispatchRejectsBaseExecution(t *testing.T) {
 	nodes := executionTestNodes(t)
-	for _, provider := range []blueprint.ComponentType{blueprint.ComponentTypeBase, blueprint.ComponentTypeAPT} {
-		t.Run(string(provider), func(t *testing.T) {
-			if _, err := OwnerValidatorsForNode(nodes[provider]); err == nil {
-				t.Fatal("owner validators unexpectedly accepted provider")
-			}
-			if _, err := MaterializeNode(nodes[provider], providers.MaterializeInput{}); err == nil {
-				t.Fatal("materialization unexpectedly accepted provider")
-			}
-		})
+	if _, err := OwnerValidatorsForNode(nodes[blueprint.ComponentTypeBase]); err == nil {
+		t.Fatal("owner validators unexpectedly accepted base")
+	}
+	if _, err := MaterializeNode(nodes[blueprint.ComponentTypeBase], providers.MaterializeInput{}); err == nil {
+		t.Fatal("materialization unexpectedly accepted base")
+	}
+}
+
+func TestExecutionDispatchesAPT(t *testing.T) {
+	node := executionTestNodes(t)[blueprint.ComponentTypeAPT]
+	validators, err := OwnerValidatorsForNode(node)
+	if err != nil || validators.Profile == nil || validators.Bundle == nil {
+		t.Fatalf("APT validators = %#v, err = %v", validators, err)
+	}
+	if _, err := MaterializeNode(node, providers.MaterializeInput{}); err == nil || !strings.Contains(err.Error(), "materialize APT input") {
+		t.Fatalf("APT materialization dispatch error = %v", err)
 	}
 }
 

@@ -96,9 +96,11 @@ func TestBuildMaterializationLayerReturnsNoIdentityOnFailure(t *testing.T) {
 	stubMaterializationBuildBaseReference(t, request.Transaction.Upstream.ConfigDigest)
 	original := runMaterializationBuildCommand
 	t.Cleanup(func() { runMaterializationBuildCommand = original })
-	runMaterializationBuildCommand = func(CommandSpec, RunOptions) error { return errors.New("argument list too long") }
+	cause := errors.New("argument list too long")
+	runMaterializationBuildCommand = func(CommandSpec, RunOptions) error { return cause }
 	image, err := BuildMaterializationLayer(store, request, RunOptions{})
-	if err == nil || !strings.Contains(err.Error(), "argument list too long") {
+	var failure *providers.BuildErrorV1
+	if err == nil || !errors.As(err, &failure) || failure.Code != "materialization.failed" || failure.Phase != "materialize" || !errors.Is(err, cause) || strings.Contains(err.Error(), "argument list too long") {
 		t.Fatalf("error = %v", err)
 	}
 	if !reflect.DeepEqual(image, MaterializationLayerCandidate{}) {

@@ -237,6 +237,9 @@ func ValidateMaterializeInput(
 	if err := input.AssemblyParent.Validate(); err != nil {
 		return fmt.Errorf("materialize input assembly parent: %w", err)
 	}
+	if input.AssemblyParent != input.Bundle.Payload.Upstream {
+		return fmt.Errorf("materialize input assembly parent does not match the resolved bundle upstream")
+	}
 	if err := ValidateValidatedExecutableInput(input.Carrier); err != nil {
 		return fmt.Errorf("materialize input carrier: %w", err)
 	}

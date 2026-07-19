@@ -1211,10 +1211,11 @@ select or rebuild a base image whose APT configuration can update successfully,
 then rebuild under the new immutable digest. Automatic key or source management
 is outside v1.
 
-APT output and source configuration are secret-tainted. Raw output is not
-stored. Diagnostics pass through the APT redactor before display; when safe
-rendering is impossible, Reploy reports the node, phase, structured error code,
-and no raw APT text.
+APT and dpkg diagnostics are streamed live to the caller and are not stored in
+deployment state, locks, bundles, store objects, labels, or a second Reploy
+log. Reploy relies on the selected base image's normal APT credential handling
+and does not redact or suppress its diagnostic stream. Binary archive data and
+package-state query output are consumed internally rather than displayed.
 
 ### APT bundle payload
 
@@ -1928,8 +1929,8 @@ validated and that the flag adds layer validation; there is no lighter
 image-validation substitute.
 
 Full validation has no elapsed-time deadline. It streams with bounded memory,
-reports progress, forwards drained stdout/stderr through the configured safe
-output path without retaining a second log copy, and stops only on completion,
+reports progress, forwards drained stdout/stderr through the configured output
+writers without retaining a second log copy, and stops only on completion,
 caller/CI cancellation, backend failure, or tool-level transport failure where
 applicable. Cancellation terminates the process tree and explicitly cleans up
 the validation container.
@@ -2458,11 +2459,13 @@ parameters, headers, environment values, credentials, host paths, and raw tool
 text. Corrections are selected from fixed templates; `Argv` is displayed with
 the CLI's normal argument quoting and never invokes a shell.
 
-APT stdout/stderr is secret-tainted. The streaming redactor removes configured
-proxy/userinfo, URI query, authentication/header, and known secret values before
-forwarding a chunk. If a chunk cannot be classified safely, Reploy suppresses
-it and emits the structured context only. Redacted text is not retained in
-state, locks, store objects, labels, or a second log buffer.
+APT and dpkg diagnostics are forwarded live through the caller's configured
+output writers. Reploy does not redact or suppress this output and does not
+retain it in state, locks, store objects, labels, or a second log buffer.
+Binary archive data and package-state query output are consumed internally. This is
+part of trusting the immutable base image and its APT configuration. Any future
+feature that injects repository credentials must define a separate diagnostic
+policy before those credentials are supported.
 
 Every error identifies:
 
@@ -2472,11 +2475,11 @@ Every error identifies:
 - safe request/package/output identity; and
 - the corrective command when one exists.
 
-Provider errors wrap typed causes rather than parsing human tool output. Raw APT
-output is displayed only after redaction. Failed operations retain the prior
-committed state and image generation. Temporary containers, mounts, files, and
-references are cleanup inventory in the pending record when immediate cleanup
-cannot complete.
+Provider errors wrap typed causes rather than parsing human tool output. The
+structured error does not duplicate the live APT output. Failed operations
+retain the prior committed state and image generation. Temporary containers,
+mounts, files, and references are cleanup inventory in the pending record when
+immediate cleanup cannot complete.
 
 Validation, resolution, and materialization have no Reploy-wide wall-clock
 deadline. Work streams with bounded memory and progress, stdout/stderr is

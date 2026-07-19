@@ -37,7 +37,7 @@ func pythonMaterializeTestInput(t *testing.T) providerapi.MaterializeInput {
 	validated := preparedTestConsumerValidation()
 	return providerapi.MaterializeInput{
 		Bundle: result.Bundle, Profile: result.Profile,
-		AssemblyParent: providerapi.RealizedImageV1{Digest: schemaTestDigest("d"), ConfigDigest: schemaTestDigest("e"), RootFSSubject: schemaTestDigest("f")},
+		AssemblyParent: result.Bundle.Payload.Upstream,
 		Carrier:        validated.Carrier, EnvironmentLauncher: validated.EnvironmentLauncher,
 		FinalImageConfig: validated.FinalImageConfig,
 	}
@@ -52,7 +52,7 @@ func TestComponentProviderMaterializeBuildsClosedOfflineTransaction(t *testing.T
 	if transaction.Schema != providerapi.MaterializationTransactionSchemaV1 || transaction.NodeID != "python/application" || transaction.RecipeVersion != MaterializationRecipeVersion {
 		t.Fatalf("transaction identity = %#v", transaction)
 	}
-	if transaction.Upstream != input.AssemblyParent || transaction.Upstream == input.Bundle.Payload.Upstream {
+	if transaction.Upstream != input.AssemblyParent || transaction.Upstream != input.Bundle.Payload.Upstream {
 		t.Fatalf("transaction upstream = %#v; assembly parent = %#v; resolver upstream = %#v", transaction.Upstream, input.AssemblyParent, input.Bundle.Payload.Upstream)
 	}
 	if len(transaction.Prerequisites) != 1 || transaction.Prerequisites[0].ID != "interpreter" || transaction.Prerequisites[0].Role != providerapi.ExecutableRoleSelectedOutput {

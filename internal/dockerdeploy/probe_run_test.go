@@ -97,6 +97,58 @@ func TestImageValidationSessionSupportsSeveralFixedProbes(t *testing.T) {
 	}
 }
 
+func TestImageValidationSessionDPKGOwnerQueryIsFixedAndLiteral(t *testing.T) {
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
+	restore := stubImageValidationCommands(t, []byte("dash: /bin/sh\n"), nil)
+	defer restore()
+	session, err := OpenImageValidationSession(context.Background(), descriptor, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := session.QueryDPKGOwners(context.Background(), []string{"/bin/sh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(output) != "dash: /bin/sh\n" {
+		t.Fatalf("owner output = %q", output)
+	}
+	want := []string{
+		"exec", "--user", "0:0", "--workdir", "/", imageProbeContainerName(workspace.HostDir),
+		"/usr/bin/dpkg-query", "--search", "/bin/sh",
+	}
+	if !reflect.DeepEqual(recordedImageValidationCommands[2].Args, want) {
+		t.Fatalf("dpkg owner command = %#v", recordedImageValidationCommands[2])
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestImageValidationSessionAlternativeQueryIsFixedAndReadOnly(t *testing.T) {
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
+	restore := stubImageValidationCommands(t, []byte("Name: java\nLink: /usr/bin/java\nValue: /usr/lib/jvm/java/bin/java\n"), nil)
+	defer restore()
+	session, err := OpenImageValidationSession(context.Background(), descriptor, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.QueryAlternative(context.Background(), "java"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"exec", "--user", "0:0", "--workdir", "/", imageProbeContainerName(workspace.HostDir),
+		"/usr/bin/update-alternatives", "--query", "java",
+	}
+	if !reflect.DeepEqual(recordedImageValidationCommands[2].Args, want) {
+		t.Fatalf("alternatives command = %#v", recordedImageValidationCommands[2])
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestOpenImageValidationSessionCleansFailedStartAndExplainsEmulation(t *testing.T) {
 	descriptor := testProbeImageDescriptor(t, "linux/arm64")
 	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
@@ -156,11 +208,13 @@ func stubImageValidationCommands(t *testing.T, response []byte, startErr error) 
 				return startErr
 			}
 		case "exec":
-			var input bytes.Buffer
-			if _, err := input.ReadFrom(options.Stdin); err != nil {
-				return err
+			if options.Stdin != nil {
+				var input bytes.Buffer
+				if _, err := input.ReadFrom(options.Stdin); err != nil {
+					return err
+				}
+				recordedImageValidationStdin = append(recordedImageValidationStdin, input.Bytes()...)
 			}
-			recordedImageValidationStdin = append(recordedImageValidationStdin, input.Bytes()...)
 			if _, err := options.Stdout.Write(response); err != nil {
 				return err
 			}

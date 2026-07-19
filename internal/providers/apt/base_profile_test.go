@@ -20,7 +20,7 @@ func aptBasePlatform(t *testing.T, value string) blueprint.Platform {
 func aptBaseTools() []RequiredToolEvidenceV1 {
 	tools := RequiredBaseToolsV1()
 	for index := range tools {
-		if tools[index].Name != "env" && tools[index].Name != "sh" {
+		if requiredToolVersionV1(tools[index].Name) {
 			tools[index].Version = tools[index].Name + " 1.2.3"
 		}
 	}

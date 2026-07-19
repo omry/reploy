@@ -119,7 +119,17 @@ func buildIntegrationProbeWorkspace(t *testing.T, platform blueprint.Platform) P
 	executable := filepath.Join(dir, filepath.Base(ProbeContainerExecutable))
 	command := exec.Command("go", "build", "-o", executable, "./cmd/reploy-probe")
 	command.Dir = filepath.Clean(filepath.Join("..", ".."))
-	command.Env = append(os.Environ(), "GOCACHE=/tmp/reploy-go-cache", "GOFLAGS=-buildvcs=false")
+	command.Env = append(
+		os.Environ(),
+		"CGO_ENABLED=0",
+		"GOOS="+platform.OS,
+		"GOARCH="+platform.Architecture,
+		"GOCACHE=/tmp/reploy-go-cache",
+		"GOFLAGS=-buildvcs=false",
+	)
+	if platform.Architecture == "arm" && strings.HasPrefix(platform.Variant, "v") {
+		command.Env = append(command.Env, "GOARM="+strings.TrimPrefix(platform.Variant, "v"))
+	}
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build integration probe: %v\n%s", err, strings.TrimSpace(string(output)))
 	}

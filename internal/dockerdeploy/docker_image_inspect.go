@@ -92,7 +92,6 @@ func resolveBase(ctx context.Context, authorReference string, platform blueprint
 		if pulledDigest == "" {
 			return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("pull Docker base image %s for %s: Docker did not report an immutable manifest digest", authorReference, platform.Canonical)
 		}
-		inspectionReference = dockerRepositoryName(authorReference) + "@" + string(pulledDigest)
 	}
 	output, err := run(ctx, "image", "inspect", inspectionReference)
 	if err != nil {
@@ -234,7 +233,18 @@ func dockerImmutableReference(authorReference string, repoDigests []string, conf
 		return authorReference, "", nil
 	}
 	if pulledDigest != "" {
-		return dockerRepositoryName(authorReference) + "@" + string(pulledDigest), pulledDigest, nil
+		repository := canonicalDockerRepository(authorReference)
+		for _, candidate := range repoDigests {
+			candidateRepository, candidateDigest, found := strings.Cut(candidate, "@")
+			if found && canonicalDockerRepository(candidateRepository) == repository && candidateDigest == string(pulledDigest) {
+				return candidate, pulledDigest, nil
+			}
+		}
+		// Some Docker image stores omit RepoDigests after an explicit-platform
+		// pull. The inspected config digest is still an immutable local image
+		// reference and keeps all later operations bound to the exact bytes that
+		// were selected for this platform.
+		return string(configDigest), "", nil
 	}
 	if strings.Contains(authorReference, "@") {
 		for _, candidate := range repoDigests {

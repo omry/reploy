@@ -6,6 +6,7 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/providers"
+	aptprovider "github.com/omry/reploy/internal/providers/apt"
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
 )
 
@@ -25,7 +26,10 @@ func OwnerValidatorsForNode(node providers.NodeSpec) (providers.ProviderOwnerVal
 	case blueprint.ComponentTypeBase:
 		return providers.ProviderOwnerValidators{}, fmt.Errorf("base root does not have provider resolution validators")
 	case blueprint.ComponentTypeAPT:
-		return providers.ProviderOwnerValidators{}, fmt.Errorf("APT provider execution is not implemented")
+		return providers.ProviderOwnerValidators{
+			Profile: aptprovider.ValidateRequirementProfileV1,
+			Bundle:  aptprovider.ValidateResolvedBundlePayloadV1,
+		}, nil
 	default:
 		return providers.ProviderOwnerValidators{}, fmt.Errorf("unsupported provider %q", node.Provider)
 	}
@@ -51,7 +55,14 @@ func MaterializeNode(node providers.NodeSpec, input providers.MaterializeInput) 
 	case blueprint.ComponentTypeBase:
 		return providers.MaterializationTransaction{}, fmt.Errorf("base root does not have a provider materialization operation")
 	case blueprint.ComponentTypeAPT:
-		return providers.MaterializationTransaction{}, fmt.Errorf("APT provider execution is not implemented")
+		transaction, err := (aptprovider.ComponentProvider{}).Materialize(input)
+		if err != nil {
+			return providers.MaterializationTransaction{}, err
+		}
+		if err := validateMaterializationNodeBinding(node, input); err != nil {
+			return providers.MaterializationTransaction{}, err
+		}
+		return transaction, nil
 	default:
 		return providers.MaterializationTransaction{}, fmt.Errorf("unsupported provider %q", node.Provider)
 	}

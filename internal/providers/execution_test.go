@@ -55,7 +55,7 @@ func TestResolveContractBindsPlatformUpstreamAndProfile(t *testing.T) {
 	}
 	if err := ValidateMaterializeInput(MaterializeInput{
 		Bundle: result.Bundle, Profile: result.Profile,
-		AssemblyParent:      RealizedImageV1{Digest: testDigest("a"), ConfigDigest: testDigest("b"), RootFSSubject: testDigest("c")},
+		AssemblyParent:      result.Bundle.Payload.Upstream,
 		Carrier:             materializeTestExecutable("carrier", ExecutableRoleCarrier, "/bin/sh"),
 		EnvironmentLauncher: materializeTestExecutable("cleanenv", ExecutableRoleEnvironmentLauncher, "/usr/bin/env"),
 		FinalImageConfig:    materializeTestFinalImageConfig(),
@@ -86,7 +86,7 @@ func TestMaterializeInputRequiresDistinctValidatedBackendExecutables(t *testing.
 	_, result := validResolveContract(t)
 	valid := MaterializeInput{
 		Bundle: result.Bundle, Profile: result.Profile,
-		AssemblyParent:      RealizedImageV1{Digest: testDigest("a"), ConfigDigest: testDigest("b"), RootFSSubject: testDigest("c")},
+		AssemblyParent:      result.Bundle.Payload.Upstream,
 		Carrier:             materializeTestExecutable("carrier", ExecutableRoleCarrier, "/bin/sh"),
 		EnvironmentLauncher: materializeTestExecutable("cleanenv", ExecutableRoleEnvironmentLauncher, "/usr/bin/env"),
 		FinalImageConfig:    materializeTestFinalImageConfig(),
@@ -97,6 +97,7 @@ func TestMaterializeInputRequiresDistinctValidatedBackendExecutables(t *testing.
 		want   string
 	}{
 		{name: "missing carrier", mutate: func(input *MaterializeInput) { input.Carrier = ValidatedExecutableInput{} }, want: "carrier"},
+		{name: "wrong assembly parent", mutate: func(input *MaterializeInput) { input.AssemblyParent.Digest = testDigest("f") }, want: "assembly parent"},
 		{name: "carrier role", mutate: func(input *MaterializeInput) { input.Carrier.Role = ExecutableRoleProviderPrerequisite }, want: "carrier role"},
 		{name: "launcher role", mutate: func(input *MaterializeInput) { input.EnvironmentLauncher.Role = ExecutableRoleProviderPrerequisite }, want: "environment launcher role"},
 		{name: "duplicate ID", mutate: func(input *MaterializeInput) {

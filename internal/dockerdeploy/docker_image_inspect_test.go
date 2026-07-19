@@ -150,12 +150,12 @@ func TestResolveBaseUsesExplicitPlatformAndRejectsUnsafeBaseConfig(t *testing.T)
 		t.Fatalf("error = %v", err)
 	}
 	wantPull := []string{"pull", "--platform", "linux/amd64", "ubuntu:24.04"}
-	if len(calls) != 2 || !reflect.DeepEqual(calls[0], wantPull) || !reflect.DeepEqual(calls[1], []string{"image", "inspect", "ubuntu@" + manifestID}) {
+	if len(calls) != 2 || !reflect.DeepEqual(calls[0], wantPull) || !reflect.DeepEqual(calls[1], []string{"image", "inspect", "ubuntu:24.04"}) {
 		t.Fatalf("calls = %#v", calls)
 	}
 }
 
-func TestResolveBaseUsesPullDigestWhenInspectionOmitsRepoDigests(t *testing.T) {
+func TestResolveBaseUsesConfigDigestWhenPlatformPullOmitsRepoDigests(t *testing.T) {
 	platform, err := blueprint.ParsePlatform("linux/arm64")
 	if err != nil {
 		t.Fatal(err)
@@ -176,10 +176,10 @@ func TestResolveBaseUsesPullDigestWhenInspectionOmitsRepoDigests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if descriptor.ImmutableReference != "debian@"+manifestID || descriptor.ManifestDigest != canonical.Digest(manifestID) || descriptor.Platform != platform {
+	if descriptor.ImmutableReference != configID || descriptor.ManifestDigest != "" || descriptor.Platform != platform {
 		t.Fatalf("descriptor = %#v", descriptor)
 	}
-	if len(calls) != 2 || !reflect.DeepEqual(calls[1], []string{"image", "inspect", "debian@" + manifestID}) {
+	if len(calls) != 2 || !reflect.DeepEqual(calls[1], []string{"image", "inspect", "debian:12-slim"}) {
 		t.Fatalf("calls = %#v", calls)
 	}
 }

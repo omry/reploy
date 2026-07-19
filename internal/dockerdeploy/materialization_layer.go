@@ -105,7 +105,13 @@ func BuildMaterializationLayer(store providerstore.Store, request Materializatio
 		return MaterializationLayerCandidate{}, err
 	}
 	if err := runMaterializationBuildCommand(command, options); err != nil {
-		return MaterializationLayerCandidate{}, fmt.Errorf("build materialization layer for %q: %w", request.Transaction.NodeID, err)
+		platform := request.Platform
+		failure := providers.NewBuildErrorV1(providers.BuildErrorV1{
+			Code: "materialization.failed", Phase: "materialize", Platform: &platform,
+			BaseDigest: request.Transaction.Upstream.ConfigDigest, NodeID: request.Transaction.NodeID, CauseKind: "docker.build",
+			Correction: &providers.CorrectionV1{Kind: "retry-materialization"},
+		}, err)
+		return MaterializationLayerCandidate{}, failure
 	}
 	content, err := os.ReadFile(iidPath)
 	if err != nil {

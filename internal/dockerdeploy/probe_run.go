@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/omry/reploy/internal/canonical"
@@ -98,6 +99,95 @@ func (session *ImageValidationSession) Probe(ctx context.Context, request probe.
 		return probe.ResponseV1{}, fmt.Errorf("decode image probe response from %s: %w", session.descriptor.ImmutableReference, err)
 	}
 	return response, nil
+}
+
+// QueryDPKGOwners performs the one fixed read-only ownership operation used
+// for already-observed APT output paths. It does not enumerate packages or
+// files and cannot execute a caller-selected command.
+func (session *ImageValidationSession) QueryDPKGOwners(ctx context.Context, paths []string) ([]byte, error) {
+	if session == nil || session.closed {
+		return nil, fmt.Errorf("image validation session is not open")
+	}
+	if ctx == nil {
+		return nil, fmt.Errorf("image validation dpkg owner context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("query image dpkg owners: %w", err)
+	}
+	if len(paths) == 0 {
+		return []byte{}, nil
+	}
+	paths = append([]string{}, paths...)
+	sort.Strings(paths)
+	for index, path := range paths {
+		if path == "" || !strings.HasPrefix(path, "/") || strings.ContainsAny(path, "\x00\r\n") {
+			return nil, fmt.Errorf("image validation dpkg owner path %d is invalid", index)
+		}
+		if index > 0 && paths[index-1] == path {
+			return nil, fmt.Errorf("image validation dpkg owner paths must be unique")
+		}
+	}
+	args := []string{
+		"exec", "--user", "0:0", "--workdir", "/",
+		session.containerName, "/usr/bin/dpkg-query", "--search",
+	}
+	args = append(args, paths...)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := runImageValidationFollowupCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{
+		Context: ctx, Stdout: &stdout, Stderr: &stderr,
+	}); err != nil {
+		output := trimmedCommandOutput(stderr.String())
+		if output != "" {
+			return nil, fmt.Errorf("query image dpkg owners: %w\ncommand output:\n%s", err, output)
+		}
+		return nil, fmt.Errorf("query image dpkg owners: %w", err)
+	}
+	return stdout.Bytes(), nil
+}
+
+// QueryAlternative performs one fixed read-only query for a link-group name
+// derived from an already-observed /etc/alternatives path.
+func (session *ImageValidationSession) QueryAlternative(ctx context.Context, group string) ([]byte, error) {
+	if session == nil || session.closed {
+		return nil, fmt.Errorf("image validation session is not open")
+	}
+	if ctx == nil {
+		return nil, fmt.Errorf("image validation alternatives context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("query image alternative: %w", err)
+	}
+	if !validImageAlternativeGroup(group) {
+		return nil, fmt.Errorf("image validation alternative group is invalid")
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	spec := CommandSpec{Name: "docker", Args: []string{
+		"exec", "--user", "0:0", "--workdir", "/", session.containerName,
+		"/usr/bin/update-alternatives", "--query", group,
+	}}
+	if err := runImageValidationFollowupCommand(spec, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
+		output := trimmedCommandOutput(stderr.String())
+		if output != "" {
+			return nil, fmt.Errorf("query image alternative %q: %w\ncommand output:\n%s", group, err, output)
+		}
+		return nil, fmt.Errorf("query image alternative %q: %w", group, err)
+	}
+	return stdout.Bytes(), nil
+}
+
+func validImageAlternativeGroup(value string) bool {
+	if value == "" || value[0] == '-' {
+		return false
+	}
+	for _, char := range value {
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || strings.ContainsRune("+_.-", char) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // Close force-removes exactly this validation container. It is idempotent

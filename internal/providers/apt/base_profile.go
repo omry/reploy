@@ -48,11 +48,19 @@ type BaseProfileEvidenceV1 struct {
 
 var requiredBaseToolsV1 = []RequiredToolEvidenceV1{
 	{Name: "apt_get", Path: "/usr/bin/apt-get", Interface: "apt-get-v1"},
+	{Name: "awk", Path: "/usr/bin/awk", Interface: "posix-awk-v1"},
+	{Name: "cmp", Path: "/usr/bin/cmp", Interface: "posix-cmp-v1"},
 	{Name: "dpkg", Path: "/usr/bin/dpkg", Interface: "dpkg-v1"},
 	{Name: "dpkg_deb", Path: "/usr/bin/dpkg-deb", Interface: "dpkg-deb-v1"},
 	{Name: "dpkg_query", Path: "/usr/bin/dpkg-query", Interface: "dpkg-query-v1"},
 	{Name: "env", Path: "/usr/bin/env", Interface: "env-i-v1"},
+	{Name: "mkdir", Path: "/bin/mkdir", Interface: "posix-mkdir-v1"},
+	{Name: "rm", Path: "/bin/rm", Interface: "posix-rm-v1"},
 	{Name: "sh", Path: "/bin/sh", Interface: "posix-sh-v1"},
+	{Name: "sha256sum", Path: "/usr/bin/sha256sum", Interface: "sha256sum-v1"},
+	{Name: "sort", Path: "/usr/bin/sort", Interface: "posix-sort-v1"},
+	{Name: "update_alternatives", Path: "/usr/bin/update-alternatives", Interface: "update-alternatives-query-v1"},
+	{Name: "wc", Path: "/usr/bin/wc", Interface: "posix-wc-v1"},
 }
 
 // RequiredBaseToolsV1 returns the fixed command interfaces that a resolver or
@@ -200,14 +208,23 @@ func validateRequiredToolsV1(tools []RequiredToolEvidenceV1) error {
 		if actual.Name != expected.Name || actual.Path != expected.Path || actual.Interface != expected.Interface {
 			return fmt.Errorf("APT base tool evidence %d does not match required %s interface at %s", index, expected.Name, expected.Path)
 		}
-		if actual.Name != "env" && actual.Name != "sh" && !validEvidenceValueV1(actual.Version) {
+		if requiredToolVersionV1(actual.Name) && !validEvidenceValueV1(actual.Version) {
 			return fmt.Errorf("APT base tool %s version evidence is required", actual.Name)
 		}
-		if (actual.Name == "env" || actual.Name == "sh") && actual.Version != "" {
+		if !requiredToolVersionV1(actual.Name) && actual.Version != "" {
 			return fmt.Errorf("APT base tool %s must not invent version evidence", actual.Name)
 		}
 	}
 	return nil
+}
+
+func requiredToolVersionV1(name string) bool {
+	switch name {
+	case "apt_get", "dpkg", "dpkg_deb", "dpkg_query", "sha256sum":
+		return true
+	default:
+		return false
+	}
 }
 
 func validOSReleaseNameV1(value string) bool {

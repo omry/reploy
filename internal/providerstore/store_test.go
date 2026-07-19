@@ -45,6 +45,41 @@ func TestStorePublishesImmutableBlobAtContentPath(t *testing.T) {
 	}
 }
 
+func TestStorePublishExpectedRejectsChangedBytesBeforeBlobPublication(t *testing.T) {
+	deployment := t.TempDir()
+	store, err := NewStore(deployment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := store.Publish(context.Background(), "debs/expected.deb", "deb", strings.NewReader("expected"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherDeployment := t.TempDir()
+	otherStore, err := NewStore(otherDeployment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := otherStore.PublishExpected(context.Background(), expected, strings.NewReader("changed")); err == nil || !strings.Contains(err.Error(), "expected descriptor") {
+		t.Fatalf("error = %v", err)
+	}
+	expectedPath, err := otherStore.BlobPath(expected.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(expectedPath); !os.IsNotExist(err) {
+		t.Fatalf("mismatched blob was published: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(otherStore.Root(), "tmp"))
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("temporary entries = %#v, err = %v", entries, err)
+	}
+	published, err := otherStore.PublishExpected(context.Background(), expected, strings.NewReader("expected"))
+	if err != nil || published != expected {
+		t.Fatalf("published = %#v, err = %v", published, err)
+	}
+}
+
 func TestStoreReusesExistingValidBlobAndCleansTemporaryFiles(t *testing.T) {
 	deployment := t.TempDir()
 	root := filepath.Join(deployment, ".reploy", StoreDirName)

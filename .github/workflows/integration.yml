@@ -78,6 +78,20 @@ jobs:
           docker compose version
           docker run --rm -v "$PWD:/workspace:ro" alpine:3.22 test -f /workspace/go.mod
 
+      - name: Preload provider Docker integration fixtures
+        if: matrix.name == 'Linux amd64'
+        run: |
+          docker pull debian:bookworm-slim
+          docker pull python:3.13-slim
+
+      - name: Run provider Docker integration tests
+        if: matrix.name == 'Linux amd64'
+        env:
+          REPLOY_DOCKER_INTEGRATION: "1"
+        run: >-
+          go test -timeout 10m ./internal/dockerdeploy
+          -run '^(TestTypedMaterializationLayerDockerIntegration|TestPreparedPythonGraphDockerIntegration|TestPythonResolverWheelIntegration)$'
+
       - name: Run CLI runtime integration
         if: ${{ matrix.persistent_install == false }}
         env:
@@ -101,3 +115,64 @@ jobs:
       - name: Stop macOS Docker runtime
         if: always() && runner.os == 'macOS'
         run: colima delete --force || true
+
+  apt-provider-integration:
+    name: APT provider integration (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Debian 12
+            image: debian:bookworm-slim
+            platform: linux/amd64
+            failures: "1"
+          - name: Debian 13
+            image: debian:trixie-slim
+            platform: linux/amd64
+            failures: "0"
+          - name: Ubuntu 24.04
+            image: ubuntu:24.04
+            platform: linux/amd64
+            failures: "0"
+          - name: Ubuntu 26.04
+            image: ubuntu:26.04
+            platform: linux/amd64
+            failures: "0"
+          - name: Debian 12 arm64
+            image: debian:bookworm-slim
+            platform: linux/arm64
+            failures: "0"
+          - name: Debian 12 arm/v7
+            image: debian:bookworm-slim
+            platform: linux/arm/v7
+            failures: "0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Set up emulation for non-native APT images
+        if: matrix.platform != 'linux/amd64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64,arm
+
+      - name: Pull representative APT image
+        run: docker pull --platform ${{ matrix.platform }} ${{ matrix.image }}
+
+      - name: Run combined APT provider integration scenario
+        env:
+          REPLOY_DOCKER_INTEGRATION: "1"
+          REPLOY_APT_INTEGRATION_BASE: ${{ matrix.image }}
+          REPLOY_APT_INTEGRATION_PLATFORM: ${{ matrix.platform }}
+          REPLOY_APT_INTEGRATION_FAILURES: ${{ matrix.failures }}
+        run: >-
+          go test -timeout 15m ./internal/dockerdeploy
+          -run '^(TestAPTResolverBaseProfileDockerIntegration|TestAPTResolverRepositoryFailureDockerIntegration|TestAPTResolverUpgradeDockerIntegration)$'

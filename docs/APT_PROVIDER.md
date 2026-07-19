@@ -919,12 +919,13 @@ artifact's exact path, size, and SHA-256. Base-origin package records remain
 bound by the immutable base-image digest. Source configuration and repository
 credentials are not copied into the bundle or duplicated in identity metadata.
 
-Raw APT stdout/stderr and source declarations are secret-tainted and are not
-persisted. Before display or diagnostic logging, provider-owned filtering
-removes URI credentials and other recognized secret forms; output that cannot
-be rendered safely is replaced by a structured phase/error code. A future
-blueprint-defined repository feature must transport credentials through an
-ephemeral backend secret mechanism rather than argv, environment, locks, or
+APT and dpkg diagnostics are streamed live to the caller and are not persisted
+in deployment state, bundles, locks, store objects, labels, or a second Reploy
+log. Reploy relies on the selected base image's normal APT credential handling
+and does not redact or suppress its diagnostic stream. Binary archive data and
+package-state query output are consumed internally rather than displayed. A future
+blueprint-defined repository feature must define its own credential transport
+and diagnostic policy; credentials must not enter argv, locks, bundles, or
 image layers.
 
 ### APT Base-Image Trust Boundary
@@ -1233,14 +1234,17 @@ real workloads encounter the operating-system limit, a different invocation
 strategy requires a separate design based on that evidence.
 
 The initial Docker recipe runs `apt-get install` with every local `.deb` path
-listed explicitly, `--assume-yes`, `--no-download`, `--no-remove`,
+listed explicitly, `--assume-yes`, `--no-remove`,
 `--no-install-recommends`, and `-o APT::Install-Suggests=false` under BuildKit
 `--network=none`. APT remains responsible for dependency and `Pre-Depends`
 ordering while `dpkg` performs unpacking and configuration. The network
 boundary and empty private archive cache, rather than an assumption about APT
 behavior, guarantee that the transaction cannot fetch or inherit a missing
-package. Every eligible archive is therefore one of the hash-verified locked
-positional inputs; a transaction requiring anything else fails.
+package. `--no-download` is deliberately not passed: Debian bookworm's APT
+rejects absolute local-package operands when that option is combined with the
+local install transaction. Every eligible archive is therefore one of the
+hash-verified locked positional inputs; a transaction requiring anything else
+fails at the network boundary.
 
 ### Noninteractive APT Execution
 
@@ -1404,7 +1408,7 @@ RunBundleResolver
   stdin and terminal: /dev/null and none
   host capabilities: none
   deadline: no Reploy-wide elapsed-time deadline
-  output: continuously drained and forwarded through the safe output path
+  output: continuously drained and forwarded through the configured output writers
   cleanup: always
 ```
 
@@ -1968,8 +1972,7 @@ be enabled:
 - APT resolution must use the immutable base's APT configuration and trust
   policy without parsing or rewriting it, propagate every update error, never
   retry under changed trust settings, and inspect and hash every downloaded
-  artifact before publication. Provider redaction applies before emitting APT
-  diagnostics.
+  artifact before publication.
 - The provider request model must carry typed command requirements, candidate
   outputs, and selected supplier identities.
 - Directory-scoped deployment state must persist one versioned canonical
@@ -2298,7 +2301,7 @@ schema accept `type: apt` until the end-to-end path is complete.
   invalidate only selected dependents, and different deployments remain pinned
   to their own recorded generations.
 - Bundle-lock tests proving blueprint binding, canonical-encoding and digest
-  vectors, exact artifact/hash and recipe validation, secret omission, and
+  vectors, exact artifact/hash and recipe validation, credential omission, and
   verification that the stored identity matches the canonical lock contents
   and deployment-local manifest path.
 

@@ -63,6 +63,20 @@ func (store Store) NewWorkspace(pattern string) (string, error) {
 // package. It streams one raw artifact into private storage, then atomically
 // publishes it under its content digest without replacing an existing object.
 func (store Store) Publish(ctx context.Context, logicalPath string, kind string, reader io.Reader) (ArtifactDescriptor, error) {
+	return store.publishArtifact(ctx, logicalPath, kind, reader, nil)
+}
+
+// PublishExpected atomically publishes an artifact only when the streamed
+// bytes match the caller's already-validated descriptor. A mismatch never
+// creates a digest-addressed blob.
+func (store Store) PublishExpected(ctx context.Context, expected ArtifactDescriptor, reader io.Reader) (ArtifactDescriptor, error) {
+	if err := expected.Validate(); err != nil {
+		return ArtifactDescriptor{}, err
+	}
+	return store.publishArtifact(ctx, expected.LogicalPath, expected.Kind, reader, &expected)
+}
+
+func (store Store) publishArtifact(ctx context.Context, logicalPath string, kind string, reader io.Reader, expected *ArtifactDescriptor) (ArtifactDescriptor, error) {
 	if ctx == nil {
 		return ArtifactDescriptor{}, fmt.Errorf("artifact publication context is required")
 	}
@@ -86,6 +100,9 @@ func (store Store) Publish(ctx context.Context, logicalPath string, kind string,
 	}
 	if err := descriptor.Validate(); err != nil {
 		return ArtifactDescriptor{}, err
+	}
+	if expected != nil && descriptor != *expected {
+		return ArtifactDescriptor{}, fmt.Errorf("provider artifact bytes do not match expected descriptor")
 	}
 	finalPath, err := store.BlobPath(descriptor.SHA256)
 	if err != nil {
