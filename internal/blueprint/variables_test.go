@@ -69,7 +69,9 @@ func TestResolveExpandsVariablesAcrossStringSchemaFields(t *testing.T) {
 		"package": "demo-server>=2",
 	}
 	source.Blueprint.Version = "{{ version }}"
-	source.Docker.Image = "{{ image }}"
+	base := source.Environment.Components["base"]
+	base.Image = "{{ image }}"
+	source.Environment.Components["base"] = base
 	source.Environment.Terminal.ColorEnv = "{{ color }}"
 	source.Environment.Components["application"] = ComponentSyntax{Type: "python", Requirements: []string{"{{ package }}"}}
 
@@ -80,7 +82,7 @@ func TestResolveExpandsVariablesAcrossStringSchemaFields(t *testing.T) {
 	if document.Blueprint.Version != "2.3" || document.Docker.Image != "python:3.13" || document.Environment.Terminal.ColorEnv != "APP_COLOR" {
 		t.Fatalf("resolved document = %#v", document)
 	}
-	if got := document.Environment.Components["application"].Requirements[0]; got != "demo-server>=2" {
+	if got := document.Environment.Components["application"].Python.Requirements[0]; got != "demo-server>=2" {
 		t.Fatalf("component requirement = %q", got)
 	}
 }

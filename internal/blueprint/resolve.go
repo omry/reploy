@@ -14,6 +14,10 @@ var builtInControlOperations = map[string]bool{
 }
 
 func Resolve(source Syntax) (Document, error) {
+	compatibility, err := ParseCompatibility(source.Blueprint.Compatibility.Platforms)
+	if err != nil {
+		return Document{}, err
+	}
 	variables, err := resolveVariables(source.Environment.Vars)
 	if err != nil {
 		return Document{}, err
@@ -36,6 +40,7 @@ func Resolve(source Syntax) (Document, error) {
 			Schema:         source.Blueprint.Schema,
 			Version:        strings.TrimSpace(source.Blueprint.Version),
 			RequiresReploy: strings.TrimSpace(source.Blueprint.RequiresReploy),
+			Compatibility:  compatibility,
 		},
 		Environment: Environment{
 			ID:            id,
@@ -50,22 +55,22 @@ func Resolve(source Syntax) (Document, error) {
 			Commands:      map[string]Command{},
 		},
 		Docker: Docker{
-			Image:  strings.TrimSpace(source.Docker.Image),
 			Mounts: map[string]DockerMount{},
 		},
 	}
 	if document.Blueprint.Version == "" {
 		return Document{}, fmt.Errorf("blueprint.version is required")
 	}
-	if document.Docker.Image == "" {
-		return Document{}, fmt.Errorf("docker.image is required")
-	}
-
 	if err := resolveTranslations(source, &document); err != nil {
 		return Document{}, err
 	}
 	if err := resolveComponents(source, &document); err != nil {
 		return Document{}, err
+	}
+	for name, component := range document.Environment.Components {
+		if component.Type == ComponentTypeAPT {
+			return Document{}, fmt.Errorf("environment.components.%s.type apt is not publicly enabled until the APT cross-provider gate passes", name)
+		}
 	}
 	if err := resolvePathsAndMounts(source, extended, &document); err != nil {
 		return Document{}, err
@@ -118,30 +123,223 @@ func resolveTranslations(source Syntax, document *Document) error {
 func resolveComponents(source Syntax, document *Document) error {
 	for _, name := range sortedKeys(source.Environment.Components) {
 		item := source.Environment.Components[name]
-		if err := validateObjectName("environment.components", name); err != nil {
+		component, err := resolveComponent(name, item)
+		if err != nil {
 			return err
-		}
-		if item.Type != string(ComponentTypePython) {
-			return fmt.Errorf("environment.components.%s.type must be python in the initial implementation", name)
-		}
-		if len(item.Requirements) == 0 {
-			return fmt.Errorf("environment.components.%s.requirements must not be empty", name)
-		}
-		component := Component{Type: ComponentTypePython, Requirements: append([]string(nil), item.Requirements...)}
-		if item.Optional != nil {
-			component.Optional = &OptionalComponent{
-				Group: strings.TrimSpace(item.Optional.Group), Description: strings.TrimSpace(item.Optional.Description),
-			}
-			if component.Optional.Description == "" {
-				return fmt.Errorf("environment.components.%s.optional.description is required", name)
-			}
 		}
 		document.Environment.Components[name] = component
 	}
-	if len(document.Environment.Components) == 0 {
-		return fmt.Errorf("environment.components must not be empty")
+	base, ok := document.Environment.Components["base"]
+	if !ok || base.Type != ComponentTypeBase || base.Base == nil {
+		return fmt.Errorf("environment.components.base is required")
 	}
+	document.Docker.Image = base.Base.Image // Temporary projection for existing Docker callers.
 	return nil
+}
+
+func resolveComponent(name string, item ComponentSyntax) (Component, error) {
+	field := "environment.components." + name
+	if name == "base" {
+		return resolveBaseComponent(field, item)
+	}
+	if err := validateNonBaseComponentIdentifier(field, name); err != nil {
+		return Component{}, err
+	}
+	switch ComponentType(strings.TrimSpace(item.Type)) {
+	case ComponentTypePython:
+		return resolvePythonComponent(field, item)
+	case ComponentTypeAPT:
+		return resolveAPTComponent(field, item)
+	default:
+		return Component{}, fmt.Errorf("%s.type must be python or apt", field)
+	}
+}
+
+func resolveBaseComponent(field string, item ComponentSyntax) (Component, error) {
+	for _, forbidden := range []string{"type", "interpreter", "requirements", "packages", "options"} {
+		if item.Present[forbidden] {
+			return Component{}, fmt.Errorf("%s.%s is not valid for the base component", field, forbidden)
+		}
+	}
+	image := strings.TrimSpace(item.Image)
+	if image == "" {
+		return Component{}, fmt.Errorf("%s.image is required", field)
+	}
+	exports := make(map[string]BaseExecutableExport, len(item.Exports))
+	for _, name := range sortedKeys(item.Exports) {
+		if err := validateProviderIdentifier(field+".exports", name); err != nil {
+			return Component{}, err
+		}
+		executable := strings.TrimSpace(item.Exports[name].Executable)
+		if err := validateExecutablePath(field+".exports."+name+".executable", executable); err != nil {
+			return Component{}, err
+		}
+		exports[name] = BaseExecutableExport{Executable: executable}
+	}
+	return Component{
+		Type: ComponentTypeBase, Base: &BaseComponent{Image: image, Exports: exports}, Options: map[string]ComponentOption{},
+	}, nil
+}
+
+func resolvePythonComponent(field string, item ComponentSyntax) (Component, error) {
+	for _, forbidden := range []string{"image", "exports", "packages"} {
+		if item.Present[forbidden] {
+			return Component{}, fmt.Errorf("%s.%s is not valid for a Python component", field, forbidden)
+		}
+	}
+	interpreter := CommandRequirement{Command: "python"}
+	if item.Interpreter != nil {
+		interpreter = CommandRequirement{
+			Command: strings.TrimSpace(item.Interpreter.Command), Version: strings.TrimSpace(item.Interpreter.Version),
+			Supplier: strings.TrimSpace(item.Interpreter.Supplier),
+		}
+	}
+	if err := interpreter.Validate(field + ".interpreter"); err != nil {
+		return Component{}, err
+	}
+	requirements, err := normalizeStringSet(field+".requirements", item.Requirements)
+	if err != nil {
+		return Component{}, err
+	}
+	options, err := resolveComponentOptions(field, ComponentTypePython, item.Options)
+	if err != nil {
+		return Component{}, err
+	}
+	if len(requirements) == 0 && len(options) == 0 {
+		return Component{}, fmt.Errorf("%s must declare requirements or options", field)
+	}
+	return Component{
+		Type: ComponentTypePython, Python: &PythonComponent{Interpreter: interpreter, Requirements: requirements}, Options: options,
+	}, nil
+}
+
+func resolveAPTComponent(field string, item ComponentSyntax) (Component, error) {
+	for _, forbidden := range []string{"image", "exports", "interpreter", "requirements"} {
+		if item.Present[forbidden] {
+			return Component{}, fmt.Errorf("%s.%s is not valid for an APT component", field, forbidden)
+		}
+	}
+	packages, err := resolveAPTPackageRequests(field+".packages", item.Packages)
+	if err != nil {
+		return Component{}, err
+	}
+	options, err := resolveComponentOptions(field, ComponentTypeAPT, item.Options)
+	if err != nil {
+		return Component{}, err
+	}
+	if len(packages) == 0 && len(options) == 0 {
+		return Component{}, fmt.Errorf("%s must declare packages or options", field)
+	}
+	return Component{Type: ComponentTypeAPT, APT: &APTComponent{Packages: packages}, Options: options}, nil
+}
+
+func resolveComponentOptions(field string, componentType ComponentType, source map[string]ComponentOptionSyntax) (map[string]ComponentOption, error) {
+	options := make(map[string]ComponentOption, len(source))
+	for _, name := range sortedKeys(source) {
+		optionField := field + ".options." + name
+		if err := validateProviderIdentifier(field+".options", name); err != nil {
+			return nil, err
+		}
+		item := source[name]
+		description := strings.TrimSpace(item.Description)
+		if description == "" {
+			return nil, fmt.Errorf("%s.description is required", optionField)
+		}
+		option := ComponentOption{Description: description}
+		switch componentType {
+		case ComponentTypePython:
+			if item.Present["packages"] {
+				return nil, fmt.Errorf("%s.packages is not valid for a Python option", optionField)
+			}
+			requirements, err := normalizeStringSet(optionField+".requirements", item.Requirements)
+			if err != nil {
+				return nil, err
+			}
+			if len(requirements) == 0 {
+				return nil, fmt.Errorf("%s.requirements must not be empty", optionField)
+			}
+			option.PythonRequirements = requirements
+		case ComponentTypeAPT:
+			if item.Present["requirements"] {
+				return nil, fmt.Errorf("%s.requirements is not valid for an APT option", optionField)
+			}
+			packages, err := resolveAPTPackageRequests(optionField+".packages", item.Packages)
+			if err != nil {
+				return nil, err
+			}
+			if len(packages) == 0 {
+				return nil, fmt.Errorf("%s.packages must not be empty", optionField)
+			}
+			option.APTPackages = packages
+		}
+		options[name] = option
+	}
+	return options, nil
+}
+
+func resolveAPTPackageRequests(field string, source []APTPackageRequestSyntax) ([]APTPackageRequest, error) {
+	requests := make([]APTPackageRequest, 0, len(source))
+	byName := map[string]APTPackageRequest{}
+	for index, item := range source {
+		request, err := ParseAPTPackageRequest(item.Package)
+		if err != nil {
+			return nil, fmt.Errorf("%s[%d]: %w", field, index, err)
+		}
+		for _, name := range sortedKeys(item.Exports) {
+			executable := strings.TrimSpace(item.Exports[name].Executable)
+			request.Exports[name] = ExecutableExport{Executable: executable}
+		}
+		if err := ValidateAPTPackageRequest(request); err != nil {
+			return nil, fmt.Errorf("%s[%d]: %w", field, index, err)
+		}
+		if previous, exists := byName[request.Name]; exists {
+			if aptPackageRequestsEqual(previous, request) {
+				continue
+			}
+			return nil, fmt.Errorf("%s contains conflicting declarations for package %q", field, request.Name)
+		}
+		byName[request.Name] = request
+		requests = append(requests, request)
+	}
+	sort.Slice(requests, func(left int, right int) bool {
+		return aptPackageRequestSortKey(requests[left]) < aptPackageRequestSortKey(requests[right])
+	})
+	return requests, nil
+}
+
+func normalizeStringSet(field string, values []string) ([]string, error) {
+	seen := make(map[string]bool, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return nil, fmt.Errorf("%s must not contain an empty value", field)
+		}
+		if !seen[value] {
+			seen[value] = true
+			result = append(result, value)
+		}
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func aptPackageRequestsEqual(left APTPackageRequest, right APTPackageRequest) bool {
+	return aptPackageRequestSortKey(left) == aptPackageRequestSortKey(right)
+}
+
+func aptPackageRequestSortKey(request APTPackageRequest) string {
+	var key strings.Builder
+	key.WriteString(request.Name)
+	key.WriteByte(0)
+	key.WriteString(request.Version)
+	for _, name := range sortedKeys(request.Exports) {
+		key.WriteByte(0)
+		key.WriteString(name)
+		key.WriteByte(0)
+		key.WriteString(request.Exports[name].Executable)
+	}
+	return key.String()
 }
 
 func resolvePathsAndMounts(source Syntax, extended extendedSyntax, document *Document) error {

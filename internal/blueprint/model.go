@@ -15,6 +15,7 @@ type Metadata struct {
 	Schema         int
 	Version        string
 	RequiresReploy string
+	Compatibility  Compatibility
 }
 
 type Environment struct {
@@ -51,18 +52,41 @@ const (
 type ComponentType string
 
 const (
+	ComponentTypeBase   ComponentType = "base"
 	ComponentTypePython ComponentType = "python"
+	ComponentTypeAPT    ComponentType = "apt"
 )
 
 type Component struct {
-	Type         ComponentType
-	Optional     *OptionalComponent
+	Type    ComponentType
+	Base    *BaseComponent
+	Python  *PythonComponent
+	APT     *APTComponent
+	Options map[string]ComponentOption
+}
+
+type BaseComponent struct {
+	Image   string
+	Exports map[string]BaseExecutableExport
+}
+
+type BaseExecutableExport struct {
+	Executable string
+}
+
+type PythonComponent struct {
+	Interpreter  CommandRequirement
 	Requirements []string
 }
 
-type OptionalComponent struct {
-	Group       string
-	Description string
+type APTComponent struct {
+	Packages []APTPackageRequest
+}
+
+type ComponentOption struct {
+	Description        string
+	PythonRequirements []string
+	APTPackages        []APTPackageRequest
 }
 
 type Path struct {

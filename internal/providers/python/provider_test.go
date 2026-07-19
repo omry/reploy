@@ -23,10 +23,12 @@ func TestClassifyRootAcceptsContainerAbsoluteWheel(t *testing.T) {
 func TestResolveRequestSelectsOptionalComponents(t *testing.T) {
 	document := blueprint.Document{Environment: blueprint.Environment{
 		Components: map[string]blueprint.Component{
-			"application": {Type: blueprint.ComponentTypePython, Requirements: []string{"demo-server"}},
-			"imap": {
-				Type: blueprint.ComponentTypePython, Requirements: []string{"demo-imap"},
-				Optional: &blueprint.OptionalComponent{Group: "plugins", Description: "IMAP plugin"},
+			"application": {
+				Type:   blueprint.ComponentTypePython,
+				Python: &blueprint.PythonComponent{Requirements: []string{"demo-server"}},
+				Options: map[string]blueprint.ComponentOption{
+					"imap": {Description: "IMAP plugin", PythonRequirements: []string{"demo-imap"}},
+				},
 			},
 		},
 		Executables: map[string]blueprint.Executable{
@@ -39,26 +41,25 @@ func TestResolveRequestSelectsOptionalComponents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := []string{request.Components[0].Name, request.Components[1].Name}; !reflect.DeepEqual(got, []string{"application", "imap"}) {
-		t.Fatalf("components = %#v", got)
+	if len(request.Components) != 1 || request.Components[0].Name != "application" {
+		t.Fatalf("components = %#v", request.Components)
+	}
+	if got := request.Components[0].Requirements; !reflect.DeepEqual(got, []string{"demo-imap", "demo-server"}) {
+		t.Fatalf("requirements = %#v", got)
 	}
 	if !reflect.DeepEqual(request.DirectRoots, []string{"debugpy==1.8.0"}) {
 		t.Fatalf("direct roots = %#v", request.DirectRoots)
 	}
 }
 
-func TestResolveRequestRejectsInactiveComponentReference(t *testing.T) {
+func TestResolveRequestRejectsUnknownOption(t *testing.T) {
 	document := blueprint.Document{Environment: blueprint.Environment{
 		Components: map[string]blueprint.Component{
-			"imap": {
-				Type: blueprint.ComponentTypePython, Requirements: []string{"demo-imap"},
-				Optional: &blueprint.OptionalComponent{Description: "IMAP plugin"},
-			},
+			"application": {Type: blueprint.ComponentTypePython, Python: &blueprint.PythonComponent{Requirements: []string{"demo-server"}}},
 		},
-		Executables: map[string]blueprint.Executable{"imap": {Component: "imap", Binary: "demo-imap"}},
 	}}
-	_, err := ResolveRequest(document, Selection{}, "linux/amd64", "python@sha256:demo")
-	if err == nil || !strings.Contains(err.Error(), "inactive optional component") {
+	_, err := ResolveRequest(document, Selection{OptionalComponents: map[string]bool{"imap": true}}, "linux/amd64", "python@sha256:demo")
+	if err == nil || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -66,7 +67,7 @@ func TestResolveRequestRejectsInactiveComponentReference(t *testing.T) {
 func TestResolveRequestNormalizesExplicitTranslations(t *testing.T) {
 	document := blueprint.Document{Environment: blueprint.Environment{
 		Components: map[string]blueprint.Component{
-			"application": {Type: blueprint.ComponentTypePython, Requirements: []string{"demo-server"}},
+			"application": {Type: blueprint.ComponentTypePython, Python: &blueprint.PythonComponent{Requirements: []string{"demo-server"}}},
 		},
 		Translations: map[string]blueprint.Translation{
 			"workspace": {
@@ -88,7 +89,7 @@ func TestResolveRequestNormalizesExplicitTranslations(t *testing.T) {
 func TestResolveRequestRejectsDuplicateNormalizedTranslation(t *testing.T) {
 	document := blueprint.Document{Environment: blueprint.Environment{
 		Components: map[string]blueprint.Component{
-			"application": {Type: blueprint.ComponentTypePython, Requirements: []string{"demo-server"}},
+			"application": {Type: blueprint.ComponentTypePython, Python: &blueprint.PythonComponent{Requirements: []string{"demo-server"}}},
 		},
 		Translations: map[string]blueprint.Translation{
 			"one": {Type: blueprint.ComponentTypePython, Scope: blueprint.TranslationScopeDevelopment, Root: ".", Mappings: map[string]string{"demo_server": "one"}},

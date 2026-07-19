@@ -17,9 +17,14 @@ type Syntax struct {
 }
 
 type MetadataSyntax struct {
-	Schema         int    `yaml:"schema"`
-	Version        string `yaml:"version"`
-	RequiresReploy string `yaml:"requires_reploy"`
+	Schema         int                 `yaml:"schema"`
+	Version        string              `yaml:"version"`
+	RequiresReploy string              `yaml:"requires_reploy"`
+	Compatibility  CompatibilitySyntax `yaml:"compatibility"`
+}
+
+type CompatibilitySyntax struct {
+	Platforms []string `yaml:"platforms"`
 }
 
 type EnvironmentSyntax struct {
@@ -48,14 +53,36 @@ type TranslationSyntax struct {
 }
 
 type ComponentSyntax struct {
-	Type         string                   `yaml:"type"`
-	Optional     *OptionalComponentSyntax `yaml:"optional"`
-	Requirements []string                 `yaml:"requirements"`
+	Type         string                            `yaml:"type"`
+	Image        string                            `yaml:"image"`
+	Exports      map[string]ExecutableExportSyntax `yaml:"exports"`
+	Interpreter  *CommandRequirementSyntax         `yaml:"interpreter"`
+	Requirements []string                          `yaml:"requirements"`
+	Packages     []APTPackageRequestSyntax         `yaml:"packages"`
+	Options      map[string]ComponentOptionSyntax  `yaml:"options"`
+	Present      map[string]bool                   `yaml:"-"`
 }
 
-type OptionalComponentSyntax struct {
-	Group       string `yaml:"group"`
-	Description string `yaml:"description"`
+type ExecutableExportSyntax struct {
+	Executable string `yaml:"executable"`
+}
+
+type CommandRequirementSyntax struct {
+	Command  string `yaml:"command"`
+	Version  string `yaml:"version"`
+	Supplier string `yaml:"supplier"`
+}
+
+type ComponentOptionSyntax struct {
+	Description  string                    `yaml:"description"`
+	Requirements []string                  `yaml:"requirements"`
+	Packages     []APTPackageRequestSyntax `yaml:"packages"`
+	Present      map[string]bool           `yaml:"-"`
+}
+
+type APTPackageRequestSyntax struct {
+	Package string                            `yaml:"package"`
+	Exports map[string]ExecutableExportSyntax `yaml:"exports"`
 }
 
 type PathSyntax struct {
@@ -148,7 +175,6 @@ type InstallSuccessSyntax struct {
 }
 
 type DockerSyntax struct {
-	Image    string                       `yaml:"image"`
 	Mounts   map[string]DockerMountSyntax `yaml:"mounts"`
 	Workload *DockerWorkloadSyntax        `yaml:"workload"`
 }

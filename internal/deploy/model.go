@@ -37,6 +37,7 @@ type DeploymentState struct {
 	ResolvedArtifact      *ResolvedPackArtifact `json:"resolved_artifact,omitempty"`
 	Runtime               *RuntimeState         `json:"runtime,omitempty"`
 	Bundle                BundleState           `json:"bundle,omitempty"`
+	Overlay               RequestOverlayV1      `json:"overlay"`
 	Images                *GeneratedImagesState `json:"images,omitempty"`
 	Materialization       *MaterializationState `json:"materialization,omitempty"`
 	Install               *InstallState         `json:"install,omitempty"`

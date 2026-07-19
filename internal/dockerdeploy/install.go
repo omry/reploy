@@ -1367,11 +1367,11 @@ func writeInstalledState(plan installPlan) error {
 		NetworkName:    plan.NetworkName,
 		Ports:          installPortState(plan.Ports),
 	}
-	content, err := json.MarshalIndent(state, "", "  ")
+	content, err := deploy.MarshalDeploymentState(state)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(plan.TargetDir, StateFileName), append(content, '\n'), 0o644)
+	return os.WriteFile(filepath.Join(plan.TargetDir, StateFileName), content, 0o644)
 }
 
 func writeInstalledDockerEnv(plan installPlan) error {

@@ -9,9 +9,14 @@ import (
 
 func TestComponentOptionsAndSelection(t *testing.T) {
 	document := blueprint.Document{Environment: blueprint.Environment{Components: map[string]blueprint.Component{
-		"application": {Type: blueprint.ComponentTypePython, Requirements: []string{"demo"}},
-		"smtp":        {Type: blueprint.ComponentTypePython, Requirements: []string{"demo-smtp"}, Optional: &blueprint.OptionalComponent{Group: "plugins", Description: "SMTP"}},
-		"imap":        {Type: blueprint.ComponentTypePython, Requirements: []string{"demo-imap"}, Optional: &blueprint.OptionalComponent{Group: "plugins", Description: "IMAP"}},
+		"application": {
+			Type:   blueprint.ComponentTypePython,
+			Python: &blueprint.PythonComponent{Requirements: []string{"demo"}},
+			Options: map[string]blueprint.ComponentOption{
+				"smtp": {Description: "SMTP", PythonRequirements: []string{"demo-smtp"}},
+				"imap": {Description: "IMAP", PythonRequirements: []string{"demo-imap"}},
+			},
+		},
 	}}}
 	options := ComponentOptions(document)
 	if got := []string{options[0].Name, options[1].Name}; !reflect.DeepEqual(got, []string{"imap", "smtp"}) {
@@ -28,7 +33,7 @@ func TestComponentOptionsAndSelection(t *testing.T) {
 
 func TestSelectComponentsDoesNotTreatRequiredComponentAsOption(t *testing.T) {
 	document := blueprint.Document{Environment: blueprint.Environment{Components: map[string]blueprint.Component{
-		"application": {Type: blueprint.ComponentTypePython, Requirements: []string{"demo"}},
+		"application": {Type: blueprint.ComponentTypePython, Python: &blueprint.PythonComponent{Requirements: []string{"demo"}}},
 	}}}
 	if _, err := SelectComponents(document, nil, []string{"application"}, nil); err == nil {
 		t.Fatal("expected required component selection to fail")

@@ -2,7 +2,6 @@ package dockerdeploy
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -400,8 +399,8 @@ func loadState(dir string) (deploy.DeploymentState, error) {
 	if err != nil {
 		return deploy.DeploymentState{}, fmt.Errorf("read deployment state: %w", err)
 	}
-	var state deploy.DeploymentState
-	if err := json.Unmarshal(content, &state); err != nil {
+	state, err := deploy.ParseDeploymentState(content)
+	if err != nil {
 		return deploy.DeploymentState{}, fmt.Errorf("parse deployment state: %w", err)
 	}
 	return state, nil

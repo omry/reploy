@@ -3,10 +3,19 @@
   "control_script": "demo",
   "component": {
     "Type": "python",
-    "Optional": null,
-    "Requirements": [
-      "demo-server"
-    ]
+    "Base": null,
+    "Python": {
+      "Interpreter": {
+        "Command": "python",
+        "Version": "",
+        "Supplier": ""
+      },
+      "Requirements": [
+        "demo-server"
+      ]
+    },
+    "APT": null,
+    "Options": {}
   },
   "path": {
     "Container": "/data",

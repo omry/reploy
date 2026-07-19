@@ -20,11 +20,141 @@ func TestResolveProducesTypedEnvironment(t *testing.T) {
 	if document.Environment.ControlScript != "demo" {
 		t.Fatalf("control script = %q", document.Environment.ControlScript)
 	}
+	if got := document.Blueprint.Compatibility.Platforms; !reflect.DeepEqual(got, []Platform{
+		{OS: "linux", Architecture: "amd64", Canonical: "linux/amd64"},
+		{OS: "linux", Architecture: "arm64", Canonical: "linux/arm64"},
+	}) {
+		t.Fatalf("compatibility platforms = %#v", got)
+	}
 	if !reflect.DeepEqual(document.Environment.Executables["server"].Order, DefaultArgumentOrder) {
 		t.Fatalf("order = %#v", document.Environment.Executables["server"].Order)
 	}
 	if document.Docker.Mounts["data"].Path.Update != UpdatePreserve {
 		t.Fatalf("mount path = %#v", document.Docker.Mounts["data"].Path)
+	}
+	base := document.Environment.Components["base"]
+	if base.Type != ComponentTypeBase || base.Base == nil || base.Python != nil || base.APT != nil || base.Base.Image != "python:3.13-slim" {
+		t.Fatalf("base component = %#v", base)
+	}
+	application := document.Environment.Components["application"]
+	if application.Type != ComponentTypePython || application.Base != nil || application.Python == nil || application.APT != nil {
+		t.Fatalf("application component = %#v", application)
+	}
+	if application.Python.Interpreter != (CommandRequirement{Command: "python"}) {
+		t.Fatalf("default Python interpreter = %#v", application.Python.Interpreter)
+	}
+}
+
+func TestResolveRequiresStrictBaseComponent(t *testing.T) {
+	tests := []struct {
+		name string
+		old  string
+		new  string
+		want string
+	}{
+		{name: "missing", old: "    base:\n      image: python:3.13-slim\n", want: "environment.components.base is required"},
+		{name: "type", old: "    base:\n      image: python:3.13-slim\n", new: "    base:\n      type: python\n      image: python:3.13-slim\n", want: ".type is not valid for the base component"},
+		{name: "provider payload", old: "    base:\n      image: python:3.13-slim\n", new: "    base:\n      image: python:3.13-slim\n      requirements: []\n", want: ".requirements is not valid for the base component"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value := strings.Replace(minimalBlueprint, tt.old, tt.new, 1)
+			source, err := Decode([]byte(value))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = Resolve(source)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolvePythonComponentOptions(t *testing.T) {
+	value := strings.Replace(minimalBlueprint,
+		"      requirements: [demo-server]\n",
+		"      interpreter: {command: python, version: '>=3.11', supplier: base}\n      requirements: [demo-server, demo-server]\n      options:\n        imap:\n          description: Install IMAP support.\n          requirements: [demo-imap, demo-imap]\n", 1)
+	source, err := Decode([]byte(value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := Resolve(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	component := document.Environment.Components["application"]
+	if component.Python.Interpreter != (CommandRequirement{Command: "python", Version: ">=3.11", Supplier: "base"}) {
+		t.Fatalf("interpreter = %#v", component.Python.Interpreter)
+	}
+	if !reflect.DeepEqual(component.Python.Requirements, []string{"demo-server"}) {
+		t.Fatalf("requirements = %#v", component.Python.Requirements)
+	}
+	if got := component.Options["imap"].PythonRequirements; !reflect.DeepEqual(got, []string{"demo-imap"}) {
+		t.Fatalf("option requirements = %#v", got)
+	}
+}
+
+func TestResolveRejectsProviderOwnedUnionFields(t *testing.T) {
+	tests := []struct {
+		name string
+		old  string
+		new  string
+		want string
+	}{
+		{name: "Python packages", old: "      requirements: [demo-server]\n", new: "      requirements: [demo-server]\n      packages: []\n", want: ".packages is not valid for a Python component"},
+		{name: "Python option packages", old: "      requirements: [demo-server]\n", new: "      requirements: [demo-server]\n      options:\n        imap:\n          description: IMAP\n          packages: []\n", want: ".packages is not valid for a Python option"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source, err := Decode([]byte(strings.Replace(minimalBlueprint, tt.old, tt.new, 1)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = Resolve(source)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveAPTComponentSyntaxAndPublicGate(t *testing.T) {
+	value := strings.Replace(minimalBlueprint,
+		"    application:\n",
+		"    system:\n      type: apt\n      packages:\n        - curl\n        - package: python3=3.11.2-1+deb12u1\n          exports:\n            python:\n              executable: /usr/bin/python3\n      options:\n        git:\n          description: Install Git.\n          packages: [git]\n    application:\n", 1)
+	source, err := Decode([]byte(value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	component, err := resolveComponent("system", source.Environment.Components["system"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if component.Type != ComponentTypeAPT || component.Base != nil || component.Python != nil || component.APT == nil {
+		t.Fatalf("APT component union = %#v", component)
+	}
+	if got := component.APT.Packages; len(got) != 2 || got[0].Name != "curl" || got[1].Exports["python"].Executable != "/usr/bin/python3" {
+		t.Fatalf("APT packages = %#v", got)
+	}
+	if got := component.Options["git"].APTPackages; len(got) != 1 || got[0].Name != "git" {
+		t.Fatalf("APT option = %#v", got)
+	}
+	_, err = Resolve(source)
+	if err == nil || !strings.Contains(err.Error(), "type apt is not publicly enabled") {
+		t.Fatalf("public APT gate error = %v", err)
+	}
+}
+
+func TestResolveRequiresBlueprintCompatibilityPlatforms(t *testing.T) {
+	withoutCompatibility := strings.Replace(minimalBlueprint, "  compatibility:\n    platforms: [linux/amd64, linux/arm64]\n", "", 1)
+	source, err := Decode([]byte(withoutCompatibility))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Resolve(source)
+	if err == nil || !strings.Contains(err.Error(), "blueprint.compatibility.platforms must not be empty") {
+		t.Fatalf("Resolve() error = %v", err)
 	}
 }
 

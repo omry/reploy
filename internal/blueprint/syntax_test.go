@@ -10,9 +10,13 @@ blueprint:
   schema: 1
   version: 0.1.0
   requires_reploy: ">=NEXT"
+  compatibility:
+    platforms: [linux/amd64, linux/arm64]
 environment:
   id: demo
   components:
+    base:
+      image: python:3.13-slim
     application:
       type: python
       requirements: [demo-server]
@@ -36,7 +40,6 @@ environment:
         scheme: http
         port: 8080
 docker:
-  image: python:3.13-slim
   mounts:
     data:
       extends: environment.paths.data
@@ -55,7 +58,7 @@ func TestDecodeAcceptsEnvironmentSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if source.Environment.ID != "demo" || source.Docker.Image != "python:3.13-slim" {
+	if source.Environment.ID != "demo" || source.Environment.Components["base"].Image != "python:3.13-slim" || len(source.Blueprint.Compatibility.Platforms) != 2 {
 		t.Fatalf("decoded source = %#v", source)
 	}
 }
@@ -63,6 +66,13 @@ func TestDecodeAcceptsEnvironmentSchema(t *testing.T) {
 func TestDecodeRejectsUnknownField(t *testing.T) {
 	_, err := Decode([]byte(strings.Replace(minimalBlueprint, "  id: demo\n", "  id: demo\n  surprise: true\n", 1)))
 	if err == nil || !strings.Contains(err.Error(), "field surprise not found") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestDecodeRejectsDockerImage(t *testing.T) {
+	_, err := Decode([]byte(strings.Replace(minimalBlueprint, "docker:\n", "docker:\n  image: python:3.13-slim\n", 1)))
+	if err == nil || !strings.Contains(err.Error(), "field image not found") {
 		t.Fatalf("error = %v", err)
 	}
 }

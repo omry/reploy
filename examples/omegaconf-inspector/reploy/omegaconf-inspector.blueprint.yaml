@@ -2,6 +2,8 @@ blueprint:
   schema: 1
   version: 0.1.0
   requires_reploy: ">=0.5.1.dev1"
+  compatibility:
+    platforms: [linux/amd64, linux/arm64]
 
 environment:
   id: omegaconf-inspector
@@ -15,6 +17,8 @@ environment:
       mappings:
         omegaconf-inspector: .
   components:
+    base:
+      image: python:3.11-slim
     application:
       type: python
       requirements: [omegaconf-inspector]
@@ -97,7 +101,6 @@ environment:
         - "inspector url: {{ environment.workload.endpoints.http.scheme }}://{{ reploy.workload.endpoints.http.publish.address }}:{{ reploy.workload.endpoints.http.publish.port }}"
 
 docker:
-  image: python:3.11-slim
   mounts:
     config:
       extends: environment.paths.config

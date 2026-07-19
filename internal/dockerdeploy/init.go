@@ -3,7 +3,6 @@ package dockerdeploy
 import (
 	"context"
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -221,6 +220,7 @@ func stateContent(pack deploy.AppPack, bundle deploy.BundleState, runtimeState *
 		ResolvedArtifact:      pack.ResolvedArtifact,
 		Runtime:               runtimeState,
 		Bundle:                bundle,
+		Overlay:               deploy.EmptyRequestOverlayV1(),
 	}
 	return marshalState(state)
 }
@@ -238,6 +238,7 @@ func updatedStateContent(pack deploy.AppPack, bundle deploy.BundleState, existin
 		ResolvedArtifact:      pack.ResolvedArtifact,
 		Runtime:               existing.Runtime,
 		Bundle:                bundle,
+		Overlay:               existing.Overlay,
 		Images:                existing.Images,
 		Materialization:       existing.Materialization,
 	}
@@ -249,11 +250,7 @@ func updatedStateContent(pack deploy.AppPack, bundle deploy.BundleState, existin
 }
 
 func marshalState(state deploy.DeploymentState) ([]byte, error) {
-	content, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	return append(content, '\n'), nil
+	return deploy.MarshalDeploymentState(state)
 }
 
 func initBundleRoots(pack deploy.AppPack, explicitRequirements []string) ([]deploy.ArtifactRoot, error) {

@@ -9,8 +9,8 @@ import (
 	"github.com/omry/reploy/internal/providers"
 )
 
-// Selection is deployment-local input. It activates optional blueprint
-// components and carries direct roots added through the retained bundle UX.
+// Selection is deployment-local input. It activates blueprint component
+// options and carries direct roots added through the retained bundle UX.
 type Selection struct {
 	OptionalComponents map[string]bool
 	DirectRoots        []string
@@ -48,8 +48,8 @@ func ResolveRequest(document blueprint.Document, selection Selection, platform s
 	}
 	sort.Strings(componentNames)
 
-	knownOptional := map[string]bool{}
-	active := map[string]bool{}
+	knownOptions := map[string]string{}
+	ambiguousOptions := map[string]bool{}
 	request := providers.ResolveRequest{
 		Platform:    platform,
 		BaseImage:   baseImage,
@@ -60,21 +60,34 @@ func ResolveRequest(document blueprint.Document, selection Selection, platform s
 		if component.Type != blueprint.ComponentTypePython {
 			continue
 		}
-		if component.Optional != nil {
-			knownOptional[name] = true
-			if !selection.OptionalComponents[name] {
-				continue
+		if component.Python == nil {
+			return providers.ResolveRequest{}, fmt.Errorf("Python component %q has no Python payload", name)
+		}
+		requirements := append([]string(nil), component.Python.Requirements...)
+		for _, optionName := range sortedOptionNames(component.Options) {
+			if owner, exists := knownOptions[optionName]; exists && owner != name {
+				ambiguousOptions[optionName] = true
+			} else {
+				knownOptions[optionName] = name
+			}
+			if selection.OptionalComponents[optionName] {
+				requirements = append(requirements, component.Options[optionName].PythonRequirements...)
 			}
 		}
-		active[name] = true
 		request.Components = append(request.Components, providers.Component{
 			Name:         name,
-			Requirements: append([]string(nil), component.Requirements...),
+			Requirements: normalizeRequirements(requirements),
 		})
 	}
 	for name, selected := range selection.OptionalComponents {
-		if selected && !knownOptional[name] {
-			return providers.ResolveRequest{}, fmt.Errorf("selected Python component %q is not an optional component", name)
+		if !selected {
+			continue
+		}
+		if ambiguousOptions[name] {
+			return providers.ResolveRequest{}, fmt.Errorf("selected Python option %q is ambiguous across components", name)
+		}
+		if _, exists := knownOptions[name]; !exists {
+			return providers.ResolveRequest{}, fmt.Errorf("selected Python option %q does not exist", name)
 		}
 	}
 	translationNames := make([]string, 0, len(document.Environment.Translations))
@@ -119,13 +132,32 @@ func ResolveRequest(document blueprint.Document, selection Selection, platform s
 		if component.Type != blueprint.ComponentTypePython {
 			continue
 		}
-		if !active[executable.Component] {
-			return providers.ResolveRequest{}, fmt.Errorf("executable %q references inactive optional component %q", name, executable.Component)
-		}
 		request.Executables = append(request.Executables, providers.ExecutableRequest{
 			Name: name, Component: executable.Component, Binary: executable.Binary,
 		})
 	}
 
 	return providers.NormalizeResolveRequest(request), nil
+}
+
+func sortedOptionNames(options map[string]blueprint.ComponentOption) []string {
+	names := make([]string, 0, len(options))
+	for name := range options {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func normalizeRequirements(requirements []string) []string {
+	seen := make(map[string]bool, len(requirements))
+	result := make([]string, 0, len(requirements))
+	for _, requirement := range requirements {
+		if !seen[requirement] {
+			seen[requirement] = true
+			result = append(result, requirement)
+		}
+	}
+	sort.Strings(result)
+	return result
 }

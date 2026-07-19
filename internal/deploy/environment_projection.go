@@ -61,16 +61,19 @@ func projectEnvironmentManifest(document blueprintmodel.Document, _ string) (Pac
 		return PackManifest{}, err
 	}
 	manifest.App.Provider.Type = string(component.Type)
-	manifest.App.Provider.Identifier = component.Requirements[0]
+	if component.Python == nil || len(component.Python.Requirements) == 0 {
+		return PackManifest{}, fmt.Errorf("environment component %q has no Python requirement for the temporary app projection", componentName)
+	}
+	manifest.App.Provider.Identifier = component.Python.Requirements[0]
 	manifest.App.Provider.LocalSources = projectedLocalSources(document)
-	_ = componentName
 
-	for name, item := range document.Environment.Components {
-		if item.Optional == nil {
+	for _, optionName := range sortedComponentOptionNames(component.Options) {
+		option := component.Options[optionName]
+		if len(option.PythonRequirements) == 0 {
 			continue
 		}
-		manifest.Bundle.Options[name] = BundleOptionConfig{
-			Identifier: item.Requirements[0], Group: item.Optional.Group, Description: item.Optional.Description,
+		manifest.Bundle.Options[optionName] = BundleOptionConfig{
+			Identifier: option.PythonRequirements[0], Description: option.Description,
 		}
 	}
 	manifest.Install.Ports.Staging = map[string]InstallPortConfig{}
@@ -134,20 +137,29 @@ func projectedInstallHooks(steps []blueprintmodel.Step) []DockerInstallHookConfi
 }
 
 func projectedApplicationComponent(document blueprintmodel.Document) (string, blueprintmodel.Component, error) {
-	if component, ok := document.Environment.Components["application"]; ok && component.Optional == nil {
+	if component, ok := document.Environment.Components["application"]; ok && component.Type == blueprintmodel.ComponentTypePython {
 		return "application", component, nil
 	}
 	names := make([]string, 0, len(document.Environment.Components))
 	for name, component := range document.Environment.Components {
-		if component.Optional == nil {
+		if component.Type == blueprintmodel.ComponentTypePython {
 			names = append(names, name)
 		}
 	}
 	sort.Strings(names)
 	if len(names) == 0 {
-		return "", blueprintmodel.Component{}, fmt.Errorf("environment has no required component")
+		return "", blueprintmodel.Component{}, fmt.Errorf("environment has no Python component for the temporary app projection")
 	}
 	return names[0], document.Environment.Components[names[0]], nil
+}
+
+func sortedComponentOptionNames(options map[string]blueprintmodel.ComponentOption) []string {
+	names := make([]string, 0, len(options))
+	for name := range options {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func projectedLocalSources(document blueprintmodel.Document) map[string]string {

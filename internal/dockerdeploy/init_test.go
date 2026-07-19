@@ -121,6 +121,27 @@ func TestInitWritesDeploymentDirectory(t *testing.T) {
 	}
 }
 
+func TestUpdatedStateContentPreservesRequestOverlay(t *testing.T) {
+	existing := deploy.DeploymentState{Overlay: deploy.RequestOverlayV1{
+		Schema: deploy.RequestOverlaySchemaV1,
+		SelectedOptions: []deploy.QualifiedOption{
+			{Component: "application", Option: "imap"},
+		},
+		DirectPackages: []deploy.DirectPackageRequest{},
+	}}
+	content, err := updatedStateContent(deploy.AppPack{}, deploy.BundleState{}, existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := deploy.ParseDeploymentState(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Overlay.SelectedOptions) != 1 || state.Overlay.SelectedOptions[0] != (deploy.QualifiedOption{Component: "application", Option: "imap"}) {
+		t.Fatalf("overlay = %#v", state.Overlay)
+	}
+}
+
 func TestMaterializeRuntimeComposeDeclaresNamedRuntimeVolume(t *testing.T) {
 	packDir := makeTestPack(t)
 	ref, err := deploy.ParsePackRef("file:" + packDir)

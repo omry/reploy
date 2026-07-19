@@ -7,6 +7,7 @@ import (
 )
 
 var portableNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+var providerIdentifierPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
 var windowsReservedNames = map[string]bool{
 	"CON": true, "PRN": true, "AUX": true, "NUL": true,
@@ -38,6 +39,29 @@ func validatePortableName(field string, name string) error {
 	stem, _, _ := strings.Cut(name, ".")
 	if windowsReservedNames[strings.ToUpper(stem)] {
 		return fmt.Errorf("%s must not use platform-reserved filename %q", field, name)
+	}
+	return nil
+}
+
+func validateProviderIdentifier(field string, name string) error {
+	if !providerIdentifierPattern.MatchString(name) {
+		return fmt.Errorf("%s must match [a-z][a-z0-9_-]*", field)
+	}
+	return nil
+}
+
+// ValidateProviderIdentifier applies the shared component, option, and output
+// identifier grammar at command and overlay boundaries outside this package.
+func ValidateProviderIdentifier(field string, name string) error {
+	return validateProviderIdentifier(field, name)
+}
+
+func validateNonBaseComponentIdentifier(field string, name string) error {
+	if err := validateProviderIdentifier(field, name); err != nil {
+		return err
+	}
+	if name == "base" {
+		return fmt.Errorf("%s uses reserved root component name %q", field, name)
 	}
 	return nil
 }

@@ -1824,11 +1824,10 @@ func syncBundleState(dir string, state deploy.DeploymentState) ([]UpdateResult, 
 	if state.Images != nil {
 		state.Images.Staging = nil
 	}
-	stateContent, err := json.MarshalIndent(state, "", "  ")
+	stateContent, err := deploy.MarshalDeploymentState(state)
 	if err != nil {
 		return nil, err
 	}
-	stateContent = append(stateContent, '\n')
 	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
 	if err != nil {
 		return nil, err
