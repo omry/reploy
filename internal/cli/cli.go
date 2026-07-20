@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -36,6 +37,10 @@ var dockerTestServer = dockerdeploy.TestServer
 var dockerShell = dockerdeploy.Shell
 var dockerStageInit = dockerdeploy.Init
 var dockerStageUpdate = dockerdeploy.Update
+var dockerStageLoadedPackDesiredState = dockerdeploy.StageLoadedPackDesiredStateV1
+var dockerRestageCurrentDesiredPlatform = dockerdeploy.RestageCurrentDesiredPlatformV1
+var dockerProviderBuild = dockerdeploy.RunProviderBuildV1
+var dockerProviderBuildRuntime = dockerdeploy.CurrentStagedProviderBuildRuntimeV1
 
 func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 	if message := windowsWSLBoundaryError(runtime.GOOS, os.LookupEnv, os.Getwd); message != "" {
@@ -317,7 +322,7 @@ func parseDockerTimeout(value string) (time.Duration, error) {
 
 func isDeploymentCommand(command string) bool {
 	switch command {
-	case "stage", "info", "app", "shell", "bundle", "up", "restart", "down", "ps", "status", "logs", "test", "doctor", "install", "uninstall":
+	case "stage", "build", "info", "app", "shell", "bundle", "up", "restart", "down", "ps", "status", "logs", "test", "doctor", "install", "uninstall":
 		return true
 	default:
 		return false
@@ -516,68 +521,32 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer, globalOptions 
 		printDockerHelp(stdout)
 		return 0
 	case "stage":
-		options, err := parseDockerCommandOptions(args[1:], true, dockerCommandParseConfig{
-			AllowUpdate:  true,
-			AllowVerbose: true,
-		})
+		return runDockerStage(args[1:], stdout, stderr, globalOptions)
+	case "build":
+		options, err := parseDockerBuildOptions(args[1:])
 		if err != nil {
-			fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
-			printDockerStageHelp(stderr)
+			fmt.Fprintf(stderr, "reploy build usage error: %v\n", err)
+			printDockerBuildHelp(stderr)
 			return 2
 		}
-		printWarnings(stderr, options.Warnings)
-		if options.Update {
-			options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
-			if err != nil {
-				fmt.Fprintf(stderr, "reploy stage --update error: %v\n", err)
-				return 1
-			}
-			stdout, stderr, err = dockerdeploy.DeploymentOutputWriters(options.Dir, stdout, stderr)
-			if err != nil {
-				fmt.Fprintf(stderr, "reploy stage --update error: %v\n", err)
-				return 1
-			}
-			results, err := dockerStageUpdate(dockerdeploy.UpdateOptions{
-				Dir: options.Dir, Pack: options.Pack, Force: options.Force,
-				MaterializeEnvironment: true, Verbose: options.Verbose, Stdout: stdout, Stderr: stderr,
-				Progress:               stderr,
-				DockerPreflightTimeout: globalOptions.DockerTimeout,
-			})
-			if err != nil {
-				fmt.Fprintf(stderr, "reploy stage --update error: %v\n", err)
-				return 1
-			}
-			printStageUpdateResults(stdout, options.Dir, results, options.Verbose)
-			return 0
+		options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, io.Discard)
+		runtimeInput, err := dockerProviderBuildRuntime()
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy build error: %v\n", err)
+			return 1
 		}
-		results, err := dockerStageInit(dockerdeploy.InitOptions{
-			Dir:                    options.Dir,
-			Pack:                   options.Pack,
-			Requirements:           options.Requirements,
-			MaterializeEnvironment: true,
-			Verbose:                options.Verbose,
-			Stdout:                 stdout,
-			Stderr:                 stderr,
-			Progress:               stderr,
-			DockerPreflightTimeout: globalOptions.DockerTimeout,
+		_, err = dockerProviderBuild(context.Background(), dockerdeploy.ProviderBuildRunInputV1{
+			DeploymentDir:  options.Dir,
+			Runtime:        runtimeInput,
+			NoCache:        options.NoCache,
+			ValidateLayers: options.ValidateLayers,
+			RunOptions: dockerdeploy.RunOptions{
+				Stdout: stdout, Stderr: stderr, DockerPreflightTimeout: globalOptions.DockerTimeout,
+			},
 		})
 		if err != nil {
-			var existingFileError dockerdeploy.ExistingDeploymentFileError
-			if errors.As(err, &existingFileError) {
-				fmt.Fprintf(stderr, "reploy stage error: staging directory already exists at %s (found %s). use --update to update it\n", options.Dir, existingFileError.Path)
-				return 1
-			}
-			fmt.Fprintf(stderr, "reploy stage error: %v\n", err)
+			fmt.Fprintf(stderr, "reploy build error: %v\n", err)
 			return 1
-		}
-		stdout, stderr, err = dockerdeploy.DeploymentOutputWriters(options.Dir, stdout, stderr)
-		if err != nil {
-			fmt.Fprintf(stderr, "reploy stage error: %v\n", err)
-			return 1
-		}
-		fmt.Fprintf(stdout, "created staging directory for %s: %s\n", packDisplayName(options.Pack), options.Dir)
-		if options.Verbose {
-			printUpdateResults(stdout, results)
 		}
 		return 0
 	case "info":
@@ -645,6 +614,247 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer, globalOptions 
 	}
 }
 
+func runDockerStage(args []string, stdout io.Writer, stderr io.Writer, globalOptions globalDeploymentOptions) int {
+	options, err := parseDockerCommandOptions(args, true, dockerCommandParseConfig{
+		AllowUpdate:   true,
+		AllowVerbose:  true,
+		AllowPlatform: true,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
+		printDockerStageHelp(stderr)
+		return 2
+	}
+	printWarnings(stderr, options.Warnings)
+
+	if options.Update {
+		options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, io.Discard)
+		if options.Pack.Raw != "" {
+			pack, loadErr := deploy.LoadPack(options.Pack)
+			if loadErr != nil {
+				fmt.Fprintf(stderr, "reploy stage --update error: %v\n", loadErr)
+				return 1
+			}
+			if pack.Environment != nil {
+				if code := rejectEnvironmentStageLegacyOptions(options, stderr); code != 0 {
+					return code
+				}
+				versionedState, inspectErr := deploymentHasVersionedState(options.Dir)
+				if inspectErr != nil {
+					fmt.Fprintf(stderr, "reploy stage --update error: %v\n", inspectErr)
+					return 1
+				}
+				if !versionedState {
+					fmt.Fprintf(stderr, "reploy stage --update error: %s is not a state-v1 staging directory; create it again with reploy stage\n", options.Dir)
+					return 1
+				}
+				result, stageErr := dockerStageLoadedPackDesiredState(context.Background(), dockerdeploy.LoadedPackDesiredStateStageInputV1{
+					DeploymentDir: options.Dir, Pack: pack, ExplicitPlatform: options.Platform,
+				})
+				if stageErr != nil {
+					fmt.Fprintf(stderr, "reploy stage --update error: %v\n", stageErr)
+					return 1
+				}
+				printDesiredStateStageResult(stdout, options.Dir, result.DesiredState, options.Verbose)
+				return 0
+			}
+		}
+
+		versionedState, inspectErr := deploymentHasVersionedState(options.Dir)
+		if inspectErr != nil {
+			fmt.Fprintf(stderr, "reploy stage --update error: %v\n", inspectErr)
+			return 1
+		}
+		if versionedState {
+			if code := rejectEnvironmentStageLegacyOptions(options, stderr); code != 0 {
+				return code
+			}
+			if options.Pack.Raw != "" {
+				fmt.Fprintln(stderr, "reploy stage --update error: the replacement blueprint does not use the environment model")
+				return 1
+			}
+			result, stageErr := dockerRestageCurrentDesiredPlatform(context.Background(), options.Dir, options.Platform)
+			if stageErr != nil {
+				fmt.Fprintf(stderr, "reploy stage --update error: %v\n", stageErr)
+				return 1
+			}
+			printDesiredStateStageResult(stdout, options.Dir, result, options.Verbose)
+			return 0
+		}
+
+		if options.Platform != "" {
+			fmt.Fprintln(stderr, "reploy usage error: --platform requires an environment-model blueprint")
+			printDockerStageHelp(stderr)
+			return 2
+		}
+		options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, true, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy stage --update error: %v\n", err)
+			return 1
+		}
+		legacyStdout, legacyStderr, outputErr := dockerdeploy.DeploymentOutputWriters(options.Dir, stdout, stderr)
+		if outputErr != nil {
+			fmt.Fprintf(stderr, "reploy stage --update error: %v\n", outputErr)
+			return 1
+		}
+		results, updateErr := dockerStageUpdate(dockerdeploy.UpdateOptions{
+			Dir: options.Dir, Pack: options.Pack, Force: options.Force,
+			MaterializeEnvironment: true, Verbose: options.Verbose, Stdout: legacyStdout, Stderr: legacyStderr,
+			Progress:               legacyStderr,
+			DockerPreflightTimeout: globalOptions.DockerTimeout,
+		})
+		if updateErr != nil {
+			fmt.Fprintf(legacyStderr, "reploy stage --update error: %v\n", updateErr)
+			return 1
+		}
+		printStageUpdateResults(legacyStdout, options.Dir, results, options.Verbose)
+		return 0
+	}
+
+	pack, err := deploy.LoadPack(options.Pack)
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy stage error: %v\n", err)
+		return 1
+	}
+	if pack.Environment != nil {
+		if code := rejectEnvironmentStageLegacyOptions(options, stderr); code != 0 {
+			return code
+		}
+		result, stageErr := dockerStageLoadedPackDesiredState(context.Background(), dockerdeploy.LoadedPackDesiredStateStageInputV1{
+			DeploymentDir: options.Dir, Pack: pack, ExplicitPlatform: options.Platform, Create: true,
+		})
+		if stageErr != nil {
+			if errors.Is(stageErr, deploy.ErrDesiredStateAlreadyExists) {
+				fmt.Fprintf(stderr, "reploy stage error: staging directory already exists at %s. use --update to update it\n", options.Dir)
+				return 1
+			}
+			fmt.Fprintf(stderr, "reploy stage error: %v\n", stageErr)
+			return 1
+		}
+		fmt.Fprintf(stdout, "created staging directory for %s: %s\n", result.AppID, options.Dir)
+		if options.Verbose {
+			fmt.Fprintf(stdout, "selected platform: %s\n", result.DesiredState.State.Platform.Canonical)
+		}
+		return 0
+	}
+
+	if options.Platform != "" {
+		fmt.Fprintln(stderr, "reploy usage error: --platform requires an environment-model blueprint")
+		printDockerStageHelp(stderr)
+		return 2
+	}
+	results, err := dockerStageInit(dockerdeploy.InitOptions{
+		Dir:                    options.Dir,
+		Pack:                   options.Pack,
+		Requirements:           options.Requirements,
+		MaterializeEnvironment: true,
+		Verbose:                options.Verbose,
+		Stdout:                 stdout,
+		Stderr:                 stderr,
+		Progress:               stderr,
+		DockerPreflightTimeout: globalOptions.DockerTimeout,
+	})
+	if err != nil {
+		var existingFileError dockerdeploy.ExistingDeploymentFileError
+		if errors.As(err, &existingFileError) {
+			fmt.Fprintf(stderr, "reploy stage error: staging directory already exists at %s (found %s). use --update to update it\n", options.Dir, existingFileError.Path)
+			return 1
+		}
+		fmt.Fprintf(stderr, "reploy stage error: %v\n", err)
+		return 1
+	}
+	legacyStdout, _, err := dockerdeploy.DeploymentOutputWriters(options.Dir, stdout, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy stage error: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(legacyStdout, "created staging directory for %s: %s\n", packDisplayName(options.Pack), options.Dir)
+	if options.Verbose {
+		printUpdateResults(legacyStdout, results)
+	}
+	return 0
+}
+
+func rejectEnvironmentStageLegacyOptions(options dockerCommandOptions, stderr io.Writer) int {
+	if options.Force {
+		fmt.Fprintln(stderr, "reploy usage error: --force is not supported for environment-model staging")
+		printDockerStageHelp(stderr)
+		return 2
+	}
+	if len(options.Requirements) > 0 {
+		fmt.Fprintln(stderr, "reploy usage error: --requirement is not supported for environment-model staging; declare Python packages in the blueprint")
+		printDockerStageHelp(stderr)
+		return 2
+	}
+	return 0
+}
+
+func deploymentHasVersionedState(dir string) (bool, error) {
+	content, err := os.ReadFile(filepath.Join(dir, dockerdeploy.StateFileName))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read deployment state: %w", err)
+	}
+	var envelope struct {
+		Schema string `json:"schema"`
+	}
+	if err := json.Unmarshal(content, &envelope); err != nil {
+		return false, fmt.Errorf("inspect deployment state schema: %w", err)
+	}
+	return envelope.Schema != "", nil
+}
+
+func printDesiredStateStageResult(output io.Writer, dir string, result deploy.DesiredStateUpdateResult, verbose bool) {
+	if result.Changed {
+		fmt.Fprintf(output, "updated staging directory: %s\n", dir)
+	} else {
+		fmt.Fprintf(output, "staging directory is up to date: %s\n", dir)
+	}
+	if verbose {
+		fmt.Fprintf(output, "selected platform: %s\n", result.State.Platform.Canonical)
+	}
+}
+
+type dockerBuildOptions struct {
+	Dir            string
+	DirExplicit    bool
+	NoCache        bool
+	ValidateLayers bool
+}
+
+func parseDockerBuildOptions(args []string) (dockerBuildOptions, error) {
+	options := dockerBuildOptions{Dir: dockerdeploy.DefaultDeploymentDir}
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		switch arg {
+		case "--dir":
+			value, ok := optionValue(args, &index)
+			if !ok {
+				return dockerBuildOptions{}, fmt.Errorf("%s requires a value", arg)
+			}
+			options.Dir = value
+			options.DirExplicit = true
+		case "--no-cache":
+			options.NoCache = true
+		case "--validate-layers":
+			options.ValidateLayers = true
+		default:
+			if strings.HasPrefix(arg, "--dir=") {
+				options.Dir = strings.TrimPrefix(arg, "--dir=")
+				options.DirExplicit = true
+				continue
+			}
+			return dockerBuildOptions{}, fmt.Errorf("unknown option: %s", arg)
+		}
+	}
+	if options.Dir == "" {
+		return dockerBuildOptions{}, fmt.Errorf("--dir must not be empty")
+	}
+	return options, nil
+}
+
 func runDockerApp(args []string, stdout io.Writer, stderr io.Writer, globalOptions globalDeploymentOptions) int {
 	if len(args) > 0 && isHelpArg(args[0]) {
 		printAppHelp(stdout)
@@ -662,6 +872,11 @@ func runDockerApp(args []string, stdout io.Writer, stderr io.Writer, globalOptio
 		return 2
 	}
 	if options.Commands {
+		if options.OutputDir != "" || options.OutputFile != "" {
+			fmt.Fprintln(stderr, "reploy usage error: output options require an app command")
+			printAppShortUsage(stderr)
+			return 2
+		}
 		if len(options.CommandArgs) != 0 {
 			fmt.Fprintln(stderr, "reploy usage error: --commands does not accept app command arguments")
 			printAppShortUsage(stderr)
@@ -675,6 +890,11 @@ func runDockerApp(args []string, stdout io.Writer, stderr io.Writer, globalOptio
 		}, stdout, stderr)
 	}
 	if len(options.CommandArgs) == 0 {
+		if options.OutputDir != "" || options.OutputFile != "" {
+			fmt.Fprintln(stderr, "reploy usage error: output options require an app command")
+			printAppShortUsage(stderr)
+			return 2
+		}
 		return runDockerAppSummaryForOptions(dockerAppSummaryOptions{
 			Dir:          options.Dir,
 			DirExplicit:  options.DirExplicit,
@@ -699,6 +919,8 @@ func runDockerApp(args []string, stdout io.Writer, stderr io.Writer, globalOptio
 		Dir:                    options.Dir,
 		CommandArgs:            options.CommandArgs,
 		DeployedOnly:           options.DeployedOnly,
+		OutputDir:              options.OutputDir,
+		OutputFile:             options.OutputFile,
 		Stdout:                 stdout,
 		Stderr:                 stderr,
 		DockerPreflightTimeout: globalOptions.DockerTimeout,
@@ -770,6 +992,8 @@ type dockerAppOptions struct {
 	Commands     bool
 	DeployedOnly bool
 	Format       string
+	OutputDir    string
+	OutputFile   string
 	CommandArgs  []string
 }
 
@@ -802,6 +1026,18 @@ func parseDockerAppOptions(args []string) (dockerAppOptions, error) {
 				return dockerAppOptions{}, fmt.Errorf("%s requires a value", arg)
 			}
 			options.Format = value
+		case "--output-dir":
+			value, ok := optionValue(args, &index)
+			if !ok {
+				return dockerAppOptions{}, fmt.Errorf("%s requires a value", arg)
+			}
+			options.OutputDir = value
+		case "--output-file":
+			value, ok := optionValue(args, &index)
+			if !ok {
+				return dockerAppOptions{}, fmt.Errorf("%s requires a value", arg)
+			}
+			options.OutputFile = value
 		default:
 			if strings.HasPrefix(arg, "--dir=") {
 				options.Dir = strings.TrimPrefix(arg, "--dir=")
@@ -810,6 +1046,14 @@ func parseDockerAppOptions(args []string) (dockerAppOptions, error) {
 			}
 			if strings.HasPrefix(arg, "--format=") {
 				options.Format = strings.TrimPrefix(arg, "--format=")
+				continue
+			}
+			if strings.HasPrefix(arg, "--output-dir=") {
+				options.OutputDir = strings.TrimPrefix(arg, "--output-dir=")
+				continue
+			}
+			if strings.HasPrefix(arg, "--output-file=") {
+				options.OutputFile = strings.TrimPrefix(arg, "--output-file=")
 				continue
 			}
 			options.CommandArgs = append(options.CommandArgs, arg)
@@ -821,7 +1065,22 @@ func parseDockerAppOptions(args []string) (dockerAppOptions, error) {
 	if options.Format != "" && options.Format != "json" {
 		return dockerAppOptions{}, fmt.Errorf("unsupported --format: %s", options.Format)
 	}
+	if options.OutputDir != "" && options.OutputFile != "" {
+		return dockerAppOptions{}, fmt.Errorf("--output-dir and --output-file are mutually exclusive")
+	}
+	if (options.OutputDir == "" && appOptionWasPresent(args, "--output-dir")) || (options.OutputFile == "" && appOptionWasPresent(args, "--output-file")) {
+		return dockerAppOptions{}, fmt.Errorf("output path must not be empty")
+	}
 	return options, nil
+}
+
+func appOptionWasPresent(args []string, name string) bool {
+	for _, arg := range args {
+		if arg == name || strings.HasPrefix(arg, name+"=") {
+			return true
+		}
+	}
+	return false
 }
 
 func parseDockerAppSummaryOptions(args []string) (dockerAppSummaryOptions, error) {
@@ -1516,7 +1775,6 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer, globalO
 			PortOverrides:          options.PortOverrides,
 			Replace:                options.Replace,
 			Clean:                  options.Clean,
-			InPlace:                options.InPlace,
 			Start:                  options.Start,
 			DryRun:                 options.DryRun,
 			Stdout:                 installStdout,
@@ -1548,7 +1806,6 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer, globalO
 				PortOverrides:          options.PortOverrides,
 				Replace:                options.Replace,
 				Clean:                  options.Clean,
-				InPlace:                options.InPlace,
 				Start:                  options.Start,
 				DryRun:                 options.DryRun,
 				Stdout:                 installStdout,
@@ -1642,7 +1899,6 @@ type dockerInstallOptions struct {
 	PortOverrides []dockerdeploy.PortOverride
 	Replace       []string
 	Clean         bool
-	InPlace       bool
 	Start         bool
 	DryRun        bool
 }
@@ -1663,8 +1919,6 @@ func parseDockerInstallOptions(args []string) (dockerInstallOptions, error) {
 			options.DryRun = true
 		case "--clean":
 			options.Clean = true
-		case "--in-place":
-			options.InPlace = true
 		case "--start":
 			options.Start = true
 		case "--no-start":
@@ -1772,9 +2026,6 @@ func parseDockerInstallOptions(args []string) (dockerInstallOptions, error) {
 	}
 	if options.Pack.Raw != "" && options.DirExplicit {
 		return dockerInstallOptions{}, fmt.Errorf("--dir is only supported when installing from an existing staging directory")
-	}
-	if options.InPlace && options.Pack.Raw == "" {
-		return dockerInstallOptions{}, fmt.Errorf("--in-place is only supported with direct app install")
 	}
 	return options, nil
 }
@@ -2199,11 +2450,13 @@ type dockerCommandOptions struct {
 	Update       bool
 	Verbose      bool
 	Requirements []string
+	Platform     string
 }
 
 type dockerCommandParseConfig struct {
-	AllowUpdate  bool
-	AllowVerbose bool
+	AllowUpdate   bool
+	AllowVerbose  bool
+	AllowPlatform bool
 }
 
 func parseDockerCommandOptions(args []string, requirePack bool, configs ...dockerCommandParseConfig) (dockerCommandOptions, error) {
@@ -2241,6 +2494,18 @@ func parseDockerCommandOptions(args []string, requirePack bool, configs ...docke
 				return dockerCommandOptions{}, fmt.Errorf("%s requires a value", arg)
 			}
 			options.Requirements = append(options.Requirements, value)
+		case "--platform":
+			if !config.AllowPlatform {
+				return dockerCommandOptions{}, fmt.Errorf("unknown option: %s", arg)
+			}
+			value, ok := optionValue(args, &index)
+			if !ok {
+				return dockerCommandOptions{}, fmt.Errorf("%s requires a value", arg)
+			}
+			if strings.TrimSpace(value) == "" {
+				return dockerCommandOptions{}, fmt.Errorf("--platform must not be empty")
+			}
+			options.Platform = value
 		default:
 			if strings.HasPrefix(arg, "--dir=") {
 				options.Dir = strings.TrimPrefix(arg, "--dir=")
@@ -2249,6 +2514,16 @@ func parseDockerCommandOptions(args []string, requirePack bool, configs ...docke
 			}
 			if strings.HasPrefix(arg, "--requirement=") {
 				options.Requirements = append(options.Requirements, strings.TrimPrefix(arg, "--requirement="))
+				continue
+			}
+			if strings.HasPrefix(arg, "--platform=") {
+				if !config.AllowPlatform {
+					return dockerCommandOptions{}, fmt.Errorf("unknown option: --platform")
+				}
+				options.Platform = strings.TrimPrefix(arg, "--platform=")
+				if strings.TrimSpace(options.Platform) == "" {
+					return dockerCommandOptions{}, fmt.Errorf("--platform must not be empty")
+				}
 				continue
 			}
 			if requirePack && !strings.HasPrefix(arg, "-") {
@@ -2780,6 +3055,7 @@ Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND
 
 Commands:
   stage        Create a staging directory
+  build        Build and validate the staged environment image
   info         Show staging state and bundle contents
   app          Run a blueprint-declared app command inside staging
   shell        Open /bin/sh in a transient staging container
@@ -2844,8 +3120,6 @@ Staging options:
               Replace a preserved managed path during install/update;
               use --replace all to replace every managed path
   --clean     Equivalent to replacing all managed paths
-  --in-place  Direct install into the target path instead of a temporary
-              staging-like workspace
   --dry-run    Print the install/uninstall plan without changing the host
   --remove-dir Remove the installed target directory during uninstall
   --start      Start after install, default
@@ -2953,8 +3227,10 @@ application installed in the staging bundle, not a host executable from PATH.
 	fmt.Fprint(output, strings.TrimLeft(`
 
 Options:
-  --dir DIR    Staging directory, default current staging dir or reploy-staging
-  -h, --help   Show app command help
+  --dir DIR          Staging directory, default current staging dir or reploy-staging
+  --output-dir DIR   Mount a persistent result directory at REPLOY_OUTPUT_DIR
+  --output-file FILE Publish one complete result file from REPLOY_OUTPUT_FILE
+  -h, --help         Show app command help
 `, "\n"))
 }
 
@@ -3005,6 +3281,7 @@ Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND
 
 Commands:
   stage        Create a staging directory
+  build        Build and validate the staged environment image
   info         Show staging state and bundle contents
   app          Run a blueprint-declared app command inside staging
   shell        Open /bin/sh in a transient staging container
@@ -3063,8 +3340,6 @@ Options:
               Replace a preserved managed path during install/update;
               use --replace all to replace every managed path
   --clean     Equivalent to replacing all managed paths
-  --in-place  Direct install into the target path instead of a temporary
-              staging-like workspace
   --dry-run    Print the install/uninstall plan without changing the host
   --remove-dir Remove the installed target directory during uninstall
   --start      Start after install, default
@@ -3086,11 +3361,29 @@ func printDockerCommandHelp(command string, output io.Writer) {
 	switch command {
 	case "stage":
 		printDockerStageHelp(output)
+	case "build":
+		printDockerBuildHelp(output)
 	case "logs":
 		printDockerLogsHelp(output)
 	default:
 		printDockerHelp(output)
 	}
+}
+
+func printDockerBuildHelp(output io.Writer) {
+	fmt.Fprint(output, strings.TrimLeft(`
+Usage: reploy [--docker] [--docker-timeout DURATION] build [OPTIONS]
+
+Build and validate the current staged environment image without installing it.
+The resulting image is always fully validated. --validate-layers additionally
+runs full validation after each component layer is created.
+
+Options:
+  --dir DIR          Staging directory, default current staging dir or reploy-staging
+  --no-cache         Rerun resolvers and image construction instead of reusing the current build
+  --validate-layers  Also fully validate every newly created component layer
+  -h, --help         Show build help
+`, "\n"))
 }
 
 func printDockerStageHelp(output io.Writer) {
@@ -3100,6 +3393,7 @@ Usage: reploy [--docker] [--docker-timeout DURATION] stage APP_REF [OPTIONS]
 
 Create a staging directory from an app blueprint reference.
 Use --update to refresh an existing staging directory, optionally from a new ref.
+Environment blueprints record desired state only; reploy build creates the image.
 
 APP_REF:
   Indexed shorthand from the Reploy blueprint index:
@@ -3126,8 +3420,10 @@ APP_REF:
 Options:
   --dir DIR    Staging directory to create, default reploy-staging
   --update     Update an existing staging directory instead of creating one
+  --platform OCI
+              Select an environment blueprint target, for example linux/amd64
   --force      With --update, overwrite locally edited generated files
-  --verbose    Show generated file update details
+  --verbose    Show additional staging details
 
 Python provider options:
   --requirement REQ

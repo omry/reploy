@@ -158,7 +158,8 @@ func aptMaterializeInput(t *testing.T) providerapi.MaterializeInput {
 	bundle, err := providerapi.NewResolvedBundle(providerapi.ResolvedBundleIdentityV1{
 		Schema: providerapi.ResolvedBundleSchemaV1, NodeID: "apt", Provider: blueprint.ComponentTypeAPT,
 		Request: request, RequirementProfileDigest: profileDigest, RecipeVersion: RecipeVersion,
-		Platform: platform, Upstream: upstream, Artifacts: artifacts, Outputs: []providerapi.ResolvedOutput{}, ProviderPayload: payloadData,
+		Platform: platform, Upstream: upstream, SelectedSources: []providerapi.ResolvedSourceInput{},
+		Artifacts: artifacts, Outputs: []providerapi.ResolvedOutput{}, ProviderPayload: payloadData,
 	}, ValidateResolvedBundlePayloadV1)
 	if err != nil {
 		t.Fatal(err)

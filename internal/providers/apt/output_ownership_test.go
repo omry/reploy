@@ -40,6 +40,37 @@ func TestParseDPKGSearchOutputRequiresOneLiteralOwnerPerPath(t *testing.T) {
 	}
 }
 
+func TestParseInstalledPackageStateRequiresExactLockedTuples(t *testing.T) {
+	expected := []PackageTuple{
+		{Name: "libc6", Version: "2.39-1", Architecture: "amd64", Status: InstalledPackageStatusV1},
+		{Name: "python3-minimal", Version: "3.13.1-1", Architecture: "amd64", Status: InstalledPackageStatusV1},
+	}
+	output := []byte("python3-minimal:amd64\t3.13.1-1\tamd64\tinstall ok installed\nlibc6:amd64\t2.39-1\tamd64\tinstall ok installed\n")
+	got, err := ParseInstalledPackageStateV1(output, expected, "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Name != "libc6" || got[1].Name != "python3-minimal" {
+		t.Fatalf("installed tuples = %#v", got)
+	}
+	for _, test := range []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{name: "changed version", output: "libc6:amd64\t2.40\tamd64\tinstall ok installed\npython3-minimal:amd64\t3.13.1-1\tamd64\tinstall ok installed\n", want: "locked tuple"},
+		{name: "bad status", output: "libc6:amd64\t2.39-1\tamd64\tdeinstall ok config-files\npython3-minimal:amd64\t3.13.1-1\tamd64\tinstall ok installed\n", want: "locked tuple"},
+		{name: "missing", output: "libc6:amd64\t2.39-1\tamd64\tinstall ok installed\n", want: "did not report"},
+		{name: "extra", output: "libc6:amd64\t2.39-1\tamd64\tinstall ok installed\npython3-minimal:amd64\t3.13.1-1\tamd64\tinstall ok installed\nzlib1g:amd64\t1.3\tamd64\tinstall ok installed\n", want: "unrequested"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := ParseInstalledPackageStateV1([]byte(test.output), expected, "amd64"); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
 func TestApplyOutputOwnershipBindsEveryOrdinaryPathToLockedTuple(t *testing.T) {
 	bundle := BundleV1{
 		NativeArchitecture: "amd64",
@@ -78,6 +109,38 @@ func TestApplyOutputOwnershipBindsEveryOrdinaryPathToLockedTuple(t *testing.T) {
 		"/usr/bin/python3": "other", "/usr/bin/python3.13": "python3-minimal",
 	}, map[string]AlternativeSelectionV1{}); err == nil || !strings.Contains(err.Error(), "outside the locked closure") {
 		t.Fatalf("outside owner error = %v", err)
+	}
+	fresh := append([]providers.ExecutableEvidence{}, evidence...)
+	fresh[0].Terminal.Size = "2"
+	installed := []PackageTuple{bundle.BasePackages[0].Tuple}
+	reproduced, err := ReproduceOutputOwnershipV1(
+		"amd64", fresh, owned,
+		map[string]string{"/usr/bin/python3": "python3-minimal", "/usr/bin/python3.13": "python3-minimal"},
+		installed, map[string]AlternativeSelectionV1{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reproduced[0].Terminal.Size != "2" || reproduced[0].Terminal.Owner == nil || reproduced[0].Terminal.Owner.Data.Value["version"] != "3.13.1-1" {
+		t.Fatalf("reproduced ownership = %#v", reproduced)
+	}
+	changed := append([]PackageTuple{}, installed...)
+	changed[0].Version = "3.13.2-1"
+	if _, err := ReproduceOutputOwnershipV1(
+		"amd64", fresh, owned,
+		map[string]string{"/usr/bin/python3": "python3-minimal", "/usr/bin/python3.13": "python3-minimal"},
+		changed, map[string]AlternativeSelectionV1{},
+	); err == nil || !strings.Contains(err.Error(), "locked tuple") {
+		t.Fatalf("changed installed tuple error = %v", err)
+	}
+	dirty := append([]providers.ExecutableEvidence{}, fresh...)
+	dirty[0].Terminal.Owner = owned[0].Terminal.Owner
+	if _, err := ReproduceOutputOwnershipV1(
+		"amd64", dirty, owned,
+		map[string]string{"/usr/bin/python3": "python3-minimal", "/usr/bin/python3.13": "python3-minimal"},
+		installed, map[string]AlternativeSelectionV1{},
+	); err == nil || !strings.Contains(err.Error(), "prebound") {
+		t.Fatalf("prebound fresh evidence error = %v", err)
 	}
 }
 
@@ -127,6 +190,15 @@ func TestAlternativeQueryAndObservedChainMustAgree(t *testing.T) {
 	public, alternative := owned[0].LinkChain[0], owned[0].LinkChain[1]
 	if public.Kind != "alternative" || public.Owner != nil || public.ProviderDetail == nil || alternative.Kind != "alternative" || alternative.Owner != nil || alternative.ProviderDetail == nil || alternative.ProviderDetail.Schema != AlternativeSelectionSchemaV1 {
 		t.Fatalf("alternative evidence = %#v; %#v", public, alternative)
+	}
+	reproduced, err := ReproduceOutputOwnershipV1(
+		"amd64", evidence, owned,
+		map[string]string{"/usr/lib/jvm/java-21/bin/java": "openjdk-21-jre-headless"},
+		[]PackageTuple{bundle.BasePackages[0].Tuple},
+		map[string]AlternativeSelectionV1{"/etc/alternatives/java": selection},
+	)
+	if err != nil || reproduced[0].LinkChain[1].ProviderDetail == nil {
+		t.Fatalf("reproduced alternative = %#v, error = %v", reproduced, err)
 	}
 	selection.Value = "/usr/lib/jvm/other/bin/java"
 	if _, err := ApplyOutputOwnershipV1(

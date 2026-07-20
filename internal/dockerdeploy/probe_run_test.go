@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -97,6 +98,104 @@ func TestImageValidationSessionSupportsSeveralFixedProbes(t *testing.T) {
 	}
 }
 
+func TestAPTImageValidationSessionAddsScratchMountWithoutNetwork(t *testing.T) {
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	probeWorkspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
+	aptWorkspace := testPreparedAPTResolverWorkspace(t)
+	spec, _, err := imageValidationCreateCommandSpecWithAPT(descriptor, probeWorkspace, &aptWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantProbeMount := "type=bind,source=" + probeWorkspace.HostDir + ",target=" + probeWorkspace.ContainerDir + ",readonly"
+	wantAPTMount := "type=bind,source=" + aptWorkspace.HostDir + ",target=" + aptWorkspace.ContainerDir
+	joined := strings.Join(spec.Args, "\n")
+	if !strings.Contains(joined, wantProbeMount) || !strings.Contains(joined, wantAPTMount) {
+		t.Fatalf("create args do not contain both mounts: %#v", spec.Args)
+	}
+	if !containsAdjacentArguments(spec.Args, "--network", "none") {
+		t.Fatalf("APT validation container is not networkless: %#v", spec.Args)
+	}
+}
+
+func TestAPTImageValidationSessionReusesHeldContainerAndCachesProfile(t *testing.T) {
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	probeWorkspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
+	aptWorkspace := testPreparedAPTResolverWorkspace(t)
+	profileOutputs := [][]byte{
+		[]byte("ID\x00debian\x00VERSION_ID\x0013\x00"),
+		[]byte("apt 3.0.3 (amd64)\n"),
+		[]byte("Debian 'dpkg' package management program version 1.22.21 (amd64).\n"),
+		[]byte("Debian 'dpkg-deb' package archive backend version 1.22.21 (amd64).\n"),
+		[]byte("Debian dpkg-query package management program query tool version 1.22.21 (amd64).\n"),
+		[]byte("sha256sum (GNU coreutils) 9.5\n"),
+		[]byte("amd64\n"),
+		{},
+	}
+	previousOpen := runImageValidationOpenCommand
+	previousFollowup := runImageValidationFollowupCommand
+	t.Cleanup(func() {
+		runImageValidationOpenCommand = previousOpen
+		runImageValidationFollowupCommand = previousFollowup
+	})
+	commands := []CommandSpec{}
+	profileIndex := 0
+	runImageValidationOpenCommand = func(spec CommandSpec, _ RunOptions) error {
+		commands = append(commands, spec)
+		return nil
+	}
+	runImageValidationFollowupCommand = func(spec CommandSpec, options RunOptions) error {
+		commands = append(commands, spec)
+		if len(spec.Args) == 0 || spec.Args[0] != "exec" {
+			return nil
+		}
+		if spec.Args[len(spec.Args)-1] == ProbeContainerExecutable {
+			if _, err := io.ReadAll(options.Stdin); err != nil {
+				return err
+			}
+			_, _ = options.Stdout.Write(mustCanonicalProbeResponse(t, aptBaseProbeResponse()))
+			return nil
+		}
+		if profileIndex >= len(profileOutputs) {
+			t.Fatalf("unexpected profile command: %#v", spec.Args)
+		}
+		_, _ = options.Stdout.Write(profileOutputs[profileIndex])
+		profileIndex++
+		return nil
+	}
+	session, err := OpenAPTImageValidationSession(context.Background(), descriptor, probeWorkspace, aptWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := session.ProbeAPTBaseProfile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandCount := len(commands)
+	first.Executables[0].Evidence.Access.Paths[0].Mode = "0000"
+	second, err := session.ProbeAPTBaseProfile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Executables[0].Evidence.Access.Paths[0].Mode != "0755" || len(commands) != commandCount {
+		t.Fatalf("cached profile = %#v, commands = %#v", second, commands)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if profileIndex != len(profileOutputs) || len(commands) != 12 {
+		t.Fatalf("profile commands=%d all commands=%#v", profileIndex, commands)
+	}
+}
+
+func containsAdjacentArguments(arguments []string, first string, second string) bool {
+	for index := 0; index+1 < len(arguments); index++ {
+		if arguments[index] == first && arguments[index+1] == second {
+			return true
+		}
+	}
+	return false
+}
+
 func TestImageValidationSessionDPKGOwnerQueryIsFixedAndLiteral(t *testing.T) {
 	descriptor := testProbeImageDescriptor(t, "linux/amd64")
 	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
@@ -125,6 +224,34 @@ func TestImageValidationSessionDPKGOwnerQueryIsFixedAndLiteral(t *testing.T) {
 	}
 }
 
+func TestImageValidationSessionDPKGPackageStateQueryIsFixedAndLiteral(t *testing.T) {
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
+	restore := stubImageValidationCommands(t, []byte("libc6:amd64\t2.39\tamd64\tinstall ok installed\n"), nil)
+	defer restore()
+	session, err := OpenImageValidationSession(context.Background(), descriptor, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := session.QueryDPKGPackageState(context.Background(), []string{"libc6"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(output) != "libc6:amd64\t2.39\tamd64\tinstall ok installed\n" {
+		t.Fatalf("package-state output = %q", output)
+	}
+	want := []string{
+		"exec", "--user", "0:0", "--workdir", "/", imageProbeContainerName(workspace.HostDir),
+		"/usr/bin/dpkg-query", "--show", "--showformat=${binary:Package}\t${Version}\t${Architecture}\t${Status}\n", "libc6",
+	}
+	if !reflect.DeepEqual(recordedImageValidationCommands[2].Args, want) {
+		t.Fatalf("dpkg package-state command = %#v", recordedImageValidationCommands[2])
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestImageValidationSessionAlternativeQueryIsFixedAndReadOnly(t *testing.T) {
 	descriptor := testProbeImageDescriptor(t, "linux/amd64")
 	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
@@ -143,6 +270,30 @@ func TestImageValidationSessionAlternativeQueryIsFixedAndReadOnly(t *testing.T) 
 	}
 	if !reflect.DeepEqual(recordedImageValidationCommands[2].Args, want) {
 		t.Fatalf("alternatives command = %#v", recordedImageValidationCommands[2])
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestImageValidationSessionBuildScratchAbsenceCheckIsFixed(t *testing.T) {
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
+	restore := stubImageValidationCommands(t, nil, nil)
+	defer restore()
+	session, err := OpenImageValidationSession(context.Background(), descriptor, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.ValidateBuildScratchAbsent(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"exec", "--user", "0:0", "--workdir", "/", imageProbeContainerName(workspace.HostDir),
+		"/bin/sh", "-c", `test ! -e "$1"`, "reploy-validation", "/.reploy-build",
+	}
+	if !reflect.DeepEqual(recordedImageValidationCommands[2].Args, want) {
+		t.Fatalf("build-scratch command = %#v", recordedImageValidationCommands[2])
 	}
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatal(err)

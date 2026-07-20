@@ -46,9 +46,6 @@ func (ComponentProvider) Type() blueprint.ComponentType { return blueprint.Compo
 func (ComponentProvider) RecipeVersion() string { return RecipeVersion }
 
 func (ComponentProvider) Plan(input providerapi.PlanInput) ([]providerapi.NodeSpec, error) {
-	if err := input.BlueprintDigest.Validate(); err != nil {
-		return nil, fmt.Errorf("Python plan blueprint digest: %w", err)
-	}
 	if err := input.Platform.Validate(); err != nil {
 		return nil, fmt.Errorf("Python plan platform: %w", err)
 	}

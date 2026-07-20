@@ -99,7 +99,7 @@ func BuildMaterializationLayer(store providerstore.Store, request Materializatio
 	iidPath := filepath.Join(workspace, "result.iid")
 	command, err := MaterializationBuildCommand(MaterializationBuildPlan{
 		BaseReference: baseReference, Platform: request.Platform,
-		DockerfilePath: dockerfilePath, ContextDir: prepared.Dir, IIDFile: iidPath,
+		DockerfilePath: dockerfilePath, ContextDir: prepared.Dir, IIDFile: iidPath, NoCache: options.NoCache,
 	})
 	if err != nil {
 		return MaterializationLayerCandidate{}, err

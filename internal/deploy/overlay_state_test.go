@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/canonical"
 )
 
 func writeOverlayTestState(t *testing.T, dir string) string {
@@ -19,16 +21,24 @@ func writeOverlayTestState(t *testing.T, dir string) string {
 	if err := os.Mkdir(stateDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	state := DeploymentState{
-		SchemaVersion: 1,
-		Bundle:        BundleState{PreparedFingerprint: "prepared"},
-		Overlay:       EmptyRequestOverlayV1(),
-		Images:        &GeneratedImagesState{Staging: &GeneratedImageState{Reference: "reploy/demo:staging"}},
-		Materialization: &MaterializationState{
-			BundleFingerprint: "prepared",
-		},
+	resolved, err := blueprint.EncodeResolvedDocumentV1(overlayTestDocument())
+	if err != nil {
+		t.Fatal(err)
 	}
-	content, err := MarshalDeploymentState(state)
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := canonical.Digest("sha256:" + strings.Repeat("a", 64))
+	current := &EnvironmentGenerationState{
+		Reference: "reploy/env/overlay-test:g-current", ImageDigest: digest,
+		RootFSSubject: digest, BuildLockDigest: digest, Platform: platform, RuntimePolicyDigest: digest,
+	}
+	state := StateV1{
+		Schema: StateSchemaV1, Blueprint: resolved, Platform: platform,
+		Overlay: EmptyRequestOverlayV1(), Current: current,
+	}
+	content, err := EncodeStateV1(state)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,27 +49,23 @@ func writeOverlayTestState(t *testing.T, dir string) string {
 	return path
 }
 
-func readOverlayTestState(t *testing.T, path string) DeploymentState {
+func readOverlayTestState(t *testing.T, path string) StateV1 {
 	t.Helper()
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err := ParseDeploymentState(content)
+	state, err := DecodeStateV1(content)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return state
 }
 
-func overlayTestDocumentResolver(DeploymentState) (blueprint.Document, error) {
-	return overlayTestDocument(), nil
-}
-
 func TestMutateRequestOverlayV1WritesOneValidatedStateTransaction(t *testing.T) {
 	dir := t.TempDir()
 	statePath := writeOverlayTestState(t, dir)
-	result, err := mutateRequestOverlayV1(context.Background(), dir, overlayTestDocumentResolver, overlayTestPackageValidator, func(_ blueprint.Document, overlay RequestOverlayV1) (RequestOverlayV1, error) {
+	result, err := mutateRequestOverlayV1(context.Background(), dir, overlayTestPackageValidator, func(_ blueprint.Document, overlay RequestOverlayV1) (RequestOverlayV1, error) {
 		overlay.SelectedOptions = append(overlay.SelectedOptions, QualifiedOption{Component: "app", Option: "debug"})
 		return overlay, nil
 	})
@@ -73,17 +79,14 @@ func TestMutateRequestOverlayV1WritesOneValidatedStateTransaction(t *testing.T) 
 	if !reflect.DeepEqual(state.Overlay, result.Overlay) {
 		t.Fatalf("persisted overlay = %#v, want %#v", state.Overlay, result.Overlay)
 	}
-	if state.Bundle.PreparedFingerprint != "" || state.Materialization != nil {
-		t.Fatalf("build facts were not marked stale: %#v", state)
-	}
-	if state.Images == nil || state.Images.Staging == nil || state.Images.Staging.Reference != "reploy/demo:staging" {
-		t.Fatalf("existing image ownership was discarded: %#v", state.Images)
+	if state.Blueprint == "" || state.Current == nil || state.Current.Reference != "reploy/env/overlay-test:g-current" {
+		t.Fatalf("state identity changed unexpectedly: %#v", state)
 	}
 	info, err := os.Stat(statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o640 {
+	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("state mode = %o", info.Mode().Perm())
 	}
 	if _, err := os.Stat(filepath.Join(dir, "requirements.txt")); !errors.Is(err, os.ErrNotExist) {
@@ -98,7 +101,7 @@ func TestMutateRequestOverlayV1NoopDoesNotRewriteState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := mutateRequestOverlayV1(context.Background(), dir, overlayTestDocumentResolver, overlayTestPackageValidator, func(_ blueprint.Document, overlay RequestOverlayV1) (RequestOverlayV1, error) {
+	result, err := mutateRequestOverlayV1(context.Background(), dir, overlayTestPackageValidator, func(_ blueprint.Document, overlay RequestOverlayV1) (RequestOverlayV1, error) {
 		return overlay, nil
 	})
 	if err != nil {
@@ -123,7 +126,7 @@ func TestMutateRequestOverlayV1FailureLeavesStateUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = mutateRequestOverlayV1(context.Background(), dir, overlayTestDocumentResolver, overlayTestPackageValidator, func(_ blueprint.Document, overlay RequestOverlayV1) (RequestOverlayV1, error) {
+	_, err = mutateRequestOverlayV1(context.Background(), dir, overlayTestPackageValidator, func(_ blueprint.Document, overlay RequestOverlayV1) (RequestOverlayV1, error) {
 		overlay.SelectedOptions = append(overlay.SelectedOptions,
 			QualifiedOption{Component: "app", Option: "debug"},
 			QualifiedOption{Component: "app", Option: "missing"},
@@ -142,6 +145,32 @@ func TestMutateRequestOverlayV1FailureLeavesStateUnchanged(t *testing.T) {
 	}
 }
 
+func TestMutateRequestOverlayV1RejectsLegacyStateWithoutMutation(t *testing.T) {
+	dir := t.TempDir()
+	stateDir := filepath.Join(dir, ".reploy")
+	if err := os.Mkdir(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(stateDir, "state.json")
+	legacy := []byte(`{"schema_version":1,"bundle":{"prepared_fingerprint":"old"}}`)
+	if err := os.WriteFile(path, legacy, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	_, err := MutateRequestOverlayV1(context.Background(), dir, overlayTestPackageValidator, func(_ blueprint.Document, overlay RequestOverlayV1) (RequestOverlayV1, error) {
+		return overlay, nil
+	})
+	if !errors.Is(err, ErrLegacyStateUnsupported) {
+		t.Fatalf("legacy mutation error = %v", err)
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(after, legacy) {
+		t.Fatal("legacy state was mutated")
+	}
+}
+
 func TestMutateRequestOverlayV1ReplaceFailurePreservesOriginal(t *testing.T) {
 	dir := t.TempDir()
 	statePath := writeOverlayTestState(t, dir)
@@ -152,7 +181,7 @@ func TestMutateRequestOverlayV1ReplaceFailurePreservesOriginal(t *testing.T) {
 	originalReplace := replaceAtomicStateFile
 	replaceAtomicStateFile = func(string, string) error { return errors.New("injected replace failure") }
 	t.Cleanup(func() { replaceAtomicStateFile = originalReplace })
-	_, err = mutateRequestOverlayV1(context.Background(), dir, overlayTestDocumentResolver, overlayTestPackageValidator, func(_ blueprint.Document, overlay RequestOverlayV1) (RequestOverlayV1, error) {
+	_, err = mutateRequestOverlayV1(context.Background(), dir, overlayTestPackageValidator, func(_ blueprint.Document, overlay RequestOverlayV1) (RequestOverlayV1, error) {
 		overlay.SelectedOptions = append(overlay.SelectedOptions, QualifiedOption{Component: "app", Option: "debug"})
 		return overlay, nil
 	})
@@ -189,7 +218,7 @@ func TestMutateRequestOverlayV1HonorsOperationLock(t *testing.T) {
 	defer lock.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
-	_, err = mutateRequestOverlayV1(ctx, dir, overlayTestDocumentResolver, overlayTestPackageValidator, func(_ blueprint.Document, overlay RequestOverlayV1) (RequestOverlayV1, error) {
+	_, err = mutateRequestOverlayV1(ctx, dir, overlayTestPackageValidator, func(_ blueprint.Document, overlay RequestOverlayV1) (RequestOverlayV1, error) {
 		return overlay, nil
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {

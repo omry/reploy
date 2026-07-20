@@ -88,7 +88,7 @@ func TestPreparedPythonGraphDockerIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := providers.ResolvedRequestV1{
-		Schema: providers.ResolvedRequestSchemaV1, BlueprintDigest: reuseTestDigest("b"), OverlayDigest: reuseTestDigest("c"),
+		Schema: providers.ResolvedRequestSchemaV1, OverlayDigest: reuseTestDigest("c"),
 		Platform: platform,
 		Components: []providers.ResolvedComponentRequestV1{
 			{Component: "application", Provider: blueprint.ComponentTypePython, Request: pythonRequest},
@@ -103,16 +103,16 @@ func TestPreparedPythonGraphDockerIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	finalImageConfig, err := ProviderFinalImageConfigV1(preparedBase.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
 	result, err := ExecutePreparedPythonGraph(ctx, PreparedPythonGraphExecutionInput{
 		Store: store, Plan: preparedBase.Plan, BaseDescriptor: preparedBase.Descriptor,
 		BaseCatalog: preparedBase.Catalog, Sources: request.Sources,
-		SourceWheels: []providerstore.ArtifactDescriptor{wheel},
-		FinalImageConfig: providers.ImageConfigPolicy{
-			User: "0:0", WorkingDir: "/", Environment: []providers.EnvironmentVariable{},
-			Entrypoint: []string{}, Command: []string{}, Healthcheck: providers.ImageHealthcheckNone,
-			StopSignal: "SIGTERM", Labels: []providers.ImageLabel{},
-		},
-		RunOptions: RunOptions{Stdout: os.Stdout, Stderr: os.Stderr},
+		SourceWheels:     []providerstore.ArtifactDescriptor{wheel},
+		FinalImageConfig: finalImageConfig,
+		RunOptions:       RunOptions{Stdout: os.Stdout, Stderr: os.Stderr},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +247,7 @@ func runPreparedAPTPythonGraphDockerIntegration(
 		t.Fatal(err)
 	}
 	request := providers.ResolvedRequestV1{
-		Schema: providers.ResolvedRequestSchemaV1, BlueprintDigest: reuseTestDigest("d"), OverlayDigest: reuseTestDigest("e"),
+		Schema: providers.ResolvedRequestSchemaV1, OverlayDigest: reuseTestDigest("e"),
 		Platform: platform,
 		Components: []providers.ResolvedComponentRequestV1{
 			{Component: "application", Provider: blueprint.ComponentTypePython, Request: pythonRequest},
@@ -263,16 +263,16 @@ func runPreparedAPTPythonGraphDockerIntegration(
 	if err != nil {
 		t.Fatal(err)
 	}
+	finalImageConfig, err := ProviderFinalImageConfigV1(preparedBase.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
 	result, err := ExecutePreparedPythonGraph(ctx, PreparedPythonGraphExecutionInput{
 		Store: store, Plan: preparedBase.Plan, BaseDescriptor: preparedBase.Descriptor,
 		BaseCatalog: preparedBase.Catalog, Sources: request.Sources,
-		SourceWheels: []providerstore.ArtifactDescriptor{wheel},
-		FinalImageConfig: providers.ImageConfigPolicy{
-			User: "0:0", WorkingDir: "/", Environment: []providers.EnvironmentVariable{},
-			Entrypoint: []string{}, Command: []string{}, Healthcheck: providers.ImageHealthcheckNone,
-			StopSignal: "SIGTERM", Labels: []providers.ImageLabel{},
-		},
-		RunOptions: RunOptions{Stdout: os.Stdout, Stderr: os.Stderr},
+		SourceWheels:     []providerstore.ArtifactDescriptor{wheel},
+		FinalImageConfig: finalImageConfig,
+		RunOptions:       RunOptions{Stdout: os.Stdout, Stderr: os.Stderr},
 	})
 	if err != nil {
 		t.Fatal(err)

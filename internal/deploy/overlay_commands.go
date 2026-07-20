@@ -181,8 +181,8 @@ func RemoveOverlayPackages(overlay RequestOverlayV1, packages []DirectPackageReq
 
 func cloneOverlayCollections(overlay RequestOverlayV1) RequestOverlayV1 {
 	result := overlay
-	result.SelectedOptions = append([]QualifiedOption(nil), overlay.SelectedOptions...)
-	result.DirectPackages = append([]DirectPackageRequest(nil), overlay.DirectPackages...)
+	result.SelectedOptions = append([]QualifiedOption{}, overlay.SelectedOptions...)
+	result.DirectPackages = append([]DirectPackageRequest{}, overlay.DirectPackages...)
 	return result
 }
 

@@ -146,7 +146,8 @@ func (session *APTResolverSession) PublishResolvedBundle(ctx context.Context, st
 		Schema: providers.ResolvedBundleSchemaV1, NodeID: node.ID, Provider: node.Provider,
 		Request: node.Request, RequirementProfileDigest: profileDigest, RecipeVersion: aptprovider.RecipeVersion,
 		Platform: session.descriptor.Platform, Upstream: upstream,
-		Artifacts: artifacts, Outputs: outputs, ProviderPayload: payloadData,
+		SelectedSources: []providers.ResolvedSourceInput{},
+		Artifacts:       artifacts, Outputs: outputs, ProviderPayload: payloadData,
 	}, aptprovider.ValidateResolvedBundlePayloadV1)
 	if err != nil {
 		return providers.ResolveResult{}, providerstore.StoreObjectRef{}, err
@@ -155,10 +156,13 @@ func (session *APTResolverSession) PublishResolvedBundle(ctx context.Context, st
 	if err != nil {
 		return providers.ResolveResult{}, providerstore.StoreObjectRef{}, err
 	}
-	result := providers.ResolveResult{Bundle: resolvedBundle, Profile: profile, Evidence: evidence}
+	result := providers.ResolveResult{
+		Bundle: resolvedBundle, Profile: profile, Evidence: evidence,
+		SelectedSources: []providers.ResolvedSourceInput{},
+	}
 	input := providers.ResolveInput{
 		Node: node, Candidates: []providers.RequirementCandidatesV1{}, Platform: session.descriptor.Platform,
-		Sources: []providers.ResolvedSourceInput{}, Upstream: upstream, ReusableArtifacts: []providerstore.StoreObjectRef{},
+		SourceCandidates: []providers.ResolvedSourceInput{}, Upstream: upstream, ReusableArtifacts: []providerstore.StoreObjectRef{},
 	}
 	if err := providers.ValidateResolveResult(input, result, aptprovider.ValidateRequirementProfileV1, aptprovider.ValidateResolvedBundlePayloadV1); err != nil {
 		return providers.ResolveResult{}, providerstore.StoreObjectRef{}, err
@@ -700,80 +704,18 @@ func (session *APTResolverSession) ProbeBaseProfile(ctx context.Context) (APTBas
 	if session.base != nil {
 		return cloneAPTBaseValidation(*session.base), nil
 	}
-
-	requiredTools := aptprovider.RequiredBaseToolsV1()
-	inspections := make([]probe.ExecutableInspectionV1, 0, len(requiredTools))
-	for _, tool := range requiredTools {
-		inspections = append(inspections, probe.ExecutableInspectionV1{ID: tool.Name, InvocationPath: tool.Path})
-	}
-	request := probe.RequestV1{Schema: probe.RequestSchemaV1, Inspections: inspections}
-	response, err := session.runProbe(ctx, request)
-	if err != nil {
-		return APTBaseValidation{}, fmt.Errorf("validate APT base executables: %w", err)
-	}
-	for _, observation := range response.Observations {
-		session.observations[observation.ID] = observation
-	}
-
-	osReleaseOutput, err := session.runProfileCommand(ctx, "/bin/sh", "-c", aptOSReleaseProbeScriptV1)
-	if err != nil {
-		return APTBaseValidation{}, err
-	}
-	osRelease, err := parseAPTOSReleaseOutputV1(osReleaseOutput)
-	if err != nil {
-		return APTBaseValidation{}, err
-	}
-	versionCommands := map[string][]string{
-		"apt_get":    {"/usr/bin/apt-get", "--version"},
-		"dpkg":       {"/usr/bin/dpkg", "--version"},
-		"dpkg_deb":   {"/usr/bin/dpkg-deb", "--version"},
-		"dpkg_query": {"/usr/bin/dpkg-query", "--version"},
-		"sha256sum":  {"/usr/bin/sha256sum", "--version"},
-	}
-	versions := map[string]string{}
-	for _, tool := range requiredTools {
-		command, exists := versionCommands[tool.Name]
-		if !exists {
-			continue
+	result, err := observeAPTBaseProfile(ctx, session.descriptor.Platform, func(ctx context.Context, request probe.RequestV1) (probe.ResponseV1, error) {
+		response, err := session.runProbe(ctx, request)
+		if err == nil {
+			for _, observation := range response.Observations {
+				session.observations[observation.ID] = observation
+			}
 		}
-		output, err := session.runProfileCommand(ctx, command[0], command[1:]...)
-		if err != nil {
-			return APTBaseValidation{}, err
-		}
-		version, err := firstAPTOutputLine(tool.Name+" version", output)
-		if err != nil {
-			return APTBaseValidation{}, err
-		}
-		versions[tool.Name] = version
-	}
-	nativeOutput, err := session.runProfileCommand(ctx, "/usr/bin/dpkg", "--print-architecture")
+		return response, err
+	}, session.runProfileCommand)
 	if err != nil {
 		return APTBaseValidation{}, err
 	}
-	native, err := singleAPTOutputLine("native architecture", nativeOutput)
-	if err != nil {
-		return APTBaseValidation{}, err
-	}
-	foreignOutput, err := session.runProfileCommand(ctx, "/usr/bin/dpkg", "--print-foreign-architectures")
-	if err != nil {
-		return APTBaseValidation{}, err
-	}
-	foreign, err := aptOutputLines("foreign architectures", foreignOutput)
-	if err != nil {
-		return APTBaseValidation{}, err
-	}
-	for index := range requiredTools {
-		requiredTools[index].Version = versions[requiredTools[index].Name]
-	}
-	profile, err := aptprovider.NewBaseProfileEvidenceV1(session.descriptor.Platform, osRelease, requiredTools, native, foreign)
-	if err != nil {
-		return APTBaseValidation{}, err
-	}
-	executables, err := session.bindBaseExecutables(profile.Tools)
-	if err != nil {
-		return APTBaseValidation{}, err
-	}
-	result := APTBaseValidation{Profile: profile, Executables: executables}
 	session.base = &result
 	return cloneAPTBaseValidation(result), nil
 }
@@ -885,44 +827,6 @@ func (session *APTResolverSession) observationForPath(path string) (probe.Execut
 		}
 	}
 	return probe.ExecutableObservationV1{}, false
-}
-
-func (session *APTResolverSession) bindBaseExecutables(tools []aptprovider.RequiredToolEvidenceV1) ([]providers.ValidatedExecutableInput, error) {
-	result := make([]providers.ValidatedExecutableInput, 0, len(tools))
-	for _, tool := range tools {
-		observation, found := session.observations[tool.Name]
-		if !found {
-			return nil, fmt.Errorf("APT base tool %q was not probed in this container", tool.Name)
-		}
-		role := providers.ExecutableRoleProviderPrerequisite
-		component := "apt"
-		if tool.Name == "sh" {
-			role, component = providers.ExecutableRoleCarrier, "backend"
-		} else if tool.Name == "env" {
-			role, component = providers.ExecutableRoleEnvironmentLauncher, "backend"
-		}
-		requirement := providers.ExecutableRequirement{
-			ID: tool.Name, Command: tool.Name, Supplier: component,
-			ValidationPolicy: providers.ValidationPolicyCompatible,
-		}
-		evidence, err := ExecutableEvidenceFromProbe(observation, ProbeExecutableBinding{
-			Requirement: &requirement,
-			Output:      providers.QualifiedOutput{Component: component, Name: tool.Name},
-			Facts: providers.CanonicalProviderData{Schema: "apt-required-tool-v1", Value: canonical.Object{
-				"interface": tool.Interface, "version": tool.Version,
-			}},
-		})
-		if err != nil {
-			return nil, err
-		}
-		input := providers.ValidatedExecutableInput{ID: tool.Name, Role: role, Policy: providers.ValidationPolicyCompatible, Evidence: evidence}
-		if err := providers.ValidateValidatedExecutableInput(input); err != nil {
-			return nil, err
-		}
-		result = append(result, input)
-	}
-	sort.Slice(result, func(left int, right int) bool { return result[left].ID < result[right].ID })
-	return result, nil
 }
 
 func (session *APTResolverSession) Close(ctx context.Context) error {

@@ -41,6 +41,25 @@ func TestMaterializationBuildCommandUsesOrdinaryDockerBuild(t *testing.T) {
 	}
 }
 
+func TestMaterializationBuildCommandBypassesDockerCacheWhenRequested(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := MaterializationBuildPlan{
+		BaseReference: "sha256:" + strings.Repeat("b", 64), Platform: platform,
+		DockerfilePath: "/tmp/Dockerfile", ContextDir: "/tmp/context", IIDFile: "/tmp/result.iid",
+		NoCache: true,
+	}
+	command, err := MaterializationBuildCommand(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(command.Args[:2], []string{"build", "--no-cache"}) {
+		t.Fatalf("command args = %#v", command.Args)
+	}
+}
+
 func TestMaterializationBuildCommandRejectsMutableOrIncompleteInputs(t *testing.T) {
 	platform, err := blueprint.ParsePlatform("linux/amd64")
 	if err != nil {

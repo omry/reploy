@@ -319,19 +319,32 @@ and contains sorted fully qualified selections plus component-qualified typed
 provider additions. A directory-path-derived Docker resource identity is not a
 request identity.
 
-The effective request identity binds the blueprint fingerprint, canonical
-overlay digest, and selected target-platform record. Each provider node binds
-only its relevant overlay subset. The bundle lock embeds the complete overlay
-and digest. An existing local lock is valid only for an exact match.
+The effective provider request identity binds the normalized component
+requests, canonical overlay digest, selected target-platform record, and only
+the local-source artifacts selected into the resolved closure. The complete
+resolved blueprint remains in deployment state, and its digest remains in the
+build lock as provenance, but it is not duplicated into provider request
+identity. Consequently, an unused translation or a runtime-only blueprint
+change does not invalidate provider resolution. Each provider node binds only
+its relevant request subset. The bundle lock embeds the complete overlay and
+digest. An existing local lock is valid only for an exact provider-request
+match.
 
 When a blueprint translation is used, its filesystem path is only a local build
 input. Reploy identities use a canonical source-manifest digest, versioned
 builder/toolchain profile, selected platform, and relevant build settings.
 After the provider validates and emits its normal raw artifact, the resolved
-request and lock additionally record ecosystem metadata and the exact artifact
-digest. The deployment-local provider store contains that artifact, not the
-source tree or its physical path. This same contract covers local wheels,
-binaries, `.deb` files, and future source-derived artifacts.
+request, resolved-bundle identity, and lock additionally record only the
+selected source records, including ecosystem metadata and the exact artifact
+digest. Candidates that the resolver did not select are absent. The
+deployment-local provider store contains the selected artifact, not the source
+tree or its physical path. This same contract covers local wheels, binaries,
+`.deb` files, and future source-derived artifacts.
+
+For exact build reuse, Reploy reconstructs the prior selected-source list from
+the validated provider profiles embedded in the current lock and compares only
+those records with current candidates. This check does not scan the provider
+store, hash candidate artifacts, inspect unused translations, or call Docker.
 
 ### Public Provider Names and Options
 
@@ -811,6 +824,19 @@ makes the recorded build stale. Docker-intrinsic kernel and resolver mounts are
 not blueprint mounts and are outside this allowlist. Blueprint mounts never
 become provider-owned claims, and changing a safe runtime mount plan or its
 additional roots does not change provider-node cache identity.
+
+One-shot app commands may add one explicit output mount at
+`/mnt/reploy-output`. `--output-dir DIR` mounts the selected host directory and
+sets `REPLOY_OUTPUT_DIR`; its contents are directly visible and remain after
+either success or failure. `--output-file FILE` creates a hidden staging
+directory adjacent to the requested host file, mounts that directory, and sets
+`REPLOY_OUTPUT_FILE` to a fixed file within it. The staging directory is also
+the Reploy-operation reservation. On success Reploy verifies a regular file and
+atomically publishes it without replacing an existing `FILE`; the final name
+is absent while the command is running. Command failure removes the staging
+directory, while publication failure retains it for explicit recovery. The
+options are mutually exclusive, and Reploy never searches the container
+filesystem for undeclared outputs.
 
 ## APT/dpkg Resolution
 
@@ -1552,7 +1578,8 @@ The Python node identity additionally includes:
 - logical command requirement and selected supplier identity;
 - resolved absolute interpreter path;
 - logical Python version;
-- Python requirements, wheel hashes, translations, and recipe version.
+- Python requirements, wheel hashes, selected local-source records, and recipe
+  version.
 
 Every provider node participates in four private identities:
 
@@ -1654,10 +1681,16 @@ terminal produces different realized evidence.
 
 The Python resolver-dependency profile includes the selected interpreter's
 complete validation evidence, target platform, declared system/build
-prerequisites, builder/toolchain profile, requirements and translations, and
-local-source manifests and build settings. A changed upstream image triggers a
-cheap validation of that profile; an unchanged fingerprint reuses the exact
-wheel bundle, while changed evidence reruns the Python resolver.
+prerequisites, builder/toolchain profile, requirements, and selected
+local-source manifests and build settings. Unused translation candidates are
+not part of the profile. On a resolver miss, Reploy exposes all verified local
+wheel candidates through one resolver-owned constraints file and runs pip once.
+The constraints make a local wheel override the index if its distribution is
+needed without making that wheel a root requirement. Reploy then records only
+the candidates whose exact wheels appear in pip's completed closure. A changed
+upstream image triggers a cheap validation of that profile; an unchanged
+fingerprint reuses the exact wheel bundle, while changed evidence reruns the
+Python resolver.
 
 The Docker backend creates an environment-owned generation reference for each
 staged or installed environment. That reference and deployment state pin the
@@ -1805,6 +1838,23 @@ locks coexist safely during publication. Outside an active or recoverable
 cutover, exactly one lock file remains, and its transitive provider-store
 closure is the deployment's complete retained provider cache.
 
+The same directory's canonical `state-v1` stores the complete resolved
+blueprint, selected target platform, request overlay, and optional current
+generation. A separate optional `deployment.installation` node stores
+machine-local facts about an installed copy, such as its target directory,
+service identity, container identity, and bound ports. Those facts describe
+where this copy was installed; they are not needed to reproduce the environment
+and do not participate in provider, request, build-lock, or image identity.
+State does not retain a source path or depend on the original blueprint package
+remaining available. Build publication and runtime reuse require the stored
+resolved-blueprint digest and selected platform to match the selected build
+lock.
+
+Blueprint or overlay mutations retain the previously published generation.
+If its lock names the preceding inputs, runtime treats it as stale and asks for
+an explicit build; the mutation does not delete the last successful image or
+silently rebuild it.
+
 The lock contains at least:
 
 - lock-schema, canonical-encoding, digest-algorithm, script-content-digest, and
@@ -1831,7 +1881,7 @@ The lock contains at least:
   tagged `base` or `bundle` origins, optional base-predecessor tuples, artifact
   paths/sizes/hashes for bundle-origin members only, and resolved bundle
   identities;
-- every local-source input's logical identity, canonical source-manifest
+- every selected local-source input's logical identity, canonical source-manifest
   digest, builder/toolchain profile, selected build settings, validated artifact
   metadata, and exact output-artifact digest, with physical source paths omitted;
 - selected executable-output identities and validated compatibility facts.

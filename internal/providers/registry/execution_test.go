@@ -40,7 +40,7 @@ func executionTestNodes(t *testing.T) map[blueprint.ComponentType]providers.Node
 		t.Fatal(err)
 	}
 	plan, err := Plan(providers.PlanInput{
-		BlueprintDigest: registryDigest("e"), Platform: platform,
+		Platform: platform,
 		Components: []providers.ResolvedComponentRequestV1{
 			{Component: "application", Provider: blueprint.ComponentTypePython, Request: pythonRequest},
 			{Component: "base", Provider: blueprint.ComponentTypeBase, Request: base},
@@ -92,6 +92,18 @@ func TestValidateRequirementProfileV1DispatchesMixedProviderOwners(t *testing.T)
 	}}
 	if err := ValidateRequirementProfileV1(unknown); err == nil || !strings.Contains(err.Error(), "unsupported requirement profile") {
 		t.Fatalf("unknown profile dispatch error = %v", err)
+	}
+}
+
+func TestValidateResolvedBundlePayloadV1DispatchesMixedProviderOwners(t *testing.T) {
+	if err := ValidateResolvedBundlePayloadV1(providers.ResolvedBundleIdentityV1{Provider: blueprint.ComponentTypeAPT}); err == nil || !strings.Contains(err.Error(), "APT bundle recipe version") {
+		t.Fatalf("APT bundle dispatch error = %v", err)
+	}
+	if err := ValidateResolvedBundlePayloadV1(providers.ResolvedBundleIdentityV1{Provider: blueprint.ComponentTypePython}); err == nil || !strings.Contains(err.Error(), "Python bundle recipe version") {
+		t.Fatalf("Python bundle dispatch error = %v", err)
+	}
+	if err := ValidateResolvedBundlePayloadV1(providers.ResolvedBundleIdentityV1{Provider: blueprint.ComponentTypeBase}); err == nil || !strings.Contains(err.Error(), "unsupported resolved bundle") {
+		t.Fatalf("base bundle dispatch error = %v", err)
 	}
 }
 

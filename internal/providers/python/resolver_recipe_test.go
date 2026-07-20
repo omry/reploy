@@ -11,7 +11,7 @@ import (
 	"github.com/omry/reploy/internal/providerstore"
 )
 
-func TestWheelResolverArgvUsesOnePipClosureWithExactSourceRoots(t *testing.T) {
+func TestWheelResolverArgvUsesOnePipClosureWithOptionalSourceConstraints(t *testing.T) {
 	requirement, err := CanonicalPackageRequestV1("demo>=1")
 	if err != nil {
 		t.Fatal(err)
@@ -39,10 +39,33 @@ func TestWheelResolverArgvUsesOnePipClosureWithExactSourceRoots(t *testing.T) {
 	want := []string{
 		"/usr/bin/python3", "-m", "pip", "--disable-pip-version-check", "wheel", "--no-cache-dir",
 		"--progress-bar", "off", "--find-links", ResolverInputDirectory,
-		"--wheel-dir", ResolverOutputDirectory, "demo>=1", ResolverInputDirectory + "/local_demo-2-py3-none-any.whl",
+		"--wheel-dir", ResolverOutputDirectory, "--constraint", ResolverSourceConstraintsPath, "demo>=1",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("argv = %#v, want %#v", got, want)
+	}
+	constraints, err := WheelResolverSourceConstraints(request, []providers.ResolvedSourceInput{source}, []providerstore.ArtifactDescriptor{wheel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantConstraints := "local-demo @ file:///.reploy-resolver/input/local_demo-2-py3-none-any.whl\n"
+	if string(constraints) != wantConstraints {
+		t.Fatalf("constraints = %q, want %q", constraints, wantConstraints)
+	}
+}
+
+func TestWheelResolverArgvOmitsEmptySourceConstraints(t *testing.T) {
+	requirement, _ := CanonicalPackageRequestV1("demo")
+	request, _ := CanonicalProviderRequestV1(PythonProviderRequestV1{
+		Component: "application", Interpreter: blueprint.CommandRequirement{Command: "python"},
+		Requirements: []providers.CanonicalPackageRequest{requirement},
+	})
+	got, err := WheelResolverArgv("/usr/bin/python3", request, []providers.ResolvedSourceInput{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(got, " "), ResolverSourceConstraintsPath) {
+		t.Fatalf("empty source constraints were added: %#v", got)
 	}
 }
 

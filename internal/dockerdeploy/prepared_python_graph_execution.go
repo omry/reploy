@@ -66,8 +66,8 @@ func ExecutePreparedPythonGraph(
 	}()
 	return executePreparedPythonProviderGraph(ctx, providers.GraphExecutionRequest{
 		Plan: input.Plan, Platform: input.BaseDescriptor.Platform,
-		Sources:   append([]providers.ResolvedSourceInput{}, input.Sources...),
-		BaseImage: baseImage, BaseCatalog: append([]providers.RealizedOutput{}, input.BaseCatalog...),
+		SourceCandidates: append([]providers.ResolvedSourceInput{}, input.Sources...),
+		BaseImage:        baseImage, BaseCatalog: append([]providers.RealizedOutput{}, input.BaseCatalog...),
 		ReusableArtifacts: reuse.ReusableArtifacts, CachedResolutions: reuse.CachedResolutions,
 		Validators:  registry.OwnerValidatorsForNode,
 		PrepareNode: backend.PrepareNode, MaterializeNode: backend.MaterializeNode,

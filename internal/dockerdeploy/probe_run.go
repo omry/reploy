@@ -14,12 +14,15 @@ import (
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/probe"
+	aptprovider "github.com/omry/reploy/internal/providers/apt"
 )
 
 type ImageValidationSession struct {
 	descriptor    deploy.ImageDescriptor
 	workspace     PreparedProbeWorkspace
+	aptWorkspace  *PreparedAPTResolverWorkspace
 	containerName string
+	aptBase       *APTBaseValidation
 	closed        bool
 }
 
@@ -31,6 +34,27 @@ var runImageValidationFollowupCommand = runCommandWithoutDockerPreflight
 // closed: callers may invoke the fixed filesystem probe and close the session,
 // but cannot execute arbitrary commands.
 func OpenImageValidationSession(ctx context.Context, descriptor deploy.ImageDescriptor, workspace PreparedProbeWorkspace) (*ImageValidationSession, error) {
+	return openImageValidationSession(ctx, descriptor, workspace, nil)
+}
+
+// OpenAPTImageValidationSession starts the same networkless validation
+// container with the private APT scratch mount required by apt-resolve-v1's
+// fixed profile commands. It does not grant package-network access.
+func OpenAPTImageValidationSession(
+	ctx context.Context,
+	descriptor deploy.ImageDescriptor,
+	workspace PreparedProbeWorkspace,
+	aptWorkspace PreparedAPTResolverWorkspace,
+) (*ImageValidationSession, error) {
+	return openImageValidationSession(ctx, descriptor, workspace, &aptWorkspace)
+}
+
+func openImageValidationSession(
+	ctx context.Context,
+	descriptor deploy.ImageDescriptor,
+	workspace PreparedProbeWorkspace,
+	aptWorkspace *PreparedAPTResolverWorkspace,
+) (*ImageValidationSession, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("image validation session context is required")
 	}
@@ -43,7 +67,7 @@ func OpenImageValidationSession(ctx context.Context, descriptor deploy.ImageDesc
 	if descriptor.Platform.OS != "linux" {
 		return nil, fmt.Errorf("image validation requires a Linux image")
 	}
-	spec, containerName, err := imageValidationCreateCommandSpec(descriptor, workspace)
+	spec, containerName, err := imageValidationCreateCommandSpecWithAPT(descriptor, workspace, aptWorkspace)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +85,62 @@ func OpenImageValidationSession(ctx context.Context, descriptor deploy.ImageDesc
 		cleanupErr := removeImageValidationContainer(context.WithoutCancel(ctx), containerName)
 		return nil, errors.Join(startErr, cleanupErr)
 	}
-	return &ImageValidationSession{descriptor: descriptor, workspace: workspace, containerName: containerName}, nil
+	return &ImageValidationSession{
+		descriptor: descriptor, workspace: workspace, aptWorkspace: aptWorkspace, containerName: containerName,
+	}, nil
+}
+
+// ProbeAPTBaseProfile reproduces the same canonical APT base facts used by
+// resolution inside this already-held networkless validation container.
+func (session *ImageValidationSession) ProbeAPTBaseProfile(ctx context.Context) (APTBaseValidation, error) {
+	if session == nil || session.closed {
+		return APTBaseValidation{}, fmt.Errorf("image validation session is not open")
+	}
+	if session.aptWorkspace == nil {
+		return APTBaseValidation{}, fmt.Errorf("image validation session has no APT profile workspace")
+	}
+	if session.aptBase != nil {
+		return cloneAPTBaseValidation(*session.aptBase), nil
+	}
+	result, err := observeAPTBaseProfile(ctx, session.descriptor.Platform, session.Probe, session.runAPTProfileCommand)
+	if err != nil {
+		return APTBaseValidation{}, err
+	}
+	session.aptBase = &result
+	return cloneAPTBaseValidation(result), nil
+}
+
+func (session *ImageValidationSession) runAPTProfileCommand(ctx context.Context, executable string, arguments ...string) ([]byte, error) {
+	if session == nil || session.closed || session.aptWorkspace == nil {
+		return nil, fmt.Errorf("image validation APT profile session is not open")
+	}
+	if ctx == nil {
+		return nil, fmt.Errorf("image validation APT profile context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("run image validation APT profile: %w", err)
+	}
+	profile := aptprovider.ResolveChildEnvironmentV1()
+	args := []string{
+		"exec", "--user", "0:0", "--workdir", "/", session.containerName,
+		"/usr/bin/env", "-i",
+	}
+	for _, variable := range profile.Variables {
+		args = append(args, variable.Name+"="+variable.Value)
+	}
+	args = append(args,
+		"/bin/sh", "-c", `exec </dev/null; umask "$1"; shift; exec "$@"`,
+		profile.Name, profile.Umask, executable,
+	)
+	args = append(args, arguments...)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := runImageValidationFollowupCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{
+		Context: ctx, Stdout: &stdout, Stderr: &stderr,
+	}); err != nil {
+		return nil, imageValidationCommandError("APT profile", session.descriptor.Platform.Canonical, stderr.String(), err)
+	}
+	return stdout.Bytes(), nil
 }
 
 // Probe performs one fixed canonical filesystem-observation exchange in the
@@ -146,6 +225,51 @@ func (session *ImageValidationSession) QueryDPKGOwners(ctx context.Context, path
 	return stdout.Bytes(), nil
 }
 
+// QueryDPKGPackageState performs one fixed read-only exact-state query for
+// already-known owner package names. It never enumerates installed packages.
+func (session *ImageValidationSession) QueryDPKGPackageState(ctx context.Context, names []string) ([]byte, error) {
+	if session == nil || session.closed {
+		return nil, fmt.Errorf("image validation session is not open")
+	}
+	if ctx == nil {
+		return nil, fmt.Errorf("image validation dpkg package-state context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("query image dpkg package state: %w", err)
+	}
+	if len(names) == 0 {
+		return []byte{}, nil
+	}
+	names = append([]string{}, names...)
+	sort.Strings(names)
+	for index, name := range names {
+		if !validImageDPKGPackageName(name) {
+			return nil, fmt.Errorf("image validation dpkg package name %d is invalid", index)
+		}
+		if index > 0 && names[index-1] == name {
+			return nil, fmt.Errorf("image validation dpkg package names must be unique")
+		}
+	}
+	args := []string{
+		"exec", "--user", "0:0", "--workdir", "/", session.containerName,
+		"/usr/bin/dpkg-query", "--show",
+		"--showformat=${binary:Package}\t${Version}\t${Architecture}\t${Status}\n",
+	}
+	args = append(args, names...)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := runImageValidationFollowupCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{
+		Context: ctx, Stdout: &stdout, Stderr: &stderr,
+	}); err != nil {
+		output := trimmedCommandOutput(stderr.String())
+		if output != "" {
+			return nil, fmt.Errorf("query image dpkg package state: %w\ncommand output:\n%s", err, output)
+		}
+		return nil, fmt.Errorf("query image dpkg package state: %w", err)
+	}
+	return stdout.Bytes(), nil
+}
+
 // QueryAlternative performs one fixed read-only query for a link-group name
 // derived from an already-observed /etc/alternatives path.
 func (session *ImageValidationSession) QueryAlternative(ctx context.Context, group string) ([]byte, error) {
@@ -177,12 +301,50 @@ func (session *ImageValidationSession) QueryAlternative(ctx context.Context, gro
 	return stdout.Bytes(), nil
 }
 
+// ValidateBuildScratchAbsent performs the one fixed absence check required
+// before provider mount roots can be trusted. It cannot inspect a
+// caller-selected path.
+func (session *ImageValidationSession) ValidateBuildScratchAbsent(ctx context.Context) error {
+	if session == nil || session.closed {
+		return fmt.Errorf("image validation session is not open")
+	}
+	if ctx == nil {
+		return fmt.Errorf("image validation build-scratch context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("validate image build-scratch absence: %w", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	spec := CommandSpec{Name: "docker", Args: []string{
+		"exec", "--user", "0:0", "--workdir", "/", session.containerName,
+		"/bin/sh", "-c", `test ! -e "$1"`, "reploy-validation", "/.reploy-build",
+	}}
+	if err := runImageValidationFollowupCommand(spec, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
+		return fmt.Errorf("image validation requires /.reploy-build to be absent: %w", imageValidationCommandError("build-scratch absence", session.descriptor.Platform.Canonical, stderr.String(), err))
+	}
+	return nil
+}
+
 func validImageAlternativeGroup(value string) bool {
 	if value == "" || value[0] == '-' {
 		return false
 	}
 	for _, char := range value {
 		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || strings.ContainsRune("+_.-", char) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validImageDPKGPackageName(value string) bool {
+	if len(value) < 2 {
+		return false
+	}
+	for index, char := range value {
+		if char >= 'a' && char <= 'z' || char >= '0' && char <= '9' || index > 0 && strings.ContainsRune("+.-", char) {
 			continue
 		}
 		return false
@@ -223,6 +385,14 @@ func RunImageProbe(ctx context.Context, descriptor deploy.ImageDescriptor, works
 }
 
 func imageValidationCreateCommandSpec(descriptor deploy.ImageDescriptor, workspace PreparedProbeWorkspace) (CommandSpec, string, error) {
+	return imageValidationCreateCommandSpecWithAPT(descriptor, workspace, nil)
+}
+
+func imageValidationCreateCommandSpecWithAPT(
+	descriptor deploy.ImageDescriptor,
+	workspace PreparedProbeWorkspace,
+	aptWorkspace *PreparedAPTResolverWorkspace,
+) (CommandSpec, string, error) {
 	if err := validatePreparedProbeWorkspace(descriptor, workspace); err != nil {
 		return CommandSpec{}, "", err
 	}
@@ -242,9 +412,21 @@ func imageValidationCreateCommandSpec(descriptor deploy.ImageDescriptor, workspa
 		"--pull", "never", "--user", "0:0", "--workdir", "/",
 		"--read-only", "--network", "none",
 		"--mount", mount,
-		"--entrypoint", workspace.ContainerExecutable,
-		descriptor.ImmutableReference, "hold",
 	}
+	if aptWorkspace != nil {
+		if err := validatePreparedAPTResolverWorkspace(*aptWorkspace); err != nil {
+			return CommandSpec{}, "", err
+		}
+		aptMount, err := dockerMountArgument(
+			"type=bind", "source="+aptWorkspace.HostDir,
+			"target="+aptWorkspace.ContainerDir,
+		)
+		if err != nil {
+			return CommandSpec{}, "", err
+		}
+		args = append(args, "--mount", aptMount)
+	}
+	args = append(args, "--entrypoint", workspace.ContainerExecutable, descriptor.ImmutableReference, "hold")
 	return CommandSpec{Name: "docker", Args: args}, containerName, nil
 }
 

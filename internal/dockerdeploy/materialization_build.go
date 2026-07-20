@@ -15,6 +15,7 @@ type MaterializationBuildPlan struct {
 	DockerfilePath string
 	ContextDir     string
 	IIDFile        string
+	NoCache        bool
 }
 
 func MaterializationBuildCommand(plan MaterializationBuildPlan) (CommandSpec, error) {
@@ -40,14 +41,17 @@ func MaterializationBuildCommand(plan MaterializationBuildPlan) (CommandSpec, er
 			return CommandSpec{}, fmt.Errorf("materialization build %s path must be absolute and clean", item.field)
 		}
 	}
-	args := []string{
-		"build",
+	args := []string{"build"}
+	if plan.NoCache {
+		args = append(args, "--no-cache")
+	}
+	args = append(args,
 		"--file", plan.DockerfilePath,
 		"--platform", plan.Platform.Canonical,
-		"--build-arg", "REPLOY_BASE_IMAGE=" + plan.BaseReference,
+		"--build-arg", "REPLOY_BASE_IMAGE="+plan.BaseReference,
 		"--iidfile", plan.IIDFile,
 		plan.ContextDir,
-	}
+	)
 	return CommandSpec{Name: "docker", Args: args, Env: []string{"DOCKER_BUILDKIT=1"}}, nil
 }
 

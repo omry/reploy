@@ -54,7 +54,7 @@ func TestBuildMaterializationLayerReturnsUnacceptedImageID(t *testing.T) {
 	t.Cleanup(func() { runMaterializationBuildCommand = original })
 	var workspace string
 	runMaterializationBuildCommand = func(spec CommandSpec, _ RunOptions) error {
-		if spec.Name != "docker" || len(spec.Args) == 0 || spec.Args[0] != "build" {
+		if spec.Name != "docker" || len(spec.Args) < 2 || spec.Args[0] != "build" || spec.Args[1] != "--no-cache" {
 			t.Fatalf("command = %#v", spec)
 		}
 		if base := commandOption(t, spec.Args, "--build-arg"); !strings.HasPrefix(base, "REPLOY_BASE_IMAGE="+temporaryBuildReferencePrefix) {
@@ -72,7 +72,7 @@ func TestBuildMaterializationLayerReturnsUnacceptedImageID(t *testing.T) {
 		}
 		return os.WriteFile(iidPath, []byte(string(rendererDigest("f"))+"\n"), 0o600)
 	}
-	image, err := BuildMaterializationLayer(store, request, RunOptions{})
+	image, err := BuildMaterializationLayer(store, request, RunOptions{NoCache: true})
 	if err != nil {
 		t.Fatal(err)
 	}

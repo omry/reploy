@@ -3,6 +3,7 @@ package cli
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -153,6 +155,56 @@ func TestParseGlobalDeploymentOptionsRejectsInvalidDockerTimeout(t *testing.T) {
 		if _, _, err := parseGlobalDeploymentOptions(args); err == nil {
 			t.Fatalf("parseGlobalDeploymentOptions(%#v) err = nil, want error", args)
 		}
+	}
+}
+
+func TestParseDockerBuildOptions(t *testing.T) {
+	options, err := parseDockerBuildOptions([]string{"--dir", "stage", "--no-cache", "--validate-layers"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Dir != "stage" || !options.DirExplicit || !options.NoCache || !options.ValidateLayers {
+		t.Fatalf("options = %#v", options)
+	}
+	if _, err := parseDockerBuildOptions([]string{"--verbose"}); err == nil || !strings.Contains(err.Error(), "unknown option") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestBuildCommandRunsProviderBuildWithoutInstalling(t *testing.T) {
+	originalBuild := dockerProviderBuild
+	originalRuntime := dockerProviderBuildRuntime
+	t.Cleanup(func() {
+		dockerProviderBuild = originalBuild
+		dockerProviderBuildRuntime = originalRuntime
+	})
+	dockerProviderBuildRuntime = func() (dockerdeploy.StagedProviderBuildRuntimeV1, error) {
+		return dockerdeploy.StagedProviderBuildRuntimeV1{UID: 501, GID: 20}, nil
+	}
+	called := false
+	dockerProviderBuild = func(ctx context.Context, input dockerdeploy.ProviderBuildRunInputV1) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
+		called = true
+		if ctx == nil || input.DeploymentDir != "/tmp/provider-stage" || !input.NoCache || !input.ValidateLayers {
+			t.Fatalf("input = %#v", input)
+		}
+		if input.Runtime.UID != 501 || input.Runtime.GID != 20 || input.RunOptions.DockerPreflightTimeout != 12*time.Second || input.RunOptions.Stdout == nil || input.RunOptions.Stderr == nil {
+			t.Fatalf("runtime options = %#v", input)
+		}
+		return dockerdeploy.LockedProviderBuildExecutionResultV1{Reused: true}, nil
+	}
+	code, stdout, stderr := runCLI("--docker-timeout", "12s", "build", "--dir", "/tmp/provider-stage", "--no-cache", "--validate-layers")
+	if code != 0 || !called || stdout != "" || stderr != "" {
+		t.Fatalf("code/called/stdout/stderr = %d/%v/%q/%q", code, called, stdout, stderr)
+	}
+}
+
+func TestBuildHelpClarifiesLayerValidationIsAdditional(t *testing.T) {
+	code, stdout, stderr := runCLI("build", "--help")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code/stderr = %d/%q", code, stderr)
+	}
+	if !strings.Contains(stdout, "always fully validated") || !strings.Contains(stdout, "additionally") || !strings.Contains(stdout, "without installing") {
+		t.Fatalf("build help = %q", stdout)
 	}
 }
 
@@ -587,10 +639,13 @@ func TestDockerHelp(t *testing.T) {
 	if strings.Contains(stdout, "--wait") || !strings.Contains(stdout, "--timeout DURATION") {
 		t.Fatalf("stdout did not contain expected test timeout options:\n%s", stdout)
 	}
-	for _, want := range []string{"install      Install or update a deployed host service", "--to DIR", "--scope user|system", "--port NAME=PORT", "--replace PATH", "--clean", "--in-place", "--dry-run"} {
+	for _, want := range []string{"install      Install or update a deployed host service", "--to DIR", "--scope user|system", "--port NAME=PORT", "--replace PATH", "--clean", "--dry-run"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout missing install help %q:\n%s", want, stdout)
 		}
+	}
+	if strings.Contains(stdout, "--in-place") {
+		t.Fatalf("stdout retained removed --in-place option:\n%s", stdout)
 	}
 	if strings.Contains(stdout, "Install or update a deployed host service from staging") {
 		t.Fatalf("stdout did not contain install command/options:\n%s", stdout)
@@ -624,10 +679,13 @@ func TestDockerInstallHelpShowsPortOptions(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	for _, want := range []string{"--scope user|system", "--port PORT", "--port NAME=PORT", "--replace PATH", "--clean", "--in-place"} {
+	for _, want := range []string{"--scope user|system", "--port PORT", "--port NAME=PORT", "--replace PATH", "--clean"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout did not contain install option %q:\n%s", want, stdout)
 		}
+	}
+	if strings.Contains(stdout, "--in-place") {
+		t.Fatalf("stdout retained removed --in-place option:\n%s", stdout)
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
@@ -648,11 +706,53 @@ func TestAppHelp(t *testing.T) {
 	if !strings.Contains(stdout, "Show this staging directory's app subcommands") || !strings.Contains(stdout, "reploy app COMMAND") {
 		t.Fatalf("stdout did not contain generic app command guidance:\n%s", stdout)
 	}
+	for _, want := range []string{"--output-dir DIR", "REPLOY_OUTPUT_DIR", "--output-file FILE", "REPLOY_OUTPUT_FILE"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout did not document %q:\n%s", want, stdout)
+		}
+	}
 	if strings.Contains(stdout, "Demo") || strings.Contains(stdout, "bootstrap plugin PLUGIN account NAME") {
 		t.Fatalf("stdout contained app-specific help:\n%s", stdout)
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestParseDockerAppOutputOptions(t *testing.T) {
+	options, err := parseDockerAppOptions([]string{"--output-dir", "results", "export"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.OutputDir != "results" || options.OutputFile != "" || !reflect.DeepEqual(options.CommandArgs, []string{"export"}) {
+		t.Fatalf("output-dir options = %#v", options)
+	}
+	options, err = parseDockerAppOptions([]string{"--output-file=report.json", "export"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.OutputFile != "report.json" || options.OutputDir != "" || !reflect.DeepEqual(options.CommandArgs, []string{"export"}) {
+		t.Fatalf("output-file options = %#v", options)
+	}
+	for _, args := range [][]string{
+		{"--output-dir", "results", "--output-file", "report.json", "export"},
+		{"--output-dir=", "export"},
+		{"--output-file", "", "export"},
+	} {
+		if _, err := parseDockerAppOptions(args); err == nil {
+			t.Fatalf("parseDockerAppOptions(%#v) unexpectedly succeeded", args)
+		}
+	}
+}
+
+func TestAppCommandsRejectsOutputOptionsWithoutCommand(t *testing.T) {
+	code, _, stderr := runCLI("app", "--commands", "--output-dir", "results")
+	if code != 2 || !strings.Contains(stderr, "output options require an app command") {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	code, _, stderr = runCLI("app", "--output-file", "report.json")
+	if code != 2 || !strings.Contains(stderr, "output options require an app command") {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
 }
 
@@ -801,6 +901,15 @@ func TestEmbeddedControlRunsDeployedAppCommandWithScriptPrefix(t *testing.T) {
 	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
 	if code != 0 {
 		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	appArgs, matched, err := embeddedControlAppArguments(deployDir, []string{"--output-file", "report.json", "config", "check"})
+	wantAppArgs := []string{"--deployed-only", "--dir", deployDir, "--output-file", "report.json", "config", "check"}
+	if err != nil || !matched || !reflect.DeepEqual(appArgs, wantAppArgs) {
+		t.Fatalf("embedded output app args = %#v, matched=%v, error=%v", appArgs, matched, err)
+	}
+	helpCode, helpStdout, helpStderr := runCLI("_control", "--dir", deployDir, "--script-name", "democtl", "--help")
+	if helpCode != 0 || helpStderr != "" || !strings.Contains(helpStdout, "--output-dir DIR") || !strings.Contains(helpStdout, "--output-file FILE") {
+		t.Fatalf("embedded control help: code=%d stdout=%q stderr=%q", helpCode, helpStdout, helpStderr)
 	}
 
 	fakeBin := filepath.Join(t.TempDir(), "bin")
@@ -1348,6 +1457,7 @@ func TestDockerStageHelp(t *testing.T) {
 		"reploy [--docker] [--docker-timeout DURATION] stage --update [APP_REF] [OPTIONS]",
 		"Create a staging directory from an app blueprint reference.",
 		"Use --update to refresh an existing staging directory",
+		"Environment blueprints record desired state only; reploy build creates the image.",
 		"Indexed shorthand from the Reploy blueprint index:",
 		"arbiter-server==0.4.2",
 		"Local filesystem refs:",
@@ -1365,9 +1475,11 @@ func TestDockerStageHelp(t *testing.T) {
 		"GitHub paths must point to the blueprint file inside the repository.",
 		"--dir DIR",
 		"--update",
+		"--platform OCI",
+		"linux/amd64",
 		"--force",
 		"--verbose",
-		"Show generated file update details",
+		"Show additional staging details",
 		"Python provider options:",
 		"--requirement REQ",
 		"Exact Python package pin or absolute container path for requirements.txt",
@@ -1833,11 +1945,11 @@ func TestDockerInstallPortOptionsParse(t *testing.T) {
 		t.Fatalf("shorthand override = %#v", options.PortOverrides)
 	}
 
-	options, err = parseDockerInstallOptions([]string{"pypi:demo-server#demo_server/reploy/demo-server.blueprint.yaml", "--scope=user", "--dry-run", "--in-place", "--replace", "conf", "--replace=.env", "--clean"})
+	options, err = parseDockerInstallOptions([]string{"pypi:demo-server#demo_server/reploy/demo-server.blueprint.yaml", "--scope=user", "--dry-run", "--replace", "conf", "--replace=.env", "--clean"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.Pack.Raw != "pypi:demo-server#demo_server/reploy/demo-server.blueprint.yaml" || !options.DryRun || !options.InPlace || !options.Clean {
+	if options.Pack.Raw != "pypi:demo-server#demo_server/reploy/demo-server.blueprint.yaml" || !options.DryRun || !options.Clean {
 		t.Fatalf("direct install options = %#v", options)
 	}
 	if options.Scope != dockerdeploy.InstallScopeUser {
@@ -1845,6 +1957,9 @@ func TestDockerInstallPortOptionsParse(t *testing.T) {
 	}
 	if strings.Join(options.Replace, ",") != "conf,.env" {
 		t.Fatalf("replace = %#v", options.Replace)
+	}
+	if _, err := parseDockerInstallOptions([]string{"--scope=user", "--in-place"}); err == nil || !strings.Contains(err.Error(), "unknown option: --in-place") {
+		t.Fatalf("removed --in-place error = %v", err)
 	}
 }
 
@@ -1932,6 +2047,29 @@ func TestParseDockerCommandOptionsWarnsWhenShorthandMatchesLocalPath(t *testing.
 	}
 }
 
+func TestParseDockerCommandOptionsParsesNonemptyPlatform(t *testing.T) {
+	setCLITestPackIndex(t)
+	options, err := parseDockerCommandOptions(
+		[]string{"--platform=linux/amd64", "demo-server"},
+		true,
+		dockerCommandParseConfig{AllowPlatform: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Platform != "linux/amd64" {
+		t.Fatalf("platform = %q", options.Platform)
+	}
+	for _, args := range [][]string{
+		{"--platform=", "demo-server"},
+		{"--platform", "", "demo-server"},
+	} {
+		if _, err := parseDockerCommandOptions(args, true, dockerCommandParseConfig{AllowPlatform: true}); err == nil || !strings.Contains(err.Error(), "--platform must not be empty") {
+			t.Fatalf("parse %q error = %v", args, err)
+		}
+	}
+}
+
 func TestParsePackRefArgumentSupportsGitHTTPSRef(t *testing.T) {
 	ref, err := parsePackRefArgument("git:https://github.com/acme/demo.git#demo_pkg/reploy?ref=main")
 	if err != nil {
@@ -2005,22 +2143,16 @@ func TestDirectInstallFileRefDryRunUsesBlueprintDefaults(t *testing.T) {
 	}
 }
 
-func TestDirectInstallInPlaceDryRunUsesRequestedTarget(t *testing.T) {
+func TestDirectInstallRejectsRemovedInPlaceOption(t *testing.T) {
 	requireLinuxHost(t)
 	packDir := makeCLITestPack(t)
 	target := filepath.Join(t.TempDir(), "installed")
 	code, stdout, stderr := runCLI("install", "file:"+packDir, "--to", target, "--scope", "system", "--in-place", "--dry-run", "--no-start")
-	if code != 0 {
-		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
-	}
-	if !strings.Contains(stdout, "target: "+target) || !strings.Contains(stdout, "start: no") {
-		t.Fatalf("stdout did not show requested target dry-run:\n%s", stdout)
+	if code != 2 || !strings.Contains(stderr, "unknown option: --in-place") {
+		t.Fatalf("exit code = %d, want usage error\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
-		t.Fatalf("dry-run should not create in-place target, stat err=%v", err)
-	}
-	if stderr != "" {
-		t.Fatalf("stderr = %q, want empty", stderr)
+		t.Fatalf("rejected option created target, stat err=%v", err)
 	}
 }
 
@@ -2289,6 +2421,69 @@ func TestDockerInitWritesDeployment(t *testing.T) {
 	}
 }
 
+func TestDockerStageEnvironmentBlueprintCreatesAndRestagesOnlyStateV1(t *testing.T) {
+	blueprintPath := filepath.Join(cliTestRepoRoot(t), "examples", "omegaconf-inspector", "reploy", "omegaconf-inspector.blueprint.yaml")
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "--platform", "linux/amd64", "file:"+blueprintPath)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "created staging directory for omegaconf-inspector: "+deployDir+"\n" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	assertCLIStateV1Platform(t, deployDir, "linux/amd64")
+
+	entries, err := os.ReadDir(deployDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != dockerdeploy.ReployInternalDir || !entries[0].IsDir() {
+		t.Fatalf("staging entries = %#v", entries)
+	}
+	internalEntries, err := os.ReadDir(filepath.Join(deployDir, dockerdeploy.ReployInternalDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	internalNames := make([]string, len(internalEntries))
+	for index, entry := range internalEntries {
+		internalNames[index] = entry.Name()
+	}
+	if !reflect.DeepEqual(internalNames, []string{"operation.lock", "state.json"}) {
+		t.Fatalf("internal entries = %q", internalNames)
+	}
+
+	code, stdout, stderr = runCLI("stage", "--update", "--dir", deployDir, "--platform", "linux/arm64")
+	if code != 0 {
+		t.Fatalf("stage --update failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "updated staging directory: "+deployDir+"\n" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	assertCLIStateV1Platform(t, deployDir, "linux/arm64")
+}
+
+func assertCLIStateV1Platform(t *testing.T, dir string, canonical string) {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(dir, dockerdeploy.StateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := deploy.DecodeStateV1(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Platform.Canonical != canonical || state.Current != nil {
+		t.Fatalf("state platform/current = %q/%#v", state.Platform.Canonical, state.Current)
+	}
+}
+
 func TestDockerInitVerboseReportsGeneratedFiles(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
@@ -2512,7 +2707,7 @@ func TestDockerStageAcceptsSourcePackRef(t *testing.T) {
 	}
 }
 
-func TestDockerStageRejectsAPTBeforeProviderCutover(t *testing.T) {
+func TestDockerStageAcceptsAPTAfterProviderCutover(t *testing.T) {
 	previousStageInit := dockerStageInit
 	dockerStageInit = func(options dockerdeploy.InitOptions) ([]dockerdeploy.UpdateResult, error) {
 		options.MaterializeEnvironment = false
@@ -2541,75 +2736,39 @@ docker: {}
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 
 	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
-	if code != 1 {
-		t.Fatalf("exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if stdout != "" {
-		t.Fatalf("stdout = %q, want empty", stdout)
+	if !strings.Contains(stdout, "created staging directory for apt-gate-test") {
+		t.Fatalf("stdout missing staged deployment confirmation:\n%s", stdout)
 	}
-	if !strings.Contains(stderr, "type apt is not publicly enabled until the APT cross-provider gate passes") {
-		t.Fatalf("stderr missing APT public-gate error:\n%s", stderr)
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
 	}
-	if _, err := os.Stat(deployDir); !os.IsNotExist(err) {
-		t.Fatalf("failed stage left a deployment directory: %v", err)
+	if _, err := os.Stat(deployDir); err != nil {
+		t.Fatalf("staged deployment is missing: %v", err)
 	}
 }
 
 func TestDockerStageAcceptsGitPackRef(t *testing.T) {
-	previousStageInit := dockerStageInit
-	dockerStageInit = func(options dockerdeploy.InitOptions) ([]dockerdeploy.UpdateResult, error) {
-		options.MaterializeEnvironment = false
-		return dockerdeploy.Init(options)
-	}
-	t.Cleanup(func() { dockerStageInit = previousStageInit })
-	sourceDir, commit := makeCLITestGitSourcePack(t)
+	sourceDir, _ := makeCLITestGitSourcePack(t)
 	cacheDir := filepath.Join(t.TempDir(), "cache")
 	t.Setenv("REPLOY_CACHE_DIR", cacheDir)
 	sourceURL := localFileURL(sourceDir)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 
-	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "git:"+sourceURL+"?ref=main")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "--platform", "linux/amd64", "git:"+sourceURL+"?ref=main")
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	requirements, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.RequirementsFileName))
-	if err != nil {
-		t.Fatal(err)
+	if stdout != "created staging directory for git-source-app: "+deployDir+"\n" || stderr != "" {
+		t.Fatalf("stdout/stderr = %q/%q", stdout, stderr)
 	}
-	if string(requirements) != "setuptools>=68\nwheel\ngit-source-app\n/source/app/git-source-app\n" {
-		t.Fatalf("requirements = %q", requirements)
-	}
-	stateContent, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.StateFileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var state deploy.DeploymentState
-	if err := json.Unmarshal(stateContent, &state); err != nil {
-		t.Fatal(err)
-	}
-	expectedRequestedRef := "git:" + sourceURL + "?ref=main"
-	expectedResolvedRef := "git:" + sourceURL + "#git_source_app/reploy?ref=" + commit
-	if state.RequestedBlueprintRef != expectedRequestedRef {
-		t.Fatalf("requested blueprint ref = %q, want %q", state.RequestedBlueprintRef, expectedRequestedRef)
-	}
-	if state.Blueprint.Raw != expectedResolvedRef || !state.Blueprint.IsPinned {
-		t.Fatalf("state blueprint = %#v, want pinned %q", state.Blueprint, expectedResolvedRef)
-	}
-	if state.ResolvedArtifact == nil || state.ResolvedArtifact.Scheme != "git" || state.ResolvedArtifact.Version != commit {
-		t.Fatalf("resolved artifact = %#v", state.ResolvedArtifact)
-	}
-	if !strings.HasPrefix(state.ResolvedArtifact.CachePath, cacheDir) {
-		t.Fatalf("cache path = %q, want under %q", state.ResolvedArtifact.CachePath, cacheDir)
-	}
-	compose, err := os.ReadFile(filepath.Join(deployDir, dockerdeploy.ComposeFileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(compose), "/source/app") || strings.Contains(string(compose), "prepare_python_runtime") {
-		t.Fatalf("environment staging Compose retained legacy source mounts or startup installer:\n%s", compose)
-	}
-	if !strings.Contains(string(compose), "services: {}") {
-		t.Fatalf("environment staging Compose should remain empty until image materialization:\n%s", compose)
+	assertCLIStateV1Platform(t, deployDir, "linux/amd64")
+	for _, legacy := range []string{dockerdeploy.RequirementsFileName, dockerdeploy.ComposeFileName} {
+		if _, err := os.Stat(filepath.Join(deployDir, legacy)); !os.IsNotExist(err) {
+			t.Fatalf("legacy staging file %s exists or could not be inspected: %v", legacy, err)
+		}
 	}
 }
 

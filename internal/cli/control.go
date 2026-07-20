@@ -73,13 +73,39 @@ func runEmbeddedControl(args []string, stdout io.Writer, stderr io.Writer, globa
 			return runEmbeddedControlSystemd(context, cmd, rest, stdout, stderr)
 		}
 	}
-	if embeddedControlMatchesAppCommand(context.Dir, options.Command) {
-		appArgs := append([]string{"--deployed-only", "--dir", context.Dir}, options.Command...)
+	appArgs, matched, appErr := embeddedControlAppArguments(context.Dir, options.Command)
+	if appErr != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", context.ScriptName, appErr)
+		return 2
+	}
+	if matched {
 		return runEmbeddedControlAppCommand(context, appArgs, stdout, stderr, globalOptions)
 	}
 	printEmbeddedControlUsage(stderr, context)
 	fmt.Fprintf(stderr, "unknown command: %s\n", cmd)
 	return 2
+}
+
+func embeddedControlAppArguments(dir string, args []string) ([]string, bool, error) {
+	parsed, err := parseDockerAppOptions(args)
+	if err != nil {
+		if appOptionWasPresent(args, "--output-dir") || appOptionWasPresent(args, "--output-file") {
+			return nil, false, err
+		}
+		return nil, false, nil
+	}
+	if parsed.Commands || parsed.Format != "" || parsed.DirExplicit || parsed.DeployedOnly || len(parsed.CommandArgs) == 0 || !embeddedControlMatchesAppCommand(dir, parsed.CommandArgs) {
+		return nil, false, nil
+	}
+	result := []string{"--deployed-only", "--dir", dir}
+	if parsed.OutputDir != "" {
+		result = append(result, "--output-dir", parsed.OutputDir)
+	}
+	if parsed.OutputFile != "" {
+		result = append(result, "--output-file", parsed.OutputFile)
+	}
+	result = append(result, parsed.CommandArgs...)
+	return result, true, nil
 }
 
 func parseEmbeddedControlOptions(args []string) (embeddedControlOptions, error) {
@@ -141,14 +167,21 @@ func printEmbeddedControlUsage(output io.Writer, context embeddedControlUsageCon
 		fmt.Fprintln(output, "  enable")
 		fmt.Fprintln(output, "  disable")
 	}
+	hasAppCommands := false
 	if context.Dir != "" {
 		if result, err := dockerdeploy.AppCommandList(dockerdeploy.AppCommandListOptions{Dir: context.Dir, DeployedOnly: true}); err == nil {
 			for _, command := range result.Commands {
+				hasAppCommands = true
 				fmt.Fprintf(output, "  %s\n", strings.Join(command.Trigger, " "))
 			}
 		}
 	}
 	fmt.Fprintln(output, "  help")
+	if hasAppCommands {
+		fmt.Fprintln(output, "app command output options:")
+		fmt.Fprintln(output, "  --output-dir DIR")
+		fmt.Fprintln(output, "  --output-file FILE")
+	}
 }
 
 func printEmbeddedControlLogsHelp(output io.Writer, context embeddedControlUsageContext) {

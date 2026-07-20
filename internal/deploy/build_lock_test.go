@@ -31,7 +31,7 @@ func validBuildLock(t *testing.T) BuildLockV1 {
 		ResolvedRequestDigest: buildLockTestDigest("1"), Platform: platform,
 		Base:  base,
 		Graph: ProviderGraphLockV1{Nodes: []providers.NodeID{"base"}, Edges: []providers.ProviderEdgeV1{}},
-		Nodes: []NodeLockV1{}, RuntimePolicy: validRuntimePolicy(),
+		Nodes: []NodeLockV1{}, Catalog: []providers.RealizedOutput{}, RuntimePolicy: validRuntimePolicy(),
 		ValidationRecord: providerstore.StoreObjectRef{Kind: providerstore.ValidationRecordKind, Digest: buildLockTestDigest("4")},
 		FinalImage:       providers.RealizedImageV1{Digest: buildLockTestDigest("5"), ConfigDigest: buildLockTestDigest("5"), RootFSSubject: baseRootFS},
 	}
@@ -159,6 +159,7 @@ func TestBuildLockV1RejectsInvalidNestedIdentity(t *testing.T) {
 		{name: "nil graph", mutate: func(value *BuildLockV1) { value.Graph.Nodes = nil }, want: "graph"},
 		{name: "missing base", mutate: func(value *BuildLockV1) { value.Graph.Nodes = []providers.NodeID{} }, want: "base"},
 		{name: "missing node lock", mutate: func(value *BuildLockV1) { value.Graph.Nodes = []providers.NodeID{"apt", "base"} }, want: "missing node"},
+		{name: "nil catalog", mutate: func(value *BuildLockV1) { value.Catalog = nil }, want: "catalog"},
 		{name: "runtime policy", mutate: func(value *BuildLockV1) { value.RuntimePolicy.Schema = "bad" }, want: "runtime policy"},
 		{name: "validation kind", mutate: func(value *BuildLockV1) { value.ValidationRecord.Kind = providerstore.BlobKind }, want: "validation-record"},
 		{name: "final image", mutate: func(value *BuildLockV1) { value.FinalImage.RootFSSubject = "bad" }, want: "final image"},

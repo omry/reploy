@@ -16,6 +16,7 @@ type PendingPublicationRecovery struct {
 	Decision       deploy.PendingRecoveryDecision
 	SelectedLock   *deploy.BuildLockV1
 	SelectedDigest canonical.Digest
+	OldImage       *providers.RealizedImageV1
 }
 
 func RecoverPendingPublication(
@@ -101,6 +102,17 @@ func PreparePendingPublicationRecovery(
 		return PendingPublicationRecovery{}, fmt.Errorf("pending publication state conflict; recovery changed nothing")
 	}
 	plan := PendingPublicationRecovery{Pending: pending, Decision: decision}
+	if pending.Old != nil {
+		oldLock, err := loadOnce(pending.Old.BuildLockDigest)
+		if err != nil {
+			return PendingPublicationRecovery{}, fmt.Errorf("load old recovery build lock: %w", err)
+		}
+		if err := validateGenerationBuildLock(*pending.Old, oldLock, validateProfileOwner); err != nil {
+			return PendingPublicationRecovery{}, err
+		}
+		oldImage := oldLock.FinalImage
+		plan.OldImage = &oldImage
+	}
 	var selectedGeneration *deploy.EnvironmentGenerationState
 	switch decision {
 	case deploy.PendingRecoveryKeepCandidate:
@@ -135,7 +147,7 @@ func PreparePendingPublicationRecovery(
 	return plan, nil
 }
 
-type pendingReferenceRecovery func(context.Context, deploy.PendingBuildV1, deploy.PendingRecoveryDecision, string, string) error
+type pendingReferenceRecovery func(context.Context, deploy.PendingBuildV1, deploy.PendingRecoveryDecision, *providers.RealizedImageV1, string, string) error
 
 func executePendingPublicationRecovery(
 	ctx context.Context,
@@ -158,7 +170,7 @@ func executePendingPublicationRecovery(
 	if !found || !reflect.DeepEqual(currentPending, plan.Pending) {
 		return fmt.Errorf("pending publication changed after recovery preflight")
 	}
-	if err := recoverReferences(ctx, plan.Pending, plan.Decision, environment, deploymentDir); err != nil {
+	if err := recoverReferences(ctx, plan.Pending, plan.Decision, plan.OldImage, environment, deploymentDir); err != nil {
 		return err
 	}
 	if plan.SelectedLock != nil {

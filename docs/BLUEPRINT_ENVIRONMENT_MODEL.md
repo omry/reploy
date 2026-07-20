@@ -235,6 +235,32 @@ container is removed when the command exits. Selecting a command as
 `environment.workload.command` is the only operation that promotes it to the
 persistent container entrypoint.
 
+Standard output, standard error, and the exit status are the normal one-shot
+results. A caller that needs files may select one explicit output contract.
+`reploy app --output-dir DIR COMMAND` mounts the caller-selected host directory
+at `/mnt/reploy-output` and sets `REPLOY_OUTPUT_DIR` to that path; files become
+visible on the host as they are written and remain after success or failure.
+`reploy app --output-file FILE COMMAND` instead sets `REPLOY_OUTPUT_FILE` to a
+fixed file below `/mnt/reploy-output`. Reploy atomically creates a hidden
+staging directory beside `FILE`, and that directory serves as the reservation
+against another Reploy invocation claiming the same output. The requested
+filename remains absent while the command runs. After a successful exit,
+Reploy requires the fixed output to be a regular file and atomically publishes
+it without replacing an existing `FILE`. Command failure removes the staging
+directory. A publication failure or interrupted Reploy process leaves a
+recognizable stale staging directory and the complete staged file for explicit
+recovery. The two output options are mutually exclusive. Reploy never
+discovers or copies arbitrary files from the transient container.
+
+The transient `$HOME` is operation-local workspace, not an output channel.
+Docker backs `/mnt/reploy-home` with a fresh anonymous volume for each one-shot
+container. Normal `--rm` completion removes the volume, and Reploy's
+interruption cleanup force-removes the container with its anonymous volumes.
+It is disk-backed rather than a size-limited tmpfs, but it is never named or
+reused. Files survive a one-shot invocation only through its selected output
+contract or another writable mount declared by the blueprint. The persistent
+workload container keeps its separate tmpfs home at the same container path.
+
 Lifecycle actions invoke commands through the same one-shot mechanism. An
 `after_start` command may communicate with the running workload through its
 resolved endpoints, but Reploy does not implicitly execute it inside the
@@ -1193,6 +1219,15 @@ generation reference and atomically published deployment state bind the exact
 realized image to one environment, and Reploy recreates the container when that
 selected materialization changes. Other container backends may represent
 materialization differently.
+
+That deployment state also contains the complete resolved blueprint rather
+than a reference back to its original file or package. Runtime can therefore
+reconstruct its plan and compare the resolved-blueprint digest with the current
+build lock without reacquiring external blueprint content.
+
+Deployment state records the selected target platform beside that blueprint.
+Later build and runtime operations consume that exact value; they do not infer
+it again from the Reploy executable, Docker defaults, or an existing image.
 
 Each provider declares a complete versioned resolver-dependency profile. Reploy
 validates its typed prerequisites against the current upstream image and hashes

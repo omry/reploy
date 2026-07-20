@@ -24,6 +24,17 @@ func ValidateRequirementProfileV1(profile providers.RequirementProfile) error {
 	}
 }
 
+func ValidateResolvedBundlePayloadV1(payload providers.ResolvedBundleIdentityV1) error {
+	switch payload.Provider {
+	case blueprint.ComponentTypeAPT:
+		return aptprovider.ValidateResolvedBundlePayloadV1(payload)
+	case blueprint.ComponentTypePython:
+		return pythonprovider.ValidateResolvedBundlePayloadV1(payload)
+	default:
+		return fmt.Errorf("unsupported resolved bundle provider %q", payload.Provider)
+	}
+}
+
 // OwnerValidatorsForNode returns the provider-owned validators for one
 // executable provider node. Base is realized directly and therefore has no
 // requirement profile or resolved bundle to validate.

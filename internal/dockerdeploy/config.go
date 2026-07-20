@@ -29,6 +29,8 @@ type AppCommandOptions struct {
 	Dir                    string
 	CommandArgs            []string
 	DeployedOnly           bool
+	OutputDir              string
+	OutputFile             string
 	Stdout                 io.Writer
 	Stderr                 io.Writer
 	DockerPreflightTimeout time.Duration
@@ -63,7 +65,7 @@ var runConfigCheckCommand = runCommand
 var runAppCommand = runCommand
 var colorRuntimeGOOS = runtime.GOOS
 
-type temporaryComposeRunner func(CommandSpec, RunOptions) error
+type temporaryCommandRunner func(CommandSpec, RunOptions) error
 
 func Shell(options ShellOptions) error {
 	if options.Dir == "" {
@@ -107,7 +109,12 @@ func Shell(options ShellOptions) error {
 	}
 	stdin, interactive, tty := shellCommandIO(options.Stdin, terminalOutput)
 	spec := ShellCommandSpec(plan, interactive, tty)
-	return runAppCommand(spec, RunOptions{Stdin: stdin, Stdout: options.Stdout, Stderr: options.Stderr, DockerPreflightTimeout: options.DockerPreflightTimeout})
+	return runTemporaryContainerCommand(
+		runAppCommand,
+		spec,
+		TemporaryContainerCleanupCommand(transientCommandContainerName(plan)),
+		RunOptions{Stdin: stdin, Stdout: options.Stdout, Stderr: options.Stderr, DockerPreflightTimeout: options.DockerPreflightTimeout},
+	)
 }
 
 func shellCommandIO(input io.Reader, output io.Writer) (io.Reader, bool, bool) {
@@ -157,7 +164,7 @@ func ConfigCheck(options ConfigCheckOptions) error {
 	oneOffContainerName := temporaryOneOffContainerName(projectName, "config-check")
 	spec := ConfigCheckCommandForProject(options.Dir, command.Name, forwardedArgs, projectName, configDisplayDir, configContainerDir)
 	spec = withComposeRunName(spec, oneOffContainerName)
-	return runTemporaryComposeCommand(
+	return runTemporaryContainerCommand(
 		runConfigCheckCommand,
 		spec,
 		TemporaryContainerCleanupCommand(oneOffContainerName),
@@ -227,14 +234,31 @@ func AppCommand(options AppCommandOptions) error {
 			return err
 		}
 		interactive := runOptions.Stdin != nil
-		spec, err := TransientCommandSpec(plan, command, interactive, interactive && writerLooksTerminal(terminalOutput))
+		output, err := prepareOneShotOutput(options.OutputDir, options.OutputFile)
 		if err != nil {
 			return err
 		}
-		if err := runAppCommand(spec, runOptions); err != nil {
-			return appCommandError(err)
+		spec, err := TransientCommandSpec(plan, command, output.mount, interactive, interactive && writerLooksTerminal(terminalOutput))
+		if err != nil {
+			_ = output.abort()
+			return err
+		}
+		runErr := runTemporaryContainerCommand(
+			runAppCommand, spec, TemporaryContainerCleanupCommand(transientCommandContainerName(plan)), runOptions,
+		)
+		if runErr != nil {
+			if cleanupErr := output.abort(); cleanupErr != nil {
+				return fmt.Errorf("%w; output cleanup failed: %v", appCommandError(runErr), cleanupErr)
+			}
+			return appCommandError(runErr)
+		}
+		if err := output.publish(); err != nil {
+			return fmt.Errorf("app command output: %w", err)
 		}
 		return nil
+	}
+	if options.OutputDir != "" || options.OutputFile != "" {
+		return fmt.Errorf("one-shot output options require an environment-model blueprint")
 	}
 	command, forwardedArgs, err := matchAppCommandForOptions(pack, options.CommandArgs, options.DeployedOnly)
 	if err != nil {
@@ -262,7 +286,7 @@ func AppCommand(options AppCommandOptions) error {
 	spec = withAppCommandPrefixEnv(spec)
 	spec = withAppTerminalEnv(spec, pack.App.Terminal, terminalOutput)
 	spec = withComposeRunName(spec, oneOffContainerName)
-	err = runTemporaryComposeCommand(
+	err = runTemporaryContainerCommand(
 		runAppCommand,
 		spec,
 		TemporaryContainerCleanupCommand(oneOffContainerName),
@@ -367,8 +391,12 @@ func appConfigDisplayDir(dir string, pack deploy.AppPack) string {
 	return relativeConfigDir
 }
 
-func runTemporaryComposeCommand(run temporaryComposeRunner, runSpec CommandSpec, cleanupSpec CommandSpec, runOptions RunOptions) error {
-	ctx, cancel := context.WithCancel(context.Background())
+func runTemporaryContainerCommand(run temporaryCommandRunner, runSpec CommandSpec, cleanupSpec CommandSpec, runOptions RunOptions) error {
+	parent := runOptions.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
 	temporaryRunOptions := runOptions
@@ -397,7 +425,12 @@ func runTemporaryComposeCommand(run temporaryComposeRunner, runSpec CommandSpec,
 
 	var cleanupErr error
 	if cleanupSpec.Name != "" && runErr != nil {
-		cleanupErr = run(cleanupSpec, runOptions)
+		cleanupOptions := runOptions
+		cleanupOptions.Context = context.Background()
+		cleanupOptions.Stdin = nil
+		cleanupOptions.Stdout = nil
+		cleanupOptions.Stderr = nil
+		cleanupErr = run(cleanupSpec, cleanupOptions)
 		if cleanupErr != nil && isMissingContainerCleanupError(cleanupErr) {
 			cleanupErr = nil
 		}
@@ -618,7 +651,7 @@ func TemporaryComposeCleanupCommand(dir string, projectName string) CommandSpec 
 }
 
 func TemporaryContainerCleanupCommand(containerName string) CommandSpec {
-	return CommandSpec{Name: "docker", Args: []string{"container", "rm", "-f", containerName}}
+	return CommandSpec{Name: "docker", Args: []string{"container", "rm", "--force", "--volumes", containerName}}
 }
 
 func withComposeRunName(spec CommandSpec, containerName string) CommandSpec {

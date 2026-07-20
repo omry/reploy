@@ -108,7 +108,7 @@ func LoadPreparedPythonGraphReuse(
 			wheels := reusablePythonWheels(store, pythonBundle, nodeSources[id], currentSourceWheels)
 			reuse.NodeConfigs[id] = PreparedPythonNodeConfig{ReusableWheels: wheels}
 			reuse.ReusableArtifacts[id] = artifactStoreReferences(wheels)
-			compatible = reflect.DeepEqual(pythonBundle.Sources, nodeSources[id])
+			compatible = exactSelectedSourceCandidatesV1(nodeSources[id], pythonBundle.Sources)
 		}
 
 		planDigest, err := providers.ProviderNodePlanDigest(node)
@@ -123,6 +123,7 @@ func LoadPreparedPythonGraphReuse(
 		}
 		reuse.CachedResolutions[id] = providers.ResolveResult{
 			Bundle: bundle, Profile: lockedNode.RequirementProfile, Evidence: lockedNode.ValidationEvidence,
+			SelectedSources: append([]providers.ResolvedSourceInput{}, bundle.Payload.SelectedSources...),
 		}
 	}
 	return reuse, nil

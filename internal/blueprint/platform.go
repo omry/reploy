@@ -19,6 +19,39 @@ type Platform struct {
 	Canonical    string `json:"canonical"`
 }
 
+// ValidateSelectedPlatform requires one selected concrete target to be
+// covered by the resolved blueprint's declared compatibility set. A declared
+// platform without a variant covers the selected variant for that same OS and
+// architecture.
+func ValidateSelectedPlatform(document Document, selected Platform) error {
+	if err := selected.Validate(); err != nil {
+		return fmt.Errorf("selected platform: %w", err)
+	}
+	if len(document.Blueprint.Compatibility.Platforms) == 0 {
+		return fmt.Errorf("resolved blueprint declares no compatible platforms")
+	}
+	matches := 0
+	for index, declared := range document.Blueprint.Compatibility.Platforms {
+		if err := declared.Validate(); err != nil {
+			return fmt.Errorf("declared compatibility platform: %w", err)
+		}
+		if index > 0 && document.Blueprint.Compatibility.Platforms[index-1].Canonical >= declared.Canonical {
+			return fmt.Errorf("resolved blueprint compatibility platforms must be unique and sorted")
+		}
+		if declared.OS == selected.OS && declared.Architecture == selected.Architecture &&
+			(declared.Variant == "" || declared.Variant == selected.Variant) {
+			matches++
+		}
+	}
+	if matches == 0 {
+		return fmt.Errorf("selected platform %q is not declared by the resolved blueprint", selected.Canonical)
+	}
+	if matches != 1 {
+		return fmt.Errorf("selected platform %q matches multiple resolved blueprint declarations", selected.Canonical)
+	}
+	return nil
+}
+
 // Validate rejects a record whose canonical value was not derived from its
 // parsed fields. This is used again when platform records cross a boundary.
 func (platform Platform) Validate() error {

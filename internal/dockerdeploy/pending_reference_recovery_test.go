@@ -51,6 +51,7 @@ func pendingReferenceFixture(t *testing.T) (string, deploy.PendingBuildV1) {
 
 func TestRecoverPendingImageReferencesUsesDecisionSpecificOwnership(t *testing.T) {
 	dir, pending := pendingReferenceFixture(t)
+	oldImage := providers.RealizedImageV1{Digest: pending.Old.ImageDigest, ConfigDigest: rendererDigest("8"), RootFSSubject: pending.Old.RootFSSubject}
 	tests := []struct {
 		name     string
 		decision deploy.PendingRecoveryDecision
@@ -61,7 +62,7 @@ func TestRecoverPendingImageReferencesUsesDecisionSpecificOwnership(t *testing.T
 			{image: pending.Candidate.Image, reference: pending.Candidate.TemporaryReference, kind: EnvironmentReferenceTemporary},
 		}},
 		{name: "keep", decision: deploy.PendingRecoveryKeepCandidate, want: []removedReference{
-			{image: providers.RealizedImageV1{Digest: pending.Old.ImageDigest, ConfigDigest: pending.Old.ImageDigest, RootFSSubject: pending.Old.RootFSSubject}, reference: pending.Old.Reference, kind: EnvironmentReferenceGeneration},
+			{image: oldImage, reference: pending.Old.Reference, kind: EnvironmentReferenceGeneration},
 			{image: pending.Candidate.Image, reference: pending.Candidate.TemporaryReference, kind: EnvironmentReferenceTemporary},
 		}},
 	}
@@ -76,7 +77,7 @@ func TestRecoverPendingImageReferencesUsesDecisionSpecificOwnership(t *testing.T
 				removed = append(removed, removedReference{image: image, reference: reference, kind: kind})
 				return nil
 			}
-			if err := recoverPendingImageReferences(context.Background(), pending, test.decision, "demo", dir, remove); err != nil {
+			if err := recoverPendingImageReferences(context.Background(), pending, test.decision, &oldImage, "demo", dir, remove); err != nil {
 				t.Fatal(err)
 			}
 			if !reflect.DeepEqual(removed, test.want) {
@@ -89,7 +90,7 @@ func TestRecoverPendingImageReferencesUsesDecisionSpecificOwnership(t *testing.T
 func TestRecoverPendingImageReferencesConflictChangesNothing(t *testing.T) {
 	dir, pending := pendingReferenceFixture(t)
 	calls := 0
-	err := recoverPendingImageReferences(context.Background(), pending, deploy.PendingRecoveryStateConflict, "demo", dir, func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error {
+	err := recoverPendingImageReferences(context.Background(), pending, deploy.PendingRecoveryStateConflict, nil, "demo", dir, func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error {
 		calls++
 		return nil
 	})
@@ -110,7 +111,7 @@ func TestRecoverPendingImageReferencesKeepsFirstGeneration(t *testing.T) {
 		removed = append(removed, removedReference{image: image, reference: reference, kind: kind})
 		return nil
 	}
-	if err := recoverPendingImageReferences(context.Background(), pending, deploy.PendingRecoveryKeepCandidate, "demo", dir, remove); err != nil {
+	if err := recoverPendingImageReferences(context.Background(), pending, deploy.PendingRecoveryKeepCandidate, nil, "demo", dir, remove); err != nil {
 		t.Fatal(err)
 	}
 	want := []removedReference{{

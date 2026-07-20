@@ -47,7 +47,7 @@ func TestPlanBuildsBaseAPTAndPythonGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan, err := Plan(providers.PlanInput{
-		BlueprintDigest: registryDigest("a"), Platform: platform,
+		Platform: platform,
 		Components: []providers.ResolvedComponentRequestV1{
 			{Component: "application", Provider: blueprint.ComponentTypePython, Request: pythonRequest},
 			{Component: "base", Provider: blueprint.ComponentTypeBase, Request: base},
@@ -74,7 +74,7 @@ func TestPlanRejectsMissingBase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := providers.PlanInput{BlueprintDigest: registryDigest("b"), Platform: platform, Components: []providers.ResolvedComponentRequestV1{}}
+	input := providers.PlanInput{Platform: platform, Components: []providers.ResolvedComponentRequestV1{}}
 	if _, err := Plan(input); err == nil || !strings.Contains(err.Error(), "base") {
 		t.Fatalf("missing base error = %v", err)
 	}
@@ -101,7 +101,7 @@ func TestBuildProviderPlanRejectsUnclaimedComponent(t *testing.T) {
 		t.Fatal(err)
 	}
 	input := providers.PlanInput{
-		BlueprintDigest: registryDigest("c"), Platform: platform,
+		Platform: platform,
 		Components: []providers.ResolvedComponentRequestV1{
 			{Component: "base", Provider: blueprint.ComponentTypeBase, Request: base},
 			{Component: "application", Provider: blueprint.ComponentTypePython, Request: pythonRequest},

@@ -1,0 +1,2 @@
+kind: Removed
+body: Remove `reploy install --in-place`; direct installs now always build in a private temporary workspace before installing into the target.

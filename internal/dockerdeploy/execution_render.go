@@ -35,7 +35,12 @@ type DockerControlInput struct {
 type composePlanDocument struct {
 	Name     string                        `yaml:"name"`
 	Services map[string]composePlanService `yaml:"services"`
+	Networks map[string]composePlanNetwork `yaml:"networks"`
 	Volumes  map[string]any                `yaml:"volumes,omitempty"`
+}
+
+type composePlanNetwork struct {
+	Name string `yaml:"name"`
 }
 
 type composePlanService struct {
@@ -96,7 +101,8 @@ func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerR
 		}
 	}
 	document := composePlanDocument{
-		Name: plan.NetworkName, Services: map[string]composePlanService{"environment": service}, Volumes: volumes,
+		Name: plan.NetworkName, Services: map[string]composePlanService{"environment": service},
+		Networks: map[string]composePlanNetwork{"default": {Name: plan.NetworkName}}, Volumes: volumes,
 	}
 	compose, err := yaml.Marshal(document)
 	if err != nil {
@@ -147,6 +153,10 @@ func temporaryHomeForPlan(plan DockerExecutionPlan) string {
 
 func temporaryHomeMountForPlan(plan DockerExecutionPlan) string {
 	return temporaryHomeForPlan(plan) + ":rw,noexec,nosuid,nodev,size=64m,mode=1777"
+}
+
+func transientHomeMountForPlan(plan DockerExecutionPlan) string {
+	return "type=volume,destination=" + temporaryHomeForPlan(plan) + ",volume-nocopy"
 }
 
 func temporaryEnvironmentForPlan(plan DockerExecutionPlan) map[string]string {

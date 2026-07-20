@@ -410,7 +410,7 @@ boundaries do not acquire independent schemas.
 
 | Record/schema | Owning package | Boundary and encoding | Identity role |
 | --- | --- | --- | --- |
-| Resolved blueprint / `blueprint-resolved-v1` | `internal/blueprint` | YAML input to strict resolved Go value; canonical JSON only for its fingerprint | Blueprint digest |
+| Resolved blueprint / `blueprint-resolved-v1` | `internal/blueprint` | Strict resolved Go value encoded as one validated deterministic JSON payload in `state-v1` | Blueprint digest and runtime plan input |
 | Platform / `platform-v1` | `internal/blueprint` | Embedded canonical JSON | Every platform-dependent identity |
 | Request overlay / `overlay-v1` | `internal/deploy` | Canonical JSON inside `state-v1` | Resolved-request input |
 | Provider request / provider-specific schema such as `apt-provider-request-v1` | Provider package, envelope owned by `internal/providers` | Embedded canonical JSON | Node and resolver-cache identities |
@@ -2047,6 +2047,20 @@ are sorted by ID. Mounts are sorted by destination; `SourceKind` records only
 the resolved kind (`file`, `directory`, or `generated`) and never a host source
 path. Executables are unique and sorted by qualified identity.
 
+One-shot command plans include the backend-generated temporary-home mount and
+the supported explicit output variants. `--output-dir` and `--output-file`
+both mount a host directory at the fixed `/mnt/reploy-output` destination, so
+the runtime policy records only that directory source kind; the file form uses
+an adjacent hidden staging directory and publishes its fixed regular-file
+result atomically after success. The chosen host path is operation state, not a
+build identity input.
+
+Each one-shot command and `reploy shell` mounts a fresh anonymous Docker volume
+at `/mnt/reploy-home` for `HOME` and `TMPDIR`. It is disk-backed, unnamed, and
+removed with the transient container; explicit interruption cleanup uses
+forced container removal with anonymous-volume removal. Workload containers
+retain a separate tmpfs home at `/mnt/reploy-home`.
+
 The policy digest is
 `canonical.Sum("runtime-policy", "runtime-policy-v1", policy)`. It is recorded
 in the build lock and prefix-validation record. Runtime recomputes the plan
@@ -2118,15 +2132,36 @@ image and therefore may require Docker and package-network access. Install uses
 normal cache behavior; `--no-cache` remains an option of explicit
 `reploy build`, not an implied install option.
 
+Install checks required disk space before writing candidate files, deployment
+state, or live host configuration. It then prepares all candidate deployment
+and service files before changing the live installation. Writing the actual
+adjacent candidates is the lightweight destination permission check and leaves
+no separate probe files. The already-required Docker build and image validation
+prove Docker API access, so install does not repeat a Docker permission probe.
+
+After candidates are ready, install publishes the new build and state with
+installation status `configuring`, replaces the live host configuration from
+the candidates, and atomically changes only that status to `ready`. It keeps no
+backup and attempts no rollback. A failure after publication leaves the new
+installation recorded as `configuring`; after the underlying cause is fixed,
+the same install or uninstall command accepts that state and completes or
+removes it. A startup failure happens after status becomes `ready` and likewise
+leaves the new installation in place for inspection and a later retry.
+
 The build state machine, used by `reploy build` and by install's build phase,
 is:
 
 ```text
 lock directory
-  -> load blueprint + overlay
-  -> select platform + resolve components.base.image
+  -> recover any pending publication before reading build inputs
+  -> load the resolved blueprint + selected platform + overlay from state-v1
+  -> load the optional current lock for cache/reuse candidates
+  -> observe current local-source manifests
+  -> compute the resolved request
+  -> resolve components.base.image for the selected platform
+  -> if the current generation exactly matches the request, selected base, and
+     runtime policy, verify its immutable image reference and reuse it
   -> validate the immutable base root and its declared outputs
-  -> compute resolved request
   -> plan structural graph and validate explicit edges
   -> for each ready node: start its resolver on the current prefix, validate
      candidates and freeze the supplier, resolve/materialize, publish outputs,
@@ -2182,9 +2217,38 @@ Each deployment directory contains:
 
 ```go
 type StateV1 struct {
-    Schema  string
-    Overlay RequestOverlayV1
-    Current *EnvironmentGenerationState
+    Schema     string
+    Blueprint  ResolvedDocumentV1
+    Platform   blueprint.Platform
+    Overlay    RequestOverlayV1
+    Current    *EnvironmentGenerationState
+    Deployment *DeploymentStateV1
+}
+
+type DeploymentStateV1 struct {
+    Schema       string
+    Installation InstallationStateV1
+}
+
+type InstallationStateV1 struct {
+    Schema         string
+    Status         string
+    TargetDir      string
+    Scope          string
+    Service        string
+    UnitPath       string
+    InstanceID     string
+    ComposeProject string
+    ContainerName  string
+    NetworkName    string
+    Ports          []InstallationPortBindingV1
+}
+
+type InstallationPortBindingV1 struct {
+    Name          string
+    HostBind      string
+    HostPort      string
+    ContainerPort string
 }
 
 type EnvironmentGenerationState struct {
@@ -2270,10 +2334,38 @@ type CleanupItemV1 struct {
 }
 ```
 
-The exact schema values are `state-v1`, `lock-v1`, and `pending-build-v1`.
+`InstallationStateV1.Status` is exactly `configuring` or `ready`. Reploy does
+not decode an older status-less installation record.
+
+The exact schema values are `state-v1`, `deployment-v1`, `installation-v1`,
+`lock-v1`, and `pending-build-v1`.
 `state-v1` has at most one `Current`; an environment that has not been built has
-none. Overlay collections obey `overlay-v1` ordering. State contains no prior
-generation list.
+none. `Blueprint` is the complete resolved `blueprint-resolved-v1` document,
+not a source path or package reference. Its deterministic JSON is carried as a
+validated string because resolved ports and durations are numeric while the
+outer canonical state format deliberately permits no JSON numbers. Loading
+decodes it back to the typed resolved blueprint; publication and reuse require
+its domain-separated digest to equal `BuildLockV1.BlueprintDigest`. `Platform`
+is the selected canonical OCI target and must be covered by the resolved
+blueprint's compatibility declaration. It is never inferred from the Reploy
+process architecture, Docker environment defaults, or the current image.
+Overlay collections obey `overlay-v1` ordering. State contains no prior
+generation list. The optional `Deployment.Installation` node contains only
+machine-local facts about an installed copy: target directory, service and
+container identities, and host port bindings. It is preserved when desired
+state or the current build changes, but is excluded from blueprint, provider,
+request, build-lock, and image identity because none of those facts is needed
+to reproduce the environment.
+
+`Blueprint`, `Platform`, and `Overlay` are the desired inputs. An explicit
+stage, platform selection, or overlay mutation atomically updates them while
+retaining `Current`; the retained generation may therefore name a lock for the
+preceding desired inputs. Staging a new blueprint validates the retained overlay
+against that blueprint and fails without changing state rather than silently
+dropping incompatible options or direct packages. That is
+a normal stale build, not corruption. Runtime recomputes exact reuse and tells
+the user to run `reploy build`; successful publication replaces `Current` and
+brings all three values back into agreement.
 
 Graph nodes are sorted by `NodeID`; edges by `(supplier, consumer, requirement
 ID, output component, output name)` and must reference existing nodes. Node
@@ -2644,6 +2736,8 @@ pass.
 - Enforce the `/mnt` runtime namespace, explicit additional roots, no-shadow
   image inspection, protected-path checks, final-image portable access, and
   host-side mount-source checks without a separate runtime preflight container.
+- Implement the one-shot `--output-dir` and `--output-file` contracts, including
+  adjacent hidden staging and atomic single-file publication.
 
 Gate: full tests and CLI Docker smoke prove that `reploy build` builds without
 installing; staged install reuses a matching build and rebuilds a missing or

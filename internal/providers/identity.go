@@ -28,12 +28,11 @@ type ResolvedSourceInput struct {
 }
 
 type ResolvedRequestV1 struct {
-	Schema          string                       `json:"schema"`
-	BlueprintDigest canonical.Digest             `json:"blueprint_digest"`
-	OverlayDigest   canonical.Digest             `json:"overlay_digest"`
-	Platform        blueprint.Platform           `json:"platform"`
-	Components      []ResolvedComponentRequestV1 `json:"components"`
-	Sources         []ResolvedSourceInput        `json:"sources"`
+	Schema        string                       `json:"schema"`
+	OverlayDigest canonical.Digest             `json:"overlay_digest"`
+	Platform      blueprint.Platform           `json:"platform"`
+	Components    []ResolvedComponentRequestV1 `json:"components"`
+	Sources       []ResolvedSourceInput        `json:"sources"`
 }
 
 type ResolverCacheKeyV1 struct {
@@ -66,9 +65,6 @@ func ResolvedRequestDigest(request ResolvedRequestV1, validateOwner ResolvedRequ
 func ValidateResolvedRequestV1(request ResolvedRequestV1, validateOwner ResolvedRequestOwnerValidator) error {
 	if request.Schema != ResolvedRequestSchemaV1 {
 		return fmt.Errorf("resolved request schema must be %q", ResolvedRequestSchemaV1)
-	}
-	if err := request.BlueprintDigest.Validate(); err != nil {
-		return fmt.Errorf("resolved request blueprint digest: %w", err)
 	}
 	if err := request.OverlayDigest.Validate(); err != nil {
 		return fmt.Errorf("resolved request overlay digest: %w", err)
@@ -155,6 +151,13 @@ func ProviderNodePlanDigest(node NodeSpec) (canonical.Digest, error) {
 		return "", err
 	}
 	return canonical.Sum("provider-plan", ProviderPlanSchemaV1, node)
+}
+
+func ProviderRequestDigest(request CanonicalProviderRequest) (canonical.Digest, error) {
+	if _, err := CanonicalProviderRequestBytes(request); err != nil {
+		return "", err
+	}
+	return canonical.Sum("provider-request", request.Schema, request)
 }
 
 func ResolverCacheKeyDigest(key ResolverCacheKeyV1) (canonical.Digest, error) {

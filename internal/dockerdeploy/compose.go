@@ -28,6 +28,7 @@ type RunOptions struct {
 	Stdout                 io.Writer
 	Stderr                 io.Writer
 	DockerPreflightTimeout time.Duration
+	NoCache                bool
 }
 
 const commandOutputErrorLimit = 4000

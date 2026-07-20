@@ -19,6 +19,7 @@ import (
 type PythonResolverSession struct {
 	descriptor    deploy.ImageDescriptor
 	workspace     PreparedProbeWorkspace
+	artifacts     PreparedPythonResolverArtifacts
 	containerName string
 	observations  map[string]probe.ExecutableObservationV1
 	inspected     map[string]string
@@ -92,7 +93,7 @@ func OpenPythonResolverSession(
 		return nil, errors.Join(startErr, cleanupErr)
 	}
 	return &PythonResolverSession{
-		descriptor: descriptor, workspace: workspace, containerName: containerName,
+		descriptor: descriptor, workspace: workspace, artifacts: artifacts, containerName: containerName,
 		observations: map[string]probe.ExecutableObservationV1{},
 		inspected:    map[string]string{},
 	}, nil
@@ -337,6 +338,9 @@ func (session *PythonResolverSession) ResolveWheels(
 	version, inspected := session.inspected[interpreter.InvocationPath]
 	if !inspected || interpreter.Facts.Schema != pythonprovider.InterpreterFactsSchemaV1 || interpreter.Facts.Value["version"] != version {
 		return fmt.Errorf("Python wheel resolver interpreter was not inspected in this container")
+	}
+	if err := StagePythonResolverSourceConstraints(session.artifacts, request, sources, reusable); err != nil {
+		return err
 	}
 	resolverArgv, err := pythonprovider.WheelResolverArgv(interpreter.InvocationPath, request, sources, reusable)
 	if err != nil {

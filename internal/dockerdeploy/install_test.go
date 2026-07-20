@@ -411,9 +411,10 @@ func TestInstallOnDarwinWritesDockerDesktopDeployment(t *testing.T) {
 
 func TestDockerDesktopInstallStartFailsClearlyWhenManagedFileIsMissing(t *testing.T) {
 	deployDir := makeSingleFileConfigAppCommandDeployment(t)
+	targetDir := filepath.Join(t.TempDir(), "installed")
 	err := applyDockerDesktopInstallPlan(installPlan{
 		SourceDir:              deployDir,
-		TargetDir:              deployDir,
+		TargetDir:              targetDir,
 		AppID:                  "demo",
 		ControlScript:          "democtl",
 		ConfigDir:              "conf",
@@ -421,7 +422,6 @@ func TestDockerDesktopInstallStartFailsClearlyWhenManagedFileIsMissing(t *testin
 		ManagedFiles:           []string{".arbiter.env"},
 		ComposeProject:         "demo-project",
 		Backend:                installBackendDockerDesktop,
-		InPlace:                true,
 		Start:                  true,
 		DockerPreflightTimeout: time.Second,
 	})
@@ -1662,10 +1662,9 @@ func TestDirectInstallSystemScopeRequiresRootBeforePreparingTarget(t *testing.T)
 	installGeteuid = func() int { return 1000 }
 
 	_, err = DirectInstall(DirectInstallOptions{
-		Pack:    ref,
-		Target:  target,
-		Scope:   InstallScopeSystem,
-		InPlace: true,
+		Pack:   ref,
+		Target: target,
+		Scope:  InstallScopeSystem,
 	})
 	if err == nil {
 		t.Fatal("expected root requirement error")

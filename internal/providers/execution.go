@@ -16,15 +16,16 @@ type ResolveInput struct {
 	Node              NodeSpec
 	Candidates        []RequirementCandidatesV1
 	Platform          blueprint.Platform
-	Sources           []ResolvedSourceInput
+	SourceCandidates  []ResolvedSourceInput
 	Upstream          RealizedImageV1
 	ReusableArtifacts []providerstore.StoreObjectRef
 }
 
 type ResolveResult struct {
-	Bundle   ResolvedBundle
-	Profile  RequirementProfile
-	Evidence ValidationEvidence
+	Bundle          ResolvedBundle
+	Profile         RequirementProfile
+	Evidence        ValidationEvidence
+	SelectedSources []ResolvedSourceInput
 }
 
 type MaterializeInput struct {
@@ -47,8 +48,8 @@ func ValidateResolveInput(input ResolveInput) error {
 	if input.Node.ID == "base" {
 		return fmt.Errorf("base root does not have a provider resolution operation")
 	}
-	if input.Candidates == nil || input.Sources == nil || input.ReusableArtifacts == nil {
-		return fmt.Errorf("resolve input candidates, sources, and reusable artifacts must use arrays")
+	if input.Candidates == nil || input.SourceCandidates == nil || input.ReusableArtifacts == nil {
+		return fmt.Errorf("resolve input candidates, source candidates, and reusable artifacts must use arrays")
 	}
 	if len(input.Candidates) != len(input.Node.Requirements.Executables) {
 		return fmt.Errorf("resolve input candidate groups do not match executable requirements")
@@ -80,9 +81,9 @@ func ValidateResolveInput(input ResolveInput) error {
 	for _, component := range input.Node.Components {
 		components[component] = true
 	}
-	for index, source := range input.Sources {
-		if index > 0 && compareResolvedSourceInputs(input.Sources[index-1], source) >= 0 {
-			return fmt.Errorf("resolve input sources must be unique and sorted by component and logical package")
+	for index, source := range input.SourceCandidates {
+		if index > 0 && compareResolvedSourceInputs(input.SourceCandidates[index-1], source) >= 0 {
+			return fmt.Errorf("resolve input source candidates must be unique and sorted by component and logical package")
 		}
 		if err := ValidateResolvedSourceInput(source); err != nil {
 			return fmt.Errorf("resolve input source %d: %w", index, err)
@@ -112,6 +113,9 @@ func ValidateResolveResult(
 	validateBundleOwner ResolvedBundleOwnerValidator,
 ) error {
 	if err := ValidateResolveInput(input); err != nil {
+		return err
+	}
+	if err := validateSelectedResolveSources(input.SourceCandidates, result.SelectedSources); err != nil {
 		return err
 	}
 	profileDigest, err := RequirementProfileDigest(result.Profile, validateProfileOwner)
@@ -144,6 +148,13 @@ func ValidateResolveResult(
 	if payload.NodeID != input.Node.ID || payload.Provider != input.Node.Provider {
 		return fmt.Errorf("resolve result bundle does not identify the input node")
 	}
+	selectedSourcesMatch, err := canonicalValuesEqual(payload.SelectedSources, result.SelectedSources)
+	if err != nil {
+		return err
+	}
+	if !selectedSourcesMatch {
+		return fmt.Errorf("resolve result selected sources do not match its bundle")
+	}
 	requestMatches, err := canonicalValuesEqual(payload.Request, input.Node.Request)
 	if err != nil {
 		return err
@@ -163,6 +174,36 @@ func ValidateResolveResult(
 	}
 	if !upstreamMatches {
 		return fmt.Errorf("resolve result bundle upstream does not match resolve input upstream")
+	}
+	return nil
+}
+
+func validateSelectedResolveSources(candidates []ResolvedSourceInput, selected []ResolvedSourceInput) error {
+	if selected == nil {
+		return fmt.Errorf("resolve result selected sources must use an array")
+	}
+	candidateIndex := 0
+	for index, source := range selected {
+		if index > 0 && compareResolvedSourceInputs(selected[index-1], source) >= 0 {
+			return fmt.Errorf("resolve result selected sources must be unique and sorted by component and logical package")
+		}
+		if err := ValidateResolvedSourceInput(source); err != nil {
+			return fmt.Errorf("resolve result selected source %d: %w", index, err)
+		}
+		for candidateIndex < len(candidates) && compareResolvedSourceInputs(candidates[candidateIndex], source) < 0 {
+			candidateIndex++
+		}
+		if candidateIndex == len(candidates) || compareResolvedSourceInputs(candidates[candidateIndex], source) != 0 {
+			return fmt.Errorf("resolve result selected source %q for component %q was not offered as a candidate", source.LogicalPackage, source.Component)
+		}
+		matches, err := canonicalValuesEqual(candidates[candidateIndex], source)
+		if err != nil {
+			return err
+		}
+		if !matches {
+			return fmt.Errorf("resolve result selected source %q for component %q does not exactly match its candidate", source.LogicalPackage, source.Component)
+		}
+		candidateIndex++
 	}
 	return nil
 }

@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -528,7 +529,7 @@ func TestAppCommandPassesTerminalColumns(t *testing.T) {
 func TestAppCommandReportsAppCommandFailure(t *testing.T) {
 	deployDir := makeAppCommandDeployment(t)
 	restore := stubAppCommandRunner(func(spec CommandSpec, options RunOptions) error {
-		if spec.Name == "docker" && containsInOrder(spec.Args, []string{"container", "rm", "-f"}) {
+		if spec.Name == "docker" && containsInOrder(spec.Args, []string{"container", "rm", "--force", "--volumes"}) {
 			return nil
 		}
 		return fmt.Errorf("docker failed: exit status 2")
@@ -541,6 +542,14 @@ func TestAppCommandReportsAppCommandFailure(t *testing.T) {
 	}
 	if err.Error() != "app command failed: exit status 2" {
 		t.Fatalf("error = %q", err)
+	}
+}
+
+func TestTemporaryContainerCleanupRemovesAnonymousVolumes(t *testing.T) {
+	spec := TemporaryContainerCleanupCommand("demo-oneoff")
+	want := []string{"container", "rm", "--force", "--volumes", "demo-oneoff"}
+	if !reflect.DeepEqual(spec.Args, want) {
+		t.Fatalf("cleanup args = %#v, want %#v", spec.Args, want)
 	}
 }
 
@@ -579,8 +588,8 @@ func TestConfigCheckRunsOneOffOnDeploymentProject(t *testing.T) {
 	}
 }
 
-func TestTemporaryComposeCommandReportsCleanupFailure(t *testing.T) {
-	err := runTemporaryComposeCommand(
+func TestTemporaryContainerCommandReportsCleanupFailure(t *testing.T) {
+	err := runTemporaryContainerCommand(
 		func(spec CommandSpec, options RunOptions) error {
 			if spec.Name == "cleanup" {
 				return errors.New("cleanup boom")
@@ -599,9 +608,9 @@ func TestTemporaryComposeCommandReportsCleanupFailure(t *testing.T) {
 	}
 }
 
-func TestTemporaryComposeCommandSkipsCleanupAfterSuccess(t *testing.T) {
+func TestTemporaryContainerCommandSkipsCleanupAfterSuccess(t *testing.T) {
 	var specs []CommandSpec
-	err := runTemporaryComposeCommand(
+	err := runTemporaryContainerCommand(
 		func(spec CommandSpec, options RunOptions) error {
 			specs = append(specs, spec)
 			return nil
@@ -618,8 +627,8 @@ func TestTemporaryComposeCommandSkipsCleanupAfterSuccess(t *testing.T) {
 	}
 }
 
-func TestTemporaryComposeCommandIgnoresMissingContainerCleanup(t *testing.T) {
-	err := runTemporaryComposeCommand(
+func TestTemporaryContainerCommandIgnoresMissingContainerCleanup(t *testing.T) {
+	err := runTemporaryContainerCommand(
 		func(spec CommandSpec, options RunOptions) error {
 			if spec.Name == "docker" {
 				return errors.New("docker failed: exit status 1\ncommand output:\nError response from daemon: No such container: demo-oneoff")
@@ -635,6 +644,33 @@ func TestTemporaryComposeCommandIgnoresMissingContainerCleanup(t *testing.T) {
 	}
 	if err.Error() != "check boom" {
 		t.Fatalf("error = %q, want original run error only", err.Error())
+	}
+}
+
+func TestTemporaryContainerCommandCleansWithFreshCapturedIOAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var cleanupOptions RunOptions
+	err := runTemporaryContainerCommand(
+		func(spec CommandSpec, options RunOptions) error {
+			if spec.Name == "cleanup" {
+				cleanupOptions = options
+				return nil
+			}
+			return errors.New("command canceled")
+		},
+		CommandSpec{Name: "run"},
+		CommandSpec{Name: "cleanup"},
+		RunOptions{Context: ctx, Stdin: strings.NewReader("input"), Stdout: io.Discard, Stderr: io.Discard},
+	)
+	if err == nil || err.Error() != "command canceled" {
+		t.Fatalf("error = %v, want command cancellation", err)
+	}
+	if cleanupOptions.Context == nil || cleanupOptions.Context.Err() != nil {
+		t.Fatalf("cleanup context = %#v, want fresh active context", cleanupOptions.Context)
+	}
+	if cleanupOptions.Stdin != nil || cleanupOptions.Stdout != nil || cleanupOptions.Stderr != nil {
+		t.Fatalf("cleanup I/O was not captured: %#v", cleanupOptions)
 	}
 }
 

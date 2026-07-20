@@ -37,6 +37,46 @@ func RemoveEnvironmentImageReference(
 	return removeEnvironmentImageReference(ctx, image, references, kind, environment, deploymentDir, runDockerOutput)
 }
 
+func VerifyEnvironmentGenerationReference(
+	ctx context.Context,
+	image providers.RealizedImageV1,
+	reference string,
+	environment string,
+	deploymentDir string,
+) error {
+	return verifyEnvironmentGenerationReference(ctx, image, reference, environment, deploymentDir, runDockerOutput)
+}
+
+func verifyEnvironmentGenerationReference(
+	ctx context.Context,
+	image providers.RealizedImageV1,
+	reference string,
+	environment string,
+	deploymentDir string,
+	run dockerOutputRunner,
+) error {
+	if ctx == nil {
+		return fmt.Errorf("verify environment generation reference requires a context")
+	}
+	if err := image.Validate(); err != nil {
+		return fmt.Errorf("verify environment generation reference: %w", err)
+	}
+	if err := ValidateEnvironmentGenerationReference(reference, environment, deploymentDir); err != nil {
+		return err
+	}
+	if run == nil {
+		return fmt.Errorf("verify environment generation reference requires a Docker runner")
+	}
+	output, err := run(ctx, "image", "inspect", "--format", "{{.Id}}", reference)
+	if err != nil {
+		return fmt.Errorf("inspect environment generation reference %q: %w", reference, err)
+	}
+	if strings.TrimSpace(output) != string(image.ConfigDigest) {
+		return fmt.Errorf("environment generation reference %q names config ID %q, want %s", reference, strings.TrimSpace(output), image.ConfigDigest)
+	}
+	return nil
+}
+
 func removeEnvironmentImageReference(
 	ctx context.Context,
 	image providers.RealizedImageV1,

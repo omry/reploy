@@ -12,17 +12,23 @@ import (
 )
 
 func overlayTestDocument() blueprint.Document {
-	return blueprint.Document{Environment: blueprint.Environment{Components: map[string]blueprint.Component{
-		"base": {Type: blueprint.ComponentTypeBase, Base: &blueprint.BaseComponent{Image: "debian:13"}},
-		"app": {
-			Type: blueprint.ComponentTypePython, Python: &blueprint.PythonComponent{Requirements: []string{"demo"}},
-			Options: map[string]blueprint.ComponentOption{"debug": {Description: "Debug", PythonRequirements: []string{"debugpy"}}},
-		},
-		"system": {
-			Type: blueprint.ComponentTypeAPT, APT: &blueprint.APTComponent{Packages: []blueprint.APTPackageRequest{{Name: "curl"}}},
-			Options: map[string]blueprint.ComponentOption{"git": {Description: "Git", APTPackages: []blueprint.APTPackageRequest{{Name: "git"}}}},
-		},
-	}}}
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		panic(err)
+	}
+	return blueprint.Document{
+		Blueprint: blueprint.Metadata{Compatibility: blueprint.Compatibility{Platforms: []blueprint.Platform{platform}}},
+		Environment: blueprint.Environment{Components: map[string]blueprint.Component{
+			"base": {Type: blueprint.ComponentTypeBase, Base: &blueprint.BaseComponent{Image: "debian:13"}},
+			"app": {
+				Type: blueprint.ComponentTypePython, Python: &blueprint.PythonComponent{Requirements: []string{"demo"}},
+				Options: map[string]blueprint.ComponentOption{"debug": {Description: "Debug", PythonRequirements: []string{"debugpy"}}},
+			},
+			"system": {
+				Type: blueprint.ComponentTypeAPT, APT: &blueprint.APTComponent{Packages: []blueprint.APTPackageRequest{{Name: "curl"}}},
+				Options: map[string]blueprint.ComponentOption{"git": {Description: "Git", APTPackages: []blueprint.APTPackageRequest{{Name: "git"}}}},
+			},
+		}}}
 }
 
 func overlayTestPackageValidator(componentType blueprint.ComponentType, request providers.CanonicalPackageRequest) error {

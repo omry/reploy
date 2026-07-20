@@ -119,3 +119,24 @@ func TestOverlayPackageMutationsRemoveExactCanonicalRequest(t *testing.T) {
 		t.Fatalf("direct packages = %#v", updated.DirectPackages)
 	}
 }
+
+func TestOverlayMutationsPreserveCanonicalEmptyArrays(t *testing.T) {
+	request := DirectPackageRequest{
+		Component: "app",
+		Package:   providers.CanonicalPackageRequest{Schema: "test-package-v1", Value: canonical.Object{}},
+	}
+	added := AddOverlayPackages(EmptyRequestOverlayV1(), []DirectPackageRequest{request})
+	if added.SelectedOptions == nil {
+		t.Fatal("adding a package changed selected_options from an empty array to null")
+	}
+	removed, err := RemoveOverlayPackages(added, []DirectPackageRequest{request})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed.SelectedOptions == nil || removed.DirectPackages == nil {
+		t.Fatalf("removed overlay collections = %#v", removed)
+	}
+	if _, err := RequestOverlayDigestV1(removed); err != nil {
+		t.Fatalf("mutated overlay is not canonical: %v", err)
+	}
+}

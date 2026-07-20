@@ -38,11 +38,15 @@ docker: {}
 func writeOverlayCommandDeployment(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	blueprintPath := filepath.Join(root, "test.blueprint.yaml")
-	if err := os.WriteFile(blueprintPath, []byte(overlayCommandBlueprint), 0o644); err != nil {
+	syntax, err := blueprint.Decode([]byte(overlayCommandBlueprint))
+	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := deploy.ParsePackRef("file:" + blueprintPath)
+	document, err := blueprint.Resolve(syntax)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := blueprint.EncodeResolvedDocumentV1(document)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,12 +54,9 @@ func writeOverlayCommandDeployment(t *testing.T) string {
 	if err := os.MkdirAll(filepath.Join(dir, ".reploy"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	content, err := deploy.MarshalDeploymentState(deploy.DeploymentState{
-		SchemaVersion:    1,
-		Phase:            deploy.PhaseStaged,
-		EnvironmentModel: true,
-		Blueprint:        ref,
-		Overlay:          deploy.EmptyRequestOverlayV1(),
+	content, err := deploy.EncodeStateV1(deploy.StateV1{
+		Schema: deploy.StateSchemaV1, Blueprint: payload,
+		Platform: document.Blueprint.Compatibility.Platforms[0], Overlay: deploy.EmptyRequestOverlayV1(),
 	})
 	if err != nil {
 		t.Fatal(err)

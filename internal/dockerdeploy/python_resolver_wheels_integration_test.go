@@ -90,7 +90,14 @@ func TestPythonResolverWheelIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := session.ResolveWheels(ctx, consumer.EnvironmentLauncher, requirement, interpreter, request, []providers.ResolvedSourceInput{}, []providerstore.ArtifactDescriptor{wheel}); err != nil {
+	source := providers.ResolvedSourceInput{
+		Schema: providers.ResolvedSourceInputSchemaV1, Component: "application", LogicalPackage: "demo-server",
+		SourceManifestDigest: canonical.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256([]byte("demo source")))), BuilderProfile: "integration-v1",
+		BuildSettings:     providers.CanonicalProviderData{Schema: "python-source-build-settings-v1", Value: canonical.Object{}},
+		EcosystemMetadata: providers.CanonicalProviderData{Schema: "python-source-metadata-v1", Value: canonical.Object{}},
+		ArtifactDigest:    wheel.SHA256,
+	}
+	if err := session.ResolveWheels(ctx, consumer.EnvironmentLauncher, requirement, interpreter, request, []providers.ResolvedSourceInput{source}, []providerstore.ArtifactDescriptor{wheel}); err != nil {
 		t.Fatal(err)
 	}
 	if err := session.Stop(ctx); err != nil {

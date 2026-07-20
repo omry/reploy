@@ -65,6 +65,21 @@ func ValidateEnvironmentImageReferences(references EnvironmentImageReferences, e
 	return nil
 }
 
+func ValidateEnvironmentGenerationReference(reference string, environment string, deploymentDir string) error {
+	if strings.TrimSpace(environment) == "" {
+		return fmt.Errorf("environment image reference requires an environment name")
+	}
+	directoryHash, err := pathIdentityHash(deploymentDir)
+	if err != nil {
+		return fmt.Errorf("environment image reference directory: %w", err)
+	}
+	prefix := "reploy/env/" + dockerNameSlug(environment, "environment") + "-" + directoryHash + ":g-"
+	if err := validateEnvironmentReference(reference, prefix); err != nil {
+		return fmt.Errorf("generation environment image reference: %w", err)
+	}
+	return nil
+}
+
 func randomReferenceSuffix(reader io.Reader) (string, error) {
 	content := make([]byte, environmentReferenceRandomBytes)
 	if _, err := io.ReadFull(reader, content); err != nil {

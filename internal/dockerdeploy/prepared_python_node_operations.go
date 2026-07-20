@@ -134,7 +134,7 @@ func (operations PreparedPythonNodeOperations) resolveFresh(
 			}
 			if err := session.ResolveWheels(
 				ctx, consumer.EnvironmentLauncher, requirement, interpreter,
-				input.Node.Request, input.Sources, verifiedWheels,
+				input.Node.Request, input.SourceCandidates, verifiedWheels,
 			); err != nil {
 				return "", err
 			}

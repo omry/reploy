@@ -181,7 +181,6 @@ func preparedPythonResolveRequest(t *testing.T, descriptor deploy.ImageDescripto
 		t.Fatal(err)
 	}
 	pythonNodes, err := (pythonprovider.ComponentProvider{}).Plan(providers.PlanInput{
-		BlueprintDigest: rendererDigest("b"),
 		Components: []providers.ResolvedComponentRequestV1{{
 			Component: "application", Provider: blueprint.ComponentTypePython, Request: pythonRequest,
 		}},
@@ -230,7 +229,7 @@ func preparedPythonResolveRequest(t *testing.T, descriptor deploy.ImageDescripto
 		Candidate: providers.ExecutableCandidate{InvocationPath: "/usr/bin/python3", Provenance: provenance},
 		Evidence:  baseEvidence,
 	}}
-	request.Sources = []providers.ResolvedSourceInput{}
+	request.SourceCandidates = []providers.ResolvedSourceInput{}
 	request.ReusableArtifacts = []providerstore.StoreObjectRef{}
 	return request
 }

@@ -108,6 +108,20 @@ func (lock *OperationLock) Path() string {
 	return lock.path
 }
 
+// RequireHeld fails when the operation lock has not been acquired or has
+// already been released. It performs no filesystem access.
+func (lock *OperationLock) RequireHeld() error {
+	if lock == nil {
+		return fmt.Errorf("operation lock is not held")
+	}
+	lock.mutex.Lock()
+	defer lock.mutex.Unlock()
+	if lock.released || lock.file == nil || lock.path == "" {
+		return fmt.Errorf("operation lock is not held")
+	}
+	return nil
+}
+
 // Unlock releases the kernel lock and closes its descriptor. Repeated calls
 // are harmless so cleanup paths can defer it safely.
 func (lock *OperationLock) Unlock() error {

@@ -41,7 +41,7 @@ func TestExecutePreparedPythonGraphDerivesAllReuseFromCurrentLock(t *testing.T) 
 	}
 	result, err := ExecutePreparedPythonGraph(context.Background(), PreparedPythonGraphExecutionInput{
 		Store: fixture.store, Plan: fixture.request.Plan, BaseDescriptor: descriptor,
-		BaseCatalog: fixture.request.EarlierCatalog, Sources: fixture.request.Sources, SourceWheels: fixture.sourceWheels, CurrentLock: &fixture.lock,
+		BaseCatalog: fixture.request.EarlierCatalog, Sources: fixture.request.SourceCandidates, SourceWheels: fixture.sourceWheels, CurrentLock: &fixture.lock,
 		FinalImageConfig: pythonConsumerTestImageConfig(),
 	})
 	if err != nil {

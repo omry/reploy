@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -49,7 +50,7 @@ func TestWheelNodeResolverReturnsCanonicalBundleThroughGraph(t *testing.T) {
 		},
 	}
 	result, err := providerapi.ExecuteProviderGraph(context.Background(), providerapi.GraphExecutionRequest{
-		Plan: plan, Platform: platform, Sources: []providerapi.ResolvedSourceInput{},
+		Plan: plan, Platform: platform, SourceCandidates: []providerapi.ResolvedSourceInput{},
 		BaseImage: upstream, BaseCatalog: catalog,
 		ReusableArtifacts: map[providerapi.NodeID][]providerstore.StoreObjectRef{},
 		CachedResolutions: map[providerapi.NodeID]providerapi.ResolveResult{},
@@ -137,7 +138,7 @@ func TestWheelNodeResolverRejectsUnexpectedOrLinkedOutput(t *testing.T) {
 			}
 			_, err := providerapi.ResolveProviderNode(context.Background(), providerapi.ResolveNodeRequest{
 				Plan: plan, NodeID: "python/application", EarlierCatalog: catalog,
-				Platform: platform, Sources: []providerapi.ResolvedSourceInput{}, Upstream: upstream,
+				Platform: platform, SourceCandidates: []providerapi.ResolvedSourceInput{}, Upstream: upstream,
 				ReusableArtifacts: []providerstore.StoreObjectRef{},
 			}, resolver, preparedTestSink{}, providerapi.ProviderOwnerValidators{
 				Profile: ValidateRequirementProfileV1, Bundle: ValidateResolvedBundlePayloadV1,
@@ -208,6 +209,10 @@ func TestWheelNodeResolverRequiresResolvedSourceArtifactDigest(t *testing.T) {
 		EcosystemMetadata: providerapi.CanonicalProviderData{Schema: "python-source-metadata-v1", Value: canonical.Object{}},
 		ArtifactDigest:    canonical.Digest("sha256:" + wheelDigest),
 	}
+	unusedSource := source
+	unusedSource.LogicalPackage = "unused-source"
+	unusedSource.SourceManifestDigest = schemaTestDigest("6")
+	unusedSource.ArtifactDigest = schemaTestDigest("7")
 	resolver := WheelNodeResolver{
 		PrepareWheels: func(context.Context, providerapi.ResolveInput, providerapi.ExecutableEvidence) (string, error) {
 			return dir, nil
@@ -218,7 +223,7 @@ func TestWheelNodeResolverRequiresResolvedSourceArtifactDigest(t *testing.T) {
 	}
 	request := providerapi.ResolveNodeRequest{
 		Plan: plan, NodeID: "python/application", EarlierCatalog: catalog,
-		Platform: platform, Sources: []providerapi.ResolvedSourceInput{source}, Upstream: upstream,
+		Platform: platform, SourceCandidates: []providerapi.ResolvedSourceInput{source, unusedSource}, Upstream: upstream,
 		ReusableArtifacts: []providerstore.StoreObjectRef{},
 	}
 	validators := providerapi.ProviderOwnerValidators{Profile: ValidateRequirementProfileV1, Bundle: ValidateResolvedBundlePayloadV1}
@@ -230,8 +235,11 @@ func TestWheelNodeResolverRequiresResolvedSourceArtifactDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bundle.Sources) != 1 || bundle.Sources[0].LogicalPackage != "demo-server" {
+	if len(bundle.Sources) != 1 || !reflect.DeepEqual(bundle.Sources[0], source) {
 		t.Fatalf("sources = %#v", bundle.Sources)
+	}
+	if len(result.SelectedSources) != 1 || !reflect.DeepEqual(result.SelectedSources[0], source) {
+		t.Fatalf("selected sources = %#v", result.SelectedSources)
 	}
 	component, profileSources, err := decodeProfileFactsV1(result.Profile.Facts)
 	if err != nil {
@@ -241,8 +249,8 @@ func TestWheelNodeResolverRequiresResolvedSourceArtifactDigest(t *testing.T) {
 		t.Fatalf("profile sources = %#v for %q", profileSources, component)
 	}
 	staleRequest := request
-	staleRequest.Sources = append([]providerapi.ResolvedSourceInput{}, request.Sources...)
-	staleRequest.Sources[0].ArtifactDigest = schemaTestDigest("5")
+	staleRequest.SourceCandidates = append([]providerapi.ResolvedSourceInput{}, request.SourceCandidates...)
+	staleRequest.SourceCandidates[0].ArtifactDigest = schemaTestDigest("5")
 	if _, err := providerapi.ResolveProviderNode(context.Background(), staleRequest, resolver, preparedTestSink{}, validators); err == nil || !strings.Contains(err.Error(), "want resolved artifact") {
 		t.Fatalf("stale source artifact error = %v", err)
 	}
@@ -266,7 +274,7 @@ func preparedNodeTestPlan(t *testing.T, requirement string) (providerapi.Provide
 		t.Fatal(err)
 	}
 	nodes, err := (ComponentProvider{}).Plan(providerapi.PlanInput{
-		BlueprintDigest: schemaTestDigest("1"), Platform: platform,
+		Platform:   platform,
 		Components: []providerapi.ResolvedComponentRequestV1{{Component: "application", Provider: blueprint.ComponentTypePython, Request: request}},
 	})
 	if err != nil {

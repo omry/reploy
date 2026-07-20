@@ -85,7 +85,7 @@ func TestAPTProviderPlansSharedAuthorityAndDeclaredOutputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	nodes, err := (ComponentProvider{}).Plan(providers.PlanInput{
-		BlueprintDigest: aptSchemaDigest("a"), Platform: platform,
+		Platform: platform,
 		Components: []providers.ResolvedComponentRequestV1{
 			{Component: "tools", Provider: blueprint.ComponentTypeAPT, Request: toolsRequest},
 			{Component: "system", Provider: blueprint.ComponentTypeAPT, Request: systemRequest},

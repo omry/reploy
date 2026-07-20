@@ -45,6 +45,51 @@ func TestResolveProducesTypedEnvironment(t *testing.T) {
 	}
 }
 
+func TestResolveCanonicalizesAdditionalDockerMountRoots(t *testing.T) {
+	value := strings.Replace(minimalBlueprint, "docker:\n", "docker:\n  additional_mount_roots: [/srv/z, /etc/demo]\n", 1)
+	source, err := Decode([]byte(value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := Resolve(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/etc/demo", "/srv/z"}
+	if !reflect.DeepEqual(document.Docker.AdditionalMountRoots, want) {
+		t.Fatalf("additional mount roots = %#v, want %#v", document.Docker.AdditionalMountRoots, want)
+	}
+}
+
+func TestResolveRejectsUnsafeAdditionalDockerMountRoots(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		roots string
+		want  string
+	}{
+		{name: "relative", roots: "[srv/demo]", want: "normalized absolute"},
+		{name: "root", roots: "[/]", want: "other than /"},
+		{name: "unclean", roots: "[/srv/../etc]", want: "normalized absolute"},
+		{name: "duplicate", roots: "[/srv/demo, /srv/demo]", want: "overlap"},
+		{name: "nested", roots: "[/srv, /srv/demo]", want: "overlap"},
+		{name: "nested separated by sort", roots: "[/srv, /srv-a, /srv/demo]", want: "overlap"},
+		{name: "mnt", roots: "[/mnt]", want: "built-in /mnt"},
+		{name: "beneath mnt", roots: "[/mnt/demo]", want: "built-in /mnt"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := strings.Replace(minimalBlueprint, "docker:\n", "docker:\n  additional_mount_roots: "+test.roots+"\n", 1)
+			source, err := Decode([]byte(value))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = Resolve(source)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestResolveRequiresStrictBaseComponent(t *testing.T) {
 	tests := []struct {
 		name string
@@ -119,7 +164,7 @@ func TestResolveRejectsProviderOwnedUnionFields(t *testing.T) {
 	}
 }
 
-func TestResolveAPTComponentSyntaxAndPublicGate(t *testing.T) {
+func TestResolveAPTComponentSyntax(t *testing.T) {
 	value := strings.Replace(minimalBlueprint,
 		"    application:\n",
 		"    system:\n      type: apt\n      packages:\n        - curl\n        - package: python3=3.11.2-1+deb12u1\n          exports:\n            python:\n              executable: /usr/bin/python3\n      options:\n        git:\n          description: Install Git.\n          packages: [git]\n    application:\n", 1)
@@ -140,9 +185,12 @@ func TestResolveAPTComponentSyntaxAndPublicGate(t *testing.T) {
 	if got := component.Options["git"].APTPackages; len(got) != 1 || got[0].Name != "git" {
 		t.Fatalf("APT option = %#v", got)
 	}
-	_, err = Resolve(source)
-	if err == nil || !strings.Contains(err.Error(), "type apt is not publicly enabled") {
-		t.Fatalf("public APT gate error = %v", err)
+	document, err := Resolve(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := document.Environment.Components["system"]; got.Type != ComponentTypeAPT || got.APT == nil || len(got.APT.Packages) != 2 {
+		t.Fatalf("resolved APT component = %#v", got)
 	}
 }
 

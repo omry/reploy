@@ -1,0 +1,2 @@
+kind: Changed
+body: Give one-shot environment commands a disk-backed anonymous home volume that is removed with the transient container.

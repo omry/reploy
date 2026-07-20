@@ -50,3 +50,22 @@ func ValidateResolvedRequestOwnersV1(request providers.ResolvedRequestV1) error 
 	}
 	return nil
 }
+
+// RequirementProfileSelectedSourcesV1 dispatches the provider-owned source
+// facts stored directly in one validated build-lock profile.
+func RequirementProfileSelectedSourcesV1(
+	provider blueprint.ComponentType,
+	profile providers.RequirementProfile,
+) ([]providers.ResolvedSourceInput, error) {
+	switch provider {
+	case blueprint.ComponentTypeAPT:
+		if err := apt.ValidateRequirementProfileV1(profile); err != nil {
+			return nil, err
+		}
+		return []providers.ResolvedSourceInput{}, nil
+	case blueprint.ComponentTypePython:
+		return pythonprovider.RequirementProfileSelectedSourcesV1(profile)
+	default:
+		return nil, fmt.Errorf("provider %q does not have a requirement profile", provider)
+	}
+}

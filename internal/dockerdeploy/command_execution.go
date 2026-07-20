@@ -3,11 +3,13 @@ package dockerdeploy
 import (
 	"fmt"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/legacyprovider"
+	"github.com/omry/reploy/internal/providers"
 )
 
 type ResolvedEnvironmentCommand struct {
@@ -32,8 +34,42 @@ func ResolveEnvironmentCommand(document blueprint.Document, outputs map[string]l
 	if !path.IsAbs(output.ImagePath) || output.Binary != executable.Binary || output.Component != executable.Component {
 		return ResolvedEnvironmentCommand{}, fmt.Errorf("command %q executable output does not match blueprint declaration", name)
 	}
+	return resolveEnvironmentCommandAtPath(document, name, forwarded, output.ImagePath)
+}
+
+func resolveLockedEnvironmentCommandV1(document blueprint.Document, catalog []providers.RealizedOutput, name string, forwarded []string) (ResolvedEnvironmentCommand, error) {
+	command, exists := document.Environment.Commands[name]
+	if !exists {
+		return ResolvedEnvironmentCommand{}, fmt.Errorf("unknown environment command %q", name)
+	}
+	executable, exists := document.Environment.Executables[command.Executable]
+	if !exists {
+		return ResolvedEnvironmentCommand{}, fmt.Errorf("command %q executable %q is not declared", name, command.Executable)
+	}
+	invocationPath := ""
+	for _, output := range catalog {
+		if output.SupplierComponent != executable.Component || output.Name != executable.Binary {
+			continue
+		}
+		if invocationPath != "" {
+			return ResolvedEnvironmentCommand{}, fmt.Errorf("command %q executable %q has multiple locked outputs", name, command.Executable)
+		}
+		if !path.IsAbs(output.Candidate.InvocationPath) || output.Evidence.InvocationPath != output.Candidate.InvocationPath {
+			return ResolvedEnvironmentCommand{}, fmt.Errorf("command %q executable output does not match its locked evidence", name)
+		}
+		invocationPath = output.Candidate.InvocationPath
+	}
+	if invocationPath == "" {
+		return ResolvedEnvironmentCommand{}, fmt.Errorf("command %q executable %q is not present in the locked output catalog", name, command.Executable)
+	}
+	return resolveEnvironmentCommandAtPath(document, name, forwarded, invocationPath)
+}
+
+func resolveEnvironmentCommandAtPath(document blueprint.Document, name string, forwarded []string, invocationPath string) (ResolvedEnvironmentCommand, error) {
+	command := document.Environment.Commands[name]
+	executable := document.Environment.Executables[command.Executable]
 	segments := map[blueprint.ArgumentSegment][]string{
-		blueprint.ArgumentBinary:    {output.ImagePath},
+		blueprint.ArgumentBinary:    {invocationPath},
 		blueprint.ArgumentPrefix:    append([]string(nil), executable.ArgvPrefix...),
 		blueprint.ArgumentCommand:   append([]string(nil), command.Argv...),
 		blueprint.ArgumentForwarded: append([]string(nil), forwarded...),
@@ -50,13 +86,25 @@ func ResolveEnvironmentCommand(document blueprint.Document, outputs map[string]l
 	if len(forwarded) > 0 && !usesForwarded {
 		return ResolvedEnvironmentCommand{}, fmt.Errorf("command %q does not accept forwarded arguments", name)
 	}
-	if len(argv) == 0 || argv[0] != output.ImagePath {
+	if len(argv) == 0 || argv[0] != invocationPath {
 		return ResolvedEnvironmentCommand{}, fmt.Errorf("command %q must execute its resolved binary first", name)
 	}
 	return ResolvedEnvironmentCommand{
 		Name: name, Trigger: append([]string(nil), command.Trigger...), Native: command.NativeCommand,
 		Deployed: command.DeployedCommand, ForwardFlags: append([]string(nil), command.ForwardFlags...), Argv: argv,
 	}, nil
+}
+
+func resolveLockedEnvironmentCommandForPlanV1(document blueprint.Document, catalog []providers.RealizedOutput, plan DockerExecutionPlan, name string, forwarded []string) (ResolvedEnvironmentCommand, error) {
+	command, err := resolveLockedEnvironmentCommandV1(document, catalog, name, forwarded)
+	if err != nil {
+		return ResolvedEnvironmentCommand{}, err
+	}
+	command.Argv, err = resolveEnvironmentOperationStrings(document, plan, command.Argv)
+	if err != nil {
+		return ResolvedEnvironmentCommand{}, fmt.Errorf("command %q interpolation: %w", name, err)
+	}
+	return command, nil
 }
 
 // ResolveEnvironmentCommandForPlan performs the operation-time interpolation
@@ -140,15 +188,15 @@ func validateForwardedArguments(commandName string, allowedFlags []string, argum
 	return result, nil
 }
 
-func TransientCommandSpec(plan DockerExecutionPlan, command ResolvedEnvironmentCommand, interactive bool, tty bool) (CommandSpec, error) {
+func TransientCommandSpec(plan DockerExecutionPlan, command ResolvedEnvironmentCommand, output *transientOutputMount, interactive bool, tty bool) (CommandSpec, error) {
 	if len(command.Argv) == 0 || !path.IsAbs(command.Argv[0]) {
 		return CommandSpec{}, fmt.Errorf("transient command requires an absolute resolved executable")
 	}
 	home := temporaryHomeForPlan(plan)
 	args := []string{
-		"run", "--rm", "--name", temporaryOneOffContainerName(plan.ContainerName, "command"),
+		"run", "--rm", "--name", transientCommandContainerName(plan),
 		"--user", plan.RuntimeUser.DockerUser,
-		"--read-only", "--tmpfs", temporaryHomeMountForPlan(plan),
+		"--read-only", "--mount", transientHomeMountForPlan(plan),
 		"--env", "HOME=" + home, "--env", "TMPDIR=" + home,
 	}
 	if interactive {
@@ -167,14 +215,27 @@ func TransientCommandSpec(plan DockerExecutionPlan, command ResolvedEnvironmentC
 		}
 		args = append(args, "--mount", value)
 	}
+	if output != nil {
+		if !filepath.IsAbs(output.HostDirectory) || output.Variable == "" || output.ContainerPath == "" {
+			return CommandSpec{}, fmt.Errorf("transient output mount is incomplete")
+		}
+		args = append(args,
+			"--mount", "type=bind,source="+output.HostDirectory+",target="+runtimeOutputRoot,
+			"--env", output.Variable+"="+output.ContainerPath,
+		)
+	}
 	args = append(args, plan.Image)
 	args = append(args, command.Argv...)
 	return CommandSpec{Name: "docker", Args: args}, nil
 }
 
+func transientCommandContainerName(plan DockerExecutionPlan) string {
+	return temporaryOneOffContainerName(plan.ContainerName, "command")
+}
+
 func ShellCommandSpec(plan DockerExecutionPlan, interactive bool, tty bool) CommandSpec {
 	command := ResolvedEnvironmentCommand{Argv: []string{"/bin/sh"}}
-	spec, _ := TransientCommandSpec(plan, command, interactive, tty)
+	spec, _ := TransientCommandSpec(plan, command, nil, interactive, tty)
 	return spec
 }
 

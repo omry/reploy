@@ -23,7 +23,7 @@ type ResolveNodeRequest struct {
 	NodeID            NodeID
 	EarlierCatalog    []RealizedOutput
 	Platform          blueprint.Platform
-	Sources           []ResolvedSourceInput
+	SourceCandidates  []ResolvedSourceInput
 	Upstream          RealizedImageV1
 	ReusableArtifacts []providerstore.StoreObjectRef
 }
@@ -109,12 +109,12 @@ func buildResolveInput(request ResolveNodeRequest) (NodeSpec, ResolveInput, erro
 	if err != nil {
 		return NodeSpec{}, ResolveInput{}, err
 	}
-	sources, err := filterNodeSources(request.Plan, node, request.Sources)
+	sources, err := filterNodeSources(request.Plan, node, request.SourceCandidates)
 	if err != nil {
 		return NodeSpec{}, ResolveInput{}, err
 	}
 	input := ResolveInput{
-		Node: node, Candidates: candidates, Platform: request.Platform, Sources: sources, Upstream: request.Upstream,
+		Node: node, Candidates: candidates, Platform: request.Platform, SourceCandidates: sources, Upstream: request.Upstream,
 		ReusableArtifacts: append([]providerstore.StoreObjectRef{}, request.ReusableArtifacts...),
 	}
 	if err := ValidateResolveInput(input); err != nil {

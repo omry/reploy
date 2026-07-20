@@ -30,6 +30,7 @@ func validPythonBundlePayload() ResolvedBundleIdentityV1 {
 		Upstream: RealizedImageV1{
 			Digest: testDigest("2"), ConfigDigest: testDigest("3"), RootFSSubject: testDigest("4"),
 		},
+		SelectedSources: []ResolvedSourceInput{},
 		Artifacts: []providerstore.ArtifactDescriptor{{
 			LogicalPath: "wheels/demo.whl", Kind: "wheel", Size: "1024", SHA256: testDigest("5"),
 		}},
@@ -98,6 +99,7 @@ func TestValidateResolvedBundleRejectsMalformedPayload(t *testing.T) {
 		{name: "request provider", mutate: func(value *ResolvedBundleIdentityV1) { value.Request.Provider = blueprint.ComponentTypeAPT }, want: "does not match"},
 		{name: "profile digest", mutate: func(value *ResolvedBundleIdentityV1) { value.RequirementProfileDigest = "bad" }, want: "profile digest"},
 		{name: "upstream", mutate: func(value *ResolvedBundleIdentityV1) { value.Upstream.RootFSSubject = "bad" }, want: "rootfs"},
+		{name: "selected sources", mutate: func(value *ResolvedBundleIdentityV1) { value.SelectedSources = nil }, want: "selected sources"},
 		{name: "artifact", mutate: func(value *ResolvedBundleIdentityV1) { value.Artifacts[0].LogicalPath = "../demo.whl" }, want: "artifact"},
 		{name: "output node", mutate: func(value *ResolvedBundleIdentityV1) { value.Outputs[0].SupplierNode = "python/other" }, want: "supplier node"},
 		{name: "output path", mutate: func(value *ResolvedBundleIdentityV1) { value.Outputs[0].Candidate.InvocationPath = "bin/demo" }, want: "absolute Linux path"},
@@ -134,6 +136,7 @@ func TestValidateResolvedBundleRequiresCanonicalOrdering(t *testing.T) {
 
 func cloneBundlePayloadForTest(payload ResolvedBundleIdentityV1) ResolvedBundleIdentityV1 {
 	result := payload
+	result.SelectedSources = append([]ResolvedSourceInput{}, payload.SelectedSources...)
 	result.Artifacts = append([]providerstore.ArtifactDescriptor{}, payload.Artifacts...)
 	result.Outputs = append([]ResolvedOutput{}, payload.Outputs...)
 	return result

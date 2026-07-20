@@ -35,9 +35,8 @@ type ProviderPlanV1 struct {
 }
 
 type PlanInput struct {
-	BlueprintDigest canonical.Digest
-	Components      []ResolvedComponentRequestV1
-	Platform        blueprint.Platform
+	Components []ResolvedComponentRequestV1
+	Platform   blueprint.Platform
 }
 
 type ResolvedComponentRequestV1 struct {

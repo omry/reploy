@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/deploy"
 )
 
 type DockerPlanContext struct {
@@ -40,7 +41,7 @@ type DockerExecutionPlan struct {
 	TemporaryHome string
 }
 
-const environmentTemporaryHome = "/tmp/reploy-home"
+const environmentTemporaryHome = "/mnt/reploy-home"
 
 type WorkloadExecutionPlan struct {
 	Command   string
@@ -59,12 +60,13 @@ type EndpointExecutionPlan struct {
 }
 
 type MountExecutionPlan struct {
-	Name     string
-	Mode     blueprint.MountMode
-	Source   string
-	Target   string
-	ReadOnly bool
-	Update   blueprint.UpdatePolicy
+	Name       string
+	Mode       blueprint.MountMode
+	Source     string
+	SourceKind string
+	Target     string
+	ReadOnly   bool
+	Update     blueprint.UpdatePolicy
 }
 
 type RuntimeUserPlan struct {
@@ -97,19 +99,20 @@ func PlanDockerExecution(document blueprint.Document, context DockerPlanContext)
 		return DockerExecutionPlan{}, fmt.Errorf("installed environments require an install scope")
 	}
 	identityPath := context.DeploymentDir
-	nameSuffix := "staging"
+	namePrefix := dockerNameSlug(document.Environment.ID, "environment")
 	if context.Phase == blueprint.PhaseInstalled {
 		if context.InstallTarget == "" {
 			return DockerExecutionPlan{}, fmt.Errorf("installed Docker plan requires install target")
 		}
 		identityPath = context.InstallTarget
-		nameSuffix = "installed"
+	} else {
+		namePrefix += "-staging"
 	}
 	hash, err := pathIdentityHash(identityPath)
 	if err != nil {
 		return DockerExecutionPlan{}, err
 	}
-	containerName := dockerNameSlug(document.Environment.ID, "environment") + "-" + nameSuffix + "-" + hash
+	containerName := namePrefix + "-" + hash
 	plan := DockerExecutionPlan{
 		EnvironmentID: document.Environment.ID, Phase: context.Phase, Scope: context.Scope,
 		Image: context.GeneratedImage, ContainerName: containerName, NetworkName: containerName,
@@ -165,6 +168,7 @@ func planDockerMounts(document blueprint.Document, context DockerPlanContext) ([
 		}
 		switch mount.Mode {
 		case blueprint.MountManagedBind:
+			planned.SourceKind = deploy.RuntimeMountSourceDirectory
 			planned.Source = joinDockerHostPath(context.Host, root, mount.Source)
 			if context.Host != blueprint.HostWindows {
 				relative, err := filepath.Rel(root, planned.Source)
@@ -177,12 +181,22 @@ func planDockerMounts(document blueprint.Document, context DockerPlanContext) ([
 			if !filepath.IsAbs(planned.Source) {
 				return nil, fmt.Errorf("unmanaged bind %q source must resolve to an absolute host path", name)
 			}
-			if _, err := os.Stat(planned.Source); err != nil {
+			info, err := os.Stat(planned.Source)
+			if err != nil {
 				return nil, fmt.Errorf("unmanaged bind %q source must already exist: %w", name, err)
 			}
+			if info.IsDir() {
+				planned.SourceKind = deploy.RuntimeMountSourceDirectory
+			} else if info.Mode().IsRegular() {
+				planned.SourceKind = deploy.RuntimeMountSourceFile
+			} else {
+				return nil, fmt.Errorf("unmanaged bind %q source must be a regular file or directory", name)
+			}
 		case blueprint.MountVolume:
+			planned.SourceKind = deploy.RuntimeMountSourceGenerated
 			planned.Source = dockerNameSlug(document.Environment.ID, "environment") + "-" + rootHash + "-" + dockerNameSlug(mount.Name, "volume")
 		case blueprint.MountTmpfs:
+			planned.SourceKind = deploy.RuntimeMountSourceGenerated
 		default:
 			return nil, fmt.Errorf("unsupported Docker mount mode %q", mount.Mode)
 		}

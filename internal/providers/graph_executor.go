@@ -55,7 +55,7 @@ type GraphOwnerValidators func(NodeSpec) (ProviderOwnerValidators, error)
 type GraphExecutionRequest struct {
 	Plan              ProviderPlanV1
 	Platform          blueprint.Platform
-	Sources           []ResolvedSourceInput
+	SourceCandidates  []ResolvedSourceInput
 	BaseImage         RealizedImageV1
 	BaseCatalog       []RealizedOutput
 	ReusableArtifacts map[NodeID][]providerstore.StoreObjectRef
@@ -71,6 +71,7 @@ type GraphExecutionResult struct {
 	Bundles            []ResolvedBundle
 	Profiles           []RequirementProfile
 	ValidationEvidence []ValidationEvidence
+	SelectedSources    []ResolvedSourceInput
 	PrefixImages       []RealizedImageV1
 	Materializations   []GraphNodeMaterializeResult
 	Catalog            []RealizedOutput
@@ -90,8 +91,8 @@ func ExecuteProviderGraph(ctx context.Context, request GraphExecutionRequest) (G
 	if err := request.Platform.Validate(); err != nil {
 		return GraphExecutionResult{}, fmt.Errorf("provider graph platform: %w", err)
 	}
-	if request.Sources == nil || request.BaseCatalog == nil || request.ReusableArtifacts == nil || request.CachedResolutions == nil {
-		return GraphExecutionResult{}, fmt.Errorf("provider graph sources, base catalog, reusable artifacts, and cached resolutions must use collections")
+	if request.SourceCandidates == nil || request.BaseCatalog == nil || request.ReusableArtifacts == nil || request.CachedResolutions == nil {
+		return GraphExecutionResult{}, fmt.Errorf("provider graph source candidates, base catalog, reusable artifacts, and cached resolutions must use collections")
 	}
 	if err := request.BaseImage.Validate(); err != nil {
 		return GraphExecutionResult{}, fmt.Errorf("provider graph base image: %w", err)
@@ -127,7 +128,8 @@ func ExecuteProviderGraph(ctx context.Context, request GraphExecutionRequest) (G
 	result := GraphExecutionResult{
 		Plan: request.Plan, SelectedEdges: []ProviderEdgeV1{}, Bundles: []ResolvedBundle{},
 		Profiles: []RequirementProfile{}, ValidationEvidence: []ValidationEvidence{},
-		PrefixImages: []RealizedImageV1{request.BaseImage}, Materializations: []GraphNodeMaterializeResult{},
+		SelectedSources: []ResolvedSourceInput{},
+		PrefixImages:    []RealizedImageV1{request.BaseImage}, Materializations: []GraphNodeMaterializeResult{},
 		Catalog: append([]RealizedOutput{}, request.BaseCatalog...),
 	}
 	currentImage := request.BaseImage
@@ -145,7 +147,7 @@ func ExecuteProviderGraph(ctx context.Context, request GraphExecutionRequest) (G
 		}
 		resolveRequest := ResolveNodeRequest{
 			Plan: request.Plan, NodeID: id, EarlierCatalog: append([]RealizedOutput{}, result.Catalog...),
-			Platform: request.Platform, Sources: append([]ResolvedSourceInput{}, request.Sources...), Upstream: currentImage,
+			Platform: request.Platform, SourceCandidates: append([]ResolvedSourceInput{}, request.SourceCandidates...), Upstream: currentImage,
 			ReusableArtifacts: append([]providerstore.StoreObjectRef{}, request.ReusableArtifacts[id]...),
 		}
 		_, input, err := buildResolveInput(resolveRequest)
@@ -208,6 +210,7 @@ func ExecuteProviderGraph(ctx context.Context, request GraphExecutionRequest) (G
 		result.Bundles = append(result.Bundles, resolution.Bundle)
 		result.Profiles = append(result.Profiles, resolution.Profile)
 		result.ValidationEvidence = append(result.ValidationEvidence, resolution.Evidence)
+		result.SelectedSources = append(result.SelectedSources, resolution.SelectedSources...)
 		result.PrefixImages = append(result.PrefixImages, materialized.Image)
 		result.Materializations = append(result.Materializations, materialized)
 		result.Catalog = append(result.Catalog, materialized.Outputs...)
@@ -216,6 +219,14 @@ func ExecuteProviderGraph(ctx context.Context, request GraphExecutionRequest) (G
 	sort.Slice(result.SelectedEdges, func(left int, right int) bool {
 		return compareProviderEdges(result.SelectedEdges[left], result.SelectedEdges[right]) < 0
 	})
+	sort.Slice(result.SelectedSources, func(left int, right int) bool {
+		return compareResolvedSourceInputs(result.SelectedSources[left], result.SelectedSources[right]) < 0
+	})
+	for index := 1; index < len(result.SelectedSources); index++ {
+		if compareResolvedSourceInputs(result.SelectedSources[index-1], result.SelectedSources[index]) >= 0 {
+			return GraphExecutionResult{}, fmt.Errorf("provider graph selected sources are not unique")
+		}
+	}
 	for index := 1; index < len(result.SelectedEdges); index++ {
 		if compareProviderEdges(result.SelectedEdges[index-1], result.SelectedEdges[index]) >= 0 {
 			return GraphExecutionResult{}, fmt.Errorf("provider graph selected edges are not unique")

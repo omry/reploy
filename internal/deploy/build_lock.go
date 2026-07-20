@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
@@ -24,6 +25,7 @@ type BuildLockV1 struct {
 	Base                  ImageDescriptor              `json:"base"`
 	Graph                 ProviderGraphLockV1          `json:"graph"`
 	Nodes                 []NodeLockV1                 `json:"nodes"`
+	Catalog               []providers.RealizedOutput   `json:"catalog"`
 	RuntimePolicy         RuntimePolicyV1              `json:"runtime_policy"`
 	ValidationRecord      providerstore.StoreObjectRef `json:"validation_record"`
 	FinalImage            providers.RealizedImageV1    `json:"final_image"`
@@ -137,6 +139,9 @@ func ValidateBuildLockV1(lock BuildLockV1, validateProfileOwner providers.Requir
 			return fmt.Errorf("build lock is missing node %q", node)
 		}
 	}
+	if err := validateBuildLockCatalog(lock.Catalog, graphNodes, lock.Nodes); err != nil {
+		return err
+	}
 	if err := validateBuildLockImageLineage(lock); err != nil {
 		return err
 	}
@@ -198,6 +203,48 @@ func validateBuildLockImageLineage(lock BuildLockV1) error {
 			"build lock final image root filesystem %s does not match the final graph prefix %s",
 			lock.FinalImage.RootFSSubject, current.RootFSSubject,
 		)
+	}
+	return nil
+}
+
+func validateBuildLockCatalog(catalog []providers.RealizedOutput, graphNodes map[providers.NodeID]bool, nodes []NodeLockV1) error {
+	if catalog == nil {
+		return fmt.Errorf("build lock catalog must use an array")
+	}
+	locked := make(map[providers.QualifiedOutput]providers.RealizedOutput)
+	for _, node := range nodes {
+		for _, output := range node.Outputs {
+			qualified := providers.QualifiedOutput{Component: output.SupplierComponent, Name: output.Name}
+			if _, found := locked[qualified]; found {
+				return fmt.Errorf("build lock provider nodes contain duplicate output %s.%s", qualified.Component, qualified.Name)
+			}
+			locked[qualified] = output
+		}
+	}
+	seen := make(map[providers.QualifiedOutput]bool, len(catalog))
+	for index, output := range catalog {
+		if err := providers.ValidateRealizedOutput(output); err != nil {
+			return fmt.Errorf("build lock catalog output %d: %w", index, err)
+		}
+		if !graphNodes[output.SupplierNode] {
+			return fmt.Errorf("build lock catalog output %s.%s names missing graph node %q", output.SupplierComponent, output.Name, output.SupplierNode)
+		}
+		qualified := providers.QualifiedOutput{Component: output.SupplierComponent, Name: output.Name}
+		if seen[qualified] {
+			return fmt.Errorf("build lock catalog contains duplicate output %s.%s", qualified.Component, qualified.Name)
+		}
+		seen[qualified] = true
+		if output.SupplierNode != "base" {
+			lockedOutput, found := locked[qualified]
+			if !found || !reflect.DeepEqual(lockedOutput, output) {
+				return fmt.Errorf("build lock catalog output %s.%s does not match its locked provider node", qualified.Component, qualified.Name)
+			}
+		}
+	}
+	for qualified := range locked {
+		if !seen[qualified] {
+			return fmt.Errorf("build lock catalog is missing provider output %s.%s", qualified.Component, qualified.Name)
+		}
 	}
 	return nil
 }

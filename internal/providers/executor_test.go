@@ -69,7 +69,7 @@ func TestResolveProviderNodeBuildsCandidatesAndValidatesResult(t *testing.T) {
 		Plan: plan, NodeID: input.Node.ID,
 		EarlierCatalog:    []RealizedOutput{catalogOutput("base", "base", "python", "/usr/bin/python")},
 		Platform:          input.Platform,
-		Sources:           input.Sources,
+		SourceCandidates:  input.SourceCandidates,
 		Upstream:          input.Upstream,
 		ReusableArtifacts: input.ReusableArtifacts,
 	}, resolver, testArtifactSink{}, ProviderOwnerValidators{Profile: validateTestProfileOwner, Bundle: acceptTestBundleOwner})
@@ -90,7 +90,7 @@ func TestValidateProviderNodeResolutionChecksCachedResultAgainstExactInput(t *te
 		Plan: testResolvePlan(input), NodeID: input.Node.ID,
 		EarlierCatalog:    []RealizedOutput{catalogOutput("base", "base", "python", "/usr/bin/python")},
 		Platform:          input.Platform,
-		Sources:           input.Sources,
+		SourceCandidates:  input.SourceCandidates,
 		Upstream:          input.Upstream,
 		ReusableArtifacts: input.ReusableArtifacts,
 	}
@@ -110,7 +110,7 @@ func TestResolveProviderNodeRejectsWrongResolverAndResult(t *testing.T) {
 	request := ResolveNodeRequest{
 		Plan: plan, NodeID: input.Node.ID,
 		EarlierCatalog: []RealizedOutput{catalogOutput("base", "base", "python", "/usr/bin/python")}, Platform: input.Platform,
-		Sources: input.Sources, Upstream: input.Upstream, ReusableArtifacts: input.ReusableArtifacts,
+		SourceCandidates: input.SourceCandidates, Upstream: input.Upstream, ReusableArtifacts: input.ReusableArtifacts,
 	}
 	wrong := &testNodeResolver{provider: blueprint.ComponentTypeAPT, result: result}
 	if _, err := ResolveProviderNode(context.Background(), request, wrong, testArtifactSink{}, ProviderOwnerValidators{}); err == nil || !strings.Contains(err.Error(), "does not match") {
@@ -139,7 +139,7 @@ func TestResolveProviderNodeRejectsSuccessAfterCancellation(t *testing.T) {
 	_, err := ResolveProviderNode(ctx, ResolveNodeRequest{
 		Plan: testResolvePlan(input), NodeID: input.Node.ID,
 		EarlierCatalog: []RealizedOutput{catalogOutput("base", "base", "python", "/usr/bin/python")},
-		Platform:       input.Platform, Sources: input.Sources, Upstream: input.Upstream, ReusableArtifacts: input.ReusableArtifacts,
+		Platform:       input.Platform, SourceCandidates: input.SourceCandidates, Upstream: input.Upstream, ReusableArtifacts: input.ReusableArtifacts,
 	}, resolver, testArtifactSink{}, ProviderOwnerValidators{Profile: validateTestProfileOwner, Bundle: acceptTestBundleOwner})
 	if err != context.Canceled {
 		t.Fatalf("cancellation error = %v", err)
@@ -158,13 +158,13 @@ func TestResolveProviderNodeFiltersSourcesToSelectedNode(t *testing.T) {
 	_, err := ResolveProviderNode(context.Background(), ResolveNodeRequest{
 		Plan: testResolvePlan(input), NodeID: input.Node.ID,
 		EarlierCatalog: []RealizedOutput{catalogOutput("base", "base", "python", "/usr/bin/python")},
-		Platform:       input.Platform, Sources: []ResolvedSourceInput{source}, Upstream: input.Upstream,
+		Platform:       input.Platform, SourceCandidates: []ResolvedSourceInput{source}, Upstream: input.Upstream,
 		ReusableArtifacts: input.ReusableArtifacts,
 	}, resolver, testArtifactSink{}, ProviderOwnerValidators{Profile: validateTestProfileOwner, Bundle: acceptTestBundleOwner})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resolver.input.Sources) != 1 || !reflect.DeepEqual(resolver.input.Sources[0], source) {
-		t.Fatalf("resolver sources = %#v", resolver.input.Sources)
+	if len(resolver.input.SourceCandidates) != 1 || !reflect.DeepEqual(resolver.input.SourceCandidates[0], source) {
+		t.Fatalf("resolver source candidates = %#v", resolver.input.SourceCandidates)
 	}
 }

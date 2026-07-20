@@ -63,6 +63,17 @@ func TestDecodeAcceptsEnvironmentSchema(t *testing.T) {
 	}
 }
 
+func TestDecodeAcceptsAdditionalDockerMountRoots(t *testing.T) {
+	value := strings.Replace(minimalBlueprint, "docker:\n", "docker:\n  additional_mount_roots: [/srv/demo]\n", 1)
+	source, err := Decode([]byte(value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(source.Docker.AdditionalMountRoots) != 1 || source.Docker.AdditionalMountRoots[0] != "/srv/demo" {
+		t.Fatalf("additional mount roots = %#v", source.Docker.AdditionalMountRoots)
+	}
+}
+
 func TestDecodeRejectsUnknownField(t *testing.T) {
 	_, err := Decode([]byte(strings.Replace(minimalBlueprint, "  id: demo\n", "  id: demo\n  surprise: true\n", 1)))
 	if err == nil || !strings.Contains(err.Error(), "field surprise not found") {

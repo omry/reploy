@@ -69,6 +69,9 @@ func ValidateResolvedBundlePayloadV1(payload providers.ResolvedBundleIdentityV1)
 	if payload.NodeID != "apt" || payload.Provider != blueprint.ComponentTypeAPT {
 		return fmt.Errorf("APT bundle must identify the shared APT node")
 	}
+	if len(payload.SelectedSources) != 0 {
+		return fmt.Errorf("APT bundle does not accept selected source inputs")
+	}
 	if err := ValidateCanonicalProviderRequestV1(payload.Request); err != nil {
 		return fmt.Errorf("APT bundle request: %w", err)
 	}

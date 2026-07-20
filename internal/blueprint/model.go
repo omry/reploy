@@ -210,9 +210,10 @@ type InstallSuccess struct {
 }
 
 type Docker struct {
-	Image    string
-	Mounts   map[string]DockerMount
-	Workload *DockerWorkload
+	Image                string
+	AdditionalMountRoots []string
+	Mounts               map[string]DockerMount
+	Workload             *DockerWorkload
 }
 
 type MountMode string

@@ -45,7 +45,7 @@ func TestExecuteProviderGraphCarriesOnlyEarlierCatalogAndPrefix(t *testing.T) {
 	catalogSizes := []int{}
 	nextDigest := byte('4')
 	result, err := ExecuteProviderGraph(context.Background(), GraphExecutionRequest{
-		Plan: plan, Platform: platform, Sources: []ResolvedSourceInput{}, BaseImage: baseImage, BaseCatalog: baseCatalog,
+		Plan: plan, Platform: platform, SourceCandidates: []ResolvedSourceInput{}, BaseImage: baseImage, BaseCatalog: baseCatalog,
 		ReusableArtifacts: map[NodeID][]providerstore.StoreObjectRef{},
 		CachedResolutions: map[NodeID]ResolveResult{},
 		Validators: func(NodeSpec) (ProviderOwnerValidators, error) {
@@ -86,6 +86,9 @@ func TestExecuteProviderGraphCarriesOnlyEarlierCatalogAndPrefix(t *testing.T) {
 	if len(result.Bundles) != 2 || len(result.Materializations) != 2 || len(result.Catalog) != 3 || len(result.SelectedEdges) != 2 {
 		t.Fatalf("graph result = %#v", result)
 	}
+	if result.SelectedSources == nil || len(result.SelectedSources) != 0 {
+		t.Fatalf("selected sources = %#v", result.SelectedSources)
+	}
 	if result.Materializations[0].Image != result.PrefixImages[1] || result.Materializations[1].Image != result.PrefixImages[2] {
 		t.Fatalf("materializations do not align with prefix images: %#v; %#v", result.Materializations, result.PrefixImages)
 	}
@@ -99,7 +102,7 @@ func TestExecuteProviderGraphRejectsOutputDriftBeforePublishingCatalog(t *testin
 	badOutputs := graphTestRealizedOutputs(resolution.Bundle)
 	badOutputs[0].Candidate.InvocationPath = "/changed"
 	_, err := ExecuteProviderGraph(context.Background(), GraphExecutionRequest{
-		Plan: plan, Platform: input.Platform, Sources: input.Sources, BaseImage: input.Upstream, BaseCatalog: baseCatalog,
+		Plan: plan, Platform: input.Platform, SourceCandidates: input.SourceCandidates, BaseImage: input.Upstream, BaseCatalog: baseCatalog,
 		ReusableArtifacts: map[NodeID][]providerstore.StoreObjectRef{input.Node.ID: input.ReusableArtifacts},
 		CachedResolutions: map[NodeID]ResolveResult{},
 		Validators: func(NodeSpec) (ProviderOwnerValidators, error) {
@@ -124,7 +127,7 @@ func TestExecuteProviderGraphRejectsNodeSuccessAfterCancellation(t *testing.T) {
 	baseCatalog[0].Candidate.Provenance = plan.Nodes[0].OutputDeclarations[0].Provenance
 	ctx, cancel := context.WithCancel(context.Background())
 	_, err := ExecuteProviderGraph(ctx, GraphExecutionRequest{
-		Plan: plan, Platform: input.Platform, Sources: input.Sources, BaseImage: input.Upstream, BaseCatalog: baseCatalog,
+		Plan: plan, Platform: input.Platform, SourceCandidates: input.SourceCandidates, BaseImage: input.Upstream, BaseCatalog: baseCatalog,
 		ReusableArtifacts: map[NodeID][]providerstore.StoreObjectRef{input.Node.ID: input.ReusableArtifacts},
 		CachedResolutions: map[NodeID]ResolveResult{},
 		Validators: func(NodeSpec) (ProviderOwnerValidators, error) {
@@ -156,7 +159,7 @@ func TestExecuteProviderGraphValidatesResolutionBeforeMaterialization(t *testing
 	resolution.Profile.Platform = arm64
 	materialized := false
 	_, err = ExecuteProviderGraph(context.Background(), GraphExecutionRequest{
-		Plan: plan, Platform: input.Platform, Sources: input.Sources, BaseImage: input.Upstream, BaseCatalog: baseCatalog,
+		Plan: plan, Platform: input.Platform, SourceCandidates: input.SourceCandidates, BaseImage: input.Upstream, BaseCatalog: baseCatalog,
 		ReusableArtifacts: map[NodeID][]providerstore.StoreObjectRef{input.Node.ID: input.ReusableArtifacts},
 		CachedResolutions: map[NodeID]ResolveResult{},
 		Validators: func(NodeSpec) (ProviderOwnerValidators, error) {
@@ -183,7 +186,7 @@ func TestExecuteProviderGraphPassesCachedResolutionToOnePreparation(t *testing.T
 	preparationCalls := 0
 	materialized := false
 	_, err := ExecuteProviderGraph(context.Background(), GraphExecutionRequest{
-		Plan: plan, Platform: input.Platform, Sources: input.Sources, BaseImage: input.Upstream, BaseCatalog: baseCatalog,
+		Plan: plan, Platform: input.Platform, SourceCandidates: input.SourceCandidates, BaseImage: input.Upstream, BaseCatalog: baseCatalog,
 		ReusableArtifacts: map[NodeID][]providerstore.StoreObjectRef{input.Node.ID: input.ReusableArtifacts},
 		CachedResolutions: map[NodeID]ResolveResult{input.Node.ID: resolution},
 		Validators: func(NodeSpec) (ProviderOwnerValidators, error) {
@@ -217,7 +220,7 @@ func TestExecuteProviderGraphRejectsPreparationFailureBeforeMaterialization(t *t
 	preparationCalls := 0
 	materialized := false
 	_, err := ExecuteProviderGraph(context.Background(), GraphExecutionRequest{
-		Plan: plan, Platform: input.Platform, Sources: input.Sources, BaseImage: input.Upstream, BaseCatalog: baseCatalog,
+		Plan: plan, Platform: input.Platform, SourceCandidates: input.SourceCandidates, BaseImage: input.Upstream, BaseCatalog: baseCatalog,
 		ReusableArtifacts: map[NodeID][]providerstore.StoreObjectRef{input.Node.ID: input.ReusableArtifacts},
 		CachedResolutions: map[NodeID]ResolveResult{input.Node.ID: resolution},
 		Validators: func(NodeSpec) (ProviderOwnerValidators, error) {
@@ -279,7 +282,7 @@ func graphTestResolution(t *testing.T, request ResolveNodeRequest, platform blue
 	if err != nil {
 		t.Fatal(err)
 	}
-	return ResolveResult{Bundle: bundle, Profile: profile, Evidence: evidence}
+	return ResolveResult{Bundle: bundle, Profile: profile, Evidence: evidence, SelectedSources: []ResolvedSourceInput{}}
 }
 
 func graphTestRealizedOutputs(bundle ResolvedBundle) []RealizedOutput {

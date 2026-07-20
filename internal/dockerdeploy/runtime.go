@@ -264,11 +264,16 @@ func executeEnvironmentRestart(options RuntimeOptions, pack deploy.AppPack, plan
 func environmentLifecycleExecutor(options RuntimeOptions, plan DockerExecutionPlan, stdout io.Writer, stderr io.Writer) LifecycleExecutor {
 	return LifecycleExecutor{
 		RunCommand: func(ctx context.Context, command ResolvedEnvironmentCommand) error {
-			spec, err := TransientCommandSpec(plan, command, false, false)
+			spec, err := TransientCommandSpec(plan, command, nil, false, false)
 			if err != nil {
 				return err
 			}
-			return runRuntimeCommand(spec, RunOptions{Context: ctx, Stdout: stdout, Stderr: stderr, DockerPreflightTimeout: options.DockerPreflightTimeout})
+			return runTemporaryContainerCommand(
+				runRuntimeCommand,
+				spec,
+				TemporaryContainerCleanupCommand(transientCommandContainerName(plan)),
+				RunOptions{Context: ctx, Stdout: stdout, Stderr: stderr, DockerPreflightTimeout: options.DockerPreflightTimeout},
+			)
 		},
 		Readiness: func(ctx context.Context, endpoint EndpointExecutionPlan) error {
 			return WaitForHTTPReadinessWithServiceCheck(ctx, endpoint, func(context.Context) error {

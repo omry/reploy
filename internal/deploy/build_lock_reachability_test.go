@@ -41,7 +41,7 @@ func buildReachabilityFixture(t *testing.T) (string, providerstore.Store, BuildL
 		Schema: providers.ResolvedBundleSchemaV1, NodeID: "apt", Provider: lock.Nodes[0].Provider,
 		Request:                  providers.CanonicalProviderRequest{Schema: "apt-request-v1", Provider: lock.Nodes[0].Provider, Value: canonical.Object{}},
 		RequirementProfileDigest: profileDigest, RecipeVersion: "apt-resolver-v1", Platform: lock.Platform, Upstream: lock.Nodes[0].Upstream,
-		Artifacts: []providerstore.ArtifactDescriptor{keepArtifact}, Outputs: []providers.ResolvedOutput{},
+		SelectedSources: []providers.ResolvedSourceInput{}, Artifacts: []providerstore.ArtifactDescriptor{keepArtifact}, Outputs: []providers.ResolvedOutput{},
 		ProviderPayload: canonical.Envelope{Schema: "apt-bundle-v1", Value: canonical.Object{}},
 	}, acceptBuildLockBundle)
 	if err != nil {
@@ -81,6 +81,72 @@ func TestBuildLockStoreClosureLoadsExactTransitiveObjects(t *testing.T) {
 		if closure[index] != want[index] {
 			t.Fatalf("closure[%d] = %#v, want %#v", index, closure[index], want[index])
 		}
+	}
+}
+
+func TestBuildLockStoreClosureBytesUsesExactObjectSizesWithoutRehashingBlobs(t *testing.T) {
+	_, store, lock, keepReference, _ := buildReachabilityFixture(t)
+	blobPath, err := store.BlobPath(keepReference.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath, err := store.ManifestPath(lock.Nodes[0].BundleManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validationPath, err := store.ValidationRecordPath(lock.ValidationRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := uint64(0)
+	for _, path := range []string{blobPath, manifestPath, validationPath} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want += uint64(info.Size())
+	}
+	if err := os.Chmod(blobPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(blobPath, []byte("xxxx"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	references, got, err := InspectBuildLockStoreClosure(lock, store, acceptBuildLockProfile, acceptBuildLockBundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("closure bytes = %d, want %d", got, want)
+	}
+	wantReferences := []providerstore.StoreObjectRef{keepReference, lock.Nodes[0].BundleManifest, lock.ValidationRecord}
+	if len(references) != len(wantReferences) {
+		t.Fatalf("closure references = %#v", references)
+	}
+	for index := range wantReferences {
+		if references[index] != wantReferences[index] {
+			t.Fatalf("closure reference %d = %#v, want %#v", index, references[index], wantReferences[index])
+		}
+	}
+}
+
+func TestBuildLockStoreClosureBytesRejectsWrongBlobSize(t *testing.T) {
+	_, store, lock, keepReference, _ := buildReachabilityFixture(t)
+	blobPath, err := store.BlobPath(keepReference.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(blobPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(blobPath, []byte("wrong-size"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = BuildLockStoreClosureBytes(lock, store, acceptBuildLockProfile, acceptBuildLockBundle)
+	if err == nil || !strings.Contains(err.Error(), "size") {
+		t.Fatalf("wrong blob size error = %v", err)
 	}
 }
 

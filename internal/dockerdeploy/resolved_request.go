@@ -2,10 +2,10 @@ package dockerdeploy
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 
 	"github.com/omry/reploy/internal/blueprint"
-	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providers/apt"
@@ -13,17 +13,93 @@ import (
 	"github.com/omry/reploy/internal/providers/registry"
 )
 
+func finalizeResolvedRequestV1(
+	document blueprint.Document,
+	overlay deploy.RequestOverlayV1,
+	candidateRequest providers.ResolvedRequestV1,
+	selected []providers.ResolvedSourceInput,
+) (providers.ResolvedRequestV1, error) {
+	if selected == nil {
+		return providers.ResolvedRequestV1{}, fmt.Errorf("finalize resolved request selected sources must use an array")
+	}
+	expectedCandidates, err := BuildResolvedRequestV1(
+		document, overlay, candidateRequest.Platform,
+		append([]providers.ResolvedSourceInput{}, candidateRequest.Sources...),
+	)
+	if err != nil {
+		return providers.ResolvedRequestV1{}, err
+	}
+	if !reflect.DeepEqual(expectedCandidates, candidateRequest) {
+		return providers.ResolvedRequestV1{}, fmt.Errorf("candidate resolved request does not match the document, overlay, platform, and source candidates")
+	}
+	candidates := make(map[string]providers.ResolvedSourceInput, len(candidateRequest.Sources))
+	for _, source := range candidateRequest.Sources {
+		candidates[source.Component+"\x00"+source.LogicalPackage] = source
+	}
+	for _, source := range selected {
+		candidate, found := candidates[source.Component+"\x00"+source.LogicalPackage]
+		if !found || !reflect.DeepEqual(candidate, source) {
+			return providers.ResolvedRequestV1{}, fmt.Errorf("selected source %s.%s is not an exact source candidate", source.Component, source.LogicalPackage)
+		}
+	}
+	return BuildResolvedRequestV1(
+		document, overlay, candidateRequest.Platform,
+		append([]providers.ResolvedSourceInput{}, selected...),
+	)
+}
+
+func resolvedRequestForLockedSourcesV1(
+	document blueprint.Document,
+	overlay deploy.RequestOverlayV1,
+	candidateRequest providers.ResolvedRequestV1,
+	lockedSources []providers.ResolvedSourceInput,
+) (providers.ResolvedRequestV1, bool, error) {
+	if lockedSources == nil {
+		return providers.ResolvedRequestV1{}, false, fmt.Errorf("locked resolved request sources must use an array")
+	}
+	if !exactSelectedSourceCandidatesV1(candidateRequest.Sources, lockedSources) {
+		return providers.ResolvedRequestV1{}, false, nil
+	}
+	request, err := BuildResolvedRequestV1(
+		document, overlay, candidateRequest.Platform,
+		append([]providers.ResolvedSourceInput{}, lockedSources...),
+	)
+	if err != nil {
+		return providers.ResolvedRequestV1{}, false, err
+	}
+	return request, true, nil
+}
+
+func exactSelectedSourceCandidatesV1(
+	candidates []providers.ResolvedSourceInput,
+	selected []providers.ResolvedSourceInput,
+) bool {
+	if candidates == nil || selected == nil {
+		return false
+	}
+	byKey := make(map[string]providers.ResolvedSourceInput, len(candidates))
+	for _, source := range candidates {
+		byKey[source.Component+"\x00"+source.LogicalPackage] = source
+	}
+	for _, source := range selected {
+		candidate, found := byKey[source.Component+"\x00"+source.LogicalPackage]
+		if !found || !reflect.DeepEqual(candidate, source) {
+			return false
+		}
+	}
+	return true
+}
+
 func BuildResolvedRequestV1(
 	document blueprint.Document,
 	overlay deploy.RequestOverlayV1,
-	blueprintDigest canonical.Digest,
 	platform blueprint.Platform,
 	sources []providers.ResolvedSourceInput,
 ) (providers.ResolvedRequestV1, error) {
-	if err := blueprintDigest.Validate(); err != nil {
-		return providers.ResolvedRequestV1{}, fmt.Errorf("resolved request blueprint digest: %w", err)
-	}
 	if err := platform.Validate(); err != nil {
+		return providers.ResolvedRequestV1{}, fmt.Errorf("resolved request platform: %w", err)
+	}
+	if err := blueprint.ValidateSelectedPlatform(document, platform); err != nil {
 		return providers.ResolvedRequestV1{}, fmt.Errorf("resolved request platform: %w", err)
 	}
 	normalizedOverlay, err := deploy.NormalizeRequestOverlayV1(document, overlay, registry.ValidatePackageRequest)
@@ -81,7 +157,7 @@ func BuildResolvedRequestV1(
 		})
 	}
 	result := providers.ResolvedRequestV1{
-		Schema: providers.ResolvedRequestSchemaV1, BlueprintDigest: blueprintDigest, OverlayDigest: overlayDigest,
+		Schema: providers.ResolvedRequestSchemaV1, OverlayDigest: overlayDigest,
 		Platform: platform, Components: components, Sources: append([]providers.ResolvedSourceInput{}, sources...),
 	}
 	if err := providers.ValidateResolvedRequestV1(result, registry.ValidateResolvedRequestOwnersV1); err != nil {

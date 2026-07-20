@@ -55,6 +55,47 @@ func TestPrepareProviderBasePlansResolvesAndRealizesExactRequest(t *testing.T) {
 	}
 }
 
+func TestSelectProviderBaseDefersOutputRealization(t *testing.T) {
+	request := providerBaseResolvedRequest(t)
+	descriptor := providerBaseDescriptor(t, true)
+	config := deploy.BaseConfig{
+		Schema: deploy.BaseConfigSchemaV1, Environment: []deploy.ConfigEnvironmentVariable{},
+		Entrypoint: []string{}, Command: []string{}, OnBuild: []string{}, Volumes: []string{},
+	}
+	image := providers.RealizedImageV1{
+		Digest: descriptor.ManifestDigest, ConfigDigest: descriptor.ConfigDigest, RootFSSubject: rendererDigest("9"),
+	}
+	previousResolve := resolveProviderBaseImage
+	previousRealize := realizePreparedProviderBase
+	t.Cleanup(func() {
+		resolveProviderBaseImage = previousResolve
+		realizePreparedProviderBase = previousRealize
+	})
+	resolveProviderBaseImage = func(context.Context, string, blueprint.Platform) (deploy.ImageDescriptor, deploy.BaseConfig, error) {
+		return descriptor, config, nil
+	}
+	realizeCalls := 0
+	realizePreparedProviderBase = func(context.Context, providerstore.Store, providers.ProviderPlanV1, deploy.ImageDescriptor) (providers.RealizedImageV1, []providers.RealizedOutput, error) {
+		realizeCalls++
+		return image, []providers.RealizedOutput{}, nil
+	}
+
+	selected, err := SelectProviderBase(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if realizeCalls != 0 || !reflect.DeepEqual(selected.Descriptor, descriptor) || !reflect.DeepEqual(selected.Config, config) {
+		t.Fatalf("selection realized outputs or changed base: calls=%d selected=%#v", realizeCalls, selected)
+	}
+	prepared, err := RealizeSelectedProviderBase(context.Background(), providerstore.Store{}, selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if realizeCalls != 1 || prepared.Image != image || prepared.Catalog == nil {
+		t.Fatalf("realization calls/result = %d/%#v", realizeCalls, prepared)
+	}
+}
+
 func TestPrepareProviderBaseRejectsInvalidRequestBeforeDocker(t *testing.T) {
 	request := providerBaseResolvedRequest(t)
 	request.Components[0].Request.Value["image"] = ""
@@ -88,7 +129,10 @@ func TestPrepareProviderBaseStopsAfterResolveOrRealizeFailure(t *testing.T) {
 	t.Run("realize", func(t *testing.T) {
 		descriptor := providerBaseDescriptor(t, true)
 		resolveProviderBaseImage = func(context.Context, string, blueprint.Platform) (deploy.ImageDescriptor, deploy.BaseConfig, error) {
-			return descriptor, deploy.BaseConfig{}, nil
+			return descriptor, deploy.BaseConfig{
+				Schema: deploy.BaseConfigSchemaV1, Environment: []deploy.ConfigEnvironmentVariable{},
+				Entrypoint: []string{}, Command: []string{}, OnBuild: []string{}, Volumes: []string{},
+			}, nil
 		}
 		realizePreparedProviderBase = func(context.Context, providerstore.Store, providers.ProviderPlanV1, deploy.ImageDescriptor) (providers.RealizedImageV1, []providers.RealizedOutput, error) {
 			return providers.RealizedImageV1{}, nil, errors.New("injected realize failure")
@@ -112,7 +156,7 @@ func providerBaseResolvedRequest(t *testing.T) providers.ResolvedRequestV1 {
 		t.Fatal(err)
 	}
 	return providers.ResolvedRequestV1{
-		Schema: providers.ResolvedRequestSchemaV1, BlueprintDigest: rendererDigest("a"), OverlayDigest: rendererDigest("b"),
+		Schema: providers.ResolvedRequestSchemaV1, OverlayDigest: rendererDigest("b"),
 		Platform:   platform,
 		Components: []providers.ResolvedComponentRequestV1{{Component: "base", Provider: blueprint.ComponentTypeBase, Request: base}},
 		Sources:    []providers.ResolvedSourceInput{},

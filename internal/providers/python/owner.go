@@ -54,6 +54,17 @@ func ValidateRequirementProfileV1(profile providers.RequirementProfile) error {
 	if component != request.Component {
 		return fmt.Errorf("Python profile facts component %q does not match request component %q", component, request.Component)
 	}
+	expectedRequirement := providers.ExecutableRequirement{
+		ID: "interpreter", Command: request.Interpreter.Command,
+		VersionConstraint: request.Interpreter.Version, Supplier: request.Interpreter.Supplier,
+		ValidationPolicy: providers.ValidationPolicyCompatible,
+	}
+	if len(profile.Declaration.Executables) != 1 || profile.Declaration.Executables[0] != expectedRequirement {
+		return fmt.Errorf("Python profile interpreter requirement does not match its canonical request")
+	}
+	if len(profile.Declaration.Files) != 0 || len(profile.SelectedFiles) != 0 {
+		return fmt.Errorf("Python profile must not contain file requirements")
+	}
 	if len(profile.SelectedExecutables) != 1 {
 		return fmt.Errorf("Python profile must contain exactly one selected interpreter")
 	}
@@ -73,6 +84,19 @@ func ValidateRequirementProfileV1(profile providers.RequirementProfile) error {
 		return fmt.Errorf("Python interpreter version %q is not a normalized release version", version)
 	}
 	return requireCanonicalData(interpreter.Facts, CanonicalInterpreterFactsV1(version), "Python interpreter facts")
+}
+
+// RequirementProfileSelectedSourcesV1 returns the selected local sources
+// already bound into a validated Python profile.
+func RequirementProfileSelectedSourcesV1(profile providers.RequirementProfile) ([]providers.ResolvedSourceInput, error) {
+	if err := ValidateRequirementProfileV1(profile); err != nil {
+		return nil, err
+	}
+	_, sources, err := decodeProfileFactsV1(profile.Facts)
+	if err != nil {
+		return nil, err
+	}
+	return append([]providers.ResolvedSourceInput{}, sources...), nil
 }
 
 func decodeProfileFactsV1(data providers.CanonicalProviderData) (string, []providers.ResolvedSourceInput, error) {
@@ -133,6 +157,11 @@ func ValidateResolvedBundlePayloadV1(payload providers.ResolvedBundleIdentityV1)
 	bundle, err := DecodeCanonicalBundleDataV1(request.Component, payload.ProviderPayload)
 	if err != nil {
 		return err
+	}
+	if equal, err := canonicalEqual(bundle.Sources, payload.SelectedSources); err != nil {
+		return err
+	} else if !equal {
+		return fmt.Errorf("Python bundle selected sources do not match its provider payload")
 	}
 	artifacts := make([]providerstore.ArtifactDescriptor, 0, len(bundle.Wheels)+1)
 	artifacts = append(artifacts, bundle.Script)

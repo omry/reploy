@@ -80,14 +80,14 @@ func TestBuildFinalizedImageCandidateUsesOrdinaryUntaggedBuild(t *testing.T) {
 	var workspace string
 	runFinalizationBuildCommand = func(command CommandSpec, _ RunOptions) error {
 		joined := strings.Join(command.Args, " ")
-		if command.Name != "docker" || len(command.Args) == 0 || command.Args[0] != "build" || strings.Contains(joined, "buildx") || strings.Contains(joined, "--tag") {
+		if command.Name != "docker" || len(command.Args) < 2 || command.Args[0] != "build" || command.Args[1] != "--no-cache" || strings.Contains(joined, "buildx") || strings.Contains(joined, "--tag") {
 			t.Fatalf("command = %#v", command)
 		}
 		iidPath := commandOption(t, command.Args, "--iidfile")
 		workspace = filepath.Dir(iidPath)
 		return os.WriteFile(iidPath, []byte(string(rendererDigest("4"))+"\n"), 0o600)
 	}
-	candidate, err := BuildFinalizedImageCandidate(store, request, RunOptions{})
+	candidate, err := BuildFinalizedImageCandidate(store, request, RunOptions{NoCache: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,6 +12,8 @@ import (
 
 const (
 	RuntimePolicySchemaV1 = "runtime-policy-v1"
+	ReployImageRoot       = "/opt/reploy"
+	ReployProviderRoot    = "/opt/reploy/providers"
 
 	ProtectedPathReployRoot     = "reploy-root"
 	ProtectedPathProviderRoot   = "provider-root"

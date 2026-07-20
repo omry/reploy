@@ -21,16 +21,18 @@ func RecoverPendingImageReferences(
 	ctx context.Context,
 	pending deploy.PendingBuildV1,
 	decision deploy.PendingRecoveryDecision,
+	oldImage *providers.RealizedImageV1,
 	environment string,
 	deploymentDir string,
 ) error {
-	return recoverPendingImageReferences(ctx, pending, decision, environment, deploymentDir, RemoveEnvironmentImageReference)
+	return recoverPendingImageReferences(ctx, pending, decision, oldImage, environment, deploymentDir, RemoveEnvironmentImageReference)
 }
 
 func recoverPendingImageReferences(
 	ctx context.Context,
 	pending deploy.PendingBuildV1,
 	decision deploy.PendingRecoveryDecision,
+	oldImage *providers.RealizedImageV1,
 	environment string,
 	deploymentDir string,
 	remove environmentReferenceRemover,
@@ -58,12 +60,15 @@ func recoverPendingImageReferences(
 		return remove(ctx, pending.Candidate.Image, references, EnvironmentReferenceTemporary, environment, deploymentDir)
 	case deploy.PendingRecoveryKeepCandidate:
 		if pending.Old != nil {
+			if oldImage == nil {
+				return fmt.Errorf("recover committed candidate requires the old generation image")
+			}
+			if oldImage.Digest != pending.Old.ImageDigest || oldImage.RootFSSubject != pending.Old.RootFSSubject {
+				return fmt.Errorf("old generation image does not match pending recovery state")
+			}
 			oldReferences := references
 			oldReferences.Generation = pending.Old.Reference
-			oldImage := providers.RealizedImageV1{
-				Digest: pending.Old.ImageDigest, ConfigDigest: pending.Old.ImageDigest, RootFSSubject: pending.Old.RootFSSubject,
-			}
-			if err := remove(ctx, oldImage, oldReferences, EnvironmentReferenceGeneration, environment, deploymentDir); err != nil {
+			if err := remove(ctx, *oldImage, oldReferences, EnvironmentReferenceGeneration, environment, deploymentDir); err != nil {
 				return err
 			}
 		}

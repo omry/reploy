@@ -2,13 +2,28 @@ package deploy
 
 import (
 	"fmt"
+	"math"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
 )
+
+type buildLockClosureArtifact struct {
+	NodeID     providers.NodeID
+	Descriptor providerstore.ArtifactDescriptor
+}
+
+type buildLockStoreClosurePlan struct {
+	References       []providerstore.StoreObjectRef
+	Artifacts        map[providerstore.StoreObjectRef]providerstore.ArtifactDescriptor
+	OrderedArtifacts []buildLockClosureArtifact
+	Manifests        map[providerstore.StoreObjectRef][]byte
+	Validation       []byte
+}
 
 func BuildLockStoreClosure(
 	lock BuildLockV1,
@@ -16,55 +31,145 @@ func BuildLockStoreClosure(
 	validateProfileOwner providers.RequirementProfileOwnerValidator,
 	validateBundleOwner providers.ResolvedBundleOwnerValidator,
 ) ([]providerstore.StoreObjectRef, error) {
-	if err := ValidateBuildLockV1(lock, validateProfileOwner); err != nil {
-		return nil, fmt.Errorf("build lock store closure: %w", err)
-	}
-	policyDigest, err := RuntimePolicyDigestV1(lock.RuntimePolicy)
+	plan, err := loadBuildLockStoreClosure(lock, store, validateProfileOwner, validateBundleOwner)
 	if err != nil {
 		return nil, err
 	}
-	validation, err := LoadPrefixValidation(store, lock.ValidationRecord)
+	for _, artifact := range plan.OrderedArtifacts {
+		if err := store.VerifyArtifact(artifact.Descriptor); err != nil {
+			return nil, fmt.Errorf("verify build lock node %q artifact %q: %w", artifact.NodeID, artifact.Descriptor.LogicalPath, err)
+		}
+	}
+	return plan.References, nil
+}
+
+// BuildLockStoreClosureBytes returns the logical bytes written when every
+// object in the locked closure is copied. It validates record content and blob
+// layout and size, but deliberately does not hash blob bodies; transfer does
+// that while streaming each object into the destination store.
+func BuildLockStoreClosureBytes(
+	lock BuildLockV1,
+	store providerstore.Store,
+	validateProfileOwner providers.RequirementProfileOwnerValidator,
+	validateBundleOwner providers.ResolvedBundleOwnerValidator,
+) (uint64, error) {
+	_, total, err := InspectBuildLockStoreClosure(lock, store, validateProfileOwner, validateBundleOwner)
+	return total, err
+}
+
+// InspectBuildLockStoreClosure returns the ordered closure and its logical
+// transfer size. It validates records plus blob layout and size without
+// hashing blob bodies; transfer remains responsible for streaming verification.
+func InspectBuildLockStoreClosure(
+	lock BuildLockV1,
+	store providerstore.Store,
+	validateProfileOwner providers.RequirementProfileOwnerValidator,
+	validateBundleOwner providers.ResolvedBundleOwnerValidator,
+) ([]providerstore.StoreObjectRef, uint64, error) {
+	plan, err := loadBuildLockStoreClosure(lock, store, validateProfileOwner, validateBundleOwner)
 	if err != nil {
-		return nil, fmt.Errorf("load build lock validation record: %w", err)
+		return nil, 0, err
+	}
+	total := uint64(len(plan.Validation))
+	for _, content := range plan.Manifests {
+		if err := addBuildClosureBytes(&total, uint64(len(content))); err != nil {
+			return nil, 0, err
+		}
+	}
+	for reference, descriptor := range plan.Artifacts {
+		if _, err := store.InspectArtifactPath(descriptor); err != nil {
+			return nil, 0, fmt.Errorf("inspect build lock blob %s: %w", reference.Digest, err)
+		}
+		size, err := strconv.ParseUint(descriptor.Size, 10, 64)
+		if err != nil {
+			return nil, 0, fmt.Errorf("parse build lock blob %s size: %w", reference.Digest, err)
+		}
+		if err := addBuildClosureBytes(&total, size); err != nil {
+			return nil, 0, err
+		}
+	}
+	return append([]providerstore.StoreObjectRef(nil), plan.References...), total, nil
+}
+
+func addBuildClosureBytes(total *uint64, size uint64) error {
+	if math.MaxUint64-*total < size {
+		return fmt.Errorf("build lock store closure byte size overflows uint64")
+	}
+	*total += size
+	return nil
+}
+
+func loadBuildLockStoreClosure(
+	lock BuildLockV1,
+	store providerstore.Store,
+	validateProfileOwner providers.RequirementProfileOwnerValidator,
+	validateBundleOwner providers.ResolvedBundleOwnerValidator,
+) (buildLockStoreClosurePlan, error) {
+	if err := ValidateBuildLockV1(lock, validateProfileOwner); err != nil {
+		return buildLockStoreClosurePlan{}, fmt.Errorf("build lock store closure: %w", err)
+	}
+	policyDigest, err := RuntimePolicyDigestV1(lock.RuntimePolicy)
+	if err != nil {
+		return buildLockStoreClosurePlan{}, err
+	}
+	validationContent, err := store.LoadValidationRecord(lock.ValidationRecord)
+	if err != nil {
+		return buildLockStoreClosurePlan{}, fmt.Errorf("load build lock validation record: %w", err)
+	}
+	validation, err := DecodePrefixValidation(validationContent, lock.ValidationRecord)
+	if err != nil {
+		return buildLockStoreClosurePlan{}, fmt.Errorf("load build lock validation record: %w", err)
 	}
 	if validation.SubjectRootFS != lock.FinalImage.RootFSSubject || validation.RuntimePolicy != policyDigest {
-		return nil, fmt.Errorf("build lock validation record does not match its final image and runtime policy")
+		return buildLockStoreClosurePlan{}, fmt.Errorf("build lock validation record does not match its final image and runtime policy")
 	}
 
 	objects := map[string]providerstore.StoreObjectRef{}
+	artifacts := map[providerstore.StoreObjectRef]providerstore.ArtifactDescriptor{}
+	orderedArtifacts := []buildLockClosureArtifact{}
+	manifests := map[providerstore.StoreObjectRef][]byte{}
 	addStoreClosureReference(objects, lock.ValidationRecord)
 	for _, node := range lock.Nodes {
-		bundle, err := providers.LoadResolvedBundleManifest(store, node.BundleManifest, validateBundleOwner)
+		manifestContent, err := store.LoadManifest(node.BundleManifest)
 		if err != nil {
-			return nil, fmt.Errorf("load build lock node %q manifest: %w", node.NodeID, err)
+			return buildLockStoreClosurePlan{}, fmt.Errorf("load build lock node %q manifest: %w", node.NodeID, err)
+		}
+		bundle, err := providers.DecodeResolvedBundleManifest(manifestContent, node.BundleManifest, validateBundleOwner)
+		if err != nil {
+			return buildLockStoreClosurePlan{}, fmt.Errorf("load build lock node %q manifest: %w", node.NodeID, err)
 		}
 		profileDigest, err := providers.RequirementProfileDigest(node.RequirementProfile, validateProfileOwner)
 		if err != nil {
-			return nil, err
+			return buildLockStoreClosurePlan{}, err
 		}
 		payload := bundle.Payload
 		if payload.NodeID != node.NodeID || payload.Provider != node.Provider || payload.RequirementProfileDigest != profileDigest || payload.Platform != lock.Platform || payload.Upstream != node.Upstream {
-			return nil, fmt.Errorf("build lock node %q manifest does not match its locked resolution inputs", node.NodeID)
+			return buildLockStoreClosurePlan{}, fmt.Errorf("build lock node %q manifest does not match its locked resolution inputs", node.NodeID)
 		}
 		if len(payload.Outputs) != len(node.Outputs) {
-			return nil, fmt.Errorf("build lock node %q manifest outputs do not match locked realized outputs", node.NodeID)
+			return buildLockStoreClosurePlan{}, fmt.Errorf("build lock node %q manifest outputs do not match locked realized outputs", node.NodeID)
 		}
 		for index, resolved := range payload.Outputs {
 			realized := node.Outputs[index]
 			if resolved.SupplierComponent != realized.SupplierComponent || resolved.SupplierNode != realized.SupplierNode || resolved.Name != realized.Name || !reflect.DeepEqual(resolved.Candidate, realized.Candidate) {
-				return nil, fmt.Errorf("build lock node %q output %d changed after resolution", node.NodeID, index)
+				return buildLockStoreClosurePlan{}, fmt.Errorf("build lock node %q output %d changed after resolution", node.NodeID, index)
 			}
 		}
 		addStoreClosureReference(objects, node.BundleManifest)
+		manifests[node.BundleManifest] = manifestContent
 		for _, artifact := range payload.Artifacts {
-			if err := store.VerifyArtifact(artifact); err != nil {
-				return nil, fmt.Errorf("verify build lock node %q artifact %q: %w", node.NodeID, artifact.LogicalPath, err)
-			}
 			reference, err := artifact.StoreObjectRef()
 			if err != nil {
-				return nil, err
+				return buildLockStoreClosurePlan{}, err
 			}
 			addStoreClosureReference(objects, reference)
+			if previous, found := artifacts[reference]; found && previous.Size != artifact.Size {
+				return buildLockStoreClosurePlan{}, fmt.Errorf("build lock blob %s has conflicting artifact sizes %s and %s", reference.Digest, previous.Size, artifact.Size)
+			}
+			if _, found := artifacts[reference]; !found {
+				artifacts[reference] = artifact
+			}
+			orderedArtifacts = append(orderedArtifacts, buildLockClosureArtifact{NodeID: node.NodeID, Descriptor: artifact})
 		}
 	}
 	result := make([]providerstore.StoreObjectRef, 0, len(objects))
@@ -77,7 +182,10 @@ func BuildLockStoreClosure(
 		}
 		return result[left].Digest < result[right].Digest
 	})
-	return result, nil
+	return buildLockStoreClosurePlan{
+		References: result, Artifacts: artifacts, OrderedArtifacts: orderedArtifacts,
+		Manifests: manifests, Validation: validationContent,
+	}, nil
 }
 
 func (lock *OperationLock) RemoveUnreachableBuildObjects(

@@ -20,9 +20,9 @@ func validResolveContract(t *testing.T) (ResolveInput, ResolveResult) {
 			RequirementID: "interpreter",
 			Outputs:       []RealizedOutput{catalogOutput("base", "base", "python", "/usr/bin/python")},
 		}},
-		Platform: profile.Platform,
-		Sources:  []ResolvedSourceInput{},
-		Upstream: upstream,
+		Platform:         profile.Platform,
+		SourceCandidates: []ResolvedSourceInput{},
+		Upstream:         upstream,
 		ReusableArtifacts: []providerstore.StoreObjectRef{
 			{Kind: providerstore.BlobKind, Digest: testDigest("8")},
 			{Kind: providerstore.BlobKind, Digest: testDigest("9")},
@@ -45,7 +45,7 @@ func validResolveContract(t *testing.T) (ResolveInput, ResolveResult) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return input, ResolveResult{Bundle: bundle, Profile: profile, Evidence: evidence}
+	return input, ResolveResult{Bundle: bundle, Profile: profile, Evidence: evidence, SelectedSources: []ResolvedSourceInput{}}
 }
 
 func TestResolveContractBindsPlatformUpstreamAndProfile(t *testing.T) {
@@ -61,6 +61,42 @@ func TestResolveContractBindsPlatformUpstreamAndProfile(t *testing.T) {
 		FinalImageConfig:    materializeTestFinalImageConfig(),
 	}, validateTestProfileOwner, acceptTestBundleOwner); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestResolveContractAcceptsOnlyExactSelectedSourceCandidates(t *testing.T) {
+	input, result := validResolveContract(t)
+	source := ResolvedSourceInput{
+		Schema: ResolvedSourceInputSchemaV1, Component: "application", LogicalPackage: "demo",
+		SourceManifestDigest: testDigest("a"), BuilderProfile: "python-wheel-v1",
+		BuildSettings:     providerData("python-source-build-settings-v1"),
+		EcosystemMetadata: providerData("python-source-metadata-v1"), ArtifactDigest: testDigest("b"),
+	}
+	input.SourceCandidates = []ResolvedSourceInput{source}
+	result.SelectedSources = []ResolvedSourceInput{source}
+	result.Bundle.Payload.SelectedSources = []ResolvedSourceInput{source}
+	rebuilt, err := NewResolvedBundle(result.Bundle.Payload, acceptTestBundleOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result.Bundle = rebuilt
+	if err := ValidateResolveResult(input, result, validateTestProfileOwner, acceptTestBundleOwner); err != nil {
+		t.Fatal(err)
+	}
+
+	result.SelectedSources = nil
+	if err := ValidateResolveResult(input, result, validateTestProfileOwner, acceptTestBundleOwner); err == nil || !strings.Contains(err.Error(), "must use an array") {
+		t.Fatalf("nil selected sources error = %v", err)
+	}
+	result.SelectedSources = []ResolvedSourceInput{source}
+	result.SelectedSources[0].ArtifactDigest = testDigest("c")
+	if err := ValidateResolveResult(input, result, validateTestProfileOwner, acceptTestBundleOwner); err == nil || !strings.Contains(err.Error(), "exactly match") {
+		t.Fatalf("changed selected source error = %v", err)
+	}
+	result.SelectedSources = []ResolvedSourceInput{source}
+	result.SelectedSources[0].LogicalPackage = "other"
+	if err := ValidateResolveResult(input, result, validateTestProfileOwner, acceptTestBundleOwner); err == nil || !strings.Contains(err.Error(), "not offered") {
+		t.Fatalf("unknown selected source error = %v", err)
 	}
 }
 
@@ -128,13 +164,13 @@ func TestResolveContractRejectsPlatformMismatchAndMalformedInputs(t *testing.T) 
 	}
 
 	input, _ = validResolveContract(t)
-	input.Sources = nil
+	input.SourceCandidates = nil
 	if err := ValidateResolveInput(input); err == nil || !strings.Contains(err.Error(), "must use arrays") {
 		t.Fatalf("nil sources error = %v", err)
 	}
 
 	input, _ = validResolveContract(t)
-	input.Sources = []ResolvedSourceInput{{
+	input.SourceCandidates = []ResolvedSourceInput{{
 		Schema: ResolvedSourceInputSchemaV1, Component: "other", LogicalPackage: "demo",
 		SourceManifestDigest: testDigest("1"), BuilderProfile: "python-wheel-v1",
 		BuildSettings:     providerData("python-source-build-settings-v1"),

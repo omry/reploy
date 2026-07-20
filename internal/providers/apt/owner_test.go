@@ -96,9 +96,10 @@ func TestAPTResolvedBundleOwnerRequiresExactPayloadArtifacts(t *testing.T) {
 	payload := providers.ResolvedBundleIdentityV1{
 		Schema: providers.ResolvedBundleSchemaV1, NodeID: "apt", Provider: blueprint.ComponentTypeAPT,
 		Request: request, RequirementProfileDigest: digest, RecipeVersion: RecipeVersion,
-		Platform:  aptBasePlatform(t, "linux/amd64"),
-		Upstream:  providers.RealizedImageV1{Digest: digest, ConfigDigest: digest, RootFSSubject: digest},
-		Artifacts: []providerstore.ArtifactDescriptor{bundle.BundlePackages[0].Artifact, bundle.Script, bundle.StateManifest}, Outputs: []providers.ResolvedOutput{}, ProviderPayload: data,
+		Platform:        aptBasePlatform(t, "linux/amd64"),
+		Upstream:        providers.RealizedImageV1{Digest: digest, ConfigDigest: digest, RootFSSubject: digest},
+		SelectedSources: []providers.ResolvedSourceInput{},
+		Artifacts:       []providerstore.ArtifactDescriptor{bundle.BundlePackages[0].Artifact, bundle.Script, bundle.StateManifest}, Outputs: []providers.ResolvedOutput{}, ProviderPayload: data,
 	}
 	sort.Slice(payload.Artifacts, func(left int, right int) bool {
 		return payload.Artifacts[left].LogicalPath < payload.Artifacts[right].LogicalPath

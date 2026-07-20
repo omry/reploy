@@ -11,9 +11,6 @@ type NodePlanner interface {
 }
 
 func BuildProviderPlanV1(input PlanInput, planners ...NodePlanner) (ProviderPlanV1, error) {
-	if err := input.BlueprintDigest.Validate(); err != nil {
-		return ProviderPlanV1{}, fmt.Errorf("provider plan blueprint digest: %w", err)
-	}
 	if err := input.Platform.Validate(); err != nil {
 		return ProviderPlanV1{}, fmt.Errorf("provider plan platform: %w", err)
 	}

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/omry/reploy/internal/providers"
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
 	"github.com/omry/reploy/internal/providerstore"
 )
@@ -25,6 +26,39 @@ type PreparedPythonResolverArtifacts struct {
 	OutputHostDir      string
 	InputContainerDir  string
 	OutputContainerDir string
+}
+
+// StagePythonResolverSourceConstraints places the provider-owned constraints
+// beside the verified wheels before the one pip invocation consumes them.
+func StagePythonResolverSourceConstraints(
+	prepared PreparedPythonResolverArtifacts,
+	request providers.CanonicalProviderRequest,
+	sources []providers.ResolvedSourceInput,
+	reusable []providerstore.ArtifactDescriptor,
+) error {
+	if err := validatePreparedPythonResolverArtifacts(prepared); err != nil {
+		return err
+	}
+	content, err := pythonprovider.WheelResolverSourceConstraints(request, sources, reusable)
+	if err != nil {
+		return err
+	}
+	if len(content) == 0 {
+		return nil
+	}
+	if err := os.Chmod(prepared.InputHostDir, 0o700); err != nil {
+		return fmt.Errorf("make Python resolver input writable for source constraints: %w", err)
+	}
+	constraintPath := filepath.Join(prepared.InputHostDir, filepath.Base(pythonprovider.ResolverSourceConstraintsPath))
+	writeErr := os.WriteFile(constraintPath, content, 0o400)
+	protectErr := os.Chmod(prepared.InputHostDir, 0o500)
+	if writeErr != nil {
+		return errors.Join(fmt.Errorf("write Python resolver source constraints: %w", writeErr), protectErr)
+	}
+	if protectErr != nil {
+		return fmt.Errorf("restore Python resolver input protection: %w", protectErr)
+	}
+	return nil
 }
 
 func validatePreparedPythonResolverArtifacts(prepared PreparedPythonResolverArtifacts) error {

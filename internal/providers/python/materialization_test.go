@@ -26,7 +26,7 @@ func pythonMaterializeTestInput(t *testing.T) providerapi.MaterializeInput {
 	}
 	request := providerapi.ResolveNodeRequest{
 		Plan: plan, NodeID: "python/application", EarlierCatalog: catalog, Platform: platform,
-		Sources: []providerapi.ResolvedSourceInput{}, Upstream: upstream, ReusableArtifacts: []providerstore.StoreObjectRef{},
+		SourceCandidates: []providerapi.ResolvedSourceInput{}, Upstream: upstream, ReusableArtifacts: []providerstore.StoreObjectRef{},
 	}
 	result, err := providerapi.ResolveProviderNode(context.Background(), request, resolver, preparedTestSink{}, providerapi.ProviderOwnerValidators{
 		Profile: ValidateRequirementProfileV1, Bundle: ValidateResolvedBundlePayloadV1,

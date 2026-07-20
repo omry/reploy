@@ -25,6 +25,7 @@ type ResolvedBundleIdentityV1 struct {
 	RecipeVersion            string                             `json:"recipe_version"`
 	Platform                 blueprint.Platform                 `json:"platform"`
 	Upstream                 RealizedImageV1                    `json:"upstream"`
+	SelectedSources          []ResolvedSourceInput              `json:"selected_sources"`
 	Artifacts                []providerstore.ArtifactDescriptor `json:"artifacts"`
 	Outputs                  []ResolvedOutput                   `json:"outputs"`
 	ProviderPayload          CanonicalProviderData              `json:"provider_payload"`
@@ -113,8 +114,16 @@ func ValidateResolvedBundlePayload(payload ResolvedBundleIdentityV1, validateOwn
 	if err := payload.Upstream.Validate(); err != nil {
 		return fmt.Errorf("resolved bundle upstream: %w", err)
 	}
-	if payload.Artifacts == nil || payload.Outputs == nil {
-		return fmt.Errorf("resolved bundle artifacts and outputs must use arrays")
+	if payload.SelectedSources == nil || payload.Artifacts == nil || payload.Outputs == nil {
+		return fmt.Errorf("resolved bundle selected sources, artifacts, and outputs must use arrays")
+	}
+	for index, source := range payload.SelectedSources {
+		if index > 0 && compareResolvedSourceInputs(payload.SelectedSources[index-1], source) >= 0 {
+			return fmt.Errorf("resolved bundle selected sources must be unique and sorted by component and logical package")
+		}
+		if err := ValidateResolvedSourceInput(source); err != nil {
+			return fmt.Errorf("resolved bundle selected source %d: %w", index, err)
+		}
 	}
 	for index, artifact := range payload.Artifacts {
 		if index > 0 && payload.Artifacts[index-1].LogicalPath >= artifact.LogicalPath {

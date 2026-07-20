@@ -96,7 +96,7 @@ func TestExecutePendingPublicationRecoveryRemovesPendingLast(t *testing.T) {
 	}
 	plan := PendingPublicationRecovery{Pending: pending, Decision: deploy.PendingRecoveryDiscardCandidate}
 	recovered := false
-	recoverReferences := func(context.Context, deploy.PendingBuildV1, deploy.PendingRecoveryDecision, string, string) error {
+	recoverReferences := func(context.Context, deploy.PendingBuildV1, deploy.PendingRecoveryDecision, *providers.RealizedImageV1, string, string) error {
 		recovered = true
 		_, found, err := operation.ReadPendingBuild()
 		if err != nil || !found {
@@ -140,7 +140,7 @@ func TestExecutePendingPublicationRecoveryKeepsPendingOnReferenceFailure(t *test
 	}
 	want := errors.New("reference backend failed")
 	plan := PendingPublicationRecovery{Pending: pending, Decision: deploy.PendingRecoveryDiscardCandidate}
-	err = executePendingPublicationRecovery(t.Context(), operation, store, plan, "demo", dir, acceptRecoveryProfileOwner, acceptRecoveryBundleOwner, func(context.Context, deploy.PendingBuildV1, deploy.PendingRecoveryDecision, string, string) error {
+	err = executePendingPublicationRecovery(t.Context(), operation, store, plan, "demo", dir, acceptRecoveryProfileOwner, acceptRecoveryBundleOwner, func(context.Context, deploy.PendingBuildV1, deploy.PendingRecoveryDecision, *providers.RealizedImageV1, string, string) error {
 		return want
 	})
 	if !errors.Is(err, want) {

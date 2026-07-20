@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -24,13 +25,17 @@ import (
 func TestLoadPreparedPythonGraphReuseUsesOnlyCurrentCompatibleContent(t *testing.T) {
 	fixture := newPreparedPythonGraphReuseFixture(t)
 	reuse, err := LoadPreparedPythonGraphReuse(
-		fixture.store, fixture.request.Plan, fixture.request.Platform, fixture.request.Sources, fixture.sourceWheels, &fixture.lock,
+		fixture.store, fixture.request.Plan, fixture.request.Platform, fixture.request.SourceCandidates, fixture.sourceWheels, &fixture.lock,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, found := reuse.CachedResolutions[fixture.request.NodeID]; !found {
+	cached, found := reuse.CachedResolutions[fixture.request.NodeID]
+	if !found {
 		t.Fatalf("cached resolutions = %#v", reuse.CachedResolutions)
+	}
+	if len(cached.SelectedSources) != 1 || !reflect.DeepEqual(cached.SelectedSources[0], fixture.request.SourceCandidates[0]) {
+		t.Fatalf("cached selected sources = %#v", cached.SelectedSources)
 	}
 	if got := len(reuse.NodeConfigs[fixture.request.NodeID].ReusableWheels); got != 2 {
 		t.Fatalf("reusable wheels = %d, want 2", got)
@@ -39,7 +44,7 @@ func TestLoadPreparedPythonGraphReuseUsesOnlyCurrentCompatibleContent(t *testing
 		t.Fatalf("reusable references = %d, want 2", got)
 	}
 
-	changed := append([]providers.ResolvedSourceInput{}, fixture.request.Sources...)
+	changed := append([]providers.ResolvedSourceInput{}, fixture.request.SourceCandidates...)
 	changed[0].BuilderProfile = "different-builder"
 	newLocal, err := fixture.store.Publish(context.Background(), "wheels/demo_server-1.1-py3-none-any.whl", "wheel", strings.NewReader("new local wheel"))
 	if err != nil {
@@ -61,10 +66,41 @@ func TestLoadPreparedPythonGraphReuseUsesOnlyCurrentCompatibleContent(t *testing
 	}
 }
 
+func TestLoadPreparedPythonGraphReuseIgnoresUnusedSourceCandidate(t *testing.T) {
+	fixture := newPreparedPythonGraphReuseFixture(t)
+	unusedWheel, err := fixture.store.Publish(
+		context.Background(), "wheels/unused_source-1-py3-none-any.whl", "wheel",
+		strings.NewReader("unused local wheel"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unused := fixture.request.SourceCandidates[0]
+	unused.LogicalPackage = "unused-source"
+	unused.SourceManifestDigest = reuseTestDigest("e")
+	unused.ArtifactDigest = unusedWheel.SHA256
+	candidates := append(append([]providers.ResolvedSourceInput{}, fixture.request.SourceCandidates...), unused)
+	wheels := append(append([]providerstore.ArtifactDescriptor{}, fixture.sourceWheels...), unusedWheel)
+
+	reuse, err := LoadPreparedPythonGraphReuse(
+		fixture.store, fixture.request.Plan, fixture.request.Platform, candidates, wheels, &fixture.lock,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached, found := reuse.CachedResolutions[fixture.request.NodeID]
+	if !found || !reflect.DeepEqual(cached.SelectedSources, fixture.request.SourceCandidates) {
+		t.Fatalf("unused candidate invalidated cached resolution: %#v", reuse.CachedResolutions)
+	}
+	if got := len(reuse.NodeConfigs[fixture.request.NodeID].ReusableWheels); got != 3 {
+		t.Fatalf("reusable wheels = %d, want selected, downloaded, and unused candidates", got)
+	}
+}
+
 func TestLoadPreparedPythonGraphReuseRequiresCurrentSourceWheelOnFirstBuild(t *testing.T) {
 	fixture := newPreparedPythonGraphReuseFixture(t)
 	reuse, err := LoadPreparedPythonGraphReuse(
-		fixture.store, fixture.request.Plan, fixture.request.Platform, fixture.request.Sources, fixture.sourceWheels, nil,
+		fixture.store, fixture.request.Plan, fixture.request.Platform, fixture.request.SourceCandidates, fixture.sourceWheels, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +113,7 @@ func TestLoadPreparedPythonGraphReuseRequiresCurrentSourceWheelOnFirstBuild(t *t
 		t.Fatalf("first-build cached resolutions = %#v", reuse.CachedResolutions)
 	}
 	_, err = LoadPreparedPythonGraphReuse(
-		fixture.store, fixture.request.Plan, fixture.request.Platform, fixture.request.Sources, []providerstore.ArtifactDescriptor{}, nil,
+		fixture.store, fixture.request.Plan, fixture.request.Platform, fixture.request.SourceCandidates, []providerstore.ArtifactDescriptor{}, nil,
 	)
 	if err == nil || !strings.Contains(err.Error(), "has no wheel descriptor") {
 		t.Fatalf("missing source wheel error = %v", err)
@@ -93,7 +129,7 @@ func TestLoadPreparedPythonGraphReuseInitializesAPTAlongsidePython(t *testing.T)
 		t.Fatal(err)
 	}
 	reuse, err := LoadPreparedPythonGraphReuse(
-		fixture.store, plan, fixture.request.Platform, fixture.request.Sources, fixture.sourceWheels, nil,
+		fixture.store, plan, fixture.request.Platform, fixture.request.SourceCandidates, fixture.sourceWheels, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -173,7 +209,7 @@ func TestLoadPreparedPythonGraphReuseTreatsMissingBlobAsCacheMiss(t *testing.T) 
 		t.Fatal(err)
 	}
 	reuse, err := LoadPreparedPythonGraphReuse(
-		fixture.store, fixture.request.Plan, fixture.request.Platform, fixture.request.Sources, fixture.sourceWheels, &fixture.lock,
+		fixture.store, fixture.request.Plan, fixture.request.Platform, fixture.request.SourceCandidates, fixture.sourceWheels, &fixture.lock,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -190,7 +226,7 @@ func TestLoadPreparedPythonGraphReuseTreatsMissingBlobAsCacheMiss(t *testing.T) 
 func TestPreparedPythonCachedValidationHashesStagedWheelBeforeConsumerWork(t *testing.T) {
 	fixture := newPreparedPythonGraphReuseFixture(t)
 	reuse, err := LoadPreparedPythonGraphReuse(
-		fixture.store, fixture.request.Plan, fixture.request.Platform, fixture.request.Sources, fixture.sourceWheels, &fixture.lock,
+		fixture.store, fixture.request.Plan, fixture.request.Platform, fixture.request.SourceCandidates, fixture.sourceWheels, &fixture.lock,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -254,7 +290,7 @@ func newPreparedPythonGraphReuseFixture(t *testing.T) preparedPythonGraphReuseFi
 	writeReuseTestWheel(t, downloadedPath, "dependency", "2.0")
 	localDigest := reuseTestFileDigest(t, localPath)
 	downloadedDigest := reuseTestFileDigest(t, downloadedPath)
-	request.Sources = []providers.ResolvedSourceInput{{
+	request.SourceCandidates = []providers.ResolvedSourceInput{{
 		Schema:               providers.ResolvedSourceInputSchemaV1,
 		Component:            "application",
 		LogicalPackage:       "demo-server",
@@ -324,6 +360,7 @@ func newPreparedPythonGraphReuseFixture(t *testing.T) preparedPythonGraphReuseFi
 			Upstream: request.Upstream, Result: resultImage,
 			GeneratedExecutables: []providers.RealizedGeneratedExecutable{}, Outputs: []providers.RealizedOutput{},
 		}},
+		Catalog: append([]providers.RealizedOutput{}, request.EarlierCatalog...),
 		RuntimePolicy: deploy.RuntimePolicyV1{
 			Schema: deploy.RuntimePolicySchemaV1, AllowedRoots: []string{"/mnt"},
 			ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{},
@@ -407,7 +444,7 @@ func newPreparedAPTGraphReuseFixture(t *testing.T) (
 	bundle, err := providers.NewResolvedBundle(providers.ResolvedBundleIdentityV1{
 		Schema: providers.ResolvedBundleSchemaV1, NodeID: "apt", Provider: blueprint.ComponentTypeAPT,
 		Request: request, RequirementProfileDigest: profileDigest, RecipeVersion: aptprovider.RecipeVersion,
-		Platform: descriptor.Platform, Upstream: upstream, Artifacts: artifacts,
+		Platform: descriptor.Platform, Upstream: upstream, SelectedSources: []providers.ResolvedSourceInput{}, Artifacts: artifacts,
 		Outputs: []providers.ResolvedOutput{}, ProviderPayload: providerPayload,
 	}, aptprovider.ValidateResolvedBundlePayloadV1)
 	if err != nil {
@@ -437,6 +474,7 @@ func newPreparedAPTGraphReuseFixture(t *testing.T) (
 			Upstream: upstream, Result: resultImage,
 			GeneratedExecutables: []providers.RealizedGeneratedExecutable{}, Outputs: []providers.RealizedOutput{},
 		}},
+		Catalog: []providers.RealizedOutput{},
 		RuntimePolicy: deploy.RuntimePolicyV1{
 			Schema: deploy.RuntimePolicySchemaV1, AllowedRoots: []string{"/mnt"},
 			ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{},

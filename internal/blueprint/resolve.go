@@ -55,7 +55,8 @@ func Resolve(source Syntax) (Document, error) {
 			Commands:      map[string]Command{},
 		},
 		Docker: Docker{
-			Mounts: map[string]DockerMount{},
+			AdditionalMountRoots: []string{},
+			Mounts:               map[string]DockerMount{},
 		},
 	}
 	if document.Blueprint.Version == "" {
@@ -67,10 +68,8 @@ func Resolve(source Syntax) (Document, error) {
 	if err := resolveComponents(source, &document); err != nil {
 		return Document{}, err
 	}
-	for name, component := range document.Environment.Components {
-		if component.Type == ComponentTypeAPT {
-			return Document{}, fmt.Errorf("environment.components.%s.type apt is not publicly enabled until the APT cross-provider gate passes", name)
-		}
+	if err := resolveAdditionalMountRoots(source.Docker.AdditionalMountRoots, &document); err != nil {
+		return Document{}, err
 	}
 	if err := resolvePathsAndMounts(source, extended, &document); err != nil {
 		return Document{}, err
@@ -82,6 +81,26 @@ func Resolve(source Syntax) (Document, error) {
 		return Document{}, err
 	}
 	return document, nil
+}
+
+func resolveAdditionalMountRoots(values []string, document *Document) error {
+	roots := append([]string{}, values...)
+	sort.Strings(roots)
+	for index, root := range roots {
+		if !path.IsAbs(root) || path.Clean(root) != root || root == "/" || strings.Contains(root, `\`) {
+			return fmt.Errorf("docker.additional_mount_roots entry %q must be a normalized absolute Linux path other than /", root)
+		}
+		if root == "/mnt" || strings.HasPrefix(root, "/mnt/") || strings.HasPrefix("/mnt", root+"/") {
+			return fmt.Errorf("docker.additional_mount_roots entry %q overlaps the built-in /mnt root", root)
+		}
+		for _, previous := range roots[:index] {
+			if previous == root || strings.HasPrefix(root, previous+"/") {
+				return fmt.Errorf("docker.additional_mount_roots entries %q and %q overlap", previous, root)
+			}
+		}
+	}
+	document.Docker.AdditionalMountRoots = roots
+	return nil
 }
 
 func resolveTranslations(source Syntax, document *Document) error {

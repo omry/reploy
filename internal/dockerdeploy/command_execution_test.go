@@ -7,6 +7,7 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/legacyprovider"
+	"github.com/omry/reploy/internal/providers"
 )
 
 func commandTestDocument() blueprint.Document {
@@ -20,6 +21,42 @@ func commandTestDocument() blueprint.Document {
 			"special": {Executable: "server", Trigger: []string{"config", "show"}, NativeCommand: true, Argv: []string{"show"}, Order: []blueprint.ArgumentSegment{blueprint.ArgumentBinary, blueprint.ArgumentCommand, blueprint.ArgumentSuffix, blueprint.ArgumentForwarded}},
 		},
 	}}
+}
+
+func TestResolveLockedEnvironmentCommandV1UsesQualifiedCatalogOutput(t *testing.T) {
+	resolved, err := resolveLockedEnvironmentCommandV1(commandTestDocument(), []providers.RealizedOutput{
+		{
+			SupplierComponent: "other", Name: "demo",
+			Candidate: providers.ExecutableCandidate{InvocationPath: "/opt/other"},
+			Evidence:  providers.ExecutableEvidence{InvocationPath: "/opt/other"},
+		},
+		{
+			SupplierComponent: "application", Name: "demo",
+			Candidate: providers.ExecutableCandidate{InvocationPath: "/opt/demo"},
+			Evidence:  providers.ExecutableEvidence{InvocationPath: "/opt/demo"},
+		},
+	}, "special", []string{"value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(resolved.Argv, []string{"/opt/demo", "show", "--suffix", "value"}) {
+		t.Fatalf("argv = %#v", resolved.Argv)
+	}
+}
+
+func TestResolveLockedEnvironmentCommandV1RejectsMissingOrDriftingOutput(t *testing.T) {
+	document := commandTestDocument()
+	if _, err := resolveLockedEnvironmentCommandV1(document, []providers.RealizedOutput{}, "serve", nil); err == nil || !strings.Contains(err.Error(), "locked output catalog") {
+		t.Fatalf("missing output error = %v", err)
+	}
+	_, err := resolveLockedEnvironmentCommandV1(document, []providers.RealizedOutput{{
+		SupplierComponent: "application", Name: "demo",
+		Candidate: providers.ExecutableCandidate{InvocationPath: "/opt/demo"},
+		Evidence:  providers.ExecutableEvidence{InvocationPath: "/opt/other"},
+	}}, "serve", nil)
+	if err == nil || !strings.Contains(err.Error(), "locked evidence") {
+		t.Fatalf("drifting output error = %v", err)
+	}
 }
 
 func TestResolveEnvironmentCommandSegmentOrder(t *testing.T) {
@@ -78,7 +115,8 @@ func TestMatchEnvironmentCommandLongestTriggerAndForwarding(t *testing.T) {
 
 func TestTransientAndShellCommandsUseDockerExecArgv(t *testing.T) {
 	plan := DockerExecutionPlan{Image: "reploy/demo:staging", ContainerName: "demo", RuntimeUser: RuntimeUserPlan{DockerUser: "501:20"}, Mounts: []MountExecutionPlan{{Mode: blueprint.MountManagedBind, Source: "/tmp/conf", Target: "/conf", ReadOnly: true}}}
-	spec, err := TransientCommandSpec(plan, ResolvedEnvironmentCommand{Argv: []string{"/opt/demo", ";rm", "$(touch pwned)"}}, true, false)
+	output := &transientOutputMount{HostDirectory: "/tmp/output", Variable: runtimeOutputFileVariable, ContainerPath: runtimeOutputRoot + "/output"}
+	spec, err := TransientCommandSpec(plan, ResolvedEnvironmentCommand{Argv: []string{"/opt/demo", ";rm", "$(touch pwned)"}}, output, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,15 +124,21 @@ func TestTransientAndShellCommandsUseDockerExecArgv(t *testing.T) {
 	if !strings.Contains(joined, "/opt/demo|;rm|$(touch pwned)") || strings.Contains(joined, "sh|-c") {
 		t.Fatalf("spec = %#v", spec)
 	}
+	if !containsInOrder(spec.Args, []string{"--mount", "type=bind,source=/tmp/output,target=" + runtimeOutputRoot, "--env", runtimeOutputFileVariable + "=" + runtimeOutputRoot + "/output"}) {
+		t.Fatalf("spec lacks explicit output mount: %#v", spec.Args)
+	}
 	shell := ShellCommandSpec(plan, true, true)
 	if !strings.Contains(strings.Join(shell.Args, " "), "--interactive --tty") || shell.Args[len(shell.Args)-1] != "/bin/sh" {
 		t.Fatalf("shell = %#v", shell)
 	}
 	if !containsInOrder(shell.Args, []string{
-		"--read-only", "--tmpfs", temporaryHomeMountForPlan(plan),
+		"--read-only", "--mount", transientHomeMountForPlan(plan),
 		"--env", "HOME=" + environmentTemporaryHome,
 		"--env", "TMPDIR=" + environmentTemporaryHome,
 	}) {
-		t.Fatalf("shell lacks a read-only root and temporary home: %#v", shell.Args)
+		t.Fatalf("shell lacks a read-only root and anonymous temporary home: %#v", shell.Args)
+	}
+	if strings.Contains(strings.Join(shell.Args, " "), "--tmpfs") {
+		t.Fatalf("transient home unexpectedly uses tmpfs: %#v", shell.Args)
 	}
 }

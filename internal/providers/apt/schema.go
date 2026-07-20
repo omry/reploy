@@ -157,9 +157,6 @@ func decodeCanonicalProviderRequestV1(request providers.CanonicalProviderRequest
 }
 
 func (ComponentProvider) Plan(input providers.PlanInput) ([]providers.NodeSpec, error) {
-	if err := input.BlueprintDigest.Validate(); err != nil {
-		return nil, fmt.Errorf("APT plan blueprint digest: %w", err)
-	}
 	if err := input.Platform.Validate(); err != nil {
 		return nil, fmt.Errorf("APT plan platform: %w", err)
 	}

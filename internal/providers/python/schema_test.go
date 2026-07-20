@@ -139,6 +139,12 @@ func TestPythonOwnerValidatorsBindProfileAndBundlePayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	driftedProfile := profile
+	driftedProfile.Declaration.Executables = append([]providers.ExecutableRequirement{}, profile.Declaration.Executables...)
+	driftedProfile.Declaration.Executables[0].VersionConstraint = ">=3.11"
+	if _, err := providers.RequirementProfileDigest(driftedProfile, ValidateRequirementProfileV1); err == nil || !strings.Contains(err.Error(), "canonical request") {
+		t.Fatalf("drifted Python profile error = %v", err)
+	}
 	artifact := providerstore.ArtifactDescriptor{LogicalPath: "wheels/demo.whl", Kind: "wheel", Size: "100", SHA256: schemaTestDigest("a")}
 	pythonBundle := PythonBundleV1{
 		Interpreter: interpreter,
@@ -156,8 +162,9 @@ func TestPythonOwnerValidatorsBindProfileAndBundlePayload(t *testing.T) {
 	payload := providers.ResolvedBundleIdentityV1{
 		Schema: providers.ResolvedBundleSchemaV1, NodeID: "python/application", Provider: blueprint.ComponentTypePython,
 		Request: request, RequirementProfileDigest: profileDigest, RecipeVersion: RecipeVersion, Platform: platform,
-		Upstream:  providers.RealizedImageV1{Digest: schemaTestDigest("b"), ConfigDigest: schemaTestDigest("c"), RootFSSubject: schemaTestDigest("d")},
-		Artifacts: []providerstore.ArtifactDescriptor{schemaTestMaterializationScript(), artifact},
+		Upstream:        providers.RealizedImageV1{Digest: schemaTestDigest("b"), ConfigDigest: schemaTestDigest("c"), RootFSSubject: schemaTestDigest("d")},
+		SelectedSources: []providers.ResolvedSourceInput{},
+		Artifacts:       []providerstore.ArtifactDescriptor{schemaTestMaterializationScript(), artifact},
 		Outputs: []providers.ResolvedOutput{{
 			SupplierComponent: "application", SupplierNode: "python/application", Name: "demo",
 			Candidate: providers.ExecutableCandidate{
@@ -204,7 +211,7 @@ func TestComponentProviderPlansOneTypedNodePerPythonComponent(t *testing.T) {
 		t.Fatal(err)
 	}
 	nodes, err := (ComponentProvider{}).Plan(providers.PlanInput{
-		BlueprintDigest: schemaTestDigest("c"), Platform: platform,
+		Platform:   platform,
 		Components: []providers.ResolvedComponentRequestV1{{Component: "application", Provider: blueprint.ComponentTypePython, Request: request}},
 	})
 	if err != nil {

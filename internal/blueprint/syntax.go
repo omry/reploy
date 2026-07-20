@@ -175,8 +175,9 @@ type InstallSuccessSyntax struct {
 }
 
 type DockerSyntax struct {
-	Mounts   map[string]DockerMountSyntax `yaml:"mounts"`
-	Workload *DockerWorkloadSyntax        `yaml:"workload"`
+	AdditionalMountRoots []string                     `yaml:"additional_mount_roots"`
+	Mounts               map[string]DockerMountSyntax `yaml:"mounts"`
+	Workload             *DockerWorkloadSyntax        `yaml:"workload"`
 }
 
 type DockerMountSyntax struct {

@@ -29,7 +29,6 @@ type InstallOptions struct {
 	PortOverrides          []PortOverride
 	Replace                []string
 	Clean                  bool
-	InPlace                bool
 	Start                  bool
 	DryRun                 bool
 	Stdout                 io.Writer
@@ -45,7 +44,6 @@ type DirectInstallOptions struct {
 	PortOverrides          []PortOverride
 	Replace                []string
 	Clean                  bool
-	InPlace                bool
 	Start                  bool
 	DryRun                 bool
 	Stdout                 io.Writer
@@ -88,7 +86,6 @@ type installPlan struct {
 	Clean                  bool
 	Start                  bool
 	ComposeOverride        bool
-	InPlace                bool
 	Progress               io.Writer
 	DockerPreflightTimeout time.Duration
 }
@@ -285,32 +282,6 @@ func DirectInstall(options DirectInstallOptions) (string, error) {
 		return "", err
 	}
 	options.Pack = pack.Ref
-	if options.InPlace {
-		if options.DryRun {
-			return target, directInstallViaTemporaryStaging(target, options)
-		}
-		if _, err := Init(InitOptions{Dir: target, Pack: pack.Ref}); err != nil {
-			return "", err
-		}
-		if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: target, Stdout: options.Stdout, DockerPreflightTimeout: options.DockerPreflightTimeout}); err != nil {
-			return "", fmt.Errorf("prepare direct install bundle: %w", err)
-		}
-		return target, Install(InstallOptions{
-			Dir:                    target,
-			Target:                 target,
-			Scope:                  scope,
-			Service:                options.Service,
-			PortOverrides:          options.PortOverrides,
-			Replace:                options.Replace,
-			Clean:                  options.Clean,
-			InPlace:                true,
-			Start:                  options.Start,
-			DryRun:                 options.DryRun,
-			Stdout:                 options.Stdout,
-			Progress:               options.Progress,
-			DockerPreflightTimeout: options.DockerPreflightTimeout,
-		})
-	}
 	return target, directInstallViaTemporaryStaging(target, options)
 }
 
@@ -381,11 +352,8 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 	if err != nil {
 		return installPlan{}, err
 	}
-	if installPathsOverlap(canonicalSourceDir, canonicalTargetDir) && !options.InPlace {
+	if installPathsOverlap(canonicalSourceDir, canonicalTargetDir) {
 		return installPlan{}, fmt.Errorf("--to must not overlap deployment directory: %s overlaps %s", target, absoluteDir)
-	}
-	if options.InPlace && canonicalSourceDir != canonicalTargetDir {
-		return installPlan{}, fmt.Errorf("--in-place requires deployment directory and target to be the same path")
 	}
 	if options.Service == "" {
 		service, err := defaultInstallService(options.Dir)
@@ -517,7 +485,6 @@ func newInstallPlan(options InstallOptions) (installPlan, error) {
 		Clean:                  options.Clean,
 		Start:                  options.Start,
 		ComposeOverride:        overrideErr == nil,
-		InPlace:                options.InPlace,
 		Progress:               options.Progress,
 		DockerPreflightTimeout: options.DockerPreflightTimeout,
 	}, nil
@@ -1735,13 +1702,9 @@ func prepareInstalledDeployment(plan installPlan) error {
 	if err := prepareEnvironmentPathUpdates(plan); err != nil {
 		return fmt.Errorf("prepare environment paths: %w", err)
 	}
-	if !plan.InPlace {
-		installProgress(plan.Progress, "copying staged deployment")
-		if err := copyDeploymentTreeProtected(plan.SourceDir, plan.TargetDir, plan.PreservePaths, plan.ControlScript, runtimeRelativePath); err != nil {
-			return fmt.Errorf("copy deployment: %w", err)
-		}
-	} else {
-		installProgress(plan.Progress, "using staging directory in place")
+	installProgress(plan.Progress, "copying staged deployment")
+	if err := copyDeploymentTreeProtected(plan.SourceDir, plan.TargetDir, plan.PreservePaths, plan.ControlScript, runtimeRelativePath); err != nil {
+		return fmt.Errorf("copy deployment: %w", err)
 	}
 	installProgress(plan.Progress, "writing installed control scripts")
 	if err := writeInstalledControlScripts(plan); err != nil {

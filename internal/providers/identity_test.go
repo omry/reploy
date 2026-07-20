@@ -15,7 +15,7 @@ func validResolvedRequest() ResolvedRequestV1 {
 		panic(err)
 	}
 	return ResolvedRequestV1{
-		Schema: ResolvedRequestSchemaV1, BlueprintDigest: testDigest("1"), OverlayDigest: testDigest("2"), Platform: platform,
+		Schema: ResolvedRequestSchemaV1, OverlayDigest: testDigest("2"), Platform: platform,
 		Components: []ResolvedComponentRequestV1{
 			{Component: "application", Provider: blueprint.ComponentTypePython, Request: providerRequest(blueprint.ComponentTypePython, "python-provider-request-v1")},
 			{Component: "base", Provider: blueprint.ComponentTypeBase, Request: providerRequest(blueprint.ComponentTypeBase, "base-provider-request-v1")},
@@ -110,6 +110,22 @@ func TestResolverCacheKeyDigestIsNodeLocal(t *testing.T) {
 	key.NodeID = "base"
 	if _, err := ResolverCacheKeyDigest(key); err == nil || !strings.Contains(err.Error(), "resolver node") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestProviderRequestDigestBindsCanonicalRequest(t *testing.T) {
+	request := providerRequest(blueprint.ComponentTypePython, "python-provider-request-v1")
+	first, err := ProviderRequestDigest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Value["name"] = "changed"
+	second, err := ProviderRequestDigest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("provider request digest did not bind canonical request content")
 	}
 }
 
