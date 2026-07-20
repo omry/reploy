@@ -124,7 +124,7 @@ func TestPythonOwnerValidatorsBindProfileAndBundlePayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	profile := providers.RequirementProfile{
-		Schema: providers.RequirementProfileSchemaV1,
+		Schema: providers.RequirementProfileSchemaV1, Provider: blueprint.ComponentTypePython,
 		Declaration: providers.RequirementDeclaration{
 			Executables: []providers.ExecutableRequirement{{
 				ID: "interpreter", Command: "python", Supplier: "base", ValidationPolicy: providers.ValidationPolicyCompatible,

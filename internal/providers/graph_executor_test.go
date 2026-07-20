@@ -251,7 +251,7 @@ func graphTestResolution(t *testing.T, request ResolveNodeRequest, platform blue
 		selected = append(selected, selectionEvidence(requirement, input.Candidates[index].Outputs[0]))
 	}
 	profile := RequirementProfile{
-		Schema: RequirementProfileSchemaV1, Declaration: node.Requirements,
+		Schema: RequirementProfileSchemaV1, Provider: node.Provider, Declaration: node.Requirements,
 		SelectedExecutables: selected, SelectedFiles: []FileEvidence{}, Platform: platform,
 		Facts: providerData("graph-profile-v1"),
 	}

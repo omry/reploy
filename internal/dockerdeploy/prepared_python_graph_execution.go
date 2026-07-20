@@ -52,7 +52,8 @@ func ExecutePreparedPythonGraph(
 		return providers.GraphExecutionResult{}, err
 	}
 	backend, cleanup, err := preparePythonGraphExecutionBackend(
-		ctx, input.Store, input.Plan, input.BaseDescriptor, input.FinalImageConfig, reuse.NodeConfigs, input.RunOptions,
+		ctx, input.Store, input.Plan, input.BaseDescriptor, input.FinalImageConfig, reuse.NodeConfigs,
+		reuse.APTNodeConfigs, input.RunOptions,
 	)
 	if err != nil {
 		return providers.GraphExecutionResult{}, err

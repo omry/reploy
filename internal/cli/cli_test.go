@@ -2512,6 +2512,49 @@ func TestDockerStageAcceptsSourcePackRef(t *testing.T) {
 	}
 }
 
+func TestDockerStageRejectsAPTBeforeProviderCutover(t *testing.T) {
+	previousStageInit := dockerStageInit
+	dockerStageInit = func(options dockerdeploy.InitOptions) ([]dockerdeploy.UpdateResult, error) {
+		options.MaterializeEnvironment = false
+		return dockerdeploy.Init(options)
+	}
+	t.Cleanup(func() { dockerStageInit = previousStageInit })
+
+	packDir := makeCLITestPackWithManifest(t, `blueprint:
+  schema: 1
+  version: 0.1.0
+  compatibility:
+    platforms: [linux/amd64]
+environment:
+  id: apt-gate-test
+  components:
+    base:
+      image: python:3.13-slim
+    system:
+      type: apt
+      packages: [curl]
+    application:
+      type: python
+      requirements: [demo]
+docker: {}
+`)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "type apt is not publicly enabled until the APT cross-provider gate passes") {
+		t.Fatalf("stderr missing APT public-gate error:\n%s", stderr)
+	}
+	if _, err := os.Stat(deployDir); !os.IsNotExist(err) {
+		t.Fatalf("failed stage left a deployment directory: %v", err)
+	}
+}
+
 func TestDockerStageAcceptsGitPackRef(t *testing.T) {
 	previousStageInit := dockerStageInit
 	dockerStageInit = func(options dockerdeploy.InitOptions) ([]dockerdeploy.UpdateResult, error) {

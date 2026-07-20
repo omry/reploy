@@ -38,6 +38,9 @@ func CanonicalProfileFactsV1(base BaseProfileEvidenceV1, executables []providers
 }
 
 func ValidateRequirementProfileV1(profile providers.RequirementProfile) error {
+	if profile.Provider != blueprint.ComponentTypeAPT {
+		return fmt.Errorf("APT profile provider must be %q", blueprint.ComponentTypeAPT)
+	}
 	request := providers.CanonicalProviderRequest{
 		Schema:   profile.Declaration.ProviderData.Schema,
 		Provider: blueprint.ComponentTypeAPT,

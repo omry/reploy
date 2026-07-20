@@ -41,8 +41,8 @@ type ResolvePlanMarkerParserV1 struct {
 }
 
 var (
-	resolveMarkInstallV1 = regexp.MustCompile(`^ +MarkInstall ([a-z0-9][a-z0-9+.-]+):([a-z0-9][a-z0-9-]*) < ([^ <>]+)(?: -> ([^ <>]+))? @([a-z]{2}) ([A-Za-z]+(?: [A-Za-z]+)*) > FU=([01])$`)
-	resolveMarkGarbageV1 = regexp.MustCompile(`^ +Ignore MarkGarbage of [a-z0-9][a-z0-9+.-]+:[a-z0-9][a-z0-9-]* < [^ <>]+ @[a-z]{2} [A-Za-z]+ > as its mode \([A-Za-z]+\) is protected$`)
+	resolveMarkInstallV1 = regexp.MustCompile(`^ +MarkInstall ([a-z0-9][a-z0-9+.-]+):([a-z0-9][a-z0-9-]*) < ([^ <>]+)(?: -> ([^ <>]+))? @([a-z]{2}) (?:[A-Za-z]+(?: [A-Za-z]+)*) > FU=([01])$`)
+	resolveMarkGarbageV1 = regexp.MustCompile(`^ +Ignore MarkGarbage of [a-z0-9][a-z0-9+.-]+:[a-z0-9][a-z0-9-]* < [^ <>]+(?: -> [^ <>]+)? @[a-z]{2} (?:[A-Za-z]+(?: [A-Za-z]+)*) > as its mode \([A-Za-z]+\) is protected$`)
 	debianPackageNameV1  = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]+$`)
 	debianVersionTokenV1 = regexp.MustCompile(`^[0-9A-Za-z.+:~-]+$`)
 )

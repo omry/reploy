@@ -14,7 +14,7 @@ func validRequirementProfile() RequirementProfile {
 		panic(err)
 	}
 	return RequirementProfile{
-		Schema: RequirementProfileSchemaV1,
+		Schema: RequirementProfileSchemaV1, Provider: blueprint.ComponentTypePython,
 		Declaration: RequirementDeclaration{
 			Executables: []ExecutableRequirement{{
 				ID: "interpreter", Command: "python", Supplier: "base", ValidationPolicy: ValidationPolicyCompatible,
@@ -91,6 +91,7 @@ func TestRequirementProfileRejectsIncompleteOrMismatchedEvidence(t *testing.T) {
 		want   string
 	}{
 		{name: "schema", mutate: func(value *RequirementProfile) { value.Schema = "requirement-profile-v2" }, want: "schema"},
+		{name: "provider", mutate: func(value *RequirementProfile) { value.Provider = "other" }, want: "provider"},
 		{name: "missing executable", mutate: func(value *RequirementProfile) { value.SelectedExecutables = []ExecutableEvidence{} }, want: "missing selected executable"},
 		{name: "extra executable", mutate: func(value *RequirementProfile) { value.SelectedExecutables[0].RequirementID = "other" }, want: "no declaration"},
 		{name: "wrong command", mutate: func(value *RequirementProfile) { value.SelectedExecutables[0].Output.Name = "python3" }, want: "want \"python\""},

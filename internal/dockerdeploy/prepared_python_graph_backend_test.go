@@ -10,26 +10,38 @@ import (
 	"github.com/omry/reploy/internal/providers"
 )
 
-func TestPreparedPythonGraphBackendRejectsUnconfiguredAndAPTNodes(t *testing.T) {
+func TestPreparedPythonGraphBackendRejectsUnconfiguredNodes(t *testing.T) {
 	backend := PreparedPythonGraphBackend{Operations: map[providers.NodeID]PreparedPythonNodeOperations{}}
 	_, err := backend.PrepareNode(context.Background(), providers.GraphNodePrepareRequest{
-		Resolve: providers.ResolveNodeRequest{NodeID: "python/missing"},
-	})
-	if err == nil || !strings.Contains(err.Error(), "no operation") {
-		t.Fatalf("missing operation error = %v", err)
-	}
-	backend.Operations["apt"] = PreparedPythonNodeOperations{}
-	_, err = backend.PrepareNode(context.Background(), providers.GraphNodePrepareRequest{
 		Resolve: providers.ResolveNodeRequest{
-			NodeID: "apt",
-			Plan:   providers.ProviderPlanV1{Nodes: []providers.NodeSpec{{ID: "apt", Provider: blueprint.ComponentTypeAPT}}},
+			NodeID: "python/missing",
+			Plan: providers.ProviderPlanV1{Nodes: []providers.NodeSpec{{
+				ID: "python/missing", Provider: blueprint.ComponentTypePython,
+			}}},
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "does not support") {
-		t.Fatalf("APT operation error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "no Python operation") {
+		t.Fatalf("missing operation error = %v", err)
 	}
-	if _, err := backend.MaterializeNode(context.Background(), providers.GraphNodeMaterializeRequest{Node: providers.NodeSpec{ID: "python/missing", Provider: blueprint.ComponentTypePython}}); err == nil || !strings.Contains(err.Error(), "no operation") {
+	if _, err := backend.MaterializeNode(context.Background(), providers.GraphNodeMaterializeRequest{Node: providers.NodeSpec{ID: "python/missing", Provider: blueprint.ComponentTypePython}}); err == nil || !strings.Contains(err.Error(), "no Python operation") {
 		t.Fatalf("missing materialization error = %v", err)
+	}
+}
+
+func TestPreparedPythonGraphBackendDispatchesConfiguredAPTMaterialization(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := PreparedPythonGraphBackend{
+		APTOperations: map[providers.NodeID]PreparedAPTNodeOperations{"apt": {}},
+		Materializer:  ProviderGraphMaterializer{Platform: platform},
+	}
+	_, err = backend.MaterializeNode(context.Background(), providers.GraphNodeMaterializeRequest{
+		Node: providers.NodeSpec{ID: "apt", Provider: blueprint.ComponentTypeAPT},
+	})
+	if err == nil || !strings.Contains(err.Error(), "evidence runner") {
+		t.Fatalf("configured APT dispatch error = %v", err)
 	}
 }
 

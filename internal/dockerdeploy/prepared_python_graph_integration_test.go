@@ -12,6 +12,7 @@ import (
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/probearchive"
 	"github.com/omry/reploy/internal/providers"
+	aptprovider "github.com/omry/reploy/internal/providers/apt"
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
 	"github.com/omry/reploy/internal/providers/registry"
 	"github.com/omry/reploy/internal/providerstore"
@@ -133,6 +134,170 @@ func TestPreparedPythonGraphDockerIntegration(t *testing.T) {
 		t.Fatalf("graph catalog has no demo-server output: %#v", result.Catalog)
 	}
 	output := runDockerIntegration(t, ctx, "run", "--rm", "--entrypoint", executable, string(image))
+	if strings.TrimSpace(output) != "hello from generated Python image" {
+		t.Fatalf("generated console script output = %q", output)
+	}
+}
+
+func TestPreparedAPTPythonGraphDockerIntegration(t *testing.T) {
+	runPreparedAPTPythonGraphDockerIntegration(
+		t, "debian:bookworm-slim", map[string]blueprint.BaseExecutableExport{},
+		[]blueprint.APTPackageRequest{{Name: "python3"}, {Name: "python3-pip"}, {Name: "python3-venv"}},
+		"system", "/usr/bin/python3",
+	)
+}
+
+func TestPreparedAPTPythonTwoInterpreterDockerIntegration(t *testing.T) {
+	runPreparedAPTPythonGraphDockerIntegration(
+		t, "python:3.13-slim",
+		map[string]blueprint.BaseExecutableExport{"python": {Executable: "/usr/local/bin/python3"}},
+		[]blueprint.APTPackageRequest{{Name: "python3"}, {Name: "python3-pip"}, {Name: "python3-venv"}},
+		"system", "/usr/bin/python3",
+	)
+}
+
+func TestPreparedAPTPythonNativeLibraryDockerIntegration(t *testing.T) {
+	runPreparedAPTPythonGraphDockerIntegration(
+		t, "python:3.13-slim",
+		map[string]blueprint.BaseExecutableExport{"python": {Executable: "/usr/local/bin/python3"}},
+		[]blueprint.APTPackageRequest{{Name: "libpq5"}},
+		"base", "/usr/local/bin/python3",
+	)
+}
+
+func runPreparedAPTPythonGraphDockerIntegration(
+	t *testing.T,
+	base string,
+	baseExports map[string]blueprint.BaseExecutableExport,
+	aptPackages []blueprint.APTPackageRequest,
+	pythonSupplier string,
+	wantInterpreter string,
+) {
+	t.Helper()
+	if os.Getenv("REPLOY_DOCKER_INTEGRATION") != "1" {
+		t.Skip("set REPLOY_DOCKER_INTEGRATION=1 to run Docker integration evidence")
+	}
+	ctx := context.Background()
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runDockerOutput(ctx, "image", "inspect", base); err != nil {
+		t.Skipf("local %s image is required for APT/Python graph integration: %v", base, err)
+	}
+	packedProbe := packIntegrationProbe(t, platform)
+	previousLocate := locateProbeArchiveExecutable
+	locateProbeArchiveExecutable = func() (string, error) { return packedProbe, nil }
+	t.Cleanup(func() { locateProbeArchiveExecutable = previousLocate })
+
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wheelPath := filepath.Join(t.TempDir(), "demo_server-1.0-py3-none-any.whl")
+	writePythonIntegrationWheel(t, wheelPath)
+	wheelFile, err := os.Open(wheelPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wheel, publishErr := store.Publish(ctx, "wheels/"+filepath.Base(wheelPath), "wheel", wheelFile)
+	closeErr := wheelFile.Close()
+	if publishErr != nil {
+		t.Fatal(publishErr)
+	}
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	source := providers.ResolvedSourceInput{
+		Schema:               providers.ResolvedSourceInputSchemaV1,
+		Component:            "application",
+		LogicalPackage:       "demo-server",
+		SourceManifestDigest: wheel.SHA256,
+		BuilderProfile:       "uv-wheel-v1",
+		BuildSettings:        providers.CanonicalProviderData{Schema: "python-build-settings-v1", Value: canonical.Object{}},
+		EcosystemMetadata:    providers.CanonicalProviderData{Schema: "python-source-metadata-v1", Value: canonical.Object{}},
+		ArtifactDigest:       wheel.SHA256,
+	}
+	baseRequest, err := providers.CanonicalBaseProviderRequestV1(providers.BaseProviderRequestV1{
+		Image: base, Exports: baseExports,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	aptRequest, err := aptprovider.CanonicalProviderRequestV1(aptprovider.APTProviderRequestV1{
+		Components: []aptprovider.APTComponentRequestV1{{
+			Component: "system", Packages: aptPackages,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	packageRequest, err := pythonprovider.CanonicalPackageRequestV1("demo-server==1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pythonRequest, err := pythonprovider.CanonicalProviderRequestV1(pythonprovider.PythonProviderRequestV1{
+		Component: "application",
+		Interpreter: blueprint.CommandRequirement{
+			Command: "python", Version: ">=3.11", Supplier: pythonSupplier,
+		},
+		Requirements: []providers.CanonicalPackageRequest{packageRequest},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := providers.ResolvedRequestV1{
+		Schema: providers.ResolvedRequestSchemaV1, BlueprintDigest: reuseTestDigest("d"), OverlayDigest: reuseTestDigest("e"),
+		Platform: platform,
+		Components: []providers.ResolvedComponentRequestV1{
+			{Component: "application", Provider: blueprint.ComponentTypePython, Request: pythonRequest},
+			{Component: "base", Provider: blueprint.ComponentTypeBase, Request: baseRequest},
+			{Component: "system", Provider: blueprint.ComponentTypeAPT, Request: aptRequest},
+		},
+		Sources: []providers.ResolvedSourceInput{source},
+	}
+	if err := providers.ValidateResolvedRequestV1(request, registry.ValidateResolvedRequestOwnersV1); err != nil {
+		t.Fatal(err)
+	}
+	preparedBase, err := PrepareProviderBase(ctx, store, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := ExecutePreparedPythonGraph(ctx, PreparedPythonGraphExecutionInput{
+		Store: store, Plan: preparedBase.Plan, BaseDescriptor: preparedBase.Descriptor,
+		BaseCatalog: preparedBase.Catalog, Sources: request.Sources,
+		SourceWheels: []providerstore.ArtifactDescriptor{wheel},
+		FinalImageConfig: providers.ImageConfigPolicy{
+			User: "0:0", WorkingDir: "/", Environment: []providers.EnvironmentVariable{},
+			Entrypoint: []string{}, Command: []string{}, Healthcheck: providers.ImageHealthcheckNone,
+			StopSignal: "SIGTERM", Labels: []providers.ImageLabel{},
+		},
+		RunOptions: RunOptions{Stdout: os.Stdout, Stderr: os.Stderr},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := len(result.Materializations) - 1; index >= 0; index-- {
+		image := result.Materializations[index].Image.Digest
+		t.Cleanup(func() { _, _ = runDockerOutput(context.Background(), "image", "rm", "--force", string(image)) })
+	}
+	if len(result.Materializations) != 2 || len(result.Bundles) != 2 || result.Bundles[0].Payload.Provider != blueprint.ComponentTypeAPT || result.Bundles[1].Payload.Provider != blueprint.ComponentTypePython {
+		t.Fatalf("APT/Python graph result = %#v", result)
+	}
+	if len(result.Profiles) != 2 || len(result.Profiles[1].SelectedExecutables) != 1 || result.Profiles[1].SelectedExecutables[0].InvocationPath != wantInterpreter {
+		t.Fatalf("selected Python interpreter = %#v, want %q", result.Profiles, wantInterpreter)
+	}
+	var executable string
+	for _, output := range result.Catalog {
+		if output.SupplierComponent == "application" && output.Name == "demo-server" {
+			executable = output.Candidate.InvocationPath
+		}
+	}
+	if executable == "" {
+		t.Fatalf("graph catalog has no demo-server output: %#v", result.Catalog)
+	}
+	finalImage := result.Materializations[len(result.Materializations)-1].Image.Digest
+	output := runDockerIntegration(t, ctx, "run", "--rm", "--entrypoint", executable, string(finalImage))
 	if strings.TrimSpace(output) != "hello from generated Python image" {
 		t.Fatalf("generated console script output = %q", output)
 	}

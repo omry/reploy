@@ -46,7 +46,7 @@ func acceptBuildLockProfile(providers.RequirementProfile) error { return nil }
 func addValidAPTNode(t *testing.T, lock *BuildLockV1) {
 	t.Helper()
 	profile := providers.RequirementProfile{
-		Schema: providers.RequirementProfileSchemaV1,
+		Schema: providers.RequirementProfileSchemaV1, Provider: blueprint.ComponentTypeAPT,
 		Declaration: providers.RequirementDeclaration{
 			Executables: []providers.ExecutableRequirement{}, Files: []providers.FileRequirement{},
 			ProviderData: canonical.Envelope{Schema: "apt-requirements-v1", Value: canonical.Object{}},

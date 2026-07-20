@@ -66,11 +66,32 @@ func TestOwnerValidatorsForNodeDispatchesPython(t *testing.T) {
 	if validators.Profile == nil || validators.Bundle == nil {
 		t.Fatalf("Python validators = %#v", validators)
 	}
-	if err := validators.Profile(providers.RequirementProfile{}); err == nil || !strings.Contains(err.Error(), "Python profile request") {
+	if err := validators.Profile(providers.RequirementProfile{Provider: blueprint.ComponentTypePython}); err == nil || !strings.Contains(err.Error(), "Python profile request") {
 		t.Fatalf("profile validator error = %v", err)
 	}
 	if err := validators.Bundle(providers.ResolvedBundleIdentityV1{}); err == nil || !strings.Contains(err.Error(), "Python bundle recipe version") {
 		t.Fatalf("bundle validator error = %v", err)
+	}
+}
+
+func TestValidateRequirementProfileV1DispatchesMixedProviderOwners(t *testing.T) {
+	aptProfile := providers.RequirementProfile{Provider: blueprint.ComponentTypeAPT, Declaration: providers.RequirementDeclaration{
+		ProviderData: providers.CanonicalProviderData{Schema: apt.ProviderRequestSchemaV1},
+	}}
+	if err := ValidateRequirementProfileV1(aptProfile); err == nil || !strings.Contains(err.Error(), "APT profile request") {
+		t.Fatalf("APT profile dispatch error = %v", err)
+	}
+	pythonProfile := providers.RequirementProfile{Provider: blueprint.ComponentTypePython, Declaration: providers.RequirementDeclaration{
+		ProviderData: providers.CanonicalProviderData{Schema: pythonprovider.ProviderRequestSchemaV1},
+	}}
+	if err := ValidateRequirementProfileV1(pythonProfile); err == nil || !strings.Contains(err.Error(), "Python profile request") {
+		t.Fatalf("Python profile dispatch error = %v", err)
+	}
+	unknown := providers.RequirementProfile{Provider: blueprint.ComponentType("other"), Declaration: providers.RequirementDeclaration{
+		ProviderData: providers.CanonicalProviderData{Schema: "other-provider-request-v1"},
+	}}
+	if err := ValidateRequirementProfileV1(unknown); err == nil || !strings.Contains(err.Error(), "unsupported requirement profile") {
+		t.Fatalf("unknown profile dispatch error = %v", err)
 	}
 }
 

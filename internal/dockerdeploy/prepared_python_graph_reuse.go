@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"bytes"
 	"fmt"
+	"path"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -12,20 +13,23 @@ import (
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
+	aptprovider "github.com/omry/reploy/internal/providers/apt"
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
+	"github.com/omry/reploy/internal/providers/registry"
 	"github.com/omry/reploy/internal/providerstore"
 )
 
-// PreparedPythonGraphReuse contains only content reachable from the current
-// deployment lock. The maps plug directly into GraphExecutionRequest and the
-// per-node configs used by PreparePreparedPythonGraphBackend.
+// PreparedPythonGraphReuse contains only provider content reachable from the
+// current deployment lock. The maps plug directly into GraphExecutionRequest
+// and the per-node configs used by PreparePreparedPythonGraphBackend.
 type PreparedPythonGraphReuse struct {
 	ReusableArtifacts map[providers.NodeID][]providerstore.StoreObjectRef
 	CachedResolutions map[providers.NodeID]providers.ResolveResult
 	NodeConfigs       map[providers.NodeID]PreparedPythonNodeConfig
+	APTNodeConfigs    map[providers.NodeID]PreparedAPTNodeConfig
 }
 
-// LoadPreparedPythonGraphReuse derives Python cache candidates from one
+// LoadPreparedPythonGraphReuse derives APT and Python cache candidates from one
 // current build lock. It never scans older locks or unreferenced store blobs.
 func LoadPreparedPythonGraphReuse(
 	store providerstore.Store,
@@ -43,16 +47,23 @@ func LoadPreparedPythonGraphReuse(
 	if err != nil {
 		return PreparedPythonGraphReuse{}, err
 	}
-	for id := range nodes {
-		wheels := sourceWheelsForNode(currentSourceWheels, nodeSources[id])
-		reuse.NodeConfigs[id] = PreparedPythonNodeConfig{ReusableWheels: wheels}
-		reuse.ReusableArtifacts[id] = wheelStoreReferences(wheels)
+	exclusiveRoots := plannedAPTExclusiveRoots(plan)
+	for id, node := range nodes {
+		switch node.Provider {
+		case blueprint.ComponentTypeAPT:
+			reuse.APTNodeConfigs[id] = PreparedAPTNodeConfig{ReusableDebs: []providerstore.ArtifactDescriptor{}, ExclusiveRoots: exclusiveRoots}
+			reuse.ReusableArtifacts[id] = []providerstore.StoreObjectRef{}
+		case blueprint.ComponentTypePython:
+			wheels := sourceWheelsForNode(currentSourceWheels, nodeSources[id])
+			reuse.NodeConfigs[id] = PreparedPythonNodeConfig{ReusableWheels: wheels}
+			reuse.ReusableArtifacts[id] = artifactStoreReferences(wheels)
+		}
 	}
 	if current == nil {
 		return reuse, nil
 	}
-	if err := deploy.ValidateBuildLockV1(*current, pythonprovider.ValidateRequirementProfileV1); err != nil {
-		return PreparedPythonGraphReuse{}, fmt.Errorf("load current Python build lock: %w", err)
+	if err := deploy.ValidateBuildLockV1(*current, registry.ValidateRequirementProfileV1); err != nil {
+		return PreparedPythonGraphReuse{}, fmt.Errorf("load current provider build lock: %w", err)
 	}
 	if current.Platform != platform {
 		return reuse, nil
@@ -64,31 +75,47 @@ func LoadPreparedPythonGraphReuse(
 	}
 	for id, node := range nodes {
 		lockedNode, found := locked[id]
-		if !found || lockedNode.Provider != blueprint.ComponentTypePython {
+		if !found || lockedNode.Provider != node.Provider {
 			continue
 		}
-		bundle, err := providers.LoadResolvedBundleManifest(store, lockedNode.BundleManifest, pythonprovider.ValidateResolvedBundlePayloadV1)
+		validators, err := registry.OwnerValidatorsForNode(node)
 		if err != nil {
-			return PreparedPythonGraphReuse{}, fmt.Errorf("load current Python bundle for node %q: %w", id, err)
+			return PreparedPythonGraphReuse{}, err
 		}
-		if err := validateLockedPythonBundle(lockedNode, bundle); err != nil {
-			return PreparedPythonGraphReuse{}, fmt.Errorf("current Python bundle for node %q: %w", id, err)
-		}
-		component := node.Components[0]
-		pythonBundle, err := pythonprovider.DecodeCanonicalBundleDataV1(component, bundle.Payload.ProviderPayload)
+		bundle, err := providers.LoadResolvedBundleManifest(store, lockedNode.BundleManifest, validators.Bundle)
 		if err != nil {
-			return PreparedPythonGraphReuse{}, fmt.Errorf("decode current Python bundle for node %q: %w", id, err)
+			return PreparedPythonGraphReuse{}, fmt.Errorf("load current provider bundle for node %q: %w", id, err)
 		}
-
-		wheels := reusablePythonWheels(store, pythonBundle, nodeSources[id], currentSourceWheels)
-		reuse.NodeConfigs[id] = PreparedPythonNodeConfig{ReusableWheels: wheels}
-		reuse.ReusableArtifacts[id] = wheelStoreReferences(wheels)
+		if err := validateLockedProviderBundle(lockedNode, bundle, validators.Profile); err != nil {
+			return PreparedPythonGraphReuse{}, fmt.Errorf("current provider bundle for node %q: %w", id, err)
+		}
+		compatible := true
+		switch node.Provider {
+		case blueprint.ComponentTypeAPT:
+			aptBundle, err := aptprovider.DecodeCanonicalBundleDataV1(bundle.Payload.ProviderPayload)
+			if err != nil {
+				return PreparedPythonGraphReuse{}, fmt.Errorf("decode current APT bundle for node %q: %w", id, err)
+			}
+			debs := reusableAPTArchives(store, aptBundle)
+			reuse.APTNodeConfigs[id] = PreparedAPTNodeConfig{ReusableDebs: debs, ExclusiveRoots: exclusiveRoots}
+			reuse.ReusableArtifacts[id] = artifactStoreReferences(debs)
+		case blueprint.ComponentTypePython:
+			component := node.Components[0]
+			pythonBundle, err := pythonprovider.DecodeCanonicalBundleDataV1(component, bundle.Payload.ProviderPayload)
+			if err != nil {
+				return PreparedPythonGraphReuse{}, fmt.Errorf("decode current Python bundle for node %q: %w", id, err)
+			}
+			wheels := reusablePythonWheels(store, pythonBundle, nodeSources[id], currentSourceWheels)
+			reuse.NodeConfigs[id] = PreparedPythonNodeConfig{ReusableWheels: wheels}
+			reuse.ReusableArtifacts[id] = artifactStoreReferences(wheels)
+			compatible = reflect.DeepEqual(pythonBundle.Sources, nodeSources[id])
+		}
 
 		planDigest, err := providers.ProviderNodePlanDigest(node)
 		if err != nil {
 			return PreparedPythonGraphReuse{}, err
 		}
-		if planDigest != lockedNode.PlanDigest || !reflect.DeepEqual(pythonBundle.Sources, nodeSources[id]) {
+		if planDigest != lockedNode.PlanDigest || !compatible {
 			continue
 		}
 		if !allBundleArtifactsPresent(store, bundle.Payload.Artifacts) {
@@ -110,7 +137,7 @@ func emptyPreparedPythonGraphReuse(
 		return PreparedPythonGraphReuse{}, nil, nil, err
 	}
 	if err := platform.Validate(); err != nil {
-		return PreparedPythonGraphReuse{}, nil, nil, fmt.Errorf("load Python graph reuse platform: %w", err)
+		return PreparedPythonGraphReuse{}, nil, nil, fmt.Errorf("load provider graph reuse platform: %w", err)
 	}
 	if sources == nil {
 		return PreparedPythonGraphReuse{}, nil, nil, fmt.Errorf("load Python graph reuse sources must use an array")
@@ -119,6 +146,7 @@ func emptyPreparedPythonGraphReuse(
 		ReusableArtifacts: map[providers.NodeID][]providerstore.StoreObjectRef{},
 		CachedResolutions: map[providers.NodeID]providers.ResolveResult{},
 		NodeConfigs:       map[providers.NodeID]PreparedPythonNodeConfig{},
+		APTNodeConfigs:    map[providers.NodeID]PreparedAPTNodeConfig{},
 	}
 	nodes := map[providers.NodeID]providers.NodeSpec{}
 	componentNodes := map[string]providers.NodeID{}
@@ -127,14 +155,21 @@ func emptyPreparedPythonGraphReuse(
 		if node.ID == "base" {
 			continue
 		}
-		if node.Provider != blueprint.ComponentTypePython || len(node.Components) != 1 {
-			return PreparedPythonGraphReuse{}, nil, nil, fmt.Errorf("prepared Python reuse does not support provider %q for node %q", node.Provider, node.ID)
+		if node.Provider != blueprint.ComponentTypePython && node.Provider != blueprint.ComponentTypeAPT {
+			return PreparedPythonGraphReuse{}, nil, nil, fmt.Errorf("prepared provider reuse does not support provider %q for node %q", node.Provider, node.ID)
+		}
+		if node.Provider == blueprint.ComponentTypePython && len(node.Components) != 1 {
+			return PreparedPythonGraphReuse{}, nil, nil, fmt.Errorf("prepared Python node %q must identify one component", node.ID)
 		}
 		nodes[node.ID] = node
-		componentNodes[node.Components[0]] = node.ID
-		nodeSources[node.ID] = []providers.ResolvedSourceInput{}
+		if node.Provider == blueprint.ComponentTypePython {
+			componentNodes[node.Components[0]] = node.ID
+			nodeSources[node.ID] = []providers.ResolvedSourceInput{}
+			reuse.NodeConfigs[node.ID] = PreparedPythonNodeConfig{ReusableWheels: []providerstore.ArtifactDescriptor{}}
+		} else {
+			reuse.APTNodeConfigs[node.ID] = PreparedAPTNodeConfig{ReusableDebs: []providerstore.ArtifactDescriptor{}, ExclusiveRoots: []string{}}
+		}
 		reuse.ReusableArtifacts[node.ID] = []providerstore.StoreObjectRef{}
-		reuse.NodeConfigs[node.ID] = PreparedPythonNodeConfig{ReusableWheels: []providerstore.ArtifactDescriptor{}}
 	}
 	for index, source := range sources {
 		if err := providers.ValidateResolvedSourceInput(source); err != nil {
@@ -152,8 +187,12 @@ func emptyPreparedPythonGraphReuse(
 	return reuse, nodes, nodeSources, nil
 }
 
-func validateLockedPythonBundle(node deploy.NodeLockV1, bundle providers.ResolvedBundle) error {
-	profileDigest, err := providers.RequirementProfileDigest(node.RequirementProfile, pythonprovider.ValidateRequirementProfileV1)
+func validateLockedProviderBundle(
+	node deploy.NodeLockV1,
+	bundle providers.ResolvedBundle,
+	validateProfile providers.RequirementProfileOwnerValidator,
+) error {
+	profileDigest, err := providers.RequirementProfileDigest(node.RequirementProfile, validateProfile)
 	if err != nil {
 		return err
 	}
@@ -216,6 +255,31 @@ func reusablePythonWheels(
 	return wheels
 }
 
+func reusableAPTArchives(store providerstore.Store, bundle aptprovider.BundleV1) []providerstore.ArtifactDescriptor {
+	debs := make([]providerstore.ArtifactDescriptor, 0, len(bundle.BundlePackages))
+	for _, pkg := range bundle.BundlePackages {
+		if _, err := store.InspectArtifactPath(pkg.Artifact); err == nil {
+			debs = append(debs, pkg.Artifact)
+		}
+	}
+	sort.Slice(debs, func(left int, right int) bool { return debs[left].LogicalPath < debs[right].LogicalPath })
+	return debs
+}
+
+func plannedAPTExclusiveRoots(plan providers.ProviderPlanV1) []string {
+	roots := []string{}
+	for _, node := range plan.Nodes {
+		if node.Provider != blueprint.ComponentTypePython {
+			continue
+		}
+		for _, component := range node.Components {
+			roots = append(roots, path.Join(pythonprovider.InstallRoot, component))
+		}
+	}
+	sort.Strings(roots)
+	return roots
+}
+
 func validateCurrentPythonSourceWheels(
 	store providerstore.Store,
 	sources []providers.ResolvedSourceInput,
@@ -272,10 +336,10 @@ func sourceWheelsForNode(
 	return result
 }
 
-func wheelStoreReferences(wheels []providerstore.ArtifactDescriptor) []providerstore.StoreObjectRef {
+func artifactStoreReferences(artifacts []providerstore.ArtifactDescriptor) []providerstore.StoreObjectRef {
 	unique := map[providerstore.StoreObjectRef]struct{}{}
-	for _, wheel := range wheels {
-		reference, err := wheel.StoreObjectRef()
+	for _, artifact := range artifacts {
+		reference, err := artifact.StoreObjectRef()
 		if err == nil {
 			unique[reference] = struct{}{}
 		}

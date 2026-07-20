@@ -116,7 +116,7 @@ func (session *APTResolverSession) PublishResolvedBundle(ctx context.Context, st
 		return providers.ResolveResult{}, providerstore.StoreObjectRef{}, err
 	}
 	profile := providers.RequirementProfile{
-		Schema: providers.RequirementProfileSchemaV1, Declaration: node.Requirements,
+		Schema: providers.RequirementProfileSchemaV1, Provider: blueprint.ComponentTypeAPT, Declaration: node.Requirements,
 		SelectedExecutables: []providers.ExecutableEvidence{}, SelectedFiles: []providers.FileEvidence{},
 		Platform: session.descriptor.Platform, Facts: facts,
 	}

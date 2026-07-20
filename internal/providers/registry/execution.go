@@ -10,6 +10,20 @@ import (
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
 )
 
+// ValidateRequirementProfileV1 dispatches one locked profile to its provider
+// owner. It lets whole-graph locks validate mixed APT and Python nodes without
+// weakening either provider's exact schema checks.
+func ValidateRequirementProfileV1(profile providers.RequirementProfile) error {
+	switch profile.Provider {
+	case blueprint.ComponentTypeAPT:
+		return aptprovider.ValidateRequirementProfileV1(profile)
+	case blueprint.ComponentTypePython:
+		return pythonprovider.ValidateRequirementProfileV1(profile)
+	default:
+		return fmt.Errorf("unsupported requirement profile provider %q", profile.Provider)
+	}
+}
+
 // OwnerValidatorsForNode returns the provider-owned validators for one
 // executable provider node. Base is realized directly and therefore has no
 // requirement profile or resolved bundle to validate.

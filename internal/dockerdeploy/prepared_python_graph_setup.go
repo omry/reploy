@@ -16,22 +16,28 @@ type PreparedPythonNodeConfig struct {
 	ReusableWheels []providerstore.ArtifactDescriptor
 }
 
-// PreparePreparedPythonGraphBackend assembles the deployment-scoped Python
+type PreparedAPTNodeConfig struct {
+	ReusableDebs   []providerstore.ArtifactDescriptor
+	ExclusiveRoots []string
+}
+
+// PreparePreparedPythonGraphBackend assembles the deployment-scoped provider
 // graph backend and extracts one platform probe helper beneath the same
-// deployment-owned provider store. The returned cleanup removes that scratch
-// helper workspace.
+// deployment-owned provider store. The returned cleanup removes all scratch
+// workspaces.
 func PreparePreparedPythonGraphBackend(
 	ctx context.Context,
 	store providerstore.Store,
 	plan providers.ProviderPlanV1,
 	baseDescriptor deploy.ImageDescriptor,
 	finalImageConfig providers.ImageConfigPolicy,
-	configs map[providers.NodeID]PreparedPythonNodeConfig,
+	pythonConfigs map[providers.NodeID]PreparedPythonNodeConfig,
+	aptConfigs map[providers.NodeID]PreparedAPTNodeConfig,
 	options RunOptions,
 ) (PreparedPythonGraphBackend, func() error, error) {
 	noCleanup := func() error { return nil }
 	if ctx == nil {
-		return PreparedPythonGraphBackend{}, noCleanup, fmt.Errorf("prepare Python graph backend requires a context")
+		return PreparedPythonGraphBackend{}, noCleanup, fmt.Errorf("prepare provider graph backend requires a context")
 	}
 	if err := ctx.Err(); err != nil {
 		return PreparedPythonGraphBackend{}, noCleanup, err
@@ -40,25 +46,35 @@ func PreparePreparedPythonGraphBackend(
 		return PreparedPythonGraphBackend{}, noCleanup, err
 	}
 	if err := baseDescriptor.Validate(); err != nil {
-		return PreparedPythonGraphBackend{}, noCleanup, fmt.Errorf("prepare Python graph base descriptor: %w", err)
+		return PreparedPythonGraphBackend{}, noCleanup, fmt.Errorf("prepare provider graph base descriptor: %w", err)
 	}
 	if err := providers.ValidateImageConfigPolicy(finalImageConfig); err != nil {
-		return PreparedPythonGraphBackend{}, noCleanup, fmt.Errorf("prepare Python graph final image config: %w", err)
+		return PreparedPythonGraphBackend{}, noCleanup, fmt.Errorf("prepare provider graph final image config: %w", err)
 	}
-	if configs == nil {
+	if pythonConfigs == nil {
 		return PreparedPythonGraphBackend{}, noCleanup, fmt.Errorf("prepared Python node configs must use a map")
+	}
+	if aptConfigs == nil {
+		return PreparedPythonGraphBackend{}, noCleanup, fmt.Errorf("prepared APT node configs must use a map")
 	}
 	nodes := make(map[providers.NodeID]providers.NodeSpec, len(plan.Nodes))
 	for _, node := range plan.Nodes {
 		nodes[node.ID] = node
 	}
-	for id := range configs {
+	for id := range pythonConfigs {
 		node, found := nodes[id]
 		if !found || id == "base" || node.Provider != blueprint.ComponentTypePython {
 			return PreparedPythonGraphBackend{}, noCleanup, fmt.Errorf("prepared Python config targets unsupported node %q", id)
 		}
 	}
+	for id := range aptConfigs {
+		node, found := nodes[id]
+		if !found || id == "base" || node.Provider != blueprint.ComponentTypeAPT {
+			return PreparedPythonGraphBackend{}, noCleanup, fmt.Errorf("prepared APT config targets unsupported node %q", id)
+		}
+	}
 	operations := make(map[providers.NodeID]PreparedPythonNodeOperations)
+	aptOperations := make(map[providers.NodeID]PreparedAPTNodeOperations)
 	verifiedArtifacts := make(map[providers.NodeID]map[canonical.Digest]string)
 	artifactCleanups := []func(){}
 	cleanupArtifacts := func() {
@@ -70,33 +86,48 @@ func PreparePreparedPythonGraphBackend(
 		if node.ID == "base" {
 			continue
 		}
-		if node.Provider != blueprint.ComponentTypePython {
-			cleanupArtifacts()
-			return PreparedPythonGraphBackend{}, noCleanup, fmt.Errorf("prepared Python graph does not support provider %q for node %q", node.Provider, node.ID)
-		}
-		config, found := configs[node.ID]
-		if !found {
-			cleanupArtifacts()
-			return PreparedPythonGraphBackend{}, noCleanup, fmt.Errorf("prepared Python graph node %q has no config", node.ID)
-		}
 		validators, err := registry.OwnerValidatorsForNode(node)
 		if err != nil {
 			cleanupArtifacts()
 			return PreparedPythonGraphBackend{}, noCleanup, err
 		}
-		artifacts, cleanupArtifactsForNode, err := PreparePythonResolverArtifacts(store, config.ReusableWheels)
-		if err != nil {
+		switch node.Provider {
+		case blueprint.ComponentTypeAPT:
+			config, found := aptConfigs[node.ID]
+			if !found {
+				cleanupArtifacts()
+				return PreparedPythonGraphBackend{}, noCleanup, fmt.Errorf("prepared provider graph APT node %q has no config", node.ID)
+			}
+			aptOperations[node.ID] = PreparedAPTNodeOperations{
+				Store: store, Validators: validators, FinalImageConfig: cloneImageConfigPolicy(finalImageConfig),
+				ReusableDebs:   append([]providerstore.ArtifactDescriptor{}, config.ReusableDebs...),
+				ExclusiveRoots: append([]string{}, config.ExclusiveRoots...),
+				RunOptions:     options,
+			}
+			verifiedArtifacts[node.ID] = nil
+		case blueprint.ComponentTypePython:
+			config, found := pythonConfigs[node.ID]
+			if !found {
+				cleanupArtifacts()
+				return PreparedPythonGraphBackend{}, noCleanup, fmt.Errorf("prepared provider graph Python node %q has no config", node.ID)
+			}
+			artifacts, cleanupArtifactsForNode, err := PreparePythonResolverArtifacts(store, config.ReusableWheels)
+			if err != nil {
+				cleanupArtifacts()
+				return PreparedPythonGraphBackend{}, noCleanup, fmt.Errorf("prepare Python graph node %q resolver artifacts: %w", node.ID, err)
+			}
+			artifactCleanups = append(artifactCleanups, cleanupArtifactsForNode)
+			verified := map[canonical.Digest]string{}
+			verifiedArtifacts[node.ID] = verified
+			operations[node.ID] = PreparedPythonNodeOperations{
+				Store: store, Validators: validators,
+				FinalImageConfig: cloneImageConfigPolicy(finalImageConfig), Artifacts: artifacts,
+				ReusableWheels:    append([]providerstore.ArtifactDescriptor{}, config.ReusableWheels...),
+				verifiedArtifacts: verified,
+			}
+		default:
 			cleanupArtifacts()
-			return PreparedPythonGraphBackend{}, noCleanup, fmt.Errorf("prepare Python graph node %q resolver artifacts: %w", node.ID, err)
-		}
-		artifactCleanups = append(artifactCleanups, cleanupArtifactsForNode)
-		verified := map[canonical.Digest]string{}
-		verifiedArtifacts[node.ID] = verified
-		operations[node.ID] = PreparedPythonNodeOperations{
-			Store: store, Validators: validators,
-			FinalImageConfig: cloneImageConfigPolicy(finalImageConfig), Artifacts: artifacts,
-			ReusableWheels:    append([]providerstore.ArtifactDescriptor{}, config.ReusableWheels...),
-			verifiedArtifacts: verified,
+			return PreparedPythonGraphBackend{}, noCleanup, fmt.Errorf("prepared provider graph does not support provider %q for node %q", node.Provider, node.ID)
 		}
 	}
 	workspace, cleanup, err := PrepareProbeWorkspace(ctx, store, baseDescriptor.Platform)
@@ -114,6 +145,7 @@ func PreparePreparedPythonGraphBackend(
 		BaseDescriptor: baseDescriptor,
 		Workspace:      workspace,
 		Operations:     operations,
+		APTOperations:  aptOperations,
 		Materializer: ProviderGraphMaterializer{
 			Store: store, Platform: baseDescriptor.Platform, RunEvidence: evidence.Run, RunOptions: options,
 			verifiedArtifacts: verifiedArtifacts,

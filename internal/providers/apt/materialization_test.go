@@ -128,7 +128,7 @@ func aptMaterializeInput(t *testing.T) providerapi.MaterializeInput {
 		ProviderData: providerapi.CanonicalProviderData{Schema: request.Schema, Value: request.Value},
 	}
 	profile := providerapi.RequirementProfile{
-		Schema: providerapi.RequirementProfileSchemaV1, Declaration: declaration,
+		Schema: providerapi.RequirementProfileSchemaV1, Provider: blueprint.ComponentTypeAPT, Declaration: declaration,
 		SelectedExecutables: []providerapi.ExecutableEvidence{}, SelectedFiles: []providerapi.FileEvidence{},
 		Platform: platform, Facts: facts,
 	}

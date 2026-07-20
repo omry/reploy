@@ -18,12 +18,13 @@ const (
 )
 
 type RequirementProfile struct {
-	Schema              string                 `json:"schema"`
-	Declaration         RequirementDeclaration `json:"declaration"`
-	SelectedExecutables []ExecutableEvidence   `json:"selected_executables"`
-	SelectedFiles       []FileEvidence         `json:"selected_files"`
-	Platform            blueprint.Platform     `json:"platform"`
-	Facts               CanonicalProviderData  `json:"facts"`
+	Schema              string                  `json:"schema"`
+	Provider            blueprint.ComponentType `json:"provider"`
+	Declaration         RequirementDeclaration  `json:"declaration"`
+	SelectedExecutables []ExecutableEvidence    `json:"selected_executables"`
+	SelectedFiles       []FileEvidence          `json:"selected_files"`
+	Platform            blueprint.Platform      `json:"platform"`
+	Facts               CanonicalProviderData   `json:"facts"`
 }
 
 type ValidationEvidence struct {
@@ -93,6 +94,9 @@ func RequirementProfileDigest(profile RequirementProfile, validateOwner Requirem
 func ValidateRequirementProfile(profile RequirementProfile, validateOwner RequirementProfileOwnerValidator) error {
 	if profile.Schema != RequirementProfileSchemaV1 {
 		return fmt.Errorf("requirement profile schema must be %q", RequirementProfileSchemaV1)
+	}
+	if err := validateComponentProvider(profile.Provider); err != nil {
+		return fmt.Errorf("requirement profile provider: %w", err)
 	}
 	if err := ValidateRequirementDeclaration(profile.Declaration); err != nil {
 		return fmt.Errorf("requirement profile declaration: %w", err)

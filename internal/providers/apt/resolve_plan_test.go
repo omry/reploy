@@ -14,7 +14,7 @@ func TestResolvePlanMarkerParserBuildsCanonicalMixedClosureFromChunks(t *testing
 	input := "  MarkInstall iproute2:amd64 < 6.1-1 -> 6.1-2 @ii pumU > FU=1\n" +
 		"    MarkInstall libc6:amd64 < 2.39-0ubuntu8.7 @ii pmK Ib > FU=0\n" +
 		"  MarkInstall hello:amd64 < none -> 2.10-3build1 @un puN > FU=1\n" +
-		"  Ignore MarkGarbage of libexample:amd64 < 1.0 @ii pK > as its mode (Keep) is protected\n"
+		"  Ignore MarkGarbage of libexample:amd64 < none -> 1.0 @un pK Ib > as its mode (Install) is protected\n"
 	for _, chunk := range []string{input[:17], input[17:91], input[91:]} {
 		if _, err := parser.Write([]byte(chunk)); err != nil {
 			t.Fatal(err)

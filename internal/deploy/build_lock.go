@@ -257,6 +257,12 @@ func validateNodeLock(node NodeLockV1, platform blueprint.Platform, validateProf
 	default:
 		return fmt.Errorf("node provider %q is unsupported", node.Provider)
 	}
+	if node.RequirementProfile.Provider != node.Provider {
+		return fmt.Errorf(
+			"requirement profile provider %q does not match node provider %q",
+			node.RequirementProfile.Provider, node.Provider,
+		)
+	}
 	for _, item := range []struct {
 		field  string
 		digest canonical.Digest

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
@@ -85,7 +86,7 @@ func TestValidateAndPublishImageRejectsIncompleteEvidence(t *testing.T) {
 	}
 	input := fullValidationInput(t, "c")
 	input.Profiles = []providers.RequirementProfile{{
-		Schema: providers.RequirementProfileSchemaV1,
+		Schema: providers.RequirementProfileSchemaV1, Provider: blueprint.ComponentTypePython,
 		Declaration: providers.RequirementDeclaration{
 			Executables: []providers.ExecutableRequirement{}, Files: []providers.FileRequirement{},
 			ProviderData: canonical.Envelope{Schema: "empty-requirements-v1", Value: canonical.Object{}},

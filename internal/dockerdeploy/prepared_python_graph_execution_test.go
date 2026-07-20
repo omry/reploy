@@ -28,6 +28,7 @@ func TestExecutePreparedPythonGraphDerivesAllReuseFromCurrentLock(t *testing.T) 
 		_ deploy.ImageDescriptor,
 		_ providers.ImageConfigPolicy,
 		value map[providers.NodeID]PreparedPythonNodeConfig,
+		_ map[providers.NodeID]PreparedAPTNodeConfig,
 		_ RunOptions,
 	) (PreparedPythonGraphBackend, func() error, error) {
 		configs = value

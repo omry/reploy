@@ -38,6 +38,9 @@ func CanonicalInterpreterFactsV1(version string) providers.CanonicalProviderData
 }
 
 func ValidateRequirementProfileV1(profile providers.RequirementProfile) error {
+	if profile.Provider != blueprint.ComponentTypePython {
+		return fmt.Errorf("Python profile provider must be %q", blueprint.ComponentTypePython)
+	}
 	request, err := decodeCanonicalProviderRequestV1(providers.CanonicalProviderRequest{
 		Schema: profile.Declaration.ProviderData.Schema, Provider: blueprint.ComponentTypePython, Value: profile.Declaration.ProviderData.Value,
 	})

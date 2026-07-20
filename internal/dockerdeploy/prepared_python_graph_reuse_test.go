@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -14,7 +15,9 @@ import (
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
+	aptprovider "github.com/omry/reploy/internal/providers/apt"
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
+	"github.com/omry/reploy/internal/providers/registry"
 	"github.com/omry/reploy/internal/providerstore"
 )
 
@@ -78,6 +81,85 @@ func TestLoadPreparedPythonGraphReuseRequiresCurrentSourceWheelOnFirstBuild(t *t
 	)
 	if err == nil || !strings.Contains(err.Error(), "has no wheel descriptor") {
 		t.Fatalf("missing source wheel error = %v", err)
+	}
+}
+
+func TestLoadPreparedPythonGraphReuseInitializesAPTAlongsidePython(t *testing.T) {
+	fixture := newPreparedPythonGraphReuseFixture(t)
+	aptNode := aptResolverTestNode(t, aptResolverTestRequest(t, blueprint.APTPackageRequest{Name: "python3"}))
+	plan := fixture.request.Plan
+	plan.Nodes = []providers.NodeSpec{aptNode, plan.Nodes[0], plan.Nodes[1]}
+	if err := providers.ValidateProviderPlanV1(plan); err != nil {
+		t.Fatal(err)
+	}
+	reuse, err := LoadPreparedPythonGraphReuse(
+		fixture.store, plan, fixture.request.Platform, fixture.request.Sources, fixture.sourceWheels, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aptConfig, found := reuse.APTNodeConfigs["apt"]
+	if !found || len(aptConfig.ReusableDebs) != 0 {
+		t.Fatalf("APT config = %#v, found = %v", aptConfig, found)
+	}
+	wantRoot := pythonprovider.InstallRoot + "/application"
+	if len(aptConfig.ExclusiveRoots) != 1 || aptConfig.ExclusiveRoots[0] != wantRoot {
+		t.Fatalf("APT exclusive roots = %#v, want %q", aptConfig.ExclusiveRoots, wantRoot)
+	}
+	if len(reuse.ReusableArtifacts["apt"]) != 0 || len(reuse.NodeConfigs[fixture.request.NodeID].ReusableWheels) != 1 {
+		t.Fatalf("mixed reuse = %#v", reuse)
+	}
+}
+
+func TestLoadPreparedPythonGraphReuseUsesCurrentLockedAPTBundle(t *testing.T) {
+	store, plan, platform, lock, deb := newPreparedAPTGraphReuseFixture(t)
+	reuse, err := LoadPreparedPythonGraphReuse(store, plan, platform, []providers.ResolvedSourceInput{}, []providerstore.ArtifactDescriptor{}, &lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolution, found := reuse.CachedResolutions["apt"]
+	if !found || resolution.Bundle.Identity == "" {
+		t.Fatalf("cached APT resolution = %#v, found = %v", resolution, found)
+	}
+	config := reuse.APTNodeConfigs["apt"]
+	if len(config.ReusableDebs) != 1 || config.ReusableDebs[0] != deb {
+		t.Fatalf("reusable APT archives = %#v, want %#v", config.ReusableDebs, deb)
+	}
+	if len(reuse.ReusableArtifacts["apt"]) != 1 {
+		t.Fatalf("reusable APT references = %#v", reuse.ReusableArtifacts["apt"])
+	}
+}
+
+func TestProviderBuildLockRejectsNodeAndProfileOwnerMismatch(t *testing.T) {
+	_, _, _, lock, _ := newPreparedAPTGraphReuseFixture(t)
+	lock.Graph.Nodes = []providers.NodeID{"base", "python/application"}
+	lock.Nodes[0].NodeID = "python/application"
+	lock.Nodes[0].Provider = blueprint.ComponentTypePython
+
+	err := deploy.ValidateBuildLockV1(lock, registry.ValidateRequirementProfileV1)
+	if err == nil || !strings.Contains(err.Error(), "profile provider") {
+		t.Fatalf("provider/profile mismatch error = %v", err)
+	}
+}
+
+func TestReusableAPTArchivesUsesOnlyPresentBundleDebs(t *testing.T) {
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	present, err := store.Publish(context.Background(), "debs/present.deb", "deb", strings.NewReader("present"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing := present
+	missing.LogicalPath = "debs/missing.deb"
+	missing.SHA256 = reuseTestDigest("d")
+	bundle := aptprovider.BundleV1{BundlePackages: []aptprovider.BundlePackage{
+		{Artifact: missing}, {Artifact: present},
+	}}
+	debs := reusableAPTArchives(store, bundle)
+	if len(debs) != 1 || debs[0] != present {
+		t.Fatalf("reusable APT archives = %#v", debs)
 	}
 }
 
@@ -256,6 +338,155 @@ func newPreparedPythonGraphReuseFixture(t *testing.T) preparedPythonGraphReuseFi
 		store: store, request: request, lock: lock,
 		localWheelDigest: localDigest, downloadedWheelDigest: downloadedDigest,
 		sourceWheels: []providerstore.ArtifactDescriptor{localWheel},
+	}
+}
+
+func newPreparedAPTGraphReuseFixture(t *testing.T) (
+	providerstore.Store,
+	providers.ProviderPlanV1,
+	blueprint.Platform,
+	deploy.BuildLockV1,
+	providerstore.ArtifactDescriptor,
+) {
+	t.Helper()
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	baseNode := preparedPythonResolveRequest(t, descriptor).Plan.Nodes[0]
+	request := aptResolverTestRequest(t, blueprint.APTPackageRequest{Name: "hello", Exports: map[string]blueprint.ExecutableExport{}})
+	aptNode := aptResolverTestNode(t, request)
+	plan := providers.ProviderPlanV1{
+		Schema: providers.ProviderPlanSchemaV1,
+		Nodes:  []providers.NodeSpec{aptNode, baseNode},
+		Edges:  []providers.ProviderEdgeV1{},
+	}
+	if err := providers.ValidateProviderPlanV1(plan); err != nil {
+		t.Fatal(err)
+	}
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deb, err := store.Publish(context.Background(), "debs/hello_1_amd64.deb", "deb", strings.NewReader("deb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvePlan := aptprovider.ResolvePlanV1{Schema: aptprovider.ResolvePlanSchemaV1, Packages: []aptprovider.ResolvePlanPackageV1{{
+		Name: "hello", ResolverArchitecture: "amd64", SelectedVersion: "1",
+	}}}
+	bundlePackage, err := aptprovider.NewBundlePackageV1(
+		resolvePlan.Packages[0],
+		aptprovider.PackageTuple{Name: "hello", Version: "1", Architecture: "amd64", Status: aptprovider.InstalledPackageStatusV1},
+		deb,
+		reuseTestDigest("f"),
+		[]aptprovider.PackageTuple{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundleData, err := aptprovider.NewBundleV1("amd64", resolvePlan, []aptprovider.PackageTuple{}, []aptprovider.BundlePackage{bundlePackage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := aptprovider.PublishMaterializationArtifactsV1(context.Background(), store, bundleData); err != nil {
+		t.Fatal(err)
+	}
+	profile := preparedAPTReuseProfile(t, descriptor.Platform, aptNode.Requirements)
+	profileDigest, err := providers.RequirementProfileDigest(profile, aptprovider.ValidateRequirementProfileV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerPayload, err := aptprovider.CanonicalBundleDataV1(bundleData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts := []providerstore.ArtifactDescriptor{deb, bundleData.Script, bundleData.StateManifest}
+	sort.Slice(artifacts, func(left int, right int) bool { return artifacts[left].LogicalPath < artifacts[right].LogicalPath })
+	upstream, err := realizedImageFromDescriptor(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := providers.NewResolvedBundle(providers.ResolvedBundleIdentityV1{
+		Schema: providers.ResolvedBundleSchemaV1, NodeID: "apt", Provider: blueprint.ComponentTypeAPT,
+		Request: request, RequirementProfileDigest: profileDigest, RecipeVersion: aptprovider.RecipeVersion,
+		Platform: descriptor.Platform, Upstream: upstream, Artifacts: artifacts,
+		Outputs: []providers.ResolvedOutput{}, ProviderPayload: providerPayload,
+	}, aptprovider.ValidateResolvedBundlePayloadV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := providers.PublishResolvedBundleManifest(context.Background(), store, bundle, aptprovider.ValidateResolvedBundlePayloadV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := providers.NewValidationEvidence(upstream.RootFSSubject, profileDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planDigest, err := providers.ProviderNodePlanDigest(aptNode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultImage := providers.RealizedImageV1{Digest: reuseTestDigest("8"), ConfigDigest: reuseTestDigest("9"), RootFSSubject: reuseTestDigest("a")}
+	lock := deploy.BuildLockV1{
+		Schema: deploy.BuildLockSchemaV1, BlueprintDigest: reuseTestDigest("2"), Overlay: deploy.EmptyRequestOverlayV1(),
+		ResolvedRequestDigest: reuseTestDigest("3"), Platform: descriptor.Platform, Base: descriptor,
+		Graph: deploy.ProviderGraphLockV1{Nodes: []providers.NodeID{"apt", "base"}, Edges: []providers.ProviderEdgeV1{}},
+		Nodes: []deploy.NodeLockV1{{
+			NodeID: "apt", Provider: blueprint.ComponentTypeAPT, PlanDigest: planDigest,
+			ResolverCacheKey: reuseTestDigest("4"), RequirementProfile: profile,
+			ValidationEvidence: evidence, BundleManifest: manifest, TransactionDigest: reuseTestDigest("5"),
+			Upstream: upstream, Result: resultImage,
+			GeneratedExecutables: []providers.RealizedGeneratedExecutable{}, Outputs: []providers.RealizedOutput{},
+		}},
+		RuntimePolicy: deploy.RuntimePolicyV1{
+			Schema: deploy.RuntimePolicySchemaV1, AllowedRoots: []string{"/mnt"},
+			ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{},
+		},
+		ValidationRecord: providerstore.StoreObjectRef{Kind: providerstore.ValidationRecordKind, Digest: reuseTestDigest("6")},
+		FinalImage:       resultImage,
+	}
+	if err := deploy.ValidateBuildLockV1(lock, registry.ValidateRequirementProfileV1); err != nil {
+		t.Fatal(err)
+	}
+	return store, plan, descriptor.Platform, lock, deb
+}
+
+func preparedAPTReuseProfile(t *testing.T, platform blueprint.Platform, declaration providers.RequirementDeclaration) providers.RequirementProfile {
+	t.Helper()
+	tools := aptprovider.RequiredBaseToolsV1()
+	for index := range tools {
+		switch tools[index].Name {
+		case "apt_get", "dpkg", "dpkg_deb", "dpkg_query", "sha256sum":
+			tools[index].Version = tools[index].Name + " 1"
+		}
+	}
+	base, err := aptprovider.NewBaseProfileEvidenceV1(platform, map[string]string{"ID": "debian", "VERSION_ID": "13"}, tools, "amd64", []string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executables := make([]providers.ValidatedExecutableInput, 0, len(tools))
+	for _, tool := range tools {
+		role := providers.ExecutableRoleProviderPrerequisite
+		component := "apt"
+		if tool.Name == "sh" {
+			role, component = providers.ExecutableRoleCarrier, "backend"
+		} else if tool.Name == "env" {
+			role, component = providers.ExecutableRoleEnvironmentLauncher, "backend"
+		}
+		executable := rendererExecutable(tool.Name, role, tool.Path)
+		executable.Evidence.Output.Component = component
+		executable.Evidence.Facts = providers.CanonicalProviderData{
+			Schema: "apt-required-tool-v1", Value: canonical.Object{"interface": tool.Interface, "version": tool.Version},
+		}
+		executables = append(executables, executable)
+	}
+	facts, err := aptprovider.CanonicalProfileFactsV1(base, executables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return providers.RequirementProfile{
+		Schema: providers.RequirementProfileSchemaV1, Provider: blueprint.ComponentTypeAPT, Declaration: declaration,
+		SelectedExecutables: []providers.ExecutableEvidence{}, SelectedFiles: []providers.FileEvidence{},
+		Platform: platform, Facts: facts,
 	}
 }
 

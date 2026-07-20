@@ -102,6 +102,7 @@ func (resolver WheelNodeResolver) Resolve(
 	}
 	profile := providerapi.RequirementProfile{
 		Schema:              providerapi.RequirementProfileSchemaV1,
+		Provider:            blueprint.ComponentTypePython,
 		Declaration:         input.Node.Requirements,
 		SelectedExecutables: []providerapi.ExecutableEvidence{interpreter},
 		SelectedFiles:       []providerapi.FileEvidence{},

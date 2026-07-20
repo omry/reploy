@@ -26,6 +26,7 @@ func TestAPTRequirementProfileBindsCanonicalBaseEvidence(t *testing.T) {
 	}
 	profile := providers.RequirementProfile{
 		Schema:              providers.RequirementProfileSchemaV1,
+		Provider:            blueprint.ComponentTypeAPT,
 		Declaration:         providers.RequirementDeclaration{Executables: []providers.ExecutableRequirement{}, Files: []providers.FileRequirement{}, ProviderData: providers.CanonicalProviderData{Schema: request.Schema, Value: request.Value}},
 		SelectedExecutables: []providers.ExecutableEvidence{}, SelectedFiles: []providers.FileEvidence{},
 		Platform: base.Platform, Facts: facts,
