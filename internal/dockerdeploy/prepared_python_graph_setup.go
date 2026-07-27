@@ -13,8 +13,10 @@ import (
 )
 
 type PreparedPythonNodeConfig struct {
-	ReusableWheels []providerstore.ArtifactDescriptor
-	LocalOverrides []PythonLocalOverrideV1
+	ReusableWheels    []providerstore.ArtifactDescriptor
+	PriorSources      []providers.ResolvedSourceInput
+	PriorSourceWheels []providerstore.ArtifactDescriptor
+	LocalOverrides    []PythonLocalOverrideV1
 }
 
 type PreparedAPTNodeConfig struct {
@@ -124,8 +126,11 @@ func PreparePreparedPythonGraphBackend(
 				Store: store, Validators: validators,
 				FinalImageConfig: cloneImageConfigPolicy(finalImageConfig), Artifacts: artifacts,
 				ReusableWheels:    append([]providerstore.ArtifactDescriptor{}, config.ReusableWheels...),
+				PriorSources:      append([]providers.ResolvedSourceInput{}, config.PriorSources...),
+				PriorSourceWheels: append([]providerstore.ArtifactDescriptor{}, config.PriorSourceWheels...),
 				LocalOverrides:    append([]PythonLocalOverrideV1{}, config.LocalOverrides...),
 				Progress:          options.Progress,
+				RunOptions:        options,
 				verifiedArtifacts: verified,
 			}
 		default:

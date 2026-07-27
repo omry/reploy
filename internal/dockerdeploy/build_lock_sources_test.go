@@ -29,7 +29,7 @@ func TestBuildLockSelectedSourceWheelsV1UsesCurrentBundleDescriptors(t *testing.
 		t.Fatalf("selected source wheels = %#v, want %#v", wheels, fixture.sourceWheels)
 	}
 	changed := append([]providers.ResolvedSourceInput{}, fixture.request.SourceCandidates...)
-	changed[0].ArtifactDigest = reuseTestDigest("f")
+	changed[0].OutputArtifactDigest = reuseTestDigest("f")
 	if _, err := buildLockSelectedSourceWheelsV1(fixture.store, fixture.lock, changed); err == nil || !strings.Contains(err.Error(), "not an exact identity") {
 		t.Fatalf("changed source error = %v", err)
 	}

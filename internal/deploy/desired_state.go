@@ -30,7 +30,7 @@ func SetDesiredStateV1(
 	platform blueprint.Platform,
 	validatePackage PackageRequestValidator,
 ) (result DesiredStateUpdateResult, err error) {
-	return setDesiredStateV1(ctx, deploymentDir, document, platform, validatePackage, nil, "", false)
+	return setDesiredStateV1(ctx, deploymentDir, document, platform, validatePackage, nil, "", false, nil)
 }
 
 // CreateDesiredStateV1 atomically stages a new deployment and refuses to
@@ -43,7 +43,7 @@ func CreateDesiredStateV1(
 	platform blueprint.Platform,
 	validatePackage PackageRequestValidator,
 ) (result DesiredStateUpdateResult, err error) {
-	return setDesiredStateV1(ctx, deploymentDir, document, platform, validatePackage, nil, "", true)
+	return setDesiredStateV1(ctx, deploymentDir, document, platform, validatePackage, nil, "", true, nil)
 }
 
 // SetStagedDesiredStateV1 records the author-provided blueprint text alongside
@@ -58,7 +58,27 @@ func SetStagedDesiredStateV1(
 	requireMissing bool,
 ) (result DesiredStateUpdateResult, err error) {
 	staging := &StagingStateV1{Schema: StagingStateSchemaV1}
-	return setDesiredStateV1(ctx, deploymentDir, document, platform, validatePackage, staging, blueprintSource, requireMissing)
+	return setDesiredStateV1(ctx, deploymentDir, document, platform, validatePackage, staging, blueprintSource, requireMissing, nil)
+}
+
+// CreateStagedDesiredStateWithPackageOverridesV1 records a new staged
+// deployment and its local-development package overrides under one operation
+// lock. It refuses to replace either existing deployment state or an existing
+// sidecar.
+func CreateStagedDesiredStateWithPackageOverridesV1(
+	ctx context.Context,
+	deploymentDir string,
+	document blueprint.Document,
+	platform blueprint.Platform,
+	validatePackage PackageRequestValidator,
+	blueprintSource string,
+	overrides PackageOverridesV1,
+) (result DesiredStateUpdateResult, err error) {
+	staging := &StagingStateV1{Schema: StagingStateSchemaV1}
+	return setDesiredStateV1(
+		ctx, deploymentDir, document, platform, validatePackage,
+		staging, blueprintSource, true, &overrides,
+	)
 }
 
 func setDesiredStateV1(
@@ -70,6 +90,7 @@ func setDesiredStateV1(
 	staging *StagingStateV1,
 	blueprintSource string,
 	requireMissing bool,
+	initialOverrides *PackageOverridesV1,
 ) (result DesiredStateUpdateResult, err error) {
 	lock, err := AcquireOperationLock(ctx, deploymentDir)
 	if err != nil {
@@ -87,6 +108,26 @@ func setDesiredStateV1(
 	}
 	if requireMissing && found {
 		return DesiredStateUpdateResult{}, ErrDesiredStateAlreadyExists
+	}
+	if initialOverrides != nil {
+		if !requireMissing {
+			return DesiredStateUpdateResult{}, fmt.Errorf("initial package overrides require a new staged deployment")
+		}
+		if initialOverrides.Environment.ID != document.Environment.ID {
+			return DesiredStateUpdateResult{}, fmt.Errorf(
+				"package overrides target environment %q, want %q",
+				initialOverrides.Environment.ID,
+				document.Environment.ID,
+			)
+		}
+		if _, sidecarFound, readErr := ReadPackageOverridesV1(deploymentDir); readErr != nil {
+			return DesiredStateUpdateResult{}, readErr
+		} else if sidecarFound {
+			return DesiredStateUpdateResult{}, fmt.Errorf(
+				"%s already exists in the staging directory",
+				PackageOverridesFilename,
+			)
+		}
 	}
 	overlay := EmptyRequestOverlayV1()
 	var generation *EnvironmentGenerationState
@@ -145,7 +186,15 @@ func setDesiredStateV1(
 		}
 	}
 
+	if initialOverrides != nil {
+		if err := lock.CommitPackageOverridesV1(*initialOverrides); err != nil {
+			return DesiredStateUpdateResult{}, err
+		}
+	}
 	if err := lock.CommitStateV1(generation, candidate); err != nil {
+		if initialOverrides != nil {
+			err = errors.Join(err, lock.removePackageOverridesV1())
+		}
 		return DesiredStateUpdateResult{}, fmt.Errorf("write deployment state: %w", err)
 	}
 	return result, nil

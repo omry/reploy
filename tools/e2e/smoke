@@ -672,7 +672,7 @@ def run_smoke(
         "      smoke-imap:\n"
         '        path: "{{ workspace_root }}/smoke-imap"\n'
     )
-    overrides_path = deploy_dir / "package-overrides.yaml"
+    overrides_path = deploy_dir / "overrides.yaml"
     overrides_path.write_text(overrides, encoding="utf-8")
     overrides_path.chmod(0o600)
 

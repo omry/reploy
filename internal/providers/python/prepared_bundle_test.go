@@ -206,8 +206,8 @@ func TestWheelNodeResolverRequiresResolvedSourceArtifactDigest(t *testing.T) {
 	)
 	unusedSource := source
 	unusedSource.LogicalPackage = "unused-source"
-	unusedSource.SourceManifestDigest = schemaTestDigest("6")
-	unusedSource.ArtifactDigest = schemaTestDigest("7")
+	unusedSource.SourceInputDigest = schemaTestDigest("6")
+	unusedSource.OutputArtifactDigest = schemaTestDigest("7")
 	resolver := WheelNodeResolver{
 		PrepareWheels: func(context.Context, providerapi.ResolveInput, providerapi.ExecutableEvidence) (string, error) {
 			return dir, nil
@@ -231,10 +231,10 @@ func TestWheelNodeResolverRequiresResolvedSourceArtifactDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(bundle.Sources) != 1 || bundle.Sources[0].LogicalPackage != source.LogicalPackage ||
-		bundle.Sources[0].SourceManifestDigest != source.SourceManifestDigest || bundle.Sources[0].ArtifactDigest != source.ArtifactDigest {
+		bundle.Sources[0].SourceInputDigest != source.SourceInputDigest || bundle.Sources[0].OutputArtifactDigest != source.OutputArtifactDigest {
 		t.Fatalf("sources = %#v", bundle.Sources)
 	}
-	if err := ValidateResolvedSourceInputV1(bundle.Sources[0]); err != nil {
+	if err := ValidateResolvedSourceInputV2(bundle.Sources[0]); err != nil {
 		t.Fatal(err)
 	}
 	if len(result.SelectedSources) != 1 || !reflect.DeepEqual(result.SelectedSources[0], source) {
@@ -244,12 +244,12 @@ func TestWheelNodeResolverRequiresResolvedSourceArtifactDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if component != "application" || len(profileSources) != 1 || profileSources[0].ArtifactDigest != source.ArtifactDigest {
+	if component != "application" || len(profileSources) != 1 || profileSources[0].OutputArtifactDigest != source.OutputArtifactDigest {
 		t.Fatalf("profile sources = %#v for %q", profileSources, component)
 	}
 	staleRequest := request
 	staleRequest.SourceCandidates = append([]providerapi.ResolvedSourceInput{}, request.SourceCandidates...)
-	staleRequest.SourceCandidates[0].ArtifactDigest = schemaTestDigest("5")
+	staleRequest.SourceCandidates[0].OutputArtifactDigest = schemaTestDigest("5")
 	if _, err := providerapi.ResolveProviderNode(context.Background(), staleRequest, resolver, preparedTestSink{}, validators); err == nil || !strings.Contains(err.Error(), "want resolved artifact") {
 		t.Fatalf("stale source artifact error = %v", err)
 	}
@@ -380,7 +380,118 @@ func TestInspectPreparedWheelDistributionsV1ReturnsSortedValidatedClosure(t *tes
 	}
 }
 
+func TestInspectWheelDeclaredDependenciesV1ReadsOnlyRequiresDistNames(t *testing.T) {
+	dir := t.TempDir()
+	filename := "root-1-py3-none-any.whl"
+	writeTestWheelWithDependencies(t, dir, filename, "root", "1", []string{
+		"Hydra_Core>=1.3",
+		"omegaconf>=2.3; python_version >= '3.10'",
+		"hydra-core<2",
+	})
+	dependencies, err := InspectWheelDeclaredDependenciesV1(
+		filepath.Join(dir, filename), []string{"hydra-core", "omegaconf"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(dependencies, []string{"hydra-core", "omegaconf"}) {
+		t.Fatalf("dependencies = %#v", dependencies)
+	}
+	dependencies, err = InspectWheelDeclaredDependenciesV1(
+		filepath.Join(dir, filename), []string{"hydra-core"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(dependencies, []string{"hydra-core"}) {
+		t.Fatalf("unresolved dependency became an override candidate: %#v", dependencies)
+	}
+}
+
+func TestInspectWheelDeclaredDependenciesV1AcceptsMetadataEndingAtEOF(t *testing.T) {
+	dir := t.TempDir()
+	filename := filepath.Join(dir, "root-1-py3-none-any.whl")
+	file, err := os.Create(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := zip.NewWriter(file)
+	writeZipFile(t, archive, "root-1.dist-info/METADATA", "Metadata-Version: 2.1\nName: root\nVersion: 1\nRequires-Dist: dependency>=1")
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dependencies, err := InspectWheelDeclaredDependenciesV1(filename, []string{"dependency"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(dependencies, []string{"dependency"}) {
+		t.Fatalf("dependencies = %#v", dependencies)
+	}
+}
+
+func TestInspectWheelDeclaredDependenciesV1BoundsRetainedMetadataFields(t *testing.T) {
+	dir := t.TempDir()
+	filename := filepath.Join(dir, "root-1-py3-none-any.whl")
+	file, err := os.Create(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := zip.NewWriter(file)
+	writeZipFile(t, archive, "root-1.dist-info/METADATA",
+		"Metadata-Version: 2.1\nName: root\nVersion: 1\nRequires-Dist: "+
+			strings.Repeat("a", maxWheelMetadataFieldBytes+1)+"\n",
+	)
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InspectWheelDeclaredDependenciesV1(filename, []string{"dependency"}); err == nil ||
+		!strings.Contains(err.Error(), "Requires-Dist field exceeds") {
+		t.Fatalf("oversized metadata error = %v", err)
+	}
+}
+
+func TestInspectWheelDeclaredDependenciesV1StreamsLargeUnrelatedMetadata(t *testing.T) {
+	dir := t.TempDir()
+	filename := filepath.Join(dir, "root-1-py3-none-any.whl")
+	file, err := os.Create(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := zip.NewWriter(file)
+	writeZipFile(t, archive, "root-1.dist-info/METADATA",
+		"Metadata-Version: 2.1\nName: root\nVersion: 1\nDescription: "+
+			strings.Repeat("x", maxWheelMetadataFieldBytes*2)+"\nRequires-Dist: dependency>=1\n",
+	)
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dependencies, err := InspectWheelDeclaredDependenciesV1(filename, []string{"dependency"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(dependencies, []string{"dependency"}) {
+		t.Fatalf("dependencies = %#v", dependencies)
+	}
+}
+
 func writeTestWheel(t *testing.T, dir string, filename string, name string, version string, scripts map[string]string) {
+	writeTestWheelContent(t, dir, filename, name, version, scripts, nil)
+}
+
+func writeTestWheelWithDependencies(t *testing.T, dir string, filename string, name string, version string, dependencies []string) {
+	writeTestWheelContent(t, dir, filename, name, version, nil, dependencies)
+}
+
+func writeTestWheelContent(t *testing.T, dir string, filename string, name string, version string, scripts map[string]string, dependencies []string) {
 	t.Helper()
 	file, err := os.Create(filepath.Join(dir, filename))
 	if err != nil {
@@ -388,7 +499,13 @@ func writeTestWheel(t *testing.T, dir string, filename string, name string, vers
 	}
 	archive := zip.NewWriter(file)
 	distInfo := strings.ReplaceAll(name, "-", "_") + "-" + version + ".dist-info/"
-	writeZipFile(t, archive, distInfo+"METADATA", "Metadata-Version: 2.1\nName: "+name+"\nVersion: "+version+"\n\n")
+	var metadata strings.Builder
+	metadata.WriteString("Metadata-Version: 2.1\nName: " + name + "\nVersion: " + version + "\n")
+	for _, dependency := range dependencies {
+		metadata.WriteString("Requires-Dist: " + dependency + "\n")
+	}
+	metadata.WriteString("\n")
+	writeZipFile(t, archive, distInfo+"METADATA", metadata.String())
 	writeZipFile(t, archive, distInfo+"WHEEL", "Wheel-Version: 1.0\nGenerator: reploy-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
 	if len(scripts) > 0 {
 		var entries strings.Builder

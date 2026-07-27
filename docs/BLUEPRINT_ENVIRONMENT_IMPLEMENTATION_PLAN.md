@@ -12,7 +12,7 @@ environment model is normative; this plan may choose implementation structure
 but must not invent public schema.
 
 The implementation replaces the earlier unreleased `environment.workspace`
-schema completely with the staging-only `package-overrides.yaml` contract
+schema completely with the staging-only `overrides.yaml` contract
 defined by the normative model. There is no compatibility loader: the old
 schema, CLI root override, staging-state fields, tests, examples, and
 documentation are removed rather than retained alongside the new mechanism.

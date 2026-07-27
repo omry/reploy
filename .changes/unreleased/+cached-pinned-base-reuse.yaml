@@ -1,0 +1,2 @@
+kind: Changed
+body: Reuse a locally cached digest-pinned base image without repeating a registry pull.

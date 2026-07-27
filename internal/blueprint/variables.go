@@ -53,7 +53,7 @@ func resolveVariables(source map[string]any) (map[string]any, error) {
 }
 
 // ResolveEnvironmentVariables resolves one environment-owned variable map for
-// blueprint-adjacent staging inputs such as package-overrides.yaml.
+// blueprint-adjacent staging inputs such as overrides.yaml.
 func ResolveEnvironmentVariables(source map[string]any) (map[string]any, error) {
 	return resolveVariables(source)
 }

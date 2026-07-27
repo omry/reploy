@@ -1,2 +1,2 @@
 kind: Changed
-body: Give `reploy build` immediate Reploy-level progress, captured and deduplicated backend warnings, explicit fresh/reused results, and durable `--verbose` steps without raw Docker transcripts.
+body: Give `reploy build` immediate Reploy-level progress, captured, deduplicated, and filtered backend warnings, explicit fresh/reused results, and durable `--verbose` steps without raw Docker transcripts.

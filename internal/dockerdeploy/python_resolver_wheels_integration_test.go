@@ -86,6 +86,7 @@ func TestPythonResolverWheelIntegration(t *testing.T) {
 	request, err := pythonprovider.CanonicalProviderRequestV1(pythonprovider.PythonProviderRequestV1{
 		Component: "application", Interpreter: blueprint.CommandRequirement{Command: "python", Supplier: "base"},
 		Requirements: []providers.CanonicalPackageRequest{packageRequest},
+		Overrides:    []pythonprovider.PythonPackageOverrideV1{{Distribution: "demo-server", Kind: "local"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -166,13 +167,22 @@ demo-server = "demo_server:main"
 	if err := os.WriteFile(filepath.Join(sourceDir, "demo_server.py"), []byte("def main():\n    print('hello from workspace source')\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	generatedEnvironment := filepath.Join(sourceDir, ".venv-demo")
+	if err := os.Mkdir(generatedEnvironment, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(generatedEnvironment, "generated.py"), []byte("must_not_ship = True\n"), 0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
 	manifest, digest, err := ObservePythonSourceManifest(sourceDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	localSources := []PythonLocalSource{{
 		Distribution: "demo-server", HostDir: sourceDir,
-		Manifest: manifest, SourceManifestDigest: digest,
+		Manifest: manifest, SourceInputDigest: digest,
 	}}
 	snapshots, err := StagePythonLocalSourceSnapshots(artifacts, localSources)
 	if err != nil {
@@ -199,10 +209,80 @@ demo-server = "demo_server:main"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := session.BuildSourceWheels(ctx, consumer.EnvironmentLauncher, requirement, interpreter, snapshots); err != nil {
+	if err := session.BuildSourceDistributions(ctx, consumer.EnvironmentLauncher, requirement, interpreter, snapshots); err != nil {
 		t.Fatal(err)
 	}
-	sources, wheels, err := PublishBuiltPythonSourceWheels(ctx, store, artifacts, "application", snapshots, []providerstore.ArtifactDescriptor{})
+	buildEnvironmentDigest, err := session.SourceBuildEnvironmentDigest(interpreter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	distributions, err := PublishBuiltPythonSourceDistributions(
+		ctx, store, artifacts, snapshots, buildEnvironmentDigest,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(
+		distributions[0].HostDir, distributions[0].ArchiveRoot, ".venv-demo",
+	)); !os.IsNotExist(err) {
+		t.Fatalf("unrelated .venv-demo entered retained sdist: %v", err)
+	}
+	if err := session.BuildSourceWheels(ctx, consumer.EnvironmentLauncher, requirement, interpreter, distributions); err != nil {
+		t.Fatal(err)
+	}
+	sources, wheels, err := PublishBuiltPythonSourceWheels(ctx, store, artifacts, "application", distributions, []providerstore.ArtifactDescriptor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyDir := filepath.Join(workspace, "legacy")
+	if err := os.Mkdir(legacyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(legacyDir, "setup.py"),
+		[]byte("from setuptools import setup\nsetup(name='legacy-demo', version='1.0', py_modules=['legacy_demo'])\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyDir, "legacy_demo.py"), []byte("value = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	legacyManifest, legacyDigest, err := ObservePythonSourceManifest(legacyDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacySnapshots, err := StagePythonLocalSourceSnapshots(artifacts, []PythonLocalSource{{
+		Distribution: "legacy-demo", HostDir: legacyDir,
+		Manifest: legacyManifest, SourceInputDigest: legacyDigest,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.BuildSourceDistributions(
+		ctx, consumer.EnvironmentLauncher, requirement, interpreter, legacySnapshots,
+	); err != nil {
+		t.Fatal(err)
+	}
+	legacyDistributions, err := PublishBuiltPythonSourceDistributions(
+		ctx, store, artifacts, legacySnapshots, buildEnvironmentDigest,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(
+		legacyDistributions[0].HostDir, legacyDistributions[0].ArchiveRoot, "setup.py",
+	)); err != nil {
+		t.Fatalf("legacy setup.py was not retained: %v", err)
+	}
+	if err := session.BuildSourceWheels(
+		ctx, consumer.EnvironmentLauncher, requirement, interpreter, legacyDistributions,
+	); err != nil {
+		t.Fatal(err)
+	}
+	_, wheels, err = PublishBuiltPythonSourceWheels(
+		ctx, store, artifacts, "application", legacyDistributions, wheels,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +308,7 @@ demo-server = "demo_server:main"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sources) != 1 || sources[0].SourceManifestDigest != localSources[0].SourceManifestDigest ||
+	if len(sources) != 1 || sources[0].SourceInputDigest != localSources[0].SourceInputDigest ||
 		len(entries) != 1 || !strings.HasPrefix(entries[0].Name(), "demo_server-1.0-") || !strings.HasSuffix(entries[0].Name(), ".whl") {
 		t.Fatalf("source resolver result = sources %#v, entries %#v", sources, entries)
 	}

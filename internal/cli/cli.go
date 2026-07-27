@@ -43,7 +43,8 @@ var dockerProviderBuild = dockerdeploy.RunProviderBuildV1
 var dockerProviderStoreClean = dockerdeploy.CleanProviderStoreV1
 var dockerProviderBuildRuntime = dockerdeploy.CurrentStagedProviderBuildRuntimeV1
 var dockerAppCommand = dockerdeploy.AppCommand
-var runOverrideEditor = overrideui.Run
+var runOverrideEditor = overrideui.RunWithResult
+var inspectStagedOverrideValidation = dockerdeploy.InspectStagedOverrideValidation
 
 func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 	if message := windowsWSLBoundaryError(runtime.GOOS, os.LookupEnv, os.Getwd); message != "" {
@@ -577,7 +578,7 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer, globalOptions 
 	case "stage":
 		return runDockerStage(args[1:], stdout, stderr, globalOptions)
 	case "overrides":
-		return runPackageOverrides(args[1:], stdout, stderr)
+		return runPackageOverrides(args[1:], stdout, stderr, globalOptions)
 	case "build":
 		return runDockerBuild(args[1:], stdout, stderr, globalOptions)
 	case "info":
@@ -657,7 +658,7 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer, globalOptions 
 	}
 }
 
-func runPackageOverrides(args []string, stdout io.Writer, stderr io.Writer) int {
+func runPackageOverrides(args []string, stdout io.Writer, stderr io.Writer, globalOptions globalDeploymentOptions) int {
 	options, err := parseDockerCommandOptions(args, false)
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy overrides usage error: %v\n", err)
@@ -669,34 +670,97 @@ func runPackageOverrides(args []string, stdout io.Writer, stderr io.Writer) int 
 		fmt.Fprintf(stderr, "reploy overrides error: %v\n", err)
 		return 1
 	}
-	operation, err := deploy.AcquireExistingOperationLock(context.Background(), options.Dir)
+	config, err := packageOverrideEditorConfig(
+		options.Dir, globalOptions, false, false,
+	)
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy overrides error: %v\n", err)
 		return 1
 	}
-	state, found, readErr := operation.ReadStateV1()
-	unlockErr := operation.Unlock()
-	if err := errors.Join(readErr, unlockErr); err != nil {
-		fmt.Fprintf(stderr, "reploy overrides error: %v\n", err)
-		return 1
-	}
-	if !found || state.Staging == nil {
-		fmt.Fprintln(stderr, "reploy overrides error: package overrides require a staged deployment")
-		return 1
-	}
-	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
-	if err != nil {
-		fmt.Fprintf(stderr, "reploy overrides error: %v\n", err)
-		return 1
-	}
-	if err := runOverrideEditor(overrideui.Config{
-		Context: context.Background(), DeploymentDir: options.Dir, Document: document, Overlay: state.Overlay,
-		Input: os.Stdin, Output: stdout,
-	}); err != nil {
+	config.Input = os.Stdin
+	config.Output = stdout
+	if _, err := runOverrideEditor(config); err != nil {
 		fmt.Fprintf(stderr, "reploy overrides error: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+func packageOverrideEditorConfig(
+	deploymentDir string,
+	globalOptions globalDeploymentOptions,
+	noCache bool,
+	validateLayers bool,
+) (overrideui.Config, error) {
+	operation, err := deploy.AcquireExistingOperationLock(context.Background(), deploymentDir)
+	if err != nil {
+		return overrideui.Config{}, err
+	}
+	state, found, readErr := operation.ReadStateV1()
+	unlockErr := operation.Unlock()
+	if err := errors.Join(readErr, unlockErr); err != nil {
+		return overrideui.Config{}, err
+	}
+	if !found || state.Staging == nil {
+		return overrideui.Config{}, fmt.Errorf("package overrides require a staged deployment")
+	}
+	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	if err != nil {
+		return overrideui.Config{}, err
+	}
+	validation, err := inspectStagedOverrideValidation(context.Background(), deploymentDir)
+	if err != nil {
+		return overrideui.Config{}, fmt.Errorf("inspect validation status: %w", err)
+	}
+	discovered := make([]overrideui.DiscoveredPackage, 0, len(validation.Packages))
+	for _, item := range validation.Packages {
+		discovered = append(discovered, overrideui.DiscoveredPackage{Provider: item.Provider, Package: item.Package})
+	}
+	unused := make([]overrideui.DiscoveredPackage, 0, len(validation.Unused))
+	for _, item := range validation.Unused {
+		unused = append(unused, overrideui.DiscoveredPackage{Provider: item.Provider, Package: item.Package})
+	}
+	return overrideui.Config{
+		Context: context.Background(), DeploymentDir: deploymentDir, Document: document, Overlay: state.Overlay,
+		Platform: state.Platform, Validated: validation.Validated, Discovered: discovered, Unused: unused,
+		Validate: func(ctx context.Context, progress io.Writer) (overrideui.ValidationResult, error) {
+			runtime, err := dockerProviderBuildRuntime()
+			if err != nil {
+				return overrideui.ValidationResult{}, err
+			}
+			var childOutput synchronizedBuffer
+			_, err = dockerProviderBuild(ctx, dockerdeploy.ProviderBuildRunInputV1{
+				DeploymentDir: deploymentDir, Runtime: runtime, ValidateChoices: true,
+				NoCache: noCache, ValidateLayers: validateLayers, Progress: progress,
+				RunOptions: dockerdeploy.RunOptions{
+					Stdout: &childOutput, Stderr: &childOutput,
+					DockerPreflightTimeout: globalOptions.DockerTimeout,
+				},
+			})
+			if err != nil {
+				return overrideui.ValidationResult{}, errors.New(
+					buildFailureDiagnostic(err, childOutput.String()),
+				)
+			}
+			status, err := inspectStagedOverrideValidation(ctx, deploymentDir)
+			if err != nil {
+				return overrideui.ValidationResult{}, err
+			}
+			if !status.Validated {
+				return overrideui.ValidationResult{}, fmt.Errorf(
+					"trial build completed without a matching validated result; reopen the editor and try again",
+				)
+			}
+			result := overrideui.ValidationResult{Packages: make([]overrideui.DiscoveredPackage, 0, len(status.Packages))}
+			for _, item := range status.Packages {
+				result.Packages = append(result.Packages, overrideui.DiscoveredPackage{Provider: item.Provider, Package: item.Package})
+			}
+			for _, item := range status.Unused {
+				result.Unused = append(result.Unused, overrideui.DiscoveredPackage{Provider: item.Provider, Package: item.Package})
+			}
+			return result, nil
+		},
+	}, nil
 }
 
 func runDockerStage(args []string, stdout io.Writer, stderr io.Writer, globalOptions globalDeploymentOptions) int {
@@ -2857,7 +2921,7 @@ Usage: reploy [--docker-timeout DURATION] COMMAND
 Commands:
   validate     Validate blueprint syntax and semantics
   stage        Create a staging directory
-  overrides    Edit staged development package overrides
+  overrides    Edit staged development overrides
   build        Build and validate the staged environment image
   info         Show staging state and bundle contents
   app          Run a staged app command from the current build
@@ -3069,7 +3133,7 @@ Usage: reploy [--docker-timeout DURATION] COMMAND
 Commands:
   validate     Validate blueprint syntax and semantics
   stage        Create a staging directory
-  overrides    Edit staged development package overrides
+  overrides    Edit staged development overrides
   build        Build and validate the staged environment image
   info         Show staging state and bundle contents
   app          Run a staged app command from the current build
@@ -3147,14 +3211,19 @@ func printPackageOverridesHelp(output io.Writer) {
 	fmt.Fprint(output, strings.TrimLeft(`
 Usage: reploy overrides [OPTIONS]
 
-Open the interactive editor for a staged deployment's development package
-overrides. Existing package-overrides.yaml content is loaded automatically.
+Open the interactive editor for a staged deployment's development overrides.
+Existing overrides.yaml content is loaded automatically. Keep the base image
+from the blueprint or enter an exact image name.
+Press A and enter os:PACKAGE to add an exact native package through the base
+image's supported OS provider, or enter a Python package name to override its source.
 The workspace root is optional and unset by default. Configure it inside the
 editor to store paths beneath it relative to that root; other paths are absolute.
+Press V in the editor to opt into a trial build that validates and caches the
+saved choices without changing the current staged build.
 
 Options:
   --dir DIR    Staging directory, default current staging dir or reploy-staging
-  -h, --help   Show package override editor help
+  -h, --help   Show development override editor help
 `, "\n"))
 }
 
@@ -3257,6 +3326,8 @@ Usage: reploy [--docker-timeout DURATION] build [OPTIONS]
 Build and validate the current staged environment image without installing it.
 The resulting image is always fully validated. --validate-layers additionally
 runs full validation after each component layer is created.
+Interactive terminals retain progress, logs, and the final result in a build
+screen. Dumb or redirected terminals print the same build log and result directly.
 
 Options:
   --dir DIR          Staging directory, default current staging dir or reploy-staging
@@ -3275,6 +3346,7 @@ Usage: reploy [--docker-timeout DURATION] stage APP_REF [OPTIONS]
 Create a staging directory from an app blueprint reference.
 Use --update to refresh an existing staging directory, optionally from a new ref.
 Stage records desired state only; build explicitly or let staged up/restart build on demand.
+A new stage from a local blueprint imports overrides.yaml beside that blueprint.
 
 APP_REF:
   Indexed shorthand from the Reploy blueprint index:

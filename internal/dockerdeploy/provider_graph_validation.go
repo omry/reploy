@@ -19,17 +19,19 @@ type ProviderGraphValidationPlan struct {
 type providerGraphImageInspector func(context.Context, BuiltImageCandidate, blueprint.Platform) (InspectedImageCandidate, error)
 
 // PrepareProviderGraphValidation converts a completed provider graph into the
-// cumulative immutable-image checks used by final validation. Every validation
-// target is re-inspected by config ID; graph records alone are not accepted as
-// proof that the local image still exists unchanged.
+// cumulative immutable-image checks used by final validation. The final image,
+// and each component prefix when layer validation is requested, is re-inspected
+// by config ID; graph records alone are not accepted as proof that a validation
+// target still exists unchanged.
 func PrepareProviderGraphValidation(
 	ctx context.Context,
 	base deploy.ImageDescriptor,
 	baseCatalog []providers.RealizedOutput,
 	graph providers.GraphExecutionResult,
 	policy deploy.RuntimePolicyV1,
+	validateLayers bool,
 ) (ProviderGraphValidationPlan, error) {
-	return prepareProviderGraphValidation(ctx, base, baseCatalog, graph, policy, InspectBuiltImageCandidate)
+	return prepareProviderGraphValidation(ctx, base, baseCatalog, graph, policy, validateLayers, InspectBuiltImageCandidate)
 }
 
 func prepareProviderGraphValidation(
@@ -38,6 +40,7 @@ func prepareProviderGraphValidation(
 	baseCatalog []providers.RealizedOutput,
 	graph providers.GraphExecutionResult,
 	policy deploy.RuntimePolicyV1,
+	validateLayers bool,
 	inspect providerGraphImageInspector,
 ) (ProviderGraphValidationPlan, error) {
 	if ctx == nil {
@@ -56,9 +59,15 @@ func prepareProviderGraphValidation(
 	profiles := []providers.RequirementProfile{}
 	outputs := append([]providers.RealizedOutput{}, baseCatalog...)
 	layers := make([]FullImageValidationInput, 0, len(graph.Materializations))
+	var final FullImageValidationInput
 	for index, materialized := range graph.Materializations {
 		if err := ctx.Err(); err != nil {
 			return ProviderGraphValidationPlan{}, err
+		}
+		profiles = append(profiles, graph.Profiles[index])
+		outputs = append(outputs, materialized.Outputs...)
+		if !validateLayers && index != len(graph.Materializations)-1 {
+			continue
 		}
 		candidate, err := inspect(ctx, BuiltImageCandidate{ImageID: materialized.Image.ConfigDigest}, base.Platform)
 		if err != nil {
@@ -67,8 +76,6 @@ func prepareProviderGraphValidation(
 		if candidate.Image != materialized.Image {
 			return ProviderGraphValidationPlan{}, fmt.Errorf("provider graph layer %d changed after materialization", index+1)
 		}
-		profiles = append(profiles, graph.Profiles[index])
-		outputs = append(outputs, materialized.Outputs...)
 		input := FullImageValidationInput{
 			Image: candidate, Profiles: append([]providers.RequirementProfile{}, profiles...),
 			Outputs: append([]providers.RealizedOutput{}, outputs...), RuntimePolicy: policy,
@@ -76,13 +83,15 @@ func prepareProviderGraphValidation(
 		if err := validateFullImageValidationInput(input, registry.ValidateRequirementProfileV1); err != nil {
 			return ProviderGraphValidationPlan{}, fmt.Errorf("prepare provider graph layer %d validation: %w", index+1, err)
 		}
-		layers = append(layers, input)
+		if validateLayers {
+			layers = append(layers, input)
+		}
+		if index == len(graph.Materializations)-1 {
+			final = input
+		}
 	}
 
-	var final FullImageValidationInput
-	if len(layers) != 0 {
-		final = layers[len(layers)-1]
-	} else {
+	if len(graph.Materializations) == 0 {
 		candidate, err := inspect(ctx, BuiltImageCandidate{ImageID: base.ConfigDigest}, base.Platform)
 		if err != nil {
 			return ProviderGraphValidationPlan{}, fmt.Errorf("inspect provider graph base: %w", err)

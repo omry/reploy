@@ -13,41 +13,46 @@ func LoadStagedPackageOverridesV1(
 	operation *deploy.OperationLock,
 	deploymentDir string,
 	document blueprint.Document,
-) (deploy.ResolvedPackageOverridesV1, deploy.PackageOverrideIntentV1, error) {
+) (
+	deploy.PackageOverridesV1,
+	deploy.ResolvedPackageOverridesV1,
+	deploy.PackageOverrideIntentV1,
+	error,
+) {
 	if operation == nil {
-		return deploy.ResolvedPackageOverridesV1{}, deploy.PackageOverrideIntentV1{}, fmt.Errorf("load staged package overrides requires an operation lock")
+		return deploy.PackageOverridesV1{}, deploy.ResolvedPackageOverridesV1{}, deploy.PackageOverrideIntentV1{}, fmt.Errorf("load staged package overrides requires an operation lock")
 	}
 	if err := operation.RequireHeld(); err != nil {
-		return deploy.ResolvedPackageOverridesV1{}, deploy.PackageOverrideIntentV1{}, err
+		return deploy.PackageOverridesV1{}, deploy.ResolvedPackageOverridesV1{}, deploy.PackageOverrideIntentV1{}, err
 	}
 	absoluteDir, err := filepath.Abs(deploymentDir)
 	if err != nil {
-		return deploy.ResolvedPackageOverridesV1{}, deploy.PackageOverrideIntentV1{}, fmt.Errorf("resolve package override deployment directory: %w", err)
+		return deploy.PackageOverridesV1{}, deploy.ResolvedPackageOverridesV1{}, deploy.PackageOverrideIntentV1{}, fmt.Errorf("resolve package override deployment directory: %w", err)
 	}
 	wantLock := filepath.Join(absoluteDir, ".reploy", "operation.lock")
 	if filepath.Clean(operation.Path()) != wantLock {
-		return deploy.ResolvedPackageOverridesV1{}, deploy.PackageOverrideIntentV1{}, fmt.Errorf("package override operation lock does not belong to deployment %q", absoluteDir)
+		return deploy.PackageOverridesV1{}, deploy.ResolvedPackageOverridesV1{}, deploy.PackageOverrideIntentV1{}, fmt.Errorf("package override operation lock does not belong to deployment %q", absoluteDir)
 	}
 	raw, found, err := deploy.ReadPackageOverridesV1(absoluteDir)
 	if err != nil {
-		return deploy.ResolvedPackageOverridesV1{}, deploy.PackageOverrideIntentV1{}, err
+		return deploy.PackageOverridesV1{}, deploy.ResolvedPackageOverridesV1{}, deploy.PackageOverrideIntentV1{}, err
 	}
 	if !found {
 		raw = deploy.EmptyPackageOverridesV1(document.Environment.ID)
 	}
 	if raw.Environment.ID != document.Environment.ID {
-		return deploy.ResolvedPackageOverridesV1{}, deploy.PackageOverrideIntentV1{}, fmt.Errorf(
+		return deploy.PackageOverridesV1{}, deploy.ResolvedPackageOverridesV1{}, deploy.PackageOverrideIntentV1{}, fmt.Errorf(
 			"package overrides target environment %q, want %q",
 			raw.Environment.ID, document.Environment.ID,
 		)
 	}
 	resolved, err := deploy.ResolvePackageOverridesV1(raw, absoluteDir, registry.NormalizePackageOverrideV1)
 	if err != nil {
-		return deploy.ResolvedPackageOverridesV1{}, deploy.PackageOverrideIntentV1{}, err
+		return deploy.PackageOverridesV1{}, deploy.ResolvedPackageOverridesV1{}, deploy.PackageOverrideIntentV1{}, err
 	}
 	intent, err := resolved.Intent()
 	if err != nil {
-		return deploy.ResolvedPackageOverridesV1{}, deploy.PackageOverrideIntentV1{}, err
+		return deploy.PackageOverridesV1{}, deploy.ResolvedPackageOverridesV1{}, deploy.PackageOverrideIntentV1{}, err
 	}
-	return resolved, intent, nil
+	return raw, resolved, intent, nil
 }

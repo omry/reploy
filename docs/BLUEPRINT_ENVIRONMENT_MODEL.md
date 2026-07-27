@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-22
+updated: 2026-07-25
 summary: Normative blueprint environment, workload, component, lifecycle, and Docker rendering model.
 supersedes: docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md
 ---
@@ -549,24 +549,33 @@ unrelated option does not invalidate every provider node.
 
 All providers use one common identity contract when a staging package override
 builds an artifact from local source. The source path locates the source for
-the local build but is not content identity. Before building, Reploy
-creates a canonical source manifest and digest under the provider's declared
-inclusion and ignore rules. The build input identity contains that digest, the
-versioned builder and toolchain profile, selected platform, and every relevant
-build setting.
+the local build but is not content identity. Reploy observes a canonical
+source-input digest, while the provider defines and validates the closed source
+artifact that crosses into the final build. The identity also binds the
+versioned builder and toolchain profile, every relevant build setting, and a
+build-environment digest covering the selected platform, immutable upstream
+image, and selected toolchain evidence.
 
-The provider builds its normal raw artifact, validates its ecosystem metadata,
-and hashes the exact output bytes. The resolved request and lock omit the local
-path and record the logical source identity, source-manifest digest, build
-profile and settings, artifact metadata, and artifact digest. The
-deployment-local provider store contains the resulting artifact, not the
-original directory or its build tools.
+The provider validates and hashes both that closed source artifact and its
+normal raw output artifact. The resolved request and lock omit the local path
+and record the logical source identity, source-input digest, retained
+source-artifact digest, build-environment digest, build profile and settings,
+ecosystem metadata, and output-artifact digest. The deployment-local provider
+store contains the retained raw artifacts, not the original directory or its
+build tools.
+
+For Python, the declared packaging backend first produces the retained sdist;
+Reploy validates and securely extracts that exact store object, and the wheel
+is built only from the extracted sdist. This lets Python packaging metadata
+define package contents without making the provisional host tree a retained
+artifact.
 
 This contract applies to locally built wheels, Go or Rust binaries, locally
 built `.deb` files, and future source-derived artifacts. A package version
 inside an artifact remains ecosystem dependency metadata; it is not a substitute
-for the source or artifact digest. Rebuilding unchanged source with different
-output bytes produces a different resolved bundle.
+for the source-input, retained source-artifact, build-environment, or output
+digest. Rebuilding unchanged source with different output bytes produces a
+different resolved bundle.
 
 Any reference whose required component, output, executable, option-provided
 artifact, or installed artifact is absent is an error at the earliest phase
@@ -713,12 +722,46 @@ and actual format/backend constraints; Reploy does not scan produced layers or
 impose numeric processing quotas. The model requires no global attribution of
 every system file to a blueprint component.
 
-Developer package overrides are not part of the blueprint. A staging directory
-may contain an explicit sidecar whose sparse outer shape matches the blueprint:
-it names `environment.id`, then maps provider-owned package identifiers beneath
-`environment.package_overrides`. Each mapping selects either a local source
-path or a specific version from that provider's normal upstream source. The two
+Developer overrides are not part of the blueprint. A staging directory may
+contain an explicit `overrides.yaml` sidecar whose sparse outer shape matches
+the blueprint. It names `environment.id`, may replace the base reference at
+`environment.base.image`, and maps provider-owned package identifiers beneath
+`environment.package_overrides`. Absence of `environment.base` means **From
+blueprint**. Each package mapping selects either a local source path or a
+specific version from that provider's normal upstream source. The two package
 forms are mutually exclusive.
+
+The same sidecar may contain explicit development-only package roots beneath
+`environment.package_additions`. These are install requests, unlike source
+mappings. The `os` key selects the OS provider supported by the chosen base
+image; v1 supports Debian/Ubuntu-compatible APT bases. Each value uses the
+native provider grammar and exact package spelling—Reploy does not translate
+package names:
+
+```yaml
+environment:
+  package_additions:
+    os:
+      - default-jre-headless
+```
+
+The editor accepts the same intent as `os:default-jre-headless`. It adds the
+package to the established OS provider node or activates that node when the
+blueprint has no OS component. The canonical addition is bound into provider
+request and build-lock identity.
+
+For a local filesystem blueprint, a developer may place
+`overrides.yaml` beside the `*.blueprint.yaml` file. When `reploy stage`
+creates a new staging directory, Reploy validates that sidecar, requires
+its environment id to match, and seeds the staging sidecar from it. A
+blueprint-adjacent sidecar may define `workspace_root` relative to its own
+location. Reploy resolves that root to an absolute path, preserves it in the
+staged sidecar, and stores local paths beneath it using
+`{{ workspace_root }}`. Other variables and paths outside the workspace are
+resolved at the source location and written as absolute paths, so copying the
+intent into staging cannot retarget a local source. Remote blueprint refs never
+import a sidecar, and `stage --update` never replaces or merges the staging
+directory's existing developer choices.
 
 An override is consulted only after a direct or transitive requirement makes
 that package necessary. A mapping never requests installation, and an unused
@@ -727,12 +770,23 @@ environment, provider, and normalized package identifier, it takes precedence;
 otherwise resolution follows the blueprint. The selected override must still
 satisfy all active dependency constraints.
 
-In v1, a package that exists only as a local source and is otherwise visible
-only as a transitive dependency must also be an explicit component
-requirement. A blueprint requirement or `reploy bundle add-package` supplies
-that discovery root; the override still selects the source and does not add a
-second package to the resolved closure. This avoids inspecting or building
-every local mapping speculatively.
+A selected local project may contain a strict `.reploy.yaml` at its project
+root. This project-owned recipe is read from Reploy's immutable source snapshot,
+never from an unselected override or a published package. The initial Python
+recipe supports `pep517` and `setuptools-legacy` build protocols plus the
+portable `tool:java` requirement. Portable tools are resolved into an isolated
+source-builder image and do not become workload packages. Recipe content,
+declared build protocol, resolved tool evidence, and the exact builder image
+participate in source and build-lock identity. The accepted contract is defined
+by `docs/adr/0001-local-source-build-recipes.md`.
+
+The editor lists direct dependencies it can read from static PEP 621 metadata
+and refreshes that list from a successful trial build. A user may also add an
+override-only row for a transitive package that is not yet visible. Such a row
+still does not request the package: it is used only if normal dependency
+resolution requires it. To add an application-provider requirement, use the
+blueprint or `reploy bundle add-package`; `package_additions.os` is reserved for
+development-only native OS roots.
 
 The sidecar records developer intent only. Reploy may create or edit explicit
 mappings on the user's behalf, but resolution must not add inferred packages,
@@ -749,10 +803,28 @@ workspace. The project browser starts at the editor's current directory. The
 workspace root is unset by default and may be configured inside the editor.
 Without one, selected paths remain absolute. With one, the editor records it in
 sidecar-local `environment.vars.workspace_root`, uses `{{ workspace_root }}` for
-paths beneath it, and keeps selected paths outside the root absolute. It lists
+paths beneath it, and keeps selected paths outside the root absolute. The root
+may be absolute or use `~/path`; its original spelling stays in the sidecar and
+the current user's home is expanded when Reploy uses the override. It lists
 explicit blueprint, selected-option, and deployment-added package requirements
 first with a distinct shaded background; override-only mappings follow. These
 variables belong to the sidecar and are not blueprint variables.
+
+`V` saves the current choices and runs the normal build pipeline as an optional
+trial validation. Success means the selected versions exist, dependency
+constraints are compatible, local sources build, and the final environment
+passes validation. The resulting cache is retained for the next `reploy build`,
+but the trial does not replace the current staged image. Progress and a
+scrollable log remain visible in the editor; a failed log can be saved to a new
+file. Exiting unvalidated choices offers validation, saving without validation,
+or returning to the editor. In an interactive terminal, `reploy build`
+automatically starts a build-specific view backed by this machinery, lets a
+failed build return to the override editor for correction, and promotes the
+exact validated candidate on success. The completed image, elapsed time, and
+environment result remain in the build screen until Esc, Q, or two Ctrl+C
+presses exit. During a build, two Ctrl+C presses cancel and exit; cancellation
+never falls through to another build. Dumb and redirected terminals render the
+progress log and final result directly without a full-screen UI.
 
 ## Blueprint Variables
 
@@ -1110,7 +1182,9 @@ cannot enforce them rejects the operation.
 
 Reploy generates the Docker build definition; blueprint authors do not maintain
 a Dockerfile for supported component types. Each provider supplies a fixed
-offline installation recipe for its bundle artifacts. Reploy composes those
+offline installation recipe for its materialization artifacts. Selected-source
+retention artifacts remain in the verified bundle closure without entering the
+build mount or runtime image. Reploy composes those
 recipes into deterministic sequential BuildKit transactions, exactly one
 cacheable filesystem layer per provider materialization node. Independent
 provider bundles may resolve concurrently, but their layers join the final OCI

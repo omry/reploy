@@ -21,9 +21,11 @@ func validResolvedRequest() ResolvedRequestV1 {
 			{Component: "base", Provider: blueprint.ComponentTypeBase, Request: providerRequest(blueprint.ComponentTypeBase, "base-provider-request-v1")},
 		},
 		Sources: []ResolvedSourceInput{{
-			Schema: ResolvedSourceInputSchemaV1, Component: "application", LogicalPackage: "demo",
-			SourceManifestDigest: testDigest("3"), BuilderProfile: "python-wheel-builder-v1",
-			BuildSettings: providerData("python-build-settings-v1"), EcosystemMetadata: providerData("python-source-metadata-v1"), ArtifactDigest: testDigest("4"),
+			Schema: ResolvedSourceInputSchemaV2, Component: "application", LogicalPackage: "demo",
+			SourceInputDigest: testDigest("3"), SourceArtifactDigest: testDigest("6"),
+			BuildEnvironmentDigest: testDigest("7"),
+			BuilderProfile:         "python-wheel-builder-v1",
+			BuildSettings:          providerData("python-build-settings-v1"), EcosystemMetadata: providerData("python-source-metadata-v1"), OutputArtifactDigest: testDigest("4"),
 		}},
 	}
 }
@@ -41,13 +43,13 @@ func TestResolvedRequestDigestBindsContentWithoutPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Sources[0].SourceManifestDigest = testDigest("5")
+	request.Sources[0].SourceInputDigest = testDigest("5")
 	second, err := ResolvedRequestDigest(request, validateResolvedRequestOwner)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if first == second {
-		t.Fatal("source manifest change did not change resolved request identity")
+		t.Fatal("source input change did not change resolved request identity")
 	}
 	content, err := canonical.Marshal(request)
 	if err != nil {
@@ -73,7 +75,7 @@ func TestResolvedRequestRejectsMalformedRecords(t *testing.T) {
 		{name: "request provider", mutate: func(value *ResolvedRequestV1) { value.Components[0].Request.Provider = blueprint.ComponentTypeAPT }, want: "does not match"},
 		{name: "source target", mutate: func(value *ResolvedRequestV1) { value.Sources[0].Component = "missing" }, want: "missing or unsupported"},
 		{name: "source schema", mutate: func(value *ResolvedRequestV1) { value.Sources[0].Schema = "source-v2" }, want: "source input schema"},
-		{name: "source digest", mutate: func(value *ResolvedRequestV1) { value.Sources[0].ArtifactDigest = "bad" }, want: "artifact digest"},
+		{name: "source digest", mutate: func(value *ResolvedRequestV1) { value.Sources[0].OutputArtifactDigest = "bad" }, want: "artifact digest"},
 		{name: "owner", mutate: func(value *ResolvedRequestV1) { value.Sources[0].BuildSettings.Schema = "unknown" }, want: "provider-owned"},
 	}
 	for _, test := range tests {

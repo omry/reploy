@@ -310,7 +310,7 @@ func ValidateBundleV1(component string, bundle PythonBundleV1) error {
 		if source.Component != component {
 			return fmt.Errorf("Python bundle source targets component %q, want %q", source.Component, component)
 		}
-		if err := ValidateResolvedSourceInputV1(source); err != nil {
+		if err := ValidateResolvedSourceInputV2(source); err != nil {
 			return err
 		}
 	}
@@ -391,9 +391,10 @@ func fileEvidenceValue(value providers.FileEvidence) canonical.Object {
 func sourceValue(value providers.ResolvedSourceInput) canonical.Object {
 	return canonical.Object{
 		"schema": value.Schema, "component": value.Component, "logical_package": value.LogicalPackage,
-		"source_manifest_digest": string(value.SourceManifestDigest), "builder_profile": value.BuilderProfile,
+		"source_input_digest": string(value.SourceInputDigest), "source_artifact_digest": string(value.SourceArtifactDigest),
+		"build_environment_digest": string(value.BuildEnvironmentDigest), "builder_profile": value.BuilderProfile,
 		"build_settings": providerDataValue(value.BuildSettings), "ecosystem_metadata": providerDataValue(value.EcosystemMetadata),
-		"artifact_digest": string(value.ArtifactDigest),
+		"output_artifact_digest": string(value.OutputArtifactDigest),
 	}
 }
 

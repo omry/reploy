@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-22
+updated: 2026-07-25
 summary: Subdesign for closed .deb package layers, provider outputs, and Python runtime dependencies.
 refines: docs/BLUEPRINT_ENVIRONMENT_MODEL.md
 ---
@@ -332,16 +332,30 @@ its relevant request subset. The bundle lock embeds the complete overlay and
 digest. An existing local lock is valid only for an exact provider-request
 match.
 
-When a staging package override selects local source, its filesystem path is only a
-local build input. Reploy identities use a canonical source-manifest digest, versioned
-builder/toolchain profile, selected platform, and relevant build settings.
-After the provider validates and emits its normal raw artifact, the resolved
-request, resolved-bundle identity, and lock additionally record only the
-selected source records, including ecosystem metadata and the exact artifact
-digest. Candidates that the resolver did not select are absent. The
-deployment-local provider store contains the selected artifact, not the source
-tree or its physical path. This same contract covers local wheels, binaries,
-`.deb` files, and future source-derived artifacts.
+When a staging package override selects local Python source, its filesystem
+path is only a local build input. Reploy observes an immutable path-free input
+digest while withholding VCS metadata, then lets the declared Python build
+backend define the package boundary by producing an sdist. The backend sees
+ordinary generated directories and caches; Reploy does not decide package
+contents with a generic ignore list. Reploy validates and retains exactly one
+closed `.tar.gz` sdist, securely extracts that retained artifact, and builds
+the wheel only from the extraction.
+
+A selected snapshot may contain project-owned `.reploy.yaml` build metadata.
+The initial strict recipe declares either `pep517` or `setuptools-legacy` and
+may request the portable `tool:java` capability. Reploy resolves that tool
+through the same locked APT machinery into a disposable builder prefix; it does
+not add the native Java package to the workload provider graph. Unselected
+overrides and published packages never activate local recipes.
+
+The resolved request, bundle identity, and lock record the source-input digest,
+retained-sdist digest, resulting-wheel digest, exact build-environment digest,
+versioned builder/toolchain profile, relevant build settings, and ecosystem
+metadata. Candidates that the resolver did not select are absent. The
+deployment-local provider store contains the retained sdist and selected wheel,
+not the source tree or its physical path. A backend that cannot produce a valid
+sdist without live VCS metadata fails with an explicit local-source correction;
+v1 has no direct-wheel or generic-tree fallback.
 
 The staging directory retains the author-provided blueprint text unchanged. It
 may also contain an explicit developer package-override sidecar whose sparse
@@ -349,15 +363,47 @@ outer shape matches the blueprint and whose `environment.id` must match. The
 sidecar maps provider-owned package identifiers to either a local source path
 or a specific upstream version. It is intent, not a resolution record: Reploy
 does not add inferred dependencies, hashes, or selected artifacts to it.
+It may separately declare exact native OS roots beneath
+`environment.package_additions.os`. Those roots activate the APT provider for a
+supported Debian/Ubuntu base (or join its existing shared node) and are
+installation requests, not source mappings. Reploy validates the normal APT
+request grammar without translating the package name.
 `reploy overrides [--dir DIR]` edits this file and loads existing content;
 `--dir` selects the staging directory. An optional source workspace root can be
 configured inside the editor and is then recorded in sidecar-local
 `environment.vars.workspace_root`. Without one, selected source paths remain
 absolute; with one, paths beneath it use that variable and paths outside it
-remain absolute. Relative source paths resolve from the sidecar's directory.
+remain absolute. The root may be absolute or use `~/path`; Reploy retains the
+entered spelling and expands the current user's home when the override is used.
+The project picker accepts and searches nested paths relative to the workspace;
+relative source paths in the sidecar resolve from the sidecar's directory.
+When a new staging directory is created from a local filesystem blueprint,
+Reploy also recognizes `overrides.yaml` beside that blueprint. It
+validates and imports the developer intent. A relative workspace root is
+resolved from the blueprint sidecar location and retained as an absolute staged
+workspace; paths beneath it remain workspace-relative, while other resolved
+local paths are rebased to absolute paths. This create-time convenience does
+not apply to remote blueprint refs and does not update an existing staging
+sidecar.
+The editor can show direct dependencies from static Python project metadata or
+a completed trial build, and it permits override-only rows for transitive
+packages. Such rows never request installation; use the blueprint or
+`reploy bundle add-package` to add an application-provider requirement, or add
+an OS root in the editor with `os:PACKAGE`. `V` saves the choices
+and runs an optional full trial build. A successful trial is cached for the
+next normal build without replacing the current staged image; failure leaves a
+scrollable log that can be saved explicitly.
 Installation transfers the staged build and retained blueprint, but not the
 sidecar or its source locators; an installed deployment never reads the source
 checkout.
+
+In an interactive terminal, `reploy build` uses a build-specific view backed
+by the override validation machinery. A failed build keeps its scrollable log
+available and allows the user to correct package choices; success promotes the
+validated candidate and retains the final image, elapsed time, and environment
+result until Esc, Q, or two Ctrl+C presses exit. During a build, two Ctrl+C
+presses cancel and exit without starting another build path. Dumb and
+redirected terminals print the progress log and final result directly.
 
 For exact build reuse, Reploy reconstructs the prior selected-source list from
 the validated provider profiles embedded in the current lock and compares only
@@ -366,6 +412,11 @@ for package identifiers in the prior closure, so adding or changing an override
 for a package already in that closure invalidates reuse while an unrelated
 mapping does not. This check does not scan the provider store, hash candidate
 artifacts, inspect unused local paths, or call Docker.
+Before either source artifact is reused, its exact descriptor and bytes must
+still be present in the current deployment's provider store. If current source
+inputs produce the same retained sdist as a prior build under the same selected
+platform, immutable upstream image, and interpreter evidence, Reploy may reuse
+that sdist's exact wheel while recording the new input digest.
 
 ### Public Provider Names and Options
 
@@ -1719,7 +1770,8 @@ terminal produces different realized evidence.
 The Python resolver-dependency profile includes the selected interpreter's
 complete validation evidence, target platform, declared system/build
 prerequisites, builder/toolchain profile, requirements, and selected
-local-source manifests and build settings. Unused override mappings are not
+local-source input digests, retained sdist identities, and build settings.
+Unused override mappings are not
 part of the profile and are never inspected or built. When a direct or
 transitive requirement needs a distribution, a matching staging override takes
 precedence; absent a match, resolution follows the blueprint. A selected local
@@ -1961,8 +2013,9 @@ The lock contains at least:
   tagged `base` or `bundle` origins, optional base-predecessor tuples, artifact
   paths/sizes/hashes for bundle-origin members only, and resolved bundle
   identities;
-- every selected local-source input's logical identity, canonical source-manifest
-  digest, builder/toolchain profile, selected build settings, validated artifact
+- every selected local-source input's logical identity, canonical source-input
+  digest, retained source-artifact digest, exact build-environment digest,
+  builder/toolchain profile, selected build settings, validated artifact
   metadata, and exact output-artifact digest, with physical source paths omitted;
 - selected executable-output identities and validated compatibility facts.
 
@@ -2119,9 +2172,10 @@ be enabled:
   manifest and bind it to the blueprint, request overlay, selected platform,
   provider recipes, and realized state.
 - Local-source builders must separate auxiliary physical locators from content
-  identity, create canonical source manifests, bind builder/toolchain profiles
-  and settings, validate normal ecosystem artifacts, and publish exact artifact
-  digests into the bundle and lock.
+  identity, create canonical input manifests, ask the declared backend for a
+  closed sdist, validate and securely extract that retained artifact, build the
+  wheel only from it, bind builder/toolchain profiles and settings, and publish
+  both exact artifact digests into the bundle and lock.
 - `BuildEnvironmentImage` must stop constructing a Python provider directly and
   instead execute a provider graph.
 - Generated-image planning must accept ordered provider nodes rather than one
@@ -2237,11 +2291,11 @@ schema accept `type: apt` until the end-to-end path is complete.
   identity, complete lock embedding, existing-state exact matching, and
   explicit replacement semantics.
 - Local-source tests proving physical locators remain auxiliary local state and
-  never enter content identity; source inclusion/ignore rules are deterministic;
-  source-manifest, builder/toolchain, platform, setting, metadata, and artifact
-  changes affect the correct identity; nominal package versions cannot replace
-  content digests; and the provider store contains the built raw artifacts but
-  no source tree.
+  never enter content identity; source-input observation is deterministic;
+  source input, retained source artifact, build environment, builder/toolchain,
+  setting, metadata, and output-artifact changes affect the correct identity;
+  nominal package versions cannot replace content digests; and the provider
+  store contains the retained raw artifacts but no source tree.
 - APT bundle-resolver tests for closed transitive sets, architecture, metadata,
   hashes, component-scoped options, and repository failures. Mixed-origin cases
   cover base-only satisfiers, downloaded members, upgrades with exact base

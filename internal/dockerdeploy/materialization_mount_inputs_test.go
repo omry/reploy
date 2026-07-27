@@ -17,12 +17,23 @@ func mountInputFixture() (providers.ResolvedBundle, providers.MaterializationTra
 	wheel := providerstore.ArtifactDescriptor{
 		LogicalPath: "wheels/hydra.whl", Kind: "wheel", Size: "200", SHA256: rendererDigest("6"),
 	}
+	sdist := providerstore.ArtifactDescriptor{
+		LogicalPath: "sdists/hydra-1.0.tar.gz", Kind: "sdist", Size: "100", SHA256: rendererDigest("7"),
+	}
 	transaction.Argv[6].RelativePath = wheel.LogicalPath
 	bundle := providers.ResolvedBundle{
 		Identity: transaction.Mounts[1].SourceDigest,
 		Payload: providers.ResolvedBundleIdentityV1{
-			NodeID:    transaction.NodeID,
-			Artifacts: []providerstore.ArtifactDescriptor{transaction.Script, wheel},
+			NodeID: transaction.NodeID,
+			SelectedSources: []providers.ResolvedSourceInput{{
+				Schema: providers.ResolvedSourceInputSchemaV2, Component: "web", LogicalPackage: "hydra",
+				SourceInputDigest: rendererDigest("8"), SourceArtifactDigest: sdist.SHA256,
+				BuildEnvironmentDigest: rendererDigest("9"), BuilderProfile: "test-builder",
+				BuildSettings:        providers.CanonicalProviderData{Schema: "test-settings-v1", Value: canonical.Object{}},
+				EcosystemMetadata:    providers.CanonicalProviderData{Schema: "test-metadata-v1", Value: canonical.Object{}},
+				OutputArtifactDigest: wheel.SHA256,
+			}},
+			Artifacts: []providerstore.ArtifactDescriptor{transaction.Script, sdist, wheel},
 		},
 	}
 	return bundle, transaction, wheel
@@ -78,6 +89,9 @@ func TestMaterializationMountInputsRejectsOpenArtifactMappings(t *testing.T) {
 		{name: "wrong bundle digest", mutate: func(_ *providers.ResolvedBundle, transaction *providers.MaterializationTransaction) {
 			transaction.Mounts[1].SourceDigest = rendererDigest("7")
 		}, want: "bundle identity"},
+		{name: "missing retained source", mutate: func(bundle *providers.ResolvedBundle, _ *providers.MaterializationTransaction) {
+			bundle.Payload.Artifacts = append(bundle.Payload.Artifacts[:1], bundle.Payload.Artifacts[2:]...)
+		}, want: "retained source artifact"},
 		{name: "unused artifact", mutate: func(bundle *providers.ResolvedBundle, _ *providers.MaterializationTransaction) {
 			bundle.Payload.Artifacts = append(bundle.Payload.Artifacts, providerstore.ArtifactDescriptor{
 				LogicalPath: "wheels/unused.whl", Kind: "wheel", Size: "10", SHA256: rendererDigest("8"),

@@ -6,19 +6,21 @@ import (
 
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
-	"github.com/omry/reploy/internal/providers/registry"
 	"github.com/omry/reploy/internal/providerstore"
 )
 
 type LockedProviderBuildPreparationInputV1 struct {
-	Operation        *deploy.OperationLock
-	Store            providerstore.Store
-	Environment      string
-	DeploymentDir    string
-	PackageOverrides deploy.PackageOverrideIntentV1
-	Sources          []providers.ResolvedSourceInput
-	DockerPlan       DockerExecutionPlan
-	NoCache          bool
+	Operation          *deploy.OperationLock
+	Store              providerstore.Store
+	Environment        string
+	DeploymentDir      string
+	PackageOverrides   deploy.PackageOverrideIntentV1
+	BaseImage          string
+	Sources            []providers.ResolvedSourceInput
+	DockerPlan         DockerExecutionPlan
+	NoCache            bool
+	ValidatedCandidate *ValidatedBuildCandidateV1
+	ValidatedInputs    ValidatedBuildInputsV1
 }
 
 type LockedProviderBuildPreparationV1 struct {
@@ -34,10 +36,14 @@ type LockedProviderBuildPreparationV1 struct {
 	// Current is the verified previously published generation, including when
 	// it is stale. ReusableLock is the only cache input for later provider work
 	// and is nil under NoCache.
-	Current      *CurrentBuild
-	ReusableLock *deploy.BuildLockV1
-	Recovered    bool
-	Reused       bool
+	Current            *CurrentBuild
+	ReusableLock       *deploy.BuildLockV1
+	ValidatedCandidate *ValidatedBuildCandidateV1
+	ValidatedInputs    ValidatedBuildInputsV1
+	NoCache            bool
+	ReusedCandidate    bool
+	Recovered          bool
+	Reused             bool
 }
 
 type providerBuildPreparationBackend struct {
@@ -51,7 +57,7 @@ type providerBuildPreparationBackend struct {
 		providers.RequirementProfileOwnerValidator,
 		providers.ResolvedBundleOwnerValidator,
 	) (bool, error)
-	load            func(*deploy.OperationLock, deploy.PackageOverrideIntentV1, []providers.ResolvedSourceInput) (LoadedBuildRequestV1, error)
+	load            func(*deploy.OperationLock, deploy.PackageOverrideIntentV1, string, []providers.ResolvedSourceInput) (LoadedBuildRequestV1, error)
 	selectBase      func(context.Context, providers.ResolvedRequestV1) (SelectedProviderBase, error)
 	validateCurrent currentBuildLoader
 	lockedSources   func(deploy.BuildLockV1) ([]providers.ResolvedSourceInput, error)
@@ -112,15 +118,16 @@ func prepareLockedProviderBuildV1(
 	if found {
 		generation = state.Current
 	}
+	recoveryProfileValidator, recoveryBundleValidator := providerBuildRecoveryValidatorsV1(input.NoCache)
 	recovered, err := backend.recover(
 		ctx, input.Operation, input.Store, generation, input.Environment, input.DeploymentDir,
-		registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1,
+		recoveryProfileValidator, recoveryBundleValidator,
 	)
 	if err != nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build recovery: %w", err)
 	}
 	loaded, err := backend.load(
-		input.Operation, input.PackageOverrides,
+		input.Operation, input.PackageOverrides, input.BaseImage,
 		append([]providers.ResolvedSourceInput{}, input.Sources...),
 	)
 	if err != nil {
@@ -137,17 +144,19 @@ func prepareLockedProviderBuildV1(
 		Operation: input.Operation, Store: input.Store, Environment: input.Environment,
 		DeploymentDir: input.DeploymentDir, DockerPlan: input.DockerPlan,
 		Loaded: loaded, SelectedBase: selected, Recovered: recovered,
+		ValidatedCandidate: input.ValidatedCandidate, ValidatedInputs: input.ValidatedInputs,
+		NoCache: input.NoCache,
 	}
 
-	current, currentFound, err := backend.validateCurrent(
-		ctx, input.Operation, input.Store, input.Environment, input.DeploymentDir,
-	)
-	if err != nil {
-		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build current generation: %w", err)
-	}
-	if currentFound {
-		result.Current = &current
-		if !input.NoCache {
+	if !input.NoCache {
+		current, currentFound, err := backend.validateCurrent(
+			ctx, input.Operation, input.Store, input.Environment, input.DeploymentDir,
+		)
+		if err != nil {
+			return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build current generation: %w", err)
+		}
+		if currentFound {
+			result.Current = &current
 			available, err := backend.cacheAvailable(current.Lock, input.Store)
 			if err != nil {
 				return LockedProviderBuildPreparationV1{}, fmt.Errorf("validate current provider cache: %w", err)
@@ -179,6 +188,42 @@ func prepareLockedProviderBuildV1(
 						result.Reused = true
 						return result, nil
 					}
+				}
+			}
+		}
+	}
+	if input.ValidatedCandidate != nil && !input.NoCache {
+		candidate := input.ValidatedCandidate.Current
+		available, err := backend.cacheAvailable(candidate.Lock, input.Store)
+		if err != nil {
+			return LockedProviderBuildPreparationV1{}, fmt.Errorf("validate cached build provider data: %w", err)
+		}
+		if available {
+			result.ReusableLock = &candidate.Lock
+			lockedSources, err := backend.lockedSources(candidate.Lock)
+			if err != nil {
+				return LockedProviderBuildPreparationV1{}, err
+			}
+			lockedRequest, relevantOverrides, exactSources, err := resolvedRequestForLockedBuildV1(
+				loaded.Document, loaded.State.Overlay, loaded.PackageOverrides, loaded.Request,
+				lockedSources, candidate.Lock, input.Store,
+			)
+			if err != nil {
+				return LockedProviderBuildPreparationV1{}, err
+			}
+			if exactSources {
+				matches, err := backend.matches(candidate, CurrentBuildReuseInput{
+					ResolvedRequest: lockedRequest, Overlay: loaded.State.Overlay,
+					PackageOverrides: relevantOverrides, Base: selected.Descriptor,
+					Document: loaded.Document, DockerPlan: input.DockerPlan,
+				})
+				if err != nil {
+					return LockedProviderBuildPreparationV1{}, err
+				}
+				if matches {
+					result.Reused = true
+					result.ReusedCandidate = true
+					return result, nil
 				}
 			}
 		}

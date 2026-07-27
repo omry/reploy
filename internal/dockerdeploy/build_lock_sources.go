@@ -1,7 +1,9 @@
 package dockerdeploy
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"reflect"
 	"sort"
 
@@ -55,10 +57,11 @@ func buildLockSelectedSourceWheelsV1(
 	for _, source := range locked {
 		lockedByKey[source.Component+"\x00"+source.LogicalPackage] = source
 	}
-	required := make(map[canonical.Digest]struct{}, len(sources))
+	requiredWheels := make(map[canonical.Digest]struct{}, len(sources))
+	requiredSources := make(map[canonical.Digest]providerstore.ArtifactDescriptor, len(sources))
 	seenSources := make(map[string]struct{}, len(sources))
 	for _, source := range sources {
-		if err := pythonprovider.ValidateResolvedSourceInputV1(source); err != nil {
+		if err := pythonprovider.ValidateResolvedSourceInputV2(source); err != nil {
 			return nil, err
 		}
 		key := source.Component + "\x00" + source.LogicalPackage
@@ -69,10 +72,16 @@ func buildLockSelectedSourceWheelsV1(
 		if current, found := lockedByKey[key]; !found || !reflect.DeepEqual(current, source) {
 			return nil, fmt.Errorf("selected source %s.%s is not an exact identity from the current lock", source.Component, source.LogicalPackage)
 		}
-		required[source.ArtifactDigest] = struct{}{}
+		requiredWheels[source.OutputArtifactDigest] = struct{}{}
+		sourceArtifact, err := pythonprovider.SourceArtifactDescriptorV2(source)
+		if err != nil {
+			return nil, err
+		}
+		requiredSources[source.SourceArtifactDigest] = sourceArtifact
 	}
 
-	byDigest := make(map[canonical.Digest]providerstore.ArtifactDescriptor, len(required))
+	byDigest := make(map[canonical.Digest]providerstore.ArtifactDescriptor, len(requiredWheels))
+	foundSources := make(map[canonical.Digest]providerstore.ArtifactDescriptor, len(requiredSources))
 	for _, node := range lock.Nodes {
 		if node.Provider != blueprint.ComponentTypePython {
 			continue
@@ -85,13 +94,31 @@ func buildLockSelectedSourceWheelsV1(
 			return nil, fmt.Errorf("validate current Python bundle for source wheels at node %q: %w", node.NodeID, err)
 		}
 		for _, artifact := range bundle.Payload.Artifacts {
-			if _, found := required[artifact.SHA256]; !found {
+			if expected, sourceFound := requiredSources[artifact.SHA256]; sourceFound &&
+				reflect.DeepEqual(expected, artifact) {
+				foundSources[artifact.SHA256] = artifact
+			}
+			if _, found := requiredWheels[artifact.SHA256]; !found {
+				continue
+			}
+			if artifact.Kind != "wheel" {
 				continue
 			}
 			if current, found := byDigest[artifact.SHA256]; found && !reflect.DeepEqual(current, artifact) {
 				return nil, fmt.Errorf("current source wheel %s has conflicting descriptors", artifact.SHA256)
 			}
 			byDigest[artifact.SHA256] = artifact
+		}
+	}
+	for digest, descriptor := range requiredSources {
+		if found, ok := foundSources[digest]; !ok || !reflect.DeepEqual(found, descriptor) {
+			return nil, fmt.Errorf("current Python source distribution %s is absent from its bundle", digest)
+		}
+		if _, err := store.InspectArtifactPath(descriptor); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, fmt.Errorf("%w: inspect %q: %w", errCurrentPythonSourceArtifactMissing, descriptor.LogicalPath, err)
+			}
+			return nil, fmt.Errorf("inspect current Python source distribution %q: %w", descriptor.LogicalPath, err)
 		}
 	}
 	wheels := make([]providerstore.ArtifactDescriptor, 0, len(byDigest))

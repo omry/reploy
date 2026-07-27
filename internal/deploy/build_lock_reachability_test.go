@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/providers"
@@ -81,6 +82,60 @@ func TestBuildLockStoreClosureLoadsExactTransitiveObjects(t *testing.T) {
 		if closure[index] != want[index] {
 			t.Fatalf("closure[%d] = %#v, want %#v", index, closure[index], want[index])
 		}
+	}
+}
+
+func TestReusableBuildLockStoreClosureTrustsExactDebVerificationStamp(t *testing.T) {
+	_, store, lock, keepReference, _ := buildReachabilityFixture(t)
+	blobPath, err := store.BlobPath(keepReference.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.Lstat(blobPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(blobPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(blobPath, []byte("xxxx"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(blobPath, original.ModTime(), original.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ReusableBuildLockStoreClosure(lock, store, acceptBuildLockProfile, acceptBuildLockBundle); err != nil {
+		t.Fatalf("optimistic reusable closure rejected unchanged metadata: %v", err)
+	}
+	if _, err := BuildLockStoreClosure(lock, store, acceptBuildLockProfile, acceptBuildLockBundle); err == nil {
+		t.Fatal("full closure verification accepted changed bytes")
+	}
+}
+
+func TestReusableBuildLockStoreClosureHashesDebWithChangedModificationTime(t *testing.T) {
+	_, store, lock, keepReference, _ := buildReachabilityFixture(t)
+	blobPath, err := store.BlobPath(keepReference.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.Lstat(blobPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(blobPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(blobPath, []byte("xxxx"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	artifactTime := original.ModTime().Add(time.Second)
+	if err := os.Chtimes(blobPath, artifactTime, artifactTime); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ReusableBuildLockStoreClosure(lock, store, acceptBuildLockProfile, acceptBuildLockBundle); err == nil || !strings.Contains(err.Error(), "digest") {
+		t.Fatalf("changed deb error = %v", err)
 	}
 }
 

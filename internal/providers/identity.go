@@ -10,21 +10,23 @@ import (
 )
 
 const (
-	ResolvedSourceInputSchemaV1 = "resolved-source-input-v1"
+	ResolvedSourceInputSchemaV2 = "resolved-source-input-v2"
 	ResolvedRequestSchemaV1     = "resolved-request-v1"
 	ResolverCacheKeySchemaV1    = "resolver-cache-key-v1"
 	AssemblyKeySchemaV1         = "assembly-key-v1"
 )
 
 type ResolvedSourceInput struct {
-	Schema               string                `json:"schema"`
-	Component            string                `json:"component"`
-	LogicalPackage       string                `json:"logical_package"`
-	SourceManifestDigest canonical.Digest      `json:"source_manifest_digest"`
-	BuilderProfile       string                `json:"builder_profile"`
-	BuildSettings        CanonicalProviderData `json:"build_settings"`
-	EcosystemMetadata    CanonicalProviderData `json:"ecosystem_metadata"`
-	ArtifactDigest       canonical.Digest      `json:"artifact_digest"`
+	Schema                 string                `json:"schema"`
+	Component              string                `json:"component"`
+	LogicalPackage         string                `json:"logical_package"`
+	SourceInputDigest      canonical.Digest      `json:"source_input_digest"`
+	SourceArtifactDigest   canonical.Digest      `json:"source_artifact_digest"`
+	BuildEnvironmentDigest canonical.Digest      `json:"build_environment_digest"`
+	BuilderProfile         string                `json:"builder_profile"`
+	BuildSettings          CanonicalProviderData `json:"build_settings"`
+	EcosystemMetadata      CanonicalProviderData `json:"ecosystem_metadata"`
+	OutputArtifactDigest   canonical.Digest      `json:"output_artifact_digest"`
 }
 
 type ResolvedRequestV1 struct {
@@ -116,8 +118,8 @@ func ValidateResolvedRequestV1(request ResolvedRequestV1, validateOwner Resolved
 }
 
 func ValidateResolvedSourceInput(source ResolvedSourceInput) error {
-	if source.Schema != ResolvedSourceInputSchemaV1 {
-		return fmt.Errorf("resolved source input schema must be %q", ResolvedSourceInputSchemaV1)
+	if source.Schema != ResolvedSourceInputSchemaV2 {
+		return fmt.Errorf("resolved source input schema must be %q", ResolvedSourceInputSchemaV2)
 	}
 	if err := blueprint.ValidateProviderIdentifier("resolved source component", source.Component); err != nil {
 		return err
@@ -128,8 +130,14 @@ func ValidateResolvedSourceInput(source ResolvedSourceInput) error {
 	if !isNonemptyPlainString(source.LogicalPackage) {
 		return fmt.Errorf("resolved source logical package must be nonempty valid text")
 	}
-	if err := source.SourceManifestDigest.Validate(); err != nil {
-		return fmt.Errorf("resolved source manifest digest: %w", err)
+	if err := source.SourceInputDigest.Validate(); err != nil {
+		return fmt.Errorf("resolved source input digest: %w", err)
+	}
+	if err := source.SourceArtifactDigest.Validate(); err != nil {
+		return fmt.Errorf("resolved source artifact digest: %w", err)
+	}
+	if err := source.BuildEnvironmentDigest.Validate(); err != nil {
+		return fmt.Errorf("resolved source build environment digest: %w", err)
 	}
 	if !isNonemptyPlainString(source.BuilderProfile) {
 		return fmt.Errorf("resolved source builder profile must be nonempty valid text")
@@ -140,8 +148,8 @@ func ValidateResolvedSourceInput(source ResolvedSourceInput) error {
 	if err := validateCanonicalProviderData("resolved source ecosystem metadata", source.EcosystemMetadata); err != nil {
 		return err
 	}
-	if err := source.ArtifactDigest.Validate(); err != nil {
-		return fmt.Errorf("resolved source artifact digest: %w", err)
+	if err := source.OutputArtifactDigest.Validate(); err != nil {
+		return fmt.Errorf("resolved source output artifact digest: %w", err)
 	}
 	return nil
 }

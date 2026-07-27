@@ -93,6 +93,9 @@ func TestBuildLockV1CanonicalRoundTripAndIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if bytes.Contains(content, []byte(`"additions"`)) {
+		t.Fatalf("empty package additions changed legacy canonical lock JSON:\n%s", content)
+	}
 	decoded, err := DecodeBuildLockV1(content, acceptBuildLockProfile)
 	if err != nil {
 		t.Fatal(err)
@@ -111,6 +114,20 @@ func TestBuildLockV1CanonicalRoundTripAndIdentity(t *testing.T) {
 	second, err := BuildLockDigestV1(decoded, acceptBuildLockProfile)
 	if err != nil || first != second {
 		t.Fatalf("build lock identities = %q, %q; error = %v", first, second, err)
+	}
+
+	lock.PackageOverrides.Additions = []PackageAdditionIntentV1{{
+		Provider: "os", Requirement: "default-jre-headless",
+	}}
+	content, err = EncodeBuildLockV1(lock, acceptBuildLockProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(content, []byte(`"additions":[{"provider":"os","requirement":"default-jre-headless"}]`)) {
+		t.Fatalf("package additions are absent from canonical lock JSON:\n%s", content)
+	}
+	if _, err := DecodeBuildLockV1(content, acceptBuildLockProfile); err != nil {
+		t.Fatalf("decode lock with package additions: %v", err)
 	}
 }
 

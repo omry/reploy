@@ -1,0 +1,2 @@
+kind: Security
+body: Reject control characters in development override workspace roots and prevent filesystem-derived text from reshaping the interactive override and build displays.

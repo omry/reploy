@@ -72,18 +72,26 @@ Use `--dir DIR` only to select a staging directory explicitly:
 reploy overrides --dir ./reploy-staging
 ```
 
-The editor loads or creates `package-overrides.yaml` beside that staged
-deployment. It can select an exact upstream version or a local project for a
-package. The project browser starts in the directory where the editor was
-launched. The workspace root is unset by default, so selected paths remain
-absolute. Set an optional workspace root inside the editor to store paths
-beneath it using `{{ workspace_root }}`; paths outside it remain absolute:
+The editor loads or creates `overrides.yaml` beside that staged deployment.
+The base image can remain **From blueprint** or use an exact image name such
+as `ubuntu:24.04`. Exact names are resolved and locked during validation or
+build.
+
+Package overrides can select an exact upstream version or a local project.
+The project browser starts in the directory where the editor was launched.
+The workspace root is unset by default, so selected paths remain absolute.
+Set an optional workspace root inside the editor to store paths beneath it
+using `{{ workspace_root }}`; paths outside it remain absolute. The root may
+be an absolute path or a home-relative path such as `~/src`. Reploy retains
+the spelling in the sidecar and expands `~` when it uses the override:
 
 ```yaml
 environment:
   id: example
+  base:
+    image: python:3.13-slim
   vars:
-    workspace_root: /home/me/src
+    workspace_root: ~/src
   package_overrides:
     python:
       omegaconf:
@@ -97,10 +105,19 @@ that package. Installation consumes the artifacts built during staging and
 does not retain the sidecar or external source paths.
 
 The editor shades explicit component dependencies and lists them before
-override-only mappings. In v1, a package available only from a local project
-must be an explicit component requirement if it would otherwise appear only
-transitively; use the blueprint or `reploy bundle add-package` to add that
-discovery root.
+override-only mappings. It discovers direct dependencies from static Python
+project metadata and from a successful trial build. You may add an
+override-only row for another transitive package, but that row is used only
+when dependency resolution requires the package. Use the blueprint or
+`reploy bundle add-package` when you intend to add a direct requirement.
+
+Press `V` to save the choices and validate them with the normal build pipeline.
+Success verifies that versions exist, constraints are compatible, local
+sources build, and the final environment passes validation. Reploy keeps the
+trial result for the next `reploy build` without replacing the current staged
+image. The editor shows progress and a scrollable log; after a failure, press
+`S` to save the log to a new file. Exiting unvalidated choices offers to
+validate and exit, save without validation, or return to editing.
 
 ## Validate and Publish
 

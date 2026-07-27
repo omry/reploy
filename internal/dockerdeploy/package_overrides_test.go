@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -17,25 +18,31 @@ func TestLoadStagedPackageOverridesV1LoadsOptionalSidecar(t *testing.T) {
 	}
 	defer operation.Unlock()
 
-	resolved, intent, err := LoadStagedPackageOverridesV1(operation, dir, document)
+	raw, resolved, intent, err := LoadStagedPackageOverridesV1(operation, dir, document)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resolved.Providers) != 0 || len(intent.Choices) != 0 {
-		t.Fatalf("missing sidecar resolved to %#v / %#v", resolved, intent)
+	if raw.Environment.ID != document.Environment.ID ||
+		len(raw.Environment.PackageOverrides) != 0 ||
+		len(resolved.Providers) != 0 ||
+		len(intent.Choices) != 0 {
+		t.Fatalf("missing sidecar loaded as %#v / %#v / %#v", raw, resolved, intent)
 	}
 
-	raw := deploy.EmptyPackageOverridesV1(document.Environment.ID)
-	raw.Environment.Vars["root"] = filepath.Join(dir, "workspace")
-	raw.Environment.PackageOverrides["python"] = map[string]deploy.PackageOverrideChoiceV1{
+	wantRaw := deploy.EmptyPackageOverridesV1(document.Environment.ID)
+	wantRaw.Environment.Vars["root"] = filepath.Join(dir, "workspace")
+	wantRaw.Environment.PackageOverrides["python"] = map[string]deploy.PackageOverrideChoiceV1{
 		"Demo_Pkg": {Path: "{{ root }}/demo"},
 	}
-	if err := operation.CommitPackageOverridesV1(raw); err != nil {
+	if err := operation.CommitPackageOverridesV1(wantRaw); err != nil {
 		t.Fatal(err)
 	}
-	resolved, intent, err = LoadStagedPackageOverridesV1(operation, dir, document)
+	raw, resolved, intent, err = LoadStagedPackageOverridesV1(operation, dir, document)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(raw, wantRaw) {
+		t.Fatalf("raw overrides = %#v, want %#v", raw, wantRaw)
 	}
 	if got := resolved.Providers["python"]["demo-pkg"].Path; got != filepath.Join(dir, "workspace", "demo") {
 		t.Fatalf("resolved path = %q", got)
@@ -56,7 +63,7 @@ func TestLoadStagedPackageOverridesV1RejectsWrongEnvironment(t *testing.T) {
 	if err := operation.CommitPackageOverridesV1(deploy.EmptyPackageOverridesV1("other")); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = LoadStagedPackageOverridesV1(operation, dir, document)
+	_, _, _, err = LoadStagedPackageOverridesV1(operation, dir, document)
 	if err == nil || !strings.Contains(err.Error(), "want") {
 		t.Fatalf("error = %v", err)
 	}

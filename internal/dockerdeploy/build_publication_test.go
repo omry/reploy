@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -247,6 +248,104 @@ func TestPublishBuildReplacementUsesOldLockedConfigForCleanup(t *testing.T) {
 	}
 	if _, found, err := operation.ReadBuildLock(firstState.Current.BuildLockDigest, registry.ValidateRequirementProfileV1); err != nil || found {
 		t.Fatalf("old lock remains: found=%v err=%v", found, err)
+	}
+}
+
+func TestPublishBuildNoCacheReplacesProviderSchemaIncompatibleCurrent(t *testing.T) {
+	fixture := newPreparedPythonGraphReuseFixture(t)
+	dir := filepath.Dir(filepath.Dir(fixture.store.Root()))
+	store, candidate := publicationLockFixture(t, dir, "d", "e", "f")
+	if store.Root() != fixture.store.Root() {
+		t.Fatal("candidate fixture changed provider store")
+	}
+
+	old := fixture.lock
+	facts := make(canonical.Object, len(old.Nodes[0].RequirementProfile.Facts.Value)+1)
+	for key, value := range old.Nodes[0].RequirementProfile.Facts.Value {
+		facts[key] = value
+	}
+	facts["artifact_digest"] = reuseTestDigest("c")
+	old.Nodes[0].RequirementProfile.Facts.Value = facts
+	profileDigest, err := providers.RequirementProfileDigest(
+		old.Nodes[0].RequirementProfile, acceptProviderProfileOwnerForCutoverV1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.Nodes[0].ValidationEvidence.ProfileDigest = profileDigest
+	if err := deploy.ValidateBuildLockV1(old, registry.ValidateRequirementProfileV1); err == nil ||
+		!strings.Contains(err.Error(), "provider facts") {
+		t.Fatalf("old lock current-schema validation error = %v", err)
+	}
+
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	oldDigest, err := operation.PublishBuildLock(old, acceptProviderProfileOwnerForCutoverV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPolicyDigest, err := deploy.RuntimePolicyDigestV1(old.RuntimePolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, platform := testSelectedPlatformDocumentV1(t)
+	oldReference := fixedPublicationReferences(t, dir, 0x5a).Generation
+	oldGeneration := deploy.EnvironmentGenerationState{
+		Reference: oldReference, ImageDigest: old.FinalImage.Digest,
+		RootFSSubject: old.FinalImage.RootFSSubject, BuildLockDigest: oldDigest,
+		Platform: old.Platform, RuntimePolicyDigest: oldPolicyDigest,
+	}
+	if err := operation.CommitStateV1(nil, deploy.StateV1{
+		Schema: deploy.StateSchemaV1, Blueprint: testResolvedBlueprintV1(t, document),
+		Platform: platform, Overlay: deploy.EmptyRequestOverlayV1(), Current: &oldGeneration,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	references := fixedPublicationReferences(t, dir, 0x5b)
+	var created []publicationReferenceCall
+	var removed []publicationReferenceCall
+	backend := buildPublicationBackend{
+		newReferences: func(string, string) (EnvironmentImageReferences, error) { return references, nil },
+		createReference: func(_ context.Context, image providers.RealizedImageV1, _ EnvironmentImageReferences, kind EnvironmentReferenceKind, _, _ string) error {
+			created = append(created, publicationReferenceCall{image: image, kind: kind})
+			return nil
+		},
+		removeReference: func(_ context.Context, image providers.RealizedImageV1, _ EnvironmentImageReferences, kind EnvironmentReferenceKind, _, _ string) error {
+			removed = append(removed, publicationReferenceCall{image: image, kind: kind})
+			return nil
+		},
+	}
+	normalInput := publicationInput(t, dir, candidate)
+	if _, err := publishBuild(t.Context(), operation, store, normalInput, backend); err == nil ||
+		!strings.Contains(err.Error(), "provider facts") {
+		t.Fatalf("normal publication error = %v", err)
+	}
+	if len(created) != 0 || len(removed) != 0 {
+		t.Fatalf("normal publication changed Docker references: created=%#v removed=%#v", created, removed)
+	}
+
+	noCacheInput := normalInput
+	noCacheInput.NoCache = true
+	result, err := publishBuild(t.Context(), operation, store, noCacheInput, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Current == nil || result.Current.BuildLockDigest == oldDigest {
+		t.Fatalf("no-cache publication did not replace old generation: %#v", result.Current)
+	}
+	wantRemoved := []publicationReferenceCall{
+		{image: old.FinalImage, kind: EnvironmentReferenceGeneration},
+		{image: candidate.FinalImage, kind: EnvironmentReferenceTemporary},
+	}
+	if !reflect.DeepEqual(removed, wantRemoved) {
+		t.Fatalf("no-cache replacement cleanup = %#v, want %#v", removed, wantRemoved)
+	}
+	if _, found, err := operation.ReadBuildLock(oldDigest, acceptProviderProfileOwnerForCutoverV1); err != nil || found {
+		t.Fatalf("old incompatible lock remains: found=%v err=%v", found, err)
 	}
 }
 

@@ -36,6 +36,13 @@ func MaterializationMountInputs(bundle providers.ResolvedBundle, transaction pro
 		}
 		artifacts[artifact.LogicalPath] = artifact
 	}
+	retainedSourceDigests := make(map[canonical.Digest]bool, len(bundle.Payload.SelectedSources))
+	for index, source := range bundle.Payload.SelectedSources {
+		if err := providers.ValidateResolvedSourceInput(source); err != nil {
+			return nil, fmt.Errorf("materialization bundle selected source %d: %w", index, err)
+		}
+		retainedSourceDigests[source.SourceArtifactDigest] = true
+	}
 
 	references := make(map[string][]string, len(transaction.Mounts))
 	seenReferences := map[string]bool{}
@@ -88,15 +95,26 @@ func MaterializationMountInputs(bundle providers.ResolvedBundle, transaction pro
 		}
 		inputs = append(inputs, input)
 	}
-	if len(usedArtifacts) != len(artifacts) {
-		unused := make([]string, 0, len(artifacts)-len(usedArtifacts))
-		for logicalPath := range artifacts {
-			if !usedArtifacts[logicalPath] {
-				unused = append(unused, logicalPath)
-			}
+	retainedSources := map[canonical.Digest]bool{}
+	unused := []string{}
+	for logicalPath, artifact := range artifacts {
+		if usedArtifacts[logicalPath] {
+			continue
 		}
+		if retainedSourceDigests[artifact.SHA256] {
+			retainedSources[artifact.SHA256] = true
+			continue
+		}
+		unused = append(unused, logicalPath)
+	}
+	if len(unused) != 0 {
 		sort.Strings(unused)
 		return nil, fmt.Errorf("materialization transaction does not account for bundle artifacts: %v", unused)
+	}
+	for digest := range retainedSourceDigests {
+		if !retainedSources[digest] {
+			return nil, fmt.Errorf("materialization bundle retained source artifact %s is missing", digest)
+		}
 	}
 	return inputs, nil
 }

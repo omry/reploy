@@ -29,6 +29,10 @@ var providerStoreObjectLayouts = []objectLayout{
 	{kind: ValidationRecordKind, directory: "validation", extension: ".json"},
 }
 
+var artifactVerificationLayout = objectLayout{
+	kind: BlobKind, directory: artifactVerificationDir, extension: ".json",
+}
+
 // RemoveTemporaryEntries empties only the deployment-owned scratch directory.
 // Callers hold the deployment operation lock and establish that no active or
 // recoverable publication can still own these entries.
@@ -99,6 +103,10 @@ func (store Store) RemoveUnreachable(reachable []StoreObjectRef) error {
 		}
 		stored = append(stored, objects...)
 	}
+	verifications, err := store.collectLayoutObjects(artifactVerificationLayout)
+	if err != nil {
+		return err
+	}
 	storedByKey := make(map[string]storedObject, len(stored))
 	for _, object := range stored {
 		storedByKey[storeObjectKey(object.reference)] = object
@@ -123,7 +131,28 @@ func (store Store) RemoveUnreachable(reachable []StoreObjectRef) error {
 			return err
 		}
 	}
+	if err := store.removeUnreachableArtifactVerifications(verifications, reachableKeys); err != nil {
+		return err
+	}
 	return store.removeEmptyObjectDirectories()
+}
+
+func (store Store) removeUnreachableArtifactVerifications(
+	verifications []storedObject,
+	reachableKeys map[string]bool,
+) error {
+	for _, verification := range verifications {
+		if reachableKeys[storeObjectKey(verification.reference)] {
+			continue
+		}
+		if err := os.Remove(verification.path); err != nil {
+			return fmt.Errorf("remove unreachable artifact verification: %w", err)
+		}
+		if err := syncStoreDirectory(filepath.Dir(verification.path)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateReachableObjectClosure(reachable []StoreObjectRef) error {
@@ -221,7 +250,8 @@ func lowerHex(value string) bool {
 }
 
 func (store Store) removeEmptyObjectDirectories() error {
-	for _, layout := range providerStoreObjectLayouts {
+	layouts := append(append([]objectLayout{}, providerStoreObjectLayouts...), artifactVerificationLayout)
+	for _, layout := range layouts {
 		algorithm := filepath.Join(store.root, layout.directory, "sha256")
 		entries, err := os.ReadDir(algorithm)
 		if errors.Is(err, fs.ErrNotExist) {

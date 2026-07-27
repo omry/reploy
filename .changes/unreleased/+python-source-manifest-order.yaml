@@ -1,0 +1,2 @@
+kind: Fixed
+body: Canonically order local Python source manifests before snapshotting and report conflicting paths when externally supplied manifest order is invalid.

@@ -109,7 +109,7 @@ func wheelResolverSourceConstraints(
 		if !found || override.Kind != "local" {
 			return nil, fmt.Errorf("Python wheel resolver source %q has no matching local package override", source.LogicalPackage)
 		}
-		matches := artifactsByDigest[string(source.ArtifactDigest)]
+		matches := artifactsByDigest[string(source.OutputArtifactDigest)]
 		if len(matches) != 1 {
 			return nil, fmt.Errorf("Python wheel resolver source %q must identify exactly one reusable wheel", source.LogicalPackage)
 		}

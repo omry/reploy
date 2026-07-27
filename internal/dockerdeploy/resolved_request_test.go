@@ -73,6 +73,74 @@ func TestBuildResolvedRequestV1CombinesBlueprintOptionsAndDirectPackages(t *test
 	}
 }
 
+func TestBuildResolvedRequestWithOverridesReplacesOnlyBaseImage(t *testing.T) {
+	document := resolvedRequestTestDocument()
+	platform := document.Blueprint.Compatibility.Platforms[0]
+	request, err := BuildResolvedRequestWithOverridesV1(
+		document, deploy.EmptyRequestOverlayV1(),
+		deploy.EmptyPackageOverrideIntentV1(document.Environment.ID),
+		"python:3.13-slim", platform, []providers.ResolvedSourceInput{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, component := range request.Components {
+		if component.Component == "base" {
+			found = true
+			if component.Request.Value["image"] != "python:3.13-slim" {
+				t.Fatalf("resolved base request = %#v", component)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("resolved request has no base component")
+	}
+	if document.Environment.Components["base"].Base.Image == "python:3.13-slim" {
+		t.Fatal("base override mutated the blueprint document")
+	}
+}
+
+func TestBuildResolvedRequestPackageAdditionActivatesOSProviderWithoutMutatingBlueprint(t *testing.T) {
+	document := resolvedRequestTestDocument()
+	delete(document.Environment.Components, "system")
+	base := document.Environment.Components["base"]
+	base.Base.Exports["python"] = blueprint.BaseExecutableExport{Executable: "/usr/bin/python3"}
+	document.Environment.Components["base"] = base
+	application := document.Environment.Components["application"]
+	application.Python.Interpreter.Supplier = "base"
+	document.Environment.Components["application"] = application
+
+	intent := deploy.EmptyPackageOverrideIntentV1(document.Environment.ID)
+	intent.Additions = []deploy.PackageAdditionIntentV1{{
+		Provider: "os", Requirement: "default-jre-headless",
+	}}
+	request, err := BuildResolvedRequestWithPackageOverridesV1(
+		document, deploy.EmptyRequestOverlayV1(), intent,
+		document.Blueprint.Compatibility.Platforms[0], []providers.ResolvedSourceInput{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var osComponent *providers.ResolvedComponentRequestV1
+	for index := range request.Components {
+		if request.Components[index].Provider == blueprint.ComponentTypeAPT {
+			osComponent = &request.Components[index]
+		}
+	}
+	if osComponent == nil || osComponent.Component != "os" {
+		t.Fatalf("OS package addition did not activate an OS component: %#v", request.Components)
+	}
+	packageValue := osComponent.Request.Value["components"].([]any)[0].(canonical.Object)["packages"].([]any)[0].(canonical.Object)
+	value := packageValue["value"].(canonical.Object)
+	if value["name"] != "default-jre-headless" {
+		t.Fatalf("OS package request = %#v", packageValue)
+	}
+	if _, exists := document.Environment.Components["os"]; exists {
+		t.Fatal("OS package addition mutated the blueprint document")
+	}
+}
+
 func TestBuildResolvedRequestV1NormalizesOverlayBeforeIdentity(t *testing.T) {
 	document := resolvedRequestTestDocument()
 	packageRequest, err := pythonprovider.CanonicalPackageRequestV1("extra==2")
@@ -155,7 +223,7 @@ func TestFinalizeResolvedRequestV1RecordsGraphSelectedSources(t *testing.T) {
 		t.Fatalf("finalized sources = %#v", finalized.Sources)
 	}
 	built := selected
-	built.ArtifactDigest = registryDigest("5")
+	built.OutputArtifactDigest = registryDigest("5")
 	graph.SelectedSources = []providers.ResolvedSourceInput{built}
 	finalized, _, err = finalizeResolvedRequestV1(document, deploy.EmptyRequestOverlayV1(), packageOverrides, candidateRequest, graph)
 	if err != nil {
@@ -171,7 +239,7 @@ func TestFinalizeResolvedRequestV1RecordsGraphSelectedSources(t *testing.T) {
 		t.Fatalf("invalid selected source error = %v", err)
 	}
 	changed := selected
-	changed.ArtifactDigest = registryDigest("6")
+	changed.OutputArtifactDigest = registryDigest("6")
 	locked, exact, err := resolvedRequestForLockedSourcesV1(
 		document, deploy.EmptyRequestOverlayV1(), packageOverrides, candidateRequest,
 		[]providers.ResolvedSourceInput{selected},

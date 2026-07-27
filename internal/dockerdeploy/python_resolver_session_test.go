@@ -183,7 +183,7 @@ func TestOpenPythonResolverSessionRejectsNonemptyOutputBeforeDocker(t *testing.T
 	}
 }
 
-func TestPythonResolverSessionBuildsSourceWheelWithSelectedInterpreterAndPinnedUV(t *testing.T) {
+func TestPythonResolverSessionBuildsSdistThenWheelWithSelectedInterpreterAndPinnedUV(t *testing.T) {
 	descriptor := testProbeImageDescriptor(t, "linux/amd64")
 	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
 	artifacts := testPreparedPythonResolverArtifacts(t)
@@ -207,27 +207,76 @@ func TestPythonResolverSessionBuildsSourceWheelWithSelectedInterpreterAndPinnedU
 		t.Fatal(err)
 	}
 	snapshots := stageSourceWheelTestSnapshot(t, artifacts, "demo-pkg")
-	if err := session.BuildSourceWheels(context.Background(), launcher, requirement, interpreter.Evidence, snapshots); err != nil {
+	if err := session.BuildSourceDistributions(context.Background(), launcher, requirement, interpreter.Evidence, snapshots); err != nil {
+		t.Fatal(err)
+	}
+	successfulFollowup := runPythonResolverFollowupCommand
+	runPythonResolverFollowupCommand = func(spec CommandSpec, options RunOptions) error {
+		if containsInOrder(spec.Args, []string{"-m", "uv", "build", "--no-progress", "--sdist"}) {
+			_, _ = options.Stderr.Write([]byte("backend requires repository metadata\n"))
+			return errors.New("exit status 1")
+		}
+		return successfulFollowup(spec, options)
+	}
+	if err := session.BuildSourceDistributions(
+		context.Background(), launcher, requirement, interpreter.Evidence, snapshots,
+	); err == nil || !strings.Contains(err.Error(), "ordinary source tree without VCS metadata") {
+		t.Fatalf("source distribution failure = %v", err)
+	}
+	runPythonResolverFollowupCommand = successfulFollowup
+	buildEnvironmentDigest, err := session.SourceBuildEnvironmentDigest(interpreter.Evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := buildEnvironmentDigest.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	changedUpstream := *session
+	changedUpstream.descriptor.ConfigDigest = canonical.Digest("sha256:" + strings.Repeat("f", 64))
+	changedUpstream.descriptor.ImmutableReference = string(changedUpstream.descriptor.ConfigDigest)
+	changedUpstreamDigest, err := changedUpstream.SourceBuildEnvironmentDigest(interpreter.Evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedUpstreamDigest == buildEnvironmentDigest {
+		t.Fatal("upstream image change did not change the Python source build environment digest")
+	}
+	changedInterpreter := interpreter.Evidence
+	changedInterpreter.Terminal.SHA256 = canonical.Digest("sha256:" + strings.Repeat("e", 64))
+	changedInterpreterDigest, err := session.SourceBuildEnvironmentDigest(changedInterpreter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedInterpreterDigest == buildEnvironmentDigest {
+		t.Fatal("interpreter evidence change did not change the Python source build environment digest")
+	}
+	distributions := stageSourceWheelTestDistributionFromSnapshot(t, artifacts, snapshots[0], "1.0")
+	distributions[0].BuildEnvironmentDigest = buildEnvironmentDigest
+	if err := session.BuildSourceWheels(context.Background(), launcher, requirement, interpreter.Evidence, distributions); err != nil {
 		t.Fatal(err)
 	}
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
-	var copyCommand, bootstrapCommand, buildCommand, cleanupCommand []string
+	var sourceCopyCommand, distributionCopyCommand, bootstrapCommand, sdistCommand, wheelCommand, cleanupCommand []string
 	for _, command := range *commands {
 		switch {
 		case containsInOrder(command.Args, []string{"cp", "-a", snapshots[0].ContainerDir + "/.", pythonSourceBuildRoot + "/demo-pkg"}):
-			copyCommand = command.Args
+			sourceCopyCommand = command.Args
+		case containsInOrder(command.Args, []string{"cp", "-a", distributions[0].ContainerDir + "/.", pythonSourceBuildRoot + "/demo-pkg"}):
+			distributionCopyCommand = command.Args
 		case containsInOrder(command.Args, []string{"-m", "pip", "--disable-pip-version-check", "install"}):
 			bootstrapCommand = command.Args
-		case containsInOrder(command.Args, []string{"-m", "uv", "build"}):
-			buildCommand = command.Args
+		case containsInOrder(command.Args, []string{"-m", "uv", "build", "--no-progress", "--sdist"}):
+			sdistCommand = command.Args
+		case containsInOrder(command.Args, []string{"-m", "uv", "build", "--no-progress", "--wheel"}):
+			wheelCommand = command.Args
 		case containsInOrder(command.Args, []string{"rm", "-f", artifacts.OutputContainerDir + "/.gitignore"}):
 			cleanupCommand = command.Args
 		}
 	}
-	if copyCommand == nil {
+	if sourceCopyCommand == nil || distributionCopyCommand == nil {
 		t.Fatalf("source snapshot was not copied: %#v", *commands)
 	}
 	if !containsInOrder(bootstrapCommand, []string{
@@ -237,15 +286,20 @@ func TestPythonResolverSessionBuildsSourceWheelWithSelectedInterpreterAndPinnedU
 	}) {
 		t.Fatalf("uv bootstrap command = %#v", bootstrapCommand)
 	}
-	if !containsInOrder(buildCommand, []string{
+	if !containsInOrder(sdistCommand, []string{
+		"/usr/bin/python3", "-m", "uv", "build", "--no-progress", "--sdist", "--no-sources",
+	}) {
+		t.Fatalf("sdist build command = %#v", sdistCommand)
+	}
+	if !containsInOrder(wheelCommand, []string{
 		"PYTHONPATH=" + pythonSourceBuilderRoot, "UV_CACHE_DIR=" + pythonSourceUVCacheRoot,
 		"UV_PYTHON=/usr/bin/python3", "UV_PYTHON_DOWNLOADS=never",
-		"/usr/bin/python3", "-m", "uv", "build", "--no-progress", "--wheel",
+		"/usr/bin/python3", "-m", "uv", "build", "--no-progress", "--wheel", "--no-sources",
 		"--python", "/usr/bin/python3", "--no-python-downloads",
 		"--find-links", artifacts.InputContainerDir, "--out-dir", artifacts.OutputContainerDir,
-		pythonSourceBuildRoot + "/demo-pkg",
+		pythonSourceBuildRoot + "/demo-pkg/demo-pkg-1.0",
 	}) {
-		t.Fatalf("source build command = %#v", buildCommand)
+		t.Fatalf("wheel build command = %#v", wheelCommand)
 	}
 	if cleanupCommand == nil {
 		t.Fatalf("source-builder metadata was not cleared: %#v", *commands)

@@ -12,19 +12,23 @@ import (
 )
 
 type LockedProviderBuildExecutionInputV1 struct {
-	Preparation    LockedProviderBuildPreparationV1
-	SourceWheels   []providerstore.ArtifactDescriptor
-	LocalOverrides []PythonLocalOverrideV1
-	ValidateLayers bool
-	RunValidation  FullImageValidationRunner
-	Progress       io.Writer
-	RunOptions     RunOptions
+	Preparation       LockedProviderBuildPreparationV1
+	SourceWheels      []providerstore.ArtifactDescriptor
+	PriorSources      []providers.ResolvedSourceInput
+	PriorSourceWheels []providerstore.ArtifactDescriptor
+	LocalOverrides    []PythonLocalOverrideV1
+	ValidateLayers    bool
+	ValidateChoices   bool
+	RunValidation     FullImageValidationRunner
+	Progress          io.Writer
+	RunOptions        RunOptions
 }
 
 type LockedProviderBuildExecutionResultV1 struct {
-	State  deploy.StateV1
-	Lock   deploy.BuildLockV1
-	Reused bool
+	State     deploy.StateV1
+	Lock      deploy.BuildLockV1
+	Reused    bool
+	Validated bool
 }
 
 type providerBuildExecutionBackend struct {
@@ -35,6 +39,7 @@ type providerBuildExecutionBackend struct {
 		[]providers.RealizedOutput,
 		providers.GraphExecutionResult,
 		deploy.RuntimePolicyV1,
+		bool,
 	) (ProviderGraphValidationPlan, error)
 	complete func(
 		context.Context,
@@ -42,6 +47,11 @@ type providerBuildExecutionBackend struct {
 		providerstore.Store,
 		ProviderBuildCompletionInput,
 	) (ProviderBuildCompletionResult, error)
+	publishBuild          func(context.Context, *deploy.OperationLock, providerstore.Store, BuildPublicationInput) (deploy.StateV1, error)
+	publishValidated      func(context.Context, *deploy.OperationLock, providerstore.Store, string, string, deploy.BuildLockV1, ValidatedBuildInputsV1) (deploy.ValidatedBuildV1, error)
+	verifyReference       func(context.Context, providers.RealizedImageV1, string, string, string) error
+	retryValidatedCleanup func(context.Context, *deploy.OperationLock, string, string) (deploy.ValidatedBuildV1, bool, error)
+	discardValidated      func(context.Context, *deploy.OperationLock, string, string) error
 }
 
 // ExecuteLockedProviderBuildV1 consumes a preparation made under the same held
@@ -58,9 +68,14 @@ func ExecuteLockedProviderBuildV1(
 		input.RunValidation = runner.Run
 	}
 	return executeLockedProviderBuildV1(ctx, input, providerBuildExecutionBackend{
-		executeGraph:      ExecutePreparedPythonGraph,
-		prepareValidation: PrepareProviderGraphValidation,
-		complete:          CompleteProviderBuild,
+		executeGraph:          ExecutePreparedPythonGraph,
+		prepareValidation:     PrepareProviderGraphValidation,
+		complete:              CompleteProviderBuild,
+		publishBuild:          PublishBuild,
+		publishValidated:      PublishValidatedBuild,
+		verifyReference:       VerifyEnvironmentGenerationReference,
+		retryValidatedCleanup: RetryValidatedBuildCleanup,
+		discardValidated:      DiscardValidatedBuild,
 	})
 }
 
@@ -85,21 +100,108 @@ func executeLockedProviderBuildV1(
 	if input.LocalOverrides == nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute locked provider build local overrides must use an array")
 	}
-	if backend.executeGraph == nil || backend.prepareValidation == nil || backend.complete == nil {
-		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute locked provider build requires a complete backend")
-	}
-
 	if preparation.Reused {
-		if preparation.Current == nil || preparation.PreparedBase != nil || preparation.ReusableLock == nil {
+		if preparation.PreparedBase != nil || preparation.ReusableLock == nil {
 			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("reused provider build preparation is incomplete")
 		}
-		if !reflect.DeepEqual(*preparation.ReusableLock, preparation.Current.Lock) {
-			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("reused provider build lock does not match the current generation")
+		reused := preparation.Current
+		if preparation.ReusedCandidate {
+			if preparation.ValidatedCandidate == nil {
+				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("reused validated build preparation has no candidate")
+			}
+			reused = &preparation.ValidatedCandidate.Current
+		}
+		if reused == nil || !reflect.DeepEqual(*preparation.ReusableLock, reused.Lock) {
+			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("reused provider build lock does not match its recorded generation")
+		}
+		if input.ValidateChoices {
+			if preparation.ReusedCandidate {
+				if backend.verifyReference == nil {
+					return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("validate cached build requires image verification")
+				}
+				record := preparation.ValidatedCandidate.Record
+				if len(record.PendingCleanup) != 0 {
+					if backend.retryValidatedCleanup == nil {
+						return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("validate cached build requires cleanup retry support")
+					}
+					retried, found, err := backend.retryValidatedCleanup(
+						context.WithoutCancel(ctx), preparation.Operation,
+						preparation.Environment, preparation.DeploymentDir,
+					)
+					if err != nil {
+						return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("retry validated build cleanup: %w", err)
+					}
+					if !found {
+						return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("validated build disappeared during cleanup retry")
+					}
+					record = retried
+				}
+				if err := backend.verifyReference(
+					ctx, reused.Lock.FinalImage, preparation.ValidatedCandidate.Record.ImageReference,
+					preparation.Environment, preparation.DeploymentDir,
+				); err != nil {
+					return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("verify cached validated build: %w", err)
+				}
+				writeProviderBuildProgress(input.Progress, "validated choices using the cached image")
+				writeValidatedBuildCleanupWarning(input.Progress, record)
+			} else {
+				if backend.publishValidated == nil {
+					return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("validate cached build requires candidate publication")
+				}
+				record, err := backend.publishValidated(
+					ctx, preparation.Operation, preparation.Store, preparation.Environment,
+					preparation.DeploymentDir, reused.Lock, preparation.ValidatedInputs,
+				)
+				if err != nil {
+					return LockedProviderBuildExecutionResultV1{}, err
+				}
+				writeProviderBuildProgress(input.Progress, "validated choices using the cached image")
+				writeValidatedBuildCleanupWarning(input.Progress, record)
+			}
+			return LockedProviderBuildExecutionResultV1{
+				State: reused.State, Lock: reused.Lock, Reused: true, Validated: true,
+			}, nil
+		}
+		if preparation.ReusedCandidate {
+			if backend.verifyReference == nil || backend.publishBuild == nil || backend.discardValidated == nil {
+				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("promote cached validated build requires a complete backend")
+			}
+			if err := backend.verifyReference(
+				ctx, reused.Lock.FinalImage, preparation.ValidatedCandidate.Record.ImageReference,
+				preparation.Environment, preparation.DeploymentDir,
+			); err != nil {
+				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("verify cached validated build: %w", err)
+			}
+			state, err := backend.publishBuild(ctx, preparation.Operation, preparation.Store, BuildPublicationInput{
+				Environment: preparation.Environment, DeploymentDir: preparation.DeploymentDir,
+				Document: preparation.Loaded.Document, Lock: reused.Lock,
+			})
+			if err != nil {
+				return LockedProviderBuildExecutionResultV1{}, err
+			}
+			cleanupErr := backend.discardValidated(
+				context.WithoutCancel(ctx), preparation.Operation,
+				preparation.Environment, preparation.DeploymentDir,
+			)
+			writeProviderBuildProgress(input.Progress, "promoted validated cached image")
+			if cleanupErr != nil {
+				writeProviderBuildProgress(
+					input.Progress,
+					"warning: build succeeded, but cleanup of superseded cached image references is pending; Reploy will retry automatically: %v",
+					cleanupErr,
+				)
+			}
+			return LockedProviderBuildExecutionResultV1{
+				State: state, Lock: reused.Lock, Reused: true,
+			}, nil
 		}
 		writeProviderBuildProgress(input.Progress, "reusing current validated image")
 		return LockedProviderBuildExecutionResultV1{
 			State: preparation.Current.State, Lock: preparation.Current.Lock, Reused: true,
 		}, nil
+	}
+	if backend.executeGraph == nil || backend.prepareValidation == nil || backend.complete == nil {
+		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute locked provider build requires a complete backend")
 	}
 	if preparation.PreparedBase == nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("provider build preparation has no realized base")
@@ -123,9 +225,11 @@ func executeLockedProviderBuildV1(
 	graph, err := backend.executeGraph(ctx, PreparedPythonGraphExecutionInput{
 		Store: preparation.Store, Plan: preparedBase.Plan, BaseDescriptor: preparedBase.Descriptor,
 		BaseCatalog: preparedBase.Catalog, Sources: preparation.Loaded.Request.Sources,
-		SourceWheels:   append([]providerstore.ArtifactDescriptor{}, input.SourceWheels...),
-		LocalOverrides: append([]PythonLocalOverrideV1{}, input.LocalOverrides...),
-		CurrentLock:    preparation.ReusableLock, FinalImageConfig: preparation.FinalImageConfig,
+		SourceWheels:      append([]providerstore.ArtifactDescriptor{}, input.SourceWheels...),
+		PriorSources:      append([]providers.ResolvedSourceInput{}, input.PriorSources...),
+		PriorSourceWheels: append([]providerstore.ArtifactDescriptor{}, input.PriorSourceWheels...),
+		LocalOverrides:    append([]PythonLocalOverrideV1{}, input.LocalOverrides...),
+		CurrentLock:       preparation.ReusableLock, FinalImageConfig: preparation.FinalImageConfig,
 		Progress: input.Progress, RunOptions: options,
 	})
 	if err != nil {
@@ -148,12 +252,16 @@ func executeLockedProviderBuildV1(
 		return LockedProviderBuildExecutionResultV1{}, err
 	}
 	validation, err := backend.prepareValidation(
-		ctx, preparedBase.Descriptor, preparedBase.Catalog, graph, policy,
+		ctx, preparedBase.Descriptor, preparedBase.Catalog, graph, policy, input.ValidateLayers,
 	)
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("prepare provider build validation: %w", err)
 	}
-	writeProviderBuildProgress(input.Progress, "validating and publishing final image")
+	if input.ValidateChoices {
+		writeProviderBuildProgress(input.Progress, "validating final image and caching result")
+	} else {
+		writeProviderBuildProgress(input.Progress, "validating and publishing final image")
+	}
 	completed, err := backend.complete(ctx, preparation.Operation, preparation.Store, ProviderBuildCompletionInput{
 		Environment: preparation.Environment, DeploymentDir: preparation.DeploymentDir,
 		Document: preparation.Loaded.Document, DockerPlan: preparation.DockerPlan,
@@ -161,10 +269,34 @@ func executeLockedProviderBuildV1(
 		PackageOverrides: relevantPackageOverrides,
 		Base:             preparedBase.Descriptor, BaseCatalog: preparedBase.Catalog,
 		Graph: graph, Validation: validation, ValidateLayers: input.ValidateLayers,
+		ValidateChoices: input.ValidateChoices, ValidatedInputs: preparation.ValidatedInputs,
+		NoCache:       preparation.NoCache,
 		RunValidation: input.RunValidation, RunOptions: options,
 	})
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, err
 	}
-	return LockedProviderBuildExecutionResultV1{State: completed.State, Lock: completed.Lock}, nil
+	if completed.Validated {
+		writeValidatedBuildCleanupWarning(input.Progress, completed.ValidatedBuild)
+	}
+	return LockedProviderBuildExecutionResultV1{
+		State: completed.State, Lock: completed.Lock, Validated: completed.Validated,
+	}, nil
+}
+
+func writeValidatedBuildCleanupWarning(output io.Writer, record deploy.ValidatedBuildV1) {
+	count := len(record.PendingCleanup)
+	if count == 0 {
+		return
+	}
+	noun := "references are"
+	if count == 1 {
+		noun = "reference is"
+	}
+	writeProviderBuildProgress(
+		output,
+		"warning: validation succeeded, but cleanup of %d superseded cached image %s pending; Reploy will retry automatically",
+		count,
+		noun,
+	)
 }

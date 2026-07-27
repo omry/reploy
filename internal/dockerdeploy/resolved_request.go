@@ -137,6 +137,7 @@ func relevantPackageOverrideIntentV1(
 		}
 	}
 	result := deploy.EmptyPackageOverrideIntentV1(intent.EnvironmentID)
+	result.Additions = append([]deploy.PackageAdditionIntentV1(nil), intent.Additions...)
 	for _, choice := range intent.Choices {
 		if relevant[choice.Provider][choice.Package] {
 			result.Choices = append(result.Choices, choice)
@@ -303,6 +304,10 @@ func BuildResolvedRequestWithPackageOverridesV1(
 			packageOverrides.EnvironmentID, document.Environment.ID,
 		)
 	}
+	document, err := documentWithPackageAdditionsV1(document, packageOverrides)
+	if err != nil {
+		return providers.ResolvedRequestV1{}, err
+	}
 	normalizedOverlay, err := deploy.NormalizeRequestOverlayV1(document, overlay, registry.ValidatePackageRequest)
 	if err != nil {
 		return providers.ResolvedRequestV1{}, err
@@ -377,6 +382,100 @@ func BuildResolvedRequestWithPackageOverridesV1(
 		return providers.ResolvedRequestV1{}, err
 	}
 	return result, nil
+}
+
+func documentWithPackageAdditionsV1(
+	document blueprint.Document,
+	intent deploy.PackageOverrideIntentV1,
+) (blueprint.Document, error) {
+	additions := intent.AdditionsForProvider("os")
+	if len(additions) == 0 {
+		return document, nil
+	}
+	packages := make([]blueprint.APTPackageRequest, 0, len(additions))
+	for _, addition := range additions {
+		request, err := blueprint.ParseAPTPackageRequest(addition.Requirement)
+		if err != nil {
+			return blueprint.Document{}, fmt.Errorf("resolve OS package addition %q: %w", addition.Requirement, err)
+		}
+		packages = append(packages, request)
+	}
+
+	target := ""
+	aptComponents := []string{}
+	for name, component := range document.Environment.Components {
+		if component.Type == blueprint.ComponentTypeAPT {
+			aptComponents = append(aptComponents, name)
+		}
+	}
+	sort.Strings(aptComponents)
+	if len(aptComponents) != 0 {
+		target = aptComponents[0]
+	} else {
+		target = "os"
+		for suffix := 0; ; suffix++ {
+			if _, exists := document.Environment.Components[target]; !exists {
+				break
+			}
+			target = "reploy_os"
+			if suffix > 0 {
+				target = fmt.Sprintf("reploy_os_%d", suffix+1)
+			}
+		}
+	}
+
+	components := make(map[string]blueprint.Component, len(document.Environment.Components)+1)
+	for name, component := range document.Environment.Components {
+		components[name] = component
+	}
+	component, exists := components[target]
+	if !exists {
+		component = blueprint.Component{
+			Type:    blueprint.ComponentTypeAPT,
+			APT:     &blueprint.APTComponent{},
+			Options: map[string]blueprint.ComponentOption{},
+		}
+	}
+	aptComponent := *component.APT
+	aptComponent.Packages = append(append([]blueprint.APTPackageRequest{}, component.APT.Packages...), packages...)
+	component.APT = &aptComponent
+	components[target] = component
+	document.Environment.Components = components
+	return document, nil
+}
+
+func BuildResolvedRequestWithOverridesV1(
+	document blueprint.Document,
+	overlay deploy.RequestOverlayV1,
+	packageOverrides deploy.PackageOverrideIntentV1,
+	baseImage string,
+	platform blueprint.Platform,
+	sources []providers.ResolvedSourceInput,
+) (providers.ResolvedRequestV1, error) {
+	if baseImage == "" {
+		return BuildResolvedRequestWithPackageOverridesV1(
+			document, overlay, packageOverrides, platform, sources,
+		)
+	}
+	if err := deploy.ValidateBaseImageReferenceV1(baseImage); err != nil {
+		return providers.ResolvedRequestV1{}, fmt.Errorf("base image override: %w", err)
+	}
+	base, found := document.Environment.Components["base"]
+	if !found || base.Base == nil {
+		return providers.ResolvedRequestV1{}, fmt.Errorf("base image override requires a base component")
+	}
+	components := make(map[string]blueprint.Component, len(document.Environment.Components))
+	for name, component := range document.Environment.Components {
+		components[name] = component
+	}
+	basePayload := *base.Base
+	basePayload.Image = baseImage
+	base.Base = &basePayload
+	components["base"] = base
+	document.Environment.Components = components
+	return BuildResolvedRequestWithPackageOverridesV1(
+		document, overlay, packageOverrides, platform, sources,
+	)
 }
 
 func resolvedRequestNeedsImplicitBasePython(

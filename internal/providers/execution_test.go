@@ -67,10 +67,11 @@ func TestResolveContractBindsPlatformUpstreamAndProfile(t *testing.T) {
 func TestResolveContractAcceptsOnlyExactSelectedSourceCandidates(t *testing.T) {
 	input, result := validResolveContract(t)
 	source := ResolvedSourceInput{
-		Schema: ResolvedSourceInputSchemaV1, Component: "application", LogicalPackage: "demo",
-		SourceManifestDigest: testDigest("a"), BuilderProfile: "python-wheel-v1",
+		Schema: ResolvedSourceInputSchemaV2, Component: "application", LogicalPackage: "demo",
+		SourceInputDigest: testDigest("a"), SourceArtifactDigest: testDigest("c"),
+		BuildEnvironmentDigest: testDigest("d"), BuilderProfile: "python-wheel-v1",
 		BuildSettings:     providerData("python-source-build-settings-v1"),
-		EcosystemMetadata: providerData("python-source-metadata-v1"), ArtifactDigest: testDigest("b"),
+		EcosystemMetadata: providerData("python-source-metadata-v1"), OutputArtifactDigest: testDigest("b"),
 	}
 	input.SourceCandidates = []ResolvedSourceInput{source}
 	result.SelectedSources = []ResolvedSourceInput{source}
@@ -89,7 +90,7 @@ func TestResolveContractAcceptsOnlyExactSelectedSourceCandidates(t *testing.T) {
 		t.Fatalf("nil selected sources error = %v", err)
 	}
 	result.SelectedSources = []ResolvedSourceInput{source}
-	result.SelectedSources[0].ArtifactDigest = testDigest("c")
+	result.SelectedSources[0].OutputArtifactDigest = testDigest("c")
 	if err := ValidateResolveResult(input, result, validateTestProfileOwner, acceptTestBundleOwner); err == nil || !strings.Contains(err.Error(), "exactly match") {
 		t.Fatalf("changed selected source error = %v", err)
 	}
@@ -171,10 +172,11 @@ func TestResolveContractRejectsPlatformMismatchAndMalformedInputs(t *testing.T) 
 
 	input, _ = validResolveContract(t)
 	input.SourceCandidates = []ResolvedSourceInput{{
-		Schema: ResolvedSourceInputSchemaV1, Component: "other", LogicalPackage: "demo",
-		SourceManifestDigest: testDigest("1"), BuilderProfile: "python-wheel-v1",
+		Schema: ResolvedSourceInputSchemaV2, Component: "other", LogicalPackage: "demo",
+		SourceInputDigest: testDigest("1"), SourceArtifactDigest: testDigest("3"),
+		BuildEnvironmentDigest: testDigest("4"), BuilderProfile: "python-wheel-v1",
 		BuildSettings:     providerData("python-source-build-settings-v1"),
-		EcosystemMetadata: providerData("python-source-metadata-v1"), ArtifactDigest: testDigest("2"),
+		EcosystemMetadata: providerData("python-source-metadata-v1"), OutputArtifactDigest: testDigest("2"),
 	}}
 	if err := ValidateResolveInput(input); err == nil || !strings.Contains(err.Error(), "outside node") {
 		t.Fatalf("outside-node source error = %v", err)

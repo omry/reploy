@@ -11,6 +11,7 @@ import (
 	"sort"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providers/registry"
@@ -18,25 +19,27 @@ import (
 )
 
 type ProviderBuildRunInputV1 struct {
-	DeploymentDir  string
-	Runtime        StagedProviderBuildRuntimeV1
-	Automatic      bool
-	NoCache        bool
-	ValidateLayers bool
-	Progress       io.Writer
-	RunOptions     RunOptions
+	DeploymentDir   string
+	Runtime         StagedProviderBuildRuntimeV1
+	Automatic       bool
+	NoCache         bool
+	ValidateLayers  bool
+	ValidateChoices bool
+	Progress        io.Writer
+	RunOptions      RunOptions
 }
 
 type LockedProviderBuildRunInputV1 struct {
-	Operation      *deploy.OperationLock
-	Store          providerstore.Store
-	DeploymentDir  string
-	Runtime        StagedProviderBuildRuntimeV1
-	Automatic      bool
-	NoCache        bool
-	ValidateLayers bool
-	Progress       io.Writer
-	RunOptions     RunOptions
+	Operation       *deploy.OperationLock
+	Store           providerstore.Store
+	DeploymentDir   string
+	Runtime         StagedProviderBuildRuntimeV1
+	Automatic       bool
+	NoCache         bool
+	ValidateLayers  bool
+	ValidateChoices bool
+	Progress        io.Writer
+	RunOptions      RunOptions
 }
 
 type StagedProviderBuildRuntimeV1 struct {
@@ -65,11 +68,12 @@ func stagedProviderBuildRuntimeV1(goos string, uid int, gid int) (StagedProvider
 }
 
 type providerBuildRunBackend struct {
-	acquire        func(context.Context, string) (*deploy.OperationLock, error)
-	newStore       func(string) (providerstore.Store, error)
-	prepare        func(context.Context, LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error)
-	execute        func(context.Context, LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error)
-	cleanupFailure func(context.Context, LockedProviderBuildPreparationV1) error
+	acquire          func(context.Context, string) (*deploy.OperationLock, error)
+	newStore         func(string) (providerstore.Store, error)
+	prepare          func(context.Context, LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error)
+	execute          func(context.Context, LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error)
+	cleanupFailure   func(context.Context, LockedProviderBuildPreparationV1) error
+	discardValidated func(context.Context, *deploy.OperationLock, string, string) error
 }
 
 // RunProviderBuildV1 owns one complete deployment-locked provider build from
@@ -84,6 +88,9 @@ func RunProviderBuildV1(
 		prepare:        PrepareLockedProviderBuildV1,
 		execute:        ExecuteLockedProviderBuildV1,
 		cleanupFailure: cleanupFailedProviderBuildV1,
+		discardValidated: func(ctx context.Context, operation *deploy.OperationLock, environment, deploymentDir string) error {
+			return DiscardValidatedBuild(ctx, operation, environment, deploymentDir)
+		},
 	})
 }
 
@@ -127,7 +134,8 @@ func runProviderBuildV1(
 		Operation: operation, Store: store, DeploymentDir: deploymentDir,
 		Runtime: input.Runtime, Automatic: input.Automatic,
 		NoCache: input.NoCache, ValidateLayers: input.ValidateLayers,
-		Progress: input.Progress, RunOptions: input.RunOptions,
+		ValidateChoices: input.ValidateChoices,
+		Progress:        input.Progress, RunOptions: input.RunOptions,
 	}, backend)
 }
 
@@ -142,6 +150,9 @@ func RunLockedProviderBuildV1(
 		prepare:        PrepareLockedProviderBuildV1,
 		execute:        ExecuteLockedProviderBuildV1,
 		cleanupFailure: cleanupFailedProviderBuildV1,
+		discardValidated: func(ctx context.Context, operation *deploy.OperationLock, environment, deploymentDir string) error {
+			return DiscardValidatedBuild(ctx, operation, environment, deploymentDir)
+		},
 	})
 }
 
@@ -168,6 +179,11 @@ func runLockedProviderBuildV1(
 	if backend.cleanupFailure == nil {
 		backend.cleanupFailure = cleanupFailedProviderBuildV1
 	}
+	if backend.discardValidated == nil {
+		backend.discardValidated = func(ctx context.Context, operation *deploy.OperationLock, environment, deploymentDir string) error {
+			return DiscardValidatedBuild(ctx, operation, environment, deploymentDir)
+		}
+	}
 
 	deploymentDir, err := filepath.Abs(input.DeploymentDir)
 	if err != nil {
@@ -191,11 +207,55 @@ func runLockedProviderBuildV1(
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("provider build requires a staged deployment; an installed deployment cannot be used as a build source")
 	}
 	writeProviderBuildProgress(input.Progress, "preparing environment %s for %s", document.Environment.ID, state.Platform.Canonical)
-	packageOverrides, packageOverrideIntent, err := LoadStagedPackageOverridesV1(
+	rawPackageOverrides, packageOverrides, packageOverrideIntent, err := LoadStagedPackageOverridesV1(
 		input.Operation, deploymentDir, document,
 	)
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("load provider build package overrides: %w", err)
+	}
+	validatedInputs, err := ValidatedBuildInputs(
+		document, state.Overlay, rawPackageOverrides, deploymentDir, state.Platform,
+	)
+	if err != nil {
+		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("identify provider build validation inputs: %w", err)
+	}
+	baseImage, err := deploy.EffectiveBaseImageV1(document, rawPackageOverrides)
+	if err != nil {
+		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("resolve provider build base override: %w", err)
+	}
+	validatedCandidate := ValidatedBuildCandidateV1{}
+	validatedCandidateFound := false
+	if !input.NoCache {
+		validatedCandidate, validatedCandidateFound, err = LoadValidatedBuildCandidate(
+			ctx, input.Operation, input.Store, document, state, rawPackageOverrides, deploymentDir, false, false,
+		)
+		if err != nil {
+			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("load validated provider build: %w", err)
+		}
+	}
+	if validatedCandidateFound && !input.NoCache {
+		if _, cacheErr := deploy.ReusableBuildLockStoreClosure(
+			validatedCandidate.Current.Lock, input.Store,
+			registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1,
+		); cacheErr != nil {
+			writeProviderBuildProgress(input.Progress, "discarding incomplete validated build cache")
+			if err := backend.discardValidated(
+				context.WithoutCancel(ctx), input.Operation, document.Environment.ID, deploymentDir,
+			); err != nil {
+				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf(
+					"discard incomplete validated provider build after %v: %w", cacheErr, err,
+				)
+			}
+			validatedCandidate = ValidatedBuildCandidateV1{}
+			validatedCandidateFound = false
+		}
+	}
+	if !validatedCandidateFound && !input.ValidateChoices {
+		if err := backend.discardValidated(
+			context.WithoutCancel(ctx), input.Operation, document.Environment.ID, deploymentDir,
+		); err != nil {
+			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("discard stale validated provider build: %w", err)
+		}
 	}
 	localOverrides, err := PythonLocalOverridesV1(packageOverrides)
 	if err != nil {
@@ -203,24 +263,32 @@ func runLockedProviderBuildV1(
 	}
 	reusableSources := []providers.ResolvedSourceInput{}
 	reusableWheels := []providerstore.ArtifactDescriptor{}
+	priorSources := []providers.ResolvedSourceInput{}
+	priorSourceWheels := []providerstore.ArtifactDescriptor{}
 	observedSources := []PythonLocalSource{}
 	cacheExists := false
-	if state.Current != nil && !input.NoCache {
+	if (state.Current != nil || validatedCandidateFound) && !input.NoCache {
 		cacheExists, err = input.Store.Exists()
 		if err != nil {
 			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("inspect provider build cache for workspace reuse: %w", err)
 		}
 	}
-	if state.Current != nil && !input.NoCache && cacheExists {
-		lock, found, err := input.Operation.ReadBuildLock(state.Current.BuildLockDigest, registry.ValidateRequirementProfileV1)
-		if err != nil {
-			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("load current build lock for workspace reuse: %w", err)
-		}
-		if !found {
-			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("current build lock %s is missing", state.Current.BuildLockDigest)
-		}
-		if err := validateGenerationBuildLock(*state.Current, lock, registry.ValidateRequirementProfileV1); err != nil {
-			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("load current build lock for workspace reuse: %w", err)
+	if (state.Current != nil || validatedCandidateFound) && !input.NoCache && cacheExists {
+		var lock deploy.BuildLockV1
+		if validatedCandidateFound {
+			lock = validatedCandidate.Current.Lock
+		} else {
+			loaded, found, err := input.Operation.ReadBuildLock(state.Current.BuildLockDigest, registry.ValidateRequirementProfileV1)
+			if err != nil {
+				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("load current build lock for workspace reuse: %w", err)
+			}
+			if !found {
+				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("current build lock %s is missing", state.Current.BuildLockDigest)
+			}
+			if err := validateGenerationBuildLock(*state.Current, loaded, registry.ValidateRequirementProfileV1); err != nil {
+				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("load current build lock for workspace reuse: %w", err)
+			}
+			lock = loaded
 		}
 		if lock.Platform == state.Platform {
 			lockedSources, err := buildLockSelectedSourcesV1(lock)
@@ -252,12 +320,12 @@ func runLockedProviderBuildV1(
 			}
 			reusableWheels, err = buildLockSelectedSourceWheelsV1(input.Store, lock, reusableSources)
 			if err != nil {
-				if !errors.Is(err, errCurrentPythonSourceWheelMissing) {
+				if !errors.Is(err, errCurrentPythonSourceArtifactMissing) {
 					return LockedProviderBuildExecutionResultV1{}, err
 				}
 				if input.Automatic {
 					return LockedProviderBuildExecutionResultV1{}, fmt.Errorf(
-						"current build cache is incomplete because a locked Python source wheel is missing; run reploy build --dir %q to repair it: %w",
+						"current build cache is incomplete because a locked Python source artifact is missing; run reploy build --dir %q to repair it: %w",
 						deploymentDir, err,
 					)
 				}
@@ -266,6 +334,30 @@ func runLockedProviderBuildV1(
 				// resolver so other verified artifacts can still be reused.
 				reusableSources = []providers.ResolvedSourceInput{}
 				reusableWheels = []providerstore.ArtifactDescriptor{}
+			}
+			reusableKeys := make(map[string]struct{}, len(reusableSources))
+			for _, source := range reusableSources {
+				reusableKeys[source.Component+"\x00"+source.LogicalPackage] = struct{}{}
+			}
+			priorWheelDigests := map[canonical.Digest]struct{}{}
+			for _, source := range eligible {
+				if _, exact := reusableKeys[source.Component+"\x00"+source.LogicalPackage]; exact {
+					continue
+				}
+				wheels, candidateErr := buildLockSelectedSourceWheelsV1(
+					input.Store, lock, []providers.ResolvedSourceInput{source},
+				)
+				if candidateErr != nil {
+					continue
+				}
+				priorSources = append(priorSources, source)
+				for _, wheel := range wheels {
+					if _, found := priorWheelDigests[wheel.SHA256]; found {
+						continue
+					}
+					priorWheelDigests[wheel.SHA256] = struct{}{}
+					priorSourceWheels = append(priorSourceWheels, wheel)
+				}
 			}
 		}
 	}
@@ -284,22 +376,37 @@ func runLockedProviderBuildV1(
 
 	preparation, err := backend.prepare(ctx, LockedProviderBuildPreparationInputV1{
 		Operation: input.Operation, Store: input.Store, Environment: document.Environment.ID,
-		DeploymentDir: deploymentDir, PackageOverrides: packageOverrideIntent, Sources: reusableSources,
-		DockerPlan: dockerPlan, NoCache: input.NoCache,
+		DeploymentDir: deploymentDir, PackageOverrides: packageOverrideIntent, BaseImage: baseImage, Sources: reusableSources,
+		DockerPlan: dockerPlan, NoCache: input.NoCache, ValidatedCandidate: func() *ValidatedBuildCandidateV1 {
+			if validatedCandidateFound {
+				return &validatedCandidate
+			}
+			return nil
+		}(),
+		ValidatedInputs: validatedInputs,
 	})
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, err
+	}
+	if !input.ValidateChoices && validatedCandidateFound && !preparation.ReusedCandidate {
+		if err := backend.discardValidated(
+			context.WithoutCancel(ctx), input.Operation, document.Environment.ID, deploymentDir,
+		); err != nil {
+			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("discard superseded validated provider build: %w", err)
+		}
 	}
 	writeProviderBuildProgress(input.Progress, "preparing component packages and image layers")
 	options := input.RunOptions
 	options.NoCache = input.NoCache
 	options.Progress = input.Progress
 	result, err := backend.execute(ctx, LockedProviderBuildExecutionInputV1{
-		Preparation:    preparation,
-		SourceWheels:   reusableWheels,
+		Preparation:  preparation,
+		SourceWheels: reusableWheels,
+		PriorSources: priorSources, PriorSourceWheels: priorSourceWheels,
 		LocalOverrides: localOverrides,
 		ValidateLayers: input.ValidateLayers, RunValidation: nil,
-		Progress: input.Progress, RunOptions: options,
+		ValidateChoices: input.ValidateChoices,
+		Progress:        input.Progress, RunOptions: options,
 	})
 	if err != nil {
 		cleanupErr := backend.cleanupFailure(context.WithoutCancel(ctx), preparation)
@@ -308,8 +415,10 @@ func runLockedProviderBuildV1(
 	if err := ctx.Err(); err != nil {
 		return LockedProviderBuildExecutionResultV1{}, err
 	}
-	if err := PrepareStagedManagedBindPathsV1(deploymentDir, dockerPlan); err != nil {
-		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("prepare staged managed paths: %w", err)
+	if !input.ValidateChoices {
+		if err := PrepareStagedManagedBindPathsV1(deploymentDir, dockerPlan); err != nil {
+			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("prepare staged managed paths: %w", err)
+		}
 	}
 	return result, nil
 }

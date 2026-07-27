@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/probe"
@@ -24,6 +25,7 @@ type PythonResolverSession struct {
 	containerName string
 	observations  map[string]probe.ExecutableObservationV1
 	inspected     map[string]string
+	buildTools    []PortableBuildToolEvidenceV1
 	stopped       bool
 	closed        bool
 }
@@ -32,10 +34,19 @@ var runPythonResolverOpenCommand = runCommand
 var runPythonResolverFollowupCommand = runCommandWithoutDockerPreflight
 
 const (
-	pythonSourceBuildRoot   = "/tmp/reploy-source-build"
-	pythonSourceBuilderRoot = "/tmp/reploy-source-builder"
-	pythonSourceUVCacheRoot = "/tmp/reploy-uv-cache"
+	pythonSourceBuildRoot                = "/tmp/reploy-source-build"
+	pythonSourceBuilderRoot              = "/tmp/reploy-source-builder"
+	pythonSourceUVCacheRoot              = "/tmp/reploy-uv-cache"
+	pythonSourceBuildEnvironmentSchemaV1 = "python-source-build-environment-v1"
 )
+
+type pythonSourceBuildEnvironmentV1 struct {
+	Schema      string                        `json:"schema"`
+	Platform    blueprint.Platform            `json:"platform"`
+	Upstream    providers.RealizedImageV1     `json:"upstream"`
+	Interpreter providers.ExecutableEvidence  `json:"interpreter"`
+	BuildTools  []PortableBuildToolEvidenceV1 `json:"build_tools,omitempty"`
+}
 
 // OpenPythonResolverSession starts the one disposable consumer container used
 // for Python prerequisite validation and, later, wheel resolution. Its public
@@ -338,11 +349,9 @@ func (session *PythonResolverSession) ResolveWheels(
 	return nil
 }
 
-// BuildSourceWheels copies immutable source snapshots into container-local
-// scratch and builds one wheel for each through the exact selected interpreter
-// and pinned uv toolchain. The writable output remains host-owned for the
-// subsequent validation and publication handoff.
-func (session *PythonResolverSession) BuildSourceWheels(
+// BuildSourceDistributions copies immutable source inputs into container-local
+// scratch and asks each declared backend for exactly one portable sdist.
+func (session *PythonResolverSession) BuildSourceDistributions(
 	ctx context.Context,
 	launcher providers.ValidatedExecutableInput,
 	requirement providers.ExecutableRequirement,
@@ -417,9 +426,9 @@ func (session *PythonResolverSession) BuildSourceWheels(
 			operation string
 			argv      []string
 		}{
-			operation: "build source wheel",
+			operation: "build source distribution",
 			argv: []string{
-				interpreter.InvocationPath, "-m", "uv", "build", "--no-progress", "--wheel",
+				interpreter.InvocationPath, "-m", "uv", "build", "--no-progress", "--sdist", "--no-sources",
 				"--python", interpreter.InvocationPath, "--no-python-downloads",
 				"--find-links", session.artifacts.InputContainerDir,
 				"--out-dir", session.artifacts.OutputContainerDir,
@@ -439,6 +448,122 @@ func (session *PythonResolverSession) BuildSourceWheels(
 			if command.operation == "bootstrap pinned uv source builder" && strings.Contains(strings.ToLower(err.Error()), "no module named pip") {
 				return fmt.Errorf("selected Python interpreter has no pip module; ensure its providing packages include pip support: %w", err)
 			}
+			if command.operation == "build source distribution" {
+				return fmt.Errorf(
+					"local Python source sdist build failed; its backend must produce an sdist "+
+						"from an ordinary source tree without VCS metadata: %w",
+					err,
+				)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func (session *PythonResolverSession) SourceBuildEnvironmentDigest(
+	interpreter providers.ExecutableEvidence,
+) (canonical.Digest, error) {
+	if session == nil || session.closed || session.stopped {
+		return "", fmt.Errorf("Python resolver session is not open")
+	}
+	version, inspected := session.inspected[interpreter.InvocationPath]
+	if !inspected || interpreter.Facts.Schema != pythonprovider.InterpreterFactsSchemaV1 ||
+		interpreter.Facts.Value["version"] != version {
+		return "", fmt.Errorf("Python source build environment interpreter was not inspected in this container")
+	}
+	upstream, err := realizedImageFromDescriptor(session.descriptor)
+	if err != nil {
+		return "", err
+	}
+	environment := pythonSourceBuildEnvironmentV1{
+		Schema:      pythonSourceBuildEnvironmentSchemaV1,
+		Platform:    session.descriptor.Platform,
+		Upstream:    upstream,
+		Interpreter: interpreter,
+		BuildTools:  append([]PortableBuildToolEvidenceV1{}, session.buildTools...),
+	}
+	return canonical.Sum(
+		"python-source-build-environment", pythonSourceBuildEnvironmentSchemaV1, environment,
+	)
+}
+
+// BuildSourceWheels copies only the securely extracted retained sdists into
+// container-local scratch and builds one wheel from each closed artifact.
+func (session *PythonResolverSession) BuildSourceWheels(
+	ctx context.Context,
+	launcher providers.ValidatedExecutableInput,
+	requirement providers.ExecutableRequirement,
+	interpreter providers.ExecutableEvidence,
+	distributions []PreparedPythonSourceDistribution,
+) error {
+	if session == nil || session.closed || session.stopped {
+		return fmt.Errorf("Python resolver session is not open")
+	}
+	if ctx == nil {
+		return fmt.Errorf("Python source wheel build context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if distributions == nil {
+		return fmt.Errorf("Python source distributions must use an array")
+	}
+	if err := validatePreparedPythonResolverArtifacts(session.artifacts); err != nil {
+		return err
+	}
+	if err := validatePreparedPythonSourceDistributions(session.artifacts, distributions); err != nil {
+		return err
+	}
+	if err := session.validateWheelOperationInputs(launcher, requirement, interpreter); err != nil {
+		return err
+	}
+	if len(distributions) == 0 {
+		return nil
+	}
+
+	commands := []struct {
+		operation string
+		argv      []string
+	}{
+		{operation: "clear source-build scratch", argv: []string{"rm", "-rf", pythonSourceBuildRoot}},
+		{operation: "create source-build scratch", argv: []string{"mkdir", "-p", pythonSourceBuildRoot}},
+	}
+	for _, distribution := range distributions {
+		buildDir := path.Join(pythonSourceBuildRoot, distribution.Distribution)
+		commands = append(commands,
+			struct {
+				operation string
+				argv      []string
+			}{operation: "create source-build directory", argv: []string{"mkdir", "-p", buildDir}},
+			struct {
+				operation string
+				argv      []string
+			}{operation: "copy retained source distribution", argv: []string{"cp", "-a", distribution.ContainerDir + "/.", buildDir}},
+			struct {
+				operation string
+				argv      []string
+			}{
+				operation: "build source wheel from retained distribution",
+				argv: []string{
+					interpreter.InvocationPath, "-m", "uv", "build", "--no-progress", "--wheel", "--no-sources",
+					"--python", interpreter.InvocationPath, "--no-python-downloads",
+					"--find-links", session.artifacts.InputContainerDir,
+					"--out-dir", session.artifacts.OutputContainerDir,
+					path.Join(buildDir, distribution.ArchiveRoot),
+				},
+			},
+		)
+	}
+	commands = append(commands, struct {
+		operation string
+		argv      []string
+	}{
+		operation: "clear source-builder metadata",
+		argv:      []string{"rm", "-f", path.Join(session.artifacts.OutputContainerDir, ".gitignore")},
+	})
+	for _, command := range commands {
+		if err := session.runWheelEnvironmentCommand(ctx, launcher, interpreter.InvocationPath, command.operation, command.argv); err != nil {
 			return err
 		}
 	}

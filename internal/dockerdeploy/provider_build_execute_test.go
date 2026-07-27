@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
@@ -30,7 +31,7 @@ func TestExecuteLockedProviderBuildV1ReturnsExactReuseWithoutBackendWork(t *test
 			fail()
 			return providers.GraphExecutionResult{}, nil
 		},
-		prepareValidation: func(context.Context, deploy.ImageDescriptor, []providers.RealizedOutput, providers.GraphExecutionResult, deploy.RuntimePolicyV1) (ProviderGraphValidationPlan, error) {
+		prepareValidation: func(context.Context, deploy.ImageDescriptor, []providers.RealizedOutput, providers.GraphExecutionResult, deploy.RuntimePolicyV1, bool) (ProviderGraphValidationPlan, error) {
 			fail()
 			return ProviderGraphValidationPlan{}, nil
 		},
@@ -54,6 +55,164 @@ func TestExecuteLockedProviderBuildV1ReturnsExactReuseWithoutBackendWork(t *test
 	}
 }
 
+func TestExecuteLockedProviderBuildV1ValidatesAnExactCurrentBuildWithoutReplacingIt(t *testing.T) {
+	input, _, current, _, _ := providerBuildPreparationFixture(t)
+	lock := current.Lock
+	published := 0
+	var progress strings.Builder
+	result, err := executeLockedProviderBuildV1(t.Context(), LockedProviderBuildExecutionInputV1{
+		SourceWheels: []providerstore.ArtifactDescriptor{}, LocalOverrides: []PythonLocalOverrideV1{},
+		ValidateChoices: true, Progress: &progress,
+		Preparation: LockedProviderBuildPreparationV1{
+			Operation: input.Operation, Store: input.Store, Environment: "demo", DeploymentDir: input.DeploymentDir,
+			Current: &current, ReusableLock: &lock, Reused: true,
+		},
+	}, providerBuildExecutionBackend{
+		publishValidated: func(_ context.Context, operation *deploy.OperationLock, store providerstore.Store, environment, dir string, got deploy.BuildLockV1, _ ValidatedBuildInputsV1) (deploy.ValidatedBuildV1, error) {
+			published++
+			if operation != input.Operation || store.Root() != input.Store.Root() || environment != "demo" || dir != input.DeploymentDir || !reflect.DeepEqual(got, lock) {
+				t.Fatal("validated publication input changed")
+			}
+			return deploy.ValidatedBuildV1{PendingCleanup: []deploy.ValidatedBuildReferenceV1{{
+				ImageReference: "superseded",
+			}}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if published != 1 || !result.Validated || !result.Reused || !reflect.DeepEqual(result.State, current.State) {
+		t.Fatalf("published=%d result=%#v", published, result)
+	}
+	if !strings.Contains(progress.String(), "cleanup of 1 superseded cached image reference is pending") {
+		t.Fatalf("progress = %q", progress.String())
+	}
+}
+
+func TestExecuteLockedProviderBuildV1PromotesAnExactValidatedBuild(t *testing.T) {
+	input, _, current, _, _ := providerBuildPreparationFixture(t)
+	lock := current.Lock
+	record := deploy.ValidatedBuildV1{ImageReference: current.Generation.Reference}
+	candidate := ValidatedBuildCandidateV1{Record: record, Current: current}
+	wantState := current.State
+	document, err := blueprint.DecodeResolvedDocumentV1(current.State.Blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := []string{}
+	result, err := executeLockedProviderBuildV1(t.Context(), LockedProviderBuildExecutionInputV1{
+		SourceWheels: []providerstore.ArtifactDescriptor{}, LocalOverrides: []PythonLocalOverrideV1{},
+		Preparation: LockedProviderBuildPreparationV1{
+			Operation: input.Operation, Store: input.Store, Environment: "demo", DeploymentDir: input.DeploymentDir,
+			ReusableLock: &lock, Reused: true, ReusedCandidate: true, ValidatedCandidate: &candidate,
+			Loaded: LoadedBuildRequestV1{Document: document},
+		},
+	}, providerBuildExecutionBackend{
+		verifyReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
+			order = append(order, "verify")
+			return nil
+		},
+		publishBuild: func(context.Context, *deploy.OperationLock, providerstore.Store, BuildPublicationInput) (deploy.StateV1, error) {
+			order = append(order, "publish")
+			return wantState, nil
+		},
+		discardValidated: func(context.Context, *deploy.OperationLock, string, string) error {
+			order = append(order, "discard")
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Reused || result.Validated || !reflect.DeepEqual(result.State, wantState) ||
+		!reflect.DeepEqual(order, []string{"verify", "publish", "discard"}) {
+		t.Fatalf("result/order = %#v/%#v", result, order)
+	}
+}
+
+func TestExecuteLockedProviderBuildV1PromotionDefersCleanupWithoutFailingPublishedBuild(t *testing.T) {
+	input, _, current, _, _ := providerBuildPreparationFixture(t)
+	lock := current.Lock
+	candidate := ValidatedBuildCandidateV1{
+		Record:  deploy.ValidatedBuildV1{ImageReference: current.Generation.Reference},
+		Current: current,
+	}
+	document, err := blueprint.DecodeResolvedDocumentV1(current.State.Blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupErr := errors.New("Docker reference is busy")
+	var progress strings.Builder
+	result, err := executeLockedProviderBuildV1(t.Context(), LockedProviderBuildExecutionInputV1{
+		SourceWheels: []providerstore.ArtifactDescriptor{}, LocalOverrides: []PythonLocalOverrideV1{},
+		Progress: &progress,
+		Preparation: LockedProviderBuildPreparationV1{
+			Operation: input.Operation, Store: input.Store, Environment: "demo", DeploymentDir: input.DeploymentDir,
+			ReusableLock: &lock, Reused: true, ReusedCandidate: true, ValidatedCandidate: &candidate,
+			Loaded: LoadedBuildRequestV1{Document: document},
+		},
+	}, providerBuildExecutionBackend{
+		verifyReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
+			return nil
+		},
+		publishBuild: func(context.Context, *deploy.OperationLock, providerstore.Store, BuildPublicationInput) (deploy.StateV1, error) {
+			return current.State, nil
+		},
+		discardValidated: func(context.Context, *deploy.OperationLock, string, string) error {
+			return cleanupErr
+		},
+	})
+	if err != nil {
+		t.Fatalf("published build reported failure: %v", err)
+	}
+	if !result.Reused || !reflect.DeepEqual(result.State, current.State) {
+		t.Fatalf("result = %#v", result)
+	}
+	if got := progress.String(); !strings.Contains(got, "cleanup of superseded cached image references is pending") ||
+		!strings.Contains(got, cleanupErr.Error()) {
+		t.Fatalf("progress = %q", got)
+	}
+}
+
+func TestExecuteLockedProviderBuildV1RetriesPendingCleanupWhenRevalidatingCandidate(t *testing.T) {
+	input, _, current, _, _ := providerBuildPreparationFixture(t)
+	lock := current.Lock
+	record := deploy.ValidatedBuildV1{
+		ImageReference: current.Generation.Reference,
+		PendingCleanup: []deploy.ValidatedBuildReferenceV1{{ImageReference: "superseded"}},
+	}
+	candidate := ValidatedBuildCandidateV1{Record: record, Current: current}
+	var progress strings.Builder
+	order := []string{}
+	result, err := executeLockedProviderBuildV1(t.Context(), LockedProviderBuildExecutionInputV1{
+		SourceWheels: []providerstore.ArtifactDescriptor{}, LocalOverrides: []PythonLocalOverrideV1{},
+		ValidateChoices: true, Progress: &progress,
+		Preparation: LockedProviderBuildPreparationV1{
+			Operation: input.Operation, Store: input.Store, Environment: "demo", DeploymentDir: input.DeploymentDir,
+			ReusableLock: &lock, Reused: true, ReusedCandidate: true, ValidatedCandidate: &candidate,
+		},
+	}, providerBuildExecutionBackend{
+		retryValidatedCleanup: func(context.Context, *deploy.OperationLock, string, string) (deploy.ValidatedBuildV1, bool, error) {
+			order = append(order, "retry-cleanup")
+			return record, true, nil
+		},
+		verifyReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
+			order = append(order, "verify")
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Validated || !result.Reused ||
+		!reflect.DeepEqual(order, []string{"retry-cleanup", "verify"}) {
+		t.Fatalf("result/order = %#v/%#v", result, order)
+	}
+	if !strings.Contains(progress.String(), "cleanup of 1 superseded cached image reference is pending") {
+		t.Fatalf("progress = %q", progress.String())
+	}
+}
+
 func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testing.T) {
 	completionInput, operation, store := providerBuildCompletionFixture(t)
 	defer operation.Unlock()
@@ -63,8 +222,8 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 	candidateRequest := completionInput.ResolvedRequest
 	unusedSource := candidateRequest.Sources[0]
 	unusedSource.LogicalPackage = "unused-source"
-	unusedSource.SourceManifestDigest = reuseTestDigest("a")
-	unusedSource.ArtifactDigest = reuseTestDigest("b")
+	unusedSource.SourceInputDigest = reuseTestDigest("a")
+	unusedSource.OutputArtifactDigest = reuseTestDigest("b")
 	candidateRequest.Sources = append(append([]providers.ResolvedSourceInput{}, candidateRequest.Sources...), unusedSource)
 	selected := SelectedProviderBase{Plan: completionInput.Graph.Plan, Descriptor: completionInput.Base, Config: providerBuildExecutionBaseConfig()}
 	prepared := PreparedProviderBase{
@@ -81,6 +240,7 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 				PackageOverrides: completionInput.PackageOverrides, Request: candidateRequest,
 			},
 			SelectedBase: selected, PreparedBase: &prepared, FinalImageConfig: pythonConsumerTestImageConfig(),
+			NoCache: true,
 		},
 		SourceWheels:   []providerstore.ArtifactDescriptor{},
 		LocalOverrides: localOverrides,
@@ -98,16 +258,16 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 			}
 			return completionInput.Graph, nil
 		},
-		prepareValidation: func(_ context.Context, base deploy.ImageDescriptor, catalog []providers.RealizedOutput, graph providers.GraphExecutionResult, policy deploy.RuntimePolicyV1) (ProviderGraphValidationPlan, error) {
+		prepareValidation: func(_ context.Context, base deploy.ImageDescriptor, catalog []providers.RealizedOutput, graph providers.GraphExecutionResult, policy deploy.RuntimePolicyV1, validateLayers bool) (ProviderGraphValidationPlan, error) {
 			order = append(order, "validation")
-			if !reflect.DeepEqual(base, completionInput.Base) || !reflect.DeepEqual(catalog, completionInput.BaseCatalog) || !reflect.DeepEqual(graph, completionInput.Graph) || !reflect.DeepEqual(policy, completionInput.Validation.Final.RuntimePolicy) {
+			if !reflect.DeepEqual(base, completionInput.Base) || !reflect.DeepEqual(catalog, completionInput.BaseCatalog) || !reflect.DeepEqual(graph, completionInput.Graph) || !reflect.DeepEqual(policy, completionInput.Validation.Final.RuntimePolicy) || !validateLayers {
 				t.Fatal("validation input changed")
 			}
 			return completionInput.Validation, nil
 		},
 		complete: func(_ context.Context, gotOperation *deploy.OperationLock, gotStore providerstore.Store, got ProviderBuildCompletionInput) (ProviderBuildCompletionResult, error) {
 			order = append(order, "complete")
-			if gotOperation != operation || gotStore.Root() != store.Root() || !reflect.DeepEqual(got.ResolvedRequest, completionInput.ResolvedRequest) || !reflect.DeepEqual(got.Graph, completionInput.Graph) || !reflect.DeepEqual(got.Validation, completionInput.Validation) || !got.ValidateLayers || got.RunValidation == nil || got.RunOptions.Context == nil {
+			if gotOperation != operation || gotStore.Root() != store.Root() || !reflect.DeepEqual(got.ResolvedRequest, completionInput.ResolvedRequest) || !reflect.DeepEqual(got.Graph, completionInput.Graph) || !reflect.DeepEqual(got.Validation, completionInput.Validation) || !got.ValidateLayers || !got.NoCache || got.RunValidation == nil || got.RunOptions.Context == nil {
 				t.Fatalf("completion input = %#v", got)
 			}
 			return ProviderBuildCompletionResult{State: wantState, Lock: wantLock}, nil
@@ -146,7 +306,7 @@ func TestExecuteLockedProviderBuildV1StopsAfterGraphFailure(t *testing.T) {
 		executeGraph: func(context.Context, PreparedPythonGraphExecutionInput) (providers.GraphExecutionResult, error) {
 			return providers.GraphExecutionResult{}, want
 		},
-		prepareValidation: func(context.Context, deploy.ImageDescriptor, []providers.RealizedOutput, providers.GraphExecutionResult, deploy.RuntimePolicyV1) (ProviderGraphValidationPlan, error) {
+		prepareValidation: func(context.Context, deploy.ImageDescriptor, []providers.RealizedOutput, providers.GraphExecutionResult, deploy.RuntimePolicyV1, bool) (ProviderGraphValidationPlan, error) {
 			t.Fatal("failed graph prepared validation")
 			return ProviderGraphValidationPlan{}, nil
 		},
@@ -170,7 +330,7 @@ func TestExecuteLockedProviderBuildV1RequiresValidationRunnerBeforeGraph(t *test
 			t.Fatal("missing validation runner reached graph execution")
 			return providers.GraphExecutionResult{}, nil
 		},
-		prepareValidation: func(context.Context, deploy.ImageDescriptor, []providers.RealizedOutput, providers.GraphExecutionResult, deploy.RuntimePolicyV1) (ProviderGraphValidationPlan, error) {
+		prepareValidation: func(context.Context, deploy.ImageDescriptor, []providers.RealizedOutput, providers.GraphExecutionResult, deploy.RuntimePolicyV1, bool) (ProviderGraphValidationPlan, error) {
 			return ProviderGraphValidationPlan{}, nil
 		},
 		complete: func(context.Context, *deploy.OperationLock, providerstore.Store, ProviderBuildCompletionInput) (ProviderBuildCompletionResult, error) {
@@ -200,7 +360,7 @@ func TestExecuteLockedProviderBuildV1RejectsReleasedPreparationLock(t *testing.T
 			t.Fatal("released lock reached graph execution")
 			return providers.GraphExecutionResult{}, nil
 		},
-		prepareValidation: func(context.Context, deploy.ImageDescriptor, []providers.RealizedOutput, providers.GraphExecutionResult, deploy.RuntimePolicyV1) (ProviderGraphValidationPlan, error) {
+		prepareValidation: func(context.Context, deploy.ImageDescriptor, []providers.RealizedOutput, providers.GraphExecutionResult, deploy.RuntimePolicyV1, bool) (ProviderGraphValidationPlan, error) {
 			return ProviderGraphValidationPlan{}, nil
 		},
 		complete: func(context.Context, *deploy.OperationLock, providerstore.Store, ProviderBuildCompletionInput) (ProviderBuildCompletionResult, error) {

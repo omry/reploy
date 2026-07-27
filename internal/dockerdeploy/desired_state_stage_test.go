@@ -47,7 +47,7 @@ func TestStageDesiredStateV1ProbesNativeOnlyForAmbiguousDefault(t *testing.T) {
 			probeCalls++
 			return targetPlatform(t, "linux/arm64"), nil
 		},
-		setState: func(_ context.Context, _ string, _ blueprint.Document, platform blueprint.Platform, _ string, create bool) (deploy.DesiredStateUpdateResult, error) {
+		setState: func(_ context.Context, _ string, _ blueprint.Document, platform blueprint.Platform, _ string, create bool, _ *deploy.PackageOverridesV1) (deploy.DesiredStateUpdateResult, error) {
 			if create {
 				t.Fatal("update unexpectedly requested create-only publication")
 			}
@@ -69,7 +69,7 @@ func TestStageDesiredStateV1ExplicitPlatformSkipsNativeProbe(t *testing.T) {
 	_, err := stageDesiredStateV1(t.Context(), DesiredStateStageInputV1{
 		DeploymentDir: t.TempDir(), Document: document, ExplicitPlatform: "linux/arm64",
 	}, desiredStateStageBackendV1{
-		setState: func(_ context.Context, _ string, _ blueprint.Document, platform blueprint.Platform, _ string, create bool) (deploy.DesiredStateUpdateResult, error) {
+		setState: func(_ context.Context, _ string, _ blueprint.Document, platform blueprint.Platform, _ string, create bool, _ *deploy.PackageOverridesV1) (deploy.DesiredStateUpdateResult, error) {
 			if create {
 				t.Fatal("update unexpectedly requested create-only publication")
 			}

@@ -41,7 +41,7 @@ func providerBuildPreparationFixture(t *testing.T) (
 	packageOverrides := deploy.EmptyPackageOverrideIntentV1(document.Environment.ID)
 	loaded := LoadedBuildRequestV1{
 		State: state, Document: document, PackageOverrides: packageOverrides,
-		Request: request, Current: &lock,
+		Request: request,
 	}
 	current := CurrentBuild{State: state, Generation: *state.Current, Lock: lock}
 	plan, err := registry.Plan(providers.PlanInput{
@@ -97,6 +97,45 @@ func TestPrepareLockedProviderBuildV1StopsBeforeBaseRealizationOnExactReuse(t *t
 		t.Fatal("preparation did not bind its operation inputs")
 	}
 	if !reflect.DeepEqual(order, []string{"recover", "load", "select", "current", "cache", "locked-sources", "match"}) {
+		t.Fatalf("order = %#v", order)
+	}
+}
+
+func TestPrepareLockedProviderBuildV1ReusesExactValidatedCandidate(t *testing.T) {
+	input, loaded, current, selected, _ := providerBuildPreparationFixture(t)
+	candidate := ValidatedBuildCandidateV1{Current: current}
+	input.ValidatedCandidate = &candidate
+	order := []string{}
+	backend := providerBuildPreparationTestBackend(t, loaded, current, selected, PreparedProviderBase{}, &order)
+	backend.validateCurrent = func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (CurrentBuild, bool, error) {
+		order = append(order, "current")
+		return CurrentBuild{}, false, nil
+	}
+	backend.matches = func(got CurrentBuild, reuse CurrentBuildReuseInput) (bool, error) {
+		order = append(order, "match")
+		if !reflect.DeepEqual(got, candidate.Current) ||
+			!reflect.DeepEqual(reuse.Base, selected.Descriptor) ||
+			!reflect.DeepEqual(reuse.ResolvedRequest, loaded.Request) {
+			t.Fatal("validated candidate reuse input changed")
+		}
+		return true, nil
+	}
+	backend.realizeBase = func(context.Context, providerstore.Store, SelectedProviderBase) (PreparedProviderBase, error) {
+		t.Fatal("exact validated candidate reuse realized base outputs")
+		return PreparedProviderBase{}, nil
+	}
+
+	result, err := prepareLockedProviderBuildV1(t.Context(), input, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Reused || !result.ReusedCandidate || result.PreparedBase != nil ||
+		result.ValidatedCandidate != &candidate || result.ReusableLock == nil {
+		t.Fatalf("result = %#v", result)
+	}
+	if !reflect.DeepEqual(order, []string{
+		"recover", "load", "select", "current", "cache", "locked-sources", "match",
+	}) {
 		t.Fatalf("order = %#v", order)
 	}
 }
@@ -177,15 +216,29 @@ func TestPrepareLockedProviderBuildV1NoCacheSkipsAllCurrentLockReuse(t *testing.
 		t.Fatal("no-cache evaluated exact reuse")
 		return false, nil
 	}
+	backend.validateCurrent = func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (CurrentBuild, bool, error) {
+		t.Fatal("no-cache interpreted the current lock")
+		return CurrentBuild{}, false, nil
+	}
+	backend.recover = func(_ context.Context, _ *deploy.OperationLock, _ providerstore.Store, _ *deploy.EnvironmentGenerationState, _ string, _ string, validateProfile providers.RequirementProfileOwnerValidator, validateBundle providers.ResolvedBundleOwnerValidator) (bool, error) {
+		order = append(order, "recover")
+		if err := validateProfile(providers.RequirementProfile{}); err != nil {
+			t.Fatalf("no-cache recovery used the current profile schema validator: %v", err)
+		}
+		if err := validateBundle(providers.ResolvedBundleIdentityV1{}); err != nil {
+			t.Fatalf("no-cache recovery used the current bundle schema validator: %v", err)
+		}
+		return true, nil
+	}
 
 	result, err := prepareLockedProviderBuildV1(context.Background(), input, backend)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Reused || result.PreparedBase == nil || result.Current == nil || result.ReusableLock != nil {
+	if result.Reused || result.PreparedBase == nil || result.Current != nil || result.ReusableLock != nil || !result.NoCache {
 		t.Fatalf("result = %#v", result)
 	}
-	if !reflect.DeepEqual(order, []string{"recover", "load", "select", "current", "realize"}) {
+	if !reflect.DeepEqual(order, []string{"recover", "load", "select", "realize"}) {
 		t.Fatalf("order = %#v", order)
 	}
 }
@@ -222,7 +275,7 @@ func TestPrepareLockedProviderBuildV1StopsWhenRecoveryFails(t *testing.T) {
 	backend.recover = func(context.Context, *deploy.OperationLock, providerstore.Store, *deploy.EnvironmentGenerationState, string, string, providers.RequirementProfileOwnerValidator, providers.ResolvedBundleOwnerValidator) (bool, error) {
 		return false, want
 	}
-	backend.load = func(*deploy.OperationLock, deploy.PackageOverrideIntentV1, []providers.ResolvedSourceInput) (LoadedBuildRequestV1, error) {
+	backend.load = func(*deploy.OperationLock, deploy.PackageOverrideIntentV1, string, []providers.ResolvedSourceInput) (LoadedBuildRequestV1, error) {
 		t.Fatal("failed recovery loaded build inputs")
 		return LoadedBuildRequestV1{}, nil
 	}
@@ -272,9 +325,9 @@ func providerBuildPreparationTestBackend(
 			}
 			return true, nil
 		},
-		load: func(_ *deploy.OperationLock, packageOverrides deploy.PackageOverrideIntentV1, sources []providers.ResolvedSourceInput) (LoadedBuildRequestV1, error) {
+		load: func(_ *deploy.OperationLock, packageOverrides deploy.PackageOverrideIntentV1, baseImage string, sources []providers.ResolvedSourceInput) (LoadedBuildRequestV1, error) {
 			*order = append(*order, "load")
-			if sources == nil || !reflect.DeepEqual(packageOverrides, loaded.PackageOverrides) {
+			if sources == nil || !reflect.DeepEqual(packageOverrides, loaded.PackageOverrides) || baseImage != loaded.BaseImage {
 				t.Fatal("build request inputs changed")
 			}
 			return loaded, nil

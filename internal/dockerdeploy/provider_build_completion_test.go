@@ -19,6 +19,7 @@ import (
 func TestCompleteProviderBuildOrdersValidationAssemblyAndPublication(t *testing.T) {
 	input, operation, store := providerBuildCompletionFixture(t)
 	defer operation.Unlock()
+	input.NoCache = true
 	validationReference := providerstore.StoreObjectRef{Kind: providerstore.ValidationRecordKind, Digest: rendererDigest("a")}
 	finalImage := providers.RealizedImageV1{Digest: rendererDigest("b"), ConfigDigest: rendererDigest("b"), RootFSSubject: input.Validation.Final.Image.Image.RootFSSubject}
 	wantLock := deploy.BuildLockV1{Schema: deploy.BuildLockSchemaV1}
@@ -48,7 +49,7 @@ func TestCompleteProviderBuildOrdersValidationAssemblyAndPublication(t *testing.
 		},
 		publish: func(_ context.Context, gotOperation *deploy.OperationLock, gotStore providerstore.Store, got BuildPublicationInput) (deploy.StateV1, error) {
 			order = append(order, "publish")
-			if gotOperation != operation || gotStore.Root() != store.Root() || got.Environment != input.Environment || got.DeploymentDir != input.DeploymentDir || !reflect.DeepEqual(got.Document, input.Document) || !reflect.DeepEqual(got.Lock, wantLock) {
+			if gotOperation != operation || gotStore.Root() != store.Root() || got.Environment != input.Environment || got.DeploymentDir != input.DeploymentDir || !reflect.DeepEqual(got.Document, input.Document) || !reflect.DeepEqual(got.Lock, wantLock) || !got.NoCache {
 				t.Fatalf("publication input = %#v", got)
 			}
 			return wantState, nil
@@ -60,6 +61,65 @@ func TestCompleteProviderBuildOrdersValidationAssemblyAndPublication(t *testing.
 	}
 	if !reflect.DeepEqual(order, []string{"validate", "assemble", "publish"}) || !reflect.DeepEqual(result, ProviderBuildCompletionResult{State: wantState, Lock: wantLock}) {
 		t.Fatalf("order/result = %#v/%#v", order, result)
+	}
+}
+
+func TestCompleteProviderBuildValidationPublishesCandidateWithoutChangingCurrentState(t *testing.T) {
+	input, operation, store := providerBuildCompletionFixture(t)
+	defer operation.Unlock()
+	input.ValidateChoices = true
+	validationReference := providerstore.StoreObjectRef{
+		Kind: providerstore.ValidationRecordKind, Digest: rendererDigest("a"),
+	}
+	finalImage := providers.RealizedImageV1{
+		Digest: rendererDigest("b"), ConfigDigest: rendererDigest("b"),
+		RootFSSubject: input.Validation.Final.Image.Image.RootFSSubject,
+	}
+	lock := deploy.BuildLockV1{Schema: deploy.BuildLockSchemaV1}
+	resolved, err := blueprint.EncodeResolvedDocumentV1(input.Document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := deploy.StateV1{
+		Schema: deploy.StateSchemaV1, Blueprint: resolved, BlueprintSource: "test blueprint",
+		Platform: input.ResolvedRequest.Platform, Overlay: input.Overlay,
+		Staging: &deploy.StagingStateV1{Schema: deploy.StagingStateSchemaV1},
+	}
+	if err := operation.CommitStateV1(nil, state); err != nil {
+		t.Fatal(err)
+	}
+	record := deploy.ValidatedBuildV1{
+		Schema:         deploy.ValidatedBuildSchemaV1,
+		PendingCleanup: []deploy.ValidatedBuildReferenceV1{{ImageReference: "superseded"}},
+	}
+	publishedCurrent := false
+	result, err := completeProviderBuild(t.Context(), operation, store, input, providerBuildCompletionBackend{
+		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, bool, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, RunOptions) (FinalizedBuildValidationResult, error) {
+			return FinalizedBuildValidationResult{
+				Validation: BuildValidationResult{
+					Layers: []PublishedImageValidation{},
+					Final:  PublishedImageValidation{Reference: validationReference},
+				},
+				Image: InspectedImageCandidate{Image: finalImage},
+			}, nil
+		},
+		assemble: func(context.Context, providerstore.Store, BuildLockAssemblyInput) (deploy.BuildLockV1, error) {
+			return lock, nil
+		},
+		publish: func(context.Context, *deploy.OperationLock, providerstore.Store, BuildPublicationInput) (deploy.StateV1, error) {
+			publishedCurrent = true
+			return deploy.StateV1{}, nil
+		},
+		publishValidated: func(context.Context, *deploy.OperationLock, providerstore.Store, string, string, deploy.BuildLockV1, ValidatedBuildInputsV1) (deploy.ValidatedBuildV1, error) {
+			return record, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if publishedCurrent || !result.Validated || !reflect.DeepEqual(result.State, state) ||
+		!reflect.DeepEqual(result.ValidatedBuild, record) {
+		t.Fatalf("published-current=%v result=%#v", publishedCurrent, result)
 	}
 }
 

@@ -37,7 +37,7 @@ func TestStagePythonLocalSourceSnapshotsCopiesOnlyManifestEntries(t *testing.T) 
 	}
 	sources := []PythonLocalSource{{
 		Distribution: "demo-pkg", HostDir: sourceDir,
-		Manifest: manifest, SourceManifestDigest: digest,
+		Manifest: manifest, SourceInputDigest: digest,
 	}}
 
 	snapshots, err := StagePythonLocalSourceSnapshots(prepared, sources)
@@ -46,7 +46,7 @@ func TestStagePythonLocalSourceSnapshotsCopiesOnlyManifestEntries(t *testing.T) 
 	}
 	if len(snapshots) != 1 || snapshots[0].Distribution != "demo-pkg" ||
 		snapshots[0].ContainerDir != prepared.InputContainerDir+"/sources/demo-pkg" ||
-		snapshots[0].SourceManifestDigest != sources[0].SourceManifestDigest {
+		snapshots[0].SourceInputDigest != sources[0].SourceInputDigest {
 		t.Fatalf("snapshots = %#v", snapshots)
 	}
 	snapshotProgram := filepath.Join(snapshots[0].HostDir, "tool.py")
@@ -83,6 +83,35 @@ func TestStagePythonLocalSourceSnapshotsCopiesOnlyManifestEntries(t *testing.T) 
 	}
 }
 
+func TestStagePythonLocalSourceSnapshotsExplainsInvalidManifestOrder(t *testing.T) {
+	sourceDir := t.TempDir()
+	manifest := PythonSourceManifestV1{
+		Schema: pythonSourceManifestSchemaV1,
+		Entries: []PythonSourceManifestEntryV1{
+			{Path: "zeta", Kind: "directory", Mode: "0755"},
+			{Path: "alpha", Kind: "directory", Mode: "0755"},
+		},
+	}
+	source := PythonLocalSource{
+		Distribution: "demo",
+		HostDir:      sourceDir,
+		Manifest:     manifest,
+	}
+	err := validatePythonLocalSourcesForSnapshot([]PythonLocalSource{source})
+	if err == nil {
+		t.Fatal("invalid manifest order was accepted")
+	}
+	for _, want := range []string{
+		`prepare immutable snapshot for local Python source "demo" from "`,
+		`entry 1 path "alpha" is not strictly after entry 0 path "zeta"`,
+		"stable content digest",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error does not contain %q: %v", want, err)
+		}
+	}
+}
+
 func TestStagePythonLocalSourceSnapshotsSupportsSuccessiveWaves(t *testing.T) {
 	store, err := providerstore.NewStore(t.TempDir())
 	if err != nil {
@@ -108,7 +137,7 @@ func TestStagePythonLocalSourceSnapshotsSupportsSuccessiveWaves(t *testing.T) {
 		}
 		return PythonLocalSource{
 			Distribution: distribution, HostDir: dir,
-			Manifest: manifest, SourceManifestDigest: digest,
+			Manifest: manifest, SourceInputDigest: digest,
 		}
 	}
 
@@ -152,7 +181,7 @@ func TestStagePythonLocalSourceSnapshotsFailedLaterWavePreservesEarlierSnapshots
 	}
 	firstSource := PythonLocalSource{
 		Distribution: "direct", HostDir: sourceDir,
-		Manifest: manifest, SourceManifestDigest: digest,
+		Manifest: manifest, SourceInputDigest: digest,
 	}
 	first, err := StagePythonLocalSourceSnapshots(prepared, []PythonLocalSource{firstSource})
 	if err != nil {
@@ -202,7 +231,7 @@ func TestStagePythonLocalSourceSnapshotsRejectsChangedSourceAndCleansPartialSnap
 	}
 	sources := []PythonLocalSource{{
 		Distribution: "demo", HostDir: sourceDir,
-		Manifest: manifest, SourceManifestDigest: digest,
+		Manifest: manifest, SourceInputDigest: digest,
 	}}
 	if err := os.WriteFile(filename, []byte("changed"), 0o644); err != nil {
 		t.Fatal(err)

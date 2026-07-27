@@ -24,7 +24,7 @@ func PublishBuiltPythonSourceWheels(
 	store providerstore.Store,
 	prepared PreparedPythonResolverArtifacts,
 	component string,
-	snapshots []PreparedPythonSourceSnapshot,
+	distributions []PreparedPythonSourceDistribution,
 	reusable []providerstore.ArtifactDescriptor,
 ) (sources []providers.ResolvedSourceInput, effective []providerstore.ArtifactDescriptor, err error) {
 	if ctx == nil {
@@ -39,10 +39,10 @@ func PublishBuiltPythonSourceWheels(
 	if err := validatePreparedPythonResolverArtifactLayout(prepared); err != nil {
 		return nil, nil, err
 	}
-	if snapshots == nil || reusable == nil {
-		return nil, nil, fmt.Errorf("Python source snapshots and reusable wheels must use arrays")
+	if distributions == nil || reusable == nil {
+		return nil, nil, fmt.Errorf("Python source distributions and reusable wheels must use arrays")
 	}
-	if err := validatePreparedPythonSourceSnapshots(prepared, snapshots); err != nil {
+	if err := validatePreparedPythonSourceDistributions(prepared, distributions); err != nil {
 		return nil, nil, err
 	}
 
@@ -50,14 +50,14 @@ func PublishBuiltPythonSourceWheels(
 	if err != nil {
 		return nil, nil, fmt.Errorf("read Python source wheel output: %w", err)
 	}
-	if len(entries) != len(snapshots) {
+	if len(entries) != len(distributions) {
 		names := make([]string, len(entries))
 		for index, entry := range entries {
 			names[index] = entry.Name()
 		}
 		return nil, nil, fmt.Errorf(
 			"Python source build produced %d output entries for %d source snapshots: %q",
-			len(entries), len(snapshots), names,
+			len(entries), len(distributions), names,
 		)
 	}
 
@@ -86,22 +86,30 @@ func PublishBuiltPythonSourceWheels(
 		}
 	}
 
-	sources = make([]providers.ResolvedSourceInput, 0, len(snapshots))
-	built := make([]builtWheel, 0, len(snapshots))
-	for _, snapshot := range snapshots {
-		wheel, found := builtByDistribution[snapshot.Distribution]
+	sources = make([]providers.ResolvedSourceInput, 0, len(distributions))
+	built := make([]builtWheel, 0, len(distributions))
+	for _, distribution := range distributions {
+		wheel, found := builtByDistribution[distribution.Distribution]
 		if !found {
-			return nil, nil, fmt.Errorf("Python source build produced no wheel for distribution %q", snapshot.Distribution)
+			return nil, nil, fmt.Errorf("Python source build produced no wheel for distribution %q", distribution.Distribution)
 		}
-		source, err := pythonprovider.NewResolvedSourceInputV1(
-			component, snapshot.Distribution, snapshot.SourceManifestDigest, wheel.descriptor, wheel.metadata,
+		if wheel.metadata.Version != distribution.Version {
+			return nil, nil, fmt.Errorf(
+				"Python source wheel for %q has version %q, want retained sdist version %q",
+				distribution.Distribution, wheel.metadata.Version, distribution.Version,
+			)
+		}
+		source, err := pythonprovider.NewResolvedSourceInputWithBuildV2(
+			component, distribution.Distribution, distribution.SourceInputDigest,
+			distribution.Artifact, distribution.BuildEnvironmentDigest, wheel.descriptor, wheel.metadata,
+			distribution.BuilderProfile, distribution.BuildSettings,
 		)
 		if err != nil {
 			return nil, nil, err
 		}
 		sources = append(sources, source)
 		built = append(built, wheel)
-		delete(builtByDistribution, snapshot.Distribution)
+		delete(builtByDistribution, distribution.Distribution)
 	}
 	if len(builtByDistribution) != 0 {
 		for distribution := range builtByDistribution {
@@ -199,7 +207,7 @@ func validatePreparedPythonSourceSnapshots(prepared PreparedPythonResolverArtifa
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("Python source snapshot %q must be a real directory", snapshot.Distribution)
 		}
-		if err := snapshot.SourceManifestDigest.Validate(); err != nil {
+		if err := snapshot.SourceInputDigest.Validate(); err != nil {
 			return fmt.Errorf("Python source snapshot %q manifest digest: %w", snapshot.Distribution, err)
 		}
 	}

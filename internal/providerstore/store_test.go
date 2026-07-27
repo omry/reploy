@@ -3,11 +3,13 @@ package providerstore
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStorePublishesImmutableBlobAtContentPath(t *testing.T) {
@@ -43,6 +45,58 @@ func TestStorePublishesImmutableBlobAtContentPath(t *testing.T) {
 	}
 	if err := store.VerifyArtifact(descriptor); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOpenVerifiedArtifactKeepsTheVerifiedFileAfterPathReplacement(t *testing.T) {
+	deployment := t.TempDir()
+	store, err := NewStore(deployment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := store.Publish(
+		context.Background(), "wheels/demo.whl", "wheel", strings.NewReader("original"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := store.OpenVerifiedArtifact(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	path, err := store.BlobPath(descriptor.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path, path+".replaced"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("modified"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	content, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "original" {
+		t.Fatalf("open artifact changed with its path: %q", content)
+	}
+	if err := VerifyOpenArtifact(file, descriptor); err != nil {
+		t.Fatalf("verified open artifact changed with its path: %v", err)
+	}
+	if err := os.Chmod(path+".replaced", 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".replaced", []byte("tampered"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyOpenArtifact(file, descriptor); err == nil {
+		t.Fatal("in-place modification of the open artifact passed re-verification")
+	}
+	if replacement, err := store.OpenVerifiedArtifact(descriptor); err == nil {
+		replacement.Close()
+		t.Fatal("same-sized replacement passed content verification")
 	}
 }
 
@@ -138,6 +192,93 @@ func TestStoreRejectsCorruptExistingBlobWithoutReplacingIt(t *testing.T) {
 	}
 	if string(content) != "corrupt!" {
 		t.Fatalf("existing blob was replaced: %q", content)
+	}
+}
+
+func TestStoreCachedDebVerificationUsesExactRecordedModificationTime(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := store.Publish(context.Background(), "debs/demo.deb", "deb", strings.NewReader("expected"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactPath, err := store.BlobPath(descriptor.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.Lstat(artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.VerifyCachedDeb(descriptor); err != nil {
+		t.Fatal(err)
+	}
+
+	changedTime := original.ModTime().Add(time.Second)
+	if err := os.Chtimes(artifactPath, changedTime, changedTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.VerifyCachedDeb(descriptor); err != nil {
+		t.Fatalf("rehash unchanged content after mtime change: %v", err)
+	}
+
+	if err := os.Chmod(artifactPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(artifactPath, []byte("corrupt!"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(artifactPath, changedTime, changedTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.VerifyCachedDeb(descriptor); err != nil {
+		t.Fatalf("exact matching mtime did not use optimistic verification: %v", err)
+	}
+
+	newerTime := changedTime.Add(time.Second)
+	if err := os.Chtimes(artifactPath, newerTime, newerTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.VerifyCachedDeb(descriptor); err == nil || !strings.Contains(err.Error(), "digest") {
+		t.Fatalf("changed mtime did not trigger hash: %v", err)
+	}
+}
+
+func TestArtifactVerificationMetadataRequiresStableSizeAndModificationTime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "artifact.deb")
+	if err := os.WriteFile(path, []byte("first"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameArtifactVerificationMetadata(original, original) {
+		t.Fatal("unchanged artifact metadata did not match")
+	}
+
+	if err := os.Chtimes(path, original.ModTime().Add(time.Second), original.ModTime().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	changedTime, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sameArtifactVerificationMetadata(original, changedTime) {
+		t.Fatal("changed artifact modification time matched")
+	}
+
+	if err := os.WriteFile(path, []byte("longer"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	changedSize, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sameArtifactVerificationMetadata(changedTime, changedSize) {
+		t.Fatal("changed artifact size matched")
 	}
 }
 
@@ -347,12 +488,24 @@ func TestStoreRemoveUnreachableKeepsExactClosure(t *testing.T) {
 	if _, err := store.LoadValidationRecord(keepValidation); err != nil {
 		t.Fatal(err)
 	}
+	keepVerificationPath, err := store.artifactVerificationPath(keepBlob.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(keepVerificationPath); err != nil {
+		t.Fatalf("reachable artifact verification was removed: %v", err)
+	}
 	dropBlobPath, err := store.BlobPath(dropBlob.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropVerificationPath, err := store.artifactVerificationPath(dropBlob.SHA256)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{
 		dropBlobPath,
+		dropVerificationPath,
 		mustManifestPath(t, store, dropManifest),
 		mustValidationRecordPath(t, store, dropValidation),
 	} {
@@ -385,6 +538,31 @@ func TestStoreRemoveUnreachablePreflightsLayoutBeforeDeletion(t *testing.T) {
 	}
 	if err := store.VerifyArtifact(descriptor); err != nil {
 		t.Fatalf("recognized object was removed before layout validation: %v", err)
+	}
+}
+
+func TestStoreRemoveUnreachablePreflightsArtifactVerificationLayoutBeforeDeletion(t *testing.T) {
+	deployment := t.TempDir()
+	store, err := NewStore(deployment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := store.Publish(context.Background(), "keep.deb", "deb", strings.NewReader("keep"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	verificationPath, err := store.artifactVerificationPath(descriptor.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(verificationPath), "unexpected"), []byte("unknown"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RemoveUnreachable([]StoreObjectRef{}); err == nil || !strings.Contains(err.Error(), "unrecognized object name") {
+		t.Fatalf("error = %v", err)
+	}
+	if err := store.VerifyArtifact(descriptor); err != nil {
+		t.Fatalf("blob was removed before artifact verification layout validation: %v", err)
 	}
 }
 

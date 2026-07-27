@@ -81,6 +81,18 @@ func resolveBase(ctx context.Context, authorReference string, platform blueprint
 	pulledDigest := canonical.Digest("")
 	inspectionReference := authorReference
 	if !isDockerLocalImageID(authorReference) {
+		if pinnedDigest, pinned := dockerPinnedManifestDigest(authorReference); pinned {
+			if output, inspectErr := run(ctx, "image", "inspect", inspectionReference); inspectErr == nil {
+				if descriptor, config, parseErr := parseResolvedDockerBase(
+					authorReference,
+					platform,
+					[]byte(output),
+					pinnedDigest,
+				); parseErr == nil {
+					return descriptor, config, nil
+				}
+			}
+		}
 		pullOutput, err := run(ctx, "pull", "--platform", platform.Canonical, authorReference)
 		if err != nil {
 			return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("pull Docker base image %s for %s: %w", authorReference, platform.Canonical, err)
@@ -97,7 +109,16 @@ func resolveBase(ctx context.Context, authorReference string, platform blueprint
 	if err != nil {
 		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("inspect Docker base image %s: %w", authorReference, err)
 	}
-	descriptor, config, err := parseDockerImageInspectionWithPullDigest(authorReference, platform, []byte(output), pulledDigest)
+	return parseResolvedDockerBase(authorReference, platform, []byte(output), pulledDigest)
+}
+
+func parseResolvedDockerBase(
+	authorReference string,
+	platform blueprint.Platform,
+	output []byte,
+	pulledDigest canonical.Digest,
+) (deploy.ImageDescriptor, deploy.BaseConfig, error) {
+	descriptor, config, err := parseDockerImageInspectionWithPullDigest(authorReference, platform, output, pulledDigest)
 	if err != nil {
 		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, err
 	}
@@ -108,6 +129,15 @@ func resolveBase(ctx context.Context, authorReference string, platform blueprint
 		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("Docker base image %s declares unsupported volumes", authorReference)
 	}
 	return descriptor, config, nil
+}
+
+func dockerPinnedManifestDigest(reference string) (canonical.Digest, bool) {
+	_, rawDigest, found := strings.Cut(reference, "@")
+	if !found {
+		return "", false
+	}
+	digest := canonical.Digest(rawDigest)
+	return digest, digest.Validate() == nil
 }
 
 func parseDockerImageInspection(authorReference string, expected blueprint.Platform, data []byte) (deploy.ImageDescriptor, deploy.BaseConfig, error) {
@@ -292,7 +322,7 @@ func dockerRepositoryName(reference string) string {
 }
 
 func canonicalDockerRepository(reference string) string {
-	repository := dockerRepositoryWithoutTag(reference)
+	repository := dockerRepositoryName(reference)
 	repository = strings.TrimPrefix(repository, "docker.io/")
 	repository = strings.TrimPrefix(repository, "index.docker.io/")
 	if strings.HasPrefix(repository, "library/") && strings.Count(repository, "/") == 1 {
@@ -302,19 +332,8 @@ func canonicalDockerRepository(reference string) string {
 }
 
 func validateDockerAuthorReference(reference string) error {
-	if reference == "" || strings.TrimSpace(reference) != reference || strings.ContainsAny(reference, "\r\n\t") || strings.Contains(reference, "://") {
-		return fmt.Errorf("Docker image author reference is missing or unsafe")
-	}
-	if repository, digest, found := strings.Cut(reference, "@"); found {
-		if repository == "" {
-			return fmt.Errorf("Docker image author reference is malformed")
-		}
-		if strings.Contains(digest, "@") {
-			return fmt.Errorf("Docker image author reference is malformed")
-		}
-		if err := canonical.Digest(digest).Validate(); err != nil {
-			return fmt.Errorf("Docker image author reference digest: %w", err)
-		}
+	if err := deploy.ValidateBaseImageReferenceV1(reference); err != nil {
+		return fmt.Errorf("Docker image author reference: %w", err)
 	}
 	return nil
 }

@@ -12,8 +12,8 @@ import (
 func TestMatchReusablePythonLocalSourcesRequiresUnchangedManifest(t *testing.T) {
 	root := t.TempDir()
 	overrides, observed := sourceReuseLocalFixture(t, root)
-	lockedDemo := testPythonResolvedSource("application", "demo", "1.0", observed[0].SourceManifestDigest, reuseTestDigest("1"))
-	lockedOtherComponent := testPythonResolvedSource("tools", "demo", "1.0", observed[0].SourceManifestDigest, reuseTestDigest("2"))
+	lockedDemo := testPythonResolvedSource("application", "demo", "1.0", observed[0].SourceInputDigest, reuseTestDigest("1"))
+	lockedOtherComponent := testPythonResolvedSource("tools", "demo", "1.0", observed[0].SourceInputDigest, reuseTestDigest("2"))
 	lockedChanged := testPythonResolvedSource("application", "changed", "1.0", reuseTestDigest("3"), reuseTestDigest("4"))
 
 	current, err := ObserveSelectedPythonLocalSources(overrides, []string{"changed", "demo"})

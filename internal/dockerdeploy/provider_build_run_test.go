@@ -18,6 +18,19 @@ import (
 
 func TestRunProviderBuildV1HoldsOneLockAcrossPreparationAndExecution(t *testing.T) {
 	dir, document := stageProviderBuildRunState(t, false)
+	baseOverride := "sha256:" + strings.Repeat("a", 64)
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overrides := deploy.EmptyPackageOverridesV1(document.Environment.ID)
+	overrides.Environment.Base = &deploy.BaseImageOverrideV1{Image: baseOverride}
+	if err := operation.CommitPackageOverridesV1(overrides); err != nil {
+		t.Fatal(err)
+	}
+	if err := operation.Unlock(); err != nil {
+		t.Fatal(err)
+	}
 	order := []string{}
 	want := LockedProviderBuildExecutionResultV1{Reused: true}
 	var progress strings.Builder
@@ -34,7 +47,7 @@ func TestRunProviderBuildV1HoldsOneLockAcrossPreparationAndExecution(t *testing.
 			if err := input.Operation.RequireHeld(); err != nil {
 				t.Fatal(err)
 			}
-			if input.Environment != document.Environment.ID || input.DeploymentDir != dir || !input.NoCache || input.Store.Root() != dir+"/.reploy/provider-store" || len(input.Sources) != 0 {
+			if input.Environment != document.Environment.ID || input.DeploymentDir != dir || !input.NoCache || input.Store.Root() != dir+"/.reploy/provider-store" || len(input.Sources) != 0 || input.BaseImage != baseOverride {
 				t.Fatalf("preparation input = %#v", input)
 			}
 			if input.DockerPlan.EnvironmentID != "demo" || input.DockerPlan.Phase != blueprint.PhaseStaged || input.DockerPlan.Image != providerBuildPlanImage || input.DockerPlan.Scope != nil || input.DockerPlan.RuntimeUser.UID != 1001 || input.DockerPlan.RuntimeUser.GID != 1002 {
@@ -67,7 +80,7 @@ func TestRunProviderBuildV1HoldsOneLockAcrossPreparationAndExecution(t *testing.
 			t.Fatalf("progress missing %q:\n%s", want, progress.String())
 		}
 	}
-	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	operation, err = deploy.AcquireOperationLock(t.Context(), dir)
 	if err != nil {
 		t.Fatal("build did not release operation lock:", err)
 	}
@@ -118,6 +131,109 @@ func TestRunLockedProviderBuildV1UsesAndRetainsCallerLock(t *testing.T) {
 	}
 	if err := operation.RequireHeld(); err != nil {
 		t.Fatalf("caller lock was released: %v", err)
+	}
+}
+
+func TestRunLockedProviderBuildV1DiscardsSupersededCandidateBeforeExecution(t *testing.T) {
+	dir, operation, store, lock, state := currentBuildFixture(t, true)
+	defer operation.Unlock()
+	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overrides := deploy.EmptyPackageOverridesV1(document.Environment.ID)
+	inputs, err := ValidatedBuildInputs(document, state.Overlay, overrides, dir, state.Platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := operation.CommitValidatedBuildV1(deploy.ValidatedBuildV1{
+		Schema:          deploy.ValidatedBuildSchemaV1,
+		BlueprintDigest: inputs.BlueprintDigest, OverlayDigest: inputs.OverlayDigest,
+		PackageOverridesDigest: inputs.PackageOverridesDigest, Platform: inputs.Platform,
+		BuildLockDigest: state.Current.BuildLockDigest, Image: lock.FinalImage, ImageReference: state.Current.Reference,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	discarded := false
+	_, err = runLockedProviderBuildV1(t.Context(), LockedProviderBuildRunInputV1{
+		Operation: operation, Store: store, DeploymentDir: dir,
+		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
+	}, providerBuildRunBackend{
+		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
+			if input.ValidatedCandidate == nil {
+				t.Fatal("validated candidate was not offered to preparation")
+			}
+			return LockedProviderBuildPreparationV1{
+				Operation: input.Operation, Store: input.Store, Environment: input.Environment,
+				DeploymentDir: input.DeploymentDir, DockerPlan: input.DockerPlan,
+				ValidatedCandidate: input.ValidatedCandidate,
+			}, nil
+		},
+		discardValidated: func(context.Context, *deploy.OperationLock, string, string) error {
+			discarded = true
+			return nil
+		},
+		execute: func(context.Context, LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
+			if !discarded {
+				t.Fatal("provider execution started before the superseded candidate was discarded")
+			}
+			return LockedProviderBuildExecutionResultV1{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunLockedProviderBuildV1RebuildsAnIncompleteValidationCandidate(t *testing.T) {
+	dir, operation, store, lock, state := currentBuildFixture(t, true)
+	defer operation.Unlock()
+	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overrides := deploy.EmptyPackageOverridesV1(document.Environment.ID)
+	inputs, err := ValidatedBuildInputs(document, state.Overlay, overrides, dir, state.Platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := operation.CommitValidatedBuildV1(deploy.ValidatedBuildV1{
+		Schema:          deploy.ValidatedBuildSchemaV1,
+		BlueprintDigest: inputs.BlueprintDigest, OverlayDigest: inputs.OverlayDigest,
+		PackageOverridesDigest: inputs.PackageOverridesDigest, Platform: inputs.Platform,
+		BuildLockDigest: state.Current.BuildLockDigest, Image: lock.FinalImage, ImageReference: state.Current.Reference,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := operation.RemoveProviderStore(store); err != nil {
+		t.Fatal(err)
+	}
+
+	discarded := false
+	_, err = runLockedProviderBuildV1(t.Context(), LockedProviderBuildRunInputV1{
+		Operation: operation, Store: store, DeploymentDir: dir, ValidateChoices: true,
+		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
+	}, providerBuildRunBackend{
+		discardValidated: func(context.Context, *deploy.OperationLock, string, string) error {
+			discarded = true
+			return nil
+		},
+		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
+			if !discarded || input.ValidatedCandidate != nil {
+				t.Fatalf("incomplete candidate reached preparation: discarded=%v candidate=%#v", discarded, input.ValidatedCandidate)
+			}
+			return LockedProviderBuildPreparationV1{
+				Operation: input.Operation, Store: input.Store, Environment: input.Environment,
+				DeploymentDir: input.DeploymentDir, DockerPlan: input.DockerPlan,
+			}, nil
+		},
+		execute: func(context.Context, LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
+			return LockedProviderBuildExecutionResultV1{Validated: true}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -189,6 +305,34 @@ func TestCleanupFailedProviderBuildV1RemovesOnlyUnreachableObjects(t *testing.T)
 	}
 	if _, found, err := operation.ReadBuildLock(operationCurrentDigest(t, operation), registry.ValidateRequirementProfileV1); err != nil || !found {
 		t.Fatalf("current build lock was not preserved: found=%v error=%v lock=%#v", found, err, lock)
+	}
+}
+
+func TestCleanupFailedProviderBuildV1NoCachePreservesImmutableObjects(t *testing.T) {
+	dir, operation, store, _, _ := currentBuildFixture(t, true)
+	defer operation.Unlock()
+	dropped, err := store.Publish(t.Context(), "failed.deb", "deb", strings.NewReader("failed candidate"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := store.NewWorkspace("failed-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupFailedProviderBuildV1(t.Context(), LockedProviderBuildPreparationV1{
+		Operation: operation, Store: store, Environment: "demo", DeploymentDir: dir, NoCache: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	droppedPath, err := store.BlobPath(dropped.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(droppedPath); err != nil {
+		t.Fatalf("no-cache cleanup removed an immutable candidate object: %v", err)
+	}
+	if _, err := os.Lstat(workspace); !os.IsNotExist(err) {
+		t.Fatalf("no-cache cleanup retained a temporary workspace: %v", err)
 	}
 }
 

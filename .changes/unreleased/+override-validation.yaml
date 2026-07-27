@@ -1,0 +1,2 @@
+kind: Added
+body: Let the development override editor browse and filter workspace projects, discover direct dependencies and statically named local setup.py projects, accept ~/path workspace roots, and validate exact package choices through a cached trial build with a scrollable, saveable log without replacing the current staged image. Add a guided exit that can validate and exit, save without validation, or return to editing.

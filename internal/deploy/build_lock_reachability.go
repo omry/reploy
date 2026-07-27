@@ -43,6 +43,41 @@ func BuildLockStoreClosure(
 	return plan.References, nil
 }
 
+// ReusableBuildLockStoreClosure verifies the closure for deployment-local
+// cache reuse. Debian archives use deployment-local verification stamps so an
+// unchanged size and modification time avoid rereading their bodies. All other
+// artifacts continue to receive full content hashing.
+func ReusableBuildLockStoreClosure(
+	lock BuildLockV1,
+	store providerstore.Store,
+	validateProfileOwner providers.RequirementProfileOwnerValidator,
+	validateBundleOwner providers.ResolvedBundleOwnerValidator,
+) ([]providerstore.StoreObjectRef, error) {
+	plan, err := loadBuildLockStoreClosure(lock, store, validateProfileOwner, validateBundleOwner)
+	if err != nil {
+		return nil, err
+	}
+	for _, artifact := range plan.OrderedArtifacts {
+		if artifact.Descriptor.Kind == "deb" {
+			if err := store.VerifyCachedDeb(artifact.Descriptor); err == nil {
+				continue
+			} else {
+				return nil, fmt.Errorf(
+					"verify reusable build lock node %q artifact %q: %w",
+					artifact.NodeID, artifact.Descriptor.LogicalPath, err,
+				)
+			}
+		}
+		if err := store.VerifyArtifact(artifact.Descriptor); err != nil {
+			return nil, fmt.Errorf(
+				"verify reusable build lock node %q artifact %q: %w",
+				artifact.NodeID, artifact.Descriptor.LogicalPath, err,
+			)
+		}
+	}
+	return plan.References, nil
+}
+
 // BuildLockStoreClosureBytes returns the logical bytes written when every
 // object in the locked closure is copied. It validates record content and blob
 // layout and size, but deliberately does not hash blob bodies; transfer does

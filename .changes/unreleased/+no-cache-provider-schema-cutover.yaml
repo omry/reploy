@@ -1,0 +1,2 @@
+kind: Fixed
+body: Allow `reploy build --no-cache` to replace cached builds from an older provider schema.

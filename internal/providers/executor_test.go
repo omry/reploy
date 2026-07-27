@@ -149,10 +149,11 @@ func TestResolveProviderNodeRejectsSuccessAfterCancellation(t *testing.T) {
 func TestResolveProviderNodeFiltersSourcesToSelectedNode(t *testing.T) {
 	input, result := validResolveContract(t)
 	source := ResolvedSourceInput{
-		Schema: ResolvedSourceInputSchemaV1, Component: "application", LogicalPackage: "demo",
-		SourceManifestDigest: testDigest("1"), BuilderProfile: "python-wheel-v1",
+		Schema: ResolvedSourceInputSchemaV2, Component: "application", LogicalPackage: "demo",
+		SourceInputDigest: testDigest("1"), SourceArtifactDigest: testDigest("3"),
+		BuildEnvironmentDigest: testDigest("4"), BuilderProfile: "python-wheel-v1",
 		BuildSettings:     providerData("python-source-build-settings-v1"),
-		EcosystemMetadata: providerData("python-source-metadata-v1"), ArtifactDigest: testDigest("2"),
+		EcosystemMetadata: providerData("python-source-metadata-v1"), OutputArtifactDigest: testDigest("2"),
 	}
 	resolver := &testNodeResolver{provider: blueprint.ComponentTypePython, result: result}
 	_, err := ResolveProviderNode(context.Background(), ResolveNodeRequest{

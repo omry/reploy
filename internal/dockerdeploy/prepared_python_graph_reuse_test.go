@@ -50,7 +50,7 @@ func TestLoadPreparedPythonGraphReuseUsesOnlyCurrentCompatibleContent(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	changed[0].ArtifactDigest = newLocal.SHA256
+	changed[0].OutputArtifactDigest = newLocal.SHA256
 	reuse, err = LoadPreparedPythonGraphReuse(
 		fixture.store, fixture.request.Plan, fixture.request.Platform, changed, []providerstore.ArtifactDescriptor{newLocal}, &fixture.lock,
 	)
@@ -118,8 +118,8 @@ func TestLoadPreparedPythonGraphReuseIgnoresUnusedSourceCandidate(t *testing.T) 
 	}
 	unused := fixture.request.SourceCandidates[0]
 	unused.LogicalPackage = "unused-source"
-	unused.SourceManifestDigest = reuseTestDigest("e")
-	unused.ArtifactDigest = unusedWheel.SHA256
+	unused.SourceInputDigest = reuseTestDigest("e")
+	unused.OutputArtifactDigest = unusedWheel.SHA256
 	candidates := append(append([]providers.ResolvedSourceInput{}, fixture.request.SourceCandidates...), unused)
 	wheels := append(append([]providerstore.ArtifactDescriptor{}, fixture.sourceWheels...), unusedWheel)
 
@@ -360,12 +360,20 @@ func newPreparedPythonGraphReuseFixtureWithManifest(t *testing.T, sourceManifest
 	writeReuseTestWheel(t, downloadedPath, "dependency", "2.0")
 	localDigest := reuseTestFileDigest(t, localPath)
 	downloadedDigest := reuseTestFileDigest(t, downloadedPath)
-	request.SourceCandidates = []providers.ResolvedSourceInput{
-		testPythonResolvedSource("application", "demo-server", "1.0", sourceManifest, localDigest),
-	}
 	store, err := providerstore.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
+	}
+	sourceArtifact, err := store.Publish(
+		context.Background(), "sdists/demo-server-1.0.tar.gz", "sdist", strings.NewReader("source distribution"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.SourceCandidates = []providers.ResolvedSourceInput{
+		testPythonResolvedSourceWithSourceArtifact(
+			"application", "demo-server", "1.0", sourceManifest, sourceArtifact, localDigest,
+		),
 	}
 	interpreter := request.EarlierCatalog[0].Evidence
 	interpreter.RequirementID = "interpreter"

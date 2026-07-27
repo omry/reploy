@@ -21,7 +21,7 @@ import (
 	"github.com/omry/reploy/internal/providerstore"
 )
 
-var errCurrentPythonSourceWheelMissing = errors.New("current Python source wheel is missing")
+var errCurrentPythonSourceArtifactMissing = errors.New("current Python source artifact is missing")
 
 // PreparedPythonGraphReuse contains only provider content reachable from the
 // current deployment lock. The maps plug directly into GraphExecutionRequest
@@ -239,11 +239,11 @@ func reusablePythonWheels(
 	}
 	oldLocal := make(map[string][]providers.ResolvedSourceInput, len(bundle.Sources))
 	for _, source := range bundle.Sources {
-		oldLocal[string(source.ArtifactDigest)] = append(oldLocal[string(source.ArtifactDigest)], source)
+		oldLocal[string(source.OutputArtifactDigest)] = append(oldLocal[string(source.OutputArtifactDigest)], source)
 	}
 	wheelsByDigest := make(map[canonical.Digest]providerstore.ArtifactDescriptor, len(bundle.Wheels)+len(currentSources))
 	for _, source := range currentSources {
-		wheelsByDigest[source.ArtifactDigest] = currentSourceWheels[source.ArtifactDigest]
+		wheelsByDigest[source.OutputArtifactDigest] = currentSourceWheels[source.OutputArtifactDigest]
 	}
 	for _, wheel := range bundle.Wheels {
 		if oldSources := oldLocal[string(wheel.Artifact.SHA256)]; len(oldSources) > 0 {
@@ -320,7 +320,7 @@ func validateCurrentPythonSourceWheels(
 		}
 		if _, err := store.InspectArtifactPath(wheel); err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
-				return nil, fmt.Errorf("%w: inspect %q: %w", errCurrentPythonSourceWheelMissing, wheel.LogicalPath, err)
+				return nil, fmt.Errorf("%w: inspect %q: %w", errCurrentPythonSourceArtifactMissing, wheel.LogicalPath, err)
 			}
 			return nil, fmt.Errorf("inspect current Python source wheel %q: %w", wheel.LogicalPath, err)
 		}
@@ -328,10 +328,10 @@ func validateCurrentPythonSourceWheels(
 	}
 	required := make(map[canonical.Digest]bool, len(sources))
 	for _, source := range sources {
-		if _, found := wheelsByDigest[source.ArtifactDigest]; !found {
-			return nil, fmt.Errorf("current Python source %s.%s has no wheel descriptor for %s", source.Component, source.LogicalPackage, source.ArtifactDigest)
+		if _, found := wheelsByDigest[source.OutputArtifactDigest]; !found {
+			return nil, fmt.Errorf("current Python source %s.%s has no wheel descriptor for %s", source.Component, source.LogicalPackage, source.OutputArtifactDigest)
 		}
-		required[source.ArtifactDigest] = true
+		required[source.OutputArtifactDigest] = true
 	}
 	for digest := range wheelsByDigest {
 		if !required[digest] {
@@ -348,9 +348,9 @@ func sourceWheelsForNode(
 	result := make([]providerstore.ArtifactDescriptor, 0, len(sources))
 	seen := map[canonical.Digest]bool{}
 	for _, source := range sources {
-		if !seen[source.ArtifactDigest] {
-			result = append(result, wheels[source.ArtifactDigest])
-			seen[source.ArtifactDigest] = true
+		if !seen[source.OutputArtifactDigest] {
+			result = append(result, wheels[source.OutputArtifactDigest])
+			seen[source.OutputArtifactDigest] = true
 		}
 	}
 	sort.Slice(result, func(left int, right int) bool { return result[left].LogicalPath < result[right].LogicalPath })

@@ -1,0 +1,2 @@
+kind: Changed
+body: Add an interactive environment build screen with retained results, direct dumb-terminal logs, package override correction and retry, unchanged-choice preservation, and deliberate two-Ctrl-C cancellation.

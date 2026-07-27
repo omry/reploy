@@ -1,0 +1,2 @@
+kind: Fixed
+body: Let the local project picker edit and select nested workspace-relative Python project paths.

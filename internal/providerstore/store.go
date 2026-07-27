@@ -163,6 +163,11 @@ func (store Store) publishArtifact(ctx context.Context, logicalPath string, kind
 	}); err != nil {
 		return ArtifactDescriptor{}, fmt.Errorf("publish provider store blob: %w", err)
 	}
+	if descriptor.Kind == "deb" {
+		if err := store.recordArtifactVerification(descriptor); err != nil {
+			return ArtifactDescriptor{}, fmt.Errorf("record provider artifact verification: %w", err)
+		}
+	}
 	return descriptor, nil
 }
 
@@ -461,6 +466,87 @@ func (store Store) VerifyArtifact(descriptor ArtifactDescriptor) error {
 		return err
 	}
 	return VerifyArtifactFile(path, descriptor)
+}
+
+// OpenVerifiedArtifact opens and hashes one immutable store artifact. The
+// returned descriptor-bound file remains stable if its store path is replaced;
+// callers that parse it should call VerifyOpenArtifact again before closing to
+// detect in-place modification during parsing.
+func (store Store) OpenVerifiedArtifact(descriptor ArtifactDescriptor) (*os.File, error) {
+	if err := descriptor.Validate(); err != nil {
+		return nil, err
+	}
+	path, err := store.BlobPath(descriptor.SHA256)
+	if err != nil {
+		return nil, err
+	}
+	hex := strings.TrimPrefix(string(descriptor.SHA256), "sha256:")
+	if err := store.requireDirectories("blobs", "sha256", hex[:2]); err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(store.root)
+	if err != nil {
+		return nil, fmt.Errorf("open provider store root: %w", err)
+	}
+	relative, err := filepath.Rel(store.root, path)
+	if err != nil {
+		_ = root.Close()
+		return nil, fmt.Errorf("resolve provider store artifact path: %w", err)
+	}
+	file, openErr := root.Open(relative)
+	closeRootErr := root.Close()
+	if openErr != nil {
+		return nil, fmt.Errorf("open provider store artifact: %w", errors.Join(openErr, closeRootErr))
+	}
+	if closeRootErr != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("close provider store root: %w", closeRootErr)
+	}
+	if err := VerifyOpenArtifact(file, descriptor); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return file, nil
+}
+
+// VerifyOpenArtifact hashes the exact open file rather than reopening its
+// pathname. It resets the file offset to the start before returning.
+func VerifyOpenArtifact(file *os.File, descriptor ArtifactDescriptor) error {
+	if file == nil {
+		return fmt.Errorf("verify open provider artifact requires a file")
+	}
+	if err := descriptor.Validate(); err != nil {
+		return err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("inspect open provider artifact: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("open provider artifact must be a regular file")
+	}
+	wantSize, err := strconv.ParseInt(descriptor.Size, 10, 64)
+	if err != nil {
+		return fmt.Errorf("parse artifact size: %w", err)
+	}
+	if info.Size() != wantSize {
+		return fmt.Errorf("open provider artifact size is %d, want %d", info.Size(), wantSize)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("seek open provider artifact: %w", err)
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return fmt.Errorf("hash open provider artifact: %w", err)
+	}
+	got := canonical.Digest(fmt.Sprintf("sha256:%x", hash.Sum(nil)))
+	if got != descriptor.SHA256 {
+		return fmt.Errorf("open provider artifact digest is %s, want %s", got, descriptor.SHA256)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("reset open provider artifact: %w", err)
+	}
+	return nil
 }
 
 // VerifyArtifactFile validates one regular file against an immutable artifact

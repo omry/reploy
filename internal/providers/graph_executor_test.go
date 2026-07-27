@@ -251,10 +251,11 @@ func TestExecuteProviderGraphValidatesResolutionBeforeMaterialization(t *testing
 func TestExecuteProviderGraphAcceptsPathFreeSourcesResolvedDuringNodePreparation(t *testing.T) {
 	input, resolution := validResolveContract(t)
 	source := ResolvedSourceInput{
-		Schema: ResolvedSourceInputSchemaV1, Component: "application", LogicalPackage: "demo",
-		SourceManifestDigest: testDigest("a"), BuilderProfile: "python-wheel-v1",
+		Schema: ResolvedSourceInputSchemaV2, Component: "application", LogicalPackage: "demo",
+		SourceInputDigest: testDigest("a"), SourceArtifactDigest: testDigest("c"),
+		BuildEnvironmentDigest: testDigest("d"), BuilderProfile: "python-wheel-v1",
 		BuildSettings:     providerData("python-source-build-settings-v1"),
-		EcosystemMetadata: providerData("python-source-metadata-v1"), ArtifactDigest: testDigest("b"),
+		EcosystemMetadata: providerData("python-source-metadata-v1"), OutputArtifactDigest: testDigest("b"),
 	}
 	input.SourceCandidates = []ResolvedSourceInput{source}
 	resolution.SelectedSources = []ResolvedSourceInput{source}
@@ -307,10 +308,11 @@ func TestExecuteProviderGraphRejectsPreparedSourceOwnedByAnotherNode(t *testing.
 	baseCatalog := []RealizedOutput{catalogOutput("base", "base", "python", "/usr/bin/python")}
 	baseCatalog[0].Candidate.Provenance = plan.Nodes[0].OutputDeclarations[0].Provenance
 	foreignSource := ResolvedSourceInput{
-		Schema: ResolvedSourceInputSchemaV1, Component: "other", LogicalPackage: "demo",
-		SourceManifestDigest: testDigest("a"), BuilderProfile: "python-wheel-v1",
+		Schema: ResolvedSourceInputSchemaV2, Component: "other", LogicalPackage: "demo",
+		SourceInputDigest: testDigest("a"), SourceArtifactDigest: testDigest("c"),
+		BuildEnvironmentDigest: testDigest("d"), BuilderProfile: "python-wheel-v1",
 		BuildSettings:     providerData("python-source-build-settings-v1"),
-		EcosystemMetadata: providerData("python-source-metadata-v1"), ArtifactDigest: testDigest("b"),
+		EcosystemMetadata: providerData("python-source-metadata-v1"), OutputArtifactDigest: testDigest("b"),
 	}
 
 	_, err := ExecuteProviderGraph(context.Background(), GraphExecutionRequest{

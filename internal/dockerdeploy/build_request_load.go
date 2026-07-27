@@ -6,15 +6,14 @@ import (
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
-	"github.com/omry/reploy/internal/providers/registry"
 )
 
 type LoadedBuildRequestV1 struct {
 	State            deploy.StateV1
 	Document         blueprint.Document
 	PackageOverrides deploy.PackageOverrideIntentV1
+	BaseImage        string
 	Request          providers.ResolvedRequestV1
-	Current          *deploy.BuildLockV1
 }
 
 // LoadBuildRequestV1 derives the canonical provider request from the desired
@@ -33,13 +32,14 @@ func LoadBuildRequestV1(
 		return LoadedBuildRequestV1{}, err
 	}
 	return loadBuildRequestWithInputsV1(
-		operation, deploy.EmptyPackageOverrideIntentV1(document.Environment.ID), sources, state, document,
+		operation, deploy.EmptyPackageOverrideIntentV1(document.Environment.ID), "", sources, state, document,
 	)
 }
 
 func LoadBuildRequestWithPackageOverridesV1(
 	operation *deploy.OperationLock,
 	packageOverrides deploy.PackageOverrideIntentV1,
+	baseImage string,
 	sources []providers.ResolvedSourceInput,
 ) (LoadedBuildRequestV1, error) {
 	if operation == nil {
@@ -52,40 +52,27 @@ func LoadBuildRequestWithPackageOverridesV1(
 	if err != nil {
 		return LoadedBuildRequestV1{}, err
 	}
-	return loadBuildRequestWithInputsV1(operation, packageOverrides, sources, state, document)
+	return loadBuildRequestWithInputsV1(operation, packageOverrides, baseImage, sources, state, document)
 }
 
 func loadBuildRequestWithInputsV1(
 	operation *deploy.OperationLock,
 	packageOverrides deploy.PackageOverrideIntentV1,
+	baseImage string,
 	sources []providers.ResolvedSourceInput,
 	state deploy.StateV1,
 	document blueprint.Document,
 ) (LoadedBuildRequestV1, error) {
-	request, err := BuildResolvedRequestWithPackageOverridesV1(
-		document, state.Overlay, packageOverrides, state.Platform,
+	request, err := BuildResolvedRequestWithOverridesV1(
+		document, state.Overlay, packageOverrides, baseImage, state.Platform,
 		append([]providers.ResolvedSourceInput{}, sources...),
 	)
 	if err != nil {
 		return LoadedBuildRequestV1{}, fmt.Errorf("load build request: %w", err)
 	}
-	var current *deploy.BuildLockV1
-	if state.Current != nil {
-		lock, found, err := operation.ReadBuildLock(state.Current.BuildLockDigest, registry.ValidateRequirementProfileV1)
-		if err != nil {
-			return LoadedBuildRequestV1{}, fmt.Errorf("load current build lock: %w", err)
-		}
-		if !found {
-			return LoadedBuildRequestV1{}, fmt.Errorf("current build lock %s is missing", state.Current.BuildLockDigest)
-		}
-		if err := validateGenerationBuildLock(*state.Current, lock, registry.ValidateRequirementProfileV1); err != nil {
-			return LoadedBuildRequestV1{}, fmt.Errorf("load current build lock: %w", err)
-		}
-		current = &lock
-	}
 	return LoadedBuildRequestV1{
 		State: state, Document: document, PackageOverrides: packageOverrides,
-		Request: request, Current: current,
+		BaseImage: baseImage, Request: request,
 	}, nil
 }
 

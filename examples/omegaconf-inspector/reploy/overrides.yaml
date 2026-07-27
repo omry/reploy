@@ -1,0 +1,8 @@
+environment:
+  id: omegaconf-inspector
+  vars:
+    workspace_root: ../../../..
+  package_overrides:
+    python:
+      omegaconf-inspector:
+        path: "{{ workspace_root }}/reploy/examples/omegaconf-inspector"

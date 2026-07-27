@@ -132,7 +132,7 @@ func decodeProfileFactsV1(data providers.CanonicalProviderData) (string, []provi
 		if source.Component != wire.Component {
 			return "", nil, fmt.Errorf("Python profile source targets component %q, want %q", source.Component, wire.Component)
 		}
-		if err := ValidateResolvedSourceInputV1(source); err != nil {
+		if err := ValidateResolvedSourceInputV2(source); err != nil {
 			return "", nil, err
 		}
 	}
@@ -163,16 +163,23 @@ func ValidateResolvedBundlePayloadV1(payload providers.ResolvedBundleIdentityV1)
 	} else if !equal {
 		return fmt.Errorf("Python bundle selected sources do not match its provider payload")
 	}
-	artifacts := make([]providerstore.ArtifactDescriptor, 0, len(bundle.Wheels)+1)
+	artifacts := make([]providerstore.ArtifactDescriptor, 0, len(bundle.Wheels)+len(bundle.Sources)+1)
 	artifacts = append(artifacts, bundle.Script)
 	for _, wheel := range bundle.Wheels {
 		artifacts = append(artifacts, wheel.Artifact)
+	}
+	for _, source := range bundle.Sources {
+		sourceArtifact, err := SourceArtifactDescriptorV2(source)
+		if err != nil {
+			return err
+		}
+		artifacts = append(artifacts, sourceArtifact)
 	}
 	sort.Slice(artifacts, func(left int, right int) bool { return artifacts[left].LogicalPath < artifacts[right].LogicalPath })
 	if equal, err := canonicalEqual(artifacts, payload.Artifacts); err != nil {
 		return err
 	} else if !equal {
-		return fmt.Errorf("Python bundle artifacts do not match its wheel payload")
+		return fmt.Errorf("Python bundle artifacts do not match its wheel and retained-source payload")
 	}
 	outputs := make([]providers.ResolvedOutput, 0, len(bundle.Outputs))
 	for _, output := range bundle.Outputs {

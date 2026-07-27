@@ -18,9 +18,11 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -167,7 +169,20 @@ func TestParseDockerBuildOptions(t *testing.T) {
 	}
 }
 
+func TestBuildOverrideUIAllowsOnlyInteractiveNondumbTerminals(t *testing.T) {
+	t.Setenv("CI", "")
+	t.Setenv("TERM", "xterm-256color")
+	if !buildOverrideUIAllowed(true, true) {
+		t.Fatal("interactive terminal did not enable the build screen")
+	}
+	t.Setenv("TERM", "dumb")
+	if buildOverrideUIAllowed(true, true) {
+		t.Fatal("dumb terminal enabled the interactive build screen")
+	}
+}
+
 func TestBuildCommandUsesReployProgressAndHidesBackendOutput(t *testing.T) {
+	t.Setenv("TERM", "dumb")
 	originalBuild := dockerProviderBuild
 	originalRuntime := dockerProviderBuildRuntime
 	t.Cleanup(func() {
@@ -224,15 +239,134 @@ func TestBuildCommandUsesReployProgressAndHidesBackendOutput(t *testing.T) {
 	}
 }
 
-func TestBuildWarningsSuppressSecretsUsedInArgOrEnv(t *testing.T) {
+func TestInteractiveBuildUsesOverrideValidationUIThenPromotesValidatedCandidate(t *testing.T) {
+	originalEnabled := buildOverrideUIEnabled
+	originalEditor := runOverrideEditor
+	originalBuild := dockerProviderBuild
+	originalRuntime := dockerProviderBuildRuntime
+	originalInspect := inspectStagedOverrideValidation
+	t.Cleanup(func() {
+		buildOverrideUIEnabled = originalEnabled
+		runOverrideEditor = originalEditor
+		dockerProviderBuild = originalBuild
+		dockerProviderBuildRuntime = originalRuntime
+		inspectStagedOverrideValidation = originalInspect
+	})
+	buildOverrideUIEnabled = func(io.Reader, io.Writer) bool { return true }
+	dockerProviderBuildRuntime = func() (dockerdeploy.StagedProviderBuildRuntimeV1, error) {
+		return dockerdeploy.StagedProviderBuildRuntimeV1{}, nil
+	}
+	stageDir := filepath.Join(t.TempDir(), "provider-stage")
+	writeCLITestStagedState(t, stageDir, "demo")
+	operation, err := deploy.AcquireOperationLock(t.Context(), stageDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := operation.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	inspectCalls := 0
+	inspectStagedOverrideValidation = func(context.Context, string) (dockerdeploy.StagedOverrideValidationV1, error) {
+		inspectCalls++
+		return dockerdeploy.StagedOverrideValidationV1{Validated: inspectCalls > 1}, nil
+	}
+	var editorConfig overrideui.Config
+	var buildOutcome *overrideui.BuildOutcome
+	runOverrideEditor = func(config overrideui.Config) (overrideui.Result, error) {
+		editorConfig = config
+		result, err := config.Validate(t.Context(), io.Discard)
+		if err != nil {
+			return overrideui.Result{}, err
+		}
+		buildOutcome = result.Build
+		return overrideui.Result{Validated: true}, nil
+	}
+	buildCalls := 0
+	dockerProviderBuild = func(_ context.Context, input dockerdeploy.ProviderBuildRunInputV1) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
+		buildCalls++
+		if input.ValidateChoices {
+			if !input.NoCache || !input.ValidateLayers {
+				t.Fatalf("validation UI did not honor build flags: %#v", input)
+			}
+			return dockerdeploy.LockedProviderBuildExecutionResultV1{}, nil
+		}
+		if input.NoCache || input.ValidateLayers {
+			t.Fatalf("promotion unexpectedly rebuilt validated choices: %#v", input)
+		}
+		return cliTestProviderBuildResult(t, stageDir, false), nil
+	}
+
+	code, stdout, stderr := runCLI("build", "--dir", stageDir, "--no-cache", "--validate-layers")
+	if code != 0 || buildCalls != 2 {
+		t.Fatalf("code/buildCalls/stdout/stderr = %d/%d/%q/%q", code, buildCalls, stdout, stderr)
+	}
+	if !editorConfig.AutoValidate || !editorConfig.BuildMode || editorConfig.ExitOnValid || editorConfig.Validate == nil {
+		t.Fatalf("interactive build editor config = %#v", editorConfig)
+	}
+	if editorConfig.Input == nil || editorConfig.Output == nil {
+		t.Fatalf("interactive build terminal streams = %#v", editorConfig)
+	}
+	if buildOutcome == nil || buildOutcome.Image != "sha256:demo-image" || buildOutcome.Environment != "demo" {
+		t.Fatalf("interactive build outcome = %#v", buildOutcome)
+	}
+}
+
+func TestInteractiveBuildCancellationDoesNotFallThroughToBackendBuild(t *testing.T) {
+	originalEnabled := buildOverrideUIEnabled
+	originalEditor := runOverrideEditor
+	originalBuild := dockerProviderBuild
+	t.Cleanup(func() {
+		buildOverrideUIEnabled = originalEnabled
+		runOverrideEditor = originalEditor
+		dockerProviderBuild = originalBuild
+	})
+	buildOverrideUIEnabled = func(io.Reader, io.Writer) bool { return true }
+	stageDir := filepath.Join(t.TempDir(), "provider-stage")
+	writeCLITestStagedState(t, stageDir, "demo")
+	operation, err := deploy.AcquireOperationLock(t.Context(), stageDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := operation.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	runOverrideEditor = func(overrideui.Config) (overrideui.Result, error) {
+		return overrideui.Result{Canceled: true}, nil
+	}
+	dockerProviderBuild = func(context.Context, dockerdeploy.ProviderBuildRunInputV1) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
+		t.Fatal("backend build ran after the validation UI was canceled")
+		return dockerdeploy.LockedProviderBuildExecutionResultV1{}, nil
+	}
+
+	code, stdout, stderr := runCLI("build", "--dir", stageDir)
+	if code != 130 || stdout != "" || !strings.Contains(stderr, "reploy build canceled") {
+		t.Fatalf("code/stdout/stderr = %d/%q/%q", code, stdout, stderr)
+	}
+}
+
+func TestBuildWarningsSuppressExpectedSuccessfulWarnings(t *testing.T) {
 	output := strings.Join([]string{
 		`- SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data (ENV "FIRST_TOKEN")`,
 		`- SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data (ARG "SECOND_TOKEN")`,
+		`W: Download is performed unsandboxed as root as file '/tmp/reploy-apt-resolve/lists/partial/example' couldn't be accessed by user '_apt'. - pkgAcquire::Run (13: Permission denied)`,
+		`W: Could not open lock file /var/lib/dpkg/lock-frontend - open (13: Permission denied)`,
+		`W: Repository metadata will expire soon`,
 		`- UndefinedVar: Usage of undefined variable '$MISSING'`,
 	}, "\n")
-	warnings := buildWarnings(output)
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "Docker check UndefinedVar") {
+	warnings := buildWarnings(output, true)
+	if len(warnings) != 2 {
 		t.Fatalf("warnings = %#v", warnings)
+	}
+	for _, want := range []string{"Docker check UndefinedVar", "APT: Repository metadata will expire soon"} {
+		if !slices.ContainsFunc(warnings, func(warning string) bool { return strings.Contains(warning, want) }) {
+			t.Fatalf("unrelated warning %q was lost: %#v", want, warnings)
+		}
+	}
+	failedWarnings := buildWarnings(output, false)
+	if !slices.ContainsFunc(failedWarnings, func(warning string) bool {
+		return strings.Contains(warning, "unsandboxed as root")
+	}) {
+		t.Fatalf("failed-build resolver warning was lost: %#v", failedWarnings)
 	}
 }
 
@@ -240,6 +374,7 @@ func TestBuildFailureDiagnosticTranslatesProviderFailures(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		output string
+		err    error
 		want   string
 	}{
 		{
@@ -252,16 +387,49 @@ func TestBuildFailureDiagnosticTranslatesProviderFailures(t *testing.T) {
 		},
 		{
 			name: "python resolution", output: "ERROR: Could not find a version that satisfies the requirement demo==99",
-			want: "environment build failed: Could not find a version",
+			want: "Python package resolution failed: Could not find a version",
+		},
+		{
+			name: "python resolution retained only in error chain",
+			err: errors.New(
+				"execute provider graph: prepare provider node \"python/application\": fresh Python resolution failed: " +
+					"resolve wheels Python resolver container for linux/amd64: docker failed: exit status 1\n" +
+					"command output:\nERROR: No matching distribution found for omegaconf-inspector",
+			),
+			want: "Python package resolution failed: No matching distribution found for omegaconf-inspector",
+		},
+		{
+			name: "unclassified Python build backend failure retains operation and output",
+			err: errors.New(
+				"execute provider graph: prepare provider node \"python/application\": fresh Python resolution failed: " +
+					"local Python source sdist build failed: build source distribution Python resolver container for linux/amd64: " +
+					"\x1b[31mdocker failed: exit status 1\x1b[0m\rcommand output:\r" +
+					"\x1b[1m× Failed to build `/reploy/source-build/omegaconf`\x1b[0m\a\b\x00\x7f\u009b\u202e\r" +
+					"╰─▶ FileNotFoundError: [Errno 2] No such file or directory: 'java'",
+			),
+			want: "build source distribution Python resolver container for linux/amd64",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got := buildFailureDiagnostic(errors.New("docker failed: exit status 1"), test.output)
+			buildErr := test.err
+			if buildErr == nil {
+				buildErr = errors.New("docker failed: exit status 1")
+			}
+			got := buildFailureDiagnostic(buildErr, test.output)
 			if !strings.Contains(got, test.want) {
 				t.Fatalf("diagnostic = %q, want substring %q", got, test.want)
 			}
 			if strings.Contains(got, "docker failed") {
 				t.Fatalf("diagnostic leaked backend process failure: %q", got)
+			}
+			if strings.IndexFunc(got, func(char rune) bool {
+				return char != '\n' && (unicode.IsControl(char) || unicode.In(char, unicode.Cf))
+			}) >= 0 {
+				t.Fatalf("diagnostic retained terminal controls: %q", got)
+			}
+			if test.name == "unclassified Python build backend failure retains operation and output" &&
+				!strings.Contains(got, "FileNotFoundError") {
+				t.Fatalf("diagnostic lost backend output: %q", got)
 			}
 		})
 	}
@@ -1964,7 +2132,8 @@ func TestPackageOverridesHelp(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Usage: reploy overrides [OPTIONS]",
-		"Existing package-overrides.yaml content is loaded automatically.",
+		"Existing overrides.yaml content is loaded automatically.",
+		"enter an exact image name",
 		"workspace root is optional and unset by default",
 		"--dir DIR",
 	} {
@@ -1988,9 +2157,9 @@ func TestPackageOverridesOpensEditorForStagedDeployment(t *testing.T) {
 	original := runOverrideEditor
 	t.Cleanup(func() { runOverrideEditor = original })
 	var received overrideui.Config
-	runOverrideEditor = func(config overrideui.Config) error {
+	runOverrideEditor = func(config overrideui.Config) (overrideui.Result, error) {
 		received = config
-		return nil
+		return overrideui.Result{}, nil
 	}
 
 	code, stdout, stderr = runCLI("overrides", "--dir", deployDir)
@@ -2018,6 +2187,90 @@ func TestPackageOverridesOpensEditorForStagedDeployment(t *testing.T) {
 	}
 	if received.DeploymentDir != "." {
 		t.Fatalf("implicit deployment dir = %q, want current staging directory", received.DeploymentDir)
+	}
+}
+
+func TestPackageOverridesValidationRequiresAuthoritativeTrialResult(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	originalEditor := runOverrideEditor
+	originalBuild := dockerProviderBuild
+	originalRuntime := dockerProviderBuildRuntime
+	originalInspect := inspectStagedOverrideValidation
+	t.Cleanup(func() {
+		runOverrideEditor = originalEditor
+		dockerProviderBuild = originalBuild
+		dockerProviderBuildRuntime = originalRuntime
+		inspectStagedOverrideValidation = originalInspect
+	})
+
+	var received overrideui.Config
+	runOverrideEditor = func(config overrideui.Config) (overrideui.Result, error) {
+		received = config
+		return overrideui.Result{}, nil
+	}
+	dockerProviderBuildRuntime = func() (dockerdeploy.StagedProviderBuildRuntimeV1, error) {
+		return dockerdeploy.StagedProviderBuildRuntimeV1{
+			Host: blueprint.HostLinux,
+			UID:  1000,
+			GID:  1000,
+		}, nil
+	}
+	var buildInput dockerdeploy.ProviderBuildRunInputV1
+	dockerProviderBuild = func(
+		_ context.Context,
+		input dockerdeploy.ProviderBuildRunInputV1,
+	) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
+		buildInput = input
+		return dockerdeploy.LockedProviderBuildExecutionResultV1{}, nil
+	}
+	inspectCalls := 0
+	inspectStagedOverrideValidation = func(
+		context.Context,
+		string,
+	) (dockerdeploy.StagedOverrideValidationV1, error) {
+		inspectCalls++
+		return dockerdeploy.StagedOverrideValidationV1{
+			Validated: inspectCalls > 1,
+			Packages: []dockerdeploy.OverrideDiscoveredPackageV1{{
+				Provider: "python",
+				Package:  "dependency",
+			}},
+		}, nil
+	}
+
+	code, stdout, stderr = runCLI("overrides", "--dir", deployDir)
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("overrides = %d/%q/%q", code, stdout, stderr)
+	}
+	if received.Validate == nil {
+		t.Fatal("override editor validation action was not configured")
+	}
+	result, err := received.Validate(t.Context(), io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !buildInput.ValidateChoices || buildInput.DeploymentDir != deployDir {
+		t.Fatalf("trial build input = %#v", buildInput)
+	}
+	if len(result.Packages) != 1 || result.Packages[0].Package != "dependency" {
+		t.Fatalf("validation result = %#v", result)
+	}
+
+	inspectStagedOverrideValidation = func(
+		context.Context,
+		string,
+	) (dockerdeploy.StagedOverrideValidationV1, error) {
+		return dockerdeploy.StagedOverrideValidationV1{}, nil
+	}
+	if _, err := received.Validate(t.Context(), io.Discard); err == nil ||
+		!strings.Contains(err.Error(), "without a matching validated result") {
+		t.Fatalf("missing authoritative result error = %v", err)
 	}
 }
 
@@ -3094,8 +3347,23 @@ func TestDockerStageEnvironmentBlueprintCreatesAndRestagesOnlyStateV1(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != dockerdeploy.ReployInternalDir || !entries[0].IsDir() {
+	if len(entries) != 2 ||
+		entries[0].Name() != dockerdeploy.ReployInternalDir ||
+		!entries[0].IsDir() ||
+		entries[1].Name() != deploy.PackageOverridesFilename {
 		t.Fatalf("staging entries = %#v", entries)
+	}
+	overrides, found, err := deploy.ReadPackageOverridesV1(deployDir)
+	if err != nil || !found {
+		t.Fatalf("read imported package overrides: found=%v err=%v", found, err)
+	}
+	wantLocalProject := filepath.Clean(filepath.Join(filepath.Dir(blueprintPath), ".."))
+	wantWorkspace := filepath.Clean(filepath.Join(wantLocalProject, "..", "..", ".."))
+	if got := overrides.Environment.Vars["workspace_root"]; got != wantWorkspace {
+		t.Fatalf("imported workspace root = %#v, want %q", got, wantWorkspace)
+	}
+	if got := overrides.Environment.PackageOverrides["python"]["omegaconf-inspector"].Path; got != "{{ workspace_root }}/reploy/examples/omegaconf-inspector" {
+		t.Fatalf("imported local project path = %q", got)
 	}
 	internalEntries, err := os.ReadDir(filepath.Join(deployDir, dockerdeploy.ReployInternalDir))
 	if err != nil {

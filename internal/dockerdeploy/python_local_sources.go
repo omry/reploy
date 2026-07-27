@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
@@ -15,7 +16,7 @@ import (
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
 )
 
-const pythonSourceManifestSchemaV1 = pythonprovider.SourceManifestSchemaV1
+const pythonSourceManifestSchemaV1 = pythonprovider.SourceInputManifestSchemaV1
 
 // PythonLocalOverrideV1 is an uninterpreted, staging-only physical locator.
 // Constructing it never accesses HostDir; source observation is demand-driven
@@ -27,13 +28,14 @@ type PythonLocalOverrideV1 struct {
 }
 
 // PythonLocalSource is a staging-only physical locator paired with the
-// path-free source manifest that later Python preparation turns into a wheel.
-// HostDir and Manifest never cross into the provider graph or build lock.
+// path-free provisional source input from which Python packaging defines a
+// retained sdist. HostDir and Manifest never cross into the provider graph or
+// build lock.
 type PythonLocalSource struct {
-	Distribution         string
-	HostDir              string
-	Manifest             PythonSourceManifestV1
-	SourceManifestDigest canonical.Digest
+	Distribution      string
+	HostDir           string
+	Manifest          PythonSourceManifestV1
+	SourceInputDigest canonical.Digest
 }
 
 type PythonSourceManifestV1 struct {
@@ -120,19 +122,19 @@ func ObserveSelectedPythonLocalSources(
 		}
 		manifest, digest, err := ObservePythonSourceManifest(hostDir)
 		if err != nil {
-			return nil, fmt.Errorf("local Python override %q source manifest: %w", override.Distribution, err)
+			return nil, fmt.Errorf("local Python override %q source input: %w", override.Distribution, err)
 		}
 		sources = append(sources, PythonLocalSource{
 			Distribution: override.Distribution, HostDir: hostDir,
-			Manifest: manifest, SourceManifestDigest: digest,
+			Manifest: manifest, SourceInputDigest: digest,
 		})
 	}
 	return sources, nil
 }
 
-// ObservePythonSourceManifest records only source inputs exposed to the v1
-// builder snapshot. Generated development directories and bytecode are omitted
-// from both the manifest and that later snapshot.
+// ObservePythonSourceManifest records the complete immutable input exposed to
+// the build backend, excluding only repository metadata that v1 deliberately
+// withholds. Packaging metadata, not a Reploy ignore list, defines the sdist.
 func ObservePythonSourceManifest(sourceDir string) (PythonSourceManifestV1, canonical.Digest, error) {
 	realSource, err := resolveRealPythonSourceDirectory(sourceDir)
 	if err != nil {
@@ -150,10 +152,10 @@ func ObservePythonSourceManifest(sourceDir string) (PythonSourceManifestV1, cano
 			return nil
 		}
 		name := entry.Name()
-		if entry.IsDir() && ignoredPythonSourceDirectory(name) {
-			return filepath.SkipDir
-		}
-		if !entry.IsDir() && (strings.HasSuffix(name, ".pyc") || strings.HasSuffix(name, ".pyo")) {
+		if ignoredPythonSourceEntry(name) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		relative, err := filepath.Rel(realSource, filename)
@@ -183,15 +185,8 @@ func ObservePythonSourceManifest(sourceDir string) (PythonSourceManifestV1, cano
 			if err != nil {
 				return err
 			}
-			if filepath.IsAbs(target) {
-				return fmt.Errorf("source symlink %q has an absolute target", manifestEntry.Path)
-			}
-			resolved, err := filepath.EvalSymlinks(filename)
-			if err != nil {
-				return fmt.Errorf("resolve source symlink %q: %w", manifestEntry.Path, err)
-			}
-			if err := requirePathWithinPythonWorkspace(realSource, resolved); err != nil {
-				return fmt.Errorf("source symlink %q: %w", manifestEntry.Path, err)
+			if !utf8.ValidString(target) || strings.ContainsRune(target, 0) {
+				return fmt.Errorf("source symlink %q has an invalid target", manifestEntry.Path)
 			}
 			manifestEntry.LinkTarget = filepath.ToSlash(target)
 		default:
@@ -203,9 +198,19 @@ func ObservePythonSourceManifest(sourceDir string) (PythonSourceManifestV1, cano
 	if err != nil {
 		return PythonSourceManifestV1{}, "", err
 	}
+	sort.Slice(manifest.Entries, func(left int, right int) bool {
+		return manifest.Entries[left].Path < manifest.Entries[right].Path
+	})
+	if err := validatePythonSourceManifestV1(manifest); err != nil {
+		return PythonSourceManifestV1{}, "", fmt.Errorf(
+			"construct canonical Python source manifest for %q: %w",
+			realSource,
+			err,
+		)
+	}
 	digest, err := canonical.Sum("python-source-manifest", pythonSourceManifestSchemaV1, manifest)
 	if err != nil {
-		return PythonSourceManifestV1{}, "", fmt.Errorf("digest Python source manifest: %w", err)
+		return PythonSourceManifestV1{}, "", fmt.Errorf("digest Python source input: %w", err)
 	}
 	return manifest, digest, nil
 }
@@ -245,12 +250,12 @@ func requirePathWithinPythonWorkspace(root string, candidate string) error {
 	return nil
 }
 
-func ignoredPythonSourceDirectory(name string) bool {
+func ignoredPythonSourceEntry(name string) bool {
 	switch name {
-	case ".git", ".hg", ".jj", ".mypy_cache", ".nox", ".pytest_cache", ".ruff_cache", ".sl", ".tox", ".venv", "__pycache__", "node_modules":
+	case ".git", ".hg", ".jj", ".sl":
 		return true
 	default:
-		return strings.HasSuffix(name, ".egg-info")
+		return false
 	}
 }
 

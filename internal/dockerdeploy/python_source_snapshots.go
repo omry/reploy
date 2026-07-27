@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
@@ -20,10 +21,10 @@ import (
 const pythonSourceSnapshotDirectory = "sources"
 
 type PreparedPythonSourceSnapshot struct {
-	Distribution         string
-	HostDir              string
-	ContainerDir         string
-	SourceManifestDigest canonical.Digest
+	Distribution      string
+	HostDir           string
+	ContainerDir      string
+	SourceInputDigest canonical.Digest
 }
 
 // StagePythonLocalSourceSnapshots copies exactly the entries covered by
@@ -61,17 +62,20 @@ func StagePythonLocalSourceSnapshots(
 				err = errors.Join(err, os.Remove(snapshotRoot))
 			}
 		}
-		if !rootCreated || err == nil {
-			if protectErr := os.Chmod(snapshotRoot, 0o500); protectErr != nil {
-				err = errors.Join(err, fmt.Errorf("protect Python source snapshot root: %w", protectErr))
-				snapshots = nil
-			}
+		if protectErr := os.Chmod(snapshotRoot, 0o500); protectErr != nil && !errors.Is(protectErr, os.ErrNotExist) {
+			err = errors.Join(err, fmt.Errorf("protect Python source snapshot root: %w", protectErr))
+			snapshots = nil
 		}
 		if protectErr := os.Chmod(prepared.InputHostDir, 0o500); protectErr != nil {
 			err = errors.Join(err, fmt.Errorf("restore Python resolver input protection: %w", protectErr))
 			snapshots = nil
 		}
 	}()
+	previousDistributionRoot := filepath.Join(prepared.InputHostDir, pythonSourceDistributionDirectory)
+	makePythonResolverWorkspaceRemovable(previousDistributionRoot)
+	if err := os.RemoveAll(previousDistributionRoot); err != nil {
+		return nil, fmt.Errorf("clear prior retained Python source distribution inputs: %w", err)
+	}
 	info, statErr := os.Lstat(snapshotRoot)
 	switch {
 	case errors.Is(statErr, os.ErrNotExist):
@@ -103,8 +107,8 @@ func StagePythonLocalSourceSnapshots(
 		}
 		snapshots = append(snapshots, PreparedPythonSourceSnapshot{
 			Distribution: source.Distribution, HostDir: hostDir,
-			ContainerDir:         path.Join(prepared.InputContainerDir, pythonSourceSnapshotDirectory, source.Distribution),
-			SourceManifestDigest: source.SourceManifestDigest,
+			ContainerDir:      path.Join(prepared.InputContainerDir, pythonSourceSnapshotDirectory, source.Distribution),
+			SourceInputDigest: source.SourceInputDigest,
 		})
 	}
 	return snapshots, nil
@@ -132,13 +136,18 @@ func validatePythonLocalSourcesForSnapshot(sources []PythonLocalSource) error {
 			return fmt.Errorf("local Python source %q host directory must be fully resolved", source.Distribution)
 		}
 		if err := validatePythonSourceManifestV1(source.Manifest); err != nil {
-			return fmt.Errorf("local Python source %q manifest: %w", source.Distribution, err)
+			return fmt.Errorf(
+				"prepare immutable snapshot for local Python source %q from %q: invalid source manifest: %w",
+				source.Distribution,
+				source.HostDir,
+				err,
+			)
 		}
 		digest, err := canonical.Sum("python-source-manifest", pythonSourceManifestSchemaV1, source.Manifest)
 		if err != nil {
 			return fmt.Errorf("local Python source %q manifest digest: %w", source.Distribution, err)
 		}
-		if digest != source.SourceManifestDigest {
+		if digest != source.SourceInputDigest {
 			return fmt.Errorf("local Python source %q manifest digest does not match its entries", source.Distribution)
 		}
 	}
@@ -159,7 +168,13 @@ func validatePythonSourceManifestV1(manifest PythonSourceManifestV1) error {
 			return fmt.Errorf("entry %d has unsafe path %q", index, entry.Path)
 		}
 		if index > 0 && manifest.Entries[index-1].Path >= entry.Path {
-			return fmt.Errorf("entries must be unique and sorted by path")
+			return fmt.Errorf(
+				"entry %d path %q is not strictly after entry %d path %q; entries must be unique and sorted so the local source has a stable content digest",
+				index,
+				entry.Path,
+				index-1,
+				manifest.Entries[index-1].Path,
+			)
 		}
 		if _, found := directories[path.Dir(entry.Path)]; !found {
 			return fmt.Errorf("entry %q has no recorded parent directory", entry.Path)
@@ -187,12 +202,8 @@ func validatePythonSourceManifestV1(manifest PythonSourceManifestV1) error {
 			if entry.Mode != "" || entry.ContentDigest != "" {
 				return fmt.Errorf("symlink %q has file metadata", entry.Path)
 			}
-			if entry.LinkTarget == "" || path.IsAbs(entry.LinkTarget) || strings.ContainsAny(entry.LinkTarget, `\:`) {
-				return fmt.Errorf("symlink %q has unsafe target %q", entry.Path, entry.LinkTarget)
-			}
-			resolved := path.Clean(path.Join(path.Dir(entry.Path), entry.LinkTarget))
-			if resolved == ".." || strings.HasPrefix(resolved, "../") {
-				return fmt.Errorf("symlink %q target escapes the source root", entry.Path)
+			if entry.LinkTarget == "" || !utf8.ValidString(entry.LinkTarget) || strings.ContainsRune(entry.LinkTarget, 0) {
+				return fmt.Errorf("symlink %q has an invalid target", entry.Path)
 			}
 		default:
 			return fmt.Errorf("entry %q has unsupported kind %q", entry.Path, entry.Kind)
@@ -272,7 +283,7 @@ func stageOnePythonSourceSnapshot(source PythonLocalSource, destination string) 
 	if err != nil {
 		return err
 	}
-	if digest != source.SourceManifestDigest || !reflect.DeepEqual(observed, source.Manifest) {
+	if digest != source.SourceInputDigest || !reflect.DeepEqual(observed, source.Manifest) {
 		return fmt.Errorf("prepared snapshot does not match its source manifest")
 	}
 	return nil

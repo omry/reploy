@@ -1,7 +1,10 @@
 package dockerdeploy
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -212,11 +215,29 @@ func TestPreparedPythonNodeOperationsBuildsOnlySelectedLocalSource(t *testing.T)
 	}
 	defer cleanup()
 	localSources := sourceWheelTestLocalSources(t, "demo-server")
+	if err := os.WriteFile(
+		filepath.Join(localSources[0].HostDir, LocalSourceRecipeFilename),
+		[]byte("schema: 1\nproject: demo-server\ntype: python\nbuild: pep517\nrequires: []\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	localSources[0].Manifest, localSources[0].SourceInputDigest, err = ObservePythonSourceManifest(localSources[0].HostDir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	workCalls := 0
 	commands := stubPythonInterpreterSelectionCommands(t, mustCanonicalProbeResponse(t, interpreterResponse), []string{"3.13.2\n"}, func() error {
 		workCalls++
-		output := filepath.Join(artifacts.OutputHostDir, "demo_server-1.0-py3-none-any.whl")
 		if workCalls == 1 {
+			writeDockerdeployTestSourceDistribution(
+				t, filepath.Join(artifacts.OutputHostDir, "demo_server-1.0.tar.gz"),
+				"demo_server-1.0", "demo-server", "1.0",
+			)
+			return nil
+		}
+		output := filepath.Join(artifacts.OutputHostDir, "demo_server-1.0-py3-none-any.whl")
+		if workCalls == 2 {
 			writePythonIntegrationWheel(t, output)
 			return nil
 		}
@@ -253,8 +274,8 @@ func TestPreparedPythonNodeOperationsBuildsOnlySelectedLocalSource(t *testing.T)
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if workCalls != 2 {
-		t.Fatalf("source build and resolver calls = %d, commands = %#v", workCalls, *commands)
+	if workCalls != 3 {
+		t.Fatalf("sdist, wheel, and resolver calls = %d, commands = %#v", workCalls, *commands)
 	}
 	pipCalls := 0
 	for _, command := range *commands {
@@ -266,11 +287,15 @@ func TestPreparedPythonNodeOperationsBuildsOnlySelectedLocalSource(t *testing.T)
 		t.Fatalf("pip calls = %d, commands = %#v", pipCalls, *commands)
 	}
 	if len(resolution.SelectedSources) != 1 || resolution.SelectedSources[0].LogicalPackage != "demo-server" ||
-		resolution.SelectedSources[0].SourceManifestDigest != localSources[0].SourceManifestDigest {
+		resolution.SelectedSources[0].SourceInputDigest != localSources[0].SourceInputDigest {
 		t.Fatalf("selected sources = %#v", resolution.SelectedSources)
 	}
+	if resolution.SelectedSources[0].BuilderProfile != pythonprovider.SourceBuilderProfileV2 ||
+		resolution.SelectedSources[0].BuildSettings.Value["build_type"] != pythonprovider.SourceBuildTypePEP517 {
+		t.Fatalf("selected source recipe identity = %#v", resolution.SelectedSources[0])
+	}
 	if len(resolution.Bundle.Payload.SelectedSources) != 1 ||
-		resolution.Bundle.Payload.SelectedSources[0].ArtifactDigest != resolution.SelectedSources[0].ArtifactDigest {
+		resolution.Bundle.Payload.SelectedSources[0].OutputArtifactDigest != resolution.SelectedSources[0].OutputArtifactDigest {
 		t.Fatalf("bundle selected sources = %#v", resolution.Bundle.Payload.SelectedSources)
 	}
 	if overrides := resolution.Bundle.Payload.Request.Value["overrides"].([]any); len(overrides) != 1 {
@@ -283,6 +308,101 @@ func TestPreparedPythonNodeOperationsBuildsOnlySelectedLocalSource(t *testing.T)
 		if !strings.Contains(progress.String(), want) {
 			t.Fatalf("progress missing %q:\n%s", want, progress.String())
 		}
+	}
+}
+
+func TestPreparedPythonNodeOperationsRequestsToolsFromSelectedRecipeBeforeBuild(t *testing.T) {
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts, cleanup, err := PreparePythonResolverArtifacts(store, []providerstore.ArtifactDescriptor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	sourceDir := t.TempDir()
+	for name, content := range map[string]string{
+		"setup.py":                "from setuptools import setup\n",
+		"pyproject.toml":          "[tool.ruff]\n",
+		LocalSourceRecipeFilename: "schema: 1\nproject: omegaconf\ntype: python\nbuild: setuptools-legacy\nrequires: [tool:java]\n",
+	} {
+		if err := os.WriteFile(filepath.Join(sourceDir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	session := &PythonResolverSession{artifacts: artifacts, buildTools: []PortableBuildToolEvidenceV1{}}
+	operations := PreparedPythonNodeOperations{Store: store, Artifacts: artifacts}
+	_, _, err = operations.materializeLocalOverrides(
+		context.Background(), session,
+		providers.ValidatedExecutableInput{}, providers.ExecutableRequirement{},
+		providers.ExecutableEvidence{}, rendererDigest("a"), "application",
+		[]PythonLocalOverrideV1{{Distribution: "omegaconf", HostDir: sourceDir}},
+		[]providers.ResolvedSourceInput{}, []providerstore.ArtifactDescriptor{},
+	)
+	var required *pythonBuildToolsRequiredError
+	if !errors.As(err, &required) || !reflect.DeepEqual(required.Tools, []string{"java"}) {
+		t.Fatalf("tool requirement error = %v", err)
+	}
+	entries, readErr := os.ReadDir(artifacts.OutputHostDir)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("project build ran before Java was prepared: %#v", entries)
+	}
+}
+
+func writeDockerdeployTestSourceDistribution(
+	t *testing.T,
+	filename string,
+	root string,
+	distribution string,
+	version string,
+) {
+	t.Helper()
+	file, err := os.Create(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressed := gzip.NewWriter(file)
+	archive := tar.NewWriter(compressed)
+	entries := []struct {
+		name    string
+		kind    byte
+		content string
+	}{
+		{name: root + "/", kind: tar.TypeDir},
+		{name: root + "/pyproject.toml", kind: tar.TypeReg, content: "[build-system]\n"},
+		{name: root + "/PKG-INFO", kind: tar.TypeReg, content: "Name: " + distribution + "\nVersion: " + version + "\n\n"},
+		{name: root + "/demo_server.py", kind: tar.TypeReg, content: "def main():\n    pass\n"},
+	}
+	for _, entry := range entries {
+		mode := int64(0o644)
+		size := int64(len(entry.content))
+		if entry.kind == tar.TypeDir {
+			mode = 0o755
+			size = 0
+		}
+		if err := archive.WriteHeader(&tar.Header{
+			Name: entry.name, Typeflag: entry.kind, Mode: mode, Size: size, Format: tar.FormatPAX,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if entry.kind == tar.TypeReg {
+			if _, err := archive.Write([]byte(entry.content)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := compressed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

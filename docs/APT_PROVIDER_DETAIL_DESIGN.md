@@ -294,14 +294,15 @@ syntax error, or payload that does not match the component type rejects the
 whole command and leaves the overlay unchanged.
 
 Staging package overrides are not blueprint or request-overlay entries. A
-staging directory may contain `package-overrides.yaml`, an explicit sparse
+staging directory may contain `overrides.yaml`, an explicit sparse
 environment overlay whose `environment.id` must match the retained blueprint.
 For each provider-owned package identifier it selects exactly one local `path`
 or upstream `version`. During `reploy build`, inspection of a selected local
 source produces a `ResolvedSourceInput`
-containing the source-manifest digest, builder/toolchain profile, settings,
-ecosystem metadata, and built-artifact digest. The resolved request and its
-digest live in the build lock; the physical source path does not.
+containing the source-input digest, retained source-artifact digest,
+build-environment digest, builder/toolchain profile, settings, ecosystem
+metadata, and output-artifact digest. The resolved request and its digest live
+in the build lock; the physical source path does not.
 
 The resolver consults a mapping only after the blueprint or dependency closure
 requires its normalized package identifier. A match takes precedence over the
@@ -329,36 +330,64 @@ shaded background; override-only mappings appear afterward.
 
 ```go
 type ResolvedSourceInput struct {
-    Schema               string
-    Component            string
-    LogicalPackage       string
-    SourceManifestDigest canonical.Digest
-    BuilderProfile       string
-    BuildSettings        CanonicalProviderData
-    EcosystemMetadata    CanonicalProviderData
-    ArtifactDigest       canonical.Digest
+    Schema                 string
+    Component              string
+    LogicalPackage         string
+    SourceInputDigest      canonical.Digest
+    SourceArtifactDigest   canonical.Digest
+    BuildEnvironmentDigest canonical.Digest
+    BuilderProfile         string
+    BuildSettings          CanonicalProviderData
+    EcosystemMetadata      CanonicalProviderData
+    OutputArtifactDigest   canonical.Digest
 }
 ```
 
-`Schema` is `resolved-source-input-v1`. Records are unique and sorted by
+`Schema` is `resolved-source-input-v2`. Records are unique and sorted by
 `(component, logical package)`. Both provider-owned values must have recognized
 schemas. Source roots and host paths are used only while producing these
 content-bound values and are absent from the record.
 
-The Python `python-source-manifest-v1` observer records sorted relative paths,
-entry kinds, regular-file content digests, portable permission bits, and safe
-relative symlink targets. It omits version-control metadata, common generated
-development environments and caches, `node_modules`, `.egg-info` directories,
-and Python bytecode. A source symlink whose resolved target escapes the source
-root is rejected. The source builder receives a snapshot containing exactly
-the recorded entries, so ignored or unrecorded host content cannot affect the
-built wheel.
+The Python `python-source-input-manifest-v1` observer records sorted relative
+paths, entry kinds, regular-file content digests, portable permission bits, and
+symbolic-link text. It omits only Git, Mercurial, Sapling, and Jujutsu metadata.
+Generated environments, caches, `node_modules`, `.egg-info` directories, and
+Python bytecode remain visible to the declared build backend so Python
+packaging metadata, not Reploy, defines what enters the package.
 
 V1 does not expose Git, Mercurial, Sapling, or Jujutsu repository metadata to
 source builds. A project whose version or file list requires live VCS metadata
-must provide a build fallback that works from an ordinary source snapshot.
+must provide a build fallback that works from an ordinary source input.
 Explicit opt-in VCS metadata support is deferred until a concrete package needs
 it.
+
+The provider copies that complete input into the disposable resolver's
+read-only mount, then uses the selected interpreter and pinned
+`uv==0.11.26` frontend with `--no-sources` to ask the declared backend for
+exactly one sdist. The resolver retains its read-only root filesystem, private
+tmpfs scratch, clean environment, default build network, and absence of host
+credentials and the Docker socket. Failure to produce an sdist is an error;
+there is no direct-wheel fallback. Legacy `setup.py` projects remain supported
+when the frontend's setuptools compatibility can produce a valid sdist.
+
+Before publication, Reploy requires a bounded regular `.tar.gz` archive with
+one normalized package root, root `PKG-INFO`, and either `pyproject.toml` or a
+legacy `setup.py`. Archive paths must be unique normalized relative paths.
+Absolute paths, traversal, hard links, special files, escaping symbolic links,
+and oversized archives or expansions are rejected. Reploy-owned Go code
+extracts the exact provider-store blob into a fresh immutable input; no host
+`tar` command runs. The wheel build sees only that extracted retained sdist,
+not the provisional source projection.
+
+`SourceInputDigest` is the cheap freshness and TOCTOU key.
+`SourceArtifactDigest` identifies the retained sdist, and
+`OutputArtifactDigest` identifies the resulting wheel.
+`BuildEnvironmentDigest` binds the selected platform, exact immutable upstream
+image, and selected interpreter evidence. Exact input reuse requires both
+descriptors and bytes in the provider store. When changed inputs produce a
+byte-identical sdist under the same builder profile, settings, and build
+environment, the prior wheel may be reused through the retained-sdist identity.
+Both artifacts are part of the resolved bundle and build-lock store closure.
 
 The Docker backend may produce that path-free candidate list during one
 provider-node preparation session, after the node's exact upstream prefix and
@@ -885,10 +914,21 @@ Each deployment owns an immutable content-addressed provider store beneath its
 ```text
 <deployment>/.reploy/provider-store/
   blobs/sha256/<first-two>/<digest>
+  artifact-verification/sha256/<first-two>/<digest>.json
   manifests/sha256/<first-two>/<resolved-bundle-digest>.json
   validation/sha256/<first-two>/<validation-record-digest>.json
   tmp/<random>
 ```
+
+The artifact-verification files are derived deployment-local cache evidence,
+not immutable store objects or bundle identity. A Debian stamp binds the blob
+digest, size, and nanosecond modification time recorded after publication or a
+full hash. Retained trial-build reuse may skip rereading that archive only while
+the declared size and recorded modification time still match. A missing or
+malformed regular stamp, a stamp-field mismatch, or changed modification time
+causes a full SHA-256 verification and stamp refresh; a blob-size mismatch is
+rejected before hashing. Stamps are not transferred between deployments, may be
+deleted safely, and follow their blob's reachability during local cleanup.
 
 There is no machine-wide provider store, mutable global reference index, or
 independent provider-artifact garbage collector. Publication and recovery use
@@ -1515,8 +1555,11 @@ typed inputs rather than one overloaded runner.
 the corresponding fields may be nonempty. A `mounted-artifact` uses `MountID`
 plus the artifact's normalized manifest logical path unchanged; no host path
 enters the record. The backend maps that pair back to the verified descriptor,
-rejects missing, repeated, or unused bundle artifacts, and resolves the physical
-store path only while staging the private build context. The renderer rejects a
+rejects missing, repeated, or unused materialization artifacts, and resolves the
+physical store path only while staging the private build context. A retained
+selected-source artifact such as a Python sdist remains part of the bundle
+closure but is accounted for by its selected-source digest instead of entering
+the materialization mount or runtime image. The renderer rejects a
 `literal` in command position. A fixed trusted recipe may use a generated
 executable after its declared generating operation. The initial
 Python case is the controlled venv interpreter entry: immediately before venv
@@ -2292,7 +2335,7 @@ lock directory
   -> recover any pending publication before reading build inputs
   -> load the resolved blueprint + selected platform + overlay from state-v1
   -> load the optional current lock for cache/reuse candidates
-  -> observe current local-source manifests
+  -> observe current local-source inputs
   -> compute the resolved request
   -> resolve components.base.image for the selected platform
   -> if the current generation exactly matches the request, selected base, and
@@ -2345,10 +2388,11 @@ build check before reaching that gate.
 Each deployment directory contains:
 
 ```text
-package-overrides.yaml           # optional, staged deployments only
+overrides.yaml                   # optional, staged deployments only
 .reploy/state.json
 .reploy/locks/sha256-<digest>.json
 .reploy/provider-store/blobs/sha256/<first-two>/<digest>
+.reploy/provider-store/artifact-verification/sha256/<first-two>/<digest>.json
 .reploy/provider-store/manifests/sha256/<first-two>/<digest>.json
 .reploy/provider-store/validation/sha256/<first-two>/<digest>.json
 .reploy/provider-store/tmp/<random>
@@ -2485,7 +2529,7 @@ type CleanupItemV1 struct {
 
 `BlueprintSource` retains the author-provided blueprint text unchanged for
 inspection and transfer. `Staging` uses schema `staging-v1` and marks a
-deployment as a build source. The optional `package-overrides.yaml` beside it
+deployment as a build source. The optional `overrides.yaml` beside it
 contains staging-local developer intent and is never copied to an installed
 deployment. Its sparse outer shape matches the blueprint: `environment.id`
 must match, and `environment.package_overrides` groups mappings by provider.
@@ -2553,8 +2597,12 @@ validates its nested schemas, and checks that state's image digest, rootfs
 subject, platform, and runtime-policy digest equal the lock. A mismatch is
 corruption or staleness, never a cache hit.
 
-Store-object validation is operation-specific. `reploy build`, install
-transfer, and provider-cache reuse validate every store object they will read.
+Store-object validation is operation-specific. Install transfer streams and
+hashes every artifact it copies. Retained trial-build cache reuse validates the
+canonical records and fully hashes non-Debian artifacts; for a Debian archive,
+an exact deployment-local verification stamp may replace that repeated byte
+scan. Missing or changed stamp evidence falls back to full SHA-256 verification,
+while a changed blob size is rejected before hashing.
 Runtime does not need raw bundles or the separately stored aggregate validation
 object: it compares the final image's fixed validation subject/record labels
 with `FinalImage.RootFSSubject` and `ValidationRecord.Digest` in the committed
@@ -2889,7 +2937,7 @@ pass.
 - Hard-cut the blueprint schema to component-scoped
   executable profiles, mounts/target/update_policy, and allow_concurrent.
 - Move developer package substitutions out of the blueprint into the explicit
-  staging-only `package-overrides.yaml` sidecar.
+  staging-only `overrides.yaml` sidecar.
 - Add syntax-and-semantics `reploy validate` and remove dry-run.
 - Make staged up and restart visibly ensure a current build; retain build-free
   staged stop recovery; make app commands and remaining staged runtime

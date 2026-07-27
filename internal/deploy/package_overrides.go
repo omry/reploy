@@ -14,10 +14,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/canonical"
 	"gopkg.in/yaml.v3"
 )
 
-const PackageOverridesFilename = "package-overrides.yaml"
+const PackageOverridesFilename = "overrides.yaml"
 const PackageOverrideIntentSchemaV1 = "package-override-intent-v1"
 
 // PackageOverridesV1 is the explicit, staging-only developer intent stored
@@ -29,7 +30,13 @@ type PackageOverridesV1 struct {
 type PackageOverridesEnvironmentV1 struct {
 	ID               string                                        `yaml:"id"`
 	Vars             map[string]any                                `yaml:"vars,omitempty"`
+	Base             *BaseImageOverrideV1                          `yaml:"base,omitempty"`
+	PackageAdditions map[string][]string                           `yaml:"package_additions,omitempty"`
 	PackageOverrides map[string]map[string]PackageOverrideChoiceV1 `yaml:"package_overrides"`
+}
+
+type BaseImageOverrideV1 struct {
+	Image string `yaml:"image"`
 }
 
 // PackageOverrideChoiceV1 selects exactly one local source or exact upstream
@@ -44,6 +51,7 @@ type PackageOverrideChoiceV1 struct {
 // unused mappings remain completely unobserved.
 type ResolvedPackageOverridesV1 struct {
 	EnvironmentID string
+	Additions     map[string][]string
 	Providers     map[string]map[string]ResolvedPackageOverrideChoiceV1
 }
 
@@ -54,11 +62,18 @@ type ResolvedPackageOverrideChoiceV1 struct {
 
 // PackageOverrideIntentV1 is the path-free build input retained in the lock.
 // Local paths are deliberately represented only as kind=local; selected
-// content is bound separately by source-manifest and wheel digests.
+// content is bound separately by source-input, retained source-artifact,
+// build-environment, and output-artifact digests.
 type PackageOverrideIntentV1 struct {
 	Schema        string                          `json:"schema"`
 	EnvironmentID string                          `json:"environment_id"`
+	Additions     []PackageAdditionIntentV1       `json:"additions,omitempty"`
 	Choices       []PackageOverrideIntentChoiceV1 `json:"choices"`
+}
+
+type PackageAdditionIntentV1 struct {
+	Provider    string `json:"provider"`
+	Requirement string `json:"requirement"`
 }
 
 type PackageOverrideIntentChoiceV1 struct {
@@ -114,11 +129,43 @@ func ValidatePackageOverridesV1(overrides PackageOverridesV1) error {
 	if err := blueprint.ValidateEnvironmentID("package overrides environment.id", environment.ID); err != nil {
 		return err
 	}
-	if _, err := blueprint.ResolveEnvironmentVariables(environment.Vars); err != nil {
+	variables, err := blueprint.ResolveEnvironmentVariables(environment.Vars)
+	if err != nil {
 		return fmt.Errorf("package overrides variables: %w", err)
+	}
+	if _, declared := environment.Vars["workspace_root"]; declared {
+		workspace, ok := variables["workspace_root"].(string)
+		if !ok {
+			return fmt.Errorf("package overrides workspace_root must resolve to a string")
+		}
+		if containsControl(workspace) {
+			return fmt.Errorf("package overrides workspace_root must not contain control characters")
+		}
+	}
+	if environment.Base != nil {
+		if err := ValidateBaseImageReferenceV1(environment.Base.Image); err != nil {
+			return fmt.Errorf("overrides environment.base.image: %w", err)
+		}
 	}
 	if environment.PackageOverrides == nil {
 		return fmt.Errorf("package overrides environment.package_overrides must use a mapping")
+	}
+	for _, provider := range sortedKeys(environment.PackageAdditions) {
+		requirements := environment.PackageAdditions[provider]
+		if requirements == nil {
+			return fmt.Errorf("package additions for provider %q must use an array", provider)
+		}
+		seen := map[string]bool{}
+		for _, requirement := range requirements {
+			normalized, err := NormalizePackageAdditionV1(provider, requirement)
+			if err != nil {
+				return err
+			}
+			if seen[normalized] {
+				return fmt.Errorf("package additions for provider %q contain duplicate requirement %q", provider, normalized)
+			}
+			seen[normalized] = true
+		}
 	}
 	providers := sortedKeys(environment.PackageOverrides)
 	for _, provider := range providers {
@@ -159,6 +206,75 @@ func ValidatePackageOverridesV1(overrides PackageOverridesV1) error {
 	return nil
 }
 
+// NormalizePackageAdditionV1 validates a provider-native development package
+// addition without translating its package name. The os provider currently
+// selects the Debian/Ubuntu APT implementation at build time.
+func NormalizePackageAdditionV1(provider string, requirement string) (string, error) {
+	if provider != "os" {
+		return "", fmt.Errorf("package addition provider %q is unsupported; use os", provider)
+	}
+	if requirement == "" || strings.TrimSpace(requirement) != requirement {
+		return "", fmt.Errorf("package addition %s requirement must be nonempty and have no surrounding whitespace", provider)
+	}
+	request, err := blueprint.ParseAPTPackageRequest(requirement)
+	if err != nil {
+		return "", fmt.Errorf("package addition %s:%s: %w", provider, requirement, err)
+	}
+	normalized := request.Name
+	if request.Version != "" {
+		normalized += "=" + request.Version
+	}
+	if normalized != requirement {
+		return "", fmt.Errorf("package addition %s:%s must use its exact native package spelling %q", provider, requirement, normalized)
+	}
+	return requirement, nil
+}
+
+// ValidateBaseImageReferenceV1 validates one Docker author reference without
+// resolving or pulling it. A bare sha256 digest is a full local image ID;
+// repository digests remain valid remote references.
+func ValidateBaseImageReferenceV1(reference string) error {
+	if reference == "" || strings.TrimSpace(reference) != reference ||
+		containsControl(reference) || strings.Contains(reference, "://") {
+		return fmt.Errorf("Docker image reference is missing or unsafe")
+	}
+	if strings.HasPrefix(reference, "sha256:") {
+		if err := canonical.Digest(reference).Validate(); err != nil {
+			return fmt.Errorf("Docker local image ID: %w", err)
+		}
+		return nil
+	}
+	if repository, digest, found := strings.Cut(reference, "@"); found {
+		if repository == "" || strings.Contains(digest, "@") {
+			return fmt.Errorf("Docker image reference is malformed")
+		}
+		if err := canonical.Digest(digest).Validate(); err != nil {
+			return fmt.Errorf("Docker image reference digest: %w", err)
+		}
+	}
+	return nil
+}
+
+func EffectiveBaseImageV1(document blueprint.Document, overrides PackageOverridesV1) (string, error) {
+	if err := ValidatePackageOverridesV1(overrides); err != nil {
+		return "", err
+	}
+	base, found := document.Environment.Components["base"]
+	if !found || base.Base == nil || base.Base.Image == "" {
+		return "", fmt.Errorf("resolved blueprint has no base image")
+	}
+	if overrides.Environment.ID != document.Environment.ID {
+		return "", fmt.Errorf(
+			"overrides target environment %q, want %q",
+			overrides.Environment.ID, document.Environment.ID,
+		)
+	}
+	if overrides.Environment.Base != nil {
+		return overrides.Environment.Base.Image, nil
+	}
+	return base.Base.Image, nil
+}
+
 // ResolvePackageOverridesV1 interpolates sidecar variables and creates stable
 // provider/package lookup maps. normalizePackage owns ecosystem-specific
 // package-name canonicalization and supported-choice validation.
@@ -180,9 +296,41 @@ func ResolvePackageOverridesV1(
 	if err != nil {
 		return ResolvedPackageOverridesV1{}, fmt.Errorf("package overrides variables: %w", err)
 	}
+	if _, declared := overrides.Environment.Vars["workspace_root"]; declared {
+		workspace, ok := variables["workspace_root"].(string)
+		if !ok {
+			return ResolvedPackageOverridesV1{}, fmt.Errorf("package overrides workspace_root must resolve to a string")
+		}
+		workspace, err = ResolvePackageOverrideWorkspaceRootV1(workspace)
+		if err != nil {
+			return ResolvedPackageOverridesV1{}, fmt.Errorf("package overrides workspace_root: %w", err)
+		}
+		source := make(map[string]any, len(overrides.Environment.Vars))
+		for name, value := range overrides.Environment.Vars {
+			source[name] = value
+		}
+		source["workspace_root"] = workspace
+		variables, err = blueprint.ResolveEnvironmentVariables(source)
+		if err != nil {
+			return ResolvedPackageOverridesV1{}, fmt.Errorf("package overrides variables: %w", err)
+		}
+	}
 	resolved := ResolvedPackageOverridesV1{
 		EnvironmentID: overrides.Environment.ID,
 		Providers:     map[string]map[string]ResolvedPackageOverrideChoiceV1{},
+	}
+	if len(overrides.Environment.PackageAdditions) != 0 {
+		resolved.Additions = map[string][]string{}
+	}
+	for _, provider := range sortedKeys(overrides.Environment.PackageAdditions) {
+		for _, requirement := range overrides.Environment.PackageAdditions[provider] {
+			normalized, err := NormalizePackageAdditionV1(provider, requirement)
+			if err != nil {
+				return ResolvedPackageOverridesV1{}, err
+			}
+			resolved.Additions[provider] = append(resolved.Additions[provider], normalized)
+		}
+		sort.Strings(resolved.Additions[provider])
 	}
 	for _, provider := range sortedKeys(overrides.Environment.PackageOverrides) {
 		resolvedPackages := map[string]ResolvedPackageOverrideChoiceV1{}
@@ -229,10 +377,38 @@ func ResolvePackageOverridesV1(
 	return resolved, nil
 }
 
+// ResolvePackageOverrideWorkspaceRootV1 expands a current-user home shorthand
+// only when the workspace is used. The sidecar retains the user's original
+// spelling.
+func ResolvePackageOverrideWorkspaceRootV1(value string) (string, error) {
+	expanded := value
+	if value == "~" || strings.HasPrefix(value, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve current user's home directory: %w", err)
+		}
+		expanded = home
+		if value != "~" {
+			expanded = filepath.Join(home, strings.TrimPrefix(value, "~/"))
+		}
+	}
+	if !filepath.IsAbs(expanded) {
+		return "", fmt.Errorf("must be an absolute path or ~/path")
+	}
+	return filepath.Clean(expanded), nil
+}
+
 func (overrides ResolvedPackageOverridesV1) Intent() (PackageOverrideIntentV1, error) {
 	intent := PackageOverrideIntentV1{
 		Schema: PackageOverrideIntentSchemaV1, EnvironmentID: overrides.EnvironmentID,
 		Choices: []PackageOverrideIntentChoiceV1{},
+	}
+	for _, provider := range sortedKeys(overrides.Additions) {
+		for _, requirement := range overrides.Additions[provider] {
+			intent.Additions = append(intent.Additions, PackageAdditionIntentV1{
+				Provider: provider, Requirement: requirement,
+			})
+		}
 	}
 	for _, provider := range sortedKeys(overrides.Providers) {
 		for _, packageID := range sortedKeys(overrides.Providers[provider]) {
@@ -270,6 +446,22 @@ func ValidatePackageOverrideIntentV1(intent PackageOverrideIntentV1) error {
 	if err := blueprint.ValidateEnvironmentID("package override intent environment", intent.EnvironmentID); err != nil {
 		return err
 	}
+	for index, addition := range intent.Additions {
+		normalized, err := NormalizePackageAdditionV1(addition.Provider, addition.Requirement)
+		if err != nil {
+			return err
+		}
+		if normalized != addition.Requirement {
+			return fmt.Errorf("package override intent addition must be normalized")
+		}
+		if index > 0 {
+			prior := intent.Additions[index-1]
+			if prior.Provider > addition.Provider ||
+				prior.Provider == addition.Provider && prior.Requirement >= addition.Requirement {
+				return fmt.Errorf("package override intent additions must be unique and sorted by provider and requirement")
+			}
+		}
+	}
 	if intent.Choices == nil {
 		return fmt.Errorf("package override intent choices must use an array")
 	}
@@ -300,6 +492,16 @@ func ValidatePackageOverrideIntentV1(intent PackageOverrideIntentV1) error {
 		}
 	}
 	return nil
+}
+
+func (intent PackageOverrideIntentV1) AdditionsForProvider(provider string) []PackageAdditionIntentV1 {
+	result := []PackageAdditionIntentV1{}
+	for _, addition := range intent.Additions {
+		if addition.Provider == provider {
+			result = append(result, addition)
+		}
+	}
+	return result
 }
 
 func (intent PackageOverrideIntentV1) ChoicesForProvider(provider string) []PackageOverrideIntentChoiceV1 {
@@ -373,6 +575,24 @@ func (lock *OperationLock) CommitPackageOverridesV1(overrides PackageOverridesV1
 	}
 	if err := writeAtomicStateFile(path, content, 0o600); err != nil {
 		return fmt.Errorf("commit package overrides: %w", err)
+	}
+	return nil
+}
+
+// removePackageOverridesV1 removes a sidecar created during the same locked
+// operation when publication of the corresponding new staged state fails.
+func (lock *OperationLock) removePackageOverridesV1() error {
+	if lock == nil {
+		return fmt.Errorf("remove package overrides requires an operation lock")
+	}
+	lock.mutex.Lock()
+	defer lock.mutex.Unlock()
+	if lock.released || lock.file == nil || lock.path == "" {
+		return fmt.Errorf("operation lock is not held")
+	}
+	path := filepath.Join(filepath.Dir(filepath.Dir(lock.path)), PackageOverridesFilename)
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove package overrides after failed state publication: %w", err)
 	}
 	return nil
 }

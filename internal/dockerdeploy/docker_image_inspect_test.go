@@ -85,6 +85,126 @@ func TestResolveBaseInspectsLocalImageIDWithoutPulling(t *testing.T) {
 	}
 }
 
+func TestResolveBaseInspectsCachedDigestReferenceWithoutPulling(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configID := "sha256:" + strings.Repeat("4", 64)
+	manifestID := "sha256:" + strings.Repeat("5", 64)
+	diffID := "sha256:" + strings.Repeat("6", 64)
+	reference := "debian@" + manifestID
+	inspection := fmt.Sprintf(
+		`[{"Id":%q,"RepoDigests":[%q],"Os":"linux","Architecture":"amd64","RootFS":{"Layers":[%q]},"Config":{}}]`,
+		configID,
+		reference,
+		diffID,
+	)
+	var calls [][]string
+	run := func(_ context.Context, args ...string) (string, error) {
+		calls = append(calls, append([]string{}, args...))
+		return inspection, nil
+	}
+	descriptor, _, err := resolveBase(context.Background(), reference, platform, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(calls, [][]string{{"image", "inspect", reference}}) {
+		t.Fatalf("calls = %#v", calls)
+	}
+	if descriptor.ImmutableReference != reference ||
+		descriptor.ManifestDigest != canonical.Digest(manifestID) ||
+		descriptor.ConfigDigest != canonical.Digest(configID) {
+		t.Fatalf("descriptor = %#v", descriptor)
+	}
+}
+
+func TestResolveBasePullsDigestReferenceWhenItIsNotCached(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configID := "sha256:" + strings.Repeat("4", 64)
+	manifestID := "sha256:" + strings.Repeat("5", 64)
+	diffID := "sha256:" + strings.Repeat("6", 64)
+	reference := "debian@" + manifestID
+	inspection := fmt.Sprintf(
+		`[{"Id":%q,"RepoDigests":[%q],"Os":"linux","Architecture":"amd64","RootFS":{"Layers":[%q]},"Config":{}}]`,
+		configID,
+		reference,
+		diffID,
+	)
+	var calls [][]string
+	run := func(_ context.Context, args ...string) (string, error) {
+		calls = append(calls, append([]string{}, args...))
+		if len(calls) == 1 {
+			return "", fmt.Errorf("image is not cached")
+		}
+		if args[0] == "pull" {
+			return "Digest: " + manifestID + "\n", nil
+		}
+		return inspection, nil
+	}
+	descriptor, _, err := resolveBase(context.Background(), reference, platform, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"image", "inspect", reference},
+		{"pull", "--platform", "linux/amd64", reference},
+		{"image", "inspect", reference},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+	if descriptor.ImmutableReference != reference || descriptor.ManifestDigest != canonical.Digest(manifestID) {
+		t.Fatalf("descriptor = %#v", descriptor)
+	}
+}
+
+func TestResolveBasePullsDigestReferenceWhenCachedPlatformDoesNotMatch(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configID := "sha256:" + strings.Repeat("4", 64)
+	manifestID := "sha256:" + strings.Repeat("5", 64)
+	diffID := "sha256:" + strings.Repeat("6", 64)
+	reference := "debian@" + manifestID
+	inspection := func(architecture string) string {
+		return fmt.Sprintf(
+			`[{"Id":%q,"RepoDigests":[%q],"Os":"linux","Architecture":%q,"RootFS":{"Layers":[%q]},"Config":{}}]`,
+			configID,
+			reference,
+			architecture,
+			diffID,
+		)
+	}
+	var calls [][]string
+	run := func(_ context.Context, args ...string) (string, error) {
+		calls = append(calls, append([]string{}, args...))
+		switch len(calls) {
+		case 1:
+			return inspection("arm64"), nil
+		case 2:
+			return "Digest: " + manifestID + "\n", nil
+		default:
+			return inspection("amd64"), nil
+		}
+	}
+	if _, _, err := resolveBase(context.Background(), reference, platform, run); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"image", "inspect", reference},
+		{"pull", "--platform", "linux/amd64", reference},
+		{"image", "inspect", reference},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+}
+
 func TestParseDockerImageInspectionAcceptsConcreteVariantForVariantlessSelection(t *testing.T) {
 	platform, err := blueprint.ParsePlatform("linux/arm64")
 	if err != nil {
@@ -280,6 +400,15 @@ func TestResolveBaseDockerIntegration(t *testing.T) {
 	}
 	if len(descriptor.RootFSDiffIDs) == 0 || len(config.Environment) == 0 {
 		t.Fatalf("incomplete inspection: descriptor=%#v config=%#v", descriptor, config)
+	}
+	pinnedDescriptor, _, err := ResolveBase(ctx, descriptor.ImmutableReference, platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinnedDescriptor.ImmutableReference != descriptor.ImmutableReference ||
+		pinnedDescriptor.ManifestDigest != descriptor.ManifestDigest ||
+		pinnedDescriptor.ConfigDigest != descriptor.ConfigDigest {
+		t.Fatalf("pinned descriptor = %#v, want identity %#v", pinnedDescriptor, descriptor)
 	}
 	localDescriptor, _, err := ResolveBase(ctx, string(descriptor.ConfigDigest), platform)
 	if err != nil {

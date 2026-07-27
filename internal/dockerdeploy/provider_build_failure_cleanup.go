@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/omry/reploy/internal/deploy"
-	"github.com/omry/reploy/internal/providers/registry"
 )
 
 // cleanupFailedProviderBuildV1 preserves only the generation selected by the
@@ -20,10 +19,11 @@ func cleanupFailedProviderBuildV1(ctx context.Context, preparation LockedProvide
 	if found {
 		current = state.Current
 	}
+	validateProfile, validateBundle := providerBuildRecoveryValidatorsV1(preparation.NoCache)
 	if _, err := RecoverPendingPublication(
 		ctx, preparation.Operation, preparation.Store, current,
 		preparation.Environment, preparation.DeploymentDir,
-		registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1,
+		validateProfile, validateBundle,
 	); err != nil {
 		return fmt.Errorf("recover failed provider build publication: %w", err)
 	}
@@ -32,7 +32,7 @@ func cleanupFailedProviderBuildV1(ctx context.Context, preparation LockedProvide
 		return fmt.Errorf("reread failed provider build state: %w", err)
 	}
 	if !found || state.Current == nil {
-		if err := preparation.Operation.RemoveAllBuildLocks(registry.ValidateRequirementProfileV1); err != nil {
+		if err := preparation.Operation.RemoveAllBuildLocks(validateProfile); err != nil {
 			return err
 		}
 		if err := preparation.Operation.RemoveAllBuildObjects(preparation.Store); err != nil {
@@ -40,22 +40,29 @@ func cleanupFailedProviderBuildV1(ctx context.Context, preparation LockedProvide
 		}
 		return preparation.Store.RemoveTemporaryEntries()
 	}
-	lock, lockFound, err := preparation.Operation.ReadBuildLock(state.Current.BuildLockDigest, registry.ValidateRequirementProfileV1)
+	lock, lockFound, err := preparation.Operation.ReadBuildLock(state.Current.BuildLockDigest, validateProfile)
 	if err != nil {
 		return err
 	}
 	if !lockFound {
 		return fmt.Errorf("current build lock %s is missing during failed build cleanup", state.Current.BuildLockDigest)
 	}
-	if err := validateGenerationBuildLock(*state.Current, lock, registry.ValidateRequirementProfileV1); err != nil {
+	if err := validateGenerationBuildLock(*state.Current, lock, validateProfile); err != nil {
 		return err
 	}
-	if err := preparation.Operation.RemoveOtherBuildLocks(state.Current.BuildLockDigest, registry.ValidateRequirementProfileV1); err != nil {
+	if err := preparation.Operation.RemoveOtherBuildLocks(state.Current.BuildLockDigest, validateProfile); err != nil {
 		return err
+	}
+	// A no-cache rebuild is the provider-schema cutover path. If that rebuild
+	// fails, the selected lock may still reference bundle payloads that the
+	// current binary cannot decode. Preserve immutable objects conservatively;
+	// successful replacement will prune them through the new lock.
+	if preparation.NoCache {
+		return preparation.Store.RemoveTemporaryEntries()
 	}
 	if err := preparation.Operation.RemoveUnreachableBuildObjects(
 		preparation.Store, lock,
-		registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1,
+		validateProfile, validateBundle,
 	); err != nil {
 		return err
 	}

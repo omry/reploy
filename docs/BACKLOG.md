@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-18
+updated: 2026-07-26
 summary: Active planning surface for Reploy design and implementation gaps.
 ---
 
@@ -42,6 +42,18 @@ This file is the day-to-day queue for design and implementation gaps.
 
 ## Pre-release
 
+- [ ] `P1` Model applications separately from package materialization layers.
+      Keep each application's OS packages, language packages, executables, and
+      related declarations in one self-contained blueprint block. Allow
+      environment-level OS tools such as `zsh` and `htop`, then combine those
+      packages with application-owned OS dependencies in the shared OS package
+      transaction while retaining application ownership in diagnostics and
+      overrides. Replace the current assumption that each blueprint component
+      is owned by exactly one package provider without preserving the unreleased
+      schema, and define stable identities for applications, provider
+      contributions, executables, build locks, and cached results before
+      implementation.
+
 - [ ] `P1` Minimize the required environment blueprint shape.
       Make environment nodes optional whenever Reploy can supply an
       unambiguous default or infer the value safely. Acceptance checks: audit
@@ -51,6 +63,32 @@ This file is the day-to-day queue for design and implementation gaps.
       start with that minimal example before introducing optional features.
 
 ## Post-v1
+
+- [ ] `P2` Generate a maintained official base-image index.
+      Add a server-side tool that clones `docker-library/official-images` and
+      produces one deterministic, versioned index file containing the official
+      operating-system image names, maintained tag groups, and supported
+      platforms. Run it periodically in GitHub Actions, update the published
+      file only when its semantic content changes, and retain upstream source
+      provenance so generated changes are reviewable.
+
+- [ ] `P2` Add cached official base-image discovery.
+      Let the base-image override editor search the generated official-image
+      index instead of querying Docker Hub or the local Docker daemon. Fetch
+      and cache the index on first use, periodically probe for updates without
+      blocking ordinary editor use, retain a usable cached copy across
+      transient failures, and filter results against the staged platform.
+
+- [ ] `P2` Design local-source build environments and cross-run caching.
+      Local source packages should use an explicit build command. Define its
+      argv-versus-shell representation, input and output artifact contract,
+      execution location, build dependencies, isolation, network policy, and
+      access to secrets or host files. Decide whether verified outputs or
+      intermediate caches survive across runs; bind reuse to source, toolchain,
+      platform, settings, and output integrity; define cache scope, permissions,
+      ownership, and cleanup; and make caches inspectable, bypassable,
+      invalidatable, and recoverable. Keep this separate from deployment-local
+      provider artifact reuse and the current override-validation work.
 
 - [ ] `P2` Design portable environment export and import.
       Separate exact offline transfer from instruction-based rebuilds and model

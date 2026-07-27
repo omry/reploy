@@ -28,6 +28,64 @@ type PreparedPythonResolverArtifacts struct {
 	OutputContainerDir string
 }
 
+// StagePythonResolverWheelArtifact exposes one verified store wheel only after
+// a retained sdist identity has selected it for reuse.
+func StagePythonResolverWheelArtifact(
+	store providerstore.Store,
+	prepared PreparedPythonResolverArtifacts,
+	artifact providerstore.ArtifactDescriptor,
+) (err error) {
+	if err := validatePreparedPythonResolverArtifactLayout(prepared); err != nil {
+		return err
+	}
+	if err := artifact.Validate(); err != nil {
+		return fmt.Errorf("stage Python resolver wheel: %w", err)
+	}
+	filename := filepath.Base(filepath.FromSlash(artifact.LogicalPath))
+	if artifact.Kind != "wheel" || !strings.HasSuffix(strings.ToLower(filename), ".whl") {
+		return fmt.Errorf("stage Python resolver artifact %q must be a wheel", artifact.LogicalPath)
+	}
+	blob, err := store.InspectArtifactPath(artifact)
+	if err != nil {
+		return fmt.Errorf("inspect staged Python resolver wheel %q: %w", artifact.LogicalPath, err)
+	}
+	if err := os.Chmod(prepared.InputHostDir, 0o700); err != nil {
+		return fmt.Errorf("make Python resolver input writable for source wheel reuse: %w", err)
+	}
+	defer func() {
+		if protectErr := os.Chmod(prepared.InputHostDir, 0o500); protectErr != nil {
+			err = errors.Join(err, fmt.Errorf("restore Python resolver input protection: %w", protectErr))
+		}
+	}()
+	destination := filepath.Join(prepared.InputHostDir, filename)
+	if err := os.Remove(destination); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("replace staged Python resolver wheel %q: %w", filename, err)
+	}
+	if err := os.Link(blob, destination); err != nil {
+		return fmt.Errorf("stage Python resolver wheel %q: %w", filename, err)
+	}
+	return nil
+}
+
+func replacePythonWheelByFilename(
+	artifacts []providerstore.ArtifactDescriptor,
+	replacement providerstore.ArtifactDescriptor,
+) []providerstore.ArtifactDescriptor {
+	byFilename := make(map[string]providerstore.ArtifactDescriptor, len(artifacts)+1)
+	for _, artifact := range artifacts {
+		byFilename[filepath.Base(filepath.FromSlash(artifact.LogicalPath))] = artifact
+	}
+	byFilename[filepath.Base(filepath.FromSlash(replacement.LogicalPath))] = replacement
+	result := make([]providerstore.ArtifactDescriptor, 0, len(byFilename))
+	for _, artifact := range byFilename {
+		result = append(result, artifact)
+	}
+	sort.Slice(result, func(left int, right int) bool {
+		return result[left].LogicalPath < result[right].LogicalPath
+	})
+	return result
+}
+
 // StagePythonResolverSourceConstraints places the provider-owned constraints
 // beside the verified wheels before the one pip invocation consumes them.
 func StagePythonResolverSourceConstraints(

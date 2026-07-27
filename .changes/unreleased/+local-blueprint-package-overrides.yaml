@@ -1,0 +1,2 @@
+kind: Added
+body: Seed new staging directories from an overrides.yaml beside a local filesystem blueprint while preserving its configured workspace and local source path meaning.

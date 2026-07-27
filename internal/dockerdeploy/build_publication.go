@@ -18,6 +18,7 @@ type BuildPublicationInput struct {
 	DeploymentDir string
 	Document      blueprint.Document
 	Lock          deploy.BuildLockV1
+	NoCache       bool
 }
 
 type buildPublicationBackend struct {
@@ -102,18 +103,22 @@ func publishBuild(
 	}
 	var old *deploy.EnvironmentGenerationState
 	var oldImage *providers.RealizedImageV1
+	priorProfileValidator := providers.RequirementProfileOwnerValidator(registry.ValidateRequirementProfileV1)
+	if input.NoCache {
+		priorProfileValidator = acceptProviderProfileOwnerForCutoverV1
+	}
 	if found {
 		old = state.Current
 	}
 	if old != nil {
-		oldLock, lockFound, err := operation.ReadBuildLock(old.BuildLockDigest, registry.ValidateRequirementProfileV1)
+		oldLock, lockFound, err := operation.ReadBuildLock(old.BuildLockDigest, priorProfileValidator)
 		if err != nil {
 			return deploy.StateV1{}, err
 		}
 		if !lockFound {
 			return deploy.StateV1{}, fmt.Errorf("current generation build lock %s is missing", old.BuildLockDigest)
 		}
-		if err := validateGenerationBuildLock(*old, oldLock, registry.ValidateRequirementProfileV1); err != nil {
+		if err := validateGenerationBuildLock(*old, oldLock, priorProfileValidator); err != nil {
 			return deploy.StateV1{}, fmt.Errorf("current generation: %w", err)
 		}
 		oldReferences := references
@@ -188,7 +193,7 @@ func publishBuild(
 	if err := backend.removeReference(ctx, input.Lock.FinalImage, references, EnvironmentReferenceTemporary, input.Environment, input.DeploymentDir); err != nil {
 		return deploy.StateV1{}, err
 	}
-	if err := operation.RemoveOtherBuildLocks(lockDigest, registry.ValidateRequirementProfileV1); err != nil {
+	if err := operation.RemoveOtherBuildLocks(lockDigest, priorProfileValidator); err != nil {
 		return deploy.StateV1{}, err
 	}
 	if err := operation.RemoveUnreachableBuildObjects(store, input.Lock, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1); err != nil {
