@@ -78,7 +78,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--port-conflict-probe",
         action="store_true",
-        help="After bundle build/check, verify a staging up fails cleanly when the host port is already occupied.",
+        help="After the environment build, verify a staging up fails cleanly when the host port is already occupied.",
     )
     parser.add_argument(
         "--docker-unavailable-probe",
