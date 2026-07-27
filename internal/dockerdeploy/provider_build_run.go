@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -22,6 +23,7 @@ type ProviderBuildRunInputV1 struct {
 	Automatic      bool
 	NoCache        bool
 	ValidateLayers bool
+	Progress       io.Writer
 	RunOptions     RunOptions
 }
 
@@ -33,6 +35,7 @@ type LockedProviderBuildRunInputV1 struct {
 	Automatic      bool
 	NoCache        bool
 	ValidateLayers bool
+	Progress       io.Writer
 	RunOptions     RunOptions
 }
 
@@ -123,7 +126,8 @@ func runProviderBuildV1(
 	return runLockedProviderBuildV1(ctx, LockedProviderBuildRunInputV1{
 		Operation: operation, Store: store, DeploymentDir: deploymentDir,
 		Runtime: input.Runtime, Automatic: input.Automatic,
-		NoCache: input.NoCache, ValidateLayers: input.ValidateLayers, RunOptions: input.RunOptions,
+		NoCache: input.NoCache, ValidateLayers: input.ValidateLayers,
+		Progress: input.Progress, RunOptions: input.RunOptions,
 	}, backend)
 }
 
@@ -186,13 +190,20 @@ func runLockedProviderBuildV1(
 	if state.Deployment != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("provider build requires a staged deployment; an installed deployment cannot be used as a build source")
 	}
-	workspaceRoot := ""
-	if state.Staging != nil {
-		workspaceRoot = state.Staging.WorkspaceRoot
+	writeProviderBuildProgress(input.Progress, "preparing environment %s for %s", document.Environment.ID, state.Platform.Canonical)
+	packageOverrides, packageOverrideIntent, err := LoadStagedPackageOverridesV1(
+		input.Operation, deploymentDir, document,
+	)
+	if err != nil {
+		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("load provider build package overrides: %w", err)
+	}
+	localOverrides, err := PythonLocalOverridesV1(packageOverrides)
+	if err != nil {
+		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("load local Python package overrides: %w", err)
 	}
 	reusableSources := []providers.ResolvedSourceInput{}
 	reusableWheels := []providerstore.ArtifactDescriptor{}
-	observedSources := []PythonWorkspaceSource{}
+	observedSources := []PythonLocalSource{}
 	cacheExists := false
 	if state.Current != nil && !input.NoCache {
 		cacheExists, err = input.Store.Exists()
@@ -231,11 +242,11 @@ func runLockedProviderBuildV1(
 				distributions = append(distributions, distribution)
 			}
 			sort.Strings(distributions)
-			observedSources, err = ResolveSelectedPythonWorkspaceSources(document, workspaceRoot, distributions)
+			observedSources, err = ObserveSelectedPythonLocalSources(localOverrides, distributions)
 			if err != nil {
-				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("observe current provider build workspace sources: %w", err)
+				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("observe current provider build local sources: %w", err)
 			}
-			reusableSources, err = MatchReusablePythonWorkspaceSources(eligible, observedSources)
+			reusableSources, err = MatchReusablePythonLocalSources(eligible, observedSources)
 			if err != nil {
 				return LockedProviderBuildExecutionResultV1{}, err
 			}
@@ -273,26 +284,22 @@ func runLockedProviderBuildV1(
 
 	preparation, err := backend.prepare(ctx, LockedProviderBuildPreparationInputV1{
 		Operation: input.Operation, Store: input.Store, Environment: document.Environment.ID,
-		DeploymentDir: deploymentDir, Sources: reusableSources,
+		DeploymentDir: deploymentDir, PackageOverrides: packageOverrideIntent, Sources: reusableSources,
 		DockerPlan: dockerPlan, NoCache: input.NoCache,
 	})
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, err
 	}
-	workspaceSources := []PythonWorkspaceSource{}
-	if !preparation.Reused {
-		workspaceSources, err = CompletePythonWorkspaceSources(document, workspaceRoot, observedSources)
-		if err != nil {
-			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("prepare provider build workspace sources: %w", err)
-		}
-	}
+	writeProviderBuildProgress(input.Progress, "preparing component packages and image layers")
 	options := input.RunOptions
 	options.NoCache = input.NoCache
+	options.Progress = input.Progress
 	result, err := backend.execute(ctx, LockedProviderBuildExecutionInputV1{
-		Preparation:      preparation,
-		SourceWheels:     reusableWheels,
-		WorkspaceSources: workspaceSources,
-		ValidateLayers:   input.ValidateLayers, RunValidation: nil, RunOptions: options,
+		Preparation:    preparation,
+		SourceWheels:   reusableWheels,
+		LocalOverrides: localOverrides,
+		ValidateLayers: input.ValidateLayers, RunValidation: nil,
+		Progress: input.Progress, RunOptions: options,
 	})
 	if err != nil {
 		cleanupErr := backend.cleanupFailure(context.WithoutCancel(ctx), preparation)
@@ -311,3 +318,10 @@ func runLockedProviderBuildV1(
 // identity deliberately excludes it. This value is planning-only and is never
 // created, published, recorded, or shown to the user.
 const providerBuildPlanImage = "reploy-internal-build-plan"
+
+func writeProviderBuildProgress(output io.Writer, format string, values ...any) {
+	if output == nil {
+		return
+	}
+	fmt.Fprintf(output, format+"\n", values...)
+}

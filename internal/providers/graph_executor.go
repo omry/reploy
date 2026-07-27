@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sort"
 
 	"github.com/omry/reploy/internal/blueprint"
@@ -41,6 +42,10 @@ type GraphNodePrepareRequest struct {
 type GraphNodePreparation struct {
 	Resolution ResolveResult
 	Consumer   GraphConsumerValidation
+	// EffectiveRequest optionally narrows provider request intent after the
+	// resolver knows its completed closure. It may not alter any other node or
+	// planning field.
+	EffectiveRequest *CanonicalProviderRequest
 	// SourceCandidates optionally replaces this node's pre-resolved candidates.
 	// Backends use this only to turn auxiliary local source locators into
 	// content-bound records during preparation. Nil retains the request input;
@@ -131,7 +136,12 @@ func ExecuteProviderGraph(ctx context.Context, request GraphExecutionRequest) (G
 	}
 
 	result := GraphExecutionResult{
-		Plan: request.Plan, SelectedEdges: []ProviderEdgeV1{}, Bundles: []ResolvedBundle{},
+		Plan: ProviderPlanV1{
+			Schema: request.Plan.Schema,
+			Nodes:  append([]NodeSpec{}, request.Plan.Nodes...),
+			Edges:  append([]ProviderEdgeV1{}, request.Plan.Edges...),
+		},
+		SelectedEdges: []ProviderEdgeV1{}, Bundles: []ResolvedBundle{},
 		Profiles: []RequirementProfile{}, ValidationEvidence: []ValidationEvidence{},
 		SelectedSources: []ResolvedSourceInput{},
 		PrefixImages:    []RealizedImageV1{request.BaseImage}, Materializations: []GraphNodeMaterializeResult{},
@@ -151,7 +161,7 @@ func ExecuteProviderGraph(ctx context.Context, request GraphExecutionRequest) (G
 			return GraphExecutionResult{}, fmt.Errorf("provider node %q validators: %w", id, err)
 		}
 		resolveRequest := ResolveNodeRequest{
-			Plan: request.Plan, NodeID: id, EarlierCatalog: append([]RealizedOutput{}, result.Catalog...),
+			Plan: result.Plan, NodeID: id, EarlierCatalog: append([]RealizedOutput{}, result.Catalog...),
 			Platform: request.Platform, SourceCandidates: append([]ResolvedSourceInput{}, request.SourceCandidates...), Upstream: currentImage,
 			ReusableArtifacts: append([]providerstore.StoreObjectRef{}, request.ReusableArtifacts[id]...),
 		}
@@ -176,6 +186,33 @@ func ExecuteProviderGraph(ctx context.Context, request GraphExecutionRequest) (G
 			return GraphExecutionResult{}, fmt.Errorf("prepare provider node %q reported a cache refresh without a cached resolution", id)
 		}
 		effectiveRequest := resolveRequest
+		effectiveNode := node
+		if prepared.EffectiveRequest != nil {
+			if node.Requirements.ProviderData.Schema != node.Request.Schema ||
+				!reflect.DeepEqual(node.Requirements.ProviderData.Value, node.Request.Value) {
+				return GraphExecutionResult{}, fmt.Errorf(
+					"prepare provider node %q cannot narrow a request that is not its resolver dependency data", id,
+				)
+			}
+			effectiveNode.Request = *prepared.EffectiveRequest
+			effectiveNode.Requirements.ProviderData = CanonicalProviderData{
+				Schema: prepared.EffectiveRequest.Schema,
+				Value:  prepared.EffectiveRequest.Value,
+			}
+			if err := ValidateNodeSpec(effectiveNode); err != nil {
+				return GraphExecutionResult{}, fmt.Errorf("prepare provider node %q effective request: %w", id, err)
+			}
+			for index := range result.Plan.Nodes {
+				if result.Plan.Nodes[index].ID == id {
+					result.Plan.Nodes[index] = effectiveNode
+					break
+				}
+			}
+			if err := ValidateProviderPlanV1(result.Plan); err != nil {
+				return GraphExecutionResult{}, fmt.Errorf("prepare provider node %q effective plan: %w", id, err)
+			}
+			effectiveRequest.Plan = result.Plan
+		}
 		if prepared.SourceCandidates != nil {
 			effectiveRequest.SourceCandidates = append([]ResolvedSourceInput{}, prepared.SourceCandidates...)
 		}
@@ -198,7 +235,7 @@ func ExecuteProviderGraph(ctx context.Context, request GraphExecutionRequest) (G
 		if err := ValidateMaterializeInput(materializeInput, validators.Profile, validators.Bundle); err != nil {
 			return GraphExecutionResult{}, fmt.Errorf("materialize provider node %q input: %w", id, err)
 		}
-		materialized, err := request.MaterializeNode(ctx, GraphNodeMaterializeRequest{Node: node, Input: materializeInput})
+		materialized, err := request.MaterializeNode(ctx, GraphNodeMaterializeRequest{Node: effectiveNode, Input: materializeInput})
 		if err != nil {
 			return GraphExecutionResult{}, fmt.Errorf("materialize provider node %q: %w", id, err)
 		}

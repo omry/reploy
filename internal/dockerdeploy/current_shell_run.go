@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 
 	"github.com/omry/reploy/internal/blueprint"
@@ -14,6 +15,7 @@ import (
 type CurrentShellRunInputV1 struct {
 	DeploymentDir string
 	Wait          bool
+	ReadOnly      bool
 	Runtime       StagedProviderBuildRuntimeV1
 	TTY           bool
 	RunOptions    RunOptions
@@ -29,7 +31,7 @@ type currentShellRunBackendV1 struct {
 	invocation   func(DockerExecutionPlan) (RuntimeInvocationV1, error)
 	concurrency  func(blueprint.Document, DockerExecutionPlan, *transientOutputMount) (LiveRunConcurrencyDecisionV1, error)
 	newRunID     func() (string, error)
-	await        func(context.Context, string, *deploy.OperationLock, deploy.LiveRunV1, bool) (*deploy.OperationLock, error)
+	await        func(context.Context, string, *deploy.OperationLock, deploy.LiveRunV1, bool, io.Writer) (*deploy.OperationLock, error)
 	runPublished func(context.Context, PublishedRuntimeContainerInput, PublishedRuntimeContainerRunnerV1) error
 	prepareProbe func(context.Context, providerstore.Store, blueprint.Platform) (PreparedProbeWorkspace, func() error, error)
 	execution    func(DockerExecutionPlan, PreparedProbeWorkspace, string, bool, bool) (TransientContainerExecutionV1, error)
@@ -50,7 +52,7 @@ func RunCurrentShellV1(ctx context.Context, input CurrentShellRunInputV1) error 
 		invocation:   ShellRuntimeInvocationV1,
 		concurrency:  PlanLiveRunConcurrencyV1,
 		newRunID:     deploy.NewLiveRunIDV1,
-		await:        AwaitLiveRunAdmissionV1,
+		await:        AwaitLiveRunAdmissionWithNoticeV1,
 		runPublished: RunPublishedRuntimeContainerV1,
 		prepareProbe: PrepareProbeWorkspace,
 		execution: func(plan DockerExecutionPlan, workspace PreparedProbeWorkspace, runID string, interactive bool, tty bool) (TransientContainerExecutionV1, error) {
@@ -125,7 +127,14 @@ func runCurrentShellV1(ctx context.Context, input CurrentShellRunInputV1, backen
 	if err != nil {
 		return err
 	}
-	concurrency, err := backend.concurrency(document, planned.Docker, nil)
+	effectivePlan := planned.Docker
+	if input.ReadOnly {
+		effectivePlan.Mounts = append([]MountExecutionPlan(nil), planned.Docker.Mounts...)
+		for index := range effectivePlan.Mounts {
+			effectivePlan.Mounts[index].ReadOnly = true
+		}
+	}
+	concurrency, err := backend.concurrency(document, effectivePlan, nil)
 	if err != nil {
 		return err
 	}
@@ -138,8 +147,9 @@ func runCurrentShellV1(ctx context.Context, input CurrentShellRunInputV1, backen
 		GenerationReference: current.Generation.Reference,
 		Exclusive:           !concurrency.AllowsOverlap,
 		WritableMount:       concurrency.WritableMount,
+		WritablePaths:       concurrency.WritablePaths,
 	}
-	operation, err = backend.await(ctx, dir, operation, candidate, input.Wait)
+	operation, err = backend.await(ctx, dir, operation, candidate, input.Wait, input.RunOptions.Stderr)
 	if err != nil {
 		if errors.Is(err, deploy.ErrLiveRunConflict) {
 			err = liveRunConflictErrorV1(document.Environment.AllowConcurrent, concurrency.WritableMount)
@@ -165,7 +175,7 @@ func runCurrentShellV1(ctx context.Context, input CurrentShellRunInputV1, backen
 			return removeAdmittedTransientBeforeCreateV1(operation, runID, err)
 		}
 		interactive := runOptions.Stdin != nil
-		execution, err := backend.execution(planned.Docker, workspace, runID, interactive, interactive && input.TTY)
+		execution, err := backend.execution(effectivePlan, workspace, runID, interactive, interactive && input.TTY)
 		if err != nil {
 			return removeAdmittedTransientBeforeCreateV1(operation, runID, errors.Join(err, cleanup()))
 		}

@@ -50,7 +50,7 @@ architecture. The detailed design deliberately replaces these assumptions:
 | one `Materialization` per generated image | ordered provider-node transactions, one layer each |
 | image identity uses directory tags and labels | content-derived image identity plus directory-owned generation references |
 | host `runtime.GOARCH` chooses the target | blueprint-level OCI compatibility set plus explicit backend selection |
-| runtime startup may build without saying so | staged up, restart, and app commands visibly ensure a current build; installed runtime operations never build |
+| runtime startup may build without saying so | staged up and restart visibly ensure a current build; app commands and installed runtime operations never build |
 | mutable state embeds prototype bundle structures | versioned request overlay, local build lock, and generation pointer |
 
 Existing types may be adapted during migration, but they must not be extended in
@@ -310,6 +310,22 @@ blueprint normally. A mapping never adds a root requirement. Local paths are
 inspected and built only when selected, while version mappings use the
 provider's normal configured upstream. Every selected result must still satisfy
 the complete active dependency graph.
+
+For v1, a distribution available only from a local mapping cannot be discovered
+after the upstream resolver has already failed to find that transitive. The
+user must also add it as an explicit component package request. Published
+transitives remain discoverable through the normal closure and can activate a
+matching override without becoming explicit roots.
+
+`reploy overrides [--dir DIR]` provides the native editor for this sidecar and
+loads existing content. `--dir` selects the staging directory. The project
+browser starts at the editor's current directory. The optional source workspace
+root is unset for a new sidecar and may be configured inside the editor. When
+configured, the editor stores it in sidecar-local
+`environment.vars.workspace_root` and uses it for common-root-relative paths;
+otherwise selected paths remain absolute. Paths outside a configured root also
+remain absolute. Explicit component requirements appear first with a distinct
+shaded background; override-only mappings appear afterward.
 
 ```go
 type ResolvedSourceInput struct {
@@ -2230,7 +2246,8 @@ The operation contract is:
 | `reploy install` from a staged deployment | Ensures the staged deployment has a current image, reusing a matching recorded build or running the build pipeline, then transfers the selected build into the installed deployment. |
 | Direct `reploy install BLUEPRINT` | Creates its private temporary staging-like workspace, runs the build pipeline there, transfers the selected build into the installed deployment, then removes the temporary workspace. |
 | `stage` and bundle-overlay mutations | Change requested state only. They may make the recorded build stale but never run the build pipeline. |
-| Staged `up`, restart, and app commands | Ensure the current build automatically, reporting the build phase before running. Unexpectedly missing locked source artifacts fail with guidance to run `reploy build`; these commands do not repair them. |
+| Staged `up` and restart | Ensure the current build automatically, reporting the build phase before running. Unexpectedly missing locked source artifacts fail with guidance to run `reploy build`; these commands do not repair them. |
+| Staged app commands | Consume the committed current image and reject a missing or stale build with guidance to run `reploy build`. They never resolve packages or construct an image. |
 | Staged `stop` | Stop the recorded workload even when current-build validation fails, without building or repairing it. |
 | Staged shell, test, and observation commands | Consume the committed image and reject a missing or stale build. |
 | Installed runtime operations | Consume the installed committed image only. They never resolve, build, repair, or change the installed bundle. |
@@ -2474,10 +2491,13 @@ deployment. Its sparse outer shape matches the blueprint: `environment.id`
 must match, and `environment.package_overrides` groups mappings by provider.
 Reploy may create or edit explicit mappings, but it never writes inferred
 dependencies, resolution results, hashes, or selected artifacts into this
-file. Relative local paths resolve from the sidecar directory. Installed-state
-commit retains `BlueprintSource` and removes `Staging`, so the installed
-deployment consumes only the selected staged build and never retains override
-intent or checkout locators.
+file. If the user configures a source workspace root, the native editor records
+it in sidecar-local `environment.vars.workspace_root`; paths beneath it use that
+variable and paths outside it remain absolute. Without a configured root,
+selected paths remain absolute. Relative local paths resolve from the sidecar
+directory. Installed-state commit retains `BlueprintSource` and removes
+`Staging`, so the installed deployment consumes only the selected staged build
+and never retains override intent or checkout locators.
 
 `InstallationStateV1.Status` is exactly `configuring` or `ready`. Reploy does
 not decode an older status-less installation record.
@@ -2871,8 +2891,8 @@ pass.
 - Move developer package substitutions out of the blueprint into the explicit
   staging-only `package-overrides.yaml` sidecar.
 - Add syntax-and-semantics `reploy validate` and remove dry-run.
-- Make staged up, restart, and app commands visibly ensure a current build;
-  retain build-free staged stop recovery; make remaining staged runtime
+- Make staged up and restart visibly ensure a current build; retain build-free
+  staged stop recovery; make app commands and remaining staged runtime
   operations reject missing/stale builds; and keep installed runtime operations
   build-free.
 - Remove startup-time Python runtime preparation and replace the unversioned
@@ -2902,7 +2922,7 @@ Gate: full tests and CLI Docker smoke prove that `reploy build` builds without
 installing; staged install reuses a matching build and rebuilds a missing or
 stale one; direct install builds in its private temporary workspace; install
 help/progress exposes that work; stage and overlay mutations do not build;
-staged up, restart, and app commands visibly ensure a current build; other
+staged up and restart visibly ensure a current build; app commands and other
 staged runtime operations reject missing/stale builds; and installed runtime
 operations never invoke a resolver or builder. Tests also cover transfer of
 only the current lock's provider-store

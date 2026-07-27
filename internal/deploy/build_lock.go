@@ -20,6 +20,7 @@ type BuildLockV1 struct {
 	Schema                string                       `json:"schema"`
 	BlueprintDigest       canonical.Digest             `json:"blueprint_digest"`
 	Overlay               RequestOverlayV1             `json:"overlay"`
+	PackageOverrides      PackageOverrideIntentV1      `json:"package_overrides"`
 	ResolvedRequestDigest canonical.Digest             `json:"resolved_request_digest"`
 	Platform              blueprint.Platform           `json:"platform"`
 	Base                  ImageDescriptor              `json:"base"`
@@ -101,6 +102,9 @@ func ValidateBuildLockV1(lock BuildLockV1, validateProfileOwner providers.Requir
 	}
 	if _, err := RequestOverlayDigestV1(lock.Overlay); err != nil {
 		return fmt.Errorf("build lock overlay: %w", err)
+	}
+	if err := ValidatePackageOverrideIntentV1(lock.PackageOverrides); err != nil {
+		return fmt.Errorf("build lock package overrides: %w", err)
 	}
 	if err := lock.ResolvedRequestDigest.Validate(); err != nil {
 		return fmt.Errorf("build lock resolved request digest: %w", err)

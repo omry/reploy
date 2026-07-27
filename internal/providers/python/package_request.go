@@ -3,6 +3,7 @@ package python
 import (
 	"bytes"
 	"fmt"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -59,4 +60,67 @@ func ValidateCanonicalPackageRequestV1(request providers.CanonicalPackageRequest
 		return fmt.Errorf("Python package request is not canonically normalized")
 	}
 	return nil
+}
+
+// ProviderRequestDistributionsV1 returns the normalized direct distribution
+// roots in one canonical Python provider request. It does not evaluate or
+// resolve dependencies.
+func ProviderRequestDistributionsV1(request providers.CanonicalProviderRequest) ([]string, error) {
+	decoded, err := decodeCanonicalProviderRequestV1(request)
+	if err != nil {
+		return nil, err
+	}
+	unique := make(map[string]struct{}, len(decoded.Requirements))
+	for _, requirement := range decoded.Requirements {
+		value, ok := requirement.Value["requirement"].(string)
+		if !ok {
+			return nil, fmt.Errorf("Python package request requirement must be a string")
+		}
+		distribution, err := pythonRequirementName(value)
+		if err != nil {
+			return nil, err
+		}
+		unique[distribution] = struct{}{}
+	}
+	result := make([]string, 0, len(unique))
+	for distribution := range unique {
+		result = append(result, distribution)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+// FilterProviderRequestOverridesV1 returns the same request with override
+// intent restricted to distributions in the completed component closure.
+func FilterProviderRequestOverridesV1(
+	request providers.CanonicalProviderRequest,
+	distributions []string,
+) (providers.CanonicalProviderRequest, error) {
+	decoded, err := decodeCanonicalProviderRequestV1(request)
+	if err != nil {
+		return providers.CanonicalProviderRequest{}, err
+	}
+	if distributions == nil {
+		return providers.CanonicalProviderRequest{}, fmt.Errorf("Python closure distributions must use an array")
+	}
+	closure := make(map[string]struct{}, len(distributions))
+	for index, distribution := range distributions {
+		if distribution == "" || NormalizeDistributionName(distribution) != distribution {
+			return providers.CanonicalProviderRequest{}, fmt.Errorf(
+				"Python closure distribution %d is not normalized: %q", index, distribution,
+			)
+		}
+		if index > 0 && distributions[index-1] >= distribution {
+			return providers.CanonicalProviderRequest{}, fmt.Errorf("Python closure distributions must be unique and sorted")
+		}
+		closure[distribution] = struct{}{}
+	}
+	filtered := make([]PythonPackageOverrideV1, 0, len(decoded.Overrides))
+	for _, override := range decoded.Overrides {
+		if _, relevant := closure[override.Distribution]; relevant {
+			filtered = append(filtered, override)
+		}
+	}
+	decoded.Overrides = filtered
+	return CanonicalProviderRequestV1(decoded)
 }

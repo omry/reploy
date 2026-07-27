@@ -36,7 +36,7 @@ func TestRunCurrentRuntimeTestV1KeepsLockThroughReadiness(t *testing.T) {
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("order = %v, want %v", order, want)
 	}
-	if stdout.String() != "[STAGING] ok: http://127.0.0.1:8080/a\n[STAGING] ok: http://127.0.0.1:8080/z\n" {
+	if stdout.String() != "[STAGING : demo] ok: http://127.0.0.1:8080/a\n[STAGING : demo] ok: http://127.0.0.1:8080/z\n" {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }

@@ -9,6 +9,7 @@ This directory contains reusable fixture packages for Reploy CLI smoke tests.
 - `git-source-app` is a tiny source-checkout fixture with an in-tree Reploy
   blueprint for `git:` ref staging tests.
 
-The smoke blueprint declares both distributions under
-`environment.workspace.packages.python` so tests can exercise explicit local
-workspace overrides without publishing wheels.
+The smoke runner writes a staging-only `package-overrides.yaml` after staging.
+It maps both distributions to these local projects so the provider tests can
+exercise explicit, demand-driven local overrides without publishing wheels.
+The published smoke blueprint contains no development checkout paths.

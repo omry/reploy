@@ -23,11 +23,16 @@ When working on the in-repo example, stage the local blueprint instead:
 
 ```bash
 reploy stage file:examples/omegaconf-inspector/reploy --dir /tmp/reploy-omegaconf-inspector-demo
+reploy overrides --dir /tmp/reploy-omegaconf-inspector-demo
 reploy app config init --dir /tmp/reploy-omegaconf-inspector-demo
 reploy app config check --dir /tmp/reploy-omegaconf-inspector-demo
 reploy build --dir /tmp/reploy-omegaconf-inspector-demo
 reploy up --dir /tmp/reploy-omegaconf-inspector-demo
 ```
+
+In the override editor, select the current `examples/omegaconf-inspector`
+checkout for `omegaconf-inspector`. The editor writes that development choice
+to the staging directory; the published blueprint remains source-independent.
 
 Then open the staged service URL reported by Reploy.
 

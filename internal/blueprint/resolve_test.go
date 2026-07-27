@@ -170,48 +170,6 @@ func TestResolveDefaultsEnvironmentMountTarget(t *testing.T) {
 	}
 }
 
-func TestResolveWorkspacePackages(t *testing.T) {
-	value := strings.Replace(minimalBlueprint, "  components:\n", "  workspace:\n    root: '{{ workspace_root }}'\n    packages:\n      python:\n        Demo_Server: ./server\n  vars:\n    workspace_root: ..\n  components:\n", 1)
-	source, err := Decode([]byte(value))
-	if err != nil {
-		t.Fatal(err)
-	}
-	document, err := Resolve(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if document.Environment.Workspace.Root != ".." || document.Environment.Workspace.PythonPackages["Demo_Server"] != "server" {
-		t.Fatalf("workspace = %#v", document.Environment.Workspace)
-	}
-}
-
-func TestResolveRejectsInvalidWorkspacePackages(t *testing.T) {
-	for _, test := range []struct {
-		name      string
-		workspace string
-		want      string
-	}{
-		{name: "missing root", workspace: "  workspace:\n    packages:\n      python: {demo: demo}\n", want: "root is required"},
-		{name: "invalid distribution path", workspace: "  workspace:\n    root: .\n    packages:\n      python: {'demo/pkg': demo}\n", want: "must be a valid Python distribution name"},
-		{name: "invalid trailing separator", workspace: "  workspace:\n    root: .\n    packages:\n      python: {'demo-': demo}\n", want: "must be a valid Python distribution name"},
-		{name: "absolute package", workspace: "  workspace:\n    root: .\n    packages:\n      python: {demo: /demo}\n", want: "must stay within root"},
-		{name: "Windows package", workspace: "  workspace:\n    root: .\n    packages:\n      python: {demo: 'C:\\demo'}\n", want: "must stay within root"},
-		{name: "escaping package", workspace: "  workspace:\n    root: .\n    packages:\n      python: {demo: ../demo}\n", want: "must stay within root"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			value := strings.Replace(minimalBlueprint, "  components:\n", test.workspace+"  components:\n", 1)
-			source, err := Decode([]byte(value))
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = Resolve(source)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("error = %v, want containing %q", err, test.want)
-			}
-		})
-	}
-}
-
 func TestResolveRejectsUnsafeEnvironmentMountTargets(t *testing.T) {
 	for _, test := range []struct {
 		name   string

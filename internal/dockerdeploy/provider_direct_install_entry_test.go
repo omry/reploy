@@ -36,13 +36,20 @@ func TestDirectProviderInstallStagesPrivatelyAndResolvesBlueprintTarget(t *testi
 			if input.SourceDeploymentDir != "/private/staging" || input.DestinationDeploymentDir != "/opt/demo" || input.ControlMode != ControlAdmissionWaitV1 || input.Scope != InstallScopeSystem || input.Service != "demo-service" || len(input.Replace) != 1 || !input.Start {
 				t.Fatalf("direct install input = %#v", input)
 			}
+			if input.result == nil {
+				t.Fatal("direct install did not request result details")
+			}
+			input.result.Environment = "demo"
+			input.result.TargetDir = "/opt/demo"
 			return installed, nil
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Target != "/opt/demo" || result.State.Schema != deploy.StateSchemaV1 {
+	if result.Target != "/opt/demo" || result.State.Schema != deploy.StateSchemaV1 ||
+		result.Install.Environment != "demo" || result.Install.TargetDir != "/opt/demo" ||
+		result.Install.State.Schema != deploy.StateSchemaV1 {
 		t.Fatalf("direct install result = %#v", result)
 	}
 }

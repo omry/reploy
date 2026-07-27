@@ -117,7 +117,7 @@ func TestPythonResolverWheelIntegration(t *testing.T) {
 	}
 }
 
-func TestPythonWorkspaceSourceResolverIntegration(t *testing.T) {
+func TestPythonLocalSourceResolverIntegration(t *testing.T) {
 	if os.Getenv("REPLOY_DOCKER_INTEGRATION") != "1" {
 		t.Skip("set REPLOY_DOCKER_INTEGRATION=1 to run Docker integration evidence")
 	}
@@ -166,14 +166,15 @@ demo-server = "demo_server:main"
 	if err := os.WriteFile(filepath.Join(sourceDir, "demo_server.py"), []byte("def main():\n    print('hello from workspace source')\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	document := blueprint.Document{Environment: blueprint.Environment{Workspace: blueprint.Workspace{
-		PythonPackages: map[string]string{"demo-server": "demo"},
-	}}}
-	workspaceSources, err := ResolvePythonWorkspaceSources(document, workspace)
+	manifest, digest, err := ObservePythonSourceManifest(sourceDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshots, err := StagePythonWorkspaceSourceSnapshots(artifacts, workspaceSources)
+	localSources := []PythonLocalSource{{
+		Distribution: "demo-server", HostDir: sourceDir,
+		Manifest: manifest, SourceManifestDigest: digest,
+	}}
+	snapshots, err := StagePythonLocalSourceSnapshots(artifacts, localSources)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,6 +213,7 @@ demo-server = "demo_server:main"
 	request, err := pythonprovider.CanonicalProviderRequestV1(pythonprovider.PythonProviderRequestV1{
 		Component: "application", Interpreter: blueprint.CommandRequirement{Command: "python", Supplier: "base"},
 		Requirements: []providers.CanonicalPackageRequest{packageRequest},
+		Overrides:    []pythonprovider.PythonPackageOverrideV1{{Distribution: "demo-server", Kind: "local"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -226,7 +228,7 @@ demo-server = "demo_server:main"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sources) != 1 || sources[0].SourceManifestDigest != workspaceSources[0].SourceManifestDigest ||
+	if len(sources) != 1 || sources[0].SourceManifestDigest != localSources[0].SourceManifestDigest ||
 		len(entries) != 1 || !strings.HasPrefix(entries[0].Name(), "demo_server-1.0-") || !strings.HasSuffix(entries[0].Name(), ".whl") {
 		t.Fatalf("source resolver result = sources %#v, entries %#v", sources, entries)
 	}

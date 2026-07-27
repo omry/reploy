@@ -20,14 +20,19 @@ type UninstallOptions struct {
 	ServiceName string
 	RemoveDir   bool
 	Stdout      io.Writer
+	Progress    io.Writer
 	ControlMode ControlAdmissionModeV1
 
 	DockerPreflightTimeout time.Duration
 }
 
 type ProviderUninstallResultV1 struct {
-	AlreadyAbsent bool
-	DeploymentDir string
+	AlreadyAbsent     bool
+	DeploymentDir     string
+	Environment       string
+	Service           string
+	RemovedDirectory  bool
+	RetainedDirectory bool
 }
 
 type providerUninstallPublicBackendV1 struct {
@@ -89,20 +94,25 @@ func uninstallProviderV1(options UninstallOptions, backend providerUninstallPubl
 			err := backend.recover(context.Background(), ProviderUninstallRecoveryInputV1{
 				RequestedDir: strings.TrimSpace(options.From), Service: options.ServiceName,
 				Runtime: runtime, ControlMode: options.ControlMode, RemoveDir: options.RemoveDir,
-				RunOptions: providerInstallRunOptionsV1(options.Stdout, options.DockerPreflightTimeout),
+				RunOptions: providerInstallRunOptionsV1(options.Stdout, options.Progress, options.DockerPreflightTimeout),
 			})
-			return ProviderUninstallResultV1{}, err
+			return ProviderUninstallResultV1{
+				DeploymentDir: deploymentDir, Service: options.ServiceName,
+				RemovedDirectory: options.RemoveDir, RetainedDirectory: !options.RemoveDir,
+			}, err
 		}
 	}
+	result := ProviderUninstallResultV1{DeploymentDir: deploymentDir}
 	err = backend.uninstall(context.Background(), ProviderUninstallInputV1{
 		DeploymentDir: deploymentDir,
 		Runtime:       runtime,
 		ControlMode:   options.ControlMode,
 		Service:       options.ServiceName,
 		RemoveDir:     options.RemoveDir,
-		RunOptions:    providerInstallRunOptionsV1(options.Stdout, options.DockerPreflightTimeout),
+		RunOptions:    providerInstallRunOptionsV1(options.Stdout, options.Progress, options.DockerPreflightTimeout),
+		result:        &result,
 	})
-	return ProviderUninstallResultV1{}, err
+	return result, err
 }
 
 // UninstallProviderNeedsRootV1 reports whether the recorded state-v1 install

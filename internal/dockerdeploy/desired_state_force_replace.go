@@ -193,7 +193,7 @@ func forceReplaceStagedDesiredStateV1(
 	candidate := deploy.StateV1{
 		Schema: deploy.StateSchemaV1, Blueprint: payload, BlueprintSource: desired.BlueprintSource,
 		Platform: selected, Overlay: deploy.EmptyRequestOverlayV1(), Current: nil,
-		Staging: &deploy.StagingStateV1{Schema: deploy.StagingStateSchemaV1, WorkspaceRoot: desired.WorkspaceRoot},
+		Staging: &deploy.StagingStateV1{Schema: deploy.StagingStateSchemaV1},
 	}
 	if err := deploy.ValidateStateV1(candidate); err != nil {
 		return result, fmt.Errorf("validate force-replacement staged state: %w", err)

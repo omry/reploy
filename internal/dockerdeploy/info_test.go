@@ -36,8 +36,8 @@ func TestInfoReadsUnbuiltStateV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"target: docker", "phase: staged", "environment: demo", "platform: linux/amd64",
-		"resolved: not built", "materialized image: not built", "request overlay:", "  (empty)",
+		"runtime: docker", "phase: staged", "environment: demo", "platform: linux/amd64",
+		"bundle: not built", "image: not built", "request overlay:", "  (empty)",
 	} {
 		if !strings.Contains(info, want) {
 			t.Fatalf("state-v1 info missing %q:\n%s", want, info)
@@ -55,12 +55,15 @@ func TestInfoReportsCurrentStateV1Build(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"resolved: build lock " + string(current.Generation.BuildLockDigest),
-		"materialized image: " + current.Generation.Reference,
+		"bundle: built",
+		"image: built",
 	} {
 		if !strings.Contains(info, want) {
 			t.Fatalf("state-v1 info missing %q:\n%s", want, info)
 		}
+	}
+	if strings.Contains(info, string(current.Generation.BuildLockDigest)) || strings.Contains(info, current.Generation.Reference) {
+		t.Fatalf("default info leaked internal build identities:\n%s", info)
 	}
 }
 

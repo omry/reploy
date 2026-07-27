@@ -1,2 +1,0 @@
-kind: Changed
-body: Replace named Python translation entries with environment.workspace package mappings, with relative roots resolved from the blueprint directory.

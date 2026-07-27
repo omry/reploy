@@ -31,7 +31,6 @@ type EnvironmentSyntax struct {
 	ID              string                     `yaml:"id"`
 	ControlScript   string                     `yaml:"control_script"`
 	Vars            map[string]any             `yaml:"vars"`
-	Workspace       WorkspaceSyntax            `yaml:"workspace"`
 	Components      map[string]ComponentSyntax `yaml:"components"`
 	AllowConcurrent string                     `yaml:"allow_concurrent"`
 	Terminal        TerminalSyntax             `yaml:"terminal"`
@@ -43,15 +42,6 @@ type EnvironmentSyntax struct {
 
 type TerminalSyntax struct {
 	ColorEnv string `yaml:"color_env"`
-}
-
-type WorkspaceSyntax struct {
-	Root     string                  `yaml:"root"`
-	Packages WorkspacePackagesSyntax `yaml:"packages"`
-}
-
-type WorkspacePackagesSyntax struct {
-	Python map[string]string `yaml:"python"`
 }
 
 type ComponentSyntax struct {

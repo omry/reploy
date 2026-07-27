@@ -17,6 +17,7 @@ type ProviderUninstallInputV1 struct {
 	Service       string
 	RemoveDir     bool
 	RunOptions    RunOptions
+	result        *ProviderUninstallResultV1
 }
 
 type providerUninstallRunBackendV1 struct {
@@ -86,9 +87,18 @@ func runProviderUninstallV1(
 	if err != nil {
 		return err
 	}
+	writeProviderBuildProgress(input.RunOptions.Progress, "planning uninstall")
+	if input.result != nil {
+		*input.result = ProviderUninstallResultV1{
+			DeploymentDir: deploymentDir, Environment: plan.Environment,
+			Service: plan.Installation.Service, RemovedDirectory: plan.RemoveDir,
+			RetainedDirectory: !plan.RemoveDir,
+		}
+	}
 	admitted, err := backend.admit(ctx, deploymentDir, operation, ControlAdmissionInputV1{
 		Operation: deploy.ControlOperationUninstallV1, GenerationReference: plan.GenerationReference,
 		Mode: input.ControlMode, DockerPreflightTimeout: input.RunOptions.DockerPreflightTimeout,
+		Notice: controlWaitNoticeWriterV1(input.RunOptions),
 	})
 	if err != nil {
 		operation = nil // admission owns lock release on every error path
@@ -115,12 +125,16 @@ func runProviderUninstallV1(
 		}
 		plan = waitedPlan
 	}
+	writeProviderBuildProgress(input.RunOptions.Progress, "stopping installed service")
+	writeProviderBuildProgress(input.RunOptions.Progress, "removing runtime resources")
 	if err := backend.execute(ctx, operation, plan, input.RunOptions); err != nil {
 		return err
 	}
 	if !plan.RemoveDir {
+		writeProviderBuildProgress(input.RunOptions.Progress, "retaining installation directory")
 		return nil
 	}
+	writeProviderBuildProgress(input.RunOptions.Progress, "removing installation directory")
 	ownedOperation := operation
 	ownedMarkerID := markerID
 	ownedControlLease := controlLease

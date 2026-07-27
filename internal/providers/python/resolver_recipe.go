@@ -33,7 +33,8 @@ func WheelResolverArgv(
 	if err != nil {
 		return nil, err
 	}
-	if _, err := wheelResolverSourceConstraints(decoded.Component, sources, reusable); err != nil {
+	constraints, err := wheelResolverSourceConstraints(decoded, sources, reusable)
+	if err != nil {
 		return nil, err
 	}
 	argv := []string{
@@ -41,7 +42,7 @@ func WheelResolverArgv(
 		"wheel", "--no-cache-dir", "--progress-bar", "off",
 		"--find-links", ResolverInputDirectory, "--wheel-dir", ResolverOutputDirectory,
 	}
-	if len(sources) != 0 {
+	if len(constraints) != 0 {
 		argv = append(argv, "--constraint", ResolverSourceConstraintsPath)
 	}
 	for _, requirement := range decoded.Requirements {
@@ -62,11 +63,11 @@ func WheelResolverSourceConstraints(
 	if err != nil {
 		return nil, err
 	}
-	return wheelResolverSourceConstraints(decoded.Component, sources, reusable)
+	return wheelResolverSourceConstraints(decoded, sources, reusable)
 }
 
 func wheelResolverSourceConstraints(
-	component string,
+	request PythonProviderRequestV1,
 	sources []providers.ResolvedSourceInput,
 	reusable []providerstore.ArtifactDescriptor,
 ) ([]byte, error) {
@@ -81,6 +82,13 @@ func wheelResolverSourceConstraints(
 		artifactsByDigest[string(artifact.SHA256)] = append(artifactsByDigest[string(artifact.SHA256)], artifact)
 	}
 	var constraints strings.Builder
+	overrideByDistribution := make(map[string]PythonPackageOverrideV1, len(request.Overrides))
+	for _, override := range request.Overrides {
+		overrideByDistribution[override.Distribution] = override
+		if override.Kind == "version" {
+			fmt.Fprintf(&constraints, "%s==%s\n", override.Distribution, override.Version)
+		}
+	}
 	distributions := map[string]string{}
 	for index, source := range sources {
 		if index > 0 && (sources[index-1].Component > source.Component || sources[index-1].Component == source.Component && sources[index-1].LogicalPackage >= source.LogicalPackage) {
@@ -89,14 +97,18 @@ func wheelResolverSourceConstraints(
 		if err := providers.ValidateResolvedSourceInput(source); err != nil {
 			return nil, err
 		}
-		if source.Component != component {
-			return nil, fmt.Errorf("Python wheel resolver source %q targets component %q, want %q", source.LogicalPackage, source.Component, component)
+		if source.Component != request.Component {
+			return nil, fmt.Errorf("Python wheel resolver source %q targets component %q, want %q", source.LogicalPackage, source.Component, request.Component)
 		}
 		distribution := NormalizeDistributionName(source.LogicalPackage)
 		if prior, found := distributions[distribution]; found {
 			return nil, fmt.Errorf("Python wheel resolver sources %q and %q normalize to the same distribution", prior, source.LogicalPackage)
 		}
 		distributions[distribution] = source.LogicalPackage
+		override, found := overrideByDistribution[distribution]
+		if !found || override.Kind != "local" {
+			return nil, fmt.Errorf("Python wheel resolver source %q has no matching local package override", source.LogicalPackage)
+		}
 		matches := artifactsByDigest[string(source.ArtifactDigest)]
 		if len(matches) != 1 {
 			return nil, fmt.Errorf("Python wheel resolver source %q must identify exactly one reusable wheel", source.LogicalPackage)

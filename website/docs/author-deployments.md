@@ -50,37 +50,57 @@ as `component.profile`.
 
 Add only the nodes the app needs. Common additions are:
 
-- `environment.workspace` for explicitly named local development package
-  checkouts;
 - `environment.mounts` plus `docker.mounts` for persistent runtime data;
 - `environment.allow_concurrent` for app-command and shell overlap policy;
 - `environment.install` for target, system account, and success output;
 - `environment.workload.endpoints` and `docker.workload.endpoints` for published
   services and readiness checks.
 
-## Local Workspace Overrides
+## Local Development Overrides
 
-Local checkouts can supersede published Python distributions during staging:
+Local development choices do not belong in a published blueprint. Stage the
+blueprint, then open the override editor:
+
+```bash
+reploy stage ./example.blueprint.yaml
+reploy overrides
+```
+
+Use `--dir DIR` only to select a staging directory explicitly:
+
+```bash
+reploy overrides --dir ./reploy-staging
+```
+
+The editor loads or creates `package-overrides.yaml` beside that staged
+deployment. It can select an exact upstream version or a local project for a
+package. The project browser starts in the directory where the editor was
+launched. The workspace root is unset by default, so selected paths remain
+absolute. Set an optional workspace root inside the editor to store paths
+beneath it using `{{ workspace_root }}`; paths outside it remain absolute:
 
 ```yaml
 environment:
-  workspace:
-    root: ..
-    packages:
-      python:
-        omegaconf: OmegaConf
-        hydra-core: hydra
+  id: example
+  vars:
+    workspace_root: /home/me/src
+  package_overrides:
+    python:
+      omegaconf:
+        path: "{{ workspace_root }}/OmegaConf"
+      hydra-core:
+        path: "{{ workspace_root }}/hydra"
 ```
 
-`root` may be relative to the blueprint. Package paths are relative to `root`
-and must stay inside it. A caller may override the root while staging:
+An override is used only if the blueprint or a dependency actually requires
+that package. Installation consumes the artifacts built during staging and
+does not retain the sidecar or external source paths.
 
-```bash
-reploy stage ./example.blueprint.yaml --workspace-root /home/me/src/project
-```
-
-Reploy records the effective root in staging state. Installation consumes the
-artifacts built during staging and does not retain an external workspace path.
+The editor shades explicit component dependencies and lists them before
+override-only mappings. In v1, a package available only from a local project
+must be an explicit component requirement if it would otherwise appear only
+transitively; use the blueprint or `reploy bundle add-package` to add that
+discovery root.
 
 ## Validate and Publish
 

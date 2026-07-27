@@ -1,7 +1,6 @@
 package dockerdeploy
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -12,26 +11,14 @@ import (
 	"github.com/omry/reploy/internal/deploy"
 )
 
-func TestAppCommandEnsuresStagedProviderBuildBeforeExecution(t *testing.T) {
+func TestAppCommandUsesCurrentGenerationWithoutProviderBuild(t *testing.T) {
 	dir := appCommandStateDir(t)
-	originalBuild := runAppCommandProviderBuild
 	originalCommand := runCurrentAppCommand
 	t.Cleanup(func() {
-		runAppCommandProviderBuild = originalBuild
 		runCurrentAppCommand = originalCommand
 	})
 
 	var order []string
-	var progress bytes.Buffer
-	var builds []ProviderBuildRunInputV1
-	runAppCommandProviderBuild = func(ctx context.Context, input ProviderBuildRunInputV1) (LockedProviderBuildExecutionResultV1, error) {
-		if ctx == nil {
-			t.Fatal("build context is nil")
-		}
-		builds = append(builds, input)
-		order = append(order, "build")
-		return LockedProviderBuildExecutionResultV1{}, nil
-	}
 	var commands []CurrentAppCommandRunInputV1
 	runCurrentAppCommand = func(ctx context.Context, input CurrentAppCommandRunInputV1) error {
 		if ctx == nil {
@@ -42,34 +29,28 @@ func TestAppCommandEnsuresStagedProviderBuildBeforeExecution(t *testing.T) {
 		return nil
 	}
 
-	if err := AppCommand(AppCommandOptions{Dir: dir, CommandArgs: []string{"serve"}, Progress: &progress}); err != nil {
+	if err := AppCommand(AppCommandOptions{Dir: dir, CommandArgs: []string{"serve"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := AppCommand(AppCommandOptions{Dir: dir, CommandArgs: []string{"serve"}, DeployedOnly: true}); err != nil {
 		t.Fatal(err)
 	}
 
-	if len(builds) != 1 || builds[0].DeploymentDir != dir || !builds[0].Automatic || builds[0].NoCache || builds[0].ValidateLayers {
-		t.Fatalf("implicit builds = %#v", builds)
-	}
 	if len(commands) != 2 || commands[0].DeployedOnly || !commands[1].DeployedOnly {
 		t.Fatalf("commands = %#v", commands)
 	}
-	if got, want := order, []string{"build", "command", "command"}; !reflect.DeepEqual(got, want) {
+	if got, want := order, []string{"command", "command"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("dispatch order = %#v, want %#v", got, want)
-	}
-	if progress.String() != "prepare current build\n" {
-		t.Fatalf("automatic build progress = %q", progress.String())
 	}
 }
 
-func TestAppCommandRejectsInvalidRequestBeforeImplicitBuild(t *testing.T) {
+func TestAppCommandRejectsInvalidRequestBeforeRuntimeExecution(t *testing.T) {
 	dir := appCommandStateDir(t)
-	originalBuild := runAppCommandProviderBuild
-	t.Cleanup(func() { runAppCommandProviderBuild = originalBuild })
-	runAppCommandProviderBuild = func(context.Context, ProviderBuildRunInputV1) (LockedProviderBuildExecutionResultV1, error) {
-		t.Fatal("invalid app command attempted an implicit build")
-		return LockedProviderBuildExecutionResultV1{}, nil
+	originalCommand := runCurrentAppCommand
+	t.Cleanup(func() { runCurrentAppCommand = originalCommand })
+	runCurrentAppCommand = func(context.Context, CurrentAppCommandRunInputV1) error {
+		t.Fatal("invalid app command reached runtime execution")
+		return nil
 	}
 	if err := AppCommand(AppCommandOptions{Dir: dir, CommandArgs: []string{"unknown"}}); err == nil {
 		t.Fatal("invalid command was accepted")
@@ -97,16 +78,10 @@ func TestAppCommandNeverBuildsInstalledState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	originalBuild := runAppCommandProviderBuild
 	originalCommand := runCurrentAppCommand
 	t.Cleanup(func() {
-		runAppCommandProviderBuild = originalBuild
 		runCurrentAppCommand = originalCommand
 	})
-	runAppCommandProviderBuild = func(context.Context, ProviderBuildRunInputV1) (LockedProviderBuildExecutionResultV1, error) {
-		t.Fatal("installed app command attempted an implicit build")
-		return LockedProviderBuildExecutionResultV1{}, nil
-	}
 	runCurrentAppCommand = func(context.Context, CurrentAppCommandRunInputV1) error { return nil }
 
 	if err := AppCommand(AppCommandOptions{Dir: dir, CommandArgs: []string{"serve"}}); err != nil {

@@ -33,10 +33,6 @@ func TestStagePackDesiredStateV1CreatesOnlyStateFiles(t *testing.T) {
 	if state.BlueprintSource != string(wantSource) || state.Staging == nil {
 		t.Fatalf("retained staging source = %#v", state)
 	}
-	wantWorkspaceRoot := filepath.Clean(filepath.Join(filepath.Dir(manifestPath), stateDocumentWorkspaceRoot(t, state)))
-	if state.Staging.WorkspaceRoot != wantWorkspaceRoot {
-		t.Fatalf("workspace root = %q, want %q", state.Staging.WorkspaceRoot, wantWorkspaceRoot)
-	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -55,32 +51,6 @@ func TestStagePackDesiredStateV1CreatesOnlyStateFiles(t *testing.T) {
 	if !reflect.DeepEqual(names, []string{"operation.lock", "state.json"}) {
 		t.Fatalf("internal entries = %q", names)
 	}
-}
-
-func TestStagePackDesiredStateV1StoresWorkspaceRootOverrideOutsideStagingDirectory(t *testing.T) {
-	ref, _ := writeDesiredStateStagePack(t, "0.1.0")
-	stagingDir := filepath.Join(t.TempDir(), "detached", "staging")
-	override := filepath.Join(t.TempDir(), "checkout")
-
-	result, err := StagePackDesiredStateV1(t.Context(), PackDesiredStateStageInputV1{
-		DeploymentDir: stagingDir, Pack: ref, ExplicitPlatform: "linux/amd64",
-		WorkspaceRoot: override, Create: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.DesiredState.State.Staging == nil || result.DesiredState.State.Staging.WorkspaceRoot != override {
-		t.Fatalf("staging state = %#v", result.DesiredState.State.Staging)
-	}
-}
-
-func stateDocumentWorkspaceRoot(t *testing.T, state deploy.StateV1) string {
-	t.Helper()
-	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return filepath.FromSlash(document.Environment.Workspace.Root)
 }
 
 func TestStagePackDesiredStateV1UpdatesResolvedBlueprint(t *testing.T) {

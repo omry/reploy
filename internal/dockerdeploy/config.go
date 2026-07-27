@@ -25,7 +25,6 @@ type AppCommandOptions struct {
 	Wait                   bool
 	Stdout                 io.Writer
 	Stderr                 io.Writer
-	Progress               io.Writer
 	DockerPreflightTimeout time.Duration
 }
 
@@ -37,6 +36,7 @@ type AppCommandListOptions struct {
 type ShellOptions struct {
 	Dir                    string
 	Wait                   bool
+	ReadOnly               bool
 	Stdin                  io.Reader
 	Stdout                 io.Writer
 	Stderr                 io.Writer
@@ -57,7 +57,6 @@ type AppCommandListEntry struct {
 
 var runCurrentAppCommand = RunCurrentAppCommandV1
 var runCurrentShell = RunCurrentShellV1
-var runAppCommandProviderBuild = RunProviderBuildV1
 var colorRuntimeGOOS = runtime.GOOS
 
 type temporaryCommandRunner func(CommandSpec, RunOptions) error
@@ -82,8 +81,10 @@ func Shell(options ShellOptions) error {
 		terminalOutput = os.Stdout
 	}
 	stdin, _, tty := shellCommandIO(options.Stdin, terminalOutput)
-	return runCurrentShell(context.Background(), CurrentShellRunInputV1{
-		DeploymentDir: options.Dir, Wait: options.Wait, Runtime: runtime, TTY: tty,
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	return runCurrentShell(ctx, CurrentShellRunInputV1{
+		DeploymentDir: options.Dir, Wait: options.Wait, ReadOnly: options.ReadOnly, Runtime: runtime, TTY: tty,
 		RunOptions: RunOptions{Stdin: stdin, Stdout: options.Stdout, Stderr: options.Stderr, DockerPreflightTimeout: options.DockerPreflightTimeout},
 	})
 }
@@ -117,27 +118,8 @@ func AppCommand(options AppCommandOptions) error {
 	if err != nil {
 		return err
 	}
-	ctx := context.Background()
-	installed, err := runtimeStateHasDeploymentV1(options.Dir)
-	if err != nil {
-		return err
-	}
-	if !options.DeployedOnly && !installed {
-		if options.Progress != nil {
-			fmt.Fprintln(options.Progress, "prepare current build")
-		}
-		if _, err := runAppCommandProviderBuild(ctx, ProviderBuildRunInputV1{
-			DeploymentDir: options.Dir,
-			Runtime:       runtime,
-			Automatic:     true,
-			RunOptions: RunOptions{
-				Stdout: options.Stdout, Stderr: options.Stderr,
-				DockerPreflightTimeout: options.DockerPreflightTimeout,
-			},
-		}); err != nil {
-			return fmt.Errorf("prepare current build: %w", err)
-		}
-	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 	return runCurrentAppCommand(ctx, CurrentAppCommandRunInputV1{
 		DeploymentDir: options.Dir, Arguments: append([]string(nil), options.CommandArgs...),
 		DeployedOnly: options.DeployedOnly, OutputDir: options.OutputDir, OutputFile: options.OutputFile,

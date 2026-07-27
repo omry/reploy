@@ -67,7 +67,8 @@ func TestAssembleBuildLockPublishesCompleteGraphLock(t *testing.T) {
 		Catalog: append([]providers.RealizedOutput{}, fixture.request.EarlierCatalog...),
 	}
 	lock, err := AssembleBuildLock(context.Background(), fixture.store, BuildLockAssemblyInput{
-		BlueprintDigest: rendererDigest("b"), ResolvedRequest: request, Overlay: overlay, Base: fixture.lock.Base, Graph: graph,
+		BlueprintDigest: rendererDigest("b"), ResolvedRequest: request, Overlay: overlay,
+		PackageOverrides: fixture.lock.PackageOverrides, Base: fixture.lock.Base, Graph: graph,
 		RuntimePolicy: fixture.lock.RuntimePolicy, ValidationRecord: validationReference, FinalImage: lockedNode.Result,
 	})
 	if err != nil {
@@ -101,7 +102,8 @@ func TestAssembleBuildLockRejectsMisalignedGraphBeforePublication(t *testing.T) 
 		Sources: fixture.request.SourceCandidates,
 	}
 	_, err = AssembleBuildLock(context.Background(), fixture.store, BuildLockAssemblyInput{
-		BlueprintDigest: rendererDigest("b"), ResolvedRequest: request, Overlay: overlay, Base: fixture.lock.Base,
+		BlueprintDigest: rendererDigest("b"), ResolvedRequest: request, Overlay: overlay,
+		PackageOverrides: fixture.lock.PackageOverrides, Base: fixture.lock.Base,
 		Graph:         providers.GraphExecutionResult{Plan: fixture.request.Plan, PrefixImages: []providers.RealizedImageV1{}},
 		RuntimePolicy: fixture.lock.RuntimePolicy, ValidationRecord: fixture.lock.ValidationRecord, FinalImage: fixture.lock.FinalImage,
 	})

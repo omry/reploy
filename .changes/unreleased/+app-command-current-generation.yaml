@@ -1,0 +1,2 @@
+kind: Changed
+body: Run staged app commands only from the current committed build, with explicit `reploy build` recovery instead of automatic package resolution and image construction.

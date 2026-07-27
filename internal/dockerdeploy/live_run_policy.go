@@ -13,6 +13,7 @@ import (
 type LiveRunConcurrencyDecisionV1 struct {
 	AllowsOverlap bool
 	WritableMount string
+	WritablePaths []string
 }
 
 func liveRunConflictErrorV1(policy blueprint.ConcurrentRunPolicy, writableMount string) error {
@@ -59,20 +60,27 @@ func PlanLiveRunConcurrencyV1(
 		)
 	}
 
-	writable := make([]string, 0)
+	writable := make([]MountExecutionPlan, 0)
 	for _, mount := range plan.Mounts {
 		if !mount.ReadOnly {
-			writable = append(writable, mount.Name)
+			writable = append(writable, mount)
 		}
 	}
-	sort.Strings(writable)
+	sort.Slice(writable, func(left, right int) bool {
+		return writable[left].Name < writable[right].Name
+	})
 	if len(writable) != 0 {
-		return LiveRunConcurrencyDecisionV1{WritableMount: writable[0]}, nil
+		paths := make([]string, 0, len(writable))
+		for _, mount := range writable {
+			paths = append(paths, mount.Target)
+		}
+		sort.Strings(paths)
+		return LiveRunConcurrencyDecisionV1{WritableMount: writable[0].Name, WritablePaths: paths}, nil
 	}
 	if output != nil {
 		switch output.Variable {
 		case runtimeOutputDirectoryVariable:
-			return LiveRunConcurrencyDecisionV1{WritableMount: "--output-dir"}, nil
+			return LiveRunConcurrencyDecisionV1{WritableMount: "--output-dir", WritablePaths: []string{output.ContainerPath}}, nil
 		case runtimeOutputFileVariable:
 			// The adjacent hidden staging directory belongs only to this run.
 		case "":

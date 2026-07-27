@@ -62,14 +62,11 @@ func TestDecodeAcceptsEnvironmentSchema(t *testing.T) {
 	}
 }
 
-func TestDecodeAcceptsWorkspacePackages(t *testing.T) {
+func TestDecodeRejectsRemovedWorkspaceNode(t *testing.T) {
 	value := strings.Replace(minimalBlueprint, "  components:\n", "  workspace:\n    root: ..\n    packages:\n      python:\n        demo-server: server\n  components:\n", 1)
-	source, err := Decode([]byte(value))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if source.Environment.Workspace.Root != ".." || source.Environment.Workspace.Packages.Python["demo-server"] != "server" {
-		t.Fatalf("workspace = %#v", source.Environment.Workspace)
+	_, err := Decode([]byte(value))
+	if err == nil || !strings.Contains(err.Error(), "field workspace not found") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

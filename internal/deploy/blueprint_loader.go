@@ -19,7 +19,6 @@ type LoadedBlueprint struct {
 	ResolvedArtifact *ResolvedPackArtifact
 	ManifestPath     string
 	BlueprintSource  string
-	WorkspaceRoot    string
 }
 
 // LoadBlueprint resolves and validates one environment blueprint. It does not
@@ -55,22 +54,10 @@ func LoadBlueprint(ref PackRef) (LoadedBlueprint, error) {
 	if err != nil {
 		return LoadedBlueprint{}, err
 	}
-	workspaceRoot := resolveBlueprintWorkspaceRoot(manifestPath, document.Environment.Workspace.Root)
 	return LoadedBlueprint{
 		Document: document, Ref: resolved, RequestedRef: requested, ResolvedArtifact: artifact,
-		ManifestPath: manifestPath, BlueprintSource: string(content), WorkspaceRoot: workspaceRoot,
+		ManifestPath: manifestPath, BlueprintSource: string(content),
 	}, nil
-}
-
-func resolveBlueprintWorkspaceRoot(manifestPath string, declaredRoot string) string {
-	if declaredRoot == "" {
-		return ""
-	}
-	root := filepath.FromSlash(declaredRoot)
-	if filepath.IsAbs(root) {
-		return filepath.Clean(root)
-	}
-	return filepath.Clean(filepath.Join(filepath.Dir(manifestPath), root))
 }
 
 func loadEnvironmentBlueprintManifest(manifestPath string) ([]byte, blueprint.Document, error) {

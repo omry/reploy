@@ -1,0 +1,2 @@
+kind: Changed
+body: Render runtime status with Reploy fields instead of Docker Compose tables, preserve application log lines by default, and make runtime capture timestamps opt-in with terminal-only color.

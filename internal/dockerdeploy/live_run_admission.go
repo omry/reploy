@@ -3,7 +3,9 @@ package dockerdeploy
 import (
 	"context"
 	"fmt"
+	"io"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/omry/reploy/internal/deploy"
@@ -26,7 +28,18 @@ func AwaitLiveRunAdmissionV1(
 	candidate deploy.LiveRunV1,
 	wait bool,
 ) (*deploy.OperationLock, error) {
-	return awaitLiveRunAdmissionV1(ctx, deploymentDir, operation, candidate, wait, liveRunAdmissionBackendV1{
+	return AwaitLiveRunAdmissionWithNoticeV1(ctx, deploymentDir, operation, candidate, wait, nil)
+}
+
+func AwaitLiveRunAdmissionWithNoticeV1(
+	ctx context.Context,
+	deploymentDir string,
+	operation *deploy.OperationLock,
+	candidate deploy.LiveRunV1,
+	wait bool,
+	notice io.Writer,
+) (*deploy.OperationLock, error) {
+	return awaitLiveRunAdmissionV1(ctx, deploymentDir, operation, candidate, wait, notice, liveRunAdmissionBackendV1{
 		acquire: deploy.AcquireOperationLock,
 		wait: func(ctx context.Context) error {
 			timer := time.NewTimer(liveRunAdmissionPollIntervalV1)
@@ -47,6 +60,7 @@ func awaitLiveRunAdmissionV1(
 	operation *deploy.OperationLock,
 	candidate deploy.LiveRunV1,
 	wait bool,
+	notice io.Writer,
 	backend liveRunAdmissionBackendV1,
 ) (*deploy.OperationLock, error) {
 	if ctx == nil {
@@ -88,6 +102,10 @@ func awaitLiveRunAdmissionV1(
 		return cancelLiveRunAdmissionV1(ctx, deploymentDir, operation, candidate.ID, backend,
 			fmt.Errorf("live run admission returned unsupported status %q", status))
 	}
+	if err := writeAdmissionWaitNoticeV1(operation, candidate.ID, notice); err != nil {
+		return cancelLiveRunAdmissionV1(ctx, deploymentDir, operation, candidate.ID, backend,
+			fmt.Errorf("describe live run wait: %w", err))
+	}
 	if err := operation.Unlock(); err != nil {
 		return cancelLiveRunAdmissionV1(ctx, deploymentDir, nil, candidate.ID, backend,
 			fmt.Errorf("release operation lock while waiting: %w", err))
@@ -128,6 +146,59 @@ func awaitLiveRunAdmissionV1(
 			return cancelLiveRunAdmissionV1(ctx, deploymentDir, operation, candidate.ID, backend,
 				fmt.Errorf("live run %q has unsupported status %q", candidate.ID, run.Status))
 		}
+	}
+}
+
+func writeAdmissionWaitNoticeV1(operation *deploy.OperationLock, candidateID string, output io.Writer) error {
+	if output == nil {
+		return nil
+	}
+	queue, _, err := operation.ReadLiveRunQueueV1()
+	if err != nil {
+		return err
+	}
+	candidateIndex := -1
+	for index, entry := range queue.Runs {
+		if entry.ID == candidateID {
+			candidateIndex = index
+			break
+		}
+	}
+	if candidateIndex < 0 {
+		return fmt.Errorf("waiting operation is not in the queue")
+	}
+	ahead := queue.Runs[:candidateIndex]
+	active := deploy.LiveRunV1{}
+	for _, entry := range ahead {
+		if entry.Status == deploy.LiveRunStatusActiveV1 {
+			active = entry
+			break
+		}
+	}
+	label := admissionEntryLabelV1(active)
+	detail := ""
+	if len(active.WritablePaths) != 0 {
+		detail = " (shared writable mounts: " + strings.Join(active.WritablePaths, ", ") + ")"
+	}
+	if len(ahead) <= 1 {
+		fmt.Fprintf(output, "Waiting for %s to finish%s.\n", label, detail)
+	} else {
+		fmt.Fprintf(output, "Waiting behind %d operations; %s is blocking this command%s.\n", len(ahead), label, detail)
+	}
+	fmt.Fprintln(output, "Ctrl-C cancels this wait without affecting the active command.")
+	return nil
+}
+
+func admissionEntryLabelV1(entry deploy.LiveRunV1) string {
+	switch entry.Kind {
+	case deploy.LiveRunKindShellV1:
+		return "active shell"
+	case deploy.LiveRunKindAppV1:
+		return fmt.Sprintf("active app command %q", entry.Name)
+	case deploy.LiveRunKindControlV1:
+		return fmt.Sprintf("active %s operation", entry.Name)
+	default:
+		return "active operation"
 	}
 }
 

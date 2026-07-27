@@ -18,6 +18,7 @@ type RuntimeOptions struct {
 	ControlMode            ControlAdmissionModeV1
 	Follow                 bool
 	Tail                   string
+	Timestamps             bool
 	Verbose                bool
 	Stdout                 io.Writer
 	Stderr                 io.Writer
@@ -94,7 +95,9 @@ func Runtime(options RuntimeOptions) error {
 			DeploymentDir: options.Dir,
 			Action:        options.Action,
 			Runtime:       runtime,
-			Command:       RuntimeCommandOptions{Follow: options.Follow, Tail: options.Tail},
+			Command: RuntimeCommandOptions{
+				Follow: options.Follow, Tail: options.Tail, Timestamps: options.Timestamps,
+			},
 			RunOptions: RunOptions{
 				Stdout: options.Stdout, Stderr: options.Stderr,
 				DockerPreflightTimeout: options.DockerPreflightTimeout,
@@ -162,9 +165,10 @@ func runtimeRunPhase(action string) string {
 }
 
 type RuntimeCommandOptions struct {
-	Follow bool
-	Tail   string
-	Since  string
+	Follow     bool
+	Tail       string
+	Since      string
+	Timestamps bool
 }
 
 func RuntimeCommand(dir string, action string) (CommandSpec, error) {
@@ -188,7 +192,10 @@ func RuntimeCommandWithOptions(dir string, action string, options RuntimeCommand
 	case "status":
 		return composeCommandWithProject(dir, projectName, "ps", "--all"), nil
 	case "logs":
-		args := []string{"logs", "--timestamps"}
+		args := []string{"logs"}
+		if options.Timestamps {
+			args = append(args, "--timestamps")
+		}
 		if options.Since != "" {
 			args = append(args, "--since", options.Since)
 		}

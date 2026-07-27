@@ -6,22 +6,21 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/providers"
 )
 
-func TestMatchReusablePythonWorkspaceSourcesRequiresUnchangedManifest(t *testing.T) {
+func TestMatchReusablePythonLocalSourcesRequiresUnchangedManifest(t *testing.T) {
 	root := t.TempDir()
-	document, observed := sourceReuseWorkspaceFixture(t, root)
+	overrides, observed := sourceReuseLocalFixture(t, root)
 	lockedDemo := testPythonResolvedSource("application", "demo", "1.0", observed[0].SourceManifestDigest, reuseTestDigest("1"))
 	lockedOtherComponent := testPythonResolvedSource("tools", "demo", "1.0", observed[0].SourceManifestDigest, reuseTestDigest("2"))
 	lockedChanged := testPythonResolvedSource("application", "changed", "1.0", reuseTestDigest("3"), reuseTestDigest("4"))
 
-	current, err := ResolveSelectedPythonWorkspaceSources(document, root, []string{"changed", "demo"})
+	current, err := ObserveSelectedPythonLocalSources(overrides, []string{"changed", "demo"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	reusable, err := MatchReusablePythonWorkspaceSources(
+	reusable, err := MatchReusablePythonLocalSources(
 		[]providers.ResolvedSourceInput{lockedChanged, lockedDemo, lockedOtherComponent}, current,
 	)
 	if err != nil {
@@ -32,7 +31,7 @@ func TestMatchReusablePythonWorkspaceSourcesRequiresUnchangedManifest(t *testing
 	}
 }
 
-func sourceReuseWorkspaceFixture(t *testing.T, root string) (blueprint.Document, []PythonWorkspaceSource) {
+func sourceReuseLocalFixture(t *testing.T, root string) ([]PythonLocalOverrideV1, []PythonLocalSource) {
 	t.Helper()
 	for _, name := range []string{"demo", "changed"} {
 		directory := filepath.Join(root, name)
@@ -43,12 +42,13 @@ func sourceReuseWorkspaceFixture(t *testing.T, root string) (blueprint.Document,
 			t.Fatal(err)
 		}
 	}
-	document := blueprint.Document{Environment: blueprint.Environment{Workspace: blueprint.Workspace{
-		PythonPackages: map[string]string{"demo": "demo", "changed": "changed"},
-	}}}
-	observed, err := ResolveSelectedPythonWorkspaceSources(document, root, []string{"demo"})
+	overrides := []PythonLocalOverrideV1{
+		{Distribution: "changed", HostDir: filepath.Join(root, "changed")},
+		{Distribution: "demo", HostDir: filepath.Join(root, "demo")},
+	}
+	observed, err := ObserveSelectedPythonLocalSources(overrides, []string{"demo"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return document, observed
+	return overrides, observed
 }

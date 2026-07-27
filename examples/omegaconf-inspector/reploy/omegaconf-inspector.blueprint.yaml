@@ -7,13 +7,6 @@ blueprint:
 
 environment:
   id: omegaconf-inspector
-  vars:
-    project_root: ..
-  workspace:
-    root: "{{ project_root }}"
-    packages:
-      python:
-        omegaconf-inspector: .
   components:
     base:
       image: python:3.11-slim

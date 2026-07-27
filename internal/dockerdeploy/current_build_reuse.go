@@ -11,11 +11,12 @@ import (
 )
 
 type CurrentBuildReuseInput struct {
-	ResolvedRequest providers.ResolvedRequestV1
-	Overlay         deploy.RequestOverlayV1
-	Base            deploy.ImageDescriptor
-	Document        blueprint.Document
-	DockerPlan      DockerExecutionPlan
+	ResolvedRequest  providers.ResolvedRequestV1
+	Overlay          deploy.RequestOverlayV1
+	PackageOverrides deploy.PackageOverrideIntentV1
+	Base             deploy.ImageDescriptor
+	Document         blueprint.Document
+	DockerPlan       DockerExecutionPlan
 }
 
 // CurrentBuildMatches returns false for a valid but changed build input. It
@@ -93,6 +94,7 @@ func CurrentBuildMatches(current CurrentBuild, input CurrentBuildReuseInput) (bo
 	}
 	if current.Lock.ResolvedRequestDigest != requestDigest ||
 		lockedOverlayDigest != overlayDigest ||
+		!reflect.DeepEqual(current.Lock.PackageOverrides, input.PackageOverrides) ||
 		current.Lock.Platform != input.ResolvedRequest.Platform ||
 		!reflect.DeepEqual(current.Lock.Base, input.Base) ||
 		lockedPolicyDigest != policyDigest {

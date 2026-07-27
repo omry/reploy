@@ -38,7 +38,11 @@ func providerBuildPreparationFixture(t *testing.T) (
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded := LoadedBuildRequestV1{State: state, Document: document, Request: request, Current: &lock}
+	packageOverrides := deploy.EmptyPackageOverrideIntentV1(document.Environment.ID)
+	loaded := LoadedBuildRequestV1{
+		State: state, Document: document, PackageOverrides: packageOverrides,
+		Request: request, Current: &lock,
+	}
 	current := CurrentBuild{State: state, Generation: *state.Current, Lock: lock}
 	plan, err := registry.Plan(providers.PlanInput{
 		Components: request.Components, Platform: request.Platform,
@@ -60,7 +64,8 @@ func providerBuildPreparationFixture(t *testing.T) (
 	}
 	input := LockedProviderBuildPreparationInputV1{
 		Operation: operation, Store: store, Environment: "current-test", DeploymentDir: dir,
-		Sources: []providers.ResolvedSourceInput{}, DockerPlan: DockerExecutionPlan{},
+		PackageOverrides: packageOverrides,
+		Sources:          []providers.ResolvedSourceInput{}, DockerPlan: DockerExecutionPlan{},
 	}
 	return input, loaded, current, selected, prepared
 }
@@ -217,7 +222,7 @@ func TestPrepareLockedProviderBuildV1StopsWhenRecoveryFails(t *testing.T) {
 	backend.recover = func(context.Context, *deploy.OperationLock, providerstore.Store, *deploy.EnvironmentGenerationState, string, string, providers.RequirementProfileOwnerValidator, providers.ResolvedBundleOwnerValidator) (bool, error) {
 		return false, want
 	}
-	backend.load = func(*deploy.OperationLock, []providers.ResolvedSourceInput) (LoadedBuildRequestV1, error) {
+	backend.load = func(*deploy.OperationLock, deploy.PackageOverrideIntentV1, []providers.ResolvedSourceInput) (LoadedBuildRequestV1, error) {
 		t.Fatal("failed recovery loaded build inputs")
 		return LoadedBuildRequestV1{}, nil
 	}
@@ -267,10 +272,10 @@ func providerBuildPreparationTestBackend(
 			}
 			return true, nil
 		},
-		load: func(_ *deploy.OperationLock, sources []providers.ResolvedSourceInput) (LoadedBuildRequestV1, error) {
+		load: func(_ *deploy.OperationLock, packageOverrides deploy.PackageOverrideIntentV1, sources []providers.ResolvedSourceInput) (LoadedBuildRequestV1, error) {
 			*order = append(*order, "load")
-			if sources == nil {
-				t.Fatal("sources became nil")
+			if sources == nil || !reflect.DeepEqual(packageOverrides, loaded.PackageOverrides) {
+				t.Fatal("build request inputs changed")
 			}
 			return loaded, nil
 		},

@@ -20,6 +20,21 @@ type providerInstallRunInputV1 struct {
 	ControlMode              ControlAdmissionModeV1
 	Install                  providerInstallOptionsV1
 	RunOptions               RunOptions
+	result                   *ProviderInstallResultV1
+}
+
+// ProviderInstallResultV1 describes what a completed install actually did.
+// It is derived from the locked install plan and prior destination state.
+type ProviderInstallResultV1 struct {
+	State         deploy.StateV1
+	Environment   string
+	TargetDir     string
+	ControlScript string
+	Service       string
+	Updated       bool
+	ImageReused   bool
+	Started       bool
+	PathUpdates   []PathUpdateAction
 }
 
 type providerInstallOptionsV1 struct {
@@ -148,6 +163,7 @@ func runProviderInstallV1(
 	if err != nil {
 		return deploy.StateV1{}, err
 	}
+	writeProviderBuildProgress(input.RunOptions.Progress, "preparing current staged environment")
 	built, err := backend.buildSource(ctx, LockedProviderBuildRunInputV1{
 		Operation: sourceOperation, Store: sourceStore, DeploymentDir: sourceDir,
 		Runtime: input.Runtime, RunOptions: input.RunOptions,
@@ -300,6 +316,23 @@ func runProviderInstallV1(
 	if err != nil {
 		return deploy.StateV1{}, err
 	}
+	updated := destinationFound && destinationState.Deployment != nil
+	if updated {
+		writeProviderBuildProgress(input.RunOptions.Progress, "updating existing installation")
+	} else {
+		writeProviderBuildProgress(input.RunOptions.Progress, "planning new installation")
+	}
+	if input.result != nil {
+		*input.result = ProviderInstallResultV1{
+			Environment: document.Environment.ID, TargetDir: destinationDir,
+			ControlScript: plan.ControlScript, Service: plan.Installation.Service,
+			Updated: updated, Started: input.Install.Start,
+			PathUpdates: append([]PathUpdateAction(nil), plan.PathUpdates...),
+		}
+		if updated && destinationState.Current != nil {
+			input.result.ImageReused = destinationState.Current.ImageDigest == sourceBuild.Generation.ImageDigest
+		}
+	}
 	destinationGeneration := providerInstallDestinationGenerationV1(destinationState, destinationFound, references.Generation)
 	locked := lockedProviderInstallV1{
 		SourceOperation: sourceOperation, DestinationOperation: destinationOperation,
@@ -316,6 +349,7 @@ func runProviderInstallV1(
 		GenerationReference:    destinationGeneration,
 		Mode:                   input.ControlMode,
 		DockerPreflightTimeout: input.RunOptions.DockerPreflightTimeout,
+		Notice:                 controlWaitNoticeWriterV1(input.RunOptions),
 	})
 	if err != nil {
 		if errors.Is(err, deploy.ErrLiveRunConflict) {
@@ -344,15 +378,18 @@ func runProviderInstallV1(
 		}
 	}
 	if destinationFound && destinationState.Deployment != nil {
+		writeProviderBuildProgress(input.RunOptions.Progress, "stopping existing service")
 		if err := backend.stopDestination(ctx, locked, destinationState); err != nil {
 			return deploy.StateV1{}, fmt.Errorf("stop existing installed workload before cutover: %w", err)
 		}
 	}
+	writeProviderBuildProgress(input.RunOptions.Progress, "installing environment generation")
 	published, err := backend.publish(ctx, sourceOperation, destinationOperation, sourceStore, destinationStore, publicationInput)
 	if err != nil {
 		return deploy.StateV1{}, err
 	}
 	destinationPublished = true
+	writeProviderBuildProgress(input.RunOptions.Progress, "configuring installed environment")
 	if err := backend.publishFiles(prepared); err != nil {
 		return published, fmt.Errorf("installation was committed as configuring but installation configuration failed: %w; resolve the cause and rerun reploy install", err)
 	}
@@ -364,9 +401,13 @@ func runProviderInstallV1(
 		return published, fmt.Errorf("host configuration succeeded but installation could not be marked ready: %w; rerun reploy install", err)
 	}
 	if input.Install.Start {
+		writeProviderBuildProgress(input.RunOptions.Progress, "starting installed service")
 		if err := backend.startDestination(ctx, locked, ready); err != nil {
 			return ready, fmt.Errorf("installation is ready but startup failed: %w; the installation remains in place for inspection", err)
 		}
+	}
+	if input.result != nil {
+		input.result.State = ready
 	}
 	return ready, nil
 }

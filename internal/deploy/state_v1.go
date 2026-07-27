@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
@@ -29,12 +28,10 @@ type StateV1 struct {
 	Deployment      *DeploymentStateV1           `json:"deployment"`
 }
 
-// StagingStateV1 contains machine-local inputs that let a staging deployment
-// observe live development sources. It is excluded from provider identity and
-// is never transferred into an installed deployment.
+// StagingStateV1 marks a deployment as staged. Staging-only package overrides
+// live in the private sidecar rather than deployment state.
 type StagingStateV1 struct {
-	Schema        string `json:"schema"`
-	WorkspaceRoot string `json:"workspace_root"`
+	Schema string `json:"schema"`
 }
 
 func ValidateStateV1(state StateV1) error {
@@ -75,15 +72,9 @@ func ValidateStateV1(state StateV1) error {
 	return nil
 }
 
-func ValidateStagingStateV1(state StagingStateV1, document blueprint.Document) error {
+func ValidateStagingStateV1(state StagingStateV1, _ blueprint.Document) error {
 	if state.Schema != StagingStateSchemaV1 {
 		return fmt.Errorf("staging state schema must be %q", StagingStateSchemaV1)
-	}
-	if state.WorkspaceRoot != "" && (!filepath.IsAbs(state.WorkspaceRoot) || filepath.Clean(state.WorkspaceRoot) != state.WorkspaceRoot) {
-		return fmt.Errorf("staging workspace root must be empty or an absolute clean path")
-	}
-	if len(document.Environment.Workspace.PythonPackages) != 0 && state.WorkspaceRoot == "" {
-		return fmt.Errorf("staging workspace root is required by blueprint workspace packages")
 	}
 	return nil
 }

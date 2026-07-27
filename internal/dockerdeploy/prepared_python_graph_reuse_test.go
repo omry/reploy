@@ -66,6 +66,47 @@ func TestLoadPreparedPythonGraphReuseUsesOnlyCurrentCompatibleContent(t *testing
 	}
 }
 
+func TestLoadPreparedPythonGraphReuseIgnoresUnrelatedPythonOverride(t *testing.T) {
+	fixture := newPreparedPythonGraphReuseFixture(t)
+	plan := fixture.request.Plan
+	plan.Nodes = append([]providers.NodeSpec{}, plan.Nodes...)
+	requirement, err := pythonprovider.CanonicalPackageRequestV1("demo-server==1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := pythonprovider.CanonicalProviderRequestV1(pythonprovider.PythonProviderRequestV1{
+		Component:    "application",
+		Interpreter:  blueprint.CommandRequirement{Command: "python", Version: ">=3.11", Supplier: "base"},
+		Requirements: []providers.CanonicalPackageRequest{requirement},
+		Overrides: []pythonprovider.PythonPackageOverrideV1{
+			{Distribution: "demo-server", Kind: "local"},
+			{Distribution: "unused", Kind: "version", Version: "99"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range plan.Nodes {
+		if plan.Nodes[index].ID != fixture.request.NodeID {
+			continue
+		}
+		plan.Nodes[index].Request = request
+		plan.Nodes[index].Requirements.ProviderData = providers.CanonicalProviderData{
+			Schema: request.Schema, Value: request.Value,
+		}
+	}
+	reuse, err := LoadPreparedPythonGraphReuse(
+		fixture.store, plan, fixture.request.Platform,
+		fixture.request.SourceCandidates, fixture.sourceWheels, &fixture.lock,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := reuse.CachedResolutions[fixture.request.NodeID]; !found {
+		t.Fatal("unrelated Python override invalidated the cached node resolution")
+	}
+}
+
 func TestLoadPreparedPythonGraphReuseIgnoresUnusedSourceCandidate(t *testing.T) {
 	fixture := newPreparedPythonGraphReuseFixture(t)
 	unusedWheel, err := fixture.store.Publish(
@@ -373,6 +414,12 @@ func newPreparedPythonGraphReuseFixtureWithManifest(t *testing.T, sourceManifest
 	}
 	lock := deploy.BuildLockV1{
 		Schema: deploy.BuildLockSchemaV1, BlueprintDigest: reuseTestDigest("2"), Overlay: deploy.EmptyRequestOverlayV1(),
+		PackageOverrides: deploy.PackageOverrideIntentV1{
+			Schema: deploy.PackageOverrideIntentSchemaV1, EnvironmentID: "demo",
+			Choices: []deploy.PackageOverrideIntentChoiceV1{{
+				Provider: "python", Package: "demo-server", Kind: "local",
+			}},
+		},
 		ResolvedRequestDigest: reuseTestDigest("3"), Platform: request.Platform, Base: descriptor,
 		Graph: deploy.ProviderGraphLockV1{Nodes: []providers.NodeID{"base", request.NodeID}, Edges: append([]providers.ProviderEdgeV1{}, request.Plan.Edges...)},
 		Nodes: []deploy.NodeLockV1{{
@@ -487,6 +534,7 @@ func newPreparedAPTGraphReuseFixture(t *testing.T) (
 	resultImage := providers.RealizedImageV1{Digest: reuseTestDigest("8"), ConfigDigest: reuseTestDigest("9"), RootFSSubject: reuseTestDigest("a")}
 	lock := deploy.BuildLockV1{
 		Schema: deploy.BuildLockSchemaV1, BlueprintDigest: reuseTestDigest("2"), Overlay: deploy.EmptyRequestOverlayV1(),
+		PackageOverrides:      deploy.EmptyPackageOverrideIntentV1("demo"),
 		ResolvedRequestDigest: reuseTestDigest("3"), Platform: descriptor.Platform, Base: descriptor,
 		Graph: deploy.ProviderGraphLockV1{Nodes: []providers.NodeID{"apt", "base"}, Edges: []providers.ProviderEdgeV1{}},
 		Nodes: []deploy.NodeLockV1{{

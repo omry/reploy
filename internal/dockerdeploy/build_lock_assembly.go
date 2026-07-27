@@ -17,6 +17,7 @@ type BuildLockAssemblyInput struct {
 	BlueprintDigest  canonical.Digest
 	ResolvedRequest  providers.ResolvedRequestV1
 	Overlay          deploy.RequestOverlayV1
+	PackageOverrides deploy.PackageOverrideIntentV1
 	Base             deploy.ImageDescriptor
 	Graph            providers.GraphExecutionResult
 	RuntimePolicy    deploy.RuntimePolicyV1
@@ -51,6 +52,9 @@ func AssembleBuildLock(
 	}
 	if overlayDigest != input.ResolvedRequest.OverlayDigest {
 		return deploy.BuildLockV1{}, fmt.Errorf("assemble build lock overlay does not match the resolved request")
+	}
+	if err := deploy.ValidatePackageOverrideIntentV1(input.PackageOverrides); err != nil {
+		return deploy.BuildLockV1{}, err
 	}
 	if err := input.Base.Validate(); err != nil {
 		return deploy.BuildLockV1{}, fmt.Errorf("assemble build lock base: %w", err)
@@ -137,7 +141,8 @@ func AssembleBuildLock(
 	sort.Slice(locks, func(left int, right int) bool { return locks[left].NodeID < locks[right].NodeID })
 	lock := deploy.BuildLockV1{
 		Schema: deploy.BuildLockSchemaV1, BlueprintDigest: input.BlueprintDigest,
-		Overlay: input.Overlay, ResolvedRequestDigest: requestDigest, Platform: input.ResolvedRequest.Platform,
+		Overlay: input.Overlay, PackageOverrides: input.PackageOverrides,
+		ResolvedRequestDigest: requestDigest, Platform: input.ResolvedRequest.Platform,
 		Base: input.Base, Graph: deploy.ProviderGraphLockV1{
 			Nodes: graphNodes, Edges: append([]providers.ProviderEdgeV1{}, input.Graph.SelectedEdges...),
 		},

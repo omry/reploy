@@ -22,6 +22,13 @@ type PythonProviderRequestV1 struct {
 	Component    string
 	Interpreter  blueprint.CommandRequirement
 	Requirements []providers.CanonicalPackageRequest
+	Overrides    []PythonPackageOverrideV1
+}
+
+type PythonPackageOverrideV1 struct {
+	Distribution string
+	Kind         string
+	Version      string
 }
 
 type PythonBundleV1 struct {
@@ -92,9 +99,38 @@ func CanonicalProviderRequestV1(request PythonProviderRequestV1) (providers.Cano
 	if request.Interpreter.Supplier != "" {
 		interpreter["supplier"] = request.Interpreter.Supplier
 	}
+	overrides := make([]any, 0, len(request.Overrides))
+	for index, override := range request.Overrides {
+		if override.Distribution == "" || NormalizeDistributionName(override.Distribution) != override.Distribution {
+			return providers.CanonicalProviderRequest{}, fmt.Errorf("Python package override %d distribution is not normalized", index)
+		}
+		if index > 0 && request.Overrides[index-1].Distribution >= override.Distribution {
+			return providers.CanonicalProviderRequest{}, fmt.Errorf("Python package overrides must be unique and sorted by distribution")
+		}
+		item := canonical.Object{"distribution": override.Distribution, "kind": override.Kind}
+		switch override.Kind {
+		case "local":
+			if override.Version != "" {
+				return providers.CanonicalProviderRequest{}, fmt.Errorf("local Python package override %q must not contain a version", override.Distribution)
+			}
+		case "version":
+			if err := ValidatePackageVersionV1(override.Version); err != nil {
+				return providers.CanonicalProviderRequest{}, fmt.Errorf(
+					"version Python package override %q: %w", override.Distribution, err,
+				)
+			}
+			item["version"] = override.Version
+		default:
+			return providers.CanonicalProviderRequest{}, fmt.Errorf("Python package override %q has unsupported kind %q", override.Distribution, override.Kind)
+		}
+		overrides = append(overrides, item)
+	}
 	return providers.CanonicalProviderRequest{
 		Schema: ProviderRequestSchemaV1, Provider: blueprint.ComponentTypePython,
-		Value: canonical.Object{"component": request.Component, "interpreter": interpreter, "requirements": requirements},
+		Value: canonical.Object{
+			"component": request.Component, "interpreter": interpreter,
+			"requirements": requirements, "overrides": overrides,
+		},
 	}, nil
 }
 
@@ -115,13 +151,14 @@ func ValidateCanonicalProviderRequestForComponentV1(component string, request pr
 }
 
 func decodeCanonicalProviderRequestV1(request providers.CanonicalProviderRequest) (PythonProviderRequestV1, error) {
-	if request.Schema != ProviderRequestSchemaV1 || request.Provider != blueprint.ComponentTypePython || len(request.Value) != 3 {
+	if request.Schema != ProviderRequestSchemaV1 || request.Provider != blueprint.ComponentTypePython || len(request.Value) != 4 {
 		return PythonProviderRequestV1{}, fmt.Errorf("Python provider request must use schema %q and the exact value shape", ProviderRequestSchemaV1)
 	}
 	component, componentOK := request.Value["component"].(string)
 	interpreterValue, interpreterOK := asCanonicalObject(request.Value["interpreter"])
 	requirementValues, requirementsOK := request.Value["requirements"].([]any)
-	if !componentOK || !interpreterOK || !requirementsOK {
+	overrideValues, overridesOK := request.Value["overrides"].([]any)
+	if !componentOK || !interpreterOK || !requirementsOK || !overridesOK {
 		return PythonProviderRequestV1{}, fmt.Errorf("Python provider request fields have invalid types")
 	}
 	command, commandOK := interpreterValue["command"].(string)
@@ -143,8 +180,25 @@ func decodeCanonicalProviderRequestV1(request providers.CanonicalProviderRequest
 		}
 		requirements = append(requirements, providers.CanonicalPackageRequest{Schema: schema, Value: packageValue})
 	}
+	overrides := make([]PythonPackageOverrideV1, 0, len(overrideValues))
+	for index, value := range overrideValues {
+		object, ok := asCanonicalObject(value)
+		if !ok {
+			return PythonProviderRequestV1{}, fmt.Errorf("Python provider request override %d has invalid shape", index)
+		}
+		distribution, distributionOK := object["distribution"].(string)
+		kind, kindOK := object["kind"].(string)
+		version, _ := object["version"].(string)
+		if !distributionOK || !kindOK || len(object) != 2+boolInt(version != "") {
+			return PythonProviderRequestV1{}, fmt.Errorf("Python provider request override %d has invalid fields", index)
+		}
+		overrides = append(overrides, PythonPackageOverrideV1{
+			Distribution: distribution, Kind: kind, Version: version,
+		})
+	}
 	normalized, err := CanonicalProviderRequestV1(PythonProviderRequestV1{
-		Component: component, Interpreter: blueprint.CommandRequirement{Command: command, Version: version, Supplier: supplier}, Requirements: requirements,
+		Component: component, Interpreter: blueprint.CommandRequirement{Command: command, Version: version, Supplier: supplier},
+		Requirements: requirements, Overrides: overrides,
 	})
 	if err != nil {
 		return PythonProviderRequestV1{}, err
@@ -161,7 +215,8 @@ func decodeCanonicalProviderRequestV1(request providers.CanonicalProviderRequest
 		return PythonProviderRequestV1{}, fmt.Errorf("Python provider request is not canonically normalized")
 	}
 	return PythonProviderRequestV1{
-		Component: component, Interpreter: blueprint.CommandRequirement{Command: command, Version: version, Supplier: supplier}, Requirements: requirements,
+		Component: component, Interpreter: blueprint.CommandRequirement{Command: command, Version: version, Supplier: supplier},
+		Requirements: requirements, Overrides: overrides,
 	}, nil
 }
 

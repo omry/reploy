@@ -51,17 +51,17 @@ func infoStateV1(dir string) (string, error) {
 	}
 	lines := []string{
 		fmt.Sprintf("deployment: %s", absoluteDir),
-		"target: docker",
+		"runtime: docker",
 		fmt.Sprintf("phase: %s", phase),
 		fmt.Sprintf("environment: %s", document.Environment.ID),
 		fmt.Sprintf("platform: %s", state.Platform.Canonical),
 	}
 	if state.Current == nil {
-		lines = append(lines, "resolved: not built", "materialized image: not built")
+		lines = append(lines, "bundle: not built", "image: not built")
 	} else {
 		lines = append(lines,
-			fmt.Sprintf("resolved: build lock %s", state.Current.BuildLockDigest),
-			fmt.Sprintf("materialized image: %s", state.Current.Reference),
+			"bundle: built",
+			"image: built",
 		)
 	}
 	lines = append(lines, "request overlay:")

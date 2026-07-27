@@ -26,46 +26,78 @@ type PreparedPythonSourceSnapshot struct {
 	SourceManifestDigest canonical.Digest
 }
 
-// StagePythonWorkspaceSourceSnapshots copies exactly the entries covered by
+// StagePythonLocalSourceSnapshots copies exactly the entries covered by
 // each recorded manifest into the resolver's existing read-only input mount.
 // The live checkout is never mounted into the resolver container.
-func StagePythonWorkspaceSourceSnapshots(
+func StagePythonLocalSourceSnapshots(
 	prepared PreparedPythonResolverArtifacts,
-	sources []PythonWorkspaceSource,
+	sources []PythonLocalSource,
 ) (snapshots []PreparedPythonSourceSnapshot, err error) {
 	if err := validatePreparedPythonResolverArtifacts(prepared); err != nil {
 		return nil, err
 	}
 	if sources == nil {
-		return nil, fmt.Errorf("Python workspace sources must use an array")
+		return nil, fmt.Errorf("local Python sources must use an array")
 	}
 	if len(sources) == 0 {
 		return []PreparedPythonSourceSnapshot{}, nil
 	}
-	if err := validatePythonWorkspaceSourcesForSnapshot(sources); err != nil {
+	if err := validatePythonLocalSourcesForSnapshot(sources); err != nil {
 		return nil, err
 	}
 	if err := os.Chmod(prepared.InputHostDir, 0o700); err != nil {
 		return nil, fmt.Errorf("make Python resolver input writable for source snapshots: %w", err)
 	}
 	snapshotRoot := filepath.Join(prepared.InputHostDir, pythonSourceSnapshotDirectory)
+	rootCreated := false
+	created := []string{}
 	defer func() {
 		if err != nil {
-			makePythonResolverWorkspaceRemovable(snapshotRoot)
-			err = errors.Join(err, os.RemoveAll(snapshotRoot))
+			for index := len(created) - 1; index >= 0; index-- {
+				makePythonResolverWorkspaceRemovable(created[index])
+				err = errors.Join(err, os.RemoveAll(created[index]))
+			}
+			if rootCreated {
+				err = errors.Join(err, os.Remove(snapshotRoot))
+			}
+		}
+		if !rootCreated || err == nil {
+			if protectErr := os.Chmod(snapshotRoot, 0o500); protectErr != nil {
+				err = errors.Join(err, fmt.Errorf("protect Python source snapshot root: %w", protectErr))
+				snapshots = nil
+			}
 		}
 		if protectErr := os.Chmod(prepared.InputHostDir, 0o500); protectErr != nil {
 			err = errors.Join(err, fmt.Errorf("restore Python resolver input protection: %w", protectErr))
 			snapshots = nil
 		}
 	}()
-	if err := os.Mkdir(snapshotRoot, 0o700); err != nil {
-		return nil, fmt.Errorf("create Python source snapshot root: %w", err)
+	info, statErr := os.Lstat(snapshotRoot)
+	switch {
+	case errors.Is(statErr, os.ErrNotExist):
+		if err := os.Mkdir(snapshotRoot, 0o700); err != nil {
+			return nil, fmt.Errorf("create Python source snapshot root: %w", err)
+		}
+		rootCreated = true
+	case statErr != nil:
+		return nil, fmt.Errorf("inspect Python source snapshot root: %w", statErr)
+	case !info.IsDir() || info.Mode()&os.ModeSymlink != 0:
+		return nil, fmt.Errorf("Python source snapshot root must be a directory")
+	default:
+		if err := os.Chmod(snapshotRoot, 0o700); err != nil {
+			return nil, fmt.Errorf("make Python source snapshot root writable: %w", err)
+		}
 	}
 
 	snapshots = make([]PreparedPythonSourceSnapshot, 0, len(sources))
 	for _, source := range sources {
 		hostDir := filepath.Join(snapshotRoot, source.Distribution)
+		if _, statErr := os.Lstat(hostDir); statErr == nil {
+			return nil, fmt.Errorf("Python source snapshot %q already exists", source.Distribution)
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return nil, fmt.Errorf("inspect Python source snapshot %q: %w", source.Distribution, statErr)
+		}
+		created = append(created, hostDir)
 		if err := stageOnePythonSourceSnapshot(source, hostDir); err != nil {
 			return nil, fmt.Errorf("stage Python source snapshot %q: %w", source.Distribution, err)
 		}
@@ -75,42 +107,39 @@ func StagePythonWorkspaceSourceSnapshots(
 			SourceManifestDigest: source.SourceManifestDigest,
 		})
 	}
-	if err := os.Chmod(snapshotRoot, 0o500); err != nil {
-		return nil, fmt.Errorf("protect Python source snapshot root: %w", err)
-	}
 	return snapshots, nil
 }
 
-func validatePythonWorkspaceSourcesForSnapshot(sources []PythonWorkspaceSource) error {
+func validatePythonLocalSourcesForSnapshot(sources []PythonLocalSource) error {
 	for index, source := range sources {
-		if err := blueprint.ValidatePythonDistributionName("Python workspace source distribution", source.Distribution); err != nil {
-			return fmt.Errorf("Python workspace source %d: %w", index, err)
+		if err := blueprint.ValidatePythonDistributionName("local Python source distribution", source.Distribution); err != nil {
+			return fmt.Errorf("local Python source %d: %w", index, err)
 		}
 		if pythonprovider.NormalizeDistributionName(source.Distribution) != source.Distribution {
-			return fmt.Errorf("Python workspace source %d has noncanonical distribution %q", index, source.Distribution)
+			return fmt.Errorf("local Python source %d has noncanonical distribution %q", index, source.Distribution)
 		}
 		if index > 0 && sources[index-1].Distribution >= source.Distribution {
-			return fmt.Errorf("Python workspace sources must be unique and sorted by distribution")
+			return fmt.Errorf("local Python sources must be unique and sorted by distribution")
 		}
 		if source.HostDir == "" || !filepath.IsAbs(source.HostDir) || filepath.Clean(source.HostDir) != source.HostDir {
-			return fmt.Errorf("Python workspace source %q host directory must be absolute and clean", source.Distribution)
+			return fmt.Errorf("local Python source %q host directory must be absolute and clean", source.Distribution)
 		}
 		real, err := resolveRealPythonSourceDirectory(source.HostDir)
 		if err != nil {
-			return fmt.Errorf("Python workspace source %q host directory: %w", source.Distribution, err)
+			return fmt.Errorf("local Python source %q host directory: %w", source.Distribution, err)
 		}
 		if real != source.HostDir {
-			return fmt.Errorf("Python workspace source %q host directory must be fully resolved", source.Distribution)
+			return fmt.Errorf("local Python source %q host directory must be fully resolved", source.Distribution)
 		}
 		if err := validatePythonSourceManifestV1(source.Manifest); err != nil {
-			return fmt.Errorf("Python workspace source %q manifest: %w", source.Distribution, err)
+			return fmt.Errorf("local Python source %q manifest: %w", source.Distribution, err)
 		}
 		digest, err := canonical.Sum("python-source-manifest", pythonSourceManifestSchemaV1, source.Manifest)
 		if err != nil {
-			return fmt.Errorf("Python workspace source %q manifest digest: %w", source.Distribution, err)
+			return fmt.Errorf("local Python source %q manifest digest: %w", source.Distribution, err)
 		}
 		if digest != source.SourceManifestDigest {
-			return fmt.Errorf("Python workspace source %q manifest digest does not match its entries", source.Distribution)
+			return fmt.Errorf("local Python source %q manifest digest does not match its entries", source.Distribution)
 		}
 	}
 	return nil
@@ -183,7 +212,7 @@ func parsePythonSourceMode(value string) (os.FileMode, error) {
 	return os.FileMode(parsed), nil
 }
 
-func stageOnePythonSourceSnapshot(source PythonWorkspaceSource, destination string) error {
+func stageOnePythonSourceSnapshot(source PythonLocalSource, destination string) error {
 	if err := os.Mkdir(destination, 0o700); err != nil {
 		return err
 	}

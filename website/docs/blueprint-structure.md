@@ -22,7 +22,6 @@ environment:
   id: example                 # Required stable environment name.
   control_script: example     # Optional generated command name; defaults to id.
   vars: {}                    # Values used by blueprint interpolation.
-  workspace: {}               # Optional local development package checkouts.
   components: {}              # Base image and requested software.
   allow_concurrent: auto      # App-command and shell overlap policy.
   terminal: {}                # Terminal and color integration.
@@ -87,25 +86,6 @@ environment:
   workload:
     command: serve
 ```
-
-## Workspace
-
-Workspace entries are explicit development overrides, not installation
-requests:
-
-```yaml
-environment:
-  workspace:
-    root: ..
-    packages:
-      python:
-        omegaconf: OmegaConf
-        hydra-core: hydra
-```
-
-`root` may be relative to the blueprint. Package paths are relative to that root
-and may not escape it. The declared distribution name must match the built
-metadata and satisfy active requirements.
 
 ## Mounts
 

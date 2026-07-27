@@ -85,12 +85,16 @@ func TestStagePythonResolverSourceConstraintsProtectsDeterministicInput(t *testi
 	request, _ := pythonprovider.CanonicalProviderRequestV1(pythonprovider.PythonProviderRequestV1{
 		Component: "application", Interpreter: blueprint.CommandRequirement{Command: "python"},
 		Requirements: []providers.CanonicalPackageRequest{packageRequest},
+		Overrides:    []pythonprovider.PythonPackageOverrideV1{{Distribution: "demo", Kind: "local"}},
 	})
 	source := testPythonResolvedSource(
 		"application", "demo", "1.0", canonical.Digest("sha256:"+strings.Repeat("a", 64)), wheel.SHA256,
 	)
 	if err := StagePythonResolverSourceConstraints(prepared, request, []providers.ResolvedSourceInput{source}, []providerstore.ArtifactDescriptor{wheel}); err != nil {
 		t.Fatal(err)
+	}
+	if err := StagePythonResolverSourceConstraints(prepared, request, []providers.ResolvedSourceInput{source}, []providerstore.ArtifactDescriptor{wheel}); err != nil {
+		t.Fatal("replace source constraints:", err)
 	}
 	content, err := os.ReadFile(filepath.Join(prepared.InputHostDir, filepath.Base(pythonprovider.ResolverSourceConstraintsPath)))
 	if err != nil {
@@ -106,6 +110,28 @@ func TestStagePythonResolverSourceConstraintsProtectsDeterministicInput(t *testi
 	}
 	if info.Mode().Perm() != 0o500 {
 		t.Fatalf("input mode = %o after constraints, want 500", info.Mode().Perm())
+	}
+}
+
+func TestResetPythonResolverOutputRemovesOnlyRegularPrivateFiles(t *testing.T) {
+	prepared := testPreparedPythonResolverArtifacts(t)
+	for _, name := range []string{"first.whl", "second.whl"} {
+		if err := os.WriteFile(filepath.Join(prepared.OutputHostDir, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ResetPythonResolverOutput(prepared); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(prepared.OutputHostDir)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("reset output = %#v, %v", entries, err)
+	}
+	if err := os.Mkdir(filepath.Join(prepared.OutputHostDir, "unsafe"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := ResetPythonResolverOutput(prepared); err == nil || !strings.Contains(err.Error(), "unsafe entry") {
+		t.Fatalf("unsafe reset error = %v", err)
 	}
 }
 

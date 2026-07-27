@@ -727,6 +727,13 @@ environment, provider, and normalized package identifier, it takes precedence;
 otherwise resolution follows the blueprint. The selected override must still
 satisfy all active dependency constraints.
 
+In v1, a package that exists only as a local source and is otherwise visible
+only as a transitive dependency must also be an explicit component
+requirement. A blueprint requirement or `reploy bundle add-package` supplies
+that discovery root; the override still selects the source and does not add a
+second package to the resolved closure. This avoids inspecting or building
+every local mapping speculatively.
+
 The sidecar records developer intent only. Reploy may create or edit explicit
 mappings on the user's behalf, but resolution must not add inferred packages,
 resolved dependencies, hashes, or selected artifacts to it. Those results
@@ -734,6 +741,18 @@ belong in the generated build lock and closed bundle. Relative local paths are
 resolved from the sidecar's directory; absolute paths are also valid. Physical
 paths never enter resolved content identity. Installation consumes the staged
 bundle and never reads the sidecar or original source checkout.
+
+`reploy overrides [--dir DIR]` opens the native editor for the current,
+default, or explicitly selected staging directory and loads an existing
+sidecar. `--dir` always identifies the staging directory, not a source
+workspace. The project browser starts at the editor's current directory. The
+workspace root is unset by default and may be configured inside the editor.
+Without one, selected paths remain absolute. With one, the editor records it in
+sidecar-local `environment.vars.workspace_root`, uses `{{ workspace_root }}` for
+paths beneath it, and keeps selected paths outside the root absolute. It lists
+explicit blueprint, selected-option, and deployment-added package requirements
+first with a distinct shaded background; override-only mappings follow. These
+variables belong to the sidecar and are not blueprint variables.
 
 ## Blueprint Variables
 
@@ -811,12 +830,14 @@ following explicit sidecar to its staging directory:
 ```yaml
 environment:
   id: arbiter
+  vars:
+    workspace_root: /home/me/src
   package_overrides:
     python:
       arbiter-server:
-        path: ../server
+        path: "{{ workspace_root }}/server"
       arbiter-imap:
-        path: ../plugins/imap
+        path: "{{ workspace_root }}/plugins/imap"
       arbiter-smtp:
         version: "1.4.2"
 ```

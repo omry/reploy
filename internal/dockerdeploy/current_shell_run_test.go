@@ -50,17 +50,62 @@ func TestRunCurrentShellV1NeverCreatesContainerForStaleBuild(t *testing.T) {
 	}
 }
 
+func TestRunCurrentShellV1ReadOnlyChangesOnlyTransientMounts(t *testing.T) {
+	dir := t.TempDir()
+	current, _ := runtimeCurrentBuildFixture(t)
+	original := DockerExecutionPlan{
+		ContainerName: "demo",
+		Mounts: []MountExecutionPlan{
+			{Name: "config", Target: "/conf"},
+			{Name: "data", Target: "/data"},
+		},
+	}
+	order := []string{}
+	backend := currentShellRunTestBackend(t, dir, current, CurrentRuntimePlanV1{Docker: original}, &order)
+	backend.matches = func(_ CurrentBuild, plan DockerExecutionPlan) (bool, error) {
+		if !reflect.DeepEqual(plan, original) {
+			t.Fatalf("published-plan match received %#v, want original %#v", plan, original)
+		}
+		return true, nil
+	}
+	backend.concurrency = func(_ blueprint.Document, plan DockerExecutionPlan, _ *transientOutputMount) (LiveRunConcurrencyDecisionV1, error) {
+		for _, mount := range plan.Mounts {
+			if !mount.ReadOnly {
+				t.Fatalf("read-only shell concurrency saw writable mount %#v", mount)
+			}
+		}
+		return LiveRunConcurrencyDecisionV1{AllowsOverlap: true}, nil
+	}
+	backend.execution = func(plan DockerExecutionPlan, _ PreparedProbeWorkspace, runID string, interactive bool, tty bool) (TransientContainerExecutionV1, error) {
+		for _, mount := range plan.Mounts {
+			if !mount.ReadOnly {
+				t.Fatalf("read-only shell execution saw writable mount %#v", mount)
+			}
+		}
+		if plan.TemporaryHome != original.TemporaryHome {
+			t.Fatalf("temporary home changed from %q to %q", original.TemporaryHome, plan.TemporaryHome)
+		}
+		return TransientContainerExecutionV1{Container: "demo-" + runID}, nil
+	}
+	if err := runCurrentShellV1(t.Context(), CurrentShellRunInputV1{
+		DeploymentDir: dir, ReadOnly: true,
+		RunOptions: RunOptions{Stdin: strings.NewReader("input"), Stdout: io.Discard},
+	}, backend); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunCurrentShellV1RejectsGenerationChangeAfterWait(t *testing.T) {
 	dir := t.TempDir()
 	current, _ := runtimeCurrentBuildFixture(t)
 	order := []string{}
 	backend := currentShellRunTestBackend(t, dir, current, CurrentRuntimePlanV1{Docker: DockerExecutionPlan{ContainerName: "demo"}}, &order)
 	originalAwait := backend.await
-	backend.await = func(ctx context.Context, gotDir string, operation *deploy.OperationLock, candidate deploy.LiveRunV1, wait bool) (*deploy.OperationLock, error) {
+	backend.await = func(ctx context.Context, gotDir string, operation *deploy.OperationLock, candidate deploy.LiveRunV1, wait bool, notice io.Writer) (*deploy.OperationLock, error) {
 		if !wait {
 			t.Fatal("shell wait option was not forwarded")
 		}
-		return originalAwait(ctx, gotDir, operation, candidate, wait)
+		return originalAwait(ctx, gotDir, operation, candidate, wait, notice)
 	}
 	backend.runPublished = func(ctx context.Context, input PublishedRuntimeContainerInput, run PublishedRuntimeContainerRunnerV1) error {
 		order = append(order, "final gate")
@@ -119,7 +164,7 @@ func currentShellRunTestBackend(t *testing.T, dir string, current CurrentBuild, 
 			*order = append(*order, "run id")
 			return "run-0000000000000001", nil
 		},
-		await: func(_ context.Context, gotDir string, operation *deploy.OperationLock, candidate deploy.LiveRunV1, wait bool) (*deploy.OperationLock, error) {
+		await: func(_ context.Context, gotDir string, operation *deploy.OperationLock, candidate deploy.LiveRunV1, wait bool, _ io.Writer) (*deploy.OperationLock, error) {
 			*order = append(*order, "admit")
 			if gotDir != filepath.Clean(dir) || candidate.ID != "run-0000000000000001" || candidate.Kind != deploy.LiveRunKindShellV1 || candidate.Name != "shell" || candidate.GenerationReference != current.Generation.Reference || candidate.Exclusive || candidate.WritableMount != "" {
 				t.Fatalf("shell admission = %q, %#v, wait=%t", gotDir, candidate, wait)

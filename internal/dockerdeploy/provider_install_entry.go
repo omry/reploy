@@ -19,6 +19,7 @@ type ProviderInstallInputV1 struct {
 	Clean                    bool
 	Start                    bool
 	RunOptions               RunOptions
+	result                   *ProviderInstallResultV1
 }
 
 type providerInstallEntryBackendV1 struct {
@@ -71,5 +72,16 @@ func runProviderInstallEntryV1(
 			Start:         input.Start,
 		},
 		RunOptions: input.RunOptions,
+		result:     input.result,
 	}, newProviderInstallRunBackendV1())
+}
+
+// RunProviderInstallResultV1 installs one staged deployment and returns the
+// facts needed to present the completed operation.
+func RunProviderInstallResultV1(ctx context.Context, input ProviderInstallInputV1) (ProviderInstallResultV1, error) {
+	var result ProviderInstallResultV1
+	input.result = &result
+	state, err := RunProviderInstallV1(ctx, input)
+	result.State = state
+	return result, err
 }

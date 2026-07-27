@@ -218,23 +218,21 @@ The `pyproject.toml` should include package data for
 `omegaconf_inspector/static/*` so the frontend is present in the wheel and in a
 prepared Reploy bundle.
 
-The local blueprint should use an explicit Python workspace package override to
-point from the blueprint directory back to the package root. For the proposed
-layout, the workspace entry resolves `omegaconf-inspector` from `..`:
+The published blueprint contains only the ordinary
+`omegaconf-inspector` requirement. For local development, stage it and use the
+native override editor to select the package checkout:
 
-```yaml
-environment:
-  workspace:
-    root: ..
-    packages:
-      python:
-        omegaconf-inspector: .
+```bash
+reploy stage ./reploy/omegaconf-inspector.blueprint.yaml
+reploy overrides
 ```
 
-The GitHub-backed blueprint index entry should point at the same blueprint
-inside the Reploy repository. When Reploy stages that GitHub ref, the relative
-workspace should resolve within the checked-out repository just as it does for
-local development.
+The editor writes the explicit choice to the staging-only
+`package-overrides.yaml`. Its optional workspace root can be set inside the
+editor; projects beneath a configured root are stored relative to that common
+root, while paths remain absolute when it is unset. The GitHub-backed
+blueprint index entry points at the same clean blueprint inside the Reploy
+repository and carries no developer checkout paths.
 
 ## Service Configuration
 

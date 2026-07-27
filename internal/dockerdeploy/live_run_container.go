@@ -16,6 +16,8 @@ type admittedTransientContainerBackendV1 struct {
 	runTemporary func(temporaryCommandRunner, CommandSpec, CommandSpec, RunOptions) error
 }
 
+var ErrLiveRunStoppedV1 = errors.New("live run was stopped")
+
 // RunAdmittedTransientContainerV1 takes ownership of operation. It creates and
 // records the container while the lock is held, releases the lock for attached
 // execution, and reacquires it to remove the live entry on every exit path.
@@ -91,9 +93,13 @@ func runAdmittedTransientContainerV1(
 	startOptions := options
 	startOptions.Context = ctx
 	runErr := backend.runTemporary(backend.followup, execution.Start, execution.Cleanup, startOptions)
-	completionErr := completeAdmittedTransientRunV1(context.WithoutCancel(ctx), absoluteDir, runID, backend)
+	removed, completionErr := completeAdmittedTransientRunV1(context.WithoutCancel(ctx), absoluteDir, runID, backend)
 	if runErr != nil {
-		runErr = fmt.Errorf("run admitted transient container: %w", runErr)
+		if completionErr == nil && !removed {
+			runErr = ErrLiveRunStoppedV1
+		} else {
+			runErr = fmt.Errorf("run admitted transient container: %w", runErr)
+		}
 	}
 	return errors.Join(runErr, completionErr)
 }
@@ -233,7 +239,8 @@ func abortAdmittedTransientAfterReleaseV1(
 			containerErr = fmt.Errorf("clean admitted transient container: %w", containerErr)
 		}
 	}
-	return errors.Join(cause, containerErr, completeAdmittedTransientRunV1(cleanupContext, deploymentDir, runID, backend))
+	_, completionErr := completeAdmittedTransientRunV1(cleanupContext, deploymentDir, runID, backend)
+	return errors.Join(cause, containerErr, completionErr)
 }
 
 func completeAdmittedTransientRunV1(
@@ -241,12 +248,12 @@ func completeAdmittedTransientRunV1(
 	deploymentDir string,
 	runID string,
 	backend admittedTransientContainerBackendV1,
-) error {
+) (bool, error) {
 	operation, err := backend.acquire(cleanupContext, deploymentDir)
 	if err != nil {
-		return fmt.Errorf("reacquire operation lock after transient execution: %w", err)
+		return false, fmt.Errorf("reacquire operation lock after transient execution: %w", err)
 	}
-	_, _, removeErr := operation.RemoveLiveRunV1(runID)
+	_, removed, removeErr := operation.RemoveLiveRunV1(runID)
 	unlockErr := operation.Unlock()
 	if removeErr != nil {
 		removeErr = fmt.Errorf("remove completed live run: %w", removeErr)
@@ -254,5 +261,5 @@ func completeAdmittedTransientRunV1(
 	if unlockErr != nil {
 		unlockErr = fmt.Errorf("release operation lock after transient execution: %w", unlockErr)
 	}
-	return errors.Join(removeErr, unlockErr)
+	return removed, errors.Join(removeErr, unlockErr)
 }

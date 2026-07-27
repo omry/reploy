@@ -24,8 +24,9 @@ type DirectProviderInstallInputV1 struct {
 }
 
 type DirectProviderInstallResultV1 struct {
-	Target string
-	State  deploy.StateV1
+	Target  string
+	State   deploy.StateV1
+	Install ProviderInstallResultV1
 }
 
 type directProviderInstallEntryBackendV1 struct {
@@ -85,17 +86,20 @@ func runDirectProviderInstallEntryV1(
 		if err != nil {
 			return err
 		}
+		var installResult ProviderInstallResultV1
 		installed, err := backend.install(ctx, ProviderInstallInputV1{
 			SourceDeploymentDir: sourceDir, DestinationDeploymentDir: target,
 			Runtime: input.Runtime, ControlMode: input.ControlMode, Scope: input.Scope, Service: input.Service,
 			PortOverrides: append([]PortOverride(nil), input.PortOverrides...),
 			Replace:       append([]string(nil), input.Replace...), Clean: input.Clean, Start: input.Start,
 			RunOptions: input.RunOptions,
+			result:     &installResult,
 		})
 		if err != nil {
 			return err
 		}
-		result = DirectProviderInstallResultV1{Target: target, State: installed}
+		installResult.State = installed
+		result = DirectProviderInstallResultV1{Target: target, State: installed, Install: installResult}
 		return nil
 	})
 	return result, err

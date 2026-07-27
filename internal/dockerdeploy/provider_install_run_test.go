@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -99,7 +100,12 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 			if input.References != fixedPublicationReferences(t, destinationDir, 0x81) {
 				t.Fatalf("planned references = %#v", input.References)
 			}
-			return providerInstallRunPlanFixture(destinationDir, input.References), nil
+			plan := providerInstallRunPlanFixture(destinationDir, input.References)
+			plan.PathUpdates = []PathUpdateAction{{
+				Name: "data", Kind: PathPreserveManagedBind,
+				Target: filepath.Join(destinationDir, "data"),
+			}}
+			return plan, nil
 		},
 		inspectHostTools: func(_ context.Context, backend installBackend) (providerInstallHostToolsV1, error) {
 			order = append(order, "inspect-host-tools")
@@ -221,9 +227,13 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 		}
 		return operation.Unlock()
 	}
+	var progress bytes.Buffer
+	var details ProviderInstallResultV1
 	result, err := runProviderInstallV1(t.Context(), providerInstallRunInputV1{
 		SourceDeploymentDir: sourceDir, DestinationDeploymentDir: destinationDir,
-		Install: providerInstallOptionsV1{Start: true},
+		Install:    providerInstallOptionsV1{Start: true},
+		RunOptions: RunOptions{Progress: &progress},
+		result:     &details,
 	}, backend)
 	if err != nil || !reflect.DeepEqual(result, want) {
 		t.Fatalf("result=%#v error=%v", result, err)
@@ -231,6 +241,30 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 	wantOrder := []string{"acquire-source", "build-source", "acquire-destination", "recover-destination", "prepare-install-account", "plan-installation", "inspect-host-tools", "preflight-destination", "prepare-destination", "admit-install", "stop-destination", "publish", "publish-files", "activate-destination", "mark-ready", "start-destination", "complete-install", "release-source"}
 	if !reflect.DeepEqual(order, wantOrder) {
 		t.Fatalf("order=%v want=%v", order, wantOrder)
+	}
+	if details.Environment != "demo" || details.TargetDir != destinationDir ||
+		details.ControlScript != "democtl" || details.Service != "demo" ||
+		!details.Updated || !details.ImageReused || !details.Started ||
+		!reflect.DeepEqual(details.State, want) {
+		t.Fatalf("install result details = %#v", details)
+	}
+	if !reflect.DeepEqual(details.PathUpdates, []PathUpdateAction{{
+		Name: "data", Kind: PathPreserveManagedBind,
+		Target: filepath.Join(destinationDir, "data"),
+	}}) {
+		t.Fatalf("install result path updates = %#v", details.PathUpdates)
+	}
+	for _, step := range []string{
+		"preparing current staged environment",
+		"updating existing installation",
+		"stopping existing service",
+		"installing environment generation",
+		"configuring installed environment",
+		"starting installed service",
+	} {
+		if !strings.Contains(progress.String(), step) {
+			t.Fatalf("install progress missing %q:\n%s", step, progress.String())
+		}
 	}
 	if _, err := os.Stat(filepath.Join(destinationDir, ".prepared-candidate")); !os.IsNotExist(err) {
 		t.Fatalf("prepared candidate was not cleaned: %v", err)

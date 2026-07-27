@@ -19,6 +19,7 @@ func TestWheelResolverArgvUsesOnePipClosureWithOptionalSourceConstraints(t *test
 	request, err := CanonicalProviderRequestV1(PythonProviderRequestV1{
 		Component: "application", Interpreter: blueprint.CommandRequirement{Command: "python"},
 		Requirements: []providers.CanonicalPackageRequest{requirement},
+		Overrides:    []PythonPackageOverrideV1{{Distribution: "local-demo", Kind: "local"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -55,6 +56,7 @@ func TestWheelResolverArgvOmitsEmptySourceConstraints(t *testing.T) {
 	request, _ := CanonicalProviderRequestV1(PythonProviderRequestV1{
 		Component: "application", Interpreter: blueprint.CommandRequirement{Command: "python"},
 		Requirements: []providers.CanonicalPackageRequest{requirement},
+		Overrides:    []PythonPackageOverrideV1{{Distribution: "demo", Kind: "local"}},
 	})
 	got, err := WheelResolverArgv("/usr/bin/python3", request, []providers.ResolvedSourceInput{}, nil)
 	if err != nil {
@@ -65,11 +67,40 @@ func TestWheelResolverArgvOmitsEmptySourceConstraints(t *testing.T) {
 	}
 }
 
+func TestWheelResolverArgvAddsVersionConstraintWithoutRequestingPackage(t *testing.T) {
+	requirement, _ := CanonicalPackageRequestV1("demo")
+	request, err := CanonicalProviderRequestV1(PythonProviderRequestV1{
+		Component: "application", Interpreter: blueprint.CommandRequirement{Command: "python"},
+		Requirements: []providers.CanonicalPackageRequest{requirement},
+		Overrides: []PythonPackageOverrideV1{
+			{Distribution: "transitive", Kind: "version", Version: "2.4.0"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv, err := WheelResolverArgv("/usr/bin/python3", request, []providers.ResolvedSourceInput{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := argv[len(argv)-1]; got != "demo" {
+		t.Fatalf("last resolver argument = %q, version override became a direct requirement", got)
+	}
+	constraints, err := WheelResolverSourceConstraints(request, []providers.ResolvedSourceInput{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(constraints); got != "transitive==2.4.0\n" {
+		t.Fatalf("constraints = %q", got)
+	}
+}
+
 func TestWheelResolverArgvRequiresSourceWheelInReusableInputs(t *testing.T) {
 	requirement, _ := CanonicalPackageRequestV1("demo")
 	request, _ := CanonicalProviderRequestV1(PythonProviderRequestV1{
 		Component: "application", Interpreter: blueprint.CommandRequirement{Command: "python"},
 		Requirements: []providers.CanonicalPackageRequest{requirement},
+		Overrides:    []PythonPackageOverrideV1{{Distribution: "demo", Kind: "local"}},
 	})
 	digest := canonical.Digest("sha256:" + strings.Repeat("a", 64))
 	source := testPythonSourceInput("application", "demo", "1.0", digest, digest)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -33,7 +34,7 @@ func TestAdmitControlOperationV1DrainCancelsWaitersBeforeQueuingMarker(t *testin
 	}, controlOperationAdmissionBackendV1{
 		newID: func() (string, error) { return "control-0000000000000001", nil },
 		pause: func(context.Context, time.Duration) error { pauseCalls++; return nil },
-		await: func(_ context.Context, _ string, held *deploy.OperationLock, marker deploy.ControlMarkerV1, wait bool) (*deploy.OperationLock, error) {
+		await: func(_ context.Context, _ string, held *deploy.OperationLock, marker deploy.ControlMarkerV1, wait bool, _ io.Writer) (*deploy.OperationLock, error) {
 			queue, _, err := held.ReadLiveRunQueueV1()
 			if err != nil || len(queue.Runs) != 1 || queue.Runs[0].ID != active.ID || !wait {
 				t.Fatalf("queue before drain marker = %#v, wait=%t, error=%v", queue, wait, err)
@@ -99,7 +100,7 @@ func TestAdmitControlOperationV1ForceStopsActiveContainersBeforeMarker(t *testin
 			}
 			return nil
 		},
-		await: AwaitControlAdmissionV1,
+		await: AwaitControlAdmissionWithNoticeV1,
 		removeContainer: func(spec CommandSpec, options RunOptions) error {
 			if options.DockerPreflightTimeout != 8*time.Second {
 				t.Fatalf("Docker timeout = %s", options.DockerPreflightTimeout)
@@ -163,7 +164,7 @@ func TestAdmitControlOperationV1ForceFailurePreservesFailedAndLaterActiveRuns(t 
 	}, controlOperationAdmissionBackendV1{
 		newID: func() (string, error) { return "control-0000000000000001", nil },
 		pause: func(context.Context, time.Duration) error { return nil },
-		await: AwaitControlAdmissionV1,
+		await: AwaitControlAdmissionWithNoticeV1,
 		removeContainer: func(CommandSpec, RunOptions) error {
 			calls++
 			if calls == 2 {
@@ -200,7 +201,7 @@ func TestAdmitControlOperationV1RejectsInvalidModeBeforeMutation(t *testing.T) {
 	}, controlOperationAdmissionBackendV1{
 		newID:           func() (string, error) { return "control-0000000000000001", nil },
 		pause:           func(context.Context, time.Duration) error { return nil },
-		await:           AwaitControlAdmissionV1,
+		await:           AwaitControlAdmissionWithNoticeV1,
 		removeContainer: func(CommandSpec, RunOptions) error { return nil },
 	})
 	if err == nil {
@@ -228,7 +229,7 @@ func TestAdmitControlOperationV1RejectsInvalidMarkerBeforeForceMutation(t *testi
 	}, controlOperationAdmissionBackendV1{
 		newID: func() (string, error) { return "control-0000000000000001", nil },
 		pause: func(context.Context, time.Duration) error { return nil },
-		await: AwaitControlAdmissionV1,
+		await: AwaitControlAdmissionWithNoticeV1,
 		removeContainer: func(CommandSpec, RunOptions) error {
 			dockerCalls++
 			return nil
@@ -273,7 +274,7 @@ func TestAdmitControlOperationV1InterruptedPauseChangesNothing(t *testing.T) {
 	}, controlOperationAdmissionBackendV1{
 		newID: func() (string, error) { return "control-0000000000000001", nil },
 		pause: func(context.Context, time.Duration) error { return want },
-		await: AwaitControlAdmissionV1,
+		await: AwaitControlAdmissionWithNoticeV1,
 		removeContainer: func(CommandSpec, RunOptions) error {
 			dockerCalls++
 			return nil
@@ -316,7 +317,7 @@ func TestAdmitControlOperationV1ForceDoesNotOvertakeLifecycleOperation(t *testin
 	}, controlOperationAdmissionBackendV1{
 		newID:           func() (string, error) { return "control-0000000000000002", nil },
 		pause:           func(context.Context, time.Duration) error { pauseCalls++; return nil },
-		await:           AwaitControlAdmissionV1,
+		await:           AwaitControlAdmissionWithNoticeV1,
 		removeContainer: func(CommandSpec, RunOptions) error { return nil },
 	})
 	if !errors.Is(err, deploy.ErrLiveRunConflict) || pauseCalls != 0 {
@@ -355,7 +356,7 @@ func TestAdmitControlOperationV1DoesNotPauseWhenNoJobsAreAffected(t *testing.T) 
 	}, controlOperationAdmissionBackendV1{
 		newID:           func() (string, error) { return "control-0000000000000001", nil },
 		pause:           func(context.Context, time.Duration) error { pauseCalls++; return nil },
-		await:           AwaitControlAdmissionV1,
+		await:           AwaitControlAdmissionWithNoticeV1,
 		removeContainer: func(CommandSpec, RunOptions) error { return nil },
 	})
 	if err != nil {

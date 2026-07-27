@@ -50,7 +50,6 @@ func Resolve(source Syntax) (Document, error) {
 			ID:              id,
 			ControlScript:   controlScript,
 			Vars:            variables,
-			Workspace:       Workspace{PythonPackages: map[string]string{}},
 			Components:      map[string]Component{},
 			AllowConcurrent: allowConcurrent,
 			Terminal:        Terminal{ColorEnv: strings.TrimSpace(source.Environment.Terminal.ColorEnv)},
@@ -64,9 +63,6 @@ func Resolve(source Syntax) (Document, error) {
 	}
 	if document.Blueprint.Version == "" {
 		return Document{}, fmt.Errorf("blueprint.version is required")
-	}
-	if err := resolveWorkspace(source, &document); err != nil {
-		return Document{}, err
 	}
 	if err := resolveComponents(source, &document); err != nil {
 		return Document{}, err
@@ -94,34 +90,6 @@ func resolveConcurrentRunPolicy(value string) (ConcurrentRunPolicy, error) {
 	default:
 		return "", fmt.Errorf("environment.allow_concurrent must be yes, no, or auto")
 	}
-}
-
-func resolveWorkspace(source Syntax, document *Document) error {
-	item := source.Environment.Workspace
-	root, err := resolveStaticString(item.Root, document.Environment.Vars)
-	if err != nil {
-		return fmt.Errorf("environment.workspace.root: %w", err)
-	}
-	root = strings.TrimSpace(root)
-	if len(item.Packages.Python) != 0 && root == "" {
-		return fmt.Errorf("environment.workspace.root is required when packages are declared")
-	}
-	packages := map[string]string{}
-	for distribution, relative := range item.Packages.Python {
-		if strings.TrimSpace(distribution) == "" || strings.TrimSpace(relative) == "" {
-			return fmt.Errorf("environment.workspace.packages.python must not contain empty names or paths")
-		}
-		if err := ValidatePythonDistributionName("environment.workspace.packages.python distribution", distribution); err != nil {
-			return err
-		}
-		clean := path.Clean(relative)
-		if path.IsAbs(relative) || strings.ContainsAny(relative, `\:`) || clean == ".." || strings.HasPrefix(clean, "../") {
-			return fmt.Errorf("environment.workspace.packages.python.%s must stay within root", distribution)
-		}
-		packages[distribution] = clean
-	}
-	document.Environment.Workspace = Workspace{Root: root, PythonPackages: packages}
-	return nil
 }
 
 func resolveComponents(source Syntax, document *Document) error {

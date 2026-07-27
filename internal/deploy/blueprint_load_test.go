@@ -79,67 +79,6 @@ func TestSourceBlueprintManifestPathRejectsSymlinkOutsideSourceRoot(t *testing.T
 		t.Fatalf("source symlink escape error = %v", err)
 	}
 }
-func TestLoadBlueprintResolvesRelativeWorkspaceRootFromManifestDirectory(t *testing.T) {
-	root := t.TempDir()
-	manifest := filepath.Join(root, "pkg", "reploy", "apt-demo.blueprint.yaml")
-	if err := os.MkdirAll(filepath.Dir(manifest), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	fixture := strings.Replace(aptOnlyBlueprintFixture, "  id: apt-demo\n", "  id: apt-demo\n  workspace:\n    root: ../..\n    packages:\n      python: {demo: src}\n", 1)
-	if err := os.WriteFile(manifest, []byte(fixture), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	ref, err := ParsePackRef("file:" + manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := LoadBlueprint(ref)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.WorkspaceRoot != root {
-		t.Fatalf("workspace root = %q, want %q", loaded.WorkspaceRoot, root)
-	}
-	if loaded.Document.Environment.Workspace.Root != "../.." {
-		t.Fatalf("resolved blueprint retained root = %q", loaded.Document.Environment.Workspace.Root)
-	}
-}
-
-func TestLoadBlueprintPreservesAbsoluteAndOmittedWorkspaceRoots(t *testing.T) {
-	absoluteRoot := t.TempDir()
-	for _, test := range []struct {
-		name     string
-		root     string
-		expected string
-	}{
-		{name: "absolute", root: absoluteRoot, expected: absoluteRoot},
-		{name: "omitted"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			dir := t.TempDir()
-			manifest := filepath.Join(dir, "apt-demo.blueprint.yaml")
-			fixture := aptOnlyBlueprintFixture
-			if test.root != "" {
-				fixture = strings.Replace(fixture, "  id: apt-demo\n", "  id: apt-demo\n  workspace:\n    root: "+filepath.ToSlash(test.root)+"\n", 1)
-			}
-			if err := os.WriteFile(manifest, []byte(fixture), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			ref, err := ParsePackRef("file:" + manifest)
-			if err != nil {
-				t.Fatal(err)
-			}
-			loaded, err := LoadBlueprint(ref)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if loaded.WorkspaceRoot != test.expected {
-				t.Fatalf("workspace root = %q, want %q", loaded.WorkspaceRoot, test.expected)
-			}
-		})
-	}
-}
-
 func TestLoadBlueprintRejectsSemanticErrors(t *testing.T) {
 	dir := t.TempDir()
 	manifest := filepath.Join(dir, "invalid.blueprint.yaml")

@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"path/filepath"
@@ -52,7 +53,7 @@ func TestAwaitControlAdmissionV1ReturnsHeldAfterEarlierRunAndKeepsLaterRunBehind
 	}
 	resultChannel := make(chan result, 1)
 	go func() {
-		admitted, err := awaitControlAdmissionV1(t.Context(), dir, operation, marker, true, backend)
+		admitted, err := awaitControlAdmissionV1(t.Context(), dir, operation, marker, true, nil, backend)
 		resultChannel <- result{operation: admitted, err: err}
 	}()
 	<-waitStarted
@@ -93,6 +94,39 @@ func TestAwaitControlAdmissionV1ReturnsHeldAfterEarlierRunAndKeepsLaterRunBehind
 	}
 }
 
+func TestAwaitControlAdmissionV1ExplainsLifecycleWait(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := liveRunAdmissionFixtureV1("run-0000000000000001", true)
+	run.WritableMount = "data"
+	run.WritablePaths = []string{"/data"}
+	if _, err := operation.AdmitLiveRunV1(run, false); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	var notice bytes.Buffer
+	backend := controlAdmissionBackendV1{
+		acquire: deploy.AcquireOperationLock,
+		wait: func(context.Context) error {
+			cancel()
+			return context.Canceled
+		},
+	}
+	marker := controlAdmissionFixtureV1("control-0000000000000001", deploy.ControlOperationInstallV1)
+	_, err = awaitControlAdmissionV1(ctx, dir, operation, marker, true, &notice, backend)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("wait error = %v", err)
+	}
+	want := "Waiting for active app command \"export\" to finish (shared writable mounts: /data).\n" +
+		"Ctrl-C cancels this wait without affecting the active command.\n"
+	if notice.String() != want {
+		t.Fatalf("wait notice = %q, want %q", notice.String(), want)
+	}
+}
+
 func TestAwaitControlAdmissionV1CancellationRemovesOnlyCaller(t *testing.T) {
 	dir := t.TempDir()
 	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
@@ -116,7 +150,7 @@ func TestAwaitControlAdmissionV1CancellationRemovesOnlyCaller(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	admitted, err := awaitControlAdmissionV1(ctx, dir, operation, marker, true, backend)
+	admitted, err := awaitControlAdmissionV1(ctx, dir, operation, marker, true, nil, backend)
 	if leaseErr := lease.Release(); leaseErr != nil {
 		t.Fatal(leaseErr)
 	}
@@ -145,7 +179,7 @@ func TestAwaitControlAdmissionV1ImmediateConflictReleasesLockWithoutMarker(t *te
 		t.Fatal(err)
 	}
 	marker := controlAdmissionFixtureV1("control-0000000000000001", deploy.ControlOperationStopV1)
-	admitted, err := awaitControlAdmissionV1(t.Context(), dir, operation, marker, false, controlAdmissionBackendV1{
+	admitted, err := awaitControlAdmissionV1(t.Context(), dir, operation, marker, false, nil, controlAdmissionBackendV1{
 		acquire: deploy.AcquireOperationLock,
 		wait:    func(context.Context) error { return nil },
 	})
@@ -172,7 +206,7 @@ func TestAwaitControlAdmissionV1RejectsForeignOperationLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	marker := controlAdmissionFixtureV1("control-0000000000000001", deploy.ControlOperationUpV1)
-	admitted, err := awaitControlAdmissionV1(t.Context(), t.TempDir(), operation, marker, false, controlAdmissionBackendV1{
+	admitted, err := awaitControlAdmissionV1(t.Context(), t.TempDir(), operation, marker, false, nil, controlAdmissionBackendV1{
 		acquire: deploy.AcquireOperationLock,
 		wait:    func(context.Context) error { return nil },
 	})

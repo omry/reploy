@@ -24,6 +24,25 @@ func InstallProviderV1(options InstallOptions) error {
 	})
 }
 
+// InstallProviderResultV1 installs a staged deployment and returns the facts
+// needed for user-facing completion output.
+func InstallProviderResultV1(options InstallOptions) (ProviderInstallResultV1, error) {
+	if options.DryRun {
+		return ProviderInstallResultV1{}, fmt.Errorf("provider install does not support dry-run; use reploy validate for blueprint validation")
+	}
+	runtime, err := CurrentStagedProviderBuildRuntimeV1()
+	if err != nil {
+		return ProviderInstallResultV1{}, err
+	}
+	return RunProviderInstallResultV1(context.Background(), ProviderInstallInputV1{
+		SourceDeploymentDir: options.Dir, DestinationDeploymentDir: options.Target,
+		Runtime: runtime, ControlMode: options.ControlMode, Scope: options.Scope, Service: options.Service,
+		PortOverrides: append([]PortOverride(nil), options.PortOverrides...),
+		Replace:       append([]string(nil), options.Replace...), Clean: options.Clean, Start: options.Start,
+		RunOptions: providerInstallRunOptionsV1(options.Stdout, options.Progress, options.DockerPreflightTimeout),
+	})
+}
+
 func installProviderV1(options InstallOptions, backend providerInstallPublicBackendV1) error {
 	if options.DryRun {
 		return fmt.Errorf("provider install does not support dry-run; use reploy validate for blueprint validation")
@@ -46,7 +65,7 @@ func installProviderV1(options InstallOptions, backend providerInstallPublicBack
 		Replace:                  append([]string(nil), options.Replace...),
 		Clean:                    options.Clean,
 		Start:                    options.Start,
-		RunOptions:               providerInstallRunOptionsV1(options.Stdout, options.DockerPreflightTimeout),
+		RunOptions:               providerInstallRunOptionsV1(options.Stdout, options.Progress, options.DockerPreflightTimeout),
 	})
 	return err
 }
@@ -58,6 +77,26 @@ func DirectInstallProviderV1(options DirectInstallOptions) (string, error) {
 		runtime: CurrentStagedProviderBuildRuntimeV1,
 		direct:  RunDirectProviderInstallV1,
 	})
+}
+
+// DirectInstallProviderResultV1 resolves, builds, and installs a blueprint and
+// returns the facts needed for user-facing completion output.
+func DirectInstallProviderResultV1(options DirectInstallOptions) (ProviderInstallResultV1, error) {
+	if options.DryRun {
+		return ProviderInstallResultV1{}, fmt.Errorf("provider install does not support dry-run; use reploy validate for blueprint validation")
+	}
+	runtime, err := CurrentStagedProviderBuildRuntimeV1()
+	if err != nil {
+		return ProviderInstallResultV1{}, err
+	}
+	result, err := RunDirectProviderInstallV1(context.Background(), DirectProviderInstallInputV1{
+		Pack: options.Pack, Target: options.Target, Runtime: runtime,
+		ControlMode: options.ControlMode, Scope: options.Scope, Service: options.Service,
+		PortOverrides: append([]PortOverride(nil), options.PortOverrides...),
+		Replace:       append([]string(nil), options.Replace...), Clean: options.Clean, Start: options.Start,
+		RunOptions: providerInstallRunOptionsV1(options.Stdout, options.Progress, options.DockerPreflightTimeout),
+	})
+	return result.Install, err
 }
 
 func directInstallProviderV1(options DirectInstallOptions, backend providerInstallPublicBackendV1) (string, error) {
@@ -82,7 +121,7 @@ func directInstallProviderV1(options DirectInstallOptions, backend providerInsta
 		Replace:       append([]string(nil), options.Replace...),
 		Clean:         options.Clean,
 		Start:         options.Start,
-		RunOptions:    providerInstallRunOptionsV1(options.Stdout, options.DockerPreflightTimeout),
+		RunOptions:    providerInstallRunOptionsV1(options.Stdout, options.Progress, options.DockerPreflightTimeout),
 	})
 	if err != nil {
 		return "", err
@@ -90,11 +129,12 @@ func directInstallProviderV1(options DirectInstallOptions, backend providerInsta
 	return result.Target, nil
 }
 
-func providerInstallRunOptionsV1(output io.Writer, dockerPreflightTimeout time.Duration) RunOptions {
+func providerInstallRunOptionsV1(output io.Writer, progress io.Writer, dockerPreflightTimeout time.Duration) RunOptions {
 	return RunOptions{
 		Context:                context.Background(),
 		Stdout:                 output,
 		Stderr:                 output,
+		Progress:               progress,
 		DockerPreflightTimeout: dockerPreflightTimeout,
 	}
 }

@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"path/filepath"
@@ -48,7 +49,7 @@ func TestAwaitLiveRunAdmissionV1ReturnsWithLockHeldAfterFairPromotion(t *testing
 	}
 	resultChannel := make(chan admissionResult, 1)
 	go func() {
-		admitted, err := awaitLiveRunAdmissionV1(t.Context(), dir, operation, second, true, backend)
+		admitted, err := awaitLiveRunAdmissionV1(t.Context(), dir, operation, second, true, nil, backend)
 		resultChannel <- admissionResult{operation: admitted, err: err}
 	}()
 	<-waitStarted
@@ -79,6 +80,73 @@ func TestAwaitLiveRunAdmissionV1ReturnsWithLockHeldAfterFairPromotion(t *testing
 	}
 }
 
+func TestAwaitLiveRunAdmissionV1ExplainsWaitBeforePolling(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := liveRunAdmissionFixtureV1("run-0000000000000001", true)
+	first.Kind = deploy.LiveRunKindShellV1
+	first.Name = "shell"
+	first.WritableMount = "config"
+	first.WritablePaths = []string{"/conf", "/data"}
+	if _, err := operation.AdmitLiveRunV1(first, false); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	var notice bytes.Buffer
+	backend := liveRunAdmissionBackendV1{
+		acquire: deploy.AcquireOperationLock,
+		wait: func(context.Context) error {
+			cancel()
+			return context.Canceled
+		},
+	}
+	second := liveRunAdmissionFixtureV1("run-0000000000000002", true)
+	_, err = awaitLiveRunAdmissionV1(ctx, dir, operation, second, true, &notice, backend)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("wait error = %v", err)
+	}
+	want := "Waiting for active shell to finish (shared writable mounts: /conf, /data).\n" +
+		"Ctrl-C cancels this wait without affecting the active command.\n"
+	if notice.String() != want {
+		t.Fatalf("wait notice = %q, want %q", notice.String(), want)
+	}
+}
+
+func TestAwaitLiveRunAdmissionV1ReportsQueueDepthForMultipleWaiters(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := liveRunAdmissionFixtureV1("run-0000000000000001", true)
+	if _, err := operation.AdmitLiveRunV1(first, false); err != nil {
+		t.Fatal(err)
+	}
+	second := liveRunAdmissionFixtureV1("run-0000000000000002", false)
+	if _, err := operation.AdmitLiveRunV1(second, true); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	var notice bytes.Buffer
+	third := liveRunAdmissionFixtureV1("run-0000000000000003", false)
+	_, err = awaitLiveRunAdmissionV1(ctx, dir, operation, third, true, &notice, liveRunAdmissionBackendV1{
+		acquire: deploy.AcquireOperationLock,
+		wait: func(context.Context) error {
+			cancel()
+			return context.Canceled
+		},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("wait error = %v", err)
+	}
+	if !strings.HasPrefix(notice.String(), "Waiting behind 2 operations; active app command \"export\" is blocking this command.") {
+		t.Fatalf("multi-waiter notice = %q", notice.String())
+	}
+}
+
 func TestAwaitLiveRunAdmissionV1CancellationRemovesOnlyCaller(t *testing.T) {
 	dir := t.TempDir()
 	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
@@ -98,7 +166,7 @@ func TestAwaitLiveRunAdmissionV1CancellationRemovesOnlyCaller(t *testing.T) {
 		},
 	}
 	second := liveRunAdmissionFixtureV1("run-0000000000000002", true)
-	admitted, err := awaitLiveRunAdmissionV1(ctx, dir, operation, second, true, backend)
+	admitted, err := awaitLiveRunAdmissionV1(ctx, dir, operation, second, true, nil, backend)
 	if admitted != nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled admission = %#v, %v", admitted, err)
 	}
@@ -124,7 +192,7 @@ func TestAwaitLiveRunAdmissionV1ImmediateConflictReleasesLockWithoutQueueChange(
 		t.Fatal(err)
 	}
 	second := liveRunAdmissionFixtureV1("run-0000000000000002", true)
-	admitted, err := awaitLiveRunAdmissionV1(t.Context(), dir, operation, second, false, liveRunAdmissionBackendV1{
+	admitted, err := awaitLiveRunAdmissionV1(t.Context(), dir, operation, second, false, nil, liveRunAdmissionBackendV1{
 		acquire: deploy.AcquireOperationLock,
 		wait:    func(context.Context) error { return nil },
 	})
@@ -151,7 +219,7 @@ func TestAwaitLiveRunAdmissionV1RejectsForeignOperationLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	candidate := liveRunAdmissionFixtureV1("run-0000000000000001", false)
-	admitted, err := awaitLiveRunAdmissionV1(t.Context(), t.TempDir(), operation, candidate, false, liveRunAdmissionBackendV1{
+	admitted, err := awaitLiveRunAdmissionV1(t.Context(), t.TempDir(), operation, candidate, false, nil, liveRunAdmissionBackendV1{
 		acquire: deploy.AcquireOperationLock,
 		wait:    func(context.Context) error { return nil },
 	})
@@ -175,7 +243,7 @@ func TestAwaitLiveRunAdmissionV1RecoversAbandonedControlMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	candidate := liveRunAdmissionFixtureV1("run-0000000000000001", false)
-	admitted, err := awaitLiveRunAdmissionV1(t.Context(), dir, operation, candidate, false, liveRunAdmissionBackendV1{
+	admitted, err := awaitLiveRunAdmissionV1(t.Context(), dir, operation, candidate, false, nil, liveRunAdmissionBackendV1{
 		acquire: deploy.AcquireOperationLock,
 		wait:    func(context.Context) error { return nil },
 	})

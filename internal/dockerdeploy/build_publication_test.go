@@ -322,6 +322,7 @@ func publicationLockFixture(t *testing.T, dir string, imageChar string, configCh
 	document, _ := testSelectedPlatformDocumentV1(t)
 	lock := deploy.BuildLockV1{
 		Schema: deploy.BuildLockSchemaV1, BlueprintDigest: testResolvedBlueprintDigestV1(t, document), Overlay: deploy.EmptyRequestOverlayV1(),
+		PackageOverrides:      deploy.EmptyPackageOverrideIntentV1(document.Environment.ID),
 		ResolvedRequestDigest: rendererDigest("3"), Platform: platform,
 		Base:  base,
 		Graph: deploy.ProviderGraphLockV1{Nodes: []providers.NodeID{"base"}, Edges: []providers.ProviderEdgeV1{}},

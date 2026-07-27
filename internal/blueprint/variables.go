@@ -52,6 +52,18 @@ func resolveVariables(source map[string]any) (map[string]any, error) {
 	return resolver.resolved, nil
 }
 
+// ResolveEnvironmentVariables resolves one environment-owned variable map for
+// blueprint-adjacent staging inputs such as package-overrides.yaml.
+func ResolveEnvironmentVariables(source map[string]any) (map[string]any, error) {
+	return resolveVariables(source)
+}
+
+// ResolveEnvironmentVariableString interpolates environment-owned variables
+// into one string without enabling runtime namespaces.
+func ResolveEnvironmentVariableString(value string, variables map[string]any) (string, error) {
+	return resolveGlobalVariableString(value, variables)
+}
+
 func (resolver *variableResolver) resolve(name string) (any, error) {
 	if value, ok := resolver.resolved[name]; ok {
 		return value, nil

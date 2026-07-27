@@ -11,13 +11,11 @@ This document defines the work and evidence behind the environment model. The
 environment model is normative; this plan may choose implementation structure
 but must not invent public schema.
 
-The reviewed implementation stack still contains the earlier
-`environment.workspace` schema. After the current stack review, replace that
-implementation completely with the staging-only `package-overrides.yaml`
-contract now defined by the normative model. This is a deferred truth fix, not
-a compatibility requirement: the unreleased workspace schema, CLI root
-override, state fields, tests, examples, and documentation should be removed
-rather than retained alongside the new mechanism.
+The implementation replaces the earlier unreleased `environment.workspace`
+schema completely with the staging-only `package-overrides.yaml` contract
+defined by the normative model. There is no compatibility loader: the old
+schema, CLI root override, staging-state fields, tests, examples, and
+documentation are removed rather than retained alongside the new mechanism.
 
 The post-review implementation must first prove the provider-resolution shape,
 especially Python's ability to activate a local override only when a direct or
@@ -25,6 +23,11 @@ transitive dependency needs it. The contract is fixed—unused mappings are not
 inspected or built—but whether Python satisfies it with one resolver invocation
 or a bounded retry is deliberately deferred until that focused implementation
 review.
+
+The completed v1 review narrows one edge: a distribution available only from a
+local mapping must be an explicit component package request when it would
+otherwise be visible only transitively. This preserves demand-driven local
+inspection without introducing a custom lazy package server.
 
 ## Scope and Compatibility
 

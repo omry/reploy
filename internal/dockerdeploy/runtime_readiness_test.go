@@ -89,7 +89,7 @@ func TestRunPublishedRuntimeContainerV1NeverRunsForStaleBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	current.Lock.ResolvedRequestDigest = rendererDigest("f")
+	current.Lock.Base.AuthorReference = "debian:changed"
 	refreshCurrentBuildReuseGeneration(t, &current)
 	runs := 0
 	err = runPublishedRuntimeContainerV1(t.Context(), PublishedRuntimeContainerInput{

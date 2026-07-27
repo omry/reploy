@@ -49,6 +49,54 @@ type inspectedWheel struct {
 	ConsoleScripts map[string]string
 }
 
+// InspectPreparedWheelDistributionsV1 validates a resolver output directory
+// and returns its unique normalized distributions without publishing it.
+// This is used to discover which optional local overrides are actually part
+// of the resolved closure before any local path is inspected.
+func InspectPreparedWheelDistributionsV1(ctx context.Context, dir string) ([]string, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("inspect prepared Python wheels requires a context")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read Python resolver output: %w", err)
+	}
+	distributions := make([]string, 0, len(entries))
+	owners := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if entry.Type()&os.ModeSymlink != 0 || entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".whl") {
+			return nil, fmt.Errorf("Python resolver output contains unexpected entry %q", entry.Name())
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil, fmt.Errorf("inspect Python resolver output %q: %w", entry.Name(), err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("Python resolver output %q must be a regular wheel", entry.Name())
+		}
+		wheel, err := inspectWheel(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("inspect Python wheel %s: %w", entry.Name(), err)
+		}
+		if prior, found := owners[wheel.Distribution]; found {
+			return nil, fmt.Errorf(
+				"Python resolver output contains duplicate normalized distribution %q in %s and %s",
+				wheel.Distribution, prior, wheel.Filename,
+			)
+		}
+		owners[wheel.Distribution] = wheel.Filename
+		distributions = append(distributions, wheel.Distribution)
+	}
+	if len(distributions) == 0 {
+		return nil, fmt.Errorf("prepared Python bundle contains no wheels: %s", dir)
+	}
+	sort.Strings(distributions)
+	return distributions, nil
+}
+
 func (WheelNodeResolver) Type() blueprint.ComponentType { return blueprint.ComponentTypePython }
 
 func (resolver WheelNodeResolver) Resolve(
@@ -474,6 +522,12 @@ func pythonRequirementName(requirement string) (string, error) {
 		return "", fmt.Errorf("invalid requirement %q", requirement)
 	}
 	return NormalizeDistributionName(match), nil
+}
+
+// RequirementDistributionName returns the normalized distribution named by a
+// validated Python requirement. It does not resolve or install the package.
+func RequirementDistributionName(requirement string) (string, error) {
+	return pythonRequirementName(requirement)
 }
 
 func fileSHA256(filename string) (string, error) {

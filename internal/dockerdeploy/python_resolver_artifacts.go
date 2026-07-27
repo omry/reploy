@@ -50,6 +50,11 @@ func StagePythonResolverSourceConstraints(
 		return fmt.Errorf("make Python resolver input writable for source constraints: %w", err)
 	}
 	constraintPath := filepath.Join(prepared.InputHostDir, filepath.Base(pythonprovider.ResolverSourceConstraintsPath))
+	removeErr := os.Remove(constraintPath)
+	if removeErr != nil && !os.IsNotExist(removeErr) {
+		protectErr := os.Chmod(prepared.InputHostDir, 0o500)
+		return errors.Join(fmt.Errorf("replace Python resolver source constraints: %w", removeErr), protectErr)
+	}
 	writeErr := os.WriteFile(constraintPath, content, 0o400)
 	protectErr := os.Chmod(prepared.InputHostDir, 0o500)
 	if writeErr != nil {
@@ -57,6 +62,37 @@ func StagePythonResolverSourceConstraints(
 	}
 	if protectErr != nil {
 		return fmt.Errorf("restore Python resolver input protection: %w", protectErr)
+	}
+	return nil
+}
+
+// ResetPythonResolverOutput removes one provisional resolver result before a
+// second pass or local source build. It accepts only regular files in the
+// private output directory and leaves the directory itself in place.
+func ResetPythonResolverOutput(prepared PreparedPythonResolverArtifacts) error {
+	if err := validatePreparedPythonResolverArtifactLayout(prepared); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(prepared.OutputHostDir)
+	if err != nil {
+		return fmt.Errorf("read Python resolver output for reset: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("Python resolver output contains unsafe entry %q", entry.Name())
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return fmt.Errorf("inspect Python resolver output %q for reset: %w", entry.Name(), err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("Python resolver output %q must be a regular file", entry.Name())
+		}
+	}
+	for _, entry := range entries {
+		if err := os.Remove(filepath.Join(prepared.OutputHostDir, entry.Name())); err != nil {
+			return fmt.Errorf("reset Python resolver output %q: %w", entry.Name(), err)
+		}
 	}
 	return nil
 }

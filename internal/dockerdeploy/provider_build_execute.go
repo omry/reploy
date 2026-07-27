@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"context"
 	"fmt"
+	"io"
 	"reflect"
 
 	"github.com/omry/reploy/internal/deploy"
@@ -11,12 +12,13 @@ import (
 )
 
 type LockedProviderBuildExecutionInputV1 struct {
-	Preparation      LockedProviderBuildPreparationV1
-	SourceWheels     []providerstore.ArtifactDescriptor
-	WorkspaceSources []PythonWorkspaceSource
-	ValidateLayers   bool
-	RunValidation    FullImageValidationRunner
-	RunOptions       RunOptions
+	Preparation    LockedProviderBuildPreparationV1
+	SourceWheels   []providerstore.ArtifactDescriptor
+	LocalOverrides []PythonLocalOverrideV1
+	ValidateLayers bool
+	RunValidation  FullImageValidationRunner
+	Progress       io.Writer
+	RunOptions     RunOptions
 }
 
 type LockedProviderBuildExecutionResultV1 struct {
@@ -80,8 +82,8 @@ func executeLockedProviderBuildV1(
 	if input.SourceWheels == nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute locked provider build source wheels must use an array")
 	}
-	if input.WorkspaceSources == nil {
-		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute locked provider build workspace sources must use an array")
+	if input.LocalOverrides == nil {
+		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute locked provider build local overrides must use an array")
 	}
 	if backend.executeGraph == nil || backend.prepareValidation == nil || backend.complete == nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute locked provider build requires a complete backend")
@@ -94,6 +96,7 @@ func executeLockedProviderBuildV1(
 		if !reflect.DeepEqual(*preparation.ReusableLock, preparation.Current.Lock) {
 			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("reused provider build lock does not match the current generation")
 		}
+		writeProviderBuildProgress(input.Progress, "reusing current validated image")
 		return LockedProviderBuildExecutionResultV1{
 			State: preparation.Current.State, Lock: preparation.Current.Lock, Reused: true,
 		}, nil
@@ -116,20 +119,22 @@ func executeLockedProviderBuildV1(
 
 	options := input.RunOptions
 	options.Context = ctx
+	options.Progress = input.Progress
 	graph, err := backend.executeGraph(ctx, PreparedPythonGraphExecutionInput{
 		Store: preparation.Store, Plan: preparedBase.Plan, BaseDescriptor: preparedBase.Descriptor,
 		BaseCatalog: preparedBase.Catalog, Sources: preparation.Loaded.Request.Sources,
-		SourceWheels:     append([]providerstore.ArtifactDescriptor{}, input.SourceWheels...),
-		WorkspaceSources: append([]PythonWorkspaceSource{}, input.WorkspaceSources...),
-		CurrentLock:      preparation.ReusableLock, FinalImageConfig: preparation.FinalImageConfig,
-		RunOptions: options,
+		SourceWheels:   append([]providerstore.ArtifactDescriptor{}, input.SourceWheels...),
+		LocalOverrides: append([]PythonLocalOverrideV1{}, input.LocalOverrides...),
+		CurrentLock:    preparation.ReusableLock, FinalImageConfig: preparation.FinalImageConfig,
+		Progress: input.Progress, RunOptions: options,
 	})
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute provider graph: %w", err)
 	}
-	resolvedRequest, err := finalizeResolvedRequestV1(
-		preparation.Loaded.Document, preparation.Loaded.State.Overlay, preparation.Loaded.Request,
-		append([]providers.ResolvedSourceInput{}, graph.SelectedSources...),
+	writeProviderBuildProgress(input.Progress, "assembling environment runtime plan")
+	resolvedRequest, relevantPackageOverrides, err := finalizeResolvedRequestV1(
+		preparation.Loaded.Document, preparation.Loaded.State.Overlay, preparation.Loaded.PackageOverrides,
+		preparation.Loaded.Request, graph,
 	)
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("finalize provider request: %w", err)
@@ -148,11 +153,13 @@ func executeLockedProviderBuildV1(
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("prepare provider build validation: %w", err)
 	}
+	writeProviderBuildProgress(input.Progress, "validating and publishing final image")
 	completed, err := backend.complete(ctx, preparation.Operation, preparation.Store, ProviderBuildCompletionInput{
 		Environment: preparation.Environment, DeploymentDir: preparation.DeploymentDir,
 		Document: preparation.Loaded.Document, DockerPlan: preparation.DockerPlan,
 		ResolvedRequest: resolvedRequest, Overlay: preparation.Loaded.State.Overlay,
-		Base: preparedBase.Descriptor, BaseCatalog: preparedBase.Catalog,
+		PackageOverrides: relevantPackageOverrides,
+		Base:             preparedBase.Descriptor, BaseCatalog: preparedBase.Catalog,
 		Graph: graph, Validation: validation, ValidateLayers: input.ValidateLayers,
 		RunValidation: input.RunValidation, RunOptions: options,
 	})

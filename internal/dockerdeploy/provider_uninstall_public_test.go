@@ -76,10 +76,11 @@ func TestUninstallProviderV1DoesNotTreatTargetInspectionFailureAsAbsent(t *testi
 func TestUninstallProviderV1MapsPublicOptions(t *testing.T) {
 	runtime := StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1000, GID: 1000}
 	timeout := 7 * time.Second
+	var progress bytes.Buffer
 	captured := ProviderUninstallInputV1{}
 	_, err := uninstallProviderV1(UninstallOptions{
 		From: "/opt/demo", ServiceName: "demo-service", RemoveDir: true,
-		ControlMode: ControlAdmissionDrainV1, DockerPreflightTimeout: timeout,
+		ControlMode: ControlAdmissionDrainV1, Progress: &progress, DockerPreflightTimeout: timeout,
 	}, providerUninstallPublicBackendV1{
 		runtime: func() (StagedProviderBuildRuntimeV1, error) { return runtime, nil },
 		readState: func(string) (deploy.StateV1, bool, error) {
@@ -93,7 +94,9 @@ func TestUninstallProviderV1MapsPublicOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if captured.DeploymentDir != "/opt/demo" || captured.Runtime != runtime || captured.Service != "demo-service" || !captured.RemoveDir || captured.ControlMode != ControlAdmissionDrainV1 || captured.RunOptions.DockerPreflightTimeout != timeout {
+	if captured.DeploymentDir != "/opt/demo" || captured.Runtime != runtime || captured.Service != "demo-service" ||
+		!captured.RemoveDir || captured.ControlMode != ControlAdmissionDrainV1 ||
+		captured.RunOptions.Progress != &progress || captured.RunOptions.DockerPreflightTimeout != timeout {
 		t.Fatalf("provider uninstall input = %#v", captured)
 	}
 }

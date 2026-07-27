@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"sort"
+	"strings"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providers/registry"
@@ -20,9 +24,10 @@ type PreparedPythonGraphExecutionInput struct {
 	BaseCatalog      []providers.RealizedOutput
 	Sources          []providers.ResolvedSourceInput
 	SourceWheels     []providerstore.ArtifactDescriptor
-	WorkspaceSources []PythonWorkspaceSource
+	LocalOverrides   []PythonLocalOverrideV1
 	CurrentLock      *deploy.BuildLockV1
 	FinalImageConfig providers.ImageConfigPolicy
+	Progress         io.Writer
 	RunOptions       RunOptions
 }
 
@@ -53,7 +58,7 @@ func ExecutePreparedPythonGraph(
 		return providers.GraphExecutionResult{}, err
 	}
 	for id, config := range reuse.NodeConfigs {
-		config.WorkspaceSources = append([]PythonWorkspaceSource{}, input.WorkspaceSources...)
+		config.LocalOverrides = append([]PythonLocalOverrideV1{}, input.LocalOverrides...)
 		reuse.NodeConfigs[id] = config
 	}
 	backend, cleanup, err := preparePythonGraphExecutionBackend(
@@ -69,12 +74,49 @@ func ExecutePreparedPythonGraph(
 			err = errors.Join(err, cleanupErr)
 		}
 	}()
+	prepareNode := backend.PrepareNode
+	materializeNode := backend.MaterializeNode
+	if input.Progress != nil {
+		prepareNode = func(ctx context.Context, request providers.GraphNodePrepareRequest) (providers.GraphNodePreparation, error) {
+			writeProviderNodeProgress(input.Progress, "resolving", request.Resolve.Plan, request.Resolve.NodeID)
+			return backend.PrepareNode(ctx, request)
+		}
+		materializeNode = func(ctx context.Context, request providers.GraphNodeMaterializeRequest) (providers.GraphNodeMaterializeResult, error) {
+			writeProviderNodeProgress(input.Progress, "building", input.Plan, request.Node.ID)
+			return backend.MaterializeNode(ctx, request)
+		}
+	}
 	return executePreparedPythonProviderGraph(ctx, providers.GraphExecutionRequest{
 		Plan: input.Plan, Platform: input.BaseDescriptor.Platform,
 		SourceCandidates: append([]providers.ResolvedSourceInput{}, input.Sources...),
 		BaseImage:        baseImage, BaseCatalog: append([]providers.RealizedOutput{}, input.BaseCatalog...),
 		ReusableArtifacts: reuse.ReusableArtifacts, CachedResolutions: reuse.CachedResolutions,
 		Validators:  registry.OwnerValidatorsForNode,
-		PrepareNode: backend.PrepareNode, MaterializeNode: backend.MaterializeNode,
+		PrepareNode: prepareNode, MaterializeNode: materializeNode,
 	})
+}
+
+func writeProviderNodeProgress(output io.Writer, action string, plan providers.ProviderPlanV1, id providers.NodeID) {
+	node, found := graphBackendNode(plan, id)
+	if !found {
+		return
+	}
+	components := append([]string{}, node.Components...)
+	sort.Strings(components)
+	componentLabel := "component " + strings.Join(components, ", ")
+	if len(components) != 1 {
+		componentLabel = "components " + strings.Join(components, ", ")
+	}
+	provider := string(node.Provider)
+	switch node.Provider {
+	case blueprint.ComponentTypeAPT:
+		provider = "APT"
+	case blueprint.ComponentTypePython:
+		provider = "Python"
+	}
+	if action == "building" {
+		writeProviderBuildProgress(output, "building %s layer for %s", provider, componentLabel)
+		return
+	}
+	writeProviderBuildProgress(output, "resolving %s packages for %s", provider, componentLabel)
 }

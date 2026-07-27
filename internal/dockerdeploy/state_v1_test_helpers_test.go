@@ -32,7 +32,8 @@ func testSelectedPlatformDocumentV1(t *testing.T) (blueprint.Document, blueprint
 		t.Fatal(err)
 	}
 	document := blueprint.Document{
-		Blueprint: blueprint.Metadata{Compatibility: blueprint.Compatibility{Platforms: []blueprint.Platform{platform}}},
+		Blueprint:   blueprint.Metadata{Compatibility: blueprint.Compatibility{Platforms: []blueprint.Platform{platform}}},
+		Environment: blueprint.Environment{ID: "demo"},
 	}
 	return document, platform
 }

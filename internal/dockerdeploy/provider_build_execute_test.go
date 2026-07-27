@@ -15,8 +15,10 @@ import (
 func TestExecuteLockedProviderBuildV1ReturnsExactReuseWithoutBackendWork(t *testing.T) {
 	input, _, current, _, _ := providerBuildPreparationFixture(t)
 	lock := current.Lock
+	var progress strings.Builder
 	execution := LockedProviderBuildExecutionInputV1{
-		SourceWheels: []providerstore.ArtifactDescriptor{}, WorkspaceSources: []PythonWorkspaceSource{},
+		SourceWheels: []providerstore.ArtifactDescriptor{}, LocalOverrides: []PythonLocalOverrideV1{},
+		Progress: &progress,
 		Preparation: LockedProviderBuildPreparationV1{
 			Operation: input.Operation, Store: input.Store,
 			Current: &current, ReusableLock: &lock, Reused: true,
@@ -43,6 +45,9 @@ func TestExecuteLockedProviderBuildV1ReturnsExactReuseWithoutBackendWork(t *test
 	if !result.Reused || !reflect.DeepEqual(result.State, current.State) || !reflect.DeepEqual(result.Lock, current.Lock) {
 		t.Fatalf("result = %#v", result)
 	}
+	if got := progress.String(); got != "reusing current validated image\n" {
+		t.Fatalf("progress = %q", got)
+	}
 	publicResult, err := ExecuteLockedProviderBuildV1(context.Background(), execution)
 	if err != nil || !publicResult.Reused || !reflect.DeepEqual(publicResult.Lock, current.Lock) {
 		t.Fatalf("public exact reuse result = %#v, error = %v", publicResult, err)
@@ -66,20 +71,20 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 		Plan: selected.Plan, Descriptor: selected.Descriptor, Config: selected.Config,
 		Image: completionInput.Graph.PrefixImages[0], Catalog: completionInput.BaseCatalog,
 	}
-	workspaceSources := []PythonWorkspaceSource{{Distribution: "demo-server"}}
+	localOverrides := []PythonLocalOverrideV1{{Distribution: "demo-server", HostDir: "/tmp/demo-server"}}
 	input := LockedProviderBuildExecutionInputV1{
 		Preparation: LockedProviderBuildPreparationV1{
 			Operation: operation, Store: store, Environment: completionInput.Environment,
 			DeploymentDir: completionInput.DeploymentDir, DockerPlan: completionInput.DockerPlan,
 			Loaded: LoadedBuildRequestV1{
 				State: deploy.StateV1{Overlay: completionInput.Overlay}, Document: completionInput.Document,
-				Request: candidateRequest,
+				PackageOverrides: completionInput.PackageOverrides, Request: candidateRequest,
 			},
 			SelectedBase: selected, PreparedBase: &prepared, FinalImageConfig: pythonConsumerTestImageConfig(),
 		},
-		SourceWheels:     []providerstore.ArtifactDescriptor{},
-		WorkspaceSources: workspaceSources,
-		ValidateLayers:   true, RunValidation: completionInput.RunValidation,
+		SourceWheels:   []providerstore.ArtifactDescriptor{},
+		LocalOverrides: localOverrides,
+		ValidateLayers: true, RunValidation: completionInput.RunValidation,
 	}
 	wantState := deploy.StateV1{Schema: deploy.StateSchemaV1}
 	wantLock := deploy.BuildLockV1{Schema: deploy.BuildLockSchemaV1}
@@ -88,7 +93,7 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 		executeGraph: func(_ context.Context, got PreparedPythonGraphExecutionInput) (providers.GraphExecutionResult, error) {
 			order = append(order, "graph")
 			if !reflect.DeepEqual(got.Plan, prepared.Plan) || !reflect.DeepEqual(got.Sources, candidateRequest.Sources) ||
-				!reflect.DeepEqual(got.WorkspaceSources, workspaceSources) || got.CurrentLock != nil || got.RunOptions.Context == nil {
+				!reflect.DeepEqual(got.LocalOverrides, localOverrides) || got.CurrentLock != nil || got.RunOptions.Context == nil {
 				t.Fatalf("graph input = %#v", got)
 			}
 			return completionInput.Graph, nil
@@ -123,14 +128,17 @@ func TestExecuteLockedProviderBuildV1StopsAfterGraphFailure(t *testing.T) {
 	selected := SelectedProviderBase{Plan: completionInput.Graph.Plan, Descriptor: completionInput.Base, Config: providerBuildExecutionBaseConfig()}
 	prepared := PreparedProviderBase{Plan: selected.Plan, Descriptor: selected.Descriptor, Config: selected.Config}
 	input := LockedProviderBuildExecutionInputV1{
-		SourceWheels:     []providerstore.ArtifactDescriptor{},
-		WorkspaceSources: []PythonWorkspaceSource{},
+		SourceWheels:   []providerstore.ArtifactDescriptor{},
+		LocalOverrides: []PythonLocalOverrideV1{},
 		RunValidation: func(context.Context, FullImageValidationInput) ([]providers.ValidationEvidence, []providers.ExecutableEvidence, error) {
 			return nil, nil, nil
 		},
 		Preparation: LockedProviderBuildPreparationV1{
 			Operation: operation, Store: store, DockerPlan: completionInput.DockerPlan,
-			Loaded:       LoadedBuildRequestV1{Document: completionInput.Document, Request: completionInput.ResolvedRequest},
+			Loaded: LoadedBuildRequestV1{
+				Document: completionInput.Document, PackageOverrides: completionInput.PackageOverrides,
+				Request: completionInput.ResolvedRequest,
+			},
 			SelectedBase: selected, PreparedBase: &prepared, FinalImageConfig: pythonConsumerTestImageConfig(),
 		},
 	}
@@ -174,8 +182,8 @@ func TestExecuteLockedProviderBuildV1RequiresValidationRunnerBeforeGraph(t *test
 			Operation: operation, Store: store, SelectedBase: selected, PreparedBase: &prepared,
 			FinalImageConfig: pythonConsumerTestImageConfig(),
 		},
-		SourceWheels:     []providerstore.ArtifactDescriptor{},
-		WorkspaceSources: []PythonWorkspaceSource{},
+		SourceWheels:   []providerstore.ArtifactDescriptor{},
+		LocalOverrides: []PythonLocalOverrideV1{},
 	}, backend)
 	if err == nil || !strings.Contains(err.Error(), "validation runner") {
 		t.Fatalf("error = %v", err)
@@ -201,7 +209,7 @@ func TestExecuteLockedProviderBuildV1RejectsReleasedPreparationLock(t *testing.T
 	}
 	_, err := executeLockedProviderBuildV1(context.Background(), LockedProviderBuildExecutionInputV1{
 		Preparation:  LockedProviderBuildPreparationV1{Operation: input.Operation},
-		SourceWheels: []providerstore.ArtifactDescriptor{}, WorkspaceSources: []PythonWorkspaceSource{},
+		SourceWheels: []providerstore.ArtifactDescriptor{}, LocalOverrides: []PythonLocalOverrideV1{},
 	}, backend)
 	if err == nil || !strings.Contains(err.Error(), "not held") {
 		t.Fatalf("error = %v", err)

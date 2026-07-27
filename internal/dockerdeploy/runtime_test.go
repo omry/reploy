@@ -23,7 +23,7 @@ func TestRuntimeCommandActions(t *testing.T) {
 		{action: "down", suffix: []string{"down", "--remove-orphans"}},
 		{action: "ps", suffix: []string{"ps"}},
 		{action: "status", suffix: []string{"ps", "--all"}},
-		{action: "logs", suffix: []string{"logs", "--timestamps"}},
+		{action: "logs", suffix: []string{"logs"}},
 	}
 	for _, test := range cases {
 		t.Run(test.action, func(t *testing.T) {
@@ -47,7 +47,7 @@ func TestRuntimeCommandActions(t *testing.T) {
 func TestRuntimeCommandLogOptions(t *testing.T) {
 	dir := runtimeCommandDeployment(t, "demo-project")
 	spec, err := RuntimeCommandWithOptions(dir, "logs", RuntimeCommandOptions{
-		Follow: true, Tail: "100", Since: "2026-07-09T00:00:00Z",
+		Follow: true, Tail: "100", Since: "2026-07-09T00:00:00Z", Timestamps: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -176,14 +176,14 @@ func TestRuntimeDispatchesStateV1Observations(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	for _, action := range []string{"status", "logs", "ps"} {
-		if err := Runtime(RuntimeOptions{Dir: dir, Action: action, Follow: true, Tail: "25", Stdout: &stdout, Stderr: &stderr}); err != nil {
+		if err := Runtime(RuntimeOptions{Dir: dir, Action: action, Follow: true, Tail: "25", Timestamps: true, Stdout: &stdout, Stderr: &stderr}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if len(calls) != 3 || calls[0].Action != "status" || calls[1].Action != "logs" || calls[2].Action != "ps" {
 		t.Fatalf("observation calls = %#v", calls)
 	}
-	if !calls[1].Command.Follow || calls[1].Command.Tail != "25" {
+	if !calls[1].Command.Follow || calls[1].Command.Tail != "25" || !calls[1].Command.Timestamps {
 		t.Fatalf("log observation = %#v", calls[1])
 	}
 }

@@ -187,7 +187,7 @@ func TestOperationLockCommitsInstalledDestinationFromStagedSource(t *testing.T) 
 	sourcePath := writeOverlayTestState(t, sourceDir)
 	source := readOverlayTestState(t, sourcePath)
 	source.BlueprintSource = "blueprint: retained exactly\n"
-	source.Staging = &StagingStateV1{Schema: StagingStateSchemaV1, WorkspaceRoot: t.TempDir()}
+	source.Staging = &StagingStateV1{Schema: StagingStateSchemaV1}
 	destinationDir := t.TempDir()
 	destinationLock, err := AcquireOperationLock(t.Context(), destinationDir)
 	if err != nil {

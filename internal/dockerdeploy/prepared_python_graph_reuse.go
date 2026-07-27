@@ -94,6 +94,7 @@ func LoadPreparedPythonGraphReuse(
 			return PreparedPythonGraphReuse{}, fmt.Errorf("current provider bundle for node %q: %w", id, err)
 		}
 		compatible := true
+		cacheNode := node
 		switch node.Provider {
 		case blueprint.ComponentTypeAPT:
 			aptBundle, err := aptprovider.DecodeCanonicalBundleDataV1(bundle.Payload.ProviderPayload)
@@ -113,9 +114,21 @@ func LoadPreparedPythonGraphReuse(
 			reuse.NodeConfigs[id] = PreparedPythonNodeConfig{ReusableWheels: wheels}
 			reuse.ReusableArtifacts[id] = artifactStoreReferences(wheels)
 			compatible = exactSelectedSourceCandidatesV1(nodeSources[id], pythonBundle.Sources)
+			closure := make([]string, 0, len(pythonBundle.Wheels))
+			for _, wheel := range pythonBundle.Wheels {
+				closure = append(closure, wheel.Distribution)
+			}
+			sort.Strings(closure)
+			cacheNode.Request, err = pythonprovider.FilterProviderRequestOverridesV1(node.Request, closure)
+			if err != nil {
+				return PreparedPythonGraphReuse{}, fmt.Errorf("project current Python request for node %q: %w", id, err)
+			}
+			cacheNode.Requirements.ProviderData = providers.CanonicalProviderData{
+				Schema: cacheNode.Request.Schema, Value: cacheNode.Request.Value,
+			}
 		}
 
-		planDigest, err := providers.ProviderNodePlanDigest(node)
+		planDigest, err := providers.ProviderNodePlanDigest(cacheNode)
 		if err != nil {
 			return PreparedPythonGraphReuse{}, err
 		}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/providerstore"
 )
 
@@ -91,6 +92,75 @@ func TestExecuteProviderGraphCarriesOnlyEarlierCatalogAndPrefix(t *testing.T) {
 	}
 	if result.Materializations[0].Image != result.PrefixImages[1] || result.Materializations[1].Image != result.PrefixImages[2] {
 		t.Fatalf("materializations do not align with prefix images: %#v; %#v", result.Materializations, result.PrefixImages)
+	}
+}
+
+func TestExecuteProviderGraphRecordsAResolverNarrowedNodeRequest(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseDeclaration := OutputDeclaration{
+		SupplierComponent: "base", Name: "python", Kind: OutputKindExecutable,
+		CandidatePath: "/usr/bin/python", Provenance: providerData("test-output-v1"),
+	}
+	requirement := ExecutableRequirement{ID: "interpreter", Command: "python", Supplier: "base", ValidationPolicy: ValidationPolicyCompatible}
+	node := pythonPlanNode("application", requirement)
+	node.Requirements.ProviderData = CanonicalProviderData{Schema: node.Request.Schema, Value: node.Request.Value}
+	plan := ProviderPlanV1{
+		Schema: ProviderPlanSchemaV1,
+		Nodes:  []NodeSpec{basePlanNode(baseDeclaration), node},
+		Edges: []ProviderEdgeV1{{
+			Supplier: "base", Consumer: node.ID, RequirementID: "interpreter",
+			Output: QualifiedOutput{Component: "base", Name: "python"},
+		}},
+	}
+	baseImage := RealizedImageV1{Digest: testDigest("1"), ConfigDigest: testDigest("2"), RootFSSubject: testDigest("3")}
+	baseCatalog := []RealizedOutput{catalogOutput("base", "base", "python", "/usr/bin/python")}
+	original := plan.Nodes[1].Request
+	effective := original
+	effective.Value = canonical.Object{"effective": true}
+
+	result, err := ExecuteProviderGraph(context.Background(), GraphExecutionRequest{
+		Plan: plan, Platform: platform, SourceCandidates: []ResolvedSourceInput{},
+		BaseImage: baseImage, BaseCatalog: baseCatalog,
+		ReusableArtifacts: map[NodeID][]providerstore.StoreObjectRef{},
+		CachedResolutions: map[NodeID]ResolveResult{},
+		Validators: func(NodeSpec) (ProviderOwnerValidators, error) {
+			return ProviderOwnerValidators{Profile: func(RequirementProfile) error { return nil }, Bundle: acceptTestBundleOwner}, nil
+		},
+		PrepareNode: func(_ context.Context, request GraphNodePrepareRequest) (GraphNodePreparation, error) {
+			effectivePlan := request.Resolve.Plan
+			effectivePlan.Nodes = append([]NodeSpec{}, effectivePlan.Nodes...)
+			effectivePlan.Nodes[1].Request = effective
+			effectivePlan.Nodes[1].Requirements.ProviderData = CanonicalProviderData{
+				Schema: effective.Schema, Value: effective.Value,
+			}
+			effectiveResolve := request.Resolve
+			effectiveResolve.Plan = effectivePlan
+			return GraphNodePreparation{
+				Resolution:       graphTestResolution(t, effectiveResolve, platform),
+				Consumer:         acceptGraphConsumer(),
+				EffectiveRequest: &effective,
+			}, nil
+		},
+		MaterializeNode: func(_ context.Context, request GraphNodeMaterializeRequest) (GraphNodeMaterializeResult, error) {
+			return GraphNodeMaterializeResult{
+				Image: baseImage, TransactionDigest: testDigest("d"),
+				GeneratedExecutables: []RealizedGeneratedExecutable{},
+				Outputs:              graphTestRealizedOutputs(request.Input.Bundle),
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(result.Plan.Nodes[1].Request, effective) ||
+		!reflect.DeepEqual(result.Bundles[0].Payload.Request, effective) {
+		t.Fatalf("effective request was not retained: plan=%#v bundle=%#v", result.Plan.Nodes[1].Request, result.Bundles[0].Payload.Request)
+	}
+	if !reflect.DeepEqual(plan.Nodes[1].Request, original) {
+		t.Fatalf("input plan was mutated: %#v", plan.Nodes[1].Request)
 	}
 }
 

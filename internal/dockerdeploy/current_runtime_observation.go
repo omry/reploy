@@ -32,6 +32,7 @@ type currentRuntimeObservationBackendV1 struct {
 	command       func(string, string, RuntimeCommandOptions) (CommandSpec, error)
 	containerID   func(context.Context, DockerExecutionPlan, time.Duration) (string, error)
 	logsCommand   func(string, RuntimeCommandOptions) (CommandSpec, error)
+	status        func(context.Context, DockerExecutionPlan, time.Duration) (RuntimeStatusV1, error)
 	run           func(CommandSpec, RunOptions) error
 }
 
@@ -52,6 +53,7 @@ func RunCurrentRuntimeObservationV1(ctx context.Context, input CurrentRuntimeObs
 		command:       RuntimeCommandWithOptions,
 		containerID:   CurrentRuntimeContainerIDV1,
 		logsCommand:   RuntimeContainerLogsCommandV1,
+		status:        ObserveRuntimeStatusV1,
 		run:           runCommand,
 	})
 }
@@ -73,7 +75,7 @@ func runCurrentRuntimeObservationV1(
 	if input.DeploymentDir == "" {
 		return fmt.Errorf("run current runtime observation requires a deployment directory")
 	}
-	if backend.acquire == nil || backend.newStore == nil || backend.readState == nil || backend.loadCurrent == nil || backend.plan == nil || backend.matches == nil || backend.requireInputs == nil || backend.command == nil || backend.containerID == nil || backend.logsCommand == nil || backend.run == nil {
+	if backend.acquire == nil || backend.newStore == nil || backend.readState == nil || backend.loadCurrent == nil || backend.plan == nil || backend.matches == nil || backend.requireInputs == nil || backend.command == nil || backend.containerID == nil || backend.logsCommand == nil || backend.status == nil || backend.run == nil {
 		return fmt.Errorf("run current runtime observation requires a complete backend")
 	}
 	dir, err := filepath.Abs(input.DeploymentDir)
@@ -128,6 +130,18 @@ func runCurrentRuntimeObservationV1(
 	}
 	if err := backend.requireInputs(operation, dir, planned); err != nil {
 		return err
+	}
+	if input.Action == "status" {
+		status, err := backend.status(ctx, planned.Docker, input.RunOptions.DockerPreflightTimeout)
+		if err != nil {
+			return err
+		}
+		phase, color := stagingOutputPhase, stagingOutputColor
+		if state.Deployment != nil {
+			phase, color = deployedOutputPhase, deployedOutputColor
+		}
+		label := deploymentOutputLabel(phase, document.Environment.ID)
+		return WriteRuntimeStatusV1(newDeploymentOutputWriter(input.RunOptions.Stdout, label, color), status, planned.Docker)
 	}
 	var spec CommandSpec
 	if input.Action == "logs" {
@@ -197,7 +211,10 @@ func RuntimeContainerLogsCommandV1(containerID string, options RuntimeCommandOpt
 	if _, err := hex.DecodeString(containerID); err != nil {
 		return CommandSpec{}, fmt.Errorf("runtime logs require a full container ID")
 	}
-	args := []string{"logs", "--timestamps"}
+	args := []string{"logs"}
+	if options.Timestamps {
+		args = append(args, "--timestamps")
+	}
 	if options.Since != "" {
 		args = append(args, "--since", options.Since)
 	}

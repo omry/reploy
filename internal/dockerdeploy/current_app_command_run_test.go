@@ -44,7 +44,7 @@ func TestRunCurrentAppCommandV1OrdersStaleCheckOutputGateAndContainer(t *testing
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("order = %v, want %v", order, want)
 	}
-	if stdout.String() != "[STAGING] command output\n" {
+	if stdout.String() != "[STAGING : demo] command output\n" {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }
@@ -64,6 +64,28 @@ func TestRunCurrentAppCommandV1DoesNotReserveOutputForStaleBuild(t *testing.T) {
 	}
 	if containsRuntimeObservationStep(order, "plan command", "prepare output", "final gate", "temporary") {
 		t.Fatalf("stale build reached output or runtime work: %v", order)
+	}
+}
+
+func TestRunCurrentAppCommandV1RequiresExplicitBuildWhenCurrentGenerationIsMissing(t *testing.T) {
+	dir := t.TempDir()
+	current, _ := runtimeCurrentBuildFixture(t)
+	current.State.Current = nil
+	order := []string{}
+	backend := currentAppCommandRunTestBackend(t, dir, current, CurrentRuntimePlanV1{}, &order)
+	backend.loadCurrent = func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (CurrentBuild, bool, error) {
+		order = append(order, "current")
+		return CurrentBuild{}, false, nil
+	}
+
+	err := runCurrentAppCommandV1(t.Context(), CurrentAppCommandRunInputV1{
+		DeploymentDir: dir, Arguments: []string{"export"},
+	}, backend)
+	if err == nil || !strings.Contains(err.Error(), "runtime build is missing; run `reploy build`") {
+		t.Fatalf("missing build error = %v", err)
+	}
+	if containsRuntimeObservationStep(order, "plan runtime", "prepare output", "admit", "execution", "run admitted") {
+		t.Fatalf("missing build reached runtime work: %v", order)
 	}
 }
 
@@ -127,11 +149,11 @@ func TestRunCurrentAppCommandV1RejectsGenerationChangeAfterAdmission(t *testing.
 	order := []string{}
 	backend := currentAppCommandRunTestBackend(t, dir, current, CurrentRuntimePlanV1{Docker: DockerExecutionPlan{ContainerName: "demo"}}, &order)
 	originalAwait := backend.await
-	backend.await = func(ctx context.Context, gotDir string, operation *deploy.OperationLock, candidate deploy.LiveRunV1, wait bool) (*deploy.OperationLock, error) {
+	backend.await = func(ctx context.Context, gotDir string, operation *deploy.OperationLock, candidate deploy.LiveRunV1, wait bool, notice io.Writer) (*deploy.OperationLock, error) {
 		if !wait {
 			t.Fatal("wait option was not forwarded to admission")
 		}
-		return originalAwait(ctx, gotDir, operation, candidate, wait)
+		return originalAwait(ctx, gotDir, operation, candidate, wait, notice)
 	}
 	backend.runPublished = func(ctx context.Context, input PublishedRuntimeContainerInput, run PublishedRuntimeContainerRunnerV1) error {
 		order = append(order, "final gate")
@@ -220,7 +242,7 @@ func currentAppCommandRunTestBackend(
 			*order = append(*order, "run id")
 			return "run-0000000000000001", nil
 		},
-		await: func(_ context.Context, gotDir string, operation *deploy.OperationLock, candidate deploy.LiveRunV1, wait bool) (*deploy.OperationLock, error) {
+		await: func(_ context.Context, gotDir string, operation *deploy.OperationLock, candidate deploy.LiveRunV1, wait bool, _ io.Writer) (*deploy.OperationLock, error) {
 			*order = append(*order, "admit")
 			if gotDir != filepath.Clean(dir) || candidate.ID != "run-0000000000000001" || candidate.Kind != deploy.LiveRunKindAppV1 || candidate.Name != "export" || candidate.GenerationReference != current.Generation.Reference || !candidate.Exclusive || candidate.WritableMount != "--output-dir" {
 				t.Fatalf("admission input = %q, %#v, wait=%t", gotDir, candidate, wait)

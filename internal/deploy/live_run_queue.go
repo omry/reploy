@@ -49,6 +49,7 @@ type LiveRunV1 struct {
 	Status              LiveRunStatusV1 `json:"status"`
 	Exclusive           bool            `json:"exclusive"`
 	WritableMount       string          `json:"writable_mount,omitempty"`
+	WritablePaths       []string        `json:"writable_paths,omitempty"`
 	Container           string          `json:"container,omitempty"`
 }
 
@@ -223,8 +224,16 @@ func validateLiveRunV1(run LiveRunV1) error {
 	if run.Status != LiveRunStatusActiveV1 && run.Status != LiveRunStatusWaitingV1 {
 		return fmt.Errorf("live run status must be active or waiting")
 	}
-	if !run.Exclusive && run.WritableMount != "" {
+	if !run.Exclusive && (run.WritableMount != "" || len(run.WritablePaths) != 0) {
 		return fmt.Errorf("concurrent live run must not name a writable mount conflict")
+	}
+	for index, path := range run.WritablePaths {
+		if !safeRecoveryIdentity(path) {
+			return fmt.Errorf("live run writable path must be nonempty safe text")
+		}
+		if index > 0 && run.WritablePaths[index-1] >= path {
+			return fmt.Errorf("live run writable paths must be sorted and unique")
+		}
 	}
 	if run.Container != "" && !safeRecoveryIdentity(run.Container) {
 		return fmt.Errorf("live run container must be safe text")
@@ -254,7 +263,7 @@ func validateLiveQueueEntryV1(entry LiveRunV1) error {
 	if !entry.Exclusive {
 		return fmt.Errorf("control marker must be exclusive")
 	}
-	if entry.WritableMount != "" || entry.Container != "" {
+	if entry.WritableMount != "" || len(entry.WritablePaths) != 0 || entry.Container != "" {
 		return fmt.Errorf("control marker must not name a writable mount or container")
 	}
 	return nil

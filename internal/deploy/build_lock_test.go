@@ -28,6 +28,7 @@ func validBuildLock(t *testing.T) BuildLockV1 {
 	}
 	return BuildLockV1{
 		Schema: BuildLockSchemaV1, BlueprintDigest: buildLockTestDigest("0"), Overlay: EmptyRequestOverlayV1(),
+		PackageOverrides:      EmptyPackageOverrideIntentV1("demo"),
 		ResolvedRequestDigest: buildLockTestDigest("1"), Platform: platform,
 		Base:  base,
 		Graph: ProviderGraphLockV1{Nodes: []providers.NodeID{"base"}, Edges: []providers.ProviderEdgeV1{}},

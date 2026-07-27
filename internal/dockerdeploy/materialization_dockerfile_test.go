@@ -27,7 +27,7 @@ func TestMaterializationDockerfileRendersPinnedAtomicLayer(t *testing.T) {
 	text := string(dockerfile)
 	wants := []string{
 		"# syntax=" + MaterializationDockerfileSyntax,
-		"ARG REPLOY_BASE_IMAGE\nFROM ${REPLOY_BASE_IMAGE}",
+		"ARG REPLOY_BASE_IMAGE=scratch\nFROM ${REPLOY_BASE_IMAGE}",
 		"USER 0:0\nWORKDIR \"/\"",
 		"RUN --network=none --mount=type=bind,source=mounts/script,target=/.reploy-build/script,readonly --mount=type=bind,source=mounts/wheels,target=/.reploy-build/wheels,readonly [\"/usr/bin/env\",\"-i\",\"/bin/sh\",\"-c\"",
 		`"python-v1","0022","/bin/sh","-eu","/.reploy-build/script/python-web.sh"`,

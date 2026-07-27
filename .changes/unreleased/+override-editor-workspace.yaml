@@ -1,0 +1,2 @@
+kind: Changed
+body: Make workspace-root selection visible within the local-project override flow and keep the native override editor usable on narrow terminals.

@@ -13,19 +13,20 @@ import (
 )
 
 type ProviderBuildCompletionInput struct {
-	Environment     string
-	DeploymentDir   string
-	Document        blueprint.Document
-	DockerPlan      DockerExecutionPlan
-	ResolvedRequest providers.ResolvedRequestV1
-	Overlay         deploy.RequestOverlayV1
-	Base            deploy.ImageDescriptor
-	BaseCatalog     []providers.RealizedOutput
-	Graph           providers.GraphExecutionResult
-	Validation      ProviderGraphValidationPlan
-	ValidateLayers  bool
-	RunValidation   FullImageValidationRunner
-	RunOptions      RunOptions
+	Environment      string
+	DeploymentDir    string
+	Document         blueprint.Document
+	DockerPlan       DockerExecutionPlan
+	ResolvedRequest  providers.ResolvedRequestV1
+	Overlay          deploy.RequestOverlayV1
+	PackageOverrides deploy.PackageOverrideIntentV1
+	Base             deploy.ImageDescriptor
+	BaseCatalog      []providers.RealizedOutput
+	Graph            providers.GraphExecutionResult
+	Validation       ProviderGraphValidationPlan
+	ValidateLayers   bool
+	RunValidation    FullImageValidationRunner
+	RunOptions       RunOptions
 }
 
 type ProviderBuildCompletionResult struct {
@@ -107,7 +108,8 @@ func completeProviderBuild(
 	}
 	lock, err := backend.assemble(ctx, store, BuildLockAssemblyInput{
 		BlueprintDigest: blueprintDigest, ResolvedRequest: input.ResolvedRequest,
-		Overlay: input.Overlay, Base: input.Base, Graph: input.Graph,
+		Overlay: input.Overlay, PackageOverrides: input.PackageOverrides,
+		Base: input.Base, Graph: input.Graph,
 		RuntimePolicy:    policy,
 		ValidationRecord: finalized.Validation.Final.Reference, FinalImage: finalized.Image.Image,
 	})
@@ -135,14 +137,21 @@ func validateProviderBuildCompletionInput(input ProviderBuildCompletionInput, po
 	if err := providers.ValidateResolvedRequestV1(input.ResolvedRequest, registry.ValidateResolvedRequestOwnersV1); err != nil {
 		return err
 	}
-	expectedRequest, err := BuildResolvedRequestV1(
-		input.Document, input.Overlay, input.ResolvedRequest.Platform,
+	candidateRequest, err := BuildResolvedRequestWithPackageOverridesV1(
+		input.Document, input.Overlay, input.PackageOverrides, input.ResolvedRequest.Platform,
 		append([]providers.ResolvedSourceInput{}, input.ResolvedRequest.Sources...),
 	)
 	if err != nil {
 		return fmt.Errorf("provider build derive resolved request: %w", err)
 	}
-	if !reflect.DeepEqual(expectedRequest, input.ResolvedRequest) {
+	expectedRequest, expectedOverrides, err := finalizeResolvedRequestV1(
+		input.Document, input.Overlay, input.PackageOverrides, candidateRequest, input.Graph,
+	)
+	if err != nil {
+		return fmt.Errorf("provider build resolved request does not match the completed graph: %w", err)
+	}
+	if !reflect.DeepEqual(expectedRequest, input.ResolvedRequest) ||
+		!reflect.DeepEqual(expectedOverrides, input.PackageOverrides) {
 		return fmt.Errorf("provider build resolved request does not match the document, overlay, platform, and selected sources")
 	}
 	if err := blueprint.ValidateSelectedPlatform(input.Document, input.ResolvedRequest.Platform); err != nil {

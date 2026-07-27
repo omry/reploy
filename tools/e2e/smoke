@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import codecs
+import json
 import os
 import re
 import shutil
@@ -635,7 +636,7 @@ def run_smoke(
 
     blueprint_ref = "file:" + str(pack_dir)
     validation = run([str(reploy), "validate", blueprint_ref], cwd=workdir, env=env)
-    require_contains(validation.stdout, "valid blueprint: smoke-app", "validate output")
+    require_contains(validation.stdout, "pass: smoke-app (syntax and semantics)", "validate output")
 
     docker_enabled = docker_mode != "skip"
     if docker_unavailable_probe:
@@ -658,6 +659,22 @@ def run_smoke(
         env=env,
     )
     require_contains(init.stdout, "created staging directory", "stage output")
+    package_root = pack_dir.parent.resolve()
+    overrides = (
+        "environment:\n"
+        "  id: smoke-app\n"
+        "  vars:\n"
+        f"    workspace_root: {json.dumps(str(package_root))}\n"
+        "  package_overrides:\n"
+        "    python:\n"
+        "      smoke-suite:\n"
+        '        path: "{{ workspace_root }}/smoke-suite"\n'
+        "      smoke-imap:\n"
+        '        path: "{{ workspace_root }}/smoke-imap"\n'
+    )
+    overrides_path = deploy_dir / "package-overrides.yaml"
+    overrides_path.write_text(overrides, encoding="utf-8")
+    overrides_path.chmod(0o600)
 
     update = run(
         [str(reploy), "stage", "--update", "--dir", str(deploy_dir)],
@@ -696,15 +713,16 @@ def run_smoke(
     bundle_list = run([str(reploy), "bundle", "list", "--dir", str(deploy_dir)], cwd=workdir, env=env)
     require_contains(bundle_list.stdout, "option\tapplication/imap", "bundle list")
 
-    automatic_build = run(
+    run([str(reploy), "build", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+    app_check = run(
         [str(reploy), "app", "config", "check", "--dir", str(deploy_dir)],
         cwd=workdir,
         env=env,
     )
-    require_contains(automatic_build.stdout, '"check": "pass"', "automatic app build")
+    require_contains(app_check.stdout, '"check": "pass"', "app command after explicit build")
 
-    # The app command above built the missing image. Keep the explicit command
-    # as an end-to-end check that an already-current build is reused cleanly.
+    # Keep a second explicit command as an end-to-end check that an
+    # already-current build is reused cleanly.
     run([str(reploy), "build", "--dir", str(deploy_dir)], cwd=workdir, env=env)
     if runtime:
         run_runtime_smoke(reploy, deploy_dir, workdir, env)

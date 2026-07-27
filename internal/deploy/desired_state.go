@@ -46,8 +46,8 @@ func CreateDesiredStateV1(
 	return setDesiredStateV1(ctx, deploymentDir, document, platform, validatePackage, nil, "", true)
 }
 
-// SetStagedDesiredStateV1 records the author-provided blueprint text and the
-// effective machine-local workspace locator alongside the resolved document.
+// SetStagedDesiredStateV1 records the author-provided blueprint text alongside
+// the resolved document.
 func SetStagedDesiredStateV1(
 	ctx context.Context,
 	deploymentDir string,
@@ -55,10 +55,9 @@ func SetStagedDesiredStateV1(
 	platform blueprint.Platform,
 	validatePackage PackageRequestValidator,
 	blueprintSource string,
-	workspaceRoot string,
 	requireMissing bool,
 ) (result DesiredStateUpdateResult, err error) {
-	staging := &StagingStateV1{Schema: StagingStateSchemaV1, WorkspaceRoot: workspaceRoot}
+	staging := &StagingStateV1{Schema: StagingStateSchemaV1}
 	return setDesiredStateV1(ctx, deploymentDir, document, platform, validatePackage, staging, blueprintSource, requireMissing)
 }
 

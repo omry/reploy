@@ -47,6 +47,24 @@ func TestRunCurrentRuntimeObservationV1ChecksPublishedInputsBeforeCommand(t *tes
 	}
 }
 
+func TestRuntimeContainerLogsCommandV1MakesTimestampsExplicit(t *testing.T) {
+	containerID := strings.Repeat("a", 64)
+	plain, err := RuntimeContainerLogsCommandV1(containerID, RuntimeCommandOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsRuntimeObservationStep(plain.Args, "--timestamps") {
+		t.Fatalf("default logs requested timestamps: %#v", plain.Args)
+	}
+	timestamped, err := RuntimeContainerLogsCommandV1(containerID, RuntimeCommandOptions{Timestamps: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsRuntimeObservationStep(timestamped.Args, "--timestamps") {
+		t.Fatalf("timestamped logs omitted timestamps: %#v", timestamped.Args)
+	}
+}
+
 func TestRunCurrentRuntimeObservationV1StopsAtStaleBuildOrInputs(t *testing.T) {
 	dir := t.TempDir()
 	current, _ := runtimeCurrentBuildFixture(t)
@@ -98,22 +116,42 @@ func TestRunCurrentRuntimeObservationV1RejectsUnsupportedActionAndMissingState(t
 	}
 }
 
-func TestRunCurrentRuntimeObservationV1PrefixesStatusButNotLogs(t *testing.T) {
+func TestRunCurrentRuntimeObservationV1NormalizesStagedAndDeployedStatusButNotLogs(t *testing.T) {
 	t.Setenv("REPLOY_COLOR", "never")
 	dir := t.TempDir()
 	current, _ := runtimeCurrentBuildFixture(t)
 	planned := CurrentRuntimePlanV1{Docker: DockerExecutionPlan{EnvironmentID: "demo"}}
 
 	for _, test := range []struct {
-		action string
-		want   string
+		name     string
+		action   string
+		deployed bool
+		want     string
 	}{
-		{action: "status", want: "[STAGING] compose output\n"},
-		{action: "logs", want: "compose output\n"},
+		{name: "staged status", action: "status", want: strings.Join([]string{
+			"[STAGING : demo] status: running",
+			"[STAGING : demo] started: 5 seconds ago",
+			"[STAGING : demo] endpoint http: http://127.0.0.1:18076",
+			"",
+		}, "\n")},
+		{name: "deployed status", action: "status", deployed: true, want: strings.Join([]string{
+			"[DEPLOYED : demo] status: running",
+			"[DEPLOYED : demo] started: 5 seconds ago",
+			"[DEPLOYED : demo] endpoint http: http://127.0.0.1:18076",
+			"",
+		}, "\n")},
+		{name: "logs", action: "logs", want: "compose output\n"},
 	} {
-		t.Run(test.action, func(t *testing.T) {
+		t.Run(test.name, func(t *testing.T) {
 			order := []string{}
-			backend := currentRuntimeObservationTestBackend(t, dir, current, planned, &order)
+			testCurrent := current
+			if test.deployed {
+				testCurrent.State.Deployment = &deploy.DeploymentStateV1{}
+			}
+			planned.Docker.Workload = &WorkloadExecutionPlan{Endpoints: map[string]EndpointExecutionPlan{
+				"http": {Scheme: "http", PublishAddress: "127.0.0.1", PublishedPort: 18076},
+			}}
+			backend := currentRuntimeObservationTestBackend(t, dir, testCurrent, planned, &order)
 			originalRun := backend.run
 			backend.run = func(spec CommandSpec, options RunOptions) error {
 				if err := originalRun(spec, options); err != nil {
@@ -205,6 +243,10 @@ func currentRuntimeObservationTestBackend(
 				t.Fatalf("logs container ID = %q", containerID)
 			}
 			return RuntimeContainerLogsCommandV1(containerID, options)
+		},
+		status: func(context.Context, DockerExecutionPlan, time.Duration) (RuntimeStatusV1, error) {
+			*order = append(*order, "status")
+			return RuntimeStatusV1{Status: "running", Started: "5 seconds ago"}, nil
 		},
 		run: func(spec CommandSpec, options RunOptions) error {
 			*order = append(*order, "run")

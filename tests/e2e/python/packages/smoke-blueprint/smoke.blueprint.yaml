@@ -7,14 +7,6 @@ blueprint:
 
 environment:
   id: smoke-app
-  vars:
-    project_root: ..
-  workspace:
-    root: "{{ project_root }}"
-    packages:
-      python:
-        smoke-suite: smoke-suite
-        smoke-imap: smoke-imap
   components:
     base:
       image: python:3.11-slim

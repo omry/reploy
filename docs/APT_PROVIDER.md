@@ -349,9 +349,15 @@ outer shape matches the blueprint and whose `environment.id` must match. The
 sidecar maps provider-owned package identifiers to either a local source path
 or a specific upstream version. It is intent, not a resolution record: Reploy
 does not add inferred dependencies, hashes, or selected artifacts to it.
-Relative source paths resolve from the sidecar's directory. Installation
-transfers the staged build and retained blueprint, but not the sidecar or its
-source locators; an installed deployment never reads the source checkout.
+`reploy overrides [--dir DIR]` edits this file and loads existing content;
+`--dir` selects the staging directory. An optional source workspace root can be
+configured inside the editor and is then recorded in sidecar-local
+`environment.vars.workspace_root`. Without one, selected source paths remain
+absolute; with one, paths beneath it use that variable and paths outside it
+remain absolute. Relative source paths resolve from the sidecar's directory.
+Installation transfers the staged build and retained blueprint, but not the
+sidecar or its source locators; an installed deployment never reads the source
+checkout.
 
 For exact build reuse, Reploy reconstructs the prior selected-source list from
 the validated provider profiles embedded in the current lock and compares only
@@ -1724,6 +1730,11 @@ upstream image triggers a cheap validation of that profile; an unchanged
 fingerprint reuses the exact wheel bundle, while changed evidence reruns the
 Python resolver.
 
+V1 requires a local-only transitive distribution to also appear as an explicit
+component package request. This gives the resolver a discovery root without
+speculatively inspecting every local mapping. Published transitives remain
+demand-discovered normally.
+
 The Docker backend creates an environment-owned generation reference for each
 staged or installed environment. That reference and deployment state pin the
 exact image that one environment validated. When an ordinary `docker build`
@@ -2401,9 +2412,9 @@ schema accept `type: apt` until the end-to-end path is complete.
   staged install reuses a matching build and builds a missing or stale one;
   direct install builds in its private temporary staging-like workspace; help
   and progress expose install's build work and Docker/network requirements;
-  stage and overlay mutations never build; staged up, restart, and app commands
-  visibly ensure a current build; staged stop can stop the recorded workload
-  after validation failure; remaining staged runtime operations reject a
+  stage and overlay mutations never build; staged up and restart visibly ensure
+  a current build; staged stop can stop the recorded workload after validation
+  failure; staged app commands and remaining staged runtime operations reject a
   missing/stale build; and installed runtime operations never invoke resolution
   or image construction.
 - Install-transfer tests proving staged and direct install copy exactly the

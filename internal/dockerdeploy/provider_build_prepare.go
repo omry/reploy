@@ -11,13 +11,14 @@ import (
 )
 
 type LockedProviderBuildPreparationInputV1 struct {
-	Operation     *deploy.OperationLock
-	Store         providerstore.Store
-	Environment   string
-	DeploymentDir string
-	Sources       []providers.ResolvedSourceInput
-	DockerPlan    DockerExecutionPlan
-	NoCache       bool
+	Operation        *deploy.OperationLock
+	Store            providerstore.Store
+	Environment      string
+	DeploymentDir    string
+	PackageOverrides deploy.PackageOverrideIntentV1
+	Sources          []providers.ResolvedSourceInput
+	DockerPlan       DockerExecutionPlan
+	NoCache          bool
 }
 
 type LockedProviderBuildPreparationV1 struct {
@@ -50,7 +51,7 @@ type providerBuildPreparationBackend struct {
 		providers.RequirementProfileOwnerValidator,
 		providers.ResolvedBundleOwnerValidator,
 	) (bool, error)
-	load            func(*deploy.OperationLock, []providers.ResolvedSourceInput) (LoadedBuildRequestV1, error)
+	load            func(*deploy.OperationLock, deploy.PackageOverrideIntentV1, []providers.ResolvedSourceInput) (LoadedBuildRequestV1, error)
 	selectBase      func(context.Context, providers.ResolvedRequestV1) (SelectedProviderBase, error)
 	validateCurrent currentBuildLoader
 	lockedSources   func(deploy.BuildLockV1) ([]providers.ResolvedSourceInput, error)
@@ -69,7 +70,7 @@ func PrepareLockedProviderBuildV1(
 ) (LockedProviderBuildPreparationV1, error) {
 	return prepareLockedProviderBuildV1(ctx, input, providerBuildPreparationBackend{
 		recover:         RecoverPendingPublication,
-		load:            LoadBuildRequestV1,
+		load:            LoadBuildRequestWithPackageOverridesV1,
 		selectBase:      SelectProviderBase,
 		validateCurrent: ValidateCurrentBuild,
 		lockedSources:   buildLockSelectedSourcesV1,
@@ -118,7 +119,10 @@ func prepareLockedProviderBuildV1(
 	if err != nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build recovery: %w", err)
 	}
-	loaded, err := backend.load(input.Operation, append([]providers.ResolvedSourceInput{}, input.Sources...))
+	loaded, err := backend.load(
+		input.Operation, input.PackageOverrides,
+		append([]providers.ResolvedSourceInput{}, input.Sources...),
+	)
 	if err != nil {
 		return LockedProviderBuildPreparationV1{}, err
 	}
@@ -155,15 +159,17 @@ func prepareLockedProviderBuildV1(
 				if err != nil {
 					return LockedProviderBuildPreparationV1{}, err
 				}
-				lockedRequest, exactSources, err := resolvedRequestForLockedSourcesV1(
-					loaded.Document, loaded.State.Overlay, loaded.Request, lockedSources,
+				lockedRequest, relevantOverrides, exactSources, err := resolvedRequestForLockedBuildV1(
+					loaded.Document, loaded.State.Overlay, loaded.PackageOverrides, loaded.Request,
+					lockedSources, current.Lock, input.Store,
 				)
 				if err != nil {
 					return LockedProviderBuildPreparationV1{}, err
 				}
 				if exactSources {
 					matches, err := backend.matches(current, CurrentBuildReuseInput{
-						ResolvedRequest: lockedRequest, Overlay: loaded.State.Overlay, Base: selected.Descriptor,
+						ResolvedRequest: lockedRequest, Overlay: loaded.State.Overlay,
+						PackageOverrides: relevantOverrides, Base: selected.Descriptor,
 						Document: loaded.Document, DockerPlan: input.DockerPlan,
 					})
 					if err != nil {

@@ -1,0 +1,3 @@
+kind: Added
+body: Add staging-only, demand-driven package overrides and a native `reploy overrides` editor for selecting local projects or exact upstream versions without putting development paths in published blueprints.
+time: 2026-07-23T00:00:00+08:00

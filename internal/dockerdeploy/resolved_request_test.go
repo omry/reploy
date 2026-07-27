@@ -120,48 +120,6 @@ func TestBuildResolvedRequestV1NormalizesOverlayBeforeIdentity(t *testing.T) {
 	}
 }
 
-func TestBuildResolvedRequestV1ExcludesUnusedWorkspaceCandidatesFromIdentity(t *testing.T) {
-	firstDocument := resolvedRequestTestDocument()
-	firstDocument.Environment.Workspace = blueprint.Workspace{
-		Root: "/checkout/one", PythonPackages: map[string]string{"unused": "package"},
-	}
-	secondDocument := resolvedRequestTestDocument()
-	secondDocument.Environment.Workspace = blueprint.Workspace{
-		Root: "/checkout/two", PythonPackages: map[string]string{"also-unused": "src"},
-	}
-	platform := firstDocument.Blueprint.Compatibility.Platforms[0]
-	first, err := BuildResolvedRequestV1(firstDocument, deploy.EmptyRequestOverlayV1(), platform, []providers.ResolvedSourceInput{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := BuildResolvedRequestV1(secondDocument, deploy.EmptyRequestOverlayV1(), platform, []providers.ResolvedSourceInput{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	firstDigest, err := providers.ResolvedRequestDigest(first, registry.ValidateResolvedRequestOwnersV1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondDigest, err := providers.ResolvedRequestDigest(second, registry.ValidateResolvedRequestOwnersV1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if firstDigest != secondDigest {
-		t.Fatalf("unused workspace packages changed provider request identity: %s != %s", firstDigest, secondDigest)
-	}
-	firstDocumentDigest, err := blueprint.DocumentDigestV1(firstDocument)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondDocumentDigest, err := blueprint.DocumentDigestV1(secondDocument)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if firstDocumentDigest == secondDocumentDigest {
-		t.Fatal("complete blueprint provenance did not retain workspace changes")
-	}
-}
-
 func TestFinalizeResolvedRequestV1RecordsGraphSelectedSources(t *testing.T) {
 	document := resolvedRequestTestDocument()
 	platform := document.Blueprint.Compatibility.Platforms[0]
@@ -177,19 +135,29 @@ func TestFinalizeResolvedRequestV1RecordsGraphSelectedSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	finalized, err := finalizeResolvedRequestV1(
-		document, deploy.EmptyRequestOverlayV1(), candidateRequest,
-		[]providers.ResolvedSourceInput{selected},
+	packageOverrides := deploy.EmptyPackageOverrideIntentV1(document.Environment.ID)
+	plan, err := registry.Plan(providers.PlanInput{Components: candidateRequest.Components, Platform: candidateRequest.Platform})
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := providers.GraphExecutionResult{Plan: plan, Bundles: []providers.ResolvedBundle{}, SelectedSources: []providers.ResolvedSourceInput{selected}}
+	finalized, relevant, err := finalizeResolvedRequestV1(
+		document, deploy.EmptyRequestOverlayV1(), packageOverrides, candidateRequest,
+		graph,
 	)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(relevant, packageOverrides) {
+		t.Fatalf("relevant overrides = %#v", relevant)
 	}
 	if len(finalized.Sources) != 1 || !reflect.DeepEqual(finalized.Sources[0], selected) {
 		t.Fatalf("finalized sources = %#v", finalized.Sources)
 	}
 	built := selected
 	built.ArtifactDigest = registryDigest("5")
-	finalized, err = finalizeResolvedRequestV1(document, deploy.EmptyRequestOverlayV1(), candidateRequest, []providers.ResolvedSourceInput{built})
+	graph.SelectedSources = []providers.ResolvedSourceInput{built}
+	finalized, _, err = finalizeResolvedRequestV1(document, deploy.EmptyRequestOverlayV1(), packageOverrides, candidateRequest, graph)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,20 +166,83 @@ func TestFinalizeResolvedRequestV1RecordsGraphSelectedSources(t *testing.T) {
 	}
 	invalid := built
 	invalid.Component = "missing"
-	if _, err := finalizeResolvedRequestV1(document, deploy.EmptyRequestOverlayV1(), candidateRequest, []providers.ResolvedSourceInput{invalid}); err == nil || !strings.Contains(err.Error(), "missing or unsupported") {
+	graph.SelectedSources = []providers.ResolvedSourceInput{invalid}
+	if _, _, err := finalizeResolvedRequestV1(document, deploy.EmptyRequestOverlayV1(), packageOverrides, candidateRequest, graph); err == nil || !strings.Contains(err.Error(), "missing or unsupported") {
 		t.Fatalf("invalid selected source error = %v", err)
 	}
 	changed := selected
 	changed.ArtifactDigest = registryDigest("6")
 	locked, exact, err := resolvedRequestForLockedSourcesV1(
-		document, deploy.EmptyRequestOverlayV1(), candidateRequest,
+		document, deploy.EmptyRequestOverlayV1(), packageOverrides, candidateRequest,
 		[]providers.ResolvedSourceInput{selected},
 	)
 	if err != nil || !exact || len(locked.Sources) != 1 || !reflect.DeepEqual(locked.Sources[0], selected) {
 		t.Fatalf("locked request = %#v, exact = %v, error = %v", locked, exact, err)
 	}
-	if _, exact, err := resolvedRequestForLockedSourcesV1(document, deploy.EmptyRequestOverlayV1(), candidateRequest, []providers.ResolvedSourceInput{changed}); err != nil || exact {
+	if _, exact, err := resolvedRequestForLockedSourcesV1(document, deploy.EmptyRequestOverlayV1(), packageOverrides, candidateRequest, []providers.ResolvedSourceInput{changed}); err != nil || exact {
 		t.Fatalf("changed locked source exact = %v, error = %v", exact, err)
+	}
+}
+
+func TestResolvedRequestForLockedBuildIgnoresUnrelatedPackageOverride(t *testing.T) {
+	fixture := newPreparedPythonGraphReuseFixture(t)
+	document := blueprint.Document{
+		Blueprint: blueprint.Metadata{Compatibility: blueprint.Compatibility{Platforms: []blueprint.Platform{fixture.request.Platform}}},
+		Environment: blueprint.Environment{ID: "demo", Components: map[string]blueprint.Component{
+			"base": {
+				Type: blueprint.ComponentTypeBase,
+				Base: &blueprint.BaseComponent{
+					Image:   fixture.lock.Base.AuthorReference,
+					Exports: map[string]blueprint.BaseExecutableExport{"python": {Executable: "/usr/bin/python3"}},
+				},
+				Options: map[string]blueprint.ComponentOption{},
+			},
+			"application": {
+				Type: blueprint.ComponentTypePython,
+				Python: &blueprint.PythonComponent{
+					Interpreter:  blueprint.CommandRequirement{Command: "python", Version: ">=3.11", Supplier: "base"},
+					Requirements: []string{"demo-server==1.0"},
+				},
+				Options: map[string]blueprint.ComponentOption{},
+			},
+		}},
+	}
+	fullIntent := deploy.PackageOverrideIntentV1{
+		Schema: deploy.PackageOverrideIntentSchemaV1, EnvironmentID: "demo",
+		Choices: []deploy.PackageOverrideIntentChoiceV1{
+			{Provider: "python", Package: "demo-server", Kind: "local"},
+			{Provider: "python", Package: "unused", Kind: "version", Version: "99"},
+		},
+	}
+	candidate, err := BuildResolvedRequestWithPackageOverridesV1(
+		document, deploy.EmptyRequestOverlayV1(), fullIntent, fixture.request.Platform,
+		append([]providers.ResolvedSourceInput{}, fixture.request.SourceCandidates...),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockedSources, err := buildLockSelectedSourcesV1(fixture.lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, relevant, exact, err := resolvedRequestForLockedBuildV1(
+		document, deploy.EmptyRequestOverlayV1(), fullIntent, candidate,
+		lockedSources, fixture.lock, fixture.store,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exact || !reflect.DeepEqual(relevant, fixture.lock.PackageOverrides) {
+		t.Fatalf("exact=%v relevant=%#v", exact, relevant)
+	}
+	for _, component := range request.Components {
+		if component.Provider != blueprint.ComponentTypePython {
+			continue
+		}
+		overrides := component.Request.Value["overrides"].([]any)
+		if len(overrides) != 1 {
+			t.Fatalf("closure-relevant Python overrides = %#v", overrides)
+		}
 	}
 }
 
@@ -281,7 +312,7 @@ func resolvedRequestTestDocument() blueprint.Document {
 	}
 	return blueprint.Document{
 		Blueprint: blueprint.Metadata{Compatibility: blueprint.Compatibility{Platforms: []blueprint.Platform{platform}}},
-		Environment: blueprint.Environment{Components: map[string]blueprint.Component{
+		Environment: blueprint.Environment{ID: "demo", Components: map[string]blueprint.Component{
 			"base": {
 				Type:    blueprint.ComponentTypeBase,
 				Base:    &blueprint.BaseComponent{Image: "debian:13", Exports: map[string]blueprint.BaseExecutableExport{}},

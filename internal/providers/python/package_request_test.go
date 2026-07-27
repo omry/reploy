@@ -1,8 +1,11 @@
 package python
 
 import (
+	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/providers"
 )
@@ -49,5 +52,66 @@ func TestCanonicalPackageRequestV1RejectsPackageManagerOptions(t *testing.T) {
 		if err := ValidateCanonicalPackageRequestV1(request); err == nil {
 			t.Fatalf("ValidateCanonicalPackageRequestV1(%q) succeeded", requirement)
 		}
+	}
+}
+
+func TestProviderRequestDistributionsV1ReturnsSortedDirectRoots(t *testing.T) {
+	zeta, err := CanonicalPackageRequestV1("Zeta[extra]>=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	alpha, err := CanonicalPackageRequestV1("alpha_pkg==2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := CanonicalProviderRequestV1(PythonProviderRequestV1{
+		Component: "application",
+		Interpreter: blueprint.CommandRequirement{
+			Command: "python",
+		},
+		Requirements: []providers.CanonicalPackageRequest{zeta, alpha, alpha},
+		Overrides:    []PythonPackageOverrideV1{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	distributions, err := ProviderRequestDistributionsV1(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(distributions, ","); got != "alpha-pkg,zeta" {
+		t.Fatalf("distributions = %q", got)
+	}
+}
+
+func TestFilterProviderRequestOverridesV1KeepsOnlyClosureDistributions(t *testing.T) {
+	requirement, err := CanonicalPackageRequestV1("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := CanonicalProviderRequestV1(PythonProviderRequestV1{
+		Component:    "application",
+		Interpreter:  blueprint.CommandRequirement{Command: "python", Supplier: "base"},
+		Requirements: []providers.CanonicalPackageRequest{requirement},
+		Overrides: []PythonPackageOverrideV1{
+			{Distribution: "demo", Kind: "version", Version: "2"},
+			{Distribution: "unused", Kind: "local"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	filtered, err := FilterProviderRequestOverridesV1(request, []string{"demo", "dependency"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeCanonicalProviderRequestV1(filtered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(decoded.Overrides, []PythonPackageOverrideV1{{
+		Distribution: "demo", Kind: "version", Version: "2",
+	}}) {
+		t.Fatalf("filtered overrides = %#v", decoded.Overrides)
 	}
 }

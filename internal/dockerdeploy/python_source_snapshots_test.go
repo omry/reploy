@@ -6,11 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/providerstore"
 )
 
-func TestStagePythonWorkspaceSourceSnapshotsCopiesOnlyManifestEntries(t *testing.T) {
+func TestStagePythonLocalSourceSnapshotsCopiesOnlyManifestEntries(t *testing.T) {
 	store, err := providerstore.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -32,15 +31,16 @@ func TestStagePythonWorkspaceSourceSnapshotsCopiesOnlyManifestEntries(t *testing
 	if err := os.WriteFile(filepath.Join(sourceDir, ".git", "index"), []byte("ignored"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	document := blueprint.Document{Environment: blueprint.Environment{Workspace: blueprint.Workspace{
-		PythonPackages: map[string]string{"Demo_Pkg": "demo"},
-	}}}
-	sources, err := ResolvePythonWorkspaceSources(document, workspace)
+	manifest, digest, err := ObservePythonSourceManifest(sourceDir)
 	if err != nil {
 		t.Fatal(err)
 	}
+	sources := []PythonLocalSource{{
+		Distribution: "demo-pkg", HostDir: sourceDir,
+		Manifest: manifest, SourceManifestDigest: digest,
+	}}
 
-	snapshots, err := StagePythonWorkspaceSourceSnapshots(prepared, sources)
+	snapshots, err := StagePythonLocalSourceSnapshots(prepared, sources)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,101 @@ func TestStagePythonWorkspaceSourceSnapshotsCopiesOnlyManifestEntries(t *testing
 	}
 }
 
-func TestStagePythonWorkspaceSourceSnapshotsRejectsChangedSourceAndCleansPartialSnapshot(t *testing.T) {
+func TestStagePythonLocalSourceSnapshotsSupportsSuccessiveWaves(t *testing.T) {
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, cleanup, err := PreparePythonResolverArtifacts(store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	source := func(distribution string) PythonLocalSource {
+		dir := filepath.Join(t.TempDir(), distribution)
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte(distribution), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		manifest, digest, err := ObservePythonSourceManifest(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return PythonLocalSource{
+			Distribution: distribution, HostDir: dir,
+			Manifest: manifest, SourceManifestDigest: digest,
+		}
+	}
+
+	first, err := StagePythonLocalSourceSnapshots(prepared, []PythonLocalSource{source("direct")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := StagePythonLocalSourceSnapshots(prepared, []PythonLocalSource{source("transitive")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 || len(second) != 1 {
+		t.Fatalf("snapshots = %#v / %#v", first, second)
+	}
+	for _, snapshot := range append(first, second...) {
+		if _, err := os.Stat(filepath.Join(snapshot.HostDir, "pyproject.toml")); err != nil {
+			t.Fatalf("snapshot %q was not retained: %v", snapshot.Distribution, err)
+		}
+	}
+}
+
+func TestStagePythonLocalSourceSnapshotsFailedLaterWavePreservesEarlierSnapshots(t *testing.T) {
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, cleanup, err := PreparePythonResolverArtifacts(store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	sourceDir := t.TempDir()
+	sourceFile := filepath.Join(sourceDir, "pyproject.toml")
+	if err := os.WriteFile(sourceFile, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest, digest, err := ObservePythonSourceManifest(sourceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstSource := PythonLocalSource{
+		Distribution: "direct", HostDir: sourceDir,
+		Manifest: manifest, SourceManifestDigest: digest,
+	}
+	first, err := StagePythonLocalSourceSnapshots(prepared, []PythonLocalSource{firstSource})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	secondSource := firstSource
+	secondSource.Distribution = "transitive"
+	if err := os.WriteFile(sourceFile, []byte("changed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StagePythonLocalSourceSnapshots(prepared, []PythonLocalSource{secondSource}); err == nil {
+		t.Fatal("changed later-wave source was accepted")
+	}
+	if _, err := os.Stat(filepath.Join(first[0].HostDir, "pyproject.toml")); err != nil {
+		t.Fatalf("failed later wave removed the earlier snapshot: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(
+		prepared.InputHostDir, pythonSourceSnapshotDirectory, secondSource.Distribution,
+	)); !os.IsNotExist(err) {
+		t.Fatalf("failed later wave left a partial snapshot: %v", err)
+	}
+}
+
+func TestStagePythonLocalSourceSnapshotsRejectsChangedSourceAndCleansPartialSnapshot(t *testing.T) {
 	store, err := providerstore.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -102,17 +196,18 @@ func TestStagePythonWorkspaceSourceSnapshotsRejectsChangedSourceAndCleansPartial
 	if err := os.WriteFile(filename, []byte("original"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	document := blueprint.Document{Environment: blueprint.Environment{Workspace: blueprint.Workspace{
-		PythonPackages: map[string]string{"demo": "demo"},
-	}}}
-	sources, err := ResolvePythonWorkspaceSources(document, workspace)
+	manifest, digest, err := ObservePythonSourceManifest(sourceDir)
 	if err != nil {
 		t.Fatal(err)
 	}
+	sources := []PythonLocalSource{{
+		Distribution: "demo", HostDir: sourceDir,
+		Manifest: manifest, SourceManifestDigest: digest,
+	}}
 	if err := os.WriteFile(filename, []byte("changed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := StagePythonWorkspaceSourceSnapshots(prepared, sources); err == nil || !strings.Contains(err.Error(), "content changed") {
+	if _, err := StagePythonLocalSourceSnapshots(prepared, sources); err == nil || !strings.Contains(err.Error(), "content changed") {
 		t.Fatalf("changed-source error = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(prepared.InputHostDir, pythonSourceSnapshotDirectory)); !os.IsNotExist(err) {
@@ -127,7 +222,7 @@ func TestStagePythonWorkspaceSourceSnapshotsRejectsChangedSourceAndCleansPartial
 	}
 }
 
-func TestStagePythonWorkspaceSourceSnapshotsRejectsInvalidDistributionBeforeCreatingSnapshotRoot(t *testing.T) {
+func TestStagePythonLocalSourceSnapshotsRejectsInvalidDistributionBeforeCreatingSnapshotRoot(t *testing.T) {
 	store, err := providerstore.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +232,7 @@ func TestStagePythonWorkspaceSourceSnapshotsRejectsInvalidDistributionBeforeCrea
 		t.Fatal(err)
 	}
 	defer cleanup()
-	_, err = StagePythonWorkspaceSourceSnapshots(prepared, []PythonWorkspaceSource{{Distribution: "demo/pkg"}})
+	_, err = StagePythonLocalSourceSnapshots(prepared, []PythonLocalSource{{Distribution: "demo/pkg"}})
 	if err == nil || !strings.Contains(err.Error(), "valid Python distribution name") {
 		t.Fatalf("error = %v", err)
 	}

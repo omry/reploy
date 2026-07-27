@@ -40,7 +40,7 @@ type AdmittedControlV1 struct {
 type controlOperationAdmissionBackendV1 struct {
 	newID           func() (string, error)
 	pause           func(context.Context, time.Duration) error
-	await           func(context.Context, string, *deploy.OperationLock, deploy.ControlMarkerV1, bool) (*deploy.OperationLock, error)
+	await           func(context.Context, string, *deploy.OperationLock, deploy.ControlMarkerV1, bool, io.Writer) (*deploy.OperationLock, error)
 	removeContainer commandRunner
 }
 
@@ -55,7 +55,7 @@ func AdmitControlOperationV1(
 	return admitControlOperationV1(ctx, deploymentDir, operation, input, controlOperationAdmissionBackendV1{
 		newID:           deploy.NewControlMarkerIDV1,
 		pause:           waitForControlDisruptionV1,
-		await:           AwaitControlAdmissionV1,
+		await:           AwaitControlAdmissionWithNoticeV1,
 		removeContainer: runCommand,
 	})
 }
@@ -159,7 +159,7 @@ func admitControlOperationV1(
 	}
 
 	wait := input.Mode == ControlAdmissionWaitV1 || input.Mode == ControlAdmissionDrainV1
-	result.Operation, err = backend.await(ctx, deploymentDir, operation, result.Marker, wait)
+	result.Operation, err = backend.await(ctx, deploymentDir, operation, result.Marker, wait, input.Notice)
 	if err != nil {
 		return result, releaseLeaseOnError(err)
 	}
@@ -196,6 +196,13 @@ func pluralizedJobV1(count int) string {
 		return "job"
 	}
 	return "jobs"
+}
+
+func controlWaitNoticeWriterV1(options RunOptions) io.Writer {
+	if options.Progress != nil {
+		return options.Progress
+	}
+	return options.Stderr
 }
 
 func waitForControlDisruptionV1(ctx context.Context, delay time.Duration) error {

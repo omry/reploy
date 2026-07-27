@@ -3,17 +3,41 @@ package dockerdeploy
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
 )
 
+func TestWriteProviderNodeProgressUsesBlueprintComponents(t *testing.T) {
+	plan := providers.ProviderPlanV1{Nodes: []providers.NodeSpec{{
+		ID: "python/application", Provider: blueprint.ComponentTypePython, Components: []string{"worker", "application"},
+	}}}
+	var progress strings.Builder
+	writeProviderNodeProgress(&progress, "resolving", plan, "python/application")
+	writeProviderNodeProgress(&progress, "building", plan, "python/application")
+
+	got := progress.String()
+	for _, want := range []string{
+		"resolving Python packages for components application, worker",
+		"building Python layer for components application, worker",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("progress missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "python/application") {
+		t.Fatalf("progress exposed provider node ID:\n%s", got)
+	}
+}
+
 func TestExecutePreparedPythonGraphDerivesAllReuseFromCurrentLock(t *testing.T) {
 	fixture := newPreparedPythonGraphReuseFixture(t)
 	descriptor := fixture.lock.Base
-	workspaceSources := sourceWheelTestWorkspaceSources(t, "demo-server")
+	localOverrides := []PythonLocalOverrideV1{{Distribution: "demo-server", HostDir: "/tmp/demo-server"}}
 	previousPrepare := preparePythonGraphExecutionBackend
 	previousExecute := executePreparedPythonProviderGraph
 	t.Cleanup(func() {
@@ -43,7 +67,7 @@ func TestExecutePreparedPythonGraphDerivesAllReuseFromCurrentLock(t *testing.T) 
 	result, err := ExecutePreparedPythonGraph(context.Background(), PreparedPythonGraphExecutionInput{
 		Store: fixture.store, Plan: fixture.request.Plan, BaseDescriptor: descriptor,
 		BaseCatalog: fixture.request.EarlierCatalog, Sources: fixture.request.SourceCandidates, SourceWheels: fixture.sourceWheels, CurrentLock: &fixture.lock,
-		WorkspaceSources: workspaceSources,
+		LocalOverrides:   localOverrides,
 		FinalImageConfig: pythonConsumerTestImageConfig(),
 	})
 	if err != nil {
@@ -55,8 +79,8 @@ func TestExecutePreparedPythonGraphDerivesAllReuseFromCurrentLock(t *testing.T) 
 	if len(configs[fixture.request.NodeID].ReusableWheels) != 2 || len(execution.ReusableArtifacts[fixture.request.NodeID]) != 2 {
 		t.Fatalf("configs = %#v, reusable = %#v", configs, execution.ReusableArtifacts)
 	}
-	if !reflect.DeepEqual(configs[fixture.request.NodeID].WorkspaceSources, workspaceSources) {
-		t.Fatalf("workspace sources = %#v", configs[fixture.request.NodeID].WorkspaceSources)
+	if !reflect.DeepEqual(configs[fixture.request.NodeID].LocalOverrides, localOverrides) {
+		t.Fatalf("local overrides = %#v", configs[fixture.request.NodeID].LocalOverrides)
 	}
 	if _, found := execution.CachedResolutions[fixture.request.NodeID]; !found {
 		t.Fatalf("cached resolutions = %#v", execution.CachedResolutions)

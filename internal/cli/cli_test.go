@@ -29,6 +29,7 @@ import (
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/dockerdeploy"
+	"github.com/omry/reploy/internal/overrideui"
 	"github.com/omry/reploy/internal/providerstore"
 )
 
@@ -84,8 +85,11 @@ func TestHelp(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	if !strings.Contains(stdout, "Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND") {
+	if !strings.Contains(stdout, "Usage: reploy [--docker-timeout DURATION] COMMAND") {
 		t.Fatalf("stdout did not contain usage:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "--docker ") || strings.Contains(stdout, "[--docker]") {
+		t.Fatalf("stdout retained removed Docker backend selector:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "--docker-timeout DURATION") {
 		t.Fatalf("stdout did not contain Docker timeout option:\n%s", stdout)
@@ -105,9 +109,6 @@ func TestParseGlobalDeploymentOptionsDockerTimeout(t *testing.T) {
 	options, args, err := parseGlobalDeploymentOptions([]string{"--docker-timeout", "12s", "build"})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if options.Target != "docker" {
-		t.Fatalf("target = %q, want docker", options.Target)
 	}
 	if !options.DockerTimeoutSet || options.DockerTimeout != 12*time.Second {
 		t.Fatalf("docker timeout = %s set=%v, want 12s set", options.DockerTimeout, options.DockerTimeoutSet)
@@ -157,19 +158,16 @@ func TestParseGlobalDeploymentOptionsRejectsInvalidDockerTimeout(t *testing.T) {
 }
 
 func TestParseDockerBuildOptions(t *testing.T) {
-	options, err := parseDockerBuildOptions([]string{"--dir", "stage", "--no-cache", "--validate-layers"})
+	options, err := parseDockerBuildOptions([]string{"--dir", "stage", "--no-cache", "--validate-layers", "--verbose"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.Dir != "stage" || !options.DirExplicit || !options.NoCache || !options.ValidateLayers {
+	if options.Dir != "stage" || !options.DirExplicit || !options.NoCache || !options.ValidateLayers || !options.Verbose {
 		t.Fatalf("options = %#v", options)
-	}
-	if _, err := parseDockerBuildOptions([]string{"--verbose"}); err == nil || !strings.Contains(err.Error(), "unknown option") {
-		t.Fatalf("error = %v", err)
 	}
 }
 
-func TestBuildCommandRunsProviderBuildWithoutInstalling(t *testing.T) {
+func TestBuildCommandUsesReployProgressAndHidesBackendOutput(t *testing.T) {
 	originalBuild := dockerProviderBuild
 	originalRuntime := dockerProviderBuildRuntime
 	t.Cleanup(func() {
@@ -179,20 +177,158 @@ func TestBuildCommandRunsProviderBuildWithoutInstalling(t *testing.T) {
 	dockerProviderBuildRuntime = func() (dockerdeploy.StagedProviderBuildRuntimeV1, error) {
 		return dockerdeploy.StagedProviderBuildRuntimeV1{UID: 501, GID: 20}, nil
 	}
+	stageDir := filepath.Join(t.TempDir(), "provider-stage")
+	writeCLITestStagedState(t, stageDir, "demo")
 	called := false
 	dockerProviderBuild = func(ctx context.Context, input dockerdeploy.ProviderBuildRunInputV1) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
 		called = true
-		if ctx == nil || input.DeploymentDir != "/tmp/provider-stage" || input.Automatic || !input.NoCache || !input.ValidateLayers {
+		if ctx == nil || input.DeploymentDir != stageDir || input.Automatic || !input.NoCache || !input.ValidateLayers {
 			t.Fatalf("input = %#v", input)
 		}
 		if input.Runtime.UID != 501 || input.Runtime.GID != 20 || input.RunOptions.DockerPreflightTimeout != 12*time.Second || input.RunOptions.Stdout == nil || input.RunOptions.Stderr == nil {
 			t.Fatalf("runtime options = %#v", input)
 		}
-		return dockerdeploy.LockedProviderBuildExecutionResultV1{Reused: true}, nil
+		fmt.Fprintln(input.Progress, "resolving Python packages for component application")
+		fmt.Fprintln(input.RunOptions.Stdout, "[+] Building 5.6s (10/10) FINISHED")
+		fmt.Fprintln(input.RunOptions.Stderr, "1 warning found (use docker --debug to expand):")
+		fmt.Fprintln(input.RunOptions.Stderr, `- SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data (ENV "SECRET")`)
+		fmt.Fprintln(input.RunOptions.Stderr, `- SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data (ENV "SECRET")`)
+		fmt.Fprintln(input.RunOptions.Stderr, `- UndefinedVar: Usage of undefined variable '$MISSING'`)
+		fmt.Fprintln(input.RunOptions.Stderr, `- UndefinedVar: Usage of undefined variable '$MISSING'`)
+		return cliTestProviderBuildResult(t, stageDir, false), nil
 	}
-	code, stdout, stderr := runCLI("--docker-timeout", "12s", "build", "--dir", "/tmp/provider-stage", "--no-cache", "--validate-layers")
-	if code != 0 || !called || stdout != "" || stderr != "" {
+	code, stdout, stderr := runCLI("--docker-timeout", "12s", "build", "--dir", stageDir, "--no-cache", "--validate-layers")
+	if code != 0 || !called {
 		t.Fatalf("code/called/stdout/stderr = %d/%v/%q/%q", code, called, stdout, stderr)
+	}
+	for _, want := range []string{
+		"building environment: preparing staged environment",
+		"building environment: resolving Python packages for component application",
+		"building environment: done",
+		"reploy warning: Docker check UndefinedVar:",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr)
+		}
+	}
+	for _, unwanted := range []string{"[+] Building", "warning found", "docker --debug", "SecretsUsedInArgOrEnv", `"SECRET"`} {
+		if strings.Contains(stdout+stderr, unwanted) {
+			t.Fatalf("normal build output leaked %q:\nstdout:\n%s\nstderr:\n%s", unwanted, stdout, stderr)
+		}
+	}
+	if strings.Count(stderr, "reploy warning:") != 1 {
+		t.Fatalf("build warnings were not deduplicated:\n%s", stderr)
+	}
+	if want := "image: sha256:demo-image\nbuilt environment: demo\n"; stdout != want {
+		t.Fatalf("stdout = %q, want %q", stdout, want)
+	}
+}
+
+func TestBuildWarningsSuppressSecretsUsedInArgOrEnv(t *testing.T) {
+	output := strings.Join([]string{
+		`- SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data (ENV "FIRST_TOKEN")`,
+		`- SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data (ARG "SECOND_TOKEN")`,
+		`- UndefinedVar: Usage of undefined variable '$MISSING'`,
+	}, "\n")
+	warnings := buildWarnings(output)
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "Docker check UndefinedVar") {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+}
+
+func TestBuildFailureDiagnosticTranslatesProviderFailures(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{
+			name: "apt", output: "E: The repository 'https://example.invalid stable Release' does not have a Release file.",
+			want: "APT package operation failed: The repository",
+		},
+		{
+			name: "network", output: "Temporary failure resolving 'deb.debian.org'",
+			want: "network access failed: Temporary failure resolving",
+		},
+		{
+			name: "python resolution", output: "ERROR: Could not find a version that satisfies the requirement demo==99",
+			want: "environment build failed: Could not find a version",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := buildFailureDiagnostic(errors.New("docker failed: exit status 1"), test.output)
+			if !strings.Contains(got, test.want) {
+				t.Fatalf("diagnostic = %q, want substring %q", got, test.want)
+			}
+			if strings.Contains(got, "docker failed") {
+				t.Fatalf("diagnostic leaked backend process failure: %q", got)
+			}
+		})
+	}
+}
+
+func TestBuildCommandReportsExactReuse(t *testing.T) {
+	originalBuild := dockerProviderBuild
+	originalRuntime := dockerProviderBuildRuntime
+	t.Cleanup(func() {
+		dockerProviderBuild = originalBuild
+		dockerProviderBuildRuntime = originalRuntime
+	})
+	dockerProviderBuildRuntime = func() (dockerdeploy.StagedProviderBuildRuntimeV1, error) {
+		return dockerdeploy.StagedProviderBuildRuntimeV1{}, nil
+	}
+	stageDir := filepath.Join(t.TempDir(), "provider-stage")
+	writeCLITestStagedState(t, stageDir, "demo")
+	dockerProviderBuild = func(context.Context, dockerdeploy.ProviderBuildRunInputV1) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
+		return cliTestProviderBuildResult(t, stageDir, true), nil
+	}
+
+	code, stdout, stderr := runCLI("build", "--dir", stageDir)
+	if code != 0 {
+		t.Fatalf("code = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if want := "image: sha256:demo-image\nenvironment already current: demo\n"; stdout != want {
+		t.Fatalf("stdout = %q, want %q", stdout, want)
+	}
+	if !strings.Contains(stderr, "building environment: done") {
+		t.Fatalf("stderr missing successful completion:\n%s", stderr)
+	}
+}
+
+func TestBuildCommandFailureRetainsStepWithoutRawBackendTranscript(t *testing.T) {
+	originalBuild := dockerProviderBuild
+	originalRuntime := dockerProviderBuildRuntime
+	t.Cleanup(func() {
+		dockerProviderBuild = originalBuild
+		dockerProviderBuildRuntime = originalRuntime
+	})
+	dockerProviderBuildRuntime = func() (dockerdeploy.StagedProviderBuildRuntimeV1, error) {
+		return dockerdeploy.StagedProviderBuildRuntimeV1{}, nil
+	}
+	stageDir := filepath.Join(t.TempDir(), "provider-stage")
+	writeCLITestStagedState(t, stageDir, "demo")
+	dockerProviderBuild = func(_ context.Context, input dockerdeploy.ProviderBuildRunInputV1) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
+		fmt.Fprintln(input.Progress, "assembling environment image")
+		fmt.Fprintln(input.RunOptions.Stderr, "ERROR: failed to solve: selected base image was not found")
+		return dockerdeploy.LockedProviderBuildExecutionResultV1{}, errors.New("execute provider graph: docker failed: exit status 1")
+	}
+
+	code, stdout, stderr := runCLI("build", "--dir", stageDir)
+	if code != 1 || stdout != "" {
+		t.Fatalf("code/stdout = %d/%q\nstderr:\n%s", code, stdout, stderr)
+	}
+	for _, want := range []string{
+		"building environment: assembling environment image: failed",
+		"reploy build error: environment image construction failed: selected base image was not found",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr)
+		}
+	}
+	for _, unwanted := range []string{"failed to solve", "docker failed", "exit status 1"} {
+		if strings.Contains(stderr, unwanted) {
+			t.Fatalf("failure output leaked %q:\n%s", unwanted, stderr)
+		}
 	}
 }
 
@@ -201,7 +337,9 @@ func TestBuildHelpClarifiesLayerValidationIsAdditional(t *testing.T) {
 	if code != 0 || stderr != "" {
 		t.Fatalf("code/stderr = %d/%q", code, stderr)
 	}
-	if !strings.Contains(stdout, "always fully validated") || !strings.Contains(stdout, "additionally") || !strings.Contains(stdout, "without installing") {
+	if !strings.Contains(stdout, "always fully validated") || !strings.Contains(stdout, "additionally") ||
+		!strings.Contains(stdout, "without installing") || !strings.Contains(stdout, "--verbose") ||
+		!strings.Contains(stdout, "without backend transcripts") {
 		t.Fatalf("build help = %q", stdout)
 	}
 }
@@ -334,7 +472,7 @@ func TestUsageErrorsDoNotShowGlobalOnboarding(t *testing.T) {
 			name:      "unknown top-level short option",
 			args:      []string{"-fd"},
 			wantError: "reploy usage error: unknown option: -fd",
-			wantUsage: "Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND",
+			wantUsage: "Usage: reploy [--docker-timeout DURATION] COMMAND",
 			forbidExtra: []string{
 				"Next steps:",
 			},
@@ -343,16 +481,16 @@ func TestUsageErrorsDoNotShowGlobalOnboarding(t *testing.T) {
 			name:      "unknown top-level long option",
 			args:      []string{"--wat"},
 			wantError: "reploy usage error: unknown option: --wat",
-			wantUsage: "Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND",
+			wantUsage: "Usage: reploy [--docker-timeout DURATION] COMMAND",
 			forbidExtra: []string{
 				"Next steps:",
 			},
 		},
 		{
-			name:      "global target without command",
+			name:      "removed global target",
 			args:      []string{"--docker"},
-			wantError: "reploy usage error: expected command",
-			wantUsage: "Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND",
+			wantError: "reploy usage error: unknown option: --docker",
+			wantUsage: "Usage: reploy [--docker-timeout DURATION] COMMAND",
 			forbidExtra: []string{
 				"Next steps:",
 			},
@@ -361,7 +499,7 @@ func TestUsageErrorsDoNotShowGlobalOnboarding(t *testing.T) {
 			name:      "global timeout without command",
 			args:      []string{"--docker-timeout", "5s"},
 			wantError: "reploy usage error: expected command",
-			wantUsage: "Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND",
+			wantUsage: "Usage: reploy [--docker-timeout DURATION] COMMAND",
 			forbidExtra: []string{
 				"Next steps:",
 			},
@@ -370,7 +508,7 @@ func TestUsageErrorsDoNotShowGlobalOnboarding(t *testing.T) {
 			name:      "global timeout missing value",
 			args:      []string{"--docker-timeout"},
 			wantError: "reploy usage error: --docker-timeout requires a value",
-			wantUsage: "Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND",
+			wantUsage: "Usage: reploy [--docker-timeout DURATION] COMMAND",
 			forbidExtra: []string{
 				"Next steps:",
 			},
@@ -379,7 +517,7 @@ func TestUsageErrorsDoNotShowGlobalOnboarding(t *testing.T) {
 			name:      "unknown top-level command",
 			args:      []string{"wat"},
 			wantError: "reploy usage error: unknown command: wat",
-			wantUsage: "Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND",
+			wantUsage: "Usage: reploy [--docker-timeout DURATION] COMMAND",
 			forbidExtra: []string{
 				"Next steps:",
 			},
@@ -607,11 +745,11 @@ func TestDockerHelp(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	if !strings.Contains(stdout, "Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND") {
+	if !strings.Contains(stdout, "Usage: reploy [--docker-timeout DURATION] COMMAND") {
 		t.Fatalf("stdout did not contain deployment usage:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "--docker") || !strings.Contains(stdout, "--docker-timeout DURATION") || !strings.Contains(stdout, "--aws") {
-		t.Fatalf("stdout did not contain target options:\n%s", stdout)
+	if strings.Contains(stdout, "  --docker ") || !strings.Contains(stdout, "--docker-timeout DURATION") || !strings.Contains(stdout, "--aws") {
+		t.Fatalf("stdout has incorrect runtime options:\n%s", stdout)
 	}
 	if strings.Contains(stdout, "smoke") {
 		t.Fatalf("stdout should not contain premature smoke command:\n%s", stdout)
@@ -628,12 +766,12 @@ func TestDockerHelp(t *testing.T) {
 	if !strings.Contains(stdout, "validate     Validate blueprint syntax and semantics") {
 		t.Fatalf("stdout did not contain blueprint validation command:\n%s", stdout)
 	}
-	for _, want := range []string{"app          Build if needed", "up           Build if needed", "restart      Build if needed"} {
+	for _, want := range []string{"app          Run a staged app command from the current build", "up           Build if needed", "restart      Build if needed"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout did not disclose automatic staged builds with %q:\n%s", want, stdout)
 		}
 	}
-	if !strings.Contains(stdout, "may build with Docker and download packages") {
+	if !strings.Contains(stdout, "Staged up and restart may build with Docker and download packages") {
 		t.Fatalf("stdout did not disclose automatic build cost:\n%s", stdout)
 	}
 	if strings.Contains(stdout, "add-wheel") || strings.Contains(stdout, "add-source") {
@@ -669,16 +807,13 @@ func TestDockerHelp(t *testing.T) {
 	}
 }
 
-func TestDockerTargetOptionUsesDefaultDeploymentCommands(t *testing.T) {
+func TestRemovedDockerTargetOptionIsRejected(t *testing.T) {
 	code, stdout, stderr := runCLI("--docker", "--help")
-	if code != 0 {
-		t.Fatalf("exit code = %d, want 0", code)
+	if code != 2 || stdout != "" {
+		t.Fatalf("exit/stdout = %d/%q", code, stdout)
 	}
-	if !strings.Contains(stdout, "Usage: reploy [--docker] [--docker-timeout DURATION] COMMAND") || !strings.Contains(stdout, "bundle") {
-		t.Fatalf("stdout did not contain deployment help:\n%s", stdout)
-	}
-	if stderr != "" {
-		t.Fatalf("stderr = %q, want empty", stderr)
+	if !strings.Contains(stderr, "unknown option: --docker") || strings.Contains(stderr, "[--docker]") {
+		t.Fatalf("removed option error = %q", stderr)
 	}
 }
 
@@ -733,7 +868,7 @@ docker: {}
 	if code != 0 {
 		t.Fatalf("exit code = %d, stdout = %q, stderr = %q", code, stdout, stderr)
 	}
-	if stdout != "valid blueprint: apt-demo (syntax and semantics)\n" || stderr != "" {
+	if stdout != "pass: apt-demo (syntax and semantics)\n" || stderr != "" {
 		t.Fatalf("stdout/stderr = %q/%q", stdout, stderr)
 	}
 	if _, err := os.Stat(stagingDir); !os.IsNotExist(err) {
@@ -758,8 +893,28 @@ docker: {}
 		t.Fatal(err)
 	}
 	code, stdout, stderr := runCLI("validate", manifest)
-	if code != 1 || stdout != "" || !strings.Contains(stderr, "reploy validate error:") || !strings.Contains(stderr, "blueprint.version is required") {
+	if code != 1 || stdout != "" || !strings.HasPrefix(stderr, "fail: ") || !strings.Contains(stderr, "blueprint.version is required") {
 		t.Fatalf("exit/stdout/stderr = %d/%q/%q", code, stdout, stderr)
+	}
+}
+
+func TestBlueprintValidateColorsOnlyPassAndFailStatus(t *testing.T) {
+	valid := filepath.Join(t.TempDir(), "valid.blueprint.yaml")
+	if err := os.WriteFile(valid, []byte(cliTestPackManifest()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	invalid := filepath.Join(t.TempDir(), "invalid.blueprint.yaml")
+	if err := os.WriteFile(invalid, []byte("blueprint: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REPLOY_COLOR", "always")
+	code, stdout, stderr := runCLI("validate", valid)
+	if code != 0 || !strings.HasPrefix(stdout, "\x1b[32mpass\x1b[0m: ") || stderr != "" {
+		t.Fatalf("colored pass = %d/%q/%q", code, stdout, stderr)
+	}
+	code, stdout, stderr = runCLI("validate", invalid)
+	if code != 1 || stdout != "" || !strings.HasPrefix(stderr, "\x1b[31mfail\x1b[0m: ") {
+		t.Fatalf("colored fail = %d/%q/%q", code, stdout, stderr)
 	}
 }
 
@@ -825,11 +980,11 @@ func TestAppHelp(t *testing.T) {
 	if !strings.Contains(stdout, "Usage: reploy [--docker-timeout DURATION] app COMMAND") {
 		t.Fatalf("stdout did not contain app usage:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "staging bundle, not a host executable from") {
+	if !strings.Contains(stdout, "current staged build, not a host executable") {
 		t.Fatalf("stdout did not explain staging app runtime:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "builds it first") || !strings.Contains(stdout, "Docker") || !strings.Contains(stdout, "download packages") {
-		t.Fatalf("stdout did not disclose automatic app build work:\n%s", stdout)
+	if !strings.Contains(stdout, "run reploy build") || !strings.Contains(stdout, "app commands do not resolve packages or rebuild it") {
+		t.Fatalf("stdout did not explain the explicit app build boundary:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "Show this staging directory's app subcommands") || !strings.Contains(stdout, "reploy app COMMAND") {
 		t.Fatalf("stdout did not contain generic app command guidance:\n%s", stdout)
@@ -887,9 +1042,12 @@ func TestShellWaitHelpAndParsing(t *testing.T) {
 	if code != 0 || stderr != "" || !strings.Contains(stdout, "--wait") || !strings.Contains(stdout, "Usage: reploy") {
 		t.Fatalf("shell help: code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
-	options, err := parseDockerShellOptions([]string{"--dir", "deployment", "--wait"})
-	if err != nil || options.Dir != "deployment" || !options.Wait {
+	options, err := parseDockerShellOptions([]string{"--dir", "deployment", "--wait", "--read-only"})
+	if err != nil || options.Dir != "deployment" || !options.Wait || !options.ReadOnly {
 		t.Fatalf("shell options = %#v, %v", options, err)
+	}
+	if !strings.Contains(stdout, "--read-only") {
+		t.Fatalf("shell help does not describe read-only mode: %q", stdout)
 	}
 	runtimeOptions, err := parseDockerRuntimeOptions([]string{"--wait"})
 	if err != nil || runtimeOptions.ControlMode != dockerdeploy.ControlAdmissionWaitV1 {
@@ -919,7 +1077,7 @@ func TestDockerRuntimeControlAdmissionOptions(t *testing.T) {
 func TestDockerLifecycleHelpDocumentsControlAdmissionOptions(t *testing.T) {
 	for _, command := range []string{"stop", "restart"} {
 		code, stdout, stderr := runCLI(command, "--help")
-		if code != 0 || stderr != "" || !strings.Contains(stdout, "Usage: reploy [--docker] "+command+" [OPTIONS]") {
+		if code != 0 || stderr != "" || !strings.Contains(stdout, "Usage: reploy "+command+" [OPTIONS]") {
 			t.Fatalf("%s help: code=%d stdout=%q stderr=%q", command, code, stdout, stderr)
 		}
 		for _, want := range []string{"--wait", "active jobs", "three seconds", "Ctrl-C"} {
@@ -1175,6 +1333,49 @@ func TestShellPreservesContainerExitStatus(t *testing.T) {
 	}
 }
 
+func TestShellReportsIntentionalStopWithoutDockerStatus(t *testing.T) {
+	packDir := makeCLITestPackWithManifest(t, cliTestPackManifest())
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	previous := dockerShell
+	dockerShell = func(options dockerdeploy.ShellOptions) error {
+		if options.ReadOnly {
+			t.Fatal("default shell unexpectedly became read-only")
+		}
+		return dockerdeploy.ErrLiveRunStoppedV1
+	}
+	t.Cleanup(func() { dockerShell = previous })
+
+	code, stdout, stderr = runCLI("shell", "--dir", deployDir)
+	if code != 130 {
+		t.Fatalf("shell stop exit code = %d, want 130", code)
+	}
+	if !strings.Contains(stdout, "shell stopped by `reploy runs stop`.") || strings.Contains(stdout+stderr, "137") || stderr != "" {
+		t.Fatalf("shell stop output = stdout %q, stderr %q", stdout, stderr)
+	}
+}
+
+func TestShellCancellationReturnsInterruptionStatusWithoutError(t *testing.T) {
+	packDir := makeCLITestPackWithManifest(t, cliTestPackManifest())
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	previous := dockerShell
+	dockerShell = func(dockerdeploy.ShellOptions) error { return context.Canceled }
+	t.Cleanup(func() { dockerShell = previous })
+
+	code, stdout, stderr = runCLI("shell", "--dir", deployDir)
+	if code != 130 || stdout != "" || stderr != "" {
+		t.Fatalf("canceled shell = code %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+}
+
 func TestEmbeddedControlRuntimeAcceptsInstalledDeploymentDir(t *testing.T) {
 	t.Setenv("REPLOY_COLOR", "never")
 	installDir := filepath.Join(t.TempDir(), "installed")
@@ -1207,6 +1408,34 @@ func TestEmbeddedControlRuntimeAcceptsInstalledDeploymentDir(t *testing.T) {
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestEmbeddedControlSystemdStatusAndLogsUseSharedRuntimeObservation(t *testing.T) {
+	installDir := filepath.Join(t.TempDir(), "installed")
+	writeCLITestInstalledState(t, installDir, "demo", "demo-service")
+	markCLITestSystemd(t, installDir, "/etc/systemd/system/demo-service.service")
+
+	oldRuntime := dockerRuntime
+	t.Cleanup(func() { dockerRuntime = oldRuntime })
+	var calls []dockerdeploy.RuntimeOptions
+	dockerRuntime = func(options dockerdeploy.RuntimeOptions) error {
+		calls = append(calls, options)
+		return nil
+	}
+
+	for _, command := range [][]string{
+		{"_control", "--dir", installDir, "status"},
+		{"_control", "--dir", installDir, "logs", "--timestamps", "--tail", "10"},
+	} {
+		code, stdout, stderr := runCLI(command...)
+		if code != 0 || stdout != "" || stderr != "" {
+			t.Fatalf("%v: code=%d stdout=%q stderr=%q", command, code, stdout, stderr)
+		}
+	}
+	if len(calls) != 2 || calls[0].Action != "status" || calls[1].Action != "logs" ||
+		!calls[1].Timestamps || calls[1].Tail != "10" {
+		t.Fatalf("shared runtime observation calls = %#v", calls)
 	}
 }
 
@@ -1583,6 +1812,7 @@ func TestStagingCommandsRejectInstalledDeploymentDir(t *testing.T) {
 		args []string
 	}{
 		{name: "info", args: []string{"info", "--dir", deployDir}},
+		{name: "overrides", args: []string{"overrides", "--dir", deployDir}},
 		{name: "app", args: []string{"app", "--dir", deployDir}},
 		{name: "status", args: []string{"status", "--dir", deployDir}},
 		{name: "test", args: []string{"test", "--dir", deployDir}},
@@ -1677,11 +1907,11 @@ func TestDockerStageHelp(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
 	for _, want := range []string{
-		"Usage: reploy [--docker] [--docker-timeout DURATION] stage APP_REF [OPTIONS]",
-		"reploy [--docker] [--docker-timeout DURATION] stage --update [APP_REF] [OPTIONS]",
+		"Usage: reploy [--docker-timeout DURATION] stage APP_REF [OPTIONS]",
+		"reploy [--docker-timeout DURATION] stage --update [APP_REF] [OPTIONS]",
 		"Create a staging directory from an app blueprint reference.",
 		"Use --update to refresh an existing staging directory",
-		"Stage records desired state only; build explicitly or let staged runtime commands build on demand.",
+		"Stage records desired state only; build explicitly or let staged up/restart build on demand.",
 		"Indexed shorthand from the Reploy blueprint index:",
 		"arbiter-server==0.4.2",
 		"Local filesystem refs:",
@@ -1727,12 +1957,76 @@ func TestDockerStageHelp(t *testing.T) {
 	}
 }
 
+func TestPackageOverridesHelp(t *testing.T) {
+	code, stdout, stderr := runCLI("overrides", "--help")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	for _, want := range []string{
+		"Usage: reploy overrides [OPTIONS]",
+		"Existing package-overrides.yaml content is loaded automatically.",
+		"workspace root is optional and unset by default",
+		"--dir DIR",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout)
+		}
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
+func TestPackageOverridesOpensEditorForStagedDeployment(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	original := runOverrideEditor
+	t.Cleanup(func() { runOverrideEditor = original })
+	var received overrideui.Config
+	runOverrideEditor = func(config overrideui.Config) error {
+		received = config
+		return nil
+	}
+
+	code, stdout, stderr = runCLI("overrides", "--dir", deployDir)
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("overrides = %d/%q/%q", code, stdout, stderr)
+	}
+	if received.DeploymentDir != deployDir {
+		t.Fatalf("deployment dir = %q", received.DeploymentDir)
+	}
+	if received.Document.Environment.ID != "demo" {
+		t.Fatalf("environment = %q", received.Document.Environment.ID)
+	}
+	if !reflect.DeepEqual(received.Overlay, deploy.EmptyRequestOverlayV1()) {
+		t.Fatalf("editor overlay = %#v", received.Overlay)
+	}
+	if received.Input == nil || received.Output == nil {
+		t.Fatalf("editor terminal streams were not configured: %#v", received)
+	}
+
+	received = overrideui.Config{}
+	t.Chdir(deployDir)
+	code, stdout, stderr = runCLI("overrides")
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("implicit overrides = %d/%q/%q", code, stdout, stderr)
+	}
+	if received.DeploymentDir != "." {
+		t.Fatalf("implicit deployment dir = %q, want current staging directory", received.DeploymentDir)
+	}
+}
+
 func TestDockerLogsHelp(t *testing.T) {
 	code, stdout, stderr := runCLI("logs", "--help")
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	if !strings.Contains(stdout, "Usage: reploy [--docker] logs [OPTIONS]") {
+	if !strings.Contains(stdout, "Usage: reploy logs [OPTIONS]") {
 		t.Fatalf("stdout did not contain logs usage:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "--follow, -f") || !strings.Contains(stdout, "Follow logs instead of exiting after current output") {
@@ -1812,7 +2106,7 @@ func TestDockerObservationParserRejectsControlAdmissionOptions(t *testing.T) {
 }
 
 func TestDockerLogsOptionsParse(t *testing.T) {
-	options, err := parseDockerRuntimeOptions([]string{"--dir", "deployment", "--tail", "100", "--follow", "--verbose"})
+	options, err := parseDockerRuntimeOptions([]string{"--dir", "deployment", "--tail", "100", "--follow", "--timestamps", "--verbose"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1827,6 +2121,9 @@ func TestDockerLogsOptionsParse(t *testing.T) {
 	}
 	if !options.Verbose {
 		t.Fatal("verbose = false, want true")
+	}
+	if !options.Timestamps {
+		t.Fatal("timestamps = false, want true")
 	}
 
 	options, err = parseDockerRuntimeOptions([]string{"--tail=25"})
@@ -2277,8 +2574,45 @@ func TestParsePackRefArgumentDoesNotGuessPlainPath(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), `unknown blueprint shorthand "demo/path"`) {
+	for _, want := range []string{
+		`"demo/path" looks like a local blueprint path`,
+		"./demo/path",
+		"file://demo/path",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err missing %q: %v", want, err)
+		}
+	}
+}
+
+func TestStageLikelyLocalPathUsesFocusedDiagnosticEvenWhenIndexMatches(t *testing.T) {
+	indexPath := filepath.Join(t.TempDir(), "reploy-blueprint-index.json")
+	index := `{"schema_version":1,"blueprints":{"examples/demo.blueprint.yaml":{"ref":"pypi://demo/demo/reploy/demo.blueprint.yaml"}}}`
+	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(packIndexURLEnv, "file:"+indexPath)
+	code, stdout, stderr := runCLI("stage", "examples/demo.blueprint.yaml")
+	if code != 2 || stdout != "" {
+		t.Fatalf("stage local-path mistake = %d/%q/%q", code, stdout, stderr)
+	}
+	for _, want := range []string{"looks like a local blueprint path", "./examples/demo.blueprint.yaml", "file://examples/demo.blueprint.yaml"} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("focused diagnostic missing %q:\n%s", want, stderr)
+		}
+	}
+	if strings.Contains(stderr, "Python provider refs") || strings.Contains(stderr, "Git provider refs") {
+		t.Fatalf("focused diagnostic included full reference help:\n%s", stderr)
+	}
+}
+
+func TestParsePackRefArgumentAcceptsFileDoubleSlashRelativeForm(t *testing.T) {
+	ref, err := parsePackRefArgument("file://examples/demo.blueprint.yaml")
+	if err != nil {
 		t.Fatalf("err = %v", err)
+	}
+	if ref.Scheme != "file" || ref.Source != "examples/demo.blueprint.yaml" || ref.Raw != "file://examples/demo.blueprint.yaml" {
+		t.Fatalf("file double-slash ref = %#v", ref)
 	}
 }
 
@@ -2330,26 +2664,15 @@ func TestParseDockerCommandOptionsParsesNonemptyPlatform(t *testing.T) {
 	}
 }
 
-func TestParseDockerCommandOptionsParsesNonemptyWorkspaceRoot(t *testing.T) {
+func TestParseDockerCommandOptionsRejectsRemovedWorkspaceRoot(t *testing.T) {
 	setCLITestPackIndex(t)
-	options, err := parseDockerCommandOptions(
+	_, err := parseDockerCommandOptions(
 		[]string{"--workspace-root=../checkout", "demo-server"},
 		true,
-		dockerCommandParseConfig{AllowWorkspaceRoot: true},
+		dockerCommandParseConfig{},
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if options.WorkspaceRoot != "../checkout" {
-		t.Fatalf("workspace root = %q", options.WorkspaceRoot)
-	}
-	for _, args := range [][]string{
-		{"--workspace-root=", "demo-server"},
-		{"--workspace-root", "", "demo-server"},
-	} {
-		if _, err := parseDockerCommandOptions(args, true, dockerCommandParseConfig{AllowWorkspaceRoot: true}); err == nil || !strings.Contains(err.Error(), "--workspace-root must not be empty") {
-			t.Fatalf("parse %q error = %v", args, err)
-		}
+	if err == nil || !strings.Contains(err.Error(), "unknown option: --workspace-root") {
+		t.Fatalf("removed workspace-root error = %v", err)
 	}
 }
 
@@ -2426,13 +2749,13 @@ func TestDirectInstallRejectsRemovedInPlaceOption(t *testing.T) {
 
 func TestDirectInstallPrintsSuccessFromResolvedDefaultTarget(t *testing.T) {
 	oldDirectInstall := dockerDirectInstall
-	oldPrintInstallSuccess := dockerPrintInstallSuccess
+	oldInstallSuccessLines := dockerInstallSuccessLines
 	t.Cleanup(func() {
 		dockerDirectInstall = oldDirectInstall
-		dockerPrintInstallSuccess = oldPrintInstallSuccess
+		dockerInstallSuccessLines = oldInstallSuccessLines
 	})
 
-	dockerDirectInstall = func(options dockerdeploy.DirectInstallOptions) (string, error) {
+	dockerDirectInstall = func(options dockerdeploy.DirectInstallOptions) (dockerdeploy.ProviderInstallResultV1, error) {
 		if options.Target != "" {
 			t.Fatalf("target option = %q, want empty default target", options.Target)
 		}
@@ -2442,29 +2765,46 @@ func TestDirectInstallPrintsSuccessFromResolvedDefaultTarget(t *testing.T) {
 		if options.ControlMode != dockerdeploy.ControlAdmissionForceV1 {
 			t.Fatalf("control mode = %q, want force", options.ControlMode)
 		}
-		return "/opt/demo", nil
+		fmt.Fprintln(options.Stdout, "raw lifecycle success")
+		return dockerdeploy.ProviderInstallResultV1{
+			Environment: "demo", TargetDir: "/opt/demo", ControlScript: "demo",
+			Service: "demo", Started: true,
+		}, nil
 	}
-	dockerPrintInstallSuccess = func(dir string, stdout io.Writer, dockerPreflightTimeout time.Duration) error {
+	dockerInstallSuccessLines = func(dir string, dockerPreflightTimeout time.Duration) ([]string, error) {
 		if dir != "/opt/demo" {
 			t.Fatalf("success dir = %q, want resolved default target", dir)
 		}
 		if dockerPreflightTimeout != time.Second {
 			t.Fatalf("success docker timeout = %s, want 1s", dockerPreflightTimeout)
 		}
-		fmt.Fprintln(stdout, "installed at "+dir)
-		return nil
+		return []string{"inspector url: http://127.0.0.1:19076"}, nil
 	}
 
-	code, stdout, _ := runCLI("--docker-timeout", "1s", "install", "file:/does/not/need/to/exist", "--scope", "system", "--force")
+	code, stdout, stderr := runCLI("--docker-timeout", "1s", "install", "file:/does/not/need/to/exist", "--scope", "system", "--force")
 	if code != 0 {
-		t.Fatalf("exit code = %d, want 0\nstdout:\n%s", code, stdout)
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "installed at /opt/demo") {
+	for _, want := range []string{
+		"[DEPLOYED : demo] installed successfully",
+		"[DEPLOYED : demo] location: /opt/demo",
+		"[DEPLOYED : demo] control: /opt/demo/demo",
+		"[DEPLOYED : demo] status: running",
+		"[DEPLOYED : demo] inspector url: http://127.0.0.1:19076",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout)
+		}
+	}
+	if strings.Contains(stdout, "raw lifecycle success") || strings.Contains(stderr, "raw lifecycle success") {
+		t.Fatalf("successful lifecycle output leaked:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	if strings.Count(stdout, "inspector url:") != 1 {
 		t.Fatalf("stdout missing success output:\n%s", stdout)
 	}
 }
 
-func TestStagedInstallSpinnerUsesDeploymentPrefix(t *testing.T) {
+func TestStagedInstallUsesReployProgressAndDeployedResult(t *testing.T) {
 	t.Setenv("REPLOY_COLOR", "never")
 	t.Setenv("TERM", "xterm-256color")
 	packDir := makeCLITestPack(t)
@@ -2478,7 +2818,7 @@ func TestStagedInstallSpinnerUsesDeploymentPrefix(t *testing.T) {
 	t.Cleanup(func() {
 		dockerInstall = oldDockerInstall
 	})
-	dockerInstall = func(options dockerdeploy.InstallOptions) error {
+	dockerInstall = func(options dockerdeploy.InstallOptions) (dockerdeploy.ProviderInstallResultV1, error) {
 		if options.Dir != deployDir {
 			t.Fatalf("install dir = %q, want %q", options.Dir, deployDir)
 		}
@@ -2489,18 +2829,24 @@ func TestStagedInstallSpinnerUsesDeploymentPrefix(t *testing.T) {
 			t.Fatalf("control mode = %q, want wait", options.ControlMode)
 		}
 		fmt.Fprintln(options.Progress, "running before start hook: app config check")
-		return nil
+		return dockerdeploy.ProviderInstallResultV1{
+			Environment: "demo", TargetDir: "/opt/demo", ControlScript: "demo",
+			Service: "demo", Started: true,
+		}, nil
 	}
+	oldInstallSuccessLines := dockerInstallSuccessLines
+	t.Cleanup(func() { dockerInstallSuccessLines = oldInstallSuccessLines })
+	dockerInstallSuccessLines = func(string, time.Duration) ([]string, error) { return nil, nil }
 
-	code, _, stderr = runCLI("install", "--dir", deployDir, "--scope", "system", "--wait")
+	code, stdout, stderr = runCLI("install", "--dir", deployDir, "--scope", "system", "--wait")
 	if code != 0 {
 		t.Fatalf("install failed: code=%d\nstderr:\n%s", code, stderr)
 	}
-	if !strings.Contains(stderr, "[STAGING : demo] installing") {
-		t.Fatalf("stderr missing deployment-scoped install spinner:\n%s", stderr)
+	if !strings.Contains(stderr, "installing deployment: running before start hook: app config check") {
+		t.Fatalf("stderr missing Reploy install progress:\n%s", stderr)
 	}
-	if strings.Contains(stderr, "installing from staging") {
-		t.Fatalf("stderr should not use generic staged install label:\n%s", stderr)
+	if !strings.Contains(stdout, "[DEPLOYED : demo] installed successfully") {
+		t.Fatalf("stdout missing deployed result:\n%s", stdout)
 	}
 }
 
@@ -2521,6 +2867,10 @@ func TestDockerInstallControlOptionsParse(t *testing.T) {
 	if _, err := parseDockerInstallOptions([]string{"--scope", "user", "--wait", "--force"}); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("conflicting control modes error = %v", err)
 	}
+	options, err := parseDockerInstallOptions([]string{"--scope", "user", "--verbose"})
+	if err != nil || !options.Verbose {
+		t.Fatalf("verbose install options = %#v, error=%v", options, err)
+	}
 }
 
 func TestDockerUninstallOptionsParse(t *testing.T) {
@@ -2529,12 +2879,16 @@ func TestDockerUninstallOptionsParse(t *testing.T) {
 		"--service-name", "demo2",
 		"--remove-dir",
 		"--drain",
+		"--verbose",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if options.From != "/opt/demo2" || options.ServiceName != "demo2" {
 		t.Fatalf("from/service-name = %q/%q", options.From, options.ServiceName)
+	}
+	if !options.Verbose {
+		t.Fatal("verbose = false, want true")
 	}
 	if !options.RemoveDir || options.ControlMode != dockerdeploy.ControlAdmissionDrainV1 {
 		t.Fatalf("remove-dir/control-mode = %v/%q", options.RemoveDir, options.ControlMode)
@@ -2617,7 +2971,7 @@ func TestDockerUninstallExplicitAbsentTargetIsSuccessfulAfterProgress(t *testing
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\noutput:\n%s", code, output.String())
 	}
-	wantProgress := "uninstalling... done"
+	wantProgress := "uninstalling deployment: done"
 	wantResult := "No installation found at " + target + "; it may already have been removed."
 	if !strings.Contains(output.String(), wantProgress) || !strings.Contains(output.String(), wantResult) {
 		t.Fatalf("output missing completed progress or no-installation result:\n%s", output.String())
@@ -2630,7 +2984,7 @@ func TestDockerUninstallExplicitAbsentTargetIsSuccessfulAfterProgress(t *testing
 	}
 }
 
-func TestDockerUninstallAnimatedSpinnerKeepsDeploymentOutputSeparate(t *testing.T) {
+func TestDockerUninstallHidesSuccessfulBackendOutputAndReportsExactResult(t *testing.T) {
 	t.Setenv("REPLOY_COLOR", "never")
 	t.Setenv("CI", "")
 	t.Setenv("TERM", "xterm-256color")
@@ -2654,27 +3008,33 @@ func TestDockerUninstallAnimatedSpinnerKeepsDeploymentOutputSeparate(t *testing.
 			t.Fatalf("control mode = %q", options.ControlMode)
 		}
 		fmt.Fprintln(options.Stdout, "uninstalled service: demo")
-		return dockerdeploy.ProviderUninstallResultV1{}, nil
+		fmt.Fprintln(options.Progress, "removing runtime resources")
+		return dockerdeploy.ProviderUninstallResultV1{
+			DeploymentDir: installDir, Environment: "demo", Service: "demo-service",
+			RemovedDirectory: true,
+		}, nil
 	}
 
 	code, stdout, stderr := runCLI("uninstall", "--from", installDir, "--remove-dir", "--force")
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if stdout != "" {
-		t.Fatalf("stdout = %q, want empty while animated spinner owns uninstall output", stdout)
+	if strings.Contains(stdout, "uninstalled service") || strings.Contains(stderr, "uninstalled service") {
+		t.Fatalf("successful backend output leaked:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
-	if !strings.Contains(stderr, "[DEPLOYED : demo] uninstalled service: demo\n") {
-		t.Fatalf("stderr missing deployed uninstall output:\n%q", stderr)
+	for _, want := range []string{
+		"[DEPLOYED : demo] uninstalled successfully",
+		"[DEPLOYED : demo] removed: service demo-service",
+		"[DEPLOYED : demo] removed: runtime resources",
+		"[DEPLOYED : demo] removed: installation directory " + installDir,
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout)
+		}
 	}
-	if !strings.Contains(stderr, "[DEPLOYED : demo] uninstalling... done") {
-		t.Fatalf("stderr missing spinner completion:\n%q", stderr)
-	}
-	if strings.Contains(stderr, "\\[DEPLOYED") ||
-		strings.Contains(stderr, "/[DEPLOYED") ||
-		strings.Contains(stderr, "|[DEPLOYED") ||
-		strings.Contains(stderr, "-[DEPLOYED") {
-		t.Fatalf("spinner frame collided with deployment output:\n%q", stderr)
+	if !strings.Contains(stderr, "uninstalling deployment: removing runtime resources") ||
+		!strings.Contains(stderr, "uninstalling deployment: done") {
+		t.Fatalf("stderr missing Reploy uninstall progress:\n%q", stderr)
 	}
 }
 
@@ -2703,9 +3063,7 @@ func TestDockerInitWritesDeployment(t *testing.T) {
 func TestDockerStageEnvironmentBlueprintCreatesAndRestagesOnlyStateV1(t *testing.T) {
 	blueprintPath := filepath.Join(cliTestRepoRoot(t), "examples", "omegaconf-inspector", "reploy", "omegaconf-inspector.blueprint.yaml")
 	deployDir := filepath.Join(t.TempDir(), "deployment")
-	workspaceRoot := filepath.Join(t.TempDir(), "checkout")
-
-	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "--platform", "linux/amd64", "--workspace-root", workspaceRoot, "file:"+blueprintPath)
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "--platform", "linux/amd64", "file:"+blueprintPath)
 	if code != 0 {
 		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -2728,7 +3086,7 @@ func TestDockerStageEnvironmentBlueprintCreatesAndRestagesOnlyStateV1(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.BlueprintSource != string(wantBlueprint) || state.Staging == nil || state.Staging.WorkspaceRoot != workspaceRoot {
+	if state.BlueprintSource != string(wantBlueprint) || state.Staging == nil {
 		t.Fatalf("retained staging inputs = %#v", state)
 	}
 
@@ -2909,7 +3267,7 @@ func TestDockerInitRequiresPack(t *testing.T) {
 		t.Fatalf("stderr did not contain required blueprint message:\n%s", stderr)
 	}
 	for _, want := range []string{
-		"Usage: reploy [--docker] [--docker-timeout DURATION] stage APP_REF [OPTIONS]",
+		"Usage: reploy [--docker-timeout DURATION] stage APP_REF [OPTIONS]",
 		"arbiter-server==VERSION",
 		"pypi://PACKAGE/PATH/APP.blueprint.yaml",
 		"pypi://PACKAGE/PATH/APP.blueprint.yaml?version=VERSION",
@@ -4041,8 +4399,15 @@ func TestDockerInfoShowsDeploymentState(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("info failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "target: docker") || !strings.Contains(stdout, "phase: staged") {
-		t.Fatalf("stdout missing target/phase:\n%s", stdout)
+	for _, want := range []string{"runtime: docker", "bundle: not built", "image: not built", "phase: staged"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout)
+		}
+	}
+	for _, forbidden := range []string{"target:", "resolved:", "materialized image:"} {
+		if strings.Contains(stdout, forbidden) {
+			t.Fatalf("stdout retained internal label %q:\n%s", forbidden, stdout)
+		}
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
@@ -4260,6 +4625,46 @@ docker: {}
 	if err := os.WriteFile(filepath.Join(dir, dockerdeploy.StateFileName), content, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeCLITestStagedState(t *testing.T, dir string, appID string) {
+	t.Helper()
+	writeCLITestInstalledState(t, dir, appID, appID+"-service")
+	path := filepath.Join(dir, dockerdeploy.StateFileName)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := deploy.DecodeStateV1(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Deployment = nil
+	state.Staging = &deploy.StagingStateV1{Schema: deploy.StagingStateSchemaV1}
+	state.BlueprintSource = "test blueprint"
+	content, err = deploy.EncodeStateV1(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func cliTestProviderBuildResult(t *testing.T, dir string, reused bool) dockerdeploy.LockedProviderBuildExecutionResultV1 {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(dir, dockerdeploy.StateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := deploy.DecodeStateV1(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Current = &deploy.EnvironmentGenerationState{
+		Reference: "reploy/env/demo:g-test", ImageDigest: "sha256:demo-image",
+	}
+	return dockerdeploy.LockedProviderBuildExecutionResultV1{State: state, Reused: reused}
 }
 
 func markCLITestSystemd(t *testing.T, dir string, unitPath string) {

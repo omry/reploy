@@ -37,7 +37,7 @@ func MaterializationDockerfile(transaction providers.MaterializationTransaction,
 
 	var output bytes.Buffer
 	fmt.Fprintf(&output, "# syntax=%s\n", MaterializationDockerfileSyntax)
-	output.WriteString("ARG REPLOY_BASE_IMAGE\n")
+	output.WriteString("ARG REPLOY_BASE_IMAGE=scratch\n")
 	output.WriteString("FROM ${REPLOY_BASE_IMAGE}\n")
 	fmt.Fprintf(&output, "USER %s:%s\n", transaction.BuildIdentity.UID, transaction.BuildIdentity.GID)
 	workingDirectory, err := quoteDockerfileWord(transaction.WorkingDirectory)

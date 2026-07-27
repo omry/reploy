@@ -193,9 +193,26 @@ func TestValidateProviderBuildCompletionRejectsBaseOnlyRuntimePolicyDrift(t *tes
 	input.Graph.Bundles = []providers.ResolvedBundle{}
 	input.Graph.Profiles = []providers.RequirementProfile{}
 	input.Graph.ValidationEvidence = []providers.ValidationEvidence{}
+	input.Graph.SelectedSources = []providers.ResolvedSourceInput{}
+	for _, node := range input.Graph.Plan.Nodes {
+		if node.ID == "base" {
+			input.Graph.Plan.Nodes = []providers.NodeSpec{node}
+			break
+		}
+	}
+	input.Graph.Plan.Edges = []providers.ProviderEdgeV1{}
 	input.Graph.PrefixImages = []providers.RealizedImageV1{baseImage}
 	input.Graph.Materializations = []providers.GraphNodeMaterializeResult{}
 	input.Graph.Catalog = append([]providers.RealizedOutput{}, input.BaseCatalog...)
+	delete(input.Document.Environment.Components, "application")
+	for _, component := range input.ResolvedRequest.Components {
+		if component.Component == "base" {
+			input.ResolvedRequest.Components = []providers.ResolvedComponentRequestV1{component}
+			break
+		}
+	}
+	input.ResolvedRequest.Sources = []providers.ResolvedSourceInput{}
+	input.PackageOverrides = deploy.EmptyPackageOverrideIntentV1(input.Environment)
 	policy, err := providerBuildRuntimePolicyV1(input)
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +264,7 @@ func providerBuildCompletionFixture(t *testing.T) (ProviderBuildCompletionInput,
 	}
 	document := blueprint.Document{
 		Blueprint: blueprint.Metadata{Compatibility: blueprint.Compatibility{Platforms: []blueprint.Platform{fixture.request.Platform}}},
-		Environment: blueprint.Environment{Components: map[string]blueprint.Component{
+		Environment: blueprint.Environment{ID: "demo", Components: map[string]blueprint.Component{
 			"application": {
 				Type: blueprint.ComponentTypePython,
 				Python: &blueprint.PythonComponent{
@@ -312,7 +329,8 @@ func providerBuildCompletionFixture(t *testing.T) (ProviderBuildCompletionInput,
 	return ProviderBuildCompletionInput{
 		Environment: "demo", DeploymentDir: dir, Document: document, DockerPlan: dockerPlan,
 		ResolvedRequest: request, Overlay: overlay,
-		Base: fixture.lock.Base, BaseCatalog: append([]providers.RealizedOutput{}, fixture.request.EarlierCatalog...),
+		PackageOverrides: fixture.lock.PackageOverrides,
+		Base:             fixture.lock.Base, BaseCatalog: append([]providers.RealizedOutput{}, fixture.request.EarlierCatalog...),
 		Graph: graph, Validation: validation, ValidateLayers: true,
 		RunValidation: func(context.Context, FullImageValidationInput) ([]providers.ValidationEvidence, []providers.ExecutableEvidence, error) {
 			return nil, nil, nil

@@ -20,10 +20,12 @@ func TestRunProviderBuildV1HoldsOneLockAcrossPreparationAndExecution(t *testing.
 	dir, document := stageProviderBuildRunState(t, false)
 	order := []string{}
 	want := LockedProviderBuildExecutionResultV1{Reused: true}
+	var progress strings.Builder
 
 	result, err := runProviderBuildV1(t.Context(), ProviderBuildRunInputV1{
 		DeploymentDir: dir, NoCache: true, ValidateLayers: true,
-		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
+		Runtime:  StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
+		Progress: &progress,
 	}, providerBuildRunBackend{
 		acquire:  deploy.AcquireOperationLock,
 		newStore: providerstore.NewStore,
@@ -45,7 +47,7 @@ func TestRunProviderBuildV1HoldsOneLockAcrossPreparationAndExecution(t *testing.
 			if err := input.Preparation.Operation.RequireHeld(); err != nil {
 				t.Fatal(err)
 			}
-			if !input.ValidateLayers || !input.RunOptions.NoCache || len(input.SourceWheels) != 0 || len(input.WorkspaceSources) != 0 {
+			if !input.ValidateLayers || !input.RunOptions.NoCache || len(input.SourceWheels) != 0 || len(input.LocalOverrides) != 0 || input.Progress != &progress {
 				t.Fatalf("execution input = %#v", input)
 			}
 			return want, nil
@@ -56,6 +58,14 @@ func TestRunProviderBuildV1HoldsOneLockAcrossPreparationAndExecution(t *testing.
 	}
 	if !reflect.DeepEqual(result, want) || !reflect.DeepEqual(order, []string{"prepare", "execute"}) {
 		t.Fatalf("result/order = %#v/%#v", result, order)
+	}
+	for _, want := range []string{
+		"preparing environment demo for linux/amd64",
+		"preparing component packages and image layers",
+	} {
+		if !strings.Contains(progress.String(), want) {
+			t.Fatalf("progress missing %q:\n%s", want, progress.String())
+		}
 	}
 	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
 	if err != nil {
@@ -249,7 +259,7 @@ func TestRunLockedProviderBuildV1RejectsForeignStoreBeforeProviderWork(t *testin
 	}
 }
 
-func TestRunProviderBuildV1ObservesWorkspaceSourcesForExecution(t *testing.T) {
+func TestRunProviderBuildV1PassesLocalOverrideLocatorsWithoutObservation(t *testing.T) {
 	dir, _ := stageProviderBuildRunState(t, true)
 	prepared := false
 	executed := false
@@ -262,9 +272,9 @@ func TestRunProviderBuildV1ObservesWorkspaceSourcesForExecution(t *testing.T) {
 		},
 		execute: func(_ context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
 			executed = true
-			if len(input.WorkspaceSources) != 1 || input.WorkspaceSources[0].Distribution != "demo" ||
-				input.WorkspaceSources[0].HostDir != filepath.Join(dir, "demo") || len(input.WorkspaceSources[0].Manifest.Entries) == 0 {
-				t.Fatalf("workspace sources = %#v", input.WorkspaceSources)
+			if len(input.LocalOverrides) != 1 || input.LocalOverrides[0].Distribution != "demo" ||
+				input.LocalOverrides[0].HostDir != filepath.Join(dir, "demo") {
+				t.Fatalf("local overrides = %#v", input.LocalOverrides)
 			}
 			return LockedProviderBuildExecutionResultV1{}, nil
 		},
@@ -281,7 +291,7 @@ func TestRunProviderBuildV1ObservesWorkspaceSourcesForExecution(t *testing.T) {
 	}
 }
 
-func TestRunProviderBuildV1DoesNotObserveWorkspaceSourcesOnExactReuse(t *testing.T) {
+func TestRunProviderBuildV1DoesNotObserveLocalOverridePathOnExactReuse(t *testing.T) {
 	dir, _ := stageProviderBuildRunState(t, true)
 	if err := os.RemoveAll(filepath.Join(dir, "demo")); err != nil {
 		t.Fatal(err)
@@ -295,8 +305,8 @@ func TestRunProviderBuildV1DoesNotObserveWorkspaceSourcesOnExactReuse(t *testing
 		},
 		execute: func(_ context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
 			executed = true
-			if len(input.WorkspaceSources) != 0 {
-				t.Fatalf("workspace sources = %#v", input.WorkspaceSources)
+			if len(input.LocalOverrides) != 1 || input.LocalOverrides[0].HostDir != filepath.Join(dir, "demo") {
+				t.Fatalf("local overrides = %#v", input.LocalOverrides)
 			}
 			return LockedProviderBuildExecutionResultV1{Reused: true}, nil
 		},
@@ -306,7 +316,7 @@ func TestRunProviderBuildV1DoesNotObserveWorkspaceSourcesOnExactReuse(t *testing
 	}
 }
 
-func TestRunLockedProviderBuildV1ReusesUnchangedWorkspaceSourceIdentity(t *testing.T) {
+func TestRunLockedProviderBuildV1ReusesUnchangedLocalSourceIdentity(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	sourceDir := filepath.Join(workspaceRoot, "demo")
 	if err := os.Mkdir(sourceDir, 0o755); err != nil {
@@ -347,9 +357,14 @@ func TestRunLockedProviderBuildV1ReusesUnchangedWorkspaceSourceIdentity(t *testi
 	state := deploy.StateV1{
 		Schema: deploy.StateSchemaV1, Blueprint: resolved, BlueprintSource: "blueprint",
 		Platform: fixture.request.Platform, Overlay: deploy.EmptyRequestOverlayV1(), Current: &generation,
-		Staging: &deploy.StagingStateV1{Schema: deploy.StagingStateSchemaV1, WorkspaceRoot: workspaceRoot},
+		Staging: &deploy.StagingStateV1{Schema: deploy.StagingStateSchemaV1},
 	}
 	if err := operation.CommitStateV1(nil, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := operation.CommitPackageOverridesV1(localPythonPackageOverrides(
+		"demo", "demo-server", sourceDir,
+	)); err != nil {
 		t.Fatal(err)
 	}
 	prepared := false
@@ -367,8 +382,8 @@ func TestRunLockedProviderBuildV1ReusesUnchangedWorkspaceSourceIdentity(t *testi
 		},
 		execute: func(_ context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
 			executed = true
-			if !reflect.DeepEqual(input.SourceWheels, fixture.sourceWheels) || len(input.WorkspaceSources) != 0 {
-				t.Fatalf("execution source inputs = %#v/%#v", input.SourceWheels, input.WorkspaceSources)
+			if !reflect.DeepEqual(input.SourceWheels, fixture.sourceWheels) || len(input.LocalOverrides) != 1 {
+				t.Fatalf("execution source inputs = %#v/%#v", input.SourceWheels, input.LocalOverrides)
 			}
 			return LockedProviderBuildExecutionResultV1{Reused: true}, nil
 		},
@@ -391,8 +406,8 @@ func TestRunLockedProviderBuildV1ReusesUnchangedWorkspaceSourceIdentity(t *testi
 		},
 		execute: func(_ context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
 			executed = true
-			if len(input.SourceWheels) != 0 || len(input.WorkspaceSources) != 1 || input.WorkspaceSources[0].Distribution != "demo-server" {
-				t.Fatalf("no-cache execution source inputs = %#v/%#v", input.SourceWheels, input.WorkspaceSources)
+			if len(input.SourceWheels) != 0 || len(input.LocalOverrides) != 1 || input.LocalOverrides[0].Distribution != "demo-server" {
+				t.Fatalf("no-cache execution source inputs = %#v/%#v", input.SourceWheels, input.LocalOverrides)
 			}
 			return LockedProviderBuildExecutionResultV1{}, nil
 		},
@@ -423,8 +438,8 @@ func TestRunLockedProviderBuildV1ReusesUnchangedWorkspaceSourceIdentity(t *testi
 		},
 		execute: func(_ context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
 			executed = true
-			if len(input.SourceWheels) != 0 || len(input.WorkspaceSources) != 1 || input.WorkspaceSources[0].Distribution != "demo-server" {
-				t.Fatalf("repair execution source inputs = %#v/%#v", input.SourceWheels, input.WorkspaceSources)
+			if len(input.SourceWheels) != 0 || len(input.LocalOverrides) != 1 || input.LocalOverrides[0].Distribution != "demo-server" {
+				t.Fatalf("repair execution source inputs = %#v/%#v", input.SourceWheels, input.LocalOverrides)
 			}
 			return LockedProviderBuildExecutionResultV1{}, nil
 		},
@@ -517,16 +532,13 @@ func stageProviderBuildRunState(t *testing.T, workspace bool) (string, blueprint
 	document := blueprint.Document{
 		Blueprint: blueprint.Metadata{Compatibility: blueprint.Compatibility{Platforms: []blueprint.Platform{platform}}},
 		Environment: blueprint.Environment{
-			ID: "demo", Workspace: blueprint.Workspace{PythonPackages: map[string]string{}},
+			ID: "demo",
 			Components: map[string]blueprint.Component{
 				"base": {Type: blueprint.ComponentTypeBase, Base: &blueprint.BaseComponent{Image: "debian:13", Exports: map[string]blueprint.BaseExecutableExport{}}},
 			},
 		},
 	}
 	if workspace {
-		document.Environment.Workspace = blueprint.Workspace{
-			Root: ".", PythonPackages: map[string]string{"demo": "demo"},
-		}
 		if err := os.Mkdir(filepath.Join(dir, "demo"), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -536,12 +548,27 @@ func stageProviderBuildRunState(t *testing.T, workspace bool) (string, blueprint
 	}
 	var stageErr error
 	if workspace {
-		_, stageErr = deploy.SetStagedDesiredStateV1(t.Context(), dir, document, platform, nil, "blueprint", dir, false)
+		_, stageErr = deploy.SetStagedDesiredStateV1(t.Context(), dir, document, platform, nil, "blueprint", false)
 	} else {
 		_, stageErr = deploy.SetDesiredStateV1(t.Context(), dir, document, platform, nil)
 	}
 	if stageErr != nil {
 		t.Fatal(stageErr)
+	}
+	if workspace {
+		operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := operation.CommitPackageOverridesV1(localPythonPackageOverrides(
+			"demo", "demo", filepath.Join(dir, "demo"),
+		)); err != nil {
+			_ = operation.Unlock()
+			t.Fatal(err)
+		}
+		if err := operation.Unlock(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return dir, document
 }
@@ -550,7 +577,7 @@ func providerBuildRunWorkspaceDocument(platform blueprint.Platform) blueprint.Do
 	return blueprint.Document{
 		Blueprint: blueprint.Metadata{Compatibility: blueprint.Compatibility{Platforms: []blueprint.Platform{platform}}},
 		Environment: blueprint.Environment{
-			ID: "demo", Workspace: blueprint.Workspace{Root: ".", PythonPackages: map[string]string{"demo-server": "demo"}},
+			ID: "demo",
 			Components: map[string]blueprint.Component{
 				"base": {
 					Type: blueprint.ComponentTypeBase,
@@ -570,4 +597,14 @@ func providerBuildRunWorkspaceDocument(platform blueprint.Platform) blueprint.Do
 			},
 		},
 	}
+}
+
+func localPythonPackageOverrides(environmentID string, distribution string, sourceDir string) deploy.PackageOverridesV1 {
+	return deploy.PackageOverridesV1{Environment: deploy.PackageOverridesEnvironmentV1{
+		ID:   environmentID,
+		Vars: map[string]any{},
+		PackageOverrides: map[string]map[string]deploy.PackageOverrideChoiceV1{
+			"python": {distribution: {Path: sourceDir}},
+		},
+	}}
 }

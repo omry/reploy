@@ -7,7 +7,6 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
-	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providers/registry"
 	"github.com/omry/reploy/internal/providerstore"
 )
@@ -202,23 +201,11 @@ func CurrentBuildMatchesRuntimeV1(current CurrentBuild, dockerPlan DockerExecuti
 		return false, nil
 	}
 
-	selectedSources, err := buildLockSelectedSourcesV1(current.Lock)
-	if err != nil {
-		return false, err
-	}
-	request, err := BuildResolvedRequestV1(document, current.State.Overlay, current.State.Platform, selectedSources)
-	if err != nil {
+	base := document.Environment.Components["base"]
+	if base.Type != blueprint.ComponentTypeBase || base.Base == nil {
 		return false, nil
 	}
-	requestDigest, err := providers.ResolvedRequestDigest(request, registry.ValidateResolvedRequestOwnersV1)
-	if err != nil {
-		return false, err
-	}
-	baseReference, err := resolvedRequestBaseReference(request)
-	if err != nil {
-		return false, nil
-	}
-	if requestDigest != current.Lock.ResolvedRequestDigest || baseReference != current.Lock.Base.AuthorReference {
+	if base.Base.Image != current.Lock.Base.AuthorReference {
 		return false, nil
 	}
 

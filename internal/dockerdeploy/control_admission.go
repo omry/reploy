@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"time"
 
@@ -25,7 +26,18 @@ func AwaitControlAdmissionV1(
 	candidate deploy.ControlMarkerV1,
 	wait bool,
 ) (*deploy.OperationLock, error) {
-	return awaitControlAdmissionV1(ctx, deploymentDir, operation, candidate, wait, controlAdmissionBackendV1{
+	return AwaitControlAdmissionWithNoticeV1(ctx, deploymentDir, operation, candidate, wait, nil)
+}
+
+func AwaitControlAdmissionWithNoticeV1(
+	ctx context.Context,
+	deploymentDir string,
+	operation *deploy.OperationLock,
+	candidate deploy.ControlMarkerV1,
+	wait bool,
+	notice io.Writer,
+) (*deploy.OperationLock, error) {
+	return awaitControlAdmissionV1(ctx, deploymentDir, operation, candidate, wait, notice, controlAdmissionBackendV1{
 		acquire: deploy.AcquireOperationLock,
 		wait: func(ctx context.Context) error {
 			timer := time.NewTimer(liveRunAdmissionPollIntervalV1)
@@ -46,6 +58,7 @@ func awaitControlAdmissionV1(
 	operation *deploy.OperationLock,
 	candidate deploy.ControlMarkerV1,
 	wait bool,
+	notice io.Writer,
 	backend controlAdmissionBackendV1,
 ) (*deploy.OperationLock, error) {
 	if ctx == nil {
@@ -85,6 +98,10 @@ func awaitControlAdmissionV1(
 	if status != deploy.LiveRunStatusWaitingV1 {
 		return cancelControlAdmissionV1(ctx, absoluteDir, operation, candidate.ID, backend,
 			fmt.Errorf("control admission returned unsupported status %q", status))
+	}
+	if err := writeAdmissionWaitNoticeV1(operation, candidate.ID, notice); err != nil {
+		return cancelControlAdmissionV1(ctx, absoluteDir, operation, candidate.ID, backend,
+			fmt.Errorf("describe lifecycle wait: %w", err))
 	}
 	if err := operation.Unlock(); err != nil {
 		return cancelControlAdmissionV1(ctx, absoluteDir, nil, candidate.ID, backend,

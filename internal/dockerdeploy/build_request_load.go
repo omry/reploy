@@ -10,10 +10,11 @@ import (
 )
 
 type LoadedBuildRequestV1 struct {
-	State    deploy.StateV1
-	Document blueprint.Document
-	Request  providers.ResolvedRequestV1
-	Current  *deploy.BuildLockV1
+	State            deploy.StateV1
+	Document         blueprint.Document
+	PackageOverrides deploy.PackageOverrideIntentV1
+	Request          providers.ResolvedRequestV1
+	Current          *deploy.BuildLockV1
 }
 
 // LoadBuildRequestV1 derives the canonical provider request from the desired
@@ -24,25 +25,45 @@ func LoadBuildRequestV1(
 	operation *deploy.OperationLock,
 	sources []providers.ResolvedSourceInput,
 ) (LoadedBuildRequestV1, error) {
+	if sources == nil {
+		return LoadedBuildRequestV1{}, fmt.Errorf("load build request sources must use an array")
+	}
+	state, document, err := loadBuildStateDocumentV1(operation)
+	if err != nil {
+		return LoadedBuildRequestV1{}, err
+	}
+	return loadBuildRequestWithInputsV1(
+		operation, deploy.EmptyPackageOverrideIntentV1(document.Environment.ID), sources, state, document,
+	)
+}
+
+func LoadBuildRequestWithPackageOverridesV1(
+	operation *deploy.OperationLock,
+	packageOverrides deploy.PackageOverrideIntentV1,
+	sources []providers.ResolvedSourceInput,
+) (LoadedBuildRequestV1, error) {
 	if operation == nil {
 		return LoadedBuildRequestV1{}, fmt.Errorf("load build request requires an operation lock")
 	}
 	if sources == nil {
 		return LoadedBuildRequestV1{}, fmt.Errorf("load build request sources must use an array")
 	}
-	state, found, err := operation.ReadStateV1()
+	state, document, err := loadBuildStateDocumentV1(operation)
 	if err != nil {
-		return LoadedBuildRequestV1{}, fmt.Errorf("load build state: %w", err)
+		return LoadedBuildRequestV1{}, err
 	}
-	if !found {
-		return LoadedBuildRequestV1{}, fmt.Errorf("build state is missing; stage or install the deployment first")
-	}
-	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
-	if err != nil {
-		return LoadedBuildRequestV1{}, fmt.Errorf("load build blueprint: %w", err)
-	}
-	request, err := BuildResolvedRequestV1(
-		document, state.Overlay, state.Platform,
+	return loadBuildRequestWithInputsV1(operation, packageOverrides, sources, state, document)
+}
+
+func loadBuildRequestWithInputsV1(
+	operation *deploy.OperationLock,
+	packageOverrides deploy.PackageOverrideIntentV1,
+	sources []providers.ResolvedSourceInput,
+	state deploy.StateV1,
+	document blueprint.Document,
+) (LoadedBuildRequestV1, error) {
+	request, err := BuildResolvedRequestWithPackageOverridesV1(
+		document, state.Overlay, packageOverrides, state.Platform,
 		append([]providers.ResolvedSourceInput{}, sources...),
 	)
 	if err != nil {
@@ -62,5 +83,26 @@ func LoadBuildRequestV1(
 		}
 		current = &lock
 	}
-	return LoadedBuildRequestV1{State: state, Document: document, Request: request, Current: current}, nil
+	return LoadedBuildRequestV1{
+		State: state, Document: document, PackageOverrides: packageOverrides,
+		Request: request, Current: current,
+	}, nil
+}
+
+func loadBuildStateDocumentV1(operation *deploy.OperationLock) (deploy.StateV1, blueprint.Document, error) {
+	if operation == nil {
+		return deploy.StateV1{}, blueprint.Document{}, fmt.Errorf("load build request requires an operation lock")
+	}
+	state, found, err := operation.ReadStateV1()
+	if err != nil {
+		return deploy.StateV1{}, blueprint.Document{}, fmt.Errorf("load build state: %w", err)
+	}
+	if !found {
+		return deploy.StateV1{}, blueprint.Document{}, fmt.Errorf("build state is missing; stage or install the deployment first")
+	}
+	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	if err != nil {
+		return deploy.StateV1{}, blueprint.Document{}, fmt.Errorf("load build blueprint: %w", err)
+	}
+	return state, document, nil
 }

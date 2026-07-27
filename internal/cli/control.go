@@ -203,13 +203,15 @@ func printEmbeddedControlLogsHelp(output io.Writer, context embeddedControlUsage
 	scriptName := embeddedControlDefaultString(context.ScriptName, "reployctl")
 	fmt.Fprintf(output, "Usage: %s logs [OPTIONS]\n", scriptName)
 	fmt.Fprintln(output)
-	fmt.Fprintln(output, "Show deployed service logs with timestamps.")
+	fmt.Fprintln(output, "Show deployed service application logs.")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Options:")
 	fmt.Fprintf(output, "  --tail N     Show only the last N log lines (default: %s)\n", embeddedControlDefaultLogsTail)
 	fmt.Fprintln(output, "  --tail all   Show the complete available log")
 	fmt.Fprintln(output, "  --follow, -f")
 	fmt.Fprintln(output, "              Follow logs instead of exiting after current output")
+	fmt.Fprintln(output, "  --timestamps")
+	fmt.Fprintln(output, "              Include the runtime capture timestamp")
 	fmt.Fprintln(output, "  -h, --help   Show logs help")
 }
 
@@ -223,14 +225,6 @@ func runEmbeddedControlRuntime(
 ) int {
 	if action == "logs" {
 		args = embeddedControlLogsArgs(args)
-	}
-	if embeddedControlContextUsesSystemd(context) {
-		switch action {
-		case "status":
-			return runEmbeddedControlSystemd(context, action, args, stdout, stderr)
-		case "logs":
-			return runEmbeddedControlJournal(context, args, stdout, stderr)
-		}
 	}
 	runtimeArgs := append([]string{}, args...)
 	runtimeArgs = append(runtimeArgs, "--dir", context.Dir)
@@ -333,32 +327,6 @@ func runEmbeddedControlSystemd(
 		return 1
 	}
 	return runEmbeddedControlExternal(context.Dir, stdout, stderr, "systemctl", action, service)
-}
-
-func runEmbeddedControlJournal(
-	context embeddedControlUsageContext,
-	args []string,
-	stdout io.Writer,
-	stderr io.Writer,
-) int {
-	options, err := parseDockerObservationOptions(append(args, "--dir", context.Dir))
-	if err != nil {
-		fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
-		return 2
-	}
-	service := embeddedControlContextSystemdUnit(context)
-	if service == "" {
-		fmt.Fprintln(stderr, "reploy control error: installed service is not recorded")
-		return 1
-	}
-	journalArgs := []string{"-u", service}
-	if options.Tail != "" {
-		journalArgs = append(journalArgs, "-n", options.Tail)
-	}
-	if options.Follow {
-		journalArgs = append(journalArgs, "-f")
-	}
-	return runEmbeddedControlExternal(context.Dir, stdout, stderr, "journalctl", journalArgs...)
 }
 
 func runEmbeddedControlExternal(dir string, stdout io.Writer, stderr io.Writer, name string, args ...string) int {

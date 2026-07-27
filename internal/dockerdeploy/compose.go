@@ -29,6 +29,7 @@ type RunOptions struct {
 	Stdin                  io.Reader
 	Stdout                 io.Writer
 	Stderr                 io.Writer
+	Progress               io.Writer
 	DockerPreflightTimeout time.Duration
 	NoCache                bool
 }

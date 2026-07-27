@@ -5,22 +5,31 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
+	"github.com/omry/reploy/internal/deploy"
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
 )
 
 const pythonSourceManifestSchemaV1 = pythonprovider.SourceManifestSchemaV1
 
-// PythonWorkspaceSource is a staging-only physical locator paired with the
+// PythonLocalOverrideV1 is an uninterpreted, staging-only physical locator.
+// Constructing it never accesses HostDir; source observation is demand-driven
+// after a direct request or resolved package closure identifies a matching
+// distribution.
+type PythonLocalOverrideV1 struct {
+	Distribution string
+	HostDir      string
+}
+
+// PythonLocalSource is a staging-only physical locator paired with the
 // path-free source manifest that later Python preparation turns into a wheel.
 // HostDir and Manifest never cross into the provider graph or build lock.
-type PythonWorkspaceSource struct {
+type PythonLocalSource struct {
 	Distribution         string
 	HostDir              string
 	Manifest             PythonSourceManifestV1
@@ -40,154 +49,84 @@ type PythonSourceManifestEntryV1 struct {
 	LinkTarget    string           `json:"link_target"`
 }
 
-// ResolvePythonWorkspaceSources resolves auxiliary workspace locators and
-// observes deterministic manifests. Callers choose when observation is needed;
-// merely loading a blueprint does not walk source trees.
-func ResolvePythonWorkspaceSources(
-	document blueprint.Document,
-	workspaceRoot string,
-) ([]PythonWorkspaceSource, error) {
-	return resolvePythonWorkspaceSources(document, workspaceRoot, nil)
+// PythonLocalOverridesV1 extracts local Python override locators without
+// inspecting any target path.
+func PythonLocalOverridesV1(
+	overrides deploy.ResolvedPackageOverridesV1,
+) ([]PythonLocalOverrideV1, error) {
+	packages := overrides.Providers[string(blueprint.ComponentTypePython)]
+	result := make([]PythonLocalOverrideV1, 0, len(packages))
+	for distribution, choice := range packages {
+		if distribution == "" || pythonprovider.NormalizeDistributionName(distribution) != distribution {
+			return nil, fmt.Errorf("local Python override distribution is not normalized: %q", distribution)
+		}
+		if choice.Path == "" {
+			continue
+		}
+		if choice.Version != "" {
+			return nil, fmt.Errorf("local Python override %q also contains a version", distribution)
+		}
+		if !filepath.IsAbs(choice.Path) || filepath.Clean(choice.Path) != choice.Path {
+			return nil, fmt.Errorf("local Python override %q path must be absolute and clean", distribution)
+		}
+		result = append(result, PythonLocalOverrideV1{Distribution: distribution, HostDir: choice.Path})
+	}
+	sort.Slice(result, func(left int, right int) bool {
+		return result[left].Distribution < result[right].Distribution
+	})
+	return result, nil
 }
 
-// ResolveSelectedPythonWorkspaceSources observes only the named normalized
-// distributions. It still validates declaration names and locator syntax, but
-// it does not stat or walk unselected source directories.
-func ResolveSelectedPythonWorkspaceSources(
-	document blueprint.Document,
-	workspaceRoot string,
+// ObserveSelectedPythonLocalSources observes only selected normalized
+// distributions. Unselected override paths are never statted or walked.
+func ObserveSelectedPythonLocalSources(
+	overrides []PythonLocalOverrideV1,
 	distributions []string,
-) ([]PythonWorkspaceSource, error) {
+) ([]PythonLocalSource, error) {
+	if overrides == nil {
+		return nil, fmt.Errorf("local Python overrides must use an array")
+	}
 	if distributions == nil {
-		return nil, fmt.Errorf("selected Python workspace distributions must use an array")
+		return nil, fmt.Errorf("selected local Python distributions must use an array")
 	}
 	selected := make(map[string]struct{}, len(distributions))
 	for index, distribution := range distributions {
 		if distribution == "" || pythonprovider.NormalizeDistributionName(distribution) != distribution {
-			return nil, fmt.Errorf("selected Python workspace distribution %d is not normalized: %q", index, distribution)
+			return nil, fmt.Errorf("selected local Python distribution %d is not normalized: %q", index, distribution)
 		}
 		if index > 0 && distributions[index-1] >= distribution {
-			return nil, fmt.Errorf("selected Python workspace distributions must be unique and sorted")
+			return nil, fmt.Errorf("selected local Python distributions must be unique and sorted")
 		}
 		selected[distribution] = struct{}{}
 	}
-	return resolvePythonWorkspaceSources(document, workspaceRoot, selected)
-}
 
-// CompletePythonWorkspaceSources adds observations for declarations not
-// already present without re-walking the supplied source manifests.
-func CompletePythonWorkspaceSources(
-	document blueprint.Document,
-	workspaceRoot string,
-	observed []PythonWorkspaceSource,
-) ([]PythonWorkspaceSource, error) {
-	if observed == nil {
-		return nil, fmt.Errorf("observed Python workspace sources must use an array")
-	}
-	if err := validatePythonWorkspaceSourcesForSnapshot(observed); err != nil {
-		return nil, err
-	}
-	declared := make(map[string]struct{}, len(document.Environment.Workspace.PythonPackages))
-	for name := range document.Environment.Workspace.PythonPackages {
-		declared[pythonprovider.NormalizeDistributionName(name)] = struct{}{}
-	}
-	seen := make(map[string]struct{}, len(observed))
-	for _, source := range observed {
-		if _, found := declared[source.Distribution]; !found {
-			return nil, fmt.Errorf("observed Python workspace source %q is no longer declared", source.Distribution)
+	sources := make([]PythonLocalSource, 0, len(selected))
+	for index, override := range overrides {
+		if override.Distribution == "" || pythonprovider.NormalizeDistributionName(override.Distribution) != override.Distribution {
+			return nil, fmt.Errorf("local Python override %d distribution is not normalized: %q", index, override.Distribution)
 		}
-		seen[source.Distribution] = struct{}{}
-	}
-	remaining := make([]string, 0, len(declared)-len(seen))
-	for distribution := range declared {
-		if distribution != "" {
-			if _, found := seen[distribution]; !found {
-				remaining = append(remaining, distribution)
-			}
+		if index > 0 && overrides[index-1].Distribution >= override.Distribution {
+			return nil, fmt.Errorf("local Python overrides must be unique and sorted")
 		}
-	}
-	sort.Strings(remaining)
-	additional, err := ResolveSelectedPythonWorkspaceSources(document, workspaceRoot, remaining)
-	if err != nil {
-		return nil, err
-	}
-	result := append(append([]PythonWorkspaceSource{}, observed...), additional...)
-	sort.Slice(result, func(left int, right int) bool { return result[left].Distribution < result[right].Distribution })
-	return result, nil
-}
-
-func resolvePythonWorkspaceSources(
-	document blueprint.Document,
-	workspaceRoot string,
-	selected map[string]struct{},
-) ([]PythonWorkspaceSource, error) {
-	packages := document.Environment.Workspace.PythonPackages
-	if len(packages) == 0 {
-		return []PythonWorkspaceSource{}, nil
-	}
-
-	declaredNames := make([]string, 0, len(packages))
-	for name := range packages {
-		declaredNames = append(declaredNames, name)
-	}
-	sort.Strings(declaredNames)
-	owners := map[string]string{}
-	selectedNames := make([]string, 0, len(declaredNames))
-	for _, declaredName := range declaredNames {
-		if err := blueprint.ValidatePythonDistributionName("Python workspace distribution", declaredName); err != nil {
-			return nil, err
+		if override.HostDir == "" || !filepath.IsAbs(override.HostDir) || filepath.Clean(override.HostDir) != override.HostDir {
+			return nil, fmt.Errorf("local Python override %q path must be absolute and clean", override.Distribution)
 		}
-		normalized := pythonprovider.NormalizeDistributionName(declaredName)
-		if owner, found := owners[normalized]; found {
-			return nil, fmt.Errorf("Python workspace distributions %q and %q both normalize to %q", owner, declaredName, normalized)
+		if _, found := selected[override.Distribution]; !found {
+			continue
 		}
-		owners[normalized] = declaredName
-
-		relative := packages[declaredName]
-		cleanRelative := path.Clean(relative)
-		if relative == "" || path.IsAbs(relative) || strings.ContainsAny(relative, `\:`) || cleanRelative == ".." || strings.HasPrefix(cleanRelative, "../") {
-			return nil, fmt.Errorf("Python workspace distribution %q source must stay within the workspace root", declaredName)
-		}
-		if selected == nil {
-			selectedNames = append(selectedNames, declaredName)
-		} else if _, found := selected[normalized]; found {
-			selectedNames = append(selectedNames, declaredName)
-		}
-	}
-	if len(selectedNames) == 0 {
-		return []PythonWorkspaceSource{}, nil
-	}
-	if workspaceRoot == "" || !filepath.IsAbs(workspaceRoot) || filepath.Clean(workspaceRoot) != workspaceRoot {
-		return nil, fmt.Errorf("Python workspace root must be an absolute clean path")
-	}
-	realRoot, err := resolveRealPythonSourceDirectory(workspaceRoot)
-	if err != nil {
-		return nil, fmt.Errorf("Python workspace root: %w", err)
-	}
-
-	sources := make([]PythonWorkspaceSource, 0, len(selectedNames))
-	for _, declaredName := range selectedNames {
-		normalized := pythonprovider.NormalizeDistributionName(declaredName)
-		cleanRelative := path.Clean(packages[declaredName])
-		hostDir, err := resolveRealPythonSourceDirectory(filepath.Join(realRoot, filepath.FromSlash(cleanRelative)))
+		hostDir, err := resolveRealPythonSourceDirectory(override.HostDir)
 		if err != nil {
-			return nil, fmt.Errorf("Python workspace distribution %q source: %w", declaredName, err)
-		}
-		if err := requirePathWithinPythonWorkspace(realRoot, hostDir); err != nil {
-			return nil, fmt.Errorf("Python workspace distribution %q source: %w", declaredName, err)
+			return nil, fmt.Errorf("local Python override %q source: %w", override.Distribution, err)
 		}
 		manifest, digest, err := ObservePythonSourceManifest(hostDir)
 		if err != nil {
-			return nil, fmt.Errorf("Python workspace distribution %q source manifest: %w", declaredName, err)
+			return nil, fmt.Errorf("local Python override %q source manifest: %w", override.Distribution, err)
 		}
-		sources = append(sources, PythonWorkspaceSource{
-			Distribution: normalized, HostDir: hostDir,
+		sources = append(sources, PythonLocalSource{
+			Distribution: override.Distribution, HostDir: hostDir,
 			Manifest: manifest, SourceManifestDigest: digest,
 		})
 	}
-	sort.Slice(sources, func(left int, right int) bool {
-		return sources[left].Distribution < sources[right].Distribution
-	})
 	return sources, nil
 }
 

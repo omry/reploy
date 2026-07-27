@@ -360,6 +360,26 @@ func TestInterpreterVersionSatisfiesObservedRuntime(t *testing.T) {
 	}
 }
 
+func TestInspectPreparedWheelDistributionsV1ReturnsSortedValidatedClosure(t *testing.T) {
+	dir := t.TempDir()
+	writeTestWheel(t, dir, "zeta-2-py3-none-any.whl", "zeta", "2", nil)
+	writeTestWheel(t, dir, "alpha-1-py3-none-any.whl", "Alpha", "1", nil)
+	distributions, err := InspectPreparedWheelDistributionsV1(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(distributions, []string{"alpha", "zeta"}) {
+		t.Fatalf("distributions = %#v", distributions)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "unexpected.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InspectPreparedWheelDistributionsV1(context.Background(), dir); err == nil ||
+		!strings.Contains(err.Error(), `unexpected entry "unexpected.txt"`) {
+		t.Fatalf("unexpected-entry error = %v", err)
+	}
+}
+
 func writeTestWheel(t *testing.T, dir string, filename string, name string, version string, scripts map[string]string) {
 	t.Helper()
 	file, err := os.Create(filepath.Join(dir, filename))

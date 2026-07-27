@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/omry/reploy/internal/blueprint"
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
 	"github.com/omry/reploy/internal/providerstore"
 )
@@ -83,15 +82,15 @@ func TestPublishBuiltPythonSourceWheelsRejectsWrongDistribution(t *testing.T) {
 
 func stageSourceWheelTestSnapshot(t *testing.T, prepared PreparedPythonResolverArtifacts, distribution string) []PreparedPythonSourceSnapshot {
 	t.Helper()
-	sources := sourceWheelTestWorkspaceSources(t, distribution)
-	snapshots, err := StagePythonWorkspaceSourceSnapshots(prepared, sources)
+	sources := sourceWheelTestLocalSources(t, distribution)
+	snapshots, err := StagePythonLocalSourceSnapshots(prepared, sources)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return snapshots
 }
 
-func sourceWheelTestWorkspaceSources(t *testing.T, distribution string) []PythonWorkspaceSource {
+func sourceWheelTestLocalSources(t *testing.T, distribution string) []PythonLocalSource {
 	t.Helper()
 	workspace := t.TempDir()
 	sourceDir := filepath.Join(workspace, "source")
@@ -101,12 +100,12 @@ func sourceWheelTestWorkspaceSources(t *testing.T, distribution string) []Python
 	if err := os.WriteFile(filepath.Join(sourceDir, "pyproject.toml"), []byte("[build-system]\nrequires = []\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	document := blueprint.Document{Environment: blueprint.Environment{Workspace: blueprint.Workspace{
-		PythonPackages: map[string]string{distribution: "source"},
-	}}}
-	sources, err := ResolvePythonWorkspaceSources(document, workspace)
+	manifest, digest, err := ObservePythonSourceManifest(sourceDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return sources
+	return []PythonLocalSource{{
+		Distribution: distribution, HostDir: sourceDir,
+		Manifest: manifest, SourceManifestDigest: digest,
+	}}
 }

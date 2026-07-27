@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -20,6 +21,8 @@ func TestRunProviderUninstallAdmitsBeforeExecutionAndCompletes(t *testing.T) {
 		t.Fatal(err)
 	}
 	order := []string{}
+	var progress bytes.Buffer
+	var details ProviderUninstallResultV1
 	lease := new(deploy.ControlLeaseV1)
 	backend := providerUninstallRunBackendV1{
 		acquire: deploy.AcquireOperationLock,
@@ -56,12 +59,29 @@ func TestRunProviderUninstallAdmitsBeforeExecutionAndCompletes(t *testing.T) {
 	err := runProviderUninstallV1(t.Context(), ProviderUninstallInputV1{
 		DeploymentDir: dir, Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux},
 		ControlMode: ControlAdmissionDrainV1,
+		RunOptions:  RunOptions{Progress: &progress},
+		result:      &details,
 	}, backend)
 	if err != nil {
 		t.Fatalf("run uninstall: %v", err)
 	}
 	if got := strings.Join(order, ","); got != "plan,admit,execute,complete" {
 		t.Fatalf("order = %s", got)
+	}
+	if details.Environment != "demo" || details.DeploymentDir != dir ||
+		details.Service != "demo" || details.RemovedDirectory ||
+		!details.RetainedDirectory {
+		t.Fatalf("uninstall result details = %#v", details)
+	}
+	for _, step := range []string{
+		"planning uninstall",
+		"stopping installed service",
+		"removing runtime resources",
+		"retaining installation directory",
+	} {
+		if !strings.Contains(progress.String(), step) {
+			t.Fatalf("uninstall progress missing %q:\n%s", step, progress.String())
+		}
 	}
 }
 

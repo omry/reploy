@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"reflect"
@@ -13,11 +14,13 @@ import (
 
 func TestInstallProviderV1MapsPublicOptions(t *testing.T) {
 	runtime := StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 12, GID: 34}
+	var progress bytes.Buffer
 	var captured ProviderInstallInputV1
 	err := installProviderV1(InstallOptions{
 		Dir: "/staging", Target: "/installed", ControlMode: ControlAdmissionDrainV1,
 		Scope: InstallScopeSystem, Service: "demo", PortOverrides: []PortOverride{{Name: "web", HostPort: "8080"}},
-		Replace: []string{"config"}, Clean: true, Start: true, Stdout: io.Discard, DockerPreflightTimeout: 7 * time.Second,
+		Replace: []string{"config"}, Clean: true, Start: true, Stdout: io.Discard,
+		Progress: &progress, DockerPreflightTimeout: 7 * time.Second,
 	}, providerInstallPublicBackendV1{
 		runtime: func() (StagedProviderBuildRuntimeV1, error) { return runtime, nil },
 		install: func(ctx context.Context, input ProviderInstallInputV1) (deploy.StateV1, error) {
@@ -40,7 +43,8 @@ func TestInstallProviderV1MapsPublicOptions(t *testing.T) {
 	if !reflect.DeepEqual(captured.PortOverrides, []PortOverride{{Name: "web", HostPort: "8080"}}) || !reflect.DeepEqual(captured.Replace, []string{"config"}) || !captured.Clean || !captured.Start {
 		t.Fatalf("install content options = %#v", captured)
 	}
-	if captured.RunOptions.Stdout != io.Discard || captured.RunOptions.Stderr != io.Discard || captured.RunOptions.DockerPreflightTimeout != 7*time.Second {
+	if captured.RunOptions.Stdout != io.Discard || captured.RunOptions.Stderr != io.Discard ||
+		captured.RunOptions.Progress != &progress || captured.RunOptions.DockerPreflightTimeout != 7*time.Second {
 		t.Fatalf("install run options = %#v", captured.RunOptions)
 	}
 }

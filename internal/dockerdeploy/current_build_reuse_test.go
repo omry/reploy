@@ -55,6 +55,11 @@ func TestCurrentBuildMatchesInvalidatesEverySemanticBoundary(t *testing.T) {
 			}})
 			refreshCurrentBuildReuseGeneration(t, current)
 		}},
+		{name: "package overrides", mutate: func(_ *CurrentBuild, input *CurrentBuildReuseInput) {
+			input.PackageOverrides.Choices = []deploy.PackageOverrideIntentChoiceV1{{
+				Provider: "python", Package: "demo", Kind: "version", Version: "2",
+			}}
+		}},
 		{name: "base", mutate: func(_ *CurrentBuild, input *CurrentBuildReuseInput) {
 			input.Base.ConfigDigest = rendererDigest("f")
 			input.Base.ImmutableReference = string(input.Base.ConfigDigest)
@@ -71,18 +76,6 @@ func TestCurrentBuildMatchesInvalidatesEverySemanticBoundary(t *testing.T) {
 				t.Fatalf("matched=%v error=%v", matched, err)
 			}
 		})
-	}
-}
-
-func TestCurrentBuildMatchesIgnoresUnusedWorkspaceLocators(t *testing.T) {
-	current, input := currentBuildReuseFixture(t)
-	input.Document.Environment.Workspace = blueprint.Workspace{
-		Root: "/new/checkout", PythonPackages: map[string]string{"unused": "package"},
-	}
-	current.State.Blueprint = testResolvedBlueprintV1(t, input.Document)
-	matched, err := CurrentBuildMatches(current, input)
-	if err != nil || !matched {
-		t.Fatalf("matched=%v error=%v", matched, err)
 	}
 }
 
@@ -164,7 +157,8 @@ func currentBuildReuseFixture(t *testing.T) (CurrentBuild, CurrentBuildReuseInpu
 		t.Fatal(err)
 	}
 	input := CurrentBuildReuseInput{
-		ResolvedRequest: request, Overlay: overlay, Base: lock.Base, Document: document, DockerPlan: dockerPlan,
+		ResolvedRequest: request, Overlay: overlay, PackageOverrides: lock.PackageOverrides,
+		Base: lock.Base, Document: document, DockerPlan: dockerPlan,
 	}
 	lockDigest, err := deploy.BuildLockDigestV1(lock, registry.ValidateRequirementProfileV1)
 	if err != nil {

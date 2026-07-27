@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -10,10 +11,10 @@ import (
 )
 
 func TestPlanLiveRunConcurrencyV1AppliesBlueprintPolicy(t *testing.T) {
-	readOnly := DockerExecutionPlan{Mounts: []MountExecutionPlan{{Name: "config", ReadOnly: true}}}
+	readOnly := DockerExecutionPlan{Mounts: []MountExecutionPlan{{Name: "config", Target: "/conf", ReadOnly: true}}}
 	writable := DockerExecutionPlan{Mounts: []MountExecutionPlan{
-		{Name: "data", ReadOnly: false},
-		{Name: "config", ReadOnly: false},
+		{Name: "data", Target: "/data", ReadOnly: false},
+		{Name: "config", Target: "/conf", ReadOnly: false},
 	}}
 	tests := []struct {
 		name     string
@@ -36,6 +37,9 @@ func TestPlanLiveRunConcurrencyV1AppliesBlueprintPolicy(t *testing.T) {
 			}
 			if decision.AllowsOverlap != test.overlap || decision.WritableMount != test.conflict {
 				t.Fatalf("decision = %#v", decision)
+			}
+			if test.name == "auto with writable mounts" && !reflect.DeepEqual(decision.WritablePaths, []string{"/conf", "/data"}) {
+				t.Fatalf("writable paths = %#v", decision.WritablePaths)
 			}
 		})
 	}
@@ -68,7 +72,7 @@ func TestPlanLiveRunConcurrencyV1TreatsOutputDirectoryAsSharedAndOutputFileAsPri
 		conflict string
 	}{
 		{name: "none", overlap: true},
-		{name: "directory", output: &transientOutputMount{Variable: runtimeOutputDirectoryVariable}, conflict: "--output-dir"},
+		{name: "directory", output: &transientOutputMount{Variable: runtimeOutputDirectoryVariable, ContainerPath: runtimeOutputRoot}, conflict: "--output-dir"},
 		{name: "file", output: &transientOutputMount{Variable: runtimeOutputFileVariable}, overlap: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {

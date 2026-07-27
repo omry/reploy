@@ -21,6 +21,32 @@ func TestPreparedPythonNodeOperationsResolvesAndIngestsWheelsInSession(t *testin
 	descriptor := testProbeImageDescriptor(t, "linux/amd64")
 	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
 	request := preparedPythonResolveRequest(t, descriptor)
+	requirement, err := pythonprovider.CanonicalPackageRequestV1("demo-server==1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestWithUnused, err := pythonprovider.CanonicalProviderRequestV1(pythonprovider.PythonProviderRequestV1{
+		Component:    "application",
+		Interpreter:  blueprint.CommandRequirement{Command: "python", Version: ">=3.11", Supplier: "base"},
+		Requirements: []providers.CanonicalPackageRequest{requirement},
+		Overrides: []pythonprovider.PythonPackageOverrideV1{
+			{Distribution: "demo-server", Kind: "local"},
+			{Distribution: "unused", Kind: "local"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Plan.Nodes = append([]providers.NodeSpec{}, request.Plan.Nodes...)
+	for index := range request.Plan.Nodes {
+		if request.Plan.Nodes[index].ID != request.NodeID {
+			continue
+		}
+		request.Plan.Nodes[index].Request = requestWithUnused
+		request.Plan.Nodes[index].Requirements.ProviderData = providers.CanonicalProviderData{
+			Schema: requestWithUnused.Schema, Value: requestWithUnused.Value,
+		}
+	}
 	interpreterObservation := pythonConsumerObservation("interpreter", "/usr/bin/python3")
 	interpreterResponse := probe.ResponseV1{Schema: probe.ResponseSchemaV1, Observations: []probe.ExecutableObservationV1{interpreterObservation}}
 	artifacts := testPreparedPythonResolverArtifacts(t)
@@ -45,8 +71,11 @@ func TestPreparedPythonNodeOperationsResolvesAndIngestsWheelsInSession(t *testin
 			Profile: pythonprovider.ValidateRequirementProfileV1,
 			Bundle:  pythonprovider.ValidateResolvedBundlePayloadV1,
 		},
-		FinalImageConfig:  pythonConsumerTestImageConfig(),
-		Artifacts:         artifacts,
+		FinalImageConfig: pythonConsumerTestImageConfig(),
+		Artifacts:        artifacts,
+		LocalOverrides: []PythonLocalOverrideV1{{
+			Distribution: "unused", HostDir: filepath.Join(t.TempDir(), "missing"),
+		}},
 		verifiedArtifacts: map[canonical.Digest]string{rendererDigest("f"): "/stale/cache/path"},
 	}
 	resolution, _, err := operations.resolveFresh(context.Background(), session, request)
@@ -141,6 +170,7 @@ func TestPreparedPythonNodeOperationsExcludesCorruptReusableWheelBeforePip(t *te
 	request.ReusableArtifacts = []providerstore.StoreObjectRef{reference}
 	operations := PreparedPythonNodeOperations{
 		Store: store, ReusableWheels: []providerstore.ArtifactDescriptor{wheel}, Artifacts: artifacts,
+		LocalOverrides: []PythonLocalOverrideV1{},
 		Validators: providers.ProviderOwnerValidators{
 			Profile: pythonprovider.ValidateRequirementProfileV1, Bundle: pythonprovider.ValidateResolvedBundlePayloadV1,
 		},
@@ -157,7 +187,7 @@ func TestPreparedPythonNodeOperationsExcludesCorruptReusableWheelBeforePip(t *te
 	}
 	pipCalls := 0
 	for _, command := range *commands {
-		if containsInOrder(command.Args, []string{"-m", "pip"}) {
+		if containsInOrder(command.Args, []string{"--wheel-dir", pythonResolverOutputContainerDir}) {
 			pipCalls++
 		}
 	}
@@ -166,7 +196,7 @@ func TestPreparedPythonNodeOperationsExcludesCorruptReusableWheelBeforePip(t *te
 	}
 }
 
-func TestPreparedPythonNodeOperationsBuildsAndSelectsWorkspaceSource(t *testing.T) {
+func TestPreparedPythonNodeOperationsBuildsOnlySelectedLocalSource(t *testing.T) {
 	descriptor := testProbeImageDescriptor(t, "linux/amd64")
 	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
 	request := preparedPythonResolveRequest(t, descriptor)
@@ -181,7 +211,7 @@ func TestPreparedPythonNodeOperationsBuildsAndSelectsWorkspaceSource(t *testing.
 		t.Fatal(err)
 	}
 	defer cleanup()
-	snapshots := stageSourceWheelTestSnapshot(t, artifacts, "demo-server")
+	localSources := sourceWheelTestLocalSources(t, "demo-server")
 	workCalls := 0
 	commands := stubPythonInterpreterSelectionCommands(t, mustCanonicalProbeResponse(t, interpreterResponse), []string{"3.13.2\n"}, func() error {
 		workCalls++
@@ -203,12 +233,18 @@ func TestPreparedPythonNodeOperationsBuildsAndSelectsWorkspaceSource(t *testing.
 	}
 	session.observations[pythonCarrierRequirementID] = pythonConsumerObservation(pythonCarrierRequirementID, pythonCarrierPath)
 	session.observations[pythonLauncherRequirementID] = pythonConsumerObservation(pythonLauncherRequirementID, pythonLauncherPath)
+	var progress strings.Builder
 	operations := PreparedPythonNodeOperations{
-		Store: store, Artifacts: artifacts, SourceSnapshots: snapshots,
+		Store: store, Artifacts: artifacts,
+		LocalOverrides: []PythonLocalOverrideV1{
+			{Distribution: "demo-server", HostDir: localSources[0].HostDir},
+			{Distribution: "unused", HostDir: filepath.Join(t.TempDir(), "missing")},
+		},
 		Validators: providers.ProviderOwnerValidators{
 			Profile: pythonprovider.ValidateRequirementProfileV1, Bundle: pythonprovider.ValidateResolvedBundlePayloadV1,
 		},
 		FinalImageConfig: pythonConsumerTestImageConfig(),
+		Progress:         &progress,
 	}
 	resolution, _, err := operations.resolveFresh(context.Background(), session, request)
 	if err != nil {
@@ -220,13 +256,33 @@ func TestPreparedPythonNodeOperationsBuildsAndSelectsWorkspaceSource(t *testing.
 	if workCalls != 2 {
 		t.Fatalf("source build and resolver calls = %d, commands = %#v", workCalls, *commands)
 	}
+	pipCalls := 0
+	for _, command := range *commands {
+		if containsInOrder(command.Args, []string{"--wheel-dir", pythonResolverOutputContainerDir}) {
+			pipCalls++
+		}
+	}
+	if pipCalls != 1 {
+		t.Fatalf("pip calls = %d, commands = %#v", pipCalls, *commands)
+	}
 	if len(resolution.SelectedSources) != 1 || resolution.SelectedSources[0].LogicalPackage != "demo-server" ||
-		resolution.SelectedSources[0].SourceManifestDigest != snapshots[0].SourceManifestDigest {
+		resolution.SelectedSources[0].SourceManifestDigest != localSources[0].SourceManifestDigest {
 		t.Fatalf("selected sources = %#v", resolution.SelectedSources)
 	}
 	if len(resolution.Bundle.Payload.SelectedSources) != 1 ||
 		resolution.Bundle.Payload.SelectedSources[0].ArtifactDigest != resolution.SelectedSources[0].ArtifactDigest {
 		t.Fatalf("bundle selected sources = %#v", resolution.Bundle.Payload.SelectedSources)
+	}
+	if overrides := resolution.Bundle.Payload.Request.Value["overrides"].([]any); len(overrides) != 1 {
+		t.Fatalf("closure-relevant bundle overrides = %#v", overrides)
+	}
+	for _, want := range []string{
+		"observing local Python sources demo-server for component application",
+		"building local Python source artifacts demo-server for component application",
+	} {
+		if !strings.Contains(progress.String(), want) {
+			t.Fatalf("progress missing %q:\n%s", want, progress.String())
+		}
 	}
 }
 
@@ -257,6 +313,7 @@ func preparedPythonResolveRequest(t *testing.T, descriptor deploy.ImageDescripto
 		Component:    "application",
 		Interpreter:  blueprint.CommandRequirement{Command: "python", Version: ">=3.11", Supplier: "base"},
 		Requirements: []providers.CanonicalPackageRequest{packageRequest},
+		Overrides:    []pythonprovider.PythonPackageOverrideV1{{Distribution: "demo-server", Kind: "local"}},
 	})
 	if err != nil {
 		t.Fatal(err)

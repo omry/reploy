@@ -25,7 +25,6 @@ type Environment struct {
 	ID              string
 	ControlScript   string
 	Vars            map[string]any
-	Workspace       Workspace
 	Components      map[string]Component
 	AllowConcurrent ConcurrentRunPolicy
 	Terminal        Terminal
@@ -45,11 +44,6 @@ const (
 
 type Terminal struct {
 	ColorEnv string
-}
-
-type Workspace struct {
-	Root           string
-	PythonPackages map[string]string
 }
 
 type ComponentType string

@@ -72,8 +72,9 @@ func (preparer PythonNodePreparer) Prepare(
 		consumer, validateErr := preparer.ValidateCached(ctx, session, request.Resolve, *request.CachedResolution)
 		if validateErr == nil {
 			return providers.GraphNodePreparation{
-				Resolution: *request.CachedResolution,
-				Consumer:   consumer,
+				Resolution:       *request.CachedResolution,
+				Consumer:         consumer,
+				EffectiveRequest: &request.CachedResolution.Bundle.Payload.Request,
 			}, nil
 		}
 		cachedMismatch = validateErr
@@ -95,6 +96,7 @@ func (preparer PythonNodePreparer) Prepare(
 	return providers.GraphNodePreparation{
 		Resolution:       resolution,
 		Consumer:         consumer,
+		EffectiveRequest: &resolution.Bundle.Payload.Request,
 		SourceCandidates: append([]providers.ResolvedSourceInput{}, resolution.SelectedSources...),
 		Refreshed:        request.CachedResolution != nil,
 	}, nil

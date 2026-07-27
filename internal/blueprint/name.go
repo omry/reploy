@@ -44,6 +44,12 @@ func validatePortableName(field string, name string) error {
 	return nil
 }
 
+// ValidateEnvironmentID applies the portable environment identifier grammar
+// at staging-only sidecar boundaries outside this package.
+func ValidateEnvironmentID(field string, name string) error {
+	return validatePortableName(field, name)
+}
+
 func validateProviderIdentifier(field string, name string) error {
 	if !providerIdentifierPattern.MatchString(name) {
 		return fmt.Errorf("%s must match [a-z][a-z0-9_-]*", field)
@@ -58,7 +64,7 @@ func ValidateProviderIdentifier(field string, name string) error {
 }
 
 // ValidatePythonDistributionName applies the Python project-name grammar used
-// by blueprint workspace declarations and provider-owned package identities.
+// by staging package overrides and provider-owned package identities.
 func ValidatePythonDistributionName(field string, name string) error {
 	if !pythonDistributionNamePattern.MatchString(name) {
 		return fmt.Errorf("%s must be a valid Python distribution name using letters, numbers, '.', '_', or '-'", field)
