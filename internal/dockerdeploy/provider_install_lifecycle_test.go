@@ -63,7 +63,7 @@ func lockedLifecycleFixtureV1() (blueprint.Document, DockerExecutionPlan, []prov
 	}
 	plan := DockerExecutionPlan{Phase: blueprint.PhaseStaged, Workload: &WorkloadExecutionPlan{Command: "serve"}}
 	catalog := []providers.RealizedOutput{{
-		SupplierComponent: "application", SupplierNode: "python/application", Name: "demo",
+		SupplierComponent: "application/application/python", SupplierNode: "python/application/application", Name: "demo",
 		Candidate: providers.ExecutableCandidate{InvocationPath: "/opt/demo"},
 		Evidence:  providers.ExecutableEvidence{InvocationPath: "/opt/demo"},
 	}}

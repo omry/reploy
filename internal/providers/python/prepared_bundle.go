@@ -313,7 +313,10 @@ func publishPreparedWheels(
 		for name, entryPoint := range wheel.ConsoleScripts {
 			outputs = append(outputs, PythonConsoleScriptV1{
 				Name: name, Distribution: wheel.Distribution, EntryPoint: entryPoint,
-				Path: InstallRoot + "/" + request.Component + "/bin/" + name,
+				Path: InstallRoot + "/" + blueprint.ContributionRuntimeOwner(
+					request.Component,
+					blueprint.ContributionProviderPython,
+				) + "/bin/" + name,
 			})
 		}
 	}

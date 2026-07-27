@@ -94,7 +94,7 @@ func (requirement CommandRequirement) Validate(field string) error {
 		return fmt.Errorf("%s.version must not contain surrounding whitespace", field)
 	}
 	if requirement.Supplier != "" {
-		if err := validateProviderIdentifier(field+".supplier", requirement.Supplier); err != nil {
+		if err := ValidateContributionReference(field+".supplier", requirement.Supplier); err != nil {
 			return err
 		}
 	}

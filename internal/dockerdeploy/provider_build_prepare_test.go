@@ -90,7 +90,8 @@ func TestPrepareLockedProviderBuildV1StopsBeforeBaseRealizationOnExactReuse(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Reused || result.PreparedBase != nil || result.Current == nil || result.ReusableLock == nil {
+	if !result.Reused || result.PreparedBase != nil || result.Current == nil ||
+		result.ReusableLock == nil || result.PublicationLock == nil {
 		t.Fatalf("result = %#v", result)
 	}
 	if result.Operation != input.Operation || result.Store.Root() != input.Store.Root() || result.Environment != input.Environment || result.DeploymentDir != input.DeploymentDir || !reflect.DeepEqual(result.DockerPlan, input.DockerPlan) {
@@ -130,7 +131,8 @@ func TestPrepareLockedProviderBuildV1ReusesExactValidatedCandidate(t *testing.T)
 		t.Fatal(err)
 	}
 	if !result.Reused || !result.ReusedCandidate || result.PreparedBase != nil ||
-		result.ValidatedCandidate != &candidate || result.ReusableLock == nil {
+		result.ValidatedCandidate != &candidate || result.ReusableLock == nil ||
+		result.PublicationLock == nil {
 		t.Fatalf("result = %#v", result)
 	}
 	if !reflect.DeepEqual(order, []string{

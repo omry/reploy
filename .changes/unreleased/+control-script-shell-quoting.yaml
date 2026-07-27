@@ -1,0 +1,2 @@
+kind: Security
+body: Treat installed control-script paths as literal shell data instead of allowing command expansion.

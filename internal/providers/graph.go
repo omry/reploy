@@ -233,7 +233,7 @@ func validateRealizedCatalogOutput(output RealizedOutput) error {
 	if output.SupplierNode == "" {
 		return fmt.Errorf("supplier node is required")
 	}
-	if err := blueprint.ValidateProviderIdentifier("catalog output component", output.SupplierComponent); err != nil {
+	if err := blueprint.ValidateContributionReference("catalog output contribution", output.SupplierComponent); err != nil {
 		return err
 	}
 	if err := blueprint.ValidateProviderIdentifier("catalog output name", output.Name); err != nil {

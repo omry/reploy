@@ -67,7 +67,8 @@ func withDirectProviderInstallSourceBackendV1(
 	}()
 	deploymentDir := filepath.Join(root, "staging")
 	if _, err := backend.stage(ctx, PackDesiredStateStageInputV1{
-		DeploymentDir: deploymentDir, Pack: input.Pack, ExplicitPlatform: input.ExplicitPlatform, Create: true,
+		DeploymentDir: deploymentDir, Pack: input.Pack, ExplicitPlatform: input.ExplicitPlatform,
+		Create: true, SkipControlSurface: true,
 	}); err != nil {
 		return fmt.Errorf("stage direct provider install source: %w", err)
 	}

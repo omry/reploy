@@ -318,14 +318,25 @@ func BuildResolvedRequestWithPackageOverridesV1(
 	}
 	selectedOptions := make(map[string]map[string]bool)
 	for _, option := range normalizedOverlay.SelectedOptions {
-		if selectedOptions[option.Component] == nil {
-			selectedOptions[option.Component] = map[string]bool{}
+		application := document.Environment.Applications[option.Application]
+		selected := application.Options[option.Option]
+		contributions := []string{}
+		if len(selected.Packages.OS) != 0 {
+			contributions = append(contributions, blueprint.ApplicationContributionID(option.Application, blueprint.ContributionProviderOS))
 		}
-		selectedOptions[option.Component][option.Option] = true
+		if selected.Packages.Python != nil {
+			contributions = append(contributions, blueprint.ApplicationContributionID(option.Application, blueprint.ContributionProviderPython))
+		}
+		for _, contribution := range contributions {
+			if selectedOptions[contribution] == nil {
+				selectedOptions[contribution] = map[string]bool{}
+			}
+			selectedOptions[contribution][option.Option] = true
+		}
 	}
 	directPackages := make(map[string][]providers.CanonicalPackageRequest)
 	for _, request := range normalizedOverlay.DirectPackages {
-		directPackages[request.Component] = append(directPackages[request.Component], request.Package)
+		directPackages[request.Contribution] = append(directPackages[request.Contribution], request.Package)
 	}
 	implicitBasePython := resolvedRequestNeedsImplicitBasePython(document, selectedOptions, directPackages)
 	pythonOverrides := pythonPackageOverridesV1(packageOverrides)
@@ -401,46 +412,13 @@ func documentWithPackageAdditionsV1(
 		packages = append(packages, request)
 	}
 
-	target := ""
-	aptComponents := []string{}
-	for name, component := range document.Environment.Components {
-		if component.Type == blueprint.ComponentTypeAPT {
-			aptComponents = append(aptComponents, name)
-		}
+	document.Environment.Packages.OS = append(
+		append([]blueprint.APTPackageRequest{}, document.Environment.Packages.OS...),
+		packages...,
+	)
+	if err := document.Environment.RebuildProviderContributions(); err != nil {
+		return blueprint.Document{}, err
 	}
-	sort.Strings(aptComponents)
-	if len(aptComponents) != 0 {
-		target = aptComponents[0]
-	} else {
-		target = "os"
-		for suffix := 0; ; suffix++ {
-			if _, exists := document.Environment.Components[target]; !exists {
-				break
-			}
-			target = "reploy_os"
-			if suffix > 0 {
-				target = fmt.Sprintf("reploy_os_%d", suffix+1)
-			}
-		}
-	}
-
-	components := make(map[string]blueprint.Component, len(document.Environment.Components)+1)
-	for name, component := range document.Environment.Components {
-		components[name] = component
-	}
-	component, exists := components[target]
-	if !exists {
-		component = blueprint.Component{
-			Type:    blueprint.ComponentTypeAPT,
-			APT:     &blueprint.APTComponent{},
-			Options: map[string]blueprint.ComponentOption{},
-		}
-	}
-	aptComponent := *component.APT
-	aptComponent.Packages = append(append([]blueprint.APTPackageRequest{}, component.APT.Packages...), packages...)
-	component.APT = &aptComponent
-	components[target] = component
-	document.Environment.Components = components
 	return document, nil
 }
 
@@ -460,19 +438,10 @@ func BuildResolvedRequestWithOverridesV1(
 	if err := deploy.ValidateBaseImageReferenceV1(baseImage); err != nil {
 		return providers.ResolvedRequestV1{}, fmt.Errorf("base image override: %w", err)
 	}
-	base, found := document.Environment.Components["base"]
-	if !found || base.Base == nil {
-		return providers.ResolvedRequestV1{}, fmt.Errorf("base image override requires a base component")
+	document.Environment.Base.Image = baseImage
+	if err := document.Environment.RebuildProviderContributions(); err != nil {
+		return providers.ResolvedRequestV1{}, fmt.Errorf("base image override: %w", err)
 	}
-	components := make(map[string]blueprint.Component, len(document.Environment.Components))
-	for name, component := range document.Environment.Components {
-		components[name] = component
-	}
-	basePayload := *base.Base
-	basePayload.Image = baseImage
-	base.Base = &basePayload
-	components["base"] = base
-	document.Environment.Components = components
 	return BuildResolvedRequestWithPackageOverridesV1(
 		document, overlay, packageOverrides, platform, sources,
 	)
@@ -483,11 +452,11 @@ func resolvedRequestNeedsImplicitBasePython(
 	selected map[string]map[string]bool,
 	direct map[string][]providers.CanonicalPackageRequest,
 ) bool {
-	base := document.Environment.Components["base"]
-	if base.Base == nil {
+	base := document.Environment.Base
+	if base.Image == "" {
 		return false
 	}
-	if _, explicit := base.Base.Exports["python"]; explicit {
+	if _, explicit := base.Exports["python"]; explicit {
 		return false
 	}
 	for name, component := range document.Environment.Components {

@@ -5,6 +5,7 @@ import (
 	"path"
 	"sort"
 
+	"github.com/omry/reploy/internal/blueprint"
 	providerapi "github.com/omry/reploy/internal/providers"
 )
 
@@ -40,7 +41,10 @@ func (ComponentProvider) Materialize(input providerapi.MaterializeInput) (provid
 		return providerapi.MaterializationTransaction{}, fmt.Errorf("Python bundle interpreter does not match its requirement profile")
 	}
 
-	venvRoot := path.Join(InstallRoot, request.Component)
+	venvRoot := path.Join(
+		InstallRoot,
+		blueprint.ContributionRuntimeOwner(request.Component, blueprint.ContributionProviderPython),
+	)
 	venvPython := path.Join(venvRoot, "bin", "python")
 	arguments := []providerapi.TypedArgument{
 		{Kind: providerapi.TypedArgumentValidatedExecutable, ExecutableID: input.Carrier.ID},

@@ -1,0 +1,2 @@
+kind: Fixed
+body: Stop successful portable-tool builds from reporting expected read-only APT lock diagnostics as user warnings.

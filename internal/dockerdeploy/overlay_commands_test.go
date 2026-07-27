@@ -23,16 +23,19 @@ blueprint:
     platforms: [linux/amd64]
 environment:
   id: overlay-test
-  components:
-    base:
-      image: python:3.13-slim
+  base:
+    image: python:3.13-slim
+  applications:
     application:
-      type: python
-      requirements: [demo]
+      packages:
+        python:
+          requirements: [demo]
       options:
         debug:
           description: Install debug support.
-          requirements: [debugpy]
+          packages:
+            python:
+              requirements: [debugpy]
 docker: {}
 `
 
@@ -74,7 +77,7 @@ func TestRequestOverlayOptionCommandsUseLockedBlueprint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Changed || !reflect.DeepEqual(result.Overlay.SelectedOptions, []deploy.QualifiedOption{{Component: "application", Option: "debug"}}) {
+	if !result.Changed || !reflect.DeepEqual(result.Overlay.SelectedOptions, []deploy.QualifiedOption{{Application: "application", Option: "debug"}}) {
 		t.Fatalf("result = %#v", result)
 	}
 	result, err = AddRequestOverlayOptions(context.Background(), dir, []string{"application/debug"})
@@ -95,7 +98,8 @@ func TestRequestOverlayOptionCommandsUseLockedBlueprint(t *testing.T) {
 
 func TestRequestOverlayPackageCommandsStoreTypedIntentOnly(t *testing.T) {
 	dir := writeOverlayCommandDeployment(t)
-	result, err := AddRequestOverlayPackages(context.Background(), dir, "application", []string{"debugpy==1.8.0", "rich>=13"})
+	contribution := "application/application/python"
+	result, err := AddRequestOverlayPackages(context.Background(), dir, contribution, []string{"debugpy==1.8.0", "rich>=13"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,14 +107,14 @@ func TestRequestOverlayPackageCommandsStoreTypedIntentOnly(t *testing.T) {
 		t.Fatalf("result = %#v", result)
 	}
 	for _, request := range result.Overlay.DirectPackages {
-		if request.Component != "application" || request.Package.Schema != pythonprovider.PackageRequestSchemaV1 {
+		if request.Contribution != contribution || request.Package.Schema != pythonprovider.PackageRequestSchemaV1 {
 			t.Fatalf("request = %#v", request)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".reploy", providerstore.StoreDirName)); !os.IsNotExist(err) {
 		t.Fatalf("package intent unexpectedly prepared a bundle: %v", err)
 	}
-	result, err = RemoveRequestOverlayPackages(context.Background(), dir, "application", []string{"debugpy==1.8.0"})
+	result, err = RemoveRequestOverlayPackages(context.Background(), dir, contribution, []string{"debugpy==1.8.0"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +136,7 @@ func TestRequestOverlayInspectionUsesResolvedBlueprintAndCanonicalState(t *testi
 	if _, err := AddRequestOverlayOptions(context.Background(), dir, []string{"application/debug"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := AddRequestOverlayPackages(context.Background(), dir, "application", []string{"rich>=13"}); err != nil {
+	if _, err := AddRequestOverlayPackages(context.Background(), dir, "application/application/python", []string{"rich>=13"}); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := ListRequestOverlay(context.Background(), dir)
@@ -141,7 +145,7 @@ func TestRequestOverlayInspectionUsesResolvedBlueprintAndCanonicalState(t *testi
 	}
 	wantEntries := []RequestOverlayEntry{
 		{Kind: "option", Component: "application", Value: "application/debug"},
-		{Kind: "package", Component: "application", Value: "rich>=13"},
+		{Kind: "package", Component: "application/application/python", Value: "rich>=13"},
 	}
 	if !reflect.DeepEqual(entries, wantEntries) {
 		t.Fatalf("entries = %#v, want %#v", entries, wantEntries)

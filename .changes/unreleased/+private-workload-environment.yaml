@@ -1,0 +1,2 @@
+kind: Added
+body: 'Inject an optional owner-only deployment `.env` into the workload through a metadata-private one-shot runtime channel, with mount isolation and preserve-by-default install updates.'

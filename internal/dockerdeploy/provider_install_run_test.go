@@ -184,8 +184,11 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 			}
 			return want, true, nil
 		},
-		startDestination: func(_ context.Context, _ lockedProviderInstallV1, ready deploy.StateV1) error {
+		startDestination: func(_ context.Context, locked lockedProviderInstallV1, ready deploy.StateV1) error {
 			order = append(order, "start-destination")
+			if locked.DestinationOperation != nil {
+				t.Fatal("service startup must not retain the destination lock")
+			}
 			if ready.Deployment == nil || ready.Deployment.Installation.Status != deploy.InstallationStatusReady {
 				t.Fatalf("started state = %#v", ready)
 			}
@@ -238,7 +241,7 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 	if err != nil || !reflect.DeepEqual(result, want) {
 		t.Fatalf("result=%#v error=%v", result, err)
 	}
-	wantOrder := []string{"acquire-source", "build-source", "acquire-destination", "recover-destination", "prepare-install-account", "plan-installation", "inspect-host-tools", "preflight-destination", "prepare-destination", "admit-install", "stop-destination", "publish", "publish-files", "activate-destination", "mark-ready", "start-destination", "complete-install", "release-source"}
+	wantOrder := []string{"acquire-source", "build-source", "acquire-destination", "recover-destination", "prepare-install-account", "plan-installation", "inspect-host-tools", "preflight-destination", "prepare-destination", "admit-install", "stop-destination", "publish", "publish-files", "activate-destination", "mark-ready", "start-destination", "acquire-destination", "complete-install", "release-source"}
 	if !reflect.DeepEqual(order, wantOrder) {
 		t.Fatalf("order=%v want=%v", order, wantOrder)
 	}

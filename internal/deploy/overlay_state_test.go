@@ -66,13 +66,13 @@ func TestMutateRequestOverlayV1WritesOneValidatedStateTransaction(t *testing.T) 
 	dir := t.TempDir()
 	statePath := writeOverlayTestState(t, dir)
 	result, err := mutateRequestOverlayV1(context.Background(), dir, overlayTestPackageValidator, func(_ blueprint.Document, overlay RequestOverlayV1) (RequestOverlayV1, error) {
-		overlay.SelectedOptions = append(overlay.SelectedOptions, QualifiedOption{Component: "app", Option: "debug"})
+		overlay.SelectedOptions = append(overlay.SelectedOptions, QualifiedOption{Application: "app", Option: "debug"})
 		return overlay, nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Changed || result.Digest == "" || !reflect.DeepEqual(result.Overlay.SelectedOptions, []QualifiedOption{{Component: "app", Option: "debug"}}) {
+	if !result.Changed || result.Digest == "" || !reflect.DeepEqual(result.Overlay.SelectedOptions, []QualifiedOption{{Application: "app", Option: "debug"}}) {
 		t.Fatalf("result = %#v", result)
 	}
 	state := readOverlayTestState(t, statePath)
@@ -128,8 +128,8 @@ func TestMutateRequestOverlayV1FailureLeavesStateUnchanged(t *testing.T) {
 	}
 	_, err = mutateRequestOverlayV1(context.Background(), dir, overlayTestPackageValidator, func(_ blueprint.Document, overlay RequestOverlayV1) (RequestOverlayV1, error) {
 		overlay.SelectedOptions = append(overlay.SelectedOptions,
-			QualifiedOption{Component: "app", Option: "debug"},
-			QualifiedOption{Component: "app", Option: "missing"},
+			QualifiedOption{Application: "app", Option: "debug"},
+			QualifiedOption{Application: "app", Option: "missing"},
 		)
 		return overlay, nil
 	})
@@ -212,7 +212,7 @@ func TestMutateRequestOverlayV1ReplaceFailurePreservesOriginal(t *testing.T) {
 	replaceAtomicStateFile = func(string, string) error { return errors.New("injected replace failure") }
 	t.Cleanup(func() { replaceAtomicStateFile = originalReplace })
 	_, err = mutateRequestOverlayV1(context.Background(), dir, overlayTestPackageValidator, func(_ blueprint.Document, overlay RequestOverlayV1) (RequestOverlayV1, error) {
-		overlay.SelectedOptions = append(overlay.SelectedOptions, QualifiedOption{Component: "app", Option: "debug"})
+		overlay.SelectedOptions = append(overlay.SelectedOptions, QualifiedOption{Application: "app", Option: "debug"})
 		return overlay, nil
 	})
 	if err == nil || !strings.Contains(err.Error(), "injected replace failure") {

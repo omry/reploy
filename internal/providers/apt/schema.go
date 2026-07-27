@@ -36,7 +36,7 @@ func CanonicalProviderRequestV1(request APTProviderRequestV1) (providers.Canonic
 	values := make([]any, 0, len(components))
 	packageDeclarations := map[string][]byte{}
 	for index, component := range components {
-		if err := blueprint.ValidateProviderIdentifier("APT component", component.Component); err != nil {
+		if err := blueprint.ValidateContributionReference("APT contribution", component.Component); err != nil {
 			return providers.CanonicalProviderRequest{}, err
 		}
 		if component.Component == "base" || index > 0 && components[index-1].Component == component.Component {

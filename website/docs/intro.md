@@ -8,8 +8,8 @@ slug: /
 Cross-platform app installs from portable blueprints.
 
 Reploy is an experimental app installer built around portable blueprints. An
-app author writes one blueprint that describes install intent: software
-components, runtime mounts, persistent data, ports, health checks, commands,
+app author writes one blueprint that describes install intent: applications,
+packages, runtime mounts, persistent data, ports, health checks, commands,
 install targets, and success output. Reploy maps that blueprint onto the
 current host's staging, test, install, update, and uninstall flow.
 
@@ -67,12 +67,12 @@ reploy stage omegaconf-inspector-demo
 # Resolve packages, build the image, and validate it.
 reploy build
 
-# Create and validate the demo service config.
-reploy app config init
-reploy app config check
+# Create and validate the demo service config through the staged app command.
+./reploy-staging/omegaconf-inspector config init
+./reploy-staging/omegaconf-inspector config check
 
 # Start the staged app.
-reploy up
+./reploy-staging/omegaconf-inspector up
 
 # Run the blueprint-defined checks against staging.
 reploy test
@@ -82,6 +82,7 @@ Then install from the tested staging state:
 
 ```bash
 reploy install --scope user --to "$PWD/omegaconf-inspector-installed"
+./omegaconf-inspector-installed/omegaconf-inspector status
 ```
 
 The blueprint defines default install values such as the target path and

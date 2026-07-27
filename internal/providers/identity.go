@@ -82,7 +82,7 @@ func ValidateResolvedRequestV1(request ResolvedRequestV1, validateOwner Resolved
 		if index > 0 && request.Components[index-1].Component >= component.Component {
 			return fmt.Errorf("resolved request components must be unique and sorted by component name")
 		}
-		if err := blueprint.ValidateProviderIdentifier("resolved request component", component.Component); err != nil {
+		if err := blueprint.ValidateContributionReference("resolved request contribution", component.Component); err != nil {
 			return err
 		}
 		if err := validateComponentProvider(component.Provider); err != nil {
@@ -121,7 +121,7 @@ func ValidateResolvedSourceInput(source ResolvedSourceInput) error {
 	if source.Schema != ResolvedSourceInputSchemaV2 {
 		return fmt.Errorf("resolved source input schema must be %q", ResolvedSourceInputSchemaV2)
 	}
-	if err := blueprint.ValidateProviderIdentifier("resolved source component", source.Component); err != nil {
+	if err := blueprint.ValidateContributionReference("resolved source contribution", source.Component); err != nil {
 		return err
 	}
 	if source.Component == "base" {
@@ -226,11 +226,15 @@ func validateResolvableNodeID(id NodeID) error {
 	if id == "apt" {
 		return nil
 	}
-	component, ok := strings.CutPrefix(string(id), "python/")
-	if !ok || component == "" || component == "base" {
-		return fmt.Errorf("resolver node ID must be %q or python/<component>", "apt")
+	applicationID, ok := strings.CutPrefix(string(id), "python/")
+	if !ok || applicationID == "" || applicationID == "base" {
+		return fmt.Errorf("resolver node ID must be %q, python/<component>, or python/application/<application>", "apt")
 	}
-	return blueprint.ValidateProviderIdentifier("resolver node component", component)
+	application, ok := strings.CutPrefix(applicationID, "application/")
+	if ok && !strings.Contains(application, "/") {
+		return blueprint.ValidateProviderIdentifier("resolver node application", application)
+	}
+	return blueprint.ValidateProviderIdentifier("resolver node component", applicationID)
 }
 
 func isNonemptyPlainString(value string) bool {

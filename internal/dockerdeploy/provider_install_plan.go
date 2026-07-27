@@ -81,6 +81,16 @@ func planProviderInstallationV1(ctx context.Context, input providerInstallPlanni
 	if err != nil {
 		return providerInstallationPlanV1{}, fmt.Errorf("plan installed path updates: %w", err)
 	}
+	for _, action := range pathUpdates {
+		if action.Kind != PathPreservePrivateEnv && action.Kind != PathReplacePrivateEnv {
+			continue
+		}
+		if err := validatePrivateWorkloadEnvironmentIsolationV1ForPlan(destinationDir, dockerPlan); err != nil {
+			return providerInstallationPlanV1{}, err
+		}
+		dockerPlan.PrivateEnvironment = true
+		break
+	}
 	if dockerPlan.Workload != nil {
 		command, err := resolveLockedEnvironmentCommandForPlanV1(document, input.SourceBuild.Lock.Catalog, dockerPlan, dockerPlan.Workload.Command, nil)
 		if err != nil {

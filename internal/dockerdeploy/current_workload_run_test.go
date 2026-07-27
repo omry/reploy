@@ -50,6 +50,60 @@ func TestRunCurrentWorkloadV1OrdersPrecheckPublicationFinalGateAndLaunch(t *test
 	}
 }
 
+func TestRunCurrentWorkloadV1KeepsPrivateEnvironmentOutOfPublishedStateAndPassesItOnlyToLaunch(t *testing.T) {
+	dir := t.TempDir()
+	current, _ := runtimeCurrentBuildFixture(t)
+	document, err := blueprint.DecodeResolvedDocumentV1(current.State.Blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.Environment.Workload = &blueprint.Workload{Command: "serve"}
+	current.State.Blueprint, err = blueprint.EncodeResolvedDocumentV1(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planned := CurrentRuntimePlanV1{
+		Document: document,
+		Docker: DockerExecutionPlan{
+			EnvironmentID: "demo", Phase: blueprint.PhaseStaged, Image: current.Generation.Reference,
+			ContainerName: "demo", NetworkName: "demo", Workload: &WorkloadExecutionPlan{Command: "serve"},
+		},
+	}
+	private := privateWorkloadEnvironmentV1{
+		Present: true,
+		Payload: []byte("TOKEN=private-value\n\n"),
+		Raw:     []byte("TOKEN=private-value\n"),
+	}
+	order := []string{}
+	backend := currentWorkloadRunTestBackend(t, dir, current, planned, &order)
+	backend.privateEnvironment = func(gotDir string) (privateWorkloadEnvironmentV1, error) {
+		if gotDir != dir {
+			t.Fatalf("private environment dir = %q", gotDir)
+		}
+		return private, nil
+	}
+	backend.publishInputs = func(_ *deploy.OperationLock, _ string, plan CurrentRuntimePlanV1) (bool, error) {
+		order = append(order, "publish")
+		if !plan.Docker.PrivateEnvironment {
+			t.Fatal("published Compose plan did not enable the private launcher")
+		}
+		return true, nil
+	}
+	backend.runLifecycle = func(_ context.Context, input CurrentWorkloadLifecycleInputV1) error {
+		order = append(order, "lifecycle "+input.Action)
+		if !reflect.DeepEqual(input.PrivateEnvironment, private) {
+			t.Fatalf("lifecycle private environment = %#v", input.PrivateEnvironment)
+		}
+		return nil
+	}
+	if err := runCurrentWorkloadV1(t.Context(), CurrentWorkloadRunInputV1{
+		DeploymentDir: dir, Action: "up",
+		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1000, GID: 1000},
+	}, backend); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunCurrentWorkloadV1KeepsQueueResponsiveDuringLifecycle(t *testing.T) {
 	dir := t.TempDir()
 	current, _ := runtimeCurrentBuildFixture(t)
@@ -524,5 +578,8 @@ func currentWorkloadRunTestBackend(
 			return nil
 		},
 		startupFailure: runtimePostStartError,
+		privateEnvironment: func(string) (privateWorkloadEnvironmentV1, error) {
+			return privateWorkloadEnvironmentV1{}, nil
+		},
 	}
 }

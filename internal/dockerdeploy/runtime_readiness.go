@@ -201,11 +201,10 @@ func CurrentBuildMatchesRuntimeV1(current CurrentBuild, dockerPlan DockerExecuti
 		return false, nil
 	}
 
-	base := document.Environment.Components["base"]
-	if base.Type != blueprint.ComponentTypeBase || base.Base == nil {
+	if document.Environment.Base.Image == "" {
 		return false, nil
 	}
-	if base.Base.Image != current.Lock.Base.AuthorReference {
+	if document.Environment.Base.Image != current.Lock.Base.AuthorReference {
 		return false, nil
 	}
 

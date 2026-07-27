@@ -14,11 +14,12 @@ type EmbeddedControlMetadataV1 struct {
 	EnvironmentID string
 	ControlScript string
 	SystemdUnit   string
+	Deployed      bool
 }
 
-// LoadEmbeddedControlMetadataV1 reads only the installed state needed by the
-// self-contained control wrapper. A false result means the deployment does not
-// use state-v1.
+// LoadEmbeddedControlMetadataV1 reads only the state needed by a staged or
+// installed self-contained control wrapper. A false result means the
+// deployment does not use state-v1.
 func LoadEmbeddedControlMetadataV1(ctx context.Context, dir string) (metadata EmbeddedControlMetadataV1, found bool, err error) {
 	if ctx == nil {
 		return EmbeddedControlMetadataV1{}, false, fmt.Errorf("load embedded control metadata requires a context")
@@ -50,8 +51,8 @@ func LoadEmbeddedControlMetadataV1(ctx context.Context, dir string) (metadata Em
 	if err != nil {
 		return EmbeddedControlMetadataV1{}, false, err
 	}
-	if !found || state.Deployment == nil {
-		return EmbeddedControlMetadataV1{}, false, fmt.Errorf("embedded control requires an installed state-v1 deployment")
+	if !found {
+		return EmbeddedControlMetadataV1{}, false, fmt.Errorf("embedded control requires a staged or installed state-v1 deployment")
 	}
 	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
 	if err != nil {
@@ -60,12 +61,15 @@ func LoadEmbeddedControlMetadataV1(ctx context.Context, dir string) (metadata Em
 	metadata = EmbeddedControlMetadataV1{
 		EnvironmentID: document.Environment.ID,
 		ControlScript: document.Environment.ControlScript,
+		Deployed:      state.Deployment != nil,
 	}
-	installation := state.Deployment.Installation
-	if strings.TrimSpace(installation.UnitPath) != "" {
-		metadata.SystemdUnit = strings.TrimSpace(installation.Service)
-		if !strings.HasSuffix(metadata.SystemdUnit, ".service") {
-			metadata.SystemdUnit += ".service"
+	if state.Deployment != nil {
+		installation := state.Deployment.Installation
+		if strings.TrimSpace(installation.UnitPath) != "" {
+			metadata.SystemdUnit = strings.TrimSpace(installation.Service)
+			if !strings.HasSuffix(metadata.SystemdUnit, ".service") {
+				metadata.SystemdUnit += ".service"
+			}
 		}
 	}
 	return metadata, true, nil

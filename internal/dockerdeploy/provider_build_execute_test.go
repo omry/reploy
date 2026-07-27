@@ -22,7 +22,7 @@ func TestExecuteLockedProviderBuildV1ReturnsExactReuseWithoutBackendWork(t *test
 		Progress: &progress,
 		Preparation: LockedProviderBuildPreparationV1{
 			Operation: input.Operation, Store: input.Store,
-			Current: &current, ReusableLock: &lock, Reused: true,
+			Current: &current, ReusableLock: &lock, PublicationLock: &lock, Reused: true,
 		},
 	}
 	fail := func() { t.Fatal("exact reuse reached build backend") }
@@ -55,6 +55,67 @@ func TestExecuteLockedProviderBuildV1ReturnsExactReuseWithoutBackendWork(t *test
 	}
 }
 
+func TestExecuteLockedProviderBuildV1RepublishesRuntimeOnlyDocumentUpdate(t *testing.T) {
+	input, _, current, _, _ := providerBuildPreparationFixture(t)
+	reusableLock := current.Lock
+	document, err := blueprint.DecodeResolvedDocumentV1(current.State.Blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.Environment.ControlScript = "updated-control"
+	current.State.Blueprint = testResolvedBlueprintV1(t, document)
+	publicationLock, err := rebindCurrentBuildLockV1(reusableLock, document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantState := current.State
+	published := 0
+	var progress strings.Builder
+	fail := func() { t.Fatal("runtime-only republish reached build backend") }
+	result, err := executeLockedProviderBuildV1(t.Context(), LockedProviderBuildExecutionInputV1{
+		SourceWheels: []providerstore.ArtifactDescriptor{}, LocalOverrides: []PythonLocalOverrideV1{},
+		Progress: &progress,
+		Preparation: LockedProviderBuildPreparationV1{
+			Operation: input.Operation, Store: input.Store, Environment: "current-test",
+			DeploymentDir: input.DeploymentDir, Current: &current,
+			ReusableLock: &reusableLock, PublicationLock: &publicationLock, Reused: true,
+			Loaded: LoadedBuildRequestV1{Document: document},
+		},
+	}, providerBuildExecutionBackend{
+		executeGraph: func(context.Context, PreparedPythonGraphExecutionInput) (providers.GraphExecutionResult, error) {
+			fail()
+			return providers.GraphExecutionResult{}, nil
+		},
+		prepareValidation: func(context.Context, deploy.ImageDescriptor, []providers.RealizedOutput, providers.GraphExecutionResult, deploy.RuntimePolicyV1, bool) (ProviderGraphValidationPlan, error) {
+			fail()
+			return ProviderGraphValidationPlan{}, nil
+		},
+		complete: func(context.Context, *deploy.OperationLock, providerstore.Store, ProviderBuildCompletionInput) (ProviderBuildCompletionResult, error) {
+			fail()
+			return ProviderBuildCompletionResult{}, nil
+		},
+		publishBuild: func(_ context.Context, operation *deploy.OperationLock, store providerstore.Store, got BuildPublicationInput) (deploy.StateV1, error) {
+			published++
+			if operation != input.Operation || store.Root() != input.Store.Root() ||
+				got.Environment != "current-test" || got.DeploymentDir != input.DeploymentDir ||
+				!reflect.DeepEqual(got.Document, document) || !reflect.DeepEqual(got.Lock, publicationLock) {
+				t.Fatalf("publication input = %#v", got)
+			}
+			return wantState, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if published != 1 || !result.Reused || !result.Republished || !reflect.DeepEqual(result.State, wantState) ||
+		!reflect.DeepEqual(result.Lock, publicationLock) {
+		t.Fatalf("published=%d result=%#v", published, result)
+	}
+	if got := progress.String(); got != "reusing current validated image for updated runtime configuration\n" {
+		t.Fatalf("progress = %q", got)
+	}
+}
+
 func TestExecuteLockedProviderBuildV1ValidatesAnExactCurrentBuildWithoutReplacingIt(t *testing.T) {
 	input, _, current, _, _ := providerBuildPreparationFixture(t)
 	lock := current.Lock
@@ -65,7 +126,7 @@ func TestExecuteLockedProviderBuildV1ValidatesAnExactCurrentBuildWithoutReplacin
 		ValidateChoices: true, Progress: &progress,
 		Preparation: LockedProviderBuildPreparationV1{
 			Operation: input.Operation, Store: input.Store, Environment: "demo", DeploymentDir: input.DeploymentDir,
-			Current: &current, ReusableLock: &lock, Reused: true,
+			Current: &current, ReusableLock: &lock, PublicationLock: &lock, Reused: true,
 		},
 	}, providerBuildExecutionBackend{
 		publishValidated: func(_ context.Context, operation *deploy.OperationLock, store providerstore.Store, environment, dir string, got deploy.BuildLockV1, _ ValidatedBuildInputsV1) (deploy.ValidatedBuildV1, error) {
@@ -104,7 +165,7 @@ func TestExecuteLockedProviderBuildV1PromotesAnExactValidatedBuild(t *testing.T)
 		SourceWheels: []providerstore.ArtifactDescriptor{}, LocalOverrides: []PythonLocalOverrideV1{},
 		Preparation: LockedProviderBuildPreparationV1{
 			Operation: input.Operation, Store: input.Store, Environment: "demo", DeploymentDir: input.DeploymentDir,
-			ReusableLock: &lock, Reused: true, ReusedCandidate: true, ValidatedCandidate: &candidate,
+			ReusableLock: &lock, PublicationLock: &lock, Reused: true, ReusedCandidate: true, ValidatedCandidate: &candidate,
 			Loaded: LoadedBuildRequestV1{Document: document},
 		},
 	}, providerBuildExecutionBackend{
@@ -148,7 +209,7 @@ func TestExecuteLockedProviderBuildV1PromotionDefersCleanupWithoutFailingPublish
 		Progress: &progress,
 		Preparation: LockedProviderBuildPreparationV1{
 			Operation: input.Operation, Store: input.Store, Environment: "demo", DeploymentDir: input.DeploymentDir,
-			ReusableLock: &lock, Reused: true, ReusedCandidate: true, ValidatedCandidate: &candidate,
+			ReusableLock: &lock, PublicationLock: &lock, Reused: true, ReusedCandidate: true, ValidatedCandidate: &candidate,
 			Loaded: LoadedBuildRequestV1{Document: document},
 		},
 	}, providerBuildExecutionBackend{
@@ -189,7 +250,7 @@ func TestExecuteLockedProviderBuildV1RetriesPendingCleanupWhenRevalidatingCandid
 		ValidateChoices: true, Progress: &progress,
 		Preparation: LockedProviderBuildPreparationV1{
 			Operation: input.Operation, Store: input.Store, Environment: "demo", DeploymentDir: input.DeploymentDir,
-			ReusableLock: &lock, Reused: true, ReusedCandidate: true, ValidatedCandidate: &candidate,
+			ReusableLock: &lock, PublicationLock: &lock, Reused: true, ReusedCandidate: true, ValidatedCandidate: &candidate,
 		},
 	}, providerBuildExecutionBackend{
 		retryValidatedCleanup: func(context.Context, *deploy.OperationLock, string, string) (deploy.ValidatedBuildV1, bool, error) {

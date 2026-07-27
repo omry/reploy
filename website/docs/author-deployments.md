@@ -4,14 +4,15 @@ sidebar_position: 1
 
 # App Author
 
-An app blueprint describes an environment: its base image, software
-components, published commands, runtime mounts, workload, and install policy.
+An app blueprint describes an environment: its base image, application-owned
+packages, published commands, runtime mounts, workload, and install policy.
 Reploy owns resolution, image construction, validation, runtime wiring, and
 installation.
 
-## Minimal Blueprint
+## Smallest Blueprint
 
-Start with the smallest environment that expresses the app:
+Only format identity, supported platforms, environment identity, and a base
+image are required:
 
 ```yaml
 blueprint:
@@ -22,14 +23,35 @@ blueprint:
 
 environment:
   id: example-app
-  components:
-    base:
-      image: python:3.11-slim
+  base:
+    image: python:3.11-slim
+```
+
+This base-only form can be staged, built, inspected, installed, and opened with
+`reploy shell`. Add applications and commands only when the environment needs
+them.
+
+## Minimal Runnable Python App
+
+```yaml
+blueprint:
+  schema: 1
+  version: 0.1.0
+  compatibility:
+    platforms: [linux/amd64, linux/arm64]
+
+environment:
+  id: example-app
+  base:
+    image: python:3.11-slim
+  applications:
     application:
-      type: python
-      requirements: [example-suite]
+      packages:
+        python:
+          requirements: [example-suite]
       executables:
         server:
+          source: python
           binary: example-server
   commands:
     serve:
@@ -37,16 +59,13 @@ environment:
       argv: [serve]
   workload:
     command: serve
-
-docker:
-  workload: {}
 ```
 
-The base image may already provide Python, or an earlier APT component may
-provide it. Before creating the Python component environment, Reploy verifies
-that the selected interpreter is Python and determines its version. Component
-executables stay with the component that provides them; commands reference them
-as `component.profile`.
+The base image may already provide Python, or the application may request it
+through `packages.os`. Before creating the Python application environment,
+Reploy verifies the selected interpreter and determines its version.
+Executables stay with the application that provides them; commands reference
+them as `application.executable`.
 
 Add only the nodes the app needs. Common additions are:
 
@@ -104,7 +123,7 @@ An override is used only if the blueprint or a dependency actually requires
 that package. Installation consumes the artifacts built during staging and
 does not retain the sidecar or external source paths.
 
-The editor shades explicit component dependencies and lists them before
+The editor shades explicit package dependencies and lists them before
 override-only mappings. It discovers direct dependencies from static Python
 project metadata and from a successful trial build. You may add an
 override-only row for another transitive package, but that row is used only

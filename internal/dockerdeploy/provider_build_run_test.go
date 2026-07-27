@@ -676,10 +676,8 @@ func stageProviderBuildRunState(t *testing.T, workspace bool) (string, blueprint
 	document := blueprint.Document{
 		Blueprint: blueprint.Metadata{Compatibility: blueprint.Compatibility{Platforms: []blueprint.Platform{platform}}},
 		Environment: blueprint.Environment{
-			ID: "demo",
-			Components: map[string]blueprint.Component{
-				"base": {Type: blueprint.ComponentTypeBase, Base: &blueprint.BaseComponent{Image: "debian:13", Exports: map[string]blueprint.BaseExecutableExport{}}},
-			},
+			ID:   "demo",
+			Base: blueprint.BaseComponent{Image: "debian:13", Exports: map[string]blueprint.BaseExecutableExport{}},
 		},
 	}
 	if workspace {
@@ -722,21 +720,18 @@ func providerBuildRunWorkspaceDocument(platform blueprint.Platform) blueprint.Do
 		Blueprint: blueprint.Metadata{Compatibility: blueprint.Compatibility{Platforms: []blueprint.Platform{platform}}},
 		Environment: blueprint.Environment{
 			ID: "demo",
-			Components: map[string]blueprint.Component{
-				"base": {
-					Type: blueprint.ComponentTypeBase,
-					Base: &blueprint.BaseComponent{Image: "debian:13", Exports: map[string]blueprint.BaseExecutableExport{
-						"python": {Executable: "/usr/bin/python3"},
-					}},
-					Options: map[string]blueprint.ComponentOption{},
+			Base: blueprint.BaseComponent{
+				Image: "debian:13", Exports: map[string]blueprint.BaseExecutableExport{
+					"python": {Executable: "/usr/bin/python3"},
 				},
+			},
+			Applications: map[string]blueprint.Application{
 				"application": {
-					Type: blueprint.ComponentTypePython,
-					Python: &blueprint.PythonComponent{
+					Packages: blueprint.ApplicationPackages{Python: &blueprint.PythonComponent{
 						Interpreter:  blueprint.CommandRequirement{Command: "python", Version: ">=3.11", Supplier: "base"},
 						Requirements: []string{"demo-server==1.0"},
-					},
-					Options: map[string]blueprint.ComponentOption{},
+					}},
+					Options: map[string]blueprint.ApplicationOption{},
 				},
 			},
 		},

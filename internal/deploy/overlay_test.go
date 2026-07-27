@@ -16,19 +16,43 @@ func overlayTestDocument() blueprint.Document {
 	if err != nil {
 		panic(err)
 	}
-	return blueprint.Document{
+	document := blueprint.Document{
 		Blueprint: blueprint.Metadata{Compatibility: blueprint.Compatibility{Platforms: []blueprint.Platform{platform}}},
-		Environment: blueprint.Environment{Components: map[string]blueprint.Component{
-			"base": {Type: blueprint.ComponentTypeBase, Base: &blueprint.BaseComponent{Image: "debian:13"}},
-			"app": {
-				Type: blueprint.ComponentTypePython, Python: &blueprint.PythonComponent{Requirements: []string{"demo"}},
-				Options: map[string]blueprint.ComponentOption{"debug": {Description: "Debug", PythonRequirements: []string{"debugpy"}}},
+		Environment: blueprint.Environment{
+			Base:     blueprint.BaseComponent{Image: "debian:13"},
+			Packages: blueprint.EnvironmentPackages{OS: []blueprint.APTPackageRequest{{Name: "curl"}}},
+			Applications: map[string]blueprint.Application{
+				"app": {
+					Packages: blueprint.ApplicationPackages{
+						Python: &blueprint.PythonComponent{Requirements: []string{"demo"}},
+					},
+					Options: map[string]blueprint.ApplicationOption{
+						"debug": {
+							Description: "Debug",
+							Packages: blueprint.ApplicationOptionPackages{
+								Python: &blueprint.PythonOptionPackages{Requirements: []string{"debugpy"}},
+							},
+						},
+					},
+				},
+				"tools": {
+					Packages: blueprint.ApplicationPackages{OS: []blueprint.APTPackageRequest{{Name: "curl"}}},
+					Options: map[string]blueprint.ApplicationOption{
+						"git": {
+							Description: "Git",
+							Packages: blueprint.ApplicationOptionPackages{
+								OS: []blueprint.APTPackageRequest{{Name: "git"}},
+							},
+						},
+					},
+				},
 			},
-			"system": {
-				Type: blueprint.ComponentTypeAPT, APT: &blueprint.APTComponent{Packages: []blueprint.APTPackageRequest{{Name: "curl"}}},
-				Options: map[string]blueprint.ComponentOption{"git": {Description: "Git", APTPackages: []blueprint.APTPackageRequest{{Name: "git"}}}},
-			},
-		}}}
+		},
+	}
+	if err := document.Environment.RebuildProviderContributions(); err != nil {
+		panic(err)
+	}
+	return document
 }
 
 func overlayTestPackageValidator(componentType blueprint.ComponentType, request providers.CanonicalPackageRequest) error {
@@ -81,26 +105,26 @@ func TestNormalizeRequestOverlayV1SortsAndDeduplicates(t *testing.T) {
 	overlay := RequestOverlayV1{
 		Schema: RequestOverlaySchemaV1,
 		SelectedOptions: []QualifiedOption{
-			{Component: "system", Option: "git"},
-			{Component: "app", Option: "debug"},
-			{Component: "app", Option: "debug"},
+			{Application: "tools", Option: "git"},
+			{Application: "app", Option: "debug"},
+			{Application: "app", Option: "debug"},
 		},
 		DirectPackages: []DirectPackageRequest{
-			{Component: "system", Package: aptGit},
-			{Component: "app", Package: pythonDebug},
-			{Component: "system", Package: aptCurl},
-			{Component: "system", Package: aptCurl},
+			{Contribution: "application/tools/os", Package: aptGit},
+			{Contribution: "application/app/python", Package: pythonDebug},
+			{Contribution: "application/tools/os", Package: aptCurl},
+			{Contribution: "application/tools/os", Package: aptCurl},
 		},
 	}
 	normalized, err := NormalizeRequestOverlayV1(overlayTestDocument(), overlay, overlayTestPackageValidator)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantOptions := []QualifiedOption{{Component: "app", Option: "debug"}, {Component: "system", Option: "git"}}
+	wantOptions := []QualifiedOption{{Application: "app", Option: "debug"}, {Application: "tools", Option: "git"}}
 	if !reflect.DeepEqual(normalized.SelectedOptions, wantOptions) {
 		t.Fatalf("selected options = %#v", normalized.SelectedOptions)
 	}
-	if len(normalized.DirectPackages) != 3 || normalized.DirectPackages[0].Component != "app" || normalized.DirectPackages[1].Package.Value["name"] != "curl" || normalized.DirectPackages[2].Package.Value["name"] != "git" {
+	if len(normalized.DirectPackages) != 3 || normalized.DirectPackages[0].Contribution != "application/app/python" || normalized.DirectPackages[1].Package.Value["name"] != "curl" || normalized.DirectPackages[2].Package.Value["name"] != "git" {
 		t.Fatalf("direct packages = %#v", normalized.DirectPackages)
 	}
 	if _, err := RequestOverlayDigestV1(normalized); err != nil {
@@ -116,10 +140,10 @@ func TestNormalizeRequestOverlayV1RejectsInvalidIntent(t *testing.T) {
 		want    string
 	}{
 		{name: "schema", overlay: RequestOverlayV1{Schema: "overlay-v2"}, want: "schema"},
-		{name: "missing component option", overlay: RequestOverlayV1{Schema: RequestOverlaySchemaV1, SelectedOptions: []QualifiedOption{{Component: "missing", Option: "debug"}}}, want: "missing component"},
-		{name: "missing option", overlay: RequestOverlayV1{Schema: RequestOverlaySchemaV1, SelectedOptions: []QualifiedOption{{Component: "app", Option: "missing"}}}, want: "missing option"},
-		{name: "base package", overlay: RequestOverlayV1{Schema: RequestOverlaySchemaV1, DirectPackages: []DirectPackageRequest{{Component: "base", Package: apt}}}, want: "does not support"},
-		{name: "wrong package schema", overlay: RequestOverlayV1{Schema: RequestOverlaySchemaV1, DirectPackages: []DirectPackageRequest{{Component: "app", Package: apt}}}, want: "requires package schema"},
+		{name: "missing application option", overlay: RequestOverlayV1{Schema: RequestOverlaySchemaV1, SelectedOptions: []QualifiedOption{{Application: "missing", Option: "debug"}}}, want: "missing application"},
+		{name: "missing option", overlay: RequestOverlayV1{Schema: RequestOverlaySchemaV1, SelectedOptions: []QualifiedOption{{Application: "app", Option: "missing"}}}, want: "missing option"},
+		{name: "base package", overlay: RequestOverlayV1{Schema: RequestOverlaySchemaV1, DirectPackages: []DirectPackageRequest{{Contribution: "base", Package: apt}}}, want: "does not support"},
+		{name: "wrong package schema", overlay: RequestOverlayV1{Schema: RequestOverlaySchemaV1, DirectPackages: []DirectPackageRequest{{Contribution: "application/app/python", Package: apt}}}, want: "requires package schema"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := NormalizeRequestOverlayV1(overlayTestDocument(), test.overlay, overlayTestPackageValidator)
@@ -135,10 +159,10 @@ func TestRequestOverlayDigestV1RejectsNoncanonicalCollections(t *testing.T) {
 	aptGit := providers.CanonicalPackageRequest{Schema: "apt-package-request-v1", Value: canonical.Object{"name": "git", "exports": []any{}}}
 	for _, overlay := range []RequestOverlayV1{
 		{Schema: RequestOverlaySchemaV1},
-		{Schema: RequestOverlaySchemaV1, SelectedOptions: []QualifiedOption{{Component: "system", Option: "git"}, {Component: "app", Option: "debug"}}, DirectPackages: []DirectPackageRequest{}},
-		{Schema: RequestOverlaySchemaV1, SelectedOptions: []QualifiedOption{{Component: "app", Option: "debug"}, {Component: "app", Option: "debug"}}, DirectPackages: []DirectPackageRequest{}},
-		{Schema: RequestOverlaySchemaV1, SelectedOptions: []QualifiedOption{}, DirectPackages: []DirectPackageRequest{{Component: "system", Package: aptGit}, {Component: "system", Package: aptCurl}}},
-		{Schema: RequestOverlaySchemaV1, SelectedOptions: []QualifiedOption{}, DirectPackages: []DirectPackageRequest{{Component: "system", Package: aptCurl}, {Component: "system", Package: aptCurl}}},
+		{Schema: RequestOverlaySchemaV1, SelectedOptions: []QualifiedOption{{Application: "tools", Option: "git"}, {Application: "app", Option: "debug"}}, DirectPackages: []DirectPackageRequest{}},
+		{Schema: RequestOverlaySchemaV1, SelectedOptions: []QualifiedOption{{Application: "app", Option: "debug"}, {Application: "app", Option: "debug"}}, DirectPackages: []DirectPackageRequest{}},
+		{Schema: RequestOverlaySchemaV1, SelectedOptions: []QualifiedOption{}, DirectPackages: []DirectPackageRequest{{Contribution: "application/tools/os", Package: aptGit}, {Contribution: "application/tools/os", Package: aptCurl}}},
+		{Schema: RequestOverlaySchemaV1, SelectedOptions: []QualifiedOption{}, DirectPackages: []DirectPackageRequest{{Contribution: "application/tools/os", Package: aptCurl}, {Contribution: "application/tools/os", Package: aptCurl}}},
 	} {
 		if _, err := RequestOverlayDigestV1(overlay); err == nil {
 			t.Fatalf("RequestOverlayDigestV1(%#v) succeeded", overlay)
@@ -149,7 +173,7 @@ func TestRequestOverlayDigestV1RejectsNoncanonicalCollections(t *testing.T) {
 func TestRequestOverlayDigestV1ChangesWithIntent(t *testing.T) {
 	empty := EmptyRequestOverlayV1()
 	selected := EmptyRequestOverlayV1()
-	selected.SelectedOptions = append(selected.SelectedOptions, QualifiedOption{Component: "app", Option: "debug"})
+	selected.SelectedOptions = append(selected.SelectedOptions, QualifiedOption{Application: "app", Option: "debug"})
 	emptyDigest, err := RequestOverlayDigestV1(empty)
 	if err != nil {
 		t.Fatal(err)

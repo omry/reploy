@@ -259,8 +259,7 @@ func EffectiveBaseImageV1(document blueprint.Document, overrides PackageOverride
 	if err := ValidatePackageOverridesV1(overrides); err != nil {
 		return "", err
 	}
-	base, found := document.Environment.Components["base"]
-	if !found || base.Base == nil || base.Base.Image == "" {
+	if document.Environment.Base.Image == "" {
 		return "", fmt.Errorf("resolved blueprint has no base image")
 	}
 	if overrides.Environment.ID != document.Environment.ID {
@@ -272,7 +271,7 @@ func EffectiveBaseImageV1(document blueprint.Document, overrides PackageOverride
 	if overrides.Environment.Base != nil {
 		return overrides.Environment.Base.Image, nil
 	}
-	return base.Base.Image, nil
+	return document.Environment.Base.Image, nil
 }
 
 // ResolvePackageOverridesV1 interpolates sidecar variables and creates stable

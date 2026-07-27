@@ -49,7 +49,9 @@ type composePlanService struct {
 	ContainerName string             `yaml:"container_name"`
 	User          string             `yaml:"user"`
 	Restart       string             `yaml:"restart,omitempty"`
+	Entrypoint    []string           `yaml:"entrypoint,omitempty,flow"`
 	Command       []string           `yaml:"command,omitempty,flow"`
+	StdinOpen     bool               `yaml:"stdin_open,omitempty"`
 	Volumes       []composePlanMount `yaml:"volumes,omitempty"`
 	Ports         []string           `yaml:"ports,omitempty"`
 	ReadOnly      bool               `yaml:"read_only"`
@@ -64,6 +66,19 @@ type composePlanMount struct {
 	ReadOnly bool   `yaml:"read_only,omitempty"`
 }
 
+const privateWorkloadEnvironmentLauncherV1 = `set -eu
+reploy_private_environment_ready=
+while IFS= read -r reploy_private_environment_line; do
+  if [ -z "$reploy_private_environment_line" ]; then
+    reploy_private_environment_ready=1
+    break
+  fi
+  export "$reploy_private_environment_line"
+done
+[ "$reploy_private_environment_ready" = 1 ] || exit 70
+exec "$@" </dev/null
+`
+
 func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerRenderedInputs, error) {
 	if controlScript == "" {
 		return DockerRenderedInputs{}, fmt.Errorf("control script is required")
@@ -74,6 +89,17 @@ func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerR
 	}
 	if plan.Workload != nil {
 		service.Command = append([]string(nil), plan.Workload.Argv...)
+	}
+	if plan.PrivateEnvironment {
+		if plan.Workload == nil {
+			return DockerRenderedInputs{}, fmt.Errorf("private workload environment injection requires a workload")
+		}
+		if strings.TrimSpace(plan.Restart) != "" && strings.TrimSpace(plan.Restart) != "no" {
+			return DockerRenderedInputs{}, fmt.Errorf("private workload environment injection does not support Docker restart policy %q", plan.Restart)
+		}
+		composeLauncher := strings.ReplaceAll(privateWorkloadEnvironmentLauncherV1, "$", "$$")
+		service.Entrypoint = []string{"/bin/sh", "-c", composeLauncher, "reploy-private-environment"}
+		service.StdinOpen = true
 	}
 	volumes := map[string]any{}
 	for _, mount := range plan.Mounts {

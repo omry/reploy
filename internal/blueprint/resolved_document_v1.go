@@ -57,6 +57,9 @@ func DecodeResolvedDocumentV1(payload ResolvedDocumentV1) (Document, error) {
 	if canonicalPayload != payload {
 		return Document{}, fmt.Errorf("resolved blueprint is not in its canonical wire form")
 	}
+	if err := envelope.Document.Environment.RebuildProviderContributions(); err != nil {
+		return Document{}, fmt.Errorf("rebuild resolved blueprint provider contributions: %w", err)
+	}
 	return envelope.Document, nil
 }
 

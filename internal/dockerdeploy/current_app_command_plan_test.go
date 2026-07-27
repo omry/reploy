@@ -11,18 +11,18 @@ import (
 
 func TestPlanCurrentAppCommandV1MatchesForwardsAndUsesLockedOutput(t *testing.T) {
 	document := commandTestDocument()
-	application := document.Environment.Components["application"]
+	application := document.Environment.Applications["application"]
 	application.Executables["server"] = blueprint.Executable{
-		Binary: "demo", ArgvPrefix: []string{"--prefix"},
+		Source: "python", Binary: "demo", ArgvPrefix: []string{"--prefix"},
 		ArgvSuffix: []string{"phase={{ reploy.phase }}"},
 	}
-	document.Environment.Components["application"] = application
+	document.Environment.Applications["application"] = application
 	plan := CurrentRuntimePlanV1{
 		Document: document,
 		Docker:   DockerExecutionPlan{Phase: blueprint.PhaseInstalled},
 	}
 	catalog := []providers.RealizedOutput{{
-		SupplierComponent: "application", Name: "demo",
+		SupplierComponent: "application/application/python", Name: "demo",
 		Candidate: providers.ExecutableCandidate{InvocationPath: "/opt/demo"},
 		Evidence:  providers.ExecutableEvidence{InvocationPath: "/opt/demo"},
 	}}

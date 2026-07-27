@@ -49,6 +49,31 @@ func TestRunCurrentWorkloadLifecycleV1GatesEveryCreatedContainer(t *testing.T) {
 	}
 }
 
+func TestRunCurrentWorkloadLifecycleV1InjectsBeforeServiceCheck(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = operation.Unlock() })
+	lifecycle := LifecyclePlan{Operations: []LifecycleOperation{{Kind: LifecycleStart, Event: "start"}}}
+	order := []string{}
+	backend := currentWorkloadLifecycleTestBackend(t, lifecycle, &order)
+	private := privateWorkloadEnvironmentV1{Present: true, Payload: []byte("TOKEN=value\n\n")}
+	err = runCurrentWorkloadLifecycleV1(t.Context(), CurrentWorkloadLifecycleInputV1{
+		Operation: operation, Environment: "demo", DeploymentDir: dir, Action: "up",
+		Plan:               CurrentRuntimePlanV1{Docker: DockerExecutionPlan{ContainerName: "demo", PrivateEnvironment: true}},
+		PrivateEnvironment: private,
+	}, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"plan start", "gate workload", "command up", "run compose-up", "inject private environment", "service check"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("private lifecycle order = %v, want %v", order, want)
+	}
+}
+
 func TestRunCurrentWorkloadLifecycleV1DoesNotGateStopButGatesRestartStart(t *testing.T) {
 	dir := t.TempDir()
 	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
@@ -129,7 +154,7 @@ func TestRunCurrentWorkloadLifecycleV1UsesOwnedSystemCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"plan restart", "run /usr/bin/systemctl", "gate workload", "run /usr/bin/systemctl", "service check"}
+	want := []string{"plan restart", "run /usr/bin/systemctl", "run /usr/bin/systemctl", "service check"}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("system lifecycle order = %v, want %v", order, want)
 	}
@@ -342,6 +367,10 @@ func currentWorkloadLifecycleTestBackend(t *testing.T, lifecycle LifecyclePlan, 
 		},
 		runCommand: func(spec CommandSpec, _ RunOptions) error {
 			*order = append(*order, "run "+spec.Name)
+			return nil
+		},
+		inject: func(context.Context, string, string, privateWorkloadEnvironmentV1, RunOptions, commandRunner) error {
+			*order = append(*order, "inject private environment")
 			return nil
 		},
 		readiness: func(ctx context.Context, _ EndpointExecutionPlan, service func(context.Context) error) error {

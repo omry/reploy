@@ -1,7 +1,7 @@
 ---
 status: Active
-updated: 2026-07-25
-summary: Normative blueprint environment, workload, component, lifecycle, and Docker rendering model.
+updated: 2026-07-27
+summary: Normative blueprint environment, workload, application, provider contribution, lifecycle, and Docker rendering model.
 supersedes: docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md
 ---
 
@@ -43,13 +43,13 @@ The Arbiter blueprint makes the boundary problem visible. Arbiter has:
 
 Environment-owned:
 
-- environment id and software components
-- the required `base` root component, including its starting OCI image and
+- environment id, shared packages, and software applications
+- the required `base` root, including its starting OCI image and
   declared executable outputs
 - CLI/terminal integration, such as color environment variables
 - logical runtime paths such as config and data
 - commands
-- component requirements and requested build outputs
+- application package requirements, options, and requested build outputs
 
 Staging-owned developer input:
 
@@ -86,12 +86,14 @@ environment:
   id: example                 # Stable environment and resource name.
   control_script: example     # Optional generated command name; defaults to id.
   vars: {}                    # Blueprint interpolation values.
-  components: {}              # Base image and software requirements.
+  base: {}                    # Required base image root.
+  packages: {}                # Environment-owned package contributions.
+  applications: {}            # Application-owned packages, options, and executables.
   allow_concurrent: auto      # App-command and shell overlap policy.
   terminal: {}                # Terminal/color integration.
   install: {}                 # Installation target, identity, and success output.
   mounts: {}                  # Runtime filesystem contracts.
-  commands: {}                # Public commands using component executables.
+  commands: {}                # Public commands using application executables.
   workload: {}                # Optional persistent primary workload.
 ```
 
@@ -118,7 +120,7 @@ resolve blueprint
 ```
 
 The internal phases are not author-defined lifecycle hooks. Blueprint authors
-provide component, mount, workload, readiness, and lifecycle intent; Reploy and
+provide application, package, mount, workload, readiness, and lifecycle intent; Reploy and
 the selected backend determine how to realize the prerequisite phases. Provider
 graph steps may interleave: a downstream bundle resolver may need a disposable
 resolver container based on an already materialized upstream node. Every
@@ -293,7 +295,7 @@ workload container. `native_command: true` exposes the command in staging and
 source workflows; `deployed_command: true` also exposes the same transient
 command operation through the installed control script.
 
-The environment defines shared identity, paths, commands, and components. Its
+The environment defines shared identity, paths, commands, packages, and applications. Its
 primary workload selects one command and defines the lifecycle and endpoints
 associated with running it. Service-manager installation, restart policy, port
 publication, and other backend mechanics remain backend concerns. Other native
@@ -320,7 +322,7 @@ Environments that need only standalone execution can omit the workload and
 expose native commands.
 
 Container lifecycle is intentionally simple. A change to configuration,
-managed paths, components, executable defaults, or other workload inputs
+managed paths, applications, packages, executable defaults, or other workload inputs
 requires the container to be recreated before the change takes effect. The
 initial model does not
 include change notifications, reload-on-change behavior, resource convergence,
@@ -410,17 +412,17 @@ container. This lets unrelated build and cleanup work proceed while an app
 command or shell is running; the live queue, not the filesystem operation lock,
 owns runtime admission and cancellation.
 
-## Software Components
+## Applications and Provider Contributions
 
-An environment may require software from several ecosystems. `components` is a
-map of named software requirements. Each component contributes packages,
-runtime preparation, or built executables to the same environment. Component
-names give stable references and allow more than one component of the same type
-when needed.
+An environment may require software from several packaging ecosystems.
+`applications` is a map of application-owned package intent. Each application
+keeps its OS packages, Python packages, optional features, and executable
+profiles together under one stable application name. `environment.packages`
+holds shared tools that do not belong to one application.
 
-Every environment has exactly one required root component named `base`. It
+Every environment has exactly one required `base` root. It
 contains the starting OCI image and may declare executable outputs already
-present in that image. It has no `type`, upstream component, provider bundle,
+present in that image. It has no provider key, upstream application, provider bundle,
 or materialization layer. Reploy resolves it first and represents it as the
 lowest node in the provider graph.
 
@@ -432,86 +434,81 @@ Reploy does not search an arbitrary image filesystem, package contents, or
 platform-specific immutable image, Reploy validates these declarations and
 publishes them under qualified identities such as `base.python`.
 
-Every non-base component's `type` selects a software ecosystem or
-package-management stack such as `python`, `go`, `rust`, `apt`, `rpm`, or
-`alpine`.
-The provider is Reploy's internal implementation for materializing that
-component; it is not a blueprint object. Components are declarative, not an
-ordered shell-script sequence. Reploy resolves materialization order from
-provider semantics and explicit dependencies where a component type requires
-them. Incompatible requirements are validation errors rather than
-last-writer-wins behavior. Every component must be compatible with the selected
-backend and runtime.
+Applications own their complete package intent across providers. The initial
+public provider keys are `os` and `python`. `os` selects the implementation
+appropriate for the detected base-image OS; supported Debian-derived images use
+APT. Provider implementations and physical graph nodes are not blueprint
+objects. Reploy combines compatible OS contributions into one transaction while
+retaining their application or environment ownership, and gives each Python
+application its own environment.
 
-A declared component is an independently named, logically owned environment
-unit with its own requirements and output namespace. Provider semantics decide
-whether components receive separate materialization nodes or share a
-transaction node. Optional features that belong to the same logical unit are
-component-scoped options, not additional components:
+Optional features are application-scoped options. One option can contribute
+packages to more than one provider:
 
 ```yaml
 environment:
-  components:
+  applications:
     arbiter:
-      type: python
-      requirements: [arbiter-server]
+      packages:
+        python:
+          requirements: [arbiter-server]
       options:
         imap:
           description: Install the Arbiter IMAP plugin.
-          requirements: [arbiter-imap]
+          packages:
+            os: [libmagic1]
+            python:
+              requirements: [arbiter-imap]
         smtp:
           description: Install the Arbiter SMTP plugin.
-          requirements: [arbiter-smtp]
+          packages:
+            python:
+              requirements: [arbiter-smtp]
 ```
 
-Component, option, and executable-output names use one common provider
+Application, option, and executable-output names use one common provider
 identifier grammar: `[a-z][a-z0-9_-]*`. Names are lowercase ASCII, and `.`,
 `/`, and `,` remain unavailable because they delimit qualified outputs and CLI
-option selections. Component names are unique within the blueprint; option and
-output names are unique within their component. `base` is the required reserved
-root component and cannot be used for another component. The stable qualified
-output identity remains `<component>.<output>`, for example
-`python_env_3.arbiter_server`.
+option selections. Application names are unique within the blueprint; option
+and output names are unique within their application. The stable public
+executable identity is `<application>.<executable>`, for example
+`arbiter.arbiter_server`.
 
-An option has the common `description` field plus only the additive request
-fields defined by its component provider. A Python option contributes
-`requirements`; an APT option contributes `packages`. The provider applies the
-same item grammar and validation used by the owning component. An option cannot
-change `type`, `interpreter`, component identity, or define nested options.
+An option has a required `description` and additive `packages`. It cannot
+change application identity, define nested options, or replace the base image.
 
 `reploy bundle options` lists fully qualified option names. Selection uses a
-component prefix and may group several options for that component:
+application prefix and may group several options for that application:
 
 ```text
 reploy bundle add arbiter/imap,smtp
 reploy bundle remove arbiter/imap
 ```
 
-Several component groups may be supplied as separate arguments. `/` separates
-the component from its option list and `,` separates options; component and
+Several application groups may be supplied as separate arguments. `/` separates
+the application from its option list and `,` separates options; application and
 option names may contain neither character. Reploy normalizes duplicates,
-validates every component and option before changing state, and applies the
+validates every application and option before changing state, and applies the
 entire command atomically.
 
-An enabled option contributes its requirements to the owning component's
-provider resolution, bundle, and materialized environment. Its selection is a
-deployment-local input to that component's identity and does not rewrite the
-blueprint. A disabled option contributes nothing. A separate Python component
-always means a separate venv, including when such a component is used only in
+An enabled option contributes its packages to the owning application's
+provider requests and materialized environment. Its selection is a
+deployment-local input and does not rewrite the blueprint. A disabled option
+contributes nothing. A separate Python application always means a separate
+Python environment, including when that application is used only in
 some blueprints or deployments.
 
 Direct package additions are also deployment-local provider inputs. When
-more than one component could accept an addition, the operation must name its
-target component; a direct addition does not create a public component or
-option object. The public commands are explicit so an addition cannot be
-confused with an option selection:
+more than one contribution could accept an addition, the operation must name
+its canonical contribution identity. A direct addition does not create a
+public application or option object:
 
 ```text
-reploy bundle add-package system jq
-reploy bundle add-package arbiter arbiter-debug==1.2.0
+reploy bundle add-package application/arbiter/os jq
+reploy bundle add-package application/arbiter/python arbiter-debug==1.2.0
 ```
 
-`add-package` accepts one target component followed by one or more
+`add-package` accepts one target contribution followed by one or more
 provider-native root requirements and applies them atomically.
 `remove-package` removes an exact normalized request. Package strings still use
 only the owning provider's public grammar; these commands do not expose raw
@@ -615,7 +612,7 @@ the explicit `exports.python.executable` form. No path search or additional
 probe container is used.
 
 APT output ownership is validated after materialization against the complete
-locked APT node, which is one shared dpkg authority across all APT components.
+locked APT node, which is one shared dpkg authority across all OS contributions.
 Reploy resolves only the already selected path and uses literal `dpkg-query -S`
 to identify its terminal's installed package key, whose exact status tuple must
 appear in the locked closure; it stores no per-root dependency graph. Ordinary
@@ -636,30 +633,24 @@ entries use the same request grammar when adding fields such as exports. The
 complete rules are in
 [the APT package-request contract](APT_PROVIDER.md#apt-package-request-grammar).
 
-Providers define node grouping according to materialization semantics. Each
-Python component represents one independently materialized Python environment
-with its own selected interpreter, closed bundle, venv root, and qualified
-outputs. System-package components may resolve together into one transaction
-node. Providers declare their internal prerequisites; blueprint authors do not
-order layers. Reploy first builds a deterministic structural graph containing
-the base root, provider nodes, and explicit supplier edges, and rejects cycles
-in those known edges. It uses stable component-name ordering where independent
-nodes need a tie-breaker. Immediately before resolving each consumer, Reploy
-starts its resolver on the current immutable prefix. The resolver's first step
-validates unqualified candidates from already initialized suppliers in stable
-order, freezes the first compatible selection before network or source work,
-and adds that edge to the final graph. Automatic edges point to initialized
-nodes and therefore cannot create cycles. Independent artifact builds whose
-selections are already frozen may run concurrently, while final image assembly
-follows deterministic final-graph order.
-
-The current Python implementation has a single aggregated provider node. The
-generalized DAG executor and component-scoped Python nodes must be implemented
-before the schema or runtime accepts multiple independently materialized Python
-environments or a second provider type. It also derives Python executable
-requests from the old environment-wide executable map; the generalized provider
-must instead derive the component's console-script catalog from its exact
-resolved wheel metadata.
+Providers define physical node grouping according to materialization semantics.
+Each application's Python contribution becomes one independently materialized
+Python environment with its own selected interpreter, closed bundle, venv root,
+and qualified outputs. All OS contributions for a supported base resolve
+together into one transaction node while retaining their application or
+environment ownership. Providers declare their internal prerequisites;
+blueprint authors do not order layers. Reploy first builds a deterministic
+structural graph containing the base root, provider nodes, and explicit supplier
+edges, and rejects cycles in those known edges. It uses stable contribution
+ordering where independent nodes need a tie-breaker. Immediately before
+resolving each consumer, Reploy starts its resolver on the current immutable
+prefix. The resolver's first step validates unqualified candidates from already
+initialized suppliers in stable order, freezes the first compatible selection
+before network or source work, and adds that edge to the final graph. Automatic
+edges point to initialized nodes and therefore cannot create cycles.
+Independent artifact builds whose selections are already frozen may run
+concurrently, while final image assembly follows deterministic final-graph
+order.
 
 Every provider declares the tools and runtimes it requires for bundling and
 materialization. Reploy checks those prerequisites before executing the provider.
@@ -669,33 +660,33 @@ DAG. Reploy never installs an undeclared prerequisite automatically. Failures
 name the provider, missing or incompatible requirement, and selected image or
 build environment.
 
-The existing Python-only prototype requires the selected base image to provide
-a compatible Python interpreter. The target v1 design removes that restriction:
-a Python component may select a compatible interpreter from the base or an
-earlier APT node. Future Go or Rust providers may require a compatible toolchain
-or use a provider-owned builder environment. A system-package provider requires
-a compatible base distribution and its package installation tooling.
+An application Python contribution may select a compatible interpreter from the
+base or the same application's OS contribution. Future Go or Rust providers may
+require a compatible toolchain or use a provider-owned builder environment. A
+system-package provider requires a compatible base distribution and its package
+installation tooling.
 
-For every Python component, an omitted `interpreter` field normalizes to the
-logical requirement `{command: python}` with no version or supplier constraint.
-The normal base-first, then provider-graph supplier order selects it. An author
-declares `interpreter` only to constrain the logical version or select a
-supplier. Failure to find a compatible `python` output remains an unsatisfied
-provider prerequisite. Command requirements have no generic capability-name
-list. Each provider validates the fixed prerequisites of its recipe; the Python
-provider proves `venv` support by creating the real component environment.
+For every application Python contribution, an omitted `interpreter` field
+normalizes to the logical requirement `{command: python}` with no version or
+supplier constraint. The normal base-first, then provider-graph supplier order
+selects it. An author declares `interpreter` only to constrain the logical
+version or select `base` or another contribution owned by that application.
+Failure to find a compatible `python` output remains an unsatisfied provider
+prerequisite. Command requirements have no generic capability-name list. Each
+provider validates the fixed prerequisites of its recipe; the Python provider
+proves `venv` support by creating the real application environment.
 
-At most one system-package provider (`apt`, `rpm`, or `alpine`) is allowed in
-an environment, and it must match the base image. Component names are unique
-within a blueprint, and executable output names are unique within their
-component. The stable qualified output identity is
-`<component>.<output>`. Equal local output names across components are valid;
-incompatible executable claims or overlapping exclusive namespaces remain
-validation errors.
+At most one system-package provider (`apt`, `rpm`, or `alpine`) is active in an
+environment, and it must match the base image. Application names are unique
+within a blueprint, and executable profile names are unique within their
+application. Public commands use `<application>.<executable>` identities;
+provider outputs retain canonical owning contribution identities. Equal local
+output names across applications are valid; incompatible executable claims or
+overlapping exclusive namespaces remain validation errors.
 
 Filesystem authority is either exclusive or shared. An exclusive provider owns
 a dedicated root or exact leaf; before creating it Reploy validates the complete
-ancestor chain without following symlinks, requires the component leaf to be
+ancestor chain without following symlinks, requires the contribution leaf to be
 absent, and safely creates the root beneath a missing or previously verified
 Reploy-owned provider hierarchy. Its resulting layer may persist changes only
 inside that namespace by provider recipe contract. V1 validates the declared
@@ -704,8 +695,8 @@ confinement. Python environments use this model.
 
 A shared system-package provider delegates path ownership, upgrades,
 replacement, conffiles, diversions, alternatives, and generated-file semantics
-to its native package manager. All component requirements handled by that
-provider participate in one authority domain; their blueprint names do not own
+to its native package manager. All contributions handled by that provider
+participate in one authority domain; their application names do not own
 individual system files. Reploy does not reconstruct dpkg, RPM, or APK collision
 rules. It rejects archive claims beneath Reploy-protected namespaces before
 installation, validates the package database
@@ -870,29 +861,15 @@ Resolved values are deterministic and cached for the operation.
 ```yaml
 environment:
   # Application runtime requirements.
-  components:
-    # Future system-package provider shape.
-    system:
-      type: apt
-      packages: [ca-certificates, libmagic1]
-
+  packages:
+    os: [ca-certificates]
+  applications:
     application:
-      type: python
-      requirements:
-        - "arbiter-server[imap,smtp]>=1.4"
-
-    mailprobe:
-      type: go
       packages:
-        - module: github.com/example/mailprobe/cmd/mailprobe
-          version: v1.4.0
-
-    message_indexer:
-      type: rust
-      crates:
-        - name: message-indexer
-          version: "0.8.2"
-          binaries: [message-indexer]
+        os: [libmagic1]
+        python:
+          requirements:
+            - "arbiter-server[imap,smtp]>=1.4"
 ```
 
 Python `requirements` use normal Python requirement syntax. The published
@@ -928,9 +905,8 @@ identifier normalization and validates the override forms it supports. The
 common staging schema and precedence rule do not make any provider support a
 local source or upstream-version form that it cannot materialize.
 
-Go components request module packages or local module binaries. Rust components
-request crates or packages from a local Cargo workspace. The blueprint uses the
-ecosystem name `rust`; Cargo is an implementation detail of the Rust provider.
+The same application/package ownership model can be extended to other build
+and packaging systems later.
 
 ## Possible Shape
 
@@ -947,18 +923,20 @@ environment:
   control_script: arbiter
   vars:
     config_name: arbiter-server
-  components:
-    base:
-      image: python:3.11-slim
-      exports:
-        python:
-          executable: /usr/local/bin/python
+  base:
+    image: python:3.11-slim
+    exports:
+      python:
+        executable: /usr/local/bin/python
+  applications:
     application:
-      type: python
-      requirements:
-        - arbiter-server
+      packages:
+        python:
+          requirements:
+            - arbiter-server
       executables:
         arbiter_server:
+          source: python
           binary: arbiter-server
           order: [binary, prefix, command, forwarded, suffix]
           # resolved binary + argv_prefix + command argv + argv_suffix form argv.
@@ -1066,11 +1044,12 @@ docker:
 
 ```
 
-### Component Materialization and Executable Defaults
+### Contribution Materialization and Executable Defaults
 
-`environment.components.base.image` is the author-supplied starting OCI image.
-Reploy resolves the `base` root and its declared outputs before other components,
-then applies selected staging package overrides while resolving provider components through the graph and records
+`environment.base.image` is the author-supplied starting OCI image.
+Reploy resolves the `base` root and its declared outputs before provider
+contributions, then applies selected staging package overrides while resolving
+the provider graph and records
 closed, checksummed artifact sets for the target platform and upstream image
 identity. A provider's bundle resolver may run with network/source access in a
 disposable resolver container based on an earlier materialized node. The
@@ -1079,7 +1058,7 @@ no package-index or source-checkout access. Normal start and restart reuse the
 recorded bundles and image. An explicit `reploy build` performs fresh resolution
 and may produce new bundle fingerprints.
 
-When `environment.components.base.image` is a mutable tag, `reploy build`
+When `environment.base.image` is a mutable tag, `reploy build`
 resolves it to an immutable digest and records that digest as the base-layer
 input. A provider node's semantic bundle identity covers its resolved bundle
 section, relevant overridden-source artifacts, target platform, provider recipe
@@ -1254,8 +1233,8 @@ A provider prerequisite is validated on the immediate prefix as the first step
 inside its consumer, and a later consumer validates again inside its own
 operation. A cached-bundle mismatch exits before persistent changes, commits no
 layer, and causes resolution to rerun once against that fixed prefix. That
-consumer-scoped guarantee ends with the operation. Every output referenced by a
-component executable profile and command is
+consumer-scoped guarantee ends with the operation. Every output referenced by an
+application executable profile and command is
 additionally validated on the final immutable environment image after all
 provider layers and before publication. An earlier prefix record cannot
 authorize final command exposure.
@@ -1419,12 +1398,12 @@ environment image without installing it. `reploy install` ensures its staged or
 temporary staging-like workspace has a current build by reusing a matching
 record or running that same build pipeline before it transfers and installs the
 result. Install help and progress expose that build work and its Docker/network
-requirements. In a staged deployment, `reploy up`, `reploy restart`, and
-`reploy app` automatically ensure that the recorded build is current and report
-the build phase before running. Staged `reploy stop` can stop the recorded
-workload after build validation fails; staged shell, test, and observation
-commands require an already-current build. Installed runtime commands never
-resolve or build: changing an installed application requires staging the
+requirements. In a staged deployment, `reploy up` and `reploy restart`
+automatically ensure that the recorded build is current and report the build
+phase before running. Staged app commands require an already-current build, as
+do staged shell, test, and observation commands. Staged `reploy stop` can stop
+the recorded workload after build validation fails. Installed runtime commands
+never resolve or build: changing an installed application requires staging the
 changed blueprint and installing it again.
 
 If an automatic staged build check finds that the provider store still exists
@@ -1559,23 +1538,24 @@ install, container, and generated-resource identities, it must satisfy the same
 portable-basename rules even when `control_script` is overridden. Reploy also
 rejects platform-reserved filenames such as Windows device names.
 
-`environment.components.<component>.executables` contains named invocation
-profiles for outputs supplied by that component. Keeping the profile with its
-component avoids a second environment-wide alias map. A command refers to the
-profile by its stable qualified name `<component>.<executable>`. The profile's
-`binary` names the component output and may define reusable argument defaults;
-it does not declare a provider output. The component provider resolves the
+`environment.applications.<application>.executables` contains named invocation
+profiles for outputs owned by that application. Keeping the profile with its
+application avoids a second environment-wide alias map. A command refers to the
+profile by its stable qualified name `<application>.<executable>`. The profile's
+`source` selects the application's provider contribution, and `binary` names
+that contribution's output. The profile may define reusable argument defaults;
+it does not declare a provider output. The selected provider resolves the
 binary's backend-specific absolute path: for example, a Python console script
 in a virtual environment or a Go/Rust build artifact.
 Reploy does not guess a path or rely on unrelated entries in the container's
 `PATH` to select that outer executable. The selected package may itself use an
 `env` shebang or perform later `PATH` lookups as part of its trusted runtime
 semantics. For a Python entry-point wrapper, the Python provider additionally
-verifies that the immediate shebang names the interpreter in the same component
+verifies that the immediate shebang names the interpreter in the same application
 environment.
 
 Provider outputs use one model regardless of whether another provider consumes
-them or a component executable profile references them. Every output names one
+them or an application executable profile references them. Every output names one
 candidate path, supplied
 by an explicit declaration, a narrowly versioned provider mapping, or exact
 ecosystem metadata such as a Python wheel's console-script entry point. Empty
@@ -1584,12 +1564,12 @@ Producing an output does not expose it publicly. An
 unqualified provider requirement selects the first compatible output from lower
 to higher image layers among catalogs already published by initialized
 suppliers: base first, then provider nodes in deterministic initialization order
-with stable component-name ordering within a layer. As the first step in the
+with stable contribution ordering within a layer. As the first step in the
 consumer's existing resolver container, the typed consumer inspects candidates'
 actual executables in that order and freezes the first compatible candidate
 before network or source work. Selection is recorded as an edge in the final
-graph and local build lock. A provider requirement may set
-`supplier` to an active component name or the required `base` component to
+graph and local build lock. An application provider requirement may set
+`supplier` to `base` or another contribution owned by the same application to
 override that precedence; dotted identities are diagnostic, not blueprint
 syntax. `base` cannot be replaced or reused for another component.
 Application executable outputs are matched by name only in the initial design;
@@ -1602,37 +1582,35 @@ the executable, applies its version constraint before selection, and records
 the observed facts. An explicit `supplier` limits validation to that supplier
 and fails when its candidate is incompatible.
 
-Python components derive executable outputs from the console-script entry-point
+Python contributions derive executable outputs from the console-script entry-point
 metadata of every exact wheel in their resolved closure. The catalog records
 the exact script name, entry-point target, and actual owning distribution,
 including a transitive dependency. A distribution with no console script
 produces no executable output merely because of its package name. Duplicate
-console-script claims within one component fail as a physical venv collision;
+console-script claims within one application fail as a physical Python-environment collision;
 scripts without console-script metadata are not provider outputs in the initial
 design. After materialization, every selected wrapper must exist beneath the
-component venv and name that environment's interpreter in its immediate
+application environment and name that environment's interpreter in its immediate
 shebang.
 
-An executable profile has no typed compatibility filter; it references the
-component output's one candidate path.
+An executable profile's required `source` selects one provider contribution
+owned by the containing application. In the example,
+`applications.application.executables.arbiter_server` uses `source: python`.
+The Python provider finds `arbiter-server` in the exact wheel closure's
+console-script metadata, records its owning distribution, validates the
+generated wrapper, and returns its absolute path. The blueprint author
+references the application and executable name but never supplies a
+provider-specific filesystem path.
 
-The containing component selects the provider. In the example,
-`components.application.executables.arbiter_server` belongs to
-`components.application`, whose `type: python` selects the Python provider. That
-provider finds `arbiter-server` in the exact wheel closure's console-script
-metadata, records its owning distribution, validates the generated wrapper in
-the materialized Python environment, and returns its absolute path. The
-blueprint author references the component and script name but never declares
-that the package produces it or supplies a provider-specific filesystem path.
-
-Even when no reusable argument defaults are needed, the component declares the
+Even when no reusable argument defaults are needed, the application declares the
 small executable profile and commands use the same qualified reference form:
 
 ```yaml
-components:
+applications:
   application:
     executables:
       inspector:
+        source: python
         binary: arbiter-server
 commands:
   inspect:
@@ -1697,20 +1675,61 @@ part of the environment contract.
 The conceptual flow is:
 
 ```text
-components + staging package overrides -> closed bundle -> derived/declared output catalog
--> image layers -> validated selected outputs -> component executable profiles
+applications + provider contributions + staging package overrides
+-> closed bundles -> derived/declared output catalogs
+-> image layers -> validated selected outputs -> application executable profiles
 -> commands -> optional workload
 ```
 
 ### Application Configuration
 
-The initial model does not expose Docker process-environment injection or host
-environment passthrough. Application environment variables are application
-configuration and should be supplied through managed configuration, such as
-Arbiter's environment file under the config path. Blueprint variables remain
-interpolation values only; they are not copied into the workload process
-environment. Reploy may still use private internal variables in generated
-runtime plumbing, but their names are not blueprint protocol.
+Blueprint variables remain interpolation values only; they are not copied into
+the workload process environment, and Reploy does not pass through the host
+process environment. An operator may instead place an optional `.env` in the
+deployment root. This file is a Reploy-owned, deployment-local runtime input,
+not blueprint syntax, image configuration, or a workload-visible config file.
+
+The file uses one `NAME=value` assignment per line. Blank lines and lines whose
+first non-space character is `#` are ignored. Names use portable environment
+identifier syntax. Values may be unquoted, single-quoted, or double-quoted;
+interpolation, shell evaluation, duplicate names, multiline values, NUL bytes,
+and malformed quoting are rejected. Reploy limits the file to 1 MiB.
+
+Reploy opens the file without following the final link and reads from the
+validated open handle, so a path replacement cannot change the bytes being
+used. The file must have exactly one filesystem link, preventing a second path
+from exposing the same file through a permitted mount. On POSIX hosts it must
+be a regular file owned by the deployment directory owner with mode `0400` or
+`0600`. On Windows it must be a non-reparse regular file owned by the deployment
+directory owner, with an ACL that grants access only to that owner, SYSTEM, and
+Administrators and grants the owner read access.
+
+When the file is present, generated Compose starts a fixed, secret-free
+launcher waiting on standard input. After container creation, Reploy uses a
+short-lived fixed `docker exec -i` relay to write the validated assignments to
+the launcher's existing standard-input pipe; the launcher exports them and
+executes the workload with the private pipe closed and ordinary detached
+standard-input behavior restored. The host file is never mounted. Neither its
+path nor its variable names or values are placed in image or container
+configuration, Compose environment content, Docker argv, Reploy state, build
+locks, or Reploy-generated diagnostics. Workload output remains
+application-owned: Reploy cannot prevent an application from logging its own
+environment. Reploy rejects any runtime bind whose source is the file or an
+ancestor of it.
+
+Docker restart policies other than `no` are incompatible with `.env`, because
+Docker cannot privately recreate this one-shot channel. Explicit Reploy
+restart remains supported. Changes to `.env` take effect when Reploy next
+creates or restarts the workload; `up` does not mutate the environment of an
+already-running process. Linux system services run the installed Reploy runtime
+as their systemd service boundary, so every systemd-managed start revalidates
+and reinjects the file before monitoring the workload container.
+
+Installation treats `.env` as a reserved preserved path. An initial install
+copies it with defensive host permissions or ACLs. Later installs preserve the
+installed copy by default; `--replace .env`, `--replace all`, or `--clean`
+replaces it from staging. Reploy refuses a requested replacement when staging
+has no `.env`, rather than deleting the installed file.
 
 ## Mount Modes
 
@@ -2226,7 +2245,8 @@ capabilities. Existing CLI and deployment behavior is retained unless it
 conflicts with an explicit decision in this model. Such conflicts must be
 called out and resolved deliberately rather than silently dropping the feature.
 
-The initial implementation supports base, Python, and APT components; Docker;
+The initial implementation supports the base root and application-owned Python
+and OS package contributions through APT; Docker;
 cross-provider executable consumption; at most one primary workload; native
 one-shot commands; and HTTP readiness. APT becomes publicly usable only after
 its provider-graph, resolver, materializer, cross-provider Python, and public

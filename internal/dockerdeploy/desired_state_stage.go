@@ -94,7 +94,16 @@ func selectDesiredStateTargetV1(ctx context.Context, input DesiredStateStageInpu
 // RestageCurrentDesiredPlatformV1 reselects only the target platform from the
 // resolved blueprint already stored in state-v1.
 func RestageCurrentDesiredPlatformV1(ctx context.Context, deploymentDir string, explicitPlatform string) (deploy.DesiredStateUpdateResult, error) {
-	return restageCurrentDesiredPlatformV1(ctx, deploymentDir, explicitPlatform, ProbeDockerNativePlatform)
+	result, err := restageCurrentDesiredPlatformV1(ctx, deploymentDir, explicitPlatform, ProbeDockerNativePlatform)
+	if err != nil {
+		return result, err
+	}
+	changed, err := syncCurrentStagedControlSurfaceV1(ctx, deploymentDir)
+	if err != nil {
+		return result, fmt.Errorf("refresh staged control surface: %w", err)
+	}
+	result.Changed = result.Changed || changed
+	return result, nil
 }
 
 func restageCurrentDesiredPlatformV1(

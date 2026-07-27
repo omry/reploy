@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-26
+updated: 2026-07-27
 summary: Active planning surface for Reploy design and implementation gaps.
 ---
 
@@ -31,18 +31,27 @@ This file is the day-to-day queue for design and implementation gaps.
 
 ## Now
 
-- [ ] `P1` Redesign health checks and public URL handling.
-      Make service readiness an app-facing contract instead of a Reploy
-      environment-variable protocol leaked into blueprints. Acceptance checks:
-      define the app-owned health/readiness shape; unify or clearly separate
-      install and runtime health hook semantics; remove ignored or misleading
-      fields such as port-level `public_scheme`; preserve useful startup error
-      diagnostics; document the supported blueprint shape and minimum Reploy
-      version; and update the OmegaConf Inspector example and tests.
+No active items.
 
 ## Pre-release
 
-- [ ] `P1` Model applications separately from package materialization layers.
+- [x] `P1` Restore private workload environment injection.
+      Support an optional deployment-local `.env` as a Reploy-owned runtime
+      input rather than blueprint or Docker image configuration. Acceptance
+      checks: require a real owner-readable host file with no group or other
+      access, or the supported-host equivalent; open and validate it without
+      following links or replacement races; transmit its values through a
+      one-shot private Reploy launcher channel only into the workload process
+      environment; keep the file, variable names, and values out of container
+      mounts, Docker image and container metadata, Compose content, argv, state,
+      locks, and Reploy-generated diagnostics; reject runtime mounts that would
+      expose the file or an ancestor directory; copy it on initial install when
+      needed, preserve it by default, and honor the managed-path replacement
+      overrides without silently deleting it when the staging source is absent;
+      and prove the isolation and install behavior with focused and real-Docker
+      tests.
+
+- [x] `P1` Model applications separately from package materialization layers.
       Keep each application's OS packages, language packages, executables, and
       related declarations in one self-contained blueprint block. Allow
       environment-level OS tools such as `zsh` and `htop`, then combine those
@@ -54,7 +63,7 @@ This file is the day-to-day queue for design and implementation gaps.
       contributions, executables, build locks, and cached results before
       implementation.
 
-- [ ] `P1` Minimize the required environment blueprint shape.
+- [x] `P1` Minimize the required environment blueprint shape.
       Make environment nodes optional whenever Reploy can supply an
       unambiguous default or infer the value safely. Acceptance checks: audit
       every required environment node; retain required fields only where

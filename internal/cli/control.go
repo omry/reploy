@@ -33,7 +33,7 @@ func runEmbeddedControl(args []string, stdout io.Writer, stderr io.Writer, globa
 		return 1
 	}
 	if !found {
-		fmt.Fprintln(stderr, "reploy control error: installed state-v1 deployment metadata is missing")
+		fmt.Fprintln(stderr, "reploy control error: staged or installed state-v1 deployment metadata is missing")
 		return 1
 	}
 	scriptName := options.ScriptName
@@ -44,6 +44,7 @@ func runEmbeddedControl(args []string, stdout io.Writer, stderr io.Writer, globa
 		Dir:         options.Dir,
 		ScriptName:  scriptName,
 		SystemdUnit: metadata.SystemdUnit,
+		Deployed:    metadata.Deployed,
 	}
 	if len(options.Command) == 0 || isHelpArg(options.Command[0]) {
 		printEmbeddedControlUsage(stdout, context)
@@ -81,7 +82,7 @@ func runEmbeddedControl(args []string, stdout io.Writer, stderr io.Writer, globa
 			return runEmbeddedControlSystemd(context, cmd, rest, stdout, stderr)
 		}
 	}
-	appArgs, matched, appErr := embeddedControlAppArguments(context.Dir, options.Command)
+	appArgs, matched, appErr := embeddedControlAppArguments(context.Dir, options.Command, context.Deployed)
 	if appErr != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", context.ScriptName, appErr)
 		return 2
@@ -94,7 +95,7 @@ func runEmbeddedControl(args []string, stdout io.Writer, stderr io.Writer, globa
 	return 2
 }
 
-func embeddedControlAppArguments(dir string, args []string) ([]string, bool, error) {
+func embeddedControlAppArguments(dir string, args []string, deployedOnly bool) ([]string, bool, error) {
 	parsed, err := parseDockerAppOptions(args)
 	if err != nil {
 		if appOptionWasPresent(args, "--output-dir") || appOptionWasPresent(args, "--output-file") {
@@ -102,10 +103,13 @@ func embeddedControlAppArguments(dir string, args []string) ([]string, bool, err
 		}
 		return nil, false, nil
 	}
-	if parsed.Commands || parsed.Format != "" || parsed.DirExplicit || parsed.DeployedOnly || len(parsed.CommandArgs) == 0 || !embeddedControlMatchesAppCommand(dir, parsed.CommandArgs) {
+	if parsed.Commands || parsed.Format != "" || parsed.DirExplicit || parsed.DeployedOnly || len(parsed.CommandArgs) == 0 || !embeddedControlMatchesAppCommand(dir, parsed.CommandArgs, deployedOnly) {
 		return nil, false, nil
 	}
-	result := []string{"--deployed-only", "--dir", dir}
+	result := []string{"--dir", dir}
+	if deployedOnly {
+		result = append([]string{"--deployed-only"}, result...)
+	}
 	if parsed.OutputDir != "" {
 		result = append(result, "--output-dir", parsed.OutputDir)
 	}
@@ -165,6 +169,7 @@ type embeddedControlUsageContext struct {
 	Dir         string
 	ScriptName  string
 	SystemdUnit string
+	Deployed    bool
 }
 
 func printEmbeddedControlUsage(output io.Writer, context embeddedControlUsageContext) {
@@ -180,7 +185,7 @@ func printEmbeddedControlUsage(output io.Writer, context embeddedControlUsageCon
 	}
 	hasAppCommands := false
 	if context.Dir != "" {
-		if result, err := dockerdeploy.AppCommandList(dockerdeploy.AppCommandListOptions{Dir: context.Dir, DeployedOnly: true}); err == nil {
+		if result, err := dockerdeploy.AppCommandList(dockerdeploy.AppCommandListOptions{Dir: context.Dir, DeployedOnly: context.Deployed}); err == nil {
 			for _, command := range result.Commands {
 				hasAppCommands = true
 				fmt.Fprintf(output, "  %s\n", strings.Join(command.Trigger, " "))
@@ -203,7 +208,7 @@ func printEmbeddedControlLogsHelp(output io.Writer, context embeddedControlUsage
 	scriptName := embeddedControlDefaultString(context.ScriptName, "reployctl")
 	fmt.Fprintf(output, "Usage: %s logs [OPTIONS]\n", scriptName)
 	fmt.Fprintln(output)
-	fmt.Fprintln(output, "Show deployed service application logs.")
+	fmt.Fprintln(output, "Show workload logs.")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Options:")
 	fmt.Fprintf(output, "  --tail N     Show only the last N log lines (default: %s)\n", embeddedControlDefaultLogsTail)
@@ -360,11 +365,11 @@ func externalCommandExitCode(err error) (int, bool) {
 	return code, true
 }
 
-func embeddedControlMatchesAppCommand(dir string, args []string) bool {
+func embeddedControlMatchesAppCommand(dir string, args []string, deployedOnly bool) bool {
 	if len(args) == 0 {
 		return false
 	}
-	result, err := dockerdeploy.AppCommandList(dockerdeploy.AppCommandListOptions{Dir: dir, DeployedOnly: true})
+	result, err := dockerdeploy.AppCommandList(dockerdeploy.AppCommandListOptions{Dir: dir, DeployedOnly: deployedOnly})
 	if err != nil {
 		return false
 	}

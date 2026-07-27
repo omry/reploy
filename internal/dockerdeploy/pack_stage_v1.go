@@ -13,10 +13,11 @@ import (
 )
 
 type PackDesiredStateStageInputV1 struct {
-	DeploymentDir    string
-	Pack             deploy.PackRef
-	ExplicitPlatform string
-	Create           bool
+	DeploymentDir      string
+	Pack               deploy.PackRef
+	ExplicitPlatform   string
+	Create             bool
+	SkipControlSurface bool
 }
 
 type PackDesiredStateStageResultV1 struct {
@@ -25,16 +26,18 @@ type PackDesiredStateStageResultV1 struct {
 }
 
 type LoadedPackDesiredStateStageInputV1 struct {
-	DeploymentDir    string
-	Blueprint        deploy.LoadedBlueprint
-	ExplicitPlatform string
-	Create           bool
-	Force            bool
-	RunOptions       RunOptions
+	DeploymentDir      string
+	Blueprint          deploy.LoadedBlueprint
+	ExplicitPlatform   string
+	Create             bool
+	Force              bool
+	RunOptions         RunOptions
+	SkipControlSurface bool
 }
 
-// StagePackDesiredStateV1 resolves one blueprint reference and records only
-// the deployment's desired state. It does not prepare providers or an image.
+// StagePackDesiredStateV1 resolves one blueprint reference, records the
+// deployment's desired state, and materializes the user-facing staged control
+// surface. It does not prepare providers or an image.
 func StagePackDesiredStateV1(ctx context.Context, input PackDesiredStateStageInputV1) (PackDesiredStateStageResultV1, error) {
 	if ctx == nil {
 		return PackDesiredStateStageResultV1{}, fmt.Errorf("stage blueprint requires a context")
@@ -55,11 +58,11 @@ func StagePackDesiredStateV1(ctx context.Context, input PackDesiredStateStageInp
 	}
 	return StageLoadedPackDesiredStateV1(ctx, LoadedPackDesiredStateStageInputV1{
 		DeploymentDir: input.DeploymentDir, Blueprint: loaded, ExplicitPlatform: input.ExplicitPlatform,
-		Create: input.Create,
+		Create: input.Create, SkipControlSurface: input.SkipControlSurface,
 	})
 }
 
-// StageLoadedPackDesiredStateV1 records a pack that the caller has already
+// StageLoadedPackDesiredStateV1 stages a pack that the caller has already
 // resolved, avoiding a second remote blueprint fetch at command boundaries.
 func StageLoadedPackDesiredStateV1(ctx context.Context, input LoadedPackDesiredStateStageInputV1) (PackDesiredStateStageResultV1, error) {
 	if ctx == nil {
@@ -74,6 +77,12 @@ func StageLoadedPackDesiredStateV1(ctx context.Context, input LoadedPackDesiredS
 	loaded := input.Blueprint
 	if err := prepareDesiredStateStageDirV1(input.DeploymentDir, input.Create); err != nil {
 		return PackDesiredStateStageResultV1{}, err
+	}
+	if !input.SkipControlSurface {
+		_, err := planStagedControlSurfaceV1(input.DeploymentDir, loaded.Document)
+		if err != nil {
+			return PackDesiredStateStageResultV1{}, err
+		}
 	}
 	initialOverrides, err := localBlueprintInitialPackageOverridesV1(loaded, input.DeploymentDir, input.Create)
 	if err != nil {
@@ -98,6 +107,16 @@ func StageLoadedPackDesiredStateV1(ctx context.Context, input LoadedPackDesiredS
 	}
 	if err != nil {
 		return PackDesiredStateStageResultV1{}, err
+	}
+	if !input.SkipControlSurface {
+		controlChanged, err := syncCurrentStagedControlSurfaceV1(ctx, input.DeploymentDir)
+		if err != nil {
+			return PackDesiredStateStageResultV1{}, fmt.Errorf(
+				"staging desired state was recorded, but its control surface could not be generated; run `reploy stage --update`: %w",
+				err,
+			)
+		}
+		desired.Changed = desired.Changed || controlChanged
 	}
 	return PackDesiredStateStageResultV1{AppID: loaded.Document.Environment.ID, DesiredState: desired}, nil
 }

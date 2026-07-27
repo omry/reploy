@@ -119,7 +119,7 @@ func decodeProfileFactsV1(data providers.CanonicalProviderData) (string, []provi
 	if err := requireJSONEOF(decoder); err != nil {
 		return "", nil, err
 	}
-	if err := blueprint.ValidateProviderIdentifier("Python profile component", wire.Component); err != nil {
+	if err := blueprint.ValidateContributionReference("Python profile contribution", wire.Component); err != nil {
 		return "", nil, err
 	}
 	if wire.Sources == nil {
@@ -151,7 +151,14 @@ func ValidateResolvedBundlePayloadV1(payload providers.ResolvedBundleIdentityV1)
 	if err != nil {
 		return fmt.Errorf("Python bundle request: %w", err)
 	}
-	if payload.NodeID != providers.NodeID("python/"+request.Component) {
+	expectedNodeID := providers.NodeID("python/" + request.Component)
+	if application, ok := blueprint.ApplicationContributionOwner(
+		request.Component,
+		blueprint.ContributionProviderPython,
+	); ok {
+		expectedNodeID = providers.NodeID("python/" + blueprint.ApplicationID(application))
+	}
+	if payload.NodeID != expectedNodeID {
 		return fmt.Errorf("Python bundle node does not match request component %q", request.Component)
 	}
 	bundle, err := DecodeCanonicalBundleDataV1(request.Component, payload.ProviderPayload)

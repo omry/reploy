@@ -101,9 +101,10 @@ func TestLoadValidatedBuildCandidateUsesReusableDebVerification(t *testing.T) {
 	defer operation.Unlock()
 
 	document, _ := testSelectedPlatformDocumentV1(t)
-	base := document.Environment.Components["base"]
-	base.Base.Image = lock.Base.AuthorReference
-	document.Environment.Components["base"] = base
+	document.Environment.Base.Image = lock.Base.AuthorReference
+	if err := document.Environment.RebuildProviderContributions(); err != nil {
+		t.Fatal(err)
+	}
 	lock.BlueprintDigest = testResolvedBlueprintDigestV1(t, document)
 	lock.Overlay = deploy.EmptyRequestOverlayV1()
 	lock.PackageOverrides = deploy.EmptyPackageOverrideIntentV1(document.Environment.ID)

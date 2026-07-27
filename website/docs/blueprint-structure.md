@@ -4,16 +4,32 @@ sidebar_position: 2
 
 # Blueprint Structure
 
-A schema-1 blueprint has three top-level nodes:
+A schema-1 blueprint has two required top-level nodes and one optional backend
+node:
 
 ```yaml
-blueprint:   # Format version, blueprint version, Reploy requirement, platforms.
-environment: # Portable software, command, mount, workload, and install intent.
-docker:      # Docker-specific realization of mounts, endpoints, and restart policy.
+blueprint:   # Required format version, blueprint version, and platforms.
+environment: # Required identity and base image; other portable intent is optional.
+docker:      # Optional Docker realization of mounts, endpoints, and restart policy.
 ```
 
 Unknown fields are errors. Reploy does not accept aliases for the removed
 prototype schema.
+
+The smallest valid blueprint is:
+
+```yaml
+blueprint:
+  schema: 1
+  version: 0.1.0
+  compatibility:
+    platforms: [linux/amd64]
+
+environment:
+  id: example
+  base:
+    image: debian:13
+```
 
 ## Environment Nodes
 
@@ -22,52 +38,55 @@ environment:
   id: example                 # Required stable environment name.
   control_script: example     # Optional generated command name; defaults to id.
   vars: {}                    # Values used by blueprint interpolation.
-  components: {}              # Base image and requested software.
+  base:                       # Required base image root.
+    image: debian:13          # Required OCI image reference.
+  packages: {}                # Environment-owned packages.
+  applications: {}            # Application packages, options, and executables.
   allow_concurrent: auto      # App-command and shell overlap policy.
   terminal: {}                # Terminal and color integration.
   install: {}                 # Target, system account, hooks, success output.
   mounts: {}                  # Portable runtime filesystem contracts.
-  commands: {}                # Public commands using component executables.
+  commands: {}                # Public commands using application executables.
   workload: {}                # Optional persistent primary workload.
 ```
 
 Optional empty nodes should be omitted.
 
-## Components and Executables
+## Applications and Executables
 
-Every environment has a base component. Additional components currently
-support Python and APT packages:
+Every environment has a base root. Applications can contribute OS and Python
+packages while keeping one application identity:
 
 ```yaml
 environment:
-  components:
-    base:
-      image: debian:13
-    system:
-      type: apt
-      packages:
-        - package: python3
-          exports:
-            python:
-              executable: /usr/bin/python3
-        - ca-certificates
+  base:
+    image: debian:13
+  applications:
     application:
-      type: python
-      interpreter:
-        command: python
-        version: ">=3.11"
-        supplier: system
-      requirements: [example-suite]
+      packages:
+        os:
+          - package: python3
+            exports:
+              python:
+                executable: /usr/bin/python3
+          - ca-certificates
+        python:
+          interpreter:
+            command: python
+            version: ">=3.11"
+            supplier: os
+          requirements: [example-suite]
       executables:
         server:
+          source: python
           binary: example-server
 ```
 
 The interpreter requirement is optional when Reploy can identify the single
-supported Python supplied by an earlier component. If discovery fails or the
+supported Python supplied by the base or the application's OS contribution. If discovery fails or the
 binary is not Python, the error guides the author to the explicit form.
 
-Executable profiles belong to their component. Environment commands reference
+Executable profiles belong to their application. Environment commands reference
 them with a qualified name:
 
 ```yaml

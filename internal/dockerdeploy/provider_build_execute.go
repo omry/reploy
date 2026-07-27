@@ -25,10 +25,11 @@ type LockedProviderBuildExecutionInputV1 struct {
 }
 
 type LockedProviderBuildExecutionResultV1 struct {
-	State     deploy.StateV1
-	Lock      deploy.BuildLockV1
-	Reused    bool
-	Validated bool
+	State       deploy.StateV1
+	Lock        deploy.BuildLockV1
+	Reused      bool
+	Republished bool
+	Validated   bool
 }
 
 type providerBuildExecutionBackend struct {
@@ -101,7 +102,7 @@ func executeLockedProviderBuildV1(
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute locked provider build local overrides must use an array")
 	}
 	if preparation.Reused {
-		if preparation.PreparedBase != nil || preparation.ReusableLock == nil {
+		if preparation.PreparedBase != nil || preparation.ReusableLock == nil || preparation.PublicationLock == nil {
 			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("reused provider build preparation is incomplete")
 		}
 		reused := preparation.Current
@@ -113,6 +114,12 @@ func executeLockedProviderBuildV1(
 		}
 		if reused == nil || !reflect.DeepEqual(*preparation.ReusableLock, reused.Lock) {
 			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("reused provider build lock does not match its recorded generation")
+		}
+		publicationLock := *preparation.PublicationLock
+		expectedPublicationLock := reused.Lock
+		expectedPublicationLock.BlueprintDigest = publicationLock.BlueprintDigest
+		if !reflect.DeepEqual(publicationLock, expectedPublicationLock) {
+			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("reused provider build publication lock changes validated build inputs")
 		}
 		if input.ValidateChoices {
 			if preparation.ReusedCandidate {
@@ -150,7 +157,7 @@ func executeLockedProviderBuildV1(
 				}
 				record, err := backend.publishValidated(
 					ctx, preparation.Operation, preparation.Store, preparation.Environment,
-					preparation.DeploymentDir, reused.Lock, preparation.ValidatedInputs,
+					preparation.DeploymentDir, publicationLock, preparation.ValidatedInputs,
 				)
 				if err != nil {
 					return LockedProviderBuildExecutionResultV1{}, err
@@ -159,7 +166,7 @@ func executeLockedProviderBuildV1(
 				writeValidatedBuildCleanupWarning(input.Progress, record)
 			}
 			return LockedProviderBuildExecutionResultV1{
-				State: reused.State, Lock: reused.Lock, Reused: true, Validated: true,
+				State: reused.State, Lock: publicationLock, Reused: true, Validated: true,
 			}, nil
 		}
 		if preparation.ReusedCandidate {
@@ -174,7 +181,7 @@ func executeLockedProviderBuildV1(
 			}
 			state, err := backend.publishBuild(ctx, preparation.Operation, preparation.Store, BuildPublicationInput{
 				Environment: preparation.Environment, DeploymentDir: preparation.DeploymentDir,
-				Document: preparation.Loaded.Document, Lock: reused.Lock,
+				Document: preparation.Loaded.Document, Lock: publicationLock,
 			})
 			if err != nil {
 				return LockedProviderBuildExecutionResultV1{}, err
@@ -192,12 +199,28 @@ func executeLockedProviderBuildV1(
 				)
 			}
 			return LockedProviderBuildExecutionResultV1{
-				State: state, Lock: reused.Lock, Reused: true,
+				State: state, Lock: publicationLock, Reused: true,
+			}, nil
+		}
+		if !reflect.DeepEqual(publicationLock, reused.Lock) {
+			if backend.publishBuild == nil {
+				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("republish reused build requires publication support")
+			}
+			state, err := backend.publishBuild(ctx, preparation.Operation, preparation.Store, BuildPublicationInput{
+				Environment: preparation.Environment, DeploymentDir: preparation.DeploymentDir,
+				Document: preparation.Loaded.Document, Lock: publicationLock,
+			})
+			if err != nil {
+				return LockedProviderBuildExecutionResultV1{}, err
+			}
+			writeProviderBuildProgress(input.Progress, "reusing current validated image for updated runtime configuration")
+			return LockedProviderBuildExecutionResultV1{
+				State: state, Lock: publicationLock, Reused: true, Republished: true,
 			}, nil
 		}
 		writeProviderBuildProgress(input.Progress, "reusing current validated image")
 		return LockedProviderBuildExecutionResultV1{
-			State: preparation.Current.State, Lock: preparation.Current.Lock, Reused: true,
+			State: preparation.Current.State, Lock: publicationLock, Reused: true,
 		}, nil
 	}
 	if backend.executeGraph == nil || backend.prepareValidation == nil || backend.complete == nil {

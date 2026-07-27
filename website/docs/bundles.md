@@ -45,11 +45,10 @@ runs the same full validation after every newly created component layer.
 `--no-cache` reruns resolvers and image construction instead of reusing the
 current verified build.
 
-`reploy up`, `reploy restart`, and staged app commands automatically reuse a
-current successful build or run the same build pipeline when it is missing or
-stale. `reploy shell` and `reploy test` require a current build. Staging and
-direct installation also ensure a current build before publishing the
-installation.
+`reploy up` and `reploy restart` automatically reuse a current successful build
+or run the same build pipeline when it is missing or stale. Staged app commands,
+`reploy shell`, and `reploy test` require a current build. Staging and direct
+installation also ensure a current build before publishing the installation.
 
 Remove deployment-local provider artifacts when they are no longer needed:
 

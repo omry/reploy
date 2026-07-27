@@ -756,16 +756,17 @@ profile.
 Planning rules for the initial registry are exact:
 
 - blueprint resolution synthesizes the required `base` root node from
-  `components.base`; it is not returned by a provider, has no bundle or
+  `environment.base`; it is not returned by a provider, has no bundle or
   materialization transaction, and exposes only outputs validated against its
   immutable selected image;
-- all active APT components form one `apt` node and one dpkg authority;
-- each active Python component forms `python/<component>`;
-- an explicit supplier creates a structural edge from the named component, or
-  the `base` root, to the consumer;
+- all active OS contributions on a Debian-derived image form one `apt` node and
+  one dpkg authority;
+- each active application Python contribution forms `python/<application>`;
+- an explicit supplier creates a structural edge from the named contribution,
+  or the `base` root, to the consumer;
 - cycles among the known structural edges fail before any resolver starts;
 - initialization order is base first, then the shared system-package node,
-  component-scoped Python nodes in stable component-name order, and then
+  application-scoped Python nodes in stable application-name order, and then
   higher provider layers, subject to explicit structural edges; and
 - independent nodes use stable node-ID byte order as the final tie-breaker.
 
@@ -1231,12 +1232,14 @@ TMPDIR=/tmp/reploy-apt-resolve
 ```
 
 The resolver's final APT overrides select the private lists and archive
-directories and set `Acquire::Languages=none`. Reploy trusts the selected base
-image's APT implementation, configuration, sources, keyrings, credentials, and
-trust policy. Reploy does not parse or rewrite source trust options and does not
-reconstruct a second signed-release-to-index-to-artifact verification chain or
-hash and rescan all `Packages` indexes. It also never adds a trust override,
-changes keys, or retries a rejected update under weaker settings.
+directories, set `Acquire::Languages=none`, and set `Debug::NoLocking=1`
+because every resolver operation is non-installing and uses immutable base
+package state. Reploy trusts the selected base image's APT implementation,
+configuration, sources, keyrings, credentials, and trust policy. Reploy does
+not parse or rewrite source trust options and does not reconstruct a second
+signed-release-to-index-to-artifact verification chain or hash and rescan all
+`Packages` indexes. It also never adds a trust override, changes keys, or
+retries a rejected update under weaker settings.
 
 The fixed resolver sequence is:
 
@@ -2274,12 +2277,12 @@ does not overwrite arbitrary edited files in the staging directory.
 `reploy build` is the explicit build operation. Install uses the same build
 pipeline; it does not require the user to run `reploy build` first. `stage` and
 overlay commands may make the recorded build stale but do not perform provider
-work. Staged up, restart, and app commands automatically ensure the current
-build and visibly report that phase. Staged stop can stop the recorded workload
-after build validation fails; staged shell, test, and observation commands
-require a matching recorded build. Installed runtime operations never resolve
-or build; changing their bundle requires a new staging operation followed by
-install.
+work. Staged up and restart automatically ensure the current build and visibly
+report that phase. Staged app commands require a matching current build, as do
+staged shell, test, and observation commands. Staged stop can stop the recorded
+workload after build validation fails. Installed runtime operations never
+resolve or build; changing their bundle requires a new staging operation
+followed by install.
 
 The operation contract is:
 
@@ -2337,7 +2340,7 @@ lock directory
   -> load the optional current lock for cache/reuse candidates
   -> observe current local-source inputs
   -> compute the resolved request
-  -> resolve components.base.image for the selected platform
+  -> resolve environment.base.image for the selected platform
   -> if the current generation exactly matches the request, selected base, and
      runtime policy, verify its immutable image reference and reuse it
   -> validate the immutable base root and its declared outputs
@@ -2921,10 +2924,10 @@ continued rejection of public `type: apt` throughout this slice.
 
 - Materialize APT before dependent Python nodes.
 - Select and validate actual APT/base interpreter outputs.
-- Resolve each Python component against its selected interpreter.
+- Resolve each application Python contribution against its selected interpreter.
 - Create independent venv roots and console-script catalogs.
 - After the complete cross-provider gate passes, remove the temporary
-  top-level semantic rejection and accept public `type: apt` components.
+  top-level semantic rejection and accept public `os` package contributions.
 
 Gate: one environment where APT supplies Python, two independently selected
 Python interpreter/venv pairs, and one Python-base environment where APT adds

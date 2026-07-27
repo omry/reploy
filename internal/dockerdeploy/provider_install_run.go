@@ -402,7 +402,26 @@ func runProviderInstallV1(
 	}
 	if input.Install.Start {
 		writeProviderBuildProgress(input.RunOptions.Progress, "starting installed service")
-		if err := backend.startDestination(ctx, locked, ready); err != nil {
+		if plan.Backend == installBackendLinuxSystemd {
+			if err := destinationOperation.Unlock(); err != nil {
+				return ready, fmt.Errorf("release installation lock before system service startup: %w", err)
+			}
+			destinationOperation = nil
+			locked.DestinationOperation = nil
+			startErr := backend.startDestination(ctx, locked, ready)
+			reacquireContext := context.WithoutCancel(ctx)
+			destinationOperation, err = backend.acquire(reacquireContext, destinationDir)
+			if err != nil {
+				leaseErr := controlLease.Release()
+				controlLease = nil
+				markerID = ""
+				return ready, errors.Join(startErr, fmt.Errorf("reacquire installation lock after system service startup: %w", err), leaseErr)
+			}
+			locked.DestinationOperation = destinationOperation
+			if startErr != nil {
+				return ready, fmt.Errorf("installation is ready but startup failed: %w; the installation remains in place for inspection", startErr)
+			}
+		} else if err := backend.startDestination(ctx, locked, ready); err != nil {
 			return ready, fmt.Errorf("installation is ready but startup failed: %w; the installation remains in place for inspection", err)
 		}
 	}

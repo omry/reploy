@@ -302,8 +302,8 @@ func validateNodeLock(node NodeLockV1, platform blueprint.Platform, validateProf
 		}
 	case blueprint.ComponentTypePython:
 		component, ok := strings.CutPrefix(string(node.NodeID), "python/")
-		if !ok || blueprint.ValidateProviderIdentifier("Python node component", component) != nil {
-			return fmt.Errorf("Python node ID must use python/<component>")
+		if !ok || validatePythonNodeOwner(component) != nil {
+			return fmt.Errorf("Python node ID must use python/<component> or python/application/<application>")
 		}
 	default:
 		return fmt.Errorf("node provider %q is unsupported", node.Provider)
@@ -384,10 +384,20 @@ func validateLockedGraphNodeID(node providers.NodeID) error {
 		return nil
 	}
 	component, ok := strings.CutPrefix(string(node), "python/")
-	if !ok || blueprint.ValidateProviderIdentifier("Python graph node component", component) != nil {
+	if !ok || validatePythonNodeOwner(component) != nil {
 		return fmt.Errorf("build lock graph node ID %q is unsupported", node)
 	}
 	return nil
+}
+
+func validatePythonNodeOwner(owner string) error {
+	if application, ok := strings.CutPrefix(owner, "application/"); ok {
+		if application == "" || strings.Contains(application, "/") {
+			return fmt.Errorf("invalid application node owner")
+		}
+		return blueprint.ValidateProviderIdentifier("Python node application", application)
+	}
+	return blueprint.ValidateProviderIdentifier("Python node component", owner)
 }
 
 func rejectLockedGraphCycles(nodes []providers.NodeID, edges []providers.ProviderEdgeV1) error {
@@ -427,7 +437,7 @@ func rejectLockedGraphCycles(nodes []providers.NodeID, edges []providers.Provide
 }
 
 func validateQualifiedOutput(output providers.QualifiedOutput) error {
-	if err := blueprint.ValidateProviderIdentifier("qualified output component", output.Component); err != nil {
+	if err := blueprint.ValidateContributionReference("qualified output contribution", output.Component); err != nil {
 		return err
 	}
 	return blueprint.ValidateProviderIdentifier("qualified output name", output.Name)

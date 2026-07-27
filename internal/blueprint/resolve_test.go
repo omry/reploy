@@ -29,8 +29,8 @@ func TestResolveProducesTypedEnvironment(t *testing.T) {
 	}) {
 		t.Fatalf("compatibility platforms = %#v", got)
 	}
-	if !reflect.DeepEqual(document.Environment.Components["application"].Executables["server"].Order, DefaultArgumentOrder) {
-		t.Fatalf("order = %#v", document.Environment.Components["application"].Executables["server"].Order)
+	if !reflect.DeepEqual(document.Environment.Applications["application"].Executables["server"].Order, DefaultArgumentOrder) {
+		t.Fatalf("order = %#v", document.Environment.Applications["application"].Executables["server"].Order)
 	}
 	if document.Docker.Mounts["data"].Contract.UpdatePolicy != UpdatePreserve {
 		t.Fatalf("mount contract = %#v", document.Docker.Mounts["data"].Contract)
@@ -39,7 +39,7 @@ func TestResolveProducesTypedEnvironment(t *testing.T) {
 	if base.Type != ComponentTypeBase || base.Base == nil || base.Python != nil || base.APT != nil || base.Base.Image != "python:3.13-slim" {
 		t.Fatalf("base component = %#v", base)
 	}
-	application := document.Environment.Components["application"]
+	application := document.Environment.Components[ApplicationContributionID("application", ContributionProviderPython)]
 	if application.Type != ComponentTypePython || application.Base != nil || application.Python == nil || application.APT != nil {
 		t.Fatalf("application component = %#v", application)
 	}
@@ -48,10 +48,68 @@ func TestResolveProducesTypedEnvironment(t *testing.T) {
 	}
 }
 
+func TestResolveAcceptsBaseOnlyEnvironment(t *testing.T) {
+	value := strings.Replace(
+		minimalBlueprint,
+		"  applications:\n    application:\n      packages:\n        python:\n          requirements: [demo-server]\n      executables:\n        server:\n          source: python\n          binary: demo-server\n",
+		"",
+		1,
+	)
+	value = strings.Replace(
+		value,
+		"  commands:\n    serve:\n      executable: application.server\n      argv: [serve]\n  workload:\n    command: serve\n    endpoints:\n      http:\n        scheme: http\n        port: 8080\n",
+		"",
+		1,
+	)
+	value = strings.Replace(
+		value,
+		"  workload:\n    endpoints:\n      http:\n        extends: environment.workload.endpoints.http\n        bind: {address: 0.0.0.0}\n        publish: {address: 127.0.0.1, staging: 18080, deployed: 8080}\n",
+		"",
+		1,
+	)
+	source, err := Decode([]byte(value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := Resolve(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(document.Environment.Applications) != 0 || len(document.Environment.Components) != 1 {
+		t.Fatalf("base-only environment = %#v", document.Environment)
+	}
+}
+
+func TestResolveAcceptsSmallestBlueprint(t *testing.T) {
+	source, err := Decode([]byte(`blueprint:
+  schema: 1
+  version: 0.1.0
+  compatibility:
+    platforms: [linux/amd64]
+environment:
+  id: minimal
+  base:
+    image: debian:13
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := Resolve(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if document.Environment.ID != "minimal" ||
+		document.Environment.Base.Image != "debian:13" ||
+		len(document.Environment.Applications) != 0 ||
+		len(document.Environment.Components) != 1 {
+		t.Fatalf("minimal document = %#v", document)
+	}
+}
+
 func TestResolveConcurrentRunPolicy(t *testing.T) {
 	for _, policy := range []ConcurrentRunPolicy{ConcurrentRunYes, ConcurrentRunNo, ConcurrentRunAuto} {
 		t.Run(string(policy), func(t *testing.T) {
-			value := strings.Replace(minimalBlueprint, "  components:\n", "  allow_concurrent: "+string(policy)+"\n  components:\n", 1)
+			value := strings.Replace(minimalBlueprint, "  base:\n", "  allow_concurrent: "+string(policy)+"\n  base:\n", 1)
 			source, err := Decode([]byte(value))
 			if err != nil {
 				t.Fatal(err)
@@ -68,7 +126,7 @@ func TestResolveConcurrentRunPolicy(t *testing.T) {
 }
 
 func TestResolveRejectsInvalidConcurrentRunPolicy(t *testing.T) {
-	value := strings.Replace(minimalBlueprint, "  components:\n", "  allow_concurrent: sometimes\n  components:\n", 1)
+	value := strings.Replace(minimalBlueprint, "  base:\n", "  allow_concurrent: sometimes\n  base:\n", 1)
 	source, err := Decode([]byte(value))
 	if err != nil {
 		t.Fatal(err)
@@ -103,12 +161,12 @@ func TestResolveRejectsInvalidExecutableProfileIdentifiers(t *testing.T) {
 				"        server:\n", "        Server:\n",
 				"executable: application.server", "executable: application.Server",
 			).Replace(minimalBlueprint),
-			want: "environment.components.application.executables must match [a-z][a-z0-9_-]*",
+			want: "environment.applications.application.executables must match [a-z][a-z0-9_-]*",
 		},
 		{
 			name:  "binary output name",
 			value: strings.Replace(minimalBlueprint, "binary: demo-server", "binary: demo.server", 1),
-			want:  "environment.components.application.executables.server.binary must match [a-z][a-z0-9_-]*",
+			want:  "environment.applications.application.executables.server.binary must match [a-z][a-z0-9_-]*",
 		},
 	}
 	for _, test := range tests {
@@ -140,8 +198,8 @@ func TestResolveRejectsInvalidCommandIdentifier(t *testing.T) {
 	}
 }
 
-func TestResolveAllowsEqualExecutableProfileNamesInDifferentComponents(t *testing.T) {
-	value := strings.Replace(minimalBlueprint, "    application:\n", "    tools:\n      type: apt\n      packages: [curl]\n      executables:\n        server:\n          binary: curl\n    application:\n", 1)
+func TestResolveAllowsEqualExecutableProfileNamesInDifferentApplications(t *testing.T) {
+	value := strings.Replace(minimalBlueprint, "    application:\n", "    tools:\n      packages:\n        os: [curl]\n      executables:\n        server:\n          source: os\n          binary: curl\n    application:\n", 1)
 	source, err := Decode([]byte(value))
 	if err != nil {
 		t.Fatal(err)
@@ -150,8 +208,8 @@ func TestResolveAllowsEqualExecutableProfileNamesInDifferentComponents(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if document.Environment.Components["tools"].Executables["server"].Binary != "curl" || document.Environment.Components["application"].Executables["server"].Binary != "demo-server" {
-		t.Fatalf("components = %#v", document.Environment.Components)
+	if document.Environment.Applications["tools"].Executables["server"].Binary != "curl" || document.Environment.Applications["application"].Executables["server"].Binary != "demo-server" {
+		t.Fatalf("applications = %#v", document.Environment.Applications)
 	}
 }
 
@@ -208,16 +266,19 @@ func TestResolveRequiresStrictBaseComponent(t *testing.T) {
 		new  string
 		want string
 	}{
-		{name: "missing", old: "    base:\n      image: python:3.13-slim\n", want: "environment.components.base is required"},
-		{name: "type", old: "    base:\n      image: python:3.13-slim\n", new: "    base:\n      type: python\n      image: python:3.13-slim\n", want: ".type is not valid for the base component"},
-		{name: "provider payload", old: "    base:\n      image: python:3.13-slim\n", new: "    base:\n      image: python:3.13-slim\n      requirements: []\n", want: ".requirements is not valid for the base component"},
+		{name: "missing", old: "  base:\n    image: python:3.13-slim\n", want: "environment.base.image is required"},
+		{name: "type", old: "  base:\n    image: python:3.13-slim\n", new: "  base:\n    type: python\n    image: python:3.13-slim\n", want: "field type not found"},
+		{name: "provider payload", old: "  base:\n    image: python:3.13-slim\n", new: "  base:\n    image: python:3.13-slim\n    requirements: []\n", want: "field requirements not found"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			value := strings.Replace(minimalBlueprint, tt.old, tt.new, 1)
 			source, err := Decode([]byte(value))
 			if err != nil {
-				t.Fatal(err)
+				if !strings.Contains(err.Error(), tt.want) {
+					t.Fatalf("decode error = %v, want %q", err, tt.want)
+				}
+				return
 			}
 			_, err = Resolve(source)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
@@ -229,8 +290,8 @@ func TestResolveRequiresStrictBaseComponent(t *testing.T) {
 
 func TestResolvePythonComponentOptions(t *testing.T) {
 	value := strings.Replace(minimalBlueprint,
-		"      requirements: [demo-server]\n",
-		"      interpreter: {command: python, version: '>=3.11', supplier: base}\n      requirements: [demo-server, demo-server]\n      options:\n        imap:\n          description: Install IMAP support.\n          requirements: [demo-imap, demo-imap]\n", 1)
+		"          requirements: [demo-server]\n",
+		"          interpreter: {command: python, version: '>=3.11', supplier: base}\n          requirements: [demo-server, demo-server]\n      options:\n        imap:\n          description: Install IMAP support.\n          packages:\n            python:\n              requirements: [demo-imap, demo-imap]\n", 1)
 	source, err := Decode([]byte(value))
 	if err != nil {
 		t.Fatal(err)
@@ -239,7 +300,7 @@ func TestResolvePythonComponentOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	component := document.Environment.Components["application"]
+	component := document.Environment.Components[ApplicationContributionID("application", ContributionProviderPython)]
 	if component.Python.Interpreter != (CommandRequirement{Command: "python", Version: ">=3.11", Supplier: "base"}) {
 		t.Fatalf("interpreter = %#v", component.Python.Interpreter)
 	}
@@ -251,23 +312,35 @@ func TestResolvePythonComponentOptions(t *testing.T) {
 	}
 }
 
-func TestResolveRejectsProviderOwnedUnionFields(t *testing.T) {
+func TestResolveRejectsOptionSpecificPythonInterpreter(t *testing.T) {
+	value := strings.Replace(minimalBlueprint,
+		"      executables:\n",
+		"      options:\n        debug:\n          description: Install debugging support.\n          packages:\n            python:\n              interpreter: {command: python, supplier: base}\n              requirements: [debugpy]\n      executables:\n",
+		1,
+	)
+	source, err := Decode([]byte(value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Resolve(source)
+	if err == nil || !strings.Contains(err.Error(), "options.debug.packages.python.interpreter is not valid") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestDecodeRejectsProviderOwnedApplicationFields(t *testing.T) {
 	tests := []struct {
 		name string
 		old  string
 		new  string
 		want string
 	}{
-		{name: "Python packages", old: "      requirements: [demo-server]\n", new: "      requirements: [demo-server]\n      packages: []\n", want: ".packages is not valid for a Python component"},
-		{name: "Python option packages", old: "      requirements: [demo-server]\n", new: "      requirements: [demo-server]\n      options:\n        imap:\n          description: IMAP\n          packages: []\n", want: ".packages is not valid for a Python option"},
+		{name: "application type", old: "    application:\n", new: "    application:\n      type: python\n", want: "field type not found"},
+		{name: "application requirements", old: "    application:\n", new: "    application:\n      requirements: [demo-server]\n", want: "field requirements not found"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			source, err := Decode([]byte(strings.Replace(minimalBlueprint, tt.old, tt.new, 1)))
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = Resolve(source)
+			_, err := Decode([]byte(strings.Replace(minimalBlueprint, tt.old, tt.new, 1)))
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %v, want %q", err, tt.want)
 			}
@@ -275,33 +348,24 @@ func TestResolveRejectsProviderOwnedUnionFields(t *testing.T) {
 	}
 }
 
-func TestResolveAPTComponentSyntax(t *testing.T) {
-	value := strings.Replace(minimalBlueprint,
-		"    application:\n",
-		"    system:\n      type: apt\n      packages:\n        - curl\n        - package: python3=3.11.2-1+deb12u1\n          exports:\n            python:\n              executable: /usr/bin/python3\n      options:\n        git:\n          description: Install Git.\n          packages: [git]\n    application:\n", 1)
+func TestResolveOSContributionSyntax(t *testing.T) {
+	value := strings.Replace(minimalBlueprint, "  applications:\n",
+		"  packages:\n    os:\n      - curl\n      - package: python3=3.11.2-1+deb12u1\n        exports:\n          python:\n            executable: /usr/bin/python3\n  applications:\n", 1)
+	value = strings.Replace(value, "    application:\n",
+		"    application:\n      options:\n        git:\n          description: Install Git.\n          packages:\n            os: [git]\n", 1)
 	source, err := Decode([]byte(value))
 	if err != nil {
 		t.Fatal(err)
-	}
-	component, err := resolveComponent("system", source.Environment.Components["system"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if component.Type != ComponentTypeAPT || component.Base != nil || component.Python != nil || component.APT == nil {
-		t.Fatalf("APT component union = %#v", component)
-	}
-	if got := component.APT.Packages; len(got) != 2 || got[0].Name != "curl" || got[1].Exports["python"].Executable != "/usr/bin/python3" {
-		t.Fatalf("APT packages = %#v", got)
-	}
-	if got := component.Options["git"].APTPackages; len(got) != 1 || got[0].Name != "git" {
-		t.Fatalf("APT option = %#v", got)
 	}
 	document, err := Resolve(source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := document.Environment.Components["system"]; got.Type != ComponentTypeAPT || got.APT == nil || len(got.APT.Packages) != 2 {
-		t.Fatalf("resolved APT component = %#v", got)
+	if got := document.Environment.Packages.OS; len(got) != 2 || got[0].Name != "curl" || got[1].Exports["python"].Executable != "/usr/bin/python3" {
+		t.Fatalf("environment OS packages = %#v", got)
+	}
+	if got := document.Environment.Applications["application"].Options["git"].Packages.OS; len(got) != 1 || got[0].Name != "git" {
+		t.Fatalf("application OS option = %#v", got)
 	}
 }
 
@@ -442,8 +506,8 @@ func TestResolvedMinimalGolden(t *testing.T) {
 	}
 	actual, err := json.MarshalIndent(golden{
 		ID: document.Environment.ID, ControlScript: document.Environment.ControlScript,
-		Component: document.Environment.Components["application"],
-		Mount:     document.Environment.Mounts["data"], Executable: document.Environment.Components["application"].Executables["server"],
+		Component: document.Environment.Components[ApplicationContributionID("application", ContributionProviderPython)],
+		Mount:     document.Environment.Mounts["data"], Executable: document.Environment.Applications["application"].Executables["server"],
 		Endpoint: document.Environment.Workload.Endpoints["http"], MountMode: document.Docker.Mounts["data"].Mode,
 		Publication: document.Docker.Workload.Endpoints["http"].Publish,
 	}, "", "  ")

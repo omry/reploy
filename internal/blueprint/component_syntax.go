@@ -6,23 +6,62 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func (component *ComponentSyntax) UnmarshalYAML(node *yaml.Node) error {
-	allowed := map[string]bool{
-		"type": true, "image": true, "exports": true, "interpreter": true,
-		"requirements": true, "packages": true, "options": true, "executables": true,
-	}
-	present, err := validateSyntaxMapping(node, "component", allowed)
-	if err != nil {
+func (base *BaseSyntax) UnmarshalYAML(node *yaml.Node) error {
+	if _, err := validateSyntaxMapping(node, "base", map[string]bool{
+		"image": true, "exports": true,
+	}); err != nil {
 		return err
 	}
-	type plain ComponentSyntax
-	var decoded plain
-	if err := node.Decode(&decoded); err != nil {
+	type plain BaseSyntax
+	return node.Decode((*plain)(base))
+}
+
+func (packages *EnvironmentPackagesSyntax) UnmarshalYAML(node *yaml.Node) error {
+	if _, err := validateSyntaxMapping(node, "environment packages", map[string]bool{"os": true}); err != nil {
 		return err
 	}
-	*component = ComponentSyntax(decoded)
-	component.Present = present
-	return nil
+	type plain EnvironmentPackagesSyntax
+	return node.Decode((*plain)(packages))
+}
+
+func (application *ApplicationSyntax) UnmarshalYAML(node *yaml.Node) error {
+	if _, err := validateSyntaxMapping(node, "application", map[string]bool{
+		"packages": true, "options": true, "executables": true,
+	}); err != nil {
+		return err
+	}
+	type plain ApplicationSyntax
+	return node.Decode((*plain)(application))
+}
+
+func (packages *ApplicationPackagesSyntax) UnmarshalYAML(node *yaml.Node) error {
+	if _, err := validateSyntaxMapping(node, "application packages", map[string]bool{
+		"os": true, "python": true,
+	}); err != nil {
+		return err
+	}
+	type plain ApplicationPackagesSyntax
+	return node.Decode((*plain)(packages))
+}
+
+func (packages *PythonPackagesSyntax) UnmarshalYAML(node *yaml.Node) error {
+	if _, err := validateSyntaxMapping(node, "Python packages", map[string]bool{
+		"interpreter": true, "requirements": true,
+	}); err != nil {
+		return err
+	}
+	type plain PythonPackagesSyntax
+	return node.Decode((*plain)(packages))
+}
+
+func (option *ApplicationOptionSyntax) UnmarshalYAML(node *yaml.Node) error {
+	if _, err := validateSyntaxMapping(node, "application option", map[string]bool{
+		"description": true, "packages": true,
+	}); err != nil {
+		return err
+	}
+	type plain ApplicationOptionSyntax
+	return node.Decode((*plain)(option))
 }
 
 func (export *ExecutableExportSyntax) UnmarshalYAML(node *yaml.Node) error {
@@ -35,7 +74,7 @@ func (export *ExecutableExportSyntax) UnmarshalYAML(node *yaml.Node) error {
 
 func (executable *ExecutableSyntax) UnmarshalYAML(node *yaml.Node) error {
 	if _, err := validateSyntaxMapping(node, "executable profile", map[string]bool{
-		"binary": true, "order": true, "argv_prefix": true, "argv_suffix": true,
+		"source": true, "binary": true, "order": true, "argv_prefix": true, "argv_suffix": true,
 	}); err != nil {
 		return err
 	}
@@ -51,23 +90,6 @@ func (requirement *CommandRequirementSyntax) UnmarshalYAML(node *yaml.Node) erro
 	}
 	type plain CommandRequirementSyntax
 	return node.Decode((*plain)(requirement))
-}
-
-func (option *ComponentOptionSyntax) UnmarshalYAML(node *yaml.Node) error {
-	present, err := validateSyntaxMapping(node, "component option", map[string]bool{
-		"description": true, "requirements": true, "packages": true,
-	})
-	if err != nil {
-		return err
-	}
-	type plain ComponentOptionSyntax
-	var decoded plain
-	if err := node.Decode(&decoded); err != nil {
-		return err
-	}
-	*option = ComponentOptionSyntax(decoded)
-	option.Present = present
-	return nil
 }
 
 func (request *APTPackageRequestSyntax) UnmarshalYAML(node *yaml.Node) error {

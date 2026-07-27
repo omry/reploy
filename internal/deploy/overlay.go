@@ -19,17 +19,17 @@ type RequestOverlayV1 struct {
 }
 
 type QualifiedOption struct {
-	Component string `json:"component"`
-	Option    string `json:"option"`
+	Application string `json:"application"`
+	Option      string `json:"option"`
 }
 
 type DirectPackageRequest struct {
-	Component string                            `json:"component"`
-	Package   providers.CanonicalPackageRequest `json:"package"`
+	Contribution string                            `json:"contribution"`
+	Package      providers.CanonicalPackageRequest `json:"package"`
 }
 
 // PackageRequestValidator is supplied by the provider registry. It binds the
-// target component type to an exact provider-owned package schema and value.
+// target contribution type to an exact provider-owned package schema and value.
 type PackageRequestValidator func(blueprint.ComponentType, providers.CanonicalPackageRequest) error
 
 func EmptyRequestOverlayV1() RequestOverlayV1 {
@@ -53,25 +53,22 @@ func NormalizeRequestOverlayV1(document blueprint.Document, overlay RequestOverl
 	normalized := EmptyRequestOverlayV1()
 	selected := map[string]QualifiedOption{}
 	for _, option := range overlay.SelectedOptions {
-		component, exists := document.Environment.Components[option.Component]
+		application, exists := document.Environment.Applications[option.Application]
 		if !exists {
-			return RequestOverlayV1{}, fmt.Errorf("request overlay option targets missing component %q", option.Component)
+			return RequestOverlayV1{}, fmt.Errorf("request overlay option targets missing application %q", option.Application)
 		}
-		if component.Type == blueprint.ComponentTypeBase {
-			return RequestOverlayV1{}, fmt.Errorf("base component does not support options")
+		if _, exists := application.Options[option.Option]; !exists {
+			return RequestOverlayV1{}, fmt.Errorf("request overlay selects missing option %q on application %q", option.Option, option.Application)
 		}
-		if _, exists := component.Options[option.Option]; !exists {
-			return RequestOverlayV1{}, fmt.Errorf("request overlay selects missing option %q on component %q", option.Option, option.Component)
-		}
-		key := option.Component + "\x00" + option.Option
+		key := option.Application + "\x00" + option.Option
 		selected[key] = option
 	}
 	for _, option := range selected {
 		normalized.SelectedOptions = append(normalized.SelectedOptions, option)
 	}
 	sort.Slice(normalized.SelectedOptions, func(left int, right int) bool {
-		if normalized.SelectedOptions[left].Component != normalized.SelectedOptions[right].Component {
-			return normalized.SelectedOptions[left].Component < normalized.SelectedOptions[right].Component
+		if normalized.SelectedOptions[left].Application != normalized.SelectedOptions[right].Application {
+			return normalized.SelectedOptions[left].Application < normalized.SelectedOptions[right].Application
 		}
 		return normalized.SelectedOptions[left].Option < normalized.SelectedOptions[right].Option
 	})
@@ -82,24 +79,24 @@ func NormalizeRequestOverlayV1(document blueprint.Document, overlay RequestOverl
 	}
 	direct := map[string]canonicalDirectPackage{}
 	for _, request := range overlay.DirectPackages {
-		component, exists := document.Environment.Components[request.Component]
+		contribution, exists := document.Environment.Components[request.Contribution]
 		if !exists {
-			return RequestOverlayV1{}, fmt.Errorf("direct package request targets missing component %q", request.Component)
+			return RequestOverlayV1{}, fmt.Errorf("direct package request targets missing contribution %q", request.Contribution)
 		}
-		if component.Type == blueprint.ComponentTypeBase {
-			return RequestOverlayV1{}, fmt.Errorf("base component does not support direct package requests")
+		if contribution.Type == blueprint.ComponentTypeBase {
+			return RequestOverlayV1{}, fmt.Errorf("base contribution does not support direct package requests")
 		}
 		if validatePackage == nil {
 			return RequestOverlayV1{}, fmt.Errorf("direct package request validation is unavailable")
 		}
-		if err := validatePackage(component.Type, request.Package); err != nil {
-			return RequestOverlayV1{}, fmt.Errorf("direct package request for component %q: %w", request.Component, err)
+		if err := validatePackage(contribution.Type, request.Package); err != nil {
+			return RequestOverlayV1{}, fmt.Errorf("direct package request for contribution %q: %w", request.Contribution, err)
 		}
 		encoded, err := providers.CanonicalPackageRequestBytes(request.Package)
 		if err != nil {
-			return RequestOverlayV1{}, fmt.Errorf("direct package request for component %q: %w", request.Component, err)
+			return RequestOverlayV1{}, fmt.Errorf("direct package request for contribution %q: %w", request.Contribution, err)
 		}
-		key := request.Component + "\x00" + string(encoded)
+		key := request.Contribution + "\x00" + string(encoded)
 		direct[key] = canonicalDirectPackage{request: request, encoded: encoded}
 	}
 	ordered := make([]canonicalDirectPackage, 0, len(direct))
@@ -107,8 +104,8 @@ func NormalizeRequestOverlayV1(document blueprint.Document, overlay RequestOverl
 		ordered = append(ordered, request)
 	}
 	sort.Slice(ordered, func(left int, right int) bool {
-		if ordered[left].request.Component != ordered[right].request.Component {
-			return ordered[left].request.Component < ordered[right].request.Component
+		if ordered[left].request.Contribution != ordered[right].request.Contribution {
+			return ordered[left].request.Contribution < ordered[right].request.Contribution
 		}
 		if ordered[left].request.Package.Schema != ordered[right].request.Package.Schema {
 			return ordered[left].request.Package.Schema < ordered[right].request.Package.Schema
@@ -131,8 +128,8 @@ func RequestOverlayDigestV1(overlay RequestOverlayV1) (canonical.Digest, error) 
 		return "", fmt.Errorf("request overlay collections must be arrays")
 	}
 	if !sort.SliceIsSorted(overlay.SelectedOptions, func(left int, right int) bool {
-		if overlay.SelectedOptions[left].Component != overlay.SelectedOptions[right].Component {
-			return overlay.SelectedOptions[left].Component < overlay.SelectedOptions[right].Component
+		if overlay.SelectedOptions[left].Application != overlay.SelectedOptions[right].Application {
+			return overlay.SelectedOptions[left].Application < overlay.SelectedOptions[right].Application
 		}
 		return overlay.SelectedOptions[left].Option < overlay.SelectedOptions[right].Option
 	}) {
@@ -144,7 +141,7 @@ func RequestOverlayDigestV1(overlay RequestOverlayV1) (canonical.Digest, error) 
 		}
 	}
 
-	var previousComponent string
+	var previousContribution string
 	var previousSchema string
 	var previousBytes []byte
 	for index, request := range overlay.DirectPackages {
@@ -153,7 +150,7 @@ func RequestOverlayDigestV1(overlay RequestOverlayV1) (canonical.Digest, error) 
 			return "", fmt.Errorf("direct package request %d: %w", index, err)
 		}
 		if index > 0 {
-			comparison := compareDirectPackageKey(request.Component, request.Package.Schema, encoded, previousComponent, previousSchema, previousBytes)
+			comparison := compareDirectPackageKey(request.Contribution, request.Package.Schema, encoded, previousContribution, previousSchema, previousBytes)
 			if comparison == 0 {
 				return "", fmt.Errorf("request overlay contains duplicate direct package request")
 			}
@@ -161,16 +158,16 @@ func RequestOverlayDigestV1(overlay RequestOverlayV1) (canonical.Digest, error) 
 				return "", fmt.Errorf("request overlay direct packages are not canonically ordered")
 			}
 		}
-		previousComponent, previousSchema, previousBytes = request.Component, request.Package.Schema, encoded
+		previousContribution, previousSchema, previousBytes = request.Contribution, request.Package.Schema, encoded
 	}
 	return canonical.Sum("request-overlay", RequestOverlaySchemaV1, overlay)
 }
 
-func compareDirectPackageKey(component string, schema string, encoded []byte, previousComponent string, previousSchema string, previousBytes []byte) int {
-	if component < previousComponent {
+func compareDirectPackageKey(contribution string, schema string, encoded []byte, previousContribution string, previousSchema string, previousBytes []byte) int {
+	if contribution < previousContribution {
 		return -1
 	}
-	if component > previousComponent {
+	if contribution > previousContribution {
 		return 1
 	}
 	if schema < previousSchema {

@@ -16,10 +16,12 @@ func TestPlanProviderInstallationV1UsesLockedBlueprintAndDestinationReference(t 
 		Blueprint: blueprint.Metadata{Schema: 1, Version: "1.0.0"},
 		Environment: blueprint.Environment{
 			ID: "demo", ControlScript: "democtl",
-			Components: map[string]blueprint.Component{"application": {
-				Type: blueprint.ComponentTypePython,
+			Applications: map[string]blueprint.Application{"application": {
+				Packages: blueprint.ApplicationPackages{
+					Python: &blueprint.PythonComponent{Requirements: []string{"demo"}},
+				},
 				Executables: map[string]blueprint.Executable{"server": {
-					Binary: "demo", Order: blueprint.DefaultArgumentOrder,
+					Source: "python", Binary: "demo", Order: blueprint.DefaultArgumentOrder,
 				}},
 			}},
 			Commands: map[string]blueprint.Command{"serve": {
@@ -49,7 +51,7 @@ func TestPlanProviderInstallationV1UsesLockedBlueprintAndDestinationReference(t 
 		SourceBuild: CurrentBuild{
 			State: deploy.StateV1{Blueprint: testResolvedBlueprintV1(t, document)},
 			Lock: deploy.BuildLockV1{Catalog: []providers.RealizedOutput{{
-				SupplierComponent: "application", SupplierNode: "python/application", Name: "demo",
+				SupplierComponent: "application/application/python", SupplierNode: "python/application/application", Name: "demo",
 				Candidate: providers.ExecutableCandidate{InvocationPath: "/opt/demo"},
 				Evidence:  providers.ExecutableEvidence{InvocationPath: "/opt/demo"},
 			}}},

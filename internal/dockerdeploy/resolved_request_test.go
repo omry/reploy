@@ -31,12 +31,12 @@ func TestBuildResolvedRequestV1CombinesBlueprintOptionsAndDirectPackages(t *test
 	overlay := deploy.RequestOverlayV1{
 		Schema: deploy.RequestOverlaySchemaV1,
 		SelectedOptions: []deploy.QualifiedOption{
-			{Component: "system", Option: "tools"},
-			{Component: "application", Option: "debug"},
+			{Application: "system", Option: "tools"},
+			{Application: "application", Option: "debug"},
 		},
 		DirectPackages: []deploy.DirectPackageRequest{
-			{Component: "system", Package: aptDirect},
-			{Component: "application", Package: pythonDirect},
+			{Contribution: "application/system/os", Package: aptDirect},
+			{Contribution: "application/application/python", Package: pythonDirect},
 		},
 	}
 	platform, err := blueprint.ParsePlatform("linux/amd64")
@@ -51,14 +51,14 @@ func TestBuildResolvedRequestV1CombinesBlueprintOptionsAndDirectPackages(t *test
 	for _, component := range request.Components {
 		names = append(names, component.Component)
 	}
-	if !reflect.DeepEqual(names, []string{"application", "base", "system"}) {
+	if !reflect.DeepEqual(names, []string{"application/application/python", "application/system/os", "base"}) {
 		t.Fatalf("components = %#v", request.Components)
 	}
 	pythonRequest := request.Components[0].Request
 	if got := len(pythonRequest.Value["requirements"].([]any)); got != 3 {
 		t.Fatalf("Python requirements = %#v", pythonRequest.Value["requirements"])
 	}
-	aptRequest := request.Components[2].Request
+	aptRequest := request.Components[1].Request
 	aptComponents := aptRequest.Value["components"].([]any)
 	aptPackages := aptComponents[0].(canonical.Object)["packages"].([]any)
 	if len(aptPackages) != 3 {
@@ -70,6 +70,64 @@ func TestBuildResolvedRequestV1CombinesBlueprintOptionsAndDirectPackages(t *test
 	}
 	if len(plan.Nodes) != 3 || len(plan.Edges) != 1 || plan.Edges[0].Supplier != "apt" {
 		t.Fatalf("plan = %#v", plan)
+	}
+}
+
+func TestBuildResolvedRequestV1ExpandsOneApplicationOptionAcrossProviders(t *testing.T) {
+	document := resolvedRequestTestDocument()
+	application := document.Environment.Applications["application"]
+	debug := application.Options["debug"]
+	debug.Packages.OS = []blueprint.APTPackageRequest{{
+		Name: "gdb", Exports: map[string]blueprint.ExecutableExport{},
+	}}
+	application.Options["debug"] = debug
+	document.Environment.Applications["application"] = application
+	if err := document.Environment.RebuildProviderContributions(); err != nil {
+		t.Fatal(err)
+	}
+
+	request, err := BuildResolvedRequestV1(
+		document,
+		deploy.RequestOverlayV1{
+			Schema: deploy.RequestOverlaySchemaV1,
+			SelectedOptions: []deploy.QualifiedOption{{
+				Application: "application", Option: "debug",
+			}},
+			DirectPackages: []deploy.DirectPackageRequest{},
+		},
+		document.Blueprint.Compatibility.Platforms[0],
+		[]providers.ResolvedSourceInput{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := registry.Plan(providers.PlanInput{
+		Components: request.Components,
+		Platform:   request.Platform,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var aptNode *providers.NodeSpec
+	for index := range plan.Nodes {
+		if plan.Nodes[index].Provider == blueprint.ComponentTypeAPT {
+			aptNode = &plan.Nodes[index]
+		}
+	}
+	if aptNode == nil || !reflect.DeepEqual(aptNode.Components, []string{
+		"application/application/os",
+		"application/system/os",
+	}) {
+		t.Fatalf("APT node contributions = %#v", aptNode)
+	}
+	pythonFound := false
+	for _, component := range request.Components {
+		if component.Component == "application/application/python" {
+			pythonFound = len(component.Request.Value["requirements"].([]any)) == 2
+		}
+	}
+	if !pythonFound {
+		t.Fatalf("Python option contribution was not selected: %#v", request.Components)
 	}
 }
 
@@ -96,20 +154,21 @@ func TestBuildResolvedRequestWithOverridesReplacesOnlyBaseImage(t *testing.T) {
 	if !found {
 		t.Fatal("resolved request has no base component")
 	}
-	if document.Environment.Components["base"].Base.Image == "python:3.13-slim" {
+	if document.Environment.Base.Image == "python:3.13-slim" {
 		t.Fatal("base override mutated the blueprint document")
 	}
 }
 
 func TestBuildResolvedRequestPackageAdditionActivatesOSProviderWithoutMutatingBlueprint(t *testing.T) {
 	document := resolvedRequestTestDocument()
-	delete(document.Environment.Components, "system")
-	base := document.Environment.Components["base"]
-	base.Base.Exports["python"] = blueprint.BaseExecutableExport{Executable: "/usr/bin/python3"}
-	document.Environment.Components["base"] = base
-	application := document.Environment.Components["application"]
-	application.Python.Interpreter.Supplier = "base"
-	document.Environment.Components["application"] = application
+	delete(document.Environment.Applications, "system")
+	document.Environment.Base.Exports["python"] = blueprint.BaseExecutableExport{Executable: "/usr/bin/python3"}
+	application := document.Environment.Applications["application"]
+	application.Packages.Python.Interpreter.Supplier = "base"
+	document.Environment.Applications["application"] = application
+	if err := document.Environment.RebuildProviderContributions(); err != nil {
+		t.Fatal(err)
+	}
 
 	intent := deploy.EmptyPackageOverrideIntentV1(document.Environment.ID)
 	intent.Additions = []deploy.PackageAdditionIntentV1{{
@@ -128,7 +187,7 @@ func TestBuildResolvedRequestPackageAdditionActivatesOSProviderWithoutMutatingBl
 			osComponent = &request.Components[index]
 		}
 	}
-	if osComponent == nil || osComponent.Component != "os" {
+	if osComponent == nil || osComponent.Component != "environment/os" {
 		t.Fatalf("OS package addition did not activate an OS component: %#v", request.Components)
 	}
 	packageValue := osComponent.Request.Value["components"].([]any)[0].(canonical.Object)["packages"].([]any)[0].(canonical.Object)
@@ -136,7 +195,7 @@ func TestBuildResolvedRequestPackageAdditionActivatesOSProviderWithoutMutatingBl
 	if value["name"] != "default-jre-headless" {
 		t.Fatalf("OS package request = %#v", packageValue)
 	}
-	if _, exists := document.Environment.Components["os"]; exists {
+	if _, exists := document.Environment.Components["environment/os"]; exists {
 		t.Fatal("OS package addition mutated the blueprint document")
 	}
 }
@@ -154,18 +213,18 @@ func TestBuildResolvedRequestV1NormalizesOverlayBeforeIdentity(t *testing.T) {
 	duplicate := deploy.RequestOverlayV1{
 		Schema: deploy.RequestOverlaySchemaV1,
 		SelectedOptions: []deploy.QualifiedOption{
-			{Component: "application", Option: "debug"},
-			{Component: "application", Option: "debug"},
+			{Application: "application", Option: "debug"},
+			{Application: "application", Option: "debug"},
 		},
 		DirectPackages: []deploy.DirectPackageRequest{
-			{Component: "application", Package: packageRequest},
-			{Component: "application", Package: packageRequest},
+			{Contribution: "application/application/python", Package: packageRequest},
+			{Contribution: "application/application/python", Package: packageRequest},
 		},
 	}
 	canonicalOverlay := deploy.RequestOverlayV1{
 		Schema:          deploy.RequestOverlaySchemaV1,
-		SelectedOptions: []deploy.QualifiedOption{{Component: "application", Option: "debug"}},
-		DirectPackages:  []deploy.DirectPackageRequest{{Component: "application", Package: packageRequest}},
+		SelectedOptions: []deploy.QualifiedOption{{Application: "application", Option: "debug"}},
+		DirectPackages:  []deploy.DirectPackageRequest{{Contribution: "application/application/python", Package: packageRequest}},
 	}
 	first, err := BuildResolvedRequestV1(document, duplicate, platform, []providers.ResolvedSourceInput{})
 	if err != nil {
@@ -192,7 +251,7 @@ func TestFinalizeResolvedRequestV1RecordsGraphSelectedSources(t *testing.T) {
 	document := resolvedRequestTestDocument()
 	platform := document.Blueprint.Compatibility.Platforms[0]
 	source := func(name string, manifest string, artifact string) providers.ResolvedSourceInput {
-		return testPythonResolvedSource("application", name, "1.0", registryDigest(manifest), registryDigest(artifact))
+		return testPythonResolvedSource("application/application/python", name, "1.0", registryDigest(manifest), registryDigest(artifact))
 	}
 	selected := source("demo", "1", "2")
 	unused := source("unused", "3", "4")
@@ -256,24 +315,25 @@ func TestResolvedRequestForLockedBuildIgnoresUnrelatedPackageOverride(t *testing
 	fixture := newPreparedPythonGraphReuseFixture(t)
 	document := blueprint.Document{
 		Blueprint: blueprint.Metadata{Compatibility: blueprint.Compatibility{Platforms: []blueprint.Platform{fixture.request.Platform}}},
-		Environment: blueprint.Environment{ID: "demo", Components: map[string]blueprint.Component{
-			"base": {
-				Type: blueprint.ComponentTypeBase,
-				Base: &blueprint.BaseComponent{
-					Image:   fixture.lock.Base.AuthorReference,
-					Exports: map[string]blueprint.BaseExecutableExport{"python": {Executable: "/usr/bin/python3"}},
-				},
-				Options: map[string]blueprint.ComponentOption{},
+		Environment: blueprint.Environment{
+			ID: "demo",
+			Base: blueprint.BaseComponent{
+				Image:   fixture.lock.Base.AuthorReference,
+				Exports: map[string]blueprint.BaseExecutableExport{"python": {Executable: "/usr/bin/python3"}},
 			},
-			"application": {
-				Type: blueprint.ComponentTypePython,
-				Python: &blueprint.PythonComponent{
-					Interpreter:  blueprint.CommandRequirement{Command: "python", Version: ">=3.11", Supplier: "base"},
-					Requirements: []string{"demo-server==1.0"},
+			Applications: map[string]blueprint.Application{
+				"application": {
+					Packages: blueprint.ApplicationPackages{Python: &blueprint.PythonComponent{
+						Interpreter:  blueprint.CommandRequirement{Command: "python", Version: ">=3.11", Supplier: "base"},
+						Requirements: []string{"demo-server==1.0"},
+					}},
+					Options: map[string]blueprint.ApplicationOption{},
 				},
-				Options: map[string]blueprint.ComponentOption{},
 			},
-		}},
+		},
+	}
+	if err := document.Environment.RebuildProviderContributions(); err != nil {
+		t.Fatal(err)
 	}
 	fullIntent := deploy.PackageOverrideIntentV1{
 		Schema: deploy.PackageOverrideIntentSchemaV1, EnvironmentID: "demo",
@@ -349,6 +409,7 @@ func TestResolvedRequestOwnersBindOuterComponentAndSourcesTargetActiveNodes(t *t
 
 func TestBuildResolvedRequestV1RequiresBaseRoot(t *testing.T) {
 	document := resolvedRequestTestDocument()
+	document.Environment.Base = blueprint.BaseComponent{}
 	delete(document.Environment.Components, "base")
 	platform, err := blueprint.ParsePlatform("linux/amd64")
 	if err != nil {
@@ -378,30 +439,48 @@ func resolvedRequestTestDocument() blueprint.Document {
 	if err != nil {
 		panic(err)
 	}
-	return blueprint.Document{
+	document := blueprint.Document{
 		Blueprint: blueprint.Metadata{Compatibility: blueprint.Compatibility{Platforms: []blueprint.Platform{platform}}},
-		Environment: blueprint.Environment{ID: "demo", Components: map[string]blueprint.Component{
-			"base": {
-				Type:    blueprint.ComponentTypeBase,
-				Base:    &blueprint.BaseComponent{Image: "debian:13", Exports: map[string]blueprint.BaseExecutableExport{}},
-				Options: map[string]blueprint.ComponentOption{},
-			},
-			"application": {
-				Type: blueprint.ComponentTypePython,
-				Python: &blueprint.PythonComponent{
-					Interpreter:  blueprint.CommandRequirement{Command: "python", Supplier: "system"},
-					Requirements: []string{"demo==1"},
+		Environment: blueprint.Environment{
+			ID:   "demo",
+			Base: blueprint.BaseComponent{Image: "debian:13", Exports: map[string]blueprint.BaseExecutableExport{}},
+			Applications: map[string]blueprint.Application{
+				"application": {
+					Packages: blueprint.ApplicationPackages{Python: &blueprint.PythonComponent{
+						Interpreter: blueprint.CommandRequirement{
+							Command: "python", Supplier: "application/system/os",
+						},
+						Requirements: []string{"demo==1"},
+					}},
+					Options: map[string]blueprint.ApplicationOption{
+						"debug": {
+							Packages: blueprint.ApplicationOptionPackages{
+								Python: &blueprint.PythonOptionPackages{Requirements: []string{"debugpy==1"}},
+							},
+						},
+					},
 				},
-				Options: map[string]blueprint.ComponentOption{
-					"debug": {PythonRequirements: []string{"debugpy==1"}},
+				"system": {
+					Packages: blueprint.ApplicationPackages{
+						OS: []blueprint.APTPackageRequest{{
+							Name: "python3", Exports: map[string]blueprint.ExecutableExport{},
+						}},
+					},
+					Options: map[string]blueprint.ApplicationOption{
+						"tools": {
+							Packages: blueprint.ApplicationOptionPackages{
+								OS: []blueprint.APTPackageRequest{{
+									Name: "jq", Exports: map[string]blueprint.ExecutableExport{},
+								}},
+							},
+						},
+					},
 				},
 			},
-			"system": {
-				Type: blueprint.ComponentTypeAPT,
-				APT:  &blueprint.APTComponent{Packages: []blueprint.APTPackageRequest{{Name: "python3", Exports: map[string]blueprint.ExecutableExport{}}}},
-				Options: map[string]blueprint.ComponentOption{
-					"tools": {APTPackages: []blueprint.APTPackageRequest{{Name: "jq", Exports: map[string]blueprint.ExecutableExport{}}}},
-				},
-			},
-		}}}
+		},
+	}
+	if err := document.Environment.RebuildProviderContributions(); err != nil {
+		panic(err)
+	}
+	return document
 }

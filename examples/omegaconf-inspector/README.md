@@ -12,29 +12,45 @@ Arbiter or another domain-specific service.
 ## Local Demo Flow
 
 ```bash
-reploy stage omegaconf-inspector-demo --dir /tmp/reploy-omegaconf-inspector-demo
-reploy app config init --dir /tmp/reploy-omegaconf-inspector-demo
-reploy app config check --dir /tmp/reploy-omegaconf-inspector-demo
-reploy build --dir /tmp/reploy-omegaconf-inspector-demo
-reploy up --dir /tmp/reploy-omegaconf-inspector-demo
+STAGING=/tmp/reploy-omegaconf-inspector-demo
+reploy stage omegaconf-inspector-demo --dir "$STAGING"
+reploy build --dir "$STAGING"
+"$STAGING/omegaconf-inspector" config init
+"$STAGING/omegaconf-inspector" config check
+"$STAGING/omegaconf-inspector" up
+reploy test --dir "$STAGING"
 ```
 
 When working on the in-repo example, stage the local blueprint instead:
 
 ```bash
-reploy stage file:examples/omegaconf-inspector/reploy --dir /tmp/reploy-omegaconf-inspector-demo
-reploy overrides --dir /tmp/reploy-omegaconf-inspector-demo
-reploy app config init --dir /tmp/reploy-omegaconf-inspector-demo
-reploy app config check --dir /tmp/reploy-omegaconf-inspector-demo
-reploy build --dir /tmp/reploy-omegaconf-inspector-demo
-reploy up --dir /tmp/reploy-omegaconf-inspector-demo
+STAGING=/tmp/reploy-omegaconf-inspector-demo
+reploy stage file:examples/omegaconf-inspector/reploy --dir "$STAGING"
+reploy overrides --dir "$STAGING"
+reploy build --dir "$STAGING"
+"$STAGING/omegaconf-inspector" config init
+"$STAGING/omegaconf-inspector" config check
+"$STAGING/omegaconf-inspector" up
+reploy test --dir "$STAGING"
 ```
 
-In the override editor, select the current `examples/omegaconf-inspector`
-checkout for `omegaconf-inspector`. The editor writes that development choice
-to the staging directory; the published blueprint remains source-independent.
+Staging the local blueprint imports its adjacent development override, which
+selects the current `examples/omegaconf-inspector` checkout. The override editor
+can inspect or change that choice; the published blueprint remains
+source-independent.
 
 Then open the staged service URL reported by Reploy.
+
+Install the tested staging state, then use the control command in the installed
+directory:
+
+```bash
+INSTALL="$PWD/omegaconf-inspector-installed"
+reploy install --dir "$STAGING" --scope user --to "$INSTALL"
+"$INSTALL/omegaconf-inspector" status
+"$INSTALL/omegaconf-inspector" config show
+"$INSTALL/omegaconf-inspector" logs
+```
 
 ## Local Python Development
 

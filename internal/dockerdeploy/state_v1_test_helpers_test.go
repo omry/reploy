@@ -34,14 +34,9 @@ func testSelectedPlatformDocumentV1(t *testing.T) (blueprint.Document, blueprint
 	document := blueprint.Document{
 		Blueprint: blueprint.Metadata{Compatibility: blueprint.Compatibility{Platforms: []blueprint.Platform{platform}}},
 		Environment: blueprint.Environment{
-			ID: "demo",
-			Components: map[string]blueprint.Component{
-				"base": {
-					Type: blueprint.ComponentTypeBase,
-					Base: &blueprint.BaseComponent{
-						Image: "local-base", Exports: map[string]blueprint.BaseExecutableExport{},
-					},
-				},
+			ID: "demo", ControlScript: "demo",
+			Base: blueprint.BaseComponent{
+				Image: "local-base", Exports: map[string]blueprint.BaseExecutableExport{},
 			},
 		},
 	}

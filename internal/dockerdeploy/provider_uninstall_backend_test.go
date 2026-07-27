@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -56,6 +58,15 @@ func TestExecuteProviderUninstallRetainsBuildAsStagingAndReportsSuccess(t *testi
 	state, found, err := operation.ReadStateV1()
 	if err != nil || !found || state.Deployment != nil || state.Current == nil {
 		t.Fatalf("retained state: found=%v err=%v state=%#v", found, err, state)
+	}
+	for _, path := range []string{
+		filepath.Join(dir, "demo"),
+		filepath.Join(dir, filepath.FromSlash(embeddedRuntimeFileName())),
+		filepath.Join(dir, filepath.FromSlash(stagedControlManifestPathV1)),
+	} {
+		if info, statErr := os.Stat(path); statErr != nil || !info.Mode().IsRegular() {
+			t.Fatalf("retained staged control file %q: info=%v err=%v", path, info, statErr)
+		}
 	}
 }
 

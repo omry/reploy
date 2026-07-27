@@ -7,22 +7,20 @@ import (
 	"github.com/omry/reploy/internal/blueprint"
 )
 
-// ComponentOption is the provider-neutral projection used by the retained
+// ApplicationOption is the provider-neutral projection used by the retained
 // bundle options/add/remove UX.
-type ComponentOption struct {
+type ApplicationOption struct {
 	Name        string
-	Component   string
-	Type        blueprint.ComponentType
+	Application string
 	Description string
 }
 
-func ComponentOptions(document blueprint.Document) []ComponentOption {
-	result := []ComponentOption{}
-	for componentName, component := range document.Environment.Components {
-		for name, option := range component.Options {
-			result = append(result, ComponentOption{
-				Name: name, Component: componentName, Type: component.Type,
-				Description: option.Description,
+func ApplicationOptions(document blueprint.Document) []ApplicationOption {
+	result := []ApplicationOption{}
+	for applicationName, application := range document.Environment.Applications {
+		for name, option := range application.Options {
+			result = append(result, ApplicationOption{
+				Name: name, Application: applicationName, Description: option.Description,
 			})
 		}
 	}
@@ -30,16 +28,16 @@ func ComponentOptions(document blueprint.Document) []ComponentOption {
 		if result[i].Name != result[j].Name {
 			return result[i].Name < result[j].Name
 		}
-		return result[i].Component < result[j].Component
+		return result[i].Application < result[j].Application
 	})
 	return result
 }
 
-// SelectComponents validates a complete selection update and returns stable
+// SelectApplicationOptions validates a complete selection update and returns stable
 // state. It does not mutate the input when any requested name is invalid.
-func SelectComponents(document blueprint.Document, selected []string, add []string, remove []string) ([]string, error) {
+func SelectApplicationOptions(document blueprint.Document, selected []string, add []string, remove []string) ([]string, error) {
 	options := map[string]int{}
-	for _, option := range ComponentOptions(document) {
+	for _, option := range ApplicationOptions(document) {
 		options[option.Name]++
 	}
 	next := map[string]bool{}
@@ -50,22 +48,22 @@ func SelectComponents(document blueprint.Document, selected []string, add []stri
 	}
 	for _, name := range add {
 		if options[name] == 0 {
-			return nil, fmt.Errorf("unknown component option %q", name)
+			return nil, fmt.Errorf("unknown application option %q", name)
 		}
 		if options[name] > 1 {
-			return nil, fmt.Errorf("component option %q is ambiguous across components", name)
+			return nil, fmt.Errorf("application option %q is ambiguous across applications", name)
 		}
 		next[name] = true
 	}
 	for _, name := range remove {
 		if options[name] == 0 {
-			return nil, fmt.Errorf("unknown component option %q", name)
+			return nil, fmt.Errorf("unknown application option %q", name)
 		}
 		if options[name] > 1 {
-			return nil, fmt.Errorf("component option %q is ambiguous across components", name)
+			return nil, fmt.Errorf("application option %q is ambiguous across applications", name)
 		}
 		if !next[name] {
-			return nil, fmt.Errorf("component option is not selected: %s", name)
+			return nil, fmt.Errorf("application option is not selected: %s", name)
 		}
 		delete(next, name)
 	}

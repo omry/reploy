@@ -18,6 +18,32 @@ func startProviderInstallHostV1(ctx context.Context, plan providerInstallationPl
 	if err != nil {
 		return err
 	}
+	if plan.Docker.PrivateEnvironment && plan.Backend != installBackendLinuxSystemd {
+		environment, err := loadPrivateWorkloadEnvironmentV1(plan.Installation.TargetDir)
+		if err != nil {
+			return fmt.Errorf("load installed private workload environment: %w", err)
+		}
+		if !environment.Present {
+			return fmt.Errorf("installed private workload environment disappeared before startup")
+		}
+		if err := validatePrivateWorkloadEnvironmentIsolationV1(plan.Installation.TargetDir, plan.Docker); err != nil {
+			return fmt.Errorf("validate installed private workload environment isolation: %w", err)
+		}
+		cleanup := composeCommandWithProject(plan.Installation.TargetDir, plan.Installation.ComposeProject, "down", "--remove-orphans")
+		cleanup.Name = tools.DockerPath
+		if err := startAndInjectPrivateWorkloadEnvironmentV1(
+			ctx,
+			commands.Start,
+			cleanup,
+			plan.Docker.ContainerName,
+			environment,
+			options,
+			runCommandWithoutDockerPreflight,
+		); err != nil {
+			return fmt.Errorf("install host startup: %w", err)
+		}
+		return nil
+	}
 	return startProviderInstallHostWithV1(ctx, commands, options, runCommandWithoutDockerPreflight)
 }
 

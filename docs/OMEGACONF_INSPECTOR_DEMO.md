@@ -230,6 +230,10 @@ path, and keeps the project path workspace-relative:
 ```bash
 reploy stage ./reploy/omegaconf-inspector.blueprint.yaml
 reploy build
+./reploy-staging/omegaconf-inspector config init
+./reploy-staging/omegaconf-inspector config check
+./reploy-staging/omegaconf-inspector up
+reploy test
 ```
 
 Java is not a dependency of OmegaConf Inspector. The local OmegaConf checkout
@@ -282,17 +286,18 @@ serve
 config init
 config check
 config show
-project list
-project show <id>
 version
 ```
 
 Installed command exposure should be conservative:
 
-- expose `config check`, `config show`, project list/show, and version
+- expose `config check`, `config show`, and version
 - use `serve` as the runtime command, not as an operator command
 - keep `config init` as a staging/bootstrap command unless a clear installed
   use case appears
+
+Project creation, selection, editing, and inspection belong to the web UI. The
+CLI intentionally does not duplicate those workflows.
 
 ## Blueprint Shape
 
@@ -306,7 +311,7 @@ The blueprint should demonstrate:
 - health check against `/_health_`
 - install hooks that check config before start and health after start
 - success output with the service URL
-- environment commands for service config and persisted project inspection
+- environment commands for deployment configuration and a version smoke check
 - localhost-only host port binding, because users may paste real configs or
   secrets into the inspector
 
@@ -354,7 +359,8 @@ The first implementation should be considered good enough when:
 - the UI can create a project, edit config layers, and merge them
 - `data` survives update/reinstall flows that preserve mounts
 - `conf` remains app-owned service config, not user project input
-- the installed control surface can show config and project state
+- the staged and installed control surfaces can show service config and operate
+  the deployment
 - docs can use the demo to explain Reploy without referencing Arbiter
 
 ## Non-Goals For V1

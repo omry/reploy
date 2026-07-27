@@ -214,32 +214,32 @@ blueprint:
     platforms: [linux/amd64, linux/arm64]
 
 environment:
-  components:
-    base:
-      image: debian:bookworm-slim
-
-    system:
-      type: apt
-      packages:
-        - ca-certificates
-        - libmagic1
-
-        - python3
-
+  base:
+    image: debian:bookworm-slim
+  packages:
+    os:
+      - ca-certificates
+      - libmagic1
+  applications:
     application:
-      type: python
-      interpreter:
-        command: python
-        version: ">=3.11,<3.12"
-      requirements:
-        - arbiter-server
+      packages:
+        os:
+          - python3
+        python:
+          interpreter:
+            command: python
+            supplier: os
+            version: ">=3.11,<3.12"
+          requirements:
+            - arbiter-server
 ```
 
-`system` is an ordinary component name chosen by the author. `apt` selects the
-APT/dpkg component provider. The versioned well-known-tool profile recognizes
-the exact `python3` package request and publishes the logical `python` candidate
-at `/usr/bin/python3`. The Python component requests that logical command
-without naming its source or an executable path.
+The `os` package key selects the provider detected for the base image. On the
+currently supported Debian-derived images that provider is APT/dpkg. The
+versioned well-known-tool profile recognizes the exact `python3` package
+request and publishes the logical `python` candidate at `/usr/bin/python3`.
+The application's Python contribution requests that logical command without
+naming an executable path.
 
 A pinned package uses the same well-known mapping:
 
@@ -554,26 +554,25 @@ version-constraint mismatch rejects that candidate. Once selection is frozen,
 later validation drift fails under the normal validation policy rather than
 silently switching suppliers.
 
-### Base Component and Exports
+### Base Image and Exports
 
-Every environment has one required root component named `base`. It selects the
-starting OCI image and may contribute commands to the same logical namespace:
+Every environment has one required `base`. It selects the starting OCI image
+and may contribute commands to the same logical namespace:
 
 ```yaml
 environment:
-  components:
-    base:
-      image: python:3.13-slim
-      exports:
-        python:
-          executable: /usr/local/bin/python
+  base:
+    image: python:3.13-slim
+    exports:
+      python:
+        executable: /usr/local/bin/python
 ```
 
-The `base` component is the lowest graph node. It has no `type`, upstream
-component, provider bundle, or materialization layer. Reploy resolves its image
-to an immutable platform-specific descriptor, validates each export against that
-exact image, and records the base digest, absolute path, and probe result. Its
-qualified outputs use the ordinary component form, such as `base.python`.
+The base is the lowest graph node. It has no provider bundle or materialization
+layer. Reploy resolves its image to an immutable platform-specific descriptor,
+validates each export against that exact image, and records the base digest,
+absolute path, and probe result. Its qualified outputs use the `base` identity,
+such as `base.python`.
 
 Every base-image export requires an explicit absolute `executable` path. Reploy
 does not list the whole image, search its `PATH`, or probe candidate files.
@@ -595,8 +594,8 @@ interpolation, a `PATH` lookup, or shell source. Candidate suppliers may include
 the immutable base image and active earlier provider nodes:
 
 ```text
-base image export:        python -> /usr/local/bin/python
-APT component export:     python -> /usr/bin/python3
+base image export:         python -> /usr/local/bin/python
+OS contribution export:   python -> /usr/bin/python3
 consumer requirement:     python >=3.11,<3.12
 ```
 
@@ -604,7 +603,7 @@ Reploy asks the consuming provider to validate each candidate using the
 consumer's executable-identity and version semantics. For an unqualified
 requirement, Reploy traverses only catalogs already published by initialized
 suppliers, from lower to higher image layers: the immutable base first, then
-active provider nodes in initialization order, using stable component-name
+active provider nodes in initialization order, using stable contribution
 order within one layer. The first compatible candidate is selected and
 recorded; no compatible candidate is an unsatisfied prerequisite.
 
@@ -613,49 +612,50 @@ A requirement may override automatic precedence with `supplier`:
 ```yaml
 interpreter:
   command: python
-  supplier: system
+  supplier: os
   version: ">=3.11,<3.12"
 ```
 
-`supplier` is either an active component name or the reserved backend-neutral
-identity `base`. When present, Reploy evaluates only that supplier's named
-output and fails directly if the supplier is missing, inactive, incompatible,
-or does not export the command. `base` cannot be used as a component name. The
-field participates in the consumer node identity. Dotted forms such as
-`system.python` and `base.python` are diagnostic identities, not blueprint
-syntax.
+`supplier` selects another contribution owned by the same application or the
+reserved backend-neutral identity `base`. In the initial schema, `os` selects
+the application's OS contribution and `python` selects its Python contribution.
+When present, Reploy evaluates only that supplier's named output and fails
+directly if it is missing, inactive, incompatible, or does not export the
+command. The field participates in the consumer node identity. Dotted forms
+such as `application.python` and `base.python` are diagnostic identities, not
+blueprint syntax.
 
 ### Executable Output Identity and Exposure
 
 All provider-produced executables use one output model. A supplier output names
 one executable candidate, whether explicitly declared, supplied by the APT
 well-known-tool profile, or derived from exact ecosystem metadata. It may be
-consumed by another provider, referenced by a component executable profile, or
+consumed by another provider, referenced by an application executable profile, or
 both; these uses do not create different kinds of output.
 
-Component names are unique within a blueprint, and output names are unique
-within their component. Their combination forms the stable qualified identity
-`<component>.<output>`, for example `system.python`,
-`python314.arbiter_server`, or `python_env_3.arbiter_server`. Repeated local
-output names across components are valid. A qualified reference resolves
-directly. An unqualified provider requirement uses lower-layer-first compatible
-selection. Public command exposure uses a component-scoped executable profile
-and its qualified `<component>.<executable>` name.
+Application names are unique within a blueprint, and executable-profile names
+are unique within their application. Their combination forms the public
+qualified identity `<application>.<executable>`, for example
+`application.arbiter_server`. Internal provider outputs retain their canonical
+owning contribution. Repeated local output names across applications are valid.
+Public command exposure uses an application-scoped executable profile and its
+qualified `<application>.<executable>` name.
 
 Provider types may declare or derive their output catalogs. The Python provider
 derives its initial catalog from the console-script entry-point metadata of
-every exact wheel in the component's resolved closure. It records each script's
-exact name, owning distribution, and entry-point target; a distribution name by
-itself never implies an executable. A console script supplied by a transitive
-dependency is valid and retains that dependency as its actual owner. Two wheels
-claiming the same console-script name in one Python environment are a physical
-venv collision and fail resolution. Wheel scripts without console-script
-metadata are not outputs in the initial design.
+every exact wheel in the application's resolved Python closure. It records each
+script's exact name, owning distribution, and entry-point target; a distribution
+name by itself never implies an executable. A console script supplied by a
+transitive dependency is valid and retains that dependency as its actual owner.
+Two wheels claiming the same console-script name in one application environment
+are a physical venv collision and fail resolution. Wheel scripts without
+console-script metadata are not outputs in the initial design.
 
-`environment.components.<component>.executables` contains invocation profiles
-for outputs of that component. A profile names its provider output with
-`binary` and may define reusable argument defaults; it never declares what the
-provider produces. Commands always name a qualified profile such as
+`environment.applications.<application>.executables` contains invocation
+profiles for outputs owned by that application. A profile names its provider
+contribution with `source`, names its output with `binary`, and may define
+reusable argument defaults; it never declares what the provider produces.
+Commands always name a qualified profile such as
 `application.inspector`; there is no environment-wide alias map or inline
 command-reference alternative. Because command exposure has no typed consumer
 constraint, the profile must resolve to one terminal candidate. Merely
@@ -671,7 +671,7 @@ application-output versioning is deferred.
 Collision validation applies to qualified identities and incompatible physical
 path ownership claims. Multiple references or public aliases for the same
 qualified output are not collisions, nor are equal local output names from
-different components.
+different applications.
 
 Initial supplier catalogs contain candidate paths and provenance. The
 consumer's resolver validates the actual executable and version in its existing
@@ -750,7 +750,7 @@ Graph execution initializes nodes in deterministic topological order:
 ```text
 resolve immutable base and validate base exports
 -> initialize/materialize system-provider node, if active
--> initialize component-scoped Python environment nodes
+-> initialize application-scoped Python environment nodes
 -> initialize any higher-level dependent nodes
 ```
 
@@ -760,13 +760,13 @@ before those outputs become eligible upstream candidates. This natural ordering
 supplies candidate records before a consumer validates and selects one; no
 separate public discovery graph is required.
 
-All active APT components resolve together into one APT bundle node. Each
-active Python component represents one independently materialized Python
-environment and creates its own provider node. It selects its own upstream
-interpreter output, resolves its own closed wheel bundle, owns its own venv
-root, and exports its own component-qualified outputs. Several Python components may
-select the same interpreter, while others may select different compatible
-interpreters.
+All active OS contributions on a Debian-derived base resolve together into one
+APT bundle node. Each application's active Python contribution represents one
+independently materialized Python environment and creates its own provider node.
+It selects its own upstream interpreter output, resolves its own closed wheel
+bundle, owns its own venv root, and exports outputs qualified by their owning
+contribution. Several applications may select the same interpreter, while
+others may select different compatible interpreters.
 
 Each provider type owns its bundle-resolver implementation, and the graph runs
 it once for each provider node that needs a closed artifact bundle. The combined
@@ -776,14 +776,14 @@ resolver.
 
 Within one deployment, Python wheel downloads and build artifacts may be reused
 when their complete artifact identities match, but materialized venv nodes
-remain component-scoped because their roots and outputs differ. Independent
+remain application-scoped because their roots and outputs differ. Independent
 Python bundles may resolve concurrently when their semantic graph dependencies
 permit it. Final image materialization is sequential in stable node order
 because an OCI image is an ordered layer chain.
 
 The backend applies exactly one filesystem layer per provider materialization
-node: one combined APT/dpkg transaction layer and one layer for each Python
-environment component. One provider-owned POSIX shell script performs all
+node: one combined APT/dpkg transaction layer and one layer for each application
+Python environment. One provider-owned POSIX shell script performs all
 offline install and verification subprocesses for that node inside one BuildKit
 `RUN`. The backend invokes `/bin/sh` explicitly and mounts the script and bundle
 artifacts read-only. Mounting does not itself add their raw contents to the
@@ -791,7 +791,7 @@ layer; the fixed recipe forbids copying the script or artifact archives into
 final image paths and verifies their absence before accepting the layer.
 
 Sequential assembly does not make later siblings semantic dependencies. A
-change to an earlier component may require later filesystem layers to be
+change to an earlier provider node may require later filesystem layers to be
 rematerialized, but their unchanged closed bundles remain reusable without
 resolution or source access. Custom sibling-layer merging is deferred until
 measured rebuild cost justifies the additional backend contract.
@@ -805,10 +805,10 @@ The graph executor must support:
 - a disposable bundle-resolver container based on the selected upstream image;
 - prerequisite checks against the base or an earlier node;
 - typed candidates exposed only through declared logical command requirements;
-- component-name uniqueness within the blueprint and output-name uniqueness
-  within each component;
+- application-name uniqueness within the blueprint and output-name uniqueness
+  within each owning contribution;
 - optional supplier overrides and lower-layer-first compatible selection for
-  unqualified references across components exporting the same local name;
+  unqualified references across contributions exporting the same local name;
 - collision checks across executable paths, exclusive provider namespaces, and
   Reploy-protected roots;
 - invalidation of a changed node and every downstream node, without invalidating
@@ -817,11 +817,11 @@ The graph executor must support:
 ## Filesystem Authority and Protected Roots
 
 Filesystem ownership has two explicit provider modes. An exclusive-namespace
-provider owns a dedicated root or exact leaf, such as one component-scoped
+provider owns a dedicated root or exact leaf, such as one application-scoped
 Python venv. A shared-authority provider delegates overlap, upgrade, replacement,
 diversion, and generated-file semantics to one ecosystem package manager. All
-active APT components resolve into the same APT bundle and dpkg authority;
-blueprint component names do not imply separate filesystem ownership inside
+active OS contributions resolve into the same APT bundle and dpkg authority;
+application names do not imply separate filesystem ownership inside
 that transaction.
 
 At most one shared system-package authority is active in an environment and it
@@ -931,8 +931,8 @@ from the selected immutable base image.
    `Dir::State::lists` override selecting that directory, stdin connected to
    `/dev/null`, and no controlling terminal. The base probe requires support
    for the error mode; any enabled-source acquisition error fails resolution.
-5. Resolve all active APT components, including requirements contributed by
-   their enabled component-scoped options, together.
+5. Resolve all active OS contributions, including requirements contributed by
+   their enabled application options, together.
 6. Use a provider-generated `apt-get --download-only install` transaction with
    `--assume-yes`, `--no-remove`, `--no-install-recommends`, and
    `-o APT::Install-Suggests=false` to download the requested packages and
@@ -1164,6 +1164,10 @@ DEBIAN_FRONTEND=noninteractive
 APT_CONFIG=/tmp/reploy-apt-resolve/apt.conf
 ```
 
+The additive resolver configuration sets `Debug::NoLocking=1` because every
+resolver operation is non-installing and consumes immutable base package state.
+It does not weaken repository authentication or package integrity checks.
+
 `apt-dpkg-v1` covers offline installation and post-install verification:
 
 ```text
@@ -1292,7 +1296,7 @@ A provider prerequisite is validated against the exact prefix immediately
 inside the consuming operation. That consumer-use guarantee ends when the
 operation ends unless a later consumer selects the output again. Each later
 consumer validates it inside its own operation against its immediate prefix. An
-output referenced by a component executable profile and then exposed by a
+output referenced by an application executable profile and then exposed by a
 command is validated by the full final-image validation before publication. An
 earlier consumer observation never authorizes final command exposure.
 
@@ -1613,8 +1617,8 @@ The provider must:
    resolve and build the closed wheel bundle for its actual version and ABI.
 9. During offline materialization, invoke that typed, quoted absolute
    interpreter to create the
-   component-scoped Reploy-owned environment, conceptually:
-   `/opt/reploy/providers/python/<component>`.
+   application-scoped Reploy-owned environment, conceptually:
+   `/opt/reploy/providers/python/application/<application>`.
    Successful creation of this real environment proves the recipe's fixed
    `venv` prerequisite; there is no separate capability probe.
 10. Use the controlled interpreter entry created in that venv to install the
@@ -1624,15 +1628,15 @@ The provider must:
     the single layer build.
 11. After the layer completes, validate the venv interpreter's realized
     link/terminal evidence before accepting the layer or exposing any output.
-12. Derive the component output catalog from the exact wheels' console-script
+12. Derive the contribution output catalog from the exact wheels' console-script
     entry-point metadata. For each output selected by a provider consumer or
-    exposed through a component executable profile and command, verify that
+    exposed through an application executable profile and command, verify that
     the generated wrapper exists and its immediate shebang names the interpreter
-    in that same component environment. Other package-supplied scripts retain
+    in that same application environment. Other package-supplied scripts retain
     their package-defined execution semantics.
 
 The exact root encoding remains a private Python recipe decision and must map
-the globally unique component identity to a safe deterministic path. It must
+the globally unique application identity to a safe deterministic path. It must
 also keep the generated interpreter path space-free and within the target's
 direct-shebang length limit; a bounded digest segment may represent a longer
 component name. The bootstrap interpreter path is a resolved upstream provider
@@ -1890,13 +1894,13 @@ reuse; otherwise the resolver runs again.
 The environment-image build pipeline is explicit, visible heavy work. `reploy build`
 runs it without installing the deployment. `reploy install` runs the same
 pipeline as part of installation when its staged or temporary workspace does
-not already have a matching recorded build. Staged `reploy up`,
-`reploy restart`, and `reploy app` also ensure the current build automatically and
-report the build phase before running. Staged `reploy stop` can still stop the
-recorded workload after build validation fails; staged shell, test, and
-observation commands require an already-current build. Installed runtime
-operations never build or change the bundle; application changes require a new
-staging operation followed by install.
+not already have a matching recorded build. Staged `reploy up` and
+`reploy restart` also ensure the current build automatically and report the
+build phase before running. Staged app commands require an already-current
+build, as do staged shell, test, and observation commands. Staged `reploy stop`
+can still stop the recorded workload after build validation fails. Installed
+runtime operations never build or change the bundle; application changes
+require a new staging operation followed by install.
 
 An automatic staged build check does not silently repair a source artifact
 that is referenced by the current lock but unexpectedly missing from an
@@ -2130,11 +2134,11 @@ component application [python]
 fresh package resolution, Docker access, or persistent changes. V1 has no
 `dry-run` operation or effectful diagnostic rerun mode.
 
-## Implementation Impact
+## Historical Implementation Impact
 
-The current implementation assumes one aggregated Python materialization and
-therefore needs structural work before the component-scoped provider graph can
-be enabled:
+The provider-graph implementation required the following structural work. This
+list is retained as design history; the application-ownership model now
+described above supersedes its component-oriented public terminology:
 
 - Blueprint syntax/model must represent `.deb` packages, component and base
   image exports, logical command requirements, and version constraints.
@@ -2199,7 +2203,7 @@ be enabled:
   closure rather than treating public executable profiles as
   provider output declarations.
 
-## Suggested Implementation Slices
+## Historical Implementation Slices
 
 1. Introduce typed provider inputs/outputs, Python console-script catalog
    derivation, and a deterministic graph planner; retain the existing single
@@ -2220,8 +2224,9 @@ be enabled:
 Portable environment export/import is unsupported in v1. Any future transfer
 feature requires a separate design and is not part of these slices.
 
-Each slice should retain Python-only behavior and should not make the public
-schema accept `type: apt` until the end-to-end path is complete.
+These slices retained Python-only behavior until the end-to-end APT path was
+complete. The released public shape uses application-owned `os` contributions,
+not public `type: apt` components.
 
 ## Required Evidence
 
@@ -2248,7 +2253,7 @@ schema accept `type: apt` until the end-to-end path is complete.
   digest; capability profiles are versioned; floating syntax tags and backend
   platform defaults are ignored; and every mismatch fails before execution.
 - Candidate-selection tests proving base-first and graph/stable-name provider
-  precedence, compatibility filtering, explicit component/base supplier
+  precedence, compatibility filtering, explicit contribution/base supplier
   overrides, recorded supplier identity and final graph edge, observed-value
   incompatibility failure without fallback, and reuse when the selected result
   is unchanged.
@@ -2258,36 +2263,36 @@ schema accept `type: apt` until the end-to-end path is complete.
   dependencies before initialization, and `reploy build` can change an
   automatic selection without runtime re-resolution.
 - Multi-Python tests proving independent interpreter selection,
-  component-scoped venv roots and outputs, content-addressed artifact reuse
+  application-scoped venv roots and outputs, content-addressed artifact reuse
   within one deployment, parallel independent bundle resolution,
   deterministic sequential image assembly, and logical invalidation confined
-  to dependent component nodes.
+  to dependent provider nodes.
 - Python-output tests proving console scripts are derived from exact wheel
   entry-point metadata across the resolved closure; distribution names do not
   imply binaries; transitive owners are recorded; duplicate script claims fail;
   scripts without console-script metadata are initially absent; direct command
   references and optional executable profiles resolve the same qualified output;
-  and selected wrappers exist with a shebang naming their component interpreter.
+  and selected wrappers exist with a shebang naming their application interpreter.
 - Assembly tests proving one layer per materialization node, both venvs remain
-  present when either component changes, unchanged later bundles are reused even
+  present when either application changes, unchanged later bundles are reused even
   when their layers must be rematerialized, transaction failure commits no
   layer, and finalized images remain local unless an explicit future export/push
   operation is requested.
-- Component-option tests proving `COMPONENT/OPTION[,OPTION...]` parsing,
-  atomic multi-component selection, option requirements joining the owning
-  Python venv, component-scoped identity changes, and explicit targeting for
+- Application-option tests proving `APPLICATION/OPTION[,OPTION...]` parsing,
+  atomic multi-application selection, option requirements joining the owning
+  Python venv, application-scoped identity changes, and explicit targeting for
   direct additions when several Python environments exist. Public-surface tests
   distinguish option `add`/`remove` from `add-package`/`remove-package`,
   exercise atomic multi-addition behavior, and prove every package request
   still uses its provider's strict grammar.
-- Public-schema tests covering the shared component/option/output identifier
+- Public-schema tests covering the shared application/option/output identifier
   grammar, separator and reserved-name rejection, scope-specific uniqueness,
-  provider-owned Python `requirements` and APT `packages` option payloads,
+  application-owned Python and OS option package payloads,
   rejection of structural or nested option fields, omitted interpreter
   normalization to logical `python`, and explicit version/supplier overrides.
 - Request-overlay tests proving fully qualified typed entries, stable sorting
   and deduplication, atomic directory-locked updates, blueprint validation,
-  component-local invalidation, separation from directory/Docker resource
+  contribution-local invalidation, separation from directory/Docker resource
   identity, complete lock embedding, existing-state exact matching, and
   explicit replacement semantics.
 - Local-source tests proving physical locators remain auxiliary local state and
@@ -2297,7 +2302,7 @@ schema accept `type: apt` until the end-to-end path is complete.
   nominal package versions cannot replace content digests; and the provider
   store contains the retained raw artifacts but no source tree.
 - APT bundle-resolver tests for closed transitive sets, architecture, metadata,
-  hashes, component-scoped options, and repository failures. Mixed-origin cases
+  hashes, application-scoped options, and repository failures. Mixed-origin cases
   cover base-only satisfiers, downloaded members, upgrades with exact base
   predecessors, absence of synthetic base-package hashes, base-digest
   invalidation, exact pre-install base-status checks, final full-closure

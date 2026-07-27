@@ -7,14 +7,16 @@ blueprint:
 
 environment:
   id: git-source-app
-  components:
-    base:
-      image: python:3.11-slim
+  base:
+    image: python:3.11-slim
+  applications:
     application:
-      type: python
-      requirements: [git-source-app]
+      packages:
+        python:
+          requirements: [git-source-app]
       executables:
         application:
+          source: python
           binary: git-source-app
   commands:
     serve:

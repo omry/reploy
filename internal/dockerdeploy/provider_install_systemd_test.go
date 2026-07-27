@@ -20,12 +20,14 @@ func TestProviderInstallSystemdFileV1RendersRestartWithoutTimingPolicy(t *testin
 	unit := string(files[0].Content)
 	for _, want := range []string{
 		"Requires=docker.service\nAfter=docker.service\n",
+		"Type=notify\nNotifyAccess=main\n",
 		"WorkingDirectory=\"" + destinationDir + "\"",
-		"ExecStart=\"/usr/bin/docker\" \"compose\" \"--project-name\" \"demo\"",
-		"\"--env-file\" \"" + systemdPath(destinationDir, DockerEnvFileName) + "\"",
-		"\"-f\" \"" + systemdPath(destinationDir, ComposeFileName) + "\" \"up\"",
+		"ExecStart=\"" + systemdPath(destinationDir, embeddedRuntimeFileName()) + "\" \"_service-container\"",
+		"\"--dir\" \"" + systemdPath(destinationDir) + "\"",
+		"\"--docker\" \"/usr/bin/docker\" \"run\"",
 		"ExecStop=\"/usr/bin/docker\" \"compose\"",
-		"\"down\"\nRestart=on-failure\n",
+		"\"--env-file\" \"" + systemdPath(destinationDir, DockerEnvFileName) + "\"",
+		"\"down\" \"--remove-orphans\"\nRestart=on-failure\n",
 	} {
 		if !strings.Contains(unit, want) {
 			t.Fatalf("unit missing %q:\n%s", want, unit)
@@ -48,7 +50,7 @@ func TestProviderInstallSystemdFileV1OmitsUnknownDockerUnit(t *testing.T) {
 		t.Fatal(err)
 	}
 	unit := string(files[0].Content)
-	if strings.Contains(unit, "docker.service") || !strings.Contains(unit, `ExecStart="/opt/docker bin/docker" "compose"`) {
+	if strings.Contains(unit, "docker.service") || !strings.Contains(unit, `"--docker" "/opt/docker bin/docker" "run"`) {
 		t.Fatalf("unexpected Docker unit or path rendering:\n%s", unit)
 	}
 }

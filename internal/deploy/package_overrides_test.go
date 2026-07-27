@@ -93,13 +93,8 @@ func TestPackageOverridesRoundTripsBaseImageOverride(t *testing.T) {
 
 func TestEffectiveBaseImageUsesOverrideOrBlueprint(t *testing.T) {
 	document := blueprint.Document{Environment: blueprint.Environment{
-		ID: "demo",
-		Components: map[string]blueprint.Component{
-			"base": {
-				Type: blueprint.ComponentTypeBase,
-				Base: &blueprint.BaseComponent{Image: "python:3.11-slim"},
-			},
-		},
+		ID:   "demo",
+		Base: blueprint.BaseComponent{Image: "python:3.11-slim"},
 	}}
 	overrides := EmptyPackageOverridesV1("demo")
 	image, err := EffectiveBaseImageV1(document, overrides)

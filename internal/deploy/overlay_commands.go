@@ -12,19 +12,19 @@ import (
 
 type PackageRequestParser func(blueprint.ComponentType, string) (providers.CanonicalPackageRequest, error)
 
-// ParseQualifiedOptionGroups parses COMPONENT/OPTION[,OPTION...] arguments
+// ParseQualifiedOptionGroups parses APPLICATION/OPTION[,OPTION...] arguments
 // into sorted, duplicate-free overlay entries.
 func ParseQualifiedOptionGroups(arguments []string) ([]QualifiedOption, error) {
 	if len(arguments) == 0 {
-		return nil, fmt.Errorf("expected at least one component/option selection")
+		return nil, fmt.Errorf("expected at least one application/option selection")
 	}
 	selected := map[string]QualifiedOption{}
 	for _, argument := range arguments {
 		if strings.Count(argument, "/") != 1 {
-			return nil, fmt.Errorf("option selection %q must use COMPONENT/OPTION[,OPTION...]", argument)
+			return nil, fmt.Errorf("option selection %q must use APPLICATION/OPTION[,OPTION...]", argument)
 		}
-		component, optionList, _ := strings.Cut(argument, "/")
-		if err := blueprint.ValidateProviderIdentifier("option component", component); err != nil {
+		application, optionList, _ := strings.Cut(argument, "/")
+		if err := blueprint.ValidateProviderIdentifier("option application", application); err != nil {
 			return nil, err
 		}
 		options := strings.Split(optionList, ",")
@@ -35,8 +35,8 @@ func ParseQualifiedOptionGroups(arguments []string) ([]QualifiedOption, error) {
 			if err := blueprint.ValidateProviderIdentifier("option name", option); err != nil {
 				return nil, err
 			}
-			qualified := QualifiedOption{Component: component, Option: option}
-			selected[component+"\x00"+option] = qualified
+			qualified := QualifiedOption{Application: application, Option: option}
+			selected[application+"\x00"+option] = qualified
 		}
 	}
 	result := make([]QualifiedOption, 0, len(selected))
@@ -44,8 +44,8 @@ func ParseQualifiedOptionGroups(arguments []string) ([]QualifiedOption, error) {
 		result = append(result, option)
 	}
 	sort.Slice(result, func(left int, right int) bool {
-		if result[left].Component != result[right].Component {
-			return result[left].Component < result[right].Component
+		if result[left].Application != result[right].Application {
+			return result[left].Application < result[right].Application
 		}
 		return result[left].Option < result[right].Option
 	})
@@ -54,19 +54,19 @@ func ParseQualifiedOptionGroups(arguments []string) ([]QualifiedOption, error) {
 
 func ParseDirectPackageRequests(
 	document blueprint.Document,
-	componentName string,
+	contributionRef string,
 	requirements []string,
 	parse PackageRequestParser,
 ) ([]DirectPackageRequest, error) {
-	if err := blueprint.ValidateProviderIdentifier("package component", componentName); err != nil {
+	if err := blueprint.ValidateContributionReference("package contribution", contributionRef); err != nil {
 		return nil, err
 	}
-	component, exists := document.Environment.Components[componentName]
+	contribution, exists := document.Environment.Components[contributionRef]
 	if !exists {
-		return nil, fmt.Errorf("package component %q does not exist", componentName)
+		return nil, fmt.Errorf("package contribution %q does not exist", contributionRef)
 	}
-	if component.Type == blueprint.ComponentTypeBase {
-		return nil, fmt.Errorf("base component does not support direct package requests")
+	if contribution.Type == blueprint.ComponentTypeBase {
+		return nil, fmt.Errorf("base contribution does not support direct package requests")
 	}
 	if len(requirements) == 0 {
 		return nil, fmt.Errorf("expected at least one package requirement")
@@ -80,16 +80,16 @@ func ParseDirectPackageRequests(
 	}
 	unique := map[string]parsedRequest{}
 	for _, requirement := range requirements {
-		packageRequest, err := parse(component.Type, requirement)
+		packageRequest, err := parse(contribution.Type, requirement)
 		if err != nil {
-			return nil, fmt.Errorf("package requirement %q for component %q: %w", requirement, componentName, err)
+			return nil, fmt.Errorf("package requirement %q for contribution %q: %w", requirement, contributionRef, err)
 		}
 		encoded, err := providers.CanonicalPackageRequestBytes(packageRequest)
 		if err != nil {
-			return nil, fmt.Errorf("package requirement %q for component %q: %w", requirement, componentName, err)
+			return nil, fmt.Errorf("package requirement %q for contribution %q: %w", requirement, contributionRef, err)
 		}
 		unique[string(encoded)] = parsedRequest{
-			request: DirectPackageRequest{Component: componentName, Package: packageRequest},
+			request: DirectPackageRequest{Contribution: contributionRef, Package: packageRequest},
 			encoded: encoded,
 		}
 	}
@@ -125,7 +125,7 @@ func RemoveOverlayOptions(overlay RequestOverlayV1, options []QualifiedOption) (
 	for _, option := range options {
 		key := qualifiedOptionKey(option)
 		if !selected[key] {
-			return RequestOverlayV1{}, fmt.Errorf("component option %s/%s is not selected", option.Component, option.Option)
+			return RequestOverlayV1{}, fmt.Errorf("application option %s/%s is not selected", option.Application, option.Option)
 		}
 		remove[key] = true
 	}
@@ -161,7 +161,7 @@ func RemoveOverlayPackages(overlay RequestOverlayV1, packages []DirectPackageReq
 			return RequestOverlayV1{}, err
 		}
 		if !selected[key] {
-			return RequestOverlayV1{}, fmt.Errorf("direct package request is not selected for component %q", request.Component)
+			return RequestOverlayV1{}, fmt.Errorf("direct package request is not selected for contribution %q", request.Contribution)
 		}
 		remove[key] = true
 	}
@@ -187,7 +187,7 @@ func cloneOverlayCollections(overlay RequestOverlayV1) RequestOverlayV1 {
 }
 
 func qualifiedOptionKey(option QualifiedOption) string {
-	return option.Component + "\x00" + option.Option
+	return option.Application + "\x00" + option.Option
 }
 
 func directPackageRequestKey(request DirectPackageRequest) (string, error) {
@@ -195,5 +195,5 @@ func directPackageRequestKey(request DirectPackageRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return request.Component + "\x00" + string(encoded), nil
+	return request.Contribution + "\x00" + string(encoded), nil
 }

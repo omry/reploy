@@ -11,15 +11,16 @@ environment:
   id: omegaconf-inspector
 
   # Image and application packages.
-  components:
-    base:
-      image: python:3.11-slim
-
+  base:
+    image: python:3.11-slim
+  applications:
     application:
-      type: python
-      requirements: [omegaconf-inspector]
+      packages:
+        python:
+          requirements: [omegaconf-inspector]
       executables:
         inspector:
+          source: python
           binary: omegaconf-inspector
 
   # Runtime concurrency policy.
@@ -64,20 +65,6 @@ environment:
       native_command: true
       deployed_command: true
       argv: [config, show]
-
-    project_list:
-      executable: application.inspector
-      trigger: [project, list]
-      native_command: true
-      deployed_command: true
-      argv: [project, list]
-
-    project_show:
-      executable: application.inspector
-      trigger: [project, show]
-      native_command: true
-      deployed_command: true
-      argv: [project, show]
 
     version:
       executable: application.inspector

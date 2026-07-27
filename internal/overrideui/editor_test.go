@@ -98,11 +98,15 @@ func TestEditorAddsNativeOSPackageToDevelopmentOverrides(t *testing.T) {
 
 func TestEditorItemsListsAllExplicitDependenciesBeforeOverrideOnlyRows(t *testing.T) {
 	document := editorDocument("base-root>=1")
-	component := document.Environment.Components["python"]
-	component.Options = map[string]blueprint.ComponentOption{
-		"feature": {PythonRequirements: []string{"option-root"}},
+	application := document.Environment.Applications["python"]
+	application.Options = map[string]blueprint.ApplicationOption{
+		"feature": {
+			Packages: blueprint.ApplicationOptionPackages{
+				Python: &blueprint.PythonOptionPackages{Requirements: []string{"option-root"}},
+			},
+		},
 	}
-	document.Environment.Components["python"] = component
+	document.Environment.Applications["python"] = application
 	direct, err := pythonprovider.CanonicalPackageRequestV1("direct-root==2")
 	if err != nil {
 		t.Fatal(err)
@@ -110,10 +114,10 @@ func TestEditorItemsListsAllExplicitDependenciesBeforeOverrideOnlyRows(t *testin
 	overlay := deploy.RequestOverlayV1{
 		Schema: deploy.RequestOverlaySchemaV1,
 		SelectedOptions: []deploy.QualifiedOption{{
-			Component: "python", Option: "feature",
+			Application: "python", Option: "feature",
 		}},
 		DirectPackages: []deploy.DirectPackageRequest{{
-			Component: "python", Package: providers.CanonicalPackageRequest(direct),
+			Contribution: "application/python/python", Package: providers.CanonicalPackageRequest(direct),
 		}},
 	}
 	raw := deploy.EmptyPackageOverridesV1("example")
@@ -799,6 +803,26 @@ func TestBuildModeStartsValidationOnEditorInit(t *testing.T) {
 	if !strings.Contains(view, "Build in progress") || !strings.Contains(view, "Build log") ||
 		strings.Contains(view, "Validation in progress") {
 		t.Fatalf("build-mode progress screen:\n%s", view)
+	}
+}
+
+func TestBuildModeReportsRepublishedRuntimeConfiguration(t *testing.T) {
+	m := editorModelForInteraction(t)
+	m.buildMode = true
+	m.validationVisible = true
+	m.validated = true
+	m.buildOutcome = &BuildOutcome{
+		Environment: "example", Image: "sha256:example", Reused: true, Republished: true,
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "updated environment: example") {
+		t.Fatalf("republished build result missing update:\n%s", view)
+	}
+	for _, unwanted := range []string{"environment already current: example", "built environment: example"} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("republished build result retained %q:\n%s", unwanted, view)
+		}
 	}
 }
 
@@ -1508,6 +1532,16 @@ func editorDocumentForEnvironment(environmentID string, requirements ...string) 
 		},
 		Environment: blueprint.Environment{
 			ID: environmentID,
+			Base: blueprint.BaseComponent{
+				Image: "python:3.11-slim", Exports: map[string]blueprint.BaseExecutableExport{},
+			},
+			Applications: map[string]blueprint.Application{
+				"python": {
+					Packages: blueprint.ApplicationPackages{
+						Python: &blueprint.PythonComponent{Requirements: requirements},
+					},
+				},
+			},
 			Components: map[string]blueprint.Component{
 				"base": {
 					Type: blueprint.ComponentTypeBase,

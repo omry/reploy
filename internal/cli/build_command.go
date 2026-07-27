@@ -114,6 +114,10 @@ func runDockerBuild(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 		if elapsed >= time.Second {
 			fmt.Fprintf(output, "elapsed: %s\n", elapsed.Round(100*time.Millisecond))
 		}
+		if result.Republished {
+			fmt.Fprintf(output, "updated environment: %s\n", summary.Environment)
+			return
+		}
 		if result.Reused {
 			fmt.Fprintf(output, "environment already current: %s\n", summary.Environment)
 			return
@@ -163,6 +167,7 @@ func buildModeValidationRunner(
 			Image:       summary.Image,
 			Elapsed:     time.Since(started),
 			Reused:      build.Reused,
+			Republished: build.Republished,
 		}
 		return result, nil
 	}

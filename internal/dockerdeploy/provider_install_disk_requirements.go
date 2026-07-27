@@ -123,7 +123,7 @@ func providerInstallDiskRequirementsV1(
 		})
 	}
 	for index, action := range pathUpdates {
-		requirement, include, err := providerInstallManagedBindDiskRequirementV1(action)
+		requirement, include, err := providerInstallPathUpdateDiskRequirementV1(action)
 		if err != nil {
 			return nil, fmt.Errorf("install disk requirement path update %d: %w", index, err)
 		}
@@ -132,6 +132,36 @@ func providerInstallDiskRequirementsV1(
 		}
 	}
 	return requirements, nil
+}
+
+func providerInstallPathUpdateDiskRequirementV1(action PathUpdateAction) (providerInstallDiskRequirementV1, bool, error) {
+	if action.Kind == PathPreservePrivateEnv || action.Kind == PathReplacePrivateEnv {
+		if action.Target == "" || !filepath.IsAbs(action.Target) || filepath.Clean(action.Target) != action.Target {
+			return providerInstallDiskRequirementV1{}, false, fmt.Errorf("private environment target must be an absolute clean path")
+		}
+		if action.Kind == PathPreservePrivateEnv {
+			if _, err := os.Lstat(action.Target); err == nil {
+				if _, loadErr := loadPrivateWorkloadEnvironmentV1(filepath.Dir(action.Target)); loadErr != nil {
+					return providerInstallDiskRequirementV1{}, false, loadErr
+				}
+				return providerInstallDiskRequirementV1{}, false, nil
+			} else if !os.IsNotExist(err) {
+				return providerInstallDiskRequirementV1{}, false, fmt.Errorf("inspect preserved private environment: %w", err)
+			}
+		}
+		environment, err := loadPrivateWorkloadEnvironmentV1(filepath.Dir(action.Source))
+		if err != nil {
+			return providerInstallDiskRequirementV1{}, false, err
+		}
+		if !environment.Present {
+			if action.Kind == PathReplacePrivateEnv {
+				return providerInstallDiskRequirementV1{}, false, fmt.Errorf("replacement private environment source is missing")
+			}
+			return providerInstallDiskRequirementV1{}, false, nil
+		}
+		return providerInstallDiskRequirementV1{Path: action.Target, Bytes: uint64(len(environment.Raw))}, true, nil
+	}
+	return providerInstallManagedBindDiskRequirementV1(action)
 }
 
 func providerInstallManagedBindDiskRequirementV1(action PathUpdateAction) (providerInstallDiskRequirementV1, bool, error) {

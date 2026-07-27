@@ -28,6 +28,7 @@ PY_COMPILE_FILES = (
     "tests/e2e/python/packages/smoke-suite/src/smoke_suite/cli.py",
     "tests/e2e/python/packages/smoke-suite/src/smoke_suite/__init__.py",
     "tests/e2e/python/packages/smoke-imap/src/smoke_imap/__init__.py",
+    "examples/omegaconf-inspector/src/omegaconf_inspector/cli.py",
 )
 
 

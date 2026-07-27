@@ -89,7 +89,7 @@ func providerInstallControlFilesV1(plan providerInstallationPlanV1) ([]providerI
 		spec.ControlScript = powerShellName
 		candidates = append(candidates, providerInstallFileCandidateV1{
 			Path:    filepath.Join(plan.Installation.TargetDir, powerShellName),
-			Content: []byte(renderPowerShellDockerDesktopControlScript(spec)),
+			Content: []byte(renderPowerShellControlScript(spec)),
 			Mode:    0o755,
 		})
 	}

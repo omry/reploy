@@ -23,7 +23,7 @@ func TestLoadBuildRequestV1UsesOnlyLockedDesiredInputs(t *testing.T) {
 	document := resolvedRequestTestDocument()
 	platform := document.Blueprint.Compatibility.Platforms[0]
 	payload := testResolvedBlueprintV1(t, document)
-	overlay := deploy.AddOverlayOptions(deploy.EmptyRequestOverlayV1(), []deploy.QualifiedOption{{Component: "application", Option: "debug"}})
+	overlay := deploy.AddOverlayOptions(deploy.EmptyRequestOverlayV1(), []deploy.QualifiedOption{{Application: "application", Option: "debug"}})
 	state := deploy.StateV1{
 		Schema: deploy.StateSchemaV1, Blueprint: payload, Platform: platform, Overlay: overlay,
 	}
@@ -31,7 +31,7 @@ func TestLoadBuildRequestV1UsesOnlyLockedDesiredInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := testPythonResolvedSource(
-		"application", "demo", "1.0",
+		"application/application/python", "demo", "1.0",
 		canonical.Digest("sha256:"+strings.Repeat("a", 64)), canonical.Digest("sha256:"+strings.Repeat("b", 64)),
 	)
 	loaded, err := LoadBuildRequestV1(operation, []providers.ResolvedSourceInput{source})

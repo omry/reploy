@@ -35,10 +35,13 @@ type DockerExecutionPlan struct {
 	ContainerName string
 	NetworkName   string
 	Restart       string
-	Workload      *WorkloadExecutionPlan
-	Mounts        []MountExecutionPlan
-	RuntimeUser   RuntimeUserPlan
-	TemporaryHome string
+	// PrivateEnvironment is a deployment-local runtime property. It controls
+	// launcher rendering only and is never persisted in build state or locks.
+	PrivateEnvironment bool
+	Workload           *WorkloadExecutionPlan
+	Mounts             []MountExecutionPlan
+	RuntimeUser        RuntimeUserPlan
+	TemporaryHome      string
 }
 
 const environmentTemporaryHome = "/mnt/reploy-home"

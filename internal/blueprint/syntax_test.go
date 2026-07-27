@@ -14,14 +14,16 @@ blueprint:
     platforms: [linux/amd64, linux/arm64]
 environment:
   id: demo
-  components:
-    base:
-      image: python:3.13-slim
+  base:
+    image: python:3.13-slim
+  applications:
     application:
-      type: python
-      requirements: [demo-server]
+      packages:
+        python:
+          requirements: [demo-server]
       executables:
         server:
+          source: python
           binary: demo-server
   mounts:
     data:
@@ -57,13 +59,13 @@ func TestDecodeAcceptsEnvironmentSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if source.Environment.ID != "demo" || source.Environment.Components["base"].Image != "python:3.13-slim" || len(source.Blueprint.Compatibility.Platforms) != 2 {
+	if source.Environment.ID != "demo" || source.Environment.Base.Image != "python:3.13-slim" || len(source.Blueprint.Compatibility.Platforms) != 2 {
 		t.Fatalf("decoded source = %#v", source)
 	}
 }
 
 func TestDecodeRejectsRemovedWorkspaceNode(t *testing.T) {
-	value := strings.Replace(minimalBlueprint, "  components:\n", "  workspace:\n    root: ..\n    packages:\n      python:\n        demo-server: server\n  components:\n", 1)
+	value := strings.Replace(minimalBlueprint, "  base:\n", "  workspace:\n    root: ..\n    packages:\n      python:\n        demo-server: server\n  base:\n", 1)
 	_, err := Decode([]byte(value))
 	if err == nil || !strings.Contains(err.Error(), "field workspace not found") {
 		t.Fatalf("error = %v", err)
@@ -71,7 +73,7 @@ func TestDecodeRejectsRemovedWorkspaceNode(t *testing.T) {
 }
 
 func TestDecodeRejectsTranslationsAlias(t *testing.T) {
-	value := strings.Replace(minimalBlueprint, "  components:\n", "  translations: {}\n  components:\n", 1)
+	value := strings.Replace(minimalBlueprint, "  base:\n", "  translations: {}\n  base:\n", 1)
 	_, err := Decode([]byte(value))
 	if err == nil || !strings.Contains(err.Error(), "field translations not found") {
 		t.Fatalf("error = %v", err)
@@ -90,6 +92,14 @@ func TestDecodeRejectsExecutableComponentField(t *testing.T) {
 	value := strings.Replace(minimalBlueprint, "          binary: demo-server", "          component: application\n          binary: demo-server", 1)
 	_, err := Decode([]byte(value))
 	if err == nil || !strings.Contains(err.Error(), "field component not found") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestDecodeRejectsUnreleasedComponentsShape(t *testing.T) {
+	value := strings.Replace(minimalBlueprint, "  applications:\n", "  components: {}\n  applications:\n", 1)
+	_, err := Decode([]byte(value))
+	if err == nil || !strings.Contains(err.Error(), "field components not found") {
 		t.Fatalf("error = %v", err)
 	}
 }

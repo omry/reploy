@@ -30,7 +30,7 @@ func TestRuntimePlansV1CoversWorkloadShellCommandsAndOutputVariant(t *testing.T)
 		t.Fatalf("runtime plan IDs = %#v, want %#v", gotIDs, wantIDs)
 	}
 	check := runtimePlanByID(t, plans, "command/check")
-	if !reflect.DeepEqual(check.Executables, []providers.QualifiedOutput{{Component: "application", Name: "demo"}}) {
+	if !reflect.DeepEqual(check.Executables, []providers.QualifiedOutput{{Component: "application/application/python", Name: "demo"}}) {
 		t.Fatalf("command executables = %#v", check.Executables)
 	}
 	if !reflect.DeepEqual(check.Mounts, []deploy.RuntimeMountV1{
@@ -49,7 +49,7 @@ func TestRuntimePlansV1CoversWorkloadShellCommandsAndOutputVariant(t *testing.T)
 		t.Fatalf("shell plan = %#v", shell)
 	}
 	workload := runtimePlanByID(t, plans, "workload")
-	if !reflect.DeepEqual(workload.Executables, []providers.QualifiedOutput{{Component: "application", Name: "demo"}}) {
+	if !reflect.DeepEqual(workload.Executables, []providers.QualifiedOutput{{Component: "application/application/python", Name: "demo"}}) {
 		t.Fatalf("workload executables = %#v", workload.Executables)
 	}
 }
@@ -96,8 +96,8 @@ func TestRuntimePlansV1RejectsWorkloadPlanMismatch(t *testing.T) {
 
 func runtimePlanDocument() blueprint.Document {
 	return blueprint.Document{Environment: blueprint.Environment{
-		Components: map[string]blueprint.Component{
-			"application": {Executables: map[string]blueprint.Executable{"server": {Binary: "demo"}}},
+		Applications: map[string]blueprint.Application{
+			"application": {Executables: map[string]blueprint.Executable{"server": {Source: "python", Binary: "demo"}}},
 		},
 		Commands: map[string]blueprint.Command{
 			"check":   {Executable: "application.server", Trigger: []string{"check"}, NativeCommand: true},

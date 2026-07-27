@@ -102,3 +102,23 @@ func CurrentBuildMatches(current CurrentBuild, input CurrentBuildReuseInput) (bo
 	}
 	return true, nil
 }
+
+// rebindCurrentBuildLockV1 returns a lock for the desired resolved document
+// while preserving the exact validated image, provider closure, and runtime
+// policy of a build that already passed CurrentBuildMatches.
+func rebindCurrentBuildLockV1(lock deploy.BuildLockV1, document blueprint.Document) (deploy.BuildLockV1, error) {
+	blueprintPayload, err := blueprint.EncodeResolvedDocumentV1(document)
+	if err != nil {
+		return deploy.BuildLockV1{}, err
+	}
+	blueprintDigest, err := blueprint.ResolvedDocumentDigestV1(blueprintPayload)
+	if err != nil {
+		return deploy.BuildLockV1{}, err
+	}
+	rebound := lock
+	rebound.BlueprintDigest = blueprintDigest
+	if err := deploy.ValidateBuildLockV1(rebound, registry.ValidateRequirementProfileV1); err != nil {
+		return deploy.BuildLockV1{}, fmt.Errorf("rebind current build lock: %w", err)
+	}
+	return rebound, nil
+}

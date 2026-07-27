@@ -12,7 +12,7 @@ import (
 	"github.com/omry/reploy/internal/deploy"
 )
 
-func TestStagePackDesiredStateV1CreatesOnlyStateFiles(t *testing.T) {
+func TestStagePackDesiredStateV1CreatesStateAndControlSurface(t *testing.T) {
 	ref, manifestPath := writeDesiredStateStagePack(t, "0.1.0")
 	dir := filepath.Join(t.TempDir(), "nested", "staging")
 
@@ -37,7 +37,8 @@ func TestStagePackDesiredStateV1CreatesOnlyStateFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != ReployInternalDir || !entries[0].IsDir() {
+	if len(entries) != 2 || entries[0].Name() != ReployInternalDir || !entries[0].IsDir() ||
+		entries[1].Name() != "omegaconf-inspector" || entries[1].IsDir() {
 		t.Fatalf("staging entries = %#v", entries)
 	}
 	internalEntries, err := os.ReadDir(filepath.Join(dir, ReployInternalDir))
@@ -48,8 +49,18 @@ func TestStagePackDesiredStateV1CreatesOnlyStateFiles(t *testing.T) {
 	for index, entry := range internalEntries {
 		names[index] = entry.Name()
 	}
-	if !reflect.DeepEqual(names, []string{"operation.lock", "state.json"}) {
+	if !reflect.DeepEqual(names, []string{"bin", "operation.lock", "staged-control.json", "state.json"}) {
 		t.Fatalf("internal entries = %q", names)
+	}
+	for _, path := range []string{
+		filepath.Join(dir, "omegaconf-inspector"),
+		filepath.Join(dir, filepath.FromSlash(embeddedRuntimeFileName())),
+		filepath.Join(dir, filepath.FromSlash(stagedControlManifestPathV1)),
+	} {
+		info, statErr := os.Stat(path)
+		if statErr != nil || !info.Mode().IsRegular() {
+			t.Fatalf("staged control file %q: info=%v err=%v", path, info, statErr)
+		}
 	}
 }
 

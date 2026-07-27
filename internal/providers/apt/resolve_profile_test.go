@@ -87,10 +87,13 @@ func TestResolveAPTArgvV1IsExact(t *testing.T) {
 }
 
 func TestResolveAdditiveConfigV1IsFixed(t *testing.T) {
-	if ResolveAdditiveConfigV1 != "Acquire::Languages \"none\";\nDpkg::Use-Pty \"0\";\n" {
+	if ResolveAdditiveConfigV1 != "Acquire::Languages \"none\";\nDebug::NoLocking \"1\";\nDpkg::Use-Pty \"0\";\n" {
 		t.Fatalf("config = %q", ResolveAdditiveConfigV1)
 	}
 	if strings.Contains(ResolveAdditiveConfigV1, "Dir::") {
 		t.Fatal("additive config must not replace the base configuration directories")
+	}
+	if strings.Count(ResolveAdditiveConfigV1, "Debug::NoLocking \"1\";") != 1 {
+		t.Fatal("read-only resolver operations must disable APT locking exactly once")
 	}
 }

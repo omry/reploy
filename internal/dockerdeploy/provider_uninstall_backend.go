@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 )
 
@@ -62,6 +63,13 @@ func executeProviderUninstallWithV1(
 		}
 		if !changed || state.Deployment != nil {
 			return fmt.Errorf("provider uninstall did not clear installed state")
+		}
+		document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+		if err != nil {
+			return fmt.Errorf("decode retained staged blueprint after uninstall: %w", err)
+		}
+		if _, err := syncStagedControlSurfaceV1(plan.Installation.TargetDir, document); err != nil {
+			return fmt.Errorf("generate retained staged control surface after uninstall: %w", err)
 		}
 		if options.Stdout != nil {
 			fmt.Fprintf(options.Stdout, "uninstalled service: %s\n", plan.Installation.Service)

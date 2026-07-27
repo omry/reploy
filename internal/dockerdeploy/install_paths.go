@@ -5,6 +5,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
@@ -85,12 +86,20 @@ func planEnvironmentInstallPathUpdates(document blueprint.Document, sourceDir st
 		return nil, nil, err
 	}
 	replaceAll := false
+	replacePrivateEnvironment := clean
+	explicitPrivateEnvironmentReplacement := false
 	requested := []string{}
 	installedByName := mountPlansByName(installedMounts)
 	for _, value := range replace {
 		value = cleanManifestPath(value)
 		if value == "all" {
 			replaceAll = true
+			replacePrivateEnvironment = true
+			continue
+		}
+		if value == PrivateWorkloadEnvironmentFileName {
+			replacePrivateEnvironment = true
+			explicitPrivateEnvironmentReplacement = true
 			continue
 		}
 		name, err := environmentPathUpdateName(value, installedByName, targetDir)
@@ -103,18 +112,55 @@ func planEnvironmentInstallPathUpdates(document blueprint.Document, sourceDir st
 	if err != nil {
 		return nil, nil, err
 	}
+	privateEnvironmentSource := filepath.Join(sourceDir, PrivateWorkloadEnvironmentFileName)
+	privateEnvironmentTarget := filepath.Join(targetDir, PrivateWorkloadEnvironmentFileName)
+	sourceEnvironmentExists, err := installPathEntryExistsV1(privateEnvironmentSource)
+	if err != nil {
+		return nil, nil, fmt.Errorf("inspect staging %s: %w", PrivateWorkloadEnvironmentFileName, err)
+	}
+	targetEnvironmentExists, err := installPathEntryExistsV1(privateEnvironmentTarget)
+	if err != nil {
+		return nil, nil, fmt.Errorf("inspect installed %s: %w", PrivateWorkloadEnvironmentFileName, err)
+	}
+	if replacePrivateEnvironment && !sourceEnvironmentExists && (targetEnvironmentExists || explicitPrivateEnvironmentReplacement) {
+		return nil, nil, fmt.Errorf(
+			"cannot replace %s because the staging deployment does not contain it; the installed private environment was not deleted",
+			PrivateWorkloadEnvironmentFileName,
+		)
+	}
+	if sourceEnvironmentExists || targetEnvironmentExists {
+		kind := PathPreservePrivateEnv
+		if replacePrivateEnvironment {
+			kind = PathReplacePrivateEnv
+		}
+		actions = append(actions, PathUpdateAction{
+			Name:   PrivateWorkloadEnvironmentFileName,
+			Kind:   kind,
+			Source: privateEnvironmentSource,
+			Target: privateEnvironmentTarget,
+		})
+		sort.Slice(actions, func(left int, right int) bool { return actions[left].Name < actions[right].Name })
+	}
 	preserve := []string{}
 	for _, action := range actions {
-		if action.Kind != PathPreserveManagedBind {
-			continue
+		switch action.Kind {
+		case PathPreserveManagedBind, PathPreservePrivateEnv:
+			relative, err := filepath.Rel(targetDir, action.Target)
+			if err != nil {
+				return nil, nil, err
+			}
+			preserve = append(preserve, filepath.ToSlash(relative))
 		}
-		relative, err := filepath.Rel(targetDir, action.Target)
-		if err != nil {
-			return nil, nil, err
-		}
-		preserve = append(preserve, filepath.ToSlash(relative))
 	}
 	return actions, preserve, nil
+}
+
+func installPathEntryExistsV1(path string) (bool, error) {
+	_, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func environmentPathUpdateName(value string, installed map[string]MountExecutionPlan, targetDir string) (string, error) {

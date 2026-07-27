@@ -1,6 +1,7 @@
 ---
-status: Active
-summary: Completed review evidence and remaining gated work from the Reploy redesign evaluation.
+status: Complete
+updated: 2026-07-27
+summary: Implementation and fresh follow-up review complete; all discovered P1 findings are resolved.
 ---
 
 # Reploy Redesign Evaluation
@@ -8,28 +9,22 @@ summary: Completed review evidence and remaining gated work from the Reploy rede
 This is a temporary evidence and continuation surface for observations made
 during the redesign walkthrough. The implementation slices below define the
 primary owner and verification boundary for every finding. Completed findings
-remain as historical acceptance evidence while the remaining slices are active;
-this document can be removed after the final dependent cleanup lands.
+remain as historical acceptance evidence through the fresh review; this
+document can be removed after that review is summarized.
 
 ## Implementation triage
 
-The reviewed implementation stack completed slices 1-12. Their original scope
-and verification gates remain below as completion evidence. The remaining work
-is:
+The reviewed implementation stack completed slices 1-15. Their original scope
+and verification gates remain below as completion evidence. A fresh
+end-to-end review follows this implementation sequence.
 
-1. design and implement slice 13's confirmed staged control surface;
-2. complete the active health-check redesign; and
-3. run slice 14's demo cleanup after both inputs settle.
+The broader post-v1 design for explicit local build commands and cross-run
+caching remains related but separate.
 
-Slice 13 must land before slice 14. The broader post-v1 design for explicit
-local build commands and cross-run caching remains related but separate.
-
-Each remaining implementation slice should be developed test-first, pass its
-focused tests and `go test ./...`, include a Changie fragment when user-visible,
-and be committed as one independently reviewable slice. Docker-facing behavior
-also needs a focused integration test against a real Docker daemon. Do not
-combine the two design-gated slices with adjacent implementation work merely to
-keep the stack short.
+Each implementation slice was developed test-first, passed its focused tests
+and `go test ./...`, included a Changie fragment when user-visible, and was
+kept independently reviewable. Docker-facing behavior also received focused
+integration testing against a real Docker daemon.
 
 ### Slice 1: Make transient home writable
 
@@ -358,32 +353,42 @@ explicit opt-in later.
 
 ### Slice 13: Add a self-contained staged control surface
 
-**State:** active; confirmed product requirement, design-gated, and required
-before slice 14.
+**State:** complete; implemented and reviewed.
 
-Decide when the app-named control command appears in staging and how it invokes
-Reploy without a fragile external executable dependency or an unexplained
-large binary copy. The staged and installed command surfaces should teach the
-same application commands while retaining staging-only management operations.
+The app-named control command now appears at stage time. It locates the
+stage-owned runtime at `.reploy/bin/reploy` relative to the command itself, so
+moving the complete staging directory does not introduce an external executable
+or workspace dependency. Each user-managed staging directory owns one runtime
+copy; `stage --update` refreshes it when Reploy changes.
 
 **Primary finding:** `Staging does not contain the environment control script`.
 
-**Decision gate before implementation:**
+**Implemented ownership and lifecycle:**
 
-- choose stage-time versus first-build generation;
-- choose copied runtime, launcher, or another self-contained mechanism; and
-- define size, update, relocation, and cleanup behavior.
+- stage creates the app-named wrapper and embedded runtime without building;
+- a private canonical manifest tracks generated paths and content identities;
+- update refreshes changed generated files and removes an obsolete renamed
+  wrapper only while it still matches the managed identity;
+- build cleanup preserves the control surface because it is staging
+  control-plane state, not a build artifact;
+- uninstall without directory removal converts the retained installed command
+  back to the relocatable staged form; and
+- direct install's private temporary staging workspace skips this user-facing
+  surface.
 
-**Verification gate after approval:**
+**Verification evidence:**
 
 - a moved staging directory retains a working app-named control command;
 - no external workspace path is required;
 - staged and installed help share the intended command model; and
-- stage, rebuild, and cleanup update or remove the surface predictably.
+- stage, rebuild, and cleanup update or remove the surface predictably; and
+- `nox -s cli-integration` passes the complete staged runtime and persistent
+  install lifecycle against Docker.
 
 ### Slice 14: Simplify the OmegaConf Inspector demo and walkthrough
 
-**State:** blocked on slice 13 and the active health-check redesign.
+**State:** complete; implemented and reviewed after the staged control surface
+and app-owned readiness contract settled.
 
 Remove project-inspection commands from the blueprint and Python CLI, keep only
 deployment-relevant commands, update the local flow to build before app
@@ -401,33 +406,150 @@ explain optional nodes only when introduced.
 - the web UI remains the sole project-management interface; and
 - every documented command is exercised by an acceptance test or smoke script.
 
+**Verification evidence:**
+
+- the resolved demo blueprint exposes only `serve`, `config init`,
+  `config check`, `config show`, and `version`, with conservative installed
+  exposure;
+- the built Python CLI and staged app command reject the removed `project`
+  surface;
+- the local blueprint completed a clean Docker-backed build, staged config and
+  readiness lifecycle, user install, installed config/status/logs lifecycle,
+  stop, and uninstall; and
+- the public website build passes with the rewritten minimal-to-complete
+  walkthrough.
+
+### Slice 15: Restore metadata-private workload environment injection
+
+**State:** complete; implemented and reviewed.
+
+Treat a deployment-root `.env` as operator-owned runtime configuration rather
+than blueprint or image configuration. Validate the host file defensively,
+keep it outside every Docker and Reploy persistence surface, and inject its
+assignments only after container creation through a fixed one-shot workload
+launcher channel.
+
+**Verification gate:**
+
+- POSIX permissions and Windows ACLs limit the file to its deployment owner
+  and supported administrative identities;
+- symbolic or hard links, replacement races, invalid assignment syntax,
+  ancestor bind mounts, and autonomous Docker restart policies fail before
+  workload creation;
+- Compose, image/container metadata, commands, state, locks, and
+  Reploy-generated diagnostics contain neither the host file nor its variable
+  names or values;
+- first install copies the file defensively, reinstall preserves it, explicit
+  `.env` replacement updates it, and a missing replacement source never
+  deletes the installed copy; and
+- focused tests plus a real-Docker test prove that the workload receives the
+  value while `docker inspect` does not.
+
 ## Coverage and dependency summary
 
-Every detailed finding below has exactly one primary slice above. Slices 1-12
-are complete. The remaining dependency graph is:
+Every detailed finding below has exactly one primary slice above. Slices 1-15
+and the prerequisite health-check redesign are complete. The broader cross-run
+build-cache design remains post-v1 and was not a prerequisite.
 
-```mermaid
-flowchart LR
-    S13["Slice 13<br/>Staged control surface"]
-    HC["Health-check redesign"]
-    S14["Slice 14<br/>Demo cleanup"]
+## Fresh end-to-end review
 
-    S13 --> S14
-    HC --> S14
+The post-implementation review confirmed that the original 14 findings remain
+resolved. It also exercised the project-owned local build recipe for OmegaConf:
+overriding OmegaConf to its local source discovered `tool:java`, prepared the
+portable Java tool layer, built the setuptools-legacy artifact, and completed
+the OmegaConf Inspector image without relying on host Java.
+
+The review found two new P1 follow-ups. Both are transferred to the active
+backlog rather than reopening the completed implementation slices.
+
+### Runtime-only blueprint updates reuse an obsolete build lock
+
+**State:** resolved and verified on 2026-07-27.
+
+Reproduction:
+
+1. stage and build the OmegaConf Inspector demo;
+2. change only `docker.workload.endpoints.http.publish.staging`;
+3. run `reploy stage --update` with the changed blueprint;
+4. run `reploy build`; and
+5. run the staged app command's `up`.
+
+Observed result:
+
+- build reports `reusing current validated image` and
+  `environment already current`; then
+- `up` fails with `runtime build is missing or stale; run reploy build`.
+
+The runtime check is correct: staged state contains the new blueprint while the
+reused lock still contains the old blueprint digest. The defect is the reuse
+path returning that old generation without publishing a new lock/state binding
+for the unchanged image and provider closure.
+
+The build reuse path now rebinds the unchanged validated image and provider
+closure to the desired blueprint digest and publishes a new recoverable
+generation. Policy-changing inputs still take the validated build path. A real
+Docker acceptance changed only the staged HTTP publication port, retained the
+exact image digest, completed the reuse path in 2.4 seconds, started the
+workload on the new port, passed its health probe, and stopped it cleanly.
+
+### Expected APT resolver mechanics leak as user warnings
+
+**State:** resolved and verified on 2026-07-27.
+
+The successful local OmegaConf build ended with:
+
+```text
+reploy warning: APT: Not using locking for read only lock file /var/lib/dpkg/lock-frontend
+reploy warning: APT: Not using locking for read only lock file /var/lib/dpkg/lock
 ```
 
-Slice 13 and the health-check redesign may proceed independently. Slice 14 is
-the convergence point: it must document and test the settled local-source
-pipeline, staged and installed control surfaces, and health-check contract. The
-broader cross-run build-cache design remains post-v1 and is not a prerequisite
-for slice 14.
+These warnings are emitted by APT while Reploy intentionally performs
+read-only dependency planning. They identify no blueprint, package, security,
+or recovery problem. Reploy currently promotes every `W:` line from successful
+APT work unless its exact text appears in a version-specific allowlist; that
+allowlist recognizes older permission-denied lock messages but not these newer
+forms.
+
+The resolver now sets APT's `Debug::NoLocking=1` option for its non-installing,
+read-only package planning and download operations. Warning parsing was not
+broadened. A clean real Docker build of local OmegaConf through its
+project-owned `tool:java` requirement completed in 2m36s without either lock
+warning while retaining ordinary APT diagnostics.
+
+### Follow-up redesign review
+
+**State:** complete on 2026-07-27.
+
+The next implementation queue completed the metadata-private workload
+environment channel, separated application ownership from physical provider
+nodes, and documented and tested the smallest base-only blueprint. The review
+confirmed that runtime-only blueprint changes republish a current generation,
+APT's read-only resolver remains warning-free without weakening diagnostics,
+canonical application contribution identities survive shared OS
+materialization, and optional environment nodes do not invent defaults for
+identity, platform support, or the base image.
+
+The private workload environment review applied the stronger invariant that
+neither variable names nor values may enter Docker image/container metadata,
+labels, command arguments, mounts, Compose environment content, Reploy state,
+locks, or diagnostics. The one-shot stdin relay satisfies that boundary, and a
+real-Docker test verifies both workload delivery and absence from
+`docker inspect`.
+
+The review found one additional isolation defect on the immediate user-install
+startup path: its planning check compared lexical mount paths, but it did not
+repeat the symlink-resolving check after installed bind sources existed. A bind
+source symlinked to the installed deployment directory could therefore expose
+the host `.env` on that first start. User-install startup now resolves and
+revalidates every realized bind source before container creation, matching
+staged starts and system-service starts. A focused regression test proves that
+the start is rejected without exposing the private variable name or value.
 
 ## Detailed evaluation evidence
 
-The sections below preserve the observations as recorded during the walkthrough.
-For slices 1-12, descriptions of “current” behavior refer to the evaluated
-pre-fix state, not the current repository. Evidence owned by slices 12-14
-remains active.
+The sections below preserve the observations as recorded during the
+walkthrough. Descriptions of “current” behavior refer to the evaluated pre-fix
+state, not the current repository.
 
 ## Validate result presentation
 
@@ -722,28 +844,24 @@ failure and warnings into its own terminology.
 
 ## Staging does not contain the environment control script
 
-After a successful stage and build, the staging directory contains only the
-private `.reploy/` state and `overrides.yaml`; it does not contain the
-environment's generated command surface.
+The evaluated pre-fix staging directory contained only private `.reploy/` state
+and `overrides.yaml`; it did not contain the environment's generated command
+surface.
 
-Current implementation:
+Resolved implementation:
 
-- Staging operations are available only through direct commands such as
-  `reploy up`, `reploy status`, `reploy logs`, and `reploy app`.
-- The app-named control script and embedded Reploy runtime are generated only
-  during `reploy install`.
-- A staged control-script rendering mode remains in the implementation but has
-  no caller.
+- `reploy stage` generates the app-named command and a stage-owned Reploy
+  runtime before any environment build.
+- The command resolves both its staging directory and runtime relative to its
+  own location, so the complete directory can be moved.
+- The embedded control runtime distinguishes staged and deployed state:
+  staging exposes all native app commands, while installed control remains
+  limited to commands declared for deployment.
+- `reploy stage --update` refreshes the runtime and wrapper and safely removes
+  a renamed managed wrapper.
 
-This appears inconsistent with the intended staging experience, where users
-should learn and exercise the same app-local command surface before installing
-the service. For this blueprint, the default script name would be
-`omegaconf-inspector`.
-
-Triage whether staging should generate the app-named script at stage time or
-after the first successful build, how that script locates Reploy without
-creating a fragile external dependency, and which staging-only management
-commands remain exclusive to the main `reploy` CLI.
+General staging management such as `stage --update`, build customization,
+doctor, and install remains exclusive to the main `reploy` CLI.
 
 ## Transient shell home is not writable by the runtime user
 
@@ -856,7 +974,7 @@ reuse, and actual build work.
 
 ## Remove project-inspection commands from the demo
 
-The OmegaConf Inspector blueprint exposes:
+The evaluated pre-fix OmegaConf Inspector blueprint exposed:
 
 ```text
 reploy app project list
@@ -874,18 +992,16 @@ duplicates part of that interface in a less convenient form. Demonstrating
 positional argument forwarding is not sufficient reason to expose a command
 that has no natural deployment-management use.
 
-Remove `project list` and `project show` from the blueprint and, unless the
-standalone Python application needs them for another reason, from its CLI. Keep
-the commands that serve the deployment workflow:
+Resolved implementation:
 
-- the internal `serve` workload command;
-- staging-only `config init`;
-- staged and deployed `config check`;
-- staged and deployed `config show`; and
-- `version` as a cheap staged and deployed smoke check.
+- the blueprint and standalone Python CLI no longer expose `project list` or
+  `project show`; project workflows remain in the web UI;
+- the internal `serve` workload command remains;
+- `config init` remains staging-only;
+- `config check`, `config show`, and `version` remain staged and deployed; and
+- public walkthroughs use the app-named staged and installed control commands.
 
-With app commands no longer building implicitly, the local demo flow should
-build before invoking `config init`:
+The local demo flow now builds before invoking `config init`:
 
 ```text
 stage -> select overrides -> build -> config init -> config check -> up

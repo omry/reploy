@@ -442,17 +442,13 @@ def run_runtime_smoke(reploy: Path, deploy_dir: Path, workdir: Path, env: dict[s
     primary_error: BaseException | None = None
     started = False
     try:
-        app_check = run(
-            [str(reploy), "app", "config", "check", "--dir", str(deploy_dir)],
-            cwd=workdir,
-            env=env,
-        )
+        app_check = run(control_script_command(deploy_dir, "config", "check"), cwd=workdir, env=env)
         require_contains(app_check.stdout, '"check": "pass"', "config check")
 
         run([str(reploy), "up", "--dir", str(deploy_dir)], cwd=workdir, env=env)
         started = True
 
-        run([str(reploy), "status", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+        run(control_script_command(deploy_dir, "status"), cwd=workdir, env=env)
         health = run(
             [str(reploy), "test", "--timeout", "30s", "--dir", str(deploy_dir)],
             cwd=workdir,
@@ -460,18 +456,10 @@ def run_runtime_smoke(reploy: Path, deploy_dir: Path, workdir: Path, env: dict[s
         )
         require_contains(health.stdout, f"ok: https://127.0.0.1:{host_port}/_health_", "health check")
 
-        logs = run(
-            [str(reploy), "logs", "--tail", "50", "--dir", str(deploy_dir)],
-            cwd=workdir,
-            env=env,
-        )
+        logs = run(control_script_command(deploy_dir, "logs", "--tail", "50"), cwd=workdir, env=env)
         require_contains(logs.stdout, "smoke-suite serving HTTPS", "runtime logs")
 
-        live_check = run(
-            [str(reploy), "app", "config", "check", "--live", "--dir", str(deploy_dir)],
-            cwd=workdir,
-            env=env,
-        )
+        live_check = run(control_script_command(deploy_dir, "config", "check", "--live"), cwd=workdir, env=env)
         require_contains(live_check.stdout, '"check": "pass"', "live config check")
 
         run([str(reploy), "restart", "--dir", str(deploy_dir)], cwd=workdir, env=env)
@@ -525,10 +513,7 @@ def run_persistent_install_smoke(
 
         status = run(control_script_command(install_dir, "status"), cwd=workdir, env=env)
         require_contains(completed_output(status), "smoke-app", "installed control status")
-        if docker_managed_install():
-            require_contains(status.stdout, "[DEPLOYED : smoke-app] NAME", "installed control status")
-        else:
-            require_contains(completed_output(status), "[DEPLOYED : smoke-app]", "installed control status")
+        require_contains(status.stdout, "[DEPLOYED : smoke-app] status: running", "installed control status")
         require_not_contains(completed_output(status), "[smoke-app]", "installed control status")
 
         logs = run(control_script_command(install_dir, "logs"), cwd=workdir, env=env)
@@ -632,9 +617,13 @@ def run_smoke(
         shutil.copytree(packages_dir, fixture_dir)
         print(f"[smoke] Windows fixture copy elapsed: {format_duration(time.monotonic() - copy_started)}", flush=True)
         pack_dir = fixture_dir / "smoke-blueprint"
+    direct_pack_dir = pack_dir.parent / "direct-blueprint"
+    if not (direct_pack_dir / "direct.blueprint.yaml").is_file():
+        raise SystemExit(f"missing direct-install e2e blueprint: {direct_pack_dir}")
     smoke_started = time.monotonic()
 
     blueprint_ref = "file:" + str(pack_dir)
+    direct_blueprint_ref = "file:" + str(direct_pack_dir)
     validation = run([str(reploy), "validate", blueprint_ref], cwd=workdir, env=env)
     require_contains(validation.stdout, "pass: smoke-app (syntax and semantics)", "validate output")
 
@@ -659,6 +648,11 @@ def run_smoke(
         env=env,
     )
     require_contains(init.stdout, "created staging directory", "stage output")
+    moved_deploy_dir = workdir / "deployment-moved"
+    deploy_dir.rename(moved_deploy_dir)
+    staged_help = run(control_script_command(moved_deploy_dir, "--help"), cwd=workdir, env=env)
+    require_contains(staged_help.stdout, "config check", "moved staged control help")
+    moved_deploy_dir.rename(deploy_dir)
     package_root = pack_dir.parent.resolve()
     overrides = (
         "environment:\n"
@@ -733,7 +727,7 @@ def run_smoke(
 
     if persistent_install:
         run_persistent_install_smoke(reploy, deploy_dir, install_dir, workdir, env)
-        run_direct_install_smoke(reploy, blueprint_ref, direct_install_dir, workdir, env)
+        run_direct_install_smoke(reploy, direct_blueprint_ref, direct_install_dir, workdir, env)
 
     run([str(reploy), "bundle", "clean", "--verbose", "--dir", str(deploy_dir)], cwd=workdir, env=env)
 

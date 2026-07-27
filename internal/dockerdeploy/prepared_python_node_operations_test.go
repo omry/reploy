@@ -29,7 +29,7 @@ func TestPreparedPythonNodeOperationsResolvesAndIngestsWheelsInSession(t *testin
 		t.Fatal(err)
 	}
 	requestWithUnused, err := pythonprovider.CanonicalProviderRequestV1(pythonprovider.PythonProviderRequestV1{
-		Component:    "application",
+		Component:    blueprint.ApplicationContributionID("application", blueprint.ContributionProviderPython),
 		Interpreter:  blueprint.CommandRequirement{Command: "python", Version: ">=3.11", Supplier: "base"},
 		Requirements: []providers.CanonicalPackageRequest{requirement},
 		Overrides: []pythonprovider.PythonPackageOverrideV1{
@@ -425,12 +425,13 @@ func TestMergePythonSourceCandidatesReplacesMatchingCurrentCandidate(t *testing.
 
 func preparedPythonResolveRequest(t *testing.T, descriptor deploy.ImageDescriptor) providers.ResolveNodeRequest {
 	t.Helper()
+	contribution := blueprint.ApplicationContributionID("application", blueprint.ContributionProviderPython)
 	packageRequest, err := pythonprovider.CanonicalPackageRequestV1("demo-server==1.0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	pythonRequest, err := pythonprovider.CanonicalProviderRequestV1(pythonprovider.PythonProviderRequestV1{
-		Component:    "application",
+		Component:    contribution,
 		Interpreter:  blueprint.CommandRequirement{Command: "python", Version: ">=3.11", Supplier: "base"},
 		Requirements: []providers.CanonicalPackageRequest{packageRequest},
 		Overrides:    []pythonprovider.PythonPackageOverrideV1{{Distribution: "demo-server", Kind: "local"}},
@@ -440,7 +441,7 @@ func preparedPythonResolveRequest(t *testing.T, descriptor deploy.ImageDescripto
 	}
 	pythonNodes, err := (pythonprovider.ComponentProvider{}).Plan(providers.PlanInput{
 		Components: []providers.ResolvedComponentRequestV1{{
-			Component: "application", Provider: blueprint.ComponentTypePython, Request: pythonRequest,
+			Component: contribution, Provider: blueprint.ComponentTypePython, Request: pythonRequest,
 		}},
 		Platform: descriptor.Platform,
 	})

@@ -57,6 +57,7 @@ type BuildOutcome struct {
 	Image       string
 	Elapsed     time.Duration
 	Reused      bool
+	Republished bool
 }
 
 type Config struct {
@@ -409,11 +410,11 @@ func editorItems(
 		}
 		byKey[key] = item
 	}
-	for componentName, component := range document.Environment.Components {
-		if component.Type != blueprint.ComponentTypePython || component.Python == nil {
+	for applicationName, application := range document.Environment.Applications {
+		if application.Packages.Python == nil {
 			continue
 		}
-		for _, requirement := range component.Python.Requirements {
+		for _, requirement := range application.Packages.Python.Requirements {
 			distribution, err := pythonprovider.RequirementDistributionName(requirement)
 			if err != nil {
 				return nil, fmt.Errorf("identify Python requirement %q: %w", requirement, err)
@@ -421,10 +422,14 @@ func editorItems(
 			addExplicit(distribution, pythonRequirementSource(requirement))
 		}
 		for _, selected := range overlay.SelectedOptions {
-			if selected.Component != componentName {
+			if selected.Application != applicationName {
 				continue
 			}
-			for _, requirement := range component.Options[selected.Option].PythonRequirements {
+			option := application.Options[selected.Option]
+			if option.Packages.Python == nil {
+				continue
+			}
+			for _, requirement := range option.Packages.Python.Requirements {
 				distribution, err := pythonprovider.RequirementDistributionName(requirement)
 				if err != nil {
 					return nil, fmt.Errorf("identify Python option requirement %q: %w", requirement, err)
@@ -434,13 +439,12 @@ func editorItems(
 		}
 	}
 	for _, direct := range overlay.DirectPackages {
-		component, found := document.Environment.Components[direct.Component]
-		if !found || component.Type != blueprint.ComponentTypePython {
+		if direct.Package.Schema != pythonprovider.PackageRequestSchemaV1 {
 			continue
 		}
 		requirement, ok := direct.Package.Value["requirement"].(string)
 		if !ok {
-			return nil, fmt.Errorf("identify direct Python requirement for component %q: requirement must be a string", direct.Component)
+			return nil, fmt.Errorf("identify direct Python requirement for component %q: requirement must be a string", direct.Contribution)
 		}
 		distribution, err := pythonprovider.RequirementDistributionName(requirement)
 		if err != nil {
@@ -748,7 +752,9 @@ func (m *model) viewValidationOverlay() string {
 		if m.buildOutcome.Elapsed >= time.Second {
 			body.WriteString("\nelapsed: " + m.buildOutcome.Elapsed.Round(100*time.Millisecond).String())
 		}
-		if m.buildOutcome.Reused {
+		if m.buildOutcome.Republished {
+			body.WriteString("\nupdated environment: " + sanitizeTerminalText(m.buildOutcome.Environment))
+		} else if m.buildOutcome.Reused {
 			body.WriteString("\nenvironment already current: " + sanitizeTerminalText(m.buildOutcome.Environment))
 		} else {
 			body.WriteString("\nbuilt environment: " + sanitizeTerminalText(m.buildOutcome.Environment))
@@ -1644,11 +1650,10 @@ func (m *model) setBaseImage(image string) {
 }
 
 func (m *model) blueprintBaseImage() string {
-	base, found := m.document.Environment.Components["base"]
-	if !found || base.Base == nil || base.Base.Image == "" {
+	if m.document.Environment.Base.Image == "" {
 		return "not declared"
 	}
-	return base.Base.Image
+	return m.document.Environment.Base.Image
 }
 
 func (m *model) updateAdd(key tea.KeyMsg) (tea.Model, tea.Cmd) {

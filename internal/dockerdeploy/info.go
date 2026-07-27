@@ -69,10 +69,10 @@ func infoStateV1(dir string) (string, error) {
 		lines = append(lines, "  (empty)")
 	} else {
 		for _, option := range state.Overlay.SelectedOptions {
-			lines = append(lines, fmt.Sprintf("  - option %s/%s", option.Component, option.Option))
+			lines = append(lines, fmt.Sprintf("  - option %s/%s", option.Application, option.Option))
 		}
 		for _, request := range state.Overlay.DirectPackages {
-			lines = append(lines, fmt.Sprintf("  - package %s [%s]", request.Component, request.Package.Schema))
+			lines = append(lines, fmt.Sprintf("  - package %s [%s]", request.Contribution, request.Package.Schema))
 		}
 	}
 	return strings.Join(lines, "\n") + "\n", nil

@@ -73,6 +73,8 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 0
 	case "_control":
 		return runEmbeddedControl(args[1:], stdout, stderr, globalOptions)
+	case "_service-container":
+		return runEmbeddedServiceContainer(args[1:], stdout, stderr, globalOptions)
 	case "index":
 		return runPackIndex(args[0], args[1:], stdout, stderr)
 	case "validate":
@@ -91,6 +93,63 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		return printTopLevelUsageError(stderr, "unknown command: %s", args[0])
 	}
+}
+
+func runEmbeddedServiceContainer(args []string, stdout io.Writer, stderr io.Writer, globalOptions globalDeploymentOptions) int {
+	dir := ""
+	dockerPath := ""
+	action := ""
+	for len(args) > 0 {
+		switch args[0] {
+		case "--dir":
+			if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
+				fmt.Fprintln(stderr, "reploy service-container usage error: --dir requires a value")
+				return 2
+			}
+			dir = args[1]
+			args = args[2:]
+		case "--docker":
+			if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
+				fmt.Fprintln(stderr, "reploy service-container usage error: --docker requires a value")
+				return 2
+			}
+			dockerPath = args[1]
+			args = args[2:]
+		default:
+			if strings.HasPrefix(args[0], "--dir=") {
+				dir = strings.TrimPrefix(args[0], "--dir=")
+				args = args[1:]
+				continue
+			}
+			if strings.HasPrefix(args[0], "--docker=") {
+				dockerPath = strings.TrimPrefix(args[0], "--docker=")
+				args = args[1:]
+				continue
+			}
+			if action == "" {
+				action = args[0]
+				args = args[1:]
+				continue
+			}
+			fmt.Fprintln(stderr, "reploy service-container usage error: unexpected argument")
+			return 2
+		}
+	}
+	if dir == "" || dockerPath == "" || action != "run" {
+		fmt.Fprintln(stderr, "reploy service-container usage error: expected --dir DIR --docker PATH run")
+		return 2
+	}
+	timeout := time.Duration(0)
+	if globalOptions.DockerTimeoutSet {
+		timeout = globalOptions.DockerTimeout
+	}
+	if err := dockerdeploy.RunInstalledServiceContainerV1(context.Background(), dir, action, dockerPath, dockerdeploy.RunOptions{
+		Stdout: stdout, Stderr: stderr, DockerPreflightTimeout: timeout,
+	}); err != nil {
+		fmt.Fprintf(stderr, "reploy service-container error: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func runBlueprintValidate(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -3286,8 +3345,8 @@ Options:
   --service NAME     Installed service identity, default environment id
   --port PORT        Host port override for a single-endpoint blueprint
   --port NAME=PORT   Host port override for a named endpoint; repeat as needed
-  --replace PATH     Replace a preserved managed path; use all for every managed path
-  --clean            Replace all managed paths
+  --replace PATH     Replace a preserved managed path or .env; use all for every preserved path
+  --clean            Replace all managed paths and .env
   --start            Start after install, default
   --no-start         Install without starting the service
   --wait             Wait in FIFO order for active and earlier queued runs
@@ -3345,7 +3404,8 @@ Usage: reploy [--docker-timeout DURATION] stage APP_REF [OPTIONS]
 
 Create a staging directory from an app blueprint reference.
 Use --update to refresh an existing staging directory, optionally from a new ref.
-Stage records desired state only; build explicitly or let staged up/restart build on demand.
+Stage records desired state and generates the app-named control command without building.
+Build explicitly or let staged up/restart build on demand.
 A new stage from a local blueprint imports overrides.yaml beside that blueprint.
 
 APP_REF:

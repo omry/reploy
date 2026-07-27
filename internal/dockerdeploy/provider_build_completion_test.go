@@ -220,9 +220,12 @@ func TestCompleteProviderBuildRejectsRuntimePlanDriftBeforeBackendWork(t *testin
 func TestCompleteProviderBuildRejectsDocumentRequestDriftBeforeBackendWork(t *testing.T) {
 	input, operation, store := providerBuildCompletionFixture(t)
 	defer operation.Unlock()
-	component := input.Document.Environment.Components["application"]
-	component.Python.Requirements = append(component.Python.Requirements, "other==1.0")
-	input.Document.Environment.Components["application"] = component
+	application := input.Document.Environment.Applications["application"]
+	application.Packages.Python.Requirements = append(application.Packages.Python.Requirements, "other==1.0")
+	input.Document.Environment.Applications["application"] = application
+	if err := input.Document.Environment.RebuildProviderContributions(); err != nil {
+		t.Fatal(err)
+	}
 	calls := 0
 	_, err := completeProviderBuild(t.Context(), operation, store, input, providerBuildCompletionBackend{
 		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, bool, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, RunOptions) (FinalizedBuildValidationResult, error) {
@@ -264,7 +267,10 @@ func TestValidateProviderBuildCompletionRejectsBaseOnlyRuntimePolicyDrift(t *tes
 	input.Graph.PrefixImages = []providers.RealizedImageV1{baseImage}
 	input.Graph.Materializations = []providers.GraphNodeMaterializeResult{}
 	input.Graph.Catalog = append([]providers.RealizedOutput{}, input.BaseCatalog...)
-	delete(input.Document.Environment.Components, "application")
+	delete(input.Document.Environment.Applications, "application")
+	if err := input.Document.Environment.RebuildProviderContributions(); err != nil {
+		t.Fatal(err)
+	}
 	for _, component := range input.ResolvedRequest.Components {
 		if component.Component == "base" {
 			input.ResolvedRequest.Components = []providers.ResolvedComponentRequestV1{component}
@@ -324,24 +330,23 @@ func providerBuildCompletionFixture(t *testing.T) (ProviderBuildCompletionInput,
 	}
 	document := blueprint.Document{
 		Blueprint: blueprint.Metadata{Compatibility: blueprint.Compatibility{Platforms: []blueprint.Platform{fixture.request.Platform}}},
-		Environment: blueprint.Environment{ID: "demo", Components: map[string]blueprint.Component{
-			"application": {
-				Type: blueprint.ComponentTypePython,
-				Python: &blueprint.PythonComponent{
+		Environment: blueprint.Environment{
+			ID: "demo",
+			Applications: map[string]blueprint.Application{"application": {
+				Packages: blueprint.ApplicationPackages{Python: &blueprint.PythonComponent{
 					Interpreter:  blueprint.CommandRequirement{Command: "python", Version: ">=3.11", Supplier: "base"},
 					Requirements: []string{"demo-server==1.0"},
-				},
-				Options: map[string]blueprint.ComponentOption{},
+				}},
+				Options: map[string]blueprint.ApplicationOption{},
+			}},
+			Base: blueprint.BaseComponent{
+				Image:   "debian:bookworm-slim",
+				Exports: map[string]blueprint.BaseExecutableExport{"python": {Executable: "/usr/bin/python3"}},
 			},
-			"base": {
-				Type: blueprint.ComponentTypeBase,
-				Base: &blueprint.BaseComponent{
-					Image:   "debian:bookworm-slim",
-					Exports: map[string]blueprint.BaseExecutableExport{"python": {Executable: "/usr/bin/python3"}},
-				},
-				Options: map[string]blueprint.ComponentOption{},
-			},
-		}},
+		},
+	}
+	if err := document.Environment.RebuildProviderContributions(); err != nil {
+		t.Fatal(err)
 	}
 	dockerPlan := DockerExecutionPlan{}
 	plans, err := RuntimePlansV1(document, dockerPlan)

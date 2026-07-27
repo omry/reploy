@@ -33,7 +33,7 @@ func PublishBuiltPythonSourceWheels(
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
-	if err := blueprint.ValidateProviderIdentifier("Python source wheel component", component); err != nil {
+	if err := blueprint.ValidateContributionReference("Python source wheel contribution", component); err != nil {
 		return nil, nil, err
 	}
 	if err := validatePreparedPythonResolverArtifactLayout(prepared); err != nil {

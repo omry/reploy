@@ -20,6 +20,29 @@ func TestCurrentBuildMatchesExactCanonicalInputs(t *testing.T) {
 	}
 }
 
+func TestRebindCurrentBuildLockV1UpdatesOnlyDesiredBlueprintIdentity(t *testing.T) {
+	current, input := currentBuildReuseFixture(t)
+	input.Document.Environment.ControlScript = "updated-control"
+	current.State.Blueprint = testResolvedBlueprintV1(t, input.Document)
+
+	matched, err := CurrentBuildMatches(current, input)
+	if err != nil || !matched {
+		t.Fatalf("matched=%v error=%v", matched, err)
+	}
+	rebound, err := rebindCurrentBuildLockV1(current.Lock, input.Document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := current.Lock
+	want.BlueprintDigest = testResolvedBlueprintDigestV1(t, input.Document)
+	if !reflect.DeepEqual(rebound, want) {
+		t.Fatalf("rebound lock changed validated build inputs:\n got: %#v\nwant: %#v", rebound, want)
+	}
+	if rebound.BlueprintDigest == current.Lock.BlueprintDigest {
+		t.Fatal("runtime-only document update retained the obsolete blueprint digest")
+	}
+}
+
 func TestCurrentBuildMatchesIgnoresDeploymentLocalState(t *testing.T) {
 	current, input := currentBuildReuseFixture(t)
 	current.State.Deployment = &deploy.DeploymentStateV1{
@@ -51,7 +74,7 @@ func TestCurrentBuildMatchesInvalidatesEverySemanticBoundary(t *testing.T) {
 		}},
 		{name: "overlay", mutate: func(current *CurrentBuild, _ *CurrentBuildReuseInput) {
 			current.Lock.Overlay = deploy.AddOverlayPackages(current.Lock.Overlay, []deploy.DirectPackageRequest{{
-				Component: "application", Package: providers.CanonicalPackageRequest{Schema: "test-package-v1", Value: canonical.Object{}},
+				Contribution: "application", Package: providers.CanonicalPackageRequest{Schema: "test-package-v1", Value: canonical.Object{}},
 			}})
 			refreshCurrentBuildReuseGeneration(t, current)
 		}},
@@ -91,7 +114,7 @@ func TestCurrentBuildMatchesRejectsOverlayRequestMismatch(t *testing.T) {
 func TestCurrentBuildMatchesTreatsChangedStateOverlayAsStale(t *testing.T) {
 	current, input := currentBuildReuseFixture(t)
 	current.State.Overlay = deploy.AddOverlayPackages(current.State.Overlay, []deploy.DirectPackageRequest{{
-		Component: "application", Package: providers.CanonicalPackageRequest{Schema: "test-package-v1", Value: canonical.Object{}},
+		Contribution: "application", Package: providers.CanonicalPackageRequest{Schema: "test-package-v1", Value: canonical.Object{}},
 	}})
 	matched, err := CurrentBuildMatches(current, input)
 	if err != nil || matched {

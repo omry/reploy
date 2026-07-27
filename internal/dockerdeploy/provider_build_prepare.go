@@ -35,9 +35,12 @@ type LockedProviderBuildPreparationV1 struct {
 	FinalImageConfig providers.ImageConfigPolicy
 	// Current is the verified previously published generation, including when
 	// it is stale. ReusableLock is the only cache input for later provider work
-	// and is nil under NoCache.
+	// and is nil under NoCache. PublicationLock is the lock bound to the desired
+	// staged blueprint when an otherwise exact current or validated build is
+	// reused.
 	Current            *CurrentBuild
 	ReusableLock       *deploy.BuildLockV1
+	PublicationLock    *deploy.BuildLockV1
 	ValidatedCandidate *ValidatedBuildCandidateV1
 	ValidatedInputs    ValidatedBuildInputsV1
 	NoCache            bool
@@ -185,6 +188,11 @@ func prepareLockedProviderBuildV1(
 						return LockedProviderBuildPreparationV1{}, err
 					}
 					if matches {
+						publicationLock, err := rebindCurrentBuildLockV1(current.Lock, loaded.Document)
+						if err != nil {
+							return LockedProviderBuildPreparationV1{}, err
+						}
+						result.PublicationLock = &publicationLock
 						result.Reused = true
 						return result, nil
 					}
@@ -221,6 +229,11 @@ func prepareLockedProviderBuildV1(
 					return LockedProviderBuildPreparationV1{}, err
 				}
 				if matches {
+					publicationLock, err := rebindCurrentBuildLockV1(candidate.Lock, loaded.Document)
+					if err != nil {
+						return LockedProviderBuildPreparationV1{}, err
+					}
+					result.PublicationLock = &publicationLock
 					result.Reused = true
 					result.ReusedCandidate = true
 					return result, nil

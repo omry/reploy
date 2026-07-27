@@ -231,9 +231,10 @@ func TestCurrentBuildMatchesRuntimeV1TreatsChangedStateAsStale(t *testing.T) {
 	}
 
 	changed := buildInput.Document
-	base := changed.Environment.Components["base"]
-	base.Base = &blueprint.BaseComponent{Image: "debian:13", Exports: base.Base.Exports}
-	changed.Environment.Components["base"] = base
+	changed.Environment.Base.Image = "debian:13"
+	if err := changed.Environment.RebuildProviderContributions(); err != nil {
+		t.Fatal(err)
+	}
 	current.State.Blueprint, err = blueprint.EncodeResolvedDocumentV1(changed)
 	if err != nil {
 		t.Fatal(err)
@@ -256,14 +257,11 @@ func runtimeCurrentBuildFixture(t *testing.T) (CurrentBuild, CurrentBuildReuseIn
 	t.Helper()
 	current, input := currentBuildReuseFixture(t)
 	document := input.Document
-	document.Environment.Components = map[string]blueprint.Component{
-		"base": {
-			Type: blueprint.ComponentTypeBase,
-			Base: &blueprint.BaseComponent{
-				Image:   current.Lock.Base.AuthorReference,
-				Exports: map[string]blueprint.BaseExecutableExport{},
-			},
-		},
+	document.Environment.Base = blueprint.BaseComponent{
+		Image: current.Lock.Base.AuthorReference, Exports: map[string]blueprint.BaseExecutableExport{},
+	}
+	if err := document.Environment.RebuildProviderContributions(); err != nil {
+		t.Fatal(err)
 	}
 	resolved, err := blueprint.EncodeResolvedDocumentV1(document)
 	if err != nil {

@@ -40,8 +40,16 @@ func (ComponentProvider) Plan(input providerapi.PlanInput) ([]providerapi.NodeSp
 		if request.Component != component.Component {
 			return nil, fmt.Errorf("Python request component %q does not match resolved component %q", request.Component, component.Component)
 		}
+		application, ok := blueprint.ApplicationContributionOwner(
+			component.Component,
+			blueprint.ContributionProviderPython,
+		)
+		nodeOwner := component.Component
+		if ok {
+			nodeOwner = blueprint.ApplicationID(application)
+		}
 		node := providerapi.NodeSpec{
-			ID:                 providerapi.NodeID("python/" + component.Component),
+			ID:                 providerapi.NodeID("python/" + nodeOwner),
 			Provider:           blueprint.ComponentTypePython,
 			Components:         []string{component.Component},
 			Request:            component.Request,

@@ -26,20 +26,21 @@ type CurrentWorkloadRunInputV1 struct {
 }
 
 type currentWorkloadRunBackendV1 struct {
-	acquire          func(context.Context, string) (*deploy.OperationLock, error)
-	newStore         func(string) (providerstore.Store, error)
-	readState        func(*deploy.OperationLock) (deploy.StateV1, bool, error)
-	loadCurrent      currentBuildLoader
-	admit            func(context.Context, string, *deploy.OperationLock, ControlAdmissionInputV1) (AdmittedControlV1, error)
-	complete         func(*deploy.OperationLock, string, *deploy.ControlLeaseV1) error
-	plan             func(CurrentRuntimePlanInputV1) (CurrentRuntimePlanV1, error)
-	precheck         func(RuntimeReadinessInput) error
-	workloadCommands func(deploy.StateV1) (*CommandSpec, *CommandSpec, error)
-	stopOwned        func(context.Context, *deploy.OperationLock, deploy.StateV1, string, RunOptions) error
-	publishInputs    func(*deploy.OperationLock, string, CurrentRuntimePlanV1) (bool, error)
-	invocation       func(DockerExecutionPlan) (RuntimeInvocationV1, error)
-	runLifecycle     func(context.Context, CurrentWorkloadLifecycleInputV1) error
-	startupFailure   func(string, error, RuntimeOptions, time.Time) error
+	acquire            func(context.Context, string) (*deploy.OperationLock, error)
+	newStore           func(string) (providerstore.Store, error)
+	readState          func(*deploy.OperationLock) (deploy.StateV1, bool, error)
+	loadCurrent        currentBuildLoader
+	admit              func(context.Context, string, *deploy.OperationLock, ControlAdmissionInputV1) (AdmittedControlV1, error)
+	complete           func(*deploy.OperationLock, string, *deploy.ControlLeaseV1) error
+	plan               func(CurrentRuntimePlanInputV1) (CurrentRuntimePlanV1, error)
+	precheck           func(RuntimeReadinessInput) error
+	workloadCommands   func(deploy.StateV1) (*CommandSpec, *CommandSpec, error)
+	stopOwned          func(context.Context, *deploy.OperationLock, deploy.StateV1, string, RunOptions) error
+	publishInputs      func(*deploy.OperationLock, string, CurrentRuntimePlanV1) (bool, error)
+	invocation         func(DockerExecutionPlan) (RuntimeInvocationV1, error)
+	runLifecycle       func(context.Context, CurrentWorkloadLifecycleInputV1) error
+	startupFailure     func(string, error, RuntimeOptions, time.Time) error
+	privateEnvironment func(string) (privateWorkloadEnvironmentV1, error)
 }
 
 const unavailableRuntimeGenerationV1 = "runtime-generation-unavailable"
@@ -55,17 +56,18 @@ func RunCurrentWorkloadV1(ctx context.Context, input CurrentWorkloadRunInputV1) 
 		readState: func(operation *deploy.OperationLock) (deploy.StateV1, bool, error) {
 			return operation.ReadStateV1()
 		},
-		loadCurrent:      ValidateCurrentBuild,
-		admit:            AdmitControlOperationV1,
-		complete:         CompleteControlAdmissionV1,
-		plan:             PlanCurrentRuntimeV1,
-		precheck:         RequireRuntimeReady,
-		workloadCommands: currentWorkloadCommandsV1,
-		stopOwned:        stopOwnedCurrentWorkloadV1,
-		publishInputs:    PublishCurrentRuntimeInputsV1,
-		invocation:       WorkloadRuntimeInvocationV1,
-		runLifecycle:     RunCurrentWorkloadLifecycleV1,
-		startupFailure:   runtimePostStartError,
+		loadCurrent:        ValidateCurrentBuild,
+		admit:              AdmitControlOperationV1,
+		complete:           CompleteControlAdmissionV1,
+		plan:               PlanCurrentRuntimeV1,
+		precheck:           RequireRuntimeReady,
+		workloadCommands:   currentWorkloadCommandsV1,
+		stopOwned:          stopOwnedCurrentWorkloadV1,
+		publishInputs:      PublishCurrentRuntimeInputsV1,
+		invocation:         WorkloadRuntimeInvocationV1,
+		runLifecycle:       RunCurrentWorkloadLifecycleV1,
+		startupFailure:     runtimePostStartError,
+		privateEnvironment: loadPrivateWorkloadEnvironmentV1,
 	})
 }
 
@@ -82,7 +84,7 @@ func runCurrentWorkloadV1(ctx context.Context, input CurrentWorkloadRunInputV1, 
 	if input.DeploymentDir == "" {
 		return fmt.Errorf("run current workload requires a deployment directory")
 	}
-	if backend.acquire == nil || backend.newStore == nil || backend.readState == nil || backend.loadCurrent == nil || backend.admit == nil || backend.complete == nil || backend.plan == nil || backend.precheck == nil || backend.workloadCommands == nil || backend.stopOwned == nil || backend.publishInputs == nil || backend.invocation == nil || backend.runLifecycle == nil || backend.startupFailure == nil {
+	if backend.acquire == nil || backend.newStore == nil || backend.readState == nil || backend.loadCurrent == nil || backend.admit == nil || backend.complete == nil || backend.plan == nil || backend.precheck == nil || backend.workloadCommands == nil || backend.stopOwned == nil || backend.publishInputs == nil || backend.invocation == nil || backend.runLifecycle == nil || backend.startupFailure == nil || backend.privateEnvironment == nil {
 		return fmt.Errorf("run current workload requires a complete backend")
 	}
 	controlOperation, err := currentWorkloadControlOperationV1(input.Action)
@@ -198,6 +200,19 @@ func runCurrentWorkloadV1(ctx context.Context, input CurrentWorkloadRunInputV1, 
 	if planned.Docker.Workload == nil {
 		return recoverStop(fmt.Errorf("environment has no workload to %s", currentWorkloadActionVerbV1(input.Action)))
 	}
+	privateEnvironment := privateWorkloadEnvironmentV1{}
+	if input.Action == "up" || input.Action == "restart" {
+		privateEnvironment, err = backend.privateEnvironment(dir)
+		if err != nil {
+			return recoverStop(fmt.Errorf("load private workload environment: %w", err))
+		}
+		if privateEnvironment.Present {
+			if err := validatePrivateWorkloadEnvironmentIsolationV1(dir, planned.Docker); err != nil {
+				return recoverStop(err)
+			}
+			planned.Docker.PrivateEnvironment = true
+		}
+	}
 	invocation, err := backend.invocation(planned.Docker)
 	if err != nil {
 		return recoverStop(err)
@@ -229,6 +244,7 @@ func runCurrentWorkloadV1(ctx context.Context, input CurrentWorkloadRunInputV1, 
 		Environment: document.Environment.ID, DeploymentDir: dir,
 		Action: input.Action, RunOptions: input.RunOptions, Progress: input.Progress,
 		StartCommand: startCommand, StopCommand: stopCommand,
+		PrivateEnvironment: privateEnvironment,
 	})
 	cleanupContext := context.WithoutCancel(ctx)
 	operation, reacquireErr := backend.acquire(cleanupContext, dir)

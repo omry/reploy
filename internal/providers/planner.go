@@ -21,7 +21,7 @@ func BuildProviderPlanV1(input PlanInput, planners ...NodePlanner) (ProviderPlan
 	expected := make(map[string]blueprint.ComponentType, len(input.Components))
 	var baseRequest *CanonicalProviderRequest
 	for _, component := range input.Components {
-		if err := blueprint.ValidateProviderIdentifier("resolved component", component.Component); err != nil {
+		if err := blueprint.ValidateContributionReference("resolved contribution", component.Component); err != nil {
 			return ProviderPlanV1{}, err
 		}
 		if previous, exists := expected[component.Component]; exists {

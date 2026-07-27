@@ -16,6 +16,8 @@ const (
 	PathReplaceManagedBind  PathUpdateActionKind = "replace-managed-bind"
 	PathPreserveVolume      PathUpdateActionKind = "preserve-volume"
 	PathReplaceVolume       PathUpdateActionKind = "replace-volume"
+	PathPreservePrivateEnv  PathUpdateActionKind = "preserve-private-environment"
+	PathReplacePrivateEnv   PathUpdateActionKind = "replace-private-environment"
 	PathValidateUnmanaged   PathUpdateActionKind = "validate-unmanaged"
 	PathTmpfsNoop           PathUpdateActionKind = "tmpfs-noop"
 )

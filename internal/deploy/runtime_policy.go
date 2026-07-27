@@ -106,7 +106,7 @@ func ValidateRuntimePolicyV1(policy RuntimePolicyV1) error {
 			}
 		}
 		for outputIndex, output := range plan.Executables {
-			if err := blueprint.ValidateProviderIdentifier("runtime executable component", output.Component); err != nil {
+			if err := blueprint.ValidateContributionReference("runtime executable contribution", output.Component); err != nil {
 				return fmt.Errorf("runtime plan %q: %w", plan.ID, err)
 			}
 			if err := blueprint.ValidateProviderIdentifier("runtime executable output", output.Name); err != nil {

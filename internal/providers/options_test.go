@@ -7,22 +7,20 @@ import (
 	"github.com/omry/reploy/internal/blueprint"
 )
 
-func TestComponentOptionsAndSelection(t *testing.T) {
-	document := blueprint.Document{Environment: blueprint.Environment{Components: map[string]blueprint.Component{
+func TestApplicationOptionsAndSelection(t *testing.T) {
+	document := blueprint.Document{Environment: blueprint.Environment{Applications: map[string]blueprint.Application{
 		"application": {
-			Type:   blueprint.ComponentTypePython,
-			Python: &blueprint.PythonComponent{Requirements: []string{"demo"}},
-			Options: map[string]blueprint.ComponentOption{
-				"smtp": {Description: "SMTP", PythonRequirements: []string{"demo-smtp"}},
-				"imap": {Description: "IMAP", PythonRequirements: []string{"demo-imap"}},
+			Options: map[string]blueprint.ApplicationOption{
+				"smtp": {Description: "SMTP"},
+				"imap": {Description: "IMAP"},
 			},
 		},
 	}}}
-	options := ComponentOptions(document)
+	options := ApplicationOptions(document)
 	if got := []string{options[0].Name, options[1].Name}; !reflect.DeepEqual(got, []string{"imap", "smtp"}) {
 		t.Fatalf("options = %#v", got)
 	}
-	selected, err := SelectComponents(document, []string{"smtp"}, []string{"imap"}, []string{"smtp"})
+	selected, err := SelectApplicationOptions(document, []string{"smtp"}, []string{"imap"}, []string{"smtp"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,11 +29,11 @@ func TestComponentOptionsAndSelection(t *testing.T) {
 	}
 }
 
-func TestSelectComponentsDoesNotTreatRequiredComponentAsOption(t *testing.T) {
-	document := blueprint.Document{Environment: blueprint.Environment{Components: map[string]blueprint.Component{
-		"application": {Type: blueprint.ComponentTypePython, Python: &blueprint.PythonComponent{Requirements: []string{"demo"}}},
+func TestSelectApplicationOptionsDoesNotTreatRequiredApplicationAsOption(t *testing.T) {
+	document := blueprint.Document{Environment: blueprint.Environment{Applications: map[string]blueprint.Application{
+		"application": {},
 	}}}
-	if _, err := SelectComponents(document, nil, []string{"application"}, nil); err == nil {
-		t.Fatal("expected required component selection to fail")
+	if _, err := SelectApplicationOptions(document, nil, []string{"application"}, nil); err == nil {
+		t.Fatal("expected required application selection to fail")
 	}
 }

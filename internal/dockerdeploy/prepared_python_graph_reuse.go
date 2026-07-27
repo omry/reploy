@@ -291,7 +291,10 @@ func plannedAPTExclusiveRoots(plan providers.ProviderPlanV1) []string {
 			continue
 		}
 		for _, component := range node.Components {
-			roots = append(roots, path.Join(pythonprovider.InstallRoot, component))
+			roots = append(roots, path.Join(
+				pythonprovider.InstallRoot,
+				blueprint.ContributionRuntimeOwner(component, blueprint.ContributionProviderPython),
+			))
 		}
 	}
 	sort.Strings(roots)

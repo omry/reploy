@@ -29,10 +29,10 @@ func ListRequestOverlayOptions(ctx context.Context, dir string) ([]RequestOverla
 		return nil, err
 	}
 	entries := []RequestOverlayOptionEntry{}
-	for componentName, component := range document.Environment.Components {
-		for optionName, option := range component.Options {
+	for applicationName, application := range document.Environment.Applications {
+		for optionName, option := range application.Options {
 			entries = append(entries, RequestOverlayOptionEntry{
-				Name: componentName + "/" + optionName, Description: option.Description,
+				Name: applicationName + "/" + optionName, Description: option.Description,
 			})
 		}
 	}
@@ -48,15 +48,15 @@ func ListRequestOverlay(ctx context.Context, dir string) ([]RequestOverlayEntry,
 	entries := make([]RequestOverlayEntry, 0, len(overlay.SelectedOptions)+len(overlay.DirectPackages))
 	for _, option := range overlay.SelectedOptions {
 		entries = append(entries, RequestOverlayEntry{
-			Kind: "option", Component: option.Component, Value: option.Component + "/" + option.Option,
+			Kind: "option", Component: option.Application, Value: option.Application + "/" + option.Option,
 		})
 	}
 	for _, request := range overlay.DirectPackages {
 		value, err := displayOverlayPackageRequest(request.Package)
 		if err != nil {
-			return nil, fmt.Errorf("display package request for component %q: %w", request.Component, err)
+			return nil, fmt.Errorf("display package request for contribution %q: %w", request.Contribution, err)
 		}
-		entries = append(entries, RequestOverlayEntry{Kind: "package", Component: request.Component, Value: value})
+		entries = append(entries, RequestOverlayEntry{Kind: "package", Component: request.Contribution, Value: value})
 	}
 	return entries, nil
 }

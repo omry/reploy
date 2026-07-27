@@ -50,6 +50,7 @@ func Resolve(source Syntax) (Document, error) {
 			ID:              id,
 			ControlScript:   controlScript,
 			Vars:            variables,
+			Applications:    map[string]Application{},
 			Components:      map[string]Component{},
 			AllowConcurrent: allowConcurrent,
 			Terminal:        Terminal{ColorEnv: strings.TrimSpace(source.Environment.Terminal.ColorEnv)},
@@ -64,7 +65,7 @@ func Resolve(source Syntax) (Document, error) {
 	if document.Blueprint.Version == "" {
 		return Document{}, fmt.Errorf("blueprint.version is required")
 	}
-	if err := resolveComponents(source, &document); err != nil {
+	if err := resolveApplications(source, &document); err != nil {
 		return Document{}, err
 	}
 	if err := resolveMounts(source, extended, &document); err != nil {
@@ -92,51 +93,35 @@ func resolveConcurrentRunPolicy(value string) (ConcurrentRunPolicy, error) {
 	}
 }
 
-func resolveComponents(source Syntax, document *Document) error {
-	for _, name := range sortedKeys(source.Environment.Components) {
-		item := source.Environment.Components[name]
-		component, err := resolveComponent(name, item)
+func resolveApplications(source Syntax, document *Document) error {
+	base, err := resolveBaseComponent("environment.base", source.Environment.Base)
+	if err != nil {
+		return err
+	}
+	document.Environment.Base = *base.Base
+	document.Docker.Image = base.Base.Image
+
+	environmentOS, err := resolveAPTPackageRequests("environment.packages.os", source.Environment.Packages.OS)
+	if err != nil {
+		return err
+	}
+	document.Environment.Packages.OS = environmentOS
+	for _, name := range sortedKeys(source.Environment.Applications) {
+		if err := validateProviderIdentifier("environment.applications", name); err != nil {
+			return err
+		}
+		field := "environment.applications." + name
+		item := source.Environment.Applications[name]
+		application, err := resolveApplication(field, name, item)
 		if err != nil {
 			return err
 		}
-		component.Executables, err = resolveExecutableProfiles("environment.components."+name+".executables", item.Executables)
-		if err != nil {
-			return err
-		}
-		document.Environment.Components[name] = component
+		document.Environment.Applications[name] = application
 	}
-	base, ok := document.Environment.Components["base"]
-	if !ok || base.Type != ComponentTypeBase || base.Base == nil {
-		return fmt.Errorf("environment.components.base is required")
-	}
-	document.Docker.Image = base.Base.Image // Temporary projection for existing Docker callers.
-	return nil
+	return document.Environment.RebuildProviderContributions()
 }
 
-func resolveComponent(name string, item ComponentSyntax) (Component, error) {
-	field := "environment.components." + name
-	if name == "base" {
-		return resolveBaseComponent(field, item)
-	}
-	if err := validateNonBaseComponentIdentifier(field, name); err != nil {
-		return Component{}, err
-	}
-	switch ComponentType(strings.TrimSpace(item.Type)) {
-	case ComponentTypePython:
-		return resolvePythonComponent(field, item)
-	case ComponentTypeAPT:
-		return resolveAPTComponent(field, item)
-	default:
-		return Component{}, fmt.Errorf("%s.type must be python or apt", field)
-	}
-}
-
-func resolveBaseComponent(field string, item ComponentSyntax) (Component, error) {
-	for _, forbidden := range []string{"type", "interpreter", "requirements", "packages", "options"} {
-		if item.Present[forbidden] {
-			return Component{}, fmt.Errorf("%s.%s is not valid for the base component", field, forbidden)
-		}
-	}
+func resolveBaseComponent(field string, item BaseSyntax) (Component, error) {
 	image := strings.TrimSpace(item.Image)
 	if image == "" {
 		return Component{}, fmt.Errorf("%s.image is required", field)
@@ -157,100 +142,124 @@ func resolveBaseComponent(field string, item ComponentSyntax) (Component, error)
 	}, nil
 }
 
-func resolvePythonComponent(field string, item ComponentSyntax) (Component, error) {
-	for _, forbidden := range []string{"image", "exports", "packages"} {
-		if item.Present[forbidden] {
-			return Component{}, fmt.Errorf("%s.%s is not valid for a Python component", field, forbidden)
+func resolveApplication(field string, name string, item ApplicationSyntax) (Application, error) {
+	application := Application{
+		Options: map[string]ApplicationOption{}, Executables: map[string]Executable{},
+	}
+	osPackages, err := resolveAPTPackageRequests(field+".packages.os", item.Packages.OS)
+	if err != nil {
+		return Application{}, err
+	}
+	application.Packages.OS = osPackages
+	python, err := resolvePythonPackages(field+".packages.python", name, item.Packages.Python)
+	if err != nil {
+		return Application{}, err
+	}
+	application.Packages.Python = python
+	hasOS := len(osPackages) != 0
+	hasPython := python != nil
+	for _, optionName := range sortedKeys(item.Options) {
+		optionField := field + ".options." + optionName
+		if err := validateProviderIdentifier(field+".options", optionName); err != nil {
+			return Application{}, err
 		}
+		optionSource := item.Options[optionName]
+		description := strings.TrimSpace(optionSource.Description)
+		if description == "" {
+			return Application{}, fmt.Errorf("%s.description is required", optionField)
+		}
+		if optionSource.Packages.Python != nil && optionSource.Packages.Python.Interpreter != nil {
+			return Application{}, fmt.Errorf(
+				"%s.packages.python.interpreter is not valid; options inherit the application's Python interpreter",
+				optionField,
+			)
+		}
+		optionOS, err := resolveAPTPackageRequests(optionField+".packages.os", optionSource.Packages.OS)
+		if err != nil {
+			return Application{}, err
+		}
+		optionPython, err := resolvePythonOptionPackages(optionField+".packages.python", optionSource.Packages.Python)
+		if err != nil {
+			return Application{}, err
+		}
+		if len(optionOS) == 0 && optionPython == nil {
+			return Application{}, fmt.Errorf("%s.packages must not be empty", optionField)
+		}
+		application.Options[optionName] = ApplicationOption{
+			Description: description,
+			Packages:    ApplicationOptionPackages{OS: optionOS, Python: optionPython},
+		}
+		if len(optionOS) != 0 {
+			hasOS = true
+		}
+		if optionPython != nil {
+			hasPython = true
+		}
+	}
+	application.Executables, err = resolveExecutableProfiles(field+".executables", item.Executables)
+	if err != nil {
+		return Application{}, err
+	}
+	for executableName, executable := range application.Executables {
+		if executable.Source == ContributionProviderOS && !hasOS ||
+			executable.Source == ContributionProviderPython && !hasPython {
+			return Application{}, fmt.Errorf(
+				"%s.executables.%s.source references missing contribution %q",
+				field,
+				executableName,
+				executable.Source,
+			)
+		}
+	}
+	if !hasOS && !hasPython {
+		return Application{}, fmt.Errorf("%s must declare packages or package options", field)
+	}
+	return application, nil
+}
+
+func resolvePythonPackages(field string, application string, item *PythonPackagesSyntax) (*PythonComponent, error) {
+	if item == nil {
+		return nil, nil
 	}
 	interpreter := CommandRequirement{Command: "python"}
 	if item.Interpreter != nil {
+		supplier := strings.TrimSpace(item.Interpreter.Supplier)
+		if supplier != "" && supplier != "base" {
+			if err := validateContributionProvider(field+".interpreter.supplier", supplier); err != nil {
+				return nil, fmt.Errorf("%s must be base or an application package provider: %w", field+".interpreter.supplier", err)
+			}
+			supplier = ApplicationContributionID(application, supplier)
+		}
 		interpreter = CommandRequirement{
 			Command: strings.TrimSpace(item.Interpreter.Command), Version: strings.TrimSpace(item.Interpreter.Version),
-			Supplier: strings.TrimSpace(item.Interpreter.Supplier),
+			Supplier: supplier,
 		}
 	}
 	if err := interpreter.Validate(field + ".interpreter"); err != nil {
-		return Component{}, err
+		return nil, err
 	}
 	requirements, err := normalizeStringSet(field+".requirements", item.Requirements)
 	if err != nil {
-		return Component{}, err
+		return nil, err
 	}
-	options, err := resolveComponentOptions(field, ComponentTypePython, item.Options)
-	if err != nil {
-		return Component{}, err
+	if len(requirements) == 0 {
+		return nil, fmt.Errorf("%s.requirements must not be empty", field)
 	}
-	if len(requirements) == 0 && len(options) == 0 {
-		return Component{}, fmt.Errorf("%s must declare requirements or options", field)
-	}
-	return Component{
-		Type: ComponentTypePython, Python: &PythonComponent{Interpreter: interpreter, Requirements: requirements}, Options: options,
-	}, nil
+	return &PythonComponent{Interpreter: interpreter, Requirements: requirements}, nil
 }
 
-func resolveAPTComponent(field string, item ComponentSyntax) (Component, error) {
-	for _, forbidden := range []string{"image", "exports", "interpreter", "requirements"} {
-		if item.Present[forbidden] {
-			return Component{}, fmt.Errorf("%s.%s is not valid for an APT component", field, forbidden)
-		}
+func resolvePythonOptionPackages(field string, item *PythonPackagesSyntax) (*PythonOptionPackages, error) {
+	if item == nil {
+		return nil, nil
 	}
-	packages, err := resolveAPTPackageRequests(field+".packages", item.Packages)
+	requirements, err := normalizeStringSet(field+".requirements", item.Requirements)
 	if err != nil {
-		return Component{}, err
+		return nil, err
 	}
-	options, err := resolveComponentOptions(field, ComponentTypeAPT, item.Options)
-	if err != nil {
-		return Component{}, err
+	if len(requirements) == 0 {
+		return nil, fmt.Errorf("%s.requirements must not be empty", field)
 	}
-	if len(packages) == 0 && len(options) == 0 {
-		return Component{}, fmt.Errorf("%s must declare packages or options", field)
-	}
-	return Component{Type: ComponentTypeAPT, APT: &APTComponent{Packages: packages}, Options: options}, nil
-}
-
-func resolveComponentOptions(field string, componentType ComponentType, source map[string]ComponentOptionSyntax) (map[string]ComponentOption, error) {
-	options := make(map[string]ComponentOption, len(source))
-	for _, name := range sortedKeys(source) {
-		optionField := field + ".options." + name
-		if err := validateProviderIdentifier(field+".options", name); err != nil {
-			return nil, err
-		}
-		item := source[name]
-		description := strings.TrimSpace(item.Description)
-		if description == "" {
-			return nil, fmt.Errorf("%s.description is required", optionField)
-		}
-		option := ComponentOption{Description: description}
-		switch componentType {
-		case ComponentTypePython:
-			if item.Present["packages"] {
-				return nil, fmt.Errorf("%s.packages is not valid for a Python option", optionField)
-			}
-			requirements, err := normalizeStringSet(optionField+".requirements", item.Requirements)
-			if err != nil {
-				return nil, err
-			}
-			if len(requirements) == 0 {
-				return nil, fmt.Errorf("%s.requirements must not be empty", optionField)
-			}
-			option.PythonRequirements = requirements
-		case ComponentTypeAPT:
-			if item.Present["requirements"] {
-				return nil, fmt.Errorf("%s.requirements is not valid for an APT option", optionField)
-			}
-			packages, err := resolveAPTPackageRequests(optionField+".packages", item.Packages)
-			if err != nil {
-				return nil, err
-			}
-			if len(packages) == 0 {
-				return nil, fmt.Errorf("%s.packages must not be empty", optionField)
-			}
-			option.APTPackages = packages
-		}
-		options[name] = option
-	}
-	return options, nil
+	return &PythonOptionPackages{Requirements: requirements}, nil
 }
 
 func resolveAPTPackageRequests(field string, source []APTPackageRequestSyntax) ([]APTPackageRequest, error) {
@@ -439,6 +448,10 @@ func resolveExecutableProfiles(field string, source map[string]ExecutableSyntax)
 			return nil, err
 		}
 		item := source[name]
+		contributionSource := strings.TrimSpace(item.Source)
+		if contributionSource != ContributionProviderOS && contributionSource != ContributionProviderPython {
+			return nil, fmt.Errorf("%s.%s.source must be os or python", field, name)
+		}
 		order, err := resolveOrder(item.Order)
 		if err != nil {
 			return nil, fmt.Errorf("%s.%s.order: %w", field, name, err)
@@ -448,7 +461,7 @@ func resolveExecutableProfiles(field string, source map[string]ExecutableSyntax)
 			return nil, err
 		}
 		profiles[name] = Executable{
-			Binary: binary, Order: order,
+			Source: contributionSource, Binary: binary, Order: order,
 			ArgvPrefix: append([]string(nil), item.ArgvPrefix...), ArgvSuffix: append([]string(nil), item.ArgvSuffix...),
 		}
 	}

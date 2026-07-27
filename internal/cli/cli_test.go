@@ -463,6 +463,36 @@ func TestBuildCommandReportsExactReuse(t *testing.T) {
 	}
 }
 
+func TestBuildCommandReportsRuntimeConfigurationUpdate(t *testing.T) {
+	originalBuild := dockerProviderBuild
+	originalRuntime := dockerProviderBuildRuntime
+	t.Cleanup(func() {
+		dockerProviderBuild = originalBuild
+		dockerProviderBuildRuntime = originalRuntime
+	})
+	dockerProviderBuildRuntime = func() (dockerdeploy.StagedProviderBuildRuntimeV1, error) {
+		return dockerdeploy.StagedProviderBuildRuntimeV1{}, nil
+	}
+	stageDir := filepath.Join(t.TempDir(), "provider-stage")
+	writeCLITestStagedState(t, stageDir, "demo")
+	dockerProviderBuild = func(context.Context, dockerdeploy.ProviderBuildRunInputV1) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
+		result := cliTestProviderBuildResult(t, stageDir, true)
+		result.Republished = true
+		return result, nil
+	}
+
+	code, stdout, stderr := runCLI("build", "--dir", stageDir)
+	if code != 0 {
+		t.Fatalf("code = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if want := "image: sha256:demo-image\nupdated environment: demo\n"; stdout != want {
+		t.Fatalf("stdout = %q, want %q", stdout, want)
+	}
+	if !strings.Contains(stderr, "building environment: done") {
+		t.Fatalf("stderr missing successful completion:\n%s", stderr)
+	}
+}
+
 func TestBuildCommandFailureRetainsStepWithoutRawBackendTranscript(t *testing.T) {
 	originalBuild := dockerProviderBuild
 	originalRuntime := dockerProviderBuildRuntime
@@ -1019,13 +1049,13 @@ func TestBlueprintValidateAcceptsAPTOnlyBlueprintWithoutCreatingStaging(t *testi
     platforms: [linux/amd64]
 environment:
   id: apt-demo
-  components:
-    base:
-      image: debian:13
+  base:
+    image: debian:13
+  applications:
     tools:
-      type: apt
       packages:
-        - package: curl
+        os:
+          - package: curl
 docker: {}
 `
 	if err := os.WriteFile(manifest, []byte(content), 0o644); err != nil {
@@ -1052,9 +1082,12 @@ func TestBlueprintValidateReportsSemanticErrors(t *testing.T) {
     platforms: [linux/amd64]
 environment:
   id: invalid
-  components:
-    base:
-      image: debian:13
+  base:
+    image: debian:13
+  applications:
+    application:
+      packages:
+        os: [curl]
 docker: {}
 `
 	if err := os.WriteFile(manifest, []byte(content), 0o644); err != nil {
@@ -1438,7 +1471,7 @@ func TestEmbeddedControlRunsDeployedAppCommandWithScriptPrefix(t *testing.T) {
 		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 	markCLITestDeploymentInstalled(t, deployDir)
-	appArgs, matched, err := embeddedControlAppArguments(deployDir, []string{"--output-file", "report.json", "--wait", "config", "check"})
+	appArgs, matched, err := embeddedControlAppArguments(deployDir, []string{"--output-file", "report.json", "--wait", "config", "check"}, true)
 	wantAppArgs := []string{"--deployed-only", "--dir", deployDir, "--output-file", "report.json", "--wait", "config", "check"}
 	if err != nil || !matched || !reflect.DeepEqual(appArgs, wantAppArgs) {
 		t.Fatalf("embedded output app args = %#v, matched=%v, error=%v", appArgs, matched, err)
@@ -1446,6 +1479,42 @@ func TestEmbeddedControlRunsDeployedAppCommandWithScriptPrefix(t *testing.T) {
 	helpCode, helpStdout, helpStderr := runCLI("_control", "--dir", deployDir, "--script-name", "democtl", "--help")
 	if helpCode != 0 || helpStderr != "" || !strings.Contains(helpStdout, "--output-dir DIR") || !strings.Contains(helpStdout, "--output-file FILE") || !strings.Contains(helpStdout, "--wait") {
 		t.Fatalf("embedded control help: code=%d stdout=%q stderr=%q", helpCode, helpStdout, helpStderr)
+	}
+}
+
+func TestEmbeddedControlUsesStagedAppCommandsBeforeInstall(t *testing.T) {
+	packDir := makeCLITestPackWithManifest(t, cliTestPackManifest())
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	appArgs, matched, err := embeddedControlAppArguments(
+		deployDir, []string{"--output-file", "report.json", "--wait", "config", "check"}, false,
+	)
+	wantAppArgs := []string{"--dir", deployDir, "--output-file", "report.json", "--wait", "config", "check"}
+	if err != nil || !matched || !reflect.DeepEqual(appArgs, wantAppArgs) {
+		t.Fatalf("staged embedded app args = %#v, matched=%v, error=%v", appArgs, matched, err)
+	}
+	helpCode, helpStdout, helpStderr := runCLI("_control", "--dir", deployDir, "--script-name", "democtl", "--help")
+	if helpCode != 0 || helpStderr != "" || !strings.Contains(helpStdout, "config check") {
+		t.Fatalf("staged embedded control help: code=%d stdout=%q stderr=%q", helpCode, helpStdout, helpStderr)
+	}
+}
+
+func TestEmbeddedControlMissingMetadataUsesNeutralMessage(t *testing.T) {
+	code, stdout, stderr := runCLI("_control", "--dir", t.TempDir(), "--script-name", "democtl", "status")
+	if code != 1 || stdout != "" || !strings.Contains(stderr, "staged or installed state-v1 deployment metadata is missing") {
+		t.Fatalf("embedded control missing metadata: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestEmbeddedControlLogsHelpDescribesStagedAndInstalledWorkloads(t *testing.T) {
+	var output strings.Builder
+	printEmbeddedControlLogsHelp(&output, embeddedControlUsageContext{ScriptName: "democtl"})
+	if !strings.Contains(output.String(), "Show workload logs.") || strings.Contains(output.String(), "deployed service") {
+		t.Fatalf("logs help = %q", output.String())
 	}
 }
 
@@ -2079,7 +2148,8 @@ func TestDockerStageHelp(t *testing.T) {
 		"reploy [--docker-timeout DURATION] stage --update [APP_REF] [OPTIONS]",
 		"Create a staging directory from an app blueprint reference.",
 		"Use --update to refresh an existing staging directory",
-		"Stage records desired state only; build explicitly or let staged up/restart build on demand.",
+		"Stage records desired state and generates the app-named control command without building.",
+		"Build explicitly or let staged up/restart build on demand.",
 		"Indexed shorthand from the Reploy blueprint index:",
 		"arbiter-server==0.4.2",
 		"Local filesystem refs:",
@@ -3313,7 +3383,7 @@ func TestDockerInitWritesDeployment(t *testing.T) {
 	}
 }
 
-func TestDockerStageEnvironmentBlueprintCreatesAndRestagesOnlyStateV1(t *testing.T) {
+func TestDockerStageEnvironmentBlueprintCreatesAndRestagesCurrentDemo(t *testing.T) {
 	blueprintPath := filepath.Join(cliTestRepoRoot(t), "examples", "omegaconf-inspector", "reploy", "omegaconf-inspector.blueprint.yaml")
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "--platform", "linux/amd64", "file:"+blueprintPath)
@@ -3342,15 +3412,35 @@ func TestDockerStageEnvironmentBlueprintCreatesAndRestagesOnlyStateV1(t *testing
 	if state.BlueprintSource != string(wantBlueprint) || state.Staging == nil {
 		t.Fatalf("retained staging inputs = %#v", state)
 	}
+	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandNames := make([]string, 0, len(document.Environment.Commands))
+	for name := range document.Environment.Commands {
+		commandNames = append(commandNames, name)
+	}
+	slices.Sort(commandNames)
+	wantCommandNames := []string{"config_check", "config_init", "config_show", "serve", "version"}
+	if !reflect.DeepEqual(commandNames, wantCommandNames) {
+		t.Fatalf("OmegaConf Inspector commands = %q, want %q", commandNames, wantCommandNames)
+	}
+	if document.Environment.Commands["config_init"].DeployedCommand ||
+		!document.Environment.Commands["config_check"].DeployedCommand ||
+		!document.Environment.Commands["config_show"].DeployedCommand ||
+		!document.Environment.Commands["version"].DeployedCommand {
+		t.Fatalf("OmegaConf Inspector command exposure = %#v", document.Environment.Commands)
+	}
 
 	entries, err := os.ReadDir(deployDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 ||
+	if len(entries) != 3 ||
 		entries[0].Name() != dockerdeploy.ReployInternalDir ||
 		!entries[0].IsDir() ||
-		entries[1].Name() != deploy.PackageOverridesFilename {
+		entries[1].Name() != "omegaconf-inspector" ||
+		entries[2].Name() != deploy.PackageOverridesFilename {
 		t.Fatalf("staging entries = %#v", entries)
 	}
 	overrides, found, err := deploy.ReadPackageOverridesV1(deployDir)
@@ -3373,7 +3463,7 @@ func TestDockerStageEnvironmentBlueprintCreatesAndRestagesOnlyStateV1(t *testing
 	for index, entry := range internalEntries {
 		internalNames[index] = entry.Name()
 	}
-	if !reflect.DeepEqual(internalNames, []string{"operation.lock", "state.json"}) {
+	if !reflect.DeepEqual(internalNames, []string{"bin", "operation.lock", "staged-control.json", "state.json"}) {
 		t.Fatalf("internal entries = %q", internalNames)
 	}
 
@@ -3608,15 +3698,14 @@ func TestDockerStageAcceptsAPTAfterProviderCutover(t *testing.T) {
     platforms: [linux/amd64]
 environment:
   id: apt-gate-test
-  components:
-    base:
-      image: python:3.13-slim
-    system:
-      type: apt
-      packages: [curl]
+  base:
+    image: python:3.13-slim
+  applications:
     application:
-      type: python
-      requirements: [demo]
+      packages:
+        os: [curl]
+        python:
+          requirements: [demo]
 docker: {}
 `)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
@@ -4207,19 +4296,22 @@ func writeCLIOverlayDeployment(t *testing.T) string {
     platforms: [linux/amd64]
 environment:
   id: overlay-cli
-  components:
-    base:
-      image: python:3.13-slim
+  base:
+    image: python:3.13-slim
+  applications:
     app:
-      type: python
-      requirements: [demo]
+      packages:
+        python:
+          requirements: [demo]
       options:
         debug:
           description: Install debug support.
-          requirements: [debugpy]
+          packages:
+            python:
+              requirements: [debugpy]
     tools:
-      type: apt
-      packages: [curl]
+      packages:
+        os: [curl]
 docker: {}
 `)
 	syntax, err := blueprint.Decode(content)
@@ -4295,11 +4387,11 @@ func TestDockerBundleOverlayMutationsUpdateStateWithoutBuilding(t *testing.T) {
 	if code != 0 || stdout != "bundle overlay unchanged\n" || stderr != "" {
 		t.Fatalf("duplicate add result = %d/%q/%q", code, stdout, stderr)
 	}
-	code, stdout, stderr = runCLI("bundle", "add-package", "app", "rich>=13", "--dir="+dir)
+	code, stdout, stderr = runCLI("bundle", "add-package", "application/app/python", "rich>=13", "--dir="+dir)
 	if code != 0 || stdout != "bundle overlay updated\n" || stderr != "" {
 		t.Fatalf("add-package result = %d/%q/%q", code, stdout, stderr)
 	}
-	code, stdout, stderr = runCLI("bundle", "add-package", "tools", "jq", "--dir", dir)
+	code, stdout, stderr = runCLI("bundle", "add-package", "application/tools/os", "jq", "--dir", dir)
 	if code != 0 || stdout != "bundle overlay updated\n" || stderr != "" {
 		t.Fatalf("APT add-package result = %d/%q/%q", code, stdout, stderr)
 	}
@@ -4310,7 +4402,7 @@ func TestDockerBundleOverlayMutationsUpdateStateWithoutBuilding(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, ".reploy", "providers")); !os.IsNotExist(err) {
 		t.Fatalf("overlay mutation built provider artifacts: %v", err)
 	}
-	code, stdout, stderr = runCLI("bundle", "remove-package", "app", "rich>=13", "--dir", dir)
+	code, stdout, stderr = runCLI("bundle", "remove-package", "application/app/python", "rich>=13", "--dir", dir)
 	if code != 0 || stdout != "bundle overlay updated\n" || stderr != "" {
 		t.Fatalf("remove-package result = %d/%q/%q", code, stdout, stderr)
 	}
@@ -4343,8 +4435,8 @@ func TestDockerBundleOptionsAndListInspectStateV1Overlay(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"bundle", "add", "app/debug", "--dir", dir},
-		{"bundle", "add-package", "app", "rich>=13", "--dir", dir},
-		{"bundle", "add-package", "tools", "jq=1.7", "--dir", dir},
+		{"bundle", "add-package", "application/app/python", "rich>=13", "--dir", dir},
+		{"bundle", "add-package", "application/tools/os", "jq=1.7", "--dir", dir},
 	} {
 		code, stdout, stderr = runCLI(args...)
 		if code != 0 || stderr != "" {
@@ -4356,7 +4448,7 @@ func TestDockerBundleOptionsAndListInspectStateV1Overlay(t *testing.T) {
 	if code != 0 || stderr != "" {
 		t.Fatalf("list result = %d/%q/%q", code, stdout, stderr)
 	}
-	want := "option\tapp/debug\npackage\tapp\trich>=13\npackage\ttools\tjq=1.7\n"
+	want := "option\tapp/debug\npackage\tapplication/app/python\trich>=13\npackage\tapplication/tools/os\tjq=1.7\n"
 	if stdout != want {
 		t.Fatalf("list stdout = %q, want %q", stdout, want)
 	}
@@ -4865,9 +4957,12 @@ func writeCLITestInstalledState(t *testing.T, dir string, appID string, service 
     platforms: [linux/amd64]
 environment:
   id: %s
-  components:
-    base:
-      image: alpine:3.20
+  base:
+    image: alpine:3.20
+  applications:
+    application:
+      packages:
+        os: [busybox]
 docker: {}
 `, appID)))
 	if err != nil {
@@ -5017,14 +5112,16 @@ environment:
   id: demo
   vars:
     color_env: DEMO_COLOR
-  components:
-    base:
-      image: python:3.13-slim
+  base:
+    image: python:3.13-slim
+  applications:
     application:
-      type: python
-      requirements: [demo-suite]
+      packages:
+        python:
+          requirements: [demo-suite]
       executables:
         server:
+          source: python
           binary: demo-server
   allow_concurrent: auto
   mounts:

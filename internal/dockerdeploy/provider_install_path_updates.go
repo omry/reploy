@@ -66,6 +66,14 @@ func applyProviderInstallPathUpdatesWithV1(
 			if err := applyProviderInstallVolumeV1(ctx, action, locked, true, backend); err != nil {
 				return err
 			}
+		case PathPreservePrivateEnv:
+			if err := applyProviderInstallPrivateEnvironmentV1(ctx, action, locked, false); err != nil {
+				return err
+			}
+		case PathReplacePrivateEnv:
+			if err := applyProviderInstallPrivateEnvironmentV1(ctx, action, locked, true); err != nil {
+				return err
+			}
 		case PathValidateUnmanaged:
 			if _, err := os.Stat(action.Target); err != nil {
 				return fmt.Errorf("validate unmanaged mount %q: %w", action.Name, err)
@@ -75,6 +83,67 @@ func applyProviderInstallPathUpdatesWithV1(
 		default:
 			return fmt.Errorf("installed mount %q has unsupported path update %q", action.Name, action.Kind)
 		}
+	}
+	return nil
+}
+
+func applyProviderInstallPrivateEnvironmentV1(
+	ctx context.Context,
+	action PathUpdateAction,
+	locked lockedProviderInstallV1,
+	replace bool,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if action.Name != PrivateWorkloadEnvironmentFileName {
+		return fmt.Errorf("private environment path update has unexpected name %q", action.Name)
+	}
+	if err := requirePathWithinInstallTarget(action.Target, locked.Input.DestinationDeploymentDir); err != nil {
+		return fmt.Errorf("installed %s: %w", PrivateWorkloadEnvironmentFileName, err)
+	}
+	targetInfo, targetErr := os.Lstat(action.Target)
+	if targetErr == nil && (!targetInfo.Mode().IsRegular() || targetInfo.Mode()&os.ModeSymlink != 0) {
+		return fmt.Errorf("installed %s must be a real regular file: %s", PrivateWorkloadEnvironmentFileName, action.Target)
+	}
+	if targetErr == nil && !replace {
+		if _, err := loadPrivateWorkloadEnvironmentV1(filepath.Dir(action.Target)); err != nil {
+			return fmt.Errorf("validate preserved installed %s: %w", PrivateWorkloadEnvironmentFileName, err)
+		}
+		return nil
+	}
+	if targetErr != nil && !os.IsNotExist(targetErr) {
+		return fmt.Errorf("inspect installed %s: %w", PrivateWorkloadEnvironmentFileName, targetErr)
+	}
+	source, err := loadPrivateWorkloadEnvironmentV1(filepath.Dir(action.Source))
+	if err != nil {
+		return fmt.Errorf("read staging %s for installation: %w", PrivateWorkloadEnvironmentFileName, err)
+	}
+	if !source.Present {
+		if replace {
+			return fmt.Errorf("replace installed %s: staging source is missing", PrivateWorkloadEnvironmentFileName)
+		}
+		return nil
+	}
+	parent := filepath.Dir(action.Target)
+	if err := validateProviderInstallDirectoryAncestorsV1(parent); err != nil {
+		return fmt.Errorf("validate installed %s destination: %w", PrivateWorkloadEnvironmentFileName, err)
+	}
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return fmt.Errorf("create installed %s parent: %w", PrivateWorkloadEnvironmentFileName, err)
+	}
+	created, err := publishPrivateWorkloadEnvironmentFileV1(action.Target, source.Raw, replace)
+	if err != nil {
+		return fmt.Errorf("publish installed %s: %w", PrivateWorkloadEnvironmentFileName, err)
+	}
+	if !created {
+		if _, validateErr := loadPrivateWorkloadEnvironmentV1(parent); validateErr != nil {
+			return fmt.Errorf("validate concurrently created installed %s: %w", PrivateWorkloadEnvironmentFileName, validateErr)
+		}
+		return nil
+	}
+	if err := syncProviderInstallDirectory(parent); err != nil {
+		return fmt.Errorf("sync installed %s directory: %w", PrivateWorkloadEnvironmentFileName, err)
 	}
 	return nil
 }

@@ -2,8 +2,14 @@ package dockerdeploy
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
+	"strings"
 	"testing"
+
+	"github.com/omry/reploy/internal/blueprint"
 )
 
 func TestConfigureProviderInstallHostV1RunsOnlyPlannedConfiguration(t *testing.T) {
@@ -45,6 +51,47 @@ func TestStartProviderInstallHostV1RunsOneCommandWithoutPreflight(t *testing.T) 
 	})
 	if err != nil || called != 1 {
 		t.Fatalf("called=%d error=%v", called, err)
+	}
+}
+
+func TestStartProviderInstallHostV1RejectsRealizedPrivateEnvironmentAncestorMount(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ordinary Windows users cannot create the test symlink")
+	}
+	destinationDir := t.TempDir()
+	environmentPath := filepath.Join(destinationDir, PrivateWorkloadEnvironmentFileName)
+	if created, err := publishPrivateWorkloadEnvironmentFileV1(
+		environmentPath,
+		[]byte("PRIVATE_NAME=private-value\n"),
+		false,
+	); err != nil || !created {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "deployment-link")
+	if err := os.Symlink(destinationDir, link); err != nil {
+		t.Fatal(err)
+	}
+	references := fixedPublicationReferences(t, destinationDir, 0xd3)
+	plan := providerInstallRunPlanFixture(destinationDir, references)
+	plan.Backend = installBackendDockerManaged
+	plan.Installation.Scope = "user"
+	plan.Installation.UnitPath = ""
+	plan.Docker.PrivateEnvironment = true
+	plan.Docker.Mounts = []MountExecutionPlan{{
+		Name: "deployment", Mode: blueprint.MountBind, Source: link,
+	}}
+
+	err := startProviderInstallHostV1(
+		t.Context(),
+		plan,
+		providerInstallHostToolsV1{DockerPath: "/usr/bin/docker"},
+		RunOptions{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "exposes .env") {
+		t.Fatalf("ancestor mount error = %v", err)
+	}
+	if strings.Contains(err.Error(), "PRIVATE_NAME") || strings.Contains(err.Error(), "private-value") {
+		t.Fatalf("ancestor mount error leaked private material: %v", err)
 	}
 }
 

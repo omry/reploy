@@ -33,7 +33,7 @@ func TestAssembleBuildLockPublishesCompleteGraphLock(t *testing.T) {
 		Schema:        providers.ResolvedRequestSchemaV1,
 		OverlayDigest: overlayDigest, Platform: fixture.request.Platform,
 		Components: []providers.ResolvedComponentRequestV1{
-			{Component: "application", Provider: blueprint.ComponentTypePython, Request: fixture.request.Plan.Nodes[1].Request},
+			{Component: fixture.request.Plan.Nodes[1].Components[0], Provider: blueprint.ComponentTypePython, Request: fixture.request.Plan.Nodes[1].Request},
 			{Component: "base", Provider: blueprint.ComponentTypeBase, Request: fixture.request.Plan.Nodes[0].Request},
 		},
 		Sources: fixture.request.SourceCandidates,
@@ -96,7 +96,7 @@ func TestAssembleBuildLockRejectsMisalignedGraphBeforePublication(t *testing.T) 
 		Schema: providers.ResolvedRequestSchemaV1, OverlayDigest: overlayDigest,
 		Platform: fixture.request.Platform,
 		Components: []providers.ResolvedComponentRequestV1{
-			{Component: "application", Provider: blueprint.ComponentTypePython, Request: fixture.request.Plan.Nodes[1].Request},
+			{Component: fixture.request.Plan.Nodes[1].Components[0], Provider: blueprint.ComponentTypePython, Request: fixture.request.Plan.Nodes[1].Request},
 			{Component: "base", Provider: blueprint.ComponentTypeBase, Request: fixture.request.Plan.Nodes[0].Request},
 		},
 		Sources: fixture.request.SourceCandidates,

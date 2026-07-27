@@ -11,10 +11,9 @@ import (
 
 func commandTestDocument() blueprint.Document {
 	return blueprint.Document{Environment: blueprint.Environment{
-		Components: map[string]blueprint.Component{"application": {
-			Type: blueprint.ComponentTypePython,
+		Applications: map[string]blueprint.Application{"application": {
 			Executables: map[string]blueprint.Executable{"server": {
-				Binary: "demo", ArgvPrefix: []string{"--prefix"}, ArgvSuffix: []string{"--suffix"},
+				Source: "python", Binary: "demo", ArgvPrefix: []string{"--prefix"}, ArgvSuffix: []string{"--suffix"},
 			}},
 		}},
 		Commands: map[string]blueprint.Command{
@@ -32,7 +31,7 @@ func TestResolveLockedEnvironmentCommandV1UsesQualifiedCatalogOutput(t *testing.
 			Evidence:  providers.ExecutableEvidence{InvocationPath: "/opt/other"},
 		},
 		{
-			SupplierComponent: "application", Name: "demo",
+			SupplierComponent: "application/application/python", Name: "demo",
 			Candidate: providers.ExecutableCandidate{InvocationPath: "/opt/demo"},
 			Evidence:  providers.ExecutableEvidence{InvocationPath: "/opt/demo"},
 		},
@@ -51,7 +50,7 @@ func TestResolveLockedEnvironmentCommandV1RejectsMissingOrDriftingOutput(t *test
 		t.Fatalf("missing output error = %v", err)
 	}
 	_, err := resolveLockedEnvironmentCommandV1(document, []providers.RealizedOutput{{
-		SupplierComponent: "application", Name: "demo",
+		SupplierComponent: "application/application/python", Name: "demo",
 		Candidate: providers.ExecutableCandidate{InvocationPath: "/opt/demo"},
 		Evidence:  providers.ExecutableEvidence{InvocationPath: "/opt/other"},
 	}}, "serve", nil)

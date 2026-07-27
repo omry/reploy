@@ -54,7 +54,7 @@ type PythonConsoleScriptV1 struct {
 }
 
 func CanonicalProviderRequestV1(request PythonProviderRequestV1) (providers.CanonicalProviderRequest, error) {
-	if err := blueprint.ValidateProviderIdentifier("Python component", request.Component); err != nil {
+	if err := blueprint.ValidateContributionReference("Python contribution", request.Component); err != nil {
 		return providers.CanonicalProviderRequest{}, err
 	}
 	if request.Component == "base" {
@@ -245,7 +245,7 @@ func CanonicalBundleDataV1(component string, bundle PythonBundleV1) (providers.C
 }
 
 func ValidateBundleV1(component string, bundle PythonBundleV1) error {
-	if err := blueprint.ValidateProviderIdentifier("Python bundle component", component); err != nil {
+	if err := blueprint.ValidateContributionReference("Python bundle contribution", component); err != nil {
 		return err
 	}
 	if bundle.Interpreter.RequirementID != "interpreter" || bundle.Interpreter.Output.Name != "python" {
@@ -288,7 +288,9 @@ func ValidateBundleV1(component string, bundle PythonBundleV1) error {
 			return fmt.Errorf("Python wheel artifact must be directly beneath wheels")
 		}
 	}
-	root := "/opt/reploy/providers/python/" + component + "/bin/"
+	root := "/opt/reploy/providers/python/" +
+		blueprint.ContributionRuntimeOwner(component, blueprint.ContributionProviderPython) +
+		"/bin/"
 	for index, output := range bundle.Outputs {
 		if index > 0 && bundle.Outputs[index-1].Name >= output.Name {
 			return fmt.Errorf("Python console scripts must be unique and sorted by name")

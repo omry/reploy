@@ -14,13 +14,13 @@ const aptOnlyBlueprintFixture = `blueprint:
     platforms: [linux/amd64]
 environment:
   id: apt-demo
-  components:
-    base:
-      image: debian:13
+  base:
+    image: debian:13
+  applications:
     tools:
-      type: apt
       packages:
-        - package: curl
+        os:
+          - package: curl
 docker: {}
 `
 
@@ -38,7 +38,8 @@ func TestLoadBlueprintAcceptsAPTOnlyEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Document.Environment.ID != "apt-demo" || loaded.Document.Environment.Components["tools"].Type != "apt" {
+	if loaded.Document.Environment.ID != "apt-demo" ||
+		len(loaded.Document.Environment.Applications["tools"].Packages.OS) != 1 {
 		t.Fatalf("loaded blueprint = %#v", loaded.Document)
 	}
 	if loaded.ManifestPath != manifest || loaded.Ref.Source != manifest || loaded.RequestedRef.Raw != ref.Raw {

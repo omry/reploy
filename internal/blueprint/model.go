@@ -22,16 +22,50 @@ type Metadata struct {
 }
 
 type Environment struct {
-	ID              string
-	ControlScript   string
-	Vars            map[string]any
-	Components      map[string]Component
+	ID            string
+	ControlScript string
+	Vars          map[string]any
+	Base          BaseComponent
+	Packages      EnvironmentPackages
+	Applications  map[string]Application
+	// Components is a derived provider-contribution projection used while the
+	// provider internals migrate to first-class contribution identities.
+	Components      map[string]Component `json:"-"`
 	AllowConcurrent ConcurrentRunPolicy
 	Terminal        Terminal
 	Install         Install
 	Mounts          map[string]EnvironmentMount
 	Commands        map[string]Command
 	Workload        *Workload
+}
+
+type EnvironmentPackages struct {
+	OS []APTPackageRequest
+}
+
+type Application struct {
+	Packages    ApplicationPackages
+	Options     map[string]ApplicationOption
+	Executables map[string]Executable
+}
+
+type ApplicationPackages struct {
+	OS     []APTPackageRequest
+	Python *PythonComponent
+}
+
+type ApplicationOption struct {
+	Description string
+	Packages    ApplicationOptionPackages
+}
+
+type ApplicationOptionPackages struct {
+	OS     []APTPackageRequest
+	Python *PythonOptionPackages
+}
+
+type PythonOptionPackages struct {
+	Requirements []string
 }
 
 type ConcurrentRunPolicy string
@@ -102,6 +136,7 @@ const (
 )
 
 type Executable struct {
+	Source     string
 	Binary     string
 	Order      []ArgumentSegment
 	ArgvPrefix []string
@@ -137,16 +172,19 @@ type Command struct {
 }
 
 func (environment Environment) ResolveExecutableProfile(reference string) (string, Executable, bool) {
-	componentName, profileName, found := strings.Cut(reference, ".")
-	if !found || componentName == "" || profileName == "" || strings.Contains(profileName, ".") {
+	applicationName, profileName, found := strings.Cut(reference, ".")
+	if !found || applicationName == "" || profileName == "" || strings.Contains(profileName, ".") {
 		return "", Executable{}, false
 	}
-	component, found := environment.Components[componentName]
+	application, found := environment.Applications[applicationName]
 	if !found {
 		return "", Executable{}, false
 	}
-	profile, found := component.Executables[profileName]
-	return componentName, profile, found
+	profile, found := application.Executables[profileName]
+	if !found {
+		return "", Executable{}, false
+	}
+	return ApplicationContributionID(applicationName, profile.Source), profile, true
 }
 
 type Workload struct {

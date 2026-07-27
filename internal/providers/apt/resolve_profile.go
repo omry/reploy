@@ -9,7 +9,7 @@ const (
 	ResolveArchivesDirectory = ResolverScratchDirectory + "/archives"
 	ResolveOutputDirectory   = ResolverScratchDirectory + "/output"
 	ResolveProfileUmask      = "0022"
-	ResolveAdditiveConfigV1  = "Acquire::Languages \"none\";\nDpkg::Use-Pty \"0\";\n"
+	ResolveAdditiveConfigV1  = "Acquire::Languages \"none\";\nDebug::NoLocking \"1\";\nDpkg::Use-Pty \"0\";\n"
 )
 
 // ResolveChildEnvironmentV1 returns the complete closed environment supplied

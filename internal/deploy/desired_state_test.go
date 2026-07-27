@@ -141,7 +141,7 @@ func TestSetDesiredStateV1PreservesOverlayAndCurrentGeneration(t *testing.T) {
 	dir := t.TempDir()
 	statePath := writeOverlayTestState(t, dir)
 	if _, err := MutateRequestOverlayV1(context.Background(), dir, overlayTestPackageValidator, func(_ blueprint.Document, overlay RequestOverlayV1) (RequestOverlayV1, error) {
-		overlay.SelectedOptions = append(overlay.SelectedOptions, QualifiedOption{Component: "app", Option: "debug"})
+		overlay.SelectedOptions = append(overlay.SelectedOptions, QualifiedOption{Application: "app", Option: "debug"})
 		return overlay, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -237,7 +237,7 @@ func TestSetDesiredStateV1RejectsIncompatibleOverlayWithoutMutation(t *testing.T
 	dir := t.TempDir()
 	statePath := writeOverlayTestState(t, dir)
 	if _, err := MutateRequestOverlayV1(context.Background(), dir, overlayTestPackageValidator, func(_ blueprint.Document, overlay RequestOverlayV1) (RequestOverlayV1, error) {
-		overlay.SelectedOptions = append(overlay.SelectedOptions, QualifiedOption{Component: "app", Option: "debug"})
+		overlay.SelectedOptions = append(overlay.SelectedOptions, QualifiedOption{Application: "app", Option: "debug"})
 		return overlay, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -247,10 +247,11 @@ func TestSetDesiredStateV1RejectsIncompatibleOverlayWithoutMutation(t *testing.T
 		t.Fatal(err)
 	}
 	document := overlayTestDocument()
-	document.Environment.Components["app"] = blueprint.Component{
-		Type:    blueprint.ComponentTypePython,
-		Python:  &blueprint.PythonComponent{Requirements: []string{"demo"}},
-		Options: map[string]blueprint.ComponentOption{},
+	application := document.Environment.Applications["app"]
+	application.Options = map[string]blueprint.ApplicationOption{}
+	document.Environment.Applications["app"] = application
+	if err := document.Environment.RebuildProviderContributions(); err != nil {
+		t.Fatal(err)
 	}
 	_, err = SetDesiredStateV1(context.Background(), dir, document, desiredStateTestPlatform(t, "linux/amd64"), overlayTestPackageValidator)
 	if err == nil || !strings.Contains(err.Error(), "missing option") {

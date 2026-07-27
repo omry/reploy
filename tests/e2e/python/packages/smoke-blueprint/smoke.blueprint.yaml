@@ -7,19 +7,23 @@ blueprint:
 
 environment:
   id: smoke-app
-  components:
-    base:
-      image: python:3.11-slim
+  base:
+    image: python:3.11-slim
+  applications:
     application:
-      type: python
-      requirements: [smoke-suite]
+      packages:
+        python:
+          requirements: [smoke-suite]
       executables:
         server:
+          source: python
           binary: smoke-server
       options:
         imap:
           description: Install the smoke IMAP plugin.
-          requirements: [smoke-imap]
+          packages:
+            python:
+              requirements: [smoke-imap]
   allow_concurrent: auto
   terminal:
     color_env: SMOKE_COLOR

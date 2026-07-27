@@ -75,7 +75,7 @@ func TestLoadPreparedPythonGraphReuseIgnoresUnrelatedPythonOverride(t *testing.T
 		t.Fatal(err)
 	}
 	request, err := pythonprovider.CanonicalProviderRequestV1(pythonprovider.PythonProviderRequestV1{
-		Component:    "application",
+		Component:    "application/application/python",
 		Interpreter:  blueprint.CommandRequirement{Command: "python", Version: ">=3.11", Supplier: "base"},
 		Requirements: []providers.CanonicalPackageRequest{requirement},
 		Overrides: []pythonprovider.PythonPackageOverrideV1{
@@ -179,7 +179,7 @@ func TestLoadPreparedPythonGraphReuseInitializesAPTAlongsidePython(t *testing.T)
 	if !found || len(aptConfig.ReusableDebs) != 0 {
 		t.Fatalf("APT config = %#v, found = %v", aptConfig, found)
 	}
-	wantRoot := pythonprovider.InstallRoot + "/application"
+	wantRoot := pythonprovider.InstallRoot + "/application/application"
 	if len(aptConfig.ExclusiveRoots) != 1 || aptConfig.ExclusiveRoots[0] != wantRoot {
 		t.Fatalf("APT exclusive roots = %#v, want %q", aptConfig.ExclusiveRoots, wantRoot)
 	}
@@ -372,7 +372,7 @@ func newPreparedPythonGraphReuseFixtureWithManifest(t *testing.T, sourceManifest
 	}
 	request.SourceCandidates = []providers.ResolvedSourceInput{
 		testPythonResolvedSourceWithSourceArtifact(
-			"application", "demo-server", "1.0", sourceManifest, sourceArtifact, localDigest,
+			"application/application/python", "demo-server", "1.0", sourceManifest, sourceArtifact, localDigest,
 		),
 	}
 	interpreter := request.EarlierCatalog[0].Evidence

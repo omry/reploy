@@ -140,7 +140,7 @@ func ValidateResolvedBundlePayload(payload ResolvedBundleIdentityV1, validateOwn
 		if output.SupplierNode != payload.NodeID {
 			return fmt.Errorf("resolved output %s.%s has supplier node %q, want %q", output.SupplierComponent, output.Name, output.SupplierNode, payload.NodeID)
 		}
-		if err := blueprint.ValidateProviderIdentifier("resolved output component", output.SupplierComponent); err != nil {
+		if err := blueprint.ValidateContributionReference("resolved output contribution", output.SupplierComponent); err != nil {
 			return err
 		}
 		if err := blueprint.ValidateProviderIdentifier("resolved output name", output.Name); err != nil {
@@ -188,13 +188,7 @@ func validateBundleNodeID(id NodeID, provider blueprint.ComponentType) error {
 			return fmt.Errorf("APT resolved bundle node ID must be %q", "apt")
 		}
 	case blueprint.ComponentTypePython:
-		component, ok := strings.CutPrefix(string(id), "python/")
-		if !ok || component == "" || component == "base" {
-			return fmt.Errorf("Python resolved bundle node ID must use python/<component>")
-		}
-		if err := blueprint.ValidateProviderIdentifier("Python bundle component", component); err != nil {
-			return err
-		}
+		return validateResolvableNodeID(id)
 	default:
 		return fmt.Errorf("unsupported resolved bundle provider %q", provider)
 	}

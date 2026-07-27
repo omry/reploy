@@ -200,7 +200,7 @@ func validateExecutableEvidenceStructure(evidence ExecutableEvidence, allowEmpty
 	if evidence.Schema != ExecutableEvidenceSchemaV1 {
 		return fmt.Errorf("executable evidence %q schema must be %q", evidence.RequirementID, ExecutableEvidenceSchemaV1)
 	}
-	if err := blueprint.ValidateProviderIdentifier("executable evidence component", evidence.Output.Component); err != nil {
+	if err := blueprint.ValidateContributionReference("executable evidence contribution", evidence.Output.Component); err != nil {
 		return err
 	}
 	if err := blueprint.ValidateProviderIdentifier("executable evidence output", evidence.Output.Name); err != nil {

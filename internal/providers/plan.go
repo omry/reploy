@@ -212,7 +212,7 @@ func ValidateNodeSpec(node NodeSpec) error {
 		return fmt.Errorf("node components, outputs, and requirements must use arrays")
 	}
 	for index, component := range node.Components {
-		if err := blueprint.ValidateProviderIdentifier("component", component); err != nil {
+		if err := blueprint.ValidateContributionReference("contribution", component); err != nil {
 			return err
 		}
 		if index > 0 && node.Components[index-1] >= component {
@@ -271,7 +271,7 @@ func ValidateRequirementDeclaration(declaration RequirementDeclaration) error {
 			return err
 		}
 		if requirement.Supplier != "" {
-			if err := blueprint.ValidateProviderIdentifier("executable supplier", requirement.Supplier); err != nil {
+			if err := blueprint.ValidateContributionReference("executable supplier contribution", requirement.Supplier); err != nil {
 				return err
 			}
 		}
@@ -334,8 +334,16 @@ func validateNodeID(id NodeID, provider blueprint.ComponentType, components []st
 			}
 		}
 	case blueprint.ComponentTypePython:
-		if len(components) != 1 || id != NodeID("python/"+components[0]) {
-			return fmt.Errorf("Python provider node must use ID python/<component> and contain that one component")
+		if len(components) != 1 {
+			return fmt.Errorf("Python provider node must contain one application contribution")
+		}
+		application, ok := blueprint.ApplicationContributionOwner(components[0], blueprint.ContributionProviderPython)
+		expected := NodeID("python/" + components[0])
+		if ok {
+			expected = NodeID("python/" + blueprint.ApplicationID(application))
+		}
+		if id != expected {
+			return fmt.Errorf("Python provider node must use python/<component> or python/application/<application> from its contribution and contain one Python contribution")
 		}
 		if components[0] == "base" {
 			return fmt.Errorf("Python provider node cannot claim the reserved base component")

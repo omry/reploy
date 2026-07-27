@@ -18,6 +18,7 @@
     "Options": {},
     "Executables": {
       "server": {
+        "Source": "python",
         "Binary": "demo-server",
         "Order": [
           "binary",
@@ -37,6 +38,7 @@
     "UpdatePolicy": "preserve"
   },
   "executable": {
+    "Source": "python",
     "Binary": "demo-server",
     "Order": [
       "binary",

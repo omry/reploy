@@ -171,8 +171,8 @@ Implement:
 - Portable `environment.id`; optional `control_script` defaults directly to ID.
   Reject unsafe/reserved filenames and native-trigger collisions with control
   operations.
-- Blueprint compatibility; the required `components.base` root; vars,
-  provider components with component-scoped options and
+- Blueprint compatibility; the required `environment.base` root; vars,
+  environment packages, applications with application-scoped options and
   executable profiles, mounts, commands, `allow_concurrent`, optional workload,
   `workload.runtime`, install, and Docker runtime nodes.
 - Install target defaults, semantic host variables, `system.run_as`, success
@@ -300,7 +300,7 @@ does not depend on the isolated prototype contract.
 
 Prototype first; complete only after the architecture review gate.
 
-- **P3-01:** resolve the mutable image reference from `components.base.image` to an
+- **P3-01:** resolve the mutable image reference from `environment.base.image` to an
   immutable platform-specific descriptor during `reploy build`.
 - **P3-02:** inspect and normalize the base-image configuration according to the model;
   reject unsupported hidden build/runtime behavior before materialization.

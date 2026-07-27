@@ -25,7 +25,11 @@ func powerShellControlScriptName(appID string) string {
 	return controlScriptName(appID) + ".ps1"
 }
 
-func renderPowerShellDockerDesktopControlScript(spec controlScriptSpec) string {
+func renderPowerShellControlScript(spec controlScriptSpec) string {
+	targetDir := "$PSScriptRoot"
+	if spec.Mode != controlScriptModeStaged {
+		targetDir = powerShellSingleQuote(spec.TargetDir)
+	}
 	return fmt.Sprintf(`[CmdletBinding()]
 param(
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -40,7 +44,7 @@ $ReployBin = Join-Path $TargetDir %s
 
 & $ReployBin _control --dir $TargetDir --script-name $ControlScript @RemainingArgs
 exit $LASTEXITCODE
-`, powerShellSingleQuote(spec.TargetDir), powerShellSingleQuote(spec.ControlScript), powerShellSingleQuote(filepath.FromSlash(embeddedRuntimeFileName())))
+`, targetDir, powerShellSingleQuote(spec.ControlScript), powerShellSingleQuote(filepath.FromSlash(embeddedRuntimeFileName())))
 }
 
 func renderControlScript(spec controlScriptSpec) string {
@@ -57,12 +61,20 @@ func controlScriptWrapperAssignments(spec controlScriptSpec) string {
 	controlScript := defaultString(spec.ControlScript, controlScriptName(spec.AppID))
 	if spec.Mode == controlScriptModeStaged {
 		return fmt.Sprintf(`target_dir="${REPLOY_DEPLOY_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}"
-control_script=%q
-reploy_bin="$target_dir"/%s`, controlScript, embeddedRuntimeFileName())
+control_script=%s
+reploy_bin="$target_dir"/%s`, posixShellSingleQuote(controlScript), embeddedRuntimeFileName())
 	}
-	return fmt.Sprintf(`target_dir=%q
-control_script=%q
-reploy_bin=%q`, spec.TargetDir, controlScript, filepath.Join(spec.TargetDir, embeddedRuntimeFileName()))
+	return fmt.Sprintf(`target_dir=%s
+control_script=%s
+reploy_bin=%s`,
+		posixShellSingleQuote(spec.TargetDir),
+		posixShellSingleQuote(controlScript),
+		posixShellSingleQuote(filepath.Join(spec.TargetDir, embeddedRuntimeFileName())),
+	)
+}
+
+func posixShellSingleQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func powerShellSingleQuote(value string) string {

@@ -4,8 +4,8 @@ sidebar_position: 3
 
 # Blueprints
 
-A blueprint is app-owned environment metadata. It tells Reploy which software
-components and options are required, what commands exist, which runtime mounts
+A blueprint is app-owned environment metadata. It tells Reploy which
+applications, packages, and options are required, what commands exist, which runtime mounts
 and endpoints are needed, and how Docker should realize them.
 
 Blueprints can be referenced in three common ways.

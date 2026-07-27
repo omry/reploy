@@ -28,32 +28,52 @@ type CompatibilitySyntax struct {
 }
 
 type EnvironmentSyntax struct {
-	ID              string                     `yaml:"id"`
-	ControlScript   string                     `yaml:"control_script"`
-	Vars            map[string]any             `yaml:"vars"`
-	Components      map[string]ComponentSyntax `yaml:"components"`
-	AllowConcurrent string                     `yaml:"allow_concurrent"`
-	Terminal        TerminalSyntax             `yaml:"terminal"`
-	Install         InstallSyntax              `yaml:"install"`
-	Mounts          map[string]MountSyntax     `yaml:"mounts"`
-	Commands        map[string]CommandSyntax   `yaml:"commands"`
-	Workload        *WorkloadSyntax            `yaml:"workload"`
+	ID              string                       `yaml:"id"`
+	ControlScript   string                       `yaml:"control_script"`
+	Vars            map[string]any               `yaml:"vars"`
+	Base            BaseSyntax                   `yaml:"base"`
+	Packages        EnvironmentPackagesSyntax    `yaml:"packages"`
+	Applications    map[string]ApplicationSyntax `yaml:"applications"`
+	AllowConcurrent string                       `yaml:"allow_concurrent"`
+	Terminal        TerminalSyntax               `yaml:"terminal"`
+	Install         InstallSyntax                `yaml:"install"`
+	Mounts          map[string]MountSyntax       `yaml:"mounts"`
+	Commands        map[string]CommandSyntax     `yaml:"commands"`
+	Workload        *WorkloadSyntax              `yaml:"workload"`
 }
 
 type TerminalSyntax struct {
 	ColorEnv string `yaml:"color_env"`
 }
 
-type ComponentSyntax struct {
-	Type         string                            `yaml:"type"`
-	Image        string                            `yaml:"image"`
-	Exports      map[string]ExecutableExportSyntax `yaml:"exports"`
-	Interpreter  *CommandRequirementSyntax         `yaml:"interpreter"`
-	Requirements []string                          `yaml:"requirements"`
-	Packages     []APTPackageRequestSyntax         `yaml:"packages"`
-	Options      map[string]ComponentOptionSyntax  `yaml:"options"`
-	Executables  map[string]ExecutableSyntax       `yaml:"executables"`
-	Present      map[string]bool                   `yaml:"-"`
+type BaseSyntax struct {
+	Image   string                            `yaml:"image"`
+	Exports map[string]ExecutableExportSyntax `yaml:"exports"`
+}
+
+type EnvironmentPackagesSyntax struct {
+	OS []APTPackageRequestSyntax `yaml:"os"`
+}
+
+type ApplicationSyntax struct {
+	Packages    ApplicationPackagesSyntax          `yaml:"packages"`
+	Options     map[string]ApplicationOptionSyntax `yaml:"options"`
+	Executables map[string]ExecutableSyntax        `yaml:"executables"`
+}
+
+type ApplicationPackagesSyntax struct {
+	OS     []APTPackageRequestSyntax `yaml:"os"`
+	Python *PythonPackagesSyntax     `yaml:"python"`
+}
+
+type PythonPackagesSyntax struct {
+	Interpreter  *CommandRequirementSyntax `yaml:"interpreter"`
+	Requirements []string                  `yaml:"requirements"`
+}
+
+type ApplicationOptionSyntax struct {
+	Description string                    `yaml:"description"`
+	Packages    ApplicationPackagesSyntax `yaml:"packages"`
 }
 
 type ExecutableExportSyntax struct {
@@ -64,13 +84,6 @@ type CommandRequirementSyntax struct {
 	Command  string `yaml:"command"`
 	Version  string `yaml:"version"`
 	Supplier string `yaml:"supplier"`
-}
-
-type ComponentOptionSyntax struct {
-	Description  string                    `yaml:"description"`
-	Requirements []string                  `yaml:"requirements"`
-	Packages     []APTPackageRequestSyntax `yaml:"packages"`
-	Present      map[string]bool           `yaml:"-"`
 }
 
 type APTPackageRequestSyntax struct {
@@ -85,6 +98,7 @@ type MountSyntax struct {
 }
 
 type ExecutableSyntax struct {
+	Source     string   `yaml:"source"`
 	Binary     string   `yaml:"binary"`
 	Order      []string `yaml:"order"`
 	ArgvPrefix []string `yaml:"argv_prefix"`

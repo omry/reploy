@@ -29,20 +29,28 @@ func providerInstallSystemdFileV1(plan providerInstallationPlanV1, dockerPath st
 	if err != nil {
 		return nil, err
 	}
-	composePath := systemdPath(plan.Installation.TargetDir, ComposeFileName)
-	environmentPath := systemdPath(plan.Installation.TargetDir, DockerEnvFileName)
+	runtimePath := systemdPath(plan.Installation.TargetDir, embeddedRuntimeFileName())
 	composeArguments := []string{
 		dockerPath, "compose",
 		"--project-name", plan.Installation.ComposeProject,
 		"--project-directory", systemdPath(plan.Installation.TargetDir),
-		"--env-file", environmentPath,
-		"-f", composePath,
+		"--env-file", systemdPath(plan.Installation.TargetDir, DockerEnvFileName),
+		"-f", systemdPath(plan.Installation.TargetDir, ComposeFileName),
 	}
-	start, err := systemdInstallCommandV1(append(append([]string{}, composeArguments...), "up"))
+	startArguments := []string{
+		runtimePath,
+		"_service-container",
+		"--dir", systemdPath(plan.Installation.TargetDir),
+		"--docker", dockerPath,
+		"run",
+	}
+	stopArguments := append(append([]string{}, composeArguments...), "down")
+	stopArguments = append(stopArguments, "--remove-orphans")
+	start, err := systemdInstallCommandV1(startArguments)
 	if err != nil {
 		return nil, err
 	}
-	stop, err := systemdInstallCommandV1(append(append([]string{}, composeArguments...), "down"))
+	stop, err := systemdInstallCommandV1(stopArguments)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +67,8 @@ Description=Reploy Docker service (%s)
 # Reploy-Compose-Project: %s
 %s
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 WorkingDirectory=%s
 ExecStart=%s
 ExecStop=%s
