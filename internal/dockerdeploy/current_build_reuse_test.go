@@ -46,13 +46,8 @@ func TestRebindCurrentBuildLockV1UpdatesOnlyDesiredBlueprintIdentity(t *testing.
 func TestCurrentBuildMatchesIgnoresDeploymentLocalState(t *testing.T) {
 	current, input := currentBuildReuseFixture(t)
 	current.State.Deployment = &deploy.DeploymentStateV1{
-		Schema: deploy.DeploymentStateSchemaV1,
-		Installation: deploy.InstallationStateV1{
-			Schema: deploy.InstallationSchemaV1, Status: deploy.InstallationStatusReady,
-			TargetDir: "/opt/demo", Scope: "system", Service: "demo",
-			UnitPath: "/etc/systemd/system/demo.service", InstanceID: "demo-1", ComposeProject: "demo-1",
-			ContainerName: "demo", NetworkName: "demo", Ports: []deploy.InstallationPortBindingV1{},
-		},
+		Schema:       deploy.DeploymentStateSchemaV1,
+		Installation: installedBuildPublicationInstallation(t.TempDir()),
 	}
 	matched, err := CurrentBuildMatches(current, input)
 	if err != nil {

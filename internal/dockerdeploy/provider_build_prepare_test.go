@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -292,7 +293,7 @@ func TestPrepareLockedProviderBuildV1RejectsInstalledDeploymentBeforeBackendWork
 	_, _, err := input.Operation.SetInstallationStateV1(deploy.InstallationStateV1{
 		Schema: deploy.InstallationSchemaV1, Status: deploy.InstallationStatusReady,
 		TargetDir: input.DeploymentDir, Scope: "system", Service: "demo",
-		UnitPath: "/etc/systemd/system/demo.service", InstanceID: "demo-1", ComposeProject: "demo-1",
+		UnitPath: filepath.Join(input.DeploymentDir, ".reploy", "demo.service"), InstanceID: "demo-1", ComposeProject: "demo-1",
 		ContainerName: "demo", NetworkName: "demo", Ports: []deploy.InstallationPortBindingV1{},
 	})
 	if err != nil {

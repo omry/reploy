@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -409,6 +410,9 @@ func TestRunCurrentWorkloadV1AddsStartupDiagnosticsToLifecycleFailure(t *testing
 }
 
 func TestCurrentWorkloadCommandsV1UsesRecordedSystemService(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("systemd command discovery requires a POSIX host")
+	}
 	binDir := t.TempDir()
 	systemctl := filepath.Join(binDir, "systemctl")
 	if err := os.WriteFile(systemctl, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {

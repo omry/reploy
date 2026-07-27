@@ -245,14 +245,23 @@ func removeStagedDeploymentV1(
 		return result, fmt.Errorf("release staging removal queue ownership: %w", err)
 	}
 	lease = nil
+	if stagedRemovalMustUnlockBeforeRename() {
+		if err := backend.unlock(operation); err != nil {
+			operation = nil
+			return result, fmt.Errorf("release operation lock before moving staging: %w", err)
+		}
+		operation = nil
+	}
 	if err := backend.rename(dir, tombstone); err != nil {
 		return result, fmt.Errorf("move staging directory for removal: %w", err)
 	}
-	if err := backend.unlock(operation); err != nil {
+	if operation != nil {
+		if err := backend.unlock(operation); err != nil {
+			operation = nil
+			return result, fmt.Errorf("release operation lock after moving staging: %w", err)
+		}
 		operation = nil
-		return result, fmt.Errorf("release operation lock after moving staging: %w", err)
 	}
-	operation = nil
 
 	if image != nil {
 		if err := backend.removeReference(

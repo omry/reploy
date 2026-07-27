@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -43,6 +44,9 @@ func TestExecuteProviderUninstallHostMapsLockedInstallationWithoutRemovingDirect
 }
 
 func TestApplyProviderUninstallHostPlanRunsLinuxCleanupInOrder(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Linux/systemd cleanup requires a POSIX host")
+	}
 	oldLookPath := uninstallLookPath
 	oldRunCommand := uninstallRunCommand
 	oldRunDocker := uninstallRunDockerCommand

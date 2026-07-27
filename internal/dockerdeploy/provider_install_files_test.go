@@ -3,12 +3,16 @@ package dockerdeploy
 import (
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
 )
 
 func TestProviderInstallFilesV1CombinesAndSortsSystemdCandidates(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("systemd installation rendering is Linux-specific")
+	}
 	destinationDir := t.TempDir()
 	references := fixedPublicationReferences(t, destinationDir, 0xc3)
 	plan := providerInstallRunPlanFixture(destinationDir, references)

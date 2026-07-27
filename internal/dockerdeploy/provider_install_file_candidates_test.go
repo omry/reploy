@@ -40,7 +40,7 @@ func TestPrepareProviderInstallFileCandidatesV1WritesNoLiveFilesAndCleansUp(t *t
 		if err != nil {
 			t.Fatalf("stat temporary file %d: %v", index, err)
 		}
-		if info.Mode().Perm() != candidates[index].Mode {
+		if hasPOSIXPermissionBits() && info.Mode().Perm() != candidates[index].Mode {
 			t.Fatalf("temporary mode %d = %v", index, info.Mode())
 		}
 		if _, err := os.Lstat(file.FinalPath); !os.IsNotExist(err) {
@@ -75,7 +75,7 @@ func TestPrepareProviderInstallFileCandidatesV1RemovesEarlierCandidatesOnFailure
 	}
 
 	_, err := prepareProviderInstallFileCandidatesV1(candidates)
-	if err == nil || !strings.Contains(err.Error(), "not a directory") {
+	if err == nil || !strings.Contains(err.Error(), "directory") {
 		t.Fatalf("invalid ancestor error = %v", err)
 	}
 	entries, err := os.ReadDir(root)

@@ -25,7 +25,7 @@ func TestPublishCurrentRuntimeInputsV1WritesRepairsAndSkipsExactFiles(t *testing
 	}
 	for _, relative := range []string{DockerEnvFileName, ComposeFileName} {
 		info, err := os.Lstat(filepath.Join(dir, relative))
-		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 {
+		if err != nil || !info.Mode().IsRegular() || hasPOSIXPermissionBits() && info.Mode().Perm() != 0o644 {
 			t.Fatalf("runtime input %q = %#v, %v", relative, info, err)
 		}
 	}
@@ -46,7 +46,7 @@ func TestPublishCurrentRuntimeInputsV1WritesRepairsAndSkipsExactFiles(t *testing
 		t.Fatalf("repair publication = %v, %v", changed, err)
 	}
 	info, err := os.Lstat(environmentPath)
-	if err != nil || info.Mode().Perm() != 0o644 {
+	if err != nil || hasPOSIXPermissionBits() && info.Mode().Perm() != 0o644 {
 		t.Fatalf("repaired environment mode = %#v, %v", info, err)
 	}
 	content, err := os.ReadFile(environmentPath)
@@ -139,7 +139,7 @@ func TestRequireCurrentRuntimeInputsV1IsReadOnly(t *testing.T) {
 		t.Fatalf("stale runtime input was replaced: %q, %v", content, err)
 	}
 	info, err := os.Lstat(environmentPath)
-	if err != nil || info.Mode().Perm() != 0o600 {
+	if err != nil || hasPOSIXPermissionBits() && info.Mode().Perm() != 0o600 {
 		t.Fatalf("stale runtime input mode was repaired: %#v, %v", info, err)
 	}
 }

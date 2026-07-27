@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -19,13 +20,18 @@ type testSourceDistributionEntry struct {
 
 func TestSourceDistributionValidationAndExtraction(t *testing.T) {
 	archive := filepath.Join(t.TempDir(), "demo_pkg-1.2.3.tar.gz")
-	writeTestSourceDistribution(t, archive, []testSourceDistributionEntry{
+	entries := []testSourceDistributionEntry{
 		{name: "demo_pkg-1.2.3/", kind: tar.TypeDir},
 		{name: "demo_pkg-1.2.3/pyproject.toml", kind: tar.TypeReg, content: "[build-system]\n"},
 		{name: "demo_pkg-1.2.3/PKG-INFO", kind: tar.TypeReg, content: "Name: Demo-Pkg\nVersion: 1.2.3\n\n"},
 		{name: "demo_pkg-1.2.3/demo.py", kind: tar.TypeReg, content: "value = 1\n"},
-		{name: "demo_pkg-1.2.3/link.py", kind: tar.TypeSymlink, linkname: "demo.py"},
-	})
+	}
+	if runtime.GOOS != "windows" {
+		entries = append(entries, testSourceDistributionEntry{
+			name: "demo_pkg-1.2.3/link.py", kind: tar.TypeSymlink, linkname: "demo.py",
+		})
+	}
+	writeTestSourceDistribution(t, archive, entries)
 	descriptor, metadata, err := DescribeSourceDistributionFileV1(
 		archive, "sdists/demo_pkg-1.2.3.tar.gz",
 	)
@@ -48,9 +54,11 @@ func TestSourceDistributionValidationAndExtraction(t *testing.T) {
 	if err != nil || string(content) != "value = 1\n" {
 		t.Fatalf("extracted file = %q, %v", content, err)
 	}
-	target, err := os.Readlink(filepath.Join(destination, metadata.Root, "link.py"))
-	if err != nil || target != "demo.py" {
-		t.Fatalf("extracted link = %q, %v", target, err)
+	if runtime.GOOS != "windows" {
+		target, err := os.Readlink(filepath.Join(destination, metadata.Root, "link.py"))
+		if err != nil || target != "demo.py" {
+			t.Fatalf("extracted link = %q, %v", target, err)
+		}
 	}
 }
 

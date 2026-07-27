@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -163,6 +164,9 @@ func TestComposeServiceStatesIncludesCommandFailureOutput(t *testing.T) {
 }
 
 func TestCommandOutputSeparatesSuccessfulStderrAndIncludesFailureStderr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture requires a POSIX host")
+	}
 	output, err := commandOutput(CommandSpec{Name: "sh", Args: []string{"-c", "printf stdout; printf stderr >&2"}}, RunOptions{})
 	if err != nil || string(output) != "stdout" {
 		t.Fatalf("successful output = %q, %v", output, err)

@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -188,7 +189,7 @@ func installedBuildPublicationInstallation(destinationDir string) deploy.Install
 	return deploy.InstallationStateV1{
 		Schema: deploy.InstallationSchemaV1, Status: deploy.InstallationStatusReady,
 		TargetDir: destinationDir, Scope: "system", Service: "demo",
-		UnitPath: "/etc/systemd/system/demo.service", InstanceID: "demo-1", ComposeProject: "demo",
+		UnitPath: filepath.Join(destinationDir, ".reploy", "demo.service"), InstanceID: "demo-1", ComposeProject: "demo",
 		ContainerName: "demo", NetworkName: "demo", Ports: []deploy.InstallationPortBindingV1{},
 	}
 }

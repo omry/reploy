@@ -92,18 +92,18 @@ func DescribeSourceDistributionFileV1(
 	}
 	if !info.Mode().IsRegular() {
 		return providerstore.ArtifactDescriptor{}, SourceDistributionMetadataV1{}, fmt.Errorf(
-			"Python source distribution %q must be a regular file", path.Base(filename),
+			"Python source distribution %q must be a regular file", filepath.Base(filename),
 		)
 	}
 	if info.Size() > maxSourceDistributionArchiveBytes {
 		return providerstore.ArtifactDescriptor{}, SourceDistributionMetadataV1{}, fmt.Errorf(
 			"Python source distribution %q exceeds the %d-byte archive limit",
-			path.Base(filename), maxSourceDistributionArchiveBytes,
+			filepath.Base(filename), maxSourceDistributionArchiveBytes,
 		)
 	}
-	if !strings.HasSuffix(strings.ToLower(path.Base(filename)), ".tar.gz") {
+	if !strings.HasSuffix(strings.ToLower(filepath.Base(filename)), ".tar.gz") {
 		return providerstore.ArtifactDescriptor{}, SourceDistributionMetadataV1{}, fmt.Errorf(
-			"Python source distribution %q must be a .tar.gz archive", path.Base(filename),
+			"Python source distribution %q must be a .tar.gz archive", filepath.Base(filename),
 		)
 	}
 	metadata, err := inspectSourceDistributionArchive(filename)
@@ -126,10 +126,10 @@ func DescribeSourceDistributionFileV1(
 		)
 	}
 	if path.Dir(descriptor.LogicalPath) != "sdists" ||
-		path.Base(descriptor.LogicalPath) != path.Base(filename) {
+		path.Base(descriptor.LogicalPath) != filepath.Base(filename) {
 		return providerstore.ArtifactDescriptor{}, SourceDistributionMetadataV1{}, fmt.Errorf(
 			"Python source distribution descriptor does not identify %q beneath sdists",
-			path.Base(filename),
+			filepath.Base(filename),
 		)
 	}
 	return descriptor, metadata, nil

@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/omry/reploy/internal/blueprint"
@@ -10,6 +11,12 @@ import (
 )
 
 func TestPlanProviderInstallationV1UsesLockedBlueprintAndDestinationReference(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Linux/systemd installation planning is not a native Windows operation")
+	}
+	previousUnitDir := installSystemdUnitDir
+	installSystemdUnitDir = t.TempDir()
+	t.Cleanup(func() { installSystemdUnitDir = previousUnitDir })
 	sourceDir := t.TempDir()
 	destinationDir := t.TempDir()
 	document := blueprint.Document{

@@ -24,7 +24,7 @@ func TestOperationLockPublishesAndLoadsImmutableBuildLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+	if !info.Mode().IsRegular() || hasPOSIXPermissionBits() && info.Mode().Perm() != 0o600 {
 		t.Fatalf("build lock mode = %v", info.Mode())
 	}
 	loaded, found, err := operation.ReadBuildLock(digest, acceptBuildLockProfile)

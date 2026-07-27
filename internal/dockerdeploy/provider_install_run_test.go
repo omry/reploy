@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -315,6 +316,9 @@ func TestProviderInstallDestinationGenerationV1UsesExistingCurrentOrIncoming(t *
 }
 
 func TestResolveProviderInstallDestinationV1UsesBlueprintTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Linux install target resolution requires a Linux host")
+	}
 	document := blueprint.Document{Environment: blueprint.Environment{
 		ID: "demo", Install: blueprint.Install{Target: blueprint.InstallTarget{DefaultPath: "/tmp/reploy-target/{{ environment.id }}"}},
 	}}
@@ -864,7 +868,7 @@ func TestRunProviderInstallV1RejectsServiceRenameBeforeDestinationPreparation(t 
 	destinationOperation, _, _ := installedBuildPublicationSourceFixtureAtDir(t, destinationDir)
 	existing := installedBuildPublicationInstallation(destinationDir)
 	existing.Service = "old-service"
-	existing.UnitPath = "/etc/systemd/system/old-service.service"
+	existing.UnitPath = filepath.Join(destinationDir, "old-service.service")
 	if _, _, err := destinationOperation.SetInstallationStateV1(existing); err != nil {
 		t.Fatal(err)
 	}
@@ -890,7 +894,7 @@ func TestRunProviderInstallV1RejectsServiceRenameBeforeDestinationPreparation(t 
 		planInstallation: func(_ context.Context, input providerInstallPlanningV1) (providerInstallationPlanV1, error) {
 			plan := providerInstallRunPlanFixture(destinationDir, input.References)
 			plan.Installation.Service = "new-service"
-			plan.Installation.UnitPath = "/etc/systemd/system/new-service.service"
+			plan.Installation.UnitPath = filepath.Join(destinationDir, "new-service.service")
 			return plan, nil
 		},
 		inspectHostTools: func(context.Context, installBackend) (providerInstallHostToolsV1, error) {
@@ -943,13 +947,8 @@ func providerInstallRunBuildFixture(t *testing.T, sourceDir string) (deploy.Stat
 	result := LockedProviderBuildExecutionResultV1{State: current.State, Lock: current.Lock, Reused: true}
 	want := current.State
 	want.Deployment = &deploy.DeploymentStateV1{
-		Schema: deploy.DeploymentStateSchemaV1,
-		Installation: deploy.InstallationStateV1{
-			Schema: deploy.InstallationSchemaV1, Status: deploy.InstallationStatusReady,
-			TargetDir: filepath.Clean("/tmp/destination"), Scope: "system", Service: "demo",
-			UnitPath: "/etc/systemd/system/demo.service", InstanceID: "demo-1", ComposeProject: "demo",
-			ContainerName: "demo", NetworkName: "demo", Ports: []deploy.InstallationPortBindingV1{},
-		},
+		Schema:       deploy.DeploymentStateSchemaV1,
+		Installation: installedBuildPublicationInstallation(filepath.Join(sourceDir, "destination")),
 	}
 	return want, result
 }

@@ -49,7 +49,7 @@ func TestOperationLockSetsInstallationWithoutChangingEnvironmentState(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o640 {
+	if hasPOSIXPermissionBits() && info.Mode().Perm() != 0o640 {
 		t.Fatalf("no-op installation update rewrote state: mode=%o", info.Mode().Perm())
 	}
 }
@@ -317,7 +317,7 @@ func installationStateV1Fixture(targetDir string) InstallationStateV1 {
 	return InstallationStateV1{
 		Schema: InstallationSchemaV1, Status: InstallationStatusReady,
 		TargetDir: targetDir, Scope: "system", Service: "demo",
-		UnitPath: "/etc/systemd/system/demo.service", InstanceID: "demo-1", ComposeProject: "demo-1",
+		UnitPath: filepath.Join(targetDir, "demo.service"), InstanceID: "demo-1", ComposeProject: "demo-1",
 		ContainerName: "demo", NetworkName: "demo", Ports: []InstallationPortBindingV1{},
 	}
 }

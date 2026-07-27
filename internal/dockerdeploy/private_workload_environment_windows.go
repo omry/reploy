@@ -172,7 +172,7 @@ func publishPrivateWorkloadEnvironmentFileV1(target string, content []byte, repl
 		return false, fmt.Errorf("read private environment destination owner: %w", err)
 	}
 	sddl := "O:" + owner.String() + "D:P" +
-		"(A;;GRGW;;;" + owner.String() + ")" +
+		"(A;;GA;;;" + owner.String() + ")" +
 		"(A;;GA;;;SY)" +
 		"(A;;GA;;;BA)"
 	securityDescriptor, err := windows.SecurityDescriptorFromString(sddl)

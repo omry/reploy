@@ -423,7 +423,7 @@ func readPythonSourceRelevance(
 	}
 	info, err := os.Lstat(filename)
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
-		info.Mode().Perm()&0o077 != 0 {
+		!providerInstallFileModeMatches(info.Mode(), 0o600) {
 		return pythonSourceRelevanceV1{}, false
 	}
 	content, err := os.ReadFile(filename)

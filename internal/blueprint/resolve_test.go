@@ -518,7 +518,8 @@ func TestResolvedMinimalGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(string(actual)) != strings.TrimSpace(string(want)) {
+	normalizedWant := strings.ReplaceAll(string(want), "\r\n", "\n")
+	if strings.TrimSpace(string(actual)) != strings.TrimSpace(normalizedWant) {
 		t.Fatalf("resolved golden mismatch\nactual:\n%s\nwant:\n%s", actual, want)
 	}
 }

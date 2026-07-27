@@ -125,7 +125,7 @@ func TestOverlayPackageMutationsRemoveExactCanonicalRequest(t *testing.T) {
 func TestOverlayMutationsPreserveCanonicalEmptyArrays(t *testing.T) {
 	request := DirectPackageRequest{
 		Contribution: "app",
-		Package:   providers.CanonicalPackageRequest{Schema: "test-package-v1", Value: canonical.Object{}},
+		Package:      providers.CanonicalPackageRequest{Schema: "test-package-v1", Value: canonical.Object{}},
 	}
 	added := AddOverlayPackages(EmptyRequestOverlayV1(), []DirectPackageRequest{request})
 	if added.SelectedOptions == nil {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -53,7 +54,7 @@ func DescribeSourceWheelFileV1(filename string, logicalPath string) (providersto
 		return providerstore.ArtifactDescriptor{}, SourceWheelMetadataV1{}, err
 	}
 	if !info.Mode().IsRegular() {
-		return providerstore.ArtifactDescriptor{}, SourceWheelMetadataV1{}, fmt.Errorf("Python source wheel %q must be a regular file", path.Base(filename))
+		return providerstore.ArtifactDescriptor{}, SourceWheelMetadataV1{}, fmt.Errorf("Python source wheel %q must be a regular file", filepath.Base(filename))
 	}
 	wheel, err := inspectWheel(filename)
 	if err != nil {
@@ -68,8 +69,8 @@ func DescribeSourceWheelFileV1(filename string, logicalPath string) (providersto
 	if err := descriptor.Validate(); err != nil {
 		return providerstore.ArtifactDescriptor{}, SourceWheelMetadataV1{}, fmt.Errorf("Python source wheel descriptor: %w", err)
 	}
-	if path.Base(descriptor.LogicalPath) != path.Base(filename) {
-		return providerstore.ArtifactDescriptor{}, SourceWheelMetadataV1{}, fmt.Errorf("Python source wheel descriptor does not identify %q", path.Base(filename))
+	if path.Base(descriptor.LogicalPath) != filepath.Base(filename) {
+		return providerstore.ArtifactDescriptor{}, SourceWheelMetadataV1{}, fmt.Errorf("Python source wheel descriptor does not identify %q", filepath.Base(filename))
 	}
 	metadata := SourceWheelMetadataV1{
 		Distribution: wheel.Distribution, Version: wheel.Version, Tags: append([]string{}, wheel.Tags...),
@@ -86,18 +87,18 @@ func InspectSourceWheelFileV1(filename string, descriptor providerstore.Artifact
 	if err := descriptor.Validate(); err != nil {
 		return SourceWheelMetadataV1{}, fmt.Errorf("Python source wheel descriptor: %w", err)
 	}
-	if descriptor.Kind != "wheel" || path.Base(descriptor.LogicalPath) != path.Base(filename) {
-		return SourceWheelMetadataV1{}, fmt.Errorf("Python source wheel descriptor does not identify %q", path.Base(filename))
+	if descriptor.Kind != "wheel" || path.Base(descriptor.LogicalPath) != filepath.Base(filename) {
+		return SourceWheelMetadataV1{}, fmt.Errorf("Python source wheel descriptor does not identify %q", filepath.Base(filename))
 	}
 	observed, metadata, err := DescribeSourceWheelFileV1(filename, descriptor.LogicalPath)
 	if err != nil {
 		return SourceWheelMetadataV1{}, err
 	}
 	if descriptor.SHA256 != observed.SHA256 {
-		return SourceWheelMetadataV1{}, fmt.Errorf("Python source wheel %q digest does not match its descriptor", path.Base(filename))
+		return SourceWheelMetadataV1{}, fmt.Errorf("Python source wheel %q digest does not match its descriptor", filepath.Base(filename))
 	}
 	if descriptor.Size != observed.Size {
-		return SourceWheelMetadataV1{}, fmt.Errorf("Python source wheel %q size does not match its descriptor", path.Base(filename))
+		return SourceWheelMetadataV1{}, fmt.Errorf("Python source wheel %q size does not match its descriptor", filepath.Base(filename))
 	}
 	return metadata, nil
 }

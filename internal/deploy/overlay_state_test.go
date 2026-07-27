@@ -86,7 +86,7 @@ func TestMutateRequestOverlayV1WritesOneValidatedStateTransaction(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if hasPOSIXPermissionBits() && info.Mode().Perm() != 0o600 {
 		t.Fatalf("state mode = %o", info.Mode().Perm())
 	}
 	if _, err := os.Stat(filepath.Join(dir, "requirements.txt")); !errors.Is(err, os.ErrNotExist) {

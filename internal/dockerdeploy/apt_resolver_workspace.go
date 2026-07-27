@@ -189,7 +189,7 @@ func validateAPTResolverWorkspaceState(prepared PreparedAPTResolverWorkspace, re
 	if err != nil {
 		return fmt.Errorf("inspect APT resolver workspace: %w", err)
 	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o700 {
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !providerInstallFileModeMatches(info.Mode(), 0o700) {
 		return fmt.Errorf("APT resolver workspace must be a private real directory")
 	}
 	if prepared.ContainerDir != aptprovider.ResolverScratchDirectory {
@@ -198,7 +198,7 @@ func validateAPTResolverWorkspaceState(prepared PreparedAPTResolverWorkspace, re
 	for _, relative := range []string{"lists", "lists/partial", "archives", "archives/partial", "output"} {
 		path := filepath.Join(prepared.HostDir, relative)
 		info, err := os.Lstat(path)
-		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o700 {
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !providerInstallFileModeMatches(info.Mode(), 0o700) {
 			return fmt.Errorf("APT resolver %s must be a private real directory", relative)
 		}
 	}
@@ -224,7 +224,7 @@ func validateAPTResolverWorkspaceState(prepared PreparedAPTResolverWorkspace, re
 	}
 	configPath := filepath.Join(prepared.HostDir, "apt.conf")
 	configInfo, err := os.Lstat(configPath)
-	if err != nil || !configInfo.Mode().IsRegular() || configInfo.Mode().Perm() != 0o600 {
+	if err != nil || !configInfo.Mode().IsRegular() || !providerInstallFileModeMatches(configInfo.Mode(), 0o600) {
 		return fmt.Errorf("APT resolver additive config must be a private regular file")
 	}
 	config, err := os.ReadFile(configPath)

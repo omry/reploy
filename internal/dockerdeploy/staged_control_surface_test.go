@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -12,6 +13,9 @@ import (
 )
 
 func TestStagedControlSurfaceSurvivesDirectoryMove(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the Windows staging wrapper is a PowerShell script")
+	}
 	runtimePath := writeFakeEmbeddedReploy(t, t.TempDir())
 	originalExecutable := embeddedRuntimeExecutable
 	embeddedRuntimeExecutable = func() (string, error) { return runtimePath, nil }

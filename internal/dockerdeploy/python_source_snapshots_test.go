@@ -61,7 +61,7 @@ func TestStagePythonLocalSourceSnapshotsCopiesOnlyManifestEntries(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o755 {
+	if hasPOSIXPermissionBits() && info.Mode().Perm() != 0o755 {
 		t.Fatalf("snapshot mode = %o", info.Mode().Perm())
 	}
 	if _, err := os.Stat(filepath.Join(snapshots[0].HostDir, ".git")); !os.IsNotExist(err) {
@@ -78,7 +78,7 @@ func TestStagePythonLocalSourceSnapshotsCopiesOnlyManifestEntries(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if inputInfo.Mode().Perm()&0o222 != 0 {
+	if hasPOSIXPermissionBits() && inputInfo.Mode().Perm()&0o222 != 0 {
 		t.Fatalf("resolver input remained writable: %o", inputInfo.Mode().Perm())
 	}
 }

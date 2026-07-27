@@ -1,11 +1,15 @@
 package dockerdeploy
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
 
 func TestProviderInstallSystemdFileV1RendersRestartWithoutTimingPolicy(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("systemd installation rendering is Linux-specific")
+	}
 	destinationDir := t.TempDir()
 	references := fixedPublicationReferences(t, destinationDir, 0xb1)
 	plan := providerInstallRunPlanFixture(destinationDir, references)
@@ -41,6 +45,9 @@ func TestProviderInstallSystemdFileV1RendersRestartWithoutTimingPolicy(t *testin
 }
 
 func TestProviderInstallSystemdFileV1OmitsUnknownDockerUnit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("systemd installation rendering is Linux-specific")
+	}
 	destinationDir := t.TempDir()
 	references := fixedPublicationReferences(t, destinationDir, 0xb2)
 	plan := providerInstallRunPlanFixture(destinationDir, references)

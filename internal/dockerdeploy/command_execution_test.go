@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -77,9 +78,12 @@ func TestTransientAndShellCommandsUseDockerExecArgv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workspace := testPreparedProbeWorkspace(t, platform, "/tmp/probe")
-	plan := DockerExecutionPlan{Image: "reploy/demo:staging", ContainerName: "demo", RuntimeUser: RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"}, Mounts: []MountExecutionPlan{{Mode: blueprint.MountManagedBind, Source: "/tmp/conf", Target: "/conf", ReadOnly: true}}}
-	output := &transientOutputMount{HostDirectory: "/tmp/output", Variable: runtimeOutputFileVariable, ContainerPath: runtimeOutputRoot + "/output"}
+	probeDir := t.TempDir()
+	workspace := testPreparedProbeWorkspace(t, platform, probeDir)
+	mountDir := t.TempDir()
+	outputDir := t.TempDir()
+	plan := DockerExecutionPlan{Image: "reploy/demo:staging", ContainerName: "demo", RuntimeUser: RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"}, Mounts: []MountExecutionPlan{{Mode: blueprint.MountManagedBind, Source: mountDir, Target: "/conf", ReadOnly: true}}}
+	output := &transientOutputMount{HostDirectory: outputDir, Variable: runtimeOutputFileVariable, ContainerPath: runtimeOutputRoot + "/output"}
 	spec, err := TransientCommandSpec(plan, ResolvedEnvironmentCommand{Argv: []string{"/opt/demo", ";rm", "$(touch pwned)"}}, workspace, output, true, false)
 	if err != nil {
 		t.Fatal(err)
@@ -88,7 +92,7 @@ func TestTransientAndShellCommandsUseDockerExecArgv(t *testing.T) {
 	if !strings.Contains(joined, "/opt/demo|;rm|$(touch pwned)") || strings.Contains(joined, "sh|-c") {
 		t.Fatalf("spec = %#v", spec)
 	}
-	if !containsInOrder(spec.Args, []string{"--mount", "type=bind,source=/tmp/output,target=" + runtimeOutputRoot, "--env", runtimeOutputFileVariable + "=" + runtimeOutputRoot + "/output"}) {
+	if !containsInOrder(spec.Args, []string{"--mount", "type=bind,source=" + outputDir + ",target=" + runtimeOutputRoot, "--env", runtimeOutputFileVariable + "=" + runtimeOutputRoot + "/output"}) {
 		t.Fatalf("spec lacks explicit output mount: %#v", spec.Args)
 	}
 	if !containsAdjacent(spec.Args, "--pull", "never") {
@@ -98,7 +102,7 @@ func TestTransientAndShellCommandsUseDockerExecArgv(t *testing.T) {
 		t.Fatalf("transient container starts as the runtime user before its anonymous home is initialized: %#v", spec.Args)
 	}
 	if !containsInOrder(spec.Args, []string{"--user", "0:0"}) ||
-		!containsInOrder(spec.Args, []string{"--mount", "type=bind,source=/tmp/probe,target=" + ProbeContainerRoot + ",readonly"}) ||
+		!containsInOrder(spec.Args, []string{"--mount", "type=bind,source=" + probeDir + ",target=" + ProbeContainerRoot + ",readonly"}) ||
 		!containsInOrder(spec.Args, []string{
 			"--entrypoint", ProbeContainerExecutable,
 			plan.Image, "run-transient", "501", "20",
@@ -127,17 +131,21 @@ func TestTransientCommandSpecQuotesCommaContainingMountFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workspace := testPreparedProbeWorkspace(t, platform, "/tmp/probe,workspace")
+	hostRoot := t.TempDir()
+	probeDir := filepath.Join(hostRoot, "probe,workspace")
+	mountDir := filepath.Join(hostRoot, "deployment,preview", "conf")
+	outputDir := filepath.Join(hostRoot, "output,preview")
+	workspace := testPreparedProbeWorkspace(t, platform, probeDir)
 	plan := DockerExecutionPlan{
 		Image: "reploy/demo:staging", ContainerName: "demo",
 		RuntimeUser: RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"},
 		Mounts: []MountExecutionPlan{{
-			Mode: blueprint.MountManagedBind, Source: "/tmp/deployment,preview/conf",
+			Mode: blueprint.MountManagedBind, Source: mountDir,
 			Target: "/conf,preview", ReadOnly: true,
 		}},
 	}
 	output := &transientOutputMount{
-		HostDirectory: "/tmp/output,preview", Variable: runtimeOutputDirectoryVariable,
+		HostDirectory: outputDir, Variable: runtimeOutputDirectoryVariable,
 		ContainerPath: runtimeOutputRoot,
 	}
 	spec, err := TransientCommandSpec(plan, ResolvedEnvironmentCommand{Argv: []string{"/opt/demo"}}, workspace, output, false, false)
@@ -145,10 +153,10 @@ func TestTransientCommandSpecQuotesCommaContainingMountFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !containsInOrder(spec.Args, []string{
-		"--mount", `type=bind,"source=/tmp/probe,workspace",target=` + ProbeContainerRoot + ",readonly",
+		"--mount", `type=bind,"source=` + probeDir + `",target=` + ProbeContainerRoot + ",readonly",
 	}) || !containsInOrder(spec.Args, []string{
-		"--mount", `type=bind,"target=/conf,preview","source=/tmp/deployment,preview/conf",readonly`,
-		"--mount", `type=bind,"source=/tmp/output,preview",target=` + runtimeOutputRoot,
+		"--mount", `type=bind,"target=/conf,preview","source=` + mountDir + `",readonly`,
+		"--mount", `type=bind,"source=` + outputDir + `",target=` + runtimeOutputRoot,
 	}) {
 		t.Fatalf("comma-containing mount fields were not CSV-quoted: %#v", spec.Args)
 	}
@@ -159,14 +167,14 @@ func TestPlanTransientContainerExecutionV1SeparatesCreateStartAndCleanup(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	workspace := testPreparedProbeWorkspace(t, platform, "/tmp/probe")
+	workspace := testPreparedProbeWorkspace(t, platform, t.TempDir())
 	plan := DockerExecutionPlan{
 		Image: "reploy/demo:staging", ContainerName: "demo-staging-abcd",
 		RuntimeUser: RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"},
-		Mounts:      []MountExecutionPlan{{Mode: blueprint.MountManagedBind, Source: "/tmp/conf", Target: "/conf", ReadOnly: true}},
+		Mounts:      []MountExecutionPlan{{Mode: blueprint.MountManagedBind, Source: t.TempDir(), Target: "/conf", ReadOnly: true}},
 	}
 	output := &transientOutputMount{
-		HostDirectory: "/tmp/output", Variable: runtimeOutputFileVariable,
+		HostDirectory: t.TempDir(), Variable: runtimeOutputFileVariable,
 		ContainerPath: runtimeOutputRoot + "/output",
 	}
 	execution, err := PlanTransientContainerExecutionV1(
@@ -208,7 +216,7 @@ func TestPlanTransientContainerExecutionV1RejectsInvalidIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workspace := testPreparedProbeWorkspace(t, platform, "/tmp/probe")
+	workspace := testPreparedProbeWorkspace(t, platform, t.TempDir())
 	command := ResolvedEnvironmentCommand{Argv: []string{"/bin/true"}}
 	if _, err := PlanTransientContainerExecutionV1(DockerExecutionPlan{ContainerName: "demo"}, command, workspace, nil, "invalid", false, false); err == nil || !strings.Contains(err.Error(), "run ID") {
 		t.Fatalf("invalid run ID error = %v", err)

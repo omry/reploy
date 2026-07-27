@@ -8,7 +8,8 @@ import (
 )
 
 func currentOutputRuntimeUser() RuntimeUserPlan {
-	return RuntimeUserPlan{UID: os.Geteuid(), GID: os.Getegid()}
+	backend := oneShotOutputOwnershipBackend()
+	return RuntimeUserPlan{UID: backend.currentUID(), GID: backend.currentGID()}
 }
 
 func TestOneShotOutputDirectoryIsDirectAndPersistent(t *testing.T) {

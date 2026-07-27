@@ -29,7 +29,7 @@ func TestPrepareAPTResolverWorkspaceUsesDeploymentStoreAndCleansUp(t *testing.T)
 	}
 	for _, relative := range []string{"lists", "lists/partial", "archives", "archives/partial", "output"} {
 		info, err := os.Stat(filepath.Join(prepared.HostDir, relative))
-		if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		if err != nil || !info.IsDir() || hasPOSIXPermissionBits() && info.Mode().Perm() != 0o700 {
 			t.Fatalf("layout %s: info=%v err=%v", relative, info, err)
 		}
 	}

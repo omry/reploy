@@ -64,6 +64,12 @@ func stagedProviderBuildRuntimeV1(goos string, uid int, gid int) (StagedProvider
 		host = blueprint.HostMacOS
 	case "windows":
 		host = blueprint.HostWindows
+		if uid < 0 {
+			uid = 0
+		}
+		if gid < 0 {
+			gid = 0
+		}
 	default:
 		return StagedProviderBuildRuntimeV1{}, fmt.Errorf("provider build is unsupported on host OS %q", goos)
 	}

@@ -28,7 +28,7 @@ func TestPrepareStagedManagedBindPathsV1CreatesOnlyMissingManagedDirectories(t *
 			t.Fatalf("managed directory %q = %#v, error = %v", path, info, err)
 		}
 	}
-	if info, err := os.Stat(existing); err != nil || info.Mode().Perm() != 0o700 {
+	if info, err := os.Stat(existing); err != nil || hasPOSIXPermissionBits() && info.Mode().Perm() != 0o700 {
 		t.Fatalf("existing directory changed: %#v, error = %v", info, err)
 	}
 	if _, err := os.Lstat(filepath.Join(root, "ignored")); !os.IsNotExist(err) {

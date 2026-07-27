@@ -994,6 +994,7 @@ func TestWorkspaceExpandsCurrentUserHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	m := editorModelForInteraction(t)
 	m.screen = screenWorkspace
 	m.input.SetValue("~/dev")

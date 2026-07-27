@@ -218,7 +218,7 @@ func TestRequireRuntimeReadyChecksHostSourceAfterExactBuildMatch(t *testing.T) {
 			SourceKind: deploy.RuntimeMountSourceDirectory, ReadOnly: true,
 		}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "host-source") || !strings.Contains(err.Error(), "no such file") {
+	if err == nil || !strings.Contains(err.Error(), "host-source") || !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing host source error = %v", err)
 	}
 }

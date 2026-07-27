@@ -32,11 +32,7 @@ type oneShotOutputBackend struct {
 }
 
 func prepareOneShotOutput(outputDir string, outputFile string, runtimeUser RuntimeUserPlan) (*oneShotOutputSession, error) {
-	return prepareOneShotOutputWithBackend(outputDir, outputFile, runtimeUser, oneShotOutputBackend{
-		currentUID: os.Geteuid,
-		currentGID: os.Getegid,
-		chown:      os.Lchown,
-	})
+	return prepareOneShotOutputWithBackend(outputDir, outputFile, runtimeUser, oneShotOutputOwnershipBackend())
 }
 
 func prepareOneShotOutputWithBackend(

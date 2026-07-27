@@ -1802,7 +1802,7 @@ func TestEmbeddedControlRuntimeAcceptsInstalledDeploymentDir(t *testing.T) {
 func TestEmbeddedControlSystemdStatusAndLogsUseSharedRuntimeObservation(t *testing.T) {
 	installDir := filepath.Join(t.TempDir(), "installed")
 	writeCLITestInstalledState(t, installDir, "demo", "demo-service")
-	markCLITestSystemd(t, installDir, "/etc/systemd/system/demo-service.service")
+	markCLITestSystemd(t, installDir, filepath.Join(installDir, "demo-service.service"))
 
 	oldRuntime := dockerRuntime
 	t.Cleanup(func() { dockerRuntime = oldRuntime })
@@ -1831,7 +1831,7 @@ func TestEmbeddedControlSystemLifecycleUsesRuntimeAdmission(t *testing.T) {
 	t.Setenv("REPLOY_COLOR", "never")
 	installDir := filepath.Join(t.TempDir(), "installed")
 	writeCLITestInstalledState(t, installDir, "demo", "demo-service")
-	markCLITestSystemd(t, installDir, "/etc/systemd/system/demo-service.service")
+	markCLITestSystemd(t, installDir, filepath.Join(installDir, "demo-service.service"))
 	helpCode, helpStdout, helpStderr := runCLI("_control", "--dir", installDir, "--script-name", "democtl", "--help")
 	if helpCode != 0 || helpStderr != "" || !strings.Contains(helpStdout, "down/restart --wait") ||
 		!strings.Contains(helpStdout, "start (alias for up)") || !strings.Contains(helpStdout, "stop (alias for down)") {
@@ -1880,7 +1880,7 @@ func TestEmbeddedControlSystemdStopRecoversThroughPublicRuntime(t *testing.T) {
 	requireLinuxHost(t)
 	installDir := filepath.Join(t.TempDir(), "installed")
 	writeCLITestInstalledState(t, installDir, "demo", "demo-service")
-	markCLITestSystemd(t, installDir, "/etc/systemd/system/demo-service.service")
+	markCLITestSystemd(t, installDir, filepath.Join(installDir, "demo-service.service"))
 
 	binDir := t.TempDir()
 	logPath := filepath.Join(t.TempDir(), "systemctl.log")
@@ -3257,6 +3257,7 @@ func TestDirectInstallRejectsRemovedInPlaceOption(t *testing.T) {
 }
 
 func TestDirectInstallPrintsSuccessFromResolvedDefaultTarget(t *testing.T) {
+	installTarget := filepath.Join(t.TempDir(), "installed")
 	oldDirectInstall := dockerDirectInstall
 	oldInstallSuccessLines := dockerInstallSuccessLines
 	t.Cleanup(func() {
@@ -3276,12 +3277,12 @@ func TestDirectInstallPrintsSuccessFromResolvedDefaultTarget(t *testing.T) {
 		}
 		fmt.Fprintln(options.Stdout, "raw lifecycle success")
 		return dockerdeploy.ProviderInstallResultV1{
-			Environment: "demo", TargetDir: "/opt/demo", ControlScript: "demo",
+			Environment: "demo", TargetDir: installTarget, ControlScript: "demo",
 			Service: "demo", Started: true,
 		}, nil
 	}
 	dockerInstallSuccessLines = func(dir string, dockerPreflightTimeout time.Duration) ([]string, error) {
-		if dir != "/opt/demo" {
+		if dir != installTarget {
 			t.Fatalf("success dir = %q, want resolved default target", dir)
 		}
 		if dockerPreflightTimeout != time.Second {
@@ -3296,8 +3297,8 @@ func TestDirectInstallPrintsSuccessFromResolvedDefaultTarget(t *testing.T) {
 	}
 	for _, want := range []string{
 		"[DEPLOYED : demo] installed successfully",
-		"[DEPLOYED : demo] location: /opt/demo",
-		"[DEPLOYED : demo] control: /opt/demo/demo",
+		"[DEPLOYED : demo] location: " + installTarget,
+		"[DEPLOYED : demo] control: " + filepath.Join(installTarget, "demo"),
 		"[DEPLOYED : demo] status: running",
 		"[DEPLOYED : demo] inspector url: http://127.0.0.1:19076",
 	} {
@@ -3622,11 +3623,16 @@ func TestDockerStageEnvironmentBlueprintCreatesAndRestagesCurrentDemo(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 3 ||
+	wantEntryCount := 3
+	if runtime.GOOS == "windows" {
+		wantEntryCount = 4
+	}
+	if len(entries) != wantEntryCount ||
 		entries[0].Name() != dockerdeploy.ReployInternalDir ||
 		!entries[0].IsDir() ||
 		entries[1].Name() != "omegaconf-inspector" ||
-		entries[2].Name() != deploy.PackageOverridesFilename {
+		(runtime.GOOS != "windows" && entries[2].Name() != deploy.PackageOverridesFilename) ||
+		(runtime.GOOS == "windows" && (entries[2].Name() != "omegaconf-inspector.ps1" || entries[3].Name() != deploy.PackageOverridesFilename)) {
 		t.Fatalf("staging entries = %#v", entries)
 	}
 	overrides, found, err := deploy.ReadPackageOverridesV1(deployDir)

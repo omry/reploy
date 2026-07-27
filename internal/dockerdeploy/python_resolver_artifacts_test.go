@@ -38,7 +38,7 @@ func TestPreparePythonResolverArtifactsSeparatesVerifiedInputFromEmptyOutput(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if inputInfo.Mode().Perm() != 0o500 {
+	if hasPOSIXPermissionBits() && inputInfo.Mode().Perm() != 0o500 {
 		t.Fatalf("input mode = %o, want 500", inputInfo.Mode().Perm())
 	}
 	for _, artifact := range []providerstore.ArtifactDescriptor{first, second} {
@@ -108,7 +108,7 @@ func TestStagePythonResolverSourceConstraintsProtectsDeterministicInput(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o500 {
+	if hasPOSIXPermissionBits() && info.Mode().Perm() != 0o500 {
 		t.Fatalf("input mode = %o after constraints, want 500", info.Mode().Perm())
 	}
 }
@@ -208,7 +208,7 @@ func TestPythonResolverArtifactContentVerificationIsDeferredUntilConsumption(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o500 {
+	if hasPOSIXPermissionBits() && info.Mode().Perm() != 0o500 {
 		t.Fatalf("input mode = %o after filtering, want 500", info.Mode().Perm())
 	}
 }

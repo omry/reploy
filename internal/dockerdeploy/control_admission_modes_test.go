@@ -60,6 +60,9 @@ func TestAdmitControlOperationV1DrainCancelsWaitersBeforeQueuingMarker(t *testin
 	if _, removed, err := result.Operation.RemoveControlMarkerV1(result.Marker.ID); err != nil || !removed {
 		t.Fatalf("remove test marker = %t, %v", removed, err)
 	}
+	if err := result.Lease.Release(); err != nil {
+		t.Fatal(err)
+	}
 	if err := result.Operation.Unlock(); err != nil {
 		t.Fatal(err)
 	}

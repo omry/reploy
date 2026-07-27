@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -69,6 +70,9 @@ func TestMaterializationStateManifestBindsExactMixedClosure(t *testing.T) {
 }
 
 func TestMaterializationScriptIsPOSIXShellSyntax(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell syntax validation requires a POSIX host")
+	}
 	command := exec.Command("/bin/sh", "-n")
 	command.Stdin = strings.NewReader(materializationScriptV1)
 	if output, err := command.CombinedOutput(); err != nil {

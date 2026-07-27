@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,9 +14,10 @@ func TestMaterializationBuildCommandUsesOrdinaryDockerBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	root := t.TempDir()
 	plan := MaterializationBuildPlan{
 		BaseReference: "debian@" + string(rendererDigest("a")), Platform: platform,
-		DockerfilePath: "/tmp/reploy/Dockerfile", ContextDir: "/tmp/reploy/context", IIDFile: "/tmp/reploy/result.iid",
+		DockerfilePath: filepath.Join(root, "Dockerfile"), ContextDir: filepath.Join(root, "context"), IIDFile: filepath.Join(root, "result.iid"),
 	}
 	command, err := MaterializationBuildCommand(plan)
 	if err != nil {
@@ -46,9 +48,10 @@ func TestMaterializationBuildCommandBypassesDockerCacheWhenRequested(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	root := t.TempDir()
 	plan := MaterializationBuildPlan{
 		BaseReference: "sha256:" + strings.Repeat("b", 64), Platform: platform,
-		DockerfilePath: "/tmp/Dockerfile", ContextDir: "/tmp/context", IIDFile: "/tmp/result.iid",
+		DockerfilePath: filepath.Join(root, "Dockerfile"), ContextDir: filepath.Join(root, "context"), IIDFile: filepath.Join(root, "result.iid"),
 		NoCache: true,
 	}
 	command, err := MaterializationBuildCommand(plan)
@@ -65,9 +68,10 @@ func TestMaterializationBuildCommandRejectsMutableOrIncompleteInputs(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	root := t.TempDir()
 	valid := MaterializationBuildPlan{
 		BaseReference: "sha256:" + strings.Repeat("b", 64), Platform: platform,
-		DockerfilePath: "/tmp/Dockerfile", ContextDir: "/tmp/context", IIDFile: "/tmp/result.iid",
+		DockerfilePath: filepath.Join(root, "Dockerfile"), ContextDir: filepath.Join(root, "context"), IIDFile: filepath.Join(root, "result.iid"),
 	}
 	tests := []struct {
 		name   string

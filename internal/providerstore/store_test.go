@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -40,7 +41,7 @@ func TestStorePublishesImmutableBlobAtContentPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm()&0o222 != 0 {
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o222 != 0 {
 		t.Fatalf("blob mode = %o", info.Mode().Perm())
 	}
 	if err := store.VerifyArtifact(descriptor); err != nil {

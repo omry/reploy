@@ -3,6 +3,7 @@ package probe
 import (
 	"bytes"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -109,6 +110,9 @@ func TestValidateRequestV1RejectsAmbiguousInspections(t *testing.T) {
 }
 
 func TestMainUsesCanonicalStdinStdoutProtocol(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("probe inspection executes inside Linux containers")
+	}
 	request := RequestV1{Schema: RequestSchemaV1, Inspections: []ExecutableInspectionV1{}}
 	content, err := canonical.Marshal(request)
 	if err != nil {

@@ -30,14 +30,10 @@ func TestPublishBuildCommitsStateAndRemovesPendingLast(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer operation.Unlock()
+	installationState := installedBuildPublicationInstallation(dir)
 	installation := &deploy.DeploymentStateV1{
-		Schema: deploy.DeploymentStateSchemaV1,
-		Installation: deploy.InstallationStateV1{
-			Schema: deploy.InstallationSchemaV1, Status: deploy.InstallationStatusReady,
-			TargetDir: "/opt/demo", Scope: "system", Service: "demo",
-			UnitPath: "/etc/systemd/system/demo.service", InstanceID: "demo-1", ComposeProject: "demo-1",
-			ContainerName: "demo", NetworkName: "demo", Ports: []deploy.InstallationPortBindingV1{},
-		},
+		Schema:       deploy.DeploymentStateSchemaV1,
+		Installation: installationState,
 	}
 	document, platform := testSelectedPlatformDocumentV1(t)
 	if err := operation.CommitStateV1(nil, deploy.StateV1{

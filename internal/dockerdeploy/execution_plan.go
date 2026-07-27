@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -173,7 +174,13 @@ func planDockerMounts(document blueprint.Document, context DockerPlanContext) ([
 		case blueprint.MountManagedBind:
 			planned.SourceKind = deploy.RuntimeMountSourceDirectory
 			planned.Source = joinDockerHostPath(context.Host, root, mount.Source)
-			if context.Host != blueprint.HostWindows {
+			if context.Host == blueprint.HostLinux || context.Host == blueprint.HostMacOS {
+				cleanRoot := path.Clean(root)
+				cleanSource := path.Clean(planned.Source)
+				if cleanSource != cleanRoot && cleanRoot != "/" && !strings.HasPrefix(cleanSource, strings.TrimRight(cleanRoot, "/")+"/") {
+					return nil, fmt.Errorf("managed bind %q escapes deployment root", name)
+				}
+			} else if context.Host != blueprint.HostWindows {
 				relative, err := filepath.Rel(root, planned.Source)
 				if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
 					return nil, fmt.Errorf("managed bind %q escapes deployment root", name)
@@ -213,6 +220,9 @@ func joinDockerHostPath(host blueprint.HostOS, root string, relative string) str
 		root = strings.TrimRight(root, `/\`)
 		relative = strings.ReplaceAll(relative, "/", `\`)
 		return root + `\` + relative
+	}
+	if host == blueprint.HostLinux || host == blueprint.HostMacOS {
+		return path.Join(root, filepath.ToSlash(relative))
 	}
 	return filepath.Join(root, filepath.FromSlash(relative))
 }

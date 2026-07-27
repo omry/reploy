@@ -61,7 +61,7 @@ func TestSetDesiredStateV1CreatesUnbuiltDeployment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if hasPOSIXPermissionBits() && info.Mode().Perm() != 0o600 {
 		t.Fatalf("state mode = %o", info.Mode().Perm())
 	}
 }
@@ -132,7 +132,7 @@ func TestSetDesiredStateV1NoopDoesNotRewriteState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o640 {
+	if hasPOSIXPermissionBits() && info.Mode().Perm() != 0o640 {
 		t.Fatalf("no-op stage replaced state: mode = %o", info.Mode().Perm())
 	}
 }
@@ -205,12 +205,13 @@ func TestSetDesiredStateV1PreservesDeploymentLocalState(t *testing.T) {
 	dir := t.TempDir()
 	statePath := writeOverlayTestState(t, dir)
 	before := readOverlayTestState(t, statePath)
+	targetDir := filepath.Join(dir, "installed")
 	before.Deployment = &DeploymentStateV1{
 		Schema: DeploymentStateSchemaV1,
 		Installation: InstallationStateV1{
 			Schema: InstallationSchemaV1, Status: InstallationStatusReady,
-			TargetDir: "/opt/demo", Scope: "system", Service: "demo",
-			UnitPath: "/etc/systemd/system/demo.service", InstanceID: "demo-1", ComposeProject: "demo-1",
+			TargetDir: targetDir, Scope: "system", Service: "demo",
+			UnitPath: filepath.Join(targetDir, "demo.service"), InstanceID: "demo-1", ComposeProject: "demo-1",
 			ContainerName: "demo", NetworkName: "demo", Ports: []InstallationPortBindingV1{},
 		},
 	}
@@ -403,7 +404,7 @@ func TestSetDesiredPlatformV1NoopDoesNotRewriteState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o640 {
+	if hasPOSIXPermissionBits() && info.Mode().Perm() != 0o640 {
 		t.Fatalf("no-op platform update replaced state: mode = %o", info.Mode().Perm())
 	}
 }

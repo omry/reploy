@@ -3,10 +3,14 @@ package dockerdeploy
 import (
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 )
 
 func TestPlanProviderInstallHostCommandsV1SystemdConfiguresThenRestarts(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("systemd host command planning requires a POSIX host")
+	}
 	destinationDir := t.TempDir()
 	references := fixedPublicationReferences(t, destinationDir, 0xd1)
 	plan := providerInstallRunPlanFixture(destinationDir, references)
@@ -35,8 +39,9 @@ func TestPlanProviderInstallHostCommandsV1DockerManagedUsesExactInstalledInputs(
 	plan.Backend = installBackendDockerManaged
 	plan.Installation.Scope = "user"
 	plan.Installation.UnitPath = ""
+	dockerPath := filepath.Join(t.TempDir(), "docker")
 
-	commands, err := planProviderInstallHostCommandsV1(plan, "/opt/docker/bin/docker", "")
+	commands, err := planProviderInstallHostCommandsV1(plan, dockerPath, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +49,7 @@ func TestPlanProviderInstallHostCommandsV1DockerManagedUsesExactInstalledInputs(
 		t.Fatalf("managed configure commands = %#v", commands.Configure)
 	}
 	want := CommandSpec{
-		Name: "/opt/docker/bin/docker", Dir: destinationDir,
+		Name: dockerPath, Dir: destinationDir,
 		Args: []string{
 			"compose", "--project-name", "demo", "--project-directory", destinationDir,
 			"--env-file", filepath.Join(destinationDir, DockerEnvFileName),

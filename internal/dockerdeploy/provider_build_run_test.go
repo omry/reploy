@@ -52,7 +52,7 @@ func TestRunProviderBuildV1HoldsOneLockAcrossPreparationAndExecution(t *testing.
 			if err := input.Operation.RequireHeld(); err != nil {
 				t.Fatal(err)
 			}
-			if input.Environment != document.Environment.ID || input.DeploymentDir != dir || !input.NoCache || input.Store.Root() != dir+"/.reploy/provider-store" || len(input.Sources) != 0 || input.BaseImage != baseOverride {
+			if input.Environment != document.Environment.ID || input.DeploymentDir != dir || !input.NoCache || input.Store.Root() != filepath.Join(dir, ".reploy", "provider-store") || len(input.Sources) != 0 || input.BaseImage != baseOverride {
 				t.Fatalf("preparation input = %#v", input)
 			}
 			if input.DockerPlan.EnvironmentID != "demo" || input.DockerPlan.Phase != blueprint.PhaseStaged || input.DockerPlan.Image != providerBuildPlanImage || input.DockerPlan.Scope != nil || input.DockerPlan.RuntimeUser.UID != 1001 || input.DockerPlan.RuntimeUser.GID != 1002 {
@@ -673,6 +673,10 @@ func TestStagedProviderBuildRuntimeV1MapsSupportedHosts(t *testing.T) {
 				t.Fatalf("runtime = %#v, want %#v", got, want)
 			}
 		})
+	}
+	got, err := stagedProviderBuildRuntimeV1("windows", -1, -1)
+	if err != nil || got.UID != 0 || got.GID != 0 {
+		t.Fatalf("Windows runtime identity = %#v, %v", got, err)
 	}
 	if _, err := stagedProviderBuildRuntimeV1("plan9", 1, 2); err == nil || !strings.Contains(err.Error(), "unsupported") {
 		t.Fatalf("error = %v", err)

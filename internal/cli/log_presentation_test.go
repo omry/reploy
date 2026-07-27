@@ -39,11 +39,17 @@ func TestRuntimeTimestampWriterKeepsPlainOutputByteStable(t *testing.T) {
 
 func TestRuntimeLogColorPolicyHonorsTerminalEnvironment(t *testing.T) {
 	interactive := true
+	t.Setenv("CI", "")
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("NO_COLOR", "")
 	if !runtimeLogColorEnabled(&bytes.Buffer{}, &interactive) {
 		t.Fatal("interactive color-capable output did not enable color")
 	}
+	t.Setenv("CI", "1")
+	if runtimeLogColorEnabled(&bytes.Buffer{}, &interactive) {
+		t.Fatal("CI did not disable log timestamp color")
+	}
+	t.Setenv("CI", "")
 	t.Setenv("NO_COLOR", "1")
 	if runtimeLogColorEnabled(&bytes.Buffer{}, &interactive) {
 		t.Fatal("NO_COLOR did not disable log timestamp color")

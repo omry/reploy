@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -30,6 +31,7 @@ func TestStateV1CanonicalRoundTrip(t *testing.T) {
 }
 
 func TestStateV1SeparatesCanonicalInstallationFromEnvironmentInputs(t *testing.T) {
+	targetDir := filepath.Join(t.TempDir(), "installed")
 	state := StateV1{
 		Schema: StateSchemaV1, Blueprint: stateV1TestBlueprint(t), Platform: stateV1TestPlatform(t),
 		Overlay: EmptyRequestOverlayV1(),
@@ -37,8 +39,8 @@ func TestStateV1SeparatesCanonicalInstallationFromEnvironmentInputs(t *testing.T
 			Schema: DeploymentStateSchemaV1,
 			Installation: InstallationStateV1{
 				Schema: InstallationSchemaV1, Status: InstallationStatusReady,
-				TargetDir: "/opt/demo", Scope: "system", Service: "demo",
-				UnitPath: "/etc/systemd/system/demo.service", InstanceID: "demo-1", ComposeProject: "demo-1",
+				TargetDir: targetDir, Scope: "system", Service: "demo",
+				UnitPath: filepath.Join(targetDir, "demo.service"), InstanceID: "demo-1", ComposeProject: "demo-1",
 				ContainerName: "demo", NetworkName: "demo", Ports: []InstallationPortBindingV1{
 					{Name: "admin", HostBind: "127.0.0.1", HostPort: "19001", ContainerPort: "9001"},
 					{Name: "http", HostBind: "127.0.0.1", HostPort: "19000", ContainerPort: "9000"},
@@ -54,7 +56,7 @@ func TestStateV1SeparatesCanonicalInstallationFromEnvironmentInputs(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decoded.Deployment == nil || decoded.Deployment.Installation.TargetDir != "/opt/demo" {
+	if decoded.Deployment == nil || decoded.Deployment.Installation.TargetDir != targetDir {
 		t.Fatalf("decoded deployment = %#v", decoded.Deployment)
 	}
 

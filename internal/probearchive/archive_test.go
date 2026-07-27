@@ -35,7 +35,7 @@ func TestAppendAndVerifyExactProbeMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o755 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o755 {
 		t.Fatalf("executable mode = %04o", info.Mode().Perm())
 	}
 	content, err := os.ReadFile(executable)
