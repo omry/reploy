@@ -1,0 +1,2 @@
+kind: Fixed
+body: Allow `stage --update --force` to recover recognized incompatible development staging state from its retained blueprint source.

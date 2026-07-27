@@ -1,6 +1,9 @@
 package deploy
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseFilePackRef(t *testing.T) {
 	ref, err := ParsePackRef("file:./demo.blueprint.yaml")
@@ -95,19 +98,9 @@ func TestParsePyPIURLPackRefRequiresExplicitBlueprintPath(t *testing.T) {
 	}
 }
 
-func TestParseSourcePackRefWithExplicitSubdir(t *testing.T) {
-	ref, err := ParsePackRef("source:./demo-suite#demo_suite/reploy")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ref.Scheme != "source" || ref.Source != "./demo-suite" {
-		t.Fatalf("unexpected ref: %#v", ref)
-	}
-	if ref.Subdir != "demo_suite/reploy" {
-		t.Fatalf("subdir = %q", ref.Subdir)
-	}
-	if ref.IsPinned {
-		t.Fatalf("source refs should not be considered reproducibly pinned")
+func TestParsePackRefRejectsRemovedSourceScheme(t *testing.T) {
+	if _, err := ParsePackRef("source:./demo-suite#demo_suite/reploy"); err == nil || !strings.Contains(err.Error(), "unsupported blueprint reference scheme: source") {
+		t.Fatalf("removed source scheme error = %v", err)
 	}
 }
 

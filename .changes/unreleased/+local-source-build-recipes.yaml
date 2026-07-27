@@ -1,0 +1,2 @@
+kind: Added
+body: Local Python overrides can declare strict project-owned build recipes and portable Java tooling without adding build tools to the workload image.

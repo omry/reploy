@@ -1,0 +1,2 @@
+kind: Added
+body: Allow normalized absolute runtime mount targets, default omitted targets to `/mnt/<mount-name>`, and reject reserved or shadowing destinations.

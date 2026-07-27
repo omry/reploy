@@ -1,0 +1,2 @@
+kind: Fixed
+body: Allow build publication to retire an exact Reploy-owned image tag while an existing container still references its image.

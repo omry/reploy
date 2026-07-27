@@ -1,0 +1,2 @@
+kind: Changed
+body: Simplify the OmegaConf Inspector demo to deployment-focused commands and document its staged and installed control workflow.

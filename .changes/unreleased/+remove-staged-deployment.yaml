@@ -1,0 +1,2 @@
+kind: Added
+body: Add `stage --remove` to safely remove a staging directory and its verified Docker workload and image resources.

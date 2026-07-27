@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-14
+updated: 2026-07-27
 summary: Active planning surface for Reploy design and implementation gaps.
 ---
 
@@ -31,20 +31,67 @@ This file is the day-to-day queue for design and implementation gaps.
 
 ## Now
 
-- [ ] `P1` Redesign health checks and public URL handling.
-      Make service readiness an app-facing contract instead of a Reploy
-      environment-variable protocol leaked into blueprints. Acceptance checks:
-      define the app-owned health/readiness shape; unify or clearly separate
-      install and runtime health hook semantics; remove ignored or misleading
-      fields such as port-level `public_scheme`; preserve useful startup error
-      diagnostics; document the supported blueprint shape and minimum Reploy
-      version; and update the OmegaConf Inspector example and tests.
+No active items.
 
 ## Pre-release
 
-No active pre-release items.
+- [ ] `P1` Complete the remaining local Docker cleanup.
+      After the active OmegaConf staging work is no longer needed, remove its
+      preserved stopped container and superseded image, then review the
+      remaining dangling images, build cache, and unused volumes. Delete only
+      resources whose Reploy ownership is established, avoid broad pruning,
+      and finish with a fresh Docker resource and disk-usage inventory.
+
+- [ ] `P1` Make Docker lifecycle operations crash-consistent and self-reconciling.
+      Record resource-creation intent durably before Docker side effects and
+      use deterministic ownership metadata so interrupted builds, publication,
+      runtime control, and removal can be resumed or rolled back safely. At the
+      start of the next scoped operation, reconcile abandoned temporary tags,
+      candidate images, containers, networks, and removal tombstones while
+      preserving current generations and intentional caches. Keep automatic
+      cleanup idempotent and deployment-scoped; provide an explicit diagnostic
+      or cleanup path for resources whose staging directory no longer exists.
+
+- [ ] `P1` Perform a full Reploy UX review.
+      Review the complete user journey across discovery, staging, development
+      overrides, validation, builds, runtime control, installation, updates,
+      diagnostics, recovery, and removal. Exercise interactive, verbose,
+      redirected, and dumb-terminal behavior; identify unclear concepts,
+      inconsistent terminology, missing context or next actions, unnecessary
+      friction, and backend details leaking through the public surface; record
+      concrete findings and prioritize follow-up slices before implementation.
 
 ## Post-v1
+
+- [ ] `P2` Generate a maintained official base-image index.
+      Add a server-side tool that clones `docker-library/official-images` and
+      produces one deterministic, versioned index file containing the official
+      operating-system image names, maintained tag groups, and supported
+      platforms. Run it periodically in GitHub Actions, update the published
+      file only when its semantic content changes, and retain upstream source
+      provenance so generated changes are reviewable.
+
+- [ ] `P2` Add cached official base-image discovery.
+      Let the base-image override editor search the generated official-image
+      index instead of querying Docker Hub or the local Docker daemon. Fetch
+      and cache the index on first use, periodically probe for updates without
+      blocking ordinary editor use, retain a usable cached copy across
+      transient failures, and filter results against the staged platform.
+
+- [ ] `P2` Design general-purpose local-source build environments.
+      Extend beyond the implemented fixed Python build recipes without
+      weakening their declared protocol boundary. Define supported providers
+      and build protocols, command representation if arbitrary commands are
+      introduced, build dependencies, execution location, artifact contracts,
+      isolation, network policy, access to secrets or host files, and target
+      platform behavior.
+
+- [ ] `P2` Design shared and cross-run build caching.
+      Decide whether verified outputs or intermediate caches survive across
+      runs; bind reuse to source, recipe, toolchain, platform, settings, and
+      output integrity; define cache scope, permissions, ownership, and cleanup;
+      and make caches inspectable, bypassable, invalidatable, and recoverable.
+      Keep this separate from deployment-local provider artifact reuse.
 
 - [ ] `P2` Design portable environment export and import.
       Separate exact offline transfer from instruction-based rebuilds and model

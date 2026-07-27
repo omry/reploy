@@ -1,0 +1,2 @@
+kind: Fixed
+body: Avoid a duplicate validation build in interactive mode, show lock-independent inline phase and provider-operation progress for longer builds, skip the TUI for fast completed builds, and report the usable generation tag with concise build outcomes.

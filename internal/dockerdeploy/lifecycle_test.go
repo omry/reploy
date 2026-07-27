@@ -11,69 +11,7 @@ import (
 	"time"
 
 	"github.com/omry/reploy/internal/blueprint"
-	"github.com/omry/reploy/internal/providers"
 )
-
-func lifecycleTestInputs() (blueprint.Document, DockerExecutionPlan, map[string]providers.ExecutableOutput) {
-	document := commandTestDocument()
-	document.Environment.Workload = &blueprint.Workload{
-		Command: "serve",
-		Runtime: blueprint.RuntimeEvents{
-			BeforeStart: []blueprint.Step{{Actions: []blueprint.Action{{Environment: []string{"config", "show", "--", "offline"}}}}},
-			AfterStart:  []blueprint.Step{{Requires: blueprint.Requirements{Endpoints: []string{"http"}}, Actions: []blueprint.Action{{Environment: []string{"serve", "--verbose"}}}}},
-			BeforeStop:  []blueprint.Step{{Actions: []blueprint.Action{{Environment: []string{"config", "show"}}}}},
-		},
-	}
-	document.Environment.Install.AfterInstall = []blueprint.Step{{Actions: []blueprint.Action{{Environment: []string{"config", "show", "--", "installed"}}}}}
-	document.Environment.Install.Success.Lines = []string{"installed {{ environment.id }} at {{ reploy.workload.endpoints.http.publish.address }}:{{ reploy.workload.endpoints.http.publish.port }}"}
-	document.Environment.ID = "demo"
-	readiness := &blueprint.Readiness{Path: "/ready", Timeout: time.Second, Interval: time.Millisecond}
-	plan := DockerExecutionPlan{Workload: &WorkloadExecutionPlan{Endpoints: map[string]EndpointExecutionPlan{"http": {Scheme: "http", ProbeHost: "127.0.0.1", PublishAddress: "127.0.0.1", PublishedPort: 8080, Readiness: readiness}}}}
-	outputs := map[string]providers.ExecutableOutput{"server": {Component: "application", Binary: "demo", ImagePath: "/opt/demo"}}
-	return document, plan, outputs
-}
-
-func TestPlanInstallLifecycleOrdersEvents(t *testing.T) {
-	document, dockerPlan, outputs := lifecycleTestInputs()
-	plan, err := PlanInstallLifecycle(document, dockerPlan, outputs, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	kinds := make([]LifecycleOperationKind, len(plan.Operations))
-	for index, operation := range plan.Operations {
-		kinds[index] = operation.Kind
-	}
-	want := []LifecycleOperationKind{LifecycleMaterialize, LifecycleCommand, LifecycleCommand, LifecycleStart, LifecycleReadiness, LifecycleCommand, LifecycleSuccess}
-	if !reflect.DeepEqual(kinds, want) {
-		t.Fatalf("kinds = %#v", kinds)
-	}
-	if got := plan.Operations[len(plan.Operations)-1].Lines[0]; got != "installed demo at 127.0.0.1:8080" {
-		t.Fatalf("success line = %q", got)
-	}
-}
-
-func TestPlanRestartLifecycleStopsBeforeStarting(t *testing.T) {
-	document, dockerPlan, outputs := lifecycleTestInputs()
-	plan, err := PlanRestartLifecycle(document, dockerPlan, outputs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	kinds := make([]LifecycleOperationKind, len(plan.Operations))
-	for index, operation := range plan.Operations {
-		kinds[index] = operation.Kind
-	}
-	want := []LifecycleOperationKind{
-		LifecycleCommand,
-		LifecycleStop,
-		LifecycleCommand,
-		LifecycleStart,
-		LifecycleReadiness,
-		LifecycleCommand,
-	}
-	if !reflect.DeepEqual(kinds, want) {
-		t.Fatalf("kinds = %#v, want %#v", kinds, want)
-	}
-}
 
 func TestExecuteLifecycleStopsAtFirstFailure(t *testing.T) {
 	called := []string{}

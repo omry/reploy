@@ -1,0 +1,2 @@
+kind: Fixed
+body: Show local package paths and PyPI version constraints instead of reducing package sources to opaque defaults.

@@ -1,0 +1,2 @@
+kind: Added
+body: Add the allow_concurrent blueprint policy for app commands and shell sessions.

@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/omry/reploy/internal/blueprint"
-	"github.com/omry/reploy/internal/providers"
 )
 
 type LifecycleOperationKind string
@@ -31,37 +30,17 @@ type LifecyclePlan struct {
 	Operations []LifecycleOperation
 }
 
-func PlanInstallLifecycle(document blueprint.Document, dockerPlan DockerExecutionPlan, outputs map[string]providers.ExecutableOutput, start bool) (LifecyclePlan, error) {
-	plan := LifecyclePlan{Operations: []LifecycleOperation{{Kind: LifecycleMaterialize, Event: "install"}}}
-	if err := appendLifecycleSteps(&plan, "after_install", document.Environment.Install.AfterInstall, document, dockerPlan, outputs); err != nil {
-		return LifecyclePlan{}, err
-	}
-	if start {
-		if err := appendStartLifecycle(&plan, document, dockerPlan, outputs); err != nil {
-			return LifecyclePlan{}, err
-		}
-	}
-	if len(document.Environment.Install.Success.Lines) > 0 {
-		lines, err := resolveInstallSuccessLines(document, dockerPlan)
-		if err != nil {
-			return LifecyclePlan{}, fmt.Errorf("resolve install success lines: %w", err)
-		}
-		plan.Operations = append(plan.Operations, LifecycleOperation{Kind: LifecycleSuccess, Event: "success", Lines: lines})
-	}
-	return plan, nil
-}
-
 func resolveInstallSuccessLines(document blueprint.Document, plan DockerExecutionPlan) ([]string, error) {
 	return resolveEnvironmentOperationStrings(document, plan, document.Environment.Install.Success.Lines)
 }
 
 func resolveEnvironmentOperationStrings(document blueprint.Document, plan DockerExecutionPlan, values []string) ([]string, error) {
-	paths := map[string]any{}
-	for name, item := range document.Environment.Paths {
-		paths[name] = map[string]any{
-			"container": item.Container,
-			"writable":  item.Writable,
-			"update":    string(item.Update),
+	mounts := map[string]any{}
+	for name, item := range document.Environment.Mounts {
+		mounts[name] = map[string]any{
+			"target":        item.Target,
+			"writable":      item.Writable,
+			"update_policy": string(item.UpdatePolicy),
 		}
 	}
 	environmentEndpoints := map[string]any{}
@@ -80,7 +59,7 @@ func resolveEnvironmentOperationStrings(document blueprint.Document, plan Docker
 		"blueprint": map[string]any{"schema": document.Blueprint.Schema, "version": document.Blueprint.Version},
 		"environment": map[string]any{
 			"id":       document.Environment.ID,
-			"paths":    paths,
+			"mounts":   mounts,
 			"workload": map[string]any{"endpoints": environmentEndpoints},
 		},
 		"docker":          map[string]any{"image": document.Docker.Image},
@@ -89,53 +68,17 @@ func resolveEnvironmentOperationStrings(document blueprint.Document, plan Docker
 	return blueprint.ResolveOperationStrings(values, document.Environment.Vars, plan.Phase, plan.Scope, roots)
 }
 
-func PlanStartLifecycle(document blueprint.Document, dockerPlan DockerExecutionPlan, outputs map[string]providers.ExecutableOutput) (LifecyclePlan, error) {
-	plan := LifecyclePlan{}
-	if err := appendStartLifecycle(&plan, document, dockerPlan, outputs); err != nil {
-		return LifecyclePlan{}, err
+func appendLifecycleStepsWithResolver(
+	plan *LifecyclePlan,
+	event string,
+	steps []blueprint.Step,
+	document blueprint.Document,
+	dockerPlan DockerExecutionPlan,
+	resolve func(string, []string) (ResolvedEnvironmentCommand, error),
+) error {
+	if resolve == nil {
+		return fmt.Errorf("%s lifecycle command resolver is unavailable", event)
 	}
-	return plan, nil
-}
-
-func appendStartLifecycle(plan *LifecyclePlan, document blueprint.Document, dockerPlan DockerExecutionPlan, outputs map[string]providers.ExecutableOutput) error {
-	if document.Environment.Workload == nil || dockerPlan.Workload == nil {
-		return fmt.Errorf("environment has no workload to start")
-	}
-	if err := appendLifecycleSteps(plan, "before_start", document.Environment.Workload.Runtime.BeforeStart, document, dockerPlan, outputs); err != nil {
-		return err
-	}
-	plan.Operations = append(plan.Operations, LifecycleOperation{Kind: LifecycleStart, Event: "start"})
-	return appendLifecycleSteps(plan, "after_start", document.Environment.Workload.Runtime.AfterStart, document, dockerPlan, outputs)
-}
-
-func PlanStopLifecycle(document blueprint.Document, dockerPlan DockerExecutionPlan, outputs map[string]providers.ExecutableOutput) (LifecyclePlan, error) {
-	if document.Environment.Workload == nil || dockerPlan.Workload == nil {
-		return LifecyclePlan{}, fmt.Errorf("environment has no workload to stop")
-	}
-	plan := LifecyclePlan{}
-	if err := appendLifecycleSteps(&plan, "before_stop", document.Environment.Workload.Runtime.BeforeStop, document, dockerPlan, outputs); err != nil {
-		return LifecyclePlan{}, err
-	}
-	plan.Operations = append(plan.Operations, LifecycleOperation{Kind: LifecycleStop, Event: "stop"})
-	if err := appendLifecycleSteps(&plan, "after_stop", document.Environment.Workload.Runtime.AfterStop, document, dockerPlan, outputs); err != nil {
-		return LifecyclePlan{}, err
-	}
-	return plan, nil
-}
-
-func PlanRestartLifecycle(document blueprint.Document, dockerPlan DockerExecutionPlan, outputs map[string]providers.ExecutableOutput) (LifecyclePlan, error) {
-	stop, err := PlanStopLifecycle(document, dockerPlan, outputs)
-	if err != nil {
-		return LifecyclePlan{}, err
-	}
-	start, err := PlanStartLifecycle(document, dockerPlan, outputs)
-	if err != nil {
-		return LifecyclePlan{}, err
-	}
-	return LifecyclePlan{Operations: append(stop.Operations, start.Operations...)}, nil
-}
-
-func appendLifecycleSteps(plan *LifecyclePlan, event string, steps []blueprint.Step, document blueprint.Document, dockerPlan DockerExecutionPlan, outputs map[string]providers.ExecutableOutput) error {
 	for stepIndex, step := range steps {
 		for _, endpointName := range step.Requires.Endpoints {
 			if dockerPlan.Workload == nil {
@@ -156,7 +99,7 @@ func appendLifecycleSteps(plan *LifecyclePlan, event string, steps []blueprint.S
 			if err != nil {
 				return fmt.Errorf("%s step %d action %d: %w", event, stepIndex, actionIndex, err)
 			}
-			command, err := ResolveEnvironmentCommandForPlan(document, outputs, dockerPlan, name, forwarded)
+			command, err := resolve(name, forwarded)
 			if err != nil {
 				return fmt.Errorf("%s step %d action %d: %w", event, stepIndex, actionIndex, err)
 			}

@@ -57,8 +57,8 @@ func probeBuildKitCapabilities(ctx context.Context, run dockerOutputRunner) (Bui
 	if capabilities.ServerOS != "linux" {
 		return BuildKitCapabilities{}, fmt.Errorf("generated images require a Linux Docker daemon; context %q reports %q", capabilities.Context, capabilities.ServerOS)
 	}
-	if !minimumDockerVersion(capabilities.ServerVersion, 20, 10) {
-		return BuildKitCapabilities{}, fmt.Errorf("generated images require Docker 20.10 or newer; daemon reports %s", capabilities.ServerVersion)
+	if !minimumDockerVersion(capabilities.ServerVersion, 24, 0) {
+		return BuildKitCapabilities{}, fmt.Errorf("generated images require Docker Engine 24.0 or newer; daemon reports %s", capabilities.ServerVersion)
 	}
 	return capabilities, nil
 }

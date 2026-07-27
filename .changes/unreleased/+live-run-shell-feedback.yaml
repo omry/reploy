@@ -1,0 +1,2 @@
+kind: Changed
+body: Explain queued runtime waits before blocking, add a read-only inspection shell with writable private home, and report intentionally stopped shells without leaking Docker exit status 137.

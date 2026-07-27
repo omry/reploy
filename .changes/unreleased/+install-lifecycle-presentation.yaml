@@ -1,0 +1,2 @@
+kind: Changed
+body: Present install, update, and uninstall progress in Reploy terms, hide successful Docker lifecycle chatter, and report preserved, replaced, reused, removed, and retained resources.

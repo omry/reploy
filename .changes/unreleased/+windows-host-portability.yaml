@@ -1,0 +1,2 @@
+kind: Fixed
+body: Make Windows host builds, installation state, private workload environment files, and staged deployment cleanup honor native path, ACL, identity, and file-handle semantics.

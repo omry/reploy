@@ -48,7 +48,7 @@ nox -s release-build-smoke
 nox -s docs-build
 ```
 
-For the full local CLI integration test, including Docker-backed bundle checks
+For the full local CLI integration test, including Docker-backed environment build checks
 and the live staging runtime lifecycle (`up`, `status`, `logs`, `test`, and
 `down`), run:
 
@@ -126,14 +126,6 @@ returned after interrupt in 0.31 seconds with exit code 130, Docker Compose had
 already removed the one-off container before targeted cleanup, and the final
 summary reported `containers_before=0 containers_after=0 networks_before=1
 networks_after=1`.
-
-For a faster CLI smoke loop that skips the Docker-backed bundle build/check
-but still runs preinstall and install dry-run checks, pass the smoke helper's
-plan-only flag through nox:
-
-```bash
-nox -s cli-smoke -- --plan-only
-```
 
 For host CLI checks that may use Docker when it is available but should keep
 going without it, use:

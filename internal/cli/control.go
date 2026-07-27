@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -8,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/dockerdeploy"
 )
 
@@ -27,15 +27,24 @@ func runEmbeddedControl(args []string, stdout io.Writer, stderr io.Writer, globa
 		printEmbeddedControlUsage(stderr, embeddedControlUsageContext{ScriptName: "reployctl"})
 		return 2
 	}
-	state, err := dockerdeploy.LoadState(options.Dir)
+	metadata, found, err := dockerdeploy.LoadEmbeddedControlMetadataV1(context.Background(), options.Dir)
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy control error: %v\n", err)
 		return 1
 	}
+	if !found {
+		fmt.Fprintln(stderr, "reploy control error: staged or installed state-v1 deployment metadata is missing")
+		return 1
+	}
+	scriptName := options.ScriptName
+	if strings.TrimSpace(scriptName) == "" || scriptName == "reployctl" {
+		scriptName = embeddedControlDefaultString(metadata.ControlScript, "reployctl")
+	}
 	context := embeddedControlUsageContext{
-		Dir:        options.Dir,
-		ScriptName: embeddedControlDefaultString(options.ScriptName, controlScriptNameForState(state)),
-		State:      state,
+		Dir:         options.Dir,
+		ScriptName:  scriptName,
+		SystemdUnit: metadata.SystemdUnit,
+		Deployed:    metadata.Deployed,
 	}
 	if len(options.Command) == 0 || isHelpArg(options.Command[0]) {
 		printEmbeddedControlUsage(stdout, context)
@@ -45,9 +54,9 @@ func runEmbeddedControl(args []string, stdout io.Writer, stderr io.Writer, globa
 	rest := options.Command[1:]
 	switch cmd {
 	case "up", "start":
-		return runEmbeddedControlRuntime(context, "up", rest, stdout, stderr, globalOptions)
+		return runEmbeddedControlRuntime(context, cmd, rest, stdout, stderr, globalOptions)
 	case "down", "stop":
-		return runEmbeddedControlRuntime(context, "down", rest, stdout, stderr, globalOptions)
+		return runEmbeddedControlRuntime(context, cmd, rest, stdout, stderr, globalOptions)
 	case "restart":
 		return runEmbeddedControlRuntime(context, "restart", rest, stdout, stderr, globalOptions)
 	case "status", "ps":
@@ -69,17 +78,49 @@ func runEmbeddedControl(args []string, stdout io.Writer, stderr io.Writer, globa
 		}
 		return runEmbeddedControlHealth(context, stdout, stderr)
 	case "enable", "disable":
-		if embeddedControlUsesSystemd(context.State) {
+		if embeddedControlContextUsesSystemd(context) {
 			return runEmbeddedControlSystemd(context, cmd, rest, stdout, stderr)
 		}
 	}
-	if embeddedControlMatchesAppCommand(context.Dir, options.Command) {
-		appArgs := append([]string{"--deployed-only", "--dir", context.Dir}, options.Command...)
+	appArgs, matched, appErr := embeddedControlAppArguments(context.Dir, options.Command, context.Deployed)
+	if appErr != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", context.ScriptName, appErr)
+		return 2
+	}
+	if matched {
 		return runEmbeddedControlAppCommand(context, appArgs, stdout, stderr, globalOptions)
 	}
 	printEmbeddedControlUsage(stderr, context)
 	fmt.Fprintf(stderr, "unknown command: %s\n", cmd)
 	return 2
+}
+
+func embeddedControlAppArguments(dir string, args []string, deployedOnly bool) ([]string, bool, error) {
+	parsed, err := parseDockerAppOptions(args)
+	if err != nil {
+		if appOptionWasPresent(args, "--output-dir") || appOptionWasPresent(args, "--output-file") {
+			return nil, false, err
+		}
+		return nil, false, nil
+	}
+	if parsed.Commands || parsed.Format != "" || parsed.DirExplicit || parsed.DeployedOnly || len(parsed.CommandArgs) == 0 || !embeddedControlMatchesAppCommand(dir, parsed.CommandArgs, deployedOnly) {
+		return nil, false, nil
+	}
+	result := []string{"--dir", dir}
+	if deployedOnly {
+		result = append([]string{"--deployed-only"}, result...)
+	}
+	if parsed.OutputDir != "" {
+		result = append(result, "--output-dir", parsed.OutputDir)
+	}
+	if parsed.OutputFile != "" {
+		result = append(result, "--output-file", parsed.OutputFile)
+	}
+	if parsed.Wait {
+		result = append(result, "--wait")
+	}
+	result = append(result, parsed.CommandArgs...)
+	return result, true, nil
 }
 
 func parseEmbeddedControlOptions(args []string) (embeddedControlOptions, error) {
@@ -125,9 +166,10 @@ func parseEmbeddedControlOptions(args []string) (embeddedControlOptions, error) 
 }
 
 type embeddedControlUsageContext struct {
-	Dir        string
-	ScriptName string
-	State      deploy.DeploymentState
+	Dir         string
+	ScriptName  string
+	SystemdUnit string
+	Deployed    bool
 }
 
 func printEmbeddedControlUsage(output io.Writer, context embeddedControlUsageContext) {
@@ -137,31 +179,46 @@ func printEmbeddedControlUsage(output io.Writer, context embeddedControlUsageCon
 	for _, command := range []string{"up", "down", "restart", "status", "logs", "health"} {
 		fmt.Fprintf(output, "  %s\n", command)
 	}
-	if embeddedControlUsesSystemd(context.State) {
+	fmt.Fprintln(output, "  start (alias for up)")
+	fmt.Fprintln(output, "  stop (alias for down)")
+	if embeddedControlContextUsesSystemd(context) {
 		fmt.Fprintln(output, "  enable")
 		fmt.Fprintln(output, "  disable")
 	}
+	hasAppCommands := false
 	if context.Dir != "" {
-		if result, err := dockerdeploy.AppCommandList(dockerdeploy.AppCommandListOptions{Dir: context.Dir, DeployedOnly: true}); err == nil {
+		if result, err := dockerdeploy.AppCommandList(dockerdeploy.AppCommandListOptions{Dir: context.Dir, DeployedOnly: context.Deployed}); err == nil {
 			for _, command := range result.Commands {
+				hasAppCommands = true
 				fmt.Fprintf(output, "  %s\n", strings.Join(command.Trigger, " "))
 			}
 		}
 	}
 	fmt.Fprintln(output, "  help")
+	if hasAppCommands {
+		fmt.Fprintln(output, "app command options:")
+		fmt.Fprintln(output, "  --output-dir DIR")
+		fmt.Fprintln(output, "  --output-file FILE")
+		fmt.Fprintln(output, "  --wait")
+	}
+	fmt.Fprintln(output, "lifecycle options:")
+	fmt.Fprintln(output, "  up --wait|--drain|--force")
+	fmt.Fprintln(output, "  down/restart --wait")
 }
 
 func printEmbeddedControlLogsHelp(output io.Writer, context embeddedControlUsageContext) {
 	scriptName := embeddedControlDefaultString(context.ScriptName, "reployctl")
 	fmt.Fprintf(output, "Usage: %s logs [OPTIONS]\n", scriptName)
 	fmt.Fprintln(output)
-	fmt.Fprintln(output, "Show deployed service logs with timestamps.")
+	fmt.Fprintln(output, "Show workload logs.")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Options:")
 	fmt.Fprintf(output, "  --tail N     Show only the last N log lines (default: %s)\n", embeddedControlDefaultLogsTail)
 	fmt.Fprintln(output, "  --tail all   Show the complete available log")
 	fmt.Fprintln(output, "  --follow, -f")
 	fmt.Fprintln(output, "              Follow logs instead of exiting after current output")
+	fmt.Fprintln(output, "  --timestamps")
+	fmt.Fprintln(output, "              Include the runtime capture timestamp")
 	fmt.Fprintln(output, "  -h, --help   Show logs help")
 }
 
@@ -175,18 +232,6 @@ func runEmbeddedControlRuntime(
 ) int {
 	if action == "logs" {
 		args = embeddedControlLogsArgs(args)
-	}
-	if embeddedControlUsesSystemd(context.State) {
-		switch action {
-		case "up":
-			return runEmbeddedControlSystemd(context, "start", args, stdout, stderr)
-		case "down":
-			return runEmbeddedControlSystemd(context, "stop", args, stdout, stderr)
-		case "restart", "status":
-			return runEmbeddedControlSystemd(context, action, args, stdout, stderr)
-		case "logs":
-			return runEmbeddedControlJournal(context, args, stdout, stderr)
-		}
 	}
 	runtimeArgs := append([]string{}, args...)
 	runtimeArgs = append(runtimeArgs, "--dir", context.Dir)
@@ -250,7 +295,8 @@ func embeddedControlLogsWithoutTailAll(args []string) ([]string, bool) {
 }
 
 func runEmbeddedControlHealth(context embeddedControlUsageContext, stdout io.Writer, stderr io.Writer) int {
-	if err := dockerdeploy.ControlHealth(dockerdeploy.ControlHealthOptions{Dir: context.Dir, Stdout: stdout, Timeout: 5 * time.Second}); err != nil {
+	err := dockerdeploy.TestServer(dockerdeploy.TestOptions{Dir: context.Dir, Stdout: stdout, Timeout: 5 * time.Second})
+	if err != nil {
 		errorStderr, writerErr := deploymentErrorWriter(context.Dir, stderr)
 		if writerErr != nil {
 			errorStderr = stderr
@@ -282,38 +328,12 @@ func runEmbeddedControlSystemd(
 		fmt.Fprintf(stderr, "%s: unexpected argument: %s\n", action, args[0])
 		return 2
 	}
-	service := embeddedControlSystemdUnit(context.State)
+	service := embeddedControlContextSystemdUnit(context)
 	if service == "" {
 		fmt.Fprintln(stderr, "reploy control error: installed service is not recorded")
 		return 1
 	}
 	return runEmbeddedControlExternal(context.Dir, stdout, stderr, "systemctl", action, service)
-}
-
-func runEmbeddedControlJournal(
-	context embeddedControlUsageContext,
-	args []string,
-	stdout io.Writer,
-	stderr io.Writer,
-) int {
-	options, err := parseDockerRuntimeOptions(append(args, "--dir", context.Dir))
-	if err != nil {
-		fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
-		return 2
-	}
-	service := embeddedControlSystemdUnit(context.State)
-	if service == "" {
-		fmt.Fprintln(stderr, "reploy control error: installed service is not recorded")
-		return 1
-	}
-	journalArgs := []string{"-u", service}
-	if options.Tail != "" {
-		journalArgs = append(journalArgs, "-n", options.Tail)
-	}
-	if options.Follow {
-		journalArgs = append(journalArgs, "-f")
-	}
-	return runEmbeddedControlExternal(context.Dir, stdout, stderr, "journalctl", journalArgs...)
 }
 
 func runEmbeddedControlExternal(dir string, stdout io.Writer, stderr io.Writer, name string, args ...string) int {
@@ -347,11 +367,11 @@ func externalCommandExitCode(err error) (int, bool) {
 	return code, true
 }
 
-func embeddedControlMatchesAppCommand(dir string, args []string) bool {
+func embeddedControlMatchesAppCommand(dir string, args []string, deployedOnly bool) bool {
 	if len(args) == 0 {
 		return false
 	}
-	result, err := dockerdeploy.AppCommandList(dockerdeploy.AppCommandListOptions{Dir: dir, DeployedOnly: true})
+	result, err := dockerdeploy.AppCommandList(dockerdeploy.AppCommandListOptions{Dir: dir, DeployedOnly: deployedOnly})
 	if err != nil {
 		return false
 	}
@@ -373,26 +393,12 @@ func embeddedControlMatchesAppCommand(dir string, args []string) bool {
 	return false
 }
 
-func embeddedControlUsesSystemd(state deploy.DeploymentState) bool {
-	return state.Phase == deploy.PhaseInstalled && state.Install != nil && strings.TrimSpace(state.Install.UnitPath) != ""
+func embeddedControlContextUsesSystemd(context embeddedControlUsageContext) bool {
+	return strings.TrimSpace(context.SystemdUnit) != ""
 }
 
-func embeddedControlSystemdUnit(state deploy.DeploymentState) string {
-	if state.Install == nil || strings.TrimSpace(state.Install.Service) == "" {
-		return ""
-	}
-	service := strings.TrimSpace(state.Install.Service)
-	if strings.HasSuffix(service, ".service") {
-		return service
-	}
-	return service + ".service"
-}
-
-func controlScriptNameForState(state deploy.DeploymentState) string {
-	if state.AppID == "" {
-		return "reployctl"
-	}
-	return state.AppID + "ctl"
+func embeddedControlContextSystemdUnit(context embeddedControlUsageContext) string {
+	return strings.TrimSpace(context.SystemdUnit)
 }
 
 func embeddedControlDefaultString(value string, fallback string) string {

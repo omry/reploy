@@ -46,3 +46,38 @@ func TestResolveNamesRejectsUnsafeAndReservedNames(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateProviderIdentifier(t *testing.T) {
+	for _, name := range []string{"application", "python_env_3", "apt-tools", "a0"} {
+		if err := validateProviderIdentifier("component", name); err != nil {
+			t.Fatalf("validateProviderIdentifier(%q): %v", name, err)
+		}
+	}
+	for _, name := range []string{"", "Application", "3python", "python.env", "python/env", "python env"} {
+		if err := validateProviderIdentifier("component", name); err == nil {
+			t.Fatalf("validateProviderIdentifier(%q) succeeded", name)
+		}
+	}
+}
+
+func TestValidatePythonDistributionName(t *testing.T) {
+	for _, name := range []string{"demo", "Demo_Server", "demo.pkg", "demo-pkg2"} {
+		if err := ValidatePythonDistributionName("distribution", name); err != nil {
+			t.Fatalf("ValidatePythonDistributionName(%q): %v", name, err)
+		}
+	}
+	for _, name := range []string{"", "demo/pkg", `demo\pkg`, " demo", "demo-", ".demo"} {
+		if err := ValidatePythonDistributionName("distribution", name); err == nil {
+			t.Fatalf("ValidatePythonDistributionName(%q) succeeded", name)
+		}
+	}
+}
+
+func TestValidateNonBaseComponentIdentifier(t *testing.T) {
+	if err := validateNonBaseComponentIdentifier("component", "application"); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateNonBaseComponentIdentifier("component", "base"); err == nil || !strings.Contains(err.Error(), "reserved root") {
+		t.Fatalf("reserved base error = %v", err)
+	}
+}

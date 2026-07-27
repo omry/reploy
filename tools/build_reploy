@@ -29,6 +29,14 @@ class Target:
         return "reploy"
 
 
+@dataclass(frozen=True)
+class ProbeTarget:
+    goarch: str
+    goarm: str
+    binary_name: str
+    pack_flag: str
+
+
 DEFAULT_TARGETS = (
     Target("linux", "amd64"),
     Target("linux", "arm64"),
@@ -36,6 +44,18 @@ DEFAULT_TARGETS = (
     Target("darwin", "arm64"),
     Target("windows", "amd64"),
     Target("windows", "arm64"),
+)
+
+PROBE_TARGETS = (
+    ProbeTarget(
+        "amd64", "", "reploy-probe-linux-amd64", "--linux-amd64"
+    ),
+    ProbeTarget(
+        "arm", "7", "reploy-probe-linux-arm-v7", "--linux-arm-v7"
+    ),
+    ProbeTarget(
+        "arm64", "", "reploy-probe-linux-arm64", "--linux-arm64"
+    ),
 )
 
 ACTIVE_TARGET_LABELS = {target.label for target in DEFAULT_TARGETS}
@@ -84,7 +104,7 @@ def run(
             display_env = " ".join(
                 f"{name}={value}"
                 for name, value in sorted(env.items())
-                if name in {"GOOS", "GOARCH", "CGO_ENABLED"}
+                if name in {"GOOS", "GOARCH", "GOARM", "CGO_ENABLED"}
             )
         prefix = f"{display_env} " if display_env else ""
         print(f"+ {prefix}{' '.join(command)}", flush=True)
@@ -288,6 +308,58 @@ def selected_targets(args: argparse.Namespace) -> tuple[Target, ...]:
     return (target,)
 
 
+def build_probe_tools(
+    *,
+    root: Path,
+    workdir: Path,
+    env: dict[str, str],
+    strip: bool,
+    verbose: bool,
+) -> tuple[Path, tuple[tuple[ProbeTarget, Path], ...]]:
+    packer_name = "reploy-probe-pack.exe" if os.name == "nt" else "reploy-probe-pack"
+    packer = workdir / packer_name
+    packer_env = env.copy()
+    for name in ("GOOS", "GOARCH", "GOARM"):
+        packer_env.pop(name, None)
+    packer_env["CGO_ENABLED"] = "0"
+    packer_command = [
+        "go",
+        "build",
+        "-buildvcs=false",
+        "-trimpath",
+        "-ldflags",
+        "-s -w",
+        "-o",
+        str(packer),
+        "./internal/cmd/reploy-probe-pack",
+    ]
+    run(packer_command, cwd=root, env=packer_env, verbose=verbose)
+
+    helpers: list[tuple[ProbeTarget, Path]] = []
+    helper_ldflags = ["-s", "-w"] if strip else []
+    for target in PROBE_TARGETS:
+        output = workdir / target.binary_name
+        target_env = env.copy()
+        target_env.update(
+            {
+                "CGO_ENABLED": "0",
+                "GOOS": "linux",
+                "GOARCH": target.goarch,
+            }
+        )
+        if target.goarm:
+            target_env["GOARM"] = target.goarm
+        else:
+            target_env.pop("GOARM", None)
+        command = ["go", "build", "-buildvcs=false", "-trimpath"]
+        if helper_ldflags:
+            command.extend(["-ldflags", " ".join(helper_ldflags)])
+        command.extend(["-o", str(output), "./cmd/reploy-probe"])
+        run(command, cwd=root, env=target_env, verbose=verbose)
+        helpers.append((target, output))
+    return packer, tuple(helpers)
+
+
 def build_targets(
     *,
     root: Path,
@@ -303,6 +375,10 @@ def build_targets(
     if not (root / "cmd" / "reploy" / "main.go").exists():
         raise FileNotFoundError(
             f"missing Reploy command: {root / 'cmd' / 'reploy' / 'main.go'}"
+        )
+    if not (root / "cmd" / "reploy-probe" / "main.go").exists():
+        raise FileNotFoundError(
+            f"missing Reploy probe command: {root / 'cmd' / 'reploy-probe' / 'main.go'}"
         )
     if shutil.which("go") is None:
         raise FileNotFoundError("missing required executable: go")
@@ -320,33 +396,52 @@ def build_targets(
         run(["go", "test", "./..."], cwd=root, env=env, verbose=verbose)
 
     built: list[Path] = []
-    for target in targets:
-        target_dir = outdir / target.label
-        target_dir.mkdir(parents=True, exist_ok=True)
-        output = target_dir / target.binary_name
-        target_env = env.copy()
-        target_env.update(
-            {
-                "CGO_ENABLED": "0",
-                "GOOS": target.goos,
-                "GOARCH": target.goarch,
-            }
+    with tempfile.TemporaryDirectory(prefix="reploy-probe-build-") as probe_temp:
+        packer, helpers = build_probe_tools(
+            root=root,
+            workdir=Path(probe_temp),
+            env=env,
+            strip=strip,
+            verbose=verbose,
         )
-        command = [
-            "go",
-            "build",
-            "-buildvcs=false",
-            "-trimpath",
-        ]
-        ldflags = [f"-X github.com/omry/reploy.Version={version}"]
-        ldflags.extend(dev_build_ldflags(root, version))
-        if strip:
-            ldflags.extend(["-s", "-w"])
-        command.extend(["-ldflags", " ".join(ldflags)])
-        command.extend(["-o", str(output), "./cmd/reploy"])
-        run(command, cwd=root, env=target_env, verbose=verbose)
-        built.append(output)
-        print(f"built {display_path(output, root=root)}")
+        for target in targets:
+            target_dir = outdir / target.label
+            target_dir.mkdir(parents=True, exist_ok=True)
+            output = target_dir / target.binary_name
+            staging_dir = Path(tempfile.mkdtemp(prefix=".reploy-build-", dir=target_dir))
+            try:
+                staged_output = staging_dir / target.binary_name
+                target_env = env.copy()
+                target_env.update(
+                    {
+                        "CGO_ENABLED": "0",
+                        "GOOS": target.goos,
+                        "GOARCH": target.goarch,
+                    }
+                )
+                target_env.pop("GOARM", None)
+                command = [
+                    "go",
+                    "build",
+                    "-buildvcs=false",
+                    "-trimpath",
+                ]
+                ldflags = [f"-X github.com/omry/reploy.Version={version}"]
+                ldflags.extend(dev_build_ldflags(root, version))
+                if strip:
+                    ldflags.extend(["-s", "-w"])
+                command.extend(["-ldflags", " ".join(ldflags)])
+                command.extend(["-o", str(staged_output), "./cmd/reploy"])
+                run(command, cwd=root, env=target_env, verbose=verbose)
+                pack_command = [str(packer), "--executable", str(staged_output)]
+                for probe_target, helper in helpers:
+                    pack_command.extend([probe_target.pack_flag, str(helper)])
+                run(pack_command, cwd=root, env=None, verbose=verbose)
+                os.replace(staged_output, output)
+            finally:
+                shutil.rmtree(staging_dir)
+            built.append(output)
+            print(f"built {display_path(output, root=root)}")
     return built
 
 

@@ -4,50 +4,34 @@ sidebar_position: 9
 
 # Version Support
 
-Use this page when choosing `blueprint.requires_reploy`.
+Use `blueprint.requires_reploy` to declare the oldest Reploy version that
+understands every field and behavior the blueprint depends on.
 
-`requires_reploy` is a lower-bound constraint. Set it to the newest Reploy
-version required by any blueprint field or lifecycle behavior that the app
-depends on.
-
-`0.5.0.dev1` predates runtime after-start hooks. Use `>=0.5.1.dev1` when a
-blueprint uses `docker.runtime.hooks`.
-
-## Blueprint Feature Versions
-
-| Minimum Reploy | Supported surface | Use this minimum when |
-| --- | --- | --- |
-| `>=0.5.1.dev1` | Runtime after-start health checks through `docker.runtime.hooks.after_start[].health_check.wait`. `reploy up` verifies that the service is still running, runs configured runtime health checks before success, prints the service URL only after those checks pass, reports startup log snippets for failed starts, and shows exited services in `reploy status`. | The blueprint declares `docker.runtime.hooks`, or the app depends on `reploy up` failing when the service exits immediately after start. |
-| `>=0.4.8.dev1` | Current baseline blueprint authoring used by the smoke fixture: Python provider, Docker runtime, managed path mounts, bundle options, Docker command defaults, app commands, install hooks, install success output, and Docker-managed user installs on supported hosts. | The blueprint does not use `docker.runtime.hooks`. |
-
-## Platform Support Versions
-
-| Minimum Reploy | Linux | macOS | Windows |
-| --- | --- | --- | --- |
-| `>=0.5.1.dev1` | Docker-backed staging, Docker-managed user installs, and systemd system installs. | Docker-backed staging and Docker-managed user installs. | Docker-backed staging and Docker-managed user installs. |
-| `>=0.4.8.dev1` | Docker-backed staging, Docker-managed user installs, and systemd system installs. | Docker-backed staging and Docker-managed user installs. | Docker-backed staging and Docker-managed user installs. |
-
-See [Support](/docs/support-matrix) for the current host matrix.
-
-## Runtime Hook Shape
-
-Runtime hooks are intentionally narrower than install hooks. Install hooks can
-run app commands or health checks during `reploy install`. Runtime after-start
-hooks currently support only health checks during `reploy up`:
+The schema-1 environment model documented here is the current public blueprint
+surface and requires Reploy `>=0.5.1.dev1` during its development cycle:
 
 ```yaml
 blueprint:
+  schema: 1
+  version: 0.1.0
   requires_reploy: ">=0.5.1.dev1"
-
-docker:
-  health:
-    scheme_env: REPLOY_PUBLIC_SCHEME
-    host_env: REPLOY_HOST_BIND
-    port_env: REPLOY_HOST_PORT
-    path: /_health_
-  runtime:
-    hooks:
-      after_start:
-        - health_check:
-            wait: true
 ```
+
+This release makes a hard cut from the earlier prototype blueprint shape. It
+does not accept the old top-level `app`, `bundle`, and `install` nodes or their
+aliases. Use `environment` and `docker` as described in
+[Blueprint Structure](/docs/blueprint-structure).
+
+`requires_reploy` is independent of the Linux distribution in the base image.
+APT support is determined from the selected image at build time: the image must
+provide a compatible Debian-family APT/dpkg toolchain. The implementation does
+not hard-code Debian or Ubuntu release numbers, so future or older releases can
+work when their schema and required capabilities are compatible.
+
+Reploy validates the declared constraint when loading the blueprint. Increase
+the lower bound when adopting a field or behavior introduced by a newer Reploy
+release. Do not increase it merely because a newer Debian, Ubuntu, Python, or
+Docker version is used.
+
+See [Support](/docs/support-matrix) for the current host and release-target
+matrix.

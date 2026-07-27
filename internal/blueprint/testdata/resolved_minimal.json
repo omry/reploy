@@ -3,18 +3,42 @@
   "control_script": "demo",
   "component": {
     "Type": "python",
-    "Optional": null,
-    "Requirements": [
-      "demo-server"
-    ]
+    "Base": null,
+    "Python": {
+      "Interpreter": {
+        "Command": "python",
+        "Version": "",
+        "Supplier": ""
+      },
+      "Requirements": [
+        "demo-server"
+      ]
+    },
+    "APT": null,
+    "Options": {},
+    "Executables": {
+      "server": {
+        "Source": "python",
+        "Binary": "demo-server",
+        "Order": [
+          "binary",
+          "prefix",
+          "command",
+          "forwarded",
+          "suffix"
+        ],
+        "ArgvPrefix": null,
+        "ArgvSuffix": null
+      }
+    }
   },
-  "path": {
-    "Container": "/data",
+  "mount": {
+    "Target": "/data",
     "Writable": true,
-    "Update": "preserve"
+    "UpdatePolicy": "preserve"
   },
   "executable": {
-    "Component": "application",
+    "Source": "python",
     "Binary": "demo-server",
     "Order": [
       "binary",

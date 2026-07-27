@@ -1,0 +1,2 @@
+kind: Added
+body: Allow staged deployments to keep the blueprint base image or override it with an exact image name in the development override editor.

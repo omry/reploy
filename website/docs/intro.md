@@ -8,8 +8,8 @@ slug: /
 Cross-platform app installs from portable blueprints.
 
 Reploy is an experimental app installer built around portable blueprints. An
-app author writes one blueprint that describes install intent: package bundles,
-configuration paths, persistent data, ports, health checks, control commands,
+app author writes one blueprint that describes install intent: applications,
+packages, runtime mounts, persistent data, ports, health checks, commands,
 install targets, and success output. Reploy maps that blueprint onto the
 current host's staging, test, install, update, and uninstall flow.
 
@@ -64,12 +64,15 @@ curl -fsSL https://reploy.yadan.net/install.sh | sh
 # Create a staging workspace for the demo. The default is reploy-staging/.
 reploy stage omegaconf-inspector-demo
 
-# Create and validate the demo service config.
-reploy app config init
-reploy app config check
+# Resolve packages, build the image, and validate it.
+reploy build
+
+# Create and validate the demo service config through the staged app command.
+./reploy-staging/omegaconf-inspector config init
+./reploy-staging/omegaconf-inspector config check
 
 # Start the staged app.
-reploy up
+./reploy-staging/omegaconf-inspector up
 
 # Run the blueprint-defined checks against staging.
 reploy test
@@ -79,6 +82,7 @@ Then install from the tested staging state:
 
 ```bash
 reploy install --scope user --to "$PWD/omegaconf-inspector-installed"
+./omegaconf-inspector-installed/omegaconf-inspector status
 ```
 
 The blueprint defines default install values such as the target path and
@@ -100,8 +104,8 @@ Blueprints can be referenced from packages, source repositories, or local files:
 ```bash
 reploy stage omegaconf-inspector-demo
 reploy stage example-app
-reploy stage git:https://github.com/org/example-app.git?ref=v1.2.3
-reploy stage file:./example.blueprint.yaml
+reploy stage github://org/example-app/reploy/example.blueprint.yaml?ref=v1.2.3
+reploy stage ./example.blueprint.yaml
 ```
 
 The first supported app backend is Python. The first supported runtime is

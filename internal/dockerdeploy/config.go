@@ -5,30 +5,24 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 )
-
-type ConfigCheckOptions struct {
-	Dir                    string
-	CommandArgs            []string
-	Stdout                 io.Writer
-	Stderr                 io.Writer
-	DockerPreflightTimeout time.Duration
-}
 
 type AppCommandOptions struct {
 	Dir                    string
 	CommandArgs            []string
 	DeployedOnly           bool
+	OutputDir              string
+	OutputFile             string
+	Wait                   bool
 	Stdout                 io.Writer
 	Stderr                 io.Writer
 	DockerPreflightTimeout time.Duration
@@ -41,6 +35,8 @@ type AppCommandListOptions struct {
 
 type ShellOptions struct {
 	Dir                    string
+	Wait                   bool
+	ReadOnly               bool
 	Stdin                  io.Reader
 	Stdout                 io.Writer
 	Stderr                 io.Writer
@@ -59,45 +55,24 @@ type AppCommandListEntry struct {
 	ForwardFlags []string `json:"forward_flags,omitempty"`
 }
 
-var runConfigCheckCommand = runCommand
-var runAppCommand = runCommand
+var runCurrentAppCommand = RunCurrentAppCommandV1
+var runCurrentShell = RunCurrentShellV1
 var colorRuntimeGOOS = runtime.GOOS
 
-type temporaryComposeRunner func(CommandSpec, RunOptions) error
+type temporaryCommandRunner func(CommandSpec, RunOptions) error
 
 func Shell(options ShellOptions) error {
 	if options.Dir == "" {
 		options.Dir = DefaultDeploymentDir
 	}
-	state, err := loadState(options.Dir)
+	stateSchema, err := runtimeStateSchema(options.Dir)
 	if err != nil {
 		return err
 	}
-	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
-	if err != nil {
-		return err
+	if stateSchema != deploy.StateSchemaV1 {
+		return fmt.Errorf("shell state schema %q is unsupported; expected %q", stateSchema, deploy.StateSchemaV1)
 	}
-	if pack.Environment == nil {
-		return fmt.Errorf("reploy shell requires an environment-model blueprint")
-	}
-	if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: options.Dir, SkipWarmRuntime: true, Stdout: options.Stdout, Stderr: options.Stderr, DockerPreflightTimeout: options.DockerPreflightTimeout}); err != nil {
-		return err
-	}
-	state, err = loadState(options.Dir)
-	if err != nil {
-		return err
-	}
-	state, err = BuildEnvironmentImage(context.Background(), options.Dir, pack, state, RunOptions{Stdout: options.Stdout, Stderr: options.Stderr, DockerPreflightTimeout: options.DockerPreflightTimeout})
-	if err != nil {
-		return err
-	}
-	if _, err := WriteResolvedRuntimeInputs(options.Dir, pack, state); err != nil {
-		return err
-	}
-	if _, err := writeUpdatedStateIfChanged(options.Dir, pack, state.Bundle, state); err != nil {
-		return err
-	}
-	plan, err := ResolvedDockerExecutionPlan(options.Dir, pack, state)
+	runtime, err := CurrentStagedProviderBuildRuntimeV1()
 	if err != nil {
 		return err
 	}
@@ -105,9 +80,13 @@ func Shell(options ShellOptions) error {
 	if terminalOutput == nil {
 		terminalOutput = os.Stdout
 	}
-	stdin, interactive, tty := shellCommandIO(options.Stdin, terminalOutput)
-	spec := ShellCommandSpec(plan, interactive, tty)
-	return runAppCommand(spec, RunOptions{Stdin: stdin, Stdout: options.Stdout, Stderr: options.Stderr, DockerPreflightTimeout: options.DockerPreflightTimeout})
+	stdin, _, tty := shellCommandIO(options.Stdin, terminalOutput)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	return runCurrentShell(ctx, CurrentShellRunInputV1{
+		DeploymentDir: options.Dir, Wait: options.Wait, ReadOnly: options.ReadOnly, Runtime: runtime, TTY: tty,
+		RunOptions: RunOptions{Stdin: stdin, Stdout: options.Stdout, Stderr: options.Stderr, DockerPreflightTimeout: options.DockerPreflightTimeout},
+	})
 }
 
 func shellCommandIO(input io.Reader, output io.Writer) (io.Reader, bool, bool) {
@@ -115,54 +94,6 @@ func shellCommandIO(input io.Reader, output io.Writer) (io.Reader, bool, bool) {
 		input = os.Stdin
 	}
 	return input, true, readerLooksTerminal(input) && writerLooksTerminal(output)
-}
-
-func ConfigCheck(options ConfigCheckOptions) error {
-	if options.Dir == "" {
-		options.Dir = DefaultDeploymentDir
-	}
-	state, err := loadState(options.Dir)
-	if err != nil {
-		return err
-	}
-	stdout, stderr := deploymentOutputWritersForDeployment(options.Dir, state, options.Stdout, options.Stderr)
-	runOptions := RunOptions{
-		Stdout:                 stdout,
-		Stderr:                 stderr,
-		DockerPreflightTimeout: options.DockerPreflightTimeout,
-	}
-	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
-	if err != nil {
-		return err
-	}
-	if err := ensureOneOffCommandDirs(options.Dir, pack); err != nil {
-		return err
-	}
-	if err := ensureRuntimeCompose(options.Dir); err != nil {
-		return fmt.Errorf("ensure runtime compose: %w", err)
-	}
-	command, forwardedArgs, err := pack.Docker.MatchCommand(options.CommandArgs)
-	if err != nil {
-		return err
-	}
-	configDisplayDir := appConfigDisplayDir(options.Dir, pack)
-	configContainerDir := configMountLayoutForPack(pack).ContainerConfigDir
-	projectName, err := deploymentComposeProjectName(options.Dir)
-	if err != nil {
-		return err
-	}
-	if err := ensureRuntimeNamedVolumeWritable(options.Dir, projectName, options.DockerPreflightTimeout); err != nil {
-		return err
-	}
-	oneOffContainerName := temporaryOneOffContainerName(projectName, "config-check")
-	spec := ConfigCheckCommandForProject(options.Dir, command.Name, forwardedArgs, projectName, configDisplayDir, configContainerDir)
-	spec = withComposeRunName(spec, oneOffContainerName)
-	return runTemporaryComposeCommand(
-		runConfigCheckCommand,
-		spec,
-		TemporaryContainerCleanupCommand(oneOffContainerName),
-		runOptions,
-	)
 }
 
 func AppCommand(options AppCommandOptions) error {
@@ -173,121 +104,45 @@ func AppCommand(options AppCommandOptions) error {
 	if terminalOutput == nil {
 		terminalOutput = os.Stdout
 	}
-	state, err := loadState(options.Dir)
+	stateSchema, err := runtimeStateSchema(options.Dir)
 	if err != nil {
 		return err
 	}
-	if options.DeployedOnly {
-		if err := validateEmbeddedRuntimeForControl(options.Dir); err != nil {
-			return err
-		}
+	if stateSchema != deploy.StateSchemaV1 {
+		return fmt.Errorf("app command state schema %q is unsupported; expected %q", stateSchema, deploy.StateSchemaV1)
 	}
-	stdout, stderr := deploymentOutputWritersForDeployment(options.Dir, state, options.Stdout, options.Stderr)
-	runOptions := RunOptions{
-		Stdin:                  appCommandStdin(terminalOutput),
-		Stdout:                 stdout,
-		Stderr:                 stderr,
-		DockerPreflightTimeout: options.DockerPreflightTimeout,
+	if err := validateCurrentAppCommandRequestV1(options.Dir, options.CommandArgs, options.DeployedOnly); err != nil {
+		return err
 	}
-	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
+	runtime, err := CurrentStagedProviderBuildRuntimeV1()
 	if err != nil {
 		return err
 	}
-	if pack.Environment != nil {
-		if _, err := EnsureBundlePrepared(BundleEnsureOptions{
-			Dir: options.Dir, SkipWarmRuntime: true, Stdout: options.Stdout, Stderr: options.Stderr,
-			DockerPreflightTimeout: options.DockerPreflightTimeout,
-		}); err != nil {
-			return fmt.Errorf("prepare installation bundle: %w", err)
-		}
-		state, err = loadState(options.Dir)
-		if err != nil {
-			return err
-		}
-		state, err = BuildEnvironmentImage(context.Background(), options.Dir, pack, state, runOptions)
-		if err != nil {
-			return fmt.Errorf("prepare generated environment image: %w", err)
-		}
-		if _, err := WriteResolvedRuntimeInputs(options.Dir, pack, state); err != nil {
-			return err
-		}
-		if _, err := writeUpdatedStateIfChanged(options.Dir, pack, state.Bundle, state); err != nil {
-			return err
-		}
-		name, forwarded, err := MatchEnvironmentCommand(*pack.Environment, options.CommandArgs, options.DeployedOnly)
-		if err != nil {
-			return err
-		}
-		plan, err := ResolvedDockerExecutionPlan(options.Dir, pack, state)
-		if err != nil {
-			return err
-		}
-		command, err := ResolveEnvironmentCommandForPlan(*pack.Environment, state.Materialization.Executables, plan, name, forwarded)
-		if err != nil {
-			return err
-		}
-		interactive := runOptions.Stdin != nil
-		spec, err := TransientCommandSpec(plan, command, interactive, interactive && writerLooksTerminal(terminalOutput))
-		if err != nil {
-			return err
-		}
-		if err := runAppCommand(spec, runOptions); err != nil {
-			return appCommandError(err)
-		}
-		return nil
-	}
-	command, forwardedArgs, err := matchAppCommandForOptions(pack, options.CommandArgs, options.DeployedOnly)
-	if err != nil {
-		return err
-	}
-	if err := ensureAppCommandDirs(options.Dir, pack); err != nil {
-		return err
-	}
-	if _, err := EnsureBundlePrepared(BundleEnsureOptions{Dir: options.Dir, Stdout: options.Stdout, Stderr: options.Stderr, DockerPreflightTimeout: options.DockerPreflightTimeout}); err != nil {
-		return fmt.Errorf("prepare installation bundle: %w", err)
-	}
-	if err := ensureRuntimeCompose(options.Dir); err != nil {
-		return fmt.Errorf("ensure runtime compose: %w", err)
-	}
-	configDisplayDir := appConfigDisplayDir(options.Dir, pack)
-	projectName, err := deploymentComposeProjectName(options.Dir)
-	if err != nil {
-		return err
-	}
-	if err := ensureRuntimeNamedVolumeWritable(options.Dir, projectName, options.DockerPreflightTimeout); err != nil {
-		return err
-	}
-	oneOffContainerName := temporaryOneOffContainerName(projectName, "app-command")
-	spec := AppCommandForProject(options.Dir, command.Name, forwardedArgs, projectName, configDisplayDir, configMountLayoutForPack(pack).ContainerConfigDir)
-	spec = withAppCommandPrefixEnv(spec)
-	spec = withAppTerminalEnv(spec, pack.App.Terminal, terminalOutput)
-	spec = withComposeRunName(spec, oneOffContainerName)
-	err = runTemporaryComposeCommand(
-		runAppCommand,
-		spec,
-		TemporaryContainerCleanupCommand(oneOffContainerName),
-		runOptions,
-	)
-	if err != nil {
-		return appCommandError(err)
-	}
-	return nil
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	return runCurrentAppCommand(ctx, CurrentAppCommandRunInputV1{
+		DeploymentDir: options.Dir, Arguments: append([]string(nil), options.CommandArgs...),
+		DeployedOnly: options.DeployedOnly, OutputDir: options.OutputDir, OutputFile: options.OutputFile,
+		Wait: options.Wait, Runtime: runtime, TTY: writerLooksTerminal(terminalOutput),
+		RunOptions: RunOptions{Stdin: appCommandStdin(terminalOutput), Stdout: options.Stdout, Stderr: options.Stderr, DockerPreflightTimeout: options.DockerPreflightTimeout},
+	})
 }
 
-func withAppCommandPrefixEnv(spec CommandSpec) CommandSpec {
-	prefix := strings.TrimSpace(os.Getenv("REPLOY_APP_COMMAND_PREFIX"))
-	if prefix == "" {
-		return spec
+func validateCurrentAppCommandRequestV1(dir string, arguments []string, deployedOnly bool) error {
+	content, err := os.ReadFile(filepath.Join(dir, StateFileName))
+	if err != nil {
+		return fmt.Errorf("read app command state: %w", err)
 	}
-	spec.Args = appendComposeRunEnv(spec.Args, "REPLOY_APP_COMMAND_PREFIX="+prefix)
-	return spec
-}
-
-func matchAppCommandForOptions(pack deploy.AppPack, args []string, deployedOnly bool) (deploy.DockerCommandConfig, []string, error) {
-	if deployedOnly {
-		return pack.Docker.MatchDeployedCommand(args)
+	state, err := deploy.DecodeStateV1(content)
+	if err != nil {
+		return err
 	}
-	return pack.Docker.MatchAppCommand(args)
+	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	if err != nil {
+		return fmt.Errorf("app command blueprint: %w", err)
+	}
+	_, _, err = MatchEnvironmentCommand(document, arguments, deployedOnly)
+	return err
 }
 
 func appCommandStdin(output io.Writer) io.Reader {
@@ -305,84 +160,20 @@ func appCommandError(err error) error {
 	return fmt.Errorf("app command failed: %w", err)
 }
 
-func ensureOneOffCommandDirs(dir string, pack deploy.AppPack) error {
-	if err := os.MkdirAll(filepath.Join(dir, pack.Docker.DeploymentDirs.Config), 0o700); err != nil {
-		return err
+func runTemporaryContainerCommand(run temporaryCommandRunner, runSpec CommandSpec, cleanupSpec CommandSpec, runOptions RunOptions) error {
+	parent := runOptions.Context
+	if parent == nil {
+		parent = context.Background()
 	}
-	if err := ensureManagedFileMountsForPack(dir, pack); err != nil {
-		return err
-	}
-	return ensureWritableRuntimeDir(filepath.Join(dir, RuntimeDirName))
-}
-
-func ensureAppCommandDirs(dir string, pack deploy.AppPack) error {
-	if err := os.MkdirAll(filepath.Join(dir, pack.Docker.DeploymentDirs.Config), 0o700); err != nil {
-		return err
-	}
-	if err := ensureManagedFilePlaceholdersForPack(dir, pack); err != nil {
-		return err
-	}
-	return ensureWritableRuntimeDir(filepath.Join(dir, RuntimeDirName))
-}
-
-func ensureWritableRuntimeDir(path string) error {
-	if err := os.MkdirAll(path, 0o755); err != nil {
-		return err
-	}
-	probe := filepath.Join(path, ".reploy-write-test")
-	if err := os.WriteFile(probe, []byte("ok\n"), 0o644); err == nil {
-		return os.Remove(probe)
-	}
-	if err := os.RemoveAll(path); err != nil {
-		if chmodErr := os.Chmod(path, 0o755); chmodErr != nil {
-			return err
-		}
-		if retryErr := os.RemoveAll(path); retryErr != nil {
-			return err
-		}
-	}
-	if err := os.MkdirAll(path, 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(probe, []byte("ok\n"), 0o644); err != nil {
-		return err
-	}
-	return os.Remove(probe)
-}
-
-func appConfigDisplayDir(dir string, pack deploy.AppPack) string {
-	configDir := filepath.Join(dir, pack.Docker.DeploymentDirs.Config)
-	absoluteConfigDir, err := filepath.Abs(configDir)
-	if err != nil {
-		return filepath.Clean(configDir)
-	}
-	workingDir, err := os.Getwd()
-	if err != nil {
-		return absoluteConfigDir
-	}
-	relativeConfigDir, err := filepath.Rel(workingDir, absoluteConfigDir)
-	if err != nil || relativeConfigDir == ".." || strings.HasPrefix(relativeConfigDir, ".."+string(filepath.Separator)) {
-		return absoluteConfigDir
-	}
-	return relativeConfigDir
-}
-
-func runTemporaryComposeCommand(run temporaryComposeRunner, runSpec CommandSpec, cleanupSpec CommandSpec, runOptions RunOptions) error {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-
 	temporaryRunOptions := runOptions
 	temporaryRunOptions.Context = ctx
-
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
-
 	done := make(chan error, 1)
-	go func() {
-		done <- run(runSpec, temporaryRunOptions)
-	}()
-
+	go func() { done <- run(runSpec, temporaryRunOptions) }()
 	var runErr error
 	select {
 	case runErr = <-done:
@@ -394,10 +185,11 @@ func runTemporaryComposeCommand(run temporaryComposeRunner, runSpec CommandSpec,
 			runErr = fmt.Errorf("interrupted by %s", sig)
 		}
 	}
-
 	var cleanupErr error
 	if cleanupSpec.Name != "" && runErr != nil {
-		cleanupErr = run(cleanupSpec, runOptions)
+		cleanupOptions := runOptions
+		cleanupOptions.Context, cleanupOptions.Stdin, cleanupOptions.Stdout, cleanupOptions.Stderr = context.Background(), nil, nil, nil
+		cleanupErr = run(cleanupSpec, cleanupOptions)
 		if cleanupErr != nil && isMissingContainerCleanupError(cleanupErr) {
 			cleanupErr = nil
 		}
@@ -415,164 +207,31 @@ func AppCommandList(options AppCommandListOptions) (AppCommandListResult, error)
 	if options.Dir == "" {
 		options.Dir = DefaultDeploymentDir
 	}
-	state, err := loadState(options.Dir)
+	stateSchema, err := runtimeStateSchema(options.Dir)
 	if err != nil {
 		return AppCommandListResult{}, err
 	}
-	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
+	if stateSchema != deploy.StateSchemaV1 {
+		return AppCommandListResult{}, fmt.Errorf("app command list state schema %q is unsupported; expected %q", stateSchema, deploy.StateSchemaV1)
+	}
+	content, err := os.ReadFile(filepath.Join(options.Dir, StateFileName))
+	if err != nil {
+		return AppCommandListResult{}, fmt.Errorf("read app command list state: %w", err)
+	}
+	state, err := deploy.DecodeStateV1(content)
 	if err != nil {
 		return AppCommandListResult{}, err
 	}
-	commands := []AppCommandListEntry{}
-	for _, command := range appCommandsForList(pack, options.DeployedOnly) {
-		commands = append(commands, AppCommandListEntry{
-			Trigger:      append([]string(nil), command.Trigger...),
-			Name:         command.Name,
-			ForwardArgs:  command.ForwardArgs,
-			ForwardFlags: append([]string(nil), command.ForwardFlags...),
-		})
+	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	if err != nil {
+		return AppCommandListResult{}, err
 	}
-	return AppCommandListResult{AppID: pack.AppID, Commands: commands}, nil
-}
-
-func appCommandsForList(pack deploy.AppPack, deployedOnly bool) []deploy.DockerCommandConfig {
-	if deployedOnly {
-		return pack.Docker.DeployedCommands()
-	}
-	return pack.Docker.AppCommands()
-}
-
-func ConfigCheckCommand(dir string, commandName string, forwardedArgs []string) CommandSpec {
-	return ConfigCheckCommandForProject(dir, commandName, forwardedArgs, "")
-}
-
-func ConfigCheckCommandForProject(dir string, commandName string, forwardedArgs []string, projectName string, configDisplayDir ...string) CommandSpec {
-	args := []string{
-		"run",
-		"--rm",
-		"--no-deps",
-		"-e",
-		fmt.Sprintf("REPLOY_CONTAINER_COMMAND=%s", commandName),
-	}
-	args = append(args, "-e", fmt.Sprintf("REPLOY_FORWARDED_ARGC=%d", len(forwardedArgs)))
-	for index, arg := range forwardedArgs {
-		args = append(args, "-e", fmt.Sprintf("REPLOY_FORWARDED_ARG_%d=%s", index, arg))
-	}
-	if len(configDisplayDir) > 0 && strings.TrimSpace(configDisplayDir[0]) != "" {
-		configContainerDir := "/config"
-		if len(configDisplayDir) > 1 && strings.TrimSpace(configDisplayDir[1]) != "" {
-			configContainerDir = configDisplayDir[1]
-		}
-		args = append(args, "-e", fmt.Sprintf("REPLOY_CONFIG_CONTAINER_DIR=%s", configContainerDir))
-		args = append(args, "-e", fmt.Sprintf("REPLOY_CONFIG_DISPLAY_DIR=%s", configDisplayDir[0]))
-	}
-	args = append(args, "app")
-	return quietComposeCommand(composeCommandWithProject(dir, projectName, args...))
-}
-
-func AppCommandForProject(dir string, commandName string, forwardedArgs []string, projectName string, configDisplayDir ...string) CommandSpec {
-	spec := ConfigCheckCommandForProject(dir, commandName, forwardedArgs, projectName, configDisplayDir...)
-	spec.Env = withoutEnvValue(spec.Env, "COMPOSE_ANSI=never")
-	spec.Env = append(spec.Env, "REPLOY_INCLUDE_RUNTIME_OVERRIDES=0", "REPLOY_CONFIG_MOUNT=rw")
-	spec.Args = appendComposeRunEnv(
-		spec.Args,
-		"REPLOY_INCLUDE_RUNTIME_OVERRIDES=0",
-		"REPLOY_CONFIG_MOUNT=rw",
-		"REPLOY_APP_COMMAND_PREFIX=reploy app",
-	)
-	return spec
-}
-
-func withAppTerminalEnv(spec CommandSpec, terminal deploy.AppTerminalConfig, output io.Writer) CommandSpec {
-	colorEnv := appTerminalColorEnv(terminal)
-	env := []string{}
-	if colorEnv != "" {
-		env = append(env, colorEnv)
-	}
-	if columnsEnv := terminalColumnsEnv(output); columnsEnv != "" {
-		env = append(env, columnsEnv)
-	}
-	if len(env) > 0 {
-		spec.Args = appendComposeRunEnv(spec.Args, env...)
-	}
-	return spec
-}
-
-func appTerminalColorEnv(terminal deploy.AppTerminalConfig) string {
-	name := strings.TrimSpace(terminal.ColorEnv)
-	if name == "" {
-		return ""
-	}
-	if value, ok := os.LookupEnv(name); ok {
-		return name + "=" + value
-	}
-	value := reployColorValue()
-	if value == "" {
-		return ""
-	}
-	return name + "=" + value
-}
-
-func reployColorValue() string {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("REPLOY_COLOR"))) {
-	case "always":
-		return "always"
-	case "never":
-		return "never"
-	case "", "auto":
-		if os.Getenv("NO_COLOR") != "" {
-			return "never"
-		}
-		if terminalLooksColorCapable() {
-			return "always"
-		}
-		return ""
-	default:
-		return ""
-	}
+	return currentAppCommandListV1(document, options.DeployedOnly), nil
 }
 
 func terminalLooksColorCapable() bool {
 	term := strings.TrimSpace(os.Getenv("TERM"))
-	if term == "dumb" {
-		return false
-	}
-	return term != "" || colorRuntimeGOOS == "windows"
-}
-
-func terminalColumnsEnv(output io.Writer) string {
-	if columns := validTerminalColumns(os.Getenv("COLUMNS")); columns != "" {
-		return "COLUMNS=" + columns
-	}
-	if !writerLooksTerminal(output) {
-		return ""
-	}
-	command := exec.Command("stty", "size")
-	command.Stdin = os.Stdin
-	content, err := command.Output()
-	if err != nil {
-		return ""
-	}
-	fields := strings.Fields(string(content))
-	if len(fields) != 2 {
-		return ""
-	}
-	if columns := validTerminalColumns(fields[1]); columns != "" {
-		return "COLUMNS=" + columns
-	}
-	return ""
-}
-
-func validTerminalColumns(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-	columns, err := strconv.Atoi(value)
-	if err != nil || columns < 20 {
-		return ""
-	}
-	return strconv.Itoa(columns)
+	return term != "dumb" && (term != "" || colorRuntimeGOOS == "windows")
 }
 
 func writerLooksTerminal(output io.Writer) bool {
@@ -580,45 +239,25 @@ func writerLooksTerminal(output io.Writer) bool {
 		return writerLooksTerminal(passthrough.TerminalOutput())
 	}
 	file, ok := output.(*os.File)
-	if !ok {
-		return false
-	}
-	return fileLooksTerminal(file)
+	return ok && fileLooksTerminal(file)
 }
 
 func readerLooksTerminal(input io.Reader) bool {
 	file, ok := input.(*os.File)
-	if !ok {
-		return false
-	}
-	return fileLooksTerminal(file)
+	return ok && fileLooksTerminal(file)
 }
 
 func fileLooksTerminal(file *os.File) bool {
 	info, err := file.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
-}
-
-func withoutEnvValue(values []string, unwanted string) []string {
-	filtered := values[:0]
-	for _, value := range values {
-		if value == unwanted {
-			continue
-		}
-		filtered = append(filtered, value)
-	}
-	return filtered
-}
-
-func TemporaryComposeCleanupCommand(dir string, projectName string) CommandSpec {
-	return quietComposeCommand(composeCommandWithProject(dir, projectName, "down", "--remove-orphans", "--volumes", "--timeout", "0"))
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func TemporaryContainerCleanupCommand(containerName string) CommandSpec {
-	return CommandSpec{Name: "docker", Args: []string{"container", "rm", "-f", containerName}}
+	return CommandSpec{Name: "docker", Args: []string{"container", "rm", "--force", "--volumes", containerName}}
+}
+
+func TemporaryContainerStopCommand(containerName string) CommandSpec {
+	return CommandSpec{Name: "docker", Args: []string{"container", "stop", containerName}}
 }
 
 func withComposeRunName(spec CommandSpec, containerName string) CommandSpec {
@@ -674,8 +313,5 @@ func temporaryOneOffContainerName(projectName string, label string) string {
 }
 
 func isMissingContainerCleanupError(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(strings.ToLower(err.Error()), "no such container")
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "no such container")
 }

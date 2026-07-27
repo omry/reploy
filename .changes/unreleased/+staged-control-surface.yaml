@@ -1,0 +1,2 @@
+kind: Added
+body: Generate a relocatable app-named control command and self-contained Reploy runtime when creating staging, and refresh the managed surface with `stage --update`.

@@ -1,0 +1,2 @@
+kind: Added
+body: Let development overrides add exact native OS packages, activating the Debian or Ubuntu APT layer when needed.

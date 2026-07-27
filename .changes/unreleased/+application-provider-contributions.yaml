@@ -1,0 +1,2 @@
+kind: Changed
+body: Model blueprint applications independently from package providers, combining their OS packages in one shared transaction while retaining application ownership across overrides, locks, outputs, and diagnostics.

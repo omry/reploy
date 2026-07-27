@@ -1,77 +1,79 @@
+# Blueprint metadata and compatibility.
 blueprint:
   schema: 1
   version: 0.1.0
   requires_reploy: ">=0.5.1.dev1"
+  compatibility:
+    platforms: [linux/amd64, linux/arm64]
 
+# Portable environment definition.
 environment:
   id: omegaconf-inspector
-  vars:
-    project_root: ..
-  translations:
-    workspace:
-      type: python
-      scope: development
-      root: "{{ project_root }}"
-      mappings:
-        omegaconf-inspector: .
-  components:
+
+  # Image and application packages.
+  base:
+    image: python:3.11-slim
+  applications:
     application:
-      type: python
-      requirements: [omegaconf-inspector]
-  paths:
+      packages:
+        python:
+          requirements: [omegaconf-inspector]
+      executables:
+        inspector:
+          source: python
+          binary: omegaconf-inspector
+
+  # Runtime concurrency policy.
+  allow_concurrent: auto
+
+  # Persistent application storage.
+  mounts:
     config:
-      container: /conf
+      target: /conf
       writable: true
-      update: preserve
+      update_policy: preserve
+
     data:
-      container: /data
+      target: /data
       writable: true
-      update: preserve
-  executables:
-    inspector:
-      component: application
-      binary: omegaconf-inspector
+      update_policy: preserve
+
+  # Commands exposed through Reploy.
   commands:
     serve:
-      executable: inspector
+      executable: application.inspector
       argv: [serve]
+
     config_init:
-      executable: inspector
+      executable: application.inspector
       trigger: [config, init]
       native_command: true
       forward_flags: [--force]
       argv: [config, init]
+
     config_check:
-      executable: inspector
+      executable: application.inspector
       trigger: [config, check]
       native_command: true
       deployed_command: true
       forward_flags: [--live]
       argv: [config, check]
+
     config_show:
-      executable: inspector
+      executable: application.inspector
       trigger: [config, show]
       native_command: true
       deployed_command: true
       argv: [config, show]
-    project_list:
-      executable: inspector
-      trigger: [project, list]
-      native_command: true
-      deployed_command: true
-      argv: [project, list]
-    project_show:
-      executable: inspector
-      trigger: [project, show]
-      native_command: true
-      deployed_command: true
-      argv: [project, show]
+
     version:
-      executable: inspector
+      executable: application.inspector
       trigger: [version]
       native_command: true
       deployed_command: true
       argv: [version]
+
+  # Long-running service, health checks, and startup validation.
   workload:
     command: serve
     endpoints:
@@ -89,6 +91,8 @@ environment:
             endpoints: [http]
           actions:
             - environment: [config, check, --live]
+
+  # Installed deployment location and success output.
   install:
     target:
       default_path: "{{ reploy.install_root }}/{{ environment.id }}"
@@ -96,17 +100,21 @@ environment:
       lines:
         - "inspector url: {{ environment.workload.endpoints.http.scheme }}://{{ reploy.workload.endpoints.http.publish.address }}:{{ reploy.workload.endpoints.http.publish.port }}"
 
+# Docker-specific storage and networking.
 docker:
-  image: python:3.11-slim
+  # Materialize portable mounts as managed host directories.
   mounts:
     config:
-      extends: environment.paths.config
+      extends: environment.mounts.config
       mode: managed-bind
       source: conf
+
     data:
-      extends: environment.paths.data
+      extends: environment.mounts.data
       mode: managed-bind
       source: data
+
+  # Bind the service in-container and publish distinct staging/deployed ports.
   workload:
     endpoints:
       http:

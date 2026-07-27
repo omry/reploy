@@ -1,0 +1,2 @@
+kind: Changed
+body: Add retained package-override validation results, correction and retry, auto-exiting inline progress for standalone builds, direct dumb-terminal logs, unchanged-choice preservation, and deliberate two-Ctrl-C cancellation.

@@ -106,6 +106,9 @@ jobs:
       - name: Run Go tests
         env:
           NO_UPDATE_NOTIFIER: "1"
+          TMPDIR: ${{ runner.temp }}/
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: nox -s go-test
 
       - name: Run host smoke

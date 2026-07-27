@@ -2,22 +2,27 @@ blueprint:
   schema: 1
   version: 0.1.0
   requires_reploy: ">=0.1.0"
+  compatibility:
+    platforms: [linux/amd64, linux/arm64]
 
 environment:
   id: git-source-app
-  components:
+  base:
+    image: python:3.11-slim
+  applications:
     application:
-      type: python
-      requirements: [git-source-app]
-  executables:
-    application:
-      component: application
-      binary: git-source-app
+      packages:
+        python:
+          requirements: [git-source-app]
+      executables:
+        application:
+          source: python
+          binary: git-source-app
   commands:
     serve:
-      executable: application
+      executable: application.application
     config_check:
-      executable: application
+      executable: application.application
       trigger: [config, check]
       native_command: true
       deployed_command: true
@@ -31,7 +36,6 @@ environment:
         port: 8080
 
 docker:
-  image: python:3.11-slim
   workload:
     endpoints:
       http:

@@ -2,11 +2,8 @@ package dockerdeploy
 
 import (
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/omry/reploy/internal/deploy"
 )
 
 type PortOverride struct {
@@ -21,36 +18,6 @@ type dockerPortBinding struct {
 	HostPort      string
 	ContainerPort string
 	Named         bool
-}
-
-func installPortBindings(ports map[string]deploy.InstallPortConfig) ([]dockerPortBinding, error) {
-	names := make([]string, 0, len(ports))
-	for name := range ports {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	resolved := make([]dockerPortBinding, 0, len(names))
-	envSuffixes := map[string]string{}
-	for _, name := range names {
-		config := ports[name]
-		envSuffix, err := portEnvSuffix(name)
-		if err != nil {
-			return nil, err
-		}
-		if previousName, ok := envSuffixes[envSuffix]; ok {
-			return nil, fmt.Errorf("install port names %q and %q both map to environment suffix %q", previousName, name, envSuffix)
-		}
-		envSuffixes[envSuffix] = name
-		resolved = append(resolved, dockerPortBinding{
-			Name:          name,
-			EnvSuffix:     envSuffix,
-			HostBind:      config.HostBind,
-			HostPort:      strconv.Itoa(config.HostPort),
-			ContainerPort: strconv.Itoa(config.ContainerPort),
-			Named:         true,
-		})
-	}
-	return resolved, nil
 }
 
 func installPrimaryPort(ports []dockerPortBinding) dockerPortBinding {
@@ -201,18 +168,6 @@ func renderComposePortBindings(ports []dockerPortBinding) string {
 		))
 	}
 	return strings.Join(lines, "\n")
-}
-
-func installPortState(ports []dockerPortBinding) map[string]deploy.InstallPortBinding {
-	state := make(map[string]deploy.InstallPortBinding, len(ports))
-	for _, port := range ports {
-		state[port.Name] = deploy.InstallPortBinding{
-			HostBind:      port.HostBind,
-			HostPort:      port.HostPort,
-			ContainerPort: port.ContainerPort,
-		}
-	}
-	return state
 }
 
 func dockerEnvPortUpdates(ports []dockerPortBinding) map[string]string {

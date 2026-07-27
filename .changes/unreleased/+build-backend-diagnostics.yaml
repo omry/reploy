@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve sanitized Python build-backend diagnostics, suppress expected APT resolver warnings after successful builds, validate only the final cumulative image unless layer validation is requested, and keep older build locks canonical when package additions are absent.

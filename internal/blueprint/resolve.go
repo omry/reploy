@@ -9,11 +9,15 @@ import (
 )
 
 var builtInControlOperations = map[string]bool{
-	"up": true, "down": true, "restart": true, "status": true, "logs": true,
+	"up": true, "stop": true, "restart": true, "status": true, "logs": true,
 	"enable": true, "disable": true,
 }
 
 func Resolve(source Syntax) (Document, error) {
+	compatibility, err := ParseCompatibility(source.Blueprint.Compatibility.Platforms)
+	if err != nil {
+		return Document{}, err
+	}
 	variables, err := resolveVariables(source.Environment.Vars)
 	if err != nil {
 		return Document{}, err
@@ -23,6 +27,10 @@ func Resolve(source Syntax) (Document, error) {
 		return Document{}, err
 	}
 	id, controlScript, err := resolveNames(source.Environment)
+	if err != nil {
+		return Document{}, err
+	}
+	allowConcurrent, err := resolveConcurrentRunPolicy(source.Environment.AllowConcurrent)
 	if err != nil {
 		return Document{}, err
 	}
@@ -36,38 +44,31 @@ func Resolve(source Syntax) (Document, error) {
 			Schema:         source.Blueprint.Schema,
 			Version:        strings.TrimSpace(source.Blueprint.Version),
 			RequiresReploy: strings.TrimSpace(source.Blueprint.RequiresReploy),
+			Compatibility:  compatibility,
 		},
 		Environment: Environment{
-			ID:            id,
-			ControlScript: controlScript,
-			Vars:          variables,
-			Translations:  map[string]Translation{},
-			Components:    map[string]Component{},
-			Terminal:      Terminal{ColorEnv: strings.TrimSpace(source.Environment.Terminal.ColorEnv)},
-			Install:       resolveInstallSyntax(source.Environment.Install, variables),
-			Paths:         map[string]Path{},
-			Executables:   map[string]Executable{},
-			Commands:      map[string]Command{},
+			ID:              id,
+			ControlScript:   controlScript,
+			Vars:            variables,
+			Applications:    map[string]Application{},
+			Components:      map[string]Component{},
+			AllowConcurrent: allowConcurrent,
+			Terminal:        Terminal{ColorEnv: strings.TrimSpace(source.Environment.Terminal.ColorEnv)},
+			Install:         resolveInstallSyntax(source.Environment.Install, variables),
+			Mounts:          map[string]EnvironmentMount{},
+			Commands:        map[string]Command{},
 		},
 		Docker: Docker{
-			Image:  strings.TrimSpace(source.Docker.Image),
 			Mounts: map[string]DockerMount{},
 		},
 	}
 	if document.Blueprint.Version == "" {
 		return Document{}, fmt.Errorf("blueprint.version is required")
 	}
-	if document.Docker.Image == "" {
-		return Document{}, fmt.Errorf("docker.image is required")
-	}
-
-	if err := resolveTranslations(source, &document); err != nil {
+	if err := resolveApplications(source, &document); err != nil {
 		return Document{}, err
 	}
-	if err := resolveComponents(source, &document); err != nil {
-		return Document{}, err
-	}
-	if err := resolvePathsAndMounts(source, extended, &document); err != nil {
+	if err := resolveMounts(source, extended, &document); err != nil {
 		return Document{}, err
 	}
 	if err := resolveExecutablesAndCommands(source, &document); err != nil {
@@ -79,141 +80,360 @@ func Resolve(source Syntax) (Document, error) {
 	return document, nil
 }
 
-func resolveTranslations(source Syntax, document *Document) error {
-	for _, name := range sortedKeys(source.Environment.Translations) {
-		item := source.Environment.Translations[name]
-		if err := validateObjectName("environment.translations", name); err != nil {
-			return err
-		}
-		if item.Type != string(ComponentTypePython) {
-			return fmt.Errorf("environment.translations.%s.type must be python", name)
-		}
-		if item.Scope != string(TranslationScopeDevelopment) {
-			return fmt.Errorf("environment.translations.%s.scope must be development", name)
-		}
-		root, err := resolveStaticString(item.Root, document.Environment.Vars)
-		if err != nil {
-			return fmt.Errorf("environment.translations.%s.root: %w", name, err)
-		}
-		if strings.TrimSpace(root) == "" {
-			return fmt.Errorf("environment.translations.%s.root is required", name)
-		}
-		mappings := map[string]string{}
-		for distribution, relative := range item.Mappings {
-			if strings.TrimSpace(distribution) == "" || strings.TrimSpace(relative) == "" {
-				return fmt.Errorf("environment.translations.%s.mappings must not contain empty names or paths", name)
-			}
-			if path.IsAbs(relative) || path.Clean(relative) == ".." || strings.HasPrefix(path.Clean(relative), "../") {
-				return fmt.Errorf("environment.translations.%s.mappings.%s must stay within root", name, distribution)
-			}
-			mappings[distribution] = path.Clean(relative)
-		}
-		document.Environment.Translations[name] = Translation{
-			Type: ComponentTypePython, Scope: TranslationScopeDevelopment, Root: root, Mappings: mappings,
-		}
+func resolveConcurrentRunPolicy(value string) (ConcurrentRunPolicy, error) {
+	policy := ConcurrentRunPolicy(strings.TrimSpace(value))
+	if policy == "" {
+		return ConcurrentRunAuto, nil
 	}
-	return nil
+	switch policy {
+	case ConcurrentRunAuto, ConcurrentRunYes, ConcurrentRunNo:
+		return policy, nil
+	default:
+		return "", fmt.Errorf("environment.allow_concurrent must be yes, no, or auto")
+	}
 }
 
-func resolveComponents(source Syntax, document *Document) error {
-	for _, name := range sortedKeys(source.Environment.Components) {
-		item := source.Environment.Components[name]
-		if err := validateObjectName("environment.components", name); err != nil {
+func resolveApplications(source Syntax, document *Document) error {
+	base, err := resolveBaseComponent("environment.base", source.Environment.Base)
+	if err != nil {
+		return err
+	}
+	document.Environment.Base = *base.Base
+	document.Docker.Image = base.Base.Image
+
+	environmentOS, err := resolveAPTPackageRequests("environment.packages.os", source.Environment.Packages.OS)
+	if err != nil {
+		return err
+	}
+	document.Environment.Packages.OS = environmentOS
+	for _, name := range sortedKeys(source.Environment.Applications) {
+		if err := validateProviderIdentifier("environment.applications", name); err != nil {
 			return err
 		}
-		if item.Type != string(ComponentTypePython) {
-			return fmt.Errorf("environment.components.%s.type must be python in the initial implementation", name)
+		field := "environment.applications." + name
+		item := source.Environment.Applications[name]
+		application, err := resolveApplication(field, name, item)
+		if err != nil {
+			return err
 		}
-		if len(item.Requirements) == 0 {
-			return fmt.Errorf("environment.components.%s.requirements must not be empty", name)
-		}
-		component := Component{Type: ComponentTypePython, Requirements: append([]string(nil), item.Requirements...)}
-		if item.Optional != nil {
-			component.Optional = &OptionalComponent{
-				Group: strings.TrimSpace(item.Optional.Group), Description: strings.TrimSpace(item.Optional.Description),
-			}
-			if component.Optional.Description == "" {
-				return fmt.Errorf("environment.components.%s.optional.description is required", name)
-			}
-		}
-		document.Environment.Components[name] = component
+		document.Environment.Applications[name] = application
 	}
-	if len(document.Environment.Components) == 0 {
-		return fmt.Errorf("environment.components must not be empty")
-	}
-	return nil
+	return document.Environment.RebuildProviderContributions()
 }
 
-func resolvePathsAndMounts(source Syntax, extended extendedSyntax, document *Document) error {
-	for _, name := range sortedKeys(source.Environment.Paths) {
-		item := source.Environment.Paths[name]
-		if err := validateObjectName("environment.paths", name); err != nil {
+func resolveBaseComponent(field string, item BaseSyntax) (Component, error) {
+	image := strings.TrimSpace(item.Image)
+	if image == "" {
+		return Component{}, fmt.Errorf("%s.image is required", field)
+	}
+	exports := make(map[string]BaseExecutableExport, len(item.Exports))
+	for _, name := range sortedKeys(item.Exports) {
+		if err := validateProviderIdentifier(field+".exports", name); err != nil {
+			return Component{}, err
+		}
+		executable := strings.TrimSpace(item.Exports[name].Executable)
+		if err := validateExecutablePath(field+".exports."+name+".executable", executable); err != nil {
+			return Component{}, err
+		}
+		exports[name] = BaseExecutableExport{Executable: executable}
+	}
+	return Component{
+		Type: ComponentTypeBase, Base: &BaseComponent{Image: image, Exports: exports}, Options: map[string]ComponentOption{},
+	}, nil
+}
+
+func resolveApplication(field string, name string, item ApplicationSyntax) (Application, error) {
+	application := Application{
+		Options: map[string]ApplicationOption{}, Executables: map[string]Executable{},
+	}
+	osPackages, err := resolveAPTPackageRequests(field+".packages.os", item.Packages.OS)
+	if err != nil {
+		return Application{}, err
+	}
+	application.Packages.OS = osPackages
+	python, err := resolvePythonPackages(field+".packages.python", name, item.Packages.Python)
+	if err != nil {
+		return Application{}, err
+	}
+	application.Packages.Python = python
+	hasOS := len(osPackages) != 0
+	hasPython := python != nil
+	for _, optionName := range sortedKeys(item.Options) {
+		optionField := field + ".options." + optionName
+		if err := validateProviderIdentifier(field+".options", optionName); err != nil {
+			return Application{}, err
+		}
+		optionSource := item.Options[optionName]
+		description := strings.TrimSpace(optionSource.Description)
+		if description == "" {
+			return Application{}, fmt.Errorf("%s.description is required", optionField)
+		}
+		if optionSource.Packages.Python != nil && optionSource.Packages.Python.Interpreter != nil {
+			return Application{}, fmt.Errorf(
+				"%s.packages.python.interpreter is not valid; options inherit the application's Python interpreter",
+				optionField,
+			)
+		}
+		optionOS, err := resolveAPTPackageRequests(optionField+".packages.os", optionSource.Packages.OS)
+		if err != nil {
+			return Application{}, err
+		}
+		optionPython, err := resolvePythonOptionPackages(optionField+".packages.python", optionSource.Packages.Python)
+		if err != nil {
+			return Application{}, err
+		}
+		if len(optionOS) == 0 && optionPython == nil {
+			return Application{}, fmt.Errorf("%s.packages must not be empty", optionField)
+		}
+		application.Options[optionName] = ApplicationOption{
+			Description: description,
+			Packages:    ApplicationOptionPackages{OS: optionOS, Python: optionPython},
+		}
+		if len(optionOS) != 0 {
+			hasOS = true
+		}
+		if optionPython != nil {
+			hasPython = true
+		}
+	}
+	application.Executables, err = resolveExecutableProfiles(field+".executables", item.Executables)
+	if err != nil {
+		return Application{}, err
+	}
+	for executableName, executable := range application.Executables {
+		if executable.Source == ContributionProviderOS && !hasOS ||
+			executable.Source == ContributionProviderPython && !hasPython {
+			return Application{}, fmt.Errorf(
+				"%s.executables.%s.source references missing contribution %q",
+				field,
+				executableName,
+				executable.Source,
+			)
+		}
+	}
+	if !hasOS && !hasPython {
+		return Application{}, fmt.Errorf("%s must declare packages or package options", field)
+	}
+	return application, nil
+}
+
+func resolvePythonPackages(field string, application string, item *PythonPackagesSyntax) (*PythonComponent, error) {
+	if item == nil {
+		return nil, nil
+	}
+	interpreter := CommandRequirement{Command: "python"}
+	if item.Interpreter != nil {
+		supplier := strings.TrimSpace(item.Interpreter.Supplier)
+		if supplier != "" && supplier != "base" {
+			if err := validateContributionProvider(field+".interpreter.supplier", supplier); err != nil {
+				return nil, fmt.Errorf("%s must be base or an application package provider: %w", field+".interpreter.supplier", err)
+			}
+			supplier = ApplicationContributionID(application, supplier)
+		}
+		interpreter = CommandRequirement{
+			Command: strings.TrimSpace(item.Interpreter.Command), Version: strings.TrimSpace(item.Interpreter.Version),
+			Supplier: supplier,
+		}
+	}
+	if err := interpreter.Validate(field + ".interpreter"); err != nil {
+		return nil, err
+	}
+	requirements, err := normalizeStringSet(field+".requirements", item.Requirements)
+	if err != nil {
+		return nil, err
+	}
+	if len(requirements) == 0 {
+		return nil, fmt.Errorf("%s.requirements must not be empty", field)
+	}
+	return &PythonComponent{Interpreter: interpreter, Requirements: requirements}, nil
+}
+
+func resolvePythonOptionPackages(field string, item *PythonPackagesSyntax) (*PythonOptionPackages, error) {
+	if item == nil {
+		return nil, nil
+	}
+	requirements, err := normalizeStringSet(field+".requirements", item.Requirements)
+	if err != nil {
+		return nil, err
+	}
+	if len(requirements) == 0 {
+		return nil, fmt.Errorf("%s.requirements must not be empty", field)
+	}
+	return &PythonOptionPackages{Requirements: requirements}, nil
+}
+
+func resolveAPTPackageRequests(field string, source []APTPackageRequestSyntax) ([]APTPackageRequest, error) {
+	requests := make([]APTPackageRequest, 0, len(source))
+	byName := map[string]APTPackageRequest{}
+	for index, item := range source {
+		request, err := ParseAPTPackageRequest(item.Package)
+		if err != nil {
+			return nil, fmt.Errorf("%s[%d]: %w", field, index, err)
+		}
+		for _, name := range sortedKeys(item.Exports) {
+			executable := strings.TrimSpace(item.Exports[name].Executable)
+			request.Exports[name] = ExecutableExport{Executable: executable}
+		}
+		if err := ValidateAPTPackageRequest(request); err != nil {
+			return nil, fmt.Errorf("%s[%d]: %w", field, index, err)
+		}
+		if previous, exists := byName[request.Name]; exists {
+			if aptPackageRequestsEqual(previous, request) {
+				continue
+			}
+			return nil, fmt.Errorf("%s contains conflicting declarations for package %q", field, request.Name)
+		}
+		byName[request.Name] = request
+		requests = append(requests, request)
+	}
+	sort.Slice(requests, func(left int, right int) bool {
+		return aptPackageRequestSortKey(requests[left]) < aptPackageRequestSortKey(requests[right])
+	})
+	return requests, nil
+}
+
+func normalizeStringSet(field string, values []string) ([]string, error) {
+	seen := make(map[string]bool, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return nil, fmt.Errorf("%s must not contain an empty value", field)
+		}
+		if !seen[value] {
+			seen[value] = true
+			result = append(result, value)
+		}
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func aptPackageRequestsEqual(left APTPackageRequest, right APTPackageRequest) bool {
+	return aptPackageRequestSortKey(left) == aptPackageRequestSortKey(right)
+}
+
+func aptPackageRequestSortKey(request APTPackageRequest) string {
+	var key strings.Builder
+	key.WriteString(request.Name)
+	key.WriteByte(0)
+	key.WriteString(request.Version)
+	for _, name := range sortedKeys(request.Exports) {
+		key.WriteByte(0)
+		key.WriteString(name)
+		key.WriteByte(0)
+		key.WriteString(request.Exports[name].Executable)
+	}
+	return key.String()
+}
+
+func resolveMounts(source Syntax, extended extendedSyntax, document *Document) error {
+	for _, name := range sortedKeys(source.Environment.Mounts) {
+		item := source.Environment.Mounts[name]
+		if err := validateObjectName("environment.mounts", name); err != nil {
 			return err
 		}
-		container, err := resolveStaticString(item.Container, document.Environment.Vars)
+		target, err := resolveStaticString(item.Target, document.Environment.Vars)
 		if err != nil {
-			return fmt.Errorf("environment.paths.%s.container: %w", name, err)
+			return fmt.Errorf("environment.mounts.%s.target: %w", name, err)
 		}
-		if !strings.HasPrefix(container, "/") {
-			return fmt.Errorf("environment.paths.%s.container must be absolute", name)
+		if target == "" {
+			target = path.Join("/mnt", name)
 		}
-		update := UpdatePolicy(item.Update)
+		if !path.IsAbs(target) || path.Clean(target) != target || strings.Contains(target, `\`) {
+			return fmt.Errorf("environment.mounts.%s.target must be a normalized absolute Linux path", name)
+		}
+		if err := validateEnvironmentMountTarget(target); err != nil {
+			return fmt.Errorf("environment.mounts.%s.target: %w", name, err)
+		}
+		update := UpdatePolicy(item.UpdatePolicy)
 		if update != UpdatePreserve && update != UpdateReplace && update != UpdateUnmanaged {
-			return fmt.Errorf("environment.paths.%s.update must be preserve, replace, or unmanaged", name)
+			return fmt.Errorf("environment.mounts.%s.update_policy must be preserve, replace, or unmanaged", name)
 		}
-		writable, err := resolveSyntaxBool(item.Writable, "environment.paths."+name+".writable")
+		writable, err := resolveSyntaxBool(item.Writable, "environment.mounts."+name+".writable")
 		if err != nil {
 			return err
 		}
-		document.Environment.Paths[name] = Path{Container: container, Writable: writable, Update: update}
+		document.Environment.Mounts[name] = EnvironmentMount{Target: target, Writable: writable, UpdatePolicy: update}
 	}
-	pathReferences := map[string]int{}
+	mountReferences := map[string]int{}
 	for _, name := range sortedKeys(extended.Mounts) {
 		item := extended.Mounts[name]
-		pathName, _ := referencedName("extends", item.Docker.Extends, environmentPathReferencePrefix)
-		pathReferences[pathName]++
-		resolvedPath := document.Environment.Paths[pathName]
+		contractName, _ := referencedName("extends", item.Docker.Extends, environmentMountReferencePrefix)
+		mountReferences[contractName]++
+		contract := document.Environment.Mounts[contractName]
 		mount := DockerMount{
-			Extends: item.Docker.Extends,
-			Mode:    MountMode(item.Docker.Mode),
-			Source:  strings.TrimSpace(item.Docker.Source),
-			Name:    strings.TrimSpace(item.Docker.Name),
-			Path:    resolvedPath,
+			Extends:  item.Docker.Extends,
+			Mode:     MountMode(item.Docker.Mode),
+			Source:   strings.TrimSpace(item.Docker.Source),
+			Name:     strings.TrimSpace(item.Docker.Name),
+			Contract: contract,
 		}
 		if err := validateMount("docker.mounts."+name, mount); err != nil {
 			return err
 		}
 		document.Docker.Mounts[name] = mount
 	}
-	for _, name := range sortedKeys(document.Environment.Paths) {
-		if pathReferences[name] != 1 {
-			return fmt.Errorf("environment path %q must have exactly one Docker mount; found %d", name, pathReferences[name])
+	for _, name := range sortedKeys(document.Environment.Mounts) {
+		if mountReferences[name] != 1 {
+			return fmt.Errorf("environment mount %q must have exactly one Docker mount; found %d", name, mountReferences[name])
 		}
 	}
 	return nil
+}
+
+func validateEnvironmentMountTarget(target string) error {
+	if err := ValidateRuntimeMountDestination(target); err != nil {
+		return err
+	}
+	reserved := []string{"/opt/reploy", "/mnt/reploy-home", "/mnt/reploy-output"}
+	for _, protected := range reserved {
+		if runtimeMountPathsOverlap(target, protected) {
+			return fmt.Errorf("overlaps reserved container path %q", protected)
+		}
+	}
+	return nil
+}
+
+// ValidateRuntimeMountDestination applies the platform-independent container
+// path restrictions shared by blueprint validation and canonical runtime plans.
+func ValidateRuntimeMountDestination(target string) error {
+	if target == "/" {
+		return fmt.Errorf("must not be the container filesystem root")
+	}
+	for _, reserved := range []string{"/dev", "/proc", "/sys", "/run/secrets", "/etc/hostname", "/etc/hosts", "/etc/resolv.conf"} {
+		if runtimeMountPathsOverlap(target, reserved) {
+			return fmt.Errorf("overlaps reserved container path %q", reserved)
+		}
+	}
+	return nil
+}
+
+func runtimeMountPathsOverlap(left string, right string) bool {
+	return left == right || strings.HasPrefix(left, right+"/") || strings.HasPrefix(right, left+"/")
 }
 
 func validateMount(field string, mount DockerMount) error {
 	switch mount.Mode {
 	case MountManagedBind:
 		cleanSource := path.Clean(mount.Source)
-		if mount.Path.Update == UpdateUnmanaged || mount.Source == "" || path.IsAbs(mount.Source) || cleanSource == ".." || strings.HasPrefix(cleanSource, "../") {
+		if mount.Contract.UpdatePolicy == UpdateUnmanaged || mount.Source == "" || path.IsAbs(mount.Source) || cleanSource == ".." || strings.HasPrefix(cleanSource, "../") {
 			return fmt.Errorf("%s managed-bind requires managed update policy and relative source", field)
 		}
 	case MountVolume:
-		if mount.Path.Update == UpdateUnmanaged || mount.Name == "" {
+		if mount.Contract.UpdatePolicy == UpdateUnmanaged || mount.Name == "" {
 			return fmt.Errorf("%s volume requires managed update policy and name", field)
 		}
 	case MountBind:
-		if mount.Path.Update != UpdateUnmanaged || mount.Source == "" {
-			return fmt.Errorf("%s bind requires update: unmanaged and source", field)
+		if mount.Contract.UpdatePolicy != UpdateUnmanaged || mount.Source == "" {
+			return fmt.Errorf("%s bind requires update_policy: unmanaged and source", field)
 		}
 		if !containsInterpolation(mount.Source) && !isAnyAbsolutePath(mount.Source) {
 			return fmt.Errorf("%s bind source must be absolute", field)
 		}
 	case MountTmpfs:
-		if mount.Path.Update == UpdateUnmanaged {
-			return fmt.Errorf("%s tmpfs does not support update: unmanaged", field)
+		if mount.Contract.UpdatePolicy == UpdateUnmanaged {
+			return fmt.Errorf("%s tmpfs does not support update_policy: unmanaged", field)
 		}
 	default:
 		return fmt.Errorf("%s.mode is invalid: %s", field, mount.Mode)
@@ -221,31 +441,43 @@ func validateMount(field string, mount DockerMount) error {
 	return nil
 }
 
-func resolveExecutablesAndCommands(source Syntax, document *Document) error {
-	for _, name := range sortedKeys(source.Environment.Executables) {
-		item := source.Environment.Executables[name]
-		if _, ok := document.Environment.Components[item.Component]; !ok {
-			return fmt.Errorf("environment.executables.%s references missing component %q", name, item.Component)
+func resolveExecutableProfiles(field string, source map[string]ExecutableSyntax) (map[string]Executable, error) {
+	profiles := make(map[string]Executable, len(source))
+	for _, name := range sortedKeys(source) {
+		if err := validateProviderIdentifier(field, name); err != nil {
+			return nil, err
+		}
+		item := source[name]
+		contributionSource := strings.TrimSpace(item.Source)
+		if contributionSource != ContributionProviderOS && contributionSource != ContributionProviderPython {
+			return nil, fmt.Errorf("%s.%s.source must be os or python", field, name)
 		}
 		order, err := resolveOrder(item.Order)
 		if err != nil {
-			return fmt.Errorf("environment.executables.%s.order: %w", name, err)
+			return nil, fmt.Errorf("%s.%s.order: %w", field, name, err)
 		}
 		binary := strings.TrimSpace(item.Binary)
-		if binary == "" {
-			return fmt.Errorf("environment.executables.%s.binary is required", name)
+		if err := validateProviderIdentifier(field+"."+name+".binary", binary); err != nil {
+			return nil, err
 		}
-		document.Environment.Executables[name] = Executable{
-			Component: item.Component, Binary: binary, Order: order,
+		profiles[name] = Executable{
+			Source: contributionSource, Binary: binary, Order: order,
 			ArgvPrefix: append([]string(nil), item.ArgvPrefix...), ArgvSuffix: append([]string(nil), item.ArgvSuffix...),
 		}
 	}
+	return profiles, nil
+}
+
+func resolveExecutablesAndCommands(source Syntax, document *Document) error {
 	triggerOwner := map[string]string{}
 	for _, name := range sortedKeys(source.Environment.Commands) {
+		if err := validateProviderIdentifier("environment.commands", name); err != nil {
+			return err
+		}
 		item := source.Environment.Commands[name]
-		executable, ok := document.Environment.Executables[item.Executable]
+		_, executable, ok := document.Environment.ResolveExecutableProfile(item.Executable)
 		if !ok {
-			return fmt.Errorf("environment.commands.%s references missing executable %q", name, item.Executable)
+			return fmt.Errorf("environment.commands.%s references missing qualified executable %q", name, item.Executable)
 		}
 		order := append([]ArgumentSegment(nil), executable.Order...)
 		if len(item.Order) > 0 {

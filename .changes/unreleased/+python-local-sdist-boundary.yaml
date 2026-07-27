@@ -1,0 +1,2 @@
+kind: Fixed
+body: Let Python packaging define local override contents by retaining and validating an sdist before building or reusing its wheel.

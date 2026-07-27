@@ -1,0 +1,2 @@
+kind: Changed
+body: Make repeated no-op builds reuse the locally selected base image and a post-sdist learned Python source relevance map instead of pulling the base and hashing unrelated development trees again.

@@ -1,0 +1,2 @@
+kind: Changed
+body: Simplify validation and deployment info output, diagnose likely local blueprint paths with explicit file forms, and remove the redundant public `--docker` selector.

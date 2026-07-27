@@ -1,6 +1,6 @@
 ---
 status: Draft
-updated: 2026-07-11
+updated: 2026-07-25
 summary: Design for a neutral OmegaConf Inspector demo service blueprint.
 ---
 
@@ -212,30 +212,48 @@ examples/omegaconf-inspector/
       omegaconf-highlight.js
   reploy/
     omegaconf-inspector.blueprint.yaml
+    overrides.yaml
 ```
 
 The `pyproject.toml` should include package data for
 `omegaconf_inspector/static/*` so the frontend is present in the wheel and in a
 prepared Reploy bundle.
 
-The local blueprint should use `app.provider.local_sources` to point from the
-blueprint directory back to the package root. This is the same relative-source
-pattern used by Arbiter's in-repo blueprint. For the proposed layout, the local
-source entry should resolve the `omegaconf-inspector` package from `..`:
+The published blueprint contains only the ordinary
+`omegaconf-inspector` requirement. The development checkout keeps a
+`overrides.yaml` beside that local blueprint. It defines the common development
+checkout directory (`~/dev` in this layout) as a relative workspace and selects
+the inspector beneath `reploy/examples`. Creating a staging directory from the
+local blueprint imports that choice, resolves the workspace to an absolute
+path, and keeps the project path workspace-relative:
 
-```yaml
-app:
-  provider:
-    type: python
-    identifier: omegaconf-inspector
-    local_sources:
-      omegaconf-inspector: ..
+```bash
+reploy stage ./reploy/omegaconf-inspector.blueprint.yaml
+reploy build
+./reploy-staging/omegaconf-inspector config init
+./reploy-staging/omegaconf-inspector config check
+./reploy-staging/omegaconf-inspector up
+reploy test
 ```
 
-The GitHub-backed blueprint index entry should point at the same blueprint
-inside the Reploy repository. When Reploy stages that GitHub ref, the relative
-local source should resolve within the checked-out repository just as it does
-for local development.
+Java is not a dependency of OmegaConf Inspector. The local OmegaConf checkout
+owns a strict `.reploy.yaml` declaring its legacy setuptools build and
+`tool:java` requirement. Reploy reads that recipe only if dependency resolution
+selects the local OmegaConf override, resolves Java into an isolated source
+builder, and leaves Java out of the workload image. Neither the Inspector
+blueprint nor its development sidecar names Java.
+
+An interactive standalone build prints a fast result directly or temporarily
+shows an inline progress panel that exits automatically. If the build fails,
+`reploy overrides` opens the package editor, where validation retains a
+scrollable log and allows the staged choice to be corrected and retried. The
+package table names the selected package source: PyPI, a direct requirement
+URL, or a local directory override. PyPI rows retain their declared version
+constraints, and local rows show the selected path. Its workspace root can be
+changed inside the editor; projects beneath a configured root are stored
+relative to that common root, while paths remain absolute when it is unset. The
+GitHub-backed blueprint index entry points at the clean blueprint and does not
+import the development sidecar, because remote refs never consume it.
 
 ## Service Configuration
 
@@ -269,56 +287,57 @@ serve
 config init
 config check
 config show
-project list
-project show <id>
 version
 ```
 
 Installed command exposure should be conservative:
 
-- expose `config check`, `config show`, project list/show, and version
+- expose `config check`, `config show`, and version
 - use `serve` as the runtime command, not as an operator command
 - keep `config init` as a staging/bootstrap command unless a clear installed
   use case appears
+
+Project creation, selection, editing, and inspection belong to the web UI. The
+CLI intentionally does not duplicate those workflows.
 
 ## Blueprint Shape
 
 The blueprint should demonstrate:
 
 - Python package root for the demo service
-- preserved `conf` and `data` managed paths
+- preserved `conf` and `data` mounts
 - read-only runtime config mount
 - writable runtime data mount
 - HTTP port publication
 - health check against `/_health_`
 - install hooks that check config before start and health after start
 - success output with the service URL
-- environment commands for service config and persisted project inspection
+- environment commands for deployment configuration and a version smoke check
 - localhost-only host port binding, because users may paste real configs or
   secrets into the inspector
 
-Managed paths should express the config/data split explicitly:
+Managed mounts should express the config/data split explicitly:
 
 ```yaml
 environment:
-  paths:
+  mounts:
     config:
-      container: /conf
+      target: /conf
       writable: true
-      update: preserve
+      update_policy: preserve
     data:
-      container: /data
+      target: /data
       writable: true
-      update: preserve
+      update_policy: preserve
 
 docker:
   mounts:
     config:
-      extends: environment.paths.config
+      extends: environment.mounts.config
       mode: managed-bind
       source: conf
     data:
-      extends: environment.paths.data
+      extends: environment.mounts.data
       mode: managed-bind
       source: data
 ```
@@ -331,7 +350,7 @@ local operator tool, not a network service.
 
 The first implementation should be considered good enough when:
 
-- a user can stage and bundle the demo from `examples/omegaconf-inspector`
+- a user can stage and build the demo from `examples/omegaconf-inspector`
 - the Reploy blueprint index can expose `omegaconf-inspector-demo` through a
   GitHub-backed blueprint reference
 - the bundle includes FastAPI, Uvicorn, OmegaConf, and packaged static assets
@@ -339,9 +358,10 @@ The first implementation should be considered good enough when:
 - `config init` creates an editable service config template, and
   `config check` validates it before service start
 - the UI can create a project, edit config layers, and merge them
-- `data` survives update/reinstall flows that preserve managed paths
+- `data` survives update/reinstall flows that preserve mounts
 - `conf` remains app-owned service config, not user project input
-- the installed control surface can show config and project state
+- the staged and installed control surfaces can show service config and operate
+  the deployment
 - docs can use the demo to explain Reploy without referencing Arbiter
 
 ## Non-Goals For V1

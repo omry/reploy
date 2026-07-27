@@ -1,0 +1,13 @@
+blueprint:
+  schema: 1
+  version: 0.1.0
+  requires_reploy: ">=0.5.1.dev1"
+  compatibility:
+    platforms: [linux/amd64, linux/arm64]
+
+environment:
+  id: smoke-direct
+  base:
+    image: python:3.13-slim
+
+docker: {}

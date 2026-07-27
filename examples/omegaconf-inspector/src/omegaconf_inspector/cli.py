@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
-from pathlib import Path
 
 from . import __version__
-from .config import as_json, config_summary, database_path, init_config, load_config, show_config
+from .config import as_json, config_summary, init_config, show_config
 from .server import health_check, serve
-from .storage import ProjectStore
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -48,16 +45,6 @@ def build_parser() -> argparse.ArgumentParser:
     show_parser = config_sub.add_parser("show", help="Print service config.")
     add_dir(show_parser)
     show_parser.set_defaults(func=config_show_command)
-
-    project_parser = subparsers.add_parser("project", help="Inspect saved projects.")
-    project_sub = project_parser.add_subparsers(dest="project_command")
-    project_list = project_sub.add_parser("list", help="List projects.")
-    add_dir(project_list)
-    project_list.set_defaults(func=project_list_command)
-    project_show = project_sub.add_parser("show", help="Show a project.")
-    add_dir(project_show)
-    project_show.add_argument("project_id")
-    project_show.set_defaults(func=project_show_command)
 
     version_parser = subparsers.add_parser("version", help="Print the app version.")
     version_parser.set_defaults(func=version_command)
@@ -104,22 +91,3 @@ def config_check_command(args: argparse.Namespace) -> int:
 def config_show_command(args: argparse.Namespace) -> int:
     print(show_config(args.dir), end="")
     return 0
-
-
-def project_list_command(args: argparse.Namespace) -> int:
-    store = _store(args.dir)
-    print(as_json(store.list_projects()))
-    return 0
-
-
-def project_show_command(args: argparse.Namespace) -> int:
-    store = _store(args.dir)
-    print(as_json(store.get_project(args.project_id)))
-    return 0
-
-
-def _store(base_dir: str | Path | None) -> ProjectStore:
-    cfg = load_config(base_dir)
-    store = ProjectStore(database_path(cfg))
-    store.init()
-    return store

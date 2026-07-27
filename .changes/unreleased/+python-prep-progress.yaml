@@ -1,2 +1,2 @@
 kind: Changed
-body: Report quiet-mode phase progress and phase-scoped errors while preparing Python bundles and runtimes.
+body: Report phase progress and phase-scoped errors while resolving and materializing Python components.

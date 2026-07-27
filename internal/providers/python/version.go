@@ -1,9 +1,38 @@
 package python
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
+
+	pep440 "github.com/aquasecurity/go-pep440-version"
 )
+
+// ValidatePackageVersionV1 accepts one exact Python distribution version.
+// Parsing it here keeps provider-owned version syntax out of pip's constraint
+// grammar and gives every caller the same PEP 440 contract.
+func ValidatePackageVersionV1(value string) error {
+	if value == "" || value != strings.TrimSpace(value) {
+		return fmt.Errorf("Python package version must be nonempty PEP 440 text without surrounding whitespace")
+	}
+	if _, err := pep440.Parse(value); err != nil {
+		return fmt.Errorf("Python package version %q is not valid PEP 440: %w", value, err)
+	}
+	return nil
+}
+
+// ComparePackageVersionsV1 compares valid PEP 440 versions.
+func ComparePackageVersionsV1(left string, right string) (int, error) {
+	leftVersion, err := pep440.Parse(left)
+	if err != nil {
+		return 0, fmt.Errorf("parse Python package version %q: %w", left, err)
+	}
+	rightVersion, err := pep440.Parse(right)
+	if err != nil {
+		return 0, fmt.Errorf("parse Python package version %q: %w", right, err)
+	}
+	return leftVersion.Compare(rightVersion), nil
+}
 
 // requirementAllowsVersion validates the ordinary release-number specifiers
 // Reploy can establish from a built wheel without re-running dependency
@@ -27,12 +56,33 @@ func requirementAllowsVersion(requirement string, version string) (bool, bool) {
 	if remainder == "" || strings.HasPrefix(remainder, "@") {
 		return true, true
 	}
+	return versionSpecifiersAllowVersion(remainder, version)
+}
 
+// InterpreterVersionSatisfies evaluates the normalized release specifiers
+// accepted for a Python interpreter requirement against an observed runtime
+// version.
+func InterpreterVersionSatisfies(constraint string, version string) (bool, error) {
+	constraint = strings.TrimSpace(constraint)
+	if constraint == "" {
+		if _, ok := parseReleaseVersion(version); !ok {
+			return false, fmt.Errorf("Python interpreter version %q is not a normalized release version", version)
+		}
+		return true, nil
+	}
+	matches, supported := versionSpecifiersAllowVersion(constraint, version)
+	if !supported {
+		return false, fmt.Errorf("Python interpreter version constraint %q is unsupported", constraint)
+	}
+	return matches, nil
+}
+
+func versionSpecifiersAllowVersion(specifiers string, version string) (bool, bool) {
 	actual, ok := parseReleaseVersion(version)
 	if !ok {
 		return false, false
 	}
-	for _, raw := range strings.Split(remainder, ",") {
+	for _, raw := range strings.Split(specifiers, ",") {
 		specifier := strings.TrimSpace(raw)
 		operator, expectedText, ok := splitVersionSpecifier(specifier)
 		if !ok {

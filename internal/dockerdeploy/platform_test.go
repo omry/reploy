@@ -436,21 +436,6 @@ func TestDetectDockerRuntimeDetectsLinuxEngine(t *testing.T) {
 	}
 }
 
-func TestUninstallNeedsRootDependsOnPlatform(t *testing.T) {
-	restore := stubHostPlatform(t, hostPlatform{GOOS: "darwin"})
-	defer restore()
-	if UninstallNeedsRoot(UninstallOptions{}) {
-		t.Fatal("darwin Docker Desktop uninstall should not require root")
-	}
-	restore()
-
-	restore = stubHostPlatform(t, hostPlatform{GOOS: "linux"})
-	defer restore()
-	if !UninstallNeedsRoot(UninstallOptions{}) {
-		t.Fatal("linux systemd uninstall should require root")
-	}
-}
-
 func stubHostPlatform(t *testing.T, platform hostPlatform) func() {
 	t.Helper()
 	previous := detectHostPlatform

@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve actionable Python package resolution errors when the resolver returns them through the build error chain instead of child output.

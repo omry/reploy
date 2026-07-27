@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/omry/reploy/internal/deploy"
 )
 
 type CommandSpec struct {
@@ -27,7 +29,9 @@ type RunOptions struct {
 	Stdin                  io.Reader
 	Stdout                 io.Writer
 	Stderr                 io.Writer
+	Progress               io.Writer
 	DockerPreflightTimeout time.Duration
+	NoCache                bool
 }
 
 const commandOutputErrorLimit = 4000
@@ -44,6 +48,17 @@ func runCommand(spec CommandSpec, options RunOptions) error {
 		if err := dockerPreflight(ctx, spec, effectiveDockerPreflightTimeout(options.DockerPreflightTimeout)); err != nil {
 			return err
 		}
+	}
+	return runCommandWithoutDockerPreflight(spec, options)
+}
+
+// runCommandWithoutDockerPreflight is for follow-up commands in one
+// higher-level Docker operation whose first command already passed preflight.
+// Callers must not use it as the entry point to an independent operation.
+func runCommandWithoutDockerPreflight(spec CommandSpec, options RunOptions) error {
+	ctx := options.Context
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	command := exec.CommandContext(ctx, spec.Name, spec.Args...)
 	command.Dir = spec.Dir
@@ -138,9 +153,13 @@ func runInterruptibleCommand(run commandRunner, spec CommandSpec, options RunOpt
 }
 
 func deploymentComposeProjectName(dir string) (string, error) {
-	if state, err := loadState(dir); err == nil {
-		if state.Install != nil && state.Install.ComposeProject != "" {
-			return state.Install.ComposeProject, nil
+	if content, err := os.ReadFile(filepath.Join(dir, StateFileName)); err == nil {
+		state, decodeErr := deploy.DecodeStateV1(content)
+		if decodeErr != nil {
+			return "", decodeErr
+		}
+		if state.Deployment != nil && state.Deployment.Installation.ComposeProject != "" {
+			return state.Deployment.Installation.ComposeProject, nil
 		}
 	}
 	values, err := readDockerEnv(dir)

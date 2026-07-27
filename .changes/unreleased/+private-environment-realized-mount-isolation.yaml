@@ -1,0 +1,2 @@
+kind: Security
+body: Revalidate realized install bind sources before starting a workload with a private deployment environment.

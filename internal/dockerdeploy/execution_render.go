@@ -35,15 +35,23 @@ type DockerControlInput struct {
 type composePlanDocument struct {
 	Name     string                        `yaml:"name"`
 	Services map[string]composePlanService `yaml:"services"`
+	Networks map[string]composePlanNetwork `yaml:"networks"`
 	Volumes  map[string]any                `yaml:"volumes,omitempty"`
+}
+
+type composePlanNetwork struct {
+	Name string `yaml:"name"`
 }
 
 type composePlanService struct {
 	Image         string             `yaml:"image"`
+	PullPolicy    string             `yaml:"pull_policy"`
 	ContainerName string             `yaml:"container_name"`
 	User          string             `yaml:"user"`
 	Restart       string             `yaml:"restart,omitempty"`
+	Entrypoint    []string           `yaml:"entrypoint,omitempty,flow"`
 	Command       []string           `yaml:"command,omitempty,flow"`
+	StdinOpen     bool               `yaml:"stdin_open,omitempty"`
 	Volumes       []composePlanMount `yaml:"volumes,omitempty"`
 	Ports         []string           `yaml:"ports,omitempty"`
 	ReadOnly      bool               `yaml:"read_only"`
@@ -58,16 +66,40 @@ type composePlanMount struct {
 	ReadOnly bool   `yaml:"read_only,omitempty"`
 }
 
+const privateWorkloadEnvironmentLauncherV1 = `set -eu
+reploy_private_environment_ready=
+while IFS= read -r reploy_private_environment_line; do
+  if [ -z "$reploy_private_environment_line" ]; then
+    reploy_private_environment_ready=1
+    break
+  fi
+  export "$reploy_private_environment_line"
+done
+[ "$reploy_private_environment_ready" = 1 ] || exit 70
+exec "$@" </dev/null
+`
+
 func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerRenderedInputs, error) {
 	if controlScript == "" {
 		return DockerRenderedInputs{}, fmt.Errorf("control script is required")
 	}
 	service := composePlanService{
-		Image: plan.Image, ContainerName: plan.ContainerName, User: plan.RuntimeUser.DockerUser, Restart: plan.Restart,
+		Image: plan.Image, PullPolicy: "never", ContainerName: plan.ContainerName, User: plan.RuntimeUser.DockerUser, Restart: plan.Restart,
 		ReadOnly: true, Environment: temporaryEnvironmentForPlan(plan), Tmpfs: []string{temporaryHomeMountForPlan(plan)},
 	}
 	if plan.Workload != nil {
 		service.Command = append([]string(nil), plan.Workload.Argv...)
+	}
+	if plan.PrivateEnvironment {
+		if plan.Workload == nil {
+			return DockerRenderedInputs{}, fmt.Errorf("private workload environment injection requires a workload")
+		}
+		if strings.TrimSpace(plan.Restart) != "" && strings.TrimSpace(plan.Restart) != "no" {
+			return DockerRenderedInputs{}, fmt.Errorf("private workload environment injection does not support Docker restart policy %q", plan.Restart)
+		}
+		composeLauncher := strings.ReplaceAll(privateWorkloadEnvironmentLauncherV1, "$", "$$")
+		service.Entrypoint = []string{"/bin/sh", "-c", composeLauncher, "reploy-private-environment"}
+		service.StdinOpen = true
 	}
 	volumes := map[string]any{}
 	for _, mount := range plan.Mounts {
@@ -96,7 +128,8 @@ func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerR
 		}
 	}
 	document := composePlanDocument{
-		Name: plan.NetworkName, Services: map[string]composePlanService{"environment": service}, Volumes: volumes,
+		Name: plan.NetworkName, Services: map[string]composePlanService{"environment": service},
+		Networks: map[string]composePlanNetwork{"default": {Name: plan.NetworkName}}, Volumes: volumes,
 	}
 	compose, err := yaml.Marshal(document)
 	if err != nil {
@@ -147,6 +180,10 @@ func temporaryHomeForPlan(plan DockerExecutionPlan) string {
 
 func temporaryHomeMountForPlan(plan DockerExecutionPlan) string {
 	return temporaryHomeForPlan(plan) + ":rw,noexec,nosuid,nodev,size=64m,mode=1777"
+}
+
+func transientHomeMountForPlan(plan DockerExecutionPlan) string {
+	return "type=volume,destination=" + temporaryHomeForPlan(plan) + ",volume-nocopy"
 }
 
 func temporaryEnvironmentForPlan(plan DockerExecutionPlan) map[string]string {

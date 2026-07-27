@@ -1,0 +1,2 @@
+kind: Changed
+body: Make bundle inspection and mutation commands use the canonical component-qualified request overlay without building the environment.

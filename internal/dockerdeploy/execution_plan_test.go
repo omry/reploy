@@ -1,19 +1,22 @@
 package dockerdeploy
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/deploy"
 )
 
 func TestPlanDockerExecutionBaseIdentity(t *testing.T) {
+	stagingDir := t.TempDir()
 	document := blueprint.Document{
-		Environment: blueprint.Environment{ID: "demo", Paths: map[string]blueprint.Path{}},
+		Environment: blueprint.Environment{ID: "demo", Mounts: map[string]blueprint.EnvironmentMount{}},
 		Docker:      blueprint.Docker{Image: "python:3.13", Mounts: map[string]blueprint.DockerMount{}},
 	}
 	plan, err := PlanDockerExecution(document, DockerPlanContext{
-		DeploymentDir: t.TempDir(), Phase: blueprint.PhaseStaged,
+		DeploymentDir: stagingDir, Phase: blueprint.PhaseStaged,
 		GeneratedImage: "reploy/demo:staging", Host: blueprint.HostMacOS, UID: 501, GID: 20,
 	})
 	if err != nil {
@@ -25,18 +28,45 @@ func TestPlanDockerExecutionBaseIdentity(t *testing.T) {
 	if plan.Scope != nil || plan.RuntimeUser.UID != 501 {
 		t.Fatalf("scope/user = %#v / %#v", plan.Scope, plan.RuntimeUser)
 	}
+	stagingHash, err := pathIdentityHash(stagingDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "demo-staging-" + stagingHash; plan.ContainerName != want || plan.NetworkName != want {
+		t.Fatalf("staging names = %q / %q, want %q", plan.ContainerName, plan.NetworkName, want)
+	}
+
+	installTarget := t.TempDir()
+	scope := blueprint.InstallScopeUser
+	plan, err = PlanDockerExecution(document, DockerPlanContext{
+		DeploymentDir: stagingDir, InstallTarget: installTarget, Phase: blueprint.PhaseInstalled, Scope: &scope,
+		GeneratedImage: "reploy/demo:generation", Host: blueprint.HostMacOS, UID: 501, GID: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	installedHash, err := pathIdentityHash(installTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "demo-" + installedHash; plan.ContainerName != want || plan.NetworkName != want {
+		t.Fatalf("installed names = %q / %q, want %q", plan.ContainerName, plan.NetworkName, want)
+	}
 }
 
 func TestPlanDockerExecutionMountModes(t *testing.T) {
 	root := t.TempDir()
-	external := t.TempDir()
+	external := filepath.Join(t.TempDir(), "external.conf")
+	if err := os.WriteFile(external, []byte("value=true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	document := blueprint.Document{
 		Environment: blueprint.Environment{ID: "demo"},
 		Docker: blueprint.Docker{Mounts: map[string]blueprint.DockerMount{
-			"config":   {Mode: blueprint.MountManagedBind, Source: "conf", Path: blueprint.Path{Container: "/config", Update: blueprint.UpdatePreserve}},
-			"data":     {Mode: blueprint.MountVolume, Name: "data", Path: blueprint.Path{Container: "/data", Writable: true, Update: blueprint.UpdateReplace}},
-			"external": {Mode: blueprint.MountBind, Source: external, Path: blueprint.Path{Container: "/external", Update: blueprint.UpdateUnmanaged}},
-			"scratch":  {Mode: blueprint.MountTmpfs, Path: blueprint.Path{Container: "/scratch", Writable: true, Update: blueprint.UpdatePreserve}},
+			"config":   {Mode: blueprint.MountManagedBind, Source: "conf", Contract: blueprint.EnvironmentMount{Target: "/config", UpdatePolicy: blueprint.UpdatePreserve}},
+			"data":     {Mode: blueprint.MountVolume, Name: "data", Contract: blueprint.EnvironmentMount{Target: "/data", Writable: true, UpdatePolicy: blueprint.UpdateReplace}},
+			"external": {Mode: blueprint.MountBind, Source: external, Contract: blueprint.EnvironmentMount{Target: "/external", UpdatePolicy: blueprint.UpdateUnmanaged}},
+			"scratch":  {Mode: blueprint.MountTmpfs, Contract: blueprint.EnvironmentMount{Target: "/scratch", Writable: true, UpdatePolicy: blueprint.UpdatePreserve}},
 		}},
 	}
 	plan, err := PlanDockerExecution(document, DockerPlanContext{DeploymentDir: root, Phase: blueprint.PhaseStaged, GeneratedImage: "image", UID: 501, GID: 20})
@@ -48,6 +78,9 @@ func TestPlanDockerExecutionMountModes(t *testing.T) {
 	}
 	if plan.Mounts[1].Mode != blueprint.MountVolume || plan.Mounts[1].Source == "data" {
 		t.Fatalf("volume was not directory-scoped: %#v", plan.Mounts[1])
+	}
+	if plan.Mounts[0].SourceKind != deploy.RuntimeMountSourceDirectory || plan.Mounts[1].SourceKind != deploy.RuntimeMountSourceGenerated || plan.Mounts[2].SourceKind != deploy.RuntimeMountSourceFile || plan.Mounts[3].SourceKind != deploy.RuntimeMountSourceGenerated {
+		t.Fatalf("mount source kinds = %#v", plan.Mounts)
 	}
 }
 
@@ -132,7 +165,7 @@ func TestDockerPlanCrossPlatformUserPaths(t *testing.T) {
 	}
 	for _, tt := range tests {
 		document := blueprint.Document{Environment: blueprint.Environment{ID: "demo"}, Docker: blueprint.Docker{Mounts: map[string]blueprint.DockerMount{
-			"config": {Mode: blueprint.MountManagedBind, Source: "conf", Path: blueprint.Path{Container: "/config", Update: blueprint.UpdatePreserve}},
+			"config": {Mode: blueprint.MountManagedBind, Source: "conf", Contract: blueprint.EnvironmentMount{Target: "/config", UpdatePolicy: blueprint.UpdatePreserve}},
 		}}}
 		plan, err := PlanDockerExecution(document, DockerPlanContext{DeploymentDir: tt.root, Phase: blueprint.PhaseStaged, Host: tt.host, GeneratedImage: "image", UID: 1000, GID: 1000})
 		if err != nil {

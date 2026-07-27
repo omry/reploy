@@ -1,0 +1,2 @@
+kind: Changed
+body: Make up and down the canonical runtime lifecycle commands, retain start and stop as aliases, and preserve the command typed in progress and error messages.

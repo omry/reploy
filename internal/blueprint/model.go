@@ -1,6 +1,9 @@
 package blueprint
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Document is the fully resolved schema-1 blueprint consumed by Reploy.
 // Parsing retains lazy expressions separately and produces this typed form only
@@ -15,60 +18,113 @@ type Metadata struct {
 	Schema         int
 	Version        string
 	RequiresReploy string
+	Compatibility  Compatibility
 }
 
 type Environment struct {
 	ID            string
 	ControlScript string
 	Vars          map[string]any
-	Translations  map[string]Translation
-	Components    map[string]Component
-	Terminal      Terminal
-	Install       Install
-	Paths         map[string]Path
-	Executables   map[string]Executable
-	Commands      map[string]Command
-	Workload      *Workload
+	Base          BaseComponent
+	Packages      EnvironmentPackages
+	Applications  map[string]Application
+	// Components is a derived provider-contribution projection used while the
+	// provider internals migrate to first-class contribution identities.
+	Components      map[string]Component `json:"-"`
+	AllowConcurrent ConcurrentRunPolicy
+	Terminal        Terminal
+	Install         Install
+	Mounts          map[string]EnvironmentMount
+	Commands        map[string]Command
+	Workload        *Workload
 }
+
+type EnvironmentPackages struct {
+	OS []APTPackageRequest
+}
+
+type Application struct {
+	Packages    ApplicationPackages
+	Options     map[string]ApplicationOption
+	Executables map[string]Executable
+}
+
+type ApplicationPackages struct {
+	OS     []APTPackageRequest
+	Python *PythonComponent
+}
+
+type ApplicationOption struct {
+	Description string
+	Packages    ApplicationOptionPackages
+}
+
+type ApplicationOptionPackages struct {
+	OS     []APTPackageRequest
+	Python *PythonOptionPackages
+}
+
+type PythonOptionPackages struct {
+	Requirements []string
+}
+
+type ConcurrentRunPolicy string
+
+const (
+	ConcurrentRunAuto ConcurrentRunPolicy = "auto"
+	ConcurrentRunYes  ConcurrentRunPolicy = "yes"
+	ConcurrentRunNo   ConcurrentRunPolicy = "no"
+)
 
 type Terminal struct {
 	ColorEnv string
 }
 
-type Translation struct {
-	Type     ComponentType
-	Scope    TranslationScope
-	Root     string
-	Mappings map[string]string
-}
-
-type TranslationScope string
-
-const (
-	TranslationScopeDevelopment TranslationScope = "development"
-)
-
 type ComponentType string
 
 const (
+	ComponentTypeBase   ComponentType = "base"
 	ComponentTypePython ComponentType = "python"
+	ComponentTypeAPT    ComponentType = "apt"
 )
 
 type Component struct {
-	Type         ComponentType
-	Optional     *OptionalComponent
+	Type        ComponentType
+	Base        *BaseComponent
+	Python      *PythonComponent
+	APT         *APTComponent
+	Options     map[string]ComponentOption
+	Executables map[string]Executable
+}
+
+type BaseComponent struct {
+	Image   string
+	Exports map[string]BaseExecutableExport
+}
+
+type BaseExecutableExport struct {
+	Executable string
+}
+
+type PythonComponent struct {
+	Interpreter  CommandRequirement
 	Requirements []string
 }
 
-type OptionalComponent struct {
-	Group       string
-	Description string
+type APTComponent struct {
+	Packages []APTPackageRequest
 }
 
-type Path struct {
-	Container string
-	Writable  bool
-	Update    UpdatePolicy
+type ComponentOption struct {
+	Description        string
+	PythonRequirements []string
+	APTPackages        []APTPackageRequest
+}
+
+type EnvironmentMount struct {
+	Target       string
+	Writable     bool
+	UpdatePolicy UpdatePolicy
 }
 
 type UpdatePolicy string
@@ -80,7 +136,7 @@ const (
 )
 
 type Executable struct {
-	Component  string
+	Source     string
 	Binary     string
 	Order      []ArgumentSegment
 	ArgvPrefix []string
@@ -113,6 +169,22 @@ type Command struct {
 	ForwardFlags    []string
 	Argv            []string
 	Order           []ArgumentSegment
+}
+
+func (environment Environment) ResolveExecutableProfile(reference string) (string, Executable, bool) {
+	applicationName, profileName, found := strings.Cut(reference, ".")
+	if !found || applicationName == "" || profileName == "" || strings.Contains(profileName, ".") {
+		return "", Executable{}, false
+	}
+	application, found := environment.Applications[applicationName]
+	if !found {
+		return "", Executable{}, false
+	}
+	profile, found := application.Executables[profileName]
+	if !found {
+		return "", Executable{}, false
+	}
+	return ApplicationContributionID(applicationName, profile.Source), profile, true
 }
 
 type Workload struct {
@@ -201,11 +273,11 @@ const (
 )
 
 type DockerMount struct {
-	Extends string
-	Mode    MountMode
-	Source  string
-	Name    string
-	Path    Path
+	Extends  string
+	Mode     MountMode
+	Source   string
+	Name     string
+	Contract EnvironmentMount
 }
 
 type DockerWorkload struct {

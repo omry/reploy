@@ -1,2 +1,2 @@
 kind: Fixed
-body: Reject translated Python wheels whose built version does not satisfy the active component requirement.
+body: Reject workspace Python wheels whose built version does not satisfy the active component requirement.

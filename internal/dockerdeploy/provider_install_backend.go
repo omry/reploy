@@ -1,0 +1,74 @@
+package dockerdeploy
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/providers/registry"
+	"github.com/omry/reploy/internal/providerstore"
+)
+
+func newProviderInstallRunBackendV1() providerInstallRunBackend {
+	return providerInstallRunBackend{
+		acquire:              deploy.AcquireOperationLock,
+		release:              func(lock *deploy.OperationLock) error { return lock.Unlock() },
+		readState:            func(lock *deploy.OperationLock) (deploy.StateV1, bool, error) { return lock.ReadStateV1() },
+		admit:                AdmitControlOperationV1,
+		complete:             CompleteControlAdmissionV1,
+		newStore:             providerstore.NewStore,
+		recoverDestination:   recoverProviderInstallDestinationV1,
+		buildSource:          RunLockedProviderBuildV1,
+		prepareAccount:       prepareProviderInstallAccountV1,
+		newReferences:        NewEnvironmentImageReferences,
+		planInstallation:     planProviderInstallationV1,
+		inspectHostTools:     inspectProviderInstallHostToolsV1,
+		preflightDestination: preflightProviderInstallBootstrapV1,
+		ensureDestination:    ensureProviderInstallDestinationV1,
+		cleanupDestination:   cleanupFailedProviderInstallDestinationV1,
+		prepareDestination: func(ctx context.Context, locked lockedProviderInstallV1) (preparedProviderInstallFilesV1, error) {
+			return prepareProviderInstallDestinationV1(ctx, locked, locked.HostTools.DockerPath, locked.HostTools.IncludeDockerUnit)
+		},
+		stopDestination: stopProviderInstallDestinationV1,
+		publish:         PublishInstalledBuildV1,
+		publishFiles: func(prepared preparedProviderInstallFilesV1) error {
+			return prepared.Publish()
+		},
+		activateDestination: func(ctx context.Context, locked lockedProviderInstallV1, _ deploy.StateV1) error {
+			if err := applyProviderInstallPathUpdatesV1(ctx, locked); err != nil {
+				return fmt.Errorf("materialize installed mounts: %w", err)
+			}
+			if err := configureProviderInstallHostV1(ctx, locked.Plan, locked.HostTools, locked.Input.RunOptions); err != nil {
+				return err
+			}
+			return executeProviderInstallAfterInstallV1(ctx, locked)
+		},
+		markReady: func(lock *deploy.OperationLock, installation deploy.InstallationStateV1) (deploy.StateV1, bool, error) {
+			return lock.MarkInstallationReadyV1(installation)
+		},
+		startDestination: func(ctx context.Context, locked lockedProviderInstallV1, _ deploy.StateV1) error {
+			return executeProviderInstallStartV1(ctx, locked)
+		},
+	}
+}
+
+func recoverProviderInstallDestinationV1(
+	ctx context.Context,
+	operation *deploy.OperationLock,
+	store providerstore.Store,
+	environment string,
+	deploymentDir string,
+) (bool, error) {
+	state, found, err := operation.ReadStateV1()
+	if err != nil {
+		return false, fmt.Errorf("read install destination state: %w", err)
+	}
+	var current *deploy.EnvironmentGenerationState
+	if found {
+		current = state.Current
+	}
+	return RecoverPendingPublication(
+		ctx, operation, store, current, environment, deploymentDir,
+		registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1,
+	)
+}

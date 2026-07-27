@@ -28,6 +28,7 @@ PY_COMPILE_FILES = (
     "tests/e2e/python/packages/smoke-suite/src/smoke_suite/cli.py",
     "tests/e2e/python/packages/smoke-suite/src/smoke_suite/__init__.py",
     "tests/e2e/python/packages/smoke-imap/src/smoke_imap/__init__.py",
+    "examples/omegaconf-inspector/src/omegaconf_inspector/cli.py",
 )
 
 
@@ -125,7 +126,7 @@ def cli_smoke(session: nox.Session) -> None:
 
 @nox.session(name="cli-integration", python=False)
 def cli_integration(session: nox.Session) -> None:
-    _cli_smoke(session, "--runtime", *session.posargs)
+    _cli_smoke(session, "--runtime", "--persistent-install", *session.posargs)
 
 
 @nox.session(name="docker-interrupts", python=False)

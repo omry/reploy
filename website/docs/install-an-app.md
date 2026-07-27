@@ -112,21 +112,89 @@ the same command validation and Docker behavior as `reploy app`.
 
 Use `--dir` when you want a different staging directory for this app instance.
 
-## 4. Start and Test Staging
+`stage --update` normally refuses to replace a staging directory belonging to
+a different blueprint. To replace it intentionally, provide the new ref and
+`--force`:
 
 ```bash
+reploy stage --update <new-app-blueprint-ref> --force
+```
+
+Forced replacement cancels queued runs, stops active runs and the staged
+workload, removes the old selected image reference, and records the replacement
+as a fresh unbuilt staging deployment. It does not overwrite arbitrary edited
+files in the directory.
+
+Remove a staging deployment, including its running workload and Reploy-owned
+image reference, with:
+
+```bash
+reploy stage --remove --dir <staging-directory>
+```
+
+Removal stops the staged workload but refuses to interrupt another active
+Reploy operation. Add `--force` to cancel that active work before removal. If
+filesystem cleanup cannot finish, Reploy reports the hidden directory
+containing whatever could not be removed so it can be cleaned up manually.
+
+### Configure the workload environment
+
+For apps configured through environment variables, create `.env` in the
+staging deployment:
+
+```dotenv
+API_TOKEN=replace-me
+LOG_LEVEL=info
+```
+
+Use one `NAME=value` assignment per line. Reploy accepts unquoted,
+single-quoted, and double-quoted values, but does not perform shell expansion
+or interpolation.
+
+Treat this file as a secret. On Linux and macOS, restrict it to the deployment
+owner before starting the workload:
+
+```bash
+chmod 600 reploy-staging/.env
+```
+
+On Windows, remove inherited access and grant read/write access only to the
+deployment owner, SYSTEM, and Administrators. Reploy rejects links, shared
+files, and permissions or ACLs that expose the file to other users.
+
+Reploy passes these values only to the launched workload. It does not mount
+`.env` or place its names or values in Compose, Docker metadata, image
+configuration, Reploy state, or build locks. Because Docker cannot repeat this
+private one-shot injection by itself, a blueprint using an autonomous Docker
+restart policy cannot be started with `.env`; use the app control command to
+restart it.
+
+Installation copies `.env` from staging on the first install and preserves the
+installed copy on updates. Use `--replace .env` (or `--clean`) only when you
+want to replace the installed values from staging.
+
+## 4. Build, Start, and Test Staging
+
+```bash
+reploy build
 reploy up
 reploy test
 ```
 
-`reploy up` prepares the selected bundle automatically when the bundle is
-missing or out of date. Use `reploy bundle build` when you want to force that
-preparation step before starting the service.
+`reploy build` resolves the selected application and environment packages,
+builds the environment image, and validates the resulting image. `up` and
+`restart` can perform that build automatically when the selected build is
+missing or stale. Staged app
+commands require a current build and tell you to run `reploy build` when one is
+missing. Use `reploy build --no-cache` when you need to rerun resolution and
+image construction explicitly.
 
-If the app exposes configuration commands, run those through `reploy app`. The
-exact commands are app-specific.
+If the app exposes configuration commands, run them through the app-named
+control command in the staging directory. The exact commands are app-specific.
+Use `reploy app` to show the complete app-command list.
 
 ```bash
+./reploy-staging/examplectl config check
 reploy app
 ```
 

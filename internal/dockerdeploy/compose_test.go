@@ -5,12 +5,16 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestRunCommandForwardsStdin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture requires a POSIX host")
+	}
 	var stdout strings.Builder
 	err := runCommand(
 		CommandSpec{Name: "sh", Args: []string{"-c", "cat"}},
@@ -25,6 +29,9 @@ func TestRunCommandForwardsStdin(t *testing.T) {
 }
 
 func TestRunCommandCapturesSuppressedOutputOnFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture requires a POSIX host")
+	}
 	err := runCommand(
 		CommandSpec{Name: "sh", Args: []string{"-c", "echo useful failure; exit 1"}},
 		RunOptions{},
@@ -44,6 +51,9 @@ func TestRunCommandCapturesSuppressedOutputOnFailure(t *testing.T) {
 }
 
 func TestRunCommandSkipsDockerPreflightForNonDockerCommand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture requires a POSIX host")
+	}
 	restore := stubDockerPreflight(t, func(context.Context, CommandSpec, time.Duration) error {
 		t.Fatal("docker preflight should not run for non-docker commands")
 		return nil
@@ -96,6 +106,33 @@ func TestRunCommandPassesDockerPreflightTimeout(t *testing.T) {
 	}
 	if gotTimeout != time.Second {
 		t.Fatalf("docker preflight timeout = %s, want 1s", gotTimeout)
+	}
+}
+
+func TestRunCommandWithoutDockerPreflightRunsKnownFollowup(t *testing.T) {
+	dir := t.TempDir()
+	writeFakeCommand(
+		t,
+		dir,
+		"docker",
+		"#!/bin/sh\nprintf 'followup:%s\\n' \"$*\"\n",
+		"@echo off\r\necho followup:%*\r\n",
+	)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	restore := stubDockerPreflight(t, func(context.Context, CommandSpec, time.Duration) error {
+		t.Fatal("known Docker follow-up repeated preflight")
+		return nil
+	})
+	defer restore()
+	var stdout strings.Builder
+	if err := runCommandWithoutDockerPreflight(
+		CommandSpec{Name: "docker", Args: []string{"exec", "validation"}},
+		RunOptions{Stdout: &stdout},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(stdout.String()) != "followup:exec validation" {
+		t.Fatalf("follow-up output = %q", stdout.String())
 	}
 }
 

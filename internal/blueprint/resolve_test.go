@@ -20,11 +20,364 @@ func TestResolveProducesTypedEnvironment(t *testing.T) {
 	if document.Environment.ControlScript != "demo" {
 		t.Fatalf("control script = %q", document.Environment.ControlScript)
 	}
-	if !reflect.DeepEqual(document.Environment.Executables["server"].Order, DefaultArgumentOrder) {
-		t.Fatalf("order = %#v", document.Environment.Executables["server"].Order)
+	if document.Environment.AllowConcurrent != ConcurrentRunAuto {
+		t.Fatalf("allow concurrent = %q", document.Environment.AllowConcurrent)
 	}
-	if document.Docker.Mounts["data"].Path.Update != UpdatePreserve {
-		t.Fatalf("mount path = %#v", document.Docker.Mounts["data"].Path)
+	if got := document.Blueprint.Compatibility.Platforms; !reflect.DeepEqual(got, []Platform{
+		{OS: "linux", Architecture: "amd64", Canonical: "linux/amd64"},
+		{OS: "linux", Architecture: "arm64", Canonical: "linux/arm64"},
+	}) {
+		t.Fatalf("compatibility platforms = %#v", got)
+	}
+	if !reflect.DeepEqual(document.Environment.Applications["application"].Executables["server"].Order, DefaultArgumentOrder) {
+		t.Fatalf("order = %#v", document.Environment.Applications["application"].Executables["server"].Order)
+	}
+	if document.Docker.Mounts["data"].Contract.UpdatePolicy != UpdatePreserve {
+		t.Fatalf("mount contract = %#v", document.Docker.Mounts["data"].Contract)
+	}
+	base := document.Environment.Components["base"]
+	if base.Type != ComponentTypeBase || base.Base == nil || base.Python != nil || base.APT != nil || base.Base.Image != "python:3.13-slim" {
+		t.Fatalf("base component = %#v", base)
+	}
+	application := document.Environment.Components[ApplicationContributionID("application", ContributionProviderPython)]
+	if application.Type != ComponentTypePython || application.Base != nil || application.Python == nil || application.APT != nil {
+		t.Fatalf("application component = %#v", application)
+	}
+	if application.Python.Interpreter != (CommandRequirement{Command: "python"}) {
+		t.Fatalf("default Python interpreter = %#v", application.Python.Interpreter)
+	}
+}
+
+func TestResolveAcceptsBaseOnlyEnvironment(t *testing.T) {
+	value := strings.Replace(
+		minimalBlueprint,
+		"  applications:\n    application:\n      packages:\n        python:\n          requirements: [demo-server]\n      executables:\n        server:\n          source: python\n          binary: demo-server\n",
+		"",
+		1,
+	)
+	value = strings.Replace(
+		value,
+		"  commands:\n    serve:\n      executable: application.server\n      argv: [serve]\n  workload:\n    command: serve\n    endpoints:\n      http:\n        scheme: http\n        port: 8080\n",
+		"",
+		1,
+	)
+	value = strings.Replace(
+		value,
+		"  workload:\n    endpoints:\n      http:\n        extends: environment.workload.endpoints.http\n        bind: {address: 0.0.0.0}\n        publish: {address: 127.0.0.1, staging: 18080, deployed: 8080}\n",
+		"",
+		1,
+	)
+	source, err := Decode([]byte(value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := Resolve(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(document.Environment.Applications) != 0 || len(document.Environment.Components) != 1 {
+		t.Fatalf("base-only environment = %#v", document.Environment)
+	}
+}
+
+func TestResolveAcceptsSmallestBlueprint(t *testing.T) {
+	source, err := Decode([]byte(`blueprint:
+  schema: 1
+  version: 0.1.0
+  compatibility:
+    platforms: [linux/amd64]
+environment:
+  id: minimal
+  base:
+    image: debian:13
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := Resolve(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if document.Environment.ID != "minimal" ||
+		document.Environment.Base.Image != "debian:13" ||
+		len(document.Environment.Applications) != 0 ||
+		len(document.Environment.Components) != 1 {
+		t.Fatalf("minimal document = %#v", document)
+	}
+}
+
+func TestResolveConcurrentRunPolicy(t *testing.T) {
+	for _, policy := range []ConcurrentRunPolicy{ConcurrentRunYes, ConcurrentRunNo, ConcurrentRunAuto} {
+		t.Run(string(policy), func(t *testing.T) {
+			value := strings.Replace(minimalBlueprint, "  base:\n", "  allow_concurrent: "+string(policy)+"\n  base:\n", 1)
+			source, err := Decode([]byte(value))
+			if err != nil {
+				t.Fatal(err)
+			}
+			document, err := Resolve(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if document.Environment.AllowConcurrent != policy {
+				t.Fatalf("allow concurrent = %q, want %q", document.Environment.AllowConcurrent, policy)
+			}
+		})
+	}
+}
+
+func TestResolveRejectsInvalidConcurrentRunPolicy(t *testing.T) {
+	value := strings.Replace(minimalBlueprint, "  base:\n", "  allow_concurrent: sometimes\n  base:\n", 1)
+	source, err := Decode([]byte(value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Resolve(source)
+	if err == nil || !strings.Contains(err.Error(), "environment.allow_concurrent must be yes, no, or auto") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestResolveRequiresQualifiedComponentExecutableReference(t *testing.T) {
+	value := strings.Replace(minimalBlueprint, "executable: application.server", "executable: server", 1)
+	source, err := Decode([]byte(value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Resolve(source)
+	if err == nil || !strings.Contains(err.Error(), `missing qualified executable "server"`) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestResolveRejectsInvalidExecutableProfileIdentifiers(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{
+			name: "profile name",
+			value: strings.NewReplacer(
+				"        server:\n", "        Server:\n",
+				"executable: application.server", "executable: application.Server",
+			).Replace(minimalBlueprint),
+			want: "environment.applications.application.executables must match [a-z][a-z0-9_-]*",
+		},
+		{
+			name:  "binary output name",
+			value: strings.Replace(minimalBlueprint, "binary: demo-server", "binary: demo.server", 1),
+			want:  "environment.applications.application.executables.server.binary must match [a-z][a-z0-9_-]*",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source, err := Decode([]byte(test.value))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = Resolve(source)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestResolveRejectsInvalidCommandIdentifier(t *testing.T) {
+	value := strings.NewReplacer(
+		"    serve:\n", "    'serve\\e[2J':\n",
+		"    command: serve\n", "    command: 'serve\\e[2J'\n",
+	).Replace(minimalBlueprint)
+	source, err := Decode([]byte(value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Resolve(source)
+	if err == nil || !strings.Contains(err.Error(), "environment.commands must match [a-z][a-z0-9_-]*") {
+		t.Fatalf("invalid command identifier error = %v", err)
+	}
+}
+
+func TestResolveAllowsEqualExecutableProfileNamesInDifferentApplications(t *testing.T) {
+	value := strings.Replace(minimalBlueprint, "    application:\n", "    tools:\n      packages:\n        os: [curl]\n      executables:\n        server:\n          source: os\n          binary: curl\n    application:\n", 1)
+	source, err := Decode([]byte(value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := Resolve(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if document.Environment.Applications["tools"].Executables["server"].Binary != "curl" || document.Environment.Applications["application"].Executables["server"].Binary != "demo-server" {
+		t.Fatalf("applications = %#v", document.Environment.Applications)
+	}
+}
+
+func TestResolveDefaultsEnvironmentMountTarget(t *testing.T) {
+	value := strings.Replace(minimalBlueprint, "      target: /data\n", "", 1)
+	source, err := Decode([]byte(value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := Resolve(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target := document.Environment.Mounts["data"].Target; target != "/mnt/data" {
+		t.Fatalf("default mount target = %q", target)
+	}
+}
+
+func TestResolveRejectsUnsafeEnvironmentMountTargets(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		target string
+		want   string
+	}{
+		{name: "relative", target: "data", want: "normalized absolute"},
+		{name: "root", target: "/", want: "filesystem root"},
+		{name: "unclean", target: "/srv/../etc", want: "normalized absolute"},
+		{name: "device subtree", target: "/dev/shm", want: `reserved container path "/dev"`},
+		{name: "resolver parent", target: "/etc", want: `reserved container path "/etc/hostname"`},
+		{name: "Docker resolver file", target: "/etc/resolv.conf", want: `reserved container path "/etc/resolv.conf"`},
+		{name: "secrets", target: "/run/secrets/app", want: `reserved container path "/run/secrets"`},
+		{name: "provider root", target: "/opt/reploy/providers", want: `reserved container path "/opt/reploy"`},
+		{name: "temporary home parent", target: "/mnt", want: `reserved container path "/mnt/reploy-home"`},
+		{name: "output", target: "/mnt/reploy-output", want: `reserved container path "/mnt/reploy-output"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := strings.Replace(minimalBlueprint, "      target: /data\n", "      target: "+test.target+"\n", 1)
+			source, err := Decode([]byte(value))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = Resolve(source)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestResolveRequiresStrictBaseComponent(t *testing.T) {
+	tests := []struct {
+		name string
+		old  string
+		new  string
+		want string
+	}{
+		{name: "missing", old: "  base:\n    image: python:3.13-slim\n", want: "environment.base.image is required"},
+		{name: "type", old: "  base:\n    image: python:3.13-slim\n", new: "  base:\n    type: python\n    image: python:3.13-slim\n", want: "field type not found"},
+		{name: "provider payload", old: "  base:\n    image: python:3.13-slim\n", new: "  base:\n    image: python:3.13-slim\n    requirements: []\n", want: "field requirements not found"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value := strings.Replace(minimalBlueprint, tt.old, tt.new, 1)
+			source, err := Decode([]byte(value))
+			if err != nil {
+				if !strings.Contains(err.Error(), tt.want) {
+					t.Fatalf("decode error = %v, want %q", err, tt.want)
+				}
+				return
+			}
+			_, err = Resolve(source)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolvePythonComponentOptions(t *testing.T) {
+	value := strings.Replace(minimalBlueprint,
+		"          requirements: [demo-server]\n",
+		"          interpreter: {command: python, version: '>=3.11', supplier: base}\n          requirements: [demo-server, demo-server]\n      options:\n        imap:\n          description: Install IMAP support.\n          packages:\n            python:\n              requirements: [demo-imap, demo-imap]\n", 1)
+	source, err := Decode([]byte(value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := Resolve(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	component := document.Environment.Components[ApplicationContributionID("application", ContributionProviderPython)]
+	if component.Python.Interpreter != (CommandRequirement{Command: "python", Version: ">=3.11", Supplier: "base"}) {
+		t.Fatalf("interpreter = %#v", component.Python.Interpreter)
+	}
+	if !reflect.DeepEqual(component.Python.Requirements, []string{"demo-server"}) {
+		t.Fatalf("requirements = %#v", component.Python.Requirements)
+	}
+	if got := component.Options["imap"].PythonRequirements; !reflect.DeepEqual(got, []string{"demo-imap"}) {
+		t.Fatalf("option requirements = %#v", got)
+	}
+}
+
+func TestResolveRejectsOptionSpecificPythonInterpreter(t *testing.T) {
+	value := strings.Replace(minimalBlueprint,
+		"      executables:\n",
+		"      options:\n        debug:\n          description: Install debugging support.\n          packages:\n            python:\n              interpreter: {command: python, supplier: base}\n              requirements: [debugpy]\n      executables:\n",
+		1,
+	)
+	source, err := Decode([]byte(value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Resolve(source)
+	if err == nil || !strings.Contains(err.Error(), "options.debug.packages.python.interpreter is not valid") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestDecodeRejectsProviderOwnedApplicationFields(t *testing.T) {
+	tests := []struct {
+		name string
+		old  string
+		new  string
+		want string
+	}{
+		{name: "application type", old: "    application:\n", new: "    application:\n      type: python\n", want: "field type not found"},
+		{name: "application requirements", old: "    application:\n", new: "    application:\n      requirements: [demo-server]\n", want: "field requirements not found"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Decode([]byte(strings.Replace(minimalBlueprint, tt.old, tt.new, 1)))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveOSContributionSyntax(t *testing.T) {
+	value := strings.Replace(minimalBlueprint, "  applications:\n",
+		"  packages:\n    os:\n      - curl\n      - package: python3=3.11.2-1+deb12u1\n        exports:\n          python:\n            executable: /usr/bin/python3\n  applications:\n", 1)
+	value = strings.Replace(value, "    application:\n",
+		"    application:\n      options:\n        git:\n          description: Install Git.\n          packages:\n            os: [git]\n", 1)
+	source, err := Decode([]byte(value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := Resolve(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := document.Environment.Packages.OS; len(got) != 2 || got[0].Name != "curl" || got[1].Exports["python"].Executable != "/usr/bin/python3" {
+		t.Fatalf("environment OS packages = %#v", got)
+	}
+	if got := document.Environment.Applications["application"].Options["git"].Packages.OS; len(got) != 1 || got[0].Name != "git" {
+		t.Fatalf("application OS option = %#v", got)
+	}
+}
+
+func TestResolveRequiresBlueprintCompatibilityPlatforms(t *testing.T) {
+	withoutCompatibility := strings.Replace(minimalBlueprint, "  compatibility:\n    platforms: [linux/amd64, linux/arm64]\n", "", 1)
+	source, err := Decode([]byte(withoutCompatibility))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Resolve(source)
+	if err == nil || !strings.Contains(err.Error(), "blueprint.compatibility.platforms must not be empty") {
+		t.Fatalf("Resolve() error = %v", err)
 	}
 }
 
@@ -51,7 +404,7 @@ func TestResolveMountUpdateMatrix(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateMount("mount", DockerMount{Mode: tt.mode, Source: tt.source, Name: tt.volume, Path: Path{Update: tt.update}})
+			err := validateMount("mount", DockerMount{Mode: tt.mode, Source: tt.source, Name: tt.volume, Contract: EnvironmentMount{UpdatePolicy: tt.update}})
 			if (err == nil) != tt.ok {
 				t.Fatalf("error = %v, ok = %v", err, tt.ok)
 			}
@@ -109,17 +462,17 @@ func TestResolveRejectsInvalidReadinessAndCommandExposure(t *testing.T) {
 
 func TestResolveRejectsDuplicateMountReferenceThatLeavesPathUnmapped(t *testing.T) {
 	value := strings.Replace(minimalBlueprint,
-		"    data:\n      container: /data\n      writable: true\n      update: preserve\n",
-		"    data:\n      container: /data\n      writable: true\n      update: preserve\n    cache:\n      container: /cache\n      update: preserve\n", 1)
+		"    data:\n      target: /data\n      writable: true\n      update_policy: preserve\n",
+		"    data:\n      target: /data\n      writable: true\n      update_policy: preserve\n    cache:\n      target: /cache\n      update_policy: preserve\n", 1)
 	value = strings.Replace(value,
 		"      source: data\n  workload:\n    endpoints:\n",
-		"      source: data\n    duplicate:\n      extends: environment.paths.data\n      mode: managed-bind\n      source: duplicate\n  workload:\n    endpoints:\n", 1)
+		"      source: data\n    duplicate:\n      extends: environment.mounts.data\n      mode: managed-bind\n      source: duplicate\n  workload:\n    endpoints:\n", 1)
 	source, err := Decode([]byte(value))
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = Resolve(source)
-	if err == nil || !strings.Contains(err.Error(), "environment path \"cache\" must have exactly one Docker mount") {
+	if err == nil || !strings.Contains(err.Error(), "environment mount \"cache\" must have exactly one Docker mount") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -142,19 +495,19 @@ func TestResolvedMinimalGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	type golden struct {
-		ID            string      `json:"id"`
-		ControlScript string      `json:"control_script"`
-		Component     Component   `json:"component"`
-		Path          Path        `json:"path"`
-		Executable    Executable  `json:"executable"`
-		Endpoint      Endpoint    `json:"endpoint"`
-		MountMode     MountMode   `json:"mount_mode"`
-		Publication   Publication `json:"publication"`
+		ID            string           `json:"id"`
+		ControlScript string           `json:"control_script"`
+		Component     Component        `json:"component"`
+		Mount         EnvironmentMount `json:"mount"`
+		Executable    Executable       `json:"executable"`
+		Endpoint      Endpoint         `json:"endpoint"`
+		MountMode     MountMode        `json:"mount_mode"`
+		Publication   Publication      `json:"publication"`
 	}
 	actual, err := json.MarshalIndent(golden{
 		ID: document.Environment.ID, ControlScript: document.Environment.ControlScript,
-		Component: document.Environment.Components["application"],
-		Path:      document.Environment.Paths["data"], Executable: document.Environment.Executables["server"],
+		Component: document.Environment.Components[ApplicationContributionID("application", ContributionProviderPython)],
+		Mount:     document.Environment.Mounts["data"], Executable: document.Environment.Applications["application"].Executables["server"],
 		Endpoint: document.Environment.Workload.Endpoints["http"], MountMode: document.Docker.Mounts["data"].Mode,
 		Publication: document.Docker.Workload.Endpoints["http"].Publish,
 	}, "", "  ")
@@ -165,7 +518,8 @@ func TestResolvedMinimalGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(string(actual)) != strings.TrimSpace(string(want)) {
+	normalizedWant := strings.ReplaceAll(string(want), "\r\n", "\n")
+	if strings.TrimSpace(string(actual)) != strings.TrimSpace(normalizedWant) {
 		t.Fatalf("resolved golden mismatch\nactual:\n%s\nwant:\n%s", actual, want)
 	}
 }

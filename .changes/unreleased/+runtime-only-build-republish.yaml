@@ -1,0 +1,2 @@
+kind: Fixed
+body: Republish the current validated image under an updated build generation when only runtime blueprint configuration changes.

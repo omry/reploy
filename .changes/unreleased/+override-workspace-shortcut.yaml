@@ -1,0 +1,2 @@
+kind: Fixed
+body: Move the package override path picker's workspace-root shortcut to Ctrl+W so uppercase W remains available in paths and filters.

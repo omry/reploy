@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const environmentPathReferencePrefix = "environment.paths."
+const environmentMountReferencePrefix = "environment.mounts."
 const environmentEndpointReferencePrefix = "environment.workload.endpoints."
 
 type extendedSyntax struct {
@@ -15,8 +15,8 @@ type extendedSyntax struct {
 }
 
 type extendedMountSyntax struct {
-	Path   PathSyntax
-	Docker DockerMountSyntax
+	Contract MountSyntax
+	Docker   DockerMountSyntax
 }
 
 type extendedEndpointSyntax struct {
@@ -33,15 +33,15 @@ func resolveExtends(source Syntax) (extendedSyntax, error) {
 	mountNames := sortedKeys(source.Docker.Mounts)
 	for _, name := range mountNames {
 		mount := source.Docker.Mounts[name]
-		reference, err := referencedName("docker.mounts."+name+".extends", mount.Extends, environmentPathReferencePrefix)
+		reference, err := referencedName("docker.mounts."+name+".extends", mount.Extends, environmentMountReferencePrefix)
 		if err != nil {
 			return extendedSyntax{}, err
 		}
-		path, ok := source.Environment.Paths[reference]
+		contract, ok := source.Environment.Mounts[reference]
 		if !ok {
-			return extendedSyntax{}, fmt.Errorf("docker.mounts.%s.extends references missing environment path %q", name, reference)
+			return extendedSyntax{}, fmt.Errorf("docker.mounts.%s.extends references missing environment mount %q", name, reference)
 		}
-		resolved.Mounts[name] = extendedMountSyntax{Path: path, Docker: mount}
+		resolved.Mounts[name] = extendedMountSyntax{Contract: contract, Docker: mount}
 	}
 
 	if source.Docker.Workload == nil {

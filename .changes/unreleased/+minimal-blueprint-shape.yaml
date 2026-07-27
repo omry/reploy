@@ -1,0 +1,2 @@
+kind: Changed
+body: Allow base-only environments and document the smallest valid blueprint without empty application or Docker nodes.
