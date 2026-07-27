@@ -97,6 +97,16 @@ func DecodeStateV1(content []byte) (StateV1, error) {
 	if err := json.Unmarshal(content, &envelope); err != nil {
 		return StateV1{}, fmt.Errorf("decode state envelope: %w", err)
 	}
+	legacyComponents := false
+	var blueprintProbe struct {
+		Blueprint json.RawMessage `json:"blueprint"`
+	}
+	if json.Unmarshal(content, &blueprintProbe) == nil {
+		var payload blueprint.ResolvedDocumentV1
+		if json.Unmarshal(blueprintProbe.Blueprint, &payload) == nil {
+			legacyComponents = blueprint.HasLegacyComponentsResolvedShapeV1(payload)
+		}
+	}
 	if envelope.Schema == "" {
 		return StateV1{}, fmt.Errorf("%w: deployment state is not %s; recreate the deployment", ErrLegacyStateUnsupported, StateSchemaV1)
 	}
@@ -107,6 +117,9 @@ func DecodeStateV1(content []byte) (StateV1, error) {
 	decoder.DisallowUnknownFields()
 	var state StateV1
 	if err := decoder.Decode(&state); err != nil {
+		if legacyComponents {
+			return StateV1{}, legacyComponentsStateUnsupportedV1(err)
+		}
 		return StateV1{}, fmt.Errorf("decode state: %w", err)
 	}
 	var extra any
@@ -117,6 +130,9 @@ func DecodeStateV1(content []byte) (StateV1, error) {
 		return StateV1{}, fmt.Errorf("decode state trailer: %w", err)
 	}
 	if err := ValidateStateV1(state); err != nil {
+		if legacyComponents {
+			return StateV1{}, legacyComponentsStateUnsupportedV1(err)
+		}
 		return StateV1{}, fmt.Errorf("validate state: %w", err)
 	}
 	canonicalContent, err := canonical.Marshal(state)
@@ -127,4 +143,12 @@ func DecodeStateV1(content []byte) (StateV1, error) {
 		return StateV1{}, fmt.Errorf("state is not canonical JSON")
 	}
 	return state, nil
+}
+
+func legacyComponentsStateUnsupportedV1(cause error) error {
+	return fmt.Errorf(
+		"%w: staging state uses the incompatible components-based development blueprint; run `reploy stage --update --force` to recover it: %v",
+		ErrLegacyStateUnsupported,
+		cause,
+	)
 }

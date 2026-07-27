@@ -395,6 +395,27 @@ def cleanup_workdir(workdir: Path) -> None:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+def cleanup_staged_deployment(reploy: Path, workdir: Path, *, color: bool) -> None:
+    deploy_dir = workdir / "deployment"
+    if not (deploy_dir / ".reploy" / "state.json").is_file():
+        return
+    env = os.environ.copy()
+    if color:
+        env.pop("NO_COLOR", None)
+        env.pop("CI", None)
+        env["REPLOY_COLOR"] = "always"
+        env["TERM"] = "xterm-256color"
+        env["COLORTERM"] = "truecolor"
+    else:
+        env["NO_COLOR"] = "1"
+        env["TERM"] = "dumb"
+    run(
+        [str(reploy), "stage", "--remove", "--force", "--dir", str(deploy_dir)],
+        cwd=workdir,
+        env=env,
+    )
+
+
 def run_docker_unavailable_probe(reploy: Path, deploy_dir: Path, workdir: Path, env: dict[str, str]) -> None:
     doctor = run_expect_failure(
         [str(reploy), "doctor", "--preinstall", "--scope", install_scope(), "--dir", str(deploy_dir)],
@@ -759,6 +780,7 @@ def main() -> int:
         )
     else:
         workdir = make_workdir(args.workdir)
+        primary_error: BaseException | None = None
         try:
             run_smoke(
                 reploy,
@@ -770,8 +792,26 @@ def main() -> int:
                 port_conflict_probe=args.port_conflict_probe,
                 docker_unavailable_probe=args.docker_unavailable_probe,
             )
+        except BaseException as error:
+            primary_error = error
+            raise
         finally:
-            cleanup_workdir(workdir)
+            cleanup_succeeded = False
+            try:
+                cleanup_staged_deployment(reploy, workdir, color=args.color)
+                cleanup_succeeded = True
+            except BaseException as cleanup_error:
+                if primary_error is None:
+                    raise
+                print(
+                    f"[smoke] warning: staging cleanup failed after earlier error: {cleanup_error}",
+                    file=sys.stderr,
+                )
+            finally:
+                if cleanup_succeeded:
+                    cleanup_workdir(workdir)
+                else:
+                    print(f"[smoke] workdir retained for cleanup: {workdir}", file=sys.stderr)
     return 0
 
 

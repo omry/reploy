@@ -43,7 +43,10 @@ reploy build
 The resulting image is always fully validated. `--validate-layers` additionally
 runs the same full validation after every newly created component layer.
 `--no-cache` reruns resolvers and image construction instead of reusing the
-current verified build.
+current verified build. Warm reuse of a mutable base-image tag accepts Docker's
+matching current local image without contacting the registry; use `--no-cache`
+when the operation must check the remote tag and rebuild from its current
+selection.
 
 `reploy up` and `reploy restart` automatically reuse a current successful build
 or run the same build pipeline when it is missing or stale. Staged app commands,

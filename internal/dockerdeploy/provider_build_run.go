@@ -11,6 +11,7 @@ import (
 	"sort"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/buildprogress"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
@@ -26,6 +27,7 @@ type ProviderBuildRunInputV1 struct {
 	ValidateLayers  bool
 	ValidateChoices bool
 	Progress        io.Writer
+	BuildProgress   buildprogress.Reporter
 	RunOptions      RunOptions
 }
 
@@ -39,6 +41,7 @@ type LockedProviderBuildRunInputV1 struct {
 	ValidateLayers  bool
 	ValidateChoices bool
 	Progress        io.Writer
+	BuildProgress   buildprogress.Reporter
 	RunOptions      RunOptions
 }
 
@@ -135,7 +138,8 @@ func runProviderBuildV1(
 		Runtime: input.Runtime, Automatic: input.Automatic,
 		NoCache: input.NoCache, ValidateLayers: input.ValidateLayers,
 		ValidateChoices: input.ValidateChoices,
-		Progress:        input.Progress, RunOptions: input.RunOptions,
+		Progress:        input.Progress, BuildProgress: input.BuildProgress,
+		RunOptions: input.RunOptions,
 	}, backend)
 }
 
@@ -206,6 +210,10 @@ func runLockedProviderBuildV1(
 	if state.Deployment != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("provider build requires a staged deployment; an installed deployment cannot be used as a build source")
 	}
+	buildprogress.Report(input.BuildProgress, buildprogress.Event{
+		Phase: buildprogress.PhaseInspect, Environment: document.Environment.ID,
+		Detail: "Inspecting staged inputs and build cache",
+	})
 	writeProviderBuildProgress(input.Progress, "preparing environment %s for %s", document.Environment.ID, state.Platform.Canonical)
 	rawPackageOverrides, packageOverrides, packageOverrideIntent, err := LoadStagedPackageOverridesV1(
 		input.Operation, deploymentDir, document,
@@ -265,7 +273,6 @@ func runLockedProviderBuildV1(
 	reusableWheels := []providerstore.ArtifactDescriptor{}
 	priorSources := []providers.ResolvedSourceInput{}
 	priorSourceWheels := []providerstore.ArtifactDescriptor{}
-	observedSources := []PythonLocalSource{}
 	cacheExists := false
 	if (state.Current != nil || validatedCandidateFound) && !input.NoCache {
 		cacheExists, err = input.Store.Exists()
@@ -310,13 +317,11 @@ func runLockedProviderBuildV1(
 				distributions = append(distributions, distribution)
 			}
 			sort.Strings(distributions)
-			observedSources, err = ObserveSelectedPythonLocalSources(localOverrides, distributions)
+			reusableSources, err = ReusablePythonLocalSourcesV1(
+				input.Store, localOverrides, eligible,
+			)
 			if err != nil {
 				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("observe current provider build local sources: %w", err)
-			}
-			reusableSources, err = MatchReusablePythonLocalSources(eligible, observedSources)
-			if err != nil {
-				return LockedProviderBuildExecutionResultV1{}, err
 			}
 			reusableWheels, err = buildLockSelectedSourceWheelsV1(input.Store, lock, reusableSources)
 			if err != nil {
@@ -374,6 +379,9 @@ func runLockedProviderBuildV1(
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("plan provider build runtime: %w", err)
 	}
 
+	buildprogress.Report(input.BuildProgress, buildprogress.Event{
+		Phase: buildprogress.PhasePrepare, Detail: "Preparing base image and provider plan",
+	})
 	preparation, err := backend.prepare(ctx, LockedProviderBuildPreparationInputV1{
 		Operation: input.Operation, Store: input.Store, Environment: document.Environment.ID,
 		DeploymentDir: deploymentDir, PackageOverrides: packageOverrideIntent, BaseImage: baseImage, Sources: reusableSources,
@@ -396,6 +404,11 @@ func runLockedProviderBuildV1(
 		}
 	}
 	writeProviderBuildProgress(input.Progress, "preparing component packages and image layers")
+	if preparation.Reused {
+		buildprogress.Report(input.BuildProgress, buildprogress.Event{
+			Phase: buildprogress.PhasePublish, Detail: "Finalizing cached environment image",
+		})
+	}
 	options := input.RunOptions
 	options.NoCache = input.NoCache
 	options.Progress = input.Progress
@@ -406,7 +419,7 @@ func runLockedProviderBuildV1(
 		LocalOverrides: localOverrides,
 		ValidateLayers: input.ValidateLayers, RunValidation: nil,
 		ValidateChoices: input.ValidateChoices,
-		Progress:        input.Progress, RunOptions: options,
+		Progress:        input.Progress, BuildProgress: input.BuildProgress, RunOptions: options,
 	})
 	if err != nil {
 		cleanupErr := backend.cleanupFailure(context.WithoutCancel(ctx), preparation)
@@ -420,6 +433,9 @@ func runLockedProviderBuildV1(
 			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("prepare staged managed paths: %w", err)
 		}
 	}
+	buildprogress.Report(input.BuildProgress, buildprogress.Event{
+		Phase: buildprogress.PhasePublish, Detail: "Build complete", Completed: 1, Total: 1,
+	})
 	return result, nil
 }
 

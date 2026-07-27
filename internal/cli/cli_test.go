@@ -29,6 +29,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	reploy "github.com/omry/reploy"
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/buildprogress"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/dockerdeploy"
 	"github.com/omry/reploy/internal/overrideui"
@@ -234,23 +235,121 @@ func TestBuildCommandUsesReployProgressAndHidesBackendOutput(t *testing.T) {
 	if strings.Count(stderr, "reploy warning:") != 1 {
 		t.Fatalf("build warnings were not deduplicated:\n%s", stderr)
 	}
-	if want := "image: sha256:demo-image\nbuilt environment: demo\n"; stdout != want {
+	if want := "image: reploy/env/demo:g-test\nbuilt demo\n"; stdout != want {
 		t.Fatalf("stdout = %q, want %q", stdout, want)
 	}
 }
 
-func TestInteractiveBuildUsesOverrideValidationUIThenPromotesValidatedCandidate(t *testing.T) {
+func TestInteractiveBuildUsesOneBuildTransaction(t *testing.T) {
 	originalEnabled := buildOverrideUIEnabled
-	originalEditor := runOverrideEditor
+	originalProgress := runBuildProgress
 	originalBuild := dockerProviderBuild
 	originalRuntime := dockerProviderBuildRuntime
-	originalInspect := inspectStagedOverrideValidation
+	originalDelay := interactiveBuildDisplayDelay
 	t.Cleanup(func() {
 		buildOverrideUIEnabled = originalEnabled
-		runOverrideEditor = originalEditor
+		runBuildProgress = originalProgress
 		dockerProviderBuild = originalBuild
 		dockerProviderBuildRuntime = originalRuntime
-		inspectStagedOverrideValidation = originalInspect
+		interactiveBuildDisplayDelay = originalDelay
+	})
+	buildOverrideUIEnabled = func(io.Reader, io.Writer) bool { return true }
+	interactiveBuildDisplayDelay = time.Millisecond
+	dockerProviderBuildRuntime = func() (dockerdeploy.StagedProviderBuildRuntimeV1, error) {
+		return dockerdeploy.StagedProviderBuildRuntimeV1{}, nil
+	}
+	stageDir := filepath.Join(t.TempDir(), "provider-stage")
+	writeCLITestStagedState(t, stageDir, "demo")
+	var progressConfig overrideui.BuildProgressConfig
+	var buildOutcome *overrideui.BuildOutcome
+	runBuildProgress = func(config overrideui.BuildProgressConfig) (overrideui.BuildProgressResult, error) {
+		progressConfig = config
+		result, err := config.Run(t.Context(), io.Discard, nil)
+		if err != nil {
+			return overrideui.BuildProgressResult{BuildError: err}, nil
+		}
+		buildOutcome = result.Build
+		return overrideui.BuildProgressResult{Validation: result}, nil
+	}
+	buildCalls := 0
+	dockerProviderBuild = func(_ context.Context, input dockerdeploy.ProviderBuildRunInputV1) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
+		buildCalls++
+		if input.ValidateChoices || !input.NoCache || !input.ValidateLayers {
+			t.Fatalf("interactive build input = %#v", input)
+		}
+		time.Sleep(10 * time.Millisecond)
+		return cliTestProviderBuildResult(t, stageDir, false), nil
+	}
+
+	code, stdout, stderr := runCLI("build", "--dir", stageDir, "--no-cache", "--validate-layers")
+	if code != 0 || buildCalls != 1 {
+		t.Fatalf("code/buildCalls/stdout/stderr = %d/%d/%q/%q", code, buildCalls, stdout, stderr)
+	}
+	if progressConfig.Context == nil || progressConfig.Run == nil {
+		t.Fatalf("interactive build progress config = %#v", progressConfig)
+	}
+	if progressConfig.Input == nil || progressConfig.Output == nil {
+		t.Fatalf("interactive build terminal streams = %#v", progressConfig)
+	}
+	if buildOutcome == nil || buildOutcome.ImageReference != "reploy/env/demo:g-test" || buildOutcome.Environment != "demo" {
+		t.Fatalf("interactive build outcome = %#v", buildOutcome)
+	}
+	if stdout != "image: reploy/env/demo:g-test\nbuilt demo\n" || stderr != "" {
+		t.Fatalf("completed build stdout/stderr = %q/%q", stdout, stderr)
+	}
+}
+
+func TestInteractiveBuildProgressRunsWhileDeploymentLockIsHeld(t *testing.T) {
+	originalEnabled := buildOverrideUIEnabled
+	originalProgress := runBuildProgress
+	originalBuild := dockerProviderBuild
+	originalRuntime := dockerProviderBuildRuntime
+	originalDelay := interactiveBuildDisplayDelay
+	t.Cleanup(func() {
+		buildOverrideUIEnabled = originalEnabled
+		runBuildProgress = originalProgress
+		dockerProviderBuild = originalBuild
+		dockerProviderBuildRuntime = originalRuntime
+		interactiveBuildDisplayDelay = originalDelay
+	})
+	buildOverrideUIEnabled = func(io.Reader, io.Writer) bool { return true }
+	interactiveBuildDisplayDelay = time.Millisecond
+	dockerProviderBuildRuntime = func() (dockerdeploy.StagedProviderBuildRuntimeV1, error) {
+		return dockerdeploy.StagedProviderBuildRuntimeV1{}, nil
+	}
+	stageDir := filepath.Join(t.TempDir(), "provider-stage")
+	writeCLITestStagedState(t, stageDir, "demo")
+	dockerProviderBuild = func(ctx context.Context, _ dockerdeploy.ProviderBuildRunInputV1) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
+		operation, err := deploy.AcquireOperationLock(ctx, stageDir)
+		if err != nil {
+			return dockerdeploy.LockedProviderBuildExecutionResultV1{}, err
+		}
+		defer operation.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		return cliTestProviderBuildResult(t, stageDir, false), nil
+	}
+	runBuildProgress = func(config overrideui.BuildProgressConfig) (overrideui.BuildProgressResult, error) {
+		config.Input = strings.NewReader("")
+		config.Output = &bytes.Buffer{}
+		return overrideui.RunBuildProgress(config)
+	}
+
+	code, stdout, stderr := runCLI("build", "--dir", stageDir)
+	if code != 0 || !strings.Contains(stdout, "built demo") || stderr != "" {
+		t.Fatalf("code/stdout/stderr = %d/%q/%q", code, stdout, stderr)
+	}
+}
+
+func TestFastInteractiveBuildPrintsConciseOutcomeWithoutBuildScreen(t *testing.T) {
+	originalEnabled := buildOverrideUIEnabled
+	originalProgress := runBuildProgress
+	originalBuild := dockerProviderBuild
+	originalRuntime := dockerProviderBuildRuntime
+	t.Cleanup(func() {
+		buildOverrideUIEnabled = originalEnabled
+		runBuildProgress = originalProgress
+		dockerProviderBuild = originalBuild
+		dockerProviderBuildRuntime = originalRuntime
 	})
 	buildOverrideUIEnabled = func(io.Reader, io.Writer) bool { return true }
 	dockerProviderBuildRuntime = func() (dockerdeploy.StagedProviderBuildRuntimeV1, error) {
@@ -258,89 +357,137 @@ func TestInteractiveBuildUsesOverrideValidationUIThenPromotesValidatedCandidate(
 	}
 	stageDir := filepath.Join(t.TempDir(), "provider-stage")
 	writeCLITestStagedState(t, stageDir, "demo")
-	operation, err := deploy.AcquireOperationLock(t.Context(), stageDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := operation.Unlock(); err != nil {
-		t.Fatal(err)
-	}
-	inspectCalls := 0
-	inspectStagedOverrideValidation = func(context.Context, string) (dockerdeploy.StagedOverrideValidationV1, error) {
-		inspectCalls++
-		return dockerdeploy.StagedOverrideValidationV1{Validated: inspectCalls > 1}, nil
-	}
-	var editorConfig overrideui.Config
-	var buildOutcome *overrideui.BuildOutcome
-	runOverrideEditor = func(config overrideui.Config) (overrideui.Result, error) {
-		editorConfig = config
-		result, err := config.Validate(t.Context(), io.Discard)
-		if err != nil {
-			return overrideui.Result{}, err
-		}
-		buildOutcome = result.Build
-		return overrideui.Result{Validated: true}, nil
-	}
-	buildCalls := 0
-	dockerProviderBuild = func(_ context.Context, input dockerdeploy.ProviderBuildRunInputV1) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
-		buildCalls++
-		if input.ValidateChoices {
-			if !input.NoCache || !input.ValidateLayers {
-				t.Fatalf("validation UI did not honor build flags: %#v", input)
-			}
-			return dockerdeploy.LockedProviderBuildExecutionResultV1{}, nil
-		}
-		if input.NoCache || input.ValidateLayers {
-			t.Fatalf("promotion unexpectedly rebuilt validated choices: %#v", input)
-		}
-		return cliTestProviderBuildResult(t, stageDir, false), nil
-	}
-
-	code, stdout, stderr := runCLI("build", "--dir", stageDir, "--no-cache", "--validate-layers")
-	if code != 0 || buildCalls != 2 {
-		t.Fatalf("code/buildCalls/stdout/stderr = %d/%d/%q/%q", code, buildCalls, stdout, stderr)
-	}
-	if !editorConfig.AutoValidate || !editorConfig.BuildMode || editorConfig.ExitOnValid || editorConfig.Validate == nil {
-		t.Fatalf("interactive build editor config = %#v", editorConfig)
-	}
-	if editorConfig.Input == nil || editorConfig.Output == nil {
-		t.Fatalf("interactive build terminal streams = %#v", editorConfig)
-	}
-	if buildOutcome == nil || buildOutcome.Image != "sha256:demo-image" || buildOutcome.Environment != "demo" {
-		t.Fatalf("interactive build outcome = %#v", buildOutcome)
-	}
-}
-
-func TestInteractiveBuildCancellationDoesNotFallThroughToBackendBuild(t *testing.T) {
-	originalEnabled := buildOverrideUIEnabled
-	originalEditor := runOverrideEditor
-	originalBuild := dockerProviderBuild
-	t.Cleanup(func() {
-		buildOverrideUIEnabled = originalEnabled
-		runOverrideEditor = originalEditor
-		dockerProviderBuild = originalBuild
-	})
-	buildOverrideUIEnabled = func(io.Reader, io.Writer) bool { return true }
-	stageDir := filepath.Join(t.TempDir(), "provider-stage")
-	writeCLITestStagedState(t, stageDir, "demo")
-	operation, err := deploy.AcquireOperationLock(t.Context(), stageDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := operation.Unlock(); err != nil {
-		t.Fatal(err)
-	}
-	runOverrideEditor = func(overrideui.Config) (overrideui.Result, error) {
-		return overrideui.Result{Canceled: true}, nil
+	runBuildProgress = func(overrideui.BuildProgressConfig) (overrideui.BuildProgressResult, error) {
+		t.Fatal("fast successful build opened the build screen")
+		return overrideui.BuildProgressResult{}, nil
 	}
 	dockerProviderBuild = func(context.Context, dockerdeploy.ProviderBuildRunInputV1) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
-		t.Fatal("backend build ran after the validation UI was canceled")
-		return dockerdeploy.LockedProviderBuildExecutionResultV1{}, nil
+		return cliTestProviderBuildResult(t, stageDir, true), nil
 	}
 
 	code, stdout, stderr := runCLI("build", "--dir", stageDir)
-	if code != 130 || stdout != "" || !strings.Contains(stderr, "reploy build canceled") {
+	if code != 0 {
 		t.Fatalf("code/stdout/stderr = %d/%q/%q", code, stdout, stderr)
+	}
+	if stdout != "image: reploy/env/demo:g-test\ndemo is already up to date\n" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
+func TestInteractiveBuildCancellationCancelsPrestartedBackendBuild(t *testing.T) {
+	originalEnabled := buildOverrideUIEnabled
+	originalProgress := runBuildProgress
+	originalBuild := dockerProviderBuild
+	originalRuntime := dockerProviderBuildRuntime
+	originalDelay := interactiveBuildDisplayDelay
+	t.Cleanup(func() {
+		buildOverrideUIEnabled = originalEnabled
+		runBuildProgress = originalProgress
+		dockerProviderBuild = originalBuild
+		dockerProviderBuildRuntime = originalRuntime
+		interactiveBuildDisplayDelay = originalDelay
+	})
+	buildOverrideUIEnabled = func(io.Reader, io.Writer) bool { return true }
+	interactiveBuildDisplayDelay = time.Millisecond
+	dockerProviderBuildRuntime = func() (dockerdeploy.StagedProviderBuildRuntimeV1, error) {
+		return dockerdeploy.StagedProviderBuildRuntimeV1{}, nil
+	}
+	stageDir := filepath.Join(t.TempDir(), "provider-stage")
+	writeCLITestStagedState(t, stageDir, "demo")
+	runBuildProgress = func(config overrideui.BuildProgressConfig) (overrideui.BuildProgressResult, error) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		_, _ = config.Run(ctx, io.Discard, nil)
+		return overrideui.BuildProgressResult{Canceled: true}, nil
+	}
+	buildCalls := 0
+	dockerProviderBuild = func(ctx context.Context, _ dockerdeploy.ProviderBuildRunInputV1) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
+		buildCalls++
+		<-ctx.Done()
+		return dockerdeploy.LockedProviderBuildExecutionResultV1{}, ctx.Err()
+	}
+
+	code, stdout, stderr := runCLI("build", "--dir", stageDir)
+	if code != 130 || buildCalls != 1 || stdout != "" || !strings.Contains(stderr, "reploy build canceled") {
+		t.Fatalf("code/buildCalls/stdout/stderr = %d/%d/%q/%q", code, buildCalls, stdout, stderr)
+	}
+}
+
+func TestInteractiveBuildFailureClosesProgressAndPrintsDiagnostic(t *testing.T) {
+	originalEnabled := buildOverrideUIEnabled
+	originalProgress := runBuildProgress
+	originalBuild := dockerProviderBuild
+	originalRuntime := dockerProviderBuildRuntime
+	originalDelay := interactiveBuildDisplayDelay
+	t.Cleanup(func() {
+		buildOverrideUIEnabled = originalEnabled
+		runBuildProgress = originalProgress
+		dockerProviderBuild = originalBuild
+		dockerProviderBuildRuntime = originalRuntime
+		interactiveBuildDisplayDelay = originalDelay
+	})
+	buildOverrideUIEnabled = func(io.Reader, io.Writer) bool { return true }
+	interactiveBuildDisplayDelay = time.Millisecond
+	dockerProviderBuildRuntime = func() (dockerdeploy.StagedProviderBuildRuntimeV1, error) {
+		return dockerdeploy.StagedProviderBuildRuntimeV1{}, nil
+	}
+	stageDir := filepath.Join(t.TempDir(), "provider-stage")
+	writeCLITestStagedState(t, stageDir, "demo")
+	dockerProviderBuild = func(context.Context, dockerdeploy.ProviderBuildRunInputV1) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
+		time.Sleep(10 * time.Millisecond)
+		return dockerdeploy.LockedProviderBuildExecutionResultV1{}, errors.New("dependency conflict")
+	}
+	runBuildProgress = func(config overrideui.BuildProgressConfig) (overrideui.BuildProgressResult, error) {
+		_, err := config.Run(t.Context(), io.Discard, nil)
+		if err == nil {
+			t.Fatal("failed build returned no validation error")
+		}
+		return overrideui.BuildProgressResult{BuildError: err}, nil
+	}
+
+	code, stdout, stderr := runCLI("build", "--dir", stageDir)
+	if code != 1 || stdout != "" || !strings.Contains(stderr, "dependency conflict") ||
+		strings.Contains(stderr, "stopped before package choices") {
+		t.Fatalf("code/stdout/stderr = %d/%q/%q", code, stdout, stderr)
+	}
+}
+
+func TestInteractiveBuildSessionReplaysProgress(t *testing.T) {
+	runner := func(
+		_ context.Context,
+		progress io.Writer,
+		report buildprogress.Reporter,
+	) (overrideui.ValidationResult, error) {
+		report(buildprogress.Event{
+			Phase: buildprogress.PhaseInspect, Environment: "demo",
+			Detail: "Inspecting build",
+		})
+		report(buildprogress.Event{Phase: buildprogress.PhasePrepare, Detail: "Preparing build"})
+		fmt.Fprintln(progress, "inspecting build")
+		fmt.Fprintln(progress, "preparing build")
+		return overrideui.ValidationResult{}, errors.New("build failed")
+	}
+	session := startInteractiveBuildSession(runner)
+	<-session.done
+	validate := session.validationRunner()
+
+	var progress bytes.Buffer
+	var event buildprogress.Event
+	if _, err := validate(t.Context(), &progress, func(got buildprogress.Event) {
+		event = got
+	}); err == nil ||
+		!strings.Contains(err.Error(), "build failed") {
+		t.Fatalf("validation error = %v", err)
+	}
+	if progress.String() != "preparing build\n" {
+		t.Fatalf("replayed progress = %q", progress.String())
+	}
+	if event.Phase != buildprogress.PhasePrepare || event.Environment != "demo" ||
+		event.Detail != "Preparing build" {
+		t.Fatalf("replayed build progress event = %#v", event)
 	}
 }
 
@@ -455,7 +602,7 @@ func TestBuildCommandReportsExactReuse(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if want := "image: sha256:demo-image\nenvironment already current: demo\n"; stdout != want {
+	if want := "image: reploy/env/demo:g-test\ndemo is already up to date\n"; stdout != want {
 		t.Fatalf("stdout = %q, want %q", stdout, want)
 	}
 	if !strings.Contains(stderr, "building environment: done") {
@@ -485,7 +632,7 @@ func TestBuildCommandReportsRuntimeConfigurationUpdate(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if want := "image: sha256:demo-image\nupdated environment: demo\n"; stdout != want {
+	if want := "image: reploy/env/demo:g-test\nupdated demo\n"; stdout != want {
 		t.Fatalf("stdout = %q, want %q", stdout, want)
 	}
 	if !strings.Contains(stderr, "building environment: done") {
@@ -537,7 +684,9 @@ func TestBuildHelpClarifiesLayerValidationIsAdditional(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "always fully validated") || !strings.Contains(stdout, "additionally") ||
 		!strings.Contains(stdout, "without installing") || !strings.Contains(stdout, "--verbose") ||
-		!strings.Contains(stdout, "without backend transcripts") {
+		!strings.Contains(stdout, "without backend transcripts") ||
+		!strings.Contains(stdout, "inline") || !strings.Contains(stdout, "exits automatically") ||
+		strings.Contains(stdout, "retain progress") {
 		t.Fatalf("build help = %q", stdout)
 	}
 }
@@ -964,7 +1113,7 @@ func TestDockerHelp(t *testing.T) {
 	if !strings.Contains(stdout, "validate     Validate blueprint syntax and semantics") {
 		t.Fatalf("stdout did not contain blueprint validation command:\n%s", stdout)
 	}
-	for _, want := range []string{"app          Run a staged app command from the current build", "up           Build if needed", "restart      Build if needed"} {
+	for _, want := range []string{"app          Run a staged app command from the current build", "up           Build if needed", "down         Stop and remove", "start        Alias for up", "stop         Alias for down", "restart      Build if needed"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout did not disclose automatic staged builds with %q:\n%s", want, stdout)
 		}
@@ -1276,7 +1425,7 @@ func TestDockerRuntimeControlAdmissionOptions(t *testing.T) {
 }
 
 func TestDockerLifecycleHelpDocumentsControlAdmissionOptions(t *testing.T) {
-	for _, command := range []string{"stop", "restart"} {
+	for _, command := range []string{"down", "stop", "restart"} {
 		code, stdout, stderr := runCLI(command, "--help")
 		if code != 0 || stderr != "" || !strings.Contains(stdout, "Usage: reploy "+command+" [OPTIONS]") {
 			t.Fatalf("%s help: code=%d stdout=%q stderr=%q", command, code, stdout, stderr)
@@ -1292,13 +1441,15 @@ func TestDockerLifecycleHelpDocumentsControlAdmissionOptions(t *testing.T) {
 			}
 		}
 	}
-	code, stdout, stderr := runCLI("up", "--help")
-	if code != 0 || stderr != "" {
-		t.Fatalf("up help: code=%d stdout=%q stderr=%q", code, stdout, stderr)
-	}
-	for _, flag := range []string{"--wait", "--drain", "--force"} {
-		if !strings.Contains(stdout, flag) {
-			t.Fatalf("up help missing %s:\n%s", flag, stdout)
+	for _, command := range []string{"up", "start"} {
+		code, stdout, stderr := runCLI(command, "--help")
+		if code != 0 || stderr != "" {
+			t.Fatalf("%s help: code=%d stdout=%q stderr=%q", command, code, stdout, stderr)
+		}
+		for _, flag := range []string{"--wait", "--drain", "--force"} {
+			if !strings.Contains(stdout, flag) {
+				t.Fatalf("%s help missing %s:\n%s", command, flag, stdout)
+			}
 		}
 	}
 }
@@ -1368,7 +1519,7 @@ func expectedBareDemoStagingSummary(dir string) string {
 		"[STAGING : demo] useful commands:\n" +
 		"[STAGING : demo]   reploy info\n" +
 		"[STAGING : demo]   reploy bundle list\n" +
-		"[STAGING : demo]   reploy up|stop|status\n" +
+		"[STAGING : demo]   reploy up|down|status\n" +
 		"[STAGING : demo]   reploy logs --tail 50\n" +
 		"[STAGING : demo]   reploy install --scope user --to DIR\n" +
 		"[STAGING : demo] app command examples:\n" +
@@ -1385,7 +1536,7 @@ func expectedBareDemoInstalledSummary(dir string) string {
 		"[DEPLOYED : demo] context: installed deployment\n" +
 		"[DEPLOYED : demo] directory: " + dir + "\n" +
 		"[DEPLOYED : demo] useful commands:\n" +
-		"[DEPLOYED : demo]   reploy up|stop|status\n" +
+		"[DEPLOYED : demo]   reploy up|down|status\n" +
 		"[DEPLOYED : demo]   reploy logs --tail 100\n" +
 		"[DEPLOYED : demo]   reploy restart\n" +
 		"[DEPLOYED : demo]   reploy uninstall --from .\n" +
@@ -1682,7 +1833,8 @@ func TestEmbeddedControlSystemLifecycleUsesRuntimeAdmission(t *testing.T) {
 	writeCLITestInstalledState(t, installDir, "demo", "demo-service")
 	markCLITestSystemd(t, installDir, "/etc/systemd/system/demo-service.service")
 	helpCode, helpStdout, helpStderr := runCLI("_control", "--dir", installDir, "--script-name", "democtl", "--help")
-	if helpCode != 0 || helpStderr != "" || !strings.Contains(helpStdout, "stop/restart --wait") {
+	if helpCode != 0 || helpStderr != "" || !strings.Contains(helpStdout, "down/restart --wait") ||
+		!strings.Contains(helpStdout, "start (alias for up)") || !strings.Contains(helpStdout, "stop (alias for down)") {
 		t.Fatalf("system lifecycle help: code=%d stdout=%q stderr=%q", helpCode, helpStdout, helpStderr)
 	}
 
@@ -1700,6 +1852,8 @@ func TestEmbeddedControlSystemLifecycleUsesRuntimeAdmission(t *testing.T) {
 		action  string
 		mode    dockerdeploy.ControlAdmissionModeV1
 	}{
+		{command: "start", action: "up"},
+		{command: "down", args: []string{"--wait"}, action: "down", mode: dockerdeploy.ControlAdmissionWaitV1},
 		{command: "stop", args: []string{"--wait"}, action: "down", mode: dockerdeploy.ControlAdmissionWaitV1},
 		{command: "restart", action: "restart"},
 	} {
@@ -1717,8 +1871,8 @@ func TestEmbeddedControlSystemLifecycleUsesRuntimeAdmission(t *testing.T) {
 			t.Fatalf("%s runtime options = %#v", test.command, got)
 		}
 	}
-	if len(calls) != 2 {
-		t.Fatalf("runtime calls = %d, want 2", len(calls))
+	if len(calls) != 4 {
+		t.Fatalf("runtime calls = %d, want 4", len(calls))
 	}
 }
 
@@ -2166,7 +2320,10 @@ func TestDockerStageHelp(t *testing.T) {
 		"PyPI paths must point to the blueprint file inside the package.",
 		"GitHub paths must point to the blueprint file inside the repository.",
 		"--dir DIR",
+		"Staging directory to create, update, or remove",
+		"default current staging directory or reploy-staging",
 		"--update",
+		"--remove",
 		"--platform OCI",
 		"linux/amd64",
 		"--force",
@@ -2379,33 +2536,60 @@ func TestDockerUpdateCommandRemoved(t *testing.T) {
 	}
 }
 
-func TestDockerDownCommandRemoved(t *testing.T) {
-	code, stdout, stderr := runCLI("down")
-	if code != 2 || stdout != "" || !strings.Contains(stderr, "unknown command: down") {
-		t.Fatalf("down removal: code=%d stdout=%q stderr=%q", code, stdout, stderr)
-	}
-}
-
-func TestDockerStopMapsToInternalDownWithControlMode(t *testing.T) {
+func TestDockerDownAndStopMapToInternalDownWithTypedCommandMessages(t *testing.T) {
 	t.Setenv("REPLOY_COLOR", "never")
 	dir := filepath.Join(t.TempDir(), "installed")
 	writeCLITestInstalledState(t, dir, "demo", "demo-service")
 	oldRuntime := dockerRuntime
 	t.Cleanup(func() { dockerRuntime = oldRuntime })
+	var actions []string
 	dockerRuntime = func(options dockerdeploy.RuntimeOptions) error {
 		if options.Dir != dir || options.Action != "down" || options.ControlMode != "" {
-			t.Fatalf("stop runtime options = %#v", options)
+			t.Fatalf("down runtime options = %#v", options)
 		}
-		return nil
+		actions = append(actions, options.Action)
+		return errors.New("runtime failed")
 	}
-	code := runDockerRuntimeControl("stop", []string{"--dir", dir}, io.Discard, io.Discard, globalDeploymentOptions{})
-	if code != 0 {
-		t.Fatalf("stop exit code = %d", code)
+	for _, command := range []string{"down", "stop"} {
+		var stderr bytes.Buffer
+		code := runDockerRuntimeControl(command, []string{"--dir", dir}, io.Discard, &stderr, globalDeploymentOptions{})
+		if code != 1 || !strings.Contains(stderr.String(), "reploy "+command+" error: runtime failed") {
+			t.Fatalf("%s: code=%d stderr=%q", command, code, stderr.String())
+		}
+	}
+	if len(actions) != 2 {
+		t.Fatalf("runtime actions = %#v", actions)
+	}
+}
+
+func TestDockerUpAndStartMapToInternalUpWithTypedCommandMessages(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	dir := filepath.Join(t.TempDir(), "installed")
+	writeCLITestInstalledState(t, dir, "demo", "demo-service")
+	oldRuntime := dockerRuntime
+	t.Cleanup(func() { dockerRuntime = oldRuntime })
+	var actions []string
+	dockerRuntime = func(options dockerdeploy.RuntimeOptions) error {
+		if options.Dir != dir || options.Action != "up" || options.ControlMode != "" {
+			t.Fatalf("up runtime options = %#v", options)
+		}
+		actions = append(actions, options.Action)
+		return errors.New("runtime failed")
+	}
+	for _, command := range []string{"up", "start"} {
+		var stderr bytes.Buffer
+		code := runDockerRuntimeControl(command, []string{"--dir", dir}, io.Discard, &stderr, globalDeploymentOptions{})
+		if code != 1 || !strings.Contains(stderr.String(), "reploy "+command+" error: runtime failed") {
+			t.Fatalf("%s: code=%d stderr=%q", command, code, stderr.String())
+		}
+	}
+	if len(actions) != 2 {
+		t.Fatalf("runtime actions = %#v", actions)
 	}
 }
 
 func TestDockerStopAndRestartRejectOldDisruptionFlags(t *testing.T) {
-	for _, command := range []string{"stop", "restart"} {
+	for _, command := range []string{"down", "stop", "restart"} {
 		for _, flag := range []string{"--drain", "--force"} {
 			code, stdout, stderr := runCLI(command, flag)
 			if code != 2 || stdout != "" || !strings.Contains(stderr, flag+" is not supported") || !strings.Contains(stderr, "use --wait") {
@@ -2417,7 +2601,7 @@ func TestDockerStopAndRestartRejectOldDisruptionFlags(t *testing.T) {
 
 func TestDockerControlAdmissionOptionsRejectedForObservation(t *testing.T) {
 	code, stdout, stderr := runCLI("status", "--wait")
-	if code != 2 || stdout != "" || !strings.Contains(stderr, "--wait is only supported with up, stop, or restart") {
+	if code != 2 || stdout != "" || !strings.Contains(stderr, "--wait is only supported with up, down, or restart (start and stop are aliases)") {
 		t.Fatalf("status wait: code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
@@ -2459,7 +2643,7 @@ func TestDockerLogsOptionsParse(t *testing.T) {
 }
 
 func TestRuntimeLifecycleActionsShowSpinnerWhenNotVerbose(t *testing.T) {
-	for _, action := range []string{"up", "restart", "stop"} {
+	for _, action := range []string{"up", "start", "restart", "down", "stop"} {
 		if !runtimeActionShowsSpinner(action, false) {
 			t.Fatalf("%s should show a spinner when not verbose", action)
 		}
@@ -2483,12 +2667,14 @@ func TestRuntimeSpinnerLabelUsesDeploymentPrefix(t *testing.T) {
 		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
-	label, err := runtimeSpinnerLabel(deployDir, "up", &bytes.Buffer{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if label != "[STAGING : demo] up" {
-		t.Fatalf("label = %q", label)
+	for _, action := range []string{"up", "start", "down", "stop"} {
+		label, err := runtimeSpinnerLabel(deployDir, action, &bytes.Buffer{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := "[STAGING : demo] " + action; label != want {
+			t.Fatalf("%s label = %q, want %q", action, label, want)
+		}
 	}
 }
 
@@ -2671,7 +2857,7 @@ func TestRuntimeUpPrintsServiceURLAfterSuccessfulStart(t *testing.T) {
 	if stdout != "" {
 		t.Fatalf("stdout = %q, want no success lines without a recorded build", stdout)
 	}
-	if !strings.Contains(stderr, "[STAGING : demo] up... done") {
+	if !strings.Contains(stderr, "[STAGING : demo] up... done [") {
 		t.Fatalf("stderr missing successful spinner:\n%s", stderr)
 	}
 }
@@ -4278,11 +4464,73 @@ func TestDockerStageUpdateForceReplacesDifferentEnvironment(t *testing.T) {
 	}
 }
 
-func TestDockerStageForceRequiresUpdateAndBlueprint(t *testing.T) {
-	for _, args := range [][]string{{"stage", "--force", "demo"}, {"stage", "--update", "--force"}} {
+func TestDockerStageForceRequiresUpdateAndAllowsRetainedSourceRecovery(t *testing.T) {
+	packDir := makeCLITestPack(t)
+	code, stdout, stderr := runCLI("stage", "--force", "file:"+packDir)
+	if code != 2 || stdout != "" || !strings.Contains(stderr, "--force requires --update") {
+		t.Fatalf("stage force validation = %d/%q/%q", code, stdout, stderr)
+	}
+	original := dockerForceRestageCurrentDesiredPlatform
+	t.Cleanup(func() {
+		dockerForceRestageCurrentDesiredPlatform = original
+	})
+	called := false
+	dockerForceRestageCurrentDesiredPlatform = func(_ context.Context, dir string, platform string) (deploy.DesiredStateUpdateResult, error) {
+		called = true
+		if dir == "" || platform != "linux/amd64" {
+			t.Fatalf("forced retained-source update = %q/%q", dir, platform)
+		}
+		return deploy.DesiredStateUpdateResult{}, nil
+	}
+	dir := t.TempDir()
+	code, stdout, stderr = runCLI(
+		"stage", "--update", "--force", "--platform", "linux/amd64", "--dir", dir,
+	)
+	if code != 0 || stdout != "staging directory is up to date: "+dir+"\n" || stderr != "" || !called {
+		t.Fatalf("forced retained-source update = %d/%q/%q, called=%t", code, stdout, stderr, called)
+	}
+}
+
+func TestDockerStageRemoveRoutesWithoutAppReference(t *testing.T) {
+	original := dockerRemoveStagedDeployment
+	t.Cleanup(func() {
+		dockerRemoveStagedDeployment = original
+	})
+	dir := t.TempDir()
+	called := false
+	dockerRemoveStagedDeployment = func(
+		_ context.Context,
+		input dockerdeploy.StagedDeploymentRemoveInputV1,
+	) (dockerdeploy.StagedDeploymentRemoveResultV1, error) {
+		called = true
+		if input.DeploymentDir != dir ||
+			input.ControlMode != dockerdeploy.ControlAdmissionForceV1 {
+			t.Fatalf("remove input = %#v", input)
+		}
+		return dockerdeploy.StagedDeploymentRemoveResultV1{
+			DeploymentDir: dir,
+			Environment:   "demo",
+		}, nil
+	}
+	code, stdout, stderr := runCLI(
+		"stage", "--remove", "--force", "--verbose", "--dir", dir,
+	)
+	if code != 0 || stderr != "" ||
+		stdout != "removed staging directory: "+dir+"\nremoved environment: demo\n" || !called {
+		t.Fatalf("stage remove = %d/%q/%q, called=%t", code, stdout, stderr, called)
+	}
+}
+
+func TestDockerStageRemoveRejectsConflictingInputs(t *testing.T) {
+	setCLITestPackIndex(t)
+	for _, args := range [][]string{
+		{"stage", "--remove", "--update"},
+		{"stage", "--remove", "--platform", "linux/amd64"},
+		{"stage", "--remove", "demo-server"},
+	} {
 		code, stdout, stderr := runCLI(args...)
-		if code != 2 || stdout != "" || !strings.Contains(stderr, "--force") {
-			t.Fatalf("stage force validation for %#v = %d/%q/%q", args, code, stdout, stderr)
+		if code != 2 || stdout != "" || !strings.Contains(stderr, "--remove") {
+			t.Fatalf("stage remove conflict %q = %d/%q/%q", args, code, stdout, stderr)
 		}
 	}
 }
@@ -4730,6 +4978,21 @@ func TestStartProgressSpinnerUsesPlainProgressInCI(t *testing.T) {
 	}, "\n")
 	if got := stderr.String(); got != want {
 		t.Fatalf("stderr = %q, want %q", got, want)
+	}
+}
+
+func TestFormatOperationElapsed(t *testing.T) {
+	for _, test := range []struct {
+		elapsed time.Duration
+		want    string
+	}{
+		{elapsed: 245 * time.Millisecond, want: "250ms"},
+		{elapsed: 15*time.Second + 400*time.Millisecond, want: "15s"},
+		{elapsed: 75 * time.Second, want: "1m15s"},
+	} {
+		if got := formatOperationElapsed(test.elapsed); got != test.want {
+			t.Fatalf("formatOperationElapsed(%s) = %q, want %q", test.elapsed, got, test.want)
+		}
 	}
 }
 

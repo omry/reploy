@@ -125,6 +125,18 @@ workload, removes the old selected image reference, and records the replacement
 as a fresh unbuilt staging deployment. It does not overwrite arbitrary edited
 files in the directory.
 
+Remove a staging deployment, including its running workload and Reploy-owned
+image reference, with:
+
+```bash
+reploy stage --remove --dir <staging-directory>
+```
+
+Removal stops the staged workload but refuses to interrupt another active
+Reploy operation. Add `--force` to cancel that active work before removal. If
+filesystem cleanup cannot finish, Reploy reports the hidden directory
+containing whatever could not be removed so it can be cleaned up manually.
+
 ### Configure the workload environment
 
 For apps configured through environment variables, create `.env` in the
@@ -169,9 +181,10 @@ reploy up
 reploy test
 ```
 
-`reploy build` resolves the selected application and environment packages, builds the environment
-image, and validates the resulting image. `up` and `restart` can perform that
-build automatically when the selected build is missing or stale. Staged app
+`reploy build` resolves the selected application and environment packages,
+builds the environment image, and validates the resulting image. `up` and
+`restart` can perform that build automatically when the selected build is
+missing or stale. Staged app
 commands require a current build and tell you to run `reploy build` when one is
 missing. Use `reploy build --no-cache` when you need to rerun resolution and
 image construction explicitly.

@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/omry/reploy/internal/blueprint"
@@ -106,6 +107,43 @@ func RestageCurrentDesiredPlatformV1(ctx context.Context, deploymentDir string, 
 	return result, nil
 }
 
+// ForceRestageCurrentDesiredPlatformV1 behaves like an ordinary update for
+// current state and explicitly recovers the one recognized incompatible
+// components-based development staging shape.
+func ForceRestageCurrentDesiredPlatformV1(
+	ctx context.Context,
+	deploymentDir string,
+	explicitPlatform string,
+) (result deploy.DesiredStateUpdateResult, err error) {
+	result, err = RestageCurrentDesiredPlatformV1(ctx, deploymentDir, explicitPlatform)
+	if err == nil || !errors.Is(err, deploy.ErrLegacyStateUnsupported) {
+		return result, err
+	}
+	operation, err := deploy.AcquireOperationLock(ctx, deploymentDir)
+	if err != nil {
+		return result, err
+	}
+	defer func() {
+		err = errors.Join(err, operation.Unlock())
+	}()
+	result, err = operation.RecoverLegacyComponentsStagingStateV1(
+		desiredPlatformSelectorV1(ctx, explicitPlatform, ProbeDockerNativePlatform),
+		registry.ValidatePackageRequest,
+	)
+	if err != nil {
+		return result, err
+	}
+	if unlockErr := operation.Unlock(); unlockErr != nil {
+		return result, unlockErr
+	}
+	changed, err := syncCurrentStagedControlSurfaceV1(ctx, deploymentDir)
+	if err != nil {
+		return result, fmt.Errorf("refresh recovered staged control surface: %w", err)
+	}
+	result.Changed = result.Changed || changed
+	return result, nil
+}
+
 func restageCurrentDesiredPlatformV1(
 	ctx context.Context,
 	deploymentDir string,
@@ -115,7 +153,20 @@ func restageCurrentDesiredPlatformV1(
 	if deploymentDir == "" {
 		return deploy.DesiredStateUpdateResult{}, fmt.Errorf("restage desired platform requires a deployment directory")
 	}
-	return deploy.SelectDesiredPlatformV1(ctx, deploymentDir, func(document blueprint.Document) (blueprint.Platform, error) {
+	return deploy.SelectDesiredPlatformV1(
+		ctx,
+		deploymentDir,
+		desiredPlatformSelectorV1(ctx, explicitPlatform, probeNative),
+		registry.ValidatePackageRequest,
+	)
+}
+
+func desiredPlatformSelectorV1(
+	ctx context.Context,
+	explicitPlatform string,
+	probeNative func(context.Context) (blueprint.Platform, error),
+) deploy.DesiredPlatformSelector {
+	return func(document blueprint.Document) (blueprint.Platform, error) {
 		var native *blueprint.Platform
 		if explicitPlatform == "" && len(document.Blueprint.Compatibility.Platforms) > 1 {
 			if probeNative == nil {
@@ -128,5 +179,5 @@ func restageCurrentDesiredPlatformV1(
 			native = &observed
 		}
 		return SelectDockerTargetPlatform(document, explicitPlatform, native)
-	}, registry.ValidatePackageRequest)
+	}
 }

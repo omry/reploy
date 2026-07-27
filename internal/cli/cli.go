@@ -39,11 +39,14 @@ var dockerTestServer = dockerdeploy.TestServer
 var dockerShell = dockerdeploy.Shell
 var dockerStageLoadedPackDesiredState = dockerdeploy.StageLoadedPackDesiredStateV1
 var dockerRestageCurrentDesiredPlatform = dockerdeploy.RestageCurrentDesiredPlatformV1
+var dockerForceRestageCurrentDesiredPlatform = dockerdeploy.ForceRestageCurrentDesiredPlatformV1
+var dockerRemoveStagedDeployment = dockerdeploy.RemoveStagedDeploymentV1
 var dockerProviderBuild = dockerdeploy.RunProviderBuildV1
 var dockerProviderStoreClean = dockerdeploy.CleanProviderStoreV1
 var dockerProviderBuildRuntime = dockerdeploy.CurrentStagedProviderBuildRuntimeV1
 var dockerAppCommand = dockerdeploy.AppCommand
 var runOverrideEditor = overrideui.RunWithResult
+var runBuildProgress = overrideui.RunBuildProgress
 var inspectStagedOverrideValidation = dockerdeploy.InspectStagedOverrideValidation
 
 func Main(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -311,7 +314,7 @@ func deploymentSummaryDir(dir string) string {
 func deploymentSummaryCommands(state deploymentSummaryStateV1) []string {
 	if state.Installed {
 		return []string{
-			"reploy up|stop|status",
+			"reploy up|down|status",
 			"reploy logs --tail 100",
 			"reploy restart",
 			"reploy uninstall --from .",
@@ -320,7 +323,7 @@ func deploymentSummaryCommands(state deploymentSummaryStateV1) []string {
 	return []string{
 		"reploy info",
 		"reploy bundle list",
-		"reploy up|stop|status",
+		"reploy up|down|status",
 		"reploy logs --tail 50",
 		"reploy install --scope user --to DIR",
 	}
@@ -433,7 +436,7 @@ func parseDockerTimeout(value string) (time.Duration, error) {
 
 func isDeploymentCommand(command string) bool {
 	switch command {
-	case "stage", "overrides", "build", "info", "app", "shell", "runs", "bundle", "up", "restart", "stop", "ps", "status", "logs", "test", "doctor", "install", "uninstall":
+	case "stage", "overrides", "build", "info", "app", "shell", "runs", "bundle", "up", "start", "restart", "down", "stop", "ps", "status", "logs", "test", "doctor", "install", "uninstall":
 		return true
 	default:
 		return false
@@ -664,7 +667,7 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer, globalOptions 
 		}
 		fmt.Fprint(stdout, info)
 		return 0
-	case "up", "restart", "stop", "ps", "status", "logs":
+	case "up", "start", "restart", "down", "stop", "ps", "status", "logs":
 		return runDockerRuntime(args[0], args[1:], stdout, stderr, globalOptions)
 	case "shell":
 		options, err := parseDockerShellOptions(args[1:])
@@ -828,6 +831,7 @@ func runDockerStage(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 		AllowVerbose:  true,
 		AllowPlatform: true,
 		AllowForce:    true,
+		AllowRemove:   true,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy usage error: %v\n", err)
@@ -838,6 +842,34 @@ func runDockerStage(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 		return 2
 	}
 	printWarnings(stderr, options.Warnings)
+
+	if options.Remove {
+		options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, io.Discard)
+		controlMode := dockerdeploy.ControlAdmissionImmediateV1
+		if options.Force {
+			controlMode = dockerdeploy.ControlAdmissionForceV1
+		}
+		result, removeErr := dockerRemoveStagedDeployment(
+			context.Background(),
+			dockerdeploy.StagedDeploymentRemoveInputV1{
+				DeploymentDir: options.Dir,
+				ControlMode:   controlMode,
+				RunOptions: dockerdeploy.RunOptions{
+					Stdout: stdout, Stderr: stderr,
+					DockerPreflightTimeout: globalOptions.DockerTimeout,
+				},
+			},
+		)
+		if removeErr != nil {
+			fmt.Fprintf(stderr, "reploy stage --remove error: %v\n", removeErr)
+			return 1
+		}
+		fmt.Fprintf(stdout, "removed staging directory: %s\n", result.DeploymentDir)
+		if options.Verbose {
+			fmt.Fprintf(stdout, "removed environment: %s\n", result.Environment)
+		}
+		return 0
+	}
 
 	if options.Update {
 		options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, io.Discard)
@@ -858,7 +890,11 @@ func runDockerStage(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 			printDesiredStateStageResult(stdout, options.Dir, result.DesiredState, options.Verbose)
 			return 0
 		}
-		result, stageErr := dockerRestageCurrentDesiredPlatform(context.Background(), options.Dir, options.Platform)
+		restage := dockerRestageCurrentDesiredPlatform
+		if options.Force {
+			restage = dockerForceRestageCurrentDesiredPlatform
+		}
+		result, stageErr := restage(context.Background(), options.Dir, options.Platform)
 		if stageErr != nil {
 			fmt.Fprintf(stderr, "reploy stage --update error: %v\n", stageErr)
 			return 1
@@ -2079,11 +2115,11 @@ func runDockerRuntimeCommand(action string, args []string, stdout io.Writer, std
 		return 2
 	}
 	if options.ControlMode != "" && !runtimeActionUsesControlAdmission(action) {
-		fmt.Fprintf(stderr, "reploy usage error: %s is only supported with up, stop, or restart\n", controlAdmissionModeFlag(options.ControlMode))
+		fmt.Fprintf(stderr, "reploy usage error: %s is only supported with up, down, or restart (start and stop are aliases)\n", controlAdmissionModeFlag(options.ControlMode))
 		printDockerShortUsage(stderr)
 		return 2
 	}
-	if (action == "stop" || action == "restart") && (options.ControlMode == dockerdeploy.ControlAdmissionDrainV1 || options.ControlMode == dockerdeploy.ControlAdmissionForceV1) {
+	if (runtimeActionStops(action) || action == "restart") && (options.ControlMode == dockerdeploy.ControlAdmissionDrainV1 || options.ControlMode == dockerdeploy.ControlAdmissionForceV1) {
 		flag := controlAdmissionModeFlag(options.ControlMode)
 		fmt.Fprintf(stderr, "reploy usage error: %s is not supported with %s; %s already stops outstanding jobs by default, or use --wait to let active jobs finish\n", flag, action, action)
 		printDockerShortUsage(stderr)
@@ -2111,15 +2147,10 @@ func runDockerRuntimeCommand(action string, args []string, stdout io.Writer, std
 			return 1
 		}
 		var logOutput io.Writer
-		stopSpinner, progress, logOutput = startProgressSpinnerWithLogs(stderr, label)
+		stopSpinner, progress, logOutput = startTimedProgressSpinnerWithLogs(stderr, label)
 		runtimeStderr = logOutput
 	}
-	runtimeAction := action
-	if runtimeAction == "stop" {
-		runtimeAction = "down"
-	} else if runtimeAction == "ps" {
-		runtimeAction = "status"
-	}
+	runtimeAction := canonicalRuntimeAction(action)
 	runtimeStdout := stdout
 	var timestampWriters []*runtimeTimestampWriter
 	if action == "logs" && options.Timestamps {
@@ -2158,11 +2189,28 @@ func runtimeActionShowsSpinner(action string, verbose bool) bool {
 	if verbose {
 		return false
 	}
-	return action == "up" || action == "restart" || action == "stop"
+	return action == "up" || action == "start" || action == "restart" || runtimeActionStops(action)
 }
 
 func runtimeActionUsesControlAdmission(action string) bool {
-	return action == "up" || action == "stop" || action == "restart"
+	return action == "up" || action == "start" || runtimeActionStops(action) || action == "restart"
+}
+
+func runtimeActionStops(action string) bool {
+	return action == "down" || action == "stop"
+}
+
+func canonicalRuntimeAction(action string) string {
+	switch action {
+	case "start":
+		return "up"
+	case "down", "stop":
+		return "down"
+	case "ps":
+		return "status"
+	default:
+		return action
+	}
 }
 
 func deploymentErrorWriter(dir string, stderr io.Writer) (io.Writer, error) {
@@ -2322,6 +2370,7 @@ type dockerCommandOptions struct {
 	Verbose     bool
 	Platform    string
 	Force       bool
+	Remove      bool
 }
 
 type dockerCommandParseConfig struct {
@@ -2329,6 +2378,7 @@ type dockerCommandParseConfig struct {
 	AllowVerbose  bool
 	AllowPlatform bool
 	AllowForce    bool
+	AllowRemove   bool
 }
 
 func parseDockerCommandOptions(args []string, requirePack bool, configs ...dockerCommandParseConfig) (dockerCommandOptions, error) {
@@ -2356,6 +2406,11 @@ func parseDockerCommandOptions(args []string, requirePack bool, configs ...docke
 				return dockerCommandOptions{}, fmt.Errorf("unknown option: %s", arg)
 			}
 			options.Force = true
+		case "--remove":
+			if !config.AllowRemove {
+				return dockerCommandOptions{}, fmt.Errorf("unknown option: %s", arg)
+			}
+			options.Remove = true
 		case "--dir":
 			value, ok := optionValue(args, &index)
 			if !ok {
@@ -2415,13 +2470,19 @@ func parseDockerCommandOptions(args []string, requirePack bool, configs ...docke
 	if options.Dir == "" {
 		return dockerCommandOptions{}, fmt.Errorf("--dir must not be empty")
 	}
-	if options.Force && !options.Update {
-		return dockerCommandOptions{}, fmt.Errorf("--force requires --update")
+	if options.Remove && options.Update {
+		return dockerCommandOptions{}, fmt.Errorf("--remove cannot be combined with --update")
 	}
-	if options.Force && options.Pack.Raw == "" {
-		return dockerCommandOptions{}, fmt.Errorf("--force requires APP_REF")
+	if options.Remove && options.Pack.Raw != "" {
+		return dockerCommandOptions{}, fmt.Errorf("APP_REF cannot be combined with --remove")
 	}
-	if requirePack && !options.Update && options.Pack.Raw == "" {
+	if options.Remove && options.Platform != "" {
+		return dockerCommandOptions{}, fmt.Errorf("--platform cannot be combined with --remove")
+	}
+	if options.Force && !options.Update && !options.Remove {
+		return dockerCommandOptions{}, fmt.Errorf("--force requires --update or --remove")
+	}
+	if requirePack && !options.Update && !options.Remove && options.Pack.Raw == "" {
 		return dockerCommandOptions{}, fmt.Errorf("APP_REF is required; %s", appRefUsageHint)
 	}
 	return options, nil
@@ -2776,8 +2837,31 @@ func startProgressSpinner(output io.Writer, label string) (func(bool), io.Writer
 }
 
 func startProgressSpinnerWithLogs(output io.Writer, label string) (func(bool), io.Writer, io.Writer) {
+	return startProgressSpinnerWithLogsOptions(output, label, false)
+}
+
+func startTimedProgressSpinnerWithLogs(output io.Writer, label string) (func(bool), io.Writer, io.Writer) {
+	return startProgressSpinnerWithLogsOptions(output, label, true)
+}
+
+func startProgressSpinnerWithLogsOptions(
+	output io.Writer,
+	label string,
+	showElapsed bool,
+) (func(bool), io.Writer, io.Writer) {
 	if output == nil {
 		return func(bool) {}, io.Discard, io.Discard
+	}
+	started := time.Now()
+	completionSuffix := func(ok bool) string {
+		suffix := "... failed"
+		if ok {
+			suffix = "... done"
+		}
+		if showElapsed {
+			suffix += " [" + formatOperationElapsed(time.Since(started)) + "]"
+		}
+		return suffix
 	}
 	if !terminalAnimationsEnabled() {
 		fmt.Fprintf(output, "%s...\n", label)
@@ -2785,11 +2869,7 @@ func startProgressSpinnerWithLogs(output io.Writer, label string) (func(bool), i
 			fmt.Fprintf(output, "%s: %s\n", label, message)
 		}}
 		return func(ok bool) {
-			suffix := "... failed"
-			if ok {
-				suffix = "... done"
-			}
-			fmt.Fprintf(output, "%s%s\n", label, suffix)
+			fmt.Fprintf(output, "%s%s\n", label, completionSuffix(ok))
 		}, progress, output
 	}
 	done := make(chan bool, 1)
@@ -2834,10 +2914,7 @@ func startProgressSpinnerWithLogs(output io.Writer, label string) (func(bool), i
 					}
 				}
 			finish:
-				suffix := "... failed"
-				if ok {
-					suffix = "... done"
-				}
+				suffix := completionSuffix(ok)
 				line := "\r" + label + suffix
 				if len(line) < lastLen {
 					line += strings.Repeat(" ", lastLen-len(line))
@@ -2869,6 +2946,13 @@ func startProgressSpinnerWithLogs(output io.Writer, label string) (func(bool), i
 		done <- ok
 		<-finished
 	}, progress, logOutput
+}
+
+func formatOperationElapsed(elapsed time.Duration) string {
+	if elapsed < time.Second {
+		return elapsed.Round(10 * time.Millisecond).String()
+	}
+	return elapsed.Round(time.Second).String()
 }
 
 type progressWriter struct {
@@ -2988,8 +3072,10 @@ Commands:
   runs         List or stop outstanding app commands and shell sessions
   bundle       Manage staging bundle contents
   up           Build if needed, then start the staging Compose service
+  down         Stop and remove the staging Compose service
   restart      Build if needed, then recreate the staging Compose service
-  stop         Stop and remove the staging Compose service
+  start        Alias for up
+  stop         Alias for down
   ps           Show staging environment status
   status       Show staging environment status
   logs         Show staging application logs
@@ -3201,8 +3287,10 @@ Commands:
   bundle       Manage staging bundle contents
   services     List Reploy-managed services
   up           Build if needed, then start the staging Compose service
+  down         Stop and remove the staging Compose service
   restart      Build if needed, then recreate the staging Compose service
-  stop         Stop and remove the staging Compose service
+  start        Alias for up
+  stop         Alias for down
   ps           Show staging environment status
   status       Show staging environment status
   logs         Show staging application logs
@@ -3253,7 +3341,7 @@ func printDockerCommandHelp(command string, output io.Writer) {
 		printDockerUninstallHelp(output)
 	case "logs":
 		printDockerLogsHelp(output)
-	case "up", "stop", "restart":
+	case "up", "start", "down", "stop", "restart":
 		printDockerLifecycleHelp(command, output)
 	case "shell":
 		printShellHelp(output)
@@ -3307,7 +3395,7 @@ Options:
 
 func printDockerLifecycleHelp(command string, output io.Writer) {
 	fmt.Fprintf(output, "Usage: reploy %s [OPTIONS]\n\n", command)
-	if command == "stop" || command == "restart" {
+	if runtimeActionStops(command) || command == "restart" {
 		fmt.Fprintln(output, "By default, the command stops active jobs and cancels queued jobs. When jobs")
 		fmt.Fprintln(output, "are outstanding, Reploy logs a warning and waits three seconds so Ctrl-C can")
 		fmt.Fprintln(output, "abort before anything is stopped or canceled.")
@@ -3317,7 +3405,7 @@ func printDockerLifecycleHelp(command string, output io.Writer) {
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Options:")
 	fmt.Fprintln(output, "  --dir DIR    Deployment directory")
-	if command == "stop" || command == "restart" {
+	if runtimeActionStops(command) || command == "restart" {
 		fmt.Fprintln(output, "  --wait       Let active jobs finish, cancel queued jobs, then continue")
 	} else {
 		fmt.Fprintln(output, "  --wait       Wait in FIFO order for active and earlier queued runs")
@@ -3385,8 +3473,9 @@ Usage: reploy [--docker-timeout DURATION] build [OPTIONS]
 Build and validate the current staged environment image without installing it.
 The resulting image is always fully validated. --validate-layers additionally
 runs full validation after each component layer is created.
-Interactive terminals retain progress, logs, and the final result in a build
-screen. Dumb or redirected terminals print the same build log and result directly.
+Interactive terminals print fast results directly. Longer builds show an inline
+progress panel that exits automatically before printing the result. Dumb or
+redirected terminals print durable progress lines and the result directly.
 
 Options:
   --dir DIR          Staging directory, default current staging dir or reploy-staging
@@ -3401,9 +3490,11 @@ func printDockerStageHelp(output io.Writer) {
 	fmt.Fprint(output, strings.TrimLeft(`
 Usage: reploy [--docker-timeout DURATION] stage APP_REF [OPTIONS]
        reploy [--docker-timeout DURATION] stage --update [APP_REF] [OPTIONS]
+       reploy [--docker-timeout DURATION] stage --remove [OPTIONS]
 
 Create a staging directory from an app blueprint reference.
 Use --update to refresh an existing staging directory, optionally from a new ref.
+Use --remove to stop and remove a staging deployment and its directory.
 Stage records desired state and generates the app-named control command without building.
 Build explicitly or let staged up/restart build on demand.
 A new stage from a local blueprint imports overrides.yaml beside that blueprint.
@@ -3432,11 +3523,14 @@ APP_REF:
   GitHub paths must point to the blueprint file inside the repository.
 
 Options:
-  --dir DIR    Staging directory to create, default reploy-staging
+  --dir DIR    Staging directory to create, update, or remove;
+               default current staging directory or reploy-staging
   --update     Update an existing staging directory instead of creating one
+  --remove     Remove an existing staging deployment and its directory
   --platform OCI
               Select an environment blueprint target, for example linux/amd64
-  --force      Replace a staging directory that belongs to another blueprint
+  --force      Replace a staging directory that belongs to another blueprint,
+               recover incompatible state, or stop active work during removal
   --verbose    Show additional staging details
   -h, --help   Show stage help
 `, "\n"))

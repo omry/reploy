@@ -311,6 +311,19 @@ explicit opt-in later.
   local-source entry except VCS metadata. Generated environments, caches, and
   other development files remain visible to the declared build backend; the
   backend alone decides whether they enter the sdist.
+- After a successful sdist build, Reploy may retain an advisory relevance map
+  derived from the validated sdist. A warm exact-reuse check hashes the
+  previously relevant top-level source directories and root build-control
+  files, and compares the source root's shallow topology. Changes to those
+  inputs trigger a complete source observation; changes inside an existing
+  top-level directory that the prior sdist did not use do not invalidate the
+  retained source artifact. The map is a post-build invalidation aid, not a
+  claim that rerunning the backend would produce identical bytes.
+- The warm map is versioned, private to the deployment-owned provider cache,
+  and disposable. Absence, corruption, a changed build description, a changed
+  relevant input, changed root topology, or `--no-cache` falls back to the
+  complete source observation and relearns the map from the next validated
+  sdist.
 - The projection is exposed read-only only inside the existing disposable
   resolver container. The container retains its read-only root filesystem,
   private tmpfs scratch, closed environment, pinned interpreter and `uv`

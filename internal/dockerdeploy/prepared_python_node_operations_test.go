@@ -301,13 +301,14 @@ func TestPreparedPythonNodeOperationsBuildsOnlySelectedLocalSource(t *testing.T)
 	if overrides := resolution.Bundle.Payload.Request.Value["overrides"].([]any); len(overrides) != 1 {
 		t.Fatalf("closure-relevant bundle overrides = %#v", overrides)
 	}
-	for _, want := range []string{
-		"observing local Python sources demo-server for component application",
-		"building local Python source artifacts demo-server for component application",
-	} {
-		if !strings.Contains(progress.String(), want) {
-			t.Fatalf("progress missing %q:\n%s", want, progress.String())
-		}
+	if want := "building local Python project demo-server"; !strings.Contains(progress.String(), want) {
+		t.Fatalf("progress missing %q:\n%s", want, progress.String())
+	}
+	if strings.Contains(progress.String(), "app: application") {
+		t.Fatalf("single-app progress exposed redundant app ownership:\n%s", progress.String())
+	}
+	if strings.Contains(progress.String(), "observing local Python sources") {
+		t.Fatalf("progress exposed source-observation detail:\n%s", progress.String())
 	}
 }
 

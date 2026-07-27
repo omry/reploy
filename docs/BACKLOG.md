@@ -35,41 +35,31 @@ No active items.
 
 ## Pre-release
 
-- [x] `P1` Restore private workload environment injection.
-      Support an optional deployment-local `.env` as a Reploy-owned runtime
-      input rather than blueprint or Docker image configuration. Acceptance
-      checks: require a real owner-readable host file with no group or other
-      access, or the supported-host equivalent; open and validate it without
-      following links or replacement races; transmit its values through a
-      one-shot private Reploy launcher channel only into the workload process
-      environment; keep the file, variable names, and values out of container
-      mounts, Docker image and container metadata, Compose content, argv, state,
-      locks, and Reploy-generated diagnostics; reject runtime mounts that would
-      expose the file or an ancestor directory; copy it on initial install when
-      needed, preserve it by default, and honor the managed-path replacement
-      overrides without silently deleting it when the staging source is absent;
-      and prove the isolation and install behavior with focused and real-Docker
-      tests.
+- [ ] `P1` Complete the remaining local Docker cleanup.
+      After the active OmegaConf staging work is no longer needed, remove its
+      preserved stopped container and superseded image, then review the
+      remaining dangling images, build cache, and unused volumes. Delete only
+      resources whose Reploy ownership is established, avoid broad pruning,
+      and finish with a fresh Docker resource and disk-usage inventory.
 
-- [x] `P1` Model applications separately from package materialization layers.
-      Keep each application's OS packages, language packages, executables, and
-      related declarations in one self-contained blueprint block. Allow
-      environment-level OS tools such as `zsh` and `htop`, then combine those
-      packages with application-owned OS dependencies in the shared OS package
-      transaction while retaining application ownership in diagnostics and
-      overrides. Replace the current assumption that each blueprint component
-      is owned by exactly one package provider without preserving the unreleased
-      schema, and define stable identities for applications, provider
-      contributions, executables, build locks, and cached results before
-      implementation.
+- [ ] `P1` Make Docker lifecycle operations crash-consistent and self-reconciling.
+      Record resource-creation intent durably before Docker side effects and
+      use deterministic ownership metadata so interrupted builds, publication,
+      runtime control, and removal can be resumed or rolled back safely. At the
+      start of the next scoped operation, reconcile abandoned temporary tags,
+      candidate images, containers, networks, and removal tombstones while
+      preserving current generations and intentional caches. Keep automatic
+      cleanup idempotent and deployment-scoped; provide an explicit diagnostic
+      or cleanup path for resources whose staging directory no longer exists.
 
-- [x] `P1` Minimize the required environment blueprint shape.
-      Make environment nodes optional whenever Reploy can supply an
-      unambiguous default or infer the value safely. Acceptance checks: audit
-      every required environment node; retain required fields only where
-      omission would be ambiguous or unsafe; add parser and validation tests
-      for the smallest useful blueprint; and make the blueprint documentation
-      start with that minimal example before introducing optional features.
+- [ ] `P1` Perform a full Reploy UX review.
+      Review the complete user journey across discovery, staging, development
+      overrides, validation, builds, runtime control, installation, updates,
+      diagnostics, recovery, and removal. Exercise interactive, verbose,
+      redirected, and dumb-terminal behavior; identify unclear concepts,
+      inconsistent terminology, missing context or next actions, unnecessary
+      friction, and backend details leaking through the public surface; record
+      concrete findings and prioritize follow-up slices before implementation.
 
 ## Post-v1
 
@@ -88,16 +78,20 @@ No active items.
       blocking ordinary editor use, retain a usable cached copy across
       transient failures, and filter results against the staged platform.
 
-- [ ] `P2` Design local-source build environments and cross-run caching.
-      Local source packages should use an explicit build command. Define its
-      argv-versus-shell representation, input and output artifact contract,
-      execution location, build dependencies, isolation, network policy, and
-      access to secrets or host files. Decide whether verified outputs or
-      intermediate caches survive across runs; bind reuse to source, toolchain,
-      platform, settings, and output integrity; define cache scope, permissions,
-      ownership, and cleanup; and make caches inspectable, bypassable,
-      invalidatable, and recoverable. Keep this separate from deployment-local
-      provider artifact reuse and the current override-validation work.
+- [ ] `P2` Design general-purpose local-source build environments.
+      Extend beyond the implemented fixed Python build recipes without
+      weakening their declared protocol boundary. Define supported providers
+      and build protocols, command representation if arbitrary commands are
+      introduced, build dependencies, execution location, artifact contracts,
+      isolation, network policy, access to secrets or host files, and target
+      platform behavior.
+
+- [ ] `P2` Design shared and cross-run build caching.
+      Decide whether verified outputs or intermediate caches survive across
+      runs; bind reuse to source, recipe, toolchain, platform, settings, and
+      output integrity; define cache scope, permissions, ownership, and cleanup;
+      and make caches inspectable, bypassable, invalidatable, and recoverable.
+      Keep this separate from deployment-local provider artifact reuse.
 
 - [ ] `P2` Design portable environment export and import.
       Separate exact offline transfer from instruction-based rebuilds and model

@@ -7,18 +7,22 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/buildprogress"
 	"github.com/omry/reploy/internal/dockerdeploy"
 	"github.com/omry/reploy/internal/overrideui"
 )
 
 var dockerBuildWarningPattern = regexp.MustCompile(`^-\s*([A-Za-z][A-Za-z0-9]+):\s*(.+)$`)
 var dockerExitStatusPattern = regexp.MustCompile(`(?i)(?::\s*)?docker failed: exit status [0-9]+`)
+
+var interactiveBuildDisplayDelay = 500 * time.Millisecond
 
 var buildOverrideUIEnabled = func(input io.Reader, output io.Writer) bool {
 	inputFile, inputOK := input.(*os.File)
@@ -45,33 +49,55 @@ func runDockerBuild(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 	options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, io.Discard)
 	started := time.Now()
 	if buildOverrideUIEnabled(os.Stdin, stderr) {
-		config, configErr := packageOverrideEditorConfig(
-			options.Dir, globalOptions, options.NoCache, options.ValidateLayers,
+		buildRunner := interactiveBuildRunner(
+			options.Dir,
+			globalOptions,
+			started,
+			options.NoCache,
+			options.ValidateLayers,
 		)
-		if configErr != nil {
-			fmt.Fprintf(stderr, "reploy build error: %v\n", configErr)
-			return 1
-		}
-		config.Input = os.Stdin
-		config.Output = stderr
-		config.AutoValidate = true
-		config.BuildMode = true
-		config.Validate = buildModeValidationRunner(
-			config.Validate, options.Dir, globalOptions, started,
-		)
-		editorResult, editorErr := runOverrideEditor(config)
-		if editorErr != nil {
-			fmt.Fprintf(stderr, "reploy build error: package validation UI: %v\n", editorErr)
-			return 1
-		}
-		if !editorResult.Validated {
-			if editorResult.Canceled {
-				fmt.Fprintln(stderr, "reploy build canceled")
-				return 130
+		session := startInteractiveBuildSession(buildRunner)
+		defer session.cancel()
+		timer := time.NewTimer(interactiveBuildDisplayDelay)
+		select {
+		case <-session.done:
+			timer.Stop()
+			result, buildErr := session.result()
+			if buildErr != nil {
+				fmt.Fprintln(stderr, "reploy build error: "+buildErr.Error())
+				return 1
 			}
-			fmt.Fprintln(stderr, "reploy build stopped before package choices were validated")
+			if result.Build == nil {
+				fmt.Fprintln(stderr, "reploy build error: completed build did not provide an outcome")
+				return 1
+			}
+			writeBuildOutcome(stdout, *result.Build)
+			return 0
+		case <-timer.C:
+		}
+		progressResult, progressErr := runBuildProgress(overrideui.BuildProgressConfig{
+			Context: context.Background(),
+			Input:   os.Stdin,
+			Output:  stderr,
+			Run:     session.validationRunner(),
+		})
+		if progressErr != nil {
+			fmt.Fprintf(stderr, "reploy build error: build progress UI: %v\n", progressErr)
 			return 1
 		}
+		if progressResult.Canceled {
+			fmt.Fprintln(stderr, "reploy build canceled")
+			return 130
+		}
+		if progressResult.BuildError != nil {
+			fmt.Fprintln(stderr, "reploy build error: "+progressResult.BuildError.Error())
+			return 1
+		}
+		if progressResult.Validation.Build == nil {
+			fmt.Fprintln(stderr, "reploy build error: completed build did not provide an outcome")
+			return 1
+		}
+		writeBuildOutcome(stdout, *progressResult.Validation.Build)
 		return 0
 	}
 	presenter := newOperationPresenter(operationPresenterOptions{
@@ -110,43 +136,159 @@ func runDockerBuild(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 	}
 	elapsed := time.Since(started)
 	_ = presenter.Success(func(output io.Writer) {
-		fmt.Fprintf(output, "image: %s\n", summary.Image)
-		if elapsed >= time.Second {
-			fmt.Fprintf(output, "elapsed: %s\n", elapsed.Round(100*time.Millisecond))
-		}
-		if result.Republished {
-			fmt.Fprintf(output, "updated environment: %s\n", summary.Environment)
-			return
-		}
-		if result.Reused {
-			fmt.Fprintf(output, "environment already current: %s\n", summary.Environment)
-			return
-		}
-		fmt.Fprintf(output, "built environment: %s\n", summary.Environment)
+		writeBuildOutcome(output, overrideui.BuildOutcome{
+			Environment: summary.Environment, ImageReference: summary.ImageReference, Elapsed: elapsed,
+			Reused: result.Reused, Republished: result.Republished,
+		})
 	})
 	return 0
 }
 
-func buildModeValidationRunner(
-	validate overrideui.ValidationRunner,
+type interactiveBuildCompletion struct {
+	result overrideui.ValidationResult
+	err    error
+}
+
+type interactiveBuildProgress struct {
+	mutex      sync.Mutex
+	log        strings.Builder
+	subscriber io.Writer
+	event      buildprogress.Event
+	eventFound bool
+	reporter   buildprogress.Reporter
+}
+
+func (progress *interactiveBuildProgress) Write(content []byte) (int, error) {
+	progress.mutex.Lock()
+	defer progress.mutex.Unlock()
+	_, _ = progress.log.Write(content)
+	if progress.subscriber != nil {
+		_, _ = progress.subscriber.Write(content)
+	}
+	return len(content), nil
+}
+
+func (progress *interactiveBuildProgress) report(event buildprogress.Event) {
+	progress.mutex.Lock()
+	defer progress.mutex.Unlock()
+	if event.Environment == "" && progress.eventFound {
+		event.Environment = progress.event.Environment
+	}
+	progress.event = event
+	progress.eventFound = true
+	if progress.reporter != nil {
+		progress.reporter(event)
+	}
+}
+
+func (progress *interactiveBuildProgress) attach(output io.Writer, reporter buildprogress.Reporter) func() {
+	progress.mutex.Lock()
+	if output != nil {
+		lines := strings.Split(strings.TrimSpace(progress.log.String()), "\n")
+		if len(lines) != 0 && lines[len(lines)-1] != "" {
+			_, _ = fmt.Fprintln(output, lines[len(lines)-1])
+		}
+	}
+	progress.subscriber = output
+	progress.reporter = reporter
+	if progress.eventFound && reporter != nil {
+		reporter(progress.event)
+	}
+	progress.mutex.Unlock()
+	return func() {
+		progress.mutex.Lock()
+		progress.subscriber = nil
+		progress.reporter = nil
+		progress.mutex.Unlock()
+	}
+}
+
+type interactiveBuildSession struct {
+	cancel     context.CancelFunc
+	progress   interactiveBuildProgress
+	done       chan struct{}
+	mutex      sync.Mutex
+	completion interactiveBuildCompletion
+}
+
+func startInteractiveBuildSession(runner overrideui.BuildRunner) *interactiveBuildSession {
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &interactiveBuildSession{cancel: cancel, done: make(chan struct{})}
+	go func() {
+		result, err := runner(ctx, &session.progress, session.progress.report)
+		session.mutex.Lock()
+		session.completion = interactiveBuildCompletion{result: result, err: err}
+		session.mutex.Unlock()
+		close(session.done)
+	}()
+	return session
+}
+
+func (session *interactiveBuildSession) result() (overrideui.ValidationResult, error) {
+	<-session.done
+	session.mutex.Lock()
+	defer session.mutex.Unlock()
+	return session.completion.result, session.completion.err
+}
+
+func (session *interactiveBuildSession) validationRunner() overrideui.BuildRunner {
+	return func(
+		ctx context.Context,
+		progress io.Writer,
+		reporter buildprogress.Reporter,
+	) (overrideui.ValidationResult, error) {
+		detach := session.progress.attach(progress, reporter)
+		defer detach()
+		select {
+		case <-session.done:
+			return session.result()
+		case <-ctx.Done():
+			session.cancel()
+			return session.result()
+		}
+	}
+}
+
+func writeBuildOutcome(output io.Writer, outcome overrideui.BuildOutcome) {
+	fmt.Fprintf(output, "image: %s\n", outcome.ImageReference)
+	if outcome.Elapsed >= time.Second {
+		fmt.Fprintf(output, "elapsed: %s\n", outcome.Elapsed.Round(100*time.Millisecond))
+	}
+	if outcome.Republished {
+		fmt.Fprintf(output, "updated %s\n", outcome.Environment)
+		return
+	}
+	if outcome.Reused {
+		fmt.Fprintf(output, "%s is already up to date\n", outcome.Environment)
+		return
+	}
+	fmt.Fprintf(output, "built %s\n", outcome.Environment)
+}
+
+func interactiveBuildRunner(
 	deploymentDir string,
 	globalOptions globalDeploymentOptions,
 	started time.Time,
-) overrideui.ValidationRunner {
-	return func(ctx context.Context, progress io.Writer) (overrideui.ValidationResult, error) {
-		result, err := validate(ctx, progress)
-		if err != nil {
-			return overrideui.ValidationResult{}, err
-		}
+	noCache bool,
+	validateLayers bool,
+) overrideui.BuildRunner {
+	return func(
+		ctx context.Context,
+		progress io.Writer,
+		reporter buildprogress.Reporter,
+	) (overrideui.ValidationResult, error) {
 		runtimeInput, err := dockerProviderBuildRuntime()
 		if err != nil {
 			return overrideui.ValidationResult{}, err
 		}
 		var childOutput synchronizedBuffer
 		build, err := dockerProviderBuild(ctx, dockerdeploy.ProviderBuildRunInputV1{
-			DeploymentDir: deploymentDir,
-			Runtime:       runtimeInput,
-			Progress:      progress,
+			DeploymentDir:  deploymentDir,
+			Runtime:        runtimeInput,
+			NoCache:        noCache,
+			ValidateLayers: validateLayers,
+			Progress:       progress,
+			BuildProgress:  reporter,
 			RunOptions: dockerdeploy.RunOptions{
 				Stdout: &childOutput, Stderr: &childOutput,
 				DockerPreflightTimeout: globalOptions.DockerTimeout,
@@ -154,7 +296,7 @@ func buildModeValidationRunner(
 		})
 		if err != nil {
 			return overrideui.ValidationResult{}, fmt.Errorf(
-				"publish validated build: %s",
+				"build environment: %s",
 				buildFailureDiagnostic(err, childOutput.String()),
 			)
 		}
@@ -162,20 +304,16 @@ func buildModeValidationRunner(
 		if err != nil {
 			return overrideui.ValidationResult{}, fmt.Errorf("summarize completed build: %w", err)
 		}
-		result.Build = &overrideui.BuildOutcome{
-			Environment: summary.Environment,
-			Image:       summary.Image,
-			Elapsed:     time.Since(started),
-			Reused:      build.Reused,
-			Republished: build.Republished,
-		}
-		return result, nil
+		return overrideui.ValidationResult{Build: &overrideui.BuildOutcome{
+			Environment: summary.Environment, ImageReference: summary.ImageReference,
+			Elapsed: time.Since(started), Reused: build.Reused, Republished: build.Republished,
+		}}, nil
 	}
 }
 
 type providerBuildSummary struct {
-	Environment string
-	Image       string
+	Environment    string
+	ImageReference string
 }
 
 func summarizeProviderBuild(result dockerdeploy.LockedProviderBuildExecutionResultV1) (providerBuildSummary, error) {
@@ -186,14 +324,13 @@ func summarizeProviderBuild(result dockerdeploy.LockedProviderBuildExecutionResu
 	if result.State.Current == nil {
 		return providerBuildSummary{}, fmt.Errorf("completed build has no current generation")
 	}
-	image := strings.TrimSpace(string(result.State.Current.ImageDigest))
-	if image == "" {
-		image = strings.TrimSpace(string(result.Lock.FinalImage.Digest))
+	imageReference := strings.TrimSpace(result.State.Current.Reference)
+	if imageReference == "" {
+		return providerBuildSummary{}, fmt.Errorf("completed build has no image reference")
 	}
-	if image == "" {
-		return providerBuildSummary{}, fmt.Errorf("completed build has no image identity")
-	}
-	return providerBuildSummary{Environment: document.Environment.ID, Image: image}, nil
+	return providerBuildSummary{
+		Environment: document.Environment.ID, ImageReference: imageReference,
+	}, nil
 }
 
 func buildWarnings(output string, successful bool) []string {

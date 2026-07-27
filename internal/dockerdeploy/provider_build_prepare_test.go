@@ -97,7 +97,7 @@ func TestPrepareLockedProviderBuildV1StopsBeforeBaseRealizationOnExactReuse(t *t
 	if result.Operation != input.Operation || result.Store.Root() != input.Store.Root() || result.Environment != input.Environment || result.DeploymentDir != input.DeploymentDir || !reflect.DeepEqual(result.DockerPlan, input.DockerPlan) {
 		t.Fatal("preparation did not bind its operation inputs")
 	}
-	if !reflect.DeepEqual(order, []string{"recover", "load", "select", "current", "cache", "locked-sources", "match"}) {
+	if !reflect.DeepEqual(order, []string{"recover", "load", "current", "cache", "locked-sources", "cached-select", "match"}) {
 		t.Fatalf("order = %#v", order)
 	}
 }
@@ -136,7 +136,7 @@ func TestPrepareLockedProviderBuildV1ReusesExactValidatedCandidate(t *testing.T)
 		t.Fatalf("result = %#v", result)
 	}
 	if !reflect.DeepEqual(order, []string{
-		"recover", "load", "select", "current", "cache", "locked-sources", "match",
+		"recover", "load", "current", "select", "cache", "locked-sources", "match",
 	}) {
 		t.Fatalf("order = %#v", order)
 	}
@@ -158,7 +158,7 @@ func TestPrepareLockedProviderBuildV1RealizesBaseAfterStaleReuse(t *testing.T) {
 	if result.Reused || result.PreparedBase == nil || !reflect.DeepEqual(*result.PreparedBase, prepared) || result.ReusableLock == nil {
 		t.Fatalf("result = %#v", result)
 	}
-	if result.FinalImageConfig.User != "0:0" || !reflect.DeepEqual(order, []string{"recover", "load", "select", "current", "cache", "locked-sources", "match", "realize"}) {
+	if result.FinalImageConfig.User != "0:0" || !reflect.DeepEqual(order, []string{"recover", "load", "current", "cache", "locked-sources", "cached-select", "match", "select", "realize"}) {
 		t.Fatalf("config/order = %#v/%#v", result.FinalImageConfig, order)
 	}
 }
@@ -186,7 +186,7 @@ func TestPrepareLockedProviderBuildV1RebuildsExactCurrentAfterProviderStoreClean
 	if result.Reused || result.PreparedBase == nil || result.ReusableLock != nil || result.Current == nil {
 		t.Fatalf("result = %#v", result)
 	}
-	if !reflect.DeepEqual(order, []string{"recover", "load", "select", "current", "cache-miss", "realize"}) {
+	if !reflect.DeepEqual(order, []string{"recover", "load", "current", "cache-miss", "select", "realize"}) {
 		t.Fatalf("order = %#v", order)
 	}
 }
@@ -265,7 +265,7 @@ func TestPrepareLockedProviderBuildV1RealizesBaseForUnbuiltState(t *testing.T) {
 	if result.Reused || result.PreparedBase == nil || result.Current != nil || result.ReusableLock != nil {
 		t.Fatalf("result = %#v", result)
 	}
-	if !reflect.DeepEqual(order, []string{"recover", "load", "select", "current", "realize"}) {
+	if !reflect.DeepEqual(order, []string{"recover", "load", "current", "select", "realize"}) {
 		t.Fatalf("order = %#v", order)
 	}
 }
@@ -340,6 +340,13 @@ func providerBuildPreparationTestBackend(
 				t.Fatal("selected base for different request")
 			}
 			return selected, nil
+		},
+		selectCachedBase: func(_ context.Context, request providers.ResolvedRequestV1) (SelectedProviderBase, bool, error) {
+			*order = append(*order, "cached-select")
+			if !reflect.DeepEqual(request, loaded.Request) {
+				t.Fatal("selected cached base for different request")
+			}
+			return selected, true, nil
 		},
 		validateCurrent: func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (CurrentBuild, bool, error) {
 			*order = append(*order, "current")

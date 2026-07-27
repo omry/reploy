@@ -6,6 +6,7 @@ import (
 	"io"
 	"reflect"
 
+	"github.com/omry/reploy/internal/buildprogress"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
@@ -21,6 +22,7 @@ type LockedProviderBuildExecutionInputV1 struct {
 	ValidateChoices   bool
 	RunValidation     FullImageValidationRunner
 	Progress          io.Writer
+	BuildProgress     buildprogress.Reporter
 	RunOptions        RunOptions
 }
 
@@ -253,12 +255,15 @@ func executeLockedProviderBuildV1(
 		PriorSourceWheels: append([]providerstore.ArtifactDescriptor{}, input.PriorSourceWheels...),
 		LocalOverrides:    append([]PythonLocalOverrideV1{}, input.LocalOverrides...),
 		CurrentLock:       preparation.ReusableLock, FinalImageConfig: preparation.FinalImageConfig,
-		Progress: input.Progress, RunOptions: options,
+		Progress: input.Progress, BuildProgress: input.BuildProgress, RunOptions: options,
 	})
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute provider graph: %w", err)
 	}
 	writeProviderBuildProgress(input.Progress, "assembling environment runtime plan")
+	buildprogress.Report(input.BuildProgress, buildprogress.Event{
+		Phase: buildprogress.PhaseAssemble, Detail: "Assembling environment runtime plan",
+	})
 	resolvedRequest, relevantPackageOverrides, err := finalizeResolvedRequestV1(
 		preparation.Loaded.Document, preparation.Loaded.State.Overlay, preparation.Loaded.PackageOverrides,
 		preparation.Loaded.Request, graph,
@@ -285,6 +290,13 @@ func executeLockedProviderBuildV1(
 	} else {
 		writeProviderBuildProgress(input.Progress, "validating and publishing final image")
 	}
+	publishDetail := "Validating and publishing final image"
+	if input.ValidateChoices {
+		publishDetail = "Validating final image and caching result"
+	}
+	buildprogress.Report(input.BuildProgress, buildprogress.Event{
+		Phase: buildprogress.PhasePublish, Detail: publishDetail,
+	})
 	completed, err := backend.complete(ctx, preparation.Operation, preparation.Store, ProviderBuildCompletionInput{
 		Environment: preparation.Environment, DeploymentDir: preparation.DeploymentDir,
 		Document: preparation.Loaded.Document, DockerPlan: preparation.DockerPlan,

@@ -66,6 +66,9 @@ func (store Store) Remove() (bool, error) {
 	if err != nil || !exists {
 		return false, err
 	}
+	if err := store.RemoveTemporaryEntries(); err != nil {
+		return false, fmt.Errorf("remove provider store temporary entries: %w", err)
+	}
 	if err := os.RemoveAll(store.root); err != nil {
 		return false, fmt.Errorf("remove provider store: %w", err)
 	}

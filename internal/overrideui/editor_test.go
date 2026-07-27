@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -433,7 +434,7 @@ func TestValidationLogSavePromptWritesNewFileWithoutOverwriting(t *testing.T) {
 }
 
 func TestValidationProgressWriterEmitsCompleteSteps(t *testing.T) {
-	events := make(chan string, 2)
+	events := make(chan string, 3)
 	writer := &validationProgressWriter{events: events}
 	if _, err := writer.Write([]byte("preparing environ")); err != nil {
 		t.Fatal(err)
@@ -441,9 +442,45 @@ func TestValidationProgressWriterEmitsCompleteSteps(t *testing.T) {
 	if _, err := writer.Write([]byte("ment\nresolving packages\n")); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := writer.Write([]byte("preparing environment\n")); err != nil {
+		t.Fatal(err)
+	}
 	writer.flush()
 	if first, second := <-events, <-events; first != "preparing environment" || second != "resolving packages" {
 		t.Fatalf("progress steps = %q, %q", first, second)
+	}
+	if repeated := <-events; repeated != "preparing environment" {
+		t.Fatalf("repeated progress event = %q", repeated)
+	}
+	if got := writer.log.String(); got != "preparing environment\nresolving packages\n" {
+		t.Fatalf("deduplicated progress log = %q", got)
+	}
+}
+
+func TestRecordValidationStepKeepsDistinctHistoryWhileUpdatingCurrentStep(t *testing.T) {
+	m := editorModelForInteraction(t)
+	m.validationCurrent = "Preparing environment"
+	m.completedSteps = map[string]struct{}{}
+	m.loggedSteps = map[string]struct{}{"Preparing environment": {}}
+	m.validationLog = "Preparing environment\n"
+
+	m.recordValidationStep("Resolving packages")
+	m.recordValidationStep("Preparing build tools")
+	m.recordValidationStep("Resolving packages")
+
+	if got := m.validationLog; got != "Preparing environment\nResolving packages\nPreparing build tools\n" {
+		t.Fatalf("validation log = %q", got)
+	}
+	wantCompleted := []string{
+		"Preparing environment",
+		"Resolving packages",
+		"Preparing build tools",
+	}
+	if !reflect.DeepEqual(m.validationCompleted, wantCompleted) {
+		t.Fatalf("completed steps = %#v, want %#v", m.validationCompleted, wantCompleted)
+	}
+	if m.validationCurrent != "Resolving packages" {
+		t.Fatalf("current step = %q", m.validationCurrent)
 	}
 }
 
@@ -727,182 +764,6 @@ func TestDoubleCtrlCCancelsRunningValidationAndExits(t *testing.T) {
 	}
 	if _, ok := command().(tea.QuitMsg); !ok {
 		t.Fatalf("canceled validation completion message = %T", command())
-	}
-}
-
-func TestBuildModeKeepsSuccessfulResultVisibleUntilExit(t *testing.T) {
-	m := editorModelForInteraction(t)
-	m.buildMode = true
-	m.validate = func(context.Context, io.Writer) (ValidationResult, error) {
-		return ValidationResult{Build: &BuildOutcome{
-			Environment: "example",
-			Image:       "sha256:example",
-			Elapsed:     2400 * time.Millisecond,
-			Reused:      true,
-		}}, nil
-	}
-
-	updated, command := m.updateMain(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
-	m = updated.(*model)
-	if command == nil || !m.validating {
-		t.Fatalf("validation did not start: command=%v validating=%v", command, m.validating)
-	}
-	updated, command = m.Update(validationResultFromBatch(t, command))
-	m = updated.(*model)
-	if !m.validated || command != nil || !m.validationVisible {
-		t.Fatalf(
-			"successful build result validated=%v command=%v visible=%v",
-			m.validated, command, m.validationVisible,
-		)
-	}
-	view := m.View()
-	for _, want := range []string{
-		"Building environment",
-		"Build complete",
-		"image: sha256:example",
-		"elapsed: 2.4s",
-		"environment already current: example",
-		"Build log",
-		"Esc or Q exits",
-	} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("build result screen missing %q:\n%s", want, view)
-		}
-	}
-	for _, unwanted := range []string{"Validation in progress", "Validation succeeded", "Validation log"} {
-		if strings.Contains(view, unwanted) {
-			t.Fatalf("build result screen retained %q:\n%s", unwanted, view)
-		}
-	}
-
-	updated, command = m.updateValidationOverlay(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
-	if command == nil {
-		t.Fatal("Q did not exit the completed build screen")
-	}
-	if _, ok := command().(tea.QuitMsg); !ok {
-		t.Fatalf("Q message = %T", command())
-	}
-}
-
-func TestBuildModeStartsValidationOnEditorInit(t *testing.T) {
-	m := editorModelForInteraction(t)
-	m.autoValidate = true
-	m.buildMode = true
-	m.validate = func(context.Context, io.Writer) (ValidationResult, error) {
-		return ValidationResult{}, nil
-	}
-
-	command := m.Init()
-	if command == nil || !m.validating || m.autoValidate {
-		t.Fatalf(
-			"build-mode init command=%v validating=%v autoValidate=%v",
-			command, m.validating, m.autoValidate,
-		)
-	}
-	view := m.View()
-	if !strings.Contains(view, "Build in progress") || !strings.Contains(view, "Build log") ||
-		strings.Contains(view, "Validation in progress") {
-		t.Fatalf("build-mode progress screen:\n%s", view)
-	}
-}
-
-func TestBuildModeReportsRepublishedRuntimeConfiguration(t *testing.T) {
-	m := editorModelForInteraction(t)
-	m.buildMode = true
-	m.validationVisible = true
-	m.validated = true
-	m.buildOutcome = &BuildOutcome{
-		Environment: "example", Image: "sha256:example", Reused: true, Republished: true,
-	}
-
-	view := m.View()
-	if !strings.Contains(view, "updated environment: example") {
-		t.Fatalf("republished build result missing update:\n%s", view)
-	}
-	for _, unwanted := range []string{"environment already current: example", "built environment: example"} {
-		if strings.Contains(view, unwanted) {
-			t.Fatalf("republished build result retained %q:\n%s", unwanted, view)
-		}
-	}
-}
-
-func TestCompletedBuildScreenSupportsEscAndDoubleCtrlCExit(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		keys []tea.KeyMsg
-	}{
-		{name: "escape", keys: []tea.KeyMsg{{Type: tea.KeyEsc}}},
-		{name: "double Ctrl-C", keys: []tea.KeyMsg{{Type: tea.KeyCtrlC}, {Type: tea.KeyCtrlC}}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			m := editorModelForInteraction(t)
-			m.buildMode = true
-			m.validationVisible = true
-			m.validated = true
-			m.buildOutcome = &BuildOutcome{Environment: "example", Image: "sha256:example"}
-			var command tea.Cmd
-			for _, key := range test.keys {
-				updated, next := m.updateValidationOverlay(key)
-				m = updated.(*model)
-				if next != nil {
-					command = next
-				}
-			}
-			if command == nil {
-				t.Fatal("completed build screen did not exit")
-			}
-			if _, ok := command().(tea.QuitMsg); !ok {
-				t.Fatalf("exit message = %T", command())
-			}
-			if m.canceled {
-				t.Fatal("exiting a completed build was reported as cancellation")
-			}
-		})
-	}
-}
-
-func TestBuildModeDoesNotSaveUnchangedExistingChoices(t *testing.T) {
-	dir := stagedEditorDir(t)
-	overrides := deploy.EmptyPackageOverridesV1("example")
-	overrides.Environment.PackageOverrides["python"] = map[string]deploy.PackageOverrideChoiceV1{
-		"demo": {Version: "2.0"},
-	}
-	commitOverrides(t, dir, overrides)
-	m, err := newModel(Config{
-		Context: t.Context(), DeploymentDir: dir, Document: editorDocument("demo"),
-		Versions: func(context.Context, string) ([]string, error) {
-			return []string{"2.0"}, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	saveCalls := 0
-	originalSave := m.save
-	m.save = func(ctx context.Context, snapshot editorSnapshot, raw deploy.PackageOverridesV1) (editorSnapshot, error) {
-		saveCalls++
-		return originalSave(ctx, snapshot, raw)
-	}
-	m.autoValidate = true
-	m.buildMode = true
-	m.validate = func(context.Context, io.Writer) (ValidationResult, error) {
-		return ValidationResult{}, nil
-	}
-
-	updated, command := m.startValidation(false)
-	m = updated.(*model)
-	message := validationResultFromBatch(t, command)
-	result, ok := message.(validatedMsg)
-	if !ok {
-		t.Fatalf("validation result = %T", message)
-	}
-	if saveCalls != 0 || result.StartStep != "Preparing current package choices" {
-		t.Fatalf("saveCalls/startStep = %d/%q", saveCalls, result.StartStep)
-	}
-	updated, _ = m.Update(result)
-	m = updated.(*model)
-	if strings.Contains(m.validationLog, "Saving choices") {
-		t.Fatalf("build validation log claimed to save unchanged choices:\n%s", m.validationLog)
 	}
 }
 

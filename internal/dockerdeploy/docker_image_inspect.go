@@ -68,6 +68,55 @@ func ResolveBase(ctx context.Context, authorReference string, platform blueprint
 	return resolveBase(ctx, authorReference, platform, runDockerOutput)
 }
 
+// InspectCachedBase resolves only Docker's current local author reference. A
+// missing or unusable local reference is a cache miss; it never contacts a
+// registry. Callers use this only to test an already-published build before
+// falling back to normal base resolution.
+func InspectCachedBase(
+	ctx context.Context,
+	authorReference string,
+	platform blueprint.Platform,
+) (deploy.ImageDescriptor, deploy.BaseConfig, bool, error) {
+	return inspectCachedBase(ctx, authorReference, platform, runDockerOutput)
+}
+
+func inspectCachedBase(
+	ctx context.Context,
+	authorReference string,
+	platform blueprint.Platform,
+	run dockerOutputRunner,
+) (deploy.ImageDescriptor, deploy.BaseConfig, bool, error) {
+	if ctx == nil {
+		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, fmt.Errorf("inspect cached Docker base requires a context")
+	}
+	if err := ctx.Err(); err != nil {
+		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, err
+	}
+	if err := validateDockerAuthorReference(authorReference); err != nil {
+		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, err
+	}
+	if err := platform.Validate(); err != nil {
+		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, fmt.Errorf("inspect cached Docker base platform: %w", err)
+	}
+	output, err := run(ctx, "image", "inspect", authorReference)
+	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, contextErr
+		}
+		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, nil
+	}
+	descriptor, config, err := parseResolvedDockerBase(
+		authorReference,
+		platform,
+		[]byte(output),
+		"",
+	)
+	if err != nil {
+		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, nil
+	}
+	return descriptor, config, true, nil
+}
+
 func resolveBase(ctx context.Context, authorReference string, platform blueprint.Platform, run dockerOutputRunner) (deploy.ImageDescriptor, deploy.BaseConfig, error) {
 	if err := validateDockerAuthorReference(authorReference); err != nil {
 		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, err

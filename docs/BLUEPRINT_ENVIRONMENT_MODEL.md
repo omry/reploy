@@ -368,22 +368,24 @@ syntactically, but v1 keeps no completed-run history: a well-formed ID that is
 not outstanding succeeds with `No active run found for RUN_ID; it may have
 already finished.`
 
-Runtime-changing control operations—`up`, `stop`, `restart`, `install`, and
-`uninstall`—are serialized with each other. `up`, `install`, and `uninstall`
-retain the general admission modes: no flag fails on a conflict; `--wait` joins
-the fair queue; `--drain` cancels waiting runs and lets active runs finish; and
-`--force` cancels waiting runs and stops active runs.
+Runtime-changing control operations—`up`, `down`, `restart`, `install`, and
+`uninstall`—are serialized with each other. `start` aliases `up`, and `stop`
+aliases `down`. `up`, `install`, and `uninstall` retain the general admission
+modes: no flag fails on a conflict; `--wait` joins the fair queue; `--drain`
+cancels waiting runs and lets active runs finish; and `--force` cancels waiting
+runs and stops active runs.
 
-`stop` and `restart` are intentionally disruptive without a flag. They cancel
+`down` and `restart` are intentionally disruptive without a flag. They cancel
 waiting app commands and shells, log how many active and waiting jobs will be
 affected, mention the `--wait` alternative, and pause for three seconds so the
 caller can abort with Ctrl-C before any job is changed. They then stop active
 job containers through Docker's normal stop behavior and perform the requested
-lifecycle operation. The notice appears only in the `stop` or `restart`
-caller's output; Reploy does not inject text into another job's terminal.
-`stop --wait` and `restart --wait` are the non-disruptive forms: they cancel
+lifecycle operation. The notice appears only in the `down`, `stop`, or
+`restart` caller's output; Reploy does not inject text into another job's
+terminal. `down --wait` (or its `stop --wait` alias) and `restart --wait` are
+the non-disruptive forms: they cancel
 waiting app commands and shells, let active jobs finish, and then proceed.
-`--drain` and `--force` are not accepted by `stop` or `restart`.
+`--drain` and `--force` are not accepted by `down`, `stop`, or `restart`.
 
 The persisted queue also records lifecycle operations such as a waiting
 restart or install, so new runs cannot jump ahead of them. These internal
@@ -392,10 +394,10 @@ runs list`, and cannot be passed to `reploy runs stop`. Reploy holds a small
 kernel-backed ownership lease for each entry. If the owning process exits,
 the next queue operation removes the abandoned entry automatically.
 
-Mode flags are mutually exclusive. A default `stop` or `restart` never
+Mode flags are mutually exclusive. A default `down` or `restart` never
 overtakes another live lifecycle operation; it reports the conflict, while
 `--wait` queues behind that operation. Runs that join behind an admitted `up`,
-`stop`, or `restart` may continue afterward because the deployment generation
+`down`, or `restart` may continue afterward because the deployment generation
 is unchanged. After `install` or `uninstall`, every older waiting run fails and
 must be retried explicitly against the new generation. Lifecycle hooks are
 sequential internal steps owned by their control operation; they do not enter
@@ -808,14 +810,14 @@ passes validation. The resulting cache is retained for the next `reploy build`,
 but the trial does not replace the current staged image. Progress and a
 scrollable log remain visible in the editor; a failed log can be saved to a new
 file. Exiting unvalidated choices offers validation, saving without validation,
-or returning to the editor. In an interactive terminal, `reploy build`
-automatically starts a build-specific view backed by this machinery, lets a
-failed build return to the override editor for correction, and promotes the
-exact validated candidate on success. The completed image, elapsed time, and
-environment result remain in the build screen until Esc, Q, or two Ctrl+C
-presses exit. During a build, two Ctrl+C presses cancel and exit; cancellation
-never falls through to another build. Dumb and redirected terminals render the
-progress log and final result directly without a full-screen UI.
+or returning to the editor. A standalone interactive `reploy build` instead
+starts one build transaction immediately. Fast completion prints a concise
+result without opening a panel; a longer build renders a compact inline
+progress panel beneath the command, exits the panel automatically, and then
+prints the result or diagnostic. It never enters the override editor. During a
+build, two Ctrl+C presses cancel and exit; cancellation never falls through to
+another build. Dumb and redirected terminals render durable progress lines and
+the final result directly without a full-screen UI.
 
 ## Blueprint Variables
 
@@ -1055,12 +1057,19 @@ identity. A provider's bundle resolver may run with network/source access in a
 disposable resolver container based on an earlier materialized node. The
 corresponding node materialization performs no package resolution and requires
 no package-index or source-checkout access. Normal start and restart reuse the
-recorded bundles and image. An explicit `reploy build` performs fresh resolution
-and may produce new bundle fingerprints.
+recorded bundles and image. An explicit `reploy build` ensures the selected
+environment is current and may exactly reuse a matching build;
+`reploy build --no-cache` performs fresh resolution and may produce new bundle
+fingerprints.
 
 When `environment.base.image` is a mutable tag, `reploy build`
 resolves it to an immutable digest and records that digest as the base-layer
-input. A provider node's semantic bundle identity covers its resolved bundle
+input. For warm exact reuse, Reploy first inspects Docker's current local author
+reference and accepts it only when the immutable descriptor still matches the
+recorded build; it does not contact the registry merely to discover remote tag
+movement. A missing or changed local reference falls back to normal resolution,
+and `--no-cache` explicitly runs that registry-backed path. A provider node's
+semantic bundle identity covers its resolved bundle
 section, relevant overridden-source artifacts, target platform, provider recipe
 version, and selected
 prerequisites. Assembly uses the broader rendered transaction identity defined
@@ -1401,8 +1410,9 @@ result. Install help and progress expose that build work and its Docker/network
 requirements. In a staged deployment, `reploy up` and `reploy restart`
 automatically ensure that the recorded build is current and report the build
 phase before running. Staged app commands require an already-current build, as
-do staged shell, test, and observation commands. Staged `reploy stop` can stop
-the recorded workload after build validation fails. Installed runtime commands
+do staged shell, test, and observation commands. Staged `reploy down` can stop
+the recorded workload after build validation fails; `reploy stop` is its alias.
+Installed runtime commands
 never resolve or build: changing an installed application requires staging the
 changed blueprint and installing it again.
 

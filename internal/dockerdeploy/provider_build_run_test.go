@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/buildprogress"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers/registry"
@@ -34,11 +35,15 @@ func TestRunProviderBuildV1HoldsOneLockAcrossPreparationAndExecution(t *testing.
 	order := []string{}
 	want := LockedProviderBuildExecutionResultV1{Reused: true}
 	var progress strings.Builder
+	var buildEvents []buildprogress.Event
 
 	result, err := runProviderBuildV1(t.Context(), ProviderBuildRunInputV1{
 		DeploymentDir: dir, NoCache: true, ValidateLayers: true,
 		Runtime:  StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
 		Progress: &progress,
+		BuildProgress: func(event buildprogress.Event) {
+			buildEvents = append(buildEvents, event)
+		},
 	}, providerBuildRunBackend{
 		acquire:  deploy.AcquireOperationLock,
 		newStore: providerstore.NewStore,
@@ -60,7 +65,7 @@ func TestRunProviderBuildV1HoldsOneLockAcrossPreparationAndExecution(t *testing.
 			if err := input.Preparation.Operation.RequireHeld(); err != nil {
 				t.Fatal(err)
 			}
-			if !input.ValidateLayers || !input.RunOptions.NoCache || len(input.SourceWheels) != 0 || len(input.LocalOverrides) != 0 || input.Progress != &progress {
+			if !input.ValidateLayers || !input.RunOptions.NoCache || len(input.SourceWheels) != 0 || len(input.LocalOverrides) != 0 || input.Progress != &progress || input.BuildProgress == nil {
 				t.Fatalf("execution input = %#v", input)
 			}
 			return want, nil
@@ -71,6 +76,14 @@ func TestRunProviderBuildV1HoldsOneLockAcrossPreparationAndExecution(t *testing.
 	}
 	if !reflect.DeepEqual(result, want) || !reflect.DeepEqual(order, []string{"prepare", "execute"}) {
 		t.Fatalf("result/order = %#v/%#v", result, order)
+	}
+	if len(buildEvents) != 3 ||
+		buildEvents[0].Phase != buildprogress.PhaseInspect ||
+		buildEvents[0].Environment != document.Environment.ID ||
+		buildEvents[1].Phase != buildprogress.PhasePrepare ||
+		buildEvents[2].Phase != buildprogress.PhasePublish ||
+		buildEvents[2].Completed != 1 || buildEvents[2].Total != 1 {
+		t.Fatalf("structured build progress = %#v", buildEvents)
 	}
 	for _, want := range []string{
 		"preparing environment demo for linux/amd64",

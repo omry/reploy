@@ -1,0 +1,2 @@
+kind: Fixed
+body: Recover and clean abandoned provider workspaces after interrupted builds even when their input directories were sealed read-only.

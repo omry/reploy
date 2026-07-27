@@ -326,6 +326,20 @@ func TestStoreRemoveTemporaryEntriesPreservesPublishedObjects(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "nested", "partial"), []byte("partial"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	outside := t.TempDir()
+	outsideEvidence := filepath.Join(outside, "preserved")
+	if err := os.WriteFile(outsideEvidence, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(workspace, "nested", "outside")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.Chmod(filepath.Join(workspace, "nested"), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(workspace, 0o500); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(store.Root(), "tmp", "partial-blob"), []byte("partial"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -341,6 +355,10 @@ func TestStoreRemoveTemporaryEntriesPreservesPublishedObjects(t *testing.T) {
 	}
 	if err := store.VerifyArtifact(descriptor); err != nil {
 		t.Fatalf("published object was changed: %v", err)
+	}
+	content, err := os.ReadFile(outsideEvidence)
+	if err != nil || string(content) != "outside" {
+		t.Fatalf("cleanup followed temporary symlink outside the store: %q, %v", content, err)
 	}
 }
 
@@ -666,6 +684,9 @@ func TestStoreRemoveDeletesObjectsAndTemporaryWorkspacesAndIsAbsentSafe(t *testi
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(workspace, "partial"), []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(workspace, 0o500); err != nil {
 		t.Fatal(err)
 	}
 

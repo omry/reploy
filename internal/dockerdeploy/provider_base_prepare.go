@@ -83,6 +83,38 @@ func SelectProviderBase(
 	return SelectedProviderBase{Plan: plan, Descriptor: descriptor, Config: config}, nil
 }
 
+// SelectCachedProviderBase plans the request but inspects only Docker's local
+// author reference. It is a warm-reuse probe, not normal base resolution.
+func SelectCachedProviderBase(
+	ctx context.Context,
+	request providers.ResolvedRequestV1,
+) (SelectedProviderBase, bool, error) {
+	if ctx == nil {
+		return SelectedProviderBase{}, false, fmt.Errorf("select cached provider base requires a context")
+	}
+	if err := ctx.Err(); err != nil {
+		return SelectedProviderBase{}, false, err
+	}
+	if err := providers.ValidateResolvedRequestV1(request, registry.ValidateResolvedRequestOwnersV1); err != nil {
+		return SelectedProviderBase{}, false, err
+	}
+	plan, err := registry.Plan(providers.PlanInput{
+		Components: request.Components, Platform: request.Platform,
+	})
+	if err != nil {
+		return SelectedProviderBase{}, false, fmt.Errorf("prepare cached provider plan: %w", err)
+	}
+	baseReference, err := resolvedRequestBaseReference(request)
+	if err != nil {
+		return SelectedProviderBase{}, false, err
+	}
+	descriptor, config, found, err := InspectCachedBase(ctx, baseReference, request.Platform)
+	if err != nil || !found {
+		return SelectedProviderBase{}, found, err
+	}
+	return SelectedProviderBase{Plan: plan, Descriptor: descriptor, Config: config}, true, nil
+}
+
 // RealizeSelectedProviderBase validates declared base outputs and produces the
 // graph's initial image and catalog after a caller has ruled out exact reuse.
 func RealizeSelectedProviderBase(

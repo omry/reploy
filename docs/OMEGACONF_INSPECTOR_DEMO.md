@@ -243,16 +243,17 @@ selects the local OmegaConf override, resolves Java into an isolated source
 builder, and leaves Java out of the workload image. Neither the Inspector
 blueprint nor its development sidecar names Java.
 
-The interactive build uses the build screen and retains its result until the
-user exits. If the build fails, the same UI can edit the staged choice and
-retry; `reploy overrides` opens that editor directly. The package table names
-the selected package source: PyPI, a direct requirement URL, or a local
-directory override. PyPI rows retain their declared version constraints, and
-local rows show the selected path. Its workspace root can be changed inside the
-editor; projects beneath a configured root are stored relative to that common
-root, while paths remain absolute when it is unset. The GitHub-backed blueprint
-index entry points at the clean blueprint and does not import the development
-sidecar, because remote refs never consume it.
+An interactive standalone build prints a fast result directly or temporarily
+shows an inline progress panel that exits automatically. If the build fails,
+`reploy overrides` opens the package editor, where validation retains a
+scrollable log and allows the staged choice to be corrected and retried. The
+package table names the selected package source: PyPI, a direct requirement
+URL, or a local directory override. PyPI rows retain their declared version
+constraints, and local rows show the selected path. Its workspace root can be
+changed inside the editor; projects beneath a configured root are stored
+relative to that common root, while paths remain absolute when it is unset. The
+GitHub-backed blueprint index entry points at the clean blueprint and does not
+import the development sidecar, because remote refs never consume it.
 
 ## Service Configuration
 

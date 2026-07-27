@@ -1,2 +1,2 @@
 kind: Changed
-body: Add an interactive environment build screen with retained results, direct dumb-terminal logs, package override correction and retry, unchanged-choice preservation, and deliberate two-Ctrl-C cancellation.
+body: Add retained package-override validation results, correction and retry, auto-exiting inline progress for standalone builds, direct dumb-terminal logs, unchanged-choice preservation, and deliberate two-Ctrl-C cancellation.

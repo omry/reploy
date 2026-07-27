@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
@@ -60,32 +61,35 @@ type providerBuildPreparationBackend struct {
 		providers.RequirementProfileOwnerValidator,
 		providers.ResolvedBundleOwnerValidator,
 	) (bool, error)
-	load            func(*deploy.OperationLock, deploy.PackageOverrideIntentV1, string, []providers.ResolvedSourceInput) (LoadedBuildRequestV1, error)
-	selectBase      func(context.Context, providers.ResolvedRequestV1) (SelectedProviderBase, error)
-	validateCurrent currentBuildLoader
-	lockedSources   func(deploy.BuildLockV1) ([]providers.ResolvedSourceInput, error)
-	matches         func(CurrentBuild, CurrentBuildReuseInput) (bool, error)
-	cacheAvailable  func(deploy.BuildLockV1, providerstore.Store) (bool, error)
-	realizeBase     func(context.Context, providerstore.Store, SelectedProviderBase) (PreparedProviderBase, error)
+	load             func(*deploy.OperationLock, deploy.PackageOverrideIntentV1, string, []providers.ResolvedSourceInput) (LoadedBuildRequestV1, error)
+	selectCachedBase func(context.Context, providers.ResolvedRequestV1) (SelectedProviderBase, bool, error)
+	selectBase       func(context.Context, providers.ResolvedRequestV1) (SelectedProviderBase, error)
+	validateCurrent  currentBuildLoader
+	lockedSources    func(deploy.BuildLockV1) ([]providers.ResolvedSourceInput, error)
+	matches          func(CurrentBuild, CurrentBuildReuseInput) (bool, error)
+	cacheAvailable   func(deploy.BuildLockV1, providerstore.Store) (bool, error)
+	realizeBase      func(context.Context, providerstore.Store, SelectedProviderBase) (PreparedProviderBase, error)
 }
 
 // PrepareLockedProviderBuildV1 performs the read/recovery and reuse boundary
-// under a caller-held deployment lock. Exact reuse stops after immutable base
-// selection. A stale or absent build realizes base outputs but does not start a
-// provider resolver or construct a provider layer.
+// under a caller-held deployment lock. Exact reuse first checks the current
+// local base selection and avoids registry resolution when it still matches. A
+// stale or absent build realizes base outputs but does not start a provider
+// resolver or construct a provider layer.
 func PrepareLockedProviderBuildV1(
 	ctx context.Context,
 	input LockedProviderBuildPreparationInputV1,
 ) (LockedProviderBuildPreparationV1, error) {
 	return prepareLockedProviderBuildV1(ctx, input, providerBuildPreparationBackend{
-		recover:         RecoverPendingPublication,
-		load:            LoadBuildRequestWithPackageOverridesV1,
-		selectBase:      SelectProviderBase,
-		validateCurrent: ValidateCurrentBuild,
-		lockedSources:   buildLockSelectedSourcesV1,
-		matches:         CurrentBuildMatches,
-		cacheAvailable:  providerBuildCacheAvailable,
-		realizeBase:     RealizeSelectedProviderBase,
+		recover:          RecoverPendingPublication,
+		load:             LoadBuildRequestWithPackageOverridesV1,
+		selectCachedBase: SelectCachedProviderBase,
+		selectBase:       SelectProviderBase,
+		validateCurrent:  ValidateCurrentBuild,
+		lockedSources:    buildLockSelectedSourcesV1,
+		matches:          CurrentBuildMatches,
+		cacheAvailable:   providerBuildCacheAvailable,
+		realizeBase:      RealizeSelectedProviderBase,
 	})
 }
 
@@ -106,7 +110,7 @@ func prepareLockedProviderBuildV1(
 	if input.Sources == nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build sources must use an array")
 	}
-	if backend.recover == nil || backend.load == nil || backend.selectBase == nil || backend.validateCurrent == nil || backend.lockedSources == nil || backend.matches == nil || backend.cacheAvailable == nil || backend.realizeBase == nil {
+	if backend.recover == nil || backend.load == nil || backend.selectCachedBase == nil || backend.selectBase == nil || backend.validateCurrent == nil || backend.lockedSources == nil || backend.matches == nil || backend.cacheAvailable == nil || backend.realizeBase == nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build requires a complete backend")
 	}
 
@@ -139,18 +143,21 @@ func prepareLockedProviderBuildV1(
 	if _, err := RuntimePlansV1(loaded.Document, input.DockerPlan); err != nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build runtime plan: %w", err)
 	}
-	selected, err := backend.selectBase(ctx, loaded.Request)
-	if err != nil {
-		return LockedProviderBuildPreparationV1{}, err
-	}
 	result := LockedProviderBuildPreparationV1{
 		Operation: input.Operation, Store: input.Store, Environment: input.Environment,
 		DeploymentDir: input.DeploymentDir, DockerPlan: input.DockerPlan,
-		Loaded: loaded, SelectedBase: selected, Recovered: recovered,
+		Loaded: loaded, Recovered: recovered,
 		ValidatedCandidate: input.ValidatedCandidate, ValidatedInputs: input.ValidatedInputs,
 		NoCache: input.NoCache,
 	}
 
+	type reuseCandidate struct {
+		current          CurrentBuild
+		request          providers.ResolvedRequestV1
+		packageOverrides deploy.PackageOverrideIntentV1
+		validated        bool
+	}
+	var currentReuse *reuseCandidate
 	if !input.NoCache {
 		current, currentFound, err := backend.validateCurrent(
 			ctx, input.Operation, input.Store, input.Environment, input.DeploymentDir,
@@ -179,25 +186,61 @@ func prepareLockedProviderBuildV1(
 					return LockedProviderBuildPreparationV1{}, err
 				}
 				if exactSources {
-					matches, err := backend.matches(current, CurrentBuildReuseInput{
-						ResolvedRequest: lockedRequest, Overlay: loaded.State.Overlay,
-						PackageOverrides: relevantOverrides, Base: selected.Descriptor,
-						Document: loaded.Document, DockerPlan: input.DockerPlan,
-					})
-					if err != nil {
-						return LockedProviderBuildPreparationV1{}, err
-					}
-					if matches {
-						publicationLock, err := rebindCurrentBuildLockV1(current.Lock, loaded.Document)
-						if err != nil {
-							return LockedProviderBuildPreparationV1{}, err
-						}
-						result.PublicationLock = &publicationLock
-						result.Reused = true
-						return result, nil
+					currentReuse = &reuseCandidate{
+						current: current, request: lockedRequest,
+						packageOverrides: relevantOverrides,
 					}
 				}
 			}
+		}
+	}
+	tryReuse := func(candidate reuseCandidate, selected SelectedProviderBase) (bool, error) {
+		matches, err := backend.matches(candidate.current, CurrentBuildReuseInput{
+			ResolvedRequest: candidate.request, Overlay: loaded.State.Overlay,
+			PackageOverrides: candidate.packageOverrides, Base: selected.Descriptor,
+			Document: loaded.Document, DockerPlan: input.DockerPlan,
+		})
+		if err != nil || !matches {
+			return false, err
+		}
+		publicationLock, err := rebindCurrentBuildLockV1(candidate.current.Lock, loaded.Document)
+		if err != nil {
+			return false, err
+		}
+		result.SelectedBase = selected
+		result.PublicationLock = &publicationLock
+		result.Reused = true
+		result.ReusedCandidate = candidate.validated
+		return true, nil
+	}
+
+	var cachedSelection *SelectedProviderBase
+	if currentReuse != nil {
+		cached, found, err := backend.selectCachedBase(ctx, loaded.Request)
+		if err != nil {
+			return LockedProviderBuildPreparationV1{}, err
+		}
+		if found {
+			cachedSelection = &cached
+			if reused, err := tryReuse(*currentReuse, cached); err != nil {
+				return LockedProviderBuildPreparationV1{}, err
+			} else if reused {
+				return result, nil
+			}
+		}
+	}
+
+	selected, err := backend.selectBase(ctx, loaded.Request)
+	if err != nil {
+		return LockedProviderBuildPreparationV1{}, err
+	}
+	result.SelectedBase = selected
+	if currentReuse != nil &&
+		(cachedSelection == nil || !reflect.DeepEqual(cachedSelection.Descriptor, selected.Descriptor)) {
+		if reused, err := tryReuse(*currentReuse, selected); err != nil {
+			return LockedProviderBuildPreparationV1{}, err
+		} else if reused {
+			return result, nil
 		}
 	}
 	if input.ValidatedCandidate != nil && !input.NoCache {
@@ -220,22 +263,12 @@ func prepareLockedProviderBuildV1(
 				return LockedProviderBuildPreparationV1{}, err
 			}
 			if exactSources {
-				matches, err := backend.matches(candidate, CurrentBuildReuseInput{
-					ResolvedRequest: lockedRequest, Overlay: loaded.State.Overlay,
-					PackageOverrides: relevantOverrides, Base: selected.Descriptor,
-					Document: loaded.Document, DockerPlan: input.DockerPlan,
-				})
-				if err != nil {
+				if reused, err := tryReuse(reuseCandidate{
+					current: candidate, request: lockedRequest,
+					packageOverrides: relevantOverrides, validated: true,
+				}, selected); err != nil {
 					return LockedProviderBuildPreparationV1{}, err
-				}
-				if matches {
-					publicationLock, err := rebindCurrentBuildLockV1(candidate.Lock, loaded.Document)
-					if err != nil {
-						return LockedProviderBuildPreparationV1{}, err
-					}
-					result.PublicationLock = &publicationLock
-					result.Reused = true
-					result.ReusedCandidate = true
+				} else if reused {
 					return result, nil
 				}
 			}

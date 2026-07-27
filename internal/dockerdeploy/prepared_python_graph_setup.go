@@ -80,6 +80,7 @@ func PreparePreparedPythonGraphBackend(
 	aptOperations := make(map[providers.NodeID]PreparedAPTNodeOperations)
 	verifiedArtifacts := make(map[providers.NodeID]map[canonical.Digest]string)
 	artifactCleanups := []func(){}
+	showApplicationContext := providerPlanApplicationCount(plan) > 1
 	cleanupArtifacts := func() {
 		for index := len(artifactCleanups) - 1; index >= 0; index-- {
 			artifactCleanups[index]()
@@ -125,13 +126,14 @@ func PreparePreparedPythonGraphBackend(
 			operations[node.ID] = PreparedPythonNodeOperations{
 				Store: store, Validators: validators,
 				FinalImageConfig: cloneImageConfigPolicy(finalImageConfig), Artifacts: artifacts,
-				ReusableWheels:    append([]providerstore.ArtifactDescriptor{}, config.ReusableWheels...),
-				PriorSources:      append([]providers.ResolvedSourceInput{}, config.PriorSources...),
-				PriorSourceWheels: append([]providerstore.ArtifactDescriptor{}, config.PriorSourceWheels...),
-				LocalOverrides:    append([]PythonLocalOverrideV1{}, config.LocalOverrides...),
-				Progress:          options.Progress,
-				RunOptions:        options,
-				verifiedArtifacts: verified,
+				ReusableWheels:         append([]providerstore.ArtifactDescriptor{}, config.ReusableWheels...),
+				PriorSources:           append([]providers.ResolvedSourceInput{}, config.PriorSources...),
+				PriorSourceWheels:      append([]providerstore.ArtifactDescriptor{}, config.PriorSourceWheels...),
+				LocalOverrides:         append([]PythonLocalOverrideV1{}, config.LocalOverrides...),
+				Progress:               options.Progress,
+				ShowApplicationContext: showApplicationContext,
+				RunOptions:             options,
+				verifiedArtifacts:      verified,
 			}
 		default:
 			cleanupArtifacts()

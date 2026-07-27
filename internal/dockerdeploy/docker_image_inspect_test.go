@@ -85,6 +85,60 @@ func TestResolveBaseInspectsLocalImageIDWithoutPulling(t *testing.T) {
 	}
 }
 
+func TestInspectCachedBaseUsesMutableLocalReferenceWithoutPulling(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configID := "sha256:" + strings.Repeat("4", 64)
+	manifestID := "sha256:" + strings.Repeat("5", 64)
+	diffID := "sha256:" + strings.Repeat("6", 64)
+	inspection := fmt.Sprintf(
+		`[{"Id":%q,"RepoDigests":[%q],"Os":"linux","Architecture":"amd64","RootFS":{"Layers":[%q]},"Config":{}}]`,
+		configID,
+		"python@"+manifestID,
+		diffID,
+	)
+	var calls [][]string
+	run := func(_ context.Context, args ...string) (string, error) {
+		calls = append(calls, append([]string{}, args...))
+		return inspection, nil
+	}
+	descriptor, _, found, err := inspectCachedBase(
+		t.Context(),
+		"python:3.11-slim",
+		platform,
+		run,
+	)
+	if err != nil || !found {
+		t.Fatalf("cached base = %#v, found=%v, error=%v", descriptor, found, err)
+	}
+	if !reflect.DeepEqual(calls, [][]string{{"image", "inspect", "python:3.11-slim"}}) {
+		t.Fatalf("calls = %#v", calls)
+	}
+	if descriptor.ManifestDigest != canonical.Digest(manifestID) {
+		t.Fatalf("descriptor = %#v", descriptor)
+	}
+}
+
+func TestInspectCachedBaseTreatsMissingMutableReferenceAsCacheMiss(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, found, err := inspectCachedBase(
+		t.Context(),
+		"python:3.11-slim",
+		platform,
+		func(context.Context, ...string) (string, error) {
+			return "", fmt.Errorf("not found")
+		},
+	)
+	if err != nil || found {
+		t.Fatalf("found/error = %v/%v", found, err)
+	}
+}
+
 func TestResolveBaseInspectsCachedDigestReferenceWithoutPulling(t *testing.T) {
 	platform, err := blueprint.ParsePlatform("linux/amd64")
 	if err != nil {

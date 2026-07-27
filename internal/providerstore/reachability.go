@@ -61,9 +61,17 @@ func (store Store) RemoveTemporaryEntries() error {
 	if err != nil {
 		return fmt.Errorf("read provider store temporary directory: %w", err)
 	}
+	temporary, err := os.OpenRoot(temporaryRoot)
+	if err != nil {
+		return fmt.Errorf("open provider store temporary directory: %w", err)
+	}
+	defer temporary.Close()
 	sort.Slice(entries, func(left int, right int) bool { return entries[left].Name() < entries[right].Name() })
 	for _, entry := range entries {
-		if err := os.RemoveAll(filepath.Join(temporaryRoot, entry.Name())); err != nil {
+		if err := makeTemporaryEntryRemovable(temporary, entry.Name()); err != nil {
+			return fmt.Errorf("prepare abandoned provider store temporary entry %q for removal: %w", entry.Name(), err)
+		}
+		if err := temporary.RemoveAll(entry.Name()); err != nil {
 			return fmt.Errorf("remove abandoned provider store temporary entry %q: %w", entry.Name(), err)
 		}
 	}
@@ -71,6 +79,21 @@ func (store Store) RemoveTemporaryEntries() error {
 		return syncStoreDirectory(temporaryRoot)
 	}
 	return nil
+}
+
+func makeTemporaryEntryRemovable(temporary *os.Root, name string) error {
+	return fs.WalkDir(temporary.FS(), name, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		if err := temporary.Chmod(path, 0o700); err != nil {
+			return fmt.Errorf("make temporary directory %q removable: %w", path, err)
+		}
+		return nil
+	})
 }
 
 // RemoveUnreachable removes only recognized immutable objects not present in

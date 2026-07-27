@@ -53,11 +53,11 @@ type ValidationResult struct {
 }
 
 type BuildOutcome struct {
-	Environment string
-	Image       string
-	Elapsed     time.Duration
-	Reused      bool
-	Republished bool
+	Environment    string
+	ImageReference string
+	Elapsed        time.Duration
+	Reused         bool
+	Republished    bool
 }
 
 type Config struct {
@@ -76,7 +76,6 @@ type Config struct {
 	Unused        []DiscoveredPackage
 	AutoValidate  bool
 	ExitOnValid   bool
-	BuildMode     bool
 }
 
 type Result struct {
@@ -209,6 +208,8 @@ type model struct {
 	validationSpinner    spinner.Model
 	validationCurrent    string
 	validationCompleted  []string
+	completedSteps       map[string]struct{}
+	loggedSteps          map[string]struct{}
 	validationError      string
 	validationProgress   <-chan string
 	validationVisible    bool
@@ -220,10 +221,8 @@ type model struct {
 	validationSavedPath  string
 	validatedPackages    map[string]struct{}
 	unusedOverrides      []DiscoveredPackage
-	buildOutcome         *BuildOutcome
 	autoValidate         bool
 	exitOnValid          bool
-	buildMode            bool
 	validationCancel     context.CancelFunc
 	canceled             bool
 }
@@ -368,7 +367,6 @@ func newModel(config Config) (*model, error) {
 		validationSpinner: validationSpinner, validationViewport: validationViewport,
 		validationSaveInput: validationSaveInput,
 		autoValidate:        config.AutoValidate, exitOnValid: config.ExitOnValid,
-		buildMode: config.BuildMode,
 	}
 	if raw.Environment.Base != nil {
 		m.baseImage = raw.Environment.Base.Image
@@ -624,24 +622,15 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = ""
 		} else {
 			m.validated = true
-			m.buildOutcome = msg.Result.Build
 			m.validatedPackages = map[string]struct{}{}
 			for _, item := range msg.Result.Packages {
 				m.validatedPackages[item.Provider+"\x00"+item.Package] = struct{}{}
 			}
 			m.unusedOverrides = append([]DiscoveredPackage{}, msg.Result.Unused...)
 			m.validateItems()
-			if m.buildMode {
-				m.status = "Build completed."
-			} else {
-				m.status = "Validated choices. The cached trial build is ready for reploy build."
-			}
+			m.status = "Validated choices. The cached trial build is ready for reploy build."
 			m.validationError = ""
-			if m.buildMode {
-				m.appendValidationLog("Build succeeded.")
-			} else {
-				m.appendValidationLog("Validation succeeded.")
-			}
+			m.appendValidationLog("Validation succeeded.")
 			if msg.ExitAfter {
 				return m, tea.Quit
 			}
@@ -721,13 +710,6 @@ func (m *model) viewValidationOverlay() string {
 	failed := "Validation failed"
 	succeeded := "Validation succeeded"
 	logTitle := "Validation log"
-	if m.buildMode {
-		title = "Building environment"
-		inProgress = "Build in progress"
-		failed = "Build failed"
-		succeeded = "Build complete"
-		logTitle = "Build log"
-	}
 	body.WriteString(titleStyle.Render(title))
 	body.WriteString("\n\n")
 	switch {
@@ -746,20 +728,6 @@ func (m *model) viewValidationOverlay() string {
 	default:
 		body.WriteString(goodStyle.Render("✓ " + succeeded))
 	}
-	if m.buildMode && !m.validating && m.buildOutcome != nil {
-		body.WriteString("\n\n")
-		body.WriteString("image: " + sanitizeTerminalText(m.buildOutcome.Image))
-		if m.buildOutcome.Elapsed >= time.Second {
-			body.WriteString("\nelapsed: " + m.buildOutcome.Elapsed.Round(100*time.Millisecond).String())
-		}
-		if m.buildOutcome.Republished {
-			body.WriteString("\nupdated environment: " + sanitizeTerminalText(m.buildOutcome.Environment))
-		} else if m.buildOutcome.Reused {
-			body.WriteString("\nenvironment already current: " + sanitizeTerminalText(m.buildOutcome.Environment))
-		} else {
-			body.WriteString("\nbuilt environment: " + sanitizeTerminalText(m.buildOutcome.Environment))
-		}
-	}
 	body.WriteString("\n\n")
 	body.WriteString(mutedStyle.Render(logTitle))
 	body.WriteString("\n")
@@ -773,18 +741,9 @@ func (m *model) viewValidationOverlay() string {
 			footer += " · Ctrl+C twice exits"
 		}
 	} else {
-		if m.buildMode {
-			if m.validationError != "" {
-				footer += " · Enter edits choices"
-			}
-			footer += " · S save log · Esc or Q exits"
-		} else {
-			footer += " · S save log · Enter or Esc closes"
-		}
+		footer += " · S save log · Enter or Esc closes"
 		if m.ctrlCArmed {
 			footer += " · Press Ctrl+C again to exit."
-		} else if m.buildMode {
-			footer += " · Ctrl+C twice exits"
 		}
 	}
 	body.WriteString(mutedStyle.Render(footer))
@@ -856,11 +815,7 @@ func (m *model) validationScrollbar() string {
 
 func (m *model) viewValidationSavePrompt() string {
 	var body strings.Builder
-	title := "Save validation log"
-	if m.buildMode {
-		title = "Save build log"
-	}
-	body.WriteString(titleStyle.Render(title))
+	body.WriteString(titleStyle.Render("Save validation log"))
 	body.WriteString("\n\n")
 	body.WriteString(m.validationSaveInput.View())
 	body.WriteString("\n\n")
@@ -1299,11 +1254,7 @@ func (m *model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if m.validationCancel != nil {
 					m.validationCancel()
 				}
-				if m.buildMode {
-					m.validationCurrent = "Canceling build"
-				} else {
-					m.validationCurrent = "Canceling validation"
-				}
+				m.validationCurrent = "Canceling validation"
 				return m, nil
 			}
 			return m, tea.Quit
@@ -1454,11 +1405,7 @@ func (m *model) updateValidationOverlay(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if m.validationCancel != nil {
 					m.validationCancel()
 				}
-				if m.buildMode {
-					m.validationCurrent = "Canceling build"
-				} else {
-					m.validationCurrent = "Canceling validation"
-				}
+				m.validationCurrent = "Canceling validation"
 				return m, nil
 			}
 			return m, tea.Quit
@@ -1469,24 +1416,7 @@ func (m *model) updateValidationOverlay(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.ctrlCArmed {
 		m.ctrlCArmed = false
 	}
-
 	if !m.validating {
-		if m.buildMode {
-			switch key.String() {
-			case "esc", "q", "Q":
-				return m, tea.Quit
-			case "enter":
-				if m.validationError == "" {
-					return m, nil
-				}
-				m.validationVisible = false
-				m.validationCurrent = ""
-				m.validationCompleted = nil
-				m.validationError = ""
-				m.validationSavedPath = ""
-				return m, nil
-			}
-		}
 		switch key.String() {
 		case "enter", "esc":
 			m.validationVisible = false
@@ -1498,11 +1428,7 @@ func (m *model) updateValidationOverlay(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "s", "S":
 			m.validationSavePrompt = true
 			m.validationSaveError = ""
-			filename := "reploy-validation.log"
-			if m.buildMode {
-				filename = "reploy-build.log"
-			}
-			m.validationSaveInput.SetValue(filename)
+			m.validationSaveInput.SetValue("reploy-validation.log")
 			m.validationSaveInput.CursorEnd()
 			return m, m.validationSaveInput.Focus()
 		}
@@ -2196,20 +2122,16 @@ func (m *model) startValidation(exitAfter bool) (tea.Model, tea.Cmd) {
 	m.validating = true
 	m.validationVisible = true
 	m.validationError = ""
-	m.buildOutcome = nil
 	m.validationCompleted = nil
 	saveChoices := m.dirty
 	startStep := "Validating current choices"
-	if m.buildMode {
-		startStep = "Preparing current package choices"
-	}
-	if saveChoices && m.buildMode {
-		startStep = "Saving updated package choices"
-	} else if saveChoices {
+	if saveChoices {
 		startStep = "Saving choices"
 	}
 	m.validationCurrent = startStep
 	m.validationLog = ""
+	m.completedSteps = map[string]struct{}{}
+	m.loggedSteps = map[string]struct{}{startStep: {}}
 	m.validationSavedPath = ""
 	m.validationSaveError = ""
 	m.validationSavePrompt = false
@@ -2277,10 +2199,16 @@ func (m *model) recordValidationStep(step string) {
 		return
 	}
 	if m.validationCurrent != "" {
-		m.validationCompleted = append(m.validationCompleted, m.validationCurrent)
+		if _, found := m.completedSteps[m.validationCurrent]; !found {
+			m.validationCompleted = append(m.validationCompleted, m.validationCurrent)
+			m.completedSteps[m.validationCurrent] = struct{}{}
+		}
 	}
 	m.validationCurrent = step
-	m.appendValidationLog(step)
+	if _, found := m.loggedSteps[step]; !found {
+		m.appendValidationLog(step)
+		m.loggedSteps[step] = struct{}{}
+	}
 }
 
 func waitForValidationProgress(id uint64, progress <-chan string) tea.Cmd {
@@ -2295,6 +2223,7 @@ type validationProgressWriter struct {
 	pending string
 	events  chan<- string
 	log     strings.Builder
+	seen    map[string]struct{}
 }
 
 func (writer *validationProgressWriter) Write(content []byte) (int, error) {
@@ -2322,8 +2251,14 @@ func (writer *validationProgressWriter) flush() {
 func (writer *validationProgressWriter) emitLocked(step string) {
 	step = sanitizeTerminalText(strings.TrimSpace(step))
 	if step != "" {
-		writer.log.WriteString(step)
-		writer.log.WriteByte('\n')
+		if writer.seen == nil {
+			writer.seen = map[string]struct{}{}
+		}
+		if _, found := writer.seen[step]; !found {
+			writer.log.WriteString(step)
+			writer.log.WriteByte('\n')
+			writer.seen[step] = struct{}{}
+		}
 		select {
 		case writer.events <- step:
 		default:

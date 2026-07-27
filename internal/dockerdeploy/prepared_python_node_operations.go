@@ -21,17 +21,18 @@ import (
 // PreparedPythonNodeOperations connects one-session wheel resolution to the
 // typed provider graph and deployment-owned store.
 type PreparedPythonNodeOperations struct {
-	Store             providerstore.Store
-	Validators        providers.ProviderOwnerValidators
-	FinalImageConfig  providers.ImageConfigPolicy
-	Artifacts         PreparedPythonResolverArtifacts
-	ReusableWheels    []providerstore.ArtifactDescriptor
-	PriorSources      []providers.ResolvedSourceInput
-	PriorSourceWheels []providerstore.ArtifactDescriptor
-	LocalOverrides    []PythonLocalOverrideV1
-	Progress          io.Writer
-	RunOptions        RunOptions
-	verifiedArtifacts map[canonical.Digest]string
+	Store                  providerstore.Store
+	Validators             providers.ProviderOwnerValidators
+	FinalImageConfig       providers.ImageConfigPolicy
+	Artifacts              PreparedPythonResolverArtifacts
+	ReusableWheels         []providerstore.ArtifactDescriptor
+	PriorSources           []providers.ResolvedSourceInput
+	PriorSourceWheels      []providerstore.ArtifactDescriptor
+	LocalOverrides         []PythonLocalOverrideV1
+	Progress               io.Writer
+	ShowApplicationContext bool
+	RunOptions             RunOptions
+	verifiedArtifacts      map[canonical.Digest]string
 }
 
 func (operations PreparedPythonNodeOperations) Preparer(
@@ -47,7 +48,7 @@ func (operations PreparedPythonNodeOperations) Preparer(
 		ResolveFresh:   operations.resolveFresh,
 		PrepareBuildTools: func(ctx context.Context, tools []string) (PythonBuildToolEnvironmentV1, error) {
 			writeProviderBuildProgress(
-				operations.Progress, "preparing portable build tools %s for local Python sources",
+				operations.Progress, "preparing build tools %s",
 				strings.Join(tools, ", "),
 			)
 			return PreparePythonBuildToolEnvironmentV1(ctx, PythonBuildToolEnvironmentInputV1{
@@ -323,10 +324,6 @@ func (operations PreparedPythonNodeOperations) materializeLocalOverrides(
 		distributions[index] = override.Distribution
 	}
 	sort.Strings(distributions)
-	writeProviderBuildProgress(
-		operations.Progress, "observing local Python sources %s for component %s",
-		strings.Join(distributions, ", "), component,
-	)
 	sources, err := ObserveSelectedPythonLocalSources(selected, distributions)
 	if err != nil {
 		return nil, nil, err
@@ -357,9 +354,17 @@ func (operations PreparedPythonNodeOperations) materializeLocalOverrides(
 		sort.Strings(tools)
 		return nil, nil, &pythonBuildToolsRequiredError{Tools: tools}
 	}
+	projectKind := "project"
+	if len(distributions) != 1 {
+		projectKind = "projects"
+	}
 	writeProviderBuildProgress(
-		operations.Progress, "building local Python source artifacts %s for component %s",
-		strings.Join(distributions, ", "), component,
+		operations.Progress, "building local Python %s %s%s",
+		projectKind,
+		strings.Join(distributions, ", "),
+		providerProgressContextSuffix([]string{providerProgressComponentContext(
+			blueprint.ComponentTypePython, component, operations.ShowApplicationContext,
+		)}),
 	)
 	if err := session.BuildSourceDistributions(ctx, launcher, requirement, interpreter, snapshots); err != nil {
 		return nil, nil, err
@@ -389,6 +394,16 @@ func (operations PreparedPythonNodeOperations) materializeLocalOverrides(
 	)
 	if err != nil {
 		return nil, nil, err
+	}
+	sourceByDistribution := make(map[string]PythonLocalSource, len(sources))
+	for _, source := range sources {
+		sourceByDistribution[source.Distribution] = source
+	}
+	for _, distribution := range preparedDistributions {
+		source, found := sourceByDistribution[distribution.Distribution]
+		if found {
+			_ = learnPythonSourceRelevance(operations.Store, source, distribution.Artifact)
+		}
 	}
 	reusedSources, pendingDistributions, wheelsAfterSdistReuse, err := operations.reusePythonSourceWheels(
 		session.artifacts, component, preparedDistributions, effectiveWheels,

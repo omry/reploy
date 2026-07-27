@@ -53,10 +53,10 @@ func runEmbeddedControl(args []string, stdout io.Writer, stderr io.Writer, globa
 	cmd := options.Command[0]
 	rest := options.Command[1:]
 	switch cmd {
-	case "up":
-		return runEmbeddedControlRuntime(context, "up", rest, stdout, stderr, globalOptions)
-	case "stop":
-		return runEmbeddedControlRuntime(context, "stop", rest, stdout, stderr, globalOptions)
+	case "up", "start":
+		return runEmbeddedControlRuntime(context, cmd, rest, stdout, stderr, globalOptions)
+	case "down", "stop":
+		return runEmbeddedControlRuntime(context, cmd, rest, stdout, stderr, globalOptions)
 	case "restart":
 		return runEmbeddedControlRuntime(context, "restart", rest, stdout, stderr, globalOptions)
 	case "status", "ps":
@@ -176,9 +176,11 @@ func printEmbeddedControlUsage(output io.Writer, context embeddedControlUsageCon
 	scriptName := embeddedControlDefaultString(context.ScriptName, "reployctl")
 	fmt.Fprintf(output, "usage: %s COMMAND [ARGS...]\n", scriptName)
 	fmt.Fprintln(output, "commands:")
-	for _, command := range []string{"up", "stop", "restart", "status", "logs", "health"} {
+	for _, command := range []string{"up", "down", "restart", "status", "logs", "health"} {
 		fmt.Fprintf(output, "  %s\n", command)
 	}
+	fmt.Fprintln(output, "  start (alias for up)")
+	fmt.Fprintln(output, "  stop (alias for down)")
 	if embeddedControlContextUsesSystemd(context) {
 		fmt.Fprintln(output, "  enable")
 		fmt.Fprintln(output, "  disable")
@@ -201,7 +203,7 @@ func printEmbeddedControlUsage(output io.Writer, context embeddedControlUsageCon
 	}
 	fmt.Fprintln(output, "lifecycle options:")
 	fmt.Fprintln(output, "  up --wait|--drain|--force")
-	fmt.Fprintln(output, "  stop/restart --wait")
+	fmt.Fprintln(output, "  down/restart --wait")
 }
 
 func printEmbeddedControlLogsHelp(output io.Writer, context embeddedControlUsageContext) {

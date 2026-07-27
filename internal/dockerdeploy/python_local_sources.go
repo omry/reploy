@@ -85,11 +85,24 @@ func ObserveSelectedPythonLocalSources(
 	overrides []PythonLocalOverrideV1,
 	distributions []string,
 ) ([]PythonLocalSource, error) {
+	return observeSelectedPythonLocalSources(overrides, distributions, ObservePythonSourceManifest)
+}
+
+type pythonSourceManifestObserver func(string) (PythonSourceManifestV1, canonical.Digest, error)
+
+func observeSelectedPythonLocalSources(
+	overrides []PythonLocalOverrideV1,
+	distributions []string,
+	observe pythonSourceManifestObserver,
+) ([]PythonLocalSource, error) {
 	if overrides == nil {
 		return nil, fmt.Errorf("local Python overrides must use an array")
 	}
 	if distributions == nil {
 		return nil, fmt.Errorf("selected local Python distributions must use an array")
+	}
+	if observe == nil {
+		return nil, fmt.Errorf("local Python source observer is required")
 	}
 	selected := make(map[string]struct{}, len(distributions))
 	for index, distribution := range distributions {
@@ -120,7 +133,7 @@ func ObserveSelectedPythonLocalSources(
 		if err != nil {
 			return nil, fmt.Errorf("local Python override %q source: %w", override.Distribution, err)
 		}
-		manifest, digest, err := ObservePythonSourceManifest(hostDir)
+		manifest, digest, err := observe(hostDir)
 		if err != nil {
 			return nil, fmt.Errorf("local Python override %q source input: %w", override.Distribution, err)
 		}

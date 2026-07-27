@@ -397,21 +397,28 @@ Installation transfers the staged build and retained blueprint, but not the
 sidecar or its source locators; an installed deployment never reads the source
 checkout.
 
-In an interactive terminal, `reploy build` uses a build-specific view backed
-by the override validation machinery. A failed build keeps its scrollable log
-available and allows the user to correct package choices; success promotes the
-validated candidate and retains the final image, elapsed time, and environment
-result until Esc, Q, or two Ctrl+C presses exit. During a build, two Ctrl+C
-presses cancel and exit without starting another build path. Dumb and
-redirected terminals print the progress log and final result directly.
+In an interactive terminal, `reploy build` starts one build transaction
+immediately. A fast completion prints the concise result without opening a
+panel. A longer build renders a compact inline progress panel beneath the
+command and exits that panel automatically before printing the result or
+diagnostic. It does not enter the override editor; editing choices and retaining
+a scrollable validation log remain behaviors of validation launched from
+`reploy overrides`. During a build, two Ctrl+C presses cancel and exit without
+starting another build path. Dumb and redirected terminals print durable
+progress lines and the final result directly.
 
 For exact build reuse, Reploy reconstructs the prior selected-source list from
 the validated provider profiles embedded in the current lock and compares only
 those records with current candidates. It also compares override intent only
 for package identifiers in the prior closure, so adding or changing an override
 for a package already in that closure invalidates reuse while an unrelated
-mapping does not. This check does not scan the provider store, hash candidate
-artifacts, inspect unused local paths, or call Docker.
+mapping does not. A warm local-source check hashes the previously learned
+sdist-relevant directories and root build-control files and compares shallow
+root topology; an absent, invalid, changed, or symlink-dependent map falls back
+to complete source observation. Reploy also inspects Docker's current local
+author reference and reuses it only when its immutable descriptor still
+matches. This path does not walk the complete provider-store closure, inspect
+unused local paths, or contact the registry when the local base still matches.
 Before either source artifact is reused, its exact descriptor and bytes must
 still be present in the current deployment's provider store. If current source
 inputs produce the same retained sdist as a prior build under the same selected
@@ -1897,8 +1904,9 @@ pipeline as part of installation when its staged or temporary workspace does
 not already have a matching recorded build. Staged `reploy up` and
 `reploy restart` also ensure the current build automatically and report the
 build phase before running. Staged app commands require an already-current
-build, as do staged shell, test, and observation commands. Staged `reploy stop`
-can still stop the recorded workload after build validation fails. Installed
+build, as do staged shell, test, and observation commands. Staged
+`reploy down` can still stop the recorded workload after build validation
+fails; `reploy stop` is its alias. Installed
 runtime operations never build or change the bundle; application changes
 require a new staging operation followed by install.
 
@@ -1945,11 +1953,12 @@ managed mount contents. The new installation is first recorded as
 no backup and attempts no rollback; a post-cutover failure leaves the new
 installation available for inspection and for a repairing reinstall or
 uninstall. The same admission queue supports default failure, `--wait`,
-`--drain`, and `--force` for `up`, install, and uninstall. `stop` and `restart`
+`--drain`, and `--force` for `up`, install, and uninstall. `down` and `restart`
 instead stop active jobs and cancel queued jobs by default after logging the
 impact and waiting three seconds for an optional Ctrl-C abort; their `--wait`
-form lets active jobs finish. Build, ordinary stage/update, overlay mutation,
-and clean remain outside this live run queue. Cross-blueprint
+form lets active jobs finish. `stop` is an alias for `down`. Build, ordinary
+stage/update, overlay mutation, and clean remain outside this live run queue.
+Cross-blueprint
 `stage --update APP_REF --force`
 uses force admission so it can cancel queued runs, stop active runs and the
 staged workload, remove the old generation reference, and publish a fresh
@@ -2472,7 +2481,7 @@ not public `type: apt` components.
   direct install builds in its private temporary staging-like workspace; help
   and progress expose install's build work and Docker/network requirements;
   stage and overlay mutations never build; staged up and restart visibly ensure
-  a current build; staged stop can stop the recorded workload after validation
+  a current build; staged down can stop the recorded workload after validation
   failure; staged app commands and remaining staged runtime operations reject a
   missing/stale build; and installed runtime operations never invoke resolution
   or image construction.
@@ -2488,8 +2497,8 @@ not public `type: apt` components.
   ordering, waiter cancellation, active run stopping, absent-run idempotence,
   concurrent output-file publication, and shell sessions as long-running runs.
   Control-operation tests cover general default/`--wait`/`--drain`/`--force`
-  admission, disruptive default stop/restart with an interruptible warning,
-  graceful stop/restart `--wait`, lifecycle-hook ownership,
+  admission, disruptive default down/restart with an interruptible warning,
+  graceful down/restart `--wait`, the stop alias, lifecycle-hook ownership,
   generation-change cancellation, lock release after container creation, and
   reinstall stopping the old workload before live state or mount mutation.
 - Lock-retention tests proving current and candidate locks may coexist only
