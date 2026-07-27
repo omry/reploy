@@ -163,8 +163,8 @@ func planDockerMounts(document blueprint.Document, context DockerPlanContext) ([
 	}
 	for name, mount := range document.Docker.Mounts {
 		planned := MountExecutionPlan{
-			Name: name, Mode: mount.Mode, Target: mount.Path.Container,
-			ReadOnly: !mount.Path.Writable, Update: mount.Path.Update,
+			Name: name, Mode: mount.Mode, Target: mount.Contract.Target,
+			ReadOnly: !mount.Contract.Writable, Update: mount.Contract.UpdatePolicy,
 		}
 		switch mount.Mode {
 		case blueprint.MountManagedBind:

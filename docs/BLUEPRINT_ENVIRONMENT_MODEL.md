@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-15
+updated: 2026-07-22
 summary: Normative blueprint environment, workload, component, lifecycle, and Docker rendering model.
 supersedes: docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md
 ---
@@ -50,7 +50,11 @@ Environment-owned:
 - logical runtime paths such as config and data
 - commands
 - component requirements and requested build outputs
-- explicit requirement-to-source translations
+
+Staging-owned developer input:
+
+- optional environment-scoped package overrides kept beside the staged
+  blueprint, outside the published blueprint itself
 
 Workload-owned:
 
@@ -75,6 +79,25 @@ Reploy-owned:
 - startup log markers and diagnostics
 - command execution plumbing
 
+The environment node has this top-level shape:
+
+```yaml
+environment:
+  id: example                 # Stable environment and resource name.
+  control_script: example     # Optional generated command name; defaults to id.
+  vars: {}                    # Blueprint interpolation values.
+  components: {}              # Base image and software requirements.
+  allow_concurrent: auto      # App-command and shell overlap policy.
+  terminal: {}                # Terminal/color integration.
+  install: {}                 # Installation target, identity, and success output.
+  mounts: {}                  # Runtime filesystem contracts.
+  commands: {}                # Public commands using component executables.
+  workload: {}                # Optional persistent primary workload.
+```
+
+Optional empty nodes are omitted in an actual blueprint. Backend-specific
+runtime choices remain under the top-level `docker` node.
+
 ## Internal Execution Phases
 
 Reploy evaluates an environment through an ordered internal pipeline:
@@ -95,7 +118,7 @@ resolve blueprint
 ```
 
 The internal phases are not author-defined lifecycle hooks. Blueprint authors
-provide component, path, workload, readiness, and lifecycle intent; Reploy and
+provide component, mount, workload, readiness, and lifecycle intent; Reploy and
 the selected backend determine how to realize the prerequisite phases. Provider
 graph steps may interleave: a downstream bundle resolver may need a disposable
 resolver container based on an already materialized upstream node. Every
@@ -104,18 +127,13 @@ every materialization step remains offline. Docker may materialize a derived
 image from bundle layers, while another container backend may use a different
 native mechanism without changing the environment schema.
 
-Inspection should remain lightweight. Dry-run and status output should show the
-resolved phase order, commands, endpoint addresses, selected bundle identity,
-and locations of generated backend files. Inspection must not imply a graphical
-renderer and should not trigger package resolution, image builds, or other
-material changes unless the requested operation normally performs them.
-
-Without package resolution, dry-run cannot know a changed environment's future
-bundle identity. It reports the currently recorded bundle and materialized
-backend identity when available, whether static bundle inputs changed, and the
-candidate identity as `unresolved` until `reploy build` performs resolution.
-Generated backend paths are reported as existing, changing, or planned; dry-run
-does not need to generate their final contents.
+Inspection should remain lightweight. `reploy validate BLUEPRINT` performs
+syntax and semantic validation without package resolution, image builds, Docker
+access, or persistent changes. The command accepts the same blueprint shorthand
+or URL forms as other blueprint-consuming commands. Deeper validation levels
+may be added later, but v1 defines only this inexpensive level. There is no
+`dry-run` command or flag: effectful operations must report failures directly
+rather than requiring the user to rerun them in a diagnostic mode.
 
 ## Target Container Platforms
 
@@ -240,11 +258,15 @@ results. A caller that needs files may select one explicit output contract.
 `reploy app --output-dir DIR COMMAND` mounts the caller-selected host directory
 at `/mnt/reploy-output` and sets `REPLOY_OUTPUT_DIR` to that path; files become
 visible on the host as they are written and remain after success or failure.
+The caller is responsible for making this directory writable by the selected
+runtime user, so files written by a system service are normally owned by that
+service user.
 `reploy app --output-file FILE COMMAND` instead sets `REPLOY_OUTPUT_FILE` to a
 fixed file below `/mnt/reploy-output`. Reploy atomically creates a hidden
-staging directory beside `FILE`, and that directory serves as the reservation
-against another Reploy invocation claiming the same output. The requested
-filename remains absent while the command runs. After a successful exit,
+staging directory beside `FILE`, assigns that directory to the selected runtime
+user, and uses it as the reservation against another Reploy invocation claiming
+the same output. The requested filename remains absent while the command runs.
+After a successful exit,
 Reploy requires the fixed output to be a regular file and atomically publishes
 it without replacing an existing `FILE`. Command failure removes the staging
 directory. A publication failure or interrupted Reploy process leaves a
@@ -257,9 +279,12 @@ Docker backs `/mnt/reploy-home` with a fresh anonymous volume for each one-shot
 container. Normal `--rm` completion removes the volume, and Reploy's
 interruption cleanup force-removes the container with its anonymous volumes.
 It is disk-backed rather than a size-limited tmpfs, but it is never named or
-reused. Files survive a one-shot invocation only through its selected output
-contract or another writable mount declared by the blueprint. The persistent
-workload container keeps its separate tmpfs home at the same container path.
+reused. Before launching the requested command, Reploy's embedded Linux helper
+assigns the empty volume to the selected runtime UID/GID, restricts it to that
+identity, drops root privileges, and directly executes the command. Files
+survive a one-shot invocation only through its selected output contract or
+another writable mount declared by the blueprint. The persistent workload
+container keeps its separate tmpfs home at the same container path.
 
 Lifecycle actions invoke commands through the same one-shot mechanism. An
 `after_start` command may communicate with the running workload through its
@@ -314,6 +339,76 @@ perform package resolution or stage a new bundle.
 policy, bind addresses, and published ports. If the environment has no workload,
 `docker.workload` is omitted. A second named workload or Docker workload is a
 schema error; multi-service composition is intentionally out of scope.
+
+## Concurrent Runs and Control Operations
+
+`environment.allow_concurrent` controls whether app commands and interactive
+shell sessions may overlap within one deployment. Its values are `yes`, `no`,
+and `auto`; omission means `auto`. `yes` permits overlap, `no` serializes every
+run, and `auto` permits overlap only when every shared environment mount in the
+effective run plans is read-only. Private per-run home storage and the hidden
+atomic staging used by `--output-file` are not shared writable mounts.
+`--output-dir` is a writable shared mount and therefore makes `auto` exclusive.
+
+An exclusive run fails immediately when another run is active or waiting unless
+the caller passes `--wait`. The short error identifies the policy and
+conflicting writable mount when applicable, and says that `--wait` will queue
+the run. `reploy runs list` separately shows outstanding app commands and shell
+sessions; lifecycle operations are intentionally omitted. The deployment keeps
+a live fair queue for active and waiting app commands and shell sessions.
+Multiple `--wait` callers start in arrival order, waits have no fixed timeout,
+and cancellation removes only the caller's entry. A shell session is a
+long-running run under the same rules.
+
+`reploy runs list` lists active and waiting runs and sessions. `reploy runs stop
+RUN_ID` terminates an active run or cancels a waiting one. Run IDs are validated
+syntactically, but v1 keeps no completed-run history: a well-formed ID that is
+not outstanding succeeds with `No active run found for RUN_ID; it may have
+already finished.`
+
+Runtime-changing control operations—`up`, `stop`, `restart`, `install`, and
+`uninstall`—are serialized with each other. `up`, `install`, and `uninstall`
+retain the general admission modes: no flag fails on a conflict; `--wait` joins
+the fair queue; `--drain` cancels waiting runs and lets active runs finish; and
+`--force` cancels waiting runs and stops active runs.
+
+`stop` and `restart` are intentionally disruptive without a flag. They cancel
+waiting app commands and shells, log how many active and waiting jobs will be
+affected, mention the `--wait` alternative, and pause for three seconds so the
+caller can abort with Ctrl-C before any job is changed. They then stop active
+job containers through Docker's normal stop behavior and perform the requested
+lifecycle operation. The notice appears only in the `stop` or `restart`
+caller's output; Reploy does not inject text into another job's terminal.
+`stop --wait` and `restart --wait` are the non-disruptive forms: they cancel
+waiting app commands and shells, let active jobs finish, and then proceed.
+`--drain` and `--force` are not accepted by `stop` or `restart`.
+
+The persisted queue also records lifecycle operations such as a waiting
+restart or install, so new runs cannot jump ahead of them. These internal
+entries are not app runs: they have no public run ID, do not appear in `reploy
+runs list`, and cannot be passed to `reploy runs stop`. Reploy holds a small
+kernel-backed ownership lease for each entry. If the owning process exits,
+the next queue operation removes the abandoned entry automatically.
+
+Mode flags are mutually exclusive. A default `stop` or `restart` never
+overtakes another live lifecycle operation; it reports the conflict, while
+`--wait` queues behind that operation. Runs that join behind an admitted `up`,
+`stop`, or `restart` may continue afterward because the deployment generation
+is unchanged. After `install` or `uninstall`, every older waiting run fails and
+must be retried explicitly against the new generation. Lifecycle hooks are
+sequential internal steps owned by their control operation; they do not enter
+the user run queue, receive run IDs, or appear in `runs list`.
+
+Build, ordinary stage/update, overlay mutation, and clean operations do not join
+the runtime queue. `stage --update APP_REF --force` is the exception: when the
+directory belongs to another blueprint, it uses a force-admitted hidden stage
+marker, cancels waiting runs, stops active runs and the persistent workload,
+removes the old generation reference, and records a fresh unbuilt staging
+deployment. Runtime container creation occurs under the deployment operation lock,
+but the lock is released after creation rather than held for the life of the
+container. This lets unrelated build and cleanup work proceed while an app
+command or shell is running; the live queue, not the filesystem operation lock,
+owns runtime admission and cancellation.
 
 ## Software Components
 
@@ -452,9 +547,9 @@ unrelated option does not invalidate every provider node.
 
 ### Local Source-Derived Artifacts
 
-All providers use one common identity contract when a blueprint translation
-builds an artifact from local source. The translation root locates the source
-for the local build but is not content identity. Before building, Reploy
+All providers use one common identity contract when a staging package override
+builds an artifact from local source. The source path locates the source for
+the local build but is not content identity. Before building, Reploy
 creates a canonical source manifest and digest under the provider's declared
 inclusion and ignore rules. The build input identity contains that digest, the
 versioned builder and toolchain profile, selected platform, and every relevant
@@ -553,9 +648,9 @@ The current Python implementation has a single aggregated provider node. The
 generalized DAG executor and component-scoped Python nodes must be implemented
 before the schema or runtime accepts multiple independently materialized Python
 environments or a second provider type. It also derives Python executable
-requests from public `environment.executables`; the generalized provider must
-instead derive the component's console-script catalog from its exact resolved
-wheel metadata.
+requests from the old environment-wide executable map; the generalized provider
+must instead derive the component's console-script catalog from its exact
+resolved wheel metadata.
 
 Every provider declares the tools and runtimes it requires for bundling and
 materialization. Reploy checks those prerequisites before executing the provider.
@@ -618,14 +713,27 @@ and actual format/backend constraints; Reploy does not scan produced layers or
 impose numeric processing quotas. The model requires no global attribution of
 every system file to a blueprint component.
 
-`translations` is separate from `components`. A translation does not request
-installation. It explicitly maps an ecosystem package identifier to another
-source for resolution. A Python translation means "if resolution requires this
-distribution, use this local source instead of fetching it from an index." An
-unused mapping has no effect on the materialized environment. When a mapping is
-used, its root is an auxiliary local locator and the resulting wheel follows
-the source-manifest, builder-profile, and artifact-digest contract above; the
-physical root never enters the resolved content identity.
+Developer package overrides are not part of the blueprint. A staging directory
+may contain an explicit sidecar whose sparse outer shape matches the blueprint:
+it names `environment.id`, then maps provider-owned package identifiers beneath
+`environment.package_overrides`. Each mapping selects either a local source
+path or a specific version from that provider's normal upstream source. The two
+forms are mutually exclusive.
+
+An override is consulted only after a direct or transitive requirement makes
+that package necessary. A mapping never requests installation, and an unused
+mapping is never inspected, copied, or built. If a mapping exists for the
+environment, provider, and normalized package identifier, it takes precedence;
+otherwise resolution follows the blueprint. The selected override must still
+satisfy all active dependency constraints.
+
+The sidecar records developer intent only. Reploy may create or edit explicit
+mappings on the user's behalf, but resolution must not add inferred packages,
+resolved dependencies, hashes, or selected artifacts to it. Those results
+belong in the generated build lock and closed bundle. Relative local paths are
+resolved from the sidecar's directory; absolute paths are also valid. Physical
+paths never enter resolved content identity. Installation consumes the staged
+bundle and never reads the sidecar or original source checkout.
 
 ## Blueprint Variables
 
@@ -666,22 +774,10 @@ without a workload. Missing values, type mismatches, and interpolation cycles
 are errors at the latest point where the containing field must be resolved.
 Resolved values are deterministic and cached for the operation.
 
-## Representative Components and Translations
+## Representative Components and Developer Overrides
 
 ```yaml
 environment:
-  # Resolution overrides: these do not request installation.
-  translations:
-    local_python:
-      type: python
-      scope: development
-      root: ..
-      mappings:
-        arbiter-client: client
-        arbiter-server: server
-        arbiter-imap: plugins/imap
-        arbiter-smtp: plugins/smtp
-
   # Application runtime requirements.
   components:
     # Future system-package provider shape.
@@ -708,35 +804,36 @@ environment:
           binaries: [message-indexer]
 ```
 
-Python `requirements` use normal Python requirement syntax. A Python translation
-maps an explicitly named distribution to a source path. Reploy normalizes the
-declared distribution name for matching but does not infer it from the directory
-or scan neighboring directories.
+Python `requirements` use normal Python requirement syntax. The published
+blueprint above contains no local development paths. A developer may add the
+following explicit sidecar to its staging directory:
 
-An explicitly declared translation takes precedence over a bundled or index
-candidate with the same normalized distribution name. This precedence also
-applies to transitive requirements. `root` establishes the translation's source
-boundary, and every mapping value is relative to it. Reploy normalizes each path
-and rejects absolute mappings or any mapping that escapes `root`.
+```yaml
+environment:
+  id: arbiter
+  package_overrides:
+    python:
+      arbiter-server:
+        path: ../server
+      arbiter-imap:
+        path: ../plugins/imap
+      arbiter-smtp:
+        version: "1.4.2"
+```
 
-`scope: development` means the translation is available only while resolving
-from the declared source checkout. For Arbiter, `root` is the repository root,
-even though the blueprint lives below it. Reploy uses those sources to produce
-bundled artifacts; an installed environment consumes the artifacts and does not
-need access to the development checkout.
+Reploy normalizes each provider-owned package identifier for matching but does
+not infer identifiers from directories or scan neighboring directories. A
+matching override takes precedence for both direct and transitive requirements.
+A local path builds that source; a version selects that exact version through
+the provider's normal upstream configuration. Duplicate normalized names,
+built metadata that disagrees with the declared name, and selected versions
+that do not satisfy the active dependency graph are errors.
 
-Duplicate normalized names, built metadata that disagrees with the declared
-name, and local versions that do not satisfy the active requirement are errors.
-Unused mappings are valid because translations are resolution rules, not
-installation requests.
-
-The same structure can translate other ecosystem identifiers: a Go module path
-or Rust crate name may map to a local directory. The initial mapping value is a
-path string. Richer source descriptors such as Git URL/ref or subdirectory
-selection should be introduced only for a concrete use case rather than making
-every mapping an object preemptively. Translation types define identifier
-normalization and path validation for their ecosystem; the mapping itself
-remains explicit.
+The same sidecar structure can override identifiers owned by other providers,
+such as an APT package, Go module, or Rust crate. Each provider defines its
+identifier normalization and validates the override forms it supports. The
+common staging schema and precedence rule do not make any provider support a
+local source or upstream-version form that it cannot materialize.
 
 Go components request module packages or local module binaries. Rust components
 request crates or packages from a local Cargo workspace. The blueprint uses the
@@ -756,19 +853,7 @@ environment:
   id: arbiter
   control_script: arbiter
   vars:
-    project_root: ../../../..
     config_name: arbiter-server
-  translations:
-    local_python:
-      type: python
-      scope: development
-      root: "{{ project_root }}"
-      mappings:
-        arbiter-client: client
-        arbiter-imap: plugins/imap
-        arbiter-server: server
-        arbiter-smtp: plugins/smtp
-        arbiter-suite: meta/arbiter-suite
   components:
     base:
       image: python:3.11-slim
@@ -779,6 +864,28 @@ environment:
       type: python
       requirements:
         - arbiter-server
+      executables:
+        arbiter_server:
+          binary: arbiter-server
+          order: [binary, prefix, command, forwarded, suffix]
+          # resolved binary + argv_prefix + command argv + argv_suffix form argv.
+          argv_prefix:
+            - --config-dir
+            - /mnt/config
+            - --config-name
+            - "{{ config_name }}"
+          argv_suffix:
+            # `reploy.workload` exposes the active backend's resolved bind and
+            # published endpoint values.
+            - arbiter.server.bind.host={{ reploy.workload.endpoints.https.bind.address }}
+            - arbiter.server.bind.port={{ reploy.workload.endpoints.https.bind.port }}
+            - arbiter.server.public.scheme={{ environment.workload.endpoints.https.scheme }}
+            - arbiter.server.public.host={{ reploy.workload.endpoints.https.publish.address }}
+            - arbiter.server.public.port={{ reploy.workload.endpoints.https.publish.port }}
+            - arbiter.storage.server_data_dir={{ environment.mounts.data.target }}/server
+            - arbiter.storage.plugin_data_dir={{ environment.mounts.data.target }}/plugins
+            - arbiter.deployment_scope={{ reploy.phase }}
+  allow_concurrent: auto
   terminal:
     color_env: ARBITER_COLOR
     # Future extension if an environment does not use always/never/auto:
@@ -796,44 +903,21 @@ environment:
       lines:
         - "server url: {{ environment.workload.endpoints.https.scheme }}://{{ reploy.workload.endpoints.https.publish.address }}:{{ reploy.workload.endpoints.https.publish.port }}"
 
-  paths:
+  mounts:
     config:
-      container: /mnt/config
-      update: preserve
+      target: /mnt/config
+      update_policy: preserve
     data:
-      container: /mnt/data
+      target: /mnt/data
       writable: true
-      update: preserve
-
-  executables:
-    arbiter_server:
-      component: application
-      binary: arbiter-server
-      order: [binary, prefix, command, forwarded, suffix]
-      # resolved binary + argv_prefix + command argv + argv_suffix form argv.
-      argv_prefix:
-        - --config-dir
-        - /mnt/config
-        - --config-name
-        - "{{ config_name }}"
-      argv_suffix:
-        # `reploy.workload` exposes the active backend's resolved bind and
-        # published endpoint values.
-        - arbiter.server.bind.host={{ reploy.workload.endpoints.https.bind.address }}
-        - arbiter.server.bind.port={{ reploy.workload.endpoints.https.bind.port }}
-        - arbiter.server.public.scheme={{ environment.workload.endpoints.https.scheme }}
-        - arbiter.server.public.host={{ reploy.workload.endpoints.https.publish.address }}
-        - arbiter.server.public.port={{ reploy.workload.endpoints.https.publish.port }}
-        - arbiter.storage.server_data_dir={{ environment.paths.data.container }}/server
-        - arbiter.storage.plugin_data_dir={{ environment.paths.data.container }}/plugins
-        - arbiter.deployment_scope={{ reploy.phase }}
+      update_policy: preserve
   commands:
     server:
-      executable: arbiter_server
+      executable: application.arbiter_server
       argv: [serve]
 
     config_check:
-      executable: arbiter_server
+      executable: application.arbiter_server
       trigger: [config, check]
       native_command: true
       deployed_command: true
@@ -865,16 +949,13 @@ environment:
             - environment: [config, check, --live]
 
 docker:
-  # /mnt is always allowed. Additional roots are an explicit opt-in for
-  # applications that require mountpoints elsewhere.
-  # additional_mount_roots: [/srv/arbiter]
   mounts:
     config:
-      extends: environment.paths.config
+      extends: environment.mounts.config
       mode: managed-bind
       source: conf
     data:
-      extends: environment.paths.data
+      extends: environment.mounts.data
       mode: managed-bind
       source: data
 
@@ -896,7 +977,7 @@ docker:
 
 `environment.components.base.image` is the author-supplied starting OCI image.
 Reploy resolves the `base` root and its declared outputs before other components,
-then resolves translations and provider components through the graph and records
+then applies selected staging package overrides while resolving provider components through the graph and records
 closed, checksummed artifact sets for the target platform and upstream image
 identity. A provider's bundle resolver may run with network/source access in a
 disposable resolver container based on an earlier materialized node. The
@@ -908,7 +989,7 @@ and may produce new bundle fingerprints.
 When `environment.components.base.image` is a mutable tag, `reploy build`
 resolves it to an immutable digest and records that digest as the base-layer
 input. A provider node's semantic bundle identity covers its resolved bundle
-section, relevant translation artifacts, target platform, provider recipe
+section, relevant overridden-source artifacts, target platform, provider recipe
 version, and selected
 prerequisites. Assembly uses the broader rendered transaction identity defined
 below, including the exact upstream image and every execution-relevant input.
@@ -1079,7 +1160,7 @@ inside its consumer, and a later consumer validates again inside its own
 operation. A cached-bundle mismatch exits before persistent changes, commits no
 layer, and causes resolution to rerun once against that fixed prefix. That
 consumer-scoped guarantee ends with the operation. Every output referenced by a
-command, directly or through `environment.executables`, is
+component executable profile and command is
 additionally validated on the final immutable environment image after all
 provider layers and before publication. An earlier prefix record cannot
 authorize final command exposure.
@@ -1243,9 +1324,26 @@ environment image without installing it. `reploy install` ensures its staged or
 temporary staging-like workspace has a current build by reusing a matching
 record or running that same build pipeline before it transfers and installs the
 result. Install help and progress expose that build work and its Docker/network
-requirements. `reploy up` and other runtime operations consume the recorded
-build and never hide resolution or image construction. `reploy build
---no-cache` bypasses the current deployment's build-lock reuse and the backend
+requirements. In a staged deployment, `reploy up`, `reploy restart`, and
+`reploy app` automatically ensure that the recorded build is current and report
+the build phase before running. Staged `reploy stop` can stop the recorded
+workload after build validation fails; staged shell, test, and observation
+commands require an already-current build. Installed runtime commands never
+resolve or build: changing an installed application requires staging the
+changed blueprint and installing it again.
+
+If an automatic staged build check finds that the provider store still exists
+but a source artifact referenced by the current lock was removed, it does not
+silently reconstruct that unexpected damage. The command fails before running
+the application and directs the user to `reploy build`. An explicit
+`reploy build` treats the missing artifact as an incomplete cache, reconstructs
+the affected provider result, and keeps other verified artifacts eligible for
+reuse. It does not require `--no-cache`. Installed runtime remains independent
+of these cached build inputs; an installed maintenance operation that needs a
+missing object directs the user to reinstall from staging.
+
+`reploy build --no-cache` bypasses
+the current deployment's build-lock reuse and the backend
 build cache, then reruns every resolver, rematerializes every node, and performs
 full final validation, while verified immutable raw artifacts in that
 deployment may remain reusable by digest. The bypass flag is execution policy,
@@ -1315,8 +1413,24 @@ private temporary staging-like workspace used by direct install. It then copies
 only the store objects transitively referenced by the selected current build
 lock, not the source deployment's complete store. The destination keeps no
 reference to that source. Objects are digest-verified and atomically published
-before installed state commits, so a failed build or transfer leaves the
-previous installed state active.
+before installed state commits. Before writing candidates or changing live
+state, install checks required disk space and creates then removes the actual
+adjacent candidate files as its lightweight permission check; it leaves no
+probe junk. A failed first install before state publication removes the newly
+created destination after releasing its lock, unless another operation has
+claimed or changed it. The already-required Docker build and validation
+establish Docker API access.
+
+A failed build, transfer, or candidate preparation leaves the previous
+installed state active. At cutover, install first acquires runtime admission
+according to its default, `--wait`, `--drain`, or `--force` mode and stops the
+persistent workload being replaced. Only then does it publish the new installed
+state with status `configuring`, replace live host configuration and managed
+mount contents, and atomically change the status to `ready`. This cutover is not
+zero-downtime. Reploy keeps no backup and attempts no rollback: a later failure
+leaves the new installation in `configuring` for inspection, and reinstall or
+uninstall must accept that state after the underlying cause is fixed. A startup
+failure occurs after `ready` and likewise leaves the new installation in place.
 
 Install holds the source workspace's operation lock from before that build check
 through the final source-object read. Direct install also locks its private
@@ -1350,13 +1464,14 @@ install, container, and generated-resource identities, it must satisfy the same
 portable-basename rules even when `control_script` is overridden. Reploy also
 rejects platform-reserved filenames such as Windows device names.
 
-`environment.executables` is an optional named invocation profile. It binds a
-public alias to a qualified component output and defines reusable argument
-defaults. `component` names the component that must provide `binary`; together
-they identify `<component>.<output>`. It does not declare provider output. The
-component provider resolves the binary's backend-specific absolute path: for
-example, a Python console script in a virtual environment or a Go/Rust build
-artifact.
+`environment.components.<component>.executables` contains named invocation
+profiles for outputs supplied by that component. Keeping the profile with its
+component avoids a second environment-wide alias map. A command refers to the
+profile by its stable qualified name `<component>.<executable>`. The profile's
+`binary` names the component output and may define reusable argument defaults;
+it does not declare a provider output. The component provider resolves the
+binary's backend-specific absolute path: for example, a Python console script
+in a virtual environment or a Go/Rust build artifact.
 Reploy does not guess a path or rely on unrelated entries in the container's
 `PATH` to select that outer executable. The selected package may itself use an
 `env` shebang or perform later `PATH` lookups as part of its trusted runtime
@@ -1365,8 +1480,8 @@ verifies that the immediate shebang names the interpreter in the same component
 environment.
 
 Provider outputs use one model regardless of whether another provider consumes
-them, a command references them directly, `environment.executables` configures
-them, or several of these apply. Every output names one candidate path, supplied
+them or a component executable profile references them. Every output names one
+candidate path, supplied
 by an explicit declaration, a narrowly versioned provider mapping, or exact
 ecosystem metadata such as a Python wheel's console-script entry point. Empty
 output objects are invalid, and a declared export requires `executable`.
@@ -1403,11 +1518,11 @@ design. After materialization, every selected wrapper must exist beneath the
 component venv and name that environment's interpreter in its immediate
 shebang.
 
-Neither a direct command reference nor `environment.executables` has a typed
-compatibility filter; each references the supplier output's one candidate path.
+An executable profile has no typed compatibility filter; it references the
+component output's one candidate path.
 
-The component reference selects the provider. In the example,
-`executables.arbiter_server.component: application` resolves
+The containing component selects the provider. In the example,
+`components.application.executables.arbiter_server` belongs to
 `components.application`, whose `type: python` selects the Python provider. That
 provider finds `arbiter-server` in the exact wheel closure's console-script
 metadata, records its owning distribution, validates the generated wrapper in
@@ -1415,29 +1530,26 @@ the materialized Python environment, and returns its absolute path. The
 blueprint author references the component and script name but never declares
 that the package produces it or supplies a provider-specific filesystem path.
 
-When no reusable executable defaults are needed, a command may reference the
-same output directly instead of creating an `environment.executables` entry:
+Even when no reusable argument defaults are needed, the component declares the
+small executable profile and commands use the same qualified reference form:
 
 ```yaml
+components:
+  application:
+    executables:
+      inspector:
+        binary: arbiter-server
 commands:
   inspect:
-    executable:
-      component: application
-      binary: arbiter-server
+    executable: application.inspector
     argv: [inspect]
 ```
 
-The inline object contains only the qualified output reference. Shared
-`argv_prefix`, `argv_suffix`, or default `order` belong in an optional named
-executable profile.
-
-Each command selects either an executable-profile name or an inline qualified
-output reference. Invocation is assembled from five argv segments: `binary`,
-`prefix`, `command`, `forwarded`, and `suffix`.
-`environment.executables.<name>.order` defines the default order for a profile,
-and an individual command may replace it with its own `order`. The default is
-`[binary, prefix, command, forwarded, suffix]`; an inline reference has empty
-`prefix` and `suffix` segments.
+Each command selects one qualified executable-profile name. Invocation is
+assembled from five argv segments: `binary`, `prefix`, `command`, `forwarded`,
+and `suffix`. The executable profile's `order` defines the default, and an
+individual command may replace it with its own `order`. The default is
+`[binary, prefix, command, forwarded, suffix]`.
 
 `order` must contain `binary` exactly once and first. Every other segment may
 appear zero or one time, and no segment may be duplicated. Omitting a segment
@@ -1449,7 +1561,7 @@ it does not use—without allowing user input to replace or precede the executab
 ```yaml
 commands:
   special:
-    executable: arbiter_server
+    executable: application.arbiter_server
     order: [binary, command, suffix, forwarded]
     argv: [special]
 ```
@@ -1490,8 +1602,8 @@ part of the environment contract.
 The conceptual flow is:
 
 ```text
-components + translations -> closed bundle -> derived/declared output catalog
--> image layers -> validated selected outputs -> optional executable profiles
+components + staging package overrides -> closed bundle -> derived/declared output catalog
+-> image layers -> validated selected outputs -> component executable profiles
 -> commands -> optional workload
 ```
 
@@ -1505,10 +1617,10 @@ interpolation values only; they are not copied into the workload process
 environment. Reploy may still use private internal variables in generated
 runtime plumbing, but their names are not blueprint protocol.
 
-## Path Mount Modes
+## Mount Modes
 
-`environment.paths` describes the filesystem contract visible to the workload
-inside its runtime. This blueprint targets a container runtime, so `container`
+`environment.mounts` describes the filesystem contract visible to the workload
+inside its runtime. This blueprint targets a container runtime, so `target`
 paths such as `/mnt/config` and `/mnt/data` are intentionally known to
 environment commands. They are not Docker host paths or mount-source paths.
 
@@ -1516,14 +1628,14 @@ For Arbiter, the environment needs a config path and a writable data path:
 
 ```yaml
 environment:
-  paths:
+  mounts:
     config:
-      container: /mnt/config
-      update: preserve
+      target: /mnt/config
+      update_policy: preserve
     data:
-      container: /mnt/data
+      target: /mnt/data
       writable: true
-      update: preserve
+      update_policy: preserve
 ```
 
 `docker.mounts` should describe how Docker materializes those paths:
@@ -1532,40 +1644,25 @@ environment:
 docker:
   mounts:
     config:
-      extends: environment.paths.config
+      extends: environment.mounts.config
       mode: managed-bind
       source: conf
     data:
-      extends: environment.paths.data
+      extends: environment.mounts.data
       mode: volume
       name: arbiter-data
 ```
 
-`/mnt` is the one built-in runtime-mount root. A normal container destination
-must be a strict descendant of `/mnt`; mounting `/mnt` itself is invalid.
-Destinations in one effective plan must be distinct and may not have an
-ancestor/descendant relationship. Reploy reserves `/mnt` during image
-construction: in the selected base and after every provider layer it must be
-absent or an empty real directory, and providers may not persist content below
-it.
+An omitted container destination defaults to `/mnt/<mount-name>`. An explicit
+destination may be any normalized absolute Linux path other than `/`; no
+separate allowlist or opt-in node is required. Destinations in one effective
+plan must be distinct and may not have an ancestor/descendant relationship.
 
-An application that requires another location opts in explicitly through the
-Docker backend:
-
-```yaml
-docker:
-  additional_mount_roots:
-    - /etc/arbiter
-```
-
-An additional root must be an absolute normalized path other than `/`, must not
-overlap another allowed or protected root, and allows destinations equal to or
-beneath it. It widens only the set of possible destinations; it does not permit
-shadowing image content. Consequently `/etc/arbiter` is usable when that exact
-destination is absent or an empty directory in the image, while adding `/usr`
-does not make a mount over the existing `/usr/lib` valid. Additional roots are
-runtime/backend configuration and do not enter provider bundle, transaction,
-assembly, or image identity.
+Reploy reserves `/mnt` during image construction as the predictable namespace
+for default targets: in the selected base and after every provider layer it
+must be absent or an empty real directory, and providers may not persist
+content below it. Explicit destinations elsewhere remain subject to the same
+no-shadow and protected-path checks.
 
 Possible mount modes:
 
@@ -1575,7 +1672,7 @@ Possible mount modes:
 - `volume`: use a Docker named volume.
 - `tmpfs`: use an ephemeral in-memory mount.
 
-`environment.paths.*.update` declares ownership and install/update behavior.
+`environment.mounts.*.update_policy` declares ownership and install/update behavior.
 `preserve` protects Reploy-managed user-edited contents, `replace` refreshes
 managed contents from staging, and `unmanaged` suppresses both modes: Reploy
 mounts user-owned contents but never creates, copies, replaces, or deletes them. The existing
@@ -1586,7 +1683,7 @@ mount controls how the path is materialized.
 The Docker backend must either implement that semantic policy or reject the
 mount configuration. Initial support is:
 
-| Docker mount | Allowed `update` values |
+| Docker mount | Allowed `update_policy` values |
 | --- | --- |
 | `managed-bind` | `preserve`, `replace` |
 | `volume` | `preserve`, `replace` |
@@ -1603,6 +1700,16 @@ policies are satisfied without work, and container recreation discards its
 contents normally.
 `writable` defaults to `false` when omitted.
 
+Named-volume copying uses Reploy's embedded platform-matched native helper in a
+short-lived, network-disabled container. The application image supplies no
+shell or copy utility. The source volume is read-only, the newly created target
+must be empty, and the fixed helper operation preserves directories, regular
+files, symlinks, hardlinks, modes, regular-file and directory timestamps, and
+numeric ownership while rejecting unsupported special files. Retry removes a
+stale deterministically named copy container before target replacement; a
+helper-preparation or copy failure removes the incomplete target, and a failed
+or cancelled copy also removes its container.
+
 ### Runtime Mount Integrity
 
 Runtime mounts are subtree overlays, not merges with the verified image
@@ -1613,18 +1720,22 @@ claim over that path and all descendants.
 Every blueprint or Reploy-generated runtime mount passes three independent
 checks against the exact immutable image:
 
-1. Its destination is beneath `/mnt`, or equal to or beneath one declared
-   `docker.additional_mount_roots` entry.
+1. Its destination is a normalized absolute path other than `/` and does not
+   overlap `/dev`, `/proc`, `/sys`, `/run/secrets`, or Docker-managed
+   `/etc/hostname`, `/etc/hosts`, or `/etc/resolv.conf`.
 2. The destination is absent or an empty real directory. Existing files,
    symlinks, non-directories, mountpoints, and non-empty directories fail. The
    backend validates existing ancestors without following symlinks and needs
    only an `lstat` plus a one-entry directory read, not a recursive scan.
 3. Its overlay subtree does not intersect the protected runtime set below.
 
-Docker-intrinsic kernel and resolver mounts such as `/proc`, `/dev`, `/sys`,
-and engine-managed resolver files are outside the blueprint mount plan and are
-not additional-root exceptions. Every mount introduced by Reploy's resolved
-backend plan remains subject to these checks.
+Blueprint-declared destinations additionally may not overlap Reploy's
+`/opt/reploy`, `/mnt/reploy-home`, or `/mnt/reploy-output` namespaces. The last
+two are valid only for the corresponding backend-generated mounts.
+
+Docker-intrinsic kernel and resolver mounts are outside the blueprint mount
+plan. Every mount introduced by Reploy's resolved backend plan remains subject
+to these checks.
 
 The protected runtime set contains:
 
@@ -1691,16 +1802,16 @@ could use a structured configuration system.
 `extends` rules:
 
 - The value is an absolute blueprint reference beginning with `environment.`,
-  such as `environment.paths.config` or
+  such as `environment.mounts.config` or
   `environment.workload.endpoints.https`.
 - The reference must exist and must name the corresponding kind of object. A
-  Docker mount may extend an environment path; a Docker endpoint may extend a
+  Docker mount may extend an environment mount; a Docker endpoint may extend a
   workload endpoint. Cross-kind references are invalid.
 - Resolution copies the referenced environment object, then adds backend-owned
   fields from the extending object. `extends` itself is removed from the
   resolved object.
-- The extending object may not replace an environment-owned field. For paths this
-  includes `container`, `writable`, and `update`. For endpoints this
+- The extending object may not replace an environment-owned field. For mounts this
+  includes `target`, `writable`, and `update_policy`. For endpoints this
   includes `scheme` and `readiness`. Backend-owned fields such as `mode`, `source`,
   `bind`, and `publish` are added by the Docker object.
 - A field present on both objects is an error; there is no implicit scalar,

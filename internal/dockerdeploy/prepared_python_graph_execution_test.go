@@ -13,6 +13,7 @@ import (
 func TestExecutePreparedPythonGraphDerivesAllReuseFromCurrentLock(t *testing.T) {
 	fixture := newPreparedPythonGraphReuseFixture(t)
 	descriptor := fixture.lock.Base
+	workspaceSources := sourceWheelTestWorkspaceSources(t, "demo-server")
 	previousPrepare := preparePythonGraphExecutionBackend
 	previousExecute := executePreparedPythonProviderGraph
 	t.Cleanup(func() {
@@ -42,6 +43,7 @@ func TestExecutePreparedPythonGraphDerivesAllReuseFromCurrentLock(t *testing.T) 
 	result, err := ExecutePreparedPythonGraph(context.Background(), PreparedPythonGraphExecutionInput{
 		Store: fixture.store, Plan: fixture.request.Plan, BaseDescriptor: descriptor,
 		BaseCatalog: fixture.request.EarlierCatalog, Sources: fixture.request.SourceCandidates, SourceWheels: fixture.sourceWheels, CurrentLock: &fixture.lock,
+		WorkspaceSources: workspaceSources,
 		FinalImageConfig: pythonConsumerTestImageConfig(),
 	})
 	if err != nil {
@@ -52,6 +54,9 @@ func TestExecutePreparedPythonGraphDerivesAllReuseFromCurrentLock(t *testing.T) 
 	}
 	if len(configs[fixture.request.NodeID].ReusableWheels) != 2 || len(execution.ReusableArtifacts[fixture.request.NodeID]) != 2 {
 		t.Fatalf("configs = %#v, reusable = %#v", configs, execution.ReusableArtifacts)
+	}
+	if !reflect.DeepEqual(configs[fixture.request.NodeID].WorkspaceSources, workspaceSources) {
+		t.Fatalf("workspace sources = %#v", configs[fixture.request.NodeID].WorkspaceSources)
 	}
 	if _, found := execution.CachedResolutions[fixture.request.NodeID]; !found {
 		t.Fatalf("cached resolutions = %#v", execution.CachedResolutions)

@@ -208,3 +208,29 @@ func TestOperationLockRejectsStoreFromAnotherDeployment(t *testing.T) {
 		t.Fatalf("foreign store error = %v", err)
 	}
 }
+
+func TestOperationLockRemovesOnlyOwnedProviderStoreAndRetainsLock(t *testing.T) {
+	dir, store, _, _, _ := buildReachabilityFixture(t)
+	foreignStore, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	if removed, err := operation.RemoveProviderStore(foreignStore); err == nil || removed {
+		t.Fatalf("foreign store removal = %v, %v", removed, err)
+	}
+	if _, err := os.Stat(store.Root()); err != nil {
+		t.Fatalf("foreign removal changed owned store: %v", err)
+	}
+	removed, err := operation.RemoveProviderStore(store)
+	if err != nil || !removed {
+		t.Fatalf("owned store removal = %v, %v", removed, err)
+	}
+	if err := operation.RequireHeld(); err != nil {
+		t.Fatalf("provider store removal released operation lock: %v", err)
+	}
+}

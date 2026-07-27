@@ -7,9 +7,13 @@ import (
 	"testing"
 )
 
+func currentOutputRuntimeUser() RuntimeUserPlan {
+	return RuntimeUserPlan{UID: os.Geteuid(), GID: os.Getegid()}
+}
+
 func TestOneShotOutputDirectoryIsDirectAndPersistent(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "results")
-	session, err := prepareOneShotOutput(destination, "")
+	session, err := prepareOneShotOutput(destination, "", currentOutputRuntimeUser())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +33,7 @@ func TestOneShotOutputDirectoryIsDirectAndPersistent(t *testing.T) {
 
 func TestOneShotOutputFilePublishesCompleteFile(t *testing.T) {
 	final := filepath.Join(t.TempDir(), "report.json")
-	session, err := prepareOneShotOutput("", final)
+	session, err := prepareOneShotOutput("", final, currentOutputRuntimeUser())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +57,7 @@ func TestOneShotOutputFilePublishesCompleteFile(t *testing.T) {
 
 func TestOneShotOutputFileFailureRemovesReservation(t *testing.T) {
 	final := filepath.Join(t.TempDir(), "report.json")
-	session, err := prepareOneShotOutput("", final)
+	session, err := prepareOneShotOutput("", final, currentOutputRuntimeUser())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,11 +74,11 @@ func TestOneShotOutputFileFailureRemovesReservation(t *testing.T) {
 
 func TestOneShotOutputFileDoesNotOverwriteOrShareReservation(t *testing.T) {
 	final := filepath.Join(t.TempDir(), "report.json")
-	session, err := prepareOneShotOutput("", final)
+	session, err := prepareOneShotOutput("", final, currentOutputRuntimeUser())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := prepareOneShotOutput("", final); err == nil || !strings.Contains(err.Error(), "reserved") {
+	if _, err := prepareOneShotOutput("", final, currentOutputRuntimeUser()); err == nil || !strings.Contains(err.Error(), "reserved") {
 		t.Fatalf("second reservation error = %v", err)
 	}
 	if err := os.WriteFile(session.stagingFile, []byte("new\n"), 0o600); err != nil {
@@ -97,10 +101,10 @@ func TestOneShotOutputFileDoesNotOverwriteOrShareReservation(t *testing.T) {
 
 func TestOneShotOutputOptionsAreExclusiveAndFileMustBeRegular(t *testing.T) {
 	root := t.TempDir()
-	if _, err := prepareOneShotOutput(root, filepath.Join(root, "result")); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+	if _, err := prepareOneShotOutput(root, filepath.Join(root, "result"), currentOutputRuntimeUser()); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("exclusive options error = %v", err)
 	}
-	session, err := prepareOneShotOutput("", filepath.Join(root, "result"))
+	session, err := prepareOneShotOutput("", filepath.Join(root, "result"), currentOutputRuntimeUser())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,5 +113,71 @@ func TestOneShotOutputOptionsAreExclusiveAndFileMustBeRegular(t *testing.T) {
 	}
 	if err := session.publish(); err == nil || !strings.Contains(err.Error(), "regular file") {
 		t.Fatalf("non-regular output error = %v", err)
+	}
+}
+
+func TestOneShotOutputFileAssignsReservationToRuntimeUser(t *testing.T) {
+	root := t.TempDir()
+	final := filepath.Join(root, "result")
+	wantUID, wantGID := 991, 992
+	var chownPath string
+	var chownUID, chownGID int
+
+	session, err := prepareOneShotOutputWithBackend("", final, RuntimeUserPlan{UID: wantUID, GID: wantGID}, oneShotOutputBackend{
+		currentUID: func() int { return 0 },
+		currentGID: func() int { return 0 },
+		chown: func(path string, uid int, gid int) error {
+			chownPath, chownUID, chownGID = path, uid, gid
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chownPath != session.stagingDir || chownUID != wantUID || chownGID != wantGID {
+		t.Fatalf("reservation ownership = %q %d:%d, want %q %d:%d", chownPath, chownUID, chownGID, session.stagingDir, wantUID, wantGID)
+	}
+}
+
+func TestOneShotOutputFileRemovesReservationWhenOwnershipFails(t *testing.T) {
+	root := t.TempDir()
+	final := filepath.Join(root, "result")
+	_, err := prepareOneShotOutputWithBackend("", final, RuntimeUserPlan{UID: 991, GID: 992}, oneShotOutputBackend{
+		currentUID: func() int { return 0 },
+		currentGID: func() int { return 0 },
+		chown:      func(string, int, int) error { return os.ErrPermission },
+	})
+	if err == nil || !strings.Contains(err.Error(), "runtime user 991:992") {
+		t.Fatalf("ownership error = %v", err)
+	}
+	stagingDir := filepath.Join(root, ".result.reploy-output")
+	if _, statErr := os.Lstat(stagingDir); !os.IsNotExist(statErr) {
+		t.Fatalf("failed ownership left reservation: %v", statErr)
+	}
+}
+
+func TestOneShotOutputFileRejectsReservationReplacedBySymlink(t *testing.T) {
+	root := t.TempDir()
+	final := filepath.Join(root, "result")
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := prepareOneShotOutputWithBackend("", final, RuntimeUserPlan{UID: 991, GID: 992}, oneShotOutputBackend{
+		currentUID: func() int { return 0 },
+		currentGID: func() int { return 0 },
+		chown: func(path string, _, _ int) error {
+			if err := os.Remove(path); err != nil {
+				return err
+			}
+			return os.Symlink(target, path)
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("substituted reservation error = %v", err)
+	}
+	stagingDir := filepath.Join(root, ".result.reploy-output")
+	if _, statErr := os.Lstat(stagingDir); !os.IsNotExist(statErr) {
+		t.Fatalf("substituted reservation was not removed: %v", statErr)
 	}
 }

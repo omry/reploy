@@ -38,6 +38,43 @@ func NewStore(deploymentRoot string) (Store, error) {
 
 func (store Store) Root() string { return store.root }
 
+// Exists distinguishes a deliberately absent cache root from a present but
+// malformed provider store. Callers may treat only the former as a cache miss.
+func (store Store) Exists() (bool, error) {
+	parent := filepath.Dir(store.root)
+	if err := requireRealDirectory(parent); err != nil {
+		return false, err
+	}
+	info, err := os.Lstat(store.root)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect provider store root: %w", err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return false, fmt.Errorf("provider store root must be a real directory: %s", store.root)
+	}
+	return true, nil
+}
+
+// Remove deletes the complete deployment-owned provider store, including
+// abandoned temporary workspaces. It refuses to follow a replaced or corrupt
+// store path and is absent-safe so clean can be repeated.
+func (store Store) Remove() (bool, error) {
+	exists, err := store.Exists()
+	if err != nil || !exists {
+		return false, err
+	}
+	if err := os.RemoveAll(store.root); err != nil {
+		return false, fmt.Errorf("remove provider store: %w", err)
+	}
+	if err := syncStoreDirectory(filepath.Dir(store.root)); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // NewWorkspace creates private same-filesystem scratch beneath the
 // deployment-owned store. Callers can therefore stage immutable blobs with
 // hardlinks instead of copying their bytes.

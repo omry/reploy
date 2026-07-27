@@ -2,6 +2,7 @@ name: demo-staging-abcd
 services:
     environment:
         image: reploy/demo:staging
+        pull_policy: never
         container_name: demo-staging-abcd
         user: "501:20"
         command: [/opt/reploy/python/bin/demo, serve]

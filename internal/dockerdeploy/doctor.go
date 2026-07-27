@@ -9,8 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
-	"github.com/omry/reploy/internal/providers/python"
+	"github.com/omry/reploy/internal/providerstore"
 )
 
 type DoctorOptions struct {
@@ -33,8 +34,7 @@ func Doctor(options DoctorOptions) int {
 		options.Dir = DefaultDeploymentDir
 	}
 	colors := doctorStatusColors(options.Stdout)
-	if state, err := loadState(options.Dir); err == nil {
-		stdout, _ := deploymentOutputWritersForDeployment(options.Dir, state, options.Stdout, nil)
+	if stdout, _, err := DeploymentOutputWriters(options.Dir, options.Stdout, nil); err == nil {
 		options.Stdout = stdout
 	}
 	findings := doctorFindings(options.Dir, options.Preinstall, options.Scope, options.DockerPreflightTimeout)
@@ -60,9 +60,7 @@ func shouldPrintDoctorFinding(finding DoctorFinding, options DoctorOptions) bool
 	return true
 }
 
-type doctorColors struct {
-	enabled bool
-}
+type doctorColors struct{ enabled bool }
 
 func doctorStatusColors(output io.Writer) doctorColors {
 	return doctorColors{enabled: outputColorEnabled(output)}
@@ -91,189 +89,148 @@ func outputColorEnabled(output io.Writer) bool {
 	case "never":
 		return false
 	}
-	if os.Getenv("NO_COLOR") != "" {
-		return false
-	}
-	if !terminalLooksColorCapable() {
+	if os.Getenv("NO_COLOR") != "" || !terminalLooksColorCapable() {
 		return false
 	}
 	return writerLooksTerminal(output)
 }
 
+type doctorFindingsBackendV1 struct {
+	readFile func(string) ([]byte, error)
+	acquire  func(context.Context, string) (*deploy.OperationLock, error)
+}
+
 func doctorFindings(dir string, preinstall bool, scope InstallScope, dockerPreflightTimeout time.Duration) []DoctorFinding {
-	required := []string{
-		ComposeFileName,
-		DockerEnvFileName,
-		RequirementsFileName,
-		StateFileName,
-		ManifestFileName,
+	return doctorFindingsWithV1(dir, preinstall, scope, dockerPreflightTimeout, doctorFindingsBackendV1{
+		readFile: os.ReadFile,
+		acquire:  deploy.AcquireExistingOperationLock,
+	})
+}
+
+func doctorFindingsWithV1(
+	dir string,
+	preinstall bool,
+	scope InstallScope,
+	dockerPreflightTimeout time.Duration,
+	backend doctorFindingsBackendV1,
+) (findings []DoctorFinding) {
+	if backend.readFile == nil || backend.acquire == nil {
+		return []DoctorFinding{{Status: "fail", Message: "doctor requires a complete inspection backend"}}
 	}
-	findings := []DoctorFinding{}
-	for _, relativePath := range required {
-		path := filepath.Join(dir, relativePath)
-		if _, err := os.Stat(path); err != nil {
-			if os.IsNotExist(err) {
-				findings = append(findings, DoctorFinding{Status: "fail", Message: "missing file: " + path})
-			} else {
-				findings = append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("cannot inspect file: %s: %v", path, err)})
-			}
-			continue
-		}
-		findings = append(findings, DoctorFinding{Status: "ok", Message: "file exists: " + path})
-	}
-	manifest, err := deploy.LoadDeploymentManifest(filepath.Join(dir, ManifestFileName))
+	absoluteDir, err := filepath.Abs(dir)
 	if err != nil {
-		findings = append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("cannot read manifest: %v", err)})
-		return findings
+		return []DoctorFinding{{Status: "fail", Message: fmt.Sprintf("cannot resolve deployment directory: %v", err)}}
 	}
-	for relativePath, entry := range manifest.Files {
-		path := filepath.Join(dir, filepath.FromSlash(relativePath))
-		hash, err := deploy.HashFile(path)
-		if err != nil {
-			findings = append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("cannot hash generated file: %s: %v", path, err)})
-			continue
+	dir = absoluteDir
+	statePath := filepath.Join(dir, StateFileName)
+	content, err := backend.readFile(statePath)
+	if err != nil {
+		return []DoctorFinding{{Status: "fail", Message: fmt.Sprintf("cannot read state: %v", err)}}
+	}
+	if _, err := deploy.DecodeStateV1(content); err != nil {
+		return []DoctorFinding{{Status: "fail", Message: fmt.Sprintf("cannot decode state-v1: %v", err)}}
+	}
+	operation, err := backend.acquire(context.Background(), dir)
+	if err != nil {
+		return []DoctorFinding{{Status: "fail", Message: fmt.Sprintf("cannot lock deployment for inspection: %v", err)}}
+	}
+	defer func() {
+		if err := operation.Unlock(); err != nil {
+			findings = append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("cannot unlock deployment after inspection: %v", err)})
 		}
-		if hash != entry.SHA256 {
-			findings = append(findings, DoctorFinding{Status: "fail", Message: "generated file has local edits: " + path})
-			continue
-		}
-		findings = append(findings, DoctorFinding{Status: "ok", Message: "generated file matches manifest: " + path})
+	}()
+	state, found, err := operation.ReadStateV1()
+	if err != nil {
+		return []DoctorFinding{{Status: "fail", Message: fmt.Sprintf("cannot decode state-v1: %v", err)}}
+	}
+	if !found {
+		return []DoctorFinding{{Status: "fail", Message: "deployment state disappeared while waiting for the operation lock"}}
+	}
+	findings = []DoctorFinding{{Status: "ok", Message: "state-v1 deployment is readable: " + statePath}}
+	if state.Current == nil {
+		findings = append(findings, DoctorFinding{Status: "warn", Message: "environment has not been built"})
+	} else {
+		findings = append(findings, doctorCurrentRuntimeFileFindings(dir, operation, state)...)
 	}
 	if preinstall {
-		findings = append(findings, doctorPreinstallFindings(dir, scope, dockerPreflightTimeout)...)
+		findings = append(findings, providerPreinstallFindings(dir, scope, state, dockerPreflightTimeout)...)
 	}
 	return findings
 }
 
-func doctorPreinstallFindings(dir string, scope InstallScope, dockerPreflightTimeout time.Duration) []DoctorFinding {
-	findings := []DoctorFinding{}
-	values, err := readDockerEnv(dir)
+func doctorCurrentRuntimeFileFindings(dir string, operation *deploy.OperationLock, state deploy.StateV1) []DoctorFinding {
+	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
 	if err != nil {
-		return append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("cannot read %s: %v", DockerEnvFileName, err)})
+		return []DoctorFinding{{Status: "fail", Message: fmt.Sprintf("cannot decode current runtime blueprint: %v", err)}}
 	}
-	for key, defaultValue := range map[string]string{
-		"REPLOY_CONFIG_DIR":        "./conf",
-		"REPLOY_REQUIREMENTS_FILE": "./" + RequirementsFileName,
-		"REPLOY_BUNDLE_DIR":        "./" + BundleDirName,
-		"REPLOY_RUNTIME_DIR":       "./" + RuntimeDirName,
-		"REPLOY_DATA_DIR":          "./data",
-	} {
-		value := envValue(values, key, defaultValue)
-		switch {
-		case value == "":
-			findings = append(findings, DoctorFinding{Status: "fail", Message: "runtime path is empty: " + key})
-		case filepath.IsAbs(value):
-			findings = append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("runtime path must be relative for install: %s=%s", key, value)})
-		case filepath.Clean(value) == ".." || strings.HasPrefix(filepath.Clean(value), "../"):
-			findings = append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("runtime path must stay under deployment directory: %s=%s", key, value)})
-		case strings.ContainsAny(value, " \t\n"):
-			findings = append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("runtime path must not contain whitespace: %s=%s", key, value)})
-		default:
-			findings = append(findings, DoctorFinding{Status: "ok", Message: "install runtime path is relative: " + key})
-		}
+	store, err := providerstore.NewStore(dir)
+	if err != nil {
+		return []DoctorFinding{{Status: "fail", Message: fmt.Sprintf("cannot open provider store for runtime-file verification: %v", err)}}
+	}
+	current, found, err := LoadRecordedCurrentBuildV1(context.Background(), operation, store, document.Environment.ID, dir)
+	if err != nil {
+		return []DoctorFinding{{Status: "fail", Message: fmt.Sprintf("cannot load current build for runtime-file verification: %v", err)}}
+	}
+	if !found {
+		return []DoctorFinding{{Status: "fail", Message: "current state names a build but its build record is missing"}}
+	}
+	runtime, err := CurrentStagedProviderBuildRuntimeV1()
+	if err != nil {
+		return []DoctorFinding{{Status: "fail", Message: fmt.Sprintf("cannot inspect host runtime identity: %v", err)}}
+	}
+	plan, err := PlanCurrentRuntimeV1(CurrentRuntimePlanInputV1{DeploymentDir: dir, Current: current, Runtime: runtime})
+	if err != nil {
+		return []DoctorFinding{{Status: "fail", Message: fmt.Sprintf("cannot reconstruct current runtime files: %v", err)}}
+	}
+	if err := RequireCurrentRuntimeInputsV1(operation, dir, plan); err != nil {
+		return []DoctorFinding{{Status: "fail", Message: fmt.Sprintf("current runtime files do not match the recorded build: %v", err)}}
+	}
+	return []DoctorFinding{{Status: "ok", Message: "current runtime files match the recorded build"}}
+}
+
+var doctorInspectHostTools = inspectProviderInstallHostToolsV1
+var doctorInspectAccount = inspectProviderInstallAccountV1
+var doctorGeteuid = os.Geteuid
+
+func providerPreinstallFindings(dir string, scope InstallScope, state deploy.StateV1, dockerPreflightTimeout time.Duration) []DoctorFinding {
+	parsedScope, err := ParseInstallScope(string(scope))
+	if err != nil {
+		return []DoctorFinding{{Status: "fail", Message: fmt.Sprintf("install scope readiness: %v", err)}}
 	}
 	platform := currentHostPlatform()
-	backend := platform.installBackend()
-	if scope != "" {
-		if parsedScope, err := ParseInstallScope(string(scope)); err == nil {
-			backend = platform.installBackendForScope(parsedScope)
-		}
+	backend := platform.installBackendForScope(parsedScope)
+	if err := validateInstallScopeForBackend(parsedScope, backend, platform); err != nil {
+		return []DoctorFinding{{Status: "fail", Message: fmt.Sprintf("install scope readiness: %v", err)}}
 	}
-	switch backend {
-	case installBackendLinuxSystemd:
-		owner, err := resolveInstallOwner(values)
-		if err != nil {
-			if spec, createErr := installOwnerCreationSpecForResolveError(values, err); createErr == nil {
-				findings = append(findings, DoctorFinding{Status: "ok", Message: "install owner will be created if missing: " + spec})
-			} else {
-				findings = append(findings, DoctorFinding{Status: "fail", Message: "install owner must resolve to a non-root uid:gid: " + createErr.Error()})
-			}
-		} else {
-			findings = append(findings, DoctorFinding{Status: "ok", Message: fmt.Sprintf("install owner resolves to %s (%d:%d)", owner.Spec, owner.UID, owner.GID)})
-		}
-	case installBackendDockerDesktop:
-		findings = append(findings, dockerDesktopPreinstallFindings(dir, dockerPreflightTimeout)...)
-	case installBackendDockerManaged:
-		findings = append(findings, dockerManagedPreinstallFindings(dir, dockerPreflightTimeout)...)
-	default:
-		if platform.GOOS == "windows" {
-			findings = append(findings, dockerDesktopPreinstallFindings(dir, dockerPreflightTimeout)...)
-			findings = append(findings, DoctorFinding{Status: "fail", Message: platform.unsupportedPersistentInstallError("install").Error()})
-		} else {
-			findings = append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("persistent install is not supported on %s", platform.GOOS)})
-		}
-	}
-	state, err := loadState(dir)
+	tools, err := doctorInspectHostTools(context.Background(), backend)
 	if err != nil {
-		return append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("cannot read state: %v", err)})
+		return []DoctorFinding{{Status: "fail", Message: fmt.Sprintf("install host tools are not ready for %s scope: %v", parsedScope, err)}}
 	}
-	state, err = withInferredBundleState(dir, state)
+	findings := []DoctorFinding{{Status: "ok", Message: fmt.Sprintf("install host tools are ready for %s scope", parsedScope)}}
+	runtimeInfo, err := detectDockerRuntimeForDoctor(context.Background(), CommandSpec{Name: tools.DockerPath, Dir: dir}, dockerPreflightTimeout)
 	if err != nil {
-		return append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("cannot infer bundle state: %v", err)})
+		return append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("Docker runtime is required for install: %v", err)})
 	}
-	bundleDir, err := deploymentBundleDir(dir)
+	findings = append(findings, DoctorFinding{Status: "ok", Message: "Docker runtime detected: " + runtimeInfo.OperatingSystem})
+	if parsedScope != InstallScopeSystem {
+		return findings
+	}
+	if doctorGeteuid() != 0 {
+		return append(findings, DoctorFinding{Status: "fail", Message: "system install requires root privileges"})
+	}
+	findings = append(findings, DoctorFinding{Status: "ok", Message: "system install is running with root privileges"})
+	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
 	if err != nil {
-		return append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("cannot resolve bundle dir: %v", err)})
+		return append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("cannot decode system install account: %v", err)})
 	}
-	for _, root := range state.Bundle.Roots {
-		if root.Provider != python.ProviderName {
-			continue
-		}
-		switch root.Kind {
-		case "source":
-			findings = append(findings, DoctorFinding{Status: "fail", Message: "persistent source roots are not installable; add a package or wheel artifact instead: " + root.Source})
-		case "wheel":
-			if !strings.HasPrefix(root.Source, "/bundle/") {
-				findings = append(findings, DoctorFinding{Status: "fail", Message: "wheel root must live in deployment bundle for install: " + root.Source})
-				continue
-			}
-			wheelPath := filepath.Join(bundleDir, strings.TrimPrefix(root.Source, "/bundle/"))
-			if _, err := os.Stat(wheelPath); err != nil {
-				if os.IsNotExist(err) {
-					findings = append(findings, DoctorFinding{Status: "fail", Message: "wheel root is missing from deployment bundle: " + wheelPath})
-				} else {
-					findings = append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("cannot inspect wheel root: %s: %v", wheelPath, err)})
-				}
-				continue
-			}
-			findings = append(findings, DoctorFinding{Status: "ok", Message: "wheel root exists: " + wheelPath})
-		}
-	}
-	if !hasDoctorFailure(findings) {
-		findings = append(findings, DoctorFinding{Status: "ok", Message: "preinstall checks passed"})
-	}
-	return findings
-}
-
-func dockerManagedPreinstallFindings(dir string, dockerPreflightTimeout time.Duration) []DoctorFinding {
-	findings := []DoctorFinding{}
-	runtimeInfo, err := detectDockerRuntimeForDoctor(context.Background(), CommandSpec{Name: "docker", Dir: dir}, dockerPreflightTimeout)
+	account, err := doctorInspectAccount(parsedScope, document.Environment.Install.System.RunAs)
 	if err != nil {
-		findings = append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("Docker runtime is required for Docker-managed permanent install: %v", err)})
+		return append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("system install account is not ready: %v", err)})
+	}
+	if account.WillCreate {
+		findings = append(findings, DoctorFinding{Status: "ok", Message: fmt.Sprintf("system install account %s:%s can be created", account.User, account.Group)})
 	} else {
-		findings = append(findings, DoctorFinding{Status: "ok", Message: "Docker runtime detected: " + runtimeInfo.OperatingSystem})
+		findings = append(findings, DoctorFinding{Status: "ok", Message: fmt.Sprintf("system install account %s:%s exists", account.User, account.Group)})
 	}
 	return findings
-}
-
-func dockerDesktopPreinstallFindings(dir string, dockerPreflightTimeout time.Duration) []DoctorFinding {
-	findings := []DoctorFinding{}
-	runtimeInfo, err := detectDockerRuntimeForDoctor(context.Background(), CommandSpec{Name: "docker", Dir: dir}, dockerPreflightTimeout)
-	if err != nil {
-		findings = append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("Docker Desktop runtime is required for Docker-managed permanent install: %v", err)})
-	} else if runtimeInfo.Runtime == dockerRuntimeDockerDesktop {
-		findings = append(findings, DoctorFinding{Status: "ok", Message: "Docker Desktop runtime detected: " + runtimeInfo.OperatingSystem})
-	} else {
-		findings = append(findings, DoctorFinding{Status: "fail", Message: "Docker Desktop runtime is required for Docker-managed permanent install; detected: " + runtimeInfo.OperatingSystem})
-	}
-	return findings
-}
-
-func hasDoctorFailure(findings []DoctorFinding) bool {
-	for _, finding := range findings {
-		if finding.Status == "fail" {
-			return true
-		}
-	}
-	return false
 }

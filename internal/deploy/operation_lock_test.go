@@ -73,6 +73,32 @@ func TestOperationLockHonorsCancellationBeforeFilesystemMutation(t *testing.T) {
 	}
 }
 
+func TestAcquireExistingOperationLockDoesNotCreateState(t *testing.T) {
+	dir := t.TempDir()
+	lock, err := AcquireExistingOperationLock(context.Background(), dir)
+	if err == nil || lock != nil {
+		t.Fatalf("missing existing lock = %#v, %v", lock, err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, ".reploy")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("existing-lock lookup created deployment state: %v", err)
+	}
+
+	created, err := AcquireOperationLock(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := created.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	existing, err := AcquireExistingOperationLock(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := existing.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestOperationLockRequiresExistingRealDeploymentDirectory(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "missing")
 	if lock, err := AcquireOperationLock(context.Background(), dir); err == nil || lock != nil {

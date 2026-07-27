@@ -13,15 +13,14 @@ environment:
     application:
       type: python
       requirements: [git-source-app]
-  executables:
-    application:
-      component: application
-      binary: git-source-app
+      executables:
+        application:
+          binary: git-source-app
   commands:
     serve:
-      executable: application
+      executable: application.application
     config_check:
-      executable: application
+      executable: application.application
       trigger: [config, check]
       native_command: true
       deployed_command: true

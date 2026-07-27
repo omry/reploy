@@ -45,6 +45,7 @@ type composePlanNetwork struct {
 
 type composePlanService struct {
 	Image         string             `yaml:"image"`
+	PullPolicy    string             `yaml:"pull_policy"`
 	ContainerName string             `yaml:"container_name"`
 	User          string             `yaml:"user"`
 	Restart       string             `yaml:"restart,omitempty"`
@@ -68,7 +69,7 @@ func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerR
 		return DockerRenderedInputs{}, fmt.Errorf("control script is required")
 	}
 	service := composePlanService{
-		Image: plan.Image, ContainerName: plan.ContainerName, User: plan.RuntimeUser.DockerUser, Restart: plan.Restart,
+		Image: plan.Image, PullPolicy: "never", ContainerName: plan.ContainerName, User: plan.RuntimeUser.DockerUser, Restart: plan.Restart,
 		ReadOnly: true, Environment: temporaryEnvironmentForPlan(plan), Tmpfs: []string{temporaryHomeMountForPlan(plan)},
 	}
 	if plan.Workload != nil {

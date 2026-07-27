@@ -62,13 +62,7 @@ func TestRecoverPendingPublicationCleansTemporaryEntriesWhenNothingIsPending(t *
 	if recovered {
 		t.Fatal("recovery reported a pending publication")
 	}
-	entries, err := os.ReadDir(filepath.Join(store.Root(), "tmp"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("temporary entries remain: %#v", entries)
-	}
+	requireNoTemporaryEntries(t, store)
 }
 
 func TestExecutePendingPublicationRecoveryRemovesPendingLast(t *testing.T) {
@@ -113,12 +107,20 @@ func TestExecutePendingPublicationRecoveryRemovesPendingLast(t *testing.T) {
 	if _, found, err := operation.ReadPendingBuild(); err != nil || found {
 		t.Fatalf("pending found after successful recovery = %v, error = %v", found, err)
 	}
+	requireNoTemporaryEntries(t, store)
+}
+
+func requireNoTemporaryEntries(t *testing.T, store providerstore.Store) {
+	t.Helper()
 	entries, err := os.ReadDir(filepath.Join(store.Root(), "tmp"))
+	if os.IsNotExist(err) {
+		return
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) != 0 {
-		t.Fatalf("temporary entries remain after recovery: %#v", entries)
+		t.Fatalf("temporary entries remain: %#v", entries)
 	}
 }
 

@@ -121,7 +121,7 @@ func TestRemoveEnvironmentImageReferenceIsAbsentSafeAndExact(t *testing.T) {
 		}
 		want := [][]string{
 			{"image", "ls", "--quiet", "--no-trunc", references.Generation},
-			{"image", "rm", references.Generation},
+			{"image", "rm", "--force", references.Generation},
 		}
 		if !reflect.DeepEqual(calls, want) {
 			t.Fatalf("Docker calls = %#v", calls)
@@ -133,6 +133,55 @@ func TestRemoveEnvironmentImageReferenceRejectsRetargetedReference(t *testing.T)
 	dir, references, image := generationReferenceFixture(t)
 	calls := 0
 	err := removeEnvironmentImageReference(context.Background(), image, references, EnvironmentReferenceGeneration, "demo", dir, func(context.Context, ...string) (string, error) {
+		calls++
+		return string(rendererDigest("9")), nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "no longer names expected") || calls != 1 {
+		t.Fatalf("calls = %d, error = %v", calls, err)
+	}
+}
+
+func TestRemoveEnvironmentGenerationReferenceUsesExactRecordedReference(t *testing.T) {
+	dir, references, image := generationReferenceFixture(t)
+	var calls [][]string
+	err := removeEnvironmentGenerationReference(context.Background(), image, references.Generation, "demo", dir, func(_ context.Context, args ...string) (string, error) {
+		calls = append(calls, append([]string{}, args...))
+		if len(calls) == 1 {
+			return string(image.ConfigDigest), nil
+		}
+		return "", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"image", "ls", "--quiet", "--no-trunc", references.Generation},
+		{"image", "rm", "--force", references.Generation},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("Docker calls = %#v", calls)
+	}
+}
+
+func TestRemoveEnvironmentGenerationReferenceRejectsAnotherDeploymentBeforeDocker(t *testing.T) {
+	dir, references, image := generationReferenceFixture(t)
+	calls := 0
+	err := removeEnvironmentGenerationReference(context.Background(), image, references.Generation, "demo", t.TempDir(), func(context.Context, ...string) (string, error) {
+		calls++
+		return "", nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "not owned by this deployment") {
+		t.Fatalf("ownership error = %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("ownership failure made %d Docker calls for source dir %s", calls, dir)
+	}
+}
+
+func TestRemoveEnvironmentGenerationReferenceRejectsRetargetedReference(t *testing.T) {
+	dir, references, image := generationReferenceFixture(t)
+	calls := 0
+	err := removeEnvironmentGenerationReference(context.Background(), image, references.Generation, "demo", dir, func(context.Context, ...string) (string, error) {
 		calls++
 		return string(rendererDigest("9")), nil
 	})

@@ -86,13 +86,9 @@ func TestStagePythonResolverSourceConstraintsProtectsDeterministicInput(t *testi
 		Component: "application", Interpreter: blueprint.CommandRequirement{Command: "python"},
 		Requirements: []providers.CanonicalPackageRequest{packageRequest},
 	})
-	source := providers.ResolvedSourceInput{
-		Schema: providers.ResolvedSourceInputSchemaV1, Component: "application", LogicalPackage: "demo",
-		SourceManifestDigest: canonical.Digest("sha256:" + strings.Repeat("a", 64)), BuilderProfile: "uv-v1",
-		BuildSettings:     providers.CanonicalProviderData{Schema: "source-settings-v1", Value: canonical.Object{}},
-		EcosystemMetadata: providers.CanonicalProviderData{Schema: "python-source-v1", Value: canonical.Object{}},
-		ArtifactDigest:    wheel.SHA256,
-	}
+	source := testPythonResolvedSource(
+		"application", "demo", "1.0", canonical.Digest("sha256:"+strings.Repeat("a", 64)), wheel.SHA256,
+	)
 	if err := StagePythonResolverSourceConstraints(prepared, request, []providers.ResolvedSourceInput{source}, []providerstore.ArtifactDescriptor{wheel}); err != nil {
 		t.Fatal(err)
 	}

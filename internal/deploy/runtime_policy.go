@@ -27,7 +27,6 @@ const (
 
 type RuntimePolicyV1 struct {
 	Schema         string            `json:"schema"`
-	AllowedRoots   []string          `json:"allowed_roots"`
 	ProtectedPaths []ProtectedPathV1 `json:"protected_paths"`
 	Plans          []RuntimePlanV1   `json:"plans"`
 }
@@ -61,34 +60,8 @@ func ValidateRuntimePolicyV1(policy RuntimePolicyV1) error {
 	if policy.Schema != RuntimePolicySchemaV1 {
 		return fmt.Errorf("runtime policy schema must be %q", RuntimePolicySchemaV1)
 	}
-	if policy.AllowedRoots == nil || policy.ProtectedPaths == nil || policy.Plans == nil {
+	if policy.ProtectedPaths == nil || policy.Plans == nil {
 		return fmt.Errorf("runtime policy collections must use arrays")
-	}
-	hasBuiltInRoot := false
-	for index, root := range policy.AllowedRoots {
-		if err := validateRuntimeAbsolutePath("allowed root", root); err != nil {
-			return err
-		}
-		if root == "/" {
-			return fmt.Errorf("runtime policy cannot allow the filesystem root")
-		}
-		if root == "/mnt" {
-			hasBuiltInRoot = true
-		}
-		if index > 0 {
-			previous := policy.AllowedRoots[index-1]
-			if previous >= root {
-				return fmt.Errorf("runtime policy allowed roots must be unique and sorted")
-			}
-		}
-		for _, previous := range policy.AllowedRoots[:index] {
-			if runtimePathsOverlap(previous, root) {
-				return fmt.Errorf("runtime policy allowed roots %q and %q overlap", previous, root)
-			}
-		}
-	}
-	if !hasBuiltInRoot {
-		return fmt.Errorf("runtime policy allowed roots must include /mnt")
 	}
 	for index, protected := range policy.ProtectedPaths {
 		if err := validateRuntimeAbsolutePath("protected path", protected.Path); err != nil {
@@ -120,6 +93,9 @@ func ValidateRuntimePolicyV1(policy RuntimePolicyV1) error {
 			if err := validateRuntimeAbsolutePath("mount destination", mount.Destination); err != nil {
 				return fmt.Errorf("runtime plan %q: %w", plan.ID, err)
 			}
+			if err := validateRuntimeReservedDestination(mount.Destination); err != nil {
+				return fmt.Errorf("runtime plan %q: %w", plan.ID, err)
+			}
 			if mountIndex > 0 && plan.Mounts[mountIndex-1].Destination >= mount.Destination {
 				return fmt.Errorf("runtime plan %q mounts must be unique and sorted by destination", plan.ID)
 			}
@@ -140,6 +116,16 @@ func ValidateRuntimePolicyV1(policy RuntimePolicyV1) error {
 				return fmt.Errorf("runtime plan %q executables must be unique and sorted", plan.ID)
 			}
 		}
+	}
+	return nil
+}
+
+func validateRuntimeReservedDestination(destination string) error {
+	if destination == "/" {
+		return fmt.Errorf("mount destination must not be the container filesystem root")
+	}
+	if err := blueprint.ValidateRuntimeMountDestination(destination); err != nil {
+		return fmt.Errorf("mount destination %q %w", destination, err)
 	}
 	return nil
 }

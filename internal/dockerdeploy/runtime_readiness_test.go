@@ -11,13 +11,15 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/providers/registry"
 	"github.com/omry/reploy/internal/providerstore"
 )
 
 func TestRequireRuntimeReadyAcceptsMatchingBuildAndGeneratedOnlyPlan(t *testing.T) {
-	current, buildInput := currentBuildReuseFixture(t)
+	current, buildInput := runtimeCurrentBuildFixture(t)
 	if err := RequireRuntimeReady(RuntimeReadinessInput{
-		Current: current, BuildInput: buildInput, PlanID: "shell", Sources: []RuntimeHostSourceV1{},
+		Current: current, DockerPlan: buildInput.DockerPlan, PlanID: "shell", Sources: []RuntimeHostSourceV1{},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -48,14 +50,14 @@ func TestRuntimeInvocationV1UsesCompiledPlanIdentities(t *testing.T) {
 }
 
 func TestRunPublishedRuntimeContainerV1GatesRunnerAndPassesExactBuild(t *testing.T) {
-	current, buildInput := currentBuildReuseFixture(t)
+	current, buildInput := runtimeCurrentBuildFixture(t)
 	invocation, err := ShellRuntimeInvocationV1(buildInput.DockerPlan)
 	if err != nil {
 		t.Fatal(err)
 	}
 	order := []string{}
 	input := PublishedRuntimeContainerInput{
-		Environment: "demo", DeploymentDir: "/srv/demo", BuildInput: buildInput, Invocation: invocation,
+		Environment: "demo", DeploymentDir: "/srv/demo", DockerPlan: buildInput.DockerPlan, Invocation: invocation,
 	}
 	err = runPublishedRuntimeContainerV1(t.Context(), input, func(
 		_ context.Context,
@@ -82,7 +84,7 @@ func TestRunPublishedRuntimeContainerV1GatesRunnerAndPassesExactBuild(t *testing
 }
 
 func TestRunPublishedRuntimeContainerV1NeverRunsForStaleBuild(t *testing.T) {
-	current, buildInput := currentBuildReuseFixture(t)
+	current, buildInput := runtimeCurrentBuildFixture(t)
 	invocation, err := ShellRuntimeInvocationV1(buildInput.DockerPlan)
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +93,7 @@ func TestRunPublishedRuntimeContainerV1NeverRunsForStaleBuild(t *testing.T) {
 	refreshCurrentBuildReuseGeneration(t, &current)
 	runs := 0
 	err = runPublishedRuntimeContainerV1(t.Context(), PublishedRuntimeContainerInput{
-		Environment: "demo", DeploymentDir: "/srv/demo", BuildInput: buildInput, Invocation: invocation,
+		Environment: "demo", DeploymentDir: "/srv/demo", DockerPlan: buildInput.DockerPlan, Invocation: invocation,
 	}, func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (CurrentBuild, bool, error) {
 		return current, true, nil
 	}, func(context.Context, CurrentBuild) error {
@@ -120,10 +122,10 @@ func TestRunPublishedRuntimeContainerV1RejectsMissingBoundaryInputs(t *testing.T
 }
 
 func TestRequirePublishedRuntimeReadyLoadsCurrentBuildWithoutMutation(t *testing.T) {
-	current, buildInput := currentBuildReuseFixture(t)
+	current, buildInput := runtimeCurrentBuildFixture(t)
 	loaded := 0
 	result, err := requirePublishedRuntimeReady(t.Context(), PublishedRuntimeReadinessInput{
-		Environment: "demo", DeploymentDir: "/deployment", BuildInput: buildInput,
+		Environment: "demo", DeploymentDir: "/deployment", DockerPlan: buildInput.DockerPlan,
 		PlanID: "shell", Sources: []RuntimeHostSourceV1{},
 	}, func(_ context.Context, _ *deploy.OperationLock, _ providerstore.Store, environment string, dir string) (CurrentBuild, bool, error) {
 		loaded++
@@ -138,8 +140,8 @@ func TestRequirePublishedRuntimeReadyLoadsCurrentBuildWithoutMutation(t *testing
 }
 
 func TestRequirePublishedRuntimeReadyRejectsMissingAndLoadFailure(t *testing.T) {
-	current, buildInput := currentBuildReuseFixture(t)
-	input := PublishedRuntimeReadinessInput{BuildInput: buildInput, PlanID: "shell", Sources: []RuntimeHostSourceV1{}}
+	current, buildInput := runtimeCurrentBuildFixture(t)
+	input := PublishedRuntimeReadinessInput{DockerPlan: buildInput.DockerPlan, PlanID: "shell", Sources: []RuntimeHostSourceV1{}}
 	_, err := requirePublishedRuntimeReady(t.Context(), input, func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (CurrentBuild, bool, error) {
 		return CurrentBuild{}, false, nil
 	})
@@ -155,11 +157,31 @@ func TestRequirePublishedRuntimeReadyRejectsMissingAndLoadFailure(t *testing.T) 
 	}
 }
 
+func TestRequirePublishedRuntimeReadyPointsInstalledBuildRecoveryToInstall(t *testing.T) {
+	input := PublishedRuntimeReadinessInput{
+		DockerPlan: DockerExecutionPlan{Phase: blueprint.PhaseInstalled},
+		PlanID:     "shell",
+		Sources:    []RuntimeHostSourceV1{},
+	}
+	_, err := requirePublishedRuntimeReady(t.Context(), input, func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (CurrentBuild, bool, error) {
+		return CurrentBuild{}, false, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "original `reploy install` command") || strings.Contains(err.Error(), "reploy build") {
+		t.Fatalf("installed missing-build recovery = %v", err)
+	}
+}
+
 func TestRequireRuntimeReadyReportsStaleBuildBeforeHostChecks(t *testing.T) {
-	current, buildInput := currentBuildReuseFixture(t)
-	buildInput.Document.Docker.AdditionalMountRoots = []string{"/srv/demo"}
-	err := RequireRuntimeReady(RuntimeReadinessInput{
-		Current: current, BuildInput: buildInput, PlanID: "missing", Sources: []RuntimeHostSourceV1{},
+	current, buildInput := runtimeCurrentBuildFixture(t)
+	changed := buildInput.Document
+	changed.Environment.Terminal.ColorEnv = "FORCE_COLOR"
+	var err error
+	current.State.Blueprint, err = blueprint.EncodeResolvedDocumentV1(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = RequireRuntimeReady(RuntimeReadinessInput{
+		Current: current, DockerPlan: buildInput.DockerPlan, PlanID: "missing", Sources: []RuntimeHostSourceV1{},
 	})
 	if err == nil || !strings.Contains(err.Error(), "run `reploy build`") || strings.Contains(err.Error(), "host-source") {
 		t.Fatalf("stale runtime error = %v", err)
@@ -167,7 +189,7 @@ func TestRequireRuntimeReadyReportsStaleBuildBeforeHostChecks(t *testing.T) {
 }
 
 func TestRequireRuntimeReadyChecksHostSourceAfterExactBuildMatch(t *testing.T) {
-	current, buildInput := currentBuildReuseFixture(t)
+	current, buildInput := runtimeCurrentBuildFixture(t)
 	root := t.TempDir()
 	config := filepath.Join(root, "config")
 	if err := os.Mkdir(config, 0o700); err != nil {
@@ -190,7 +212,7 @@ func TestRequireRuntimeReadyChecksHostSourceAfterExactBuildMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = RequireRuntimeReady(RuntimeReadinessInput{
-		Current: current, BuildInput: buildInput, PlanID: "shell",
+		Current: current, DockerPlan: buildInput.DockerPlan, PlanID: "shell",
 		Sources: []RuntimeHostSourceV1{{
 			Destination: "/mnt/config", HostPath: config,
 			SourceKind: deploy.RuntimeMountSourceDirectory, ReadOnly: true,
@@ -199,4 +221,78 @@ func TestRequireRuntimeReadyChecksHostSourceAfterExactBuildMatch(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "host-source") || !strings.Contains(err.Error(), "no such file") {
 		t.Fatalf("missing host source error = %v", err)
 	}
+}
+
+func TestCurrentBuildMatchesRuntimeV1TreatsChangedStateAsStale(t *testing.T) {
+	current, buildInput := runtimeCurrentBuildFixture(t)
+	matched, err := CurrentBuildMatchesRuntimeV1(current, buildInput.DockerPlan)
+	if err != nil || !matched {
+		t.Fatalf("matching runtime build = %v, %v", matched, err)
+	}
+
+	changed := buildInput.Document
+	base := changed.Environment.Components["base"]
+	base.Base = &blueprint.BaseComponent{Image: "debian:13", Exports: base.Base.Exports}
+	changed.Environment.Components["base"] = base
+	current.State.Blueprint, err = blueprint.EncodeResolvedDocumentV1(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matched, err = CurrentBuildMatchesRuntimeV1(current, buildInput.DockerPlan)
+	if err != nil || matched {
+		t.Fatalf("changed runtime blueprint = %v, %v", matched, err)
+	}
+}
+
+func TestCurrentBuildMatchesRuntimeV1RejectsMalformedRuntimePlan(t *testing.T) {
+	current, _ := runtimeCurrentBuildFixture(t)
+	matched, err := CurrentBuildMatchesRuntimeV1(current, DockerExecutionPlan{Workload: &WorkloadExecutionPlan{}})
+	if err == nil || matched || !strings.Contains(err.Error(), "runtime plan") {
+		t.Fatalf("malformed runtime plan = %v, %v", matched, err)
+	}
+}
+
+func runtimeCurrentBuildFixture(t *testing.T) (CurrentBuild, CurrentBuildReuseInput) {
+	t.Helper()
+	current, input := currentBuildReuseFixture(t)
+	document := input.Document
+	document.Environment.Components = map[string]blueprint.Component{
+		"base": {
+			Type: blueprint.ComponentTypeBase,
+			Base: &blueprint.BaseComponent{
+				Image:   current.Lock.Base.AuthorReference,
+				Exports: map[string]blueprint.BaseExecutableExport{},
+			},
+		},
+	}
+	resolved, err := blueprint.EncodeResolvedDocumentV1(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.State.Blueprint = resolved
+	current.Lock.BlueprintDigest, err = blueprint.ResolvedDocumentDigestV1(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := BuildResolvedRequestV1(document, current.State.Overlay, current.State.Platform, []providers.ResolvedSourceInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Lock.ResolvedRequestDigest, err = providers.ResolvedRequestDigest(request, registry.ValidateResolvedRequestOwnersV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plans, err := RuntimePlansV1(document, input.DockerPlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Lock.RuntimePolicy, err = CompileRuntimePolicyFromLockV1(document, current.Lock, plans)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshCurrentBuildReuseGeneration(t, &current)
+	input.Document = document
+	input.ResolvedRequest = request
+	input.Base = current.Lock.Base
+	return current, input
 }

@@ -132,7 +132,7 @@ func decodeProfileFactsV1(data providers.CanonicalProviderData) (string, []provi
 		if source.Component != wire.Component {
 			return "", nil, fmt.Errorf("Python profile source targets component %q, want %q", source.Component, wire.Component)
 		}
-		if err := providers.ValidateResolvedSourceInput(source); err != nil {
+		if err := ValidateResolvedSourceInputV1(source); err != nil {
 			return "", nil, err
 		}
 	}

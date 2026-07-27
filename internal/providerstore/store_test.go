@@ -3,6 +3,7 @@ package providerstore
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -470,5 +471,59 @@ func TestNewStoreRequiresAbsoluteCleanDeploymentRoot(t *testing.T) {
 		if _, err := NewStore(root); err == nil {
 			t.Fatalf("invalid root accepted: %q", root)
 		}
+	}
+}
+
+func TestStoreRemoveDeletesObjectsAndTemporaryWorkspacesAndIsAbsentSafe(t *testing.T) {
+	deployment := t.TempDir()
+	store, err := NewStore(deployment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Publish(t.Context(), "packages/demo.deb", "deb", strings.NewReader("demo")); err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := store.NewWorkspace("clean-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "partial"), []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := store.Remove()
+	if err != nil || !removed {
+		t.Fatalf("first remove = %v, %v", removed, err)
+	}
+	if _, err := os.Lstat(store.Root()); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("provider store remains after clean: %v", err)
+	}
+	removed, err = store.Remove()
+	if err != nil || removed {
+		t.Fatalf("second remove = %v, %v", removed, err)
+	}
+}
+
+func TestStoreRemoveRejectsReplacedRootWithoutFollowingIt(t *testing.T) {
+	deployment := t.TempDir()
+	store, err := NewStore(deployment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	if err := os.WriteFile(filepath.Join(target, "keep"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(store.Root()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, store.Root()); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := store.Remove(); err == nil || removed {
+		t.Fatalf("remove replaced store = %v, %v", removed, err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "keep")); err != nil {
+		t.Fatalf("clean followed replaced store root: %v", err)
 	}
 }

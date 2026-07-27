@@ -1,0 +1,2 @@
+kind: Security
+body: Prevent privileged system installs from following staging-directory symlinks introduced while managed mount contents are being copied.

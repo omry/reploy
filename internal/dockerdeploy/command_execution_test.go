@@ -6,19 +6,20 @@ import (
 	"testing"
 
 	"github.com/omry/reploy/internal/blueprint"
-	"github.com/omry/reploy/internal/legacyprovider"
 	"github.com/omry/reploy/internal/providers"
 )
 
 func commandTestDocument() blueprint.Document {
 	return blueprint.Document{Environment: blueprint.Environment{
-		Components: map[string]blueprint.Component{"application": {Type: blueprint.ComponentTypePython}},
-		Executables: map[string]blueprint.Executable{"server": {
-			Component: "application", Binary: "demo", ArgvPrefix: []string{"--prefix"}, ArgvSuffix: []string{"--suffix"},
+		Components: map[string]blueprint.Component{"application": {
+			Type: blueprint.ComponentTypePython,
+			Executables: map[string]blueprint.Executable{"server": {
+				Binary: "demo", ArgvPrefix: []string{"--prefix"}, ArgvSuffix: []string{"--suffix"},
+			}},
 		}},
 		Commands: map[string]blueprint.Command{
-			"serve":   {Executable: "server", Trigger: []string{"serve"}, NativeCommand: true, DeployedCommand: true, ForwardFlags: []string{"--verbose"}, Argv: []string{"serve"}, Order: blueprint.DefaultArgumentOrder},
-			"special": {Executable: "server", Trigger: []string{"config", "show"}, NativeCommand: true, Argv: []string{"show"}, Order: []blueprint.ArgumentSegment{blueprint.ArgumentBinary, blueprint.ArgumentCommand, blueprint.ArgumentSuffix, blueprint.ArgumentForwarded}},
+			"serve":   {Executable: "application.server", Trigger: []string{"serve"}, NativeCommand: true, DeployedCommand: true, ForwardFlags: []string{"--verbose"}, Argv: []string{"serve"}, Order: blueprint.DefaultArgumentOrder},
+			"special": {Executable: "application.server", Trigger: []string{"config", "show"}, NativeCommand: true, Argv: []string{"show"}, Order: []blueprint.ArgumentSegment{blueprint.ArgumentBinary, blueprint.ArgumentCommand, blueprint.ArgumentSuffix, blueprint.ArgumentForwarded}},
 		},
 	}}
 }
@@ -59,47 +60,6 @@ func TestResolveLockedEnvironmentCommandV1RejectsMissingOrDriftingOutput(t *test
 	}
 }
 
-func TestResolveEnvironmentCommandSegmentOrder(t *testing.T) {
-	resolved, err := ResolveEnvironmentCommand(commandTestDocument(), map[string]legacyprovider.ExecutableOutput{
-		"server": {Component: "application", Binary: "demo", ImagePath: "/opt/demo"},
-	}, "special", []string{"value"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(resolved.Argv, []string{"/opt/demo", "show", "--suffix", "value"}) {
-		t.Fatalf("argv = %#v", resolved.Argv)
-	}
-}
-
-func TestResolveEnvironmentCommandForPlanInterpolatesLateRuntimeValues(t *testing.T) {
-	document := commandTestDocument()
-	document.Environment.Vars = map[string]any{"config_name": "demo-server"}
-	document.Environment.Paths = map[string]blueprint.Path{"data": {Container: "/data", Writable: true, Update: blueprint.UpdatePreserve}}
-	document.Environment.Workload = &blueprint.Workload{Endpoints: map[string]blueprint.Endpoint{"http": {Scheme: "http", Port: 8080}}}
-	document.Environment.Executables["server"] = blueprint.Executable{
-		Component: "application", Binary: "demo", Order: blueprint.DefaultArgumentOrder,
-		ArgvPrefix: []string{"--config", "{{ config_name }}"},
-		ArgvSuffix: []string{
-			"bind={{ reploy.workload.endpoints.http.bind.address }}:{{ reploy.workload.endpoints.http.bind.port }}",
-			"publish={{ reploy.workload.endpoints.http.publish.address }}:{{ reploy.workload.endpoints.http.publish.port }}",
-			"data={{ environment.paths.data.container }}", "phase={{ reploy.phase }}",
-		},
-	}
-	plan := DockerExecutionPlan{Phase: blueprint.PhaseStaged, Workload: &WorkloadExecutionPlan{Endpoints: map[string]EndpointExecutionPlan{
-		"http": {BindAddress: "0.0.0.0", ContainerPort: 8080, PublishAddress: "127.0.0.1", PublishedPort: 18080},
-	}}}
-	resolved, err := ResolveEnvironmentCommandForPlan(document, map[string]legacyprovider.ExecutableOutput{
-		"server": {Component: "application", Binary: "demo", ImagePath: "/opt/demo"},
-	}, plan, "serve", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"/opt/demo", "--config", "demo-server", "serve", "bind=0.0.0.0:8080", "publish=127.0.0.1:18080", "data=/data", "phase=staged"}
-	if !reflect.DeepEqual(resolved.Argv, want) {
-		t.Fatalf("argv = %#v, want %#v", resolved.Argv, want)
-	}
-}
-
 func TestMatchEnvironmentCommandLongestTriggerAndForwarding(t *testing.T) {
 	name, forwarded, err := MatchEnvironmentCommand(commandTestDocument(), []string{"config", "show", "--", "$(not-shell)"}, false)
 	if err != nil {
@@ -114,9 +74,14 @@ func TestMatchEnvironmentCommandLongestTriggerAndForwarding(t *testing.T) {
 }
 
 func TestTransientAndShellCommandsUseDockerExecArgv(t *testing.T) {
-	plan := DockerExecutionPlan{Image: "reploy/demo:staging", ContainerName: "demo", RuntimeUser: RuntimeUserPlan{DockerUser: "501:20"}, Mounts: []MountExecutionPlan{{Mode: blueprint.MountManagedBind, Source: "/tmp/conf", Target: "/conf", ReadOnly: true}}}
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := testPreparedProbeWorkspace(t, platform, "/tmp/probe")
+	plan := DockerExecutionPlan{Image: "reploy/demo:staging", ContainerName: "demo", RuntimeUser: RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"}, Mounts: []MountExecutionPlan{{Mode: blueprint.MountManagedBind, Source: "/tmp/conf", Target: "/conf", ReadOnly: true}}}
 	output := &transientOutputMount{HostDirectory: "/tmp/output", Variable: runtimeOutputFileVariable, ContainerPath: runtimeOutputRoot + "/output"}
-	spec, err := TransientCommandSpec(plan, ResolvedEnvironmentCommand{Argv: []string{"/opt/demo", ";rm", "$(touch pwned)"}}, output, true, false)
+	spec, err := TransientCommandSpec(plan, ResolvedEnvironmentCommand{Argv: []string{"/opt/demo", ";rm", "$(touch pwned)"}}, workspace, output, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,18 +92,129 @@ func TestTransientAndShellCommandsUseDockerExecArgv(t *testing.T) {
 	if !containsInOrder(spec.Args, []string{"--mount", "type=bind,source=/tmp/output,target=" + runtimeOutputRoot, "--env", runtimeOutputFileVariable + "=" + runtimeOutputRoot + "/output"}) {
 		t.Fatalf("spec lacks explicit output mount: %#v", spec.Args)
 	}
-	shell := ShellCommandSpec(plan, true, true)
+	if !containsAdjacent(spec.Args, "--pull", "never") {
+		t.Fatalf("transient command permits image pulls: %#v", spec.Args)
+	}
+	if containsAdjacent(spec.Args, "--user", plan.RuntimeUser.DockerUser) {
+		t.Fatalf("transient container starts as the runtime user before its anonymous home is initialized: %#v", spec.Args)
+	}
+	if !containsInOrder(spec.Args, []string{"--user", "0:0"}) ||
+		!containsInOrder(spec.Args, []string{"--mount", "type=bind,source=/tmp/probe,target=" + ProbeContainerRoot + ",readonly"}) ||
+		!containsInOrder(spec.Args, []string{
+			"--entrypoint", ProbeContainerExecutable,
+			plan.Image, "run-transient", "501", "20",
+			"/opt/demo", ";rm", "$(touch pwned)",
+		}) {
+		t.Fatalf("transient command does not initialize its anonymous home and drop to the runtime user: %#v", spec.Args)
+	}
+	shell := ShellCommandSpec(plan, workspace, true, true)
 	if !strings.Contains(strings.Join(shell.Args, " "), "--interactive --tty") || shell.Args[len(shell.Args)-1] != "/bin/sh" {
 		t.Fatalf("shell = %#v", shell)
 	}
-	if !containsInOrder(shell.Args, []string{
-		"--read-only", "--mount", transientHomeMountForPlan(plan),
-		"--env", "HOME=" + environmentTemporaryHome,
-		"--env", "TMPDIR=" + environmentTemporaryHome,
-	}) {
+	if !containsInOrder(shell.Args, []string{"--read-only", "--mount", transientHomeMountForPlan(plan)}) ||
+		!containsInOrder(shell.Args, []string{
+			"--env", "HOME=" + environmentTemporaryHome,
+			"--env", "TMPDIR=" + environmentTemporaryHome,
+		}) {
 		t.Fatalf("shell lacks a read-only root and anonymous temporary home: %#v", shell.Args)
 	}
 	if strings.Contains(strings.Join(shell.Args, " "), "--tmpfs") {
 		t.Fatalf("transient home unexpectedly uses tmpfs: %#v", shell.Args)
+	}
+}
+
+func TestTransientCommandSpecQuotesCommaContainingMountFields(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := testPreparedProbeWorkspace(t, platform, "/tmp/probe,workspace")
+	plan := DockerExecutionPlan{
+		Image: "reploy/demo:staging", ContainerName: "demo",
+		RuntimeUser: RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"},
+		Mounts: []MountExecutionPlan{{
+			Mode: blueprint.MountManagedBind, Source: "/tmp/deployment,preview/conf",
+			Target: "/conf,preview", ReadOnly: true,
+		}},
+	}
+	output := &transientOutputMount{
+		HostDirectory: "/tmp/output,preview", Variable: runtimeOutputDirectoryVariable,
+		ContainerPath: runtimeOutputRoot,
+	}
+	spec, err := TransientCommandSpec(plan, ResolvedEnvironmentCommand{Argv: []string{"/opt/demo"}}, workspace, output, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsInOrder(spec.Args, []string{
+		"--mount", `type=bind,"source=/tmp/probe,workspace",target=` + ProbeContainerRoot + ",readonly",
+	}) || !containsInOrder(spec.Args, []string{
+		"--mount", `type=bind,"target=/conf,preview","source=/tmp/deployment,preview/conf",readonly`,
+		"--mount", `type=bind,"source=/tmp/output,preview",target=` + runtimeOutputRoot,
+	}) {
+		t.Fatalf("comma-containing mount fields were not CSV-quoted: %#v", spec.Args)
+	}
+}
+
+func TestPlanTransientContainerExecutionV1SeparatesCreateStartAndCleanup(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := testPreparedProbeWorkspace(t, platform, "/tmp/probe")
+	plan := DockerExecutionPlan{
+		Image: "reploy/demo:staging", ContainerName: "demo-staging-abcd",
+		RuntimeUser: RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"},
+		Mounts:      []MountExecutionPlan{{Mode: blueprint.MountManagedBind, Source: "/tmp/conf", Target: "/conf", ReadOnly: true}},
+	}
+	output := &transientOutputMount{
+		HostDirectory: "/tmp/output", Variable: runtimeOutputFileVariable,
+		ContainerPath: runtimeOutputRoot + "/output",
+	}
+	execution, err := PlanTransientContainerExecutionV1(
+		plan,
+		ResolvedEnvironmentCommand{Argv: []string{"/opt/demo", "export"}},
+		workspace,
+		output,
+		"run-00010203040506ff",
+		true,
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantContainer := "demo-staging-abcd-run-00010203040506ff"
+	if execution.Container != wantContainer {
+		t.Fatalf("container = %q", execution.Container)
+	}
+	if !reflect.DeepEqual(execution.Create.Args[:7], []string{"create", "--pull", "never", "--rm", "--name", wantContainer, "--user"}) {
+		t.Fatalf("create prefix = %#v", execution.Create.Args)
+	}
+	if !containsInOrder(execution.Create.Args, []string{"--interactive", "--tty"}) ||
+		!reflect.DeepEqual(execution.Create.Args[len(execution.Create.Args)-6:], []string{plan.Image, "run-transient", "501", "20", "/opt/demo", "export"}) {
+		t.Fatalf("create args = %#v", execution.Create.Args)
+	}
+	if !reflect.DeepEqual(execution.Start.Args, []string{"start", "--attach", "--interactive", wantContainer}) {
+		t.Fatalf("start args = %#v", execution.Start.Args)
+	}
+	if !reflect.DeepEqual(execution.Cleanup, TemporaryContainerCleanupCommand(wantContainer)) {
+		t.Fatalf("cleanup = %#v", execution.Cleanup)
+	}
+	if strings.Contains(strings.Join(execution.Create.Args, " "), " run ") {
+		t.Fatalf("create unexpectedly runs container: %#v", execution.Create.Args)
+	}
+}
+
+func TestPlanTransientContainerExecutionV1RejectsInvalidIdentity(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := testPreparedProbeWorkspace(t, platform, "/tmp/probe")
+	command := ResolvedEnvironmentCommand{Argv: []string{"/bin/true"}}
+	if _, err := PlanTransientContainerExecutionV1(DockerExecutionPlan{ContainerName: "demo"}, command, workspace, nil, "invalid", false, false); err == nil || !strings.Contains(err.Error(), "run ID") {
+		t.Fatalf("invalid run ID error = %v", err)
+	}
+	if _, err := PlanTransientContainerExecutionV1(DockerExecutionPlan{}, command, workspace, nil, "run-0000000000000001", false, false); err == nil || !strings.Contains(err.Error(), "base container name") {
+		t.Fatalf("missing base name error = %v", err)
 	}
 }

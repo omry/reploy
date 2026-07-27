@@ -25,12 +25,34 @@ type oneShotOutputSession struct {
 	finalFile   string
 }
 
-func prepareOneShotOutput(outputDir string, outputFile string) (*oneShotOutputSession, error) {
+type oneShotOutputBackend struct {
+	currentUID func() int
+	currentGID func() int
+	chown      func(string, int, int) error
+}
+
+func prepareOneShotOutput(outputDir string, outputFile string, runtimeUser RuntimeUserPlan) (*oneShotOutputSession, error) {
+	return prepareOneShotOutputWithBackend(outputDir, outputFile, runtimeUser, oneShotOutputBackend{
+		currentUID: os.Geteuid,
+		currentGID: os.Getegid,
+		chown:      os.Lchown,
+	})
+}
+
+func prepareOneShotOutputWithBackend(
+	outputDir string,
+	outputFile string,
+	runtimeUser RuntimeUserPlan,
+	backend oneShotOutputBackend,
+) (*oneShotOutputSession, error) {
 	if outputDir != "" && outputFile != "" {
 		return nil, fmt.Errorf("--output-dir and --output-file are mutually exclusive")
 	}
 	if outputDir == "" && outputFile == "" {
 		return &oneShotOutputSession{}, nil
+	}
+	if backend.currentUID == nil || backend.currentGID == nil || backend.chown == nil {
+		return nil, fmt.Errorf("prepare one-shot output requires a complete ownership backend")
 	}
 	if outputDir != "" {
 		absolute, err := filepath.Abs(outputDir)
@@ -69,6 +91,29 @@ func prepareOneShotOutput(outputDir string, outputFile string) (*oneShotOutputSe
 			return nil, fmt.Errorf("output file is reserved by existing Reploy staging directory: %s", stagingDir)
 		}
 		return nil, fmt.Errorf("reserve output file: %w", err)
+	}
+	if runtimeUser.UID < 0 || runtimeUser.GID < 0 {
+		_ = os.Remove(stagingDir)
+		return nil, fmt.Errorf("reserve output file requires a numeric runtime user")
+	}
+	if runtimeUser.UID != backend.currentUID() || runtimeUser.GID != backend.currentGID() {
+		if err := backend.chown(stagingDir, runtimeUser.UID, runtimeUser.GID); err != nil {
+			_ = os.Remove(stagingDir)
+			return nil, fmt.Errorf("make output reservation writable by runtime user %d:%d: %w", runtimeUser.UID, runtimeUser.GID, err)
+		}
+	}
+	info, err := os.Lstat(stagingDir)
+	if err != nil {
+		_ = os.RemoveAll(stagingDir)
+		return nil, fmt.Errorf("verify output reservation: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		_ = os.Remove(stagingDir)
+		return nil, fmt.Errorf("output reservation was replaced by a symbolic link: %s", stagingDir)
+	}
+	if !info.IsDir() {
+		_ = os.RemoveAll(stagingDir)
+		return nil, fmt.Errorf("output reservation is not a directory: %s", stagingDir)
 	}
 	return &oneShotOutputSession{
 		mount: &transientOutputMount{

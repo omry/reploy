@@ -5,10 +5,12 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
-	"github.com/omry/reploy/internal/legacyprovider"
+	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/probe"
 	"github.com/omry/reploy/internal/providers"
 )
 
@@ -21,20 +23,11 @@ type ResolvedEnvironmentCommand struct {
 	Argv         []string
 }
 
-func ResolveEnvironmentCommand(document blueprint.Document, outputs map[string]legacyprovider.ExecutableOutput, name string, forwarded []string) (ResolvedEnvironmentCommand, error) {
-	command, exists := document.Environment.Commands[name]
-	if !exists {
-		return ResolvedEnvironmentCommand{}, fmt.Errorf("unknown environment command %q", name)
-	}
-	executable := document.Environment.Executables[command.Executable]
-	output, exists := outputs[command.Executable]
-	if !exists {
-		return ResolvedEnvironmentCommand{}, fmt.Errorf("command %q executable %q is not materialized", name, command.Executable)
-	}
-	if !path.IsAbs(output.ImagePath) || output.Binary != executable.Binary || output.Component != executable.Component {
-		return ResolvedEnvironmentCommand{}, fmt.Errorf("command %q executable output does not match blueprint declaration", name)
-	}
-	return resolveEnvironmentCommandAtPath(document, name, forwarded, output.ImagePath)
+type TransientContainerExecutionV1 struct {
+	Container string
+	Create    CommandSpec
+	Start     CommandSpec
+	Cleanup   CommandSpec
 }
 
 func resolveLockedEnvironmentCommandV1(document blueprint.Document, catalog []providers.RealizedOutput, name string, forwarded []string) (ResolvedEnvironmentCommand, error) {
@@ -42,13 +35,13 @@ func resolveLockedEnvironmentCommandV1(document blueprint.Document, catalog []pr
 	if !exists {
 		return ResolvedEnvironmentCommand{}, fmt.Errorf("unknown environment command %q", name)
 	}
-	executable, exists := document.Environment.Executables[command.Executable]
+	component, executable, exists := document.Environment.ResolveExecutableProfile(command.Executable)
 	if !exists {
 		return ResolvedEnvironmentCommand{}, fmt.Errorf("command %q executable %q is not declared", name, command.Executable)
 	}
 	invocationPath := ""
 	for _, output := range catalog {
-		if output.SupplierComponent != executable.Component || output.Name != executable.Binary {
+		if output.SupplierComponent != component || output.Name != executable.Binary {
 			continue
 		}
 		if invocationPath != "" {
@@ -67,7 +60,7 @@ func resolveLockedEnvironmentCommandV1(document blueprint.Document, catalog []pr
 
 func resolveEnvironmentCommandAtPath(document blueprint.Document, name string, forwarded []string, invocationPath string) (ResolvedEnvironmentCommand, error) {
 	command := document.Environment.Commands[name]
-	executable := document.Environment.Executables[command.Executable]
+	_, executable, _ := document.Environment.ResolveExecutableProfile(command.Executable)
 	segments := map[blueprint.ArgumentSegment][]string{
 		blueprint.ArgumentBinary:    {invocationPath},
 		blueprint.ArgumentPrefix:    append([]string(nil), executable.ArgvPrefix...),
@@ -97,21 +90,6 @@ func resolveEnvironmentCommandAtPath(document blueprint.Document, name string, f
 
 func resolveLockedEnvironmentCommandForPlanV1(document blueprint.Document, catalog []providers.RealizedOutput, plan DockerExecutionPlan, name string, forwarded []string) (ResolvedEnvironmentCommand, error) {
 	command, err := resolveLockedEnvironmentCommandV1(document, catalog, name, forwarded)
-	if err != nil {
-		return ResolvedEnvironmentCommand{}, err
-	}
-	command.Argv, err = resolveEnvironmentOperationStrings(document, plan, command.Argv)
-	if err != nil {
-		return ResolvedEnvironmentCommand{}, fmt.Errorf("command %q interpolation: %w", name, err)
-	}
-	return command, nil
-}
-
-// ResolveEnvironmentCommandForPlan performs the operation-time interpolation
-// that depends on the selected phase, scope, mounts, and resolved endpoints.
-// The provider-resolved binary remains the first argv element.
-func ResolveEnvironmentCommandForPlan(document blueprint.Document, outputs map[string]legacyprovider.ExecutableOutput, plan DockerExecutionPlan, name string, forwarded []string) (ResolvedEnvironmentCommand, error) {
-	command, err := ResolveEnvironmentCommand(document, outputs, name, forwarded)
 	if err != nil {
 		return ResolvedEnvironmentCommand{}, err
 	}
@@ -188,15 +166,83 @@ func validateForwardedArguments(commandName string, allowedFlags []string, argum
 	return result, nil
 }
 
-func TransientCommandSpec(plan DockerExecutionPlan, command ResolvedEnvironmentCommand, output *transientOutputMount, interactive bool, tty bool) (CommandSpec, error) {
+func TransientCommandSpec(plan DockerExecutionPlan, command ResolvedEnvironmentCommand, workspace PreparedProbeWorkspace, output *transientOutputMount, interactive bool, tty bool) (CommandSpec, error) {
+	return transientContainerCommandSpecV1("run", transientCommandContainerName(plan), plan, command, workspace, output, interactive, tty)
+}
+
+func PlanTransientContainerExecutionV1(
+	plan DockerExecutionPlan,
+	command ResolvedEnvironmentCommand,
+	workspace PreparedProbeWorkspace,
+	output *transientOutputMount,
+	runID string,
+	interactive bool,
+	tty bool,
+) (TransientContainerExecutionV1, error) {
+	if err := deploy.ValidateLiveRunIDV1(runID); err != nil {
+		return TransientContainerExecutionV1{}, err
+	}
+	if strings.TrimSpace(plan.ContainerName) == "" {
+		return TransientContainerExecutionV1{}, fmt.Errorf("transient container execution requires a base container name")
+	}
+	container := plan.ContainerName + "-" + runID
+	create, err := transientContainerCommandSpecV1("create", container, plan, command, workspace, output, interactive, tty)
+	if err != nil {
+		return TransientContainerExecutionV1{}, err
+	}
+	startArgs := []string{"start", "--attach"}
+	if interactive {
+		startArgs = append(startArgs, "--interactive")
+	}
+	startArgs = append(startArgs, container)
+	return TransientContainerExecutionV1{
+		Container: container,
+		Create:    create,
+		Start:     CommandSpec{Name: "docker", Args: startArgs},
+		Cleanup:   TemporaryContainerCleanupCommand(container),
+	}, nil
+}
+
+func transientContainerCommandSpecV1(operation string, container string, plan DockerExecutionPlan, command ResolvedEnvironmentCommand, workspace PreparedProbeWorkspace, output *transientOutputMount, interactive bool, tty bool) (CommandSpec, error) {
 	if len(command.Argv) == 0 || !path.IsAbs(command.Argv[0]) {
 		return CommandSpec{}, fmt.Errorf("transient command requires an absolute resolved executable")
 	}
+	if operation != "run" && operation != "create" {
+		return CommandSpec{}, fmt.Errorf("transient container operation must be run or create")
+	}
+	if strings.TrimSpace(container) == "" {
+		return CommandSpec{}, fmt.Errorf("transient container name is required")
+	}
+	if err := validatePreparedProbeWorkspaceShape(workspace); err != nil {
+		return CommandSpec{}, fmt.Errorf("transient helper: %w", err)
+	}
+	if plan.RuntimeUser.UID < 0 || plan.RuntimeUser.GID < 0 {
+		return CommandSpec{}, fmt.Errorf("transient runtime user requires non-negative UID and GID")
+	}
+	runtimeUID := strconv.Itoa(plan.RuntimeUser.UID)
+	runtimeGID := strconv.Itoa(plan.RuntimeUser.GID)
+	if plan.RuntimeUser.DockerUser != runtimeUID+":"+runtimeGID {
+		return CommandSpec{}, fmt.Errorf("transient runtime user does not match its numeric UID and GID")
+	}
 	home := temporaryHomeForPlan(plan)
+	if home != probe.TransientHome {
+		return CommandSpec{}, fmt.Errorf("transient home must be %s", probe.TransientHome)
+	}
+	homeMount, err := dockerMountArgument("type=volume", "destination="+home, "volume-nocopy")
+	if err != nil {
+		return CommandSpec{}, fmt.Errorf("render transient home mount: %w", err)
+	}
+	helperMount, err := dockerMountArgument(
+		"type=bind", "source="+workspace.HostDir, "target="+workspace.ContainerDir, "readonly",
+	)
+	if err != nil {
+		return CommandSpec{}, fmt.Errorf("render transient helper mount: %w", err)
+	}
 	args := []string{
-		"run", "--rm", "--name", transientCommandContainerName(plan),
-		"--user", plan.RuntimeUser.DockerUser,
-		"--read-only", "--mount", transientHomeMountForPlan(plan),
+		operation, "--pull", "never", "--rm", "--name", container,
+		"--user", "0:0",
+		"--read-only", "--mount", homeMount,
+		"--mount", helperMount,
 		"--env", "HOME=" + home, "--env", "TMPDIR=" + home,
 	}
 	if interactive {
@@ -206,12 +252,16 @@ func TransientCommandSpec(plan DockerExecutionPlan, command ResolvedEnvironmentC
 		args = append(args, "--tty")
 	}
 	for _, mount := range plan.Mounts {
-		value := "type=" + renderDockerMountType(mount.Mode) + ",target=" + mount.Target
+		fields := []string{"type=" + renderDockerMountType(mount.Mode), "target=" + mount.Target}
 		if mount.Source != "" {
-			value += ",source=" + mount.Source
+			fields = append(fields, "source="+mount.Source)
 		}
 		if mount.ReadOnly {
-			value += ",readonly"
+			fields = append(fields, "readonly")
+		}
+		value, err := dockerMountArgument(fields...)
+		if err != nil {
+			return CommandSpec{}, fmt.Errorf("render transient mount %q: %w", mount.Name, err)
 		}
 		args = append(args, "--mount", value)
 	}
@@ -219,12 +269,19 @@ func TransientCommandSpec(plan DockerExecutionPlan, command ResolvedEnvironmentC
 		if !filepath.IsAbs(output.HostDirectory) || output.Variable == "" || output.ContainerPath == "" {
 			return CommandSpec{}, fmt.Errorf("transient output mount is incomplete")
 		}
+		outputMount, err := dockerMountArgument("type=bind", "source="+output.HostDirectory, "target="+runtimeOutputRoot)
+		if err != nil {
+			return CommandSpec{}, fmt.Errorf("render transient output mount: %w", err)
+		}
 		args = append(args,
-			"--mount", "type=bind,source="+output.HostDirectory+",target="+runtimeOutputRoot,
+			"--mount", outputMount,
 			"--env", output.Variable+"="+output.ContainerPath,
 		)
 	}
-	args = append(args, plan.Image)
+	args = append(args,
+		"--entrypoint", workspace.ContainerExecutable,
+		plan.Image, "run-transient", runtimeUID, runtimeGID,
+	)
 	args = append(args, command.Argv...)
 	return CommandSpec{Name: "docker", Args: args}, nil
 }
@@ -233,9 +290,9 @@ func transientCommandContainerName(plan DockerExecutionPlan) string {
 	return temporaryOneOffContainerName(plan.ContainerName, "command")
 }
 
-func ShellCommandSpec(plan DockerExecutionPlan, interactive bool, tty bool) CommandSpec {
+func ShellCommandSpec(plan DockerExecutionPlan, workspace PreparedProbeWorkspace, interactive bool, tty bool) CommandSpec {
 	command := ResolvedEnvironmentCommand{Argv: []string{"/bin/sh"}}
-	spec, _ := TransientCommandSpec(plan, command, nil, interactive, tty)
+	spec, _ := TransientCommandSpec(plan, command, workspace, nil, interactive, tty)
 	return spec
 }
 

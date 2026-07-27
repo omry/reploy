@@ -106,13 +106,19 @@ func publishInstalledBuildV1(
 	if err != nil {
 		return deploy.StateV1{}, err
 	}
-	if !found || !reflect.DeepEqual(lockedSourceBuild, input.Source.Lock) {
-		return deploy.StateV1{}, fmt.Errorf("installed build source lock changed after build selection")
+	if !found {
+		return deploy.StateV1{}, fmt.Errorf("installed build source lock is missing after build selection")
 	}
-
 	lockDigest, err := deploy.BuildLockDigestV1(input.Source.Lock, registry.ValidateRequirementProfileV1)
 	if err != nil {
 		return deploy.StateV1{}, err
+	}
+	lockedSourceDigest, err := deploy.BuildLockDigestV1(lockedSourceBuild, registry.ValidateRequirementProfileV1)
+	if err != nil {
+		return deploy.StateV1{}, err
+	}
+	if lockedSourceDigest != lockDigest {
+		return deploy.StateV1{}, fmt.Errorf("installed build source lock changed after build selection")
 	}
 	if lockDigest != input.Source.Generation.BuildLockDigest {
 		return deploy.StateV1{}, fmt.Errorf("installed build source lock digest does not match its generation")

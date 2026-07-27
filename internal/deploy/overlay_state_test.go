@@ -171,6 +171,36 @@ func TestMutateRequestOverlayV1RejectsLegacyStateWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestMutateRequestOverlayV1RejectsInstalledStateWithoutMutation(t *testing.T) {
+	statePath := writeOverlayTestState(t, t.TempDir())
+	state := readOverlayTestState(t, statePath)
+	state.Deployment = &DeploymentStateV1{
+		Schema:       DeploymentStateSchemaV1,
+		Installation: installationStateV1Fixture(filepath.Dir(filepath.Dir(statePath))),
+	}
+	content, err := EncodeStateV1(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := append([]byte(nil), content...)
+	_, err = MutateRequestOverlayV1(context.Background(), filepath.Dir(filepath.Dir(statePath)), overlayTestPackageValidator, func(_ blueprint.Document, overlay RequestOverlayV1) (RequestOverlayV1, error) {
+		return overlay, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot be changed on an installed deployment") {
+		t.Fatalf("error = %v", err)
+	}
+	after, readErr := os.ReadFile(statePath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("installed-state rejection changed state")
+	}
+}
+
 func TestMutateRequestOverlayV1ReplaceFailurePreservesOriginal(t *testing.T) {
 	dir := t.TempDir()
 	statePath := writeOverlayTestState(t, dir)

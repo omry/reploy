@@ -25,6 +25,7 @@ func TestPreparePreparedPythonGraphBackendUsesDeploymentStoreAndOneHelper(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	workspaceSources := sourceWheelTestWorkspaceSources(t, "demo-pkg")
 	backend, cleanup, err := PreparePreparedPythonGraphBackend(
 		context.Background(),
 		store,
@@ -32,7 +33,7 @@ func TestPreparePreparedPythonGraphBackendUsesDeploymentStoreAndOneHelper(t *tes
 		descriptor,
 		pythonConsumerTestImageConfig(),
 		map[providers.NodeID]PreparedPythonNodeConfig{
-			request.NodeID: {},
+			request.NodeID: {WorkspaceSources: workspaceSources},
 		},
 		map[providers.NodeID]PreparedAPTNodeConfig{},
 		RunOptions{},
@@ -49,6 +50,10 @@ func TestPreparePreparedPythonGraphBackendUsesDeploymentStoreAndOneHelper(t *tes
 	}
 	if filepath.Dir(operation.Artifacts.HostDir) != filepath.Join(store.Root(), "tmp") {
 		t.Fatalf("operation resolver artifacts = %#v", operation.Artifacts)
+	}
+	if len(operation.SourceSnapshots) != 1 || operation.SourceSnapshots[0].Distribution != "demo-pkg" ||
+		operation.SourceSnapshots[0].SourceManifestDigest != workspaceSources[0].SourceManifestDigest {
+		t.Fatalf("operation source snapshots = %#v", operation.SourceSnapshots)
 	}
 	if backend.Workspace.HostDir == "" || !strings.HasPrefix(backend.Workspace.HostDir, store.Root()+string(os.PathSeparator)) {
 		t.Fatalf("workspace = %#v, store = %s", backend.Workspace, store.Root())

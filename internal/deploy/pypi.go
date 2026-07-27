@@ -37,37 +37,37 @@ type pyPIFile struct {
 	} `json:"digests"`
 }
 
-func loadPyPIPack(ref PackRef) (AppPack, error) {
+func resolvePyPIBlueprint(ref PackRef) (PackRef, string, *ResolvedPackArtifact, error) {
 	packageName, requestedVersion, err := parsePyPISource(ref.Source)
 	if err != nil {
-		return AppPack{}, err
+		return PackRef{}, "", nil, err
 	}
 	project, err := fetchPyPIProject(ref, packageName)
 	if err != nil {
-		return AppPack{}, err
+		return PackRef{}, "", nil, err
 	}
 	version := requestedVersion
 	if version == "" {
 		version = project.Info.Version
 	}
 	if version == "" {
-		return AppPack{}, fmt.Errorf("pypi project metadata is missing latest version: %s", packageName)
+		return PackRef{}, "", nil, fmt.Errorf("pypi project metadata is missing latest version: %s", packageName)
 	}
 	file, err := selectPyPIWheel(project, version)
 	if err != nil {
-		return AppPack{}, err
+		return PackRef{}, "", nil, err
 	}
 	cacheRoot, err := reployCacheDir()
 	if err != nil {
-		return AppPack{}, err
+		return PackRef{}, "", nil, err
 	}
 	wheelPath, sha256, err := cachePyPIWheel(cacheRoot, packageName, version, file)
 	if err != nil {
-		return AppPack{}, err
+		return PackRef{}, "", nil, err
 	}
 	blueprintPath, err := extractPackFromWheel(cacheRoot, packageName, version, sha256, wheelPath, ref.Subdir)
 	if err != nil {
-		return AppPack{}, err
+		return PackRef{}, "", nil, err
 	}
 	resolvedRef := ref
 	resolvedRef.Source = packageName + "==" + version
@@ -75,7 +75,7 @@ func loadPyPIPack(ref PackRef) (AppPack, error) {
 	resolvedRef.IsPinned = true
 	resolvedRef.Query = nil
 
-	pack, err := loadCachedPack(resolvedRef, ref, blueprintPath, &ResolvedPackArtifact{
+	artifact := &ResolvedPackArtifact{
 		Scheme:        "pypi",
 		Package:       packageName,
 		Version:       version,
@@ -84,11 +84,8 @@ func loadPyPIPack(ref PackRef) (AppPack, error) {
 		Subdir:        ref.Subdir,
 		CachePath:     wheelPath,
 		BlueprintPath: blueprintPath,
-	})
-	if err != nil {
-		return AppPack{}, err
 	}
-	return pack, nil
+	return resolvedRef, blueprintPath, artifact, nil
 }
 
 func formatPyPIRef(packageName string, version string, blueprintPath string) string {
@@ -227,7 +224,23 @@ func cachePyPIWheel(cacheRoot string, packageName string, version string, file p
 }
 
 func pypiWheelCachePath(cacheRoot string, packageName string, version string, sha256 string, filename string) string {
-	return filepath.Join(cacheRoot, "pypi", normalizePackageName(packageName), version, sha256, filename)
+	return filepath.Join(cacheRoot, "pypi", normalizePackageName(packageName), pypiVersionCacheKey(version), sha256, filename)
+}
+
+func pypiVersionCacheKey(version string) string {
+	return "version-" + HashBytes([]byte(version))
+}
+
+func pypiBlueprintCacheDir(cacheRoot string, packageName string, version string, sha256 string, archiveDir string) string {
+	return filepath.Join(
+		cacheRoot,
+		"blueprints",
+		"pypi",
+		normalizePackageName(packageName),
+		pypiVersionCacheKey(version),
+		sha256,
+		filepath.FromSlash(archiveDir),
+	)
 }
 
 func extractPackFromWheel(cacheRoot string, packageName string, version string, sha256 string, wheelPath string, blueprintPath string) (string, error) {
@@ -244,7 +257,7 @@ func extractPackFromWheel(cacheRoot string, packageName string, version string, 
 		cacheDir = "_root"
 	}
 	blueprintFilename := filepath.Base(cleanBlueprintPath)
-	targetDir := filepath.Join(cacheRoot, "blueprints", "pypi", normalizePackageName(packageName), version, sha256, filepath.FromSlash(cacheDir))
+	targetDir := pypiBlueprintCacheDir(cacheRoot, packageName, version, sha256, cacheDir)
 	targetBlueprintPath := filepath.Join(targetDir, blueprintFilename)
 	if _, err := os.Stat(targetDir); err == nil {
 		if _, err := os.Stat(targetBlueprintPath); err != nil {
@@ -351,18 +364,6 @@ func cleanArchiveSubdir(path string) (string, error) {
 		return "", fmt.Errorf("archive path must be relative: %s", path)
 	}
 	return clean, nil
-}
-
-func loadCachedPack(ref PackRef, requestedRef PackRef, dir string, artifact *ResolvedPackArtifact) (AppPack, error) {
-	fileRef := PackRef{Raw: "file:" + dir, Scheme: "file", Source: dir}
-	pack, err := loadFilePack(fileRef)
-	if err != nil {
-		return AppPack{}, err
-	}
-	pack.Ref = ref
-	pack.RequestedRef = requestedRef
-	pack.ResolvedArtifact = artifact
-	return pack, nil
 }
 
 func normalizePackageName(name string) string {

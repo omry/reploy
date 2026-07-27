@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -72,8 +73,8 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 			if err := locks[sourceDir].RequireHeld(); err != nil {
 				t.Fatal(err)
 			}
-			if _, found := locks[destinationDir]; found {
-				t.Fatal("destination lock was acquired before account preparation")
+			if err := locks[destinationDir].RequireHeld(); err != nil {
+				t.Fatal("destination was not validated before account preparation")
 			}
 			if runAs != (blueprint.RunAs{}) || store.Root() != filepath.Join(sourceDir, ".reploy", providerstore.StoreDirName) || !reflect.DeepEqual(gotBuild.State, build.State) {
 				t.Fatalf("account preparation input = %#v / %s / %#v", runAs, store.Root(), gotBuild)
@@ -89,8 +90,8 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 			if err := locks[sourceDir].RequireHeld(); err != nil {
 				t.Fatal(err)
 			}
-			if _, found := locks[destinationDir]; found {
-				t.Fatal("destination lock was acquired before installation planning")
+			if err := locks[destinationDir].RequireHeld(); err != nil {
+				t.Fatal("destination lock was not held during installation planning")
 			}
 			if !reflect.DeepEqual(input.SourceBuild.State, build.State) {
 				t.Fatalf("planned source build = %#v", input.SourceBuild)
@@ -106,6 +107,13 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 				t.Fatalf("host tool backend = %q", backend)
 			}
 			return providerInstallHostToolsV1{DockerPath: "/usr/bin/docker", SystemctlPath: "/usr/bin/systemctl", IncludeDockerUnit: true}, nil
+		},
+		preflightDestination: func(store providerstore.Store, gotBuild CurrentBuild, dir string) error {
+			order = append(order, "preflight-destination")
+			if store.Root() != filepath.Join(sourceDir, ".reploy", providerstore.StoreDirName) || !reflect.DeepEqual(gotBuild.State, build.State) || dir != destinationDir {
+				t.Fatalf("destination preflight input = %s / %#v / %s", store.Root(), gotBuild, dir)
+			}
+			return nil
 		},
 		prepareDestination: func(_ context.Context, input lockedProviderInstallV1) (preparedProviderInstallFilesV1, error) {
 			order = append(order, "prepare-destination")
@@ -179,6 +187,40 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 		},
 	}
 
+	backend = providerInstallAdmissionTestBackend(backend, &order)
+	backend.readState = func(*deploy.OperationLock) (deploy.StateV1, bool, error) {
+		return want, true, nil
+	}
+	lease := new(deploy.ControlLeaseV1)
+	backend.admit = func(ctx context.Context, _ string, operation *deploy.OperationLock, input ControlAdmissionInputV1) (AdmittedControlV1, error) {
+		order = append(order, "admit-install")
+		if input.Operation != deploy.ControlOperationInstallV1 || input.Mode != ControlAdmissionImmediateV1 {
+			t.Fatalf("install admission input = %+v", input)
+		}
+		if err := operation.Unlock(); err != nil {
+			return AdmittedControlV1{}, err
+		}
+		reacquired, err := deploy.AcquireOperationLock(ctx, destinationDir)
+		if err != nil {
+			return AdmittedControlV1{}, err
+		}
+		locks[destinationDir] = reacquired
+		return AdmittedControlV1{
+			Operation: reacquired,
+			Lease:     lease,
+			Marker: deploy.ControlMarkerV1{
+				ID: "control-0000000000000001", Operation: input.Operation,
+				GenerationReference: input.GenerationReference,
+			},
+		}, nil
+	}
+	backend.complete = func(operation *deploy.OperationLock, _ string, gotLease *deploy.ControlLeaseV1) error {
+		order = append(order, "complete-install")
+		if gotLease != lease {
+			t.Fatalf("completed install with lease %p, want %p", gotLease, lease)
+		}
+		return operation.Unlock()
+	}
 	result, err := runProviderInstallV1(t.Context(), providerInstallRunInputV1{
 		SourceDeploymentDir: sourceDir, DestinationDeploymentDir: destinationDir,
 		Install: providerInstallOptionsV1{Start: true},
@@ -186,7 +228,7 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 	if err != nil || !reflect.DeepEqual(result, want) {
 		t.Fatalf("result=%#v error=%v", result, err)
 	}
-	wantOrder := []string{"acquire-source", "build-source", "prepare-install-account", "plan-installation", "inspect-host-tools", "acquire-destination", "recover-destination", "prepare-destination", "publish", "publish-files", "activate-destination", "mark-ready", "start-destination", "release-destination", "release-source"}
+	wantOrder := []string{"acquire-source", "build-source", "acquire-destination", "recover-destination", "prepare-install-account", "plan-installation", "inspect-host-tools", "preflight-destination", "prepare-destination", "admit-install", "stop-destination", "publish", "publish-files", "activate-destination", "mark-ready", "start-destination", "complete-install", "release-source"}
 	if !reflect.DeepEqual(order, wantOrder) {
 		t.Fatalf("order=%v want=%v", order, wantOrder)
 	}
@@ -195,10 +237,66 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 	}
 }
 
-func TestRunProviderInstallV1BuildFailureNeverAcquiresDestination(t *testing.T) {
+func TestRunProviderInstallV1RejectsInvalidControlModeBeforeBackendWork(t *testing.T) {
+	_, err := runProviderInstallV1(t.Context(), providerInstallRunInputV1{
+		SourceDeploymentDir: t.TempDir(), DestinationDeploymentDir: t.TempDir(), ControlMode: "later",
+	}, providerInstallRunBackend{})
+	if err == nil || !strings.Contains(err.Error(), "control admission mode") {
+		t.Fatalf("invalid control mode error = %v", err)
+	}
+}
+
+func TestRunProviderInstallV1RejectsOverlappingSourceAndDestinationBeforeBackendWork(t *testing.T) {
+	sourceDir := t.TempDir()
+	_, err := runProviderInstallV1(t.Context(), providerInstallRunInputV1{
+		SourceDeploymentDir: sourceDir, DestinationDeploymentDir: filepath.Join(sourceDir, "installed"),
+	}, providerInstallRunBackend{})
+	if err == nil || !strings.Contains(err.Error(), "must not overlap") {
+		t.Fatalf("overlap error = %v", err)
+	}
+}
+
+func TestRunProviderInstallV1CanceledBeforeBackendWork(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := runProviderInstallV1(ctx, providerInstallRunInputV1{
+		SourceDeploymentDir: t.TempDir(), DestinationDeploymentDir: t.TempDir(),
+	}, providerInstallRunBackend{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation error = %v", err)
+	}
+}
+
+func TestProviderInstallDestinationGenerationV1UsesExistingCurrentOrIncoming(t *testing.T) {
+	state := deploy.StateV1{Current: &deploy.EnvironmentGenerationState{Reference: "g-current"}}
+	if got := providerInstallDestinationGenerationV1(state, true, "g-incoming"); got != "g-current" {
+		t.Fatalf("existing generation = %q", got)
+	}
+	if got := providerInstallDestinationGenerationV1(deploy.StateV1{}, false, "g-incoming"); got != "g-incoming" {
+		t.Fatalf("new generation = %q", got)
+	}
+}
+
+func TestResolveProviderInstallDestinationV1UsesBlueprintTarget(t *testing.T) {
+	document := blueprint.Document{Environment: blueprint.Environment{
+		ID: "demo", Install: blueprint.Install{Target: blueprint.InstallTarget{DefaultPath: "/tmp/reploy-target/{{ environment.id }}"}},
+	}}
+	got, err := resolveProviderInstallDestinationV1(document, providerInstallRunInputV1{
+		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux},
+		Install: providerInstallOptionsV1{Scope: InstallScopeUser},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "/tmp/reploy-target/demo" {
+		t.Fatalf("resolved destination = %q", got)
+	}
+}
+
+func TestRunProviderInstallV1BuildCancellationReleasesSourceAndNeverAcquiresDestination(t *testing.T) {
 	sourceDir := t.TempDir()
 	destinationDir := t.TempDir()
-	want := errors.New("source build failed")
+	want := context.Canceled
 	acquiredDestination := false
 	releasedSource := false
 	backend := providerInstallRunBackend{
@@ -212,8 +310,7 @@ func TestRunProviderInstallV1BuildFailureNeverAcquiresDestination(t *testing.T) 
 			releasedSource = true
 			return lock.Unlock()
 		},
-		newStore:           providerstore.NewStore,
-		recoverDestination: providerInstallRunRecoverDestinationFixture,
+		newStore: providerstore.NewStore,
 		newReferences: func(string, string) (EnvironmentImageReferences, error) {
 			t.Fatal("created references after source build failure")
 			return EnvironmentImageReferences{}, nil
@@ -258,13 +355,13 @@ func TestRunProviderInstallV1BuildFailureNeverAcquiresDestination(t *testing.T) 
 
 	_, err := runProviderInstallV1(t.Context(), providerInstallRunInputV1{
 		SourceDeploymentDir: sourceDir, DestinationDeploymentDir: destinationDir,
-	}, backend)
+	}, providerInstallAdmissionTestBackend(backend, nil))
 	if !errors.Is(err, want) || acquiredDestination || !releasedSource {
 		t.Fatalf("error=%v acquired-destination=%v released-source=%v", err, acquiredDestination, releasedSource)
 	}
 }
 
-func TestRunProviderInstallV1PlanningFailureNeverAcquiresDestination(t *testing.T) {
+func TestRunProviderInstallV1PlanningFailureReleasesValidatedDestination(t *testing.T) {
 	sourceDir := t.TempDir()
 	destinationDir := t.TempDir()
 	_, build := providerInstallRunBuildFixture(t, sourceDir)
@@ -282,8 +379,7 @@ func TestRunProviderInstallV1PlanningFailureNeverAcquiresDestination(t *testing.
 			releasedSource = true
 			return lock.Unlock()
 		},
-		newStore:           providerstore.NewStore,
-		recoverDestination: providerInstallRunRecoverDestinationFixture,
+		newStore: providerstore.NewStore,
 		newReferences: func(string, string) (EnvironmentImageReferences, error) {
 			return fixedPublicationReferences(t, destinationDir, 0x82), nil
 		},
@@ -326,9 +422,77 @@ func TestRunProviderInstallV1PlanningFailureNeverAcquiresDestination(t *testing.
 
 	_, err := runProviderInstallV1(t.Context(), providerInstallRunInputV1{
 		SourceDeploymentDir: sourceDir, DestinationDeploymentDir: destinationDir,
-	}, backend)
-	if !errors.Is(err, want) || acquiredDestination || !releasedSource {
+	}, providerInstallAdmissionTestBackend(backend, nil))
+	if !errors.Is(err, want) || !acquiredDestination || !releasedSource {
 		t.Fatalf("error=%v acquired-destination=%v released-source=%v", err, acquiredDestination, releasedSource)
+	}
+}
+
+func TestRunProviderInstallV1CleansNewDestinationAfterPreparationFailure(t *testing.T) {
+	sourceDir := t.TempDir()
+	destinationDir := filepath.Join(t.TempDir(), "new-install")
+	_, build := providerInstallRunBuildFixture(t, sourceDir)
+	want := errors.New("candidate preparation failed")
+	backend := providerInstallRunBackend{
+		acquire: deploy.AcquireOperationLock,
+		release: func(lock *deploy.OperationLock) error {
+			return lock.Unlock()
+		},
+		newStore: providerstore.NewStore,
+		buildSource: func(context.Context, LockedProviderBuildRunInputV1) (LockedProviderBuildExecutionResultV1, error) {
+			return build, nil
+		},
+		prepareAccount: providerInstallRunPrepareAccountFixture,
+		newReferences: func(string, string) (EnvironmentImageReferences, error) {
+			return fixedPublicationReferences(t, destinationDir, 0x89), nil
+		},
+		planInstallation: func(_ context.Context, input providerInstallPlanningV1) (providerInstallationPlanV1, error) {
+			return providerInstallRunPlanFixture(destinationDir, input.References), nil
+		},
+		inspectHostTools: func(context.Context, installBackend) (providerInstallHostToolsV1, error) {
+			return providerInstallHostToolsV1{DockerPath: "/usr/bin/docker", SystemctlPath: "/usr/bin/systemctl"}, nil
+		},
+		preflightDestination: func(providerstore.Store, CurrentBuild, string) error {
+			if _, err := os.Lstat(destinationDir); !os.IsNotExist(err) {
+				t.Fatalf("destination exists before preflight: %v", err)
+			}
+			return nil
+		},
+		ensureDestination:  ensureProviderInstallDestinationV1,
+		cleanupDestination: cleanupFailedProviderInstallDestinationV1,
+		prepareDestination: func(context.Context, lockedProviderInstallV1) (preparedProviderInstallFilesV1, error) {
+			return preparedProviderInstallFilesV1{}, want
+		},
+		publish: func(context.Context, *deploy.OperationLock, *deploy.OperationLock, providerstore.Store, providerstore.Store, InstalledBuildPublicationInputV1) (deploy.StateV1, error) {
+			t.Fatal("published after candidate preparation failure")
+			return deploy.StateV1{}, nil
+		},
+		publishFiles: func(preparedProviderInstallFilesV1) error {
+			t.Fatal("published files after candidate preparation failure")
+			return nil
+		},
+		activateDestination: func(context.Context, lockedProviderInstallV1, deploy.StateV1) error {
+			t.Fatal("activated destination after candidate preparation failure")
+			return nil
+		},
+		markReady: func(*deploy.OperationLock, deploy.InstallationStateV1) (deploy.StateV1, bool, error) {
+			t.Fatal("marked destination ready after candidate preparation failure")
+			return deploy.StateV1{}, false, nil
+		},
+		startDestination: func(context.Context, lockedProviderInstallV1, deploy.StateV1) error {
+			t.Fatal("started destination after candidate preparation failure")
+			return nil
+		},
+	}
+
+	_, err := runProviderInstallV1(t.Context(), providerInstallRunInputV1{
+		SourceDeploymentDir: sourceDir, DestinationDeploymentDir: destinationDir,
+	}, providerInstallAdmissionTestBackend(backend, nil))
+	if !errors.Is(err, want) {
+		t.Fatalf("preparation error = %v", err)
+	}
+	if _, err := os.Lstat(destinationDir); !os.IsNotExist(err) {
+		t.Fatalf("failed first-install destination remains: %v", err)
 	}
 }
 
@@ -339,10 +503,9 @@ func TestRunProviderInstallV1LeavesCommittedConfiguringStateWhenActivationFails(
 	wantActivation := errors.New("write systemd unit: permission denied")
 	markedReady := false
 	backend := providerInstallRunBackend{
-		acquire:            deploy.AcquireOperationLock,
-		release:            func(lock *deploy.OperationLock) error { return lock.Unlock() },
-		newStore:           providerstore.NewStore,
-		recoverDestination: providerInstallRunRecoverDestinationFixture,
+		acquire:  deploy.AcquireOperationLock,
+		release:  func(lock *deploy.OperationLock) error { return lock.Unlock() },
+		newStore: providerstore.NewStore,
 		buildSource: func(context.Context, LockedProviderBuildRunInputV1) (LockedProviderBuildExecutionResultV1, error) {
 			return build, nil
 		},
@@ -385,7 +548,7 @@ func TestRunProviderInstallV1LeavesCommittedConfiguringStateWhenActivationFails(
 
 	result, err := runProviderInstallV1(t.Context(), providerInstallRunInputV1{
 		SourceDeploymentDir: sourceDir, DestinationDeploymentDir: destinationDir,
-	}, backend)
+	}, providerInstallAdmissionTestBackend(backend, nil))
 	if !errors.Is(err, wantActivation) || !strings.Contains(err.Error(), "committed as configuring") || !strings.Contains(err.Error(), "rerun reploy install") {
 		t.Fatalf("activation error = %v", err)
 	}
@@ -400,10 +563,9 @@ func TestRunProviderInstallV1NoStartStillMarksInstallationReady(t *testing.T) {
 	want, build := providerInstallRunBuildFixture(t, sourceDir)
 	started := false
 	backend := providerInstallRunBackend{
-		acquire:            deploy.AcquireOperationLock,
-		release:            func(lock *deploy.OperationLock) error { return lock.Unlock() },
-		newStore:           providerstore.NewStore,
-		recoverDestination: providerInstallRunRecoverDestinationFixture,
+		acquire:  deploy.AcquireOperationLock,
+		release:  func(lock *deploy.OperationLock) error { return lock.Unlock() },
+		newStore: providerstore.NewStore,
 		buildSource: func(context.Context, LockedProviderBuildRunInputV1) (LockedProviderBuildExecutionResultV1, error) {
 			return build, nil
 		},
@@ -441,7 +603,7 @@ func TestRunProviderInstallV1NoStartStillMarksInstallationReady(t *testing.T) {
 	result, err := runProviderInstallV1(t.Context(), providerInstallRunInputV1{
 		SourceDeploymentDir: sourceDir, DestinationDeploymentDir: destinationDir,
 		Install: providerInstallOptionsV1{Start: false},
-	}, backend)
+	}, providerInstallAdmissionTestBackend(backend, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,10 +618,9 @@ func TestRunProviderInstallV1LeavesReadyStateWhenStartupFails(t *testing.T) {
 	want, build := providerInstallRunBuildFixture(t, sourceDir)
 	wantStartup := errors.New("service exited")
 	backend := providerInstallRunBackend{
-		acquire:            deploy.AcquireOperationLock,
-		release:            func(lock *deploy.OperationLock) error { return lock.Unlock() },
-		newStore:           providerstore.NewStore,
-		recoverDestination: providerInstallRunRecoverDestinationFixture,
+		acquire:  deploy.AcquireOperationLock,
+		release:  func(lock *deploy.OperationLock) error { return lock.Unlock() },
+		newStore: providerstore.NewStore,
 		buildSource: func(context.Context, LockedProviderBuildRunInputV1) (LockedProviderBuildExecutionResultV1, error) {
 			return build, nil
 		},
@@ -499,7 +660,7 @@ func TestRunProviderInstallV1LeavesReadyStateWhenStartupFails(t *testing.T) {
 	result, err := runProviderInstallV1(t.Context(), providerInstallRunInputV1{
 		SourceDeploymentDir: sourceDir, DestinationDeploymentDir: destinationDir,
 		Install: providerInstallOptionsV1{Start: true},
-	}, backend)
+	}, providerInstallAdmissionTestBackend(backend, nil))
 	if !errors.Is(err, wantStartup) || !strings.Contains(err.Error(), "installation is ready") || !strings.Contains(err.Error(), "remains in place") {
 		t.Fatalf("startup error = %v", err)
 	}
@@ -523,6 +684,142 @@ func TestValidateProviderInstallDestinationAllowsRetryOfConfiguringService(t *te
 	}
 }
 
+func TestValidateProviderInstallDestinationRejectsStagingState(t *testing.T) {
+	destinationDir := t.TempDir()
+	document, platform := testSelectedPlatformDocumentV1(t)
+	if _, err := deploy.SetDesiredStateV1(t.Context(), destinationDir, document, platform, nil); err != nil {
+		t.Fatal(err)
+	}
+	operation, err := deploy.AcquireOperationLock(t.Context(), destinationDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := operation.Unlock(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	err = validateProviderInstallDestinationV1(operation, installedBuildPublicationInstallation(destinationDir))
+	if err == nil || !strings.Contains(err.Error(), "destination contains a staging deployment") {
+		t.Fatalf("staging destination error = %v", err)
+	}
+}
+
+func TestPreflightProviderInstallDestinationRoleRejectsCrossedStagingTargets(t *testing.T) {
+	first := t.TempDir()
+	second := t.TempDir()
+	document, platform := testSelectedPlatformDocumentV1(t)
+	for _, dir := range []string{first, second} {
+		if _, err := deploy.SetDesiredStateV1(t.Context(), dir, document, platform, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	errors := make(chan error, 2)
+	go func() {
+		errors <- preflightProviderInstallDestinationRoleV1(t.Context(), second, deploy.AcquireOperationLock, func(lock *deploy.OperationLock) error { return lock.Unlock() })
+	}()
+	go func() {
+		errors <- preflightProviderInstallDestinationRoleV1(t.Context(), first, deploy.AcquireOperationLock, func(lock *deploy.OperationLock) error { return lock.Unlock() })
+	}()
+	for range 2 {
+		err := <-errors
+		if err == nil || !strings.Contains(err.Error(), "destination contains a staging deployment") {
+			t.Fatalf("crossed staging destination error = %v", err)
+		}
+	}
+}
+
+func TestPreflightProviderInstallDestinationRoleLeavesEmptyDestinationUntouched(t *testing.T) {
+	destinationDir := t.TempDir()
+	if err := preflightProviderInstallDestinationRoleV1(t.Context(), destinationDir, deploy.AcquireOperationLock, func(lock *deploy.OperationLock) error { return lock.Unlock() }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(destinationDir, ".reploy")); !os.IsNotExist(err) {
+		t.Fatalf("preflight left state behind: %v", err)
+	}
+}
+
+func TestRunProviderInstallV1RejectsStagingDestinationBeforePreparation(t *testing.T) {
+	sourceDir := t.TempDir()
+	destinationDir := t.TempDir()
+	_, build := providerInstallRunBuildFixture(t, sourceDir)
+	document, platform := testSelectedPlatformDocumentV1(t)
+	if _, err := deploy.SetDesiredStateV1(t.Context(), destinationDir, document, platform, nil); err != nil {
+		t.Fatal(err)
+	}
+	acquiredSource := false
+	backend := providerInstallRunBackend{
+		acquire: func(ctx context.Context, dir string) (*deploy.OperationLock, error) {
+			if dir == sourceDir {
+				acquiredSource = true
+			}
+			return deploy.AcquireOperationLock(ctx, dir)
+		},
+		release:            func(lock *deploy.OperationLock) error { return lock.Unlock() },
+		newStore:           providerstore.NewStore,
+		recoverDestination: providerInstallRunRecoverDestinationFixture,
+		buildSource: func(context.Context, LockedProviderBuildRunInputV1) (LockedProviderBuildExecutionResultV1, error) {
+			return build, nil
+		},
+		prepareAccount: func(context.Context, blueprint.RunAs, providerstore.Store, CurrentBuild, providerInstallRunInputV1) (providerInstallRunInputV1, error) {
+			t.Fatal("prepared an account for a staging destination")
+			return providerInstallRunInputV1{}, nil
+		},
+		newReferences: func(string, string) (EnvironmentImageReferences, error) {
+			return fixedPublicationReferences(t, destinationDir, 0x8a), nil
+		},
+		planInstallation: func(_ context.Context, input providerInstallPlanningV1) (providerInstallationPlanV1, error) {
+			return providerInstallRunPlanFixture(destinationDir, input.References), nil
+		},
+		inspectHostTools: func(context.Context, installBackend) (providerInstallHostToolsV1, error) {
+			return providerInstallHostToolsV1{DockerPath: "/usr/bin/docker", SystemctlPath: "/usr/bin/systemctl"}, nil
+		},
+		preflightDestination: func(providerstore.Store, CurrentBuild, string) error { return nil },
+		ensureDestination:    func(string) (bool, error) { return false, nil },
+		cleanupDestination:   func(string) error { return nil },
+		prepareDestination: func(context.Context, lockedProviderInstallV1) (preparedProviderInstallFilesV1, error) {
+			t.Fatal("prepared a staging destination")
+			return preparedProviderInstallFilesV1{}, nil
+		},
+		stopDestination: func(context.Context, lockedProviderInstallV1, deploy.StateV1) error {
+			t.Fatal("stopped a staging destination")
+			return nil
+		},
+		publish: func(context.Context, *deploy.OperationLock, *deploy.OperationLock, providerstore.Store, providerstore.Store, InstalledBuildPublicationInputV1) (deploy.StateV1, error) {
+			t.Fatal("published over a staging destination")
+			return deploy.StateV1{}, nil
+		},
+		publishFiles: func(preparedProviderInstallFilesV1) error {
+			t.Fatal("published files over a staging destination")
+			return nil
+		},
+		activateDestination: func(context.Context, lockedProviderInstallV1, deploy.StateV1) error {
+			t.Fatal("activated a staging destination")
+			return nil
+		},
+		markReady: func(*deploy.OperationLock, deploy.InstallationStateV1) (deploy.StateV1, bool, error) {
+			t.Fatal("marked a staging destination ready")
+			return deploy.StateV1{}, false, nil
+		},
+		startDestination: func(context.Context, lockedProviderInstallV1, deploy.StateV1) error {
+			t.Fatal("started a staging destination")
+			return nil
+		},
+	}
+
+	_, err := runProviderInstallV1(t.Context(), providerInstallRunInputV1{
+		SourceDeploymentDir: sourceDir, DestinationDeploymentDir: destinationDir,
+	}, providerInstallAdmissionTestBackend(backend, nil))
+	if err == nil || !strings.Contains(err.Error(), "destination contains a staging deployment") {
+		t.Fatalf("staging destination error = %v", err)
+	}
+	if acquiredSource {
+		t.Fatal("source lock was acquired before rejecting the staging destination")
+	}
+}
+
 func TestRunProviderInstallV1RejectsServiceRenameBeforeDestinationPreparation(t *testing.T) {
 	sourceDir := t.TempDir()
 	destinationDir := t.TempDir()
@@ -540,14 +837,16 @@ func TestRunProviderInstallV1RejectsServiceRenameBeforeDestinationPreparation(t 
 	prepared := false
 	published := false
 	backend := providerInstallRunBackend{
-		acquire:            deploy.AcquireOperationLock,
-		release:            func(lock *deploy.OperationLock) error { return lock.Unlock() },
-		newStore:           providerstore.NewStore,
-		recoverDestination: providerInstallRunRecoverDestinationFixture,
+		acquire:  deploy.AcquireOperationLock,
+		release:  func(lock *deploy.OperationLock) error { return lock.Unlock() },
+		newStore: providerstore.NewStore,
 		buildSource: func(context.Context, LockedProviderBuildRunInputV1) (LockedProviderBuildExecutionResultV1, error) {
 			return build, nil
 		},
-		prepareAccount: providerInstallRunPrepareAccountFixture,
+		prepareAccount: func(context.Context, blueprint.RunAs, providerstore.Store, CurrentBuild, providerInstallRunInputV1) (providerInstallRunInputV1, error) {
+			t.Fatal("prepared an account before rejecting a service rename")
+			return providerInstallRunInputV1{}, nil
+		},
 		newReferences: func(string, string) (EnvironmentImageReferences, error) {
 			return fixedPublicationReferences(t, destinationDir, 0x83), nil
 		},
@@ -588,7 +887,8 @@ func TestRunProviderInstallV1RejectsServiceRenameBeforeDestinationPreparation(t 
 
 	_, err := runProviderInstallV1(t.Context(), providerInstallRunInputV1{
 		SourceDeploymentDir: sourceDir, DestinationDeploymentDir: destinationDir,
-	}, backend)
+		Install: providerInstallOptionsV1{Service: "new-service"},
+	}, providerInstallAdmissionTestBackend(backend, nil))
 	if err == nil || !strings.Contains(err.Error(), "already installed as service \"old-service\"") || !strings.Contains(err.Error(), "uninstall") {
 		t.Fatalf("service rename error = %v", err)
 	}
@@ -620,7 +920,8 @@ func providerInstallRunBuildFixture(t *testing.T, sourceDir string) (deploy.Stat
 func providerInstallRunPlanFixture(destinationDir string, references EnvironmentImageReferences) providerInstallationPlanV1 {
 	scope := blueprint.InstallScopeSystem
 	return providerInstallationPlanV1{
-		Installation: installedBuildPublicationInstallation(destinationDir),
+		Installation:  installedBuildPublicationInstallation(destinationDir),
+		ControlScript: "democtl",
 		Docker: DockerExecutionPlan{
 			Phase: blueprint.PhaseInstalled, Scope: &scope, Image: references.Generation,
 			ContainerName: "demo", NetworkName: "demo",
@@ -648,4 +949,60 @@ func providerInstallRunRecoverDestinationFixture(
 	string,
 ) (bool, error) {
 	return false, nil
+}
+
+func providerInstallAdmissionTestBackend(backend providerInstallRunBackend, order *[]string) providerInstallRunBackend {
+	lease := new(deploy.ControlLeaseV1)
+	if backend.recoverDestination == nil {
+		backend.recoverDestination = func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (bool, error) {
+			return false, nil
+		}
+	}
+	if backend.preflightDestination == nil {
+		backend.preflightDestination = func(providerstore.Store, CurrentBuild, string) error { return nil }
+	}
+	if backend.ensureDestination == nil {
+		backend.ensureDestination = ensureProviderInstallDestinationV1
+	}
+	if backend.cleanupDestination == nil {
+		backend.cleanupDestination = cleanupFailedProviderInstallDestinationV1
+	}
+	backend.readState = func(operation *deploy.OperationLock) (deploy.StateV1, bool, error) {
+		return operation.ReadStateV1()
+	}
+	backend.admit = func(_ context.Context, _ string, operation *deploy.OperationLock, input ControlAdmissionInputV1) (AdmittedControlV1, error) {
+		if order != nil {
+			*order = append(*order, "admit-install")
+		}
+		if input.Operation != deploy.ControlOperationInstallV1 {
+			return AdmittedControlV1{}, fmt.Errorf("unexpected control operation %q", input.Operation)
+		}
+		if input.Mode != ControlAdmissionImmediateV1 {
+			return AdmittedControlV1{}, fmt.Errorf("unexpected control mode %q", input.Mode)
+		}
+		return AdmittedControlV1{
+			Operation: operation,
+			Lease:     lease,
+			Marker: deploy.ControlMarkerV1{
+				ID: "control-0000000000000001", Operation: input.Operation,
+				GenerationReference: input.GenerationReference,
+			},
+		}, nil
+	}
+	backend.complete = func(operation *deploy.OperationLock, _ string, gotLease *deploy.ControlLeaseV1) error {
+		if gotLease != lease {
+			return fmt.Errorf("completed install with the wrong control lease")
+		}
+		if order != nil {
+			*order = append(*order, "complete-install")
+		}
+		return operation.Unlock()
+	}
+	backend.stopDestination = func(_ context.Context, _ lockedProviderInstallV1, _ deploy.StateV1) error {
+		if order != nil {
+			*order = append(*order, "stop-destination")
+		}
+		return nil
+	}
+	return backend
 }

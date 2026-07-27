@@ -1,0 +1,2 @@
+kind: Fixed
+body: Let explicit builds repair missing cached local-source wheels while automatic staged build checks report how to recover.

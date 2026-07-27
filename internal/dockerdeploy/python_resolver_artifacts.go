@@ -62,6 +62,20 @@ func StagePythonResolverSourceConstraints(
 }
 
 func validatePreparedPythonResolverArtifacts(prepared PreparedPythonResolverArtifacts) error {
+	if err := validatePreparedPythonResolverArtifactLayout(prepared); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(prepared.OutputHostDir)
+	if err != nil {
+		return fmt.Errorf("read Python resolver artifact output directory: %w", err)
+	}
+	if len(entries) != 0 {
+		return fmt.Errorf("Python resolver artifact output directory must be initially empty")
+	}
+	return nil
+}
+
+func validatePreparedPythonResolverArtifactLayout(prepared PreparedPythonResolverArtifacts) error {
 	paths := []struct {
 		name  string
 		value string
@@ -97,13 +111,6 @@ func validatePreparedPythonResolverArtifacts(prepared PreparedPythonResolverArti
 	if outputInfo.Mode().Perm()&0o200 == 0 {
 		return fmt.Errorf("Python resolver artifact output directory must be owner-writable")
 	}
-	entries, err := os.ReadDir(prepared.OutputHostDir)
-	if err != nil {
-		return fmt.Errorf("read Python resolver artifact output directory: %w", err)
-	}
-	if len(entries) != 0 {
-		return fmt.Errorf("Python resolver artifact output directory must be initially empty")
-	}
 	return nil
 }
 
@@ -122,6 +129,7 @@ func PreparePythonResolverArtifacts(
 	outputDir := filepath.Join(workspace, "output")
 	cleanup := func() {
 		_ = os.Chmod(inputDir, 0o700)
+		makePythonResolverWorkspaceRemovable(workspace)
 		_ = os.RemoveAll(workspace)
 	}
 	for _, directory := range []string{inputDir, outputDir} {

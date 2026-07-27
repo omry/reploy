@@ -293,13 +293,18 @@ func publicationLockFixture(t *testing.T, dir string, imageChar string, configCh
 		t.Fatal(err)
 	}
 	baseConfig := rendererDigest("1")
-	rootFSSubject, err := deploy.RootFSSubject([]canonical.Digest{rendererDigest(rootChar)})
+	base := deploy.ImageDescriptor{
+		Schema: deploy.ImageDescriptorSchemaV1, Platform: platform, AuthorReference: "local-base",
+		ImmutableReference: string(baseConfig), ConfigDigest: baseConfig,
+		RootFSDiffIDs: []canonical.Digest{rendererDigest(rootChar)},
+	}
+	rootFSSubject, err := deploy.RootFSSubject(base.RootFSDiffIDs)
 	if err != nil {
 		t.Fatal(err)
 	}
 	image := providers.RealizedImageV1{Digest: rendererDigest(imageChar), ConfigDigest: rendererDigest(configChar), RootFSSubject: rootFSSubject}
 	policy := deploy.RuntimePolicyV1{
-		Schema: deploy.RuntimePolicySchemaV1, AllowedRoots: []string{"/mnt"},
+		Schema:         deploy.RuntimePolicySchemaV1,
 		ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{},
 	}
 	policyDigest, err := deploy.RuntimePolicyDigestV1(policy)
@@ -318,11 +323,7 @@ func publicationLockFixture(t *testing.T, dir string, imageChar string, configCh
 	lock := deploy.BuildLockV1{
 		Schema: deploy.BuildLockSchemaV1, BlueprintDigest: testResolvedBlueprintDigestV1(t, document), Overlay: deploy.EmptyRequestOverlayV1(),
 		ResolvedRequestDigest: rendererDigest("3"), Platform: platform,
-		Base: deploy.ImageDescriptor{
-			Schema: deploy.ImageDescriptorSchemaV1, Platform: platform, AuthorReference: "local-base",
-			ImmutableReference: string(baseConfig), ConfigDigest: baseConfig,
-			RootFSDiffIDs: []canonical.Digest{rendererDigest(rootChar)},
-		},
+		Base:  base,
 		Graph: deploy.ProviderGraphLockV1{Nodes: []providers.NodeID{"base"}, Edges: []providers.ProviderEdgeV1{}},
 		Nodes: []deploy.NodeLockV1{}, Catalog: []providers.RealizedOutput{},
 		RuntimePolicy: policy, ValidationRecord: validation, FinalImage: image,

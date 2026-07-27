@@ -30,7 +30,7 @@ func SetDesiredStateV1(
 	platform blueprint.Platform,
 	validatePackage PackageRequestValidator,
 ) (result DesiredStateUpdateResult, err error) {
-	return setDesiredStateV1(ctx, deploymentDir, document, platform, validatePackage, false)
+	return setDesiredStateV1(ctx, deploymentDir, document, platform, validatePackage, nil, "", false)
 }
 
 // CreateDesiredStateV1 atomically stages a new deployment and refuses to
@@ -43,7 +43,23 @@ func CreateDesiredStateV1(
 	platform blueprint.Platform,
 	validatePackage PackageRequestValidator,
 ) (result DesiredStateUpdateResult, err error) {
-	return setDesiredStateV1(ctx, deploymentDir, document, platform, validatePackage, true)
+	return setDesiredStateV1(ctx, deploymentDir, document, platform, validatePackage, nil, "", true)
+}
+
+// SetStagedDesiredStateV1 records the author-provided blueprint text and the
+// effective machine-local workspace locator alongside the resolved document.
+func SetStagedDesiredStateV1(
+	ctx context.Context,
+	deploymentDir string,
+	document blueprint.Document,
+	platform blueprint.Platform,
+	validatePackage PackageRequestValidator,
+	blueprintSource string,
+	workspaceRoot string,
+	requireMissing bool,
+) (result DesiredStateUpdateResult, err error) {
+	staging := &StagingStateV1{Schema: StagingStateSchemaV1, WorkspaceRoot: workspaceRoot}
+	return setDesiredStateV1(ctx, deploymentDir, document, platform, validatePackage, staging, blueprintSource, requireMissing)
 }
 
 func setDesiredStateV1(
@@ -52,6 +68,8 @@ func setDesiredStateV1(
 	document blueprint.Document,
 	platform blueprint.Platform,
 	validatePackage PackageRequestValidator,
+	staging *StagingStateV1,
+	blueprintSource string,
 	requireMissing bool,
 ) (result DesiredStateUpdateResult, err error) {
 	lock, err := AcquireOperationLock(ctx, deploymentDir)
@@ -75,9 +93,24 @@ func setDesiredStateV1(
 	var generation *EnvironmentGenerationState
 	var deployment *DeploymentStateV1
 	if found {
+		currentDocument, decodeErr := blueprint.DecodeResolvedDocumentV1(current.Blueprint)
+		if decodeErr != nil {
+			return DesiredStateUpdateResult{}, fmt.Errorf("decode staged blueprint: %w", decodeErr)
+		}
+		if currentDocument.Environment.ID != document.Environment.ID {
+			return DesiredStateUpdateResult{}, fmt.Errorf(
+				"staging directory belongs to environment %q, not %q; use a different staging directory",
+				currentDocument.Environment.ID,
+				document.Environment.ID,
+			)
+		}
 		overlay = current.Overlay
 		generation = current.Current
 		deployment = current.Deployment
+		if staging == nil {
+			staging = current.Staging
+			blueprintSource = current.BlueprintSource
+		}
 	}
 
 	payload, err := blueprint.EncodeResolvedDocumentV1(document)
@@ -93,12 +126,9 @@ func setDesiredStateV1(
 	}
 
 	candidate := StateV1{
-		Schema:     StateSchemaV1,
-		Blueprint:  payload,
-		Platform:   platform,
-		Overlay:    overlay,
-		Current:    generation,
-		Deployment: deployment,
+		Schema: StateSchemaV1, Blueprint: payload, BlueprintSource: blueprintSource,
+		Platform: platform, Overlay: overlay, Current: generation,
+		Staging: staging, Deployment: deployment,
 	}
 	candidateBytes, err := EncodeStateV1(candidate)
 	if err != nil {

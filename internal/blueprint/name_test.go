@@ -60,6 +60,19 @@ func TestValidateProviderIdentifier(t *testing.T) {
 	}
 }
 
+func TestValidatePythonDistributionName(t *testing.T) {
+	for _, name := range []string{"demo", "Demo_Server", "demo.pkg", "demo-pkg2"} {
+		if err := ValidatePythonDistributionName("distribution", name); err != nil {
+			t.Fatalf("ValidatePythonDistributionName(%q): %v", name, err)
+		}
+	}
+	for _, name := range []string{"", "demo/pkg", `demo\pkg`, " demo", "demo-", ".demo"} {
+		if err := ValidatePythonDistributionName("distribution", name); err == nil {
+			t.Fatalf("ValidatePythonDistributionName(%q) succeeded", name)
+		}
+	}
+}
+
 func TestValidateNonBaseComponentIdentifier(t *testing.T) {
 	if err := validateNonBaseComponentIdentifier("component", "application"); err != nil {
 		t.Fatal(err)

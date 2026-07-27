@@ -79,7 +79,7 @@ func TestRuntimePlansV1DetectsExternalBindSourceKind(t *testing.T) {
 func TestRuntimePlansV1RejectsUnknownCommandExecutable(t *testing.T) {
 	document := runtimePlanDocument()
 	command := document.Environment.Commands["check"]
-	command.Executable = "missing"
+	command.Executable = "application.missing"
 	document.Environment.Commands["check"] = command
 	_, err := RuntimePlansV1(document, DockerExecutionPlan{Workload: &WorkloadExecutionPlan{}})
 	if err == nil || !strings.Contains(err.Error(), "unknown executable") {
@@ -96,14 +96,14 @@ func TestRuntimePlansV1RejectsWorkloadPlanMismatch(t *testing.T) {
 
 func runtimePlanDocument() blueprint.Document {
 	return blueprint.Document{Environment: blueprint.Environment{
-		Executables: map[string]blueprint.Executable{
-			"server": {Component: "application", Binary: "demo"},
+		Components: map[string]blueprint.Component{
+			"application": {Executables: map[string]blueprint.Executable{"server": {Binary: "demo"}}},
 		},
 		Commands: map[string]blueprint.Command{
-			"check":   {Executable: "server", Trigger: []string{"check"}, NativeCommand: true},
-			"prepare": {Executable: "server", Trigger: []string{"prepare"}},
-			"serve":   {Executable: "server"},
-			"unused":  {Executable: "server"},
+			"check":   {Executable: "application.server", Trigger: []string{"check"}, NativeCommand: true},
+			"prepare": {Executable: "application.server", Trigger: []string{"prepare"}},
+			"serve":   {Executable: "application.server"},
+			"unused":  {Executable: "application.server"},
 		},
 		Workload: &blueprint.Workload{
 			Command: "serve",

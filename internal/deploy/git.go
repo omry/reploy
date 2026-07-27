@@ -14,20 +14,20 @@ import (
 
 var fullGitHashPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 
-func loadGitPack(ref PackRef) (AppPack, error) {
+func resolveGitBlueprint(ref PackRef) (PackRef, string, string, *ResolvedPackArtifact, error) {
 	if ref.Scheme != "git" {
-		return AppPack{}, fmt.Errorf("blueprint scheme is not git: %s", ref.Scheme)
+		return PackRef{}, "", "", nil, fmt.Errorf("blueprint scheme is not git: %s", ref.Scheme)
 	}
 	if err := validateGitPackRef(ref); err != nil {
-		return AppPack{}, err
+		return PackRef{}, "", "", nil, err
 	}
 	checkoutRoot, commit, err := cacheGitCheckout(ref.Source, ref.Query.Get("ref"))
 	if err != nil {
-		return AppPack{}, err
+		return PackRef{}, "", "", nil, err
 	}
-	pack, subdir, err := loadSourceCheckout(checkoutRoot, ref.Subdir)
+	manifestPath, subdir, err := sourceBlueprintManifestPath(checkoutRoot, ref.Subdir)
 	if err != nil {
-		return AppPack{}, err
+		return PackRef{}, "", "", nil, err
 	}
 	resolvedRef := PackRef{
 		Scheme:   "git",
@@ -37,17 +37,15 @@ func loadGitPack(ref PackRef) (AppPack, error) {
 		IsPinned: true,
 	}
 	resolvedRef.Raw = "git:" + resolvedRef.Source + "#" + resolvedRef.Subdir + "?ref=" + commit
-	pack.Ref = resolvedRef
-	pack.RequestedRef = ref
-	pack.ResolvedArtifact = &ResolvedPackArtifact{
+	artifact := &ResolvedPackArtifact{
 		Scheme:        "git",
 		Package:       ref.Source,
 		Version:       commit,
 		Subdir:        subdir,
 		CachePath:     checkoutRoot,
-		BlueprintPath: pack.Dir,
+		BlueprintPath: filepath.Dir(manifestPath),
 	}
-	return pack, nil
+	return resolvedRef, checkoutRoot, subdir, artifact, nil
 }
 
 func validateGitPackRef(ref PackRef) error {

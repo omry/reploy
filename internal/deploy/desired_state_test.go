@@ -172,6 +172,35 @@ func TestSetDesiredStateV1PreservesOverlayAndCurrentGeneration(t *testing.T) {
 	}
 }
 
+func TestSetDesiredStateV1RejectsDifferentEnvironmentWithoutMutation(t *testing.T) {
+	dir := t.TempDir()
+	document := overlayTestDocument()
+	document.Environment.ID = "demo"
+	platform := desiredStateTestPlatform(t, "linux/amd64")
+	if _, err := SetDesiredStateV1(t.Context(), dir, document, platform, overlayTestPackageValidator); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(dir, ".reploy", stateFilenameV1)
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	replacement := document
+	replacement.Environment.ID = "other"
+	_, err = SetDesiredStateV1(t.Context(), dir, replacement, platform, overlayTestPackageValidator)
+	if err == nil || !strings.Contains(err.Error(), `staging directory belongs to environment "demo"`) || !strings.Contains(err.Error(), "different staging directory") {
+		t.Fatalf("different environment error = %v", err)
+	}
+	after, readErr := os.ReadFile(statePath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("rejected environment replacement changed existing state")
+	}
+}
+
 func TestSetDesiredStateV1PreservesDeploymentLocalState(t *testing.T) {
 	dir := t.TempDir()
 	statePath := writeOverlayTestState(t, dir)

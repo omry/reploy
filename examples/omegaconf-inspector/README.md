@@ -15,7 +15,7 @@ Arbiter or another domain-specific service.
 reploy stage omegaconf-inspector-demo --dir /tmp/reploy-omegaconf-inspector-demo
 reploy app config init --dir /tmp/reploy-omegaconf-inspector-demo
 reploy app config check --dir /tmp/reploy-omegaconf-inspector-demo
-reploy bundle build --dir /tmp/reploy-omegaconf-inspector-demo
+reploy build --dir /tmp/reploy-omegaconf-inspector-demo
 reploy up --dir /tmp/reploy-omegaconf-inspector-demo
 ```
 
@@ -25,7 +25,7 @@ When working on the in-repo example, stage the local blueprint instead:
 reploy stage file:examples/omegaconf-inspector/reploy --dir /tmp/reploy-omegaconf-inspector-demo
 reploy app config init --dir /tmp/reploy-omegaconf-inspector-demo
 reploy app config check --dir /tmp/reploy-omegaconf-inspector-demo
-reploy bundle build --dir /tmp/reploy-omegaconf-inspector-demo
+reploy build --dir /tmp/reploy-omegaconf-inspector-demo
 reploy up --dir /tmp/reploy-omegaconf-inspector-demo
 ```
 

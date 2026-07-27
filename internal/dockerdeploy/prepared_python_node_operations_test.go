@@ -166,6 +166,87 @@ func TestPreparedPythonNodeOperationsExcludesCorruptReusableWheelBeforePip(t *te
 	}
 }
 
+func TestPreparedPythonNodeOperationsBuildsAndSelectsWorkspaceSource(t *testing.T) {
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
+	request := preparedPythonResolveRequest(t, descriptor)
+	interpreterObservation := pythonConsumerObservation("interpreter", "/usr/bin/python3")
+	interpreterResponse := probe.ResponseV1{Schema: probe.ResponseSchemaV1, Observations: []probe.ExecutableObservationV1{interpreterObservation}}
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts, cleanup, err := PreparePythonResolverArtifacts(store, []providerstore.ArtifactDescriptor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	snapshots := stageSourceWheelTestSnapshot(t, artifacts, "demo-server")
+	workCalls := 0
+	commands := stubPythonInterpreterSelectionCommands(t, mustCanonicalProbeResponse(t, interpreterResponse), []string{"3.13.2\n"}, func() error {
+		workCalls++
+		output := filepath.Join(artifacts.OutputHostDir, "demo_server-1.0-py3-none-any.whl")
+		if workCalls == 1 {
+			writePythonIntegrationWheel(t, output)
+			return nil
+		}
+		input := filepath.Join(artifacts.InputHostDir, "demo_server-1.0-py3-none-any.whl")
+		content, err := os.ReadFile(input)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(output, content, 0o600)
+	})
+	session, err := OpenPythonResolverSession(context.Background(), descriptor, workspace, artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.observations[pythonCarrierRequirementID] = pythonConsumerObservation(pythonCarrierRequirementID, pythonCarrierPath)
+	session.observations[pythonLauncherRequirementID] = pythonConsumerObservation(pythonLauncherRequirementID, pythonLauncherPath)
+	operations := PreparedPythonNodeOperations{
+		Store: store, Artifacts: artifacts, SourceSnapshots: snapshots,
+		Validators: providers.ProviderOwnerValidators{
+			Profile: pythonprovider.ValidateRequirementProfileV1, Bundle: pythonprovider.ValidateResolvedBundlePayloadV1,
+		},
+		FinalImageConfig: pythonConsumerTestImageConfig(),
+	}
+	resolution, _, err := operations.resolveFresh(context.Background(), session, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if workCalls != 2 {
+		t.Fatalf("source build and resolver calls = %d, commands = %#v", workCalls, *commands)
+	}
+	if len(resolution.SelectedSources) != 1 || resolution.SelectedSources[0].LogicalPackage != "demo-server" ||
+		resolution.SelectedSources[0].SourceManifestDigest != snapshots[0].SourceManifestDigest {
+		t.Fatalf("selected sources = %#v", resolution.SelectedSources)
+	}
+	if len(resolution.Bundle.Payload.SelectedSources) != 1 ||
+		resolution.Bundle.Payload.SelectedSources[0].ArtifactDigest != resolution.SelectedSources[0].ArtifactDigest {
+		t.Fatalf("bundle selected sources = %#v", resolution.Bundle.Payload.SelectedSources)
+	}
+}
+
+func TestMergePythonSourceCandidatesReplacesMatchingCurrentCandidate(t *testing.T) {
+	existing := []providers.ResolvedSourceInput{
+		testPythonResolvedSource("application", "demo", "1.0", reuseTestDigest("1"), reuseTestDigest("2")),
+		testPythonResolvedSource("other", "kept", "1.0", reuseTestDigest("3"), reuseTestDigest("4")),
+	}
+	built := []providers.ResolvedSourceInput{
+		testPythonResolvedSource("application", "demo", "2.0", reuseTestDigest("5"), reuseTestDigest("6")),
+	}
+	merged, err := mergePythonSourceCandidates(existing, built)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged) != 2 || !reflect.DeepEqual(merged[0], built[0]) || !reflect.DeepEqual(merged[1], existing[1]) {
+		t.Fatalf("merged sources = %#v", merged)
+	}
+}
+
 func preparedPythonResolveRequest(t *testing.T, descriptor deploy.ImageDescriptor) providers.ResolveNodeRequest {
 	t.Helper()
 	packageRequest, err := pythonprovider.CanonicalPackageRequestV1("demo-server==1.0")

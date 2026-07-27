@@ -41,7 +41,12 @@ type GraphNodePrepareRequest struct {
 type GraphNodePreparation struct {
 	Resolution ResolveResult
 	Consumer   GraphConsumerValidation
-	Refreshed  bool
+	// SourceCandidates optionally replaces this node's pre-resolved candidates.
+	// Backends use this only to turn auxiliary local source locators into
+	// content-bound records during preparation. Nil retains the request input;
+	// an explicit empty array replaces it with no candidates.
+	SourceCandidates []ResolvedSourceInput
+	Refreshed        bool
 }
 
 // GraphNodePreparer validates cached state and, when needed, performs one
@@ -150,8 +155,7 @@ func ExecuteProviderGraph(ctx context.Context, request GraphExecutionRequest) (G
 			Platform: request.Platform, SourceCandidates: append([]ResolvedSourceInput{}, request.SourceCandidates...), Upstream: currentImage,
 			ReusableArtifacts: append([]providerstore.StoreObjectRef{}, request.ReusableArtifacts[id]...),
 		}
-		_, input, err := buildResolveInput(resolveRequest)
-		if err != nil {
+		if _, _, err := buildResolveInput(resolveRequest); err != nil {
 			return GraphExecutionResult{}, err
 		}
 		var cached *ResolveResult
@@ -171,8 +175,19 @@ func ExecuteProviderGraph(ctx context.Context, request GraphExecutionRequest) (G
 		if prepared.Refreshed && cached == nil {
 			return GraphExecutionResult{}, fmt.Errorf("prepare provider node %q reported a cache refresh without a cached resolution", id)
 		}
+		effectiveRequest := resolveRequest
+		if prepared.SourceCandidates != nil {
+			effectiveRequest.SourceCandidates = append([]ResolvedSourceInput{}, prepared.SourceCandidates...)
+		}
+		_, effectiveInput, err := buildResolveInput(effectiveRequest)
+		if err != nil {
+			return GraphExecutionResult{}, fmt.Errorf("prepare provider node %q source candidates: %w", id, err)
+		}
+		if prepared.SourceCandidates != nil && len(effectiveInput.SourceCandidates) != len(prepared.SourceCandidates) {
+			return GraphExecutionResult{}, fmt.Errorf("prepare provider node %q returned source candidates owned by another node", id)
+		}
 		resolution := prepared.Resolution
-		if err := ValidateResolveResult(input, resolution, validators.Profile, validators.Bundle); err != nil {
+		if err := ValidateResolveResult(effectiveInput, resolution, validators.Profile, validators.Bundle); err != nil {
 			return GraphExecutionResult{}, fmt.Errorf("prepare provider node %q resolution contract: %w", id, err)
 		}
 		materializeInput := MaterializeInput{
@@ -202,7 +217,7 @@ func ExecuteProviderGraph(ctx context.Context, request GraphExecutionRequest) (G
 		if err := validateRealizedNodeOutputs(resolution.Bundle, materialized.Outputs); err != nil {
 			return GraphExecutionResult{}, fmt.Errorf("materialize provider node %q outputs: %w", id, err)
 		}
-		edges, err := resolvedSelectionEdges(input, resolution)
+		edges, err := resolvedSelectionEdges(effectiveInput, resolution)
 		if err != nil {
 			return GraphExecutionResult{}, fmt.Errorf("execute provider node %q selections: %w", id, err)
 		}

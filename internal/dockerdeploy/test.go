@@ -3,16 +3,10 @@ package dockerdeploy
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
-	"net/url"
 	"os/exec"
-	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -20,6 +14,7 @@ import (
 )
 
 var runTestCommandOutput = commandOutput
+var runCurrentRuntimeTest = RunCurrentRuntimeTestV1
 
 type TestOptions struct {
 	Dir                    string
@@ -36,114 +31,21 @@ func TestServer(options TestOptions) error {
 	if options.Timeout == 0 {
 		options.Timeout = 30 * time.Second
 	}
-	state, err := loadState(options.Dir)
+	stateSchema, err := runtimeStateSchema(options.Dir)
 	if err != nil {
 		return err
 	}
-	stdout, _ := deploymentOutputWritersForDeployment(options.Dir, state, options.Stdout, nil)
-	options.Stdout = stdout
-	if state.EnvironmentModel {
-		return testEnvironmentReadiness(options, state)
+	if stateSchema != deploy.StateSchemaV1 {
+		return fmt.Errorf("runtime test state schema %q is unsupported; expected %q", stateSchema, deploy.StateSchemaV1)
 	}
-	serverURL, err := ServerURL(options.Dir)
+	runtime, err := CurrentStagedProviderBuildRuntimeV1()
 	if err != nil {
 		return err
 	}
-	healthURL := serverURL.String()
-	health, err := healthConfig(options.Dir)
-	if err != nil {
-		return err
-	}
-	if err := ensureRuntimeCompose(options.Dir); err != nil {
-		return fmt.Errorf("ensure runtime compose: %w", err)
-	}
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: !healthTLSVerify(health)},
-		},
-	}
-	if err := requireComposeServiceRunning(options.Dir, options.RestartingDiagnostics, options.DockerPreflightTimeout); err != nil {
-		return err
-	}
-	check := func() error {
-		response, err := client.Get(healthURL)
-		if err == nil {
-			_, _ = io.Copy(io.Discard, response.Body)
-			_ = response.Body.Close()
-			if response.StatusCode >= 200 && response.StatusCode < 300 {
-				if options.Stdout != nil {
-					fmt.Fprintf(options.Stdout, "ok: %s\n", healthURL)
-				}
-				return nil
-			}
-			return fmt.Errorf("health check returned HTTP %d", response.StatusCode)
-		}
-		return err
-	}
-	lastErr := check()
-	if lastErr == nil {
-		return nil
-	}
-	deadline := time.Now().Add(options.Timeout)
-	for {
-		if time.Now().After(deadline) {
-			return fmt.Errorf("server health check failed: %w", lastErr)
-		}
-		time.Sleep(1 * time.Second)
-		if err := requireComposeServiceRunning(options.Dir, options.RestartingDiagnostics, options.DockerPreflightTimeout); err != nil {
-			return err
-		}
-		lastErr = check()
-		if lastErr == nil {
-			return nil
-		}
-	}
-}
-
-func testEnvironmentReadiness(options TestOptions, state deploy.DeploymentState) error {
-	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
-	if err != nil {
-		return err
-	}
-	plan, err := ResolvedDockerExecutionPlan(options.Dir, pack, state)
-	if err != nil {
-		return err
-	}
-	if plan.Workload == nil {
-		return fmt.Errorf("environment has no workload to test")
-	}
-	if err := ensureRuntimeCompose(options.Dir); err != nil {
-		return fmt.Errorf("ensure runtime compose: %w", err)
-	}
-	if err := requireComposeServiceRunning(options.Dir, options.RestartingDiagnostics, options.DockerPreflightTimeout); err != nil {
-		return err
-	}
-	names := make([]string, 0, len(plan.Workload.Endpoints))
-	for name, endpoint := range plan.Workload.Endpoints {
-		if endpoint.Readiness != nil {
-			names = append(names, name)
-		}
-	}
-	if len(names) == 0 {
-		return fmt.Errorf("environment workload has no readiness endpoint")
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		endpoint := plan.Workload.Endpoints[name]
-		readiness := *endpoint.Readiness
-		readiness.Timeout = options.Timeout
-		endpoint.Readiness = &readiness
-		if err := WaitForHTTPReadinessWithServiceCheck(context.Background(), endpoint, func(context.Context) error {
-			return requireComposeServiceRunning(options.Dir, options.RestartingDiagnostics, options.DockerPreflightTimeout)
-		}); err != nil {
-			return err
-		}
-		if options.Stdout != nil {
-			fmt.Fprintf(options.Stdout, "ok: %s\n", readinessTarget(endpoint))
-		}
-	}
-	return nil
+	return runCurrentRuntimeTest(context.Background(), CurrentRuntimeTestInputV1{
+		DeploymentDir: options.Dir, Runtime: runtime, Timeout: options.Timeout, Stdout: options.Stdout,
+		RestartingDiagnostics: options.RestartingDiagnostics, DockerPreflightTimeout: options.DockerPreflightTimeout,
+	})
 }
 
 func requireComposeServiceRunning(dir string, restartingDiagnostics string, dockerPreflightTimeout time.Duration) error {
@@ -248,68 +150,11 @@ func composeRowState(row composePSRow) string {
 	return state
 }
 
-func ServerURL(dir string) (*url.URL, error) {
-	absoluteDir, err := filepath.Abs(dir)
-	if err != nil {
-		return nil, err
-	}
-	values, err := readDockerEnv(absoluteDir)
-	if err != nil {
-		return nil, err
-	}
-	health, err := healthConfig(absoluteDir)
-	if err != nil {
-		return nil, err
-	}
-	scheme := envValue(values, health.SchemeEnv, defaultString(health.DefaultScheme, "https"))
-	host := envValue(values, health.HostEnv, defaultString(health.DefaultHost, "127.0.0.1"))
-	port := envValue(values, health.PortEnv, health.DefaultPort)
-	if port == "" {
-		return nil, fmt.Errorf("blueprint health probe is missing docker.health.default_port")
-	}
-	if host == "0.0.0.0" {
-		host = "127.0.0.1"
-	}
-	return &url.URL{Scheme: scheme, Host: net.JoinHostPort(host, port), Path: health.Path}, nil
-}
-
-func healthConfig(dir string) (deploy.DockerHealthConfig, error) {
-	state, err := loadState(dir)
-	if err != nil {
-		return deploy.DockerHealthConfig{}, err
-	}
-	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
-	if err != nil {
-		return deploy.DockerHealthConfig{}, err
-	}
-	health := pack.Docker.Health
-	if health.Path == "" {
-		return deploy.DockerHealthConfig{}, fmt.Errorf("blueprint does not declare docker.health.path")
-	}
-	if health.SchemeEnv == "" {
-		return deploy.DockerHealthConfig{}, fmt.Errorf("blueprint health probe is missing docker.health.scheme_env")
-	}
-	if health.HostEnv == "" {
-		return deploy.DockerHealthConfig{}, fmt.Errorf("blueprint health probe is missing docker.health.host_env")
-	}
-	if health.PortEnv == "" {
-		return deploy.DockerHealthConfig{}, fmt.Errorf("blueprint health probe is missing docker.health.port_env")
-	}
-	return health, nil
-}
-
 func defaultString(value string, fallback string) string {
 	if value != "" {
 		return value
 	}
 	return fallback
-}
-
-func healthTLSVerify(health deploy.DockerHealthConfig) bool {
-	if health.TLSVerify == nil {
-		return true
-	}
-	return *health.TLSVerify
 }
 
 func commandOutput(spec CommandSpec, options RunOptions) ([]byte, error) {

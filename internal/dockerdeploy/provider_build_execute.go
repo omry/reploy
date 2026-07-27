@@ -11,11 +11,12 @@ import (
 )
 
 type LockedProviderBuildExecutionInputV1 struct {
-	Preparation    LockedProviderBuildPreparationV1
-	SourceWheels   []providerstore.ArtifactDescriptor
-	ValidateLayers bool
-	RunValidation  FullImageValidationRunner
-	RunOptions     RunOptions
+	Preparation      LockedProviderBuildPreparationV1
+	SourceWheels     []providerstore.ArtifactDescriptor
+	WorkspaceSources []PythonWorkspaceSource
+	ValidateLayers   bool
+	RunValidation    FullImageValidationRunner
+	RunOptions       RunOptions
 }
 
 type LockedProviderBuildExecutionResultV1 struct {
@@ -79,6 +80,9 @@ func executeLockedProviderBuildV1(
 	if input.SourceWheels == nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute locked provider build source wheels must use an array")
 	}
+	if input.WorkspaceSources == nil {
+		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute locked provider build workspace sources must use an array")
+	}
 	if backend.executeGraph == nil || backend.prepareValidation == nil || backend.complete == nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute locked provider build requires a complete backend")
 	}
@@ -115,8 +119,9 @@ func executeLockedProviderBuildV1(
 	graph, err := backend.executeGraph(ctx, PreparedPythonGraphExecutionInput{
 		Store: preparation.Store, Plan: preparedBase.Plan, BaseDescriptor: preparedBase.Descriptor,
 		BaseCatalog: preparedBase.Catalog, Sources: preparation.Loaded.Request.Sources,
-		SourceWheels: append([]providerstore.ArtifactDescriptor{}, input.SourceWheels...),
-		CurrentLock:  preparation.ReusableLock, FinalImageConfig: preparation.FinalImageConfig,
+		SourceWheels:     append([]providerstore.ArtifactDescriptor{}, input.SourceWheels...),
+		WorkspaceSources: append([]PythonWorkspaceSource{}, input.WorkspaceSources...),
+		CurrentLock:      preparation.ReusableLock, FinalImageConfig: preparation.FinalImageConfig,
 		RunOptions: options,
 	})
 	if err != nil {

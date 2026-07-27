@@ -1,0 +1,3 @@
+kind: Fixed
+body: Reject malformed Python workspace distribution names before they can enter provider source staging.
+time: 2026-07-22T00:00:00+08:00

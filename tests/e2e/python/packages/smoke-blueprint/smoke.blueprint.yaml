@@ -9,12 +9,10 @@ environment:
   id: smoke-app
   vars:
     project_root: ..
-  translations:
-    workspace:
-      type: python
-      scope: development
-      root: "{{ project_root }}"
-      mappings:
+  workspace:
+    root: "{{ project_root }}"
+    packages:
+      python:
         smoke-suite: smoke-suite
         smoke-imap: smoke-imap
   components:
@@ -23,28 +21,28 @@ environment:
     application:
       type: python
       requirements: [smoke-suite]
+      executables:
+        server:
+          binary: smoke-server
       options:
         imap:
           description: Install the smoke IMAP plugin.
           requirements: [smoke-imap]
+  allow_concurrent: auto
   terminal:
     color_env: SMOKE_COLOR
-  paths:
+  mounts:
     config:
-      container: /conf
+      target: /conf
       writable: true
-      update: preserve
+      update_policy: preserve
     data:
-      container: /data
+      target: /data
       writable: true
-      update: preserve
-  executables:
-    server:
-      component: application
-      binary: smoke-server
+      update_policy: preserve
   commands:
     serve:
-      executable: server
+      executable: application.server
       argv:
         - serve
         - --host
@@ -52,7 +50,7 @@ environment:
         - --port
         - "{{ reploy.workload.endpoints.https.bind.port }}"
     config_check:
-      executable: server
+      executable: application.server
       trigger: [config, check]
       native_command: true
       deployed_command: true
@@ -90,11 +88,11 @@ environment:
 docker:
   mounts:
     config:
-      extends: environment.paths.config
+      extends: environment.mounts.config
       mode: managed-bind
       source: conf
     data:
-      extends: environment.paths.data
+      extends: environment.mounts.data
       mode: managed-bind
       source: data
   workload:

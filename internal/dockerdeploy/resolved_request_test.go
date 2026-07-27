@@ -120,20 +120,14 @@ func TestBuildResolvedRequestV1NormalizesOverlayBeforeIdentity(t *testing.T) {
 	}
 }
 
-func TestBuildResolvedRequestV1ExcludesUnusedTranslationCandidatesFromIdentity(t *testing.T) {
+func TestBuildResolvedRequestV1ExcludesUnusedWorkspaceCandidatesFromIdentity(t *testing.T) {
 	firstDocument := resolvedRequestTestDocument()
-	firstDocument.Environment.Translations = map[string]blueprint.Translation{
-		"workspace": {
-			Type: blueprint.ComponentTypePython, Scope: blueprint.TranslationScopeDevelopment,
-			Root: "/checkout/one", Mappings: map[string]string{"unused": "package"},
-		},
+	firstDocument.Environment.Workspace = blueprint.Workspace{
+		Root: "/checkout/one", PythonPackages: map[string]string{"unused": "package"},
 	}
 	secondDocument := resolvedRequestTestDocument()
-	secondDocument.Environment.Translations = map[string]blueprint.Translation{
-		"other": {
-			Type: blueprint.ComponentTypePython, Scope: blueprint.TranslationScopeDevelopment,
-			Root: "/checkout/two", Mappings: map[string]string{"also-unused": "src"},
-		},
+	secondDocument.Environment.Workspace = blueprint.Workspace{
+		Root: "/checkout/two", PythonPackages: map[string]string{"also-unused": "src"},
 	}
 	platform := firstDocument.Blueprint.Compatibility.Platforms[0]
 	first, err := BuildResolvedRequestV1(firstDocument, deploy.EmptyRequestOverlayV1(), platform, []providers.ResolvedSourceInput{})
@@ -153,7 +147,7 @@ func TestBuildResolvedRequestV1ExcludesUnusedTranslationCandidatesFromIdentity(t
 		t.Fatal(err)
 	}
 	if firstDigest != secondDigest {
-		t.Fatalf("unused translations changed provider request identity: %s != %s", firstDigest, secondDigest)
+		t.Fatalf("unused workspace packages changed provider request identity: %s != %s", firstDigest, secondDigest)
 	}
 	firstDocumentDigest, err := blueprint.DocumentDigestV1(firstDocument)
 	if err != nil {
@@ -164,21 +158,15 @@ func TestBuildResolvedRequestV1ExcludesUnusedTranslationCandidatesFromIdentity(t
 		t.Fatal(err)
 	}
 	if firstDocumentDigest == secondDocumentDigest {
-		t.Fatal("complete blueprint provenance did not retain translation changes")
+		t.Fatal("complete blueprint provenance did not retain workspace changes")
 	}
 }
 
-func TestFinalizeResolvedRequestV1UsesOnlyExactSelectedCandidates(t *testing.T) {
+func TestFinalizeResolvedRequestV1RecordsGraphSelectedSources(t *testing.T) {
 	document := resolvedRequestTestDocument()
 	platform := document.Blueprint.Compatibility.Platforms[0]
 	source := func(name string, manifest string, artifact string) providers.ResolvedSourceInput {
-		return providers.ResolvedSourceInput{
-			Schema: providers.ResolvedSourceInputSchemaV1, Component: "application", LogicalPackage: name,
-			SourceManifestDigest: registryDigest(manifest), BuilderProfile: "python-wheel-v1",
-			BuildSettings:     providers.CanonicalProviderData{Schema: "python-source-build-settings-v1", Value: canonical.Object{}},
-			EcosystemMetadata: providers.CanonicalProviderData{Schema: "python-source-metadata-v1", Value: canonical.Object{}},
-			ArtifactDigest:    registryDigest(artifact),
-		}
+		return testPythonResolvedSource("application", name, "1.0", registryDigest(manifest), registryDigest(artifact))
 	}
 	selected := source("demo", "1", "2")
 	unused := source("unused", "3", "4")
@@ -199,11 +187,22 @@ func TestFinalizeResolvedRequestV1UsesOnlyExactSelectedCandidates(t *testing.T) 
 	if len(finalized.Sources) != 1 || !reflect.DeepEqual(finalized.Sources[0], selected) {
 		t.Fatalf("finalized sources = %#v", finalized.Sources)
 	}
-	changed := selected
-	changed.ArtifactDigest = registryDigest("5")
-	if _, err := finalizeResolvedRequestV1(document, deploy.EmptyRequestOverlayV1(), candidateRequest, []providers.ResolvedSourceInput{changed}); err == nil || !strings.Contains(err.Error(), "not an exact source candidate") {
-		t.Fatalf("changed selected source error = %v", err)
+	built := selected
+	built.ArtifactDigest = registryDigest("5")
+	finalized, err = finalizeResolvedRequestV1(document, deploy.EmptyRequestOverlayV1(), candidateRequest, []providers.ResolvedSourceInput{built})
+	if err != nil {
+		t.Fatal(err)
 	}
+	if len(finalized.Sources) != 1 || !reflect.DeepEqual(finalized.Sources[0], built) {
+		t.Fatalf("post-build finalized sources = %#v", finalized.Sources)
+	}
+	invalid := built
+	invalid.Component = "missing"
+	if _, err := finalizeResolvedRequestV1(document, deploy.EmptyRequestOverlayV1(), candidateRequest, []providers.ResolvedSourceInput{invalid}); err == nil || !strings.Contains(err.Error(), "missing or unsupported") {
+		t.Fatalf("invalid selected source error = %v", err)
+	}
+	changed := selected
+	changed.ArtifactDigest = registryDigest("6")
 	locked, exact, err := resolvedRequestForLockedSourcesV1(
 		document, deploy.EmptyRequestOverlayV1(), candidateRequest,
 		[]providers.ResolvedSourceInput{selected},
@@ -230,13 +229,7 @@ func TestResolvedRequestOwnersBindOuterComponentAndSourcesTargetActiveNodes(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := providers.ResolvedSourceInput{
-		Schema: providers.ResolvedSourceInputSchemaV1, Component: "optional", LogicalPackage: "demo",
-		SourceManifestDigest: registryDigest("1"), BuilderProfile: "python-wheel-v1",
-		BuildSettings:     providers.CanonicalProviderData{Schema: "python-source-build-settings-v1", Value: canonical.Object{}},
-		EcosystemMetadata: providers.CanonicalProviderData{Schema: "python-source-metadata-v1", Value: canonical.Object{}},
-		ArtifactDigest:    registryDigest("2"),
-	}
+	source := testPythonResolvedSource("optional", "demo", "1.0", registryDigest("1"), registryDigest("2"))
 	if _, err := BuildResolvedRequestV1(document, deploy.EmptyRequestOverlayV1(), platform, []providers.ResolvedSourceInput{source}); err == nil || !strings.Contains(err.Error(), "missing or unsupported") {
 		t.Fatalf("inactive source error = %v", err)
 	}

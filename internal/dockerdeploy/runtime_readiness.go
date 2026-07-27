@@ -3,14 +3,18 @@ package dockerdeploy
 import (
 	"context"
 	"fmt"
+	"reflect"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/providers/registry"
 	"github.com/omry/reploy/internal/providerstore"
 )
 
 type RuntimeReadinessInput struct {
 	Current    CurrentBuild
-	BuildInput CurrentBuildReuseInput
+	DockerPlan DockerExecutionPlan
 	PlanID     string
 	Sources    []RuntimeHostSourceV1
 }
@@ -20,7 +24,7 @@ type PublishedRuntimeReadinessInput struct {
 	Store         providerstore.Store
 	Environment   string
 	DeploymentDir string
-	BuildInput    CurrentBuildReuseInput
+	DockerPlan    DockerExecutionPlan
 	PlanID        string
 	Sources       []RuntimeHostSourceV1
 }
@@ -35,7 +39,7 @@ type PublishedRuntimeContainerInput struct {
 	Store         providerstore.Store
 	Environment   string
 	DeploymentDir string
-	BuildInput    CurrentBuildReuseInput
+	DockerPlan    DockerExecutionPlan
 	Invocation    RuntimeInvocationV1
 }
 
@@ -93,7 +97,7 @@ func runPublishedRuntimeContainerV1(
 	}
 	current, err := requirePublishedRuntimeReady(ctx, PublishedRuntimeReadinessInput{
 		Operation: input.Operation, Store: input.Store, Environment: input.Environment,
-		DeploymentDir: input.DeploymentDir, BuildInput: input.BuildInput,
+		DeploymentDir: input.DeploymentDir, DockerPlan: input.DockerPlan,
 		PlanID: input.Invocation.PlanID, Sources: input.Invocation.Sources,
 	}, load)
 	if err != nil {
@@ -127,29 +131,112 @@ func requirePublishedRuntimeReady(ctx context.Context, input PublishedRuntimeRea
 		return CurrentBuild{}, fmt.Errorf("runtime current build: %w", err)
 	}
 	if !found {
-		return CurrentBuild{}, fmt.Errorf("runtime build is missing; run `reploy build`")
+		return CurrentBuild{}, fmt.Errorf("%s", runtimeBuildRecoveryForPhaseV1(input.DockerPlan.Phase, "runtime build is missing"))
 	}
 	if err := RequireRuntimeReady(RuntimeReadinessInput{
-		Current: current, BuildInput: input.BuildInput, PlanID: input.PlanID, Sources: input.Sources,
+		Current: current, DockerPlan: input.DockerPlan, PlanID: input.PlanID, Sources: input.Sources,
 	}); err != nil {
 		return CurrentBuild{}, err
 	}
 	return current, nil
 }
 
+func runtimeBuildRecoveryForPhaseV1(phase blueprint.Phase, problem string) string {
+	if phase == blueprint.PhaseInstalled {
+		return problem + "; rerun the original `reploy install` command"
+	}
+	return problem + "; run `reploy build`"
+}
+
 // RequireRuntimeReady performs the complete pre-container check that needs no
 // Docker probe: the current build must match exact inputs, then the selected
 // locked plan's host sources must still match.
 func RequireRuntimeReady(input RuntimeReadinessInput) error {
-	matched, err := CurrentBuildMatches(input.Current, input.BuildInput)
+	matched, err := CurrentBuildMatchesRuntimeV1(input.Current, input.DockerPlan)
 	if err != nil {
 		return fmt.Errorf("runtime current-build check: %w", err)
 	}
 	if !matched {
-		return fmt.Errorf("runtime build is missing or stale; run `reploy build`")
+		return fmt.Errorf("%s", currentBuildRecoveryMessageV1(input.Current.State, "runtime build is missing or stale"))
 	}
 	if err := ValidateRuntimeHostSourcesV1(input.Current.Lock.RuntimePolicy, input.PlanID, input.Sources); err != nil {
 		return fmt.Errorf("runtime host-source check: %w", err)
 	}
 	return nil
+}
+
+// CurrentBuildMatchesRuntimeV1 checks the complete runtime-affecting state
+// against the published lock without resolving a mutable base or contacting a
+// provider. A valid state that no longer composes with the published lock is a
+// stale build, not runtime work to repair or reproduce.
+func CurrentBuildMatchesRuntimeV1(current CurrentBuild, dockerPlan DockerExecutionPlan) (bool, error) {
+	if err := deploy.ValidateStateV1(current.State); err != nil {
+		return false, fmt.Errorf("runtime current build state: %w", err)
+	}
+	if current.State.Current == nil || !reflect.DeepEqual(*current.State.Current, current.Generation) {
+		return false, fmt.Errorf("runtime current build state does not name the supplied generation")
+	}
+	if err := validateGenerationBuildLock(current.Generation, current.Lock, registry.ValidateRequirementProfileV1); err != nil {
+		return false, fmt.Errorf("runtime current build: %w", err)
+	}
+	document, err := blueprint.DecodeResolvedDocumentV1(current.State.Blueprint)
+	if err != nil {
+		return false, fmt.Errorf("runtime blueprint: %w", err)
+	}
+	blueprintDigest, err := blueprint.ResolvedDocumentDigestV1(current.State.Blueprint)
+	if err != nil {
+		return false, err
+	}
+	if blueprintDigest != current.Lock.BlueprintDigest || current.State.Platform != current.Lock.Platform {
+		return false, nil
+	}
+	stateOverlayDigest, err := deploy.RequestOverlayDigestV1(current.State.Overlay)
+	if err != nil {
+		return false, err
+	}
+	lockedOverlayDigest, err := deploy.RequestOverlayDigestV1(current.Lock.Overlay)
+	if err != nil {
+		return false, err
+	}
+	if stateOverlayDigest != lockedOverlayDigest {
+		return false, nil
+	}
+
+	selectedSources, err := buildLockSelectedSourcesV1(current.Lock)
+	if err != nil {
+		return false, err
+	}
+	request, err := BuildResolvedRequestV1(document, current.State.Overlay, current.State.Platform, selectedSources)
+	if err != nil {
+		return false, nil
+	}
+	requestDigest, err := providers.ResolvedRequestDigest(request, registry.ValidateResolvedRequestOwnersV1)
+	if err != nil {
+		return false, err
+	}
+	baseReference, err := resolvedRequestBaseReference(request)
+	if err != nil {
+		return false, nil
+	}
+	if requestDigest != current.Lock.ResolvedRequestDigest || baseReference != current.Lock.Base.AuthorReference {
+		return false, nil
+	}
+
+	plans, err := RuntimePlansV1(document, dockerPlan)
+	if err != nil {
+		return false, fmt.Errorf("runtime plan: %w", err)
+	}
+	policy, err := CompileRuntimePolicyFromLockV1(document, current.Lock, plans)
+	if err != nil {
+		return false, nil
+	}
+	policyDigest, err := deploy.RuntimePolicyDigestV1(policy)
+	if err != nil {
+		return false, err
+	}
+	lockedPolicyDigest, err := deploy.RuntimePolicyDigestV1(current.Lock.RuntimePolicy)
+	if err != nil {
+		return false, err
+	}
+	return policyDigest == lockedPolicyDigest, nil
 }

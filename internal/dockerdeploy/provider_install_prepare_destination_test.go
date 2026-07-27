@@ -18,7 +18,7 @@ func TestPrepareProviderInstallDestinationV1ChecksSpaceBeforeWritingPrivateCandi
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = prepared.Cleanup() })
-	if len(prepared.Files) != 2 {
+	if len(prepared.Files) != 4 {
 		t.Fatalf("prepared files = %#v", prepared.Files)
 	}
 	for _, file := range prepared.Files {
@@ -37,7 +37,7 @@ func TestPrepareProviderInstallDestinationV1DoesNotWriteAfterDiskFailure(t *test
 	preparedCalled := false
 	backend := providerInstallPrepareDestinationBackendV1{
 		files: providerInstallFilesV1,
-		diskRequirements: func(_ providerstore.Store, _ providerstore.Store, _ InstalledBuildPublicationInputV1, _ *deploy.EnvironmentGenerationState, candidates []providerInstallFileCandidateV1) ([]providerInstallDiskRequirementV1, error) {
+		diskRequirements: func(_ providerstore.Store, _ providerstore.Store, _ InstalledBuildPublicationInputV1, _ *deploy.EnvironmentGenerationState, candidates []providerInstallFileCandidateV1, _ []PathUpdateAction) ([]providerInstallDiskRequirementV1, error) {
 			return []providerInstallDiskRequirementV1{{Path: candidates[0].Path, Bytes: 1}}, nil
 		},
 		preflight: func([]providerInstallDiskRequirementV1) error { return want },
@@ -53,6 +53,8 @@ func TestPrepareProviderInstallDestinationV1DoesNotWriteAfterDiskFailure(t *test
 	for _, path := range []string{
 		filepath.Join(locked.Input.DestinationDeploymentDir, DockerEnvFileName),
 		filepath.Join(locked.Input.DestinationDeploymentDir, ComposeFileName),
+		filepath.Join(locked.Input.DestinationDeploymentDir, locked.Plan.ControlScript),
+		filepath.Join(locked.Input.DestinationDeploymentDir, filepath.FromSlash(embeddedRuntimeFileName())),
 	} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("destination %q changed after disk failure: %v", path, err)

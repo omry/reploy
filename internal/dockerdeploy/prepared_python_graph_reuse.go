@@ -2,7 +2,9 @@ package dockerdeploy
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"path"
 	"path/filepath"
 	"reflect"
@@ -18,6 +20,8 @@ import (
 	"github.com/omry/reploy/internal/providers/registry"
 	"github.com/omry/reploy/internal/providerstore"
 )
+
+var errCurrentPythonSourceWheelMissing = errors.New("current Python source wheel is missing")
 
 // PreparedPythonGraphReuse contains only provider content reachable from the
 // current deployment lock. The maps plug directly into GraphExecutionRequest
@@ -302,6 +306,9 @@ func validateCurrentPythonSourceWheels(
 			return nil, fmt.Errorf("current Python source wheels must have unique digests")
 		}
 		if _, err := store.InspectArtifactPath(wheel); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, fmt.Errorf("%w: inspect %q: %w", errCurrentPythonSourceWheelMissing, wheel.LogicalPath, err)
+			}
 			return nil, fmt.Errorf("inspect current Python source wheel %q: %w", wheel.LogicalPath, err)
 		}
 		wheelsByDigest[wheel.SHA256] = wheel

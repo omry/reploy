@@ -1,0 +1,2 @@
+kind: Added
+body: Add blueprint-controlled concurrent app and shell admission with fair, cancellation-aware `--wait` queuing, abandoned lifecycle-operation recovery, and `reploy runs` administration.

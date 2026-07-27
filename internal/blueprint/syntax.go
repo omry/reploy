@@ -28,28 +28,30 @@ type CompatibilitySyntax struct {
 }
 
 type EnvironmentSyntax struct {
-	ID            string                       `yaml:"id"`
-	ControlScript string                       `yaml:"control_script"`
-	Vars          map[string]any               `yaml:"vars"`
-	Translations  map[string]TranslationSyntax `yaml:"translations"`
-	Components    map[string]ComponentSyntax   `yaml:"components"`
-	Terminal      TerminalSyntax               `yaml:"terminal"`
-	Install       InstallSyntax                `yaml:"install"`
-	Paths         map[string]PathSyntax        `yaml:"paths"`
-	Executables   map[string]ExecutableSyntax  `yaml:"executables"`
-	Commands      map[string]CommandSyntax     `yaml:"commands"`
-	Workload      *WorkloadSyntax              `yaml:"workload"`
+	ID              string                     `yaml:"id"`
+	ControlScript   string                     `yaml:"control_script"`
+	Vars            map[string]any             `yaml:"vars"`
+	Workspace       WorkspaceSyntax            `yaml:"workspace"`
+	Components      map[string]ComponentSyntax `yaml:"components"`
+	AllowConcurrent string                     `yaml:"allow_concurrent"`
+	Terminal        TerminalSyntax             `yaml:"terminal"`
+	Install         InstallSyntax              `yaml:"install"`
+	Mounts          map[string]MountSyntax     `yaml:"mounts"`
+	Commands        map[string]CommandSyntax   `yaml:"commands"`
+	Workload        *WorkloadSyntax            `yaml:"workload"`
 }
 
 type TerminalSyntax struct {
 	ColorEnv string `yaml:"color_env"`
 }
 
-type TranslationSyntax struct {
-	Type     string            `yaml:"type"`
-	Scope    string            `yaml:"scope"`
-	Root     string            `yaml:"root"`
-	Mappings map[string]string `yaml:"mappings"`
+type WorkspaceSyntax struct {
+	Root     string                  `yaml:"root"`
+	Packages WorkspacePackagesSyntax `yaml:"packages"`
+}
+
+type WorkspacePackagesSyntax struct {
+	Python map[string]string `yaml:"python"`
 }
 
 type ComponentSyntax struct {
@@ -60,6 +62,7 @@ type ComponentSyntax struct {
 	Requirements []string                          `yaml:"requirements"`
 	Packages     []APTPackageRequestSyntax         `yaml:"packages"`
 	Options      map[string]ComponentOptionSyntax  `yaml:"options"`
+	Executables  map[string]ExecutableSyntax       `yaml:"executables"`
 	Present      map[string]bool                   `yaml:"-"`
 }
 
@@ -85,14 +88,13 @@ type APTPackageRequestSyntax struct {
 	Exports map[string]ExecutableExportSyntax `yaml:"exports"`
 }
 
-type PathSyntax struct {
-	Container string `yaml:"container"`
-	Writable  any    `yaml:"writable"`
-	Update    string `yaml:"update"`
+type MountSyntax struct {
+	Target       string `yaml:"target"`
+	Writable     any    `yaml:"writable"`
+	UpdatePolicy string `yaml:"update_policy"`
 }
 
 type ExecutableSyntax struct {
-	Component  string   `yaml:"component"`
 	Binary     string   `yaml:"binary"`
 	Order      []string `yaml:"order"`
 	ArgvPrefix []string `yaml:"argv_prefix"`
@@ -175,9 +177,8 @@ type InstallSuccessSyntax struct {
 }
 
 type DockerSyntax struct {
-	AdditionalMountRoots []string                     `yaml:"additional_mount_roots"`
-	Mounts               map[string]DockerMountSyntax `yaml:"mounts"`
-	Workload             *DockerWorkloadSyntax        `yaml:"workload"`
+	Mounts   map[string]DockerMountSyntax `yaml:"mounts"`
+	Workload *DockerWorkloadSyntax        `yaml:"workload"`
 }
 
 type DockerMountSyntax struct {

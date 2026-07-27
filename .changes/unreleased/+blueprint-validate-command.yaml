@@ -1,0 +1,2 @@
+kind: Added
+body: Add `reploy validate BLUEPRINT_REF` for syntax and semantic validation without staging or building an image.

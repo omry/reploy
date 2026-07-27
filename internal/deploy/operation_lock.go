@@ -26,6 +26,18 @@ type OperationLock struct {
 // lock and keeps its descriptor open until Unlock. Waiting is bounded only by
 // caller cancellation.
 func AcquireOperationLock(ctx context.Context, deploymentDir string) (*OperationLock, error) {
+	return acquireOperationLock(ctx, deploymentDir, true)
+}
+
+// AcquireExistingOperationLock acquires an already-initialized deployment's
+// operation lock without creating the state directory or lock file. Read-only
+// diagnostics use it so a missing or malformed deployment is never changed by
+// inspection.
+func AcquireExistingOperationLock(ctx context.Context, deploymentDir string) (*OperationLock, error) {
+	return acquireOperationLock(ctx, deploymentDir, false)
+}
+
+func acquireOperationLock(ctx context.Context, deploymentDir string, create bool) (*OperationLock, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("operation lock requires a context")
 	}
@@ -36,11 +48,15 @@ func AcquireOperationLock(ctx context.Context, deploymentDir string) (*Operation
 	if err != nil {
 		return nil, fmt.Errorf("resolve deployment directory for operation lock: %w", err)
 	}
-	lockPath, err := prepareOperationLockPath(absoluteDir)
+	lockPath, err := prepareOperationLockPath(absoluteDir, create)
 	if err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
+	flags := os.O_RDWR
+	if create {
+		flags |= os.O_CREATE
+	}
+	file, err := os.OpenFile(lockPath, flags, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open operation lock: %w", err)
 	}
@@ -66,7 +82,7 @@ func AcquireOperationLock(ctx context.Context, deploymentDir string) (*Operation
 	}
 }
 
-func prepareOperationLockPath(deploymentDir string) (string, error) {
+func prepareOperationLockPath(deploymentDir string, create bool) (string, error) {
 	info, err := os.Lstat(deploymentDir)
 	if err != nil {
 		return "", fmt.Errorf("inspect deployment directory for operation lock: %w", err)
@@ -77,6 +93,9 @@ func prepareOperationLockPath(deploymentDir string) (string, error) {
 	stateDir := filepath.Join(deploymentDir, ".reploy")
 	info, err = os.Lstat(stateDir)
 	if os.IsNotExist(err) {
+		if !create {
+			return "", fmt.Errorf("operation lock state directory does not exist: %s", stateDir)
+		}
 		if mkdirErr := os.Mkdir(stateDir, 0o755); mkdirErr != nil && !os.IsExist(mkdirErr) {
 			return "", fmt.Errorf("create operation lock directory: %w", mkdirErr)
 		}
@@ -95,6 +114,9 @@ func prepareOperationLockPath(deploymentDir string) (string, error) {
 	}
 	if err != nil && !os.IsNotExist(err) {
 		return "", fmt.Errorf("inspect operation lock path: %w", err)
+	}
+	if os.IsNotExist(err) && !create {
+		return "", fmt.Errorf("operation lock does not exist: %s", lockPath)
 	}
 	return lockPath, nil
 }

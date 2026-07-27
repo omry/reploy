@@ -40,7 +40,8 @@ func TestOperationLockRejectsLegacyAndSymlinkState(t *testing.T) {
 		t.Fatal(err)
 	}
 	statePath := filepath.Join(stateDir, stateFilenameV1)
-	if err := os.WriteFile(statePath, []byte(`{"schema_version":1}`), 0o600); err != nil {
+	legacyContent := []byte(`{"schema_version":1}`)
+	if err := os.WriteFile(statePath, legacyContent, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	lock, err := AcquireOperationLock(context.Background(), dir)
@@ -49,6 +50,13 @@ func TestOperationLockRejectsLegacyAndSymlinkState(t *testing.T) {
 	}
 	if _, _, err := lock.ReadStateV1(); !errors.Is(err, ErrLegacyStateUnsupported) {
 		t.Fatalf("legacy state read error = %v", err)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(legacyContent) {
+		t.Fatalf("legacy state changed during rejected read: %q", after)
 	}
 	if err := os.Remove(statePath); err != nil {
 		t.Fatal(err)

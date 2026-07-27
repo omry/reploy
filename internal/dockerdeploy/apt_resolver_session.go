@@ -658,7 +658,7 @@ func OpenAPTResolverSession(
 		"--network", "default",
 		"--mount", probeMount, "--mount", resolverMount,
 		"--entrypoint", probeWorkspace.ContainerExecutable,
-		descriptor.ImmutableReference, "hold",
+		string(descriptor.ConfigDigest), "hold",
 	}}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

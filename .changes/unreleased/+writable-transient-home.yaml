@@ -1,0 +1,2 @@
+kind: Fixed
+body: Make the anonymous home used by shells, app commands, and lifecycle hooks writable by the selected non-root runtime user while keeping the container root filesystem read-only.

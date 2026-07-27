@@ -1,2 +1,2 @@
 kind: Security
-body: Reject parent-directory traversal segments in interpolated environment and legacy install targets.
+body: Reject parent-directory traversal segments in interpolated environment install targets.

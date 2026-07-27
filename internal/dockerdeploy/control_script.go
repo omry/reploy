@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-
-	"github.com/omry/reploy/internal/deploy"
 )
 
 type controlScriptMode string
@@ -17,75 +15,14 @@ const (
 )
 
 type controlScriptSpec struct {
-	Mode               controlScriptMode
-	TargetDir          string
-	AppID              string
-	Service            string
-	ComposeProject     string
-	ComposeOverride    bool
-	ControlScript      string
-	ConfigDir          string
-	Health             deploy.DockerHealthConfig
-	Terminal           deploy.AppTerminalConfig
-	DeployedCommands   []deploy.DockerCommandConfig
-	ConfigContainerDir string
-	ManagedFiles       []string
-}
-
-func stagingControlScriptContent(pack deploy.AppPack, deployedCommands []deploy.DockerCommandConfig) string {
-	configLayout := configMountLayoutForPack(pack)
-	return renderControlScript(controlScriptSpec{
-		Mode:               controlScriptModeStaged,
-		AppID:              pack.AppID,
-		ControlScript:      controlScriptNameForPack(pack),
-		ConfigDir:          pack.Docker.DeploymentDirs.Config,
-		Health:             pack.Docker.Health,
-		Terminal:           pack.App.Terminal,
-		DeployedCommands:   deployedCommands,
-		ConfigContainerDir: configLayout.ContainerConfigDir,
-		ManagedFiles:       append([]string(nil), configLayout.FileMounts...),
-	})
-}
-
-func controlScriptContent(plan installPlan) string {
-	mode := controlScriptModeDeployed
-	if isDockerManagedInstallBackend(plan.Backend) {
-		mode = controlScriptModeDockerDesktop
-	}
-	return renderControlScript(controlScriptSpec{
-		Mode:               mode,
-		TargetDir:          plan.TargetDir,
-		AppID:              plan.AppID,
-		Service:            plan.Service,
-		ComposeProject:     plan.ComposeProject,
-		ComposeOverride:    plan.ComposeOverride,
-		ControlScript:      plan.ControlScript,
-		ConfigDir:          plan.ConfigDir,
-		Health:             plan.Health,
-		Terminal:           plan.Terminal,
-		DeployedCommands:   plan.DeployedCommands,
-		ConfigContainerDir: plan.ConfigContainerDir,
-		ManagedFiles:       append([]string(nil), plan.ManagedFiles...),
-	})
+	Mode          controlScriptMode
+	TargetDir     string
+	AppID         string
+	ControlScript string
 }
 
 func powerShellControlScriptName(appID string) string {
 	return controlScriptName(appID) + ".ps1"
-}
-
-func powerShellDockerDesktopControlScriptContent(plan installPlan) string {
-	return renderPowerShellDockerDesktopControlScript(controlScriptSpec{
-		Mode:               controlScriptModeDockerDesktop,
-		TargetDir:          plan.TargetDir,
-		AppID:              plan.AppID,
-		ComposeProject:     plan.ComposeProject,
-		ControlScript:      powerShellControlScriptName(plan.AppID),
-		ConfigDir:          plan.ConfigDir,
-		Terminal:           plan.Terminal,
-		DeployedCommands:   plan.DeployedCommands,
-		ConfigContainerDir: plan.ConfigContainerDir,
-		ManagedFiles:       append([]string(nil), plan.ManagedFiles...),
-	})
 }
 
 func renderPowerShellDockerDesktopControlScript(spec controlScriptSpec) string {

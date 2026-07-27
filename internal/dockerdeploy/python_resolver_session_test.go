@@ -14,6 +14,7 @@ import (
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/probe"
 	"github.com/omry/reploy/internal/providers"
+	pythonprovider "github.com/omry/reploy/internal/providers/python"
 	"github.com/omry/reploy/internal/providerstore"
 )
 
@@ -50,11 +51,11 @@ func TestPythonResolverSessionProbesAndInspectsInOneContainer(t *testing.T) {
 		"create", "--name", name,
 		"--platform", "linux/amd64", "--pull", "never",
 		"--user", "0:0", "--workdir", "/", "--read-only",
-		"--network", "default", "--tmpfs", "/tmp:rw,nosuid,nodev,mode=1777",
+		"--network", "default", "--tmpfs", "/tmp:rw,exec,nosuid,nodev,mode=1777",
 		"--mount", "type=bind,\"source=" + workspace.HostDir + "\",target=/.reploy-validation,readonly",
 		"--mount", "type=bind,source=" + artifacts.InputHostDir + ",target=" + pythonResolverInputContainerDir + ",readonly",
 		"--mount", "type=bind,source=" + artifacts.OutputHostDir + ",target=" + pythonResolverOutputContainerDir,
-		"--entrypoint", ProbeContainerExecutable, descriptor.ImmutableReference, "hold",
+		"--entrypoint", ProbeContainerExecutable, string(descriptor.ConfigDigest), "hold",
 	}
 	wantInspect := []string{
 		"exec", "--user", "0:0", "--workdir", "/", name,
@@ -179,6 +180,75 @@ func TestOpenPythonResolverSessionRejectsNonemptyOutputBeforeDocker(t *testing.T
 	}
 	if len(*commands) != 0 {
 		t.Fatalf("nonempty resolver output reached Docker: %#v", *commands)
+	}
+}
+
+func TestPythonResolverSessionBuildsSourceWheelWithSelectedInterpreterAndPinnedUV(t *testing.T) {
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
+	artifacts := testPreparedPythonResolverArtifacts(t)
+	request, responseRecord := pythonResolverProbeExchange()
+	commands, _ := stubPythonResolverCommands(t, mustCanonicalProbeResponse(t, responseRecord), []byte("3.13.2\n"), nil)
+	session, err := OpenPythonResolverSession(context.Background(), descriptor, workspace, artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Probe(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	launcher := pythonResolverSessionInput(t, session, responseRecord.Observations[0], providers.ExecutableRoleEnvironmentLauncher)
+	requirement := providers.ExecutableRequirement{
+		ID: "interpreter", Command: "interpreter", Supplier: "base", ValidationPolicy: providers.ValidationPolicyCompatible,
+	}
+	interpreter, _, err := session.InspectAndBindInterpreter(
+		context.Background(), launcher, requirement, providers.QualifiedOutput{Component: "base", Name: "interpreter"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshots := stageSourceWheelTestSnapshot(t, artifacts, "demo-pkg")
+	if err := session.BuildSourceWheels(context.Background(), launcher, requirement, interpreter.Evidence, snapshots); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	var copyCommand, bootstrapCommand, buildCommand, cleanupCommand []string
+	for _, command := range *commands {
+		switch {
+		case containsInOrder(command.Args, []string{"cp", "-a", snapshots[0].ContainerDir + "/.", pythonSourceBuildRoot + "/demo-pkg"}):
+			copyCommand = command.Args
+		case containsInOrder(command.Args, []string{"-m", "pip", "--disable-pip-version-check", "install"}):
+			bootstrapCommand = command.Args
+		case containsInOrder(command.Args, []string{"-m", "uv", "build"}):
+			buildCommand = command.Args
+		case containsInOrder(command.Args, []string{"rm", "-f", artifacts.OutputContainerDir + "/.gitignore"}):
+			cleanupCommand = command.Args
+		}
+	}
+	if copyCommand == nil {
+		t.Fatalf("source snapshot was not copied: %#v", *commands)
+	}
+	if !containsInOrder(bootstrapCommand, []string{
+		"/usr/bin/python3", "-m", "pip", "--disable-pip-version-check", "install",
+	}) || !containsInOrder(bootstrapCommand, []string{
+		"--find-links", artifacts.InputContainerDir, "--target", pythonSourceBuilderRoot, pythonprovider.SourceBuilderRequirementV1,
+	}) {
+		t.Fatalf("uv bootstrap command = %#v", bootstrapCommand)
+	}
+	if !containsInOrder(buildCommand, []string{
+		"PYTHONPATH=" + pythonSourceBuilderRoot, "UV_CACHE_DIR=" + pythonSourceUVCacheRoot,
+		"UV_PYTHON=/usr/bin/python3", "UV_PYTHON_DOWNLOADS=never",
+		"/usr/bin/python3", "-m", "uv", "build", "--no-progress", "--wheel",
+		"--python", "/usr/bin/python3", "--no-python-downloads",
+		"--find-links", artifacts.InputContainerDir, "--out-dir", artifacts.OutputContainerDir,
+		pythonSourceBuildRoot + "/demo-pkg",
+	}) {
+		t.Fatalf("source build command = %#v", buildCommand)
+	}
+	if cleanupCommand == nil {
+		t.Fatalf("source-builder metadata was not cleared: %#v", *commands)
 	}
 }
 

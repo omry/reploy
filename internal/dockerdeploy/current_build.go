@@ -33,6 +33,21 @@ func ValidateCurrentBuild(
 	return validateCurrentBuild(ctx, operation, store, environment, deploymentDir, VerifyEnvironmentGenerationReference)
 }
 
+// LoadRecordedCurrentBuildV1 validates the recorded state and lock without
+// inspecting Docker. It is for read-only metadata rendering after an operation
+// has already validated and published the image.
+func LoadRecordedCurrentBuildV1(
+	ctx context.Context,
+	operation *deploy.OperationLock,
+	store providerstore.Store,
+	environment string,
+	deploymentDir string,
+) (CurrentBuild, bool, error) {
+	return validateCurrentBuild(ctx, operation, store, environment, deploymentDir, func(context.Context, providers.RealizedImageV1, string, string, string) error {
+		return nil
+	})
+}
+
 func validateCurrentBuild(
 	ctx context.Context,
 	operation *deploy.OperationLock,

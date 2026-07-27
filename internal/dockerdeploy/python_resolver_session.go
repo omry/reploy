@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"reflect"
 	"strings"
 
@@ -29,6 +30,12 @@ type PythonResolverSession struct {
 
 var runPythonResolverOpenCommand = runCommand
 var runPythonResolverFollowupCommand = runCommandWithoutDockerPreflight
+
+const (
+	pythonSourceBuildRoot   = "/tmp/reploy-source-build"
+	pythonSourceBuilderRoot = "/tmp/reploy-source-builder"
+	pythonSourceUVCacheRoot = "/tmp/reploy-uv-cache"
+)
 
 // OpenPythonResolverSession starts the one disposable consumer container used
 // for Python prerequisite validation and, later, wheel resolution. Its public
@@ -74,12 +81,12 @@ func OpenPythonResolverSession(
 		"create", "--name", containerName,
 		"--platform", descriptor.Platform.Canonical, "--pull", "never",
 		"--user", "0:0", "--workdir", "/", "--read-only",
-		"--network", "default", "--tmpfs", "/tmp:rw,nosuid,nodev,mode=1777",
+		"--network", "default", "--tmpfs", "/tmp:rw,exec,nosuid,nodev,mode=1777",
 		"--mount", probeMount,
 		"--mount", inputMount,
 		"--mount", outputMount,
 		"--entrypoint", workspace.ContainerExecutable,
-		descriptor.ImmutableReference, "hold",
+		string(descriptor.ConfigDigest), "hold",
 	}}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -303,41 +310,8 @@ func (session *PythonResolverSession) ResolveWheels(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := providers.ValidateValidatedExecutableInput(launcher); err != nil || launcher.Role != providers.ExecutableRoleEnvironmentLauncher {
-		return fmt.Errorf("Python wheel resolver requires its validated environment launcher")
-	}
-	launcherRequirement := providers.ExecutableRequirement{
-		ID: launcher.ID, Command: launcher.Evidence.Output.Name,
-		Supplier: launcher.Evidence.Output.Component, ValidationPolicy: launcher.Policy,
-	}
-	expectedLauncher, err := session.ValidatedExecutableInput(
-		providers.ExecutableRoleEnvironmentLauncher, launcherRequirement, launcher.Evidence.Output, launcher.Evidence.Facts,
-	)
-	if err != nil {
+	if err := session.validateWheelOperationInputs(launcher, requirement, interpreter); err != nil {
 		return err
-	}
-	if !reflect.DeepEqual(expectedLauncher, launcher) {
-		return fmt.Errorf("Python wheel resolver environment launcher evidence does not match this container")
-	}
-	selected := providers.ValidatedExecutableInput{
-		ID: requirement.ID, Role: providers.ExecutableRoleSelectedOutput,
-		Policy: requirement.ValidationPolicy, Evidence: interpreter,
-	}
-	if err := providers.ValidateValidatedExecutableInput(selected); err != nil {
-		return fmt.Errorf("Python wheel resolver interpreter: %w", err)
-	}
-	expected, err := session.ValidatedExecutableInput(
-		providers.ExecutableRoleSelectedOutput, requirement, interpreter.Output, interpreter.Facts,
-	)
-	if err != nil {
-		return err
-	}
-	if !reflect.DeepEqual(expected.Evidence, interpreter) {
-		return fmt.Errorf("Python wheel resolver interpreter evidence does not match this container")
-	}
-	version, inspected := session.inspected[interpreter.InvocationPath]
-	if !inspected || interpreter.Facts.Schema != pythonprovider.InterpreterFactsSchemaV1 || interpreter.Facts.Value["version"] != version {
-		return fmt.Errorf("Python wheel resolver interpreter was not inspected in this container")
 	}
 	if err := StagePythonResolverSourceConstraints(session.artifacts, request, sources, reusable); err != nil {
 		return err
@@ -360,6 +334,181 @@ func (session *PythonResolverSession) ResolveWheels(
 			return fmt.Errorf("selected Python interpreter has no pip module; ensure its providing packages include pip support: %w", commandErr)
 		}
 		return fmt.Errorf("Python wheel resolution failed: %w", commandErr)
+	}
+	return nil
+}
+
+// BuildSourceWheels copies immutable source snapshots into container-local
+// scratch and builds one wheel for each through the exact selected interpreter
+// and pinned uv toolchain. The writable output remains host-owned for the
+// subsequent validation and publication handoff.
+func (session *PythonResolverSession) BuildSourceWheels(
+	ctx context.Context,
+	launcher providers.ValidatedExecutableInput,
+	requirement providers.ExecutableRequirement,
+	interpreter providers.ExecutableEvidence,
+	snapshots []PreparedPythonSourceSnapshot,
+) error {
+	if session == nil || session.closed || session.stopped {
+		return fmt.Errorf("Python resolver session is not open")
+	}
+	if ctx == nil {
+		return fmt.Errorf("Python source build context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if snapshots == nil {
+		return fmt.Errorf("Python source snapshots must use an array")
+	}
+	if err := validatePreparedPythonResolverArtifacts(session.artifacts); err != nil {
+		return err
+	}
+	if err := validatePreparedPythonSourceSnapshots(session.artifacts, snapshots); err != nil {
+		return err
+	}
+	if err := session.validateWheelOperationInputs(launcher, requirement, interpreter); err != nil {
+		return err
+	}
+	if len(snapshots) == 0 {
+		return nil
+	}
+
+	commands := []struct {
+		operation string
+		argv      []string
+	}{
+		{
+			operation: "clear source-build scratch",
+			argv:      []string{"rm", "-rf", pythonSourceBuildRoot, pythonSourceBuilderRoot, pythonSourceUVCacheRoot},
+		},
+		{
+			operation: "create source-build scratch",
+			argv:      []string{"mkdir", "-p", pythonSourceBuildRoot},
+		},
+	}
+	for _, snapshot := range snapshots {
+		buildDir := path.Join(pythonSourceBuildRoot, snapshot.Distribution)
+		commands = append(commands,
+			struct {
+				operation string
+				argv      []string
+			}{operation: "create source-build directory", argv: []string{"mkdir", "-p", buildDir}},
+			struct {
+				operation string
+				argv      []string
+			}{operation: "copy source snapshot", argv: []string{"cp", "-a", snapshot.ContainerDir + "/.", buildDir}},
+		)
+	}
+	commands = append(commands, struct {
+		operation string
+		argv      []string
+	}{
+		operation: "bootstrap pinned uv source builder",
+		argv: []string{
+			interpreter.InvocationPath, "-m", "pip", "--disable-pip-version-check",
+			"install", "--no-cache-dir", "--progress-bar", "off", "--root-user-action", "ignore",
+			"--find-links", session.artifacts.InputContainerDir,
+			"--target", pythonSourceBuilderRoot, pythonprovider.SourceBuilderRequirementV1,
+		},
+	})
+	for _, snapshot := range snapshots {
+		commands = append(commands, struct {
+			operation string
+			argv      []string
+		}{
+			operation: "build source wheel",
+			argv: []string{
+				interpreter.InvocationPath, "-m", "uv", "build", "--no-progress", "--wheel",
+				"--python", interpreter.InvocationPath, "--no-python-downloads",
+				"--find-links", session.artifacts.InputContainerDir,
+				"--out-dir", session.artifacts.OutputContainerDir,
+				path.Join(pythonSourceBuildRoot, snapshot.Distribution),
+			},
+		})
+	}
+	commands = append(commands, struct {
+		operation string
+		argv      []string
+	}{
+		operation: "clear source-builder metadata",
+		argv:      []string{"rm", "-f", path.Join(session.artifacts.OutputContainerDir, ".gitignore")},
+	})
+	for _, command := range commands {
+		if err := session.runWheelEnvironmentCommand(ctx, launcher, interpreter.InvocationPath, command.operation, command.argv); err != nil {
+			if command.operation == "bootstrap pinned uv source builder" && strings.Contains(strings.ToLower(err.Error()), "no module named pip") {
+				return fmt.Errorf("selected Python interpreter has no pip module; ensure its providing packages include pip support: %w", err)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func (session *PythonResolverSession) validateWheelOperationInputs(
+	launcher providers.ValidatedExecutableInput,
+	requirement providers.ExecutableRequirement,
+	interpreter providers.ExecutableEvidence,
+) error {
+	if err := providers.ValidateValidatedExecutableInput(launcher); err != nil || launcher.Role != providers.ExecutableRoleEnvironmentLauncher {
+		return fmt.Errorf("Python wheel operation requires its validated environment launcher")
+	}
+	launcherRequirement := providers.ExecutableRequirement{
+		ID: launcher.ID, Command: launcher.Evidence.Output.Name,
+		Supplier: launcher.Evidence.Output.Component, ValidationPolicy: launcher.Policy,
+	}
+	expectedLauncher, err := session.ValidatedExecutableInput(
+		providers.ExecutableRoleEnvironmentLauncher, launcherRequirement, launcher.Evidence.Output, launcher.Evidence.Facts,
+	)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(expectedLauncher, launcher) {
+		return fmt.Errorf("Python wheel operation environment launcher evidence does not match this container")
+	}
+	selected := providers.ValidatedExecutableInput{
+		ID: requirement.ID, Role: providers.ExecutableRoleSelectedOutput,
+		Policy: requirement.ValidationPolicy, Evidence: interpreter,
+	}
+	if err := providers.ValidateValidatedExecutableInput(selected); err != nil {
+		return fmt.Errorf("Python wheel operation interpreter: %w", err)
+	}
+	expected, err := session.ValidatedExecutableInput(
+		providers.ExecutableRoleSelectedOutput, requirement, interpreter.Output, interpreter.Facts,
+	)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(expected.Evidence, interpreter) {
+		return fmt.Errorf("Python wheel operation interpreter evidence does not match this container")
+	}
+	version, inspected := session.inspected[interpreter.InvocationPath]
+	if !inspected || interpreter.Facts.Schema != pythonprovider.InterpreterFactsSchemaV1 || interpreter.Facts.Value["version"] != version {
+		return fmt.Errorf("Python wheel operation interpreter was not inspected in this container")
+	}
+	return nil
+}
+
+func (session *PythonResolverSession) runWheelEnvironmentCommand(
+	ctx context.Context,
+	launcher providers.ValidatedExecutableInput,
+	interpreter string,
+	operation string,
+	command []string,
+) error {
+	args := []string{
+		"exec", "--user", "0:0", "--workdir", "/", session.containerName,
+		launcher.Evidence.InvocationPath, "-i",
+		"HOME=/tmp", "LANG=C", "LC_ALL=C",
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "TMPDIR=/tmp",
+		"PYTHONNOUSERSITE=1", "PYTHONPATH=" + pythonSourceBuilderRoot,
+		"UV_CACHE_DIR=" + pythonSourceUVCacheRoot, "UV_PYTHON=" + interpreter, "UV_PYTHON_DOWNLOADS=never",
+	}
+	args = append(args, command...)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := runPythonResolverFollowupCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
+		return pythonResolverCommandError(operation, session.descriptor.Platform.Canonical, stderr.String(), err)
 	}
 	return nil
 }

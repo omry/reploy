@@ -223,6 +223,31 @@ func TestLoadPreparedPythonGraphReuseTreatsMissingBlobAsCacheMiss(t *testing.T) 
 	}
 }
 
+func TestLoadPreparedPythonGraphReuseRetainsOtherWheelsWhileRebuildingMissingSourceWheel(t *testing.T) {
+	fixture := newPreparedPythonGraphReuseFixture(t)
+	path, err := fixture.store.BlobPath(fixture.localWheelDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	reuse, err := LoadPreparedPythonGraphReuse(
+		fixture.store, fixture.request.Plan, fixture.request.Platform,
+		[]providers.ResolvedSourceInput{}, []providerstore.ArtifactDescriptor{}, &fixture.lock,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := reuse.CachedResolutions[fixture.request.NodeID]; found {
+		t.Fatal("missing source wheel retained cached resolution")
+	}
+	wheels := reuse.NodeConfigs[fixture.request.NodeID].ReusableWheels
+	if len(wheels) != 1 || wheels[0].SHA256 != fixture.downloadedWheelDigest {
+		t.Fatalf("wheels retained during source repair = %#v", wheels)
+	}
+}
+
 func TestPreparedPythonCachedValidationHashesStagedWheelBeforeConsumerWork(t *testing.T) {
 	fixture := newPreparedPythonGraphReuseFixture(t)
 	reuse, err := LoadPreparedPythonGraphReuse(
@@ -280,6 +305,10 @@ type preparedPythonGraphReuseFixture struct {
 }
 
 func newPreparedPythonGraphReuseFixture(t *testing.T) preparedPythonGraphReuseFixture {
+	return newPreparedPythonGraphReuseFixtureWithManifest(t, reuseTestDigest("1"))
+}
+
+func newPreparedPythonGraphReuseFixtureWithManifest(t *testing.T, sourceManifest canonical.Digest) preparedPythonGraphReuseFixture {
 	t.Helper()
 	descriptor := testProbeImageDescriptor(t, "linux/amd64")
 	request := preparedPythonResolveRequest(t, descriptor)
@@ -290,16 +319,9 @@ func newPreparedPythonGraphReuseFixture(t *testing.T) preparedPythonGraphReuseFi
 	writeReuseTestWheel(t, downloadedPath, "dependency", "2.0")
 	localDigest := reuseTestFileDigest(t, localPath)
 	downloadedDigest := reuseTestFileDigest(t, downloadedPath)
-	request.SourceCandidates = []providers.ResolvedSourceInput{{
-		Schema:               providers.ResolvedSourceInputSchemaV1,
-		Component:            "application",
-		LogicalPackage:       "demo-server",
-		SourceManifestDigest: reuseTestDigest("1"),
-		BuilderProfile:       "uv-wheel-v1",
-		BuildSettings:        providers.CanonicalProviderData{Schema: "python-build-settings-v1", Value: canonical.Object{}},
-		EcosystemMetadata:    providers.CanonicalProviderData{Schema: "python-source-metadata-v1", Value: canonical.Object{}},
-		ArtifactDigest:       localDigest,
-	}}
+	request.SourceCandidates = []providers.ResolvedSourceInput{
+		testPythonResolvedSource("application", "demo-server", "1.0", sourceManifest, localDigest),
+	}
 	store, err := providerstore.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -362,7 +384,7 @@ func newPreparedPythonGraphReuseFixture(t *testing.T) preparedPythonGraphReuseFi
 		}},
 		Catalog: append([]providers.RealizedOutput{}, request.EarlierCatalog...),
 		RuntimePolicy: deploy.RuntimePolicyV1{
-			Schema: deploy.RuntimePolicySchemaV1, AllowedRoots: []string{"/mnt"},
+			Schema:         deploy.RuntimePolicySchemaV1,
 			ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{},
 		},
 		ValidationRecord: providerstore.StoreObjectRef{Kind: providerstore.ValidationRecordKind, Digest: reuseTestDigest("6")},
@@ -476,7 +498,7 @@ func newPreparedAPTGraphReuseFixture(t *testing.T) (
 		}},
 		Catalog: []providers.RealizedOutput{},
 		RuntimePolicy: deploy.RuntimePolicyV1{
-			Schema: deploy.RuntimePolicySchemaV1, AllowedRoots: []string{"/mnt"},
+			Schema:         deploy.RuntimePolicySchemaV1,
 			ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{},
 		},
 		ValidationRecord: providerstore.StoreObjectRef{Kind: providerstore.ValidationRecordKind, Digest: reuseTestDigest("6")},

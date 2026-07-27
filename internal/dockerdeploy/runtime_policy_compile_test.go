@@ -11,8 +11,8 @@ import (
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
 )
 
-func TestCompileRuntimePolicyCanonicalizesAllowedRootsAndPlans(t *testing.T) {
-	document := runtimePolicyDocument(t, []string{"/srv/demo", "/data"})
+func TestCompileRuntimePolicyCanonicalizesPlans(t *testing.T) {
+	document := runtimePolicyDocument(t)
 	plans := []deploy.RuntimePlanV1{
 		{ID: "workload", Mounts: []deploy.RuntimeMountV1{
 			{Destination: "/mnt/config", SourceKind: deploy.RuntimeMountSourceFile, ReadOnly: true},
@@ -24,9 +24,6 @@ func TestCompileRuntimePolicyCanonicalizesAllowedRootsAndPlans(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(policy.AllowedRoots, []string{"/data", "/mnt", "/srv/demo"}) {
-		t.Fatalf("allowed roots = %#v", policy.AllowedRoots)
-	}
 	if len(policy.ProtectedPaths) != 2 || policy.ProtectedPaths[0].Path != deploy.ReployImageRoot || policy.ProtectedPaths[1].Path != deploy.ReployProviderRoot {
 		t.Fatalf("protected paths = %#v", policy.ProtectedPaths)
 	}
@@ -35,15 +32,20 @@ func TestCompileRuntimePolicyCanonicalizesAllowedRootsAndPlans(t *testing.T) {
 	}
 }
 
-func TestCompileRuntimePolicyRejectsMountOutsideAllowedRootsAndOverlap(t *testing.T) {
-	document := runtimePolicyDocument(t, []string{})
+func TestCompileRuntimePolicyAllowsAbsoluteTargetsAndRejectsOverlap(t *testing.T) {
+	document := runtimePolicyDocument(t)
+	if _, err := CompileRuntimePolicyV1(document, emptyRuntimePolicyGraph(), []deploy.RuntimePlanV1{{
+		ID: "workload", Mounts: []deploy.RuntimeMountV1{{Destination: "/data", SourceKind: deploy.RuntimeMountSourceDirectory}}, Executables: []providers.QualifiedOutput{},
+	}}); err != nil {
+		t.Fatalf("absolute mount target: %v", err)
+	}
 	for _, test := range []struct {
 		name   string
 		mounts []deploy.RuntimeMountV1
 		want   string
 	}{
-		{name: "mount root", mounts: []deploy.RuntimeMountV1{{Destination: "/mnt", SourceKind: deploy.RuntimeMountSourceDirectory}}, want: "outside allowed"},
-		{name: "outside", mounts: []deploy.RuntimeMountV1{{Destination: "/data", SourceKind: deploy.RuntimeMountSourceDirectory}}, want: "outside allowed"},
+		{name: "filesystem root", mounts: []deploy.RuntimeMountV1{{Destination: "/", SourceKind: deploy.RuntimeMountSourceDirectory}}, want: "filesystem root"},
+		{name: "kernel subtree", mounts: []deploy.RuntimeMountV1{{Destination: "/sys/fs", SourceKind: deploy.RuntimeMountSourceDirectory}}, want: "reserved container path"},
 		{name: "overlap", mounts: []deploy.RuntimeMountV1{
 			{Destination: "/mnt/data", SourceKind: deploy.RuntimeMountSourceDirectory},
 			{Destination: "/mnt/data/cache", SourceKind: deploy.RuntimeMountSourceDirectory},
@@ -72,13 +74,15 @@ func TestCompileRuntimePolicyProtectsProviderRootsAndExecutableChains(t *testing
 		}},
 		Catalog: []providers.RealizedOutput{},
 	}
-	document := runtimePolicyDocument(t, []string{"/opt/reploy/providers/python/web"})
-	_, err = CompileRuntimePolicyV1(document, graph, []deploy.RuntimePlanV1{})
+	document := runtimePolicyDocument(t)
+	_, err = CompileRuntimePolicyV1(document, graph, []deploy.RuntimePlanV1{{
+		ID: "shell", Mounts: []deploy.RuntimeMountV1{{Destination: "/opt/reploy/providers/python/web", SourceKind: deploy.RuntimeMountSourceDirectory}}, Executables: []providers.QualifiedOutput{},
+	}})
 	if err == nil || !strings.Contains(err.Error(), "protected") {
 		t.Fatalf("protected allowed-root error = %v", err)
 	}
 	fixture := newPreparedPythonGraphReuseFixture(t)
-	document = runtimePolicyDocument(t, []string{"/usr"})
+	document = runtimePolicyDocument(t)
 	graph = providers.GraphExecutionResult{
 		Bundles: []providers.ResolvedBundle{}, Materializations: []providers.GraphNodeMaterializeResult{},
 		Catalog: fixture.request.EarlierCatalog,
@@ -100,7 +104,7 @@ func TestCompileRuntimePolicyProtectsProviderRootsAndExecutableChains(t *testing
 }
 
 func TestCompileRuntimePolicyRejectsExecutableAbsentFromFinalGraph(t *testing.T) {
-	_, err := CompileRuntimePolicyV1(runtimePolicyDocument(t, []string{}), emptyRuntimePolicyGraph(), []deploy.RuntimePlanV1{{
+	_, err := CompileRuntimePolicyV1(runtimePolicyDocument(t), emptyRuntimePolicyGraph(), []deploy.RuntimePlanV1{{
 		ID: "workload", Mounts: []deploy.RuntimeMountV1{},
 		Executables: []providers.QualifiedOutput{{Component: "application", Name: "serve"}},
 	}})
@@ -115,7 +119,7 @@ func TestCompileRuntimePolicyFromLockMatchesGraphCompilation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	document := runtimePolicyDocument(t, []string{"/usr"})
+	document := runtimePolicyDocument(t)
 	plans := []deploy.RuntimePlanV1{{
 		ID: "shell", Mounts: []deploy.RuntimeMountV1{},
 		Executables: []providers.QualifiedOutput{{Component: "base", Name: "python"}},
@@ -141,9 +145,9 @@ func TestCompileRuntimePolicyFromLockMatchesGraphCompilation(t *testing.T) {
 	}
 }
 
-func runtimePolicyDocument(t *testing.T, roots []string) blueprint.Document {
+func runtimePolicyDocument(t *testing.T) blueprint.Document {
 	t.Helper()
-	document := blueprint.Document{Docker: blueprint.Docker{AdditionalMountRoots: append([]string{}, roots...)}}
+	document := blueprint.Document{Docker: blueprint.Docker{}}
 	return document
 }
 

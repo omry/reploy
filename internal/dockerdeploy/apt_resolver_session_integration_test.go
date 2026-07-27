@@ -27,16 +27,19 @@ func TestAPTResolverBaseProfileDockerIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	nativeArchitecture, err := aptprovider.DebianArchitectureForPlatformV1(platform)
+	debianArchitecture, err := aptprovider.DebianArchitectureForPlatformV1(platform)
 	if err != nil {
 		t.Fatal(err)
 	}
 	base := os.Getenv("REPLOY_APT_INTEGRATION_BASE")
 	if base == "" {
-		base = "debian:bookworm-slim"
+		base = "debian:12-slim"
 	}
 	descriptor, _, err := ResolveBase(ctx, base, platform)
 	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no matching manifest") {
+			t.Skipf("%s does not publish %s: %v", base, platform.Canonical, err)
+		}
 		t.Fatal(err)
 	}
 	store, err := providerstore.NewStore(t.TempDir())
@@ -58,7 +61,7 @@ func TestAPTResolverBaseProfileDockerIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if validation.Profile.NativeArchitecture != nativeArchitecture || len(validation.Profile.ForeignArchitectures) != 0 || len(validation.Executables) != len(aptprovider.RequiredBaseToolsV1()) {
+	if validation.Profile.NativeArchitecture != debianArchitecture || len(validation.Profile.ForeignArchitectures) != 0 || len(validation.Executables) != len(aptprovider.RequiredBaseToolsV1()) {
 		t.Fatalf("validation = %#v", validation)
 	}
 	if err := session.RefreshIndexes(ctx); err != nil {
@@ -102,7 +105,7 @@ func TestAPTResolverBaseProfileDockerIntegration(t *testing.T) {
 		t.Fatal("base package state did not contain retained dependencies")
 	}
 	for _, tuple := range baseState {
-		if tuple.Status != aptprovider.InstalledPackageStatusV1 || tuple.Architecture != nativeArchitecture && tuple.Architecture != "all" {
+		if tuple.Status != aptprovider.InstalledPackageStatusV1 || tuple.Architecture != debianArchitecture && tuple.Architecture != "all" {
 			t.Fatalf("invalid base package tuple: %#v", tuple)
 		}
 	}
@@ -135,7 +138,7 @@ func TestAPTResolverBaseProfileDockerIntegration(t *testing.T) {
 	}
 	foundHello := false
 	for _, pkg := range bundlePackages {
-		if pkg.Tuple.Name == "hello" && pkg.Tuple.Version != "" && pkg.Tuple.Architecture == nativeArchitecture && pkg.FileListDigest != "" {
+		if pkg.Tuple.Name == "hello" && pkg.Tuple.Version != "" && pkg.Tuple.Architecture == debianArchitecture && pkg.FileListDigest != "" {
 			foundHello = true
 		}
 	}

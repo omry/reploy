@@ -29,7 +29,7 @@ func TestRenderDockerInputsFromResolvedPlan(t *testing.T) {
 	if compose != string(wantGolden) {
 		t.Fatalf("compose golden mismatch\nactual:\n%s\nwant:\n%s", compose, wantGolden)
 	}
-	for _, want := range []string{"image: reploy/demo:staging", `user: "501:20"`, "read_only: true", "HOME: /mnt/reploy-home", "TMPDIR: /mnt/reploy-home", "- /mnt/reploy-home:rw,noexec,nosuid,nodev,size=64m,mode=1777", "type: bind", "127.0.0.1:18080:8080", "/opt/reploy/python/bin/demo", "name: demo-staging-abcd"} {
+	for _, want := range []string{"image: reploy/demo:staging", "pull_policy: never", `user: "501:20"`, "read_only: true", "HOME: /mnt/reploy-home", "TMPDIR: /mnt/reploy-home", "- /mnt/reploy-home:rw,noexec,nosuid,nodev,size=64m,mode=1777", "type: bind", "127.0.0.1:18080:8080", "/opt/reploy/python/bin/demo", "name: demo-staging-abcd"} {
 		if !strings.Contains(compose, want) {
 			t.Fatalf("compose missing %q:\n%s", want, compose)
 		}

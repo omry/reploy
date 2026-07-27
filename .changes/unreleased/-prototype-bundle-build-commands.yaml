@@ -1,0 +1,2 @@
+kind: Removed
+body: Remove prototype `bundle check`, `bundle build`, and `bundle upgrade`; use top-level `reploy build` to build and validate an environment.

@@ -91,7 +91,7 @@ func TestRuntimeHostSourcesV1IncludesOnlyBindAndExplicitOutputMounts(t *testing.
 
 func runtimeHostPolicy(mounts []deploy.RuntimeMountV1) deploy.RuntimePolicyV1 {
 	return deploy.RuntimePolicyV1{
-		Schema: deploy.RuntimePolicySchemaV1, AllowedRoots: []string{"/mnt"},
+		Schema:         deploy.RuntimePolicySchemaV1,
 		ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{{
 			ID: "command/check", Mounts: mounts, Executables: []providers.QualifiedOutput{},
 		}},

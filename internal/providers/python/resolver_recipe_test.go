@@ -25,13 +25,9 @@ func TestWheelResolverArgvUsesOnePipClosureWithOptionalSourceConstraints(t *test
 	}
 	digest := canonical.Digest("sha256:" + strings.Repeat("a", 64))
 	wheel := providerstore.ArtifactDescriptor{LogicalPath: "wheels/local_demo-2-py3-none-any.whl", Kind: "wheel", Size: "10", SHA256: digest}
-	source := providers.ResolvedSourceInput{
-		Schema: providers.ResolvedSourceInputSchemaV1, Component: "application", LogicalPackage: "local-demo",
-		SourceManifestDigest: canonical.Digest("sha256:" + strings.Repeat("b", 64)), BuilderProfile: "uv-v1",
-		BuildSettings:     providers.CanonicalProviderData{Schema: "source-settings-v1", Value: canonical.Object{}},
-		EcosystemMetadata: providers.CanonicalProviderData{Schema: "python-source-v1", Value: canonical.Object{}},
-		ArtifactDigest:    digest,
-	}
+	source := testPythonSourceInput(
+		"application", "local-demo", "2", canonical.Digest("sha256:"+strings.Repeat("b", 64)), digest,
+	)
 	got, err := WheelResolverArgv("/usr/bin/python3", request, []providers.ResolvedSourceInput{source}, []providerstore.ArtifactDescriptor{wheel})
 	if err != nil {
 		t.Fatal(err)
@@ -76,13 +72,7 @@ func TestWheelResolverArgvRequiresSourceWheelInReusableInputs(t *testing.T) {
 		Requirements: []providers.CanonicalPackageRequest{requirement},
 	})
 	digest := canonical.Digest("sha256:" + strings.Repeat("a", 64))
-	source := providers.ResolvedSourceInput{
-		Schema: providers.ResolvedSourceInputSchemaV1, Component: "application", LogicalPackage: "demo",
-		SourceManifestDigest: digest, BuilderProfile: "uv-v1",
-		BuildSettings:     providers.CanonicalProviderData{Schema: "source-settings-v1", Value: canonical.Object{}},
-		EcosystemMetadata: providers.CanonicalProviderData{Schema: "python-source-v1", Value: canonical.Object{}},
-		ArtifactDigest:    digest,
-	}
+	source := testPythonSourceInput("application", "demo", "1.0", digest, digest)
 	if _, err := WheelResolverArgv("/usr/bin/python3", request, []providers.ResolvedSourceInput{source}, nil); err == nil || !strings.Contains(err.Error(), "exactly one reusable wheel") {
 		t.Fatalf("error = %v", err)
 	}

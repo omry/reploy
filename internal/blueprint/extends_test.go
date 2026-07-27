@@ -14,7 +14,7 @@ func TestResolveExtendsCopiesEnvironmentObjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.Mounts["data"].Path.Container != "/data" {
+	if resolved.Mounts["data"].Contract.Target != "/data" {
 		t.Fatalf("mount = %#v", resolved.Mounts["data"])
 	}
 	if resolved.Endpoints["http"].Endpoint.Port != 8080 {
@@ -29,10 +29,10 @@ func TestResolveExtendsRejectsInvalidReferences(t *testing.T) {
 		new  string
 		want string
 	}{
-		{name: "cross kind", old: "environment.paths.data", new: "environment.workload.endpoints.http", want: "must reference environment.paths"},
-		{name: "missing", old: "environment.paths.data", new: "environment.paths.missing", want: "missing environment path"},
-		{name: "nested", old: "environment.paths.data", new: "environment.paths.data.child", want: "one named object"},
-		{name: "missing extends", old: "      extends: environment.paths.data\n", new: "", want: "extends is required"},
+		{name: "cross kind", old: "environment.mounts.data", new: "environment.workload.endpoints.http", want: "must reference environment.mounts"},
+		{name: "missing", old: "environment.mounts.data", new: "environment.mounts.missing", want: "missing environment mount"},
+		{name: "nested", old: "environment.mounts.data", new: "environment.mounts.data.child", want: "one named object"},
+		{name: "missing extends", old: "      extends: environment.mounts.data\n", new: "", want: "extends is required"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

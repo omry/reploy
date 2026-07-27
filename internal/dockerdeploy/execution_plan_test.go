@@ -12,7 +12,7 @@ import (
 func TestPlanDockerExecutionBaseIdentity(t *testing.T) {
 	stagingDir := t.TempDir()
 	document := blueprint.Document{
-		Environment: blueprint.Environment{ID: "demo", Paths: map[string]blueprint.Path{}},
+		Environment: blueprint.Environment{ID: "demo", Mounts: map[string]blueprint.EnvironmentMount{}},
 		Docker:      blueprint.Docker{Image: "python:3.13", Mounts: map[string]blueprint.DockerMount{}},
 	}
 	plan, err := PlanDockerExecution(document, DockerPlanContext{
@@ -63,10 +63,10 @@ func TestPlanDockerExecutionMountModes(t *testing.T) {
 	document := blueprint.Document{
 		Environment: blueprint.Environment{ID: "demo"},
 		Docker: blueprint.Docker{Mounts: map[string]blueprint.DockerMount{
-			"config":   {Mode: blueprint.MountManagedBind, Source: "conf", Path: blueprint.Path{Container: "/config", Update: blueprint.UpdatePreserve}},
-			"data":     {Mode: blueprint.MountVolume, Name: "data", Path: blueprint.Path{Container: "/data", Writable: true, Update: blueprint.UpdateReplace}},
-			"external": {Mode: blueprint.MountBind, Source: external, Path: blueprint.Path{Container: "/external", Update: blueprint.UpdateUnmanaged}},
-			"scratch":  {Mode: blueprint.MountTmpfs, Path: blueprint.Path{Container: "/scratch", Writable: true, Update: blueprint.UpdatePreserve}},
+			"config":   {Mode: blueprint.MountManagedBind, Source: "conf", Contract: blueprint.EnvironmentMount{Target: "/config", UpdatePolicy: blueprint.UpdatePreserve}},
+			"data":     {Mode: blueprint.MountVolume, Name: "data", Contract: blueprint.EnvironmentMount{Target: "/data", Writable: true, UpdatePolicy: blueprint.UpdateReplace}},
+			"external": {Mode: blueprint.MountBind, Source: external, Contract: blueprint.EnvironmentMount{Target: "/external", UpdatePolicy: blueprint.UpdateUnmanaged}},
+			"scratch":  {Mode: blueprint.MountTmpfs, Contract: blueprint.EnvironmentMount{Target: "/scratch", Writable: true, UpdatePolicy: blueprint.UpdatePreserve}},
 		}},
 	}
 	plan, err := PlanDockerExecution(document, DockerPlanContext{DeploymentDir: root, Phase: blueprint.PhaseStaged, GeneratedImage: "image", UID: 501, GID: 20})
@@ -165,7 +165,7 @@ func TestDockerPlanCrossPlatformUserPaths(t *testing.T) {
 	}
 	for _, tt := range tests {
 		document := blueprint.Document{Environment: blueprint.Environment{ID: "demo"}, Docker: blueprint.Docker{Mounts: map[string]blueprint.DockerMount{
-			"config": {Mode: blueprint.MountManagedBind, Source: "conf", Path: blueprint.Path{Container: "/config", Update: blueprint.UpdatePreserve}},
+			"config": {Mode: blueprint.MountManagedBind, Source: "conf", Contract: blueprint.EnvironmentMount{Target: "/config", UpdatePolicy: blueprint.UpdatePreserve}},
 		}}}
 		plan, err := PlanDockerExecution(document, DockerPlanContext{DeploymentDir: tt.root, Phase: blueprint.PhaseStaged, Host: tt.host, GeneratedImage: "image", UID: 1000, GID: 1000})
 		if err != nil {

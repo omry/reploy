@@ -19,6 +19,8 @@ from typing import NamedTuple
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 INTERRUPT_EXIT_CODE = 130
+_fixed_local_ports: list[str] | None = None
+_fixed_local_ports_enabled = False
 
 
 class StreamCapture(NamedTuple):
@@ -52,42 +54,19 @@ def parse_args() -> argparse.Namespace:
         help="Force color output and use a smart terminal identity.",
     )
     parser.add_argument(
-        "--plan-only",
-        action="store_true",
-        help=(
-            "Skip the Docker-backed bundle build/check/list-all while still "
-            "running preinstall and install dry-run checks."
-        ),
-    )
-    parser.add_argument(
         "--no-docker",
         action="store_true",
-        help="Exercise staging and bundle planning without executing Docker, preinstall, or install checks.",
+        help="Run only blueprint validation without executing Docker-backed staging or build checks.",
     )
     parser.add_argument(
         "--runtime",
         action="store_true",
-        help="Include the live staging runtime lifecycle: up/status/logs/test/down.",
+        help="Include the live staging runtime lifecycle: up/status/logs/test/stop.",
     )
     parser.add_argument(
         "--persistent-install",
         action="store_true",
         help="Include Docker-managed persistent install/control/uninstall checks.",
-    )
-    parser.add_argument(
-        "--verbose-bundle",
-        action="store_true",
-        help="Run bundle build in verbose mode so Reploy prints its phase timing breakdown.",
-    )
-    parser.add_argument(
-        "--runtime-volume",
-        action="store_true",
-        help="Use a temporary Docker named volume for the generated Python runtime cache.",
-    )
-    parser.add_argument(
-        "--runtime-host-dir",
-        action="store_true",
-        help="Use a temporary explicit host directory for the generated Python runtime cache.",
     )
     parser.add_argument(
         "--docker-mode",
@@ -110,19 +89,13 @@ def parse_args() -> argparse.Namespace:
         if args.docker_mode != "required":
             parser.error("--no-docker cannot be combined with --docker-mode")
         args.docker_mode = "skip"
-    if args.runtime and args.plan_only:
-        parser.error("--runtime cannot be combined with --plan-only")
     if args.runtime and args.docker_mode != "required":
         parser.error("--runtime requires Docker and cannot be combined with --no-docker or optional Docker mode")
-    if args.persistent_install and args.plan_only:
-        parser.error("--persistent-install cannot be combined with --plan-only")
     if args.persistent_install and args.docker_mode != "required":
         parser.error(
             "--persistent-install requires Docker and cannot be combined "
             "with --no-docker or optional Docker mode"
         )
-    if args.runtime_volume and args.runtime_host_dir:
-        parser.error("--runtime-volume cannot be combined with --runtime-host-dir")
     if args.port_conflict_probe and args.docker_unavailable_probe:
         parser.error("--port-conflict-probe cannot be combined with --docker-unavailable-probe")
     if args.port_conflict_probe and args.docker_mode != "required":
@@ -314,97 +287,9 @@ def completed_output(completed: subprocess.CompletedProcess[str]) -> str:
     return completed.stdout + completed.stderr
 
 
-def upsert_env_value(path: Path, key: str, value: str) -> None:
-    prefix = key + "="
-    lines = path.read_text(encoding="utf-8").splitlines()
-    updated = False
-    for index, line in enumerate(lines):
-        if line.startswith(prefix):
-            lines[index] = prefix + value
-            updated = True
-            break
-    if not updated:
-        lines.append(prefix + value)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def docker_volume_name(value: str) -> str:
-    normalized = re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-")
-    return normalized or "reploy-smoke-runtime"
-
-
-def is_docker_named_volume_reference(value: str) -> bool:
-    value = value.strip()
-    if value in {"", ".", ".."}:
-        return False
-    if value.startswith(".") or any(separator in value for separator in ("/", "\\", ":")):
-        return False
-    return re.fullmatch(r"[A-Za-z0-9_.-]+", value) is not None
-
-
-def runtime_volume_from_deployment(deploy_dir: Path) -> str:
-    docker_env = deploy_dir / ".reploy" / "docker.env"
-    if not docker_env.is_file():
-        return ""
-    prefix = "REPLOY_RUNTIME_DIR="
-    for line in docker_env.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line.startswith(prefix):
-            value = line[len(prefix) :].strip()
-            return value if is_docker_named_volume_reference(value) else ""
-    return ""
-
-
-def enable_runtime_volume(deploy_dir: Path, volume_name: str) -> None:
-    upsert_env_value(deploy_dir / ".reploy" / "docker.env", "REPLOY_RUNTIME_DIR", volume_name)
-    compose_path = deploy_dir / ".reploy" / "runtime" / "compose.yaml"
-    compose = compose_path.read_text(encoding="utf-8")
-    if "\nvolumes:\n" not in compose:
-        compose += "\nvolumes:\n"
-    if f"  {volume_name}:\n" not in compose:
-        compose += f"  {volume_name}:\n    name: {volume_name}\n    external: true\n"
-    compose_path.write_text(compose, encoding="utf-8")
-
-
-def enable_runtime_host_dir(deploy_dir: Path, runtime_dir: Path) -> None:
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    relative = runtime_dir.relative_to(deploy_dir)
-    upsert_env_value(deploy_dir / ".reploy" / "docker.env", "REPLOY_RUNTIME_DIR", "./" + relative.as_posix())
-
-
-def cleanup_docker_volume(name: str, *, cwd: Path, env: dict[str, str]) -> None:
-    if not name:
-        return
-    if shutil.which("docker") is None:
-        return
-    available, _ = docker_available(env, cwd)
-    if not available:
-        return
-    completed = subprocess.run(
-        ["docker", "volume", "rm", "-f", name],
-        cwd=cwd,
-        env=env,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout).strip()
-        if "No such volume" not in detail:
-            print(f"[smoke] warning: failed to remove Docker volume {name}: {detail}", file=sys.stderr)
-
-
-def cleanup_runtime_volume_from_deployment(deploy_dir: Path, *, cwd: Path, env: dict[str, str]) -> None:
-    cleanup_docker_volume(runtime_volume_from_deployment(deploy_dir), cwd=cwd, env=env)
-
-
 def finish_smoke(reploy: Path, workdir: Path, deploy_dir: Path, env: dict[str, str], started: float) -> None:
     run([str(reploy), "--version"], cwd=workdir, env=env)
     print(f"[smoke] measured elapsed: {format_duration(time.monotonic() - started)}", flush=True)
-    cleanup_runtime_volume_from_deployment(deploy_dir, cwd=workdir, env=env)
 
 
 def docker_available(env: dict[str, str], cwd: Path) -> tuple[bool, str]:
@@ -434,6 +319,18 @@ def docker_available(env: dict[str, str], cwd: Path) -> tuple[bool, str]:
 
 
 def free_local_port() -> str:
+    global _fixed_local_ports, _fixed_local_ports_enabled
+    if _fixed_local_ports is None:
+        configured = os.environ.get("REPLOY_SMOKE_FIXED_PORTS", "").strip()
+        _fixed_local_ports_enabled = bool(configured)
+        _fixed_local_ports = [value.strip() for value in configured.split(",") if value.strip()]
+        for value in _fixed_local_ports:
+            if not value.isdigit() or not 1 <= int(value) <= 65535:
+                raise SystemExit(f"invalid REPLOY_SMOKE_FIXED_PORTS entry: {value!r}")
+    if _fixed_local_ports:
+        return _fixed_local_ports.pop(0)
+    if _fixed_local_ports_enabled:
+        raise SystemExit("REPLOY_SMOKE_FIXED_PORTS does not contain enough ports")
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind(("127.0.0.1", 0))
         return str(listener.getsockname()[1])
@@ -449,7 +346,7 @@ def docker_managed_install() -> bool:
 
 def control_script_command(install_dir: Path, *args: str) -> list[str]:
     if sys.platform.startswith(("win32", "cygwin", "msys")):
-        script = install_dir / "smoke-appctl.ps1"
+        script = install_dir / "smoke-app.ps1"
         return [
             "powershell",
             "-NoProfile",
@@ -459,7 +356,7 @@ def control_script_command(install_dir: Path, *args: str) -> list[str]:
             str(script),
             *args,
         ]
-    return [str(install_dir / "smoke-appctl"), *args]
+    return [str(install_dir / "smoke-app"), *args]
 
 
 def update_env_file(path: Path, updates: dict[str, str]) -> None:
@@ -523,7 +420,7 @@ def run_port_conflict_probe(reploy: Path, deploy_dir: Path, workdir: Path, env: 
             )
         finally:
             subprocess.run(
-                [str(reploy), "down", "--dir", str(deploy_dir)],
+                [str(reploy), "stop", "--dir", str(deploy_dir)],
                 cwd=workdir,
                 env=env,
                 text=True,
@@ -544,20 +441,6 @@ def run_runtime_smoke(reploy: Path, deploy_dir: Path, workdir: Path, env: dict[s
     primary_error: BaseException | None = None
     started = False
     try:
-        if os.name == "posix":
-            run(
-                [
-                    sys.executable,
-                    str(Path(__file__).with_name("shell_pty.py")),
-                    "--reploy",
-                    str(reploy),
-                    "--dir",
-                    str(deploy_dir),
-                ],
-                cwd=workdir,
-                env=env,
-            )
-
         app_check = run(
             [str(reploy), "app", "config", "check", "--dir", str(deploy_dir)],
             cwd=workdir,
@@ -603,7 +486,7 @@ def run_runtime_smoke(reploy: Path, deploy_dir: Path, workdir: Path, env: dict[s
     finally:
         if started:
             try:
-                run([str(reploy), "down", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+                run([str(reploy), "stop", "--dir", str(deploy_dir)], cwd=workdir, env=env)
             except BaseException as cleanup_error:
                 if primary_error is None:
                     raise
@@ -655,33 +538,68 @@ def run_persistent_install_smoke(
         require_contains(completed_output(live_check), '"check": "pass"', "installed live config check")
         require_not_contains(completed_output(live_check), "[smoke-app]", "installed live config check")
 
-        down = run(control_script_command(install_dir, "down"), cwd=workdir, env=env)
-        if docker_managed_install():
-            require_contains(completed_output(down), "[DEPLOYED : smoke-app] down... done", "installed control down")
-        require_not_contains(completed_output(down), "[smoke-app]", "installed control down")
+        stop = run(control_script_command(install_dir, "stop"), cwd=workdir, env=env)
+        require_not_contains(completed_output(stop), "[smoke-app]", "installed control stop")
     finally:
-        if installed or install_dir.exists():
+        if installed:
             run(
                 [str(reploy), "uninstall", "--from", str(install_dir), "--remove-dir"],
                 cwd=workdir,
                 env=env,
             )
-        if install_dir.exists():
+        if installed and install_dir.exists():
             raise SystemExit(f"persistent install cleanup left target directory behind: {install_dir}")
+
+
+def run_direct_install_smoke(
+    reploy: Path,
+    blueprint_ref: str,
+    install_dir: Path,
+    workdir: Path,
+    env: dict[str, str],
+) -> None:
+    installed = False
+    try:
+        run(
+            [
+                str(reploy),
+                "install",
+                blueprint_ref,
+                "--to",
+                str(install_dir),
+                "--scope",
+                install_scope(),
+                "--service",
+                "smoke-direct",
+                "--port",
+                free_local_port(),
+                "--no-start",
+            ],
+            cwd=workdir,
+            env=env,
+        )
+        installed = True
+        if not (install_dir / ".reploy" / "state.json").is_file():
+            raise SystemExit("direct install did not publish installed state-v1")
+    finally:
+        if installed:
+            run(
+                [str(reploy), "uninstall", "--from", str(install_dir), "--remove-dir"],
+                cwd=workdir,
+                env=env,
+            )
+        if installed and install_dir.exists():
+            raise SystemExit(f"direct install cleanup left target directory behind: {install_dir}")
 
 
 def run_smoke(
     reploy: Path,
     workdir: Path,
     *,
-    plan_only: bool,
     runtime: bool,
     persistent_install: bool,
     docker_mode: str,
     color: bool,
-    verbose_bundle: bool,
-    runtime_volume: bool,
-    runtime_host_dir: bool,
     port_conflict_probe: bool,
     docker_unavailable_probe: bool,
 ) -> None:
@@ -690,6 +608,7 @@ def run_smoke(
     pack_dir = packages_dir / "smoke-blueprint"
     deploy_dir = workdir / "deployment"
     install_dir = workdir / "installed"
+    direct_install_dir = workdir / "installed-direct"
     if not (pack_dir / "smoke.blueprint.yaml").is_file():
         raise SystemExit(f"missing e2e smoke blueprint: {pack_dir}")
 
@@ -714,10 +633,14 @@ def run_smoke(
         pack_dir = fixture_dir / "smoke-blueprint"
     smoke_started = time.monotonic()
 
+    blueprint_ref = "file:" + str(pack_dir)
+    validation = run([str(reploy), "validate", blueprint_ref], cwd=workdir, env=env)
+    require_contains(validation.stdout, "valid blueprint: smoke-app", "validate output")
+
     docker_enabled = docker_mode != "skip"
     if docker_unavailable_probe:
         docker_enabled = True
-    if docker_enabled and not plan_only and not docker_unavailable_probe:
+    if docker_enabled and not docker_unavailable_probe:
         available, reason = docker_available(env, workdir)
         if not available:
             if docker_mode == "optional":
@@ -725,13 +648,12 @@ def run_smoke(
             else:
                 raise SystemExit(f"Docker is required for this smoke test: {reason}")
 
-    runtime_volume_name = ""
-    if runtime_volume:
-        runtime_volume_name = docker_volume_name(workdir.name + "-runtime")
-    runtime_host_path = deploy_dir / ".reploy" / "runtime-host" if runtime_host_dir else None
+    if not docker_enabled:
+        finish_smoke(reploy, workdir, deploy_dir, env, smoke_started)
+        return
 
     init = run(
-        [str(reploy), "stage", "file:" + str(pack_dir), "--dir", str(deploy_dir)],
+        [str(reploy), "stage", blueprint_ref, "--dir", str(deploy_dir)],
         cwd=workdir,
         env=env,
     )
@@ -742,7 +664,7 @@ def run_smoke(
         cwd=workdir,
         env=env,
     )
-    update_markers = ("up_to_date", ".reploy/state.json", "updated staging directory")
+    update_markers = ("staging directory is up to date", "updated staging directory")
     if not any(marker in update.stdout for marker in update_markers):
         raise SystemExit(
             "update output did not report an unchanged or updated deployment"
@@ -756,127 +678,46 @@ def run_smoke(
 
     info = run([str(reploy), "info", "--dir", str(deploy_dir)], cwd=workdir, env=env)
     require_contains(info.stdout, "phase: staged", "info output")
-    require_contains(info.stdout, "python package smoke-suite", "info output")
+    require_contains(info.stdout, "environment: smoke-app", "info output")
 
     options = run(
-        [str(reploy), "bundle", "list-options", "--dir", str(deploy_dir)],
+        [str(reploy), "bundle", "options", "--dir", str(deploy_dir)],
         cwd=workdir,
         env=env,
     )
-    require_contains(options.stdout, "imap\tInstall the smoke IMAP plugin.", "bundle options")
+    require_contains(options.stdout, "application/imap\tInstall the smoke IMAP plugin.", "bundle options")
 
     add = run(
-        [str(reploy), "bundle", "add", "--name", "imap", "--dir", str(deploy_dir)],
+        [str(reploy), "bundle", "add", "application/imap", "--dir", str(deploy_dir)],
         cwd=workdir,
         env=env,
     )
     require_contains(add.stdout, "updated", "bundle add output")
-    if runtime_volume_name:
-        enable_runtime_volume(deploy_dir, runtime_volume_name)
-        print(f"[smoke] Docker runtime volume: {runtime_volume_name}", flush=True)
-    if runtime_host_path is not None:
-        enable_runtime_host_dir(deploy_dir, runtime_host_path)
-        print(f"[smoke] host runtime mount: {runtime_host_path}", flush=True)
-
     bundle_list = run([str(reploy), "bundle", "list", "--dir", str(deploy_dir)], cwd=workdir, env=env)
-    require_contains(bundle_list.stdout, "smoke-suite", "bundle list")
-    require_contains(bundle_list.stdout, "smoke-imap", "bundle list")
+    require_contains(bundle_list.stdout, "option\tapplication/imap", "bundle list")
 
-    if plan_only or not docker_enabled:
-        bundle_build = run(
-            [str(reploy), "bundle", "build", "--dry-run", "--dir", str(deploy_dir)],
-            cwd=workdir,
-            env=env,
-        )
-        require_contains(bundle_build.stdout, "would build installation bundle:", "bundle build dry-run")
-        require_contains(bundle_build.stdout, "docker run --rm", "bundle build dry-run")
-    else:
-        bundle_build_args = [str(reploy), "bundle", "build", "--dir", str(deploy_dir)]
-        if verbose_bundle:
-            bundle_build_args.insert(3, "--verbose")
-        bundle_build = run(
-            bundle_build_args,
-            cwd=workdir,
-            env=env,
-        )
-        if verbose_bundle:
-            require_contains(completed_output(bundle_build), "bundle build timing:", "bundle build")
-        else:
-            require_contains(bundle_build.stderr, "building installation bundle... done", "bundle build")
-        bundle_check = run(
-            [str(reploy), "bundle", "check", "--dir", str(deploy_dir)],
-            cwd=workdir,
-            env=env,
-        )
-        require_contains(bundle_check.stderr, "validating installation bundle... done", "bundle check")
-        bundle_all = run(
-            [str(reploy), "bundle", "list", "all", "--dir", str(deploy_dir)],
-            cwd=workdir,
-            env=env,
-        )
-        require_contains(bundle_all.stdout, "root\tsmoke-suite==0.1.0", "bundle list all")
-        require_contains(bundle_all.stdout, "root\tsmoke-imap==0.1.0", "bundle list all")
-        if runtime:
-            run_runtime_smoke(reploy, deploy_dir, workdir, env)
-        if port_conflict_probe:
-            run_port_conflict_probe(reploy, deploy_dir, workdir, env)
-            finish_smoke(reploy, workdir, deploy_dir, env, smoke_started)
-            return
+    automatic_build = run(
+        [str(reploy), "app", "config", "check", "--dir", str(deploy_dir)],
+        cwd=workdir,
+        env=env,
+    )
+    require_contains(automatic_build.stdout, '"check": "pass"', "automatic app build")
 
-    if not docker_enabled:
+    # The app command above built the missing image. Keep the explicit command
+    # as an end-to-end check that an already-current build is reused cleanly.
+    run([str(reploy), "build", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+    if runtime:
+        run_runtime_smoke(reploy, deploy_dir, workdir, env)
+    if port_conflict_probe:
+        run_port_conflict_probe(reploy, deploy_dir, workdir, env)
         finish_smoke(reploy, workdir, deploy_dir, env, smoke_started)
         return
 
-    install_checks = plan_only or persistent_install or not runtime
-    if install_checks:
-        doctor = run(
-            [str(reploy), "doctor", "--preinstall", "--scope", install_scope(), "--dir", str(deploy_dir)],
-            cwd=workdir,
-            env=env,
-        )
-        require_contains(completed_output(doctor), "ok: preinstall checks passed", "preinstall doctor")
+    if persistent_install:
+        run_persistent_install_smoke(reploy, deploy_dir, install_dir, workdir, env)
+        run_direct_install_smoke(reploy, blueprint_ref, direct_install_dir, workdir, env)
 
-        install = run(
-            [
-                str(reploy),
-                "install",
-                "--dir",
-                str(deploy_dir),
-                "--to",
-                str(install_dir),
-                "--scope",
-                install_scope(),
-                "--service",
-                "smoke-e2e",
-                "--port",
-                "18082",
-                "--dry-run",
-            ],
-            cwd=workdir,
-            env=env,
-        )
-        require_contains(install.stdout, "would install deployment:", "install dry-run")
-        require_prefixed_lines(install.stdout, "[STAGING : smoke-app] ", "install dry-run")
-        require_contains(install.stdout, "[STAGING : smoke-app] would install deployment:", "install dry-run")
-        require_contains(install.stdout, "service: smoke-e2e", "install dry-run")
-        require_contains(install.stdout, "port https: 127.0.0.1:18082 -> 8075", "install dry-run")
-        require_contains(
-            install.stdout,
-            "would rebuild local source bundle: smoke-imap, smoke-suite",
-            "install dry-run",
-        )
-        require_contains(install.stdout, "would run environment before_start lifecycle: 1 step(s)", "install dry-run")
-        require_contains(
-            install.stdout,
-            "would satisfy readiness and run environment after_start lifecycle: 1 step(s)",
-            "install dry-run",
-        )
-
-    if not plan_only:
-        if persistent_install:
-            run_persistent_install_smoke(reploy, deploy_dir, install_dir, workdir, env)
-
-        run([str(reploy), "bundle", "clean", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+    run([str(reploy), "bundle", "clean", "--verbose", "--dir", str(deploy_dir)], cwd=workdir, env=env)
 
     if not docker_managed_install():
         run([str(reploy), "services", "list"], cwd=workdir, env=env)
@@ -897,14 +738,10 @@ def main() -> int:
         run_smoke(
             reploy,
             workdir,
-            plan_only=args.plan_only,
             runtime=args.runtime,
             persistent_install=args.persistent_install,
             docker_mode=args.docker_mode,
             color=args.color,
-            verbose_bundle=args.verbose_bundle,
-            runtime_volume=args.runtime_volume,
-            runtime_host_dir=args.runtime_host_dir,
             port_conflict_probe=args.port_conflict_probe,
             docker_unavailable_probe=args.docker_unavailable_probe,
         )
@@ -914,19 +751,14 @@ def main() -> int:
             run_smoke(
                 reploy,
                 workdir,
-                plan_only=args.plan_only,
                 runtime=args.runtime,
                 persistent_install=args.persistent_install,
                 docker_mode=args.docker_mode,
                 color=args.color,
-                verbose_bundle=args.verbose_bundle,
-                runtime_volume=args.runtime_volume,
-                runtime_host_dir=args.runtime_host_dir,
                 port_conflict_probe=args.port_conflict_probe,
                 docker_unavailable_probe=args.docker_unavailable_probe,
             )
         finally:
-            cleanup_runtime_volume_from_deployment(workdir / "deployment", cwd=workdir, env=os.environ.copy())
             cleanup_workdir(workdir)
     return 0
 

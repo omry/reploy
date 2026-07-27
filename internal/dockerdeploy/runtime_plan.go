@@ -122,11 +122,11 @@ func runtimeCommandOutputV1(document blueprint.Document, commandName string) (pr
 	if !found {
 		return providers.QualifiedOutput{}, fmt.Errorf("runtime command %q is not defined", commandName)
 	}
-	executable, found := document.Environment.Executables[command.Executable]
+	component, executable, found := document.Environment.ResolveExecutableProfile(command.Executable)
 	if !found {
 		return providers.QualifiedOutput{}, fmt.Errorf("runtime command %q references unknown executable %q", commandName, command.Executable)
 	}
-	return providers.QualifiedOutput{Component: executable.Component, Name: executable.Binary}, nil
+	return providers.QualifiedOutput{Component: component, Name: executable.Binary}, nil
 }
 
 func runtimeMountsV1(plan DockerExecutionPlan) ([]deploy.RuntimeMountV1, error) {

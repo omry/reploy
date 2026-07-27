@@ -222,15 +222,22 @@ func (lock *OperationLock) ValidateProviderStore(store providerstore.Store) erro
 }
 
 func (lock *OperationLock) RemoveAllBuildObjects(store providerstore.Store) error {
+	_, err := lock.RemoveProviderStore(store)
+	return err
+}
+
+// RemoveProviderStore deletes the complete deployment-owned provider cache
+// while retaining state, build locks, and the operation lock itself.
+func (lock *OperationLock) RemoveProviderStore(store providerstore.Store) (bool, error) {
 	if lock == nil {
-		return fmt.Errorf("clean all build objects requires an operation lock")
+		return false, fmt.Errorf("clean provider store requires an operation lock")
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
 	if err := lock.validateProviderStoreLocked(store); err != nil {
-		return err
+		return false, err
 	}
-	return store.RemoveUnreachable([]providerstore.StoreObjectRef{})
+	return store.Remove()
 }
 
 func (lock *OperationLock) validateProviderStoreLocked(store providerstore.Store) error {

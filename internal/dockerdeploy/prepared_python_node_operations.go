@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"reflect"
+	"sort"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
@@ -21,6 +23,7 @@ type PreparedPythonNodeOperations struct {
 	FinalImageConfig  providers.ImageConfigPolicy
 	Artifacts         PreparedPythonResolverArtifacts
 	ReusableWheels    []providerstore.ArtifactDescriptor
+	SourceSnapshots   []PreparedPythonSourceSnapshot
 	verifiedArtifacts map[canonical.Digest]string
 }
 
@@ -116,25 +119,66 @@ func (operations PreparedPythonNodeOperations) resolveFresh(
 	if err != nil {
 		return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
 	}
+	node, found := graphBackendNode(request.Plan, request.NodeID)
+	if !found || node.Provider != blueprint.ComponentTypePython || len(node.Components) != 1 || len(node.Requirements.Executables) != 1 {
+		return providers.ResolveResult{}, providers.GraphConsumerValidation{}, fmt.Errorf("fresh Python node %q does not identify one component and interpreter requirement", request.NodeID)
+	}
+	candidateGroups, err := providers.BuildRequirementCandidates(request.Plan, node.ID, request.EarlierCatalog)
+	if err != nil {
+		return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
+	}
+	if len(candidateGroups) != 1 || candidateGroups[0].RequirementID != node.Requirements.Executables[0].ID {
+		return providers.ResolveResult{}, providers.GraphConsumerValidation{}, fmt.Errorf("fresh Python node %q does not have one interpreter candidate group", request.NodeID)
+	}
+	requirement := node.Requirements.Executables[0]
+	candidates := append([]providers.RealizedOutput{}, candidateGroups[0].Outputs...)
+	interpreter, err := SelectPythonInterpreter(ctx, session, consumer.EnvironmentLauncher, requirement, candidates)
+	if err != nil {
+		return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
+	}
+	verifiedWheels, err := FilterVerifiedPythonResolverArtifacts(operations.Artifacts, operations.ReusableWheels)
+	if err != nil {
+		return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
+	}
+	effectiveSources := append([]providers.ResolvedSourceInput{}, request.SourceCandidates...)
+	effectiveWheels := verifiedWheels
+	if len(operations.SourceSnapshots) != 0 {
+		if err := session.BuildSourceWheels(
+			ctx, consumer.EnvironmentLauncher, requirement, interpreter, operations.SourceSnapshots,
+		); err != nil {
+			return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
+		}
+		builtSources, stagedWheels, err := PublishBuiltPythonSourceWheels(
+			ctx, operations.Store, operations.Artifacts, node.Components[0], operations.SourceSnapshots, verifiedWheels,
+		)
+		if err != nil {
+			return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
+		}
+		effectiveSources, err = mergePythonSourceCandidates(effectiveSources, builtSources)
+		if err != nil {
+			return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
+		}
+		effectiveWheels = stagedWheels
+	}
+	effectiveRequest := request
+	effectiveRequest.SourceCandidates = effectiveSources
 	resolver := pythonprovider.WheelNodeResolver{
 		ResolveInterpreter: func(
-			ctx context.Context,
-			requirement providers.ExecutableRequirement,
-			candidates []providers.RealizedOutput,
+			_ context.Context,
+			gotRequirement providers.ExecutableRequirement,
+			gotCandidates []providers.RealizedOutput,
 			_ providers.RealizedImageV1,
 			_ blueprint.Platform,
 		) (providers.ExecutableEvidence, error) {
-			return SelectPythonInterpreter(ctx, session, consumer.EnvironmentLauncher, requirement, candidates)
+			if gotRequirement != requirement || !reflect.DeepEqual(gotCandidates, candidates) {
+				return providers.ExecutableEvidence{}, fmt.Errorf("Python resolver interpreter inputs changed after selection")
+			}
+			return interpreter, nil
 		},
 		PrepareWheels: func(ctx context.Context, input providers.ResolveInput, interpreter providers.ExecutableEvidence) (string, error) {
-			requirement := input.Node.Requirements.Executables[0]
-			verifiedWheels, err := FilterVerifiedPythonResolverArtifacts(operations.Artifacts, operations.ReusableWheels)
-			if err != nil {
-				return "", err
-			}
 			if err := session.ResolveWheels(
 				ctx, consumer.EnvironmentLauncher, requirement, interpreter,
-				input.Node.Request, input.SourceCandidates, verifiedWheels,
+				input.Node.Request, input.SourceCandidates, effectiveWheels,
 			); err != nil {
 				return "", err
 			}
@@ -144,7 +188,7 @@ func (operations PreparedPythonNodeOperations) resolveFresh(
 			return operations.Artifacts.OutputHostDir, nil
 		},
 	}
-	resolution, err := providers.ResolveProviderNode(ctx, request, resolver, operations.Store, operations.Validators)
+	resolution, err := providers.ResolveProviderNode(ctx, effectiveRequest, resolver, operations.Store, operations.Validators)
 	if err != nil {
 		return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
 	}
@@ -152,6 +196,35 @@ func (operations PreparedPythonNodeOperations) resolveFresh(
 		return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
 	}
 	return resolution, consumer, nil
+}
+
+func mergePythonSourceCandidates(
+	existing []providers.ResolvedSourceInput,
+	built []providers.ResolvedSourceInput,
+) ([]providers.ResolvedSourceInput, error) {
+	if existing == nil || built == nil {
+		return nil, fmt.Errorf("Python source candidate collections must use arrays")
+	}
+	byKey := make(map[string]providers.ResolvedSourceInput, len(existing)+len(built))
+	for _, collection := range [][]providers.ResolvedSourceInput{existing, built} {
+		for _, source := range collection {
+			if err := pythonprovider.ValidateResolvedSourceInputV1(source); err != nil {
+				return nil, err
+			}
+			byKey[source.Component+"\x00"+source.LogicalPackage] = source
+		}
+	}
+	merged := make([]providers.ResolvedSourceInput, 0, len(byKey))
+	for _, source := range byKey {
+		merged = append(merged, source)
+	}
+	sort.Slice(merged, func(left int, right int) bool {
+		if merged[left].Component != merged[right].Component {
+			return merged[left].Component < merged[right].Component
+		}
+		return merged[left].LogicalPackage < merged[right].LogicalPackage
+	})
+	return merged, nil
 }
 
 func (operations PreparedPythonNodeOperations) recordVerifiedPythonArtifacts(bundle providers.ResolvedBundle) error {

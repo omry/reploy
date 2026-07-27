@@ -57,7 +57,8 @@ APP_REF=omegaconf-inspector-demo
 # Create a self-contained staging workspace in ./reploy-staging.
 reploy stage "$APP_REF"
 
-# Create and validate the demo service config.
+# Create and validate the demo service config. The first staged app command
+# builds and fully validates the selected environment when needed.
 reploy app config init
 reploy app config check
 

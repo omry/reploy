@@ -31,13 +31,10 @@ func TestLoadBuildRequestV1UsesOnlyLockedDesiredInputs(t *testing.T) {
 	if err := operation.CommitStateV1(nil, state); err != nil {
 		t.Fatal(err)
 	}
-	source := providers.ResolvedSourceInput{
-		Schema: providers.ResolvedSourceInputSchemaV1, Component: "application", LogicalPackage: "demo",
-		SourceManifestDigest: canonical.Digest("sha256:" + strings.Repeat("a", 64)), BuilderProfile: "python-wheel-v1",
-		BuildSettings:     providers.CanonicalProviderData{Schema: "python-build-settings-v1", Value: canonical.Object{}},
-		EcosystemMetadata: providers.CanonicalProviderData{Schema: "python-source-metadata-v1", Value: canonical.Object{}},
-		ArtifactDigest:    canonical.Digest("sha256:" + strings.Repeat("b", 64)),
-	}
+	source := testPythonResolvedSource(
+		"application", "demo", "1.0",
+		canonical.Digest("sha256:"+strings.Repeat("a", 64)), canonical.Digest("sha256:"+strings.Repeat("b", 64)),
+	)
 	loaded, err := LoadBuildRequestV1(operation, []providers.ResolvedSourceInput{source})
 	if err != nil {
 		t.Fatal(err)

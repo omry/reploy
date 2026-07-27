@@ -108,9 +108,20 @@ func stubPythonInterpreterSelectionCommands(t *testing.T, probeResponse []byte, 
 		}
 		for index := 0; index+1 < len(spec.Args); index++ {
 			if spec.Args[index] == "-m" && spec.Args[index+1] == "pip" {
+				if containsInOrder(spec.Args[index+2:], []string{"wheel"}) && resolveWheels != nil {
+					return resolveWheels()
+				}
+				return nil
+			}
+			if spec.Args[index] == "-m" && spec.Args[index+1] == "uv" {
 				if resolveWheels != nil {
 					return resolveWheels()
 				}
+				return nil
+			}
+		}
+		for _, operation := range []string{"rm", "mkdir", "cp"} {
+			if containsInOrder(spec.Args, []string{operation}) {
 				return nil
 			}
 		}

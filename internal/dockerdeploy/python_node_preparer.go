@@ -93,9 +93,10 @@ func (preparer PythonNodePreparer) Prepare(
 		return providers.GraphNodePreparation{}, err
 	}
 	return providers.GraphNodePreparation{
-		Resolution: resolution,
-		Consumer:   consumer,
-		Refreshed:  request.CachedResolution != nil,
+		Resolution:       resolution,
+		Consumer:         consumer,
+		SourceCandidates: append([]providers.ResolvedSourceInput{}, resolution.SelectedSources...),
+		Refreshed:        request.CachedResolution != nil,
 	}, nil
 }
 

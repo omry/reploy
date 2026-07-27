@@ -35,7 +35,7 @@ func TestRunImageProbeUsesHeldClosedDockerBoundary(t *testing.T) {
 		"--platform", "linux/arm/v7", "--pull", "never",
 		"--user", "0:0", "--workdir", "/", "--read-only", "--network", "none",
 		"--mount", "type=bind,\"source=" + workspace.HostDir + "\",target=/.reploy-validation,readonly",
-		"--entrypoint", ProbeContainerExecutable, descriptor.ImmutableReference, "hold",
+		"--entrypoint", ProbeContainerExecutable, string(descriptor.ConfigDigest), "hold",
 	}
 	if !reflect.DeepEqual(recordedImageValidationCommands[0].Args, wantCreate) {
 		t.Fatalf("create command = %#v", recordedImageValidationCommands[0])

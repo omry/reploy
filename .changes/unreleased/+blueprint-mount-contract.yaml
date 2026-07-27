@@ -1,0 +1,2 @@
+kind: Changed
+body: Rename blueprint environment path contracts to mounts, with target and update_policy fields.

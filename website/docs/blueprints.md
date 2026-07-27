@@ -4,9 +4,9 @@ sidebar_position: 3
 
 # Blueprints
 
-A blueprint is app-owned deployment metadata. It tells Reploy where app bundles
-come from, which options users can choose, what app commands exist, and how the
-Docker deployment should be shaped.
+A blueprint is app-owned environment metadata. It tells Reploy which software
+components and options are required, what commands exist, which runtime mounts
+and endpoints are needed, and how Docker should realize them.
 
 Blueprints can be referenced in three common ways.
 
@@ -39,6 +39,16 @@ Direct PyPI refs include the exact blueprint file path inside the package. Use
 the Reploy blueprint index when users should be able to type a short app name
 instead of the full package path.
 
+## GitHub Repository
+
+```bash
+reploy stage github://org/example-app/reploy/example.blueprint.yaml?ref=v1.2.3
+reploy install github://org/example-app/reploy/example.blueprint.yaml?ref=v1.2.3 --scope user
+```
+
+The path names the blueprint inside the repository. `ref` may select a branch,
+tag, or commit. Use `transport=ssh` only when repository access requires it.
+
 ## Local File
 
 ```bash
@@ -47,4 +57,5 @@ reploy install file:./path/to/app.blueprint.yaml --scope <user|system>
 ```
 
 Local file refs are useful while developing an app blueprint before publishing
-it in a package or index.
+it in a package or index. Paths written without `file:` must begin with `.` or
+`/`, for example `./path/to/app.blueprint.yaml`.

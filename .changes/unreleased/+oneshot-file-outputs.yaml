@@ -1,2 +1,2 @@
 kind: Added
-body: Add explicit `reploy app --output-dir` and `--output-file` contracts for durable one-shot command results.
+body: Add explicit `reploy app --output-dir` and `--output-file` contracts for durable, runtime-user-owned one-shot command results.

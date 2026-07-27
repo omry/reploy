@@ -54,6 +54,31 @@ func TestOperationLockSetsInstallationWithoutChangingEnvironmentState(t *testing
 	}
 }
 
+func TestOperationLockClearsExactInstallationWithoutChangingCurrentBuild(t *testing.T) {
+	dir := t.TempDir()
+	writeOverlayTestState(t, dir)
+	lock, err := AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Unlock()
+	installation := installationStateV1Fixture(dir)
+	installed, _, err := lock.SetInstallationStateV1(installation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleared, changed, err := lock.ClearInstallationStateV1(installation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed || cleared.Deployment != nil || !reflect.DeepEqual(cleared.Current, installed.Current) {
+		t.Fatalf("cleared state = %#v, changed=%v", cleared, changed)
+	}
+	if _, _, err := lock.ClearInstallationStateV1(installation); err == nil {
+		t.Fatal("clearing an already-staged deployment unexpectedly succeeded")
+	}
+}
+
 func TestOperationLockRejectsInstallationWithoutCurrentBuild(t *testing.T) {
 	dir := t.TempDir()
 	lock, err := AcquireOperationLock(t.Context(), dir)
@@ -161,6 +186,8 @@ func TestOperationLockCommitsInstalledDestinationFromStagedSource(t *testing.T) 
 	sourceDir := t.TempDir()
 	sourcePath := writeOverlayTestState(t, sourceDir)
 	source := readOverlayTestState(t, sourcePath)
+	source.BlueprintSource = "blueprint: retained exactly\n"
+	source.Staging = &StagingStateV1{Schema: StagingStateSchemaV1, WorkspaceRoot: t.TempDir()}
 	destinationDir := t.TempDir()
 	destinationLock, err := AcquireOperationLock(t.Context(), destinationDir)
 	if err != nil {
@@ -180,6 +207,7 @@ func TestOperationLockCommitsInstalledDestinationFromStagedSource(t *testing.T) 
 	}
 	want := source
 	want.Current = &destinationGeneration
+	want.Staging = nil
 	want.Deployment = nil
 	withoutDeployment := installed
 	withoutDeployment.Deployment = nil

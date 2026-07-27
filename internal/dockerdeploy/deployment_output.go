@@ -2,9 +2,13 @@ package dockerdeploy
 
 import (
 	"bytes"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 )
 
@@ -15,60 +19,56 @@ const (
 	deployedOutputColor = "208"
 )
 
-func deploymentOutputWritersForState(state deploy.DeploymentState, stdout io.Writer, stderr io.Writer) (io.Writer, io.Writer) {
-	label, color, ok := deploymentOutputPrefixForState("", state)
-	if !ok {
-		return stdout, stderr
-	}
-	return newDeploymentOutputWriter(stdout, label, color), newDeploymentOutputWriter(stderr, label, color)
-}
-
-func deploymentOutputWritersForDeployment(dir string, state deploy.DeploymentState, stdout io.Writer, stderr io.Writer) (io.Writer, io.Writer) {
-	label, color, ok := deploymentOutputPrefixForState(dir, state)
-	if !ok {
-		return stdout, stderr
-	}
-	return newDeploymentOutputWriter(stdout, label, color), newDeploymentOutputWriter(stderr, label, color)
-}
-
 func DeploymentOutputWriters(dir string, stdout io.Writer, stderr io.Writer) (io.Writer, io.Writer, error) {
-	state, err := loadState(dir)
+	label, color, versioned, err := deploymentOutputPrefixForStateV1(dir)
 	if err != nil {
 		return nil, nil, err
 	}
-	stdout, stderr = deploymentOutputWritersForDeployment(dir, state, stdout, stderr)
+	if versioned {
+		return newDeploymentOutputWriter(stdout, label, color), newDeploymentOutputWriter(stderr, label, color), nil
+	}
 	return stdout, stderr, nil
 }
 
 func DeploymentOutputPrefix(dir string, output io.Writer) (string, error) {
-	state, err := loadState(dir)
+	label, color, versioned, err := deploymentOutputPrefixForStateV1(dir)
 	if err != nil {
 		return "", err
 	}
-	label, color, ok := deploymentOutputPrefixForState(dir, state)
-	if !ok {
-		return "", nil
+	if versioned {
+		return deploymentOutputPrefixText(output, label, color), nil
 	}
-	return deploymentOutputPrefixText(output, label, color), nil
+	return "", nil
 }
 
-func deploymentOutputPrefixForState(dir string, state deploy.DeploymentState) (string, string, bool) {
-	phase, color, ok := deploymentOutputPhase(state.Phase)
-	if !ok {
-		return "", "", false
+func deploymentOutputPrefixForStateV1(dir string) (string, string, bool, error) {
+	schema, err := runtimeStateSchema(dir)
+	if err != nil {
+		return "", "", false, err
 	}
-	return deploymentOutputLabel(phase, deploymentOutputAppID(dir, state)), color, true
-}
-
-func deploymentOutputPhase(phase deploy.Phase) (string, string, bool) {
-	switch phase {
-	case deploy.PhaseStaged:
-		return stagingOutputPhase, stagingOutputColor, true
-	case deploy.PhaseInstalled:
-		return deployedOutputPhase, deployedOutputColor, true
-	default:
-		return "", "", false
+	if schema == "" {
+		return "", "", false, nil
 	}
+	if schema != deploy.StateSchemaV1 {
+		return "", "", false, fmt.Errorf("deployment state schema %q is unsupported; expected %q", schema, deploy.StateSchemaV1)
+	}
+	content, err := os.ReadFile(filepath.Join(dir, StateFileName))
+	if err != nil {
+		return "", "", false, fmt.Errorf("read deployment state: %w", err)
+	}
+	state, err := deploy.DecodeStateV1(content)
+	if err != nil {
+		return "", "", false, err
+	}
+	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	if err != nil {
+		return "", "", false, err
+	}
+	phase, color := stagingOutputPhase, stagingOutputColor
+	if state.Deployment != nil {
+		phase, color = deployedOutputPhase, deployedOutputColor
+	}
+	return deploymentOutputLabel(phase, document.Environment.ID), color, true, nil
 }
 
 func deploymentOutputLabel(phase string, appID string) string {
@@ -77,20 +77,6 @@ func deploymentOutputLabel(phase string, appID string) string {
 		return "[" + phase + "]"
 	}
 	return "[" + phase + " : " + appID + "]"
-}
-
-func deploymentOutputAppID(dir string, state deploy.DeploymentState) string {
-	if strings.TrimSpace(state.AppID) != "" {
-		return state.AppID
-	}
-	if dir == "" {
-		return ""
-	}
-	pack, err := deploy.LoadResolvedPack(state.Blueprint, state.RequestedBlueprintRef, state.ResolvedArtifact)
-	if err != nil {
-		return ""
-	}
-	return pack.AppID
 }
 
 func newDeploymentOutputWriter(output io.Writer, label string, color string) io.Writer {

@@ -7,16 +7,19 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/providers/registry"
 	"github.com/omry/reploy/internal/providerstore"
 )
 
 type ProviderBuildRunInputV1 struct {
 	DeploymentDir  string
 	Runtime        StagedProviderBuildRuntimeV1
+	Automatic      bool
 	NoCache        bool
 	ValidateLayers bool
 	RunOptions     RunOptions
@@ -27,6 +30,7 @@ type LockedProviderBuildRunInputV1 struct {
 	Store          providerstore.Store
 	DeploymentDir  string
 	Runtime        StagedProviderBuildRuntimeV1
+	Automatic      bool
 	NoCache        bool
 	ValidateLayers bool
 	RunOptions     RunOptions
@@ -67,7 +71,6 @@ type providerBuildRunBackend struct {
 
 // RunProviderBuildV1 owns one complete deployment-locked provider build from
 // reuse selection through provider execution, validation, and publication.
-// Translation-aware source preparation is not yet wired into this entry point.
 func RunProviderBuildV1(
 	ctx context.Context,
 	input ProviderBuildRunInputV1,
@@ -119,7 +122,8 @@ func runProviderBuildV1(
 	}
 	return runLockedProviderBuildV1(ctx, LockedProviderBuildRunInputV1{
 		Operation: operation, Store: store, DeploymentDir: deploymentDir,
-		Runtime: input.Runtime, NoCache: input.NoCache, ValidateLayers: input.ValidateLayers, RunOptions: input.RunOptions,
+		Runtime: input.Runtime, Automatic: input.Automatic,
+		NoCache: input.NoCache, ValidateLayers: input.ValidateLayers, RunOptions: input.RunOptions,
 	}, backend)
 }
 
@@ -154,8 +158,11 @@ func runLockedProviderBuildV1(
 	if input.DeploymentDir == "" {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("run locked provider build requires a deployment directory")
 	}
-	if backend.prepare == nil || backend.execute == nil || backend.cleanupFailure == nil {
+	if backend.prepare == nil || backend.execute == nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("run locked provider build requires a complete backend")
+	}
+	if backend.cleanupFailure == nil {
+		backend.cleanupFailure = cleanupFailedProviderBuildV1
 	}
 
 	deploymentDir, err := filepath.Abs(input.DeploymentDir)
@@ -176,10 +183,82 @@ func runLockedProviderBuildV1(
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("run provider build blueprint: %w", err)
 	}
-
-	if len(document.Environment.Translations) != 0 {
-		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("provider builds with blueprint translations are not implemented")
+	if state.Deployment != nil {
+		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("provider build requires a staged deployment; an installed deployment cannot be used as a build source")
 	}
+	workspaceRoot := ""
+	if state.Staging != nil {
+		workspaceRoot = state.Staging.WorkspaceRoot
+	}
+	reusableSources := []providers.ResolvedSourceInput{}
+	reusableWheels := []providerstore.ArtifactDescriptor{}
+	observedSources := []PythonWorkspaceSource{}
+	cacheExists := false
+	if state.Current != nil && !input.NoCache {
+		cacheExists, err = input.Store.Exists()
+		if err != nil {
+			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("inspect provider build cache for workspace reuse: %w", err)
+		}
+	}
+	if state.Current != nil && !input.NoCache && cacheExists {
+		lock, found, err := input.Operation.ReadBuildLock(state.Current.BuildLockDigest, registry.ValidateRequirementProfileV1)
+		if err != nil {
+			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("load current build lock for workspace reuse: %w", err)
+		}
+		if !found {
+			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("current build lock %s is missing", state.Current.BuildLockDigest)
+		}
+		if err := validateGenerationBuildLock(*state.Current, lock, registry.ValidateRequirementProfileV1); err != nil {
+			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("load current build lock for workspace reuse: %w", err)
+		}
+		if lock.Platform == state.Platform {
+			lockedSources, err := buildLockSelectedSourcesV1(lock)
+			if err != nil {
+				return LockedProviderBuildExecutionResultV1{}, err
+			}
+			eligible := make([]providers.ResolvedSourceInput, 0, len(lockedSources))
+			distributionSet := map[string]struct{}{}
+			for _, source := range lockedSources {
+				component, found := document.Environment.Components[source.Component]
+				if !found || component.Type != blueprint.ComponentTypePython {
+					continue
+				}
+				eligible = append(eligible, source)
+				distributionSet[source.LogicalPackage] = struct{}{}
+			}
+			distributions := make([]string, 0, len(distributionSet))
+			for distribution := range distributionSet {
+				distributions = append(distributions, distribution)
+			}
+			sort.Strings(distributions)
+			observedSources, err = ResolveSelectedPythonWorkspaceSources(document, workspaceRoot, distributions)
+			if err != nil {
+				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("observe current provider build workspace sources: %w", err)
+			}
+			reusableSources, err = MatchReusablePythonWorkspaceSources(eligible, observedSources)
+			if err != nil {
+				return LockedProviderBuildExecutionResultV1{}, err
+			}
+			reusableWheels, err = buildLockSelectedSourceWheelsV1(input.Store, lock, reusableSources)
+			if err != nil {
+				if !errors.Is(err, errCurrentPythonSourceWheelMissing) {
+					return LockedProviderBuildExecutionResultV1{}, err
+				}
+				if input.Automatic {
+					return LockedProviderBuildExecutionResultV1{}, fmt.Errorf(
+						"current build cache is incomplete because a locked Python source wheel is missing; run reploy build --dir %q to repair it: %w",
+						deploymentDir, err,
+					)
+				}
+				// An explicit build is authorization to reconstruct the selected
+				// source wheel. Keep the current lock available to the provider
+				// resolver so other verified artifacts can still be reused.
+				reusableSources = []providers.ResolvedSourceInput{}
+				reusableWheels = []providerstore.ArtifactDescriptor{}
+			}
+		}
+	}
+
 	dockerPlan, err := PlanDockerExecution(document, DockerPlanContext{
 		DeploymentDir:  deploymentDir,
 		Phase:          blueprint.PhaseStaged,
@@ -194,24 +273,38 @@ func runLockedProviderBuildV1(
 
 	preparation, err := backend.prepare(ctx, LockedProviderBuildPreparationInputV1{
 		Operation: input.Operation, Store: input.Store, Environment: document.Environment.ID,
-		DeploymentDir: deploymentDir, Sources: []providers.ResolvedSourceInput{},
+		DeploymentDir: deploymentDir, Sources: reusableSources,
 		DockerPlan: dockerPlan, NoCache: input.NoCache,
 	})
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, err
 	}
+	workspaceSources := []PythonWorkspaceSource{}
+	if !preparation.Reused {
+		workspaceSources, err = CompletePythonWorkspaceSources(document, workspaceRoot, observedSources)
+		if err != nil {
+			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("prepare provider build workspace sources: %w", err)
+		}
+	}
 	options := input.RunOptions
 	options.NoCache = input.NoCache
 	result, err := backend.execute(ctx, LockedProviderBuildExecutionInputV1{
-		Preparation:    preparation,
-		SourceWheels:   []providerstore.ArtifactDescriptor{},
-		ValidateLayers: input.ValidateLayers, RunValidation: nil, RunOptions: options,
+		Preparation:      preparation,
+		SourceWheels:     reusableWheels,
+		WorkspaceSources: workspaceSources,
+		ValidateLayers:   input.ValidateLayers, RunValidation: nil, RunOptions: options,
 	})
-	if err == nil {
-		return result, nil
+	if err != nil {
+		cleanupErr := backend.cleanupFailure(context.WithoutCancel(ctx), preparation)
+		return LockedProviderBuildExecutionResultV1{}, errors.Join(err, cleanupErr)
 	}
-	cleanupErr := backend.cleanupFailure(context.WithoutCancel(ctx), preparation)
-	return LockedProviderBuildExecutionResultV1{}, errors.Join(err, cleanupErr)
+	if err := ctx.Err(); err != nil {
+		return LockedProviderBuildExecutionResultV1{}, err
+	}
+	if err := PrepareStagedManagedBindPathsV1(deploymentDir, dockerPlan); err != nil {
+		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("prepare staged managed paths: %w", err)
+	}
+	return result, nil
 }
 
 // PlanDockerExecution requires an image reference even though runtime-policy

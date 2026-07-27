@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"bufio"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -23,6 +24,17 @@ func runtimeActionUsesStartupLogSnippet(action string) bool {
 type runtimeStartupLogDiagnostics struct {
 	Snippet string
 	Failure string
+}
+
+func runtimePostStartError(message string, err error, options RuntimeOptions, logSince time.Time) error {
+	diagnostics := runtimeStartupLogDiagnosticsFor(options.Dir, logSince, options.DockerPreflightTimeout)
+	if diagnostics.Failure != "" {
+		message += ": " + diagnostics.Failure
+	}
+	if diagnostics.Snippet != "" {
+		return fmt.Errorf("%s: %w\nstartup log snippet:\n%s", message, err, diagnostics.Snippet)
+	}
+	return fmt.Errorf("%s: %w", message, err)
 }
 
 func runtimeStartupLogDiagnosticsFor(dir string, since time.Time, dockerPreflightTimeout time.Duration) runtimeStartupLogDiagnostics {

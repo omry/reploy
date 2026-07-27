@@ -19,6 +19,8 @@ func TestProviderInstallFilesV1CombinesAndSortsSystemdCandidates(t *testing.T) {
 	}
 	wantPaths := []string{
 		plan.Installation.UnitPath,
+		filepath.Join(destinationDir, plan.ControlScript),
+		filepath.Join(destinationDir, filepath.FromSlash(embeddedRuntimeFileName())),
 		filepath.Join(destinationDir, DockerEnvFileName),
 		filepath.Join(destinationDir, ComposeFileName),
 	}
@@ -45,7 +47,7 @@ func TestProviderInstallFilesV1OmitsSystemdForManagedBackend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 2 {
+	if len(files) != 4 {
 		t.Fatalf("files = %#v", files)
 	}
 }

@@ -37,6 +37,18 @@ func RemoveEnvironmentImageReference(
 	return removeEnvironmentImageReference(ctx, image, references, kind, environment, deploymentDir, runDockerOutput)
 }
 
+// RemoveEnvironmentGenerationReference removes one state-recorded,
+// deployment-owned generation reference after verifying its exact image ID.
+func RemoveEnvironmentGenerationReference(
+	ctx context.Context,
+	image providers.RealizedImageV1,
+	reference string,
+	environment string,
+	deploymentDir string,
+) error {
+	return removeEnvironmentGenerationReference(ctx, image, reference, environment, deploymentDir, runDockerOutput)
+}
+
 func VerifyEnvironmentGenerationReference(
 	ctx context.Context,
 	image providers.RealizedImageV1,
@@ -102,6 +114,38 @@ func removeEnvironmentImageReference(
 	if run == nil {
 		return fmt.Errorf("remove environment image reference requires a Docker runner")
 	}
+	return removeExactEnvironmentImageReference(ctx, image, reference, run)
+}
+
+func removeEnvironmentGenerationReference(
+	ctx context.Context,
+	image providers.RealizedImageV1,
+	reference string,
+	environment string,
+	deploymentDir string,
+	run dockerOutputRunner,
+) error {
+	if ctx == nil {
+		return fmt.Errorf("remove environment generation reference requires a context")
+	}
+	if err := image.Validate(); err != nil {
+		return fmt.Errorf("remove environment generation reference: %w", err)
+	}
+	if err := ValidateEnvironmentGenerationReference(reference, environment, deploymentDir); err != nil {
+		return err
+	}
+	if run == nil {
+		return fmt.Errorf("remove environment generation reference requires a Docker runner")
+	}
+	return removeExactEnvironmentImageReference(ctx, image, reference, run)
+}
+
+func removeExactEnvironmentImageReference(
+	ctx context.Context,
+	image providers.RealizedImageV1,
+	reference string,
+	run dockerOutputRunner,
+) error {
 	output, err := run(ctx, "image", "ls", "--quiet", "--no-trunc", reference)
 	if err != nil {
 		return fmt.Errorf("inspect environment image reference %q for removal: %w", reference, err)
@@ -113,7 +157,11 @@ func removeEnvironmentImageReference(
 	if len(ids) != 1 || ids[0] != string(image.ConfigDigest) {
 		return fmt.Errorf("environment image reference %q no longer names expected config ID %s", reference, image.ConfigDigest)
 	}
-	if _, err := run(ctx, "image", "rm", reference); err != nil {
+	// Docker rejects an ordinary untag when any container was created from
+	// this reference, including an exited container. Force applies only to the
+	// exact deployment-owned tag verified above; Docker retains the container
+	// and its immutable image while removing the stale repository reference.
+	if _, err := run(ctx, "image", "rm", "--force", reference); err != nil {
 		return fmt.Errorf("remove environment image reference %q: %w", reference, err)
 	}
 	return nil

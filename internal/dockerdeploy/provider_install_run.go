@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"reflect"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
@@ -15,6 +17,7 @@ type providerInstallRunInputV1 struct {
 	SourceDeploymentDir      string
 	DestinationDeploymentDir string
 	Runtime                  StagedProviderBuildRuntimeV1
+	ControlMode              ControlAdmissionModeV1
 	Install                  providerInstallOptionsV1
 	RunOptions               RunOptions
 }
@@ -23,6 +26,8 @@ type providerInstallOptionsV1 struct {
 	Scope         InstallScope
 	Service       string
 	PortOverrides []PortOverride
+	Replace       []string
+	Clean         bool
 	Start         bool
 	SystemUser    string
 	SystemGroup   string
@@ -37,10 +42,15 @@ type providerInstallPlanningV1 struct {
 }
 
 type providerInstallationPlanV1 struct {
-	Installation deploy.InstallationStateV1
-	Docker       DockerExecutionPlan
-	Rendered     DockerRenderedInputs
-	Backend      installBackend
+	Installation  deploy.InstallationStateV1
+	ControlScript string
+	Docker        DockerExecutionPlan
+	Rendered      DockerRenderedInputs
+	PathUpdates   []PathUpdateAction
+	PreservePaths []string
+	AfterInstall  LifecyclePlan
+	Start         LifecyclePlan
+	Backend       installBackend
 }
 
 type lockedProviderInstallV1 struct {
@@ -56,26 +66,31 @@ type lockedProviderInstallV1 struct {
 }
 
 type providerInstallRunBackend struct {
-	acquire             func(context.Context, string) (*deploy.OperationLock, error)
-	release             func(*deploy.OperationLock) error
-	newStore            func(string) (providerstore.Store, error)
-	recoverDestination  func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (bool, error)
-	buildSource         func(context.Context, LockedProviderBuildRunInputV1) (LockedProviderBuildExecutionResultV1, error)
-	prepareAccount      func(context.Context, blueprint.RunAs, providerstore.Store, CurrentBuild, providerInstallRunInputV1) (providerInstallRunInputV1, error)
-	newReferences       func(string, string) (EnvironmentImageReferences, error)
-	planInstallation    func(context.Context, providerInstallPlanningV1) (providerInstallationPlanV1, error)
-	inspectHostTools    func(context.Context, installBackend) (providerInstallHostToolsV1, error)
-	prepareDestination  func(context.Context, lockedProviderInstallV1) (preparedProviderInstallFilesV1, error)
-	publish             func(context.Context, *deploy.OperationLock, *deploy.OperationLock, providerstore.Store, providerstore.Store, InstalledBuildPublicationInputV1) (deploy.StateV1, error)
-	publishFiles        func(preparedProviderInstallFilesV1) error
-	activateDestination func(context.Context, lockedProviderInstallV1, deploy.StateV1) error
-	markReady           func(*deploy.OperationLock, deploy.InstallationStateV1) (deploy.StateV1, bool, error)
-	startDestination    func(context.Context, lockedProviderInstallV1, deploy.StateV1) error
+	acquire              func(context.Context, string) (*deploy.OperationLock, error)
+	release              func(*deploy.OperationLock) error
+	readState            func(*deploy.OperationLock) (deploy.StateV1, bool, error)
+	admit                func(context.Context, string, *deploy.OperationLock, ControlAdmissionInputV1) (AdmittedControlV1, error)
+	complete             func(*deploy.OperationLock, string, *deploy.ControlLeaseV1) error
+	newStore             func(string) (providerstore.Store, error)
+	recoverDestination   func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (bool, error)
+	buildSource          func(context.Context, LockedProviderBuildRunInputV1) (LockedProviderBuildExecutionResultV1, error)
+	prepareAccount       func(context.Context, blueprint.RunAs, providerstore.Store, CurrentBuild, providerInstallRunInputV1) (providerInstallRunInputV1, error)
+	newReferences        func(string, string) (EnvironmentImageReferences, error)
+	planInstallation     func(context.Context, providerInstallPlanningV1) (providerInstallationPlanV1, error)
+	inspectHostTools     func(context.Context, installBackend) (providerInstallHostToolsV1, error)
+	preflightDestination func(providerstore.Store, CurrentBuild, string) error
+	ensureDestination    func(string) (bool, error)
+	cleanupDestination   func(string) error
+	prepareDestination   func(context.Context, lockedProviderInstallV1) (preparedProviderInstallFilesV1, error)
+	stopDestination      func(context.Context, lockedProviderInstallV1, deploy.StateV1) error
+	publish              func(context.Context, *deploy.OperationLock, *deploy.OperationLock, providerstore.Store, providerstore.Store, InstalledBuildPublicationInputV1) (deploy.StateV1, error)
+	publishFiles         func(preparedProviderInstallFilesV1) error
+	activateDestination  func(context.Context, lockedProviderInstallV1, deploy.StateV1) error
+	markReady            func(*deploy.OperationLock, deploy.InstallationStateV1) (deploy.StateV1, bool, error)
+	startDestination     func(context.Context, lockedProviderInstallV1, deploy.StateV1) error
 }
 
-// runProviderInstallV1 owns the two-lock install sequence. It remains internal
-// until candidate preparation and host activation implement the complete
-// installation contract.
+// runProviderInstallV1 owns the two-lock install sequence.
 func runProviderInstallV1(
 	ctx context.Context,
 	input providerInstallRunInputV1,
@@ -87,25 +102,38 @@ func runProviderInstallV1(
 	if err := ctx.Err(); err != nil {
 		return deploy.StateV1{}, err
 	}
-	if input.SourceDeploymentDir == "" || input.DestinationDeploymentDir == "" {
-		return deploy.StateV1{}, fmt.Errorf("run provider install requires source and destination deployment directories")
+	if input.SourceDeploymentDir == "" {
+		return deploy.StateV1{}, fmt.Errorf("run provider install requires a source deployment directory")
 	}
-	if backend.acquire == nil || backend.release == nil || backend.newStore == nil || backend.recoverDestination == nil || backend.buildSource == nil || backend.prepareAccount == nil || backend.newReferences == nil || backend.planInstallation == nil || backend.inspectHostTools == nil || backend.prepareDestination == nil || backend.publish == nil || backend.publishFiles == nil || backend.activateDestination == nil || backend.markReady == nil || backend.startDestination == nil {
-		return deploy.StateV1{}, fmt.Errorf("run provider install requires a complete backend")
+	if input.ControlMode == "" {
+		input.ControlMode = ControlAdmissionImmediateV1
+	}
+	if !validControlAdmissionModeV1(input.ControlMode) {
+		return deploy.StateV1{}, fmt.Errorf("install control admission mode must be immediate, wait, drain, or force")
 	}
 	sourceDir, err := filepath.Abs(input.SourceDeploymentDir)
 	if err != nil {
 		return deploy.StateV1{}, fmt.Errorf("resolve provider install source: %w", err)
 	}
-	destinationDir, err := filepath.Abs(input.DestinationDeploymentDir)
-	if err != nil {
-		return deploy.StateV1{}, fmt.Errorf("resolve provider install destination: %w", err)
+	destinationDir := ""
+	if input.DestinationDeploymentDir != "" {
+		destinationDir, err = filepath.Abs(input.DestinationDeploymentDir)
+		if err != nil {
+			return deploy.StateV1{}, fmt.Errorf("resolve provider install destination: %w", err)
+		}
+		if installPathsOverlap(sourceDir, destinationDir) {
+			return deploy.StateV1{}, fmt.Errorf("provider install source and destination must not overlap")
+		}
 	}
-	if installPathsOverlap(sourceDir, destinationDir) {
-		return deploy.StateV1{}, fmt.Errorf("provider install source and destination must not overlap")
+	if backend.acquire == nil || backend.release == nil || backend.readState == nil || backend.admit == nil || backend.complete == nil || backend.newStore == nil || backend.recoverDestination == nil || backend.buildSource == nil || backend.prepareAccount == nil || backend.newReferences == nil || backend.planInstallation == nil || backend.inspectHostTools == nil || backend.preflightDestination == nil || backend.ensureDestination == nil || backend.cleanupDestination == nil || backend.prepareDestination == nil || backend.stopDestination == nil || backend.publish == nil || backend.publishFiles == nil || backend.activateDestination == nil || backend.markReady == nil || backend.startDestination == nil {
+		return deploy.StateV1{}, fmt.Errorf("run provider install requires a complete backend")
 	}
 	input.SourceDeploymentDir = sourceDir
-	input.DestinationDeploymentDir = destinationDir
+	if destinationDir != "" {
+		if err := preflightProviderInstallDestinationRoleV1(ctx, destinationDir, backend.acquire, backend.release); err != nil {
+			return deploy.StateV1{}, err
+		}
+	}
 
 	sourceOperation, err := backend.acquire(ctx, sourceDir)
 	if err != nil {
@@ -135,6 +163,67 @@ func runProviderInstallV1(
 	if err != nil {
 		return deploy.StateV1{}, fmt.Errorf("provider install source blueprint: %w", err)
 	}
+	if destinationDir == "" {
+		destinationDir, err = resolveProviderInstallDestinationV1(document, input)
+		if err != nil {
+			return deploy.StateV1{}, fmt.Errorf("resolve provider install destination: %w", err)
+		}
+		if installPathsOverlap(sourceDir, destinationDir) {
+			return deploy.StateV1{}, fmt.Errorf("provider install source and destination must not overlap")
+		}
+	}
+	input.DestinationDeploymentDir = destinationDir
+	service, err := providerInstallServiceV1(document.Environment.ID, input.Install.Service)
+	if err != nil {
+		return deploy.StateV1{}, err
+	}
+
+	var destinationOperation *deploy.OperationLock
+	var destinationStore providerstore.Store
+	markerID := ""
+	var controlLease *deploy.ControlLeaseV1
+	destinationCleanupSafe := true
+	releaseDestination := func() {
+		if destinationOperation == nil {
+			return
+		}
+		var releaseErr error
+		if markerID == "" {
+			releaseErr = backend.release(destinationOperation)
+		} else {
+			releaseErr = backend.complete(destinationOperation, markerID, controlLease)
+		}
+		if releaseErr != nil {
+			err = errors.Join(err, releaseErr)
+		} else {
+			destinationCleanupSafe = true
+		}
+	}
+	destinationExists, err := providerInstallDestinationExistsV1(destinationDir)
+	if err != nil {
+		return deploy.StateV1{}, err
+	}
+	if destinationExists {
+		destinationOperation, err = backend.acquire(ctx, destinationDir)
+		if err != nil {
+			return deploy.StateV1{}, err
+		}
+		defer releaseDestination()
+		destinationCleanupSafe = false
+		destinationStore, err = backend.newStore(destinationDir)
+		if err != nil {
+			return deploy.StateV1{}, err
+		}
+		if err := validateProviderInstallDestinationServiceV1(destinationOperation, service); err != nil {
+			return deploy.StateV1{}, err
+		}
+		if _, err := backend.recoverDestination(ctx, destinationOperation, destinationStore, document.Environment.ID, destinationDir); err != nil {
+			return deploy.StateV1{}, fmt.Errorf("recover provider install destination: %w", err)
+		}
+		if err := validateProviderInstallDestinationServiceV1(destinationOperation, service); err != nil {
+			return deploy.StateV1{}, err
+		}
+	}
 	input, err = backend.prepareAccount(ctx, document.Environment.Install.System.RunAs, sourceStore, sourceBuild, input)
 	if err != nil {
 		return deploy.StateV1{}, fmt.Errorf("prepare provider installation account: %w", err)
@@ -163,6 +252,19 @@ func runProviderInstallV1(
 	if err != nil {
 		return deploy.StateV1{}, fmt.Errorf("inspect provider installation host tools: %w", err)
 	}
+	if err := backend.preflightDestination(sourceStore, sourceBuild, destinationDir); err != nil {
+		return deploy.StateV1{}, fmt.Errorf("check install disk space before creating destination: %w", err)
+	}
+	destinationCreated, err := backend.ensureDestination(destinationDir)
+	if err != nil {
+		return deploy.StateV1{}, err
+	}
+	destinationPublished := false
+	defer func() {
+		if err != nil && destinationCreated && !destinationPublished && destinationCleanupSafe {
+			err = errors.Join(err, backend.cleanupDestination(destinationDir))
+		}
+	}()
 	configuring := plan.Installation
 	configuring.Status = deploy.InstallationStatusConfiguring
 	publicationInput := InstalledBuildPublicationInputV1{
@@ -173,25 +275,32 @@ func runProviderInstallV1(
 		return deploy.StateV1{}, err
 	}
 
-	destinationOperation, err := backend.acquire(ctx, destinationDir)
-	if err != nil {
-		return deploy.StateV1{}, err
-	}
-	defer func() {
-		if releaseErr := backend.release(destinationOperation); err == nil && releaseErr != nil {
-			err = releaseErr
+	if destinationOperation == nil {
+		destinationOperation, err = backend.acquire(ctx, destinationDir)
+		if err != nil {
+			return deploy.StateV1{}, err
 		}
-	}()
-	destinationStore, err := backend.newStore(destinationDir)
-	if err != nil {
-		return deploy.StateV1{}, err
-	}
-	if _, err := backend.recoverDestination(ctx, destinationOperation, destinationStore, document.Environment.ID, destinationDir); err != nil {
-		return deploy.StateV1{}, fmt.Errorf("recover provider install destination: %w", err)
+		defer releaseDestination()
+		destinationCleanupSafe = false
+		destinationStore, err = backend.newStore(destinationDir)
+		if err != nil {
+			return deploy.StateV1{}, err
+		}
+		if err := validateProviderInstallDestinationServiceV1(destinationOperation, service); err != nil {
+			return deploy.StateV1{}, err
+		}
+		if _, err := backend.recoverDestination(ctx, destinationOperation, destinationStore, document.Environment.ID, destinationDir); err != nil {
+			return deploy.StateV1{}, fmt.Errorf("recover provider install destination: %w", err)
+		}
 	}
 	if err := validateProviderInstallDestinationV1(destinationOperation, plan.Installation); err != nil {
 		return deploy.StateV1{}, err
 	}
+	destinationState, destinationFound, err := backend.readState(destinationOperation)
+	if err != nil {
+		return deploy.StateV1{}, err
+	}
+	destinationGeneration := providerInstallDestinationGenerationV1(destinationState, destinationFound, references.Generation)
 	locked := lockedProviderInstallV1{
 		SourceOperation: sourceOperation, DestinationOperation: destinationOperation,
 		SourceStore: sourceStore, DestinationStore: destinationStore,
@@ -202,15 +311,53 @@ func runProviderInstallV1(
 		return deploy.StateV1{}, err
 	}
 	defer func() { err = errors.Join(err, prepared.Cleanup()) }()
+	admitted, err := backend.admit(ctx, destinationDir, destinationOperation, ControlAdmissionInputV1{
+		Operation:              deploy.ControlOperationInstallV1,
+		GenerationReference:    destinationGeneration,
+		Mode:                   input.ControlMode,
+		DockerPreflightTimeout: input.RunOptions.DockerPreflightTimeout,
+	})
+	if err != nil {
+		if errors.Is(err, deploy.ErrLiveRunConflict) {
+			return deploy.StateV1{}, fmt.Errorf("%w; rerun with --wait to queue this install", err)
+		}
+		return deploy.StateV1{}, err
+	}
+	previousDestinationOperation := destinationOperation
+	destinationOperation = admitted.Operation
+	locked.DestinationOperation = destinationOperation
+	markerID = admitted.Marker.ID
+	controlLease = admitted.Lease
+	if destinationOperation != previousDestinationOperation {
+		waitingState, waitingFound, readErr := backend.readState(destinationOperation)
+		if readErr != nil {
+			return deploy.StateV1{}, readErr
+		}
+		if providerInstallDestinationGenerationV1(waitingState, waitingFound, references.Generation) != destinationGeneration {
+			return deploy.StateV1{}, fmt.Errorf("destination generation changed while install was waiting; retry the command")
+		}
+		if waitingFound != destinationFound || !reflect.DeepEqual(waitingState, destinationState) {
+			return deploy.StateV1{}, fmt.Errorf("destination state changed while install was waiting; retry the command")
+		}
+		if err := validateProviderInstallDestinationV1(destinationOperation, plan.Installation); err != nil {
+			return deploy.StateV1{}, err
+		}
+	}
+	if destinationFound && destinationState.Deployment != nil {
+		if err := backend.stopDestination(ctx, locked, destinationState); err != nil {
+			return deploy.StateV1{}, fmt.Errorf("stop existing installed workload before cutover: %w", err)
+		}
+	}
 	published, err := backend.publish(ctx, sourceOperation, destinationOperation, sourceStore, destinationStore, publicationInput)
 	if err != nil {
 		return deploy.StateV1{}, err
 	}
+	destinationPublished = true
 	if err := backend.publishFiles(prepared); err != nil {
-		return published, fmt.Errorf("installation was committed as configuring but host configuration failed: %w; resolve the cause and rerun reploy install", err)
+		return published, fmt.Errorf("installation was committed as configuring but installation configuration failed: %w; resolve the cause and rerun reploy install", err)
 	}
 	if err := backend.activateDestination(ctx, locked, published); err != nil {
-		return published, fmt.Errorf("installation was committed as configuring but host configuration failed: %w; resolve the cause and rerun reploy install", err)
+		return published, fmt.Errorf("installation was committed as configuring but installation configuration failed: %w; resolve the cause and rerun reploy install", err)
 	}
 	ready, _, err := backend.markReady(destinationOperation, plan.Installation)
 	if err != nil {
@@ -224,7 +371,95 @@ func runProviderInstallV1(
 	return ready, nil
 }
 
+func preflightProviderInstallDestinationRoleV1(
+	ctx context.Context,
+	destinationDir string,
+	acquire func(context.Context, string) (*deploy.OperationLock, error),
+	release func(*deploy.OperationLock) error,
+) (err error) {
+	if ctx == nil {
+		return fmt.Errorf("preflight provider install destination requires a context")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if destinationDir == "" || acquire == nil || release == nil {
+		return fmt.Errorf("preflight provider install destination requires a directory and lock backend")
+	}
+	if _, err := os.Lstat(filepath.Join(destinationDir, StateFileName)); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("inspect provider install destination state: %w", err)
+	}
+	operation, err := acquire(ctx, destinationDir)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, release(operation)) }()
+	state, found, err := operation.ReadStateV1()
+	if err != nil {
+		return err
+	}
+	if found && state.Deployment == nil {
+		return fmt.Errorf("destination contains a staging deployment; choose a different install target")
+	}
+	return nil
+}
+
+func providerInstallDestinationExistsV1(destinationDir string) (bool, error) {
+	info, err := os.Lstat(destinationDir)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect provider install destination: %w", err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return false, fmt.Errorf("install destination must be a real directory: %s", destinationDir)
+	}
+	return true, nil
+}
+
+func resolveProviderInstallDestinationV1(document blueprint.Document, input providerInstallRunInputV1) (string, error) {
+	scope, err := ParseInstallScope(string(input.Install.Scope))
+	if err != nil {
+		return "", err
+	}
+	platform, err := installHostPlatformV1(input.Runtime.Host)
+	if err != nil {
+		return "", err
+	}
+	roots, err := installTargetRoots(platform.GOOS)
+	if err != nil {
+		return "", err
+	}
+	target, err := blueprint.ResolveInstallTarget(document.Environment.Install.Target, document.Environment.ID, blueprint.InstallTargetContext{
+		Host: input.Runtime.Host, Scope: blueprint.InstallScope(scope),
+		Paths: blueprint.HostPaths{
+			Home: roots.UserHome, UserData: roots.UserData, LocalData: roots.UserLocalData,
+			SystemData: roots.SystemData,
+		},
+		Variables: document.Environment.Vars,
+	})
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(target)
+}
+
+func providerInstallDestinationGenerationV1(state deploy.StateV1, found bool, incoming string) string {
+	if found && state.Current != nil {
+		return state.Current.Reference
+	}
+	return incoming
+}
+
 func validateProviderInstallDestinationV1(operation *deploy.OperationLock, installation deploy.InstallationStateV1) error {
+	return validateProviderInstallDestinationServiceV1(operation, installation.Service)
+}
+
+func validateProviderInstallDestinationServiceV1(operation *deploy.OperationLock, service string) error {
 	if operation == nil {
 		return fmt.Errorf("validate provider install destination requires an operation lock")
 	}
@@ -232,12 +467,15 @@ func validateProviderInstallDestinationV1(operation *deploy.OperationLock, insta
 	if err != nil {
 		return err
 	}
-	if !found || state.Deployment == nil {
+	if !found {
 		return nil
 	}
+	if state.Deployment == nil {
+		return fmt.Errorf("destination contains a staging deployment; choose a different install target")
+	}
 	existing := state.Deployment.Installation.Service
-	if existing != installation.Service {
-		return fmt.Errorf("destination is already installed as service %q; uninstall it before installing as service %q", existing, installation.Service)
+	if existing != service {
+		return fmt.Errorf("destination is already installed as service %q; uninstall it before installing as service %q", existing, service)
 	}
 	return nil
 }

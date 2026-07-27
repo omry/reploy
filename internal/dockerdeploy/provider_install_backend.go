@@ -11,30 +11,43 @@ import (
 
 func newProviderInstallRunBackendV1() providerInstallRunBackend {
 	return providerInstallRunBackend{
-		acquire:            deploy.AcquireOperationLock,
-		release:            func(lock *deploy.OperationLock) error { return lock.Unlock() },
-		newStore:           providerstore.NewStore,
-		recoverDestination: recoverProviderInstallDestinationV1,
-		buildSource:        RunLockedProviderBuildV1,
-		prepareAccount:     prepareProviderInstallAccountV1,
-		newReferences:      NewEnvironmentImageReferences,
-		planInstallation:   planProviderInstallationV1,
-		inspectHostTools:   inspectProviderInstallHostToolsV1,
+		acquire:              deploy.AcquireOperationLock,
+		release:              func(lock *deploy.OperationLock) error { return lock.Unlock() },
+		readState:            func(lock *deploy.OperationLock) (deploy.StateV1, bool, error) { return lock.ReadStateV1() },
+		admit:                AdmitControlOperationV1,
+		complete:             CompleteControlAdmissionV1,
+		newStore:             providerstore.NewStore,
+		recoverDestination:   recoverProviderInstallDestinationV1,
+		buildSource:          RunLockedProviderBuildV1,
+		prepareAccount:       prepareProviderInstallAccountV1,
+		newReferences:        NewEnvironmentImageReferences,
+		planInstallation:     planProviderInstallationV1,
+		inspectHostTools:     inspectProviderInstallHostToolsV1,
+		preflightDestination: preflightProviderInstallBootstrapV1,
+		ensureDestination:    ensureProviderInstallDestinationV1,
+		cleanupDestination:   cleanupFailedProviderInstallDestinationV1,
 		prepareDestination: func(ctx context.Context, locked lockedProviderInstallV1) (preparedProviderInstallFilesV1, error) {
 			return prepareProviderInstallDestinationV1(ctx, locked, locked.HostTools.DockerPath, locked.HostTools.IncludeDockerUnit)
 		},
-		publish: PublishInstalledBuildV1,
+		stopDestination: stopProviderInstallDestinationV1,
+		publish:         PublishInstalledBuildV1,
 		publishFiles: func(prepared preparedProviderInstallFilesV1) error {
 			return prepared.Publish()
 		},
 		activateDestination: func(ctx context.Context, locked lockedProviderInstallV1, _ deploy.StateV1) error {
-			return configureProviderInstallHostV1(ctx, locked.Plan, locked.HostTools, locked.Input.RunOptions)
+			if err := applyProviderInstallPathUpdatesV1(ctx, locked); err != nil {
+				return fmt.Errorf("materialize installed mounts: %w", err)
+			}
+			if err := configureProviderInstallHostV1(ctx, locked.Plan, locked.HostTools, locked.Input.RunOptions); err != nil {
+				return err
+			}
+			return executeProviderInstallAfterInstallV1(ctx, locked)
 		},
 		markReady: func(lock *deploy.OperationLock, installation deploy.InstallationStateV1) (deploy.StateV1, bool, error) {
 			return lock.MarkInstallationReadyV1(installation)
 		},
 		startDestination: func(ctx context.Context, locked lockedProviderInstallV1, _ deploy.StateV1) error {
-			return startProviderInstallHostV1(ctx, locked.Plan, locked.HostTools, locked.Input.RunOptions)
+			return executeProviderInstallStartV1(ctx, locked)
 		},
 	}
 }

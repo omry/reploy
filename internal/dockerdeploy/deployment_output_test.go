@@ -1,9 +1,14 @@
 package dockerdeploy
 
 import (
+	"bytes"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 )
 
@@ -25,49 +30,6 @@ func TestStagingOutputWriterPrefixesEachLine(t *testing.T) {
 	}
 }
 
-func TestStagingOutputWritersWrapDeploymentPhases(t *testing.T) {
-	t.Setenv("REPLOY_COLOR", "never")
-	var staged strings.Builder
-	stdout, _ := deploymentOutputWritersForState(deploy.DeploymentState{Phase: deploy.PhaseStaged, AppID: "demo"}, &staged, nil)
-	if _, err := stdout.Write([]byte("hello\n")); err != nil {
-		t.Fatal(err)
-	}
-	if staged.String() != "[STAGING : demo] hello\n" {
-		t.Fatalf("staged output = %q", staged.String())
-	}
-
-	var installed strings.Builder
-	stdout, _ = deploymentOutputWritersForState(deploy.DeploymentState{Phase: deploy.PhaseInstalled, AppID: "demo"}, &installed, nil)
-	if _, err := stdout.Write([]byte("hello\n")); err != nil {
-		t.Fatal(err)
-	}
-	if installed.String() != "[DEPLOYED : demo] hello\n" {
-		t.Fatalf("installed output = %q", installed.String())
-	}
-}
-
-func TestDeploymentOutputWriterUsesPhaseColors(t *testing.T) {
-	t.Setenv("REPLOY_COLOR", "always")
-
-	var staged strings.Builder
-	stdout, _ := deploymentOutputWritersForState(deploy.DeploymentState{Phase: deploy.PhaseStaged, AppID: "demo"}, &staged, nil)
-	if _, err := stdout.Write([]byte("hello\n")); err != nil {
-		t.Fatal(err)
-	}
-	if staged.String() != "\x1b[38;5;117m[STAGING : demo]\x1b[0m hello\n" {
-		t.Fatalf("staged output = %q", staged.String())
-	}
-
-	var deployed strings.Builder
-	stdout, _ = deploymentOutputWritersForState(deploy.DeploymentState{Phase: deploy.PhaseInstalled, AppID: "demo"}, &deployed, nil)
-	if _, err := stdout.Write([]byte("hello\n")); err != nil {
-		t.Fatal(err)
-	}
-	if deployed.String() != "\x1b[38;5;208m[DEPLOYED : demo]\x1b[0m hello\n" {
-		t.Fatalf("deployed output = %q", deployed.String())
-	}
-}
-
 func TestDeploymentOutputPrefixTextUsesSameColors(t *testing.T) {
 	t.Setenv("REPLOY_COLOR", "always")
 
@@ -75,5 +37,43 @@ func TestDeploymentOutputPrefixTextUsesSameColors(t *testing.T) {
 	prefix := deploymentOutputPrefixText(&output, deploymentOutputLabel(stagingOutputPhase, "demo"), stagingOutputColor)
 	if prefix != "\x1b[38;5;117m[STAGING : demo]\x1b[0m" {
 		t.Fatalf("prefix = %q", prefix)
+	}
+}
+
+func TestDeploymentOutputHelpersReadStateV1WithoutLegacyProjection(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	dir := t.TempDir()
+	current, input := runtimeCurrentBuildFixture(t)
+	document := input.Document
+	document.Environment.ID = "demo"
+	resolved, err := blueprint.EncodeResolvedDocumentV1(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.State.Blueprint = resolved
+	content, err := deploy.EncodeStateV1(current.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".reploy"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, StateFileName), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prefix, err := DeploymentOutputPrefix(dir, io.Discard)
+	if err != nil || prefix != "[STAGING : demo]" {
+		t.Fatalf("state-v1 prefix = %q, %v", prefix, err)
+	}
+	var stdout bytes.Buffer
+	wrapped, _, err := DeploymentOutputWriters(dir, &stdout, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(wrapped, "ready\n"); err != nil {
+		t.Fatal(err)
+	}
+	if got := stdout.String(); got != "[STAGING : demo] ready\n" {
+		t.Fatalf("state-v1 output = %q", got)
 	}
 }

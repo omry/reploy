@@ -218,24 +218,23 @@ The `pyproject.toml` should include package data for
 `omegaconf_inspector/static/*` so the frontend is present in the wheel and in a
 prepared Reploy bundle.
 
-The local blueprint should use `app.provider.local_sources` to point from the
-blueprint directory back to the package root. This is the same relative-source
-pattern used by Arbiter's in-repo blueprint. For the proposed layout, the local
-source entry should resolve the `omegaconf-inspector` package from `..`:
+The local blueprint should use an explicit Python workspace package override to
+point from the blueprint directory back to the package root. For the proposed
+layout, the workspace entry resolves `omegaconf-inspector` from `..`:
 
 ```yaml
-app:
-  provider:
-    type: python
-    identifier: omegaconf-inspector
-    local_sources:
-      omegaconf-inspector: ..
+environment:
+  workspace:
+    root: ..
+    packages:
+      python:
+        omegaconf-inspector: .
 ```
 
 The GitHub-backed blueprint index entry should point at the same blueprint
 inside the Reploy repository. When Reploy stages that GitHub ref, the relative
-local source should resolve within the checked-out repository just as it does
-for local development.
+workspace should resolve within the checked-out repository just as it does for
+local development.
 
 ## Service Configuration
 
@@ -286,7 +285,7 @@ Installed command exposure should be conservative:
 The blueprint should demonstrate:
 
 - Python package root for the demo service
-- preserved `conf` and `data` managed paths
+- preserved `conf` and `data` mounts
 - read-only runtime config mount
 - writable runtime data mount
 - HTTP port publication
@@ -297,28 +296,28 @@ The blueprint should demonstrate:
 - localhost-only host port binding, because users may paste real configs or
   secrets into the inspector
 
-Managed paths should express the config/data split explicitly:
+Managed mounts should express the config/data split explicitly:
 
 ```yaml
 environment:
-  paths:
+  mounts:
     config:
-      container: /conf
+      target: /conf
       writable: true
-      update: preserve
+      update_policy: preserve
     data:
-      container: /data
+      target: /data
       writable: true
-      update: preserve
+      update_policy: preserve
 
 docker:
   mounts:
     config:
-      extends: environment.paths.config
+      extends: environment.mounts.config
       mode: managed-bind
       source: conf
     data:
-      extends: environment.paths.data
+      extends: environment.mounts.data
       mode: managed-bind
       source: data
 ```
@@ -331,7 +330,7 @@ local operator tool, not a network service.
 
 The first implementation should be considered good enough when:
 
-- a user can stage and bundle the demo from `examples/omegaconf-inspector`
+- a user can stage and build the demo from `examples/omegaconf-inspector`
 - the Reploy blueprint index can expose `omegaconf-inspector-demo` through a
   GitHub-backed blueprint reference
 - the bundle includes FastAPI, Uvicorn, OmegaConf, and packaged static assets
@@ -339,7 +338,7 @@ The first implementation should be considered good enough when:
 - `config init` creates an editable service config template, and
   `config check` validates it before service start
 - the UI can create a project, edit config layers, and merge them
-- `data` survives update/reinstall flows that preserve managed paths
+- `data` survives update/reinstall flows that preserve mounts
 - `conf` remains app-owned service config, not user project input
 - the installed control surface can show config and project state
 - docs can use the demo to explain Reploy without referencing Arbiter

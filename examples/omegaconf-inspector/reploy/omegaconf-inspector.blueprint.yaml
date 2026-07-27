@@ -9,12 +9,10 @@ environment:
   id: omegaconf-inspector
   vars:
     project_root: ..
-  translations:
-    workspace:
-      type: python
-      scope: development
-      root: "{{ project_root }}"
-      mappings:
+  workspace:
+    root: "{{ project_root }}"
+    packages:
+      python:
         omegaconf-inspector: .
   components:
     base:
@@ -22,56 +20,56 @@ environment:
     application:
       type: python
       requirements: [omegaconf-inspector]
-  paths:
+      executables:
+        inspector:
+          binary: omegaconf-inspector
+  allow_concurrent: auto
+  mounts:
     config:
-      container: /conf
+      target: /conf
       writable: true
-      update: preserve
+      update_policy: preserve
     data:
-      container: /data
+      target: /data
       writable: true
-      update: preserve
-  executables:
-    inspector:
-      component: application
-      binary: omegaconf-inspector
+      update_policy: preserve
   commands:
     serve:
-      executable: inspector
+      executable: application.inspector
       argv: [serve]
     config_init:
-      executable: inspector
+      executable: application.inspector
       trigger: [config, init]
       native_command: true
       forward_flags: [--force]
       argv: [config, init]
     config_check:
-      executable: inspector
+      executable: application.inspector
       trigger: [config, check]
       native_command: true
       deployed_command: true
       forward_flags: [--live]
       argv: [config, check]
     config_show:
-      executable: inspector
+      executable: application.inspector
       trigger: [config, show]
       native_command: true
       deployed_command: true
       argv: [config, show]
     project_list:
-      executable: inspector
+      executable: application.inspector
       trigger: [project, list]
       native_command: true
       deployed_command: true
       argv: [project, list]
     project_show:
-      executable: inspector
+      executable: application.inspector
       trigger: [project, show]
       native_command: true
       deployed_command: true
       argv: [project, show]
     version:
-      executable: inspector
+      executable: application.inspector
       trigger: [version]
       native_command: true
       deployed_command: true
@@ -103,11 +101,11 @@ environment:
 docker:
   mounts:
     config:
-      extends: environment.paths.config
+      extends: environment.mounts.config
       mode: managed-bind
       source: conf
     data:
-      extends: environment.paths.data
+      extends: environment.mounts.data
       mode: managed-bind
       source: data
   workload:

@@ -55,6 +55,7 @@ type providerBuildPreparationBackend struct {
 	validateCurrent currentBuildLoader
 	lockedSources   func(deploy.BuildLockV1) ([]providers.ResolvedSourceInput, error)
 	matches         func(CurrentBuild, CurrentBuildReuseInput) (bool, error)
+	cacheAvailable  func(deploy.BuildLockV1, providerstore.Store) (bool, error)
 	realizeBase     func(context.Context, providerstore.Store, SelectedProviderBase) (PreparedProviderBase, error)
 }
 
@@ -73,6 +74,7 @@ func PrepareLockedProviderBuildV1(
 		validateCurrent: ValidateCurrentBuild,
 		lockedSources:   buildLockSelectedSourcesV1,
 		matches:         CurrentBuildMatches,
+		cacheAvailable:  providerBuildCacheAvailable,
 		realizeBase:     RealizeSelectedProviderBase,
 	})
 }
@@ -94,7 +96,7 @@ func prepareLockedProviderBuildV1(
 	if input.Sources == nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build sources must use an array")
 	}
-	if backend.recover == nil || backend.load == nil || backend.selectBase == nil || backend.validateCurrent == nil || backend.lockedSources == nil || backend.matches == nil || backend.realizeBase == nil {
+	if backend.recover == nil || backend.load == nil || backend.selectBase == nil || backend.validateCurrent == nil || backend.lockedSources == nil || backend.matches == nil || backend.cacheAvailable == nil || backend.realizeBase == nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build requires a complete backend")
 	}
 
@@ -142,29 +144,35 @@ func prepareLockedProviderBuildV1(
 	if currentFound {
 		result.Current = &current
 		if !input.NoCache {
-			lock := current.Lock
-			result.ReusableLock = &lock
-			lockedSources, err := backend.lockedSources(current.Lock)
+			available, err := backend.cacheAvailable(current.Lock, input.Store)
 			if err != nil {
-				return LockedProviderBuildPreparationV1{}, err
+				return LockedProviderBuildPreparationV1{}, fmt.Errorf("validate current provider cache: %w", err)
 			}
-			lockedRequest, exactSources, err := resolvedRequestForLockedSourcesV1(
-				loaded.Document, loaded.State.Overlay, loaded.Request, lockedSources,
-			)
-			if err != nil {
-				return LockedProviderBuildPreparationV1{}, err
-			}
-			if exactSources {
-				matches, err := backend.matches(current, CurrentBuildReuseInput{
-					ResolvedRequest: lockedRequest, Overlay: loaded.State.Overlay, Base: selected.Descriptor,
-					Document: loaded.Document, DockerPlan: input.DockerPlan,
-				})
+			if available {
+				lock := current.Lock
+				result.ReusableLock = &lock
+				lockedSources, err := backend.lockedSources(current.Lock)
 				if err != nil {
 					return LockedProviderBuildPreparationV1{}, err
 				}
-				if matches {
-					result.Reused = true
-					return result, nil
+				lockedRequest, exactSources, err := resolvedRequestForLockedSourcesV1(
+					loaded.Document, loaded.State.Overlay, loaded.Request, lockedSources,
+				)
+				if err != nil {
+					return LockedProviderBuildPreparationV1{}, err
+				}
+				if exactSources {
+					matches, err := backend.matches(current, CurrentBuildReuseInput{
+						ResolvedRequest: lockedRequest, Overlay: loaded.State.Overlay, Base: selected.Descriptor,
+						Document: loaded.Document, DockerPlan: input.DockerPlan,
+					})
+					if err != nil {
+						return LockedProviderBuildPreparationV1{}, err
+					}
+					if matches {
+						result.Reused = true
+						return result, nil
+					}
 				}
 			}
 		}
@@ -181,4 +189,12 @@ func prepareLockedProviderBuildV1(
 	result.PreparedBase = &prepared
 	result.FinalImageConfig = config
 	return result, nil
+}
+
+// Exact image reuse needs only a real cache root. It deliberately does not
+// walk or hash the locked closure; later provider or install reads validate the
+// exact objects they consume. bundle clean removes the complete root, making
+// that explicit operation a cheap cache miss here.
+func providerBuildCacheAvailable(_ deploy.BuildLockV1, store providerstore.Store) (bool, error) {
+	return store.Exists()
 }

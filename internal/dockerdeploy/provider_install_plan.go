@@ -42,12 +42,9 @@ func planProviderInstallationV1(ctx context.Context, input providerInstallPlanni
 	if err := validateInstallScopeForBackend(scope, backend, platform); err != nil {
 		return providerInstallationPlanV1{}, err
 	}
-	service := strings.TrimSpace(input.Input.Install.Service)
-	if service == "" {
-		service = dockerNameSlug(document.Environment.ID, "reploy")
-	}
-	if !validServiceName(service) {
-		return providerInstallationPlanV1{}, fmt.Errorf("--service contains unsupported characters: %s", service)
+	service, err := providerInstallServiceV1(document.Environment.ID, input.Input.Install.Service)
+	if err != nil {
+		return providerInstallationPlanV1{}, err
 	}
 	instanceID, err := installedInstanceID(service, destinationDir)
 	if err != nil {
@@ -72,12 +69,35 @@ func planProviderInstallationV1(ctx context.Context, input providerInstallPlanni
 	if err != nil {
 		return providerInstallationPlanV1{}, fmt.Errorf("plan installed Docker runtime: %w", err)
 	}
+	pathUpdates, preservePaths, err := planEnvironmentInstallPathUpdates(
+		document,
+		input.Input.SourceDeploymentDir,
+		destinationDir,
+		scope,
+		input.Input.Install.Replace,
+		input.Input.Install.Clean,
+		platform.GOOS,
+	)
+	if err != nil {
+		return providerInstallationPlanV1{}, fmt.Errorf("plan installed path updates: %w", err)
+	}
 	if dockerPlan.Workload != nil {
 		command, err := resolveLockedEnvironmentCommandForPlanV1(document, input.SourceBuild.Lock.Catalog, dockerPlan, dockerPlan.Workload.Command, nil)
 		if err != nil {
 			return providerInstallationPlanV1{}, fmt.Errorf("plan installed workload command: %w", err)
 		}
 		dockerPlan.Workload.Argv = command.Argv
+	}
+	afterInstall, err := planLockedAfterInstallLifecycleV1(document, dockerPlan, input.SourceBuild.Lock.Catalog)
+	if err != nil {
+		return providerInstallationPlanV1{}, fmt.Errorf("plan installed after_install lifecycle: %w", err)
+	}
+	start := LifecyclePlan{}
+	if input.Input.Install.Start {
+		start, err = planLockedStartLifecycleV1(document, dockerPlan, input.SourceBuild.Lock.Catalog)
+		if err != nil {
+			return providerInstallationPlanV1{}, fmt.Errorf("plan installed start lifecycle: %w", err)
+		}
 	}
 	rendered, err := RenderDockerInputs(dockerPlan, document.Environment.ControlScript)
 	if err != nil {
@@ -94,16 +114,35 @@ func planProviderInstallationV1(ctx context.Context, input providerInstallPlanni
 		ComposeProject: dockerPlan.NetworkName, ContainerName: dockerPlan.ContainerName, NetworkName: dockerPlan.NetworkName,
 		Ports: installationPortsForDockerPlanV1(dockerPlan),
 	}
-	plan := providerInstallationPlanV1{Installation: installation, Docker: dockerPlan, Rendered: rendered, Backend: backend}
+	plan := providerInstallationPlanV1{
+		Installation: installation, ControlScript: document.Environment.ControlScript,
+		Docker: dockerPlan, Rendered: rendered,
+		PathUpdates: pathUpdates, PreservePaths: preservePaths,
+		AfterInstall: afterInstall, Start: start, Backend: backend,
+	}
 	if err := validateProviderInstallationPlanV1(plan, input.References); err != nil {
 		return providerInstallationPlanV1{}, err
 	}
 	return plan, nil
 }
 
+func providerInstallServiceV1(environmentID string, requested string) (string, error) {
+	service := strings.TrimSpace(requested)
+	if service == "" {
+		service = dockerNameSlug(environmentID, "reploy")
+	}
+	if !validServiceName(service) {
+		return "", fmt.Errorf("--service contains unsupported characters: %s", service)
+	}
+	return service, nil
+}
+
 func validateProviderInstallationPlanV1(plan providerInstallationPlanV1, references EnvironmentImageReferences) error {
 	if err := deploy.ValidateInstallationStateV1(plan.Installation); err != nil {
 		return err
+	}
+	if strings.TrimSpace(plan.ControlScript) == "" {
+		return fmt.Errorf("provider installation control script is required")
 	}
 	if plan.Docker.Phase != blueprint.PhaseInstalled || plan.Docker.Scope == nil {
 		return fmt.Errorf("provider installation Docker plan must be installed and scoped")

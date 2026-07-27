@@ -255,7 +255,7 @@ func ValidateBundleV1(component string, bundle PythonBundleV1) error {
 		if source.Component != component {
 			return fmt.Errorf("Python bundle source targets component %q, want %q", source.Component, component)
 		}
-		if err := providers.ValidateResolvedSourceInput(source); err != nil {
+		if err := ValidateResolvedSourceInputV1(source); err != nil {
 			return err
 		}
 	}

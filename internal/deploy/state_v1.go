@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
@@ -13,15 +14,27 @@ import (
 
 const StateSchemaV1 = "state-v1"
 
+const StagingStateSchemaV1 = "staging-v1"
+
 var ErrLegacyStateUnsupported = errors.New("state.legacy_unsupported")
 
 type StateV1 struct {
-	Schema     string                       `json:"schema"`
-	Blueprint  blueprint.ResolvedDocumentV1 `json:"blueprint"`
-	Platform   blueprint.Platform           `json:"platform"`
-	Overlay    RequestOverlayV1             `json:"overlay"`
-	Current    *EnvironmentGenerationState  `json:"current"`
-	Deployment *DeploymentStateV1           `json:"deployment"`
+	Schema          string                       `json:"schema"`
+	Blueprint       blueprint.ResolvedDocumentV1 `json:"blueprint"`
+	BlueprintSource string                       `json:"blueprint_source"`
+	Platform        blueprint.Platform           `json:"platform"`
+	Overlay         RequestOverlayV1             `json:"overlay"`
+	Current         *EnvironmentGenerationState  `json:"current"`
+	Staging         *StagingStateV1              `json:"staging"`
+	Deployment      *DeploymentStateV1           `json:"deployment"`
+}
+
+// StagingStateV1 contains machine-local inputs that let a staging deployment
+// observe live development sources. It is excluded from provider identity and
+// is never transferred into an installed deployment.
+type StagingStateV1 struct {
+	Schema        string `json:"schema"`
+	WorkspaceRoot string `json:"workspace_root"`
 }
 
 func ValidateStateV1(state StateV1) error {
@@ -38,6 +51,17 @@ func ValidateStateV1(state StateV1) error {
 	if _, err := RequestOverlayDigestV1(state.Overlay); err != nil {
 		return fmt.Errorf("state overlay: %w", err)
 	}
+	if state.Staging != nil {
+		if state.BlueprintSource == "" {
+			return fmt.Errorf("state staging requires retained blueprint source")
+		}
+		if err := ValidateStagingStateV1(*state.Staging, document); err != nil {
+			return fmt.Errorf("state staging: %w", err)
+		}
+		if state.Deployment != nil {
+			return fmt.Errorf("state cannot contain both staging and installed deployment facts")
+		}
+	}
 	if state.Current != nil {
 		if err := ValidateEnvironmentGenerationState(*state.Current); err != nil {
 			return fmt.Errorf("state current generation: %w", err)
@@ -47,6 +71,19 @@ func ValidateStateV1(state StateV1) error {
 		if err := ValidateDeploymentStateV1(*state.Deployment); err != nil {
 			return fmt.Errorf("state deployment: %w", err)
 		}
+	}
+	return nil
+}
+
+func ValidateStagingStateV1(state StagingStateV1, document blueprint.Document) error {
+	if state.Schema != StagingStateSchemaV1 {
+		return fmt.Errorf("staging state schema must be %q", StagingStateSchemaV1)
+	}
+	if state.WorkspaceRoot != "" && (!filepath.IsAbs(state.WorkspaceRoot) || filepath.Clean(state.WorkspaceRoot) != state.WorkspaceRoot) {
+		return fmt.Errorf("staging workspace root must be empty or an absolute clean path")
+	}
+	if len(document.Environment.Workspace.PythonPackages) != 0 && state.WorkspaceRoot == "" {
+		return fmt.Errorf("staging workspace root is required by blueprint workspace packages")
 	}
 	return nil
 }

@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"fmt"
 	"math"
+	"os"
 	"path/filepath"
 
 	"github.com/omry/reploy/internal/deploy"
@@ -20,6 +21,7 @@ func providerInstallDiskRequirementsV1(
 	publication InstalledBuildPublicationInputV1,
 	old *deploy.EnvironmentGenerationState,
 	candidates []providerInstallFileCandidateV1,
+	pathUpdates []PathUpdateAction,
 ) ([]providerInstallDiskRequirementV1, error) {
 	if candidates == nil {
 		return nil, fmt.Errorf("install disk requirements require file candidates")
@@ -59,6 +61,7 @@ func providerInstallDiskRequirementsV1(
 	destinationGeneration.Reference = publication.References.Generation
 	destinationState := publication.Source.State
 	destinationState.Current = &destinationGeneration
+	destinationState.Staging = nil
 	destinationState.Deployment = &deploy.DeploymentStateV1{
 		Schema: deploy.DeploymentStateSchemaV1, Installation: publication.Installation,
 	}
@@ -119,5 +122,71 @@ func providerInstallDiskRequirementsV1(
 			Path: candidate.Path, Bytes: uint64(len(candidate.Content)),
 		})
 	}
+	for index, action := range pathUpdates {
+		requirement, include, err := providerInstallManagedBindDiskRequirementV1(action)
+		if err != nil {
+			return nil, fmt.Errorf("install disk requirement path update %d: %w", index, err)
+		}
+		if include {
+			requirements = append(requirements, requirement)
+		}
+	}
 	return requirements, nil
+}
+
+func providerInstallManagedBindDiskRequirementV1(action PathUpdateAction) (providerInstallDiskRequirementV1, bool, error) {
+	if action.Kind != PathPreserveManagedBind && action.Kind != PathReplaceManagedBind {
+		return providerInstallDiskRequirementV1{}, false, nil
+	}
+	if action.Target == "" || !filepath.IsAbs(action.Target) || filepath.Clean(action.Target) != action.Target {
+		return providerInstallDiskRequirementV1{}, false, fmt.Errorf("managed mount %q target must be an absolute clean path", action.Name)
+	}
+	if action.Kind == PathPreserveManagedBind {
+		info, err := os.Lstat(action.Target)
+		if err == nil {
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return providerInstallDiskRequirementV1{}, false, fmt.Errorf("preserved managed mount %q must be a real directory: %s", action.Name, action.Target)
+			}
+			return providerInstallDiskRequirementV1{}, false, nil
+		}
+		if !os.IsNotExist(err) {
+			return providerInstallDiskRequirementV1{}, false, fmt.Errorf("inspect preserved managed mount %q: %w", action.Name, err)
+		}
+	}
+	sourceInfo, err := os.Lstat(action.Source)
+	if err != nil {
+		return providerInstallDiskRequirementV1{}, false, fmt.Errorf("inspect staging managed mount %q: %w", action.Name, err)
+	}
+	if !sourceInfo.IsDir() || sourceInfo.Mode()&os.ModeSymlink != 0 {
+		return providerInstallDiskRequirementV1{}, false, fmt.Errorf("staging managed mount %q must be a real directory: %s", action.Name, action.Source)
+	}
+	bytes := uint64(0)
+	err = filepath.WalkDir(action.Source, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to copy symlink: %s", path)
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("refusing to copy special file: %s", path)
+		}
+		size := uint64(info.Size())
+		if math.MaxUint64-bytes < size {
+			return fmt.Errorf("managed mount %q size overflows uint64", action.Name)
+		}
+		bytes += size
+		return nil
+	})
+	if err != nil {
+		return providerInstallDiskRequirementV1{}, false, err
+	}
+	return providerInstallDiskRequirementV1{Path: action.Target, Bytes: bytes}, true, nil
 }

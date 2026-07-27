@@ -73,7 +73,9 @@ func TestResolveExpandsVariablesAcrossStringSchemaFields(t *testing.T) {
 	base.Image = "{{ image }}"
 	source.Environment.Components["base"] = base
 	source.Environment.Terminal.ColorEnv = "{{ color }}"
-	source.Environment.Components["application"] = ComponentSyntax{Type: "python", Requirements: []string{"{{ package }}"}}
+	application := source.Environment.Components["application"]
+	application.Requirements = []string{"{{ package }}"}
+	source.Environment.Components["application"] = application
 
 	document, err := Resolve(source)
 	if err != nil {

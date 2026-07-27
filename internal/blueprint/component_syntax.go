@@ -9,7 +9,7 @@ import (
 func (component *ComponentSyntax) UnmarshalYAML(node *yaml.Node) error {
 	allowed := map[string]bool{
 		"type": true, "image": true, "exports": true, "interpreter": true,
-		"requirements": true, "packages": true, "options": true,
+		"requirements": true, "packages": true, "options": true, "executables": true,
 	}
 	present, err := validateSyntaxMapping(node, "component", allowed)
 	if err != nil {
@@ -31,6 +31,16 @@ func (export *ExecutableExportSyntax) UnmarshalYAML(node *yaml.Node) error {
 	}
 	type plain ExecutableExportSyntax
 	return node.Decode((*plain)(export))
+}
+
+func (executable *ExecutableSyntax) UnmarshalYAML(node *yaml.Node) error {
+	if _, err := validateSyntaxMapping(node, "executable profile", map[string]bool{
+		"binary": true, "order": true, "argv_prefix": true, "argv_suffix": true,
+	}); err != nil {
+		return err
+	}
+	type plain ExecutableSyntax
+	return node.Decode((*plain)(executable))
 }
 
 func (requirement *CommandRequirementSyntax) UnmarshalYAML(node *yaml.Node) error {

@@ -1,0 +1,2 @@
+kind: Fixed
+body: Make repeated uninstall of an explicitly removed installation succeed without incorrectly requesting root privileges.

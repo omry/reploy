@@ -1,0 +1,2 @@
+kind: Changed
+body: Move executable invocation profiles under their components and require commands to use qualified component.profile references.

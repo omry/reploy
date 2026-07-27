@@ -204,7 +204,9 @@ func TestValidateProviderBuildCompletionRejectsBaseOnlyRuntimePolicyDrift(t *tes
 		Image: inspectedValidationCandidate(t, input.Base), Profiles: []providers.RequirementProfile{},
 		Outputs: append([]providers.RealizedOutput{}, input.BaseCatalog...), RuntimePolicy: policy,
 	}}
-	input.Validation.Final.RuntimePolicy.AllowedRoots = []string{"/mnt", "/srv/demo"}
+	input.Validation.Final.RuntimePolicy.Plans = append([]deploy.RuntimePlanV1{}, input.Validation.Final.RuntimePolicy.Plans...)
+	input.Validation.Final.RuntimePolicy.Plans[0].Mounts = append([]deploy.RuntimeMountV1{}, input.Validation.Final.RuntimePolicy.Plans[0].Mounts...)
+	input.Validation.Final.RuntimePolicy.Plans[0].Mounts[0].ReadOnly = !input.Validation.Final.RuntimePolicy.Plans[0].Mounts[0].ReadOnly
 	if err := validateProviderBuildCompletionInput(input, policy); err == nil || !strings.Contains(err.Error(), "base-only") {
 		t.Fatalf("base-only policy drift error = %v", err)
 	}

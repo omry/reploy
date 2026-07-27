@@ -1,2 +1,2 @@
 kind: Changed
-body: Make environment stage and stage --update resolve the closed bundle, immutable base identity, generated image, and runtime inputs.
+body: Make `stage` and `stage --update` record desired environment state without building; let staged start, restart, and app commands build on demand; and add `stage --update APP_REF --force` to replace staging owned by another blueprint after stopping its active work.

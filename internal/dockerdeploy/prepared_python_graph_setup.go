@@ -13,7 +13,8 @@ import (
 )
 
 type PreparedPythonNodeConfig struct {
-	ReusableWheels []providerstore.ArtifactDescriptor
+	ReusableWheels   []providerstore.ArtifactDescriptor
+	WorkspaceSources []PythonWorkspaceSource
 }
 
 type PreparedAPTNodeConfig struct {
@@ -117,12 +118,20 @@ func PreparePreparedPythonGraphBackend(
 				return PreparedPythonGraphBackend{}, noCleanup, fmt.Errorf("prepare Python graph node %q resolver artifacts: %w", node.ID, err)
 			}
 			artifactCleanups = append(artifactCleanups, cleanupArtifactsForNode)
+			workspaceSources := make([]PythonWorkspaceSource, len(config.WorkspaceSources))
+			copy(workspaceSources, config.WorkspaceSources)
+			snapshots, err := StagePythonWorkspaceSourceSnapshots(artifacts, workspaceSources)
+			if err != nil {
+				cleanupArtifacts()
+				return PreparedPythonGraphBackend{}, noCleanup, fmt.Errorf("prepare Python graph node %q source snapshots: %w", node.ID, err)
+			}
 			verified := map[canonical.Digest]string{}
 			verifiedArtifacts[node.ID] = verified
 			operations[node.ID] = PreparedPythonNodeOperations{
 				Store: store, Validators: validators,
 				FinalImageConfig: cloneImageConfigPolicy(finalImageConfig), Artifacts: artifacts,
 				ReusableWheels:    append([]providerstore.ArtifactDescriptor{}, config.ReusableWheels...),
+				SourceSnapshots:   snapshots,
 				verifiedArtifacts: verified,
 			}
 		default:

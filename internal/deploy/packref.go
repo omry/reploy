@@ -47,7 +47,7 @@ func ParsePackRef(raw string) (PackRef, error) {
 			return PackRef{}, fmt.Errorf("%s blueprint paths use #PATH, not //PATH", scheme)
 		}
 	}
-	if scheme == "pypi" || scheme == "source" || scheme == "git" {
+	if scheme == "pypi" || scheme == "git" {
 		if splitSource, path, hasPath := strings.Cut(body, "#"); hasPath {
 			source = splitSource
 			subdir = strings.TrimPrefix(path, "/")
@@ -196,7 +196,7 @@ func defaultSourceBlueprintSubdir(projectName string) string {
 
 func isSupportedPackScheme(scheme string) bool {
 	switch scheme {
-	case "file", "pypi", "source", "git":
+	case "file", "pypi", "git":
 		return true
 	default:
 		return false
@@ -205,7 +205,7 @@ func isSupportedPackScheme(scheme string) bool {
 
 func packRefIsPinned(scheme string, source string, query url.Values) bool {
 	switch scheme {
-	case "file", "source":
+	case "file":
 		return false
 	case "pypi":
 		return strings.Contains(source, "==")

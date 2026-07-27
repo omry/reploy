@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve staging state when forced replacement cannot be committed, retain named-volume root metadata during install, make doctor verify runtime-file drift and scope-specific install readiness, and document installed app commands.

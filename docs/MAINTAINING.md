@@ -128,7 +128,7 @@ summary reported `containers_before=0 containers_after=0 networks_before=1
 networks_after=1`.
 
 For a faster CLI smoke loop that skips the Docker-backed bundle build/check
-but still runs preinstall and install dry-run checks, pass the smoke helper's
+but still runs preinstall and install plan checks, pass the smoke helper's
 plan-only flag through nox:
 
 ```bash

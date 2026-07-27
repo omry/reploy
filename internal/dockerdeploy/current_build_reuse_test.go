@@ -60,7 +60,7 @@ func TestCurrentBuildMatchesInvalidatesEverySemanticBoundary(t *testing.T) {
 			input.Base.ImmutableReference = string(input.Base.ConfigDigest)
 		}},
 		{name: "runtime policy", mutate: func(_ *CurrentBuild, input *CurrentBuildReuseInput) {
-			input.Document.Docker.AdditionalMountRoots = []string{"/srv/demo"}
+			input.DockerPlan.TemporaryHome = "/tmp/alternate-home"
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -74,13 +74,10 @@ func TestCurrentBuildMatchesInvalidatesEverySemanticBoundary(t *testing.T) {
 	}
 }
 
-func TestCurrentBuildMatchesIgnoresUnusedTranslationLocators(t *testing.T) {
+func TestCurrentBuildMatchesIgnoresUnusedWorkspaceLocators(t *testing.T) {
 	current, input := currentBuildReuseFixture(t)
-	input.Document.Environment.Translations = map[string]blueprint.Translation{
-		"workspace": {
-			Type: blueprint.ComponentTypePython, Scope: blueprint.TranslationScopeDevelopment,
-			Root: "/new/checkout", Mappings: map[string]string{"unused": "package"},
-		},
+	input.Document.Environment.Workspace = blueprint.Workspace{
+		Root: "/new/checkout", PythonPackages: map[string]string{"unused": "package"},
 	}
 	current.State.Blueprint = testResolvedBlueprintV1(t, input.Document)
 	matched, err := CurrentBuildMatches(current, input)

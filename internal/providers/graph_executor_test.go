@@ -178,6 +178,95 @@ func TestExecuteProviderGraphValidatesResolutionBeforeMaterialization(t *testing
 	}
 }
 
+func TestExecuteProviderGraphAcceptsPathFreeSourcesResolvedDuringNodePreparation(t *testing.T) {
+	input, resolution := validResolveContract(t)
+	source := ResolvedSourceInput{
+		Schema: ResolvedSourceInputSchemaV1, Component: "application", LogicalPackage: "demo",
+		SourceManifestDigest: testDigest("a"), BuilderProfile: "python-wheel-v1",
+		BuildSettings:     providerData("python-source-build-settings-v1"),
+		EcosystemMetadata: providerData("python-source-metadata-v1"), ArtifactDigest: testDigest("b"),
+	}
+	input.SourceCandidates = []ResolvedSourceInput{source}
+	resolution.SelectedSources = []ResolvedSourceInput{source}
+	resolution.Bundle.Payload.SelectedSources = []ResolvedSourceInput{source}
+	rebuilt, err := NewResolvedBundle(resolution.Bundle.Payload, acceptTestBundleOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolution.Bundle = rebuilt
+	plan := testResolvePlan(input)
+	baseCatalog := []RealizedOutput{catalogOutput("base", "base", "python", "/usr/bin/python")}
+	baseCatalog[0].Candidate.Provenance = plan.Nodes[0].OutputDeclarations[0].Provenance
+
+	result, err := ExecuteProviderGraph(context.Background(), GraphExecutionRequest{
+		Plan: plan, Platform: input.Platform, SourceCandidates: []ResolvedSourceInput{},
+		BaseImage: input.Upstream, BaseCatalog: baseCatalog,
+		ReusableArtifacts: map[NodeID][]providerstore.StoreObjectRef{input.Node.ID: input.ReusableArtifacts},
+		CachedResolutions: map[NodeID]ResolveResult{},
+		Validators: func(NodeSpec) (ProviderOwnerValidators, error) {
+			return ProviderOwnerValidators{Profile: validateTestProfileOwner, Bundle: acceptTestBundleOwner}, nil
+		},
+		PrepareNode: func(_ context.Context, request GraphNodePrepareRequest) (GraphNodePreparation, error) {
+			if len(request.Resolve.SourceCandidates) != 0 {
+				return GraphNodePreparation{}, errors.New("physical source preparation leaked into the graph request")
+			}
+			return GraphNodePreparation{
+				Resolution: resolution, Consumer: acceptGraphConsumer(),
+				SourceCandidates: []ResolvedSourceInput{source},
+			}, nil
+		},
+		MaterializeNode: func(context.Context, GraphNodeMaterializeRequest) (GraphNodeMaterializeResult, error) {
+			return GraphNodeMaterializeResult{
+				Image: input.Upstream, TransactionDigest: testDigest("d"),
+				GeneratedExecutables: []RealizedGeneratedExecutable{}, Outputs: graphTestRealizedOutputs(resolution.Bundle),
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(result.SelectedSources, []ResolvedSourceInput{source}) {
+		t.Fatalf("selected sources = %#v", result.SelectedSources)
+	}
+}
+
+func TestExecuteProviderGraphRejectsPreparedSourceOwnedByAnotherNode(t *testing.T) {
+	input, resolution := validResolveContract(t)
+	plan := testResolvePlan(input)
+	plan.Nodes = append(plan.Nodes, pythonPlanNode("other", ExecutableRequirement{}))
+	baseCatalog := []RealizedOutput{catalogOutput("base", "base", "python", "/usr/bin/python")}
+	baseCatalog[0].Candidate.Provenance = plan.Nodes[0].OutputDeclarations[0].Provenance
+	foreignSource := ResolvedSourceInput{
+		Schema: ResolvedSourceInputSchemaV1, Component: "other", LogicalPackage: "demo",
+		SourceManifestDigest: testDigest("a"), BuilderProfile: "python-wheel-v1",
+		BuildSettings:     providerData("python-source-build-settings-v1"),
+		EcosystemMetadata: providerData("python-source-metadata-v1"), ArtifactDigest: testDigest("b"),
+	}
+
+	_, err := ExecuteProviderGraph(context.Background(), GraphExecutionRequest{
+		Plan: plan, Platform: input.Platform, SourceCandidates: []ResolvedSourceInput{},
+		BaseImage: input.Upstream, BaseCatalog: baseCatalog,
+		ReusableArtifacts: map[NodeID][]providerstore.StoreObjectRef{input.Node.ID: input.ReusableArtifacts},
+		CachedResolutions: map[NodeID]ResolveResult{},
+		Validators: func(NodeSpec) (ProviderOwnerValidators, error) {
+			return ProviderOwnerValidators{Profile: validateTestProfileOwner, Bundle: acceptTestBundleOwner}, nil
+		},
+		PrepareNode: func(context.Context, GraphNodePrepareRequest) (GraphNodePreparation, error) {
+			return GraphNodePreparation{
+				Resolution: resolution, Consumer: acceptGraphConsumer(),
+				SourceCandidates: []ResolvedSourceInput{foreignSource},
+			}, nil
+		},
+		MaterializeNode: func(context.Context, GraphNodeMaterializeRequest) (GraphNodeMaterializeResult, error) {
+			t.Fatal("materialization ran with a source owned by another node")
+			return GraphNodeMaterializeResult{}, nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "owned by another node") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestExecuteProviderGraphPassesCachedResolutionToOnePreparation(t *testing.T) {
 	input, resolution := validResolveContract(t)
 	plan := testResolvePlan(input)

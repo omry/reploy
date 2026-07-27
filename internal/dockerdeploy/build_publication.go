@@ -164,9 +164,9 @@ func publishBuild(
 	}
 
 	result := deploy.StateV1{
-		Schema: deploy.StateSchemaV1, Blueprint: blueprintPayload,
+		Schema: deploy.StateSchemaV1, Blueprint: blueprintPayload, BlueprintSource: state.BlueprintSource,
 		Platform: input.Lock.Platform, Overlay: input.Lock.Overlay, Current: &candidate,
-		Deployment: state.Deployment,
+		Staging: state.Staging, Deployment: state.Deployment,
 	}
 	if err := operation.CommitStateV1(old, result); err != nil {
 		return deploy.StateV1{}, err

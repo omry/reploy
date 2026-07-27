@@ -125,7 +125,7 @@ def cli_smoke(session: nox.Session) -> None:
 
 @nox.session(name="cli-integration", python=False)
 def cli_integration(session: nox.Session) -> None:
-    _cli_smoke(session, "--runtime", *session.posargs)
+    _cli_smoke(session, "--runtime", "--persistent-install", *session.posargs)
 
 
 @nox.session(name="docker-interrupts", python=False)

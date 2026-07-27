@@ -16,16 +16,20 @@ func TestPlanProviderInstallationV1UsesLockedBlueprintAndDestinationReference(t 
 		Blueprint: blueprint.Metadata{Schema: 1, Version: "1.0.0"},
 		Environment: blueprint.Environment{
 			ID: "demo", ControlScript: "democtl",
-			Components: map[string]blueprint.Component{"application": {Type: blueprint.ComponentTypePython}},
-			Executables: map[string]blueprint.Executable{"server": {
-				Component: "application", Binary: "demo", Order: blueprint.DefaultArgumentOrder,
+			Components: map[string]blueprint.Component{"application": {
+				Type: blueprint.ComponentTypePython,
+				Executables: map[string]blueprint.Executable{"server": {
+					Binary: "demo", Order: blueprint.DefaultArgumentOrder,
+				}},
 			}},
 			Commands: map[string]blueprint.Command{"serve": {
-				Executable: "server", Argv: []string{"serve"}, Order: blueprint.DefaultArgumentOrder,
+				Executable: "application.server", Trigger: []string{"serve"}, Argv: []string{"serve"}, Order: blueprint.DefaultArgumentOrder,
 			}},
-			Workload: &blueprint.Workload{Command: "serve", Endpoints: map[string]blueprint.Endpoint{
-				"http": {Scheme: "http", Port: 8080},
-			}},
+			Install: blueprint.Install{AfterInstall: []blueprint.Step{{Actions: []blueprint.Action{{Environment: []string{"serve"}}}}}},
+			Workload: &blueprint.Workload{
+				Command: "serve", Endpoints: map[string]blueprint.Endpoint{"http": {Scheme: "http", Port: 8080}},
+				Runtime: blueprint.RuntimeEvents{BeforeStart: []blueprint.Step{{Actions: []blueprint.Action{{Environment: []string{"serve"}}}}}},
+			},
 		},
 		Docker: blueprint.Docker{Mounts: map[string]blueprint.DockerMount{}, Workload: &blueprint.DockerWorkload{
 			Endpoints: map[string]blueprint.DockerEndpoint{
@@ -35,6 +39,10 @@ func TestPlanProviderInstallationV1UsesLockedBlueprintAndDestinationReference(t 
 				},
 			},
 		}},
+	}
+	document.Docker.Mounts["config"] = blueprint.DockerMount{
+		Mode: blueprint.MountManagedBind, Source: "conf",
+		Contract: blueprint.EnvironmentMount{Target: "/conf", UpdatePolicy: blueprint.UpdatePreserve},
 	}
 	references := fixedPublicationReferences(t, destinationDir, 0x91)
 	plan, err := planProviderInstallationV1(t.Context(), providerInstallPlanningV1{
@@ -54,6 +62,7 @@ func TestPlanProviderInstallationV1UsesLockedBlueprintAndDestinationReference(t 
 				Scope: InstallScopeSystem, Service: "demo-service",
 				SystemUser: "demo", SystemGroup: "demo", SystemUID: 991, SystemGID: 992,
 				PortOverrides: []PortOverride{{Name: "http", HostPort: "19090"}},
+				Replace:       []string{"conf"}, Start: true,
 			},
 		},
 	})
@@ -82,8 +91,17 @@ func TestPlanProviderInstallationV1UsesLockedBlueprintAndDestinationReference(t 
 	if !reflect.DeepEqual(plan.Docker.Workload.Argv, []string{"/opt/demo", "serve"}) {
 		t.Fatalf("installed workload argv = %#v", plan.Docker.Workload.Argv)
 	}
+	if len(plan.AfterInstall.Operations) != 1 || plan.AfterInstall.Operations[0].Kind != LifecycleCommand || !reflect.DeepEqual(plan.AfterInstall.Operations[0].Command.Argv, []string{"/opt/demo", "serve"}) {
+		t.Fatalf("after_install lifecycle = %#v", plan.AfterInstall)
+	}
+	if len(plan.Start.Operations) != 2 || plan.Start.Operations[0].Kind != LifecycleCommand || plan.Start.Operations[1].Kind != LifecycleStart {
+		t.Fatalf("start lifecycle = %#v", plan.Start)
+	}
 	if plan.Rendered.Environment["REPLOY_IMAGE"] != references.Generation || len(plan.Rendered.Compose) == 0 {
 		t.Fatalf("rendered inputs = %#v", plan.Rendered)
+	}
+	if len(plan.PathUpdates) != 1 || plan.PathUpdates[0].Name != "config" || plan.PathUpdates[0].Kind != PathReplaceManagedBind || len(plan.PreservePaths) != 0 {
+		t.Fatalf("path update plan = %#v preserve=%#v", plan.PathUpdates, plan.PreservePaths)
 	}
 }
 

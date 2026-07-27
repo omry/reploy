@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-15
+updated: 2026-07-22
 summary: Evidence-driven implementation plan for the blueprint environment and workload model.
 implements: docs/BLUEPRINT_ENVIRONMENT_MODEL.md
 ---
@@ -10,6 +10,21 @@ implements: docs/BLUEPRINT_ENVIRONMENT_MODEL.md
 This document defines the work and evidence behind the environment model. The
 environment model is normative; this plan may choose implementation structure
 but must not invent public schema.
+
+The reviewed implementation stack still contains the earlier
+`environment.workspace` schema. After the current stack review, replace that
+implementation completely with the staging-only `package-overrides.yaml`
+contract now defined by the normative model. This is a deferred truth fix, not
+a compatibility requirement: the unreleased workspace schema, CLI root
+override, state fields, tests, examples, and documentation should be removed
+rather than retained alongside the new mechanism.
+
+The post-review implementation must first prove the provider-resolution shape,
+especially Python's ability to activate a local override only when a direct or
+transitive dependency needs it. The contract is fixed—unused mappings are not
+inspected or built—but whether Python satisfies it with one resolver invocation
+or a bounded retry is deliberately deferred until that focused implementation
+review.
 
 ## Scope and Compatibility
 
@@ -21,8 +36,8 @@ Initial scope:
 
 - Blueprint-level platform compatibility and one required `base` root component
   containing the starting OCI image and any explicitly declared outputs.
-- Python components, component-scoped options, and explicit development
-  translations.
+- Python components, component-scoped options and executable profiles, and an
+  explicit staging-only package-override sidecar.
 - Docker with a BuildKit-generated Python image.
 - At most one persistent service workload.
 - Native one-shot commands and built-in `reploy shell`.
@@ -42,7 +57,7 @@ removal of private health/success-variable protocols.
 - Add the resolved model beside legacy code; cut callers over only after the
   replacement path passes its gate.
 - Resolve once into typed environment and Docker execution plans. Compose,
-  commands, lifecycle, install, status, dry-run, and cleanup consume those plans.
+  commands, lifecycle, install, validation, status, and cleanup consume those plans.
 - Keep generated bundle metadata, build definitions, layer graphs, and image
   identities private.
 - Pass application invocations as argv arrays. Never construct shell command
@@ -154,9 +169,9 @@ Implement:
   Reject unsafe/reserved filenames and native-trigger collisions with control
   operations.
 - Blueprint compatibility; the required `components.base` root; vars,
-  translations, provider components and component-scoped options, paths,
-  executables, commands, optional workload, `workload.runtime`, install, and
-  Docker runtime nodes including `additional_mount_roots`.
+  provider components with component-scoped options and
+  executable profiles, mounts, commands, `allow_concurrent`, optional workload,
+  `workload.runtime`, install, and Docker runtime nodes.
 - Install target defaults, semantic host variables, `system.run_as`, success
   lines, and current platform/scope validation.
 - Strict unknown-field rejection and explicit rejection of legacy top-level
@@ -203,7 +218,9 @@ Define a provider contract that:
   resolver then validates candidates from already initialized output catalogs
   and freezes its automatic selection as the resolver's first step;
 - **P2-04:** resolves a closed checksummed artifact set for platform/base identity;
-- **P2-05:** applies translations without turning them into install requests;
+- **P2-05:** applies staging package overrides only when direct or transitive
+  resolution needs the mapped package, without turning mappings into install
+  requests;
 - **P2-06:** reports provider-owned executable outputs and final image paths;
 - **P2-07:** emits a deterministic offline recipe with a recipe version;
 - **P2-08:** distinguishes ordinary recipe data from typed executable operands and binds
@@ -236,8 +253,9 @@ Python implementation:
   enabled component options, and explicitly targeted direct package additions.
 - **P2-17:** keep option selections and direct package roots in deployment state;
   disabled options contribute nothing.
-- **P2-18:** normalize explicit distribution mappings, enforce translation-root boundaries,
-  and give mappings precedence over index candidates including transitives.
+- **P2-18:** normalize explicit distribution mappings, validate staging-local
+  source paths and provider-owned version selections, and give mappings
+  precedence over blueprint candidates including transitives.
 - **P2-19:** validate built metadata, constraints, duplicate normalized names, collisions,
   and unused mappings.
 - **P2-20:** preflight compatible Python through a declared and validated `base` output;
@@ -254,8 +272,8 @@ and provider-store cleanup before removing the legacy bundle projection.
 Gate:
 
 - **P2-24:** provider unit tests cover closed resolution, option selection,
-  translations, deterministic ordering, prerequisites, incompatibilities, and
-  executable lookup.
+  staging package overrides, deterministic ordering, prerequisites,
+  incompatibilities, and executable lookup.
 - **P2-25:** graph tests cover base-first automatic selection,
   incompatible-base selection of an earlier provider output, explicit supplier
   override, no retroactive use of later nodes, observed incompatibility failure
@@ -379,16 +397,16 @@ installed scope, materialized image, and CLI install overrides.
 
 Paths and mounts:
 
-- Environment owns `container`, `writable` (default false), and `update`.
-- Reserve `/mnt` as the default runtime-mount root; require normal destinations
-  to be strict descendants, and admit other roots only through normalized,
-  non-overlapping `docker.additional_mount_roots` entries.
+- Environment owns `target`, `writable` (default false), and `update_policy`.
+- Default omitted runtime-mount destinations to `/mnt/<mount-name>` while
+  allowing explicit normalized absolute targets outside reserved system,
+  Docker, Reploy, and provider namespaces.
 - Against the exact immutable image, require every effective Reploy/blueprint
   mount target to be absent or an empty real directory; reject files, symlinks,
   mountpoints, non-empty directories, overlapping destinations, and every
   protected provider/Reploy intersection without recursive filesystem scans.
-- Keep Docker-intrinsic kernel and resolver mounts outside the blueprint
-  allowlist while validating every Reploy-generated mount.
+- Keep Docker-intrinsic kernel and resolver mounts outside the blueprint plan
+  while validating every Reploy-generated mount.
 - Enforce the model matrix:
   - managed-bind: preserve or replace;
   - named volume: preserve or replace, with replacement copied from the staging
@@ -428,12 +446,12 @@ Ownership:
   only host-side mount-source existence, kind, and read/write-policy checks;
   create no separate access-preflight container or runtime-access record.
 
-Regenerate Compose, backend env/state, dry-run, status, and control inputs from
+Regenerate Compose, backend env/state, validation, status, and control inputs from
 the plan. Use exec-form Compose commands, not `sh -c`.
 
 Gate: golden rendering/state tests plus Linux system/user and Docker Desktop
-current-user planning tests. Mount-policy tests cover `/mnt`, additional roots,
-no-shadow image inspection, protected intersections, intrinsic-mount exclusion,
+current-user planning tests. Mount-policy tests cover `/mnt` defaults, explicit
+absolute targets, reserved paths, no-shadow image inspection, protected intersections, intrinsic-mount exclusion,
 host-side source checks, and runtime permission-failure reporting.
 
 ## Phase 5: Commands and Interactive Shell
@@ -494,7 +512,7 @@ and diagnostic bounds.
 
 ## Phase 7: Cutover and Legacy Removal
 
-Cut CLI, state, generated scripts, status, dry-run, install/update, bundle,
+Cut CLI, state, generated scripts, status, validation, install/update, bundle,
 commands, and cleanup to resolved plans. Keep schema 1 but only the new shape.
 
 Migrate repository smoke, git-source, and OmegaConf demo blueprints. Migrate and

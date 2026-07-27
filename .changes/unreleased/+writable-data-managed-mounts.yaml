@@ -1,2 +1,2 @@
-kind: Fixed
-body: Allow blueprints to mark mounted managed paths writable at runtime with writeable: true while keeping mounted managed paths read-only by default.
+kind: Added
+body: 'Allow environment mount contracts to set `writable: true` while keeping runtime mounts read-only by default.'

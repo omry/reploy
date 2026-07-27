@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -202,13 +201,9 @@ func TestWheelNodeResolverRequiresResolvedSourceArtifactDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := providerapi.ResolvedSourceInput{
-		Schema: providerapi.ResolvedSourceInputSchemaV1, Component: "application", LogicalPackage: "demo-server",
-		SourceManifestDigest: schemaTestDigest("4"), BuilderProfile: "python-wheel-v1",
-		BuildSettings:     providerapi.CanonicalProviderData{Schema: "python-source-build-settings-v1", Value: canonical.Object{}},
-		EcosystemMetadata: providerapi.CanonicalProviderData{Schema: "python-source-metadata-v1", Value: canonical.Object{}},
-		ArtifactDigest:    canonical.Digest("sha256:" + wheelDigest),
-	}
+	source := testPythonSourceInput(
+		"application", "demo-server", "1.2.3", schemaTestDigest("4"), canonical.Digest("sha256:"+wheelDigest),
+	)
 	unusedSource := source
 	unusedSource.LogicalPackage = "unused-source"
 	unusedSource.SourceManifestDigest = schemaTestDigest("6")
@@ -235,8 +230,12 @@ func TestWheelNodeResolverRequiresResolvedSourceArtifactDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bundle.Sources) != 1 || !reflect.DeepEqual(bundle.Sources[0], source) {
+	if len(bundle.Sources) != 1 || bundle.Sources[0].LogicalPackage != source.LogicalPackage ||
+		bundle.Sources[0].SourceManifestDigest != source.SourceManifestDigest || bundle.Sources[0].ArtifactDigest != source.ArtifactDigest {
 		t.Fatalf("sources = %#v", bundle.Sources)
+	}
+	if err := ValidateResolvedSourceInputV1(bundle.Sources[0]); err != nil {
+		t.Fatal(err)
 	}
 	if len(result.SelectedSources) != 1 || !reflect.DeepEqual(result.SelectedSources[0], source) {
 		t.Fatalf("selected sources = %#v", result.SelectedSources)
@@ -315,78 +314,6 @@ func preparedNodeTestPlan(t *testing.T, requirement string) (providerapi.Provide
 	return plan, platform, upstream, catalog, selectedEvidence
 }
 
-func TestPreparedBundleResolverReadsClosedArtifactsAndScripts(t *testing.T) {
-	dir := t.TempDir()
-	writeTestWheel(t, dir, "demo_server-1.2.3-py3-none-any.whl", "Demo-Server", "1.2.3", map[string]string{"demo-server": "demo:main"})
-	resolver := PreparedBundleResolver{Dir: dir, BaseIdentity: "python@sha256:base"}
-	resolved, err := resolver.ResolvePython(context.Background(), LegacyResolveRequest{
-		Platform:   "linux/amd64",
-		Components: []LegacyComponent{{Name: "application", Requirements: []string{"demo-server[http]>=1.2"}}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(resolved.Artifacts) != 1 || resolved.Artifacts[0].Identifier != "demo-server" || len(resolved.Artifacts[0].SHA256) != 64 {
-		t.Fatalf("artifacts = %#v", resolved.Artifacts)
-	}
-	if resolved.ConsoleScripts["demo-server"] != "demo-server" {
-		t.Fatalf("scripts = %#v", resolved.ConsoleScripts)
-	}
-}
-
-func TestPreparedBundleResolverEnforcesTranslationPrecedence(t *testing.T) {
-	dir := t.TempDir()
-	wheel := "demo_server-1.0-py3-none-any.whl"
-	writeTestWheel(t, dir, wheel, "demo-server", "1.0", nil)
-	request := LegacyResolveRequest{
-		Components:   []LegacyComponent{{Name: "application", Requirements: []string{"demo-server"}}},
-		Translations: []LegacyTranslation{{Name: "workspace", Root: "..", Mappings: map[string]string{"demo-server": "server"}}},
-	}
-	resolver := PreparedBundleResolver{Dir: dir, BaseIdentity: "python@sha256:base"}
-	if _, err := resolver.ResolvePython(context.Background(), request); err == nil || !strings.Contains(err.Error(), "did not take precedence") {
-		t.Fatalf("error = %v", err)
-	}
-	manifest := map[string]any{
-		"schema_version": 1,
-		"local_sources":  map[string]any{"demo-server": map[string]any{"wheel": wheel, "fingerprint": "test"}},
-	}
-	content, err := json.Marshal(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, preparedBundleManifestName), content, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := resolver.ResolvePython(context.Background(), request); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestPreparedBundleResolverRejectsTranslatedVersionOutsideRequirement(t *testing.T) {
-	dir := t.TempDir()
-	wheel := "demo_server-1.4-py3-none-any.whl"
-	writeTestWheel(t, dir, wheel, "demo-server", "1.4", nil)
-	manifest := map[string]any{
-		"schema_version": 1,
-		"local_sources":  map[string]any{"demo-server": map[string]any{"wheel": wheel, "fingerprint": "test"}},
-	}
-	content, err := json.Marshal(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, preparedBundleManifestName), content, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	request := LegacyResolveRequest{
-		Components:   []LegacyComponent{{Name: "application", Requirements: []string{"demo-server[imap]>=2.0,<3"}}},
-		Translations: []LegacyTranslation{{Name: "workspace", Mappings: map[string]string{"demo-server": "server"}}},
-	}
-	_, err = (PreparedBundleResolver{Dir: dir, BaseIdentity: "python@sha256:base"}).ResolvePython(context.Background(), request)
-	if err == nil || !strings.Contains(err.Error(), `built version 1.4 does not satisfy`) {
-		t.Fatalf("error = %v", err)
-	}
-}
-
 func TestRequirementAllowsVersion(t *testing.T) {
 	tests := []struct {
 		requirement string
@@ -431,26 +358,6 @@ func TestInterpreterVersionSatisfiesObservedRuntime(t *testing.T) {
 	if _, err := InterpreterVersionSatisfies("not-a-specifier", "3.13.2"); err == nil {
 		t.Fatal("unsupported interpreter constraint was accepted")
 	}
-}
-
-func TestPreparedBundleResolverRejectsMetadataAndDuplicateCollisions(t *testing.T) {
-	t.Run("filename metadata mismatch", func(t *testing.T) {
-		dir := t.TempDir()
-		writeTestWheel(t, dir, "demo-1.0-py3-none-any.whl", "other", "1.0", nil)
-		_, err := (PreparedBundleResolver{Dir: dir, BaseIdentity: "base"}).ResolvePython(context.Background(), LegacyResolveRequest{})
-		if err == nil || !strings.Contains(err.Error(), "metadata identifies") {
-			t.Fatalf("error = %v", err)
-		}
-	})
-	t.Run("duplicate console script", func(t *testing.T) {
-		dir := t.TempDir()
-		writeTestWheel(t, dir, "one-1.0-py3-none-any.whl", "one", "1.0", map[string]string{"demo": "one:main"})
-		writeTestWheel(t, dir, "two-1.0-py3-none-any.whl", "two", "1.0", map[string]string{"demo": "two:main"})
-		_, err := (PreparedBundleResolver{Dir: dir, BaseIdentity: "base"}).ResolvePython(context.Background(), LegacyResolveRequest{})
-		if err == nil || !strings.Contains(err.Error(), "provided by both") {
-			t.Fatalf("error = %v", err)
-		}
-	})
 }
 
 func writeTestWheel(t *testing.T, dir string, filename string, name string, version string, scripts map[string]string) {

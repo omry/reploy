@@ -32,16 +32,11 @@ func finalizeResolvedRequestV1(
 	if !reflect.DeepEqual(expectedCandidates, candidateRequest) {
 		return providers.ResolvedRequestV1{}, fmt.Errorf("candidate resolved request does not match the document, overlay, platform, and source candidates")
 	}
-	candidates := make(map[string]providers.ResolvedSourceInput, len(candidateRequest.Sources))
-	for _, source := range candidateRequest.Sources {
-		candidates[source.Component+"\x00"+source.LogicalPackage] = source
-	}
-	for _, source := range selected {
-		candidate, found := candidates[source.Component+"\x00"+source.LogicalPackage]
-		if !found || !reflect.DeepEqual(candidate, source) {
-			return providers.ResolvedRequestV1{}, fmt.Errorf("selected source %s.%s is not an exact source candidate", source.Component, source.LogicalPackage)
-		}
-	}
+	// Source candidates in the loaded request are reusable identities known
+	// before provider execution. Fresh workspace wheels do not have a complete
+	// identity until the node preparation builds and inspects them. The provider
+	// graph validates its selected sources against that node's effective,
+	// post-build candidate list; finalization records exactly those selections.
 	return BuildResolvedRequestV1(
 		document, overlay, candidateRequest.Platform,
 		append([]providers.ResolvedSourceInput{}, selected...),
@@ -121,6 +116,7 @@ func BuildResolvedRequestV1(
 	for _, request := range normalizedOverlay.DirectPackages {
 		directPackages[request.Component] = append(directPackages[request.Component], request.Package)
 	}
+	implicitBasePython := resolvedRequestNeedsImplicitBasePython(document, selectedOptions, directPackages)
 
 	names := make([]string, 0, len(document.Environment.Components))
 	for name := range document.Environment.Components {
@@ -136,8 +132,18 @@ func BuildResolvedRequestV1(
 			if name != "base" || component.Base == nil {
 				return providers.ResolvedRequestV1{}, fmt.Errorf("base component is missing its typed payload")
 			}
+			exports := component.Base.Exports
+			if implicitBasePython {
+				exports = make(map[string]blueprint.BaseExecutableExport, len(component.Base.Exports)+1)
+				for exportName, export := range component.Base.Exports {
+					exports[exportName] = export
+				}
+				if _, explicit := exports["python"]; !explicit {
+					exports["python"] = blueprint.BaseExecutableExport{Executable: "/usr/local/bin/python"}
+				}
+			}
 			request, err = providers.CanonicalBaseProviderRequestV1(providers.BaseProviderRequestV1{
-				Image: component.Base.Image, Exports: component.Base.Exports,
+				Image: component.Base.Image, Exports: exports,
 			})
 		case blueprint.ComponentTypePython:
 			request, err = buildPythonComponentRequest(name, component, selectedOptions[name], directPackages[name])
@@ -164,6 +170,39 @@ func BuildResolvedRequestV1(
 		return providers.ResolvedRequestV1{}, err
 	}
 	return result, nil
+}
+
+func resolvedRequestNeedsImplicitBasePython(
+	document blueprint.Document,
+	selected map[string]map[string]bool,
+	direct map[string][]providers.CanonicalPackageRequest,
+) bool {
+	base := document.Environment.Components["base"]
+	if base.Base == nil {
+		return false
+	}
+	if _, explicit := base.Base.Exports["python"]; explicit {
+		return false
+	}
+	for name, component := range document.Environment.Components {
+		if component.Type != blueprint.ComponentTypePython || component.Python == nil {
+			continue
+		}
+		interpreter := component.Python.Interpreter
+		if interpreter.Command != "python" || interpreter.Supplier != "" {
+			continue
+		}
+		active := len(component.Python.Requirements) != 0 || len(direct[name]) != 0
+		for option := range selected[name] {
+			if declared, found := component.Options[option]; found && len(declared.PythonRequirements) != 0 {
+				active = true
+			}
+		}
+		if active {
+			return true
+		}
+	}
+	return false
 }
 
 func buildPythonComponentRequest(

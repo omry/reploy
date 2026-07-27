@@ -2,373 +2,203 @@
 sidebar_position: 2
 ---
 
-import PlatformTabs from '@site/src/components/PlatformTabs';
-import TabItem from '@theme/TabItem';
-
 # Blueprint Structure
 
-A blueprint is a YAML manifest owned by the app author. It describes the
-app-specific pieces that Reploy needs in order to build bundles, generate Docker
-runtime files, expose app commands, and install the service.
-
-## Top-Level Sections
+A schema-1 blueprint has three top-level nodes:
 
 ```yaml
-blueprint:
-  schema: 1
-  version: 0.1.0
-  requires_reploy: ">=0.5.1.dev1"
-
-app:
-  id: example-app
-  provider:
-    type: python
-    identifier: example-suite
-
-install:
-  target: {}
-  system:
-    run_as:
-      user: example
-      group: example
-      on_missing: create
-  ports:
-    deployed:
-      https:
-        host_bind: 127.0.0.1
-        host_port: 8075
-    staging:
-      https:
-        host_bind: 127.0.0.1
-        host_port: 18075
-  managed_paths:
-    files:
-      - path: .example.env
-        update: preserve
-        mount: /{{ path }}
-    dirs:
-      - path: conf
-        update: preserve
-        mount: /{{ path }}
-      - path: data
-        update: preserve
-        mount: /{{ path }}
-        writeable: true
-
-bundle:
-  options: {}
-
-docker:
-  service: {}
-  health:
-    scheme_env: REPLOY_PUBLIC_SCHEME
-    host_env: REPLOY_HOST_BIND
-    port_env: REPLOY_HOST_PORT
-    default_scheme: https
-    default_host: 127.0.0.1
-    default_port: "18075"
-    path: /_health_
-  runtime:
-    hooks:
-      after_start:
-        - health_check:
-            wait: true
-  default_command: serve
-  commands: {}
+blueprint:   # Format version, blueprint version, Reploy requirement, platforms.
+environment: # Portable software, command, mount, workload, and install intent.
+docker:      # Docker-specific realization of mounts, endpoints, and restart policy.
 ```
 
-`blueprint` identifies the manifest format, the blueprint version, and the
-minimum Reploy version expected by the app.
+Unknown fields are errors. Reploy does not accept aliases for the removed
+prototype schema.
 
-`app` names the deployment and declares the app provider. The first supported
-provider is `python`, where `identifier` is the required root package.
-
-`install` declares host install defaults: target path selection, system-scope
-app account, whether Reploy creates that system account when missing,
-deployed and staging port defaults, and managed app-owned paths with update
-policy and optional runtime mounts.
-
-`install.system.run_as` applies only to system installs. User-scope installs
-are owned by the invoking user and do not create or chown files to this account.
-The older `install.owner` key is accepted as a compatibility alias.
-
-Managed path mounts may use the blueprint-time `{{ path }}` placeholder, which
-expands to the entry's normalized relative path. For example,
-`mount: /{{ path }}` mounts `conf` at `/conf` and `.example.env` at
-`/.example.env`. The compact `{{path}}` form is accepted, but `{{ path }}` is
-the canonical style. Use `${...}` placeholders only for container/runtime
-environment values.
-
-Mounted managed paths are read-only at runtime by default. Set
-`writeable: true` on a mounted managed path when the app needs to write through
-that mount while the service is running, such as persistent runtime data. The
-field only applies to entries that also set `mount`.
-
-`bundle` declares optional package selections that an app user can add to the
-deployment bundle.
-
-`docker` declares the runtime shape: image, ports, deployment directories,
-health checks, app commands, and install hooks.
-
-## Install Target
-
-`install.target` controls the default permanent install directory. If the
-blueprint omits target defaults, Reploy chooses a built-in host default:
-
-<PlatformTabs>
-  <TabItem value="linux">
-
-| Field | Value |
-| --- | --- |
-| Host/backend | Linux system scope |
-| Built-in default | `/opt/{{ app.id }}` |
-| For `app.id: example-app` | `/opt/example-app` |
-
-  </TabItem>
-  <TabItem value="windows">
-
-| Field | Value |
-| --- | --- |
-| Host/backend | Windows Docker Desktop |
-| Built-in default | `{{ user.local_data }}/Reploy/installs/{{ app.id }}` |
-| For `app.id: example-app` | `%LOCALAPPDATA%\Reploy\installs\example-app` |
-
-  </TabItem>
-  <TabItem value="macos">
-
-| Field | Value |
-| --- | --- |
-| Host/backend | Mac Docker-managed runtime |
-| Built-in default | `{{ user.data }}/Reploy/installs/{{ app.id }}` |
-| For `app.id: example-app` | `$HOME/Library/Application Support/Reploy/installs/example-app` |
-
-  </TabItem>
-</PlatformTabs>
-
-Users can always override the resolved target with
-`reploy install --scope user|system --to DIR`.
-
-Blueprints may provide one global default:
+## Environment Nodes
 
 ```yaml
-install:
-  target:
-    default_path: "{{ reploy.install_root }}/{{ app.id }}"
+environment:
+  id: example                 # Required stable environment name.
+  control_script: example     # Optional generated command name; defaults to id.
+  vars: {}                    # Values used by blueprint interpolation.
+  workspace: {}               # Optional local development package checkouts.
+  components: {}              # Base image and requested software.
+  allow_concurrent: auto      # App-command and shell overlap policy.
+  terminal: {}                # Terminal and color integration.
+  install: {}                 # Target, system account, hooks, success output.
+  mounts: {}                  # Portable runtime filesystem contracts.
+  commands: {}                # Public commands using component executables.
+  workload: {}                # Optional persistent primary workload.
 ```
 
-Blueprints may also provide per-OS defaults:
+Optional empty nodes should be omitted.
+
+## Components and Executables
+
+Every environment has a base component. Additional components currently
+support Python and APT packages:
 
 ```yaml
-install:
-  target:
-    default_paths:
-      linux: /opt/{{ app.id }}
-      macos: "{{ user.data }}/Acme/{{ app.id }}"
-      windows: "{{ user.local_data }}/Acme/{{ app.id }}"
+environment:
+  components:
+    base:
+      image: debian:13
+    system:
+      type: apt
+      packages:
+        - package: python3
+          exports:
+            python:
+              executable: /usr/bin/python3
+        - ca-certificates
+    application:
+      type: python
+      interpreter:
+        command: python
+        version: ">=3.11"
+        supplier: system
+      requirements: [example-suite]
+      executables:
+        server:
+          binary: example-server
 ```
 
-Blueprints may provide per-scope, per-OS defaults using
-`<scope>.<host_os>` keys:
+The interpreter requirement is optional when Reploy can identify the single
+supported Python supplied by an earlier component. If discovery fails or the
+binary is not Python, the error guides the author to the explicit form.
+
+Executable profiles belong to their component. Environment commands reference
+them with a qualified name:
 
 ```yaml
-install:
-  target:
-    default_paths:
-      system.linux: /opt/{{ app.id }}
-      user.windows: "{{ user.local_data }}/Acme/{{ app.id }}"
-```
-
-Resolution order is:
-
-1. `reploy install --scope user|system --to DIR`
-2. explicit install scope
-3. `install.target.default_paths.<scope>.<host_os>`
-4. `install.target.default_paths.<host_os>`
-5. `install.target.default_path`
-6. Reploy's built-in target default for the host/backend/scope
-
-Supported `default_paths` OS keys are `linux`, `macos`, and `windows`.
-Supported scope-qualified keys are `user.<host_os>` and `system.<host_os>`.
-Inactive per-OS paths may use that OS's path syntax. For example,
-`default_paths.system.linux: /opt/{{ app.id }}` is valid in a blueprint used
-on Windows because it is not the active Windows default.
-
-Supported install-target template variables and default root values are:
-
-<PlatformTabs>
-  <TabItem value="linux">
-
-| Variable | Meaning | Linux default |
-| --- | --- | --- |
-| `{{ app.id }}` | Blueprint app id | App-specific |
-| `{{ user.home }}` | Current user's home directory | `$HOME` |
-| `{{ user.data }}` | Per-user application data root | `$HOME/.local/share` |
-| `{{ user.local_data }}` | Per-user local data root | `$HOME/.local/share` |
-| `{{ system.data }}` | System-wide application data root | `/var/lib` |
-| `{{ reploy.install_root }}` | Reploy's default install root for this host/backend | `/opt` |
-| Built-in install target | Target used when the blueprint omits target defaults | `/opt/{{ app.id }}` |
-
-  </TabItem>
-  <TabItem value="windows">
-
-| Variable | Meaning | Windows default |
-| --- | --- | --- |
-| `{{ app.id }}` | Blueprint app id | App-specific |
-| `{{ user.home }}` | Current user's home directory | `%USERPROFILE%` |
-| `{{ user.data }}` | Per-user application data root | `%APPDATA%` |
-| `{{ user.local_data }}` | Per-user local data root | `%LOCALAPPDATA%` |
-| `{{ system.data }}` | System-wide application data root | `%ProgramData%` |
-| `{{ reploy.install_root }}` | Reploy's default install root for this host/backend | `%LOCALAPPDATA%\Reploy\installs` |
-| Built-in install target | Target used when the blueprint omits target defaults | `%LOCALAPPDATA%\Reploy\installs\{{ app.id }}` |
-
-  </TabItem>
-  <TabItem value="macos">
-
-| Variable | Meaning | Mac default |
-| --- | --- | --- |
-| `{{ app.id }}` | Blueprint app id | App-specific |
-| `{{ user.home }}` | Current user's home directory | `$HOME` |
-| `{{ user.data }}` | Per-user application data root | `$HOME/Library/Application Support` |
-| `{{ user.local_data }}` | Per-user local data root | `$HOME/Library/Application Support` |
-| `{{ system.data }}` | System-wide application data root | `/Library/Application Support` |
-| `{{ reploy.install_root }}` | Reploy's default install root for this host/backend | `$HOME/Library/Application Support/Reploy/installs` |
-| Built-in install target | Target used when the blueprint omits target defaults | `$HOME/Library/Application Support/Reploy/installs/{{ app.id }}` |
-
-  </TabItem>
-</PlatformTabs>
-
-On Windows, `{{ user.data }}` falls back to `%LOCALAPPDATA%` if `%APPDATA%`
-is not set.
-
-These variables choose the one install directory for the app. Reploy keeps
-managed app paths such as `conf` and `data`, plus generated bundle artifacts,
-localized under that install directory. For Docker deployments, the generated
-Python runtime cache uses a Docker named volume by default; operators may
-override `REPLOY_RUNTIME_DIR` to a host path when they need a bind-mounted
-runtime cache.
-
-## Bundle Options
-
-Bundle options declare additional choices an app user can include in a
-deployment bundle, such as plugins or related artifacts. For Python app
-providers, each option points to a package identifier that Reploy can resolve
-when the user selects it:
-
-```yaml
-bundle:
-  options:
-    imap:
-      identifier: example-imap
-      group: plugins
-      description: Enable the example IMAP plugin.
-```
-
-App users can list and select these options with `reploy bundle list-options`
-and `reploy bundle add`.
-
-## Docker Service
-
-The service section defines the default container runtime. Host install
-defaults live in `install`, not in Docker-specific fields.
-
-```yaml
-docker:
-  service:
-    image: python:3.11-slim
-```
-
-Use `install.ports.deployed` and `install.ports.staging` when the app exposes
-more than one named public port.
-
-## Runtime After Start
-
-Runtime after-start checks control what `reploy up` verifies after Docker starts
-the service. Reploy always checks that the service is still running. Add a
-health check when the app should prove the declared health endpoint is reachable
-before `reploy up` succeeds.
-
-```yaml
-docker:
-  runtime:
-    hooks:
-      after_start:
-        - health_check:
-            wait: true
-```
-
-Runtime after-start hooks currently support `health_check` only. Runtime health
-checks require `docker.health`. Blueprints that use `docker.runtime.hooks`
-should set `blueprint.requires_reploy` to `>=0.5.1.dev1`.
-
-## App Commands
-
-Commands expose app-specific operations through `reploy app`:
-
-```yaml
-docker:
-  default_command: serve
-  command_defaults:
-    app_command: true
-    container:
-      argv_prefix: [example-server, --config-dir, "${REPLOY_CONFIG_CONTAINER_DIR}"]
+environment:
   commands:
     serve:
-      container:
-        argv_suffix: [serve]
+      executable: application.server
+      argv: [serve]
     config_check:
+      executable: application.server
+      trigger: [config, check]
+      native_command: true
       deployed_command: true
       forward_flags: [--live]
-      container:
-        argv_suffix: [config, check]
-    external_status:
-      trigger: [status, external]
-      container:
-        argv_override: [example-status-tool, inspect]
+      argv: [config, check]
+  workload:
+    command: serve
 ```
 
-`trigger` is the command path after `reploy app`. When omitted, Reploy derives
-it from the command key by splitting underscores, so `config_check` becomes
-`reploy app config check`. The `docker.default_command` command remains
-internal unless it declares an explicit trigger.
+## Workspace
 
-Use `command_defaults` for repeated command settings. `app_command` exposes a
-command through `reploy app`. Set `deployed_command: true` on individual app
-commands that are safe to expose through the installed app control script, such
-as live validation.
-
-Tools can inspect the deployed app-command surface with:
-
-```bash
-reploy app --commands --deployed-only --format json --dir DIR
-```
-
-For container arguments, `argv_prefix` plus `argv_suffix` produces the final
-command. Use command-level `container.argv_override` only as an explicit
-full-command escape hatch; it cannot be combined with `argv_prefix` or
-`argv_suffix` in the same `container` node. Quote `${...}` placeholders inside
-flow-style YAML lists.
-`forward_flags` and `forward_args` control what user input is passed through to
-the container command.
-
-## Install Hooks
-
-Install hooks let the app run checks before or after the service starts:
+Workspace entries are explicit development overrides, not installation
+requests:
 
 ```yaml
-docker:
-  install:
-    hooks:
-      before_start:
-        - app:
-            - config
-            - check
-      after_start:
-        - health_check:
-            wait: true
+environment:
+  workspace:
+    root: ..
+    packages:
+      python:
+        omegaconf: OmegaConf
+        hydra-core: hydra
 ```
 
-Use app hooks for app-owned validation, and health-check hooks for service
-readiness.
+`root` may be relative to the blueprint. Package paths are relative to that root
+and may not escape it. The declared distribution name must match the built
+metadata and satisfy active requirements.
 
-For a working reference, see
-`tests/e2e/python/packages/smoke-blueprint/smoke.blueprint.yaml`.
+## Mounts
+
+Portable mount contracts are declared under `environment.mounts`; Docker maps
+them to a backend mode and source:
+
+```yaml
+environment:
+  mounts:
+    config:
+      target: /conf
+      writable: true
+      update_policy: preserve
+    data:
+      target: /data
+      writable: true
+      update_policy: preserve
+
+docker:
+  mounts:
+    config:
+      extends: environment.mounts.config
+      mode: managed-bind
+      source: conf
+    data:
+      extends: environment.mounts.data
+      mode: managed-bind
+      source: data
+```
+
+`update_policy` is `preserve`, `replace`, or `unmanaged`. `writable` controls
+runtime access; read-only mounts also determine the default `auto` concurrency
+policy.
+
+## Concurrency
+
+`allow_concurrent` accepts `yes`, `no`, or `auto` and defaults to `auto`. In
+automatic mode, concurrent app commands and shell sessions are allowed only
+when all of their mounts are read-only. A blocked caller may use `--wait` to
+queue in FIFO order. `reploy runs list` and `reploy runs stop RUN_ID` inspect or
+stop active and waiting runs.
+
+## Installation
+
+Installation settings remain part of the portable environment:
+
+```yaml
+environment:
+  install:
+    target:
+      default_path: "{{ reploy.install_root }}/{{ environment.id }}"
+    system:
+      run_as:
+        user: example
+        group: example
+        on_missing: create
+    success:
+      lines:
+        - "installed {{ environment.id }}"
+```
+
+`on_missing: create` allows Reploy to create the declared system account during
+a system-scope install. User-scope installs run as the invoking user.
+
+## Endpoints and Readiness
+
+The environment owns the portable endpoint; Docker supplies bind and published
+addresses and ports:
+
+```yaml
+environment:
+  workload:
+    command: serve
+    endpoints:
+      http:
+        scheme: http
+        port: 8076
+        readiness:
+          path: /_health_
+
+docker:
+  workload:
+    endpoints:
+      http:
+        extends: environment.workload.endpoints.http
+        bind:
+          address: 0.0.0.0
+        publish:
+          address: 127.0.0.1
+          staging: 18076
+          deployed: 19076
+```
+
+Use `reploy validate BLUEPRINT_REF` for syntax and semantic checks. Use
+`reploy build` after staging to resolve packages, build the image, and perform
+full image validation.

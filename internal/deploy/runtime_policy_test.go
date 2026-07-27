@@ -9,8 +9,7 @@ import (
 
 func validRuntimePolicy() RuntimePolicyV1 {
 	return RuntimePolicyV1{
-		Schema:       RuntimePolicySchemaV1,
-		AllowedRoots: []string{"/mnt", "/workspace"},
+		Schema: RuntimePolicySchemaV1,
 		ProtectedPaths: []ProtectedPathV1{
 			{Path: "/.reploy", Kind: ProtectedPathReployRoot, Owner: "reploy"},
 			{Path: "/opt/app/bin/tool", Kind: ProtectedPathExecutablePath, Owner: "app.tool"},
@@ -41,24 +40,13 @@ func TestRuntimePolicyDigestV1IsStable(t *testing.T) {
 	}
 }
 
-func TestValidateRuntimePolicyV1AllowsRootsThatSortBeforeMnt(t *testing.T) {
-	policy := validRuntimePolicy()
-	policy.AllowedRoots = []string{"/data", "/mnt", "/workspace"}
-	if err := ValidateRuntimePolicyV1(policy); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestValidateRuntimePolicyV1RejectsNoncanonicalStructure(t *testing.T) {
 	tests := []struct {
 		name   string
 		mutate func(*RuntimePolicyV1)
 		want   string
 	}{
-		{name: "nil roots", mutate: func(value *RuntimePolicyV1) { value.AllowedRoots = nil }, want: "collections"},
-		{name: "missing mnt", mutate: func(value *RuntimePolicyV1) { value.AllowedRoots = []string{"/workspace"} }, want: "include /mnt"},
-		{name: "overlapping roots", mutate: func(value *RuntimePolicyV1) { value.AllowedRoots = []string{"/mnt", "/mnt/work"} }, want: "overlap"},
-		{name: "interleaved overlapping roots", mutate: func(value *RuntimePolicyV1) { value.AllowedRoots = []string{"/mnt", "/mnt-work", "/mnt/work"} }, want: "overlap"},
+		{name: "nil protected paths", mutate: func(value *RuntimePolicyV1) { value.ProtectedPaths = nil }, want: "collections"},
 		{name: "unsorted protected", mutate: func(value *RuntimePolicyV1) {
 			value.ProtectedPaths[0], value.ProtectedPaths[1] = value.ProtectedPaths[1], value.ProtectedPaths[0]
 		}, want: "protected paths"},
@@ -68,6 +56,9 @@ func TestValidateRuntimePolicyV1RejectsNoncanonicalStructure(t *testing.T) {
 			value.Plans[0].Mounts[0], value.Plans[0].Mounts[1] = value.Plans[0].Mounts[1], value.Plans[0].Mounts[0]
 		}, want: "mounts"},
 		{name: "host-like destination", mutate: func(value *RuntimePolicyV1) { value.Plans[0].Mounts[0].Destination = `C:\config` }, want: "absolute Linux path"},
+		{name: "filesystem root", mutate: func(value *RuntimePolicyV1) { value.Plans[0].Mounts[0].Destination = "/" }, want: "filesystem root"},
+		{name: "kernel subtree", mutate: func(value *RuntimePolicyV1) { value.Plans[0].Mounts[0].Destination = "/proc/app" }, want: `reserved container path "/proc"`},
+		{name: "Docker resolver parent", mutate: func(value *RuntimePolicyV1) { value.Plans[0].Mounts[0].Destination = "/etc" }, want: `reserved container path "/etc/hostname"`},
 		{name: "source kind", mutate: func(value *RuntimePolicyV1) { value.Plans[0].Mounts[0].SourceKind = "bind" }, want: "source kind"},
 		{name: "duplicate executable", mutate: func(value *RuntimePolicyV1) {
 			value.Plans[0].Executables = append(value.Plans[0].Executables, value.Plans[0].Executables[0])

@@ -94,7 +94,8 @@ func TestPythonNodePreparerResolvesFreshWithoutCache(t *testing.T) {
 	descriptor := testProbeImageDescriptor(t, "linux/amd64")
 	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
 	commands, _ := stubPythonResolverCommands(t, nil, nil, nil)
-	fresh := providers.ResolveResult{Evidence: providers.ValidationEvidence{Schema: "fresh"}}
+	source := providers.ResolvedSourceInput{Schema: "resolved-source-input-v1", Component: "application", LogicalPackage: "demo"}
+	fresh := providers.ResolveResult{Evidence: providers.ValidationEvidence{Schema: "fresh"}, SelectedSources: []providers.ResolvedSourceInput{source}}
 	validationCalls := 0
 	freshCalls := 0
 	preparer := PythonNodePreparer{
@@ -116,7 +117,7 @@ func TestPythonNodePreparerResolvesFreshWithoutCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if validationCalls != 0 || freshCalls != 1 || result.Refreshed || !reflect.DeepEqual(result.Resolution, fresh) {
+	if validationCalls != 0 || freshCalls != 1 || result.Refreshed || !reflect.DeepEqual(result.Resolution, fresh) || !reflect.DeepEqual(result.SourceCandidates, fresh.SelectedSources) {
 		t.Fatalf("validation = %d, fresh = %d, result = %#v", validationCalls, freshCalls, result)
 	}
 	assertOnePythonPreparationContainer(t, *commands, workspace.HostDir, 3)

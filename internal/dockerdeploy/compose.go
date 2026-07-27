@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/omry/reploy/internal/deploy"
 )
 
 type CommandSpec struct {
@@ -150,9 +152,13 @@ func runInterruptibleCommand(run commandRunner, spec CommandSpec, options RunOpt
 }
 
 func deploymentComposeProjectName(dir string) (string, error) {
-	if state, err := loadState(dir); err == nil {
-		if state.Install != nil && state.Install.ComposeProject != "" {
-			return state.Install.ComposeProject, nil
+	if content, err := os.ReadFile(filepath.Join(dir, StateFileName)); err == nil {
+		state, decodeErr := deploy.DecodeStateV1(content)
+		if decodeErr != nil {
+			return "", decodeErr
+		}
+		if state.Deployment != nil && state.Deployment.Installation.ComposeProject != "" {
+			return state.Deployment.Installation.ComposeProject, nil
 		}
 	}
 	values, err := readDockerEnv(dir)

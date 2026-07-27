@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-14
+updated: 2026-07-18
 summary: Active planning surface for Reploy design and implementation gaps.
 ---
 
@@ -42,7 +42,13 @@ This file is the day-to-day queue for design and implementation gaps.
 
 ## Pre-release
 
-No active pre-release items.
+- [ ] `P1` Minimize the required environment blueprint shape.
+      Make environment nodes optional whenever Reploy can supply an
+      unambiguous default or infer the value safely. Acceptance checks: audit
+      every required environment node; retain required fields only where
+      omission would be ambiguous or unsafe; add parser and validation tests
+      for the smallest useful blueprint; and make the blueprint documentation
+      start with that minimal example before introducing optional features.
 
 ## Post-v1
 

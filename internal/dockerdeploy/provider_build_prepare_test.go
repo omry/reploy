@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -90,7 +91,7 @@ func TestPrepareLockedProviderBuildV1StopsBeforeBaseRealizationOnExactReuse(t *t
 	if result.Operation != input.Operation || result.Store.Root() != input.Store.Root() || result.Environment != input.Environment || result.DeploymentDir != input.DeploymentDir || !reflect.DeepEqual(result.DockerPlan, input.DockerPlan) {
 		t.Fatal("preparation did not bind its operation inputs")
 	}
-	if !reflect.DeepEqual(order, []string{"recover", "load", "select", "current", "locked-sources", "match"}) {
+	if !reflect.DeepEqual(order, []string{"recover", "load", "select", "current", "cache", "locked-sources", "match"}) {
 		t.Fatalf("order = %#v", order)
 	}
 }
@@ -111,8 +112,54 @@ func TestPrepareLockedProviderBuildV1RealizesBaseAfterStaleReuse(t *testing.T) {
 	if result.Reused || result.PreparedBase == nil || !reflect.DeepEqual(*result.PreparedBase, prepared) || result.ReusableLock == nil {
 		t.Fatalf("result = %#v", result)
 	}
-	if result.FinalImageConfig.User != "0:0" || !reflect.DeepEqual(order, []string{"recover", "load", "select", "current", "locked-sources", "match", "realize"}) {
+	if result.FinalImageConfig.User != "0:0" || !reflect.DeepEqual(order, []string{"recover", "load", "select", "current", "cache", "locked-sources", "match", "realize"}) {
 		t.Fatalf("config/order = %#v/%#v", result.FinalImageConfig, order)
+	}
+}
+
+func TestPrepareLockedProviderBuildV1RebuildsExactCurrentAfterProviderStoreClean(t *testing.T) {
+	input, loaded, current, selected, prepared := providerBuildPreparationFixture(t)
+	order := []string{}
+	backend := providerBuildPreparationTestBackend(t, loaded, current, selected, prepared, &order)
+	backend.matches = func(CurrentBuild, CurrentBuildReuseInput) (bool, error) {
+		t.Fatal("absent provider store evaluated exact reuse")
+		return false, nil
+	}
+	backend.cacheAvailable = func(lock deploy.BuildLockV1, store providerstore.Store) (bool, error) {
+		order = append(order, "cache-miss")
+		if !reflect.DeepEqual(lock, current.Lock) || store.Root() != input.Store.Root() {
+			t.Fatal("cache check inputs changed")
+		}
+		return false, nil
+	}
+
+	result, err := prepareLockedProviderBuildV1(context.Background(), input, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Reused || result.PreparedBase == nil || result.ReusableLock != nil || result.Current == nil {
+		t.Fatalf("result = %#v", result)
+	}
+	if !reflect.DeepEqual(order, []string{"recover", "load", "select", "current", "cache-miss", "realize"}) {
+		t.Fatalf("order = %#v", order)
+	}
+}
+
+func TestProviderBuildCacheAvailableTreatsOnlyAbsentStoreAsCacheMiss(t *testing.T) {
+	input, _, current, _, _ := providerBuildPreparationFixture(t)
+	if _, err := input.Operation.RemoveProviderStore(input.Store); err != nil {
+		t.Fatal(err)
+	}
+	available, err := providerBuildCacheAvailable(current.Lock, input.Store)
+	if err != nil || available {
+		t.Fatalf("cleaned store availability = %v, %v", available, err)
+	}
+
+	if err := os.WriteFile(input.Store.Root(), []byte("corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if available, err := providerBuildCacheAvailable(current.Lock, input.Store); err == nil || available {
+		t.Fatalf("corrupt store availability = %v, %v", available, err)
 	}
 }
 
@@ -247,6 +294,13 @@ func providerBuildPreparationTestBackend(
 		},
 		matches: func(CurrentBuild, CurrentBuildReuseInput) (bool, error) {
 			return false, nil
+		},
+		cacheAvailable: func(lock deploy.BuildLockV1, store providerstore.Store) (bool, error) {
+			*order = append(*order, "cache")
+			if !reflect.DeepEqual(lock, current.Lock) || store.Root() == "" {
+				t.Fatal("cache availability checked for different inputs")
+			}
+			return true, nil
 		},
 		realizeBase: func(_ context.Context, _ providerstore.Store, got SelectedProviderBase) (PreparedProviderBase, error) {
 			*order = append(*order, "realize")

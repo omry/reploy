@@ -75,6 +75,72 @@ func TestPrepareProviderInstallAccountChecksBulkDiskBeforeCreatingMissingAccount
 	}
 }
 
+func TestInspectProviderInstallAccountReportsMissingCreateWithoutIDs(t *testing.T) {
+	missing := errors.New("unknown user")
+	inspection, err := inspectProviderInstallAccountWithV1(
+		InstallScopeSystem,
+		blueprint.RunAs{User: "service", Group: "service", OnMissing: "create"},
+		providerInstallAccountInspectionBackendV1{
+			resolve: func(map[string]string) (resolvedInstallOwner, error) {
+				return resolvedInstallOwner{}, missing
+			},
+			creationReadiness: func(values map[string]string, resolveErr error) (string, error) {
+				if !errors.Is(resolveErr, missing) || values[reployInstallOwnerOnMissing] != "create" {
+					t.Fatalf("creation readiness input = %#v / %v", values, resolveErr)
+				}
+				return "service:service", nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.User != "service" || inspection.Group != "service" || !inspection.WillCreate || inspection.UID != nil || inspection.GID != nil {
+		t.Fatalf("missing account inspection = %#v", inspection)
+	}
+}
+
+func TestInspectProviderInstallAccountReportsExistingNumericIdentity(t *testing.T) {
+	inspection, err := inspectProviderInstallAccountWithV1(
+		InstallScopeSystem,
+		blueprint.RunAs{User: "service", Group: "service", OnMissing: "create"},
+		providerInstallAccountInspectionBackendV1{
+			resolve: func(map[string]string) (resolvedInstallOwner, error) {
+				return resolvedInstallOwner{UID: 991, GID: 992}, nil
+			},
+			creationReadiness: func(map[string]string, error) (string, error) {
+				t.Fatal("existing account checked creation readiness")
+				return "", nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.WillCreate || inspection.UID == nil || *inspection.UID != 991 || inspection.GID == nil || *inspection.GID != 992 {
+		t.Fatalf("existing account inspection = %#v", inspection)
+	}
+}
+
+func TestInspectProviderInstallAccountRejectsMissingFailPolicy(t *testing.T) {
+	want := errors.New("unknown user")
+	_, err := inspectProviderInstallAccountWithV1(
+		InstallScopeSystem,
+		blueprint.RunAs{User: "service", Group: "service", OnMissing: "fail"},
+		providerInstallAccountInspectionBackendV1{
+			resolve: func(map[string]string) (resolvedInstallOwner, error) {
+				return resolvedInstallOwner{}, want
+			},
+			creationReadiness: func(map[string]string, error) (string, error) {
+				return "", want
+			},
+		},
+	)
+	if !errors.Is(err, want) || !strings.Contains(err.Error(), "resolve system install account") {
+		t.Fatalf("missing fail-policy error = %v", err)
+	}
+}
+
 func TestPrepareProviderInstallAccountDoesNotCreateWhenBulkDiskPreflightFails(t *testing.T) {
 	want := errors.New("insufficient disk space")
 	created := false

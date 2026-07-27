@@ -90,13 +90,10 @@ func TestPythonResolverWheelIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := providers.ResolvedSourceInput{
-		Schema: providers.ResolvedSourceInputSchemaV1, Component: "application", LogicalPackage: "demo-server",
-		SourceManifestDigest: canonical.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256([]byte("demo source")))), BuilderProfile: "integration-v1",
-		BuildSettings:     providers.CanonicalProviderData{Schema: "python-source-build-settings-v1", Value: canonical.Object{}},
-		EcosystemMetadata: providers.CanonicalProviderData{Schema: "python-source-metadata-v1", Value: canonical.Object{}},
-		ArtifactDigest:    wheel.SHA256,
-	}
+	source := testPythonResolvedSource(
+		"application", "demo-server", "1.0",
+		canonical.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256([]byte("demo source")))), wheel.SHA256,
+	)
 	if err := session.ResolveWheels(ctx, consumer.EnvironmentLauncher, requirement, interpreter, request, []providers.ResolvedSourceInput{source}, []providerstore.ArtifactDescriptor{wheel}); err != nil {
 		t.Fatal(err)
 	}
@@ -117,6 +114,121 @@ func TestPythonResolverWheelIntegration(t *testing.T) {
 	digest := canonical.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(content)))
 	if digest != wheel.SHA256 {
 		t.Fatalf("resolver copied digest = %s, want %s", digest, wheel.SHA256)
+	}
+}
+
+func TestPythonWorkspaceSourceResolverIntegration(t *testing.T) {
+	if os.Getenv("REPLOY_DOCKER_INTEGRATION") != "1" {
+		t.Skip("set REPLOY_DOCKER_INTEGRATION=1 to run Docker integration evidence")
+	}
+	ctx := context.Background()
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const base = "python:3.13-slim"
+	inspection, err := runDockerOutput(ctx, "image", "inspect", base)
+	if err != nil {
+		t.Skipf("local %s image is required for source resolver integration: %v", base, err)
+	}
+	descriptor, _, err := parseDockerImageInspection(base, platform, []byte(inspection))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts, cleanupArtifacts, err := PreparePythonResolverArtifacts(store, []providerstore.ArtifactDescriptor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cleanupArtifacts)
+	workspace := t.TempDir()
+	sourceDir := filepath.Join(workspace, "demo")
+	if err := os.Mkdir(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pyproject := `[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "demo-server"
+version = "1.0"
+
+[project.scripts]
+demo-server = "demo_server:main"
+`
+	if err := os.WriteFile(filepath.Join(sourceDir, "pyproject.toml"), []byte(pyproject), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "demo_server.py"), []byte("def main():\n    print('hello from workspace source')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	document := blueprint.Document{Environment: blueprint.Environment{Workspace: blueprint.Workspace{
+		PythonPackages: map[string]string{"demo-server": "demo"},
+	}}}
+	workspaceSources, err := ResolvePythonWorkspaceSources(document, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshots, err := StagePythonWorkspaceSourceSnapshots(artifacts, workspaceSources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probeWorkspace := buildIntegrationProbeWorkspace(t, platform)
+	session, err := OpenPythonResolverSession(ctx, descriptor, probeWorkspace, artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close(context.Background()) })
+	consumer, err := ValidatePythonConsumer(ctx, session, pythonConsumerTestImageConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	requirement := providers.ExecutableRequirement{
+		ID: "interpreter", Command: "python", Supplier: "base", VersionConstraint: ">=3.11",
+		ValidationPolicy: providers.ValidationPolicyCompatible,
+	}
+	interpreter, err := SelectPythonInterpreter(ctx, session, consumer.EnvironmentLauncher, requirement, []providers.RealizedOutput{{
+		SupplierNode: "base", SupplierComponent: "base", Name: "python",
+		Candidate: providers.ExecutableCandidate{InvocationPath: "/usr/local/bin/python3"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.BuildSourceWheels(ctx, consumer.EnvironmentLauncher, requirement, interpreter, snapshots); err != nil {
+		t.Fatal(err)
+	}
+	sources, wheels, err := PublishBuiltPythonSourceWheels(ctx, store, artifacts, "application", snapshots, []providerstore.ArtifactDescriptor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	packageRequest, err := pythonprovider.CanonicalPackageRequestV1("demo-server==1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := pythonprovider.CanonicalProviderRequestV1(pythonprovider.PythonProviderRequestV1{
+		Component: "application", Interpreter: blueprint.CommandRequirement{Command: "python", Supplier: "base"},
+		Requirements: []providers.CanonicalPackageRequest{packageRequest},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.ResolveWheels(ctx, consumer.EnvironmentLauncher, requirement, interpreter, request, sources, wheels); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(artifacts.OutputHostDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 || sources[0].SourceManifestDigest != workspaceSources[0].SourceManifestDigest ||
+		len(entries) != 1 || !strings.HasPrefix(entries[0].Name(), "demo_server-1.0-") || !strings.HasSuffix(entries[0].Name(), ".whl") {
+		t.Fatalf("source resolver result = sources %#v, entries %#v", sources, entries)
 	}
 }
 

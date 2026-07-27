@@ -5,7 +5,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -16,21 +15,11 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
-	"github.com/omry/reploy/internal/legacyprovider"
 	providerapi "github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
 )
 
-const preparedBundleManifestName = "reploy-wheelhouse.json"
-
 var requirementNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*`)
-
-// PreparedBundleResolver adapts the retained wheelhouse builder to the new
-// provider contract. It reads built metadata rather than trusting filenames.
-type PreparedBundleResolver struct {
-	Dir          string
-	BaseIdentity string
-}
 
 // InterpreterEvidenceResolver validates one Python interpreter candidate
 // against the exact image prefix and returns the consuming Python node's
@@ -280,60 +269,6 @@ func pathJoin(parts ...string) string {
 	return strings.Join(parts, "/")
 }
 
-func (resolver PreparedBundleResolver) ResolvePython(ctx context.Context, request LegacyResolveRequest) (ResolvedSet, error) {
-	if resolver.Dir == "" {
-		return ResolvedSet{}, fmt.Errorf("prepared Python bundle directory is required")
-	}
-	if resolver.BaseIdentity == "" {
-		return ResolvedSet{}, fmt.Errorf("prepared Python bundle base identity is required")
-	}
-	entries, err := os.ReadDir(resolver.Dir)
-	if err != nil {
-		return ResolvedSet{}, err
-	}
-	artifacts := []legacyprovider.Artifact{}
-	byDistribution := map[string]legacyprovider.Artifact{}
-	consoleScripts := map[string]string{}
-	for _, entry := range entries {
-		if err := ctx.Err(); err != nil {
-			return ResolvedSet{}, err
-		}
-		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".whl") {
-			continue
-		}
-		wheel, err := inspectWheel(filepath.Join(resolver.Dir, entry.Name()))
-		if err != nil {
-			return ResolvedSet{}, fmt.Errorf("inspect Python wheel %s: %w", entry.Name(), err)
-		}
-		artifact := legacyprovider.Artifact{
-			Identifier: wheel.Distribution, Version: wheel.Version, Kind: "wheel",
-			Path: wheel.Filename, SHA256: wheel.SHA256,
-		}
-		if existing, exists := byDistribution[artifact.Identifier]; exists {
-			return ResolvedSet{}, fmt.Errorf("Python bundle contains duplicate normalized distribution %q in %s and %s", artifact.Identifier, existing.Path, artifact.Path)
-		}
-		byDistribution[artifact.Identifier] = artifact
-		artifacts = append(artifacts, artifact)
-		for script := range wheel.ConsoleScripts {
-			if owner, exists := consoleScripts[script]; exists {
-				return ResolvedSet{}, fmt.Errorf("Python console script %q is provided by both %s and %s", script, owner, artifact.Identifier)
-			}
-			consoleScripts[script] = artifact.Identifier
-		}
-	}
-	if len(artifacts) == 0 {
-		return ResolvedSet{}, fmt.Errorf("prepared Python bundle contains no wheels: %s", resolver.Dir)
-	}
-	if err := validateRequestedDistributions(request, byDistribution); err != nil {
-		return ResolvedSet{}, err
-	}
-	if err := validateTranslationArtifacts(resolver.Dir, request, byDistribution); err != nil {
-		return ResolvedSet{}, err
-	}
-	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].Path < artifacts[j].Path })
-	return ResolvedSet{BaseIdentity: resolver.BaseIdentity, Artifacts: artifacts, ConsoleScripts: consoleScripts}, nil
-}
-
 func inspectWheel(filename string) (inspectedWheel, error) {
 	archive, err := zip.OpenReader(filename)
 	if err != nil {
@@ -515,36 +450,6 @@ func validateCanonicalRequestedDistributions(request PythonProviderRequestV1, ar
 	return nil
 }
 
-type preparedManifestSource struct {
-	Wheel string `json:"wheel"`
-}
-
-type preparedBundleManifest struct {
-	SchemaVersion int                               `json:"schema_version"`
-	LocalSources  map[string]preparedManifestSource `json:"local_sources"`
-}
-
-func readPreparedBundleManifest(dir string) (preparedBundleManifest, error) {
-	manifest := preparedBundleManifest{LocalSources: map[string]preparedManifestSource{}}
-	content, err := os.ReadFile(filepath.Join(dir, preparedBundleManifestName))
-	if os.IsNotExist(err) {
-		return manifest, nil
-	}
-	if err != nil {
-		return preparedBundleManifest{}, err
-	}
-	if err := json.Unmarshal(content, &manifest); err != nil {
-		return preparedBundleManifest{}, fmt.Errorf("decode %s: %w", preparedBundleManifestName, err)
-	}
-	if manifest.SchemaVersion != 1 {
-		return preparedBundleManifest{}, fmt.Errorf("unsupported %s schema %d", preparedBundleManifestName, manifest.SchemaVersion)
-	}
-	if manifest.LocalSources == nil {
-		manifest.LocalSources = map[string]preparedManifestSource{}
-	}
-	return manifest, nil
-}
-
 func selectResolvedSourceArtifacts(sources []providerapi.ResolvedSourceInput, artifacts map[string]inspectedWheel) ([]providerapi.ResolvedSourceInput, error) {
 	selected := make([]providerapi.ResolvedSourceInput, 0, len(sources))
 	for _, source := range sources {
@@ -562,42 +467,6 @@ func selectResolvedSourceArtifacts(sources []providerapi.ResolvedSourceInput, ar
 	return selected, nil
 }
 
-func validateRequestedDistributions(request LegacyResolveRequest, artifacts map[string]legacyprovider.Artifact) error {
-	translated := map[string]bool{}
-	for _, translation := range request.Translations {
-		for distribution := range translation.Mappings {
-			translated[NormalizeDistributionName(distribution)] = true
-		}
-	}
-	for _, component := range request.Components {
-		for _, requirement := range component.Requirements {
-			name, err := pythonRequirementName(requirement)
-			if err != nil {
-				return fmt.Errorf("Python component %q requirement: %w", component.Name, err)
-			}
-			artifact, exists := artifacts[name]
-			if !exists {
-				return fmt.Errorf("prepared Python bundle is missing root distribution %q for component %q", name, component.Name)
-			}
-			if translated[name] {
-				if satisfied, checked := requirementAllowsVersion(requirement, artifact.Version); checked && !satisfied {
-					return fmt.Errorf("translated Python distribution %q built version %s does not satisfy component %q requirement %q", name, artifact.Version, component.Name, requirement)
-				}
-			}
-		}
-	}
-	for _, root := range request.DirectRoots {
-		name, err := pythonRootName(root)
-		if err != nil {
-			return err
-		}
-		if _, exists := artifacts[name]; !exists {
-			return fmt.Errorf("prepared Python bundle is missing direct root distribution %q", name)
-		}
-	}
-	return nil
-}
-
 func pythonRequirementName(requirement string) (string, error) {
 	value := strings.TrimSpace(requirement)
 	match := requirementNamePattern.FindString(value)
@@ -605,39 +474,6 @@ func pythonRequirementName(requirement string) (string, error) {
 		return "", fmt.Errorf("invalid requirement %q", requirement)
 	}
 	return NormalizeDistributionName(match), nil
-}
-
-func pythonRootName(root string) (string, error) {
-	root = strings.TrimSpace(root)
-	if strings.HasSuffix(strings.ToLower(root), ".whl") {
-		requirement, ok := WheelFilenameRequirement(filepath.Base(root))
-		if !ok {
-			return "", fmt.Errorf("invalid Python wheel root %q", root)
-		}
-		name, _, _ := strings.Cut(requirement, "==")
-		return name, nil
-	}
-	return pythonRequirementName(root)
-}
-
-func validateTranslationArtifacts(dir string, request LegacyResolveRequest, artifacts map[string]legacyprovider.Artifact) error {
-	manifest, err := readPreparedBundleManifest(dir)
-	if err != nil {
-		return err
-	}
-	for _, translation := range request.Translations {
-		for distribution := range translation.Mappings {
-			artifact, used := artifacts[distribution]
-			if !used {
-				continue
-			}
-			built, ok := manifest.LocalSources[distribution]
-			if !ok || built.Wheel != artifact.Path {
-				return fmt.Errorf("Python translation for %q did not take precedence in the prepared bundle", distribution)
-			}
-		}
-	}
-	return nil
 }
 
 func fileSHA256(filename string) (string, error) {

@@ -12,6 +12,7 @@ import (
 	"github.com/omry/reploy/internal/deploy"
 	aptprovider "github.com/omry/reploy/internal/providers/apt"
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
+	"github.com/omry/reploy/internal/providerstore"
 )
 
 const overlayCommandBlueprint = `
@@ -106,7 +107,7 @@ func TestRequestOverlayPackageCommandsStoreTypedIntentOnly(t *testing.T) {
 			t.Fatalf("request = %#v", request)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, RequirementsFileName)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, ".reploy", providerstore.StoreDirName)); !os.IsNotExist(err) {
 		t.Fatalf("package intent unexpectedly prepared a bundle: %v", err)
 	}
 	result, err = RemoveRequestOverlayPackages(context.Background(), dir, "application", []string{"debugpy==1.8.0"})
@@ -115,6 +116,35 @@ func TestRequestOverlayPackageCommandsStoreTypedIntentOnly(t *testing.T) {
 	}
 	if len(result.Overlay.DirectPackages) != 1 {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestRequestOverlayInspectionUsesResolvedBlueprintAndCanonicalState(t *testing.T) {
+	dir := writeOverlayCommandDeployment(t)
+	options, err := ListRequestOverlayOptions(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantOptions := []RequestOverlayOptionEntry{{Name: "application/debug", Description: "Install debug support."}}
+	if !reflect.DeepEqual(options, wantOptions) {
+		t.Fatalf("options = %#v, want %#v", options, wantOptions)
+	}
+	if _, err := AddRequestOverlayOptions(context.Background(), dir, []string{"application/debug"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AddRequestOverlayPackages(context.Background(), dir, "application", []string{"rich>=13"}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := ListRequestOverlay(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEntries := []RequestOverlayEntry{
+		{Kind: "option", Component: "application", Value: "application/debug"},
+		{Kind: "package", Component: "application", Value: "rich>=13"},
+	}
+	if !reflect.DeepEqual(entries, wantEntries) {
+		t.Fatalf("entries = %#v, want %#v", entries, wantEntries)
 	}
 }
 

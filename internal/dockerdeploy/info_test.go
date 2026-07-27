@@ -6,119 +6,89 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 )
 
-func TestInfoReportsStateAndBundle(t *testing.T) {
-	packDir := makeTestPack(t)
-	ref, err := deploy.ParsePackRef("file:" + packDir)
+func TestInfoReadsUnbuiltStateV1(t *testing.T) {
+	current, _ := runtimeCurrentBuildFixture(t)
+	document, err := blueprint.DecodeResolvedDocumentV1(current.State.Blueprint)
 	if err != nil {
 		t.Fatal(err)
 	}
-	deployDir := filepath.Join(t.TempDir(), "deployment")
-	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+	document.Environment.ID = "demo"
+	current.State.Blueprint, err = blueprint.EncodeResolvedDocumentV1(document)
+	if err != nil {
 		t.Fatal(err)
 	}
+	current.State.Current = nil
+	current.State.BlueprintSource = "blueprint:\n  schema: 1\n"
+	current.State.Staging = &deploy.StagingStateV1{Schema: deploy.StagingStateSchemaV1}
+	current.State.Deployment = nil
+	dir := t.TempDir()
+	writeInfoStateV1(t, dir, current.State)
 
-	info, err := Info(InfoOptions{Dir: deployDir})
+	if err := RequireStagingDeployment(dir); err != nil {
+		t.Fatal(err)
+	}
+	info, err := Info(InfoOptions{Dir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"target: docker",
-		"phase: staged",
-		"blueprint: file:" + packDir,
-		"bundle roots:",
-		"  - python package demo-suite",
-		"bundle prepared:",
-		"  not built",
-		"files:",
+		"target: docker", "phase: staged", "environment: demo", "platform: linux/amd64",
+		"resolved: not built", "materialized image: not built", "request overlay:", "  (empty)",
 	} {
 		if !strings.Contains(info, want) {
-			t.Fatalf("info missing %q:\n%s", want, info)
-		}
-	}
-	for _, unwanted := range []string{"compose:", "docker env:", "requirements:"} {
-		if strings.Contains(info, unwanted) {
-			t.Fatalf("info should not expose generated path %q:\n%s", unwanted, info)
+			t.Fatalf("state-v1 info missing %q:\n%s", want, info)
 		}
 	}
 }
 
-func TestInfoReportsPreparedBundle(t *testing.T) {
-	packDir := makeTestPack(t)
-	ref, err := deploy.ParsePackRef("file:" + packDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	deployDir := filepath.Join(t.TempDir(), "deployment")
-	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
-		t.Fatal(err)
-	}
-	bundleDir := filepath.Join(deployDir, BundleDirName)
-	if err := os.WriteFile(filepath.Join(bundleDir, "demo_suite-1.2.3-py3-none-any.whl"), []byte("wheel\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(bundleDir, "hydra_core-1.3.2-py3-none-any.whl"), []byte("wheel\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+func TestInfoReportsCurrentStateV1Build(t *testing.T) {
+	current, _ := runtimeCurrentBuildFixture(t)
+	dir := t.TempDir()
+	writeInfoStateV1(t, dir, current.State)
 
-	info, err := Info(InfoOptions{Dir: deployDir})
+	info, err := Info(InfoOptions{Dir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"bundle prepared:",
-		"  - root demo-suite==1.2.3",
-		"  - transitive hydra-core==1.3.2",
+		"resolved: build lock " + string(current.Generation.BuildLockDigest),
+		"materialized image: " + current.Generation.Reference,
 	} {
 		if !strings.Contains(info, want) {
-			t.Fatalf("info missing %q:\n%s", want, info)
+			t.Fatalf("state-v1 info missing %q:\n%s", want, info)
 		}
 	}
 }
 
-func TestInfoReportsResolvedEnvironmentWithoutMaterializingIt(t *testing.T) {
-	ref, err := deploy.ParsePackRef("file:../../examples/omegaconf-inspector/reploy/omegaconf-inspector.blueprint.yaml")
-	if err != nil {
+func TestInfoRejectsLegacyState(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, StateFileName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	deployDir := filepath.Join(t.TempDir(), "deployment")
-	if _, err := Init(InitOptions{Dir: deployDir, Pack: ref}); err != nil {
+	if err := os.WriteFile(path, []byte(`{"phase":"installed"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := Info(InfoOptions{Dir: dir}); err == nil || !strings.Contains(err.Error(), "expected \"state-v1\"") {
+		t.Fatalf("legacy state error = %v", err)
+	}
+}
 
-	info, err := Info(InfoOptions{Dir: deployDir})
+func writeInfoStateV1(t *testing.T, dir string, state deploy.StateV1) {
+	t.Helper()
+	content, err := deploy.EncodeStateV1(state)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{
-		"environment: omegaconf-inspector",
-		"bundle identity: unresolved",
-		"bundle inputs changed: true",
-		"candidate bundle identity: unresolved",
-		"materialized image: unresolved",
-		"phase order:",
-		"  - resolve blueprint",
-		"  - materialize Docker environment",
-		"  - satisfy readiness requirements",
-		"commands:",
-		"  - config check [staging,deployed]:",
-		"endpoints:",
-		"  - http: http://127.0.0.1:18076 -> 0.0.0.0:8076 readiness=/_health_",
-		"backend files:",
-		filepath.Join(deployDir, StateFileName) + " [existing]",
-		filepath.Join(deployDir, ComposeFileName) + " [existing]",
-	} {
-		if !strings.Contains(info, want) {
-			t.Fatalf("info missing %q:\n%s", want, info)
-		}
-	}
-	state, err := loadState(deployDir)
-	if err != nil {
+	path := filepath.Join(dir, StateFileName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if state.Materialization != nil || state.Images != nil || state.Bundle.PreparedFingerprint != "" {
-		t.Fatalf("info mutated deployment state: %#v", state)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

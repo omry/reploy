@@ -133,7 +133,7 @@ func TestAPTResolverSessionCollectsBaseEvidenceBeforeNetworkWork(t *testing.T) {
 		"--user", "0:0", "--workdir", "/", "--read-only", "--network", "default",
 		"--mount", "type=bind,\"source=" + probeWorkspace.HostDir + "\",target=/.reploy-validation,readonly",
 		"--mount", "type=bind,source=" + resolverWorkspace.HostDir + ",target=" + aptprovider.ResolverScratchDirectory,
-		"--entrypoint", ProbeContainerExecutable, descriptor.ImmutableReference, "hold",
+		"--entrypoint", ProbeContainerExecutable, string(descriptor.ConfigDigest), "hold",
 	}
 	if !reflect.DeepEqual((*commands)[0].Args, wantCreate) {
 		t.Fatalf("create = %#v, want %#v", (*commands)[0].Args, wantCreate)

@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/omry/reploy/internal/blueprint"
-	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/probearchive"
 	"github.com/omry/reploy/internal/providers"
 	aptprovider "github.com/omry/reploy/internal/providers/apt"
@@ -54,16 +53,7 @@ func TestPreparedPythonGraphDockerIntegration(t *testing.T) {
 	if closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	source := providers.ResolvedSourceInput{
-		Schema:               providers.ResolvedSourceInputSchemaV1,
-		Component:            "application",
-		LogicalPackage:       "demo-server",
-		SourceManifestDigest: wheel.SHA256,
-		BuilderProfile:       "uv-wheel-v1",
-		BuildSettings:        providers.CanonicalProviderData{Schema: "python-build-settings-v1", Value: canonical.Object{}},
-		EcosystemMetadata:    providers.CanonicalProviderData{Schema: "python-source-metadata-v1", Value: canonical.Object{}},
-		ArtifactDigest:       wheel.SHA256,
-	}
+	source := testPythonResolvedSource("application", "demo-server", "1.0", wheel.SHA256, wheel.SHA256)
 	baseRequest, err := providers.CanonicalBaseProviderRequestV1(providers.BaseProviderRequestV1{
 		Image: base,
 		Exports: map[string]blueprint.BaseExecutableExport{
@@ -208,16 +198,7 @@ func runPreparedAPTPythonGraphDockerIntegration(
 	if closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	source := providers.ResolvedSourceInput{
-		Schema:               providers.ResolvedSourceInputSchemaV1,
-		Component:            "application",
-		LogicalPackage:       "demo-server",
-		SourceManifestDigest: wheel.SHA256,
-		BuilderProfile:       "uv-wheel-v1",
-		BuildSettings:        providers.CanonicalProviderData{Schema: "python-build-settings-v1", Value: canonical.Object{}},
-		EcosystemMetadata:    providers.CanonicalProviderData{Schema: "python-source-metadata-v1", Value: canonical.Object{}},
-		ArtifactDigest:       wheel.SHA256,
-	}
+	source := testPythonResolvedSource("application", "demo-server", "1.0", wheel.SHA256, wheel.SHA256)
 	baseRequest, err := providers.CanonicalBaseProviderRequestV1(providers.BaseProviderRequestV1{
 		Image: base, Exports: baseExports,
 	})

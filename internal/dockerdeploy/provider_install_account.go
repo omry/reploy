@@ -20,6 +20,62 @@ type providerInstallAccountBackendV1 struct {
 	create               func(map[string]string) error
 }
 
+type providerInstallAccountInspectionV1 struct {
+	User       string
+	Group      string
+	UID        *int
+	GID        *int
+	WillCreate bool
+}
+
+type providerInstallAccountInspectionBackendV1 struct {
+	resolve           func(map[string]string) (resolvedInstallOwner, error)
+	creationReadiness func(map[string]string, error) (string, error)
+}
+
+func inspectProviderInstallAccountV1(scope InstallScope, runAs blueprint.RunAs) (providerInstallAccountInspectionV1, error) {
+	return inspectProviderInstallAccountWithV1(scope, runAs, providerInstallAccountInspectionBackendV1{
+		resolve:           resolveInstallOwner,
+		creationReadiness: installOwnerCreationSpecForResolveError,
+	})
+}
+
+func inspectProviderInstallAccountWithV1(
+	scope InstallScope,
+	runAs blueprint.RunAs,
+	backend providerInstallAccountInspectionBackendV1,
+) (providerInstallAccountInspectionV1, error) {
+	parsedScope, err := ParseInstallScope(string(scope))
+	if err != nil {
+		return providerInstallAccountInspectionV1{}, err
+	}
+	if parsedScope != InstallScopeSystem {
+		return providerInstallAccountInspectionV1{}, nil
+	}
+	if backend.resolve == nil || backend.creationReadiness == nil {
+		return providerInstallAccountInspectionV1{}, fmt.Errorf("inspect provider install account requires a complete backend")
+	}
+	values, err := providerInstallAccountValuesV1(runAs)
+	if err != nil {
+		return providerInstallAccountInspectionV1{}, err
+	}
+	inspection := providerInstallAccountInspectionV1{
+		User: strings.TrimSpace(runAs.User), Group: strings.TrimSpace(runAs.Group),
+	}
+	owner, resolveErr := backend.resolve(values)
+	if resolveErr == nil {
+		uid, gid := owner.UID, owner.GID
+		inspection.UID = &uid
+		inspection.GID = &gid
+		return inspection, nil
+	}
+	if _, err := backend.creationReadiness(values, resolveErr); err != nil {
+		return providerInstallAccountInspectionV1{}, fmt.Errorf("resolve system install account: %w", err)
+	}
+	inspection.WillCreate = true
+	return inspection, nil
+}
+
 func prepareProviderInstallAccountV1(
 	ctx context.Context,
 	runAs blueprint.RunAs,

@@ -57,6 +57,9 @@ func mutateRequestOverlayV1(
 	if !found {
 		return RequestOverlayMutationResult{}, fmt.Errorf("deployment state is missing; stage or install the deployment first")
 	}
+	if state.Deployment != nil {
+		return RequestOverlayMutationResult{}, fmt.Errorf("request overlay cannot be changed on an installed deployment; change the staging source and install it again")
+	}
 	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
 	if err != nil {
 		return RequestOverlayMutationResult{}, fmt.Errorf("load resolved blueprint: %w", err)

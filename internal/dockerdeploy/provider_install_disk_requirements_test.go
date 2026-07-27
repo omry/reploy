@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -27,7 +28,7 @@ func TestProviderInstallDiskRequirementsV1CountsPublicationPeakAndCandidates(t *
 		{Path: filepath.Join(destinationDir, DockerEnvFileName), Content: []byte("env"), Mode: 0o600},
 		{Path: filepath.Join(destinationDir, ComposeFileName), Content: []byte("compose"), Mode: 0o644},
 	}
-	requirements, err := providerInstallDiskRequirementsV1(sourceStore, destinationStore, publication, nil, candidates)
+	requirements, err := providerInstallDiskRequirementsV1(sourceStore, destinationStore, publication, nil, candidates, []PathUpdateAction{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +93,7 @@ func TestProviderInstallDiskRequirementsV1RequiresConfiguringStateAndSortedCandi
 		Source: source, Installation: installedBuildPublicationInstallation(destinationDir),
 		References: fixedPublicationReferences(t, destinationDir, 0xc2),
 	}
-	if _, err := providerInstallDiskRequirementsV1(sourceStore, destinationStore, publication, nil, []providerInstallFileCandidateV1{}); err == nil {
+	if _, err := providerInstallDiskRequirementsV1(sourceStore, destinationStore, publication, nil, []providerInstallFileCandidateV1{}, []PathUpdateAction{}); err == nil {
 		t.Fatal("expected ready installation rejection")
 	}
 	publication.Installation.Status = deploy.InstallationStatusConfiguring
@@ -100,7 +101,57 @@ func TestProviderInstallDiskRequirementsV1RequiresConfiguringStateAndSortedCandi
 	if _, err := providerInstallDiskRequirementsV1(sourceStore, destinationStore, publication, nil, []providerInstallFileCandidateV1{
 		{Path: path, Content: []byte("a"), Mode: 0o600},
 		{Path: path, Content: []byte("b"), Mode: 0o600},
-	}); err == nil {
+	}, []PathUpdateAction{}); err == nil {
 		t.Fatal("expected duplicate candidate rejection")
+	}
+}
+
+func TestProviderInstallDiskRequirementsV1CountsManagedBindCopy(t *testing.T) {
+	sourceDir, _, sourceStore, source := installedBuildPublicationSourceFixture(t)
+	destinationDir := t.TempDir()
+	destinationStore, err := providerstore.NewStore(destinationDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	managedSource := filepath.Join(sourceDir, "conf")
+	if err := os.MkdirAll(filepath.Join(managedSource, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(managedSource, "a"), []byte("abc"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(managedSource, "nested", "b"), []byte("12345"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	installation := installedBuildPublicationInstallation(destinationDir)
+	installation.Status = deploy.InstallationStatusConfiguring
+	publication := InstalledBuildPublicationInputV1{
+		Environment: "demo", SourceDeploymentDir: sourceDir, DestinationDeploymentDir: destinationDir,
+		Source: source, Installation: installation, References: fixedPublicationReferences(t, destinationDir, 0xc3),
+	}
+	target := filepath.Join(destinationDir, "conf")
+	requirements, err := providerInstallDiskRequirementsV1(
+		sourceStore, destinationStore, publication, nil, []providerInstallFileCandidateV1{},
+		[]PathUpdateAction{{Name: "config", Kind: PathPreserveManagedBind, Source: managedSource, Target: target}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := requirements[len(requirements)-1]
+	if last.Path != target || last.Bytes != 8 {
+		t.Fatalf("managed bind requirement = %#v", last)
+	}
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	requirements, err = providerInstallDiskRequirementsV1(
+		sourceStore, destinationStore, publication, nil, []providerInstallFileCandidateV1{},
+		[]PathUpdateAction{{Name: "config", Kind: PathPreserveManagedBind, Source: managedSource, Target: target}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requirements) != 1 {
+		t.Fatalf("preserved existing target requirements = %#v", requirements)
 	}
 }

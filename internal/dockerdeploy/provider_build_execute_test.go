@@ -16,7 +16,7 @@ func TestExecuteLockedProviderBuildV1ReturnsExactReuseWithoutBackendWork(t *test
 	input, _, current, _, _ := providerBuildPreparationFixture(t)
 	lock := current.Lock
 	execution := LockedProviderBuildExecutionInputV1{
-		SourceWheels: []providerstore.ArtifactDescriptor{},
+		SourceWheels: []providerstore.ArtifactDescriptor{}, WorkspaceSources: []PythonWorkspaceSource{},
 		Preparation: LockedProviderBuildPreparationV1{
 			Operation: input.Operation, Store: input.Store,
 			Current: &current, ReusableLock: &lock, Reused: true,
@@ -66,6 +66,7 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 		Plan: selected.Plan, Descriptor: selected.Descriptor, Config: selected.Config,
 		Image: completionInput.Graph.PrefixImages[0], Catalog: completionInput.BaseCatalog,
 	}
+	workspaceSources := []PythonWorkspaceSource{{Distribution: "demo-server"}}
 	input := LockedProviderBuildExecutionInputV1{
 		Preparation: LockedProviderBuildPreparationV1{
 			Operation: operation, Store: store, Environment: completionInput.Environment,
@@ -76,8 +77,9 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 			},
 			SelectedBase: selected, PreparedBase: &prepared, FinalImageConfig: pythonConsumerTestImageConfig(),
 		},
-		SourceWheels:   []providerstore.ArtifactDescriptor{},
-		ValidateLayers: true, RunValidation: completionInput.RunValidation,
+		SourceWheels:     []providerstore.ArtifactDescriptor{},
+		WorkspaceSources: workspaceSources,
+		ValidateLayers:   true, RunValidation: completionInput.RunValidation,
 	}
 	wantState := deploy.StateV1{Schema: deploy.StateSchemaV1}
 	wantLock := deploy.BuildLockV1{Schema: deploy.BuildLockSchemaV1}
@@ -85,7 +87,8 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 	result, err := executeLockedProviderBuildV1(context.Background(), input, providerBuildExecutionBackend{
 		executeGraph: func(_ context.Context, got PreparedPythonGraphExecutionInput) (providers.GraphExecutionResult, error) {
 			order = append(order, "graph")
-			if !reflect.DeepEqual(got.Plan, prepared.Plan) || !reflect.DeepEqual(got.Sources, candidateRequest.Sources) || got.CurrentLock != nil || got.RunOptions.Context == nil {
+			if !reflect.DeepEqual(got.Plan, prepared.Plan) || !reflect.DeepEqual(got.Sources, candidateRequest.Sources) ||
+				!reflect.DeepEqual(got.WorkspaceSources, workspaceSources) || got.CurrentLock != nil || got.RunOptions.Context == nil {
 				t.Fatalf("graph input = %#v", got)
 			}
 			return completionInput.Graph, nil
@@ -120,7 +123,8 @@ func TestExecuteLockedProviderBuildV1StopsAfterGraphFailure(t *testing.T) {
 	selected := SelectedProviderBase{Plan: completionInput.Graph.Plan, Descriptor: completionInput.Base, Config: providerBuildExecutionBaseConfig()}
 	prepared := PreparedProviderBase{Plan: selected.Plan, Descriptor: selected.Descriptor, Config: selected.Config}
 	input := LockedProviderBuildExecutionInputV1{
-		SourceWheels: []providerstore.ArtifactDescriptor{},
+		SourceWheels:     []providerstore.ArtifactDescriptor{},
+		WorkspaceSources: []PythonWorkspaceSource{},
 		RunValidation: func(context.Context, FullImageValidationInput) ([]providers.ValidationEvidence, []providers.ExecutableEvidence, error) {
 			return nil, nil, nil
 		},
@@ -170,7 +174,8 @@ func TestExecuteLockedProviderBuildV1RequiresValidationRunnerBeforeGraph(t *test
 			Operation: operation, Store: store, SelectedBase: selected, PreparedBase: &prepared,
 			FinalImageConfig: pythonConsumerTestImageConfig(),
 		},
-		SourceWheels: []providerstore.ArtifactDescriptor{},
+		SourceWheels:     []providerstore.ArtifactDescriptor{},
+		WorkspaceSources: []PythonWorkspaceSource{},
 	}, backend)
 	if err == nil || !strings.Contains(err.Error(), "validation runner") {
 		t.Fatalf("error = %v", err)
@@ -196,7 +201,7 @@ func TestExecuteLockedProviderBuildV1RejectsReleasedPreparationLock(t *testing.T
 	}
 	_, err := executeLockedProviderBuildV1(context.Background(), LockedProviderBuildExecutionInputV1{
 		Preparation:  LockedProviderBuildPreparationV1{Operation: input.Operation},
-		SourceWheels: []providerstore.ArtifactDescriptor{},
+		SourceWheels: []providerstore.ArtifactDescriptor{}, WorkspaceSources: []PythonWorkspaceSource{},
 	}, backend)
 	if err == nil || !strings.Contains(err.Error(), "not held") {
 		t.Fatalf("error = %v", err)

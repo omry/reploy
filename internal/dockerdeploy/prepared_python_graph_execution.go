@@ -20,6 +20,7 @@ type PreparedPythonGraphExecutionInput struct {
 	BaseCatalog      []providers.RealizedOutput
 	Sources          []providers.ResolvedSourceInput
 	SourceWheels     []providerstore.ArtifactDescriptor
+	WorkspaceSources []PythonWorkspaceSource
 	CurrentLock      *deploy.BuildLockV1
 	FinalImageConfig providers.ImageConfigPolicy
 	RunOptions       RunOptions
@@ -50,6 +51,10 @@ func ExecutePreparedPythonGraph(
 	)
 	if err != nil {
 		return providers.GraphExecutionResult{}, err
+	}
+	for id, config := range reuse.NodeConfigs {
+		config.WorkspaceSources = append([]PythonWorkspaceSource{}, input.WorkspaceSources...)
+		reuse.NodeConfigs[id] = config
 	}
 	backend, cleanup, err := preparePythonGraphExecutionBackend(
 		ctx, input.Store, input.Plan, input.BaseDescriptor, input.FinalImageConfig, reuse.NodeConfigs,

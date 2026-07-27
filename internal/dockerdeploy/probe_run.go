@@ -426,16 +426,23 @@ func imageValidationCreateCommandSpecWithAPT(
 		}
 		args = append(args, "--mount", aptMount)
 	}
-	args = append(args, "--entrypoint", workspace.ContainerExecutable, descriptor.ImmutableReference, "hold")
+	args = append(args, "--entrypoint", workspace.ContainerExecutable, string(descriptor.ConfigDigest), "hold")
 	return CommandSpec{Name: "docker", Args: args}, containerName, nil
 }
 
 func validatePreparedProbeWorkspace(descriptor deploy.ImageDescriptor, workspace PreparedProbeWorkspace) error {
-	if err := workspace.Platform.Validate(); err != nil {
-		return fmt.Errorf("probe helper platform: %w", err)
+	if err := validatePreparedProbeWorkspaceShape(workspace); err != nil {
+		return err
 	}
 	if workspace.Platform.Canonical != descriptor.Platform.Canonical {
 		return fmt.Errorf("probe helper platform %s does not match image platform %s", workspace.Platform.Canonical, descriptor.Platform.Canonical)
+	}
+	return nil
+}
+
+func validatePreparedProbeWorkspaceShape(workspace PreparedProbeWorkspace) error {
+	if err := workspace.Platform.Validate(); err != nil {
+		return fmt.Errorf("probe helper platform: %w", err)
 	}
 	if workspace.ContainerDir != ProbeContainerRoot || workspace.ContainerExecutable != ProbeContainerExecutable || !workspace.ReadOnly {
 		return fmt.Errorf("probe workspace does not describe the fixed read-only container mount")
@@ -472,11 +479,11 @@ func dockerMountArgument(fields ...string) (string, error) {
 	var output strings.Builder
 	writer := csv.NewWriter(&output)
 	if err := writer.Write(fields); err != nil {
-		return "", fmt.Errorf("render Docker probe mount: %w", err)
+		return "", fmt.Errorf("render Docker mount: %w", err)
 	}
 	writer.Flush()
 	if err := writer.Error(); err != nil {
-		return "", fmt.Errorf("render Docker probe mount: %w", err)
+		return "", fmt.Errorf("render Docker mount: %w", err)
 	}
 	return strings.TrimSuffix(output.String(), "\n"), nil
 }

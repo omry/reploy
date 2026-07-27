@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
@@ -10,6 +11,108 @@ import (
 	aptprovider "github.com/omry/reploy/internal/providers/apt"
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
 )
+
+type RequestOverlayOptionEntry struct {
+	Name        string
+	Description string
+}
+
+type RequestOverlayEntry struct {
+	Kind      string
+	Component string
+	Value     string
+}
+
+func ListRequestOverlayOptions(ctx context.Context, dir string) ([]RequestOverlayOptionEntry, error) {
+	document, _, err := readStagedRequestOverlay(ctx, dir)
+	if err != nil {
+		return nil, err
+	}
+	entries := []RequestOverlayOptionEntry{}
+	for componentName, component := range document.Environment.Components {
+		for optionName, option := range component.Options {
+			entries = append(entries, RequestOverlayOptionEntry{
+				Name: componentName + "/" + optionName, Description: option.Description,
+			})
+		}
+	}
+	sort.Slice(entries, func(left int, right int) bool { return entries[left].Name < entries[right].Name })
+	return entries, nil
+}
+
+func ListRequestOverlay(ctx context.Context, dir string) ([]RequestOverlayEntry, error) {
+	_, overlay, err := readStagedRequestOverlay(ctx, dir)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]RequestOverlayEntry, 0, len(overlay.SelectedOptions)+len(overlay.DirectPackages))
+	for _, option := range overlay.SelectedOptions {
+		entries = append(entries, RequestOverlayEntry{
+			Kind: "option", Component: option.Component, Value: option.Component + "/" + option.Option,
+		})
+	}
+	for _, request := range overlay.DirectPackages {
+		value, err := displayOverlayPackageRequest(request.Package)
+		if err != nil {
+			return nil, fmt.Errorf("display package request for component %q: %w", request.Component, err)
+		}
+		entries = append(entries, RequestOverlayEntry{Kind: "package", Component: request.Component, Value: value})
+	}
+	return entries, nil
+}
+
+func readStagedRequestOverlay(ctx context.Context, dir string) (document blueprint.Document, overlay deploy.RequestOverlayV1, err error) {
+	lock, err := deploy.AcquireOperationLock(ctx, dir)
+	if err != nil {
+		return blueprint.Document{}, deploy.RequestOverlayV1{}, err
+	}
+	defer func() {
+		if unlockErr := lock.Unlock(); err == nil && unlockErr != nil {
+			err = unlockErr
+		}
+	}()
+	state, found, err := lock.ReadStateV1()
+	if err != nil {
+		return blueprint.Document{}, deploy.RequestOverlayV1{}, fmt.Errorf("read deployment state: %w", err)
+	}
+	if !found {
+		return blueprint.Document{}, deploy.RequestOverlayV1{}, fmt.Errorf("deployment state is missing; stage the deployment first")
+	}
+	if state.Deployment != nil {
+		return blueprint.Document{}, deploy.RequestOverlayV1{}, fmt.Errorf("request overlay is only available on a staging deployment")
+	}
+	document, err = blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	if err != nil {
+		return blueprint.Document{}, deploy.RequestOverlayV1{}, fmt.Errorf("load resolved blueprint: %w", err)
+	}
+	overlay, err = deploy.NormalizeRequestOverlayV1(document, state.Overlay, validateOverlayPackageRequest)
+	if err != nil {
+		return blueprint.Document{}, deploy.RequestOverlayV1{}, fmt.Errorf("validate request overlay: %w", err)
+	}
+	return document, overlay, nil
+}
+
+func displayOverlayPackageRequest(request providers.CanonicalPackageRequest) (string, error) {
+	switch request.Schema {
+	case aptprovider.PackageRequestSchemaV1:
+		decoded, err := aptprovider.DecodeCanonicalPackageRequestV1(request)
+		if err != nil {
+			return "", err
+		}
+		if decoded.Version != "" {
+			return decoded.Name + "=" + decoded.Version, nil
+		}
+		return decoded.Name, nil
+	case pythonprovider.PackageRequestSchemaV1:
+		if err := pythonprovider.ValidateCanonicalPackageRequestV1(request); err != nil {
+			return "", err
+		}
+		requirement, _ := request.Value["requirement"].(string)
+		return requirement, nil
+	default:
+		return "", fmt.Errorf("unsupported package request schema %q", request.Schema)
+	}
+}
 
 func AddRequestOverlayOptions(ctx context.Context, dir string, arguments []string) (deploy.RequestOverlayMutationResult, error) {
 	options, err := deploy.ParseQualifiedOptionGroups(arguments)

@@ -112,16 +112,32 @@ the same command validation and Docker behavior as `reploy app`.
 
 Use `--dir` when you want a different staging directory for this app instance.
 
-## 4. Start and Test Staging
+`stage --update` normally refuses to replace a staging directory belonging to
+a different blueprint. To replace it intentionally, provide the new ref and
+`--force`:
 
 ```bash
+reploy stage --update <new-app-blueprint-ref> --force
+```
+
+Forced replacement cancels queued runs, stops active runs and the staged
+workload, removes the old selected image reference, and records the replacement
+as a fresh unbuilt staging deployment. It does not overwrite arbitrary edited
+files in the directory.
+
+## 4. Build, Start, and Test Staging
+
+```bash
+reploy build
 reploy up
 reploy test
 ```
 
-`reploy up` prepares the selected bundle automatically when the bundle is
-missing or out of date. Use `reploy bundle build` when you want to force that
-preparation step before starting the service.
+`reploy build` resolves the selected component packages, builds the environment
+image, and validates the resulting image. `up`, `restart`, and staged app
+commands perform that build automatically when the selected build is missing or
+stale. Use `reploy build --no-cache` when you need to rerun resolution and image
+construction explicitly.
 
 If the app exposes configuration commands, run those through `reploy app`. The
 exact commands are app-specific.

@@ -198,6 +198,40 @@ func (lock *OperationLock) SetInstallationStateV1(installation InstallationState
 	return state, true, nil
 }
 
+// ClearInstallationStateV1 removes the exact recorded installation facts
+// after host uninstall succeeds, returning the deployment to staged state
+// without changing its current build.
+func (lock *OperationLock) ClearInstallationStateV1(expected InstallationStateV1) (StateV1, bool, error) {
+	if lock == nil {
+		return StateV1{}, false, fmt.Errorf("clear installation state requires an operation lock")
+	}
+	if err := ValidateInstallationStateV1(expected); err != nil {
+		return StateV1{}, false, err
+	}
+
+	lock.mutex.Lock()
+	defer lock.mutex.Unlock()
+	path, err := lock.statePathV1Locked()
+	if err != nil {
+		return StateV1{}, false, err
+	}
+	state, found, err := readStateV1Path(path)
+	if err != nil {
+		return StateV1{}, false, err
+	}
+	if !found || state.Current == nil || state.Deployment == nil {
+		return StateV1{}, false, fmt.Errorf("clear installation state requires a committed installation")
+	}
+	if !reflect.DeepEqual(state.Deployment.Installation, expected) {
+		return StateV1{}, false, fmt.Errorf("installed facts changed before clearing installation state")
+	}
+	state.Deployment = nil
+	if err := writeInstalledStateV1(path, state); err != nil {
+		return StateV1{}, false, err
+	}
+	return state, true, nil
+}
+
 // CommitInstalledStateV1 is the destination state commit point for install.
 // Artifact transfer, image-reference creation, and host-file candidate
 // preparation must succeed first. The caller commits status configuring before
@@ -251,6 +285,7 @@ func (lock *OperationLock) CommitInstalledStateV1(
 
 	candidate := sourceState
 	candidate.Current = &destinationGeneration
+	candidate.Staging = nil
 	candidate.Deployment = &DeploymentStateV1{Schema: DeploymentStateSchemaV1, Installation: installation}
 	if found && reflect.DeepEqual(current, candidate) {
 		return candidate, false, nil

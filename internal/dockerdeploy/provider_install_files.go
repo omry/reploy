@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -25,7 +26,12 @@ func providerInstallFilesV1(plan providerInstallationPlanV1, dockerPath string, 
 	if err != nil {
 		return nil, err
 	}
+	controlFiles, err := providerInstallControlFilesV1(plan)
+	if err != nil {
+		return nil, err
+	}
 	candidates := append(dockerFiles, systemdFiles...)
+	candidates = append(candidates, controlFiles...)
 	sort.Slice(candidates, func(left int, right int) bool { return candidates[left].Path < candidates[right].Path })
 	for index, candidate := range candidates {
 		if err := validateProviderInstallFileCandidateV1(candidate); err != nil {
@@ -34,6 +40,58 @@ func providerInstallFilesV1(plan providerInstallationPlanV1, dockerPath string, 
 		if index > 0 && candidates[index-1].Path == candidate.Path {
 			return nil, fmt.Errorf("install file candidates repeat destination %q", candidate.Path)
 		}
+	}
+	return candidates, nil
+}
+
+func providerInstallControlFilesV1(plan providerInstallationPlanV1) ([]providerInstallFileCandidateV1, error) {
+	if err := deploy.ValidateInstallationStateV1(plan.Installation); err != nil {
+		return nil, fmt.Errorf("install control files: %w", err)
+	}
+	if plan.Installation.Status != deploy.InstallationStatusReady {
+		return nil, fmt.Errorf("install control files require a ready installation plan")
+	}
+	if strings.TrimSpace(plan.ControlScript) == "" {
+		return nil, fmt.Errorf("install control files require a control script name")
+	}
+	mode := controlScriptModeDeployed
+	if isDockerManagedInstallBackend(plan.Backend) {
+		mode = controlScriptModeDockerDesktop
+	}
+	spec := controlScriptSpec{
+		Mode:          mode,
+		TargetDir:     plan.Installation.TargetDir,
+		AppID:         plan.Docker.EnvironmentID,
+		ControlScript: plan.ControlScript,
+	}
+	runtimePath, err := embeddedRuntimeExecutable()
+	if err != nil {
+		return nil, fmt.Errorf("locate installed Reploy runtime: %w", err)
+	}
+	runtimeContent, err := os.ReadFile(runtimePath)
+	if err != nil {
+		return nil, fmt.Errorf("read installed Reploy runtime: %w", err)
+	}
+	candidates := []providerInstallFileCandidateV1{
+		{
+			Path:    filepath.Join(plan.Installation.TargetDir, plan.ControlScript),
+			Content: []byte(renderControlScript(spec)),
+			Mode:    0o755,
+		},
+		{
+			Path:    filepath.Join(plan.Installation.TargetDir, filepath.FromSlash(embeddedRuntimeFileName())),
+			Content: runtimeContent,
+			Mode:    0o755,
+		},
+	}
+	if currentHostPlatform().GOOS == "windows" {
+		powerShellName := plan.ControlScript + ".ps1"
+		spec.ControlScript = powerShellName
+		candidates = append(candidates, providerInstallFileCandidateV1{
+			Path:    filepath.Join(plan.Installation.TargetDir, powerShellName),
+			Content: []byte(renderPowerShellDockerDesktopControlScript(spec)),
+			Mode:    0o755,
+		})
 	}
 	return candidates, nil
 }

@@ -1,0 +1,3 @@
+kind: Changed
+body: Replace the staging `down` command with `stop`, route installs and normal uninstalls through the state-v1 provider pipeline, retain systemd-unit recovery when an installed directory was deleted, remove uninstall dry-run, retain exact blueprint text plus a staging-only `--workspace-root` source link, serialize workload lifecycle, install, and uninstall operations, keep `--wait`, `--drain`, and `--force` policies for `up`, install, and uninstall, and make `stop` and `restart` interrupt active jobs by default after a three-second warning while `--wait` lets active jobs finish.
+time: 2026-07-18T00:00:00+08:00

@@ -1,0 +1,133 @@
+package dockerdeploy
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"time"
+
+	"github.com/omry/reploy/internal/deploy"
+)
+
+type LiveRunStopResultV1 struct {
+	Found bool
+	Run   deploy.LiveRunV1
+}
+
+type liveRunsBackendV1 struct {
+	acquire         func(context.Context, string) (*deploy.OperationLock, error)
+	removeContainer commandRunner
+}
+
+func ListLiveRunsV1(ctx context.Context, deploymentDir string) ([]deploy.LiveRunV1, error) {
+	return listLiveRunsV1(ctx, deploymentDir, liveRunsBackendV1{acquire: deploy.AcquireOperationLock})
+}
+
+func StopLiveRunV1(ctx context.Context, deploymentDir string, id string, dockerPreflightTimeout time.Duration) (LiveRunStopResultV1, error) {
+	return stopLiveRunV1(ctx, deploymentDir, id, dockerPreflightTimeout, liveRunsBackendV1{
+		acquire:         deploy.AcquireOperationLock,
+		removeContainer: runCommand,
+	})
+}
+
+func listLiveRunsV1(ctx context.Context, deploymentDir string, backend liveRunsBackendV1) (runs []deploy.LiveRunV1, err error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("list live runs requires a context")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if deploymentDir == "" {
+		return nil, fmt.Errorf("list live runs requires a deployment directory")
+	}
+	if backend.acquire == nil {
+		return nil, fmt.Errorf("list live runs requires a complete backend")
+	}
+	dir, err := filepath.Abs(deploymentDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve live run deployment directory: %w", err)
+	}
+	operation, err := backend.acquire(ctx, dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if unlockErr := operation.Unlock(); err == nil && unlockErr != nil {
+			err = unlockErr
+		}
+	}()
+	queue, _, err := operation.ReadLiveRunQueueV1()
+	if err != nil {
+		return nil, err
+	}
+	runs = make([]deploy.LiveRunV1, 0, len(queue.Runs))
+	for _, entry := range queue.Runs {
+		if entry.Kind != deploy.LiveRunKindControlV1 {
+			runs = append(runs, entry)
+		}
+	}
+	return runs, nil
+}
+
+func stopLiveRunV1(
+	ctx context.Context,
+	deploymentDir string,
+	id string,
+	dockerPreflightTimeout time.Duration,
+	backend liveRunsBackendV1,
+) (result LiveRunStopResultV1, err error) {
+	if ctx == nil {
+		return result, fmt.Errorf("stop live run requires a context")
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	if deploymentDir == "" {
+		return result, fmt.Errorf("stop live run requires a deployment directory")
+	}
+	if err := deploy.ValidateLiveRunIDV1(id); err != nil {
+		return result, err
+	}
+	if backend.acquire == nil || backend.removeContainer == nil {
+		return result, fmt.Errorf("stop live run requires a complete backend")
+	}
+	dir, err := filepath.Abs(deploymentDir)
+	if err != nil {
+		return result, fmt.Errorf("resolve live run deployment directory: %w", err)
+	}
+	operation, err := backend.acquire(ctx, dir)
+	if err != nil {
+		return result, err
+	}
+	defer func() {
+		if unlockErr := operation.Unlock(); err == nil && unlockErr != nil {
+			err = unlockErr
+		}
+	}()
+	queue, _, err := operation.ReadLiveRunQueueV1()
+	if err != nil {
+		return result, err
+	}
+	run, found := findLiveRunV1(queue, id)
+	if !found {
+		return result, nil
+	}
+	result = LiveRunStopResultV1{Found: true, Run: run}
+	if run.Status == deploy.LiveRunStatusActiveV1 && run.Container != "" {
+		removeErr := backend.removeContainer(
+			TemporaryContainerCleanupCommand(run.Container),
+			RunOptions{Context: ctx, DockerPreflightTimeout: dockerPreflightTimeout},
+		)
+		if removeErr != nil && !isMissingContainerCleanupError(removeErr) {
+			return result, fmt.Errorf("stop live run container %q: %w", run.Container, removeErr)
+		}
+	}
+	_, removed, err := operation.RemoveLiveRunV1(id)
+	if err != nil {
+		return result, err
+	}
+	if !removed {
+		return result, fmt.Errorf("live run %q disappeared while the operation lock was held", id)
+	}
+	return result, nil
+}

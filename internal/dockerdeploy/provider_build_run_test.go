@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -24,9 +25,8 @@ func TestRunProviderBuildV1HoldsOneLockAcrossPreparationAndExecution(t *testing.
 		DeploymentDir: dir, NoCache: true, ValidateLayers: true,
 		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
 	}, providerBuildRunBackend{
-		cleanupFailure: providerBuildRunCleanupFixture,
-		acquire:        deploy.AcquireOperationLock,
-		newStore:       providerstore.NewStore,
+		acquire:  deploy.AcquireOperationLock,
+		newStore: providerstore.NewStore,
 		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
 			order = append(order, "prepare")
 			if err := input.Operation.RequireHeld(); err != nil {
@@ -45,7 +45,7 @@ func TestRunProviderBuildV1HoldsOneLockAcrossPreparationAndExecution(t *testing.
 			if err := input.Preparation.Operation.RequireHeld(); err != nil {
 				t.Fatal(err)
 			}
-			if !input.ValidateLayers || !input.RunOptions.NoCache || len(input.SourceWheels) != 0 {
+			if !input.ValidateLayers || !input.RunOptions.NoCache || len(input.SourceWheels) != 0 || len(input.WorkspaceSources) != 0 {
 				t.Fatalf("execution input = %#v", input)
 			}
 			return want, nil
@@ -85,7 +85,6 @@ func TestRunLockedProviderBuildV1UsesAndRetainsCallerLock(t *testing.T) {
 		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
 		NoCache: true, ValidateLayers: true,
 	}, providerBuildRunBackend{
-		cleanupFailure: providerBuildRunCleanupFixture,
 		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
 			order = append(order, "prepare")
 			if input.Operation != operation || input.Store.Root() != store.Root() || input.Environment != document.Environment.ID || !input.NoCache {
@@ -236,7 +235,6 @@ func TestRunLockedProviderBuildV1RejectsForeignStoreBeforeProviderWork(t *testin
 	_, err = runLockedProviderBuildV1(t.Context(), LockedProviderBuildRunInputV1{
 		Operation: operation, Store: foreignStore, DeploymentDir: dir,
 	}, providerBuildRunBackend{
-		cleanupFailure: providerBuildRunCleanupFixture,
 		prepare: func(context.Context, LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
 			called = true
 			return LockedProviderBuildPreparationV1{}, nil
@@ -251,24 +249,28 @@ func TestRunLockedProviderBuildV1RejectsForeignStoreBeforeProviderWork(t *testin
 	}
 }
 
-func TestRunProviderBuildV1RequiresSourcePreparationForTranslations(t *testing.T) {
+func TestRunProviderBuildV1ObservesWorkspaceSourcesForExecution(t *testing.T) {
 	dir, _ := stageProviderBuildRunState(t, true)
-	called := false
+	prepared := false
+	executed := false
 	_, err := runProviderBuildV1(t.Context(), ProviderBuildRunInputV1{DeploymentDir: dir}, providerBuildRunBackend{
-		cleanupFailure: providerBuildRunCleanupFixture,
-		acquire:        deploy.AcquireOperationLock,
-		newStore:       providerstore.NewStore,
-		prepare: func(context.Context, LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
-			called = true
-			return LockedProviderBuildPreparationV1{}, nil
+		acquire:  deploy.AcquireOperationLock,
+		newStore: providerstore.NewStore,
+		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
+			prepared = true
+			return LockedProviderBuildPreparationV1{Operation: input.Operation, Store: input.Store}, nil
 		},
-		execute: func(context.Context, LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
-			called = true
+		execute: func(_ context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
+			executed = true
+			if len(input.WorkspaceSources) != 1 || input.WorkspaceSources[0].Distribution != "demo" ||
+				input.WorkspaceSources[0].HostDir != filepath.Join(dir, "demo") || len(input.WorkspaceSources[0].Manifest.Entries) == 0 {
+				t.Fatalf("workspace sources = %#v", input.WorkspaceSources)
+			}
 			return LockedProviderBuildExecutionResultV1{}, nil
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "translations are not implemented") || called {
-		t.Fatalf("error/called = %v/%v", err, called)
+	if err != nil || !prepared || !executed {
+		t.Fatalf("error/prepared/executed = %v/%v/%v", err, prepared, executed)
 	}
 	operation, lockErr := deploy.AcquireOperationLock(t.Context(), dir)
 	if lockErr != nil {
@@ -279,6 +281,176 @@ func TestRunProviderBuildV1RequiresSourcePreparationForTranslations(t *testing.T
 	}
 }
 
+func TestRunProviderBuildV1DoesNotObserveWorkspaceSourcesOnExactReuse(t *testing.T) {
+	dir, _ := stageProviderBuildRunState(t, true)
+	if err := os.RemoveAll(filepath.Join(dir, "demo")); err != nil {
+		t.Fatal(err)
+	}
+	executed := false
+	_, err := runProviderBuildV1(t.Context(), ProviderBuildRunInputV1{DeploymentDir: dir}, providerBuildRunBackend{
+		acquire:  deploy.AcquireOperationLock,
+		newStore: providerstore.NewStore,
+		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
+			return LockedProviderBuildPreparationV1{Operation: input.Operation, Store: input.Store, Reused: true}, nil
+		},
+		execute: func(_ context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
+			executed = true
+			if len(input.WorkspaceSources) != 0 {
+				t.Fatalf("workspace sources = %#v", input.WorkspaceSources)
+			}
+			return LockedProviderBuildExecutionResultV1{Reused: true}, nil
+		},
+	})
+	if err != nil || !executed {
+		t.Fatalf("error/executed = %v/%v", err, executed)
+	}
+}
+
+func TestRunLockedProviderBuildV1ReusesUnchangedWorkspaceSourceIdentity(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	sourceDir := filepath.Join(workspaceRoot, "demo")
+	if err := os.Mkdir(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "pyproject.toml"), []byte("[project]\nname='demo-server'\nversion='1.0'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, manifest, err := ObservePythonSourceManifest(sourceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := newPreparedPythonGraphReuseFixtureWithManifest(t, manifest)
+	deploymentDir := filepath.Dir(filepath.Dir(fixture.store.Root()))
+	operation, err := deploy.AcquireOperationLock(t.Context(), deploymentDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	lockDigest, err := operation.PublishBuildLock(fixture.lock, registry.ValidateRequirementProfileV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyDigest, err := deploy.RuntimePolicyDigestV1(fixture.lock.RuntimePolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := deploy.EnvironmentGenerationState{
+		Reference: "reploy/test:g-current", ImageDigest: fixture.lock.FinalImage.Digest,
+		RootFSSubject: fixture.lock.FinalImage.RootFSSubject, BuildLockDigest: lockDigest,
+		Platform: fixture.lock.Platform, RuntimePolicyDigest: policyDigest,
+	}
+	document := providerBuildRunWorkspaceDocument(fixture.request.Platform)
+	resolved, err := blueprint.EncodeResolvedDocumentV1(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := deploy.StateV1{
+		Schema: deploy.StateSchemaV1, Blueprint: resolved, BlueprintSource: "blueprint",
+		Platform: fixture.request.Platform, Overlay: deploy.EmptyRequestOverlayV1(), Current: &generation,
+		Staging: &deploy.StagingStateV1{Schema: deploy.StagingStateSchemaV1, WorkspaceRoot: workspaceRoot},
+	}
+	if err := operation.CommitStateV1(nil, state); err != nil {
+		t.Fatal(err)
+	}
+	prepared := false
+	executed := false
+	_, err = runLockedProviderBuildV1(t.Context(), LockedProviderBuildRunInputV1{
+		Operation: operation, Store: fixture.store, DeploymentDir: deploymentDir,
+		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
+	}, providerBuildRunBackend{
+		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
+			prepared = true
+			if !reflect.DeepEqual(input.Sources, fixture.request.SourceCandidates) {
+				t.Fatalf("reusable sources = %#v", input.Sources)
+			}
+			return LockedProviderBuildPreparationV1{Operation: operation, Store: fixture.store, Reused: true}, nil
+		},
+		execute: func(_ context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
+			executed = true
+			if !reflect.DeepEqual(input.SourceWheels, fixture.sourceWheels) || len(input.WorkspaceSources) != 0 {
+				t.Fatalf("execution source inputs = %#v/%#v", input.SourceWheels, input.WorkspaceSources)
+			}
+			return LockedProviderBuildExecutionResultV1{Reused: true}, nil
+		},
+	})
+	if err != nil || !prepared || !executed {
+		t.Fatalf("error/prepared/executed = %v/%v/%v", err, prepared, executed)
+	}
+	prepared = false
+	executed = false
+	_, err = runLockedProviderBuildV1(t.Context(), LockedProviderBuildRunInputV1{
+		Operation: operation, Store: fixture.store, DeploymentDir: deploymentDir, NoCache: true,
+		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
+	}, providerBuildRunBackend{
+		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
+			prepared = true
+			if len(input.Sources) != 0 || !input.NoCache {
+				t.Fatalf("no-cache preparation = %#v", input)
+			}
+			return LockedProviderBuildPreparationV1{Operation: operation, Store: fixture.store}, nil
+		},
+		execute: func(_ context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
+			executed = true
+			if len(input.SourceWheels) != 0 || len(input.WorkspaceSources) != 1 || input.WorkspaceSources[0].Distribution != "demo-server" {
+				t.Fatalf("no-cache execution source inputs = %#v/%#v", input.SourceWheels, input.WorkspaceSources)
+			}
+			return LockedProviderBuildExecutionResultV1{}, nil
+		},
+	})
+	if err != nil || !prepared || !executed {
+		t.Fatalf("no-cache error/prepared/executed = %v/%v/%v", err, prepared, executed)
+	}
+
+	missingWheelPath, err := fixture.store.BlobPath(fixture.localWheelDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(missingWheelPath); err != nil {
+		t.Fatal(err)
+	}
+	prepared = false
+	executed = false
+	_, err = runLockedProviderBuildV1(t.Context(), LockedProviderBuildRunInputV1{
+		Operation: operation, Store: fixture.store, DeploymentDir: deploymentDir,
+		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
+	}, providerBuildRunBackend{
+		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
+			prepared = true
+			if len(input.Sources) != 0 || input.NoCache {
+				t.Fatalf("repair preparation = %#v", input)
+			}
+			return LockedProviderBuildPreparationV1{Operation: operation, Store: fixture.store}, nil
+		},
+		execute: func(_ context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
+			executed = true
+			if len(input.SourceWheels) != 0 || len(input.WorkspaceSources) != 1 || input.WorkspaceSources[0].Distribution != "demo-server" {
+				t.Fatalf("repair execution source inputs = %#v/%#v", input.SourceWheels, input.WorkspaceSources)
+			}
+			return LockedProviderBuildExecutionResultV1{}, nil
+		},
+	})
+	if err != nil || !prepared || !executed {
+		t.Fatalf("repair error/prepared/executed = %v/%v/%v", err, prepared, executed)
+	}
+
+	prepared = false
+	_, err = runLockedProviderBuildV1(t.Context(), LockedProviderBuildRunInputV1{
+		Operation: operation, Store: fixture.store, DeploymentDir: deploymentDir, Automatic: true,
+		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
+	}, providerBuildRunBackend{
+		prepare: func(context.Context, LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
+			prepared = true
+			return LockedProviderBuildPreparationV1{}, nil
+		},
+		execute: func(context.Context, LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
+			return LockedProviderBuildExecutionResultV1{}, nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "run reploy build --dir") || !strings.Contains(err.Error(), deploymentDir) || prepared {
+		t.Fatalf("automatic repair error/prepared = %v/%v", err, prepared)
+	}
+}
+
 func TestRunProviderBuildV1RejectsInvalidRuntimeContextBeforeProviderWork(t *testing.T) {
 	dir, _ := stageProviderBuildRunState(t, false)
 	called := false
@@ -286,9 +458,8 @@ func TestRunProviderBuildV1RejectsInvalidRuntimeContextBeforeProviderWork(t *tes
 		DeploymentDir: dir,
 		Runtime:       StagedProviderBuildRuntimeV1{Host: blueprint.HostOS("plan9")},
 	}, providerBuildRunBackend{
-		cleanupFailure: providerBuildRunCleanupFixture,
-		acquire:        deploy.AcquireOperationLock,
-		newStore:       providerstore.NewStore,
+		acquire:  deploy.AcquireOperationLock,
+		newStore: providerstore.NewStore,
 		prepare: func(context.Context, LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
 			called = true
 			return LockedProviderBuildPreparationV1{}, nil
@@ -336,7 +507,7 @@ func TestStagedProviderBuildRuntimeV1MapsSupportedHosts(t *testing.T) {
 	}
 }
 
-func stageProviderBuildRunState(t *testing.T, translation bool) (string, blueprint.Document) {
+func stageProviderBuildRunState(t *testing.T, workspace bool) (string, blueprint.Document) {
 	t.Helper()
 	dir := t.TempDir()
 	platform, err := blueprint.ParsePlatform("linux/amd64")
@@ -346,24 +517,57 @@ func stageProviderBuildRunState(t *testing.T, translation bool) (string, bluepri
 	document := blueprint.Document{
 		Blueprint: blueprint.Metadata{Compatibility: blueprint.Compatibility{Platforms: []blueprint.Platform{platform}}},
 		Environment: blueprint.Environment{
-			ID: "demo", Translations: map[string]blueprint.Translation{},
+			ID: "demo", Workspace: blueprint.Workspace{PythonPackages: map[string]string{}},
 			Components: map[string]blueprint.Component{
 				"base": {Type: blueprint.ComponentTypeBase, Base: &blueprint.BaseComponent{Image: "debian:13", Exports: map[string]blueprint.BaseExecutableExport{}}},
 			},
 		},
 	}
-	if translation {
-		document.Environment.Translations["local"] = blueprint.Translation{
-			Type: blueprint.ComponentTypePython, Scope: blueprint.TranslationScopeDevelopment,
-			Root: ".", Mappings: map[string]string{"demo": "demo"},
+	if workspace {
+		document.Environment.Workspace = blueprint.Workspace{
+			Root: ".", PythonPackages: map[string]string{"demo": "demo"},
+		}
+		if err := os.Mkdir(filepath.Join(dir, "demo"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "demo", "pyproject.toml"), []byte("[project]\nname='demo'\nversion='1.0'\n"), 0o644); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if _, err := deploy.SetDesiredStateV1(t.Context(), dir, document, platform, nil); err != nil {
-		t.Fatal(err)
+	var stageErr error
+	if workspace {
+		_, stageErr = deploy.SetStagedDesiredStateV1(t.Context(), dir, document, platform, nil, "blueprint", dir, false)
+	} else {
+		_, stageErr = deploy.SetDesiredStateV1(t.Context(), dir, document, platform, nil)
+	}
+	if stageErr != nil {
+		t.Fatal(stageErr)
 	}
 	return dir, document
 }
 
-func providerBuildRunCleanupFixture(context.Context, LockedProviderBuildPreparationV1) error {
-	return nil
+func providerBuildRunWorkspaceDocument(platform blueprint.Platform) blueprint.Document {
+	return blueprint.Document{
+		Blueprint: blueprint.Metadata{Compatibility: blueprint.Compatibility{Platforms: []blueprint.Platform{platform}}},
+		Environment: blueprint.Environment{
+			ID: "demo", Workspace: blueprint.Workspace{Root: ".", PythonPackages: map[string]string{"demo-server": "demo"}},
+			Components: map[string]blueprint.Component{
+				"base": {
+					Type: blueprint.ComponentTypeBase,
+					Base: &blueprint.BaseComponent{Image: "debian:13", Exports: map[string]blueprint.BaseExecutableExport{
+						"python": {Executable: "/usr/bin/python3"},
+					}},
+					Options: map[string]blueprint.ComponentOption{},
+				},
+				"application": {
+					Type: blueprint.ComponentTypePython,
+					Python: &blueprint.PythonComponent{
+						Interpreter:  blueprint.CommandRequirement{Command: "python", Version: ">=3.11", Supplier: "base"},
+						Requirements: []string{"demo-server==1.0"},
+					},
+					Options: map[string]blueprint.ComponentOption{},
+				},
+			},
+		},
+	}
 }

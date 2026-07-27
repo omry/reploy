@@ -16,8 +16,8 @@ type runtimeProtectedMaterialization struct {
 	GeneratedExecutables []providers.RealizedGeneratedExecutable
 }
 
-// CompileRuntimePolicyV1 binds already-resolved runtime plans to the blueprint
-// mount allowlist and the complete provider graph output/protected-root set.
+// CompileRuntimePolicyV1 binds already-resolved runtime plans to the complete
+// provider graph output/protected-root set.
 func CompileRuntimePolicyV1(
 	document blueprint.Document,
 	graph providers.GraphExecutionResult,
@@ -60,8 +60,6 @@ func compileRuntimePolicyV1(
 	protected []deploy.ProtectedPathV1,
 	plans []deploy.RuntimePlanV1,
 ) (deploy.RuntimePolicyV1, error) {
-	allowedRoots := append([]string{"/mnt"}, document.Docker.AdditionalMountRoots...)
-	sort.Strings(allowedRoots)
 	canonicalPlans := append([]deploy.RuntimePlanV1{}, plans...)
 	for index := range canonicalPlans {
 		canonicalPlans[index].Mounts = append([]deploy.RuntimeMountV1{}, canonicalPlans[index].Mounts...)
@@ -80,8 +78,7 @@ func compileRuntimePolicyV1(
 	}
 	sort.Slice(canonicalPlans, func(left int, right int) bool { return canonicalPlans[left].ID < canonicalPlans[right].ID })
 	policy := deploy.RuntimePolicyV1{
-		Schema: deploy.RuntimePolicySchemaV1, AllowedRoots: allowedRoots,
-		ProtectedPaths: protected, Plans: canonicalPlans,
+		Schema: deploy.RuntimePolicySchemaV1, ProtectedPaths: protected, Plans: canonicalPlans,
 	}
 	if err := deploy.ValidateRuntimePolicyV1(policy); err != nil {
 		return deploy.RuntimePolicyV1{}, err
@@ -192,24 +189,8 @@ func validateRuntimePolicyExecutables(policy deploy.RuntimePolicyV1, catalog []p
 }
 
 func validateRuntimePolicyOverlays(policy deploy.RuntimePolicyV1) error {
-	for _, root := range policy.AllowedRoots {
-		if root == "/mnt" {
-			continue
-		}
-		for _, protected := range policy.ProtectedPaths {
-			if protected.Kind == deploy.ProtectedPathExecutablePath {
-				continue
-			}
-			if runtimePolicyPathsOverlap(root, protected.Path) {
-				return fmt.Errorf("runtime allowed root %q overlaps protected %s %q", root, protected.Kind, protected.Path)
-			}
-		}
-	}
 	for _, plan := range policy.Plans {
 		for index, mount := range plan.Mounts {
-			if !runtimeMountDestinationAllowed(mount.Destination, policy.AllowedRoots) {
-				return fmt.Errorf("runtime plan %q mount destination %q is outside allowed roots", plan.ID, mount.Destination)
-			}
 			for _, previous := range plan.Mounts[:index] {
 				if runtimePolicyPathsOverlap(previous.Destination, mount.Destination) {
 					return fmt.Errorf("runtime plan %q mount destinations %q and %q overlap", plan.ID, previous.Destination, mount.Destination)
@@ -223,21 +204,6 @@ func validateRuntimePolicyOverlays(policy deploy.RuntimePolicyV1) error {
 		}
 	}
 	return nil
-}
-
-func runtimeMountDestinationAllowed(destination string, roots []string) bool {
-	for _, root := range roots {
-		if root == "/mnt" {
-			if strings.HasPrefix(destination, "/mnt/") {
-				return true
-			}
-			continue
-		}
-		if destination == root || strings.HasPrefix(destination, root+"/") {
-			return true
-		}
-	}
-	return false
 }
 
 func runtimePolicyPathsOverlap(left string, right string) bool {

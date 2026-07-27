@@ -26,7 +26,7 @@ func fullValidationInput(t *testing.T, digestChar string) FullImageValidationInp
 	return FullImageValidationInput{
 		Image: request.Source, Profiles: []providers.RequirementProfile{}, Outputs: []providers.RealizedOutput{},
 		RuntimePolicy: deploy.RuntimePolicyV1{
-			Schema: deploy.RuntimePolicySchemaV1, AllowedRoots: []string{"/mnt"}, ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{},
+			Schema: deploy.RuntimePolicySchemaV1, ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{},
 		},
 	}
 }

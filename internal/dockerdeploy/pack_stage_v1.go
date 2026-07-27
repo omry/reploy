@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/omry/reploy/internal/deploy"
 )
@@ -12,6 +13,7 @@ type PackDesiredStateStageInputV1 struct {
 	DeploymentDir    string
 	Pack             deploy.PackRef
 	ExplicitPlatform string
+	WorkspaceRoot    string
 	Create           bool
 }
 
@@ -22,9 +24,12 @@ type PackDesiredStateStageResultV1 struct {
 
 type LoadedPackDesiredStateStageInputV1 struct {
 	DeploymentDir    string
-	Pack             deploy.AppPack
+	Blueprint        deploy.LoadedBlueprint
 	ExplicitPlatform string
+	WorkspaceRoot    string
 	Create           bool
+	Force            bool
+	RunOptions       RunOptions
 }
 
 // StagePackDesiredStateV1 resolves one blueprint reference and records only
@@ -43,12 +48,13 @@ func StagePackDesiredStateV1(ctx context.Context, input PackDesiredStateStageInp
 		return PackDesiredStateStageResultV1{}, fmt.Errorf("stage blueprint requires a blueprint reference")
 	}
 
-	pack, err := deploy.LoadPack(input.Pack)
+	loaded, err := deploy.LoadBlueprint(input.Pack)
 	if err != nil {
 		return PackDesiredStateStageResultV1{}, err
 	}
 	return StageLoadedPackDesiredStateV1(ctx, LoadedPackDesiredStateStageInputV1{
-		DeploymentDir: input.DeploymentDir, Pack: pack, ExplicitPlatform: input.ExplicitPlatform, Create: input.Create,
+		DeploymentDir: input.DeploymentDir, Blueprint: loaded, ExplicitPlatform: input.ExplicitPlatform,
+		WorkspaceRoot: input.WorkspaceRoot, Create: input.Create,
 	})
 }
 
@@ -64,23 +70,40 @@ func StageLoadedPackDesiredStateV1(ctx context.Context, input LoadedPackDesiredS
 	if input.DeploymentDir == "" {
 		return PackDesiredStateStageResultV1{}, fmt.Errorf("stage blueprint requires a deployment directory")
 	}
-	pack := input.Pack
-	if pack.Environment == nil {
-		return PackDesiredStateStageResultV1{}, fmt.Errorf("blueprint %q does not use the environment model", pack.AppID)
-	}
+	loaded := input.Blueprint
 	if err := prepareDesiredStateStageDirV1(input.DeploymentDir, input.Create); err != nil {
 		return PackDesiredStateStageResultV1{}, err
 	}
-	desired, err := StageDesiredStateV1(ctx, DesiredStateStageInputV1{
+	workspaceRoot := loaded.WorkspaceRoot
+	if input.WorkspaceRoot != "" {
+		resolvedWorkspaceRoot, err := filepath.Abs(input.WorkspaceRoot)
+		if err != nil {
+			return PackDesiredStateStageResultV1{}, fmt.Errorf("resolve staging workspace root: %w", err)
+		}
+		workspaceRoot = filepath.Clean(resolvedWorkspaceRoot)
+	}
+	stageInput := DesiredStateStageInputV1{
 		DeploymentDir:    input.DeploymentDir,
-		Document:         *pack.Environment,
+		Document:         loaded.Document,
 		ExplicitPlatform: input.ExplicitPlatform,
+		BlueprintSource:  loaded.BlueprintSource,
+		WorkspaceRoot:    workspaceRoot,
 		Create:           input.Create,
-	})
+	}
+	var desired deploy.DesiredStateUpdateResult
+	var err error
+	if input.Force {
+		desired, err = ForceReplaceStagedDesiredStateV1(ctx, ForceReplaceStagedDesiredStateInputV1{
+			DesiredState: stageInput,
+			RunOptions:   input.RunOptions,
+		})
+	} else {
+		desired, err = StageDesiredStateV1(ctx, stageInput)
+	}
 	if err != nil {
 		return PackDesiredStateStageResultV1{}, err
 	}
-	return PackDesiredStateStageResultV1{AppID: pack.AppID, DesiredState: desired}, nil
+	return PackDesiredStateStageResultV1{AppID: loaded.Document.Environment.ID, DesiredState: desired}, nil
 }
 
 func prepareDesiredStateStageDirV1(dir string, create bool) error {

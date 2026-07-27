@@ -1,6 +1,9 @@
 package blueprint
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Document is the fully resolved schema-1 blueprint consumed by Reploy.
 // Parsing retains lazy expressions separately and produces this typed form only
@@ -19,35 +22,35 @@ type Metadata struct {
 }
 
 type Environment struct {
-	ID            string
-	ControlScript string
-	Vars          map[string]any
-	Translations  map[string]Translation
-	Components    map[string]Component
-	Terminal      Terminal
-	Install       Install
-	Paths         map[string]Path
-	Executables   map[string]Executable
-	Commands      map[string]Command
-	Workload      *Workload
+	ID              string
+	ControlScript   string
+	Vars            map[string]any
+	Workspace       Workspace
+	Components      map[string]Component
+	AllowConcurrent ConcurrentRunPolicy
+	Terminal        Terminal
+	Install         Install
+	Mounts          map[string]EnvironmentMount
+	Commands        map[string]Command
+	Workload        *Workload
 }
+
+type ConcurrentRunPolicy string
+
+const (
+	ConcurrentRunAuto ConcurrentRunPolicy = "auto"
+	ConcurrentRunYes  ConcurrentRunPolicy = "yes"
+	ConcurrentRunNo   ConcurrentRunPolicy = "no"
+)
 
 type Terminal struct {
 	ColorEnv string
 }
 
-type Translation struct {
-	Type     ComponentType
-	Scope    TranslationScope
-	Root     string
-	Mappings map[string]string
+type Workspace struct {
+	Root           string
+	PythonPackages map[string]string
 }
-
-type TranslationScope string
-
-const (
-	TranslationScopeDevelopment TranslationScope = "development"
-)
 
 type ComponentType string
 
@@ -58,11 +61,12 @@ const (
 )
 
 type Component struct {
-	Type    ComponentType
-	Base    *BaseComponent
-	Python  *PythonComponent
-	APT     *APTComponent
-	Options map[string]ComponentOption
+	Type        ComponentType
+	Base        *BaseComponent
+	Python      *PythonComponent
+	APT         *APTComponent
+	Options     map[string]ComponentOption
+	Executables map[string]Executable
 }
 
 type BaseComponent struct {
@@ -89,10 +93,10 @@ type ComponentOption struct {
 	APTPackages        []APTPackageRequest
 }
 
-type Path struct {
-	Container string
-	Writable  bool
-	Update    UpdatePolicy
+type EnvironmentMount struct {
+	Target       string
+	Writable     bool
+	UpdatePolicy UpdatePolicy
 }
 
 type UpdatePolicy string
@@ -104,7 +108,6 @@ const (
 )
 
 type Executable struct {
-	Component  string
 	Binary     string
 	Order      []ArgumentSegment
 	ArgvPrefix []string
@@ -137,6 +140,19 @@ type Command struct {
 	ForwardFlags    []string
 	Argv            []string
 	Order           []ArgumentSegment
+}
+
+func (environment Environment) ResolveExecutableProfile(reference string) (string, Executable, bool) {
+	componentName, profileName, found := strings.Cut(reference, ".")
+	if !found || componentName == "" || profileName == "" || strings.Contains(profileName, ".") {
+		return "", Executable{}, false
+	}
+	component, found := environment.Components[componentName]
+	if !found {
+		return "", Executable{}, false
+	}
+	profile, found := component.Executables[profileName]
+	return componentName, profile, found
 }
 
 type Workload struct {
@@ -210,10 +226,9 @@ type InstallSuccess struct {
 }
 
 type Docker struct {
-	Image                string
-	AdditionalMountRoots []string
-	Mounts               map[string]DockerMount
-	Workload             *DockerWorkload
+	Image    string
+	Mounts   map[string]DockerMount
+	Workload *DockerWorkload
 }
 
 type MountMode string
@@ -226,11 +241,11 @@ const (
 )
 
 type DockerMount struct {
-	Extends string
-	Mode    MountMode
-	Source  string
-	Name    string
-	Path    Path
+	Extends  string
+	Mode     MountMode
+	Source   string
+	Name     string
+	Contract EnvironmentMount
 }
 
 type DockerWorkload struct {

@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-15
+updated: 2026-07-22
 summary: Concrete implementation design for the provider graph, APT/dpkg bundles, generated image layers, and cross-provider executable consumption.
 implements: docs/APT_PROVIDER.md
 ---
@@ -50,7 +50,7 @@ architecture. The detailed design deliberately replaces these assumptions:
 | one `Materialization` per generated image | ordered provider-node transactions, one layer each |
 | image identity uses directory tags and labels | content-derived image identity plus directory-owned generation references |
 | host `runtime.GOARCH` chooses the target | blueprint-level OCI compatibility set plus explicit backend selection |
-| runtime startup may build a missing image | `reploy build` and the explicit build phase of `reploy install` may resolve and materialize; runtime operations never do |
+| runtime startup may build without saying so | staged up, restart, and app commands visibly ensure a current build; installed runtime operations never build |
 | mutable state embeds prototype bundle structures | versioned request overlay, local build lock, and generation pointer |
 
 Existing types may be adapted during migration, but they must not be extended in
@@ -293,11 +293,23 @@ requirement. A missing component, unsupported direct-package capability,
 syntax error, or payload that does not match the component type rejects the
 whole command and leaves the overlay unchanged.
 
-Blueprint translations are not overlay entries. During `reploy build`, a used
-translation's local-source inspection produces a `ResolvedSourceInput`
+Staging package overrides are not blueprint or request-overlay entries. A
+staging directory may contain `package-overrides.yaml`, an explicit sparse
+environment overlay whose `environment.id` must match the retained blueprint.
+For each provider-owned package identifier it selects exactly one local `path`
+or upstream `version`. During `reploy build`, inspection of a selected local
+source produces a `ResolvedSourceInput`
 containing the source-manifest digest, builder/toolchain profile, settings,
 ecosystem metadata, and built-artifact digest. The resolved request and its
 digest live in the build lock; the physical source path does not.
+
+The resolver consults a mapping only after the blueprint or dependency closure
+requires its normalized package identifier. A match takes precedence over the
+blueprint's candidate selection; without one, the provider follows the
+blueprint normally. A mapping never adds a root requirement. Local paths are
+inspected and built only when selected, while version mappings use the
+provider's normal configured upstream. Every selected result must still satisfy
+the complete active dependency graph.
 
 ```go
 type ResolvedSourceInput struct {
@@ -316,6 +328,30 @@ type ResolvedSourceInput struct {
 `(component, logical package)`. Both provider-owned values must have recognized
 schemas. Source roots and host paths are used only while producing these
 content-bound values and are absent from the record.
+
+The Python `python-source-manifest-v1` observer records sorted relative paths,
+entry kinds, regular-file content digests, portable permission bits, and safe
+relative symlink targets. It omits version-control metadata, common generated
+development environments and caches, `node_modules`, `.egg-info` directories,
+and Python bytecode. A source symlink whose resolved target escapes the source
+root is rejected. The source builder receives a snapshot containing exactly
+the recorded entries, so ignored or unrecorded host content cannot affect the
+built wheel.
+
+V1 does not expose Git, Mercurial, Sapling, or Jujutsu repository metadata to
+source builds. A project whose version or file list requires live VCS metadata
+must provide a build fallback that works from an ordinary source snapshot.
+Explicit opt-in VCS metadata support is deferred until a concrete package needs
+it.
+
+The Docker backend may produce that path-free candidate list during one
+provider-node preparation session, after the node's exact upstream prefix and
+consumer interpreter are known. `GraphNodePreparation.SourceCandidates`
+replaces only that node's provisional candidate list for final contract
+validation; physical locators never cross into the common graph request or
+result. A fresh Python preparation returns only its selected resolved sources
+to the graph, while unselected override mappings remain uninspected and absent from build
+identity.
 
 This produces two intentionally different values:
 
@@ -506,7 +542,7 @@ package value is the provider's normalized requirement record under
 validation, and provider normalization. It includes runtime and Docker policy,
 not only provider components, because those fields participate in build
 staleness. It excludes YAML spelling/order, comments, source locations, and
-physical translation roots. Its digest is
+staging package overrides. Its digest is
 `canonical.Sum("resolved-blueprint", "blueprint-resolved-v1", projection)`.
 
 ## Provider Registry and Node Planning
@@ -796,8 +832,8 @@ The resolver cache key is the digest of:
 - selected platform.
 
 The Python profile includes the selected interpreter evidence, platform/ABI,
-declared build prerequisites, builder profile, requirements, translations, and
-resolved local-source inputs. The APT profile binds the exact base image,
+declared build prerequisites, builder profile, requirements, selected staging
+package overrides, and resolved local-source inputs. The APT profile binds the exact base image,
 APT/dpkg fixed-interface evidence, mapped native architecture, repository/trust
 state transitively supplied by that base, and normalized root request.
 
@@ -1747,6 +1783,20 @@ container alive; it performs no inspection or command dispatch. A request has
 no Reploy-defined path, chain, byte, or elapsed-time limit and remains subject
 to caller cancellation and ordinary operating-system resource failures.
 
+The helper also accepts one fixed `copy-volume-tree` operation for installed
+named-volume updates. Reploy mounts the source volume read-only and a newly
+created empty target volume writable at fixed paths, uses the final image only
+as an immutable container root with the helper as entrypoint, and disables the
+network. The helper copies directories, regular files, symlinks, hardlinks,
+modes, regular-file and directory timestamps, and numeric ownership; it rejects
+unsupported special files and a nonempty target. This is a low-level filesystem
+operation, not a generic command surface, and it removes any dependency on
+application-image `/bin/sh` or `cp` implementations. The container has a
+deterministic internal name. A retry removes a stale copy container before
+target-volume replacement. Helper-preparation or copy failure removes the
+incomplete target; copy failure or cancellation also force-removes the
+container.
+
 The release build compiles exactly three static helpers:
 
 | Target | Build settings |
@@ -2007,15 +2057,14 @@ defaults are not selection inputs.
 
 The resolved Docker plan compiles a runtime policy after interpolation,
 `extends`, backend-generated mounts, phase selection, and effective user
-selection. `/mnt` is the built-in allowed root. A blueprint may add explicit
-absolute normalized roots through `docker.additional_mount_roots`; `/`,
-duplicate or overlapping roots, and intersections with protected
-Reploy/provider roots are invalid.
+selection. An omitted destination defaults to `/mnt/<mount-name>`. An explicit
+destination may be any normalized absolute Linux path other than `/`; there is
+no separate mount-root allowlist. Duplicate or overlapping destinations and
+intersections with reserved system, Reploy, or provider paths are invalid.
 
 ```go
 type RuntimePolicyV1 struct {
     Schema          string
-    AllowedRoots    []string
     ProtectedPaths  []ProtectedPathV1
     Plans           []RuntimePlanV1
 }
@@ -2039,8 +2088,8 @@ type RuntimeMountV1 struct {
 }
 ```
 
-`Schema` is `runtime-policy-v1`. Allowed roots and protected paths are unique
-normalized absolute paths sorted by path. Protected kind is `reploy-root`,
+`Schema` is `runtime-policy-v1`. Protected paths are unique normalized absolute
+paths sorted by path. Protected kind is `reploy-root`,
 `provider-root`, `provider-leaf`, or `executable-path`; owner is the stable node
 or qualified-output identity. Plans use the stable command/workload/probe ID and
 are sorted by ID. Mounts are sorted by destination; `SourceKind` records only
@@ -2057,9 +2106,12 @@ build identity input.
 
 Each one-shot command and `reploy shell` mounts a fresh anonymous Docker volume
 at `/mnt/reploy-home` for `HOME` and `TMPDIR`. It is disk-backed, unnamed, and
-removed with the transient container; explicit interruption cleanup uses
-forced container removal with anonymous-volume removal. Workload containers
-retain a separate tmpfs home at `/mnt/reploy-home`.
+removed with the transient container. The embedded platform helper assigns the
+empty volume to the selected runtime UID/GID, restricts it to that identity,
+drops root privileges, and directly executes the requested command. Explicit
+interruption cleanup uses forced container removal with anonymous-volume
+removal. Workload containers retain a separate tmpfs home at
+`/mnt/reploy-home`.
 
 The policy digest is
 `canonical.Sum("runtime-policy", "runtime-policy-v1", policy)`. It is recorded
@@ -2076,8 +2128,9 @@ During `reploy build`, after interpolation, phase selection, and generated
 mounts are known, Reploy compiles every runtime plan and full final-image
 validation checks it in this order:
 
-1. Every destination is a strict descendant of `/mnt`, or equal to or beneath
-   one additional allowed root. Destinations are unique and non-overlapping.
+1. Every destination is a normalized absolute Linux path other than `/` and
+   avoids reserved kernel, Docker, secret, and Reploy namespaces. Destinations
+   are unique and non-overlapping.
 2. Against the exact immutable image, the destination is absent or an empty
    real directory. The backend walks existing ancestors with no-follow
    `lstat`; an existing file, symlink, non-directory, mountpoint, or non-empty
@@ -2091,10 +2144,9 @@ validation checks it in this order:
    or access ACL.
 
 Docker-intrinsic kernel and resolver mounts are not authored by the blueprint
-or Reploy mount plan and are outside the allowed-root check. All
-Reploy-generated mounts are checked. Additional roots and the compiled mount
-plans are build inputs recorded in the build lock; a change makes the build
-stale but does not affect provider bundles or provider materialization
+or Reploy mount plan. All Reploy-generated mounts are checked. The compiled
+mount plans are build inputs recorded in the build lock; a change makes the
+build stale but does not affect provider bundles or provider materialization
 transactions.
 
 Immediately before a workload or transient container, including commands,
@@ -2105,25 +2157,83 @@ read/write policy. Reploy does not run a separate access preflight or simulate
 the selected numeric identity. Docker container creation and the workload are
 authoritative for runtime permission failures.
 
+## Runtime Admission
+
+App commands and `reploy shell` use the deployment-local live admission queue
+defined by `BLUEPRINT_ENVIRONMENT_MODEL.md`. `environment.allow_concurrent`
+accepts `yes`, `no`, or `auto` and defaults to `auto`; automatic concurrency is
+allowed only when all shared environment mounts in the effective plans are
+read-only. Private per-run home storage and reserved `--output-file` staging do
+not make a plan writable, while `--output-dir` does.
+
+Queue entries exist only while waiting or active. They have opaque validated run
+IDs and retain enough data for fair arrival ordering, status display,
+cancellation, owning operation, selected generation, and active Docker
+container identity. There is no completed-run history or durable counter.
+`reploy runs list` shows the outstanding entries, and `reploy runs stop RUN_ID`
+cancels a waiter or stops an active container. A syntactically valid absent ID
+is a successful no-op reported as possibly already finished.
+
+Without `--wait`, a conflicting run fails immediately and names the controlling
+policy and writable mount when applicable. `--wait` joins a cancellation-aware
+FIFO queue with no fixed timeout; multiple waiters cannot bypass one another.
+Shell sessions are long-running entries in the same queue.
+
+`up`, `stop`, `restart`, `install`, and `uninstall` are serialized control
+operations. `up`, install, and uninstall retain default conflict failure plus
+the mutually exclusive `--wait`, `--drain`, and `--force` modes. `stop` and
+`restart` instead cancel queued runs and stop active runs by default. When jobs
+would be affected, the invoking command logs the counts and `--wait`
+alternative, then pauses for three seconds so Ctrl-C can abort before mutation;
+it never writes into another run's terminal. Their `--wait` form cancels queued
+runs but lets active runs finish. Lifecycle hooks are sequential steps of the
+owning control operation and never receive their own run IDs or queue entries.
+Runs queued behind `up`, `stop`, or `restart` may continue afterward; an install
+or uninstall generation change cancels older waiters with an explicit retry
+error.
+
+The same persisted queue records lifecycle operations so later runs cannot
+jump ahead of a waiting restart, install, or other control action. These are
+internal queue entries rather than app runs: they have no public run IDs,
+`reploy runs list` omits them, and `reploy runs stop` does not accept them.
+Each entry has a kernel-backed ownership lease, allowing the next queue
+operation to remove it automatically if its owning process exits.
+
+The directory operation lock protects admission changes and Docker container
+creation, not the life of a run. Reploy creates the container while holding the
+lock, records its active queue state, releases the lock, and then starts and
+attaches to it. Completion or cancellation reacquires the lock to remove the
+live entry. Build, ordinary stage/update, overlay mutation, and clean do not
+join this runtime queue. Cross-blueprint `stage --update APP_REF --force` does:
+it uses a hidden force-admitted stage marker, cancels queued runs, stops active
+runs and the persistent staged workload, removes the old generation reference,
+and commits the replacement as a fresh unbuilt staging deployment. The flag
+does not overwrite arbitrary edited files in the staging directory.
+
 ## Build Orchestration
 
-`reploy build` and `reploy install` are the only public operations that may
-resolve bundles or construct an environment image. Install uses the same build
-pipeline as `reploy build`; it does not require the user to run `reploy build`
-first. `stage` and overlay commands may make the recorded build stale but do
-not perform hidden provider work. `up`, restart, shell, command, test,
-lifecycle actions, and probes require a matching recorded build and otherwise
-instruct the user to run `reploy build`.
+`reploy build` is the explicit build operation. Install uses the same build
+pipeline; it does not require the user to run `reploy build` first. `stage` and
+overlay commands may make the recorded build stale but do not perform provider
+work. Staged up, restart, and app commands automatically ensure the current
+build and visibly report that phase. Staged stop can stop the recorded workload
+after build validation fails; staged shell, test, and observation commands
+require a matching recorded build. Installed runtime operations never resolve
+or build; changing their bundle requires a new staging operation followed by
+install.
 
 The operation contract is:
 
 | Operation | Build behavior |
 |---|---|
-| `reploy build` | Ensures the selected deployment has a current image by running the build pipeline. It does not install the deployment. |
+| `reploy build` | Ensures the selected deployment has a current image by running the build pipeline. It repairs a missing locked source artifact with normal cache behavior and does not install the deployment. |
 | `reploy install` from a staged deployment | Ensures the staged deployment has a current image, reusing a matching recorded build or running the build pipeline, then transfers the selected build into the installed deployment. |
 | Direct `reploy install BLUEPRINT` | Creates its private temporary staging-like workspace, runs the build pipeline there, transfers the selected build into the installed deployment, then removes the temporary workspace. |
 | `stage` and bundle-overlay mutations | Change requested state only. They may make the recorded build stale but never run the build pipeline. |
-| `up`, restart, shell, command, test, lifecycle actions, and probes | Consume the committed image only. They never resolve, build, or repair it. |
+| Staged `up`, restart, and app commands | Ensure the current build automatically, reporting the build phase before running. Unexpectedly missing locked source artifacts fail with guidance to run `reploy build`; these commands do not repair them. |
+| Staged `stop` | Stop the recorded workload even when current-build validation fails, without building or repairing it. |
+| Staged shell, test, and observation commands | Consume the committed image and reject a missing or stale build. |
+| Installed runtime operations | Consume the installed committed image only. They never resolve, build, repair, or change the installed bundle. |
 | `bundle clean` | Removes the selected deployment's provider-store cache. An existing committed image remains runnable; a later build or install build phase recreates any required cache entries. |
 
 Install reports its resolve, download, materialization, and validation work as
@@ -2138,15 +2248,24 @@ and service files before changing the live installation. Writing the actual
 adjacent candidates is the lightweight destination permission check and leaves
 no separate probe files. The already-required Docker build and image validation
 prove Docker API access, so install does not repeat a Docker permission probe.
+A failed first install before state publication removes the destination it
+created after releasing its operation lock; cleanup first isolates and verifies
+that the directory still contains only bootstrap lock state, and retains a
+destination that another operation claimed or changed.
 
-After candidates are ready, install publishes the new build and state with
-installation status `configuring`, replaces the live host configuration from
-the candidates, and atomically changes only that status to `ready`. It keeps no
-backup and attempts no rollback. A failure after publication leaves the new
-installation recorded as `configuring`; after the underlying cause is fixed,
-the same install or uninstall command accepts that state and completes or
-removes it. A startup failure happens after status becomes `ready` and likewise
-leaves the new installation in place for inspection and a later retry.
+After candidates are ready, install acquires runtime admission using its
+default, `--wait`, `--drain`, or `--force` mode and stops the persistent
+workload being replaced. It does this before publishing the new installed state
+or changing live host configuration or managed mount contents. Install then
+publishes the new build and state with installation status `configuring`,
+replaces live configuration from the candidates, and atomically changes only
+that status to `ready`. It keeps no backup and attempts no rollback. A failure
+after publication leaves the new installation recorded as `configuring`; after
+the underlying cause is fixed, the same install or uninstall command accepts
+that state and completes or removes it. A startup failure happens after status
+becomes `ready` and likewise leaves the new installation in place for
+inspection and a later retry. Previously waiting runs fail and require an
+explicit retry because the installed generation changed.
 
 The build state machine, used by `reploy build` and by install's build phase,
 is:
@@ -2178,10 +2297,14 @@ lock directory
 
 A matching provider-node entry in the current committed build lock, with every
 locked artifact present and valid in the deployment store, skips resolution and
-index refresh. A missing current lock, key mismatch, missing or invalid
-artifact, or `--no-cache` runs the affected resolver. For the combined APT node,
-that means one fresh `apt-get update` followed by resolution and download of the
-complete requested closure. `--no-cache` also bypasses realized-image lookup
+index refresh. During explicit `reploy build`, a missing locked artifact is a
+cache miss for the affected provider result; other verified artifacts remain
+eligible for reuse. An automatic build check instead reports unexpected cache
+damage and directs the user to explicit build. Invalid content or inconsistent
+records remain corruption errors rather than cache misses. A missing current
+lock, key mismatch, or `--no-cache` runs the affected resolver. For the combined
+APT node, that means one fresh `apt-get update` followed by resolution and
+download of the complete requested closure. `--no-cache` also bypasses realized-image lookup
 in the current deployment and the backend build cache, then reruns materializers
 and validation; it may reuse verified raw blobs already in this deployment's
 store and does not delete cache content.
@@ -2196,13 +2319,16 @@ for a later `reploy build` or install build phase. Missing/malformed state,
 lock, final image, or
 validation labels; a changed blueprint/overlay/platform/runtime policy; or an
 image digest/rootfs mismatch yields `build.missing`, `build.stale`, or store
-corruption as appropriate. Runtime never resolves or repairs the build.
+corruption as appropriate. The final runtime admission gate never resolves or
+repairs the build; staged up, restart, and app perform their visible automatic
+build check before reaching that gate.
 
 ## Local Files and State
 
 Each deployment directory contains:
 
 ```text
+package-overrides.yaml           # optional, staged deployments only
 .reploy/state.json
 .reploy/locks/sha256-<digest>.json
 .reploy/provider-store/blobs/sha256/<first-two>/<digest>
@@ -2217,12 +2343,18 @@ Each deployment directory contains:
 
 ```go
 type StateV1 struct {
-    Schema     string
-    Blueprint  ResolvedDocumentV1
-    Platform   blueprint.Platform
-    Overlay    RequestOverlayV1
-    Current    *EnvironmentGenerationState
-    Deployment *DeploymentStateV1
+    Schema          string
+    Blueprint       ResolvedDocumentV1
+    BlueprintSource string
+    Platform        blueprint.Platform
+    Overlay         RequestOverlayV1
+    Current         *EnvironmentGenerationState
+    Staging         *StagingStateV1
+    Deployment      *DeploymentStateV1
+}
+
+type StagingStateV1 struct {
+    Schema string
 }
 
 type DeploymentStateV1 struct {
@@ -2334,6 +2466,19 @@ type CleanupItemV1 struct {
 }
 ```
 
+`BlueprintSource` retains the author-provided blueprint text unchanged for
+inspection and transfer. `Staging` uses schema `staging-v1` and marks a
+deployment as a build source. The optional `package-overrides.yaml` beside it
+contains staging-local developer intent and is never copied to an installed
+deployment. Its sparse outer shape matches the blueprint: `environment.id`
+must match, and `environment.package_overrides` groups mappings by provider.
+Reploy may create or edit explicit mappings, but it never writes inferred
+dependencies, resolution results, hashes, or selected artifacts into this
+file. Relative local paths resolve from the sidecar directory. Installed-state
+commit retains `BlueprintSource` and removes `Staging`, so the installed
+deployment consumes only the selected staged build and never retains override
+intent or checkout locators.
+
 `InstallationStateV1.Status` is exactly `configuring` or `ready`. Reploy does
 not decode an older status-less installation record.
 
@@ -2363,9 +2508,13 @@ retaining `Current`; the retained generation may therefore name a lock for the
 preceding desired inputs. Staging a new blueprint validates the retained overlay
 against that blueprint and fails without changing state rather than silently
 dropping incompatible options or direct packages. That is
-a normal stale build, not corruption. Runtime recomputes exact reuse and tells
-the user to run `reploy build`; successful publication replaces `Current` and
-brings all three values back into agreement.
+a normal stale build, not corruption. Staged build, up, restart, and app
+operations recompute exact reuse and publish a current build when needed.
+Staged stop may stop the recorded workload without repairing the build; staged
+shell, test, and observation operations tell the user to run `reploy build`.
+Installed runtime operations remain build-free and direct recovery through
+install. Successful publication replaces `Current` and brings all three values
+back into agreement.
 
 Graph nodes are sorted by `NodeID`; edges by `(supplier, consumer, requirement
 ID, output component, output name)` and must reference existing nodes. Node
@@ -2602,7 +2751,7 @@ Removal is split only to keep intermediate implementation slices buildable:
 | `PreparedBundleResolver`, `preparedBundleManifestName`, `copyWheelhouse`, `BundleAddWheel`, `BundleAddSource`, `.reploy/bundle`, `BundleDirName`, `REPLOY_BUNDLE_DIR`, and configurable `docker.deployment_dirs.bundle` | Resolver output ingestion plus the fixed deployment-owned `.reploy/provider-store/` | Temporary adapter in Slice 2; provider-store ingestion and `copyWheelhouse` removal in Slice 3; delete the remaining legacy surface in Slice 6 | Slice 3 tests prove read-only store inputs plus initially empty resolver output and repository search finds no `copyWheelhouse`; Slice 6 deletes the adapter, direct wheel/source helpers, path/config/env surface, and wheelhouse-layout tests after provider-store build/install tests pass |
 | `BundleState`, `ArtifactRoot`, `SelectedComponents`, and `PreparedFingerprint`; `bundlePreparedFingerprint`; persisted `MaterializationState` | `RequestOverlayV1`, digest-named `BuildLockV1`, and `EnvironmentGenerationState` | Slice 6 | Delete all legacy state fields/helpers and fingerprint invalidation logic; old-state fixtures must fail `state.legacy_unsupported` without mutation rather than migrate |
 | `GeneratedImagesState`, `GeneratedImageState`, `GeneratedImageIdentity`, `staging/deployed/previous` tags, directory/fingerprint/base labels, `promotePreviousEnvironmentImage`, `promoteGeneratedImageState`, recovery-from-labels, and `generatedImageCleanup*` discovery | One committed directory-owned generation reference plus temporary/pending cutover records; fixed validation digest labels | Introduce in Slice 3; delete old lifecycle in Slice 6 | Delete the previous-generation slot, directory-derived content identity, tag-promotion/recovery helpers, old labels, and forced image-removal discovery; tests assert only state/pending-owned references are changed |
-| Prototype `bundle list-options`, `prepare`, `check`, and `upgrade` plus wheelhouse-oriented `list` output | `bundle options`, overlay-oriented `bundle list`, explicit overlay mutations, `bundle clean`, and top-level `reploy build` | Slice 6 | Remove obsolete command parsing/help/tests rather than aliases; CLI tests assert the final command set and that runtime never prepares or builds |
+| Prototype `bundle list-options`, `prepare`, `check`, and `upgrade` plus wheelhouse-oriented `list` output | `bundle options`, overlay-oriented `bundle list`, explicit overlay mutations, `bundle clean`, and top-level `reploy build` | Slice 6 | Remove obsolete command parsing/help/tests rather than aliases; CLI tests assert the final command set, visible automatic staged builds, and build-free installed runtime |
 
 No old symbol or serialized field is retained merely to ease this cutover. Unit
 and CLI fixtures that characterize the prototype are deleted or rewritten to
@@ -2618,7 +2767,7 @@ The entry condition and produced result are explicit:
 | Slice | Entry condition | Parent contract made mandatory in this slice | Produced result |
 | --- | --- | --- | --- |
 | 1. Canonical foundations and schema | Accepted environment/APT public contracts and the working prototype baseline | Platform, base/component union, option/package overlay, identifier, and canonical-identity syntax | Canonical identity service, parsed/resolved base/Python/APT schema, and versioned overlay intent, with public APT still rejected |
-| 2. Provider graph with existing Python behavior | Slice 1 gate passes | Provider graph, exact requirement profiles, supplier selection, bundle/output identity, and Python translation semantics | Common provider DAG and `ResolvedBundle` contracts, temporary Python adapter, deterministic supplier selection, and removal of the old provider/request/prerequisite interfaces; the prototype bundle/image path and legacy wheelhouse remain isolated temporarily |
+| 2. Provider graph with existing Python behavior | Slice 1 gate passes | Provider graph, exact requirement profiles, supplier selection, bundle/output identity, and staging package-override semantics | Common provider DAG and `ResolvedBundle` contracts, temporary Python adapter, deterministic supplier selection, and removal of the old provider/request/prerequisite interfaces; the prototype bundle/image path and legacy wheelhouse remain isolated temporarily |
 | 3. Artifact store and Docker transaction backend | Slice 2 gate passes with public APT rejected | Deployment-owned storage, exact child environments, typed materialization transactions and APT/Python executable operands, platform/base inspection, portable access, validation labels, and recovery | Provider store, resolver ingestion, read-only reusable wheel inputs, typed Docker transaction backend, validation records, and recoverable generation publication; old bundle/output serialization, free-form materialization, and `copyWheelhouse` are removed |
 | 4. APT resolver and offline layer | Slice 3 Docker/store gate passes and public APT remains rejected | Exact APT argv/environment, immutable-base trust policy, mixed-origin closure, `.deb` inspection, offline installation, and package-state validation | Internally complete APT resolver/materializer with representative distro/platform evidence; no public APT acceptance yet |
 | 5. Cross-provider Python | Slice 4 APT internal gate passes | APT output ownership/alternatives, consumer-observed Python identity/version, component-scoped venvs, and cross-provider ordering | Component-scoped Python nodes, real APT/base interpreter selection, independent venvs, and public `type: apt` acceptance after the complete cross-provider gate |
@@ -2717,7 +2866,15 @@ pass.
 ### Slice 6: Public build cutover
 
 - Make top-level `reploy build` canonical.
-- Make runtime operations reject missing/stale builds.
+- Hard-cut the blueprint schema to component-scoped
+  executable profiles, mounts/target/update_policy, and allow_concurrent.
+- Move developer package substitutions out of the blueprint into the explicit
+  staging-only `package-overrides.yaml` sidecar.
+- Add syntax-and-semantics `reploy validate` and remove dry-run.
+- Make staged up, restart, and app commands visibly ensure a current build;
+  retain build-free staged stop recovery; make remaining staged runtime
+  operations reject missing/stale builds; and keep installed runtime operations
+  build-free.
 - Remove startup-time Python runtime preparation and replace the unversioned
   directory-local bundle with the directory-owned immutable provider store.
 - Hard-cut state to `state-v1`: reject the prototype state shape with
@@ -2732,9 +2889,11 @@ pass.
 - Remove `bundle list-options`, `prepare`, `check`, and `upgrade`; make
   `options`/`list` overlay-oriented, retain explicit overlay mutations and
   `clean`, and route all build/validation work through the shared build
-  pipeline invoked explicitly by `reploy build` or `reploy install`.
-- Enforce the `/mnt` runtime namespace, explicit additional roots, no-shadow
-  image inspection, protected-path checks, final-image portable access, and
+  pipeline invoked by `reploy build`, `reploy install`, or staged build-on-demand
+  commands.
+- Enforce normalized absolute runtime targets with `/mnt/<mount-name>` defaults,
+  reserved-path rejection, no-shadow image inspection, protected-path checks,
+  final-image portable access, and
   host-side mount-source checks without a separate runtime preflight container.
 - Implement the one-shot `--output-dir` and `--output-file` contracts, including
   adjacent hidden staging and atomic single-file publication.
@@ -2742,14 +2901,22 @@ pass.
 Gate: full tests and CLI Docker smoke prove that `reploy build` builds without
 installing; staged install reuses a matching build and rebuilds a missing or
 stale one; direct install builds in its private temporary workspace; install
-help/progress exposes that work; stage and overlay mutations do not build; and
-runtime operations reject missing/stale builds without invoking a resolver or
-builder. Tests also cover transfer of only the current lock's provider-store
+help/progress exposes that work; stage and overlay mutations do not build;
+staged up, restart, and app commands visibly ensure a current build; other
+staged runtime operations reject missing/stale builds; and installed runtime
+operations never invoke a resolver or builder. Tests also cover transfer of
+only the current lock's provider-store
 closure for staged and direct installs, failure recovery, cache cleanup,
 mount-policy and runtime-permission failures, and legacy-removal assertions.
 Install concurrency tests prove source-before-destination acquisition, direct
 workspace locking, blocking of concurrent source build/cleanup during transfer,
 and release of both locks on success, failure, and cancellation.
+Runtime-admission tests prove fair multi-waiter ordering, yes/no/auto mount
+policy, app/shell list and stop behavior, control-operation modes, generation
+change cancellation, and operation-lock release after container creation.
+Reinstall tests prove disk and permission checks happen before mutation, the
+old persistent workload stops before cutover, and a `configuring` installation
+can be repaired or uninstalled without backup or rollback state.
 Repository searches find none of the symbols, paths, labels, tags, commands, or
 serialized fields listed in the cutover table; an old-state fixture fails
 without mutation.

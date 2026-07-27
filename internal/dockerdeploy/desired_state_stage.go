@@ -13,12 +13,14 @@ type DesiredStateStageInputV1 struct {
 	DeploymentDir    string
 	Document         blueprint.Document
 	ExplicitPlatform string
+	BlueprintSource  string
+	WorkspaceRoot    string
 	Create           bool
 }
 
 type desiredStateStageBackendV1 struct {
 	probeNative func(context.Context) (blueprint.Platform, error)
-	setState    func(context.Context, string, blueprint.Document, blueprint.Platform, bool) (deploy.DesiredStateUpdateResult, error)
+	setState    func(context.Context, string, blueprint.Document, blueprint.Platform, string, string, bool) (deploy.DesiredStateUpdateResult, error)
 }
 
 // StageDesiredStateV1 records the resolved blueprint and one selected target.
@@ -26,11 +28,14 @@ type desiredStateStageBackendV1 struct {
 func StageDesiredStateV1(ctx context.Context, input DesiredStateStageInputV1) (deploy.DesiredStateUpdateResult, error) {
 	return stageDesiredStateV1(ctx, input, desiredStateStageBackendV1{
 		probeNative: ProbeDockerNativePlatform,
-		setState: func(ctx context.Context, dir string, document blueprint.Document, platform blueprint.Platform, create bool) (deploy.DesiredStateUpdateResult, error) {
-			if create {
-				return deploy.CreateDesiredStateV1(ctx, dir, document, platform, registry.ValidatePackageRequest)
+		setState: func(ctx context.Context, dir string, document blueprint.Document, platform blueprint.Platform, source string, workspaceRoot string, create bool) (deploy.DesiredStateUpdateResult, error) {
+			if source == "" && workspaceRoot == "" {
+				if create {
+					return deploy.CreateDesiredStateV1(ctx, dir, document, platform, registry.ValidatePackageRequest)
+				}
+				return deploy.SetDesiredStateV1(ctx, dir, document, platform, registry.ValidatePackageRequest)
 			}
-			return deploy.SetDesiredStateV1(ctx, dir, document, platform, registry.ValidatePackageRequest)
+			return deploy.SetStagedDesiredStateV1(ctx, dir, document, platform, registry.ValidatePackageRequest, source, workspaceRoot, create)
 		},
 	})
 }
@@ -49,22 +54,30 @@ func stageDesiredStateV1(ctx context.Context, input DesiredStateStageInputV1, ba
 		return deploy.DesiredStateUpdateResult{}, fmt.Errorf("stage desired state requires a state writer")
 	}
 
+	selected, err := selectDesiredStateTargetV1(ctx, input, backend.probeNative)
+	if err != nil {
+		return deploy.DesiredStateUpdateResult{}, err
+	}
+	return backend.setState(ctx, input.DeploymentDir, input.Document, selected, input.BlueprintSource, input.WorkspaceRoot, input.Create)
+}
+
+func selectDesiredStateTargetV1(ctx context.Context, input DesiredStateStageInputV1, probeNative func(context.Context) (blueprint.Platform, error)) (blueprint.Platform, error) {
 	var native *blueprint.Platform
 	if input.ExplicitPlatform == "" && len(input.Document.Blueprint.Compatibility.Platforms) > 1 {
-		if backend.probeNative == nil {
-			return deploy.DesiredStateUpdateResult{}, fmt.Errorf("stage desired state requires a Docker native-platform probe")
+		if probeNative == nil {
+			return blueprint.Platform{}, fmt.Errorf("stage desired state requires a Docker native-platform probe")
 		}
-		observed, err := backend.probeNative(ctx)
+		observed, err := probeNative(ctx)
 		if err != nil {
-			return deploy.DesiredStateUpdateResult{}, err
+			return blueprint.Platform{}, err
 		}
 		native = &observed
 	}
 	selected, err := SelectDockerTargetPlatform(input.Document, input.ExplicitPlatform, native)
 	if err != nil {
-		return deploy.DesiredStateUpdateResult{}, err
+		return blueprint.Platform{}, err
 	}
-	return backend.setState(ctx, input.DeploymentDir, input.Document, selected, input.Create)
+	return selected, nil
 }
 
 // RestageCurrentDesiredPlatformV1 reselects only the target platform from the

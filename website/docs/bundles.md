@@ -2,94 +2,65 @@
 sidebar_position: 4
 ---
 
-# Bundles
+# Bundle Selection and Builds
 
-Bundles are the app artifacts that Reploy prepares for the deployment runtime.
-For Python app providers, Reploy can build wheels from local package roots or
-resolve packages from PyPI.
+A staged deployment records desired component packages and options. Provider
+artifacts live in that deployment's `.reploy/provider-store/`; they are not
+shared through a hidden machine-wide Reploy store. Docker owns the resulting
+image and layer storage. The deployment state records the exact Docker image
+reference it currently uses.
 
-List available bundle options:
-
-```bash
-reploy bundle list-options
-```
-
-Reploy prepares the selected bundle automatically when a staging command needs
-it, such as `reploy up`, `reploy app ...`, or `reploy bundle check`. Adding,
-removing, cleaning, or updating bundle inputs marks the prepared bundle out of
-date.
-
-Install expects the staging bundle to already be current. If the bundle is out
-of date, run `reploy bundle build`, retest staging, then install again.
-
-Explicitly build the selected bundle when you want an early preflight:
+Inspect the available component-qualified options and the current request:
 
 ```bash
-reploy bundle build
+reploy bundle options
+reploy bundle list
 ```
 
-Bundle build prepares and validates dependency artifacts, then warms the staging
-Python runtime so the virtual environment is ready before the app starts.
-App startup checks are still handled by runtime and install commands.
-When a blueprint declares mounted managed files, warmup may create empty
-placeholders for missing files so Docker can mount them.
-
-For Docker deployments, the warmed Python runtime cache lives in a generated
-Docker named volume by default. Reploy names that volume from the Docker
-deployment identity, reuses it across staging commands, and removes it when
-`reploy bundle clean` cleans the bundle. Operators can override
-`REPLOY_RUNTIME_DIR` to a deployment-relative host path when they need a
-bind-mounted runtime cache instead of the default named volume.
-
-The runtime cache mount is configured in `.reploy/docker.env`:
-
-```env
-REPLOY_RUNTIME_DIR=<docker-identity>-runtime
-```
-
-`REPLOY_RUNTIME_DIR` is interpreted as a Docker named volume when it is a bare
-volume name, such as `example-runtime`. It is interpreted as a host bind mount
-when it is a path, such as `./.reploy/runtime`. Installed deployments require
-the host-path form to stay under the install target. Reploy mounts the selected
-storage at `/reploy-runtime` inside the container.
-
-For named-volume runtime caches, Reploy materializes the generated Compose file
-with an external volume declaration:
-
-```yaml
-volumes:
-  example-runtime:
-    name: example-runtime
-    external: true
-```
-
-Reploy creates the volume before using it, prepares `/reploy-runtime` for the
-configured container user, and removes the volume when `reploy bundle clean` or
-installed-service uninstall cleans the generated runtime cache.
-
-You can also warm the staging Python runtime directly:
+Select or remove an option by its qualified name:
 
 ```bash
-reploy bundle warm-runtime
+reploy bundle add application/imap
+reploy bundle remove application/imap
 ```
 
-This builds the selected bundle first when needed, materializes runtime Compose,
-and exits after the Python runtime is ready.
-
-Check that the bundle can be prepared. This builds first when needed:
+Add or remove a direct package request from a specific component:
 
 ```bash
-reploy bundle check
+reploy bundle add-package application 'rich>=13'
+reploy bundle remove-package application 'rich>=13'
+reploy bundle add-package system jq
 ```
 
-Use verbose output when diagnosing build or dependency resolver behavior:
+These commands update desired state only. They do not resolve packages or build
+an image. To build and fully validate the selected environment before running
+anything, use:
 
 ```bash
-reploy bundle check --verbose
-reploy bundle build --verbose
-reploy bundle warm-runtime --verbose
+reploy build
 ```
 
-For deployments staged from PyPI package refs, `reploy stage --update` refreshes
-the blueprint source according to the pinning rules recorded in the deployment
-manifest.
+The resulting image is always fully validated. `--validate-layers` additionally
+runs the same full validation after every newly created component layer.
+`--no-cache` reruns resolvers and image construction instead of reusing the
+current verified build.
+
+`reploy up`, `reploy restart`, and staged app commands automatically reuse a
+current successful build or run the same build pipeline when it is missing or
+stale. `reploy shell` and `reploy test` require a current build. Staging and
+direct installation also ensure a current build before publishing the
+installation.
+
+Remove deployment-local provider artifacts when they are no longer needed:
+
+```bash
+reploy bundle clean
+```
+
+Cleaning does not change the blueprint, request overlay, current build record,
+or Docker image. The current image remains runnable. A later build may need to
+download or reconstruct provider artifacts that were removed.
+
+For deployments staged from remote refs, `reploy stage --update` refreshes the
+blueprint source according to its recorded reference. Package selection remains
+explicit in the deployment overlay.

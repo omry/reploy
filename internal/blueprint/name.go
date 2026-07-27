@@ -8,6 +8,7 @@ import (
 
 var portableNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 var providerIdentifierPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+var pythonDistributionNamePattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$`)
 
 var windowsReservedNames = map[string]bool{
 	"CON": true, "PRN": true, "AUX": true, "NUL": true,
@@ -54,6 +55,15 @@ func validateProviderIdentifier(field string, name string) error {
 // identifier grammar at command and overlay boundaries outside this package.
 func ValidateProviderIdentifier(field string, name string) error {
 	return validateProviderIdentifier(field, name)
+}
+
+// ValidatePythonDistributionName applies the Python project-name grammar used
+// by blueprint workspace declarations and provider-owned package identities.
+func ValidatePythonDistributionName(field string, name string) error {
+	if !pythonDistributionNamePattern.MatchString(name) {
+		return fmt.Errorf("%s must be a valid Python distribution name using letters, numbers, '.', '_', or '-'", field)
+	}
+	return nil
 }
 
 func validateNonBaseComponentIdentifier(field string, name string) error {

@@ -1,2 +1,0 @@
-kind: Added
-body: Add explicit `docker.additional_mount_roots` blueprint configuration with canonical runtime mount-policy validation.

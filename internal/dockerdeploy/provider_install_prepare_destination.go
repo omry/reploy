@@ -11,7 +11,7 @@ import (
 
 type providerInstallPrepareDestinationBackendV1 struct {
 	files            func(providerInstallationPlanV1, string, bool) ([]providerInstallFileCandidateV1, error)
-	diskRequirements func(providerstore.Store, providerstore.Store, InstalledBuildPublicationInputV1, *deploy.EnvironmentGenerationState, []providerInstallFileCandidateV1) ([]providerInstallDiskRequirementV1, error)
+	diskRequirements func(providerstore.Store, providerstore.Store, InstalledBuildPublicationInputV1, *deploy.EnvironmentGenerationState, []providerInstallFileCandidateV1, []PathUpdateAction) ([]providerInstallDiskRequirementV1, error)
 	preflight        func([]providerInstallDiskRequirementV1) error
 	prepare          func([]providerInstallFileCandidateV1) (preparedProviderInstallFilesV1, error)
 }
@@ -80,7 +80,7 @@ func prepareProviderInstallDestinationWithV1(
 		DestinationDeploymentDir: locked.Input.DestinationDeploymentDir, Source: locked.SourceBuild,
 		Installation: configuring, References: locked.References,
 	}
-	requirements, err := backend.diskRequirements(locked.SourceStore, locked.DestinationStore, publication, old, candidates)
+	requirements, err := backend.diskRequirements(locked.SourceStore, locked.DestinationStore, publication, old, candidates, locked.Plan.PathUpdates)
 	if err != nil {
 		return preparedProviderInstallFilesV1{}, err
 	}
