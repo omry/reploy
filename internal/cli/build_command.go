@@ -72,6 +72,7 @@ func runDockerBuild(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 				return 1
 			}
 			writeBuildOutcome(stdout, *result.Build)
+			printWarnings(stderr, result.Warnings)
 			return 0
 		case <-timer.C:
 		}
@@ -98,6 +99,7 @@ func runDockerBuild(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 			return 1
 		}
 		writeBuildOutcome(stdout, *progressResult.Validation.Build)
+		printWarnings(stderr, progressResult.Validation.Warnings)
 		return 0
 	}
 	presenter := newOperationPresenter(operationPresenterOptions{
@@ -304,10 +306,13 @@ func interactiveBuildRunner(
 		if err != nil {
 			return overrideui.ValidationResult{}, fmt.Errorf("summarize completed build: %w", err)
 		}
-		return overrideui.ValidationResult{Build: &overrideui.BuildOutcome{
-			Environment: summary.Environment, ImageReference: summary.ImageReference,
-			Elapsed: time.Since(started), Reused: build.Reused, Republished: build.Republished,
-		}}, nil
+		return overrideui.ValidationResult{
+			Build: &overrideui.BuildOutcome{
+				Environment: summary.Environment, ImageReference: summary.ImageReference,
+				Elapsed: time.Since(started), Reused: build.Reused, Republished: build.Republished,
+			},
+			Warnings: buildWarnings(childOutput.String(), true),
+		}, nil
 	}
 }
 

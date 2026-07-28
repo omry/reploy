@@ -269,6 +269,7 @@ func TestInteractiveBuildUsesOneBuildTransaction(t *testing.T) {
 			return overrideui.BuildProgressResult{BuildError: err}, nil
 		}
 		buildOutcome = result.Build
+		fmt.Fprintln(config.Output, "progress UI released")
 		return overrideui.BuildProgressResult{Validation: result}, nil
 	}
 	buildCalls := 0
@@ -277,6 +278,9 @@ func TestInteractiveBuildUsesOneBuildTransaction(t *testing.T) {
 		if input.ValidateChoices || !input.NoCache || !input.ValidateLayers {
 			t.Fatalf("interactive build input = %#v", input)
 		}
+		fmt.Fprintln(input.RunOptions.Stderr, `- UndefinedVar: Usage of undefined variable '$MISSING'`)
+		fmt.Fprintln(input.RunOptions.Stderr, `- UndefinedVar: Usage of undefined variable '$MISSING'`)
+		fmt.Fprintln(input.RunOptions.Stderr, `- SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data (ENV "TOKEN")`)
 		time.Sleep(10 * time.Millisecond)
 		return cliTestProviderBuildResult(t, stageDir, false), nil
 	}
@@ -294,8 +298,18 @@ func TestInteractiveBuildUsesOneBuildTransaction(t *testing.T) {
 	if buildOutcome == nil || buildOutcome.ImageReference != "reploy/env/demo:g-test" || buildOutcome.Environment != "demo" {
 		t.Fatalf("interactive build outcome = %#v", buildOutcome)
 	}
-	if stdout != "image: reploy/env/demo:g-test\nbuilt demo\n" || stderr != "" {
+	if stdout != "image: reploy/env/demo:g-test\nbuilt demo\n" {
 		t.Fatalf("completed build stdout/stderr = %q/%q", stdout, stderr)
+	}
+	uiReleased := strings.Index(stderr, "progress UI released")
+	warningPrinted := strings.Index(stderr, "reploy warning:")
+	if uiReleased < 0 ||
+		warningPrinted < 0 ||
+		uiReleased > warningPrinted ||
+		strings.Count(stderr, "reploy warning: Docker check UndefinedVar:") != 1 ||
+		strings.Contains(stderr, "SecretsUsedInArgOrEnv") ||
+		strings.Contains(stderr, `"TOKEN"`) {
+		t.Fatalf("interactive build warning output = %q", stderr)
 	}
 }
 
@@ -361,7 +375,11 @@ func TestFastInteractiveBuildPrintsConciseOutcomeWithoutBuildScreen(t *testing.T
 		t.Fatal("fast successful build opened the build screen")
 		return overrideui.BuildProgressResult{}, nil
 	}
-	dockerProviderBuild = func(context.Context, dockerdeploy.ProviderBuildRunInputV1) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
+	dockerProviderBuild = func(_ context.Context, input dockerdeploy.ProviderBuildRunInputV1) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
+		fmt.Fprintln(input.RunOptions.Stderr, `- UndefinedVar: Usage of undefined variable '$MISSING'`)
+		fmt.Fprintln(input.RunOptions.Stderr, `- UndefinedVar: Usage of undefined variable '$MISSING'`)
+		fmt.Fprintln(input.RunOptions.Stderr, `W: Could not open lock file /var/lib/dpkg/lock-frontend - open (13: Permission denied)`)
+		fmt.Fprintln(input.RunOptions.Stderr, `- SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data (ENV "TOKEN")`)
 		return cliTestProviderBuildResult(t, stageDir, true), nil
 	}
 
@@ -372,7 +390,9 @@ func TestFastInteractiveBuildPrintsConciseOutcomeWithoutBuildScreen(t *testing.T
 	if stdout != "image: reploy/env/demo:g-test\ndemo is already up to date\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
-	if stderr != "" {
+	if strings.Count(stderr, "reploy warning: Docker check UndefinedVar:") != 1 ||
+		strings.Contains(stderr, "SecretsUsedInArgOrEnv") ||
+		strings.Contains(stderr, "Could not open lock file") {
 		t.Fatalf("stderr = %q", stderr)
 	}
 }

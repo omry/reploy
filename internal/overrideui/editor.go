@@ -50,6 +50,7 @@ type ValidationResult struct {
 	Packages []DiscoveredPackage
 	Unused   []DiscoveredPackage
 	Build    *BuildOutcome
+	Warnings []string
 }
 
 type BuildOutcome struct {
