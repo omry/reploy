@@ -1,0 +1,2 @@
+kind: Fixed
+body: Prevent force-stopped app commands that exit cleanly from reporting success or publishing incomplete output.

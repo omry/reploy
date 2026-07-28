@@ -124,6 +124,24 @@ func TestRunCurrentAppCommandV1AbortsReservedOutputAfterContainerFailure(t *test
 	}
 }
 
+func TestRunCurrentAppCommandV1DoesNotPublishOutputAfterIntentionalStop(t *testing.T) {
+	dir := t.TempDir()
+	current, _ := runtimeCurrentBuildFixture(t)
+	order := []string{}
+	backend := currentAppCommandRunTestBackend(t, dir, current, CurrentRuntimePlanV1{Docker: DockerExecutionPlan{ContainerName: "demo"}}, &order)
+	backend.runAdmitted = func(context.Context, string, *deploy.OperationLock, string, TransientContainerExecutionV1, RunOptions) error {
+		order = append(order, "run admitted")
+		return ErrLiveRunStoppedV1
+	}
+	err := runCurrentAppCommandV1(t.Context(), CurrentAppCommandRunInputV1{DeploymentDir: dir, Arguments: []string{"export"}}, backend)
+	if !errors.Is(err, ErrLiveRunStoppedV1) {
+		t.Fatalf("intentional stop error = %v", err)
+	}
+	if !containsRuntimeObservationStep(order, "abort output") || containsRuntimeObservationStep(order, "publish output") {
+		t.Fatalf("stopped output lifecycle = %v", order)
+	}
+}
+
 func TestRunCurrentAppCommandV1PreservesFinalGateCorrection(t *testing.T) {
 	dir := t.TempDir()
 	current, _ := runtimeCurrentBuildFixture(t)

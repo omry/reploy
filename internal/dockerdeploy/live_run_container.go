@@ -94,12 +94,10 @@ func runAdmittedTransientContainerV1(
 	startOptions.Context = ctx
 	runErr := backend.runTemporary(backend.followup, execution.Start, execution.Cleanup, startOptions)
 	removed, completionErr := completeAdmittedTransientRunV1(context.WithoutCancel(ctx), absoluteDir, runID, backend)
-	if runErr != nil {
-		if completionErr == nil && !removed {
-			runErr = ErrLiveRunStoppedV1
-		} else {
-			runErr = fmt.Errorf("run admitted transient container: %w", runErr)
-		}
+	if completionErr == nil && !removed {
+		runErr = ErrLiveRunStoppedV1
+	} else if runErr != nil {
+		runErr = fmt.Errorf("run admitted transient container: %w", runErr)
 	}
 	return errors.Join(runErr, completionErr)
 }

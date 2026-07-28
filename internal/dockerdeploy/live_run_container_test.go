@@ -193,6 +193,33 @@ func TestRunAdmittedTransientContainerV1RecognizesIntentionalStop(t *testing.T) 
 	}
 }
 
+func TestRunAdmittedTransientContainerV1RecognizesIntentionalStopAfterCleanExit(t *testing.T) {
+	dir := t.TempDir()
+	operation, run, execution := admittedTransientFixtureV1(t, dir)
+	backend := admittedTransientContainerBackendV1{
+		acquire:  deploy.AcquireOperationLock,
+		create:   func(CommandSpec, RunOptions) error { return nil },
+		followup: func(CommandSpec, RunOptions) error { return nil },
+		runTemporary: func(temporaryCommandRunner, CommandSpec, CommandSpec, RunOptions) error {
+			stop, err := deploy.AcquireOperationLock(t.Context(), dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, removed, err := stop.RemoveLiveRunV1(run.ID); err != nil || !removed {
+				t.Fatalf("remove stopped run = %t, %v", removed, err)
+			}
+			if err := stop.Unlock(); err != nil {
+				t.Fatal(err)
+			}
+			return nil
+		},
+	}
+	err := runAdmittedTransientContainerV1(t.Context(), dir, operation, run.ID, execution, RunOptions{}, backend)
+	if !errors.Is(err, ErrLiveRunStoppedV1) {
+		t.Fatalf("clean intentional stop error = %v", err)
+	}
+}
+
 func TestRunAdmittedTransientContainerV1CanceledBeforeCreateRemovesAdmission(t *testing.T) {
 	dir := t.TempDir()
 	operation, run, execution := admittedTransientFixtureV1(t, dir)
