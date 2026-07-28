@@ -1,0 +1,2 @@
+kind: Fixed
+body: Forward app arguments after `--` even when their names collide with Reploy output options.

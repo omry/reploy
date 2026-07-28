@@ -1499,6 +1499,23 @@ func TestParseDockerAppOptionsForwardsWaitAfterSeparator(t *testing.T) {
 	}
 }
 
+func TestParseDockerAppOptionsForwardsOutputOptionNamesAfterSeparator(t *testing.T) {
+	for _, args := range [][]string{
+		{"export", "--", "--output-dir", "results"},
+		{"export", "--", "--output-dir="},
+		{"export", "--", "--output-file", "report.json"},
+		{"export", "--", "--output-file="},
+	} {
+		options, err := parseDockerAppOptions(args)
+		if err != nil {
+			t.Fatalf("parseDockerAppOptions(%#v): %v", args, err)
+		}
+		if options.OutputDir != "" || options.OutputFile != "" || !reflect.DeepEqual(options.CommandArgs, args) {
+			t.Fatalf("parseDockerAppOptions(%#v) = %#v", args, options)
+		}
+	}
+}
+
 func expectedDemoAppSummary() string {
 	return "[STAGING : demo] app: demo\n" +
 		"[STAGING : demo] app subcommands:\n" +
@@ -1630,6 +1647,33 @@ func TestEmbeddedControlRunsDeployedAppCommandWithScriptPrefix(t *testing.T) {
 	helpCode, helpStdout, helpStderr := runCLI("_control", "--dir", deployDir, "--script-name", "democtl", "--help")
 	if helpCode != 0 || helpStderr != "" || !strings.Contains(helpStdout, "--output-dir DIR") || !strings.Contains(helpStdout, "--output-file FILE") || !strings.Contains(helpStdout, "--wait") {
 		t.Fatalf("embedded control help: code=%d stdout=%q stderr=%q", helpCode, helpStdout, helpStderr)
+	}
+}
+
+func TestEmbeddedControlForwardsOutputOptionNamesAfterSeparator(t *testing.T) {
+	manifest := strings.Replace(
+		cliTestPackManifest(),
+		"      native_command: true\n      forward_flags: [--live]\n",
+		"      native_command: true\n      deployed_command: true\n      forward_flags: [--live]\n",
+		1,
+	)
+	packDir := makeCLITestPackWithManifest(t, manifest)
+	deployDir := filepath.Join(t.TempDir(), "deployment")
+
+	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
+	if code != 0 {
+		t.Fatalf("stage failed: code=%d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	markCLITestDeploymentInstalled(t, deployDir)
+	for _, commandArgs := range [][]string{
+		{"config", "check", "--", "--output-dir", "results"},
+		{"config", "check", "--", "--output-file="},
+	} {
+		appArgs, matched, err := embeddedControlAppArguments(deployDir, commandArgs, true)
+		want := append([]string{"--deployed-only", "--dir", deployDir}, commandArgs...)
+		if err != nil || !matched || !reflect.DeepEqual(appArgs, want) {
+			t.Fatalf("embeddedControlAppArguments(%#v) = %#v, matched=%v, error=%v; want %#v", commandArgs, appArgs, matched, err, want)
+		}
 	}
 }
 

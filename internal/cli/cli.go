@@ -1243,6 +1243,9 @@ func parseDockerAppOptions(args []string) (dockerAppOptions, error) {
 
 func appOptionWasPresent(args []string, name string) bool {
 	for _, arg := range args {
+		if arg == "--" {
+			break
+		}
 		if arg == name || strings.HasPrefix(arg, name+"=") {
 			return true
 		}
