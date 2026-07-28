@@ -37,37 +37,41 @@ type pyPIFile struct {
 	} `json:"digests"`
 }
 
-func resolvePyPIBlueprint(ref PackRef) (PackRef, string, *ResolvedPackArtifact, error) {
+func resolvePyPIBlueprint(ref PackRef) (PackRef, string, []byte, *ResolvedPackArtifact, error) {
 	packageName, requestedVersion, err := parsePyPISource(ref.Source)
 	if err != nil {
-		return PackRef{}, "", nil, err
+		return PackRef{}, "", nil, nil, err
 	}
 	project, err := fetchPyPIProject(ref, packageName)
 	if err != nil {
-		return PackRef{}, "", nil, err
+		return PackRef{}, "", nil, nil, err
 	}
 	version := requestedVersion
 	if version == "" {
 		version = project.Info.Version
 	}
 	if version == "" {
-		return PackRef{}, "", nil, fmt.Errorf("pypi project metadata is missing latest version: %s", packageName)
+		return PackRef{}, "", nil, nil, fmt.Errorf("pypi project metadata is missing latest version: %s", packageName)
 	}
 	file, err := selectPyPIWheel(project, version)
 	if err != nil {
-		return PackRef{}, "", nil, err
+		return PackRef{}, "", nil, nil, err
 	}
 	cacheRoot, err := reployCacheDir()
 	if err != nil {
-		return PackRef{}, "", nil, err
+		return PackRef{}, "", nil, nil, err
 	}
 	wheelPath, sha256, err := cachePyPIWheel(cacheRoot, packageName, version, file)
 	if err != nil {
-		return PackRef{}, "", nil, err
+		return PackRef{}, "", nil, nil, err
 	}
 	blueprintPath, err := extractPackFromWheel(cacheRoot, packageName, version, sha256, wheelPath, ref.Subdir)
 	if err != nil {
-		return PackRef{}, "", nil, err
+		return PackRef{}, "", nil, nil, err
+	}
+	blueprintContent, err := readBlueprintContentFromWheel(wheelPath, ref.Subdir)
+	if err != nil {
+		return PackRef{}, "", nil, nil, fmt.Errorf("read verified PyPI blueprint: %w", err)
 	}
 	resolvedRef := ref
 	resolvedRef.Source = packageName + "==" + version
@@ -85,7 +89,7 @@ func resolvePyPIBlueprint(ref PackRef) (PackRef, string, *ResolvedPackArtifact, 
 		CachePath:     wheelPath,
 		BlueprintPath: blueprintPath,
 	}
-	return resolvedRef, blueprintPath, artifact, nil
+	return resolvedRef, blueprintPath, blueprintContent, artifact, nil
 }
 
 func formatPyPIRef(packageName string, version string, blueprintPath string) string {
@@ -259,19 +263,29 @@ func extractPackFromWheel(cacheRoot string, packageName string, version string, 
 	blueprintFilename := filepath.Base(cleanBlueprintPath)
 	targetDir := pypiBlueprintCacheDir(cacheRoot, packageName, version, sha256, cacheDir)
 	targetBlueprintPath := filepath.Join(targetDir, blueprintFilename)
-	if _, err := os.Stat(targetDir); err == nil {
-		if _, err := os.Stat(targetBlueprintPath); err != nil {
-			return "", err
-		}
-		return targetBlueprintPath, nil
-	} else if !os.IsNotExist(err) {
-		return "", err
-	}
 	reader, err := zip.OpenReader(wheelPath)
 	if err != nil {
 		return "", fmt.Errorf("open wheel archive: %w", err)
 	}
 	defer reader.Close()
+	blueprintContent, blueprintMode, err := readBlueprintFromWheel(reader.File, cleanBlueprintPath)
+	if err != nil {
+		return "", fmt.Errorf(
+			"read blueprint from PyPI wheel %s==%s (%s): %w",
+			packageName, version, filepath.Base(wheelPath), err,
+		)
+	}
+	if info, err := os.Lstat(targetDir); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("cached PyPI blueprint path is not a directory: %s", targetDir)
+		}
+		if err := ensureCachedPyPIBlueprint(targetBlueprintPath, blueprintContent, blueprintMode); err != nil {
+			return "", fmt.Errorf("validate cached PyPI blueprint %s: %w", targetBlueprintPath, err)
+		}
+		return targetBlueprintPath, nil
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
 	tmpRoot := filepath.Join(cacheRoot, "tmp")
 	if err := os.MkdirAll(tmpRoot, 0o755); err != nil {
 		return "", err
@@ -350,12 +364,97 @@ func extractPackFromWheel(cacheRoot string, packageName string, version string, 
 		return "", err
 	}
 	if err := os.Rename(tempDir, targetDir); err != nil {
-		if _, statErr := os.Stat(targetBlueprintPath); statErr == nil {
-			return targetBlueprintPath, nil
+		info, statErr := os.Lstat(targetDir)
+		if statErr == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+			if validationErr := ensureCachedPyPIBlueprint(targetBlueprintPath, blueprintContent, blueprintMode); validationErr == nil {
+				return targetBlueprintPath, nil
+			}
+		}
+		if statErr == nil && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
+			return "", fmt.Errorf("cached PyPI blueprint path is not a directory: %s", targetDir)
+		}
+		if statErr != nil && !os.IsNotExist(statErr) {
+			return "", statErr
 		}
 		return "", err
 	}
+	if err := ensureCachedPyPIBlueprint(targetBlueprintPath, blueprintContent, blueprintMode); err != nil {
+		return "", fmt.Errorf("validate extracted PyPI blueprint %s: %w", targetBlueprintPath, err)
+	}
 	return targetBlueprintPath, nil
+}
+
+func readBlueprintContentFromWheel(wheelPath string, blueprintPath string) ([]byte, error) {
+	cleanBlueprintPath, err := cleanArchiveSubdir(blueprintPath)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := zip.OpenReader(wheelPath)
+	if err != nil {
+		return nil, fmt.Errorf("open wheel archive: %w", err)
+	}
+	defer reader.Close()
+	content, _, err := readBlueprintFromWheel(reader.File, cleanBlueprintPath)
+	if err != nil {
+		return nil, err
+	}
+	return content, nil
+}
+
+func readBlueprintFromWheel(files []*zip.File, blueprintPath string) ([]byte, os.FileMode, error) {
+	var blueprint *zip.File
+	for _, file := range files {
+		if file.Name != blueprintPath {
+			continue
+		}
+		if blueprint != nil {
+			return nil, 0, fmt.Errorf("wheel contains duplicate blueprint path: %s", blueprintPath)
+		}
+		blueprint = file
+	}
+	if blueprint == nil || blueprint.FileInfo().IsDir() {
+		return nil, 0, fmt.Errorf("blueprint path not found: %s", blueprintPath)
+	}
+	in, err := blueprint.Open()
+	if err != nil {
+		return nil, 0, err
+	}
+	defer in.Close()
+	content, err := io.ReadAll(in)
+	if err != nil {
+		return nil, 0, err
+	}
+	return content, blueprint.FileInfo().Mode().Perm(), nil
+}
+
+func ensureCachedPyPIBlueprint(path string, expected []byte, mode os.FileMode) error {
+	info, err := os.Lstat(path)
+	if err == nil && info.Mode().IsRegular() {
+		current, hashErr := HashFile(path)
+		if hashErr == nil && current == HashBytes(expected) {
+			return nil
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := writeAtomicStateFile(path, expected, mode); err != nil {
+		return err
+	}
+	info, err = os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("repaired cache entry is not a regular file")
+	}
+	current, err := HashFile(path)
+	if err != nil {
+		return err
+	}
+	if current != HashBytes(expected) {
+		return fmt.Errorf("repaired cache entry does not match its verified wheel")
+	}
+	return nil
 }
 
 func cleanArchiveSubdir(path string) (string, error) {

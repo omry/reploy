@@ -1,0 +1,2 @@
+kind: Fixed
+body: Reploy now verifies cached extracted PyPI blueprints against their pinned wheel and repairs modified or symlinked manifest entries.

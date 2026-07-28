@@ -96,6 +96,22 @@ func TestLoadBlueprintRejectsSemanticErrors(t *testing.T) {
 	}
 }
 
+func TestLoadEnvironmentBlueprintManifestUsesAuthoritativeContent(t *testing.T) {
+	manifest := filepath.Join(t.TempDir(), "demo.blueprint.yaml")
+	if err := os.WriteFile(manifest, []byte("tampered"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	content, document, err := loadEnvironmentBlueprintManifest(
+		manifest, []byte(aptOnlyBlueprintFixture), true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != aptOnlyBlueprintFixture || document.Environment.ID != "apt-demo" {
+		t.Fatalf("loaded content = %q, document = %#v", content, document)
+	}
+}
+
 func TestLoadBlueprintResolvesPyPIReference(t *testing.T) {
 	blueprintPath := "demo_pkg/reploy/demo.blueprint.yaml"
 	wheel := testPackWheelWithFiles(t, map[string]string{
@@ -116,6 +132,41 @@ func TestLoadBlueprintResolvesPyPIReference(t *testing.T) {
 	}
 	if loaded.ResolvedArtifact == nil || loaded.ResolvedArtifact.BlueprintPath != loaded.ManifestPath {
 		t.Fatalf("resolved artifact = %#v, manifest = %q", loaded.ResolvedArtifact, loaded.ManifestPath)
+	}
+}
+
+func TestLoadBlueprintRepairsTamperedPyPIManifestCache(t *testing.T) {
+	blueprintPath := "demo_pkg/reploy/demo.blueprint.yaml"
+	wheel := testPackWheelWithFiles(t, map[string]string{
+		blueprintPath: aptOnlyBlueprintFixture,
+	})
+	indexURL := testPyPIIndex(t, wheel, "1.2.3")
+	t.Setenv("REPLOY_CACHE_DIR", filepath.Join(t.TempDir(), "cache"))
+	ref, err := ParsePackRef("pypi:demo-pkg==1.2.3#" + blueprintPath + "?index-url=" + indexURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadBlueprint(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(loaded.ManifestPath, []byte("tampered"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := LoadBlueprint(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Document.Environment.ID != "apt-demo" || reloaded.BlueprintSource != aptOnlyBlueprintFixture {
+		t.Fatalf("reloaded blueprint = %#v", reloaded)
+	}
+	repaired, err := os.ReadFile(reloaded.ManifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(repaired) != aptOnlyBlueprintFixture {
+		t.Fatalf("repaired manifest = %q", repaired)
 	}
 }
 

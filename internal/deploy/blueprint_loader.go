@@ -27,6 +27,8 @@ func LoadBlueprint(ref PackRef) (LoadedBlueprint, error) {
 	requested := ref
 	resolved := ref
 	manifestPath := ""
+	var manifestContent []byte
+	hasManifestContent := false
 	var artifact *ResolvedPackArtifact
 	var err error
 	switch ref.Scheme {
@@ -37,7 +39,8 @@ func LoadBlueprint(ref PackRef) (LoadedBlueprint, error) {
 			resolved.Raw = "file:" + manifestPath
 		}
 	case "pypi":
-		resolved, manifestPath, artifact, err = resolvePyPIBlueprint(ref)
+		resolved, manifestPath, manifestContent, artifact, err = resolvePyPIBlueprint(ref)
+		hasManifestContent = err == nil
 	case "git":
 		var checkoutRoot, subdir string
 		resolved, checkoutRoot, subdir, artifact, err = resolveGitBlueprint(ref)
@@ -50,7 +53,7 @@ func LoadBlueprint(ref PackRef) (LoadedBlueprint, error) {
 	if err != nil {
 		return LoadedBlueprint{}, err
 	}
-	content, document, err := loadEnvironmentBlueprintManifest(manifestPath)
+	content, document, err := loadEnvironmentBlueprintManifest(manifestPath, manifestContent, hasManifestContent)
 	if err != nil {
 		return LoadedBlueprint{}, err
 	}
@@ -60,10 +63,17 @@ func LoadBlueprint(ref PackRef) (LoadedBlueprint, error) {
 	}, nil
 }
 
-func loadEnvironmentBlueprintManifest(manifestPath string) ([]byte, blueprint.Document, error) {
-	content, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return nil, blueprint.Document{}, fmt.Errorf("read blueprint manifest: %w", err)
+func loadEnvironmentBlueprintManifest(
+	manifestPath string,
+	content []byte,
+	hasContent bool,
+) ([]byte, blueprint.Document, error) {
+	if !hasContent {
+		var err error
+		content, err = os.ReadFile(manifestPath)
+		if err != nil {
+			return nil, blueprint.Document{}, fmt.Errorf("read blueprint manifest: %w", err)
+		}
 	}
 	source, err := blueprint.Decode(content)
 	if err != nil {
