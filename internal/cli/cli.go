@@ -2863,6 +2863,8 @@ func startTimedProgressSpinnerWithLogs(output io.Writer, label string) (func(boo
 	return startProgressSpinnerWithLogsOptions(output, label, true)
 }
 
+var spinnerOutputIsInteractive = operationOutputIsInteractive
+
 func startProgressSpinnerWithLogsOptions(
 	output io.Writer,
 	label string,
@@ -2882,7 +2884,7 @@ func startProgressSpinnerWithLogsOptions(
 		}
 		return suffix
 	}
-	if !terminalAnimationsEnabled() {
+	if !terminalAnimationsEnabled(output) {
 		fmt.Fprintf(output, "%s...\n", label)
 		progress := progressWriter{write: func(message string) {
 			fmt.Fprintf(output, "%s: %s\n", label, message)
@@ -3023,7 +3025,10 @@ func (writer *spinnerLogWriter) Flush() {
 	writer.buffer.Reset()
 }
 
-func terminalAnimationsEnabled() bool {
+func terminalAnimationsEnabled(output io.Writer) bool {
+	if !spinnerOutputIsInteractive(output) {
+		return false
+	}
 	if envBool("CI") {
 		return false
 	}

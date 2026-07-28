@@ -4932,7 +4932,17 @@ func TestDockerBundleCleanVerboseReportsProviderStoreRemovalAndNoOp(t *testing.T
 	}
 }
 
+func forceSpinnerOutputInteractive(t *testing.T) {
+	t.Helper()
+	original := spinnerOutputIsInteractive
+	spinnerOutputIsInteractive = func(io.Writer) bool { return true }
+	t.Cleanup(func() {
+		spinnerOutputIsInteractive = original
+	})
+}
+
 func TestStartSpinnerPrintsCompletion(t *testing.T) {
+	forceSpinnerOutputInteractive(t)
 	t.Setenv("CI", "")
 	t.Setenv("TERM", "xterm-256color")
 	var stderr bytes.Buffer
@@ -4949,7 +4959,19 @@ func TestStartSpinnerPrintsCompletion(t *testing.T) {
 	}
 }
 
+func TestStartSpinnerUsesPlainProgressForRedirectedOutput(t *testing.T) {
+	t.Setenv("CI", "")
+	t.Setenv("TERM", "xterm-256color")
+	var stderr bytes.Buffer
+	stop := startSpinner(&stderr, "building installation bundle")
+	stop(true)
+	if got, want := stderr.String(), "building installation bundle...\nbuilding installation bundle... done\n"; got != want {
+		t.Fatalf("stderr = %q, want %q", got, want)
+	}
+}
+
 func TestStartSpinnerUsesPlainProgressInCI(t *testing.T) {
+	forceSpinnerOutputInteractive(t)
 	t.Setenv("CI", "true")
 	t.Setenv("TERM", "xterm-256color")
 	var stderr bytes.Buffer
@@ -4961,6 +4983,7 @@ func TestStartSpinnerUsesPlainProgressInCI(t *testing.T) {
 }
 
 func TestStartSpinnerUsesPlainProgressForDumbTerminal(t *testing.T) {
+	forceSpinnerOutputInteractive(t)
 	t.Setenv("CI", "")
 	t.Setenv("TERM", "dumb")
 	var stderr bytes.Buffer
@@ -4972,6 +4995,7 @@ func TestStartSpinnerUsesPlainProgressForDumbTerminal(t *testing.T) {
 }
 
 func TestStartProgressSpinnerUpdatesAnimatedLabel(t *testing.T) {
+	forceSpinnerOutputInteractive(t)
 	t.Setenv("CI", "")
 	t.Setenv("TERM", "xterm-256color")
 	var stderr bytes.Buffer
@@ -4988,6 +5012,7 @@ func TestStartProgressSpinnerUpdatesAnimatedLabel(t *testing.T) {
 }
 
 func TestStartProgressSpinnerWithLogsKeepsLogLinesSeparate(t *testing.T) {
+	forceSpinnerOutputInteractive(t)
 	t.Setenv("CI", "")
 	t.Setenv("TERM", "xterm-256color")
 	var stderr bytes.Buffer
@@ -5020,6 +5045,7 @@ func TestStartProgressSpinnerWithLogsKeepsLogLinesSeparate(t *testing.T) {
 }
 
 func TestStartProgressSpinnerUsesPlainProgressInCI(t *testing.T) {
+	forceSpinnerOutputInteractive(t)
 	t.Setenv("CI", "true")
 	t.Setenv("TERM", "xterm-256color")
 	var stderr bytes.Buffer

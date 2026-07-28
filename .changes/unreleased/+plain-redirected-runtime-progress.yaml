@@ -1,0 +1,2 @@
+kind: Fixed
+body: Emit plain runtime progress without terminal cursor controls when lifecycle output is redirected.
