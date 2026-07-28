@@ -1,0 +1,2 @@
+kind: Fixed
+body: Keep the override editor's saved baseline tied to the exact sidecar content it committed.

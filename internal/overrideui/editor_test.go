@@ -1198,6 +1198,65 @@ func TestSaveSidecarRejectsConcurrentChange(t *testing.T) {
 	}
 }
 
+func TestSaveSidecarDoesNotAdoptPostCommitReplacement(t *testing.T) {
+	dir := stagedEditorDir(t)
+	original, err := readEditorSnapshot(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	committed := deploy.EmptyPackageOverridesV1("example")
+	committed.Environment.PackageOverrides["python"] = map[string]deploy.PackageOverrideChoiceV1{
+		"demo": {Version: "1"},
+	}
+	replacement := deploy.EmptyPackageOverridesV1("example")
+	replacement.Environment.PackageOverrides["python"] = map[string]deploy.PackageOverrideChoiceV1{
+		"demo": {Version: "2"},
+	}
+	replacementContent, err := deploy.EncodePackageOverridesV1(replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := deploy.PackageOverridesPath(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	originalCommit := commitEditorPackageOverridesV1
+	t.Cleanup(func() {
+		commitEditorPackageOverridesV1 = originalCommit
+	})
+	commitEditorPackageOverridesV1 = func(
+		operation *deploy.OperationLock,
+		overrides deploy.PackageOverridesV1,
+	) error {
+		if err := originalCommit(operation, overrides); err != nil {
+			return err
+		}
+		return os.WriteFile(path, replacementContent, 0o600)
+	}
+
+	saved, err := saveSidecarAt(t.Context(), dir, original, committed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	committedContent, err := deploy.EncodePackageOverridesV1(committed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Sidecar != sidecarSnapshotForContent(committedContent) {
+		t.Fatalf("saved sidecar snapshot = %#v, want committed content snapshot", saved.Sidecar)
+	}
+	if disk, err := readSidecarSnapshot(dir); err != nil {
+		t.Fatal(err)
+	} else if disk != sidecarSnapshotForContent(replacementContent) {
+		t.Fatalf("sidecar on disk = %#v, want replacement content snapshot", disk)
+	}
+	if _, err := saveSidecarAt(t.Context(), dir, saved, committed); err == nil ||
+		!strings.Contains(err.Error(), "changed while the editor was open") {
+		t.Fatalf("second save error = %v", err)
+	}
+}
+
 func TestSaveSidecarRejectsStagingEnvironmentReplacement(t *testing.T) {
 	dir := stagedEditorDir(t)
 	original, err := readEditorSnapshot(t.Context(), dir)

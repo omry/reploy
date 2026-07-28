@@ -2570,6 +2570,11 @@ func (m *model) projectSearchRoot() string {
 	return m.browseRoot
 }
 
+func sidecarSnapshotForContent(content []byte) fileSnapshot {
+	sum := sha256.Sum256(content)
+	return fileSnapshot{Found: true, Digest: hex.EncodeToString(sum[:])}
+}
+
 func readSidecarSnapshot(deploymentDir string) (fileSnapshot, error) {
 	path, err := deploy.PackageOverridesPath(deploymentDir)
 	if err != nil {
@@ -2582,8 +2587,14 @@ func readSidecarSnapshot(deploymentDir string) (fileSnapshot, error) {
 	if err != nil {
 		return fileSnapshot{}, fmt.Errorf("read package overrides snapshot: %w", err)
 	}
-	sum := sha256.Sum256(content)
-	return fileSnapshot{Found: true, Digest: hex.EncodeToString(sum[:])}, nil
+	return sidecarSnapshotForContent(content), nil
+}
+
+var commitEditorPackageOverridesV1 = func(
+	operation *deploy.OperationLock,
+	overrides deploy.PackageOverridesV1,
+) error {
+	return operation.CommitPackageOverridesV1(overrides)
 }
 
 func stagingSnapshotFor(
@@ -2713,14 +2724,17 @@ func saveSidecarAt(
 			document.Environment.ID,
 		)
 	}
-	if err := operation.CommitPackageOverridesV1(overrides); err != nil {
-		return editorSnapshot{}, err
-	}
-	sidecar, err := readSidecarSnapshot(deploymentDir)
+	content, err := deploy.EncodePackageOverridesV1(overrides)
 	if err != nil {
 		return editorSnapshot{}, err
 	}
-	return editorSnapshot{Sidecar: sidecar, Staging: currentStaging}, nil
+	if err := commitEditorPackageOverridesV1(operation, overrides); err != nil {
+		return editorSnapshot{}, err
+	}
+	return editorSnapshot{
+		Sidecar: sidecarSnapshotForContent(content),
+		Staging: currentStaging,
+	}, nil
 }
 
 func cloneVars(source map[string]any) map[string]any {
