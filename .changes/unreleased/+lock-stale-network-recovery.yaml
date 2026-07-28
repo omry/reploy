@@ -1,0 +1,2 @@
+kind: Fixed
+body: Serialize stale Docker network cleanup under the deployment operation lock before retrying workload startup.

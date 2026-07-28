@@ -216,7 +216,10 @@ func runCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLif
 				}
 				options := runOptions
 				options.Context = startCtx
-				if downErr := backend.runCommand(down, options); downErr != nil {
+				downErr = withOperation(startCtx, func(*deploy.OperationLock) error {
+					return backend.runCommand(down, options)
+				})
+				if downErr != nil {
 					return fmt.Errorf("recover stale Docker network state: %w", downErr)
 				}
 				err = launch(startCtx)

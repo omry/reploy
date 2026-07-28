@@ -270,6 +270,48 @@ func TestRunCurrentWorkloadLifecycleV1RecoversStaleNetworkOnceForUp(t *testing.T
 	}
 }
 
+func TestRunCurrentWorkloadLifecycleV1LocksStaleNetworkRecoveryWhenCallerReleasedBroadLock(t *testing.T) {
+	dir := t.TempDir()
+	lifecycle := LifecyclePlan{Operations: []LifecycleOperation{{Kind: LifecycleStart, Event: "start"}}}
+	order := []string{}
+	backend := currentWorkloadLifecycleTestBackend(t, lifecycle, &order)
+	backend.acquire = func(ctx context.Context, got string) (*deploy.OperationLock, error) {
+		if got != dir {
+			t.Fatalf("lock directory = %q", got)
+		}
+		order = append(order, "acquire")
+		return deploy.AcquireOperationLock(ctx, got)
+	}
+	attempts := 0
+	backend.runCommand = func(spec CommandSpec, _ RunOptions) error {
+		order = append(order, "run "+spec.Name)
+		if spec.Name == "compose-up" {
+			attempts++
+			if attempts == 1 {
+				return errors.New("network demo not found")
+			}
+		}
+		return nil
+	}
+
+	err := runCurrentWorkloadLifecycleV1(t.Context(), CurrentWorkloadLifecycleInputV1{
+		Environment: "demo", DeploymentDir: dir, Action: "up",
+		Plan: CurrentRuntimePlanV1{Docker: DockerExecutionPlan{ContainerName: "demo"}},
+	}, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"plan start",
+		"acquire", "gate workload", "command up", "run compose-up",
+		"command down", "acquire", "run compose-down",
+		"acquire", "gate workload", "run compose-up", "service check",
+	}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("stale-network per-mutation lock order = %v, want %v", order, want)
+	}
+}
+
 func TestRunCurrentWorkloadLifecycleV1StopsWhenStaleNetworkCleanupFails(t *testing.T) {
 	dir := t.TempDir()
 	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
