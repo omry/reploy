@@ -2750,9 +2750,19 @@ func loadPackIndex(indexURL string) (packIndex, error) {
 	if refreshErr == nil {
 		return index, nil
 	}
-	cached, cacheErr := os.ReadFile(packIndexCachePath(indexURL))
+	cachePath := packIndexCachePath(indexURL)
+	cached, cacheErr := os.ReadFile(cachePath)
 	if cacheErr == nil {
-		return parsePackIndex(cached)
+		index, parseErr := parsePackIndex(cached)
+		if parseErr == nil {
+			return index, nil
+		}
+		return packIndex{}, fmt.Errorf(
+			"refresh blueprint index: %v; cached blueprint index %s is invalid: %w",
+			refreshErr,
+			cachePath,
+			parseErr,
+		)
 	}
 	return packIndex{}, refreshErr
 }
@@ -2813,13 +2823,6 @@ func parsePackIndex(content []byte) (packIndex, error) {
 		index.Blueprints = map[string]packIndexEntry{}
 	}
 	return index, nil
-}
-
-func writePackIndexCachePath(path string, content []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, content, 0o644)
 }
 
 func packIndexCachePath(indexURL string) string {

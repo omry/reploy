@@ -1,0 +1,2 @@
+kind: Fixed
+body: Publish refreshed blueprint indexes atomically so interrupted updates preserve the last usable cache.

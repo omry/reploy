@@ -1087,6 +1087,165 @@ func TestPackIndexRefreshDownloadsAndCachesHTTPIndex(t *testing.T) {
 	}
 }
 
+func TestWritePackIndexCachePathPreservesExistingCacheOnPreparationFailure(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		prepare func(*os.File, []byte) error
+		want    string
+	}{
+		{
+			name: "partial write",
+			prepare: func(temporary *os.File, _ []byte) error {
+				if _, err := temporary.Write([]byte(`{"schema_version":1`)); err != nil {
+					return err
+				}
+				return errors.New("injected temporary-file write failure")
+			},
+			want: "injected temporary-file write failure",
+		},
+		{
+			name: "sync",
+			prepare: func(temporary *os.File, content []byte) error {
+				if _, err := temporary.Write(content); err != nil {
+					return err
+				}
+				return errors.New("injected temporary-file sync failure")
+			},
+			want: "injected temporary-file sync failure",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "cache", "index.json")
+			original := []byte(`{"schema_version":1,"blueprints":{"old":{"ref":"file:old"}}}`)
+			if err := writePackIndexCachePath(path, original); err != nil {
+				t.Fatal(err)
+			}
+
+			originalPrepare := preparePackIndexCacheTemporary
+			t.Cleanup(func() {
+				preparePackIndexCacheTemporary = originalPrepare
+			})
+			preparePackIndexCacheTemporary = test.prepare
+
+			if err := writePackIndexCachePath(path, []byte(`{"schema_version":1,"blueprints":{}}`)); err == nil ||
+				!strings.Contains(err.Error(), test.want) {
+				t.Fatalf("write error = %v", err)
+			}
+			if content, err := os.ReadFile(path); err != nil {
+				t.Fatal(err)
+			} else if !bytes.Equal(content, original) {
+				t.Fatalf("cache content = %q, want original %q", content, original)
+			}
+			if matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".blueprint-index-*.tmp")); err != nil {
+				t.Fatal(err)
+			} else if len(matches) != 0 {
+				t.Fatalf("temporary cache files remain: %v", matches)
+			}
+		})
+	}
+}
+
+func TestWritePackIndexCachePathPreservesExistingCacheOnReplaceFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cache", "index.json")
+	original := []byte(`{"schema_version":1,"blueprints":{"old":{"ref":"file:old"}}}`)
+	if err := writePackIndexCachePath(path, original); err != nil {
+		t.Fatal(err)
+	}
+
+	originalReplace := replacePackIndexCacheFile
+	t.Cleanup(func() {
+		replacePackIndexCacheFile = originalReplace
+	})
+	replacePackIndexCacheFile = func(string, string) error {
+		return errors.New("injected replace failure")
+	}
+
+	if err := writePackIndexCachePath(path, []byte(`{"schema_version":1,"blueprints":{}}`)); err == nil ||
+		!strings.Contains(err.Error(), "injected replace failure") {
+		t.Fatalf("write error = %v", err)
+	}
+	if content, err := os.ReadFile(path); err != nil {
+		t.Fatal(err)
+	} else if !bytes.Equal(content, original) {
+		t.Fatalf("cache content = %q, want original %q", content, original)
+	}
+}
+
+func TestWritePackIndexCachePathKeepsConcurrentReadsComplete(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cache", "index.json")
+	oldContent := []byte(`{"schema_version":1,"blueprints":{"old":{"ref":"file:old"}}}`)
+	newContent := []byte(`{"schema_version":1,"blueprints":{"new":{"ref":"file:new"}}}`)
+	if err := writePackIndexCachePath(path, oldContent); err != nil {
+		t.Fatal(err)
+	}
+
+	stop := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				done <- nil
+				return
+			default:
+			}
+			content, err := os.ReadFile(path)
+			if err != nil {
+				done <- err
+				return
+			}
+			if _, err := parsePackIndex(content); err != nil {
+				done <- fmt.Errorf("parse concurrently read cache: %w", err)
+				return
+			}
+		}
+	}()
+	for index := 0; index < 20; index++ {
+		content := oldContent
+		if index%2 == 0 {
+			content = newContent
+		}
+		if err := writePackIndexCachePath(path, content); err != nil {
+			close(stop)
+			<-done
+			t.Fatal(err)
+		}
+	}
+	close(stop)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadPackIndexReportsRefreshAndCorruptFallback(t *testing.T) {
+	server := newCLITestHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	t.Setenv("REPLOY_CACHE_DIR", t.TempDir())
+	indexURL := server.URL + "/index.json"
+	cachePath := packIndexCachePath(indexURL)
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, []byte(`{"schema_version":`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := loadPackIndex(indexURL)
+	if err == nil {
+		t.Fatal("loadPackIndex() error = nil")
+	}
+	for _, want := range []string{
+		"503 Service Unavailable",
+		"cached blueprint index " + cachePath + " is invalid",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("loadPackIndex() error = %q, want %q", err, want)
+		}
+	}
+}
+
 func TestDockerHelp(t *testing.T) {
 	code, stdout, stderr := runCLI("--help")
 	if code != 0 {
