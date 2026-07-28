@@ -67,7 +67,7 @@ func RunCurrentWorkloadV1(ctx context.Context, input CurrentWorkloadRunInputV1) 
 		invocation:         WorkloadRuntimeInvocationV1,
 		runLifecycle:       RunCurrentWorkloadLifecycleV1,
 		startupFailure:     runtimePostStartError,
-		privateEnvironment: loadPrivateWorkloadEnvironmentV1,
+		privateEnvironment: preparePrivateWorkloadEnvironmentV1,
 	})
 }
 
@@ -201,16 +201,21 @@ func runCurrentWorkloadV1(ctx context.Context, input CurrentWorkloadRunInputV1, 
 		return recoverStop(fmt.Errorf("environment has no workload to %s", currentWorkloadActionVerbV1(input.Action)))
 	}
 	privateEnvironment := privateWorkloadEnvironmentV1{}
+	var privateRuntimeMasks []privateRuntimeMaskV1
 	if input.Action == "up" || input.Action == "restart" {
 		privateEnvironment, err = backend.privateEnvironment(dir)
 		if err != nil {
-			return recoverStop(fmt.Errorf("load private workload environment: %w", err))
+			return recoverStop(fmt.Errorf("prepare private workload environment: %w", err))
 		}
 		if privateEnvironment.Present {
 			if err := validatePrivateWorkloadEnvironmentIsolationV1(dir, planned.Docker); err != nil {
 				return recoverStop(err)
 			}
 			planned.Docker.PrivateEnvironment = true
+		}
+		privateRuntimeMasks, err = privateRuntimeMasksV1(planned.Docker)
+		if err != nil {
+			return recoverStop(fmt.Errorf("snapshot private runtime masks: %w", err))
 		}
 	}
 	invocation, err := backend.invocation(planned.Docker)
@@ -244,7 +249,8 @@ func runCurrentWorkloadV1(ctx context.Context, input CurrentWorkloadRunInputV1, 
 		Environment: document.Environment.ID, DeploymentDir: dir,
 		Action: input.Action, RunOptions: input.RunOptions, Progress: input.Progress,
 		StartCommand: startCommand, StopCommand: stopCommand,
-		PrivateEnvironment: privateEnvironment,
+		PrivateEnvironment:  privateEnvironment,
+		PrivateRuntimeMasks: append(make([]privateRuntimeMaskV1, 0, len(privateRuntimeMasks)), privateRuntimeMasks...),
 	})
 	cleanupContext := context.WithoutCancel(ctx)
 	operation, reacquireErr := backend.acquire(cleanupContext, dir)

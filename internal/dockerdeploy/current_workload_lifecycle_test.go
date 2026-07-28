@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +49,69 @@ func TestRunCurrentWorkloadLifecycleV1GatesEveryCreatedContainer(t *testing.T) {
 	}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("lifecycle order = %v, want %v", order, want)
+	}
+}
+
+func TestRunCurrentWorkloadLifecycleV1RejectsMasksChangedByBeforeStart(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ordinary Windows users cannot create the test symlink")
+	}
+	deploymentDir := t.TempDir()
+	operation, err := deploy.AcquireOperationLock(t.Context(), deploymentDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = operation.Unlock() })
+	originalSource := t.TempDir()
+	link := filepath.Join(t.TempDir(), "deployment-link")
+	if err := os.Symlink(originalSource, link); err != nil {
+		t.Fatal(err)
+	}
+	plan := DockerExecutionPlan{
+		DeploymentDir: deploymentDir,
+		ContainerName: "demo",
+		Mounts: []MountExecutionPlan{{
+			Name: "deployment", Mode: blueprint.MountBind, Source: link,
+			SourceKind: deploy.RuntimeMountSourceDirectory, Target: "/deployment",
+		}},
+	}
+	masks, err := privateRuntimeMasksV1(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if masks == nil || len(masks) != 0 {
+		t.Fatalf("initial masks = %#v", masks)
+	}
+	command := ResolvedEnvironmentCommand{Name: "prepare", Argv: []string{"/opt/prepare"}}
+	lifecycle := LifecyclePlan{Operations: []LifecycleOperation{
+		{Kind: LifecycleCommand, Event: "before_start", Command: &command},
+		{Kind: LifecycleStart, Event: "start"},
+	}}
+	order := []string{}
+	backend := currentWorkloadLifecycleTestBackend(t, lifecycle, &order)
+	runCommand := backend.runCommand
+	backend.runCommand = func(spec CommandSpec, options RunOptions) error {
+		if err := runCommand(spec, options); err != nil {
+			return err
+		}
+		if spec.Name != "transient" {
+			return nil
+		}
+		if err := os.Remove(link); err != nil {
+			return err
+		}
+		return os.Symlink(deploymentDir, link)
+	}
+	err = runCurrentWorkloadLifecycleV1(t.Context(), CurrentWorkloadLifecycleInputV1{
+		Operation: operation, Environment: "demo", DeploymentDir: deploymentDir, Action: "up",
+		Plan:                CurrentRuntimePlanV1{Docker: plan},
+		PrivateRuntimeMasks: masks,
+	}, backend)
+	if err == nil || !strings.Contains(err.Error(), "runtime bind sources changed after runtime inputs were rendered") {
+		t.Fatalf("error = %v", err)
+	}
+	if strings.Contains(strings.Join(order, ","), "run compose-up") {
+		t.Fatalf("workload started after masks changed: %v", order)
 	}
 }
 

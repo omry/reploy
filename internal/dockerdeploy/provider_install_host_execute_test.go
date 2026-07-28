@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/deploy"
 )
 
 func TestConfigureProviderInstallHostV1RunsOnlyPlannedConfiguration(t *testing.T) {
@@ -54,7 +55,7 @@ func TestStartProviderInstallHostV1RunsOneCommandWithoutPreflight(t *testing.T) 
 	}
 }
 
-func TestStartProviderInstallHostV1RejectsRealizedPrivateEnvironmentAncestorMount(t *testing.T) {
+func TestStartProviderInstallHostV1RejectsChangedPrivateRuntimeMasks(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("ordinary Windows users cannot create the test symlink")
 	}
@@ -67,8 +68,9 @@ func TestStartProviderInstallHostV1RejectsRealizedPrivateEnvironmentAncestorMoun
 	); err != nil || !created {
 		t.Fatal(err)
 	}
+	originalSource := t.TempDir()
 	link := filepath.Join(t.TempDir(), "deployment-link")
-	if err := os.Symlink(destinationDir, link); err != nil {
+	if err := os.Symlink(originalSource, link); err != nil {
 		t.Fatal(err)
 	}
 	references := fixedPublicationReferences(t, destinationDir, 0xd3)
@@ -76,22 +78,38 @@ func TestStartProviderInstallHostV1RejectsRealizedPrivateEnvironmentAncestorMoun
 	plan.Backend = installBackendDockerManaged
 	plan.Installation.Scope = "user"
 	plan.Installation.UnitPath = ""
+	plan.Docker.DeploymentDir = destinationDir
 	plan.Docker.PrivateEnvironment = true
+	plan.Docker.Workload = &WorkloadExecutionPlan{Argv: []string{"/bin/true"}}
 	plan.Docker.Mounts = []MountExecutionPlan{{
 		Name: "deployment", Mode: blueprint.MountBind, Source: link,
+		SourceKind: deploy.RuntimeMountSourceDirectory, Target: "/deployment",
 	}}
-
-	err := startProviderInstallHostV1(
+	rendered, err := RenderDockerInputs(plan.Docker, plan.ControlScript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Rendered = rendered
+	if len(plan.Rendered.privateRuntimeMasks) != 0 {
+		t.Fatalf("initial masks = %#v", plan.Rendered.privateRuntimeMasks)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(destinationDir, link); err != nil {
+		t.Fatal(err)
+	}
+	err = startProviderInstallHostV1(
 		t.Context(),
 		plan,
 		providerInstallHostToolsV1{DockerPath: "/usr/bin/docker"},
 		RunOptions{},
 	)
-	if err == nil || !strings.Contains(err.Error(), "exposes .env") {
-		t.Fatalf("ancestor mount error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "runtime bind sources changed after runtime inputs were rendered") {
+		t.Fatalf("error = %v", err)
 	}
 	if strings.Contains(err.Error(), "PRIVATE_NAME") || strings.Contains(err.Error(), "private-value") {
-		t.Fatalf("ancestor mount error leaked private material: %v", err)
+		t.Fatalf("error exposes private environment material: %v", err)
 	}
 }
 

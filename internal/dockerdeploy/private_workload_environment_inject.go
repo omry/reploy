@@ -7,10 +7,13 @@ import (
 	"fmt"
 )
 
-const privateWorkloadEnvironmentRelayV1 = `while IFS= read -r reploy_private_environment_line; do
-  printf '%s\n' "$reploy_private_environment_line"
-  [ -n "$reploy_private_environment_line" ] || break
-done > /proc/1/fd/0
+const privateWorkloadEnvironmentFIFOPathV1 = environmentTemporaryHome + "/.reploy-private-environment"
+
+const privateWorkloadEnvironmentRelayV1 = `reploy_private_environment_pipe=$1
+while [ ! -p "$reploy_private_environment_pipe" ]; do
+  sleep 0.05
+done
+cat > "$reploy_private_environment_pipe"
 `
 
 func injectPrivateWorkloadEnvironmentV1(
@@ -47,10 +50,12 @@ func injectPrivateWorkloadEnvironmentV1(
 			"/bin/sh",
 			"-c",
 			privateWorkloadEnvironmentRelayV1,
+			"reploy-private-environment",
+			privateWorkloadEnvironmentFIFOPathV1,
 		},
 	}
 	if err := run(spec, runOptions); err != nil {
-		return fmt.Errorf("inject private workload environment through the one-shot stdin relay: %w", err)
+		return fmt.Errorf("inject private workload environment through one-shot FIFO relay: %w", err)
 	}
 	return nil
 }

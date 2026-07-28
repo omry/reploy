@@ -15,6 +15,8 @@ type DockerRenderedInputs struct {
 	DryRun      []string
 	Status      DockerPlanStatus
 	Control     DockerControlInput
+
+	privateRuntimeMasks []privateRuntimeMaskV1
 }
 
 type DockerPlanStatus struct {
@@ -67,17 +69,28 @@ type composePlanMount struct {
 }
 
 const privateWorkloadEnvironmentLauncherV1 = `set -eu
+reploy_private_environment_pipe="$HOME/.reploy-private-environment"
+umask 077
+rm -f "$reploy_private_environment_pipe"
+mkfifo "$reploy_private_environment_pipe"
+trap 'rm -f "$reploy_private_environment_pipe"' EXIT
 reploy_private_environment_ready=
-while IFS= read -r reploy_private_environment_line; do
+exec 3< "$reploy_private_environment_pipe"
+while IFS= read -r reploy_private_environment_line <&3; do
   if [ -z "$reploy_private_environment_line" ]; then
     reploy_private_environment_ready=1
     break
   fi
   export "$reploy_private_environment_line"
 done
+exec 3<&-
 [ "$reploy_private_environment_ready" = 1 ] || exit 70
+rm -f "$reploy_private_environment_pipe"
+trap - EXIT
 exec "$@" </dev/null
 `
+
+const privateRuntimeDirectoryMaskOptionsV1 = "ro,noexec,nosuid,nodev,size=4096,mode=000"
 
 func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerRenderedInputs, error) {
 	if controlScript == "" {
@@ -115,6 +128,22 @@ func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerR
 			return DockerRenderedInputs{}, fmt.Errorf("unsupported rendered mount mode %q", mount.Mode)
 		}
 		service.Volumes = append(service.Volumes, item)
+	}
+	masks, err := privateRuntimeMasksV1(plan)
+	if err != nil {
+		return DockerRenderedInputs{}, err
+	}
+	for _, mask := range masks {
+		switch mask.Kind {
+		case privateRuntimeMaskDirectoryV1:
+			service.Tmpfs = append(service.Tmpfs, mask.Target+":"+privateRuntimeDirectoryMaskOptionsV1)
+		case privateRuntimeMaskFileV1:
+			service.Volumes = append(service.Volumes, composePlanMount{
+				Type: "bind", Source: "/dev/null", Target: mask.Target, ReadOnly: true,
+			})
+		default:
+			return DockerRenderedInputs{}, fmt.Errorf("unsupported private runtime mask kind %q", mask.Kind)
+		}
 	}
 	endpointNames := []string{}
 	if plan.Workload != nil {
@@ -166,8 +195,9 @@ func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerR
 	}
 	return DockerRenderedInputs{
 		Compose: compose, Environment: environment, DryRun: dryRun,
-		Status:  DockerPlanStatus{Environment: plan.EnvironmentID, Phase: string(plan.Phase), Scope: scope, Image: plan.Image, Container: plan.ContainerName, Endpoints: statusEndpoints},
-		Control: DockerControlInput{Script: controlScript, Environment: plan.EnvironmentID, HasWorkload: plan.Workload != nil},
+		Status:              DockerPlanStatus{Environment: plan.EnvironmentID, Phase: string(plan.Phase), Scope: scope, Image: plan.Image, Container: plan.ContainerName, Endpoints: statusEndpoints},
+		Control:             DockerControlInput{Script: controlScript, Environment: plan.EnvironmentID, HasWorkload: plan.Workload != nil},
+		privateRuntimeMasks: append([]privateRuntimeMaskV1(nil), masks...),
 	}, nil
 }
 

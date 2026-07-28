@@ -4,17 +4,34 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/omry/reploy/internal/deploy"
 )
 
 const (
-	PrivateWorkloadEnvironmentFileName = ".env"
-	privateWorkloadEnvironmentMaxBytes = 1024 * 1024
+	PrivateWorkloadEnvironmentFileName  = ".env"
+	privateWorkloadEnvironmentMaxBytes  = 1024 * 1024
+	privateRuntimeMetadataDirectoryName = ".reploy"
 )
+
+type privateRuntimeMaskKindV1 string
+
+const (
+	privateRuntimeMaskDirectoryV1 privateRuntimeMaskKindV1 = "directory"
+	privateRuntimeMaskFileV1      privateRuntimeMaskKindV1 = "file"
+)
+
+type privateRuntimeMaskV1 struct {
+	Kind   privateRuntimeMaskKindV1
+	Target string
+}
 
 type privateWorkloadEnvironmentV1 struct {
 	Present bool
@@ -41,10 +58,26 @@ func loadPrivateWorkloadEnvironmentV1(deploymentDir string) (privateWorkloadEnvi
 	}
 	payload.WriteByte('\n')
 	return privateWorkloadEnvironmentV1{
-		Present: true,
+		Present: len(assignments) != 0,
 		Payload: payload.Bytes(),
 		Raw:     append([]byte(nil), raw...),
 	}, nil
+}
+
+// preparePrivateWorkloadEnvironmentV1 makes the private environment path a
+// stable regular-file mountpoint before container creation, then validates and
+// loads it through the defensive platform-specific reader. The empty
+// placeholder is not considered a configured private environment.
+func preparePrivateWorkloadEnvironmentV1(deploymentDir string) (privateWorkloadEnvironmentV1, error) {
+	target := filepath.Join(deploymentDir, PrivateWorkloadEnvironmentFileName)
+	if _, err := publishPrivateWorkloadEnvironmentFileV1(target, nil, false); err != nil {
+		return privateWorkloadEnvironmentV1{}, fmt.Errorf("create empty %s mountpoint: %w", PrivateWorkloadEnvironmentFileName, err)
+	}
+	environment, err := loadPrivateWorkloadEnvironmentV1(deploymentDir)
+	if err != nil {
+		return privateWorkloadEnvironmentV1{}, err
+	}
+	return environment, nil
 }
 
 func parsePrivateWorkloadEnvironmentV1(content []byte) ([]string, error) {
@@ -143,33 +176,9 @@ func validatePrivateWorkloadEnvironmentIsolationV1(deploymentDir string, plan Do
 			plan.Restart,
 		)
 	}
-	environmentPath := filepath.Join(deploymentDir, PrivateWorkloadEnvironmentFileName)
-	realEnvironmentDir, err := filepath.EvalSymlinks(filepath.Dir(environmentPath))
-	if err != nil {
-		return fmt.Errorf("resolve %s parent directory: %w", PrivateWorkloadEnvironmentFileName, err)
-	}
-	realEnvironmentPath := filepath.Join(realEnvironmentDir, filepath.Base(environmentPath))
-	for _, mount := range plan.Mounts {
-		if mount.Mode != "bind" && mount.Mode != "managed-bind" {
-			continue
-		}
-		source, err := filepath.Abs(mount.Source)
-		if err != nil {
-			return fmt.Errorf("resolve runtime mount %q while protecting %s: %w", mount.Name, PrivateWorkloadEnvironmentFileName, err)
-		}
-		if info, err := filepath.EvalSymlinks(source); err == nil {
-			source = info
-		} else {
-			return fmt.Errorf("resolve runtime mount %q while protecting %s: %w", mount.Name, PrivateWorkloadEnvironmentFileName, err)
-		}
-		if pathContainsOrEqualsV1(source, realEnvironmentPath) {
-			return fmt.Errorf(
-				"runtime mount %q exposes %s through host source %s; private workload environment files and their ancestors must not be mounted",
-				mount.Name,
-				PrivateWorkloadEnvironmentFileName,
-				mount.Source,
-			)
-		}
+	plan.DeploymentDir = deploymentDir
+	if _, err := privateRuntimeMasksV1(plan); err != nil {
+		return fmt.Errorf("plan private runtime masks: %w", err)
 	}
 	return nil
 }
@@ -182,25 +191,133 @@ func validatePrivateWorkloadEnvironmentIsolationV1ForPlan(deploymentDir string, 
 			plan.Restart,
 		)
 	}
-	environmentPath := filepath.Join(deploymentDir, PrivateWorkloadEnvironmentFileName)
+	plan.DeploymentDir = deploymentDir
+	if _, err := privateRuntimeMasksV1(plan); err != nil {
+		return fmt.Errorf("plan installed private runtime masks: %w", err)
+	}
+	return nil
+}
+
+func validatePrivateRuntimeMaskSnapshotV1(plan DockerExecutionPlan, expected []privateRuntimeMaskV1) error {
+	masks, err := privateRuntimeMasksV1(plan)
+	if err != nil {
+		return fmt.Errorf("resolve current private runtime masks: %w", err)
+	}
+	if len(masks) != len(expected) {
+		return fmt.Errorf("runtime bind sources changed after runtime inputs were rendered; rerun the operation")
+	}
+	for index := range masks {
+		if masks[index] != expected[index] {
+			return fmt.Errorf("runtime bind sources changed after runtime inputs were rendered; rerun the operation")
+		}
+	}
+	return nil
+}
+
+func privateRuntimeMasksV1(plan DockerExecutionPlan) ([]privateRuntimeMaskV1, error) {
+	if strings.TrimSpace(plan.DeploymentDir) == "" {
+		return nil, fmt.Errorf("private runtime masks require a deployment directory")
+	}
+	root, err := canonicalPathAllowMissingV1(plan.DeploymentDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve deployment root: %w", err)
+	}
+	protected := []struct {
+		path string
+		kind privateRuntimeMaskKindV1
+	}{
+		{path: filepath.Join(root, privateRuntimeMetadataDirectoryName), kind: privateRuntimeMaskDirectoryV1},
+		{path: filepath.Join(root, PrivateWorkloadEnvironmentFileName), kind: privateRuntimeMaskFileV1},
+	}
+	byTarget := map[string]privateRuntimeMaskKindV1{}
 	for _, mount := range plan.Mounts {
 		if mount.Mode != "bind" && mount.Mode != "managed-bind" {
 			continue
 		}
-		source, err := filepath.Abs(mount.Source)
+		source, err := canonicalPathAllowMissingV1(mount.Source)
 		if err != nil {
-			return fmt.Errorf("resolve installed runtime mount %q while protecting %s: %w", mount.Name, PrivateWorkloadEnvironmentFileName, err)
+			return nil, fmt.Errorf("resolve runtime mount %q source: %w", mount.Name, err)
 		}
-		if pathContainsOrEqualsV1(source, environmentPath) {
-			return fmt.Errorf(
-				"installed runtime mount %q exposes %s through host source %s; private workload environment files and their ancestors must not be mounted",
-				mount.Name,
-				PrivateWorkloadEnvironmentFileName,
-				mount.Source,
-			)
+		sourceKind, err := runtimeMountSourceKindV1(mount)
+		if err != nil {
+			return nil, fmt.Errorf("resolve runtime mount %q kind: %w", mount.Name, err)
+		}
+		for _, item := range protected {
+			target, kind, exposed := privateRuntimeMaskTargetV1(source, sourceKind, mount.Target, item.path, item.kind)
+			if !exposed {
+				continue
+			}
+			if previous, found := byTarget[target]; found && previous != kind {
+				return nil, fmt.Errorf("runtime mask target %q has conflicting file and directory types", target)
+			}
+			byTarget[target] = kind
 		}
 	}
-	return nil
+	targets := make([]string, 0, len(byTarget))
+	for target := range byTarget {
+		targets = append(targets, target)
+	}
+	sort.Strings(targets)
+	masks := make([]privateRuntimeMaskV1, 0, len(targets))
+	for _, target := range targets {
+		masks = append(masks, privateRuntimeMaskV1{Kind: byTarget[target], Target: target})
+	}
+	return masks, nil
+}
+
+func privateRuntimeMaskTargetV1(
+	source string,
+	sourceKind string,
+	containerTarget string,
+	protectedPath string,
+	protectedKind privateRuntimeMaskKindV1,
+) (target string, kind privateRuntimeMaskKindV1, exposed bool) {
+	if pathContainsOrEqualsV1(source, protectedPath) {
+		relative, _ := filepath.Rel(source, protectedPath)
+		if relative == "." {
+			return path.Clean(containerTarget), protectedKind, true
+		}
+		return path.Join(containerTarget, filepath.ToSlash(relative)), protectedKind, true
+	}
+	if !pathContainsOrEqualsV1(protectedPath, source) {
+		return "", "", false
+	}
+	kind = privateRuntimeMaskDirectoryV1
+	if sourceKind == deploy.RuntimeMountSourceFile {
+		kind = privateRuntimeMaskFileV1
+	}
+	return path.Clean(containerTarget), kind, true
+}
+
+func canonicalPathAllowMissingV1(value string) (string, error) {
+	absolute, err := filepath.Abs(value)
+	if err != nil {
+		return "", err
+	}
+	current := filepath.Clean(absolute)
+	missing := []string{}
+	for {
+		_, err := os.Lstat(current)
+		if err == nil {
+			resolved, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				return "", err
+			}
+			for index := len(missing) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, missing[index])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
 }
 
 func pathContainsOrEqualsV1(parent string, child string) bool {

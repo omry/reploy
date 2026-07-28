@@ -439,7 +439,7 @@ explain optional nodes only when introduced.
 Treat a deployment-root `.env` as operator-owned runtime configuration rather
 than blueprint or image configuration. Validate the host file defensively,
 keep it outside every Docker and Reploy persistence surface, and inject its
-assignments only after container creation through a fixed one-shot workload
+assignments only after container creation through a fixed private FIFO
 launcher channel.
 
 **Verification gate:**
@@ -447,8 +447,9 @@ launcher channel.
 - POSIX permissions and Windows ACLs limit the file to its deployment owner
   and supported administrative identities;
 - symbolic or hard links, replacement races, invalid assignment syntax,
-  ancestor bind mounts, and autonomous Docker restart policies fail before
-  workload creation;
+  realized bind-source changes, and autonomous Docker restart policies fail
+  before workload creation, while stable ancestor binds receive private-path
+  masks;
 - Compose, image/container metadata, commands, state, locks, and
   Reploy-generated diagnostics contain neither the host file nor its variable
   names or values;
@@ -545,7 +546,7 @@ identity, platform support, or the base image.
 The private workload environment review applied the stronger invariant that
 neither variable names nor values may enter Docker image/container metadata,
 labels, command arguments, mounts, Compose environment content, Reploy state,
-locks, or diagnostics. The one-shot stdin relay satisfies that boundary, and a
+locks, or diagnostics. The private FIFO relay satisfies that boundary, and a
 real-Docker test verifies both workload delivery and absence from
 `docker inspect`.
 
@@ -553,10 +554,12 @@ The review found one additional isolation defect on the immediate user-install
 startup path: its planning check compared lexical mount paths, but it did not
 repeat the symlink-resolving check after installed bind sources existed. A bind
 source symlinked to the installed deployment directory could therefore expose
-the host `.env` on that first start. User-install startup now resolves and
-revalidates every realized bind source before container creation, matching
-staged starts and system-service starts. A focused regression test proves that
-the start is rejected without exposing the private variable name or value.
+the host `.env` on that first start. User-install startup now resolves every
+realized bind source immediately before container creation and compares the
+resulting masks with the published Compose snapshot, matching staged starts
+and system-service starts. Staged starts repeat the same comparison after
+`before_start` lifecycle actions. Focused regression tests prove that changed
+realization is rejected without exposing the private variable name or value.
 
 ## Detailed evaluation evidence
 

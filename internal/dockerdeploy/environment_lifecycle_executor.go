@@ -12,6 +12,9 @@ import (
 func environmentLifecycleExecutor(options RuntimeOptions, plan DockerExecutionPlan, store providerstore.Store, platform blueprint.Platform, stdout io.Writer, stderr io.Writer) LifecycleExecutor {
 	return LifecycleExecutor{
 		RunCommand: func(ctx context.Context, command ResolvedEnvironmentCommand) error {
+			if _, err := preparePrivateWorkloadEnvironmentV1(options.Dir); err != nil {
+				return err
+			}
 			workspace, cleanup, err := PrepareProbeWorkspace(ctx, store, platform)
 			if err != nil {
 				return err

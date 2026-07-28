@@ -18,18 +18,19 @@ func isStaleDockerNetworkError(err error) bool {
 }
 
 type CurrentWorkloadLifecycleInputV1 struct {
-	Operation          *deploy.OperationLock
-	Store              providerstore.Store
-	Current            CurrentBuild
-	Plan               CurrentRuntimePlanV1
-	Environment        string
-	DeploymentDir      string
-	Action             string
-	RunOptions         RunOptions
-	Progress           io.Writer
-	StartCommand       *CommandSpec
-	StopCommand        *CommandSpec
-	PrivateEnvironment privateWorkloadEnvironmentV1
+	Operation           *deploy.OperationLock
+	Store               providerstore.Store
+	Current             CurrentBuild
+	Plan                CurrentRuntimePlanV1
+	Environment         string
+	DeploymentDir       string
+	Action              string
+	RunOptions          RunOptions
+	Progress            io.Writer
+	StartCommand        *CommandSpec
+	StopCommand         *CommandSpec
+	PrivateEnvironment  privateWorkloadEnvironmentV1
+	PrivateRuntimeMasks []privateRuntimeMaskV1
 }
 
 type currentWorkloadLifecycleBackendV1 struct {
@@ -166,6 +167,11 @@ func runCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLif
 			})
 		},
 		Start: func(startCtx context.Context) error {
+			if input.StartCommand == nil && input.PrivateRuntimeMasks != nil {
+				if err := validatePrivateRuntimeMaskSnapshotV1(input.Plan.Docker, input.PrivateRuntimeMasks); err != nil {
+					return fmt.Errorf("validate private runtime isolation before workload creation: %w", err)
+				}
+			}
 			invocation, err := WorkloadRuntimeInvocationV1(input.Plan.Docker)
 			if err != nil {
 				return err

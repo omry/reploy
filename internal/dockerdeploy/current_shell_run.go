@@ -123,6 +123,9 @@ func runCurrentShellV1(ctx context.Context, input CurrentShellRunInputV1, backen
 	if !matched {
 		return fmt.Errorf("%s", currentBuildRecoveryMessageV1(state, "runtime build is missing or stale"))
 	}
+	if _, err := preparePrivateWorkloadEnvironmentV1(dir); err != nil {
+		return fmt.Errorf("prepare private workload environment: %w", err)
+	}
 	invocation, err := backend.invocation(planned.Docker)
 	if err != nil {
 		return err

@@ -1714,18 +1714,29 @@ be a regular file owned by the deployment directory owner with mode `0400` or
 directory owner, with an ACL that grants access only to that owner, SYSTEM, and
 Administrators and grants the owner read access.
 
-When the file is present, generated Compose starts a fixed, secret-free
-launcher waiting on standard input. After container creation, Reploy uses a
-short-lived fixed `docker exec -i` relay to write the validated assignments to
-the launcher's existing standard-input pipe; the launcher exports them and
-executes the workload with the private pipe closed and ordinary detached
-standard-input behavior restored. The host file is never mounted. Neither its
-path nor its variable names or values are placed in image or container
-configuration, Compose environment content, Docker argv, Reploy state, build
-locks, or Reploy-generated diagnostics. Workload output remains
+When the file contains assignments, generated Compose starts a fixed,
+secret-free launcher waiting on a private FIFO in Reploy's in-memory temporary
+home. After container creation, Reploy uses a short-lived fixed
+`docker exec -i` relay to write the validated assignments to that FIFO; the
+launcher exports them, removes the FIFO, and executes the workload with
+ordinary detached standard-input behavior. The host file is never mounted.
+Neither its path nor its variable names or values are placed in image or
+container configuration, Compose environment content, Docker argv, Reploy
+state, build locks, or Reploy-generated diagnostics. Workload output remains
 application-owned: Reploy cannot prevent an application from logging its own
-environment. Reploy rejects any runtime bind whose source is the file or an
-ancestor of it.
+environment.
+
+Runtime binds may expose the deployment directory or one of its ancestors.
+For every resulting container-visible alias, Reploy masks `.env` with an empty
+read-only file and `.reploy` with an inaccessible read-only in-memory
+filesystem. The masks are applied to workloads, shells, app commands, and
+lifecycle containers. Reploy resolves host-side symlinks while planning these
+masks and creates a defensively permissioned empty `.env` placeholder before
+container creation, so a file added or changed after startup cannot become
+visible through an existing parent bind. An empty placeholder does not
+configure any workload values. Reploy also compares the realized masks with
+the rendered runtime inputs immediately before creating the workload, after
+any `before_start` actions, and fails closed if bind-source resolution changed.
 
 Docker restart policies other than `no` are incompatible with `.env`, because
 Docker cannot privately recreate this one-shot channel. Explicit Reploy

@@ -1,12 +1,14 @@
 package dockerdeploy
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 )
 
@@ -82,7 +84,7 @@ func TestTransientAndShellCommandsUseDockerExecArgv(t *testing.T) {
 	workspace := testPreparedProbeWorkspace(t, platform, probeDir)
 	mountDir := t.TempDir()
 	outputDir := t.TempDir()
-	plan := DockerExecutionPlan{Image: "reploy/demo:staging", ContainerName: "demo", RuntimeUser: RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"}, Mounts: []MountExecutionPlan{{Mode: blueprint.MountManagedBind, Source: mountDir, Target: "/conf", ReadOnly: true}}}
+	plan := DockerExecutionPlan{DeploymentDir: t.TempDir(), Image: "reploy/demo:staging", ContainerName: "demo", RuntimeUser: RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"}, Mounts: []MountExecutionPlan{{Mode: blueprint.MountManagedBind, Source: mountDir, Target: "/conf", ReadOnly: true}}}
 	output := &transientOutputMount{HostDirectory: outputDir, Variable: runtimeOutputFileVariable, ContainerPath: runtimeOutputRoot + "/output"}
 	spec, err := TransientCommandSpec(plan, ResolvedEnvironmentCommand{Argv: []string{"/opt/demo", ";rm", "$(touch pwned)"}}, workspace, output, true, false)
 	if err != nil {
@@ -137,7 +139,7 @@ func TestTransientCommandSpecQuotesCommaContainingMountFields(t *testing.T) {
 	outputDir := filepath.Join(hostRoot, "output,preview")
 	workspace := testPreparedProbeWorkspace(t, platform, probeDir)
 	plan := DockerExecutionPlan{
-		Image: "reploy/demo:staging", ContainerName: "demo",
+		DeploymentDir: t.TempDir(), Image: "reploy/demo:staging", ContainerName: "demo",
 		RuntimeUser: RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"},
 		Mounts: []MountExecutionPlan{{
 			Mode: blueprint.MountManagedBind, Source: mountDir,
@@ -162,6 +164,47 @@ func TestTransientCommandSpecQuotesCommaContainingMountFields(t *testing.T) {
 	}
 }
 
+func TestTransientCommandSpecMasksDeploymentPrivatePaths(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deploymentDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(deploymentDir, privateRuntimeMetadataDirectoryName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := preparePrivateWorkloadEnvironmentV1(deploymentDir); err != nil {
+		t.Fatal(err)
+	}
+	workspace := testPreparedProbeWorkspace(t, platform, t.TempDir())
+	plan := DockerExecutionPlan{
+		DeploymentDir: deploymentDir, Image: "reploy/demo:staging", ContainerName: "demo",
+		RuntimeUser: RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"},
+		Mounts: []MountExecutionPlan{{
+			Name: "deployment", Mode: blueprint.MountBind, Source: deploymentDir,
+			SourceKind: deploy.RuntimeMountSourceDirectory, Target: "/deployment",
+		}},
+	}
+	spec, err := TransientCommandSpec(
+		plan,
+		ResolvedEnvironmentCommand{Argv: []string{"/bin/true"}},
+		workspace,
+		nil,
+		false,
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsInOrder(spec.Args, []string{
+		"--tmpfs", "/deployment/.reploy:" + privateRuntimeDirectoryMaskOptionsV1,
+	}) || !containsInOrder(spec.Args, []string{
+		"--mount", "type=bind,source=/dev/null,target=/deployment/.env,readonly",
+	}) {
+		t.Fatalf("transient private runtime masks = %#v", spec.Args)
+	}
+}
+
 func TestPlanTransientContainerExecutionV1SeparatesCreateStartAndCleanup(t *testing.T) {
 	platform, err := blueprint.ParsePlatform("linux/amd64")
 	if err != nil {
@@ -169,7 +212,7 @@ func TestPlanTransientContainerExecutionV1SeparatesCreateStartAndCleanup(t *test
 	}
 	workspace := testPreparedProbeWorkspace(t, platform, t.TempDir())
 	plan := DockerExecutionPlan{
-		Image: "reploy/demo:staging", ContainerName: "demo-staging-abcd",
+		DeploymentDir: t.TempDir(), Image: "reploy/demo:staging", ContainerName: "demo-staging-abcd",
 		RuntimeUser: RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"},
 		Mounts:      []MountExecutionPlan{{Mode: blueprint.MountManagedBind, Source: t.TempDir(), Target: "/conf", ReadOnly: true}},
 	}

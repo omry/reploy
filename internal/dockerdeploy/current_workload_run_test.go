@@ -95,6 +95,9 @@ func TestRunCurrentWorkloadV1KeepsPrivateEnvironmentOutOfPublishedStateAndPasses
 		if !reflect.DeepEqual(input.PrivateEnvironment, private) {
 			t.Fatalf("lifecycle private environment = %#v", input.PrivateEnvironment)
 		}
+		if input.PrivateRuntimeMasks == nil || len(input.PrivateRuntimeMasks) != 0 {
+			t.Fatalf("lifecycle private runtime masks = %#v", input.PrivateRuntimeMasks)
+		}
 		return nil
 	}
 	if err := runCurrentWorkloadV1(t.Context(), CurrentWorkloadRunInputV1{
@@ -516,6 +519,7 @@ func currentWorkloadRunTestBackend(
 	order *[]string,
 ) currentWorkloadRunBackendV1 {
 	t.Helper()
+	planned.Docker.DeploymentDir = dir
 	return currentWorkloadRunBackendV1{
 		acquire: func(ctx context.Context, got string) (*deploy.OperationLock, error) {
 			*order = append(*order, "acquire")

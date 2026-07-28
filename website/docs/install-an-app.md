@@ -164,10 +164,15 @@ files, and permissions or ACLs that expose the file to other users.
 
 Reploy passes these values only to the launched workload. It does not mount
 `.env` or place its names or values in Compose, Docker metadata, image
-configuration, Reploy state, or build locks. Because Docker cannot repeat this
-private one-shot injection by itself, a blueprint using an autonomous Docker
-restart policy cannot be started with `.env`; use the app control command to
-restart it.
+configuration, Reploy state, or build locks. If a runtime bind exposes the
+deployment directory or one of its parents, Reploy masks both `.env` and the
+internal `.reploy` directory at every path where that mount would expose them.
+This applies to workload, shell, app-command, and lifecycle containers.
+Reploy may create an empty owner-only `.env` placeholder to keep that mask
+stable; an empty file does not configure any workload values.
+Because Docker cannot repeat this private one-shot injection by itself, a
+blueprint using an autonomous Docker restart policy cannot be started with
+`.env`; use the app control command to restart it.
 
 Installation copies `.env` from staging on the first install and preserves the
 installed copy on updates. Use `--replace .env` (or `--clean`) only when you

@@ -30,6 +30,9 @@ type DockerPlanContext struct {
 
 type DockerExecutionPlan struct {
 	EnvironmentID string
+	// DeploymentDir is the host deployment root whose private runtime files
+	// must be masked from every container-visible bind-mount alias.
+	DeploymentDir string
 	Phase         blueprint.Phase
 	Scope         *blueprint.InstallScope
 	Image         string
@@ -118,7 +121,7 @@ func PlanDockerExecution(document blueprint.Document, context DockerPlanContext)
 	}
 	containerName := namePrefix + "-" + hash
 	plan := DockerExecutionPlan{
-		EnvironmentID: document.Environment.ID, Phase: context.Phase, Scope: context.Scope,
+		EnvironmentID: document.Environment.ID, DeploymentDir: identityPath, Phase: context.Phase, Scope: context.Scope,
 		Image: context.GeneratedImage, ContainerName: containerName, NetworkName: containerName,
 		TemporaryHome: environmentTemporaryHome,
 	}

@@ -5,15 +5,18 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/deploy"
 )
 
 func TestLoadPrivateWorkloadEnvironmentV1OpensOwnerOnlyRealFile(t *testing.T) {
@@ -32,6 +35,32 @@ func TestLoadPrivateWorkloadEnvironmentV1OpensOwnerOnlyRealFile(t *testing.T) {
 	}
 	if got, want := string(environment.Payload), "EMPTY=\nPORT=8080\nTOKEN=private value\n\n"; got != want {
 		t.Fatalf("payload = %q, want %q", got, want)
+	}
+}
+
+func TestPreparePrivateWorkloadEnvironmentV1CreatesStableEmptyMountpoint(t *testing.T) {
+	dir := t.TempDir()
+	environment, err := preparePrivateWorkloadEnvironmentV1(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if environment.Present || len(environment.Payload) != 1 || environment.Payload[0] != '\n' {
+		t.Fatalf("empty environment = %#v", environment)
+	}
+	path := filepath.Join(dir, PrivateWorkloadEnvironmentFileName)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || hasPOSIXPermissionBits() && info.Mode().Perm() != 0o600 {
+		t.Fatalf("empty mountpoint = %#v, %v", info, err)
+	}
+	if err := os.WriteFile(path, []byte("TOKEN=private-value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	environment, err = preparePrivateWorkloadEnvironmentV1(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !environment.Present || string(environment.Payload) != "TOKEN=private-value\n\n" {
+		t.Fatalf("configured environment = %#v", environment)
 	}
 }
 
@@ -121,13 +150,14 @@ func TestParsePrivateWorkloadEnvironmentV1RejectsAmbiguousInput(t *testing.T) {
 	}
 }
 
-func TestValidatePrivateWorkloadEnvironmentIsolationV1RejectsAncestorMountAndRestart(t *testing.T) {
+func TestValidatePrivateWorkloadEnvironmentIsolationV1MasksAncestorMountAndRejectsRestart(t *testing.T) {
 	dir := t.TempDir()
 	plan := DockerExecutionPlan{Mounts: []MountExecutionPlan{{
 		Name: "deployment", Mode: blueprint.MountBind, Source: dir,
+		SourceKind: deploy.RuntimeMountSourceDirectory, Target: "/deployment",
 	}}}
-	if err := validatePrivateWorkloadEnvironmentIsolationV1(dir, plan); err == nil || !strings.Contains(err.Error(), "exposes .env") {
-		t.Fatalf("ancestor mount error = %v", err)
+	if err := validatePrivateWorkloadEnvironmentIsolationV1(dir, plan); err != nil {
+		t.Fatalf("ancestor mount validation = %v", err)
 	}
 	plan = DockerExecutionPlan{Restart: "unless-stopped"}
 	if err := validatePrivateWorkloadEnvironmentIsolationV1(dir, plan); err == nil || !strings.Contains(err.Error(), "Reploy-managed restart") {
@@ -135,20 +165,69 @@ func TestValidatePrivateWorkloadEnvironmentIsolationV1RejectsAncestorMountAndRes
 	}
 }
 
-func TestRenderDockerInputsUsesSecretFreePrivateLauncher(t *testing.T) {
+func TestPrivateRuntimeMasksV1CoversAliasesAndDirectProtectedSources(t *testing.T) {
+	dir := t.TempDir()
+	privateDir := filepath.Join(dir, privateRuntimeMetadataDirectoryName)
+	if err := os.MkdirAll(filepath.Join(privateDir, "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := preparePrivateWorkloadEnvironmentV1(dir); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "deployment-link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
 	plan := DockerExecutionPlan{
-		EnvironmentID: "demo", Phase: blueprint.PhaseStaged,
+		DeploymentDir: dir,
+		Mounts: []MountExecutionPlan{
+			{Name: "root", Mode: blueprint.MountBind, Source: dir, SourceKind: deploy.RuntimeMountSourceDirectory, Target: "/root"},
+			{Name: "link", Mode: blueprint.MountBind, Source: link, SourceKind: deploy.RuntimeMountSourceDirectory, Target: "/linked"},
+			{Name: "env", Mode: blueprint.MountBind, Source: filepath.Join(dir, PrivateWorkloadEnvironmentFileName), SourceKind: deploy.RuntimeMountSourceFile, Target: "/direct-env"},
+			{Name: "metadata", Mode: blueprint.MountBind, Source: filepath.Join(privateDir, "nested"), SourceKind: deploy.RuntimeMountSourceDirectory, Target: "/direct-metadata"},
+		},
+	}
+	masks, err := privateRuntimeMasksV1(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []privateRuntimeMaskV1{
+		{Kind: privateRuntimeMaskFileV1, Target: "/direct-env"},
+		{Kind: privateRuntimeMaskDirectoryV1, Target: "/direct-metadata"},
+		{Kind: privateRuntimeMaskFileV1, Target: "/linked/.env"},
+		{Kind: privateRuntimeMaskDirectoryV1, Target: "/linked/.reploy"},
+		{Kind: privateRuntimeMaskFileV1, Target: "/root/.env"},
+		{Kind: privateRuntimeMaskDirectoryV1, Target: "/root/.reploy"},
+	}
+	sort.Slice(want, func(left, right int) bool { return want[left].Target < want[right].Target })
+	if !reflect.DeepEqual(masks, want) {
+		t.Fatalf("masks = %#v, want %#v", masks, want)
+	}
+}
+
+func TestRenderDockerInputsUsesSecretFreePrivateLauncher(t *testing.T) {
+	deploymentDir := t.TempDir()
+	plan := DockerExecutionPlan{
+		EnvironmentID: "demo", DeploymentDir: deploymentDir, Phase: blueprint.PhaseStaged,
 		Image: "sha256:image", ContainerName: "demo", NetworkName: "demo",
 		RuntimeUser:        RuntimeUserPlan{DockerUser: "1000:1000"},
 		PrivateEnvironment: true,
 		Workload:           &WorkloadExecutionPlan{Argv: []string{"/opt/demo", "serve"}},
+		Mounts: []MountExecutionPlan{{
+			Name: "deployment", Mode: blueprint.MountBind, Source: deploymentDir,
+			SourceKind: deploy.RuntimeMountSourceDirectory, Target: "/deployment",
+		}},
 	}
 	rendered, err := RenderDockerInputs(plan, "democtl")
 	if err != nil {
 		t.Fatal(err)
 	}
 	compose := string(rendered.Compose)
-	for _, want := range []string{"stdin_open: true", "reploy_private_environment_ready", "/opt/demo", "serve"} {
+	for _, want := range []string{
+		"stdin_open: true", "reploy_private_environment_ready", "/opt/demo", "serve",
+		"source: /dev/null", "target: /deployment/.env", "read_only: true",
+		"/deployment/.reploy:" + privateRuntimeDirectoryMaskOptionsV1,
+	} {
 		if !strings.Contains(compose, want) {
 			t.Fatalf("Compose missing %q:\n%s", want, compose)
 		}
@@ -182,7 +261,10 @@ func TestInjectPrivateWorkloadEnvironmentV1UsesOnlyStdin(t *testing.T) {
 	if strings.Contains(command, "private value") || strings.Contains(command, "TOKEN") {
 		t.Fatalf("command contains secret: %#v", gotSpec)
 	}
-	if !reflect.DeepEqual(gotSpec.Args, []string{"exec", "-i", "demo", "/bin/sh", "-c", privateWorkloadEnvironmentRelayV1}) {
+	if !reflect.DeepEqual(gotSpec.Args, []string{
+		"exec", "-i", "demo", "/bin/sh", "-c", privateWorkloadEnvironmentRelayV1,
+		"reploy-private-environment", privateWorkloadEnvironmentFIFOPathV1,
+	}) {
 		t.Fatalf("relay command = %#v", gotSpec)
 	}
 	want := []byte("TOKEN=private value\n\n")
@@ -218,7 +300,7 @@ func TestStartAndInjectPrivateWorkloadEnvironmentV1CleansFailedContainer(t *test
 			return nil
 		},
 	)
-	if err == nil || !strings.Contains(err.Error(), "one-shot stdin relay") {
+	if err == nil || !strings.Contains(err.Error(), "one-shot FIFO relay") {
 		t.Fatalf("error = %v", err)
 	}
 	if len(order) != 3 || order[0] != "compose up" || !strings.HasPrefix(order[1], "exec -i demo /bin/sh -c ") || order[2] != "compose down" {
@@ -297,21 +379,27 @@ func TestPlanAndApplyPrivateEnvironmentInstallPreservesThenReplaces(t *testing.T
 }
 
 func TestPrivateWorkloadEnvironmentRealDockerIsolation(t *testing.T) {
-	if os.Getenv("REPLOY_TEST_PRIVATE_ENV_DOCKER") != "1" {
-		t.Skip("set REPLOY_TEST_PRIVATE_ENV_DOCKER=1 to run the real-Docker private environment test")
+	if os.Getenv("REPLOY_DOCKER_INTEGRATION") != "1" && os.Getenv("REPLOY_TEST_PRIVATE_ENV_DOCKER") != "1" {
+		t.Skip("set REPLOY_DOCKER_INTEGRATION=1 to run the real-Docker private environment test")
 	}
 	container := "reploy-private-env-test-" + strconv.Itoa(os.Getpid())
 	run := func(spec CommandSpec, options RunOptions) error {
 		options.Context = t.Context()
 		return runCommandWithoutDockerPreflight(spec, options)
 	}
-	_ = run(CommandSpec{Name: "docker", Args: []string{"rm", "--force", container}}, RunOptions{})
+	remove := func() {
+		_ = exec.CommandContext(context.Background(), "docker", "rm", "--force", container).Run()
+	}
+	remove()
 	t.Cleanup(func() {
-		_ = run(CommandSpec{Name: "docker", Args: []string{"rm", "--force", container}}, RunOptions{})
+		remove()
 	})
 	script := privateWorkloadEnvironmentLauncherV1
 	create := CommandSpec{Name: "docker", Args: []string{
-		"create", "--name", container, "-i", "--user", "65532:65532", "--entrypoint", "/bin/sh", "python:3.11-slim",
+		"create", "--name", container, "-i", "--user", "65532:65532",
+		"--tmpfs", environmentTemporaryHome + ":rw,noexec,nosuid,nodev,size=64m,mode=1777",
+		"--env", "HOME=" + environmentTemporaryHome,
+		"--entrypoint", "/bin/sh", "python:3.11-slim",
 		"-c", script, "reploy-private-environment",
 		"python", "-c", `import os,time; name="REPLOY_"+"PRIVATE_"+"TEST"; value=os.environ.get(name); data=os.read(0, 1); print("ENV_PRESENT", value is not None, "LENGTH", len(value or ""), "STDIN_EOF", data == b"", flush=True); time.sleep(20)`,
 	}}

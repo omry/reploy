@@ -1,0 +1,2 @@
+kind: Security
+body: Prevent runtime binds from exposing deployment `.env` files or internal `.reploy` state inside Reploy-managed containers.

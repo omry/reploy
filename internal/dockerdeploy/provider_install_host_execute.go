@@ -18,11 +18,18 @@ func startProviderInstallHostV1(ctx context.Context, plan providerInstallationPl
 	if err != nil {
 		return err
 	}
-	if plan.Docker.PrivateEnvironment && plan.Backend != installBackendLinuxSystemd {
-		environment, err := loadPrivateWorkloadEnvironmentV1(plan.Installation.TargetDir)
-		if err != nil {
-			return fmt.Errorf("load installed private workload environment: %w", err)
+	environment, err := preparePrivateWorkloadEnvironmentV1(plan.Installation.TargetDir)
+	if err != nil {
+		return fmt.Errorf("prepare installed private workload environment: %w", err)
+	}
+	if plan.Backend != installBackendLinuxSystemd {
+		currentDockerPlan := plan.Docker
+		currentDockerPlan.DeploymentDir = plan.Installation.TargetDir
+		if err := validatePrivateRuntimeMaskSnapshotV1(currentDockerPlan, plan.Rendered.privateRuntimeMasks); err != nil {
+			return fmt.Errorf("validate installed private runtime isolation: %w", err)
 		}
+	}
+	if plan.Docker.PrivateEnvironment && plan.Backend != installBackendLinuxSystemd {
 		if !environment.Present {
 			return fmt.Errorf("installed private workload environment disappeared before startup")
 		}

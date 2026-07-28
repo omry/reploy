@@ -28,7 +28,7 @@ func TestTransientCommandDockerIntegrationInitializesPrivateHomeAndDropsPrivileg
 	}
 	workspace := testPreparedProbeWorkspace(t, platform, helperDir)
 	plan := DockerExecutionPlan{
-		Image: "debian:bookworm-slim", ContainerName: "reploy-transient-home-integration",
+		DeploymentDir: t.TempDir(), Image: "debian:bookworm-slim", ContainerName: "reploy-transient-home-integration",
 		RuntimeUser: RuntimeUserPlan{UID: 12345, GID: 23456, DockerUser: "12345:23456"},
 	}
 	command := ResolvedEnvironmentCommand{Argv: []string{

@@ -148,7 +148,7 @@ func currentRuntimeFilePlanV1() CurrentRuntimePlanV1 {
 	return CurrentRuntimePlanV1{
 		Document: blueprint.Document{Environment: blueprint.Environment{ControlScript: "demo"}},
 		Docker: DockerExecutionPlan{
-			EnvironmentID: "demo", Phase: blueprint.PhaseStaged,
+			EnvironmentID: "demo", DeploymentDir: "/deployment", Phase: blueprint.PhaseStaged,
 			Image: "reploy/env/demo-deadbeef:g-current", ContainerName: "demo-staging", NetworkName: "demo-staging",
 			RuntimeUser: RuntimeUserPlan{DockerUser: "1000:1000"}, TemporaryHome: environmentTemporaryHome,
 		},

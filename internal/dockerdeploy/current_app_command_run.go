@@ -138,6 +138,9 @@ func runCurrentAppCommandV1(ctx context.Context, input CurrentAppCommandRunInput
 	if !matched {
 		return fmt.Errorf("%s", currentBuildRecoveryMessageV1(state, "runtime build is missing or stale"))
 	}
+	if _, err := preparePrivateWorkloadEnvironmentV1(dir); err != nil {
+		return fmt.Errorf("prepare private workload environment: %w", err)
+	}
 	command, err := backend.planCommand(planned, current.Lock.Catalog, input.Arguments, input.DeployedOnly)
 	if err != nil {
 		return err

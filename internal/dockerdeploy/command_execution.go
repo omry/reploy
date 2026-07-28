@@ -265,6 +265,24 @@ func transientContainerCommandSpecV1(operation string, container string, plan Do
 		}
 		args = append(args, "--mount", value)
 	}
+	masks, err := privateRuntimeMasksV1(plan)
+	if err != nil {
+		return CommandSpec{}, err
+	}
+	for _, mask := range masks {
+		switch mask.Kind {
+		case privateRuntimeMaskDirectoryV1:
+			args = append(args, "--tmpfs", mask.Target+":"+privateRuntimeDirectoryMaskOptionsV1)
+		case privateRuntimeMaskFileV1:
+			value, err := dockerMountArgument("type=bind", "source=/dev/null", "target="+mask.Target, "readonly")
+			if err != nil {
+				return CommandSpec{}, fmt.Errorf("render private runtime file mask: %w", err)
+			}
+			args = append(args, "--mount", value)
+		default:
+			return CommandSpec{}, fmt.Errorf("unsupported private runtime mask kind %q", mask.Kind)
+		}
+	}
 	if output != nil {
 		if !filepath.IsAbs(output.HostDirectory) || output.Variable == "" || output.ContainerPath == "" {
 			return CommandSpec{}, fmt.Errorf("transient output mount is incomplete")

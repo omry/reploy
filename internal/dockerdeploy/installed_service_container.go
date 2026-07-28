@@ -71,9 +71,9 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 	if err != nil {
 		return err
 	}
-	environment, err := loadPrivateWorkloadEnvironmentV1(deploymentDir)
+	environment, err := preparePrivateWorkloadEnvironmentV1(deploymentDir)
 	if err != nil {
-		return fmt.Errorf("load private workload environment: %w", err)
+		return fmt.Errorf("prepare private workload environment: %w", err)
 	}
 	if environment.Present {
 		if err := validatePrivateWorkloadEnvironmentIsolationV1(deploymentDir, plan.Docker); err != nil {
