@@ -383,11 +383,11 @@ not the provisional source projection.
 `SourceArtifactDigest` identifies the retained sdist, and
 `OutputArtifactDigest` identifies the resulting wheel.
 `BuildEnvironmentDigest` binds the selected platform, exact immutable upstream
-image, and selected interpreter evidence. Exact input reuse requires both
-descriptors and bytes in the provider store. When changed inputs produce a
-byte-identical sdist under the same builder profile, settings, and build
-environment, the prior wheel may be reused through the retained-sdist identity.
-Both artifacts are part of the resolved bundle and build-lock store closure.
+image, and selected interpreter evidence. Every explicit image build with a
+selected local project rebuilds both the sdist and wheel before deciding
+whether later provider layers or the final image can be reused. Prior artifacts
+cannot bypass wheel construction. Both newly verified artifacts are part of
+the resolved bundle and build-lock store closure.
 
 The Docker backend may produce that path-free candidate list during one
 provider-node preparation session, after the node's exact upstream prefix and
@@ -1955,8 +1955,10 @@ wheelhouse. The single resolver invocation may write its complete selected
 closure there, including temporary copies of selected reusable wheels. During
 ingestion, matching digests reuse the existing immutable store blobs, and the
 entire resolver workspace is then removed. Downloaded wheel reuse requires
-compatible interpreter, ABI, platform, architecture, and tags; locally built
-wheel reuse also binds source and complete build identity.
+compatible interpreter, ABI, platform, architecture, and tags. A local wheel
+is admitted only after the current execution freshly rebuilds it from the
+retained sdist; its recorded identity binds the source and complete build
+environment.
 
 Offline materialization creates its venv at:
 

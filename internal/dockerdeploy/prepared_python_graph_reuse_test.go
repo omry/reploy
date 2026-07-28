@@ -66,6 +66,29 @@ func TestLoadPreparedPythonGraphReuseUsesOnlyCurrentCompatibleContent(t *testing
 	}
 }
 
+func TestLoadPreparedPythonGraphReuseRequiresFreshLocalWheelCandidates(t *testing.T) {
+	fixture := newPreparedPythonGraphReuseFixture(t)
+	reuse, err := LoadPreparedPythonGraphReuse(
+		fixture.store,
+		fixture.request.Plan,
+		fixture.request.Platform,
+		[]providers.ResolvedSourceInput{},
+		[]providerstore.ArtifactDescriptor{},
+		&fixture.lock,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := reuse.CachedResolutions[fixture.request.NodeID]; found {
+		t.Fatal("current local-source resolution was reused without a freshly built wheel candidate")
+	}
+	for _, wheel := range reuse.NodeConfigs[fixture.request.NodeID].ReusableWheels {
+		if wheel.SHA256 == fixture.localWheelDigest {
+			t.Fatalf("prior local wheel remained reusable: %#v", wheel)
+		}
+	}
+}
+
 func TestLoadPreparedPythonGraphReuseIgnoresUnrelatedPythonOverride(t *testing.T) {
 	fixture := newPreparedPythonGraphReuseFixture(t)
 	plan := fixture.request.Plan

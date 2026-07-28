@@ -736,9 +736,13 @@ def run_smoke(
     )
     require_contains(app_check.stdout, '"check": "pass"', "app command after explicit build")
 
-    # Keep a second explicit command as an end-to-end check that an
-    # already-current build is reused cleanly.
-    run([str(reploy), "build", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+    # A second explicit build must still reconstruct selected local wheels.
+    repeated_build = run([str(reploy), "build", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+    require_contains(
+        completed_output(repeated_build),
+        "building local Python projects smoke-imap, smoke-suite",
+        "repeated explicit local-source build",
+    )
     if runtime:
         run_runtime_smoke(reploy, deploy_dir, workdir, env)
     if port_conflict_probe:

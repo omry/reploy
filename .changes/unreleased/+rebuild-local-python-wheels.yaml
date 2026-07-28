@@ -1,0 +1,2 @@
+kind: Fixed
+body: Explicit builds now rebuild wheels for selected local Python projects before deciding whether the environment image can be reused.

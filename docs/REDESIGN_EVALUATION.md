@@ -311,19 +311,16 @@ explicit opt-in later.
   local-source entry except VCS metadata. Generated environments, caches, and
   other development files remain visible to the declared build backend; the
   backend alone decides whether they enter the sdist.
-- After a successful sdist build, Reploy may retain an advisory relevance map
-  derived from the validated sdist. A warm exact-reuse check hashes the
-  previously relevant top-level source directories and root build-control
-  files, and compares the source root's shallow topology. Changes to those
-  inputs trigger a complete source observation; changes inside an existing
-  top-level directory that the prior sdist did not use do not invalidate the
-  retained source artifact. The map is a post-build invalidation aid, not a
-  claim that rerunning the backend would produce identical bytes.
-- The warm map is versioned, private to the deployment-owned provider cache,
-  and disposable. Absence, corruption, a changed build description, a changed
-  relevant input, changed root topology, or `--no-cache` falls back to the
-  complete source observation and relearns the map from the next validated
-  sdist.
+- Every explicit image build with a selected local Python project performs the
+  complete source projection, sdist build, validation, and wheel build before
+  deciding whether later provider layers or the final environment image are
+  reusable. A prior sdist's contents are not treated as a list of every input
+  the backend may read, and a prior wheel cannot bypass fresh wheel
+  construction.
+- Automatic runtime preparation may reuse an already-current locked image
+  without inspecting or rebuilding its local projects. If another changed
+  input prevents exact image reuse, the local projects re-enter the same fresh
+  wheel path as an explicit build.
 - The projection is exposed read-only only inside the existing disposable
   resolver container. The container retains its read-only root filesystem,
   private tmpfs scratch, closed environment, pinned interpreter and `uv`
@@ -346,10 +343,9 @@ explicit opt-in later.
 - Resolved source identity records the full source-input digest as a freshness
   and TOCTOU key, the retained sdist digest, the resulting wheel digest, the
   exact build-environment digest, builder profile, build settings, and ecosystem
-  metadata. Exact input reuse requires both retained artifacts. If source
-  inputs change but produce the same retained sdist under the same selected
-  platform, immutable upstream image, and interpreter evidence, the existing
-  wheel may be reused through that sdist identity.
+  metadata. A fresh byte-identical wheel may allow later graph materialization
+  and final-image reuse, but explicit builds do not use either retained
+  artifact to skip local wheel construction.
 - Broader cross-run build-environment caching and pre-resolved offline build
   dependencies remain separate post-v1 work.
 
@@ -359,7 +355,8 @@ explicit opt-in later.
   backend;
 - unrelated virtual environments, including `.venv-demo`, do not enter the
   retained package artifact;
-- wheel reuse is keyed through the retained sdist;
+- repeated explicit builds execute both the local sdist and wheel builders
+  before any environment-image reuse decision;
 - escaping links and malformed archives fail with concise local-source
   diagnostics; and
 - packages requiring unavailable VCS metadata get an actionable error.

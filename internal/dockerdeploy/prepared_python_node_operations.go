@@ -26,8 +26,6 @@ type PreparedPythonNodeOperations struct {
 	FinalImageConfig       providers.ImageConfigPolicy
 	Artifacts              PreparedPythonResolverArtifacts
 	ReusableWheels         []providerstore.ArtifactDescriptor
-	PriorSources           []providers.ResolvedSourceInput
-	PriorSourceWheels      []providerstore.ArtifactDescriptor
 	LocalOverrides         []PythonLocalOverrideV1
 	Progress               io.Writer
 	ShowApplicationContext bool
@@ -395,107 +393,20 @@ func (operations PreparedPythonNodeOperations) materializeLocalOverrides(
 	if err != nil {
 		return nil, nil, err
 	}
-	sourceByDistribution := make(map[string]PythonLocalSource, len(sources))
-	for _, source := range sources {
-		sourceByDistribution[source.Distribution] = source
-	}
-	for _, distribution := range preparedDistributions {
-		source, found := sourceByDistribution[distribution.Distribution]
-		if found {
-			_ = learnPythonSourceRelevance(operations.Store, source, distribution.Artifact)
-		}
-	}
-	reusedSources, pendingDistributions, wheelsAfterSdistReuse, err := operations.reusePythonSourceWheels(
-		session.artifacts, component, preparedDistributions, effectiveWheels,
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := session.BuildSourceWheels(ctx, launcher, requirement, interpreter, pendingDistributions); err != nil {
+	if err := session.BuildSourceWheels(ctx, launcher, requirement, interpreter, preparedDistributions); err != nil {
 		return nil, nil, err
 	}
 	builtSources, stagedWheels, err := PublishBuiltPythonSourceWheels(
-		ctx, operations.Store, session.artifacts, component, pendingDistributions, wheelsAfterSdistReuse,
+		ctx, operations.Store, session.artifacts, component, preparedDistributions, effectiveWheels,
 	)
 	if err != nil {
 		return nil, nil, err
 	}
-	mergedBuilt, err := mergePythonSourceCandidates(reusedSources, builtSources)
-	if err != nil {
-		return nil, nil, err
-	}
-	merged, err := mergePythonSourceCandidates(effectiveSources, mergedBuilt)
+	merged, err := mergePythonSourceCandidates(effectiveSources, builtSources)
 	if err != nil {
 		return nil, nil, err
 	}
 	return merged, stagedWheels, nil
-}
-
-func (operations PreparedPythonNodeOperations) reusePythonSourceWheels(
-	artifacts PreparedPythonResolverArtifacts,
-	component string,
-	distributions []PreparedPythonSourceDistribution,
-	effective []providerstore.ArtifactDescriptor,
-) ([]providers.ResolvedSourceInput, []PreparedPythonSourceDistribution, []providerstore.ArtifactDescriptor, error) {
-	priorByPackage := make(map[string]providers.ResolvedSourceInput, len(operations.PriorSources))
-	for _, source := range operations.PriorSources {
-		if err := pythonprovider.ValidateResolvedSourceInputV2(source); err != nil {
-			return nil, nil, nil, err
-		}
-		if source.Component == component {
-			priorByPackage[source.LogicalPackage] = source
-		}
-	}
-	wheelsByDigest := make(map[canonical.Digest]providerstore.ArtifactDescriptor, len(operations.PriorSourceWheels))
-	for _, wheel := range operations.PriorSourceWheels {
-		if err := wheel.Validate(); err != nil {
-			return nil, nil, nil, fmt.Errorf("prior Python source wheel: %w", err)
-		}
-		if wheel.Kind != "wheel" {
-			return nil, nil, nil, fmt.Errorf("prior Python source artifact %q must be a wheel", wheel.LogicalPath)
-		}
-		wheelsByDigest[wheel.SHA256] = wheel
-	}
-	reused := []providers.ResolvedSourceInput{}
-	pending := []PreparedPythonSourceDistribution{}
-	for _, distribution := range distributions {
-		prior, found := priorByPackage[distribution.Distribution]
-		if !found ||
-			prior.SourceArtifactDigest != distribution.Artifact.SHA256 ||
-			prior.BuildEnvironmentDigest != distribution.BuildEnvironmentDigest ||
-			prior.BuilderProfile != distribution.BuilderProfile ||
-			!reflect.DeepEqual(prior.BuildSettings, distribution.BuildSettings) {
-			pending = append(pending, distribution)
-			continue
-		}
-		wheel, found := wheelsByDigest[prior.OutputArtifactDigest]
-		if !found {
-			pending = append(pending, distribution)
-			continue
-		}
-		metadata, err := pythonprovider.SourceWheelMetadataV2(prior)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		if metadata.Version != distribution.Version {
-			pending = append(pending, distribution)
-			continue
-		}
-		if err := StagePythonResolverWheelArtifact(operations.Store, artifacts, wheel); err != nil {
-			return nil, nil, nil, err
-		}
-		source, err := pythonprovider.NewResolvedSourceInputWithBuildV2(
-			component, distribution.Distribution, distribution.SourceInputDigest,
-			distribution.Artifact, distribution.BuildEnvironmentDigest, wheel, metadata,
-			distribution.BuilderProfile, distribution.BuildSettings,
-		)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		reused = append(reused, source)
-		effective = replacePythonWheelByFilename(effective, wheel)
-	}
-	return reused, pending, effective, nil
 }
 
 func filterPythonSourcesForBuildEnvironment(

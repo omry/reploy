@@ -13,17 +13,15 @@ import (
 )
 
 type LockedProviderBuildExecutionInputV1 struct {
-	Preparation       LockedProviderBuildPreparationV1
-	SourceWheels      []providerstore.ArtifactDescriptor
-	PriorSources      []providers.ResolvedSourceInput
-	PriorSourceWheels []providerstore.ArtifactDescriptor
-	LocalOverrides    []PythonLocalOverrideV1
-	ValidateLayers    bool
-	ValidateChoices   bool
-	RunValidation     FullImageValidationRunner
-	Progress          io.Writer
-	BuildProgress     buildprogress.Reporter
-	RunOptions        RunOptions
+	Preparation     LockedProviderBuildPreparationV1
+	SourceWheels    []providerstore.ArtifactDescriptor
+	LocalOverrides  []PythonLocalOverrideV1
+	ValidateLayers  bool
+	ValidateChoices bool
+	RunValidation   FullImageValidationRunner
+	Progress        io.Writer
+	BuildProgress   buildprogress.Reporter
+	RunOptions      RunOptions
 }
 
 type LockedProviderBuildExecutionResultV1 struct {
@@ -60,8 +58,8 @@ type providerBuildExecutionBackend struct {
 // ExecuteLockedProviderBuildV1 consumes a preparation made under the same held
 // operation lock. It either returns the exact reused generation without backend
 // work or executes the provider graph, plans complete validation, and publishes
-// the resulting generation. Source observation and lock acquisition belong to
-// the caller.
+// the resulting generation. Local-source observation occurs during fresh graph
+// preparation after package selection; lock acquisition belongs to the caller.
 func ExecuteLockedProviderBuildV1(
 	ctx context.Context,
 	input LockedProviderBuildExecutionInputV1,
@@ -250,11 +248,9 @@ func executeLockedProviderBuildV1(
 	graph, err := backend.executeGraph(ctx, PreparedPythonGraphExecutionInput{
 		Store: preparation.Store, Plan: preparedBase.Plan, BaseDescriptor: preparedBase.Descriptor,
 		BaseCatalog: preparedBase.Catalog, Sources: preparation.Loaded.Request.Sources,
-		SourceWheels:      append([]providerstore.ArtifactDescriptor{}, input.SourceWheels...),
-		PriorSources:      append([]providers.ResolvedSourceInput{}, input.PriorSources...),
-		PriorSourceWheels: append([]providerstore.ArtifactDescriptor{}, input.PriorSourceWheels...),
-		LocalOverrides:    append([]PythonLocalOverrideV1{}, input.LocalOverrides...),
-		CurrentLock:       preparation.ReusableLock, FinalImageConfig: preparation.FinalImageConfig,
+		SourceWheels:   append([]providerstore.ArtifactDescriptor{}, input.SourceWheels...),
+		LocalOverrides: append([]PythonLocalOverrideV1{}, input.LocalOverrides...),
+		CurrentLock:    preparation.ReusableLock, FinalImageConfig: preparation.FinalImageConfig,
 		Progress: input.Progress, BuildProgress: input.BuildProgress, RunOptions: options,
 	})
 	if err != nil {

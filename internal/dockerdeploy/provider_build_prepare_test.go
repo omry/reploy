@@ -164,6 +164,49 @@ func TestPrepareLockedProviderBuildV1RealizesBaseAfterStaleReuse(t *testing.T) {
 	}
 }
 
+func TestPrepareLockedProviderBuildV1DropsAutomaticSourcesBeforeExecution(t *testing.T) {
+	input, loaded, _, selected, prepared := providerBuildPreparationFixture(t)
+	source := testPythonResolvedSource(
+		"application",
+		"demo",
+		"1",
+		reuseTestDigest("1"),
+		reuseTestDigest("2"),
+	)
+	input.Sources = []providers.ResolvedSourceInput{source}
+	loaded.Request.Sources = []providers.ResolvedSourceInput{source}
+	order := []string{}
+	backend := providerBuildPreparationTestBackend(
+		t,
+		loaded,
+		CurrentBuild{},
+		selected,
+		prepared,
+		&order,
+	)
+	backend.validateCurrent = func(
+		context.Context,
+		*deploy.OperationLock,
+		providerstore.Store,
+		string,
+		string,
+	) (CurrentBuild, bool, error) {
+		order = append(order, "current")
+		return CurrentBuild{}, false, nil
+	}
+
+	result, err := prepareLockedProviderBuildV1(context.Background(), input, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Reused || result.PreparedBase == nil || len(result.Loaded.Request.Sources) != 0 {
+		t.Fatalf("result retained automatic source candidates = %#v", result)
+	}
+	if !reflect.DeepEqual(order, []string{"recover", "load", "current", "select", "realize"}) {
+		t.Fatalf("order = %#v", order)
+	}
+}
+
 func TestPrepareLockedProviderBuildV1RebuildsExactCurrentAfterProviderStoreClean(t *testing.T) {
 	input, loaded, current, selected, prepared := providerBuildPreparationFixture(t)
 	order := []string{}

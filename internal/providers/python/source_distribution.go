@@ -35,51 +35,6 @@ type SourceDistributionMetadataV1 struct {
 	Root         string
 }
 
-// SourceDistributionRelativePathsV1 returns the validated archive paths below
-// the sdist's single package root. It is intended for advisory post-build
-// provenance; callers must not interpret the list as every input the backend
-// may have read while producing the archive.
-func SourceDistributionRelativePathsV1(filename string) ([]string, SourceDistributionMetadataV1, error) {
-	metadata, err := inspectSourceDistributionArchive(filename)
-	if err != nil {
-		return nil, SourceDistributionMetadataV1{}, err
-	}
-	archive, closeArchive, err := openSourceDistributionArchive(filename)
-	if err != nil {
-		return nil, SourceDistributionMetadataV1{}, err
-	}
-	defer closeArchive()
-	prefix := metadata.Root + "/"
-	relative := []string{}
-	for {
-		header, err := archive.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return nil, SourceDistributionMetadataV1{}, fmt.Errorf("read Python source distribution: %w", err)
-		}
-		name, err := normalizedSourceDistributionPath(header)
-		if err != nil {
-			return nil, SourceDistributionMetadataV1{}, err
-		}
-		if name == metadata.Root {
-			continue
-		}
-		value, found := strings.CutPrefix(name, prefix)
-		if !found || value == "" {
-			return nil, SourceDistributionMetadataV1{}, fmt.Errorf(
-				"Python source distribution path %q is outside package root %q",
-				name,
-				metadata.Root,
-			)
-		}
-		relative = append(relative, value)
-	}
-	sort.Strings(relative)
-	return relative, metadata, nil
-}
-
 // DescribeSourceDistributionFileV1 validates one closed PEP 517 source
 // distribution and binds the same bytes to their provider-store descriptor.
 func DescribeSourceDistributionFileV1(

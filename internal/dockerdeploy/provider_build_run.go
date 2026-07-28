@@ -8,11 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/buildprogress"
-	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providers/registry"
@@ -275,100 +273,45 @@ func runLockedProviderBuildV1(
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("load local Python package overrides: %w", err)
 	}
-	reusableSources := []providers.ResolvedSourceInput{}
-	reusableWheels := []providerstore.ArtifactDescriptor{}
-	priorSources := []providers.ResolvedSourceInput{}
-	priorSourceWheels := []providerstore.ArtifactDescriptor{}
-	cacheExists := false
-	if (state.Current != nil || validatedCandidateFound) && !input.NoCache {
-		cacheExists, err = input.Store.Exists()
-		if err != nil {
-			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("inspect provider build cache for workspace reuse: %w", err)
-		}
-	}
-	if (state.Current != nil || validatedCandidateFound) && !input.NoCache && cacheExists {
-		var lock deploy.BuildLockV1
+	reuseSources := []providers.ResolvedSourceInput{}
+	if input.Automatic && !input.NoCache {
+		var reuseLock *deploy.BuildLockV1
 		if validatedCandidateFound {
-			lock = validatedCandidate.Current.Lock
-		} else {
-			loaded, found, err := input.Operation.ReadBuildLock(state.Current.BuildLockDigest, registry.ValidateRequirementProfileV1)
-			if err != nil {
-				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("load current build lock for workspace reuse: %w", err)
-			}
-			if !found {
-				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("current build lock %s is missing", state.Current.BuildLockDigest)
-			}
-			if err := validateGenerationBuildLock(*state.Current, loaded, registry.ValidateRequirementProfileV1); err != nil {
-				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("load current build lock for workspace reuse: %w", err)
-			}
-			lock = loaded
-		}
-		if lock.Platform == state.Platform {
-			lockedSources, err := buildLockSelectedSourcesV1(lock)
-			if err != nil {
-				return LockedProviderBuildExecutionResultV1{}, err
-			}
-			eligible := make([]providers.ResolvedSourceInput, 0, len(lockedSources))
-			distributionSet := map[string]struct{}{}
-			for _, source := range lockedSources {
-				component, found := document.Environment.Components[source.Component]
-				if !found || component.Type != blueprint.ComponentTypePython {
-					continue
-				}
-				eligible = append(eligible, source)
-				distributionSet[source.LogicalPackage] = struct{}{}
-			}
-			distributions := make([]string, 0, len(distributionSet))
-			for distribution := range distributionSet {
-				distributions = append(distributions, distribution)
-			}
-			sort.Strings(distributions)
-			reusableSources, err = ReusablePythonLocalSourcesV1(
-				input.Store, localOverrides, eligible,
+			lock := validatedCandidate.Current.Lock
+			reuseLock = &lock
+		} else if state.Current != nil {
+			lock, found, err := input.Operation.ReadBuildLock(
+				state.Current.BuildLockDigest,
+				registry.ValidateRequirementProfileV1,
 			)
 			if err != nil {
-				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("observe current provider build local sources: %w", err)
-			}
-			reusableWheels, err = buildLockSelectedSourceWheelsV1(input.Store, lock, reusableSources)
-			if err != nil {
-				if !errors.Is(err, errCurrentPythonSourceArtifactMissing) {
-					return LockedProviderBuildExecutionResultV1{}, err
-				}
-				if input.Automatic {
-					return LockedProviderBuildExecutionResultV1{}, fmt.Errorf(
-						"current build cache is incomplete because a locked Python source artifact is missing; run reploy build --dir %q to repair it: %w",
-						deploymentDir, err,
-					)
-				}
-				// An explicit build is authorization to reconstruct the selected
-				// source wheel. Keep the current lock available to the provider
-				// resolver so other verified artifacts can still be reused.
-				reusableSources = []providers.ResolvedSourceInput{}
-				reusableWheels = []providerstore.ArtifactDescriptor{}
-			}
-			reusableKeys := make(map[string]struct{}, len(reusableSources))
-			for _, source := range reusableSources {
-				reusableKeys[source.Component+"\x00"+source.LogicalPackage] = struct{}{}
-			}
-			priorWheelDigests := map[canonical.Digest]struct{}{}
-			for _, source := range eligible {
-				if _, exact := reusableKeys[source.Component+"\x00"+source.LogicalPackage]; exact {
-					continue
-				}
-				wheels, candidateErr := buildLockSelectedSourceWheelsV1(
-					input.Store, lock, []providers.ResolvedSourceInput{source},
+				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf(
+					"load current build lock for automatic reuse: %w",
+					err,
 				)
-				if candidateErr != nil {
-					continue
-				}
-				priorSources = append(priorSources, source)
-				for _, wheel := range wheels {
-					if _, found := priorWheelDigests[wheel.SHA256]; found {
-						continue
-					}
-					priorWheelDigests[wheel.SHA256] = struct{}{}
-					priorSourceWheels = append(priorSourceWheels, wheel)
-				}
+			}
+			if !found {
+				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf(
+					"current build lock %s is missing",
+					state.Current.BuildLockDigest,
+				)
+			}
+			if err := validateGenerationBuildLock(
+				*state.Current,
+				lock,
+				registry.ValidateRequirementProfileV1,
+			); err != nil {
+				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf(
+					"load current build lock for automatic reuse: %w",
+					err,
+				)
+			}
+			reuseLock = &lock
+		}
+		if reuseLock != nil && reuseLock.Platform == state.Platform {
+			reuseSources, err = buildLockSelectedSourcesV1(*reuseLock)
+			if err != nil {
+				return LockedProviderBuildExecutionResultV1{}, err
 			}
 		}
 	}
@@ -390,7 +333,8 @@ func runLockedProviderBuildV1(
 	})
 	preparation, err := backend.prepare(ctx, LockedProviderBuildPreparationInputV1{
 		Operation: input.Operation, Store: input.Store, Environment: document.Environment.ID,
-		DeploymentDir: deploymentDir, PackageOverrides: packageOverrideIntent, BaseImage: baseImage, Sources: reusableSources,
+		DeploymentDir: deploymentDir, PackageOverrides: packageOverrideIntent, BaseImage: baseImage,
+		Sources:    reuseSources,
 		DockerPlan: dockerPlan, NoCache: input.NoCache, ValidatedCandidate: func() *ValidatedBuildCandidateV1 {
 			if validatedCandidateFound {
 				return &validatedCandidate
@@ -419,9 +363,8 @@ func runLockedProviderBuildV1(
 	options.NoCache = input.NoCache
 	options.Progress = input.Progress
 	result, err := backend.execute(ctx, LockedProviderBuildExecutionInputV1{
-		Preparation:  preparation,
-		SourceWheels: reusableWheels,
-		PriorSources: priorSources, PriorSourceWheels: priorSourceWheels,
+		Preparation:    preparation,
+		SourceWheels:   []providerstore.ArtifactDescriptor{},
 		LocalOverrides: localOverrides,
 		ValidateLayers: input.ValidateLayers, RunValidation: nil,
 		ValidateChoices: input.ValidateChoices,

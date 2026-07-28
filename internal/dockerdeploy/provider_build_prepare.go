@@ -275,6 +275,11 @@ func prepareLockedProviderBuildV1(
 		}
 	}
 
+	// Source candidates supplied by an automatic runtime check exist only to
+	// prove exact reuse of an already-built image. Once any other input forces
+	// provider execution, local sources must re-enter through fresh wheel
+	// construction rather than through the prior lock.
+	result.Loaded.Request.Sources = []providers.ResolvedSourceInput{}
 	prepared, err := backend.realizeBase(ctx, input.Store, selected)
 	if err != nil {
 		return LockedProviderBuildPreparationV1{}, err

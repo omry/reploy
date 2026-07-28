@@ -5,7 +5,6 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -59,25 +58,6 @@ func TestSourceDistributionValidationAndExtraction(t *testing.T) {
 		if err != nil || target != "demo.py" {
 			t.Fatalf("extracted link = %q, %v", target, err)
 		}
-	}
-}
-
-func TestSourceDistributionRelativePathsV1ReturnsValidatedPathsBelowRoot(t *testing.T) {
-	archive := filepath.Join(t.TempDir(), "demo-1.tar.gz")
-	writeTestSourceDistribution(t, archive, []testSourceDistributionEntry{
-		{name: "demo-1/", kind: tar.TypeDir},
-		{name: "demo-1/pyproject.toml", kind: tar.TypeReg, content: "[build-system]\n"},
-		{name: "demo-1/PKG-INFO", kind: tar.TypeReg, content: "Name: demo\nVersion: 1\n\n"},
-		{name: "demo-1/src/", kind: tar.TypeDir},
-		{name: "demo-1/src/demo.py", kind: tar.TypeReg, content: "value = 1\n"},
-	})
-	paths, metadata, err := SourceDistributionRelativePathsV1(archive)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"PKG-INFO", "pyproject.toml", "src", "src/demo.py"}
-	if !reflect.DeepEqual(paths, want) || metadata.Root != "demo-1" {
-		t.Fatalf("paths/metadata = %#v/%#v", paths, metadata)
 	}
 }
 

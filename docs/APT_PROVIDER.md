@@ -407,23 +407,17 @@ a scrollable validation log remain behaviors of validation launched from
 starting another build path. Dumb and redirected terminals print durable
 progress lines and the final result directly.
 
-For exact build reuse, Reploy reconstructs the prior selected-source list from
-the validated provider profiles embedded in the current lock and compares only
-those records with current candidates. It also compares override intent only
-for package identifiers in the prior closure, so adding or changing an override
-for a package already in that closure invalidates reuse while an unrelated
-mapping does not. A warm local-source check hashes the previously learned
-sdist-relevant directories and root build-control files and compares shallow
-root topology; an absent, invalid, changed, or symlink-dependent map falls back
-to complete source observation. Reploy also inspects Docker's current local
-author reference and reuses it only when its immutable descriptor still
-matches. This path does not walk the complete provider-store closure, inspect
-unused local paths, or contact the registry when the local base still matches.
-Before either source artifact is reused, its exact descriptor and bytes must
-still be present in the current deployment's provider store. If current source
-inputs produce the same retained sdist as a prior build under the same selected
-platform, immutable upstream image, and interpreter evidence, Reploy may reuse
-that sdist's exact wheel while recording the new input digest.
+An explicit `reploy build` with selected local Python projects does not use
+their prior locked source identities to prove exact image reuse. It observes
+the complete source projection and rebuilds each sdist and wheel before later
+provider layers or the final image may be reused. Unselected override paths
+remain uninspected. Automatic staged runtime preparation and staged install may
+use the prior selected-source identities only to prove that an already-current
+image is an exact match; if any other input forces provider execution, the
+local projects re-enter the fresh wheel path. Exact image reuse still inspects
+Docker's current local author reference and avoids a registry request when its
+immutable descriptor matches. This path does not walk the complete
+provider-store closure.
 
 ### Public Provider Names and Options
 

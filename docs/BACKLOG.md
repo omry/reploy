@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-27
+updated: 2026-07-29
 summary: Active planning surface for Reploy design and implementation gaps.
 ---
 
@@ -92,6 +92,17 @@ No active items.
       output integrity; define cache scope, permissions, ownership, and cleanup;
       and make caches inspectable, bypassable, invalidatable, and recoverable.
       Keep this separate from deployment-local provider artifact reuse.
+
+- [ ] `P2` Add optional Watchman-backed local-source change detection.
+      After a successful local-source wheel build, retain a synchronized
+      Watchman clock and use it to prove cheaply that the complete source tree
+      has not changed before considering artifact reuse. Treat a missing
+      Watchman installation, fresh instance, recrawl, expired or invalid clock,
+      query failure, changed non-source build input, or `--no-cache` as a full
+      projection and wheel-build fallback. Do not require the daemon or
+      silently ignore development directories that a build backend may consume;
+      settle explicit-build reuse semantics and measure the no-op improvement
+      before enabling wheel reuse.
 
 - [ ] `P2` Design portable environment export and import.
       Separate exact offline transfer from instruction-based rebuilds and model

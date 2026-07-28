@@ -65,6 +65,9 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 			if err := input.Operation.RequireHeld(); err != nil {
 				t.Fatal(err)
 			}
+			if !input.Automatic {
+				t.Fatal("staged install did not request exact-current build reuse")
+			}
 			if _, found := locks[destinationDir]; found {
 				t.Fatal("destination lock was acquired before the source build")
 			}

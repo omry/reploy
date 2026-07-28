@@ -166,7 +166,7 @@ func runProviderInstallV1(
 	writeProviderBuildProgress(input.RunOptions.Progress, "preparing current staged environment")
 	built, err := backend.buildSource(ctx, LockedProviderBuildRunInputV1{
 		Operation: sourceOperation, Store: sourceStore, DeploymentDir: sourceDir,
-		Runtime: input.Runtime, RunOptions: input.RunOptions,
+		Runtime: input.Runtime, Automatic: true, RunOptions: input.RunOptions,
 	})
 	if err != nil {
 		return deploy.StateV1{}, err

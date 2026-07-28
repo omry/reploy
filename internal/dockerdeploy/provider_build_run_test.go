@@ -454,7 +454,10 @@ func TestRunProviderBuildV1DoesNotObserveLocalOverridePathOnExactReuse(t *testin
 		t.Fatal(err)
 	}
 	executed := false
-	_, err := runProviderBuildV1(t.Context(), ProviderBuildRunInputV1{DeploymentDir: dir}, providerBuildRunBackend{
+	_, err := runProviderBuildV1(t.Context(), ProviderBuildRunInputV1{
+		DeploymentDir: dir,
+		Automatic:     true,
+	}, providerBuildRunBackend{
 		acquire:  deploy.AcquireOperationLock,
 		newStore: providerstore.NewStore,
 		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
@@ -473,7 +476,7 @@ func TestRunProviderBuildV1DoesNotObserveLocalOverridePathOnExactReuse(t *testin
 	}
 }
 
-func TestRunLockedProviderBuildV1ReusesUnchangedLocalSourceIdentity(t *testing.T) {
+func TestRunLockedProviderBuildV1RoutesUnchangedLocalSourceThroughFreshWheelBuild(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	sourceDir := filepath.Join(workspaceRoot, "demo")
 	if err := os.Mkdir(sourceDir, 0o755); err != nil {
@@ -532,94 +535,48 @@ func TestRunLockedProviderBuildV1ReusesUnchangedLocalSourceIdentity(t *testing.T
 	}, providerBuildRunBackend{
 		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
 			prepared = true
-			if !reflect.DeepEqual(input.Sources, fixture.request.SourceCandidates) {
-				t.Fatalf("reusable sources = %#v", input.Sources)
+			if len(input.Sources) != 0 {
+				t.Fatalf("explicit build reused source identities = %#v", input.Sources)
 			}
-			return LockedProviderBuildPreparationV1{Operation: operation, Store: fixture.store, Reused: true}, nil
+			return LockedProviderBuildPreparationV1{Operation: operation, Store: fixture.store}, nil
 		},
 		execute: func(_ context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
 			executed = true
-			if !reflect.DeepEqual(input.SourceWheels, fixture.sourceWheels) || len(input.LocalOverrides) != 1 {
+			if len(input.SourceWheels) != 0 || len(input.LocalOverrides) != 1 ||
+				input.LocalOverrides[0].Distribution != "demo-server" {
 				t.Fatalf("execution source inputs = %#v/%#v", input.SourceWheels, input.LocalOverrides)
 			}
-			return LockedProviderBuildExecutionResultV1{Reused: true}, nil
+			return LockedProviderBuildExecutionResultV1{}, nil
 		},
 	})
 	if err != nil || !prepared || !executed {
 		t.Fatalf("error/prepared/executed = %v/%v/%v", err, prepared, executed)
 	}
-	prepared = false
-	executed = false
-	_, err = runLockedProviderBuildV1(t.Context(), LockedProviderBuildRunInputV1{
-		Operation: operation, Store: fixture.store, DeploymentDir: deploymentDir, NoCache: true,
-		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
-	}, providerBuildRunBackend{
-		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
-			prepared = true
-			if len(input.Sources) != 0 || !input.NoCache {
-				t.Fatalf("no-cache preparation = %#v", input)
-			}
-			return LockedProviderBuildPreparationV1{Operation: operation, Store: fixture.store}, nil
-		},
-		execute: func(_ context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
-			executed = true
-			if len(input.SourceWheels) != 0 || len(input.LocalOverrides) != 1 || input.LocalOverrides[0].Distribution != "demo-server" {
-				t.Fatalf("no-cache execution source inputs = %#v/%#v", input.SourceWheels, input.LocalOverrides)
-			}
-			return LockedProviderBuildExecutionResultV1{}, nil
-		},
-	})
-	if err != nil || !prepared || !executed {
-		t.Fatalf("no-cache error/prepared/executed = %v/%v/%v", err, prepared, executed)
-	}
 
-	missingWheelPath, err := fixture.store.BlobPath(fixture.localWheelDigest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(missingWheelPath); err != nil {
-		t.Fatal(err)
-	}
 	prepared = false
 	executed = false
 	_, err = runLockedProviderBuildV1(t.Context(), LockedProviderBuildRunInputV1{
 		Operation: operation, Store: fixture.store, DeploymentDir: deploymentDir,
-		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
+		Automatic: true,
+		Runtime:   StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
 	}, providerBuildRunBackend{
 		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
 			prepared = true
-			if len(input.Sources) != 0 || input.NoCache {
-				t.Fatalf("repair preparation = %#v", input)
+			if !reflect.DeepEqual(input.Sources, fixture.request.SourceCandidates) {
+				t.Fatalf("automatic reuse sources = %#v", input.Sources)
 			}
-			return LockedProviderBuildPreparationV1{Operation: operation, Store: fixture.store}, nil
+			return LockedProviderBuildPreparationV1{Operation: operation, Store: fixture.store, Reused: true}, nil
 		},
 		execute: func(_ context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
 			executed = true
-			if len(input.SourceWheels) != 0 || len(input.LocalOverrides) != 1 || input.LocalOverrides[0].Distribution != "demo-server" {
-				t.Fatalf("repair execution source inputs = %#v/%#v", input.SourceWheels, input.LocalOverrides)
+			if len(input.SourceWheels) != 0 || len(input.LocalOverrides) != 1 {
+				t.Fatalf("automatic execution source inputs = %#v/%#v", input.SourceWheels, input.LocalOverrides)
 			}
-			return LockedProviderBuildExecutionResultV1{}, nil
+			return LockedProviderBuildExecutionResultV1{Reused: true}, nil
 		},
 	})
 	if err != nil || !prepared || !executed {
-		t.Fatalf("repair error/prepared/executed = %v/%v/%v", err, prepared, executed)
-	}
-
-	prepared = false
-	_, err = runLockedProviderBuildV1(t.Context(), LockedProviderBuildRunInputV1{
-		Operation: operation, Store: fixture.store, DeploymentDir: deploymentDir, Automatic: true,
-		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
-	}, providerBuildRunBackend{
-		prepare: func(context.Context, LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
-			prepared = true
-			return LockedProviderBuildPreparationV1{}, nil
-		},
-		execute: func(context.Context, LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
-			return LockedProviderBuildExecutionResultV1{}, nil
-		},
-	})
-	if err == nil || !strings.Contains(err.Error(), "run reploy build --dir") || !strings.Contains(err.Error(), deploymentDir) || prepared {
-		t.Fatalf("automatic repair error/prepared = %v/%v", err, prepared)
+		t.Fatalf("automatic error/prepared/executed = %v/%v/%v", err, prepared, executed)
 	}
 }
 

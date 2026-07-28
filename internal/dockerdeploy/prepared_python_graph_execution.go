@@ -19,20 +19,18 @@ import (
 // PreparedPythonGraphExecutionInput contains the complete temporary Python
 // graph path until APT joins the same registry-backed executor.
 type PreparedPythonGraphExecutionInput struct {
-	Store             providerstore.Store
-	Plan              providers.ProviderPlanV1
-	BaseDescriptor    deploy.ImageDescriptor
-	BaseCatalog       []providers.RealizedOutput
-	Sources           []providers.ResolvedSourceInput
-	SourceWheels      []providerstore.ArtifactDescriptor
-	PriorSources      []providers.ResolvedSourceInput
-	PriorSourceWheels []providerstore.ArtifactDescriptor
-	LocalOverrides    []PythonLocalOverrideV1
-	CurrentLock       *deploy.BuildLockV1
-	FinalImageConfig  providers.ImageConfigPolicy
-	Progress          io.Writer
-	BuildProgress     buildprogress.Reporter
-	RunOptions        RunOptions
+	Store            providerstore.Store
+	Plan             providers.ProviderPlanV1
+	BaseDescriptor   deploy.ImageDescriptor
+	BaseCatalog      []providers.RealizedOutput
+	Sources          []providers.ResolvedSourceInput
+	SourceWheels     []providerstore.ArtifactDescriptor
+	LocalOverrides   []PythonLocalOverrideV1
+	CurrentLock      *deploy.BuildLockV1
+	FinalImageConfig providers.ImageConfigPolicy
+	Progress         io.Writer
+	BuildProgress    buildprogress.Reporter
+	RunOptions       RunOptions
 }
 
 var preparePythonGraphExecutionBackend = PreparePreparedPythonGraphBackend
@@ -63,17 +61,6 @@ func ExecutePreparedPythonGraph(
 	}
 	for id, config := range reuse.NodeConfigs {
 		config.LocalOverrides = append([]PythonLocalOverrideV1{}, input.LocalOverrides...)
-		node, found := graphBackendNode(input.Plan, id)
-		if found && len(node.Components) == 1 {
-			for _, source := range input.PriorSources {
-				if source.Component == node.Components[0] {
-					config.PriorSources = append(config.PriorSources, source)
-				}
-			}
-		}
-		config.PriorSourceWheels = append(
-			[]providerstore.ArtifactDescriptor{}, input.PriorSourceWheels...,
-		)
 		reuse.NodeConfigs[id] = config
 	}
 	backend, cleanup, err := preparePythonGraphExecutionBackend(
