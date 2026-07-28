@@ -461,35 +461,7 @@ deferred, and complete them before claiming release readiness.
    Document requirements, support matrix, known limitations, and
    troubleshooting for Docker Desktop.
 
-## Detailed AWD Execution Plan
-
-The high-level milestones above are not detailed enough for implementation on
-their own. Use this AWD plan as the executable port shape:
-
-```text
-(inventory Windows port plan and current Reploy platform assumptions
--> record agreed Windows support contract and command matrix
--> (review support contract against settled decisions !> support contract matches settled decisions)
--> design platform capability layer and Docker Desktop runtime detection
--> implement platform support decisions and unsupported-command errors
--> ((run platform unit tests + run CLI smoke for Linux behavior) !> platform checks pass)
--> add Windows release artifacts and installer platform detection
--> ((run windows-amd64 cross compile + run windows-arm64 cross compile + verify release archive naming, .exe handling, and checksums) !> release artifact checks pass)
--> implement Windows Docker Desktop preflight and doctor checks
--> ((run doctor unit tests + run Docker timeout and responsiveness tests) !> doctor checks pass)
--> (validate CLI-only Windows staging on real Windows !> CLI-only Windows staging smoke passes)
--> (validate Docker Desktop staging runtime on real Windows !> Docker Desktop staging smoke passes)
--> record agreed Docker-managed permanent install semantics for Windows
--> (review persistent install design against settled decisions !> persistent install design matches settled decisions)
--> implement Docker Desktop-backed Docker-managed install and uninstall
--> ((run focused install tests + run Windows control command tests + run uninstall cleanup tests) !> Docker-managed install automated checks pass)
--> (validate Docker-managed permanent install on real Windows with Docker Desktop !> Docker-managed install Windows smoke passes)
--> publish Windows user docs and troubleshooting
--> (review Windows Service future-design boundary remains explicit !> docs and scope review pass)
--> (release readiness review with evidence bundle ?> approve Windows support milestone))
-```
-
-### Expanded Planning Steps
+## Expanded Planning Steps
 
 Before implementation, expand the following chunky steps into small design
 artifacts and checks.
@@ -519,9 +491,8 @@ The main product decisions are already settled:
   binary, Linux paths, and Linux control script behavior inside WSL rather than
   the native Windows `reploy.exe` support contract.
 
-The review gates in the AWD plan are therefore consistency gates. They should
-verify that design artifacts and implementation match these decisions, not
-reopen the product direction.
+Implementation reviews should verify that design artifacts and behavior match
+these decisions, not reopen the product direction.
 
 #### Platform Capability Layer
 
@@ -734,17 +705,10 @@ manual validation host.
 
 ### Per-Phase Commit Loop
 
-Use a small commit loop for each implementation phase:
-
-```text
-(select one Windows port phase
--> review selected phase scope ?>
-   (((implement phase changes -> run focused tests + run relevant validation)
-     *3 until pass: phase checks pass)
-    !> compose phase commit message
-    -> commit selected phase
-    -> verify no unintended changes remain))
-```
+For each implementation phase, review the selected scope, implement the phase,
+run focused tests and relevant validation until they pass, compose a
+phase-specific commit message, commit the phase, and verify that no unintended
+changes remain.
 
 This keeps platform support, release artifacts, Docker Desktop behavior,
 persistent install semantics, and documentation as reviewable slices instead of

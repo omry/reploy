@@ -271,35 +271,7 @@ deferred, and complete them before claiming release readiness.
    Document requirements, support matrix, known limitations, and
    troubleshooting for Docker Desktop.
 
-## Detailed AWD Execution Plan
-
-The high-level milestones above are not detailed enough for implementation on
-their own. Use this AWD plan as the executable port shape:
-
-```text
-(inventory macOS port plan and current Reploy platform assumptions
--> record agreed macOS support contract and command matrix
--> (review support contract against settled decisions !> support contract matches settled decisions)
--> design platform capability layer and Docker Desktop runtime detection
--> implement platform support decisions and unsupported-command errors
--> ((run platform unit tests + run CLI smoke for Linux behavior) !> platform checks pass)
--> add Darwin release artifacts and installer platform detection
--> ((run darwin-arm64 cross compile + run darwin-amd64 cross compile + verify release archive naming and checksums) !> release artifact checks pass)
--> implement macOS Docker Desktop preflight and doctor checks
--> ((run doctor unit tests + run Docker timeout and responsiveness tests) !> doctor checks pass)
--> (validate CLI-only macOS staging on real macOS !> CLI-only macOS staging smoke passes)
--> (validate Docker Desktop staging runtime on real macOS !> Docker Desktop staging smoke passes)
--> record agreed persistent development install semantics for macOS
--> (review persistent install design against settled decisions !> persistent install design matches settled decisions)
--> implement Docker Desktop-backed persistent development install and uninstall
--> ((run focused install tests + run generated control script tests + run uninstall cleanup tests) !> persistent install automated checks pass)
--> (validate persistent development install on real macOS with Docker Desktop !> persistent install macOS smoke passes)
--> publish macOS user docs and troubleshooting
--> (review launchd future-design boundary remains explicit !> docs and scope review pass)
--> (release readiness review with evidence bundle ?> approve macOS support milestone))
-```
-
-### Expanded Planning Steps
+## Expanded Planning Steps
 
 Before implementation, expand the following chunky steps into small design
 artifacts and checks.
@@ -318,9 +290,8 @@ The main product decisions are already settled:
 - Reboot resistance means Docker Desktop starts when the user signs in and
   Reploy-managed containers use a restart policy.
 
-The review gates in the AWD plan are therefore consistency gates. They should
-verify that design artifacts and implementation match these decisions, not
-reopen the product direction.
+Implementation reviews should verify that design artifacts and behavior match
+these decisions, not reopen the product direction.
 
 #### Platform Capability Layer
 
@@ -421,17 +392,10 @@ version, Docker context, exact commands, expected outputs, and cleanup steps.
 
 ### Per-Phase Commit Loop
 
-Use a small commit loop for each implementation phase:
-
-```text
-(select one macOS port phase
--> review selected phase scope ?>
-   (((implement phase changes -> run focused tests + run relevant validation)
-     *3 until pass: phase checks pass)
-    !> compose phase commit message
-    -> commit selected phase
-    -> verify no unintended changes remain))
-```
+For each implementation phase, review the selected scope, implement the phase,
+run focused tests and relevant validation until they pass, compose a
+phase-specific commit message, commit the phase, and verify that no unintended
+changes remain.
 
 This keeps platform support, release artifacts, Docker Desktop behavior,
 persistent install semantics, and documentation as reviewable slices instead of
