@@ -1,0 +1,2 @@
+kind: Fixed
+body: Report state-publication failures when the containing directory cannot be durably synchronized.

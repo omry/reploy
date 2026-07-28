@@ -6,6 +6,7 @@ import (
 )
 
 var replaceAtomicStateFile = atomicReplaceFile
+var syncAtomicStateFileDirectory = syncAtomicStateDirectory
 
 func writeAtomicStateFile(path string, content []byte, mode os.FileMode) (err error) {
 	directory := filepath.Dir(path)
@@ -33,6 +34,8 @@ func writeAtomicStateFile(path string, content []byte, mode os.FileMode) (err er
 	if err := replaceAtomicStateFile(temporaryPath, path); err != nil {
 		return err
 	}
-	_ = syncAtomicStateDirectory(directory)
+	if err := syncAtomicStateFileDirectory(directory); err != nil {
+		return err
+	}
 	return nil
 }
