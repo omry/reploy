@@ -189,3 +189,52 @@ func TestRemoveEnvironmentGenerationReferenceRejectsRetargetedReference(t *testi
 		t.Fatalf("calls = %d, error = %v", calls, err)
 	}
 }
+
+func TestRemoveLegacyEnvironmentGenerationReferenceUsesOwnedTagWithoutBuildRecord(t *testing.T) {
+	dir, references, _ := generationReferenceFixture(t)
+	var calls [][]string
+	err := removeLegacyEnvironmentGenerationReference(
+		context.Background(),
+		references.Generation,
+		"demo",
+		dir,
+		func(_ context.Context, args ...string) (string, error) {
+			calls = append(calls, append([]string{}, args...))
+			if len(calls) == 1 {
+				return string(rendererDigest("9")), nil
+			}
+			return "", nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"image", "ls", "--quiet", "--no-trunc", references.Generation},
+		{"image", "rm", "--force", references.Generation},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("Docker calls = %#v", calls)
+	}
+}
+
+func TestRemoveLegacyEnvironmentGenerationReferenceRejectsAnotherDeploymentBeforeDocker(t *testing.T) {
+	_, references, _ := generationReferenceFixture(t)
+	calls := 0
+	err := removeLegacyEnvironmentGenerationReference(
+		context.Background(),
+		references.Generation,
+		"demo",
+		t.TempDir(),
+		func(context.Context, ...string) (string, error) {
+			calls++
+			return "", nil
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "not owned by this deployment") {
+		t.Fatalf("ownership error = %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("ownership failure made %d Docker calls", calls)
+	}
+}

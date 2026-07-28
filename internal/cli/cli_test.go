@@ -4481,15 +4481,23 @@ func TestDockerStageForceRequiresUpdateAndAllowsRetainedSourceRecovery(t *testin
 		dockerForceRestageCurrentDesiredPlatform = original
 	})
 	called := false
-	dockerForceRestageCurrentDesiredPlatform = func(_ context.Context, dir string, platform string) (deploy.DesiredStateUpdateResult, error) {
+	dockerForceRestageCurrentDesiredPlatform = func(
+		_ context.Context,
+		dir string,
+		platform string,
+		options dockerdeploy.RunOptions,
+	) (deploy.DesiredStateUpdateResult, error) {
 		called = true
-		if dir == "" || platform != "linux/amd64" {
-			t.Fatalf("forced retained-source update = %q/%q", dir, platform)
+		if dir == "" ||
+			platform != "linux/amd64" ||
+			options.DockerPreflightTimeout != 13*time.Second {
+			t.Fatalf("forced retained-source update = %q/%q/%#v", dir, platform, options)
 		}
 		return deploy.DesiredStateUpdateResult{}, nil
 	}
 	dir := t.TempDir()
 	code, stdout, stderr = runCLI(
+		"--docker-timeout", "13s",
 		"stage", "--update", "--force", "--platform", "linux/amd64", "--dir", dir,
 	)
 	if code != 0 || stdout != "staging directory is up to date: "+dir+"\n" || stderr != "" || !called {

@@ -127,10 +127,10 @@ func TestApplyProviderUninstallRecoveryRunsCleanupInRecoverableOrder(t *testing.
 	}
 }
 
-func TestRemoveProviderUninstallDockerProjectUsesExactComposeLabels(t *testing.T) {
+func TestRemoveDockerComposeProjectByLabelUsesExactComposeLabels(t *testing.T) {
 	outputs := [][]byte{[]byte("container-1\ncontainer-2\n"), []byte("network-1\n")}
 	got := []CommandSpec{}
-	err := removeProviderUninstallDockerProjectWithV1(t.Context(), "demo-deadbeef", 7*time.Second, providerUninstallDockerProjectBackendV1{
+	err := removeDockerComposeProjectByLabelWithV1(t.Context(), "demo-deadbeef", 7*time.Second, dockerComposeProjectRemovalBackendV1{
 		output: func(spec CommandSpec, options RunOptions) ([]byte, error) {
 			if options.Context != t.Context() || options.DockerPreflightTimeout != 7*time.Second {
 				t.Fatalf("output options = %#v", options)

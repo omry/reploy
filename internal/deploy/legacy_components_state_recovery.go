@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/providers"
@@ -40,43 +41,73 @@ type legacyComponentsStagingStateV1 struct {
 	Deployment      json.RawMessage                  `json:"deployment"`
 }
 
-// RecoverLegacyComponentsStagingStateV1 atomically replaces only the
-// recognized unreleased components-based staging shape. The operation retains
-// the current generation and converts its request overlay without touching the
-// package-override sidecar or managed application data.
-func (lock *OperationLock) RecoverLegacyComponentsStagingStateV1(
+// LegacyComponentsStagingRecoveryV1 is a recovery intent prepared from one
+// exact legacy state snapshot. State is the source-authoritative,
+// unbuilt replacement. PreviousCurrent and PreviousEnvironment identify only
+// the superseded Docker generation whose cleanup must be coordinated around
+// publication; it must never remain selected by the recovered state.
+type LegacyComponentsStagingRecoveryV1 struct {
+	State               StateV1
+	PreviousCurrent     *EnvironmentGenerationState
+	PreviousEnvironment string
+
+	path     string
+	original []byte
+}
+
+// PrepareLegacyComponentsStagingRecoveryV1 converts only the recognized
+// unreleased components-based staging shape. It preserves Reploy-managed user
+// intent, but deliberately clears the selected build generation. The caller
+// must stop and clean any PreviousCurrent resources before committing the
+// prepared replacement.
+func (lock *OperationLock) PrepareLegacyComponentsStagingRecoveryV1(
 	selectPlatform DesiredPlatformSelector,
 	validatePackage PackageRequestValidator,
-) (DesiredStateUpdateResult, error) {
+	preserveSelectedPlatform bool,
+) (LegacyComponentsStagingRecoveryV1, error) {
 	if selectPlatform == nil {
-		return DesiredStateUpdateResult{}, fmt.Errorf(
+		return LegacyComponentsStagingRecoveryV1{}, fmt.Errorf(
 			"recover legacy staging state requires a platform selector",
 		)
 	}
 	path, original, err := lock.readRawStateForRecoveryV1()
 	if err != nil {
-		return DesiredStateUpdateResult{}, err
+		return LegacyComponentsStagingRecoveryV1{}, err
 	}
 	legacy, err := decodeLegacyComponentsStagingStateV1(original)
 	if err != nil {
-		return DesiredStateUpdateResult{}, err
+		return LegacyComponentsStagingRecoveryV1{}, err
 	}
 	recovery, err := blueprint.RecoverLegacyComponentsBlueprintV1(
 		legacy.BlueprintSource,
 		legacy.Blueprint,
 	)
 	if err != nil {
-		return DesiredStateUpdateResult{}, fmt.Errorf(
+		return LegacyComponentsStagingRecoveryV1{}, fmt.Errorf(
 			"recover legacy staging blueprint: %w",
 			err,
 		)
+	}
+	overrides, overridesFound, err := ReadPackageOverridesV1(
+		filepath.Dir(filepath.Dir(path)),
+	)
+	if err != nil {
+		return LegacyComponentsStagingRecoveryV1{}, err
+	}
+	if overridesFound {
+		if _, err := EffectiveBaseImageV1(recovery.Document, overrides); err != nil {
+			return LegacyComponentsStagingRecoveryV1{}, fmt.Errorf(
+				"retain package overrides for recovered blueprint: %w",
+				err,
+			)
+		}
 	}
 	overlay, err := convertLegacyComponentsRequestOverlayV1(
 		legacy.Overlay,
 		recovery.ComponentTypes,
 	)
 	if err != nil {
-		return DesiredStateUpdateResult{}, err
+		return LegacyComponentsStagingRecoveryV1{}, err
 	}
 	overlay, err = NormalizeRequestOverlayV1(
 		recovery.Document,
@@ -84,18 +115,22 @@ func (lock *OperationLock) RecoverLegacyComponentsStagingStateV1(
 		validatePackage,
 	)
 	if err != nil {
-		return DesiredStateUpdateResult{}, fmt.Errorf(
+		return LegacyComponentsStagingRecoveryV1{}, fmt.Errorf(
 			"retain legacy staging request overlay: %w",
 			err,
 		)
 	}
-	selected, err := selectPlatform(recovery.Document)
-	if err != nil {
-		return DesiredStateUpdateResult{}, err
+	selected := legacy.Platform
+	if !preserveSelectedPlatform ||
+		blueprint.ValidateSelectedPlatform(recovery.Document, selected) != nil {
+		selected, err = selectPlatform(recovery.Document)
+		if err != nil {
+			return LegacyComponentsStagingRecoveryV1{}, err
+		}
 	}
 	payload, err := blueprint.EncodeResolvedDocumentV1(recovery.Document)
 	if err != nil {
-		return DesiredStateUpdateResult{}, err
+		return LegacyComponentsStagingRecoveryV1{}, err
 	}
 	candidate := StateV1{
 		Schema:          StateSchemaV1,
@@ -103,19 +138,48 @@ func (lock *OperationLock) RecoverLegacyComponentsStagingStateV1(
 		BlueprintSource: recovery.Source,
 		Platform:        selected,
 		Overlay:         overlay,
-		Current:         legacy.Current,
+		Current:         nil,
 		Staging:         legacy.Staging,
 	}
 	if err := ValidateStateV1(candidate); err != nil {
-		return DesiredStateUpdateResult{}, fmt.Errorf(
+		return LegacyComponentsStagingRecoveryV1{}, fmt.Errorf(
 			"validate recovered staging state: %w",
 			err,
 		)
 	}
-	if err := lock.commitRecoveredStateV1(path, original, candidate); err != nil {
-		return DesiredStateUpdateResult{}, err
+	var previous *EnvironmentGenerationState
+	if legacy.Current != nil {
+		copy := *legacy.Current
+		previous = &copy
 	}
-	return DesiredStateUpdateResult{State: candidate, Changed: true}, nil
+	return LegacyComponentsStagingRecoveryV1{
+		State:               candidate,
+		PreviousCurrent:     previous,
+		PreviousEnvironment: recovery.PreviousEnvironmentID,
+		path:                path,
+		original:            append([]byte(nil), original...),
+	}, nil
+}
+
+// CommitLegacyComponentsStagingRecoveryV1 atomically publishes a prepared
+// recovery only if the exact incompatible state snapshot is still present.
+func (lock *OperationLock) CommitLegacyComponentsStagingRecoveryV1(
+	recovery LegacyComponentsStagingRecoveryV1,
+) error {
+	if recovery.path == "" || len(recovery.original) == 0 {
+		return fmt.Errorf("commit legacy staging recovery requires a prepared recovery")
+	}
+	if recovery.State.Current != nil {
+		return fmt.Errorf("recovered staging state must not retain a current generation")
+	}
+	if err := ValidateStateV1(recovery.State); err != nil {
+		return fmt.Errorf("validate recovered staging state: %w", err)
+	}
+	return lock.commitRecoveredStateV1(
+		recovery.path,
+		recovery.original,
+		recovery.State,
+	)
 }
 
 func decodeLegacyComponentsStagingStateV1(content []byte) (legacyComponentsStagingStateV1, error) {

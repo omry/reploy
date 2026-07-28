@@ -404,15 +404,20 @@ sequential internal steps owned by their control operation; they do not enter
 the user run queue, receive run IDs, or appear in `runs list`.
 
 Build, ordinary stage/update, overlay mutation, and clean operations do not join
-the runtime queue. `stage --update APP_REF --force` is the exception: when the
-directory belongs to another blueprint, it uses a force-admitted hidden stage
-marker, cancels waiting runs, stops active runs and the persistent workload,
-removes the old generation reference, and records a fresh unbuilt staging
-deployment. Runtime container creation occurs under the deployment operation lock,
-but the lock is released after creation rather than held for the life of the
-container. This lets unrelated build and cleanup work proceed while an app
-command or shell is running; the live queue, not the filesystem operation lock,
-owns runtime admission and cancellation.
+the runtime queue. Forced staging replacement is the exception. With an
+`APP_REF`, `stage --update APP_REF --force` replaces staging owned by another
+blueprint. Without an `APP_REF`, the same flag may recover the one recognized
+incompatible components-based development state from its retained blueprint
+source. Both paths use a force-admitted hidden stage marker, cancel waiting
+runs, stop active runs and the persistent workload, remove the old generation
+reference, and record a fresh unbuilt staging deployment. Recovery preserves
+compatible Reploy-managed developer intent, including the package-override
+sidecar, request overlay, private workload environment, and managed data.
+Runtime container creation occurs under the deployment operation lock, but the
+lock is released after creation rather than held for the life of the container.
+This lets unrelated build and cleanup work proceed while an app command or
+shell is running; the live queue, not the filesystem operation lock, owns
+runtime admission and cancellation.
 
 ## Applications and Provider Contributions
 

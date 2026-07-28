@@ -890,11 +890,27 @@ func runDockerStage(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 			printDesiredStateStageResult(stdout, options.Dir, result.DesiredState, options.Verbose)
 			return 0
 		}
-		restage := dockerRestageCurrentDesiredPlatform
 		if options.Force {
-			restage = dockerForceRestageCurrentDesiredPlatform
+			result, stageErr := dockerForceRestageCurrentDesiredPlatform(
+				context.Background(),
+				options.Dir,
+				options.Platform,
+				dockerdeploy.RunOptions{
+					DockerPreflightTimeout: globalOptions.DockerTimeout,
+				},
+			)
+			if stageErr != nil {
+				fmt.Fprintf(stderr, "reploy stage --update error: %v\n", stageErr)
+				return 1
+			}
+			printDesiredStateStageResult(stdout, options.Dir, result, options.Verbose)
+			return 0
 		}
-		result, stageErr := restage(context.Background(), options.Dir, options.Platform)
+		result, stageErr := dockerRestageCurrentDesiredPlatform(
+			context.Background(),
+			options.Dir,
+			options.Platform,
+		)
 		if stageErr != nil {
 			fmt.Fprintf(stderr, "reploy stage --update error: %v\n", stageErr)
 			return 1

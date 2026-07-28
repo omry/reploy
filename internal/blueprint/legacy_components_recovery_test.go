@@ -41,7 +41,7 @@ func TestRecoverLegacyComponentsBlueprintV1ConvertsPythonApplication(t *testing.
 	}
 }
 
-func TestRecoverLegacyComponentsBlueprintV1RejectsAPTComponent(t *testing.T) {
+func TestRecoverLegacyComponentsBlueprintV1UsesRetainedSourceInsteadOfStoredProjection(t *testing.T) {
 	source, resolved, _ := legacyComponentsPythonRecoveryFixtureV1(t)
 	var envelope map[string]any
 	if err := json.Unmarshal([]byte(resolved), &envelope); err != nil {
@@ -49,6 +49,7 @@ func TestRecoverLegacyComponentsBlueprintV1RejectsAPTComponent(t *testing.T) {
 	}
 	document := envelope["document"].(map[string]any)
 	environment := document["Environment"].(map[string]any)
+	environment["ID"] = "previous-demo"
 	components := environment["Components"].(map[string]any)
 	application := components["application"].(map[string]any)
 	application["Type"] = string(ComponentTypeAPT)
@@ -58,9 +59,32 @@ func TestRecoverLegacyComponentsBlueprintV1RejectsAPTComponent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = RecoverLegacyComponentsBlueprintV1(source, ResolvedDocumentV1(content))
-	if err == nil || !strings.Contains(err.Error(), "supports only base and Python") {
-		t.Fatalf("APT recovery error = %v", err)
+	recovery, err := RecoverLegacyComponentsBlueprintV1(
+		source,
+		ResolvedDocumentV1(content),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovery.Document.Environment.Applications["application"].Packages.Python == nil {
+		t.Fatalf("recovered source was changed by stored projection: %#v", recovery.Document)
+	}
+	if recovery.Document.Environment.ID != "legacy-demo" ||
+		recovery.PreviousEnvironmentID != "previous-demo" {
+		t.Fatalf(
+			"source/cleanup environments = %q/%q",
+			recovery.Document.Environment.ID,
+			recovery.PreviousEnvironmentID,
+		)
+	}
+}
+
+func TestRecoverLegacyComponentsBlueprintV1RejectsUnsupportedSourceComponent(t *testing.T) {
+	source, resolved, _ := legacyComponentsPythonRecoveryFixtureV1(t)
+	source = strings.Replace(source, "type: python", "type: apt", 1)
+	_, err := RecoverLegacyComponentsBlueprintV1(source, resolved)
+	if err == nil || !strings.Contains(err.Error(), "must declare type: python") {
+		t.Fatalf("unsupported source component error = %v", err)
 	}
 }
 

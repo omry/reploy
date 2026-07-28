@@ -39,11 +39,6 @@ type providerUninstallRecoveryApplyBackendV1 struct {
 	remove              func(string) error
 }
 
-type providerUninstallDockerProjectBackendV1 struct {
-	output func(CommandSpec, RunOptions) ([]byte, error)
-	run    commandRunner
-}
-
 // RecoverMissingProviderUninstallV1 removes a Linux system installation whose
 // deployment directory is gone. The root-owned Reploy systemd unit is the only
 // recovery authority; existing or corrupt deployment state never falls back to
@@ -133,7 +128,7 @@ func applyProviderUninstallRecovery(ctx context.Context, plan providerUninstallR
 	return applyProviderUninstallRecoveryV1(ctx, plan, options, providerUninstallRecoveryApplyBackendV1{
 		lookPath:            uninstallLookPath,
 		runHost:             uninstallRunCommand,
-		removeDockerProject: removeProviderUninstallDockerProjectV1,
+		removeDockerProject: removeDockerComposeProjectByLabelV1,
 		remove:              uninstallRemove,
 	})
 }
@@ -171,54 +166,4 @@ func applyProviderUninstallRecoveryV1(ctx context.Context, plan providerUninstal
 		fmt.Fprintf(options.Stdout, "uninstalled service: %s\n", plan.Service)
 	}
 	return nil
-}
-
-func removeProviderUninstallDockerProjectV1(ctx context.Context, project string, timeout time.Duration) error {
-	return removeProviderUninstallDockerProjectWithV1(ctx, project, timeout, providerUninstallDockerProjectBackendV1{
-		output: commandOutput,
-		run:    runCommand,
-	})
-}
-
-func removeProviderUninstallDockerProjectWithV1(ctx context.Context, project string, timeout time.Duration, backend providerUninstallDockerProjectBackendV1) error {
-	if backend.output == nil || backend.run == nil {
-		return fmt.Errorf("recover Docker Compose project requires a complete backend")
-	}
-	options := RunOptions{Context: ctx, DockerPreflightTimeout: timeout}
-	containerIDs, err := providerUninstallDockerIDsByLabelV1(options, backend.output, "ps", "-a", project)
-	if err != nil {
-		return err
-	}
-	if len(containerIDs) != 0 {
-		if err := backend.run(CommandSpec{Name: "docker", Args: append([]string{"rm", "-f"}, containerIDs...)}, options); err != nil {
-			return err
-		}
-	}
-	networkIDs, err := providerUninstallDockerIDsByLabelV1(options, backend.output, "network", "ls", project)
-	if err != nil {
-		return err
-	}
-	if len(networkIDs) != 0 {
-		if err := backend.run(CommandSpec{Name: "docker", Args: append([]string{"network", "rm"}, networkIDs...)}, options); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func providerUninstallDockerIDsByLabelV1(options RunOptions, outputCommand func(CommandSpec, RunOptions) ([]byte, error), first string, second string, project string) ([]string, error) {
-	output, err := outputCommand(CommandSpec{
-		Name: "docker",
-		Args: []string{first, second, "--filter", "label=com.docker.compose.project=" + project, "--format", "{{.ID}}"},
-	}, options)
-	if err != nil {
-		return nil, err
-	}
-	ids := []string{}
-	for _, line := range strings.Split(string(output), "\n") {
-		if id := strings.TrimSpace(line); id != "" {
-			ids = append(ids, id)
-		}
-	}
-	return ids, nil
 }

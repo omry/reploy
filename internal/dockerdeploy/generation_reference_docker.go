@@ -49,6 +49,25 @@ func RemoveEnvironmentGenerationReference(
 	return removeEnvironmentGenerationReference(ctx, image, reference, environment, deploymentDir, runDockerOutput)
 }
 
+// removeLegacyEnvironmentGenerationReferenceV1 removes one validated
+// deployment-owned generation tag without decoding the obsolete build lock
+// that originally selected it. This is restricted to forced legacy-state
+// recovery; current-state cleanup must verify the exact realized image.
+func removeLegacyEnvironmentGenerationReferenceV1(
+	ctx context.Context,
+	reference string,
+	environment string,
+	deploymentDir string,
+) error {
+	return removeLegacyEnvironmentGenerationReference(
+		ctx,
+		reference,
+		environment,
+		deploymentDir,
+		runDockerOutput,
+	)
+}
+
 func VerifyEnvironmentGenerationReference(
 	ctx context.Context,
 	image providers.RealizedImageV1,
@@ -138,6 +157,55 @@ func removeEnvironmentGenerationReference(
 		return fmt.Errorf("remove environment generation reference requires a Docker runner")
 	}
 	return removeExactEnvironmentImageReference(ctx, image, reference, run)
+}
+
+func removeLegacyEnvironmentGenerationReference(
+	ctx context.Context,
+	reference string,
+	environment string,
+	deploymentDir string,
+	run dockerOutputRunner,
+) error {
+	if ctx == nil {
+		return fmt.Errorf("remove legacy environment generation reference requires a context")
+	}
+	if err := ValidateEnvironmentGenerationReference(
+		reference,
+		environment,
+		deploymentDir,
+	); err != nil {
+		return err
+	}
+	if run == nil {
+		return fmt.Errorf("remove legacy environment generation reference requires a Docker runner")
+	}
+	output, err := run(ctx, "image", "ls", "--quiet", "--no-trunc", reference)
+	if err != nil {
+		return fmt.Errorf(
+			"inspect legacy environment image reference %q for removal: %w",
+			reference,
+			err,
+		)
+	}
+	ids := strings.Fields(output)
+	if len(ids) == 0 {
+		return nil
+	}
+	if len(ids) != 1 {
+		return fmt.Errorf(
+			"legacy environment image reference %q resolved to %d images",
+			reference,
+			len(ids),
+		)
+	}
+	if _, err := run(ctx, "image", "rm", "--force", reference); err != nil {
+		return fmt.Errorf(
+			"remove legacy environment image reference %q: %w",
+			reference,
+			err,
+		)
+	}
+	return nil
 }
 
 func removeExactEnvironmentImageReference(

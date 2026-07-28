@@ -1,0 +1,2 @@
+kind: Fixed
+body: Make forced legacy staging recovery rebuild desired state from retained blueprint source while preserving compatible Reploy-managed intent and invalidating the superseded build generation.

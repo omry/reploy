@@ -25,7 +25,12 @@ func TestRecoverLegacyComponentsStagingStateV1PreservesIntentAndFiles(t *testing
 	if err := os.WriteFile(statePath, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	overrides := []byte("environment:\n  id: legacy-demo\n")
+	overrides := []byte(
+		"environment:\n" +
+			"  id: legacy-demo\n" +
+			"  vars: {}\n" +
+			"  package_overrides: {}\n",
+	)
 	if err := os.WriteFile(filepath.Join(dir, PackageOverridesFilename), overrides, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -35,11 +40,14 @@ func TestRecoverLegacyComponentsStagingStateV1PreservesIntentAndFiles(t *testing
 	if err := os.WriteFile(filepath.Join(dir, "data", "value"), []byte("preserved"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	result, err := operation.RecoverLegacyComponentsStagingStateV1(
+	privateEnvironment := []byte("TOKEN=preserved\n")
+	if err := os.WriteFile(filepath.Join(dir, ".env"), privateEnvironment, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	platformSelectionCalls := 0
+	recovery, err := operation.PrepareLegacyComponentsStagingRecoveryV1(
 		func(document blueprint.Document) (blueprint.Platform, error) {
-			if document.Environment.ID != "legacy-demo" {
-				t.Fatalf("recovered environment = %q", document.Environment.ID)
-			}
+			platformSelectionCalls++
 			return document.Blueprint.Compatibility.Platforms[0], nil
 		},
 		func(componentType blueprint.ComponentType, request providers.CanonicalPackageRequest) error {
@@ -48,28 +56,37 @@ func TestRecoverLegacyComponentsStagingStateV1PreservesIntentAndFiles(t *testing
 			}
 			return nil
 		},
+		true,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Changed || !reflect.DeepEqual(result.State.Current, current) {
-		t.Fatalf("recovery result = %#v", result)
+	if platformSelectionCalls != 0 {
+		t.Fatalf("supported selected platform was reselected %d times", platformSelectionCalls)
 	}
-	if !reflect.DeepEqual(result.State.Overlay.SelectedOptions, []QualifiedOption{{
+	if recovery.State.Current != nil ||
+		!reflect.DeepEqual(recovery.PreviousCurrent, current) ||
+		recovery.PreviousEnvironment != "legacy-demo" {
+		t.Fatalf("recovery plan = %#v", recovery)
+	}
+	if !reflect.DeepEqual(recovery.State.Overlay.SelectedOptions, []QualifiedOption{{
 		Application: "application",
 		Option:      "debug",
 	}}) {
-		t.Fatalf("recovered options = %#v", result.State.Overlay.SelectedOptions)
+		t.Fatalf("recovered options = %#v", recovery.State.Overlay.SelectedOptions)
 	}
-	if len(result.State.Overlay.DirectPackages) != 1 ||
-		result.State.Overlay.DirectPackages[0].Contribution != "application/application/python" {
-		t.Fatalf("recovered direct packages = %#v", result.State.Overlay.DirectPackages)
+	if len(recovery.State.Overlay.DirectPackages) != 1 ||
+		recovery.State.Overlay.DirectPackages[0].Contribution != "application/application/python" {
+		t.Fatalf("recovered direct packages = %#v", recovery.State.Overlay.DirectPackages)
+	}
+	if err := operation.CommitLegacyComponentsStagingRecoveryV1(recovery); err != nil {
+		t.Fatal(err)
 	}
 	reloaded, found, err := operation.ReadStateV1()
 	if err != nil || !found {
 		t.Fatalf("read recovered state: found=%t err=%v", found, err)
 	}
-	if !reflect.DeepEqual(reloaded, result.State) ||
+	if !reflect.DeepEqual(reloaded, recovery.State) ||
 		strings.Contains(reloaded.BlueprintSource, "components:") ||
 		!strings.Contains(reloaded.BlueprintSource, "applications:") {
 		t.Fatalf("reloaded recovery = %#v", reloaded)
@@ -81,6 +98,94 @@ func TestRecoverLegacyComponentsStagingStateV1PreservesIntentAndFiles(t *testing
 	gotData, err := os.ReadFile(filepath.Join(dir, "data", "value"))
 	if err != nil || string(gotData) != "preserved" {
 		t.Fatalf("managed data after recovery = %q, %v", gotData, err)
+	}
+	gotEnvironment, err := os.ReadFile(filepath.Join(dir, ".env"))
+	if err != nil || !reflect.DeepEqual(gotEnvironment, privateEnvironment) {
+		t.Fatalf("private environment after recovery = %q, %v", gotEnvironment, err)
+	}
+}
+
+func TestPrepareLegacyComponentsStagingRecoveryV1RejectsIncompatiblePreservedOverrides(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	content, _ := legacyComponentsStagingStateFixtureV1(t)
+	statePath := filepath.Join(dir, ".reploy", stateFilenameV1)
+	if err := os.WriteFile(statePath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	overrides, err := EncodePackageOverridesV1(
+		EmptyPackageOverridesV1("different-environment"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(dir, PackageOverridesFilename),
+		overrides,
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = operation.PrepareLegacyComponentsStagingRecoveryV1(
+		func(document blueprint.Document) (blueprint.Platform, error) {
+			return document.Blueprint.Compatibility.Platforms[0], nil
+		},
+		func(blueprint.ComponentType, providers.CanonicalPackageRequest) error {
+			return nil
+		},
+		true,
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "retain package overrides") ||
+		!strings.Contains(err.Error(), `target environment "different-environment"`) {
+		t.Fatalf("incompatible preserved overrides error = %v", err)
+	}
+	got, readErr := os.ReadFile(statePath)
+	if readErr != nil || !reflect.DeepEqual(got, content) {
+		t.Fatalf("legacy state changed after rejected recovery = %v/%q", readErr, got)
+	}
+}
+
+func TestCommitLegacyComponentsStagingRecoveryV1RejectsChangedSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	content, _ := legacyComponentsStagingStateFixtureV1(t)
+	statePath := filepath.Join(dir, ".reploy", stateFilenameV1)
+	if err := os.WriteFile(statePath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := operation.PrepareLegacyComponentsStagingRecoveryV1(
+		func(document blueprint.Document) (blueprint.Platform, error) {
+			return document.Blueprint.Compatibility.Platforms[0], nil
+		},
+		func(blueprint.ComponentType, providers.CanonicalPackageRequest) error {
+			return nil
+		},
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := append(append([]byte(nil), content...), '\n')
+	if err := os.WriteFile(statePath, changed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = operation.CommitLegacyComponentsStagingRecoveryV1(recovery)
+	if err == nil || !strings.Contains(err.Error(), "changed before forced recovery") {
+		t.Fatalf("changed-snapshot commit error = %v", err)
+	}
+	got, readErr := os.ReadFile(statePath)
+	if readErr != nil || !reflect.DeepEqual(got, changed) {
+		t.Fatalf("changed snapshot after rejected commit = %v/%q", readErr, got)
 	}
 }
 
