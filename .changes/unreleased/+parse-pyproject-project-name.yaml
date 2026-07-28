@@ -1,0 +1,2 @@
+kind: Fixed
+body: Parse `pyproject.toml` as TOML when deriving the default blueprint path for a Git source.

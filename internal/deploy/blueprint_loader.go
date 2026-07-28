@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/pelletier/go-toml/v2"
 )
 
 const BlueprintManifestGlob = "*.blueprint.yaml"
@@ -147,27 +148,31 @@ func sourceProjectName(sourceRoot string) (string, error) {
 		}
 		return "", err
 	}
-	inProject := false
-	for _, line := range strings.Split(string(content), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
-			inProject = trimmed == "[project]"
-			continue
-		}
-		if !inProject || !strings.HasPrefix(trimmed, "name") {
-			continue
-		}
-		key, value, ok := strings.Cut(trimmed, "=")
-		if ok && strings.TrimSpace(key) == "name" {
-			if name := strings.Trim(strings.TrimSpace(value), `"'`); name != "" {
-				return name, nil
-			}
-		}
+	var document map[string]any
+	if err := toml.Unmarshal(content, &document); err != nil {
+		return "", fmt.Errorf("parse pyproject.toml for blueprint ref without #PATH: %w", err)
 	}
-	return "", fmt.Errorf("blueprint ref without #PATH requires pyproject.toml with [project].name: %s", sourceRoot)
+	projectValue, ok := document["project"]
+	if !ok {
+		return "", fmt.Errorf("blueprint ref without #PATH requires [project].name in pyproject.toml: %s", sourceRoot)
+	}
+	project, ok := projectValue.(map[string]any)
+	if !ok {
+		return "", fmt.Errorf("blueprint ref without #PATH requires [project] to be a table in pyproject.toml: %s", sourceRoot)
+	}
+	nameValue, ok := project["name"]
+	if !ok {
+		return "", fmt.Errorf("blueprint ref without #PATH requires [project].name in pyproject.toml: %s", sourceRoot)
+	}
+	name, ok := nameValue.(string)
+	if !ok {
+		return "", fmt.Errorf("blueprint ref without #PATH requires [project].name to be a string in pyproject.toml: %s", sourceRoot)
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("blueprint ref without #PATH requires [project].name to be non-empty in pyproject.toml: %s", sourceRoot)
+	}
+	return name, nil
 }
 
 func findBlueprintManifest(dir string) (string, error) {

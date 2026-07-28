@@ -80,6 +80,106 @@ func TestSourceBlueprintManifestPathRejectsSymlinkOutsideSourceRoot(t *testing.T
 		t.Fatalf("source symlink escape error = %v", err)
 	}
 }
+
+func TestSourceProjectNameParsesTOML(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "basic string with inline comment",
+			content: "[project]\nname = \"demo-server\" # retained comment\n",
+			want:    "demo-server",
+		},
+		{
+			name:    "literal string",
+			content: "[project]\nname = 'demo-server'\n",
+			want:    "demo-server",
+		},
+		{
+			name:    "multiline basic string",
+			content: "[project]\nname = \"\"\"demo-server\"\"\"\n",
+			want:    "demo-server",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "pyproject.toml"), []byte(test.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			got, err := sourceProjectName(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("sourceProjectName() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSourceProjectNameRejectsInvalidProjectName(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		content   string
+		wantError string
+	}{
+		{
+			name:      "missing",
+			content:   "[project]\nversion = \"1.0\"\n",
+			wantError: "requires [project].name",
+		},
+		{
+			name:      "non-string",
+			content:   "[project]\nname = 123\n",
+			wantError: "requires [project].name to be a string",
+		},
+		{
+			name:      "empty",
+			content:   "[project]\nname = \"  \"\n",
+			wantError: "requires [project].name to be non-empty",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "pyproject.toml"), []byte(test.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := sourceProjectName(root); err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("sourceProjectName() error = %v, want containing %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestSourceBlueprintManifestPathDerivesNormalizedProjectSubdirFromTOML(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(root, "pyproject.toml"),
+		[]byte("[project]\nname = \"Demo.Server-Pkg\" # valid inline comment\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	blueprintDir := filepath.Join(root, "demo_server_pkg", "reploy")
+	if err := os.MkdirAll(blueprintDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(blueprintDir, "demo.blueprint.yaml")
+	if err := os.WriteFile(manifest, []byte(aptOnlyBlueprintFixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	gotManifest, gotSubdir, err := sourceBlueprintManifestPath(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotManifest != manifest || gotSubdir != "demo_server_pkg/reploy" {
+		t.Fatalf("sourceBlueprintManifestPath() = (%q, %q), want (%q, %q)", gotManifest, gotSubdir, manifest, "demo_server_pkg/reploy")
+	}
+}
+
 func TestLoadBlueprintRejectsSemanticErrors(t *testing.T) {
 	dir := t.TempDir()
 	manifest := filepath.Join(dir, "invalid.blueprint.yaml")
