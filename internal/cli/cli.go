@@ -960,6 +960,7 @@ type dockerBuildOptions struct {
 	Dir         string
 	DirExplicit bool
 	NoCache     bool
+	Verify      bool
 	Verbose     bool
 }
 
@@ -977,6 +978,8 @@ func parseDockerBuildOptions(args []string) (dockerBuildOptions, error) {
 			options.DirExplicit = true
 		case "--no-cache":
 			options.NoCache = true
+		case "--verify":
+			options.Verify = true
 		case "--verbose":
 			options.Verbose = true
 		default:
@@ -990,6 +993,9 @@ func parseDockerBuildOptions(args []string) (dockerBuildOptions, error) {
 	}
 	if options.Dir == "" {
 		return dockerBuildOptions{}, fmt.Errorf("--dir must not be empty")
+	}
+	if options.NoCache && options.Verify {
+		return dockerBuildOptions{}, fmt.Errorf("--no-cache and --verify are mutually exclusive")
 	}
 	return options, nil
 }
@@ -3570,6 +3576,7 @@ redirected terminals print durable progress lines and the result directly.
 Options:
   --dir DIR          Staging directory, default current staging dir or reploy-staging
   --no-cache         Rerun resolvers and image construction instead of reusing the current build
+  --verify           Fully verify a reusable current build; rebuild if verification fails
   --verbose          Show durable Reploy-level build steps without backend transcripts
   -h, --help         Show build help
 `, "\n"))

@@ -2147,6 +2147,13 @@ build or repair images, publish records, update deployment state, or execute
 application commands. Its temporary containers and workspaces are removed on
 every exit.
 
+`reploy build --verify` applies the same audit only after the build pipeline has
+identified an otherwise reusable current or validated image. A successful
+verification permits ordinary reuse. A failed verification prevents reuse and
+continues with a normal uncached rebuild, reporting that recovery to the user.
+Ordinary `reploy build` retains the deployment-local trust policy and does not
+pay for this comprehensive audit.
+
 ## Historical Implementation Impact
 
 The provider-graph implementation required the following structural work. This

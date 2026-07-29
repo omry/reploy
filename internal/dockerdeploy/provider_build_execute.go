@@ -24,11 +24,12 @@ type LockedProviderBuildExecutionInputV1 struct {
 }
 
 type LockedProviderBuildExecutionResultV1 struct {
-	State       deploy.StateV1
-	Lock        deploy.BuildLockV1
-	Reused      bool
-	Republished bool
-	Validated   bool
+	State               deploy.StateV1
+	Lock                deploy.BuildLockV1
+	Reused              bool
+	Republished         bool
+	Validated           bool
+	VerificationFailure string
 }
 
 type providerBuildExecutionBackend struct {

@@ -87,19 +87,6 @@ This file is the day-to-day queue for design and implementation gaps.
       commands under clear functional headings such as lifecycle and monitoring
       while preserving the existing command syntax and discoverability.
 
-- [ ] `P2` Add explicit verification of existing staged builds.
-      Add `reploy verify` as a read-only audit of the current staged build:
-      validate state and lock relationships, fully rehash the reachable
-      provider-store closure, inspect image identity and lineage, rerun
-      cumulative provider-layer checks, validate final-image evidence, and
-      prove that workloads, lifecycle hooks, and command triggers resolve
-      against the locked output catalog. It must not resolve packages, build,
-      repair, publish records, update state, or execute application commands;
-      transient read-only, network-disabled verification containers must be
-      cleaned on every exit. Add `reploy build --verify` over the same verifier
-      so explicit verification failures prevent reuse and may trigger a normal
-      rebuild, while ordinary reuse retains its local-system trust policy.
-
 - [ ] `P2` Complete the public site documentation.
       Build out the documentation site as the maintained user-facing guide for
       discovering, staging, configuring, running, installing, diagnosing, and

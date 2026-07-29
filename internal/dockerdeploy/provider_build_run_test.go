@@ -476,6 +476,173 @@ func TestRunProviderBuildV1DoesNotObserveLocalOverridePathOnExactReuse(t *testin
 	}
 }
 
+func TestRunProviderBuildV1VerifiesExactReuseBeforeExecution(t *testing.T) {
+	dir, _ := stageProviderBuildRunState(t, false)
+	current := CurrentBuild{Generation: deploy.EnvironmentGenerationState{
+		Reference: "reploy/test:g-current",
+	}}
+	order := []string{}
+	result, err := runProviderBuildV1(t.Context(), ProviderBuildRunInputV1{
+		DeploymentDir: dir,
+		Verify:        true,
+	}, providerBuildRunBackend{
+		acquire:  deploy.AcquireOperationLock,
+		newStore: providerstore.NewStore,
+		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
+			order = append(order, "prepare")
+			return LockedProviderBuildPreparationV1{
+				Operation: input.Operation, Store: input.Store,
+				DeploymentDir: input.DeploymentDir, Current: &current, Reused: true,
+			}, nil
+		},
+		planCurrent: func(input CurrentRuntimePlanInputV1) (CurrentRuntimePlanV1, error) {
+			order = append(order, "plan")
+			if !reflect.DeepEqual(input.Current, current) || input.DeploymentDir != dir {
+				t.Fatalf("current runtime input = %#v", input)
+			}
+			return CurrentRuntimePlanV1{}, nil
+		},
+		verifyCurrent: func(_ context.Context, input CurrentBuildVerificationInputV1) (CurrentBuildVerificationResultV1, error) {
+			order = append(order, "verify")
+			if !reflect.DeepEqual(input.Current, current) {
+				t.Fatalf("verification input = %#v", input)
+			}
+			return CurrentBuildVerificationResultV1{}, nil
+		},
+		execute: func(_ context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
+			order = append(order, "execute")
+			if !input.Preparation.Reused || input.RunOptions.NoCache {
+				t.Fatalf("verified execution input = %#v", input)
+			}
+			return LockedProviderBuildExecutionResultV1{Reused: true}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantOrder := []string{"prepare", "plan", "verify", "execute"}
+	if !result.Reused ||
+		result.VerificationFailure != "" ||
+		!reflect.DeepEqual(order, wantOrder) {
+		t.Fatalf("result=%#v order=%v", result, order)
+	}
+}
+
+func TestRunProviderBuildV1VerifiesValidatedCandidateBeforePromotion(t *testing.T) {
+	dir, _ := stageProviderBuildRunState(t, false)
+	candidateCurrent := CurrentBuild{Generation: deploy.EnvironmentGenerationState{
+		Reference: "reploy/test:v-validated",
+	}}
+	candidate := ValidatedBuildCandidateV1{Current: candidateCurrent}
+	order := []string{}
+	result, err := runProviderBuildV1(t.Context(), ProviderBuildRunInputV1{
+		DeploymentDir: dir,
+		Verify:        true,
+	}, providerBuildRunBackend{
+		acquire:  deploy.AcquireOperationLock,
+		newStore: providerstore.NewStore,
+		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
+			order = append(order, "prepare")
+			return LockedProviderBuildPreparationV1{
+				Operation: input.Operation, Store: input.Store,
+				DeploymentDir: input.DeploymentDir, Reused: true, ReusedCandidate: true,
+				ValidatedCandidate: &candidate,
+			}, nil
+		},
+		planCurrent: func(input CurrentRuntimePlanInputV1) (CurrentRuntimePlanV1, error) {
+			order = append(order, "plan")
+			if !reflect.DeepEqual(input.Current, candidateCurrent) {
+				t.Fatalf("validated candidate runtime input = %#v", input)
+			}
+			return CurrentRuntimePlanV1{}, nil
+		},
+		verifyCurrent: func(_ context.Context, input CurrentBuildVerificationInputV1) (CurrentBuildVerificationResultV1, error) {
+			order = append(order, "verify")
+			if !reflect.DeepEqual(input.Current, candidateCurrent) {
+				t.Fatalf("validated candidate verification input = %#v", input)
+			}
+			return CurrentBuildVerificationResultV1{}, nil
+		},
+		execute: func(_ context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
+			order = append(order, "execute")
+			if !input.Preparation.ReusedCandidate ||
+				input.Preparation.ValidatedCandidate != &candidate ||
+				input.RunOptions.NoCache {
+				t.Fatalf("validated candidate execution input = %#v", input)
+			}
+			return LockedProviderBuildExecutionResultV1{Reused: true}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantOrder := []string{"prepare", "plan", "verify", "execute"}
+	if !result.Reused || !reflect.DeepEqual(order, wantOrder) {
+		t.Fatalf("result=%#v order=%v", result, order)
+	}
+}
+
+func TestRunProviderBuildV1RebuildsAfterReuseVerificationFailure(t *testing.T) {
+	dir, _ := stageProviderBuildRunState(t, false)
+	current := CurrentBuild{}
+	wantVerification := errors.New("provider artifact digest changed")
+	prepareCalls := 0
+	var progress strings.Builder
+	result, err := runProviderBuildV1(t.Context(), ProviderBuildRunInputV1{
+		DeploymentDir: dir,
+		Verify:        true,
+		Progress:      &progress,
+	}, providerBuildRunBackend{
+		acquire:  deploy.AcquireOperationLock,
+		newStore: providerstore.NewStore,
+		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
+			prepareCalls++
+			if prepareCalls == 1 {
+				if input.NoCache {
+					t.Fatal("initial reuse preparation bypassed cache")
+				}
+				return LockedProviderBuildPreparationV1{
+					Operation: input.Operation, Store: input.Store,
+					DeploymentDir: input.DeploymentDir, Current: &current, Reused: true,
+				}, nil
+			}
+			if !input.NoCache || input.ValidatedCandidate != nil {
+				t.Fatalf("rebuild preparation input = %#v", input)
+			}
+			return LockedProviderBuildPreparationV1{
+				Operation: input.Operation, Store: input.Store,
+				DeploymentDir: input.DeploymentDir,
+			}, nil
+		},
+		planCurrent: func(CurrentRuntimePlanInputV1) (CurrentRuntimePlanV1, error) {
+			return CurrentRuntimePlanV1{}, nil
+		},
+		verifyCurrent: func(context.Context, CurrentBuildVerificationInputV1) (CurrentBuildVerificationResultV1, error) {
+			return CurrentBuildVerificationResultV1{}, wantVerification
+		},
+		execute: func(_ context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
+			if input.Preparation.Reused || !input.RunOptions.NoCache {
+				t.Fatalf("verification failure reused cache: %#v", input)
+			}
+			return LockedProviderBuildExecutionResultV1{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepareCalls != 2 ||
+		result.Reused ||
+		result.VerificationFailure != wantVerification.Error() ||
+		!strings.Contains(progress.String(), "verification failed; rebuilding instead") {
+		t.Fatalf(
+			"prepare=%d result=%#v progress=%q",
+			prepareCalls,
+			result,
+			progress.String(),
+		)
+	}
+}
+
 func TestRunLockedProviderBuildV1RoutesUnchangedLocalSourceThroughFreshWheelBuild(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	sourceDir := filepath.Join(workspaceRoot, "demo")

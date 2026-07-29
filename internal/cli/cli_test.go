@@ -161,15 +161,53 @@ func TestParseGlobalDeploymentOptionsRejectsInvalidDockerTimeout(t *testing.T) {
 }
 
 func TestParseDockerBuildOptions(t *testing.T) {
-	options, err := parseDockerBuildOptions([]string{"--dir", "stage", "--no-cache", "--verbose"})
+	options, err := parseDockerBuildOptions([]string{"--dir", "stage", "--verify", "--verbose"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.Dir != "stage" || !options.DirExplicit || !options.NoCache || !options.Verbose {
+	if options.Dir != "stage" || !options.DirExplicit || options.NoCache || !options.Verify || !options.Verbose {
 		t.Fatalf("options = %#v", options)
 	}
 	if _, err := parseDockerBuildOptions([]string{"--validate-layers"}); err == nil {
 		t.Fatal("removed --validate-layers option was accepted")
+	}
+	if _, err := parseDockerBuildOptions([]string{"--no-cache", "--verify"}); err == nil ||
+		!strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("conflicting build verification options error = %v", err)
+	}
+}
+
+func TestBuildVerifyReportsRecoveryFromInvalidCachedBuild(t *testing.T) {
+	t.Setenv("TERM", "dumb")
+	originalBuild := dockerProviderBuild
+	originalRuntime := dockerProviderBuildRuntime
+	t.Cleanup(func() {
+		dockerProviderBuild = originalBuild
+		dockerProviderBuildRuntime = originalRuntime
+	})
+	dockerProviderBuildRuntime = func() (dockerdeploy.StagedProviderBuildRuntimeV1, error) {
+		return dockerdeploy.StagedProviderBuildRuntimeV1{UID: 501, GID: 20}, nil
+	}
+	stageDir := filepath.Join(t.TempDir(), "provider-stage")
+	writeCLITestStagedState(t, stageDir, "demo")
+	dockerProviderBuild = func(
+		_ context.Context,
+		input dockerdeploy.ProviderBuildRunInputV1,
+	) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
+		if !input.Verify || input.NoCache {
+			t.Fatalf("verified build input = %#v", input)
+		}
+		result := cliTestProviderBuildResult(t, stageDir, false)
+		result.VerificationFailure = "provider artifact digest changed"
+		return result, nil
+	}
+	code, stdout, stderr := runCLI("build", "--dir", stageDir, "--verify")
+	if code != 0 ||
+		!strings.Contains(stdout, "built demo") ||
+		!strings.Contains(stderr, "Cached build verification failed") ||
+		!strings.Contains(stderr, "rebuilt the environment instead") ||
+		!strings.Contains(stderr, "provider artifact digest changed") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
 

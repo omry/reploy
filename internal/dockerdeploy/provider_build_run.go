@@ -22,6 +22,7 @@ type ProviderBuildRunInputV1 struct {
 	Runtime         StagedProviderBuildRuntimeV1
 	Automatic       bool
 	NoCache         bool
+	Verify          bool
 	ValidateChoices bool
 	Progress        io.Writer
 	BuildProgress   buildprogress.Reporter
@@ -35,6 +36,7 @@ type LockedProviderBuildRunInputV1 struct {
 	Runtime         StagedProviderBuildRuntimeV1
 	Automatic       bool
 	NoCache         bool
+	Verify          bool
 	ValidateChoices bool
 	Progress        io.Writer
 	BuildProgress   buildprogress.Reporter
@@ -77,6 +79,8 @@ type providerBuildRunBackend struct {
 	newStore         func(string) (providerstore.Store, error)
 	prepare          func(context.Context, LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error)
 	execute          func(context.Context, LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error)
+	planCurrent      func(CurrentRuntimePlanInputV1) (CurrentRuntimePlanV1, error)
+	verifyCurrent    func(context.Context, CurrentBuildVerificationInputV1) (CurrentBuildVerificationResultV1, error)
 	cleanupFailure   func(context.Context, LockedProviderBuildPreparationV1) error
 	discardValidated func(context.Context, *deploy.OperationLock, string, string) error
 }
@@ -92,6 +96,8 @@ func RunProviderBuildV1(
 		newStore:       providerstore.NewStore,
 		prepare:        PrepareLockedProviderBuildV1,
 		execute:        ExecuteLockedProviderBuildV1,
+		planCurrent:    PlanCurrentRuntimeV1,
+		verifyCurrent:  VerifyLoadedCurrentBuildV1,
 		cleanupFailure: cleanupFailedProviderBuildV1,
 		discardValidated: func(ctx context.Context, operation *deploy.OperationLock, environment, deploymentDir string) error {
 			return DiscardValidatedBuild(ctx, operation, environment, deploymentDir)
@@ -139,6 +145,7 @@ func runProviderBuildV1(
 		Operation: operation, Store: store, DeploymentDir: deploymentDir,
 		Runtime: input.Runtime, Automatic: input.Automatic,
 		NoCache:         input.NoCache,
+		Verify:          input.Verify,
 		ValidateChoices: input.ValidateChoices,
 		Progress:        input.Progress, BuildProgress: input.BuildProgress,
 		RunOptions: input.RunOptions,
@@ -155,6 +162,8 @@ func RunLockedProviderBuildV1(
 	return runLockedProviderBuildV1(ctx, input, providerBuildRunBackend{
 		prepare:        PrepareLockedProviderBuildV1,
 		execute:        ExecuteLockedProviderBuildV1,
+		planCurrent:    PlanCurrentRuntimeV1,
+		verifyCurrent:  VerifyLoadedCurrentBuildV1,
 		cleanupFailure: cleanupFailedProviderBuildV1,
 		discardValidated: func(ctx context.Context, operation *deploy.OperationLock, environment, deploymentDir string) error {
 			return DiscardValidatedBuild(ctx, operation, environment, deploymentDir)
@@ -181,6 +190,9 @@ func runLockedProviderBuildV1(
 	}
 	if backend.prepare == nil || backend.execute == nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("run locked provider build requires a complete backend")
+	}
+	if input.Verify && (backend.planCurrent == nil || backend.verifyCurrent == nil) {
+		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("verified provider build requires current-build verification backends")
 	}
 	if backend.cleanupFailure == nil {
 		backend.cleanupFailure = cleanupFailedProviderBuildV1
@@ -329,7 +341,7 @@ func runLockedProviderBuildV1(
 	buildprogress.Report(input.BuildProgress, buildprogress.Event{
 		Phase: buildprogress.PhasePrepare, Detail: "Preparing base image and provider plan",
 	})
-	preparation, err := backend.prepare(ctx, LockedProviderBuildPreparationInputV1{
+	preparationInput := LockedProviderBuildPreparationInputV1{
 		Operation: input.Operation, Store: input.Store, Environment: document.Environment.ID,
 		DeploymentDir: deploymentDir, PackageOverrides: packageOverrideIntent, BaseImage: baseImage,
 		Sources:    reuseSources,
@@ -340,9 +352,57 @@ func runLockedProviderBuildV1(
 			return nil
 		}(),
 		ValidatedInputs: validatedInputs,
-	})
+	}
+	preparation, err := backend.prepare(ctx, preparationInput)
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, err
+	}
+	effectiveNoCache := input.NoCache
+	verificationFailure := ""
+	if input.Verify && preparation.Reused {
+		reused, err := providerBuildVerificationCurrentV1(preparation)
+		if err != nil {
+			return LockedProviderBuildExecutionResultV1{}, err
+		}
+		currentRuntime, err := backend.planCurrent(CurrentRuntimePlanInputV1{
+			DeploymentDir: deploymentDir,
+			Current:       reused,
+			Runtime:       input.Runtime,
+		})
+		if err == nil {
+			_, err = backend.verifyCurrent(ctx, CurrentBuildVerificationInputV1{
+				Store: input.Store, Current: reused, Runtime: currentRuntime,
+			})
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return LockedProviderBuildExecutionResultV1{}, ctx.Err()
+			}
+			verificationFailure = err.Error()
+			writeProviderBuildProgress(
+				input.Progress,
+				"cached build verification failed; rebuilding instead: %v",
+				err,
+			)
+			effectiveNoCache = true
+			preparationInput.NoCache = true
+			preparationInput.ValidatedCandidate = nil
+			preparation, err = backend.prepare(ctx, preparationInput)
+			if err != nil {
+				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf(
+					"cached build verification failed (%s), and rebuild preparation failed: %w",
+					verificationFailure,
+					err,
+				)
+			}
+			if preparation.Reused {
+				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf(
+					"rebuild preparation reused a cached build after verification failed",
+				)
+			}
+		} else {
+			writeProviderBuildProgress(input.Progress, "verified cached environment image")
+		}
 	}
 	if !input.ValidateChoices && validatedCandidateFound && !preparation.ReusedCandidate {
 		if err := backend.discardValidated(
@@ -358,7 +418,7 @@ func runLockedProviderBuildV1(
 		})
 	}
 	options := input.RunOptions
-	options.NoCache = input.NoCache
+	options.NoCache = effectiveNoCache
 	options.Progress = input.Progress
 	result, err := backend.execute(ctx, LockedProviderBuildExecutionInputV1{
 		Preparation:     preparation,
@@ -370,8 +430,16 @@ func runLockedProviderBuildV1(
 	})
 	if err != nil {
 		cleanupErr := backend.cleanupFailure(context.WithoutCancel(ctx), preparation)
+		if verificationFailure != "" {
+			err = fmt.Errorf(
+				"rebuild after cached build verification failed (%s): %w",
+				verificationFailure,
+				err,
+			)
+		}
 		return LockedProviderBuildExecutionResultV1{}, errors.Join(err, cleanupErr)
 	}
+	result.VerificationFailure = verificationFailure
 	if err := ctx.Err(); err != nil {
 		return LockedProviderBuildExecutionResultV1{}, err
 	}
@@ -384,6 +452,24 @@ func runLockedProviderBuildV1(
 		Phase: buildprogress.PhasePublish, Detail: "Build complete", Completed: 1, Total: 1,
 	})
 	return result, nil
+}
+
+func providerBuildVerificationCurrentV1(
+	preparation LockedProviderBuildPreparationV1,
+) (CurrentBuild, error) {
+	if !preparation.Reused {
+		return CurrentBuild{}, fmt.Errorf("provider build verification requires a reused build")
+	}
+	if preparation.ReusedCandidate {
+		if preparation.ValidatedCandidate == nil {
+			return CurrentBuild{}, fmt.Errorf("verified cached build has no validated candidate")
+		}
+		return preparation.ValidatedCandidate.Current, nil
+	}
+	if preparation.Current == nil {
+		return CurrentBuild{}, fmt.Errorf("verified cached build has no current generation")
+	}
+	return *preparation.Current, nil
 }
 
 // PlanDockerExecution requires an image reference even though runtime-policy

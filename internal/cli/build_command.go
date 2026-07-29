@@ -54,6 +54,7 @@ func runDockerBuild(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 			globalOptions,
 			started,
 			options.NoCache,
+			options.Verify,
 		)
 		session := startInteractiveBuildSession(buildRunner)
 		defer session.cancel()
@@ -115,6 +116,7 @@ func runDockerBuild(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 		DeploymentDir: options.Dir,
 		Runtime:       runtimeInput,
 		NoCache:       options.NoCache,
+		Verify:        options.Verify,
 		Progress:      presenter.Progress(),
 		RunOptions: dockerdeploy.RunOptions{
 			Stdout: presenter.ChildOutput(), Stderr: presenter.ChildOutput(),
@@ -128,6 +130,9 @@ func runDockerBuild(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 	if err != nil {
 		_ = presenter.Failure("reploy build error: " + buildFailureDiagnostic(err, childOutput))
 		return 1
+	}
+	if result.VerificationFailure != "" {
+		presenter.Warn(buildVerificationWarning(result.VerificationFailure))
 	}
 	summary, err := summarizeProviderBuild(result)
 	if err != nil {
@@ -270,6 +275,7 @@ func interactiveBuildRunner(
 	globalOptions globalDeploymentOptions,
 	started time.Time,
 	noCache bool,
+	verify bool,
 ) overrideui.BuildRunner {
 	return func(
 		ctx context.Context,
@@ -285,6 +291,7 @@ func interactiveBuildRunner(
 			DeploymentDir: deploymentDir,
 			Runtime:       runtimeInput,
 			NoCache:       noCache,
+			Verify:        verify,
 			Progress:      progress,
 			BuildProgress: reporter,
 			RunOptions: dockerdeploy.RunOptions{
@@ -302,14 +309,23 @@ func interactiveBuildRunner(
 		if err != nil {
 			return overrideui.ValidationResult{}, fmt.Errorf("summarize completed build: %w", err)
 		}
+		warnings := buildWarnings(childOutput.String(), true)
+		if build.VerificationFailure != "" {
+			warnings = append(warnings, buildVerificationWarning(build.VerificationFailure))
+		}
 		return overrideui.ValidationResult{
 			Build: &overrideui.BuildOutcome{
 				Environment: summary.Environment, ImageReference: summary.ImageReference,
 				Elapsed: time.Since(started), Reused: build.Reused, Republished: build.Republished,
 			},
-			Warnings: buildWarnings(childOutput.String(), true),
+			Warnings: warnings,
 		}, nil
 	}
+}
+
+func buildVerificationWarning(diagnostic string) string {
+	return "Cached build verification failed; Reploy rebuilt the environment instead: " +
+		strings.TrimSpace(diagnostic)
 }
 
 type providerBuildSummary struct {
