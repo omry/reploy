@@ -111,3 +111,23 @@ func TestValidateAndPublishImageRejectsIncompleteEvidence(t *testing.T) {
 		t.Fatalf("profile error = %v", err)
 	}
 }
+
+func TestValidateImageReturnsEvidenceWithoutPublishing(t *testing.T) {
+	input := fullValidationInput(t, "d")
+	record, err := ValidateImage(
+		t.Context(),
+		input,
+		acceptFullValidationProfile,
+		func(context.Context, FullImageValidationInput) ([]providers.ValidationEvidence, []providers.ExecutableEvidence, error) {
+			return []providers.ValidationEvidence{}, []providers.ExecutableEvidence{}, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.SubjectRootFS != input.Image.Image.RootFSSubject ||
+		len(record.Profiles) != 0 ||
+		len(record.ExposedOutputs) != 0 {
+		t.Fatalf("validation record = %#v", record)
+	}
+}

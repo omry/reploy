@@ -33,28 +33,30 @@ type BuildValidationResult struct {
 	Final  PublishedImageValidation
 }
 
-func ValidateAndPublishImage(
+// ValidateImage performs complete image validation without publishing the
+// resulting evidence. Callers that only audit existing state must use this
+// path so verification cannot mutate the provider store.
+func ValidateImage(
 	ctx context.Context,
-	store providerstore.Store,
 	input FullImageValidationInput,
 	validateProfileOwner providers.RequirementProfileOwnerValidator,
 	run FullImageValidationRunner,
-) (PublishedImageValidation, error) {
+) (deploy.PrefixValidationV1, error) {
 	if ctx == nil {
-		return PublishedImageValidation{}, fmt.Errorf("full image validation requires a context")
+		return deploy.PrefixValidationV1{}, fmt.Errorf("full image validation requires a context")
 	}
 	if err := ctx.Err(); err != nil {
-		return PublishedImageValidation{}, err
+		return deploy.PrefixValidationV1{}, err
 	}
 	if err := validateFullImageValidationInput(input, validateProfileOwner); err != nil {
-		return PublishedImageValidation{}, err
+		return deploy.PrefixValidationV1{}, err
 	}
 	if run == nil {
-		return PublishedImageValidation{}, fmt.Errorf("full image validation requires a runner")
+		return deploy.PrefixValidationV1{}, fmt.Errorf("full image validation requires a runner")
 	}
 	profiles, outputs, err := run(ctx, input)
 	if err != nil {
-		return PublishedImageValidation{}, fmt.Errorf("validate image %s: %w", input.Image.Image.Digest, err)
+		return deploy.PrefixValidationV1{}, fmt.Errorf("validate image %s: %w", input.Image.Image.Digest, err)
 	}
 	profiles = append([]providers.ValidationEvidence{}, profiles...)
 	outputs = append([]providers.ExecutableEvidence{}, outputs...)
@@ -66,15 +68,32 @@ func ValidateAndPublishImage(
 		return outputs[left].Output.Name < outputs[right].Output.Name
 	})
 	if err := validateFullImageEvidence(input, profiles, outputs, validateProfileOwner); err != nil {
-		return PublishedImageValidation{}, err
+		return deploy.PrefixValidationV1{}, err
 	}
 	policyDigest, err := deploy.RuntimePolicyDigestV1(input.RuntimePolicy)
 	if err != nil {
-		return PublishedImageValidation{}, err
+		return deploy.PrefixValidationV1{}, err
 	}
 	record := deploy.PrefixValidationV1{
 		Schema: deploy.PrefixValidationSchemaV1, SubjectRootFS: input.Image.Image.RootFSSubject,
 		Profiles: profiles, RuntimePolicy: policyDigest, ExposedOutputs: outputs,
+	}
+	if err := deploy.ValidatePrefixValidation(record); err != nil {
+		return deploy.PrefixValidationV1{}, fmt.Errorf("validate full image evidence record: %w", err)
+	}
+	return record, nil
+}
+
+func ValidateAndPublishImage(
+	ctx context.Context,
+	store providerstore.Store,
+	input FullImageValidationInput,
+	validateProfileOwner providers.RequirementProfileOwnerValidator,
+	run FullImageValidationRunner,
+) (PublishedImageValidation, error) {
+	record, err := ValidateImage(ctx, input, validateProfileOwner, run)
+	if err != nil {
+		return PublishedImageValidation{}, err
 	}
 	reference, err := deploy.PublishPrefixValidation(ctx, store, record)
 	if err != nil {

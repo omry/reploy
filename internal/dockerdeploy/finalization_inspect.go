@@ -20,17 +20,30 @@ func inspectFinalizedImageCandidate(ctx context.Context, built BuiltImageCandida
 	if err != nil {
 		return InspectedImageCandidate{}, err
 	}
+	if err := validateInspectedFinalizedImageCandidate(finalized, request); err != nil {
+		return InspectedImageCandidate{}, err
+	}
+	return finalized, nil
+}
+
+func validateInspectedFinalizedImageCandidate(finalized InspectedImageCandidate, request FinalizationBuildRequest) error {
+	if err := validateFinalizationBuildRequest(request); err != nil {
+		return err
+	}
+	if err := ValidateInspectedImageCandidateIdentity(finalized); err != nil {
+		return err
+	}
 	if finalized.Image.RootFSSubject != request.Source.Image.RootFSSubject {
-		return InspectedImageCandidate{}, fmt.Errorf("finalized image changed the validated rootfs subject")
+		return fmt.Errorf("finalized image changed the validated rootfs subject")
 	}
 	if err := request.Source.Config.Validate(); err != nil {
-		return InspectedImageCandidate{}, fmt.Errorf("finalization source config: %w", err)
+		return fmt.Errorf("finalization source config: %w", err)
 	}
 	if !reflect.DeepEqual(finalized.Config, request.Source.Config) {
-		return InspectedImageCandidate{}, fmt.Errorf("finalized image changed non-label image configuration")
+		return fmt.Errorf("finalized image changed non-label image configuration")
 	}
 	if err := deploy.ValidatePrefixValidationLabels(finalized.Labels, finalized.Image, request.ValidationReference); err != nil {
-		return InspectedImageCandidate{}, err
+		return err
 	}
 	expectedLabels := make(map[string]string, len(request.Source.Labels)+3)
 	for name, value := range request.Source.Labels {
@@ -38,13 +51,13 @@ func inspectFinalizedImageCandidate(ctx context.Context, built BuiltImageCandida
 	}
 	validationLabels, err := deploy.PrefixValidationLabels(finalized.Image.RootFSSubject, request.ValidationReference)
 	if err != nil {
-		return InspectedImageCandidate{}, err
+		return err
 	}
 	for _, label := range validationLabels {
 		expectedLabels[label.Name] = label.Value
 	}
 	if !reflect.DeepEqual(finalized.Labels, expectedLabels) {
-		return InspectedImageCandidate{}, fmt.Errorf("finalized image changed labels outside the validation contract")
+		return fmt.Errorf("finalized image changed labels outside the validation contract")
 	}
-	return finalized, nil
+	return nil
 }
