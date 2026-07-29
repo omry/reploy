@@ -2,11 +2,13 @@ package dockerdeploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providers/registry"
@@ -24,6 +26,24 @@ type CurrentBuildVerificationResultV1 struct {
 	StoreObjects int
 	Images       int
 	Commands     int
+}
+
+type CurrentBuildImageMissingErrorV1 struct {
+	Subject string
+	ImageID canonical.Digest
+	cause   error
+}
+
+func (err *CurrentBuildImageMissingErrorV1) Error() string {
+	return fmt.Sprintf(
+		"%s %s is missing from Docker",
+		err.Subject,
+		err.ImageID,
+	)
+}
+
+func (err *CurrentBuildImageMissingErrorV1) Unwrap() error {
+	return err.cause
 }
 
 type currentBuildVerificationBackendV1 struct {
@@ -200,7 +220,11 @@ func verifyLockedImagesV1(
 		lock.Platform,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("verify current base image: %w", err)
+		return 0, currentBuildImageInspectionError(
+			"current base image",
+			lock.Base.ConfigDigest,
+			err,
+		)
 	}
 	expectedBase, err := realizedImageFromDescriptor(lock.Base)
 	if err != nil {
@@ -245,10 +269,17 @@ func verifyLockedImagesV1(
 			lock.Platform,
 		)
 		if err != nil {
-			return 0, fmt.Errorf("verify current provider layer %q: %w", nodeID, err)
+			return 0, currentBuildImageInspectionError(
+				fmt.Sprintf("cached %s layer image", providerDisplayName(node.Provider)),
+				node.Result.ConfigDigest,
+				err,
+			)
 		}
 		if layer.Image != node.Result {
-			return 0, fmt.Errorf("current provider layer %q no longer matches its locked image", nodeID)
+			return 0, fmt.Errorf(
+				"cached %s layer image no longer matches its locked identity",
+				providerDisplayName(node.Provider),
+			)
 		}
 		record, err := ValidateImage(ctx, FullImageValidationInput{
 			Image:         layer,
@@ -257,7 +288,11 @@ func verifyLockedImagesV1(
 			RuntimePolicy: lock.RuntimePolicy,
 		}, registry.ValidateRequirementProfileV1, run)
 		if err != nil {
-			return 0, fmt.Errorf("verify current provider layer %q contents: %w", nodeID, err)
+			return 0, fmt.Errorf(
+				"verify cached %s layer contents: %w",
+				providerDisplayName(node.Provider),
+				err,
+			)
 		}
 		source = layer
 		inspectedImages++
@@ -286,7 +321,11 @@ func verifyLockedImagesV1(
 		lock.Platform,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("verify current final image: %w", err)
+		return 0, currentBuildImageInspectionError(
+			"current environment image",
+			lock.FinalImage.ConfigDigest,
+			err,
+		)
 	}
 	if err := validateInspectedFinalizedImageCandidate(final, FinalizationBuildRequest{
 		Source:              source,
@@ -300,6 +339,22 @@ func verifyLockedImagesV1(
 		return 0, fmt.Errorf("current final image no longer matches the locked image")
 	}
 	return inspectedImages + 1, nil
+}
+
+func currentBuildImageInspectionError(
+	subject string,
+	imageID canonical.Digest,
+	err error,
+) error {
+	var missing *dockerImageNotFoundError
+	if errors.As(err, &missing) {
+		return &CurrentBuildImageMissingErrorV1{
+			Subject: subject,
+			ImageID: imageID,
+			cause:   err,
+		}
+	}
+	return fmt.Errorf("verify %s: %w", subject, err)
 }
 
 func lastNonBaseNodeID(order []providers.NodeID) providers.NodeID {

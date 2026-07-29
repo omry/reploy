@@ -1614,6 +1614,17 @@ func runDockerVerify(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 130
 		}
 		fmt.Fprintf(stderr, "reploy verify error: %v\n", err)
+		var missingImage *dockerdeploy.CurrentBuildImageMissingErrorV1
+		if errors.As(err, &missingImage) {
+			fmt.Fprintln(
+				stderr,
+				"the current environment image may still run, but complete build lineage cannot be verified",
+			)
+			fmt.Fprintln(
+				stderr,
+				"next: run `reploy build --verify`; it will rebuild instead of reusing this incomplete cache",
+			)
+		}
 		return 1
 	}
 	fmt.Fprintf(stdout, "verified current build: %s\n", result.Environment)

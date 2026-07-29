@@ -159,6 +159,33 @@ func TestInspectBuiltImageCandidateDerivesObservedIdentity(t *testing.T) {
 	}
 }
 
+func TestInspectBuiltImageCandidateClassifiesMissingDockerImage(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	imageID := rendererDigest("c")
+	_, err = inspectBuiltImageCandidate(
+		t.Context(),
+		BuiltImageCandidate{ImageID: imageID},
+		platform,
+		func(context.Context, ...string) (string, error) {
+			return "", errors.New(
+				"docker image inspect " + string(imageID) +
+					": exit status 1: []\nError response from daemon: No such image: " +
+					string(imageID),
+			)
+		},
+	)
+	var missing *dockerImageNotFoundError
+	if !errors.As(err, &missing) ||
+		missing.ImageID != imageID ||
+		strings.Contains(err.Error(), "[]") ||
+		strings.Contains(err.Error(), "Error response from daemon") {
+		t.Fatalf("missing image error = %#v / %v", missing, err)
+	}
+}
+
 func TestInspectBuiltImageCandidateRejectsDockerIdentityMismatch(t *testing.T) {
 	platform, err := blueprint.ParsePlatform("linux/amd64")
 	if err != nil {

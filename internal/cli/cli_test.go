@@ -258,6 +258,54 @@ func TestVerifyCommandReportsReadOnlyAuditResult(t *testing.T) {
 	}
 }
 
+func TestVerifyCommandSuggestsRebuildForMissingCachedImage(t *testing.T) {
+	originalVerify := dockerVerifyCurrentBuild
+	originalRuntime := dockerProviderBuildRuntime
+	t.Cleanup(func() {
+		dockerVerifyCurrentBuild = originalVerify
+		dockerProviderBuildRuntime = originalRuntime
+	})
+	stageDir := filepath.Join(t.TempDir(), "provider-stage")
+	writeCLITestStagedState(t, stageDir, "demo")
+	dockerProviderBuildRuntime = func() (dockerdeploy.StagedProviderBuildRuntimeV1, error) {
+		return dockerdeploy.StagedProviderBuildRuntimeV1{UID: 501, GID: 20}, nil
+	}
+	const imageID = "sha256:d5bc82357ed038ef1f77c03b1425c21deffa956d75c80651d07cf560a3d0b562"
+	dockerVerifyCurrentBuild = func(
+		context.Context,
+		dockerdeploy.VerifyCurrentBuildInputV1,
+	) (dockerdeploy.VerifyCurrentBuildResultV1, error) {
+		return dockerdeploy.VerifyCurrentBuildResultV1{}, &dockerdeploy.CurrentBuildImageMissingErrorV1{
+			Subject: "cached Python layer image",
+			ImageID: imageID,
+		}
+	}
+	code, stdout, stderr := runCLI("verify", "--dir", stageDir)
+	if code != 1 || stdout != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	for _, want := range []string{
+		"reploy verify error: cached Python layer image " + imageID + " is missing from Docker",
+		"complete build lineage cannot be verified",
+		"next: run `reploy build --verify`",
+		"rebuild instead of reusing this incomplete cache",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("missing image diagnostic lacks %q:\n%s", want, stderr)
+		}
+	}
+	for _, unwanted := range []string{
+		"application/application",
+		"inspect materialization candidate",
+		"Error response from daemon",
+		"[]",
+	} {
+		if strings.Contains(stderr, unwanted) {
+			t.Fatalf("missing image diagnostic exposes %q:\n%s", unwanted, stderr)
+		}
+	}
+}
+
 func TestVerifyHelpDescribesReadOnlyComprehensiveAudit(t *testing.T) {
 	code, stdout, stderr := runCLI("verify", "--help")
 	if code != 0 || stderr != "" {

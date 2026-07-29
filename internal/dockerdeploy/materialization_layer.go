@@ -27,6 +27,19 @@ type BuiltImageCandidate struct {
 	ImageID canonical.Digest
 }
 
+type dockerImageNotFoundError struct {
+	ImageID canonical.Digest
+	cause   error
+}
+
+func (err *dockerImageNotFoundError) Error() string {
+	return fmt.Sprintf("Docker image %s is not available locally", err.ImageID)
+}
+
+func (err *dockerImageNotFoundError) Unwrap() error {
+	return err.cause
+}
+
 // MaterializationLayerCandidate binds the predicted assembly identity to an
 // uninspected Docker result. It is not validated or publishable state.
 type MaterializationLayerCandidate struct {
@@ -163,6 +176,15 @@ func inspectBuiltImageCandidate(ctx context.Context, candidate BuiltImageCandida
 	}
 	output, err := run(ctx, "image", "inspect", string(candidate.ImageID))
 	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return InspectedImageCandidate{}, contextErr
+		}
+		if dockerImageInspectReportsMissing(err) {
+			return InspectedImageCandidate{}, &dockerImageNotFoundError{
+				ImageID: candidate.ImageID,
+				cause:   err,
+			}
+		}
 		return InspectedImageCandidate{}, fmt.Errorf("inspect materialization candidate %s: %w", candidate.ImageID, err)
 	}
 	inspection, err := parseDockerImageInspectionDetails(string(candidate.ImageID), platform, []byte(output))
@@ -181,6 +203,12 @@ func inspectBuiltImageCandidate(ctx context.Context, candidate BuiltImageCandida
 		return InspectedImageCandidate{}, fmt.Errorf("inspect materialization candidate realized image: %w", err)
 	}
 	return InspectedImageCandidate{Descriptor: descriptor, Config: inspection.Config, Labels: inspection.Labels, Image: image}, nil
+}
+
+func dockerImageInspectReportsMissing(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no such image") ||
+		strings.Contains(message, "no such object")
 }
 
 // ValidateInspectedMaterializationCandidate checks the configuration values

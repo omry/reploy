@@ -155,6 +155,73 @@ func TestVerifyLoadedCurrentBuildV1ReportsStoreClosureFailureBeforeImages(t *tes
 	}
 }
 
+func TestVerifyLockedImagesV1ExplainsMissingProviderLayer(t *testing.T) {
+	fixture := newPreparedPythonGraphReuseFixture(t)
+	lock := fixture.lock
+	if len(lock.Nodes) != 1 || lock.Nodes[0].Provider != blueprint.ComponentTypePython {
+		t.Fatalf("Python fixture nodes = %#v", lock.Nodes)
+	}
+	baseImage, err := realizedImageFromDescriptor(lock.Base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := InspectedImageCandidate{
+		Descriptor: lock.Base,
+		Config: deploy.BaseConfig{
+			Schema: deploy.BaseConfigSchemaV1, Environment: []deploy.ConfigEnvironmentVariable{},
+			Entrypoint: []string{}, Command: []string{}, OnBuild: []string{}, Volumes: []string{},
+		},
+		Labels: map[string]string{},
+		Image:  baseImage,
+	}
+	layerID := lock.Nodes[0].Result.ConfigDigest
+	_, err = verifyLockedImagesV1(
+		t.Context(),
+		lock,
+		deploy.PrefixValidationV1{},
+		func(context.Context, FullImageValidationInput) ([]providers.ValidationEvidence, []providers.ExecutableEvidence, error) {
+			t.Fatal("missing provider layer reached content validation")
+			return nil, nil, nil
+		},
+		func(_ context.Context, candidate BuiltImageCandidate, _ blueprint.Platform) (InspectedImageCandidate, error) {
+			if candidate.ImageID == lock.Base.ConfigDigest {
+				return base, nil
+			}
+			return InspectedImageCandidate{}, &dockerImageNotFoundError{
+				ImageID: candidate.ImageID,
+				cause: errors.New(
+					"docker image inspect: [] Error response from daemon: No such image",
+				),
+			}
+		},
+	)
+	var missing *CurrentBuildImageMissingErrorV1
+	if !errors.As(err, &missing) ||
+		missing.Subject != "cached Python layer image" ||
+		missing.ImageID != layerID {
+		t.Fatalf("missing provider image error = %#v / %v", missing, err)
+	}
+	for _, want := range []string{
+		"cached Python layer image",
+		string(layerID),
+		"missing from Docker",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("missing provider image error lacks %q: %v", want, err)
+		}
+	}
+	for _, unwanted := range []string{
+		string(lock.Nodes[0].NodeID),
+		"inspect materialization candidate",
+		"Error response from daemon",
+		"[]",
+	} {
+		if strings.Contains(err.Error(), unwanted) {
+			t.Fatalf("missing provider image error exposes %q: %v", unwanted, err)
+		}
+	}
+}
+
 func TestVerifyLockedImagesV1RerunsCumulativeLayerValidation(t *testing.T) {
 	_, _, _, lock, _ := newPreparedAPTGraphReuseFixture(t)
 	config := deploy.BaseConfig{

@@ -167,17 +167,22 @@ func providerNodeProgressDescription(action string, plan providers.ProviderPlanV
 	}
 	sort.Strings(components)
 	contextSuffix := providerProgressContextSuffix(components)
-	provider := string(node.Provider)
-	switch node.Provider {
-	case blueprint.ComponentTypeAPT:
-		provider = "APT"
-	case blueprint.ComponentTypePython:
-		provider = "Python"
-	}
+	provider := providerDisplayName(node.Provider)
 	if action == "building" {
 		return fmt.Sprintf("building %s layer%s", provider, contextSuffix)
 	}
 	return fmt.Sprintf("resolving %s packages%s", provider, contextSuffix)
+}
+
+func providerDisplayName(provider blueprint.ComponentType) string {
+	switch provider {
+	case blueprint.ComponentTypeAPT:
+		return "APT"
+	case blueprint.ComponentTypePython:
+		return "Python"
+	default:
+		return string(provider)
+	}
 }
 
 func providerPlanApplicationCount(plan providers.ProviderPlanV1) int {

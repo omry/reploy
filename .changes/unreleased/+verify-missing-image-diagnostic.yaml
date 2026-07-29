@@ -1,0 +1,2 @@
+kind: Fixed
+body: Explain missing cached Docker images during `reploy verify` and suggest the rebuilding verification command.
