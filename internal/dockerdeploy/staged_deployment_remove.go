@@ -65,9 +65,11 @@ func RemoveStagedDeploymentV1(
 				registry.ValidateResolvedBundlePayloadV1,
 			)
 		},
-		admit:            AdmitControlOperationV1,
-		stopOwned:        stopStagedWorkloadForRemovalV1,
-		discardValidated: DiscardValidatedBuild,
+		admit:     AdmitControlOperationV1,
+		stopOwned: stopStagedWorkloadForRemovalV1,
+		discardValidated: func(ctx context.Context, operation *deploy.OperationLock, environment, deploymentDir string) error {
+			return DiscardValidatedBuild(ctx, operation, environment, deploymentDir, input.RunOptions.Progress)
+		},
 		removeMarker: func(operation *deploy.OperationLock, markerID string) error {
 			_, removed, err := operation.RemoveControlMarkerV1(markerID)
 			if err == nil && !removed {

@@ -1,0 +1,2 @@
+kind: Fixed
+body: Reclaim superseded validation build locks and provider-store objects while preserving cleanup for automatic retry.

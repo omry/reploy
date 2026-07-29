@@ -101,7 +101,7 @@ func RunProviderBuildV1(
 		verifyCurrent:  VerifyLoadedCurrentBuildV1,
 		cleanupFailure: cleanupFailedProviderBuildV1,
 		discardValidated: func(ctx context.Context, operation *deploy.OperationLock, environment, deploymentDir string) error {
-			return DiscardValidatedBuild(ctx, operation, environment, deploymentDir)
+			return DiscardValidatedBuild(ctx, operation, environment, deploymentDir, input.Progress)
 		},
 	})
 }
@@ -173,7 +173,7 @@ func RunLockedProviderBuildV1(
 		verifyCurrent:  VerifyLoadedCurrentBuildV1,
 		cleanupFailure: cleanupFailedProviderBuildV1,
 		discardValidated: func(ctx context.Context, operation *deploy.OperationLock, environment, deploymentDir string) error {
-			return DiscardValidatedBuild(ctx, operation, environment, deploymentDir)
+			return DiscardValidatedBuild(ctx, operation, environment, deploymentDir, input.Progress)
 		},
 	})
 }
@@ -208,7 +208,7 @@ func runLockedProviderBuildV1(
 	}
 	if backend.discardValidated == nil {
 		backend.discardValidated = func(ctx context.Context, operation *deploy.OperationLock, environment, deploymentDir string) error {
-			return DiscardValidatedBuild(ctx, operation, environment, deploymentDir)
+			return DiscardValidatedBuild(ctx, operation, environment, deploymentDir, input.Progress)
 		}
 	}
 

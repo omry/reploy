@@ -115,17 +115,32 @@ func (lock *OperationLock) RemoveBuildLock(digest canonical.Digest, validateProf
 }
 
 func (lock *OperationLock) RemoveOtherBuildLocks(current canonical.Digest, validateProfileOwner providers.RequirementProfileOwnerValidator) error {
+	return lock.RemoveBuildLocksExcept([]canonical.Digest{current}, validateProfileOwner)
+}
+
+// RemoveBuildLocksExcept removes every verified build lock except the selected
+// roots. An empty root set removes all locks.
+func (lock *OperationLock) RemoveBuildLocksExcept(keep []canonical.Digest, validateProfileOwner providers.RequirementProfileOwnerValidator) error {
 	if lock == nil {
 		return fmt.Errorf("clean build locks requires an operation lock")
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
-	currentPath, err := lock.buildLockPathLocked(current, false)
-	if err != nil {
-		return err
+	if lock.released || lock.file == nil || lock.path == "" {
+		return fmt.Errorf("operation lock is not held")
 	}
-	directory := filepath.Dir(currentPath)
+	kept := make(map[canonical.Digest]struct{}, len(keep))
+	for _, digest := range keep {
+		if err := digest.Validate(); err != nil {
+			return fmt.Errorf("retained build lock digest: %w", err)
+		}
+		kept[digest] = struct{}{}
+	}
+	directory := filepath.Join(filepath.Dir(lock.path), buildLockDirectoryName)
 	entries, err := os.ReadDir(directory)
+	if errors.Is(err, fs.ErrNotExist) && len(kept) == 0 {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("read build lock directory: %w", err)
 	}
@@ -135,7 +150,7 @@ func (lock *OperationLock) RemoveOtherBuildLocks(current canonical.Digest, valid
 	}
 	verified := make([]verifiedBuildLock, 0, len(entries))
 	temporaryPaths := []string{}
-	currentFound := false
+	foundKept := make(map[canonical.Digest]struct{}, len(kept))
 	for _, entry := range entries {
 		path := filepath.Join(directory, entry.Name())
 		if isBuildLockTemporaryFilename(entry.Name()) {
@@ -158,21 +173,23 @@ func (lock *OperationLock) RemoveOtherBuildLocks(current canonical.Digest, valid
 			}
 			return fmt.Errorf("build lock disappeared during cleanup: %s", path)
 		}
-		if digest == current {
-			currentFound = true
+		if _, found := kept[digest]; found {
+			foundKept[digest] = struct{}{}
 		}
 		verified = append(verified, verifiedBuildLock{digest: digest, path: path})
 	}
-	if !currentFound {
-		return fmt.Errorf("current build lock %s is missing", current)
+	for digest := range kept {
+		if _, found := foundKept[digest]; !found {
+			return fmt.Errorf("retained build lock %s is missing", digest)
+		}
 	}
 	removed := false
 	for _, item := range verified {
-		if item.digest == current {
+		if _, found := kept[item.digest]; found {
 			continue
 		}
 		if err := os.Remove(item.path); err != nil {
-			return fmt.Errorf("remove non-current build lock %s: %w", item.digest, err)
+			return fmt.Errorf("remove unretained build lock %s: %w", item.digest, err)
 		}
 		removed = true
 	}

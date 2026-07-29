@@ -229,6 +229,19 @@ func (lock *OperationLock) RemoveUnreachableBuildObjects(
 	validateProfileOwner providers.RequirementProfileOwnerValidator,
 	validateBundleOwner providers.ResolvedBundleOwnerValidator,
 ) error {
+	return lock.RemoveUnreachableBuildObjectsForBuilds(
+		store, []BuildLockV1{build}, validateProfileOwner, validateBundleOwner,
+	)
+}
+
+// RemoveUnreachableBuildObjectsForBuilds retains the union of the selected
+// build closures. An empty root set removes every provider-store object.
+func (lock *OperationLock) RemoveUnreachableBuildObjectsForBuilds(
+	store providerstore.Store,
+	builds []BuildLockV1,
+	validateProfileOwner providers.RequirementProfileOwnerValidator,
+	validateBundleOwner providers.ResolvedBundleOwnerValidator,
+) error {
 	if lock == nil {
 		return fmt.Errorf("clean build objects requires an operation lock")
 	}
@@ -240,10 +253,27 @@ func (lock *OperationLock) RemoveUnreachableBuildObjects(
 	if err := lock.validateProviderStoreLocked(store); err != nil {
 		return err
 	}
-	reachable, err := BuildLockStoreClosure(build, store, validateProfileOwner, validateBundleOwner)
-	if err != nil {
-		return err
+	byIdentity := map[string]providerstore.StoreObjectRef{}
+	for _, build := range builds {
+		reachable, err := BuildLockStoreClosure(build, store, validateProfileOwner, validateBundleOwner)
+		if err != nil {
+			return err
+		}
+		for _, reference := range reachable {
+			key := reference.Kind + "\x00" + string(reference.Digest)
+			byIdentity[key] = reference
+		}
 	}
+	reachable := make([]providerstore.StoreObjectRef, 0, len(byIdentity))
+	for _, reference := range byIdentity {
+		reachable = append(reachable, reference)
+	}
+	sort.Slice(reachable, func(left int, right int) bool {
+		if reachable[left].Kind != reachable[right].Kind {
+			return reachable[left].Kind < reachable[right].Kind
+		}
+		return reachable[left].Digest < reachable[right].Digest
+	})
 	return store.RemoveUnreachable(reachable)
 }
 

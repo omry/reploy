@@ -10,9 +10,11 @@ import (
 	"testing"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providers/registry"
+	"github.com/omry/reploy/internal/providerstore"
 )
 
 func TestLoadValidatedBuildCandidateRequiresExactSavedInputs(t *testing.T) {
@@ -528,8 +530,244 @@ func TestPublishValidatedBuildRetainsFailedCleanupForRetry(t *testing.T) {
 	}
 }
 
+func TestPublishValidatedBuildPrunesSupersededStorageAndRetainsCurrentAndCandidate(t *testing.T) {
+	dir, operation, store, current, state := currentBuildFixture(t, true)
+	defer operation.Unlock()
+	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs, err := ValidatedBuildInputs(
+		document, state.Overlay, deploy.EmptyPackageOverridesV1(document.Environment.ID), dir, state.Platform,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphan, err := store.Publish(t.Context(), "packages/superseded.whl", "wheel", strings.NewReader("superseded"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphanReference, err := orphan.StoreObjectRef()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := validatedBuildStorageVariant(t, store, current, "7", "8")
+	oldDigest, err := operation.PublishBuildLock(old, registry.ValidateRequirementProfileV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldRecord := deploy.ValidatedBuildV1{
+		Schema: deploy.ValidatedBuildSchemaV1, BlueprintDigest: inputs.BlueprintDigest,
+		OverlayDigest: inputs.OverlayDigest, PackageOverridesDigest: inputs.PackageOverridesDigest,
+		Platform: inputs.Platform, BuildLockDigest: oldDigest, Image: old.FinalImage,
+		ImageReference: "reploy/env/demo:validated-old",
+	}
+	if err := operation.CommitValidatedBuildV1(oldRecord); err != nil {
+		t.Fatal(err)
+	}
+	candidate := validatedBuildStorageVariant(t, store, current, "a", "b")
+	record, err := publishValidatedBuild(
+		t.Context(), operation, store, document.Environment.ID, dir, candidate, inputs,
+		publishValidatedBuildBackendV1{
+			newReferences: func(string, string) (EnvironmentImageReferences, error) {
+				return EnvironmentImageReferences{
+					Temporary:  "reploy/env/demo:temporary-new",
+					Generation: "reploy/env/demo:validated-new",
+				}, nil
+			},
+			createReference: func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error {
+				return nil
+			},
+			removeReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.PendingStorageCleanup {
+		t.Fatalf("successful cleanup remained pending: %#v", record)
+	}
+	candidateDigest, err := deploy.BuildLockDigestV1(candidate, registry.ValidateRequirementProfileV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, digest := range []canonical.Digest{state.Current.BuildLockDigest, candidateDigest} {
+		if _, found, err := operation.ReadBuildLock(digest, registry.ValidateRequirementProfileV1); err != nil || !found {
+			t.Fatalf("retained lock %s found=%v err=%v", digest, found, err)
+		}
+	}
+	if _, found, err := operation.ReadBuildLock(oldDigest, registry.ValidateRequirementProfileV1); err != nil || found {
+		t.Fatalf("superseded lock found=%v err=%v", found, err)
+	}
+	validationPath, err := store.ValidationRecordPath(current.ValidationRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(validationPath); err != nil {
+		t.Fatalf("shared retained validation missing: %v", err)
+	}
+	orphanPath, err := store.BlobPath(orphanReference.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(orphanPath); !os.IsNotExist(err) {
+		t.Fatalf("superseded provider-store object remains: %v", err)
+	}
+}
+
+func TestPublishValidatedBuildPersistsStorageCleanupForRetry(t *testing.T) {
+	dir, operation, store, current, state := currentBuildFixture(t, true)
+	defer operation.Unlock()
+	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs, err := ValidatedBuildInputs(
+		document, state.Overlay, deploy.EmptyPackageOverridesV1(document.Environment.ID), dir, state.Platform,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := validatedBuildStorageVariant(t, store, current, "7", "8")
+	blocker := filepath.Join(dir, ".reploy", "locks", "unknown")
+	if err := os.WriteFile(blocker, []byte("block cleanup"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	record, err := publishValidatedBuild(
+		t.Context(), operation, store, document.Environment.ID, dir, candidate, inputs,
+		publishValidatedBuildBackendV1{
+			newReferences: func(string, string) (EnvironmentImageReferences, error) {
+				return EnvironmentImageReferences{
+					Temporary:  "reploy/env/demo:temporary-pending",
+					Generation: "reploy/env/demo:validated-pending",
+				}, nil
+			},
+			createReference: func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error {
+				return nil
+			},
+			removeReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
+				return nil
+			},
+		},
+	)
+	if err != nil || !record.PendingStorageCleanup {
+		t.Fatalf("validation result = %#v, err=%v", record, err)
+	}
+	var warning strings.Builder
+	writeValidatedBuildCleanupWarning(&warning, record)
+	if !strings.Contains(warning.String(), "validated build storage is pending") ||
+		!strings.Contains(warning.String(), "retry automatically") {
+		t.Fatalf("cleanup warning = %q", warning.String())
+	}
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	retried, found, err := RetryValidatedBuildCleanup(
+		t.Context(), operation, store, document.Environment.ID, dir,
+	)
+	if err != nil || !found || retried.PendingStorageCleanup {
+		t.Fatalf("retried cleanup = %#v, found=%v err=%v", retried, found, err)
+	}
+}
+
+func TestDiscardValidatedBuildPersistsAndRetriesStorageCleanup(t *testing.T) {
+	dir, operation, store, current, state := currentBuildFixture(t, true)
+	defer operation.Unlock()
+	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs, err := ValidatedBuildInputs(
+		document, state.Overlay, deploy.EmptyPackageOverridesV1(document.Environment.ID), dir, state.Platform,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := validatedBuildStorageVariant(t, store, current, "7", "8")
+	candidateDigest, err := operation.PublishBuildLock(candidate, registry.ValidateRequirementProfileV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := operation.CommitValidatedBuildV1(deploy.ValidatedBuildV1{
+		Schema: deploy.ValidatedBuildSchemaV1, BlueprintDigest: inputs.BlueprintDigest,
+		OverlayDigest: inputs.OverlayDigest, PackageOverridesDigest: inputs.PackageOverridesDigest,
+		Platform: inputs.Platform, BuildLockDigest: candidateDigest, Image: candidate.FinalImage,
+		ImageReference: "reploy/env/demo:validated-discard",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	blocker := filepath.Join(dir, ".reploy", "locks", "unknown")
+	if err := os.WriteFile(blocker, []byte("block cleanup"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	removeReference := func(context.Context, providers.RealizedImageV1, string, string, string) error {
+		return nil
+	}
+	pending, err := discardValidatedBuild(
+		t.Context(), operation, store, document.Environment.ID, dir, removeReference,
+	)
+	if err != nil || !pending {
+		t.Fatalf("first discard pending=%v err=%v", pending, err)
+	}
+	record, found, err := operation.ReadValidatedBuildV1()
+	if err != nil || !found || !record.Discarded || !record.PendingStorageCleanup {
+		t.Fatalf("persisted discard = %#v, found=%v err=%v", record, found, err)
+	}
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = discardValidatedBuild(
+		t.Context(), operation, store, document.Environment.ID, dir, removeReference,
+	)
+	if err != nil || pending {
+		t.Fatalf("retried discard pending=%v err=%v", pending, err)
+	}
+	if _, found, err := operation.ReadValidatedBuildV1(); err != nil || found {
+		t.Fatalf("discard cleanup record remained: found=%v err=%v", found, err)
+	}
+	if _, found, err := operation.ReadBuildLock(candidateDigest, registry.ValidateRequirementProfileV1); err != nil || found {
+		t.Fatalf("discarded lock found=%v err=%v", found, err)
+	}
+	if _, found, err := operation.ReadBuildLock(state.Current.BuildLockDigest, registry.ValidateRequirementProfileV1); err != nil || !found {
+		t.Fatalf("current lock found=%v err=%v", found, err)
+	}
+}
+
+func validatedBuildStorageVariant(
+	t *testing.T,
+	store providerstore.Store,
+	base deploy.BuildLockV1,
+	imageChar string,
+	configChar string,
+) deploy.BuildLockV1 {
+	t.Helper()
+	lock := base
+	lock.FinalImage = providers.RealizedImageV1{
+		Digest: rendererDigest(imageChar), ConfigDigest: rendererDigest(configChar),
+		RootFSSubject: base.FinalImage.RootFSSubject,
+	}
+	policyDigest, err := deploy.RuntimePolicyDigestV1(lock.RuntimePolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.ValidationRecord, err = deploy.PublishPrefixValidation(t.Context(), store, deploy.PrefixValidationV1{
+		Schema: deploy.PrefixValidationSchemaV1, SubjectRootFS: lock.FinalImage.RootFSSubject,
+		Profiles: []providers.ValidationEvidence{}, RuntimePolicy: policyDigest,
+		ExposedOutputs: []providers.ExecutableEvidence{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := deploy.ValidateBuildLockV1(lock, registry.ValidateRequirementProfileV1); err != nil {
+		t.Fatal(err)
+	}
+	return lock
+}
+
 func TestRetryValidatedBuildCleanupRejectsNilContext(t *testing.T) {
-	if _, _, err := RetryValidatedBuildCleanup(nil, nil, "demo", t.TempDir()); err == nil {
+	if _, _, err := RetryValidatedBuildCleanup(nil, nil, providerstore.Store{}, "demo", t.TempDir()); err == nil {
 		t.Fatal("nil cleanup context was accepted")
 	}
 }
@@ -560,9 +798,13 @@ func TestDiscardValidatedBuildDoesNotDependOnBuildLockForCleanup(t *testing.T) {
 	if err := operation.CommitValidatedBuildV1(record); err != nil {
 		t.Fatal(err)
 	}
+	store, err := providerstore.NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	removed := []string{}
-	if err := discardValidatedBuild(
-		t.Context(), operation, "demo", dir,
+	pending, err := discardValidatedBuild(
+		t.Context(), operation, store, "demo", dir,
 		func(_ context.Context, gotImage providers.RealizedImageV1, reference, _, _ string) error {
 			if !reflect.DeepEqual(gotImage, image) {
 				t.Fatalf("removed image = %#v", gotImage)
@@ -570,8 +812,9 @@ func TestDiscardValidatedBuildDoesNotDependOnBuildLockForCleanup(t *testing.T) {
 			removed = append(removed, reference)
 			return nil
 		},
-	); err != nil {
-		t.Fatal(err)
+	)
+	if err != nil || pending {
+		t.Fatalf("discard pending=%v err=%v", pending, err)
 	}
 	if !reflect.DeepEqual(removed, []string{"reploy/env/demo:older", "reploy/env/demo:validated"}) {
 		t.Fatalf("removed = %#v", removed)

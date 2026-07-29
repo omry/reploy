@@ -31,6 +31,12 @@ type ValidatedBuildV1 struct {
 	Image                  providers.RealizedImageV1   `json:"image"`
 	ImageReference         string                      `json:"image_reference"`
 	PendingCleanup         []ValidatedBuildReferenceV1 `json:"pending_cleanup,omitempty"`
+	// PendingStorageCleanup keeps successful validation authoritative while
+	// superseded locks or provider-store objects await another cleanup attempt.
+	PendingStorageCleanup bool `json:"pending_storage_cleanup,omitempty"`
+	// Discarded prevents reuse after image references have been removed while
+	// retaining a durable storage-cleanup retry record.
+	Discarded bool `json:"discarded,omitempty"`
 }
 
 // ValidatedBuildReferenceV1 retains enough trusted identity to remove a
@@ -88,6 +94,14 @@ func ValidateValidatedBuildV1(record ValidatedBuildV1) error {
 			return fmt.Errorf("validated build pending cleanup references must be unique and sorted")
 		}
 		previous = pending.ImageReference
+	}
+	if record.Discarded {
+		if len(record.PendingCleanup) != 0 {
+			return fmt.Errorf("discarded validated build cannot retain pending image references")
+		}
+		if !record.PendingStorageCleanup {
+			return fmt.Errorf("discarded validated build must retain pending storage cleanup")
+		}
 	}
 	return nil
 }

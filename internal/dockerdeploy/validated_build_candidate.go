@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -86,7 +87,8 @@ func ValidatedBuildInputs(
 }
 
 func ValidatedBuildRecordMatchesInputs(record deploy.ValidatedBuildV1, input ValidatedBuildInputsV1) bool {
-	return record.BlueprintDigest == input.BlueprintDigest &&
+	return !record.Discarded &&
+		record.BlueprintDigest == input.BlueprintDigest &&
 		record.OverlayDigest == input.OverlayDigest &&
 		record.PackageOverridesDigest == input.PackageOverridesDigest &&
 		record.Platform == input.Platform
@@ -133,6 +135,9 @@ func LoadValidatedBuildCandidate(
 	record, found, err := operation.ReadValidatedBuildV1()
 	if err != nil || !found {
 		return ValidatedBuildCandidateV1{}, false, err
+	}
+	if record.Discarded {
+		return ValidatedBuildCandidateV1{}, false, nil
 	}
 	inputs, err := ValidatedBuildInputs(document, state.Overlay, overrides, deploymentDir, state.Platform)
 	if err != nil {
@@ -359,44 +364,74 @@ func DiscardValidatedBuild(
 	operation *deploy.OperationLock,
 	environment string,
 	deploymentDir string,
+	progress io.Writer,
 ) error {
-	return discardValidatedBuild(
-		ctx, operation, environment, deploymentDir, RemoveEnvironmentGenerationReference,
+	store, err := providerstore.NewStore(deploymentDir)
+	if err != nil {
+		return err
+	}
+	pending, err := discardValidatedBuild(
+		ctx, operation, store, environment, deploymentDir, RemoveEnvironmentGenerationReference,
 	)
+	if err != nil {
+		return err
+	}
+	if pending {
+		writeProviderBuildProgress(
+			progress,
+			"warning: validated build was discarded, but cleanup of its storage is pending; Reploy will retry automatically",
+		)
+	}
+	return nil
 }
 
 func discardValidatedBuild(
 	ctx context.Context,
 	operation *deploy.OperationLock,
+	store providerstore.Store,
 	environment string,
 	deploymentDir string,
 	removeReference func(context.Context, providers.RealizedImageV1, string, string, string) error,
-) error {
+) (bool, error) {
 	if ctx == nil {
-		return fmt.Errorf("discard validated build requires a context")
+		return false, fmt.Errorf("discard validated build requires a context")
 	}
 	if operation == nil || removeReference == nil {
-		return fmt.Errorf("discard validated build requires a complete backend")
+		return false, fmt.Errorf("discard validated build requires a complete backend")
 	}
 	record, found, err := operation.ReadValidatedBuildV1()
 	if err != nil || !found {
-		return err
+		return false, err
 	}
-	record, cleanupErrors := cleanupPendingValidatedBuildReferences(
-		context.WithoutCancel(ctx), operation, record, environment, deploymentDir,
-		removeReference,
-	)
-	if err := removeReference(
-		context.WithoutCancel(ctx), record.Image, record.ImageReference, environment, deploymentDir,
-	); err != nil {
-		cleanupErrors = append(cleanupErrors, fmt.Errorf(
-			"remove current validated image reference %q: %w", record.ImageReference, err,
-		))
+	if !record.Discarded {
+		record, cleanupErrors := cleanupPendingValidatedBuildReferences(
+			context.WithoutCancel(ctx), operation, record, environment, deploymentDir,
+			removeReference,
+		)
+		if err := removeReference(
+			context.WithoutCancel(ctx), record.Image, record.ImageReference, environment, deploymentDir,
+		); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf(
+				"remove current validated image reference %q: %w", record.ImageReference, err,
+			))
+		}
+		if len(cleanupErrors) != 0 {
+			return false, errors.Join(cleanupErrors...)
+		}
+		record.PendingCleanup = nil
+		record.PendingStorageCleanup = true
+		record.Discarded = true
+		if err := operation.CommitValidatedBuildV1(record); err != nil {
+			return false, err
+		}
 	}
-	if len(cleanupErrors) != 0 {
-		return errors.Join(cleanupErrors...)
+	if err := cleanupValidatedBuildStorage(operation, store, nil); err != nil {
+		return true, nil
 	}
-	return operation.RemoveValidatedBuildV1()
+	if err := operation.RemoveValidatedBuildV1(); err != nil {
+		return true, nil
+	}
+	return false, nil
 }
 
 type publishValidatedBuildBackendV1 struct {
@@ -405,12 +440,13 @@ type publishValidatedBuildBackendV1 struct {
 	removeReference func(context.Context, providers.RealizedImageV1, string, string, string) error
 }
 
-// RetryValidatedBuildCleanup retries superseded Docker references retained by
-// a successful validated-build publication. Cleanup failures remain durable in
-// the returned record and do not invalidate the current candidate.
+// RetryValidatedBuildCleanup retries superseded Docker references, build
+// locks, and provider-store objects retained by a successful validation.
+// Cleanup failures remain durable and do not invalidate the current candidate.
 func RetryValidatedBuildCleanup(
 	ctx context.Context,
 	operation *deploy.OperationLock,
+	store providerstore.Store,
 	environment string,
 	deploymentDir string,
 ) (deploy.ValidatedBuildV1, bool, error) {
@@ -424,10 +460,43 @@ func RetryValidatedBuildCleanup(
 	if err != nil || !found {
 		return deploy.ValidatedBuildV1{}, found, err
 	}
-	record, _ = cleanupPendingValidatedBuildReferences(
-		context.WithoutCancel(ctx), operation, record, environment, deploymentDir,
-		RemoveEnvironmentGenerationReference,
-	)
+	if !record.Discarded {
+		record, _ = cleanupPendingValidatedBuildReferences(
+			context.WithoutCancel(ctx), operation, record, environment, deploymentDir,
+			RemoveEnvironmentGenerationReference,
+		)
+	}
+	if record.PendingStorageCleanup {
+		var candidate *deploy.BuildLockV1
+		if !record.Discarded {
+			build, found, err := operation.ReadBuildLock(
+				record.BuildLockDigest, registry.ValidateRequirementProfileV1,
+			)
+			if err != nil {
+				return deploy.ValidatedBuildV1{}, false, err
+			}
+			if !found {
+				return deploy.ValidatedBuildV1{}, false, fmt.Errorf(
+					"validated build lock %s is missing during cleanup retry",
+					record.BuildLockDigest,
+				)
+			}
+			candidate = &build
+		}
+		if err := cleanupValidatedBuildStorage(operation, store, candidate); err == nil {
+			if record.Discarded {
+				if err := operation.RemoveValidatedBuildV1(); err == nil {
+					return deploy.ValidatedBuildV1{}, false, nil
+				}
+			} else {
+				updated := record
+				updated.PendingStorageCleanup = false
+				if err := operation.CommitValidatedBuildV1(updated); err == nil {
+					record = updated
+				}
+			}
+		}
+	}
 	return record, true, nil
 }
 
@@ -491,7 +560,7 @@ func publishValidatedBuild(
 		return deploy.ValidatedBuildV1{}, err
 	}
 	pendingCleanup := []deploy.ValidatedBuildReferenceV1(nil)
-	if oldFound {
+	if oldFound && !old.Discarded {
 		pendingCleanup, err = mergeValidatedBuildReferences(
 			deploy.ValidatedBuildReferenceV1{
 				Image: lock.FinalImage, ImageReference: references.Generation,
@@ -536,7 +605,7 @@ func publishValidatedBuild(
 		BlueprintDigest: inputs.BlueprintDigest, OverlayDigest: inputs.OverlayDigest,
 		PackageOverridesDigest: inputs.PackageOverridesDigest, Platform: inputs.Platform,
 		BuildLockDigest: lockDigest, Image: lock.FinalImage, ImageReference: references.Generation,
-		PendingCleanup: pendingCleanup,
+		PendingCleanup: pendingCleanup, PendingStorageCleanup: true,
 	}
 	if err := operation.CommitValidatedBuildV1(record); err != nil {
 		return deploy.ValidatedBuildV1{}, err
@@ -545,7 +614,68 @@ func publishValidatedBuild(
 	record, _ = cleanupPendingValidatedBuildReferences(
 		context.WithoutCancel(ctx), operation, record, environment, deploymentDir, backend.removeReference,
 	)
+	if err := cleanupValidatedBuildStorage(operation, store, &lock); err == nil {
+		updated := record
+		updated.PendingStorageCleanup = false
+		if err := operation.CommitValidatedBuildV1(updated); err == nil {
+			record = updated
+		}
+	}
 	return record, nil
+}
+
+func cleanupValidatedBuildStorage(
+	operation *deploy.OperationLock,
+	store providerstore.Store,
+	candidate *deploy.BuildLockV1,
+) error {
+	state, found, err := operation.ReadStateV1()
+	if err != nil {
+		return err
+	}
+	roots := make([]deploy.BuildLockV1, 0, 2)
+	digests := make([]canonical.Digest, 0, 2)
+	if found && state.Current != nil {
+		current, found, err := operation.ReadBuildLock(
+			state.Current.BuildLockDigest, registry.ValidateRequirementProfileV1,
+		)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return fmt.Errorf("current build lock %s is missing during validated build cleanup", state.Current.BuildLockDigest)
+		}
+		if err := validateGenerationBuildLock(
+			*state.Current, current, registry.ValidateRequirementProfileV1,
+		); err != nil {
+			return err
+		}
+		roots = append(roots, current)
+		digests = append(digests, state.Current.BuildLockDigest)
+	}
+	if candidate != nil {
+		digest, err := deploy.BuildLockDigestV1(*candidate, registry.ValidateRequirementProfileV1)
+		if err != nil {
+			return err
+		}
+		duplicate := false
+		for _, retained := range digests {
+			if retained == digest {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			roots = append(roots, *candidate)
+			digests = append(digests, digest)
+		}
+	}
+	if err := operation.RemoveUnreachableBuildObjectsForBuilds(
+		store, roots, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1,
+	); err != nil {
+		return err
+	}
+	return operation.RemoveBuildLocksExcept(digests, registry.ValidateRequirementProfileV1)
 }
 
 func mergeValidatedBuildReferences(

@@ -34,25 +34,7 @@ func buildReachabilityFixture(t *testing.T) (string, providerstore.Store, BuildL
 
 	lock := validBuildLock(t)
 	addValidAPTNode(t, &lock)
-	profileDigest, err := providers.RequirementProfileDigest(lock.Nodes[0].RequirementProfile, acceptBuildLockProfile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bundle, err := providers.NewResolvedBundle(providers.ResolvedBundleIdentityV1{
-		Schema: providers.ResolvedBundleSchemaV1, NodeID: "apt", Provider: lock.Nodes[0].Provider,
-		Request:                  providers.CanonicalProviderRequest{Schema: "apt-request-v1", Provider: lock.Nodes[0].Provider, Value: canonical.Object{}},
-		RequirementProfileDigest: profileDigest, RecipeVersion: "apt-resolver-v1", Platform: lock.Platform, Upstream: lock.Nodes[0].Upstream,
-		SelectedSources: []providers.ResolvedSourceInput{}, Artifacts: []providerstore.ArtifactDescriptor{keepArtifact}, Outputs: []providers.ResolvedOutput{},
-		ProviderPayload: canonical.Envelope{Schema: "apt-bundle-v1", Value: canonical.Object{}},
-	}, acceptBuildLockBundle)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifestReference, err := providers.PublishResolvedBundleManifest(context.Background(), store, bundle, acceptBuildLockBundle)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lock.Nodes[0].BundleManifest = manifestReference
+	lock.Nodes[0].BundleManifest = publishReachabilityBundle(t, store, lock, []providerstore.ArtifactDescriptor{keepArtifact})
 	policyDigest, err := RuntimePolicyDigestV1(lock.RuntimePolicy)
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +48,34 @@ func buildReachabilityFixture(t *testing.T) (string, providerstore.Store, BuildL
 	}
 	lock.ValidationRecord = validationReference
 	return dir, store, lock, keepReference, dropReference
+}
+
+func publishReachabilityBundle(
+	t *testing.T,
+	store providerstore.Store,
+	lock BuildLockV1,
+	artifacts []providerstore.ArtifactDescriptor,
+) providerstore.StoreObjectRef {
+	t.Helper()
+	profileDigest, err := providers.RequirementProfileDigest(lock.Nodes[0].RequirementProfile, acceptBuildLockProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := providers.NewResolvedBundle(providers.ResolvedBundleIdentityV1{
+		Schema: providers.ResolvedBundleSchemaV1, NodeID: "apt", Provider: lock.Nodes[0].Provider,
+		Request:                  providers.CanonicalProviderRequest{Schema: "apt-request-v1", Provider: lock.Nodes[0].Provider, Value: canonical.Object{}},
+		RequirementProfileDigest: profileDigest, RecipeVersion: "apt-resolver-v1", Platform: lock.Platform, Upstream: lock.Nodes[0].Upstream,
+		SelectedSources: []providers.ResolvedSourceInput{}, Artifacts: artifacts, Outputs: []providers.ResolvedOutput{},
+		ProviderPayload: canonical.Envelope{Schema: "apt-bundle-v1", Value: canonical.Object{}},
+	}, acceptBuildLockBundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestReference, err := providers.PublishResolvedBundleManifest(context.Background(), store, bundle, acceptBuildLockBundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manifestReference
 }
 
 func TestBuildLockStoreClosureLoadsExactTransitiveObjects(t *testing.T) {
@@ -221,6 +231,46 @@ func TestOperationLockCleansOnlyObjectsOutsideCurrentBuildClosure(t *testing.T) 
 		t.Fatalf("reachable blob removed: %v", err)
 	}
 	if _, err := os.Lstat(dropPath); !os.IsNotExist(err) {
+		t.Fatalf("unreachable blob remains: %v", err)
+	}
+}
+
+func TestOperationLockRetainsUnionOfSelectedBuildClosures(t *testing.T) {
+	dir, store, first, firstReference, droppedReference := buildReachabilityFixture(t)
+	secondArtifact, err := store.Publish(context.Background(), "packages/second.deb", "deb", strings.NewReader("second"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondReference, err := secondArtifact.StoreObjectRef()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.Nodes = append([]NodeLockV1(nil), first.Nodes...)
+	second.Nodes[0].BundleManifest = publishReachabilityBundle(
+		t, store, second, []providerstore.ArtifactDescriptor{secondArtifact},
+	)
+	operation, err := AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	if err := operation.RemoveUnreachableBuildObjectsForBuilds(
+		store,
+		[]BuildLockV1{first, second},
+		acceptBuildLockProfile,
+		acceptBuildLockBundle,
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, reference := range []providerstore.StoreObjectRef{firstReference, secondReference} {
+		path, _ := store.BlobPath(reference.Digest)
+		if _, err := os.Lstat(path); err != nil {
+			t.Fatalf("reachable blob %s removed: %v", reference.Digest, err)
+		}
+	}
+	droppedPath, _ := store.BlobPath(droppedReference.Digest)
+	if _, err := os.Lstat(droppedPath); !os.IsNotExist(err) {
 		t.Fatalf("unreachable blob remains: %v", err)
 	}
 }

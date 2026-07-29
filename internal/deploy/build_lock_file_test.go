@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/omry/reploy/internal/canonical"
 )
 
 func TestOperationLockPublishesAndLoadsImmutableBuildLock(t *testing.T) {
@@ -135,6 +137,46 @@ func TestOperationLockRetainsOnlySelectedBuildLock(t *testing.T) {
 	}
 	if _, found, err := operation.ReadBuildLock(oldDigest, acceptBuildLockProfile); err != nil || found {
 		t.Fatalf("old found = %v, error = %v", found, err)
+	}
+}
+
+func TestOperationLockRetainsMultipleSelectedBuildLocks(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	first := validBuildLock(t)
+	firstDigest, err := operation.PublishBuildLock(first, acceptBuildLockProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.BlueprintDigest = buildLockTestDigest("e")
+	secondDigest, err := operation.PublishBuildLock(second, acceptBuildLockProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropped := first
+	dropped.BlueprintDigest = buildLockTestDigest("f")
+	droppedDigest, err := operation.PublishBuildLock(dropped, acceptBuildLockProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := operation.RemoveBuildLocksExcept(
+		[]canonical.Digest{firstDigest, secondDigest},
+		acceptBuildLockProfile,
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, digest := range []canonical.Digest{firstDigest, secondDigest} {
+		if _, found, err := operation.ReadBuildLock(digest, acceptBuildLockProfile); err != nil || !found {
+			t.Fatalf("retained lock %s found = %v, error = %v", digest, found, err)
+		}
+	}
+	if _, found, err := operation.ReadBuildLock(droppedDigest, acceptBuildLockProfile); err != nil || found {
+		t.Fatalf("dropped lock found = %v, error = %v", found, err)
 	}
 }
 

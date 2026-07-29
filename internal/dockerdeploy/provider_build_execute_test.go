@@ -253,7 +253,7 @@ func TestExecuteLockedProviderBuildV1RetriesPendingCleanupWhenRevalidatingCandid
 			ReusableLock: &lock, PublicationLock: &lock, Reused: true, ReusedCandidate: true, ValidatedCandidate: &candidate,
 		},
 	}, providerBuildExecutionBackend{
-		retryValidatedCleanup: func(context.Context, *deploy.OperationLock, string, string) (deploy.ValidatedBuildV1, bool, error) {
+		retryValidatedCleanup: func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (deploy.ValidatedBuildV1, bool, error) {
 			order = append(order, "retry-cleanup")
 			return record, true, nil
 		},

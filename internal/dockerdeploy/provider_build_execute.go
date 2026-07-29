@@ -51,7 +51,7 @@ type providerBuildExecutionBackend struct {
 	publishBuild          func(context.Context, *deploy.OperationLock, providerstore.Store, BuildPublicationInput) (deploy.StateV1, error)
 	publishValidated      func(context.Context, *deploy.OperationLock, providerstore.Store, string, string, deploy.BuildLockV1, ValidatedBuildInputsV1) (deploy.ValidatedBuildV1, error)
 	verifyReference       func(context.Context, providers.RealizedImageV1, string, string, string) error
-	retryValidatedCleanup func(context.Context, *deploy.OperationLock, string, string) (deploy.ValidatedBuildV1, bool, error)
+	retryValidatedCleanup func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (deploy.ValidatedBuildV1, bool, error)
 	discardValidated      func(context.Context, *deploy.OperationLock, string, string) error
 }
 
@@ -76,7 +76,9 @@ func ExecuteLockedProviderBuildV1(
 		publishValidated:      PublishValidatedBuild,
 		verifyReference:       VerifyEnvironmentGenerationReference,
 		retryValidatedCleanup: RetryValidatedBuildCleanup,
-		discardValidated:      DiscardValidatedBuild,
+		discardValidated: func(ctx context.Context, operation *deploy.OperationLock, environment, deploymentDir string) error {
+			return DiscardValidatedBuild(ctx, operation, environment, deploymentDir, input.Progress)
+		},
 	})
 }
 
@@ -127,12 +129,12 @@ func executeLockedProviderBuildV1(
 					return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("validate cached build requires image verification")
 				}
 				record := preparation.ValidatedCandidate.Record
-				if len(record.PendingCleanup) != 0 {
+				if len(record.PendingCleanup) != 0 || record.PendingStorageCleanup {
 					if backend.retryValidatedCleanup == nil {
 						return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("validate cached build requires cleanup retry support")
 					}
 					retried, found, err := backend.retryValidatedCleanup(
-						context.WithoutCancel(ctx), preparation.Operation,
+						context.WithoutCancel(ctx), preparation.Operation, preparation.Store,
 						preparation.Environment, preparation.DeploymentDir,
 					)
 					if err != nil {
@@ -327,17 +329,23 @@ func executeLockedProviderBuildV1(
 
 func writeValidatedBuildCleanupWarning(output io.Writer, record deploy.ValidatedBuildV1) {
 	count := len(record.PendingCleanup)
-	if count == 0 {
+	if count == 0 && !record.PendingStorageCleanup {
 		return
 	}
-	noun := "references are"
-	if count == 1 {
-		noun = "reference is"
+	description := "validated build storage"
+	if count != 0 {
+		noun := "references"
+		if count == 1 {
+			noun = "reference"
+		}
+		description = fmt.Sprintf("%d superseded cached image %s", count, noun)
+		if record.PendingStorageCleanup {
+			description += " and validated build storage"
+		}
 	}
 	writeProviderBuildProgress(
 		output,
-		"warning: validation succeeded, but cleanup of %d superseded cached image %s pending; Reploy will retry automatically",
-		count,
-		noun,
+		"warning: validation succeeded, but cleanup of %s is pending; Reploy will retry automatically",
+		description,
 	)
 }

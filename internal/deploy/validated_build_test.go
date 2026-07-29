@@ -175,6 +175,35 @@ func TestValidateValidatedBuildV1RejectsAmbiguousPendingCleanup(t *testing.T) {
 	}
 }
 
+func TestValidateValidatedBuildV1RejectsInvalidDiscardedState(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := canonical.Digest("sha256:" + strings.Repeat("a", 64))
+	valid := ValidatedBuildV1{
+		Schema: ValidatedBuildSchemaV1, BlueprintDigest: digest, OverlayDigest: digest,
+		PackageOverridesDigest: digest, Platform: platform, BuildLockDigest: digest,
+		Image: validatedBuildTestImage(digest), ImageReference: "reploy/env/demo:validated",
+		Discarded: true, PendingStorageCleanup: true,
+	}
+	if err := ValidateValidatedBuildV1(valid); err != nil {
+		t.Fatalf("valid discarded state was rejected: %v", err)
+	}
+	withoutStorageCleanup := valid
+	withoutStorageCleanup.PendingStorageCleanup = false
+	if err := ValidateValidatedBuildV1(withoutStorageCleanup); err == nil {
+		t.Fatal("discarded state without pending storage cleanup was accepted")
+	}
+	withImageReference := valid
+	withImageReference.PendingCleanup = []ValidatedBuildReferenceV1{{
+		Image: valid.Image, ImageReference: "reploy/env/demo:old",
+	}}
+	if err := ValidateValidatedBuildV1(withImageReference); err == nil {
+		t.Fatal("discarded state with a pending image reference was accepted")
+	}
+}
+
 func validatedBuildTestImage(digest canonical.Digest) providers.RealizedImageV1 {
 	return providers.RealizedImageV1{
 		Digest: digest, ConfigDigest: digest, RootFSSubject: digest,
