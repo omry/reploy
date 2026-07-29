@@ -13,6 +13,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	dockerreference "github.com/distribution/reference"
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
 	"gopkg.in/yaml.v3"
@@ -251,6 +252,9 @@ func ValidateBaseImageReferenceV1(reference string) error {
 		if err := canonical.Digest(digest).Validate(); err != nil {
 			return fmt.Errorf("Docker image reference digest: %w", err)
 		}
+	}
+	if _, err := dockerreference.ParseNormalizedNamed(reference); err != nil {
+		return fmt.Errorf("Docker image reference %q is invalid: %w", reference, err)
 	}
 	return nil
 }

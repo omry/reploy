@@ -435,6 +435,28 @@ func TestResolveBaseRejectsUnsafeReferenceBeforeDocker(t *testing.T) {
 	}
 }
 
+func TestResolveBaseRejectsMalformedAuthorReferencesBeforeDocker(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reference := range []string{"--help", "-q", "ubuntu:", "bad//repository", "team/Uppercase"} {
+		t.Run(reference, func(t *testing.T) {
+			called := false
+			run := func(context.Context, ...string) (string, error) {
+				called = true
+				return "", nil
+			}
+			if _, _, err := resolveBase(t.Context(), reference, platform, run); err == nil {
+				t.Fatalf("resolveBase(%q) error = nil", reference)
+			}
+			if called {
+				t.Fatalf("resolveBase(%q) invoked Docker", reference)
+			}
+		})
+	}
+}
+
 func TestResolveBaseDockerIntegration(t *testing.T) {
 	if os.Getenv("REPLOY_DOCKER_INTEGRATION") != "1" {
 		t.Skip("set REPLOY_DOCKER_INTEGRATION=1 to run Docker integration evidence")

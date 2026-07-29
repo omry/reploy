@@ -1,0 +1,2 @@
+kind: Fixed
+body: Reject malformed and option-like Docker base-image references before invoking Docker.

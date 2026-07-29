@@ -189,6 +189,42 @@ func TestPackageOverridesRejectsControlCharactersInResolvedWorkspaceRoot(t *test
 	}
 }
 
+func TestValidateBaseImageReferenceAcceptsDockerReferencesAndLocalImageIDs(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	for _, reference := range []string{
+		"ubuntu",
+		"ubuntu:24.04",
+		"registry.example.com:5000/team/image:release-1",
+		"ubuntu@" + digest,
+		"ubuntu:24.04@" + digest,
+		digest,
+	} {
+		t.Run(reference, func(t *testing.T) {
+			if err := ValidateBaseImageReferenceV1(reference); err != nil {
+				t.Fatalf("ValidateBaseImageReferenceV1(%q) error = %v", reference, err)
+			}
+		})
+	}
+}
+
+func TestValidateBaseImageReferenceRejectsMalformedDockerReferences(t *testing.T) {
+	for _, reference := range []string{
+		"--help",
+		"-q",
+		"ubuntu:",
+		"bad//repository",
+		"team/Uppercase",
+		"ubuntu::24.04",
+		"ubuntu@sha256:abcd",
+	} {
+		t.Run(reference, func(t *testing.T) {
+			if err := ValidateBaseImageReferenceV1(reference); err == nil {
+				t.Fatalf("ValidateBaseImageReferenceV1(%q) error = nil", reference)
+			}
+		})
+	}
+}
+
 func TestPackageOverridesRejectInvalidShape(t *testing.T) {
 	tests := []struct {
 		name string

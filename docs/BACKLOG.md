@@ -31,9 +31,30 @@ This file is the day-to-day queue for design and implementation gaps.
 
 ## Now
 
-No active items.
+- [ ] `P1` Add blueprint-configured control-runtime modes.
+      Let blueprints select `embedded` or `path` independently for staging and
+      installation, defaulting both to the current self-contained `embedded`
+      behavior. In `path` mode, generate the control script without copying
+      Reploy into the deployment; resolve only the fixed `reploy` executable,
+      reject unavailable or incompatible runtimes clearly, and use an absolute
+      resolved path for installed service definitions rather than depending on
+      an interactive user's `PATH`.
 
 ## Pre-release
+
+- [ ] `P1` Audit validation for every blueprint field.
+      Inventory each field from strict decoding through interpolation and
+      resolution to its final host, Docker, or workload sink. Verify structural,
+      semantic, cross-field, and trust-boundary validation; explicitly record
+      intentional pass-through values; and add focused tests proving invalid
+      values are rejected before external side effects. Turn gaps into discrete
+      findings and resolve pre-release blockers before publishing.
+
+- [ ] `P2` Add a triggerless default app-command passthrough.
+      Allow an application to expose a native command as the generated control
+      script's default action, so application arguments can be passed directly
+      (for example, `app model=resnet50`) without a synthetic trigger or `--`
+      separator.
 
 - [ ] `P1` Complete the remaining local Docker cleanup.
       After the active OmegaConf staging work is no longer needed, remove its
