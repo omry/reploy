@@ -1893,8 +1893,8 @@ created. Provider-specific logic remains in the main Reploy implementation:
 APT ownership and alternatives checks use fixed absolute package tools, and
 Python compatibility uses its typed fixed invocation.
 
-Full final-image validation and each additive `--validate-layers` check use one
-held validation container per image. Reploy creates it from the exact immutable
+Full validation of each newly created cumulative provider layer uses one held
+validation container per image. Reploy creates it from the exact immutable
 reference with `--pull never`, the exact OCI platform, numeric user `0:0`, `/`
 as working directory, a read-only root filesystem, no network, the helper
 workspace mounted read-only, and the helper's fixed `hold` entrypoint. One
@@ -2035,12 +2035,10 @@ verify the final image's subject and record-digest labels against the committed
 lock without loading the record body. Evidence that does not reproduce the
 labeled digest rejects reuse.
 
-A normal build runs full validation once after the resulting image is created.
-`reploy build --validate-layers` additionally runs full layer-specific
-validation after each combined APT or component-scoped Python layer. The final
-validation still runs. CLI help states that the resulting image is always
-validated and that the flag adds layer validation; there is no lighter
-image-validation substitute.
+A build fully validates every newly created combined APT or component-scoped
+Python layer against its cumulative requirements and outputs. The last layer's
+validation evidence is reused as the resulting image's final validation
+evidence, so it is not validated twice. A base-only graph is validated once.
 
 Full validation has no elapsed-time deadline. It streams with bounded memory,
 reports progress, forwards drained stdout/stderr through the configured output
@@ -2350,9 +2348,9 @@ lock directory
   -> for each ready node: start its resolver on the current prefix, validate
      candidates and freeze the supplier, resolve/materialize, publish outputs,
      and add the selected edge to the final graph
-  -> when --validate-layers is set, run full layer-specific validation after
-     each component layer
-  -> run full validation on the resulting image and final exposed outputs
+  -> run full validation after each newly created component layer against its
+     cumulative requirements and exposed outputs
+  -> reuse the last layer's evidence as final-image validation evidence
   -> write canonical local build lock
   -> publish unique environment generation
   -> atomically replace directory state
@@ -2893,8 +2891,8 @@ failure without switching suppliers.
   free-form generated-image renderer, and the frontend 1.7 constant; tests use
   only exhaustive `MaterializationTransaction` rendering.
 - Add fixed validation labels, immutable aggregate validation-record objects,
-  normal final-image validation, optional `--validate-layers`, and unique
-  generation publication/recovery.
+  unconditional validation of newly created cumulative provider layers, and
+  unique generation publication/recovery.
 
 Gate: fake-Docker command tests plus ordinary `docker build` on the minimum
 Engine 24.0 lane and the current Docker Desktop-hosted Engine pass for a
@@ -3029,9 +3027,10 @@ The prototype review established these implementation constraints:
    named above.
 3. Reploy inspects each `.deb` file list before installation and does not save
    the image, export OCI layers, or scan produced layers/full filesystems.
-4. Full validation runs once on the resulting image; `--validate-layers` adds
-   full component-layer validation. Validation records use fixed digest labels
-   and immutable store objects. Operations have no Reploy-wide deadlines,
+4. Full validation runs on every newly created cumulative provider layer, with
+   the last layer's evidence reused as final-image evidence. Validation records
+   use fixed digest labels and immutable store objects. Operations have no
+   Reploy-wide deadlines,
    retained subprocess logs, or arbitrary artifact/path/scratch/layer/label
    quotas.
 5. `.reploy/operation.lock` uses the small OS-specific `x/sys` advisory-lock

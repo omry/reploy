@@ -19,7 +19,7 @@ func TestValidateAndFinalizeBuildUsesPublishedFinalEvidence(t *testing.T) {
 	validated := false
 	built := false
 	result, err := validateAndFinalizeBuild(
-		context.Background(), store, []FullImageValidationInput{}, final, false, acceptFullValidationProfile,
+		context.Background(), store, []FullImageValidationInput{}, final, acceptFullValidationProfile,
 		func(context.Context, FullImageValidationInput) ([]providers.ValidationEvidence, []providers.ExecutableEvidence, error) {
 			validated = true
 			return []providers.ValidationEvidence{}, []providers.ExecutableEvidence{}, nil
@@ -59,7 +59,7 @@ func TestValidateAndFinalizeBuildDoesNotBuildAfterValidationFailure(t *testing.T
 	}
 	built := false
 	_, err = validateAndFinalizeBuild(
-		context.Background(), store, []FullImageValidationInput{}, fullValidationInput(t, "f"), false, acceptFullValidationProfile,
+		context.Background(), store, []FullImageValidationInput{}, fullValidationInput(t, "f"), acceptFullValidationProfile,
 		func(context.Context, FullImageValidationInput) ([]providers.ValidationEvidence, []providers.ExecutableEvidence, error) {
 			return nil, nil, errors.New("validation failed")
 		}, RunOptions{},

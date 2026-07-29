@@ -161,12 +161,15 @@ func TestParseGlobalDeploymentOptionsRejectsInvalidDockerTimeout(t *testing.T) {
 }
 
 func TestParseDockerBuildOptions(t *testing.T) {
-	options, err := parseDockerBuildOptions([]string{"--dir", "stage", "--no-cache", "--validate-layers", "--verbose"})
+	options, err := parseDockerBuildOptions([]string{"--dir", "stage", "--no-cache", "--verbose"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.Dir != "stage" || !options.DirExplicit || !options.NoCache || !options.ValidateLayers || !options.Verbose {
+	if options.Dir != "stage" || !options.DirExplicit || !options.NoCache || !options.Verbose {
 		t.Fatalf("options = %#v", options)
+	}
+	if _, err := parseDockerBuildOptions([]string{"--validate-layers"}); err == nil {
+		t.Fatal("removed --validate-layers option was accepted")
 	}
 }
 
@@ -198,7 +201,7 @@ func TestBuildCommandUsesReployProgressAndHidesBackendOutput(t *testing.T) {
 	called := false
 	dockerProviderBuild = func(ctx context.Context, input dockerdeploy.ProviderBuildRunInputV1) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
 		called = true
-		if ctx == nil || input.DeploymentDir != stageDir || input.Automatic || !input.NoCache || !input.ValidateLayers {
+		if ctx == nil || input.DeploymentDir != stageDir || input.Automatic || !input.NoCache {
 			t.Fatalf("input = %#v", input)
 		}
 		if input.Runtime.UID != 501 || input.Runtime.GID != 20 || input.RunOptions.DockerPreflightTimeout != 12*time.Second || input.RunOptions.Stdout == nil || input.RunOptions.Stderr == nil {
@@ -213,7 +216,7 @@ func TestBuildCommandUsesReployProgressAndHidesBackendOutput(t *testing.T) {
 		fmt.Fprintln(input.RunOptions.Stderr, `- UndefinedVar: Usage of undefined variable '$MISSING'`)
 		return cliTestProviderBuildResult(t, stageDir, false), nil
 	}
-	code, stdout, stderr := runCLI("--docker-timeout", "12s", "build", "--dir", stageDir, "--no-cache", "--validate-layers")
+	code, stdout, stderr := runCLI("--docker-timeout", "12s", "build", "--dir", stageDir, "--no-cache")
 	if code != 0 || !called {
 		t.Fatalf("code/called/stdout/stderr = %d/%v/%q/%q", code, called, stdout, stderr)
 	}
@@ -275,7 +278,7 @@ func TestInteractiveBuildUsesOneBuildTransaction(t *testing.T) {
 	buildCalls := 0
 	dockerProviderBuild = func(_ context.Context, input dockerdeploy.ProviderBuildRunInputV1) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
 		buildCalls++
-		if input.ValidateChoices || !input.NoCache || !input.ValidateLayers {
+		if input.ValidateChoices || !input.NoCache {
 			t.Fatalf("interactive build input = %#v", input)
 		}
 		fmt.Fprintln(input.RunOptions.Stderr, `- UndefinedVar: Usage of undefined variable '$MISSING'`)
@@ -285,7 +288,7 @@ func TestInteractiveBuildUsesOneBuildTransaction(t *testing.T) {
 		return cliTestProviderBuildResult(t, stageDir, false), nil
 	}
 
-	code, stdout, stderr := runCLI("build", "--dir", stageDir, "--no-cache", "--validate-layers")
+	code, stdout, stderr := runCLI("build", "--dir", stageDir, "--no-cache")
 	if code != 0 || buildCalls != 1 {
 		t.Fatalf("code/buildCalls/stdout/stderr = %d/%d/%q/%q", code, buildCalls, stdout, stderr)
 	}
@@ -697,12 +700,13 @@ func TestBuildCommandFailureRetainsStepWithoutRawBackendTranscript(t *testing.T)
 	}
 }
 
-func TestBuildHelpClarifiesLayerValidationIsAdditional(t *testing.T) {
+func TestBuildHelpDescribesLayerValidationInvariant(t *testing.T) {
 	code, stdout, stderr := runCLI("build", "--help")
 	if code != 0 || stderr != "" {
 		t.Fatalf("code/stderr = %d/%q", code, stderr)
 	}
-	if !strings.Contains(stdout, "always fully validated") || !strings.Contains(stdout, "additionally") ||
+	if !strings.Contains(stdout, "Every newly created component layer is validated") ||
+		!strings.Contains(stdout, "fully validated before publication") ||
 		!strings.Contains(stdout, "without installing") || !strings.Contains(stdout, "--verbose") ||
 		!strings.Contains(stdout, "without backend transcripts") ||
 		!strings.Contains(stdout, "inline") || !strings.Contains(stdout, "exits automatically") ||

@@ -334,8 +334,9 @@ Prototype first; complete only after the architecture review gate.
   absence of the fixed transient build-mount root as the first step inside the
   consuming resolver or materializer. On a cached-bundle mismatch, commit no
   layer, resolve once against the fixed current prefix, and materialize the
-  replacement. Create no standalone prerequisite-probe container; keep the
-  separate full final-image validation and optional `--validate-layers` runs.
+  replacement. Create no standalone prerequisite-probe container; fully
+  validate every newly created cumulative provider layer and reuse the last
+  layer's evidence as final-image evidence.
 - **P3-11:** run each package-tool transaction unsplit and rely on the operating system's
   actual process-argument limit. Report `E2BIG` with provider, phase, and
   operand-count context; do not add a predictive budget or silently chunk one

@@ -54,7 +54,6 @@ func runDockerBuild(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 			globalOptions,
 			started,
 			options.NoCache,
-			options.ValidateLayers,
 		)
 		session := startInteractiveBuildSession(buildRunner)
 		defer session.cancel()
@@ -113,11 +112,10 @@ func runDockerBuild(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 		return 1
 	}
 	result, err := dockerProviderBuild(context.Background(), dockerdeploy.ProviderBuildRunInputV1{
-		DeploymentDir:  options.Dir,
-		Runtime:        runtimeInput,
-		NoCache:        options.NoCache,
-		ValidateLayers: options.ValidateLayers,
-		Progress:       presenter.Progress(),
+		DeploymentDir: options.Dir,
+		Runtime:       runtimeInput,
+		NoCache:       options.NoCache,
+		Progress:      presenter.Progress(),
 		RunOptions: dockerdeploy.RunOptions{
 			Stdout: presenter.ChildOutput(), Stderr: presenter.ChildOutput(),
 			DockerPreflightTimeout: globalOptions.DockerTimeout,
@@ -272,7 +270,6 @@ func interactiveBuildRunner(
 	globalOptions globalDeploymentOptions,
 	started time.Time,
 	noCache bool,
-	validateLayers bool,
 ) overrideui.BuildRunner {
 	return func(
 		ctx context.Context,
@@ -285,12 +282,11 @@ func interactiveBuildRunner(
 		}
 		var childOutput synchronizedBuffer
 		build, err := dockerProviderBuild(ctx, dockerdeploy.ProviderBuildRunInputV1{
-			DeploymentDir:  deploymentDir,
-			Runtime:        runtimeInput,
-			NoCache:        noCache,
-			ValidateLayers: validateLayers,
-			Progress:       progress,
-			BuildProgress:  reporter,
+			DeploymentDir: deploymentDir,
+			Runtime:       runtimeInput,
+			NoCache:       noCache,
+			Progress:      progress,
+			BuildProgress: reporter,
 			RunOptions: dockerdeploy.RunOptions{
 				Stdout: &childOutput, Stderr: &childOutput,
 				DockerPreflightTimeout: globalOptions.DockerTimeout,

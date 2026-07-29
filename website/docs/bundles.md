@@ -40,8 +40,9 @@ anything, use:
 reploy build
 ```
 
-The resulting image is always fully validated. `--validate-layers` additionally
-runs the same full validation after every newly created component layer.
+Every newly created component layer is fully validated against the cumulative
+provider requirements. The last layer's evidence is also the resulting image's
+final validation evidence.
 `--no-cache` reruns resolvers and image construction instead of reusing the
 current verified build. Warm reuse of a mutable base-image tag accepts Docker's
 matching current local image without contacting the registry; use `--no-cache`

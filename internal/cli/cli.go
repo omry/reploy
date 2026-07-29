@@ -733,7 +733,7 @@ func runPackageOverrides(args []string, stdout io.Writer, stderr io.Writer, glob
 		return 1
 	}
 	config, err := packageOverrideEditorConfig(
-		options.Dir, globalOptions, false, false,
+		options.Dir, globalOptions, false,
 	)
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy overrides error: %v\n", err)
@@ -752,7 +752,6 @@ func packageOverrideEditorConfig(
 	deploymentDir string,
 	globalOptions globalDeploymentOptions,
 	noCache bool,
-	validateLayers bool,
 ) (overrideui.Config, error) {
 	operation, err := deploy.AcquireExistingOperationLock(context.Background(), deploymentDir)
 	if err != nil {
@@ -793,7 +792,7 @@ func packageOverrideEditorConfig(
 			var childOutput synchronizedBuffer
 			_, err = dockerProviderBuild(ctx, dockerdeploy.ProviderBuildRunInputV1{
 				DeploymentDir: deploymentDir, Runtime: runtime, ValidateChoices: true,
-				NoCache: noCache, ValidateLayers: validateLayers, Progress: progress,
+				NoCache: noCache, Progress: progress,
 				RunOptions: dockerdeploy.RunOptions{
 					Stdout: &childOutput, Stderr: &childOutput,
 					DockerPreflightTimeout: globalOptions.DockerTimeout,
@@ -955,11 +954,10 @@ func printDesiredStateStageResult(output io.Writer, dir string, result deploy.De
 }
 
 type dockerBuildOptions struct {
-	Dir            string
-	DirExplicit    bool
-	NoCache        bool
-	ValidateLayers bool
-	Verbose        bool
+	Dir         string
+	DirExplicit bool
+	NoCache     bool
+	Verbose     bool
 }
 
 func parseDockerBuildOptions(args []string) (dockerBuildOptions, error) {
@@ -976,8 +974,6 @@ func parseDockerBuildOptions(args []string) (dockerBuildOptions, error) {
 			options.DirExplicit = true
 		case "--no-cache":
 			options.NoCache = true
-		case "--validate-layers":
-			options.ValidateLayers = true
 		case "--verbose":
 			options.Verbose = true
 		default:
@@ -3498,8 +3494,8 @@ func printDockerBuildHelp(output io.Writer) {
 Usage: reploy [--docker-timeout DURATION] build [OPTIONS]
 
 Build and validate the current staged environment image without installing it.
-The resulting image is always fully validated. --validate-layers additionally
-runs full validation after each component layer is created.
+Every newly created component layer is validated against its cumulative provider
+requirements, and the resulting image is fully validated before publication.
 Interactive terminals print fast results directly. Longer builds show an inline
 progress panel that exits automatically before printing the result. Dumb or
 redirected terminals print durable progress lines and the result directly.
@@ -3507,7 +3503,6 @@ redirected terminals print durable progress lines and the result directly.
 Options:
   --dir DIR          Staging directory, default current staging dir or reploy-staging
   --no-cache         Rerun resolvers and image construction instead of reusing the current build
-  --validate-layers  Also fully validate every newly created component layer
   --verbose          Show durable Reploy-level build steps without backend transcripts
   -h, --help         Show build help
 `, "\n"))

@@ -21,13 +21,12 @@ func ValidateAndFinalizeBuild(
 	store providerstore.Store,
 	layers []FullImageValidationInput,
 	final FullImageValidationInput,
-	validateLayers bool,
 	validateProfileOwner providers.RequirementProfileOwnerValidator,
 	runValidation FullImageValidationRunner,
 	options RunOptions,
 ) (FinalizedBuildValidationResult, error) {
 	return validateAndFinalizeBuild(
-		ctx, store, layers, final, validateLayers, validateProfileOwner, runValidation, options,
+		ctx, store, layers, final, validateProfileOwner, runValidation, options,
 		BuildFinalizedImageCandidate, InspectFinalizedImageCandidate,
 	)
 }
@@ -37,7 +36,6 @@ func validateAndFinalizeBuild(
 	store providerstore.Store,
 	layers []FullImageValidationInput,
 	final FullImageValidationInput,
-	validateLayers bool,
 	validateProfileOwner providers.RequirementProfileOwnerValidator,
 	runValidation FullImageValidationRunner,
 	options RunOptions,
@@ -47,7 +45,7 @@ func validateAndFinalizeBuild(
 	if build == nil || inspect == nil {
 		return FinalizedBuildValidationResult{}, fmt.Errorf("final validation pipeline requires build and inspection backends")
 	}
-	validation, err := ValidateBuildImages(ctx, store, layers, final, validateLayers, validateProfileOwner, runValidation)
+	validation, err := ValidateBuildImages(ctx, store, layers, final, validateProfileOwner, runValidation)
 	if err != nil {
 		return FinalizedBuildValidationResult{}, err
 	}

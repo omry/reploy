@@ -38,7 +38,7 @@ func TestRunProviderBuildV1HoldsOneLockAcrossPreparationAndExecution(t *testing.
 	var buildEvents []buildprogress.Event
 
 	result, err := runProviderBuildV1(t.Context(), ProviderBuildRunInputV1{
-		DeploymentDir: dir, NoCache: true, ValidateLayers: true,
+		DeploymentDir: dir, NoCache: true,
 		Runtime:  StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
 		Progress: &progress,
 		BuildProgress: func(event buildprogress.Event) {
@@ -65,7 +65,7 @@ func TestRunProviderBuildV1HoldsOneLockAcrossPreparationAndExecution(t *testing.
 			if err := input.Preparation.Operation.RequireHeld(); err != nil {
 				t.Fatal(err)
 			}
-			if !input.ValidateLayers || !input.RunOptions.NoCache || len(input.SourceWheels) != 0 || len(input.LocalOverrides) != 0 || input.Progress != &progress || input.BuildProgress == nil {
+			if !input.RunOptions.NoCache || len(input.SourceWheels) != 0 || len(input.LocalOverrides) != 0 || input.Progress != &progress || input.BuildProgress == nil {
 				t.Fatalf("execution input = %#v", input)
 			}
 			return want, nil
@@ -119,7 +119,7 @@ func TestRunLockedProviderBuildV1UsesAndRetainsCallerLock(t *testing.T) {
 	result, err := runLockedProviderBuildV1(t.Context(), LockedProviderBuildRunInputV1{
 		Operation: operation, Store: store, DeploymentDir: dir,
 		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
-		NoCache: true, ValidateLayers: true,
+		NoCache: true,
 	}, providerBuildRunBackend{
 		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
 			order = append(order, "prepare")
@@ -130,7 +130,7 @@ func TestRunLockedProviderBuildV1UsesAndRetainsCallerLock(t *testing.T) {
 		},
 		execute: func(_ context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
 			order = append(order, "execute")
-			if input.Preparation.Operation != operation || !input.ValidateLayers {
+			if input.Preparation.Operation != operation {
 				t.Fatalf("execution input = %#v", input)
 			}
 			return want, nil

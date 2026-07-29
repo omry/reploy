@@ -22,7 +22,6 @@ type ProviderBuildRunInputV1 struct {
 	Runtime         StagedProviderBuildRuntimeV1
 	Automatic       bool
 	NoCache         bool
-	ValidateLayers  bool
 	ValidateChoices bool
 	Progress        io.Writer
 	BuildProgress   buildprogress.Reporter
@@ -36,7 +35,6 @@ type LockedProviderBuildRunInputV1 struct {
 	Runtime         StagedProviderBuildRuntimeV1
 	Automatic       bool
 	NoCache         bool
-	ValidateLayers  bool
 	ValidateChoices bool
 	Progress        io.Writer
 	BuildProgress   buildprogress.Reporter
@@ -140,7 +138,7 @@ func runProviderBuildV1(
 	return runLockedProviderBuildV1(ctx, LockedProviderBuildRunInputV1{
 		Operation: operation, Store: store, DeploymentDir: deploymentDir,
 		Runtime: input.Runtime, Automatic: input.Automatic,
-		NoCache: input.NoCache, ValidateLayers: input.ValidateLayers,
+		NoCache:         input.NoCache,
 		ValidateChoices: input.ValidateChoices,
 		Progress:        input.Progress, BuildProgress: input.BuildProgress,
 		RunOptions: input.RunOptions,
@@ -363,10 +361,10 @@ func runLockedProviderBuildV1(
 	options.NoCache = input.NoCache
 	options.Progress = input.Progress
 	result, err := backend.execute(ctx, LockedProviderBuildExecutionInputV1{
-		Preparation:    preparation,
-		SourceWheels:   []providerstore.ArtifactDescriptor{},
-		LocalOverrides: localOverrides,
-		ValidateLayers: input.ValidateLayers, RunValidation: nil,
+		Preparation:     preparation,
+		SourceWheels:    []providerstore.ArtifactDescriptor{},
+		LocalOverrides:  localOverrides,
+		RunValidation:   nil,
 		ValidateChoices: input.ValidateChoices,
 		Progress:        input.Progress, BuildProgress: input.BuildProgress, RunOptions: options,
 	})

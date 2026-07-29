@@ -16,7 +16,6 @@ type LockedProviderBuildExecutionInputV1 struct {
 	Preparation     LockedProviderBuildPreparationV1
 	SourceWheels    []providerstore.ArtifactDescriptor
 	LocalOverrides  []PythonLocalOverrideV1
-	ValidateLayers  bool
 	ValidateChoices bool
 	RunValidation   FullImageValidationRunner
 	Progress        io.Writer
@@ -40,7 +39,6 @@ type providerBuildExecutionBackend struct {
 		[]providers.RealizedOutput,
 		providers.GraphExecutionResult,
 		deploy.RuntimePolicyV1,
-		bool,
 	) (ProviderGraphValidationPlan, error)
 	complete func(
 		context.Context,
@@ -276,19 +274,19 @@ func executeLockedProviderBuildV1(
 		return LockedProviderBuildExecutionResultV1{}, err
 	}
 	validation, err := backend.prepareValidation(
-		ctx, preparedBase.Descriptor, preparedBase.Catalog, graph, policy, input.ValidateLayers,
+		ctx, preparedBase.Descriptor, preparedBase.Catalog, graph, policy,
 	)
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("prepare provider build validation: %w", err)
 	}
 	if input.ValidateChoices {
-		writeProviderBuildProgress(input.Progress, "validating final image and caching result")
+		writeProviderBuildProgress(input.Progress, "validating build and caching result")
 	} else {
-		writeProviderBuildProgress(input.Progress, "validating and publishing final image")
+		writeProviderBuildProgress(input.Progress, "validating build and publishing image")
 	}
-	publishDetail := "Validating and publishing final image"
+	publishDetail := "Validating build and publishing image"
 	if input.ValidateChoices {
-		publishDetail = "Validating final image and caching result"
+		publishDetail = "Validating build and caching result"
 	}
 	buildprogress.Report(input.BuildProgress, buildprogress.Event{
 		Phase: buildprogress.PhasePublish, Detail: publishDetail,
@@ -299,7 +297,7 @@ func executeLockedProviderBuildV1(
 		ResolvedRequest: resolvedRequest, Overlay: preparation.Loaded.State.Overlay,
 		PackageOverrides: relevantPackageOverrides,
 		Base:             preparedBase.Descriptor, BaseCatalog: preparedBase.Catalog,
-		Graph: graph, Validation: validation, ValidateLayers: input.ValidateLayers,
+		Graph: graph, Validation: validation,
 		ValidateChoices: input.ValidateChoices, ValidatedInputs: preparation.ValidatedInputs,
 		NoCache:       preparation.NoCache,
 		RunValidation: input.RunValidation, RunOptions: options,

@@ -24,7 +24,6 @@ type ProviderBuildCompletionInput struct {
 	BaseCatalog      []providers.RealizedOutput
 	Graph            providers.GraphExecutionResult
 	Validation       ProviderGraphValidationPlan
-	ValidateLayers   bool
 	RunValidation    FullImageValidationRunner
 	RunOptions       RunOptions
 	ValidateChoices  bool
@@ -45,7 +44,6 @@ type providerBuildCompletionBackend struct {
 		providerstore.Store,
 		[]FullImageValidationInput,
 		FullImageValidationInput,
-		bool,
 		providers.RequirementProfileOwnerValidator,
 		FullImageValidationRunner,
 		RunOptions,
@@ -109,7 +107,7 @@ func completeProviderBuild(
 	options := input.RunOptions
 	options.Context = ctx
 	finalized, err := backend.validateAndFinalize(
-		ctx, store, input.Validation.Layers, input.Validation.Final, input.ValidateLayers,
+		ctx, store, input.Validation.Layers, input.Validation.Final,
 		registry.ValidateRequirementProfileV1, input.RunValidation, options,
 	)
 	if err != nil {
@@ -208,25 +206,20 @@ func validateProviderBuildCompletionInput(input ProviderBuildCompletionInput, po
 	if err := validateProviderGraphValidationShape(input.Base, input.BaseCatalog, input.Graph, policy); err != nil {
 		return err
 	}
-	if input.ValidateLayers && len(input.Validation.Layers) != len(input.Graph.Materializations) {
+	if len(input.Validation.Layers) != len(input.Graph.Materializations) {
 		return fmt.Errorf("provider build validation layers do not match graph materializations")
-	}
-	if !input.ValidateLayers && len(input.Validation.Layers) != 0 {
-		return fmt.Errorf("provider build validation contains component layers when layer validation is disabled")
 	}
 	profiles := []providers.RequirementProfile{}
 	outputs := append([]providers.RealizedOutput{}, input.BaseCatalog...)
 	for index, materialized := range input.Graph.Materializations {
 		profiles = append(profiles, input.Graph.Profiles[index])
 		outputs = append(outputs, materialized.Outputs...)
-		if input.ValidateLayers {
-			layer := input.Validation.Layers[index]
-			if layer.Image.Image != materialized.Image || !reflect.DeepEqual(layer.Profiles, profiles) || !reflect.DeepEqual(layer.Outputs, outputs) || !reflect.DeepEqual(layer.RuntimePolicy, policy) {
-				return fmt.Errorf("provider build validation layer %d does not match its cumulative graph prefix", index+1)
-			}
-			if err := validateFullImageValidationInput(layer, registry.ValidateRequirementProfileV1); err != nil {
-				return err
-			}
+		layer := input.Validation.Layers[index]
+		if layer.Image.Image != materialized.Image || !reflect.DeepEqual(layer.Profiles, profiles) || !reflect.DeepEqual(layer.Outputs, outputs) || !reflect.DeepEqual(layer.RuntimePolicy, policy) {
+			return fmt.Errorf("provider build validation layer %d does not match its cumulative graph prefix", index+1)
+		}
+		if err := validateFullImageValidationInput(layer, registry.ValidateRequirementProfileV1); err != nil {
+			return err
 		}
 	}
 	if len(input.Graph.Materializations) != 0 {
@@ -241,7 +234,7 @@ func validateProviderBuildCompletionInput(input ProviderBuildCompletionInput, po
 			return err
 		}
 	}
-	if input.ValidateLayers && len(input.Validation.Layers) != 0 {
+	if len(input.Validation.Layers) != 0 {
 		if !reflect.DeepEqual(input.Validation.Final, input.Validation.Layers[len(input.Validation.Layers)-1]) {
 			return fmt.Errorf("provider build final validation does not match the final graph layer")
 		}

@@ -1,0 +1,2 @@
+kind: Changed
+body: Validate every newly created cumulative provider layer and reuse the last layer's evidence as final-image validation.

@@ -1446,9 +1446,9 @@ Inside containers the complete workspace is mounted read-only at
 `/.reploy-validation`, making the fixed executable path
 `/.reploy-validation/reploy-probe`. A consumer invokes it as the first step in
 the consumer's existing resolver or materializer container; Reploy never
-creates a standalone prerequisite-probe container. Full final-image validation,
-and each additional layer validation requested by `--validate-layers`, instead
-uses its already-required validation container. Reploy creates that container
+creates a standalone prerequisite-probe container. Full validation of every
+newly created cumulative provider layer instead uses its already-required
+validation container. Reploy creates that container
 from the exact immutable image with the selected platform, root user, `/`
 working directory, read-only root filesystem, no network, and no implicit image
 pull. The helper's fixed `hold` mode only keeps the container alive. Reploy then

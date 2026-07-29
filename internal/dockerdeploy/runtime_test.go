@@ -117,7 +117,7 @@ func TestRuntimeDispatchesStateV1Workloads(t *testing.T) {
 		t.Fatalf("dispatch order = %#v, want %#v", got, want)
 	}
 	for _, build := range buildCalls {
-		if build.DeploymentDir != dir || build.NoCache || build.ValidateLayers {
+		if build.DeploymentDir != dir || build.NoCache {
 			t.Fatalf("implicit provider build = %#v", build)
 		}
 	}

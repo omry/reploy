@@ -30,9 +30,9 @@ func TestCompleteProviderBuildOrdersValidationAssemblyAndPublication(t *testing.
 	order := []string{}
 	blueprintDigest := testResolvedBlueprintDigestV1(t, input.Document)
 	backend := providerBuildCompletionBackend{
-		validateAndFinalize: func(_ context.Context, gotStore providerstore.Store, layers []FullImageValidationInput, final FullImageValidationInput, validateLayers bool, validateOwner providers.RequirementProfileOwnerValidator, run FullImageValidationRunner, options RunOptions) (FinalizedBuildValidationResult, error) {
+		validateAndFinalize: func(_ context.Context, gotStore providerstore.Store, layers []FullImageValidationInput, final FullImageValidationInput, validateOwner providers.RequirementProfileOwnerValidator, run FullImageValidationRunner, options RunOptions) (FinalizedBuildValidationResult, error) {
 			order = append(order, "validate")
-			if gotStore.Root() != store.Root() || !reflect.DeepEqual(layers, input.Validation.Layers) || !reflect.DeepEqual(final, input.Validation.Final) || !validateLayers || validateOwner == nil || run == nil || options.Context == nil {
+			if gotStore.Root() != store.Root() || !reflect.DeepEqual(layers, input.Validation.Layers) || !reflect.DeepEqual(final, input.Validation.Final) || validateOwner == nil || run == nil || options.Context == nil {
 				t.Fatalf("validation arguments were not preserved")
 			}
 			return FinalizedBuildValidationResult{
@@ -94,7 +94,7 @@ func TestCompleteProviderBuildValidationPublishesCandidateWithoutChangingCurrent
 	}
 	publishedCurrent := false
 	result, err := completeProviderBuild(t.Context(), operation, store, input, providerBuildCompletionBackend{
-		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, bool, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, RunOptions) (FinalizedBuildValidationResult, error) {
+		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, RunOptions) (FinalizedBuildValidationResult, error) {
 			return FinalizedBuildValidationResult{
 				Validation: BuildValidationResult{
 					Layers: []PublishedImageValidation{},
@@ -130,7 +130,7 @@ func TestCompleteProviderBuildDoesNotAssembleOrPublishAfterValidationFailure(t *
 	assembled := false
 	published := false
 	_, err := completeProviderBuild(t.Context(), operation, store, input, providerBuildCompletionBackend{
-		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, bool, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, RunOptions) (FinalizedBuildValidationResult, error) {
+		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, RunOptions) (FinalizedBuildValidationResult, error) {
 			return FinalizedBuildValidationResult{}, want
 		},
 		assemble: func(context.Context, providerstore.Store, BuildLockAssemblyInput) (deploy.BuildLockV1, error) {
@@ -153,7 +153,7 @@ func TestCompleteProviderBuildDoesNotPublishAfterAssemblyFailure(t *testing.T) {
 	want := errors.New("lock assembly failed")
 	published := false
 	_, err := completeProviderBuild(t.Context(), operation, store, input, providerBuildCompletionBackend{
-		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, bool, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, RunOptions) (FinalizedBuildValidationResult, error) {
+		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, RunOptions) (FinalizedBuildValidationResult, error) {
 			return FinalizedBuildValidationResult{}, nil
 		},
 		assemble: func(context.Context, providerstore.Store, BuildLockAssemblyInput) (deploy.BuildLockV1, error) {
@@ -175,7 +175,7 @@ func TestCompleteProviderBuildRejectsValidationPlanDriftBeforeBackendWork(t *tes
 	input.Validation.Layers[0].Outputs = nil
 	calls := 0
 	_, err := completeProviderBuild(t.Context(), operation, store, input, providerBuildCompletionBackend{
-		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, bool, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, RunOptions) (FinalizedBuildValidationResult, error) {
+		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, RunOptions) (FinalizedBuildValidationResult, error) {
 			calls++
 			return FinalizedBuildValidationResult{}, nil
 		},
@@ -199,7 +199,7 @@ func TestCompleteProviderBuildRejectsRuntimePlanDriftBeforeBackendWork(t *testin
 	input.DockerPlan.TemporaryHome = "/mnt/changed-home"
 	calls := 0
 	_, err := completeProviderBuild(t.Context(), operation, store, input, providerBuildCompletionBackend{
-		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, bool, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, RunOptions) (FinalizedBuildValidationResult, error) {
+		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, RunOptions) (FinalizedBuildValidationResult, error) {
 			calls++
 			return FinalizedBuildValidationResult{}, nil
 		},
@@ -228,7 +228,7 @@ func TestCompleteProviderBuildRejectsDocumentRequestDriftBeforeBackendWork(t *te
 	}
 	calls := 0
 	_, err := completeProviderBuild(t.Context(), operation, store, input, providerBuildCompletionBackend{
-		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, bool, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, RunOptions) (FinalizedBuildValidationResult, error) {
+		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, RunOptions) (FinalizedBuildValidationResult, error) {
 			calls++
 			return FinalizedBuildValidationResult{}, nil
 		},
@@ -396,7 +396,7 @@ func providerBuildCompletionFixture(t *testing.T) (ProviderBuildCompletionInput,
 		ResolvedRequest: request, Overlay: overlay,
 		PackageOverrides: fixture.lock.PackageOverrides,
 		Base:             fixture.lock.Base, BaseCatalog: append([]providers.RealizedOutput{}, fixture.request.EarlierCatalog...),
-		Graph: graph, Validation: validation, ValidateLayers: true,
+		Graph: graph, Validation: validation,
 		RunValidation: func(context.Context, FullImageValidationInput) ([]providers.ValidationEvidence, []providers.ExecutableEvidence, error) {
 			return nil, nil, nil
 		},

@@ -842,8 +842,8 @@ view using concepts visible in the blueprint, such as:
 - building a named local package source;
 - preparing a named component layer;
 - assembling the environment image;
-- validating component layers when requested;
-- validating the final image; and
+- validating each newly created cumulative component layer;
+- reusing the last layer's evidence as final-image validation; and
 - publishing the completed staged build.
 
 Progress should identify blueprint component names and provider types where

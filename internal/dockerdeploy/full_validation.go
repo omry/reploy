@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sort"
 
 	"github.com/omry/reploy/internal/deploy"
@@ -87,19 +88,23 @@ func ValidateBuildImages(
 	store providerstore.Store,
 	layers []FullImageValidationInput,
 	final FullImageValidationInput,
-	validateLayers bool,
 	validateProfileOwner providers.RequirementProfileOwnerValidator,
 	run FullImageValidationRunner,
 ) (BuildValidationResult, error) {
 	result := BuildValidationResult{Layers: []PublishedImageValidation{}}
-	if validateLayers {
-		for index, layer := range layers {
-			validated, err := ValidateAndPublishImage(ctx, store, layer, validateProfileOwner, run)
-			if err != nil {
-				return BuildValidationResult{}, fmt.Errorf("validate component layer %d: %w", index+1, err)
-			}
-			result.Layers = append(result.Layers, validated)
+	if len(layers) != 0 && !reflect.DeepEqual(final, layers[len(layers)-1]) {
+		return BuildValidationResult{}, fmt.Errorf("final image validation does not match the last component layer")
+	}
+	for index, layer := range layers {
+		validated, err := ValidateAndPublishImage(ctx, store, layer, validateProfileOwner, run)
+		if err != nil {
+			return BuildValidationResult{}, fmt.Errorf("validate component layer %d: %w", index+1, err)
 		}
+		result.Layers = append(result.Layers, validated)
+	}
+	if len(layers) != 0 {
+		result.Final = result.Layers[len(result.Layers)-1]
+		return result, nil
 	}
 	validated, err := ValidateAndPublishImage(ctx, store, final, validateProfileOwner, run)
 	if err != nil {
