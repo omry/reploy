@@ -42,6 +42,7 @@ var dockerRestageCurrentDesiredPlatform = dockerdeploy.RestageCurrentDesiredPlat
 var dockerForceRestageCurrentDesiredPlatform = dockerdeploy.ForceRestageCurrentDesiredPlatformV1
 var dockerRemoveStagedDeployment = dockerdeploy.RemoveStagedDeploymentV1
 var dockerProviderBuild = dockerdeploy.RunProviderBuildV1
+var dockerVerifyCurrentBuild = dockerdeploy.VerifyCurrentBuildV1
 var dockerProviderStoreClean = dockerdeploy.CleanProviderStoreV1
 var dockerProviderBuildRuntime = dockerdeploy.CurrentStagedProviderBuildRuntimeV1
 var dockerAppCommand = dockerdeploy.AppCommand
@@ -436,7 +437,7 @@ func parseDockerTimeout(value string) (time.Duration, error) {
 
 func isDeploymentCommand(command string) bool {
 	switch command {
-	case "stage", "overrides", "build", "info", "app", "shell", "runs", "bundle", "up", "start", "restart", "down", "stop", "ps", "status", "logs", "test", "doctor", "install", "uninstall":
+	case "stage", "overrides", "build", "verify", "info", "app", "shell", "runs", "bundle", "up", "start", "restart", "down", "stop", "ps", "status", "logs", "test", "doctor", "install", "uninstall":
 		return true
 	default:
 		return false
@@ -643,6 +644,8 @@ func runDocker(args []string, stdout io.Writer, stderr io.Writer, globalOptions 
 		return runPackageOverrides(args[1:], stdout, stderr, globalOptions)
 	case "build":
 		return runDockerBuild(args[1:], stdout, stderr, globalOptions)
+	case "verify":
+		return runDockerVerify(args[1:], stdout, stderr)
 	case "info":
 		options, err := parseDockerCommandOptions(args[1:], false)
 		if err != nil {
@@ -1573,6 +1576,46 @@ func runDockerDoctor(args []string, stdout io.Writer, stderr io.Writer, globalOp
 		Stdout:                 stdout,
 		DockerPreflightTimeout: globalOptions.DockerTimeout,
 	})
+}
+
+func runDockerVerify(args []string, stdout io.Writer, stderr io.Writer) int {
+	options, err := parseDockerCommandOptions(args, false)
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy verify usage error: %v\n", err)
+		fmt.Fprintln(stderr, "Usage: reploy verify [OPTIONS]")
+		return 2
+	}
+	options.Dir, err = resolveImplicitStagingDeploymentDir(
+		options.Dir,
+		options.DirExplicit,
+		stderr,
+	)
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy verify error: %v\n", err)
+		return 1
+	}
+	runtime, err := dockerProviderBuildRuntime()
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy verify error: %v\n", err)
+		return 1
+	}
+	result, err := dockerVerifyCurrentBuild(context.Background(), dockerdeploy.VerifyCurrentBuildInputV1{
+		DeploymentDir: options.Dir,
+		Runtime:       runtime,
+	})
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return 130
+		}
+		fmt.Fprintf(stderr, "reploy verify error: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "verified current build: %s\n", result.Environment)
+	fmt.Fprintf(stdout, "image: %s\n", result.Reference)
+	fmt.Fprintf(stdout, "provider-store objects: %d\n", result.Details.StoreObjects)
+	fmt.Fprintf(stdout, "images: %d\n", result.Details.Images)
+	fmt.Fprintf(stdout, "commands: %d\n", result.Details.Commands)
+	return 0
 }
 
 func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer, globalOptions globalDeploymentOptions) int {
@@ -3089,6 +3132,7 @@ Commands:
   stage        Create a staging directory
   overrides    Edit staged development overrides
   build        Build and validate the staged environment image
+  verify       Audit the current staged build without changing it
   info         Show staging state and bundle contents
   app          Run a staged app command from the current build
   shell        Open /bin/sh in a transient staging container
@@ -3303,6 +3347,7 @@ Commands:
   stage        Create a staging directory
   overrides    Edit staged development overrides
   build        Build and validate the staged environment image
+  verify       Audit the current staged build without changing it
   info         Show staging state and bundle contents
   app          Run a staged app command from the current build
   shell        Open /bin/sh in a transient staging container
@@ -3358,6 +3403,8 @@ func printDockerCommandHelp(command string, output io.Writer) {
 		printPackageOverridesHelp(output)
 	case "build":
 		printDockerBuildHelp(output)
+	case "verify":
+		printDockerVerifyHelp(output)
 	case "install":
 		printDockerInstallHelp(output)
 	case "uninstall":
@@ -3413,6 +3460,26 @@ Options:
                      Required with --preinstall
   --quiet            Suppress successful checks
   -h, --help         Show doctor help
+`, "\n"))
+}
+
+func printDockerVerifyHelp(output io.Writer) {
+	fmt.Fprint(output, strings.TrimLeft(`
+Usage: reploy verify [OPTIONS]
+
+Audit the current staged build without changing it. Verification fully hashes
+the reachable provider-store objects, re-inspects the base, provider layers,
+and final image, reruns cumulative provider checks in temporary network-disabled
+containers, validates final-image evidence, and proves that declared runtime
+commands resolve against the locked output catalog.
+
+This command does not resolve packages, build or repair images, publish records,
+update deployment state, or execute application commands. Temporary verification
+containers and workspaces are removed on every exit.
+
+Options:
+  --dir DIR    Staging directory, default current staging dir or reploy-staging
+  -h, --help   Show verification help
 `, "\n"))
 }
 

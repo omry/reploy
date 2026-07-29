@@ -1,0 +1,2 @@
+kind: Added
+body: Add `reploy verify` for a read-only, comprehensive audit of the current staged build.

@@ -173,6 +173,72 @@ func TestParseDockerBuildOptions(t *testing.T) {
 	}
 }
 
+func TestVerifyCommandReportsReadOnlyAuditResult(t *testing.T) {
+	originalVerify := dockerVerifyCurrentBuild
+	originalRuntime := dockerProviderBuildRuntime
+	t.Cleanup(func() {
+		dockerVerifyCurrentBuild = originalVerify
+		dockerProviderBuildRuntime = originalRuntime
+	})
+	stageDir := filepath.Join(t.TempDir(), "provider-stage")
+	writeCLITestStagedState(t, stageDir, "demo")
+	dockerProviderBuildRuntime = func() (dockerdeploy.StagedProviderBuildRuntimeV1, error) {
+		return dockerdeploy.StagedProviderBuildRuntimeV1{UID: 501, GID: 20}, nil
+	}
+	called := false
+	dockerVerifyCurrentBuild = func(
+		ctx context.Context,
+		input dockerdeploy.VerifyCurrentBuildInputV1,
+	) (dockerdeploy.VerifyCurrentBuildResultV1, error) {
+		called = true
+		if ctx == nil ||
+			input.DeploymentDir != stageDir ||
+			input.Runtime.UID != 501 ||
+			input.Runtime.GID != 20 {
+			t.Fatalf("verify input = %#v", input)
+		}
+		return dockerdeploy.VerifyCurrentBuildResultV1{
+			Environment: "demo",
+			Reference:   "reploy/env/demo-deadbeef:g-current",
+			Details: dockerdeploy.CurrentBuildVerificationResultV1{
+				StoreObjects: 8, Images: 4, Commands: 3,
+			},
+		}, nil
+	}
+	code, stdout, stderr := runCLI("verify", "--dir", stageDir)
+	if code != 0 || !called || stderr != "" {
+		t.Fatalf("code=%d called=%t stdout=%q stderr=%q", code, called, stdout, stderr)
+	}
+	want := "" +
+		"verified current build: demo\n" +
+		"image: reploy/env/demo-deadbeef:g-current\n" +
+		"provider-store objects: 8\n" +
+		"images: 4\n" +
+		"commands: 3\n"
+	if stdout != want {
+		t.Fatalf("stdout = %q, want %q", stdout, want)
+	}
+}
+
+func TestVerifyHelpDescribesReadOnlyComprehensiveAudit(t *testing.T) {
+	code, stdout, stderr := runCLI("verify", "--help")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	for _, want := range []string{
+		"Usage: reploy verify [OPTIONS]",
+		"without changing it",
+		"fully hashes",
+		"network-disabled",
+		"does not resolve packages",
+		"execute application commands",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("verify help missing %q:\n%s", want, stdout)
+		}
+	}
+}
+
 func TestBuildOverrideUIAllowsOnlyInteractiveNondumbTerminals(t *testing.T) {
 	t.Setenv("CI", "")
 	t.Setenv("TERM", "xterm-256color")
@@ -2431,6 +2497,7 @@ func TestStagingCommandsRejectInstalledDeploymentDir(t *testing.T) {
 	}{
 		{name: "info", args: []string{"info", "--dir", deployDir}},
 		{name: "overrides", args: []string{"overrides", "--dir", deployDir}},
+		{name: "verify", args: []string{"verify", "--dir", deployDir}},
 		{name: "app", args: []string{"app", "--dir", deployDir}},
 		{name: "status", args: []string{"status", "--dir", deployDir}},
 		{name: "test", args: []string{"test", "--dir", deployDir}},

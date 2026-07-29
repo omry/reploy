@@ -2137,6 +2137,16 @@ component application [python]
 fresh package resolution, Docker access, or persistent changes. V1 has no
 `dry-run` operation or effectful diagnostic rerun mode.
 
+`reploy verify` audits the current staged build without changing it. It fully
+hashes the reachable provider-store closure, re-inspects the locked base,
+provider layers, and final image, reruns cumulative provider checks in
+temporary network-disabled containers, validates the final evidence labels,
+and proves that workloads, lifecycle hooks, and declared commands resolve
+against the locked output catalog. Verification does not resolve packages,
+build or repair images, publish records, update deployment state, or execute
+application commands. Its temporary containers and workspaces are removed on
+every exit.
+
 ## Historical Implementation Impact
 
 The provider-graph implementation required the following structural work. This
