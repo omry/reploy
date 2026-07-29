@@ -81,8 +81,11 @@ func TestRemoveProviderUninstallDeploymentTransfersLockThenDeletesTombstone(t *t
 			}
 			return nil
 		},
-		removeAll: func(root string) error {
-			order = append(order, "remove:"+root)
+		finalize: func(root string, pending string) error {
+			if root != dir {
+				t.Fatalf("finalize root = %q", root)
+			}
+			order = append(order, "remove:"+pending)
 			return nil
 		},
 	})
@@ -140,7 +143,7 @@ func TestRemoveProviderUninstallDeploymentRestoresPublicPathWhenReferenceRemoval
 		removeReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
 			return want
 		},
-		removeAll: func(string) error {
+		finalize: func(string, string) error {
 			removed = true
 			return nil
 		},
@@ -157,17 +160,74 @@ func TestRemoveProviderUninstallDeploymentRestoresPublicPathWhenReferenceRemoval
 	}
 }
 
-func TestReserveProviderUninstallTombstoneLeavesOnlyAnAbsentSiblingPath(t *testing.T) {
+func TestRemoveProviderUninstallDeploymentRetainsTombstoneWhenDirectoryRemovalFails(t *testing.T) {
+	dir := t.TempDir()
+	operation, _, current := installedBuildPublicationSourceFixtureAtDir(t, dir)
+	plan := providerUninstallPlanV1{
+		Installation: installedBuildPublicationInstallation(dir), Environment: "demo",
+		GenerationReference: current.Generation.Reference, RemoveDir: true,
+	}
+	tombstone := filepath.Join(filepath.Dir(dir), ".removed")
+	want := errors.New("permission denied")
+	renames := [][2]string{}
+	lease := new(deploy.ControlLeaseV1)
+	err := removeProviderUninstallDeploymentWithV1(t.Context(), operation, "control-0000000000000003", lease, plan, RunOptions{}, providerUninstallRemoveDirBackendV1{
+		newStore: func(string) (providerstore.Store, error) { return providerstore.Store{}, nil },
+		load: func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (CurrentBuild, bool, error) {
+			return current, true, nil
+		},
+		complete: func(*deploy.OperationLock, string, *deploy.ControlLeaseV1) error {
+			return errors.New("unexpected complete")
+		},
+		releaseLease: func(*deploy.ControlLeaseV1) error { return nil },
+		removeMarker: func(*deploy.OperationLock, string) error { return nil },
+		reserve:      func(string) (string, error) { return tombstone, nil },
+		rename: func(oldPath string, newPath string) error {
+			renames = append(renames, [2]string{oldPath, newPath})
+			return nil
+		},
+		unlock:          func(operation *deploy.OperationLock) error { return operation.Unlock() },
+		removeReference: func(context.Context, providers.RealizedImageV1, string, string, string) error { return nil },
+		finalize:        func(string, string) error { return want },
+	})
+	if !errors.Is(err, want) ||
+		!strings.Contains(err.Error(), "partial removal retained at "+tombstone) ||
+		!strings.Contains(err.Error(), "retry uninstall against "+dir) {
+		t.Fatalf("directory removal failure = %v", err)
+	}
+	if wantRenames := [][2]string{{dir, tombstone}}; !reflect.DeepEqual(renames, wantRenames) {
+		t.Fatalf("renames = %#v, want %#v", renames, wantRenames)
+	}
+}
+
+func TestReserveProviderUninstallTombstoneUsesAbsentDeterministicSiblingPath(t *testing.T) {
 	dir := t.TempDir()
 	tombstone, err := reserveProviderUninstallTombstoneV1(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filepath.Dir(tombstone) != filepath.Dir(dir) || !strings.HasPrefix(filepath.Base(tombstone), "."+filepath.Base(dir)+".reploy-uninstall-") {
+	want := filepath.Join(filepath.Dir(dir), "."+filepath.Base(dir)+".reploy-uninstall-pending")
+	if tombstone != want {
 		t.Fatalf("tombstone = %q for %q", tombstone, dir)
 	}
 	if _, err := os.Lstat(tombstone); !os.IsNotExist(err) {
 		t.Fatalf("reserved tombstone left filesystem entry: %v", err)
+	}
+}
+
+func TestReserveProviderUninstallTombstoneRejectsExistingPendingRemoval(t *testing.T) {
+	dir := t.TempDir()
+	tombstone, err := providerUninstallTombstoneV1(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(tombstone, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tombstone) })
+	if _, err := reserveProviderUninstallTombstoneV1(dir); err == nil ||
+		!strings.Contains(err.Error(), "pending deployment removal already exists") {
+		t.Fatalf("reserve existing tombstone error = %v", err)
 	}
 }
 
@@ -196,7 +256,7 @@ func TestRemoveProviderUninstallDeploymentCancellationCompletesAdmission(t *test
 		rename:          func(string, string) error { return nil },
 		unlock:          func(*deploy.OperationLock) error { return nil },
 		removeReference: func(context.Context, providers.RealizedImageV1, string, string, string) error { return nil },
-		removeAll:       func(string) error { return nil },
+		finalize:        func(string, string) error { return nil },
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation error = %v", err)

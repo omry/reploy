@@ -50,6 +50,44 @@ func TestUninstallProviderV1CompletesWhenExplicitTargetIsAlreadyAbsent(t *testin
 	}
 }
 
+func TestUninstallProviderV1RetriesPendingDirectoryRemovalBeforeAbsentResult(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "removed-installation")
+	want := ProviderUninstallResultV1{
+		DeploymentDir: target, Environment: "demo", Service: "demo",
+		RemovedDirectory: true,
+	}
+	runtimeCalled := false
+	uninstallCalled := false
+	result, err := uninstallProviderV1(UninstallOptions{
+		From: target, RemoveDir: true,
+	}, providerUninstallPublicBackendV1{
+		retryPending: func(_ context.Context, dir string, service string) (ProviderUninstallResultV1, bool, error) {
+			if dir != target || service != "" {
+				t.Fatalf("retry identity: dir=%q service=%q", dir, service)
+			}
+			return want, true, nil
+		},
+		targetAbsent: func(string) (bool, error) {
+			t.Fatal("pending removal reached absent handling")
+			return false, nil
+		},
+		runtime: func() (StagedProviderBuildRuntimeV1, error) {
+			runtimeCalled = true
+			return StagedProviderBuildRuntimeV1{}, nil
+		},
+		uninstall: func(context.Context, ProviderUninstallInputV1) error {
+			uninstallCalled = true
+			return nil
+		},
+	})
+	if err != nil || result != want {
+		t.Fatalf("retry result=%#v err=%v", result, err)
+	}
+	if runtimeCalled || uninstallCalled {
+		t.Fatalf("pending retry called runtime=%t uninstall=%t", runtimeCalled, uninstallCalled)
+	}
+}
+
 func TestUninstallProviderV1DoesNotTreatTargetInspectionFailureAsAbsent(t *testing.T) {
 	want := errors.New("permission denied")
 	result, err := uninstallProviderV1(UninstallOptions{From: "/opt/unreadable"}, providerUninstallPublicBackendV1{
@@ -234,5 +272,30 @@ func TestUninstallProviderNeedsRootDoesNotElevateExplicitAbsentTarget(t *testing
 	}
 	if readStateCalled {
 		t.Fatal("already-absent target attempted to read installation state")
+	}
+}
+
+func TestUninstallProviderNeedsRootUsesPendingRemovalScope(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "removed")
+	got := uninstallProviderNeedsRootV1(UninstallOptions{
+		From: target, RemoveDir: true,
+	}, providerUninstallPublicBackendV1{
+		runtime: func() (StagedProviderBuildRuntimeV1, error) {
+			return StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux}, nil
+		},
+		targetAbsent: func(string) (bool, error) { return true, nil },
+		readPending: func(dir string) (deploy.StateV1, bool, error) {
+			if dir != target {
+				t.Fatalf("pending removal dir = %q", dir)
+			}
+			return deploy.StateV1{
+				Deployment: &deploy.DeploymentStateV1{
+					Installation: deploy.InstallationStateV1{Scope: string(InstallScopeSystem)},
+				},
+			}, true, nil
+		},
+	})
+	if !got {
+		t.Fatal("system-scoped pending removal did not require root")
 	}
 }

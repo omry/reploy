@@ -22,7 +22,7 @@ type providerUninstallRemoveDirBackendV1 struct {
 	rename          func(string, string) error
 	unlock          func(*deploy.OperationLock) error
 	removeReference func(context.Context, providers.RealizedImageV1, string, string, string) error
-	removeAll       func(string) error
+	finalize        func(string, string) error
 }
 
 func removeProviderUninstallDeploymentV1(
@@ -49,7 +49,7 @@ func removeProviderUninstallDeploymentV1(
 		rename:          os.Rename,
 		unlock:          func(operation *deploy.OperationLock) error { return operation.Unlock() },
 		removeReference: RemoveEnvironmentGenerationReference,
-		removeAll:       os.RemoveAll,
+		finalize:        finalizePendingProviderUninstallRemovalV1,
 	})
 }
 
@@ -68,7 +68,7 @@ func removeProviderUninstallDeploymentWithV1(
 	if !plan.RemoveDir {
 		return fmt.Errorf("remove provider uninstall deployment requires remove-dir")
 	}
-	if backend.newStore == nil || backend.load == nil || backend.complete == nil || backend.removeMarker == nil || backend.releaseLease == nil || backend.reserve == nil || backend.rename == nil || backend.unlock == nil || backend.removeReference == nil || backend.removeAll == nil {
+	if backend.newStore == nil || backend.load == nil || backend.complete == nil || backend.removeMarker == nil || backend.releaseLease == nil || backend.reserve == nil || backend.rename == nil || backend.unlock == nil || backend.removeReference == nil || backend.finalize == nil {
 		return fmt.Errorf("remove provider uninstall deployment requires a complete backend")
 	}
 	markerOutstanding := true
@@ -132,9 +132,13 @@ func removeProviderUninstallDeploymentWithV1(
 		restoreErr := backend.rename(tombstone, plan.Installation.TargetDir)
 		return errors.Join(fmt.Errorf("remove deployment image reference: %w", err), providerUninstallRestoreErrorV1(restoreErr))
 	}
-	if err := backend.removeAll(tombstone); err != nil {
-		restoreErr := backend.rename(tombstone, plan.Installation.TargetDir)
-		return errors.Join(fmt.Errorf("remove deployment directory: %w", err), providerUninstallRestoreErrorV1(restoreErr))
+	if err := backend.finalize(plan.Installation.TargetDir, tombstone); err != nil {
+		return pendingProviderUninstallRemovalErrorV1(
+			"remove deployment directory",
+			err,
+			plan.Installation.TargetDir,
+			tombstone,
+		)
 	}
 	if options.Stdout != nil {
 		fmt.Fprintf(options.Stdout, "uninstalled service: %s\n", plan.Installation.Service)
@@ -143,17 +147,33 @@ func removeProviderUninstallDeploymentWithV1(
 }
 
 func reserveProviderUninstallTombstoneV1(deploymentDir string) (string, error) {
-	parent := filepath.Dir(deploymentDir)
-	pattern := "." + filepath.Base(deploymentDir) + ".reploy-uninstall-*"
-	reserved, err := os.MkdirTemp(parent, pattern)
+	reserved, err := providerUninstallTombstoneV1(deploymentDir)
 	if err != nil {
 		return "", err
 	}
-	if err := os.Remove(reserved); err != nil {
-		_ = os.RemoveAll(reserved)
+	control, err := providerUninstallControlV1(deploymentDir)
+	if err != nil {
 		return "", err
 	}
+	for _, path := range []string{reserved, control} {
+		if _, err := os.Lstat(path); err == nil {
+			return "", fmt.Errorf("pending deployment removal already exists: %s", path)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("inspect pending deployment removal path: %w", err)
+		}
+	}
 	return reserved, nil
+}
+
+func providerUninstallTombstoneV1(deploymentDir string) (string, error) {
+	absolute, err := filepath.Abs(deploymentDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve provider uninstall deployment directory: %w", err)
+	}
+	return filepath.Join(
+		filepath.Dir(absolute),
+		"."+filepath.Base(absolute)+".reploy-uninstall-pending",
+	), nil
 }
 
 func providerUninstallRestoreErrorV1(err error) error {

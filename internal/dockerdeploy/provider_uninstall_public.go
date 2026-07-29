@@ -39,7 +39,9 @@ type providerUninstallPublicBackendV1 struct {
 	runtime      func() (StagedProviderBuildRuntimeV1, error)
 	uninstall    func(context.Context, ProviderUninstallInputV1) error
 	readState    func(string) (deploy.StateV1, bool, error)
+	readPending  func(string) (deploy.StateV1, bool, error)
 	recover      func(context.Context, ProviderUninstallRecoveryInputV1) error
+	retryPending func(context.Context, string, string) (ProviderUninstallResultV1, bool, error)
 	targetAbsent func(string) (bool, error)
 }
 
@@ -50,7 +52,9 @@ func UninstallProviderV1(options UninstallOptions) (ProviderUninstallResultV1, e
 		runtime:      CurrentStagedProviderBuildRuntimeV1,
 		uninstall:    RunProviderUninstallV1,
 		readState:    readProviderUninstallStateV1,
+		readPending:  readPendingProviderUninstallStateV1,
 		recover:      RecoverMissingProviderUninstallV1,
+		retryPending: retryPendingProviderUninstallRemovalV1,
 		targetAbsent: providerUninstallTargetAbsentV1,
 	})
 }
@@ -62,6 +66,16 @@ func uninstallProviderV1(options UninstallOptions, backend providerUninstallPubl
 	deploymentDir := strings.TrimSpace(options.From)
 	if deploymentDir == "" {
 		deploymentDir = "."
+	}
+	if options.RemoveDir && backend.retryPending != nil {
+		result, found, err := backend.retryPending(
+			context.Background(),
+			deploymentDir,
+			options.ServiceName,
+		)
+		if err != nil || found {
+			return result, err
+		}
 	}
 	if strings.TrimSpace(options.From) != "" && strings.TrimSpace(options.ServiceName) == "" {
 		if backend.targetAbsent == nil {
@@ -122,6 +136,7 @@ func UninstallProviderNeedsRootV1(options UninstallOptions) bool {
 	return uninstallProviderNeedsRootV1(options, providerUninstallPublicBackendV1{
 		runtime:      CurrentStagedProviderBuildRuntimeV1,
 		readState:    readProviderUninstallStateV1,
+		readPending:  readPendingProviderUninstallStateV1,
 		targetAbsent: providerUninstallTargetAbsentV1,
 	})
 }
@@ -150,7 +165,18 @@ func uninstallProviderNeedsRootV1(options UninstallOptions, backend providerUnin
 			return true
 		}
 		if absent {
-			return false
+			if !options.RemoveDir || backend.readPending == nil {
+				return false
+			}
+			state, found, err := backend.readPending(deploymentDir)
+			if err != nil {
+				return true
+			}
+			if !found || state.Deployment == nil {
+				return false
+			}
+			scope, err := ParseInstallScope(state.Deployment.Installation.Scope)
+			return err != nil || scope == InstallScopeSystem
 		}
 	}
 	state, found, err := backend.readState(deploymentDir)

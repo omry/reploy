@@ -1,0 +1,2 @@
+kind: Fixed
+body: Keep failed installation-directory removals hidden and retryable without restoring an invalid public deployment.
