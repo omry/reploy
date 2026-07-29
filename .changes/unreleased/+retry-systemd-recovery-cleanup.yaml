@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve verified managed systemd units when missing-directory uninstall recovery must be retried.

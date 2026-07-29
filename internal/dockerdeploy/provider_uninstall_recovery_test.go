@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -109,6 +110,10 @@ func TestApplyProviderUninstallRecoveryRunsCleanupInRecoverableOrder(t *testing.
 			order = append(order, "docker-clean "+project)
 			return nil
 		},
+		rename: func(oldPath string, newPath string) error {
+			order = append(order, "rename "+oldPath+" -> "+newPath)
+			return nil
+		},
 		remove: func(path string) error {
 			order = append(order, "remove "+path)
 			return nil
@@ -119,11 +124,194 @@ func TestApplyProviderUninstallRecoveryRunsCleanupInRecoverableOrder(t *testing.
 	}
 	want := []string{
 		"/bin/systemctl stop demo.service", "docker-clean demo-deadbeef",
-		"/bin/systemctl disable demo.service", "remove " + unitPath,
+		"/bin/systemctl disable demo.service",
+		"rename " + unitPath + " -> " + unitPath + ".reploy-uninstall-pending",
 		"/bin/systemctl daemon-reload",
+		"remove " + unitPath + ".reploy-uninstall-pending",
 	}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("recovery order = %#v, want %#v", order, want)
+	}
+}
+
+func TestRecoverMissingProviderUninstallRestoresUnitAfterReloadFailureAndRetries(t *testing.T) {
+	unitDir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "deleted")
+	unitPath := filepath.Join(unitDir, "demo.service")
+	content := []byte(
+		"# Managed-By: reploy\n" +
+			"# Reploy-Service: demo\n" +
+			"# Reploy-Target: " + target + "\n" +
+			"# Reploy-Compose-Project: demo-deadbeef\n",
+	)
+	if err := os.WriteFile(unitPath, content, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(unitPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloads := 0
+	dockerCleanups := 0
+	apply := func(ctx context.Context, plan providerUninstallRecoveryPlanV1, options RunOptions) error {
+		return applyProviderUninstallRecoveryV1(ctx, plan, options, providerUninstallRecoveryApplyBackendV1{
+			lookPath: func(string) (string, error) { return "/bin/systemctl", nil },
+			runHost: func(_ string, args ...string) error {
+				if len(args) == 1 && args[0] == "daemon-reload" {
+					reloads++
+					if reloads == 1 {
+						return errors.New("systemd busy")
+					}
+				}
+				return nil
+			},
+			removeDockerProject: func(context.Context, string, time.Duration) error {
+				dockerCleanups++
+				return nil
+			},
+			rename: os.Rename,
+			remove: os.Remove,
+		})
+	}
+	input := ProviderUninstallRecoveryInputV1{
+		RequestedDir: target,
+		Service:      "demo",
+		Runtime:      StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux},
+	}
+	backend := providerUninstallRecoveryBackendV1{unitDir: unitDir, apply: apply}
+	err = recoverMissingProviderUninstallV1(t.Context(), input, backend)
+	if err == nil || !strings.Contains(err.Error(), "restored verified managed unit at "+unitPath) {
+		t.Fatalf("first recovery error = %v", err)
+	}
+	restored, err := os.ReadFile(unitPath)
+	if err != nil {
+		t.Fatalf("read restored unit: %v", err)
+	}
+	after, err := os.Stat(unitPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(restored, content) || after.Mode() != before.Mode() {
+		t.Fatalf(
+			"restored unit content/mode = %q/%v, want %q/%v",
+			restored, after.Mode(), content, before.Mode(),
+		)
+	}
+	if _, err := os.Lstat(unitPath + ".reploy-uninstall-pending"); !os.IsNotExist(err) {
+		t.Fatalf("unit tombstone remains after restoration: %v", err)
+	}
+	if err := recoverMissingProviderUninstallV1(t.Context(), input, backend); err != nil {
+		t.Fatalf("retry recovery: %v", err)
+	}
+	if _, err := os.Lstat(unitPath); !os.IsNotExist(err) {
+		t.Fatalf("managed unit remains after retry: %v", err)
+	}
+	if reloads != 2 || dockerCleanups != 2 {
+		t.Fatalf("recovery attempts: reloads=%d Docker cleanups=%d", reloads, dockerCleanups)
+	}
+}
+
+func TestApplyProviderUninstallRecoveryRejectsPendingUnitBeforeMutation(t *testing.T) {
+	unitPath := filepath.Join(t.TempDir(), "demo.service")
+	if err := os.WriteFile(unitPath, []byte("unit"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tombstone := unitPath + ".reploy-uninstall-pending"
+	if err := os.WriteFile(tombstone, []byte("pending"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mutated := false
+	err := applyProviderUninstallRecoveryV1(
+		t.Context(),
+		providerUninstallRecoveryPlanV1{
+			Service: "demo", UnitPath: unitPath, ComposeProject: "demo-deadbeef",
+		},
+		RunOptions{},
+		providerUninstallRecoveryApplyBackendV1{
+			lookPath: func(string) (string, error) { return "/bin/systemctl", nil },
+			runHost: func(string, ...string) error {
+				mutated = true
+				return nil
+			},
+			removeDockerProject: func(context.Context, string, time.Duration) error {
+				mutated = true
+				return nil
+			},
+			rename: func(string, string) error {
+				mutated = true
+				return nil
+			},
+			remove: func(string) error {
+				mutated = true
+				return nil
+			},
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "pending recovered systemd unit removal already exists") {
+		t.Fatalf("pending-unit error = %v", err)
+	}
+	if mutated {
+		t.Fatal("pending-unit collision mutated host state")
+	}
+}
+
+func TestRecoverMissingProviderUninstallUsesVerifiedPendingUnitForCleanupRetry(t *testing.T) {
+	unitDir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "deleted")
+	unitPath := filepath.Join(unitDir, "demo.service")
+	content := "# Managed-By: reploy\n# Reploy-Service: demo\n# Reploy-Target: " + target +
+		"\n# Reploy-Compose-Project: demo-deadbeef\n"
+	if err := os.WriteFile(unitPath, []byte(content), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	removeAttempts := 0
+	dockerCleanups := 0
+	pendingPlans := 0
+	apply := func(ctx context.Context, plan providerUninstallRecoveryPlanV1, options RunOptions) error {
+		if plan.PendingUnitRemoval {
+			pendingPlans++
+		}
+		return applyProviderUninstallRecoveryV1(ctx, plan, options, providerUninstallRecoveryApplyBackendV1{
+			lookPath: func(string) (string, error) { return "/bin/systemctl", nil },
+			runHost:  func(string, ...string) error { return nil },
+			removeDockerProject: func(context.Context, string, time.Duration) error {
+				dockerCleanups++
+				return nil
+			},
+			rename: os.Rename,
+			remove: func(path string) error {
+				removeAttempts++
+				if removeAttempts == 1 {
+					return errors.New("filesystem busy")
+				}
+				return os.Remove(path)
+			},
+		})
+	}
+	input := ProviderUninstallRecoveryInputV1{
+		RequestedDir: target,
+		Service:      "demo",
+		Runtime:      StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux},
+	}
+	backend := providerUninstallRecoveryBackendV1{unitDir: unitDir, apply: apply}
+	err := recoverMissingProviderUninstallV1(t.Context(), input, backend)
+	if err == nil || !strings.Contains(err.Error(), "verified managed unit retained at "+unitPath+".reploy-uninstall-pending") {
+		t.Fatalf("first recovery error = %v", err)
+	}
+	if _, err := os.Lstat(unitPath); !os.IsNotExist(err) {
+		t.Fatalf("public unit restored after successful reload: %v", err)
+	}
+	if err := recoverMissingProviderUninstallV1(t.Context(), input, backend); err != nil {
+		t.Fatalf("pending-unit retry: %v", err)
+	}
+	if pendingPlans != 1 || dockerCleanups != 1 || removeAttempts != 2 {
+		t.Fatalf(
+			"pending retry counts: plans=%d Docker=%d removes=%d",
+			pendingPlans, dockerCleanups, removeAttempts,
+		)
+	}
+	if _, err := os.Lstat(unitPath + ".reploy-uninstall-pending"); !os.IsNotExist(err) {
+		t.Fatalf("pending unit remains after retry: %v", err)
 	}
 }
 
