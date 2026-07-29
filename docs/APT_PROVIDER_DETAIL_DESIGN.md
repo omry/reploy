@@ -2693,7 +2693,7 @@ The recoverable transitions are authoritative:
 
 | Observed state while holding `operation.lock` | Authoritative generation | Recovery action |
 | --- | --- | --- |
-| No pending record | `state.Current` | Remove abandoned store `tmp` entries; perform no generation cutover |
+| No pending record | `state.Current` | Remove abandoned build/finalization references derived from surviving store `tmp` workspaces, then remove abandoned `tmp` entries; perform no generation cutover |
 | Pending exists and state still equals `Old` | Old (or none) | Remove candidate generation/temp references, candidate lock, and objects unreachable from the old lock; restore no state fields; remove pending last |
 | Pending exists and state equals candidate lock/image | Candidate | Keep candidate generation, remove old/temp references and all non-current locks/objects, then remove pending |
 | Pending exists and state matches neither old nor candidate | None can be inferred safely | Fail `publication.state_conflict` without deleting either generation or any referenced object |
@@ -2793,9 +2793,13 @@ Every error identifies:
 
 Provider errors wrap typed causes rather than parsing human tool output. The
 structured error does not duplicate the live APT output. Failed operations
-retain the prior committed state and image generation. Temporary containers,
-mounts, files, and references are cleanup inventory in the pending record when
-immediate cleanup cannot complete.
+retain the prior committed state and image generation. Publication resources
+are cleanup inventory in the pending record when immediate cleanup cannot
+complete. Earlier materialization/finalization builds instead retain private
+`build-*` or `finalize-*` provider-store workspaces as the recovery record for
+their deterministic temporary base/output references; the next operation
+holding the deployment lock removes those exact references before removing the
+workspaces.
 
 Validation, resolution, and materialization have no Reploy-wide wall-clock
 deadline. Work streams with bounded memory and progress, stdout/stderr is

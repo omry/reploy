@@ -1,0 +1,2 @@
+kind: Fixed
+body: Give unpublished Docker build outputs deployment-scoped temporary references, remove them after validation or publication failures, and recover abandoned references on the next locked operation.

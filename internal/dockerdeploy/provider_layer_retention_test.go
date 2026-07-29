@@ -21,9 +21,12 @@ func retainedProviderLayerFixture() providers.RealizedImageV1 {
 
 func TestRetainVerifiedProviderLayerCreatesContentAddressedReference(t *testing.T) {
 	image := retainedProviderLayerFixture()
+	candidate := BuiltImageCandidate{
+		ImageID: image.ConfigDigest, TemporaryReference: temporaryBuildReferencePrefix + "12345678:build-output",
+	}
 	reference := verifiedProviderLayerReference(image)
 	calls := [][]string{}
-	err := retainVerifiedProviderLayer(t.Context(), image, func(_ context.Context, args ...string) (string, error) {
+	err := retainVerifiedProviderLayer(t.Context(), candidate, image, func(_ context.Context, args ...string) (string, error) {
 		calls = append(calls, append([]string{}, args...))
 		switch len(calls) {
 		case 1:
@@ -32,6 +35,10 @@ func TestRetainVerifiedProviderLayerCreatesContentAddressedReference(t *testing.
 			return "", nil
 		case 3:
 			return string(image.ConfigDigest) + "\n", nil
+		case 4:
+			return string(image.ConfigDigest) + "\n", nil
+		case 5:
+			return "", nil
 		default:
 			t.Fatalf("unexpected Docker call %d: %#v", len(calls), args)
 			return "", nil
@@ -44,6 +51,8 @@ func TestRetainVerifiedProviderLayerCreatesContentAddressedReference(t *testing.
 		{"image", "inspect", "--format", "{{.Id}}", reference},
 		{"image", "tag", string(image.ConfigDigest), reference},
 		{"image", "inspect", "--format", "{{.Id}}", reference},
+		{"image", "ls", "--quiet", "--no-trunc", candidate.TemporaryReference},
+		{"image", "rm", candidate.TemporaryReference},
 	}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("Docker calls = %#v, want %#v", calls, want)
@@ -52,22 +61,36 @@ func TestRetainVerifiedProviderLayerCreatesContentAddressedReference(t *testing.
 
 func TestRetainVerifiedProviderLayerReusesExactReference(t *testing.T) {
 	image := retainedProviderLayerFixture()
+	candidate := BuiltImageCandidate{
+		ImageID: image.ConfigDigest, TemporaryReference: temporaryBuildReferencePrefix + "12345678:build-output",
+	}
 	calls := 0
-	err := retainVerifiedProviderLayer(t.Context(), image, func(_ context.Context, args ...string) (string, error) {
+	err := retainVerifiedProviderLayer(t.Context(), candidate, image, func(_ context.Context, args ...string) (string, error) {
 		calls++
-		return string(image.ConfigDigest), nil
+		switch calls {
+		case 1, 2:
+			return string(image.ConfigDigest), nil
+		case 3:
+			return "", nil
+		default:
+			t.Fatalf("unexpected Docker call %d: %v", calls, args)
+			return "", nil
+		}
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if calls != 1 {
-		t.Fatalf("Docker calls = %d, want 1", calls)
+	if calls != 3 {
+		t.Fatalf("Docker calls = %d, want 3", calls)
 	}
 }
 
 func TestRetainVerifiedProviderLayerRejectsReferenceMismatch(t *testing.T) {
 	image := retainedProviderLayerFixture()
-	err := retainVerifiedProviderLayer(t.Context(), image, func(_ context.Context, args ...string) (string, error) {
+	candidate := BuiltImageCandidate{
+		ImageID: image.ConfigDigest, TemporaryReference: temporaryBuildReferencePrefix + "12345678:build-output",
+	}
+	err := retainVerifiedProviderLayer(t.Context(), candidate, image, func(_ context.Context, args ...string) (string, error) {
 		return string(rendererDigest("9")), nil
 	})
 	if err == nil || !strings.Contains(err.Error(), "want "+string(image.ConfigDigest)) {
@@ -108,7 +131,7 @@ func TestBuildAndAcceptMaterializationLayerRemovesCandidateWhenRetentionFails(t 
 		func(context.Context, MaterializationLayerCandidate, MaterializationLayerRequest) (InspectedMaterializationLayerCandidate, error) {
 			return acceptedMaterializationCandidate(t, transaction, request.Platform), nil
 		},
-		func(context.Context, providers.RealizedImageV1) error {
+		func(context.Context, BuiltImageCandidate, providers.RealizedImageV1) error {
 			return errors.New("tag failed")
 		},
 		func(_ context.Context, candidate BuiltImageCandidate) error {

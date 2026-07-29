@@ -40,6 +40,7 @@ func TestPreparePendingPublicationRecoveryDiscardsInterruptedFirstBuildWithoutCa
 }
 
 func TestRecoverPendingPublicationCleansTemporaryEntriesWhenNothingIsPending(t *testing.T) {
+	stubNoAbandonedBuildReferences(t)
 	dir := t.TempDir()
 	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
 	if err != nil {
@@ -67,7 +68,8 @@ func TestRecoverPendingPublicationCleansTemporaryEntriesWhenNothingIsPending(t *
 	requireNoTemporaryEntries(t, store)
 }
 
-func TestRecoverPendingPublicationRemovesDeterministicHelperContainersBeforeScratch(t *testing.T) {
+func TestRecoverPendingPublicationRemovesContainersThenBuildReferencesBeforeScratch(t *testing.T) {
+	stubNoAbandonedBuildReferences(t)
 	dir := t.TempDir()
 	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
 	if err != nil {
@@ -89,10 +91,15 @@ func TestRecoverPendingPublicationRemovesDeterministicHelperContainersBeforeScra
 	if _, err := store.NewWorkspace("python-resolve-*"); err != nil {
 		t.Fatal(err)
 	}
+	buildWorkspace, err := store.NewWorkspace("build-*")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	previousRun := runAbandonedProviderContainerCleanupCommand
 	t.Cleanup(func() { runAbandonedProviderContainerCleanupCommand = previousRun })
 	got := []string{}
+	order := []string{}
 	runAbandonedProviderContainerCleanupCommand = func(spec CommandSpec, _ RunOptions) error {
 		if spec.Name != "docker" || len(spec.Args) != 3 || spec.Args[0] != "rm" || spec.Args[1] != "--force" {
 			t.Fatalf("command = %#v", spec)
@@ -101,7 +108,24 @@ func TestRecoverPendingPublicationRemovesDeterministicHelperContainersBeforeScra
 			t.Fatalf("probe workspace was removed before helper containers: %v", err)
 		}
 		got = append(got, spec.Args[2])
+		order = append(order, "container")
 		return nil
+	}
+	runAbandonedBuildReferenceCleanupDocker = func(
+		_ context.Context,
+		args ...string,
+	) (string, error) {
+		if args[1] != "ls" {
+			t.Fatalf("unexpected build-reference command: %v", args)
+		}
+		if _, err := os.Stat(probeWorkspace); err != nil {
+			t.Fatalf("probe workspace was removed before build references: %v", err)
+		}
+		if _, err := os.Stat(buildWorkspace); err != nil {
+			t.Fatalf("build workspace was removed before build references: %v", err)
+		}
+		order = append(order, "reference")
+		return "", nil
 	}
 
 	if _, err := RecoverPendingPublication(t.Context(), operation, store, nil, "demo", dir, acceptRecoveryProfileOwner, acceptRecoveryBundleOwner); err != nil {
@@ -116,7 +140,53 @@ func TestRecoverPendingPublicationRemovesDeterministicHelperContainersBeforeScra
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("helper containers = %#v, want %#v", got, want)
 	}
+	wantOrder := []string{
+		"container", "container", "container",
+		"reference", "reference",
+	}
+	if !reflect.DeepEqual(order, wantOrder) {
+		t.Fatalf("cleanup order = %v, want %v", order, wantOrder)
+	}
 	requireNoTemporaryEntries(t, store)
+}
+
+func TestRecoverPendingPublicationKeepsBuildWorkspaceWhenReferenceCleanupFails(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	store, err := providerstore.NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := store.NewWorkspace("build-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := runAbandonedBuildReferenceCleanupDocker
+	t.Cleanup(func() { runAbandonedBuildReferenceCleanupDocker = previous })
+	cause := errors.New("injected reference removal failure")
+	runAbandonedBuildReferenceCleanupDocker = func(
+		_ context.Context,
+		args ...string,
+	) (string, error) {
+		if args[1] == "ls" {
+			return string(rendererDigest("a")), nil
+		}
+		return "", cause
+	}
+	_, err = RecoverPendingPublication(
+		t.Context(), operation, store, nil, "demo", dir,
+		acceptRecoveryProfileOwner, acceptRecoveryBundleOwner,
+	)
+	if !errors.Is(err, cause) {
+		t.Fatalf("error = %v", err)
+	}
+	if _, err := os.Lstat(workspace); err != nil {
+		t.Fatalf("recovery workspace was removed after reference failure: %v", err)
+	}
 }
 
 func TestRemoveAbandonedProviderContainerAcceptsAlreadyAbsentContainer(t *testing.T) {
@@ -132,6 +202,7 @@ func TestRemoveAbandonedProviderContainerAcceptsAlreadyAbsentContainer(t *testin
 }
 
 func TestExecutePendingPublicationRecoveryRemovesPendingLast(t *testing.T) {
+	stubNoAbandonedBuildReferences(t)
 	dir, pending := pendingReferenceFixture(t)
 	pending.Old = nil
 	pending.Phase = deploy.PendingBuildPhaseValidated

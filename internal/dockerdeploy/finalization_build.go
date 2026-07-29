@@ -59,7 +59,12 @@ func BuildFinalizedImageCandidate(store providerstore.Store, request Finalizatio
 	if err != nil {
 		return BuiltImageCandidate{}, err
 	}
-	defer os.RemoveAll(workspace)
+	preserveWorkspace := false
+	defer func() {
+		if !preserveWorkspace {
+			_ = os.RemoveAll(workspace)
+		}
+	}()
 	ctx := options.Context
 	if ctx == nil {
 		ctx = context.Background()
@@ -74,12 +79,30 @@ func BuildFinalizedImageCandidate(store providerstore.Store, request Finalizatio
 		if cleanupErr := cleanupTemporaryBuildBaseReferenceAfterBuild(
 			context.WithoutCancel(ctx), cleanupBaseReference, result, runFinalizationBuildReferenceDocker,
 		); cleanupErr != nil {
+			preserveWorkspace = true
 			if resultErr != nil {
 				resultErr = fmt.Errorf("%w; cleanup temporary build base reference: %v", resultErr, cleanupErr)
 			} else {
 				result = BuiltImageCandidate{}
 				resultErr = fmt.Errorf("cleanup temporary build base reference: %w", cleanupErr)
 			}
+		}
+	}()
+	outputReference, err := prepareTemporaryBuildOutputReference(
+		ctx, store.Root(), workspace, runFinalizationBuildReferenceDocker,
+	)
+	if err != nil {
+		return BuiltImageCandidate{}, err
+	}
+	defer func() {
+		if resultErr == nil {
+			return
+		}
+		if cleanupErr := removeTemporaryBuildReference(
+			context.WithoutCancel(ctx), outputReference, "", runFinalizationBuildReferenceDocker,
+		); cleanupErr != nil {
+			preserveWorkspace = true
+			resultErr = fmt.Errorf("%w; cleanup temporary finalization output reference: %v", resultErr, cleanupErr)
 		}
 	}()
 	contextDir := filepath.Join(workspace, "context")
@@ -92,7 +115,7 @@ func BuildFinalizedImageCandidate(store providerstore.Store, request Finalizatio
 	}
 	iidPath := filepath.Join(workspace, "result.iid")
 	command, err := MaterializationBuildCommand(MaterializationBuildPlan{
-		BaseReference: baseReference, Platform: request.Platform,
+		BaseReference: baseReference, OutputReference: outputReference, Platform: request.Platform,
 		DockerfilePath: dockerfilePath, ContextDir: contextDir, IIDFile: iidPath, NoCache: options.NoCache,
 	})
 	if err != nil {
@@ -109,7 +132,10 @@ func BuildFinalizedImageCandidate(store providerstore.Store, request Finalizatio
 	if err := imageID.Validate(); err != nil {
 		return BuiltImageCandidate{}, fmt.Errorf("finalized image ID: %w", err)
 	}
-	return BuiltImageCandidate{ImageID: imageID}, nil
+	preserveWorkspace = true
+	return BuiltImageCandidate{
+		ImageID: imageID, TemporaryReference: outputReference, Workspace: workspace,
+	}, nil
 }
 
 func validateFinalizationBuildRequest(request FinalizationBuildRequest) error {

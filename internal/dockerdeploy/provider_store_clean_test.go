@@ -17,6 +17,7 @@ import (
 )
 
 func TestCleanProviderStoreV1RemovesOnlyProviderStoreAndIsRepeatable(t *testing.T) {
+	stubNoAbandonedBuildReferences(t)
 	dir, operation, store, lock, state := currentBuildFixture(t, true)
 	statePath := filepath.Join(dir, ".reploy", "state.json")
 	before, err := os.ReadFile(statePath)

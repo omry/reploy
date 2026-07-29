@@ -16,8 +16,10 @@ func TestMaterializationBuildCommandUsesOrdinaryDockerBuild(t *testing.T) {
 	}
 	root := t.TempDir()
 	plan := MaterializationBuildPlan{
-		BaseReference: "debian@" + string(rendererDigest("a")), Platform: platform,
-		DockerfilePath: filepath.Join(root, "Dockerfile"), ContextDir: filepath.Join(root, "context"), IIDFile: filepath.Join(root, "result.iid"),
+		BaseReference:   "debian@" + string(rendererDigest("a")),
+		OutputReference: temporaryBuildReferencePrefix + "12345678:build-output",
+		Platform:        platform,
+		DockerfilePath:  filepath.Join(root, "Dockerfile"), ContextDir: filepath.Join(root, "context"), IIDFile: filepath.Join(root, "result.iid"),
 	}
 	command, err := MaterializationBuildCommand(plan)
 	if err != nil {
@@ -29,6 +31,7 @@ func TestMaterializationBuildCommandUsesOrdinaryDockerBuild(t *testing.T) {
 			"build", "--file", plan.DockerfilePath,
 			"--platform", "linux/arm/v7",
 			"--build-arg", "REPLOY_BASE_IMAGE=" + plan.BaseReference,
+			"--tag", plan.OutputReference,
 			"--iidfile", plan.IIDFile,
 			plan.ContextDir,
 		},
@@ -38,8 +41,8 @@ func TestMaterializationBuildCommandUsesOrdinaryDockerBuild(t *testing.T) {
 		t.Fatalf("command = %#v, want %#v", command, want)
 	}
 	joined := strings.Join(command.Args, " ")
-	if strings.Contains(joined, "buildx") || strings.Contains(joined, "--tag") {
-		t.Fatalf("command introduced Buildx or a canonical image tag: %s", joined)
+	if strings.Contains(joined, "buildx") {
+		t.Fatalf("command introduced Buildx: %s", joined)
 	}
 }
 
@@ -50,8 +53,10 @@ func TestMaterializationBuildCommandBypassesDockerCacheWhenRequested(t *testing.
 	}
 	root := t.TempDir()
 	plan := MaterializationBuildPlan{
-		BaseReference: "sha256:" + strings.Repeat("b", 64), Platform: platform,
-		DockerfilePath: filepath.Join(root, "Dockerfile"), ContextDir: filepath.Join(root, "context"), IIDFile: filepath.Join(root, "result.iid"),
+		BaseReference:   "sha256:" + strings.Repeat("b", 64),
+		OutputReference: temporaryBuildReferencePrefix + "12345678:build-output",
+		Platform:        platform,
+		DockerfilePath:  filepath.Join(root, "Dockerfile"), ContextDir: filepath.Join(root, "context"), IIDFile: filepath.Join(root, "result.iid"),
 		NoCache: true,
 	}
 	command, err := MaterializationBuildCommand(plan)
@@ -70,8 +75,10 @@ func TestMaterializationBuildCommandRejectsMutableOrIncompleteInputs(t *testing.
 	}
 	root := t.TempDir()
 	valid := MaterializationBuildPlan{
-		BaseReference: "sha256:" + strings.Repeat("b", 64), Platform: platform,
-		DockerfilePath: filepath.Join(root, "Dockerfile"), ContextDir: filepath.Join(root, "context"), IIDFile: filepath.Join(root, "result.iid"),
+		BaseReference:   "sha256:" + strings.Repeat("b", 64),
+		OutputReference: temporaryBuildReferencePrefix + "12345678:build-output",
+		Platform:        platform,
+		DockerfilePath:  filepath.Join(root, "Dockerfile"), ContextDir: filepath.Join(root, "context"), IIDFile: filepath.Join(root, "result.iid"),
 	}
 	tests := []struct {
 		name   string
@@ -79,6 +86,7 @@ func TestMaterializationBuildCommandRejectsMutableOrIncompleteInputs(t *testing.
 		want   string
 	}{
 		{name: "mutable base", mutate: func(value *MaterializationBuildPlan) { value.BaseReference = "debian:13" }, want: "immutable"},
+		{name: "unowned output", mutate: func(value *MaterializationBuildPlan) { value.OutputReference = "example/output:latest" }, want: "Reploy-owned"},
 		{name: "relative Dockerfile", mutate: func(value *MaterializationBuildPlan) { value.DockerfilePath = "Dockerfile" }, want: "absolute"},
 		{name: "relative context", mutate: func(value *MaterializationBuildPlan) { value.ContextDir = "context" }, want: "absolute"},
 		{name: "missing iid", mutate: func(value *MaterializationBuildPlan) { value.IIDFile = "" }, want: "absolute"},

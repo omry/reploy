@@ -69,7 +69,7 @@ func TestProviderGraphMaterializerUsesTypedAcceptancePipeline(t *testing.T) {
 	}
 	materializer := ProviderGraphMaterializer{
 		Store: store, Platform: platform, RunEvidence: evidence,
-		RetainLayer:       func(context.Context, providers.RealizedImageV1) error { return nil },
+		RetainLayer:       func(context.Context, BuiltImageCandidate, providers.RealizedImageV1) error { return nil },
 		verifiedArtifacts: map[providers.NodeID]map[canonical.Digest]string{request.Node.ID: verified},
 	}
 	got, err := materializer.Materialize(ctx, request)
@@ -108,7 +108,7 @@ func TestProviderGraphMaterializerStopsBeforeBuildOnRegistryFailure(t *testing.T
 		RunEvidence: func(context.Context, MaterializationEvidenceInput) ([]providers.RealizedGeneratedExecutable, []providers.RealizedOutput, error) {
 			return nil, nil, nil
 		},
-		RetainLayer: func(context.Context, providers.RealizedImageV1) error { return nil },
+		RetainLayer: func(context.Context, BuiltImageCandidate, providers.RealizedImageV1) error { return nil },
 	}
 	_, err = materializer.Materialize(context.Background(), providers.GraphNodeMaterializeRequest{Node: providers.NodeSpec{ID: "apt"}})
 	if err == nil || !strings.Contains(err.Error(), "APT provider execution is not implemented") {

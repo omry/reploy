@@ -3,6 +3,8 @@ package dockerdeploy
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 
@@ -28,7 +30,11 @@ type MaterializationEvidenceRunner func(
 
 type materializationLayerBuilder func(providerstore.Store, MaterializationLayerRequest, RunOptions) (MaterializationLayerCandidate, error)
 type materializationLayerInspector func(context.Context, MaterializationLayerCandidate, MaterializationLayerRequest) (InspectedMaterializationLayerCandidate, error)
-type materializationCandidateRetainer func(context.Context, providers.RealizedImageV1) error
+type materializationCandidateRetainer func(
+	context.Context,
+	BuiltImageCandidate,
+	providers.RealizedImageV1,
+) error
 type materializationCandidateRemover func(context.Context, BuiltImageCandidate) error
 
 // BuildAndAcceptMaterializationLayer builds one provider layer and returns a
@@ -129,7 +135,7 @@ func buildAndAcceptMaterializationLayer(
 		return rejectMaterializationCandidate(ctx, built.Built, err, remove)
 	}
 	retainCtx, endRetain := buildprofile.Start(ctx, "Retain provider layer")
-	err = retain(retainCtx, accepted.Image)
+	err = retain(retainCtx, built.Built, accepted.Image)
 	endRetain(err)
 	if err != nil {
 		return rejectMaterializationCandidate(
@@ -155,25 +161,77 @@ func rejectMaterializationCandidate(
 	return providers.GraphNodeMaterializeResult{}, rejection
 }
 
-// RemoveBuiltImageCandidate removes exactly the untagged immutable image ID
-// produced by the current materialization build. It never invokes a Docker
-// prune operation or discovers other images.
+// RemoveBuiltImageCandidate removes exactly the deployment-owned temporary
+// reference produced by the current build, or an exact immutable image ID for
+// legacy/internal candidates without that ownership metadata. It never invokes
+// a Docker prune operation or discovers other images.
 func RemoveBuiltImageCandidate(ctx context.Context, candidate BuiltImageCandidate) error {
 	return removeBuiltImageCandidate(ctx, candidate, runDockerOutput)
 }
 
 func removeBuiltImageCandidate(ctx context.Context, candidate BuiltImageCandidate, run dockerOutputRunner) error {
 	if ctx == nil {
-		return fmt.Errorf("remove materialization candidate requires a context")
+		return fmt.Errorf("remove built image candidate requires a context")
 	}
 	if err := candidate.ImageID.Validate(); err != nil {
-		return fmt.Errorf("remove materialization candidate image ID: %w", err)
+		return fmt.Errorf("remove built image candidate image ID: %w", err)
 	}
 	if run == nil {
-		return fmt.Errorf("remove materialization candidate requires a Docker runner")
+		return fmt.Errorf("remove built image candidate requires a Docker runner")
+	}
+	if candidate.TemporaryReference != "" {
+		if candidate.Workspace != "" {
+			if err := validateTemporaryBuildCandidateWorkspace(candidate); err != nil {
+				return fmt.Errorf("remove built image candidate workspace: %w", err)
+			}
+		}
+		if err := removeTemporaryBuildReference(
+			ctx, candidate.TemporaryReference, string(candidate.ImageID), run,
+		); err != nil {
+			return fmt.Errorf("remove built image candidate reference: %w", err)
+		}
+		if candidate.Workspace != "" {
+			if err := os.RemoveAll(candidate.Workspace); err != nil {
+				return fmt.Errorf("remove built image candidate workspace: %w", err)
+			}
+		}
+		return nil
 	}
 	if _, err := run(ctx, "image", "rm", string(candidate.ImageID)); err != nil {
-		return fmt.Errorf("remove materialization candidate %s: %w", candidate.ImageID, err)
+		return fmt.Errorf("remove built image candidate %s: %w", candidate.ImageID, err)
+	}
+	return nil
+}
+
+func validateTemporaryBuildCandidateWorkspace(candidate BuiltImageCandidate) error {
+	if err := validateTemporaryBuildWorkspace(candidate.Workspace); err != nil {
+		return err
+	}
+	storeRoot := filepath.Dir(filepath.Dir(candidate.Workspace))
+	expectedReference, err := temporaryBuildOutputReference(storeRoot, candidate.Workspace)
+	if err != nil {
+		return err
+	}
+	if candidate.TemporaryReference != expectedReference {
+		return fmt.Errorf("temporary build workspace does not own candidate reference")
+	}
+	return nil
+}
+
+func validateTemporaryBuildWorkspace(workspace string) error {
+	if workspace == "" || !filepath.IsAbs(workspace) ||
+		filepath.Clean(workspace) != workspace {
+		return fmt.Errorf("temporary build workspace must be absolute and clean")
+	}
+	temporaryRoot := filepath.Dir(workspace)
+	if filepath.Base(temporaryRoot) != "tmp" ||
+		filepath.Base(filepath.Dir(temporaryRoot)) != providerstore.StoreDirName {
+		return fmt.Errorf("temporary build workspace must belong to a provider store")
+	}
+	name := filepath.Base(workspace)
+	if !temporaryWorkspaceName(name, "build-") &&
+		!temporaryWorkspaceName(name, "finalize-") {
+		return fmt.Errorf("temporary build workspace has an unsupported name")
 	}
 	return nil
 }

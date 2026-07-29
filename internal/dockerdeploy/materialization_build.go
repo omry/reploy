@@ -10,17 +10,21 @@ import (
 )
 
 type MaterializationBuildPlan struct {
-	BaseReference  string
-	Platform       blueprint.Platform
-	DockerfilePath string
-	ContextDir     string
-	IIDFile        string
-	NoCache        bool
+	BaseReference   string
+	OutputReference string
+	Platform        blueprint.Platform
+	DockerfilePath  string
+	ContextDir      string
+	IIDFile         string
+	NoCache         bool
 }
 
 func MaterializationBuildCommand(plan MaterializationBuildPlan) (CommandSpec, error) {
 	if err := validateDockerBuildBaseReference(plan.BaseReference); err != nil {
 		return CommandSpec{}, err
+	}
+	if err := validateTemporaryBuildReference(plan.OutputReference); err != nil {
+		return CommandSpec{}, fmt.Errorf("materialization build output reference: %w", err)
 	}
 	if err := plan.Platform.Validate(); err != nil {
 		return CommandSpec{}, fmt.Errorf("materialization build platform: %w", err)
@@ -49,6 +53,7 @@ func MaterializationBuildCommand(plan MaterializationBuildPlan) (CommandSpec, er
 		"--file", plan.DockerfilePath,
 		"--platform", plan.Platform.Canonical,
 		"--build-arg", "REPLOY_BASE_IMAGE="+plan.BaseReference,
+		"--tag", plan.OutputReference,
 		"--iidfile", plan.IIDFile,
 		plan.ContextDir,
 	)

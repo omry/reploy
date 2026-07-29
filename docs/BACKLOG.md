@@ -72,15 +72,16 @@ This file is the day-to-day queue for design and implementation gaps.
       resources whose Reploy ownership is established, avoid broad pruning,
       and finish with a fresh Docker resource and disk-usage inventory.
 
-- [ ] `P1` Make Docker lifecycle operations crash-consistent and self-reconciling.
-      Record resource-creation intent durably before Docker side effects and
-      use deterministic ownership metadata so interrupted builds, publication,
-      runtime control, and removal can be resumed or rolled back safely. At the
-      start of the next scoped operation, reconcile abandoned temporary tags,
-      candidate images, containers, networks, and removal tombstones while
-      preserving current generations and intentional caches. Keep automatic
-      cleanup idempotent and deployment-scoped; provide an explicit diagnostic
-      or cleanup path for resources whose staging directory no longer exists.
+- [ ] `P1` Complete Docker lifecycle crash consistency and reconciliation.
+      Build and finalization output now use deployment-scoped temporary
+      references whose surviving provider-store workspaces drive exact cleanup
+      on the next locked operation. Extend the same deterministic ownership and
+      restart reconciliation to the remaining publication, runtime-control,
+      and removal resources: candidate images outside this protocol,
+      containers, networks, and removal tombstones. Preserve current
+      generations and intentional caches, keep cleanup idempotent and
+      deployment-scoped, and provide an explicit diagnostic or cleanup path for
+      resources whose staging directory no longer exists.
 
 - [ ] `P1` Define and implement the provider-layer verification-cache lifecycle.
       Accepted provider layers receive shared content-addressed

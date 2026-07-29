@@ -43,6 +43,9 @@ func RecoverPendingPublication(
 		if err := removeAbandonedProviderContainers(ctx, store); err != nil {
 			return false, fmt.Errorf("clean abandoned provider helper containers: %w", err)
 		}
+		if err := removeAbandonedBuildReferences(ctx, store); err != nil {
+			return false, fmt.Errorf("clean abandoned build references: %w", err)
+		}
 		if err := store.RemoveTemporaryEntries(); err != nil {
 			return false, fmt.Errorf("clean abandoned provider store temporary entries: %w", err)
 		}
@@ -193,6 +196,9 @@ func executePendingPublicationRecovery(
 	}
 	if err := removeAbandonedProviderContainers(ctx, store); err != nil {
 		return fmt.Errorf("clean abandoned provider helper containers: %w", err)
+	}
+	if err := removeAbandonedBuildReferences(ctx, store); err != nil {
+		return fmt.Errorf("clean abandoned build references: %w", err)
 	}
 	if err := store.RemoveTemporaryEntries(); err != nil {
 		return fmt.Errorf("clean abandoned provider store temporary entries: %w", err)

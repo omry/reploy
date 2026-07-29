@@ -291,6 +291,7 @@ func TestRunLockedProviderBuildV1CleansFailedExecutionAndPreservesItsError(t *te
 }
 
 func TestCleanupFailedProviderBuildV1RemovesOnlyUnreachableObjects(t *testing.T) {
+	stubNoAbandonedBuildReferences(t)
 	dir, operation, store, lock, _ := currentBuildFixture(t, true)
 	defer operation.Unlock()
 	dropped, err := store.Publish(t.Context(), "failed.deb", "deb", strings.NewReader("failed candidate"))
@@ -322,6 +323,7 @@ func TestCleanupFailedProviderBuildV1RemovesOnlyUnreachableObjects(t *testing.T)
 }
 
 func TestCleanupFailedProviderBuildV1NoCachePreservesImmutableObjects(t *testing.T) {
+	stubNoAbandonedBuildReferences(t)
 	dir, operation, store, _, _ := currentBuildFixture(t, true)
 	defer operation.Unlock()
 	dropped, err := store.Publish(t.Context(), "failed.deb", "deb", strings.NewReader("failed candidate"))
@@ -350,6 +352,7 @@ func TestCleanupFailedProviderBuildV1NoCachePreservesImmutableObjects(t *testing
 }
 
 func TestCleanupFailedProviderBuildV1WithoutCurrentRemovesAllBuildObjects(t *testing.T) {
+	stubNoAbandonedBuildReferences(t)
 	dir, _ := stageProviderBuildRunState(t, false)
 	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
 	if err != nil {

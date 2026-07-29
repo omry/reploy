@@ -114,6 +114,25 @@ func PreparePythonBuildToolEnvironmentV1(
 		RunOptions:       options,
 	}
 	evidence := ProviderMaterializationEvidenceRunner{Store: input.Store}
+	transientCandidates := []BuiltImageCandidate{}
+	retainTransient := func(
+		retainCtx context.Context,
+		candidate BuiltImageCandidate,
+		image providers.RealizedImageV1,
+	) error {
+		if retainCtx == nil {
+			return fmt.Errorf("retain transient provider layer requires a context")
+		}
+		if err := retainCtx.Err(); err != nil {
+			return err
+		}
+		if candidate.TemporaryReference == "" || candidate.Workspace == "" ||
+			candidate.ImageID != image.ConfigDigest {
+			return fmt.Errorf("transient provider layer does not identify its temporary build output")
+		}
+		transientCandidates = append(transientCandidates, candidate)
+		return nil
+	}
 	backend := PreparedPythonGraphBackend{
 		BaseDescriptor: input.Upstream,
 		Workspace:      input.Workspace,
@@ -121,7 +140,7 @@ func PreparePythonBuildToolEnvironmentV1(
 		Operations:     map[providers.NodeID]PreparedPythonNodeOperations{},
 		Materializer: ProviderGraphMaterializer{
 			Store: input.Store, Platform: input.Upstream.Platform,
-			RunEvidence: evidence.Run, RetainLayer: skipTransientProviderLayerRetention,
+			RunEvidence: evidence.Run, RetainLayer: retainTransient,
 			RunOptions:        options,
 			verifiedArtifacts: map[providers.NodeID]map[canonical.Digest]string{"apt": nil},
 		},
@@ -129,6 +148,26 @@ func PreparePythonBuildToolEnvironmentV1(
 	baseImage, err := realizedImageFromDescriptor(input.Upstream)
 	if err != nil {
 		return PythonBuildToolEnvironmentV1{}, err
+	}
+	cleanupCandidates := func(
+		cleanupContext context.Context,
+		fallback []providers.GraphNodeMaterializeResult,
+	) error {
+		candidates := append([]BuiltImageCandidate{}, transientCandidates...)
+		if len(candidates) == 0 {
+			for _, materialized := range fallback {
+				candidates = append(candidates, BuiltImageCandidate{
+					ImageID: materialized.Image.ConfigDigest,
+				})
+			}
+		}
+		var cleanupErrors []error
+		for index := len(candidates) - 1; index >= 0; index-- {
+			if err := removePortableBuildToolImageV1(cleanupContext, candidates[index]); err != nil {
+				cleanupErrors = append(cleanupErrors, err)
+			}
+		}
+		return errors.Join(cleanupErrors...)
 	}
 	result, err := executePortableBuildToolGraphV1(ctx, providers.GraphExecutionRequest{
 		Plan: plan, Platform: input.Upstream.Platform,
@@ -144,19 +183,15 @@ func PreparePythonBuildToolEnvironmentV1(
 		MaterializeNode:   backend.MaterializeNode,
 	})
 	if err != nil {
+		cleanupErr := cleanupCandidates(context.WithoutCancel(ctx), nil)
 		return PythonBuildToolEnvironmentV1{}, fmt.Errorf(
-			"prepare portable Python build tools %s: %w", strings.Join(tools, ", "), err,
+			"prepare portable Python build tools %s: %w",
+			strings.Join(tools, ", "),
+			errors.Join(err, cleanupErr),
 		)
 	}
 	cleanup := func(cleanupContext context.Context) error {
-		var cleanupErrors []error
-		for index := len(result.Materializations) - 1; index >= 0; index-- {
-			candidate := BuiltImageCandidate{ImageID: result.Materializations[index].Image.ConfigDigest}
-			if err := removePortableBuildToolImageV1(cleanupContext, candidate); err != nil {
-				cleanupErrors = append(cleanupErrors, err)
-			}
-		}
-		return errors.Join(cleanupErrors...)
+		return cleanupCandidates(cleanupContext, result.Materializations)
 	}
 	if len(result.PrefixImages) != 2 || len(result.Materializations) != 1 {
 		resultErr := fmt.Errorf("portable Python build-tool graph returned an incomplete image prefix")

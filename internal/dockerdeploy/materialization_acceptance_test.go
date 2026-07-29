@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -168,9 +169,9 @@ func TestBuildAndAcceptMaterializationLayerRunsEvidenceAfterInspection(t *testin
 			}
 			return acceptedMaterializationCandidate(t, transaction, request.Platform), nil
 		},
-		func(_ context.Context, image providers.RealizedImageV1) error {
+		func(_ context.Context, candidate BuiltImageCandidate, image providers.RealizedImageV1) error {
 			order = append(order, "retain")
-			if image.ConfigDigest != rendererDigest("7") {
+			if candidate.ImageID != rendererDigest("7") || image.ConfigDigest != rendererDigest("7") {
 				return errors.New("retention did not receive the accepted image")
 			}
 			return nil
@@ -207,7 +208,7 @@ func TestBuildAndAcceptMaterializationLayerRejectsBindingBeforeBuild(t *testing.
 			called = true
 			return InspectedMaterializationLayerCandidate{}, nil
 		},
-		func(context.Context, providers.RealizedImageV1) error {
+		func(context.Context, BuiltImageCandidate, providers.RealizedImageV1) error {
 			called = true
 			return nil
 		},
@@ -242,7 +243,7 @@ func TestBuildAndAcceptMaterializationLayerRemovesRejectedCandidate(t *testing.T
 		func(context.Context, MaterializationLayerCandidate, MaterializationLayerRequest) (InspectedMaterializationLayerCandidate, error) {
 			return acceptedMaterializationCandidate(t, transaction, request.Platform), nil
 		},
-		func(context.Context, providers.RealizedImageV1) error {
+		func(context.Context, BuiltImageCandidate, providers.RealizedImageV1) error {
 			t.Fatal("rejected candidate was retained")
 			return nil
 		},
@@ -282,7 +283,7 @@ func TestBuildAndAcceptMaterializationLayerRemovesAfterCancellation(t *testing.T
 			t.Fatal("inspection ran after cancellation")
 			return InspectedMaterializationLayerCandidate{}, nil
 		},
-		func(context.Context, providers.RealizedImageV1) error {
+		func(context.Context, BuiltImageCandidate, providers.RealizedImageV1) error {
 			t.Fatal("retention ran after cancellation")
 			return nil
 		},
@@ -312,5 +313,72 @@ func TestRemoveBuiltImageCandidateUsesOnlyExactImageID(t *testing.T) {
 		return "", nil
 	}); err == nil || !strings.Contains(err.Error(), "image ID") {
 		t.Fatalf("invalid candidate error = %v", err)
+	}
+}
+
+func TestRemoveBuiltImageCandidateUsesExactOwnedReference(t *testing.T) {
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := store.NewWorkspace("build-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference, err := temporaryBuildOutputReference(store.Root(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := BuiltImageCandidate{
+		ImageID:            rendererDigest("7"),
+		TemporaryReference: reference,
+		Workspace:          workspace,
+	}
+	var calls [][]string
+	err = removeBuiltImageCandidate(t.Context(), candidate, func(
+		_ context.Context,
+		args ...string,
+	) (string, error) {
+		calls = append(calls, append([]string{}, args...))
+		if args[1] == "ls" {
+			return string(candidate.ImageID), nil
+		}
+		return "", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"image", "ls", "--quiet", "--no-trunc", candidate.TemporaryReference},
+		{"image", "rm", candidate.TemporaryReference},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("Docker calls = %v, want %v", calls, want)
+	}
+	if _, err := os.Lstat(workspace); !os.IsNotExist(err) {
+		t.Fatalf("candidate workspace remains after cleanup: %v", err)
+	}
+}
+
+func TestRemoveBuiltImageCandidateRejectsMismatchedWorkspaceReference(t *testing.T) {
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := store.NewWorkspace("build-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	err = removeBuiltImageCandidate(t.Context(), BuiltImageCandidate{
+		ImageID:            rendererDigest("7"),
+		TemporaryReference: temporaryBuildReferencePrefix + "12345678:build-output",
+		Workspace:          workspace,
+	}, func(context.Context, ...string) (string, error) {
+		called = true
+		return "", nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not own") || called {
+		t.Fatalf("called = %t, error = %v", called, err)
 	}
 }

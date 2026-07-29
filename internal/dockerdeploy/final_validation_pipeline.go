@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/omry/reploy/internal/buildprofile"
@@ -12,10 +13,12 @@ import (
 type FinalizedBuildValidationResult struct {
 	Validation BuildValidationResult
 	Image      InspectedImageCandidate
+	Candidate  BuiltImageCandidate
 }
 
 type finalizationBuilder func(providerstore.Store, FinalizationBuildRequest, RunOptions) (BuiltImageCandidate, error)
 type finalizationInspector func(context.Context, BuiltImageCandidate, FinalizationBuildRequest) (InspectedImageCandidate, error)
+type finalizationCandidateRemover func(context.Context, BuiltImageCandidate) error
 
 func ValidateAndFinalizeBuild(
 	ctx context.Context,
@@ -28,7 +31,7 @@ func ValidateAndFinalizeBuild(
 ) (FinalizedBuildValidationResult, error) {
 	return validateAndFinalizeBuild(
 		ctx, store, layers, final, validateProfileOwner, runValidation, options,
-		BuildFinalizedImageCandidate, InspectFinalizedImageCandidate,
+		BuildFinalizedImageCandidate, InspectFinalizedImageCandidate, RemoveBuiltImageCandidate,
 	)
 }
 
@@ -42,8 +45,9 @@ func validateAndFinalizeBuild(
 	options RunOptions,
 	build finalizationBuilder,
 	inspect finalizationInspector,
+	remove finalizationCandidateRemover,
 ) (FinalizedBuildValidationResult, error) {
-	if build == nil || inspect == nil {
+	if build == nil || inspect == nil || remove == nil {
 		return FinalizedBuildValidationResult{}, fmt.Errorf("final validation pipeline requires build and inspection backends")
 	}
 	validateCtx, endValidate := buildprofile.Start(ctx, "Validate final image")
@@ -67,7 +71,13 @@ func validateAndFinalizeBuild(
 	image, err := inspect(inspectCtx, built, request)
 	endInspect(err)
 	if err != nil {
-		return FinalizedBuildValidationResult{}, fmt.Errorf("inspect finalized validated image: %w", err)
+		cleanupErr := remove(context.WithoutCancel(ctx), built)
+		return FinalizedBuildValidationResult{}, errors.Join(
+			fmt.Errorf("inspect finalized validated image: %w", err),
+			cleanupErr,
+		)
 	}
-	return FinalizedBuildValidationResult{Validation: validation, Image: image}, nil
+	return FinalizedBuildValidationResult{
+		Validation: validation, Image: image, Candidate: built,
+	}, nil
 }

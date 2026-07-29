@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,7 +73,7 @@ func TestFinalizationDockerfileAddsOnlyFixedValidationLabels(t *testing.T) {
 	}
 }
 
-func TestBuildFinalizedImageCandidateUsesOrdinaryUntaggedBuild(t *testing.T) {
+func TestBuildFinalizedImageCandidateUsesOwnedTemporaryOutputReference(t *testing.T) {
 	store, request := finalizationBuildFixture(t)
 	stubFinalizationBuildBaseReference(t, request.Source.Image.ConfigDigest)
 	original := runFinalizationBuildCommand
@@ -80,8 +81,13 @@ func TestBuildFinalizedImageCandidateUsesOrdinaryUntaggedBuild(t *testing.T) {
 	var workspace string
 	runFinalizationBuildCommand = func(command CommandSpec, _ RunOptions) error {
 		joined := strings.Join(command.Args, " ")
-		if command.Name != "docker" || len(command.Args) < 2 || command.Args[0] != "build" || command.Args[1] != "--no-cache" || strings.Contains(joined, "buildx") || strings.Contains(joined, "--tag") {
+		if command.Name != "docker" || len(command.Args) < 2 || command.Args[0] != "build" ||
+			command.Args[1] != "--no-cache" || strings.Contains(joined, "buildx") {
 			t.Fatalf("command = %#v", command)
+		}
+		outputReference := commandOption(t, command.Args, "--tag")
+		if err := validateTemporaryBuildReference(outputReference); err != nil {
+			t.Fatalf("temporary output reference = %q: %v", outputReference, err)
 		}
 		iidPath := commandOption(t, command.Args, "--iidfile")
 		workspace = filepath.Dir(iidPath)
@@ -91,11 +97,25 @@ func TestBuildFinalizedImageCandidateUsesOrdinaryUntaggedBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if candidate.ImageID != rendererDigest("4") {
+	if candidate.ImageID != rendererDigest("4") ||
+		candidate.TemporaryReference == "" {
 		t.Fatalf("candidate = %#v", candidate)
 	}
+	if candidate.Workspace != workspace {
+		t.Fatalf("candidate workspace = %q, want %q", candidate.Workspace, workspace)
+	}
+	if _, err := os.Lstat(workspace); err != nil {
+		t.Fatalf("finalization recovery workspace is unavailable: %v", err)
+	}
+	if err := removeBuiltImageCandidate(
+		t.Context(),
+		candidate,
+		func(context.Context, ...string) (string, error) { return "", nil },
+	); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Lstat(workspace); !os.IsNotExist(err) {
-		t.Fatalf("finalization workspace remains: %v", err)
+		t.Fatalf("finalization workspace remains after cleanup: %v", err)
 	}
 }
 

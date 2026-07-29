@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 
@@ -52,6 +53,7 @@ type providerBuildCompletionBackend struct {
 	assemble         func(context.Context, providerstore.Store, BuildLockAssemblyInput) (deploy.BuildLockV1, error)
 	publish          func(context.Context, *deploy.OperationLock, providerstore.Store, BuildPublicationInput) (deploy.StateV1, error)
 	publishValidated func(context.Context, *deploy.OperationLock, providerstore.Store, string, string, deploy.BuildLockV1, ValidatedBuildInputsV1) (deploy.ValidatedBuildV1, error)
+	removeFinalized  func(context.Context, BuiltImageCandidate) error
 }
 
 // CompleteProviderBuild is the canonical completion path from a materialized
@@ -69,6 +71,7 @@ func CompleteProviderBuild(
 		assemble:            AssembleBuildLock,
 		publish:             PublishBuild,
 		publishValidated:    PublishValidatedBuild,
+		removeFinalized:     RemoveBuiltImageCandidate,
 	})
 }
 
@@ -78,7 +81,7 @@ func completeProviderBuild(
 	store providerstore.Store,
 	input ProviderBuildCompletionInput,
 	backend providerBuildCompletionBackend,
-) (ProviderBuildCompletionResult, error) {
+) (result ProviderBuildCompletionResult, resultErr error) {
 	if ctx == nil {
 		return ProviderBuildCompletionResult{}, fmt.Errorf("complete provider build requires a context")
 	}
@@ -89,6 +92,7 @@ func completeProviderBuild(
 		return ProviderBuildCompletionResult{}, fmt.Errorf("complete provider build requires an operation lock")
 	}
 	if backend.validateAndFinalize == nil || backend.assemble == nil ||
+		backend.removeFinalized == nil ||
 		(input.ValidateChoices && backend.publishValidated == nil) ||
 		(!input.ValidateChoices && backend.publish == nil) {
 		return ProviderBuildCompletionResult{}, fmt.Errorf("complete provider build requires a complete backend")
@@ -118,6 +122,31 @@ func completeProviderBuild(
 	if err != nil {
 		return ProviderBuildCompletionResult{}, err
 	}
+	published := false
+	defer func() {
+		if cleanupErr := backend.removeFinalized(
+			context.WithoutCancel(ctx), finalized.Candidate,
+		); cleanupErr != nil {
+			if published {
+				outcome := "build"
+				if input.ValidateChoices {
+					outcome = "validation"
+				}
+				writeProviderBuildProgress(
+					input.RunOptions.Progress,
+					"warning: %s succeeded, but cleanup of a temporary build image is pending; Reploy will retry automatically: %v",
+					outcome,
+					cleanupErr,
+				)
+				return
+			}
+			result = ProviderBuildCompletionResult{}
+			resultErr = errors.Join(
+				resultErr,
+				fmt.Errorf("remove finalized build candidate: %w", cleanupErr),
+			)
+		}
+	}()
 	assembleCtx, endAssemble := buildprofile.Start(ctx, "Assemble build lock")
 	lock, err := backend.assemble(assembleCtx, store, BuildLockAssemblyInput{
 		BlueprintDigest: blueprintDigest, ResolvedRequest: input.ResolvedRequest,
@@ -144,6 +173,7 @@ func completeProviderBuild(
 		if !found {
 			return ProviderBuildCompletionResult{}, fmt.Errorf("validated build state disappeared")
 		}
+		published = true
 		return ProviderBuildCompletionResult{
 			State: state, Lock: lock, Validated: true, ValidatedBuild: record,
 		}, nil
@@ -157,6 +187,7 @@ func completeProviderBuild(
 	if err != nil {
 		return ProviderBuildCompletionResult{}, err
 	}
+	published = true
 	return ProviderBuildCompletionResult{State: state, Lock: lock}, nil
 }
 

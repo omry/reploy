@@ -76,7 +76,8 @@ func TestBuildMaterializationLayerReturnsUnacceptedImageID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if image.Built.ImageID != rendererDigest("f") {
+	if image.Built.ImageID != rendererDigest("f") ||
+		image.Built.TemporaryReference == "" {
 		t.Fatalf("unvalidated image = %#v", image)
 	}
 	wantKey, wantDigest, err := MaterializationAssemblyKey(request.Transaction, request.Platform)
@@ -86,8 +87,21 @@ func TestBuildMaterializationLayerReturnsUnacceptedImageID(t *testing.T) {
 	if !reflect.DeepEqual(image.AssemblyKey, wantKey) || image.AssemblyKeyDigest != wantDigest {
 		t.Fatalf("assembly identity = %#v, %q", image.AssemblyKey, image.AssemblyKeyDigest)
 	}
+	if image.Built.Workspace != workspace {
+		t.Fatalf("candidate workspace = %q, want %q", image.Built.Workspace, workspace)
+	}
+	if _, err := os.Stat(workspace); err != nil {
+		t.Fatalf("candidate recovery workspace is unavailable: %v", err)
+	}
+	if err := removeBuiltImageCandidate(
+		t.Context(),
+		image.Built,
+		func(context.Context, ...string) (string, error) { return "", nil },
+	); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Stat(workspace); !os.IsNotExist(err) {
-		t.Fatalf("private build workspace still exists: %v", err)
+		t.Fatalf("candidate workspace remains after cleanup: %v", err)
 	}
 }
 

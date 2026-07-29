@@ -1803,12 +1803,17 @@ demand-discovered normally.
 The Docker backend creates an environment-owned generation reference for each
 staged or installed environment. That reference and deployment state pin the
 exact image that one environment validated. When an ordinary `docker build`
-needs to use a locally built image in `FROM`, Reploy also creates a unique
-deployment-scoped temporary base reference, verifies that it names the exact
-expected Docker config ID, and removes it when that individual build returns.
-This private reference is not configurable, published, stored in deployment
-state, or included in any content identity. Accepted provider-layer images also
-receive an internal content-addressed
+needs to use a locally built image in `FROM`, Reploy creates unique
+deployment-scoped temporary base and output references. It verifies that the
+base reference names the exact expected Docker config ID and removes that
+reference when the individual Docker build returns. The output reference is
+created atomically by Docker, remains attached through inspection and
+validation, and is removed when the candidate is rejected or transferred to
+its accepted/publication owner. The private provider-store workspace remains
+as the exact recovery record until reference cleanup completes. These
+references are not configurable, published, stored in deployment state, or
+included in any content identity. Accepted provider-layer images also receive
+an internal content-addressed
 `reploy/cache/provider-layer:sha256-<config-digest>` reference. This retains the
 exact intermediate image required by `reploy verify` after temporary build-base
 references are removed. The reference is idempotent, contains no deployment
@@ -1833,11 +1838,15 @@ in reverse order. Direct install also locks its private source workspace so both
 install paths use the same protocol. Installed deployments are never install
 sources, and no operation acquires a source lock while holding an installed-
 destination lock, so the fixed source-before-destination order cannot cycle.
-An uncached build uses a
-collision-resistant operation-specific temporary reference and captures the
+Each materialization and finalization build uses a collision-resistant,
+operation-specific temporary output reference and captures the
 backend-reported immutable image ID directly; it never discovers the result by
-reinspecting a mutable staging or deployed tag. All output probes and validation
-address that immutable ID.
+reinspecting a mutable staging or deployed tag. All output probes and
+validation address that immutable ID. If Reploy is interrupted before normal
+cleanup, the next operation holding the same deployment lock reconstructs only
+the base/output references named by surviving `build-*` and `finalize-*`
+workspaces, removes those exact references, and then removes the scratch
+workspaces. It does not enumerate or prune unrelated Docker images.
 
 Publication is a recoverable two-phase cutover because Docker references and a
 filesystem state file cannot participate in one atomic transaction:

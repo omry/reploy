@@ -24,7 +24,9 @@ type MaterializationLayerRequest struct {
 // BuiltImageCandidate is deliberately not providers.RealizedImageV1. It has
 // not yet passed image inspection or final validation and cannot be published.
 type BuiltImageCandidate struct {
-	ImageID canonical.Digest
+	ImageID            canonical.Digest
+	TemporaryReference string
+	Workspace          string
 }
 
 type dockerImageNotFoundError struct {
@@ -77,7 +79,12 @@ func BuildMaterializationLayer(store providerstore.Store, request Materializatio
 	if err != nil {
 		return MaterializationLayerCandidate{}, err
 	}
-	defer cleanup()
+	preserveWorkspace := false
+	defer func() {
+		if !preserveWorkspace {
+			cleanup()
+		}
+	}()
 	dockerfile, err := MaterializationDockerfile(request.Transaction, prepared.Sources)
 	if err != nil {
 		return MaterializationLayerCandidate{}, err
@@ -97,6 +104,7 @@ func BuildMaterializationLayer(store providerstore.Store, request Materializatio
 		if cleanupErr := cleanupTemporaryBuildBaseReferenceAfterBuild(
 			context.WithoutCancel(ctx), cleanupBaseReference, result.Built, runMaterializationBuildReferenceDocker,
 		); cleanupErr != nil {
+			preserveWorkspace = true
 			if resultErr != nil {
 				resultErr = fmt.Errorf("%w; cleanup temporary build base reference: %v", resultErr, cleanupErr)
 			} else {
@@ -105,13 +113,30 @@ func BuildMaterializationLayer(store providerstore.Store, request Materializatio
 			}
 		}
 	}()
+	outputReference, err := prepareTemporaryBuildOutputReference(
+		ctx, store.Root(), workspace, runMaterializationBuildReferenceDocker,
+	)
+	if err != nil {
+		return MaterializationLayerCandidate{}, err
+	}
+	defer func() {
+		if resultErr == nil {
+			return
+		}
+		if cleanupErr := removeTemporaryBuildReference(
+			context.WithoutCancel(ctx), outputReference, "", runMaterializationBuildReferenceDocker,
+		); cleanupErr != nil {
+			preserveWorkspace = true
+			resultErr = fmt.Errorf("%w; cleanup temporary build output reference: %v", resultErr, cleanupErr)
+		}
+	}()
 	dockerfilePath := filepath.Join(workspace, "Dockerfile")
 	if err := os.WriteFile(dockerfilePath, dockerfile, 0o600); err != nil {
 		return MaterializationLayerCandidate{}, fmt.Errorf("write materialization Dockerfile: %w", err)
 	}
 	iidPath := filepath.Join(workspace, "result.iid")
 	command, err := MaterializationBuildCommand(MaterializationBuildPlan{
-		BaseReference: baseReference, Platform: request.Platform,
+		BaseReference: baseReference, OutputReference: outputReference, Platform: request.Platform,
 		DockerfilePath: dockerfilePath, ContextDir: prepared.Dir, IIDFile: iidPath, NoCache: options.NoCache,
 	})
 	if err != nil {
@@ -134,8 +159,12 @@ func BuildMaterializationLayer(store providerstore.Store, request Materializatio
 	if err := imageDigest.Validate(); err != nil {
 		return MaterializationLayerCandidate{}, fmt.Errorf("materialization image ID: %w", err)
 	}
+	preserveWorkspace = true
 	return MaterializationLayerCandidate{
-		Built: BuiltImageCandidate{ImageID: imageDigest}, AssemblyKey: assemblyKey, AssemblyKeyDigest: assemblyKeyDigest,
+		Built: BuiltImageCandidate{
+			ImageID: imageDigest, TemporaryReference: outputReference, Workspace: workspace,
+		},
+		AssemblyKey: assemblyKey, AssemblyKeyDigest: assemblyKeyDigest,
 	}, nil
 }
 

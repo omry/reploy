@@ -14,25 +14,17 @@ const verifiedProviderLayerRepository = "reploy/cache/provider-layer"
 // content-addressed Docker reference. The build lock records the image config
 // digest, and reploy verify must be able to inspect that exact image after the
 // temporary build-base reference is removed during finalization.
-func RetainVerifiedProviderLayer(ctx context.Context, image providers.RealizedImageV1) error {
-	return retainVerifiedProviderLayer(ctx, image, runDockerOutput)
-}
-
-// Transient provider graphs, such as the graph that prepares a local-source
-// build toolchain, are not part of the published environment build lock and
-// therefore must not create persistent verification-cache anchors.
-func skipTransientProviderLayerRetention(
+func RetainVerifiedProviderLayer(
 	ctx context.Context,
-	_ providers.RealizedImageV1,
+	candidate BuiltImageCandidate,
+	image providers.RealizedImageV1,
 ) error {
-	if ctx == nil {
-		return fmt.Errorf("skip transient provider layer retention requires a context")
-	}
-	return ctx.Err()
+	return retainVerifiedProviderLayer(ctx, candidate, image, runDockerOutput)
 }
 
 func retainVerifiedProviderLayer(
 	ctx context.Context,
+	candidate BuiltImageCandidate,
 	image providers.RealizedImageV1,
 	run dockerOutputRunner,
 ) error {
@@ -59,7 +51,7 @@ func retainVerifiedProviderLayer(
 				image.ConfigDigest,
 			)
 		}
-		return nil
+		return removeBuiltImageCandidate(ctx, candidate, run)
 	}
 	if !dockerImageInspectReportsMissing(err) {
 		return fmt.Errorf("inspect provider layer cache reference %q: %w", reference, err)
@@ -69,7 +61,7 @@ func retainVerifiedProviderLayer(
 	}
 	output, inspectErr := run(ctx, "image", "inspect", "--format", "{{.Id}}", reference)
 	if inspectErr == nil && strings.TrimSpace(output) == string(image.ConfigDigest) {
-		return nil
+		return removeBuiltImageCandidate(ctx, candidate, run)
 	}
 	cleanupErr := removeExactEnvironmentImageReference(ctx, image, reference, run)
 	if inspectErr != nil {

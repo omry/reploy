@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -136,6 +137,43 @@ func TestCleanupTemporaryBuildBaseReferenceRemovesCandidateWhenUntagFails(t *tes
 	}
 }
 
+func TestCleanupTemporaryBuildBaseReferencePreservesWorkspaceForRecovery(t *testing.T) {
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := store.NewWorkspace("build-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference, err := temporaryBuildOutputReference(store.Root(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := BuiltImageCandidate{
+		ImageID:            rendererDigest("4"),
+		TemporaryReference: reference,
+		Workspace:          workspace,
+	}
+	err = cleanupTemporaryBuildBaseReferenceAfterBuild(
+		t.Context(),
+		func(context.Context) error { return errors.New("injected base untag failure") },
+		candidate,
+		func(_ context.Context, args ...string) (string, error) {
+			if args[1] == "ls" {
+				return string(candidate.ImageID), nil
+			}
+			return "", nil
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "base untag failure") {
+		t.Fatalf("error = %v", err)
+	}
+	if _, err := os.Lstat(workspace); err != nil {
+		t.Fatalf("recovery workspace was removed: %v", err)
+	}
+}
+
 func stubMaterializationBuildBaseReference(t *testing.T, expected canonical.Digest) {
 	t.Helper()
 	original := runMaterializationBuildReferenceDocker
@@ -152,10 +190,10 @@ func stubFinalizationBuildBaseReference(t *testing.T, expected canonical.Digest)
 
 func statefulTemporaryBuildReferenceRunner(t *testing.T, expected canonical.Digest, calls *[][]string) dockerOutputRunner {
 	t.Helper()
-	created := false
+	created := map[string]bool{}
 	t.Cleanup(func() {
-		if created {
-			t.Errorf("temporary build base reference leaked from test")
+		if len(created) != 0 {
+			t.Errorf("temporary build references leaked from test: %#v", created)
 		}
 	})
 	return func(_ context.Context, args ...string) (string, error) {
@@ -167,7 +205,8 @@ func statefulTemporaryBuildReferenceRunner(t *testing.T, expected canonical.Dige
 		}
 		switch args[1] {
 		case "ls":
-			if created {
+			reference := args[len(args)-1]
+			if created[reference] {
 				return string(expected) + "\n", nil
 			}
 			return "", nil
@@ -175,18 +214,19 @@ func statefulTemporaryBuildReferenceRunner(t *testing.T, expected canonical.Dige
 			if args[2] != string(expected) || !strings.HasPrefix(args[3], temporaryBuildReferencePrefix) {
 				t.Fatalf("temporary tag args = %v", args)
 			}
-			created = true
+			created[args[3]] = true
 			return "", nil
 		case "inspect":
-			if !created {
+			reference := args[len(args)-1]
+			if !created[reference] {
 				t.Fatal("inspected temporary reference before creating it")
 			}
 			return string(expected) + "\n", nil
 		case "rm":
-			if !created {
+			if !created[args[2]] {
 				t.Fatal("removed temporary reference before creating it")
 			}
-			created = false
+			delete(created, args[2])
 			return "", nil
 		default:
 			t.Fatalf("unexpected Docker args: %v", args)

@@ -66,6 +66,14 @@ func prepareTemporaryBuildBaseReference(
 }
 
 func temporaryBuildBaseReference(storeRoot string, workspace string) (string, error) {
+	return temporaryBuildReference(storeRoot, workspace, "")
+}
+
+func temporaryBuildOutputReference(storeRoot string, workspace string) (string, error) {
+	return temporaryBuildReference(storeRoot, workspace, "output")
+}
+
+func temporaryBuildReference(storeRoot string, workspace string, role string) (string, error) {
 	if storeRoot == "" || !filepath.IsAbs(storeRoot) || filepath.Clean(storeRoot) != storeRoot {
 		return "", fmt.Errorf("temporary build base reference store root must be absolute and clean")
 	}
@@ -76,12 +84,82 @@ func temporaryBuildBaseReference(storeRoot string, workspace string) (string, er
 	if err != nil || relative == "." || filepath.Dir(relative) != "." || strings.HasPrefix(relative, "..") {
 		return "", fmt.Errorf("temporary build base reference workspace must belong to the deployment provider store")
 	}
-	directoryHash, err := pathIdentityHash(storeRoot)
+	repository, err := temporaryBuildRepository(storeRoot)
 	if err != nil {
 		return "", fmt.Errorf("temporary build base reference deployment identity: %w", err)
 	}
 	suffix := dockerNameSlug(filepath.Base(workspace), "build")
-	return temporaryBuildReferencePrefix + directoryHash + ":" + suffix, nil
+	if role != "" {
+		suffix += "-" + dockerNameSlug(role, "output")
+	}
+	return repository + ":" + suffix, nil
+}
+
+func temporaryBuildRepository(storeRoot string) (string, error) {
+	directoryHash, err := pathIdentityHash(storeRoot)
+	if err != nil {
+		return "", err
+	}
+	return temporaryBuildReferencePrefix + directoryHash, nil
+}
+
+func validateTemporaryBuildReference(reference string) error {
+	if reference == "" || strings.TrimSpace(reference) != reference ||
+		!strings.HasPrefix(reference, temporaryBuildReferencePrefix) {
+		return fmt.Errorf("temporary build reference is not Reploy-owned")
+	}
+	name, tag, found := strings.Cut(reference, ":")
+	if !found || name == temporaryBuildReferencePrefix || tag == "" ||
+		strings.Contains(tag, ":") {
+		return fmt.Errorf("temporary build reference is malformed")
+	}
+	deployment := strings.TrimPrefix(name, temporaryBuildReferencePrefix)
+	if len(deployment) != identityHashLength || strings.Contains(deployment, "/") {
+		return fmt.Errorf("temporary build reference has an invalid deployment identity")
+	}
+	for _, character := range deployment {
+		if !strings.ContainsRune("0123456789abcdef", character) {
+			return fmt.Errorf("temporary build reference has an invalid deployment identity")
+		}
+	}
+	if len(tag) > 128 {
+		return fmt.Errorf("temporary build reference tag is too long")
+	}
+	for index, character := range tag {
+		valid := character >= 'a' && character <= 'z' ||
+			character >= '0' && character <= '9' ||
+			index > 0 && strings.ContainsRune("_.-", character)
+		if !valid {
+			return fmt.Errorf("temporary build reference has an invalid tag")
+		}
+	}
+	return nil
+}
+
+func prepareTemporaryBuildOutputReference(
+	ctx context.Context,
+	storeRoot string,
+	workspace string,
+	run dockerOutputRunner,
+) (string, error) {
+	if ctx == nil {
+		return "", fmt.Errorf("prepare temporary build output reference requires a context")
+	}
+	if run == nil {
+		return "", fmt.Errorf("prepare temporary build output reference requires a Docker runner")
+	}
+	reference, err := temporaryBuildOutputReference(storeRoot, workspace)
+	if err != nil {
+		return "", err
+	}
+	output, err := run(ctx, "image", "ls", "--quiet", "--no-trunc", reference)
+	if err != nil {
+		return "", fmt.Errorf("check temporary build output reference: %w", err)
+	}
+	if strings.TrimSpace(output) != "" {
+		return "", fmt.Errorf("temporary build output reference unexpectedly already exists")
+	}
+	return reference, nil
 }
 
 func removeTemporaryBuildBaseReference(
@@ -90,25 +168,37 @@ func removeTemporaryBuildBaseReference(
 	expectedConfigID string,
 	run dockerOutputRunner,
 ) error {
+	return removeTemporaryBuildReference(ctx, reference, expectedConfigID, run)
+}
+
+func removeTemporaryBuildReference(
+	ctx context.Context,
+	reference string,
+	expectedConfigID string,
+	run dockerOutputRunner,
+) error {
 	if ctx == nil {
-		return fmt.Errorf("remove temporary build base reference requires a context")
+		return fmt.Errorf("remove temporary build reference requires a context")
 	}
-	if !strings.HasPrefix(reference, temporaryBuildReferencePrefix) || strings.TrimSpace(reference) != reference {
-		return fmt.Errorf("refuse to remove an unowned temporary build base reference")
+	if err := validateTemporaryBuildReference(reference); err != nil {
+		return fmt.Errorf("refuse to remove temporary build reference: %w", err)
+	}
+	if run == nil {
+		return fmt.Errorf("remove temporary build reference requires a Docker runner")
 	}
 	output, err := run(ctx, "image", "ls", "--quiet", "--no-trunc", reference)
 	if err != nil {
-		return fmt.Errorf("inspect temporary build base reference for removal: %w", err)
+		return fmt.Errorf("inspect temporary build reference for removal: %w", err)
 	}
 	ids := strings.Fields(output)
 	if len(ids) == 0 {
 		return nil
 	}
-	if len(ids) != 1 || ids[0] != expectedConfigID {
-		return fmt.Errorf("temporary build base reference no longer names its expected config ID")
+	if len(ids) != 1 || expectedConfigID != "" && ids[0] != expectedConfigID {
+		return fmt.Errorf("temporary build reference no longer names its expected config ID")
 	}
 	if _, err := run(ctx, "image", "rm", reference); err != nil {
-		return fmt.Errorf("remove temporary build base reference: %w", err)
+		return fmt.Errorf("remove temporary build reference: %w", err)
 	}
 	return nil
 }
@@ -126,6 +216,10 @@ func cleanupTemporaryBuildBaseReferenceAfterBuild(
 	if candidate.ImageID == "" {
 		return cleanupErr
 	}
+	// The workspace is the recovery record for both the base and output
+	// references. A base-reference cleanup failure must retain that record even
+	// when the output reference can be removed immediately.
+	candidate.Workspace = ""
 	if removeErr := removeBuiltImageCandidate(ctx, candidate, run); removeErr != nil {
 		return fmt.Errorf("%v; remove unaccepted built image: %w", cleanupErr, removeErr)
 	}

@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"reflect"
@@ -16,12 +17,17 @@ import (
 	"github.com/omry/reploy/internal/providerstore"
 )
 
+func ignoreFinalizedCandidateRemoval(context.Context, BuiltImageCandidate) error {
+	return nil
+}
+
 func TestCompleteProviderBuildOrdersValidationAssemblyAndPublication(t *testing.T) {
 	input, operation, store := providerBuildCompletionFixture(t)
 	defer operation.Unlock()
 	input.NoCache = true
 	validationReference := providerstore.StoreObjectRef{Kind: providerstore.ValidationRecordKind, Digest: rendererDigest("a")}
 	finalImage := providers.RealizedImageV1{Digest: rendererDigest("b"), ConfigDigest: rendererDigest("b"), RootFSSubject: input.Validation.Final.Image.Image.RootFSSubject}
+	finalCandidate := BuiltImageCandidate{ImageID: finalImage.ConfigDigest}
 	wantLock := deploy.BuildLockV1{Schema: deploy.BuildLockSchemaV1}
 	wantState := deploy.StateV1{
 		Schema: deploy.StateSchemaV1, Blueprint: testResolvedBlueprintV1(t, input.Document),
@@ -38,6 +44,7 @@ func TestCompleteProviderBuildOrdersValidationAssemblyAndPublication(t *testing.
 			return FinalizedBuildValidationResult{
 				Validation: BuildValidationResult{Layers: []PublishedImageValidation{}, Final: PublishedImageValidation{Reference: validationReference}},
 				Image:      InspectedImageCandidate{Image: finalImage},
+				Candidate:  finalCandidate,
 			}, nil
 		},
 		assemble: func(_ context.Context, gotStore providerstore.Store, got BuildLockAssemblyInput) (deploy.BuildLockV1, error) {
@@ -54,13 +61,70 @@ func TestCompleteProviderBuildOrdersValidationAssemblyAndPublication(t *testing.
 			}
 			return wantState, nil
 		},
+		removeFinalized: func(_ context.Context, candidate BuiltImageCandidate) error {
+			order = append(order, "cleanup")
+			if candidate != finalCandidate {
+				t.Fatalf("finalized candidate cleanup = %#v", candidate)
+			}
+			return nil
+		},
 	}
 	result, err := completeProviderBuild(t.Context(), operation, store, input, backend)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(order, []string{"validate", "assemble", "publish"}) || !reflect.DeepEqual(result, ProviderBuildCompletionResult{State: wantState, Lock: wantLock}) {
+	if !reflect.DeepEqual(order, []string{"validate", "assemble", "publish", "cleanup"}) || !reflect.DeepEqual(result, ProviderBuildCompletionResult{State: wantState, Lock: wantLock}) {
 		t.Fatalf("order/result = %#v/%#v", order, result)
+	}
+}
+
+func TestCompleteProviderBuildWarnsWhenPublishedFinalCandidateCleanupFails(t *testing.T) {
+	input, operation, store := providerBuildCompletionFixture(t)
+	defer operation.Unlock()
+	cause := errors.New("injected final candidate cleanup failure")
+	var progress bytes.Buffer
+	input.RunOptions.Progress = &progress
+	finalImage := providers.RealizedImageV1{
+		Digest: rendererDigest("b"), ConfigDigest: rendererDigest("b"),
+		RootFSSubject: input.Validation.Final.Image.Image.RootFSSubject,
+	}
+	wantLock := deploy.BuildLockV1{Schema: deploy.BuildLockSchemaV1}
+	wantState := deploy.StateV1{Schema: deploy.StateSchemaV1}
+	result, err := completeProviderBuild(
+		t.Context(),
+		operation,
+		store,
+		input,
+		providerBuildCompletionBackend{
+			validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, RunOptions) (FinalizedBuildValidationResult, error) {
+				return FinalizedBuildValidationResult{
+					Image:     InspectedImageCandidate{Image: finalImage},
+					Candidate: BuiltImageCandidate{ImageID: finalImage.ConfigDigest},
+				}, nil
+			},
+			assemble: func(context.Context, providerstore.Store, BuildLockAssemblyInput) (deploy.BuildLockV1, error) {
+				return wantLock, nil
+			},
+			publish: func(context.Context, *deploy.OperationLock, providerstore.Store, BuildPublicationInput) (deploy.StateV1, error) {
+				return wantState, nil
+			},
+			removeFinalized: func(context.Context, BuiltImageCandidate) error {
+				return cause
+			},
+		},
+	)
+	if err != nil ||
+		!reflect.DeepEqual(result, ProviderBuildCompletionResult{
+			State: wantState, Lock: wantLock,
+		}) ||
+		!strings.Contains(progress.String(), "warning: build succeeded") ||
+		!strings.Contains(progress.String(), cause.Error()) {
+		t.Fatalf(
+			"result = %#v, error = %v, progress = %q",
+			result,
+			err,
+			progress.String(),
+		)
 	}
 }
 
@@ -68,6 +132,8 @@ func TestCompleteProviderBuildValidationPublishesCandidateWithoutChangingCurrent
 	input, operation, store := providerBuildCompletionFixture(t)
 	defer operation.Unlock()
 	input.ValidateChoices = true
+	var progress bytes.Buffer
+	input.RunOptions.Progress = &progress
 	validationReference := providerstore.StoreObjectRef{
 		Kind: providerstore.ValidationRecordKind, Digest: rendererDigest("a"),
 	}
@@ -92,6 +158,7 @@ func TestCompleteProviderBuildValidationPublishesCandidateWithoutChangingCurrent
 		Schema:         deploy.ValidatedBuildSchemaV1,
 		PendingCleanup: []deploy.ValidatedBuildReferenceV1{{ImageReference: "superseded"}},
 	}
+	cleanupCause := errors.New("injected validation candidate cleanup failure")
 	publishedCurrent := false
 	result, err := completeProviderBuild(t.Context(), operation, store, input, providerBuildCompletionBackend{
 		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, RunOptions) (FinalizedBuildValidationResult, error) {
@@ -113,13 +180,23 @@ func TestCompleteProviderBuildValidationPublishesCandidateWithoutChangingCurrent
 		publishValidated: func(context.Context, *deploy.OperationLock, providerstore.Store, string, string, deploy.BuildLockV1, ValidatedBuildInputsV1) (deploy.ValidatedBuildV1, error) {
 			return record, nil
 		},
+		removeFinalized: func(context.Context, BuiltImageCandidate) error {
+			return cleanupCause
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if publishedCurrent || !result.Validated || !reflect.DeepEqual(result.State, state) ||
-		!reflect.DeepEqual(result.ValidatedBuild, record) {
-		t.Fatalf("published-current=%v result=%#v", publishedCurrent, result)
+		!reflect.DeepEqual(result.ValidatedBuild, record) ||
+		!strings.Contains(progress.String(), "warning: validation succeeded") ||
+		!strings.Contains(progress.String(), cleanupCause.Error()) {
+		t.Fatalf(
+			"published-current=%v result=%#v progress=%q",
+			publishedCurrent,
+			result,
+			progress.String(),
+		)
 	}
 }
 
@@ -141,6 +218,7 @@ func TestCompleteProviderBuildDoesNotAssembleOrPublishAfterValidationFailure(t *
 			published = true
 			return deploy.StateV1{}, nil
 		},
+		removeFinalized: ignoreFinalizedCandidateRemoval,
 	})
 	if !errors.Is(err, want) || assembled || published {
 		t.Fatalf("error=%v assembled=%v published=%v", err, assembled, published)
@@ -152,9 +230,14 @@ func TestCompleteProviderBuildDoesNotPublishAfterAssemblyFailure(t *testing.T) {
 	defer operation.Unlock()
 	want := errors.New("lock assembly failed")
 	published := false
+	candidate := BuiltImageCandidate{
+		ImageID:            rendererDigest("c"),
+		TemporaryReference: temporaryBuildReferencePrefix + "12345678:finalize-output",
+	}
+	removed := false
 	_, err := completeProviderBuild(t.Context(), operation, store, input, providerBuildCompletionBackend{
 		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, RunOptions) (FinalizedBuildValidationResult, error) {
-			return FinalizedBuildValidationResult{}, nil
+			return FinalizedBuildValidationResult{Candidate: candidate}, nil
 		},
 		assemble: func(context.Context, providerstore.Store, BuildLockAssemblyInput) (deploy.BuildLockV1, error) {
 			return deploy.BuildLockV1{}, want
@@ -163,9 +246,13 @@ func TestCompleteProviderBuildDoesNotPublishAfterAssemblyFailure(t *testing.T) {
 			published = true
 			return deploy.StateV1{}, nil
 		},
+		removeFinalized: func(cleanupContext context.Context, got BuiltImageCandidate) error {
+			removed = cleanupContext.Err() == nil && got == candidate
+			return nil
+		},
 	})
-	if !errors.Is(err, want) || published {
-		t.Fatalf("error=%v published=%v", err, published)
+	if !errors.Is(err, want) || published || !removed {
+		t.Fatalf("error=%v published=%v removed=%v", err, published, removed)
 	}
 }
 
@@ -187,6 +274,7 @@ func TestCompleteProviderBuildRejectsValidationPlanDriftBeforeBackendWork(t *tes
 			calls++
 			return deploy.StateV1{}, nil
 		},
+		removeFinalized: ignoreFinalizedCandidateRemoval,
 	})
 	if err == nil || !strings.Contains(err.Error(), "validation layer") || calls != 0 {
 		t.Fatalf("error=%v calls=%d", err, calls)
@@ -211,6 +299,7 @@ func TestCompleteProviderBuildRejectsRuntimePlanDriftBeforeBackendWork(t *testin
 			calls++
 			return deploy.StateV1{}, nil
 		},
+		removeFinalized: ignoreFinalizedCandidateRemoval,
 	})
 	if err == nil || !strings.Contains(err.Error(), "validation layer") || calls != 0 {
 		t.Fatalf("error=%v calls=%d", err, calls)
@@ -240,6 +329,7 @@ func TestCompleteProviderBuildRejectsDocumentRequestDriftBeforeBackendWork(t *te
 			calls++
 			return deploy.StateV1{}, nil
 		},
+		removeFinalized: ignoreFinalizedCandidateRemoval,
 	})
 	if err == nil || !strings.Contains(err.Error(), "resolved request does not match") || calls != 0 {
 		t.Fatalf("error=%v calls=%d", err, calls)
