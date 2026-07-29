@@ -164,6 +164,9 @@ func currentShellRunTestBackend(t *testing.T, dir string, current CurrentBuild, 
 			*order = append(*order, "run id")
 			return "run-0000000000000001", nil
 		},
+		acquireLease: func(operation *deploy.OperationLock, id string) (*deploy.QueueEntryLeaseV1, error) {
+			return operation.AcquireLiveRunLeaseV1(id)
+		},
 		await: func(_ context.Context, gotDir string, operation *deploy.OperationLock, candidate deploy.LiveRunV1, wait bool, _ io.Writer) (*deploy.OperationLock, error) {
 			*order = append(*order, "admit")
 			if gotDir != filepath.Clean(dir) || candidate.ID != "run-0000000000000001" || candidate.Kind != deploy.LiveRunKindShellV1 || candidate.Name != "shell" || candidate.GenerationReference != current.Generation.Reference || candidate.Exclusive || candidate.WritableMount != "" {

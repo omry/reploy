@@ -61,6 +61,19 @@ var colorRuntimeGOOS = runtime.GOOS
 
 type temporaryCommandRunner func(CommandSpec, RunOptions) error
 
+type temporaryContainerCleanupFailureV1 struct {
+	runErr     error
+	cleanupErr error
+}
+
+func (failure *temporaryContainerCleanupFailureV1) Error() string {
+	return fmt.Sprintf("%v; cleanup failed: %v", failure.runErr, failure.cleanupErr)
+}
+
+func (failure *temporaryContainerCleanupFailureV1) Unwrap() []error {
+	return []error{failure.runErr, failure.cleanupErr}
+}
+
 func Shell(options ShellOptions) error {
 	if options.Dir == "" {
 		options.Dir = DefaultDeploymentDir
@@ -195,7 +208,7 @@ func runTemporaryContainerCommand(run temporaryCommandRunner, runSpec CommandSpe
 		}
 	}
 	if runErr != nil && cleanupErr != nil {
-		return fmt.Errorf("%w; cleanup failed: %v", runErr, cleanupErr)
+		return &temporaryContainerCleanupFailureV1{runErr: runErr, cleanupErr: cleanupErr}
 	}
 	if runErr != nil {
 		return runErr

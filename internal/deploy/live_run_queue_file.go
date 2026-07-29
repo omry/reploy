@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 const liveRunQueueFilenameV1 = "live-runs.json"
@@ -44,6 +45,10 @@ func (lock *OperationLock) AdmitLiveRunV1(candidate LiveRunV1, wait bool) (LiveR
 	if err != nil {
 		return "", err
 	}
+	candidate.BootSession, err = CurrentBootSessionIDV1()
+	if err != nil {
+		return "", err
+	}
 	queue, _, err := readLiveRunQueuePathV1(path)
 	if err != nil {
 		return "", err
@@ -65,6 +70,10 @@ func (lock *OperationLock) AdmitControlMarkerV1(candidate ControlMarkerV1, wait 
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
 	path, err := lock.liveRunQueuePathLockedV1()
+	if err != nil {
+		return "", err
+	}
+	candidate.BootSession, err = CurrentBootSessionIDV1()
 	if err != nil {
 		return "", err
 	}
@@ -222,56 +231,236 @@ func (lock *OperationLock) CancelWaitingLiveRunsV1() (LiveRunQueueV1, []LiveRunV
 	return updated, canceled, nil
 }
 
-// RecoverAbandonedControlMarkerV1 removes lifecycle queue entries whose owner
-// no longer holds its kernel-backed lease. It is valid while the deployment
-// operation lock is held and recovers waiting, ready, and active entries.
-func (lock *OperationLock) RecoverAbandonedControlMarkerV1() (ControlMarkerV1, bool, error) {
+// RecoverLiveRunQueueV1 removes entries that cannot belong to a live owner in
+// the current host boot session. It never replays work. Container identities
+// are transferred atomically into non-scheduling cleanup inventory.
+func (lock *OperationLock) RecoverLiveRunQueueV1() (LiveRunRecoveryV1, error) {
 	if lock == nil {
-		return ControlMarkerV1{}, false, fmt.Errorf("recover abandoned control marker requires an operation lock")
+		return LiveRunRecoveryV1{}, fmt.Errorf("recover live run queue requires an operation lock")
+	}
+	session, err := CurrentBootSessionIDV1()
+	if err != nil {
+		return LiveRunRecoveryV1{}, err
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
 	path, err := lock.liveRunQueuePathLockedV1()
 	if err != nil {
-		return ControlMarkerV1{}, false, err
+		return LiveRunRecoveryV1{}, err
+	}
+	return recoverLiveRunQueuePathV1(path, session)
+}
+
+func recoverLiveRunQueuePathV1(path string, session string) (LiveRunRecoveryV1, error) {
+	if err := validateBootSessionIDV1(session); err != nil {
+		return LiveRunRecoveryV1{}, err
+	}
+	queue, _, err := readLiveRunQueuePathV1(path)
+	if err != nil {
+		return LiveRunRecoveryV1{}, err
 	}
 	directory := filepath.Dir(path)
-	first := ControlMarkerV1{}
-	found := false
-	for {
-		queue, _, err := readLiveRunQueuePathV1(path)
-		if err != nil {
-			return ControlMarkerV1{}, false, err
-		}
-		removedOne := false
-		for _, marker := range ControlMarkersV1(queue) {
-			abandoned, err := controlLeaseAbandonedV1(directory, marker.ID)
+	result := cloneLiveRunQueueV1(queue)
+	result.Runs = result.Runs[:0]
+	recovery := LiveRunRecoveryV1{Removed: []RecoveredLiveRunV1{}}
+	for _, entry := range queue.Runs {
+		reason := LiveRunRecoveryReasonV1("")
+		switch {
+		case entry.BootSession == "":
+			reason = LiveRunRecoveryLegacyEntryV1
+		case entry.BootSession != session:
+			reason = LiveRunRecoveryPriorSessionV1
+		default:
+			abandoned, err := queueEntryLeaseAbandonedV1(directory, entry.ID)
 			if err != nil {
-				return ControlMarkerV1{}, false, err
+				return LiveRunRecoveryV1{}, err
 			}
-			if !abandoned {
-				continue
+			if abandoned {
+				reason = LiveRunRecoveryAbandonedOwnerV1
 			}
-			updated, removed, err := RemoveControlMarkerV1(queue, marker.ID)
-			if err != nil {
-				return ControlMarkerV1{}, false, err
-			}
-			if !removed {
-				return ControlMarkerV1{}, false, fmt.Errorf("abandoned lifecycle queue entry %q disappeared while the operation lock was held", marker.ID)
-			}
-			if err := commitLiveRunQueuePathV1(path, updated); err != nil {
-				return ControlMarkerV1{}, false, err
-			}
-			if !found {
-				first, found = marker, true
-			}
-			removedOne = true
-			break
 		}
-		if !removedOne {
-			return first, found, nil
+		if reason == "" {
+			result.Runs = append(result.Runs, entry)
+			continue
+		}
+		if reason != LiveRunRecoveryAbandonedOwnerV1 {
+			if err := removeQueueEntryLeasePathV1(filepath.Join(directory, entry.ID+controlLeaseSuffixV1)); err != nil {
+				return LiveRunRecoveryV1{}, err
+			}
+		}
+		recovery.Removed = append(recovery.Removed, RecoveredLiveRunV1{Run: entry, Reason: reason})
+		if entry.Container != "" {
+			result.Cleanup = append(result.Cleanup, LiveRunContainerCleanupV1{
+				Container: entry.Container,
+				RunID:     entry.ID,
+				Kind:      entry.Kind,
+				Name:      entry.Name,
+				Reason:    reason,
+			})
 		}
 	}
+	promoteLiveRunsV1(&result)
+	sort.Slice(result.Cleanup, func(i, j int) bool {
+		return result.Cleanup[i].Container < result.Cleanup[j].Container
+	})
+	result.Cleanup = deduplicateLiveRunCleanupV1(result.Cleanup)
+	if err := ValidateLiveRunQueueV1(result); err != nil {
+		return LiveRunRecoveryV1{}, fmt.Errorf("validate recovered live run queue: %w", err)
+	}
+	if len(recovery.Removed) != 0 {
+		if err := commitLiveRunQueuePathV1(path, result); err != nil {
+			return LiveRunRecoveryV1{}, err
+		}
+	}
+	retained := make(map[string]bool, len(result.Runs))
+	for _, entry := range result.Runs {
+		retained[entry.ID] = true
+	}
+	if err := removeOrphanedQueueEntryLeasesV1(directory, retained); err != nil {
+		return LiveRunRecoveryV1{}, err
+	}
+	return recovery, nil
+}
+
+func removeOrphanedQueueEntryLeasesV1(directory string, retained map[string]bool) error {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return fmt.Errorf("list queue-entry leases for recovery: %w", err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if len(name) <= len(controlLeaseSuffixV1) ||
+			name[len(name)-len(controlLeaseSuffixV1):] != controlLeaseSuffixV1 {
+			continue
+		}
+		id := name[:len(name)-len(controlLeaseSuffixV1)]
+		if validateQueueEntryLeaseIDV1(id) != nil || retained[id] {
+			continue
+		}
+		if _, err := queueEntryLeaseAbandonedV1(directory, id); err != nil {
+			return fmt.Errorf("recover orphaned queue-entry lease %q: %w", id, err)
+		}
+	}
+	return nil
+}
+
+func deduplicateLiveRunCleanupV1(cleanup []LiveRunContainerCleanupV1) []LiveRunContainerCleanupV1 {
+	if len(cleanup) < 2 {
+		return cleanup
+	}
+	result := cleanup[:1]
+	for _, entry := range cleanup[1:] {
+		if entry.Container == result[len(result)-1].Container {
+			continue
+		}
+		result = append(result, entry)
+	}
+	return result
+}
+
+func (lock *OperationLock) CompleteLiveRunContainerCleanupV1(container string) (bool, error) {
+	if lock == nil {
+		return false, fmt.Errorf("complete live run container cleanup requires an operation lock")
+	}
+	if !safeRecoveryIdentity(container) {
+		return false, fmt.Errorf("cleanup container must be nonempty safe text")
+	}
+	lock.mutex.Lock()
+	defer lock.mutex.Unlock()
+	path, err := lock.liveRunQueuePathLockedV1()
+	if err != nil {
+		return false, err
+	}
+	queue, _, err := readLiveRunQueuePathV1(path)
+	if err != nil {
+		return false, err
+	}
+	for index, entry := range queue.Cleanup {
+		if entry.Container != container {
+			continue
+		}
+		queue.Cleanup = append(queue.Cleanup[:index], queue.Cleanup[index+1:]...)
+		if err := commitLiveRunQueuePathV1(path, queue); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// CompleteLiveRunWithContainerCleanupV1 atomically removes a completed live
+// run while retaining its exact container identity for a later cleanup retry.
+func (lock *OperationLock) CompleteLiveRunWithContainerCleanupV1(id string, container string) (bool, error) {
+	if lock == nil {
+		return false, fmt.Errorf("complete live run with container cleanup requires an operation lock")
+	}
+	if err := ValidateLiveRunIDV1(id); err != nil {
+		return false, err
+	}
+	if !safeRecoveryIdentity(container) {
+		return false, fmt.Errorf("cleanup container must be nonempty safe text")
+	}
+	lock.mutex.Lock()
+	defer lock.mutex.Unlock()
+	path, err := lock.liveRunQueuePathLockedV1()
+	if err != nil {
+		return false, err
+	}
+	queue, _, err := readLiveRunQueuePathV1(path)
+	if err != nil {
+		return false, err
+	}
+	run := LiveRunV1{}
+	for _, entry := range queue.Runs {
+		if entry.ID == id && entry.Kind != LiveRunKindControlV1 {
+			run = entry
+			break
+		}
+	}
+	updated, removed, err := RemoveLiveRunV1(queue, id)
+	if err != nil || !removed {
+		return removed, err
+	}
+	if run.Container != "" && run.Container != container {
+		return false, fmt.Errorf("live run %q names container %q, not cleanup container %q", id, run.Container, container)
+	}
+	updated.Cleanup = append(updated.Cleanup, LiveRunContainerCleanupV1{
+		Container: container,
+		RunID:     run.ID,
+		Kind:      run.Kind,
+		Name:      run.Name,
+		Reason:    LiveRunRecoveryCleanupFailedV1,
+	})
+	sort.Slice(updated.Cleanup, func(i, j int) bool {
+		return updated.Cleanup[i].Container < updated.Cleanup[j].Container
+	})
+	updated.Cleanup = deduplicateLiveRunCleanupV1(updated.Cleanup)
+	if err := commitLiveRunQueuePathV1(path, updated); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// RecoverAbandonedControlMarkerV1 removes lifecycle queue entries whose owner
+// no longer holds its kernel-backed lease. It is valid while the deployment
+// operation lock is held and recovers waiting, ready, and active entries.
+func (lock *OperationLock) RecoverAbandonedControlMarkerV1() (ControlMarkerV1, bool, error) {
+	recovery, err := lock.RecoverLiveRunQueueV1()
+	if err != nil {
+		return ControlMarkerV1{}, false, err
+	}
+	for _, removed := range recovery.Removed {
+		if removed.Run.Kind == LiveRunKindControlV1 {
+			return ControlMarkerV1{
+				ID:                  removed.Run.ID,
+				Operation:           ControlOperationV1(removed.Run.Name),
+				GenerationReference: removed.Run.GenerationReference,
+				BootSession:         removed.Run.BootSession,
+				Status:              removed.Run.Status,
+			}, true, nil
+		}
+	}
+	return ControlMarkerV1{}, false, nil
 }
 
 func (lock *OperationLock) liveRunQueuePathLockedV1() (string, error) {
@@ -308,7 +497,7 @@ func commitLiveRunQueuePathV1(path string, queue LiveRunQueueV1) error {
 	if err != nil {
 		return err
 	}
-	if len(queue.Runs) == 0 {
+	if len(queue.Runs) == 0 && len(queue.Cleanup) == 0 {
 		return removeLiveRunQueuePathV1(path)
 	}
 	if err := writeAtomicStateFile(path, content, 0o600); err != nil {

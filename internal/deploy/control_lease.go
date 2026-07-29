@@ -10,25 +10,40 @@ import (
 
 const controlLeaseSuffixV1 = ".lease"
 
-// ControlLeaseV1 proves that the process which queued a lifecycle operation is
-// still alive. The kernel releases the advisory lock if that process exits,
-// even when it cannot run normal cleanup.
-type ControlLeaseV1 struct {
+// QueueEntryLeaseV1 proves that the process which queued an operation is still
+// alive. The kernel releases the advisory lock if that process exits, even
+// when it cannot run normal cleanup.
+type QueueEntryLeaseV1 struct {
 	file     *os.File
 	path     string
 	mutex    sync.Mutex
 	released bool
 }
 
+// ControlLeaseV1 is retained as the public lifecycle-operation name.
+type ControlLeaseV1 = QueueEntryLeaseV1
+
 // AcquireControlLeaseV1 creates and holds the ownership lease for a control
 // marker. The deployment operation lock prevents marker/lease publication from
 // racing queue recovery.
 func (lock *OperationLock) AcquireControlLeaseV1(id string) (*ControlLeaseV1, error) {
-	if lock == nil {
-		return nil, fmt.Errorf("acquire control lease requires an operation lock")
-	}
 	if err := ValidateControlMarkerIDV1(id); err != nil {
 		return nil, err
+	}
+	return lock.acquireQueueEntryLeaseV1(id)
+}
+
+// AcquireLiveRunLeaseV1 holds ownership of an app or shell queue entry.
+func (lock *OperationLock) AcquireLiveRunLeaseV1(id string) (*QueueEntryLeaseV1, error) {
+	if err := ValidateLiveRunIDV1(id); err != nil {
+		return nil, err
+	}
+	return lock.acquireQueueEntryLeaseV1(id)
+}
+
+func (lock *OperationLock) acquireQueueEntryLeaseV1(id string) (*QueueEntryLeaseV1, error) {
+	if lock == nil {
+		return nil, fmt.Errorf("acquire queue-entry lease requires an operation lock")
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
@@ -47,18 +62,67 @@ func (lock *OperationLock) AcquireControlLeaseV1(id string) (*ControlLeaseV1, er
 	acquired, err := tryLockOperationFile(file)
 	if err != nil {
 		_ = file.Close()
-		return nil, fmt.Errorf("acquire control lease: %w", err)
+		return nil, fmt.Errorf("acquire queue-entry lease: %w", err)
 	}
 	if !acquired {
 		_ = file.Close()
-		return nil, fmt.Errorf("control lease %q is already owned", id)
+		return nil, fmt.Errorf("queue-entry lease %q is already owned", id)
 	}
-	return &ControlLeaseV1{file: file, path: path}, nil
+	return &QueueEntryLeaseV1{file: file, path: path}, nil
+}
+
+// RequireQueueEntryLeaseHeldV1 verifies that an admission owner acquired the
+// entry lease before publishing its durable queue record.
+func (lock *OperationLock) RequireQueueEntryLeaseHeldV1(id string) error {
+	if lock == nil {
+		return fmt.Errorf("require queue-entry lease requires an operation lock")
+	}
+	if err := validateQueueEntryLeaseIDV1(id); err != nil {
+		return err
+	}
+	lock.mutex.Lock()
+	defer lock.mutex.Unlock()
+	directory, err := lock.controlLeaseDirectoryLockedV1()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(directory, id+controlLeaseSuffixV1)
+	if err := requireControlLeasePathV1(path, false); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("queue-entry lease %q is not held", id)
+		}
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("open queue-entry lease for ownership check: %w", err)
+	}
+	acquired, err := tryLockOperationFile(file)
+	if err != nil {
+		_ = file.Close()
+		return fmt.Errorf("inspect queue-entry lease ownership: %w", err)
+	}
+	if !acquired {
+		return file.Close()
+	}
+	unlockErr := unlockOperationFile(file)
+	closeErr := file.Close()
+	if err := errors.Join(unlockErr, closeErr); err != nil {
+		return fmt.Errorf("release unowned queue-entry lease check: %w", err)
+	}
+	return fmt.Errorf("queue-entry lease %q is not held", id)
+}
+
+func validateQueueEntryLeaseIDV1(id string) error {
+	if liveRunIDPatternV1.MatchString(id) || controlMarkerIDPatternV1.MatchString(id) {
+		return nil
+	}
+	return fmt.Errorf("queue-entry lease ID must be a live-run or control-marker ID")
 }
 
 // Release drops the ownership lease and removes its deployment-local file.
 // Repeated calls are harmless so error cleanup can use it freely.
-func (lease *ControlLeaseV1) Release() error {
+func (lease *QueueEntryLeaseV1) Release() error {
 	if lease == nil {
 		return nil
 	}
@@ -85,10 +149,10 @@ func (lock *OperationLock) controlLeaseDirectoryLockedV1() (string, error) {
 	return filepath.Dir(lock.path), nil
 }
 
-// controlLeaseAbandonedV1 returns true only when the marker's lease is absent
+// queueEntryLeaseAbandonedV1 returns true only when the entry's lease is absent
 // or its advisory lock can be acquired. It is called while the operation lock
-// is held, so a live owner cannot concurrently remove its marker and lease.
-func controlLeaseAbandonedV1(directory string, id string) (bool, error) {
+// is held, so a live owner cannot concurrently remove its entry and lease.
+func queueEntryLeaseAbandonedV1(directory string, id string) (bool, error) {
 	path := filepath.Join(directory, id+controlLeaseSuffixV1)
 	if err := requireControlLeasePathV1(path, false); err != nil {
 		if os.IsNotExist(err) {
@@ -114,7 +178,7 @@ func controlLeaseAbandonedV1(directory string, id string) (bool, error) {
 	}
 	unclockErr := unlockOperationFile(file)
 	closeErr := file.Close()
-	removeErr := removeControlLeasePathV1(path)
+	removeErr := removeQueueEntryLeasePathV1(path)
 	if err := errors.Join(
 		wrapControlLeaseErrorV1("release recovered control lease", unclockErr),
 		wrapControlLeaseErrorV1("close recovered control lease", closeErr),
@@ -140,6 +204,10 @@ func requireControlLeasePathV1(path string, allowMissing bool) error {
 }
 
 func removeControlLeasePathV1(path string) error {
+	return removeQueueEntryLeasePathV1(path)
+}
+
+func removeQueueEntryLeasePathV1(path string) error {
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return nil

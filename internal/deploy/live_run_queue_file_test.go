@@ -1,12 +1,18 @@
 package deploy
 
 import (
+	"bufio"
+	"bytes"
+	"context"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOperationLockLiveRunQueueFileLifecycle(t *testing.T) {
@@ -222,6 +228,11 @@ func TestOperationLockRecoversAbandonedActiveControlAndPromotesNextRun(t *testin
 		t.Fatalf("active marker = %q, %v", status, err)
 	}
 	waiter := liveRunFixture("run-0000000000000001", false)
+	waiterLease, err := owner.AcquireLiveRunLeaseV1(waiter.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer waiterLease.Release()
 	if status, err := owner.AdmitLiveRunV1(waiter, true); err != nil || status != LiveRunStatusWaitingV1 {
 		t.Fatalf("waiter = %q, %v", status, err)
 	}
@@ -255,6 +266,11 @@ func TestOperationLockKeepsOwnedControlAndRecoversAbandonedReadyControl(t *testi
 	}
 	defer operation.Unlock()
 	active := liveRunFixture("run-0000000000000001", false)
+	activeLease, err := operation.AcquireLiveRunLeaseV1(active.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer activeLease.Release()
 	if _, err := operation.AdmitLiveRunV1(active, false); err != nil {
 		t.Fatal(err)
 	}
@@ -288,6 +304,317 @@ func TestOperationLockKeepsOwnedControlAndRecoversAbandonedReadyControl(t *testi
 	}
 	if _, found, err := operation.ReadLiveRunQueueV1(); err != nil || found {
 		t.Fatalf("recovered queue remains: found=%t error=%v", found, err)
+	}
+}
+
+func TestRecoverLiveRunQueueV1PreservesOwnedSessionAndFlushesUnownedEntries(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	session, err := CurrentBootSessionIDV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned := liveRunFixture("run-0000000000000001", false)
+	owned.BootSession = session
+	owned.Status = LiveRunStatusActiveV1
+	abandoned := liveRunFixture("run-0000000000000002", false)
+	abandoned.BootSession = session
+	abandoned.Status = LiveRunStatusActiveV1
+	abandoned.Container = "demo-run-0000000000000002"
+	prior := LiveRunV1{
+		ID: "control-0000000000000001", Kind: LiveRunKindControlV1,
+		Name: string(ControlOperationRestartV1), GenerationReference: owned.GenerationReference,
+		BootSession: "prior-session", Status: LiveRunStatusWaitingV1, Exclusive: true,
+	}
+	legacy := liveRunFixture("run-0000000000000003", false)
+	legacy.Status = LiveRunStatusWaitingV1
+	queue := NewLiveRunQueueV1()
+	queue.Runs = []LiveRunV1{owned, abandoned, prior, legacy}
+	path, err := operation.liveRunQueuePathLockedV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := commitLiveRunQueuePathV1(path, queue); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := operation.AcquireLiveRunLeaseV1(owned.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+
+	recovery, err := operation.RecoverLiveRunQueueV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovery.Removed) != 3 {
+		t.Fatalf("recovery = %#v", recovery)
+	}
+	wantReasons := map[string]LiveRunRecoveryReasonV1{
+		abandoned.ID: LiveRunRecoveryAbandonedOwnerV1,
+		prior.ID:     LiveRunRecoveryPriorSessionV1,
+		legacy.ID:    LiveRunRecoveryLegacyEntryV1,
+	}
+	for _, removed := range recovery.Removed {
+		if removed.Reason != wantReasons[removed.Run.ID] {
+			t.Fatalf("removed entry = %#v", removed)
+		}
+	}
+	loaded, found, err := operation.ReadLiveRunQueueV1()
+	if err != nil || !found || len(loaded.Runs) != 1 || loaded.Runs[0].ID != owned.ID {
+		t.Fatalf("recovered queue = %#v, found=%t, error=%v", loaded, found, err)
+	}
+	if len(loaded.Cleanup) != 1 || loaded.Cleanup[0].Container != abandoned.Container || loaded.Cleanup[0].Reason != LiveRunRecoveryAbandonedOwnerV1 {
+		t.Fatalf("cleanup inventory = %#v", loaded.Cleanup)
+	}
+	if _, err := operation.RecoverLiveRunQueueV1(); err != nil {
+		t.Fatal(err)
+	}
+	stillLoaded, _, err := operation.ReadLiveRunQueueV1()
+	if err != nil || len(stillLoaded.Runs) != 1 || stillLoaded.Runs[0].ID != owned.ID {
+		t.Fatalf("owned entry was not stable across recovery: %#v, %v", stillLoaded, err)
+	}
+}
+
+func TestRecoverLiveRunQueueV1RemovesEntryAfterOwnerLeaseRelease(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	run := liveRunFixture("run-0000000000000001", false)
+	lease, err := operation.AcquireLiveRunLeaseV1(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := operation.AdmitLiveRunV1(run, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.abandonForTest(); err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := operation.RecoverLiveRunQueueV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovery.Removed) != 1 || recovery.Removed[0].Run.ID != run.ID || recovery.Removed[0].Reason != LiveRunRecoveryAbandonedOwnerV1 {
+		t.Fatalf("released-owner recovery = %#v", recovery)
+	}
+	queue, found, err := operation.ReadLiveRunQueueV1()
+	if err != nil || found || len(queue.Runs) != 0 {
+		t.Fatalf("queue after released owner = %#v, found=%t, error=%v", queue, found, err)
+	}
+}
+
+func TestRecoverLiveRunQueueV1PromotesNextLiveOwnerAfterAbruptExit(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	first := liveRunFixture("run-0000000000000001", true)
+	second := liveRunFixture("run-0000000000000002", false)
+	firstLease, err := operation.AcquireLiveRunLeaseV1(first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondLease, err := operation.AcquireLiveRunLeaseV1(second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondLease.Release()
+	if _, err := operation.AdmitLiveRunV1(first, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := operation.AdmitLiveRunV1(second, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstLease.abandonForTest(); err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := operation.RecoverLiveRunQueueV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue, _, err := operation.ReadLiveRunQueueV1()
+	if err != nil || len(recovery.Removed) != 1 || recovery.Removed[0].Run.ID != first.ID ||
+		len(queue.Runs) != 1 || queue.Runs[0].ID != second.ID || queue.Runs[0].Status != LiveRunStatusActiveV1 {
+		t.Fatalf("promotion after abrupt exit = recovery %#v, queue %#v, error=%v", recovery, queue, err)
+	}
+}
+
+func TestRecoverLiveRunQueueV1RemovesOrphanedLeaseFiles(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	abandonedID := "run-0000000000000001"
+	abandoned, err := operation.AcquireLiveRunLeaseV1(abandonedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := abandoned.abandonForTest(); err != nil {
+		t.Fatal(err)
+	}
+	ownedID := "run-0000000000000002"
+	owned, err := operation.AcquireLiveRunLeaseV1(ownedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owned.Release()
+
+	if _, err := operation.RecoverLiveRunQueueV1(); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(dir, ".reploy")
+	if _, err := os.Lstat(filepath.Join(directory, abandonedID+controlLeaseSuffixV1)); !os.IsNotExist(err) {
+		t.Fatalf("abandoned orphan lease remains: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(directory, ownedID+controlLeaseSuffixV1)); err != nil {
+		t.Fatalf("owned unpublished lease was removed: %v", err)
+	}
+}
+
+func TestRecoverLiveRunQueueV1AfterOwnerProcessIsKilled(t *testing.T) {
+	if os.Getenv("REPLOY_QUEUE_LEASE_HELPER") == "1" {
+		dir := os.Getenv("REPLOY_QUEUE_LEASE_DIR")
+		operation, err := AcquireOperationLock(context.Background(), dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		run := liveRunFixture("run-0000000000000001", false)
+		lease, err := operation.AcquireLiveRunLeaseV1(run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := operation.AdmitLiveRunV1(run, false); err != nil {
+			t.Fatal(err)
+		}
+		if err := operation.Unlock(); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintln(os.Stdout, "ready")
+		if err := os.Stdout.Sync(); err != nil {
+			t.Fatal(err)
+		}
+		_ = lease
+		time.Sleep(time.Hour)
+		return
+	}
+
+	dir := t.TempDir()
+	command := exec.Command(os.Args[0], "-test.run=^TestRecoverLiveRunQueueV1AfterOwnerProcessIsKilled$")
+	command.Env = append(
+		os.Environ(),
+		"REPLOY_QUEUE_LEASE_HELPER=1",
+		"REPLOY_QUEUE_LEASE_DIR="+dir,
+	)
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	t.Cleanup(func() {
+		if !waited {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}
+	})
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	if err != nil || strings.TrimSpace(line) != "ready" {
+		t.Fatalf("lease helper readiness = %q, %v; stderr=%s", line, err, stderr.String())
+	}
+	if err := command.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = command.Wait()
+	waited = true
+
+	operation, err := AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	recovery, err := operation.RecoverLiveRunQueueV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovery.Removed) != 1 ||
+		recovery.Removed[0].Run.ID != "run-0000000000000001" ||
+		recovery.Removed[0].Reason != LiveRunRecoveryAbandonedOwnerV1 {
+		t.Fatalf("killed-owner recovery = %#v", recovery)
+	}
+	if _, found, err := operation.ReadLiveRunQueueV1(); err != nil || found {
+		t.Fatalf("queue after killed-owner recovery: found=%t error=%v", found, err)
+	}
+}
+
+func TestRecoverLiveRunQueuePathV1RejectsUnknownCurrentSessionWithoutMutation(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	run := liveRunFixture("run-0000000000000001", false)
+	if _, err := operation.AdmitLiveRunV1(run, false); err != nil {
+		t.Fatal(err)
+	}
+	path, err := operation.liveRunQueuePathLockedV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recoverLiveRunQueuePathV1(path, ""); err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("missing-session error = %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("failed current-session lookup changed the queue")
+	}
+}
+
+func TestOperationLockRequiresHeldQueueEntryLeaseForAdmissionOwnership(t *testing.T) {
+	operation, err := AcquireOperationLock(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	id := "run-0000000000000001"
+	if err := operation.RequireQueueEntryLeaseHeldV1(id); err == nil || !strings.Contains(err.Error(), "not held") {
+		t.Fatalf("missing lease error = %v", err)
+	}
+	lease, err := operation.AcquireLiveRunLeaseV1(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := operation.RequireQueueEntryLeaseHeldV1(id); err != nil {
+		t.Fatalf("held lease rejected: %v", err)
+	}
+	if err := lease.abandonForTest(); err != nil {
+		t.Fatal(err)
+	}
+	if err := operation.RequireQueueEntryLeaseHeldV1(id); err == nil || !strings.Contains(err.Error(), "not held") {
+		t.Fatalf("released lease accepted: %v", err)
 	}
 }
 

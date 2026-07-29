@@ -391,8 +391,26 @@ The persisted queue also records lifecycle operations such as a waiting
 restart or install, so new runs cannot jump ahead of them. These internal
 entries are not app runs: they have no public run ID, do not appear in `reploy
 runs list`, and cannot be passed to `reploy runs stop`. Reploy holds a small
-kernel-backed ownership lease for each entry. If the owning process exits,
-the next queue operation removes the abandoned entry automatically.
+kernel-backed ownership lease for each entry and stamps it with the host
+boot-session identity. On the same boot, the next queue operation preserves an
+entry while its owning Reploy CLI invocation still holds the lease and removes
+the entry if that lease was released. An entry from a prior boot session is
+removed from scheduling regardless of lease state. Reploy never replays an app
+command, shell, or lifecycle operation during either recovery path. Exact
+transient-container identities from flushed entries remain retryable cleanup
+inventory when Docker is unavailable. A live client also retains the exact
+identity after a known container-cleanup failure. Cleanup retries share one
+short total time budget per queue operation rather than delaying admission once
+per retained container. Lease files left outside the durable queue by an
+interrupted publication or completion window are removed after their kernel
+lock is released.
+A Docker daemon restart therefore preserves queued operations whose Reploy
+clients remain alive. Catchable cancellation removes and reports the caller's
+own operation; after an abrupt client exit, the next queue operation removes
+and reports the abandoned entry. Prior-session flushing also reports what was
+discarded. Legacy entries without a session identity are abandoned. Failure to
+obtain the current session identity leaves the queue unchanged and fails
+clearly rather than risking replay or accidental reclamation.
 
 Mode flags are mutually exclusive. A default `down` or `restart` never
 overtakes another live lifecycle operation; it reports the conflict, while

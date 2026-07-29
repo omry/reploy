@@ -21,6 +21,8 @@ func TestAdmitControlOperationV1DrainCancelsWaitersBeforeQueuingMarker(t *testin
 	}
 	active := liveRunAdmissionFixtureV1("run-0000000000000001", false)
 	waiting := liveRunAdmissionFixtureV1("run-0000000000000002", true)
+	holdLiveRunLeaseV1(t, operation, active.ID)
+	holdLiveRunLeaseV1(t, operation, waiting.ID)
 	if _, err := operation.AdmitLiveRunV1(active, false); err != nil {
 		t.Fatal(err)
 	}
@@ -78,6 +80,7 @@ func TestAdmitControlOperationV1ForceStopsActiveContainersBeforeMarker(t *testin
 	second := liveRunAdmissionFixtureV1("run-0000000000000002", false)
 	waiting := liveRunAdmissionFixtureV1("run-0000000000000003", true)
 	for _, run := range []deploy.LiveRunV1{first, second} {
+		holdLiveRunLeaseV1(t, operation, run.ID)
 		if _, err := operation.AdmitLiveRunV1(run, false); err != nil {
 			t.Fatal(err)
 		}
@@ -85,6 +88,7 @@ func TestAdmitControlOperationV1ForceStopsActiveContainersBeforeMarker(t *testin
 			t.Fatal(err)
 		}
 	}
+	holdLiveRunLeaseV1(t, operation, waiting.ID)
 	if _, err := operation.AdmitLiveRunV1(waiting, true); err != nil {
 		t.Fatal(err)
 	}
@@ -152,6 +156,7 @@ func TestAdmitControlOperationV1ForceFailurePreservesFailedAndLaterActiveRuns(t 
 	first := liveRunAdmissionFixtureV1("run-0000000000000001", false)
 	second := liveRunAdmissionFixtureV1("run-0000000000000002", false)
 	for _, run := range []deploy.LiveRunV1{first, second} {
+		holdLiveRunLeaseV1(t, operation, run.ID)
 		if _, err := operation.AdmitLiveRunV1(run, false); err != nil {
 			t.Fatal(err)
 		}
@@ -222,6 +227,7 @@ func TestAdmitControlOperationV1RejectsInvalidMarkerBeforeForceMutation(t *testi
 		t.Fatal(err)
 	}
 	active := liveRunAdmissionFixtureV1("run-0000000000000001", false)
+	holdLiveRunLeaseV1(t, operation, active.ID)
 	if _, err := operation.AdmitLiveRunV1(active, false); err != nil {
 		t.Fatal(err)
 	}
@@ -260,6 +266,8 @@ func TestAdmitControlOperationV1InterruptedPauseChangesNothing(t *testing.T) {
 	}
 	active := liveRunAdmissionFixtureV1("run-0000000000000001", false)
 	waiting := liveRunAdmissionFixtureV1("run-0000000000000002", true)
+	holdLiveRunLeaseV1(t, operation, active.ID)
+	holdLiveRunLeaseV1(t, operation, waiting.ID)
 	if _, err := operation.AdmitLiveRunV1(active, false); err != nil {
 		t.Fatal(err)
 	}

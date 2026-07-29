@@ -93,7 +93,14 @@ func runAdmittedTransientContainerV1(
 	startOptions := options
 	startOptions.Context = ctx
 	runErr := backend.runTemporary(backend.followup, execution.Start, execution.Cleanup, startOptions)
-	removed, completionErr := completeAdmittedTransientRunV1(context.WithoutCancel(ctx), absoluteDir, runID, backend)
+	var cleanupFailure *temporaryContainerCleanupFailureV1
+	cleanupContainer := ""
+	if errors.As(runErr, &cleanupFailure) {
+		cleanupContainer = execution.Container
+	}
+	removed, completionErr := completeAdmittedTransientRunV1(
+		context.WithoutCancel(ctx), absoluteDir, runID, cleanupContainer, backend,
+	)
 	if completionErr == nil && !removed {
 		runErr = ErrLiveRunStoppedV1
 	} else if runErr != nil {
@@ -201,7 +208,11 @@ func abortAdmittedTransientBeforeStartV1(
 	var unlockErr error
 	if operation != nil {
 		if runID != "" {
-			_, _, queueErr = operation.RemoveLiveRunV1(runID)
+			if cleanupErr != nil {
+				_, queueErr = operation.CompleteLiveRunWithContainerCleanupV1(runID, execution.Container)
+			} else {
+				_, _, queueErr = operation.RemoveLiveRunV1(runID)
+			}
 			if queueErr != nil {
 				queueErr = fmt.Errorf("remove admitted live run: %w", queueErr)
 			}
@@ -237,7 +248,13 @@ func abortAdmittedTransientAfterReleaseV1(
 			containerErr = fmt.Errorf("clean admitted transient container: %w", containerErr)
 		}
 	}
-	_, completionErr := completeAdmittedTransientRunV1(cleanupContext, deploymentDir, runID, backend)
+	cleanupContainer := ""
+	if containerErr != nil {
+		cleanupContainer = execution.Container
+	}
+	_, completionErr := completeAdmittedTransientRunV1(
+		cleanupContext, deploymentDir, runID, cleanupContainer, backend,
+	)
 	return errors.Join(cause, containerErr, completionErr)
 }
 
@@ -245,13 +262,20 @@ func completeAdmittedTransientRunV1(
 	cleanupContext context.Context,
 	deploymentDir string,
 	runID string,
+	cleanupContainer string,
 	backend admittedTransientContainerBackendV1,
 ) (bool, error) {
 	operation, err := backend.acquire(cleanupContext, deploymentDir)
 	if err != nil {
 		return false, fmt.Errorf("reacquire operation lock after transient execution: %w", err)
 	}
-	_, removed, removeErr := operation.RemoveLiveRunV1(runID)
+	var removed bool
+	var removeErr error
+	if cleanupContainer != "" {
+		removed, removeErr = operation.CompleteLiveRunWithContainerCleanupV1(runID, cleanupContainer)
+	} else {
+		_, removed, removeErr = operation.RemoveLiveRunV1(runID)
+	}
 	unlockErr := operation.Unlock()
 	if removeErr != nil {
 		removeErr = fmt.Errorf("remove completed live run: %w", removeErr)

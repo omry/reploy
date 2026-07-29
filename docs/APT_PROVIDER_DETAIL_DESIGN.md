@@ -2258,8 +2258,29 @@ The same persisted queue records lifecycle operations so later runs cannot
 jump ahead of a waiting restart, install, or other control action. These are
 internal queue entries rather than app runs: they have no public run IDs,
 `reploy runs list` omits them, and `reploy runs stop` does not accept them.
-Each entry has a kernel-backed ownership lease, allowing the next queue
-operation to remove it automatically if its owning process exits.
+Each entry has a kernel-backed ownership lease and records the host
+boot-session identity. On the same boot, the next queue operation preserves a
+lease still held by its owning Reploy CLI invocation and removes an entry whose
+lease was released. It atomically removes entries from a previous boot session
+from scheduling without replaying app commands, shells, or lifecycle
+operations. Exact transient-container identities become non-blocking,
+retryable cleanup inventory if Docker is unavailable while the old scheduling
+entries are flushed or while a live client handles a known container-cleanup
+failure. Cleanup retries share one short total time budget per queue operation,
+so accumulated cleanup inventory cannot hold admission for a timeout per
+container. Lease files left outside the durable queue by an interrupted
+publication or completion window are removed once their kernel lock is no
+longer owned.
+
+Queue recovery never replays work. A Docker daemon restart does not abandon an
+entry while its owning Reploy CLI still holds the same-session lease. Normal
+completion or catchable cancellation removes the caller's own entry and reports
+which operation was canceled. If the owner exits abruptly, the next queue
+operation reports which abandoned operation it removed; prior-session recovery
+likewise reports the discarded operations. Legacy entries without a
+boot-session identity are treated as abandoned. If Reploy cannot obtain the
+current boot-session identity, it leaves the durable queue unchanged and fails
+with a diagnostic instead of guessing.
 
 The directory operation lock protects admission changes and Docker container
 creation, not the life of a run. Reploy creates the container while holding the

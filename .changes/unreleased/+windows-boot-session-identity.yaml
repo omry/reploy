@@ -1,0 +1,2 @@
+kind: Fixed
+body: Detect native Windows host restarts using the documented operating-system boot timestamp instead of a firmware boot identifier that can remain unchanged across reboots.

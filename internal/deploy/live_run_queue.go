@@ -46,6 +46,7 @@ type LiveRunV1 struct {
 	Kind                LiveRunKindV1   `json:"kind"`
 	Name                string          `json:"name"`
 	GenerationReference string          `json:"generation_reference"`
+	BootSession         string          `json:"boot_session,omitempty"`
 	Status              LiveRunStatusV1 `json:"status"`
 	Exclusive           bool            `json:"exclusive"`
 	WritableMount       string          `json:"writable_mount,omitempty"`
@@ -54,14 +55,42 @@ type LiveRunV1 struct {
 }
 
 type LiveRunQueueV1 struct {
-	Schema string      `json:"schema"`
-	Runs   []LiveRunV1 `json:"runs"`
+	Schema  string                      `json:"schema"`
+	Runs    []LiveRunV1                 `json:"runs"`
+	Cleanup []LiveRunContainerCleanupV1 `json:"cleanup,omitempty"`
+}
+
+type LiveRunRecoveryReasonV1 string
+
+const (
+	LiveRunRecoveryAbandonedOwnerV1 LiveRunRecoveryReasonV1 = "abandoned-owner"
+	LiveRunRecoveryPriorSessionV1   LiveRunRecoveryReasonV1 = "prior-session"
+	LiveRunRecoveryLegacyEntryV1    LiveRunRecoveryReasonV1 = "legacy-entry"
+	LiveRunRecoveryCleanupFailedV1  LiveRunRecoveryReasonV1 = "cleanup-failed"
+)
+
+type LiveRunContainerCleanupV1 struct {
+	Container string                  `json:"container"`
+	RunID     string                  `json:"run_id"`
+	Kind      LiveRunKindV1           `json:"kind"`
+	Name      string                  `json:"name"`
+	Reason    LiveRunRecoveryReasonV1 `json:"reason"`
+}
+
+type RecoveredLiveRunV1 struct {
+	Run    LiveRunV1
+	Reason LiveRunRecoveryReasonV1
+}
+
+type LiveRunRecoveryV1 struct {
+	Removed []RecoveredLiveRunV1
 }
 
 type ControlMarkerV1 struct {
 	ID                  string
 	Operation           ControlOperationV1
 	GenerationReference string
+	BootSession         string
 	Status              LiveRunStatusV1
 }
 
@@ -160,6 +189,14 @@ func ValidateLiveRunQueueV1(queue LiveRunQueueV1) error {
 	if queue.Runs == nil {
 		return fmt.Errorf("live run queue runs must use an array")
 	}
+	for index, cleanup := range queue.Cleanup {
+		if err := validateLiveRunContainerCleanupV1(cleanup); err != nil {
+			return fmt.Errorf("live run queue cleanup entry %d: %w", index, err)
+		}
+		if index > 0 && queue.Cleanup[index-1].Container >= cleanup.Container {
+			return fmt.Errorf("live run queue cleanup entries must be sorted and unique by container")
+		}
+	}
 	seen := map[string]bool{}
 	inactiveSeen := false
 	activeCount := 0
@@ -208,6 +245,30 @@ func ValidateLiveRunQueueV1(queue LiveRunQueueV1) error {
 	return nil
 }
 
+func validateLiveRunContainerCleanupV1(cleanup LiveRunContainerCleanupV1) error {
+	if !safeRecoveryIdentity(cleanup.Container) {
+		return fmt.Errorf("cleanup container must be nonempty safe text")
+	}
+	if err := ValidateLiveRunIDV1(cleanup.RunID); err != nil {
+		return fmt.Errorf("cleanup run ID: %w", err)
+	}
+	if cleanup.Kind != LiveRunKindAppV1 && cleanup.Kind != LiveRunKindShellV1 {
+		return fmt.Errorf("cleanup kind must be app or shell")
+	}
+	if !safeRecoveryIdentity(cleanup.Name) {
+		return fmt.Errorf("cleanup name must be nonempty safe text")
+	}
+	switch cleanup.Reason {
+	case LiveRunRecoveryAbandonedOwnerV1,
+		LiveRunRecoveryPriorSessionV1,
+		LiveRunRecoveryLegacyEntryV1,
+		LiveRunRecoveryCleanupFailedV1:
+		return nil
+	default:
+		return fmt.Errorf("cleanup reason is invalid")
+	}
+}
+
 func validateLiveRunV1(run LiveRunV1) error {
 	if err := ValidateLiveRunIDV1(run.ID); err != nil {
 		return err
@@ -220,6 +281,11 @@ func validateLiveRunV1(run LiveRunV1) error {
 	}
 	if !safeRecoveryIdentity(run.GenerationReference) {
 		return fmt.Errorf("live run generation reference must be nonempty safe text")
+	}
+	if run.BootSession != "" {
+		if err := validateBootSessionIDV1(run.BootSession); err != nil {
+			return err
+		}
 	}
 	if run.Status != LiveRunStatusActiveV1 && run.Status != LiveRunStatusWaitingV1 {
 		return fmt.Errorf("live run status must be active or waiting")
@@ -256,6 +322,11 @@ func validateLiveQueueEntryV1(entry LiveRunV1) error {
 	}
 	if !safeRecoveryIdentity(entry.GenerationReference) {
 		return fmt.Errorf("control marker generation reference must be nonempty safe text")
+	}
+	if entry.BootSession != "" {
+		if err := validateBootSessionIDV1(entry.BootSession); err != nil {
+			return err
+		}
 	}
 	if entry.Status != LiveRunStatusActiveV1 && entry.Status != LiveRunStatusWaitingV1 && entry.Status != LiveRunStatusReadyV1 {
 		return fmt.Errorf("control marker status must be active, ready, or waiting")
@@ -301,7 +372,7 @@ func AdmitControlMarkerV1(queue LiveRunQueueV1, candidate ControlMarkerV1, wait 
 	}
 	entry := LiveRunV1{
 		ID: candidate.ID, Kind: LiveRunKindControlV1, Name: string(candidate.Operation),
-		GenerationReference: candidate.GenerationReference, Exclusive: true,
+		GenerationReference: candidate.GenerationReference, BootSession: candidate.BootSession, Exclusive: true,
 	}
 	entry.Status = LiveRunStatusWaitingV1
 	if err := validateLiveQueueEntryV1(entry); err != nil {
@@ -399,7 +470,7 @@ func ControlMarkersV1(queue LiveRunQueueV1) []ControlMarkerV1 {
 		if entry.Kind == LiveRunKindControlV1 {
 			markers = append(markers, ControlMarkerV1{
 				ID: entry.ID, Operation: ControlOperationV1(entry.Name),
-				GenerationReference: entry.GenerationReference, Status: entry.Status,
+				GenerationReference: entry.GenerationReference, BootSession: entry.BootSession, Status: entry.Status,
 			})
 		}
 	}
@@ -407,7 +478,15 @@ func ControlMarkersV1(queue LiveRunQueueV1) []ControlMarkerV1 {
 }
 
 func cloneLiveRunQueueV1(queue LiveRunQueueV1) LiveRunQueueV1 {
-	return LiveRunQueueV1{Schema: queue.Schema, Runs: append([]LiveRunV1{}, queue.Runs...)}
+	var cleanup []LiveRunContainerCleanupV1
+	if queue.Cleanup != nil {
+		cleanup = append([]LiveRunContainerCleanupV1{}, queue.Cleanup...)
+	}
+	return LiveRunQueueV1{
+		Schema:  queue.Schema,
+		Runs:    append([]LiveRunV1{}, queue.Runs...),
+		Cleanup: cleanup,
+	}
 }
 
 func liveRunCanStartNowV1(queue LiveRunQueueV1, candidate LiveRunV1) bool {

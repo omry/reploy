@@ -14,8 +14,9 @@ import (
 const liveRunAdmissionPollIntervalV1 = 25 * time.Millisecond
 
 type liveRunAdmissionBackendV1 struct {
-	acquire func(context.Context, string) (*deploy.OperationLock, error)
-	wait    func(context.Context) error
+	acquire         func(context.Context, string) (*deploy.OperationLock, error)
+	wait            func(context.Context) error
+	removeContainer commandRunner
 }
 
 // AwaitLiveRunAdmissionV1 takes ownership of operation. On success it returns
@@ -51,6 +52,7 @@ func AwaitLiveRunAdmissionWithNoticeV1(
 				return nil
 			}
 		},
+		removeContainer: runCommandWithoutDockerPreflight,
 	})
 }
 
@@ -88,7 +90,10 @@ func awaitLiveRunAdmissionV1(
 	if backend.acquire == nil || backend.wait == nil {
 		return releaseLiveRunAdmissionLockV1(operation, fmt.Errorf("live run admission requires a complete backend"))
 	}
-	if _, _, err := operation.RecoverAbandonedControlMarkerV1(); err != nil {
+	if err := operation.RequireQueueEntryLeaseHeldV1(candidate.ID); err != nil {
+		return releaseLiveRunAdmissionLockV1(operation, fmt.Errorf("live run admission ownership: %w", err))
+	}
+	if _, err := recoverLiveRunQueueV1(ctx, operation, notice, backend.removeContainer); err != nil {
 		return releaseLiveRunAdmissionLockV1(operation, err)
 	}
 	status, err := operation.AdmitLiveRunV1(candidate, wait)
@@ -99,33 +104,33 @@ func awaitLiveRunAdmissionV1(
 		return operation, nil
 	}
 	if status != deploy.LiveRunStatusWaitingV1 {
-		return cancelLiveRunAdmissionV1(ctx, deploymentDir, operation, candidate.ID, backend,
+		return cancelLiveRunAdmissionV1(ctx, deploymentDir, operation, candidate, backend,
 			fmt.Errorf("live run admission returned unsupported status %q", status))
 	}
 	if err := writeAdmissionWaitNoticeV1(operation, candidate.ID, notice); err != nil {
-		return cancelLiveRunAdmissionV1(ctx, deploymentDir, operation, candidate.ID, backend,
+		return cancelLiveRunAdmissionV1(ctx, deploymentDir, operation, candidate, backend,
 			fmt.Errorf("describe live run wait: %w", err))
 	}
 	if err := operation.Unlock(); err != nil {
-		return cancelLiveRunAdmissionV1(ctx, deploymentDir, nil, candidate.ID, backend,
+		return cancelLiveRunAdmissionV1(ctx, deploymentDir, nil, candidate, backend,
 			fmt.Errorf("release operation lock while waiting: %w", err))
 	}
 	operation = nil
 
 	for {
 		if err := backend.wait(ctx); err != nil {
-			return cancelLiveRunAdmissionV1(ctx, deploymentDir, nil, candidate.ID, backend, err)
+			return cancelLiveRunAdmissionV1(ctx, deploymentDir, nil, candidate, backend, err)
 		}
 		operation, err = backend.acquire(ctx, deploymentDir)
 		if err != nil {
-			return cancelLiveRunAdmissionV1(ctx, deploymentDir, nil, candidate.ID, backend, err)
+			return cancelLiveRunAdmissionV1(ctx, deploymentDir, nil, candidate, backend, err)
 		}
-		if _, _, err := operation.RecoverAbandonedControlMarkerV1(); err != nil {
-			return cancelLiveRunAdmissionV1(ctx, deploymentDir, operation, candidate.ID, backend, err)
+		if _, err := recoverLiveRunQueueV1(ctx, operation, notice, backend.removeContainer); err != nil {
+			return cancelLiveRunAdmissionV1(ctx, deploymentDir, operation, candidate, backend, err)
 		}
 		queue, _, err := operation.ReadLiveRunQueueV1()
 		if err != nil {
-			return cancelLiveRunAdmissionV1(ctx, deploymentDir, operation, candidate.ID, backend, err)
+			return cancelLiveRunAdmissionV1(ctx, deploymentDir, operation, candidate, backend, err)
 		}
 		run, found := findLiveRunV1(queue, candidate.ID)
 		if !found {
@@ -138,12 +143,12 @@ func awaitLiveRunAdmissionV1(
 			return operation, nil
 		case deploy.LiveRunStatusWaitingV1:
 			if err := operation.Unlock(); err != nil {
-				return cancelLiveRunAdmissionV1(ctx, deploymentDir, nil, candidate.ID, backend,
+				return cancelLiveRunAdmissionV1(ctx, deploymentDir, nil, candidate, backend,
 					fmt.Errorf("release operation lock while waiting: %w", err))
 			}
 			operation = nil
 		default:
-			return cancelLiveRunAdmissionV1(ctx, deploymentDir, operation, candidate.ID, backend,
+			return cancelLiveRunAdmissionV1(ctx, deploymentDir, operation, candidate, backend,
 				fmt.Errorf("live run %q has unsupported status %q", candidate.ID, run.Status))
 		}
 	}
@@ -206,7 +211,7 @@ func cancelLiveRunAdmissionV1(
 	ctx context.Context,
 	deploymentDir string,
 	operation *deploy.OperationLock,
-	id string,
+	candidate deploy.LiveRunV1,
 	backend liveRunAdmissionBackendV1,
 	cause error,
 ) (*deploy.OperationLock, error) {
@@ -218,19 +223,25 @@ func cancelLiveRunAdmissionV1(
 		var err error
 		operation, err = backend.acquire(cleanupContext, deploymentDir)
 		if err != nil {
-			return nil, fmt.Errorf("%w; remove queued live run %q: %v", cause, id, err)
+			return nil, fmt.Errorf("%w; remove queued live run %q: %v", cause, candidate.ID, err)
 		}
 	}
-	_, _, removeErr := operation.RemoveLiveRunV1(id)
+	_, removed, removeErr := operation.RemoveLiveRunV1(candidate.ID)
 	unlockErr := operation.Unlock()
 	if removeErr != nil {
 		if unlockErr != nil {
-			return nil, fmt.Errorf("%w; remove queued live run %q: %v; release operation lock: %v", cause, id, removeErr, unlockErr)
+			return nil, fmt.Errorf("%w; remove queued live run %q: %v; release operation lock: %v", cause, candidate.ID, removeErr, unlockErr)
 		}
-		return nil, fmt.Errorf("%w; remove queued live run %q: %v", cause, id, removeErr)
+		return nil, fmt.Errorf("%w; remove queued live run %q: %v", cause, candidate.ID, removeErr)
 	}
 	if unlockErr != nil {
 		return nil, fmt.Errorf("%w; release operation lock: %v", cause, unlockErr)
+	}
+	if removed {
+		return nil, fmt.Errorf(
+			"%w; canceled queued %s %q (%s)",
+			cause, admissionRecoveryKindV1(candidate), candidate.Name, candidate.ID,
+		)
 	}
 	return nil, cause
 }

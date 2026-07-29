@@ -116,7 +116,7 @@ func admitControlOperationV1(
 		return cause
 	}
 	if input.Mode == ControlAdmissionForceV1 {
-		if _, _, err := operation.RecoverAbandonedControlMarkerV1(); err != nil {
+		if _, err := recoverLiveRunQueueV1(ctx, operation, input.Notice, backend.removeContainer); err != nil {
 			_, releaseErr := releaseControlAdmissionLockV1(operation, err)
 			return result, releaseLeaseOnError(releaseErr)
 		}

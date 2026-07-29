@@ -39,6 +39,7 @@ type currentAppCommandRunBackendV1 struct {
 	invocation    func(DockerExecutionPlan, string, *transientOutputMount) (RuntimeInvocationV1, error)
 	concurrency   func(blueprint.Document, DockerExecutionPlan, *transientOutputMount) (LiveRunConcurrencyDecisionV1, error)
 	newRunID      func() (string, error)
+	acquireLease  func(*deploy.OperationLock, string) (*deploy.QueueEntryLeaseV1, error)
 	await         func(context.Context, string, *deploy.OperationLock, deploy.LiveRunV1, bool, io.Writer) (*deploy.OperationLock, error)
 	runPublished  func(context.Context, PublishedRuntimeContainerInput, PublishedRuntimeContainerRunnerV1) error
 	prepareProbe  func(context.Context, providerstore.Store, blueprint.Platform) (PreparedProbeWorkspace, func() error, error)
@@ -65,11 +66,14 @@ func RunCurrentAppCommandV1(ctx context.Context, input CurrentAppCommandRunInput
 		invocation:    CommandRuntimeInvocationV1,
 		concurrency:   PlanLiveRunConcurrencyV1,
 		newRunID:      deploy.NewLiveRunIDV1,
-		await:         AwaitLiveRunAdmissionWithNoticeV1,
-		runPublished:  RunPublishedRuntimeContainerV1,
-		prepareProbe:  PrepareProbeWorkspace,
-		execution:     PlanTransientContainerExecutionV1,
-		runAdmitted:   RunAdmittedTransientContainerV1,
+		acquireLease: func(operation *deploy.OperationLock, id string) (*deploy.QueueEntryLeaseV1, error) {
+			return operation.AcquireLiveRunLeaseV1(id)
+		},
+		await:        AwaitLiveRunAdmissionWithNoticeV1,
+		runPublished: RunPublishedRuntimeContainerV1,
+		prepareProbe: PrepareProbeWorkspace,
+		execution:    PlanTransientContainerExecutionV1,
+		runAdmitted:  RunAdmittedTransientContainerV1,
 	})
 }
 
@@ -86,7 +90,7 @@ func runCurrentAppCommandV1(ctx context.Context, input CurrentAppCommandRunInput
 	if len(input.Arguments) == 0 {
 		return fmt.Errorf("run current app command requires command arguments")
 	}
-	if backend.acquire == nil || backend.newStore == nil || backend.readState == nil || backend.loadCurrent == nil || backend.planRuntime == nil || backend.matches == nil || backend.planCommand == nil || backend.prepareOutput == nil || backend.abortOutput == nil || backend.publishOutput == nil || backend.invocation == nil || backend.concurrency == nil || backend.newRunID == nil || backend.await == nil || backend.runPublished == nil || backend.prepareProbe == nil || backend.execution == nil || backend.runAdmitted == nil {
+	if backend.acquire == nil || backend.newStore == nil || backend.readState == nil || backend.loadCurrent == nil || backend.planRuntime == nil || backend.matches == nil || backend.planCommand == nil || backend.prepareOutput == nil || backend.abortOutput == nil || backend.publishOutput == nil || backend.invocation == nil || backend.concurrency == nil || backend.newRunID == nil || backend.acquireLease == nil || backend.await == nil || backend.runPublished == nil || backend.prepareProbe == nil || backend.execution == nil || backend.runAdmitted == nil {
 		return fmt.Errorf("run current app command requires a complete backend")
 	}
 	dir, err := filepath.Abs(input.DeploymentDir)
@@ -170,6 +174,15 @@ func runCurrentAppCommandV1(ctx context.Context, input CurrentAppCommandRunInput
 	if err != nil {
 		return abort(err)
 	}
+	lease, err := backend.acquireLease(operation, runID)
+	if err != nil {
+		return abort(fmt.Errorf("acquire app-command queue ownership: %w", err))
+	}
+	defer func() {
+		if leaseErr := lease.Release(); leaseErr != nil {
+			err = errors.Join(err, fmt.Errorf("release app-command queue ownership: %w", leaseErr))
+		}
+	}()
 	candidate := deploy.LiveRunV1{
 		ID: runID, Kind: deploy.LiveRunKindAppV1, Name: command.Name,
 		GenerationReference: current.Generation.Reference,

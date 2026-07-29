@@ -31,6 +31,7 @@ type currentShellRunBackendV1 struct {
 	invocation   func(DockerExecutionPlan) (RuntimeInvocationV1, error)
 	concurrency  func(blueprint.Document, DockerExecutionPlan, *transientOutputMount) (LiveRunConcurrencyDecisionV1, error)
 	newRunID     func() (string, error)
+	acquireLease func(*deploy.OperationLock, string) (*deploy.QueueEntryLeaseV1, error)
 	await        func(context.Context, string, *deploy.OperationLock, deploy.LiveRunV1, bool, io.Writer) (*deploy.OperationLock, error)
 	runPublished func(context.Context, PublishedRuntimeContainerInput, PublishedRuntimeContainerRunnerV1) error
 	prepareProbe func(context.Context, providerstore.Store, blueprint.Platform) (PreparedProbeWorkspace, func() error, error)
@@ -46,12 +47,15 @@ func RunCurrentShellV1(ctx context.Context, input CurrentShellRunInputV1) error 
 		readState: func(operation *deploy.OperationLock) (deploy.StateV1, bool, error) {
 			return operation.ReadStateV1()
 		},
-		loadCurrent:  ValidateCurrentBuild,
-		plan:         PlanCurrentRuntimeV1,
-		matches:      CurrentBuildMatchesRuntimeV1,
-		invocation:   ShellRuntimeInvocationV1,
-		concurrency:  PlanLiveRunConcurrencyV1,
-		newRunID:     deploy.NewLiveRunIDV1,
+		loadCurrent: ValidateCurrentBuild,
+		plan:        PlanCurrentRuntimeV1,
+		matches:     CurrentBuildMatchesRuntimeV1,
+		invocation:  ShellRuntimeInvocationV1,
+		concurrency: PlanLiveRunConcurrencyV1,
+		newRunID:    deploy.NewLiveRunIDV1,
+		acquireLease: func(operation *deploy.OperationLock, id string) (*deploy.QueueEntryLeaseV1, error) {
+			return operation.AcquireLiveRunLeaseV1(id)
+		},
 		await:        AwaitLiveRunAdmissionWithNoticeV1,
 		runPublished: RunPublishedRuntimeContainerV1,
 		prepareProbe: PrepareProbeWorkspace,
@@ -74,7 +78,7 @@ func runCurrentShellV1(ctx context.Context, input CurrentShellRunInputV1, backen
 	if input.DeploymentDir == "" {
 		return fmt.Errorf("run current shell requires a deployment directory")
 	}
-	if backend.acquire == nil || backend.newStore == nil || backend.readState == nil || backend.loadCurrent == nil || backend.plan == nil || backend.matches == nil || backend.invocation == nil || backend.concurrency == nil || backend.newRunID == nil || backend.await == nil || backend.runPublished == nil || backend.prepareProbe == nil || backend.execution == nil || backend.runAdmitted == nil {
+	if backend.acquire == nil || backend.newStore == nil || backend.readState == nil || backend.loadCurrent == nil || backend.plan == nil || backend.matches == nil || backend.invocation == nil || backend.concurrency == nil || backend.newRunID == nil || backend.acquireLease == nil || backend.await == nil || backend.runPublished == nil || backend.prepareProbe == nil || backend.execution == nil || backend.runAdmitted == nil {
 		return fmt.Errorf("run current shell requires a complete backend")
 	}
 	dir, err := filepath.Abs(input.DeploymentDir)
@@ -145,6 +149,15 @@ func runCurrentShellV1(ctx context.Context, input CurrentShellRunInputV1, backen
 	if err != nil {
 		return err
 	}
+	lease, err := backend.acquireLease(operation, runID)
+	if err != nil {
+		return fmt.Errorf("acquire shell queue ownership: %w", err)
+	}
+	defer func() {
+		if leaseErr := lease.Release(); leaseErr != nil {
+			err = errors.Join(err, fmt.Errorf("release shell queue ownership: %w", leaseErr))
+		}
+	}()
 	candidate := deploy.LiveRunV1{
 		ID: runID, Kind: deploy.LiveRunKindShellV1, Name: "shell",
 		GenerationReference: current.Generation.Reference,

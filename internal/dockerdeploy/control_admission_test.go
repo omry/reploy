@@ -18,6 +18,20 @@ func controlAdmissionFixtureV1(id string, operation deploy.ControlOperationV1) d
 	}
 }
 
+func holdControlLeaseV1(t *testing.T, operation *deploy.OperationLock, id string) *deploy.ControlLeaseV1 {
+	t.Helper()
+	lease, err := operation.AcquireControlLeaseV1(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := lease.Release(); err != nil {
+			t.Errorf("release control lease %q: %v", id, err)
+		}
+	})
+	return lease
+}
+
 func TestAwaitControlAdmissionV1ReturnsHeldAfterEarlierRunAndKeepsLaterRunBehind(t *testing.T) {
 	dir := t.TempDir()
 	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
@@ -25,6 +39,7 @@ func TestAwaitControlAdmissionV1ReturnsHeldAfterEarlierRunAndKeepsLaterRunBehind
 		t.Fatal(err)
 	}
 	first := liveRunAdmissionFixtureV1("run-0000000000000001", false)
+	holdLiveRunLeaseV1(t, operation, first.ID)
 	if _, err := operation.AdmitLiveRunV1(first, false); err != nil {
 		t.Fatal(err)
 	}
@@ -62,6 +77,7 @@ func TestAwaitControlAdmissionV1ReturnsHeldAfterEarlierRunAndKeepsLaterRunBehind
 		t.Fatal(err)
 	}
 	later := liveRunAdmissionFixtureV1("run-0000000000000002", false)
+	holdLiveRunLeaseV1(t, promoter, later.ID)
 	if status, err := promoter.AdmitLiveRunV1(later, true); err != nil || status != deploy.LiveRunStatusWaitingV1 {
 		t.Fatalf("later run admission = %q, %v", status, err)
 	}
@@ -103,6 +119,7 @@ func TestAwaitControlAdmissionV1ExplainsLifecycleWait(t *testing.T) {
 	run := liveRunAdmissionFixtureV1("run-0000000000000001", true)
 	run.WritableMount = "data"
 	run.WritablePaths = []string{"/data"}
+	holdLiveRunLeaseV1(t, operation, run.ID)
 	if _, err := operation.AdmitLiveRunV1(run, false); err != nil {
 		t.Fatal(err)
 	}
@@ -116,6 +133,7 @@ func TestAwaitControlAdmissionV1ExplainsLifecycleWait(t *testing.T) {
 		},
 	}
 	marker := controlAdmissionFixtureV1("control-0000000000000001", deploy.ControlOperationInstallV1)
+	holdControlLeaseV1(t, operation, marker.ID)
 	_, err = awaitControlAdmissionV1(ctx, dir, operation, marker, true, &notice, backend)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("wait error = %v", err)
@@ -134,6 +152,7 @@ func TestAwaitControlAdmissionV1CancellationRemovesOnlyCaller(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := liveRunAdmissionFixtureV1("run-0000000000000001", false)
+	holdLiveRunLeaseV1(t, operation, first.ID)
 	if _, err := operation.AdmitLiveRunV1(first, false); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +173,7 @@ func TestAwaitControlAdmissionV1CancellationRemovesOnlyCaller(t *testing.T) {
 	if leaseErr := lease.Release(); leaseErr != nil {
 		t.Fatal(leaseErr)
 	}
-	if admitted != nil || !errors.Is(err, context.Canceled) {
+	if admitted != nil || !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "canceled queued lifecycle operation \"restart\" ("+marker.ID+")") {
 		t.Fatalf("canceled control admission = %#v, %v", admitted, err)
 	}
 	inspection, err := deploy.AcquireOperationLock(t.Context(), dir)
@@ -175,10 +194,12 @@ func TestAwaitControlAdmissionV1ImmediateConflictReleasesLockWithoutMarker(t *te
 		t.Fatal(err)
 	}
 	first := liveRunAdmissionFixtureV1("run-0000000000000001", false)
+	holdLiveRunLeaseV1(t, operation, first.ID)
 	if _, err := operation.AdmitLiveRunV1(first, false); err != nil {
 		t.Fatal(err)
 	}
 	marker := controlAdmissionFixtureV1("control-0000000000000001", deploy.ControlOperationStopV1)
+	holdControlLeaseV1(t, operation, marker.ID)
 	admitted, err := awaitControlAdmissionV1(t.Context(), dir, operation, marker, false, nil, controlAdmissionBackendV1{
 		acquire: deploy.AcquireOperationLock,
 		wait:    func(context.Context) error { return nil },
@@ -206,6 +227,7 @@ func TestAwaitControlAdmissionV1RejectsForeignOperationLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	marker := controlAdmissionFixtureV1("control-0000000000000001", deploy.ControlOperationUpV1)
+	holdControlLeaseV1(t, operation, marker.ID)
 	admitted, err := awaitControlAdmissionV1(t.Context(), t.TempDir(), operation, marker, false, nil, controlAdmissionBackendV1{
 		acquire: deploy.AcquireOperationLock,
 		wait:    func(context.Context) error { return nil },

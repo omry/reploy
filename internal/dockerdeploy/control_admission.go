@@ -12,8 +12,9 @@ import (
 )
 
 type controlAdmissionBackendV1 struct {
-	acquire func(context.Context, string) (*deploy.OperationLock, error)
-	wait    func(context.Context) error
+	acquire         func(context.Context, string) (*deploy.OperationLock, error)
+	wait            func(context.Context) error
+	removeContainer commandRunner
 }
 
 // AwaitControlAdmissionV1 takes ownership of operation. On success it returns
@@ -49,6 +50,7 @@ func AwaitControlAdmissionWithNoticeV1(
 				return nil
 			}
 		},
+		removeContainer: runCommandWithoutDockerPreflight,
 	})
 }
 
@@ -85,7 +87,10 @@ func awaitControlAdmissionV1(
 	if backend.acquire == nil || backend.wait == nil {
 		return releaseControlAdmissionLockV1(operation, fmt.Errorf("control admission requires a complete backend"))
 	}
-	if _, _, err := operation.RecoverAbandonedControlMarkerV1(); err != nil {
+	if err := operation.RequireQueueEntryLeaseHeldV1(candidate.ID); err != nil {
+		return releaseControlAdmissionLockV1(operation, fmt.Errorf("control admission ownership: %w", err))
+	}
+	if _, err := recoverLiveRunQueueV1(ctx, operation, notice, backend.removeContainer); err != nil {
 		return releaseControlAdmissionLockV1(operation, err)
 	}
 	status, err := operation.AdmitControlMarkerV1(candidate, wait)
@@ -96,33 +101,33 @@ func awaitControlAdmissionV1(
 		return operation, nil
 	}
 	if status != deploy.LiveRunStatusWaitingV1 {
-		return cancelControlAdmissionV1(ctx, absoluteDir, operation, candidate.ID, backend,
+		return cancelControlAdmissionV1(ctx, absoluteDir, operation, candidate, backend,
 			fmt.Errorf("control admission returned unsupported status %q", status))
 	}
 	if err := writeAdmissionWaitNoticeV1(operation, candidate.ID, notice); err != nil {
-		return cancelControlAdmissionV1(ctx, absoluteDir, operation, candidate.ID, backend,
+		return cancelControlAdmissionV1(ctx, absoluteDir, operation, candidate, backend,
 			fmt.Errorf("describe lifecycle wait: %w", err))
 	}
 	if err := operation.Unlock(); err != nil {
-		return cancelControlAdmissionV1(ctx, absoluteDir, nil, candidate.ID, backend,
+		return cancelControlAdmissionV1(ctx, absoluteDir, nil, candidate, backend,
 			fmt.Errorf("release operation lock while waiting for control admission: %w", err))
 	}
 	operation = nil
 
 	for {
 		if err := backend.wait(ctx); err != nil {
-			return cancelControlAdmissionV1(ctx, absoluteDir, nil, candidate.ID, backend, err)
+			return cancelControlAdmissionV1(ctx, absoluteDir, nil, candidate, backend, err)
 		}
 		operation, err = backend.acquire(ctx, absoluteDir)
 		if err != nil {
-			return cancelControlAdmissionV1(ctx, absoluteDir, nil, candidate.ID, backend, err)
+			return cancelControlAdmissionV1(ctx, absoluteDir, nil, candidate, backend, err)
 		}
-		if _, _, err := operation.RecoverAbandonedControlMarkerV1(); err != nil {
-			return cancelControlAdmissionV1(ctx, absoluteDir, operation, candidate.ID, backend, err)
+		if _, err := recoverLiveRunQueueV1(ctx, operation, notice, backend.removeContainer); err != nil {
+			return cancelControlAdmissionV1(ctx, absoluteDir, operation, candidate, backend, err)
 		}
 		queue, _, err := operation.ReadLiveRunQueueV1()
 		if err != nil {
-			return cancelControlAdmissionV1(ctx, absoluteDir, operation, candidate.ID, backend, err)
+			return cancelControlAdmissionV1(ctx, absoluteDir, operation, candidate, backend, err)
 		}
 		marker, found := findControlMarkerV1(queue, candidate.ID)
 		if !found {
@@ -135,18 +140,18 @@ func awaitControlAdmissionV1(
 			return operation, nil
 		case deploy.LiveRunStatusReadyV1:
 			if err := operation.ActivateReadyControlMarkerV1(candidate.ID); err != nil {
-				return cancelControlAdmissionV1(ctx, absoluteDir, operation, candidate.ID, backend,
+				return cancelControlAdmissionV1(ctx, absoluteDir, operation, candidate, backend,
 					fmt.Errorf("claim ready control admission: %w", err))
 			}
 			return operation, nil
 		case deploy.LiveRunStatusWaitingV1:
 			if err := operation.Unlock(); err != nil {
-				return cancelControlAdmissionV1(ctx, absoluteDir, nil, candidate.ID, backend,
+				return cancelControlAdmissionV1(ctx, absoluteDir, nil, candidate, backend,
 					fmt.Errorf("release operation lock while waiting for control admission: %w", err))
 			}
 			operation = nil
 		default:
-			return cancelControlAdmissionV1(ctx, absoluteDir, operation, candidate.ID, backend,
+			return cancelControlAdmissionV1(ctx, absoluteDir, operation, candidate, backend,
 				fmt.Errorf("control marker %q has unsupported status %q", candidate.ID, marker.Status))
 		}
 	}
@@ -185,7 +190,7 @@ func cancelControlAdmissionV1(
 	ctx context.Context,
 	deploymentDir string,
 	operation *deploy.OperationLock,
-	id string,
+	candidate deploy.ControlMarkerV1,
 	backend controlAdmissionBackendV1,
 	cause error,
 ) (*deploy.OperationLock, error) {
@@ -197,19 +202,25 @@ func cancelControlAdmissionV1(
 		var err error
 		operation, err = backend.acquire(cleanupContext, deploymentDir)
 		if err != nil {
-			return nil, fmt.Errorf("%w; remove queued control marker %q: %v", cause, id, err)
+			return nil, fmt.Errorf("%w; remove queued control marker %q: %v", cause, candidate.ID, err)
 		}
 	}
-	_, _, removeErr := operation.RemoveControlMarkerV1(id)
+	_, removed, removeErr := operation.RemoveControlMarkerV1(candidate.ID)
 	unlockErr := operation.Unlock()
 	if removeErr != nil {
 		if unlockErr != nil {
-			return nil, fmt.Errorf("%w; remove queued control marker %q: %v; release operation lock: %v", cause, id, removeErr, unlockErr)
+			return nil, fmt.Errorf("%w; remove queued control marker %q: %v; release operation lock: %v", cause, candidate.ID, removeErr, unlockErr)
 		}
-		return nil, fmt.Errorf("%w; remove queued control marker %q: %v", cause, id, removeErr)
+		return nil, fmt.Errorf("%w; remove queued control marker %q: %v", cause, candidate.ID, removeErr)
 	}
 	if unlockErr != nil {
 		return nil, fmt.Errorf("%w; release operation lock: %v", cause, unlockErr)
+	}
+	if removed {
+		return nil, fmt.Errorf(
+			"%w; canceled queued lifecycle operation %q (%s)",
+			cause, candidate.Operation, candidate.ID,
+		)
 	}
 	return nil, cause
 }

@@ -136,6 +136,42 @@ func TestRunAdmittedTransientContainerV1CreateFailureCleansQueueAndLock(t *testi
 	}
 }
 
+func TestRunAdmittedTransientContainerV1CreateAndCleanupFailureRetainsContainer(t *testing.T) {
+	dir := t.TempDir()
+	operation, run, execution := admittedTransientFixtureV1(t, dir)
+	createErr := errors.New("Docker create response was lost")
+	cleanupErr := errors.New("Docker daemon unavailable during cleanup")
+	backend := admittedTransientContainerBackendV1{
+		acquire: deploy.AcquireOperationLock,
+		create:  func(CommandSpec, RunOptions) error { return createErr },
+		followup: func(spec CommandSpec, _ RunOptions) error {
+			if !reflect.DeepEqual(spec, execution.Cleanup) {
+				t.Fatalf("cleanup command = %#v", spec)
+			}
+			return cleanupErr
+		},
+		runTemporary: runTemporaryContainerCommand,
+	}
+	err := runAdmittedTransientContainerV1(t.Context(), dir, operation, run.ID, execution, RunOptions{}, backend)
+	if !errors.Is(err, createErr) || !errors.Is(err, cleanupErr) {
+		t.Fatalf("create and cleanup failure = %v", err)
+	}
+	inspection, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inspection.Unlock()
+	queue, found, err := inspection.ReadLiveRunQueueV1()
+	if err != nil || !found || len(queue.Runs) != 0 || len(queue.Cleanup) != 1 {
+		t.Fatalf("queue after create and cleanup failure = %#v, found=%t, error=%v", queue, found, err)
+	}
+	if queue.Cleanup[0].Container != execution.Container ||
+		queue.Cleanup[0].RunID != run.ID ||
+		queue.Cleanup[0].Reason != deploy.LiveRunRecoveryCleanupFailedV1 {
+		t.Fatalf("retained cleanup = %#v", queue.Cleanup[0])
+	}
+}
+
 func TestRunAdmittedTransientContainerV1ExecutionFailureStillCompletesQueue(t *testing.T) {
 	dir := t.TempDir()
 	operation, run, execution := admittedTransientFixtureV1(t, dir)
@@ -160,6 +196,95 @@ func TestRunAdmittedTransientContainerV1ExecutionFailureStillCompletesQueue(t *t
 	queue, found, err := inspection.ReadLiveRunQueueV1()
 	if err != nil || found || len(queue.Runs) != 0 {
 		t.Fatalf("queue after execution failure = %#v, found=%t, error=%v", queue, found, err)
+	}
+}
+
+func TestRunAdmittedTransientContainerV1RetainsFailedCleanupForRetry(t *testing.T) {
+	dir := t.TempDir()
+	operation, run, execution := admittedTransientFixtureV1(t, dir)
+	startErr := errors.New("Docker daemon stopped during execution")
+	cleanupErr := errors.New("Docker daemon unavailable during cleanup")
+	backend := admittedTransientContainerBackendV1{
+		acquire: deploy.AcquireOperationLock,
+		create:  func(CommandSpec, RunOptions) error { return nil },
+		followup: func(spec CommandSpec, _ RunOptions) error {
+			switch {
+			case reflect.DeepEqual(spec, execution.Start):
+				return startErr
+			case reflect.DeepEqual(spec, execution.Cleanup):
+				return cleanupErr
+			default:
+				t.Fatalf("unexpected transient command: %#v", spec)
+				return nil
+			}
+		},
+		runTemporary: runTemporaryContainerCommand,
+	}
+	err := runAdmittedTransientContainerV1(t.Context(), dir, operation, run.ID, execution, RunOptions{}, backend)
+	if !errors.Is(err, startErr) || !errors.Is(err, cleanupErr) {
+		t.Fatalf("execution and cleanup failure = %v", err)
+	}
+	inspection, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inspection.Unlock()
+	queue, found, err := inspection.ReadLiveRunQueueV1()
+	if err != nil || !found || len(queue.Runs) != 0 || len(queue.Cleanup) != 1 {
+		t.Fatalf("queue after failed cleanup = %#v, found=%t, error=%v", queue, found, err)
+	}
+	cleanup := queue.Cleanup[0]
+	if cleanup.Container != execution.Container ||
+		cleanup.RunID != run.ID ||
+		cleanup.Reason != deploy.LiveRunRecoveryCleanupFailedV1 {
+		t.Fatalf("retained cleanup = %#v", cleanup)
+	}
+}
+
+func TestAbortAdmittedTransientAfterReleaseV1RetainsFailedCleanup(t *testing.T) {
+	dir := t.TempDir()
+	operation, run, execution := admittedTransientFixtureV1(t, dir)
+	if err := operation.RecordLiveRunContainerV1(run.ID, execution.Container); err != nil {
+		t.Fatal(err)
+	}
+	if err := operation.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	cause := errors.New("release operation lock failed")
+	cleanupErr := errors.New("Docker daemon unavailable during cleanup")
+	err := abortAdmittedTransientAfterReleaseV1(
+		t.Context(),
+		dir,
+		run.ID,
+		execution,
+		RunOptions{},
+		admittedTransientContainerBackendV1{
+			acquire: deploy.AcquireOperationLock,
+			followup: func(spec CommandSpec, _ RunOptions) error {
+				if !reflect.DeepEqual(spec, execution.Cleanup) {
+					t.Fatalf("cleanup command = %#v", spec)
+				}
+				return cleanupErr
+			},
+		},
+		cause,
+	)
+	if !errors.Is(err, cause) || !errors.Is(err, cleanupErr) {
+		t.Fatalf("release and cleanup failure = %v", err)
+	}
+	inspection, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inspection.Unlock()
+	queue, found, err := inspection.ReadLiveRunQueueV1()
+	if err != nil || !found || len(queue.Runs) != 0 || len(queue.Cleanup) != 1 {
+		t.Fatalf("queue after release and cleanup failure = %#v, found=%t, error=%v", queue, found, err)
+	}
+	if queue.Cleanup[0].Container != execution.Container ||
+		queue.Cleanup[0].RunID != run.ID ||
+		queue.Cleanup[0].Reason != deploy.LiveRunRecoveryCleanupFailedV1 {
+		t.Fatalf("retained cleanup = %#v", queue.Cleanup[0])
 	}
 }
 

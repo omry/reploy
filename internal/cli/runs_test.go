@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -30,7 +32,7 @@ func TestRunsListUsesResolvedDeploymentAndPrintsOutstandingRuns(t *testing.T) {
 	old := dockerListLiveRuns
 	t.Cleanup(func() { dockerListLiveRuns = old })
 	var gotDir string
-	dockerListLiveRuns = func(_ context.Context, dir string) ([]deploy.LiveRunV1, error) {
+	dockerListLiveRuns = func(_ context.Context, dir string, _ io.Writer) ([]deploy.LiveRunV1, error) {
 		gotDir = dir
 		return []deploy.LiveRunV1{
 			{ID: "run-0000000000000001", Status: deploy.LiveRunStatusActiveV1, Kind: deploy.LiveRunKindAppV1, Name: "export-data"},
@@ -51,7 +53,7 @@ func TestRunsListUsesResolvedDeploymentAndPrintsOutstandingRuns(t *testing.T) {
 func TestRunsListReportsEmptyQueue(t *testing.T) {
 	old := dockerListLiveRuns
 	t.Cleanup(func() { dockerListLiveRuns = old })
-	dockerListLiveRuns = func(context.Context, string) ([]deploy.LiveRunV1, error) { return nil, nil }
+	dockerListLiveRuns = func(context.Context, string, io.Writer) ([]deploy.LiveRunV1, error) { return nil, nil }
 	code, stdout, stderr := runCLI("runs", "list", "--dir", t.TempDir())
 	if code != 0 || stdout != "No active or waiting runs.\n" || stderr != "" {
 		t.Fatalf("empty runs list: code=%d stdout=%q stderr=%q", code, stdout, stderr)
@@ -88,11 +90,35 @@ func TestRunsStopForwardsTimeoutAndReportsFoundOrAbsent(t *testing.T) {
 	}
 }
 
+func TestRunsStopReportsRecoveryBeforeStopError(t *testing.T) {
+	old := dockerStopLiveRun
+	t.Cleanup(func() { dockerStopLiveRun = old })
+	dockerStopLiveRun = func(_ context.Context, _ string, _ string, _ time.Duration) (dockerdeploy.LiveRunStopResultV1, error) {
+		return dockerdeploy.LiveRunStopResultV1{
+			Recovery: deploy.LiveRunRecoveryV1{Removed: []deploy.RecoveredLiveRunV1{{
+				Run: deploy.LiveRunV1{
+					ID: "run-0000000000000002", Kind: deploy.LiveRunKindShellV1,
+					Name: "shell",
+				},
+				Reason: deploy.LiveRunRecoveryAbandonedOwnerV1,
+			}}},
+		}, errors.New("target container removal failed")
+	}
+	code, stdout, stderr := runCLI(
+		"runs", "stop", "run-0000000000000001", "--dir", "deployment",
+	)
+	if code != 1 || stdout != "" ||
+		!strings.Contains(stderr, "skipped abandoned shell \"shell\" (run-0000000000000002)") ||
+		!strings.Contains(stderr, "reploy runs stop error: target container removal failed") {
+		t.Fatalf("stop recovery error: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
 func TestRunsRejectsInvalidUsageBeforeBackend(t *testing.T) {
 	oldList := dockerListLiveRuns
 	oldStop := dockerStopLiveRun
 	t.Cleanup(func() { dockerListLiveRuns, dockerStopLiveRun = oldList, oldStop })
-	dockerListLiveRuns = func(context.Context, string) ([]deploy.LiveRunV1, error) { panic("backend called") }
+	dockerListLiveRuns = func(context.Context, string, io.Writer) ([]deploy.LiveRunV1, error) { panic("backend called") }
 	dockerStopLiveRun = func(context.Context, string, string, time.Duration) (dockerdeploy.LiveRunStopResultV1, error) {
 		panic("backend called")
 	}

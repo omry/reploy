@@ -11,7 +11,7 @@ import (
 	"github.com/omry/reploy/internal/dockerdeploy"
 )
 
-var dockerListLiveRuns = dockerdeploy.ListLiveRunsV1
+var dockerListLiveRuns = dockerdeploy.ListLiveRunsWithNoticeV1
 var dockerStopLiveRun = dockerdeploy.StopLiveRunV1
 
 type dockerRunsOptions struct {
@@ -50,7 +50,7 @@ func runDockerRuns(args []string, stdout io.Writer, stderr io.Writer, globalOpti
 
 	switch action {
 	case "list":
-		runs, err := dockerListLiveRuns(context.Background(), options.Dir)
+		runs, err := dockerListLiveRuns(context.Background(), options.Dir, stderr)
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy runs list error: %v\n", err)
 			return 1
@@ -59,6 +59,7 @@ func runDockerRuns(args []string, stdout io.Writer, stderr io.Writer, globalOpti
 		return 0
 	case "stop":
 		result, err := dockerStopLiveRun(context.Background(), options.Dir, options.RunID, globalOptions.DockerTimeout)
+		dockerdeploy.WriteLiveRunRecoveryNoticeV1(stderr, result.Recovery)
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy runs stop error: %v\n", err)
 			return 1

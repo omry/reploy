@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"context"
 	"fmt"
+	"io"
 	"path/filepath"
 	"time"
 
@@ -10,8 +11,9 @@ import (
 )
 
 type LiveRunStopResultV1 struct {
-	Found bool
-	Run   deploy.LiveRunV1
+	Found    bool
+	Run      deploy.LiveRunV1
+	Recovery deploy.LiveRunRecoveryV1
 }
 
 type liveRunsBackendV1 struct {
@@ -20,7 +22,11 @@ type liveRunsBackendV1 struct {
 }
 
 func ListLiveRunsV1(ctx context.Context, deploymentDir string) ([]deploy.LiveRunV1, error) {
-	return listLiveRunsV1(ctx, deploymentDir, liveRunsBackendV1{acquire: deploy.AcquireOperationLock})
+	return listLiveRunsV1(ctx, deploymentDir, nil, liveRunsBackendV1{acquire: deploy.AcquireOperationLock})
+}
+
+func ListLiveRunsWithNoticeV1(ctx context.Context, deploymentDir string, notice io.Writer) ([]deploy.LiveRunV1, error) {
+	return listLiveRunsV1(ctx, deploymentDir, notice, liveRunsBackendV1{acquire: deploy.AcquireOperationLock})
 }
 
 func StopLiveRunV1(ctx context.Context, deploymentDir string, id string, dockerPreflightTimeout time.Duration) (LiveRunStopResultV1, error) {
@@ -30,7 +36,7 @@ func StopLiveRunV1(ctx context.Context, deploymentDir string, id string, dockerP
 	})
 }
 
-func listLiveRunsV1(ctx context.Context, deploymentDir string, backend liveRunsBackendV1) (runs []deploy.LiveRunV1, err error) {
+func listLiveRunsV1(ctx context.Context, deploymentDir string, notice io.Writer, backend liveRunsBackendV1) (runs []deploy.LiveRunV1, err error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("list live runs requires a context")
 	}
@@ -56,6 +62,9 @@ func listLiveRunsV1(ctx context.Context, deploymentDir string, backend liveRunsB
 			err = unlockErr
 		}
 	}()
+	if _, err := recoverLiveRunQueueV1(ctx, operation, notice, nil); err != nil {
+		return nil, err
+	}
 	queue, _, err := operation.ReadLiveRunQueueV1()
 	if err != nil {
 		return nil, err
@@ -104,6 +113,10 @@ func stopLiveRunV1(
 			err = unlockErr
 		}
 	}()
+	result.Recovery, err = recoverLiveRunQueueV1(ctx, operation, nil, backend.removeContainer)
+	if err != nil {
+		return result, err
+	}
 	queue, _, err := operation.ReadLiveRunQueueV1()
 	if err != nil {
 		return result, err
@@ -112,7 +125,8 @@ func stopLiveRunV1(
 	if !found {
 		return result, nil
 	}
-	result = LiveRunStopResultV1{Found: true, Run: run}
+	result.Found = true
+	result.Run = run
 	if run.Status == deploy.LiveRunStatusActiveV1 && run.Container != "" {
 		removeErr := backend.removeContainer(
 			TemporaryContainerCleanupCommand(run.Container),

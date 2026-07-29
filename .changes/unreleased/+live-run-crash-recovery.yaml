@@ -1,0 +1,2 @@
+kind: Fixed
+body: Recover queued app, shell, and lifecycle operations after client crashes or host restarts without replaying work, while retaining exact transient containers for bounded, retryable cleanup after crashes or cleanup failures.

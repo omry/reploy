@@ -19,6 +19,8 @@ func TestListLiveRunsV1ReturnsOnlyPersistedOutstandingRuns(t *testing.T) {
 	}
 	active := liveRunAdmissionFixtureV1("run-0000000000000001", false)
 	waiting := liveRunAdmissionFixtureV1("run-0000000000000002", true)
+	holdLiveRunLeaseV1(t, operation, active.ID)
+	holdLiveRunLeaseV1(t, operation, waiting.ID)
 	if _, err := operation.AdmitLiveRunV1(active, false); err != nil {
 		t.Fatal(err)
 	}
@@ -57,6 +59,9 @@ func TestStopLiveRunV1CancelsWaiterWithoutDockerAndPromotesFairly(t *testing.T) 
 	active := liveRunAdmissionFixtureV1("run-0000000000000001", false)
 	firstWaiter := liveRunAdmissionFixtureV1("run-0000000000000002", true)
 	secondWaiter := liveRunAdmissionFixtureV1("run-0000000000000003", false)
+	holdLiveRunLeaseV1(t, operation, active.ID)
+	holdLiveRunLeaseV1(t, operation, firstWaiter.ID)
+	holdLiveRunLeaseV1(t, operation, secondWaiter.ID)
 	for _, admission := range []struct {
 		run  deploy.LiveRunV1
 		wait bool
@@ -93,6 +98,8 @@ func TestStopLiveRunV1RemovesActiveContainerBeforePromotingWaiter(t *testing.T) 
 	}
 	active := liveRunAdmissionFixtureV1("run-0000000000000001", true)
 	waiter := liveRunAdmissionFixtureV1("run-0000000000000002", false)
+	holdLiveRunLeaseV1(t, operation, active.ID)
+	holdLiveRunLeaseV1(t, operation, waiter.ID)
 	if _, err := operation.AdmitLiveRunV1(active, false); err != nil {
 		t.Fatal(err)
 	}
@@ -141,6 +148,7 @@ func TestStopLiveRunV1IsIdempotentForAbsentRunAndPreservesQueueOnDockerFailure(t
 		t.Fatal(err)
 	}
 	active := liveRunAdmissionFixtureV1("run-0000000000000001", true)
+	holdLiveRunLeaseV1(t, operation, active.ID)
 	if _, err := operation.AdmitLiveRunV1(active, false); err != nil {
 		t.Fatal(err)
 	}
@@ -161,5 +169,33 @@ func TestStopLiveRunV1IsIdempotentForAbsentRunAndPreservesQueueOnDockerFailure(t
 	runs, listErr := ListLiveRunsV1(t.Context(), dir)
 	if listErr != nil || len(runs) != 1 || runs[0].ID != active.ID {
 		t.Fatalf("failed stop changed queue = %#v, %v", runs, listErr)
+	}
+}
+
+func TestStopLiveRunV1PreservesAutomaticRecoveryReport(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	abandoned := liveRunAdmissionFixtureV1("run-0000000000000001", false)
+	target := liveRunAdmissionFixtureV1("run-0000000000000002", false)
+	targetLease := holdLiveRunLeaseV1(t, operation, target.ID)
+	if targetLease == nil {
+		t.Fatal("target lease is missing")
+	}
+	if _, err := operation.AdmitLiveRunV1(abandoned, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := operation.AdmitLiveRunV1(target, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := operation.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	result, err := StopLiveRunV1(t.Context(), dir, target.ID, 0)
+	if err != nil || !result.Found || result.Run.ID != target.ID ||
+		len(result.Recovery.Removed) != 1 || result.Recovery.Removed[0].Run.ID != abandoned.ID {
+		t.Fatalf("stop recovery result = %#v, %v", result, err)
 	}
 }

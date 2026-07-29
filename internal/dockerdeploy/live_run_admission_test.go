@@ -18,6 +18,20 @@ func liveRunAdmissionFixtureV1(id string, exclusive bool) deploy.LiveRunV1 {
 	}
 }
 
+func holdLiveRunLeaseV1(t *testing.T, operation *deploy.OperationLock, id string) *deploy.QueueEntryLeaseV1 {
+	t.Helper()
+	lease, err := operation.AcquireLiveRunLeaseV1(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := lease.Release(); err != nil {
+			t.Errorf("release live-run lease %q: %v", id, err)
+		}
+	})
+	return lease
+}
+
 func TestAwaitLiveRunAdmissionV1ReturnsWithLockHeldAfterFairPromotion(t *testing.T) {
 	dir := t.TempDir()
 	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
@@ -25,6 +39,7 @@ func TestAwaitLiveRunAdmissionV1ReturnsWithLockHeldAfterFairPromotion(t *testing
 		t.Fatal(err)
 	}
 	first := liveRunAdmissionFixtureV1("run-0000000000000001", false)
+	holdLiveRunLeaseV1(t, operation, first.ID)
 	if _, err := operation.AdmitLiveRunV1(first, false); err != nil {
 		t.Fatal(err)
 	}
@@ -43,6 +58,7 @@ func TestAwaitLiveRunAdmissionV1ReturnsWithLockHeldAfterFairPromotion(t *testing
 		},
 	}
 	second := liveRunAdmissionFixtureV1("run-0000000000000002", true)
+	holdLiveRunLeaseV1(t, operation, second.ID)
 	type admissionResult struct {
 		operation *deploy.OperationLock
 		err       error
@@ -91,6 +107,7 @@ func TestAwaitLiveRunAdmissionV1ExplainsWaitBeforePolling(t *testing.T) {
 	first.Name = "shell"
 	first.WritableMount = "config"
 	first.WritablePaths = []string{"/conf", "/data"}
+	holdLiveRunLeaseV1(t, operation, first.ID)
 	if _, err := operation.AdmitLiveRunV1(first, false); err != nil {
 		t.Fatal(err)
 	}
@@ -104,6 +121,7 @@ func TestAwaitLiveRunAdmissionV1ExplainsWaitBeforePolling(t *testing.T) {
 		},
 	}
 	second := liveRunAdmissionFixtureV1("run-0000000000000002", true)
+	holdLiveRunLeaseV1(t, operation, second.ID)
 	_, err = awaitLiveRunAdmissionV1(ctx, dir, operation, second, true, &notice, backend)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("wait error = %v", err)
@@ -122,16 +140,19 @@ func TestAwaitLiveRunAdmissionV1ReportsQueueDepthForMultipleWaiters(t *testing.T
 		t.Fatal(err)
 	}
 	first := liveRunAdmissionFixtureV1("run-0000000000000001", true)
+	holdLiveRunLeaseV1(t, operation, first.ID)
 	if _, err := operation.AdmitLiveRunV1(first, false); err != nil {
 		t.Fatal(err)
 	}
 	second := liveRunAdmissionFixtureV1("run-0000000000000002", false)
+	holdLiveRunLeaseV1(t, operation, second.ID)
 	if _, err := operation.AdmitLiveRunV1(second, true); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	var notice bytes.Buffer
 	third := liveRunAdmissionFixtureV1("run-0000000000000003", false)
+	holdLiveRunLeaseV1(t, operation, third.ID)
 	_, err = awaitLiveRunAdmissionV1(ctx, dir, operation, third, true, &notice, liveRunAdmissionBackendV1{
 		acquire: deploy.AcquireOperationLock,
 		wait: func(context.Context) error {
@@ -154,6 +175,7 @@ func TestAwaitLiveRunAdmissionV1CancellationRemovesOnlyCaller(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := liveRunAdmissionFixtureV1("run-0000000000000001", false)
+	holdLiveRunLeaseV1(t, operation, first.ID)
 	if _, err := operation.AdmitLiveRunV1(first, false); err != nil {
 		t.Fatal(err)
 	}
@@ -166,8 +188,9 @@ func TestAwaitLiveRunAdmissionV1CancellationRemovesOnlyCaller(t *testing.T) {
 		},
 	}
 	second := liveRunAdmissionFixtureV1("run-0000000000000002", true)
+	holdLiveRunLeaseV1(t, operation, second.ID)
 	admitted, err := awaitLiveRunAdmissionV1(ctx, dir, operation, second, true, nil, backend)
-	if admitted != nil || !errors.Is(err, context.Canceled) {
+	if admitted != nil || !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "canceled queued app command \"export\" ("+second.ID+")") {
 		t.Fatalf("canceled admission = %#v, %v", admitted, err)
 	}
 	inspection, err := deploy.AcquireOperationLock(t.Context(), dir)
@@ -188,10 +211,12 @@ func TestAwaitLiveRunAdmissionV1ImmediateConflictReleasesLockWithoutQueueChange(
 		t.Fatal(err)
 	}
 	first := liveRunAdmissionFixtureV1("run-0000000000000001", false)
+	holdLiveRunLeaseV1(t, operation, first.ID)
 	if _, err := operation.AdmitLiveRunV1(first, false); err != nil {
 		t.Fatal(err)
 	}
 	second := liveRunAdmissionFixtureV1("run-0000000000000002", true)
+	holdLiveRunLeaseV1(t, operation, second.ID)
 	admitted, err := awaitLiveRunAdmissionV1(t.Context(), dir, operation, second, false, nil, liveRunAdmissionBackendV1{
 		acquire: deploy.AcquireOperationLock,
 		wait:    func(context.Context) error { return nil },
@@ -219,6 +244,7 @@ func TestAwaitLiveRunAdmissionV1RejectsForeignOperationLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	candidate := liveRunAdmissionFixtureV1("run-0000000000000001", false)
+	holdLiveRunLeaseV1(t, operation, candidate.ID)
 	admitted, err := awaitLiveRunAdmissionV1(t.Context(), t.TempDir(), operation, candidate, false, nil, liveRunAdmissionBackendV1{
 		acquire: deploy.AcquireOperationLock,
 		wait:    func(context.Context) error { return nil },
@@ -243,6 +269,7 @@ func TestAwaitLiveRunAdmissionV1RecoversAbandonedControlMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	candidate := liveRunAdmissionFixtureV1("run-0000000000000001", false)
+	holdLiveRunLeaseV1(t, operation, candidate.ID)
 	admitted, err := awaitLiveRunAdmissionV1(t.Context(), dir, operation, candidate, false, nil, liveRunAdmissionBackendV1{
 		acquire: deploy.AcquireOperationLock,
 		wait:    func(context.Context) error { return nil },
