@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/buildprofile"
 	"github.com/omry/reploy/internal/buildprogress"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
@@ -71,6 +72,9 @@ func ExecutePreparedPythonGraph(
 		return providers.GraphExecutionResult{}, err
 	}
 	defer func() {
+		if providerHelperCleanupFailed(err) {
+			return
+		}
 		if cleanupErr := cleanup(); cleanupErr != nil {
 			result = providers.GraphExecutionResult{}
 			err = errors.Join(err, cleanupErr)
@@ -104,45 +108,54 @@ func providerGraphProgressCallbacks(
 		}
 	}
 	completedOperations := 0
-	if progress != nil || report != nil {
-		originalPrepareNode := prepareNode
-		originalMaterializeNode := materializeNode
-		prepareNode = func(ctx context.Context, request providers.GraphNodePrepareRequest) (providers.GraphNodePreparation, error) {
-			detail := providerNodeProgressDescription("resolving", request.Resolve.Plan, request.Resolve.NodeID)
-			writeProviderBuildProgress(progress, "%s", detail)
+	originalPrepareNode := prepareNode
+	originalMaterializeNode := materializeNode
+	prepareNode = func(ctx context.Context, request providers.GraphNodePrepareRequest) (providers.GraphNodePreparation, error) {
+		detail := providerNodeProgressDescription("resolving", request.Resolve.Plan, request.Resolve.NodeID)
+		writeProviderBuildProgress(progress, "%s", detail)
+		buildprogress.Report(report, buildprogress.Event{
+			Phase: buildprogress.PhaseProviders, Detail: detail,
+			Completed: completedOperations, Total: totalOperations,
+		})
+		profileCtx, end := buildprofile.Start(ctx, providerProfileLabel(detail))
+		result, err := originalPrepareNode(profileCtx, request)
+		end(err)
+		if err == nil {
+			completedOperations++
 			buildprogress.Report(report, buildprogress.Event{
 				Phase: buildprogress.PhaseProviders, Detail: detail,
 				Completed: completedOperations, Total: totalOperations,
 			})
-			result, err := originalPrepareNode(ctx, request)
-			if err == nil {
-				completedOperations++
-				buildprogress.Report(report, buildprogress.Event{
-					Phase: buildprogress.PhaseProviders, Detail: detail,
-					Completed: completedOperations, Total: totalOperations,
-				})
-			}
-			return result, err
 		}
-		materializeNode = func(ctx context.Context, request providers.GraphNodeMaterializeRequest) (providers.GraphNodeMaterializeResult, error) {
-			detail := providerNodeProgressDescription("building", plan, request.Node.ID)
-			writeProviderBuildProgress(progress, "%s", detail)
+		return result, err
+	}
+	materializeNode = func(ctx context.Context, request providers.GraphNodeMaterializeRequest) (providers.GraphNodeMaterializeResult, error) {
+		detail := providerNodeProgressDescription("building", plan, request.Node.ID)
+		writeProviderBuildProgress(progress, "%s", detail)
+		buildprogress.Report(report, buildprogress.Event{
+			Phase: buildprogress.PhaseProviders, Detail: detail,
+			Completed: completedOperations, Total: totalOperations,
+		})
+		profileCtx, end := buildprofile.Start(ctx, providerProfileLabel(detail))
+		result, err := originalMaterializeNode(profileCtx, request)
+		end(err)
+		if err == nil {
+			completedOperations++
 			buildprogress.Report(report, buildprogress.Event{
 				Phase: buildprogress.PhaseProviders, Detail: detail,
 				Completed: completedOperations, Total: totalOperations,
 			})
-			result, err := originalMaterializeNode(ctx, request)
-			if err == nil {
-				completedOperations++
-				buildprogress.Report(report, buildprogress.Event{
-					Phase: buildprogress.PhaseProviders, Detail: detail,
-					Completed: completedOperations, Total: totalOperations,
-				})
-			}
-			return result, err
 		}
+		return result, err
 	}
 	return prepareNode, materializeNode
+}
+
+func providerProfileLabel(detail string) string {
+	if detail == "" {
+		return "Provider operation"
+	}
+	return strings.ToUpper(detail[:1]) + detail[1:]
 }
 
 func writeProviderNodeProgress(output io.Writer, action string, plan providers.ProviderPlanV1, id providers.NodeID) {

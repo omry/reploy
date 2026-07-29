@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/omry/reploy/internal/buildprofile"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
@@ -126,17 +127,21 @@ func prepareLockedProviderBuildV1(
 		generation = state.Current
 	}
 	recoveryProfileValidator, recoveryBundleValidator := providerBuildRecoveryValidatorsV1(input.NoCache)
+	recoveryCtx, endRecovery := buildprofile.Start(ctx, "Recover interrupted provider work")
 	recovered, err := backend.recover(
-		ctx, input.Operation, input.Store, generation, input.Environment, input.DeploymentDir,
+		recoveryCtx, input.Operation, input.Store, generation, input.Environment, input.DeploymentDir,
 		recoveryProfileValidator, recoveryBundleValidator,
 	)
+	endRecovery(err)
 	if err != nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build recovery: %w", err)
 	}
+	_, endLoad := buildprofile.Start(ctx, "Load provider build request")
 	loaded, err := backend.load(
 		input.Operation, input.PackageOverrides, input.BaseImage,
 		append([]providers.ResolvedSourceInput{}, input.Sources...),
 	)
+	endLoad(err)
 	if err != nil {
 		return LockedProviderBuildPreparationV1{}, err
 	}
@@ -159,9 +164,11 @@ func prepareLockedProviderBuildV1(
 	}
 	var currentReuse *reuseCandidate
 	if !input.NoCache {
+		currentCtx, endCurrent := buildprofile.Start(ctx, "Load current provider build")
 		current, currentFound, err := backend.validateCurrent(
-			ctx, input.Operation, input.Store, input.Environment, input.DeploymentDir,
+			currentCtx, input.Operation, input.Store, input.Environment, input.DeploymentDir,
 		)
+		endCurrent(err)
 		if err != nil {
 			return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build current generation: %w", err)
 		}
@@ -230,7 +237,9 @@ func prepareLockedProviderBuildV1(
 		}
 	}
 
-	selected, err := backend.selectBase(ctx, loaded.Request)
+	selectCtx, endSelect := buildprofile.Start(ctx, "Select base image")
+	selected, err := backend.selectBase(selectCtx, loaded.Request)
+	endSelect(err)
 	if err != nil {
 		return LockedProviderBuildPreparationV1{}, err
 	}
@@ -280,7 +289,9 @@ func prepareLockedProviderBuildV1(
 	// provider execution, local sources must re-enter through fresh wheel
 	// construction rather than through the prior lock.
 	result.Loaded.Request.Sources = []providers.ResolvedSourceInput{}
-	prepared, err := backend.realizeBase(ctx, input.Store, selected)
+	realizeCtx, endRealize := buildprofile.Start(ctx, "Inspect and realize base image")
+	prepared, err := backend.realizeBase(realizeCtx, input.Store, selected)
+	endRealize(err)
 	if err != nil {
 		return LockedProviderBuildPreparationV1{}, err
 	}

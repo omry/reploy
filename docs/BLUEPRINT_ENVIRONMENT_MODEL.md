@@ -1468,12 +1468,15 @@ Reploy owns its generated Docker containers and image references, while Docker
 and BuildKit own physical layer sharing and build-cache garbage collection.
 Each Reploy temporary or generation reference is owned by one deployment
 directory, and environment cleanup removes only that directory's references.
-V1 creates no canonical Reploy image tag and performs no cross-installation
-completed-image lookup. Docker may still reuse and garbage-collect physical
-layers and build-cache entries under its own policies. Reploy never forcibly
-deletes physical images or performs a global Docker or BuildKit prune. These
-naming, tagging, and retention rules are backend implementation details rather
-than cross-backend blueprint protocol.
+Accepted provider layers additionally use internal content-addressed
+verification-cache references so a retained build lock can be audited after
+temporary build-base references disappear. These references contain no
+deployment identity and are not a completed-image lookup or build-reuse
+protocol. Docker may still reuse and garbage-collect all other physical layers
+and build-cache entries under its own policies. Reploy never forcibly deletes
+physical images or performs a global Docker or BuildKit prune. These naming,
+tagging, and retention rules are backend implementation details rather than
+cross-backend blueprint protocol.
 
 State-changing operations for one deployment directory hold an exclusive
 directory operation lock. A build publishes under a unique temporary reference,

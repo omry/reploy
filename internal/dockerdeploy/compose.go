@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/omry/reploy/internal/buildprofile"
 	"github.com/omry/reploy/internal/deploy"
 )
 
@@ -45,7 +46,10 @@ func runCommand(spec CommandSpec, options RunOptions) error {
 		ctx = context.Background()
 	}
 	if spec.Name == "docker" {
-		if err := dockerPreflight(ctx, spec, effectiveDockerPreflightTimeout(options.DockerPreflightTimeout)); err != nil {
+		_, end := buildprofile.Start(ctx, "Docker preflight")
+		err := dockerPreflight(ctx, spec, effectiveDockerPreflightTimeout(options.DockerPreflightTimeout))
+		end(err)
+		if err != nil {
 			return err
 		}
 	}
@@ -55,10 +59,15 @@ func runCommand(spec CommandSpec, options RunOptions) error {
 // runCommandWithoutDockerPreflight is for follow-up commands in one
 // higher-level Docker operation whose first command already passed preflight.
 // Callers must not use it as the entry point to an independent operation.
-func runCommandWithoutDockerPreflight(spec CommandSpec, options RunOptions) error {
+func runCommandWithoutDockerPreflight(spec CommandSpec, options RunOptions) (resultErr error) {
 	ctx := options.Context
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if spec.Name == "docker" {
+		var end func(error)
+		ctx, end = buildprofile.Start(ctx, dockerProfileOperation(spec.Args))
+		defer func() { end(resultErr) }()
 	}
 	command := exec.CommandContext(ctx, spec.Name, spec.Args...)
 	command.Dir = spec.Dir
@@ -81,6 +90,26 @@ func runCommandWithoutDockerPreflight(spec CommandSpec, options RunOptions) erro
 		return fmt.Errorf("%s failed: %w", spec.Name, err)
 	}
 	return nil
+}
+
+func dockerProfileOperation(args []string) string {
+	if len(args) == 0 {
+		return "Docker command"
+	}
+	switch args[0] {
+	case "build", "create", "exec", "inspect", "pull", "start", "stop", "tag", "wait":
+		return "Docker " + args[0]
+	case "container", "image", "volume":
+		if len(args) > 1 {
+			switch args[1] {
+			case "create", "inspect", "ls", "rm", "start", "stop", "tag":
+				return "Docker " + args[0] + " " + args[1]
+			}
+		}
+		return "Docker " + args[0]
+	default:
+		return "Docker command"
+	}
 }
 
 func effectiveDockerPreflightTimeout(timeout time.Duration) time.Duration {

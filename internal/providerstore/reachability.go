@@ -69,6 +69,10 @@ func (store Store) RemoveTemporaryEntries() error {
 	sort.Slice(entries, func(left int, right int) bool { return entries[left].Name() < entries[right].Name() })
 	for _, entry := range entries {
 		if err := makeTemporaryEntryRemovable(temporary, entry.Name()); err != nil {
+			if errors.Is(err, fs.ErrPermission) {
+				path := filepath.Join(temporaryRoot, entry.Name())
+				return temporaryWorkspacePermissionError(path, err)
+			}
 			return fmt.Errorf("prepare abandoned provider store temporary entry %q for removal: %w", entry.Name(), err)
 		}
 		if err := temporary.RemoveAll(entry.Name()); err != nil {
@@ -79,6 +83,15 @@ func (store Store) RemoveTemporaryEntries() error {
 		return syncStoreDirectory(temporaryRoot)
 	}
 	return nil
+}
+
+func temporaryWorkspacePermissionError(path string, err error) error {
+	return fmt.Errorf(
+		"abandoned provider workspace %q cannot be removed by the current host user: %w\n"+
+			"this can follow an interrupted Docker operation\n"+
+			"next: restore ownership of that workspace and its contents to the current user, or remove it, then rerun the command",
+		path, err,
+	)
 }
 
 func makeTemporaryEntryRemovable(temporary *os.Root, name string) error {

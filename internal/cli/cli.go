@@ -961,6 +961,7 @@ type dockerBuildOptions struct {
 	DirExplicit bool
 	NoCache     bool
 	Verify      bool
+	Profile     bool
 	Verbose     bool
 }
 
@@ -980,6 +981,8 @@ func parseDockerBuildOptions(args []string) (dockerBuildOptions, error) {
 			options.NoCache = true
 		case "--verify":
 			options.Verify = true
+		case "--profile":
+			options.Profile = true
 		case "--verbose":
 			options.Verbose = true
 		default:
@@ -3588,6 +3591,7 @@ Options:
   --dir DIR          Staging directory, default current staging dir or reploy-staging
   --no-cache         Rerun resolvers and image construction instead of reusing the current build
   --verify           Fully verify a reusable current build; rebuild if verification fails
+  --profile          Show hierarchical timings for build decisions and backend work
   --verbose          Show durable Reploy-level build steps without backend transcripts
   -h, --help         Show build help
 `, "\n"))

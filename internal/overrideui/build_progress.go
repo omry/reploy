@@ -186,7 +186,7 @@ func (m *buildProgressModel) View() string {
 		title = "Building " + m.environment
 	}
 	body += titleStyle.Render(title)
-	body += "\n\n" + m.spinner.View() + " " + m.phaseLabel()
+	body += "\n" + m.spinner.View() + " " + m.phaseLabel()
 	body += "\n" + m.progressBar()
 	body += "\n" + truncate(m.current, max(24, m.panelWidth()-6))
 	operationStatus := " "
@@ -197,13 +197,17 @@ func (m *buildProgressModel) View() string {
 		)
 	}
 	body += "\n" + mutedStyle.Render(operationStatus)
-	body += "\n\n"
+	body += "\n"
 	if m.ctrlCArmed {
 		body += mutedStyle.Render("Press Ctrl+C again to cancel and exit.")
 	} else {
 		body += mutedStyle.Render("Ctrl+C twice cancels")
 	}
-	return panelStyle.Width(m.panelWidth()).Render(body)
+	// Bubble Tea's inline renderer erases the cursor's final line when it
+	// shuts down. Keep the cursor on a blank line so that graceful completion
+	// preserves the panel's bottom border and subsequent command output starts
+	// below it.
+	return panelStyle.Width(m.panelWidth()).Render(body) + "\n"
 }
 
 func (m *buildProgressModel) panelWidth() int {

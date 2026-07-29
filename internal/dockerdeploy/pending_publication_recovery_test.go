@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/omry/reploy/internal/canonical"
@@ -63,6 +65,70 @@ func TestRecoverPendingPublicationCleansTemporaryEntriesWhenNothingIsPending(t *
 		t.Fatal("recovery reported a pending publication")
 	}
 	requireNoTemporaryEntries(t, store)
+}
+
+func TestRecoverPendingPublicationRemovesDeterministicHelperContainersBeforeScratch(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	store, err := providerstore.NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probeWorkspace, err := store.NewWorkspace("probe-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aptWorkspace, err := store.NewWorkspace("apt-resolve-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.NewWorkspace("python-resolve-*"); err != nil {
+		t.Fatal(err)
+	}
+
+	previousRun := runAbandonedProviderContainerCleanupCommand
+	t.Cleanup(func() { runAbandonedProviderContainerCleanupCommand = previousRun })
+	got := []string{}
+	runAbandonedProviderContainerCleanupCommand = func(spec CommandSpec, _ RunOptions) error {
+		if spec.Name != "docker" || len(spec.Args) != 3 || spec.Args[0] != "rm" || spec.Args[1] != "--force" {
+			t.Fatalf("command = %#v", spec)
+		}
+		if _, err := os.Stat(probeWorkspace); err != nil {
+			t.Fatalf("probe workspace was removed before helper containers: %v", err)
+		}
+		got = append(got, spec.Args[2])
+		return nil
+	}
+
+	if _, err := RecoverPendingPublication(t.Context(), operation, store, nil, "demo", dir, acceptRecoveryProfileOwner, acceptRecoveryBundleOwner); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		aptResolverContainerName(aptWorkspace),
+		imageProbeContainerName(probeWorkspace),
+		pythonResolverContainerName(probeWorkspace),
+	}
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("helper containers = %#v, want %#v", got, want)
+	}
+	requireNoTemporaryEntries(t, store)
+}
+
+func TestRemoveAbandonedProviderContainerAcceptsAlreadyAbsentContainer(t *testing.T) {
+	previousRun := runAbandonedProviderContainerCleanupCommand
+	t.Cleanup(func() { runAbandonedProviderContainerCleanupCommand = previousRun })
+	runAbandonedProviderContainerCleanupCommand = func(_ CommandSpec, options RunOptions) error {
+		_, _ = options.Stderr.Write([]byte("Error response from daemon: No such container: reploy-probe-missing\n"))
+		return errors.New("docker failed")
+	}
+	if err := removeAbandonedProviderContainer(t.Context(), "reploy-probe-missing"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestExecutePendingPublicationRecoveryRemovesPendingLast(t *testing.T) {

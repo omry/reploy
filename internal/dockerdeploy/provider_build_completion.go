@@ -6,6 +6,7 @@ import (
 	"reflect"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/buildprofile"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providers/registry"
@@ -106,20 +107,26 @@ func completeProviderBuild(
 
 	options := input.RunOptions
 	options.Context = ctx
+	finalizeCtx, endFinalize := buildprofile.Start(ctx, "Validate and finalize image")
+	finalizeOptions := options
+	finalizeOptions.Context = finalizeCtx
 	finalized, err := backend.validateAndFinalize(
-		ctx, store, input.Validation.Layers, input.Validation.Final,
-		registry.ValidateRequirementProfileV1, input.RunValidation, options,
+		finalizeCtx, store, input.Validation.Layers, input.Validation.Final,
+		registry.ValidateRequirementProfileV1, input.RunValidation, finalizeOptions,
 	)
+	endFinalize(err)
 	if err != nil {
 		return ProviderBuildCompletionResult{}, err
 	}
-	lock, err := backend.assemble(ctx, store, BuildLockAssemblyInput{
+	assembleCtx, endAssemble := buildprofile.Start(ctx, "Assemble build lock")
+	lock, err := backend.assemble(assembleCtx, store, BuildLockAssemblyInput{
 		BlueprintDigest: blueprintDigest, ResolvedRequest: input.ResolvedRequest,
 		Overlay: input.Overlay, PackageOverrides: input.PackageOverrides,
 		Base: input.Base, Graph: input.Graph,
 		RuntimePolicy:    policy,
 		ValidationRecord: finalized.Validation.Final.Reference, FinalImage: finalized.Image.Image,
 	})
+	endAssemble(err)
 	if err != nil {
 		return ProviderBuildCompletionResult{}, err
 	}
@@ -141,10 +148,12 @@ func completeProviderBuild(
 			State: state, Lock: lock, Validated: true, ValidatedBuild: record,
 		}, nil
 	}
-	state, err := backend.publish(ctx, operation, store, BuildPublicationInput{
+	publishCtx, endPublish := buildprofile.Start(ctx, "Publish environment")
+	state, err := backend.publish(publishCtx, operation, store, BuildPublicationInput{
 		Environment: input.Environment, DeploymentDir: input.DeploymentDir,
 		Document: input.Document, Lock: lock, NoCache: input.NoCache,
 	})
+	endPublish(err)
 	if err != nil {
 		return ProviderBuildCompletionResult{}, err
 	}

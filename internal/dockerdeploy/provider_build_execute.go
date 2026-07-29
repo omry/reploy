@@ -6,6 +6,7 @@ import (
 	"io"
 	"reflect"
 
+	"github.com/omry/reploy/internal/buildprofile"
 	"github.com/omry/reploy/internal/buildprogress"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
@@ -244,14 +245,18 @@ func executeLockedProviderBuildV1(
 	options := input.RunOptions
 	options.Context = ctx
 	options.Progress = input.Progress
-	graph, err := backend.executeGraph(ctx, PreparedPythonGraphExecutionInput{
+	graphCtx, endGraph := buildprofile.Start(ctx, "Execute provider graph")
+	graphOptions := options
+	graphOptions.Context = graphCtx
+	graph, err := backend.executeGraph(graphCtx, PreparedPythonGraphExecutionInput{
 		Store: preparation.Store, Plan: preparedBase.Plan, BaseDescriptor: preparedBase.Descriptor,
 		BaseCatalog: preparedBase.Catalog, Sources: preparation.Loaded.Request.Sources,
 		SourceWheels:   append([]providerstore.ArtifactDescriptor{}, input.SourceWheels...),
 		LocalOverrides: append([]PythonLocalOverrideV1{}, input.LocalOverrides...),
 		CurrentLock:    preparation.ReusableLock, FinalImageConfig: preparation.FinalImageConfig,
-		Progress: input.Progress, BuildProgress: input.BuildProgress, RunOptions: options,
+		Progress: input.Progress, BuildProgress: input.BuildProgress, RunOptions: graphOptions,
 	})
+	endGraph(err)
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute provider graph: %w", err)
 	}
@@ -274,9 +279,11 @@ func executeLockedProviderBuildV1(
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, err
 	}
+	validationCtx, endValidationPlan := buildprofile.Start(ctx, "Prepare final image validation")
 	validation, err := backend.prepareValidation(
-		ctx, preparedBase.Descriptor, preparedBase.Catalog, graph, policy,
+		validationCtx, preparedBase.Descriptor, preparedBase.Catalog, graph, policy,
 	)
+	endValidationPlan(err)
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("prepare provider build validation: %w", err)
 	}
@@ -292,7 +299,10 @@ func executeLockedProviderBuildV1(
 	buildprogress.Report(input.BuildProgress, buildprogress.Event{
 		Phase: buildprogress.PhasePublish, Detail: publishDetail,
 	})
-	completed, err := backend.complete(ctx, preparation.Operation, preparation.Store, ProviderBuildCompletionInput{
+	completeCtx, endComplete := buildprofile.Start(ctx, "Validate and publish environment")
+	completeOptions := options
+	completeOptions.Context = completeCtx
+	completed, err := backend.complete(completeCtx, preparation.Operation, preparation.Store, ProviderBuildCompletionInput{
 		Environment: preparation.Environment, DeploymentDir: preparation.DeploymentDir,
 		Document: preparation.Loaded.Document, DockerPlan: preparation.DockerPlan,
 		ResolvedRequest: resolvedRequest, Overlay: preparation.Loaded.State.Overlay,
@@ -301,8 +311,9 @@ func executeLockedProviderBuildV1(
 		Graph: graph, Validation: validation,
 		ValidateChoices: input.ValidateChoices, ValidatedInputs: preparation.ValidatedInputs,
 		NoCache:       preparation.NoCache,
-		RunValidation: input.RunValidation, RunOptions: options,
+		RunValidation: input.RunValidation, RunOptions: completeOptions,
 	})
+	endComplete(err)
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, err
 	}

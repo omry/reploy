@@ -15,6 +15,7 @@ type ProviderGraphMaterializer struct {
 	Store             providerstore.Store
 	Platform          blueprint.Platform
 	RunEvidence       MaterializationEvidenceRunner
+	RetainLayer       materializationCandidateRetainer
 	RunOptions        RunOptions
 	verifiedArtifacts map[providers.NodeID]map[canonical.Digest]string
 }
@@ -41,6 +42,9 @@ func (materializer ProviderGraphMaterializer) Materialize(
 	if materializer.RunEvidence == nil {
 		return providers.GraphNodeMaterializeResult{}, fmt.Errorf("materialize provider graph node requires an evidence runner")
 	}
+	if materializer.RetainLayer == nil {
+		return providers.GraphNodeMaterializeResult{}, fmt.Errorf("materialize provider graph node requires a layer retention policy")
+	}
 	transaction, err := materializeProviderGraphNode(request.Node, request.Input)
 	if err != nil {
 		return providers.GraphNodeMaterializeResult{}, fmt.Errorf("prepare provider graph node %q transaction: %w", request.Node.ID, err)
@@ -55,6 +59,7 @@ func (materializer ProviderGraphMaterializer) Materialize(
 		materializer.Platform,
 		materializer.RunEvidence,
 		materializer.verifiedArtifacts[request.Node.ID],
+		materializer.RetainLayer,
 		options,
 	)
 	if err != nil {

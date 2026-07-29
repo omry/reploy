@@ -10,6 +10,7 @@ import (
 	"runtime"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/buildprofile"
 	"github.com/omry/reploy/internal/buildprogress"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
@@ -113,6 +114,8 @@ func runProviderBuildV1(
 	if ctx == nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("run provider build requires a context")
 	}
+	ctx, endProviderBuild := buildprofile.Start(ctx, "Provider build")
+	defer func() { endProviderBuild(err) }()
 	if err := ctx.Err(); err != nil {
 		return LockedProviderBuildExecutionResultV1{}, err
 	}
@@ -127,7 +130,9 @@ func runProviderBuildV1(
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("resolve provider build deployment directory: %w", err)
 	}
-	operation, err := backend.acquire(ctx, deploymentDir)
+	acquireCtx, endAcquire := buildprofile.Start(ctx, "Acquire deployment operation lock")
+	operation, err := backend.acquire(acquireCtx, deploymentDir)
+	endAcquire(err)
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, err
 	}
@@ -137,7 +142,9 @@ func runProviderBuildV1(
 		}
 	}()
 
+	_, endStore := buildprofile.Start(ctx, "Open provider store")
 	store, err := backend.newStore(deploymentDir)
+	endStore(err)
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, err
 	}
@@ -175,10 +182,12 @@ func runLockedProviderBuildV1(
 	ctx context.Context,
 	input LockedProviderBuildRunInputV1,
 	backend providerBuildRunBackend,
-) (LockedProviderBuildExecutionResultV1, error) {
+) (result LockedProviderBuildExecutionResultV1, resultErr error) {
 	if ctx == nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("run locked provider build requires a context")
 	}
+	ctx, endBuild := buildprofile.Start(ctx, "Build staged environment")
+	defer func() { endBuild(resultErr) }()
 	if err := ctx.Err(); err != nil {
 		return LockedProviderBuildExecutionResultV1{}, err
 	}
@@ -353,7 +362,9 @@ func runLockedProviderBuildV1(
 		}(),
 		ValidatedInputs: validatedInputs,
 	}
-	preparation, err := backend.prepare(ctx, preparationInput)
+	prepareCtx, endPrepare := buildprofile.Start(ctx, "Prepare provider build")
+	preparation, err := backend.prepare(prepareCtx, preparationInput)
+	endPrepare(err)
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, err
 	}
@@ -370,9 +381,11 @@ func runLockedProviderBuildV1(
 			Runtime:       input.Runtime,
 		})
 		if err == nil {
-			_, err = backend.verifyCurrent(ctx, CurrentBuildVerificationInputV1{
+			verifyCtx, endVerify := buildprofile.Start(ctx, "Verify reusable build")
+			_, err = backend.verifyCurrent(verifyCtx, CurrentBuildVerificationInputV1{
 				Store: input.Store, Current: reused, Runtime: currentRuntime,
 			})
+			endVerify(err)
 		}
 		if err != nil {
 			if ctx.Err() != nil {
@@ -387,7 +400,9 @@ func runLockedProviderBuildV1(
 			effectiveNoCache = true
 			preparationInput.NoCache = true
 			preparationInput.ValidatedCandidate = nil
-			preparation, err = backend.prepare(ctx, preparationInput)
+			rebuildCtx, endRebuild := buildprofile.Start(ctx, "Prepare rebuild after verification failure")
+			preparation, err = backend.prepare(rebuildCtx, preparationInput)
+			endRebuild(err)
 			if err != nil {
 				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf(
 					"cached build verification failed (%s), and rebuild preparation failed: %w",
@@ -420,7 +435,8 @@ func runLockedProviderBuildV1(
 	options := input.RunOptions
 	options.NoCache = effectiveNoCache
 	options.Progress = input.Progress
-	result, err := backend.execute(ctx, LockedProviderBuildExecutionInputV1{
+	executeCtx, endExecute := buildprofile.Start(ctx, "Execute provider build")
+	result, err = backend.execute(executeCtx, LockedProviderBuildExecutionInputV1{
 		Preparation:     preparation,
 		SourceWheels:    []providerstore.ArtifactDescriptor{},
 		LocalOverrides:  localOverrides,
@@ -428,6 +444,7 @@ func runLockedProviderBuildV1(
 		ValidateChoices: input.ValidateChoices,
 		Progress:        input.Progress, BuildProgress: input.BuildProgress, RunOptions: options,
 	})
+	endExecute(err)
 	if err != nil {
 		cleanupErr := backend.cleanupFailure(context.WithoutCancel(ctx), preparation)
 		if verificationFailure != "" {

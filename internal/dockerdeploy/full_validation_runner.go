@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/omry/reploy/internal/buildprofile"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/probe"
 	"github.com/omry/reploy/internal/providers"
@@ -24,7 +25,8 @@ var openFullAPTValidationSession = OpenAPTImageValidationSession
 
 // Run performs one complete image validation in one held networkless
 // container. Provider scratch and the embedded probe workspace are
-// deployment-local and removed on every return path.
+// deployment-local. They are removed after confirmed container cleanup or
+// retained for the next operation's abandoned-helper recovery.
 func (runner ProviderFullImageValidationRunner) Run(
 	ctx context.Context,
 	input FullImageValidationInput,
@@ -39,11 +41,17 @@ func (runner ProviderFullImageValidationRunner) Run(
 	if err != nil {
 		return nil, nil, err
 	}
-	workspace, cleanupProbe, err := prepareFullValidationProbeWorkspace(ctx, runner.Store, input.Image.Descriptor.Platform)
+	workspaceCtx, endWorkspace := buildprofile.Start(ctx, "Prepare image validation workspace")
+	workspace, cleanupProbe, err := prepareFullValidationProbeWorkspace(workspaceCtx, runner.Store, input.Image.Descriptor.Platform)
+	endWorkspace(err)
 	if err != nil {
 		return nil, nil, err
 	}
+	workspaceSafeToRemove := false
 	defer func() {
+		if !workspaceSafeToRemove {
+			return
+		}
 		if cleanupErr := cleanupProbe(); cleanupErr != nil {
 			profiles, outputs = nil, nil
 			resultErr = errors.Join(resultErr, cleanupErr)
@@ -51,27 +59,39 @@ func (runner ProviderFullImageValidationRunner) Run(
 	}()
 
 	var session *ImageValidationSession
+	sessionCtx, endSession := buildprofile.Start(ctx, "Open image validation session")
 	if plan.APT == nil {
-		session, err = openFullValidationSession(ctx, input.Image.Descriptor, workspace)
+		session, err = openFullValidationSession(sessionCtx, input.Image.Descriptor, workspace)
 	} else {
 		aptWorkspace, cleanupAPT, prepareErr := prepareFullValidationAPTWorkspace(runner.Store)
 		if prepareErr != nil {
+			endSession(prepareErr)
 			return nil, nil, prepareErr
 		}
-		defer cleanupAPT()
-		session, err = openFullAPTValidationSession(ctx, input.Image.Descriptor, workspace, aptWorkspace)
+		defer func() {
+			if workspaceSafeToRemove {
+				cleanupAPT()
+			}
+		}()
+		session, err = openFullAPTValidationSession(sessionCtx, input.Image.Descriptor, workspace, aptWorkspace)
 	}
+	endSession(err)
 	if err != nil {
+		workspaceSafeToRemove = !providerHelperCleanupFailed(err)
 		return nil, nil, err
 	}
 	defer func() {
 		if closeErr := session.Close(context.WithoutCancel(ctx)); closeErr != nil {
 			profiles, outputs = nil, nil
 			resultErr = errors.Join(resultErr, closeErr)
+			return
 		}
+		workspaceSafeToRemove = true
 	}()
 
-	response, err := session.Probe(ctx, plan.Request)
+	probeCtx, endProbe := buildprofile.Start(ctx, "Probe image requirements and outputs")
+	response, err := session.Probe(probeCtx, plan.Request)
+	endProbe(err)
 	if err != nil {
 		return nil, nil, err
 	}

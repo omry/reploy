@@ -78,6 +78,9 @@ func TestBuildProgressModelRendersCompactProgressOnlyPanel(t *testing.T) {
 	if lipgloss.Height(view) > 12 {
 		t.Fatalf("build progress panel is not compact:\n%s", view)
 	}
+	if !strings.HasSuffix(view, "\n") {
+		t.Fatalf("build progress must leave the inline renderer below its border:\n%q", view)
+	}
 }
 
 func TestBuildProgressPanelHeightDoesNotChangeBetweenPhases(t *testing.T) {

@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve verified provider-layer images so a successful `reploy build --verify` leaves complete Docker lineage for subsequent read-only verification.

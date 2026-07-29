@@ -1,0 +1,2 @@
+kind: Added
+body: Add `reploy build --profile` for safe hierarchical timing reports that expose expensive provider, local-source, validation, publication, and Docker work.

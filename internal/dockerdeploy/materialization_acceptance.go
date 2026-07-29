@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/buildprofile"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
@@ -27,6 +28,7 @@ type MaterializationEvidenceRunner func(
 
 type materializationLayerBuilder func(providerstore.Store, MaterializationLayerRequest, RunOptions) (MaterializationLayerCandidate, error)
 type materializationLayerInspector func(context.Context, MaterializationLayerCandidate, MaterializationLayerRequest) (InspectedMaterializationLayerCandidate, error)
+type materializationCandidateRetainer func(context.Context, providers.RealizedImageV1) error
 type materializationCandidateRemover func(context.Context, BuiltImageCandidate) error
 
 // BuildAndAcceptMaterializationLayer builds one provider layer and returns a
@@ -42,7 +44,8 @@ func BuildAndAcceptMaterializationLayer(
 	options RunOptions,
 ) (providers.GraphNodeMaterializeResult, error) {
 	return buildAndAcceptMaterializationLayerWithVerifiedArtifacts(
-		ctx, store, transaction, bundle, platform, runEvidence, nil, options,
+		ctx, store, transaction, bundle, platform, runEvidence, nil,
+		RetainVerifiedProviderLayer, options,
 	)
 }
 
@@ -57,11 +60,13 @@ func buildAndAcceptMaterializationLayerWithVerifiedArtifacts(
 	platform blueprint.Platform,
 	runEvidence MaterializationEvidenceRunner,
 	verifiedArtifacts map[canonical.Digest]string,
+	retain materializationCandidateRetainer,
 	options RunOptions,
 ) (providers.GraphNodeMaterializeResult, error) {
 	return buildAndAcceptMaterializationLayer(
 		ctx, store, transaction, bundle, platform, runEvidence, verifiedArtifacts, options,
-		BuildMaterializationLayer, InspectMaterializationLayerCandidate, RemoveBuiltImageCandidate,
+		BuildMaterializationLayer, InspectMaterializationLayerCandidate,
+		retain, RemoveBuiltImageCandidate,
 	)
 }
 
@@ -76,6 +81,7 @@ func buildAndAcceptMaterializationLayer(
 	options RunOptions,
 	build materializationLayerBuilder,
 	inspect materializationLayerInspector,
+	retain materializationCandidateRetainer,
 	remove materializationCandidateRemover,
 ) (providers.GraphNodeMaterializeResult, error) {
 	if ctx == nil {
@@ -84,8 +90,8 @@ func buildAndAcceptMaterializationLayer(
 	if err := ctx.Err(); err != nil {
 		return providers.GraphNodeMaterializeResult{}, err
 	}
-	if build == nil || inspect == nil || remove == nil {
-		return providers.GraphNodeMaterializeResult{}, fmt.Errorf("materialization acceptance requires build, inspection, and cleanup backends")
+	if build == nil || inspect == nil || retain == nil || remove == nil {
+		return providers.GraphNodeMaterializeResult{}, fmt.Errorf("materialization acceptance requires build, inspection, retention, and cleanup backends")
 	}
 	if err := validateMaterializationBuildBinding(transaction, bundle, platform); err != nil {
 		return providers.GraphNodeMaterializeResult{}, err
@@ -98,23 +104,40 @@ func buildAndAcceptMaterializationLayer(
 		return providers.GraphNodeMaterializeResult{}, fmt.Errorf("bind verified materialization artifacts: %w", err)
 	}
 	request := MaterializationLayerRequest{Transaction: transaction, MountInputs: mountInputs, Platform: platform}
-	options.Context = ctx
+	buildCtx, endBuild := buildprofile.Start(ctx, "Build provider layer image")
+	options.Context = buildCtx
 	built, err := build(store, request, options)
+	endBuild(err)
 	if err != nil {
 		return providers.GraphNodeMaterializeResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
 		return rejectMaterializationCandidate(ctx, built.Built, err, remove)
 	}
-	inspected, err := inspect(ctx, built, request)
+	inspectCtx, endInspect := buildprofile.Start(ctx, "Inspect provider layer image")
+	inspected, err := inspect(inspectCtx, built, request)
+	endInspect(err)
 	if err != nil {
 		return rejectMaterializationCandidate(ctx, built.Built, err, remove)
 	}
-	accepted, err := AcceptMaterializationLayer(ctx, MaterializationEvidenceInput{
+	validateCtx, endValidate := buildprofile.Start(ctx, "Validate provider layer")
+	accepted, err := AcceptMaterializationLayer(validateCtx, MaterializationEvidenceInput{
 		Candidate: inspected, Transaction: transaction, Bundle: bundle,
 	}, runEvidence)
+	endValidate(err)
 	if err != nil {
 		return rejectMaterializationCandidate(ctx, built.Built, err, remove)
+	}
+	retainCtx, endRetain := buildprofile.Start(ctx, "Retain provider layer")
+	err = retain(retainCtx, accepted.Image)
+	endRetain(err)
+	if err != nil {
+		return rejectMaterializationCandidate(
+			ctx,
+			built.Built,
+			fmt.Errorf("retain verified provider layer: %w", err),
+			remove,
+		)
 	}
 	return accepted, nil
 }

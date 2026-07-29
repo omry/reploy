@@ -663,10 +663,14 @@ func OpenAPTResolverSession(
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	if err := runAPTResolverOpenCommand(spec, RunOptions{
-		Context: ctx, Stdout: &stdout, Stderr: &stderr,
+		Context: context.WithoutCancel(ctx), Stdout: &stdout, Stderr: &stderr,
 		DockerPreflightTimeout: options.DockerPreflightTimeout,
 	}); err != nil {
 		return nil, aptResolverCommandError("create", descriptor.Platform.Canonical, descriptor.ConfigDigest, stderr.String(), err)
+	}
+	if err := ctx.Err(); err != nil {
+		cleanupErr := removeAPTResolverContainer(context.WithoutCancel(ctx), containerName)
+		return nil, errors.Join(fmt.Errorf("open APT resolver session: %w", err), cleanupErr)
 	}
 	stderr.Reset()
 	if err := runAPTResolverFollowupCommand(CommandSpec{Name: "docker", Args: []string{"start", containerName}}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
@@ -961,7 +965,7 @@ func removeAPTResolverContainer(ctx context.Context, containerName string) error
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	if err := runAPTResolverFollowupCommand(CommandSpec{Name: "docker", Args: []string{"rm", "--force", containerName}}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
-		return aptResolverCommandError("remove", "container", "", stderr.String(), err)
+		return markProviderHelperCleanupError(aptResolverCommandError("remove", "container", "", stderr.String(), err))
 	}
 	return nil
 }

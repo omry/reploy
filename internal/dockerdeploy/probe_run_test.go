@@ -315,6 +315,40 @@ func TestOpenImageValidationSessionCleansFailedStartAndExplainsEmulation(t *test
 	}
 }
 
+func TestOpenImageValidationSessionFinishesCreateBeforeHonoringCancellation(t *testing.T) {
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
+	previousOpen := runImageValidationOpenCommand
+	previousFollowup := runImageValidationFollowupCommand
+	t.Cleanup(func() {
+		runImageValidationOpenCommand = previousOpen
+		runImageValidationFollowupCommand = previousFollowup
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	removed := false
+	runImageValidationOpenCommand = func(_ CommandSpec, options RunOptions) error {
+		cancel()
+		if err := options.Context.Err(); err != nil {
+			t.Fatalf("Docker create inherited cancellation: %v", err)
+		}
+		return nil
+	}
+	runImageValidationFollowupCommand = func(spec CommandSpec, _ RunOptions) error {
+		if len(spec.Args) == 3 && spec.Args[0] == "rm" && spec.Args[1] == "--force" {
+			removed = true
+			return nil
+		}
+		t.Fatalf("unexpected follow-up command: %#v", spec)
+		return nil
+	}
+	if _, err := OpenImageValidationSession(ctx, descriptor, workspace); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v", err)
+	}
+	if !removed {
+		t.Fatal("created container was not removed after cancellation")
+	}
+}
+
 func TestRunImageProbeRejectsMismatchedPlatformBeforeDocker(t *testing.T) {
 	descriptor := testProbeImageDescriptor(t, "linux/amd64")
 	other, err := blueprint.ParsePlatform("linux/arm64")

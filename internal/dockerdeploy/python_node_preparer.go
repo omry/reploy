@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/omry/reploy/internal/buildprofile"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
@@ -68,7 +69,9 @@ func (preparer PythonNodePreparer) Prepare(
 	if err := validatePythonResolverReusableArtifacts(request.Resolve.ReusableArtifacts, preparer.ReusableWheels); err != nil {
 		return providers.GraphNodePreparation{}, err
 	}
-	session, err := openPythonNodePreparationSession(ctx, preparer.Descriptor, preparer.Workspace, preparer.Artifacts)
+	sessionCtx, endSession := buildprofile.Start(ctx, "Open Python resolver session")
+	session, err := openPythonNodePreparationSession(sessionCtx, preparer.Descriptor, preparer.Workspace, preparer.Artifacts)
+	endSession(err)
 	if err != nil {
 		return providers.GraphNodePreparation{}, err
 	}
@@ -87,8 +90,10 @@ func (preparer PythonNodePreparer) Prepare(
 				err = errors.Join(err, fmt.Errorf("remove temporary Python build-tool image: %w", cleanupErr))
 			}
 		}
-		for index := len(retryCleanups) - 1; index >= 0; index-- {
-			retryCleanups[index]()
+		if !providerHelperCleanupFailed(err) {
+			for index := len(retryCleanups) - 1; index >= 0; index-- {
+				retryCleanups[index]()
+			}
 		}
 	}()
 
@@ -103,7 +108,9 @@ func (preparer PythonNodePreparer) Prepare(
 
 	var cachedMismatch error
 	if request.CachedResolution != nil {
-		consumer, validateErr := preparer.ValidateCached(ctx, session, request.Resolve, *request.CachedResolution)
+		cachedCtx, endCached := buildprofile.Start(ctx, "Validate cached Python resolution")
+		consumer, validateErr := preparer.ValidateCached(cachedCtx, session, request.Resolve, *request.CachedResolution)
+		endCached(validateErr)
 		if validateErr == nil {
 			return providers.GraphNodePreparation{
 				Resolution:       *request.CachedResolution,
@@ -119,9 +126,11 @@ func (preparer PythonNodePreparer) Prepare(
 
 	activeTools := []string{}
 	for {
-		resolution, consumer, resolveErr := preparer.ResolveFresh(ctx, session, request.Resolve)
+		resolveCtx, endResolve := buildprofile.Start(ctx, "Resolve fresh Python requirements")
+		resolution, consumer, resolveErr := preparer.ResolveFresh(resolveCtx, session, request.Resolve)
 		var required *pythonBuildToolsRequiredError
 		if resolveErr != nil && errors.As(resolveErr, &required) {
+			endResolve(nil)
 			if preparer.PrepareBuildTools == nil || preparer.PrepareRetryArtifacts == nil {
 				return providers.GraphNodePreparation{}, fmt.Errorf(
 					"local source requires portable build tools %s, but the Python preparer has no build-tool environment",
@@ -137,7 +146,9 @@ func (preparer PythonNodePreparer) Prepare(
 			if closeErr := closeSession(); closeErr != nil {
 				return providers.GraphNodePreparation{}, closeErr
 			}
-			environment, prepareErr := preparer.PrepareBuildTools(ctx, nextTools)
+			toolsCtx, endTools := buildprofile.Start(ctx, "Prepare build tools: "+strings.Join(nextTools, ", "))
+			environment, prepareErr := preparer.PrepareBuildTools(toolsCtx, nextTools)
+			endTools(prepareErr)
 			if prepareErr != nil {
 				return providers.GraphNodePreparation{}, prepareErr
 			}
@@ -150,16 +161,22 @@ func (preparer PythonNodePreparer) Prepare(
 				return providers.GraphNodePreparation{}, prepareErr
 			}
 			retryCleanups = append(retryCleanups, cleanup)
-			session, prepareErr = openPythonNodePreparationSession(ctx, environment.Descriptor, preparer.Workspace, artifacts)
+			retryCtx, endRetry := buildprofile.Start(ctx, "Open tool-enabled Python resolver session")
+			session, prepareErr = openPythonNodePreparationSession(retryCtx, environment.Descriptor, preparer.Workspace, artifacts)
+			endRetry(prepareErr)
 			if prepareErr != nil {
 				return providers.GraphNodePreparation{}, prepareErr
 			}
-			if _, prepareErr = session.ValidatePortableBuildToolsV1(ctx, nextTools); prepareErr != nil {
+			validateToolsCtx, endValidateTools := buildprofile.Start(ctx, "Validate build tools: "+strings.Join(nextTools, ", "))
+			_, prepareErr = session.ValidatePortableBuildToolsV1(validateToolsCtx, nextTools)
+			endValidateTools(prepareErr)
+			if prepareErr != nil {
 				return providers.GraphNodePreparation{}, prepareErr
 			}
 			activeTools = nextTools
 			continue
 		}
+		endResolve(resolveErr)
 		if resolveErr != nil {
 			if cachedMismatch != nil {
 				return providers.GraphNodePreparation{}, fmt.Errorf("cached Python prerequisites changed (%v); fresh resolution failed: %w", cachedMismatch, resolveErr)

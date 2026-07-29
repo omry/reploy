@@ -58,7 +58,10 @@ func TestPreparePreparedPythonGraphBackendUsesDeploymentStoreAndOneHelper(t *tes
 	if backend.Workspace.HostDir == "" || !strings.HasPrefix(backend.Workspace.HostDir, store.Root()+string(os.PathSeparator)) {
 		t.Fatalf("workspace = %#v, store = %s", backend.Workspace, store.Root())
 	}
-	if backend.Materializer.Store.Root() != store.Root() || backend.Materializer.RunEvidence == nil || backend.Materializer.Platform != descriptor.Platform {
+	if backend.Materializer.Store.Root() != store.Root() ||
+		backend.Materializer.RunEvidence == nil ||
+		backend.Materializer.RetainLayer == nil ||
+		backend.Materializer.Platform != descriptor.Platform {
 		t.Fatalf("materializer = %#v", backend.Materializer)
 	}
 	operation.verifiedArtifacts[rendererDigest("d")] = "/tmp/verified-wheel"

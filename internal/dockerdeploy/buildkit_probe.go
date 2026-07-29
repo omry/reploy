@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/omry/reploy/internal/buildprofile"
 )
 
 type DockerEngineKind string
@@ -81,8 +83,12 @@ func minimumDockerVersion(value string, minimumMajor int, minimumMinor int) bool
 }
 
 func executeDockerOutput(ctx context.Context, args ...string) (string, error) {
+	ctx, end := buildprofile.Start(ctx, dockerProfileOperation(args))
 	command := exec.CommandContext(ctx, "docker", args...)
 	output, err := command.CombinedOutput()
+	// Docker output probes often use a non-zero exit to represent ordinary
+	// absence. Their semantic caller records a failure only when it propagates.
+	end(nil)
 	if err != nil {
 		message := strings.TrimSpace(string(output))
 		if message != "" {

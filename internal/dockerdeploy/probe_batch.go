@@ -25,7 +25,8 @@ var runPreparedImageProbe = RunImageProbe
 // or layer-validation path in one container. It is not a consumer prerequisite
 // runner: those checks execute inside the existing resolver or materializer.
 // The embedded helper is extracted once into deployment-local scratch and
-// removed after this validation container finishes.
+// removed after confirmed container cleanup. If removal fails, scratch remains
+// available to the next operation's abandoned-helper recovery.
 func CollectFullImageExecutableEvidence(
 	ctx context.Context,
 	store providerstore.Store,
@@ -68,6 +69,9 @@ func CollectFullImageExecutableEvidence(
 		return nil, err
 	}
 	defer func() {
+		if providerHelperCleanupFailed(err) {
+			return
+		}
 		if cleanupErr := cleanup(); cleanupErr != nil {
 			result = nil
 			err = errors.Join(err, cleanupErr)

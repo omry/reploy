@@ -58,15 +58,20 @@ func TestProviderGraphMaterializerUsesTypedAcceptancePipeline(t *testing.T) {
 		gotPlatform blueprint.Platform,
 		gotEvidence MaterializationEvidenceRunner,
 		gotVerified map[canonical.Digest]string,
+		gotRetain materializationCandidateRetainer,
 		options RunOptions,
 	) (providers.GraphNodeMaterializeResult, error) {
 		acceptCalls++
-		if gotCtx != ctx || gotStore.Root() != store.Root() || !reflect.DeepEqual(gotTransaction, transaction) || !reflect.DeepEqual(gotBundle, request.Input.Bundle) || gotPlatform != platform || gotEvidence == nil || !reflect.DeepEqual(gotVerified, verified) || options.Context != ctx {
+		if gotCtx != ctx || gotStore.Root() != store.Root() || !reflect.DeepEqual(gotTransaction, transaction) || !reflect.DeepEqual(gotBundle, request.Input.Bundle) || gotPlatform != platform || gotEvidence == nil || !reflect.DeepEqual(gotVerified, verified) || gotRetain == nil || options.Context != ctx {
 			return providers.GraphNodeMaterializeResult{}, errors.New("wrong acceptance input")
 		}
 		return want, nil
 	}
-	materializer := ProviderGraphMaterializer{Store: store, Platform: platform, RunEvidence: evidence, verifiedArtifacts: map[providers.NodeID]map[canonical.Digest]string{request.Node.ID: verified}}
+	materializer := ProviderGraphMaterializer{
+		Store: store, Platform: platform, RunEvidence: evidence,
+		RetainLayer:       func(context.Context, providers.RealizedImageV1) error { return nil },
+		verifiedArtifacts: map[providers.NodeID]map[canonical.Digest]string{request.Node.ID: verified},
+	}
 	got, err := materializer.Materialize(ctx, request)
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +99,7 @@ func TestProviderGraphMaterializerStopsBeforeBuildOnRegistryFailure(t *testing.T
 	materializeProviderGraphNode = func(providers.NodeSpec, providers.MaterializeInput) (providers.MaterializationTransaction, error) {
 		return providers.MaterializationTransaction{}, errors.New("APT provider execution is not implemented")
 	}
-	buildAndAcceptProviderGraphLayer = func(context.Context, providerstore.Store, providers.MaterializationTransaction, providers.ResolvedBundle, blueprint.Platform, MaterializationEvidenceRunner, map[canonical.Digest]string, RunOptions) (providers.GraphNodeMaterializeResult, error) {
+	buildAndAcceptProviderGraphLayer = func(context.Context, providerstore.Store, providers.MaterializationTransaction, providers.ResolvedBundle, blueprint.Platform, MaterializationEvidenceRunner, map[canonical.Digest]string, materializationCandidateRetainer, RunOptions) (providers.GraphNodeMaterializeResult, error) {
 		t.Fatal("build ran after registry failure")
 		return providers.GraphNodeMaterializeResult{}, nil
 	}
@@ -103,6 +108,7 @@ func TestProviderGraphMaterializerStopsBeforeBuildOnRegistryFailure(t *testing.T
 		RunEvidence: func(context.Context, MaterializationEvidenceInput) ([]providers.RealizedGeneratedExecutable, []providers.RealizedOutput, error) {
 			return nil, nil, nil
 		},
+		RetainLayer: func(context.Context, providers.RealizedImageV1) error { return nil },
 	}
 	_, err = materializer.Materialize(context.Background(), providers.GraphNodeMaterializeRequest{Node: providers.NodeSpec{ID: "apt"}})
 	if err == nil || !strings.Contains(err.Error(), "APT provider execution is not implemented") {

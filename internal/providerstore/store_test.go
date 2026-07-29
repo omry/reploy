@@ -377,6 +377,24 @@ func TestStoreRemoveTemporaryEntriesDoesNotCreateMissingStore(t *testing.T) {
 	}
 }
 
+func TestTemporaryWorkspacePermissionErrorIsActionableAndPreservesCause(t *testing.T) {
+	cause := fs.ErrPermission
+	err := temporaryWorkspacePermissionError("/staging/.reploy/provider-store/tmp/probe-1", cause)
+	for _, want := range []string{
+		"cannot be removed by the current host user",
+		"interrupted Docker operation",
+		"restore ownership",
+		"then rerun the command",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q: %v", want, err)
+		}
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("error does not preserve permission cause: %v", err)
+	}
+}
+
 func TestStoreRejectsSymlinkedStoreRoot(t *testing.T) {
 	deployment := t.TempDir()
 	outside := t.TempDir()

@@ -2661,8 +2661,12 @@ generation:  reploy/env/<slug>-<dirhash>:g-<random>
 ```
 
 V1 creates no canonical or shared Reploy image tag and performs no
-cross-deployment completed-image lookup. Docker and its builder may still reuse
-physical layers and build-cache entries under Docker's own policies.
+cross-deployment completed-image lookup. Accepted provider layers are the sole
+exception: Reploy gives their exact config digests internal content-addressed
+verification-cache references so `reploy verify` can re-inspect locked
+intermediate images after finalization. Those references are not consulted for
+build reuse. Docker and its builder may still reuse physical layers and
+build-cache entries under Docker's own policies.
 
 An individual materialization or finalization build may additionally create a
 unique deployment-scoped temporary base reference so an ordinary `docker

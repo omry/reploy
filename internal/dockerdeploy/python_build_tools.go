@@ -121,7 +121,8 @@ func PreparePythonBuildToolEnvironmentV1(
 		Operations:     map[providers.NodeID]PreparedPythonNodeOperations{},
 		Materializer: ProviderGraphMaterializer{
 			Store: input.Store, Platform: input.Upstream.Platform,
-			RunEvidence: evidence.Run, RunOptions: options,
+			RunEvidence: evidence.Run, RetainLayer: skipTransientProviderLayerRetention,
+			RunOptions:        options,
 			verifiedArtifacts: map[providers.NodeID]map[canonical.Digest]string{"apt": nil},
 		},
 	}

@@ -29,6 +29,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	reploy "github.com/omry/reploy"
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/buildprofile"
 	"github.com/omry/reploy/internal/buildprogress"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/dockerdeploy"
@@ -161,11 +162,11 @@ func TestParseGlobalDeploymentOptionsRejectsInvalidDockerTimeout(t *testing.T) {
 }
 
 func TestParseDockerBuildOptions(t *testing.T) {
-	options, err := parseDockerBuildOptions([]string{"--dir", "stage", "--verify", "--verbose"})
+	options, err := parseDockerBuildOptions([]string{"--dir", "stage", "--verify", "--profile", "--verbose"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.Dir != "stage" || !options.DirExplicit || options.NoCache || !options.Verify || !options.Verbose {
+	if options.Dir != "stage" || !options.DirExplicit || options.NoCache || !options.Verify || !options.Profile || !options.Verbose {
 		t.Fatalf("options = %#v", options)
 	}
 	if _, err := parseDockerBuildOptions([]string{"--validate-layers"}); err == nil {
@@ -207,6 +208,71 @@ func TestBuildVerifyReportsRecoveryFromInvalidCachedBuild(t *testing.T) {
 		!strings.Contains(stderr, "Cached build verification failed") ||
 		!strings.Contains(stderr, "rebuilt the environment instead") ||
 		!strings.Contains(stderr, "provider artifact digest changed") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestBuildProfilePrintsInstrumentedTimings(t *testing.T) {
+	t.Setenv("TERM", "dumb")
+	originalBuild := dockerProviderBuild
+	originalRuntime := dockerProviderBuildRuntime
+	t.Cleanup(func() {
+		dockerProviderBuild = originalBuild
+		dockerProviderBuildRuntime = originalRuntime
+	})
+	dockerProviderBuildRuntime = func() (dockerdeploy.StagedProviderBuildRuntimeV1, error) {
+		return dockerdeploy.StagedProviderBuildRuntimeV1{UID: 501, GID: 20}, nil
+	}
+	stageDir := filepath.Join(t.TempDir(), "provider-stage")
+	writeCLITestStagedState(t, stageDir, "demo")
+	dockerProviderBuild = func(
+		ctx context.Context,
+		_ dockerdeploy.ProviderBuildRunInputV1,
+	) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
+		_, end := buildprofile.Start(ctx, "Profile test phase")
+		end(nil)
+		return cliTestProviderBuildResult(t, stageDir, true), nil
+	}
+	code, stdout, stderr := runCLI("build", "--dir", stageDir, "--profile")
+	if code != 0 ||
+		!strings.Contains(stdout, "demo is already up to date") ||
+		!strings.Contains(stdout, "Build profile:") ||
+		!strings.Contains(stdout, "Profile test phase") ||
+		strings.Contains(stdout, stageDir) ||
+		!strings.Contains(stderr, "building environment") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestBuildProfilePrintsInstrumentedTimingsAfterFailure(t *testing.T) {
+	t.Setenv("TERM", "dumb")
+	originalBuild := dockerProviderBuild
+	originalRuntime := dockerProviderBuildRuntime
+	t.Cleanup(func() {
+		dockerProviderBuild = originalBuild
+		dockerProviderBuildRuntime = originalRuntime
+	})
+	dockerProviderBuildRuntime = func() (dockerdeploy.StagedProviderBuildRuntimeV1, error) {
+		return dockerdeploy.StagedProviderBuildRuntimeV1{UID: 501, GID: 20}, nil
+	}
+	stageDir := filepath.Join(t.TempDir(), "provider-stage")
+	writeCLITestStagedState(t, stageDir, "demo")
+	buildErr := errors.New("profiled build failed")
+	dockerProviderBuild = func(
+		ctx context.Context,
+		_ dockerdeploy.ProviderBuildRunInputV1,
+	) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
+		_, end := buildprofile.Start(ctx, "Profile failure phase")
+		end(buildErr)
+		return dockerdeploy.LockedProviderBuildExecutionResultV1{}, buildErr
+	}
+	code, stdout, stderr := runCLI("build", "--dir", stageDir, "--profile")
+	if code != 1 ||
+		!strings.Contains(stdout, "Build profile:") ||
+		!strings.Contains(stdout, "Profile failure phase") ||
+		!strings.Contains(stdout, "(failed)") ||
+		strings.Contains(stdout, stageDir) ||
+		!strings.Contains(stderr, buildErr.Error()) {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }

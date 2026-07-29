@@ -88,6 +88,38 @@ func TestProviderFullImageValidationRunnerCleansSessionAndWorkspaceAfterProbeFai
 	}
 }
 
+func TestProviderFullImageValidationRunnerRetainsWorkspaceAfterContainerRemovalFailure(t *testing.T) {
+	input := fullValidationInput(t, "7")
+	workspace := testPreparedProbeWorkspace(t, input.Image.Descriptor.Platform, t.TempDir())
+	previousPrepare := prepareFullValidationProbeWorkspace
+	previousOpen := openFullValidationSession
+	previousRun := runImageValidationFollowupCommand
+	t.Cleanup(func() {
+		prepareFullValidationProbeWorkspace = previousPrepare
+		openFullValidationSession = previousOpen
+		runImageValidationFollowupCommand = previousRun
+	})
+	cleaned := false
+	prepareFullValidationProbeWorkspace = func(context.Context, providerstore.Store, blueprint.Platform) (PreparedProbeWorkspace, func() error, error) {
+		return workspace, func() error { cleaned = true; return nil }, nil
+	}
+	openFullValidationSession = func(_ context.Context, descriptor deploy.ImageDescriptor, got PreparedProbeWorkspace) (*ImageValidationSession, error) {
+		return &ImageValidationSession{descriptor: descriptor, workspace: got, containerName: "held-validation"}, nil
+	}
+	runImageValidationFollowupCommand = func(spec CommandSpec, _ RunOptions) error {
+		if len(spec.Args) != 0 && spec.Args[0] == "rm" {
+			return errors.New("container removal failed")
+		}
+		return errors.New("probe failed")
+	}
+	if _, _, err := (ProviderFullImageValidationRunner{}).Run(context.Background(), input); err == nil {
+		t.Fatal("validation succeeded")
+	}
+	if cleaned {
+		t.Fatal("container removal failure deleted its bind workspace")
+	}
+}
+
 func TestProviderFullImageValidationRunnerValidatesPythonProfileAndOutputFromOneProbe(t *testing.T) {
 	completion, operation, _ := providerBuildCompletionFixture(t)
 	defer operation.Unlock()

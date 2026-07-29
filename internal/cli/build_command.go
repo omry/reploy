@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/buildprofile"
 	"github.com/omry/reploy/internal/buildprogress"
 	"github.com/omry/reploy/internal/dockerdeploy"
 	"github.com/omry/reploy/internal/overrideui"
@@ -47,6 +48,13 @@ func runDockerBuild(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 		return 2
 	}
 	options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, io.Discard)
+	var profile *buildprofile.Recorder
+	if options.Profile {
+		profile = buildprofile.New()
+		defer func() {
+			buildprofile.WriteText(stdout, profile.Snapshot())
+		}()
+	}
 	started := time.Now()
 	if buildOverrideUIEnabled(os.Stdin, stderr) {
 		buildRunner := interactiveBuildRunner(
@@ -55,6 +63,7 @@ func runDockerBuild(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 			started,
 			options.NoCache,
 			options.Verify,
+			profile,
 		)
 		session := startInteractiveBuildSession(buildRunner)
 		defer session.cancel()
@@ -112,7 +121,11 @@ func runDockerBuild(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 		_ = presenter.Failure("reploy build error: " + buildFailureDiagnostic(err, ""))
 		return 1
 	}
-	result, err := dockerProviderBuild(context.Background(), dockerdeploy.ProviderBuildRunInputV1{
+	ctx := context.Background()
+	if profile != nil {
+		ctx = buildprofile.WithRecorder(ctx, profile)
+	}
+	result, err := dockerProviderBuild(ctx, dockerdeploy.ProviderBuildRunInputV1{
 		DeploymentDir: options.Dir,
 		Runtime:       runtimeInput,
 		NoCache:       options.NoCache,
@@ -276,12 +289,16 @@ func interactiveBuildRunner(
 	started time.Time,
 	noCache bool,
 	verify bool,
+	profile *buildprofile.Recorder,
 ) overrideui.BuildRunner {
 	return func(
 		ctx context.Context,
 		progress io.Writer,
 		reporter buildprogress.Reporter,
 	) (overrideui.ValidationResult, error) {
+		if profile != nil {
+			ctx = buildprofile.WithRecorder(ctx, profile)
+		}
 		runtimeInput, err := dockerProviderBuildRuntime()
 		if err != nil {
 			return overrideui.ValidationResult{}, err

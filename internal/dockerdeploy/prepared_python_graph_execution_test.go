@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -164,5 +165,44 @@ func TestExecutePreparedPythonGraphDerivesAllReuseFromCurrentLock(t *testing.T) 
 	}
 	if execution.BaseImage != wantBase || execution.Validators == nil || execution.PrepareNode == nil || execution.MaterializeNode == nil {
 		t.Fatalf("execution request = %#v", execution)
+	}
+}
+
+func TestExecutePreparedPythonGraphRetainsScratchAfterExecutionFailure(t *testing.T) {
+	fixture := newPreparedPythonGraphReuseFixture(t)
+	previousPrepare := preparePythonGraphExecutionBackend
+	previousExecute := executePreparedPythonProviderGraph
+	t.Cleanup(func() {
+		preparePythonGraphExecutionBackend = previousPrepare
+		executePreparedPythonProviderGraph = previousExecute
+	})
+	cleaned := false
+	preparePythonGraphExecutionBackend = func(
+		context.Context,
+		providerstore.Store,
+		providers.ProviderPlanV1,
+		deploy.ImageDescriptor,
+		providers.ImageConfigPolicy,
+		map[providers.NodeID]PreparedPythonNodeConfig,
+		map[providers.NodeID]PreparedAPTNodeConfig,
+		RunOptions,
+	) (PreparedPythonGraphBackend, func() error, error) {
+		return PreparedPythonGraphBackend{}, func() error { cleaned = true; return nil }, nil
+	}
+	executePreparedPythonProviderGraph = func(context.Context, providers.GraphExecutionRequest) (providers.GraphExecutionResult, error) {
+		return providers.GraphExecutionResult{}, markProviderHelperCleanupError(errors.New("helper container removal failed"))
+	}
+
+	_, err := ExecutePreparedPythonGraph(context.Background(), PreparedPythonGraphExecutionInput{
+		Store: fixture.store, Plan: fixture.request.Plan, BaseDescriptor: fixture.lock.Base,
+		BaseCatalog: fixture.request.EarlierCatalog, Sources: fixture.request.SourceCandidates,
+		SourceWheels: fixture.sourceWheels, CurrentLock: &fixture.lock,
+		FinalImageConfig: pythonConsumerTestImageConfig(),
+	})
+	if err == nil {
+		t.Fatal("execution succeeded")
+	}
+	if cleaned {
+		t.Fatal("failed execution removed scratch before abandoned-container recovery")
 	}
 }

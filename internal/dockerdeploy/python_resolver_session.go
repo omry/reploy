@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/buildprofile"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/probe"
@@ -32,6 +33,12 @@ type PythonResolverSession struct {
 
 var runPythonResolverOpenCommand = runCommand
 var runPythonResolverFollowupCommand = runCommandWithoutDockerPreflight
+
+type pythonSourceBuildCommand struct {
+	operation string
+	profile   string
+	argv      []string
+}
 
 const (
 	pythonSourceBuildRoot                = "/tmp/reploy-source-build"
@@ -101,8 +108,12 @@ func OpenPythonResolverSession(
 	}}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := runPythonResolverOpenCommand(spec, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
+	if err := runPythonResolverOpenCommand(spec, RunOptions{Context: context.WithoutCancel(ctx), Stdout: &stdout, Stderr: &stderr}); err != nil {
 		return nil, pythonResolverCommandError("create", descriptor.Platform.Canonical, stderr.String(), err)
+	}
+	if err := ctx.Err(); err != nil {
+		cleanupErr := removePythonResolverContainer(context.WithoutCancel(ctx), containerName)
+		return nil, errors.Join(fmt.Errorf("open Python resolver session: %w", err), cleanupErr)
 	}
 	stderr.Reset()
 	if err := runPythonResolverFollowupCommand(CommandSpec{Name: "docker", Args: []string{"start", containerName}}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
@@ -383,10 +394,7 @@ func (session *PythonResolverSession) BuildSourceDistributions(
 		return nil
 	}
 
-	commands := []struct {
-		operation string
-		argv      []string
-	}{
+	commands := []pythonSourceBuildCommand{
 		{
 			operation: "clear source-build scratch",
 			argv:      []string{"rm", "-rf", pythonSourceBuildRoot, pythonSourceBuilderRoot, pythonSourceUVCacheRoot},
@@ -399,20 +407,19 @@ func (session *PythonResolverSession) BuildSourceDistributions(
 	for _, snapshot := range snapshots {
 		buildDir := path.Join(pythonSourceBuildRoot, snapshot.Distribution)
 		commands = append(commands,
-			struct {
-				operation string
-				argv      []string
-			}{operation: "create source-build directory", argv: []string{"mkdir", "-p", buildDir}},
-			struct {
-				operation string
-				argv      []string
-			}{operation: "copy source snapshot", argv: []string{"cp", "-a", snapshot.ContainerDir + "/.", buildDir}},
+			pythonSourceBuildCommand{
+				operation: "create source-build directory",
+				profile:   "Prepare source-build directory: " + snapshot.Distribution,
+				argv:      []string{"mkdir", "-p", buildDir},
+			},
+			pythonSourceBuildCommand{
+				operation: "copy source snapshot",
+				profile:   "Copy source snapshot: " + snapshot.Distribution,
+				argv:      []string{"cp", "-a", snapshot.ContainerDir + "/.", buildDir},
+			},
 		)
 	}
-	commands = append(commands, struct {
-		operation string
-		argv      []string
-	}{
+	commands = append(commands, pythonSourceBuildCommand{
 		operation: "bootstrap pinned uv source builder",
 		argv: []string{
 			interpreter.InvocationPath, "-m", "pip", "--disable-pip-version-check",
@@ -422,11 +429,9 @@ func (session *PythonResolverSession) BuildSourceDistributions(
 		},
 	})
 	for _, snapshot := range snapshots {
-		commands = append(commands, struct {
-			operation string
-			argv      []string
-		}{
+		commands = append(commands, pythonSourceBuildCommand{
 			operation: "build source distribution",
+			profile:   "Build source distribution: " + snapshot.Distribution,
 			argv: []string{
 				interpreter.InvocationPath, "-m", "uv", "build", "--no-progress", "--sdist", "--no-sources",
 				"--python", interpreter.InvocationPath, "--no-python-downloads",
@@ -436,15 +441,19 @@ func (session *PythonResolverSession) BuildSourceDistributions(
 			},
 		})
 	}
-	commands = append(commands, struct {
-		operation string
-		argv      []string
-	}{
+	commands = append(commands, pythonSourceBuildCommand{
 		operation: "clear source-builder metadata",
 		argv:      []string{"rm", "-f", path.Join(session.artifacts.OutputContainerDir, ".gitignore")},
 	})
 	for _, command := range commands {
-		if err := session.runWheelEnvironmentCommand(ctx, launcher, interpreter.InvocationPath, command.operation, command.argv); err != nil {
+		label := command.profile
+		if label == "" {
+			label = command.operation
+		}
+		commandCtx, endCommand := buildprofile.Start(ctx, label)
+		err := session.runWheelEnvironmentCommand(commandCtx, launcher, interpreter.InvocationPath, command.operation, command.argv)
+		endCommand(err)
+		if err != nil {
 			if command.operation == "bootstrap pinned uv source builder" && strings.Contains(strings.ToLower(err.Error()), "no module named pip") {
 				return fmt.Errorf("selected Python interpreter has no pip module; ensure its providing packages include pip support: %w", err)
 			}
@@ -522,29 +531,26 @@ func (session *PythonResolverSession) BuildSourceWheels(
 		return nil
 	}
 
-	commands := []struct {
-		operation string
-		argv      []string
-	}{
+	commands := []pythonSourceBuildCommand{
 		{operation: "clear source-build scratch", argv: []string{"rm", "-rf", pythonSourceBuildRoot}},
 		{operation: "create source-build scratch", argv: []string{"mkdir", "-p", pythonSourceBuildRoot}},
 	}
 	for _, distribution := range distributions {
 		buildDir := path.Join(pythonSourceBuildRoot, distribution.Distribution)
 		commands = append(commands,
-			struct {
-				operation string
-				argv      []string
-			}{operation: "create source-build directory", argv: []string{"mkdir", "-p", buildDir}},
-			struct {
-				operation string
-				argv      []string
-			}{operation: "copy retained source distribution", argv: []string{"cp", "-a", distribution.ContainerDir + "/.", buildDir}},
-			struct {
-				operation string
-				argv      []string
-			}{
+			pythonSourceBuildCommand{
+				operation: "create source-build directory",
+				profile:   "Prepare wheel-build directory: " + distribution.Distribution,
+				argv:      []string{"mkdir", "-p", buildDir},
+			},
+			pythonSourceBuildCommand{
+				operation: "copy retained source distribution",
+				profile:   "Copy retained source distribution: " + distribution.Distribution,
+				argv:      []string{"cp", "-a", distribution.ContainerDir + "/.", buildDir},
+			},
+			pythonSourceBuildCommand{
 				operation: "build source wheel from retained distribution",
+				profile:   "Build wheel: " + distribution.Distribution,
 				argv: []string{
 					interpreter.InvocationPath, "-m", "uv", "build", "--no-progress", "--wheel", "--no-sources",
 					"--python", interpreter.InvocationPath, "--no-python-downloads",
@@ -555,15 +561,19 @@ func (session *PythonResolverSession) BuildSourceWheels(
 			},
 		)
 	}
-	commands = append(commands, struct {
-		operation string
-		argv      []string
-	}{
+	commands = append(commands, pythonSourceBuildCommand{
 		operation: "clear source-builder metadata",
 		argv:      []string{"rm", "-f", path.Join(session.artifacts.OutputContainerDir, ".gitignore")},
 	})
 	for _, command := range commands {
-		if err := session.runWheelEnvironmentCommand(ctx, launcher, interpreter.InvocationPath, command.operation, command.argv); err != nil {
+		label := command.profile
+		if label == "" {
+			label = command.operation
+		}
+		commandCtx, endCommand := buildprofile.Start(ctx, label)
+		err := session.runWheelEnvironmentCommand(commandCtx, launcher, interpreter.InvocationPath, command.operation, command.argv)
+		endCommand(err)
+		if err != nil {
 			return err
 		}
 	}
@@ -676,7 +686,7 @@ func removePythonResolverContainer(ctx context.Context, containerName string) er
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	if err := runPythonResolverFollowupCommand(CommandSpec{Name: "docker", Args: []string{"rm", "--force", containerName}}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
-		return pythonResolverCommandError("remove", "local", stderr.String(), err)
+		return markProviderHelperCleanupError(pythonResolverCommandError("remove", "local", stderr.String(), err))
 	}
 	return nil
 }

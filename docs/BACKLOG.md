@@ -56,6 +56,15 @@ This file is the day-to-day queue for design and implementation gaps.
       (for example, `app model=resnet50`) without a synthetic trigger or `--`
       separator.
 
+- [ ] `P2` Eliminate repeated local-source preparation within one build.
+      Build profiling showed portable-tool discovery re-entering Python
+      preparation and repeating expensive local-source observation, snapshot,
+      and copy work for the same source identity. Reuse safe intermediate
+      results within one build attempt across graph retries or tool activation,
+      while preserving invalidation when relevant inputs change. Verify the
+      improvement with `reploy build --profile` on the OmegaConf development
+      build and retain focused tests proving the repeated work is skipped.
+
 - [ ] `P1` Complete the remaining local Docker cleanup.
       After the active OmegaConf staging work is no longer needed, remove its
       preserved stopped container and superseded image, then review the
@@ -72,6 +81,18 @@ This file is the day-to-day queue for design and implementation gaps.
       preserving current generations and intentional caches. Keep automatic
       cleanup idempotent and deployment-scoped; provide an explicit diagnostic
       or cleanup path for resources whose staging directory no longer exists.
+
+- [ ] `P1` Define and implement the provider-layer verification-cache lifecycle.
+      Accepted provider layers receive shared content-addressed
+      `reploy/cache/provider-layer:*` Docker references so `reploy verify` can
+      inspect complete build lineage, but ordinary environment cleanup and
+      `bundle clean` never reclaim them. Define durable ownership and
+      reachability for these intentional cache anchors, preserve every
+      reference needed by a current or validated build and any in-progress
+      operation, and provide safe inspection and reclamation without relying on
+      a broad Docker prune or an existing staging directory. Prove repeated
+      changed builds do not grow the cache without bound and that cleanup never
+      breaks verification of retained builds.
 
 - [ ] `P1` Perform a full Reploy UX review.
       Review the complete user journey across discovery, staging, development

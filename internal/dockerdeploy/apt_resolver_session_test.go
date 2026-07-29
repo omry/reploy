@@ -562,6 +562,41 @@ func TestOpenAPTResolverSessionCleansFailedStart(t *testing.T) {
 	}
 }
 
+func TestOpenAPTResolverSessionFinishesCreateBeforeHonoringCancellation(t *testing.T) {
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	probeWorkspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
+	resolverWorkspace := testPreparedAPTResolverWorkspace(t)
+	previousOpen := runAPTResolverOpenCommand
+	previousFollowup := runAPTResolverFollowupCommand
+	t.Cleanup(func() {
+		runAPTResolverOpenCommand = previousOpen
+		runAPTResolverFollowupCommand = previousFollowup
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	removed := false
+	runAPTResolverOpenCommand = func(_ CommandSpec, options RunOptions) error {
+		cancel()
+		if err := options.Context.Err(); err != nil {
+			t.Fatalf("Docker create inherited cancellation: %v", err)
+		}
+		return nil
+	}
+	runAPTResolverFollowupCommand = func(spec CommandSpec, _ RunOptions) error {
+		if len(spec.Args) == 3 && spec.Args[0] == "rm" && spec.Args[1] == "--force" {
+			removed = true
+			return nil
+		}
+		t.Fatalf("unexpected follow-up command: %#v", spec)
+		return nil
+	}
+	if _, err := OpenAPTResolverSession(ctx, descriptor, probeWorkspace, resolverWorkspace, RunOptions{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v", err)
+	}
+	if !removed {
+		t.Fatal("created container was not removed after cancellation")
+	}
+}
+
 func TestOpenAPTResolverSessionPropagatesDockerPreflightTimeout(t *testing.T) {
 	descriptor := testProbeImageDescriptor(t, "linux/amd64")
 	probeWorkspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())

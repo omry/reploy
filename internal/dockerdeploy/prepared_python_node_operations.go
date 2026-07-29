@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/buildprofile"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
@@ -223,11 +224,18 @@ func (operations PreparedPythonNodeOperations) resolveFresh(
 		}
 	}
 	var closure []string
+	resolutionAttempt := 0
 	for {
-		if err := session.ResolveWheels(
-			ctx, consumer.EnvironmentLauncher, requirement, interpreter,
+		resolutionAttempt++
+		resolveCtx, endResolve := buildprofile.Start(
+			ctx, fmt.Sprintf("Resolve Python wheel closure (pass %d)", resolutionAttempt),
+		)
+		err = session.ResolveWheels(
+			resolveCtx, consumer.EnvironmentLauncher, requirement, interpreter,
 			node.Request, effectiveSources, effectiveWheels,
-		); err != nil {
+		)
+		endResolve(err)
+		if err != nil {
 			return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
 		}
 		closure, err = pythonprovider.InspectPreparedWheelDistributionsV1(ctx, session.artifacts.OutputHostDir)
@@ -322,11 +330,16 @@ func (operations PreparedPythonNodeOperations) materializeLocalOverrides(
 		distributions[index] = override.Distribution
 	}
 	sort.Strings(distributions)
+	observeCtx, endObserve := buildprofile.Start(ctx, "Observe local sources: "+strings.Join(distributions, ", "))
+	_ = observeCtx
 	sources, err := ObserveSelectedPythonLocalSources(selected, distributions)
+	endObserve(err)
 	if err != nil {
 		return nil, nil, err
 	}
+	_, endSnapshots := buildprofile.Start(ctx, "Snapshot local sources: "+strings.Join(distributions, ", "))
 	snapshots, err := StagePythonLocalSourceSnapshots(session.artifacts, sources)
+	endSnapshots(err)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -364,7 +377,10 @@ func (operations PreparedPythonNodeOperations) materializeLocalOverrides(
 			blueprint.ComponentTypePython, component, operations.ShowApplicationContext,
 		)}),
 	)
-	if err := session.BuildSourceDistributions(ctx, launcher, requirement, interpreter, snapshots); err != nil {
+	sdistCtx, endSdist := buildprofile.Start(ctx, "Build source distributions")
+	err = session.BuildSourceDistributions(sdistCtx, launcher, requirement, interpreter, snapshots)
+	endSdist(err)
+	if err != nil {
 		return nil, nil, err
 	}
 	buildIdentities := make(map[string]PythonSourceBuildIdentityV1, len(snapshots))
@@ -387,18 +403,25 @@ func (operations PreparedPythonNodeOperations) materializeLocalOverrides(
 		}
 		buildIdentities[snapshot.Distribution] = identity
 	}
+	publishSdistCtx, endPublishSdist := buildprofile.Start(ctx, "Publish source distributions")
 	preparedDistributions, err := PublishBuiltPythonSourceDistributionsWithIdentities(
-		ctx, operations.Store, session.artifacts, snapshots, buildIdentities,
+		publishSdistCtx, operations.Store, session.artifacts, snapshots, buildIdentities,
 	)
+	endPublishSdist(err)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := session.BuildSourceWheels(ctx, launcher, requirement, interpreter, preparedDistributions); err != nil {
+	wheelCtx, endWheels := buildprofile.Start(ctx, "Build local wheels")
+	err = session.BuildSourceWheels(wheelCtx, launcher, requirement, interpreter, preparedDistributions)
+	endWheels(err)
+	if err != nil {
 		return nil, nil, err
 	}
+	publishWheelsCtx, endPublishWheels := buildprofile.Start(ctx, "Publish local wheels")
 	builtSources, stagedWheels, err := PublishBuiltPythonSourceWheels(
-		ctx, operations.Store, session.artifacts, component, preparedDistributions, effectiveWheels,
+		publishWheelsCtx, operations.Store, session.artifacts, component, preparedDistributions, effectiveWheels,
 	)
+	endPublishWheels(err)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -73,8 +73,12 @@ func openImageValidationSession(
 	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := runImageValidationOpenCommand(spec, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
+	if err := runImageValidationOpenCommand(spec, RunOptions{Context: context.WithoutCancel(ctx), Stdout: &stdout, Stderr: &stderr}); err != nil {
 		return nil, imageValidationCommandError("create", descriptor.Platform.Canonical, stderr.String(), err)
+	}
+	if err := ctx.Err(); err != nil {
+		cleanupErr := removeImageValidationContainer(context.WithoutCancel(ctx), containerName)
+		return nil, errors.Join(fmt.Errorf("open image validation session: %w", err), cleanupErr)
 	}
 	stderr.Reset()
 	if err := runImageValidationFollowupCommand(
@@ -468,9 +472,9 @@ func removeImageValidationContainer(ctx context.Context, containerName string) e
 	); err != nil {
 		output := trimmedCommandOutput(stderr.String())
 		if output != "" {
-			return fmt.Errorf("remove image validation container %s: %w\ncommand output:\n%s", containerName, err, output)
+			return markProviderHelperCleanupError(fmt.Errorf("remove image validation container %s: %w\ncommand output:\n%s", containerName, err, output))
 		}
-		return fmt.Errorf("remove image validation container %s: %w", containerName, err)
+		return markProviderHelperCleanupError(fmt.Errorf("remove image validation container %s: %w", containerName, err))
 	}
 	return nil
 }

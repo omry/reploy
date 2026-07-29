@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/omry/reploy/internal/buildprofile"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
 )
@@ -45,7 +46,9 @@ func validateAndFinalizeBuild(
 	if build == nil || inspect == nil {
 		return FinalizedBuildValidationResult{}, fmt.Errorf("final validation pipeline requires build and inspection backends")
 	}
-	validation, err := ValidateBuildImages(ctx, store, layers, final, validateProfileOwner, runValidation)
+	validateCtx, endValidate := buildprofile.Start(ctx, "Validate final image")
+	validation, err := ValidateBuildImages(validateCtx, store, layers, final, validateProfileOwner, runValidation)
+	endValidate(err)
 	if err != nil {
 		return FinalizedBuildValidationResult{}, err
 	}
@@ -53,11 +56,16 @@ func validateAndFinalizeBuild(
 		Source: final.Image, Validation: validation.Final.Record,
 		ValidationReference: validation.Final.Reference, Platform: final.Image.Descriptor.Platform,
 	}
+	buildCtx, endBuild := buildprofile.Start(ctx, "Finalize validated image")
+	options.Context = buildCtx
 	built, err := build(store, request, options)
+	endBuild(err)
 	if err != nil {
 		return FinalizedBuildValidationResult{}, fmt.Errorf("finalize validated image: %w", err)
 	}
-	image, err := inspect(ctx, built, request)
+	inspectCtx, endInspect := buildprofile.Start(ctx, "Inspect finalized image")
+	image, err := inspect(inspectCtx, built, request)
+	endInspect(err)
 	if err != nil {
 		return FinalizedBuildValidationResult{}, fmt.Errorf("inspect finalized validated image: %w", err)
 	}

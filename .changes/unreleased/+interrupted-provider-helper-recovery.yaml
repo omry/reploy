@@ -1,0 +1,2 @@
+kind: Fixed
+body: Recover abandoned provider helper containers before cleaning their bind-mount workspaces, and explain how to repair workspace ownership left by an interrupted Docker operation.

@@ -30,7 +30,7 @@ func (operations PreparedAPTNodeOperations) Prepare(
 	descriptor deploy.ImageDescriptor,
 	probeWorkspace PreparedProbeWorkspace,
 	request providers.GraphNodePrepareRequest,
-) (providers.GraphNodePreparation, error) {
+) (result providers.GraphNodePreparation, resultErr error) {
 	if err := validateAPTReusableArtifacts(request.Resolve.ReusableArtifacts, operations.ReusableDebs); err != nil {
 		return providers.GraphNodePreparation{}, err
 	}
@@ -38,7 +38,11 @@ func (operations PreparedAPTNodeOperations) Prepare(
 	if err != nil {
 		return providers.GraphNodePreparation{}, err
 	}
-	defer cleanup()
+	defer func() {
+		if !providerHelperCleanupFailed(resultErr) {
+			cleanup()
+		}
+	}()
 	resolver, err = SeedAPTResolverArchives(ctx, operations.Store, resolver, operations.ReusableDebs)
 	if err != nil {
 		return providers.GraphNodePreparation{}, err

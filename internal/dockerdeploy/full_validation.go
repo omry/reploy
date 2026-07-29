@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"sort"
 
+	"github.com/omry/reploy/internal/buildprofile"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
@@ -91,11 +92,15 @@ func ValidateAndPublishImage(
 	validateProfileOwner providers.RequirementProfileOwnerValidator,
 	run FullImageValidationRunner,
 ) (PublishedImageValidation, error) {
-	record, err := ValidateImage(ctx, input, validateProfileOwner, run)
+	validateCtx, endValidate := buildprofile.Start(ctx, "Probe and validate image")
+	record, err := ValidateImage(validateCtx, input, validateProfileOwner, run)
+	endValidate(err)
 	if err != nil {
 		return PublishedImageValidation{}, err
 	}
-	reference, err := deploy.PublishPrefixValidation(ctx, store, record)
+	publishCtx, endPublish := buildprofile.Start(ctx, "Publish validation evidence")
+	reference, err := deploy.PublishPrefixValidation(publishCtx, store, record)
+	endPublish(err)
 	if err != nil {
 		return PublishedImageValidation{}, fmt.Errorf("publish full image validation: %w", err)
 	}

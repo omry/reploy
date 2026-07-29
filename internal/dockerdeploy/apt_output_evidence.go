@@ -58,7 +58,11 @@ func CollectAPTOutputEvidence(
 	if err != nil {
 		return nil, err
 	}
+	workspaceSafeToRemove := false
 	defer func() {
+		if !workspaceSafeToRemove {
+			return
+		}
 		if cleanupErr := cleanup(); cleanupErr != nil {
 			result = nil
 			resultErr = errors.Join(resultErr, cleanupErr)
@@ -66,13 +70,16 @@ func CollectAPTOutputEvidence(
 	}()
 	session, err := OpenImageValidationSession(ctx, descriptor, workspace)
 	if err != nil {
+		workspaceSafeToRemove = !providerHelperCleanupFailed(err)
 		return nil, err
 	}
 	defer func() {
 		if closeErr := session.Close(context.WithoutCancel(ctx)); closeErr != nil {
 			result = nil
 			resultErr = errors.Join(resultErr, closeErr)
+			return
 		}
+		workspaceSafeToRemove = true
 	}()
 	response, err := session.Probe(ctx, request)
 	if err != nil {

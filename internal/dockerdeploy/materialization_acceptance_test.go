@@ -168,6 +168,13 @@ func TestBuildAndAcceptMaterializationLayerRunsEvidenceAfterInspection(t *testin
 			}
 			return acceptedMaterializationCandidate(t, transaction, request.Platform), nil
 		},
+		func(_ context.Context, image providers.RealizedImageV1) error {
+			order = append(order, "retain")
+			if image.ConfigDigest != rendererDigest("7") {
+				return errors.New("retention did not receive the accepted image")
+			}
+			return nil
+		},
 		func(context.Context, BuiltImageCandidate) error {
 			order = append(order, "remove")
 			return nil
@@ -176,7 +183,7 @@ func TestBuildAndAcceptMaterializationLayerRunsEvidenceAfterInspection(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(order, []string{"build", "inspect", "evidence"}) || result.Image.Digest != rendererDigest("7") {
+	if !reflect.DeepEqual(order, []string{"build", "inspect", "evidence", "retain"}) || result.Image.Digest != rendererDigest("7") {
 		t.Fatalf("order = %#v; result = %#v", order, result)
 	}
 }
@@ -199,6 +206,10 @@ func TestBuildAndAcceptMaterializationLayerRejectsBindingBeforeBuild(t *testing.
 		func(context.Context, MaterializationLayerCandidate, MaterializationLayerRequest) (InspectedMaterializationLayerCandidate, error) {
 			called = true
 			return InspectedMaterializationLayerCandidate{}, nil
+		},
+		func(context.Context, providers.RealizedImageV1) error {
+			called = true
+			return nil
 		},
 		func(context.Context, BuiltImageCandidate) error {
 			called = true
@@ -230,6 +241,10 @@ func TestBuildAndAcceptMaterializationLayerRemovesRejectedCandidate(t *testing.T
 		},
 		func(context.Context, MaterializationLayerCandidate, MaterializationLayerRequest) (InspectedMaterializationLayerCandidate, error) {
 			return acceptedMaterializationCandidate(t, transaction, request.Platform), nil
+		},
+		func(context.Context, providers.RealizedImageV1) error {
+			t.Fatal("rejected candidate was retained")
+			return nil
 		},
 		func(ctx context.Context, got BuiltImageCandidate) error {
 			removed = true
@@ -266,6 +281,10 @@ func TestBuildAndAcceptMaterializationLayerRemovesAfterCancellation(t *testing.T
 		func(context.Context, MaterializationLayerCandidate, MaterializationLayerRequest) (InspectedMaterializationLayerCandidate, error) {
 			t.Fatal("inspection ran after cancellation")
 			return InspectedMaterializationLayerCandidate{}, nil
+		},
+		func(context.Context, providers.RealizedImageV1) error {
+			t.Fatal("retention ran after cancellation")
+			return nil
 		},
 		func(cleanupContext context.Context, _ BuiltImageCandidate) error {
 			removedWithLiveContext = cleanupContext.Err() == nil

@@ -407,6 +407,14 @@ a scrollable validation log remain behaviors of validation launched from
 starting another build path. Dumb and redirected terminals print durable
 progress lines and the final result directly.
 
+`reploy build --profile` preserves the same build behavior and adds a
+hierarchical timing report after the result or diagnostic. The report expands
+provider resolution, local-source snapshot, sdist and wheel construction,
+portable build tools, provider layers, final validation, publication, and
+Docker subprocesses. Its labels contain only Reploy-owned operation names and
+validated package or component names; it does not record paths, environment
+variables, command arguments, or backend output.
+
 An explicit `reploy build` with selected local Python projects does not use
 their prior locked source identities to prove exact image reuse. It observes
 the complete source projection and rebuilds each sdist and wheel before later
@@ -1799,14 +1807,19 @@ needs to use a locally built image in `FROM`, Reploy also creates a unique
 deployment-scoped temporary base reference, verifies that it names the exact
 expected Docker config ID, and removes it when that individual build returns.
 This private reference is not configurable, published, stored in deployment
-state, or included in any content identity. V1 creates no canonical Reploy
-image tag or cross-installation completed-image lookup. Docker and its builder
-remain free to reuse physical layers and build-cache entries under Docker's own
-policies. Image configuration and Reploy-owned labels contain only content
-facts such as the assembly key, base identity, renderer profile, and
-root-filesystem-bound validation records. Deployment-directory identity belongs
-in reference names, deployment state, and runtime-resource labels; it is never
-baked into image content.
+state, or included in any content identity. Accepted provider-layer images also
+receive an internal content-addressed
+`reploy/cache/provider-layer:sha256-<config-digest>` reference. This retains the
+exact intermediate image required by `reploy verify` after temporary build-base
+references are removed. The reference is idempotent, contains no deployment
+identity, and is not consulted for build reuse or cross-installation
+completed-image lookup. Docker and its builder remain free to reuse physical
+layers and build-cache entries under Docker's own policies. Image configuration
+and Reploy-owned labels contain only content facts such as the assembly key,
+base identity, renderer profile, and root-filesystem-bound validation records.
+Deployment-directory identity belongs in environment reference names,
+deployment state, and runtime-resource labels; it is never baked into image
+content.
 
 Every operation that can change one deployment directory's image references or
 state acquires that directory's exclusive operation lock before reading current
@@ -1853,9 +1866,15 @@ state active and the old generation removable. Operations in another directory
 cannot change the generation pinned by this state.
 
 After successful recovery or publication cleanup, the directory retains only
-the generation named by current state. V1 keeps no previous generation for
-rollback and exposes no image-generation rollback command. Docker may retain
-the underlying layers under its own cache and garbage-collection policies.
+the environment generation named by current state. V1 keeps no previous
+environment generation for rollback and exposes no image-generation rollback
+command. Content-addressed provider-layer verification references are
+machine-local cache anchors rather than environment generations; they may be
+shared by exact content. Ordinary environment cleanup and `reploy bundle clean`
+do not currently reclaim these Docker references; ownership-aware Docker cache
+cleanup remains a separate lifecycle task.
+Docker may additionally retain underlying layers under its own build-cache and
+garbage-collection policies.
 
 The same cleanup leaves exactly one content-addressed build-lock file: the lock
 whose digest is named by current state. A build may temporarily add a candidate
@@ -1865,12 +1884,14 @@ removes provider-store objects not transitively referenced by the state-selected
 lock. The lock directory is therefore an atomic-cutover mechanism, not build
 history or a multi-generation cache.
 
-Reploy has no global image-cache references to clean. Environment cleanup
-removes only that directory's references and never forcibly deletes physical
-images or invokes a global backend prune. Docker owns shared-layer reference
-tracking, build-cache garbage collection, and physical reclamation; a future
-Podman backend may apply the same ownership rule through its own native image
-store.
+Environment cleanup removes only that directory's references and never forcibly
+deletes physical images or invokes a global backend prune. Internal
+content-addressed provider-layer references are Reploy verification-cache
+entries, not environment references; ordinary environment cleanup leaves them
+alone because another retained build lock may name the same immutable content.
+Docker owns all other shared-layer reference tracking, build-cache garbage
+collection, and physical reclamation; a future Podman backend may apply the same
+ownership split through its own native image store.
 
 Reploy records the complete node chain needed to resume or diagnose
 `reploy build`. Docker and BuildKit own physical layer sharing and cache garbage

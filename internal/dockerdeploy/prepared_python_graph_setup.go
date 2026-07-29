@@ -153,7 +153,9 @@ func PreparePreparedPythonGraphBackend(
 		Operations:     operations,
 		APTOperations:  aptOperations,
 		Materializer: ProviderGraphMaterializer{
-			Store: store, Platform: baseDescriptor.Platform, RunEvidence: evidence.Run, RunOptions: options,
+			Store: store, Platform: baseDescriptor.Platform,
+			RunEvidence: evidence.Run, RetainLayer: RetainVerifiedProviderLayer,
+			RunOptions:        options,
 			verifiedArtifacts: verifiedArtifacts,
 		},
 	}, cleanupAll, nil
