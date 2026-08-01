@@ -30,29 +30,13 @@ Open questions:
 - How should unsupported deployment operations fail on otherwise supported CLI
   platforms?
 
-## Blueprint Index
+## Reploy Repositories
 
-The blueprint index may evolve toward an `apt-get update` style workflow: a
-cached local catalog used for shorthand resolution, discovery, search, and
-possibly trust metadata.
-
-Possible commands:
-
-```text
-reploy index update
-reploy index search arbiter
-reploy index show arbiter-server
-```
-
-Open questions:
-
-- Should the index remain a simple JSON catalog or become a richer signed
-  metadata source?
-- Should index entries include app ids, descriptions, supported platforms,
-  latest versions, and blueprint package refs?
-- Should search work offline from the cached index?
-- What trust or verification model is needed before installing from indexed
-  shorthand names?
+The former blueprint-index direction has been superseded by the unified,
+multi-asset Reploy repository design. Repositories publish versioned blueprints
+and portable tool definitions through one TUF-authenticated index, with
+explicit surface trust and APT-like update behavior. See
+[`REPOSITORY_DESIGN.md`](REPOSITORY_DESIGN.md).
 
 ## Deployment Environments
 
@@ -200,8 +184,8 @@ reploy install git:https://github.com/org/repo.git#package_name/reploy/app.bluep
 
 Open questions:
 
-- Should a future blueprint index map Reploy versions or app versions to
-  upstream commit hashes?
+- Should published blueprint provenance map Reploy versions or application
+  versions to upstream commit hashes?
 - Should additional provider schemes be added for GitLab or Bitbucket after
   there are fixtures and parser tests for their URL layouts?
 - If GitLab is supported, how should Reploy handle nested groups without
