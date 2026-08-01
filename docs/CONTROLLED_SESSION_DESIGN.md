@@ -1,0 +1,1024 @@
+---
+status: Active
+updated: 2026-08-02
+summary: Capability-scoped execution sessions that inherit Reploy's global container sandbox.
+---
+
+# Controlled Execution Session Design
+
+## Status
+
+- Decision state: Focused review complete; high-level decisions approved
+- Implementation state: Not started
+- Initial runtime: Linux containers under Docker
+- Motivating clients: OmegaFlow recording and sandboxed AI agents
+
+This document records the decisions for a reusable Reploy controlled-session
+capability and the global Reploy container sandbox policy on which it depends.
+It does not define OmegaFlow recording syntax, browser actions, media formats,
+or publication behavior.
+
+## Decision Summary
+
+Reploy will let a controller such as the OmegaFlow toolchain control one
+host-created session in an exact staged environment generation without
+receiving Docker or arbitrary host authority.
+
+The controller owns the session from its perspective. A host Reploy operation
+performs the authorized Docker work, records the runtime resources under a
+lease, and independently attests their termination. It does not understand
+OmegaFlow beats, browser handoffs, or recording state.
+
+A controlled session provides:
+
+- one persistent PTY and shell;
+- ordered input and output bytes;
+- terminal resize;
+- recorded terminal interrupts such as ordinary Ctrl-C;
+- administrative termination and cancellation;
+- structured exit and failure events;
+- access to explicitly granted workload endpoints;
+- generation-bound admission, lifecycle, cleanup, and recovery.
+
+These are global Reploy container defaults, not additional treatment for
+controlled sessions:
+
+- no public or local network access;
+- no host application-data paths unless explicitly granted by a runtime
+  contract;
+- no inherited host environment;
+- no Docker, runtime, or daemon socket;
+- no privileged container;
+- no Linux capabilities unless separately and explicitly designed;
+- verified seccomp and `no-new-privileges`;
+- no host namespaces or host devices;
+- runtime identity inherited from the Reploy execution scope for application
+  containers;
+- read-only project source access only when explicitly granted.
+
+This baseline applies to every container Reploy creates. Provider-resolution,
+build, validation, and materialization helpers may receive narrowly scoped
+root, network, capability, or filesystem grants required by their provider
+contract. Those are explicit construction authorities, not implicit exceptions
+or authorities inherited by application containers.
+
+Reploy does not configure a second container-local username. Staged and
+installed user-scope containers run as the invoking host user's numeric UID,
+GID, and supplementary GIDs. Installed system-scope containers run as the host
+account explicitly selected by `environment.install.system.account`, using
+that account's numeric identity inside the container. This design renames the
+existing `environment.install.system.run_as` field because the setting selects
+the installation's host account; it is not a second container-user setting.
+
+If the effective runtime user is root, Reploy emits a precise warning that the
+application can interfere with more of its container. Root does not implicitly
+grant capabilities, host input or shared-state mounts, network access,
+privileged mode, or daemon access. Root-safe `--output-file` and `--output-dir`
+are separate global runtime contracts and remain rejected until their focused
+pre-release review and implementation are complete.
+
+## Context
+
+OmegaFlow separates two environments:
+
+1. A trusted toolchain environment containing OmegaFlow, asciinema,
+   Playwright, Chromium, ffmpeg, codecs, narration, and publishing tools.
+2. A recorded application environment containing project source, project
+   dependencies, terminal state, services, and demonstrated endpoints.
+
+Project code and commands are untrusted. Giving the toolchain a host Docker
+socket would also give it authority over unrelated containers, images, mounts,
+secrets, and host paths. Installing the complete OmegaFlow toolchain into every
+recorded application would erase the environment boundary and burden project
+blueprints with OmegaFlow implementation details.
+
+Distribution of portable toolchain dependencies is a separate concern defined
+in [`REPOSITORY_DESIGN.md`](REPOSITORY_DESIGN.md).
+Controlled sessions consume a prepared toolchain environment; they do not
+define tool repositories, Playwright browser acquisition, or application
+blueprint distribution.
+
+Reploy already has useful foundations:
+
+- staged desired state and exact generation identity;
+- provider build locks and current-build verification;
+- attached transient shell execution;
+- live-run admission, cancellation, generation checks, and cleanup;
+- managed mounts, private workload environment injection, and endpoint
+  publication;
+- deployment-scoped crash-recovery state.
+
+The missing capability is a programmable, capability-scoped session contract
+that a containerized controller can use without emulating Reploy internals.
+OmegaFlow is the first concrete consumer, but the same primitive can let a
+trusted agent orchestrator drive an untrusted AI-agent workspace without
+receiving Docker or unrelated host authority.
+
+`reploy validate` already performs basic blueprint syntax and semantic
+validation without creating staging state, contacting Docker, resolving
+providers, or building. Remote references may update the source cache. A
+controlled-session API must not describe this existing command as absent or
+claim that basic validation proves provider resolution or build success.
+
+## Goals
+
+1. Let a trusted controller drive one isolated staged environment without raw
+   Docker authority.
+2. Preserve a long-lived shell and PTY across multiple controller operations.
+3. Keep terminal behavior faithful enough for interactive tools and recording.
+4. Bind every operation to one admitted run and exact environment generation.
+5. Make runtime termination independently verifiable by host Reploy.
+6. Deny application code access to the host-controlled session channel.
+7. Keep network, mount, identity, secret, and output authority explicit.
+8. Reuse the primitive for sandboxed AI agents and other controllers where the
+   same trust model applies.
+9. Keep OmegaFlow recording semantics entirely outside Reploy.
+
+## Non-goals
+
+The initial controlled-session work does not:
+
+- expose Docker, Docker Compose, or arbitrary runtime operations;
+- define OmegaFlow beats, terminal-to-browser handoff, capture timelines,
+  screenshots, casts, narration, diagnostics, or publication;
+- implement arbitrary remote execution;
+- provide a permanent Reploy daemon;
+- support reconnecting or transferring ownership of a session;
+- provide unrestricted numeric signal forwarding;
+- design general Internet, DNS, domain, or proxy policy;
+- implement a portable disposable writable-source filesystem;
+- introduce shared or persistent application caches;
+- guarantee containment against a container-runtime or kernel escape;
+- support privileged recording containers.
+
+## Actors and Terminology
+
+**Host Reploy operation**
+: A normal, attached Reploy process running with the existing authorized Docker
+  access. It performs runtime operations, owns the resource lease, and observes
+  Docker state. It is not a permanent daemon.
+
+**Controller**
+: Trusted software that requests and drives a session. OmegaFlow is the
+  motivating controller.
+
+**Toolchain container**
+: The trusted controller environment. For OmegaFlow it contains orchestration,
+  asciinema, the PTY proxy, Playwright, Chromium, and media tools.
+
+**Recorded application container**
+: The controlled application environment containing the untrusted shell,
+  source, tools, services, and declared endpoints. For OmegaFlow this is the
+  recorded application; for an agent controller it is the agent workspace.
+
+**External session supervisor**
+: The attached Host Reploy operation that owns the Docker TTY attachment,
+  session protocol, application signaling, lifecycle state machine, and
+  authoritative runtime observation. No trusted Reploy process runs inside the
+  recorded application container.
+
+**Session watchdog**
+: A short-lived host Reploy child process scoped to one live lease. It receives
+  an immutable cleanup manifest, watches a private parent pipe, and removes the
+  exact leased resources if the attached Host Reploy operation disappears. It
+  has no listener, accepts no later resource selection, and is not a permanent
+  daemon.
+
+**Lease**
+: Host Reploy's binding between one controller connection, admitted run,
+  generation, capability set, and the runtime resources created for it.
+
+**Session handle**
+: An opaque identifier valid only within its lease. It never conveys arbitrary
+  deployment selection.
+
+**Session channel**
+: A private channel between the toolchain and the attached Host Reploy
+  operation. It is created for one already planned lease and carries PTY data,
+  bounded controller requests, declared endpoint streams, and host-observed
+  lifecycle events. It grants no session-creation or general host-runtime
+  authority and is never mounted into the recorded application container.
+
+## Architecture
+
+```text
+Host attached Reploy operation
+├── validates one complete immutable session plan
+├── creates the lease and inert Docker resources
+├── records their exact identities and starts the session watchdog
+├── starts the toolchain and recorded application containers
+├── owns the Docker TTY attachment and framed session protocol
+├── forwards only predeclared application endpoints
+├── monitors and cleans every leased runtime resource
+└── independently observes lifecycle completion
+         ⇅
+         ⇅ private session channel
+         ⇅
+Toolchain container
+├── controller orchestration
+├── asciinema and the toolchain-local endpoint adapter
+└── Playwright and Chromium
+
+Recorded application container
+├── untrusted application shell on the Docker-managed PTY
+└── demonstrated services and endpoints
+```
+
+The host invocation selects the staged generation and complete runtime plan
+before either container starts. Host Reploy validates that fixed plan, admits
+one live run, creates both containers, and binds the session channel to the
+resulting lease. The toolchain never requests creation of a deployment or
+container and cannot select mounts, identity, environment, output destinations,
+networks, or another generation through the channel.
+
+Startup is synchronized. Host Reploy creates the leased resources without
+starting untrusted application execution, establishes the toolchain channel and
+Docker TTY attachment, then starts the application process and reports the
+session ready. After that point the runtime plan is immutable. The channel
+accepts only operations on the already-created session.
+
+Host Reploy remains in both the PTY and lifecycle paths. It transports terminal
+bytes without interpreting them, applies resize through Docker, performs
+termination through container lifecycle operations, and independently observes
+the exact containers. Application code never receives the session channel,
+even when its effective runtime identity is root.
+
+## Trust Model
+
+### Trusted
+
+- the host Reploy executable and its state;
+- the Docker runtime within its ordinary trust boundary;
+- the controlled-session protocol implementation;
+- the intended controller and toolchain image.
+
+### Untrusted
+
+- application source and dependencies;
+- application commands and subprocesses;
+- terminal output and escape sequences;
+- network services exposed by the application;
+- files supplied by the project;
+- the application container after project code starts.
+
+The design also considers a compromised toolchain. A compromised controller can
+control and disclose everything explicitly granted to its session. It must not
+thereby gain access to unrelated host data, Docker, other deployments,
+undeclared paths, or undeclared networks.
+
+### Protected Assets
+
+- host Docker and runtime authority;
+- unrelated deployments and their resources;
+- host paths not explicitly granted;
+- deployment `.env` and internal `.reploy` state;
+- secrets not granted to this session;
+- local and public networks not granted to this session;
+- session-control integrity and lifecycle truth;
+- private outputs and diagnostics until their owning client publishes them.
+
+## Global Reploy Container Sandbox
+
+Controlled sessions do not receive a special sandbox tier. Every container
+Reploy creates starts with the same deny-oriented baseline:
+
+- verified seccomp and `no-new-privileges`;
+- no Docker or runtime socket;
+- no privileged mode;
+- no host namespaces or host devices;
+- no inherited host environment;
+- no undeclared mount, network, capability, or secret access.
+
+Purpose-specific container classes then receive only their declared authority.
+The application-runtime class includes:
+
+- staged workloads, commands, and shells;
+- installed user-scope workloads, commands, and shells;
+- installed system-scope workloads, commands, and shells;
+- controlled-session application containers.
+
+The effective blueprint, installation scope, and host invocation determine
+identity, mounts, environment, endpoints, and other explicit grants before
+startup. The toolchain cannot expand or change them or select arbitrary host
+paths, Docker resources, identities, or networks.
+
+Every application runtime container:
+
+- uses an explicit numeric runtime identity rather than the image's configured
+  `USER`;
+- drops all Linux capabilities unless a separately designed feature grants a
+  specific capability;
+- enables `no-new-privileges`;
+- uses a verified seccomp filter;
+- receives no privileged mode, host namespace, host device, or runtime socket;
+- uses a read-only container root filesystem plus only declared writable
+  storage;
+- receives no public or local network access unless explicitly granted;
+- receives only declared mounts and private environment inputs;
+- is subject to bounded process, memory, CPU, temporary-storage, and output
+  policy where supported.
+
+Reploy explicitly requests Docker's built-in seccomp profile. Before launching
+untrusted application code, the trusted runtime bootstrap verifies that filter
+mode and `no-new-privileges` are active and that the effective, permitted, and
+bounding capability sets are empty. An engine or platform that cannot prove
+this baseline cannot run Reploy application containers under this policy; it
+does not silently degrade only because the selected identity is non-root.
+
+Provider-resolution, build, validation, and materialization containers execute
+package managers and other purpose-specific operations. Their provider
+contracts must separately declare and justify any root identity, network,
+capability, writable filesystem, or host-input access. Controlled sessions and
+application containers never inherit those construction authorities.
+
+## Controlled-Session Delta
+
+A controlled session adds orchestration, not a stronger or weaker application
+sandbox. Relative to an ordinary Reploy shell or application command, it adds:
+
+- a controller-owned lease bound to one deployment generation and live run;
+- a persistent PTY and typed host-mediated protocol;
+- a private controller-to-host session channel;
+- an immutable, prevalidated runtime plan;
+- controller-loss teardown and independent host-observed termination;
+- a session-scoped cleanup watchdog;
+- bounded output transport and structured session diagnostics.
+
+It does not add another runtime identity, broader storage or network access, a
+Docker socket, or a privileged container mode. OmegaFlow recording and an AI
+agent controller consume the same generic session mechanism and the same global
+runtime sandbox.
+
+## Capability and Authorization Model
+
+Before starting either container, Host Reploy produces a host-side authorization
+record containing:
+
+- the deployment identity;
+- the exact current generation reference and build identity;
+- the admitted live-run identity;
+- the effective runtime plan;
+- the effective runtime identity inherited from the execution scope;
+- the network and endpoint grants;
+- the mount and source grants;
+- the permitted session and endpoint operations;
+- the lease lifetime and owner connection.
+
+The toolchain does not receive a generic session-creation capability. After
+creation, protocol operations do not accept a deployment name, mount, identity,
+environment key, output destination, network, or raw endpoint destination.
+They act only on the session and logical endpoint identities established by the
+host-created plan. A generation change invalidates admission of a pending
+session; it does not retarget a live session.
+
+A unique private endpoint and opaque handle prevent accidental cross-session
+use, but secrecy is not the sole security boundary. Isolation relies on:
+
+- a session endpoint made available only to the intended toolchain;
+- transport and process permissions;
+- a typed handshake bound to host-created session state;
+- server-side capability checks;
+- exact generation and run identity;
+- independent host lifecycle observation.
+
+## Session Protocol
+
+The protocol is versioned, typed, length-framed, and binary-safe. Terminal
+bytes are never parsed as protocol messages.
+
+### Controller Requests
+
+- `input(bytes)`: write exact bytes to the PTY.
+- `resize(columns, rows)`: set the PTY window size.
+- `terminate`: request bounded graceful session termination.
+- `complete`: declare that the controller has finalized its client-owned results
+  and requests successful session completion.
+- `open_endpoint(endpoint_id)`: open one byte stream to a logical endpoint fixed
+  in the immutable session plan.
+
+Admission cancellation is host-owned and is not a session-protocol request.
+Host-terminal Ctrl-C while waiting removes the caller's queued operation. Once
+admitted, host cancellation terminates that caller's session and cleans its
+lease. The exact promotion-versus-cancellation boundary is a global admission
+queue invariant tracked as separate pre-release work.
+
+### Session Events
+
+- `opened`: reports the effective dimensions, identity, generation, and fixed
+  session capabilities.
+- `output(bytes)`: ordered PTY output bytes.
+- `application_exit(status, reason)`: reports host-observed application-shell
+  exit.
+- `terminating(cause)`: reports that the host-owned terminal transition began.
+- `diagnostic(code, message)`: reports protocol, runtime, or cleanup failure
+  without embedding secret values.
+- `endpoint_closed(endpoint_id, reason)`: reports one forwarded endpoint stream
+  ending.
+
+Host Reploy emits the authoritative lease lifecycle result:
+
+- `terminated(cause, application_status, controller_status, cleanup_status,
+  recovery_action)`.
+
+### Ordering and Backpressure
+
+Output frames preserve the byte order read from the PTY master. The protocol
+uses bounded buffers. A slow controller applies backpressure; Reploy does not
+silently drop or reorder terminal bytes. Limits and timeout diagnostics are
+explicit.
+
+PTY, endpoint, and lifecycle streams use independent bounded flow-control
+windows. A stalled browser transfer cannot indefinitely block terminal output,
+termination, or the authoritative lifecycle result.
+
+A PTY merges standard output and standard error. The contract does not pretend
+to recover separate streams.
+
+### Resize
+
+The initial dimensions are part of session creation. A resize request applies
+the platform PTY resize operation. Normal terminal behavior, including
+`SIGWINCH` delivery to the foreground process group, follows from that
+operation.
+
+### Ctrl-C and Signals
+
+Ctrl-C that belongs in a recording is ordinary PTY input byte `0x03`. The
+remote terminal driver handles it normally, so echo such as `^C`, foreground
+process signaling, shell behavior, and resulting output are observable and
+recordable.
+
+Administrative cancellation is distinct from recorded input. The public
+protocol exposes bounded termination, not arbitrary numeric signals. Host
+Reploy uses a fixed grace period followed by forced container termination.
+
+### Session Ownership
+
+The initial protocol has one controller, no detach, no reconnect, and no
+ownership transfer. Loss of the controller connection begins bounded
+termination. Future reconnection would require a separate authorization and
+output-replay design.
+
+## Protecting the Session Channel
+
+Untrusted application code must not be able to read, write, inherit, duplicate,
+or impersonate the control connection.
+
+The session channel exists only between the intended toolchain and the attached
+Host Reploy operation. It is never mounted into the recorded application
+container. Its handshake binds the connection to the host-created lease, exact
+generation, protocol version, fixed capability set, and expected toolchain
+identity. Server-side checks enforce every operation; an opaque or private
+endpoint is not treated as authorization by itself.
+
+The initial Linux transport is one Unix-domain socket in a fresh,
+lease-private host directory mounted only into the toolchain. Filesystem
+ownership and mode restrict access to the effective toolchain identity. The
+toolchain establishes one multiplexed connection, after which Host Reploy may
+remove the socket pathname. No endpoint path, token, or descriptor appears in
+the recorded container, image metadata, or application environment.
+
+Host Reploy owns the Docker TTY attachment, keeps control framing separate from
+terminal bytes, and performs all signaling and process-tree teardown. The
+recorded container contains no trusted session shim and no control descriptor
+for same-UID or root application code to inspect or interfere with.
+
+Hostile terminal output remains opaque bytes. JSON text, terminal escape
+sequences, fake exit messages, and protocol-looking output cannot create
+control or lifecycle events.
+
+Root application code has more authority inside its own container, but it still
+cannot reach the host-controlled session channel. A forged terminal message,
+application exit, or closed endpoint stream cannot become an authoritative
+successful termination.
+
+## Runtime Identity
+
+### Effective Runtime Identity
+
+Every Reploy application runtime container uses the ordinary Reploy runtime
+identity:
+
+- staged execution uses the invoking host user's numeric identity;
+- installed user-scope execution uses the invoking host user's numeric
+  identity;
+- installed system-scope execution uses the host account explicitly selected
+  by `environment.install.system.account`, resolved to its numeric identity.
+
+Using the invoking identity for user-scope execution preserves ordinary host
+file ownership and avoids predictable permission failures. The container
+image's configured `USER` is not the runtime authority, and the image does not
+need a matching named account. Reploy passes the effective numeric `UID:GID`
+and the host account's supplementary GIDs, then supplies its ordinary transient
+writable home. A non-root account with a root primary or supplementary group is
+rejected rather than importing privileged host group membership into the
+container.
+
+A controlled-session client inherits this identity and cannot override it. A
+different system-scope identity is an installation configuration decision, not
+a session capability.
+
+### Root Runtime Identity
+
+Root applies when the effective runtime UID is `0`: because staged or
+user-scope Reploy was invoked as root, or because a system-scope installation
+explicitly selected root. It is never inherited merely from the base image's
+configured `USER`.
+
+A root runtime identity emits a warning equivalent to:
+
+> The application will run as root inside its container. Root can bypass
+> application-level file permissions. Host input and shared-state mounts are
+> prohibited. Explicit root output contracts require their separately reviewed
+> safeguards. Network access and Linux capabilities remain restricted unless
+> separately granted.
+
+A root runtime identity does not imply:
+
+- Docker or daemon access;
+- privileged container mode;
+- additional capabilities;
+- host input or shared-state mounts;
+- public or local networking;
+- access to other sessions or deployments.
+
+Additional Linux capabilities, if ever supported for application runtime
+containers, are separate explicit grants and require their own threat analysis.
+
+## Source and Filesystem Access
+
+No host path is visible by default.
+
+Non-root application containers may receive explicitly declared read-only or
+writable host binds from the effective Reploy runtime plan. Writable binds
+support declared configuration, data, and output paths. They are not arbitrary
+paths selected through a command or session protocol, and Reploy validates that
+the effective runtime identity can use them safely.
+
+The ordinary source grant is an explicit read-only bind mount rooted at an
+approved project directory. A client cannot turn it into an arbitrary host-path
+selector through the session protocol. Original project source is never exposed
+through a writable bind.
+
+Root inside any Reploy application container may not receive host input or
+shared-state binds, including read-only binds. Read-only prevents modification
+but does not make exposed content confidential from container root. Reploy
+validates the complete effective mount plan and rejects the operation before
+contacting Docker if a prohibited bind source would be visible. A separately
+validated output-only bind is a narrow explicit result grant, not general host
+filesystem authority.
+
+Root application containers may use image content, Docker-managed volumes,
+tmpfs, or a disposable copied workspace because those do not expose the
+original host path. An existing Docker-managed volume is allowed only when the
+effective environment plan already declares it; no command or session request
+may select an arbitrary volume by name. Root can read, mutate, and change
+ownership throughout an authorized persistent volume. Fresh scratch storage is
+Reploy-owned and scoped to the operation or lease.
+
+Until disposable copied workspaces are implemented, a root operation that
+needs local project source is unsupported rather than weakened with a host
+bind.
+
+This is an explicit global application-runtime policy, independent of the
+Docker daemon's UID mapping. Additional bind categories require a later design
+decision justified by a compelling use case; they are not implementation escape
+hatches.
+
+The original project source is never writable by a Reploy application runtime
+container. Workloads, recordings, or agents that require source mutation must
+use an explicitly requested disposable writable copy. A portable writable-copy
+implementation is a separate design. Likely implementations include an
+ephemeral copied volume, a temporary image plus container layer, or a
+platform-specific copy-on-write filesystem.
+
+### Explicit Runtime Outputs
+
+The existing `reploy app --output-file` and `--output-dir` contracts remain
+supported. They are intentional, caller-authorized result channels and are not
+replaced by the provider store or disposable session scratch.
+
+For a non-root runtime identity, the existing direct output bind remains an
+explicit host-filesystem grant. A root-safe output-only contract is separate
+global pre-release work rather than controlled-session behavior. Until that
+work lands, Reploy rejects root with either output option before contacting
+Docker.
+
+The target root `--output-file` contract retains fresh private staging,
+single-regular-file validation, race-free atomic publication without overwrite,
+and interruption recovery. It additionally requires a focused review of link
+behavior plus ownership and mode normalization before publication. The target
+root `--output-dir` contract permits a direct bind only to an explicitly
+selected, initially empty dedicated directory and defines ownership
+normalization and failure retention. Neither output exception grants access to
+the destination parent, source, configuration, staging state, or unrelated host
+data.
+
+### Sensitive Path Masks
+
+Every source grant supports exclusion masks. Reploy always protects any exposed
+deployment `.env` and `.reploy` path using its existing private-runtime mask
+rules. A project-source grant additionally masks `.env` and `.reploy` at the
+granted source root by default. The effective runtime plan may add validated
+relative file or directory masks for project-specific sensitive material.
+
+Mask planning must:
+
+- reject absolute and escaping paths;
+- resolve host symlinks defensively;
+- distinguish files and directories;
+- apply masks to every visible alias of a parent bind;
+- reject conflicting nested mount types;
+- snapshot and revalidate realized mount sources immediately before creation;
+- fail closed when a mask cannot be enforced.
+
+Read-only source does not replace masking: root inside a container may read a
+read-only sensitive file.
+
+## Secrets and Environment
+
+Host process environment is never inherited wholesale.
+
+Blueprint variables remain interpolation values, not automatic workload
+environment variables. Deployment-local `.env` values continue to use
+Reploy's private one-shot environment injection. The host file is not mounted
+and is masked from every visible parent bind.
+
+A runtime operation may narrow explicitly declared environment inputs but
+cannot invent additional ones. Names and values must not appear in image
+metadata, container configuration, Docker command lines, build locks, Reploy
+state, or generated diagnostics. Application output is untrusted; Reploy cannot
+prevent an application from printing values it receives.
+
+OmegaFlow remains responsible for deciding which capture artifacts may be
+published. Reploy provides bounded private output mechanisms, not
+media-specific allowlisting.
+
+## Network and Endpoints
+
+All Reploy application runtime containers default to:
+
+- public Internet disabled;
+- local network disabled.
+
+These are independent policy switches. A controlled workflow applies them
+separately to the toolchain and controlled application environments. Local
+denial includes host gateways, Docker peers outside the granted operation,
+loopback redirection, private and link-local address ranges, IPv6 local ranges,
+and infrastructure metadata endpoints.
+
+A controller may receive an explicit session-local grant to a declared
+application endpoint. That grant is not treated as general local-network
+access.
+
+The first OmegaFlow prototype needs only:
+
+```text
+toolchain browser -> Host Reploy -> one declared recorded-application HTTP endpoint
+```
+
+The toolchain and recorded application do not share a Docker network. Docker
+publishes only the declared application port to an ephemeral host-loopback
+port. A toolchain-local adapter accepts Chromium connections on toolchain
+loopback and multiplexes their byte streams over the private session channel.
+Host Reploy maps the fixed logical endpoint identity to the loopback-published
+port. The protocol accepts no raw host, IP address, port, or URL destination.
+The application cannot use this one-way forwarding path to reach the toolchain.
+
+The loopback-published port is inside the already trusted host boundary and is
+never disclosed to the toolchain. It, the adapter streams, and all associated
+Docker state are owned by and removed with the session lease. General
+public/local network denial remains a separate prerequisite; this endpoint
+forwarding path is not a general router, HTTP policy engine, or domain-aware
+firewall.
+
+General network isolation and auditability are a separate design surface.
+Future work may include an HTTP/HTTPS proxy, destination policy, controlled
+DNS, and agent-sandbox audit records. HTTPS `CONNECT` can filter and audit a
+destination hostname without TLS interception, but cannot inspect encrypted
+URLs or content. Direct egress must be blocked to prevent proxy bypass.
+Redirects, DNS rebinding, CDNs, WebSockets, QUIC, and application-to-network
+policy require explicit treatment.
+
+Until that design is implemented, rough public and local kill switches must
+fail closed and must not be described as domain-level isolation.
+
+## Browser and Terminal Placement
+
+For OmegaFlow:
+
+- orchestration runs in the toolchain container;
+- asciinema and the session client run in the toolchain container;
+- Playwright and Chromium run in the toolchain container;
+- Host Reploy owns the Docker TTY attachment and external session supervision;
+- the shell runs on the Docker-managed PTY in the recorded application
+  container;
+- the demonstrated web service runs in the recorded application environment;
+- Chromium reaches that service only through its toolchain-local adapter and
+  the one granted Host Reploy endpoint stream.
+
+Terminal-to-browser handoff is an OmegaFlow orchestration concern inside the
+toolchain. Reploy does not model beats, handoffs, browser actions, or capture
+state. It provides only the PTY, endpoint, network, and lifecycle primitives.
+
+## Asciinema Integration
+
+OmegaFlow retains asciinema as the initial terminal recorder. It records a
+local Reploy session-client command:
+
+```text
+asciinema
+└── Reploy session client in the toolchain
+    ⇄ private session channel
+       ⇄ Host Reploy external supervisor
+          ⇄ Docker TTY attachment
+             ⇄ application shell
+```
+
+The proxy forwards input bytes, output bytes, resize operations, and terminal
+completion. This keeps asciinema and recording dependencies out of application
+images while preserving the existing cast format and toolchain ownership.
+
+The prototype must test:
+
+- absence of double input echo;
+- raw and canonical terminal modes;
+- ordinary Ctrl-C behavior and recording;
+- initial dimensions and resize propagation;
+- byte ordering and timing;
+- headless capture;
+- large-output backpressure;
+- abrupt loss of the toolchain, application, Host Reploy, or Docker
+  observation.
+
+OmegaFlow may later write casts directly from session events, but that is not
+required by this design.
+
+## Lifecycle and Verified Termination
+
+Host Reploy serializes every session through one state machine:
+
+```text
+preparing -> active -> terminating -> terminated
+```
+
+The first accepted termination cause is latched and never rewritten. Causes
+include controller completion, application exit, host cancellation, controller
+loss, Docker-observation loss, and startup failure. Later events remain
+diagnostic observations. Application and controller exit states plus cleanup
+success are reported separately, so a cleanup failure can fail the operation
+without hiding its original cause.
+
+Channel closure is never successful completion. The controller must explicitly
+send `complete` after finalizing its client-owned results; for OmegaFlow these
+include the recording artifacts. Repeated terminate or host cancel operations
+are idempotent. Input, resize, and new endpoint streams are rejected after
+`terminating` begins. A single `complete` remains valid during termination when
+Host Reploy is waiting for controller finalization after an application exit.
+
+Normal completion is:
+
+1. The controller finalizes its recording output and sends `complete`, or Host
+   Reploy observes the application shell exit.
+2. Host Reploy atomically latches the cause and enters `terminating`.
+3. If the application exited first, Host Reploy reports that event and gives
+   the live controller a bounded finalization period in which to write its
+   recording output and send `complete`.
+4. Host Reploy performs bounded graceful termination followed by forced
+   termination when necessary.
+5. Host Reploy independently observes the exact leased containers stopped.
+6. Host Reploy removes the containers, endpoint publication, temporary mounts,
+   networks, and other lease resources.
+7. Host Reploy records the original cause, controller-finalization result,
+   application and controller statuses, and cleanup result, then emits the one
+   authoritative `terminated` event.
+
+A controller disconnect latches `controller_lost` and starts the same teardown.
+An application exit is reported to the still-live controller so it can finalize
+its recording; the session cannot succeed if the controller disappears before
+that finalization. Neither terminal output nor an endpoint-stream close can
+substitute for host-observed Docker state.
+
+### Session Watchdog
+
+Host Reploy starts one short-lived watchdog for each live controlled session.
+It first creates inert Docker resources and durably records their exact
+identities. Before starting either container, it passes the watchdog an
+immutable cleanup manifest containing the exact lease, container, endpoint,
+network, volume, and host boot identities. The attached operation retains one
+end of a private parent pipe. A crash during inert resource creation leaves no
+untrusted code running and is handled by ordinary next-operation
+reconciliation.
+
+Successful verified cleanup disarms the watchdog. Unexpected process death,
+including `SIGKILL`, closes the pipe in the operating system and causes the
+watchdog to stop, forcibly terminate when needed, remove, and verify only the
+manifested resources. The watchdog exposes no listener, accepts no later
+resource selection, and exits after verified cleanup. Although its underlying
+Docker connection has ordinary trusted-host authority, its code path is limited
+to the immutable resource set.
+
+If Docker is unavailable, the watchdog retries until Docker returns or the host
+reboots. If both the attached operation and watchdog are killed, durable labels
+and deployment-scoped live-run state let the next locked Reploy operation
+reconcile the abandoned resources. This final fallback is eventual rather than
+immediate.
+
+### Docker Restart and Host Reboot
+
+Controlled-session containers use no Docker restart policy. That alone does not
+end a session during a Docker daemon restart because Docker live-restore may
+keep both containers executing while management, attach, events, input, or
+networking are unavailable.
+
+Loss of authoritative Docker observation therefore immediately latches
+`runtime_observation_lost`, fails the recording, and closes its session and
+endpoint streams. The session is never resumed or accepted as valid after
+observation returns. Host Reploy and the watchdog retry Docker access and
+forcibly remove any survivors when control returns. Immediate termination while
+Docker itself is unreachable is not promised.
+
+A real host reboot ends the processes. The no-restart policy prevents their
+automatic return, and prior-boot queue entries are discarded under Reploy's
+existing boot-session admission rules.
+
+## Staging and Generation Semantics
+
+Basic preflight validation uses the existing `reploy validate` behavior.
+Creating a session requires a successfully staged and built current generation.
+The session is pinned to that generation for its complete lifetime.
+
+Updating a staging directory with the same environment follows ordinary
+stage-update behavior. Attempting to stage a different environment into the
+same directory is rejected by default.
+
+An explicit forced replacement:
+
+- stops and removes Reploy-managed runtime resources for the old environment;
+- replaces Reploy-managed staging state;
+- stages the new environment;
+- preserves user-owned files such as overrides, private environment
+  configuration, and unrelated paths;
+- never treats force as permission to recursively delete the staging
+  directory.
+
+A generation update never retargets a live controlled session.
+
+## Audit and Diagnostics
+
+Reploy records security-relevant facts without recording secret values:
+
+- session and lease identity;
+- deployment and generation;
+- effective runtime identity and whether it is root;
+- capability names;
+- mount targets and mask identities, without secret file contents;
+- network policy class and granted endpoint identities;
+- lifecycle transitions, cancellation, timeout, and recovery actions;
+- exit status and structured failure codes.
+
+Terminal content belongs to the controller's private output stream and is not
+duplicated into Reploy audit metadata.
+
+Diagnostics identify which operation failed, what Reploy attempted, whether
+the session channel or Docker lifecycle was observed, what cleanup ran, and the
+safe next action.
+
+## Resource and Timeout Policy
+
+Controlled sessions have explicit limits for:
+
+- startup and handshake;
+- idle or total session duration when requested by policy;
+- termination grace;
+- buffered terminal output;
+- controller request size;
+- process, memory, CPU, and temporary-disk resources where supported.
+
+Exceeding a limit produces a structured diagnostic and bounded teardown. A
+timeout never converts into successful completion.
+
+## Implementation Plan
+
+The initial implementation uses Linux containers under Docker, but it is not
+one prototype megaslice. Each slice receives focused assertions, tests, review,
+and a separate commit.
+
+### Slice 1: Global Sandbox Prerequisites
+
+Apply the approved identity, seccomp, `no-new-privileges`, capability,
+namespace, device, mount, mask, secret, network, and root rules consistently to
+ordinary Reploy application containers. Prove staged workloads, installed
+workloads, transient commands, shells, and later controlled sessions consume
+the same baseline. This is global runtime work, not controlled-session code.
+
+### Slice 2: Controlled-Session Lifecycle Core
+
+Using synthetic toolchain and application images with networking disabled:
+
+- validate one immutable plan and admit its exact generation;
+- start both containers without giving the toolchain Docker access;
+- establish the private toolchain channel and external Docker TTY supervision;
+- implement ordered terminal bytes, initial dimensions, resize, ordinary
+  Ctrl-C, bounded termination, exit status, and bounded backpressure;
+- implement the host-owned state machine and authoritative terminal result;
+- prove hostile terminal output and connection closure cannot forge lifecycle
+  success.
+
+### Slice 3: Crash Containment
+
+Add the session-scoped watchdog, immutable cleanup manifest, labels,
+reconciliation, and idempotent teardown. Test toolchain death, application
+death, Host Reploy `SIGKILL`, watchdog interruption, Docker daemon restart with
+live-restore, Docker unavailability, and host-reboot recovery without touching
+unrelated resources.
+
+### Slice 4: Declared Endpoint Forwarding
+
+Add the toolchain-local adapter and Host Reploy forwarding to one exact
+host-loopback-published application endpoint. Prove Chromium can use HTTP and
+WebSocket streams while the application cannot reach the toolchain and neither
+container receives unrelated local or public access. Keep general proxy, DNS,
+domain, redirect, QUIC, and audit policy outside this slice.
+
+### Slice 5: OmegaFlow Proof
+
+Integrate OmegaFlow, asciinema, Playwright, and Chromium only after the generic
+session slices pass. Prove one persistent shell across multiple operations,
+faithful Ctrl-C recording, resize, terminal-to-browser handoff, explicit
+recording finalization, output publication, and actionable failure diagnostics.
+
+### Independent Pre-release Runtime Fixes
+
+The admission promotion-versus-cancellation invariant and root-safe
+`--output-file`/`--output-dir` contracts are separate global backlog slices.
+Controlled sessions consume their completed behavior and do not grow private
+variants. Until root output work lands, that combination is rejected clearly.
+
+The initial implementation does not include domain filtering, remote
+execution, reconnection, persistent caches, writable source copies, or multiple
+concurrent sessions per controller.
+
+## Deferred Designs
+
+### Reploy Repositories and Portable Tools
+
+Define and implement the independently updated, federated repository mechanism
+and its portable tool surface for capabilities such as Java and Playwright in
+[`REPOSITORY_DESIGN.md`](REPOSITORY_DESIGN.md).
+This is a toolchain packaging dependency, not part of the session transport or
+lease protocol.
+
+### Network Isolation and Audit
+
+Define general public and local kill switches, direct-egress enforcement, proxy
+behavior, DNS control, IPv6, metadata protection, and auditability as a
+separate Reploy/agent-sandbox design. The one-way, exact endpoint forwarding
+used by the initial controlled session is intentionally narrower than that
+future surface.
+
+### Disposable Writable Workspaces
+
+Define portable snapshot or copy semantics, cost, ownership, exclusions,
+cleanup, persistence boundaries, and failure recovery. The original source
+must remain immutable.
+
+### Cross-platform Session Transport
+
+The first protocol uses Linux/Docker primitives. Windows named pipes, macOS and
+Docker Desktop behavior, rootless runtimes, and Podman require platform
+evidence before becoming supported contracts.
+
+### Elevated Application Capabilities
+
+Root identity is supported globally, but additional Linux capabilities and
+administrative demonstrations need separate explicit grants and threat
+analysis. Privileged application containers remain outside this design.
+
+## Consequences
+
+- Controllers can drive exact Reploy environments without receiving general
+  host authority.
+- OmegaFlow retains ownership of recording behavior and dependencies.
+- Reploy gains a primitive useful for agent sandboxes and other controlled
+  execution clients.
+- Controlled sessions reuse the global application-runtime sandbox instead of
+  defining an OmegaFlow-only security tier.
+- Host Reploy remains in both the PTY and lifecycle paths; the containers do not
+  receive a direct control connection to one another.
+- Staged and installed user-scope application containers retain practical host
+  ownership by using the invoking host identity, which may be unnamed inside
+  the image.
+- Installed system-scope application containers use the configured host
+  service account's numeric identity without requiring a corresponding
+  container-local username.
+- Root application containers are possible but visibly weaker.
+- Root application containers never receive host input or shared-state binds;
+  local source requires the separately designed disposable-copy capability.
+  Explicit root output-only binds remain unavailable until their separate
+  pre-release contract is reviewed and implemented.
+- Strong default network denial and arbitrary sensitive-path masks require new
+  implementation work.
+- Disposable writable source is intentionally more expensive and deferred.
+- Verified termination requires independent runtime observation; session
+  protocol success alone is never sufficient.
