@@ -1,0 +1,2 @@
+kind: Fixed
+body: Allow concurrent Reploy blueprint-index cache readers while atomically refreshing the cache on Windows.

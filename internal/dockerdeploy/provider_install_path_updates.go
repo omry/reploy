@@ -119,11 +119,8 @@ func applyProviderInstallPrivateEnvironmentV1(
 	if err != nil {
 		return fmt.Errorf("read staging %s for installation: %w", PrivateWorkloadEnvironmentFileName, err)
 	}
-	if !source.Present {
-		if replace {
-			return fmt.Errorf("replace installed %s: staging source is missing", PrivateWorkloadEnvironmentFileName)
-		}
-		return nil
+	if !source.Exists {
+		return fmt.Errorf("install %s: staging source is missing", PrivateWorkloadEnvironmentFileName)
 	}
 	parent := filepath.Dir(action.Target)
 	if err := validateProviderInstallDirectoryAncestorsV1(parent); err != nil {

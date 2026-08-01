@@ -37,7 +37,10 @@ func TestAPTResolverSessionCollectsBaseEvidenceBeforeNetworkWork(t *testing.T) {
 		[]byte("amd64\n"),
 		{},
 		{},
-		[]byte("  MarkInstall hello:amd64 < none -> 2.10-3 @un puN > FU=1\n    MarkInstall libc6:amd64 < 2.39 @ii pmK > FU=0\n"),
+		aptPlanCommandOutput(
+			"Inst hello (2.10-3 Debian:13/stable [amd64])\n",
+			"  MarkInstall hello:amd64 < none -> 2.10-3 @un puN > FU=1\n    MarkInstall libc6:amd64 < 2.39 @ii pmK > FU=0\n",
+		),
 		[]byte("libc6:amd64\t2.39\tamd64\tinstall ok installed\n"),
 		{},
 	}
@@ -217,7 +220,10 @@ func TestAPTResolverDownloadRequiresVerifiedBaseState(t *testing.T) {
 		[]byte("ID\x00debian\x00VERSION_ID\x0013\x00"),
 		[]byte("apt 3.0.3 (amd64)\n"), []byte("dpkg 1\n"), []byte("dpkg-deb 1\n"), []byte("dpkg-query 1\n"),
 		[]byte("sha256sum 1\n"), []byte("amd64\n"), {}, {},
-		[]byte("  MarkInstall hello:amd64 < none -> 2.10 @un puN > FU=1\n"),
+		aptPlanCommandOutput(
+			"Inst hello (2.10 Debian:13/stable [amd64])\n",
+			"  MarkInstall hello:amd64 < none -> 2.10 @un puN > FU=1\n",
+		),
 		{},
 	}
 	commands, _ := stubAPTResolverCommands(t, mustCanonicalProbeResponse(t, aptBaseProbeResponse()), outputs, nil)
@@ -259,7 +265,10 @@ func TestAPTResolverBaseStateCommandFailureDoesNotRetryOrAcceptPartialOutput(t *
 		[]byte("ID\x00debian\x00VERSION_ID\x0013\x00"),
 		[]byte("apt 3.0.3 (amd64)\n"), []byte("dpkg 1\n"), []byte("dpkg-deb 1\n"), []byte("dpkg-query 1\n"),
 		[]byte("sha256sum 1\n"), []byte("amd64\n"), {}, {},
-		[]byte("  MarkInstall hello:amd64 < none -> 2.10 @un puN > FU=1\n    MarkInstall libc6:amd64 < 2.39 @ii pmK > FU=0\n"),
+		aptPlanCommandOutput(
+			"Inst hello (2.10 Debian:13/stable [amd64])\n",
+			"  MarkInstall hello:amd64 < none -> 2.10 @un puN > FU=1\n    MarkInstall libc6:amd64 < 2.39 @ii pmK > FU=0\n",
+		),
 	}
 	commands, _ := stubAPTResolverCommands(t, mustCanonicalProbeResponse(t, aptBaseProbeResponse()), outputs, nil)
 	session, err := OpenAPTResolverSession(context.Background(), descriptor, probeWorkspace, resolverWorkspace, RunOptions{})
@@ -323,7 +332,10 @@ func TestAPTResolverInspectsSelectedArchiveAndIgnoresUnrelatedUnchangedSeed(t *t
 		[]byte("ID\x00debian\x00VERSION_ID\x0013\x00"),
 		[]byte("apt 3.0.3 (amd64)\n"), []byte("dpkg 1\n"), []byte("dpkg-deb 1\n"), []byte("dpkg-query 1\n"),
 		[]byte("sha256sum 1\n"), []byte("amd64\n"), {}, {},
-		[]byte("  MarkInstall hello:amd64 < none -> 2.10 @un puN > FU=1\n    MarkInstall libc6:amd64 < 2.39 @ii pmK > FU=0\n"),
+		aptPlanCommandOutput(
+			"Inst hello (2.10 Debian:13/stable [amd64])\n",
+			"  MarkInstall hello:amd64 < none -> 2.10 @un puN > FU=1\n    MarkInstall libc6:amd64 < 2.39 @ii pmK > FU=0\n",
+		),
 		[]byte("libc6:amd64\t2.39\tamd64\tinstall ok installed\n"), {},
 		aptArchiveInspectionStream(t, "hello", "2.10", "amd64", "./usr/bin/hello"),
 		aptArchiveInspectionStream(t, "old", "1", "all", "./usr/share/old"),
@@ -752,7 +764,13 @@ func stubAPTResolverCommands(
 			}
 			joined := strings.Join(spec.Args, "\x00")
 			if strings.Contains(joined, "Debug::pkgDepCache::Marker=1") {
-				_, _ = options.Stderr.Write(profileOutputs[profileIndex])
+				stdout, stderr, separated := bytes.Cut(profileOutputs[profileIndex], []byte("\x00APT-PLAN-STDERR\x00"))
+				if separated {
+					_, _ = options.Stdout.Write(stdout)
+					_, _ = options.Stderr.Write(stderr)
+				} else {
+					_, _ = options.Stderr.Write(profileOutputs[profileIndex])
+				}
 			} else {
 				_, _ = options.Stdout.Write(profileOutputs[profileIndex])
 			}
@@ -761,6 +779,10 @@ func stubAPTResolverCommands(
 		return nil
 	}
 	return &commands, &probeInput
+}
+
+func aptPlanCommandOutput(stdout string, stderr string) []byte {
+	return []byte(stdout + "\x00APT-PLAN-STDERR\x00" + stderr)
 }
 
 func aptArchiveInspectionStream(t *testing.T, name string, version string, architecture string, member string) []byte {

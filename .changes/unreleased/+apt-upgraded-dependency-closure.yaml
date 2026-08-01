@@ -1,0 +1,2 @@
+kind: Fixed
+body: Include upgraded base dependencies in APT provider bundles when the selected package transaction requires newer exact versions.

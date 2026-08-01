@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -9,6 +10,15 @@ import (
 var preparePackIndexCacheTemporary = preparePackIndexCacheFile
 var replacePackIndexCacheFile = atomicReplacePackIndexCacheFile
 var syncPackIndexCacheDirectory = syncPackIndexCacheParent
+
+func readPackIndexPath(path string) ([]byte, error) {
+	file, err := openPackIndexFile(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return io.ReadAll(file)
+}
 
 func writePackIndexCachePath(path string, content []byte) (err error) {
 	directory := filepath.Dir(path)

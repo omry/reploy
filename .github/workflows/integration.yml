@@ -64,8 +64,9 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew update
-          brew install docker docker-compose colima
+          brew install docker docker-buildx docker-compose colima
           mkdir -p ~/.docker/cli-plugins
+          ln -sf "$(brew --prefix)/lib/docker/cli-plugins/docker-buildx" ~/.docker/cli-plugins/docker-buildx
           ln -sf "$(brew --prefix docker-compose)/bin/docker-compose" ~/.docker/cli-plugins/docker-compose
           sw_vers
           uname -a
@@ -75,6 +76,7 @@ jobs:
           colima start --runtime docker --vm-type vz --mount-type virtiofs --cpu 2 --memory 4 --disk 20
           colima status
           docker info
+          docker buildx version
           docker compose version
           docker run --rm -v "$PWD:/workspace:ro" alpine:3.22 test -f /workspace/go.mod
 

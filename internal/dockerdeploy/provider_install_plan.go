@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -84,6 +85,24 @@ func planProviderInstallationV1(ctx context.Context, input providerInstallPlanni
 	for _, action := range pathUpdates {
 		if action.Kind != PathPreservePrivateEnv && action.Kind != PathReplacePrivateEnv {
 			continue
+		}
+		environmentDir := filepath.Dir(action.Source)
+		if action.Kind == PathPreservePrivateEnv {
+			if _, statErr := os.Lstat(action.Target); statErr == nil {
+				environmentDir = filepath.Dir(action.Target)
+			} else if !os.IsNotExist(statErr) {
+				return providerInstallationPlanV1{}, fmt.Errorf("inspect installed %s: %w", PrivateWorkloadEnvironmentFileName, statErr)
+			}
+		}
+		environment, loadErr := loadPrivateWorkloadEnvironmentV1(environmentDir)
+		if loadErr != nil {
+			return providerInstallationPlanV1{}, fmt.Errorf("read installed %s plan input: %w", PrivateWorkloadEnvironmentFileName, loadErr)
+		}
+		if !environment.Exists {
+			return providerInstallationPlanV1{}, fmt.Errorf("installed %s plan input disappeared", PrivateWorkloadEnvironmentFileName)
+		}
+		if !environment.Present {
+			break
 		}
 		if err := validatePrivateWorkloadEnvironmentIsolationV1ForPlan(destinationDir, dockerPlan); err != nil {
 			return providerInstallationPlanV1{}, err

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -316,7 +317,7 @@ demo-server = "demo_server:main"
 
 func buildIntegrationProbeWorkspace(t *testing.T, platform blueprint.Platform) PreparedProbeWorkspace {
 	t.Helper()
-	dir := t.TempDir()
+	dir := dockerIntegrationSharedTempDir(t)
 	executable := filepath.Join(dir, filepath.Base(ProbeContainerExecutable))
 	command := exec.Command("go", "build", "-o", executable, "./cmd/reploy-probe")
 	command.Dir = filepath.Clean(filepath.Join("..", ".."))
@@ -344,4 +345,28 @@ func buildIntegrationProbeWorkspace(t *testing.T, platform blueprint.Platform) P
 		ContainerDir: ProbeContainerRoot, ContainerExecutable: ProbeContainerExecutable,
 		ReadOnly: true, Platform: platform, SHA256: digest,
 	}
+}
+
+// Docker Desktop and Colima share the macOS home directory with their Linux
+// VM, but do not guarantee that Go's /var/folders test directory is visible to
+// the daemon. Keep bind-mounted integration fixtures on a shared host path.
+func dockerIntegrationSharedTempDir(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS != "darwin" {
+		return t.TempDir()
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(home, ".reploy-docker-integration-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Errorf("remove Docker integration directory: %v", err)
+		}
+	})
+	return dir
 }

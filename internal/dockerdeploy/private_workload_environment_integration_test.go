@@ -28,7 +28,7 @@ func TestPrivateWorkloadEnvironmentDockerIntegrationMasksFilesAndInjectsValues(t
 	const image = "debian:bookworm-slim"
 	runDockerIntegration(t, ctx, "pull", image)
 
-	hostRoot := t.TempDir()
+	hostRoot := dockerIntegrationSharedTempDir(t)
 	if err := os.Chmod(hostRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestPrivateRuntimeMasksDockerIntegrationProtectTransientContainer(t *testin
 	}
 	workspace := buildIntegrationProbeWorkspace(t, platform)
 
-	deploymentDir := t.TempDir()
+	deploymentDir := dockerIntegrationSharedTempDir(t)
 	if err := os.Chmod(deploymentDir, 0o755); err != nil {
 		t.Fatal(err)
 	}

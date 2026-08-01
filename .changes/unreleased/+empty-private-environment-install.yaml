@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve an empty private workload environment file during installation without incorrectly enabling secret injection.

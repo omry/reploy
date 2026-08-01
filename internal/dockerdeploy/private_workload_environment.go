@@ -34,6 +34,7 @@ type privateRuntimeMaskV1 struct {
 }
 
 type privateWorkloadEnvironmentV1 struct {
+	Exists  bool
 	Present bool
 	Payload []byte
 	Raw     []byte
@@ -58,9 +59,10 @@ func loadPrivateWorkloadEnvironmentV1(deploymentDir string) (privateWorkloadEnvi
 	}
 	payload.WriteByte('\n')
 	return privateWorkloadEnvironmentV1{
+		Exists:  true,
 		Present: len(assignments) != 0,
 		Payload: payload.Bytes(),
-		Raw:     append([]byte(nil), raw...),
+		Raw:     append([]byte{}, raw...),
 	}, nil
 }
 

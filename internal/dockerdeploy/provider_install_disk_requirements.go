@@ -153,10 +153,10 @@ func providerInstallPathUpdateDiskRequirementV1(action PathUpdateAction) (provid
 		if err != nil {
 			return providerInstallDiskRequirementV1{}, false, err
 		}
-		if !environment.Present {
-			if action.Kind == PathReplacePrivateEnv {
-				return providerInstallDiskRequirementV1{}, false, fmt.Errorf("replacement private environment source is missing")
-			}
+		if !environment.Exists {
+			return providerInstallDiskRequirementV1{}, false, fmt.Errorf("staging private environment source is missing")
+		}
+		if len(environment.Raw) == 0 {
 			return providerInstallDiskRequirementV1{}, false, nil
 		}
 		return providerInstallDiskRequirementV1{Path: action.Target, Bytes: uint64(len(environment.Raw))}, true, nil

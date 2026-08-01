@@ -511,14 +511,26 @@ func (session *APTResolverSession) PlanPackages(ctx context.Context, request pro
 	if err != nil {
 		return aptprovider.ResolvePlanV1{}, err
 	}
+	installParser, err := aptprovider.NewResolveInstallParserV1(session.base.Profile.NativeArchitecture)
+	if err != nil {
+		return aptprovider.ResolvePlanV1{}, err
+	}
 	session.planAttempted = true
 	session.planRoots = append([]string{}, roots...)
 	session.planRequest = append([]byte{}, requestBytes...)
 	argv := append(aptprovider.ResolvePlanPrefixArgvV1(), roots...)
-	if err := session.runProfileArgvTo(ctx, "apt.resolve.plan", argv, session.stdout, io.MultiWriter(parser, session.stderr)); err != nil {
+	if err := session.runProfileArgvTo(ctx, "apt.resolve.plan", argv, io.MultiWriter(installParser, session.stdout), io.MultiWriter(parser, session.stderr)); err != nil {
 		return aptprovider.ResolvePlanV1{}, err
 	}
-	plan, err := parser.Finish()
+	markerPlan, err := parser.Finish()
+	if err != nil {
+		return aptprovider.ResolvePlanV1{}, fmt.Errorf("APT package planning capability: %w", err)
+	}
+	changes, err := installParser.Finish()
+	if err != nil {
+		return aptprovider.ResolvePlanV1{}, fmt.Errorf("APT install transaction capability: %w", err)
+	}
+	plan, err := aptprovider.CompleteResolvePlanV1(markerPlan, changes)
 	if err != nil {
 		return aptprovider.ResolvePlanV1{}, fmt.Errorf("APT package planning capability: %w", err)
 	}

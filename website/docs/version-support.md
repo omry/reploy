@@ -8,13 +8,13 @@ Use `blueprint.requires_reploy` to declare the oldest Reploy version that
 understands every field and behavior the blueprint depends on.
 
 The schema-1 environment model documented here is the current public blueprint
-surface and requires Reploy `>=0.5.1.dev1` during its development cycle:
+surface and requires Reploy `>=0.6.0.dev1` during its development cycle:
 
 ```yaml
 blueprint:
   schema: 1
   version: 0.1.0
-  requires_reploy: ">=0.5.1.dev1"
+  requires_reploy: ">=0.6.0.dev1"
 ```
 
 This release makes a hard cut from the earlier prototype blueprint shape. It

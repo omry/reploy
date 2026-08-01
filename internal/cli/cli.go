@@ -2810,7 +2810,7 @@ func loadPackIndex(indexURL string) (packIndex, error) {
 		return index, nil
 	}
 	cachePath := packIndexCachePath(indexURL)
-	cached, cacheErr := os.ReadFile(cachePath)
+	cached, cacheErr := readPackIndexPath(cachePath)
 	if cacheErr == nil {
 		index, parseErr := parsePackIndex(cached)
 		if parseErr == nil {
@@ -2850,7 +2850,7 @@ func refreshPackIndex(indexURL string) (packIndex, string, error) {
 }
 
 func readPackIndexFile(path string) (packIndex, error) {
-	content, err := os.ReadFile(path)
+	content, err := readPackIndexPath(path)
 	if err != nil {
 		return packIndex{}, err
 	}

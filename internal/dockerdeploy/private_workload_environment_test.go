@@ -30,7 +30,7 @@ func TestLoadPrivateWorkloadEnvironmentV1OpensOwnerOnlyRealFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !environment.Present || !bytes.Equal(environment.Raw, content) {
+	if !environment.Exists || !environment.Present || !bytes.Equal(environment.Raw, content) {
 		t.Fatalf("loaded environment = %#v", environment)
 	}
 	if got, want := string(environment.Payload), "EMPTY=\nPORT=8080\nTOKEN=private value\n\n"; got != want {
@@ -44,7 +44,7 @@ func TestPreparePrivateWorkloadEnvironmentV1CreatesStableEmptyMountpoint(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if environment.Present || len(environment.Payload) != 1 || environment.Payload[0] != '\n' {
+	if !environment.Exists || environment.Present || len(environment.Payload) != 1 || environment.Payload[0] != '\n' {
 		t.Fatalf("empty environment = %#v", environment)
 	}
 	path := filepath.Join(dir, PrivateWorkloadEnvironmentFileName)
@@ -375,6 +375,60 @@ func TestPlanAndApplyPrivateEnvironmentInstallPreservesThenReplaces(t *testing.T
 	}
 	if got, _ := os.ReadFile(targetPath); string(got) != "TOKEN=second\n" {
 		t.Fatalf("replaced environment = %q", got)
+	}
+}
+
+func TestPlanAndApplyPrivateEnvironmentInstallKeepsEmptyFile(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "staging")
+	target := filepath.Join(root, "installed")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(source, PrivateWorkloadEnvironmentFileName)
+	if created, err := publishPrivateWorkloadEnvironmentFileV1(sourcePath, nil, false); err != nil || !created {
+		t.Fatalf("create empty staging environment = %t, %v", created, err)
+	}
+	document := blueprint.Document{Environment: blueprint.Environment{ID: "demo"}}
+	actions, _, err := planEnvironmentInstallPathUpdates(document, source, target, InstallScopeUser, nil, false, "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(actions) != 1 || actions[0].Kind != PathPreservePrivateEnv {
+		t.Fatalf("empty environment actions = %#v", actions)
+	}
+	locked := providerInstallPathUpdateFixture(target, actions[0])
+	locked.Input.SourceDeploymentDir = source
+	if err := applyProviderInstallPathUpdatesWithV1(t.Context(), locked, providerInstallPathUpdateBackendV1{
+		volumeExists: func(context.Context, string) (bool, error) { return false, nil },
+		run:          func(CommandSpec, RunOptions) error { return nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	targetPath := filepath.Join(target, PrivateWorkloadEnvironmentFileName)
+	environment, err := loadPrivateWorkloadEnvironmentV1(target)
+	if err != nil || !environment.Exists || environment.Present || len(environment.Raw) != 0 {
+		t.Fatalf("installed empty environment = %#v, %v", environment, err)
+	}
+	if err := os.WriteFile(targetPath, []byte("TOKEN=old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	actions, _, err = planEnvironmentInstallPathUpdates(document, source, target, InstallScopeUser, []string{PrivateWorkloadEnvironmentFileName}, false, "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked.Plan.PathUpdates = actions
+	if err := applyProviderInstallPathUpdatesWithV1(t.Context(), locked, providerInstallPathUpdateBackendV1{
+		volumeExists: func(context.Context, string) (bool, error) { return false, nil },
+		run:          func(CommandSpec, RunOptions) error { return nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if content, err := os.ReadFile(targetPath); err != nil || len(content) != 0 {
+		t.Fatalf("replaced empty environment = %q, %v", content, err)
 	}
 }
 

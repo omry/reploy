@@ -1431,7 +1431,7 @@ func TestWritePackIndexCachePathKeepsConcurrentReadsComplete(t *testing.T) {
 				return
 			default:
 			}
-			content, err := os.ReadFile(path)
+			content, err := readPackIndexPath(path)
 			if err != nil {
 				done <- err
 				return
