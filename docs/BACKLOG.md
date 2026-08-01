@@ -120,6 +120,15 @@ This file is the day-to-day queue for design and implementation gaps.
 
 ## Post-v1
 
+- [ ] `P2` Evaluate and prioritize the Dingo development-environment gaps.
+      Use `docs/DINGO_GAPS.md` as the needs and evidence record for portable
+      checkout binding, development execution, shell initialization, pinned
+      source workspaces, ROS dependencies, robot hardware and networking, and
+      ARM64 handoff. Confirm each boundary against current behavior, separate
+      broadly useful Reploy capabilities from ROS-specific integration, and
+      turn accepted priorities into focused follow-up backlog items without
+      treating this document as an implementation plan.
+
 - [ ] `P2` Generate a maintained official base-image index.
       Add a server-side tool that clones `docker-library/official-images` and
       produces one deterministic, versioned index file containing the official
