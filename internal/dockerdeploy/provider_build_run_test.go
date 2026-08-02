@@ -805,12 +805,41 @@ func TestStagedProviderBuildRuntimeV1MapsSupportedHosts(t *testing.T) {
 			}
 		})
 	}
-	got, err := stagedProviderBuildRuntimeV1("windows", -1, -1, nil)
-	if err != nil || got.UID != 0 || got.GID != 0 {
-		t.Fatalf("Windows runtime identity = %#v, %v", got, err)
+	if _, err := stagedProviderBuildRuntimeV1("windows", -1, -1, nil); err == nil || !strings.Contains(err.Error(), "mapped non-root") {
+		t.Fatalf("Windows runtime identity error = %v", err)
 	}
 	if _, err := stagedProviderBuildRuntimeV1("plan9", 1, 2, nil); err == nil || !strings.Contains(err.Error(), "unsupported") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestWindowsSIDRuntimeIdentityV1IsStableNonRootAndSIDSpecific(t *testing.T) {
+	firstUID, firstGID, err := windowsSIDRuntimeIdentityV1("S-1-5-21-100-200-300-1001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeatedUID, repeatedGID, err := windowsSIDRuntimeIdentityV1("s-1-5-21-100-200-300-1001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherUID, otherGID, err := windowsSIDRuntimeIdentityV1("S-1-5-21-100-200-300-1002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstUID < windowsRuntimeIDMinimumV1 || firstUID != firstGID || firstUID != repeatedUID || firstGID != repeatedGID {
+		t.Fatalf("stable SID mapping = %d:%d then %d:%d", firstUID, firstGID, repeatedUID, repeatedGID)
+	}
+	canonicalUID, canonicalGID, err := windowsSIDRuntimeIdentityV1("S-01-005-021-0100-0200-0300-01001")
+	if err != nil || canonicalUID != firstUID || canonicalGID != firstGID {
+		t.Fatalf("canonical SID mapping = %d:%d, %v", canonicalUID, canonicalGID, err)
+	}
+	if otherUID != otherGID || otherUID == firstUID {
+		t.Fatalf("distinct SID mapping = %d:%d, first %d:%d", otherUID, otherGID, firstUID, firstGID)
+	}
+	for _, malformed := range []string{"", "not-a-sid", "S-1-5", "S-1-X-21"} {
+		if _, _, err := windowsSIDRuntimeIdentityV1(malformed); err == nil {
+			t.Fatalf("malformed SID %q unexpectedly accepted", malformed)
+		}
 	}
 }
 

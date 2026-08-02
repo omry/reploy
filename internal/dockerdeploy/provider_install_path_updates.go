@@ -276,8 +276,8 @@ func applyProviderInstallVolumeV1(
 	}
 	copyCommand, err := providerInstallVolumeCopyCommandV1(
 		dockerPath, containerName, action.Source, action.Target,
-		locked.SourceBuild.Lock.FinalImage.ConfigDigest,
-		locked.SourceBuild.Lock.Platform,
+		locked.InstallBuild.FinalImage.ConfigDigest,
+		locked.InstallBuild.Platform,
 		workspace,
 	)
 	if err != nil {

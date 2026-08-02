@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
-	"runtime"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/buildprofile"
@@ -52,15 +50,11 @@ type StagedProviderBuildRuntimeV1 struct {
 }
 
 func CurrentStagedProviderBuildRuntimeV1() (StagedProviderBuildRuntimeV1, error) {
-	groups := []int{}
-	if runtime.GOOS != "windows" {
-		var err error
-		groups, err = os.Getgroups()
-		if err != nil {
-			return StagedProviderBuildRuntimeV1{}, fmt.Errorf("resolve current supplementary groups: %w", err)
-		}
+	goos, uid, gid, groups, err := currentHostRuntimeIdentityV1()
+	if err != nil {
+		return StagedProviderBuildRuntimeV1{}, err
 	}
-	return stagedProviderBuildRuntimeV1(runtime.GOOS, os.Getuid(), os.Getgid(), groups)
+	return stagedProviderBuildRuntimeV1(goos, uid, gid, groups)
 }
 
 func stagedProviderBuildRuntimeV1(goos string, uid int, gid int, groups []int) (StagedProviderBuildRuntimeV1, error) {
@@ -73,11 +67,8 @@ func stagedProviderBuildRuntimeV1(goos string, uid int, gid int, groups []int) (
 	case "windows":
 		host = blueprint.HostWindows
 		groups = []int{}
-		if uid < 0 {
-			uid = 0
-		}
-		if gid < 0 {
-			gid = 0
+		if uid <= 0 || gid <= 0 {
+			return StagedProviderBuildRuntimeV1{}, fmt.Errorf("Windows Docker runtime requires a mapped non-root UID and GID")
 		}
 	default:
 		return StagedProviderBuildRuntimeV1{}, fmt.Errorf("provider build is unsupported on host OS %q", goos)
