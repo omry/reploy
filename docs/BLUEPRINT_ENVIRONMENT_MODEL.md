@@ -1370,6 +1370,13 @@ is deliberately independent of a Windows domain account or Unix host account.
 An effective UID of zero uses the existing local name `root`; a blueprint
 cannot request root merely by naming it.
 
+An application runtime with effective UID zero cannot receive a host bind,
+whether read-only input or writable shared state. It also cannot use
+`--output-file` or `--output-dir` until the separately reviewed root-safe output
+contract is implemented. Reploy rejects these combinations before container
+creation or output-path preparation. Docker-managed volumes and tmpfs remain
+available because they do not expose a host filesystem path directly.
+
 This is a portable blueprint contract with target-specific realization. The
 current backend writes Linux account databases. A future native-Windows or
 other target backend may realize the same local identity through different OS
