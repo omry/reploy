@@ -21,6 +21,7 @@ type BuildLockAssemblyInput struct {
 	Base             deploy.ImageDescriptor
 	Graph            providers.GraphExecutionResult
 	RuntimePolicy    deploy.RuntimePolicyV1
+	RuntimeLayer     deploy.ApplicationRuntimeLayerV1
 	ValidationRecord providerstore.StoreObjectRef
 	FinalImage       providers.RealizedImageV1
 }
@@ -147,7 +148,8 @@ func AssembleBuildLock(
 			Nodes: graphNodes, Edges: append([]providers.ProviderEdgeV1{}, input.Graph.SelectedEdges...),
 		},
 		Nodes: locks, Catalog: append([]providers.RealizedOutput{}, input.Graph.Catalog...),
-		RuntimePolicy: input.RuntimePolicy, ValidationRecord: input.ValidationRecord, FinalImage: input.FinalImage,
+		RuntimePolicy: input.RuntimePolicy, RuntimeLayer: input.RuntimeLayer,
+		ValidationRecord: input.ValidationRecord, FinalImage: input.FinalImage,
 	}
 	if err := deploy.ValidateBuildLockV1(lock, registry.ValidateRequirementProfileV1); err != nil {
 		return deploy.BuildLockV1{}, fmt.Errorf("assemble build lock: %w", err)
@@ -177,6 +179,9 @@ func validateGraphLockAssemblyShape(input BuildLockAssemblyInput) error {
 	if err := deploy.ValidateRuntimePolicyV1(input.RuntimePolicy); err != nil {
 		return err
 	}
+	if err := deploy.ValidateApplicationRuntimeLayerV1(input.RuntimeLayer, input.ResolvedRequest.Platform); err != nil {
+		return err
+	}
 	if err := input.ValidationRecord.Validate(); err != nil || input.ValidationRecord.Kind != providerstore.ValidationRecordKind {
 		return fmt.Errorf("assemble build lock validation record is invalid")
 	}
@@ -184,8 +189,8 @@ func validateGraphLockAssemblyShape(input BuildLockAssemblyInput) error {
 		return fmt.Errorf("assemble build lock final image: %w", err)
 	}
 	last := input.Graph.PrefixImages[len(input.Graph.PrefixImages)-1]
-	if input.FinalImage.RootFSSubject != last.RootFSSubject {
-		return fmt.Errorf("assemble build lock final image root filesystem does not match the graph result")
+	if input.RuntimeLayer.Upstream != last || input.FinalImage.RootFSSubject != input.RuntimeLayer.Result.RootFSSubject {
+		return fmt.Errorf("assemble build lock application runtime layer does not connect the graph result to the final image")
 	}
 	return nil
 }

@@ -163,6 +163,8 @@ func TestMainCopyVolumeTreeIsFixedLifecycleOnly(t *testing.T) {
 		[]string{"copy-volume-tree"}, strings.NewReader("ignored"), &stdout, &stderr,
 		func() error { t.Fatal("copy mode reached hold"); return nil },
 		func() error { copies++; return nil },
+		func() ([]byte, error) { t.Fatal("copy mode read kernel status"); return nil, nil },
+		func([]string) error { t.Fatal("copy mode executed application"); return nil },
 	)
 	if code != 0 || copies != 1 || stdout.Len() != 0 || stderr.Len() != 0 {
 		t.Fatalf("copy code=%d copies=%d stdout=%q stderr=%q", code, copies, stdout.String(), stderr.String())
@@ -170,6 +172,7 @@ func TestMainCopyVolumeTreeIsFixedLifecycleOnly(t *testing.T) {
 	code = mainWithActions(
 		[]string{"copy-volume-tree", "anything"}, strings.NewReader(""), &stdout, &stderr,
 		func() error { return nil }, func() error { t.Fatal("invalid copy arguments reached copier"); return nil },
+		func() ([]byte, error) { return nil, nil }, func([]string) error { return nil },
 	)
 	if code != 2 || !strings.Contains(stderr.String(), "fixed copy-volume-tree mode") {
 		t.Fatalf("invalid copy code=%d stderr=%q", code, stderr.String())

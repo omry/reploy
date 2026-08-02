@@ -110,7 +110,8 @@ func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerR
 		ReadOnly:    plan.Sandbox.ReadOnlyRoot, Environment: temporaryEnvironmentForPlan(plan), Tmpfs: []string{temporaryHomeMountForPlan(plan)},
 	}
 	if plan.Workload != nil {
-		service.Command = append([]string(nil), plan.Workload.Argv...)
+		service.Entrypoint = []string{plan.Sandbox.StartupVerifier.Path}
+		service.Command = verifiedApplicationArgvV1(plan.Workload.Argv)
 	}
 	if plan.PrivateEnvironment {
 		if plan.Workload == nil {
@@ -120,7 +121,9 @@ func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerR
 			return DockerRenderedInputs{}, fmt.Errorf("private workload environment injection does not support Docker restart policy %q", plan.Restart)
 		}
 		composeLauncher := strings.ReplaceAll(privateWorkloadEnvironmentLauncherV1, "$", "$$")
-		service.Entrypoint = []string{"/bin/sh", "-c", composeLauncher, "reploy-private-environment"}
+		launcher := []string{"/bin/sh", "-c", composeLauncher, "reploy-private-environment"}
+		launcher = append(launcher, plan.Workload.Argv...)
+		service.Command = verifiedApplicationArgvV1(launcher)
 		service.StdinOpen = true
 	}
 	volumes := map[string]any{}
@@ -208,6 +211,11 @@ func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerR
 		Control:             DockerControlInput{Script: controlScript, Environment: plan.EnvironmentID, HasWorkload: plan.Workload != nil},
 		privateRuntimeMasks: append([]privateRuntimeMaskV1(nil), masks...),
 	}, nil
+}
+
+func verifiedApplicationArgvV1(argv []string) []string {
+	result := []string{"verify-exec", "--"}
+	return append(result, argv...)
 }
 
 func temporaryHomeForPlan(plan DockerExecutionPlan) string {

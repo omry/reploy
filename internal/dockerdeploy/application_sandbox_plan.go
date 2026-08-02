@@ -5,6 +5,8 @@ import (
 	"path"
 	"slices"
 	"strconv"
+
+	"github.com/omry/reploy/internal/deploy"
 )
 
 const applicationSeccompProfileBuiltinV1 = "builtin"
@@ -23,17 +25,19 @@ type ApplicationKernelPolicyV1 struct {
 // currently enforces; later sandbox slices extend this plan rather than adding
 // renderer-specific flags.
 type ApplicationSandboxPlanV1 struct {
-	RuntimeUser   RuntimeUserPlan
-	ReadOnlyRoot  bool
-	TemporaryHome string
-	Kernel        ApplicationKernelPolicyV1
+	RuntimeUser     RuntimeUserPlan
+	ReadOnlyRoot    bool
+	TemporaryHome   string
+	StartupVerifier deploy.ApplicationStartupVerifierV1
+	Kernel          ApplicationKernelPolicyV1
 }
 
 func newApplicationSandboxPlanV1(runtimeUser RuntimeUserPlan) ApplicationSandboxPlanV1 {
 	return ApplicationSandboxPlanV1{
-		RuntimeUser:   runtimeUser,
-		ReadOnlyRoot:  true,
-		TemporaryHome: environmentTemporaryHome,
+		RuntimeUser:     runtimeUser,
+		ReadOnlyRoot:    true,
+		TemporaryHome:   environmentTemporaryHome,
+		StartupVerifier: deploy.ApplicationStartupVerifierContractV1(),
 		Kernel: ApplicationKernelPolicyV1{
 			DropAllCapabilities: true,
 			NoNewPrivileges:     true,
@@ -69,6 +73,9 @@ func ValidateApplicationSandboxPlanV1(plan ApplicationSandboxPlanV1) error {
 	}
 	if plan.TemporaryHome != environmentTemporaryHome || !path.IsAbs(plan.TemporaryHome) || path.Clean(plan.TemporaryHome) != plan.TemporaryHome {
 		return fmt.Errorf("application sandbox temporary home must be %s", environmentTemporaryHome)
+	}
+	if err := deploy.ValidateApplicationStartupVerifierV1(plan.StartupVerifier, false); err != nil {
+		return fmt.Errorf("application sandbox startup verifier: %w", err)
 	}
 	if !plan.Kernel.DropAllCapabilities {
 		return fmt.Errorf("application sandbox must drop all Linux capabilities")

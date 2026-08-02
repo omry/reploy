@@ -283,10 +283,10 @@ func transientContainerCommandSpecV1(operation string, container string, plan Do
 		)
 	}
 	args = append(args,
-		"--entrypoint", command.Argv[0],
+		"--entrypoint", plan.Sandbox.StartupVerifier.Path,
 		plan.Image,
 	)
-	args = append(args, command.Argv[1:]...)
+	args = append(args, verifiedApplicationArgvV1(command.Argv)...)
 	return CommandSpec{Name: "docker", Args: args}, nil
 }
 

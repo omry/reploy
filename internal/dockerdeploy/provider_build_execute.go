@@ -311,6 +311,7 @@ func executeLockedProviderBuildV1(
 		PackageOverrides: relevantPackageOverrides,
 		Base:             preparedBase.Descriptor, BaseCatalog: preparedBase.Catalog,
 		Graph: graph, Validation: validation,
+		StartupVerifier: preparation.StartupVerifier,
 		ValidateChoices: input.ValidateChoices, ValidatedInputs: preparation.ValidatedInputs,
 		NoCache:       preparation.NoCache,
 		RunValidation: input.RunValidation, RunOptions: completeOptions,
