@@ -364,7 +364,7 @@ func TestVerifyLockedRuntimeV1ResolvesEveryCommandAndTrigger(t *testing.T) {
 	lock := fixture.lock
 	lock.Catalog = []providers.RealizedOutput{output}
 	document := commandTestDocument()
-	runtime := CurrentRuntimePlanV1{Document: document, Docker: DockerExecutionPlan{}}
+	runtime := CurrentRuntimePlanV1{Document: document, Docker: DockerExecutionPlan{Sandbox: testApplicationSandboxPlanV1(1000, 1000)}}
 	plans, err := RuntimePlansV1(document, runtime.Docker)
 	if err != nil {
 		t.Fatal(err)
@@ -394,7 +394,7 @@ func baseOnlyCurrentBuildVerificationFixtureV1(t *testing.T) currentBuildVerific
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime := CurrentRuntimePlanV1{Document: document, Docker: DockerExecutionPlan{}}
+	runtime := CurrentRuntimePlanV1{Document: document, Docker: DockerExecutionPlan{Sandbox: testApplicationSandboxPlanV1(1000, 1000)}}
 	plans, err := RuntimePlansV1(runtime.Document, runtime.Docker)
 	if err != nil {
 		t.Fatal(err)

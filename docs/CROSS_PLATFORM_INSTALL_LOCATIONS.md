@@ -12,6 +12,6 @@ This design has been folded into
 
 The environment model is now authoritative for explicit install scope,
 host/backend/scope-aware target defaults, blueprint overrides, semantic host
-variables, validation, and system `run_as` behavior. It also updates the schema
+variables, validation, and system `account` behavior. It also updates the schema
 from top-level `install` and `app.id` to `environment.install` and
 `environment.id`.
