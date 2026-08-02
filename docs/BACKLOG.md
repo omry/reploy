@@ -31,20 +31,16 @@ This file is the day-to-day queue for design and implementation gaps.
 
 ## Now
 
-- [ ] `P1` Define confinement for special files nested inside host directory
-      binds. A launch-time recursive scan for sockets and device nodes adds
-      unbounded source-tree latency and provides only a point-in-time result.
-      Choose a durable mechanism or explicitly narrow the security contract,
-      then add focused cross-platform tests without weakening ordinary
-      read-only project mounts.
+- [ ] `P1` Implement the initial coarse application-network policy. Preserve
+      independent public and local policy intent with both denied by default,
+      apply it consistently to workloads, commands, shells, and lifecycle
+      commands, and use only proven isolation and endpoint primitives from the
+      active runtime backend. Permit exact declared inbound endpoints without
+      granting general local access. Fail closed when a backend cannot realize
+      a requested combination, and do not represent this slice as destination-,
+      domain-, or packet-level filtering.
 
 ## Pre-release
-
-- [ ] `P1` Add the approved root-runtime warning. Identify root consistently
-      across staged, installed-user, installed-system, command, shell, and
-      lifecycle paths; explain that host binds and root outputs are rejected
-      while capabilities and networking remain restricted; and avoid duplicate
-      warnings from nested lifecycle operations.
 
 - [ ] `P1` Complete native Docker Desktop identity evidence.
       The Linux-container contract now creates a real local account, uses the
@@ -159,6 +155,16 @@ This file is the day-to-day queue for design and implementation gaps.
       as the representative application.
 
 ## Post-v1
+
+- [ ] `P2` Design and implement a Reploy userland L3 policy gateway. Keep this
+      separate from the initial public/local kill switches and controlled
+      sessions. Define a capability-free application network namespace, a
+      one-shot route initializer, an isolated data path whose only peer is the
+      gateway, private gateway control, root-resistant route invariants,
+      IPv4/IPv6 and DNS policy, destination and port grants, auditing, resource
+      limits, failure behavior, reconciliation, and Docker/Podman plus Desktop
+      integration. Treat native engine primitives as fast paths rather than
+      exposing backend network modes as product policy.
 
 - [ ] `P2` Evaluate and prioritize the Dingo development-environment gaps.
       Use `docs/DINGO_GAPS.md` as the needs and evidence record for portable
