@@ -157,7 +157,7 @@ environment:
     target:
       default_path: "{{ reploy.install_root }}/{{ environment.id }}"
     system:
-      run_as:
+      account:
         user: example
         group: example
         on_missing: create

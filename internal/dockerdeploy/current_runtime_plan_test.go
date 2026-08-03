@@ -28,8 +28,8 @@ func TestPlanCurrentRuntimeV1ReconstructsStagedPlanWithoutSystemLookup(t *testin
 	if lookups != 0 || result.Docker.Phase != blueprint.PhaseStaged || result.Docker.Scope != nil {
 		t.Fatalf("staged plan = %#v, lookups=%d", result.Docker, lookups)
 	}
-	if result.Docker.Image != current.Generation.Reference || result.Docker.RuntimeUser.DockerUser != "1000:1001" {
-		t.Fatalf("staged image/user = %q/%q", result.Docker.Image, result.Docker.RuntimeUser.DockerUser)
+	if result.Docker.Image != current.Generation.Reference || result.Docker.Sandbox.RuntimeUser.DockerUser != "1000:1001" {
+		t.Fatalf("staged image/user = %q/%q", result.Docker.Image, result.Docker.Sandbox.RuntimeUser.DockerUser)
 	}
 }
 
@@ -100,7 +100,7 @@ func TestPlanCurrentRuntimeV1ReportsSystemAccountLookupFailure(t *testing.T) {
 	current, input := runtimeCurrentBuildFixture(t)
 	dir := t.TempDir()
 	document := input.Document
-	document.Environment.Install.System.RunAs = blueprint.RunAs{User: "service", Group: "service", OnMissing: "fail"}
+	document.Environment.Install.System.Account = blueprint.SystemAccount{User: "service", Group: "service", OnMissing: "fail"}
 	var err error
 	current.State.Blueprint, err = blueprint.EncodeResolvedDocumentV1(document)
 	if err != nil {

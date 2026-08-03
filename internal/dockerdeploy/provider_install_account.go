@@ -33,8 +33,8 @@ type providerInstallAccountInspectionBackendV1 struct {
 	creationReadiness func(map[string]string, error) (string, error)
 }
 
-func inspectProviderInstallAccountV1(scope InstallScope, runAs blueprint.RunAs) (providerInstallAccountInspectionV1, error) {
-	return inspectProviderInstallAccountWithV1(scope, runAs, providerInstallAccountInspectionBackendV1{
+func inspectProviderInstallAccountV1(scope InstallScope, account blueprint.SystemAccount) (providerInstallAccountInspectionV1, error) {
+	return inspectProviderInstallAccountWithV1(scope, account, providerInstallAccountInspectionBackendV1{
 		resolve:           resolveInstallOwner,
 		creationReadiness: installOwnerCreationSpecForResolveError,
 	})
@@ -42,7 +42,7 @@ func inspectProviderInstallAccountV1(scope InstallScope, runAs blueprint.RunAs) 
 
 func inspectProviderInstallAccountWithV1(
 	scope InstallScope,
-	runAs blueprint.RunAs,
+	account blueprint.SystemAccount,
 	backend providerInstallAccountInspectionBackendV1,
 ) (providerInstallAccountInspectionV1, error) {
 	parsedScope, err := ParseInstallScope(string(scope))
@@ -55,12 +55,12 @@ func inspectProviderInstallAccountWithV1(
 	if backend.resolve == nil || backend.creationReadiness == nil {
 		return providerInstallAccountInspectionV1{}, fmt.Errorf("inspect provider install account requires a complete backend")
 	}
-	values, err := providerInstallAccountValuesV1(runAs)
+	values, err := providerInstallAccountValuesV1(account)
 	if err != nil {
 		return providerInstallAccountInspectionV1{}, err
 	}
 	inspection := providerInstallAccountInspectionV1{
-		User: strings.TrimSpace(runAs.User), Group: strings.TrimSpace(runAs.Group),
+		User: strings.TrimSpace(account.User), Group: strings.TrimSpace(account.Group),
 	}
 	owner, resolveErr := backend.resolve(values)
 	if resolveErr == nil {
@@ -78,12 +78,12 @@ func inspectProviderInstallAccountWithV1(
 
 func prepareProviderInstallAccountV1(
 	ctx context.Context,
-	runAs blueprint.RunAs,
+	account blueprint.SystemAccount,
 	sourceStore providerstore.Store,
 	sourceBuild CurrentBuild,
 	input providerInstallRunInputV1,
 ) (providerInstallRunInputV1, error) {
-	return prepareProviderInstallAccountWithV1(ctx, runAs, sourceStore, sourceBuild, input, providerInstallAccountBackendV1{
+	return prepareProviderInstallAccountWithV1(ctx, account, sourceStore, sourceBuild, input, providerInstallAccountBackendV1{
 		resolve:              resolveInstallOwner,
 		creationReadiness:    installOwnerCreationSpecForResolveError,
 		bulkDiskRequirements: providerInstallAccountBulkDiskRequirementsV1,
@@ -94,7 +94,7 @@ func prepareProviderInstallAccountV1(
 
 func prepareProviderInstallAccountWithV1(
 	ctx context.Context,
-	runAs blueprint.RunAs,
+	account blueprint.SystemAccount,
 	sourceStore providerstore.Store,
 	sourceBuild CurrentBuild,
 	input providerInstallRunInputV1,
@@ -121,13 +121,13 @@ func prepareProviderInstallAccountWithV1(
 		return providerInstallRunInputV1{}, fmt.Errorf("prepare provider install account requires a complete backend")
 	}
 
-	values, err := providerInstallAccountValuesV1(runAs)
+	values, err := providerInstallAccountValuesV1(account)
 	if err != nil {
 		return providerInstallRunInputV1{}, err
 	}
 	owner, resolveErr := backend.resolve(values)
 	if resolveErr == nil {
-		return providerInstallInputWithAccountV1(input, runAs, owner), nil
+		return providerInstallInputWithAccountV1(input, account, owner), nil
 	}
 	if _, err := backend.creationReadiness(values, resolveErr); err != nil {
 		return providerInstallRunInputV1{}, fmt.Errorf("resolve system install account: %w", err)
@@ -149,24 +149,24 @@ func prepareProviderInstallAccountWithV1(
 	if err != nil {
 		return providerInstallRunInputV1{}, fmt.Errorf("resolve system install account after creation: %w", err)
 	}
-	return providerInstallInputWithAccountV1(input, runAs, owner), nil
+	return providerInstallInputWithAccountV1(input, account, owner), nil
 }
 
-func providerInstallAccountValuesV1(runAs blueprint.RunAs) (map[string]string, error) {
-	userName := strings.TrimSpace(runAs.User)
-	groupName := strings.TrimSpace(runAs.Group)
+func providerInstallAccountValuesV1(account blueprint.SystemAccount) (map[string]string, error) {
+	userName := strings.TrimSpace(account.User)
+	groupName := strings.TrimSpace(account.Group)
 	if userName == "" || groupName == "" {
-		return nil, fmt.Errorf("environment.install.system.run_as must name both user and group for a system install")
+		return nil, fmt.Errorf("environment.install.system.account must name both user and group for a system install")
 	}
 	return map[string]string{
 		reployInstallOwnerEnv:       userName + ":" + groupName,
-		reployInstallOwnerOnMissing: strings.TrimSpace(runAs.OnMissing),
+		reployInstallOwnerOnMissing: strings.TrimSpace(account.OnMissing),
 	}, nil
 }
 
-func providerInstallInputWithAccountV1(input providerInstallRunInputV1, runAs blueprint.RunAs, owner resolvedInstallOwner) providerInstallRunInputV1 {
-	input.Install.SystemUser = strings.TrimSpace(runAs.User)
-	input.Install.SystemGroup = strings.TrimSpace(runAs.Group)
+func providerInstallInputWithAccountV1(input providerInstallRunInputV1, account blueprint.SystemAccount, owner resolvedInstallOwner) providerInstallRunInputV1 {
+	input.Install.SystemUser = strings.TrimSpace(account.User)
+	input.Install.SystemGroup = strings.TrimSpace(account.Group)
 	input.Install.SystemUID = owner.UID
 	input.Install.SystemGID = owner.GID
 	return input

@@ -284,7 +284,9 @@ func TestCompleteProviderBuildRejectsValidationPlanDriftBeforeBackendWork(t *tes
 func TestCompleteProviderBuildRejectsRuntimePlanDriftBeforeBackendWork(t *testing.T) {
 	input, operation, store := providerBuildCompletionFixture(t)
 	defer operation.Unlock()
-	input.DockerPlan.TemporaryHome = "/mnt/changed-home"
+	input.DockerPlan.Mounts = []MountExecutionPlan{{
+		Name: "changed", Mode: blueprint.MountVolume, Target: "/mnt/changed",
+	}}
 	calls := 0
 	_, err := completeProviderBuild(t.Context(), operation, store, input, providerBuildCompletionBackend{
 		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, RunOptions) (FinalizedBuildValidationResult, error) {
@@ -438,7 +440,7 @@ func providerBuildCompletionFixture(t *testing.T) (ProviderBuildCompletionInput,
 	if err := document.Environment.RebuildProviderContributions(); err != nil {
 		t.Fatal(err)
 	}
-	dockerPlan := DockerExecutionPlan{}
+	dockerPlan := DockerExecutionPlan{Sandbox: testApplicationSandboxPlanV1(1000, 1000)}
 	plans, err := RuntimePlansV1(document, dockerPlan)
 	if err != nil {
 		t.Fatal(err)
