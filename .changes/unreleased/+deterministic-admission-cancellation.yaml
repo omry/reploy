@@ -1,0 +1,2 @@
+kind: Fixed
+body: 'Make cancellation at the queued-operation admission boundary deterministic so an unclaimed run is removed without starting, while cancellation after admission follows normal active-run cleanup.'
