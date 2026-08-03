@@ -73,7 +73,7 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 			}
 			return build, nil
 		},
-		prepareAccount: func(_ context.Context, runAs blueprint.RunAs, store providerstore.Store, gotBuild CurrentBuild, input providerInstallRunInputV1) (providerInstallRunInputV1, error) {
+		prepareAccount: func(_ context.Context, account blueprint.SystemAccount, store providerstore.Store, gotBuild CurrentBuild, input providerInstallRunInputV1) (providerInstallRunInputV1, error) {
 			order = append(order, "prepare-install-account")
 			if err := locks[sourceDir].RequireHeld(); err != nil {
 				t.Fatal(err)
@@ -81,8 +81,8 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 			if err := locks[destinationDir].RequireHeld(); err != nil {
 				t.Fatal("destination was not validated before account preparation")
 			}
-			if runAs != (blueprint.RunAs{}) || store.Root() != filepath.Join(sourceDir, ".reploy", providerstore.StoreDirName) || !reflect.DeepEqual(gotBuild.State, build.State) {
-				t.Fatalf("account preparation input = %#v / %s / %#v", runAs, store.Root(), gotBuild)
+			if account != (blueprint.SystemAccount{}) || store.Root() != filepath.Join(sourceDir, ".reploy", providerstore.StoreDirName) || !reflect.DeepEqual(gotBuild.State, build.State) {
+				t.Fatalf("account preparation input = %#v / %s / %#v", account, store.Root(), gotBuild)
 			}
 			input.Install.SystemUser = "service"
 			input.Install.SystemGroup = "service"
@@ -807,7 +807,7 @@ func TestRunProviderInstallV1RejectsStagingDestinationBeforePreparation(t *testi
 		buildSource: func(context.Context, LockedProviderBuildRunInputV1) (LockedProviderBuildExecutionResultV1, error) {
 			return build, nil
 		},
-		prepareAccount: func(context.Context, blueprint.RunAs, providerstore.Store, CurrentBuild, providerInstallRunInputV1) (providerInstallRunInputV1, error) {
+		prepareAccount: func(context.Context, blueprint.SystemAccount, providerstore.Store, CurrentBuild, providerInstallRunInputV1) (providerInstallRunInputV1, error) {
 			t.Fatal("prepared an account for a staging destination")
 			return providerInstallRunInputV1{}, nil
 		},
@@ -887,7 +887,7 @@ func TestRunProviderInstallV1RejectsServiceRenameBeforeDestinationPreparation(t 
 		buildSource: func(context.Context, LockedProviderBuildRunInputV1) (LockedProviderBuildExecutionResultV1, error) {
 			return build, nil
 		},
-		prepareAccount: func(context.Context, blueprint.RunAs, providerstore.Store, CurrentBuild, providerInstallRunInputV1) (providerInstallRunInputV1, error) {
+		prepareAccount: func(context.Context, blueprint.SystemAccount, providerstore.Store, CurrentBuild, providerInstallRunInputV1) (providerInstallRunInputV1, error) {
 			t.Fatal("prepared an account before rejecting a service rename")
 			return providerInstallRunInputV1{}, nil
 		},
@@ -963,7 +963,7 @@ func providerInstallRunPlanFixture(destinationDir string, references Environment
 		ControlScript: "democtl",
 		Docker: DockerExecutionPlan{
 			Phase: blueprint.PhaseInstalled, Scope: &scope, Image: references.Generation,
-			ContainerName: "demo", NetworkName: "demo",
+			ContainerName: "demo", NetworkName: "demo", Sandbox: testApplicationSandboxPlanV1(1000, 1000),
 		},
 		Rendered: DockerRenderedInputs{Compose: []byte("services: {}\n"), Environment: map[string]string{"REPLOY_IMAGE": references.Generation}},
 		Backend:  installBackendLinuxSystemd,
@@ -972,7 +972,7 @@ func providerInstallRunPlanFixture(destinationDir string, references Environment
 
 func providerInstallRunPrepareAccountFixture(
 	_ context.Context,
-	_ blueprint.RunAs,
+	_ blueprint.SystemAccount,
 	_ providerstore.Store,
 	_ CurrentBuild,
 	input providerInstallRunInputV1,
