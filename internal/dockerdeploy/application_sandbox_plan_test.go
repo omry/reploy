@@ -20,6 +20,7 @@ func TestApplicationRenderersConsumeCanonicalSandboxPlan(t *testing.T) {
 		Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{
 			UID: 501, GID: 20, SupplementaryGIDs: []int{33, 44}, DockerUser: "501:20",
 		}),
+		Workload: &WorkloadExecutionPlan{Argv: []string{"/bin/true"}, Endpoints: map[string]EndpointExecutionPlan{}},
 	}
 
 	persistent, err := RenderDockerInputs(plan, "demo")
@@ -31,17 +32,33 @@ func TestApplicationRenderersConsumeCanonicalSandboxPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := compose.Services["environment"]
-	if service.User != plan.Sandbox.RuntimeUser.DockerUser || !service.ReadOnly {
+	if service.User != "0:0" || !service.ReadOnly {
 		t.Fatalf("persistent sandbox identity/read-only = user %q, read-only %t", service.User, service.ReadOnly)
 	}
-	if !slices.Equal(service.GroupAdd, []string{"33", "44"}) || !slices.Equal(service.CapDrop, []string{"ALL"}) || !slices.Equal(service.SecurityOpt, []string{"no-new-privileges:true", "seccomp=builtin"}) {
-		t.Fatalf("persistent kernel sandbox = groups %#v, caps %#v, security %#v", service.GroupAdd, service.CapDrop, service.SecurityOpt)
+	if len(service.GroupAdd) != 0 || !slices.Equal(service.CapDrop, []string{"ALL"}) ||
+		!slices.Equal(service.CapAdd, []string{"NET_ADMIN", "SETGID", "SETPCAP", "SETUID"}) ||
+		!slices.Equal(service.SecurityOpt, []string{"no-new-privileges:true", "seccomp=builtin"}) {
+		t.Fatalf("persistent kernel sandbox = groups %#v, drop %#v, add %#v, security %#v", service.GroupAdd, service.CapDrop, service.CapAdd, service.SecurityOpt)
 	}
 	if service.Environment["HOME"] != plan.Sandbox.TemporaryHome || service.Environment["TMPDIR"] != plan.Sandbox.TemporaryHome {
 		t.Fatalf("persistent sandbox environment = %#v", service.Environment)
 	}
 	if !containsString(service.Tmpfs, temporaryHomeMountForPlan(plan)) {
 		t.Fatalf("persistent sandbox temporary home = %#v", service.Tmpfs)
+	}
+	baseOnly := plan
+	baseOnly.Workload = nil
+	baseRendered, err := RenderDockerInputs(baseOnly, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var baseCompose composePlanDocument
+	if err := yaml.Unmarshal(baseRendered.Compose, &baseCompose); err != nil {
+		t.Fatal(err)
+	}
+	baseService := baseCompose.Services["environment"]
+	if baseService.User != plan.Sandbox.RuntimeUser.DockerUser || len(baseService.CapAdd) != 0 || !slices.Equal(baseService.GroupAdd, []string{"33", "44"}) {
+		t.Fatalf("base-only dormant service authority = user %q, groups %#v, caps %#v", baseService.User, baseService.GroupAdd, baseService.CapAdd)
 	}
 
 	transient, err := TransientCommandSpec(
@@ -63,10 +80,10 @@ func TestApplicationRenderersConsumeCanonicalSandboxPlan(t *testing.T) {
 	}) {
 		t.Fatalf("transient sandbox environment = %#v", transient.Args)
 	}
-	if !containsInOrder(transient.Args, []string{"--user", "501:20", "--cap-drop", "ALL"}) ||
-		!containsInOrder(transient.Args, []string{"--group-add", "33", "--group-add", "44"}) ||
+	if !containsInOrder(transient.Args, []string{"--user", "0:0", "--cap-drop", "ALL"}) ||
+		!containsInOrder(transient.Args, []string{"--cap-add", "NET_ADMIN", "--cap-add", "SETGID", "--cap-add", "SETPCAP", "--cap-add", "SETUID"}) ||
 		!containsInOrder(transient.Args, []string{"--security-opt", "no-new-privileges=true", "--security-opt", "seccomp=builtin"}) ||
-		!containsInOrder(transient.Args, []string{"--entrypoint", plan.Sandbox.StartupVerifier.Path, plan.Image, "verify-exec", "--", "/bin/true"}) {
+		!containsInOrder(transient.Args, []string{"--entrypoint", plan.Sandbox.StartupVerifier.Path, plan.Image, "sandbox-exec", "--uid", "501", "--gid", "20", "--groups", "33,44", "--public", "deny", "--local", "deny", "--", "/bin/true"}) {
 		t.Fatalf("transient sandbox runtime identity = %#v", transient.Args)
 	}
 
@@ -115,6 +132,65 @@ func TestApplicationSandboxPlanRejectsIdentityAndKernelEscapes(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestApplicationNetworkPolicyControlsOnlySetupCapability(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		public   blueprint.NetworkAccess
+		local    blueprint.NetworkAccess
+		netAdmin bool
+	}{
+		{name: "deny both", public: blueprint.NetworkAccessDeny, local: blueprint.NetworkAccessDeny, netAdmin: true},
+		{name: "public only", public: blueprint.NetworkAccessAllow, local: blueprint.NetworkAccessDeny, netAdmin: true},
+		{name: "local only", public: blueprint.NetworkAccessDeny, local: blueprint.NetworkAccessAllow, netAdmin: true},
+		{name: "allow both", public: blueprint.NetworkAccessAllow, local: blueprint.NetworkAccessAllow},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			plan := newApplicationSandboxPlanWithNetworkV1(
+				RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"},
+				blueprint.RuntimeNetwork{Public: test.public, Local: test.local},
+			)
+			capabilities := applicationSetupCapabilitiesV1(plan)
+			if containsString(capabilities, "NET_ADMIN") != test.netAdmin {
+				t.Fatalf("setup capabilities = %#v", capabilities)
+			}
+			argv := sandboxApplicationArgvV1(DockerExecutionPlan{
+				Sandbox: plan,
+				Workload: &WorkloadExecutionPlan{Endpoints: map[string]EndpointExecutionPlan{
+					"http": {ContainerPort: 8080},
+				}},
+			}, []string{"/bin/true"}, true, []int{8080})
+			if !containsInOrder(argv, []string{"--public", string(test.public), "--local", string(test.local), "--inbound-tcp", "8080", "--", "/bin/true"}) {
+				t.Fatalf("sandbox argv = %#v", argv)
+			}
+		})
+	}
+}
+
+func TestRootApplicationSetupCanClearSupplementaryGroups(t *testing.T) {
+	plan := newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 0, GID: 0, DockerUser: "0:0"})
+	capabilities := applicationSetupCapabilitiesV1(plan)
+	if !containsString(capabilities, "SETGID") || !containsString(capabilities, "SETPCAP") || !containsString(capabilities, "NET_ADMIN") || containsString(capabilities, "SETUID") {
+		t.Fatalf("root setup capabilities = %#v", capabilities)
+	}
+}
+
+func TestTransientApplicationDoesNotInheritWorkloadEndpointGrants(t *testing.T) {
+	plan := DockerExecutionPlan{
+		DeploymentDir: t.TempDir(), Image: "reploy/demo:staging", ContainerName: "demo",
+		Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"}),
+		Workload: &WorkloadExecutionPlan{Endpoints: map[string]EndpointExecutionPlan{
+			"http": {ContainerPort: 8080},
+		}},
+	}
+	spec, err := TransientCommandSpec(plan, ResolvedEnvironmentCommand{Argv: []string{"/bin/true"}}, nil, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsString(spec.Args, "--inbound-tcp") || containsString(spec.Args, "8080") {
+		t.Fatalf("transient command inherited workload endpoint grant: %#v", spec.Args)
 	}
 }
 
