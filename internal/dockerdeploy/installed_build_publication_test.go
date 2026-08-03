@@ -26,6 +26,10 @@ func TestPublishInstalledBuildTransfersAndCommitsSelectedBuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	references := fixedPublicationReferences(t, destinationDir, 0x71)
+	installLock := source.Lock
+	installLock.RuntimeLayer.Result.Digest = rendererDigest("e")
+	installLock.RuntimeLayer.Result.ConfigDigest = rendererDigest("e")
+	installLock.FinalImage = installLock.RuntimeLayer.Result
 	var created []publicationReferenceCall
 	var removed []publicationReferenceCall
 	backend := installedBuildPublicationBackend{
@@ -43,7 +47,7 @@ func TestPublishInstalledBuildTransfersAndCommitsSelectedBuild(t *testing.T) {
 
 	result, err := publishInstalledBuildV1(t.Context(), sourceOperation, destinationOperation, sourceStore, destinationStore, InstalledBuildPublicationInputV1{
 		Environment: "demo", SourceDeploymentDir: sourceDir, DestinationDeploymentDir: destinationDir,
-		Source: source, Installation: installation, References: references,
+		Source: source, Build: installLock, Installation: installation, References: references,
 	}, backend)
 	if err != nil {
 		t.Fatal(err)
@@ -52,18 +56,18 @@ func TestPublishInstalledBuildTransfersAndCommitsSelectedBuild(t *testing.T) {
 		t.Fatalf("installed result = %#v", result)
 	}
 	if !reflect.DeepEqual(created, []publicationReferenceCall{
-		{image: source.Lock.FinalImage, kind: EnvironmentReferenceTemporary},
-		{image: source.Lock.FinalImage, kind: EnvironmentReferenceGeneration},
+		{image: installLock.FinalImage, kind: EnvironmentReferenceTemporary},
+		{image: installLock.FinalImage, kind: EnvironmentReferenceGeneration},
 	}) {
 		t.Fatalf("created references = %#v", created)
 	}
-	if !reflect.DeepEqual(removed, []publicationReferenceCall{{image: source.Lock.FinalImage, kind: EnvironmentReferenceTemporary}}) {
+	if !reflect.DeepEqual(removed, []publicationReferenceCall{{image: installLock.FinalImage, kind: EnvironmentReferenceTemporary}}) {
 		t.Fatalf("removed references = %#v", removed)
 	}
-	if _, err := deploy.BuildLockStoreClosure(source.Lock, destinationStore, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1); err != nil {
+	if _, err := deploy.BuildLockStoreClosure(installLock, destinationStore, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1); err != nil {
 		t.Fatalf("destination closure = %v", err)
 	}
-	if lock, found, err := destinationOperation.ReadBuildLock(result.Current.BuildLockDigest, registry.ValidateRequirementProfileV1); err != nil || !found || !reflect.DeepEqual(lock, source.Lock) {
+	if lock, found, err := destinationOperation.ReadBuildLock(result.Current.BuildLockDigest, registry.ValidateRequirementProfileV1); err != nil || !found || !reflect.DeepEqual(lock, installLock) {
 		t.Fatalf("destination lock=%#v found=%v error=%v", lock, found, err)
 	}
 	if _, found, err := destinationOperation.ReadPendingBuild(); err != nil || found {
@@ -128,7 +132,7 @@ func TestPublishInstalledBuildFailurePreservesPriorDestinationState(t *testing.T
 
 	_, err = publishInstalledBuildV1(t.Context(), sourceOperation, destinationOperation, sourceStore, destinationStore, InstalledBuildPublicationInputV1{
 		Environment: "demo", SourceDeploymentDir: sourceDir, DestinationDeploymentDir: destinationDir,
-		Source: source, Installation: installedBuildPublicationInstallation(destinationDir), References: references,
+		Source: source, Build: source.Lock, Installation: installedBuildPublicationInstallation(destinationDir), References: references,
 	}, backend)
 	if !errors.Is(err, want) {
 		t.Fatalf("error = %v, want %v", err, want)
