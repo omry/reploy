@@ -66,7 +66,7 @@ func TestApplicationRenderersConsumeCanonicalSandboxPlan(t *testing.T) {
 	if !containsInOrder(transient.Args, []string{"--user", "501:20", "--cap-drop", "ALL"}) ||
 		!containsInOrder(transient.Args, []string{"--group-add", "33", "--group-add", "44"}) ||
 		!containsInOrder(transient.Args, []string{"--security-opt", "no-new-privileges=true", "--security-opt", "seccomp=builtin"}) ||
-		!containsInOrder(transient.Args, []string{"--entrypoint", "/bin/true", plan.Image}) {
+		!containsInOrder(transient.Args, []string{"--entrypoint", plan.Sandbox.StartupVerifier.Path, plan.Image, "verify-exec", "--", "/bin/true"}) {
 		t.Fatalf("transient sandbox runtime identity = %#v", transient.Args)
 	}
 
@@ -98,6 +98,11 @@ func TestApplicationSandboxPlanRejectsIdentityAndKernelEscapes(t *testing.T) {
 		{name: "privileged", mutate: func(plan *ApplicationSandboxPlanV1) { plan.Kernel.Privileged = true }, want: "privileged"},
 		{name: "host namespace", mutate: func(plan *ApplicationSandboxPlanV1) { plan.Kernel.HostNamespaces = []string{"pid"} }, want: "host namespaces"},
 		{name: "host device", mutate: func(plan *ApplicationSandboxPlanV1) { plan.Kernel.HostDevices = []string{"/dev/kvm"} }, want: "host devices"},
+		{name: "verifier path", mutate: func(plan *ApplicationSandboxPlanV1) { plan.StartupVerifier.Path = "/bin/true" }, want: "startup verifier"},
+		{name: "verifier recipe", mutate: func(plan *ApplicationSandboxPlanV1) { plan.StartupVerifier.RecipeVersion = "unchecked-exec-v1" }, want: "startup verifier"},
+		{name: "verifier artifact", mutate: func(plan *ApplicationSandboxPlanV1) {
+			plan.StartupVerifier.Artifact = rendererDigest("1")
+		}, want: "must not contain an artifact"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

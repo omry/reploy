@@ -17,12 +17,13 @@ import (
 )
 
 type currentBuildVerificationFixtureV1 struct {
-	store      providerstore.Store
-	current    CurrentBuild
-	runtime    CurrentRuntimePlanV1
-	base       InspectedImageCandidate
-	final      InspectedImageCandidate
-	recordPath string
+	store        providerstore.Store
+	current      CurrentBuild
+	runtime      CurrentRuntimePlanV1
+	base         InspectedImageCandidate
+	runtimeImage InspectedImageCandidate
+	final        InspectedImageCandidate
+	recordPath   string
 }
 
 func TestVerifyLoadedCurrentBuildV1AuditsWithoutPublishing(t *testing.T) {
@@ -39,7 +40,7 @@ func TestVerifyLoadedCurrentBuildV1AuditsWithoutPublishing(t *testing.T) {
 			Store: fixture.store, Current: fixture.current, Runtime: fixture.runtime,
 			RunValidation: func(_ context.Context, input FullImageValidationInput) ([]providers.ValidationEvidence, []providers.ExecutableEvidence, error) {
 				validationCalls++
-				if input.Image.Image != fixture.base.Image ||
+				if input.Image.Image != fixture.base.Image && input.Image.Image != fixture.runtimeImage.Image ||
 					len(input.Profiles) != 0 ||
 					len(input.Outputs) != 0 ||
 					!reflect.DeepEqual(input.RuntimePolicy, fixture.current.Lock.RuntimePolicy) {
@@ -58,6 +59,8 @@ func TestVerifyLoadedCurrentBuildV1AuditsWithoutPublishing(t *testing.T) {
 				switch candidate.ImageID {
 				case fixture.base.Image.ConfigDigest:
 					return fixture.base, nil
+				case fixture.runtimeImage.Image.ConfigDigest:
+					return fixture.runtimeImage, nil
 				case fixture.final.Image.ConfigDigest:
 					return fixture.final, nil
 				default:
@@ -75,12 +78,13 @@ func TestVerifyLoadedCurrentBuildV1AuditsWithoutPublishing(t *testing.T) {
 	}
 	wantInspected := []canonical.Digest{
 		fixture.base.Image.ConfigDigest,
+		fixture.runtimeImage.Image.ConfigDigest,
 		fixture.final.Image.ConfigDigest,
 	}
 	if !reflect.DeepEqual(inspected, wantInspected) ||
-		validationCalls != 1 ||
+		validationCalls != 2 ||
 		result.StoreObjects != 1 ||
-		result.Images != 2 ||
+		result.Images != 3 ||
 		result.Commands != 0 {
 		t.Fatalf(
 			"inspected=%v validation=%d result=%#v",
@@ -110,6 +114,9 @@ func TestVerifyLoadedCurrentBuildV1RejectsFinalLabelDrift(t *testing.T) {
 			inspectImage: func(_ context.Context, candidate BuiltImageCandidate, _ blueprint.Platform) (InspectedImageCandidate, error) {
 				if candidate.ImageID == fixture.base.Image.ConfigDigest {
 					return fixture.base, nil
+				}
+				if candidate.ImageID == fixture.runtimeImage.Image.ConfigDigest {
+					return fixture.runtimeImage, nil
 				}
 				return fixture.final, nil
 			},
@@ -246,13 +253,23 @@ func TestVerifyLockedImagesV1RerunsCumulativeLayerValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	lock.Nodes[0].Result = layerImage
-	finalDescriptor := layerDescriptor
-	finalDescriptor.AuthorReference = string(rendererDigest("c"))
-	finalDescriptor.ImmutableReference = string(rendererDigest("c"))
-	finalDescriptor.ConfigDigest = rendererDigest("c")
+	runtimeDescriptor := layerDescriptor
+	runtimeDescriptor.AuthorReference = string(rendererDigest("c"))
+	runtimeDescriptor.ImmutableReference = string(rendererDigest("c"))
+	runtimeDescriptor.ConfigDigest = rendererDigest("c")
+	runtimeDescriptor.RootFSDiffIDs = append(append([]canonical.Digest{}, layerDescriptor.RootFSDiffIDs...), rendererDigest("d"))
+	runtimeImage, err := realizedImageFromDescriptor(runtimeDescriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.RuntimeLayer = testApplicationRuntimeLayerV1(t, lock.Platform, layerImage, runtimeImage)
+	finalDescriptor := runtimeDescriptor
+	finalDescriptor.AuthorReference = string(rendererDigest("e"))
+	finalDescriptor.ImmutableReference = string(rendererDigest("e"))
+	finalDescriptor.ConfigDigest = rendererDigest("e")
 	lock.FinalImage = providers.RealizedImageV1{
-		Digest: rendererDigest("c"), ConfigDigest: rendererDigest("c"),
-		RootFSSubject: layerImage.RootFSSubject,
+		Digest: rendererDigest("e"), ConfigDigest: rendererDigest("e"),
+		RootFSSubject: runtimeImage.RootFSSubject,
 	}
 	profileDigest, err := providers.RequirementProfileDigest(
 		lock.Nodes[0].RequirementProfile,
@@ -265,13 +282,17 @@ func TestVerifyLockedImagesV1RerunsCumulativeLayerValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runtimeEvidence, err := providers.NewValidationEvidence(runtimeImage.RootFSSubject, profileDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
 	policyDigest, err := deploy.RuntimePolicyDigestV1(lock.RuntimePolicy)
 	if err != nil {
 		t.Fatal(err)
 	}
 	record := deploy.PrefixValidationV1{
-		Schema: deploy.PrefixValidationSchemaV1, SubjectRootFS: layerImage.RootFSSubject,
-		Profiles: []providers.ValidationEvidence{evidence}, RuntimePolicy: policyDigest,
+		Schema: deploy.PrefixValidationSchemaV1, SubjectRootFS: runtimeImage.RootFSSubject,
+		Profiles: []providers.ValidationEvidence{runtimeEvidence}, RuntimePolicy: policyDigest,
 		ExposedOutputs: []providers.ExecutableEvidence{},
 	}
 	referenceDigest, err := deploy.PrefixValidationDigest(record)
@@ -284,6 +305,9 @@ func TestVerifyLockedImagesV1RerunsCumulativeLayerValidation(t *testing.T) {
 	layer := InspectedImageCandidate{
 		Descriptor: layerDescriptor, Config: config, Labels: map[string]string{},
 		Image: layerImage,
+	}
+	runtimeLayer := InspectedImageCandidate{
+		Descriptor: runtimeDescriptor, Config: config, Labels: map[string]string{}, Image: runtimeImage,
 	}
 	finalLabels := map[string]string{}
 	labels, err := deploy.PrefixValidationLabels(
@@ -308,10 +332,13 @@ func TestVerifyLockedImagesV1RerunsCumulativeLayerValidation(t *testing.T) {
 		record,
 		func(_ context.Context, input FullImageValidationInput) ([]providers.ValidationEvidence, []providers.ExecutableEvidence, error) {
 			validationCalls++
-			if input.Image.Image != layerImage ||
+			if input.Image.Image != layerImage && input.Image.Image != runtimeImage ||
 				len(input.Profiles) != 1 ||
 				len(input.Outputs) != 0 {
 				t.Fatalf("layer validation input = %#v", input)
+			}
+			if input.Image.Image == runtimeImage {
+				return []providers.ValidationEvidence{runtimeEvidence}, []providers.ExecutableEvidence{}, nil
 			}
 			return []providers.ValidationEvidence{evidence}, []providers.ExecutableEvidence{}, nil
 		},
@@ -322,6 +349,8 @@ func TestVerifyLockedImagesV1RerunsCumulativeLayerValidation(t *testing.T) {
 				return base, nil
 			case layer.Image.ConfigDigest:
 				return layer, nil
+			case runtimeLayer.Image.ConfigDigest:
+				return runtimeLayer, nil
 			case final.Image.ConfigDigest:
 				return final, nil
 			default:
@@ -335,10 +364,11 @@ func TestVerifyLockedImagesV1RerunsCumulativeLayerValidation(t *testing.T) {
 	wantInspected := []canonical.Digest{
 		base.Image.ConfigDigest,
 		layer.Image.ConfigDigest,
+		runtimeLayer.Image.ConfigDigest,
 		final.Image.ConfigDigest,
 	}
-	if images != 3 ||
-		validationCalls != 1 ||
+	if images != 4 ||
+		validationCalls != 2 ||
 		!reflect.DeepEqual(inspected, wantInspected) {
 		t.Fatalf(
 			"images=%d validation=%d inspected=%v",
@@ -447,7 +477,16 @@ func baseOnlyCurrentBuildVerificationFixtureV1(t *testing.T) currentBuildVerific
 		Labels: map[string]string{"org.example.vendor": "inherited"},
 		Image:  baseImage,
 	}
-	finalDescriptor := lock.Base
+	runtimeDescriptor := lock.Base
+	runtimeDescriptor.RootFSDiffIDs = append(append([]canonical.Digest{}, lock.Base.RootFSDiffIDs...), rendererDigest("e"))
+	runtimeDescriptor.AuthorReference = string(lock.RuntimeLayer.Result.ConfigDigest)
+	runtimeDescriptor.ImmutableReference = string(lock.RuntimeLayer.Result.ConfigDigest)
+	runtimeDescriptor.ConfigDigest = lock.RuntimeLayer.Result.ConfigDigest
+	runtimeImage := InspectedImageCandidate{
+		Descriptor: runtimeDescriptor, Config: config,
+		Labels: map[string]string{"org.example.vendor": "inherited"}, Image: lock.RuntimeLayer.Result,
+	}
+	finalDescriptor := runtimeDescriptor
 	finalDescriptor.AuthorReference = string(lock.FinalImage.ConfigDigest)
 	finalDescriptor.ImmutableReference = string(lock.FinalImage.ConfigDigest)
 	finalDescriptor.ConfigDigest = lock.FinalImage.ConfigDigest
@@ -475,9 +514,10 @@ func baseOnlyCurrentBuildVerificationFixtureV1(t *testing.T) currentBuildVerific
 		current: CurrentBuild{
 			State: state, Generation: generation, Lock: lock,
 		},
-		runtime:    runtime,
-		base:       base,
-		final:      final,
-		recordPath: recordPath,
+		runtime:      runtime,
+		base:         base,
+		runtimeImage: runtimeImage,
+		final:        final,
+		recordPath:   recordPath,
 	}
 }
