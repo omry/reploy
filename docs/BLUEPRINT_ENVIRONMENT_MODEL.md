@@ -277,16 +277,14 @@ recovery. The two output options are mutually exclusive. Reploy never
 discovers or copies arbitrary files from the transient container.
 
 The transient `$HOME` is operation-local workspace, not an output channel.
-Docker backs `/mnt/reploy-home` with a fresh anonymous volume for each one-shot
-container. Normal `--rm` completion removes the volume, and Reploy's
-interruption cleanup force-removes the container with its anonymous volumes.
-It is disk-backed rather than a size-limited tmpfs, but it is never named or
-reused. Before launching the requested command, Reploy's embedded Linux helper
-assigns the empty volume to the selected runtime UID/GID, restricts it to that
-identity, drops root privileges, and directly executes the command. Files
-survive a one-shot invocation only through its selected output contract or
-another writable mount declared by the blueprint. The persistent workload
-container keeps its separate tmpfs home at the same container path.
+Docker backs `/mnt/reploy-home` with a fresh 64 MiB tmpfs for each one-shot
+container. The mount is restricted to mode `0700`, owned by the selected
+runtime UID/GID, and removed with the container. Docker starts the resolved
+executable directly as that final numeric identity; no root bootstrap helper
+is involved. Files survive a one-shot invocation only through its selected
+output contract or another writable mount declared by the blueprint. The
+persistent workload container uses the same bounded tmpfs-home policy at the
+same container path.
 
 Lifecycle actions invoke commands through the same one-shot mechanism. An
 `after_start` command may communicate with the running workload through its
