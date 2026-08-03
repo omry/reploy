@@ -1,0 +1,113 @@
+package probe
+
+import (
+	"flag"
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+type sandboxExecPlanV1 struct {
+	UID          int
+	GID          int
+	Groups       []int
+	AllowPublic  bool
+	AllowLocal   bool
+	InboundTCP   []uint16
+	InstallRules bool
+	Argv         []string
+}
+
+func parseSandboxExecPlanV1(args []string, installRules bool) (sandboxExecPlanV1, error) {
+	separator := -1
+	for index, argument := range args {
+		if argument == "--" {
+			separator = index
+			break
+		}
+	}
+	if separator < 0 || separator == len(args)-1 {
+		return sandboxExecPlanV1{}, fmt.Errorf("requires -- followed by an absolute application command")
+	}
+	set := flag.NewFlagSet("sandbox-exec", flag.ContinueOnError)
+	set.SetOutput(new(strings.Builder))
+	uid := set.Int("uid", -1, "application UID")
+	gid := set.Int("gid", -1, "application GID")
+	groups := set.String("groups", "", "comma-separated supplementary GIDs")
+	public := set.String("public", "", "public network policy")
+	local := set.String("local", "", "local network policy")
+	inbound := set.String("inbound-tcp", "", "comma-separated inbound TCP ports")
+	if err := set.Parse(args[:separator]); err != nil {
+		return sandboxExecPlanV1{}, err
+	}
+	if len(set.Args()) != 0 {
+		return sandboxExecPlanV1{}, fmt.Errorf("unexpected positional sandbox arguments")
+	}
+	argv := args[separator+1:]
+	if *uid < 0 || *gid < 0 {
+		return sandboxExecPlanV1{}, fmt.Errorf("requires non-negative --uid and --gid")
+	}
+	parsedGroups, err := parseDecimalListV1(*groups, 0, int(^uint(0)>>1))
+	if err != nil {
+		return sandboxExecPlanV1{}, fmt.Errorf("parse --groups: %w", err)
+	}
+	parsedInbound, err := parseDecimalListV1(*inbound, 1, 65535)
+	if err != nil {
+		return sandboxExecPlanV1{}, fmt.Errorf("parse --inbound-tcp: %w", err)
+	}
+	allowPublic, err := parseNetworkAccessV1("--public", *public, installRules)
+	if err != nil {
+		return sandboxExecPlanV1{}, err
+	}
+	allowLocal, err := parseNetworkAccessV1("--local", *local, installRules)
+	if err != nil {
+		return sandboxExecPlanV1{}, err
+	}
+	ports := make([]uint16, len(parsedInbound))
+	for index, value := range parsedInbound {
+		ports[index] = uint16(value)
+	}
+	return sandboxExecPlanV1{
+		UID: *uid, GID: *gid, Groups: parsedGroups,
+		AllowPublic: allowPublic, AllowLocal: allowLocal,
+		InboundTCP: ports, InstallRules: installRules,
+		Argv: append([]string(nil), argv...),
+	}, nil
+}
+
+func parseNetworkAccessV1(name string, value string, required bool) (bool, error) {
+	if !required {
+		if value != "" {
+			return false, fmt.Errorf("%s is not accepted by restricted-exec", name)
+		}
+		return false, nil
+	}
+	switch value {
+	case "allow":
+		return true, nil
+	case "deny":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s must be allow or deny", name)
+	}
+}
+
+func parseDecimalListV1(value string, minimum int, maximum int) ([]int, error) {
+	if value == "" {
+		return []int{}, nil
+	}
+	result := []int{}
+	previous := -1
+	for _, item := range strings.Split(value, ",") {
+		parsed, err := strconv.Atoi(item)
+		if err != nil || parsed < minimum || parsed > maximum {
+			return nil, fmt.Errorf("%q is outside %d..%d", item, minimum, maximum)
+		}
+		if parsed <= previous {
+			return nil, fmt.Errorf("values must be unique and sorted")
+		}
+		result = append(result, parsed)
+		previous = parsed
+	}
+	return result, nil
+}
