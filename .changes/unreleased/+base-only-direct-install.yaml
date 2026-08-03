@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve resolved base-image identity when building an application runtime layer for environments without package-provider layers.
