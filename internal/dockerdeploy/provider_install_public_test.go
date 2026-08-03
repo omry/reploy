@@ -37,7 +37,7 @@ func TestInstallProviderV1MapsPublicOptions(t *testing.T) {
 	if captured.SourceDeploymentDir != "/staging" || captured.DestinationDeploymentDir != "/installed" {
 		t.Fatalf("install directories = %q -> %q", captured.SourceDeploymentDir, captured.DestinationDeploymentDir)
 	}
-	if captured.Runtime != runtime || captured.ControlMode != ControlAdmissionDrainV1 || captured.Scope != InstallScopeSystem || captured.Service != "demo" {
+	if !reflect.DeepEqual(captured.Runtime, runtime) || captured.ControlMode != ControlAdmissionDrainV1 || captured.Scope != InstallScopeSystem || captured.Service != "demo" {
 		t.Fatalf("install identity options = %#v", captured)
 	}
 	if !reflect.DeepEqual(captured.PortOverrides, []PortOverride{{Name: "web", HostPort: "8080"}}) || !reflect.DeepEqual(captured.Replace, []string{"config"}) || !captured.Clean || !captured.Start {
@@ -72,7 +72,7 @@ func TestDirectInstallProviderV1MapsPublicOptionsAndReturnsTarget(t *testing.T) 
 	if target != "/resolved" {
 		t.Fatalf("target = %q, want /resolved", target)
 	}
-	if !reflect.DeepEqual(captured.Pack, pack) || captured.Target != "/installed" || captured.Runtime != runtime || captured.ControlMode != ControlAdmissionForceV1 || captured.Scope != InstallScopeUser || captured.Service != "demo" || !captured.Start {
+	if !reflect.DeepEqual(captured.Pack, pack) || captured.Target != "/installed" || !reflect.DeepEqual(captured.Runtime, runtime) || captured.ControlMode != ControlAdmissionForceV1 || captured.Scope != InstallScopeUser || captured.Service != "demo" || !captured.Start {
 		t.Fatalf("direct install options = %#v", captured)
 	}
 }

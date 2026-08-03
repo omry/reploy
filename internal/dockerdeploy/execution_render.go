@@ -50,6 +50,9 @@ type composePlanService struct {
 	PullPolicy    string             `yaml:"pull_policy"`
 	ContainerName string             `yaml:"container_name"`
 	User          string             `yaml:"user"`
+	GroupAdd      []string           `yaml:"group_add"`
+	CapDrop       []string           `yaml:"cap_drop"`
+	SecurityOpt   []string           `yaml:"security_opt"`
 	Restart       string             `yaml:"restart,omitempty"`
 	Entrypoint    []string           `yaml:"entrypoint,omitempty,flow"`
 	Command       []string           `yaml:"command,omitempty,flow"`
@@ -101,7 +104,10 @@ func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerR
 	}
 	service := composePlanService{
 		Image: plan.Image, PullPolicy: "never", ContainerName: plan.ContainerName, User: plan.Sandbox.RuntimeUser.DockerUser, Restart: plan.Restart,
-		ReadOnly: plan.Sandbox.ReadOnlyRoot, Environment: temporaryEnvironmentForPlan(plan), Tmpfs: []string{temporaryHomeMountForPlan(plan)},
+		GroupAdd:    dockerSupplementaryGroupsV1(plan.Sandbox.RuntimeUser.SupplementaryGIDs),
+		CapDrop:     []string{"ALL"},
+		SecurityOpt: []string{"no-new-privileges:true", "seccomp=" + plan.Sandbox.Kernel.SeccompProfile},
+		ReadOnly:    plan.Sandbox.ReadOnlyRoot, Environment: temporaryEnvironmentForPlan(plan), Tmpfs: []string{temporaryHomeMountForPlan(plan)},
 	}
 	if plan.Workload != nil {
 		service.Command = append([]string(nil), plan.Workload.Argv...)
@@ -209,11 +215,20 @@ func temporaryHomeForPlan(plan DockerExecutionPlan) string {
 }
 
 func temporaryHomeMountForPlan(plan DockerExecutionPlan) string {
-	return temporaryHomeForPlan(plan) + ":rw,noexec,nosuid,nodev,size=64m,mode=1777"
+	user := plan.Sandbox.RuntimeUser
+	return temporaryHomeForPlan(plan) + ":rw,noexec,nosuid,nodev,size=64m,mode=0700,uid=" + strconv.Itoa(user.UID) + ",gid=" + strconv.Itoa(user.GID)
 }
 
 func transientHomeMountForPlan(plan DockerExecutionPlan) string {
-	return "type=volume,destination=" + temporaryHomeForPlan(plan) + ",volume-nocopy"
+	return temporaryHomeMountForPlan(plan)
+}
+
+func dockerSupplementaryGroupsV1(groups []int) []string {
+	result := make([]string, len(groups))
+	for index, gid := range groups {
+		result[index] = strconv.Itoa(gid)
+	}
+	return result
 }
 
 func temporaryEnvironmentForPlan(plan DockerExecutionPlan) map[string]string {
