@@ -47,18 +47,31 @@ func providerInstallDiskRequirementsV1(
 	}
 
 	closure, closureBytes, err := deploy.InspectBuildLockStoreClosure(
-		publication.Source.Lock, sourceStore,
+		publication.Build, sourceStore,
 		registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("install disk requirements closure: %w", err)
 	}
-	lockContent, err := deploy.EncodeBuildLockV1(publication.Source.Lock, registry.ValidateRequirementProfileV1)
+	lockContent, err := deploy.EncodeBuildLockV1(publication.Build, registry.ValidateRequirementProfileV1)
 	if err != nil {
 		return nil, err
 	}
 	destinationGeneration := publication.Source.Generation
 	destinationGeneration.Reference = publication.References.Generation
+	lockDigest, err := deploy.BuildLockDigestV1(publication.Build, registry.ValidateRequirementProfileV1)
+	if err != nil {
+		return nil, err
+	}
+	policyDigest, err := deploy.RuntimePolicyDigestV1(publication.Build.RuntimePolicy)
+	if err != nil {
+		return nil, err
+	}
+	destinationGeneration.ImageDigest = publication.Build.FinalImage.Digest
+	destinationGeneration.RootFSSubject = publication.Build.FinalImage.RootFSSubject
+	destinationGeneration.BuildLockDigest = lockDigest
+	destinationGeneration.Platform = publication.Build.Platform
+	destinationGeneration.RuntimePolicyDigest = policyDigest
 	destinationState := publication.Source.State
 	destinationState.Current = &destinationGeneration
 	destinationState.Staging = nil
@@ -74,7 +87,7 @@ func providerInstallDiskRequirementsV1(
 		Candidate: deploy.PendingCandidateV1{
 			TemporaryReference:  publication.References.Temporary,
 			GenerationReference: publication.References.Generation,
-			Image:               publication.Source.Lock.FinalImage,
+			Image:               publication.Build.FinalImage,
 			BuildLockDigest:     destinationGeneration.BuildLockDigest,
 			StoreObjects:        closure,
 		},

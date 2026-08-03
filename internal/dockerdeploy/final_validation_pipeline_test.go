@@ -26,7 +26,7 @@ func TestValidateAndFinalizeBuildUsesPublishedFinalEvidence(t *testing.T) {
 		func(context.Context, FullImageValidationInput) ([]providers.ValidationEvidence, []providers.ExecutableEvidence, error) {
 			validated = true
 			return []providers.ValidationEvidence{}, []providers.ExecutableEvidence{}, nil
-		}, verifier, RunOptions{},
+		}, verifier, testApplicationLocalAccountV1(), RunOptions{},
 		func(providerstore.Store, ApplicationRuntimeLayerBuildRequest, RunOptions) (BuiltImageCandidate, error) {
 			return runtimeCandidate, nil
 		},
@@ -79,7 +79,7 @@ func TestValidateAndFinalizeBuildDoesNotBuildAfterValidationFailure(t *testing.T
 		context.Background(), store, []FullImageValidationInput{}, final, acceptFullValidationProfile,
 		func(context.Context, FullImageValidationInput) ([]providers.ValidationEvidence, []providers.ExecutableEvidence, error) {
 			return nil, nil, errors.New("validation failed")
-		}, verifier, RunOptions{},
+		}, verifier, testApplicationLocalAccountV1(), RunOptions{},
 		func(providerstore.Store, ApplicationRuntimeLayerBuildRequest, RunOptions) (BuiltImageCandidate, error) {
 			return runtimeCandidate, nil
 		},
@@ -122,7 +122,7 @@ func TestValidateAndFinalizeBuildRemovesRuntimeCandidateAfterInspectionFailure(t
 			validated = true
 			return nil, nil, nil
 		},
-		verifier, RunOptions{},
+		verifier, testApplicationLocalAccountV1(), RunOptions{},
 		func(providerstore.Store, ApplicationRuntimeLayerBuildRequest, RunOptions) (BuiltImageCandidate, error) {
 			return runtimeCandidate, nil
 		},
@@ -166,7 +166,7 @@ func TestValidateAndFinalizeBuildRemovesRuntimeCandidateAfterRetentionFailure(t 
 		func(context.Context, FullImageValidationInput) ([]providers.ValidationEvidence, []providers.ExecutableEvidence, error) {
 			return []providers.ValidationEvidence{}, []providers.ExecutableEvidence{}, nil
 		},
-		verifier, RunOptions{},
+		verifier, testApplicationLocalAccountV1(), RunOptions{},
 		func(providerstore.Store, ApplicationRuntimeLayerBuildRequest, RunOptions) (BuiltImageCandidate, error) {
 			return runtimeCandidate, nil
 		},
@@ -212,7 +212,7 @@ func TestValidateAndFinalizeBuildRemovesCandidateAfterInspectionFailure(t *testi
 		func(context.Context, FullImageValidationInput) ([]providers.ValidationEvidence, []providers.ExecutableEvidence, error) {
 			return []providers.ValidationEvidence{}, []providers.ExecutableEvidence{}, nil
 		},
-		verifier, RunOptions{},
+		verifier, testApplicationLocalAccountV1(), RunOptions{},
 		func(providerstore.Store, ApplicationRuntimeLayerBuildRequest, RunOptions) (BuiltImageCandidate, error) {
 			return runtimeCandidate, nil
 		},
