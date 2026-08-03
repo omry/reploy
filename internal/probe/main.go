@@ -11,11 +11,19 @@ import (
 )
 
 func Main(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
-	return mainWithActions(args, stdin, stdout, stderr, waitForHoldSignal, copyFixedVolumeTree)
+	return mainWithActions(
+		args, stdin, stdout, stderr,
+		waitForHoldSignal, copyFixedVolumeTree,
+		readApplicationKernelStatus, execApplication,
+	)
 }
 
 func mainWithHold(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, hold func() error) int {
-	return mainWithActions(args, stdin, stdout, stderr, hold, copyFixedVolumeTree)
+	return mainWithActions(
+		args, stdin, stdout, stderr,
+		hold, copyFixedVolumeTree,
+		readApplicationKernelStatus, execApplication,
+	)
 }
 
 func mainWithActions(
@@ -25,7 +33,20 @@ func mainWithActions(
 	stderr io.Writer,
 	hold func() error,
 	copyVolumeTree func() error,
+	readKernelStatus func() ([]byte, error),
+	execApplication func([]string) error,
 ) int {
+	if len(args) >= 1 && args[0] == "verify-exec" {
+		if len(args) < 3 || args[1] != "--" {
+			_, _ = fmt.Fprintln(stderr, "reploy-probe: verify-exec requires -- followed by an absolute application command")
+			return 2
+		}
+		if err := verifyAndExecApplication(args[2:], readKernelStatus, execApplication); err != nil {
+			_, _ = fmt.Fprintf(stderr, "reploy-probe: application startup verification failed: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	if len(args) == 1 && args[0] == "hold" {
 		if err := hold(); err != nil {
 			_, _ = fmt.Fprintf(stderr, "reploy-probe: hold validation container: %v\n", err)
@@ -41,7 +62,7 @@ func mainWithActions(
 		return 0
 	}
 	if len(args) != 0 {
-		_, _ = fmt.Fprintln(stderr, "reploy-probe accepts no arguments for one canonical stdin request, fixed hold mode, or fixed copy-volume-tree mode")
+		_, _ = fmt.Fprintln(stderr, "reploy-probe accepts no arguments for one canonical stdin request, fixed hold mode, fixed copy-volume-tree mode, or fixed verify-exec mode")
 		return 2
 	}
 	content, err := io.ReadAll(stdin)
