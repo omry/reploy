@@ -1,0 +1,2 @@
+kind: Security
+body: Package a trusted startup verifier into application images and fail closed unless seccomp, no-new-privileges, and empty capability sets are active before workload execution.

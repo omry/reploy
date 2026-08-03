@@ -17,6 +17,7 @@ type CurrentBuildReuseInput struct {
 	Base             deploy.ImageDescriptor
 	Document         blueprint.Document
 	DockerPlan       DockerExecutionPlan
+	StartupVerifier  deploy.ApplicationStartupVerifierV1
 }
 
 // CurrentBuildMatches returns false for a valid but changed build input. It
@@ -65,6 +66,9 @@ func CurrentBuildMatches(current CurrentBuild, input CurrentBuildReuseInput) (bo
 	if input.Base.Platform != input.ResolvedRequest.Platform {
 		return false, fmt.Errorf("current build reuse base platform does not match the resolved request")
 	}
+	if err := deploy.ValidateApplicationStartupVerifierV1(input.StartupVerifier, true); err != nil {
+		return false, fmt.Errorf("current build reuse startup verifier: %w", err)
+	}
 	baseReference, err := resolvedRequestBaseReference(input.ResolvedRequest)
 	if err != nil {
 		return false, err
@@ -97,7 +101,8 @@ func CurrentBuildMatches(current CurrentBuild, input CurrentBuildReuseInput) (bo
 		!reflect.DeepEqual(current.Lock.PackageOverrides, input.PackageOverrides) ||
 		current.Lock.Platform != input.ResolvedRequest.Platform ||
 		!reflect.DeepEqual(current.Lock.Base, input.Base) ||
-		lockedPolicyDigest != policyDigest {
+		lockedPolicyDigest != policyDigest ||
+		!reflect.DeepEqual(current.Lock.RuntimeLayer.Verifier, input.StartupVerifier) {
 		return false, nil
 	}
 	return true, nil

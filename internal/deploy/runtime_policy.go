@@ -26,9 +26,10 @@ const (
 )
 
 type RuntimePolicyV1 struct {
-	Schema         string            `json:"schema"`
-	ProtectedPaths []ProtectedPathV1 `json:"protected_paths"`
-	Plans          []RuntimePlanV1   `json:"plans"`
+	Schema          string                       `json:"schema"`
+	StartupVerifier ApplicationStartupVerifierV1 `json:"startup_verifier"`
+	ProtectedPaths  []ProtectedPathV1            `json:"protected_paths"`
+	Plans           []RuntimePlanV1              `json:"plans"`
 }
 
 type ProtectedPathV1 struct {
@@ -62,6 +63,9 @@ func ValidateRuntimePolicyV1(policy RuntimePolicyV1) error {
 	}
 	if policy.ProtectedPaths == nil || policy.Plans == nil {
 		return fmt.Errorf("runtime policy collections must use arrays")
+	}
+	if err := ValidateApplicationStartupVerifierV1(policy.StartupVerifier, false); err != nil {
+		return fmt.Errorf("runtime policy startup verifier: %w", err)
 	}
 	for index, protected := range policy.ProtectedPaths {
 		if err := validateRuntimeAbsolutePath("protected path", protected.Path); err != nil {
