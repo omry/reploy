@@ -84,11 +84,15 @@ func TestLiveRunQueueV1PreservesFIFOAcrossExclusiveAndConcurrentWaiters(t *testi
 		t.Fatalf("concurrent waiter = %q, %v", status, err)
 	}
 	queue, removed, err := RemoveLiveRunV1(queue, "run-0000000000000001")
-	if err != nil || !removed || queue.Runs[0].ID != "run-0000000000000002" || queue.Runs[0].Status != LiveRunStatusActiveV1 || queue.Runs[1].Status != LiveRunStatusWaitingV1 {
+	if err != nil || !removed || queue.Runs[0].ID != "run-0000000000000002" || queue.Runs[0].Status != LiveRunStatusReadyV1 || queue.Runs[1].Status != LiveRunStatusWaitingV1 {
 		t.Fatalf("exclusive promotion = %#v, removed=%t, err=%v", queue, removed, err)
 	}
+	queue, err = ActivateReadyLiveRunV1(queue, "run-0000000000000002")
+	if err != nil || queue.Runs[0].Status != LiveRunStatusActiveV1 {
+		t.Fatalf("exclusive claim = %#v, err=%v", queue, err)
+	}
 	queue, removed, err = RemoveLiveRunV1(queue, "run-0000000000000002")
-	if err != nil || !removed || len(queue.Runs) != 1 || queue.Runs[0].ID != "run-0000000000000003" || queue.Runs[0].Status != LiveRunStatusActiveV1 {
+	if err != nil || !removed || len(queue.Runs) != 1 || queue.Runs[0].ID != "run-0000000000000003" || queue.Runs[0].Status != LiveRunStatusReadyV1 {
 		t.Fatalf("concurrent promotion = %#v, removed=%t, err=%v", queue, removed, err)
 	}
 }
@@ -117,7 +121,7 @@ func TestLiveRunQueueV1PreservesFIFOAcrossHiddenControlMarker(t *testing.T) {
 		t.Fatalf("control markers = %#v", markers)
 	}
 	queue, removed, err = RemoveControlMarkerV1(queue, marker.ID)
-	if err != nil || !removed || len(queue.Runs) != 1 || queue.Runs[0].ID != "run-0000000000000002" || queue.Runs[0].Status != LiveRunStatusActiveV1 {
+	if err != nil || !removed || len(queue.Runs) != 1 || queue.Runs[0].ID != "run-0000000000000002" || queue.Runs[0].Status != LiveRunStatusReadyV1 {
 		t.Fatalf("run promotion = %#v, removed=%t, err=%v", queue, removed, err)
 	}
 }
@@ -173,7 +177,23 @@ func TestCancelWaitingLiveRunsV1PreservesActiveRunsAndControlOrder(t *testing.T)
 	}
 }
 
-func TestRemoveLiveRunV1PromotesConcurrentBatchAndCancellationDoesNotLeaveGap(t *testing.T) {
+func TestCancelWaitingLiveRunsV1CancelsUnclaimedReadyRun(t *testing.T) {
+	queue := NewLiveRunQueueV1()
+	first := liveRunFixture("run-0000000000000001", true)
+	ready := liveRunFixture("run-0000000000000002", false)
+	queue, _, _ = AdmitLiveRunV1(queue, first, false)
+	queue, _, _ = AdmitLiveRunV1(queue, ready, true)
+	queue, _, _ = RemoveLiveRunV1(queue, first.ID)
+	if queue.Runs[0].Status != LiveRunStatusReadyV1 {
+		t.Fatalf("reserved queue = %#v", queue)
+	}
+	updated, canceled, err := CancelWaitingLiveRunsV1(queue)
+	if err != nil || len(canceled) != 1 || canceled[0].ID != ready.ID || len(updated.Runs) != 0 {
+		t.Fatalf("ready cancellation = %#v, canceled=%#v, error=%v", updated, canceled, err)
+	}
+}
+
+func TestRemoveLiveRunV1ReservesConcurrentWaitersInFIFOOrder(t *testing.T) {
 	queue := NewLiveRunQueueV1()
 	queue, _, _ = AdmitLiveRunV1(queue, liveRunFixture("run-0000000000000001", false), false)
 	queue, _, _ = AdmitLiveRunV1(queue, liveRunFixture("run-0000000000000002", true), true)
@@ -183,9 +203,20 @@ func TestRemoveLiveRunV1PromotesConcurrentBatchAndCancellationDoesNotLeaveGap(t 
 	if err != nil || !removed || len(queue.Runs) != 3 {
 		t.Fatalf("cancel = %#v, removed=%t, err=%v", queue, removed, err)
 	}
+	if queue.Runs[0].Status != LiveRunStatusActiveV1 || queue.Runs[1].Status != LiveRunStatusReadyV1 || queue.Runs[2].Status != LiveRunStatusWaitingV1 {
+		t.Fatalf("first concurrent reservation = %#v", queue)
+	}
+	queue, err = ActivateReadyLiveRunV1(queue, queue.Runs[1].ID)
+	if err != nil || queue.Runs[1].Status != LiveRunStatusActiveV1 || queue.Runs[2].Status != LiveRunStatusReadyV1 {
+		t.Fatalf("second concurrent reservation = %#v, err=%v", queue, err)
+	}
+	queue, err = ActivateReadyLiveRunV1(queue, queue.Runs[2].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, run := range queue.Runs {
 		if run.Status != LiveRunStatusActiveV1 {
-			t.Fatalf("run was not promoted: %#v", queue)
+			t.Fatalf("claimed concurrent runs = %#v", queue)
 		}
 	}
 }
@@ -228,5 +259,18 @@ func TestValidateLiveRunQueueV1RejectsNoncanonicalOrUnsafeState(t *testing.T) {
 		if err := ValidateLiveRunQueueV1(value); err == nil {
 			t.Fatalf("invalid queue accepted: %#v", value)
 		}
+	}
+}
+
+func TestValidateLiveRunQueueV1RejectsActiveEntryAfterReadyReservation(t *testing.T) {
+	queue := NewLiveRunQueueV1()
+	first := liveRunFixture("run-0000000000000001", false)
+	second := liveRunFixture("run-0000000000000002", false)
+	first.Status = LiveRunStatusReadyV1
+	second.Status = LiveRunStatusActiveV1
+	queue.Runs = []LiveRunV1{first, second}
+
+	if err := ValidateLiveRunQueueV1(queue); err == nil || !strings.Contains(err.Error(), "after a ready reservation") {
+		t.Fatalf("invalid ready ordering error = %v", err)
 	}
 }
