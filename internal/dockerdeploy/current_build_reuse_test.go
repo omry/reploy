@@ -87,6 +87,9 @@ func TestCurrentBuildMatchesInvalidatesEverySemanticBoundary(t *testing.T) {
 				Name: "alternate", Mode: blueprint.MountVolume, Target: "/mnt/alternate",
 			}}
 		}},
+		{name: "startup verifier artifact", mutate: func(_ *CurrentBuild, input *CurrentBuildReuseInput) {
+			input.StartupVerifier.Artifact = rendererDigest("a")
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			current, input := currentBuildReuseFixture(t)
@@ -179,6 +182,7 @@ func currentBuildReuseFixture(t *testing.T) (CurrentBuild, CurrentBuildReuseInpu
 	input := CurrentBuildReuseInput{
 		ResolvedRequest: request, Overlay: overlay, PackageOverrides: lock.PackageOverrides,
 		Base: lock.Base, Document: document, DockerPlan: dockerPlan,
+		StartupVerifier: lock.RuntimeLayer.Verifier,
 	}
 	lockDigest, err := deploy.BuildLockDigestV1(lock, registry.ValidateRequirementProfileV1)
 	if err != nil {
