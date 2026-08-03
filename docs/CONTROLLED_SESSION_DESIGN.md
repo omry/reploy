@@ -365,7 +365,15 @@ record containing:
 - the network and endpoint grants;
 - the mount and source grants;
 - the permitted session and endpoint operations;
-- the lease lifetime and owner connection.
+- the admitted lease identity and its owner-connection policy.
+
+The authorization record is portable immutable data; it does not serialize a
+live connection or make ownership transferable. Host Reploy binds the record
+to its admitted live-run lease, permits exactly one controller connection to
+claim that lease, and treats that connection as the owner until it closes or
+Host Reploy cancels the session. Connection loss ends the lease. The initial
+protocol has no reconnect, ownership transfer, or operation that can extend the
+lease by presenting an authorization digest again.
 
 The toolchain does not receive a generic session-creation capability. After
 creation, protocol operations do not accept a deployment name, mount, identity,
