@@ -436,11 +436,12 @@ Ownership:
 
 - Staging has no install scope and uses the backend's current-user container
   identity policy.
-- On native Linux, staged and installed user containers use the invoking user's
+- On Unix hosts, staged and installed user containers use the invoking user's
   numeric UID/GID.
-- On Docker Desktop, staged and installed user containers use a stable,
-  recorded Reploy-managed non-root Linux UID/GID inside the Desktop VM rather
-  than the macOS or Windows account's numeric identity.
+- On native Windows, staged and installed user containers map the invoking SID
+  deterministically to a stable nonzero Linux UID/GID.
+- The final Linux runtime layer supplies the blueprint's container-local
+  account name for the effective numeric identity.
 - User-scope operations warn when overriding image `USER` or ignoring
   `system.account`.
 - Installed system scope uses the resolved service account.
