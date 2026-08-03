@@ -26,6 +26,15 @@ func validBuildLock(t *testing.T) BuildLockV1 {
 	if err != nil {
 		t.Fatal(err)
 	}
+	upstream := providers.RealizedImageV1{Digest: base.ConfigDigest, ConfigDigest: base.ConfigDigest, RootFSSubject: baseRootFS}
+	verifier := ApplicationStartupVerifierContractV1()
+	verifier.Artifact = buildLockTestDigest("6")
+	verifier.Size = "123"
+	transaction, err := ApplicationRuntimeLayerTransactionDigestV1(verifier, upstream, platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := providers.RealizedImageV1{Digest: buildLockTestDigest("5"), ConfigDigest: buildLockTestDigest("5"), RootFSSubject: buildLockTestDigest("7")}
 	return BuildLockV1{
 		Schema: BuildLockSchemaV1, BlueprintDigest: buildLockTestDigest("0"), Overlay: EmptyRequestOverlayV1(),
 		PackageOverrides:      EmptyPackageOverrideIntentV1("demo"),
@@ -33,8 +42,12 @@ func validBuildLock(t *testing.T) BuildLockV1 {
 		Base:  base,
 		Graph: ProviderGraphLockV1{Nodes: []providers.NodeID{"base"}, Edges: []providers.ProviderEdgeV1{}},
 		Nodes: []NodeLockV1{}, Catalog: []providers.RealizedOutput{}, RuntimePolicy: validRuntimePolicy(),
+		RuntimeLayer: ApplicationRuntimeLayerV1{
+			Schema: ApplicationRuntimeLayerSchemaV1, Verifier: verifier, TransactionDigest: transaction,
+			Upstream: upstream, Result: result,
+		},
 		ValidationRecord: providerstore.StoreObjectRef{Kind: providerstore.ValidationRecordKind, Digest: buildLockTestDigest("4")},
-		FinalImage:       providers.RealizedImageV1{Digest: buildLockTestDigest("5"), ConfigDigest: buildLockTestDigest("5"), RootFSSubject: baseRootFS},
+		FinalImage:       result,
 	}
 }
 
@@ -84,7 +97,11 @@ func addValidAPTNode(t *testing.T, lock *BuildLockV1) {
 		GeneratedExecutables: []providers.RealizedGeneratedExecutable{},
 		Outputs:              []providers.RealizedOutput{},
 	}}
-	lock.FinalImage.RootFSSubject = result.RootFSSubject
+	lock.RuntimeLayer.Upstream = result
+	lock.RuntimeLayer.TransactionDigest, err = ApplicationRuntimeLayerTransactionDigestV1(lock.RuntimeLayer.Verifier, result, lock.Platform)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestBuildLockV1CanonicalRoundTripAndIdentity(t *testing.T) {
@@ -160,7 +177,7 @@ func TestBuildLockV1RejectsDisconnectedImageLineage(t *testing.T) {
 	t.Run("final root filesystem", func(t *testing.T) {
 		lock := validBuildLock(t)
 		lock.FinalImage.RootFSSubject = buildLockTestDigest("6")
-		if _, err := BuildLockDigestV1(lock, acceptBuildLockProfile); err == nil || !strings.Contains(err.Error(), "does not match the final graph prefix") {
+		if _, err := BuildLockDigestV1(lock, acceptBuildLockProfile); err == nil || !strings.Contains(err.Error(), "does not match the application runtime layer") {
 			t.Fatalf("lineage error = %v", err)
 		}
 	})
@@ -179,6 +196,9 @@ func TestBuildLockV1RejectsInvalidNestedIdentity(t *testing.T) {
 		{name: "missing node lock", mutate: func(value *BuildLockV1) { value.Graph.Nodes = []providers.NodeID{"apt", "base"} }, want: "missing node"},
 		{name: "nil catalog", mutate: func(value *BuildLockV1) { value.Catalog = nil }, want: "catalog"},
 		{name: "runtime policy", mutate: func(value *BuildLockV1) { value.RuntimePolicy.Schema = "bad" }, want: "runtime policy"},
+		{name: "runtime verifier contract", mutate: func(value *BuildLockV1) { value.RuntimeLayer.Verifier.Path = "/bin/true" }, want: "startup verifier"},
+		{name: "runtime layer transaction", mutate: func(value *BuildLockV1) { value.RuntimeLayer.TransactionDigest = buildLockTestDigest("f") }, want: "transaction digest"},
+		{name: "runtime layer upstream", mutate: func(value *BuildLockV1) { value.RuntimeLayer.Upstream.ConfigDigest = buildLockTestDigest("f") }, want: "final graph prefix"},
 		{name: "validation kind", mutate: func(value *BuildLockV1) { value.ValidationRecord.Kind = providerstore.BlobKind }, want: "validation-record"},
 		{name: "final image", mutate: func(value *BuildLockV1) { value.FinalImage.RootFSSubject = "bad" }, want: "final image"},
 	}

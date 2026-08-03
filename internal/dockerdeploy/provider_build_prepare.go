@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/buildprofile"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
@@ -35,6 +36,7 @@ type LockedProviderBuildPreparationV1 struct {
 	SelectedBase     SelectedProviderBase
 	PreparedBase     *PreparedProviderBase
 	FinalImageConfig providers.ImageConfigPolicy
+	StartupVerifier  deploy.ApplicationStartupVerifierV1
 	// Current is the verified previously published generation, including when
 	// it is stale. ReusableLock is the only cache input for later provider work
 	// and is nil under NoCache. PublicationLock is the lock bound to the desired
@@ -63,6 +65,7 @@ type providerBuildPreparationBackend struct {
 		providers.ResolvedBundleOwnerValidator,
 	) (bool, error)
 	load             func(*deploy.OperationLock, deploy.PackageOverrideIntentV1, string, []providers.ResolvedSourceInput) (LoadedBuildRequestV1, error)
+	loadVerifier     func(blueprint.Platform) (deploy.ApplicationStartupVerifierV1, error)
 	selectCachedBase func(context.Context, providers.ResolvedRequestV1) (SelectedProviderBase, bool, error)
 	selectBase       func(context.Context, providers.ResolvedRequestV1) (SelectedProviderBase, error)
 	validateCurrent  currentBuildLoader
@@ -84,6 +87,7 @@ func PrepareLockedProviderBuildV1(
 	return prepareLockedProviderBuildV1(ctx, input, providerBuildPreparationBackend{
 		recover:          RecoverPendingPublication,
 		load:             LoadBuildRequestWithPackageOverridesV1,
+		loadVerifier:     LoadApplicationStartupVerifierV1,
 		selectCachedBase: SelectCachedProviderBase,
 		selectBase:       SelectProviderBase,
 		validateCurrent:  ValidateCurrentBuild,
@@ -111,7 +115,7 @@ func prepareLockedProviderBuildV1(
 	if input.Sources == nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build sources must use an array")
 	}
-	if backend.recover == nil || backend.load == nil || backend.selectCachedBase == nil || backend.selectBase == nil || backend.validateCurrent == nil || backend.lockedSources == nil || backend.matches == nil || backend.cacheAvailable == nil || backend.realizeBase == nil {
+	if backend.recover == nil || backend.load == nil || backend.loadVerifier == nil || backend.selectCachedBase == nil || backend.selectBase == nil || backend.validateCurrent == nil || backend.lockedSources == nil || backend.matches == nil || backend.cacheAvailable == nil || backend.realizeBase == nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build requires a complete backend")
 	}
 
@@ -148,12 +152,19 @@ func prepareLockedProviderBuildV1(
 	if _, err := RuntimePlansV1(loaded.Document, input.DockerPlan); err != nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build runtime plan: %w", err)
 	}
+	startupVerifier, err := backend.loadVerifier(loaded.Request.Platform)
+	if err != nil {
+		return LockedProviderBuildPreparationV1{}, fmt.Errorf("load application startup verifier: %w", err)
+	}
+	if err := deploy.ValidateApplicationStartupVerifierV1(startupVerifier, true); err != nil {
+		return LockedProviderBuildPreparationV1{}, err
+	}
 	result := LockedProviderBuildPreparationV1{
 		Operation: input.Operation, Store: input.Store, Environment: input.Environment,
 		DeploymentDir: input.DeploymentDir, DockerPlan: input.DockerPlan,
 		Loaded: loaded, Recovered: recovered,
 		ValidatedCandidate: input.ValidatedCandidate, ValidatedInputs: input.ValidatedInputs,
-		NoCache: input.NoCache,
+		NoCache: input.NoCache, StartupVerifier: startupVerifier,
 	}
 
 	type reuseCandidate struct {
@@ -205,7 +216,7 @@ func prepareLockedProviderBuildV1(
 		matches, err := backend.matches(candidate.current, CurrentBuildReuseInput{
 			ResolvedRequest: candidate.request, Overlay: loaded.State.Overlay,
 			PackageOverrides: candidate.packageOverrides, Base: selected.Descriptor,
-			Document: loaded.Document, DockerPlan: input.DockerPlan,
+			Document: loaded.Document, DockerPlan: input.DockerPlan, StartupVerifier: startupVerifier,
 		})
 		if err != nil || !matches {
 			return false, err
