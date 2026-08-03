@@ -13,6 +13,10 @@ import (
 
 func TestCompileRuntimePolicyCanonicalizesPlans(t *testing.T) {
 	document := runtimePolicyDocument(t)
+	document.Environment.Runtime.Network = blueprint.RuntimeNetwork{
+		Public: blueprint.NetworkAccessAllow,
+		Local:  blueprint.NetworkAccessDeny,
+	}
 	plans := []deploy.RuntimePlanV1{
 		{ID: "workload", Mounts: []deploy.RuntimeMountV1{
 			{Destination: "/mnt/config", SourceKind: deploy.RuntimeMountSourceFile, ReadOnly: true},
@@ -29,6 +33,9 @@ func TestCompileRuntimePolicyCanonicalizesPlans(t *testing.T) {
 	}
 	if len(policy.Plans) != 2 || policy.Plans[0].ID != "shell" || policy.Plans[1].Mounts[0].Destination != "/data" {
 		t.Fatalf("canonical plans = %#v", policy.Plans)
+	}
+	if policy.Network != document.Environment.Runtime.Network {
+		t.Fatalf("network policy = %#v, want %#v", policy.Network, document.Environment.Runtime.Network)
 	}
 }
 
@@ -57,6 +64,25 @@ func TestCompileRuntimePolicyAllowsAbsoluteTargetsAndRejectsOverlap(t *testing.T
 				t.Fatalf("error = %v, want containing %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestCompileRuntimePolicyRejectsInboundTCPOutsideWorkloadContract(t *testing.T) {
+	document := runtimePolicyDocument(t)
+	document.Environment.Workload = &blueprint.Workload{Endpoints: map[string]blueprint.Endpoint{
+		"http": {Scheme: "http", Port: 8080},
+	}}
+	validPlans := []deploy.RuntimePlanV1{
+		{ID: runtimeShellPlanID, InboundTCP: []string{}, Mounts: []deploy.RuntimeMountV1{}, Executables: []providers.QualifiedOutput{}},
+		{ID: runtimeWorkloadPlanID, InboundTCP: []string{"8080"}, Mounts: []deploy.RuntimeMountV1{}, Executables: []providers.QualifiedOutput{}},
+	}
+	if _, err := CompileRuntimePolicyV1(document, emptyRuntimePolicyGraph(), validPlans); err != nil {
+		t.Fatalf("valid workload grant: %v", err)
+	}
+	invalid := append([]deploy.RuntimePlanV1{}, validPlans...)
+	invalid[0].InboundTCP = []string{"8080"}
+	if _, err := CompileRuntimePolicyV1(document, emptyRuntimePolicyGraph(), invalid); err == nil || !strings.Contains(err.Error(), "shell") {
+		t.Fatalf("transient inbound grant error = %v", err)
 	}
 }
 
