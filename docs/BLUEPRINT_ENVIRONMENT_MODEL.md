@@ -991,7 +991,7 @@ environment:
     # Omit target defaults to use Reploy's host/backend/scope-aware defaults.
     target: {}
     system:
-      run_as:
+      account:
         user: arbiter
         group: arbiter
         on_missing: create
@@ -1391,7 +1391,7 @@ Docker Desktop it explains that the identity exists only inside the Linux
 container/VM. The warning also states that the image's configured user is
 overridden, the image must tolerate the selected non-root identity, and
 persistent writes are available only through declared writable paths. If
-system `run_as` configuration is present, Reploy reports that it does not apply
+system `account` configuration is present, Reploy reports that it does not apply
 to current-user scope.
 
 The materialized image is a private Docker-backend resource, not another
@@ -2165,18 +2165,18 @@ blueprint namespace.
 - `system` is a machine install and requires a backend with system lifecycle
   semantics plus an appropriate privilege path.
 - Linux system scope uses the systemd backend and may apply
-  `environment.install.system.run_as`.
+  `environment.install.system.account`.
 - Linux user scope uses user-owned Docker lifecycle and never creates, chowns
   to, or runs as the configured system account.
 - macOS and Windows currently support only user scope through Docker Desktop or
   a compatible user runtime. System scope fails clearly rather than silently
   degrading to user scope.
 
-`system.run_as` is ownership and container-process policy for a system install,
+`system.account` is ownership and container-process policy for a system install,
 not another install scope. A native-Linux current-user install runs workload and
 transient containers as the invoking numeric UID/GID; Docker Desktop instead
 uses the Reploy-managed non-root container identity defined above. If
-`system.run_as` is present, Reploy reports that it is inapplicable to user scope
+`system.account` is present, Reploy reports that it is inapplicable to user scope
 along with the non-root image compatibility warning defined above.
 
 ### Install Target Defaults

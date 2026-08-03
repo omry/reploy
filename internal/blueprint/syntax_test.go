@@ -64,6 +64,29 @@ func TestDecodeAcceptsEnvironmentSchema(t *testing.T) {
 	}
 }
 
+func TestDecodeUsesSystemAccountTerminology(t *testing.T) {
+	value := strings.Replace(minimalBlueprint, "  base:\n", "  install:\n    system:\n      account:\n        user: demo\n        group: demo\n        on_missing: create\n  base:\n", 1)
+	source, err := Decode([]byte(value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Environment.Install.System.Account != (SystemAccountSyntax{User: "demo", Group: "demo", OnMissing: "create"}) {
+		t.Fatalf("system account = %#v", source.Environment.Install.System.Account)
+	}
+	document, err := Resolve(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if document.Environment.Install.System.Account != (SystemAccount{User: "demo", Group: "demo", OnMissing: "create"}) {
+		t.Fatalf("resolved system account = %#v", document.Environment.Install.System.Account)
+	}
+
+	legacy := strings.Replace(value, "      account:\n", "      run_as:\n", 1)
+	if _, err := Decode([]byte(legacy)); err == nil || !strings.Contains(err.Error(), "field run_as not found") {
+		t.Fatalf("legacy system run_as error = %v", err)
+	}
+}
+
 func TestDecodeRejectsRemovedWorkspaceNode(t *testing.T) {
 	value := strings.Replace(minimalBlueprint, "  base:\n", "  workspace:\n    root: ..\n    packages:\n      python:\n        demo-server: server\n  base:\n", 1)
 	_, err := Decode([]byte(value))

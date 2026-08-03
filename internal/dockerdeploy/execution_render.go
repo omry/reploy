@@ -96,9 +96,12 @@ func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerR
 	if controlScript == "" {
 		return DockerRenderedInputs{}, fmt.Errorf("control script is required")
 	}
+	if err := ValidateApplicationSandboxPlanV1(plan.Sandbox); err != nil {
+		return DockerRenderedInputs{}, fmt.Errorf("render application sandbox: %w", err)
+	}
 	service := composePlanService{
-		Image: plan.Image, PullPolicy: "never", ContainerName: plan.ContainerName, User: plan.RuntimeUser.DockerUser, Restart: plan.Restart,
-		ReadOnly: true, Environment: temporaryEnvironmentForPlan(plan), Tmpfs: []string{temporaryHomeMountForPlan(plan)},
+		Image: plan.Image, PullPolicy: "never", ContainerName: plan.ContainerName, User: plan.Sandbox.RuntimeUser.DockerUser, Restart: plan.Restart,
+		ReadOnly: plan.Sandbox.ReadOnlyRoot, Environment: temporaryEnvironmentForPlan(plan), Tmpfs: []string{temporaryHomeMountForPlan(plan)},
 	}
 	if plan.Workload != nil {
 		service.Command = append([]string(nil), plan.Workload.Argv...)
@@ -173,7 +176,7 @@ func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerR
 		"REPLOY_PHASE":          string(plan.Phase),
 		"REPLOY_IMAGE":          plan.Image,
 		"REPLOY_CONTAINER_NAME": plan.ContainerName,
-		"REPLOY_DOCKER_USER":    plan.RuntimeUser.DockerUser,
+		"REPLOY_DOCKER_USER":    plan.Sandbox.RuntimeUser.DockerUser,
 	}
 	if scope != "" {
 		environment["REPLOY_SCOPE"] = scope
@@ -202,10 +205,7 @@ func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerR
 }
 
 func temporaryHomeForPlan(plan DockerExecutionPlan) string {
-	if strings.TrimSpace(plan.TemporaryHome) == "" {
-		return environmentTemporaryHome
-	}
-	return plan.TemporaryHome
+	return plan.Sandbox.TemporaryHome
 }
 
 func temporaryHomeMountForPlan(plan DockerExecutionPlan) string {

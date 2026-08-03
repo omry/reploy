@@ -223,7 +223,7 @@ func providerPreinstallFindings(dir string, scope InstallScope, state deploy.Sta
 	if err != nil {
 		return append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("cannot decode system install account: %v", err)})
 	}
-	account, err := doctorInspectAccount(parsedScope, document.Environment.Install.System.RunAs)
+	account, err := doctorInspectAccount(parsedScope, document.Environment.Install.System.Account)
 	if err != nil {
 		return append(findings, DoctorFinding{Status: "fail", Message: fmt.Sprintf("system install account is not ready: %v", err)})
 	}

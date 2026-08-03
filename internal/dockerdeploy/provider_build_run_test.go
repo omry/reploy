@@ -55,7 +55,7 @@ func TestRunProviderBuildV1HoldsOneLockAcrossPreparationAndExecution(t *testing.
 			if input.Environment != document.Environment.ID || input.DeploymentDir != dir || !input.NoCache || input.Store.Root() != filepath.Join(dir, ".reploy", "provider-store") || len(input.Sources) != 0 || input.BaseImage != baseOverride {
 				t.Fatalf("preparation input = %#v", input)
 			}
-			if input.DockerPlan.EnvironmentID != "demo" || input.DockerPlan.Phase != blueprint.PhaseStaged || input.DockerPlan.Image != providerBuildPlanImage || input.DockerPlan.Scope != nil || input.DockerPlan.RuntimeUser.UID != 1001 || input.DockerPlan.RuntimeUser.GID != 1002 {
+			if input.DockerPlan.EnvironmentID != "demo" || input.DockerPlan.Phase != blueprint.PhaseStaged || input.DockerPlan.Image != providerBuildPlanImage || input.DockerPlan.Scope != nil || input.DockerPlan.Sandbox.RuntimeUser.UID != 1001 || input.DockerPlan.Sandbox.RuntimeUser.GID != 1002 {
 				t.Fatalf("Docker plan = %#v", input.DockerPlan)
 			}
 			return LockedProviderBuildPreparationV1{Operation: input.Operation, Store: input.Store}, nil
