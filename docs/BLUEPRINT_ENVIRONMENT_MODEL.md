@@ -92,6 +92,9 @@ environment:
   allow_concurrent: auto      # App-command and shell overlap policy.
   runtime:
     user: reploy              # Container-local account name; defaults to reploy.
+    network:
+      public: deny            # Public Internet access; defaults to deny.
+      local: deny             # Local/private network access; defaults to deny.
   terminal: {}                # Terminal/color integration.
   install: {}                 # Installation target, identity, and success output.
   mounts: {}                  # Runtime filesystem contracts.
@@ -101,8 +104,10 @@ environment:
 
 Optional empty nodes are omitted in an actual blueprint. `runtime.user` names
 the ordinary non-root account inside the target environment; it does not select
-a host account or grant root. Backend-specific runtime choices remain under the
-top-level `docker` node.
+a host account or grant root. `runtime.network.public` and
+`runtime.network.local` independently accept `allow` or `deny`; both default to
+`deny`. Backend-specific runtime choices remain under the top-level `docker`
+node.
 
 ## Internal Execution Phases
 
@@ -1376,6 +1381,36 @@ whether read-only input or writable shared state. It also cannot use
 contract is implemented. Reploy rejects these combinations before container
 creation or output-path preparation. Docker-managed volumes and tmpfs remain
 available because they do not expose a host filesystem path directly.
+
+Application networking is also a portable environment policy rather than a
+Docker mode. `public` controls globally routable IP destinations. `local`
+controls private, link-local, multicast, reserved, infrastructure metadata,
+and conservative address-translation ranges that could embed a private
+destination. Container-local loopback remains available and cannot address host
+loopback through the container network namespace. Docker's embedded resolver
+is the one loopback exception: it is blocked unless `public` is allowed because
+it can forward queries outside the container.
+
+Declared workload endpoints remain reachable from their explicit host
+publication, which uses loopback by default: the application firewall permits
+new inbound TCP connections only to declared endpoint ports and permits the
+corresponding established response traffic. When DNS is enabled, resolved
+connections remain subject to the destination policy.
+
+The Linux-container backend realizes any denied class with a trusted Reploy
+startup helper and IPv4/IPv6 nftables rules inside the container network
+namespace. Docker starts only that helper as container root with the minimal
+setup capabilities. After installing the rules, the helper changes to the
+planned application UID/GID, empties every capability set and the capability
+bounding set, locks securebits and `no-new-privileges`, verifies seccomp and
+the final kernel state, and executes the exact application argv. Reploy-issued
+execs into an application container use the same authority-dropping helper;
+they never invoke an application command through raw `docker exec`.
+
+This is coarse IP-class enforcement. It is not domain, URL, DNS-content,
+general outbound port policy, or packet auditing, and it does not defend a
+container from an operator who already controls the Docker daemon. A backend
+that cannot install and verify the requested policy fails closed.
 
 This is a portable blueprint contract with target-specific realization. The
 current backend writes Linux account databases. A future native-Windows or
