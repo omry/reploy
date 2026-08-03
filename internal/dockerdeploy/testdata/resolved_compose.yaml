@@ -5,6 +5,12 @@ services:
         pull_policy: never
         container_name: demo-staging-abcd
         user: "501:20"
+        group_add: []
+        cap_drop:
+            - ALL
+        security_opt:
+            - no-new-privileges:true
+            - seccomp=builtin
         command: [/opt/reploy/python/bin/demo, serve]
         volumes:
             - type: bind
@@ -18,7 +24,7 @@ services:
             HOME: /mnt/reploy-home
             TMPDIR: /mnt/reploy-home
         tmpfs:
-            - /mnt/reploy-home:rw,noexec,nosuid,nodev,size=64m,mode=1777
+            - /mnt/reploy-home:rw,noexec,nosuid,nodev,size=64m,mode=0700,uid=501,gid=20
 networks:
     default:
         name: demo-staging-abcd
