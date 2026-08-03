@@ -108,6 +108,59 @@ func TestRunPublishedRuntimeContainerV1NeverRunsForStaleBuild(t *testing.T) {
 	}
 }
 
+func TestRunPublishedRuntimeContainerV1NeverRunsForRootHostBind(t *testing.T) {
+	current, buildInput := runtimeCurrentBuildFixture(t)
+	hostSource := t.TempDir()
+	plan := buildInput.DockerPlan
+	plan.Sandbox = testApplicationSandboxPlanV1(0, 0)
+	plan.Mounts = []MountExecutionPlan{{
+		Name: "config", Mode: blueprint.MountBind, Source: hostSource,
+		SourceKind: deploy.RuntimeMountSourceDirectory, Target: "/mnt/config", ReadOnly: true,
+	}}
+	account, err := applicationLocalAccountV1(plan.Sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Lock.RuntimeLayer.Account = account
+	current.Lock.RuntimeLayer.TransactionDigest, err = deploy.ApplicationRuntimeLayerTransactionDigestV1(
+		current.Lock.RuntimeLayer.Verifier,
+		account,
+		current.Lock.RuntimeLayer.Upstream,
+		current.Lock.Platform,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plans, err := RuntimePlansV1(buildInput.Document, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Lock.RuntimePolicy, err = CompileRuntimePolicyFromLockV1(buildInput.Document, current.Lock, plans)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshCurrentBuildReuseGeneration(t, &current)
+	invocation, err := ShellRuntimeInvocationV1(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := 0
+	err = runPublishedRuntimeContainerV1(t.Context(), PublishedRuntimeContainerInput{
+		Environment: "demo", DeploymentDir: "/srv/demo", DockerPlan: plan, Invocation: invocation,
+	}, func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (CurrentBuild, bool, error) {
+		return current, true, nil
+	}, func(context.Context, CurrentBuild) error {
+		runs++
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "root application runtime") {
+		t.Fatalf("root host-bind error = %v", err)
+	}
+	if runs != 0 {
+		t.Fatalf("runner called %d times", runs)
+	}
+}
+
 func TestRunPublishedRuntimeContainerV1RejectsMissingBoundaryInputs(t *testing.T) {
 	if err := runPublishedRuntimeContainerV1(t.Context(), PublishedRuntimeContainerInput{}, nil, func(context.Context, CurrentBuild) error {
 		return nil
@@ -215,7 +268,8 @@ func TestRequireRuntimeReadyChecksHostSourceAfterExactBuildMatch(t *testing.T) {
 		Current: current, DockerPlan: buildInput.DockerPlan, PlanID: "shell",
 		Sources: []RuntimeHostSourceV1{{
 			Destination: "/mnt/config", HostPath: config,
-			SourceKind: deploy.RuntimeMountSourceDirectory, ReadOnly: true,
+			SourceKind: deploy.RuntimeMountSourceDirectory,
+			Authority:  runtimeHostAuthorityInputV1, ReadOnly: true,
 		}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "host-source") || !errors.Is(err, os.ErrNotExist) {
