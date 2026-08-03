@@ -244,10 +244,10 @@ type InstallTarget struct {
 }
 
 type SystemInstall struct {
-	RunAs RunAs
+	Account SystemAccount
 }
 
-type RunAs struct {
+type SystemAccount struct {
 	User      string
 	Group     string
 	OnMissing string

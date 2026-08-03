@@ -230,8 +230,8 @@ func currentAppCommandRunTestBackend(
 		},
 		prepareOutput: func(_ string, _ string, runtimeUser RuntimeUserPlan) (*oneShotOutputSession, error) {
 			*order = append(*order, "prepare output")
-			if !reflect.DeepEqual(runtimeUser, planned.Docker.RuntimeUser) {
-				t.Fatalf("output runtime user = %#v, want %#v", runtimeUser, planned.Docker.RuntimeUser)
+			if !reflect.DeepEqual(runtimeUser, planned.Docker.Sandbox.RuntimeUser) {
+				t.Fatalf("output runtime user = %#v, want %#v", runtimeUser, planned.Docker.Sandbox.RuntimeUser)
 			}
 			return &oneShotOutputSession{mount: &transientOutputMount{
 				HostDirectory: dir, Variable: runtimeOutputDirectoryVariable, ContainerPath: runtimeOutputRoot,

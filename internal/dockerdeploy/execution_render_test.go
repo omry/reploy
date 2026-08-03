@@ -11,7 +11,7 @@ import (
 func TestRenderDockerInputsFromResolvedPlan(t *testing.T) {
 	plan := DockerExecutionPlan{
 		EnvironmentID: "demo", DeploymentDir: "/deployment", Phase: blueprint.PhaseStaged, Image: "reploy/demo:staging",
-		ContainerName: "demo-staging-abcd", NetworkName: "demo-staging-abcd", RuntimeUser: RuntimeUserPlan{DockerUser: "501:20"},
+		ContainerName: "demo-staging-abcd", NetworkName: "demo-staging-abcd", Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"}),
 		Mounts: []MountExecutionPlan{{Name: "config", Mode: blueprint.MountManagedBind, Source: "/tmp/demo/conf", Target: "/config", ReadOnly: true}},
 		Workload: &WorkloadExecutionPlan{Command: "server", Argv: []string{"/opt/reploy/python/bin/demo", "serve"}, Endpoints: map[string]EndpointExecutionPlan{
 			"http": {Scheme: "http", PublishAddress: "127.0.0.1", PublishedPort: 18080, ContainerPort: 8080},
