@@ -82,7 +82,7 @@ func providerInstallPrepareDestinationFixture(t *testing.T) lockedProviderInstal
 	plan.Installation.UnitPath = ""
 	return lockedProviderInstallV1{
 		SourceOperation: sourceOperation, DestinationOperation: destinationOperation,
-		SourceStore: sourceStore, DestinationStore: destinationStore, SourceBuild: source,
+		SourceStore: sourceStore, DestinationStore: destinationStore, SourceBuild: source, InstallBuild: source.Lock,
 		Plan: plan, References: references,
 		Input: providerInstallRunInputV1{SourceDeploymentDir: sourceDir, DestinationDeploymentDir: destinationDir},
 	}
