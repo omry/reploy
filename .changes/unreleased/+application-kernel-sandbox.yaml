@@ -1,0 +1,2 @@
+kind: Security
+body: Run application containers with canonical supplementary groups, no Linux capabilities, no-new-privileges, and Docker's built-in seccomp profile.

@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -62,6 +61,13 @@ func TestPrivateWorkloadEnvironmentDockerIntegrationMasksFilesAndInjectsValues(t
 	container := unique + "-container"
 	workloadScript := fmt.Sprintf(`if [ "${TOKEN+x}" != x ]; then echo token-missing; exit 31; fi
 if [ "$(printf '%%s' "$TOKEN" | sha256sum | cut -d' ' -f1)" != %s ]; then echo token-mismatch; exit 32; fi
+test "$(id -u):$(id -g)" = "12345:23456"
+test "$(id -G)" = "23456 34567 45678"
+test "$(awk '/^CapEff:/ {print $2}' /proc/self/status)" = "0000000000000000"
+test "$(awk '/^CapPrm:/ {print $2}' /proc/self/status)" = "0000000000000000"
+test "$(awk '/^CapBnd:/ {print $2}' /proc/self/status)" = "0000000000000000"
+test "$(awk '/^NoNewPrivs:/ {print $2}' /proc/self/status)" = "1"
+test "$(awk '/^Seccomp:/ {print $2}' /proc/self/status)" = "2"
 while [ ! -e /host/deployment/ready ]; do sleep 0.05; done
 if [ -s /host/deployment/.env ]; then echo env-readable; exit 41; fi
 if cat /host/deployment/.reploy/before >/dev/null 2>&1; then echo metadata-readable; exit 42; fi
@@ -71,7 +77,7 @@ printf 'private-mask-pass\n'`, expectedTokenDigest)
 	plan := DockerExecutionPlan{
 		EnvironmentID: "private-mask", DeploymentDir: deploymentDir, Phase: blueprint.PhaseStaged,
 		Image: image, ContainerName: container, NetworkName: unique,
-		Sandbox:            newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 12345, GID: 23456, DockerUser: "12345:23456"}),
+		Sandbox:            newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 12345, GID: 23456, SupplementaryGIDs: []int{34567, 45678}, DockerUser: "12345:23456"}),
 		PrivateEnvironment: true,
 		Workload: &WorkloadExecutionPlan{Argv: []string{
 			"/bin/sh", "-eu", "-c",
@@ -151,12 +157,6 @@ func TestPrivateRuntimeMasksDockerIntegrationProtectTransientContainer(t *testin
 
 	const image = "debian:bookworm-slim"
 	runDockerIntegration(t, ctx, "pull", image)
-	platform, err := blueprint.ParsePlatform("linux/" + runtime.GOARCH)
-	if err != nil {
-		t.Fatal(err)
-	}
-	workspace := buildIntegrationProbeWorkspace(t, platform)
-
 	deploymentDir := dockerIntegrationSharedTempDir(t)
 	if err := os.Chmod(deploymentDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -197,7 +197,6 @@ printf 'transient-private-mask-pass\n'`,
 	execution, err := PlanTransientContainerExecutionV1(
 		plan,
 		command,
-		workspace,
 		nil,
 		"run-0000000000000001",
 		false,
