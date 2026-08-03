@@ -9,7 +9,11 @@ import (
 
 func currentOutputRuntimeUser() RuntimeUserPlan {
 	backend := oneShotOutputOwnershipBackend()
-	return RuntimeUserPlan{UID: backend.currentUID(), GID: backend.currentGID()}
+	uid, gid := backend.currentUID(), backend.currentGID()
+	if uid == 0 {
+		uid, gid = 1, 1
+	}
+	return RuntimeUserPlan{UID: uid, GID: gid}
 }
 
 func TestOneShotOutputDirectoryIsDirectAndPersistent(t *testing.T) {
@@ -29,6 +33,17 @@ func TestOneShotOutputDirectoryIsDirectAndPersistent(t *testing.T) {
 	}
 	if _, err := os.Stat(destination); err != nil {
 		t.Fatalf("direct output directory did not persist: %v", err)
+	}
+}
+
+func TestOneShotOutputRejectsRootBeforePreparingHostPaths(t *testing.T) {
+	root := t.TempDir()
+	destination := filepath.Join(root, "not-created")
+	if _, err := prepareOneShotOutput(destination, "", RuntimeUserPlan{UID: 0, GID: 0}); err == nil || !strings.Contains(err.Error(), "root-safe output contract") {
+		t.Fatalf("root output error = %v", err)
+	}
+	if _, err := os.Stat(destination); !os.IsNotExist(err) {
+		t.Fatalf("root output destination was mutated: %v", err)
 	}
 }
 
