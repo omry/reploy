@@ -32,11 +32,16 @@ type Environment struct {
 	// provider internals migrate to first-class contribution identities.
 	Components      map[string]Component `json:"-"`
 	AllowConcurrent ConcurrentRunPolicy
+	Runtime         EnvironmentRuntime
 	Terminal        Terminal
 	Install         Install
 	Mounts          map[string]EnvironmentMount
 	Commands        map[string]Command
 	Workload        *Workload
+}
+
+type EnvironmentRuntime struct {
+	User string
 }
 
 type EnvironmentPackages struct {

@@ -41,15 +41,13 @@ This file is the day-to-day queue for design and implementation gaps.
 
 ## Pre-release
 
-- [ ] `P1` Implement the promised Docker Desktop runtime identity.
-      Current macOS and Windows user-scope planning does not provide the stable
-      Reploy-managed non-root Linux identity described by the environment
-      model; native Windows runtime discovery can currently collapse to
-      container identity `0:0`. Define and persist a non-root identity for
-      Docker Desktop, propagate its canonical supplementary groups, reject
-      accidental root, and add native macOS/Windows plus Docker integration
-      evidence across staged and installed current-user workloads and
-      transient commands.
+- [ ] `P1` Complete native Docker Desktop identity evidence.
+      The Linux-container contract now creates a real local account, uses the
+      invoking Unix UID/GID, and maps native Windows SIDs to stable nonzero
+      numeric identities. Add native macOS and Windows Docker Desktop evidence
+      across staged and installed current-user workloads and transient
+      commands, including account-name resolution, stable Windows mapping, and
+      explicit confirmation that no accidental `0:0` identity is selected.
 
 - [ ] `P2` Define cancellation at the admission boundary.
       Specify the authoritative outcome when a waiting caller is promoted at

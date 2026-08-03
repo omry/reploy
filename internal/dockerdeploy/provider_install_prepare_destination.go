@@ -77,7 +77,7 @@ func prepareProviderInstallDestinationWithV1(
 	configuring.Status = deploy.InstallationStatusConfiguring
 	publication := InstalledBuildPublicationInputV1{
 		Environment: document.Environment.ID, SourceDeploymentDir: locked.Input.SourceDeploymentDir,
-		DestinationDeploymentDir: locked.Input.DestinationDeploymentDir, Source: locked.SourceBuild,
+		DestinationDeploymentDir: locked.Input.DestinationDeploymentDir, Source: locked.SourceBuild, Build: locked.InstallBuild,
 		Installation: configuring, References: locked.References,
 	}
 	requirements, err := backend.diskRequirements(locked.SourceStore, locked.DestinationStore, publication, old, candidates, locked.Plan.PathUpdates)

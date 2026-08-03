@@ -37,9 +37,13 @@ func TestCompleteProviderBuildOrdersValidationAssemblyAndPublication(t *testing.
 	order := []string{}
 	blueprintDigest := testResolvedBlueprintDigestV1(t, input.Document)
 	backend := providerBuildCompletionBackend{
-		validateAndFinalize: func(_ context.Context, gotStore providerstore.Store, layers []FullImageValidationInput, final FullImageValidationInput, validateOwner providers.RequirementProfileOwnerValidator, run FullImageValidationRunner, verifier deploy.ApplicationStartupVerifierV1, options RunOptions) (FinalizedBuildValidationResult, error) {
+		validateAndFinalize: func(_ context.Context, gotStore providerstore.Store, layers []FullImageValidationInput, final FullImageValidationInput, validateOwner providers.RequirementProfileOwnerValidator, run FullImageValidationRunner, verifier deploy.ApplicationStartupVerifierV1, account deploy.ApplicationLocalAccountV1, options RunOptions) (FinalizedBuildValidationResult, error) {
 			order = append(order, "validate")
-			if gotStore.Root() != store.Root() || !reflect.DeepEqual(layers, input.Validation.Layers) || !reflect.DeepEqual(final, input.Validation.Final) || validateOwner == nil || run == nil || verifier != input.StartupVerifier || options.Context == nil {
+			wantAccount, err := applicationLocalAccountV1(input.DockerPlan.Sandbox)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if gotStore.Root() != store.Root() || !reflect.DeepEqual(layers, input.Validation.Layers) || !reflect.DeepEqual(final, input.Validation.Final) || validateOwner == nil || run == nil || verifier != input.StartupVerifier || account != wantAccount || options.Context == nil {
 				t.Fatalf("validation arguments were not preserved")
 			}
 			return FinalizedBuildValidationResult{
@@ -98,7 +102,7 @@ func TestCompleteProviderBuildWarnsWhenPublishedFinalCandidateCleanupFails(t *te
 		store,
 		input,
 		providerBuildCompletionBackend{
-			validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, deploy.ApplicationStartupVerifierV1, RunOptions) (FinalizedBuildValidationResult, error) {
+			validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, deploy.ApplicationStartupVerifierV1, deploy.ApplicationLocalAccountV1, RunOptions) (FinalizedBuildValidationResult, error) {
 				return FinalizedBuildValidationResult{
 					Image:     InspectedImageCandidate{Image: finalImage},
 					Candidate: BuiltImageCandidate{ImageID: finalImage.ConfigDigest},
@@ -163,7 +167,7 @@ func TestCompleteProviderBuildValidationPublishesCandidateWithoutChangingCurrent
 	cleanupCause := errors.New("injected validation candidate cleanup failure")
 	publishedCurrent := false
 	result, err := completeProviderBuild(t.Context(), operation, store, input, providerBuildCompletionBackend{
-		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, deploy.ApplicationStartupVerifierV1, RunOptions) (FinalizedBuildValidationResult, error) {
+		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, deploy.ApplicationStartupVerifierV1, deploy.ApplicationLocalAccountV1, RunOptions) (FinalizedBuildValidationResult, error) {
 			return FinalizedBuildValidationResult{
 				Validation: BuildValidationResult{
 					Layers: []PublishedImageValidation{},
@@ -209,7 +213,7 @@ func TestCompleteProviderBuildDoesNotAssembleOrPublishAfterValidationFailure(t *
 	assembled := false
 	published := false
 	_, err := completeProviderBuild(t.Context(), operation, store, input, providerBuildCompletionBackend{
-		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, deploy.ApplicationStartupVerifierV1, RunOptions) (FinalizedBuildValidationResult, error) {
+		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, deploy.ApplicationStartupVerifierV1, deploy.ApplicationLocalAccountV1, RunOptions) (FinalizedBuildValidationResult, error) {
 			return FinalizedBuildValidationResult{}, want
 		},
 		assemble: func(context.Context, providerstore.Store, BuildLockAssemblyInput) (deploy.BuildLockV1, error) {
@@ -238,7 +242,7 @@ func TestCompleteProviderBuildDoesNotPublishAfterAssemblyFailure(t *testing.T) {
 	}
 	removed := false
 	_, err := completeProviderBuild(t.Context(), operation, store, input, providerBuildCompletionBackend{
-		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, deploy.ApplicationStartupVerifierV1, RunOptions) (FinalizedBuildValidationResult, error) {
+		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, deploy.ApplicationStartupVerifierV1, deploy.ApplicationLocalAccountV1, RunOptions) (FinalizedBuildValidationResult, error) {
 			return FinalizedBuildValidationResult{Candidate: candidate}, nil
 		},
 		assemble: func(context.Context, providerstore.Store, BuildLockAssemblyInput) (deploy.BuildLockV1, error) {
@@ -264,7 +268,7 @@ func TestCompleteProviderBuildRejectsValidationPlanDriftBeforeBackendWork(t *tes
 	input.Validation.Layers[0].Outputs = nil
 	calls := 0
 	_, err := completeProviderBuild(t.Context(), operation, store, input, providerBuildCompletionBackend{
-		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, deploy.ApplicationStartupVerifierV1, RunOptions) (FinalizedBuildValidationResult, error) {
+		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, deploy.ApplicationStartupVerifierV1, deploy.ApplicationLocalAccountV1, RunOptions) (FinalizedBuildValidationResult, error) {
 			calls++
 			return FinalizedBuildValidationResult{}, nil
 		},
@@ -291,7 +295,7 @@ func TestCompleteProviderBuildRejectsRuntimePlanDriftBeforeBackendWork(t *testin
 	}}
 	calls := 0
 	_, err := completeProviderBuild(t.Context(), operation, store, input, providerBuildCompletionBackend{
-		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, deploy.ApplicationStartupVerifierV1, RunOptions) (FinalizedBuildValidationResult, error) {
+		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, deploy.ApplicationStartupVerifierV1, deploy.ApplicationLocalAccountV1, RunOptions) (FinalizedBuildValidationResult, error) {
 			calls++
 			return FinalizedBuildValidationResult{}, nil
 		},
@@ -321,7 +325,7 @@ func TestCompleteProviderBuildRejectsDocumentRequestDriftBeforeBackendWork(t *te
 	}
 	calls := 0
 	_, err := completeProviderBuild(t.Context(), operation, store, input, providerBuildCompletionBackend{
-		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, deploy.ApplicationStartupVerifierV1, RunOptions) (FinalizedBuildValidationResult, error) {
+		validateAndFinalize: func(context.Context, providerstore.Store, []FullImageValidationInput, FullImageValidationInput, providers.RequirementProfileOwnerValidator, FullImageValidationRunner, deploy.ApplicationStartupVerifierV1, deploy.ApplicationLocalAccountV1, RunOptions) (FinalizedBuildValidationResult, error) {
 			calls++
 			return FinalizedBuildValidationResult{}, nil
 		},
