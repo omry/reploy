@@ -943,11 +943,13 @@ preparing -> active -> terminating -> terminated
 ```
 
 The first accepted termination cause is latched and never rewritten. Causes
-include controller completion, application exit, host cancellation, controller
-loss, Docker-observation loss, and startup failure. Later events remain
-diagnostic observations. Application and controller exit states plus cleanup
-success are reported separately, so a cleanup failure can fail the operation
-without hiding its original cause.
+include controller-requested termination, workload exit, host cancellation,
+controller loss, Docker-observation loss, and startup failure. Later events
+remain diagnostic observations. Workload status,
+controller finalization status, and pre-delivery cleanup success are reported
+separately in the session result, so a cleanup failure can fail the operation
+without hiding its original cause. Controller exit and delivery-tail cleanup
+are reported separately by the invoking host operation after teardown.
 
 Channel closure is never successful completion. The controller must explicitly
 send `complete` after receiving `workload_outputs_finalized` and finalizing its
