@@ -35,11 +35,16 @@ type EnvironmentSyntax struct {
 	Packages        EnvironmentPackagesSyntax    `yaml:"packages"`
 	Applications    map[string]ApplicationSyntax `yaml:"applications"`
 	AllowConcurrent string                       `yaml:"allow_concurrent"`
+	Runtime         EnvironmentRuntimeSyntax     `yaml:"runtime"`
 	Terminal        TerminalSyntax               `yaml:"terminal"`
 	Install         InstallSyntax                `yaml:"install"`
 	Mounts          map[string]MountSyntax       `yaml:"mounts"`
 	Commands        map[string]CommandSyntax     `yaml:"commands"`
 	Workload        *WorkloadSyntax              `yaml:"workload"`
+}
+
+type EnvironmentRuntimeSyntax struct {
+	User string `yaml:"user"`
 }
 
 type TerminalSyntax struct {

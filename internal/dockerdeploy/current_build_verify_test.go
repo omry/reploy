@@ -257,7 +257,7 @@ func TestVerifyLockedImagesV1RerunsCumulativeLayerValidation(t *testing.T) {
 	runtimeDescriptor.AuthorReference = string(rendererDigest("c"))
 	runtimeDescriptor.ImmutableReference = string(rendererDigest("c"))
 	runtimeDescriptor.ConfigDigest = rendererDigest("c")
-	runtimeDescriptor.RootFSDiffIDs = append(append([]canonical.Digest{}, layerDescriptor.RootFSDiffIDs...), rendererDigest("d"))
+	runtimeDescriptor.RootFSDiffIDs = append(append([]canonical.Digest{}, layerDescriptor.RootFSDiffIDs...), rendererDigest("d"), rendererDigest("f"))
 	runtimeImage, err := realizedImageFromDescriptor(runtimeDescriptor)
 	if err != nil {
 		t.Fatal(err)
@@ -478,7 +478,7 @@ func baseOnlyCurrentBuildVerificationFixtureV1(t *testing.T) currentBuildVerific
 		Image:  baseImage,
 	}
 	runtimeDescriptor := lock.Base
-	runtimeDescriptor.RootFSDiffIDs = append(append([]canonical.Digest{}, lock.Base.RootFSDiffIDs...), rendererDigest("e"))
+	runtimeDescriptor.RootFSDiffIDs = append(append([]canonical.Digest{}, lock.Base.RootFSDiffIDs...), rendererDigest("e"), rendererDigest("f"))
 	runtimeDescriptor.AuthorReference = string(lock.RuntimeLayer.Result.ConfigDigest)
 	runtimeDescriptor.ImmutableReference = string(lock.RuntimeLayer.Result.ConfigDigest)
 	runtimeDescriptor.ConfigDigest = lock.RuntimeLayer.Result.ConfigDigest
