@@ -4,15 +4,20 @@ services:
         image: reploy/demo:staging
         pull_policy: never
         container_name: demo-staging-abcd
-        user: "501:20"
+        user: "0:0"
         group_add: []
         cap_drop:
             - ALL
+        cap_add:
+            - NET_ADMIN
+            - SETGID
+            - SETPCAP
+            - SETUID
         security_opt:
             - no-new-privileges:true
             - seccomp=builtin
         entrypoint: [/opt/reploy/runtime/reploy-probe]
-        command: [verify-exec, --, /opt/reploy/python/bin/demo, serve]
+        command: [sandbox-exec, --uid, "501", --gid, "20", --public, deny, --local, deny, --inbound-tcp, "8080", --, /opt/reploy/python/bin/demo, serve]
         volumes:
             - type: bind
               source: /tmp/demo/conf
