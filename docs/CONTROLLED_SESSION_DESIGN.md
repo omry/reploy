@@ -424,8 +424,12 @@ bytes are never parsed as protocol messages.
 Admission cancellation is host-owned and is not a session-protocol request.
 Host-terminal Ctrl-C while waiting removes the caller's queued operation. Once
 admitted, host cancellation terminates that caller's session and cleans its
-lease. The exact promotion-versus-cancellation boundary is a global admission
-queue invariant tracked as separate pre-release work.
+lease. The global admission queue reserves newly available capacity with an
+internal `ready` state. The owning caller atomically chooses under the operation
+lock between removing that unstarted reservation after cancellation and
+claiming it as active. That `ready`-to-`active` claim is the authoritative
+admission point; cancellation observed afterward uses normal active-operation
+cleanup and no canceled request is replayed.
 
 ### Session Events
 
