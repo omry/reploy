@@ -24,11 +24,11 @@ func TestRunCurrentAppCommandV1OrdersStaleCheckOutputGateAndContainer(t *testing
 	order := []string{}
 	backend := currentAppCommandRunTestBackend(t, dir, current, planned, &order)
 	originalExecution := backend.execution
-	backend.execution = func(plan DockerExecutionPlan, command ResolvedEnvironmentCommand, workspace PreparedProbeWorkspace, output *transientOutputMount, runID string, interactive bool, tty bool) (TransientContainerExecutionV1, error) {
+	backend.execution = func(plan DockerExecutionPlan, command ResolvedEnvironmentCommand, output *transientOutputMount, runID string, interactive bool, tty bool) (TransientContainerExecutionV1, error) {
 		if output == nil || !interactive || !tty {
 			t.Fatalf("execution input = %#v, interactive=%t, tty=%t", output, interactive, tty)
 		}
-		return originalExecution(plan, command, workspace, output, runID, interactive, tty)
+		return originalExecution(plan, command, output, runID, interactive, tty)
 	}
 	var stdout bytes.Buffer
 
@@ -40,7 +40,7 @@ func TestRunCurrentAppCommandV1OrdersStaleCheckOutputGateAndContainer(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"acquire", "store", "state", "current", "plan runtime", "match", "plan command", "prepare output", "invocation", "concurrency", "run id", "admit", "final gate", "prepare probe", "execution", "run admitted", "cleanup probe", "publish output"}
+	want := []string{"acquire", "store", "state", "current", "plan runtime", "match", "plan command", "prepare output", "invocation", "concurrency", "run id", "admit", "final gate", "execution", "run admitted", "publish output"}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("order = %v, want %v", order, want)
 	}
@@ -277,17 +277,7 @@ func currentAppCommandRunTestBackend(
 			}
 			return run(ctx, current)
 		},
-		prepareProbe: func(_ context.Context, _ providerstore.Store, platform blueprint.Platform) (PreparedProbeWorkspace, func() error, error) {
-			*order = append(*order, "prepare probe")
-			if !reflect.DeepEqual(platform, current.Lock.Platform) {
-				t.Fatalf("probe platform = %#v, want %#v", platform, current.Lock.Platform)
-			}
-			return PreparedProbeWorkspace{}, func() error {
-				*order = append(*order, "cleanup probe")
-				return nil
-			}, nil
-		},
-		execution: func(_ DockerExecutionPlan, _ ResolvedEnvironmentCommand, _ PreparedProbeWorkspace, _ *transientOutputMount, runID string, _ bool, _ bool) (TransientContainerExecutionV1, error) {
+		execution: func(_ DockerExecutionPlan, _ ResolvedEnvironmentCommand, _ *transientOutputMount, runID string, _ bool, _ bool) (TransientContainerExecutionV1, error) {
 			*order = append(*order, "execution")
 			return TransientContainerExecutionV1{Container: "demo-" + runID}, nil
 		},

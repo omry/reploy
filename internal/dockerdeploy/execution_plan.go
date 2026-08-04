@@ -14,18 +14,19 @@ import (
 )
 
 type DockerPlanContext struct {
-	DeploymentDir    string
-	InstallTarget    string
-	Phase            blueprint.Phase
-	Scope            *blueprint.InstallScope
-	GeneratedImage   string
-	Host             blueprint.HostOS
-	UID              int
-	GID              int
-	SystemUser       string
-	SystemGroup      string
-	PortOverrides    map[string]int
-	PortOverrideArgs []PortOverride
+	DeploymentDir     string
+	InstallTarget     string
+	Phase             blueprint.Phase
+	Scope             *blueprint.InstallScope
+	GeneratedImage    string
+	Host              blueprint.HostOS
+	UID               int
+	GID               int
+	SupplementaryGIDs []int
+	SystemUser        string
+	SystemGroup       string
+	PortOverrides     map[string]int
+	PortOverrideArgs  []PortOverride
 }
 
 type DockerExecutionPlan struct {
@@ -76,12 +77,13 @@ type MountExecutionPlan struct {
 }
 
 type RuntimeUserPlan struct {
-	User       string
-	Group      string
-	UID        int
-	GID        int
-	DockerUser string
-	Warnings   []string
+	User              string
+	Group             string
+	UID               int
+	GID               int
+	SupplementaryGIDs []int
+	DockerUser        string
+	Warnings          []string
 }
 
 func PlanDockerExecution(document blueprint.Document, context DockerPlanContext) (DockerExecutionPlan, error) {
@@ -311,13 +313,18 @@ func normalizeProbeHost(address string) string {
 }
 
 func planRuntimeUser(document blueprint.Document, context DockerPlanContext) (RuntimeUserPlan, error) {
+	supplementaryGIDs, err := normalizeSupplementaryGIDsV1(context.GID, context.SupplementaryGIDs)
+	if err != nil {
+		return RuntimeUserPlan{}, err
+	}
 	if context.Phase == blueprint.PhaseStaged || context.Scope != nil && *context.Scope == blueprint.InstallScopeUser {
 		if context.UID < 0 || context.GID < 0 {
 			return RuntimeUserPlan{}, fmt.Errorf("current-user Docker plan requires numeric UID and GID")
 		}
 		plan := RuntimeUserPlan{
 			User: strconv.Itoa(context.UID), Group: strconv.Itoa(context.GID), UID: context.UID, GID: context.GID,
-			DockerUser: strconv.Itoa(context.UID) + ":" + strconv.Itoa(context.GID),
+			SupplementaryGIDs: supplementaryGIDs,
+			DockerUser:        strconv.Itoa(context.UID) + ":" + strconv.Itoa(context.GID),
 		}
 		if context.Phase == blueprint.PhaseInstalled {
 			plan.Warnings = append(plan.Warnings,
@@ -339,7 +346,8 @@ func planRuntimeUser(document blueprint.Document, context DockerPlanContext) (Ru
 		}
 		return RuntimeUserPlan{
 			User: context.SystemUser, Group: context.SystemGroup, UID: context.UID, GID: context.GID,
-			DockerUser: strconv.Itoa(context.UID) + ":" + strconv.Itoa(context.GID),
+			SupplementaryGIDs: supplementaryGIDs,
+			DockerUser:        strconv.Itoa(context.UID) + ":" + strconv.Itoa(context.GID),
 		}, nil
 	}
 	return RuntimeUserPlan{}, fmt.Errorf("cannot resolve Docker runtime user")

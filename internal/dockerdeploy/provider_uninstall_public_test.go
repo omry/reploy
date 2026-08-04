@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -132,7 +133,7 @@ func TestUninstallProviderV1MapsPublicOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if captured.DeploymentDir != "/opt/demo" || captured.Runtime != runtime || captured.Service != "demo-service" ||
+	if captured.DeploymentDir != "/opt/demo" || !reflect.DeepEqual(captured.Runtime, runtime) || captured.Service != "demo-service" ||
 		!captured.RemoveDir || captured.ControlMode != ControlAdmissionDrainV1 ||
 		captured.RunOptions.Progress != &progress || captured.RunOptions.DockerPreflightTimeout != timeout {
 		t.Fatalf("provider uninstall input = %#v", captured)
@@ -164,7 +165,7 @@ func TestUninstallProviderV1RecoversMissingSystemDeploymentByService(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recovered.Runtime != runtime || recovered.RequestedDir != "" || recovered.Service != "demo" || !recovered.RemoveDir || recovered.ControlMode != ControlAdmissionForceV1 {
+	if !reflect.DeepEqual(recovered.Runtime, runtime) || recovered.RequestedDir != "" || recovered.Service != "demo" || !recovered.RemoveDir || recovered.ControlMode != ControlAdmissionForceV1 {
 		t.Fatalf("recovery input = %#v", recovered)
 	}
 }
