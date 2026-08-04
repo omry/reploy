@@ -9,7 +9,7 @@ import (
 
 func validRuntimePolicy() RuntimePolicyV1 {
 	return RuntimePolicyV1{
-		Schema: RuntimePolicySchemaV1,
+		Schema: RuntimePolicySchemaV1, StartupVerifier: ApplicationStartupVerifierContractV1(),
 		ProtectedPaths: []ProtectedPathV1{
 			{Path: "/.reploy", Kind: ProtectedPathReployRoot, Owner: "reploy"},
 			{Path: "/opt/app/bin/tool", Kind: ProtectedPathExecutablePath, Owner: "app.tool"},
