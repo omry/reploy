@@ -13,8 +13,9 @@ func TestTransientCommandDockerIntegrationEnforcesIdentityAndKernelBaseline(t *t
 		t.Skip("set REPLOY_DOCKER_INTEGRATION=1 to run Docker integration evidence")
 	}
 	ctx := context.Background()
+	image, _ := buildApplicationStartupVerifierIntegrationImage(t, ctx)
 	plan := DockerExecutionPlan{
-		DeploymentDir: t.TempDir(), Image: "debian:bookworm-slim", ContainerName: "reploy-transient-home-integration",
+		DeploymentDir: t.TempDir(), Image: image, ContainerName: uniqueDockerIntegrationName("reploy-transient-home"),
 		Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 12345, GID: 23456, SupplementaryGIDs: []int{34567, 45678}, DockerUser: "12345:23456"}),
 	}
 	command := ResolvedEnvironmentCommand{Argv: []string{
