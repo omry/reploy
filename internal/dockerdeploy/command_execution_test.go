@@ -76,22 +76,16 @@ func TestMatchEnvironmentCommandLongestTriggerAndForwarding(t *testing.T) {
 }
 
 func TestTransientAndShellCommandsUseDockerExecArgv(t *testing.T) {
-	platform, err := blueprint.ParsePlatform("linux/amd64")
-	if err != nil {
-		t.Fatal(err)
-	}
-	probeDir := t.TempDir()
-	workspace := testPreparedProbeWorkspace(t, platform, probeDir)
 	mountDir := t.TempDir()
 	outputDir := t.TempDir()
-	plan := DockerExecutionPlan{DeploymentDir: t.TempDir(), Image: "reploy/demo:staging", ContainerName: "demo", Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"}), Mounts: []MountExecutionPlan{{Mode: blueprint.MountManagedBind, Source: mountDir, Target: "/conf", ReadOnly: true}}}
+	plan := DockerExecutionPlan{DeploymentDir: t.TempDir(), Image: "reploy/demo:staging", ContainerName: "demo", Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 501, GID: 20, SupplementaryGIDs: []int{33, 44}, DockerUser: "501:20"}), Mounts: []MountExecutionPlan{{Mode: blueprint.MountManagedBind, Source: mountDir, Target: "/conf", ReadOnly: true}}}
 	output := &transientOutputMount{HostDirectory: outputDir, Variable: runtimeOutputFileVariable, ContainerPath: runtimeOutputRoot + "/output"}
-	spec, err := TransientCommandSpec(plan, ResolvedEnvironmentCommand{Argv: []string{"/opt/demo", ";rm", "$(touch pwned)"}}, workspace, output, true, false)
+	spec, err := TransientCommandSpec(plan, ResolvedEnvironmentCommand{Argv: []string{"/opt/demo", ";rm", "$(touch pwned)"}}, output, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	joined := strings.Join(spec.Args, "|")
-	if !strings.Contains(joined, "/opt/demo|;rm|$(touch pwned)") || strings.Contains(joined, "sh|-c") {
+	if strings.Contains(joined, "sh|-c") || !reflect.DeepEqual(spec.Args[len(spec.Args)-5:], []string{"--entrypoint", "/opt/demo", plan.Image, ";rm", "$(touch pwned)"}) {
 		t.Fatalf("spec = %#v", spec)
 	}
 	if !containsInOrder(spec.Args, []string{"--mount", "type=bind,source=" + outputDir + ",target=" + runtimeOutputRoot, "--env", runtimeOutputFileVariable + "=" + runtimeOutputRoot + "/output"}) {
@@ -100,44 +94,28 @@ func TestTransientAndShellCommandsUseDockerExecArgv(t *testing.T) {
 	if !containsAdjacent(spec.Args, "--pull", "never") {
 		t.Fatalf("transient command permits image pulls: %#v", spec.Args)
 	}
-	if containsAdjacent(spec.Args, "--user", plan.Sandbox.RuntimeUser.DockerUser) {
-		t.Fatalf("transient container starts as the runtime user before its anonymous home is initialized: %#v", spec.Args)
+	if !containsInOrder(spec.Args, []string{"--user", "501:20", "--cap-drop", "ALL"}) ||
+		!containsInOrder(spec.Args, []string{"--group-add", "33", "--group-add", "44"}) ||
+		!containsInOrder(spec.Args, []string{"--entrypoint", "/opt/demo", plan.Image, ";rm", "$(touch pwned)"}) {
+		t.Fatalf("transient command does not start directly with its final identity and command: %#v", spec.Args)
 	}
-	if !containsInOrder(spec.Args, []string{"--user", "0:0"}) ||
-		!containsInOrder(spec.Args, []string{"--mount", "type=bind,source=" + probeDir + ",target=" + ProbeContainerRoot + ",readonly"}) ||
-		!containsInOrder(spec.Args, []string{
-			"--entrypoint", ProbeContainerExecutable,
-			plan.Image, "run-transient", "501", "20",
-			"/opt/demo", ";rm", "$(touch pwned)",
-		}) {
-		t.Fatalf("transient command does not initialize its anonymous home and drop to the runtime user: %#v", spec.Args)
-	}
-	shell := ShellCommandSpec(plan, workspace, true, true)
-	if !strings.Contains(strings.Join(shell.Args, " "), "--interactive --tty") || shell.Args[len(shell.Args)-1] != "/bin/sh" {
+	shell := ShellCommandSpec(plan, true, true)
+	if !strings.Contains(strings.Join(shell.Args, " "), "--interactive --tty") || !containsInOrder(shell.Args, []string{"--entrypoint", "/bin/sh", plan.Image}) {
 		t.Fatalf("shell = %#v", shell)
 	}
-	if !containsInOrder(shell.Args, []string{"--read-only", "--mount", transientHomeMountForPlan(plan)}) ||
+	if !containsInOrder(shell.Args, []string{"--read-only", "--tmpfs", transientHomeMountForPlan(plan)}) ||
 		!containsInOrder(shell.Args, []string{
 			"--env", "HOME=" + environmentTemporaryHome,
 			"--env", "TMPDIR=" + environmentTemporaryHome,
 		}) {
-		t.Fatalf("shell lacks a read-only root and anonymous temporary home: %#v", shell.Args)
-	}
-	if strings.Contains(strings.Join(shell.Args, " "), "--tmpfs") {
-		t.Fatalf("transient home unexpectedly uses tmpfs: %#v", shell.Args)
+		t.Fatalf("shell lacks a read-only root and private temporary home: %#v", shell.Args)
 	}
 }
 
 func TestTransientCommandSpecQuotesCommaContainingMountFields(t *testing.T) {
-	platform, err := blueprint.ParsePlatform("linux/amd64")
-	if err != nil {
-		t.Fatal(err)
-	}
 	hostRoot := t.TempDir()
-	probeDir := filepath.Join(hostRoot, "probe,workspace")
 	mountDir := filepath.Join(hostRoot, "deployment,preview", "conf")
 	outputDir := filepath.Join(hostRoot, "output,preview")
-	workspace := testPreparedProbeWorkspace(t, platform, probeDir)
 	plan := DockerExecutionPlan{
 		DeploymentDir: t.TempDir(), Image: "reploy/demo:staging", ContainerName: "demo",
 		Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"}),
@@ -150,13 +128,11 @@ func TestTransientCommandSpecQuotesCommaContainingMountFields(t *testing.T) {
 		HostDirectory: outputDir, Variable: runtimeOutputDirectoryVariable,
 		ContainerPath: runtimeOutputRoot,
 	}
-	spec, err := TransientCommandSpec(plan, ResolvedEnvironmentCommand{Argv: []string{"/opt/demo"}}, workspace, output, false, false)
+	spec, err := TransientCommandSpec(plan, ResolvedEnvironmentCommand{Argv: []string{"/opt/demo"}}, output, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !containsInOrder(spec.Args, []string{
-		"--mount", `type=bind,"source=` + probeDir + `",target=` + ProbeContainerRoot + ",readonly",
-	}) || !containsInOrder(spec.Args, []string{
 		"--mount", `type=bind,"target=/conf,preview","source=` + mountDir + `",readonly`,
 		"--mount", `type=bind,"source=` + outputDir + `",target=` + runtimeOutputRoot,
 	}) {
@@ -165,10 +141,6 @@ func TestTransientCommandSpecQuotesCommaContainingMountFields(t *testing.T) {
 }
 
 func TestTransientCommandSpecMasksDeploymentPrivatePaths(t *testing.T) {
-	platform, err := blueprint.ParsePlatform("linux/amd64")
-	if err != nil {
-		t.Fatal(err)
-	}
 	deploymentDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(deploymentDir, privateRuntimeMetadataDirectoryName), 0o700); err != nil {
 		t.Fatal(err)
@@ -176,7 +148,6 @@ func TestTransientCommandSpecMasksDeploymentPrivatePaths(t *testing.T) {
 	if _, err := preparePrivateWorkloadEnvironmentV1(deploymentDir); err != nil {
 		t.Fatal(err)
 	}
-	workspace := testPreparedProbeWorkspace(t, platform, t.TempDir())
 	plan := DockerExecutionPlan{
 		DeploymentDir: deploymentDir, Image: "reploy/demo:staging", ContainerName: "demo",
 		Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"}),
@@ -188,7 +159,6 @@ func TestTransientCommandSpecMasksDeploymentPrivatePaths(t *testing.T) {
 	spec, err := TransientCommandSpec(
 		plan,
 		ResolvedEnvironmentCommand{Argv: []string{"/bin/true"}},
-		workspace,
 		nil,
 		false,
 		false,
@@ -206,11 +176,6 @@ func TestTransientCommandSpecMasksDeploymentPrivatePaths(t *testing.T) {
 }
 
 func TestPlanTransientContainerExecutionV1SeparatesCreateStartAndCleanup(t *testing.T) {
-	platform, err := blueprint.ParsePlatform("linux/amd64")
-	if err != nil {
-		t.Fatal(err)
-	}
-	workspace := testPreparedProbeWorkspace(t, platform, t.TempDir())
 	plan := DockerExecutionPlan{
 		DeploymentDir: t.TempDir(), Image: "reploy/demo:staging", ContainerName: "demo-staging-abcd",
 		Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"}),
@@ -223,7 +188,6 @@ func TestPlanTransientContainerExecutionV1SeparatesCreateStartAndCleanup(t *test
 	execution, err := PlanTransientContainerExecutionV1(
 		plan,
 		ResolvedEnvironmentCommand{Argv: []string{"/opt/demo", "export"}},
-		workspace,
 		output,
 		"run-00010203040506ff",
 		true,
@@ -240,7 +204,7 @@ func TestPlanTransientContainerExecutionV1SeparatesCreateStartAndCleanup(t *test
 		t.Fatalf("create prefix = %#v", execution.Create.Args)
 	}
 	if !containsInOrder(execution.Create.Args, []string{"--interactive", "--tty"}) ||
-		!reflect.DeepEqual(execution.Create.Args[len(execution.Create.Args)-6:], []string{plan.Image, "run-transient", "501", "20", "/opt/demo", "export"}) {
+		!reflect.DeepEqual(execution.Create.Args[len(execution.Create.Args)-4:], []string{"--entrypoint", "/opt/demo", plan.Image, "export"}) {
 		t.Fatalf("create args = %#v", execution.Create.Args)
 	}
 	if !reflect.DeepEqual(execution.Start.Args, []string{"start", "--attach", "--interactive", wantContainer}) {
@@ -255,16 +219,11 @@ func TestPlanTransientContainerExecutionV1SeparatesCreateStartAndCleanup(t *test
 }
 
 func TestPlanTransientContainerExecutionV1RejectsInvalidIdentity(t *testing.T) {
-	platform, err := blueprint.ParsePlatform("linux/amd64")
-	if err != nil {
-		t.Fatal(err)
-	}
-	workspace := testPreparedProbeWorkspace(t, platform, t.TempDir())
 	command := ResolvedEnvironmentCommand{Argv: []string{"/bin/true"}}
-	if _, err := PlanTransientContainerExecutionV1(DockerExecutionPlan{ContainerName: "demo"}, command, workspace, nil, "invalid", false, false); err == nil || !strings.Contains(err.Error(), "run ID") {
+	if _, err := PlanTransientContainerExecutionV1(DockerExecutionPlan{ContainerName: "demo"}, command, nil, "invalid", false, false); err == nil || !strings.Contains(err.Error(), "run ID") {
 		t.Fatalf("invalid run ID error = %v", err)
 	}
-	if _, err := PlanTransientContainerExecutionV1(DockerExecutionPlan{}, command, workspace, nil, "run-0000000000000001", false, false); err == nil || !strings.Contains(err.Error(), "base container name") {
+	if _, err := PlanTransientContainerExecutionV1(DockerExecutionPlan{}, command, nil, "run-0000000000000001", false, false); err == nil || !strings.Contains(err.Error(), "base container name") {
 		t.Fatalf("missing base name error = %v", err)
 	}
 }
