@@ -11,6 +11,19 @@ import (
 )
 
 func Main(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
+	if len(args) >= 1 && (args[0] == "sandbox-exec" || args[0] == "restricted-exec") {
+		installRules := args[0] == "sandbox-exec"
+		plan, err := parseSandboxExecPlanV1(args[1:], installRules)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "reploy-probe: %s: %v\n", args[0], err)
+			return 2
+		}
+		if err := sandboxAndExecApplicationV1(plan); err != nil {
+			_, _ = fmt.Fprintf(stderr, "reploy-probe: %s: %v\n", args[0], err)
+			return 1
+		}
+		return 0
+	}
 	return mainWithActions(
 		args, stdin, stdout, stderr,
 		waitForHoldSignal, copyFixedVolumeTree,
@@ -69,7 +82,7 @@ func mainWithActions(
 		return 0
 	}
 	if len(args) != 0 {
-		_, _ = fmt.Fprintln(stderr, "reploy-probe accepts no arguments for one canonical stdin request, fixed hold mode, fixed copy-volume-tree mode, fixed install-local-account mode, or fixed verify-exec mode")
+		_, _ = fmt.Fprintln(stderr, "reploy-probe accepts no arguments for one canonical stdin request, fixed hold mode, fixed copy-volume-tree mode, fixed install-local-account mode, fixed verify-exec mode, or a sandbox-exec/restricted-exec contract")
 		return 2
 	}
 	content, err := io.ReadAll(stdin)
