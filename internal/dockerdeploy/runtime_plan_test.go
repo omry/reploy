@@ -13,7 +13,7 @@ import (
 
 func TestRuntimePlansV1CoversWorkloadShellCommandsAndOutputVariant(t *testing.T) {
 	document := runtimePlanDocument()
-	plan := DockerExecutionPlan{Workload: &WorkloadExecutionPlan{}, Mounts: []MountExecutionPlan{
+	plan := DockerExecutionPlan{Sandbox: testApplicationSandboxPlanV1(1000, 1000), Workload: &WorkloadExecutionPlan{}, Mounts: []MountExecutionPlan{
 		{Name: "data", Mode: blueprint.MountVolume, Target: "/mnt/data", ReadOnly: false},
 		{Name: "config", Mode: blueprint.MountManagedBind, Source: filepath.Join(t.TempDir(), "config"), Target: "/mnt/config", ReadOnly: true},
 	}}
@@ -56,7 +56,7 @@ func TestRuntimePlansV1CoversWorkloadShellCommandsAndOutputVariant(t *testing.T)
 
 func TestRuntimePlansV1DetectsExternalBindSourceKind(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "config.yaml")
-	plans, err := RuntimePlansV1(runtimePlanDocument(), DockerExecutionPlan{Workload: &WorkloadExecutionPlan{}, Mounts: []MountExecutionPlan{{
+	plans, err := RuntimePlansV1(runtimePlanDocument(), DockerExecutionPlan{Sandbox: testApplicationSandboxPlanV1(1000, 1000), Workload: &WorkloadExecutionPlan{}, Mounts: []MountExecutionPlan{{
 		Name: "config", Mode: blueprint.MountBind, Source: file, SourceKind: deploy.RuntimeMountSourceFile,
 		Target: "/mnt/config", ReadOnly: true,
 	}}})
@@ -68,7 +68,7 @@ func TestRuntimePlansV1DetectsExternalBindSourceKind(t *testing.T) {
 		t.Fatalf("bind source kind = %q", shell.Mounts[0].SourceKind)
 	}
 
-	_, err = RuntimePlansV1(runtimePlanDocument(), DockerExecutionPlan{Workload: &WorkloadExecutionPlan{}, Mounts: []MountExecutionPlan{{
+	_, err = RuntimePlansV1(runtimePlanDocument(), DockerExecutionPlan{Sandbox: testApplicationSandboxPlanV1(1000, 1000), Workload: &WorkloadExecutionPlan{}, Mounts: []MountExecutionPlan{{
 		Name: "missing-kind", Mode: blueprint.MountBind, Source: filepath.Join(t.TempDir(), "source"), Target: "/mnt/missing",
 	}}})
 	if err == nil || !strings.Contains(err.Error(), "source kind") {
@@ -81,7 +81,7 @@ func TestRuntimePlansV1RejectsUnknownCommandExecutable(t *testing.T) {
 	command := document.Environment.Commands["check"]
 	command.Executable = "application.missing"
 	document.Environment.Commands["check"] = command
-	_, err := RuntimePlansV1(document, DockerExecutionPlan{Workload: &WorkloadExecutionPlan{}})
+	_, err := RuntimePlansV1(document, DockerExecutionPlan{Sandbox: testApplicationSandboxPlanV1(1000, 1000), Workload: &WorkloadExecutionPlan{}})
 	if err == nil || !strings.Contains(err.Error(), "unknown executable") {
 		t.Fatalf("unknown executable error = %v", err)
 	}

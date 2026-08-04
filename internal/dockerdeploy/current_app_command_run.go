@@ -149,7 +149,7 @@ func runCurrentAppCommandV1(ctx context.Context, input CurrentAppCommandRunInput
 	if err != nil {
 		return err
 	}
-	output, err := backend.prepareOutput(input.OutputDir, input.OutputFile, planned.Docker.RuntimeUser)
+	output, err := backend.prepareOutput(input.OutputDir, input.OutputFile, planned.Docker.Sandbox.RuntimeUser)
 	if err != nil {
 		return err
 	}
