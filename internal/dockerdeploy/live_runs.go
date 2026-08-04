@@ -72,6 +72,9 @@ func listLiveRunsV1(ctx context.Context, deploymentDir string, notice io.Writer,
 	runs = make([]deploy.LiveRunV1, 0, len(queue.Runs))
 	for _, entry := range queue.Runs {
 		if entry.Kind != deploy.LiveRunKindControlV1 {
+			if entry.Status == deploy.LiveRunStatusReadyV1 {
+				entry.Status = deploy.LiveRunStatusWaitingV1
+			}
 			runs = append(runs, entry)
 		}
 	}
@@ -142,6 +145,9 @@ func stopLiveRunV1(
 	}
 	if !removed {
 		return result, fmt.Errorf("live run %q disappeared while the operation lock was held", id)
+	}
+	if result.Run.Status == deploy.LiveRunStatusReadyV1 {
+		result.Run.Status = deploy.LiveRunStatusWaitingV1
 	}
 	return result, nil
 }
