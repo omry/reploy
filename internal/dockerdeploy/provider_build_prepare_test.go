@@ -66,7 +66,7 @@ func providerBuildPreparationFixture(t *testing.T) (
 	input := LockedProviderBuildPreparationInputV1{
 		Operation: operation, Store: store, Environment: "current-test", DeploymentDir: dir,
 		PackageOverrides: packageOverrides,
-		Sources:          []providers.ResolvedSourceInput{}, DockerPlan: DockerExecutionPlan{},
+		Sources:          []providers.ResolvedSourceInput{}, DockerPlan: DockerExecutionPlan{Sandbox: testApplicationSandboxPlanV1(1000, 1000)},
 	}
 	return input, loaded, current, selected, prepared
 }

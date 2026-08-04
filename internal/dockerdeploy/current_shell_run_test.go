@@ -82,8 +82,8 @@ func TestRunCurrentShellV1ReadOnlyChangesOnlyTransientMounts(t *testing.T) {
 				t.Fatalf("read-only shell execution saw writable mount %#v", mount)
 			}
 		}
-		if plan.TemporaryHome != original.TemporaryHome {
-			t.Fatalf("temporary home changed from %q to %q", original.TemporaryHome, plan.TemporaryHome)
+		if plan.Sandbox.TemporaryHome != original.Sandbox.TemporaryHome {
+			t.Fatalf("temporary home changed from %q to %q", original.Sandbox.TemporaryHome, plan.Sandbox.TemporaryHome)
 		}
 		return TransientContainerExecutionV1{Container: "demo-" + runID}, nil
 	}

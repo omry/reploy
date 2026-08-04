@@ -238,7 +238,7 @@ func TestDoctorPreinstallChecksSystemScopePrivilegesAndAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	document.Environment.Install.System.RunAs = blueprint.RunAs{User: "demo", Group: "demo", OnMissing: "create"}
+	document.Environment.Install.System.Account = blueprint.SystemAccount{User: "demo", Group: "demo", OnMissing: "create"}
 	state.Blueprint, err = blueprint.EncodeResolvedDocumentV1(document)
 	if err != nil {
 		t.Fatal(err)
@@ -268,9 +268,9 @@ func TestDoctorPreinstallChecksSystemScopePrivilegesAndAccount(t *testing.T) {
 		return dockerRuntimeInfo{OperatingSystem: "Linux"}, nil
 	}
 	doctorGeteuid = func() int { return 0 }
-	doctorInspectAccount = func(scope InstallScope, runAs blueprint.RunAs) (providerInstallAccountInspectionV1, error) {
-		if scope != InstallScopeSystem || runAs.User != "demo" || runAs.Group != "demo" {
-			t.Fatalf("account input = %q/%#v", scope, runAs)
+	doctorInspectAccount = func(scope InstallScope, account blueprint.SystemAccount) (providerInstallAccountInspectionV1, error) {
+		if scope != InstallScopeSystem || account.User != "demo" || account.Group != "demo" {
+			t.Fatalf("account input = %q/%#v", scope, account)
 		}
 		return providerInstallAccountInspectionV1{User: "demo", Group: "demo", WillCreate: true}, nil
 	}

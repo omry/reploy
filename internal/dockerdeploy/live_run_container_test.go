@@ -28,7 +28,7 @@ func admittedTransientFixtureV1(t *testing.T, dir string) (*deploy.OperationLock
 	}
 	workspace := testPreparedProbeWorkspace(t, platform, t.TempDir())
 	execution, err := PlanTransientContainerExecutionV1(
-		DockerExecutionPlan{DeploymentDir: dir, ContainerName: "demo", Image: "demo:image", RuntimeUser: RuntimeUserPlan{UID: 1000, GID: 1000, DockerUser: "1000:1000"}},
+		DockerExecutionPlan{DeploymentDir: dir, ContainerName: "demo", Image: "demo:image", Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 1000, GID: 1000, DockerUser: "1000:1000"})},
 		ResolvedEnvironmentCommand{Argv: []string{"/bin/true"}}, workspace, nil, run.ID, false, false,
 	)
 	if err != nil {

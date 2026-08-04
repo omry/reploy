@@ -23,7 +23,7 @@ func TestPrepareProviderInstallAccountChecksBulkDiskBeforeCreatingMissingAccount
 	}
 	got, err := prepareProviderInstallAccountWithV1(
 		t.Context(),
-		blueprint.RunAs{User: "service", Group: "service", OnMissing: "create"},
+		blueprint.SystemAccount{User: "service", Group: "service", OnMissing: "create"},
 		providerstore.Store{},
 		CurrentBuild{},
 		input,
@@ -79,7 +79,7 @@ func TestInspectProviderInstallAccountReportsMissingCreateWithoutIDs(t *testing.
 	missing := errors.New("unknown user")
 	inspection, err := inspectProviderInstallAccountWithV1(
 		InstallScopeSystem,
-		blueprint.RunAs{User: "service", Group: "service", OnMissing: "create"},
+		blueprint.SystemAccount{User: "service", Group: "service", OnMissing: "create"},
 		providerInstallAccountInspectionBackendV1{
 			resolve: func(map[string]string) (resolvedInstallOwner, error) {
 				return resolvedInstallOwner{}, missing
@@ -103,7 +103,7 @@ func TestInspectProviderInstallAccountReportsMissingCreateWithoutIDs(t *testing.
 func TestInspectProviderInstallAccountReportsExistingNumericIdentity(t *testing.T) {
 	inspection, err := inspectProviderInstallAccountWithV1(
 		InstallScopeSystem,
-		blueprint.RunAs{User: "service", Group: "service", OnMissing: "create"},
+		blueprint.SystemAccount{User: "service", Group: "service", OnMissing: "create"},
 		providerInstallAccountInspectionBackendV1{
 			resolve: func(map[string]string) (resolvedInstallOwner, error) {
 				return resolvedInstallOwner{UID: 991, GID: 992}, nil
@@ -126,7 +126,7 @@ func TestInspectProviderInstallAccountRejectsMissingFailPolicy(t *testing.T) {
 	want := errors.New("unknown user")
 	_, err := inspectProviderInstallAccountWithV1(
 		InstallScopeSystem,
-		blueprint.RunAs{User: "service", Group: "service", OnMissing: "fail"},
+		blueprint.SystemAccount{User: "service", Group: "service", OnMissing: "fail"},
 		providerInstallAccountInspectionBackendV1{
 			resolve: func(map[string]string) (resolvedInstallOwner, error) {
 				return resolvedInstallOwner{}, want
@@ -146,7 +146,7 @@ func TestPrepareProviderInstallAccountDoesNotCreateWhenBulkDiskPreflightFails(t 
 	created := false
 	_, err := prepareProviderInstallAccountWithV1(
 		t.Context(),
-		blueprint.RunAs{User: "service", Group: "service", OnMissing: "create"},
+		blueprint.SystemAccount{User: "service", Group: "service", OnMissing: "create"},
 		providerstore.Store{},
 		CurrentBuild{},
 		providerInstallRunInputV1{DestinationDeploymentDir: t.TempDir(), Install: providerInstallOptionsV1{Scope: InstallScopeSystem}},
@@ -180,7 +180,7 @@ func TestPrepareProviderInstallAccountReusesExistingAccountWithoutCreationPrefli
 	}
 	got, err := prepareProviderInstallAccountWithV1(
 		t.Context(),
-		blueprint.RunAs{User: "service", Group: "service", OnMissing: "create"},
+		blueprint.SystemAccount{User: "service", Group: "service", OnMissing: "create"},
 		providerstore.Store{},
 		CurrentBuild{},
 		input,
@@ -220,7 +220,7 @@ func TestPrepareProviderInstallAccountIgnoresSystemAccountForUserScope(t *testin
 			Scope: InstallScopeUser, SystemUser: "stale", SystemGroup: "stale", SystemUID: 991, SystemGID: 992,
 		},
 	}
-	got, err := prepareProviderInstallAccountWithV1(t.Context(), blueprint.RunAs{}, providerstore.Store{}, CurrentBuild{}, input, providerInstallAccountBackendV1{})
+	got, err := prepareProviderInstallAccountWithV1(t.Context(), blueprint.SystemAccount{}, providerstore.Store{}, CurrentBuild{}, input, providerInstallAccountBackendV1{})
 	if err != nil {
 		t.Fatal(err)
 	}

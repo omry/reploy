@@ -83,7 +83,9 @@ func TestCurrentBuildMatchesInvalidatesEverySemanticBoundary(t *testing.T) {
 			input.Base.ImmutableReference = string(input.Base.ConfigDigest)
 		}},
 		{name: "runtime policy", mutate: func(_ *CurrentBuild, input *CurrentBuildReuseInput) {
-			input.DockerPlan.TemporaryHome = "/tmp/alternate-home"
+			input.DockerPlan.Mounts = []MountExecutionPlan{{
+				Name: "alternate", Mode: blueprint.MountVolume, Target: "/mnt/alternate",
+			}}
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -165,7 +167,7 @@ func currentBuildReuseFixture(t *testing.T) (CurrentBuild, CurrentBuildReuseInpu
 		t.Fatal(err)
 	}
 	lock.ResolvedRequestDigest = requestDigest
-	dockerPlan := DockerExecutionPlan{}
+	dockerPlan := DockerExecutionPlan{Sandbox: testApplicationSandboxPlanV1(1000, 1000)}
 	plans, err := RuntimePlansV1(document, dockerPlan)
 	if err != nil {
 		t.Fatal(err)
