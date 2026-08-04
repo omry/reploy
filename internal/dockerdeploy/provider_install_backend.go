@@ -20,6 +20,7 @@ func newProviderInstallRunBackendV1() providerInstallRunBackend {
 		recoverDestination:   recoverProviderInstallDestinationV1,
 		buildSource:          RunLockedProviderBuildV1,
 		prepareAccount:       prepareProviderInstallAccountV1,
+		buildInstallRuntime:  buildInstalledRuntimeIdentityV1,
 		newReferences:        NewEnvironmentImageReferences,
 		planInstallation:     planProviderInstallationV1,
 		inspectHostTools:     inspectProviderInstallHostToolsV1,

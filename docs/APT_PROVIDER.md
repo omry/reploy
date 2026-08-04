@@ -195,8 +195,10 @@ environment.
 
 Container root in Docker Desktop remains root only inside the Linux container
 and Desktop VM, not macOS root or Windows Administrator. Native-Linux user-scope
-containers use the invoking UID/GID. Docker Desktop user-scope containers use a
-stable Reploy-managed non-root Linux identity recorded in deployment state.
+containers use the invoking UID/GID. macOS user-scope containers use the
+invoking Unix UID/GID, while native Windows maps the invoking SID
+deterministically to a stable nonzero Linux UID/GID. The final runtime layer
+supplies the blueprint's container-local account name for that numeric identity.
 Reploy validates portable output access and mount destinations while building,
 then checks host mount-source existence and policy before runtime; Docker and
 the workload report identity-dependent mount permission failures. Linux system
@@ -2420,10 +2422,11 @@ not public `type: apt` components.
   neutralized entrypoint/command/healthcheck behavior, explicit working
   directories and users, runtime-only base environment defaults, provider
   environment isolation, informational exposed ports, and `SIGTERM` shutdown.
-- Runtime-identity tests proving native-Linux user scope uses the invoking
-  UID/GID, Docker Desktop uses a recorded Reploy-managed non-root Linux identity,
-  system scope uses its service account, base `USER` is ignored, container root
-  never implies Desktop host root/Administrator, and every declared mount is
+- Runtime-identity tests proving Unix user scope uses the invoking UID/GID,
+  native Windows maps its SID to a stable nonzero Linux identity, the runtime
+  layer supplies the configured local account, system scope uses its service
+  account, base `USER` is ignored, container root never implies Desktop host
+  root/Administrator, and every declared mount is
   usable by the selected identity. Output-access cases cover portable
   `a+rX`-equivalent Python roots; rejection of base/APT exports that rely on
   owner, group, or ACL access; inaccessible parent and link-target directories;
