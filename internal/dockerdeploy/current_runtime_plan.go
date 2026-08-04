@@ -62,6 +62,7 @@ func planCurrentRuntimeV1(input CurrentRuntimePlanInputV1, backend currentRuntim
 		DeploymentDir: dir, Phase: blueprint.PhaseStaged,
 		GeneratedImage: input.Current.Generation.Reference,
 		Host:           input.Runtime.Host, UID: input.Runtime.UID, GID: input.Runtime.GID,
+		SupplementaryGIDs: append([]int(nil), input.Runtime.SupplementaryGIDs...),
 	}
 	if deployment := input.Current.State.Deployment; deployment != nil {
 		installation := deployment.Installation
@@ -99,6 +100,7 @@ func planCurrentRuntimeV1(input CurrentRuntimePlanInputV1, backend currentRuntim
 			context.SystemGroup = document.Environment.Install.System.Account.Group
 			context.UID = owner.UID
 			context.GID = owner.GID
+			context.SupplementaryGIDs = append([]int(nil), owner.SupplementaryGIDs...)
 		}
 	}
 	plan, err := PlanDockerExecution(document, context)

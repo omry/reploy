@@ -163,7 +163,6 @@ func TestMainCopyVolumeTreeIsFixedLifecycleOnly(t *testing.T) {
 		[]string{"copy-volume-tree"}, strings.NewReader("ignored"), &stdout, &stderr,
 		func() error { t.Fatal("copy mode reached hold"); return nil },
 		func() error { copies++; return nil },
-		func([]string) error { t.Fatal("copy mode reached transient runner"); return nil },
 	)
 	if code != 0 || copies != 1 || stdout.Len() != 0 || stderr.Len() != 0 {
 		t.Fatalf("copy code=%d copies=%d stdout=%q stderr=%q", code, copies, stdout.String(), stderr.String())
@@ -171,39 +170,8 @@ func TestMainCopyVolumeTreeIsFixedLifecycleOnly(t *testing.T) {
 	code = mainWithActions(
 		[]string{"copy-volume-tree", "anything"}, strings.NewReader(""), &stdout, &stderr,
 		func() error { return nil }, func() error { t.Fatal("invalid copy arguments reached copier"); return nil },
-		func([]string) error { t.Fatal("invalid copy arguments reached transient runner"); return nil },
 	)
 	if code != 2 || !strings.Contains(stderr.String(), "fixed copy-volume-tree mode") {
 		t.Fatalf("invalid copy code=%d stderr=%q", code, stderr.String())
-	}
-}
-
-func TestMainRunTransientForwardsExactArguments(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	var got []string
-	code := mainWithActions(
-		[]string{"run-transient", "501", "20", "/opt/demo", "--flag", "value"},
-		strings.NewReader("ignored"), &stdout, &stderr,
-		func() error { t.Fatal("transient mode reached hold"); return nil },
-		func() error { t.Fatal("transient mode reached copy"); return nil },
-		func(args []string) error { got = append([]string{}, args...); return nil },
-	)
-	want := []string{"501", "20", "/opt/demo", "--flag", "value"}
-	if code != 0 || !reflect.DeepEqual(got, want) || stdout.Len() != 0 || stderr.Len() != 0 {
-		t.Fatalf("code=%d args=%#v stdout=%q stderr=%q", code, got, stdout.String(), stderr.String())
-	}
-}
-
-func TestRunFixedTransientRejectsInvalidIdentityAndCommand(t *testing.T) {
-	for _, args := range [][]string{
-		{},
-		{"01", "20", "/opt/demo"},
-		{"501", "-1", "/opt/demo"},
-		{"501", "20", "demo"},
-	} {
-		if err := runFixedTransient(args); err == nil {
-			t.Fatalf("arguments accepted: %#v", args)
-		}
 	}
 }

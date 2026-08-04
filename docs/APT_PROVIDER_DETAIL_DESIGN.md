@@ -2166,14 +2166,13 @@ an adjacent hidden staging directory and publishes its fixed regular-file
 result atomically after success. The chosen host path is operation state, not a
 build identity input.
 
-Each one-shot command and `reploy shell` mounts a fresh anonymous Docker volume
-at `/mnt/reploy-home` for `HOME` and `TMPDIR`. It is disk-backed, unnamed, and
-removed with the transient container. The embedded platform helper assigns the
-empty volume to the selected runtime UID/GID, restricts it to that identity,
-drops root privileges, and directly executes the requested command. Explicit
-interruption cleanup uses forced container removal with anonymous-volume
-removal. Workload containers retain a separate tmpfs home at
-`/mnt/reploy-home`.
+Each one-shot command and `reploy shell` mounts a fresh 64 MiB tmpfs at
+`/mnt/reploy-home` for `HOME` and `TMPDIR`. The mount is mode `0700`, owned by
+the selected runtime UID/GID, and removed with the transient container. Docker
+starts the resolved executable directly under that final numeric identity; no
+root bootstrap helper is involved. Explicit interruption cleanup force-removes
+the transient container. Workload containers use the same bounded tmpfs-home
+policy at `/mnt/reploy-home`.
 
 The policy digest is
 `canonical.Sum("runtime-policy", "runtime-policy-v1", policy)`. It is recorded

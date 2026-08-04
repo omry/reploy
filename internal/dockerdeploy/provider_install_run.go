@@ -38,16 +38,17 @@ type ProviderInstallResultV1 struct {
 }
 
 type providerInstallOptionsV1 struct {
-	Scope         InstallScope
-	Service       string
-	PortOverrides []PortOverride
-	Replace       []string
-	Clean         bool
-	Start         bool
-	SystemUser    string
-	SystemGroup   string
-	SystemUID     int
-	SystemGID     int
+	Scope                   InstallScope
+	Service                 string
+	PortOverrides           []PortOverride
+	Replace                 []string
+	Clean                   bool
+	Start                   bool
+	SystemUser              string
+	SystemGroup             string
+	SystemUID               int
+	SystemGID               int
+	SystemSupplementaryGIDs []int
 }
 
 type providerInstallPlanningV1 struct {
