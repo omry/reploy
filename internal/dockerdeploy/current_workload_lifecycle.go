@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providerstore"
 )
@@ -41,8 +40,7 @@ type currentWorkloadLifecycleBackendV1 struct {
 	execute      func(context.Context, LifecyclePlan, LifecycleExecutor) error
 	runPublished func(context.Context, PublishedRuntimeContainerInput, PublishedRuntimeContainerRunnerV1) error
 	command      func(string, string) (CommandSpec, error)
-	prepareProbe func(context.Context, providerstore.Store, blueprint.Platform) (PreparedProbeWorkspace, func() error, error)
-	transient    func(DockerExecutionPlan, ResolvedEnvironmentCommand, PreparedProbeWorkspace, *transientOutputMount, bool, bool) (CommandSpec, error)
+	transient    func(DockerExecutionPlan, ResolvedEnvironmentCommand, *transientOutputMount, bool, bool) (CommandSpec, error)
 	cleanup      func(string) CommandSpec
 	runTemporary func(temporaryCommandRunner, CommandSpec, CommandSpec, RunOptions) error
 	runCommand   func(CommandSpec, RunOptions) error
@@ -66,7 +64,6 @@ func RunCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLif
 		execute:      ExecuteLifecycle,
 		runPublished: RunPublishedRuntimeContainerV1,
 		command:      RuntimeCommand,
-		prepareProbe: PrepareProbeWorkspace,
 		transient:    TransientCommandSpec,
 		cleanup:      TemporaryContainerCleanupCommand,
 		runTemporary: runTemporaryContainerCommand,
@@ -94,7 +91,7 @@ func runCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLif
 	if input.Action != "up" && input.Action != "down" && input.Action != "restart" {
 		return fmt.Errorf("current workload lifecycle action must be up, down, or restart")
 	}
-	if backend.acquire == nil || backend.planStart == nil || backend.planStop == nil || backend.planRestart == nil || backend.execute == nil || backend.runPublished == nil || backend.command == nil || backend.prepareProbe == nil || backend.transient == nil || backend.cleanup == nil || backend.runTemporary == nil || backend.runCommand == nil || backend.inject == nil || backend.readiness == nil || backend.serviceCheck == nil {
+	if backend.acquire == nil || backend.planStart == nil || backend.planStop == nil || backend.planRestart == nil || backend.execute == nil || backend.runPublished == nil || backend.command == nil || backend.transient == nil || backend.cleanup == nil || backend.runTemporary == nil || backend.runCommand == nil || backend.inject == nil || backend.readiness == nil || backend.serviceCheck == nil {
 		return fmt.Errorf("run current workload lifecycle requires a complete backend")
 	}
 	var lifecycle LifecyclePlan
@@ -145,20 +142,13 @@ func runCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLif
 				return err
 			}
 			return runPublished(commandCtx, invocation, func(runCtx context.Context, gated CurrentBuild) error {
-				workspace, cleanup, err := backend.prepareProbe(runCtx, input.Store, gated.Lock.Platform)
+				spec, err := backend.transient(input.Plan.Docker, command, nil, false, false)
 				if err != nil {
 					return err
 				}
-				spec, err := backend.transient(input.Plan.Docker, command, workspace, nil, false, false)
-				if err != nil {
-					return errors.Join(err, cleanup())
-				}
 				options := runOptions
 				options.Context = runCtx
-				return errors.Join(
-					backend.runTemporary(backend.runCommand, spec, backend.cleanup(transientCommandContainerName(input.Plan.Docker)), options),
-					cleanup(),
-				)
+				return backend.runTemporary(backend.runCommand, spec, backend.cleanup(transientCommandContainerName(input.Plan.Docker)), options)
 			})
 		},
 		Readiness: func(readinessCtx context.Context, endpoint EndpointExecutionPlan) error {

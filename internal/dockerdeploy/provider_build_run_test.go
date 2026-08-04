@@ -791,21 +791,25 @@ func TestStagedProviderBuildRuntimeV1MapsSupportedHosts(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.goos, func(t *testing.T) {
-			got, err := stagedProviderBuildRuntimeV1(test.goos, 501, 20)
+			got, err := stagedProviderBuildRuntimeV1(test.goos, 501, 20, []int{44, 20, 33, 44})
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := StagedProviderBuildRuntimeV1{Host: test.host, UID: 501, GID: 20}
-			if got != want {
+			wantGroups := []int{33, 44}
+			if test.goos == "windows" {
+				wantGroups = []int{}
+			}
+			want := StagedProviderBuildRuntimeV1{Host: test.host, UID: 501, GID: 20, SupplementaryGIDs: wantGroups}
+			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("runtime = %#v, want %#v", got, want)
 			}
 		})
 	}
-	got, err := stagedProviderBuildRuntimeV1("windows", -1, -1)
+	got, err := stagedProviderBuildRuntimeV1("windows", -1, -1, nil)
 	if err != nil || got.UID != 0 || got.GID != 0 {
 		t.Fatalf("Windows runtime identity = %#v, %v", got, err)
 	}
-	if _, err := stagedProviderBuildRuntimeV1("plan9", 1, 2); err == nil || !strings.Contains(err.Error(), "unsupported") {
+	if _, err := stagedProviderBuildRuntimeV1("plan9", 1, 2, nil); err == nil || !strings.Contains(err.Error(), "unsupported") {
 		t.Fatalf("error = %v", err)
 	}
 }

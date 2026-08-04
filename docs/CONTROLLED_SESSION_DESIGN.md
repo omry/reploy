@@ -998,6 +998,17 @@ ordinary Reploy application containers. Prove staged workloads, installed
 workloads, transient commands, shells, and later controlled sessions consume
 the same baseline. This is global runtime work, not controlled-session code.
 
+Implementation status: the canonical application sandbox plan and its identity
+and kernel baseline are implemented for persistent Compose workloads and
+transient application commands. Reploy now imports canonical supplementary
+groups, rejects root-group membership for non-root identities, starts transient
+commands directly as the final identity, drops all capabilities, enables
+`no-new-privileges`, explicitly selects Docker's built-in seccomp profile, and
+prohibits privileged mode, host namespaces, and host devices in the common
+plan. Live Docker tests inspect both runtime paths. Trusted production startup
+verification, mount/root authority, network denial, and resource limits remain
+separate prerequisite slices.
+
 ### Slice 2: Controlled-Session Lifecycle Core
 
 Using synthetic controller and workload images with networking disabled:
