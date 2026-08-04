@@ -22,7 +22,7 @@ func TestProviderInstallDiskRequirementsV1CountsPublicationPeakAndCandidates(t *
 	installation.Status = deploy.InstallationStatusConfiguring
 	publication := InstalledBuildPublicationInputV1{
 		Environment: "demo", SourceDeploymentDir: sourceDir, DestinationDeploymentDir: destinationDir,
-		Source: source, Installation: installation, References: references,
+		Source: source, Build: source.Lock, Installation: installation, References: references,
 	}
 	candidates := []providerInstallFileCandidateV1{
 		{Path: filepath.Join(destinationDir, DockerEnvFileName), Content: []byte("env"), Mode: 0o600},
@@ -90,7 +90,7 @@ func TestProviderInstallDiskRequirementsV1RequiresConfiguringStateAndSortedCandi
 	}
 	publication := InstalledBuildPublicationInputV1{
 		Environment: "demo", SourceDeploymentDir: sourceDir, DestinationDeploymentDir: destinationDir,
-		Source: source, Installation: installedBuildPublicationInstallation(destinationDir),
+		Source: source, Build: source.Lock, Installation: installedBuildPublicationInstallation(destinationDir),
 		References: fixedPublicationReferences(t, destinationDir, 0xc2),
 	}
 	if _, err := providerInstallDiskRequirementsV1(sourceStore, destinationStore, publication, nil, []providerInstallFileCandidateV1{}, []PathUpdateAction{}); err == nil {
@@ -127,7 +127,7 @@ func TestProviderInstallDiskRequirementsV1CountsManagedBindCopy(t *testing.T) {
 	installation.Status = deploy.InstallationStatusConfiguring
 	publication := InstalledBuildPublicationInputV1{
 		Environment: "demo", SourceDeploymentDir: sourceDir, DestinationDeploymentDir: destinationDir,
-		Source: source, Installation: installation, References: fixedPublicationReferences(t, destinationDir, 0xc3),
+		Source: source, Build: source.Lock, Installation: installation, References: fixedPublicationReferences(t, destinationDir, 0xc3),
 	}
 	target := filepath.Join(destinationDir, "conf")
 	requirements, err := providerInstallDiskRequirementsV1(

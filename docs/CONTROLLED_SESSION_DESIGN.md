@@ -65,12 +65,15 @@ root, network, capability, or filesystem grants required by their provider
 contract. Those are explicit construction authorities, not implicit exceptions
 or authorities inherited by application containers.
 
-Reploy does not configure a second container-local username. Staged and
-installed user-scope containers run as the invoking host user's numeric UID,
-GID, and supplementary GIDs. Installed system-scope containers run as the host
-account explicitly selected by `environment.install.system.account`, using
-that account's numeric identity inside the container. The setting selects the
-installation's host account; it is not a second container-user setting.
+Every application image receives a container-local account. Its blueprint name
+is `environment.runtime.user`, defaulting to `reploy`; it is not a host account
+selector or an authority grant. Staged and installed user-scope containers use
+the invoking Unix user's numeric identity, while native Windows maps the
+invoking SID to a stable nonzero Linux UID/GID. Installed system-scope
+containers use the host account selected by
+`environment.install.system.account`. The current Linux-container backend
+materializes the local account through Linux account databases; other target-OS
+backends may realize the same contract differently.
 
 If the effective runtime user is root, Reploy emits a precise warning that the
 application can interfere with more of its container. Root does not implicitly
@@ -561,18 +564,27 @@ identity:
 - installed system-scope execution uses the host account explicitly selected
   by `environment.install.system.account`, resolved to its numeric identity.
 
-Using the invoking identity for user-scope execution preserves ordinary host
-file ownership and avoids predictable permission failures. The container
-image's configured `USER` is not the runtime authority, and the image does not
-need a matching named account. Reploy passes the effective numeric `UID:GID`
-and the host account's supplementary GIDs, then supplies its ordinary transient
-writable home. A non-root account with a root primary or supplementary group is
-rejected rather than importing privileged host group membership into the
-container.
+Using the invoking Unix identity for user-scope execution preserves ordinary
+host file ownership and avoids predictable permission failures. Native Windows
+instead derives a stable nonzero Linux UID/GID from the invoking SID. The
+container image's configured `USER` is not the runtime authority. Reploy passes
+the effective numeric `UID:GID` and applicable supplementary GIDs, supplies its
+ordinary transient writable home, and adds a real local account named by
+`environment.runtime.user` (default `reploy`) to the final runtime layer. The
+name and numeric identity are locked build inputs. A non-root account with a
+root primary or supplementary group is rejected rather than importing
+privileged group membership into the container.
 
 A controlled-session client inherits this identity and cannot override it. A
 different system-scope identity is an installation configuration decision, not
 a session capability.
+
+The local account is an OS-neutral blueprint concept with target-specific
+realization. The initial Linux-container backend writes `/etc/passwd` and
+`/etc/group`; a future native target backend may use its own account mechanism.
+If an installation selects a different numeric account, Reploy preserves the
+provider layers and rebuilds the final runtime-account layer for the installed
+generation rather than changing the staged generation.
 
 ### Root Runtime Identity
 
@@ -1001,7 +1013,8 @@ commands directly as the final identity, drops all capabilities, enables
 prohibits privileged mode, host namespaces, and host devices in the common
 plan. Live Docker tests inspect both runtime paths. Trusted production startup
 verification is also implemented: Reploy packages the platform-specific probe
-in a final runtime layer, records that layer outside the provider graph, and
+in a final runtime layer, creates the locked container-local account there,
+records that layer outside the provider graph, and
 uses its fixed verify-and-exec contract as the outermost process for persistent
 workloads, private-environment workloads, transient commands, shells, and
 lifecycle commands. The verifier fails closed unless `/proc/self/status`
@@ -1116,11 +1129,11 @@ analysis. Privileged application containers remain outside this design.
 - Host Reploy remains in both the PTY and lifecycle paths; the containers do not
   receive a direct control connection to one another.
 - Staged and installed user-scope application containers retain practical host
-  ownership by using the invoking host identity, which may be unnamed inside
-  the image.
+  ownership through their effective numeric identity and receive a predictable
+  container-local account name.
 - Installed system-scope application containers use the configured host
-  service account's numeric identity without requiring a corresponding
-  container-local username.
+  service account's numeric identity under the blueprint's container-local
+  account name.
 - Root application containers are possible but visibly weaker.
 - Root application containers never receive host input or shared-state binds;
   local source requires the separately designed disposable-copy capability.

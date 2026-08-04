@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/omry/reploy/internal/blueprint"
@@ -132,13 +133,19 @@ func TestNormalizeProbeHostUsesLoopbackForWildcards(t *testing.T) {
 
 func TestPlanRuntimeUserScopePolicy(t *testing.T) {
 	scope := blueprint.InstallScopeUser
-	document := blueprint.Document{Environment: blueprint.Environment{Install: blueprint.Install{System: blueprint.SystemInstall{Account: blueprint.SystemAccount{User: "service", Group: "service"}}}}}
+	document := blueprint.Document{Environment: blueprint.Environment{
+		Runtime: blueprint.EnvironmentRuntime{User: "omegaflow"},
+		Install: blueprint.Install{System: blueprint.SystemInstall{Account: blueprint.SystemAccount{User: "service", Group: "service"}}},
+	}}
 	plan, err := planRuntimeUser(document, DockerPlanContext{Phase: blueprint.PhaseInstalled, Scope: &scope, Host: blueprint.HostMacOS, UID: 501, GID: 20})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.DockerUser != "501:20" || len(plan.Warnings) != 3 {
+	if plan.DockerUser != "501:20" || plan.LocalUser != "omegaflow" || len(plan.Warnings) != 3 {
 		t.Fatalf("user plan = %#v", plan)
+	}
+	if !strings.Contains(plan.Warnings[0], `local account "omegaflow"`) || !strings.Contains(plan.Warnings[0], "501:20") {
+		t.Fatalf("user identity warning = %q", plan.Warnings[0])
 	}
 	scope = blueprint.InstallScopeSystem
 	plan, err = planRuntimeUser(document, DockerPlanContext{
@@ -148,8 +155,18 @@ func TestPlanRuntimeUserScopePolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.DockerUser != "991:991" || len(plan.Warnings) != 0 {
+	if plan.DockerUser != "991:991" || plan.LocalUser != "omegaflow" || len(plan.Warnings) != 0 {
 		t.Fatalf("system plan = %#v", plan)
+	}
+	root, err := planRuntimeUser(document, DockerPlanContext{
+		Phase: blueprint.PhaseInstalled, Scope: &scope, Host: blueprint.HostLinux,
+		SystemUser: "root", SystemGroup: "root", UID: 0, GID: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root.LocalUser != "root" || root.DockerUser != "0:0" {
+		t.Fatalf("root plan = %#v", root)
 	}
 }
 
