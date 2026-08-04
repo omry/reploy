@@ -62,9 +62,11 @@ func planProviderInstallationV1(ctx context.Context, input providerInstallPlanni
 		dockerContext.SystemGroup = input.Input.Install.SystemGroup
 		dockerContext.UID = input.Input.Install.SystemUID
 		dockerContext.GID = input.Input.Install.SystemGID
+		dockerContext.SupplementaryGIDs = append([]int(nil), input.Input.Install.SystemSupplementaryGIDs...)
 	} else {
 		dockerContext.UID = input.Input.Runtime.UID
 		dockerContext.GID = input.Input.Runtime.GID
+		dockerContext.SupplementaryGIDs = append([]int(nil), input.Input.Runtime.SupplementaryGIDs...)
 	}
 	dockerPlan, err := PlanDockerExecution(document, dockerContext)
 	if err != nil {

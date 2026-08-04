@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 )
 
@@ -22,14 +21,9 @@ func admittedTransientFixtureV1(t *testing.T, dir string) (*deploy.OperationLock
 	if _, err := operation.AdmitLiveRunV1(run, false); err != nil {
 		t.Fatal(err)
 	}
-	platform, err := blueprint.ParsePlatform("linux/amd64")
-	if err != nil {
-		t.Fatal(err)
-	}
-	workspace := testPreparedProbeWorkspace(t, platform, t.TempDir())
 	execution, err := PlanTransientContainerExecutionV1(
 		DockerExecutionPlan{DeploymentDir: dir, ContainerName: "demo", Image: "demo:image", Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 1000, GID: 1000, DockerUser: "1000:1000"})},
-		ResolvedEnvironmentCommand{Argv: []string{"/bin/true"}}, workspace, nil, run.ID, false, false,
+		ResolvedEnvironmentCommand{Argv: []string{"/bin/true"}}, nil, run.ID, false, false,
 	)
 	if err != nil {
 		t.Fatal(err)

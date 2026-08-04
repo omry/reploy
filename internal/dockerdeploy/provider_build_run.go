@@ -45,16 +45,25 @@ type LockedProviderBuildRunInputV1 struct {
 }
 
 type StagedProviderBuildRuntimeV1 struct {
-	Host blueprint.HostOS
-	UID  int
-	GID  int
+	Host              blueprint.HostOS
+	UID               int
+	GID               int
+	SupplementaryGIDs []int
 }
 
 func CurrentStagedProviderBuildRuntimeV1() (StagedProviderBuildRuntimeV1, error) {
-	return stagedProviderBuildRuntimeV1(runtime.GOOS, os.Getuid(), os.Getgid())
+	groups := []int{}
+	if runtime.GOOS != "windows" {
+		var err error
+		groups, err = os.Getgroups()
+		if err != nil {
+			return StagedProviderBuildRuntimeV1{}, fmt.Errorf("resolve current supplementary groups: %w", err)
+		}
+	}
+	return stagedProviderBuildRuntimeV1(runtime.GOOS, os.Getuid(), os.Getgid(), groups)
 }
 
-func stagedProviderBuildRuntimeV1(goos string, uid int, gid int) (StagedProviderBuildRuntimeV1, error) {
+func stagedProviderBuildRuntimeV1(goos string, uid int, gid int, groups []int) (StagedProviderBuildRuntimeV1, error) {
 	host := blueprint.HostOS("")
 	switch goos {
 	case "linux":
@@ -63,6 +72,7 @@ func stagedProviderBuildRuntimeV1(goos string, uid int, gid int) (StagedProvider
 		host = blueprint.HostMacOS
 	case "windows":
 		host = blueprint.HostWindows
+		groups = []int{}
 		if uid < 0 {
 			uid = 0
 		}
@@ -72,7 +82,11 @@ func stagedProviderBuildRuntimeV1(goos string, uid int, gid int) (StagedProvider
 	default:
 		return StagedProviderBuildRuntimeV1{}, fmt.Errorf("provider build is unsupported on host OS %q", goos)
 	}
-	return StagedProviderBuildRuntimeV1{Host: host, UID: uid, GID: gid}, nil
+	groups, err := normalizeSupplementaryGIDsV1(gid, groups)
+	if err != nil {
+		return StagedProviderBuildRuntimeV1{}, fmt.Errorf("provider build runtime supplementary groups: %w", err)
+	}
+	return StagedProviderBuildRuntimeV1{Host: host, UID: uid, GID: gid, SupplementaryGIDs: groups}, nil
 }
 
 type providerBuildRunBackend struct {
@@ -336,12 +350,13 @@ func runLockedProviderBuildV1(
 	}
 
 	dockerPlan, err := PlanDockerExecution(document, DockerPlanContext{
-		DeploymentDir:  deploymentDir,
-		Phase:          blueprint.PhaseStaged,
-		GeneratedImage: providerBuildPlanImage,
-		Host:           input.Runtime.Host,
-		UID:            input.Runtime.UID,
-		GID:            input.Runtime.GID,
+		DeploymentDir:     deploymentDir,
+		Phase:             blueprint.PhaseStaged,
+		GeneratedImage:    providerBuildPlanImage,
+		Host:              input.Runtime.Host,
+		UID:               input.Runtime.UID,
+		GID:               input.Runtime.GID,
+		SupplementaryGIDs: append([]int(nil), input.Runtime.SupplementaryGIDs...),
 	})
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("plan provider build runtime: %w", err)
