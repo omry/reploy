@@ -23,6 +23,9 @@ func RuntimePlansV1(document blueprint.Document, dockerPlan DockerExecutionPlan)
 	if (document.Environment.Workload == nil) != (dockerPlan.Workload == nil) {
 		return nil, fmt.Errorf("runtime workload does not match the resolved Docker plan")
 	}
+	if err := ValidateApplicationSandboxPlanV1(dockerPlan.Sandbox); err != nil {
+		return nil, fmt.Errorf("runtime application sandbox: %w", err)
+	}
 	baseMounts, err := runtimeMountsV1(dockerPlan)
 	if err != nil {
 		return nil, err
