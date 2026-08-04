@@ -29,7 +29,7 @@ func TestTransientCommandDockerIntegrationInitializesPrivateHomeAndDropsPrivileg
 	workspace := testPreparedProbeWorkspace(t, platform, helperDir)
 	plan := DockerExecutionPlan{
 		DeploymentDir: t.TempDir(), Image: "debian:bookworm-slim", ContainerName: "reploy-transient-home-integration",
-		RuntimeUser: RuntimeUserPlan{UID: 12345, GID: 23456, DockerUser: "12345:23456"},
+		Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 12345, GID: 23456, DockerUser: "12345:23456"}),
 	}
 	command := ResolvedEnvironmentCommand{Argv: []string{
 		"/bin/sh", "-eu", "-c",
