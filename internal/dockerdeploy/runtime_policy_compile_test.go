@@ -24,7 +24,10 @@ func TestCompileRuntimePolicyCanonicalizesPlans(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(policy.ProtectedPaths) != 2 || policy.ProtectedPaths[0].Path != deploy.ReployImageRoot || policy.ProtectedPaths[1].Path != deploy.ReployProviderRoot {
+	if len(policy.ProtectedPaths) != 3 ||
+		policy.ProtectedPaths[0].Path != deploy.ReployImageRoot ||
+		policy.ProtectedPaths[1].Path != deploy.ReployProviderRoot ||
+		policy.ProtectedPaths[2].Path != deploy.ApplicationStartupVerifierPathV1 {
 		t.Fatalf("protected paths = %#v", policy.ProtectedPaths)
 	}
 	if len(policy.Plans) != 2 || policy.Plans[0].ID != "shell" || policy.Plans[1].Mounts[0].Destination != "/data" {
@@ -46,6 +49,7 @@ func TestCompileRuntimePolicyAllowsAbsoluteTargetsAndRejectsOverlap(t *testing.T
 	}{
 		{name: "filesystem root", mounts: []deploy.RuntimeMountV1{{Destination: "/", SourceKind: deploy.RuntimeMountSourceDirectory}}, want: "filesystem root"},
 		{name: "kernel subtree", mounts: []deploy.RuntimeMountV1{{Destination: "/sys/fs", SourceKind: deploy.RuntimeMountSourceDirectory}}, want: "reserved container path"},
+		{name: "startup verifier", mounts: []deploy.RuntimeMountV1{{Destination: deploy.ApplicationStartupVerifierPathV1, SourceKind: deploy.RuntimeMountSourceFile}}, want: "protected"},
 		{name: "overlap", mounts: []deploy.RuntimeMountV1{
 			{Destination: "/mnt/data", SourceKind: deploy.RuntimeMountSourceDirectory},
 			{Destination: "/mnt/data/cache", SourceKind: deploy.RuntimeMountSourceDirectory},

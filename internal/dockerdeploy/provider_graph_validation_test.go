@@ -79,7 +79,7 @@ func TestPrepareProviderGraphValidationInspectsBaseOnlyGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy := deploy.RuntimePolicyV1{
-		Schema:         deploy.RuntimePolicySchemaV1,
+		Schema: deploy.RuntimePolicySchemaV1, StartupVerifier: deploy.ApplicationStartupVerifierContractV1(),
 		ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{},
 	}
 	result, err := prepareProviderGraphValidation(

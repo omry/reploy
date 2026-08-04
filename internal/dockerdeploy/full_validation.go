@@ -116,9 +116,6 @@ func ValidateBuildImages(
 	run FullImageValidationRunner,
 ) (BuildValidationResult, error) {
 	result := BuildValidationResult{Layers: []PublishedImageValidation{}}
-	if len(layers) != 0 && !reflect.DeepEqual(final, layers[len(layers)-1]) {
-		return BuildValidationResult{}, fmt.Errorf("final image validation does not match the last component layer")
-	}
 	for index, layer := range layers {
 		validated, err := ValidateAndPublishImage(ctx, store, layer, validateProfileOwner, run)
 		if err != nil {
@@ -126,7 +123,7 @@ func ValidateBuildImages(
 		}
 		result.Layers = append(result.Layers, validated)
 	}
-	if len(layers) != 0 {
+	if len(layers) != 0 && reflect.DeepEqual(final, layers[len(layers)-1]) {
 		result.Final = result.Layers[len(result.Layers)-1]
 		return result, nil
 	}

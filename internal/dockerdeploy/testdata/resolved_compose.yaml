@@ -11,7 +11,8 @@ services:
         security_opt:
             - no-new-privileges:true
             - seccomp=builtin
-        command: [/opt/reploy/python/bin/demo, serve]
+        entrypoint: [/reploy-probe]
+        command: [verify-exec, --, /opt/reploy/python/bin/demo, serve]
         volumes:
             - type: bind
               source: /tmp/demo/conf

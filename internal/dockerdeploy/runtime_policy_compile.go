@@ -78,7 +78,8 @@ func compileRuntimePolicyV1(
 	}
 	sort.Slice(canonicalPlans, func(left int, right int) bool { return canonicalPlans[left].ID < canonicalPlans[right].ID })
 	policy := deploy.RuntimePolicyV1{
-		Schema: deploy.RuntimePolicySchemaV1, ProtectedPaths: protected, Plans: canonicalPlans,
+		Schema: deploy.RuntimePolicySchemaV1, StartupVerifier: deploy.ApplicationStartupVerifierContractV1(),
+		ProtectedPaths: protected, Plans: canonicalPlans,
 	}
 	if err := deploy.ValidateRuntimePolicyV1(policy); err != nil {
 		return deploy.RuntimePolicyV1{}, err
@@ -124,6 +125,9 @@ func runtimeProtectedPaths(
 	referenced map[providers.QualifiedOutput]bool,
 ) ([]deploy.ProtectedPathV1, error) {
 	paths := map[string]deploy.ProtectedPathV1{
+		deploy.ApplicationStartupVerifierPathV1: {
+			Path: deploy.ApplicationStartupVerifierPathV1, Kind: deploy.ProtectedPathExecutablePath, Owner: "reploy",
+		},
 		deploy.ReployImageRoot:    {Path: deploy.ReployImageRoot, Kind: deploy.ProtectedPathReployRoot, Owner: "reploy"},
 		deploy.ReployProviderRoot: {Path: deploy.ReployProviderRoot, Kind: deploy.ProtectedPathProviderRoot, Owner: "reploy"},
 	}
