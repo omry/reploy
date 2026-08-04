@@ -90,6 +90,9 @@ func TestCurrentBuildMatchesInvalidatesEverySemanticBoundary(t *testing.T) {
 		{name: "startup verifier artifact", mutate: func(_ *CurrentBuild, input *CurrentBuildReuseInput) {
 			input.StartupVerifier.Artifact = rendererDigest("a")
 		}},
+		{name: "container local account", mutate: func(_ *CurrentBuild, input *CurrentBuildReuseInput) {
+			input.DockerPlan.Sandbox = testApplicationSandboxPlanV1(2000, 2000)
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			current, input := currentBuildReuseFixture(t)

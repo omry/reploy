@@ -13,6 +13,8 @@ var builtInControlOperations = map[string]bool{
 	"enable": true, "disable": true,
 }
 
+const DefaultRuntimeUser = "reploy"
+
 func Resolve(source Syntax) (Document, error) {
 	compatibility, err := ParseCompatibility(source.Blueprint.Compatibility.Platforms)
 	if err != nil {
@@ -31,6 +33,10 @@ func Resolve(source Syntax) (Document, error) {
 		return Document{}, err
 	}
 	allowConcurrent, err := resolveConcurrentRunPolicy(source.Environment.AllowConcurrent)
+	if err != nil {
+		return Document{}, err
+	}
+	runtimeUser, err := resolveRuntimeUser(source.Environment.Runtime.User)
 	if err != nil {
 		return Document{}, err
 	}
@@ -53,6 +59,7 @@ func Resolve(source Syntax) (Document, error) {
 			Applications:    map[string]Application{},
 			Components:      map[string]Component{},
 			AllowConcurrent: allowConcurrent,
+			Runtime:         EnvironmentRuntime{User: runtimeUser},
 			Terminal:        Terminal{ColorEnv: strings.TrimSpace(source.Environment.Terminal.ColorEnv)},
 			Install:         resolveInstallSyntax(source.Environment.Install, variables),
 			Mounts:          map[string]EnvironmentMount{},
@@ -78,6 +85,34 @@ func Resolve(source Syntax) (Document, error) {
 		return Document{}, err
 	}
 	return document, nil
+}
+
+func resolveRuntimeUser(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return DefaultRuntimeUser, nil
+	}
+	if err := ValidateRuntimeUserName(value); err != nil {
+		return "", fmt.Errorf("environment.runtime.user %w", err)
+	}
+	if value == "root" {
+		return "", fmt.Errorf("environment.runtime.user names the non-root local account and must not be root")
+	}
+	return value, nil
+}
+
+func ValidateRuntimeUserName(value string) error {
+	if value == "" || len(value) > 32 {
+		return fmt.Errorf("must be a nonempty portable Unix user name no longer than 32 bytes")
+	}
+	for index, character := range value {
+		if character >= 'a' && character <= 'z' || character == '_' && index == 0 ||
+			index > 0 && (character >= '0' && character <= '9' || character == '_' || character == '-') {
+			continue
+		}
+		return fmt.Errorf("must be a portable lowercase Unix user name")
+	}
+	return nil
 }
 
 func resolveConcurrentRunPolicy(value string) (ConcurrentRunPolicy, error) {
