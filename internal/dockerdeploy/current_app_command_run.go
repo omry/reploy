@@ -42,8 +42,7 @@ type currentAppCommandRunBackendV1 struct {
 	acquireLease  func(*deploy.OperationLock, string) (*deploy.QueueEntryLeaseV1, error)
 	await         func(context.Context, string, *deploy.OperationLock, deploy.LiveRunV1, bool, io.Writer) (*deploy.OperationLock, error)
 	runPublished  func(context.Context, PublishedRuntimeContainerInput, PublishedRuntimeContainerRunnerV1) error
-	prepareProbe  func(context.Context, providerstore.Store, blueprint.Platform) (PreparedProbeWorkspace, func() error, error)
-	execution     func(DockerExecutionPlan, ResolvedEnvironmentCommand, PreparedProbeWorkspace, *transientOutputMount, string, bool, bool) (TransientContainerExecutionV1, error)
+	execution     func(DockerExecutionPlan, ResolvedEnvironmentCommand, *transientOutputMount, string, bool, bool) (TransientContainerExecutionV1, error)
 	runAdmitted   func(context.Context, string, *deploy.OperationLock, string, TransientContainerExecutionV1, RunOptions) error
 }
 
@@ -71,7 +70,6 @@ func RunCurrentAppCommandV1(ctx context.Context, input CurrentAppCommandRunInput
 		},
 		await:        AwaitLiveRunAdmissionWithNoticeV1,
 		runPublished: RunPublishedRuntimeContainerV1,
-		prepareProbe: PrepareProbeWorkspace,
 		execution:    PlanTransientContainerExecutionV1,
 		runAdmitted:  RunAdmittedTransientContainerV1,
 	})
@@ -90,7 +88,7 @@ func runCurrentAppCommandV1(ctx context.Context, input CurrentAppCommandRunInput
 	if len(input.Arguments) == 0 {
 		return fmt.Errorf("run current app command requires command arguments")
 	}
-	if backend.acquire == nil || backend.newStore == nil || backend.readState == nil || backend.loadCurrent == nil || backend.planRuntime == nil || backend.matches == nil || backend.planCommand == nil || backend.prepareOutput == nil || backend.abortOutput == nil || backend.publishOutput == nil || backend.invocation == nil || backend.concurrency == nil || backend.newRunID == nil || backend.acquireLease == nil || backend.await == nil || backend.runPublished == nil || backend.prepareProbe == nil || backend.execution == nil || backend.runAdmitted == nil {
+	if backend.acquire == nil || backend.newStore == nil || backend.readState == nil || backend.loadCurrent == nil || backend.planRuntime == nil || backend.matches == nil || backend.planCommand == nil || backend.prepareOutput == nil || backend.abortOutput == nil || backend.publishOutput == nil || backend.invocation == nil || backend.concurrency == nil || backend.newRunID == nil || backend.acquireLease == nil || backend.await == nil || backend.runPublished == nil || backend.execution == nil || backend.runAdmitted == nil {
 		return fmt.Errorf("run current app command requires a complete backend")
 	}
 	dir, err := filepath.Abs(input.DeploymentDir)
@@ -211,7 +209,6 @@ func runCurrentAppCommandV1(ctx context.Context, input CurrentAppCommandRunInput
 		DeploymentDir: dir, DockerPlan: planned.Docker, Invocation: invocation,
 	}
 	var commandRunErr error
-	var helperCleanupErr error
 	callbackEntered := false
 	runErr := backend.runPublished(ctx, published, func(runCtx context.Context, gated CurrentBuild) error {
 		callbackEntered = true
@@ -220,27 +217,22 @@ func runCurrentAppCommandV1(ctx context.Context, input CurrentAppCommandRunInput
 				"deployment generation changed while live run %q was waiting; retry the command", runID,
 			))
 		}
-		workspace, cleanup, err := backend.prepareProbe(runCtx, store, gated.Lock.Platform)
+		interactive := runOptions.Stdin != nil
+		execution, err := backend.execution(planned.Docker, command, output.mount, runID, interactive, interactive && input.TTY)
 		if err != nil {
 			return removeAdmittedTransientBeforeCreateV1(operation, runID, err)
-		}
-		interactive := runOptions.Stdin != nil
-		execution, err := backend.execution(planned.Docker, command, workspace, output.mount, runID, interactive, interactive && input.TTY)
-		if err != nil {
-			return removeAdmittedTransientBeforeCreateV1(operation, runID, errors.Join(err, cleanup()))
 		}
 		options := runOptions
 		options.Context = runCtx
 		commandRunErr = backend.runAdmitted(runCtx, dir, operation, runID, execution, options)
-		helperCleanupErr = cleanup()
-		return errors.Join(commandRunErr, helperCleanupErr)
+		return commandRunErr
 	})
 	if runErr != nil {
 		if !callbackEntered {
 			runErr = removeAdmittedTransientBeforeCreateV1(operation, runID, runErr)
 		}
 		if commandRunErr != nil {
-			return abort(errors.Join(appCommandError(commandRunErr), helperCleanupErr))
+			return abort(appCommandError(commandRunErr))
 		}
 		return abort(runErr)
 	}

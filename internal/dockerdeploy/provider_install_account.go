@@ -114,6 +114,7 @@ func prepareProviderInstallAccountWithV1(
 	input.Install.SystemGroup = ""
 	input.Install.SystemUID = 0
 	input.Install.SystemGID = 0
+	input.Install.SystemSupplementaryGIDs = nil
 	if scope != InstallScopeSystem {
 		return input, nil
 	}
@@ -169,6 +170,7 @@ func providerInstallInputWithAccountV1(input providerInstallRunInputV1, account 
 	input.Install.SystemGroup = strings.TrimSpace(account.Group)
 	input.Install.SystemUID = owner.UID
 	input.Install.SystemGID = owner.GID
+	input.Install.SystemSupplementaryGIDs = append([]int(nil), owner.SupplementaryGIDs...)
 	return input
 }
 

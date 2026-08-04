@@ -10,10 +10,11 @@ import (
 )
 
 type resolvedInstallOwner struct {
-	Spec          string
-	UID           int
-	GID           int
-	ContainerUser string
+	Spec              string
+	UID               int
+	GID               int
+	SupplementaryGIDs []int
+	ContainerUser     string
 }
 
 const (
@@ -23,6 +24,7 @@ const (
 
 var installLookupUser = user.Lookup
 var installLookupGroup = user.LookupGroup
+var installLookupUserGroupIDs = func(value *user.User) ([]string, error) { return value.GroupIds() }
 var installRunCommandOutput = func(name string, args ...string) ([]byte, error) { return exec.Command(name, args...).CombinedOutput() }
 
 func resolveInstallOwner(values map[string]string) (resolvedInstallOwner, error) {
@@ -34,7 +36,49 @@ func resolveInstallOwner(values map[string]string) (resolvedInstallOwner, error)
 	if err != nil {
 		return resolvedInstallOwner{}, err
 	}
-	return resolvedInstallOwner{Spec: spec, UID: uid, GID: gid, ContainerUser: fmt.Sprintf("%d:%d", uid, gid)}, nil
+	groups, err := resolveInstallOwnerSupplementaryGIDs(spec, uid, gid)
+	if err != nil {
+		return resolvedInstallOwner{}, err
+	}
+	return resolvedInstallOwner{
+		Spec: spec, UID: uid, GID: gid, SupplementaryGIDs: groups,
+		ContainerUser: fmt.Sprintf("%d:%d", uid, gid),
+	}, nil
+}
+
+func resolveInstallOwnerSupplementaryGIDs(spec string, uid int, gid int) ([]int, error) {
+	userPart, _, _ := strings.Cut(spec, ":")
+	if _, numeric := parseNumericInstallID(userPart); numeric {
+		return []int{}, nil
+	}
+	lookedUp, err := installLookupUser(userPart)
+	if err != nil {
+		return nil, fmt.Errorf("resolve REPLOY_INSTALL_OWNER supplementary groups for user %q: %w", userPart, err)
+	}
+	values, err := installLookupUserGroupIDs(lookedUp)
+	if err != nil {
+		return nil, fmt.Errorf("resolve REPLOY_INSTALL_OWNER supplementary groups for user %q: %w", userPart, err)
+	}
+	groups := make([]int, 0, len(values))
+	for _, value := range values {
+		parsed, ok := parseNumericInstallID(value)
+		if !ok {
+			return nil, fmt.Errorf("resolved REPLOY_INSTALL_OWNER user has non-numeric supplementary GID %q: %s", value, spec)
+		}
+		groups = append(groups, parsed)
+	}
+	groups, err = normalizeSupplementaryGIDsV1(gid, groups)
+	if err != nil {
+		return nil, err
+	}
+	if uid != 0 {
+		for _, group := range groups {
+			if group == 0 {
+				return nil, fmt.Errorf("REPLOY_INSTALL_OWNER non-root user must not belong to the root group: %s", spec)
+			}
+		}
+	}
+	return groups, nil
 }
 
 func installOwnerOnMissingPolicy(values map[string]string) string {
