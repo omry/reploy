@@ -41,7 +41,20 @@ type Environment struct {
 }
 
 type EnvironmentRuntime struct {
-	User string
+	User    string
+	Network RuntimeNetwork
+}
+
+type NetworkAccess string
+
+const (
+	NetworkAccessDeny  NetworkAccess = "deny"
+	NetworkAccessAllow NetworkAccess = "allow"
+)
+
+type RuntimeNetwork struct {
+	Public NetworkAccess
+	Local  NetworkAccess
 }
 
 type EnvironmentPackages struct {

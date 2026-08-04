@@ -80,6 +80,7 @@ func TestPrepareProviderGraphValidationInspectsBaseOnlyGraph(t *testing.T) {
 	}
 	policy := deploy.RuntimePolicyV1{
 		Schema: deploy.RuntimePolicySchemaV1, StartupVerifier: deploy.ApplicationStartupVerifierContractV1(),
+		Network:        blueprint.RuntimeNetwork{Public: blueprint.NetworkAccessDeny, Local: blueprint.NetworkAccessDeny},
 		ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{},
 	}
 	result, err := prepareProviderGraphValidation(
