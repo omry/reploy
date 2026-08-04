@@ -58,7 +58,7 @@ func providerInstallLifecycleExecutorV1(locked lockedProviderInstallV1) Lifecycl
 		},
 		locked.Plan.Docker,
 		locked.DestinationStore,
-		locked.SourceBuild.Lock.Platform,
+		locked.InstallBuild.Platform,
 		locked.Input.RunOptions.Stdout,
 		locked.Input.RunOptions.Stderr,
 	)

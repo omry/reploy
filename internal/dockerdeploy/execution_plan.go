@@ -79,6 +79,7 @@ type MountExecutionPlan struct {
 type RuntimeUserPlan struct {
 	User              string
 	Group             string
+	LocalUser         string
 	UID               int
 	GID               int
 	SupplementaryGIDs []int
@@ -325,10 +326,11 @@ func planRuntimeUser(document blueprint.Document, context DockerPlanContext) (Ru
 			User: strconv.Itoa(context.UID), Group: strconv.Itoa(context.GID), UID: context.UID, GID: context.GID,
 			SupplementaryGIDs: supplementaryGIDs,
 			DockerUser:        strconv.Itoa(context.UID) + ":" + strconv.Itoa(context.GID),
+			LocalUser:         runtimeLocalUserNameV1(document.Environment.Runtime.User, context.UID),
 		}
 		if context.Phase == blueprint.PhaseInstalled {
 			plan.Warnings = append(plan.Warnings,
-				fmt.Sprintf("current-user install overrides the image user with UID/GID %d:%d", context.UID, context.GID),
+				fmt.Sprintf("current-user install overrides the image user with local account %q (UID/GID %d:%d)", plan.LocalUser, context.UID, context.GID),
 				"the image must tolerate an arbitrary non-root identity and may write persistently only to declared writable paths",
 			)
 			if document.Environment.Install.System.Account.User != "" || document.Environment.Install.System.Account.Group != "" {
@@ -348,7 +350,18 @@ func planRuntimeUser(document blueprint.Document, context DockerPlanContext) (Ru
 			User: context.SystemUser, Group: context.SystemGroup, UID: context.UID, GID: context.GID,
 			SupplementaryGIDs: supplementaryGIDs,
 			DockerUser:        strconv.Itoa(context.UID) + ":" + strconv.Itoa(context.GID),
+			LocalUser:         runtimeLocalUserNameV1(document.Environment.Runtime.User, context.UID),
 		}, nil
 	}
 	return RuntimeUserPlan{}, fmt.Errorf("cannot resolve Docker runtime user")
+}
+
+func runtimeLocalUserNameV1(configured string, uid int) string {
+	if uid == 0 {
+		return "root"
+	}
+	if configured == "" {
+		return blueprint.DefaultRuntimeUser
+	}
+	return configured
 }
