@@ -71,7 +71,7 @@ printf 'private-mask-pass\n'`, expectedTokenDigest)
 	plan := DockerExecutionPlan{
 		EnvironmentID: "private-mask", DeploymentDir: deploymentDir, Phase: blueprint.PhaseStaged,
 		Image: image, ContainerName: container, NetworkName: unique,
-		RuntimeUser:        RuntimeUserPlan{DockerUser: "12345:23456"},
+		Sandbox:            newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 12345, GID: 23456, DockerUser: "12345:23456"}),
 		PrivateEnvironment: true,
 		Workload: &WorkloadExecutionPlan{Argv: []string{
 			"/bin/sh", "-eu", "-c",
@@ -180,7 +180,7 @@ func TestPrivateRuntimeMasksDockerIntegrationProtectTransientContainer(t *testin
 	unique := fmt.Sprintf("reploy-transient-private-mask-%d-%d", os.Getpid(), time.Now().UnixNano())
 	plan := DockerExecutionPlan{
 		DeploymentDir: deploymentDir, Image: image, ContainerName: unique,
-		RuntimeUser: RuntimeUserPlan{UID: 12345, GID: 23456, DockerUser: "12345:23456"},
+		Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 12345, GID: 23456, DockerUser: "12345:23456"}),
 		Mounts: []MountExecutionPlan{{
 			Name: "deployment", Mode: blueprint.MountBind, Source: deploymentDir,
 			SourceKind: deploy.RuntimeMountSourceDirectory, Target: "/deployment", ReadOnly: true,

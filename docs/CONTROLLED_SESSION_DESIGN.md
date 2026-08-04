@@ -67,9 +67,8 @@ Reploy does not configure a second container-local username. Staged and
 installed user-scope containers run as the invoking host user's numeric UID,
 GID, and supplementary GIDs. Installed system-scope containers run as the host
 account explicitly selected by `environment.install.system.account`, using
-that account's numeric identity inside the container. This design renames the
-existing `environment.install.system.run_as` field because the setting selects
-the installation's host account; it is not a second container-user setting.
+that account's numeric identity inside the container. The setting selects the
+installation's host account; it is not a second container-user setting.
 
 If the effective runtime user is root, Reploy emits a precise warning that the
 application can interfere with more of its container. Root does not implicitly

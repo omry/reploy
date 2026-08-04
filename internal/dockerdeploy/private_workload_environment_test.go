@@ -210,7 +210,7 @@ func TestRenderDockerInputsUsesSecretFreePrivateLauncher(t *testing.T) {
 	plan := DockerExecutionPlan{
 		EnvironmentID: "demo", DeploymentDir: deploymentDir, Phase: blueprint.PhaseStaged,
 		Image: "sha256:image", ContainerName: "demo", NetworkName: "demo",
-		RuntimeUser:        RuntimeUserPlan{DockerUser: "1000:1000"},
+		Sandbox:            newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 1000, GID: 1000, DockerUser: "1000:1000"}),
 		PrivateEnvironment: true,
 		Workload:           &WorkloadExecutionPlan{Argv: []string{"/opt/demo", "serve"}},
 		Mounts: []MountExecutionPlan{{
