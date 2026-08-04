@@ -32,8 +32,10 @@ integration testing against a real Docker daemon.
 
 Fix operation-local home initialization for non-root transient containers.
 The solution must apply consistently to shells, app commands, and lifecycle
-actions; preserve the read-only image filesystem; retain anonymous-volume
-cleanup; and avoid host-owned persistent state.
+actions; preserve the read-only image filesystem; retain operation-local home
+isolation; and avoid host-owned persistent state. The original anonymous-volume
+implementation was subsequently simplified to a bounded UID/GID-owned tmpfs,
+which also removed the trusted root bootstrap helper.
 
 **Primary finding:** `Transient shell home is not writable by the runtime user`.
 
@@ -42,7 +44,7 @@ cleanup; and avoid host-owned persistent state.
 - a transient container running as a numeric non-root UID/GID can create,
   modify, and remove files under `$HOME` and `$TMPDIR`;
 - its image filesystem remains read-only;
-- its anonymous home volume is removed after normal exit and forced stop; and
+- its bounded tmpfs home is removed after normal exit and forced stop; and
 - shell, app-command, and lifecycle integration tests exercise the shared path.
 
 ### Slice 2: Stop app commands from refreshing the environment
