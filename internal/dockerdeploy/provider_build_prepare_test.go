@@ -364,6 +364,15 @@ func providerBuildPreparationTestBackend(
 ) providerBuildPreparationBackend {
 	t.Helper()
 	return providerBuildPreparationBackend{
+		loadVerifier: func(platform blueprint.Platform) (deploy.ApplicationStartupVerifierV1, error) {
+			if platform != loaded.Request.Platform {
+				t.Fatal("startup verifier loaded for different platform")
+			}
+			verifier := deploy.ApplicationStartupVerifierContractV1()
+			verifier.Artifact = rendererDigest("f")
+			verifier.Size = "123"
+			return verifier, nil
+		},
 		recover: func(_ context.Context, _ *deploy.OperationLock, _ providerstore.Store, generation *deploy.EnvironmentGenerationState, _ string, _ string, validateProfile providers.RequirementProfileOwnerValidator, validateBundle providers.ResolvedBundleOwnerValidator) (bool, error) {
 			*order = append(*order, "recover")
 			if generation == nil || validateProfile == nil || validateBundle == nil {

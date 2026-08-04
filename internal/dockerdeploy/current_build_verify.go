@@ -296,12 +296,10 @@ func verifyLockedImagesV1(
 		}
 		source = layer
 		inspectedImages++
-		if nodeID == lastNonBaseNodeID(order) && !reflect.DeepEqual(record, storedValidation) {
-			return 0, fmt.Errorf("current provider validation evidence does not match the recorded final-prefix evidence")
-		}
+		_ = record
 	}
 	if len(lock.Nodes) == 0 {
-		record, err := ValidateImage(ctx, FullImageValidationInput{
+		_, err := ValidateImage(ctx, FullImageValidationInput{
 			Image:         base,
 			Profiles:      []providers.RequirementProfile{},
 			Outputs:       append([]providers.RealizedOutput{}, baseOutputs...),
@@ -310,10 +308,39 @@ func verifyLockedImagesV1(
 		if err != nil {
 			return 0, fmt.Errorf("verify current base image contents: %w", err)
 		}
-		if !reflect.DeepEqual(record, storedValidation) {
-			return 0, fmt.Errorf("current base validation evidence does not match the recorded final-prefix evidence")
-		}
 	}
+
+	runtimeImage, err := inspect(
+		ctx,
+		BuiltImageCandidate{ImageID: lock.RuntimeLayer.Result.ConfigDigest},
+		lock.Platform,
+	)
+	if err != nil {
+		return 0, currentBuildImageInspectionError(
+			"cached application runtime layer image",
+			lock.RuntimeLayer.Result.ConfigDigest,
+			err,
+		)
+	}
+	if runtimeImage.Image != lock.RuntimeLayer.Result {
+		return 0, fmt.Errorf("cached application runtime layer image no longer matches its locked identity")
+	}
+	if err := ValidateInspectedApplicationRuntimeLayerCandidate(ApplicationRuntimeLayerBuildRequest{
+		Source: source, Verifier: lock.RuntimeLayer.Verifier, Platform: lock.Platform,
+	}, runtimeImage); err != nil {
+		return 0, fmt.Errorf("verify cached application runtime layer: %w", err)
+	}
+	runtimeRecord, err := ValidateImage(ctx, FullImageValidationInput{
+		Image: runtimeImage, Profiles: append([]providers.RequirementProfile{}, profiles...),
+		Outputs: append([]providers.RealizedOutput{}, outputs...), RuntimePolicy: lock.RuntimePolicy,
+	}, registry.ValidateRequirementProfileV1, run)
+	if err != nil {
+		return 0, fmt.Errorf("verify application runtime image contents: %w", err)
+	}
+	if !reflect.DeepEqual(runtimeRecord, storedValidation) {
+		return 0, fmt.Errorf("current application runtime validation evidence does not match the recorded final-prefix evidence")
+	}
+	inspectedImages++
 
 	final, err := inspect(
 		ctx,
@@ -328,7 +355,7 @@ func verifyLockedImagesV1(
 		)
 	}
 	if err := validateInspectedFinalizedImageCandidate(final, FinalizationBuildRequest{
-		Source:              source,
+		Source:              runtimeImage,
 		Validation:          storedValidation,
 		ValidationReference: lock.ValidationRecord,
 		Platform:            lock.Platform,
@@ -355,13 +382,4 @@ func currentBuildImageInspectionError(
 		}
 	}
 	return fmt.Errorf("verify %s: %w", subject, err)
-}
-
-func lastNonBaseNodeID(order []providers.NodeID) providers.NodeID {
-	for index := len(order) - 1; index >= 0; index-- {
-		if order[index] != "base" {
-			return order[index]
-		}
-	}
-	return ""
 }
