@@ -30,7 +30,10 @@ func validBuildLock(t *testing.T) BuildLockV1 {
 	verifier := ApplicationStartupVerifierContractV1()
 	verifier.Artifact = buildLockTestDigest("6")
 	verifier.Size = "123"
-	transaction, err := ApplicationRuntimeLayerTransactionDigestV1(verifier, upstream, platform)
+	account := ApplicationLocalAccountV1{
+		Schema: ApplicationLocalAccountSchemaV1, Name: "reploy", UID: "1000", GID: "1000", Home: "/mnt/reploy-home",
+	}
+	transaction, err := ApplicationRuntimeLayerTransactionDigestV1(verifier, account, upstream, platform)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +46,7 @@ func validBuildLock(t *testing.T) BuildLockV1 {
 		Graph: ProviderGraphLockV1{Nodes: []providers.NodeID{"base"}, Edges: []providers.ProviderEdgeV1{}},
 		Nodes: []NodeLockV1{}, Catalog: []providers.RealizedOutput{}, RuntimePolicy: validRuntimePolicy(),
 		RuntimeLayer: ApplicationRuntimeLayerV1{
-			Schema: ApplicationRuntimeLayerSchemaV1, Verifier: verifier, TransactionDigest: transaction,
+			Schema: ApplicationRuntimeLayerSchemaV1, Verifier: verifier, Account: account, TransactionDigest: transaction,
 			Upstream: upstream, Result: result,
 		},
 		ValidationRecord: providerstore.StoreObjectRef{Kind: providerstore.ValidationRecordKind, Digest: buildLockTestDigest("4")},
@@ -98,7 +101,7 @@ func addValidAPTNode(t *testing.T, lock *BuildLockV1) {
 		Outputs:              []providers.RealizedOutput{},
 	}}
 	lock.RuntimeLayer.Upstream = result
-	lock.RuntimeLayer.TransactionDigest, err = ApplicationRuntimeLayerTransactionDigestV1(lock.RuntimeLayer.Verifier, result, lock.Platform)
+	lock.RuntimeLayer.TransactionDigest, err = ApplicationRuntimeLayerTransactionDigestV1(lock.RuntimeLayer.Verifier, lock.RuntimeLayer.Account, result, lock.Platform)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,6 +200,8 @@ func TestBuildLockV1RejectsInvalidNestedIdentity(t *testing.T) {
 		{name: "nil catalog", mutate: func(value *BuildLockV1) { value.Catalog = nil }, want: "catalog"},
 		{name: "runtime policy", mutate: func(value *BuildLockV1) { value.RuntimePolicy.Schema = "bad" }, want: "runtime policy"},
 		{name: "runtime verifier contract", mutate: func(value *BuildLockV1) { value.RuntimeLayer.Verifier.Path = "/bin/true" }, want: "startup verifier"},
+		{name: "runtime local account", mutate: func(value *BuildLockV1) { value.RuntimeLayer.Account.Name = "root" }, want: "local non-root account"},
+		{name: "runtime local root group", mutate: func(value *BuildLockV1) { value.RuntimeLayer.Account.GID = "0" }, want: "must not use GID 0"},
 		{name: "runtime layer transaction", mutate: func(value *BuildLockV1) { value.RuntimeLayer.TransactionDigest = buildLockTestDigest("f") }, want: "transaction digest"},
 		{name: "runtime layer upstream", mutate: func(value *BuildLockV1) { value.RuntimeLayer.Upstream.ConfigDigest = buildLockTestDigest("f") }, want: "final graph prefix"},
 		{name: "validation kind", mutate: func(value *BuildLockV1) { value.ValidationRecord.Kind = providerstore.BlobKind }, want: "validation-record"},

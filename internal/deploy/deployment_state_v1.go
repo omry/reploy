@@ -303,9 +303,8 @@ func validateInstalledDestinationGeneration(source EnvironmentGenerationState, d
 	if destination.Reference == source.Reference {
 		return fmt.Errorf("installed destination generation requires a new destination-local reference")
 	}
-	destination.Reference = source.Reference
-	if !reflect.DeepEqual(destination, source) {
-		return fmt.Errorf("installed destination generation must match the source build except for its reference")
+	if destination.Platform != source.Platform || destination.RuntimePolicyDigest != source.RuntimePolicyDigest {
+		return fmt.Errorf("installed destination generation must preserve the source platform and runtime policy")
 	}
 	return nil
 }
