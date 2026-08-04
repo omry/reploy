@@ -14,7 +14,6 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
-	"github.com/omry/reploy/internal/providerstore"
 )
 
 func TestRunCurrentWorkloadLifecycleV1GatesEveryCreatedContainer(t *testing.T) {
@@ -42,10 +41,10 @@ func TestRunCurrentWorkloadLifecycleV1GatesEveryCreatedContainer(t *testing.T) {
 	}
 	want := []string{
 		"plan start",
-		"gate command/check", "prepare probe", "transient check", "cleanup", "temporary", "run transient", "cleanup probe",
+		"gate command/check", "transient check", "cleanup", "temporary", "run transient",
 		"gate workload", "command up", "run compose-up", "service check",
 		"readiness", "service check",
-		"gate command/check", "prepare probe", "transient check", "cleanup", "temporary", "run transient", "cleanup probe",
+		"gate command/check", "transient check", "cleanup", "temporary", "run transient",
 	}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("lifecycle order = %v, want %v", order, want)
@@ -451,14 +450,7 @@ func currentWorkloadLifecycleTestBackend(t *testing.T, lifecycle LifecyclePlan, 
 			*order = append(*order, "command "+action)
 			return CommandSpec{Name: "compose-" + action}, nil
 		},
-		prepareProbe: func(context.Context, providerstore.Store, blueprint.Platform) (PreparedProbeWorkspace, func() error, error) {
-			*order = append(*order, "prepare probe")
-			return PreparedProbeWorkspace{}, func() error {
-				*order = append(*order, "cleanup probe")
-				return nil
-			}, nil
-		},
-		transient: func(_ DockerExecutionPlan, command ResolvedEnvironmentCommand, _ PreparedProbeWorkspace, _ *transientOutputMount, _ bool, _ bool) (CommandSpec, error) {
+		transient: func(_ DockerExecutionPlan, command ResolvedEnvironmentCommand, _ *transientOutputMount, _ bool, _ bool) (CommandSpec, error) {
 			*order = append(*order, "transient "+command.Name)
 			return CommandSpec{Name: "transient"}, nil
 		},

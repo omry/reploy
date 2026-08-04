@@ -25,7 +25,7 @@ func TestProviderInstallEntryMapsPublicOptionsWithoutAccountState(t *testing.T) 
 	_, err := runProviderInstallEntryV1(t.Context(), want, providerInstallEntryBackendV1{
 		run: func(_ context.Context, got providerInstallRunInputV1, backend providerInstallRunBackend) (deploy.StateV1, error) {
 			called = true
-			if got.SourceDeploymentDir != want.SourceDeploymentDir || got.DestinationDeploymentDir != want.DestinationDeploymentDir || got.Runtime != want.Runtime || got.ControlMode != want.ControlMode {
+			if got.SourceDeploymentDir != want.SourceDeploymentDir || got.DestinationDeploymentDir != want.DestinationDeploymentDir || !reflect.DeepEqual(got.Runtime, want.Runtime) || got.ControlMode != want.ControlMode {
 				t.Fatalf("provider install input = %#v", got)
 			}
 			if got.Install.Scope != want.Scope || got.Install.Service != want.Service || !reflect.DeepEqual(got.Install.PortOverrides, want.PortOverrides) || !reflect.DeepEqual(got.Install.Replace, want.Replace) || got.Install.Clean != want.Clean || got.Install.Start != want.Start {
