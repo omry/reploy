@@ -8,6 +8,12 @@ import (
 	"github.com/omry/reploy/internal/providers"
 )
 
+func testApplicationLocalAccountV1() deploy.ApplicationLocalAccountV1 {
+	return deploy.ApplicationLocalAccountV1{
+		Schema: deploy.ApplicationLocalAccountSchemaV1, Name: "reploy", UID: "1000", GID: "1000", Home: environmentTemporaryHome,
+	}
+}
+
 func testApplicationRuntimeLayerV1(
 	t *testing.T,
 	platform blueprint.Platform,
@@ -18,12 +24,13 @@ func testApplicationRuntimeLayerV1(
 	verifier := deploy.ApplicationStartupVerifierContractV1()
 	verifier.Artifact = rendererDigest("f")
 	verifier.Size = "123"
-	transaction, err := deploy.ApplicationRuntimeLayerTransactionDigestV1(verifier, upstream, platform)
+	account := testApplicationLocalAccountV1()
+	transaction, err := deploy.ApplicationRuntimeLayerTransactionDigestV1(verifier, account, upstream, platform)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return deploy.ApplicationRuntimeLayerV1{
-		Schema: deploy.ApplicationRuntimeLayerSchemaV1, Verifier: verifier,
+		Schema: deploy.ApplicationRuntimeLayerSchemaV1, Verifier: verifier, Account: account,
 		TransactionDigest: transaction, Upstream: upstream, Result: result,
 	}
 }

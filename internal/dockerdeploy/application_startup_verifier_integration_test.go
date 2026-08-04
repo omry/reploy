@@ -36,7 +36,7 @@ func TestApplicationStartupVerifierDockerIntegration(t *testing.T) {
 			UID: 12345, GID: 23456, DockerUser: "12345:23456",
 		}),
 		Workload: &WorkloadExecutionPlan{Argv: []string{
-			"/bin/sh", "-eu", "-c", `test "$1" = 'literal $(not-shell)'; printf 'persistent-verifier-pass\n'`, "reploy-test", "literal $(not-shell)",
+			"/bin/sh", "-eu", "-c", `test "$(id -un)" = reploy; test "$1" = 'literal $(not-shell)'; printf 'persistent-verifier-pass\n'`, "reploy-test", "literal $(not-shell)",
 		}},
 	}
 
@@ -64,7 +64,7 @@ func TestApplicationStartupVerifierDockerIntegration(t *testing.T) {
 		transientPlan := plan
 		transientPlan.ContainerName = uniqueDockerIntegrationName("reploy-verifier-transient")
 		command := ResolvedEnvironmentCommand{Argv: []string{
-			"/bin/sh", "-eu", "-c", `test "$1" = 'literal $(not-shell)'; printf 'transient-verifier-pass\n'`, "reploy-test", "literal $(not-shell)",
+			"/bin/sh", "-eu", "-c", `test "$(id -un)" = reploy; test "$1" = 'literal $(not-shell)'; printf 'transient-verifier-pass\n'`, "reploy-test", "literal $(not-shell)",
 		}}
 		spec, err := TransientCommandSpec(transientPlan, command, nil, false, false)
 		if err != nil {
@@ -193,8 +193,12 @@ func buildApplicationStartupVerifierIntegrationImage(t *testing.T, ctx context.C
 	if err != nil {
 		t.Fatal(err)
 	}
+	account := deploy.ApplicationLocalAccountV1{
+		Schema: deploy.ApplicationLocalAccountSchemaV1, Name: "reploy",
+		UID: "12345", GID: "23456", Home: environmentTemporaryHome,
+	}
 	built, err := BuildApplicationRuntimeLayerCandidate(store, ApplicationRuntimeLayerBuildRequest{
-		Source: source, Verifier: verifier, Platform: platform,
+		Source: source, Verifier: verifier, Account: account, Platform: platform,
 	}, RunOptions{Context: ctx})
 	if err != nil {
 		t.Fatal(err)
@@ -205,7 +209,7 @@ func buildApplicationStartupVerifierIntegrationImage(t *testing.T, ctx context.C
 		}
 	})
 	if _, err := InspectApplicationRuntimeLayerCandidate(ctx, built, ApplicationRuntimeLayerBuildRequest{
-		Source: source, Verifier: verifier, Platform: platform,
+		Source: source, Verifier: verifier, Account: account, Platform: platform,
 	}); err != nil {
 		t.Fatal(err)
 	}
