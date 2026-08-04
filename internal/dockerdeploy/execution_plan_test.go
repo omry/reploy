@@ -25,8 +25,8 @@ func TestPlanDockerExecutionBaseIdentity(t *testing.T) {
 	if plan.EnvironmentID != "demo" || plan.Image != "reploy/demo:staging" || plan.Phase != blueprint.PhaseStaged {
 		t.Fatalf("plan = %#v", plan)
 	}
-	if plan.Scope != nil || plan.RuntimeUser.UID != 501 {
-		t.Fatalf("scope/user = %#v / %#v", plan.Scope, plan.RuntimeUser)
+	if plan.Scope != nil || plan.Sandbox.RuntimeUser.UID != 501 {
+		t.Fatalf("scope/user = %#v / %#v", plan.Scope, plan.Sandbox.RuntimeUser)
 	}
 	stagingHash, err := pathIdentityHash(stagingDir)
 	if err != nil {
@@ -132,7 +132,7 @@ func TestNormalizeProbeHostUsesLoopbackForWildcards(t *testing.T) {
 
 func TestPlanRuntimeUserScopePolicy(t *testing.T) {
 	scope := blueprint.InstallScopeUser
-	document := blueprint.Document{Environment: blueprint.Environment{Install: blueprint.Install{System: blueprint.SystemInstall{RunAs: blueprint.RunAs{User: "service", Group: "service"}}}}}
+	document := blueprint.Document{Environment: blueprint.Environment{Install: blueprint.Install{System: blueprint.SystemInstall{Account: blueprint.SystemAccount{User: "service", Group: "service"}}}}}
 	plan, err := planRuntimeUser(document, DockerPlanContext{Phase: blueprint.PhaseInstalled, Scope: &scope, Host: blueprint.HostMacOS, UID: 501, GID: 20})
 	if err != nil {
 		t.Fatal(err)

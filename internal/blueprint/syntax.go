@@ -167,10 +167,10 @@ type InstallTargetSyntax struct {
 }
 
 type SystemInstallSyntax struct {
-	RunAs RunAsSyntax `yaml:"run_as"`
+	Account SystemAccountSyntax `yaml:"account"`
 }
 
-type RunAsSyntax struct {
+type SystemAccountSyntax struct {
 	User      string `yaml:"user"`
 	Group     string `yaml:"group"`
 	OnMissing string `yaml:"on_missing"`

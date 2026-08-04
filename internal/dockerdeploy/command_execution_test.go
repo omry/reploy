@@ -84,7 +84,7 @@ func TestTransientAndShellCommandsUseDockerExecArgv(t *testing.T) {
 	workspace := testPreparedProbeWorkspace(t, platform, probeDir)
 	mountDir := t.TempDir()
 	outputDir := t.TempDir()
-	plan := DockerExecutionPlan{DeploymentDir: t.TempDir(), Image: "reploy/demo:staging", ContainerName: "demo", RuntimeUser: RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"}, Mounts: []MountExecutionPlan{{Mode: blueprint.MountManagedBind, Source: mountDir, Target: "/conf", ReadOnly: true}}}
+	plan := DockerExecutionPlan{DeploymentDir: t.TempDir(), Image: "reploy/demo:staging", ContainerName: "demo", Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"}), Mounts: []MountExecutionPlan{{Mode: blueprint.MountManagedBind, Source: mountDir, Target: "/conf", ReadOnly: true}}}
 	output := &transientOutputMount{HostDirectory: outputDir, Variable: runtimeOutputFileVariable, ContainerPath: runtimeOutputRoot + "/output"}
 	spec, err := TransientCommandSpec(plan, ResolvedEnvironmentCommand{Argv: []string{"/opt/demo", ";rm", "$(touch pwned)"}}, workspace, output, true, false)
 	if err != nil {
@@ -100,7 +100,7 @@ func TestTransientAndShellCommandsUseDockerExecArgv(t *testing.T) {
 	if !containsAdjacent(spec.Args, "--pull", "never") {
 		t.Fatalf("transient command permits image pulls: %#v", spec.Args)
 	}
-	if containsAdjacent(spec.Args, "--user", plan.RuntimeUser.DockerUser) {
+	if containsAdjacent(spec.Args, "--user", plan.Sandbox.RuntimeUser.DockerUser) {
 		t.Fatalf("transient container starts as the runtime user before its anonymous home is initialized: %#v", spec.Args)
 	}
 	if !containsInOrder(spec.Args, []string{"--user", "0:0"}) ||
@@ -140,7 +140,7 @@ func TestTransientCommandSpecQuotesCommaContainingMountFields(t *testing.T) {
 	workspace := testPreparedProbeWorkspace(t, platform, probeDir)
 	plan := DockerExecutionPlan{
 		DeploymentDir: t.TempDir(), Image: "reploy/demo:staging", ContainerName: "demo",
-		RuntimeUser: RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"},
+		Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"}),
 		Mounts: []MountExecutionPlan{{
 			Mode: blueprint.MountManagedBind, Source: mountDir,
 			Target: "/conf,preview", ReadOnly: true,
@@ -179,7 +179,7 @@ func TestTransientCommandSpecMasksDeploymentPrivatePaths(t *testing.T) {
 	workspace := testPreparedProbeWorkspace(t, platform, t.TempDir())
 	plan := DockerExecutionPlan{
 		DeploymentDir: deploymentDir, Image: "reploy/demo:staging", ContainerName: "demo",
-		RuntimeUser: RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"},
+		Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"}),
 		Mounts: []MountExecutionPlan{{
 			Name: "deployment", Mode: blueprint.MountBind, Source: deploymentDir,
 			SourceKind: deploy.RuntimeMountSourceDirectory, Target: "/deployment",
@@ -213,8 +213,8 @@ func TestPlanTransientContainerExecutionV1SeparatesCreateStartAndCleanup(t *test
 	workspace := testPreparedProbeWorkspace(t, platform, t.TempDir())
 	plan := DockerExecutionPlan{
 		DeploymentDir: t.TempDir(), Image: "reploy/demo:staging", ContainerName: "demo-staging-abcd",
-		RuntimeUser: RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"},
-		Mounts:      []MountExecutionPlan{{Mode: blueprint.MountManagedBind, Source: t.TempDir(), Target: "/conf", ReadOnly: true}},
+		Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"}),
+		Mounts:  []MountExecutionPlan{{Mode: blueprint.MountManagedBind, Source: t.TempDir(), Target: "/conf", ReadOnly: true}},
 	}
 	output := &transientOutputMount{
 		HostDirectory: t.TempDir(), Variable: runtimeOutputFileVariable,

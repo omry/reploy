@@ -44,8 +44,7 @@ type DockerExecutionPlan struct {
 	PrivateEnvironment bool
 	Workload           *WorkloadExecutionPlan
 	Mounts             []MountExecutionPlan
-	RuntimeUser        RuntimeUserPlan
-	TemporaryHome      string
+	Sandbox            ApplicationSandboxPlanV1
 }
 
 const environmentTemporaryHome = "/mnt/reploy-home"
@@ -123,7 +122,6 @@ func PlanDockerExecution(document blueprint.Document, context DockerPlanContext)
 	plan := DockerExecutionPlan{
 		EnvironmentID: document.Environment.ID, DeploymentDir: identityPath, Phase: context.Phase, Scope: context.Scope,
 		Image: context.GeneratedImage, ContainerName: containerName, NetworkName: containerName,
-		TemporaryHome: environmentTemporaryHome,
 	}
 	if document.Environment.Workload != nil {
 		plan.Workload = &WorkloadExecutionPlan{Command: document.Environment.Workload.Command, Endpoints: map[string]EndpointExecutionPlan{}}
@@ -138,8 +136,12 @@ func PlanDockerExecution(document blueprint.Document, context DockerPlanContext)
 	if err := planDockerEndpoints(document, context, &plan); err != nil {
 		return DockerExecutionPlan{}, err
 	}
-	plan.RuntimeUser, err = planRuntimeUser(document, context)
+	runtimeUser, err := planRuntimeUser(document, context)
 	if err != nil {
+		return DockerExecutionPlan{}, err
+	}
+	plan.Sandbox = newApplicationSandboxPlanV1(runtimeUser)
+	if err := ValidateApplicationSandboxPlanV1(plan.Sandbox); err != nil {
 		return DockerExecutionPlan{}, err
 	}
 	return plan, nil
@@ -322,8 +324,8 @@ func planRuntimeUser(document blueprint.Document, context DockerPlanContext) (Ru
 				fmt.Sprintf("current-user install overrides the image user with UID/GID %d:%d", context.UID, context.GID),
 				"the image must tolerate an arbitrary non-root identity and may write persistently only to declared writable paths",
 			)
-			if document.Environment.Install.System.RunAs.User != "" || document.Environment.Install.System.RunAs.Group != "" {
-				plan.Warnings = append(plan.Warnings, "environment.install.system.run_as does not apply to current-user scope")
+			if document.Environment.Install.System.Account.User != "" || document.Environment.Install.System.Account.Group != "" {
+				plan.Warnings = append(plan.Warnings, "environment.install.system.account does not apply to current-user scope")
 			}
 		}
 		return plan, nil
