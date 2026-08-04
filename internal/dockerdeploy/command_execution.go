@@ -213,17 +213,14 @@ func transientContainerCommandSpecV1(operation string, container string, plan Do
 	if strings.TrimSpace(container) == "" {
 		return CommandSpec{}, fmt.Errorf("transient container name is required")
 	}
+	if err := ValidateApplicationSandboxPlanV1(plan.Sandbox); err != nil {
+		return CommandSpec{}, fmt.Errorf("prepare transient application sandbox: %w", err)
+	}
 	if err := validatePreparedProbeWorkspaceShape(workspace); err != nil {
 		return CommandSpec{}, fmt.Errorf("transient helper: %w", err)
 	}
-	if plan.RuntimeUser.UID < 0 || plan.RuntimeUser.GID < 0 {
-		return CommandSpec{}, fmt.Errorf("transient runtime user requires non-negative UID and GID")
-	}
-	runtimeUID := strconv.Itoa(plan.RuntimeUser.UID)
-	runtimeGID := strconv.Itoa(plan.RuntimeUser.GID)
-	if plan.RuntimeUser.DockerUser != runtimeUID+":"+runtimeGID {
-		return CommandSpec{}, fmt.Errorf("transient runtime user does not match its numeric UID and GID")
-	}
+	runtimeUID := strconv.Itoa(plan.Sandbox.RuntimeUser.UID)
+	runtimeGID := strconv.Itoa(plan.Sandbox.RuntimeUser.GID)
 	home := temporaryHomeForPlan(plan)
 	if home != probe.TransientHome {
 		return CommandSpec{}, fmt.Errorf("transient home must be %s", probe.TransientHome)
@@ -241,10 +238,15 @@ func transientContainerCommandSpecV1(operation string, container string, plan Do
 	args := []string{
 		operation, "--pull", "never", "--rm", "--name", container,
 		"--user", "0:0",
-		"--read-only", "--mount", homeMount,
-		"--mount", helperMount,
-		"--env", "HOME=" + home, "--env", "TMPDIR=" + home,
 	}
+	if plan.Sandbox.ReadOnlyRoot {
+		args = append(args, "--read-only")
+	}
+	args = append(args,
+		"--mount", homeMount,
+		"--mount", helperMount,
+		"--env", "HOME="+home, "--env", "TMPDIR="+home,
+	)
 	if interactive {
 		args = append(args, "--interactive")
 	}

@@ -94,7 +94,7 @@ func TestPlanProviderInstallationV1UsesLockedBlueprintAndDestinationReference(t 
 	if !reflect.DeepEqual(plan.Installation, wantInstallation) {
 		t.Fatalf("installation = %#v, want %#v", plan.Installation, wantInstallation)
 	}
-	if plan.Backend != installBackendLinuxSystemd || plan.Docker.Image != references.Generation || plan.Docker.RuntimeUser.DockerUser != "991:992" {
+	if plan.Backend != installBackendLinuxSystemd || plan.Docker.Image != references.Generation || plan.Docker.Sandbox.RuntimeUser.DockerUser != "991:992" {
 		t.Fatalf("provider installation plan = %#v", plan)
 	}
 	if !reflect.DeepEqual(plan.Docker.Workload.Argv, []string{"/opt/demo", "serve"}) {

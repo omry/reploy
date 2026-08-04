@@ -1,0 +1,2 @@
+kind: Changed
+body: Route persistent and transient application containers through one canonical sandbox plan, and rename the system-install identity field from `run_as` to `account`.

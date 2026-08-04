@@ -1,11 +1,18 @@
 package dockerdeploy
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
 )
+
+func testApplicationSandboxPlanV1(uid int, gid int) ApplicationSandboxPlanV1 {
+	return newApplicationSandboxPlanV1(RuntimeUserPlan{
+		UID: uid, GID: gid, DockerUser: strconv.Itoa(uid) + ":" + strconv.Itoa(gid),
+	})
+}
 
 func testResolvedBlueprintV1(t *testing.T, document blueprint.Document) blueprint.ResolvedDocumentV1 {
 	t.Helper()
