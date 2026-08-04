@@ -674,7 +674,7 @@ func resolveOrder(values []string) ([]ArgumentSegment, error) {
 func resolveInstallSyntax(item InstallSyntax, variables map[string]any) Install {
 	return Install{
 		Target:       InstallTarget{DefaultPath: item.Target.DefaultPath, DefaultPaths: cloneMap(item.Target.DefaultPaths)},
-		System:       SystemInstall{RunAs: RunAs{User: item.System.RunAs.User, Group: item.System.RunAs.Group, OnMissing: item.System.RunAs.OnMissing}},
+		System:       SystemInstall{Account: SystemAccount{User: item.System.Account.User, Group: item.System.Account.Group, OnMissing: item.System.Account.OnMissing}},
 		AfterInstall: resolveSteps(item.AfterInstall),
 		Success:      InstallSuccess{Lines: append([]string(nil), item.Success.Lines...)},
 	}
