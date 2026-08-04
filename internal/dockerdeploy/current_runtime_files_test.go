@@ -150,7 +150,7 @@ func currentRuntimeFilePlanV1() CurrentRuntimePlanV1 {
 		Docker: DockerExecutionPlan{
 			EnvironmentID: "demo", DeploymentDir: "/deployment", Phase: blueprint.PhaseStaged,
 			Image: "reploy/env/demo-deadbeef:g-current", ContainerName: "demo-staging", NetworkName: "demo-staging",
-			RuntimeUser: RuntimeUserPlan{DockerUser: "1000:1000"}, TemporaryHome: environmentTemporaryHome,
+			Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 1000, GID: 1000, DockerUser: "1000:1000"}),
 		},
 	}
 }

@@ -89,7 +89,7 @@ type providerInstallRunBackend struct {
 	newStore             func(string) (providerstore.Store, error)
 	recoverDestination   func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (bool, error)
 	buildSource          func(context.Context, LockedProviderBuildRunInputV1) (LockedProviderBuildExecutionResultV1, error)
-	prepareAccount       func(context.Context, blueprint.RunAs, providerstore.Store, CurrentBuild, providerInstallRunInputV1) (providerInstallRunInputV1, error)
+	prepareAccount       func(context.Context, blueprint.SystemAccount, providerstore.Store, CurrentBuild, providerInstallRunInputV1) (providerInstallRunInputV1, error)
 	newReferences        func(string, string) (EnvironmentImageReferences, error)
 	planInstallation     func(context.Context, providerInstallPlanningV1) (providerInstallationPlanV1, error)
 	inspectHostTools     func(context.Context, installBackend) (providerInstallHostToolsV1, error)
@@ -240,7 +240,7 @@ func runProviderInstallV1(
 			return deploy.StateV1{}, err
 		}
 	}
-	input, err = backend.prepareAccount(ctx, document.Environment.Install.System.RunAs, sourceStore, sourceBuild, input)
+	input, err = backend.prepareAccount(ctx, document.Environment.Install.System.Account, sourceStore, sourceBuild, input)
 	if err != nil {
 		return deploy.StateV1{}, fmt.Errorf("prepare provider installation account: %w", err)
 	}
