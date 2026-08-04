@@ -57,8 +57,7 @@ func providerInstallLifecycleExecutorV1(locked lockedProviderInstallV1) Lifecycl
 			DockerPreflightTimeout: locked.Input.RunOptions.DockerPreflightTimeout,
 		},
 		locked.Plan.Docker,
-		locked.DestinationStore,
-		locked.InstallBuild.Platform,
+		locked.InstallBuild.RuntimePolicy,
 		locked.Input.RunOptions.Stdout,
 		locked.Input.RunOptions.Stderr,
 	)
