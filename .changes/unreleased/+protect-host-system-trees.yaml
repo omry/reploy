@@ -1,0 +1,2 @@
+kind: Security
+body: Reject ordinary application-runtime binds to the host filesystem root, `/proc`, `/dev`, and `/sys`, including symlink and protected-filesystem aliases.
