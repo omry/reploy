@@ -633,7 +633,7 @@ user-scope Reploy was invoked as root, or because a system-scope installation
 explicitly selected root. It is never inherited merely from the base image's
 configured `USER`.
 
-A root runtime identity emits a warning equivalent to:
+A root runtime identity must emit a warning equivalent to:
 
 > The application will run as root inside its container. Root can bypass
 > application-level file permissions. Host input and shared-state mounts are
@@ -671,10 +671,10 @@ through a writable bind.
 Root inside any Reploy application container may not receive host input or
 shared-state binds, including read-only binds. Read-only prevents modification
 but does not make exposed content confidential from container root. Reploy
-validates the complete effective mount plan and rejects the operation before
-contacting Docker if a prohibited bind source would be visible. A separately
-validated output-only bind is a narrow explicit result grant, not general host
-filesystem authority.
+validates the complete effective mount plan and rejects the application-runtime
+launch before Docker can create a container with a prohibited bind source. A
+separately validated output-only bind is a narrow explicit result grant, not
+general host filesystem authority.
 
 Root application containers may use image content, Docker-managed volumes,
 tmpfs, or a disposable copied workspace because those do not expose the
@@ -1069,7 +1069,13 @@ lifecycle commands. The verifier fails closed unless `/proc/self/status`
 reports seccomp filtering, `no-new-privileges`, and empty effective, permitted,
 and bounding capability sets before it executes the exact application argv.
 Mount/root authority, network denial, and resource limits remain separate
-prerequisite slices.
+prerequisite slices. Root host authority is now enforced at runtime: host
+sources are classified as input, shared state, or explicit output; UID 0 is
+rejected for all three before container creation; and root output options are
+rejected before host-path preparation. Docker-managed volumes and tmpfs remain
+available to root. Durable confinement of special files nested inside a
+non-root directory bind remains unresolved and must not be represented as
+solved by an expensive launch-time snapshot alone.
 
 ### Slice 2: Controlled-Session Lifecycle Core
 
