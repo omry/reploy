@@ -87,7 +87,7 @@ func planCurrentRuntimeV1(input CurrentRuntimePlanInputV1, backend currentRuntim
 			if backend.resolveSystemOwner == nil {
 				return CurrentRuntimePlanV1{}, fmt.Errorf("plan current system runtime requires an account resolver")
 			}
-			values, err := providerInstallAccountValuesV1(document.Environment.Install.System.RunAs)
+			values, err := providerInstallAccountValuesV1(document.Environment.Install.System.Account)
 			if err != nil {
 				return CurrentRuntimePlanV1{}, err
 			}
@@ -95,8 +95,8 @@ func planCurrentRuntimeV1(input CurrentRuntimePlanInputV1, backend currentRuntim
 			if err != nil {
 				return CurrentRuntimePlanV1{}, fmt.Errorf("resolve installed runtime account: %w", err)
 			}
-			context.SystemUser = document.Environment.Install.System.RunAs.User
-			context.SystemGroup = document.Environment.Install.System.RunAs.Group
+			context.SystemUser = document.Environment.Install.System.Account.User
+			context.SystemGroup = document.Environment.Install.System.Account.Group
 			context.UID = owner.UID
 			context.GID = owner.GID
 		}

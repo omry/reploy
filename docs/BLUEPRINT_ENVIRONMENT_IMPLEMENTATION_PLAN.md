@@ -175,7 +175,7 @@ Implement:
   environment packages, applications with application-scoped options and
   executable profiles, mounts, commands, `allow_concurrent`, optional workload,
   `workload.runtime`, install, and Docker runtime nodes.
-- Install target defaults, semantic host variables, `system.run_as`, success
+- Install target defaults, semantic host variables, `system.account`, success
   lines, and current platform/scope validation.
 - Strict unknown-field rejection and explicit rejection of legacy top-level
   shapes after cutover.
@@ -442,7 +442,7 @@ Ownership:
   recorded Reploy-managed non-root Linux UID/GID inside the Desktop VM rather
   than the macOS or Windows account's numeric identity.
 - User-scope operations warn when overriding image `USER` or ignoring
-  `system.run_as`.
+  `system.account`.
 - Installed system scope uses the resolved service account.
 - Only writable paths and Reploy temporary home are writable.
 - During build, validate every compiled mount destination and runtime-exposed
