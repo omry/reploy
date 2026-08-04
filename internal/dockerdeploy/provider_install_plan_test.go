@@ -70,8 +70,9 @@ func TestPlanProviderInstallationV1UsesLockedBlueprintAndDestinationReference(t 
 			Install: providerInstallOptionsV1{
 				Scope: InstallScopeSystem, Service: "demo-service",
 				SystemUser: "demo", SystemGroup: "demo", SystemUID: 991, SystemGID: 992,
-				PortOverrides: []PortOverride{{Name: "http", HostPort: "19090"}},
-				Replace:       []string{"conf"}, Start: true,
+				SystemSupplementaryGIDs: []int{33, 44},
+				PortOverrides:           []PortOverride{{Name: "http", HostPort: "19090"}},
+				Replace:                 []string{"conf"}, Start: true,
 			},
 		},
 	})
@@ -94,7 +95,7 @@ func TestPlanProviderInstallationV1UsesLockedBlueprintAndDestinationReference(t 
 	if !reflect.DeepEqual(plan.Installation, wantInstallation) {
 		t.Fatalf("installation = %#v, want %#v", plan.Installation, wantInstallation)
 	}
-	if plan.Backend != installBackendLinuxSystemd || plan.Docker.Image != references.Generation || plan.Docker.Sandbox.RuntimeUser.DockerUser != "991:992" {
+	if plan.Backend != installBackendLinuxSystemd || plan.Docker.Image != references.Generation || plan.Docker.Sandbox.RuntimeUser.DockerUser != "991:992" || !reflect.DeepEqual(plan.Docker.Sandbox.RuntimeUser.SupplementaryGIDs, []int{33, 44}) {
 		t.Fatalf("provider installation plan = %#v", plan)
 	}
 	if !reflect.DeepEqual(plan.Docker.Workload.Argv, []string{"/opt/demo", "serve"}) {
