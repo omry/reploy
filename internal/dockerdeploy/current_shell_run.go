@@ -34,8 +34,7 @@ type currentShellRunBackendV1 struct {
 	acquireLease func(*deploy.OperationLock, string) (*deploy.QueueEntryLeaseV1, error)
 	await        func(context.Context, string, *deploy.OperationLock, deploy.LiveRunV1, bool, io.Writer) (*deploy.OperationLock, error)
 	runPublished func(context.Context, PublishedRuntimeContainerInput, PublishedRuntimeContainerRunnerV1) error
-	prepareProbe func(context.Context, providerstore.Store, blueprint.Platform) (PreparedProbeWorkspace, func() error, error)
-	execution    func(DockerExecutionPlan, PreparedProbeWorkspace, string, bool, bool) (TransientContainerExecutionV1, error)
+	execution    func(DockerExecutionPlan, string, bool, bool) (TransientContainerExecutionV1, error)
 	runAdmitted  func(context.Context, string, *deploy.OperationLock, string, TransientContainerExecutionV1, RunOptions) error
 }
 
@@ -58,10 +57,9 @@ func RunCurrentShellV1(ctx context.Context, input CurrentShellRunInputV1) error 
 		},
 		await:        AwaitLiveRunAdmissionWithNoticeV1,
 		runPublished: RunPublishedRuntimeContainerV1,
-		prepareProbe: PrepareProbeWorkspace,
-		execution: func(plan DockerExecutionPlan, workspace PreparedProbeWorkspace, runID string, interactive bool, tty bool) (TransientContainerExecutionV1, error) {
+		execution: func(plan DockerExecutionPlan, runID string, interactive bool, tty bool) (TransientContainerExecutionV1, error) {
 			return PlanTransientContainerExecutionV1(
-				plan, ResolvedEnvironmentCommand{Argv: []string{"/bin/sh"}}, workspace, nil, runID, interactive, tty,
+				plan, ResolvedEnvironmentCommand{Argv: []string{"/bin/sh"}}, nil, runID, interactive, tty,
 			)
 		},
 		runAdmitted: RunAdmittedTransientContainerV1,
@@ -78,7 +76,7 @@ func runCurrentShellV1(ctx context.Context, input CurrentShellRunInputV1, backen
 	if input.DeploymentDir == "" {
 		return fmt.Errorf("run current shell requires a deployment directory")
 	}
-	if backend.acquire == nil || backend.newStore == nil || backend.readState == nil || backend.loadCurrent == nil || backend.plan == nil || backend.matches == nil || backend.invocation == nil || backend.concurrency == nil || backend.newRunID == nil || backend.acquireLease == nil || backend.await == nil || backend.runPublished == nil || backend.prepareProbe == nil || backend.execution == nil || backend.runAdmitted == nil {
+	if backend.acquire == nil || backend.newStore == nil || backend.readState == nil || backend.loadCurrent == nil || backend.plan == nil || backend.matches == nil || backend.invocation == nil || backend.concurrency == nil || backend.newRunID == nil || backend.acquireLease == nil || backend.await == nil || backend.runPublished == nil || backend.execution == nil || backend.runAdmitted == nil {
 		return fmt.Errorf("run current shell requires a complete backend")
 	}
 	dir, err := filepath.Abs(input.DeploymentDir)
@@ -186,18 +184,14 @@ func runCurrentShellV1(ctx context.Context, input CurrentShellRunInputV1, backen
 				"deployment generation changed while live run %q was waiting; retry the shell", runID,
 			))
 		}
-		workspace, cleanup, err := backend.prepareProbe(runCtx, store, gated.Lock.Platform)
+		interactive := runOptions.Stdin != nil
+		execution, err := backend.execution(effectivePlan, runID, interactive, interactive && input.TTY)
 		if err != nil {
 			return removeAdmittedTransientBeforeCreateV1(operation, runID, err)
 		}
-		interactive := runOptions.Stdin != nil
-		execution, err := backend.execution(effectivePlan, workspace, runID, interactive, interactive && input.TTY)
-		if err != nil {
-			return removeAdmittedTransientBeforeCreateV1(operation, runID, errors.Join(err, cleanup()))
-		}
 		options := runOptions
 		options.Context = runCtx
-		return errors.Join(backend.runAdmitted(runCtx, dir, operation, runID, execution, options), cleanup())
+		return backend.runAdmitted(runCtx, dir, operation, runID, execution, options)
 	})
 	if runErr != nil && !callbackEntered {
 		return removeAdmittedTransientBeforeCreateV1(operation, runID, runErr)

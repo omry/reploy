@@ -26,7 +26,7 @@ func TestRunCurrentShellV1OrdersStaleCheckFinalGateAndInteractiveContainer(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"acquire", "store", "state", "current", "plan", "match", "invocation", "concurrency", "run id", "admit", "final gate", "prepare probe", "execution", "run admitted", "cleanup probe"}
+	want := []string{"acquire", "store", "state", "current", "plan", "match", "invocation", "concurrency", "run id", "admit", "final gate", "execution", "run admitted"}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("order = %v, want %v", order, want)
 	}
@@ -76,7 +76,7 @@ func TestRunCurrentShellV1ReadOnlyChangesOnlyTransientMounts(t *testing.T) {
 		}
 		return LiveRunConcurrencyDecisionV1{AllowsOverlap: true}, nil
 	}
-	backend.execution = func(plan DockerExecutionPlan, _ PreparedProbeWorkspace, runID string, interactive bool, tty bool) (TransientContainerExecutionV1, error) {
+	backend.execution = func(plan DockerExecutionPlan, runID string, interactive bool, tty bool) (TransientContainerExecutionV1, error) {
 		for _, mount := range plan.Mounts {
 			if !mount.ReadOnly {
 				t.Fatalf("read-only shell execution saw writable mount %#v", mount)
@@ -181,17 +181,7 @@ func currentShellRunTestBackend(t *testing.T, dir string, current CurrentBuild, 
 			}
 			return run(ctx, current)
 		},
-		prepareProbe: func(_ context.Context, _ providerstore.Store, platform blueprint.Platform) (PreparedProbeWorkspace, func() error, error) {
-			*order = append(*order, "prepare probe")
-			if !reflect.DeepEqual(platform, current.Lock.Platform) {
-				t.Fatalf("probe platform = %#v, want %#v", platform, current.Lock.Platform)
-			}
-			return PreparedProbeWorkspace{}, func() error {
-				*order = append(*order, "cleanup probe")
-				return nil
-			}, nil
-		},
-		execution: func(_ DockerExecutionPlan, _ PreparedProbeWorkspace, runID string, interactive bool, tty bool) (TransientContainerExecutionV1, error) {
+		execution: func(_ DockerExecutionPlan, runID string, interactive bool, tty bool) (TransientContainerExecutionV1, error) {
 			*order = append(*order, "execution")
 			if !interactive || !tty {
 				t.Fatalf("shell interactive=%t, tty=%t", interactive, tty)
