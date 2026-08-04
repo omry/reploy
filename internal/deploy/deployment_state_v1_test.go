@@ -275,7 +275,7 @@ func TestOperationLockInstalledCommitRejectsDeploymentLocalSourceState(t *testin
 	}
 }
 
-func TestOperationLockInstalledCommitRejectsChangedDestinationGeneration(t *testing.T) {
+func TestOperationLockInstalledCommitAllowsIdentityAdaptedDestinationGeneration(t *testing.T) {
 	sourceDir := t.TempDir()
 	source := readOverlayTestState(t, writeOverlayTestState(t, sourceDir))
 	destinationDir := t.TempDir()
@@ -288,12 +288,22 @@ func TestOperationLockInstalledCommitRejectsChangedDestinationGeneration(t *test
 	destinationGeneration.Reference = "reploy/env/overlay-test:g-destination"
 	destinationGeneration.ImageDigest = canonical.Digest("sha256:" + strings.Repeat("b", 64))
 
-	_, _, err = destinationLock.CommitInstalledStateV1(nil, source, destinationGeneration, installationStateV1Fixture(destinationDir))
-	if err == nil || !strings.Contains(err.Error(), "except for its reference") {
-		t.Fatalf("changed destination generation error = %v", err)
+	installed, changed, err := destinationLock.CommitInstalledStateV1(nil, source, destinationGeneration, installationStateV1Fixture(destinationDir))
+	if err != nil || !changed || installed.Current == nil || installed.Current.ImageDigest != destinationGeneration.ImageDigest {
+		t.Fatalf("identity-adapted destination = %#v, changed=%v, error=%v", installed.Current, changed, err)
 	}
-	if _, found, err := destinationLock.ReadStateV1(); err != nil || found {
-		t.Fatalf("destination state after changed generation found=%v error=%v", found, err)
+
+	otherDir := t.TempDir()
+	otherLock, err := AcquireOperationLock(t.Context(), otherDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = otherLock.Unlock() })
+	destinationGeneration.Platform.Architecture = "arm64"
+	destinationGeneration.Platform.Canonical = "linux/arm64"
+	_, _, err = otherLock.CommitInstalledStateV1(nil, source, destinationGeneration, installationStateV1Fixture(otherDir))
+	if err == nil || !strings.Contains(err.Error(), "preserve the source platform") {
+		t.Fatalf("changed destination platform error = %v", err)
 	}
 }
 

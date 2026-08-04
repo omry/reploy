@@ -50,6 +50,7 @@ type providerBuildCompletionBackend struct {
 		providers.RequirementProfileOwnerValidator,
 		FullImageValidationRunner,
 		deploy.ApplicationStartupVerifierV1,
+		deploy.ApplicationLocalAccountV1,
 		RunOptions,
 	) (FinalizedBuildValidationResult, error)
 	assemble         func(context.Context, providerstore.Store, BuildLockAssemblyInput) (deploy.BuildLockV1, error)
@@ -116,10 +117,15 @@ func completeProviderBuild(
 	finalizeCtx, endFinalize := buildprofile.Start(ctx, "Validate and finalize image")
 	finalizeOptions := options
 	finalizeOptions.Context = finalizeCtx
+	account, err := applicationLocalAccountV1(input.DockerPlan.Sandbox)
+	if err != nil {
+		endFinalize(err)
+		return ProviderBuildCompletionResult{}, fmt.Errorf("prepare application local account: %w", err)
+	}
 	finalized, err := backend.validateAndFinalize(
 		finalizeCtx, store, input.Validation.Layers, input.Validation.Final,
 		registry.ValidateRequirementProfileV1, input.RunValidation,
-		input.StartupVerifier, finalizeOptions,
+		input.StartupVerifier, account, finalizeOptions,
 	)
 	endFinalize(err)
 	if err != nil {
