@@ -28,6 +28,7 @@ type BuildLockV1 struct {
 	Nodes                 []NodeLockV1                 `json:"nodes"`
 	Catalog               []providers.RealizedOutput   `json:"catalog"`
 	RuntimePolicy         RuntimePolicyV1              `json:"runtime_policy"`
+	RuntimeLayer          ApplicationRuntimeLayerV1    `json:"runtime_layer"`
 	ValidationRecord      providerstore.StoreObjectRef `json:"validation_record"`
 	FinalImage            providers.RealizedImageV1    `json:"final_image"`
 }
@@ -152,6 +153,14 @@ func ValidateBuildLockV1(lock BuildLockV1, validateProfileOwner providers.Requir
 	if err := ValidateRuntimePolicyV1(lock.RuntimePolicy); err != nil {
 		return fmt.Errorf("build lock runtime policy: %w", err)
 	}
+	if err := ValidateApplicationRuntimeLayerV1(lock.RuntimeLayer, lock.Platform); err != nil {
+		return fmt.Errorf("build lock runtime layer: %w", err)
+	}
+	if lock.RuntimeLayer.Verifier.Schema != lock.RuntimePolicy.StartupVerifier.Schema ||
+		lock.RuntimeLayer.Verifier.RecipeVersion != lock.RuntimePolicy.StartupVerifier.RecipeVersion ||
+		lock.RuntimeLayer.Verifier.Path != lock.RuntimePolicy.StartupVerifier.Path {
+		return fmt.Errorf("build lock runtime layer verifier does not match the runtime policy")
+	}
 	if err := lock.ValidationRecord.Validate(); err != nil {
 		return fmt.Errorf("build lock validation record: %w", err)
 	}
@@ -202,10 +211,13 @@ func validateBuildLockImageLineage(lock BuildLockV1) error {
 		}
 		current = node.Result
 	}
-	if lock.FinalImage.RootFSSubject != current.RootFSSubject {
+	if lock.RuntimeLayer.Upstream != current {
+		return fmt.Errorf("build lock runtime layer upstream does not match the final graph prefix")
+	}
+	if lock.FinalImage.RootFSSubject != lock.RuntimeLayer.Result.RootFSSubject {
 		return fmt.Errorf(
-			"build lock final image root filesystem %s does not match the final graph prefix %s",
-			lock.FinalImage.RootFSSubject, current.RootFSSubject,
+			"build lock final image root filesystem %s does not match the application runtime layer %s",
+			lock.FinalImage.RootFSSubject, lock.RuntimeLayer.Result.RootFSSubject,
 		)
 	}
 	return nil
