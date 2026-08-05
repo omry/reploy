@@ -26,7 +26,8 @@ func fullValidationInput(t *testing.T, digestChar string) FullImageValidationInp
 	return FullImageValidationInput{
 		Image: request.Source, Profiles: []providers.RequirementProfile{}, Outputs: []providers.RealizedOutput{},
 		RuntimePolicy: deploy.RuntimePolicyV1{
-			Schema: deploy.RuntimePolicySchemaV1, ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{},
+			Schema: deploy.RuntimePolicySchemaV1, StartupVerifier: deploy.ApplicationStartupVerifierContractV1(),
+			ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{},
 		},
 	}
 }
@@ -73,7 +74,7 @@ func TestValidateBuildImagesStopsAtFailedLayerWithoutFinalValidation(t *testing.
 	}
 }
 
-func TestValidateBuildImagesRejectsFinalThatDoesNotMatchLastLayer(t *testing.T) {
+func TestValidateBuildImagesValidatesDistinctApplicationRuntimeImage(t *testing.T) {
 	store, err := providerstore.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +86,7 @@ func TestValidateBuildImagesRejectsFinalThatDoesNotMatchLastLayer(t *testing.T) 
 		calls++
 		return []providers.ValidationEvidence{}, []providers.ExecutableEvidence{}, nil
 	})
-	if err == nil || !strings.Contains(err.Error(), "does not match the last component layer") || calls != 0 {
+	if err != nil || calls != 2 {
 		t.Fatalf("calls = %d, error = %v", calls, err)
 	}
 }

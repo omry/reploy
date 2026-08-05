@@ -46,9 +46,9 @@ func TestAssembleBuildLockPublishesCompleteGraphLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	finalEvidence := lockedNode.ValidationEvidence
-	finalEvidence.SubjectRootFS = lockedNode.Result.RootFSSubject
+	finalEvidence.SubjectRootFS = fixture.lock.RuntimeLayer.Result.RootFSSubject
 	validationReference, err := deploy.PublishPrefixValidation(context.Background(), fixture.store, deploy.PrefixValidationV1{
-		Schema: deploy.PrefixValidationSchemaV1, SubjectRootFS: lockedNode.Result.RootFSSubject,
+		Schema: deploy.PrefixValidationSchemaV1, SubjectRootFS: fixture.lock.RuntimeLayer.Result.RootFSSubject,
 		Profiles: []providers.ValidationEvidence{finalEvidence}, RuntimePolicy: policyDigest,
 		ExposedOutputs: []providers.ExecutableEvidence{},
 	})
@@ -69,7 +69,8 @@ func TestAssembleBuildLockPublishesCompleteGraphLock(t *testing.T) {
 	lock, err := AssembleBuildLock(context.Background(), fixture.store, BuildLockAssemblyInput{
 		BlueprintDigest: rendererDigest("b"), ResolvedRequest: request, Overlay: overlay,
 		PackageOverrides: fixture.lock.PackageOverrides, Base: fixture.lock.Base, Graph: graph,
-		RuntimePolicy: fixture.lock.RuntimePolicy, ValidationRecord: validationReference, FinalImage: lockedNode.Result,
+		RuntimePolicy: fixture.lock.RuntimePolicy, RuntimeLayer: fixture.lock.RuntimeLayer,
+		ValidationRecord: validationReference, FinalImage: fixture.lock.FinalImage,
 	})
 	if err != nil {
 		t.Fatal(err)

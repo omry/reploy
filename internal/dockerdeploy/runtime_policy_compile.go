@@ -78,7 +78,8 @@ func compileRuntimePolicyV1(
 	}
 	sort.Slice(canonicalPlans, func(left int, right int) bool { return canonicalPlans[left].ID < canonicalPlans[right].ID })
 	policy := deploy.RuntimePolicyV1{
-		Schema: deploy.RuntimePolicySchemaV1, ProtectedPaths: protected, Plans: canonicalPlans,
+		Schema: deploy.RuntimePolicySchemaV1, StartupVerifier: deploy.ApplicationStartupVerifierContractV1(),
+		ProtectedPaths: protected, Plans: canonicalPlans,
 	}
 	if err := deploy.ValidateRuntimePolicyV1(policy); err != nil {
 		return deploy.RuntimePolicyV1{}, err
@@ -124,6 +125,9 @@ func runtimeProtectedPaths(
 	referenced map[providers.QualifiedOutput]bool,
 ) ([]deploy.ProtectedPathV1, error) {
 	paths := map[string]deploy.ProtectedPathV1{
+		deploy.ApplicationStartupVerifierPathV1: {
+			Path: deploy.ApplicationStartupVerifierPathV1, Kind: deploy.ProtectedPathExecutablePath, Owner: "reploy",
+		},
 		deploy.ReployImageRoot:    {Path: deploy.ReployImageRoot, Kind: deploy.ProtectedPathReployRoot, Owner: "reploy"},
 		deploy.ReployProviderRoot: {Path: deploy.ReployProviderRoot, Kind: deploy.ProtectedPathProviderRoot, Owner: "reploy"},
 	}
@@ -147,6 +151,9 @@ func runtimeProtectedPaths(
 		for _, generated := range materialized.GeneratedExecutables {
 			declaration := generated.Declaration
 			owner := string(materialized.NodeID) + "." + declaration.ID
+			if err := rejectStartupVerifierExecutableCollision(owner, generated.Evidence.InvocationPath, generated.Evidence.LinkChain, generated.Evidence.Terminal.Path); err != nil {
+				return nil, err
+			}
 			add(deploy.ProtectedPathV1{Path: declaration.ExclusiveRoot, Kind: deploy.ProtectedPathProviderLeaf, Owner: owner})
 		}
 	}
@@ -155,10 +162,13 @@ func runtimeProtectedPaths(
 			return nil, err
 		}
 		qualified := providers.QualifiedOutput{Component: output.SupplierComponent, Name: output.Name}
+		owner := qualified.Component + "." + qualified.Name
+		if err := rejectStartupVerifierExecutableCollision(owner, output.Evidence.InvocationPath, output.Evidence.LinkChain, output.Evidence.Terminal.Path); err != nil {
+			return nil, err
+		}
 		if !referenced[qualified] {
 			continue
 		}
-		owner := qualified.Component + "." + qualified.Name
 		addExecutable(owner, output.Evidence.InvocationPath, output.Evidence.LinkChain, output.Evidence.Terminal.Path)
 	}
 	result := make([]deploy.ProtectedPathV1, 0, len(paths))
@@ -167,6 +177,24 @@ func runtimeProtectedPaths(
 	}
 	sort.Slice(result, func(left int, right int) bool { return result[left].Path < result[right].Path })
 	return result, nil
+}
+
+func rejectStartupVerifierExecutableCollision(owner string, invocation string, links []providers.LinkEvidence, terminal string) error {
+	paths := make([]string, 0, len(links)+2)
+	paths = append(paths, invocation)
+	for _, link := range links {
+		paths = append(paths, link.Path)
+	}
+	paths = append(paths, terminal)
+	for _, path := range paths {
+		if runtimePolicyPathsOverlap(path, deploy.ApplicationStartupVerifierPathV1) {
+			return fmt.Errorf(
+				"runtime executable %q path %q overlaps reserved startup verifier %q",
+				owner, path, deploy.ApplicationStartupVerifierPathV1,
+			)
+		}
+	}
+	return nil
 }
 
 func validateRuntimePolicyExecutables(policy deploy.RuntimePolicyV1, catalog []providers.RealizedOutput) error {
