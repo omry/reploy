@@ -138,8 +138,21 @@ func awaitLiveRunAdmissionV1(
 				"live run %q is no longer outstanding; it may have been stopped", candidate.ID,
 			))
 		}
+		if run.Status == deploy.LiveRunStatusActiveV1 {
+			return operation, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return cancelLiveRunAdmissionV1(ctx, deploymentDir, operation, candidate, backend, err)
+		}
 		switch run.Status {
-		case deploy.LiveRunStatusActiveV1:
+		case deploy.LiveRunStatusReadyV1:
+			// Claiming ready is the admission linearization point. Cancellation
+			// observed before this transition removes the unstarted reservation;
+			// cancellation after it follows normal active-run cleanup.
+			if err := operation.ActivateReadyLiveRunV1(candidate.ID); err != nil {
+				return cancelLiveRunAdmissionV1(ctx, deploymentDir, operation, candidate, backend,
+					fmt.Errorf("claim ready live run admission: %w", err))
+			}
 			return operation, nil
 		case deploy.LiveRunStatusWaitingV1:
 			if err := operation.Unlock(); err != nil {
@@ -173,24 +186,34 @@ func writeAdmissionWaitNoticeV1(operation *deploy.OperationLock, candidateID str
 		return fmt.Errorf("waiting operation is not in the queue")
 	}
 	ahead := queue.Runs[:candidateIndex]
-	active := deploy.LiveRunV1{}
+	blocker := ahead[0]
 	for _, entry := range ahead {
-		if entry.Status == deploy.LiveRunStatusActiveV1 {
-			active = entry
+		if entry.Status == deploy.LiveRunStatusReadyV1 {
+			blocker = entry
 			break
 		}
 	}
-	label := admissionEntryLabelV1(active)
 	detail := ""
-	if len(active.WritablePaths) != 0 {
-		detail = " (shared writable mounts: " + strings.Join(active.WritablePaths, ", ") + ")"
+	if len(blocker.WritablePaths) != 0 {
+		detail = " (shared writable mounts: " + strings.Join(blocker.WritablePaths, ", ") + ")"
 	}
-	if len(ahead) <= 1 {
-		fmt.Fprintf(output, "Waiting for %s to finish%s.\n", label, detail)
+	if blocker.Status == deploy.LiveRunStatusActiveV1 {
+		label := admissionEntryLabelV1(blocker)
+		if len(ahead) <= 1 {
+			fmt.Fprintf(output, "Waiting for %s to finish%s.\n", label, detail)
+		} else {
+			fmt.Fprintf(output, "Waiting behind %d operations; %s is blocking this command%s.\n", len(ahead), label, detail)
+		}
+		fmt.Fprintln(output, "Ctrl-C cancels this wait without affecting the active command.")
 	} else {
-		fmt.Fprintf(output, "Waiting behind %d operations; %s is blocking this command%s.\n", len(ahead), label, detail)
+		label := queuedAdmissionEntryLabelV1(blocker)
+		if len(ahead) <= 1 {
+			fmt.Fprintf(output, "Waiting for %s to start%s.\n", label, detail)
+		} else {
+			fmt.Fprintf(output, "Waiting behind %d operations; %s is next to start%s.\n", len(ahead), label, detail)
+		}
+		fmt.Fprintln(output, "Ctrl-C cancels this wait without affecting earlier operations.")
 	}
-	fmt.Fprintln(output, "Ctrl-C cancels this wait without affecting the active command.")
 	return nil
 }
 
@@ -204,6 +227,19 @@ func admissionEntryLabelV1(entry deploy.LiveRunV1) string {
 		return fmt.Sprintf("active %s operation", entry.Name)
 	default:
 		return "active operation"
+	}
+}
+
+func queuedAdmissionEntryLabelV1(entry deploy.LiveRunV1) string {
+	switch entry.Kind {
+	case deploy.LiveRunKindShellV1:
+		return "queued shell"
+	case deploy.LiveRunKindAppV1:
+		return fmt.Sprintf("queued app command %q", entry.Name)
+	case deploy.LiveRunKindControlV1:
+		return fmt.Sprintf("queued %s operation", entry.Name)
+	default:
+		return "queued operation"
 	}
 }
 

@@ -174,7 +174,7 @@ func controlDisruptionCountsV1(queue deploy.LiveRunQueueV1) (active int, waiting
 		switch entry.Status {
 		case deploy.LiveRunStatusActiveV1:
 			active++
-		case deploy.LiveRunStatusWaitingV1:
+		case deploy.LiveRunStatusReadyV1, deploy.LiveRunStatusWaitingV1:
 			waiting++
 		}
 	}
