@@ -91,6 +91,13 @@ func prepareProviderGraphValidation(
 		if candidate.Image.RootFSSubject != graph.PrefixImages[0].RootFSSubject || candidate.Image.ConfigDigest != graph.PrefixImages[0].ConfigDigest {
 			return ProviderGraphValidationPlan{}, fmt.Errorf("provider graph base changed after resolution")
 		}
+		// Inspection by config ID proves that the immutable filesystem and
+		// configuration still exist, but Docker reports a config-ID descriptor
+		// instead of the resolved registry descriptor. Restore the exact base
+		// identity so the inspected candidate remains internally consistent and
+		// the application runtime layer connects to the graph's base prefix.
+		candidate.Descriptor = base
+		candidate.Image = graph.PrefixImages[0]
 		final = FullImageValidationInput{
 			Image: candidate, Profiles: []providers.RequirementProfile{},
 			Outputs: append([]providers.RealizedOutput{}, baseCatalog...), RuntimePolicy: policy,
