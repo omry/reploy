@@ -9,7 +9,10 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
 ## Status
 
 - Decision state: Focused review complete; high-level decisions approved
-- Implementation state: Not started
+- Implementation state: Initial global sandbox prerequisites and trusted
+  application-startup verification implemented in the current slice;
+  controlled-session authorization, protocol, lifecycle, and Docker
+  orchestration remain later slices
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution
@@ -1046,8 +1049,17 @@ commands directly as the final identity, drops all capabilities, enables
 `no-new-privileges`, explicitly selects Docker's built-in seccomp profile, and
 prohibits privileged mode, host namespaces, and host devices in the common
 plan. Live Docker tests inspect both runtime paths. Trusted production startup
-verification, mount/root authority, network denial, and resource limits remain
-separate prerequisite slices.
+verification is also implemented: Reploy packages the platform-specific probe
+in a final runtime layer, records that layer outside the provider graph, and
+uses its fixed verify-and-exec contract as the outermost process for persistent
+workloads, transient commands, shells, and lifecycle commands. The verifier
+fails closed unless `/proc/self/status` reports seccomp filtering,
+`no-new-privileges`, and empty effective, permitted, and bounding capability
+sets, then directly executes the exact application argv. Private-environment
+workloads use one additional fixed Reploy step: after verification, the probe
+executes the environment injector, which imports the private variables and then
+executes the unchanged application argv. Mount/root authority, network denial,
+and resource limits remain separate prerequisite slices.
 
 ### Slice 2: Controlled-Session Lifecycle Core
 
