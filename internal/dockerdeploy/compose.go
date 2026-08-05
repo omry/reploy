@@ -120,6 +120,9 @@ func effectiveDockerPreflightTimeout(timeout time.Duration) time.Duration {
 }
 
 func checkDockerResponsive(ctx context.Context, spec CommandSpec, timeout time.Duration) error {
+	if err := requireLocalDockerEndpointV1(ctx, spec, timeout); err != nil {
+		return err
+	}
 	preflightCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
