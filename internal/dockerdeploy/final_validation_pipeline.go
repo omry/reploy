@@ -33,10 +33,11 @@ func ValidateAndFinalizeBuild(
 	validateProfileOwner providers.RequirementProfileOwnerValidator,
 	runValidation FullImageValidationRunner,
 	verifier deploy.ApplicationStartupVerifierV1,
+	account deploy.ApplicationLocalAccountV1,
 	options RunOptions,
 ) (FinalizedBuildValidationResult, error) {
 	return validateAndFinalizeBuild(
-		ctx, store, layers, final, validateProfileOwner, runValidation, verifier, options,
+		ctx, store, layers, final, validateProfileOwner, runValidation, verifier, account, options,
 		BuildApplicationRuntimeLayerCandidate, InspectApplicationRuntimeLayerCandidate,
 		RetainVerifiedApplicationRuntimeLayer,
 		BuildFinalizedImageCandidate, InspectFinalizedImageCandidate, RemoveBuiltImageCandidate,
@@ -51,6 +52,7 @@ func validateAndFinalizeBuild(
 	validateProfileOwner providers.RequirementProfileOwnerValidator,
 	runValidation FullImageValidationRunner,
 	verifier deploy.ApplicationStartupVerifierV1,
+	account deploy.ApplicationLocalAccountV1,
 	options RunOptions,
 	buildRuntime applicationRuntimeLayerBuilder,
 	inspectRuntime applicationRuntimeLayerInspector,
@@ -63,7 +65,7 @@ func validateAndFinalizeBuild(
 		return FinalizedBuildValidationResult{}, fmt.Errorf("final validation pipeline requires build and inspection backends")
 	}
 	runtimeRequest := ApplicationRuntimeLayerBuildRequest{
-		Source: final.Image, Verifier: verifier, Platform: final.Image.Descriptor.Platform,
+		Source: final.Image, Verifier: verifier, Account: account, Platform: final.Image.Descriptor.Platform,
 	}
 	runtimeBuildCtx, endRuntimeBuild := buildprofile.Start(ctx, "Package application startup verifier")
 	options.Context = runtimeBuildCtx
@@ -98,7 +100,7 @@ func validateAndFinalizeBuild(
 	if err != nil {
 		return rejectRuntime(fmt.Errorf("retain application runtime layer: %w", err))
 	}
-	transaction, err := deploy.ApplicationRuntimeLayerTransactionDigestV1(verifier, final.Image.Image, final.Image.Descriptor.Platform)
+	transaction, err := deploy.ApplicationRuntimeLayerTransactionDigestV1(verifier, account, final.Image.Image, final.Image.Descriptor.Platform)
 	if err != nil {
 		return FinalizedBuildValidationResult{}, err
 	}
@@ -126,7 +128,7 @@ func validateAndFinalizeBuild(
 	return FinalizedBuildValidationResult{
 		Validation: validation,
 		RuntimeLayer: deploy.ApplicationRuntimeLayerV1{
-			Schema: deploy.ApplicationRuntimeLayerSchemaV1, Verifier: verifier,
+			Schema: deploy.ApplicationRuntimeLayerSchemaV1, Verifier: verifier, Account: account,
 			TransactionDigest: transaction, Upstream: final.Image.Image, Result: runtimeImage.Image,
 		},
 		Image: image, Candidate: built,
