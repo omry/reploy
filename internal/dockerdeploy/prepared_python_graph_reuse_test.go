@@ -463,6 +463,7 @@ func newPreparedPythonGraphReuseFixtureWithManifest(t *testing.T, sourceManifest
 		Catalog: append([]providers.RealizedOutput{}, request.EarlierCatalog...),
 		RuntimePolicy: deploy.RuntimePolicyV1{
 			Schema: deploy.RuntimePolicySchemaV1, StartupVerifier: deploy.ApplicationStartupVerifierContractV1(),
+			Network:        blueprint.RuntimeNetwork{Public: blueprint.NetworkAccessDeny, Local: blueprint.NetworkAccessDeny},
 			ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{},
 		},
 		RuntimeLayer: testApplicationRuntimeLayerV1(t, request.Platform, resultImage, providers.RealizedImageV1{
@@ -581,6 +582,7 @@ func newPreparedAPTGraphReuseFixture(t *testing.T) (
 		Catalog: []providers.RealizedOutput{},
 		RuntimePolicy: deploy.RuntimePolicyV1{
 			Schema: deploy.RuntimePolicySchemaV1, StartupVerifier: deploy.ApplicationStartupVerifierContractV1(),
+			Network:        blueprint.RuntimeNetwork{Public: blueprint.NetworkAccessDeny, Local: blueprint.NetworkAccessDeny},
 			ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{},
 		},
 		RuntimeLayer: testApplicationRuntimeLayerV1(t, descriptor.Platform, resultImage, providers.RealizedImageV1{
