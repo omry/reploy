@@ -90,6 +90,17 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 			input.Install.SystemGID = 992
 			return input, nil
 		},
+		buildInstallRuntime: func(_ context.Context, _ providerstore.Store, source CurrentBuild, plan DockerExecutionPlan, _ RunOptions) (installedRuntimeIdentityBuildV1, error) {
+			order = append(order, "build-install-runtime")
+			account, err := applicationLocalAccountV1(plan.Sandbox)
+			if err != nil {
+				return installedRuntimeIdentityBuildV1{}, err
+			}
+			if account != source.Lock.RuntimeLayer.Account {
+				t.Fatalf("install account = %#v, source account = %#v", account, source.Lock.RuntimeLayer.Account)
+			}
+			return installedRuntimeIdentityBuildV1{Lock: source.Lock}, nil
+		},
 		planInstallation: func(_ context.Context, input providerInstallPlanningV1) (providerInstallationPlanV1, error) {
 			order = append(order, "plan-installation")
 			if err := locks[sourceDir].RequireHeld(); err != nil {
@@ -109,6 +120,7 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 				Name: "data", Kind: PathPreserveManagedBind,
 				Target: filepath.Join(destinationDir, "data"),
 			}}
+			plan.Docker.Sandbox.RuntimeUser.Warnings = []string{"runtime identity warning"}
 			return plan, nil
 		},
 		inspectHostTools: func(_ context.Context, backend installBackend) (providerInstallHostToolsV1, error) {
@@ -245,7 +257,7 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 	if err != nil || !reflect.DeepEqual(result, want) {
 		t.Fatalf("result=%#v error=%v", result, err)
 	}
-	wantOrder := []string{"acquire-source", "build-source", "acquire-destination", "recover-destination", "prepare-install-account", "plan-installation", "inspect-host-tools", "preflight-destination", "prepare-destination", "admit-install", "stop-destination", "publish", "publish-files", "activate-destination", "mark-ready", "start-destination", "acquire-destination", "complete-install", "release-source"}
+	wantOrder := []string{"acquire-source", "build-source", "acquire-destination", "recover-destination", "prepare-install-account", "plan-installation", "build-install-runtime", "inspect-host-tools", "preflight-destination", "prepare-destination", "admit-install", "stop-destination", "publish", "publish-files", "activate-destination", "mark-ready", "start-destination", "acquire-destination", "complete-install", "release-source"}
 	if !reflect.DeepEqual(order, wantOrder) {
 		t.Fatalf("order=%v want=%v", order, wantOrder)
 	}
@@ -260,6 +272,9 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 		Target: filepath.Join(destinationDir, "data"),
 	}}) {
 		t.Fatalf("install result path updates = %#v", details.PathUpdates)
+	}
+	if !reflect.DeepEqual(details.Warnings, []string{"runtime identity warning"}) {
+		t.Fatalf("install result warnings = %#v", details.Warnings)
 	}
 	for _, step := range []string{
 		"preparing current staged environment",
@@ -305,6 +320,15 @@ func TestRunProviderInstallV1CanceledBeforeBackendWork(t *testing.T) {
 	}, providerInstallRunBackend{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation error = %v", err)
+	}
+}
+
+func TestRunProviderInstallV1RequiresCompleteBackend(t *testing.T) {
+	_, err := runProviderInstallV1(t.Context(), providerInstallRunInputV1{
+		SourceDeploymentDir: t.TempDir(), DestinationDeploymentDir: t.TempDir(),
+	}, providerInstallRunBackend{})
+	if err == nil || !strings.Contains(err.Error(), "complete backend") {
+		t.Fatalf("incomplete backend error = %v", err)
 	}
 }
 
@@ -992,6 +1016,11 @@ func providerInstallRunRecoverDestinationFixture(
 
 func providerInstallAdmissionTestBackend(backend providerInstallRunBackend, order *[]string) providerInstallRunBackend {
 	lease := new(deploy.ControlLeaseV1)
+	if backend.buildInstallRuntime == nil {
+		backend.buildInstallRuntime = func(_ context.Context, _ providerstore.Store, source CurrentBuild, _ DockerExecutionPlan, _ RunOptions) (installedRuntimeIdentityBuildV1, error) {
+			return installedRuntimeIdentityBuildV1{Lock: source.Lock}, nil
+		}
+	}
 	if backend.recoverDestination == nil {
 		backend.recoverDestination = func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (bool, error) {
 			return false, nil
