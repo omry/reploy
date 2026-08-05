@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 )
@@ -21,9 +22,10 @@ func TestValidateRuntimeHostSourcesV1AcceptsExactPlanWithoutGeneratedSources(t *
 		{Destination: environmentTemporaryHome, SourceKind: deploy.RuntimeMountSourceGenerated},
 	})
 	sources := []RuntimeHostSourceV1{{
-		Destination: "/mnt/config", HostPath: config, SourceKind: deploy.RuntimeMountSourceDirectory, ReadOnly: true,
+		Destination: "/mnt/config", HostPath: config, SourceKind: deploy.RuntimeMountSourceDirectory,
+		Authority: runtimeHostAuthorityInputV1, ReadOnly: true,
 	}}
-	if err := ValidateRuntimeHostSourcesV1(policy, "command/check", sources); err != nil {
+	if err := ValidateRuntimeHostSourcesV1(policy, "command/check", 1000, sources); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -38,7 +40,8 @@ func TestValidateRuntimeHostSourcesV1RejectsPlanAndSourceDrift(t *testing.T) {
 		Destination: "/mnt/config", SourceKind: deploy.RuntimeMountSourceFile, ReadOnly: true,
 	}})
 	valid := RuntimeHostSourceV1{
-		Destination: "/mnt/config", HostPath: file, SourceKind: deploy.RuntimeMountSourceFile, ReadOnly: true,
+		Destination: "/mnt/config", HostPath: file, SourceKind: deploy.RuntimeMountSourceFile,
+		Authority: runtimeHostAuthorityInputV1, ReadOnly: true,
 	}
 	for _, test := range []struct {
 		name    string
@@ -49,11 +52,12 @@ func TestValidateRuntimeHostSourcesV1RejectsPlanAndSourceDrift(t *testing.T) {
 		{name: "unknown plan", planID: "command/other", sources: []RuntimeHostSourceV1{valid}, want: "absent"},
 		{name: "missing", planID: "command/check", sources: []RuntimeHostSourceV1{}, want: "missing"},
 		{name: "access", planID: "command/check", sources: []RuntimeHostSourceV1{{Destination: valid.Destination, HostPath: file, SourceKind: valid.SourceKind}}, want: "access policy changed"},
-		{name: "kind", planID: "command/check", sources: []RuntimeHostSourceV1{{Destination: valid.Destination, HostPath: file, SourceKind: deploy.RuntimeMountSourceDirectory, ReadOnly: true}}, want: "kind or access"},
+		{name: "kind", planID: "command/check", sources: []RuntimeHostSourceV1{{Destination: valid.Destination, HostPath: file, SourceKind: deploy.RuntimeMountSourceDirectory, Authority: valid.Authority, ReadOnly: true}}, want: "kind or access"},
+		{name: "authority", planID: "command/check", sources: []RuntimeHostSourceV1{{Destination: valid.Destination, HostPath: file, SourceKind: valid.SourceKind, Authority: runtimeHostAuthoritySharedStateV1, ReadOnly: true}}, want: "kind or access"},
 		{name: "unexpected", planID: "command/check", sources: []RuntimeHostSourceV1{valid, {Destination: "/mnt/extra", HostPath: root, SourceKind: deploy.RuntimeMountSourceDirectory}}, want: "unexpected"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			err := ValidateRuntimeHostSourcesV1(policy, test.planID, test.sources)
+			err := ValidateRuntimeHostSourcesV1(policy, test.planID, 1000, test.sources)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want containing %q", err, test.want)
 			}
@@ -66,11 +70,77 @@ func TestValidateRuntimeHostSourcesV1RejectsChangedFilesystemKind(t *testing.T) 
 	policy := runtimeHostPolicy([]deploy.RuntimeMountV1{{
 		Destination: "/mnt/config", SourceKind: deploy.RuntimeMountSourceFile, ReadOnly: true,
 	}})
-	err := ValidateRuntimeHostSourcesV1(policy, "command/check", []RuntimeHostSourceV1{{
-		Destination: "/mnt/config", HostPath: root, SourceKind: deploy.RuntimeMountSourceFile, ReadOnly: true,
+	err := ValidateRuntimeHostSourcesV1(policy, "command/check", 1000, []RuntimeHostSourceV1{{
+		Destination: "/mnt/config", HostPath: root, SourceKind: deploy.RuntimeMountSourceFile,
+		Authority: runtimeHostAuthorityInputV1, ReadOnly: true,
 	}})
 	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
 		t.Fatalf("filesystem kind error = %v", err)
+	}
+}
+
+func TestValidateRuntimeHostSourcesV1RejectsEveryHostAuthorityForRoot(t *testing.T) {
+	root := t.TempDir()
+	for _, test := range []struct {
+		name      string
+		mount     deploy.RuntimeMountV1
+		authority string
+		want      string
+	}{
+		{
+			name: "host input", mount: deploy.RuntimeMountV1{
+				Destination: "/mnt/input", SourceKind: deploy.RuntimeMountSourceDirectory, ReadOnly: true,
+			}, authority: runtimeHostAuthorityInputV1, want: "host input mount",
+		},
+		{
+			name: "shared state", mount: deploy.RuntimeMountV1{
+				Destination: "/mnt/state", SourceKind: deploy.RuntimeMountSourceDirectory,
+			}, authority: runtimeHostAuthoritySharedStateV1, want: "host shared-state mount",
+		},
+		{
+			name: "explicit output", mount: deploy.RuntimeMountV1{
+				Destination: runtimeOutputRoot, SourceKind: deploy.RuntimeMountSourceDirectory,
+			}, authority: runtimeHostAuthorityOutputV1, want: "root-safe output contract",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			policy := runtimeHostPolicy([]deploy.RuntimeMountV1{test.mount})
+			err := ValidateRuntimeHostSourcesV1(policy, "command/check", 0, []RuntimeHostSourceV1{{
+				Destination: test.mount.Destination, HostPath: root, SourceKind: test.mount.SourceKind,
+				Authority: test.authority, ReadOnly: test.mount.ReadOnly,
+			}})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("root authority error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestValidateRuntimeHostSourcesV1AllowsGeneratedStorageForRoot(t *testing.T) {
+	policy := runtimeHostPolicy([]deploy.RuntimeMountV1{{
+		Destination: "/mnt/data", SourceKind: deploy.RuntimeMountSourceGenerated,
+	}})
+	if err := ValidateRuntimeHostSourcesV1(policy, "command/check", 0, []RuntimeHostSourceV1{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateRootRuntimeHostAuthorityV1RejectsBeforeHostInspection(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	plan := DockerExecutionPlan{
+		Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 0, GID: 0, DockerUser: "0:0"}),
+		Mounts: []MountExecutionPlan{{
+			Name: "config", Mode: blueprint.MountBind, Source: missing,
+			SourceKind: deploy.RuntimeMountSourceDirectory, Target: "/mnt/config", ReadOnly: true,
+		}},
+	}
+	policy := runtimeHostPolicy([]deploy.RuntimeMountV1{{
+		Destination: "/mnt/config", SourceKind: deploy.RuntimeMountSourceDirectory, ReadOnly: true,
+	}})
+	policy.Plans[0].ID = runtimeShellPlanID
+	err := ValidateRootRuntimeHostAuthorityV1(policy, plan)
+	if err == nil || !strings.Contains(err.Error(), "root application runtime") || strings.Contains(err.Error(), "no such file") {
+		t.Fatalf("early root authority error = %v", err)
 	}
 }
 
@@ -84,7 +154,9 @@ func TestRuntimeHostSourcesV1IncludesOnlyBindAndExplicitOutputMounts(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sources) != 2 || sources[0].Destination != "/mnt/config" || sources[1].Destination != runtimeOutputRoot {
+	if len(sources) != 2 ||
+		sources[0].Destination != "/mnt/config" || sources[0].Authority != runtimeHostAuthorityInputV1 ||
+		sources[1].Destination != runtimeOutputRoot || sources[1].Authority != runtimeHostAuthorityOutputV1 {
 		t.Fatalf("host sources = %#v", sources)
 	}
 }
