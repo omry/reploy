@@ -143,6 +143,52 @@ func TestCompileRuntimePolicyRejectsExecutableAbsentFromFinalGraph(t *testing.T)
 	}
 }
 
+func TestCompileRuntimePolicyRejectsStartupVerifierExecutableCollisions(t *testing.T) {
+	fixture := newPreparedPythonGraphReuseFixture(t)
+	output := fixture.request.EarlierCatalog[0]
+	observation := pythonConsumerObservation(output.Name, deploy.ApplicationStartupVerifierPathV1)
+	observation.Access = append(observation.Access[:1:1], observation.Access[len(observation.Access)-1])
+	evidence, err := ExecutableEvidenceFromProbe(observation, ProbeExecutableBinding{
+		Output: providers.QualifiedOutput{Component: output.SupplierComponent, Name: output.Name},
+		Facts:  output.Candidate.Provenance,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output.Candidate.InvocationPath = deploy.ApplicationStartupVerifierPathV1
+	output.Evidence = evidence
+	_, err = CompileRuntimePolicyV1(runtimePolicyDocument(t), providers.GraphExecutionResult{
+		Bundles: []providers.ResolvedBundle{}, Materializations: []providers.GraphNodeMaterializeResult{},
+		Catalog: []providers.RealizedOutput{output},
+	}, []deploy.RuntimePlanV1{{ID: "shell", Mounts: []deploy.RuntimeMountV1{}, Executables: []providers.QualifiedOutput{}}})
+	if err == nil || !strings.Contains(err.Error(), "overlaps reserved startup verifier") {
+		t.Fatalf("catalog collision error = %v", err)
+	}
+
+	transaction := rendererTransaction()
+	generated := acceptedGeneratedExecutable(transaction)
+	generated.Evidence.LinkChain = []providers.LinkEvidence{{
+		Path: generated.Declaration.Path, Target: deploy.ApplicationStartupVerifierPathV1,
+		ResolvedPath: deploy.ApplicationStartupVerifierPathV1, Kind: "ordinary",
+	}}
+	generated.Evidence.Terminal.Path = deploy.ApplicationStartupVerifierPathV1
+	generated.Evidence.Access.Paths[0].Path = deploy.ApplicationStartupVerifierPathV1
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = CompileRuntimePolicyV1(runtimePolicyDocument(t), providers.GraphExecutionResult{
+		Bundles: []providers.ResolvedBundle{acceptanceBundle(transaction, platform)},
+		Materializations: []providers.GraphNodeMaterializeResult{{
+			GeneratedExecutables: []providers.RealizedGeneratedExecutable{generated}, Outputs: []providers.RealizedOutput{},
+		}},
+		Catalog: []providers.RealizedOutput{},
+	}, []deploy.RuntimePlanV1{{ID: "shell", Mounts: []deploy.RuntimeMountV1{}, Executables: []providers.QualifiedOutput{}}})
+	if err == nil || !strings.Contains(err.Error(), "overlaps reserved startup verifier") {
+		t.Fatalf("generated collision error = %v", err)
+	}
+}
+
 func TestCompileRuntimePolicyFromLockMatchesGraphCompilation(t *testing.T) {
 	fixture := newPreparedPythonGraphReuseFixture(t)
 	bundle, err := providers.LoadResolvedBundleManifest(fixture.store, fixture.lock.Nodes[0].BundleManifest, pythonprovider.ValidateResolvedBundlePayloadV1)
