@@ -124,6 +124,7 @@ func TestApplyProviderInstallVolumeV1ReplacesFromExistingStagingVolume(t *testin
 	}
 	locked.SourceBuild.Lock.Platform = platform
 	locked.SourceBuild.Lock.FinalImage.ConfigDigest = rendererDigest("a")
+	locked.InstallBuild = locked.SourceBuild.Lock
 	workspace := testPreparedProbeWorkspace(t, platform, t.TempDir())
 	commands := []CommandSpec{}
 	exists := map[string]bool{"staging-data": true, "installed-data": true}
@@ -146,7 +147,7 @@ func TestApplyProviderInstallVolumeV1ReplacesFromExistingStagingVolume(t *testin
 	}
 	copyCommand, err := providerInstallVolumeCopyCommandV1(
 		"/usr/bin/docker", providerInstallVolumeCopyContainerNameV1("installed-data"), "staging-data", "installed-data",
-		locked.SourceBuild.Lock.FinalImage.ConfigDigest, platform, workspace,
+		locked.InstallBuild.FinalImage.ConfigDigest, platform, workspace,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -196,6 +197,7 @@ func TestApplyProviderInstallVolumeV1CleansContainerAndPartialTargetAfterCopyFai
 	}
 	locked.SourceBuild.Lock.Platform = platform
 	locked.SourceBuild.Lock.FinalImage.ConfigDigest = rendererDigest("b")
+	locked.InstallBuild = locked.SourceBuild.Lock
 	workspace := testPreparedProbeWorkspace(t, platform, t.TempDir())
 	wantCopy := errors.New("copy failed")
 	commands := []CommandSpec{}

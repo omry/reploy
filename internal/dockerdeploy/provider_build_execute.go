@@ -31,6 +31,7 @@ type LockedProviderBuildExecutionResultV1 struct {
 	Republished         bool
 	Validated           bool
 	VerificationFailure string
+	Warnings            []string
 }
 
 type providerBuildExecutionBackend struct {

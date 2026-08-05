@@ -35,6 +35,7 @@ type ProviderInstallResultV1 struct {
 	ImageReused   bool
 	Started       bool
 	PathUpdates   []PathUpdateAction
+	Warnings      []string
 }
 
 type providerInstallOptionsV1 struct {
@@ -75,6 +76,7 @@ type lockedProviderInstallV1 struct {
 	SourceStore          providerstore.Store
 	DestinationStore     providerstore.Store
 	SourceBuild          CurrentBuild
+	InstallBuild         deploy.BuildLockV1
 	Plan                 providerInstallationPlanV1
 	References           EnvironmentImageReferences
 	HostTools            providerInstallHostToolsV1
@@ -91,6 +93,7 @@ type providerInstallRunBackend struct {
 	recoverDestination   func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (bool, error)
 	buildSource          func(context.Context, LockedProviderBuildRunInputV1) (LockedProviderBuildExecutionResultV1, error)
 	prepareAccount       func(context.Context, blueprint.SystemAccount, providerstore.Store, CurrentBuild, providerInstallRunInputV1) (providerInstallRunInputV1, error)
+	buildInstallRuntime  func(context.Context, providerstore.Store, CurrentBuild, DockerExecutionPlan, RunOptions) (installedRuntimeIdentityBuildV1, error)
 	newReferences        func(string, string) (EnvironmentImageReferences, error)
 	planInstallation     func(context.Context, providerInstallPlanningV1) (providerInstallationPlanV1, error)
 	inspectHostTools     func(context.Context, installBackend) (providerInstallHostToolsV1, error)
@@ -141,7 +144,7 @@ func runProviderInstallV1(
 			return deploy.StateV1{}, fmt.Errorf("provider install source and destination must not overlap")
 		}
 	}
-	if backend.acquire == nil || backend.release == nil || backend.readState == nil || backend.admit == nil || backend.complete == nil || backend.newStore == nil || backend.recoverDestination == nil || backend.buildSource == nil || backend.prepareAccount == nil || backend.newReferences == nil || backend.planInstallation == nil || backend.inspectHostTools == nil || backend.preflightDestination == nil || backend.ensureDestination == nil || backend.cleanupDestination == nil || backend.prepareDestination == nil || backend.stopDestination == nil || backend.publish == nil || backend.publishFiles == nil || backend.activateDestination == nil || backend.markReady == nil || backend.startDestination == nil {
+	if backend.acquire == nil || backend.release == nil || backend.readState == nil || backend.admit == nil || backend.complete == nil || backend.newStore == nil || backend.recoverDestination == nil || backend.buildSource == nil || backend.prepareAccount == nil || backend.buildInstallRuntime == nil || backend.newReferences == nil || backend.planInstallation == nil || backend.inspectHostTools == nil || backend.preflightDestination == nil || backend.ensureDestination == nil || backend.cleanupDestination == nil || backend.prepareDestination == nil || backend.stopDestination == nil || backend.publish == nil || backend.publishFiles == nil || backend.activateDestination == nil || backend.markReady == nil || backend.startDestination == nil {
 		return deploy.StateV1{}, fmt.Errorf("run provider install requires a complete backend")
 	}
 	input.SourceDeploymentDir = sourceDir
@@ -265,6 +268,26 @@ func runProviderInstallV1(
 	if plan.Installation.Status != deploy.InstallationStatusReady {
 		return deploy.StateV1{}, fmt.Errorf("provider installation plan must describe a ready installation")
 	}
+	installBuild, err := backend.buildInstallRuntime(ctx, sourceStore, sourceBuild, plan.Docker, input.RunOptions)
+	if err != nil {
+		return deploy.StateV1{}, err
+	}
+	destinationPublished := false
+	defer func() {
+		if !installBuild.Adapted {
+			return
+		}
+		if cleanupErr := RemoveBuiltImageCandidate(context.WithoutCancel(ctx), installBuild.Candidate); cleanupErr != nil {
+			if destinationPublished {
+				writeProviderBuildProgress(input.RunOptions.Progress, "warning: installation succeeded, but cleanup of a temporary runtime image is pending: %v", cleanupErr)
+				return
+			}
+			err = errors.Join(err, fmt.Errorf("remove temporary installed runtime image: %w", cleanupErr))
+		}
+	}()
+	if err := validateInstalledRuntimeIdentityBuildV1(installBuild, sourceBuild, plan.Docker); err != nil {
+		return deploy.StateV1{}, err
+	}
 	hostTools, err := backend.inspectHostTools(ctx, plan.Backend)
 	if err != nil {
 		return deploy.StateV1{}, fmt.Errorf("inspect provider installation host tools: %w", err)
@@ -276,7 +299,6 @@ func runProviderInstallV1(
 	if err != nil {
 		return deploy.StateV1{}, err
 	}
-	destinationPublished := false
 	defer func() {
 		if err != nil && destinationCreated && !destinationPublished && destinationCleanupSafe {
 			err = errors.Join(err, backend.cleanupDestination(destinationDir))
@@ -286,7 +308,8 @@ func runProviderInstallV1(
 	configuring.Status = deploy.InstallationStatusConfiguring
 	publicationInput := InstalledBuildPublicationInputV1{
 		Environment: document.Environment.ID, SourceDeploymentDir: sourceDir,
-		DestinationDeploymentDir: destinationDir, Source: sourceBuild, Installation: configuring, References: references,
+		DestinationDeploymentDir: destinationDir, Source: sourceBuild, Build: installBuild.Lock,
+		Installation: configuring, References: references,
 	}
 	if err := validateInstalledBuildSource(publicationInput); err != nil {
 		return deploy.StateV1{}, err
@@ -329,16 +352,18 @@ func runProviderInstallV1(
 			ControlScript: plan.ControlScript, Service: plan.Installation.Service,
 			Updated: updated, Started: input.Install.Start,
 			PathUpdates: append([]PathUpdateAction(nil), plan.PathUpdates...),
+			Warnings:    append([]string(nil), plan.Docker.Sandbox.RuntimeUser.Warnings...),
 		}
 		if updated && destinationState.Current != nil {
-			input.result.ImageReused = destinationState.Current.ImageDigest == sourceBuild.Generation.ImageDigest
+			input.result.ImageReused = destinationState.Current.ImageDigest == installBuild.Lock.FinalImage.Digest
 		}
 	}
 	destinationGeneration := providerInstallDestinationGenerationV1(destinationState, destinationFound, references.Generation)
 	locked := lockedProviderInstallV1{
 		SourceOperation: sourceOperation, DestinationOperation: destinationOperation,
 		SourceStore: sourceStore, DestinationStore: destinationStore,
-		SourceBuild: sourceBuild, Plan: plan, References: references, HostTools: hostTools, Input: input,
+		SourceBuild: sourceBuild, InstallBuild: installBuild.Lock,
+		Plan: plan, References: references, HostTools: hostTools, Input: input,
 	}
 	prepared, err := backend.prepareDestination(ctx, locked)
 	if err != nil {
