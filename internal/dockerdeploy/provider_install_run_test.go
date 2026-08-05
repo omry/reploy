@@ -965,6 +965,90 @@ func TestRunProviderInstallV1RejectsServiceRenameBeforeDestinationPreparation(t 
 	}
 }
 
+func TestRunProviderInstallV1RejectsRootHostBindBeforeRuntimeBuildOrDestinationPreparation(t *testing.T) {
+	sourceDir := t.TempDir()
+	destinationDir := filepath.Join(t.TempDir(), "installed")
+	hostSource := t.TempDir()
+	_, build := providerInstallRunBuildFixture(t, sourceDir)
+	build.Lock.RuntimePolicy = runtimeHostPolicy([]deploy.RuntimeMountV1{{
+		Destination: "/mnt/config", SourceKind: deploy.RuntimeMountSourceDirectory, ReadOnly: true,
+	}})
+	build.Lock.RuntimePolicy.Plans[0].ID = runtimeShellPlanID
+
+	backend := providerInstallRunBackend{
+		acquire:  deploy.AcquireOperationLock,
+		release:  func(lock *deploy.OperationLock) error { return lock.Unlock() },
+		newStore: providerstore.NewStore,
+		buildSource: func(context.Context, LockedProviderBuildRunInputV1) (LockedProviderBuildExecutionResultV1, error) {
+			return build, nil
+		},
+		prepareAccount: providerInstallRunPrepareAccountFixture,
+		newReferences: func(string, string) (EnvironmentImageReferences, error) {
+			return fixedPublicationReferences(t, destinationDir, 0x84), nil
+		},
+		planInstallation: func(_ context.Context, input providerInstallPlanningV1) (providerInstallationPlanV1, error) {
+			plan := providerInstallRunPlanFixture(destinationDir, input.References)
+			plan.Docker.Sandbox = testApplicationSandboxPlanV1(0, 0)
+			plan.Docker.Mounts = []MountExecutionPlan{{
+				Name: "config", Mode: blueprint.MountBind, Source: hostSource,
+				SourceKind: deploy.RuntimeMountSourceDirectory, Target: "/mnt/config", ReadOnly: true,
+			}}
+			return plan, nil
+		},
+		buildInstallRuntime: func(context.Context, providerstore.Store, CurrentBuild, DockerExecutionPlan, RunOptions) (installedRuntimeIdentityBuildV1, error) {
+			t.Fatal("built an installed runtime after rejecting root host authority")
+			return installedRuntimeIdentityBuildV1{}, nil
+		},
+		inspectHostTools: func(context.Context, installBackend) (providerInstallHostToolsV1, error) {
+			t.Fatal("inspected host tools after rejecting root host authority")
+			return providerInstallHostToolsV1{}, nil
+		},
+		preflightDestination: func(providerstore.Store, CurrentBuild, string) error {
+			t.Fatal("preflighted destination after rejecting root host authority")
+			return nil
+		},
+		ensureDestination: func(string) (bool, error) {
+			t.Fatal("created destination after rejecting root host authority")
+			return false, nil
+		},
+		cleanupDestination: func(string) error { return nil },
+		prepareDestination: func(context.Context, lockedProviderInstallV1) (preparedProviderInstallFilesV1, error) {
+			t.Fatal("prepared destination after rejecting root host authority")
+			return preparedProviderInstallFilesV1{}, nil
+		},
+		publish: func(context.Context, *deploy.OperationLock, *deploy.OperationLock, providerstore.Store, providerstore.Store, InstalledBuildPublicationInputV1) (deploy.StateV1, error) {
+			t.Fatal("published destination after rejecting root host authority")
+			return deploy.StateV1{}, nil
+		},
+		publishFiles: func(preparedProviderInstallFilesV1) error {
+			t.Fatal("published files after rejecting root host authority")
+			return nil
+		},
+		activateDestination: func(context.Context, lockedProviderInstallV1, deploy.StateV1) error {
+			t.Fatal("activated destination after rejecting root host authority")
+			return nil
+		},
+		markReady: func(*deploy.OperationLock, deploy.InstallationStateV1) (deploy.StateV1, bool, error) {
+			t.Fatal("marked destination ready after rejecting root host authority")
+			return deploy.StateV1{}, false, nil
+		},
+		startDestination: func(context.Context, lockedProviderInstallV1, deploy.StateV1) error {
+			t.Fatal("started destination after rejecting root host authority")
+			return nil
+		},
+	}
+
+	_, err := runProviderInstallV1(t.Context(), providerInstallRunInputV1{
+		SourceDeploymentDir: sourceDir, DestinationDeploymentDir: destinationDir,
+	}, providerInstallAdmissionTestBackend(backend, nil))
+	if err == nil || !strings.Contains(err.Error(), "root application runtime") {
+		t.Fatalf("root host-bind install error = %v", err)
+	}
+	if _, err := os.Lstat(destinationDir); !os.IsNotExist(err) {
+		t.Fatalf("root host-bind rejection mutated destination: %v", err)
+	}
+}
+
 func providerInstallRunBuildFixture(t *testing.T, sourceDir string) (deploy.StateV1, LockedProviderBuildExecutionResultV1) {
 	t.Helper()
 	operation, _, current := installedBuildPublicationSourceFixtureAtDir(t, sourceDir)
