@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
@@ -123,6 +125,16 @@ func ValidateRuntimeHostSourcesV1(policy deploy.RuntimePolicyV1, planID string, 
 		if err != nil {
 			return fmt.Errorf("runtime plan %q mount %q host source: %w", planID, mount.Destination, err)
 		}
+		protected, err := protectedRuntimeHostTreeV1(source.HostPath)
+		if err != nil {
+			return fmt.Errorf("runtime plan %q mount %q host source: %w", planID, mount.Destination, err)
+		}
+		if protected != "" {
+			return fmt.Errorf(
+				"runtime plan %q mount %q host source resolves to protected host system source %q; ordinary host binds cannot expose the host filesystem root, /proc, /dev, or /sys",
+				planID, mount.Destination, protected,
+			)
+		}
 		switch mount.SourceKind {
 		case deploy.RuntimeMountSourceDirectory:
 			if !info.IsDir() {
@@ -145,6 +157,51 @@ func ValidateRuntimeHostSourcesV1(policy deploy.RuntimePolicyV1, planID string, 
 		return fmt.Errorf("runtime plan %q has unexpected host source for %q", planID, destinations[0])
 	}
 	return nil
+}
+
+func protectedRuntimeHostTreeV1(hostPath string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(hostPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve canonical path: %w", err)
+	}
+	resolved = filepath.Clean(resolved)
+	filesystem, err := protectedRuntimeHostFilesystemV1(resolved)
+	if err != nil {
+		return "", fmt.Errorf("identify host filesystem: %w", err)
+	}
+	if filesystem != "" {
+		return filesystem, nil
+	}
+
+	volumeRoot := filepath.VolumeName(resolved) + string(filepath.Separator)
+	if filepath.Clean(volumeRoot) == resolved {
+		return volumeRoot, nil
+	}
+	if runtime.GOOS == "windows" {
+		return "", nil
+	}
+
+	for _, candidate := range []string{"/proc", "/dev", "/sys"} {
+		canonical, err := filepath.EvalSymlinks(candidate)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return "", fmt.Errorf("resolve protected host system tree %q: %w", candidate, err)
+		}
+		if pathWithinV1(resolved, canonical) {
+			return candidate, nil
+		}
+	}
+	return "", nil
+}
+
+func pathWithinV1(path string, root string) bool {
+	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	return relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func ValidateRootRuntimeHostAuthorityV1(policy deploy.RuntimePolicyV1, plan DockerExecutionPlan) error {
