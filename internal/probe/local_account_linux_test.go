@@ -54,6 +54,28 @@ func TestInstallLocalAccountFilesCreatesMissingDatabaseFiles(t *testing.T) {
 	}
 }
 
+func TestInstallLocalAccountFilesRealizesRootRuntimeAccount(t *testing.T) {
+	root := t.TempDir()
+	passwd := filepath.Join(root, "passwd")
+	group := filepath.Join(root, "group")
+	if err := os.WriteFile(passwd, []byte("root:x:0:0:root:/root:/bin/sh\nnobody:x:65534:65534::/:/sbin/nologin\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(group, []byte("root:x:0:\nnogroup:x:65534:\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := installLocalAccountFiles("root", "0", "0", "/mnt/reploy-home", passwd, group); err != nil {
+		t.Fatal(err)
+	}
+	passwdContent, err := os.ReadFile(passwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(passwdContent); !strings.HasPrefix(got, "root:x:0:0::/mnt/reploy-home:/sbin/nologin\n") || strings.Count(got, "root:x:0:0:") != 1 {
+		t.Fatalf("root passwd = %q", got)
+	}
+}
+
 func TestInstallLocalAccountFilesRejectsNameCollisionAndSpecialDatabase(t *testing.T) {
 	root := t.TempDir()
 	passwd := filepath.Join(root, "passwd")

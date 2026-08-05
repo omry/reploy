@@ -1,0 +1,2 @@
+kind: Security
+body: Reject host input, shared-state, and explicit output mounts for root application runtimes while continuing to allow Docker-managed volumes and tmpfs.
