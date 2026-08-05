@@ -149,7 +149,7 @@ func TestCheckDockerResponsiveUsesServerVersion(t *testing.T) {
 
 	err := checkDockerResponsive(
 		context.Background(),
-		CommandSpec{Name: dockerPath, Env: []string{"DOCKER_ARGV_LOG=" + logPath}},
+		CommandSpec{Name: dockerPath, Env: []string{"DOCKER_HOST=unix:///var/run/docker.sock", "DOCKER_CONTEXT=", "DOCKER_ARGV_LOG=" + logPath}},
 		defaultDockerPreflightTimeout,
 	)
 	if err != nil {

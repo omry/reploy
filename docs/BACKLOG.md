@@ -31,12 +31,14 @@ This file is the day-to-day queue for design and implementation gaps.
 
 ## Now
 
-- [ ] `P1` Define confinement for special files nested inside host directory
-      binds. A launch-time recursive scan for sockets and device nodes adds
-      unbounded source-tree latency and provides only a point-in-time result.
-      Choose a durable mechanism or explicitly narrow the security contract,
-      then add focused cross-platform tests without weakening ordinary
-      read-only project mounts.
+- [ ] `P1` Implement the initial coarse application-network policy. Preserve
+      independent public and local policy intent with both denied by default,
+      apply it consistently to workloads, commands, shells, and lifecycle
+      commands, and use only proven isolation and endpoint primitives from the
+      active runtime backend. Permit exact declared inbound endpoints without
+      granting general local access. Fail closed when a backend cannot realize
+      a requested combination, and do not represent this slice as destination-,
+      domain-, or packet-level filtering.
 
 ## Pre-release
 
@@ -183,6 +185,15 @@ This file is the day-to-day queue for design and implementation gaps.
 
 ## Post-v1
 
+- [ ] `P2` Design explicit remote Docker support.
+      Replace today's rejected ambient `DOCKER_HOST` and remote-context behavior
+      with an intentional distributed-runtime contract. Define input snapshot
+      upload, output-file and output-dir extraction with safe local publication,
+      image export or remote placement, port forwarding, remote identity and
+      permission semantics, authenticated transport, lifecycle ownership,
+      interruption recovery, and deterministic cleanup. Keep local Docker
+      Engine and Docker Desktop behavior distinct from generic remote daemons.
+
 - [ ] `P2` Consider a Reploy host configuration surface.
       Keep a standing inventory of concrete operator- or host-owned settings
       that do not belong in blueprints, staging overrides, or installation
@@ -191,6 +202,20 @@ This file is the day-to-day queue for design and implementation gaps.
       and portability. Initial potential use case: overriding the otherwise
       fixed host-owned limits for controlled-session endpoint streams and
       connection-open rates.
+
+- [ ] `P2` Design and implement a Reploy userland L3 policy gateway. Keep this
+      separate from the initial public/local kill switches and controlled
+      sessions. Define a capability-free application network namespace, a
+      one-shot route initializer, an isolated data path whose only peer is the
+      gateway, private gateway control, root-resistant route invariants,
+      IPv4/IPv6 and DNS policy, destination and port grants, auditing, resource
+      limits, failure behavior, reconciliation, and Docker/Podman plus Desktop
+      integration. Treat native engine primitives as fast paths rather than
+      exposing backend network modes as product policy. Replace or mediate the
+      initial controlled-session host-loopback endpoint publication so only the
+      lease-owned Host Reploy operation can reach the recorded application;
+      include multi-user-host tests proving unrelated local processes cannot
+      bypass the session endpoint grant.
 
 - [ ] `P2` Evaluate and prioritize the Dingo development-environment gaps.
       Use `docs/DINGO_GAPS.md` as the needs and evidence record for portable
