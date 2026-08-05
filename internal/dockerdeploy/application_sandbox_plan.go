@@ -33,6 +33,9 @@ type ApplicationSandboxPlanV1 struct {
 }
 
 func newApplicationSandboxPlanV1(runtimeUser RuntimeUserPlan) ApplicationSandboxPlanV1 {
+	if runtimeUser.LocalUser == "" {
+		runtimeUser.LocalUser = runtimeLocalUserNameV1("", runtimeUser.UID)
+	}
 	return ApplicationSandboxPlanV1{
 		RuntimeUser:     runtimeUser,
 		ReadOnlyRoot:    true,
@@ -55,6 +58,15 @@ func ValidateApplicationSandboxPlanV1(plan ApplicationSandboxPlanV1) error {
 	wantUser := strconv.Itoa(plan.RuntimeUser.UID) + ":" + strconv.Itoa(plan.RuntimeUser.GID)
 	if plan.RuntimeUser.DockerUser != wantUser {
 		return fmt.Errorf("application sandbox Docker user must match its numeric UID and GID")
+	}
+	if plan.RuntimeUser.LocalUser == "" {
+		return fmt.Errorf("application sandbox requires a container-local user name")
+	}
+	if plan.RuntimeUser.UID == 0 && plan.RuntimeUser.LocalUser != "root" {
+		return fmt.Errorf("root application sandbox identity must use the local user name root")
+	}
+	if plan.RuntimeUser.UID != 0 && plan.RuntimeUser.LocalUser == "root" {
+		return fmt.Errorf("non-root application sandbox identity must not use the local user name root")
 	}
 	wantGroups, err := normalizeSupplementaryGIDsV1(plan.RuntimeUser.GID, plan.RuntimeUser.SupplementaryGIDs)
 	if err != nil {
@@ -96,6 +108,23 @@ func ValidateApplicationSandboxPlanV1(plan ApplicationSandboxPlanV1) error {
 		return fmt.Errorf("application sandbox must prohibit host devices")
 	}
 	return nil
+}
+
+func applicationLocalAccountV1(plan ApplicationSandboxPlanV1) (deploy.ApplicationLocalAccountV1, error) {
+	if err := ValidateApplicationSandboxPlanV1(plan); err != nil {
+		return deploy.ApplicationLocalAccountV1{}, err
+	}
+	account := deploy.ApplicationLocalAccountV1{
+		Schema: deploy.ApplicationLocalAccountSchemaV1,
+		Name:   plan.RuntimeUser.LocalUser,
+		UID:    strconv.Itoa(plan.RuntimeUser.UID),
+		GID:    strconv.Itoa(plan.RuntimeUser.GID),
+		Home:   plan.TemporaryHome,
+	}
+	if err := deploy.ValidateApplicationLocalAccountV1(account); err != nil {
+		return deploy.ApplicationLocalAccountV1{}, err
+	}
+	return account, nil
 }
 
 func normalizeSupplementaryGIDsV1(primary int, values []int) ([]int, error) {

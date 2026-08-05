@@ -147,6 +147,9 @@ func runDockerBuild(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 	if result.VerificationFailure != "" {
 		presenter.Warn(buildVerificationWarning(result.VerificationFailure))
 	}
+	for _, warning := range result.Warnings {
+		presenter.Warn(warning)
+	}
 	summary, err := summarizeProviderBuild(result)
 	if err != nil {
 		_ = presenter.Failure("reploy build error: summarize completed build: " + err.Error())
@@ -327,6 +330,7 @@ func interactiveBuildRunner(
 			return overrideui.ValidationResult{}, fmt.Errorf("summarize completed build: %w", err)
 		}
 		warnings := buildWarnings(childOutput.String(), true)
+		warnings = append(warnings, build.Warnings...)
 		if build.VerificationFailure != "" {
 			warnings = append(warnings, buildVerificationWarning(build.VerificationFailure))
 		}

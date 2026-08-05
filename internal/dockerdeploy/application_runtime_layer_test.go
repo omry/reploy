@@ -16,14 +16,19 @@ func applicationRuntimeLayerTestRequest(t *testing.T) ApplicationRuntimeLayerBui
 	verifier.Artifact = rendererDigest("a")
 	verifier.Size = "123"
 	return ApplicationRuntimeLayerBuildRequest{
-		Source: finalization.Source, Verifier: verifier, Platform: finalization.Platform,
+		Source: finalization.Source, Verifier: verifier,
+		Account:  testApplicationLocalAccountV1(),
+		Platform: finalization.Platform,
 	}
 }
 
 func applicationRuntimeLayerTestCandidate(t *testing.T, request ApplicationRuntimeLayerBuildRequest) InspectedImageCandidate {
 	t.Helper()
 	candidate := request.Source
-	candidate.Descriptor.RootFSDiffIDs = append(append([]canonical.Digest{}, candidate.Descriptor.RootFSDiffIDs...), rendererDigest("b"))
+	candidate.Descriptor.RootFSDiffIDs = append(
+		append([]canonical.Digest{}, candidate.Descriptor.RootFSDiffIDs...),
+		rendererDigest("b"), rendererDigest("d"),
+	)
 	candidate.Descriptor.AuthorReference = string(rendererDigest("c"))
 	candidate.Descriptor.ImmutableReference = string(rendererDigest("c"))
 	candidate.Descriptor.ConfigDigest = rendererDigest("c")
@@ -46,14 +51,18 @@ func TestApplicationRuntimeLayerDockerfileAddsOnlyFixedVerifier(t *testing.T) {
 	dockerfile := string(content)
 	for _, want := range []string{
 		"# syntax=" + MaterializationDockerfileSyntax,
+		"FROM ${REPLOY_BASE_IMAGE} AS reploy-runtime-account",
+		"USER 0:0",
+		`RUN ["/reploy-probe","install-local-account","reploy","1000","1000","/mnt/reploy-home"]`,
 		"FROM ${REPLOY_BASE_IMAGE}",
 		`RUN --mount=type=bind,source=reploy-probe,target=/reploy-build-probe,readonly ["/reploy-build-probe", "install-runtime-verifier", "/reploy-probe"]`,
+		"COPY --from=reploy-runtime-account /etc/passwd /etc/group /etc/",
 	} {
 		if !strings.Contains(dockerfile, want) {
 			t.Fatalf("Dockerfile missing %q:\n%s", want, dockerfile)
 		}
 	}
-	for _, forbidden := range []string{"COPY ", "ADD ", "USER ", "ENTRYPOINT ", "CMD "} {
+	for _, forbidden := range []string{"ADD ", "ENTRYPOINT ", "CMD "} {
 		if strings.Contains(dockerfile, forbidden) {
 			t.Fatalf("Dockerfile contains %q:\n%s", forbidden, dockerfile)
 		}
@@ -68,7 +77,7 @@ func TestApplicationRuntimeLayerDockerfileRestoresInheritedUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	dockerfile := string(content)
-	if !strings.Contains(dockerfile, "USER 0:0\nRUN ") || !strings.HasSuffix(dockerfile, "USER \"12345:23456\"\n") {
+	if !strings.Contains(dockerfile, "USER 0:0\nCOPY --from=reploy-runtime-account") || !strings.HasSuffix(dockerfile, "USER \"12345:23456\"\n") {
 		t.Fatalf("Dockerfile does not switch to root and restore the inherited user:\n%s", dockerfile)
 	}
 }
@@ -90,7 +99,7 @@ func TestValidateInspectedApplicationRuntimeLayerCandidatePreservesConfigAndAdds
 		{name: "no layer", mutate: func(value *InspectedImageCandidate) {
 			value.Descriptor.RootFSDiffIDs = append([]canonical.Digest{}, request.Source.Descriptor.RootFSDiffIDs...)
 			value.Image.RootFSSubject = request.Source.Image.RootFSSubject
-		}, want: "exactly one"},
+		}, want: "exactly two"},
 		{name: "changed prefix", mutate: func(value *InspectedImageCandidate) {
 			value.Descriptor.RootFSDiffIDs[0] = rendererDigest("d")
 			rootFS, err := deploy.RootFSSubject(value.Descriptor.RootFSDiffIDs)
@@ -98,7 +107,7 @@ func TestValidateInspectedApplicationRuntimeLayerCandidatePreservesConfigAndAdds
 				t.Fatal(err)
 			}
 			value.Image.RootFSSubject = rootFS
-		}, want: "exactly one"},
+		}, want: "exactly two"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

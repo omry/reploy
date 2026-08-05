@@ -398,7 +398,7 @@ func publicationLockFixture(t *testing.T, dir string, imageChar string, configCh
 		t.Fatal(err)
 	}
 	upstream := providers.RealizedImageV1{Digest: base.ConfigDigest, ConfigDigest: base.ConfigDigest, RootFSSubject: rootFSSubject}
-	runtimeDiffIDs := append(append([]canonical.Digest{}, base.RootFSDiffIDs...), rendererDigest("e"))
+	runtimeDiffIDs := append(append([]canonical.Digest{}, base.RootFSDiffIDs...), rendererDigest("e"), rendererDigest("f"))
 	runtimeRootFS, err := deploy.RootFSSubject(runtimeDiffIDs)
 	if err != nil {
 		t.Fatal(err)

@@ -1695,6 +1695,9 @@ func runDockerInstall(args []string, stdout io.Writer, stderr io.Writer, globalO
 		_ = presenter.Failure("reploy install error: " + installFailureDiagnostic(err, presenter.CapturedChildOutput()))
 		return 1
 	}
+	for _, warning := range result.Warnings {
+		presenter.Warn(warning)
+	}
 	successLines, successErr := dockerInstallSuccessLines(result.TargetDir, globalOptions.DockerTimeout)
 	if successErr != nil {
 		presenter.Warn("could not render blueprint completion details: " + successErr.Error())

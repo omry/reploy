@@ -79,6 +79,7 @@ type MountExecutionPlan struct {
 type RuntimeUserPlan struct {
 	User              string
 	Group             string
+	LocalUser         string
 	UID               int
 	GID               int
 	SupplementaryGIDs []int
@@ -325,15 +326,22 @@ func planRuntimeUser(document blueprint.Document, context DockerPlanContext) (Ru
 			User: strconv.Itoa(context.UID), Group: strconv.Itoa(context.GID), UID: context.UID, GID: context.GID,
 			SupplementaryGIDs: supplementaryGIDs,
 			DockerUser:        strconv.Itoa(context.UID) + ":" + strconv.Itoa(context.GID),
+			LocalUser:         runtimeLocalUserNameV1(document.Environment.Runtime.User, context.UID),
 		}
 		if context.Phase == blueprint.PhaseInstalled {
 			plan.Warnings = append(plan.Warnings,
-				fmt.Sprintf("current-user install overrides the image user with UID/GID %d:%d", context.UID, context.GID),
-				"the image must tolerate an arbitrary non-root identity and may write persistently only to declared writable paths",
+				fmt.Sprintf("current-user install overrides the image user with local account %q (UID/GID %d:%d)", plan.LocalUser, context.UID, context.GID),
 			)
+			if context.UID == 0 {
+				plan.Warnings = append(plan.Warnings, rootRuntimeIdentityWarningV1)
+			} else {
+				plan.Warnings = append(plan.Warnings, "the image must tolerate an arbitrary non-root identity and may write persistently only to declared writable paths")
+			}
 			if document.Environment.Install.System.Account.User != "" || document.Environment.Install.System.Account.Group != "" {
 				plan.Warnings = append(plan.Warnings, "environment.install.system.account does not apply to current-user scope")
 			}
+		} else if context.UID == 0 {
+			plan.Warnings = append(plan.Warnings, rootRuntimeIdentityWarningV1)
 		}
 		return plan, nil
 	}
@@ -344,11 +352,28 @@ func planRuntimeUser(document blueprint.Document, context DockerPlanContext) (Ru
 		if context.SystemUser == "" || context.SystemGroup == "" || context.UID < 0 || context.GID < 0 {
 			return RuntimeUserPlan{}, fmt.Errorf("system Docker plan requires resolved service account and numeric UID/GID")
 		}
-		return RuntimeUserPlan{
+		plan := RuntimeUserPlan{
 			User: context.SystemUser, Group: context.SystemGroup, UID: context.UID, GID: context.GID,
 			SupplementaryGIDs: supplementaryGIDs,
 			DockerUser:        strconv.Itoa(context.UID) + ":" + strconv.Itoa(context.GID),
-		}, nil
+			LocalUser:         runtimeLocalUserNameV1(document.Environment.Runtime.User, context.UID),
+		}
+		if context.UID == 0 {
+			plan.Warnings = append(plan.Warnings, rootRuntimeIdentityWarningV1)
+		}
+		return plan, nil
 	}
 	return RuntimeUserPlan{}, fmt.Errorf("cannot resolve Docker runtime user")
+}
+
+const rootRuntimeIdentityWarningV1 = "the application will run as root inside its container; root can bypass application-level file permissions, while Docker access, Linux capabilities, host filesystem access, and network access remain limited by the effective Reploy sandbox policy"
+
+func runtimeLocalUserNameV1(configured string, uid int) string {
+	if uid == 0 {
+		return "root"
+	}
+	if configured == "" {
+		return blueprint.DefaultRuntimeUser
+	}
+	return configured
 }

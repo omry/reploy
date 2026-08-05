@@ -65,6 +65,7 @@ func TestProviderInstallVolumeCopyHelperDockerIntegration(t *testing.T) {
 	locked.HostTools.DockerPath = "docker"
 	locked.SourceBuild.Lock.Platform = platform
 	locked.SourceBuild.Lock.FinalImage.ConfigDigest = imageID
+	locked.InstallBuild = locked.SourceBuild.Lock
 	cleaned := false
 	if err := applyProviderInstallPathUpdatesWithV1(ctx, locked, providerInstallPathUpdateBackendV1{
 		volumeExists: func(ctx context.Context, name string) (bool, error) {
