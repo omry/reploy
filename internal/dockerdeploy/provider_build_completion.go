@@ -26,6 +26,7 @@ type ProviderBuildCompletionInput struct {
 	BaseCatalog      []providers.RealizedOutput
 	Graph            providers.GraphExecutionResult
 	Validation       ProviderGraphValidationPlan
+	StartupVerifier  deploy.ApplicationStartupVerifierV1
 	RunValidation    FullImageValidationRunner
 	RunOptions       RunOptions
 	ValidateChoices  bool
@@ -48,6 +49,7 @@ type providerBuildCompletionBackend struct {
 		FullImageValidationInput,
 		providers.RequirementProfileOwnerValidator,
 		FullImageValidationRunner,
+		deploy.ApplicationStartupVerifierV1,
 		RunOptions,
 	) (FinalizedBuildValidationResult, error)
 	assemble         func(context.Context, providerstore.Store, BuildLockAssemblyInput) (deploy.BuildLockV1, error)
@@ -116,7 +118,8 @@ func completeProviderBuild(
 	finalizeOptions.Context = finalizeCtx
 	finalized, err := backend.validateAndFinalize(
 		finalizeCtx, store, input.Validation.Layers, input.Validation.Final,
-		registry.ValidateRequirementProfileV1, input.RunValidation, finalizeOptions,
+		registry.ValidateRequirementProfileV1, input.RunValidation,
+		input.StartupVerifier, finalizeOptions,
 	)
 	endFinalize(err)
 	if err != nil {
@@ -153,6 +156,7 @@ func completeProviderBuild(
 		Overlay: input.Overlay, PackageOverrides: input.PackageOverrides,
 		Base: input.Base, Graph: input.Graph,
 		RuntimePolicy:    policy,
+		RuntimeLayer:     finalized.RuntimeLayer,
 		ValidationRecord: finalized.Validation.Final.Reference, FinalImage: finalized.Image.Image,
 	})
 	endAssemble(err)
@@ -200,6 +204,9 @@ func providerBuildRuntimePolicyV1(input ProviderBuildCompletionInput) (deploy.Ru
 }
 
 func validateProviderBuildCompletionInput(input ProviderBuildCompletionInput, policy deploy.RuntimePolicyV1) error {
+	if err := deploy.ValidateApplicationStartupVerifierV1(input.StartupVerifier, true); err != nil {
+		return fmt.Errorf("provider build startup verifier: %w", err)
+	}
 	if err := providers.ValidateResolvedRequestV1(input.ResolvedRequest, registry.ValidateResolvedRequestOwnersV1); err != nil {
 		return err
 	}

@@ -24,7 +24,10 @@ func TestCompileRuntimePolicyCanonicalizesPlans(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(policy.ProtectedPaths) != 2 || policy.ProtectedPaths[0].Path != deploy.ReployImageRoot || policy.ProtectedPaths[1].Path != deploy.ReployProviderRoot {
+	if len(policy.ProtectedPaths) != 3 ||
+		policy.ProtectedPaths[0].Path != deploy.ReployImageRoot ||
+		policy.ProtectedPaths[1].Path != deploy.ReployProviderRoot ||
+		policy.ProtectedPaths[2].Path != deploy.ApplicationStartupVerifierPathV1 {
 		t.Fatalf("protected paths = %#v", policy.ProtectedPaths)
 	}
 	if len(policy.Plans) != 2 || policy.Plans[0].ID != "shell" || policy.Plans[1].Mounts[0].Destination != "/data" {
@@ -46,6 +49,7 @@ func TestCompileRuntimePolicyAllowsAbsoluteTargetsAndRejectsOverlap(t *testing.T
 	}{
 		{name: "filesystem root", mounts: []deploy.RuntimeMountV1{{Destination: "/", SourceKind: deploy.RuntimeMountSourceDirectory}}, want: "filesystem root"},
 		{name: "kernel subtree", mounts: []deploy.RuntimeMountV1{{Destination: "/sys/fs", SourceKind: deploy.RuntimeMountSourceDirectory}}, want: "reserved container path"},
+		{name: "startup verifier", mounts: []deploy.RuntimeMountV1{{Destination: deploy.ApplicationStartupVerifierPathV1, SourceKind: deploy.RuntimeMountSourceFile}}, want: "protected"},
 		{name: "overlap", mounts: []deploy.RuntimeMountV1{
 			{Destination: "/mnt/data", SourceKind: deploy.RuntimeMountSourceDirectory},
 			{Destination: "/mnt/data/cache", SourceKind: deploy.RuntimeMountSourceDirectory},
@@ -110,6 +114,52 @@ func TestCompileRuntimePolicyRejectsExecutableAbsentFromFinalGraph(t *testing.T)
 	}})
 	if err == nil || !strings.Contains(err.Error(), "absent from the final provider graph") {
 		t.Fatalf("missing executable error = %v", err)
+	}
+}
+
+func TestCompileRuntimePolicyRejectsStartupVerifierExecutableCollisions(t *testing.T) {
+	fixture := newPreparedPythonGraphReuseFixture(t)
+	output := fixture.request.EarlierCatalog[0]
+	observation := pythonConsumerObservation(output.Name, deploy.ApplicationStartupVerifierPathV1)
+	observation.Access = append(observation.Access[:1:1], observation.Access[len(observation.Access)-1])
+	evidence, err := ExecutableEvidenceFromProbe(observation, ProbeExecutableBinding{
+		Output: providers.QualifiedOutput{Component: output.SupplierComponent, Name: output.Name},
+		Facts:  output.Candidate.Provenance,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output.Candidate.InvocationPath = deploy.ApplicationStartupVerifierPathV1
+	output.Evidence = evidence
+	_, err = CompileRuntimePolicyV1(runtimePolicyDocument(t), providers.GraphExecutionResult{
+		Bundles: []providers.ResolvedBundle{}, Materializations: []providers.GraphNodeMaterializeResult{},
+		Catalog: []providers.RealizedOutput{output},
+	}, []deploy.RuntimePlanV1{{ID: "shell", Mounts: []deploy.RuntimeMountV1{}, Executables: []providers.QualifiedOutput{}}})
+	if err == nil || !strings.Contains(err.Error(), "overlaps reserved startup verifier") {
+		t.Fatalf("catalog collision error = %v", err)
+	}
+
+	transaction := rendererTransaction()
+	generated := acceptedGeneratedExecutable(transaction)
+	generated.Evidence.LinkChain = []providers.LinkEvidence{{
+		Path: generated.Declaration.Path, Target: deploy.ApplicationStartupVerifierPathV1,
+		ResolvedPath: deploy.ApplicationStartupVerifierPathV1, Kind: "ordinary",
+	}}
+	generated.Evidence.Terminal.Path = deploy.ApplicationStartupVerifierPathV1
+	generated.Evidence.Access.Paths[0].Path = deploy.ApplicationStartupVerifierPathV1
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = CompileRuntimePolicyV1(runtimePolicyDocument(t), providers.GraphExecutionResult{
+		Bundles: []providers.ResolvedBundle{acceptanceBundle(transaction, platform)},
+		Materializations: []providers.GraphNodeMaterializeResult{{
+			GeneratedExecutables: []providers.RealizedGeneratedExecutable{generated}, Outputs: []providers.RealizedOutput{},
+		}},
+		Catalog: []providers.RealizedOutput{},
+	}, []deploy.RuntimePlanV1{{ID: "shell", Mounts: []deploy.RuntimeMountV1{}, Executables: []providers.QualifiedOutput{}}})
+	if err == nil || !strings.Contains(err.Error(), "overlaps reserved startup verifier") {
+		t.Fatalf("generated collision error = %v", err)
 	}
 }
 
