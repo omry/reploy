@@ -23,6 +23,9 @@ func TestResolveProducesTypedEnvironment(t *testing.T) {
 	if document.Environment.AllowConcurrent != ConcurrentRunAuto {
 		t.Fatalf("allow concurrent = %q", document.Environment.AllowConcurrent)
 	}
+	if document.Environment.Runtime.User != DefaultRuntimeUser {
+		t.Fatalf("runtime user = %q", document.Environment.Runtime.User)
+	}
 	if got := document.Blueprint.Compatibility.Platforms; !reflect.DeepEqual(got, []Platform{
 		{OS: "linux", Architecture: "amd64", Canonical: "linux/amd64"},
 		{OS: "linux", Architecture: "arm64", Canonical: "linux/arm64"},
@@ -45,6 +48,36 @@ func TestResolveProducesTypedEnvironment(t *testing.T) {
 	}
 	if application.Python.Interpreter != (CommandRequirement{Command: "python"}) {
 		t.Fatalf("default Python interpreter = %#v", application.Python.Interpreter)
+	}
+}
+
+func TestResolveRuntimeUser(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value string
+		want  string
+		ok    bool
+	}{
+		{name: "default", want: DefaultRuntimeUser, ok: true},
+		{name: "explicit", value: "omegaflow", want: "omegaflow", ok: true},
+		{name: "underscore", value: "_agent-2", want: "_agent-2", ok: true},
+		{name: "root", value: "root"},
+		{name: "uppercase", value: "OmegaFlow"},
+		{name: "leading digit", value: "2agent"},
+		{name: "space", value: "agent user"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := resolveRuntimeUser(test.value)
+			if test.ok {
+				if err != nil || got != test.want {
+					t.Fatalf("runtime user = %q, %v; want %q", got, err, test.want)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "environment.runtime.user") {
+				t.Fatalf("runtime user error = %v", err)
+			}
+		})
 	}
 }
 
@@ -240,6 +273,8 @@ func TestResolveRejectsUnsafeEnvironmentMountTargets(t *testing.T) {
 		{name: "device subtree", target: "/dev/shm", want: `reserved container path "/dev"`},
 		{name: "resolver parent", target: "/etc", want: `reserved container path "/etc/hostname"`},
 		{name: "Docker resolver file", target: "/etc/resolv.conf", want: `reserved container path "/etc/resolv.conf"`},
+		{name: "account database", target: "/etc/passwd", want: `reserved container path "/etc/passwd"`},
+		{name: "group database", target: "/etc/group", want: `reserved container path "/etc/group"`},
 		{name: "secrets", target: "/run/secrets/app", want: `reserved container path "/run/secrets"`},
 		{name: "provider root", target: "/opt/reploy/providers", want: `reserved container path "/opt/reploy"`},
 		{name: "temporary home parent", target: "/mnt", want: `reserved container path "/mnt/reploy-home"`},

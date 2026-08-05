@@ -229,6 +229,12 @@ func TestCurrentBuildMatchesRuntimeV1TreatsChangedStateAsStale(t *testing.T) {
 	if err != nil || !matched {
 		t.Fatalf("matching runtime build = %v, %v", matched, err)
 	}
+	changedIdentity := buildInput.DockerPlan
+	changedIdentity.Sandbox = testApplicationSandboxPlanV1(2000, 2000)
+	matched, err = CurrentBuildMatchesRuntimeV1(current, changedIdentity)
+	if err != nil || matched {
+		t.Fatalf("changed runtime identity = %v, %v", matched, err)
+	}
 
 	changed := buildInput.Document
 	changed.Environment.Base.Image = "debian:13"
