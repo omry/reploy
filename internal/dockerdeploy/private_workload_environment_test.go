@@ -225,6 +225,7 @@ func TestRenderDockerInputsUsesSecretFreePrivateLauncher(t *testing.T) {
 	compose := string(rendered.Compose)
 	for _, want := range []string{
 		"stdin_open: true", "reploy_private_environment_ready", "/opt/demo", "serve",
+		"entrypoint: [/reploy-probe]", "command: [verify-exec, --, /bin/sh, -c",
 		"source: /dev/null", "target: /deployment/.env", "read_only: true",
 		"/deployment/.reploy:" + privateRuntimeDirectoryMaskOptionsV1,
 	} {

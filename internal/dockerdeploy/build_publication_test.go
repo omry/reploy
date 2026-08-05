@@ -397,9 +397,16 @@ func publicationLockFixture(t *testing.T, dir string, imageChar string, configCh
 	if err != nil {
 		t.Fatal(err)
 	}
-	image := providers.RealizedImageV1{Digest: rendererDigest(imageChar), ConfigDigest: rendererDigest(configChar), RootFSSubject: rootFSSubject}
+	upstream := providers.RealizedImageV1{Digest: base.ConfigDigest, ConfigDigest: base.ConfigDigest, RootFSSubject: rootFSSubject}
+	runtimeDiffIDs := append(append([]canonical.Digest{}, base.RootFSDiffIDs...), rendererDigest("e"))
+	runtimeRootFS, err := deploy.RootFSSubject(runtimeDiffIDs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeImage := providers.RealizedImageV1{Digest: rendererDigest(rootChar), ConfigDigest: rendererDigest(rootChar), RootFSSubject: runtimeRootFS}
+	image := providers.RealizedImageV1{Digest: rendererDigest(imageChar), ConfigDigest: rendererDigest(configChar), RootFSSubject: runtimeRootFS}
 	policy := deploy.RuntimePolicyV1{
-		Schema:         deploy.RuntimePolicySchemaV1,
+		Schema: deploy.RuntimePolicySchemaV1, StartupVerifier: deploy.ApplicationStartupVerifierContractV1(),
 		ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{},
 	}
 	policyDigest, err := deploy.RuntimePolicyDigestV1(policy)
@@ -422,7 +429,8 @@ func publicationLockFixture(t *testing.T, dir string, imageChar string, configCh
 		Base:  base,
 		Graph: deploy.ProviderGraphLockV1{Nodes: []providers.NodeID{"base"}, Edges: []providers.ProviderEdgeV1{}},
 		Nodes: []deploy.NodeLockV1{}, Catalog: []providers.RealizedOutput{},
-		RuntimePolicy: policy, ValidationRecord: validation, FinalImage: image,
+		RuntimePolicy: policy, RuntimeLayer: testApplicationRuntimeLayerV1(t, platform, upstream, runtimeImage),
+		ValidationRecord: validation, FinalImage: image,
 	}
 	if err := deploy.ValidateBuildLockV1(lock, registry.ValidateRequirementProfileV1); err != nil {
 		t.Fatal(err)

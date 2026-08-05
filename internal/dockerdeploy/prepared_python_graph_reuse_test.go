@@ -462,12 +462,15 @@ func newPreparedPythonGraphReuseFixtureWithManifest(t *testing.T, sourceManifest
 		}},
 		Catalog: append([]providers.RealizedOutput{}, request.EarlierCatalog...),
 		RuntimePolicy: deploy.RuntimePolicyV1{
-			Schema:         deploy.RuntimePolicySchemaV1,
+			Schema: deploy.RuntimePolicySchemaV1, StartupVerifier: deploy.ApplicationStartupVerifierContractV1(),
 			ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{},
 		},
+		RuntimeLayer: testApplicationRuntimeLayerV1(t, request.Platform, resultImage, providers.RealizedImageV1{
+			Digest: reuseTestDigest("b"), ConfigDigest: reuseTestDigest("b"), RootFSSubject: reuseTestDigest("c"),
+		}),
 		ValidationRecord: providerstore.StoreObjectRef{Kind: providerstore.ValidationRecordKind, Digest: reuseTestDigest("6")},
-		FinalImage:       resultImage,
 	}
+	lock.FinalImage = lock.RuntimeLayer.Result
 	if err := deploy.ValidateBuildLockV1(lock, pythonprovider.ValidateRequirementProfileV1); err != nil {
 		t.Fatal(err)
 	}
@@ -577,12 +580,15 @@ func newPreparedAPTGraphReuseFixture(t *testing.T) (
 		}},
 		Catalog: []providers.RealizedOutput{},
 		RuntimePolicy: deploy.RuntimePolicyV1{
-			Schema:         deploy.RuntimePolicySchemaV1,
+			Schema: deploy.RuntimePolicySchemaV1, StartupVerifier: deploy.ApplicationStartupVerifierContractV1(),
 			ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{},
 		},
+		RuntimeLayer: testApplicationRuntimeLayerV1(t, descriptor.Platform, resultImage, providers.RealizedImageV1{
+			Digest: reuseTestDigest("b"), ConfigDigest: reuseTestDigest("b"), RootFSSubject: reuseTestDigest("c"),
+		}),
 		ValidationRecord: providerstore.StoreObjectRef{Kind: providerstore.ValidationRecordKind, Digest: reuseTestDigest("6")},
-		FinalImage:       resultImage,
 	}
+	lock.FinalImage = lock.RuntimeLayer.Result
 	if err := deploy.ValidateBuildLockV1(lock, registry.ValidateRequirementProfileV1); err != nil {
 		t.Fatal(err)
 	}
