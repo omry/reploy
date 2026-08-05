@@ -1,0 +1,204 @@
+//go:build linux
+
+package dockerdeploy
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+
+	"golang.org/x/sys/unix"
+)
+
+const legacyDevfsSuperMagicV1 = 0x1373
+
+func protectedRuntimeHostFilesystemV1(path string) (string, error) {
+	rootFilesystem, err := runtimeHostSharesRootFilesystemV1(path)
+	if err != nil {
+		return "", err
+	}
+	if rootFilesystem {
+		return "host filesystem root", nil
+	}
+
+	var filesystem unix.Statfs_t
+	if err := unix.Statfs(path, &filesystem); err != nil {
+		return "", err
+	}
+	switch uint64(filesystem.Type) {
+	case unix.PROC_SUPER_MAGIC:
+		return "procfs", nil
+	case unix.SYSFS_MAGIC:
+		return "sysfs", nil
+	case unix.DEVPTS_SUPER_MAGIC:
+		return "devpts", nil
+	case legacyDevfsSuperMagicV1:
+		return "devfs", nil
+	case unix.TMPFS_MAGIC:
+		// devtmpfs deliberately shares tmpfs's superblock implementation. Use
+		// the exact mount identity to distinguish it without rejecting ordinary
+		// tmpfs sources.
+	default:
+		return "", nil
+	}
+
+	kind, err := runtimeHostMountFilesystemV1(path)
+	if err != nil {
+		return "", err
+	}
+	switch kind {
+	case "devtmpfs":
+		return kind, nil
+	}
+	devFilesystem, err := runtimeHostSharesDedicatedDevFilesystemV1(path)
+	if err != nil {
+		return "", err
+	}
+	if devFilesystem {
+		return "host /dev filesystem", nil
+	}
+	return "", nil
+}
+
+func runtimeHostSharesDedicatedDevFilesystemV1(path string) (bool, error) {
+	var candidate unix.Stat_t
+	if err := unix.Stat(path, &candidate); err != nil {
+		return false, fmt.Errorf("stat candidate filesystem: %w", err)
+	}
+	var dev unix.Stat_t
+	if err := unix.Stat("/dev", &dev); err != nil {
+		return false, fmt.Errorf("stat /dev filesystem: %w", err)
+	}
+	var root unix.Stat_t
+	if err := unix.Stat("/", &root); err != nil {
+		return false, fmt.Errorf("stat root filesystem: %w", err)
+	}
+	if dev.Dev == root.Dev {
+		return false, nil
+	}
+	return candidate.Dev == dev.Dev, nil
+}
+
+func runtimeHostMountFilesystemV1(path string) (string, error) {
+	mountID, found, err := runtimeHostMountIDV1(path)
+	if err != nil || !found {
+		return "", err
+	}
+
+	data, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return "", fmt.Errorf("read /proc/self/mountinfo: %w", err)
+	}
+	kind, found, err := runtimeHostMountFilesystemByIDV1(data, mountID)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("mount ID %d is absent from /proc/self/mountinfo", mountID)
+	}
+	return kind, nil
+}
+
+func runtimeHostSharesRootFilesystemV1(path string) (bool, error) {
+	candidateID, found, err := runtimeHostMountIDV1(path)
+	if err != nil || !found {
+		return false, err
+	}
+	rootID, found, err := runtimeHostMountIDV1("/")
+	if err != nil || !found || candidateID == rootID {
+		return false, err
+	}
+
+	data, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return false, fmt.Errorf("read /proc/self/mountinfo: %w", err)
+	}
+	return runtimeHostMountsExposeSameRootV1(data, candidateID, rootID)
+}
+
+func runtimeHostMountIDV1(path string) (uint64, bool, error) {
+	var status unix.Statx_t
+	err := unix.Statx(unix.AT_FDCWD, path, unix.AT_STATX_SYNC_AS_STAT, unix.STATX_MNT_ID, &status)
+	if err != nil && !errors.Is(err, unix.ENOSYS) && !errors.Is(err, unix.EINVAL) && !errors.Is(err, unix.EOPNOTSUPP) {
+		return 0, false, fmt.Errorf("statx mount identity: %w", err)
+	}
+	if err != nil || status.Mask&unix.STATX_MNT_ID == 0 {
+		return 0, false, nil
+	}
+	return status.Mnt_id, true, nil
+}
+
+func runtimeHostMountFilesystemByIDV1(data []byte, mountID uint64) (string, bool, error) {
+	identity, found, err := runtimeHostMountIdentityByIDV1(data, mountID)
+	return identity.filesystem, found, err
+}
+
+type runtimeHostMountIdentityV1 struct {
+	device     string
+	root       string
+	filesystem string
+}
+
+func runtimeHostMountsExposeSameRootV1(data []byte, candidateID uint64, rootID uint64) (bool, error) {
+	if candidateID == rootID {
+		return false, nil
+	}
+	candidate, found, err := runtimeHostMountIdentityByIDV1(data, candidateID)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, fmt.Errorf("mount ID %d is absent from /proc/self/mountinfo", candidateID)
+	}
+	root, found, err := runtimeHostMountIdentityByIDV1(data, rootID)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, fmt.Errorf("root mount ID %d is absent from /proc/self/mountinfo", rootID)
+	}
+	return candidate.device == root.device && candidate.root == root.root, nil
+}
+
+func runtimeHostMountIdentityByIDV1(data []byte, mountID uint64) (runtimeHostMountIdentityV1, bool, error) {
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		candidate, err := strconv.ParseUint(fields[0], 10, 64)
+		if err != nil {
+			return runtimeHostMountIdentityV1{}, false, fmt.Errorf("parse mount ID %q: %w", fields[0], err)
+		}
+		if candidate != mountID {
+			continue
+		}
+		identity, err := runtimeHostMountIdentityFromFieldsV1(fields)
+		return identity, true, err
+	}
+	return runtimeHostMountIdentityV1{}, false, nil
+}
+
+func runtimeHostMountFilesystemFromFieldsV1(fields []string) (string, error) {
+	identity, err := runtimeHostMountIdentityFromFieldsV1(fields)
+	return identity.filesystem, err
+}
+
+func runtimeHostMountIdentityFromFieldsV1(fields []string) (runtimeHostMountIdentityV1, error) {
+	if len(fields) < 4 {
+		return runtimeHostMountIdentityV1{}, fmt.Errorf("mountinfo record is missing identity fields")
+	}
+	for index, field := range fields {
+		if field == "-" {
+			if index+1 >= len(fields) {
+				return runtimeHostMountIdentityV1{}, fmt.Errorf("mountinfo record is missing filesystem type")
+			}
+			return runtimeHostMountIdentityV1{
+				device: fields[2], root: fields[3], filesystem: fields[index+1],
+			}, nil
+		}
+	}
+	return runtimeHostMountIdentityV1{}, fmt.Errorf("mountinfo record is missing field separator")
+}
