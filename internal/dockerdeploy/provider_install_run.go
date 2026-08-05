@@ -268,6 +268,9 @@ func runProviderInstallV1(
 	if plan.Installation.Status != deploy.InstallationStatusReady {
 		return deploy.StateV1{}, fmt.Errorf("provider installation plan must describe a ready installation")
 	}
+	if err := ValidateRootRuntimeHostAuthorityV1(sourceBuild.Lock.RuntimePolicy, plan.Docker); err != nil {
+		return deploy.StateV1{}, fmt.Errorf("validate installed root host authority: %w", err)
+	}
 	installBuild, err := backend.buildInstallRuntime(ctx, sourceStore, sourceBuild, plan.Docker, input.RunOptions)
 	if err != nil {
 		return deploy.StateV1{}, err

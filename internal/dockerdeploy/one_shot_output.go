@@ -47,6 +47,9 @@ func prepareOneShotOutputWithBackend(
 	if outputDir == "" && outputFile == "" {
 		return &oneShotOutputSession{}, nil
 	}
+	if runtimeUser.UID == 0 {
+		return nil, fmt.Errorf("root application runtime cannot use --output-dir or --output-file until the root-safe output contract is implemented")
+	}
 	if backend.currentUID == nil || backend.currentGID == nil || backend.chown == nil {
 		return nil, fmt.Errorf("prepare one-shot output requires a complete ownership backend")
 	}
