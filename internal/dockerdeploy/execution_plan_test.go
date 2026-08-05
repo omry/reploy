@@ -168,7 +168,7 @@ func TestPlanRuntimeUserScopePolicy(t *testing.T) {
 	if root.LocalUser != "root" || root.DockerUser != "0:0" {
 		t.Fatalf("root plan = %#v", root)
 	}
-	if len(root.Warnings) != 1 || !strings.Contains(root.Warnings[0], "run as root inside its container") {
+	if len(root.Warnings) != 0 {
 		t.Fatalf("root warnings = %#v", root.Warnings)
 	}
 	scope = blueprint.InstallScopeUser
@@ -178,8 +178,8 @@ func TestPlanRuntimeUserScopePolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(root.Warnings) != 3 || strings.Contains(strings.Join(root.Warnings, "\n"), "non-root identity") ||
-		!strings.Contains(strings.Join(root.Warnings, "\n"), "run as root inside its container") {
+	if len(root.Warnings) != 2 || strings.Contains(strings.Join(root.Warnings, "\n"), "non-root identity") ||
+		strings.Contains(strings.Join(root.Warnings, "\n"), "run as root inside its container") {
 		t.Fatalf("root current-user warnings = %#v", root.Warnings)
 	}
 }
