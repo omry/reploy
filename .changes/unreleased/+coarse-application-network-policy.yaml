@@ -1,0 +1,2 @@
+kind: Security
+body: 'Deny public and local application networking by default, add independent blueprint controls for each class, and enforce them for workloads, commands, shells, and lifecycle actions while preserving declared inbound endpoints.'
