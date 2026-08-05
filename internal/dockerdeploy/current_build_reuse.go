@@ -69,6 +69,10 @@ func CurrentBuildMatches(current CurrentBuild, input CurrentBuildReuseInput) (bo
 	if err := deploy.ValidateApplicationStartupVerifierV1(input.StartupVerifier, true); err != nil {
 		return false, fmt.Errorf("current build reuse startup verifier: %w", err)
 	}
+	account, err := applicationLocalAccountV1(input.DockerPlan.Sandbox)
+	if err != nil {
+		return false, fmt.Errorf("current build reuse local account: %w", err)
+	}
 	baseReference, err := resolvedRequestBaseReference(input.ResolvedRequest)
 	if err != nil {
 		return false, err
@@ -102,7 +106,8 @@ func CurrentBuildMatches(current CurrentBuild, input CurrentBuildReuseInput) (bo
 		current.Lock.Platform != input.ResolvedRequest.Platform ||
 		!reflect.DeepEqual(current.Lock.Base, input.Base) ||
 		lockedPolicyDigest != policyDigest ||
-		!reflect.DeepEqual(current.Lock.RuntimeLayer.Verifier, input.StartupVerifier) {
+		!reflect.DeepEqual(current.Lock.RuntimeLayer.Verifier, input.StartupVerifier) ||
+		!reflect.DeepEqual(current.Lock.RuntimeLayer.Account, account) {
 		return false, nil
 	}
 	return true, nil

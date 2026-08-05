@@ -1,0 +1,2 @@
+kind: Added
+body: Add a blueprint-configurable container-local runtime account, with stable native Windows identity mapping and identity-specific final runtime layers for staging and installation.

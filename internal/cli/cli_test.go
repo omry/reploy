@@ -503,7 +503,9 @@ func TestInteractiveBuildUsesOneBuildTransaction(t *testing.T) {
 		fmt.Fprintln(input.RunOptions.Stderr, `- UndefinedVar: Usage of undefined variable '$MISSING'`)
 		fmt.Fprintln(input.RunOptions.Stderr, `- SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data (ENV "TOKEN")`)
 		time.Sleep(10 * time.Millisecond)
-		return cliTestProviderBuildResult(t, stageDir, false), nil
+		result := cliTestProviderBuildResult(t, stageDir, false)
+		result.Warnings = []string{"runtime identity warning"}
+		return result, nil
 	}
 
 	code, stdout, stderr := runCLI("build", "--dir", stageDir, "--no-cache")
@@ -528,6 +530,7 @@ func TestInteractiveBuildUsesOneBuildTransaction(t *testing.T) {
 		warningPrinted < 0 ||
 		uiReleased > warningPrinted ||
 		strings.Count(stderr, "reploy warning: Docker check UndefinedVar:") != 1 ||
+		!strings.Contains(stderr, "reploy warning: runtime identity warning") ||
 		strings.Contains(stderr, "SecretsUsedInArgOrEnv") ||
 		strings.Contains(stderr, `"TOKEN"`) {
 		t.Fatalf("interactive build warning output = %q", stderr)
@@ -836,7 +839,9 @@ func TestBuildCommandReportsExactReuse(t *testing.T) {
 	stageDir := filepath.Join(t.TempDir(), "provider-stage")
 	writeCLITestStagedState(t, stageDir, "demo")
 	dockerProviderBuild = func(context.Context, dockerdeploy.ProviderBuildRunInputV1) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
-		return cliTestProviderBuildResult(t, stageDir, true), nil
+		result := cliTestProviderBuildResult(t, stageDir, true)
+		result.Warnings = []string{"runtime identity warning"}
+		return result, nil
 	}
 
 	code, stdout, stderr := runCLI("build", "--dir", stageDir)
@@ -848,6 +853,9 @@ func TestBuildCommandReportsExactReuse(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "building environment: done") {
 		t.Fatalf("stderr missing successful completion:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "reploy warning: runtime identity warning") {
+		t.Fatalf("stderr missing runtime identity warning:\n%s", stderr)
 	}
 }
 
@@ -3787,7 +3795,7 @@ func TestStagedInstallUsesReployProgressAndDeployedResult(t *testing.T) {
 		fmt.Fprintln(options.Progress, "running before start hook: app config check")
 		return dockerdeploy.ProviderInstallResultV1{
 			Environment: "demo", TargetDir: "/opt/demo", ControlScript: "demo",
-			Service: "demo", Started: true,
+			Service: "demo", Started: true, Warnings: []string{"runtime identity warning"},
 		}, nil
 	}
 	oldInstallSuccessLines := dockerInstallSuccessLines
@@ -3803,6 +3811,9 @@ func TestStagedInstallUsesReployProgressAndDeployedResult(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "[DEPLOYED : demo] installed successfully") {
 		t.Fatalf("stdout missing deployed result:\n%s", stdout)
+	}
+	if !strings.Contains(stderr, "reploy warning: runtime identity warning") {
+		t.Fatalf("stderr missing runtime identity warning:\n%s", stderr)
 	}
 }
 

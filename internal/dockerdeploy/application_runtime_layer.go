@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 type ApplicationRuntimeLayerBuildRequest struct {
 	Source   InspectedImageCandidate
 	Verifier deploy.ApplicationStartupVerifierV1
+	Account  deploy.ApplicationLocalAccountV1
 	Platform blueprint.Platform
 }
 
@@ -69,13 +71,30 @@ func ApplicationRuntimeLayerDockerfile(request ApplicationRuntimeLayerBuildReque
 			return nil, fmt.Errorf("render application runtime source user: %w", err)
 		}
 	}
+	installAccount, err := json.Marshal([]string{
+		request.Verifier.Path, "install-local-account",
+		request.Account.Name, request.Account.UID, request.Account.GID, request.Account.Home,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render application local account command: %w", err)
+	}
 	var output bytes.Buffer
 	fmt.Fprintf(&output, "# syntax=%s\n", MaterializationDockerfileSyntax)
 	output.WriteString("ARG REPLOY_BASE_IMAGE=scratch\n")
+	output.WriteString("FROM ${REPLOY_BASE_IMAGE} AS reploy-runtime-account\n")
+	output.WriteString("USER 0:0\n")
+	fmt.Fprintf(
+		&output,
+		"RUN --mount=type=bind,source=%s,target=/reploy-build-probe,readonly [\"/reploy-build-probe\", \"install-runtime-verifier\", %s]\n",
+		probearchive.ExtractedFileName,
+		strconv.Quote(request.Verifier.Path),
+	)
+	fmt.Fprintf(&output, "RUN %s\n", installAccount)
 	output.WriteString("FROM ${REPLOY_BASE_IMAGE}\n")
 	if originalUser != "" {
 		output.WriteString("USER 0:0\n")
 	}
+	output.WriteString("COPY --from=reploy-runtime-account /etc/passwd /etc/group /etc/\n")
 	fmt.Fprintf(
 		&output,
 		"RUN --mount=type=bind,source=%s,target=/reploy-build-probe,readonly [\"/reploy-build-probe\", \"install-runtime-verifier\", %s]\n",
@@ -218,8 +237,8 @@ func ValidateInspectedApplicationRuntimeLayerCandidate(
 	}
 	wantPrefix := request.Source.Descriptor.RootFSDiffIDs
 	got := candidate.Descriptor.RootFSDiffIDs
-	if len(got) != len(wantPrefix)+1 || !reflect.DeepEqual(got[:len(wantPrefix)], wantPrefix) {
-		return fmt.Errorf("application runtime layer must add exactly one filesystem layer to its source")
+	if len(got) != len(wantPrefix)+2 || !reflect.DeepEqual(got[:len(wantPrefix)], wantPrefix) {
+		return fmt.Errorf("application runtime layer must add exactly two filesystem layers to its source")
 	}
 	return nil
 }
@@ -229,6 +248,9 @@ func validateApplicationRuntimeLayerBuildRequest(request ApplicationRuntimeLayer
 		return fmt.Errorf("application runtime layer source: %w", err)
 	}
 	if err := deploy.ValidateApplicationStartupVerifierV1(request.Verifier, true); err != nil {
+		return err
+	}
+	if err := deploy.ValidateApplicationLocalAccountV1(request.Account); err != nil {
 		return err
 	}
 	if err := request.Platform.Validate(); err != nil {

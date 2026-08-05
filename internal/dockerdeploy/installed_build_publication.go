@@ -18,6 +18,7 @@ type InstalledBuildPublicationInputV1 struct {
 	SourceDeploymentDir      string
 	DestinationDeploymentDir string
 	Source                   CurrentBuild
+	Build                    deploy.BuildLockV1
 	Installation             deploy.InstallationStateV1
 	References               EnvironmentImageReferences
 }
@@ -109,7 +110,7 @@ func publishInstalledBuildV1(
 	if !found {
 		return deploy.StateV1{}, fmt.Errorf("installed build source lock is missing after build selection")
 	}
-	lockDigest, err := deploy.BuildLockDigestV1(input.Source.Lock, registry.ValidateRequirementProfileV1)
+	sourceLockDigest, err := deploy.BuildLockDigestV1(input.Source.Lock, registry.ValidateRequirementProfileV1)
 	if err != nil {
 		return deploy.StateV1{}, err
 	}
@@ -117,13 +118,17 @@ func publishInstalledBuildV1(
 	if err != nil {
 		return deploy.StateV1{}, err
 	}
-	if lockedSourceDigest != lockDigest {
+	if lockedSourceDigest != sourceLockDigest {
 		return deploy.StateV1{}, fmt.Errorf("installed build source lock changed after build selection")
 	}
-	if lockDigest != input.Source.Generation.BuildLockDigest {
+	if sourceLockDigest != input.Source.Generation.BuildLockDigest {
 		return deploy.StateV1{}, fmt.Errorf("installed build source lock digest does not match its generation")
 	}
-	policyDigest, err := deploy.RuntimePolicyDigestV1(input.Source.Lock.RuntimePolicy)
+	lockDigest, err := deploy.BuildLockDigestV1(input.Build, registry.ValidateRequirementProfileV1)
+	if err != nil {
+		return deploy.StateV1{}, err
+	}
+	policyDigest, err := deploy.RuntimePolicyDigestV1(input.Build.RuntimePolicy)
 	if err != nil {
 		return deploy.StateV1{}, err
 	}
@@ -170,34 +175,39 @@ func publishInstalledBuildV1(
 	}
 
 	closure, err := backend.transferClosure(
-		ctx, sourceOperation, destinationOperation, sourceStore, destinationStore, input.Source.Lock,
+		ctx, sourceOperation, destinationOperation, sourceStore, destinationStore, input.Build,
 	)
 	if err != nil {
 		return deploy.StateV1{}, fmt.Errorf("publish installed build closure: %w", err)
 	}
 	candidate := input.Source.Generation
 	candidate.Reference = references.Generation
+	candidate.ImageDigest = input.Build.FinalImage.Digest
+	candidate.RootFSSubject = input.Build.FinalImage.RootFSSubject
+	candidate.BuildLockDigest = lockDigest
+	candidate.Platform = input.Build.Platform
+	candidate.RuntimePolicyDigest = policyDigest
 	pending := deploy.PendingBuildV1{
 		Schema: deploy.PendingBuildSchemaV1, Phase: deploy.PendingBuildPhaseValidated, Old: old,
 		Candidate: deploy.PendingCandidateV1{
 			TemporaryReference: references.Temporary, GenerationReference: references.Generation,
-			Image: input.Source.Lock.FinalImage, BuildLockDigest: lockDigest, StoreObjects: closure,
+			Image: input.Build.FinalImage, BuildLockDigest: lockDigest, StoreObjects: closure,
 		},
 		Cleanup: publicationCleanupItems(references, old),
 	}
 	if err := destinationOperation.WritePendingBuild(pending); err != nil {
 		return deploy.StateV1{}, err
 	}
-	if err := backend.createReference(ctx, input.Source.Lock.FinalImage, references, EnvironmentReferenceTemporary, input.Environment, input.DestinationDeploymentDir); err != nil {
+	if err := backend.createReference(ctx, input.Build.FinalImage, references, EnvironmentReferenceTemporary, input.Environment, input.DestinationDeploymentDir); err != nil {
 		return deploy.StateV1{}, err
 	}
-	if err := backend.createReference(ctx, input.Source.Lock.FinalImage, references, EnvironmentReferenceGeneration, input.Environment, input.DestinationDeploymentDir); err != nil {
+	if err := backend.createReference(ctx, input.Build.FinalImage, references, EnvironmentReferenceGeneration, input.Environment, input.DestinationDeploymentDir); err != nil {
 		return deploy.StateV1{}, err
 	}
 	if err := destinationOperation.AdvancePendingBuildPhase(deploy.PendingBuildPhaseGenerationCreated); err != nil {
 		return deploy.StateV1{}, err
 	}
-	publishedDigest, err := destinationOperation.PublishBuildLock(input.Source.Lock, registry.ValidateRequirementProfileV1)
+	publishedDigest, err := destinationOperation.PublishBuildLock(input.Build, registry.ValidateRequirementProfileV1)
 	if err != nil {
 		return deploy.StateV1{}, err
 	}
@@ -224,13 +234,13 @@ func publishInstalledBuildV1(
 			return deploy.StateV1{}, err
 		}
 	}
-	if err := backend.removeReference(ctx, input.Source.Lock.FinalImage, references, EnvironmentReferenceTemporary, input.Environment, input.DestinationDeploymentDir); err != nil {
+	if err := backend.removeReference(ctx, input.Build.FinalImage, references, EnvironmentReferenceTemporary, input.Environment, input.DestinationDeploymentDir); err != nil {
 		return deploy.StateV1{}, err
 	}
 	if err := destinationOperation.RemoveOtherBuildLocks(lockDigest, registry.ValidateRequirementProfileV1); err != nil {
 		return deploy.StateV1{}, err
 	}
-	if err := destinationOperation.RemoveUnreachableBuildObjects(destinationStore, input.Source.Lock, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1); err != nil {
+	if err := destinationOperation.RemoveUnreachableBuildObjects(destinationStore, input.Build, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1); err != nil {
 		return deploy.StateV1{}, err
 	}
 	if err := destinationOperation.RemovePendingBuild(); err != nil {
@@ -265,6 +275,22 @@ func validateInstalledBuildSource(input InstalledBuildPublicationInputV1) error 
 	}
 	if blueprintDigest != input.Source.Lock.BlueprintDigest || input.Source.State.Platform != input.Source.Lock.Platform || !reflect.DeepEqual(input.Source.State.Overlay, input.Source.Lock.Overlay) {
 		return fmt.Errorf("installed build source state is stale relative to its selected build lock")
+	}
+	if err := deploy.ValidateBuildLockV1(input.Build, registry.ValidateRequirementProfileV1); err != nil {
+		return fmt.Errorf("installed build candidate: %w", err)
+	}
+	sourceShape := input.Source.Lock
+	buildShape := input.Build
+	sourceShape.RuntimeLayer = deploy.ApplicationRuntimeLayerV1{}
+	sourceShape.ValidationRecord = providerstore.StoreObjectRef{}
+	sourceShape.FinalImage = providers.RealizedImageV1{}
+	buildShape.RuntimeLayer = deploy.ApplicationRuntimeLayerV1{}
+	buildShape.ValidationRecord = providerstore.StoreObjectRef{}
+	buildShape.FinalImage = providers.RealizedImageV1{}
+	if !reflect.DeepEqual(sourceShape, buildShape) ||
+		input.Build.RuntimeLayer.Upstream != input.Source.Lock.RuntimeLayer.Upstream ||
+		input.Build.RuntimeLayer.Verifier != input.Source.Lock.RuntimeLayer.Verifier {
+		return fmt.Errorf("installed build candidate may differ from its staged source only in the application runtime identity and resulting validation")
 	}
 	if err := ValidateEnvironmentGenerationReference(input.Source.Generation.Reference, input.Environment, input.SourceDeploymentDir); err != nil {
 		return fmt.Errorf("installed build source generation reference: %w", err)

@@ -326,7 +326,7 @@ func verifyLockedImagesV1(
 		return 0, fmt.Errorf("cached application runtime layer image no longer matches its locked identity")
 	}
 	if err := ValidateInspectedApplicationRuntimeLayerCandidate(ApplicationRuntimeLayerBuildRequest{
-		Source: source, Verifier: lock.RuntimeLayer.Verifier, Platform: lock.Platform,
+		Source: source, Verifier: lock.RuntimeLayer.Verifier, Account: lock.RuntimeLayer.Account, Platform: lock.Platform,
 	}, runtimeImage); err != nil {
 		return 0, fmt.Errorf("verify cached application runtime layer: %w", err)
 	}

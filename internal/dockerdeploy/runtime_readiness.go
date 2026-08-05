@@ -224,5 +224,9 @@ func CurrentBuildMatchesRuntimeV1(current CurrentBuild, dockerPlan DockerExecuti
 	if err != nil {
 		return false, err
 	}
-	return policyDigest == lockedPolicyDigest, nil
+	account, err := applicationLocalAccountV1(dockerPlan.Sandbox)
+	if err != nil {
+		return false, fmt.Errorf("runtime local account: %w", err)
+	}
+	return policyDigest == lockedPolicyDigest && reflect.DeepEqual(account, current.Lock.RuntimeLayer.Account), nil
 }

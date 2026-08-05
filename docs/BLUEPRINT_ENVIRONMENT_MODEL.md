@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-27
+updated: 2026-08-02
 summary: Normative blueprint environment, workload, application, provider contribution, lifecycle, and Docker rendering model.
 supersedes: docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md
 ---
@@ -90,6 +90,8 @@ environment:
   packages: {}                # Environment-owned package contributions.
   applications: {}            # Application-owned packages, options, and executables.
   allow_concurrent: auto      # App-command and shell overlap policy.
+  runtime:
+    user: reploy              # Container-local account name; defaults to reploy.
   terminal: {}                # Terminal/color integration.
   install: {}                 # Installation target, identity, and success output.
   mounts: {}                  # Runtime filesystem contracts.
@@ -97,7 +99,14 @@ environment:
   workload: {}                # Optional persistent primary workload.
 ```
 
-Optional empty nodes are omitted in an actual blueprint. Backend-specific
+Optional empty nodes are omitted in an actual blueprint. `runtime.user` names
+the ordinary non-root account inside the target environment; it does not select
+a host account or grant root. It must be a portable lowercase Unix account name:
+one to 32 bytes, beginning with a lowercase ASCII letter or underscore, followed
+only by lowercase ASCII letters, digits, underscores, or hyphens. `root` is
+reserved and cannot be selected through this field. If the base image already
+defines the same account name with a different numeric ID, runtime-layer
+construction fails rather than rewriting that unrelated account. Backend-specific
 runtime choices remain under the top-level `docker` node.
 
 ## Internal Execution Phases
@@ -249,9 +258,9 @@ workload type.
 
 Every command invocation is one-shot by default and is expected to exit with a
 status. In Docker, Reploy runs it in a transient container created from the same
-materialized environment image, as the configured non-root runtime user, with the same managed
-paths and application configuration as the workload container. The transient
-container is removed when the command exits. Selecting a command as
+materialized environment image, as the effective runtime user, with the same
+managed paths and application configuration as the workload container. The
+transient container is removed when the command exits. Selecting a command as
 `environment.workload.command` is the only operation that promotes it to the
 persistent container entrypoint.
 
@@ -1344,16 +1353,38 @@ in the resulting layer. APT/dpkg, RPM/DNF, and Alpine/APK installation may run
 as root in their build steps. Python, Go, and Rust layers use the permissions
 required to populate their final image paths.
 
-Runtime ownership comes from the backend and install scope, never from the base
-image's configured `USER`. Reploy supplies an explicit user for every container:
+Runtime authority comes from the backend and install scope, never from the base
+image's configured `USER`. Reploy supplies an explicit numeric identity for
+every container:
 
 - provider materialization uses the provider-declared build identity, including
   container root where system-package installation requires it;
-- a native-Linux current-user install uses the invoking user's numeric UID/GID;
-- a Docker Desktop current-user install uses a stable Reploy-managed non-root
-  Linux UID/GID inside the Desktop VM, recorded in deployment state; this is a
-  container identity, not the macOS or Windows account running Docker Desktop;
+- a native-Linux or macOS current-user install uses the invoking user's numeric
+  UID/GID;
+- a native-Windows current-user install maps the invoking Windows SID
+  deterministically to a stable nonzero Linux UID/GID; this is a container
+  identity, not a Windows account inside the image;
 - a Linux system install uses the resolved service account.
+
+For the current Linux-container backend, Reploy also materializes a real local
+account in the final runtime layer. Its name is
+`environment.runtime.user`, defaulting to `reploy`, while its UID/GID are the
+effective numeric authority above. The account and its numeric identity are
+locked build inputs, so changing either makes reuse stale. The blueprint name
+is deliberately independent of a Windows domain account or Unix host account.
+An effective UID of zero uses the existing local name `root`; a blueprint
+cannot request root merely by naming it.
+
+This is a portable blueprint contract with target-specific realization. The
+current backend writes Linux account databases. A future native-Windows or
+other target backend may realize the same local identity through different OS
+mechanisms rather than emulating `/etc/passwd`.
+
+When installation selects a different numeric authority from staging, Reploy
+reuses the validated provider graph and rebuilds only the final
+account/verifier runtime layer and its validation labels. The installed lock
+records that identity-specific final image; the staged generation remains
+bound to the staging user.
 
 Docker Desktop mediates explicitly shared host files through the Desktop user.
 The container identity still controls permissions inside the container, named
@@ -1383,14 +1414,13 @@ no runtime-access record. Docker container creation and the workload report
 permission failures that depend on the actual runtime identity or mount
 implementation.
 
-Before a current-user install, Reploy reports the selected policy and numeric
-container UID/GID. On native Linux it identifies the invoking host user; on
-Docker Desktop it explains that the identity exists only inside the Linux
-container/VM. The warning also states that the image's configured user is
-overridden, the image must tolerate the selected non-root identity, and
-persistent writes are available only through declared writable paths. If
-system `account` configuration is present, Reploy reports that it does not apply
-to current-user scope.
+Before a current-user install, Reploy reports the selected policy, local account
+name, and numeric container UID/GID. On Unix hosts it identifies the invoking
+host identity; on native Windows it explains that the numeric mapping exists
+only inside the Linux container/VM. The warning also states that the image's
+configured user is overridden and persistent writes are available only through
+declared writable paths. If system `account` configuration is present, Reploy
+reports that it does not apply to current-user scope.
 
 The materialized image is a private Docker-backend resource, not another
 environment-schema object. A provider node has a semantic bundle identity, an
@@ -1881,7 +1911,8 @@ checks against the exact immutable image:
 
 1. Its destination is a normalized absolute path other than `/` and does not
    overlap `/dev`, `/proc`, `/sys`, `/run/secrets`, or Docker-managed
-   `/etc/hostname`, `/etc/hosts`, or `/etc/resolv.conf`.
+   `/etc/hostname`, `/etc/hosts`, or `/etc/resolv.conf`, or Reploy-generated
+   `/etc/passwd` or `/etc/group` account databases.
 2. The destination is absent or an empty real directory. Existing files,
    symlinks, non-directories, mountpoints, and non-empty directories fail. The
    backend validates existing ancestors without following symlinks and needs
@@ -2170,12 +2201,12 @@ blueprint namespace.
   a compatible user runtime. System scope fails clearly rather than silently
   degrading to user scope.
 
-`system.account` is ownership and container-process policy for a system install,
-not another install scope. A native-Linux current-user install runs workload and
-transient containers as the invoking numeric UID/GID; Docker Desktop instead
-uses the Reploy-managed non-root container identity defined above. If
-`system.account` is present, Reploy reports that it is inapplicable to user scope
-along with the non-root image compatibility warning defined above.
+`system.account` is host ownership and container-process authority for a system
+install, not another install scope and not the container-local account name. A
+current-user install uses the invoking Unix numeric identity or the stable
+native-Windows SID mapping defined above. If `system.account` is present,
+Reploy reports that it is inapplicable to user scope along with the non-root
+image compatibility warning defined above.
 
 ### Install Target Defaults
 
