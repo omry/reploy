@@ -1,0 +1,2 @@
+kind: Fixed
+body: Verify application sandbox capabilities on the exact Linux thread that will launch the workload.
