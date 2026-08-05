@@ -158,7 +158,12 @@ func RequireRuntimeReady(input RuntimeReadinessInput) error {
 	if !matched {
 		return fmt.Errorf("%s", currentBuildRecoveryMessageV1(input.Current.State, "runtime build is missing or stale"))
 	}
-	if err := ValidateRuntimeHostSourcesV1(input.Current.Lock.RuntimePolicy, input.PlanID, input.Sources); err != nil {
+	if err := ValidateRuntimeHostSourcesV1(
+		input.Current.Lock.RuntimePolicy,
+		input.PlanID,
+		input.DockerPlan.Sandbox.RuntimeUser.UID,
+		input.Sources,
+	); err != nil {
 		return fmt.Errorf("runtime host-source check: %w", err)
 	}
 	return nil
