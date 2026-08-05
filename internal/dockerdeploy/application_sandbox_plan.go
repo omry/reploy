@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 )
 
@@ -26,18 +27,30 @@ type ApplicationKernelPolicyV1 struct {
 // renderer-specific flags.
 type ApplicationSandboxPlanV1 struct {
 	RuntimeUser     RuntimeUserPlan
+	Network         ApplicationNetworkPolicyV1
 	ReadOnlyRoot    bool
 	TemporaryHome   string
 	StartupVerifier deploy.ApplicationStartupVerifierV1
 	Kernel          ApplicationKernelPolicyV1
 }
 
+type ApplicationNetworkPolicyV1 struct {
+	Public blueprint.NetworkAccess
+	Local  blueprint.NetworkAccess
+}
+
 func newApplicationSandboxPlanV1(runtimeUser RuntimeUserPlan) ApplicationSandboxPlanV1 {
+	return newApplicationSandboxPlanWithNetworkV1(runtimeUser, blueprint.RuntimeNetwork{})
+}
+
+func newApplicationSandboxPlanWithNetworkV1(runtimeUser RuntimeUserPlan, network blueprint.RuntimeNetwork) ApplicationSandboxPlanV1 {
 	if runtimeUser.LocalUser == "" {
 		runtimeUser.LocalUser = runtimeLocalUserNameV1("", runtimeUser.UID)
 	}
+	network = normalizeRuntimeNetworkV1(network)
 	return ApplicationSandboxPlanV1{
 		RuntimeUser:     runtimeUser,
+		Network:         ApplicationNetworkPolicyV1{Public: network.Public, Local: network.Local},
 		ReadOnlyRoot:    true,
 		TemporaryHome:   environmentTemporaryHome,
 		StartupVerifier: deploy.ApplicationStartupVerifierContractV1(),
@@ -51,9 +64,25 @@ func newApplicationSandboxPlanV1(runtimeUser RuntimeUserPlan) ApplicationSandbox
 	}
 }
 
+func normalizeRuntimeNetworkV1(network blueprint.RuntimeNetwork) blueprint.RuntimeNetwork {
+	if network.Public == "" {
+		network.Public = blueprint.NetworkAccessDeny
+	}
+	if network.Local == "" {
+		network.Local = blueprint.NetworkAccessDeny
+	}
+	return network
+}
+
 func ValidateApplicationSandboxPlanV1(plan ApplicationSandboxPlanV1) error {
 	if plan.RuntimeUser.UID < 0 || plan.RuntimeUser.GID < 0 {
 		return fmt.Errorf("application sandbox requires a non-negative numeric UID and GID")
+	}
+	if err := validateApplicationNetworkAccessV1("public", plan.Network.Public); err != nil {
+		return err
+	}
+	if err := validateApplicationNetworkAccessV1("local", plan.Network.Local); err != nil {
+		return err
 	}
 	wantUser := strconv.Itoa(plan.RuntimeUser.UID) + ":" + strconv.Itoa(plan.RuntimeUser.GID)
 	if plan.RuntimeUser.DockerUser != wantUser {
@@ -108,6 +137,15 @@ func ValidateApplicationSandboxPlanV1(plan ApplicationSandboxPlanV1) error {
 		return fmt.Errorf("application sandbox must prohibit host devices")
 	}
 	return nil
+}
+
+func validateApplicationNetworkAccessV1(name string, access blueprint.NetworkAccess) error {
+	switch access {
+	case blueprint.NetworkAccessDeny, blueprint.NetworkAccessAllow:
+		return nil
+	default:
+		return fmt.Errorf("application sandbox %s network access must be allow or deny", name)
+	}
 }
 
 func applicationLocalAccountV1(plan ApplicationSandboxPlanV1) (deploy.ApplicationLocalAccountV1, error) {

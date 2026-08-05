@@ -9,9 +9,11 @@ import (
 )
 
 const validApplicationKernelStatus = `Name: reploy-probe
+CapInh: 0000000000000000
 CapPrm: 0000000000000000
 CapEff: 0000000000000000
 CapBnd: 0000000000000000
+CapAmb: 0000000000000000
 NoNewPrivs: 1
 Seccomp: 2
 `
@@ -36,6 +38,8 @@ func TestVerifyApplicationKernelStatusFailsClosed(t *testing.T) {
 		{name: "effective capabilities", content: strings.ReplaceAll(validApplicationKernelStatus, "CapEff: 0000000000000000", "CapEff: 0000000000000001"), want: "CapEff is 0000000000000001"},
 		{name: "permitted capabilities", content: strings.ReplaceAll(validApplicationKernelStatus, "CapPrm: 0000000000000000", "CapPrm: 0000000000000400"), want: "CapPrm is 0000000000000400"},
 		{name: "bounding capabilities", content: strings.ReplaceAll(validApplicationKernelStatus, "CapBnd: 0000000000000000", "CapBnd: 000001ffffffffff"), want: "CapBnd is 000001ffffffffff"},
+		{name: "inheritable capabilities", content: strings.ReplaceAll(validApplicationKernelStatus, "CapInh: 0000000000000000", "CapInh: 0000000000000001"), want: "CapInh is 0000000000000001"},
+		{name: "ambient capabilities", content: strings.ReplaceAll(validApplicationKernelStatus, "CapAmb: 0000000000000000", "CapAmb: 0000000000000001"), want: "CapAmb is 0000000000000001"},
 		{name: "invalid capability", content: strings.ReplaceAll(validApplicationKernelStatus, "CapBnd: 0000000000000000", "CapBnd: not-hex"), want: "not hexadecimal"},
 	}
 	for _, test := range tests {

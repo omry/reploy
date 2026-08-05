@@ -143,7 +143,7 @@ func PlanDockerExecution(document blueprint.Document, context DockerPlanContext)
 	if err != nil {
 		return DockerExecutionPlan{}, err
 	}
-	plan.Sandbox = newApplicationSandboxPlanV1(runtimeUser)
+	plan.Sandbox = newApplicationSandboxPlanWithNetworkV1(runtimeUser, document.Environment.Runtime.Network)
 	if err := ValidateApplicationSandboxPlanV1(plan.Sandbox); err != nil {
 		return DockerExecutionPlan{}, err
 	}
