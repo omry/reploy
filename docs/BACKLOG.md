@@ -31,13 +31,12 @@ This file is the day-to-day queue for design and implementation gaps.
 
 ## Now
 
-- [ ] `P1` Inventory the global sandbox prerequisites for controlled sessions.
-      Use `CONTROLLED_SESSION_DESIGN.md` as the policy source. Map every staged,
-      installed, command, and shell container-launch path against the approved
-      identity, seccomp, `no-new-privileges`, capability, namespace, device,
-      mount, mask, secret, network, and root invariants. Record verified current
-      behavior and turn each missing invariant into a focused implementation
-      slice before starting the controlled-session lifecycle core.
+- [ ] `P1` Define confinement for special files nested inside host directory
+      binds. A launch-time recursive scan for sockets and device nodes adds
+      unbounded source-tree latency and provides only a point-in-time result.
+      Choose a durable mechanism or explicitly narrow the security contract,
+      then add focused cross-platform tests without weakening ordinary
+      read-only project mounts.
 
 ## Pre-release
 
