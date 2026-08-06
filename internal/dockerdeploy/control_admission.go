@@ -50,7 +50,7 @@ func AwaitControlAdmissionWithNoticeV1(
 				return nil
 			}
 		},
-		removeContainer: runCommandWithoutDockerPreflight,
+		removeContainer: runCommand,
 	})
 }
 
