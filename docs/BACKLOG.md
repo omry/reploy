@@ -68,13 +68,6 @@ This file is the day-to-day queue for design and implementation gaps.
       commands, including account-name resolution, stable Windows mapping, and
       explicit confirmation that no accidental `0:0` identity is selected.
 
-- [ ] `P2` Define cancellation at the admission boundary.
-      Specify the authoritative outcome when a waiting caller is promoted at
-      the same instant its context is cancelled. Preserve the invariant that
-      the operation either remains unstarted and is removed from the queue, or
-      is admitted and then cancelled with complete cleanup; never replay an
-      abandoned request. Add a deterministic race test covering both outcomes.
-
 - [ ] `P1` Define root-safe explicit output-file and output-dir contracts.
       Preserve the prohibition on arbitrary host binds while treating a
       caller-selected output destination as a narrow explicit grant. For
