@@ -106,12 +106,12 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 		plan.Docker.Sandbox,
 		environment,
 		options,
-		runCommandWithoutDockerPreflight,
+		runCommand,
 	); err != nil {
 		return err
 	}
 	if err := notifyInstalledServiceReadyV1(); err != nil {
-		return errors.Join(err, cleanupPrivateWorkloadContainerV1(cleanup, RunOptions{Context: context.WithoutCancel(ctx)}, runCommandWithoutDockerPreflight))
+		return errors.Join(err, cleanupPrivateWorkloadContainerV1(cleanup, RunOptions{Context: context.WithoutCancel(ctx)}, runCommand))
 	}
 	if err := operation.Unlock(); err != nil {
 		return err
@@ -124,7 +124,7 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 	waitOptions.Stdin = nil
 	waitOptions.Stdout = &status
 	waitOptions.Stderr = options.Stderr
-	if err := runCommandWithoutDockerPreflight(CommandSpec{
+	if err := runCommand(CommandSpec{
 		Name: dockerPath,
 		Args: []string{"wait", plan.Docker.ContainerName},
 	}, waitOptions); err != nil {
