@@ -406,7 +406,7 @@ func TestDetectDockerRuntimeDetectsDockerDesktop(t *testing.T) {
 		"#!/bin/sh\nprintf '{\"OperatingSystem\":\"Docker Desktop\",\"ServerVersion\":\"29.5.3\"}\\n'\n",
 		"@echo off\r\necho {\"OperatingSystem\":\"Docker Desktop\",\"ServerVersion\":\"29.5.3\"}\r\n",
 	)
-	info, err := detectDockerRuntime(context.Background(), CommandSpec{Name: dockerPath}, time.Second)
+	info, err := detectDockerRuntime(context.Background(), CommandSpec{Name: dockerPath, Env: []string{"DOCKER_HOST=unix:///var/run/docker.sock", "DOCKER_CONTEXT="}}, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +427,7 @@ func TestDetectDockerRuntimeDetectsLinuxEngine(t *testing.T) {
 		"#!/bin/sh\nprintf '{\"OperatingSystem\":\"Ubuntu 24.04\",\"ServerVersion\":\"29.5.3\"}\\n'\n",
 		"@echo off\r\necho {\"OperatingSystem\":\"Ubuntu 24.04\",\"ServerVersion\":\"29.5.3\"}\r\n",
 	)
-	info, err := detectDockerRuntime(context.Background(), CommandSpec{Name: dockerPath}, time.Second)
+	info, err := detectDockerRuntime(context.Background(), CommandSpec{Name: dockerPath, Env: []string{"DOCKER_HOST=unix:///var/run/docker.sock", "DOCKER_CONTEXT="}}, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

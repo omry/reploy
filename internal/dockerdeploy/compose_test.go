@@ -136,6 +136,33 @@ func TestRunCommandWithoutDockerPreflightRunsKnownFollowup(t *testing.T) {
 	}
 }
 
+func TestRunDockerCommandPreflightsAbsoluteExecutable(t *testing.T) {
+	dir := t.TempDir()
+	dockerPath := writeFakeCommand(
+		t,
+		dir,
+		"configured-docker",
+		"#!/bin/sh\nexit 0\n",
+		"@echo off\r\nexit /b 0\r\n",
+	)
+	preflightCalled := false
+	restore := stubDockerPreflight(t, func(_ context.Context, spec CommandSpec, _ time.Duration) error {
+		preflightCalled = true
+		if spec.Name != dockerPath {
+			t.Fatalf("preflight executable = %q, want %q", spec.Name, dockerPath)
+		}
+		return nil
+	})
+	defer restore()
+
+	if err := runDockerCommand(CommandSpec{Name: dockerPath, Args: []string{"version"}}, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if !preflightCalled {
+		t.Fatal("absolute Docker executable bypassed preflight")
+	}
+}
+
 func TestCheckDockerResponsiveUsesServerVersion(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "argv.log")
@@ -149,7 +176,7 @@ func TestCheckDockerResponsiveUsesServerVersion(t *testing.T) {
 
 	err := checkDockerResponsive(
 		context.Background(),
-		CommandSpec{Name: dockerPath, Env: []string{"DOCKER_ARGV_LOG=" + logPath}},
+		CommandSpec{Name: dockerPath, Env: []string{"DOCKER_HOST=unix:///var/run/docker.sock", "DOCKER_CONTEXT=", "DOCKER_ARGV_LOG=" + logPath}},
 		defaultDockerPreflightTimeout,
 	)
 	if err != nil {
