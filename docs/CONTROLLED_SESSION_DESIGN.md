@@ -76,12 +76,13 @@ containers use the host account selected by
 materializes the local account through Linux account databases; other target-OS
 backends may realize the same contract differently.
 
-If the effective runtime user is root, Reploy emits a precise warning that the
-application can interfere with more of its container. Root does not implicitly
-grant capabilities, host input or shared-state mounts, network access,
-privileged mode, or daemon access. Root-safe `--output-file` and `--output-dir`
-are separate global runtime contracts and remain rejected until their focused
-pre-release review and implementation are complete.
+Root remains an explicit runtime identity, but selecting it does not produce a
+generic runtime warning. Reploy instead rejects prohibited combinations with
+precise diagnostics. Root does not implicitly grant capabilities, host input
+or shared-state mounts, network access, privileged mode, or daemon access.
+Root-safe `--output-file` and `--output-dir` are separate global runtime
+contracts and remain rejected until their focused pre-release review and
+implementation are complete.
 
 ## Context
 
@@ -635,13 +636,13 @@ user-scope Reploy was invoked as root, or because a system-scope installation
 explicitly selected root. It is never inherited merely from the base image's
 configured `USER`.
 
-A root runtime identity must emit a warning equivalent to:
-
-> The application will run as root inside its container. Root can bypass
-> application-level file permissions. Host input and shared-state mounts are
-> prohibited. Explicit root output contracts require their separately reviewed
-> safeguards. Network access and Linux capabilities remain restricted unless
-> separately granted.
+A root runtime identity does not emit a generic warning. With the global
+sandbox enforced, its additional authority is limited to container-scoped
+root-owned image content, declared persistent storage, and processes using the
+same identity. Prohibited combinations fail with diagnostics that identify the
+specific rejected authority. If a future capability grants root broader
+authority, that capability's explicit opt-in surface must disclose the added
+risk rather than making ordinary root execution noisy.
 
 A root runtime identity does not imply:
 
@@ -669,6 +670,60 @@ The ordinary source grant is an explicit read-only bind mount rooted at an
 approved project directory. A client cannot turn it into an arbitrary host-path
 selector through the session protocol. Original project source is never exposed
 through a writable bind.
+
+An explicit host directory bind grants access to every unmasked entry below
+that directory. Read-only mode prevents ordinary file mutation, but does not
+neutralize Unix sockets, device nodes, FIFOs, or nested mount points. Reploy
+does not recursively scan a live source tree: such a scan has unbounded launch
+cost and provides only a race-prone point-in-time observation. A caller that
+requires stronger isolation must use no host bind or a future filtered-copy
+workspace. This is a deliberate narrowing of the direct-bind security
+contract, not a claim that active host objects have been confined.
+
+Direct host binds also trust the selected host pathname namespace to remain
+stable until Docker establishes the mount. Reploy does not defend against a
+separate host-side actor retargeting the source path during launch or using
+Docker daemon access to alter the container. Such actors already hold authority
+outside the controller/workload isolation boundary. The launched workload
+cannot create this race itself because Docker establishes its mounts before
+starting the workload process.
+
+Generic remote Docker daemons are unsupported. Reploy requires a local Unix
+socket or Windows named-pipe endpoint, including the local endpoint presented
+by Docker Desktop. This prevents local validation and output contracts from
+silently applying to paths, ports, images, identities, and lifecycle state on
+another machine. A future remote-Docker design requires explicit input upload,
+output extraction and local publication, image placement, port forwarding,
+authentication, cleanup, and recovery semantics rather than inherited Docker
+context behavior.
+
+On native Linux, the operator must run Reploy directly in the host namespace
+served by the local Docker Engine. Running Reploy inside a container with a
+host socket mounted, or placing a local Unix-socket proxy in front of another
+daemon, is unsupported because the Docker API cannot prove that Reploy and the
+daemon resolve host paths in the same mount namespace. Unix-socket and
+named-pipe classification rejects ordinary remote Docker configuration; it is
+not a security attestation for an operator-controlled socket. Docker Desktop
+is the intentional exception because its native client integration supplies the
+supported host-path sharing and port-forwarding contract.
+
+Ordinary host binds reject the host filesystem root and canonical sources at
+or below `/proc`, `/dev`, or `/sys`, including symlink aliases. On Linux,
+Reploy also rejects bind mounts that expose the same filesystem root and checks
+filesystem identity so procfs, sysfs, cgroup hierarchies, device filesystems,
+and kernel control or observation filesystems remain prohibited when exposed
+through another path. Linux proc magic links are rejected before canonical
+resolution, including when procfs is reached through a symlink alias, so they
+cannot resolve differently for Reploy and Docker. Where Linux reports mount
+identity, Reploy rejects aliases of every mount rooted below `/proc`, `/dev`,
+or `/sys` while preserving unrelated mounts of the same filesystem type. On
+Linux kernels without no-magic-link path resolution, direct paths remain
+available but symlinked host sources fail closed. On macOS, native devfs and
+procfs sources are likewise rejected.
+Containers keep Docker's container-scoped `/proc` and restricted `/dev`; those
+are not host binds. Hardware or host-observation access, if later justified by
+a compelling use case, requires a separately designed explicit capability
+rather than an ordinary mount.
 
 Root inside any Reploy application container may not receive host input or
 shared-state binds, including read-only binds. Read-only prevents modification
@@ -785,6 +840,13 @@ separately to the controller and workload environments. Local
 denial includes host gateways, Docker peers outside the granted operation,
 loopback redirection, private and link-local address ranges, IPv6 local ranges,
 and infrastructure metadata endpoints.
+
+The initial implementation preserves this coarse public/local policy intent
+and exact declared endpoint grants, using only backend isolation and endpoint
+primitives whose behavior Reploy can verify. A backend that cannot realize a
+requested combination fails closed. This slice does not introduce a custom
+packet gateway and must not claim destination-, port-, domain-, DNS-, or
+packet-level enforcement beyond what the selected primitive actually proves.
 
 A controller may receive an explicit session-local grant to a declared
 workload endpoint. That grant is not treated as general local-network
@@ -1077,9 +1139,13 @@ remain separate prerequisite slices. Root host authority is now enforced at
 runtime: host sources are classified as input, shared state, or explicit
 output; UID 0 is rejected for all three before container creation; and root
 output options are rejected before host-path preparation. Docker-managed
-volumes and tmpfs remain available to root. Durable confinement of special
-files nested inside a non-root directory bind remains unresolved and must not
-be represented as solved by an expensive launch-time snapshot alone.
+volumes and tmpfs remain available to root. Ordinary binds also reject
+canonical host root, `/proc`,
+`/dev`, and `/sys` sources plus equivalent protected filesystem mounts detected
+through native filesystem identity. Explicit non-root directory binds
+intentionally grant access to their remaining unmasked contents, including
+nested active objects; this narrowed contract avoids representing a recursive
+launch-time scan as durable confinement.
 
 ### Slice 2: Controlled-Session Lifecycle Core
 
@@ -1151,11 +1217,16 @@ lease protocol.
 
 ### Network Isolation and Audit
 
-Define general public and local kill switches, direct-egress enforcement, proxy
-behavior, DNS control, IPv6, metadata protection, and auditability as a
-separate Reploy/agent-sandbox design. The one-way, exact endpoint forwarding
-used by the initial controlled session is intentionally narrower than that
-future surface.
+After the coarse public/local kill switches, define a separate Reploy userland
+L3 policy gateway for finer network control. Its design should cover a
+capability-free application network namespace, one-shot route initialization,
+an isolated data path whose only peer is the gateway, private gateway control,
+root-resistant route invariants, direct-egress prevention, destination and
+port grants, DNS and IPv6 policy, metadata protection, auditing, resource
+limits, failure behavior, reconciliation, and portable Docker/Podman
+integration. The one-way, exact endpoint forwarding used by the initial
+controlled session remains intentionally narrower and does not depend on this
+later gateway.
 
 ### Disposable Writable Workspaces
 
@@ -1192,7 +1263,8 @@ analysis. Privileged application containers remain outside this design.
 - Installed system-scope application containers use the configured host
   service account's numeric identity under the blueprint's container-local
   account name.
-- Root application containers are possible but visibly weaker.
+- Root application containers are possible but receive no implicit additional
+  authority; prohibited combinations fail with precise diagnostics.
 - Root application containers never receive host input or shared-state binds;
   local source requires the separately designed disposable-copy capability.
   Explicit root output-only binds remain unavailable until their separate

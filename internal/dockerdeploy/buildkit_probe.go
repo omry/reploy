@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -83,8 +84,15 @@ func minimumDockerVersion(value string, minimumMajor int, minimumMinor int) bool
 }
 
 func executeDockerOutput(ctx context.Context, args ...string) (string, error) {
+	spec := CommandSpec{Name: "docker", Args: args}
+	endpoint, err := verifiedLocalDockerEndpointV1(ctx, spec, defaultDockerPreflightTimeout)
+	if err != nil {
+		return "", err
+	}
+	spec = pinDockerEndpointV1(spec, endpoint)
 	ctx, end := buildprofile.Start(ctx, dockerProfileOperation(args))
-	command := exec.CommandContext(ctx, "docker", args...)
+	command := exec.CommandContext(ctx, spec.Name, spec.Args...)
+	command.Env = append(os.Environ(), spec.Env...)
 	output, err := command.CombinedOutput()
 	// Docker output probes often use a non-zero exit to represent ordinary
 	// absence. Their semantic caller records a failure only when it propagates.

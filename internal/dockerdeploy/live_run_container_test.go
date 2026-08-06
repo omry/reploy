@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/omry/reploy/internal/deploy"
 )
@@ -92,6 +93,50 @@ func TestRunAdmittedTransientContainerV1ReleasesLockForExecutionAndCompletesQueu
 	}
 	if _, removed, err := inspection.RemoveLiveRunV1(waiter.ID); err != nil || !removed {
 		t.Fatalf("remove promoted waiter = %t, %v", removed, err)
+	}
+}
+
+func TestRunAdmittedTransientContainerV1UsesOneBoundDockerRunner(t *testing.T) {
+	dir := t.TempDir()
+	operation, run, execution := admittedTransientFixtureV1(t, dir)
+	boundCalls := []CommandSpec{}
+	bindCalls := 0
+	backend := admittedTransientContainerBackendV1{
+		acquire: deploy.AcquireOperationLock,
+		bind: func(ctx context.Context, spec CommandSpec, timeout time.Duration) (commandRunner, error) {
+			bindCalls++
+			if ctx != t.Context() || !reflect.DeepEqual(spec, execution.Create) || timeout != 7*time.Second {
+				t.Fatalf("bind input = %#v / %s", spec, timeout)
+			}
+			return func(spec CommandSpec, _ RunOptions) error {
+				boundCalls = append(boundCalls, spec)
+				return nil
+			}, nil
+		},
+		create: func(CommandSpec, RunOptions) error {
+			t.Fatal("unbound create runner used")
+			return nil
+		},
+		followup: func(CommandSpec, RunOptions) error {
+			t.Fatal("unbound follow-up runner used")
+			return nil
+		},
+		runTemporary: func(run temporaryCommandRunner, start CommandSpec, cleanup CommandSpec, options RunOptions) error {
+			if err := run(start, options); err != nil {
+				return err
+			}
+			return run(cleanup, options)
+		},
+	}
+	if err := runAdmittedTransientContainerV1(
+		t.Context(), dir, operation, run.ID, execution,
+		RunOptions{DockerPreflightTimeout: 7 * time.Second},
+		backend,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if bindCalls != 1 || !reflect.DeepEqual(boundCalls, []CommandSpec{execution.Create, execution.Start, execution.Cleanup}) {
+		t.Fatalf("bind calls = %d, commands = %#v", bindCalls, boundCalls)
 	}
 }
 

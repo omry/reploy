@@ -32,7 +32,7 @@ type PythonResolverSession struct {
 }
 
 var runPythonResolverOpenCommand = runCommand
-var runPythonResolverFollowupCommand = runCommandWithoutDockerPreflight
+var runPythonResolverFollowupCommand = runDockerCommand
 
 type pythonSourceBuildCommand struct {
 	operation string

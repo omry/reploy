@@ -625,7 +625,7 @@ func (session *APTResolverSession) RefreshIndexes(ctx context.Context) error {
 }
 
 var runAPTResolverOpenCommand = runCommand
-var runAPTResolverFollowupCommand = runCommandWithoutDockerPreflight
+var runAPTResolverFollowupCommand = runDockerCommand
 
 // OpenAPTResolverSession starts the one held container that will validate the
 // exact prefix and, in later typed operations, resolve its APT transaction.
