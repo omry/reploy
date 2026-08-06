@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/omry/reploy/internal/deploy"
 )
@@ -283,6 +284,49 @@ func TestAwaitLiveRunAdmissionV1RecoversAbandonedControlMarker(t *testing.T) {
 	}
 	if _, _, err := admitted.RemoveLiveRunV1(candidate.ID); err != nil {
 		t.Fatal(err)
+	}
+	if err := admitted.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAwaitLiveRunAdmissionV1PreflightsRecoveredContainerCleanup(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	abandoned := liveRunAdmissionFixtureV1("run-0000000000000001", false)
+	if _, err := operation.AdmitLiveRunV1(abandoned, false); err != nil {
+		t.Fatal(err)
+	}
+	container := "demo-" + abandoned.ID
+	if err := operation.RecordLiveRunContainerV1(abandoned.ID, container); err != nil {
+		t.Fatal(err)
+	}
+	candidate := liveRunAdmissionFixtureV1("run-0000000000000002", false)
+	holdLiveRunLeaseV1(t, operation, candidate.ID)
+	preflightCalls := 0
+	restore := stubDockerPreflight(t, func(context.Context, CommandSpec, time.Duration) error {
+		preflightCalls++
+		return errors.New("remote Docker endpoint rejected")
+	})
+	defer restore()
+
+	admitted, err := AwaitLiveRunAdmissionV1(t.Context(), dir, operation, candidate, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preflightCalls != 1 {
+		t.Fatalf("Docker preflight calls = %d, want 1", preflightCalls)
+	}
+	queue, _, err := admitted.ReadLiveRunQueueV1()
+	if err != nil || len(queue.Runs) != 1 || queue.Runs[0].ID != candidate.ID ||
+		len(queue.Cleanup) != 1 || queue.Cleanup[0].Container != container {
+		t.Fatalf("queue after rejected remote cleanup = %#v, %v", queue, err)
+	}
+	if _, removed, err := admitted.RemoveLiveRunV1(candidate.ID); err != nil || !removed {
+		t.Fatalf("remove admitted run = %t, %v", removed, err)
 	}
 	if err := admitted.Unlock(); err != nil {
 		t.Fatal(err)
