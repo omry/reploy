@@ -41,19 +41,24 @@ const defaultDockerPreflightTimeout = 5 * time.Second
 var dockerPreflight = checkDockerResponsive
 
 func runCommand(spec CommandSpec, options RunOptions) error {
+	if spec.Name == "docker" {
+		return runDockerCommand(spec, options)
+	}
+	return runCommandWithoutDockerPreflight(spec, options)
+}
+
+func runDockerCommand(spec CommandSpec, options RunOptions) error {
 	ctx := options.Context
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if spec.Name == "docker" {
-		_, end := buildprofile.Start(ctx, "Docker preflight")
-		err := dockerPreflight(ctx, spec, effectiveDockerPreflightTimeout(options.DockerPreflightTimeout))
-		end(err)
-		if err != nil {
-			return err
-		}
+	_, end := buildprofile.Start(ctx, "Docker preflight")
+	endpoint, err := dockerPreflight(ctx, spec, effectiveDockerPreflightTimeout(options.DockerPreflightTimeout))
+	end(err)
+	if err != nil {
+		return err
 	}
-	return runCommandWithoutDockerPreflight(spec, options)
+	return runCommandWithoutDockerPreflight(pinDockerEndpointV1(spec, endpoint), options)
 }
 
 // runCommandWithoutDockerPreflight is for follow-up commands in one
@@ -119,9 +124,16 @@ func effectiveDockerPreflightTimeout(timeout time.Duration) time.Duration {
 	return defaultDockerPreflightTimeout
 }
 
-func checkDockerResponsive(ctx context.Context, spec CommandSpec, timeout time.Duration) error {
+func checkDockerResponsive(ctx context.Context, spec CommandSpec, timeout time.Duration) (string, error) {
+	timeout = effectiveDockerPreflightTimeout(timeout)
 	preflightCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
+	endpoint, err := verifiedLocalDockerEndpointV1(preflightCtx, spec, timeout)
+	if err != nil {
+		return "", err
+	}
+	spec = pinDockerEndpointV1(spec, endpoint)
 
 	command := exec.CommandContext(preflightCtx, spec.Name, "version", "--format", "{{.Server.Version}}")
 	command.Dir = spec.Dir
@@ -133,14 +145,14 @@ func checkDockerResponsive(ctx context.Context, spec CommandSpec, timeout time.D
 	command.Stderr = &output
 	if err := command.Run(); err != nil {
 		if errors.Is(preflightCtx.Err(), context.DeadlineExceeded) {
-			return fmt.Errorf("docker daemon did not respond within %s", timeout)
+			return "", fmt.Errorf("docker daemon did not respond within %s", timeout)
 		}
 		if output := trimmedCommandOutput(output.String()); output != "" {
-			return fmt.Errorf("docker daemon check failed: %w\ncommand output:\n%s", err, output)
+			return "", fmt.Errorf("docker daemon check failed: %w\ncommand output:\n%s", err, output)
 		}
-		return fmt.Errorf("docker daemon check failed: %w", err)
+		return "", fmt.Errorf("docker daemon check failed: %w", err)
 	}
-	return nil
+	return endpoint, nil
 }
 
 func trimmedCommandOutput(output string) string {

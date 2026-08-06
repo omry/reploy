@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -406,7 +408,7 @@ func TestDetectDockerRuntimeDetectsDockerDesktop(t *testing.T) {
 		"#!/bin/sh\nprintf '{\"OperatingSystem\":\"Docker Desktop\",\"ServerVersion\":\"29.5.3\"}\\n'\n",
 		"@echo off\r\necho {\"OperatingSystem\":\"Docker Desktop\",\"ServerVersion\":\"29.5.3\"}\r\n",
 	)
-	info, err := detectDockerRuntime(context.Background(), CommandSpec{Name: dockerPath}, time.Second)
+	info, err := detectDockerRuntime(context.Background(), CommandSpec{Name: dockerPath, Env: []string{"DOCKER_HOST=unix:///var/run/docker.sock", "DOCKER_CONTEXT="}}, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,12 +429,43 @@ func TestDetectDockerRuntimeDetectsLinuxEngine(t *testing.T) {
 		"#!/bin/sh\nprintf '{\"OperatingSystem\":\"Ubuntu 24.04\",\"ServerVersion\":\"29.5.3\"}\\n'\n",
 		"@echo off\r\necho {\"OperatingSystem\":\"Ubuntu 24.04\",\"ServerVersion\":\"29.5.3\"}\r\n",
 	)
-	info, err := detectDockerRuntime(context.Background(), CommandSpec{Name: dockerPath}, time.Second)
+	info, err := detectDockerRuntime(context.Background(), CommandSpec{Name: dockerPath, Env: []string{"DOCKER_HOST=unix:///var/run/docker.sock", "DOCKER_CONTEXT="}}, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if info.Runtime != dockerRuntimeLinuxEngine {
 		t.Fatalf("runtime = %s, want %s", info.Runtime, dockerRuntimeLinuxEngine)
+	}
+}
+
+func TestDetectDockerRuntimeSharesOneDeadlineAcrossProbes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell timing fixture requires a POSIX host")
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "argv.log")
+	dockerPath := writeFakeCommand(
+		t,
+		dir,
+		"docker",
+		"#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$DOCKER_ARGV_LOG\"\nsleep 0.6\nif [ \"$1\" = context ]; then printf 'unix:///var/run/docker.sock\\n'; else printf '{\"OperatingSystem\":\"Ubuntu 24.04\",\"ServerVersion\":\"29.5.3\"}\\n'; fi\n",
+		"@exit /b 1\r\n",
+	)
+
+	_, err := detectDockerRuntime(
+		context.Background(),
+		CommandSpec{Name: dockerPath, Env: []string{"DOCKER_HOST=", "DOCKER_CONTEXT=", "DOCKER_ARGV_LOG=" + logPath}},
+		time.Second,
+	)
+	if err == nil || !strings.Contains(err.Error(), "docker info did not respond within 1s") {
+		t.Fatalf("error = %v", err)
+	}
+	content, readErr := os.ReadFile(logPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if got := strings.Fields(string(content)); !reflect.DeepEqual(got, []string{"context", "info"}) {
+		t.Fatalf("Docker probes = %q, want context then info", got)
 	}
 }
 
