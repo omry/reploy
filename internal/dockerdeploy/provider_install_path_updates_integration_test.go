@@ -74,7 +74,7 @@ func TestProviderInstallVolumeCopyHelperDockerIntegration(t *testing.T) {
 		prepareProbeWorkspace: func(context.Context, providerstore.Store, blueprint.Platform) (PreparedProbeWorkspace, func() error, error) {
 			return workspace, func() error { cleaned = true; return nil }, nil
 		},
-		run: runCommandWithoutDockerPreflight,
+		run: runDockerCommand,
 	}); err != nil {
 		t.Fatal(err)
 	}

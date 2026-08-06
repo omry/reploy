@@ -268,8 +268,15 @@ func detectDockerRuntime(ctx context.Context, spec CommandSpec, timeout time.Dur
 	if spec.Name == "" {
 		spec.Name = "docker"
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, effectiveDockerPreflightTimeout(timeout))
+	timeout = effectiveDockerPreflightTimeout(timeout)
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
+	endpoint, err := verifiedLocalDockerEndpointV1(probeCtx, spec, timeout)
+	if err != nil {
+		return dockerRuntimeInfo{}, err
+	}
+	spec = pinDockerEndpointV1(spec, endpoint)
 
 	command := exec.CommandContext(probeCtx, spec.Name, "info", "--format", "{{json .}}")
 	command.Dir = spec.Dir
@@ -281,7 +288,7 @@ func detectDockerRuntime(ctx context.Context, spec CommandSpec, timeout time.Dur
 	command.Stderr = &output
 	if err := command.Run(); err != nil {
 		if probeCtx.Err() == context.DeadlineExceeded {
-			return dockerRuntimeInfo{}, fmt.Errorf("docker info did not respond within %s", effectiveDockerPreflightTimeout(timeout))
+			return dockerRuntimeInfo{}, fmt.Errorf("docker info did not respond within %s", timeout)
 		}
 		if text := trimmedCommandOutput(output.String()); text != "" {
 			return dockerRuntimeInfo{}, fmt.Errorf("docker runtime check failed: %w\ncommand output:\n%s", err, text)

@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -26,17 +27,27 @@ type BuildKitCapabilities struct {
 }
 
 type dockerOutputRunner func(context.Context, ...string) (string, error)
+type dockerOutputBinder func(context.Context) (dockerOutputRunner, string, error)
 
 var runDockerOutput dockerOutputRunner = executeDockerOutput
+var bindBuildKitDockerOutput dockerOutputBinder = bindDockerOutputV1
 
 // ProbeBuildKitCapabilities verifies the common Linux daemon contract used on
 // native Linux and by Docker Desktop. The generated-build smoke test remains
 // the final proof that the daemon's BuildKit frontend supports RUN mounts.
 func ProbeBuildKitCapabilities(ctx context.Context) (BuildKitCapabilities, error) {
-	return probeBuildKitCapabilities(ctx, runDockerOutput)
+	run, contextName, err := bindBuildKitDockerOutput(ctx)
+	if err != nil {
+		return BuildKitCapabilities{}, fmt.Errorf("probe Docker daemon for generated images: %w", err)
+	}
+	return probeBuildKitCapabilitiesForContext(ctx, run, contextName)
 }
 
 func probeBuildKitCapabilities(ctx context.Context, run dockerOutputRunner) (BuildKitCapabilities, error) {
+	return probeBuildKitCapabilitiesForContext(ctx, run, "")
+}
+
+func probeBuildKitCapabilitiesForContext(ctx context.Context, run dockerOutputRunner, contextName string) (BuildKitCapabilities, error) {
 	output, err := run(ctx, "info", "--format", "{{.ServerVersion}}\t{{.OSType}}\t{{.OperatingSystem}}")
 	if err != nil {
 		return BuildKitCapabilities{}, fmt.Errorf("probe Docker daemon for generated images: %w", err)
@@ -45,12 +56,15 @@ func probeBuildKitCapabilities(ctx context.Context, run dockerOutputRunner) (Bui
 	if len(parts) != 3 || parts[0] == "" || parts[1] == "" {
 		return BuildKitCapabilities{}, fmt.Errorf("probe Docker daemon returned unexpected output %q", strings.TrimSpace(output))
 	}
-	contextName, err := run(ctx, "context", "show")
-	if err != nil {
-		return BuildKitCapabilities{}, fmt.Errorf("probe Docker context: %w", err)
+	if contextName == "" {
+		contextOutput, err := run(ctx, "context", "show")
+		if err != nil {
+			return BuildKitCapabilities{}, fmt.Errorf("probe Docker context: %w", err)
+		}
+		contextName = strings.TrimSpace(contextOutput)
 	}
 	capabilities := BuildKitCapabilities{
-		ServerVersion: parts[0], ServerOS: parts[1], OperatingSystem: parts[2], Context: strings.TrimSpace(contextName),
+		ServerVersion: parts[0], ServerOS: parts[1], OperatingSystem: parts[2], Context: contextName,
 		Engine: DockerEngineLinux,
 	}
 	if strings.Contains(strings.ToLower(capabilities.OperatingSystem), "docker desktop") {
@@ -63,6 +77,17 @@ func probeBuildKitCapabilities(ctx context.Context, run dockerOutputRunner) (Bui
 		return BuildKitCapabilities{}, fmt.Errorf("generated images require Docker Engine 24.0 or newer; daemon reports %s", capabilities.ServerVersion)
 	}
 	return capabilities, nil
+}
+
+func bindDockerOutputV1(ctx context.Context) (dockerOutputRunner, string, error) {
+	spec := CommandSpec{Name: "docker"}
+	target, err := verifiedLocalDockerTargetV1(ctx, spec, defaultDockerPreflightTimeout)
+	if err != nil {
+		return nil, "", err
+	}
+	return func(runCtx context.Context, args ...string) (string, error) {
+		return executeDockerOutputAtEndpoint(runCtx, target.Endpoint, args...)
+	}, target.Context, nil
 }
 
 func minimumDockerVersion(value string, minimumMajor int, minimumMinor int) bool {
@@ -83,8 +108,20 @@ func minimumDockerVersion(value string, minimumMajor int, minimumMinor int) bool
 }
 
 func executeDockerOutput(ctx context.Context, args ...string) (string, error) {
+	spec := CommandSpec{Name: "docker", Args: args}
+	endpoint, err := verifiedLocalDockerEndpointV1(ctx, spec, defaultDockerPreflightTimeout)
+	if err != nil {
+		return "", err
+	}
+	return executeDockerOutputAtEndpoint(ctx, endpoint, args...)
+}
+
+func executeDockerOutputAtEndpoint(ctx context.Context, endpoint string, args ...string) (string, error) {
+	spec := CommandSpec{Name: "docker", Args: args}
+	spec = pinDockerEndpointV1(spec, endpoint)
 	ctx, end := buildprofile.Start(ctx, dockerProfileOperation(args))
-	command := exec.CommandContext(ctx, "docker", args...)
+	command := exec.CommandContext(ctx, spec.Name, spec.Args...)
+	command.Env = append(os.Environ(), spec.Env...)
 	output, err := command.CombinedOutput()
 	// Docker output probes often use a non-zero exit to represent ordinary
 	// absence. Their semantic caller records a failure only when it propagates.

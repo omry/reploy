@@ -285,14 +285,14 @@ func TestAPTResolverBaseStateCommandFailureDoesNotRetryOrAcceptPartialOutput(t *
 	if _, err := session.PlanPackages(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
-	prior := runAPTResolverFollowupCommand
-	runAPTResolverFollowupCommand = func(spec CommandSpec, options RunOptions) error {
+	prior := session.runDocker
+	session.runDocker = func(spec CommandSpec, options RunOptions) error {
 		*commands = append(*commands, spec)
 		_, _ = options.Stdout.Write([]byte("libc6:amd64\t2.39\tamd64\tinstall ok installed\n"))
 		_, _ = options.Stderr.Write([]byte("secret partial dpkg output"))
 		return syscall.E2BIG
 	}
-	t.Cleanup(func() { runAPTResolverFollowupCommand = prior })
+	t.Cleanup(func() { session.runDocker = prior })
 	_, err = session.ReadBasePackageState(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "apt.resolve.base-state") || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "libc6") {
 		t.Fatalf("base state err = %v", err)
@@ -302,7 +302,7 @@ func TestAPTResolverBaseStateCommandFailureDoesNotRetryOrAcceptPartialOutput(t *
 	if err == nil || !strings.Contains(err.Error(), "already failed") || len(*commands) != commandCount {
 		t.Fatalf("retry err = %v, commands = %d", err, len(*commands))
 	}
-	runAPTResolverFollowupCommand = prior
+	session.runDocker = prior
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -467,8 +467,8 @@ func TestAPTResolverRefreshForwardsDiagnosticsAndReturnsStructuredError(t *testi
 	if _, err := session.ProbeBaseProfile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	prior := runAPTResolverFollowupCommand
-	runAPTResolverFollowupCommand = func(spec CommandSpec, options RunOptions) error {
+	prior := session.runDocker
+	session.runDocker = func(spec CommandSpec, options RunOptions) error {
 		commandsValue := *commands
 		commandsValue = append(commandsValue, spec)
 		*commands = commandsValue
@@ -476,7 +476,7 @@ func TestAPTResolverRefreshForwardsDiagnosticsAndReturnsStructuredError(t *testi
 		_, _ = options.Stderr.Write([]byte("E: https://user:secret@example.invalid/private failed\n"))
 		return errors.New("exit status 100: user:secret")
 	}
-	t.Cleanup(func() { runAPTResolverFollowupCommand = prior })
+	t.Cleanup(func() { session.runDocker = prior })
 	err = session.RefreshIndexes(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "apt.resolve.update") || !strings.Contains(err.Error(), "apt.update_failed") || !strings.Contains(err.Error(), "select or rebuild a base image") || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "example.invalid") {
 		t.Fatalf("refresh err = %v", err)
@@ -493,7 +493,7 @@ func TestAPTResolverRefreshForwardsDiagnosticsAndReturnsStructuredError(t *testi
 	if err == nil || !strings.Contains(err.Error(), "already failed") || len(*commands) != commandCount {
 		t.Fatalf("retry err = %v, commands = %d", err, len(*commands))
 	}
-	runAPTResolverFollowupCommand = prior
+	session.runDocker = prior
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -578,28 +578,29 @@ func TestOpenAPTResolverSessionFinishesCreateBeforeHonoringCancellation(t *testi
 	descriptor := testProbeImageDescriptor(t, "linux/amd64")
 	probeWorkspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
 	resolverWorkspace := testPreparedAPTResolverWorkspace(t)
-	previousOpen := runAPTResolverOpenCommand
-	previousFollowup := runAPTResolverFollowupCommand
-	t.Cleanup(func() {
-		runAPTResolverOpenCommand = previousOpen
-		runAPTResolverFollowupCommand = previousFollowup
-	})
+	previousBind := bindAPTResolverCommandRunner
+	t.Cleanup(func() { bindAPTResolverCommandRunner = previousBind })
 	ctx, cancel := context.WithCancel(context.Background())
 	removed := false
-	runAPTResolverOpenCommand = func(_ CommandSpec, options RunOptions) error {
-		cancel()
-		if err := options.Context.Err(); err != nil {
-			t.Fatalf("Docker create inherited cancellation: %v", err)
+	bindAPTResolverCommandRunner = func(bindCtx context.Context, _ CommandSpec, _ time.Duration) (commandRunner, error) {
+		if err := bindCtx.Err(); err != nil {
+			t.Fatalf("Docker endpoint binding inherited cancellation: %v", err)
 		}
-		return nil
-	}
-	runAPTResolverFollowupCommand = func(spec CommandSpec, _ RunOptions) error {
-		if len(spec.Args) == 3 && spec.Args[0] == "rm" && spec.Args[1] == "--force" {
-			removed = true
+		return func(spec CommandSpec, options RunOptions) error {
+			if len(spec.Args) != 0 && spec.Args[0] == "create" {
+				cancel()
+				if err := options.Context.Err(); err != nil {
+					t.Fatalf("Docker create inherited cancellation: %v", err)
+				}
+				return nil
+			}
+			if len(spec.Args) == 3 && spec.Args[0] == "rm" && spec.Args[1] == "--force" {
+				removed = true
+				return nil
+			}
+			t.Fatalf("unexpected follow-up command: %#v", spec)
 			return nil
-		}
-		t.Fatalf("unexpected follow-up command: %#v", spec)
-		return nil
+		}, nil
 	}
 	if _, err := OpenAPTResolverSession(ctx, descriptor, probeWorkspace, resolverWorkspace, RunOptions{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v", err)
@@ -613,18 +614,17 @@ func TestOpenAPTResolverSessionPropagatesDockerPreflightTimeout(t *testing.T) {
 	descriptor := testProbeImageDescriptor(t, "linux/amd64")
 	probeWorkspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
 	resolverWorkspace := testPreparedAPTResolverWorkspace(t)
-	previousOpen := runAPTResolverOpenCommand
-	previousFollowup := runAPTResolverFollowupCommand
-	t.Cleanup(func() {
-		runAPTResolverOpenCommand = previousOpen
-		runAPTResolverFollowupCommand = previousFollowup
-	})
+	previousBind := bindAPTResolverCommandRunner
+	t.Cleanup(func() { bindAPTResolverCommandRunner = previousBind })
 	var received time.Duration
-	runAPTResolverOpenCommand = func(_ CommandSpec, options RunOptions) error {
-		received = options.DockerPreflightTimeout
-		return nil
+	commands := []CommandSpec{}
+	bindAPTResolverCommandRunner = func(_ context.Context, _ CommandSpec, timeout time.Duration) (commandRunner, error) {
+		received = timeout
+		return func(spec CommandSpec, _ RunOptions) error {
+			commands = append(commands, spec)
+			return nil
+		}, nil
 	}
-	runAPTResolverFollowupCommand = func(_ CommandSpec, _ RunOptions) error { return nil }
 
 	const timeout = 17 * time.Second
 	session, err := OpenAPTResolverSession(context.Background(), descriptor, probeWorkspace, resolverWorkspace, RunOptions{
@@ -638,6 +638,9 @@ func TestOpenAPTResolverSessionPropagatesDockerPreflightTimeout(t *testing.T) {
 	}
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	if len(commands) != 3 || commands[0].Args[0] != "create" || commands[1].Args[0] != "start" || commands[2].Args[0] != "rm" {
+		t.Fatalf("bound Docker commands = %#v", commands)
 	}
 }
 
@@ -728,55 +731,49 @@ func stubAPTResolverCommands(
 	startErr error,
 ) (*[]CommandSpec, *[]byte) {
 	t.Helper()
-	previousOpen := runAPTResolverOpenCommand
-	previousFollowup := runAPTResolverFollowupCommand
+	previousBind := bindAPTResolverCommandRunner
 	commands := []CommandSpec{}
 	probeInput := []byte(nil)
 	profileIndex := 0
-	t.Cleanup(func() {
-		runAPTResolverOpenCommand = previousOpen
-		runAPTResolverFollowupCommand = previousFollowup
-	})
-	runAPTResolverOpenCommand = func(spec CommandSpec, _ RunOptions) error {
-		commands = append(commands, spec)
-		return nil
-	}
-	runAPTResolverFollowupCommand = func(spec CommandSpec, options RunOptions) error {
-		commands = append(commands, spec)
-		if len(spec.Args) != 0 && spec.Args[0] == "start" && startErr != nil {
-			if options.Stderr != nil {
-				_, _ = options.Stderr.Write([]byte(startErr.Error()))
-			}
-			return startErr
-		}
-		if len(spec.Args) != 0 && spec.Args[len(spec.Args)-1] == ProbeContainerExecutable {
-			input, err := io.ReadAll(options.Stdin)
-			if err != nil {
-				return err
-			}
-			probeInput = input
-			_, _ = options.Stdout.Write(probeResponse)
-			return nil
-		}
-		if len(spec.Args) != 0 && spec.Args[0] == "exec" {
-			if profileIndex >= len(profileOutputs) {
-				return errors.New("unexpected APT profile command")
-			}
-			joined := strings.Join(spec.Args, "\x00")
-			if strings.Contains(joined, "Debug::pkgDepCache::Marker=1") {
-				stdout, stderr, separated := bytes.Cut(profileOutputs[profileIndex], []byte("\x00APT-PLAN-STDERR\x00"))
-				if separated {
-					_, _ = options.Stdout.Write(stdout)
-					_, _ = options.Stderr.Write(stderr)
-				} else {
-					_, _ = options.Stderr.Write(profileOutputs[profileIndex])
+	t.Cleanup(func() { bindAPTResolverCommandRunner = previousBind })
+	bindAPTResolverCommandRunner = func(context.Context, CommandSpec, time.Duration) (commandRunner, error) {
+		return func(spec CommandSpec, options RunOptions) error {
+			commands = append(commands, spec)
+			if len(spec.Args) != 0 && spec.Args[0] == "start" && startErr != nil {
+				if options.Stderr != nil {
+					_, _ = options.Stderr.Write([]byte(startErr.Error()))
 				}
-			} else {
-				_, _ = options.Stdout.Write(profileOutputs[profileIndex])
+				return startErr
 			}
-			profileIndex++
-		}
-		return nil
+			if len(spec.Args) != 0 && spec.Args[len(spec.Args)-1] == ProbeContainerExecutable {
+				input, err := io.ReadAll(options.Stdin)
+				if err != nil {
+					return err
+				}
+				probeInput = input
+				_, _ = options.Stdout.Write(probeResponse)
+				return nil
+			}
+			if len(spec.Args) != 0 && spec.Args[0] == "exec" {
+				if profileIndex >= len(profileOutputs) {
+					return errors.New("unexpected APT profile command")
+				}
+				joined := strings.Join(spec.Args, "\x00")
+				if strings.Contains(joined, "Debug::pkgDepCache::Marker=1") {
+					stdout, stderr, separated := bytes.Cut(profileOutputs[profileIndex], []byte("\x00APT-PLAN-STDERR\x00"))
+					if separated {
+						_, _ = options.Stdout.Write(stdout)
+						_, _ = options.Stderr.Write(stderr)
+					} else {
+						_, _ = options.Stderr.Write(profileOutputs[profileIndex])
+					}
+				} else {
+					_, _ = options.Stdout.Write(profileOutputs[profileIndex])
+				}
+				profileIndex++
+			}
+			return nil
+		}, nil
 	}
 	return &commands, &probeInput
 }
