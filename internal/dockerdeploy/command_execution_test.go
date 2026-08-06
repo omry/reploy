@@ -85,7 +85,7 @@ func TestTransientAndShellCommandsUseDockerExecArgv(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(spec.Args, "|")
-	if strings.Contains(joined, "sh|-c") || !containsInOrder(spec.Args, []string{"--entrypoint", plan.Sandbox.StartupVerifier.Path, plan.Image, "verify-exec", "--", "/opt/demo", ";rm", "$(touch pwned)"}) {
+	if strings.Contains(joined, "sh|-c") || !containsInOrder(spec.Args, []string{"--entrypoint", plan.Sandbox.StartupVerifier.Path, plan.Image, "sandbox-exec", "--uid", "501", "--gid", "20", "--groups", "33,44", "--public", "deny", "--local", "deny", "--", "/opt/demo", ";rm", "$(touch pwned)"}) {
 		t.Fatalf("spec = %#v", spec)
 	}
 	if !containsInOrder(spec.Args, []string{"--mount", "type=bind,source=" + outputDir + ",target=" + runtimeOutputRoot, "--env", runtimeOutputFileVariable + "=" + runtimeOutputRoot + "/output"}) {
@@ -94,13 +94,13 @@ func TestTransientAndShellCommandsUseDockerExecArgv(t *testing.T) {
 	if !containsAdjacent(spec.Args, "--pull", "never") {
 		t.Fatalf("transient command permits image pulls: %#v", spec.Args)
 	}
-	if !containsInOrder(spec.Args, []string{"--user", "501:20", "--cap-drop", "ALL"}) ||
-		!containsInOrder(spec.Args, []string{"--group-add", "33", "--group-add", "44"}) ||
-		!containsInOrder(spec.Args, []string{"--entrypoint", plan.Sandbox.StartupVerifier.Path, plan.Image, "verify-exec", "--", "/opt/demo", ";rm", "$(touch pwned)"}) {
+	if !containsInOrder(spec.Args, []string{"--user", "0:0", "--cap-drop", "ALL"}) ||
+		!containsInOrder(spec.Args, []string{"--cap-add", "NET_ADMIN", "--cap-add", "SETGID", "--cap-add", "SETPCAP", "--cap-add", "SETUID"}) ||
+		!containsInOrder(spec.Args, []string{"--entrypoint", plan.Sandbox.StartupVerifier.Path, plan.Image, "sandbox-exec", "--uid", "501", "--gid", "20", "--groups", "33,44", "--public", "deny", "--local", "deny", "--", "/opt/demo", ";rm", "$(touch pwned)"}) {
 		t.Fatalf("transient command does not start directly with its final identity and command: %#v", spec.Args)
 	}
 	shell := ShellCommandSpec(plan, true, true)
-	if !strings.Contains(strings.Join(shell.Args, " "), "--interactive --tty") || !containsInOrder(shell.Args, []string{"--entrypoint", plan.Sandbox.StartupVerifier.Path, plan.Image, "verify-exec", "--", "/bin/sh"}) {
+	if !strings.Contains(strings.Join(shell.Args, " "), "--interactive --tty") || !containsInOrder(shell.Args, []string{"--entrypoint", plan.Sandbox.StartupVerifier.Path, plan.Image, "sandbox-exec", "--uid", "501", "--gid", "20", "--groups", "33,44", "--public", "deny", "--local", "deny", "--", "/bin/sh"}) {
 		t.Fatalf("shell = %#v", shell)
 	}
 	if !containsInOrder(shell.Args, []string{"--read-only", "--tmpfs", transientHomeMountForPlan(plan)}) ||
@@ -204,7 +204,7 @@ func TestPlanTransientContainerExecutionV1SeparatesCreateStartAndCleanup(t *test
 		t.Fatalf("create prefix = %#v", execution.Create.Args)
 	}
 	if !containsInOrder(execution.Create.Args, []string{"--interactive", "--tty"}) ||
-		!containsInOrder(execution.Create.Args, []string{"--entrypoint", plan.Sandbox.StartupVerifier.Path, plan.Image, "verify-exec", "--", "/opt/demo", "export"}) {
+		!containsInOrder(execution.Create.Args, []string{"--entrypoint", plan.Sandbox.StartupVerifier.Path, plan.Image, "sandbox-exec", "--uid", "501", "--gid", "20", "--public", "deny", "--local", "deny", "--", "/opt/demo", "export"}) {
 		t.Fatalf("create args = %#v", execution.Create.Args)
 	}
 	if !reflect.DeepEqual(execution.Start.Args, []string{"start", "--attach", "--interactive", wantContainer}) {
