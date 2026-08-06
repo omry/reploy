@@ -41,17 +41,22 @@ const defaultDockerPreflightTimeout = 5 * time.Second
 var dockerPreflight = checkDockerResponsive
 
 func runCommand(spec CommandSpec, options RunOptions) error {
+	if spec.Name == "docker" {
+		return runDockerCommand(spec, options)
+	}
+	return runCommandWithoutDockerPreflight(spec, options)
+}
+
+func runDockerCommand(spec CommandSpec, options RunOptions) error {
 	ctx := options.Context
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if spec.Name == "docker" {
-		_, end := buildprofile.Start(ctx, "Docker preflight")
-		err := dockerPreflight(ctx, spec, effectiveDockerPreflightTimeout(options.DockerPreflightTimeout))
-		end(err)
-		if err != nil {
-			return err
-		}
+	_, end := buildprofile.Start(ctx, "Docker preflight")
+	err := dockerPreflight(ctx, spec, effectiveDockerPreflightTimeout(options.DockerPreflightTimeout))
+	end(err)
+	if err != nil {
+		return err
 	}
 	return runCommandWithoutDockerPreflight(spec, options)
 }
@@ -120,6 +125,9 @@ func effectiveDockerPreflightTimeout(timeout time.Duration) time.Duration {
 }
 
 func checkDockerResponsive(ctx context.Context, spec CommandSpec, timeout time.Duration) error {
+	if err := requireLocalDockerEndpointV1(ctx, spec, timeout); err != nil {
+		return err
+	}
 	preflightCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 

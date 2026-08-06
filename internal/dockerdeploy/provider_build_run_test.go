@@ -113,7 +113,7 @@ func TestRunLockedProviderBuildV1UsesAndRetainsCallerLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := LockedProviderBuildExecutionResultV1{Reused: true, Warnings: []string{rootRuntimeIdentityWarningV1}}
+	want := LockedProviderBuildExecutionResultV1{Reused: true}
 	order := []string{}
 
 	result, err := runLockedProviderBuildV1(t.Context(), LockedProviderBuildRunInputV1{

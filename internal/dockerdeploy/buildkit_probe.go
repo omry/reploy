@@ -83,6 +83,9 @@ func minimumDockerVersion(value string, minimumMajor int, minimumMinor int) bool
 }
 
 func executeDockerOutput(ctx context.Context, args ...string) (string, error) {
+	if err := requireDefaultLocalDockerEndpointV1(ctx); err != nil {
+		return "", err
+	}
 	ctx, end := buildprofile.Start(ctx, dockerProfileOperation(args))
 	command := exec.CommandContext(ctx, "docker", args...)
 	output, err := command.CombinedOutput()
