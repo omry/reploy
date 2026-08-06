@@ -39,6 +39,7 @@ type APTResolverSession struct {
 	probe                PreparedProbeWorkspace
 	resolver             PreparedAPTResolverWorkspace
 	containerName        string
+	runDocker            commandRunner
 	stdout               io.Writer
 	stderr               io.Writer
 	observations         map[string]probe.ExecutableObservationV1
@@ -624,8 +625,7 @@ func (session *APTResolverSession) RefreshIndexes(ctx context.Context) error {
 	return nil
 }
 
-var runAPTResolverOpenCommand = runCommand
-var runAPTResolverFollowupCommand = runCommandWithoutDockerPreflight
+var bindAPTResolverCommandRunner = bindDockerCommandRunnerV1
 
 // OpenAPTResolverSession starts the one held container that will validate the
 // exact prefix and, in later typed operations, resolve its APT transaction.
@@ -674,25 +674,27 @@ func OpenAPTResolverSession(
 	}}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := runAPTResolverOpenCommand(spec, RunOptions{
-		Context: context.WithoutCancel(ctx), Stdout: &stdout, Stderr: &stderr,
-		DockerPreflightTimeout: options.DockerPreflightTimeout,
-	}); err != nil {
+	runDocker, err := bindAPTResolverCommandRunner(context.WithoutCancel(ctx), spec, options.DockerPreflightTimeout)
+	if err != nil {
+		return nil, aptResolverCommandError("create", descriptor.Platform.Canonical, descriptor.ConfigDigest, stderr.String(), err)
+	}
+	if err := runDocker(spec, RunOptions{Context: context.WithoutCancel(ctx), Stdout: &stdout, Stderr: &stderr}); err != nil {
 		return nil, aptResolverCommandError("create", descriptor.Platform.Canonical, descriptor.ConfigDigest, stderr.String(), err)
 	}
 	if err := ctx.Err(); err != nil {
-		cleanupErr := removeAPTResolverContainer(context.WithoutCancel(ctx), containerName)
+		cleanupErr := removeAPTResolverContainer(context.WithoutCancel(ctx), containerName, runDocker)
 		return nil, errors.Join(fmt.Errorf("open APT resolver session: %w", err), cleanupErr)
 	}
 	stderr.Reset()
-	if err := runAPTResolverFollowupCommand(CommandSpec{Name: "docker", Args: []string{"start", containerName}}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
+	if err := runDocker(CommandSpec{Name: "docker", Args: []string{"start", containerName}}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
 		startErr := aptResolverCommandError("start", descriptor.Platform.Canonical, descriptor.ConfigDigest, stderr.String(), err)
-		cleanupErr := removeAPTResolverContainer(context.WithoutCancel(ctx), containerName)
+		cleanupErr := removeAPTResolverContainer(context.WithoutCancel(ctx), containerName, runDocker)
 		return nil, errors.Join(startErr, cleanupErr)
 	}
 	return &APTResolverSession{
 		descriptor: descriptor, probe: probeWorkspace, resolver: resolverWorkspace,
-		containerName: containerName, stdout: aptResolverOutputWriter(options.Stdout), stderr: aptResolverOutputWriter(options.Stderr),
+		containerName: containerName, runDocker: runDocker,
+		stdout: aptResolverOutputWriter(options.Stdout), stderr: aptResolverOutputWriter(options.Stderr),
 		observations: map[string]probe.ExecutableObservationV1{},
 	}, nil
 }
@@ -747,7 +749,7 @@ func (session *APTResolverSession) runProbe(ctx context.Context, request probe.R
 		"exec", "--interactive", "--user", "0:0", "--workdir", "/",
 		session.containerName, session.probe.ContainerExecutable,
 	}}
-	if err := runAPTResolverFollowupCommand(spec, RunOptions{Context: ctx, Stdin: bytes.NewReader(encoded), Stdout: &stdout, Stderr: io.MultiWriter(&stderr, session.stderr)}); err != nil {
+	if err := session.runDocker(spec, RunOptions{Context: ctx, Stdin: bytes.NewReader(encoded), Stdout: &stdout, Stderr: io.MultiWriter(&stderr, session.stderr)}); err != nil {
 		return probe.ResponseV1{}, aptResolverCommandError("probe", session.descriptor.Platform.Canonical, session.descriptor.ConfigDigest, stderr.String(), err)
 	}
 	response, err := probe.DecodeResponseV1(request, stdout.Bytes())
@@ -803,7 +805,7 @@ func (session *APTResolverSession) runProfileArgvTo(ctx context.Context, phase s
 	args = append(args, argv[1:]...)
 	diagnosticTail := &aptDiagnosticTail{limit: commandOutputErrorLimit}
 	stderr = io.MultiWriter(aptResolverOutputWriter(stderr), diagnosticTail)
-	if err := runAPTResolverFollowupCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{Context: ctx, Stdout: aptResolverOutputWriter(stdout), Stderr: stderr}); err != nil {
+	if err := session.runDocker(CommandSpec{Name: "docker", Args: args}, RunOptions{Context: ctx, Stdout: aptResolverOutputWriter(stdout), Stderr: stderr}); err != nil {
 		return aptResolverCommandError(phase, session.descriptor.Platform.Canonical, session.descriptor.ConfigDigest, diagnosticTail.String(), err)
 	}
 	return nil
@@ -852,7 +854,7 @@ func (session *APTResolverSession) Close(ctx context.Context) error {
 	if ctx == nil {
 		return fmt.Errorf("close APT resolver session context is required")
 	}
-	if err := removeAPTResolverContainer(ctx, session.containerName); err != nil {
+	if err := removeAPTResolverContainer(ctx, session.containerName, session.runDocker); err != nil {
 		return err
 	}
 	session.closed = true
@@ -973,10 +975,10 @@ func aptResolverContainerName(workspace string) string {
 	return fmt.Sprintf("reploy-apt-resolve-%x", digest[:12])
 }
 
-func removeAPTResolverContainer(ctx context.Context, containerName string) error {
+func removeAPTResolverContainer(ctx context.Context, containerName string, runDocker commandRunner) error {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := runAPTResolverFollowupCommand(CommandSpec{Name: "docker", Args: []string{"rm", "--force", containerName}}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
+	if err := runDocker(CommandSpec{Name: "docker", Args: []string{"rm", "--force", containerName}}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
 		return markProviderHelperCleanupError(aptResolverCommandError("remove", "container", "", stderr.String(), err))
 	}
 	return nil

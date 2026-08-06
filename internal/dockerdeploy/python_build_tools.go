@@ -278,7 +278,7 @@ func (session *PythonResolverSession) ValidatePortableBuildToolsV1(
 			executable,
 		}
 		commandArgs = append(commandArgs, args...)
-		if err := runPythonResolverFollowupCommand(
+		if err := session.runDockerCommand(
 			CommandSpec{Name: "docker", Args: commandArgs},
 			RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr},
 		); err != nil {

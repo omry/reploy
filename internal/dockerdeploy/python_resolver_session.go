@@ -24,6 +24,7 @@ type PythonResolverSession struct {
 	workspace     PreparedProbeWorkspace
 	artifacts     PreparedPythonResolverArtifacts
 	containerName string
+	runDocker     commandRunner
 	observations  map[string]probe.ExecutableObservationV1
 	inspected     map[string]string
 	buildTools    []PortableBuildToolEvidenceV1
@@ -31,8 +32,8 @@ type PythonResolverSession struct {
 	closed        bool
 }
 
-var runPythonResolverOpenCommand = runCommand
-var runPythonResolverFollowupCommand = runCommandWithoutDockerPreflight
+var bindPythonResolverCommandRunner = bindDockerCommandRunnerV1
+var runPythonResolverFollowupCommand = runDockerCommand
 
 type pythonSourceBuildCommand struct {
 	operation string
@@ -108,24 +109,35 @@ func OpenPythonResolverSession(
 	}}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := runPythonResolverOpenCommand(spec, RunOptions{Context: context.WithoutCancel(ctx), Stdout: &stdout, Stderr: &stderr}); err != nil {
+	runDocker, err := bindPythonResolverCommandRunner(context.WithoutCancel(ctx), spec, 0)
+	if err != nil {
+		return nil, pythonResolverCommandError("create", descriptor.Platform.Canonical, stderr.String(), err)
+	}
+	if err := runDocker(spec, RunOptions{Context: context.WithoutCancel(ctx), Stdout: &stdout, Stderr: &stderr}); err != nil {
 		return nil, pythonResolverCommandError("create", descriptor.Platform.Canonical, stderr.String(), err)
 	}
 	if err := ctx.Err(); err != nil {
-		cleanupErr := removePythonResolverContainer(context.WithoutCancel(ctx), containerName)
+		cleanupErr := removePythonResolverContainer(context.WithoutCancel(ctx), containerName, runDocker)
 		return nil, errors.Join(fmt.Errorf("open Python resolver session: %w", err), cleanupErr)
 	}
 	stderr.Reset()
-	if err := runPythonResolverFollowupCommand(CommandSpec{Name: "docker", Args: []string{"start", containerName}}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
+	if err := runDocker(CommandSpec{Name: "docker", Args: []string{"start", containerName}}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
 		startErr := pythonResolverCommandError("start", descriptor.Platform.Canonical, stderr.String(), err)
-		cleanupErr := removePythonResolverContainer(context.WithoutCancel(ctx), containerName)
+		cleanupErr := removePythonResolverContainer(context.WithoutCancel(ctx), containerName, runDocker)
 		return nil, errors.Join(startErr, cleanupErr)
 	}
 	return &PythonResolverSession{
-		descriptor: descriptor, workspace: workspace, artifacts: artifacts, containerName: containerName,
+		descriptor: descriptor, workspace: workspace, artifacts: artifacts, containerName: containerName, runDocker: runDocker,
 		observations: map[string]probe.ExecutableObservationV1{},
 		inspected:    map[string]string{},
 	}, nil
+}
+
+func (session *PythonResolverSession) runDockerCommand(spec CommandSpec, options RunOptions) error {
+	if session.runDocker != nil {
+		return session.runDocker(spec, options)
+	}
+	return runPythonResolverFollowupCommand(spec, options)
 }
 
 // Probe performs the fixed filesystem observation as the first operation in
@@ -153,7 +165,7 @@ func (session *PythonResolverSession) Probe(ctx context.Context, request probe.R
 		"exec", "--interactive", "--user", "0:0", "--workdir", "/",
 		session.containerName, session.workspace.ContainerExecutable,
 	}}
-	if err := runPythonResolverFollowupCommand(spec, RunOptions{Context: ctx, Stdin: bytes.NewReader(encoded), Stdout: &stdout, Stderr: &stderr}); err != nil {
+	if err := session.runDockerCommand(spec, RunOptions{Context: ctx, Stdin: bytes.NewReader(encoded), Stdout: &stdout, Stderr: &stderr}); err != nil {
 		return probe.ResponseV1{}, pythonResolverCommandError("probe", session.descriptor.Platform.Canonical, stderr.String(), err)
 	}
 	response, err := probe.DecodeResponseV1(request, stdout.Bytes())
@@ -301,7 +313,7 @@ func (session *PythonResolverSession) InspectInterpreter(
 	args = append(args, inspection...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := runPythonResolverFollowupCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
+	if err := session.runDockerCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
 		return "", pythonResolverCommandError("inspect interpreter", session.descriptor.Platform.Canonical, stderr.String(), err)
 	}
 	version, err := pythonprovider.ParseInterpreterInspectionOutput(stdout.Bytes())
@@ -350,7 +362,7 @@ func (session *PythonResolverSession) ResolveWheels(
 	args = append(args, resolverArgv...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := runPythonResolverFollowupCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
+	if err := session.runDockerCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
 		commandErr := pythonResolverCommandError("resolve wheels", session.descriptor.Platform.Canonical, stderr.String(), err)
 		if strings.Contains(strings.ToLower(stderr.String()), "no module named pip") {
 			return fmt.Errorf("selected Python interpreter has no pip module; ensure its providing packages include pip support: %w", commandErr)
@@ -642,7 +654,7 @@ func (session *PythonResolverSession) runWheelEnvironmentCommand(
 	args = append(args, command...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := runPythonResolverFollowupCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
+	if err := session.runDockerCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
 		return pythonResolverCommandError(operation, session.descriptor.Platform.Canonical, stderr.String(), err)
 	}
 	return nil
@@ -661,7 +673,7 @@ func (session *PythonResolverSession) Stop(ctx context.Context) error {
 	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := runPythonResolverFollowupCommand(CommandSpec{Name: "docker", Args: []string{"kill", "--signal", "KILL", session.containerName}}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
+	if err := session.runDockerCommand(CommandSpec{Name: "docker", Args: []string{"kill", "--signal", "KILL", session.containerName}}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
 		return pythonResolverCommandError("stop", session.descriptor.Platform.Canonical, stderr.String(), err)
 	}
 	session.stopped = true
@@ -675,17 +687,17 @@ func (session *PythonResolverSession) Close(ctx context.Context) error {
 	if ctx == nil {
 		return fmt.Errorf("close Python resolver session context is required")
 	}
-	if err := removePythonResolverContainer(ctx, session.containerName); err != nil {
+	if err := removePythonResolverContainer(ctx, session.containerName, session.runDockerCommand); err != nil {
 		return err
 	}
 	session.closed = true
 	return nil
 }
 
-func removePythonResolverContainer(ctx context.Context, containerName string) error {
+func removePythonResolverContainer(ctx context.Context, containerName string, runDocker commandRunner) error {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := runPythonResolverFollowupCommand(CommandSpec{Name: "docker", Args: []string{"rm", "--force", containerName}}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
+	if err := runDocker(CommandSpec{Name: "docker", Args: []string{"rm", "--force", containerName}}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
 		return markProviderHelperCleanupError(pythonResolverCommandError("remove", "local", stderr.String(), err))
 	}
 	return nil

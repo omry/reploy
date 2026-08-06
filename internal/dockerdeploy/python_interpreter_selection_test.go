@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/omry/reploy/internal/probe"
 	"github.com/omry/reploy/internal/providers"
@@ -82,55 +83,49 @@ func pythonInterpreterCandidate(component string, path string) providers.Realize
 
 func stubPythonInterpreterSelectionCommands(t *testing.T, probeResponse []byte, inspectionResponses []string, resolveWheels func() error) *[]CommandSpec {
 	t.Helper()
-	previousOpen := runPythonResolverOpenCommand
-	previousFollowup := runPythonResolverFollowupCommand
+	previousBind := bindPythonResolverCommandRunner
 	commands := []CommandSpec{}
 	inspectionIndex := 0
-	t.Cleanup(func() {
-		runPythonResolverOpenCommand = previousOpen
-		runPythonResolverFollowupCommand = previousFollowup
-	})
-	runPythonResolverOpenCommand = func(spec CommandSpec, _ RunOptions) error {
-		commands = append(commands, spec)
-		return nil
-	}
-	runPythonResolverFollowupCommand = func(spec CommandSpec, options RunOptions) error {
-		commands = append(commands, spec)
-		if len(spec.Args) == 0 {
-			return errors.New("empty Docker command")
-		}
-		if spec.Args[0] != "exec" {
-			return nil
-		}
-		if spec.Args[len(spec.Args)-1] == ProbeContainerExecutable {
-			_, _ = options.Stdout.Write(probeResponse)
-			return nil
-		}
-		for index := 0; index+1 < len(spec.Args); index++ {
-			if spec.Args[index] == "-m" && spec.Args[index+1] == "pip" {
-				if containsInOrder(spec.Args[index+2:], []string{"wheel"}) && resolveWheels != nil {
-					return resolveWheels()
+	t.Cleanup(func() { bindPythonResolverCommandRunner = previousBind })
+	bindPythonResolverCommandRunner = func(context.Context, CommandSpec, time.Duration) (commandRunner, error) {
+		return func(spec CommandSpec, options RunOptions) error {
+			commands = append(commands, spec)
+			if len(spec.Args) == 0 {
+				return errors.New("empty Docker command")
+			}
+			if spec.Args[0] != "exec" {
+				return nil
+			}
+			if spec.Args[len(spec.Args)-1] == ProbeContainerExecutable {
+				_, _ = options.Stdout.Write(probeResponse)
+				return nil
+			}
+			for index := 0; index+1 < len(spec.Args); index++ {
+				if spec.Args[index] == "-m" && spec.Args[index+1] == "pip" {
+					if containsInOrder(spec.Args[index+2:], []string{"wheel"}) && resolveWheels != nil {
+						return resolveWheels()
+					}
+					return nil
 				}
-				return nil
-			}
-			if spec.Args[index] == "-m" && spec.Args[index+1] == "uv" {
-				if resolveWheels != nil {
-					return resolveWheels()
+				if spec.Args[index] == "-m" && spec.Args[index+1] == "uv" {
+					if resolveWheels != nil {
+						return resolveWheels()
+					}
+					return nil
 				}
-				return nil
 			}
-		}
-		for _, operation := range []string{"rm", "mkdir", "cp"} {
-			if containsInOrder(spec.Args, []string{operation}) {
-				return nil
+			for _, operation := range []string{"rm", "mkdir", "cp"} {
+				if containsInOrder(spec.Args, []string{operation}) {
+					return nil
+				}
 			}
-		}
-		if inspectionIndex >= len(inspectionResponses) {
-			return errors.New("unexpected interpreter inspection")
-		}
-		_, _ = options.Stdout.Write([]byte(inspectionResponses[inspectionIndex]))
-		inspectionIndex++
-		return nil
+			if inspectionIndex >= len(inspectionResponses) {
+				return errors.New("unexpected interpreter inspection")
+			}
+			_, _ = options.Stdout.Write([]byte(inspectionResponses[inspectionIndex]))
+			inspectionIndex++
+			return nil
+		}, nil
 	}
 	t.Cleanup(func() {
 		if inspectionIndex != len(inspectionResponses) {
