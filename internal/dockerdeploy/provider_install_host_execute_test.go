@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
@@ -52,6 +54,46 @@ func TestStartProviderInstallHostV1RunsOneCommandWithoutPreflight(t *testing.T) 
 	})
 	if err != nil || called != 1 {
 		t.Fatalf("called=%d error=%v", called, err)
+	}
+}
+
+func TestStartProviderInstallHostV1PreflightsDockerBackend(t *testing.T) {
+	destinationDir := t.TempDir()
+	dockerPath := writeFakeCommand(
+		t,
+		destinationDir,
+		"docker",
+		"#!/bin/sh\nexit 0\n",
+		"@exit /b 0\r\n",
+	)
+	references := fixedPublicationReferences(t, destinationDir, 0xd4)
+	plan := providerInstallRunPlanFixture(destinationDir, references)
+	plan.Backend = installBackendDockerManaged
+	plan.Installation.Scope = "user"
+	plan.Installation.UnitPath = ""
+	plan.Docker.DeploymentDir = destinationDir
+
+	previousPreflight := dockerPreflight
+	t.Cleanup(func() { dockerPreflight = previousPreflight })
+	preflights := 0
+	dockerPreflight = func(_ context.Context, spec CommandSpec, _ time.Duration) (string, error) {
+		preflights++
+		if spec.Name != dockerPath {
+			t.Fatalf("preflight command = %#v", spec)
+		}
+		return "unix:///var/run/docker.sock", nil
+	}
+
+	if err := startProviderInstallHostV1(
+		t.Context(),
+		plan,
+		providerInstallHostToolsV1{DockerPath: dockerPath},
+		RunOptions{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if preflights != 1 {
+		t.Fatalf("Docker preflights = %d, want 1", preflights)
 	}
 }
 

@@ -22,12 +22,13 @@ type ImageValidationSession struct {
 	workspace     PreparedProbeWorkspace
 	aptWorkspace  *PreparedAPTResolverWorkspace
 	containerName string
+	runDocker     commandRunner
 	aptBase       *APTBaseValidation
 	closed        bool
 }
 
-var runImageValidationOpenCommand = runCommand
-var runImageValidationFollowupCommand = runCommandWithoutDockerPreflight
+var bindImageValidationCommandRunner = bindDockerCommandRunnerV1
+var runImageValidationFollowupCommand = runDockerCommand
 
 // OpenImageValidationSession starts one held, networkless container for full
 // final-image or additive layer validation. Its public operations remain
@@ -73,25 +74,36 @@ func openImageValidationSession(
 	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := runImageValidationOpenCommand(spec, RunOptions{Context: context.WithoutCancel(ctx), Stdout: &stdout, Stderr: &stderr}); err != nil {
+	runDocker, err := bindImageValidationCommandRunner(context.WithoutCancel(ctx), spec, 0)
+	if err != nil {
+		return nil, imageValidationCommandError("create", descriptor.Platform.Canonical, stderr.String(), err)
+	}
+	if err := runDocker(spec, RunOptions{Context: context.WithoutCancel(ctx), Stdout: &stdout, Stderr: &stderr}); err != nil {
 		return nil, imageValidationCommandError("create", descriptor.Platform.Canonical, stderr.String(), err)
 	}
 	if err := ctx.Err(); err != nil {
-		cleanupErr := removeImageValidationContainer(context.WithoutCancel(ctx), containerName)
+		cleanupErr := removeImageValidationContainer(context.WithoutCancel(ctx), containerName, runDocker)
 		return nil, errors.Join(fmt.Errorf("open image validation session: %w", err), cleanupErr)
 	}
 	stderr.Reset()
-	if err := runImageValidationFollowupCommand(
+	if err := runDocker(
 		CommandSpec{Name: "docker", Args: []string{"start", containerName}},
 		RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr},
 	); err != nil {
 		startErr := imageValidationCommandError("start", descriptor.Platform.Canonical, stderr.String(), err)
-		cleanupErr := removeImageValidationContainer(context.WithoutCancel(ctx), containerName)
+		cleanupErr := removeImageValidationContainer(context.WithoutCancel(ctx), containerName, runDocker)
 		return nil, errors.Join(startErr, cleanupErr)
 	}
 	return &ImageValidationSession{
-		descriptor: descriptor, workspace: workspace, aptWorkspace: aptWorkspace, containerName: containerName,
+		descriptor: descriptor, workspace: workspace, aptWorkspace: aptWorkspace, containerName: containerName, runDocker: runDocker,
 	}, nil
+}
+
+func (session *ImageValidationSession) runDockerCommand(spec CommandSpec, options RunOptions) error {
+	if session.runDocker != nil {
+		return session.runDocker(spec, options)
+	}
+	return runImageValidationFollowupCommand(spec, options)
 }
 
 // ProbeAPTBaseProfile reproduces the same canonical APT base facts used by
@@ -139,7 +151,7 @@ func (session *ImageValidationSession) runAPTProfileCommand(ctx context.Context,
 	args = append(args, arguments...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := runImageValidationFollowupCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{
+	if err := session.runDockerCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{
 		Context: ctx, Stdout: &stdout, Stderr: &stderr,
 	}); err != nil {
 		return nil, imageValidationCommandError("APT profile", session.descriptor.Platform.Canonical, stderr.String(), err)
@@ -172,7 +184,7 @@ func (session *ImageValidationSession) Probe(ctx context.Context, request probe.
 		"exec", "--interactive", "--user", "0:0", "--workdir", "/",
 		session.containerName, session.workspace.ContainerExecutable,
 	}}
-	if err := runImageValidationFollowupCommand(spec, RunOptions{
+	if err := session.runDockerCommand(spec, RunOptions{
 		Context: ctx, Stdin: bytes.NewReader(encoded), Stdout: &stdout, Stderr: &stderr,
 	}); err != nil {
 		return probe.ResponseV1{}, imageValidationCommandError("probe", session.descriptor.Platform.Canonical, stderr.String(), err)
@@ -217,7 +229,7 @@ func (session *ImageValidationSession) QueryDPKGOwners(ctx context.Context, path
 	args = append(args, paths...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := runImageValidationFollowupCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{
+	if err := session.runDockerCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{
 		Context: ctx, Stdout: &stdout, Stderr: &stderr,
 	}); err != nil {
 		output := trimmedCommandOutput(stderr.String())
@@ -262,7 +274,7 @@ func (session *ImageValidationSession) QueryDPKGPackageState(ctx context.Context
 	args = append(args, names...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := runImageValidationFollowupCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{
+	if err := session.runDockerCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{
 		Context: ctx, Stdout: &stdout, Stderr: &stderr,
 	}); err != nil {
 		output := trimmedCommandOutput(stderr.String())
@@ -295,7 +307,7 @@ func (session *ImageValidationSession) QueryAlternative(ctx context.Context, gro
 		"exec", "--user", "0:0", "--workdir", "/", session.containerName,
 		"/usr/bin/update-alternatives", "--query", group,
 	}}
-	if err := runImageValidationFollowupCommand(spec, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
+	if err := session.runDockerCommand(spec, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
 		output := trimmedCommandOutput(stderr.String())
 		if output != "" {
 			return nil, fmt.Errorf("query image alternative %q: %w\ncommand output:\n%s", group, err, output)
@@ -324,7 +336,7 @@ func (session *ImageValidationSession) ValidateBuildScratchAbsent(ctx context.Co
 		"exec", "--user", "0:0", "--workdir", "/", session.containerName,
 		"/bin/sh", "-c", `test ! -e "$1"`, "reploy-validation", "/.reploy-build",
 	}}
-	if err := runImageValidationFollowupCommand(spec, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
+	if err := session.runDockerCommand(spec, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
 		return fmt.Errorf("image validation requires /.reploy-build to be absent: %w", imageValidationCommandError("build-scratch absence", session.descriptor.Platform.Canonical, stderr.String(), err))
 	}
 	return nil
@@ -365,7 +377,7 @@ func (session *ImageValidationSession) Close(ctx context.Context) error {
 	if ctx == nil {
 		return fmt.Errorf("close image validation session context is required")
 	}
-	if err := removeImageValidationContainer(ctx, session.containerName); err != nil {
+	if err := removeImageValidationContainer(ctx, session.containerName, session.runDockerCommand); err != nil {
 		return err
 	}
 	session.closed = true
@@ -463,10 +475,10 @@ func validatePreparedProbeWorkspaceShape(workspace PreparedProbeWorkspace) error
 	return nil
 }
 
-func removeImageValidationContainer(ctx context.Context, containerName string) error {
+func removeImageValidationContainer(ctx context.Context, containerName string, runDocker commandRunner) error {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := runImageValidationFollowupCommand(
+	if err := runDocker(
 		CommandSpec{Name: "docker", Args: []string{"rm", "--force", containerName}},
 		RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr},
 	); err != nil {
