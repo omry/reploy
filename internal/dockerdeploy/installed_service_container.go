@@ -103,6 +103,7 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 		start,
 		cleanup,
 		plan.Docker.ContainerName,
+		plan.Docker.Sandbox,
 		environment,
 		options,
 		runCommand,
