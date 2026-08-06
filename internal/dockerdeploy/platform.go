@@ -268,6 +268,9 @@ func detectDockerRuntime(ctx context.Context, spec CommandSpec, timeout time.Dur
 	if spec.Name == "" {
 		spec.Name = "docker"
 	}
+	if err := requireLocalDockerEndpointV1(ctx, spec, timeout); err != nil {
+		return dockerRuntimeInfo{}, err
+	}
 	probeCtx, cancel := context.WithTimeout(ctx, effectiveDockerPreflightTimeout(timeout))
 	defer cancel()
 
