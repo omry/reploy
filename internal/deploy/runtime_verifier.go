@@ -11,7 +11,7 @@ import (
 
 const (
 	ApplicationStartupVerifierSchemaV1 = "application-startup-verifier-v1"
-	ApplicationStartupVerifierRecipeV1 = "linux-proc-status-verify-exec-v1"
+	ApplicationStartupVerifierRecipeV1 = "linux-network-policy-sandbox-exec-v1"
 	ApplicationStartupVerifierPathV1   = "/reploy-probe"
 	ApplicationRuntimeLayerSchemaV1    = "application-runtime-layer-v1"
 	ApplicationLocalAccountSchemaV1    = "application-local-account-v1"

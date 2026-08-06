@@ -29,17 +29,6 @@ This file is the day-to-day queue for design and implementation gaps.
   stopping, and whether the next step needs user review, approval, input, or no
   user action.
 
-## Now
-
-- [ ] `P1` Implement the initial coarse application-network policy. Preserve
-      independent public and local policy intent with both denied by default,
-      apply it consistently to workloads, commands, shells, and lifecycle
-      commands, and use only proven isolation and endpoint primitives from the
-      active runtime backend. Permit exact declared inbound endpoints without
-      granting general local access. Fail closed when a backend cannot realize
-      a requested combination, and do not represent this slice as destination-,
-      domain-, or packet-level filtering.
-
 ## Pre-release
 
 - [ ] `P1` Accept APT install transaction records with the optional trailing
