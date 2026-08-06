@@ -469,7 +469,7 @@ func currentWorkloadLifecycleTestBackend(t *testing.T, lifecycle LifecyclePlan, 
 			*order = append(*order, "run "+spec.Name)
 			return nil
 		},
-		inject: func(context.Context, string, string, privateWorkloadEnvironmentV1, RunOptions, commandRunner) error {
+		inject: func(context.Context, string, string, ApplicationSandboxPlanV1, privateWorkloadEnvironmentV1, RunOptions, commandRunner) error {
 			*order = append(*order, "inject private environment")
 			return nil
 		},
