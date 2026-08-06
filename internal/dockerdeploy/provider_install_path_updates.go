@@ -27,7 +27,7 @@ func applyProviderInstallPathUpdatesV1(ctx context.Context, locked lockedProvide
 			return providerInstallVolumeExistsV1(ctx, locked.HostTools.DockerPath, name, locked.Input.RunOptions)
 		},
 		prepareProbeWorkspace: PrepareProbeWorkspace,
-		run:                   runCommandWithoutDockerPreflight,
+		run:                   runDockerCommand,
 	})
 }
 
@@ -304,7 +304,7 @@ func applyProviderInstallVolumeV1(
 }
 
 func providerInstallVolumeExistsV1(ctx context.Context, dockerPath string, name string, options RunOptions) (bool, error) {
-	return providerInstallVolumeExistsWithV1(ctx, dockerPath, name, options, runCommandWithoutDockerPreflight)
+	return providerInstallVolumeExistsWithV1(ctx, dockerPath, name, options, runDockerCommand)
 }
 
 func providerInstallVolumeExistsWithV1(ctx context.Context, dockerPath string, name string, options RunOptions, run commandRunner) (bool, error) {

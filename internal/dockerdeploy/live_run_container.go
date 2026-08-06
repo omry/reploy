@@ -32,7 +32,7 @@ func RunAdmittedTransientContainerV1(
 	return runAdmittedTransientContainerV1(ctx, deploymentDir, operation, runID, execution, options, admittedTransientContainerBackendV1{
 		acquire:      deploy.AcquireOperationLock,
 		create:       runCommand,
-		followup:     runCommandWithoutDockerPreflight,
+		followup:     runDockerCommand,
 		runTemporary: runTemporaryContainerCommand,
 	})
 }

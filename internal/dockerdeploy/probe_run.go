@@ -27,7 +27,7 @@ type ImageValidationSession struct {
 }
 
 var runImageValidationOpenCommand = runCommand
-var runImageValidationFollowupCommand = runCommandWithoutDockerPreflight
+var runImageValidationFollowupCommand = runDockerCommand
 
 // OpenImageValidationSession starts one held, networkless container for full
 // final-image or additive layer validation. Its public operations remain
