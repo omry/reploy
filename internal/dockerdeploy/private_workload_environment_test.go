@@ -440,7 +440,7 @@ func TestPrivateWorkloadEnvironmentRealDockerIsolation(t *testing.T) {
 	container := "reploy-private-env-test-" + strconv.Itoa(os.Getpid())
 	run := func(spec CommandSpec, options RunOptions) error {
 		options.Context = t.Context()
-		return runCommandWithoutDockerPreflight(spec, options)
+		return runDockerCommand(spec, options)
 	}
 	remove := func() {
 		_ = exec.CommandContext(context.Background(), "docker", "rm", "--force", container).Run()

@@ -113,7 +113,7 @@ func (session *ImageValidationSession) runPythonInterpreterInspection(ctx contex
 	args = append(args, inspection...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := runImageValidationFollowupCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{
+	if err := session.runDockerCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{
 		Context: ctx, Stdout: &stdout, Stderr: &stderr,
 	}); err != nil {
 		return "", imageValidationCommandError("Python interpreter inspection", session.descriptor.Platform.Canonical, stderr.String(), err)

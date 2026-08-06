@@ -14,6 +14,8 @@ import (
 	"github.com/omry/reploy/internal/providerstore"
 )
 
+var bindInstalledServiceCommandRunner = bindDockerCommandRunnerV1
+
 // RunInstalledServiceContainerV1 is the system-service container boundary. It
 // deliberately bypasses the public control surface because systemd itself is
 // already the admitted host-service operation.
@@ -98,6 +100,10 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 	start.Name = dockerPath
 	cleanup := composeCommandWithProject(deploymentDir, installation.ComposeProject, "down", "--remove-orphans")
 	cleanup.Name = dockerPath
+	runDocker, err := bindInstalledServiceCommandRunner(ctx, start, options.DockerPreflightTimeout)
+	if err != nil {
+		return fmt.Errorf("bind installed service Docker endpoint: %w", err)
+	}
 	if err := startAndInjectPrivateWorkloadEnvironmentV1(
 		ctx,
 		start,
@@ -105,12 +111,12 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 		plan.Docker.ContainerName,
 		environment,
 		options,
-		runCommandWithoutDockerPreflight,
+		runDocker,
 	); err != nil {
 		return err
 	}
 	if err := notifyInstalledServiceReadyV1(); err != nil {
-		return errors.Join(err, cleanupPrivateWorkloadContainerV1(cleanup, RunOptions{Context: context.WithoutCancel(ctx)}, runCommandWithoutDockerPreflight))
+		return errors.Join(err, cleanupPrivateWorkloadContainerV1(cleanup, RunOptions{Context: context.WithoutCancel(ctx)}, runDocker))
 	}
 	if err := operation.Unlock(); err != nil {
 		return err
@@ -123,7 +129,7 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 	waitOptions.Stdin = nil
 	waitOptions.Stdout = &status
 	waitOptions.Stderr = options.Stderr
-	if err := runCommandWithoutDockerPreflight(CommandSpec{
+	if err := runDocker(CommandSpec{
 		Name: dockerPath,
 		Args: []string{"wait", plan.Docker.ContainerName},
 	}, waitOptions); err != nil {

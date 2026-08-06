@@ -41,25 +41,50 @@ const defaultDockerPreflightTimeout = 5 * time.Second
 var dockerPreflight = checkDockerResponsive
 
 func runCommand(spec CommandSpec, options RunOptions) error {
-	ctx := options.Context
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	if spec.Name == "docker" {
-		_, end := buildprofile.Start(ctx, "Docker preflight")
-		err := dockerPreflight(ctx, spec, effectiveDockerPreflightTimeout(options.DockerPreflightTimeout))
-		end(err)
-		if err != nil {
-			return err
-		}
+		return runDockerCommand(spec, options)
 	}
 	return runCommandWithoutDockerPreflight(spec, options)
 }
 
-// runCommandWithoutDockerPreflight is for follow-up commands in one
-// higher-level Docker operation whose first command already passed preflight.
-// Callers must not use it as the entry point to an independent operation.
+func runDockerCommand(spec CommandSpec, options RunOptions) error {
+	ctx := options.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	run, err := bindDockerCommandRunnerV1(ctx, spec, options.DockerPreflightTimeout)
+	if err != nil {
+		return err
+	}
+	return run(spec, options)
+}
+
+func bindDockerCommandRunnerV1(ctx context.Context, spec CommandSpec, timeout time.Duration) (commandRunner, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("bind Docker command runner requires a context")
+	}
+	_, end := buildprofile.Start(ctx, "Docker preflight")
+	endpoint, err := dockerPreflight(ctx, spec, effectiveDockerPreflightTimeout(timeout))
+	end(err)
+	if err != nil {
+		return nil, err
+	}
+	executable := spec.Name
+	return func(command CommandSpec, options RunOptions) error {
+		if command.Name != executable {
+			return fmt.Errorf("Docker operation changed executable from %q to %q", executable, command.Name)
+		}
+		return runCommandWithoutDockerPreflight(pinDockerEndpointV1(command, endpoint), options)
+	}, nil
+}
+
+// runCommandWithoutDockerPreflight executes non-Docker commands and Docker
+// commands whose exact local endpoint was already pinned by runDockerCommand.
+// Recognizable unpinned Docker commands fail closed.
 func runCommandWithoutDockerPreflight(spec CommandSpec, options RunOptions) (resultErr error) {
+	if dockerCommandExecutableV1(spec.Name) && !pinnedDockerEndpointV1(spec) {
+		return fmt.Errorf("Docker command %q requires a verified pinned local endpoint", spec.Name)
+	}
 	ctx := options.Context
 	if ctx == nil {
 		ctx = context.Background()
@@ -92,6 +117,27 @@ func runCommandWithoutDockerPreflight(spec CommandSpec, options RunOptions) (res
 	return nil
 }
 
+func dockerCommandExecutableV1(name string) bool {
+	base := strings.TrimSuffix(strings.ToLower(filepath.Base(strings.TrimSpace(name))), ".exe")
+	return base == "docker"
+}
+
+func pinnedDockerEndpointV1(spec CommandSpec) bool {
+	host, hostSet := commandSpecEnvironmentValueV1(spec, "DOCKER_HOST")
+	contextName, contextSet := commandSpecEnvironmentValueV1(spec, "DOCKER_CONTEXT")
+	return hostSet && contextSet && contextName == "" && localDockerEndpointV1(host)
+}
+
+func commandSpecEnvironmentValueV1(spec CommandSpec, name string) (string, bool) {
+	prefix := name + "="
+	for index := len(spec.Env) - 1; index >= 0; index-- {
+		if strings.HasPrefix(spec.Env[index], prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(spec.Env[index], prefix)), true
+		}
+	}
+	return "", false
+}
+
 func dockerProfileOperation(args []string) string {
 	if len(args) == 0 {
 		return "Docker command"
@@ -119,9 +165,16 @@ func effectiveDockerPreflightTimeout(timeout time.Duration) time.Duration {
 	return defaultDockerPreflightTimeout
 }
 
-func checkDockerResponsive(ctx context.Context, spec CommandSpec, timeout time.Duration) error {
+func checkDockerResponsive(ctx context.Context, spec CommandSpec, timeout time.Duration) (string, error) {
+	timeout = effectiveDockerPreflightTimeout(timeout)
 	preflightCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
+	endpoint, err := verifiedLocalDockerEndpointV1(preflightCtx, spec, timeout)
+	if err != nil {
+		return "", err
+	}
+	spec = pinDockerEndpointV1(spec, endpoint)
 
 	command := exec.CommandContext(preflightCtx, spec.Name, "version", "--format", "{{.Server.Version}}")
 	command.Dir = spec.Dir
@@ -133,14 +186,14 @@ func checkDockerResponsive(ctx context.Context, spec CommandSpec, timeout time.D
 	command.Stderr = &output
 	if err := command.Run(); err != nil {
 		if errors.Is(preflightCtx.Err(), context.DeadlineExceeded) {
-			return fmt.Errorf("docker daemon did not respond within %s", timeout)
+			return "", fmt.Errorf("docker daemon did not respond within %s", timeout)
 		}
 		if output := trimmedCommandOutput(output.String()); output != "" {
-			return fmt.Errorf("docker daemon check failed: %w\ncommand output:\n%s", err, output)
+			return "", fmt.Errorf("docker daemon check failed: %w\ncommand output:\n%s", err, output)
 		}
-		return fmt.Errorf("docker daemon check failed: %w", err)
+		return "", fmt.Errorf("docker daemon check failed: %w", err)
 	}
-	return nil
+	return endpoint, nil
 }
 
 func trimmedCommandOutput(output string) string {
