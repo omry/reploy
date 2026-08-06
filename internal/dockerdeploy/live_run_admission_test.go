@@ -65,8 +65,9 @@ func TestAwaitLiveRunAdmissionV1ReturnsWithLockHeldAfterFairPromotion(t *testing
 		err       error
 	}
 	resultChannel := make(chan admissionResult, 1)
+	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
-		admitted, err := awaitLiveRunAdmissionV1(t.Context(), dir, operation, second, true, nil, backend)
+		admitted, err := awaitLiveRunAdmissionV1(ctx, dir, operation, second, true, nil, backend)
 		resultChannel <- admissionResult{operation: admitted, err: err}
 	}()
 	<-waitStarted
@@ -75,7 +76,7 @@ func TestAwaitLiveRunAdmissionV1ReturnsWithLockHeldAfterFairPromotion(t *testing
 		t.Fatal(err)
 	}
 	queue, removed, err := promoter.RemoveLiveRunV1(first.ID)
-	if err != nil || !removed || len(queue.Runs) != 1 || queue.Runs[0].ID != second.ID || queue.Runs[0].Status != deploy.LiveRunStatusActiveV1 {
+	if err != nil || !removed || len(queue.Runs) != 1 || queue.Runs[0].ID != second.ID || queue.Runs[0].Status != deploy.LiveRunStatusReadyV1 {
 		t.Fatalf("promotion = %#v, removed=%t, error=%v", queue, removed, err)
 	}
 	if err := promoter.Unlock(); err != nil {
@@ -89,11 +90,85 @@ func TestAwaitLiveRunAdmissionV1ReturnsWithLockHeldAfterFairPromotion(t *testing
 	if err := got.operation.RequireHeld(); err != nil {
 		t.Fatalf("returned lock is not held: %v", err)
 	}
+	cancel()
+	queue, _, err = got.operation.ReadLiveRunQueueV1()
+	if err != nil || queue.Runs[0].Status != deploy.LiveRunStatusActiveV1 {
+		t.Fatalf("claimed admission = %#v, error=%v", queue, err)
+	}
 	if _, removed, err := got.operation.RemoveLiveRunV1(second.ID); err != nil || !removed {
 		t.Fatalf("remove admitted run = %t, %v", removed, err)
 	}
 	if err := got.operation.Unlock(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAwaitLiveRunAdmissionV1CancellationWinsAfterReadyReservation(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := liveRunAdmissionFixtureV1("run-0000000000000001", true)
+	holdLiveRunLeaseV1(t, operation, first.ID)
+	if _, err := operation.AdmitLiveRunV1(first, false); err != nil {
+		t.Fatal(err)
+	}
+	second := liveRunAdmissionFixtureV1("run-0000000000000002", false)
+	holdLiveRunLeaseV1(t, operation, second.ID)
+	waitStarted := make(chan struct{})
+	allowWait := make(chan struct{})
+	lockAcquired := make(chan struct{})
+	allowAcquire := make(chan struct{})
+	backend := liveRunAdmissionBackendV1{
+		acquire: func(ctx context.Context, deploymentDir string) (*deploy.OperationLock, error) {
+			lock, err := deploy.AcquireOperationLock(ctx, deploymentDir)
+			if err != nil {
+				return nil, err
+			}
+			close(lockAcquired)
+			<-allowAcquire
+			return lock, nil
+		},
+		wait: func(context.Context) error {
+			close(waitStarted)
+			<-allowWait
+			return nil
+		},
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	result := make(chan error, 1)
+	go func() {
+		_, err := awaitLiveRunAdmissionV1(ctx, dir, operation, second, true, nil, backend)
+		result <- err
+	}()
+	<-waitStarted
+	promoter, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue, removed, err := promoter.RemoveLiveRunV1(first.ID)
+	if err != nil || !removed || len(queue.Runs) != 1 || queue.Runs[0].Status != deploy.LiveRunStatusReadyV1 {
+		t.Fatalf("ready reservation = %#v, removed=%t, error=%v", queue, removed, err)
+	}
+	if err := promoter.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	close(allowWait)
+	<-lockAcquired
+	cancel()
+	close(allowAcquire)
+	if err := <-result; !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "canceled queued app command") {
+		t.Fatalf("cancellation result = %v", err)
+	}
+	inspection, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inspection.Unlock()
+	queue, found, err := inspection.ReadLiveRunQueueV1()
+	if err != nil || found || len(queue.Runs) != 0 {
+		t.Fatalf("queue after cancellation = %#v, found=%t, error=%v", queue, found, err)
 	}
 }
 
@@ -129,6 +204,96 @@ func TestAwaitLiveRunAdmissionV1ExplainsWaitBeforePolling(t *testing.T) {
 	}
 	want := "Waiting for active shell to finish (shared writable mounts: /conf, /data).\n" +
 		"Ctrl-C cancels this wait without affecting the active command.\n"
+	if notice.String() != want {
+		t.Fatalf("wait notice = %q, want %q", notice.String(), want)
+	}
+}
+
+func TestAwaitLiveRunAdmissionV1ExplainsReadyPredecessorWithoutCallingItActive(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := liveRunAdmissionFixtureV1("run-0000000000000001", true)
+	ready := liveRunAdmissionFixtureV1("run-0000000000000002", false)
+	holdLiveRunLeaseV1(t, operation, first.ID)
+	holdLiveRunLeaseV1(t, operation, ready.ID)
+	if _, err := operation.AdmitLiveRunV1(first, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := operation.AdmitLiveRunV1(ready, true); err != nil {
+		t.Fatal(err)
+	}
+	queue, removed, err := operation.RemoveLiveRunV1(first.ID)
+	if err != nil || !removed || len(queue.Runs) != 1 || queue.Runs[0].Status != deploy.LiveRunStatusReadyV1 {
+		t.Fatalf("ready predecessor = %#v, removed=%t, error=%v", queue, removed, err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	var notice bytes.Buffer
+	candidate := liveRunAdmissionFixtureV1("run-0000000000000003", false)
+	holdLiveRunLeaseV1(t, operation, candidate.ID)
+	_, err = awaitLiveRunAdmissionV1(ctx, dir, operation, candidate, true, &notice, liveRunAdmissionBackendV1{
+		acquire: deploy.AcquireOperationLock,
+		wait: func(context.Context) error {
+			cancel()
+			return context.Canceled
+		},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("wait error = %v", err)
+	}
+	want := "Waiting for queued app command \"export\" to start.\n" +
+		"Ctrl-C cancels this wait without affecting earlier operations.\n"
+	if notice.String() != want {
+		t.Fatalf("wait notice = %q, want %q", notice.String(), want)
+	}
+}
+
+func TestAwaitLiveRunAdmissionV1ExplainsReadyPredecessorBeforeCompatibleActiveRun(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := liveRunAdmissionFixtureV1("run-0000000000000001", false)
+	exclusiveWaiter := liveRunAdmissionFixtureV1("run-0000000000000002", true)
+	ready := liveRunAdmissionFixtureV1("run-0000000000000003", false)
+	ready.Name = "generate"
+	for _, run := range []deploy.LiveRunV1{active, exclusiveWaiter, ready} {
+		holdLiveRunLeaseV1(t, operation, run.ID)
+	}
+	if _, err := operation.AdmitLiveRunV1(active, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := operation.AdmitLiveRunV1(exclusiveWaiter, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := operation.AdmitLiveRunV1(ready, true); err != nil {
+		t.Fatal(err)
+	}
+	queue, removed, err := operation.RemoveLiveRunV1(exclusiveWaiter.ID)
+	if err != nil || !removed || len(queue.Runs) != 2 || queue.Runs[1].Status != deploy.LiveRunStatusReadyV1 {
+		t.Fatalf("ready predecessor with active run = %#v, removed=%t, error=%v", queue, removed, err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	var notice bytes.Buffer
+	candidate := liveRunAdmissionFixtureV1("run-0000000000000004", false)
+	holdLiveRunLeaseV1(t, operation, candidate.ID)
+	_, err = awaitLiveRunAdmissionV1(ctx, dir, operation, candidate, true, &notice, liveRunAdmissionBackendV1{
+		acquire: deploy.AcquireOperationLock,
+		wait: func(context.Context) error {
+			cancel()
+			return context.Canceled
+		},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("wait error = %v", err)
+	}
+	want := "Waiting behind 2 operations; queued app command \"generate\" is next to start.\n" +
+		"Ctrl-C cancels this wait without affecting earlier operations.\n"
 	if notice.String() != want {
 		t.Fatalf("wait notice = %q, want %q", notice.String(), want)
 	}

@@ -371,9 +371,13 @@ conflicting writable mount when applicable, and says that `--wait` will queue
 the run. `reploy runs list` separately shows outstanding app commands and shell
 sessions; lifecycle operations are intentionally omitted. The deployment keeps
 a live fair queue for active and waiting app commands and shell sessions.
-Multiple `--wait` callers start in arrival order, waits have no fixed timeout,
-and cancellation removes only the caller's entry. A shell session is a
-long-running run under the same rules.
+Internally, newly available capacity first reserves the next waiting operation
+as `ready`; that reservation remains publicly waiting until its owner atomically
+claims it as active. Multiple `--wait` callers start in arrival order, waits
+have no fixed timeout, and cancellation before that claim removes only the
+caller's unstarted entry. Cancellation after the claim follows normal
+active-run termination and cleanup. A shell session is a long-running run under
+the same rules.
 
 `reploy runs list` lists active and waiting runs and sessions. `reploy runs stop
 RUN_ID` terminates an active run or cancels a waiting one. Run IDs are validated
