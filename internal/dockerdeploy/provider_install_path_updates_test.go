@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/providerstore"
@@ -183,6 +184,47 @@ func TestApplyProviderInstallVolumeV1CreatesEmptyTargetWhenStagingVolumeIsAbsent
 	want = append([]CommandSpec{{Name: "/usr/bin/docker", Args: []string{"container", "rm", "--force", providerInstallVolumeCopyContainerNameV1("installed-data")}}}, want...)
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatalf("volume commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestApplyProviderInstallPathUpdatesV1BindsOneRunnerForVolumeTransaction(t *testing.T) {
+	action := PathUpdateAction{Name: "data", Kind: PathPreserveVolume, Source: "staging-data", Target: "installed-data"}
+	locked := providerInstallPathUpdateFixture(t.TempDir(), action)
+	locked.HostTools.DockerPath = "/usr/bin/docker"
+	locked.Input.RunOptions.DockerPreflightTimeout = 17 * time.Second
+	previous := bindProviderInstallPathUpdateCommandRunner
+	t.Cleanup(func() { bindProviderInstallPathUpdateCommandRunner = previous })
+	bindCalls := 0
+	commands := []CommandSpec{}
+	bindProviderInstallPathUpdateCommandRunner = func(ctx context.Context, spec CommandSpec, timeout time.Duration) (commandRunner, error) {
+		bindCalls++
+		if ctx != t.Context() || spec.Name != locked.HostTools.DockerPath || timeout != locked.Input.RunOptions.DockerPreflightTimeout {
+			t.Fatalf("bind input = %#v, timeout = %s", spec, timeout)
+		}
+		return func(command CommandSpec, _ RunOptions) error {
+			commands = append(commands, command)
+			if len(command.Args) >= 2 && command.Args[0] == "container" && command.Args[1] == "rm" {
+				return errors.New("No such container")
+			}
+			if len(command.Args) >= 2 && command.Args[0] == "volume" && command.Args[1] == "inspect" {
+				return errors.New("No such volume")
+			}
+			return nil
+		}, nil
+	}
+	if err := applyProviderInstallPathUpdatesV1(t.Context(), locked); err != nil {
+		t.Fatal(err)
+	}
+	if bindCalls != 1 {
+		t.Fatalf("bind calls = %d", bindCalls)
+	}
+	wantOperations := []string{"container rm", "volume inspect", "volume create", "volume inspect"}
+	gotOperations := make([]string, len(commands))
+	for index, command := range commands {
+		gotOperations[index] = strings.Join(command.Args[:2], " ")
+	}
+	if !reflect.DeepEqual(gotOperations, wantOperations) {
+		t.Fatalf("bound volume operations = %#v, want %#v", gotOperations, wantOperations)
 	}
 }
 

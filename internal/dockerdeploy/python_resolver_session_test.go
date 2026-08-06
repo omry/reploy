@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/probe"
@@ -170,28 +171,29 @@ func TestOpenPythonResolverSessionFinishesCreateBeforeHonoringCancellation(t *te
 	descriptor := testProbeImageDescriptor(t, "linux/amd64")
 	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
 	artifacts := testPreparedPythonResolverArtifacts(t)
-	previousOpen := runPythonResolverOpenCommand
-	previousFollowup := runPythonResolverFollowupCommand
-	t.Cleanup(func() {
-		runPythonResolverOpenCommand = previousOpen
-		runPythonResolverFollowupCommand = previousFollowup
-	})
+	previousBind := bindPythonResolverCommandRunner
+	t.Cleanup(func() { bindPythonResolverCommandRunner = previousBind })
 	ctx, cancel := context.WithCancel(context.Background())
 	removed := false
-	runPythonResolverOpenCommand = func(_ CommandSpec, options RunOptions) error {
-		cancel()
-		if err := options.Context.Err(); err != nil {
-			t.Fatalf("Docker create inherited cancellation: %v", err)
+	bindPythonResolverCommandRunner = func(bindCtx context.Context, _ CommandSpec, _ time.Duration) (commandRunner, error) {
+		if err := bindCtx.Err(); err != nil {
+			t.Fatalf("Docker endpoint binding inherited cancellation: %v", err)
 		}
-		return nil
-	}
-	runPythonResolverFollowupCommand = func(spec CommandSpec, _ RunOptions) error {
-		if len(spec.Args) == 3 && spec.Args[0] == "rm" && spec.Args[1] == "--force" {
-			removed = true
+		return func(spec CommandSpec, options RunOptions) error {
+			if len(spec.Args) != 0 && spec.Args[0] == "create" {
+				cancel()
+				if err := options.Context.Err(); err != nil {
+					t.Fatalf("Docker create inherited cancellation: %v", err)
+				}
+				return nil
+			}
+			if len(spec.Args) == 3 && spec.Args[0] == "rm" && spec.Args[1] == "--force" {
+				removed = true
+				return nil
+			}
+			t.Fatalf("unexpected follow-up command: %#v", spec)
 			return nil
-		}
-		t.Fatalf("unexpected follow-up command: %#v", spec)
-		return nil
+		}, nil
 	}
 	if _, err := OpenPythonResolverSession(ctx, descriptor, workspace, artifacts); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v", err)
@@ -245,8 +247,8 @@ func TestPythonResolverSessionBuildsSdistThenWheelWithSelectedInterpreterAndPinn
 	if err := session.BuildSourceDistributions(context.Background(), launcher, requirement, interpreter.Evidence, snapshots); err != nil {
 		t.Fatal(err)
 	}
-	successfulFollowup := runPythonResolverFollowupCommand
-	runPythonResolverFollowupCommand = func(spec CommandSpec, options RunOptions) error {
+	successfulFollowup := session.runDocker
+	session.runDocker = func(spec CommandSpec, options RunOptions) error {
 		if containsInOrder(spec.Args, []string{"-m", "uv", "build", "--no-progress", "--sdist"}) {
 			_, _ = options.Stderr.Write([]byte("backend requires repository metadata\n"))
 			return errors.New("exit status 1")
@@ -258,7 +260,7 @@ func TestPythonResolverSessionBuildsSdistThenWheelWithSelectedInterpreterAndPinn
 	); err == nil || !strings.Contains(err.Error(), "ordinary source tree without VCS metadata") {
 		t.Fatalf("source distribution failure = %v", err)
 	}
-	runPythonResolverFollowupCommand = successfulFollowup
+	session.runDocker = successfulFollowup
 	buildEnvironmentDigest, err := session.SourceBuildEnvironmentDigest(interpreter.Evidence)
 	if err != nil {
 		t.Fatal(err)
@@ -362,41 +364,35 @@ func stubPythonResolverCommands(
 	startErr error,
 ) (*[]CommandSpec, *[]byte) {
 	t.Helper()
-	previousOpen := runPythonResolverOpenCommand
-	previousFollowup := runPythonResolverFollowupCommand
+	previousBind := bindPythonResolverCommandRunner
 	commands := []CommandSpec{}
 	probeInput := []byte(nil)
-	t.Cleanup(func() {
-		runPythonResolverOpenCommand = previousOpen
-		runPythonResolverFollowupCommand = previousFollowup
-	})
-	runPythonResolverOpenCommand = func(spec CommandSpec, _ RunOptions) error {
-		commands = append(commands, spec)
-		return nil
-	}
-	runPythonResolverFollowupCommand = func(spec CommandSpec, options RunOptions) error {
-		commands = append(commands, spec)
-		if len(spec.Args) == 0 {
-			return errors.New("empty Docker command")
-		}
-		if spec.Args[0] == "start" && startErr != nil {
-			_, _ = options.Stderr.Write([]byte("exec format error\n"))
-			return startErr
-		}
-		if spec.Args[0] != "exec" {
-			return nil
-		}
-		if spec.Args[len(spec.Args)-1] == ProbeContainerExecutable {
-			input, err := io.ReadAll(options.Stdin)
-			if err != nil {
-				return err
+	t.Cleanup(func() { bindPythonResolverCommandRunner = previousBind })
+	bindPythonResolverCommandRunner = func(context.Context, CommandSpec, time.Duration) (commandRunner, error) {
+		return func(spec CommandSpec, options RunOptions) error {
+			commands = append(commands, spec)
+			if len(spec.Args) == 0 {
+				return errors.New("empty Docker command")
 			}
-			probeInput = input
-			_, _ = options.Stdout.Write(probeResponse)
+			if spec.Args[0] == "start" && startErr != nil {
+				_, _ = options.Stderr.Write([]byte("exec format error\n"))
+				return startErr
+			}
+			if spec.Args[0] != "exec" {
+				return nil
+			}
+			if spec.Args[len(spec.Args)-1] == ProbeContainerExecutable {
+				input, err := io.ReadAll(options.Stdin)
+				if err != nil {
+					return err
+				}
+				probeInput = input
+				_, _ = options.Stdout.Write(probeResponse)
+				return nil
+			}
+			_, _ = options.Stdout.Write(inspectionResponse)
 			return nil
-		}
-		_, _ = options.Stdout.Write(inspectionResponse)
-		return nil
+		}, nil
 	}
 	return &commands, &probeInput
 }

@@ -21,13 +21,35 @@ type providerInstallPathUpdateBackendV1 struct {
 	run                   commandRunner
 }
 
+var bindProviderInstallPathUpdateCommandRunner = bindDockerCommandRunnerV1
+
 func applyProviderInstallPathUpdatesV1(ctx context.Context, locked lockedProviderInstallV1) error {
+	runDocker := commandRunner(runDockerCommand)
+	for _, action := range locked.Plan.PathUpdates {
+		if action.Kind != PathPreserveVolume && action.Kind != PathReplaceVolume {
+			continue
+		}
+		dockerPath := locked.HostTools.DockerPath
+		if strings.TrimSpace(dockerPath) == "" {
+			return fmt.Errorf("materialize installed volume %q requires the Docker client", action.Name)
+		}
+		var err error
+		runDocker, err = bindProviderInstallPathUpdateCommandRunner(
+			ctx,
+			CommandSpec{Name: dockerPath, Args: []string{"volume", "inspect", action.Target}},
+			locked.Input.RunOptions.DockerPreflightTimeout,
+		)
+		if err != nil {
+			return fmt.Errorf("bind provider install volume Docker endpoint: %w", err)
+		}
+		break
+	}
 	return applyProviderInstallPathUpdatesWithV1(ctx, locked, providerInstallPathUpdateBackendV1{
 		volumeExists: func(ctx context.Context, name string) (bool, error) {
-			return providerInstallVolumeExistsV1(ctx, locked.HostTools.DockerPath, name, locked.Input.RunOptions)
+			return providerInstallVolumeExistsWithV1(ctx, locked.HostTools.DockerPath, name, locked.Input.RunOptions, runDocker)
 		},
 		prepareProbeWorkspace: PrepareProbeWorkspace,
-		run:                   runCommandWithoutDockerPreflight,
+		run:                   runDocker,
 	})
 }
 
@@ -304,7 +326,7 @@ func applyProviderInstallVolumeV1(
 }
 
 func providerInstallVolumeExistsV1(ctx context.Context, dockerPath string, name string, options RunOptions) (bool, error) {
-	return providerInstallVolumeExistsWithV1(ctx, dockerPath, name, options, runCommandWithoutDockerPreflight)
+	return providerInstallVolumeExistsWithV1(ctx, dockerPath, name, options, runDockerCommand)
 }
 
 func providerInstallVolumeExistsWithV1(ctx context.Context, dockerPath string, name string, options RunOptions, run commandRunner) (bool, error) {
