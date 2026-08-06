@@ -121,16 +121,19 @@ func TestOperationLockLiveRunQueueTransitionsAreAtomicAndPersistent(t *testing.T
 	if err := lock.RecordLiveRunContainerV1(first.ID, "reploy-demo-command-1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := lock.RecordLiveRunContainerV1(second.ID, "reploy-demo-command-2"); err == nil || !strings.Contains(err.Error(), "waiting") {
-		t.Fatalf("waiting container error = %v", err)
+	if err := lock.RecordLiveRunContainerV1(second.ID, "reploy-demo-command-2"); err == nil || !strings.Contains(err.Error(), "unclaimed") {
+		t.Fatalf("unclaimed container error = %v", err)
 	}
 	updated, removed, err := lock.RemoveLiveRunV1(first.ID)
-	if err != nil || !removed || len(updated.Runs) != 1 || updated.Runs[0].ID != second.ID || updated.Runs[0].Status != LiveRunStatusActiveV1 {
+	if err != nil || !removed || len(updated.Runs) != 1 || updated.Runs[0].ID != second.ID || updated.Runs[0].Status != LiveRunStatusReadyV1 {
 		t.Fatalf("remove and promote = %#v, removed=%t, error=%v", updated, removed, err)
 	}
+	if err := lock.ActivateReadyLiveRunV1(second.ID); err != nil {
+		t.Fatal(err)
+	}
 	loaded, found, err := lock.ReadLiveRunQueueV1()
-	if err != nil || !found || !reflect.DeepEqual(loaded, updated) {
-		t.Fatalf("promoted queue = %#v, found=%t, error=%v", loaded, found, err)
+	if err != nil || !found || len(loaded.Runs) != 1 || loaded.Runs[0].ID != second.ID || loaded.Runs[0].Status != LiveRunStatusActiveV1 {
+		t.Fatalf("claimed queue = %#v, found=%t, error=%v", loaded, found, err)
 	}
 	if _, removed, err := lock.RemoveLiveRunV1("run-0000000000000099"); err != nil || removed {
 		t.Fatalf("absent removal = %t, %v", removed, err)
@@ -250,7 +253,7 @@ func TestOperationLockRecoversAbandonedActiveControlAndPromotesNextRun(t *testin
 		t.Fatalf("recovered marker = %#v, found=%t, error=%v", recovered, found, err)
 	}
 	queue, found, err := recovery.ReadLiveRunQueueV1()
-	if err != nil || !found || len(queue.Runs) != 1 || queue.Runs[0].ID != waiter.ID || queue.Runs[0].Status != LiveRunStatusActiveV1 {
+	if err != nil || !found || len(queue.Runs) != 1 || queue.Runs[0].ID != waiter.ID || queue.Runs[0].Status != LiveRunStatusReadyV1 {
 		t.Fatalf("queue after recovery = %#v, found=%t, error=%v", queue, found, err)
 	}
 	if _, found, err := recovery.RecoverAbandonedControlMarkerV1(); err != nil || found {
@@ -444,7 +447,7 @@ func TestRecoverLiveRunQueueV1PromotesNextLiveOwnerAfterAbruptExit(t *testing.T)
 	}
 	queue, _, err := operation.ReadLiveRunQueueV1()
 	if err != nil || len(recovery.Removed) != 1 || recovery.Removed[0].Run.ID != first.ID ||
-		len(queue.Runs) != 1 || queue.Runs[0].ID != second.ID || queue.Runs[0].Status != LiveRunStatusActiveV1 {
+		len(queue.Runs) != 1 || queue.Runs[0].ID != second.ID || queue.Runs[0].Status != LiveRunStatusReadyV1 {
 		t.Fatalf("promotion after abrupt exit = recovery %#v, queue %#v, error=%v", recovery, queue, err)
 	}
 }
