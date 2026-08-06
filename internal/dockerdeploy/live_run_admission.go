@@ -52,7 +52,7 @@ func AwaitLiveRunAdmissionWithNoticeV1(
 				return nil
 			}
 		},
-		removeContainer: runCommandWithoutDockerPreflight,
+		removeContainer: runCommand,
 	})
 }
 

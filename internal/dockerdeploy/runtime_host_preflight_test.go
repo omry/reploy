@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -76,6 +77,75 @@ func TestValidateRuntimeHostSourcesV1RejectsChangedFilesystemKind(t *testing.T) 
 	}})
 	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
 		t.Fatalf("filesystem kind error = %v", err)
+	}
+}
+
+func TestValidateRuntimeHostSourcesV1RejectsProtectedHostSystemTrees(t *testing.T) {
+	root := string(filepath.Separator)
+	if volume := filepath.VolumeName(t.TempDir()); volume != "" {
+		root = volume + string(filepath.Separator)
+	}
+	type testCase struct {
+		name string
+		path string
+		kind string
+	}
+	tests := []testCase{
+		{name: "filesystem root", path: root, kind: deploy.RuntimeMountSourceDirectory},
+	}
+	if runtime.GOOS != "windows" {
+		tests = append(tests,
+			testCase{name: "proc descendant", path: "/proc/self", kind: deploy.RuntimeMountSourceDirectory},
+			testCase{name: "proc process-relative directory", path: "/proc/self/cwd", kind: deploy.RuntimeMountSourceDirectory},
+			testCase{name: "dev descendant", path: "/dev/null", kind: deploy.RuntimeMountSourceFile},
+			testCase{name: "sys", path: "/sys", kind: deploy.RuntimeMountSourceDirectory},
+		)
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := os.Stat(test.path); os.IsNotExist(err) {
+				t.Skipf("host path %q is absent", test.path)
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			policy := runtimeHostPolicy([]deploy.RuntimeMountV1{{
+				Destination: "/mnt/host", SourceKind: test.kind, ReadOnly: true,
+			}})
+			err := ValidateRuntimeHostSourcesV1(policy, "command/check", 1000, []RuntimeHostSourceV1{{
+				Destination: "/mnt/host", HostPath: test.path, SourceKind: test.kind,
+				Authority: runtimeHostAuthorityInputV1, ReadOnly: true,
+			}})
+			if err == nil || !strings.Contains(err.Error(), "protected host system source") {
+				t.Fatalf("protected host tree error = %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateRuntimeHostSourcesV1RejectsProtectedHostSystemTreeAlias(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating a directory symlink requires additional privileges on Windows")
+	}
+	protected := "/dev"
+	if _, err := os.Stat(protected); os.IsNotExist(err) {
+		t.Skipf("host path %q is absent", protected)
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "device-alias")
+	if err := os.Symlink(protected, alias); err != nil {
+		t.Fatal(err)
+	}
+	policy := runtimeHostPolicy([]deploy.RuntimeMountV1{{
+		Destination: "/mnt/host", SourceKind: deploy.RuntimeMountSourceDirectory, ReadOnly: true,
+	}})
+	err := ValidateRuntimeHostSourcesV1(policy, "command/check", 1000, []RuntimeHostSourceV1{{
+		Destination: "/mnt/host", HostPath: alias, SourceKind: deploy.RuntimeMountSourceDirectory,
+		Authority: runtimeHostAuthorityInputV1, ReadOnly: true,
+	}})
+	if err == nil || !strings.Contains(err.Error(), "protected host system source") {
+		t.Fatalf("protected host tree alias error = %v", err)
 	}
 }
 
