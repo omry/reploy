@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/omry/reploy/internal/deploy"
 )
 
 type admittedTransientContainerBackendV1 struct {
 	acquire      func(context.Context, string) (*deploy.OperationLock, error)
+	bind         func(context.Context, CommandSpec, time.Duration) (commandRunner, error)
 	create       commandRunner
 	followup     temporaryCommandRunner
 	runTemporary func(temporaryCommandRunner, CommandSpec, CommandSpec, RunOptions) error
@@ -31,8 +33,9 @@ func RunAdmittedTransientContainerV1(
 ) error {
 	return runAdmittedTransientContainerV1(ctx, deploymentDir, operation, runID, execution, options, admittedTransientContainerBackendV1{
 		acquire:      deploy.AcquireOperationLock,
+		bind:         bindDockerCommandRunnerV1,
 		create:       runCommand,
-		followup:     runCommandWithoutDockerPreflight,
+		followup:     runDockerCommand,
 		runTemporary: runTemporaryContainerCommand,
 	})
 }
@@ -77,6 +80,14 @@ func runAdmittedTransientContainerV1(
 	createOptions.Stdin = nil
 	createOptions.Stdout = nil
 	createOptions.Stderr = nil
+	if backend.bind != nil {
+		run, err := backend.bind(ctx, execution.Create, options.DockerPreflightTimeout)
+		if err != nil {
+			return removeAdmittedTransientBeforeCreateV1(operation, runID, fmt.Errorf("bind admitted transient Docker endpoint: %w", err))
+		}
+		backend.create = run
+		backend.followup = temporaryCommandRunner(run)
+	}
 	if err := backend.create(execution.Create, createOptions); err != nil {
 		return abortAdmittedTransientBeforeStartV1(context.WithoutCancel(ctx), operation, runID, execution, options, backend,
 			fmt.Errorf("create admitted transient container: %w", err))

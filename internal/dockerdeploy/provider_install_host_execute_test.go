@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
@@ -52,6 +54,105 @@ func TestStartProviderInstallHostV1RunsOneCommandWithoutPreflight(t *testing.T) 
 	})
 	if err != nil || called != 1 {
 		t.Fatalf("called=%d error=%v", called, err)
+	}
+}
+
+func TestStartProviderInstallHostV1PreflightsDockerBackend(t *testing.T) {
+	destinationDir := t.TempDir()
+	dockerPath := writeFakeCommand(
+		t,
+		destinationDir,
+		"docker",
+		"#!/bin/sh\nexit 0\n",
+		"@exit /b 0\r\n",
+	)
+	references := fixedPublicationReferences(t, destinationDir, 0xd4)
+	plan := providerInstallRunPlanFixture(destinationDir, references)
+	plan.Backend = installBackendDockerManaged
+	plan.Installation.Scope = "user"
+	plan.Installation.UnitPath = ""
+	plan.Docker.DeploymentDir = destinationDir
+
+	previousPreflight := dockerPreflight
+	t.Cleanup(func() { dockerPreflight = previousPreflight })
+	preflights := 0
+	dockerPreflight = func(_ context.Context, spec CommandSpec, _ time.Duration) (string, error) {
+		preflights++
+		if spec.Name != dockerPath {
+			t.Fatalf("preflight command = %#v", spec)
+		}
+		return "unix:///var/run/docker.sock", nil
+	}
+
+	if err := startProviderInstallHostV1(
+		t.Context(),
+		plan,
+		providerInstallHostToolsV1{DockerPath: dockerPath},
+		RunOptions{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if preflights != 1 {
+		t.Fatalf("Docker preflights = %d, want 1", preflights)
+	}
+}
+
+func TestStartProviderInstallHostV1BindsPrivateEnvironmentStartupOnce(t *testing.T) {
+	destinationDir := t.TempDir()
+	environmentPath := filepath.Join(destinationDir, PrivateWorkloadEnvironmentFileName)
+	if created, err := publishPrivateWorkloadEnvironmentFileV1(
+		environmentPath,
+		[]byte("PRIVATE_NAME=private-value\n"),
+		false,
+	); err != nil || !created {
+		t.Fatal(err)
+	}
+	references := fixedPublicationReferences(t, destinationDir, 0xd5)
+	plan := providerInstallRunPlanFixture(destinationDir, references)
+	plan.Backend = installBackendDockerManaged
+	plan.Installation.Scope = "user"
+	plan.Installation.UnitPath = ""
+	plan.Docker.DeploymentDir = destinationDir
+	plan.Docker.PrivateEnvironment = true
+	plan.Docker.Workload = &WorkloadExecutionPlan{Argv: []string{"/bin/true"}}
+	rendered, err := RenderDockerInputs(plan.Docker, plan.ControlScript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Rendered = rendered
+
+	previousBind := bindProviderInstallHostCommandRunner
+	t.Cleanup(func() { bindProviderInstallHostCommandRunner = previousBind })
+	binds := 0
+	var operations []string
+	bindProviderInstallHostCommandRunner = func(bindCtx context.Context, spec CommandSpec, timeout time.Duration) (commandRunner, error) {
+		binds++
+		if bindCtx != t.Context() || spec.Name != "/usr/bin/docker" || timeout != 3*time.Second {
+			t.Fatalf("bind context=%v spec=%#v timeout=%v", bindCtx, spec, timeout)
+		}
+		return func(spec CommandSpec, _ RunOptions) error {
+			operations = append(operations, strings.Join(spec.Args, " "))
+			if len(spec.Args) > 0 && spec.Args[0] == "exec" {
+				return errors.New("relay failed")
+			}
+			return nil
+		}, nil
+	}
+
+	err = startProviderInstallHostV1(
+		t.Context(),
+		plan,
+		providerInstallHostToolsV1{DockerPath: "/usr/bin/docker"},
+		RunOptions{DockerPreflightTimeout: 3 * time.Second},
+	)
+	if err == nil || !strings.Contains(err.Error(), "relay failed") {
+		t.Fatalf("error = %v", err)
+	}
+	if binds != 1 {
+		t.Fatalf("Docker runner binds = %d, want 1", binds)
+	}
+	if len(operations) != 3 || !strings.HasPrefix(operations[0], "compose ") || !strings.HasPrefix(operations[1], "exec -i ") || !strings.HasPrefix(operations[2], "compose ") {
+		t.Fatalf("operations = %#v", operations)
 	}
 }
 

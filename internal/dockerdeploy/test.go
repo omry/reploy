@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -163,12 +164,17 @@ func commandOutput(spec CommandSpec, options RunOptions) ([]byte, error) {
 		ctx = context.Background()
 	}
 	if spec.Name == "docker" {
-		if err := dockerPreflight(ctx, spec, effectiveDockerPreflightTimeout(options.DockerPreflightTimeout)); err != nil {
+		endpoint, err := dockerPreflight(ctx, spec, effectiveDockerPreflightTimeout(options.DockerPreflightTimeout))
+		if err != nil {
 			return nil, err
 		}
+		spec = pinDockerEndpointV1(spec, endpoint)
 	}
 	command := exec.CommandContext(ctx, spec.Name, spec.Args...)
 	command.Dir = spec.Dir
+	if len(spec.Env) > 0 {
+		command.Env = append(os.Environ(), spec.Env...)
+	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	command.Stdout = &stdout
