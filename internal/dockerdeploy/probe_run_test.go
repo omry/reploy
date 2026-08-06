@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
@@ -131,36 +132,30 @@ func TestAPTImageValidationSessionReusesHeldContainerAndCachesProfile(t *testing
 		[]byte("amd64\n"),
 		{},
 	}
-	previousOpen := runImageValidationOpenCommand
-	previousFollowup := runImageValidationFollowupCommand
-	t.Cleanup(func() {
-		runImageValidationOpenCommand = previousOpen
-		runImageValidationFollowupCommand = previousFollowup
-	})
+	previousBind := bindImageValidationCommandRunner
+	t.Cleanup(func() { bindImageValidationCommandRunner = previousBind })
 	commands := []CommandSpec{}
 	profileIndex := 0
-	runImageValidationOpenCommand = func(spec CommandSpec, _ RunOptions) error {
-		commands = append(commands, spec)
-		return nil
-	}
-	runImageValidationFollowupCommand = func(spec CommandSpec, options RunOptions) error {
-		commands = append(commands, spec)
-		if len(spec.Args) == 0 || spec.Args[0] != "exec" {
-			return nil
-		}
-		if spec.Args[len(spec.Args)-1] == ProbeContainerExecutable {
-			if _, err := io.ReadAll(options.Stdin); err != nil {
-				return err
+	bindImageValidationCommandRunner = func(context.Context, CommandSpec, time.Duration) (commandRunner, error) {
+		return func(spec CommandSpec, options RunOptions) error {
+			commands = append(commands, spec)
+			if len(spec.Args) == 0 || spec.Args[0] != "exec" {
+				return nil
 			}
-			_, _ = options.Stdout.Write(mustCanonicalProbeResponse(t, aptBaseProbeResponse()))
+			if spec.Args[len(spec.Args)-1] == ProbeContainerExecutable {
+				if _, err := io.ReadAll(options.Stdin); err != nil {
+					return err
+				}
+				_, _ = options.Stdout.Write(mustCanonicalProbeResponse(t, aptBaseProbeResponse()))
+				return nil
+			}
+			if profileIndex >= len(profileOutputs) {
+				t.Fatalf("unexpected profile command: %#v", spec.Args)
+			}
+			_, _ = options.Stdout.Write(profileOutputs[profileIndex])
+			profileIndex++
 			return nil
-		}
-		if profileIndex >= len(profileOutputs) {
-			t.Fatalf("unexpected profile command: %#v", spec.Args)
-		}
-		_, _ = options.Stdout.Write(profileOutputs[profileIndex])
-		profileIndex++
-		return nil
+		}, nil
 	}
 	session, err := OpenAPTImageValidationSession(context.Background(), descriptor, probeWorkspace, aptWorkspace)
 	if err != nil {
@@ -318,28 +313,29 @@ func TestOpenImageValidationSessionCleansFailedStartAndExplainsEmulation(t *test
 func TestOpenImageValidationSessionFinishesCreateBeforeHonoringCancellation(t *testing.T) {
 	descriptor := testProbeImageDescriptor(t, "linux/amd64")
 	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
-	previousOpen := runImageValidationOpenCommand
-	previousFollowup := runImageValidationFollowupCommand
-	t.Cleanup(func() {
-		runImageValidationOpenCommand = previousOpen
-		runImageValidationFollowupCommand = previousFollowup
-	})
+	previousBind := bindImageValidationCommandRunner
+	t.Cleanup(func() { bindImageValidationCommandRunner = previousBind })
 	ctx, cancel := context.WithCancel(context.Background())
 	removed := false
-	runImageValidationOpenCommand = func(_ CommandSpec, options RunOptions) error {
-		cancel()
-		if err := options.Context.Err(); err != nil {
-			t.Fatalf("Docker create inherited cancellation: %v", err)
+	bindImageValidationCommandRunner = func(bindCtx context.Context, _ CommandSpec, _ time.Duration) (commandRunner, error) {
+		if err := bindCtx.Err(); err != nil {
+			t.Fatalf("Docker endpoint binding inherited cancellation: %v", err)
 		}
-		return nil
-	}
-	runImageValidationFollowupCommand = func(spec CommandSpec, _ RunOptions) error {
-		if len(spec.Args) == 3 && spec.Args[0] == "rm" && spec.Args[1] == "--force" {
-			removed = true
+		return func(spec CommandSpec, options RunOptions) error {
+			if len(spec.Args) != 0 && spec.Args[0] == "create" {
+				cancel()
+				if err := options.Context.Err(); err != nil {
+					t.Fatalf("Docker create inherited cancellation: %v", err)
+				}
+				return nil
+			}
+			if len(spec.Args) == 3 && spec.Args[0] == "rm" && spec.Args[1] == "--force" {
+				removed = true
+				return nil
+			}
+			t.Fatalf("unexpected follow-up command: %#v", spec)
 			return nil
-		}
-		t.Fatalf("unexpected follow-up command: %#v", spec)
-		return nil
+		}, nil
 	}
 	if _, err := OpenImageValidationSession(ctx, descriptor, workspace); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v", err)
@@ -356,11 +352,11 @@ func TestRunImageProbeRejectsMismatchedPlatformBeforeDocker(t *testing.T) {
 		t.Fatal(err)
 	}
 	workspace := testPreparedProbeWorkspace(t, other, t.TempDir())
-	previous := runImageValidationOpenCommand
-	t.Cleanup(func() { runImageValidationOpenCommand = previous })
-	runImageValidationOpenCommand = func(CommandSpec, RunOptions) error {
+	previous := bindImageValidationCommandRunner
+	t.Cleanup(func() { bindImageValidationCommandRunner = previous })
+	bindImageValidationCommandRunner = func(context.Context, CommandSpec, time.Duration) (commandRunner, error) {
 		t.Fatal("mismatched platform reached Docker")
-		return nil
+		return nil, nil
 	}
 	request := probe.RequestV1{Schema: probe.RequestSchemaV1, Inspections: []probe.ExecutableInspectionV1{}}
 	if _, err := RunImageProbe(context.Background(), descriptor, workspace, request); err == nil || !strings.Contains(err.Error(), "does not match") {
@@ -373,42 +369,38 @@ var recordedImageValidationStdin []byte
 
 func stubImageValidationCommands(t *testing.T, response []byte, startErr error) func() {
 	t.Helper()
-	previousOpen := runImageValidationOpenCommand
-	previousFollowup := runImageValidationFollowupCommand
+	previousBind := bindImageValidationCommandRunner
 	recordedImageValidationCommands = nil
 	recordedImageValidationStdin = nil
-	runImageValidationOpenCommand = func(spec CommandSpec, _ RunOptions) error {
-		recordedImageValidationCommands = append(recordedImageValidationCommands, spec)
-		return nil
-	}
-	runImageValidationFollowupCommand = func(spec CommandSpec, options RunOptions) error {
-		recordedImageValidationCommands = append(recordedImageValidationCommands, spec)
-		if len(spec.Args) == 0 {
-			return errors.New("empty Docker command")
-		}
-		switch spec.Args[0] {
-		case "start":
-			if startErr != nil {
-				_, _ = options.Stderr.Write([]byte("exec /.reploy-validation/reploy-probe: exec format error\n"))
-				return startErr
+	bindImageValidationCommandRunner = func(context.Context, CommandSpec, time.Duration) (commandRunner, error) {
+		return func(spec CommandSpec, options RunOptions) error {
+			recordedImageValidationCommands = append(recordedImageValidationCommands, spec)
+			if len(spec.Args) == 0 {
+				return errors.New("empty Docker command")
 			}
-		case "exec":
-			if options.Stdin != nil {
-				var input bytes.Buffer
-				if _, err := input.ReadFrom(options.Stdin); err != nil {
+			switch spec.Args[0] {
+			case "start":
+				if startErr != nil {
+					_, _ = options.Stderr.Write([]byte("exec /.reploy-validation/reploy-probe: exec format error\n"))
+					return startErr
+				}
+			case "exec":
+				if options.Stdin != nil {
+					var input bytes.Buffer
+					if _, err := input.ReadFrom(options.Stdin); err != nil {
+						return err
+					}
+					recordedImageValidationStdin = append(recordedImageValidationStdin, input.Bytes()...)
+				}
+				if _, err := options.Stdout.Write(response); err != nil {
 					return err
 				}
-				recordedImageValidationStdin = append(recordedImageValidationStdin, input.Bytes()...)
 			}
-			if _, err := options.Stdout.Write(response); err != nil {
-				return err
-			}
-		}
-		return nil
+			return nil
+		}, nil
 	}
 	return func() {
-		runImageValidationOpenCommand = previousOpen
-		runImageValidationFollowupCommand = previousFollowup
+		bindImageValidationCommandRunner = previousBind
 		recordedImageValidationCommands = nil
 		recordedImageValidationStdin = nil
 	}

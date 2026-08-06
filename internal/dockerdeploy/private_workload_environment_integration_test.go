@@ -117,7 +117,7 @@ printf 'private-mask-pass\n'`, expectedTokenDigest)
 		container,
 		environment,
 		RunOptions{},
-		runCommandWithoutDockerPreflight,
+		runDockerCommand,
 	); err != nil {
 		t.Fatal(err)
 	}
