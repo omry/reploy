@@ -1,0 +1,2 @@
+kind: Security
+body: 'Deny public and local application networking by default, conservatively require both grants for ambiguous translation and tunneling ranges, and enforce the policy for workloads, commands, shells, and lifecycle actions while preserving declared inbound endpoints.'
