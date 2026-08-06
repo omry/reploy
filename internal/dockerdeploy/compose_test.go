@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -136,6 +137,33 @@ func TestRunCommandWithoutDockerPreflightRunsKnownFollowup(t *testing.T) {
 	}
 }
 
+func TestRunDockerCommandPreflightsAbsoluteExecutable(t *testing.T) {
+	dir := t.TempDir()
+	dockerPath := writeFakeCommand(
+		t,
+		dir,
+		"configured-docker",
+		"#!/bin/sh\nexit 0\n",
+		"@echo off\r\nexit /b 0\r\n",
+	)
+	preflightCalled := false
+	restore := stubDockerPreflight(t, func(_ context.Context, spec CommandSpec, _ time.Duration) error {
+		preflightCalled = true
+		if spec.Name != dockerPath {
+			t.Fatalf("preflight executable = %q, want %q", spec.Name, dockerPath)
+		}
+		return nil
+	})
+	defer restore()
+
+	if err := runDockerCommand(CommandSpec{Name: dockerPath, Args: []string{"version"}}, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if !preflightCalled {
+		t.Fatal("absolute Docker executable bypassed preflight")
+	}
+}
+
 func TestCheckDockerResponsiveUsesServerVersion(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "argv.log")
@@ -149,7 +177,7 @@ func TestCheckDockerResponsiveUsesServerVersion(t *testing.T) {
 
 	err := checkDockerResponsive(
 		context.Background(),
-		CommandSpec{Name: dockerPath, Env: []string{"DOCKER_ARGV_LOG=" + logPath}},
+		CommandSpec{Name: dockerPath, Env: []string{"DOCKER_HOST=unix:///var/run/docker.sock", "DOCKER_CONTEXT=", "DOCKER_ARGV_LOG=" + logPath}},
 		defaultDockerPreflightTimeout,
 	)
 	if err != nil {
@@ -161,6 +189,37 @@ func TestCheckDockerResponsiveUsesServerVersion(t *testing.T) {
 	}
 	if strings.TrimSpace(string(content)) != "version --format {{.Server.Version}}" {
 		t.Fatalf("docker preflight argv = %q", strings.TrimSpace(string(content)))
+	}
+}
+
+func TestCheckDockerResponsiveSharesOneDeadlineAcrossProbes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell timing fixture requires a POSIX host")
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "argv.log")
+	dockerPath := writeFakeCommand(
+		t,
+		dir,
+		"docker",
+		"#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$DOCKER_ARGV_LOG\"\nsleep 0.6\nif [ \"$1\" = context ]; then printf 'unix:///var/run/docker.sock\\n'; else printf '29.5.3\\n'; fi\n",
+		"@exit /b 1\r\n",
+	)
+
+	err := checkDockerResponsive(
+		context.Background(),
+		CommandSpec{Name: dockerPath, Env: []string{"DOCKER_HOST=", "DOCKER_CONTEXT=", "DOCKER_ARGV_LOG=" + logPath}},
+		time.Second,
+	)
+	if err == nil || !strings.Contains(err.Error(), "docker daemon did not respond within 1s") {
+		t.Fatalf("error = %v", err)
+	}
+	content, readErr := os.ReadFile(logPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if got := strings.Fields(string(content)); !reflect.DeepEqual(got, []string{"context", "version"}) {
+		t.Fatalf("Docker probes = %q, want context then version", got)
 	}
 }
 
