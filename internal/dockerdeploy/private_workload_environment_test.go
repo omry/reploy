@@ -225,7 +225,7 @@ func TestRenderDockerInputsUsesSecretFreePrivateLauncher(t *testing.T) {
 	compose := string(rendered.Compose)
 	for _, want := range []string{
 		"stdin_open: true", "reploy_private_environment_ready", "/opt/demo", "serve",
-		"entrypoint: [/reploy-probe]", "command: [verify-exec, --, /bin/sh, -c",
+		"entrypoint: [/reploy-probe]", "command: [sandbox-exec, --uid", "--public, deny", "--local, deny", "/bin/sh, -c",
 		"source: /dev/null", "target: /deployment/.env", "read_only: true",
 		"/deployment/.reploy:" + privateRuntimeDirectoryMaskOptionsV1,
 	} {
@@ -249,7 +249,8 @@ func TestInjectPrivateWorkloadEnvironmentV1UsesOnlyStdin(t *testing.T) {
 	environment := privateWorkloadEnvironmentV1{Present: true, Payload: []byte("TOKEN=private value\n\n")}
 	var gotSpec CommandSpec
 	var gotInput []byte
-	err := injectPrivateWorkloadEnvironmentV1(t.Context(), "/usr/bin/docker", "demo", environment, RunOptions{}, func(spec CommandSpec, options RunOptions) error {
+	sandbox := testApplicationSandboxPlanV1(1000, 1000)
+	err := injectPrivateWorkloadEnvironmentV1(t.Context(), "/usr/bin/docker", "demo", sandbox, environment, RunOptions{}, func(spec CommandSpec, options RunOptions) error {
 		gotSpec = spec
 		var err error
 		gotInput, err = readAllForPrivateEnvironmentTest(options)
@@ -263,7 +264,8 @@ func TestInjectPrivateWorkloadEnvironmentV1UsesOnlyStdin(t *testing.T) {
 		t.Fatalf("command contains secret: %#v", gotSpec)
 	}
 	if !reflect.DeepEqual(gotSpec.Args, []string{
-		"exec", "-i", "demo", "/bin/sh", "-c", privateWorkloadEnvironmentRelayV1,
+		"exec", "-i", "demo", sandbox.StartupVerifier.Path,
+		"restricted-exec", "--uid", "1000", "--gid", "1000", "--", "/bin/sh", "-c", privateWorkloadEnvironmentRelayV1,
 		"reploy-private-environment", privateWorkloadEnvironmentFIFOPathV1,
 	}) {
 		t.Fatalf("relay command = %#v", gotSpec)
@@ -291,6 +293,7 @@ func TestStartAndInjectPrivateWorkloadEnvironmentV1CleansFailedContainer(t *test
 		CommandSpec{Name: "docker", Args: []string{"compose", "up"}},
 		CommandSpec{Name: "docker", Args: []string{"compose", "down"}},
 		"demo",
+		testApplicationSandboxPlanV1(1000, 1000),
 		environment,
 		RunOptions{},
 		func(spec CommandSpec, _ RunOptions) error {
@@ -304,7 +307,7 @@ func TestStartAndInjectPrivateWorkloadEnvironmentV1CleansFailedContainer(t *test
 	if err == nil || !strings.Contains(err.Error(), "one-shot FIFO relay") {
 		t.Fatalf("error = %v", err)
 	}
-	if len(order) != 3 || order[0] != "compose up" || !strings.HasPrefix(order[1], "exec -i demo /bin/sh -c ") || order[2] != "compose down" {
+	if len(order) != 3 || order[0] != "compose up" || !strings.HasPrefix(order[1], "exec -i demo "+deploy.ApplicationStartupVerifierPathV1+" restricted-exec ") || order[2] != "compose down" {
 		t.Fatalf("order = %#v", order)
 	}
 }
@@ -438,6 +441,12 @@ func TestPrivateWorkloadEnvironmentRealDockerIsolation(t *testing.T) {
 		t.Skip("set REPLOY_DOCKER_INTEGRATION=1 to run the real-Docker private environment test")
 	}
 	container := "reploy-private-env-test-" + strconv.Itoa(os.Getpid())
+	platform, err := blueprint.ParsePlatform("linux/" + runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := buildIntegrationProbeWorkspace(t, platform)
+	sandbox := testApplicationSandboxPlanV1(65532, 65532)
 	run := func(spec CommandSpec, options RunOptions) error {
 		options.Context = t.Context()
 		return runCommandWithoutDockerPreflight(spec, options)
@@ -451,11 +460,14 @@ func TestPrivateWorkloadEnvironmentRealDockerIsolation(t *testing.T) {
 	})
 	script := privateWorkloadEnvironmentLauncherV1
 	create := CommandSpec{Name: "docker", Args: []string{
-		"create", "--name", container, "-i", "--user", "65532:65532",
-		"--tmpfs", environmentTemporaryHome + ":rw,noexec,nosuid,nodev,size=64m,mode=1777",
+		"create", "--name", container, "-i", "--user", "0:0",
+		"--cap-drop", "ALL", "--cap-add", "NET_ADMIN", "--cap-add", "SETGID", "--cap-add", "SETPCAP", "--cap-add", "SETUID",
+		"--security-opt", "no-new-privileges=true",
+		"--tmpfs", environmentTemporaryHome + ":rw,noexec,nosuid,nodev,size=64m,mode=0700,uid=65532,gid=65532",
 		"--env", "HOME=" + environmentTemporaryHome,
-		"--entrypoint", "/bin/sh", "python:3.11-slim",
-		"-c", script, "reploy-private-environment",
+		"--mount", "type=bind,source=" + probe.HostExecutable + ",target=" + sandbox.StartupVerifier.Path + ",readonly",
+		"--entrypoint", sandbox.StartupVerifier.Path, "python:3.11-slim",
+		"sandbox-exec", "--uid", "65532", "--gid", "65532", "--public", "deny", "--local", "deny", "--", "/bin/sh", "-c", script, "reploy-private-environment",
 		"python", "-c", `import os,time; name="REPLOY_"+"PRIVATE_"+"TEST"; value=os.environ.get(name); data=os.read(0, 1); print("ENV_PRESENT", value is not None, "LENGTH", len(value or ""), "STDIN_EOF", data == b"", flush=True); time.sleep(20)`,
 	}}
 	if err := run(create, RunOptions{}); err != nil {
@@ -467,7 +479,7 @@ func TestPrivateWorkloadEnvironmentRealDockerIsolation(t *testing.T) {
 	secret := "private-docker-test-value"
 	environment := privateWorkloadEnvironmentV1{Present: true, Payload: []byte("REPLOY_PRIVATE_TEST=" + secret + "\n\n")}
 	started := time.Now()
-	if err := injectPrivateWorkloadEnvironmentV1(t.Context(), "docker", container, environment, RunOptions{}, run); err != nil {
+	if err := injectPrivateWorkloadEnvironmentV1(t.Context(), "docker", container, sandbox, environment, RunOptions{}, run); err != nil {
 		t.Fatal(err)
 	}
 	if elapsed := time.Since(started); elapsed > 5*time.Second {

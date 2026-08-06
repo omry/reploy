@@ -44,7 +44,13 @@ type EnvironmentSyntax struct {
 }
 
 type EnvironmentRuntimeSyntax struct {
-	User string `yaml:"user"`
+	User    string               `yaml:"user"`
+	Network RuntimeNetworkSyntax `yaml:"network"`
+}
+
+type RuntimeNetworkSyntax struct {
+	Public string `yaml:"public"`
+	Local  string `yaml:"local"`
 }
 
 type TerminalSyntax struct {
