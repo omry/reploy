@@ -8,6 +8,7 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/runtimeidentity"
 )
 
 const applicationSeccompProfileBuiltinV1 = "builtin"
@@ -104,15 +105,6 @@ func ValidateApplicationSandboxPlanV1(plan ApplicationSandboxPlanV1) error {
 	if plan.RuntimeUser.DockerUser != wantUser {
 		return fmt.Errorf("application sandbox Docker user must match its numeric UID and GID")
 	}
-	if plan.RuntimeUser.LocalUser == "" {
-		return fmt.Errorf("application sandbox requires a container-local user name")
-	}
-	if plan.RuntimeUser.UID == 0 && plan.RuntimeUser.LocalUser != "root" {
-		return fmt.Errorf("root application sandbox identity must use the local user name root")
-	}
-	if plan.RuntimeUser.UID != 0 && plan.RuntimeUser.LocalUser == "root" {
-		return fmt.Errorf("non-root application sandbox identity must not use the local user name root")
-	}
 	wantGroups, err := normalizeSupplementaryGIDsV1(plan.RuntimeUser.GID, plan.RuntimeUser.SupplementaryGIDs)
 	if err != nil {
 		return fmt.Errorf("application sandbox supplementary groups: %w", err)
@@ -120,10 +112,17 @@ func ValidateApplicationSandboxPlanV1(plan ApplicationSandboxPlanV1) error {
 	if !slices.Equal(plan.RuntimeUser.SupplementaryGIDs, wantGroups) {
 		return fmt.Errorf("application sandbox supplementary groups must be unique, sorted, and exclude the primary GID")
 	}
-	if plan.RuntimeUser.UID != 0 {
-		if plan.RuntimeUser.GID == 0 || slices.Contains(plan.RuntimeUser.SupplementaryGIDs, 0) {
-			return fmt.Errorf("non-root application sandbox identity must not include the root group")
-		}
+	identity := runtimeidentity.IdentityV1{
+		Username:          plan.RuntimeUser.LocalUser,
+		UID:               strconv.Itoa(plan.RuntimeUser.UID),
+		GID:               strconv.Itoa(plan.RuntimeUser.GID),
+		SupplementaryGIDs: make([]string, len(plan.RuntimeUser.SupplementaryGIDs)),
+	}
+	for index, gid := range plan.RuntimeUser.SupplementaryGIDs {
+		identity.SupplementaryGIDs[index] = strconv.Itoa(gid)
+	}
+	if err := runtimeidentity.ValidateIdentityV1(identity); err != nil {
+		return fmt.Errorf("application sandbox runtime identity: %w", err)
 	}
 	if !plan.ReadOnlyRoot {
 		return fmt.Errorf("application sandbox requires a read-only container root")
