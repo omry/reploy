@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-02
+updated: 2026-08-08
 summary: Capability-scoped execution sessions that inherit Reploy's global container sandbox.
 ---
 
@@ -9,10 +9,10 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
 ## Status
 
 - Decision state: Focused review complete; high-level decisions approved
-- Implementation state: Initial global sandbox prerequisites and trusted
-  application-startup verification implemented in the current slice;
-  controlled-session authorization, protocol, lifecycle, and Docker
-  orchestration remain later slices
+- Implementation state: Initial global sandbox prerequisites, trusted
+  application-startup verification, and controlled-session authorization are
+  implemented; protocol, lifecycle, and Docker orchestration remain later
+  slices
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution
@@ -383,7 +383,15 @@ record containing:
 - the network and endpoint grants;
 - the mount and source grants;
 - the permitted session and endpoint operations;
-- the lease lifetime and owner connection.
+- the admitted lease identity and its owner-connection policy.
+
+The authorization record is portable immutable data; it does not serialize a
+live connection or make ownership transferable. Host Reploy binds the record
+to its admitted live-run lease, permits exactly one controller connection to
+claim that lease, and treats that connection as the owner until it closes or
+Host Reploy cancels the session. Connection loss ends the lease. The initial
+protocol has no reconnect, ownership transfer, or operation that can extend the
+lease by presenting an authorization digest again.
 
 The controller does not receive a generic session-creation capability. After
 creation, protocol operations do not accept a deployment name, mount, identity,
@@ -391,6 +399,13 @@ environment key, output destination, network, or raw endpoint destination.
 They act only on the session and logical endpoint identities established by the
 host-created plan. A generation change invalidates admission of a pending
 session; it does not retarget a live session.
+
+Logical endpoint identities are the exact names declared by the resolved
+blueprint. Blueprint resolution and authorization validation share one
+Docker-style single path-component grammar: lowercase alphanumeric segments
+separated by `.`, `_`, `__`, or one or more `-`, with a 128-byte maximum. Full
+image-reference syntax is not accepted. This keeps the immutable capability
+record aligned with every blueprint that can reach runtime planning.
 
 A unique private endpoint and opaque handle prevent accidental cross-session
 use, but secrecy is not the sole security boundary. Isolation relies on:
