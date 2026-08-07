@@ -305,6 +305,17 @@ func TestCurrentBuildMatchesRuntimeV1TreatsChangedStateAsStale(t *testing.T) {
 	}
 }
 
+func TestCurrentBuildMatchesRuntimeV1TreatsChangedLockedNetworkPolicyAsStale(t *testing.T) {
+	current, buildInput := runtimeCurrentBuildFixture(t)
+	current.Lock.RuntimePolicy.Network.Public = blueprint.NetworkAccessAllow
+	refreshCurrentBuildReuseGeneration(t, &current)
+
+	matched, err := CurrentBuildMatchesRuntimeV1(current, buildInput.DockerPlan)
+	if err != nil || matched {
+		t.Fatalf("changed locked network policy = %v, %v", matched, err)
+	}
+}
+
 func TestCurrentBuildMatchesRuntimeV1RejectsMalformedRuntimePlan(t *testing.T) {
 	current, _ := runtimeCurrentBuildFixture(t)
 	matched, err := CurrentBuildMatchesRuntimeV1(current, DockerExecutionPlan{Workload: &WorkloadExecutionPlan{}})
