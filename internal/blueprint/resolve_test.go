@@ -26,6 +26,9 @@ func TestResolveProducesTypedEnvironment(t *testing.T) {
 	if document.Environment.Runtime.User != DefaultRuntimeUser {
 		t.Fatalf("runtime user = %q", document.Environment.Runtime.User)
 	}
+	if document.Environment.Runtime.Network != (RuntimeNetwork{Public: NetworkAccessDeny, Local: NetworkAccessDeny, Ambiguous: AmbiguousNetworkAccessRequireBoth}) {
+		t.Fatalf("runtime network = %#v", document.Environment.Runtime.Network)
+	}
 	if got := document.Blueprint.Compatibility.Platforms; !reflect.DeepEqual(got, []Platform{
 		{OS: "linux", Architecture: "amd64", Canonical: "linux/amd64"},
 		{OS: "linux", Architecture: "arm64", Canonical: "linux/arm64"},
@@ -48,6 +51,37 @@ func TestResolveProducesTypedEnvironment(t *testing.T) {
 	}
 	if application.Python.Interpreter != (CommandRequirement{Command: "python"}) {
 		t.Fatalf("default Python interpreter = %#v", application.Python.Interpreter)
+	}
+}
+
+func TestResolveRuntimeNetwork(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source RuntimeNetworkSyntax
+		want   RuntimeNetwork
+		field  string
+	}{
+		{name: "default", want: RuntimeNetwork{Public: NetworkAccessDeny, Local: NetworkAccessDeny, Ambiguous: AmbiguousNetworkAccessRequireBoth}},
+		{name: "public only", source: RuntimeNetworkSyntax{Public: "allow"}, want: RuntimeNetwork{Public: NetworkAccessAllow, Local: NetworkAccessDeny, Ambiguous: AmbiguousNetworkAccessRequireBoth}},
+		{name: "local only", source: RuntimeNetworkSyntax{Local: "allow"}, want: RuntimeNetwork{Public: NetworkAccessDeny, Local: NetworkAccessAllow, Ambiguous: AmbiguousNetworkAccessRequireBoth}},
+		{name: "both", source: RuntimeNetworkSyntax{Public: "allow", Local: "allow"}, want: RuntimeNetwork{Public: NetworkAccessAllow, Local: NetworkAccessAllow, Ambiguous: AmbiguousNetworkAccessRequireBoth}},
+		{name: "ambiguous escape hatch", source: RuntimeNetworkSyntax{Ambiguous: "allow"}, want: RuntimeNetwork{Public: NetworkAccessDeny, Local: NetworkAccessDeny, Ambiguous: AmbiguousNetworkAccessAllow}},
+		{name: "invalid public", source: RuntimeNetworkSyntax{Public: "yes"}, field: "environment.runtime.network.public"},
+		{name: "invalid local", source: RuntimeNetworkSyntax{Local: "none"}, field: "environment.runtime.network.local"},
+		{name: "invalid ambiguous", source: RuntimeNetworkSyntax{Ambiguous: "deny"}, field: "environment.runtime.network.ambiguous"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := resolveRuntimeNetwork(test.source)
+			if test.field == "" {
+				if err != nil || got != test.want {
+					t.Fatalf("runtime network = %#v, %v; want %#v", got, err, test.want)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.field) {
+				t.Fatalf("runtime network error = %v", err)
+			}
+		})
 	}
 }
 
