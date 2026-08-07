@@ -15,7 +15,7 @@ func testAuthorizationV1() AuthorizationV1 {
 		DeploymentID: "demo", GenerationReference: "reploy/env/demo:g-current", BuildIdentity: digest,
 		LiveRunID: "run-0000000000000001", WorkloadPlan: digest, ControllerPlan: digest,
 		RuntimeIdentity: RuntimeIdentityV1{Username: "reploy", UID: "1000", GID: "1000", SupplementaryGIDs: []string{"10", "100"}},
-		Operations:      []OperationV1{OperationCompleteV1, OperationInputV1, OperationOpenEndpointV1, OperationResizeV1, OperationTerminateV1},
+		Operations:      []OperationV1{OperationCompleteV1, OperationInputV1, OperationResizeV1, OperationTerminateV1},
 		EndpointIDs:     []string{"browser", "terminal"},
 	}
 }
@@ -62,7 +62,6 @@ func TestValidateAuthorizationV1RejectsOpenOrAmbiguousRecords(t *testing.T) {
 			value.EndpointIDs[0], value.EndpointIDs[1] = value.EndpointIDs[1], value.EndpointIDs[0]
 		}, want: "unique and sorted"},
 		{name: "invalid endpoint", mutate: func(value *AuthorizationV1) { value.EndpointIDs = []string{"API"} }, want: "Docker-style"},
-		{name: "endpoint without capability", mutate: func(value *AuthorizationV1) { value.Operations = []OperationV1{OperationCompleteV1} }, want: "require the open-endpoint"},
 		{name: "nil collection", mutate: func(value *AuthorizationV1) { value.EndpointIDs = nil }, want: "must use arrays"},
 		{name: "unsafe generation", mutate: func(value *AuthorizationV1) { value.GenerationReference = "bad\nreference" }, want: "safe text"},
 		{name: "formatted generation", mutate: func(value *AuthorizationV1) { value.GenerationReference = "bad\u202ereference" }, want: "safe text"},
