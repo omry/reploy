@@ -41,7 +41,28 @@ type Environment struct {
 }
 
 type EnvironmentRuntime struct {
-	User string
+	User    string
+	Network RuntimeNetwork
+}
+
+type NetworkAccess string
+
+const (
+	NetworkAccessDeny  NetworkAccess = "deny"
+	NetworkAccessAllow NetworkAccess = "allow"
+)
+
+type AmbiguousNetworkAccess string
+
+const (
+	AmbiguousNetworkAccessRequireBoth AmbiguousNetworkAccess = "require-both"
+	AmbiguousNetworkAccessAllow       AmbiguousNetworkAccess = "allow"
+)
+
+type RuntimeNetwork struct {
+	Public    NetworkAccess
+	Local     NetworkAccess
+	Ambiguous AmbiguousNetworkAccess
 }
 
 type EnvironmentPackages struct {
