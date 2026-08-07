@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/omry/reploy/internal/endpointname"
 )
 
 const environmentMountReferencePrefix = "environment.mounts."
@@ -53,7 +55,7 @@ func resolveExtends(source Syntax) (extendedSyntax, error) {
 	endpointNames := sortedKeys(source.Docker.Workload.Endpoints)
 	for _, name := range endpointNames {
 		endpoint := source.Docker.Workload.Endpoints[name]
-		reference, err := referencedName("docker.workload.endpoints."+name+".extends", endpoint.Extends, environmentEndpointReferencePrefix)
+		reference, err := referencedEndpointName("docker.workload.endpoints."+name+".extends", endpoint.Extends)
 		if err != nil {
 			return extendedSyntax{}, err
 		}
@@ -67,6 +69,28 @@ func resolveExtends(source Syntax) (extendedSyntax, error) {
 }
 
 func referencedName(field string, reference string, prefix string) (string, error) {
+	name, err := referencedSuffix(field, reference, prefix)
+	if err != nil {
+		return "", err
+	}
+	if strings.Contains(name, ".") {
+		return "", fmt.Errorf("%s must reference one named object", field)
+	}
+	return name, nil
+}
+
+func referencedEndpointName(field string, reference string) (string, error) {
+	name, err := referencedSuffix(field, reference, environmentEndpointReferencePrefix)
+	if err != nil {
+		return "", err
+	}
+	if err := endpointname.Validate(name); err != nil {
+		return "", fmt.Errorf("%s endpoint name %q: %w", field, name, err)
+	}
+	return name, nil
+}
+
+func referencedSuffix(field string, reference string, prefix string) (string, error) {
 	reference = strings.TrimSpace(reference)
 	if reference == "" {
 		return "", fmt.Errorf("%s is required", field)
@@ -75,7 +99,7 @@ func referencedName(field string, reference string, prefix string) (string, erro
 		return "", fmt.Errorf("%s must reference %s<name>", field, prefix)
 	}
 	name := strings.TrimPrefix(reference, prefix)
-	if name == "" || strings.Contains(name, ".") {
+	if name == "" {
 		return "", fmt.Errorf("%s must reference one named object", field)
 	}
 	return name, nil
