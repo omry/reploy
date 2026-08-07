@@ -216,13 +216,16 @@ func transientContainerCommandSpecV1(operation string, container string, plan Do
 	home := temporaryHomeForPlan(plan)
 	args := []string{
 		operation, "--pull", "never", "--rm", "--name", container,
-		"--user", plan.Sandbox.RuntimeUser.DockerUser,
+		"--user", "0:0",
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges=true",
 		"--security-opt", "seccomp=" + plan.Sandbox.Kernel.SeccompProfile,
 	}
-	for _, group := range dockerSupplementaryGroupsV1(plan.Sandbox.RuntimeUser.SupplementaryGIDs) {
-		args = append(args, "--group-add", group)
+	for _, capability := range applicationSetupCapabilitiesV1(plan.Sandbox) {
+		args = append(args, "--cap-add", capability)
+	}
+	for _, resolver := range applicationDockerDNSResolversV1(plan.Sandbox.Network) {
+		args = append(args, "--dns", resolver)
 	}
 	if plan.Sandbox.ReadOnlyRoot {
 		args = append(args, "--read-only")
@@ -286,7 +289,7 @@ func transientContainerCommandSpecV1(operation string, container string, plan Do
 		"--entrypoint", plan.Sandbox.StartupVerifier.Path,
 		plan.Image,
 	)
-	args = append(args, verifiedApplicationArgvV1(command.Argv)...)
+	args = append(args, sandboxApplicationArgvV1(plan, command.Argv, true, []int{})...)
 	return CommandSpec{Name: "docker", Args: args}, nil
 }
 
