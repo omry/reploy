@@ -40,6 +40,10 @@ func Resolve(source Syntax) (Document, error) {
 	if err != nil {
 		return Document{}, err
 	}
+	runtimeNetwork, err := resolveRuntimeNetwork(source.Environment.Runtime.Network)
+	if err != nil {
+		return Document{}, err
+	}
 	extended, err := resolveExtends(source)
 	if err != nil {
 		return Document{}, err
@@ -59,7 +63,7 @@ func Resolve(source Syntax) (Document, error) {
 			Applications:    map[string]Application{},
 			Components:      map[string]Component{},
 			AllowConcurrent: allowConcurrent,
-			Runtime:         EnvironmentRuntime{User: runtimeUser},
+			Runtime:         EnvironmentRuntime{User: runtimeUser, Network: runtimeNetwork},
 			Terminal:        Terminal{ColorEnv: strings.TrimSpace(source.Environment.Terminal.ColorEnv)},
 			Install:         resolveInstallSyntax(source.Environment.Install, variables),
 			Mounts:          map[string]EnvironmentMount{},
@@ -85,6 +89,48 @@ func Resolve(source Syntax) (Document, error) {
 		return Document{}, err
 	}
 	return document, nil
+}
+
+func resolveRuntimeNetwork(source RuntimeNetworkSyntax) (RuntimeNetwork, error) {
+	public, err := resolveNetworkAccess("environment.runtime.network.public", source.Public)
+	if err != nil {
+		return RuntimeNetwork{}, err
+	}
+	local, err := resolveNetworkAccess("environment.runtime.network.local", source.Local)
+	if err != nil {
+		return RuntimeNetwork{}, err
+	}
+	ambiguous, err := resolveAmbiguousNetworkAccess(source.Ambiguous)
+	if err != nil {
+		return RuntimeNetwork{}, err
+	}
+	return RuntimeNetwork{Public: public, Local: local, Ambiguous: ambiguous}, nil
+}
+
+func resolveNetworkAccess(field string, value string) (NetworkAccess, error) {
+	access := NetworkAccess(strings.TrimSpace(value))
+	if access == "" {
+		return NetworkAccessDeny, nil
+	}
+	switch access {
+	case NetworkAccessDeny, NetworkAccessAllow:
+		return access, nil
+	default:
+		return "", fmt.Errorf("%s must be allow or deny", field)
+	}
+}
+
+func resolveAmbiguousNetworkAccess(value string) (AmbiguousNetworkAccess, error) {
+	access := AmbiguousNetworkAccess(strings.TrimSpace(value))
+	if access == "" {
+		return AmbiguousNetworkAccessRequireBoth, nil
+	}
+	switch access {
+	case AmbiguousNetworkAccessRequireBoth, AmbiguousNetworkAccessAllow:
+		return access, nil
+	default:
+		return "", fmt.Errorf("environment.runtime.network.ambiguous must be require-both or allow")
+	}
 }
 
 func resolveRuntimeUser(value string) (string, error) {

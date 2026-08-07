@@ -101,6 +101,14 @@ jobs:
           go test -timeout 10m ./internal/dockerdeploy
           -run '^(TestPrivateWorkloadEnvironmentDockerIntegrationMasksFilesAndInjectsValues|TestPrivateRuntimeMasksDockerIntegrationProtectTransientContainer|TestPrivateWorkloadEnvironmentRealDockerIsolation)$'
 
+      - name: Run application network-policy integration tests
+        if: matrix.name == 'Linux amd64'
+        env:
+          REPLOY_DOCKER_INTEGRATION: "1"
+        run: >-
+          go test -timeout 10m ./internal/dockerdeploy
+          -run '^TestApplicationNetworkPolicyDockerIntegration$'
+
       - name: Run CLI runtime integration
         if: ${{ matrix.persistent_install == false }}
         env:

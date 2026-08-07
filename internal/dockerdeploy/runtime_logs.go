@@ -83,10 +83,16 @@ func extractRuntimeStartupLogDiagnostics(logs string) runtimeStartupLogDiagnosti
 			}
 			continue
 		}
+		cleaned := cleanRuntimeLogSnippetLine(line)
+		if strings.HasPrefix(cleaned, "reploy-probe: sandbox-exec:") {
+			diagnostics.Failure = "application sandbox setup failed"
+			lines = append(lines, cleaned)
+			continue
+		}
 		if !capturing {
 			continue
 		}
-		if cleaned := cleanRuntimeLogSnippetLine(line); cleaned != "" {
+		if cleaned != "" {
 			lines = append(lines, cleaned)
 		}
 	}

@@ -27,6 +27,7 @@ func fullValidationInput(t *testing.T, digestChar string) FullImageValidationInp
 		Image: request.Source, Profiles: []providers.RequirementProfile{}, Outputs: []providers.RealizedOutput{},
 		RuntimePolicy: deploy.RuntimePolicyV1{
 			Schema: deploy.RuntimePolicySchemaV1, StartupVerifier: deploy.ApplicationStartupVerifierContractV1(),
+			Network:        blueprint.RuntimeNetwork{Public: blueprint.NetworkAccessDeny, Local: blueprint.NetworkAccessDeny, Ambiguous: blueprint.AmbiguousNetworkAccessRequireBoth},
 			ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{},
 		},
 	}
