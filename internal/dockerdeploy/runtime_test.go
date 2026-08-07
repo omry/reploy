@@ -229,6 +229,23 @@ func TestExtractRuntimeStartupLogSnippetUsesOnlyMarkerWindows(t *testing.T) {
 	}
 }
 
+func TestExtractRuntimeStartupLogDiagnosticsIncludesSandboxSetupFailureBeforeMarkers(t *testing.T) {
+	logs := strings.Join([]string{
+		"environment | unrelated prior output",
+		"environment | reploy-probe: sandbox-exec: install application network policy: apply nftables transaction: operation not supported",
+	}, "\n")
+	diagnostics := extractRuntimeStartupLogDiagnostics(logs)
+	if diagnostics.Failure != "application sandbox setup failed" {
+		t.Fatalf("failure = %q", diagnostics.Failure)
+	}
+	if !strings.Contains(diagnostics.Snippet, "apply nftables transaction: operation not supported") {
+		t.Fatalf("snippet = %q", diagnostics.Snippet)
+	}
+	if strings.Contains(diagnostics.Snippet, "unrelated prior output") {
+		t.Fatalf("snippet contains unrelated output: %q", diagnostics.Snippet)
+	}
+}
+
 func runtimeStateEnvelope(t *testing.T, schema string) string {
 	t.Helper()
 	dir := t.TempDir()
