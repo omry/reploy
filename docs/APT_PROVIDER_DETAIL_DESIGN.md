@@ -2240,10 +2240,13 @@ allowed only when all shared environment mounts in the effective plans are
 read-only. Private per-run home storage and reserved `--output-file` staging do
 not make a plan writable, while `--output-dir` does.
 
-Queue entries exist only while waiting or active. They have opaque validated run
-IDs and retain enough data for fair arrival ordering, status display,
-cancellation, owning operation, selected generation, and active Docker
-container identity. There is no completed-run history or durable counter.
+Queue entries exist only while outstanding. Publicly they are waiting or active;
+internally, newly available capacity reserves one waiting entry as `ready` until
+its owner either cancels it or atomically claims it as active. A `ready` entry is
+still reported as waiting. Entries have opaque validated run IDs and retain
+enough data for fair arrival ordering, status display, cancellation, owning
+operation, selected generation, and active Docker container identity. There is
+no completed-run history or durable counter.
 `reploy runs list` shows the outstanding entries, and `reploy runs stop RUN_ID`
 cancels a waiter or stops an active container. A syntactically valid absent ID
 is a successful no-op reported as possibly already finished.
