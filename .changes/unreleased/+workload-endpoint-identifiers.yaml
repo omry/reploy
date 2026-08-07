@@ -1,0 +1,2 @@
+kind: Changed
+body: Require workload endpoint names to use one shared Docker-style component grammar across blueprint resolution and controlled-session authorization.

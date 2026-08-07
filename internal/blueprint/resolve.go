@@ -6,6 +6,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/omry/reploy/internal/endpointname"
+	"github.com/omry/reploy/internal/runtimeidentity"
 )
 
 var builtInControlOperations = map[string]bool{
@@ -148,17 +151,7 @@ func resolveRuntimeUser(value string) (string, error) {
 }
 
 func ValidateRuntimeUserName(value string) error {
-	if value == "" || len(value) > 32 {
-		return fmt.Errorf("must be a nonempty portable Unix user name no longer than 32 bytes")
-	}
-	for index, character := range value {
-		if character >= 'a' && character <= 'z' || character == '_' && index == 0 ||
-			index > 0 && (character >= '0' && character <= '9' || character == '_' || character == '-') {
-			continue
-		}
-		return fmt.Errorf("must be a portable lowercase Unix user name")
-	}
-	return nil
+	return runtimeidentity.ValidateUserName(value)
 }
 
 func resolveConcurrentRunPolicy(value string) (ConcurrentRunPolicy, error) {
@@ -615,6 +608,9 @@ func resolveWorkloads(source Syntax, extended extendedSyntax, document *Document
 	_ = command
 	workload := Workload{Command: source.Environment.Workload.Command, Endpoints: map[string]Endpoint{}}
 	for _, name := range sortedKeys(source.Environment.Workload.Endpoints) {
+		if err := endpointname.Validate(name); err != nil {
+			return fmt.Errorf("environment.workload.endpoints key %q: %w", name, err)
+		}
 		endpoint, err := resolveEndpoint("environment.workload.endpoints."+name, source.Environment.Workload.Endpoints[name])
 		if err != nil {
 			return err
@@ -631,7 +627,7 @@ func resolveWorkloads(source Syntax, extended extendedSyntax, document *Document
 	endpointReferences := map[string]int{}
 	for _, name := range sortedKeys(extended.Endpoints) {
 		item := extended.Endpoints[name]
-		endpointName, _ := referencedName("extends", item.Docker.Extends, environmentEndpointReferencePrefix)
+		endpointName, _ := referencedEndpointName("extends", item.Docker.Extends)
 		endpointReferences[endpointName]++
 		resolvedEndpoint := workload.Endpoints[endpointName]
 		stagingPort, err := resolveSyntaxInt(item.Docker.Publish.Staging, "docker.workload.endpoints."+name+".publish.staging")
