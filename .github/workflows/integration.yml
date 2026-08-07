@@ -80,11 +80,12 @@ jobs:
           docker compose version
           docker run --rm -v "$PWD:/workspace:ro" alpine:3.22 test -f /workspace/go.mod
 
-      - name: Preload provider Docker integration fixtures
+      - name: Preload shared Docker integration fixture
+        run: docker pull debian:bookworm-slim
+
+      - name: Preload provider Docker integration fixture
         if: matrix.name == 'Linux amd64'
-        run: |
-          docker pull debian:bookworm-slim
-          docker pull python:3.13-slim
+        run: docker pull python:3.13-slim
 
       - name: Run provider Docker integration tests
         if: matrix.name == 'Linux amd64'
@@ -101,13 +102,12 @@ jobs:
           go test -timeout 10m ./internal/dockerdeploy
           -run '^(TestPrivateWorkloadEnvironmentDockerIntegrationMasksFilesAndInjectsValues|TestPrivateRuntimeMasksDockerIntegrationProtectTransientContainer|TestPrivateWorkloadEnvironmentRealDockerIsolation)$'
 
-      - name: Run application network-policy integration tests
-        if: matrix.name == 'Linux amd64'
+      - name: Run application sandbox integration tests
         env:
           REPLOY_DOCKER_INTEGRATION: "1"
         run: >-
-          go test -timeout 10m ./internal/dockerdeploy
-          -run '^TestApplicationNetworkPolicyDockerIntegration$'
+          go test -timeout 15m ./internal/dockerdeploy
+          -run '^(TestTransientCommandDockerIntegrationEnforcesIdentityAndKernelBaseline|TestApplicationStartupVerifierDockerIntegration|TestApplicationNetworkPolicyDockerIntegration)$'
 
       - name: Run CLI runtime integration
         if: ${{ matrix.persistent_install == false }}
