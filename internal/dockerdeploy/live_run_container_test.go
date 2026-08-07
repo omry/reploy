@@ -88,7 +88,7 @@ func TestRunAdmittedTransientContainerV1ReleasesLockForExecutionAndCompletesQueu
 	}
 	defer inspection.Unlock()
 	queue, found, err := inspection.ReadLiveRunQueueV1()
-	if err != nil || !found || len(queue.Runs) != 1 || queue.Runs[0].ID != waiter.ID || queue.Runs[0].Status != deploy.LiveRunStatusActiveV1 {
+	if err != nil || !found || len(queue.Runs) != 1 || queue.Runs[0].ID != waiter.ID || queue.Runs[0].Status != deploy.LiveRunStatusReadyV1 {
 		t.Fatalf("promoted queue = %#v, found=%t, error=%v", queue, found, err)
 	}
 	if _, removed, err := inspection.RemoveLiveRunV1(waiter.ID); err != nil || !removed {
