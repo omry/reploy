@@ -29,17 +29,6 @@ This file is the day-to-day queue for design and implementation gaps.
   stopping, and whether the next step needs user review, approval, input, or no
   user action.
 
-## Now
-
-- [ ] `P1` Implement the initial coarse application-network policy. Preserve
-      independent public and local policy intent with both denied by default,
-      apply it consistently to workloads, commands, shells, and lifecycle
-      commands, and use only proven isolation and endpoint primitives from the
-      active runtime backend. Permit exact declared inbound endpoints without
-      granting general local access. Fail closed when a backend cannot realize
-      a requested combination, and do not represent this slice as destination-,
-      domain-, or packet-level filtering.
-
 ## Pre-release
 
 - [ ] `P1` Accept APT install transaction records with the optional trailing
@@ -203,7 +192,13 @@ This file is the day-to-day queue for design and implementation gaps.
       cases justify its scope, precedence, user/system ownership, validation,
       and portability. Initial potential use case: overriding the otherwise
       fixed host-owned limits for controlled-session endpoint streams and
-      connection-open rates.
+      connection-open rates. Also record host-owned DNS resolver configuration
+      used to provide DNS under the coarse application network grants. The
+      default local-capable path should use the host's configured resolver so
+      VPN and split-DNS behavior remains available; the public-only path should
+      use the built-in Google Public DNS profile (`8.8.8.8`, `8.8.4.4`). Allow
+      host configuration to override either choice. Resolver selection is
+      machine policy, not blueprint policy.
 
 - [ ] `P2` Design and implement a Reploy userland L3 policy gateway. Keep this
       separate from the initial public/local kill switches and controlled
@@ -217,7 +212,9 @@ This file is the day-to-day queue for design and implementation gaps.
       initial controlled-session host-loopback endpoint publication so only the
       lease-owned Host Reploy operation can reach the recorded application;
       include multi-user-host tests proving unrelated local processes cannot
-      bypass the session endpoint grant.
+      bypass the session endpoint grant. Replace the temporary, discouraged
+      `environment.runtime.network.ambiguous: allow` escape hatch with precise
+      translated-destination policy and deprecate that coarse override.
 
 - [ ] `P2` Evaluate and prioritize the Dingo development-environment gaps.
       Use `docs/DINGO_GAPS.md` as the needs and evidence record for portable

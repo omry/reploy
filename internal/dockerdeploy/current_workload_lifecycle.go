@@ -44,7 +44,7 @@ type currentWorkloadLifecycleBackendV1 struct {
 	cleanup      func(string) CommandSpec
 	runTemporary func(temporaryCommandRunner, CommandSpec, CommandSpec, RunOptions) error
 	runCommand   func(CommandSpec, RunOptions) error
-	inject       func(context.Context, string, string, privateWorkloadEnvironmentV1, RunOptions, commandRunner) error
+	inject       func(context.Context, string, string, ApplicationSandboxPlanV1, privateWorkloadEnvironmentV1, RunOptions, commandRunner) error
 	readiness    func(context.Context, EndpointExecutionPlan, func(context.Context) error) error
 	serviceCheck func(string, string, time.Duration) error
 }
@@ -222,6 +222,7 @@ func runCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLif
 					startCtx,
 					spec.Name,
 					input.Plan.Docker.ContainerName,
+					input.Plan.Docker.Sandbox,
 					input.PrivateEnvironment,
 					runOptions,
 					backend.runCommand,
