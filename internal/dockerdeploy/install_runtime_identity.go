@@ -63,6 +63,20 @@ func buildInstalledRuntimeIdentityWithV1(
 	if err != nil {
 		return installedRuntimeIdentityBuildV1{}, fmt.Errorf("inspect installed runtime identity upstream: %w", err)
 	}
+	baseImage, err := realizedImageFromDescriptor(source.Lock.Base)
+	if err != nil {
+		return installedRuntimeIdentityBuildV1{}, fmt.Errorf("resolve installed runtime identity base: %w", err)
+	}
+	if source.Lock.RuntimeLayer.Upstream == baseImage {
+		if upstream.Image.ConfigDigest != baseImage.ConfigDigest || upstream.Image.RootFSSubject != baseImage.RootFSSubject {
+			return installedRuntimeIdentityBuildV1{}, fmt.Errorf("installed runtime identity upstream no longer matches the staged build")
+		}
+		// Inspection by config ID proves that the selected base still exists,
+		// but Docker reports it using a local config-ID descriptor. Restore the
+		// locked registry identity before the account-specific runtime rebuild.
+		upstream.Descriptor = source.Lock.Base
+		upstream.Image = baseImage
+	}
 	if upstream.Image != source.Lock.RuntimeLayer.Upstream {
 		return installedRuntimeIdentityBuildV1{}, fmt.Errorf("installed runtime identity upstream no longer matches the staged build")
 	}
