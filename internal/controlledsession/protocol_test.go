@@ -50,6 +50,14 @@ func TestEventV1RoundTripsStrictTypedFrames(t *testing.T) {
 		{Kind: EventTerminatedV1, Terminated: &ResultV1{
 			Cause: CauseWorkloadExitV1, WorkloadStatus: ProcessStatusV1{Kind: ProcessStatusExitedV1, Code: &code},
 			WorkloadOutputFinalizationStatus: WorkloadOutputFinalizationStatusV1{Kind: WorkloadOutputFinalizationDrainedV1},
+			RuntimeObservationStatus:         RuntimeObservationStatusV1{Kind: RuntimeObservationMaintainedV1},
+			ControllerFinalizationStatus:     ControllerFinalizationStatusV1{Kind: ControllerFinalizationCompletedV1},
+			CleanupStatus:                    CleanupStatusV1{Kind: CleanupStatusSucceededV1}, RecoveryAction: RecoveryNoneV1,
+		}},
+		{Kind: EventTerminatedV1, Terminated: &ResultV1{
+			Cause: CauseWorkloadExitV1, WorkloadStatus: ProcessStatusV1{Kind: ProcessStatusExitedV1, Code: &code},
+			WorkloadOutputFinalizationStatus: WorkloadOutputFinalizationStatusV1{Kind: WorkloadOutputFinalizationDrainedV1},
+			RuntimeObservationStatus:         RuntimeObservationStatusV1{Kind: RuntimeObservationLostV1, Reason: "docker unavailable"},
 			ControllerFinalizationStatus:     ControllerFinalizationStatusV1{Kind: ControllerFinalizationCompletedV1},
 			CleanupStatus:                    CleanupStatusV1{Kind: CleanupStatusSucceededV1}, RecoveryAction: RecoveryNoneV1,
 		}},
@@ -157,7 +165,7 @@ func TestFrameV1RejectsBadMagicVersionTruncationAndUnknownJSON(t *testing.T) {
 		t.Fatalf("ReadEventV1(case-variant duplicate JSON) error = %v", err)
 	}
 
-	nestedCaseVariant := []byte(`{"cause":"workload-exit","workload_status":{"Kind":"exited","code":0},"workload_output_finalization_status":{"kind":"drained"},"controller_finalization_status":{"kind":"completed"},"cleanup_status":{"kind":"succeeded"},"recovery_action":"none"}`)
+	nestedCaseVariant := []byte(`{"cause":"workload-exit","workload_status":{"Kind":"exited","code":0},"workload_output_finalization_status":{"kind":"drained"},"runtime_observation_status":{"kind":"maintained"},"controller_finalization_status":{"kind":"completed"},"cleanup_status":{"kind":"succeeded"},"recovery_action":"none"}`)
 	framed.Reset()
 	if err := writeFrameV1(&framed, wireEventTerminatedV1, nestedCaseVariant); err != nil {
 		t.Fatal(err)
