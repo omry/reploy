@@ -1008,9 +1008,12 @@ reported separately in the session result, so a cleanup failure can fail the
 operation without hiding its original cause. Controller exit and delivery-tail
 cleanup are reported separately by the invoking host operation after teardown.
 
-Channel closure is never successful completion. The controller must explicitly
-send `complete` after receiving `workload_outputs_finalized` and finalizing its
-client-owned results; for OmegaFlow these include the recording artifacts.
+Channel closure is never successful completion. A controller granted the
+`complete` operation must explicitly send `complete` after receiving
+`workload_outputs_finalized` and finalizing its client-owned results; for
+OmegaFlow these include the recording artifacts. Host Reploy does not open a
+controller-finalization wait when `complete` was not granted and records that
+controller as `not-completed` in the terminal result.
 Repeated terminate or host cancel operations are idempotent. Input and resize
 are rejected after `terminating` begins. A single `complete` remains valid
 during termination while Host Reploy is waiting for controller finalization. A
@@ -1028,9 +1031,11 @@ Normal completion is:
 5. Host Reploy drains and closes every declared workload-output surface under
    the finite output-finalization deadline, then emits the one ordered
    `workload_outputs_finalized` outcome.
-6. Host Reploy gives the live controller a bounded finalization period in which
-   to close its client-owned output and send `complete`. A failed output outcome
-   remains a session failure even when partial client artifacts are finalized.
+6. When the live controller was granted `complete`, Host Reploy gives it a
+   bounded finalization period in which to close its client-owned output and
+   send `complete`. Without that grant, Host Reploy skips the wait and records
+   `not-completed`. A failed output outcome remains a session failure even when
+   partial client artifacts are finalized.
 7. Host Reploy removes the workload container, temporary mounts, networks, and
    every other lease resource not required to deliver the final result. It
    keeps the controller and private session channel alive.
