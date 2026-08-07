@@ -117,7 +117,7 @@ func (lock *OperationLock) RecordLiveRunContainerV1(id string, container string)
 			continue
 		}
 		if run.Status != LiveRunStatusActiveV1 {
-			return fmt.Errorf("cannot record a container for waiting live run %q", id)
+			return fmt.Errorf("cannot record a container for unclaimed live run %q", id)
 		}
 		if run.Container != "" && run.Container != container {
 			return fmt.Errorf("live run %q already names container %q", id, run.Container)
@@ -174,6 +174,27 @@ func (lock *OperationLock) RemoveControlMarkerV1(id string) (LiveRunQueueV1, boo
 		return LiveRunQueueV1{}, false, err
 	}
 	return updated, true, nil
+}
+
+func (lock *OperationLock) ActivateReadyLiveRunV1(id string) error {
+	if lock == nil {
+		return fmt.Errorf("activate ready live run requires an operation lock")
+	}
+	lock.mutex.Lock()
+	defer lock.mutex.Unlock()
+	path, err := lock.liveRunQueuePathLockedV1()
+	if err != nil {
+		return err
+	}
+	queue, _, err := readLiveRunQueuePathV1(path)
+	if err != nil {
+		return err
+	}
+	updated, err := ActivateReadyLiveRunV1(queue, id)
+	if err != nil {
+		return err
+	}
+	return commitLiveRunQueuePathV1(path, updated)
 }
 
 func (lock *OperationLock) ActivateReadyControlMarkerV1(id string) error {
