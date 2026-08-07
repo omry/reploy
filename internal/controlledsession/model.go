@@ -57,6 +57,18 @@ type WorkloadOutputFinalizationStatusV1 struct {
 	Reason string                                 `json:"reason,omitempty"`
 }
 
+type RuntimeObservationStatusKindV1 string
+
+const (
+	RuntimeObservationMaintainedV1 RuntimeObservationStatusKindV1 = "maintained"
+	RuntimeObservationLostV1       RuntimeObservationStatusKindV1 = "lost"
+)
+
+type RuntimeObservationStatusV1 struct {
+	Kind   RuntimeObservationStatusKindV1 `json:"kind"`
+	Reason string                         `json:"reason,omitempty"`
+}
+
 type CleanupStatusKindV1 string
 
 const (
@@ -81,6 +93,7 @@ type ResultV1 struct {
 	Cause                            TerminationCauseV1                 `json:"cause"`
 	WorkloadStatus                   ProcessStatusV1                    `json:"workload_status"`
 	WorkloadOutputFinalizationStatus WorkloadOutputFinalizationStatusV1 `json:"workload_output_finalization_status"`
+	RuntimeObservationStatus         RuntimeObservationStatusV1         `json:"runtime_observation_status"`
 	ControllerFinalizationStatus     ControllerFinalizationStatusV1     `json:"controller_finalization_status"`
 	CleanupStatus                    CleanupStatusV1                    `json:"cleanup_status"`
 	RecoveryAction                   RecoveryActionV1                   `json:"recovery_action"`
@@ -96,10 +109,50 @@ func ValidateResultV1(result ResultV1) error {
 	if err := validateWorkloadOutputFinalizationStatusV1(result.WorkloadOutputFinalizationStatus); err != nil {
 		return err
 	}
+	if err := validateRuntimeObservationStatusV1(result.RuntimeObservationStatus); err != nil {
+		return err
+	}
 	if err := validateTerminalControllerFinalizationStatusV1(result.ControllerFinalizationStatus); err != nil {
 		return err
 	}
-	return validateCleanupResultV1(result.CleanupStatus, result.RecoveryAction)
+	if err := validateCleanupResultV1(result.CleanupStatus, result.RecoveryAction); err != nil {
+		return err
+	}
+	return validateResultConsistencyV1(result)
+}
+
+func validateResultConsistencyV1(result ResultV1) error {
+	if result.Cause == CauseRuntimeObservationLostV1 {
+		if result.RuntimeObservationStatus.Kind != RuntimeObservationLostV1 {
+			return fmt.Errorf("runtime-observation-loss termination requires lost runtime observation status")
+		}
+		if result.WorkloadOutputFinalizationStatus.Kind != WorkloadOutputFinalizationFailedV1 {
+			return fmt.Errorf("runtime-observation-loss termination requires failed workload output finalization")
+		}
+	}
+	if result.Cause == CauseControllerLostV1 && result.ControllerFinalizationStatus.Kind != ControllerFinalizationLostV1 {
+		return fmt.Errorf("controller-loss termination requires lost controller finalization status")
+	}
+	if result.Cause == CauseStartupFailureV1 && result.ControllerFinalizationStatus.Kind != ControllerFinalizationStartupFailedV1 {
+		return fmt.Errorf("startup-failure termination requires startup-failed controller finalization status")
+	}
+	return nil
+}
+
+func validateRuntimeObservationStatusV1(status RuntimeObservationStatusV1) error {
+	switch status.Kind {
+	case RuntimeObservationMaintainedV1:
+		if status.Reason != "" {
+			return fmt.Errorf("maintained runtime observation must not contain a reason")
+		}
+	case RuntimeObservationLostV1:
+		if err := validateOptionalSafeTextV1("runtime observation loss reason", status.Reason); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("runtime observation status %q is invalid", status.Kind)
+	}
+	return nil
 }
 
 func validateWorkloadOutputFinalizationStatusV1(status WorkloadOutputFinalizationStatusV1) error {
