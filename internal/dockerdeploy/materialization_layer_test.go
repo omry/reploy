@@ -330,6 +330,23 @@ func TestValidateInspectedMaterializationCandidateChecksControlledValuesOnly(t *
 	}
 }
 
+func TestValidateInspectedImageCandidateIdentityRequiresCanonicalDescriptorImage(t *testing.T) {
+	descriptor := providerBaseDescriptor(t, true)
+	image, err := realizedImageFromDescriptor(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := InspectedImageCandidate{Descriptor: descriptor, Image: image}
+	if err := ValidateInspectedImageCandidateIdentity(candidate); err != nil {
+		t.Fatal(err)
+	}
+
+	candidate.Image.Digest = descriptor.ConfigDigest
+	if err := ValidateInspectedImageCandidateIdentity(candidate); err == nil || !strings.Contains(err.Error(), "identity") {
+		t.Fatalf("noncanonical registry image error = %v", err)
+	}
+}
+
 func commandOption(t *testing.T, args []string, option string) string {
 	t.Helper()
 	for index := range args {
