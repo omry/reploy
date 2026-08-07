@@ -26,6 +26,19 @@ func RuntimePlansV1(document blueprint.Document, dockerPlan DockerExecutionPlan)
 	if err := ValidateApplicationSandboxPlanV1(dockerPlan.Sandbox); err != nil {
 		return nil, fmt.Errorf("runtime application sandbox: %w", err)
 	}
+	resolvedNetwork := normalizeRuntimeNetworkV1(document.Environment.Runtime.Network)
+	wantNetwork := ApplicationNetworkPolicyV1{
+		Public:    resolvedNetwork.Public,
+		Local:     resolvedNetwork.Local,
+		Ambiguous: resolvedNetwork.Ambiguous,
+	}
+	if dockerPlan.Sandbox.Network != wantNetwork {
+		return nil, fmt.Errorf("runtime application network policy does not match the resolved blueprint")
+	}
+	workloadInboundTCP, err := runtimeWorkloadInboundTCPV1(document, dockerPlan)
+	if err != nil {
+		return nil, err
+	}
 	baseMounts, err := runtimeMountsV1(dockerPlan)
 	if err != nil {
 		return nil, err
@@ -34,7 +47,7 @@ func RuntimePlansV1(document blueprint.Document, dockerPlan DockerExecutionPlan)
 		Destination: temporaryHomeForPlan(dockerPlan), SourceKind: deploy.RuntimeMountSourceGenerated,
 	})
 	plans := []deploy.RuntimePlanV1{{
-		ID: runtimeShellPlanID, Mounts: cloneRuntimeMountsV1(withHome), Executables: []providers.QualifiedOutput{},
+		ID: runtimeShellPlanID, InboundTCP: []string{}, Mounts: cloneRuntimeMountsV1(withHome), Executables: []providers.QualifiedOutput{},
 	}}
 
 	commandNames, err := runtimeTransientCommandNamesV1(document)
@@ -49,11 +62,11 @@ func RuntimePlansV1(document blueprint.Document, dockerPlan DockerExecutionPlan)
 		}
 		executables := []providers.QualifiedOutput{output}
 		plans = append(plans, deploy.RuntimePlanV1{
-			ID: runtimeCommandPlanID(name, false), Mounts: cloneRuntimeMountsV1(withHome), Executables: executables,
+			ID: runtimeCommandPlanID(name, false), InboundTCP: []string{}, Mounts: cloneRuntimeMountsV1(withHome), Executables: executables,
 		})
 		if command.NativeCommand || command.DeployedCommand {
 			plans = append(plans, deploy.RuntimePlanV1{
-				ID: runtimeCommandPlanID(name, true),
+				ID: runtimeCommandPlanID(name, true), InboundTCP: []string{},
 				Mounts: appendRuntimeMountV1(withHome, deploy.RuntimeMountV1{
 					Destination: runtimeOutputRoot, SourceKind: deploy.RuntimeMountSourceDirectory,
 				}),
@@ -68,13 +81,31 @@ func RuntimePlansV1(document blueprint.Document, dockerPlan DockerExecutionPlan)
 			return nil, fmt.Errorf("runtime workload: %w", err)
 		}
 		plans = append(plans, deploy.RuntimePlanV1{
-			ID: runtimeWorkloadPlanID, Mounts: cloneRuntimeMountsV1(withHome),
+			ID: runtimeWorkloadPlanID, InboundTCP: workloadInboundTCP, Mounts: cloneRuntimeMountsV1(withHome),
 			Executables: []providers.QualifiedOutput{output},
 		})
 	}
 
 	sort.Slice(plans, func(left int, right int) bool { return plans[left].ID < plans[right].ID })
 	return plans, nil
+}
+
+func runtimeWorkloadInboundTCPV1(document blueprint.Document, dockerPlan DockerExecutionPlan) ([]string, error) {
+	if document.Environment.Workload == nil {
+		return []string{}, nil
+	}
+	if len(document.Environment.Workload.Endpoints) != len(dockerPlan.Workload.Endpoints) {
+		return nil, fmt.Errorf("runtime workload endpoints do not match the resolved Docker plan")
+	}
+	ports := make([]int, 0, len(document.Environment.Workload.Endpoints))
+	for name, endpoint := range document.Environment.Workload.Endpoints {
+		planned, found := dockerPlan.Workload.Endpoints[name]
+		if !found || planned.ContainerPort != endpoint.Port {
+			return nil, fmt.Errorf("runtime workload endpoint %q does not match the resolved Docker plan", name)
+		}
+		ports = append(ports, endpoint.Port)
+	}
+	return deploy.CanonicalRuntimeInboundTCPV1(ports), nil
 }
 
 func runtimeCommandPlanID(commandName string, output bool) string {

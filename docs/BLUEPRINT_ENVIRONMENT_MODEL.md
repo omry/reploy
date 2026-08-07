@@ -92,6 +92,10 @@ environment:
   allow_concurrent: auto      # App-command and shell overlap policy.
   runtime:
     user: reploy              # Container-local account name; defaults to reploy.
+    network:
+      public: deny            # Public Internet access; defaults to deny.
+      local: deny             # Local/private network access; defaults to deny.
+      ambiguous: require-both # Translation/tunnel ranges require both grants.
   terminal: {}                # Terminal/color integration.
   install: {}                 # Installation target, identity, and success output.
   mounts: {}                  # Runtime filesystem contracts.
@@ -106,7 +110,11 @@ one to 32 bytes, beginning with a lowercase ASCII letter or underscore, followed
 only by lowercase ASCII letters, digits, underscores, or hyphens. `root` is
 reserved and cannot be selected through this field. If the base image already
 defines the same account name with a different numeric ID, runtime-layer
-construction fails rather than rewriting that unrelated account. Backend-specific
+construction fails rather than rewriting that unrelated account.
+`runtime.network.public` and
+`runtime.network.local` independently accept `allow` or `deny`; both default to
+`deny`. `runtime.network.ambiguous` accepts `require-both` or the temporary,
+discouraged `allow` escape hatch; it defaults to `require-both`. Backend-specific
 runtime choices remain under the top-level `docker` node.
 
 ## Internal Execution Phases
@@ -1381,6 +1389,67 @@ whether read-only input or writable shared state. It also cannot use
 contract is implemented. Reploy rejects these combinations before container
 creation or output-path preparation. Docker-managed volumes and tmpfs remain
 available because they do not expose a host filesystem path directly.
+
+Application networking is also a portable environment policy rather than a
+Docker mode. `public` controls globally routable IP destinations. `local`
+controls private, link-local, multicast, reserved, and infrastructure metadata
+destinations. Translation and tunneling ranges that can represent either class
+are `ambiguous`: by default, `ambiguous: require-both` permits them only when
+both `public` and `local` are allowed. IPv4-mapped IPv6 socket addresses use
+the class of their embedded IPv4 destination because Linux emits them as IPv4
+packets. Container-local loopback remains available and cannot address host
+loopback through the container network namespace. The backend configures the
+container's DNS path from the same grants. With neither network class granted,
+DNS is unavailable. With only `local`, it uses the host's configured resolver
+so local, VPN, and split-DNS behavior remains available. With only `public`, it
+uses the built-in Google Public DNS profile (`8.8.8.8` and `8.8.4.4`). With
+both, it uses the host resolver, which normally provides both local and public
+resolution.
+
+For Docker, the local-capable path leaves DNS selection to Docker so it derives
+the container's resolver path from the host; the public-only path passes the
+selected Google Public DNS profile through Docker's per-container DNS
+configuration. Docker writes the resulting container resolver configuration.
+The default bridge normally exposes host-derived resolver addresses, while a
+custom network exposes Docker's embedded resolver at `127.0.0.11` and forwards
+to the selected upstreams. Before installing the packet filter, Reploy's
+trusted startup helper reads those engine-authored resolver addresses and
+admits TCP and UDP port 53 only to them whenever either network class is
+granted. This engine-owned exception does not grant general access to the
+resolver's address class. Resolver selection is host policy rather than
+blueprint policy; future Reploy host configuration may override the default
+local and public resolver choices. The backend does not filter DNS answers.
+Connections to every resolved address still pass the ordinary destination
+policy, so an answer outside the granted address class remains unreachable.
+
+`ambiguous: allow` is a temporary, discouraged escape hatch for environments
+that intentionally need those translation or tunneling ranges. It grants every
+range in that coarse class even when either ordinary network class is denied,
+so it weakens the isolation expressed by `public` and `local`. Reploy expects to
+deprecate this option after the planned L3 policy gateway can classify the real
+destination instead of its translated address.
+
+Declared workload endpoints remain reachable from their explicit host
+publication, which uses loopback by default: the application firewall permits
+new inbound TCP connections only to declared endpoint ports and permits the
+corresponding established response traffic. When DNS is enabled, resolved
+connections remain subject to the destination policy.
+
+The Linux-container backend realizes this policy with a trusted Reploy startup
+helper and IPv4/IPv6 nftables rules inside the container network namespace,
+including when both egress classes are allowed so undeclared inbound ports
+remain closed. Docker starts only that helper as container root with the minimal
+setup capabilities. After installing the rules, the helper changes to the
+planned application UID/GID, empties every capability set and the capability
+bounding set, locks securebits and `no-new-privileges`, verifies seccomp and
+the final kernel state, and executes the exact application argv. Reploy-issued
+execs into an application container use the same authority-dropping helper;
+they never invoke an application command through raw `docker exec`.
+
+This is coarse IP-class enforcement. It is not domain, URL, DNS-content,
+general outbound port policy, or packet auditing, and it does not defend a
+container from an operator who already controls the Docker daemon. A backend
+that cannot install and verify the requested policy fails closed.
 
 This is a portable blueprint contract with target-specific realization. The
 current backend writes Linux account databases. A future native-Windows or

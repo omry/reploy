@@ -20,6 +20,7 @@ func injectPrivateWorkloadEnvironmentV1(
 	ctx context.Context,
 	dockerPath string,
 	containerName string,
+	sandbox ApplicationSandboxPlanV1,
 	environment privateWorkloadEnvironmentV1,
 	options RunOptions,
 	run commandRunner,
@@ -47,13 +48,12 @@ func injectPrivateWorkloadEnvironmentV1(
 			"exec",
 			"-i",
 			containerName,
-			"/bin/sh",
-			"-c",
-			privateWorkloadEnvironmentRelayV1,
-			"reploy-private-environment",
-			privateWorkloadEnvironmentFIFOPathV1,
 		},
 	}
+	relay := []string{"/bin/sh", "-c", privateWorkloadEnvironmentRelayV1, "reploy-private-environment", privateWorkloadEnvironmentFIFOPathV1}
+	wrapperPlan := DockerExecutionPlan{Sandbox: sandbox}
+	spec.Args = append(spec.Args, sandbox.StartupVerifier.Path)
+	spec.Args = append(spec.Args, sandboxApplicationArgvV1(wrapperPlan, relay, false, []int{})...)
 	if err := run(spec, runOptions); err != nil {
 		return fmt.Errorf("inject private workload environment through one-shot FIFO relay: %w", err)
 	}
@@ -65,6 +65,7 @@ func startAndInjectPrivateWorkloadEnvironmentV1(
 	start CommandSpec,
 	cleanup CommandSpec,
 	containerName string,
+	sandbox ApplicationSandboxPlanV1,
 	environment privateWorkloadEnvironmentV1,
 	options RunOptions,
 	run commandRunner,
@@ -78,7 +79,7 @@ func startAndInjectPrivateWorkloadEnvironmentV1(
 	if !environment.Present {
 		return nil
 	}
-	if err := injectPrivateWorkloadEnvironmentV1(ctx, start.Name, containerName, environment, options, run); err != nil {
+	if err := injectPrivateWorkloadEnvironmentV1(ctx, start.Name, containerName, sandbox, environment, options, run); err != nil {
 		cleanupOptions := options
 		cleanupOptions.Context = context.WithoutCancel(ctx)
 		cleanupOptions.Stdin = nil
