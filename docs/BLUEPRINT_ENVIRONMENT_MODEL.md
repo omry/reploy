@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-02
+updated: 2026-08-08
 summary: Normative blueprint environment, workload, application, provider contribution, lifecycle, and Docker rendering model.
 supersedes: docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md
 ---
@@ -2093,6 +2093,13 @@ could use a structured configuration system.
   reference cycles, and references outside `environment` are errors. Although
   cycles are not possible with the initial environment-to-backend-only rule,
   implementations should still reject them rather than recurse.
+
+Workload endpoint names use one Docker Distribution image-name path component:
+lowercase alphanumeric segments separated by `.`, `_`, `__`, or one or more
+`-`, with a maximum length of 128 bytes. Names such as `api_v1`, `api.v1`,
+`api--v1`, and `2fa` are valid. Full image-reference syntax such as `/`, `:`,
+and `@` is not accepted. Reploy applies this same grammar when endpoint names
+become controlled-session capability identifiers.
 
 `environment.workload.endpoints.<name>.port` is the authoritative port on which
 the workload listens inside the container. `extends` copies that port into the
