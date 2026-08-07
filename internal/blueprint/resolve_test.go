@@ -54,6 +54,50 @@ func TestResolveProducesTypedEnvironment(t *testing.T) {
 	}
 }
 
+func TestResolveValidatesWorkloadEndpointNames(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		ok   bool
+	}{
+		{name: "api", ok: true},
+		{name: "api_v1", ok: true},
+		{name: "api.v1", ok: true},
+		{name: "api--v1", ok: true},
+		{name: "api__internal", ok: true},
+		{name: "2fa", ok: true},
+		{name: "API"},
+		{name: "-api"},
+		{name: "api-"},
+		{name: "api/v1"},
+		{name: "api:v1"},
+		{name: "api@sha256"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source, err := Decode([]byte(minimalBlueprint))
+			if err != nil {
+				t.Fatal(err)
+			}
+			endpoint := source.Environment.Workload.Endpoints["http"]
+			delete(source.Environment.Workload.Endpoints, "http")
+			source.Environment.Workload.Endpoints[test.name] = endpoint
+			dockerEndpoint := source.Docker.Workload.Endpoints["http"]
+			dockerEndpoint.Extends = "environment.workload.endpoints." + test.name
+			source.Docker.Workload.Endpoints["http"] = dockerEndpoint
+
+			_, err = Resolve(source)
+			if test.ok {
+				if err != nil {
+					t.Fatalf("Resolve() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "endpoint name") {
+				t.Fatalf("Resolve() error = %v, want endpoint-name diagnostic", err)
+			}
+		})
+	}
+}
+
 func TestResolveRuntimeNetwork(t *testing.T) {
 	for _, test := range []struct {
 		name   string
