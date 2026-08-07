@@ -115,6 +115,7 @@ printf 'private-mask-pass\n'`, expectedTokenDigest)
 		start,
 		cleanup,
 		container,
+		plan.Sandbox,
 		environment,
 		RunOptions{},
 		runDockerCommand,

@@ -47,6 +47,7 @@ func startProviderInstallHostV1(ctx context.Context, plan providerInstallationPl
 			commands.Start,
 			cleanup,
 			plan.Docker.ContainerName,
+			plan.Docker.Sandbox,
 			environment,
 			options,
 			run,
