@@ -85,7 +85,7 @@ func TestStopLiveRunV1CancelsWaiterWithoutDockerAndPromotesFairly(t *testing.T) 
 		t.Fatalf("waiter stop = %#v, calls=%d, error=%v", result, dockerCalls, err)
 	}
 	runs, err := ListLiveRunsV1(t.Context(), dir)
-	if err != nil || len(runs) != 2 || runs[0].ID != active.ID || runs[1].ID != secondWaiter.ID || runs[1].Status != deploy.LiveRunStatusActiveV1 {
+	if err != nil || len(runs) != 2 || runs[0].ID != active.ID || runs[1].ID != secondWaiter.ID || runs[1].Status != deploy.LiveRunStatusWaitingV1 {
 		t.Fatalf("queue after waiter stop = %#v, %v", runs, err)
 	}
 }
@@ -128,8 +128,49 @@ func TestStopLiveRunV1RemovesActiveContainerBeforePromotingWaiter(t *testing.T) 
 		t.Fatalf("active stop = %#v, order=%v, error=%v", result, order, err)
 	}
 	runs, err := ListLiveRunsV1(t.Context(), dir)
-	if err != nil || len(runs) != 1 || runs[0].ID != waiter.ID || runs[0].Status != deploy.LiveRunStatusActiveV1 {
+	if err != nil || len(runs) != 1 || runs[0].ID != waiter.ID || runs[0].Status != deploy.LiveRunStatusWaitingV1 {
 		t.Fatalf("promoted waiter = %#v, %v", runs, err)
+	}
+}
+
+func TestStopLiveRunV1ReportsReadyReservationAsWaitingWithoutDocker(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := liveRunAdmissionFixtureV1("run-0000000000000001", true)
+	ready := liveRunAdmissionFixtureV1("run-0000000000000002", false)
+	holdLiveRunLeaseV1(t, operation, active.ID)
+	holdLiveRunLeaseV1(t, operation, ready.ID)
+	if _, err := operation.AdmitLiveRunV1(active, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := operation.AdmitLiveRunV1(ready, true); err != nil {
+		t.Fatal(err)
+	}
+	queue, removed, err := operation.RemoveLiveRunV1(active.ID)
+	if err != nil || !removed || len(queue.Runs) != 1 || queue.Runs[0].Status != deploy.LiveRunStatusReadyV1 {
+		t.Fatalf("ready reservation = %#v, removed=%t, error=%v", queue, removed, err)
+	}
+	if err := operation.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+
+	dockerCalls := 0
+	result, err := stopLiveRunV1(t.Context(), dir, ready.ID, 0, liveRunsBackendV1{
+		acquire: deploy.AcquireOperationLock,
+		removeContainer: func(CommandSpec, RunOptions) error {
+			dockerCalls++
+			return nil
+		},
+	})
+	if err != nil || !result.Found || result.Run.Status != deploy.LiveRunStatusWaitingV1 || dockerCalls != 0 {
+		t.Fatalf("ready stop = %#v, calls=%d, error=%v", result, dockerCalls, err)
+	}
+	runs, err := ListLiveRunsV1(t.Context(), dir)
+	if err != nil || len(runs) != 0 {
+		t.Fatalf("queue after ready stop = %#v, error=%v", runs, err)
 	}
 }
 
