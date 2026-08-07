@@ -16,9 +16,11 @@ var requiredApplicationKernelStatusV1 = []struct {
 	want string
 	hex  bool
 }{
+	{name: "CapInh", want: "0", hex: true},
 	{name: "CapBnd", want: "0", hex: true},
 	{name: "CapEff", want: "0", hex: true},
 	{name: "CapPrm", want: "0", hex: true},
+	{name: "CapAmb", want: "0", hex: true},
 	{name: "NoNewPrivs", want: "1"},
 	{name: "Seccomp", want: "2"},
 }
