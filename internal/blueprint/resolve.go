@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/omry/reploy/internal/runtimeidentity"
 )
 
 var builtInControlOperations = map[string]bool{
@@ -148,17 +150,7 @@ func resolveRuntimeUser(value string) (string, error) {
 }
 
 func ValidateRuntimeUserName(value string) error {
-	if value == "" || len(value) > 32 {
-		return fmt.Errorf("must be a nonempty portable Unix user name no longer than 32 bytes")
-	}
-	for index, character := range value {
-		if character >= 'a' && character <= 'z' || character == '_' && index == 0 ||
-			index > 0 && (character >= '0' && character <= '9' || character == '_' || character == '-') {
-			continue
-		}
-		return fmt.Errorf("must be a portable lowercase Unix user name")
-	}
-	return nil
+	return runtimeidentity.ValidateUserName(value)
 }
 
 func resolveConcurrentRunPolicy(value string) (ConcurrentRunPolicy, error) {
