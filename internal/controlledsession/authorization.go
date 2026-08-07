@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"regexp"
-	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -27,11 +26,10 @@ const AuthorizationSchemaV1 = "controlled-session-authorization-v1"
 type OperationV1 string
 
 const (
-	OperationInputV1        OperationV1 = "input"
-	OperationResizeV1       OperationV1 = "resize"
-	OperationTerminateV1    OperationV1 = "terminate"
-	OperationCompleteV1     OperationV1 = "complete"
-	OperationOpenEndpointV1 OperationV1 = "open-endpoint"
+	OperationInputV1     OperationV1 = "input"
+	OperationResizeV1    OperationV1 = "resize"
+	OperationTerminateV1 OperationV1 = "terminate"
+	OperationCompleteV1  OperationV1 = "complete"
 )
 
 // RuntimeIdentityV1 records the exact container-local identity selected before
@@ -117,7 +115,7 @@ func ValidateAuthorizationV1(authorization AuthorizationV1) error {
 	}
 	for index, operation := range authorization.Operations {
 		switch operation {
-		case OperationInputV1, OperationResizeV1, OperationTerminateV1, OperationCompleteV1, OperationOpenEndpointV1:
+		case OperationInputV1, OperationResizeV1, OperationTerminateV1, OperationCompleteV1:
 		default:
 			return fmt.Errorf("controlled-session operation %q is unsupported", operation)
 		}
@@ -132,9 +130,6 @@ func ValidateAuthorizationV1(authorization AuthorizationV1) error {
 		if index > 0 && authorization.EndpointIDs[index-1] >= endpointID {
 			return fmt.Errorf("controlled-session endpoint IDs must be unique and sorted")
 		}
-	}
-	if len(authorization.EndpointIDs) != 0 && !slices.Contains(authorization.Operations, OperationOpenEndpointV1) {
-		return fmt.Errorf("controlled-session endpoint grants require the open-endpoint operation")
 	}
 	return nil
 }
