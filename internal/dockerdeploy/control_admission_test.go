@@ -68,8 +68,9 @@ func TestAwaitControlAdmissionV1ReturnsHeldAfterEarlierRunAndKeepsLaterRunBehind
 		err       error
 	}
 	resultChannel := make(chan result, 1)
+	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
-		admitted, err := awaitControlAdmissionV1(t.Context(), dir, operation, marker, true, nil, backend)
+		admitted, err := awaitControlAdmissionV1(ctx, dir, operation, marker, true, nil, backend)
 		resultChannel <- result{operation: admitted, err: err}
 	}()
 	<-waitStarted
@@ -97,6 +98,12 @@ func TestAwaitControlAdmissionV1ReturnsHeldAfterEarlierRunAndKeepsLaterRunBehind
 	if err := got.operation.RequireHeld(); err != nil {
 		t.Fatalf("returned lock is not held: %v", err)
 	}
+	cancel()
+	queue, _, err = got.operation.ReadLiveRunQueueV1()
+	markers := deploy.ControlMarkersV1(queue)
+	if err != nil || len(markers) != 1 || markers[0].Status != deploy.LiveRunStatusActiveV1 {
+		t.Fatalf("claimed control admission = %#v, error=%v", queue, err)
+	}
 	if err := CompleteControlAdmissionV1(got.operation, marker.ID, lease); err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +113,7 @@ func TestAwaitControlAdmissionV1ReturnsHeldAfterEarlierRunAndKeepsLaterRunBehind
 	}
 	defer inspection.Unlock()
 	queue, found, err := inspection.ReadLiveRunQueueV1()
-	if err != nil || !found || len(queue.Runs) != 1 || queue.Runs[0].ID != later.ID || queue.Runs[0].Status != deploy.LiveRunStatusActiveV1 {
+	if err != nil || !found || len(queue.Runs) != 1 || queue.Runs[0].ID != later.ID || queue.Runs[0].Status != deploy.LiveRunStatusReadyV1 {
 		t.Fatalf("later run promotion = %#v, found=%t, error=%v", queue, found, err)
 	}
 }
@@ -186,6 +193,75 @@ func TestAwaitControlAdmissionV1ExplainsLifecycleWait(t *testing.T) {
 		"Ctrl-C cancels this wait without affecting the active command.\n"
 	if notice.String() != want {
 		t.Fatalf("wait notice = %q, want %q", notice.String(), want)
+	}
+}
+
+func TestAwaitControlAdmissionV1CancellationWinsAfterReadyReservation(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := liveRunAdmissionFixtureV1("run-0000000000000001", true)
+	holdLiveRunLeaseV1(t, operation, first.ID)
+	if _, err := operation.AdmitLiveRunV1(first, false); err != nil {
+		t.Fatal(err)
+	}
+	marker := controlAdmissionFixtureV1("control-0000000000000001", deploy.ControlOperationRestartV1)
+	holdControlLeaseV1(t, operation, marker.ID)
+	waitStarted := make(chan struct{})
+	allowWait := make(chan struct{})
+	lockAcquired := make(chan struct{})
+	allowAcquire := make(chan struct{})
+	backend := controlAdmissionBackendV1{
+		acquire: func(ctx context.Context, deploymentDir string) (*deploy.OperationLock, error) {
+			lock, err := deploy.AcquireOperationLock(ctx, deploymentDir)
+			if err != nil {
+				return nil, err
+			}
+			close(lockAcquired)
+			<-allowAcquire
+			return lock, nil
+		},
+		wait: func(context.Context) error {
+			close(waitStarted)
+			<-allowWait
+			return nil
+		},
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	result := make(chan error, 1)
+	go func() {
+		_, err := awaitControlAdmissionV1(ctx, dir, operation, marker, true, nil, backend)
+		result <- err
+	}()
+	<-waitStarted
+	promoter, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue, removed, err := promoter.RemoveLiveRunV1(first.ID)
+	if err != nil || !removed || len(queue.Runs) != 1 || queue.Runs[0].Status != deploy.LiveRunStatusReadyV1 {
+		t.Fatalf("ready reservation = %#v, removed=%t, error=%v", queue, removed, err)
+	}
+	if err := promoter.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	close(allowWait)
+	<-lockAcquired
+	cancel()
+	close(allowAcquire)
+	if err := <-result; !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "canceled queued lifecycle operation") {
+		t.Fatalf("cancellation result = %v", err)
+	}
+	inspection, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inspection.Unlock()
+	queue, found, err := inspection.ReadLiveRunQueueV1()
+	if err != nil || found || len(queue.Runs) != 0 {
+		t.Fatalf("queue after cancellation = %#v, found=%t, error=%v", queue, found, err)
 	}
 }
 

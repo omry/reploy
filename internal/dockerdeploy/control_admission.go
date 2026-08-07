@@ -135,10 +135,17 @@ func awaitControlAdmissionV1(
 				"control operation %q is no longer waiting; retry the command", candidate.Operation,
 			))
 		}
-		switch marker.Status {
-		case deploy.LiveRunStatusActiveV1:
+		if marker.Status == deploy.LiveRunStatusActiveV1 {
 			return operation, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return cancelControlAdmissionV1(ctx, absoluteDir, operation, candidate, backend, err)
+		}
+		switch marker.Status {
 		case deploy.LiveRunStatusReadyV1:
+			// Claiming ready is the admission linearization point. Cancellation
+			// observed before this transition removes the unstarted reservation;
+			// cancellation after it belongs to admitted lifecycle cleanup.
 			if err := operation.ActivateReadyControlMarkerV1(candidate.ID); err != nil {
 				return cancelControlAdmissionV1(ctx, absoluteDir, operation, candidate, backend,
 					fmt.Errorf("claim ready control admission: %w", err))
