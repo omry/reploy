@@ -234,8 +234,9 @@ func TestRuntimeHostSourcesV1IncludesOnlyBindAndExplicitOutputMounts(t *testing.
 func runtimeHostPolicy(mounts []deploy.RuntimeMountV1) deploy.RuntimePolicyV1 {
 	return deploy.RuntimePolicyV1{
 		Schema: deploy.RuntimePolicySchemaV1, StartupVerifier: deploy.ApplicationStartupVerifierContractV1(),
+		Network:        blueprint.RuntimeNetwork{Public: blueprint.NetworkAccessDeny, Local: blueprint.NetworkAccessDeny, Ambiguous: blueprint.AmbiguousNetworkAccessRequireBoth},
 		ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{{
-			ID: "command/check", Mounts: mounts, Executables: []providers.QualifiedOutput{},
+			ID: "command/check", InboundTCP: []string{}, Mounts: mounts, Executables: []providers.QualifiedOutput{},
 		}},
 	}
 }
