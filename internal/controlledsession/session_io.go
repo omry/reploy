@@ -178,6 +178,10 @@ func (bridge *SessionIOBridgeV1) OutputDone() <-chan struct{} {
 	return bridge.output.Done()
 }
 
+func (bridge *SessionIOBridgeV1) OutputTerminalResult() (PTYOutputFinalizationV1, bool) {
+	return bridge.output.TerminalResult()
+}
+
 func (bridge *SessionIOBridgeV1) FinalizeOutput(deadline time.Time) (PTYOutputFinalizationV1, error) {
 	return bridge.output.Finalize(deadline)
 }
