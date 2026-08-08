@@ -46,8 +46,17 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   bounded write admission path, and reports request, backpressure, and
   disconnect failures without owning the channel or containers. A failed event
   write makes the framed transport terminal so a later event cannot be appended
-  to a potentially partial frame. Full lifecycle orchestration and
-  controlled-session networking remain later slices.
+  to a potentially partial frame. The attached host lifecycle supervisor is
+  also implemented: it prepares inert resources, starts the controller before
+  the workload, activates only after workload setup succeeds, serializes
+  controller requests through the lifecycle machine, latches the first
+  termination cause, stops and independently observes the workload, finalizes
+  PTY output before the terminal result, waits boundedly for controller
+  completion and result acknowledgement, and removes both containers and the
+  private channel. A workload that starts before a later startup step fails is
+  still terminated and its output is finalized through the same barrier.
+  Crash watchdogs and restart reconciliation remain the next ownership phase;
+  controlled-session networking remains a later phase.
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution
@@ -1071,18 +1080,21 @@ OmegaFlow these include the recording artifacts. Host Reploy does not open a
 controller-finalization wait when `complete` was not granted and records that
 controller as `not-completed` in the terminal result.
 Repeated terminate or host cancel operations are idempotent. Input and resize
-are rejected after `terminating` begins. A single `complete` remains valid
-during termination while Host Reploy is waiting for controller finalization. A
-`failed` workload-output result makes the session fail regardless of whether
-the controller preserves and finalizes partial artifacts.
+are rejected after `terminating` begins, and Host Reploy cancels any accepted
+input or resize operation still blocked in the runtime before it begins
+workload teardown. This cancellation does not stop request dispatch: a single
+`complete` remains valid during termination while Host Reploy is waiting for
+controller finalization. A `failed` workload-output result makes the session
+fail regardless of whether the controller preserves and finalizes partial
+artifacts.
 
 Normal completion is:
 
 1. Host Reploy observes workload exit, or a controller or host operation
    requests termination.
 2. Host Reploy atomically latches the cause and enters `terminating`.
-3. Host Reploy performs bounded graceful termination followed by forced
-   termination when necessary.
+3. Host Reploy cancels any in-flight workload request, then performs bounded
+   graceful termination followed by forced termination when necessary.
 4. Host Reploy independently observes the exact workload container stopped.
 5. Host Reploy drains and closes every declared workload-output surface under
    the finite output-finalization deadline, then emits the one ordered

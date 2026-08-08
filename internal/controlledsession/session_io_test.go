@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -168,6 +169,46 @@ func TestSessionIOBridgeV1SurfacesDisconnectAndHandlerFailure(t *testing.T) {
 			t.Fatalf("WaitRequests() = %v", err)
 		}
 	})
+}
+
+func TestSessionIOBridgeV1CancelsActiveRequestAndContinuesDispatch(t *testing.T) {
+	transport := newBridgeTestTransportV1()
+	inputStarted := make(chan struct{})
+	continued := make(chan RequestV1, 1)
+	bridge, err := StartSessionIOBridgeV1(transport, io.NopCloser(bytes.NewReader(nil)), func(ctx context.Context, request RequestV1) error {
+		if request.Kind == RequestInputV1 {
+			close(inputStarted)
+			<-ctx.Done()
+			return fmt.Errorf("blocked input: %w", ctx.Err())
+		}
+		continued <- request
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport.requests <- bridgeTestRequestResultV1{request: RequestV1{Kind: RequestInputV1, Bytes: []byte("blocked")}}
+	select {
+	case <-inputStarted:
+	case <-time.After(time.Second):
+		t.Fatal("input request did not start")
+	}
+	bridge.CancelActiveRequest()
+	transport.requests <- bridgeTestRequestResultV1{request: RequestV1{Kind: RequestCompleteV1}}
+	select {
+	case request := <-continued:
+		if request.Kind != RequestCompleteV1 {
+			t.Fatalf("continued request = %#v", request)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("request dispatch did not continue after canceling active input")
+	}
+	bridge.StopRequests()
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := bridge.WaitRequests(waitCtx); err != nil {
+		t.Fatalf("WaitRequests() = %v", err)
+	}
 }
 
 func TestSessionIOBridgeV1LifecycleRejectionPreventsPTYEffect(t *testing.T) {
