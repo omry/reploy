@@ -43,8 +43,13 @@ type ObservationV1 struct {
 	Kind                             ObservationKindV1
 	WorkloadStatus                   *ProcessStatusV1
 	WorkloadOutputFinalizationStatus *WorkloadOutputFinalizationStatusV1
-	Reason                           string
-	Finish                           *FinishV1
+	// WorkloadOutputPending records the narrow startup-failure case where
+	// the runtime started the workload before a later startup operation failed.
+	// The supervisor must then stop the workload and explicitly finalize its
+	// output before the lifecycle can finish.
+	WorkloadOutputPending bool
+	Reason                string
+	Finish                *FinishV1
 }
 
 type SnapshotV1 struct {
@@ -123,6 +128,9 @@ func (machine *MachineV1) Observe(observation ObservationV1) (TransitionV1, erro
 	defer machine.mu.Unlock()
 	before := machine.state
 	transition := TransitionV1{Before: before, After: before, Cause: machine.cause}
+	if observation.WorkloadOutputPending && observation.Kind != ObservationStartupFailureV1 {
+		return transition, fmt.Errorf("%w: pending workload output is valid only for startup failure", ErrObservationRejected)
+	}
 	if observation.Kind == ObservationResultDeliveredV1 {
 		if observation.WorkloadStatus != nil || observation.WorkloadOutputFinalizationStatus != nil || observation.Reason != "" || observation.Finish != nil || machine.state != StateTerminatedV1 || machine.result == nil {
 			return transition, fmt.Errorf("%w: result delivery is valid only after termination and carries no payload", ErrObservationRejected)
@@ -198,17 +206,29 @@ func (machine *MachineV1) Observe(observation ObservationV1) (TransitionV1, erro
 		// reports failed closure or its bounded finalization deadline expires.
 		machine.finalizePreActivationOutputsForRuntimeObservationLossLocked(observation.Reason)
 	case ObservationStartupFailureV1:
-		if observation.WorkloadStatus != nil || observation.WorkloadOutputFinalizationStatus != nil || observation.Finish != nil {
-			return transition, fmt.Errorf("%w: startup failure carries only a reason", ErrObservationRejected)
+		if observation.WorkloadStatus != nil || observation.Finish != nil ||
+			(observation.WorkloadOutputPending && observation.WorkloadOutputFinalizationStatus != nil) {
+			return transition, fmt.Errorf("%w: startup failure carries a reason and at most one workload-output outcome", ErrObservationRejected)
 		}
 		if err := validateRequiredSafeTextV1("startup-failure reason", observation.Reason); err != nil {
 			return transition, fmt.Errorf("%w: %v", ErrObservationRejected, err)
+		}
+		if observation.WorkloadOutputFinalizationStatus != nil {
+			if err := validateWorkloadOutputFinalizationStatusV1(*observation.WorkloadOutputFinalizationStatus); err != nil {
+				return transition, fmt.Errorf("%w: %v", ErrObservationRejected, err)
+			}
 		}
 		if machine.controller.Kind != ControllerFinalizationUnknownV1 {
 			return transition, fmt.Errorf("%w: startup failure is invalid after controller activation", ErrObservationRejected)
 		}
 		machine.controller = ControllerFinalizationStatusV1{Kind: ControllerFinalizationStartupFailedV1, Reason: observation.Reason}
 		machine.latchLocked(CauseStartupFailureV1, &transition)
+		if observation.WorkloadOutputPending {
+			machine.workloadOutputs = WorkloadOutputFinalizationStatusV1{}
+			machine.waitingOutputs = true
+		} else if observation.WorkloadOutputFinalizationStatus != nil {
+			machine.completeOutputFinalizationLocked(*observation.WorkloadOutputFinalizationStatus)
+		}
 	case ObservationWorkloadOutputsFinalizedV1:
 		if observation.WorkloadStatus != nil || observation.WorkloadOutputFinalizationStatus == nil || observation.Reason != "" || observation.Finish != nil || !machine.waitingOutputs {
 			return transition, fmt.Errorf("%w: workload output finalization requires exactly one status while output finalization is pending", ErrObservationRejected)

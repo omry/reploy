@@ -46,8 +46,17 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   bounded write admission path, and reports request, backpressure, and
   disconnect failures without owning the channel or containers. A failed event
   write makes the framed transport terminal so a later event cannot be appended
-  to a potentially partial frame. Full lifecycle orchestration and
-  controlled-session networking remain later slices.
+  to a potentially partial frame. The attached host lifecycle supervisor is
+  also implemented: it prepares inert resources, starts the controller before
+  the workload, activates only after workload setup succeeds, serializes
+  controller requests through the lifecycle machine, latches the first
+  termination cause, stops and independently observes the workload, finalizes
+  PTY output before the terminal result, waits boundedly for controller
+  completion and result acknowledgement, and removes both containers and the
+  private channel. A workload that starts before a later startup step fails is
+  still terminated and its output is finalized through the same barrier.
+  Crash watchdogs and restart reconciliation remain the next ownership phase;
+  controlled-session networking remains a later phase.
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution
