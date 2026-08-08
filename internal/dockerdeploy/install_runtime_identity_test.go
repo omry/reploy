@@ -51,6 +51,23 @@ func TestValidateInstalledRuntimeIdentityBuildV1RejectsWrongPlannedAccount(t *te
 
 func TestBuildInstalledRuntimeIdentityV1RebuildsChangedAccount(t *testing.T) {
 	current, _ := currentBuildReuseFixture(t)
+	current.Lock.Base.AuthorReference = "debian:bookworm-slim"
+	current.Lock.Base.ImmutableReference = "debian@" + string(rendererDigest("a"))
+	current.Lock.Base.ManifestDigest = rendererDigest("a")
+	baseImage, err := realizedImageFromDescriptor(current.Lock.Base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Lock.RuntimeLayer.Upstream = baseImage
+	current.Lock.RuntimeLayer.TransactionDigest, err = deploy.ApplicationRuntimeLayerTransactionDigestV1(
+		current.Lock.RuntimeLayer.Verifier,
+		current.Lock.RuntimeLayer.Account,
+		baseImage,
+		current.Lock.Platform,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	store, err := providerstore.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -69,13 +86,17 @@ func TestBuildInstalledRuntimeIdentityV1RebuildsChangedAccount(t *testing.T) {
 				if candidate.ImageID != current.Lock.RuntimeLayer.Upstream.ConfigDigest || platform != current.Lock.Platform {
 					t.Fatalf("upstream inspection = %#v / %#v", candidate, platform)
 				}
-				return InspectedImageCandidate{Image: current.Lock.RuntimeLayer.Upstream}, nil
+				localDescriptor := current.Lock.Base
+				localDescriptor.AuthorReference = string(localDescriptor.ConfigDigest)
+				localDescriptor.ImmutableReference = string(localDescriptor.ConfigDigest)
+				localDescriptor.ManifestDigest = ""
+				return inspectedValidationCandidate(t, localDescriptor), nil
 			},
 			finalize: func(_ context.Context, gotStore providerstore.Store, layers []FullImageValidationInput, final FullImageValidationInput, validate providers.RequirementProfileOwnerValidator, run FullImageValidationRunner, verifier deploy.ApplicationStartupVerifierV1, account deploy.ApplicationLocalAccountV1, _ RunOptions) (FinalizedBuildValidationResult, error) {
 				if gotStore.Root() != store.Root() || len(layers) != 0 || validate == nil || run == nil || verifier != current.Lock.RuntimeLayer.Verifier || account != wantAccount {
 					t.Fatalf("finalization inputs were not preserved")
 				}
-				if final.Image.Image != current.Lock.RuntimeLayer.Upstream || !reflect.DeepEqual(final.Outputs, current.Lock.Catalog) || !reflect.DeepEqual(final.RuntimePolicy, current.Lock.RuntimePolicy) {
+				if !reflect.DeepEqual(final.Image.Descriptor, current.Lock.Base) || final.Image.Image != current.Lock.RuntimeLayer.Upstream || !reflect.DeepEqual(final.Outputs, current.Lock.Catalog) || !reflect.DeepEqual(final.RuntimePolicy, current.Lock.RuntimePolicy) {
 					t.Fatalf("final validation input = %#v", final)
 				}
 				layer := current.Lock.RuntimeLayer
