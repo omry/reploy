@@ -38,9 +38,14 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   before container creation, creates the frozen controller plan inert, starts
   it at most once, independently observes its exit, exposes graceful and forced
   stop operations, captures the full container ID returned by creation, and
-  pins all later lifecycle operations to that exact container. Protocol/PTY
-  bridging, controlled-session networking, and lifecycle orchestration remain
-  later slices.
+  pins all later lifecycle operations to that exact container. The
+  backend-neutral session I/O bridge is implemented: it dispatches typed
+  controller requests to an injected lifecycle handler, applies only
+  lifecycle-accepted input and resize effects, forwards exact ordered PTY
+  output as protocol events, gives lifecycle events a separate prioritized
+  bounded write admission path, and reports request, backpressure, and
+  disconnect failures without owning the channel or containers. Full lifecycle
+  orchestration and controlled-session networking remain later slices.
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution
