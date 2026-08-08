@@ -71,6 +71,7 @@ func prepareDockerWorkloadPTYV1(
 	plan ControlledSessionContainerPlanV1,
 	backend dockerWorkloadPTYBackendV1,
 ) (*DockerWorkloadPTYV1, error) {
+	plan = cloneControlledSessionContainerPlanV1(plan)
 	if err := ValidateControlledSessionContainerPlanV1(plan); err != nil {
 		return nil, fmt.Errorf("prepare controlled-session workload PTY: %w", err)
 	}
