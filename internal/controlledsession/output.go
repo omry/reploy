@@ -88,6 +88,38 @@ func (pump *PTYOutputPumpV1) Done() <-chan struct{} {
 	return pump.done
 }
 
+// TerminalResult returns the raw immutable pump result after Done closes. It
+// does not apply the host-owned finalization deadline; lifecycle supervisors
+// use it only to distinguish a failed output surface from ordinary drained
+// EOF before establishing the termination cause.
+func (pump *PTYOutputPumpV1) TerminalResult() (PTYOutputFinalizationV1, bool) {
+	select {
+	case <-pump.done:
+		pump.resultMu.Lock()
+		defer pump.resultMu.Unlock()
+		if pump.result == nil {
+			panic("controlled-session PTY output pump stopped without a terminal result")
+		}
+		return *pump.result, true
+	default:
+		return PTYOutputFinalizationV1{}, false
+	}
+}
+
+// IsPTYOutputDeliveryFailureV1 reports whether output failed while being
+// delivered to its consumer rather than while reading or closing the PTY.
+func IsPTYOutputDeliveryFailureV1(result PTYOutputFinalizationV1) bool {
+	return result.Status == failedPTYOutputStatusV1(ptyOutputDeliveryFailureReasonV1)
+}
+
+// IsPTYOutputObservationFailureV1 reports whether the host lost the workload
+// PTY while reading or closing it. Delivery failure and a host-owned
+// finalization timeout have distinct lifecycle meanings.
+func IsPTYOutputObservationFailureV1(result PTYOutputFinalizationV1) bool {
+	return result.Status == failedPTYOutputStatusV1(ptyOutputReadFailureReasonV1) ||
+		result.Status == failedPTYOutputStatusV1(ptyOutputClosureFailureReasonV1)
+}
+
 // Finalize waits for all previously read bytes to be delivered and for the
 // source to close. deadline is the absolute host-owned deadline established
 // when termination began; time already spent stopping the workload is not
