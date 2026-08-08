@@ -93,6 +93,14 @@ type SessionIOBridgeV1 struct {
 
 	requestResultMu sync.Mutex
 	requestResult   error
+
+	activeRequestMu sync.Mutex
+	activeRequest   *sessionActiveRequestV1
+}
+
+type sessionActiveRequestV1 struct {
+	cancel         context.CancelFunc
+	canceledByHost bool
 }
 
 // StartSessionIOBridgeV1 starts request dispatch and PTY output delivery
@@ -158,6 +166,20 @@ func (bridge *SessionIOBridgeV1) StopRequests() {
 	bridge.stopOnce.Do(bridge.cancelRequest)
 }
 
+// CancelActiveRequest cancels the request currently executing without
+// stopping request dispatch. This lets a lifecycle owner interrupt an input
+// write blocked by PTY backpressure while continuing to accept the terminal
+// complete and acknowledgement requests required during teardown.
+func (bridge *SessionIOBridgeV1) CancelActiveRequest() {
+	bridge.activeRequestMu.Lock()
+	defer bridge.activeRequestMu.Unlock()
+	if bridge.activeRequest == nil {
+		return
+	}
+	bridge.activeRequest.canceledByHost = true
+	bridge.activeRequest.cancel()
+}
+
 // WaitRequests waits for request dispatch to stop and returns its immutable
 // diagnostic. Caller cancellation stops only this wait.
 func (bridge *SessionIOBridgeV1) WaitRequests(ctx context.Context) error {
@@ -178,6 +200,10 @@ func (bridge *SessionIOBridgeV1) OutputDone() <-chan struct{} {
 	return bridge.output.Done()
 }
 
+func (bridge *SessionIOBridgeV1) OutputTerminalResult() (PTYOutputFinalizationV1, bool) {
+	return bridge.output.TerminalResult()
+}
+
 func (bridge *SessionIOBridgeV1) FinalizeOutput(deadline time.Time) (PTYOutputFinalizationV1, error) {
 	return bridge.output.Finalize(deadline)
 }
@@ -190,7 +216,24 @@ func (bridge *SessionIOBridgeV1) runRequests(handle ControllerRequestHandlerV1) 
 			bridge.setRequestResult(bridge.requestFailure("read", err))
 			return
 		}
-		if err := handle(bridge.requestCtx, request); err != nil {
+		requestCtx, cancelRequest := context.WithCancel(bridge.requestCtx)
+		active := &sessionActiveRequestV1{cancel: cancelRequest}
+		bridge.activeRequestMu.Lock()
+		bridge.activeRequest = active
+		bridge.activeRequestMu.Unlock()
+
+		err = handle(requestCtx, request)
+		cancelRequest()
+		bridge.activeRequestMu.Lock()
+		canceledByHost := active.canceledByHost
+		if bridge.activeRequest == active {
+			bridge.activeRequest = nil
+		}
+		bridge.activeRequestMu.Unlock()
+		if err != nil && canceledByHost {
+			continue
+		}
+		if err != nil {
 			bridge.setRequestResult(bridge.requestFailure("handle", err))
 			return
 		}
