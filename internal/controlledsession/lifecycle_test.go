@@ -703,6 +703,75 @@ func TestLifecycleStartupFailureIsLimitedToPreActivation(t *testing.T) {
 	}
 }
 
+func TestLifecycleStartupFailureCanWaitForPartiallyStartedWorkloadOutput(t *testing.T) {
+	machine, err := NewMachineV1(testAuthorizationV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition, err := machine.Observe(ObservationV1{
+		Kind:                  ObservationStartupFailureV1,
+		Reason:                "initial terminal resize failed",
+		WorkloadOutputPending: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transition.Cause != CauseStartupFailureV1 || !transition.AwaitingWorkloadOutputFinalization ||
+		transition.WorkloadOutputFinalizationStatus.Kind != "" {
+		t.Fatalf("startup transition = %#v", transition)
+	}
+
+	code := 143
+	if _, err := machine.Observe(ObservationV1{
+		Kind:           ObservationWorkloadExitV1,
+		WorkloadStatus: &ProcessStatusV1{Kind: ProcessStatusExitedV1, Code: &code},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	drained := WorkloadOutputFinalizationStatusV1{Kind: WorkloadOutputFinalizationDrainedV1}
+	barrier, err := machine.Observe(ObservationV1{
+		Kind:                             ObservationWorkloadOutputsFinalizedV1,
+		WorkloadOutputFinalizationStatus: &drained,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if barrier.AwaitingWorkloadOutputFinalization || barrier.AwaitingControllerFinalization {
+		t.Fatalf("finalization transition = %#v", barrier)
+	}
+}
+
+func TestLifecycleStartupFailureAcceptsAlreadyFinalizedInertOutput(t *testing.T) {
+	machine, err := NewMachineV1(testAuthorizationV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := WorkloadOutputFinalizationStatusV1{
+		Kind:   WorkloadOutputFinalizationFailedV1,
+		Reason: "workload output closure failed",
+	}
+	transition, err := machine.Observe(ObservationV1{
+		Kind:                             ObservationStartupFailureV1,
+		Reason:                           "workload start failed",
+		WorkloadOutputFinalizationStatus: &failed,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transition.AwaitingWorkloadOutputFinalization || transition.WorkloadOutputFinalizationStatus != failed {
+		t.Fatalf("startup transition = %#v", transition)
+	}
+
+	if _, err := machine.Observe(ObservationV1{
+		Kind:                             ObservationStartupFailureV1,
+		Reason:                           "invalid duplicate",
+		WorkloadOutputPending:            true,
+		WorkloadOutputFinalizationStatus: &failed,
+	}); !errors.Is(err, ErrObservationRejected) {
+		t.Fatalf("ambiguous startup output state error = %v", err)
+	}
+}
+
 func TestLifecycleEnforcesAuthorizationAndCopiesIt(t *testing.T) {
 	authorization := testAuthorizationV1()
 	authorization.Operations = []OperationV1{OperationCompleteV1}
