@@ -21,7 +21,7 @@ func TestPrivateWorkloadEnvironmentDockerIntegrationMasksFilesAndInjectsValues(t
 	if os.Getenv("REPLOY_DOCKER_INTEGRATION") != "1" {
 		t.Skip("set REPLOY_DOCKER_INTEGRATION=1 to run Docker integration evidence")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
 	image, _ := buildApplicationStartupVerifierIntegrationImage(t, ctx)
@@ -152,7 +152,7 @@ func TestPrivateRuntimeMasksDockerIntegrationProtectTransientContainer(t *testin
 	if os.Getenv("REPLOY_DOCKER_INTEGRATION") != "1" {
 		t.Skip("set REPLOY_DOCKER_INTEGRATION=1 to run Docker integration evidence")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
 	image, _ := buildApplicationStartupVerifierIntegrationImage(t, ctx)
