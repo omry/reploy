@@ -26,16 +26,17 @@ type FinishV1 struct {
 type ObservationKindV1 string
 
 const (
-	ObservationActivatedV1                     ObservationKindV1 = "activated"
-	ObservationWorkloadExitV1                  ObservationKindV1 = "workload-exit"
-	ObservationHostCancelV1                    ObservationKindV1 = "host-cancel"
-	ObservationControllerLostV1                ObservationKindV1 = "controller-lost"
-	ObservationRuntimeObservationLostV1        ObservationKindV1 = "runtime-observation-lost"
-	ObservationStartupFailureV1                ObservationKindV1 = "startup-failure"
-	ObservationWorkloadOutputsFinalizedV1      ObservationKindV1 = "workload-outputs-finalized"
-	ObservationControllerFinalizationExpiredV1 ObservationKindV1 = "controller-finalization-expired"
-	ObservationFinishedV1                      ObservationKindV1 = "finished"
-	ObservationResultDeliveredV1               ObservationKindV1 = "result-delivered"
+	ObservationActivatedV1                         ObservationKindV1 = "activated"
+	ObservationWorkloadExitV1                      ObservationKindV1 = "workload-exit"
+	ObservationHostCancelV1                        ObservationKindV1 = "host-cancel"
+	ObservationControllerLostV1                    ObservationKindV1 = "controller-lost"
+	ObservationRuntimeObservationLostV1            ObservationKindV1 = "runtime-observation-lost"
+	ObservationStartupFailureV1                    ObservationKindV1 = "startup-failure"
+	ObservationWorkloadOutputsFinalizedV1          ObservationKindV1 = "workload-outputs-finalized"
+	ObservationWorkloadOutputFinalizationExpiredV1 ObservationKindV1 = "workload-output-finalization-expired"
+	ObservationControllerFinalizationExpiredV1     ObservationKindV1 = "controller-finalization-expired"
+	ObservationFinishedV1                          ObservationKindV1 = "finished"
+	ObservationResultDeliveredV1                   ObservationKindV1 = "result-delivered"
 )
 
 type ObservationV1 struct {
@@ -47,30 +48,32 @@ type ObservationV1 struct {
 }
 
 type SnapshotV1 struct {
-	State                            StateV1
-	Cause                            TerminationCauseV1
-	WorkloadStatus                   ProcessStatusV1
-	WorkloadOutputFinalizationStatus WorkloadOutputFinalizationStatusV1
-	RuntimeObservationStatus         RuntimeObservationStatusV1
-	ControllerFinalizationStatus     ControllerFinalizationStatusV1
-	AwaitingControllerFinalization   bool
-	AwaitingResultAcknowledgement    bool
-	ResultAcknowledged               bool
-	Result                           *ResultV1
+	State                              StateV1
+	Cause                              TerminationCauseV1
+	WorkloadStatus                     ProcessStatusV1
+	WorkloadOutputFinalizationStatus   WorkloadOutputFinalizationStatusV1
+	RuntimeObservationStatus           RuntimeObservationStatusV1
+	ControllerFinalizationStatus       ControllerFinalizationStatusV1
+	AwaitingWorkloadOutputFinalization bool
+	AwaitingControllerFinalization     bool
+	AwaitingResultAcknowledgement      bool
+	ResultAcknowledged                 bool
+	Result                             *ResultV1
 }
 
 type TransitionV1 struct {
-	Before                           StateV1
-	After                            StateV1
-	Cause                            TerminationCauseV1
-	CauseLatched                     bool
-	BeginTermination                 bool
-	WorkloadOutputFinalizationStatus WorkloadOutputFinalizationStatusV1
-	AwaitingControllerFinalization   bool
-	AwaitingResultAcknowledgement    bool
-	RequestAccepted                  bool
-	ResultAcknowledged               bool
-	Result                           *ResultV1
+	Before                             StateV1
+	After                              StateV1
+	Cause                              TerminationCauseV1
+	CauseLatched                       bool
+	BeginTermination                   bool
+	WorkloadOutputFinalizationStatus   WorkloadOutputFinalizationStatusV1
+	AwaitingWorkloadOutputFinalization bool
+	AwaitingControllerFinalization     bool
+	AwaitingResultAcknowledgement      bool
+	RequestAccepted                    bool
+	ResultAcknowledged                 bool
+	Result                             *ResultV1
 }
 
 var ErrRequestRejected = errors.New("controlled-session request rejected")
@@ -89,6 +92,7 @@ type MachineV1 struct {
 	workloadOutputs    WorkloadOutputFinalizationStatusV1
 	controller         ControllerFinalizationStatusV1
 	runtimeObservation RuntimeObservationStatusV1
+	waitingOutputs     bool
 	waitingFinalize    bool
 	resultDelivered    bool
 	resultAcknowledged bool
@@ -145,7 +149,10 @@ func (machine *MachineV1) Observe(observation ObservationV1) (TransitionV1, erro
 		if observation.WorkloadStatus == nil || observation.WorkloadOutputFinalizationStatus != nil || observation.Reason != "" || observation.Finish != nil {
 			return transition, fmt.Errorf("%w: workload exit requires exactly one workload status", ErrObservationRejected)
 		}
-		if machine.workloadOutputs.Kind != "" {
+		if machine.workloadOutputs.Kind != "" && !(machine.activated &&
+			machine.workload.Kind == ProcessStatusUnknownV1 &&
+			machine.runtimeObservation.Kind == RuntimeObservationLostV1 &&
+			machine.workloadOutputs.Kind == WorkloadOutputFinalizationFailedV1) {
 			return transition, fmt.Errorf("%w: workload exit cannot follow workload output finalization", ErrObservationRejected)
 		}
 		if machine.state == StatePreparingV1 {
@@ -186,12 +193,10 @@ func (machine *MachineV1) Observe(observation ObservationV1) (TransitionV1, erro
 			machine.runtimeObservation = RuntimeObservationStatusV1{Kind: RuntimeObservationLostV1, Reason: observation.Reason}
 		}
 		machine.latchLocked(CauseRuntimeObservationLostV1, &transition)
+		machine.failOutputsForRuntimeObservationLossLocked(observation.Reason)
 	case ObservationStartupFailureV1:
 		if observation.WorkloadStatus != nil || observation.WorkloadOutputFinalizationStatus != nil || observation.Finish != nil {
 			return transition, fmt.Errorf("%w: startup failure carries only a reason", ErrObservationRejected)
-		}
-		if machine.workloadOutputs.Kind != "" {
-			return transition, fmt.Errorf("%w: startup failure cannot follow workload output finalization", ErrObservationRejected)
 		}
 		if err := validateRequiredSafeTextV1("startup-failure reason", observation.Reason); err != nil {
 			return transition, fmt.Errorf("%w: %v", ErrObservationRejected, err)
@@ -202,14 +207,8 @@ func (machine *MachineV1) Observe(observation ObservationV1) (TransitionV1, erro
 		machine.controller = ControllerFinalizationStatusV1{Kind: ControllerFinalizationStartupFailedV1, Reason: observation.Reason}
 		machine.latchLocked(CauseStartupFailureV1, &transition)
 	case ObservationWorkloadOutputsFinalizedV1:
-		if observation.WorkloadStatus != nil || observation.WorkloadOutputFinalizationStatus == nil || observation.Reason != "" || observation.Finish != nil {
-			return transition, fmt.Errorf("%w: workload output finalization requires exactly one status", ErrObservationRejected)
-		}
-		if machine.state != StateTerminatingV1 {
-			return transition, fmt.Errorf("%w: workload output finalization is valid only while terminating", ErrObservationRejected)
-		}
-		if machine.workloadOutputs.Kind != "" {
-			return transition, fmt.Errorf("%w: workload output finalization was already observed", ErrObservationRejected)
+		if observation.WorkloadStatus != nil || observation.WorkloadOutputFinalizationStatus == nil || observation.Reason != "" || observation.Finish != nil || !machine.waitingOutputs {
+			return transition, fmt.Errorf("%w: workload output finalization requires exactly one status while output finalization is pending", ErrObservationRejected)
 		}
 		if machine.activated && machine.workload.Kind == ProcessStatusUnknownV1 {
 			return transition, fmt.Errorf("%w: workload output finalization requires an observed terminal workload status", ErrObservationRejected)
@@ -220,9 +219,18 @@ func (machine *MachineV1) Observe(observation ObservationV1) (TransitionV1, erro
 		if machine.runtimeObservation.Kind == RuntimeObservationLostV1 && observation.WorkloadOutputFinalizationStatus.Kind == WorkloadOutputFinalizationDrainedV1 {
 			return transition, fmt.Errorf("%w: runtime observation loss requires failed workload output finalization", ErrObservationRejected)
 		}
-		machine.workloadOutputs = *observation.WorkloadOutputFinalizationStatus
-		machine.waitingFinalize = machine.controller.Kind == ControllerFinalizationActiveV1 &&
-			containsOperationV1(machine.authorization.Operations, OperationCompleteV1)
+		machine.completeOutputFinalizationLocked(*observation.WorkloadOutputFinalizationStatus)
+	case ObservationWorkloadOutputFinalizationExpiredV1:
+		if observation.WorkloadStatus != nil || observation.WorkloadOutputFinalizationStatus != nil || observation.Finish != nil || !machine.waitingOutputs {
+			return transition, fmt.Errorf("%w: output-finalization expiry carries only a required reason while output finalization is pending", ErrObservationRejected)
+		}
+		if err := validateRequiredSafeTextV1("workload output finalization expiry reason", observation.Reason); err != nil {
+			return transition, fmt.Errorf("%w: %v", ErrObservationRejected, err)
+		}
+		machine.completeOutputFinalizationLocked(WorkloadOutputFinalizationStatusV1{
+			Kind:   WorkloadOutputFinalizationFailedV1,
+			Reason: observation.Reason,
+		})
 	case ObservationControllerFinalizationExpiredV1:
 		if observation.WorkloadStatus != nil || observation.WorkloadOutputFinalizationStatus != nil || observation.Finish != nil || observation.Reason != "" || !machine.waitingFinalize {
 			return transition, fmt.Errorf("%w: finalization expiry requires an active controller-finalization wait", ErrObservationRejected)
@@ -233,8 +241,8 @@ func (machine *MachineV1) Observe(observation ObservationV1) (TransitionV1, erro
 		if observation.WorkloadStatus != nil || observation.WorkloadOutputFinalizationStatus != nil || observation.Reason != "" || observation.Finish == nil {
 			return transition, fmt.Errorf("%w: finish requires exactly one terminal status set", ErrObservationRejected)
 		}
-		if machine.state != StateTerminatingV1 || machine.workloadOutputs.Kind == "" || machine.waitingFinalize {
-			return transition, fmt.Errorf("%w: finish requires finalized workload output and no pending controller finalization", ErrObservationRejected)
+		if machine.state != StateTerminatingV1 || machine.waitingOutputs || machine.workloadOutputs.Kind == "" || machine.waitingFinalize {
+			return transition, fmt.Errorf("%w: finish requires finalized workload output and no pending output or controller finalization", ErrObservationRejected)
 		}
 		if err := validateFinishV1(*observation.Finish); err != nil {
 			return transition, fmt.Errorf("%w: %v", ErrObservationRejected, err)
@@ -269,6 +277,7 @@ func (machine *MachineV1) Observe(observation ObservationV1) (TransitionV1, erro
 	transition.After = machine.state
 	transition.Cause = machine.cause
 	transition.WorkloadOutputFinalizationStatus = machine.workloadOutputs
+	transition.AwaitingWorkloadOutputFinalization = machine.waitingOutputs
 	transition.AwaitingControllerFinalization = machine.waitingFinalize
 	transition.AwaitingResultAcknowledgement = machine.resultDelivered && !machine.resultAcknowledged
 	transition.ResultAcknowledged = machine.resultAcknowledged
@@ -332,8 +341,8 @@ func (machine *MachineV1) ApplyRequest(request RequestV1) (TransitionV1, error) 
 			// Repeated graceful termination is idempotent and does not alter
 			// output or controller finalization already in progress.
 		case RequestCompleteV1:
-			if !machine.waitingFinalize || machine.controller.Kind != ControllerFinalizationActiveV1 {
-				return transition, fmt.Errorf("%w: completion is not awaiting controller finalization", ErrRequestRejected)
+			if machine.waitingOutputs || !machine.waitingFinalize || machine.controller.Kind != ControllerFinalizationActiveV1 {
+				return transition, fmt.Errorf("%w: completion requires finalized workload outputs and a pending controller finalization", ErrRequestRejected)
 			}
 			machine.waitingFinalize = false
 			machine.controller = ControllerFinalizationStatusV1{Kind: ControllerFinalizationCompletedV1}
@@ -349,6 +358,7 @@ func (machine *MachineV1) ApplyRequest(request RequestV1) (TransitionV1, error) 
 	transition.After = machine.state
 	transition.Cause = machine.cause
 	transition.WorkloadOutputFinalizationStatus = machine.workloadOutputs
+	transition.AwaitingWorkloadOutputFinalization = machine.waitingOutputs
 	transition.AwaitingControllerFinalization = machine.waitingFinalize
 	transition.AwaitingResultAcknowledgement = machine.resultDelivered && !machine.resultAcknowledged
 	transition.RequestAccepted = true
@@ -362,6 +372,13 @@ func (machine *MachineV1) latchLocked(cause TerminationCauseV1, transition *Tran
 	}
 	machine.cause = cause
 	machine.state = StateTerminatingV1
+	if transition.Before == StateActiveV1 {
+		machine.waitingOutputs = true
+	} else {
+		// No workload ran, so there are no workload-originated surfaces to
+		// drain. Record the barrier as satisfied rather than inventing a wait.
+		machine.workloadOutputs = WorkloadOutputFinalizationStatusV1{Kind: WorkloadOutputFinalizationDrainedV1}
+	}
 	transition.CauseLatched = true
 	transition.BeginTermination = true
 }
@@ -372,8 +389,9 @@ func (machine *MachineV1) snapshotLocked() SnapshotV1 {
 		WorkloadOutputFinalizationStatus: machine.workloadOutputs,
 		RuntimeObservationStatus:         machine.runtimeObservation,
 		ControllerFinalizationStatus:     machine.controller, AwaitingControllerFinalization: machine.waitingFinalize,
-		AwaitingResultAcknowledgement: machine.resultDelivered && !machine.resultAcknowledged,
-		ResultAcknowledged:            machine.resultAcknowledged, Result: cloneResultV1(machine.result),
+		AwaitingWorkloadOutputFinalization: machine.waitingOutputs,
+		AwaitingResultAcknowledgement:      machine.resultDelivered && !machine.resultAcknowledged,
+		ResultAcknowledged:                 machine.resultAcknowledged, Result: cloneResultV1(machine.result),
 	}
 }
 
@@ -398,6 +416,29 @@ func validateFinishV1(finish FinishV1) error {
 		return err
 	}
 	return validateCleanupResultV1(finish.CleanupStatus, finish.RecoveryAction)
+}
+
+func (machine *MachineV1) failOutputsForRuntimeObservationLossLocked(reason string) {
+	preActivationLoss := machine.cause == CauseRuntimeObservationLostV1 &&
+		!machine.activated &&
+		machine.workloadOutputs.Kind == WorkloadOutputFinalizationDrainedV1
+	if !machine.waitingOutputs && !preActivationLoss {
+		return
+	}
+	if reason == "" {
+		reason = "runtime observation was lost before workload output finalization completed"
+	}
+	machine.completeOutputFinalizationLocked(WorkloadOutputFinalizationStatusV1{
+		Kind:   WorkloadOutputFinalizationFailedV1,
+		Reason: reason,
+	})
+}
+
+func (machine *MachineV1) completeOutputFinalizationLocked(status WorkloadOutputFinalizationStatusV1) {
+	machine.workloadOutputs = status
+	machine.waitingOutputs = false
+	machine.waitingFinalize = machine.controller.Kind == ControllerFinalizationActiveV1 &&
+		containsOperationV1(machine.authorization.Operations, OperationCompleteV1)
 }
 
 func equalProcessStatusV1(left ProcessStatusV1, right ProcessStatusV1) bool {
