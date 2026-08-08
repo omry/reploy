@@ -41,6 +41,18 @@ func observeOutputsFinalizedV1(t *testing.T, machine *MachineV1, status Workload
 	if err != nil {
 		t.Fatalf("Observe(workload outputs finalized) error = %v", err)
 	}
+	if machine.Snapshot().ControllerFinalizationStatus.Kind != ControllerFinalizationActiveV1 {
+		return transition
+	}
+	return observeOutputsPublishedV1(t, machine)
+}
+
+func observeOutputsPublishedV1(t *testing.T, machine *MachineV1) TransitionV1 {
+	t.Helper()
+	transition, err := machine.Observe(ObservationV1{Kind: ObservationWorkloadOutputsPublishedV1})
+	if err != nil {
+		t.Fatalf("Observe(workload outputs published) error = %v", err)
+	}
 	return transition
 }
 
@@ -102,6 +114,45 @@ func TestLifecycleOutputBarrierPrecedesControllerFinalization(t *testing.T) {
 	}
 	if err := ValidateResultV1(*finished.Result); err != nil {
 		t.Fatalf("terminal result is invalid: %v", err)
+	}
+}
+
+func TestLifecycleRejectsCompletionUntilOutputFinalizationIsPublished(t *testing.T) {
+	machine := activatedMachineV1(t)
+	code := 0
+	observeWorkloadExitV1(t, machine, code)
+	outputStatus := WorkloadOutputFinalizationStatusV1{Kind: WorkloadOutputFinalizationDrainedV1}
+	finalized, err := machine.Observe(ObservationV1{
+		Kind:                             ObservationWorkloadOutputsFinalizedV1,
+		WorkloadOutputFinalizationStatus: &outputStatus,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finalized.AwaitingWorkloadOutputFinalization || !finalized.AwaitingWorkloadOutputPublication || finalized.AwaitingControllerFinalization {
+		t.Fatalf("internal output finalization opened controller finalization early: %#v", finalized)
+	}
+	if _, err := machine.ApplyRequest(RequestV1{Kind: RequestCompleteV1}); !errors.Is(err, ErrRequestRejected) {
+		t.Fatalf("complete before output publication error = %v", err)
+	}
+	if _, err := machine.Observe(ObservationV1{Kind: ObservationFinishedV1, Finish: &FinishV1{
+		WorkloadStatus:                   ProcessStatusV1{Kind: ProcessStatusExitedV1, Code: &code},
+		WorkloadOutputFinalizationStatus: outputStatus,
+		ControllerFinalizationStatus:     ControllerFinalizationStatusV1{Kind: ControllerFinalizationNotCompletedV1},
+		CleanupStatus:                    CleanupStatusV1{Kind: CleanupStatusSucceededV1},
+		RecoveryAction:                   RecoveryNoneV1,
+	}}); !errors.Is(err, ErrObservationRejected) {
+		t.Fatalf("finish before output publication error = %v", err)
+	}
+	published, err := machine.Observe(ObservationV1{Kind: ObservationWorkloadOutputsPublishedV1})
+	if err != nil || published.AwaitingWorkloadOutputPublication || !published.AwaitingControllerFinalization {
+		t.Fatalf("output publication transition = %#v, %v", published, err)
+	}
+	if _, err := machine.Observe(ObservationV1{Kind: ObservationWorkloadOutputsPublishedV1}); !errors.Is(err, ErrObservationRejected) {
+		t.Fatalf("duplicate output publication error = %v", err)
+	}
+	if _, err := machine.ApplyRequest(RequestV1{Kind: RequestCompleteV1}); err != nil {
+		t.Fatalf("complete after output publication error = %v", err)
 	}
 }
 
@@ -412,8 +463,12 @@ func TestLifecycleOutputFinalizationExpiryCannotBecomeDrained(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if transition.AwaitingWorkloadOutputFinalization || !transition.AwaitingControllerFinalization {
+	if transition.AwaitingWorkloadOutputFinalization || transition.AwaitingControllerFinalization {
 		t.Fatalf("output timeout transition = %#v", transition)
+	}
+	published := observeOutputsPublishedV1(t, machine)
+	if !published.AwaitingControllerFinalization {
+		t.Fatalf("output timeout publication transition = %#v", published)
 	}
 
 	drained := WorkloadOutputFinalizationStatusV1{Kind: WorkloadOutputFinalizationDrainedV1}
@@ -504,6 +559,9 @@ func TestLifecycleOutputFinalizationExpiryAcceptsLateWorkloadExit(t *testing.T) 
 				WorkloadStatus: &status,
 			}); err != nil {
 				t.Fatalf("late workload exit error = %v", err)
+			}
+			if machine.Snapshot().ControllerFinalizationStatus.Kind == ControllerFinalizationActiveV1 {
+				observeOutputsPublishedV1(t, machine)
 			}
 
 			snapshot := machine.Snapshot()
@@ -700,6 +758,75 @@ func TestLifecycleStartupFailureIsLimitedToPreActivation(t *testing.T) {
 	}
 	if snapshot := preActivation.Snapshot(); snapshot.ControllerFinalizationStatus.Kind != ControllerFinalizationStartupFailedV1 {
 		t.Fatalf("controller finalization status = %#v", snapshot.ControllerFinalizationStatus)
+	}
+}
+
+func TestLifecycleStartupFailureCanWaitForPartiallyStartedWorkloadOutput(t *testing.T) {
+	machine, err := NewMachineV1(testAuthorizationV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition, err := machine.Observe(ObservationV1{
+		Kind:                  ObservationStartupFailureV1,
+		Reason:                "initial terminal resize failed",
+		WorkloadOutputPending: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transition.Cause != CauseStartupFailureV1 || !transition.AwaitingWorkloadOutputFinalization ||
+		transition.WorkloadOutputFinalizationStatus.Kind != "" {
+		t.Fatalf("startup transition = %#v", transition)
+	}
+
+	code := 143
+	if _, err := machine.Observe(ObservationV1{
+		Kind:           ObservationWorkloadExitV1,
+		WorkloadStatus: &ProcessStatusV1{Kind: ProcessStatusExitedV1, Code: &code},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	drained := WorkloadOutputFinalizationStatusV1{Kind: WorkloadOutputFinalizationDrainedV1}
+	barrier, err := machine.Observe(ObservationV1{
+		Kind:                             ObservationWorkloadOutputsFinalizedV1,
+		WorkloadOutputFinalizationStatus: &drained,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if barrier.AwaitingWorkloadOutputFinalization || barrier.AwaitingControllerFinalization {
+		t.Fatalf("finalization transition = %#v", barrier)
+	}
+}
+
+func TestLifecycleStartupFailureAcceptsAlreadyFinalizedInertOutput(t *testing.T) {
+	machine, err := NewMachineV1(testAuthorizationV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := WorkloadOutputFinalizationStatusV1{
+		Kind:   WorkloadOutputFinalizationFailedV1,
+		Reason: "workload output closure failed",
+	}
+	transition, err := machine.Observe(ObservationV1{
+		Kind:                             ObservationStartupFailureV1,
+		Reason:                           "workload start failed",
+		WorkloadOutputFinalizationStatus: &failed,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transition.AwaitingWorkloadOutputFinalization || transition.WorkloadOutputFinalizationStatus != failed {
+		t.Fatalf("startup transition = %#v", transition)
+	}
+
+	if _, err := machine.Observe(ObservationV1{
+		Kind:                             ObservationStartupFailureV1,
+		Reason:                           "invalid duplicate",
+		WorkloadOutputPending:            true,
+		WorkloadOutputFinalizationStatus: &failed,
+	}); !errors.Is(err, ErrObservationRejected) {
+		t.Fatalf("ambiguous startup output state error = %v", err)
 	}
 }
 
