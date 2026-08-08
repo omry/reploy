@@ -174,11 +174,11 @@ func TestPrepareDockerControllerV1RollsBackOwnedAmbiguousCreateFailure(t *testin
 }
 
 func TestParseDockerControllerContainerIDV1(t *testing.T) {
-	if got, err := parseDockerControllerContainerIDV1("\n" + dockerControllerTestContainerIDV1 + "\n"); err != nil || got != dockerControllerTestContainerIDV1 {
+	if got, err := parseDockerContainerIDV1("\n" + dockerControllerTestContainerIDV1 + "\n"); err != nil || got != dockerControllerTestContainerIDV1 {
 		t.Fatalf("valid container ID = %q, %v", got, err)
 	}
 	for _, invalid := range []string{"", "abc", strings.Repeat("g", 64)} {
-		if _, err := parseDockerControllerContainerIDV1(invalid); err == nil {
+		if _, err := parseDockerContainerIDV1(invalid); err == nil {
 			t.Fatalf("invalid container ID %q was accepted", invalid)
 		}
 	}
