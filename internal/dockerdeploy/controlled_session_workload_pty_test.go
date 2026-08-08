@@ -259,6 +259,41 @@ func TestDockerWorkloadPTYV1ReportsObservationLossAndCallerWaitCancellation(t *t
 	}
 }
 
+func TestDockerWorkloadPTYV1FreezesCallerOwnedPlanSlices(t *testing.T) {
+	plan := controlledSessionWorkloadPlanFixtureV1(t)
+	wantStart := append([]string(nil), plan.Start.Args...)
+	runs := []CommandSpec{}
+	exit := make(chan int, 1)
+	workload, err := prepareDockerWorkloadPTYV1(t.Context(), plan, dockerWorkloadPTYBackendV1{
+		run: func(spec CommandSpec, _ RunOptions) error {
+			runs = append(runs, spec)
+			return nil
+		},
+		attach: func(context.Context, CommandSpec, string, time.Duration) (dockerPTYAttachmentV1, error) {
+			return &fakeDockerPTYAttachmentV1{}, nil
+		},
+		resize:  func(context.Context, CommandSpec, string, uint32, uint32, time.Duration) error { return nil },
+		observe: func(context.Context, CommandSpec, string) (int, error) { return <-exit, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workload.Output(); err != nil {
+		t.Fatal(err)
+	}
+	plan.Start.Args[0] = "tampered-start"
+	if err := workload.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	exit <- 0
+	if _, err := workload.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 2 || !reflect.DeepEqual(runs[1].Args, wantStart) {
+		t.Fatalf("frozen start command = %#v, want %#v", runs, wantStart)
+	}
+}
+
 func TestObserveDockerContainerExitV1RejectsMalformedStatus(t *testing.T) {
 	dir := t.TempDir()
 	docker := writeFakeCommand(
