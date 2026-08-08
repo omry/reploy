@@ -36,26 +36,34 @@ const (
 // the session starts.
 type RuntimeIdentityV1 = runtimeidentity.IdentityV1
 
-// AuthorizationV1 binds one opaque session handle to one already admitted,
-// immutable runtime plan. The plan digests cover all details that are not
-// repeated here, including mounts, environment, network, and commands.
+// EnvironmentAuthorizationV1 binds one session participant to the exact
+// environment generation, build, runtime identity, and immutable execution
+// plan selected before either container starts.
+type EnvironmentAuthorizationV1 struct {
+	DeploymentID        string            `json:"deployment_id"`
+	GenerationReference string            `json:"generation_reference"`
+	BuildIdentity       canonical.Digest  `json:"build_identity"`
+	PlanDigest          canonical.Digest  `json:"plan_digest"`
+	RuntimeIdentity     RuntimeIdentityV1 `json:"runtime_identity"`
+}
+
+// AuthorizationV1 binds one opaque session handle to one prospective,
+// immutable controller/workload plan pair. The plan digests cover all details
+// that are not repeated here, including mounts, environment, network, and
+// commands. Host admission binds the validated record to live runtime state.
 //
 // Ownership and lifetime are deliberately host runtime state rather than
 // transferable fields in this record. The host binds the validated value to
 // its LiveRunID, permits exactly one controller connection to claim that lease,
 // and ends the lease when that connection is lost or the host cancels it.
 type AuthorizationV1 struct {
-	Schema              string            `json:"schema"`
-	Handle              string            `json:"handle"`
-	DeploymentID        string            `json:"deployment_id"`
-	GenerationReference string            `json:"generation_reference"`
-	BuildIdentity       canonical.Digest  `json:"build_identity"`
-	LiveRunID           string            `json:"live_run_id"`
-	WorkloadPlan        canonical.Digest  `json:"workload_plan"`
-	ControllerPlan      canonical.Digest  `json:"controller_plan"`
-	RuntimeIdentity     RuntimeIdentityV1 `json:"runtime_identity"`
-	Operations          []OperationV1     `json:"operations"`
-	EndpointIDs         []string          `json:"endpoint_ids"`
+	Schema      string                     `json:"schema"`
+	Handle      string                     `json:"handle"`
+	LiveRunID   string                     `json:"live_run_id"`
+	Controller  EnvironmentAuthorizationV1 `json:"controller"`
+	Workload    EnvironmentAuthorizationV1 `json:"workload"`
+	Operations  []OperationV1              `json:"operations"`
+	EndpointIDs []string                   `json:"endpoint_ids"`
 }
 
 var sessionHandlePatternV1 = regexp.MustCompile(`^session-[0-9a-f]{64}$`)
@@ -89,26 +97,14 @@ func ValidateAuthorizationV1(authorization AuthorizationV1) error {
 	if !sessionHandlePatternV1.MatchString(authorization.Handle) {
 		return fmt.Errorf("controlled-session handle must use session- followed by 64 lowercase hexadecimal characters")
 	}
-	if err := validateSafeTextV1("deployment ID", authorization.DeploymentID); err != nil {
-		return err
-	}
-	if err := validateSafeTextV1("generation reference", authorization.GenerationReference); err != nil {
-		return err
-	}
-	if err := authorization.BuildIdentity.Validate(); err != nil {
-		return fmt.Errorf("controlled-session build identity: %w", err)
-	}
 	if err := deploy.ValidateLiveRunIDV1(authorization.LiveRunID); err != nil {
 		return fmt.Errorf("controlled-session live-run ID: %w", err)
 	}
-	if err := authorization.WorkloadPlan.Validate(); err != nil {
-		return fmt.Errorf("controlled-session workload plan: %w", err)
+	if err := validateEnvironmentAuthorizationV1("controller", authorization.Controller); err != nil {
+		return err
 	}
-	if err := authorization.ControllerPlan.Validate(); err != nil {
-		return fmt.Errorf("controlled-session controller plan: %w", err)
-	}
-	if err := runtimeidentity.ValidateIdentityV1(authorization.RuntimeIdentity); err != nil {
-		return fmt.Errorf("controlled-session runtime identity: %w", err)
+	if err := validateEnvironmentAuthorizationV1("workload", authorization.Workload); err != nil {
+		return err
 	}
 	if authorization.Operations == nil || authorization.EndpointIDs == nil {
 		return fmt.Errorf("controlled-session authorization collections must use arrays")
@@ -136,10 +132,30 @@ func ValidateAuthorizationV1(authorization AuthorizationV1) error {
 
 func cloneAuthorizationV1(authorization AuthorizationV1) AuthorizationV1 {
 	result := authorization
-	result.RuntimeIdentity.SupplementaryGIDs = append([]string{}, authorization.RuntimeIdentity.SupplementaryGIDs...)
+	result.Controller.RuntimeIdentity.SupplementaryGIDs = append([]string{}, authorization.Controller.RuntimeIdentity.SupplementaryGIDs...)
+	result.Workload.RuntimeIdentity.SupplementaryGIDs = append([]string{}, authorization.Workload.RuntimeIdentity.SupplementaryGIDs...)
 	result.Operations = append([]OperationV1{}, authorization.Operations...)
 	result.EndpointIDs = append([]string{}, authorization.EndpointIDs...)
 	return result
+}
+
+func validateEnvironmentAuthorizationV1(role string, environment EnvironmentAuthorizationV1) error {
+	if err := validateSafeTextV1(role+" deployment ID", environment.DeploymentID); err != nil {
+		return err
+	}
+	if err := validateSafeTextV1(role+" generation reference", environment.GenerationReference); err != nil {
+		return err
+	}
+	if err := environment.BuildIdentity.Validate(); err != nil {
+		return fmt.Errorf("controlled-session %s build identity: %w", role, err)
+	}
+	if err := environment.PlanDigest.Validate(); err != nil {
+		return fmt.Errorf("controlled-session %s plan: %w", role, err)
+	}
+	if err := runtimeidentity.ValidateIdentityV1(environment.RuntimeIdentity); err != nil {
+		return fmt.Errorf("controlled-session %s runtime identity: %w", role, err)
+	}
+	return nil
 }
 
 func validateSafeTextV1(field string, value string) error {
