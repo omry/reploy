@@ -23,7 +23,7 @@ const (
 
 	controlledSessionNetworkModeV1       = "none"
 	controlledSessionChannelRootV1       = "/run/reploy/session"
-	controlledSessionChannelSocketNameV1 = "control.sock"
+	controlledSessionChannelSocketNameV1 = controlledsession.PrivateChannelSocketNameV1
 )
 
 type ControlledSessionRoleV1 string
@@ -476,7 +476,7 @@ func controlledSessionContainerPlanV1(
 	if role == ControlledSessionRoleControllerV1 {
 		mounts = append(mounts, ControlledSessionMountV1{
 			Name: "session-channel", Type: "bind", Source: channel.HostDirectory,
-			SourceKind: deploy.RuntimeMountSourceDirectory, Target: channel.ContainerDirectory,
+			SourceKind: deploy.RuntimeMountSourceDirectory, Target: channel.ContainerDirectory, ReadOnly: true,
 		})
 	}
 	sort.Slice(mounts, func(left int, right int) bool {
@@ -760,7 +760,7 @@ func controlledSessionControllerCarriesChannelV1(plan ControlledSessionContainer
 	}
 	for _, mount := range plan.Mounts {
 		if mount.Name == "session-channel" && mount.Type == "bind" && mount.Source == channel.HostDirectory &&
-			mount.SourceKind == deploy.RuntimeMountSourceDirectory && mount.Target == channel.ContainerDirectory && !mount.ReadOnly {
+			mount.SourceKind == deploy.RuntimeMountSourceDirectory && mount.Target == channel.ContainerDirectory && mount.ReadOnly {
 			return true
 		}
 	}
