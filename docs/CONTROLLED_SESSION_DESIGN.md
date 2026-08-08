@@ -38,9 +38,16 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   before container creation, creates the frozen controller plan inert, starts
   it at most once, independently observes its exit, exposes graceful and forced
   stop operations, captures the full container ID returned by creation, and
-  pins all later lifecycle operations to that exact container. Protocol/PTY
-  bridging, controlled-session networking, and lifecycle orchestration remain
-  later slices.
+  pins all later lifecycle operations to that exact container. The
+  backend-neutral session I/O bridge is implemented: it dispatches typed
+  controller requests to an injected lifecycle handler, applies only
+  lifecycle-accepted input and resize effects, forwards exact ordered PTY
+  output as protocol events, gives lifecycle events a separate prioritized
+  bounded write admission path, and reports request, backpressure, and
+  disconnect failures without owning the channel or containers. A failed event
+  write makes the framed transport terminal so a later event cannot be appended
+  to a potentially partial frame. Full lifecycle orchestration and
+  controlled-session networking remain later slices.
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution
@@ -543,11 +550,16 @@ If every final byte is delivered and every output surface reaches EOF before
 the deadline, Host Reploy emits `workload_outputs_finalized(drained)` only after
 all earlier output has been consumed through its flow-control window. If the
 deadline expires, or a runtime error makes complete delivery unverifiable,
-Host Reploy forcibly closes the remaining surfaces and emits
-`workload_outputs_finalized(failed, reason)`. The multiplexing layer guarantees
-that no output frame can follow either outcome. Failure is explicit and cannot
-be converted into successful completion by `complete` or terminal
-acknowledgement.
+Host Reploy forcibly closes the remaining surfaces, records the failed outcome,
+and emits `workload_outputs_finalized(failed, reason)` while the controller
+transport remains intact. Any event-frame write failure is terminal: the frame
+header or payload may have been written partially, so Host Reploy closes the
+connection and never appends another event. That failure latches
+`controller_lost`; the output-finalization failure remains in the invoking host
+operation's result even though the damaged channel cannot carry it. The
+multiplexing layer guarantees that no output frame can follow a successfully
+emitted finalization outcome. Failure cannot be converted into successful
+completion by `complete` or terminal acknowledgement.
 
 The barrier initially covers the PTY. A future workload output-file or
 output-directory contract joins the same barrier after its files are closed,

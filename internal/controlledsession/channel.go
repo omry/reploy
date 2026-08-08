@@ -76,6 +76,8 @@ type PrivateChannelV1 struct {
 
 // ControllerConnectionV1 is the sole claimed controller connection. Reads and
 // writes each admit one frame at a time, so no unbounded in-memory queue forms.
+// A failed event write closes the connection because it may have left a partial
+// frame on the stream.
 type ControllerConnectionV1 struct {
 	connection net.Conn
 	readMu     sync.Mutex
@@ -234,10 +236,14 @@ func (connection *ControllerConnectionV1) WriteEvent(ctx context.Context, event 
 		return WriteEventV1(connection.connection, event)
 	})
 	if err != nil {
+		closeErr := connection.Close()
 		if isControllerDisconnectV1(err) {
-			return fmt.Errorf("%w while writing event: %v", ErrControllerDisconnectedV1, err)
+			return errors.Join(
+				fmt.Errorf("%w while writing event: %v", ErrControllerDisconnectedV1, err),
+				closeErr,
+			)
 		}
-		return fmt.Errorf("write controlled-session event: %w", err)
+		return errors.Join(fmt.Errorf("write controlled-session event: %w", err), closeErr)
 	}
 	return nil
 }
