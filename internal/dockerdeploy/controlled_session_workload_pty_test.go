@@ -16,6 +16,8 @@ import (
 	"github.com/omry/reploy/internal/controlledsession"
 )
 
+const dockerWorkloadTestContainerIDV1 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
 type fakeDockerPTYAttachmentV1 struct {
 	mu     sync.Mutex
 	input  []byte
@@ -63,8 +65,9 @@ func TestDockerWorkloadPTYV1OrdersAttachStartResizeAndExactOperations(t *testing
 	}
 	exit := make(chan int, 1)
 	backend := dockerWorkloadPTYBackendV1{
-		run: func(spec CommandSpec, _ RunOptions) error {
+		run: func(spec CommandSpec, options RunOptions) error {
 			record(strings.Join(spec.Args, " "))
+			writeDockerWorkloadCreateIDV1(spec, options, plan)
 			return nil
 		},
 		attach: func(_ context.Context, _ CommandSpec, container string, _ time.Duration) (dockerPTYAttachmentV1, error) {
@@ -99,6 +102,9 @@ func TestDockerWorkloadPTYV1OrdersAttachStartResizeAndExactOperations(t *testing
 	if err := workload.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+	if !workload.Started() {
+		t.Fatal("successful workload start was not recorded")
+	}
 	if err := workload.WriteInput(t.Context(), []byte{0, 1, 2, 0xff}); err != nil {
 		t.Fatal(err)
 	}
@@ -119,6 +125,15 @@ func TestDockerWorkloadPTYV1OrdersAttachStartResizeAndExactOperations(t *testing
 	if status.Kind != controlledsession.ProcessStatusExitedV1 || status.Code == nil || *status.Code != 42 {
 		t.Fatalf("wait status = %#v", status)
 	}
+	if err := workload.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := workload.Cleanup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := workload.Cleanup(t.Context()); err != nil {
+		t.Fatalf("idempotent cleanup = %v", err)
+	}
 	if !reflect.DeepEqual(attachment.input, []byte{0, 1, 2, 0xff}) {
 		t.Fatalf("PTY input = %v", attachment.input)
 	}
@@ -128,19 +143,20 @@ func TestDockerWorkloadPTYV1OrdersAttachStartResizeAndExactOperations(t *testing
 		actionsMu.Lock()
 		got := append([]string(nil), actions...)
 		actionsMu.Unlock()
-		if len(got) >= 7 {
+		if len(got) >= 8 {
 			wantPrefix := []string{
 				strings.Join(plan.Create.Args, " "),
-				"attach " + plan.Container,
-				strings.Join(plan.Start.Args, " "),
+				"attach " + dockerWorkloadTestContainerIDV1,
+				"start " + dockerWorkloadTestContainerIDV1,
 			}
 			if !reflect.DeepEqual(got[:3], wantPrefix) {
 				t.Fatalf("initial actions = %#v, want prefix %#v", got, wantPrefix)
 			}
-			if !slicesContainStringV1(got, "resize 80x24 "+plan.Container) ||
-				!slicesContainStringV1(got, "resize 132x43 "+plan.Container) ||
-				!slicesContainStringV1(got, "kill --signal TERM "+plan.Container) ||
-				!slicesContainStringV1(got, "kill --signal KILL "+plan.Container) {
+			if !slicesContainStringV1(got, "resize 80x24 "+dockerWorkloadTestContainerIDV1) ||
+				!slicesContainStringV1(got, "resize 132x43 "+dockerWorkloadTestContainerIDV1) ||
+				!slicesContainStringV1(got, "kill --signal TERM "+dockerWorkloadTestContainerIDV1) ||
+				!slicesContainStringV1(got, "kill --signal KILL "+dockerWorkloadTestContainerIDV1) ||
+				!slicesContainStringV1(got, "container rm --force "+dockerWorkloadTestContainerIDV1) {
 				t.Fatalf("lifecycle actions = %#v", got)
 			}
 			break
@@ -156,8 +172,9 @@ func TestPrepareDockerWorkloadPTYV1RollsBackInertContainerAfterAttachFailure(t *
 	plan := controlledSessionWorkloadPlanFixtureV1(t)
 	runs := []CommandSpec{}
 	backend := dockerWorkloadPTYBackendV1{
-		run: func(spec CommandSpec, _ RunOptions) error {
+		run: func(spec CommandSpec, options RunOptions) error {
 			runs = append(runs, spec)
+			writeDockerWorkloadCreateIDV1(spec, options, plan)
 			return nil
 		},
 		attach: func(context.Context, CommandSpec, string, time.Duration) (dockerPTYAttachmentV1, error) {
@@ -170,7 +187,8 @@ func TestPrepareDockerWorkloadPTYV1RollsBackInertContainerAfterAttachFailure(t *
 	if err == nil || !strings.Contains(err.Error(), "before start") || !strings.Contains(err.Error(), "attach refused") {
 		t.Fatalf("attach error = %v", err)
 	}
-	if len(runs) != 2 || !reflect.DeepEqual(runs[0].Args, plan.Create.Args) || !reflect.DeepEqual(runs[1].Args, plan.Cleanup.Args) {
+	if len(runs) != 2 || !reflect.DeepEqual(runs[0].Args, plan.Create.Args) ||
+		!reflect.DeepEqual(runs[1].Args, []string{"container", "rm", "--force", dockerWorkloadTestContainerIDV1}) {
 		t.Fatalf("rollback commands = %#v", runs)
 	}
 }
@@ -181,9 +199,10 @@ func TestDockerWorkloadPTYV1RollsBackAmbiguousStartFailure(t *testing.T) {
 	runs := []CommandSpec{}
 	observed := false
 	backend := dockerWorkloadPTYBackendV1{
-		run: func(spec CommandSpec, _ RunOptions) error {
+		run: func(spec CommandSpec, options RunOptions) error {
 			runs = append(runs, spec)
-			if reflect.DeepEqual(spec.Args, plan.Start.Args) {
+			writeDockerWorkloadCreateIDV1(spec, options, plan)
+			if reflect.DeepEqual(spec.Args, []string{"start", dockerWorkloadTestContainerIDV1}) {
 				return errors.New("start response was lost")
 			}
 			return nil
@@ -209,7 +228,8 @@ func TestDockerWorkloadPTYV1RollsBackAmbiguousStartFailure(t *testing.T) {
 		t.Fatalf("ambiguous start error = %v", err)
 	}
 	if len(runs) != 3 || !reflect.DeepEqual(runs[0].Args, plan.Create.Args) ||
-		!reflect.DeepEqual(runs[1].Args, plan.Start.Args) || !reflect.DeepEqual(runs[2].Args, plan.Cleanup.Args) {
+		!reflect.DeepEqual(runs[1].Args, []string{"start", dockerWorkloadTestContainerIDV1}) ||
+		!reflect.DeepEqual(runs[2].Args, []string{"container", "rm", "--force", dockerWorkloadTestContainerIDV1}) {
 		t.Fatalf("start rollback commands = %#v", runs)
 	}
 	attachment.mu.Lock()
@@ -218,13 +238,54 @@ func TestDockerWorkloadPTYV1RollsBackAmbiguousStartFailure(t *testing.T) {
 	if !closed || observed {
 		t.Fatalf("start rollback closed=%t observed=%t", closed, observed)
 	}
+	if workload.Started() {
+		t.Fatal("failed Docker start was recorded as started")
+	}
+}
+
+func TestDockerWorkloadPTYV1ReportsPartialStartAfterInitialResizeFailure(t *testing.T) {
+	plan := controlledSessionWorkloadPlanFixtureV1(t)
+	releaseObserver := make(chan struct{})
+	backend := dockerWorkloadPTYBackendV1{
+		run: func(spec CommandSpec, options RunOptions) error {
+			writeDockerWorkloadCreateIDV1(spec, options, plan)
+			return nil
+		},
+		attach: func(context.Context, CommandSpec, string, time.Duration) (dockerPTYAttachmentV1, error) {
+			return &fakeDockerPTYAttachmentV1{}, nil
+		},
+		resize: func(context.Context, CommandSpec, string, uint32, uint32, time.Duration) error {
+			return errors.New("resize unavailable")
+		},
+		observe: func(context.Context, CommandSpec, string) (int, error) {
+			<-releaseObserver
+			return 143, nil
+		},
+	}
+	workload, err := prepareDockerWorkloadPTYV1(t.Context(), plan, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workload.Output(); err != nil {
+		t.Fatal(err)
+	}
+	if err := workload.Start(t.Context()); err == nil || !strings.Contains(err.Error(), "resize unavailable") {
+		t.Fatalf("initial resize error = %v", err)
+	}
+	if !workload.Started() {
+		t.Fatal("Docker-started workload was hidden by the later resize failure")
+	}
+	close(releaseObserver)
 }
 
 func TestDockerWorkloadPTYV1ReportsObservationLossAndCallerWaitCancellation(t *testing.T) {
 	plan := controlledSessionWorkloadPlanFixtureV1(t)
 	release := make(chan struct{})
 	backend := dockerWorkloadPTYBackendV1{
-		run: func(CommandSpec, RunOptions) error { return nil },
+		run: func(spec CommandSpec, options RunOptions) error {
+			writeDockerWorkloadCreateIDV1(spec, options, plan)
+			return nil
+		},
 		attach: func(context.Context, CommandSpec, string, time.Duration) (dockerPTYAttachmentV1, error) {
 			return &fakeDockerPTYAttachmentV1{}, nil
 		},
@@ -265,8 +326,9 @@ func TestDockerWorkloadPTYV1FreezesCallerOwnedPlanSlices(t *testing.T) {
 	runs := []CommandSpec{}
 	exit := make(chan int, 1)
 	workload, err := prepareDockerWorkloadPTYV1(t.Context(), plan, dockerWorkloadPTYBackendV1{
-		run: func(spec CommandSpec, _ RunOptions) error {
+		run: func(spec CommandSpec, options RunOptions) error {
 			runs = append(runs, spec)
+			writeDockerWorkloadCreateIDV1(spec, options, plan)
 			return nil
 		},
 		attach: func(context.Context, CommandSpec, string, time.Duration) (dockerPTYAttachmentV1, error) {
@@ -289,8 +351,14 @@ func TestDockerWorkloadPTYV1FreezesCallerOwnedPlanSlices(t *testing.T) {
 	if _, err := workload.Wait(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if len(runs) != 2 || !reflect.DeepEqual(runs[1].Args, wantStart) {
-		t.Fatalf("frozen start command = %#v, want %#v", runs, wantStart)
+	if len(runs) != 2 || !reflect.DeepEqual(runs[1].Args, []string{"start", dockerWorkloadTestContainerIDV1}) {
+		t.Fatalf("frozen start command = %#v, original planned start %#v", runs, wantStart)
+	}
+}
+
+func writeDockerWorkloadCreateIDV1(spec CommandSpec, options RunOptions, plan ControlledSessionContainerPlanV1) {
+	if reflect.DeepEqual(spec.Args, plan.Create.Args) && options.Stdout != nil {
+		_, _ = fmt.Fprintln(options.Stdout, dockerWorkloadTestContainerIDV1)
 	}
 }
 
