@@ -33,7 +33,12 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   workload plan inert, establishes the Engine attachment before start, applies
   the initial and later dimensions through the Engine API, preserves exact
   input and output bytes, independently observes the container exit code, and
-  exposes graceful and forced stop operations. Controller launch, protocol/PTY
+  exposes graceful and forced stop operations. The Docker controller adapter
+  is also implemented: it requires the exact lease-private channel socket
+  before container creation, creates the frozen controller plan inert, starts
+  it at most once, independently observes its exit, exposes graceful and forced
+  stop operations, captures the full container ID returned by creation, and
+  pins all later lifecycle operations to that exact container. Protocol/PTY
   bridging, controlled-session networking, and lifecycle orchestration remain
   later slices.
 - Initial runtime: Linux containers under Docker
