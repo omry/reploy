@@ -123,6 +123,9 @@ func TestPTYOutputPumpV1DeliveryFailureIsExplicitAndTerminal(t *testing.T) {
 	if result.Status != failedPTYOutputStatusV1(ptyOutputDeliveryFailureReasonV1) || !errors.Is(result.Err, deliveryErr) {
 		t.Fatalf("Finalize() = %#v", result)
 	}
+	if !IsPTYOutputDeliveryFailureV1(result) || IsPTYOutputObservationFailureV1(result) {
+		t.Fatalf("delivery failure classification = %#v", result)
+	}
 	if calls.Load() != 1 {
 		t.Fatalf("emitter calls = %d", calls.Load())
 	}
@@ -156,6 +159,9 @@ func TestPTYOutputPumpV1DeliversBytesReturnedWithReadFailure(t *testing.T) {
 	}
 	if result.Status != failedPTYOutputStatusV1(ptyOutputReadFailureReasonV1) || !errors.Is(result.Err, readErr) {
 		t.Fatalf("Finalize() = %#v", result)
+	}
+	if IsPTYOutputDeliveryFailureV1(result) || !IsPTYOutputObservationFailureV1(result) {
+		t.Fatalf("read failure classification = %#v", result)
 	}
 	if source.closeCount.Load() != 1 {
 		t.Fatalf("source close count = %d", source.closeCount.Load())
@@ -335,6 +341,9 @@ func TestPTYOutputPumpV1DeadlineIncludesEarlierWorkloadShutdown(t *testing.T) {
 	if result.Status != failedPTYOutputStatusV1(ptyOutputTimeoutReasonV1) {
 		t.Fatalf("Finalize() = %#v", result)
 	}
+	if IsPTYOutputDeliveryFailureV1(result) || IsPTYOutputObservationFailureV1(result) {
+		t.Fatalf("timeout failure classification = %#v", result)
+	}
 	_ = writer.Close()
 }
 
@@ -481,6 +490,9 @@ func TestPTYOutputPumpV1CloseFailureCannotReportDrained(t *testing.T) {
 	}
 	if result.Status != failedPTYOutputStatusV1(ptyOutputClosureFailureReasonV1) || !errors.Is(result.Err, closeErr) {
 		t.Fatalf("Finalize() = %#v", result)
+	}
+	if IsPTYOutputDeliveryFailureV1(result) || !IsPTYOutputObservationFailureV1(result) {
+		t.Fatalf("closure failure classification = %#v", result)
 	}
 }
 
