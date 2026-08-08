@@ -10,13 +10,15 @@ import (
 
 func testAuthorizationV1() AuthorizationV1 {
 	digest := canonical.Digest("sha256:" + strings.Repeat("1", 64))
+	participant := EnvironmentAuthorizationV1{
+		DeploymentID: "demo", GenerationReference: "reploy/env/demo:g-current", BuildIdentity: digest, PlanDigest: digest,
+		RuntimeIdentity: RuntimeIdentityV1{Username: "reploy", UID: "1000", GID: "1000", SupplementaryGIDs: []string{"10", "100"}},
+	}
 	return AuthorizationV1{
 		Schema: AuthorizationSchemaV1, Handle: "session-" + strings.Repeat("a", 64),
-		DeploymentID: "demo", GenerationReference: "reploy/env/demo:g-current", BuildIdentity: digest,
-		LiveRunID: "run-0000000000000001", WorkloadPlan: digest, ControllerPlan: digest,
-		RuntimeIdentity: RuntimeIdentityV1{Username: "reploy", UID: "1000", GID: "1000", SupplementaryGIDs: []string{"10", "100"}},
-		Operations:      []OperationV1{OperationCompleteV1, OperationInputV1, OperationResizeV1, OperationTerminateV1},
-		EndpointIDs:     []string{"browser", "terminal"},
+		LiveRunID: "run-0000000000000001", Controller: participant, Workload: participant,
+		Operations:  []OperationV1{OperationCompleteV1, OperationInputV1, OperationResizeV1, OperationTerminateV1},
+		EndpointIDs: []string{"browser", "terminal"},
 	}
 }
 
@@ -63,15 +65,17 @@ func TestValidateAuthorizationV1RejectsOpenOrAmbiguousRecords(t *testing.T) {
 		}, want: "unique and sorted"},
 		{name: "invalid endpoint", mutate: func(value *AuthorizationV1) { value.EndpointIDs = []string{"API"} }, want: "Docker-style"},
 		{name: "nil collection", mutate: func(value *AuthorizationV1) { value.EndpointIDs = nil }, want: "must use arrays"},
-		{name: "unsafe generation", mutate: func(value *AuthorizationV1) { value.GenerationReference = "bad\nreference" }, want: "safe text"},
-		{name: "formatted generation", mutate: func(value *AuthorizationV1) { value.GenerationReference = "bad\u202ereference" }, want: "safe text"},
-		{name: "leading zero uid", mutate: func(value *AuthorizationV1) { value.RuntimeIdentity.UID = "01000" }, want: "canonical unsigned"},
-		{name: "root name for non-root", mutate: func(value *AuthorizationV1) { value.RuntimeIdentity.Username = "root" }, want: "non-root runtime identity"},
-		{name: "non-root name for root", mutate: func(value *AuthorizationV1) { value.RuntimeIdentity.UID = "0" }, want: "root runtime identity"},
-		{name: "root primary group", mutate: func(value *AuthorizationV1) { value.RuntimeIdentity.GID = "0" }, want: "root group"},
-		{name: "root supplementary group", mutate: func(value *AuthorizationV1) { value.RuntimeIdentity.SupplementaryGIDs = []string{"0", "10"} }, want: "root group"},
-		{name: "primary supplementary group", mutate: func(value *AuthorizationV1) { value.RuntimeIdentity.SupplementaryGIDs = []string{"10", "1000"} }, want: "exclude the primary"},
-		{name: "unsorted numeric groups", mutate: func(value *AuthorizationV1) { value.RuntimeIdentity.SupplementaryGIDs = []string{"100", "10"} }, want: "sorted numerically"},
+		{name: "unsafe generation", mutate: func(value *AuthorizationV1) { value.Workload.GenerationReference = "bad\nreference" }, want: "safe text"},
+		{name: "formatted generation", mutate: func(value *AuthorizationV1) { value.Controller.GenerationReference = "bad\u202ereference" }, want: "safe text"},
+		{name: "leading zero uid", mutate: func(value *AuthorizationV1) { value.Workload.RuntimeIdentity.UID = "01000" }, want: "canonical unsigned"},
+		{name: "root name for non-root", mutate: func(value *AuthorizationV1) { value.Workload.RuntimeIdentity.Username = "root" }, want: "non-root runtime identity"},
+		{name: "non-root name for root", mutate: func(value *AuthorizationV1) { value.Workload.RuntimeIdentity.UID = "0" }, want: "root runtime identity"},
+		{name: "root primary group", mutate: func(value *AuthorizationV1) { value.Workload.RuntimeIdentity.GID = "0" }, want: "root group"},
+		{name: "root supplementary group", mutate: func(value *AuthorizationV1) { value.Workload.RuntimeIdentity.SupplementaryGIDs = []string{"0", "10"} }, want: "root group"},
+		{name: "primary supplementary group", mutate: func(value *AuthorizationV1) {
+			value.Workload.RuntimeIdentity.SupplementaryGIDs = []string{"10", "1000"}
+		}, want: "exclude the primary"},
+		{name: "unsorted numeric groups", mutate: func(value *AuthorizationV1) { value.Workload.RuntimeIdentity.SupplementaryGIDs = []string{"100", "10"} }, want: "sorted numerically"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
