@@ -12,8 +12,14 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
 - Implementation state: Initial global sandbox prerequisites, trusted
   application-startup verification, controlled-session authorization, the
   framed protocol, and lifecycle state machine, including its output-finalization
-  barrier and timeout outcome, are implemented; bounded output draining,
-  controlled-session networking, and Docker orchestration remain later slices
+  barrier and timeout outcome, are implemented. The synthetic PTY output pump
+  now preserves byte order with one bounded flow-control chunk, charges time
+  already spent stopping the workload against the host-owned absolute
+  finalization deadline, cancels blocked delivery, closes the source, and
+  produces an immutable drained-or-failed status for the lifecycle barrier
+  before returning.
+  Docker PTY wiring, controlled-session networking, and orchestration remain
+  later slices
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution
