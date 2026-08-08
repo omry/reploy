@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -250,11 +251,27 @@ func TestControllerConnectionV1BoundsAndSerializesFlow(t *testing.T) {
 		server, client := net.Pipe()
 		defer client.Close()
 		connection := &ControllerConnectionV1{connection: server}
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 		defer cancel()
 		event := EventV1{Kind: EventOutputV1, Bytes: bytes.Repeat([]byte{'x'}, MaxFramePayloadV1)}
-		if err := connection.WriteEvent(ctx, event); !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("WriteEvent() error = %v", err)
+		writeErr := make(chan error, 1)
+		go func() { writeErr <- connection.WriteEvent(ctx, event) }()
+		header := make([]byte, frameHeaderSizeV1)
+		if _, err := io.ReadFull(client, header); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-writeErr; !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("first WriteEvent() error = %v", err)
+		}
+		if err := connection.WriteEvent(t.Context(), EventV1{Kind: EventOutputV1, Bytes: []byte("later")}); err == nil {
+			t.Fatal("second WriteEvent() reused the connection after a partial frame")
+		}
+		remaining, err := io.ReadAll(client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(remaining) != 0 {
+			t.Fatalf("partial payload bytes = %d, want 0", len(remaining))
 		}
 	})
 
