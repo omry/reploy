@@ -1197,7 +1197,7 @@ in a final runtime layer, creates the locked container-local account there,
 records that layer outside the provider graph, and uses its fixed
 sandbox-and-exec contract as the outermost process for persistent
 workloads, transient commands, shells, and lifecycle commands. The verifier
-fails closed unless `/proc/self/status` reports seccomp filtering,
+fails closed unless `/proc/thread-self/status` reports seccomp filtering,
 `no-new-privileges`, and empty inheritable, effective, permitted, bounding, and
 ambient capability
 sets, then directly executes the exact application argv. Private-environment
