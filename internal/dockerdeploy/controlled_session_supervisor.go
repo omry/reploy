@@ -78,7 +78,7 @@ type controlledSessionSupervisorBackendV1 struct {
 	prepareChannel    func(ControlledSessionExecutionPlanV1) (controlledSessionChannelRuntimeV1, error)
 	prepareController func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionControllerRuntimeV1, error)
 	prepareWorkload   func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error)
-	recordOwnership   func(string, string) error
+	recordOwnership   func(string, string) (deploy.ControlledSessionCleanupManifest, error)
 	now               func() time.Time
 }
 
@@ -120,6 +120,7 @@ type controlledSessionSupervisorV1 struct {
 	workloadRecorded   bool
 	controllerStarted  bool
 	workloadStarted    bool
+	cleanupManifest    deploy.ControlledSessionCleanupManifest
 
 	transportHealthy bool
 	diagnosticErr    error
@@ -175,16 +176,21 @@ func RunControlledSessionV1(
 		prepareWorkload: func(ctx context.Context, plan ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error) {
 			return PrepareDockerWorkloadPTYV1(ctx, plan)
 		},
-		recordOwnership: func(controllerID string, workloadID string) error {
+		recordOwnership: func(controllerID string, workloadID string) (deploy.ControlledSessionCleanupManifest, error) {
 			ownership := controlledSessionOwnershipFromPlanV1(plan, controllerID, workloadID)
-			if _, err := operation.RecordControlledSessionOwnershipV1(ownership); err != nil {
-				return fmt.Errorf("persist controlled-session ownership: %w", err)
+			recorded, err := operation.RecordControlledSessionOwnershipV1(ownership)
+			if err != nil {
+				return deploy.ControlledSessionCleanupManifest{}, fmt.Errorf("persist controlled-session ownership: %w", err)
+			}
+			manifest, err := deploy.ControlledSessionCleanupManifestFromOwnership(recorded)
+			if err != nil {
+				return deploy.ControlledSessionCleanupManifest{}, fmt.Errorf("prepare controlled-session cleanup manifest: %w", err)
 			}
 			released = true
 			if err := operation.Unlock(); err != nil {
-				return fmt.Errorf("release operation lock before controlled-session startup: %w", err)
+				return deploy.ControlledSessionCleanupManifest{}, fmt.Errorf("release operation lock before controlled-session startup: %w", err)
 			}
-			return nil
+			return manifest, nil
 		},
 		now: time.Now,
 	})
@@ -368,9 +374,16 @@ func (supervisor *controlledSessionSupervisorV1) prepare(ctx context.Context) er
 		return fmt.Errorf("claim controlled-session workload output: %w", err)
 	}
 	if supervisor.backend.recordOwnership != nil {
-		if err := supervisor.backend.recordOwnership(controller.ContainerID(), workload.ContainerID()); err != nil {
+		manifest, err := supervisor.backend.recordOwnership(controller.ContainerID(), workload.ContainerID())
+		if err != nil {
 			return err
 		}
+		if err := validateControlledSessionCleanupManifestForRuntimeV1(
+			manifest, supervisor.plan, controller.ContainerID(), workload.ContainerID(),
+		); err != nil {
+			return err
+		}
+		supervisor.cleanupManifest = manifest
 	}
 	if err := controller.Start(ctx); err != nil {
 		return fmt.Errorf("start controlled-session controller: %w", err)
@@ -395,6 +408,26 @@ func (supervisor *controlledSessionSupervisorV1) prepare(ctx context.Context) er
 	}
 	supervisor.workloadStarted = true
 	supervisor.workloadResult = observeControlledSessionProcessV1(workload.Wait)
+	return nil
+}
+
+func validateControlledSessionCleanupManifestForRuntimeV1(
+	manifest deploy.ControlledSessionCleanupManifest,
+	plan ControlledSessionExecutionPlanV1,
+	controllerID string,
+	workloadID string,
+) error {
+	if err := deploy.ValidateControlledSessionCleanupManifest(manifest); err != nil {
+		return fmt.Errorf("validate controlled-session cleanup manifest: %w", err)
+	}
+	expected := controlledSessionOwnershipFromPlanV1(plan, controllerID, workloadID)
+	if manifest.LiveRunID != expected.LiveRunID || manifest.ChannelDirectory != expected.ChannelDirectory ||
+		manifest.Controller != expected.Controller || manifest.Workload != expected.Workload {
+		return fmt.Errorf("controlled-session cleanup manifest does not match the exact prepared resources")
+	}
+	if len(manifest.Networks) != 0 || len(manifest.Volumes) != 0 {
+		return fmt.Errorf("controlled-session cleanup manifest names resources that this runtime does not create")
+	}
 	return nil
 }
 
