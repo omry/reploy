@@ -83,7 +83,7 @@ func prepareDockerControllerV1(
 		}
 		return nil, fmt.Errorf("create controlled-session controller container %q: %w; refusing cleanup because the creating attempt did not return an exact container ID", plan.Container, err)
 	}
-	containerID, err := parseDockerControllerContainerIDV1(createOutput.String())
+	containerID, err := parseDockerContainerIDV1(createOutput.String())
 	if err != nil {
 		return nil, fmt.Errorf("create controlled-session controller container %q: %w; refusing name-based cleanup because the created container identity is unknown", plan.Container, err)
 	}
@@ -255,7 +255,7 @@ func rollbackControlledSessionControllerContainerV1(
 	return backend.run(cleanup, RunOptions{Context: cleanupCtx})
 }
 
-func parseDockerControllerContainerIDV1(output string) (string, error) {
+func parseDockerContainerIDV1(output string) (string, error) {
 	containerID := string(bytes.TrimSpace([]byte(output)))
 	if len(containerID) != 64 {
 		return "", fmt.Errorf("Docker create returned invalid full container ID %q", containerID)
