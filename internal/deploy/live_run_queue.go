@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"regexp"
 
 	"github.com/omry/reploy/internal/canonical"
@@ -55,9 +56,28 @@ type LiveRunV1 struct {
 }
 
 type LiveRunQueueV1 struct {
-	Schema  string                      `json:"schema"`
-	Runs    []LiveRunV1                 `json:"runs"`
-	Cleanup []LiveRunContainerCleanupV1 `json:"cleanup,omitempty"`
+	Schema             string                         `json:"schema"`
+	Runs               []LiveRunV1                    `json:"runs"`
+	ControlledSessions []ControlledSessionOwnershipV1 `json:"controlled_sessions,omitempty"`
+	Cleanup            []LiveRunContainerCleanupV1    `json:"cleanup,omitempty"`
+}
+
+type ControlledSessionOwnershipV1 struct {
+	LiveRunID        string                                `json:"live_run_id"`
+	BootSession      string                                `json:"boot_session"`
+	SessionHandle    string                                `json:"session_handle"`
+	ChannelDirectory string                                `json:"channel_directory"`
+	Controller       ControlledSessionContainerOwnershipV1 `json:"controller"`
+	Workload         ControlledSessionContainerOwnershipV1 `json:"workload"`
+}
+
+type ControlledSessionContainerOwnershipV1 struct {
+	Role                string `json:"role"`
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	DeploymentID        string `json:"deployment_id"`
+	GenerationReference string `json:"generation_reference"`
+	BuildIdentity       string `json:"build_identity"`
 }
 
 type LiveRunRecoveryReasonV1 string
@@ -98,6 +118,9 @@ var ErrLiveRunConflict = errors.New("another run must finish first")
 
 var liveRunIDPatternV1 = regexp.MustCompile(`^run-[0-9a-f]{16}$`)
 var controlMarkerIDPatternV1 = regexp.MustCompile(`^control-[0-9a-f]{16}$`)
+var controlledSessionHandlePatternV1 = regexp.MustCompile(`^session-[0-9a-f]{64}$`)
+var controlledSessionContainerIDPatternV1 = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var controlledSessionBuildIdentityPatternV1 = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 func NewLiveRunQueueV1() LiveRunQueueV1 {
 	return LiveRunQueueV1{Schema: LiveRunQueueSchemaV1, Runs: []LiveRunV1{}}
@@ -189,6 +212,14 @@ func ValidateLiveRunQueueV1(queue LiveRunQueueV1) error {
 	if queue.Runs == nil {
 		return fmt.Errorf("live run queue runs must use an array")
 	}
+	for index, ownership := range queue.ControlledSessions {
+		if err := validateControlledSessionOwnershipV1(ownership); err != nil {
+			return fmt.Errorf("live run queue controlled session %d: %w", index, err)
+		}
+		if index > 0 && queue.ControlledSessions[index-1].LiveRunID >= ownership.LiveRunID {
+			return fmt.Errorf("live run queue controlled sessions must be sorted and unique by live run ID")
+		}
+	}
 	for index, cleanup := range queue.Cleanup {
 		if err := validateLiveRunContainerCleanupV1(cleanup); err != nil {
 			return fmt.Errorf("live run queue cleanup entry %d: %w", index, err)
@@ -243,6 +274,65 @@ func ValidateLiveRunQueueV1(queue LiveRunQueueV1) error {
 	}
 	if runnableCount == 0 || (readyCount == 0 && !runnableExclusive && !firstWaiting.Exclusive) {
 		return fmt.Errorf("live run queue leaves run %q waiting although it can start", firstWaiting.ID)
+	}
+	return nil
+}
+
+func validateControlledSessionOwnershipV1(ownership ControlledSessionOwnershipV1) error {
+	if err := ValidateLiveRunIDV1(ownership.LiveRunID); err != nil {
+		return fmt.Errorf("live run ID: %w", err)
+	}
+	if err := validateBootSessionIDV1(ownership.BootSession); err != nil {
+		return err
+	}
+	if !controlledSessionHandlePatternV1.MatchString(ownership.SessionHandle) {
+		return fmt.Errorf("session handle must use session- followed by 64 lowercase hexadecimal characters")
+	}
+	if !filepath.IsAbs(ownership.ChannelDirectory) || filepath.Clean(ownership.ChannelDirectory) != ownership.ChannelDirectory || !safeRecoveryIdentity(ownership.ChannelDirectory) {
+		return fmt.Errorf("channel directory must be a clean absolute path")
+	}
+	if err := validateControlledSessionContainerOwnershipStateV1(ownership.Controller, "controller"); err != nil {
+		return fmt.Errorf("controller: %w", err)
+	}
+	if err := validateControlledSessionContainerOwnershipStateV1(ownership.Workload, "workload"); err != nil {
+		return fmt.Errorf("workload: %w", err)
+	}
+	if ownership.Controller.ID == "" && ownership.Workload.ID != "" {
+		return fmt.Errorf("workload container ID cannot be recorded before the controller container ID")
+	}
+	if ownership.Controller.ID != "" && ownership.Workload.ID != "" && ownership.Controller.ID == ownership.Workload.ID {
+		return fmt.Errorf("controller and workload must name different containers")
+	}
+	return nil
+}
+
+func validateControlledSessionContainerOwnershipV1(ownership ControlledSessionContainerOwnershipV1, role string) error {
+	if err := validateControlledSessionContainerOwnershipStateV1(ownership, role); err != nil {
+		return err
+	}
+	if ownership.ID == "" {
+		return fmt.Errorf("container ID must use 64 lowercase hexadecimal characters")
+	}
+	return nil
+}
+
+func validateControlledSessionContainerOwnershipStateV1(ownership ControlledSessionContainerOwnershipV1, role string) error {
+	if ownership.Role != role {
+		return fmt.Errorf("role must be %q", role)
+	}
+	if ownership.ID != "" && !controlledSessionContainerIDPatternV1.MatchString(ownership.ID) {
+		return fmt.Errorf("container ID must use 64 lowercase hexadecimal characters")
+	}
+	for label, value := range map[string]string{
+		"name": ownership.Name, "deployment ID": ownership.DeploymentID,
+		"generation reference": ownership.GenerationReference,
+	} {
+		if !safeRecoveryIdentity(value) {
+			return fmt.Errorf("%s must be nonempty safe text", label)
+		}
+	}
+	if !controlledSessionBuildIdentityPatternV1.MatchString(ownership.BuildIdentity) {
+		return fmt.Errorf("build identity must be a sha256 digest")
 	}
 	return nil
 }
@@ -506,14 +596,19 @@ func ControlMarkersV1(queue LiveRunQueueV1) []ControlMarkerV1 {
 }
 
 func cloneLiveRunQueueV1(queue LiveRunQueueV1) LiveRunQueueV1 {
+	var controlledSessions []ControlledSessionOwnershipV1
+	if queue.ControlledSessions != nil {
+		controlledSessions = append([]ControlledSessionOwnershipV1{}, queue.ControlledSessions...)
+	}
 	var cleanup []LiveRunContainerCleanupV1
 	if queue.Cleanup != nil {
 		cleanup = append([]LiveRunContainerCleanupV1{}, queue.Cleanup...)
 	}
 	return LiveRunQueueV1{
-		Schema:  queue.Schema,
-		Runs:    append([]LiveRunV1{}, queue.Runs...),
-		Cleanup: cleanup,
+		Schema:             queue.Schema,
+		Runs:               append([]LiveRunV1{}, queue.Runs...),
+		ControlledSessions: controlledSessions,
+		Cleanup:            cleanup,
 	}
 }
 
