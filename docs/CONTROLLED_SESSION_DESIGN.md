@@ -10,9 +10,10 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
 
 - Decision state: Focused review complete; high-level decisions approved
 - Implementation state: Initial global sandbox prerequisites, trusted
-  application-startup verification, controlled-session authorization, and the
-  initial framed protocol are implemented; lifecycle, controlled networking,
-  and Docker orchestration remain later slices
+  application-startup verification, controlled-session authorization, the
+  framed protocol, and lifecycle state machine, including its output-finalization
+  barrier and timeout outcome, are implemented; bounded output draining,
+  controlled-session networking, and Docker orchestration remain later slices
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution
@@ -448,8 +449,8 @@ cleanup and no canceled request is replayed.
 
 ### Session Events
 
-- `opened`: reports the effective dimensions, identity, generation, and fixed
-  session capabilities.
+- `opened`: reports the effective dimensions, identity, generation, fixed
+  session capabilities, and workload-output-finalization timeout.
 - `output(bytes)`: ordered PTY output bytes.
 - `workload_exit(status, reason)`: reports host-observed workload-shell
   exit.
@@ -502,10 +503,9 @@ Host Reploy owns workload-output finalization; it never waits indefinitely for
 workload cooperation. Once termination begins, it rejects new output surfaces,
 performs bounded graceful shutdown followed by forced container stop, and
 continues draining the PTY. The immutable session plan carries a finite
-output-finalization deadline. The initial implementation may use a fixed
-host-owned value, but the effective value is reported by `opened` and applies
-to workload shutdown, final buffered-byte delivery, and controller
-backpressure.
+output-finalization deadline. Protocol v1 defines an initial host-owned default
+of 30 seconds; the effective value is reported by `opened` and applies to
+workload shutdown, final buffered-byte delivery, and controller backpressure.
 
 If every final byte is delivered and every output surface reaches EOF before
 the deadline, Host Reploy emits `workload_outputs_finalized(drained)` only after
