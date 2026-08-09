@@ -79,6 +79,7 @@ type controlledSessionSupervisorBackendV1 struct {
 	prepareController func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionControllerRuntimeV1, error)
 	prepareWorkload   func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error)
 	recordOwnership   func(string, string) (deploy.ControlledSessionCleanupManifest, error)
+	startWatchdog     func(context.Context, deploy.ControlledSessionCleanupManifest) (controlledSessionWatchdogRuntimeV1, error)
 	now               func() time.Time
 }
 
@@ -113,14 +114,16 @@ type controlledSessionSupervisorV1 struct {
 	terminationMu                sync.Mutex
 	terminationAt                time.Time
 
-	workloadResult     <-chan controlledSessionProcessResultV1
-	controllerResult   <-chan controlledSessionProcessResultV1
-	workloadObserved   *controlledSessionProcessResultV1
-	controllerObserved *controlledSessionProcessResultV1
-	workloadRecorded   bool
-	controllerStarted  bool
-	workloadStarted    bool
-	cleanupManifest    deploy.ControlledSessionCleanupManifest
+	workloadResult      <-chan controlledSessionProcessResultV1
+	controllerResult    <-chan controlledSessionProcessResultV1
+	workloadObserved    *controlledSessionProcessResultV1
+	controllerObserved  *controlledSessionProcessResultV1
+	workloadRecorded    bool
+	controllerStarted   bool
+	workloadStarted     bool
+	cleanupManifest     deploy.ControlledSessionCleanupManifest
+	watchdog            controlledSessionWatchdogRuntimeV1
+	preCleanupSucceeded bool
 
 	transportHealthy bool
 	diagnosticErr    error
@@ -192,7 +195,8 @@ func RunControlledSessionV1(
 			}
 			return manifest, nil
 		},
-		now: time.Now,
+		startWatchdog: startControlledSessionWatchdogV1,
+		now:           time.Now,
 	})
 	cleaned := result.SessionResult.CleanupStatus.Kind == controlledsession.CleanupStatusSucceededV1 &&
 		result.DeliveryTailCleanupStatus.Kind == controlledsession.CleanupStatusSucceededV1
@@ -336,6 +340,7 @@ func (supervisor *controlledSessionSupervisorV1) run(ctx context.Context) (Contr
 	supervisor.waitForControllerFinalization()
 
 	preDeliveryCleanup, preDeliveryRecovery, cleanupErr := supervisor.cleanupWorkload()
+	supervisor.preCleanupSucceeded = preDeliveryCleanup.Kind == controlledsession.CleanupStatusSucceededV1
 	finish := supervisor.finishStatus(preDeliveryCleanup, preDeliveryRecovery)
 	transition, finishErr := supervisor.observe(controlledsession.ObservationV1{Kind: controlledsession.ObservationFinishedV1, Finish: &finish})
 	if finishErr != nil {
@@ -384,6 +389,14 @@ func (supervisor *controlledSessionSupervisorV1) prepare(ctx context.Context) er
 			return err
 		}
 		supervisor.cleanupManifest = manifest
+		if supervisor.backend.startWatchdog == nil {
+			return fmt.Errorf("launch controlled-session watchdog: backend is incomplete")
+		}
+		watchdog, err := supervisor.backend.startWatchdog(ctx, manifest)
+		if err != nil {
+			return fmt.Errorf("launch controlled-session watchdog: %w", err)
+		}
+		supervisor.watchdog = watchdog
 	}
 	if err := controller.Start(ctx); err != nil {
 		return fmt.Errorf("start controlled-session controller: %w", err)
@@ -867,6 +880,17 @@ func (supervisor *controlledSessionSupervisorV1) cleanupDeliveryTail() (
 			Kind: controlledsession.CleanupStatusFailedV1, Message: "controlled-session delivery-tail cleanup failed",
 		}, controlledsession.RecoveryRetryCleanupV1
 	}
+	if supervisor.watchdog != nil && supervisor.preCleanupSucceeded {
+		disarmCtx, disarmCancel := context.WithTimeout(context.Background(), supervisor.options.CleanupTimeout)
+		cleanupErr = errors.Join(cleanupErr, supervisor.watchdog.Disarm(disarmCtx))
+		disarmCancel()
+		if cleanupErr != nil {
+			supervisor.diagnosticErr = errors.Join(supervisor.diagnosticErr, cleanupErr)
+			return status, controlledsession.CleanupStatusV1{
+				Kind: controlledsession.CleanupStatusFailedV1, Message: "controlled-session delivery-tail cleanup failed",
+			}, controlledsession.RecoveryRetryCleanupV1
+		}
+	}
 	return status, controlledsession.CleanupStatusV1{Kind: controlledsession.CleanupStatusSucceededV1}, controlledsession.RecoveryNoneV1
 }
 
@@ -904,6 +928,7 @@ func (supervisor *controlledSessionSupervisorV1) finishStartupFailure(cause erro
 	if supervisor.workload != nil {
 		preCleanup, recovery, cleanupErr = supervisor.cleanupWorkload()
 	}
+	supervisor.preCleanupSucceeded = preCleanup.Kind == controlledsession.CleanupStatusSucceededV1
 	finish := supervisor.finishStatus(preCleanup, recovery)
 	transition, finishErr := supervisor.observe(controlledsession.ObservationV1{Kind: controlledsession.ObservationFinishedV1, Finish: &finish})
 	invocation := supervisor.deliverTerminalResult(transition.Result)
