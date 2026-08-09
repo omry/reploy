@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/omry/reploy/internal/controlledsession"
+	"github.com/omry/reploy/internal/deploy"
 )
 
 func TestControlledSessionSupervisorDockerIntegration(t *testing.T) {
@@ -23,8 +24,32 @@ func TestControlledSessionSupervisorDockerIntegration(t *testing.T) {
 	defer cancel()
 	image := buildControlledSessionControllerIntegrationImageV1(t, ctx)
 	plan := controlledSessionControllerIntegrationPlanV1(t, image, []string{"/session-channel-helper", "supervise"})
+	operation, err := deploy.AcquireOperationLock(ctx, plan.Workload.DeploymentDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = operation.Unlock() })
+	lease, err := operation.AcquireLiveRunLeaseV1(plan.LiveRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := lease.Release(); err != nil {
+			t.Errorf("release controlled-session live-run lease: %v", err)
+		}
+	})
+	status, err := operation.AdmitLiveRunV1(deploy.LiveRunV1{
+		ID: plan.LiveRunID, Kind: deploy.LiveRunKindShellV1, Name: plan.Workload.DeploymentID,
+		GenerationReference: plan.Workload.GenerationReference, Exclusive: true,
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != deploy.LiveRunStatusActiveV1 {
+		t.Fatalf("controlled-session live run status = %q", status)
+	}
 
-	result, err := RunControlledSessionV1(ctx, plan, ControlledSessionRunOptionsV1{
+	result, err := RunControlledSessionV1(ctx, operation, plan, ControlledSessionRunOptionsV1{
 		StartupTimeout: 30 * time.Second, TerminationGrace: 5 * time.Second,
 		ControllerFinalizationTimeout: 15 * time.Second, ResultAcknowledgementTimeout: 5 * time.Second,
 		CleanupTimeout: 15 * time.Second,
@@ -52,5 +77,13 @@ func TestControlledSessionSupervisorDockerIntegration(t *testing.T) {
 	}
 	if _, statErr := os.Stat(plan.Channel.HostDirectory); !os.IsNotExist(statErr) {
 		t.Fatalf("private channel directory survived cleanup: %v", statErr)
+	}
+	check, lockErr := deploy.AcquireOperationLock(ctx, plan.Workload.DeploymentDirectory)
+	if lockErr != nil {
+		t.Fatal(lockErr)
+	}
+	defer check.Unlock()
+	if queue, found, readErr := check.ReadLiveRunQueueV1(); readErr != nil || found {
+		t.Fatalf("verified-clean session retained ownership: %#v, found=%t, error=%v", queue, found, readErr)
 	}
 }
