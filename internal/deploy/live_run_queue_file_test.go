@@ -184,12 +184,17 @@ func TestRecoverLiveRunQueuePreservesControlledSessionOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(recovery.Removed) != 1 || recovery.Removed[0].Run.ID != runID {
+	if len(recovery.Removed) != 1 || recovery.Removed[0].Run.ID != runID ||
+		len(recovery.ControlledSessions) != 1 || recovery.ControlledSessions[0] != recorded {
 		t.Fatalf("recovery = %#v", recovery)
 	}
 	queue, found, err := lock.ReadLiveRunQueueV1()
 	if err != nil || !found || len(queue.Runs) != 0 || len(queue.ControlledSessions) != 1 || queue.ControlledSessions[0] != recorded {
 		t.Fatalf("ownership after run recovery = %#v, found=%t, error=%v", queue, found, err)
+	}
+	retry, err := lock.RecoverLiveRunQueueV1()
+	if err != nil || len(retry.Removed) != 0 || len(retry.ControlledSessions) != 1 || retry.ControlledSessions[0] != recorded {
+		t.Fatalf("retained ownership retry = %#v, error=%v", retry, err)
 	}
 }
 
