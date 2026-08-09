@@ -59,9 +59,14 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   container IDs, their planned ownership identities, the private channel
   directory, and the session, lease, and boot identities are now durably
   recorded in the existing live-run state. Verified cleanup removes that
-  record; failed cleanup retains it. The watchdog and restart reconciliation
-  remain the next ownership phases, and controlled-session networking remains
-  a later phase.
+  record; failed cleanup retains it. Reploy now derives the immutable watchdog
+  cleanup manifest from that recorded ownership before startup. It names only
+  the exact containers and private channel, carries the host boot identity,
+  represents the currently absent lease networks and volumes as empty arrays,
+  and omits protocol authority. The parent and watchdog will be the same
+  executable, so this internal manifest adds no independent schema-version
+  marker. Launching the watchdog and restart reconciliation remain the next
+  ownership phases, and controlled-session networking remains a later phase.
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution
