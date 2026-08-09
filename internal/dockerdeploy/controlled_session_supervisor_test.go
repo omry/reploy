@@ -111,7 +111,7 @@ func TestRunControlledSessionV1PersistsExactOwnershipBeforeStarting(t *testing.T
 		prepareWorkload: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error) {
 			return workload, nil
 		},
-		recordOwnership: func(controllerID string, workloadID string) error {
+		recordOwnership: func(controllerID string, workloadID string) (deploy.ControlledSessionCleanupManifest, error) {
 			called = true
 			if controller.started || workload.started {
 				t.Fatal("controlled-session process started before durable ownership")
@@ -119,7 +119,7 @@ func TestRunControlledSessionV1PersistsExactOwnershipBeforeStarting(t *testing.T
 			if controllerID != dockerControllerTestContainerIDV1 || workloadID != dockerWorkloadTestContainerIDV1 {
 				t.Fatalf("container IDs = %q / %q", controllerID, workloadID)
 			}
-			return persistErr
+			return deploy.ControlledSessionCleanupManifest{}, persistErr
 		},
 		now: time.Now,
 	})
@@ -128,6 +128,46 @@ func TestRunControlledSessionV1PersistsExactOwnershipBeforeStarting(t *testing.T
 	}
 	if controller.started || workload.started {
 		t.Fatalf("started after persistence failure = controller %t workload %t", controller.started, workload.started)
+	}
+	if !controller.cleaned || !workload.cleaned || !channel.closed {
+		t.Fatalf("inert cleanup = controller %t workload %t channel %t", controller.cleaned, workload.cleaned, channel.closed)
+	}
+	if result.SessionResult.CleanupStatus.Kind != controlledsession.CleanupStatusSucceededV1 ||
+		result.DeliveryTailCleanupStatus.Kind != controlledsession.CleanupStatusSucceededV1 {
+		t.Fatalf("cleanup result = %#v", result)
+	}
+}
+
+func TestRunControlledSessionV1RejectsCleanupResourcesNotInDurableOwnership(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	controller := newFakeControlledSessionProcessV1()
+	workload := newFakeControlledSessionWorkloadV1(nil, 0)
+	channel := &fakeControlledSessionChannelV1{}
+
+	result, err := runControlledSessionV1(t.Context(), plan, testControlledSessionRunOptionsV1(), controlledSessionSupervisorBackendV1{
+		prepareChannel: func(ControlledSessionExecutionPlanV1) (controlledSessionChannelRuntimeV1, error) {
+			return channel, nil
+		},
+		prepareController: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionControllerRuntimeV1, error) {
+			return controller, nil
+		},
+		prepareWorkload: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error) {
+			return workload, nil
+		},
+		recordOwnership: func(controllerID string, workloadID string) (deploy.ControlledSessionCleanupManifest, error) {
+			ownership := controlledSessionOwnershipFromPlanV1(plan, controllerID, workloadID)
+			ownership.BootSession = "boot-session"
+			manifest, manifestErr := deploy.ControlledSessionCleanupManifestFromOwnership(ownership)
+			manifest.Networks = []string{"unrelated-network"}
+			return manifest, manifestErr
+		},
+		now: time.Now,
+	})
+	if err == nil || !strings.Contains(err.Error(), "resources that this runtime does not create") {
+		t.Fatalf("cleanup resource selection error = %v", err)
+	}
+	if controller.started || workload.started {
+		t.Fatalf("started with invalid cleanup manifest = controller %t workload %t", controller.started, workload.started)
 	}
 	if !controller.cleaned || !workload.cleaned || !channel.closed {
 		t.Fatalf("inert cleanup = controller %t workload %t channel %t", controller.cleaned, workload.cleaned, channel.closed)
