@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -22,6 +23,10 @@ func TestControlledSessionSupervisorDockerIntegration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+	watchdogExecutable := buildControlledSessionWatchdogExecutableV1(t, ctx)
+	previousWatchdogExecutable := controlledSessionWatchdogExecutableV1
+	controlledSessionWatchdogExecutableV1 = func() (string, error) { return watchdogExecutable, nil }
+	t.Cleanup(func() { controlledSessionWatchdogExecutableV1 = previousWatchdogExecutable })
 	image := buildControlledSessionControllerIntegrationImageV1(t, ctx)
 	plan := controlledSessionControllerIntegrationPlanV1(t, image, []string{"/session-channel-helper", "supervise"})
 	operation, err := deploy.AcquireOperationLock(ctx, plan.Workload.DeploymentDirectory)
@@ -73,8 +78,22 @@ func TestControlledSessionSupervisorDockerIntegration(t *testing.T) {
 	if lockErr != nil {
 		t.Fatal(lockErr)
 	}
-	defer check.Unlock()
 	if queue, found, readErr := check.ReadLiveRunQueueV1(); readErr != nil || found {
 		t.Fatalf("verified-clean session retained ownership: %#v, found=%t, error=%v", queue, found, readErr)
 	}
+	if err := check.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	proveControlledSessionWatchdogParentLossV1(t, ctx, image, plan)
+}
+
+func buildControlledSessionWatchdogExecutableV1(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	executable := filepath.Join(t.TempDir(), "reploy")
+	command := exec.CommandContext(ctx, "go", "build", "-buildvcs=false", "-o", executable, "./cmd/reploy")
+	command.Dir = filepath.Join("..", "..")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build Reploy watchdog executable: %v\n%s", err, output)
+	}
+	return executable
 }
