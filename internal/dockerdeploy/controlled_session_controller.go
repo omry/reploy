@@ -39,6 +39,10 @@ type DockerControllerV1 struct {
 	waitResult  dockerControllerWaitResultV1
 }
 
+func (controller *DockerControllerV1) ContainerID() string {
+	return controller.containerID
+}
+
 // PrepareDockerControllerV1 verifies that the private channel is ready and
 // creates the exact controller container without starting it.
 func PrepareDockerControllerV1(
