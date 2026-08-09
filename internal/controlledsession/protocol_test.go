@@ -51,6 +51,14 @@ func TestEventV1RoundTripsStrictTypedFrames(t *testing.T) {
 		{Kind: EventTerminatedV1, Terminated: &ResultV1{
 			Cause: CauseWorkloadExitV1, WorkloadStatus: ProcessStatusV1{Kind: ProcessStatusExitedV1, Code: &code},
 			WorkloadOutputFinalizationStatus: WorkloadOutputFinalizationStatusV1{Kind: WorkloadOutputFinalizationDrainedV1},
+			RuntimeObservationStatus:         RuntimeObservationStatusV1{Kind: RuntimeObservationMaintainedV1},
+			ControllerFinalizationStatus:     ControllerFinalizationStatusV1{Kind: ControllerFinalizationCompletedV1},
+			CleanupStatus:                    CleanupStatusV1{Kind: CleanupStatusSucceededV1}, RecoveryAction: RecoveryNoneV1,
+		}},
+		{Kind: EventTerminatedV1, Terminated: &ResultV1{
+			Cause: CauseWorkloadExitV1, WorkloadStatus: ProcessStatusV1{Kind: ProcessStatusExitedV1, Code: &code},
+			WorkloadOutputFinalizationStatus: WorkloadOutputFinalizationStatusV1{Kind: WorkloadOutputFinalizationDrainedV1},
+			RuntimeObservationStatus:         RuntimeObservationStatusV1{Kind: RuntimeObservationLostV1, Reason: "docker unavailable"},
 			ControllerFinalizationStatus:     ControllerFinalizationStatusV1{Kind: ControllerFinalizationCompletedV1},
 			CleanupStatus:                    CleanupStatusV1{Kind: CleanupStatusSucceededV1}, RecoveryAction: RecoveryNoneV1,
 		}},
@@ -158,7 +166,7 @@ func TestFrameV1RejectsBadMagicVersionTruncationAndUnknownJSON(t *testing.T) {
 		t.Fatalf("ReadEventV1(case-variant duplicate JSON) error = %v", err)
 	}
 
-	nestedCaseVariant := []byte(`{"cause":"workload-exit","workload_status":{"Kind":"exited","code":0},"workload_output_finalization_status":{"kind":"drained"},"controller_finalization_status":{"kind":"completed"},"cleanup_status":{"kind":"succeeded"},"recovery_action":"none"}`)
+	nestedCaseVariant := []byte(`{"cause":"workload-exit","workload_status":{"Kind":"exited","code":0},"workload_output_finalization_status":{"kind":"drained"},"runtime_observation_status":{"kind":"maintained"},"controller_finalization_status":{"kind":"completed"},"cleanup_status":{"kind":"succeeded"},"recovery_action":"none"}`)
 	framed.Reset()
 	if err := writeFrameV1(&framed, wireEventTerminatedV1, nestedCaseVariant); err != nil {
 		t.Fatal(err)
@@ -244,6 +252,74 @@ func TestReadEventV1RejectsWorkloadExitWithoutStatus(t *testing.T) {
 	}
 	if _, err := ReadEventV1(&framed); err == nil || !strings.Contains(err.Error(), "workload-exit termination requires a known workload status") {
 		t.Fatalf("ReadEventV1(workload exit without status) error = %v", err)
+	}
+}
+
+func TestReadEventV1RejectsContradictoryRuntimeObservationLossResults(t *testing.T) {
+	code := 0
+	valid := ResultV1{
+		Cause:                            CauseRuntimeObservationLostV1,
+		WorkloadStatus:                   ProcessStatusV1{Kind: ProcessStatusExitedV1, Code: &code},
+		WorkloadOutputFinalizationStatus: WorkloadOutputFinalizationStatusV1{Kind: WorkloadOutputFinalizationFailedV1, Reason: "runtime observation lost"},
+		RuntimeObservationStatus:         RuntimeObservationStatusV1{Kind: RuntimeObservationLostV1, Reason: "docker unavailable"},
+		ControllerFinalizationStatus:     ControllerFinalizationStatusV1{Kind: ControllerFinalizationLostV1, Reason: "docker unavailable"},
+		CleanupStatus:                    CleanupStatusV1{Kind: CleanupStatusSucceededV1},
+		RecoveryAction:                   RecoveryNoneV1,
+	}
+
+	tests := []struct {
+		name      string
+		wantError string
+		mutate    func(*ResultV1)
+	}{
+		{
+			name:      "runtime observation maintained",
+			wantError: "runtime-observation-loss termination requires lost runtime observation status",
+			mutate: func(result *ResultV1) {
+				result.RuntimeObservationStatus = RuntimeObservationStatusV1{Kind: RuntimeObservationMaintainedV1}
+			},
+		},
+		{
+			name:      "runtime loss with outputs drained",
+			wantError: "runtime-observation-loss termination requires failed workload output finalization",
+			mutate: func(result *ResultV1) {
+				result.WorkloadOutputFinalizationStatus = WorkloadOutputFinalizationStatusV1{Kind: WorkloadOutputFinalizationDrainedV1}
+			},
+		},
+		{
+			name:      "controller loss with completed finalization",
+			wantError: "controller-loss termination requires lost controller finalization status",
+			mutate: func(result *ResultV1) {
+				result.Cause = CauseControllerLostV1
+				result.ControllerFinalizationStatus = ControllerFinalizationStatusV1{Kind: ControllerFinalizationCompletedV1}
+			},
+		},
+		{
+			name:      "startup failure without startup-failed finalization",
+			wantError: "startup-failure termination requires startup-failed controller finalization status",
+			mutate: func(result *ResultV1) {
+				result.Cause = CauseStartupFailureV1
+				result.ControllerFinalizationStatus = ControllerFinalizationStatusV1{Kind: ControllerFinalizationNotCompletedV1}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := valid
+			test.mutate(&result)
+			payload, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var framed bytes.Buffer
+			if err := writeFrameV1(&framed, wireEventTerminatedV1, payload); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ReadEventV1(&framed); err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("ReadEventV1(contradictory terminated result) error = %v", err)
+			}
+		})
 	}
 }
 
