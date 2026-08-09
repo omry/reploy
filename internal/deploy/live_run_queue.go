@@ -103,7 +103,8 @@ type RecoveredLiveRunV1 struct {
 }
 
 type LiveRunRecoveryV1 struct {
-	Removed []RecoveredLiveRunV1
+	Removed            []RecoveredLiveRunV1
+	ControlledSessions []ControlledSessionOwnershipV1
 }
 
 type ControlMarkerV1 struct {
