@@ -55,8 +55,13 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   completion and result acknowledgement, and removes both containers and the
   private channel. A workload that starts before a later startup step fails is
   still terminated and its output is finalized through the same barrier.
-  Crash watchdogs and restart reconciliation remain the next ownership phase;
-  controlled-session networking remains a later phase.
+  Before either process starts, the exact full controller and workload
+  container IDs, their planned ownership identities, the private channel
+  directory, and the session, lease, and boot identities are now durably
+  recorded in the existing live-run state. Verified cleanup removes that
+  record; failed cleanup retains it. The watchdog and restart reconciliation
+  remain the next ownership phases, and controlled-session networking remains
+  a later phase.
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution

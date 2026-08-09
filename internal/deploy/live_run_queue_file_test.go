@@ -60,6 +60,126 @@ func TestOperationLockLiveRunQueueFileLifecycle(t *testing.T) {
 	}
 }
 
+func TestOperationLockRecordsExactControlledSessionOwnership(t *testing.T) {
+	dir := t.TempDir()
+	lock, err := AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Unlock()
+	const runID = "run-0000000000000001"
+	const generation = "reploy/env/workload:g-current"
+	status, err := lock.AdmitLiveRunV1(LiveRunV1{
+		ID: runID, Kind: LiveRunKindShellV1, Name: "controlled-session",
+		GenerationReference: generation, Exclusive: true,
+	}, false)
+	if err != nil || status != LiveRunStatusActiveV1 {
+		t.Fatalf("admission = %q, %v", status, err)
+	}
+	ownership := controlledSessionOwnershipFixtureV1(dir, runID, generation)
+	recorded, err := lock.RecordControlledSessionOwnershipV1(ownership)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recorded.BootSession == "" || ownership.BootSession != "" {
+		t.Fatalf("boot identity = recorded %q, input %q", recorded.BootSession, ownership.BootSession)
+	}
+	loaded, found, err := lock.ReadLiveRunQueueV1()
+	if err != nil || !found || len(loaded.ControlledSessions) != 1 || loaded.ControlledSessions[0] != recorded {
+		t.Fatalf("controlled-session ownership = %#v, found=%t, error=%v", loaded.ControlledSessions, found, err)
+	}
+	conflict := ownership
+	conflict.Controller.ID = strings.Repeat("c", 64)
+	if _, err := lock.RecordControlledSessionOwnershipV1(conflict); err == nil || !strings.Contains(err.Error(), "different controlled-session ownership") {
+		t.Fatalf("conflicting ownership error = %v", err)
+	}
+	if completed, err := lock.CompleteControlledSessionV1(runID); err != nil || !completed {
+		t.Fatalf("completion = %t, %v", completed, err)
+	}
+	if _, found, err := lock.ReadLiveRunQueueV1(); err != nil || found {
+		t.Fatalf("completed queue found=%t, error=%v", found, err)
+	}
+}
+
+func TestOperationLockControlledSessionOwnershipWriteFailurePreservesQueue(t *testing.T) {
+	dir := t.TempDir()
+	lock, err := AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Unlock()
+	const runID = "run-0000000000000001"
+	const generation = "reploy/env/workload:g-current"
+	if status, err := lock.AdmitLiveRunV1(LiveRunV1{
+		ID: runID, Kind: LiveRunKindShellV1, Name: "controlled-session",
+		GenerationReference: generation, Exclusive: true,
+	}, false); err != nil || status != LiveRunStatusActiveV1 {
+		t.Fatalf("admission = %q, %v", status, err)
+	}
+	before, _, err := lock.ReadLiveRunQueueV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalReplace := replaceAtomicStateFile
+	replaceAtomicStateFile = func(string, string) error { return errors.New("injected ownership replace failure") }
+	t.Cleanup(func() { replaceAtomicStateFile = originalReplace })
+	if _, err := lock.RecordControlledSessionOwnershipV1(controlledSessionOwnershipFixtureV1(dir, runID, generation)); err == nil || !strings.Contains(err.Error(), "injected ownership replace failure") {
+		t.Fatalf("ownership write error = %v", err)
+	}
+	after, _, err := lock.ReadLiveRunQueueV1()
+	if err != nil || !reflect.DeepEqual(after, before) {
+		t.Fatalf("failed ownership write changed queue: %#v, error=%v", after, err)
+	}
+}
+
+func TestRecoverLiveRunQueuePreservesControlledSessionOwnership(t *testing.T) {
+	dir := t.TempDir()
+	lock, err := AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Unlock()
+	const runID = "run-0000000000000001"
+	const generation = "reploy/env/workload:g-current"
+	if status, err := lock.AdmitLiveRunV1(LiveRunV1{
+		ID: runID, Kind: LiveRunKindShellV1, Name: "controlled-session",
+		GenerationReference: generation, Exclusive: true,
+	}, false); err != nil || status != LiveRunStatusActiveV1 {
+		t.Fatalf("admission = %q, %v", status, err)
+	}
+	recorded, err := lock.RecordControlledSessionOwnershipV1(controlledSessionOwnershipFixtureV1(dir, runID, generation))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := lock.RecoverLiveRunQueueV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovery.Removed) != 1 || recovery.Removed[0].Run.ID != runID {
+		t.Fatalf("recovery = %#v", recovery)
+	}
+	queue, found, err := lock.ReadLiveRunQueueV1()
+	if err != nil || !found || len(queue.Runs) != 0 || len(queue.ControlledSessions) != 1 || queue.ControlledSessions[0] != recorded {
+		t.Fatalf("ownership after run recovery = %#v, found=%t, error=%v", queue, found, err)
+	}
+}
+
+func controlledSessionOwnershipFixtureV1(dir string, runID string, generation string) ControlledSessionOwnershipV1 {
+	container := func(role string, id string, environment string, generation string, build string) ControlledSessionContainerOwnershipV1 {
+		return ControlledSessionContainerOwnershipV1{
+			Role: role, ID: id, Name: "reploy-" + role + "-" + runID,
+			DeploymentID: environment, GenerationReference: generation,
+			BuildIdentity: "sha256:" + strings.Repeat(build, 64),
+		}
+	}
+	return ControlledSessionOwnershipV1{
+		LiveRunID: runID, SessionHandle: "session-" + strings.Repeat("a", 64),
+		ChannelDirectory: filepath.Join(dir, ".reploy", "private", "sessions", runID),
+		Controller:       container("controller", strings.Repeat("a", 64), "controller", "reploy/env/controller:g-current", "1"),
+		Workload:         container("workload", strings.Repeat("b", 64), "workload", generation, "2"),
+	}
+}
+
 func TestOperationLockLiveRunQueueReplaceFailurePreservesQueue(t *testing.T) {
 	dir := t.TempDir()
 	lock, err := AcquireOperationLock(t.Context(), dir)
