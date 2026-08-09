@@ -9,7 +9,11 @@ import (
 	"strings"
 )
 
-const applicationKernelStatusPath = "/proc/self/status"
+// Sandbox setup is deliberately pinned to one OS thread because Linux
+// credentials and capability sets are thread-scoped. /proc/self/status
+// describes the thread-group leader, which may be a different Go runtime
+// thread; verify the exact thread that will exec the application instead.
+const applicationKernelStatusPath = "/proc/thread-self/status"
 
 var requiredApplicationKernelStatusV1 = []struct {
 	name string
