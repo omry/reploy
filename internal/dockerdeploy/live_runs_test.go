@@ -133,6 +133,120 @@ func TestStopLiveRunV1RemovesActiveContainerBeforePromotingWaiter(t *testing.T) 
 	}
 }
 
+func TestStopLiveRunV1RemovesControlledSessionContainersAndRetainsOwnership(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	dir := plan.Workload.DeploymentDirectory
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := liveRunAdmissionFixtureV1(plan.LiveRunID, false)
+	run.Kind = deploy.LiveRunKindShellV1
+	run.GenerationReference = plan.Workload.GenerationReference
+	holdLiveRunLeaseV1(t, operation, run.ID)
+	if _, err := operation.AdmitLiveRunV1(run, false); err != nil {
+		t.Fatal(err)
+	}
+	ownership, err := operation.RecordControlledSessionOwnershipV1(controlledSessionOwnershipFromPlanV1(
+		plan, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := operation.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := []CommandSpec{}
+	result, err := stopLiveRunV1(t.Context(), dir, run.ID, 7*time.Second, liveRunsBackendV1{
+		acquire: deploy.AcquireOperationLock,
+		removeContainer: func(spec CommandSpec, options RunOptions) error {
+			if options.DockerPreflightTimeout != 7*time.Second {
+				t.Fatalf("Docker timeout = %s", options.DockerPreflightTimeout)
+			}
+			calls = append(calls, spec)
+			return nil
+		},
+	})
+	if err != nil || !result.Found || result.Run.ID != run.ID {
+		t.Fatalf("controlled-session stop = %#v, %v", result, err)
+	}
+	wantCalls := []CommandSpec{
+		TemporaryContainerCleanupCommand(dockerWorkloadTestContainerIDV1),
+		TemporaryContainerCleanupCommand(dockerControllerTestContainerIDV1),
+	}
+	if !reflect.DeepEqual(calls, wantCalls) {
+		t.Fatalf("controlled-session cleanup calls = %#v", calls)
+	}
+	check, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check.Unlock()
+	queue, found, err := check.ReadLiveRunQueueV1()
+	if err != nil || !found || len(queue.Runs) != 0 || len(queue.ControlledSessions) != 1 || queue.ControlledSessions[0] != ownership {
+		t.Fatalf("retained controlled-session ownership = %#v, found=%t, error=%v", queue, found, err)
+	}
+}
+
+func TestStopLiveRunV1PreservesControlledSessionOnPartialCleanupFailure(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	dir := plan.Workload.DeploymentDirectory
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := liveRunAdmissionFixtureV1(plan.LiveRunID, false)
+	run.Kind = deploy.LiveRunKindShellV1
+	run.GenerationReference = plan.Workload.GenerationReference
+	holdLiveRunLeaseV1(t, operation, run.ID)
+	if _, err := operation.AdmitLiveRunV1(run, false); err != nil {
+		t.Fatal(err)
+	}
+	ownership, err := operation.RecordControlledSessionOwnershipV1(controlledSessionOwnershipFromPlanV1(
+		plan, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := operation.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+
+	want := errors.New("controller cleanup failed")
+	calls := []CommandSpec{}
+	result, err := stopLiveRunV1(t.Context(), dir, run.ID, 7*time.Second, liveRunsBackendV1{
+		acquire: deploy.AcquireOperationLock,
+		removeContainer: func(spec CommandSpec, _ RunOptions) error {
+			calls = append(calls, spec)
+			if len(calls) == 2 {
+				return want
+			}
+			return nil
+		},
+	})
+	if !errors.Is(err, want) || !result.Found || result.Run.ID != run.ID {
+		t.Fatalf("partial controlled-session cleanup = %#v, %v", result, err)
+	}
+	wantCalls := []CommandSpec{
+		TemporaryContainerCleanupCommand(dockerWorkloadTestContainerIDV1),
+		TemporaryContainerCleanupCommand(dockerControllerTestContainerIDV1),
+	}
+	if !reflect.DeepEqual(calls, wantCalls) {
+		t.Fatalf("partial controlled-session cleanup calls = %#v", calls)
+	}
+	check, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check.Unlock()
+	queue, _, err := check.ReadLiveRunQueueV1()
+	if err != nil || len(queue.Runs) != 1 || queue.Runs[0].ID != run.ID ||
+		len(queue.ControlledSessions) != 1 || queue.ControlledSessions[0] != ownership {
+		t.Fatalf("queue after partial controlled-session cleanup = %#v, error=%v", queue, err)
+	}
+}
+
 func TestStopLiveRunV1ReportsReadyReservationAsWaitingWithoutDocker(t *testing.T) {
 	dir := t.TempDir()
 	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
