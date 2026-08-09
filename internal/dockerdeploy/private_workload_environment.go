@@ -220,16 +220,35 @@ func privateRuntimeMasksV1(plan DockerExecutionPlan) ([]privateRuntimeMaskV1, er
 	if strings.TrimSpace(plan.DeploymentDir) == "" {
 		return nil, fmt.Errorf("private runtime masks require a deployment directory")
 	}
-	root, err := canonicalPathAllowMissingV1(plan.DeploymentDir)
-	if err != nil {
-		return nil, fmt.Errorf("resolve deployment root: %w", err)
+	return privateRuntimeMasksForDeploymentRootsV1(plan, []string{plan.DeploymentDir})
+}
+
+func privateRuntimeMasksForDeploymentRootsV1(plan DockerExecutionPlan, deploymentRoots []string) ([]privateRuntimeMaskV1, error) {
+	if len(deploymentRoots) == 0 {
+		return nil, fmt.Errorf("private runtime masks require at least one deployment root")
 	}
-	protected := []struct {
+	type protectedRuntimePathV1 struct {
 		path string
 		kind privateRuntimeMaskKindV1
-	}{
-		{path: filepath.Join(root, privateRuntimeMetadataDirectoryName), kind: privateRuntimeMaskDirectoryV1},
-		{path: filepath.Join(root, PrivateWorkloadEnvironmentFileName), kind: privateRuntimeMaskFileV1},
+	}
+	protected := []protectedRuntimePathV1{}
+	seenRoots := map[string]bool{}
+	for _, deploymentRoot := range deploymentRoots {
+		if strings.TrimSpace(deploymentRoot) == "" {
+			return nil, fmt.Errorf("private runtime masks require nonempty deployment roots")
+		}
+		root, err := canonicalPathAllowMissingV1(deploymentRoot)
+		if err != nil {
+			return nil, fmt.Errorf("resolve deployment root: %w", err)
+		}
+		if seenRoots[root] {
+			continue
+		}
+		seenRoots[root] = true
+		protected = append(protected,
+			protectedRuntimePathV1{path: filepath.Join(root, privateRuntimeMetadataDirectoryName), kind: privateRuntimeMaskDirectoryV1},
+			protectedRuntimePathV1{path: filepath.Join(root, PrivateWorkloadEnvironmentFileName), kind: privateRuntimeMaskFileV1},
+		)
 	}
 	byTarget := map[string]privateRuntimeMaskKindV1{}
 	for _, mount := range plan.Mounts {
