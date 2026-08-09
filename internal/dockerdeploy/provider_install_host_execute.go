@@ -29,6 +29,10 @@ func startProviderInstallHostV1(ctx context.Context, plan providerInstallationPl
 			return fmt.Errorf("validate installed private runtime isolation: %w", err)
 		}
 	}
+	run := commandRunner(runCommandWithoutDockerPreflight)
+	if plan.Backend == installBackendDockerDesktop || plan.Backend == installBackendDockerManaged {
+		run = runDockerCommand
+	}
 	if plan.Docker.PrivateEnvironment && plan.Backend != installBackendLinuxSystemd {
 		if !environment.Present {
 			return fmt.Errorf("installed private workload environment disappeared before startup")
@@ -46,13 +50,13 @@ func startProviderInstallHostV1(ctx context.Context, plan providerInstallationPl
 			plan.Docker.Sandbox,
 			environment,
 			options,
-			runCommandWithoutDockerPreflight,
+			run,
 		); err != nil {
 			return fmt.Errorf("install host startup: %w", err)
 		}
 		return nil
 	}
-	return startProviderInstallHostWithV1(ctx, commands, options, runCommandWithoutDockerPreflight)
+	return startProviderInstallHostWithV1(ctx, commands, options, run)
 }
 
 func configureProviderInstallHostWithV1(ctx context.Context, commands providerInstallHostCommandsV1, options RunOptions, run commandRunner) error {
