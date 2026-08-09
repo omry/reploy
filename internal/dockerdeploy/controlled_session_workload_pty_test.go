@@ -193,6 +193,45 @@ func TestPrepareDockerWorkloadPTYV1RollsBackInertContainerAfterAttachFailure(t *
 	}
 }
 
+func TestPrepareDockerWorkloadPTYV1RecordsExactIDBeforeAttachFailure(t *testing.T) {
+	plan := controlledSessionWorkloadPlanFixtureV1(t)
+	actions := []string{}
+	cleanupErr := errors.New("cleanup unavailable")
+	backend := dockerWorkloadPTYBackendV1{
+		run: func(spec CommandSpec, options RunOptions) error {
+			actions = append(actions, strings.Join(spec.Args, " "))
+			writeDockerWorkloadCreateIDV1(spec, options, plan)
+			if reflect.DeepEqual(spec.Args, []string{"container", "rm", "--force", dockerWorkloadTestContainerIDV1}) {
+				return cleanupErr
+			}
+			return nil
+		},
+		recordContainerID: func(containerID string) error {
+			actions = append(actions, "record "+containerID)
+			return nil
+		},
+		attach: func(_ context.Context, _ CommandSpec, containerID string, _ time.Duration) (dockerPTYAttachmentV1, error) {
+			actions = append(actions, "attach "+containerID)
+			return nil, errors.New("attach refused")
+		},
+		resize:  func(context.Context, CommandSpec, string, uint32, uint32, time.Duration) error { return nil },
+		observe: func(context.Context, CommandSpec, string) (int, error) { return 0, nil },
+	}
+	_, err := prepareDockerWorkloadPTYV1(t.Context(), plan, backend)
+	if err == nil || !strings.Contains(err.Error(), "attach refused") || !errors.Is(err, cleanupErr) {
+		t.Fatalf("attach and rollback error = %v", err)
+	}
+	want := []string{
+		strings.Join(plan.Create.Args, " "),
+		"record " + dockerWorkloadTestContainerIDV1,
+		"attach " + dockerWorkloadTestContainerIDV1,
+		"container rm --force " + dockerWorkloadTestContainerIDV1,
+	}
+	if !reflect.DeepEqual(actions, want) {
+		t.Fatalf("partial preparation actions = %#v, want %#v", actions, want)
+	}
+}
+
 func TestDockerWorkloadPTYV1RollsBackAmbiguousStartFailure(t *testing.T) {
 	plan := controlledSessionWorkloadPlanFixtureV1(t)
 	attachment := &fakeDockerPTYAttachmentV1{}

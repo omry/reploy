@@ -22,10 +22,11 @@ type dockerPTYAttachmentV1 interface {
 }
 
 type dockerWorkloadPTYBackendV1 struct {
-	run     commandRunner
-	attach  func(context.Context, CommandSpec, string, time.Duration) (dockerPTYAttachmentV1, error)
-	resize  func(context.Context, CommandSpec, string, uint32, uint32, time.Duration) error
-	observe func(context.Context, CommandSpec, string) (int, error)
+	run               commandRunner
+	recordContainerID func(string) error
+	attach            func(context.Context, CommandSpec, string, time.Duration) (dockerPTYAttachmentV1, error)
+	resize            func(context.Context, CommandSpec, string, uint32, uint32, time.Duration) error
+	observe           func(context.Context, CommandSpec, string) (int, error)
 }
 
 type dockerWorkloadPTYWaitResultV1 struct {
@@ -54,17 +55,30 @@ type DockerWorkloadPTYV1 struct {
 	closeErr  error
 }
 
+func (workload *DockerWorkloadPTYV1) ContainerID() string {
+	return workload.containerID
+}
+
 // PrepareDockerWorkloadPTYV1 creates the exact workload container without
 // starting it and establishes the Docker PTY attachment before returning.
 func PrepareDockerWorkloadPTYV1(
 	ctx context.Context,
 	plan ControlledSessionContainerPlanV1,
 ) (*DockerWorkloadPTYV1, error) {
+	return prepareDockerWorkloadPTYWithContainerIDV1(ctx, plan, nil)
+}
+
+func prepareDockerWorkloadPTYWithContainerIDV1(
+	ctx context.Context,
+	plan ControlledSessionContainerPlanV1,
+	recordContainerID func(string) error,
+) (*DockerWorkloadPTYV1, error) {
 	return prepareDockerWorkloadPTYV1(ctx, plan, dockerWorkloadPTYBackendV1{
-		run:     runDockerCommand,
-		attach:  attachDockerContainerPTYV1,
-		resize:  resizeDockerContainerPTYV1,
-		observe: observeDockerContainerExitV1,
+		run:               runDockerCommand,
+		recordContainerID: recordContainerID,
+		attach:            attachDockerContainerPTYV1,
+		resize:            resizeDockerContainerPTYV1,
+		observe:           observeDockerContainerExitV1,
 	})
 }
 
@@ -98,6 +112,15 @@ func prepareDockerWorkloadPTYV1(
 	containerID, err := parseDockerContainerIDV1(createOutput.String())
 	if err != nil {
 		return nil, fmt.Errorf("create controlled-session workload container %q: %w; refusing name-based cleanup because the created container identity is unknown", plan.Container, err)
+	}
+	if backend.recordContainerID != nil {
+		if err := backend.recordContainerID(containerID); err != nil {
+			recordErr := fmt.Errorf("record controlled-session workload container %q exact ID: %w", plan.Container, err)
+			if cleanupErr := rollbackControlledSessionWorkloadContainerV1(backend, plan, containerID); cleanupErr != nil {
+				return nil, errors.Join(recordErr, fmt.Errorf("remove inert controlled-session workload container %q after ownership-recording failure: %w", plan.Container, cleanupErr))
+			}
+			return nil, recordErr
+		}
 	}
 	attachment, err := backend.attach(ctx, create, containerID, defaultDockerPreflightTimeout)
 	if err != nil {

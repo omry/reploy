@@ -128,6 +128,155 @@ func (lock *OperationLock) RecordLiveRunContainerV1(id string, container string)
 	return fmt.Errorf("live run %q is not outstanding", id)
 }
 
+// RecordControlledSessionOwnershipV1 durably binds the planned resources to an
+// active admitted shell and monotonically fills each exact container ID after
+// Docker returns it. The boot identity comes from the admitted run already
+// protected by this lock.
+func (lock *OperationLock) RecordControlledSessionOwnershipV1(ownership ControlledSessionOwnershipV1) (ControlledSessionOwnershipV1, error) {
+	if lock == nil {
+		return ControlledSessionOwnershipV1{}, fmt.Errorf("record controlled session ownership requires an operation lock")
+	}
+	if err := ValidateLiveRunIDV1(ownership.LiveRunID); err != nil {
+		return ControlledSessionOwnershipV1{}, err
+	}
+	lock.mutex.Lock()
+	defer lock.mutex.Unlock()
+	path, err := lock.liveRunQueuePathLockedV1()
+	if err != nil {
+		return ControlledSessionOwnershipV1{}, err
+	}
+	queue, _, err := readLiveRunQueuePathV1(path)
+	if err != nil {
+		return ControlledSessionOwnershipV1{}, err
+	}
+	var admitted *LiveRunV1
+	for index := range queue.Runs {
+		if queue.Runs[index].ID == ownership.LiveRunID {
+			admitted = &queue.Runs[index]
+			break
+		}
+	}
+	if admitted == nil {
+		return ControlledSessionOwnershipV1{}, fmt.Errorf("live run %q is not outstanding", ownership.LiveRunID)
+	}
+	if admitted.Status != LiveRunStatusActiveV1 || admitted.Kind != LiveRunKindShellV1 {
+		return ControlledSessionOwnershipV1{}, fmt.Errorf("controlled session live run %q must be an active shell", ownership.LiveRunID)
+	}
+	if admitted.Container != "" {
+		return ControlledSessionOwnershipV1{}, fmt.Errorf("controlled session live run %q already names container %q", ownership.LiveRunID, admitted.Container)
+	}
+	if admitted.GenerationReference != ownership.Workload.GenerationReference {
+		return ControlledSessionOwnershipV1{}, fmt.Errorf("controlled session workload generation does not match admitted live run %q", ownership.LiveRunID)
+	}
+	ownership.BootSession = admitted.BootSession
+	if err := validateControlledSessionOwnershipV1(ownership); err != nil {
+		return ControlledSessionOwnershipV1{}, err
+	}
+	insert := sort.Search(len(queue.ControlledSessions), func(index int) bool {
+		return queue.ControlledSessions[index].LiveRunID >= ownership.LiveRunID
+	})
+	if insert < len(queue.ControlledSessions) && queue.ControlledSessions[insert].LiveRunID == ownership.LiveRunID {
+		merged, err := mergeControlledSessionOwnershipV1(queue.ControlledSessions[insert], ownership)
+		if err != nil {
+			return ControlledSessionOwnershipV1{}, fmt.Errorf("live run %q already has different controlled-session ownership: %w", ownership.LiveRunID, err)
+		}
+		if merged == queue.ControlledSessions[insert] {
+			return merged, nil
+		}
+		queue.ControlledSessions[insert] = merged
+		if err := commitLiveRunQueuePathV1(path, queue); err != nil {
+			return ControlledSessionOwnershipV1{}, err
+		}
+		return merged, nil
+	}
+	queue.ControlledSessions = append(queue.ControlledSessions, ControlledSessionOwnershipV1{})
+	copy(queue.ControlledSessions[insert+1:], queue.ControlledSessions[insert:])
+	queue.ControlledSessions[insert] = ownership
+	if err := commitLiveRunQueuePathV1(path, queue); err != nil {
+		return ControlledSessionOwnershipV1{}, err
+	}
+	return ownership, nil
+}
+
+func mergeControlledSessionOwnershipV1(
+	existing ControlledSessionOwnershipV1,
+	requested ControlledSessionOwnershipV1,
+) (ControlledSessionOwnershipV1, error) {
+	existingPlan := existing
+	requestedPlan := requested
+	existingPlan.Controller.ID = ""
+	existingPlan.Workload.ID = ""
+	requestedPlan.Controller.ID = ""
+	requestedPlan.Workload.ID = ""
+	if existingPlan != requestedPlan {
+		return ControlledSessionOwnershipV1{}, fmt.Errorf("immutable resource plan changed")
+	}
+	merged := existing
+	mergeID := func(current string, next string, role string) (string, error) {
+		if next == "" {
+			return current, nil
+		}
+		if current != "" && current != next {
+			return "", fmt.Errorf("%s container ID changed", role)
+		}
+		return next, nil
+	}
+	var err error
+	merged.Controller.ID, err = mergeID(existing.Controller.ID, requested.Controller.ID, "controller")
+	if err != nil {
+		return ControlledSessionOwnershipV1{}, err
+	}
+	merged.Workload.ID, err = mergeID(existing.Workload.ID, requested.Workload.ID, "workload")
+	if err != nil {
+		return ControlledSessionOwnershipV1{}, err
+	}
+	if err := validateControlledSessionOwnershipV1(merged); err != nil {
+		return ControlledSessionOwnershipV1{}, err
+	}
+	return merged, nil
+}
+
+// CompleteControlledSessionV1 atomically removes a verified-clean session's
+// ownership record and admitted run. Failed cleanup must not call this method.
+func (lock *OperationLock) CompleteControlledSessionV1(id string) (bool, error) {
+	if lock == nil {
+		return false, fmt.Errorf("complete controlled session requires an operation lock")
+	}
+	if err := ValidateLiveRunIDV1(id); err != nil {
+		return false, err
+	}
+	lock.mutex.Lock()
+	defer lock.mutex.Unlock()
+	path, err := lock.liveRunQueuePathLockedV1()
+	if err != nil {
+		return false, err
+	}
+	queue, _, err := readLiveRunQueuePathV1(path)
+	if err != nil {
+		return false, err
+	}
+	updated, runRemoved, err := RemoveLiveRunV1(queue, id)
+	if err != nil {
+		return false, err
+	}
+	ownershipRemoved := false
+	for index, ownership := range updated.ControlledSessions {
+		if ownership.LiveRunID != id {
+			continue
+		}
+		updated.ControlledSessions = append(updated.ControlledSessions[:index], updated.ControlledSessions[index+1:]...)
+		ownershipRemoved = true
+		break
+	}
+	if !runRemoved && !ownershipRemoved {
+		return false, nil
+	}
+	if err := commitLiveRunQueuePathV1(path, updated); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (lock *OperationLock) RemoveLiveRunV1(id string) (LiveRunQueueV1, bool, error) {
 	if lock == nil {
 		return LiveRunQueueV1{}, false, fmt.Errorf("remove live run requires an operation lock")
@@ -518,7 +667,7 @@ func commitLiveRunQueuePathV1(path string, queue LiveRunQueueV1) error {
 	if err != nil {
 		return err
 	}
-	if len(queue.Runs) == 0 && len(queue.Cleanup) == 0 {
+	if len(queue.Runs) == 0 && len(queue.ControlledSessions) == 0 && len(queue.Cleanup) == 0 {
 		return removeLiveRunQueuePathV1(path)
 	}
 	if err := writeAtomicStateFile(path, content, 0o600); err != nil {
