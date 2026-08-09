@@ -11,8 +11,13 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
 - Decision state: Focused review complete; high-level decisions approved
 - Implementation state: Initial global sandbox prerequisites, trusted
   application-startup verification, controlled-session authorization, the
-  framed protocol, and lifecycle state machine, including its output-finalization
-  barrier and timeout outcome, are implemented. The synthetic PTY output pump
+  framed protocol, lifecycle state machine, and immutable two-environment
+  Docker planning are implemented. The planner binds exact controller and
+  workload builds, runtime identities, mounts, masks, commands, and inert
+  lifecycle commands while networking remains disabled. Private environment
+  injection is rejected until its controlled-session launch path is wired.
+  The lifecycle state machine includes its output-finalization barrier and
+  timeout outcome. The synthetic PTY output pump
   now preserves byte order with one bounded flow-control chunk at a time,
   charges time already spent stopping the workload against the host-owned absolute
   finalization deadline, cancels blocked delivery, closes the source, and
@@ -31,8 +36,8 @@ or publication behavior.
 
 ## Decision Summary
 
-Reploy will let a controller such as OmegaFlow control one
-host-created session in an exact staged environment generation without
+Reploy will let a controller such as OmegaFlow control one host-created
+session between exact controller and workload environment generations without
 receiving Docker or arbitrary host authority.
 
 The controller owns the session from its perspective. A host Reploy operation
@@ -146,7 +151,8 @@ claim that basic validation proves provider resolution or build success.
    Docker authority.
 2. Preserve a long-lived shell and PTY across multiple controller operations.
 3. Keep terminal behavior faithful enough for interactive tools and recording.
-4. Bind every operation to one admitted run and exact environment generation.
+4. Bind every operation to one admitted run and exact controller and workload
+   environment generations.
 5. Make runtime termination independently verifiable by host Reploy.
 6. Deny workload code access to the host-controlled session channel.
 7. Keep network, mount, identity, secret, and output authority explicit.
@@ -213,7 +219,8 @@ The initial controlled-session work does not:
 
 **Lease**
 : Host Reploy's binding between one controller connection, admitted run,
-  generation, capability set, and the runtime resources created for it.
+  controller and workload generations, capability set, and the runtime
+  resources created for it.
 
 **Session handle**
 : An opaque identifier valid only within its lease. It never conveys arbitrary
@@ -251,10 +258,13 @@ Workload container
 └── declared services and endpoints
 ```
 
-The host invocation selects the staged generation and complete runtime plan
-before either container starts. Host Reploy validates that fixed plan, admits
-one live run, creates both containers, and binds the session channel to the
-resulting lease. The controller never requests creation of a deployment or
+The host invocation selects separate controller and workload staging
+directories, validates both exact current generations and complete runtime
+plans, and resolves one declared controller command plus its forwarded
+arguments before either container starts. Host Reploy admits one live run,
+creates both containers, and binds the session channel to the resulting lease.
+The workload begins as an ordinary persistent shell without caller-supplied
+workload arguments. The controller never requests creation of a deployment or
 container and cannot select mounts, identity, environment, output destinations,
 networks, or another generation through the channel.
 
@@ -364,7 +374,8 @@ A controlled session adds orchestration, not a stronger or weaker workload
 sandbox. Its workload consumes the ordinary Reploy application-runtime policy.
 Relative to an ordinary Reploy shell or application command, it adds:
 
-- a controller-owned lease bound to one deployment generation and live run;
+- a controller-owned lease bound to exact controller and workload generations
+  and one workload live run;
 - a persistent PTY and typed host-mediated protocol;
 - a private controller-to-host session channel;
 - an immutable, prevalidated runtime plan;
@@ -382,15 +393,13 @@ runtime sandbox.
 Before starting either container, Host Reploy produces a host-side authorization
 record containing:
 
-- the deployment identity;
-- the exact current generation reference and build identity;
-- the admitted live-run identity;
-- the effective runtime plan;
-- the effective runtime identity inherited from the execution scope;
-- the network and endpoint grants;
-- the mount and source grants;
-- the permitted session operations;
-- the admitted lease identity and its owner-connection policy.
+- the controller and workload deployment identities;
+- both exact current generation references and build identities;
+- the opaque session handle and proposed live-run identity;
+- both effective runtime identities inherited from their execution scopes;
+- digests that bind both complete effective runtime plans, including commands,
+  environment, network, mounts, masks, and inert lifecycle commands;
+- the permitted session operations and logical endpoint identities.
 
 The authorization record is portable immutable data; it does not serialize a
 live connection or make ownership transferable. Host Reploy binds the record
@@ -455,8 +464,9 @@ cleanup and no canceled request is replayed.
 
 ### Session Events
 
-- `opened`: reports the effective dimensions, identity, generation, fixed
-  session capabilities, and workload-output-finalization timeout.
+- `opened`: reports the effective dimensions, both runtime identities and
+  generations, fixed session capabilities, and workload-output-finalization
+  timeout.
 - `output(bytes)`: ordered PTY output bytes.
 - `workload_exit(status, reason)`: reports host-observed workload-shell
   exit.
@@ -565,9 +575,9 @@ or impersonate the control connection.
 The session channel exists only between the intended controller and the
 attached Host Reploy operation. It is never mounted into the workload
 container. Its handshake binds the connection to the host-created lease, exact
-generation, protocol version, fixed capability set, and expected controller
-identity. Server-side checks enforce every operation; an opaque or private
-endpoint is not treated as authorization by itself.
+controller and workload generations, protocol version, fixed capability set,
+and expected controller identity. Server-side checks enforce every operation;
+an opaque or private endpoint is not treated as authorization by itself.
 
 The initial Linux transport is one Unix-domain socket in a fresh,
 lease-private host directory mounted only into the controller. Filesystem
@@ -1121,8 +1131,9 @@ existing boot-session admission rules.
 ## Staging and Generation Semantics
 
 Basic preflight validation uses the existing `reploy validate` behavior.
-Creating a session requires a successfully staged and built current generation.
-The session is pinned to that generation for its complete lifetime.
+Creating a session requires successfully staged and built current controller
+and workload generations. The session is pinned to both generations for its
+complete lifetime.
 
 Updating a staging directory with the same environment follows ordinary
 stage-update behavior. Attempting to stage a different environment into the
@@ -1138,7 +1149,8 @@ An explicit forced replacement:
 - never treats force as permission to recursively delete the staging
   directory.
 
-A generation update never retargets a live controlled session.
+A controller or workload generation update never retargets a live controlled
+session.
 
 ## Audit and Diagnostics
 
@@ -1231,7 +1243,8 @@ launch-time scan as durable confinement.
 
 Using synthetic controller and workload images with networking disabled:
 
-- validate one immutable plan and admit its exact generation;
+- validate one immutable controller/workload plan pair and admit both exact
+  generations;
 - start both containers without giving the controller Docker access;
 - establish the private controller channel and external Docker TTY supervision;
 - implement ordered terminal bytes, initial dimensions, resize, ordinary
