@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/omry/reploy/internal/controlledsession"
+	"github.com/omry/reploy/internal/deploy"
 )
 
 func TestRunControlledSessionV1OwnsNormalLifecycle(t *testing.T) {
@@ -88,6 +90,109 @@ func TestRunControlledSessionV1OwnsNormalLifecycle(t *testing.T) {
 	}
 	if string(events[indices[controlledsession.EventOutputV1]].Bytes) != "hello from workload\n" {
 		t.Fatalf("output events = %#v", events)
+	}
+}
+
+func TestRunControlledSessionV1PersistsExactOwnershipBeforeStarting(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	controller := newFakeControlledSessionProcessV1()
+	workload := newFakeControlledSessionWorkloadV1(nil, 0)
+	channel := &fakeControlledSessionChannelV1{}
+	persistErr := errors.New("injected durable ownership failure")
+	called := false
+
+	result, err := runControlledSessionV1(t.Context(), plan, testControlledSessionRunOptionsV1(), controlledSessionSupervisorBackendV1{
+		prepareChannel: func(ControlledSessionExecutionPlanV1) (controlledSessionChannelRuntimeV1, error) {
+			return channel, nil
+		},
+		prepareController: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionControllerRuntimeV1, error) {
+			return controller, nil
+		},
+		prepareWorkload: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error) {
+			return workload, nil
+		},
+		recordOwnership: func(controllerID string, workloadID string) error {
+			called = true
+			if controller.started || workload.started {
+				t.Fatal("controlled-session process started before durable ownership")
+			}
+			if controllerID != dockerControllerTestContainerIDV1 || workloadID != dockerWorkloadTestContainerIDV1 {
+				t.Fatalf("container IDs = %q / %q", controllerID, workloadID)
+			}
+			return persistErr
+		},
+		now: time.Now,
+	})
+	if !called || !errors.Is(err, persistErr) {
+		t.Fatalf("ownership persistence called=%t, error=%v", called, err)
+	}
+	if controller.started || workload.started {
+		t.Fatalf("started after persistence failure = controller %t workload %t", controller.started, workload.started)
+	}
+	if !controller.cleaned || !workload.cleaned || !channel.closed {
+		t.Fatalf("inert cleanup = controller %t workload %t channel %t", controller.cleaned, workload.cleaned, channel.closed)
+	}
+	if result.SessionResult.CleanupStatus.Kind != controlledsession.CleanupStatusSucceededV1 ||
+		result.DeliveryTailCleanupStatus.Kind != controlledsession.CleanupStatusSucceededV1 {
+		t.Fatalf("cleanup result = %#v", result)
+	}
+}
+
+func TestControlledSessionCleanupFailureRetainsDurableOwnership(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	operation, err := deploy.AcquireOperationLock(t.Context(), plan.Workload.DeploymentDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, err := operation.AdmitLiveRunV1(deploy.LiveRunV1{
+		ID: plan.LiveRunID, Kind: deploy.LiveRunKindShellV1, Name: plan.Workload.DeploymentID,
+		GenerationReference: plan.Workload.GenerationReference, Exclusive: true,
+	}, false); err != nil || status != deploy.LiveRunStatusActiveV1 {
+		t.Fatalf("admission = %q, %v", status, err)
+	}
+	if _, err := operation.RecordControlledSessionOwnershipV1(controlledSessionOwnershipFromPlanV1(
+		plan, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
+	)); err != nil {
+		t.Fatal(err)
+	}
+	if err := finishControlledSessionOwnershipV1(t.Context(), plan.Workload.DeploymentDirectory, operation, false, plan.LiveRunID, false); err != nil {
+		t.Fatal(err)
+	}
+	check, err := deploy.AcquireOperationLock(t.Context(), plan.Workload.DeploymentDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check.Unlock()
+	queue, found, err := check.ReadLiveRunQueueV1()
+	if err != nil || !found || len(queue.Runs) != 1 || len(queue.ControlledSessions) != 1 {
+		t.Fatalf("retained queue = %#v, found=%t, error=%v", queue, found, err)
+	}
+}
+
+func TestRunControlledSessionV1RemovesAdmissionOnLockDirectoryMismatch(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	workloadDir := plan.Workload.DeploymentDirectory
+	operation, err := deploy.AcquireOperationLock(t.Context(), workloadDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, err := operation.AdmitLiveRunV1(deploy.LiveRunV1{
+		ID: plan.LiveRunID, Kind: deploy.LiveRunKindShellV1, Name: plan.Workload.DeploymentID,
+		GenerationReference: plan.Workload.GenerationReference, Exclusive: true,
+	}, false); err != nil || status != deploy.LiveRunStatusActiveV1 {
+		t.Fatalf("admission = %q, %v", status, err)
+	}
+	plan.Workload.DeploymentDirectory = t.TempDir()
+	if _, err := RunControlledSessionV1(t.Context(), operation, plan, testControlledSessionRunOptionsV1()); err == nil || !strings.Contains(err.Error(), "does not belong") {
+		t.Fatalf("lock-directory mismatch error = %v", err)
+	}
+	check, err := deploy.AcquireOperationLock(t.Context(), workloadDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check.Unlock()
+	if queue, found, err := check.ReadLiveRunQueueV1(); err != nil || found {
+		t.Fatalf("mismatched operation retained admission: %#v, found=%t, error=%v", queue, found, err)
 	}
 }
 
@@ -786,6 +891,10 @@ type fakeControlledSessionProcessV1 struct {
 	cleaned         bool
 }
 
+func (process *fakeControlledSessionProcessV1) ContainerID() string {
+	return dockerControllerTestContainerIDV1
+}
+
 func newFakeControlledSessionProcessV1() *fakeControlledSessionProcessV1 {
 	return &fakeControlledSessionProcessV1{exit: make(chan controlledSessionProcessResultV1, 1)}
 }
@@ -841,6 +950,10 @@ type fakeControlledSessionWorkloadV1 struct {
 	inputStartOnce    sync.Once
 	columns           uint32
 	rows              uint32
+}
+
+func (workload *fakeControlledSessionWorkloadV1) ContainerID() string {
+	return dockerWorkloadTestContainerIDV1
 }
 
 func newFakeControlledSessionWorkloadV1(output []byte, exitCode int) *fakeControlledSessionWorkloadV1 {
