@@ -54,6 +54,10 @@ type DockerWorkloadPTYV1 struct {
 	closeErr  error
 }
 
+func (workload *DockerWorkloadPTYV1) ContainerID() string {
+	return workload.containerID
+}
+
 // PrepareDockerWorkloadPTYV1 creates the exact workload container without
 // starting it and establishes the Docker PTY attachment before returning.
 func PrepareDockerWorkloadPTYV1(
