@@ -402,8 +402,9 @@ func (lock *OperationLock) CancelWaitingLiveRunsV1() (LiveRunQueueV1, []LiveRunV
 }
 
 // RecoverLiveRunQueueV1 removes entries that cannot belong to a live owner in
-// the current host boot session. It never replays work. Container identities
-// are transferred atomically into non-scheduling cleanup inventory.
+// the current host boot session. It never replays work. Ordinary container
+// identities move into non-scheduling cleanup inventory; controlled-session
+// ownership remains durable and is returned for verified cleanup and retry.
 func (lock *OperationLock) RecoverLiveRunQueueV1() (LiveRunRecoveryV1, error) {
 	if lock == nil {
 		return LiveRunRecoveryV1{}, fmt.Errorf("recover live run queue requires an operation lock")
@@ -432,7 +433,10 @@ func recoverLiveRunQueuePathV1(path string, session string) (LiveRunRecoveryV1, 
 	directory := filepath.Dir(path)
 	result := cloneLiveRunQueueV1(queue)
 	result.Runs = result.Runs[:0]
-	recovery := LiveRunRecoveryV1{Removed: []RecoveredLiveRunV1{}}
+	recovery := LiveRunRecoveryV1{
+		Removed:            []RecoveredLiveRunV1{},
+		ControlledSessions: []ControlledSessionOwnershipV1{},
+	}
 	for _, entry := range queue.Runs {
 		reason := LiveRunRecoveryReasonV1("")
 		switch {
@@ -485,6 +489,21 @@ func recoverLiveRunQueuePathV1(path string, session string) (LiveRunRecoveryV1, 
 	retained := make(map[string]bool, len(result.Runs))
 	for _, entry := range result.Runs {
 		retained[entry.ID] = true
+	}
+	for _, ownership := range result.ControlledSessions {
+		if retained[ownership.LiveRunID] {
+			continue
+		}
+		if ownership.BootSession == session {
+			abandoned, err := queueEntryLeaseAbandonedV1(directory, ownership.LiveRunID)
+			if err != nil {
+				return LiveRunRecoveryV1{}, err
+			}
+			if !abandoned {
+				continue
+			}
+		}
+		recovery.ControlledSessions = append(recovery.ControlledSessions, ownership)
 	}
 	if err := removeOrphanedQueueEntryLeasesV1(directory, retained); err != nil {
 		return LiveRunRecoveryV1{}, err
