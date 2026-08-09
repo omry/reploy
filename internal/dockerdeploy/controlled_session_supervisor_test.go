@@ -34,6 +34,12 @@ func TestRunControlledSessionV1OwnsNormalLifecycle(t *testing.T) {
 	}
 	workload := newFakeControlledSessionWorkloadV1([]byte("hello from workload\n"), 17)
 	channel := &fakeControlledSessionChannelV1{transport: transport}
+	watchdog := &fakeControlledSessionWatchdogV1{onDisarm: func() {
+		if !controller.cleaned || !workload.cleaned || !channel.closed {
+			t.Fatal("watchdog disarmed before verified workload, controller, and channel cleanup")
+		}
+	}}
+	var launchObserved bool
 
 	result, err := runControlledSessionV1(t.Context(), plan, testControlledSessionRunOptionsV1(), controlledSessionSupervisorBackendV1{
 		prepareChannel: func(ControlledSessionExecutionPlanV1) (controlledSessionChannelRuntimeV1, error) {
@@ -44,6 +50,23 @@ func TestRunControlledSessionV1OwnsNormalLifecycle(t *testing.T) {
 		},
 		prepareWorkload: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error) {
 			return workload, nil
+		},
+		recordPlannedOwnership:    func() error { return nil },
+		recordControllerOwnership: func(string) error { return nil },
+		recordOwnership: func(controllerID string, workloadID string) (deploy.ControlledSessionCleanupManifest, error) {
+			ownership := controlledSessionOwnershipFromPlanV1(plan, controllerID, workloadID)
+			ownership.BootSession = "boot-session"
+			return deploy.ControlledSessionCleanupManifestFromOwnership(ownership)
+		},
+		startWatchdog: func(_ context.Context, manifest deploy.ControlledSessionCleanupManifest) (controlledSessionWatchdogRuntimeV1, error) {
+			launchObserved = true
+			if controller.started || workload.started {
+				t.Fatal("controlled-session process started before watchdog readiness")
+			}
+			if manifest.LiveRunID != plan.LiveRunID {
+				t.Fatalf("watchdog manifest live run = %q", manifest.LiveRunID)
+			}
+			return watchdog, nil
 		},
 		now: time.Now,
 	})
@@ -63,6 +86,9 @@ func TestRunControlledSessionV1OwnsNormalLifecycle(t *testing.T) {
 	}
 	if !controller.cleaned || !workload.cleaned || !channel.closed {
 		t.Fatalf("cleanup = controller %t workload %t channel %t", controller.cleaned, workload.cleaned, channel.closed)
+	}
+	if !launchObserved || !watchdog.disarmed {
+		t.Fatalf("watchdog = launched %t disarmed %t", launchObserved, watchdog.disarmed)
 	}
 
 	events := transport.snapshotEvents()
@@ -313,6 +339,85 @@ func TestRunControlledSessionV1RejectsCleanupResourcesNotInDurableOwnership(t *t
 	if result.SessionResult.CleanupStatus.Kind != controlledsession.CleanupStatusSucceededV1 ||
 		result.DeliveryTailCleanupStatus.Kind != controlledsession.CleanupStatusSucceededV1 {
 		t.Fatalf("cleanup result = %#v", result)
+	}
+}
+
+func TestRunControlledSessionV1DoesNotStartWhenWatchdogLaunchFails(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	controller := newFakeControlledSessionProcessV1()
+	workload := newFakeControlledSessionWorkloadV1(nil, 0)
+	channel := &fakeControlledSessionChannelV1{}
+	launchErr := errors.New("injected watchdog launch failure")
+
+	result, err := runControlledSessionV1(t.Context(), plan, testControlledSessionRunOptionsV1(), controlledSessionSupervisorBackendV1{
+		prepareChannel: func(ControlledSessionExecutionPlanV1) (controlledSessionChannelRuntimeV1, error) {
+			return channel, nil
+		},
+		prepareController: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionControllerRuntimeV1, error) {
+			return controller, nil
+		},
+		prepareWorkload: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error) {
+			return workload, nil
+		},
+		recordPlannedOwnership:    func() error { return nil },
+		recordControllerOwnership: func(string) error { return nil },
+		recordOwnership: func(controllerID string, workloadID string) (deploy.ControlledSessionCleanupManifest, error) {
+			ownership := controlledSessionOwnershipFromPlanV1(plan, controllerID, workloadID)
+			ownership.BootSession = "boot-session"
+			return deploy.ControlledSessionCleanupManifestFromOwnership(ownership)
+		},
+		startWatchdog: func(context.Context, deploy.ControlledSessionCleanupManifest) (controlledSessionWatchdogRuntimeV1, error) {
+			return nil, launchErr
+		},
+		now: time.Now,
+	})
+	if !errors.Is(err, launchErr) {
+		t.Fatalf("watchdog launch error = %v", err)
+	}
+	if controller.started || workload.started {
+		t.Fatalf("started after watchdog failure = controller %t workload %t", controller.started, workload.started)
+	}
+	if !controller.cleaned || !workload.cleaned || !channel.closed {
+		t.Fatalf("inert cleanup = controller %t workload %t channel %t", controller.cleaned, workload.cleaned, channel.closed)
+	}
+	if result.SessionResult.CleanupStatus.Kind != controlledsession.CleanupStatusSucceededV1 ||
+		result.DeliveryTailCleanupStatus.Kind != controlledsession.CleanupStatusSucceededV1 {
+		t.Fatalf("cleanup result = %#v", result)
+	}
+}
+
+func TestControlledSessionWatchdogDisarmRequiresVerifiedCompleteCleanup(t *testing.T) {
+	disarmErr := errors.New("injected disarm failure")
+	for _, test := range []struct {
+		name                string
+		preCleanupSucceeded bool
+		watchdogErr         error
+		wantDisarmed        bool
+		wantCleanup         controlledsession.CleanupStatusKindV1
+	}{
+		{name: "all cleanup succeeded", preCleanupSucceeded: true, wantDisarmed: true, wantCleanup: controlledsession.CleanupStatusSucceededV1},
+		{name: "workload cleanup failed", preCleanupSucceeded: false, wantCleanup: controlledsession.CleanupStatusSucceededV1},
+		{name: "disarm failed", preCleanupSucceeded: true, watchdogErr: disarmErr, wantDisarmed: true, wantCleanup: controlledsession.CleanupStatusFailedV1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			watchdog := &fakeControlledSessionWatchdogV1{err: test.watchdogErr}
+			supervisor := &controlledSessionSupervisorV1{
+				options: testControlledSessionRunOptionsV1(),
+				channel: &fakeControlledSessionChannelV1{}, controller: newFakeControlledSessionProcessV1(),
+				watchdog: watchdog, preCleanupSucceeded: test.preCleanupSucceeded,
+			}
+			_, cleanup, recovery := supervisor.cleanupDeliveryTail()
+			if watchdog.disarmed != test.wantDisarmed || cleanup.Kind != test.wantCleanup {
+				t.Fatalf("watchdog disarmed=%t, cleanup=%q", watchdog.disarmed, cleanup.Kind)
+			}
+			if test.watchdogErr != nil {
+				if recovery != controlledsession.RecoveryRetryCleanupV1 || !errors.Is(supervisor.diagnosticErr, disarmErr) {
+					t.Fatalf("disarm failure recovery=%q, diagnostic=%v", recovery, supervisor.diagnosticErr)
+				}
+			} else if recovery != controlledsession.RecoveryNoneV1 {
+				t.Fatalf("cleanup recovery=%q", recovery)
+			}
+		})
 	}
 }
 
@@ -1075,6 +1180,20 @@ func (transport *fakeControlledSessionTransportV1) snapshotEvents() []controlled
 type fakeControlledSessionChannelV1 struct {
 	transport controlledsession.ControllerTransportV1
 	closed    bool
+}
+
+type fakeControlledSessionWatchdogV1 struct {
+	disarmed bool
+	err      error
+	onDisarm func()
+}
+
+func (watchdog *fakeControlledSessionWatchdogV1) Disarm(context.Context) error {
+	watchdog.disarmed = true
+	if watchdog.onDisarm != nil {
+		watchdog.onDisarm()
+	}
+	return watchdog.err
 }
 
 func (channel *fakeControlledSessionChannelV1) Claim(context.Context) (controlledsession.ControllerTransportV1, error) {

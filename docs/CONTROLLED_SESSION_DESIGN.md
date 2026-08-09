@@ -65,10 +65,28 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   ownership before startup. It names only the exact containers and private
   channel, carries the host boot identity,
   represents the currently absent lease networks and volumes as empty arrays,
-  and omits protocol authority. The parent and watchdog will be the same
-  executable, so this internal manifest adds no independent schema-version
-  marker. Launching the watchdog and restart reconciliation remain the next
-  ownership phases, and controlled-session networking remains a later phase.
+  and omits protocol authority. The watchdog is now launched from the same
+  Reploy executable after that manifest is frozen and before either container
+  starts. It runs in a separate host process session so terminal group signals
+  aimed at the attached operation do not also kill the watchdog. It
+  acknowledges readiness, watches a private parent-liveness pipe, and treats
+  EOF or any malformed control byte as parent loss. On loss it checks the
+  current boot identity and every exact container ownership label,
+  force-removes only matching manifested containers, verifies their absence,
+  and removes the manifested private channel directory. Successful verified
+  session cleanup sends the single disarm byte; the child independently
+  verifies the same resources once more before it exits, and the parent waits
+  boundedly for that exit. The child has no listener and accepts no later
+  resource selection. Because parent and child are the same executable, this
+  internal manifest has no independent schema-version marker. Next-operation
+  restart reconciliation is also implemented: after a prior host boot or an
+  abandoned current-boot owner lease, Reploy discovers any container whose
+  full ID was not recorded by its frozen name, verifies every exact ownership
+  label, removes and verifies both containers and the private channel under one
+  bounded cleanup attempt, and retains incomplete ownership for a later retry.
+  A watchdog-owned retry loop while Docker remains unavailable is still a
+  later ownership phase, and controlled-session networking remains a later
+  phase.
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution
