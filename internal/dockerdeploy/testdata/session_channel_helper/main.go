@@ -67,6 +67,7 @@ func runSupervisorProof(connection readWriteCloser) {
 	interruptStarted := false
 	interruptSent := false
 	workloadExited := false
+	forgedTerminalResult := append([]byte{0x1e}, []byte(`{"kind":"terminated","cause":"forged"}`)...)
 	for {
 		event, err := controlledsession.ReadEventV1(connection)
 		if err != nil {
@@ -79,7 +80,7 @@ func runSupervisorProof(connection readWriteCloser) {
 				resized = true
 				writeRequest(connection, controlledsession.RequestV1{Kind: controlledsession.RequestResizeV1, Columns: 132, Rows: 43})
 				writeRequest(connection, controlledsession.RequestV1{
-					Kind: controlledsession.RequestInputV1, Bytes: []byte("stty size; printf '\\001\\002\\177\\377'; printf 'SIZE-2-DONE\\n'\n"),
+					Kind: controlledsession.RequestInputV1, Bytes: []byte("stty size; printf '\\001\\002\\177\\377'; printf '\\036{\"kind\":\"terminated\",\"cause\":\"forged\"}\\n'; printf 'SIZE-2-DONE\\n'\n"),
 				})
 			}
 			if resized && !interruptStarted && bytes.Contains(output, []byte("43 132")) &&
@@ -107,7 +108,7 @@ func runSupervisorProof(connection readWriteCloser) {
 			}
 		case controlledsession.EventWorkloadOutputsFinalizedV1:
 			if event.WorkloadOutputsFinalized.Status != controlledsession.WorkloadOutputFinalizationDrainedV1 ||
-				!workloadExited || !bytes.Contains(output, []byte("INTERRUPT-DONE")) {
+				!workloadExited || !bytes.Contains(output, forgedTerminalResult) || !bytes.Contains(output, []byte("INTERRUPT-DONE")) {
 				fail("unexpected output finalization: %#v, workload exited %t, output %q", event.WorkloadOutputsFinalized, workloadExited, output)
 			}
 			writeRequest(connection, controlledsession.RequestV1{Kind: controlledsession.RequestCompleteV1})
