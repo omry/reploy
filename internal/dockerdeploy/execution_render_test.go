@@ -30,7 +30,7 @@ func TestRenderDockerInputsFromResolvedPlan(t *testing.T) {
 	if compose != normalizedGolden {
 		t.Fatalf("compose golden mismatch\nactual:\n%s\nwant:\n%s", compose, wantGolden)
 	}
-	for _, want := range []string{"image: reploy/demo:staging", "pull_policy: never", `user: "501:20"`, "cap_drop:", "- ALL", "no-new-privileges:true", "seccomp=builtin", "read_only: true", "HOME: /mnt/reploy-home", "TMPDIR: /mnt/reploy-home", "- /mnt/reploy-home:rw,noexec,nosuid,nodev,size=64m,mode=0700,uid=501,gid=20", "type: bind", "127.0.0.1:18080:8080", "/opt/reploy/python/bin/demo", "name: demo-staging-abcd"} {
+	for _, want := range []string{"image: reploy/demo:staging", "pull_policy: never", `user: "0:0"`, "cap_drop:", "- ALL", "cap_add:", "- NET_ADMIN", "- SETGID", "- SETPCAP", "- SETUID", "sandbox-exec", "--public", "deny", "--local", "deny", "--inbound-tcp", "no-new-privileges:true", "seccomp=builtin", "read_only: true", "HOME: /mnt/reploy-home", "TMPDIR: /mnt/reploy-home", "- /mnt/reploy-home:rw,noexec,nosuid,nodev,size=64m,mode=0700,uid=501,gid=20", "type: bind", "127.0.0.1:18080:8080", "/opt/reploy/python/bin/demo", "name: demo-staging-abcd"} {
 		if !strings.Contains(compose, want) {
 			t.Fatalf("compose missing %q:\n%s", want, compose)
 		}

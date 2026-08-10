@@ -2,7 +2,9 @@ package dockerdeploy
 
 import (
 	"fmt"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
@@ -62,6 +64,11 @@ func compileRuntimePolicyV1(
 ) (deploy.RuntimePolicyV1, error) {
 	canonicalPlans := append([]deploy.RuntimePlanV1{}, plans...)
 	for index := range canonicalPlans {
+		inboundTCP, err := canonicalRuntimeInboundTCPV1(canonicalPlans[index].InboundTCP)
+		if err != nil {
+			return deploy.RuntimePolicyV1{}, fmt.Errorf("runtime plan %q inbound TCP grants: %w", canonicalPlans[index].ID, err)
+		}
+		canonicalPlans[index].InboundTCP = inboundTCP
 		canonicalPlans[index].Mounts = append([]deploy.RuntimeMountV1{}, canonicalPlans[index].Mounts...)
 		canonicalPlans[index].Executables = append([]providers.QualifiedOutput{}, canonicalPlans[index].Executables...)
 		sort.Slice(canonicalPlans[index].Mounts, func(left int, right int) bool {
@@ -77,8 +84,12 @@ func compileRuntimePolicyV1(
 		})
 	}
 	sort.Slice(canonicalPlans, func(left int, right int) bool { return canonicalPlans[left].ID < canonicalPlans[right].ID })
+	if err := validateRuntimePolicyInboundTCPV1(document, canonicalPlans); err != nil {
+		return deploy.RuntimePolicyV1{}, err
+	}
 	policy := deploy.RuntimePolicyV1{
 		Schema: deploy.RuntimePolicySchemaV1, StartupVerifier: deploy.ApplicationStartupVerifierContractV1(),
+		Network:        normalizeRuntimeNetworkV1(document.Environment.Runtime.Network),
 		ProtectedPaths: protected, Plans: canonicalPlans,
 	}
 	if err := deploy.ValidateRuntimePolicyV1(policy); err != nil {
@@ -91,6 +102,38 @@ func compileRuntimePolicyV1(
 		return deploy.RuntimePolicyV1{}, err
 	}
 	return policy, nil
+}
+
+func canonicalRuntimeInboundTCPV1(values []string) ([]string, error) {
+	ports := make([]int, 0, len(values))
+	for _, value := range values {
+		port, err := strconv.Atoi(value)
+		if err != nil {
+			return nil, fmt.Errorf("port %q is not a decimal integer", value)
+		}
+		ports = append(ports, port)
+	}
+	return deploy.CanonicalRuntimeInboundTCPV1(ports), nil
+}
+
+func validateRuntimePolicyInboundTCPV1(document blueprint.Document, plans []deploy.RuntimePlanV1) error {
+	wantPorts := []int{}
+	if workload := document.Environment.Workload; workload != nil {
+		for _, endpoint := range workload.Endpoints {
+			wantPorts = append(wantPorts, endpoint.Port)
+		}
+	}
+	want := deploy.CanonicalRuntimeInboundTCPV1(wantPorts)
+	for _, plan := range plans {
+		planWant := []string{}
+		if plan.ID == runtimeWorkloadPlanID {
+			planWant = want
+		}
+		if !slices.Equal(plan.InboundTCP, planWant) {
+			return fmt.Errorf("runtime plan %q inbound TCP grants do not match the resolved blueprint", plan.ID)
+		}
+	}
+	return nil
 }
 
 func providerGraphProtectedPaths(graph providers.GraphExecutionResult, plans []deploy.RuntimePlanV1) ([]deploy.ProtectedPathV1, error) {
