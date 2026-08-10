@@ -1,16 +1,15 @@
 package dockerdeploy
 
 import (
-	"strconv"
 	"testing"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
 )
 
-func testApplicationSandboxPlanV1(uid int, gid int) ApplicationSandboxPlanV1 {
+func testApplicationSandboxPlanV1(uid uint32, gid uint32) ApplicationSandboxPlanV1 {
 	return newApplicationSandboxPlanV1(RuntimeUserPlan{
-		UID: uid, GID: gid, DockerUser: strconv.Itoa(uid) + ":" + strconv.Itoa(gid),
+		UID: uid, GID: gid, DockerUser: runtimeIDStringV1(uid) + ":" + runtimeIDStringV1(gid),
 	})
 }
 

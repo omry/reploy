@@ -28,7 +28,7 @@ func TestResolveInstallOwnerCarriesCanonicalSupplementaryGroups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if owner.UID != 991 || owner.GID != 992 || !reflect.DeepEqual(owner.SupplementaryGIDs, []int{33, 44}) {
+	if owner.UID != 991 || owner.GID != 992 || !reflect.DeepEqual(owner.SupplementaryGIDs, []uint32{33, 44}) {
 		t.Fatalf("owner = %#v", owner)
 	}
 }

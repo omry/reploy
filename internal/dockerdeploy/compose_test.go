@@ -120,14 +120,14 @@ func TestCommandRunnerForPinnedDockerEndpointV1PinsEveryCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"container", "inspect", "id"}, {"container", "rm", "--force", "id"}} {
-		if err := run(CommandSpec{Name: "docker", Args: args}, RunOptions{}); err != nil {
+	for _, args := range [][]string{{"container", "inspect", "abc"}, {"container", "rm", "--force", "abc"}} {
+		if err := run(CommandSpec{Name: "docker", Args: args, Env: []string{"DOCKER_CONTEXT=drifted"}}, RunOptions{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, command := range commands {
-		if got := commandEnvironmentValueV1(command, "DOCKER_HOST"); got != endpoint {
-			t.Fatalf("pinned Docker host = %q", got)
+		if host, found := commandSpecEnvironmentValueV1(command, "DOCKER_HOST"); !found || host != endpoint {
+			t.Fatalf("pinned Docker host = %q, found=%t", host, found)
 		}
 		if contextName, found := commandSpecEnvironmentValueV1(command, "DOCKER_CONTEXT"); !found || contextName != "" {
 			t.Fatalf("pinned Docker context = %q, found=%t", contextName, found)

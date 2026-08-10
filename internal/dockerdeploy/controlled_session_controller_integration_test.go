@@ -246,7 +246,15 @@ func controlledSessionControllerIntegrationPlanV1(
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity := RuntimeUserPlan{LocalUser: "reploy", UID: uid, GID: gid, DockerUser: fmt.Sprintf("%d:%d", uid, gid)}
+	runtimeUID, err := runtimeIDFromNativeIntV1(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeGID, err := runtimeIDFromNativeIntV1(gid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := RuntimeUserPlan{LocalUser: "reploy", UID: runtimeUID, GID: runtimeGID, DockerUser: fmt.Sprintf("%d:%d", runtimeUID, runtimeGID)}
 	controllerCurrent := CurrentBuild{Generation: deploy.EnvironmentGenerationState{
 		Reference: image, BuildLockDigest: canonical.Digest("sha256:" + strings.Repeat("4", 64)),
 	}}

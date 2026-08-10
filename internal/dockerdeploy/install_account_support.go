@@ -11,9 +11,9 @@ import (
 
 type resolvedInstallOwner struct {
 	Spec              string
-	UID               int
-	GID               int
-	SupplementaryGIDs []int
+	UID               uint32
+	GID               uint32
+	SupplementaryGIDs []uint32
 	ContainerUser     string
 }
 
@@ -46,10 +46,10 @@ func resolveInstallOwner(values map[string]string) (resolvedInstallOwner, error)
 	}, nil
 }
 
-func resolveInstallOwnerSupplementaryGIDs(spec string, uid int, gid int) ([]int, error) {
+func resolveInstallOwnerSupplementaryGIDs(spec string, uid uint32, gid uint32) ([]uint32, error) {
 	userPart, _, _ := strings.Cut(spec, ":")
 	if _, numeric := parseNumericInstallID(userPart); numeric {
-		return []int{}, nil
+		return []uint32{}, nil
 	}
 	lookedUp, err := installLookupUser(userPart)
 	if err != nil {
@@ -59,7 +59,7 @@ func resolveInstallOwnerSupplementaryGIDs(spec string, uid int, gid int) ([]int,
 	if err != nil {
 		return nil, fmt.Errorf("resolve REPLOY_INSTALL_OWNER supplementary groups for user %q: %w", userPart, err)
 	}
-	groups := make([]int, 0, len(values))
+	groups := make([]uint32, 0, len(values))
 	for _, value := range values {
 		parsed, ok := parseNumericInstallID(value)
 		if !ok {
@@ -201,7 +201,7 @@ func runInstallAccountCommand(name string, args ...string) error {
 	return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
 }
 
-func parseInstallOwner(value string) (int, int, error) {
+func parseInstallOwner(value string) (uint32, uint32, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return 0, 0, fmt.Errorf("REPLOY_INSTALL_OWNER must not be empty")
@@ -224,7 +224,7 @@ func parseInstallOwner(value string) (int, int, error) {
 	return uid, gid, nil
 }
 
-func resolveInstallOwnerUser(value string, original string) (int, int, error) {
+func resolveInstallOwnerUser(value string, original string) (uint32, uint32, error) {
 	if id, ok := parseNumericInstallID(value); ok {
 		return id, id, nil
 	}
@@ -240,7 +240,7 @@ func resolveInstallOwnerUser(value string, original string) (int, int, error) {
 	return uid, gid, nil
 }
 
-func resolveInstallOwnerGroup(value string, original string) (int, error) {
+func resolveInstallOwnerGroup(value string, original string) (uint32, error) {
 	if id, ok := parseNumericInstallID(value); ok {
 		return id, nil
 	}
@@ -255,7 +255,7 @@ func resolveInstallOwnerGroup(value string, original string) (int, error) {
 	return gid, nil
 }
 
-func parseNumericInstallID(value string) (int, bool) {
-	id, err := strconv.Atoi(value)
-	return id, err == nil && id >= 0
+func parseNumericInstallID(value string) (uint32, bool) {
+	id, err := strconv.ParseUint(value, 10, 32)
+	return uint32(id), err == nil && id != uint64(runtimeIDUnchangedSentinelV1) && strconv.FormatUint(id, 10) == value
 }

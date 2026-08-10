@@ -16,7 +16,7 @@ func TestTransientCommandDockerIntegrationEnforcesIdentityAndKernelBaseline(t *t
 	image, _ := buildApplicationStartupVerifierIntegrationImage(t, ctx)
 	plan := DockerExecutionPlan{
 		DeploymentDir: t.TempDir(), Image: image, ContainerName: uniqueDockerIntegrationName("reploy-transient-home"),
-		Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 12345, GID: 23456, SupplementaryGIDs: []int{34567, 45678}, DockerUser: "12345:23456"}),
+		Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 12345, GID: 23456, SupplementaryGIDs: []uint32{34567, 45678}, DockerUser: "12345:23456"}),
 	}
 	command := ResolvedEnvironmentCommand{Argv: []string{
 		"/bin/sh", "-eu", "-c",
