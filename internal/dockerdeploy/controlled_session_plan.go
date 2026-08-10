@@ -22,6 +22,8 @@ const (
 	ControlledSessionContainerPlanSchemaV1 = "controlled-session-container-plan-v1"
 
 	controlledSessionNetworkModeV1       = "none"
+	controlledSessionControllerAliasV1   = "controller"
+	controlledSessionWorkloadAliasV1     = controlledsession.WorkloadEndpointHostV2
 	controlledSessionChannelRootV1       = "/run/reploy/session"
 	controlledSessionChannelSocketNameV1 = controlledsession.PrivateChannelSocketNameV1
 )
@@ -42,6 +44,7 @@ type ControlledSessionPlanInputV1 struct {
 	ControllerForwardedArguments []string
 	WorkloadCurrent              CurrentBuild
 	WorkloadRuntime              CurrentRuntimePlanV1
+	EndpointIDs                  []string
 	InitialColumns               uint32
 	InitialRows                  uint32
 }
@@ -78,6 +81,7 @@ type ControlledSessionContainerPlanV1 struct {
 	Container           string                              `json:"container"`
 	RuntimeIdentity     controlledsession.RuntimeIdentityV1 `json:"runtime_identity"`
 	Network             string                              `json:"network"`
+	SessionNetwork      ControlledSessionNetworkPlanV1      `json:"session_network"`
 	ReadOnlyRoot        bool                                `json:"read_only_root"`
 	TemporaryHome       string                              `json:"temporary_home"`
 	StartupVerifier     string                              `json:"startup_verifier"`
@@ -95,6 +99,22 @@ type ControlledSessionContainerPlanV1 struct {
 	Create              ControlledSessionDockerCommandV1    `json:"create"`
 	Start               ControlledSessionDockerCommandV1    `json:"start"`
 	Cleanup             ControlledSessionDockerCommandV1    `json:"cleanup"`
+}
+
+type ControlledSessionNetworkPlanV1 struct {
+	Enabled   bool                              `json:"enabled"`
+	Name      string                            `json:"name"`
+	Internal  bool                              `json:"internal"`
+	Alias     string                            `json:"alias"`
+	PeerAlias string                            `json:"peer_alias"`
+	Endpoints []ControlledSessionEndpointPlanV1 `json:"endpoints"`
+}
+
+type ControlledSessionEndpointPlanV1 struct {
+	ID     string `json:"id"`
+	Scheme string `json:"scheme"`
+	Host   string `json:"host"`
+	Port   string `json:"port"`
 }
 
 type ControlledSessionLabelV1 struct {
@@ -123,6 +143,7 @@ type ControlledSessionDockerCommandV1 struct {
 
 func cloneControlledSessionContainerPlanV1(plan ControlledSessionContainerPlanV1) ControlledSessionContainerPlanV1 {
 	clone := plan
+	clone.SessionNetwork.Endpoints = slices.Clone(plan.SessionNetwork.Endpoints)
 	clone.SetupCapabilities = slices.Clone(plan.SetupCapabilities)
 	clone.SecurityOptions = slices.Clone(plan.SecurityOptions)
 	clone.Environment = slices.Clone(plan.Environment)
@@ -204,6 +225,15 @@ func planControlledSessionV1(input ControlledSessionPlanInputV1, backend control
 		ContainerDirectory: controlledSessionChannelRootV1,
 		ContainerSocket:    path.Join(controlledSessionChannelRootV1, controlledSessionChannelSocketNameV1),
 	}
+	endpoints, err := controlledSessionEndpointPlansV1(input.EndpointIDs, input.WorkloadRuntime.Docker)
+	if err != nil {
+		return ControlledSessionExecutionPlanV1{}, fmt.Errorf("plan controlled session endpoints: %w", err)
+	}
+	controllerNetwork, workloadNetwork := controlledSessionNetworkPlansV1(
+		input.WorkloadRuntime.Docker.NetworkName,
+		input.LiveRunID,
+		endpoints,
+	)
 	controller, err := controlledSessionContainerPlanV1(
 		ControlledSessionRoleControllerV1,
 		input.LiveRunID,
@@ -212,6 +242,7 @@ func planControlledSessionV1(input ControlledSessionPlanInputV1, backend control
 		controllerCommand.Argv,
 		channel,
 		[]string{input.ControllerRuntime.Docker.DeploymentDir, input.WorkloadRuntime.Docker.DeploymentDir},
+		controllerNetwork,
 		0,
 		0,
 	)
@@ -226,6 +257,7 @@ func planControlledSessionV1(input ControlledSessionPlanInputV1, backend control
 		[]string{"/bin/sh"},
 		ControlledSessionChannelPlanV1{},
 		[]string{input.ControllerRuntime.Docker.DeploymentDir, input.WorkloadRuntime.Docker.DeploymentDir},
+		workloadNetwork,
 		input.InitialColumns,
 		input.InitialRows,
 	)
@@ -252,7 +284,7 @@ func planControlledSessionV1(input ControlledSessionPlanInputV1, backend control
 			controlledsession.OperationResizeV1,
 			controlledsession.OperationTerminateV1,
 		},
-		EndpointIDs: []string{},
+		EndpointIDs: controlledSessionEndpointIDsV1(endpoints),
 	}
 	plan := ControlledSessionExecutionPlanV1{
 		Schema: ControlledSessionExecutionPlanSchemaV1, LiveRunID: input.LiveRunID,
@@ -310,6 +342,14 @@ func ValidateControlledSessionExecutionPlanV1(plan ControlledSessionExecutionPla
 	if plan.Controller.Container == plan.Workload.Container {
 		return fmt.Errorf("controlled-session controller and workload containers must be distinct")
 	}
+	if err := validateControlledSessionNetworkPairV1(
+		plan.Controller.SessionNetwork,
+		plan.Workload.SessionNetwork,
+		plan.Workload.Container,
+		plan.LiveRunID,
+	); err != nil {
+		return err
+	}
 	if !controlledSessionControllerCarriesChannelV1(plan.Controller, plan.Channel) {
 		return fmt.Errorf("controlled-session controller plan does not carry the exact private channel")
 	}
@@ -338,7 +378,7 @@ func ValidateControlledSessionExecutionPlanV1(plan ControlledSessionExecutionPla
 			controlledsession.OperationResizeV1,
 			controlledsession.OperationTerminateV1,
 		},
-		EndpointIDs: []string{},
+		EndpointIDs: controlledSessionEndpointIDsV1(plan.Controller.SessionNetwork.Endpoints),
 	}
 	if !reflect.DeepEqual(plan.Authorization, wantAuthorization) {
 		return fmt.Errorf("controlled-session authorization does not match the immutable controller and workload plans")
@@ -376,6 +416,9 @@ func ValidateControlledSessionContainerPlanV1(plan ControlledSessionContainerPla
 	}
 	if plan.Network != controlledSessionNetworkModeV1 {
 		return fmt.Errorf("container network must be %q", controlledSessionNetworkModeV1)
+	}
+	if err := validateControlledSessionNetworkPlanV1(plan.SessionNetwork); err != nil {
+		return fmt.Errorf("container session network: %w", err)
 	}
 	if !plan.ReadOnlyRoot || plan.TemporaryHome != environmentTemporaryHome || plan.StartupVerifier != deploy.ApplicationStartupVerifierPathV1 {
 		return fmt.Errorf("container plan does not preserve the application sandbox root and startup verifier")
@@ -430,6 +473,168 @@ func ValidateControlledSessionContainerPlanV1(plan ControlledSessionContainerPla
 	return nil
 }
 
+func controlledSessionEndpointPlansV1(endpointIDs []string, workload DockerExecutionPlan) ([]ControlledSessionEndpointPlanV1, error) {
+	ids := append([]string{}, endpointIDs...)
+	slices.Sort(ids)
+	for index, id := range ids {
+		if index > 0 && ids[index-1] == id {
+			return nil, fmt.Errorf("endpoint ID %q is duplicated", id)
+		}
+		if workload.Workload == nil {
+			return nil, fmt.Errorf("endpoint ID %q requires a declared workload", id)
+		}
+		planned, found := workload.Workload.Endpoints[id]
+		if !found {
+			return nil, fmt.Errorf("endpoint ID %q is not declared by the exact workload generation", id)
+		}
+		endpoint := ControlledSessionEndpointPlanV1{
+			ID: id, Scheme: planned.Scheme, Host: controlledSessionWorkloadAliasV1, Port: strconv.Itoa(planned.ContainerPort),
+		}
+		if err := validateControlledSessionEndpointPlanV1(endpoint); err != nil {
+			return nil, err
+		}
+	}
+	result := make([]ControlledSessionEndpointPlanV1, len(ids))
+	for index, id := range ids {
+		planned := workload.Workload.Endpoints[id]
+		result[index] = ControlledSessionEndpointPlanV1{
+			ID: id, Scheme: planned.Scheme, Host: controlledSessionWorkloadAliasV1, Port: strconv.Itoa(planned.ContainerPort),
+		}
+	}
+	return result, nil
+}
+
+func controlledSessionNetworkPlansV1(
+	workloadNetworkName string,
+	liveRunID string,
+	endpoints []ControlledSessionEndpointPlanV1,
+) (ControlledSessionNetworkPlanV1, ControlledSessionNetworkPlanV1) {
+	if len(endpoints) == 0 {
+		disabled := disabledControlledSessionNetworkPlanV1()
+		return disabled, disabled
+	}
+	name := workloadNetworkName + "-session-" + liveRunID
+	controller := ControlledSessionNetworkPlanV1{
+		Enabled: true, Name: name, Internal: true,
+		Alias: controlledSessionControllerAliasV1, PeerAlias: controlledSessionWorkloadAliasV1,
+		Endpoints: slices.Clone(endpoints),
+	}
+	workload := ControlledSessionNetworkPlanV1{
+		Enabled: true, Name: name, Internal: true,
+		Alias: controlledSessionWorkloadAliasV1, PeerAlias: controlledSessionControllerAliasV1,
+		Endpoints: slices.Clone(endpoints),
+	}
+	return controller, workload
+}
+
+func disabledControlledSessionNetworkPlanV1() ControlledSessionNetworkPlanV1 {
+	return ControlledSessionNetworkPlanV1{Endpoints: []ControlledSessionEndpointPlanV1{}}
+}
+
+func controlledSessionEndpointIDsV1(endpoints []ControlledSessionEndpointPlanV1) []string {
+	result := make([]string, len(endpoints))
+	for index, endpoint := range endpoints {
+		result[index] = endpoint.ID
+	}
+	return result
+}
+
+func validateControlledSessionNetworkPlanV1(plan ControlledSessionNetworkPlanV1) error {
+	if plan.Endpoints == nil {
+		return fmt.Errorf("endpoints must use an array")
+	}
+	if !plan.Enabled {
+		if plan.Name != "" || plan.Internal || plan.Alias != "" || plan.PeerAlias != "" || len(plan.Endpoints) != 0 {
+			return fmt.Errorf("disabled grant must not carry network authority")
+		}
+		return nil
+	}
+	if !plan.Internal {
+		return fmt.Errorf("enabled grant must use an engine-internal network")
+	}
+	if !validControlledSessionDockerNameV1(plan.Name) {
+		return fmt.Errorf("network name must use a safe Docker resource name")
+	}
+	if plan.Alias == plan.PeerAlias ||
+		(plan.Alias != controlledSessionControllerAliasV1 && plan.Alias != controlledSessionWorkloadAliasV1) ||
+		(plan.PeerAlias != controlledSessionControllerAliasV1 && plan.PeerAlias != controlledSessionWorkloadAliasV1) {
+		return fmt.Errorf("network aliases must identify the fixed controller and workload peers")
+	}
+	if len(plan.Endpoints) == 0 {
+		return fmt.Errorf("enabled grant requires at least one endpoint")
+	}
+	for index, endpoint := range plan.Endpoints {
+		if err := validateControlledSessionEndpointPlanV1(endpoint); err != nil {
+			return err
+		}
+		if index > 0 && plan.Endpoints[index-1].ID >= endpoint.ID {
+			return fmt.Errorf("endpoints must be unique and sorted by ID")
+		}
+	}
+	return nil
+}
+
+func validateControlledSessionEndpointPlanV1(endpoint ControlledSessionEndpointPlanV1) error {
+	port, err := strconv.ParseUint(endpoint.Port, 10, 16)
+	if err != nil || port == 0 || strconv.FormatUint(port, 10) != endpoint.Port {
+		return fmt.Errorf("controlled-session endpoint %q port must be a canonical decimal between 1 and 65535", endpoint.ID)
+	}
+	return controlledsession.ValidateEndpointV2(controlledsession.EndpointV2{
+		ID: endpoint.ID, Scheme: endpoint.Scheme, Host: endpoint.Host, Port: uint32(port),
+	})
+}
+
+func controlledSessionOpenedEndpointsV1(endpoints []ControlledSessionEndpointPlanV1) []controlledsession.EndpointV2 {
+	result := make([]controlledsession.EndpointV2, len(endpoints))
+	for index, endpoint := range endpoints {
+		port, _ := strconv.ParseUint(endpoint.Port, 10, 16)
+		result[index] = controlledsession.EndpointV2{
+			ID: endpoint.ID, Scheme: endpoint.Scheme, Host: endpoint.Host, Port: uint32(port),
+		}
+	}
+	return result
+}
+
+func validateControlledSessionNetworkPairV1(
+	controller ControlledSessionNetworkPlanV1,
+	workload ControlledSessionNetworkPlanV1,
+	workloadContainer string,
+	liveRunID string,
+) error {
+	if controller.Enabled != workload.Enabled {
+		return fmt.Errorf("controlled-session controller and workload network grants must be enabled together")
+	}
+	if !controller.Enabled {
+		if !reflect.DeepEqual(controller, workload) {
+			return fmt.Errorf("controlled-session disabled network grants must match")
+		}
+		return nil
+	}
+	wantBase := strings.TrimSuffix(workloadContainer, "-"+string(ControlledSessionRoleWorkloadV1)+"-"+liveRunID)
+	wantName := wantBase + "-session-" + liveRunID
+	if controller.Name != wantName || workload.Name != wantName ||
+		controller.Alias != controlledSessionControllerAliasV1 || controller.PeerAlias != controlledSessionWorkloadAliasV1 ||
+		workload.Alias != controlledSessionWorkloadAliasV1 || workload.PeerAlias != controlledSessionControllerAliasV1 ||
+		!controller.Internal || !workload.Internal || !reflect.DeepEqual(controller.Endpoints, workload.Endpoints) {
+		return fmt.Errorf("controlled-session network grants do not match the exact lease-local network and peers")
+	}
+	return nil
+}
+
+func validControlledSessionDockerNameV1(value string) bool {
+	if value == "" || len(value) > 255 {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		alphanumeric := character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9'
+		if !alphanumeric && (index == 0 || character != '_' && character != '.' && character != '-') {
+			return false
+		}
+	}
+	return true
+}
+
 func validateControlledSessionCurrentRuntimeV1(
 	role string,
 	current CurrentBuild,
@@ -471,6 +676,7 @@ func controlledSessionContainerPlanV1(
 	command []string,
 	channel ControlledSessionChannelPlanV1,
 	protectedDeploymentRoots []string,
+	sessionNetwork ControlledSessionNetworkPlanV1,
 	columns uint32,
 	rows uint32,
 ) (ControlledSessionContainerPlanV1, error) {
@@ -525,7 +731,7 @@ func controlledSessionContainerPlanV1(
 		DeploymentID: dockerPlan.EnvironmentID, DeploymentDirectory: dockerPlan.DeploymentDir,
 		GenerationReference: current.Generation.Reference, BuildIdentity: current.Generation.BuildLockDigest,
 		Image: dockerPlan.Image, Container: dockerPlan.ContainerName + "-" + string(role) + "-" + liveRunID,
-		RuntimeIdentity: identity, Network: controlledSessionNetworkModeV1,
+		RuntimeIdentity: identity, Network: controlledSessionNetworkModeV1, SessionNetwork: sessionNetwork,
 		ReadOnlyRoot: dockerPlan.Sandbox.ReadOnlyRoot, TemporaryHome: dockerPlan.Sandbox.TemporaryHome,
 		StartupVerifier:   dockerPlan.Sandbox.StartupVerifier.Path,
 		SetupCapabilities: controlledSessionSetupCapabilitiesV1(identity.UID),

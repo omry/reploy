@@ -49,7 +49,7 @@ func TestControlledSessionContainerPlansDockerIntegration(t *testing.T) {
 	controller, err := controlledSessionContainerPlanV1(
 		ControlledSessionRoleControllerV1, liveRunID, current, basePlan,
 		[]string{"/bin/sh", "-c", "printf 'controlled-session-controller-pass\\n'"},
-		channel, protectedRoots, 0, 0,
+		channel, protectedRoots, disabledControlledSessionNetworkPlanV1(), 0, 0,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestControlledSessionContainerPlansDockerIntegration(t *testing.T) {
 	workloadDockerPlan.ContainerName = uniqueDockerIntegrationName("reploy-session-plan")
 	workload, err := controlledSessionContainerPlanV1(
 		ControlledSessionRoleWorkloadV1, liveRunID, current, workloadDockerPlan,
-		[]string{"/bin/sh"}, ControlledSessionChannelPlanV1{}, protectedRoots, 80, 24,
+		[]string{"/bin/sh"}, ControlledSessionChannelPlanV1{}, protectedRoots, disabledControlledSessionNetworkPlanV1(), 80, 24,
 	)
 	if err != nil {
 		t.Fatal(err)
