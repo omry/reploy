@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -149,8 +150,110 @@ func cleanupControlledSessionRecoveryV1(
 	for _, container := range []deploy.ControlledSessionContainerOwnershipV1{ownership.Workload, ownership.Controller} {
 		cleanupErr = errors.Join(cleanupErr, cleanupControlledSessionRecoveryContainerV1(ctx, ownership.LiveRunID, container, pinnedRun))
 	}
+	if ownership.NetworkName != "" {
+		cleanupErr = errors.Join(cleanupErr, cleanupControlledSessionRecoveryNetworkV1(ctx, ownership, pinnedRun))
+	}
 	cleanupErr = errors.Join(cleanupErr, removeControlledSessionChannelDirectoryV1(ownership.ChannelDirectory))
 	return cleanupErr
+}
+
+func cleanupControlledSessionRecoveryNetworkV1(
+	ctx context.Context,
+	ownership deploy.ControlledSessionOwnershipV1,
+	run commandRunner,
+) error {
+	target := ownership.NetworkID
+	if target == "" {
+		target = ownership.NetworkName
+	}
+	inspection, found, err := inspectControlledSessionRecoveryNetworkV1(ctx, target, run)
+	if err != nil {
+		return fmt.Errorf("inspect recovered controlled-session network %q: %w", target, err)
+	}
+	if !found {
+		return nil
+	}
+	if ownership.NetworkID != "" && inspection.ID != ownership.NetworkID {
+		return fmt.Errorf("refuse to remove recovered controlled-session network %q because Docker returned full ID %q", ownership.NetworkID, inspection.ID)
+	}
+	if inspection.Name != ownership.NetworkName {
+		return fmt.Errorf("refuse to remove recovered controlled-session network %q because network name does not match", inspection.ID)
+	}
+	expectedLabels := map[string]string{
+		"io.reploy.session.live-run": ownership.LiveRunID,
+		"io.reploy.session.role":     deploy.ControlledSessionNetworkRoleV1,
+	}
+	if !reflect.DeepEqual(inspection.Labels, expectedLabels) {
+		return fmt.Errorf("refuse to remove recovered controlled-session network %q because ownership labels do not match", inspection.ID)
+	}
+	if len(inspection.Members) != 0 {
+		return fmt.Errorf("refuse to remove recovered controlled-session network %q because it still has members", inspection.ID)
+	}
+	removeErr := run(CommandSpec{Name: "docker", Args: []string{"network", "rm", inspection.ID}}, RunOptions{Context: ctx})
+	if removeErr != nil && !isMissingControlledSessionNetworkV1(removeErr, "") {
+		return fmt.Errorf("remove recovered controlled-session network %q: %w", inspection.ID, removeErr)
+	}
+	_, stillFound, inspectErr := inspectControlledSessionRecoveryNetworkV1(ctx, inspection.ID, run)
+	if inspectErr != nil {
+		return fmt.Errorf("verify recovered controlled-session network %q removal: %w", inspection.ID, inspectErr)
+	}
+	if stillFound {
+		return fmt.Errorf("recovered controlled-session network %q still exists after removal", inspection.ID)
+	}
+	return nil
+}
+
+func inspectControlledSessionRecoveryNetworkV1(
+	ctx context.Context,
+	target string,
+	run commandRunner,
+) (controlledSessionWatchdogNetworkInspectionV1, bool, error) {
+	var output bytes.Buffer
+	err := run(CommandSpec{Name: "docker", Args: []string{
+		"network", "inspect", "--format", "{{json .Id}} {{json .Name}} {{json .Labels}} {{json .Containers}}", target,
+	}}, RunOptions{Context: ctx, Stdout: &output, Stderr: &output})
+	if err != nil {
+		message := strings.TrimSpace(output.String())
+		if isMissingControlledSessionNetworkV1(err, message) {
+			return controlledSessionWatchdogNetworkInspectionV1{}, false, nil
+		}
+		if message != "" {
+			return controlledSessionWatchdogNetworkInspectionV1{}, false, fmt.Errorf("%w: %s", err, message)
+		}
+		return controlledSessionWatchdogNetworkInspectionV1{}, false, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(output.Bytes()))
+	var inspection controlledSessionWatchdogNetworkInspectionV1
+	var members map[string]dockerSessionNetworkContainerV1
+	if err := decoder.Decode(&inspection.ID); err != nil {
+		return controlledSessionWatchdogNetworkInspectionV1{}, false, fmt.Errorf("decode recovered controlled-session network ID: %w", err)
+	}
+	parsed, err := parseDockerNetworkIDV1(inspection.ID)
+	if err != nil {
+		return controlledSessionWatchdogNetworkInspectionV1{}, false, fmt.Errorf("decode recovered controlled-session network ID: %w", err)
+	}
+	if parsed != inspection.ID {
+		return controlledSessionWatchdogNetworkInspectionV1{}, false, fmt.Errorf("recovered controlled-session network ID is not canonical")
+	}
+	if err := decoder.Decode(&inspection.Name); err != nil {
+		return controlledSessionWatchdogNetworkInspectionV1{}, false, fmt.Errorf("decode recovered controlled-session network name: %w", err)
+	}
+	if err := decoder.Decode(&inspection.Labels); err != nil {
+		return controlledSessionWatchdogNetworkInspectionV1{}, false, fmt.Errorf("decode recovered controlled-session network labels: %w", err)
+	}
+	if err := decoder.Decode(&members); err != nil {
+		return controlledSessionWatchdogNetworkInspectionV1{}, false, fmt.Errorf("decode recovered controlled-session network members: %w", err)
+	}
+	inspection.Members = make(map[string]string, len(members))
+	for id, member := range members {
+		inspection.Members[id] = member.Name
+	}
+	return inspection, true, nil
+}
+
+func isMissingControlledSessionNetworkV1(err error, output string) bool {
+	message := strings.ToLower(output + " " + err.Error())
+	return strings.Contains(message, "no such network") || strings.Contains(message, "no such object")
 }
 
 func cleanupControlledSessionRecoveryContainerV1(

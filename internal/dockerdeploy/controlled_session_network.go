@@ -15,9 +15,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/omry/reploy/internal/deploy"
 )
 
-const controlledSessionNetworkRoleV1 = "network"
+const controlledSessionNetworkRoleV1 = deploy.ControlledSessionNetworkRoleV1
 
 type dockerSessionNetworkBackendV1 struct {
 	bind                   func(context.Context, CommandSpec, time.Duration) (CommandSpec, commandRunner, error)

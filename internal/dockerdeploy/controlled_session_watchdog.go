@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"reflect"
 	"strings"
 	"syscall"
 	"time"
@@ -39,6 +40,8 @@ type controlledSessionWatchdogCleanupBackendV1 struct {
 	bindDockerEndpoint func(string) error
 	inspectContainer   func(context.Context, string) (map[string]string, bool, error)
 	removeContainer    func(context.Context, string) error
+	inspectNetwork     func(context.Context, string) (controlledSessionWatchdogNetworkInspectionV1, bool, error)
+	removeNetwork      func(context.Context, string) error
 	removeChannel      func(string) error
 	dockerUnavailable  func(context.Context) (bool, error)
 	waitRetry          func(time.Duration)
@@ -46,9 +49,17 @@ type controlledSessionWatchdogCleanupBackendV1 struct {
 	writeIncident      func(deploy.ControlledSessionIncidentReceiptV1) error
 }
 
+type controlledSessionWatchdogNetworkInspectionV1 struct {
+	ID      string
+	Name    string
+	Labels  map[string]string
+	Members map[string]string
+}
+
 type controlledSessionWatchdogCleanupReportV1 struct {
 	controller deploy.ControlledSessionIncidentResourceStatusV1
 	workload   deploy.ControlledSessionIncidentResourceStatusV1
+	networks   []deploy.ControlledSessionIncidentResourceStatusV1
 	channel    deploy.ControlledSessionIncidentResourceStatusV1
 }
 
@@ -95,8 +106,11 @@ func runControlledSessionWatchdogV1(
 	if err := backend.bindDockerEndpoint(manifest.DockerEndpoint); err != nil {
 		return fmt.Errorf("bind watchdog Docker endpoint: %w", err)
 	}
-	if len(manifest.Networks) != 0 || len(manifest.Volumes) != 0 {
+	if len(manifest.Volumes) != 0 {
 		return fmt.Errorf("cleanup manifest names resources unsupported by this watchdog")
+	}
+	if len(manifest.Networks) != 0 && (backend.inspectNetwork == nil || backend.removeNetwork == nil) {
+		return fmt.Errorf("watchdog network cleanup backend is incomplete")
 	}
 	if err := requireControlledSessionWatchdogBootV1(manifest, backend); err != nil {
 		return err
@@ -207,10 +221,17 @@ func cleanupControlledSessionFromWatchdogWithReportV1(
 	report := controlledSessionWatchdogCleanupReportV1{
 		controller: deploy.ControlledSessionIncidentResourceCleanupFailedV1,
 		workload:   deploy.ControlledSessionIncidentResourceCleanupFailedV1,
+		networks:   make([]deploy.ControlledSessionIncidentResourceStatusV1, len(manifest.Networks)),
 		channel:    deploy.ControlledSessionIncidentResourceCleanupFailedV1,
+	}
+	for index := range report.networks {
+		report.networks[index] = deploy.ControlledSessionIncidentResourceCleanupFailedV1
 	}
 	if backend.inspectContainer == nil || backend.removeContainer == nil || backend.removeChannel == nil {
 		return report, fmt.Errorf("watchdog cleanup backend is incomplete")
+	}
+	if len(manifest.Networks) != 0 && (backend.inspectNetwork == nil || backend.removeNetwork == nil) {
+		return report, fmt.Errorf("watchdog network cleanup backend is incomplete")
 	}
 	if err := deploy.ValidateControlledSessionCleanupManifest(manifest); err != nil {
 		return report, err
@@ -225,6 +246,13 @@ func cleanupControlledSessionFromWatchdogWithReportV1(
 		cleanupErr = errors.Join(cleanupErr, err)
 	} else {
 		report.controller = deploy.ControlledSessionIncidentResourceVerifiedAbsentV1
+	}
+	for index, network := range manifest.Networks {
+		if err := cleanupControlledSessionWatchdogNetworkV1(ctx, manifest.LiveRunID, network, backend); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		} else {
+			report.networks[index] = deploy.ControlledSessionIncidentResourceVerifiedAbsentV1
+		}
 	}
 	if err := backend.removeChannel(manifest.ChannelDirectory); err != nil {
 		cleanupErr = errors.Join(cleanupErr, err)
@@ -257,14 +285,65 @@ func controlledSessionWatchdogIncidentReceiptV1(
 		cleanupStatus = deploy.ControlledSessionIncidentCleanupFailedV1
 		recoveryAction = deploy.ControlledSessionIncidentRecoveryNextOperationV1
 	}
+	networks := make([]deploy.ControlledSessionIncidentNetworkV1, len(manifest.Networks))
+	for index, network := range manifest.Networks {
+		networks[index] = deploy.ControlledSessionIncidentNetworkV1{
+			Role: network.Role, ID: network.ID, Name: network.Name, CleanupStatus: report.networks[index],
+		}
+		if report.networks[index] != deploy.ControlledSessionIncidentResourceVerifiedAbsentV1 {
+			cleanupStatus = deploy.ControlledSessionIncidentCleanupFailedV1
+			recoveryAction = deploy.ControlledSessionIncidentRecoveryNextOperationV1
+		}
+	}
 	return deploy.ControlledSessionIncidentReceiptV1{
 		Schema: deploy.ControlledSessionIncidentReceiptSchemaV1, LiveRunID: manifest.LiveRunID,
 		BootSession: manifest.BootSession, RecordedAt: recordedAt.UTC().Format(time.RFC3339Nano),
 		Trigger:              deploy.ControlledSessionIncidentParentLostV1,
 		Controller:           container(manifest.Controller, report.controller),
 		Workload:             container(manifest.Workload, report.workload),
+		Networks:             networks,
 		ChannelCleanupStatus: report.channel, CleanupStatus: cleanupStatus, RecoveryAction: recoveryAction,
 	}
+}
+
+func cleanupControlledSessionWatchdogNetworkV1(
+	ctx context.Context,
+	liveRunID string,
+	network deploy.ControlledSessionNetworkOwnershipV1,
+	backend controlledSessionWatchdogCleanupBackendV1,
+) error {
+	inspection, found, err := backend.inspectNetwork(ctx, network.ID)
+	if err != nil {
+		return fmt.Errorf("inspect controlled-session network %q: %w", network.ID, err)
+	}
+	if !found {
+		return nil
+	}
+	if inspection.ID != network.ID {
+		return fmt.Errorf("refuse to remove controlled-session network %q because Docker returned full ID %q", network.ID, inspection.ID)
+	}
+	if inspection.Name != network.Name {
+		return fmt.Errorf("refuse to remove controlled-session network %q because network name does not match", network.ID)
+	}
+	expectedLabels := map[string]string{
+		"io.reploy.session.live-run": liveRunID,
+		"io.reploy.session.role":     deploy.ControlledSessionNetworkRoleV1,
+	}
+	if !reflect.DeepEqual(inspection.Labels, expectedLabels) {
+		return fmt.Errorf("refuse to remove controlled-session network %q because ownership labels do not match", network.ID)
+	}
+	if len(inspection.Members) != 0 {
+		return fmt.Errorf("refuse to remove controlled-session network %q because it still has members", network.ID)
+	}
+	removeErr := backend.removeNetwork(ctx, network.ID)
+	_, stillFound, inspectErr := backend.inspectNetwork(ctx, network.ID)
+	if inspectErr != nil {
+		return errors.Join(removeErr, fmt.Errorf("verify controlled-session network %q removal: %w", network.ID, inspectErr))
+	}
+	if stillFound {
+		return errors.Join(removeErr, fmt.Errorf("controlled-session network %q still exists after removal", network.ID))
+	}
+	return nil
 }
 
 func cleanupControlledSessionWatchdogContainerV1(
@@ -322,6 +401,12 @@ func productionControlledSessionWatchdogCleanupBackendV1(receipt *os.File) contr
 		removeContainer: func(ctx context.Context, containerID string) error {
 			return dockerRun(CommandSpec{Name: "docker", Args: []string{"container", "rm", "--force", containerID}}, RunOptions{Context: ctx})
 		},
+		inspectNetwork: func(ctx context.Context, networkID string) (controlledSessionWatchdogNetworkInspectionV1, bool, error) {
+			return inspectControlledSessionWatchdogNetworkV1(ctx, networkID, dockerRun)
+		},
+		removeNetwork: func(ctx context.Context, networkID string) error {
+			return dockerRun(CommandSpec{Name: "docker", Args: []string{"network", "rm", networkID}}, RunOptions{Context: ctx})
+		},
 		removeChannel: removeControlledSessionChannelDirectoryV1,
 		dockerUnavailable: func(ctx context.Context) (bool, error) {
 			return controlledSessionWatchdogDockerUnavailableV1(ctx, dockerEndpoint, probeControlledSessionWatchdogDockerV1)
@@ -332,6 +417,50 @@ func productionControlledSessionWatchdogCleanupBackendV1(receipt *os.File) contr
 			return deploy.WriteControlledSessionIncidentReceiptV1(receipt, incident)
 		},
 	}
+}
+
+func inspectControlledSessionWatchdogNetworkV1(
+	ctx context.Context,
+	networkID string,
+	run commandRunner,
+) (controlledSessionWatchdogNetworkInspectionV1, bool, error) {
+	var output bytes.Buffer
+	err := run(CommandSpec{Name: "docker", Args: []string{
+		"network", "inspect", "--format", "{{json .Id}} {{json .Name}} {{json .Labels}} {{json .Containers}}", networkID,
+	}}, RunOptions{Context: ctx, Stdout: &output, Stderr: &output})
+	if err != nil {
+		message := strings.TrimSpace(output.String())
+		if strings.Contains(message, "No such network") || strings.Contains(message, "No such object") {
+			return controlledSessionWatchdogNetworkInspectionV1{}, false, nil
+		}
+		if message != "" {
+			return controlledSessionWatchdogNetworkInspectionV1{}, false, fmt.Errorf("%w: %s", err, message)
+		}
+		return controlledSessionWatchdogNetworkInspectionV1{}, false, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(output.Bytes()))
+	var inspection controlledSessionWatchdogNetworkInspectionV1
+	var members map[string]dockerSessionNetworkContainerV1
+	if err := decoder.Decode(&inspection.ID); err != nil {
+		return controlledSessionWatchdogNetworkInspectionV1{}, false, fmt.Errorf("decode inspected network ID: %w", err)
+	}
+	if err := decoder.Decode(&inspection.Name); err != nil {
+		return controlledSessionWatchdogNetworkInspectionV1{}, false, fmt.Errorf("decode inspected network name: %w", err)
+	}
+	if err := decoder.Decode(&inspection.Labels); err != nil {
+		return controlledSessionWatchdogNetworkInspectionV1{}, false, fmt.Errorf("decode inspected network labels: %w", err)
+	}
+	if err := decoder.Decode(&members); err != nil {
+		return controlledSessionWatchdogNetworkInspectionV1{}, false, fmt.Errorf("decode inspected network members: %w", err)
+	}
+	inspection.Members = make(map[string]string, len(members))
+	for id, member := range members {
+		inspection.Members[id] = member.Name
+	}
+	if inspection.ID != networkID {
+		return controlledSessionWatchdogNetworkInspectionV1{}, false, fmt.Errorf("Docker inspected network %q as unexpected full ID %q", networkID, inspection.ID)
+	}
+	return inspection, true, nil
 }
 
 type controlledSessionWatchdogDockerProbeV1 func(context.Context, string) error
