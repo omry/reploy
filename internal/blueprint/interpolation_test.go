@@ -73,3 +73,37 @@ func TestResolveOperationStringsStringifiesWholeScalarReferences(t *testing.T) {
 		t.Fatalf("values = %#v", values)
 	}
 }
+
+func TestResolveOperationStringsResolvesDottedEndpointNames(t *testing.T) {
+	values, err := ResolveOperationStrings([]string{
+		"{{ reploy.workload.endpoints.api.v1.publish.port }}",
+		"{{ reploy.workload.endpoints.api.publish.port }}",
+	}, nil, PhaseStaged, nil, map[string]any{
+		"reploy.workload": map[string]any{"endpoints": map[string]any{
+			"api.v1": map[string]any{"publish": map[string]any{"port": 8443}},
+			"api":    map[string]any{"publish": map[string]any{"port": 8080}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"8443", "8080"}; !reflect.DeepEqual(values, want) {
+		t.Fatalf("values = %#v, want %#v", values, want)
+	}
+}
+
+func TestInterpolationContextPrefersLongestAvailableDottedMapKey(t *testing.T) {
+	context := InterpolationContext{Roots: map[string]any{
+		"root": map[string]any{
+			"api":    map[string]any{"v1": "nested"},
+			"api.v1": "dotted",
+		},
+	}}
+	value, err := interpolate("{{ root.api.v1 }}", context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != "dotted" {
+		t.Fatalf("value = %#v, want dotted key", value)
+	}
+}

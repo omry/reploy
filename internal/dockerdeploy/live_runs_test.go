@@ -133,7 +133,7 @@ func TestStopLiveRunV1RemovesActiveContainerBeforePromotingWaiter(t *testing.T) 
 	}
 }
 
-func TestStopLiveRunV1RemovesControlledSessionContainersAndRetainsOwnership(t *testing.T) {
+func TestStopLiveRunV1PinsControlledSessionContainersToRecordedEndpointAndRetainsOwnership(t *testing.T) {
 	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
 	dir := plan.Workload.DeploymentDirectory
 	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
@@ -172,8 +172,8 @@ func TestStopLiveRunV1RemovesControlledSessionContainersAndRetainsOwnership(t *t
 		t.Fatalf("controlled-session stop = %#v, %v", result, err)
 	}
 	wantCalls := []CommandSpec{
-		TemporaryContainerCleanupCommand(dockerWorkloadTestContainerIDV1),
-		TemporaryContainerCleanupCommand(dockerControllerTestContainerIDV1),
+		pinDockerEndpointV1(TemporaryContainerCleanupCommand(dockerWorkloadTestContainerIDV1), controlledSessionTestDockerEndpointV1),
+		pinDockerEndpointV1(TemporaryContainerCleanupCommand(dockerControllerTestContainerIDV1), controlledSessionTestDockerEndpointV1),
 	}
 	if !reflect.DeepEqual(calls, wantCalls) {
 		t.Fatalf("controlled-session cleanup calls = %#v", calls)
@@ -223,7 +223,9 @@ func TestStopLiveRunV1SkipsUnrecordedControlledSessionContainerIDs(t *testing.T)
 	if err != nil || !result.Found {
 		t.Fatalf("partial-ownership stop = %#v, %v", result, err)
 	}
-	want := []CommandSpec{TemporaryContainerCleanupCommand(dockerControllerTestContainerIDV1)}
+	want := []CommandSpec{
+		pinDockerEndpointV1(TemporaryContainerCleanupCommand(dockerControllerTestContainerIDV1), controlledSessionTestDockerEndpointV1),
+	}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("partial-ownership cleanup calls = %#v, want %#v", calls, want)
 	}
@@ -269,8 +271,8 @@ func TestStopLiveRunV1PreservesControlledSessionOnPartialCleanupFailure(t *testi
 		t.Fatalf("partial controlled-session cleanup = %#v, %v", result, err)
 	}
 	wantCalls := []CommandSpec{
-		TemporaryContainerCleanupCommand(dockerWorkloadTestContainerIDV1),
-		TemporaryContainerCleanupCommand(dockerControllerTestContainerIDV1),
+		pinDockerEndpointV1(TemporaryContainerCleanupCommand(dockerWorkloadTestContainerIDV1), controlledSessionTestDockerEndpointV1),
+		pinDockerEndpointV1(TemporaryContainerCleanupCommand(dockerControllerTestContainerIDV1), controlledSessionTestDockerEndpointV1),
 	}
 	if !reflect.DeepEqual(calls, wantCalls) {
 		t.Fatalf("partial controlled-session cleanup calls = %#v", calls)

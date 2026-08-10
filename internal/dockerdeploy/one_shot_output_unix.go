@@ -6,8 +6,10 @@ import "os"
 
 func oneShotOutputOwnershipBackend() oneShotOutputBackend {
 	return oneShotOutputBackend{
-		currentUID: os.Geteuid,
-		currentGID: os.Getegid,
-		chown:      os.Lchown,
+		currentUID: func() uint32 { return uint32(os.Geteuid()) },
+		currentGID: func() uint32 { return uint32(os.Getegid()) },
+		chown: func(path string, uid uint32, gid uint32) error {
+			return os.Lchown(path, int(uid), int(gid))
+		},
 	}
 }

@@ -259,6 +259,29 @@ func TestRuntimeHostMountsExposeSameRootV1(t *testing.T) {
 	}
 }
 
+func TestRuntimeHostMountIdentitiesExposeSameRootV1AllowsOrdinaryPathOnRootMount(t *testing.T) {
+	root := runtimeHostMountIdentityV1{
+		mountID: 41, device: "0:1", root: "/", mountPoint: "/", filesystem: "ext4",
+	}
+	ordinary, err := runtimeHostMountIdentitiesExposeSameRootV1(root, root, "/home/user/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ordinary {
+		t.Fatal("ordinary path on the root mount was classified as a host-root alias")
+	}
+	alias := runtimeHostMountIdentityV1{
+		mountID: 42, device: "0:1", root: "/", mountPoint: "/safe/root", filesystem: "ext4",
+	}
+	exposesRoot, err := runtimeHostMountIdentitiesExposeSameRootV1(alias, root, "/safe/root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exposesRoot {
+		t.Fatal("host-root alias was not rejected")
+	}
+}
+
 func TestRuntimeHostMountIdentityForPathV1FallsBackWithoutMountIDs(t *testing.T) {
 	data := []byte("41 1 0:1 / / rw - ext4 /dev/root rw\n" +
 		"42 41 0:1 / /safe/root rw - ext4 /dev/root rw\n" +
