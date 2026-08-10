@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"reflect"
 	"slices"
 	"sort"
@@ -20,6 +21,8 @@ import (
 )
 
 const controlledSessionNetworkRoleV1 = deploy.ControlledSessionNetworkRoleV1
+
+var errControlledSessionNetworkMembersPendingV1 = errors.New("controlled-session network members are not all visible yet")
 
 type dockerSessionNetworkBackendV1 struct {
 	bind                   func(context.Context, CommandSpec, time.Duration) (CommandSpec, commandRunner, error)
@@ -62,6 +65,21 @@ type dockerSessionContainerInspectionV1 struct {
 	State struct {
 		Running bool `json:"Running"`
 	} `json:"State"`
+	NetworkSettings struct {
+		Networks map[string]dockerSessionContainerNetworkV1 `json:"Networks"`
+	} `json:"NetworkSettings"`
+}
+
+type dockerSessionContainerNetworkV1 struct {
+	Aliases           []string                            `json:"Aliases"`
+	IPAMConfig        *dockerSessionContainerIPAMConfigV1 `json:"IPAMConfig"`
+	IPAddress         string                              `json:"IPAddress"`
+	GlobalIPv6Address string                              `json:"GlobalIPv6Address"`
+}
+
+type dockerSessionContainerIPAMConfigV1 struct {
+	IPv4Address string `json:"IPv4Address"`
+	IPv6Address string `json:"IPv6Address"`
 }
 
 // DockerSessionNetworkV1 owns one exact engine-internal Docker network. The
@@ -74,6 +92,7 @@ type DockerSessionNetworkV1 struct {
 	docker    CommandSpec
 	networkID string
 	subnets   []string
+	realized  controlledSessionNetworkRealizationV1
 	backend   dockerSessionNetworkBackendV1
 
 	mu           sync.Mutex
@@ -81,6 +100,12 @@ type DockerSessionNetworkV1 struct {
 	controllerID string
 	workloadID   string
 	cleaned      bool
+}
+
+type controlledSessionNetworkRealizationV1 struct {
+	Subnets             []string
+	ControllerAddresses []string
+	WorkloadAddresses   []string
 }
 
 func (network *DockerSessionNetworkV1) ID() string {
@@ -95,6 +120,12 @@ func (network *DockerSessionNetworkV1) Subnets() []string {
 	network.mu.Lock()
 	defer network.mu.Unlock()
 	return slices.Clone(network.subnets)
+}
+
+func (network *DockerSessionNetworkV1) Realization() controlledSessionNetworkRealizationV1 {
+	network.mu.Lock()
+	defer network.mu.Unlock()
+	return cloneControlledSessionNetworkRealizationV1(network.realized)
 }
 
 // PrepareDockerSessionNetworkV1 creates and verifies the exact planned
@@ -206,12 +237,20 @@ func prepareDockerSessionNetworkV1(
 		)
 	}
 	network.subnets = subnets
+	realized, err := deriveControlledSessionNetworkRealizationV1(subnets)
+	if err != nil {
+		return nil, network.rollbackAfterPreparationFailureV1(
+			fmt.Errorf("derive controlled-session network addresses: %w", err),
+			false,
+		)
+	}
+	network.realized = realized
 	return network, nil
 }
 
-// Attach connects exactly the controller and workload inert containers using
-// their fixed aliases, then verifies that the network contains only those two
-// exact full container IDs.
+// Attach verifies the exact controller and workload inert containers, connects
+// participants that retain separately granted ordinary networking, and then
+// verifies that the session network contains only those two exact full IDs.
 func (network *DockerSessionNetworkV1) Attach(ctx context.Context, controllerID string, workloadID string) error {
 	network.mu.Lock()
 	defer network.mu.Unlock()
@@ -224,13 +263,14 @@ func (network *DockerSessionNetworkV1) Attach(ctx context.Context, controllerID 
 	if err := validateDockerNetworkContainerIDsV1(controllerID, workloadID); err != nil {
 		return fmt.Errorf("attach controlled-session network %q: %w", network.network.Name, err)
 	}
-	for _, participant := range []struct {
+	participants := []struct {
 		id   string
 		plan ControlledSessionContainerPlanV1
 	}{
 		{id: controllerID, plan: network.plan.Controller},
 		{id: workloadID, plan: network.plan.Workload},
-	} {
+	}
+	for _, participant := range participants {
 		if err := network.verifyInertContainerV1(ctx, participant.id, participant.plan); err != nil {
 			return fmt.Errorf("attach controlled-session network %q: %w", network.network.Name, err)
 		}
@@ -241,19 +281,111 @@ func (network *DockerSessionNetworkV1) Attach(ctx context.Context, controllerID 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	for _, attachment := range []struct {
-		alias       string
-		containerID string
-	}{
-		{alias: network.plan.Controller.SessionNetwork.Alias, containerID: controllerID},
-		{alias: network.plan.Workload.SessionNetwork.Alias, containerID: workloadID},
-	} {
-		command := network.commandV1("network", "connect", "--alias", attachment.alias, network.networkID, attachment.containerID)
+	for _, participant := range participants {
+		args := []string{"network", "connect", "--alias", participant.plan.SessionNetwork.Alias}
+		addresses := network.realized.ControllerAddresses
+		if participant.plan.Role == ControlledSessionRoleWorkloadV1 {
+			addresses = network.realized.WorkloadAddresses
+		}
+		for _, address := range addresses {
+			parsed, err := netip.ParseAddr(address)
+			if err != nil {
+				return fmt.Errorf("attach controlled-session %s container: invalid frozen address %q", participant.plan.Role, address)
+			}
+			option := "--ip6"
+			if parsed.Is4() {
+				option = "--ip"
+			}
+			args = append(args, option, address)
+		}
+		args = append(args, network.networkID, participant.id)
+		command := network.commandV1(args...)
 		if err := network.backend.run(command, RunOptions{Context: ctx}); err != nil {
-			return fmt.Errorf("attach controlled-session %s container %q to network %q: %w", attachment.alias, attachment.containerID, network.network.Name, err)
+			return fmt.Errorf("attach controlled-session %s container %q to network %q: %w", participant.plan.SessionNetwork.Alias, participant.id, network.network.Name, err)
+		}
+		if participant.plan.Network == controlledSessionNetworkModeV1 {
+			disconnect := network.commandV1(
+				"network", "disconnect", "--force", controlledSessionOrdinaryNetworkModeV1, participant.id,
+			)
+			if err := network.backend.run(disconnect, RunOptions{Context: ctx}); err != nil {
+				return fmt.Errorf("remove inert controlled-session %s container %q ordinary network staging attachment: %w", participant.plan.Role, participant.id, err)
+			}
+		}
+		if err := network.verifyAttachedInertContainerV1(ctx, participant.id, participant.plan); err != nil {
+			return fmt.Errorf("verify controlled-session %s container %q network attachment: %w", participant.plan.Role, participant.id, err)
 		}
 	}
-	return network.verifyLockedV1(ctx)
+	return network.verifyLockedV1(ctx, false)
+}
+
+func deriveControlledSessionNetworkRealizationV1(subnets []string) (controlledSessionNetworkRealizationV1, error) {
+	realized := controlledSessionNetworkRealizationV1{Subnets: slices.Clone(subnets)}
+	families := map[bool]bool{}
+	for _, subnet := range subnets {
+		prefix, err := netip.ParsePrefix(subnet)
+		if err != nil || prefix != prefix.Masked() {
+			return controlledSessionNetworkRealizationV1{}, fmt.Errorf("network prefix %q is not canonical", subnet)
+		}
+		ipv4 := prefix.Addr().Is4()
+		if families[ipv4] {
+			return controlledSessionNetworkRealizationV1{}, fmt.Errorf("network has multiple prefixes for one address family")
+		}
+		families[ipv4] = true
+		controller := prefix.Addr().Next().Next()
+		workload := controller.Next()
+		if !controller.IsValid() || !workload.IsValid() || !prefix.Contains(workload.Next()) {
+			return controlledSessionNetworkRealizationV1{}, fmt.Errorf("network prefix %q has no safe controller and workload addresses", subnet)
+		}
+		realized.ControllerAddresses = append(realized.ControllerAddresses, controller.String())
+		realized.WorkloadAddresses = append(realized.WorkloadAddresses, workload.String())
+	}
+	if len(realized.ControllerAddresses) == 0 {
+		return controlledSessionNetworkRealizationV1{}, fmt.Errorf("network has no participant addresses")
+	}
+	slices.Sort(realized.ControllerAddresses)
+	slices.Sort(realized.WorkloadAddresses)
+	return realized, nil
+}
+
+func cloneControlledSessionNetworkRealizationV1(value controlledSessionNetworkRealizationV1) controlledSessionNetworkRealizationV1 {
+	return controlledSessionNetworkRealizationV1{
+		Subnets:             slices.Clone(value.Subnets),
+		ControllerAddresses: slices.Clone(value.ControllerAddresses),
+		WorkloadAddresses:   slices.Clone(value.WorkloadAddresses),
+	}
+}
+
+func controlledSessionCreateWithPeerHostsV1(
+	command CommandSpec,
+	plan ControlledSessionContainerPlanV1,
+	peerAddresses []string,
+) (CommandSpec, error) {
+	command.Args = slices.Clone(command.Args)
+	if !plan.SessionNetwork.Enabled {
+		if len(peerAddresses) != 0 {
+			return CommandSpec{}, fmt.Errorf("disabled session network received peer addresses")
+		}
+		return command, nil
+	}
+	if len(peerAddresses) == 0 {
+		return CommandSpec{}, fmt.Errorf("enabled session network received no peer addresses")
+	}
+	insertAt := slices.Index(command.Args, "--entrypoint")
+	if insertAt < 0 {
+		return CommandSpec{}, fmt.Errorf("controlled-session create command has no fixed entrypoint boundary")
+	}
+	options := make([]string, 0, len(peerAddresses)*2)
+	previous := ""
+	for _, address := range peerAddresses {
+		parsed, err := netip.ParseAddr(address)
+		if err != nil || parsed.String() != address || previous != "" && previous >= address {
+			return CommandSpec{}, fmt.Errorf("peer addresses must be canonical, unique, and sorted")
+		}
+		options = append(options, "--add-host", plan.SessionNetwork.PeerAlias+"="+address)
+		previous = address
+	}
+	command.Args = slices.Insert(command.Args, insertAt, options...)
+	return command, nil
 }
 
 // Verify checks exact network ownership, isolation mode, subnets, and member
@@ -267,10 +399,91 @@ func (network *DockerSessionNetworkV1) Verify(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return network.verifyLockedV1(ctx)
+	return network.verifyLockedV1(ctx, false)
 }
 
-func (network *DockerSessionNetworkV1) verifyLockedV1(ctx context.Context) error {
+// VerifyStarted requires both selected containers to appear as exact network
+// members after Docker has started them.
+func (network *DockerSessionNetworkV1) VerifyStarted(ctx context.Context) error {
+	network.mu.Lock()
+	defer network.mu.Unlock()
+	if network.cleaned {
+		return fmt.Errorf("controlled-session network %q is already cleaned", network.network.Name)
+	}
+	if !network.attachTried {
+		return fmt.Errorf("controlled-session network %q participants were not selected", network.network.Name)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		err := network.verifyLockedV1(ctx, true)
+		if err == nil {
+			for _, participant := range []struct {
+				id   string
+				plan ControlledSessionContainerPlanV1
+			}{
+				{id: network.controllerID, plan: network.plan.Controller},
+				{id: network.workloadID, plan: network.plan.Workload},
+			} {
+				if err := network.verifyStartedContainerNetworkV1(ctx, participant.id, participant.plan); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if !errors.Is(err, errControlledSessionNetworkMembersPendingV1) {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("verify controlled-session network %q: %w", network.network.Name, err)
+		}
+		timer := time.NewTimer(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (network *DockerSessionNetworkV1) verifyStartedContainerNetworkV1(ctx context.Context, containerID string, plan ControlledSessionContainerPlanV1) error {
+	var output bytes.Buffer
+	command := network.commandV1("container", "inspect", "--format", "{{json .}}", containerID)
+	if err := network.backend.run(command, RunOptions{Context: ctx, Stdout: &output, Stderr: &output}); err != nil {
+		return fmt.Errorf("inspect started controlled-session %s container: %w", plan.Role, err)
+	}
+	var inspection dockerSessionContainerInspectionV1
+	if err := decodeOneDockerInspectionV1(output.Bytes(), &inspection); err != nil {
+		return err
+	}
+	if !inspection.State.Running {
+		return fmt.Errorf("controlled-session %s container is not running during exact network verification", plan.Role)
+	}
+	connection, found := inspection.NetworkSettings.Networks[plan.SessionNetwork.Name]
+	if !found {
+		return fmt.Errorf("controlled-session %s container lost the exact session network", plan.Role)
+	}
+	addresses := network.realized.ControllerAddresses
+	if plan.Role == ControlledSessionRoleWorkloadV1 {
+		addresses = network.realized.WorkloadAddresses
+	}
+	for _, address := range addresses {
+		parsed, _ := netip.ParseAddr(address)
+		got := connection.GlobalIPv6Address
+		if parsed.Is4() {
+			got = connection.IPAddress
+		}
+		if got != address {
+			return fmt.Errorf("started controlled-session %s container address is %q instead of %q", plan.Role, got, address)
+		}
+	}
+	return nil
+}
+
+func (network *DockerSessionNetworkV1) verifyLockedV1(ctx context.Context, requireAllMembers bool) error {
 	inspection, found, err := network.inspectV1(ctx)
 	if err != nil {
 		return fmt.Errorf("inspect controlled-session network %q: %w", network.network.Name, err)
@@ -280,8 +493,20 @@ func (network *DockerSessionNetworkV1) verifyLockedV1(ctx context.Context) error
 	}
 	wantContainers := map[string]string{}
 	if network.attachTried {
-		wantContainers[network.controllerID] = network.plan.Controller.Container
-		wantContainers[network.workloadID] = network.plan.Workload.Container
+		selected := map[string]string{
+			network.controllerID: network.plan.Controller.Container,
+			network.workloadID:   network.plan.Workload.Container,
+		}
+		for containerID, member := range inspection.Containers {
+			wantName, found := selected[containerID]
+			if !found || member.Name != wantName {
+				return fmt.Errorf("verify controlled-session network %q: unexpected network member %q", network.network.Name, containerID)
+			}
+			wantContainers[containerID] = wantName
+		}
+		if requireAllMembers && len(wantContainers) != len(selected) {
+			return errControlledSessionNetworkMembersPendingV1
+		}
 	}
 	subnets, err := validateDockerSessionNetworkInspectionV1(
 		inspection,
@@ -456,6 +681,66 @@ func (network *DockerSessionNetworkV1) verifyInertContainerV1(
 	}
 	if inspection.State.Running {
 		return fmt.Errorf("controlled-session %s container %q must remain inert before network attachment", plan.Role, plan.Container)
+	}
+	if _, found := inspection.NetworkSettings.Networks[plan.SessionNetwork.Name]; found ||
+		len(inspection.NetworkSettings.Networks) != 1 {
+		return fmt.Errorf("controlled-session %s container %q must begin with only the inert ordinary network staging attachment", plan.Role, plan.Container)
+	}
+	if _, found := inspection.NetworkSettings.Networks[controlledSessionOrdinaryNetworkModeV1]; !found {
+		return fmt.Errorf("controlled-session %s container %q is missing its inert ordinary network staging attachment", plan.Role, plan.Container)
+	}
+	return nil
+}
+
+func (network *DockerSessionNetworkV1) verifyAttachedInertContainerV1(
+	ctx context.Context,
+	containerID string,
+	plan ControlledSessionContainerPlanV1,
+) error {
+	var output bytes.Buffer
+	command := network.commandV1("container", "inspect", "--format", "{{json .}}", containerID)
+	if err := network.backend.run(command, RunOptions{Context: ctx, Stdout: &output, Stderr: &output}); err != nil {
+		return fmt.Errorf("inspect attached controlled-session %s container: %w: %s", plan.Role, err, trimmedCommandOutput(output.String()))
+	}
+	var inspection dockerSessionContainerInspectionV1
+	if err := decodeOneDockerInspectionV1(output.Bytes(), &inspection); err != nil {
+		return fmt.Errorf("decode attached controlled-session %s container inspection: %w", plan.Role, err)
+	}
+	if inspection.State.Running {
+		return fmt.Errorf("controlled-session %s container started before network isolation was verified", plan.Role)
+	}
+	connection, found := inspection.NetworkSettings.Networks[plan.SessionNetwork.Name]
+	if !found || !slices.Contains(connection.Aliases, plan.SessionNetwork.Alias) {
+		return fmt.Errorf("controlled-session %s container does not carry its exact session network and alias", plan.Role)
+	}
+	addresses := network.realized.ControllerAddresses
+	if plan.Role == ControlledSessionRoleWorkloadV1 {
+		addresses = network.realized.WorkloadAddresses
+	}
+	for _, address := range addresses {
+		parsed, _ := netip.ParseAddr(address)
+		got := connection.GlobalIPv6Address
+		if got == "" && connection.IPAMConfig != nil {
+			got = connection.IPAMConfig.IPv6Address
+		}
+		if parsed.Is4() {
+			got = connection.IPAddress
+			if got == "" && connection.IPAMConfig != nil {
+				got = connection.IPAMConfig.IPv4Address
+			}
+		}
+		if got != address {
+			return fmt.Errorf("controlled-session %s container address is %q instead of %q", plan.Role, got, address)
+		}
+	}
+	wantNetworks := 2
+	if plan.Network == controlledSessionNetworkModeV1 {
+		wantNetworks = 1
+	} else if _, found := inspection.NetworkSettings.Networks[controlledSessionOrdinaryNetworkModeV1]; !found {
+		return fmt.Errorf("controlled-session %s container lost its explicitly granted ordinary network", plan.Role)
+	}
+	if len(inspection.NetworkSettings.Networks) != wantNetworks {
+		return fmt.Errorf("controlled-session %s container has unexpected network attachments", plan.Role)
 	}
 	return nil
 }
