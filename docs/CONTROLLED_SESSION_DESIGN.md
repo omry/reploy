@@ -836,17 +836,70 @@ All Reploy application runtime containers default to:
 - local network disabled.
 
 These are independent policy switches. A controlled workflow applies them
-separately to the controller and workload environments. Local
-denial includes host gateways, Docker peers outside the granted operation,
-loopback redirection, private and link-local address ranges, IPv6 local ranges,
-and infrastructure metadata endpoints.
+separately to the controller and workload environments. Local denial includes
+host-loopback redirection, private and link-local address ranges, IPv6 local
+ranges, and infrastructure metadata endpoints. Translation and tunneling
+ranges that can represent either public or local destinations require both
+grants by default. The initial coarse classifier follows the destination
+address; topology-resistant peer and gateway confinement belongs to the
+deferred L3 gateway design.
 
-The initial implementation preserves this coarse public/local policy intent
-and exact declared endpoint grants, using only backend isolation and endpoint
-primitives whose behavior Reploy can verify. A backend that cannot realize a
-requested combination fails closed. This slice does not introduce a custom
-packet gateway and must not claim destination-, port-, domain-, DNS-, or
-packet-level enforcement beyond what the selected primitive actually proves.
+The initial Linux/Docker implementation enforces this coarse public/local
+policy with IPv4 and IPv6 nftables rules inside each application container's
+network namespace. A trusted Reploy helper begins with only the setup
+capabilities needed to install those rules and assume the planned application
+identity. It then empties every capability set and the capability bounding
+set, locks securebits and `no-new-privileges`, verifies seccomp and the final
+kernel state, and executes the exact application argv. Reploy-issued execs use
+the same guarded authority-drop path. A raw Docker daemon client remains a
+trusted host operator outside this sandbox boundary.
+
+`public` classifies globally routable IP destinations. `local` classifies
+private, link-local, multicast, reserved, and infrastructure metadata
+destinations. `ambiguous` covers predefined translation and tunneling ranges;
+its default `require-both` admits them only when both ordinary classes are
+allowed. IPv4-mapped IPv6 socket addresses use the class of their embedded IPv4
+destination because Linux emits them as IPv4 packets. The temporary
+`ambiguous: allow` escape hatch admits the remaining ambiguous class
+independently. It is intentionally discouraged because an apparently public
+translated address may reach a local destination, and it should be deprecated
+once the deferred L3 gateway can enforce the underlying destination policy.
+Container-local loopback remains available and cannot address host loopback
+through the container network namespace. The backend configures the
+container's DNS path from the same two grants:
+
+| Public | Local | DNS path |
+| --- | --- | --- |
+| deny | deny | no DNS |
+| deny | allow | the host's configured resolver, preserving local, VPN, and split-DNS behavior |
+| allow | deny | the built-in Google Public DNS profile (`8.8.8.8`, `8.8.4.4`) |
+| allow | allow | the host's configured resolver, which normally provides both local and public resolution |
+
+For Docker, the local-capable path leaves DNS selection to Docker so it derives
+the container's resolver path from the host. The public-only path passes the
+selected Google Public DNS profile through Docker's per-container DNS
+configuration. Docker writes the resulting container resolver configuration:
+the default bridge normally receives host-derived resolver addresses, while a
+custom network exposes Docker's embedded resolver at `127.0.0.11` and forwards
+to the selected upstreams. Before installing the packet filter, the trusted
+startup helper reads those engine-authored resolver addresses and admits TCP
+and UDP port 53 only to them whenever either network class is granted. This is
+an engine-owned DNS exception, not general access to the resolver's address
+class.
+
+Resolver selection is host policy, not blueprint policy. Future Reploy host
+configuration may override the default local and public resolver choices. The
+backend does not classify or filter DNS answers. A local resolver may return a
+public address and a public resolver may return a private address, but every
+subsequent connection still passes the ordinary destination policy. When both
+ordinary classes are enabled, egress is unrestricted, but the packet filter
+remains in place to admit new inbound connections only on declared endpoint
+ports. The helper always applies the same identity and authority-drop invariant.
+A backend that cannot install and verify the policy fails closed.
+
+This slice does not introduce the deferred userland L3 gateway and must not
+claim domain-, URL-, DNS-content-, general outbound destination-port-, or
+audit-level policy.
 
 A controller may receive an explicit session-local grant to a declared
 workload endpoint. That grant is not treated as general local-network
@@ -878,12 +931,12 @@ remains a separate prerequisite; this endpoint forwarding path is not a general
 router, HTTP policy engine, or domain-aware firewall.
 
 General network isolation and auditability are a separate design surface.
-Future work may include an HTTP/HTTPS proxy, destination policy, controlled
-DNS, and agent-sandbox audit records. HTTPS `CONNECT` can filter and audit a
+Future work may include an HTTP/HTTPS proxy, destination and DNS-content
+policy, and agent-sandbox audit records. HTTPS `CONNECT` can filter and audit a
 destination hostname without TLS interception, but cannot inspect encrypted
 URLs or content. Direct egress must be blocked to prevent proxy bypass.
-Redirects, DNS rebinding, CDNs, WebSockets, QUIC, and workload-to-network
-policy require explicit treatment.
+Redirects, DNS rebinding, CDNs, WebSockets, QUIC, and workload-to-network policy
+require explicit treatment.
 
 Until that design is implemented, rough public and local kill switches must
 fail closed and must not be described as domain-level isolation.
@@ -1120,27 +1173,34 @@ Implementation status: the canonical application sandbox plan and its identity
 and kernel baseline are implemented for persistent Compose workloads and
 transient application commands. Reploy now imports canonical supplementary
 groups, rejects root-group membership for non-root identities, starts transient
-commands directly as the final identity, drops all capabilities, enables
+commands through the trusted setup helper, drops all capabilities before the
+application starts, enables
 `no-new-privileges`, explicitly selects Docker's built-in seccomp profile, and
 prohibits privileged mode, host namespaces, and host devices in the common
 plan. Live Docker tests inspect both runtime paths. Trusted production startup
 verification is also implemented: Reploy packages the platform-specific probe
 in a final runtime layer, creates the locked container-local account there,
 records that layer outside the provider graph, and uses its fixed
-verify-and-exec contract as the outermost process for persistent
+sandbox-and-exec contract as the outermost process for persistent
 workloads, transient commands, shells, and lifecycle commands. The verifier
 fails closed unless `/proc/self/status` reports seccomp filtering,
-`no-new-privileges`, and empty effective, permitted, and bounding capability
+`no-new-privileges`, and empty inheritable, effective, permitted, bounding, and
+ambient capability
 sets, then directly executes the exact application argv. Private-environment
 workloads use one additional fixed Reploy step: after verification, the probe
 executes the environment injector, which imports the private variables and then
-executes the unchanged application argv. Network denial and resource limits
-remain separate prerequisite slices. Root host authority is now enforced at
-runtime: host sources are classified as input, shared state, or explicit
-output; UID 0 is rejected for all three before container creation; and root
-output options are rejected before host-path preparation. Docker-managed
-volumes and tmpfs remain available to root. Ordinary binds also reject
-canonical host root, `/proc`,
+executes the unchanged application argv. The same helper now installs the
+default-deny application-network policy for persistent and transient containers
+while preserving exact declared inbound endpoints. Live Docker coverage
+exercises all four public/local combinations over IPv4 and IPv6, strict and
+escaped ambiguous-range handling, a globally reachable exception nested inside
+a reserved parent range, a root default-denial case, non-root authority removal,
+guarded exec, and host-loopback endpoint publication. Resource limits remain a
+separate prerequisite slice. Root host authority is now enforced at runtime:
+host sources are classified as input, shared state, or explicit output; UID 0 is
+rejected for all three before container creation; and root output options are
+rejected before host-path preparation. Docker-managed volumes and tmpfs remain
+available to root. Ordinary binds also reject canonical host root, `/proc`,
 `/dev`, and `/sys` sources plus equivalent protected filesystem mounts detected
 through native filesystem identity. Explicit non-root directory binds
 intentionally grant access to their remaining unmasked contents, including
@@ -1217,16 +1277,16 @@ lease protocol.
 
 ### Network Isolation and Audit
 
-After the coarse public/local kill switches, define a separate Reploy userland
-L3 policy gateway for finer network control. Its design should cover a
-capability-free application network namespace, one-shot route initialization,
-an isolated data path whose only peer is the gateway, private gateway control,
-root-resistant route invariants, direct-egress prevention, destination and
-port grants, DNS and IPv6 policy, metadata protection, auditing, resource
-limits, failure behavior, reconciliation, and portable Docker/Podman
-integration. The one-way, exact endpoint forwarding used by the initial
-controlled session remains intentionally narrower and does not depend on this
-later gateway.
+After the implemented coarse public/local kill switches, define a separate
+Reploy userland L3 policy gateway for finer network control. Its design should
+cover a capability-free application network namespace, one-shot route
+initialization, an isolated data path whose only peer is the gateway, private
+gateway control, root-resistant route invariants, direct-egress prevention,
+destination and port grants, DNS and IPv6 policy, metadata protection,
+auditing, resource limits, failure behavior, reconciliation, and portable
+Docker/Podman integration. The one-way, exact endpoint forwarding used by the
+initial controlled session remains intentionally narrower and does not depend
+on this later gateway.
 
 ### Disposable Writable Workspaces
 

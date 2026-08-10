@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,6 +53,7 @@ type composePlanService struct {
 	User          string             `yaml:"user"`
 	GroupAdd      []string           `yaml:"group_add"`
 	CapDrop       []string           `yaml:"cap_drop"`
+	CapAdd        []string           `yaml:"cap_add"`
 	SecurityOpt   []string           `yaml:"security_opt"`
 	Restart       string             `yaml:"restart,omitempty"`
 	Entrypoint    []string           `yaml:"entrypoint,omitempty,flow"`
@@ -62,6 +64,7 @@ type composePlanService struct {
 	ReadOnly      bool               `yaml:"read_only"`
 	Environment   map[string]string  `yaml:"environment"`
 	Tmpfs         []string           `yaml:"tmpfs"`
+	DNS           []string           `yaml:"dns,omitempty"`
 }
 
 type composePlanMount struct {
@@ -108,10 +111,14 @@ func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerR
 		CapDrop:     []string{"ALL"},
 		SecurityOpt: []string{"no-new-privileges:true", "seccomp=" + plan.Sandbox.Kernel.SeccompProfile},
 		ReadOnly:    plan.Sandbox.ReadOnlyRoot, Environment: temporaryEnvironmentForPlan(plan), Tmpfs: []string{temporaryHomeMountForPlan(plan)},
+		DNS: applicationDockerDNSResolversV1(plan.Sandbox.Network),
 	}
 	if plan.Workload != nil {
+		service.User = "0:0"
+		service.GroupAdd = []string{}
+		service.CapAdd = applicationSetupCapabilitiesV1(plan.Sandbox)
 		service.Entrypoint = []string{plan.Sandbox.StartupVerifier.Path}
-		service.Command = verifiedApplicationArgvV1(plan.Workload.Argv)
+		service.Command = sandboxApplicationArgvV1(plan, plan.Workload.Argv, true, applicationInboundTCPPortsV1(plan))
 	}
 	if plan.PrivateEnvironment {
 		if plan.Workload == nil {
@@ -123,7 +130,7 @@ func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerR
 		composeLauncher := strings.ReplaceAll(privateWorkloadEnvironmentLauncherV1, "$", "$$")
 		launcher := []string{"/bin/sh", "-c", composeLauncher, "reploy-private-environment"}
 		launcher = append(launcher, plan.Workload.Argv...)
-		service.Command = verifiedApplicationArgvV1(launcher)
+		service.Command = sandboxApplicationArgvV1(plan, launcher, true, applicationInboundTCPPortsV1(plan))
 		service.StdinOpen = true
 	}
 	volumes := map[string]any{}
@@ -213,9 +220,61 @@ func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerR
 	}, nil
 }
 
-func verifiedApplicationArgvV1(argv []string) []string {
-	result := []string{"verify-exec", "--"}
+func sandboxApplicationArgvV1(plan DockerExecutionPlan, argv []string, installNetwork bool, inboundTCP []int) []string {
+	mode := "restricted-exec"
+	if installNetwork {
+		mode = "sandbox-exec"
+	}
+	user := plan.Sandbox.RuntimeUser
+	result := []string{mode, "--uid", strconv.Itoa(user.UID), "--gid", strconv.Itoa(user.GID)}
+	if len(user.SupplementaryGIDs) != 0 {
+		result = append(result, "--groups", joinDecimalValuesV1(user.SupplementaryGIDs))
+	}
+	if installNetwork {
+		result = append(result,
+			"--public", string(plan.Sandbox.Network.Public),
+			"--local", string(plan.Sandbox.Network.Local),
+			"--ambiguous", string(plan.Sandbox.Network.Ambiguous),
+		)
+		ports := append([]int{}, inboundTCP...)
+		sort.Ints(ports)
+		ports = slices.Compact(ports)
+		if len(ports) != 0 {
+			result = append(result, "--inbound-tcp", joinDecimalValuesV1(ports))
+		}
+	}
+	result = append(result, "--")
 	return append(result, argv...)
+}
+
+func applicationSetupCapabilitiesV1(plan ApplicationSandboxPlanV1) []string {
+	result := []string{"NET_ADMIN", "SETGID", "SETPCAP"}
+	if plan.RuntimeUser.UID != 0 {
+		result = append(result, "SETUID")
+	}
+	sort.Strings(result)
+	return result
+}
+
+func applicationInboundTCPPortsV1(plan DockerExecutionPlan) []int {
+	if plan.Workload == nil {
+		return []int{}
+	}
+	ports := make([]int, 0, len(plan.Workload.Endpoints))
+	for _, endpoint := range plan.Workload.Endpoints {
+		ports = append(ports, endpoint.ContainerPort)
+	}
+	sort.Ints(ports)
+	ports = slices.Compact(ports)
+	return ports
+}
+
+func joinDecimalValuesV1(values []int) string {
+	items := make([]string, len(values))
+	for index, value := range values {
+		items[index] = strconv.Itoa(value)
+	}
+	return strings.Join(items, ",")
 }
 
 func temporaryHomeForPlan(plan DockerExecutionPlan) string {
