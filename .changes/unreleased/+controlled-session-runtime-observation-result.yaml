@@ -1,0 +1,2 @@
+kind: Changed
+body: Add runtime-observation status to controlled-session terminal results so late Docker observation loss remains an explicit session failure.
