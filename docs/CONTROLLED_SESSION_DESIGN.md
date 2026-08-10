@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-08
+updated: 2026-08-09
 summary: Capability-scoped execution sessions that inherit Reploy's global container sandbox.
 ---
 
@@ -12,7 +12,13 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
 - Implementation state: Initial global sandbox prerequisites, trusted
   application-startup verification, controlled-session authorization, the
   framed protocol, lifecycle state machine, and immutable two-environment
-  Docker planning are implemented. The planner binds exact controller and
+  Docker planning are implemented. The lease-private Linux session channel is
+  also implemented: it creates a fresh controller-owned Unix socket directory,
+  exposes it through a read-only controller-only bind, verifies the claiming
+  process's kernel-reported UID/GID, accepts one connection, removes the socket
+  pathname, sends the frozen `opened` authorization, and provides bounded,
+  serialized protocol I/O with distinct before-claim and after-claim failure
+  observations. The planner binds exact controller and
   workload builds, runtime identities, mounts, masks, commands, and inert
   lifecycle commands while networking remains disabled. Private environment
   injection is rejected until its controlled-session launch path is wired.
@@ -23,8 +29,8 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   finalization deadline, cancels blocked delivery, closes the source, and
   produces an immutable drained-or-failed status for the lifecycle barrier
   before returning.
-  Docker PTY wiring, controlled-session networking, and orchestration remain
-  later slices.
+  Docker PTY wiring, controlled-session networking, and lifecycle orchestration
+  remain later slices.
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution
@@ -580,11 +586,13 @@ and expected controller identity. Server-side checks enforce every operation;
 an opaque or private endpoint is not treated as authorization by itself.
 
 The initial Linux transport is one Unix-domain socket in a fresh,
-lease-private host directory mounted only into the controller. Filesystem
-ownership and mode restrict access to the effective controller identity. The
-controller establishes one multiplexed connection, after which Host Reploy may
-remove the socket pathname. No endpoint path, token, or descriptor appears in
-the workload container, image metadata, or workload environment.
+lease-private host directory mounted read-only and only into the controller.
+Filesystem ownership and mode restrict access to the effective controller
+identity. The mount is a narrow protocol capability rather than a host input or
+shared-state grant, including when the controller runs as root. The controller
+establishes one multiplexed connection, after which Host Reploy may remove the
+socket pathname. No endpoint path, token, or descriptor appears in the workload
+container, image metadata, or workload environment.
 
 Host Reploy owns the Docker TTY attachment, keeps control framing separate from
 terminal bytes, and performs all signaling and process-tree teardown. The
