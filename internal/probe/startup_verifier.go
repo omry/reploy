@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -9,7 +10,11 @@ import (
 	"strings"
 )
 
-const applicationKernelStatusPath = "/proc/self/status"
+// Sandbox setup is deliberately pinned to one OS thread because Linux
+// credentials and capability sets are thread-scoped. /proc/self/status
+// describes the thread-group leader, which may be a different Go runtime
+// thread; verify the exact thread that will exec the application instead.
+const applicationKernelStatusPath = "/proc/thread-self/status"
 
 var requiredApplicationKernelStatusV1 = []struct {
 	name string
@@ -26,9 +31,28 @@ var requiredApplicationKernelStatusV1 = []struct {
 }
 
 func readApplicationKernelStatus() ([]byte, error) {
-	content, err := os.ReadFile(applicationKernelStatusPath)
-	if err != nil {
+	return readApplicationKernelStatusWithV1(os.ReadFile, applicationKernelStatusFallbackPathV1)
+}
+
+func readApplicationKernelStatusWithV1(
+	readFile func(string) ([]byte, error),
+	fallbackPath func() (string, error),
+) ([]byte, error) {
+	content, err := readFile(applicationKernelStatusPath)
+	if err == nil {
+		return content, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("read %s: %w", applicationKernelStatusPath, err)
+	}
+
+	compatibilityPath, pathErr := fallbackPath()
+	if pathErr != nil {
+		return nil, fmt.Errorf("read %s and determine compatibility path: %w", applicationKernelStatusPath, pathErr)
+	}
+	content, err = readFile(compatibilityPath)
+	if err != nil {
+		return nil, fmt.Errorf("read %s after %s was unavailable: %w", compatibilityPath, applicationKernelStatusPath, err)
 	}
 	return content, nil
 }
