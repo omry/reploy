@@ -26,9 +26,9 @@ type oneShotOutputSession struct {
 }
 
 type oneShotOutputBackend struct {
-	currentUID func() int
-	currentGID func() int
-	chown      func(string, int, int) error
+	currentUID func() uint32
+	currentGID func() uint32
+	chown      func(string, uint32, uint32) error
 }
 
 func prepareOneShotOutput(outputDir string, outputFile string, runtimeUser RuntimeUserPlan) (*oneShotOutputSession, error) {
@@ -91,7 +91,7 @@ func prepareOneShotOutputWithBackend(
 		}
 		return nil, fmt.Errorf("reserve output file: %w", err)
 	}
-	if runtimeUser.UID < 0 || runtimeUser.GID < 0 {
+	if runtimeUser.UID == runtimeIDUnchangedSentinelV1 || runtimeUser.GID == runtimeIDUnchangedSentinelV1 {
 		_ = os.Remove(stagingDir)
 		return nil, fmt.Errorf("reserve output file requires a numeric runtime user")
 	}

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path"
 	"slices"
-	"strconv"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
@@ -89,8 +88,8 @@ func applicationDockerDNSResolversV1(network ApplicationNetworkPolicyV1) []strin
 }
 
 func ValidateApplicationSandboxPlanV1(plan ApplicationSandboxPlanV1) error {
-	if plan.RuntimeUser.UID < 0 || plan.RuntimeUser.GID < 0 {
-		return fmt.Errorf("application sandbox requires a non-negative numeric UID and GID")
+	if plan.RuntimeUser.UID == runtimeIDUnchangedSentinelV1 || plan.RuntimeUser.GID == runtimeIDUnchangedSentinelV1 {
+		return fmt.Errorf("application sandbox requires unsigned 32-bit UID and GID values other than %d", runtimeIDUnchangedSentinelV1)
 	}
 	if err := validateApplicationNetworkAccessV1("public", plan.Network.Public); err != nil {
 		return err
@@ -101,7 +100,7 @@ func ValidateApplicationSandboxPlanV1(plan ApplicationSandboxPlanV1) error {
 	if err := validateApplicationAmbiguousNetworkAccessV1(plan.Network.Ambiguous); err != nil {
 		return err
 	}
-	wantUser := strconv.Itoa(plan.RuntimeUser.UID) + ":" + strconv.Itoa(plan.RuntimeUser.GID)
+	wantUser := runtimeIDStringV1(plan.RuntimeUser.UID) + ":" + runtimeIDStringV1(plan.RuntimeUser.GID)
 	if plan.RuntimeUser.DockerUser != wantUser {
 		return fmt.Errorf("application sandbox Docker user must match its numeric UID and GID")
 	}
@@ -114,12 +113,12 @@ func ValidateApplicationSandboxPlanV1(plan ApplicationSandboxPlanV1) error {
 	}
 	identity := runtimeidentity.IdentityV1{
 		Username:          plan.RuntimeUser.LocalUser,
-		UID:               strconv.Itoa(plan.RuntimeUser.UID),
-		GID:               strconv.Itoa(plan.RuntimeUser.GID),
+		UID:               runtimeIDStringV1(plan.RuntimeUser.UID),
+		GID:               runtimeIDStringV1(plan.RuntimeUser.GID),
 		SupplementaryGIDs: make([]string, len(plan.RuntimeUser.SupplementaryGIDs)),
 	}
 	for index, gid := range plan.RuntimeUser.SupplementaryGIDs {
-		identity.SupplementaryGIDs[index] = strconv.Itoa(gid)
+		identity.SupplementaryGIDs[index] = runtimeIDStringV1(gid)
 	}
 	if err := runtimeidentity.ValidateIdentityV1(identity); err != nil {
 		return fmt.Errorf("application sandbox runtime identity: %w", err)
@@ -179,8 +178,8 @@ func applicationLocalAccountV1(plan ApplicationSandboxPlanV1) (deploy.Applicatio
 	account := deploy.ApplicationLocalAccountV1{
 		Schema: deploy.ApplicationLocalAccountSchemaV1,
 		Name:   plan.RuntimeUser.LocalUser,
-		UID:    strconv.Itoa(plan.RuntimeUser.UID),
-		GID:    strconv.Itoa(plan.RuntimeUser.GID),
+		UID:    runtimeIDStringV1(plan.RuntimeUser.UID),
+		GID:    runtimeIDStringV1(plan.RuntimeUser.GID),
 		Home:   plan.TemporaryHome,
 	}
 	if err := deploy.ValidateApplicationLocalAccountV1(account); err != nil {
@@ -189,18 +188,21 @@ func applicationLocalAccountV1(plan ApplicationSandboxPlanV1) (deploy.Applicatio
 	return account, nil
 }
 
-func normalizeSupplementaryGIDsV1(primary int, values []int) ([]int, error) {
-	result := append([]int(nil), values...)
+func normalizeSupplementaryGIDsV1(primary uint32, values []uint32) ([]uint32, error) {
+	if primary == runtimeIDUnchangedSentinelV1 {
+		return nil, fmt.Errorf("primary GID must not use the unchanged-credential sentinel")
+	}
+	result := append([]uint32(nil), values...)
 	for _, gid := range result {
-		if gid < 0 {
-			return nil, fmt.Errorf("GID must be non-negative")
+		if gid == runtimeIDUnchangedSentinelV1 {
+			return nil, fmt.Errorf("GID must not use the unchanged-credential sentinel")
 		}
 	}
 	slices.Sort(result)
 	result = slices.Compact(result)
-	result = slices.DeleteFunc(result, func(gid int) bool { return gid == primary })
+	result = slices.DeleteFunc(result, func(gid uint32) bool { return gid == primary })
 	if result == nil {
-		result = []int{}
+		result = []uint32{}
 	}
 	return result, nil
 }

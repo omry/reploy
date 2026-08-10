@@ -23,8 +23,8 @@ type providerInstallAccountBackendV1 struct {
 type providerInstallAccountInspectionV1 struct {
 	User       string
 	Group      string
-	UID        *int
-	GID        *int
+	UID        *uint32
+	GID        *uint32
 	WillCreate bool
 }
 
@@ -170,7 +170,7 @@ func providerInstallInputWithAccountV1(input providerInstallRunInputV1, account 
 	input.Install.SystemGroup = strings.TrimSpace(account.Group)
 	input.Install.SystemUID = owner.UID
 	input.Install.SystemGID = owner.GID
-	input.Install.SystemSupplementaryGIDs = append([]int(nil), owner.SupplementaryGIDs...)
+	input.Install.SystemSupplementaryGIDs = append([]uint32(nil), owner.SupplementaryGIDs...)
 	return input
 }
 

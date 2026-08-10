@@ -63,12 +63,12 @@ func RuntimeHostSourcesV1(plan DockerExecutionPlan, output *transientOutputMount
 	return sources, nil
 }
 
-func ValidateRuntimeHostSourcesV1(policy deploy.RuntimePolicyV1, planID string, runtimeUID int, sources []RuntimeHostSourceV1) error {
+func ValidateRuntimeHostSourcesV1(policy deploy.RuntimePolicyV1, planID string, runtimeUID uint32, sources []RuntimeHostSourceV1) error {
 	if err := deploy.ValidateRuntimePolicyV1(policy); err != nil {
 		return err
 	}
-	if runtimeUID < 0 {
-		return fmt.Errorf("runtime UID must be non-negative")
+	if runtimeUID == runtimeIDUnchangedSentinelV1 {
+		return fmt.Errorf("runtime UID must not use the unchanged-credential sentinel")
 	}
 	var selected *deploy.RuntimePlanV1
 	for index := range policy.Plans {

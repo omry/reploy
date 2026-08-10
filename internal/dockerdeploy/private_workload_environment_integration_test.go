@@ -76,7 +76,7 @@ printf 'private-mask-pass\n'`, expectedTokenDigest)
 	plan := DockerExecutionPlan{
 		EnvironmentID: "private-mask", DeploymentDir: deploymentDir, Phase: blueprint.PhaseStaged,
 		Image: image, ContainerName: container, NetworkName: unique,
-		Sandbox:            newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 12345, GID: 23456, SupplementaryGIDs: []int{34567, 45678}, DockerUser: "12345:23456"}),
+		Sandbox:            newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 12345, GID: 23456, SupplementaryGIDs: []uint32{34567, 45678}, DockerUser: "12345:23456"}),
 		PrivateEnvironment: true,
 		Workload: &WorkloadExecutionPlan{Argv: []string{
 			"/bin/sh", "-eu", "-c",

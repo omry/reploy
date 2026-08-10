@@ -44,9 +44,9 @@ type LockedProviderBuildRunInputV1 struct {
 
 type StagedProviderBuildRuntimeV1 struct {
 	Host              blueprint.HostOS
-	UID               int
-	GID               int
-	SupplementaryGIDs []int
+	UID               uint32
+	GID               uint32
+	SupplementaryGIDs []uint32
 }
 
 func CurrentStagedProviderBuildRuntimeV1() (StagedProviderBuildRuntimeV1, error) {
@@ -73,11 +73,23 @@ func stagedProviderBuildRuntimeV1(goos string, uid int, gid int, groups []int) (
 	default:
 		return StagedProviderBuildRuntimeV1{}, fmt.Errorf("provider build is unsupported on host OS %q", goos)
 	}
-	groups, err := normalizeSupplementaryGIDsV1(gid, groups)
+	runtimeUID, err := runtimeIDFromNativeIntV1(uid)
+	if err != nil {
+		return StagedProviderBuildRuntimeV1{}, fmt.Errorf("provider build runtime UID: %w", err)
+	}
+	runtimeGID, err := runtimeIDFromNativeIntV1(gid)
+	if err != nil {
+		return StagedProviderBuildRuntimeV1{}, fmt.Errorf("provider build runtime GID: %w", err)
+	}
+	runtimeGroups, err := runtimeIDsFromNativeIntsV1(groups)
 	if err != nil {
 		return StagedProviderBuildRuntimeV1{}, fmt.Errorf("provider build runtime supplementary groups: %w", err)
 	}
-	return StagedProviderBuildRuntimeV1{Host: host, UID: uid, GID: gid, SupplementaryGIDs: groups}, nil
+	runtimeGroups, err = normalizeSupplementaryGIDsV1(runtimeGID, runtimeGroups)
+	if err != nil {
+		return StagedProviderBuildRuntimeV1{}, fmt.Errorf("provider build runtime supplementary groups: %w", err)
+	}
+	return StagedProviderBuildRuntimeV1{Host: host, UID: runtimeUID, GID: runtimeGID, SupplementaryGIDs: runtimeGroups}, nil
 }
 
 type providerBuildRunBackend struct {
@@ -347,7 +359,7 @@ func runLockedProviderBuildV1(
 		Host:              input.Runtime.Host,
 		UID:               input.Runtime.UID,
 		GID:               input.Runtime.GID,
-		SupplementaryGIDs: append([]int(nil), input.Runtime.SupplementaryGIDs...),
+		SupplementaryGIDs: append([]uint32(nil), input.Runtime.SupplementaryGIDs...),
 	})
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("plan provider build runtime: %w", err)

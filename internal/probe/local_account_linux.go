@@ -28,7 +28,13 @@ func installLocalAccountFiles(name string, uid string, gid string, home string, 
 	if err != nil {
 		return fmt.Errorf("prepare passwd entry: %w", err)
 	}
-	group, err := rewriteLocalAccountFile(groupPath, name, gid, 2, name+":x:"+gid+":")
+	groupName := name
+	if uid == "0" && gid != "0" {
+		// Keep the conventional root group bound to numeric GID 0 while making
+		// the invoking root process's actual primary GID resolvable.
+		groupName = "_reploy_gid_" + gid
+	}
+	group, err := rewriteLocalAccountFile(groupPath, groupName, gid, 2, groupName+":x:"+gid+":")
 	if err != nil {
 		return fmt.Errorf("prepare group entry: %w", err)
 	}
@@ -63,8 +69,8 @@ func validateLocalAccountInput(name string, uid string, gid string, home string)
 	if err != nil || strconv.FormatUint(parsedGID, 10) != gid {
 		return fmt.Errorf("local account GID is invalid")
 	}
-	if parsedUID == 0 && parsedGID != 0 || parsedUID != 0 && parsedGID == 0 {
-		return fmt.Errorf("local account root identity and GID disagree")
+	if parsedUID != 0 && parsedGID == 0 {
+		return fmt.Errorf("non-root local account must not use GID 0")
 	}
 	if home == "" || !filepath.IsAbs(home) || filepath.Clean(home) != home || strings.ContainsAny(home, ":\n\r") {
 		return fmt.Errorf("local account home is invalid")

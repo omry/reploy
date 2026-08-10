@@ -47,9 +47,9 @@ type providerInstallOptionsV1 struct {
 	Start                   bool
 	SystemUser              string
 	SystemGroup             string
-	SystemUID               int
-	SystemGID               int
-	SystemSupplementaryGIDs []int
+	SystemUID               uint32
+	SystemGID               uint32
+	SystemSupplementaryGIDs []uint32
 }
 
 type providerInstallPlanningV1 struct {
