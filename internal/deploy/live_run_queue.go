@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/omry/reploy/internal/canonical"
 )
@@ -55,9 +57,29 @@ type LiveRunV1 struct {
 }
 
 type LiveRunQueueV1 struct {
-	Schema  string                      `json:"schema"`
-	Runs    []LiveRunV1                 `json:"runs"`
-	Cleanup []LiveRunContainerCleanupV1 `json:"cleanup,omitempty"`
+	Schema             string                         `json:"schema"`
+	Runs               []LiveRunV1                    `json:"runs"`
+	ControlledSessions []ControlledSessionOwnershipV1 `json:"controlled_sessions,omitempty"`
+	Cleanup            []LiveRunContainerCleanupV1    `json:"cleanup,omitempty"`
+}
+
+type ControlledSessionOwnershipV1 struct {
+	LiveRunID        string                                `json:"live_run_id"`
+	BootSession      string                                `json:"boot_session"`
+	SessionHandle    string                                `json:"session_handle"`
+	DockerEndpoint   string                                `json:"docker_endpoint"`
+	ChannelDirectory string                                `json:"channel_directory"`
+	Controller       ControlledSessionContainerOwnershipV1 `json:"controller"`
+	Workload         ControlledSessionContainerOwnershipV1 `json:"workload"`
+}
+
+type ControlledSessionContainerOwnershipV1 struct {
+	Role                string `json:"role"`
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	DeploymentID        string `json:"deployment_id"`
+	GenerationReference string `json:"generation_reference"`
+	BuildIdentity       string `json:"build_identity"`
 }
 
 type LiveRunRecoveryReasonV1 string
@@ -83,7 +105,8 @@ type RecoveredLiveRunV1 struct {
 }
 
 type LiveRunRecoveryV1 struct {
-	Removed []RecoveredLiveRunV1
+	Removed            []RecoveredLiveRunV1
+	ControlledSessions []ControlledSessionOwnershipV1
 }
 
 type ControlMarkerV1 struct {
@@ -98,6 +121,9 @@ var ErrLiveRunConflict = errors.New("another run must finish first")
 
 var liveRunIDPatternV1 = regexp.MustCompile(`^run-[0-9a-f]{16}$`)
 var controlMarkerIDPatternV1 = regexp.MustCompile(`^control-[0-9a-f]{16}$`)
+var controlledSessionHandlePatternV1 = regexp.MustCompile(`^session-[0-9a-f]{64}$`)
+var controlledSessionContainerIDPatternV1 = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var controlledSessionBuildIdentityPatternV1 = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 func NewLiveRunQueueV1() LiveRunQueueV1 {
 	return LiveRunQueueV1{Schema: LiveRunQueueSchemaV1, Runs: []LiveRunV1{}}
@@ -189,6 +215,14 @@ func ValidateLiveRunQueueV1(queue LiveRunQueueV1) error {
 	if queue.Runs == nil {
 		return fmt.Errorf("live run queue runs must use an array")
 	}
+	for index, ownership := range queue.ControlledSessions {
+		if err := validateControlledSessionOwnershipV1(ownership); err != nil {
+			return fmt.Errorf("live run queue controlled session %d: %w", index, err)
+		}
+		if index > 0 && queue.ControlledSessions[index-1].LiveRunID >= ownership.LiveRunID {
+			return fmt.Errorf("live run queue controlled sessions must be sorted and unique by live run ID")
+		}
+	}
 	for index, cleanup := range queue.Cleanup {
 		if err := validateLiveRunContainerCleanupV1(cleanup); err != nil {
 			return fmt.Errorf("live run queue cleanup entry %d: %w", index, err)
@@ -198,10 +232,10 @@ func ValidateLiveRunQueueV1(queue LiveRunQueueV1) error {
 		}
 	}
 	seen := map[string]bool{}
-	inactiveSeen := false
-	activeCount := 0
-	activeExclusive := false
-	readyControlCount := 0
+	waitingSeen := false
+	runnableCount := 0
+	runnableExclusive := false
+	readyCount := 0
 	for index, run := range queue.Runs {
 		if err := validateLiveQueueEntryV1(run); err != nil {
 			return fmt.Errorf("live run queue entry %d: %w", index, err)
@@ -212,35 +246,110 @@ func ValidateLiveRunQueueV1(queue LiveRunQueueV1) error {
 		seen[run.ID] = true
 		switch run.Status {
 		case LiveRunStatusActiveV1:
-			if inactiveSeen {
-				return fmt.Errorf("live run queue has active entry %q after an inactive entry", run.ID)
+			if waitingSeen {
+				return fmt.Errorf("live run queue has runnable entry %q after a waiting entry", run.ID)
 			}
-			activeCount++
-			activeExclusive = activeExclusive || run.Exclusive
+			if readyCount != 0 {
+				return fmt.Errorf("live run queue has active entry %q after a ready reservation", run.ID)
+			}
+			runnableCount++
+			runnableExclusive = runnableExclusive || run.Exclusive
 		case LiveRunStatusReadyV1:
-			if run.Kind != LiveRunKindControlV1 {
-				return fmt.Errorf("only a control marker may be ready")
+			if waitingSeen {
+				return fmt.Errorf("live run queue has runnable entry %q after a waiting entry", run.ID)
 			}
-			if activeCount != 0 || readyControlCount != 0 {
-				return fmt.Errorf("ready control marker must be the only runnable queue entry")
-			}
-			readyControlCount++
-			inactiveSeen = true
+			runnableCount++
+			runnableExclusive = runnableExclusive || run.Exclusive
+			readyCount++
 		case LiveRunStatusWaitingV1:
-			inactiveSeen = true
+			waitingSeen = true
 		}
 	}
-	if activeExclusive && activeCount != 1 {
-		return fmt.Errorf("exclusive live run must be the only active run")
+	if runnableExclusive && runnableCount != 1 {
+		return fmt.Errorf("exclusive live run must be the only runnable entry")
 	}
-	if readyControlCount == 0 {
-		firstWaiting := firstWaitingLiveRunV1(queue.Runs)
-		if firstWaiting == nil {
-			return nil
+	if readyCount > 1 {
+		return fmt.Errorf("live run queue may reserve only one ready entry")
+	}
+	firstWaiting := firstWaitingLiveRunV1(queue.Runs)
+	if firstWaiting == nil {
+		return nil
+	}
+	if runnableCount == 0 || (readyCount == 0 && !runnableExclusive && !firstWaiting.Exclusive) {
+		return fmt.Errorf("live run queue leaves run %q waiting although it can start", firstWaiting.ID)
+	}
+	return nil
+}
+
+func validateControlledSessionOwnershipV1(ownership ControlledSessionOwnershipV1) error {
+	if err := ValidateLiveRunIDV1(ownership.LiveRunID); err != nil {
+		return fmt.Errorf("live run ID: %w", err)
+	}
+	if err := validateBootSessionIDV1(ownership.BootSession); err != nil {
+		return err
+	}
+	if !controlledSessionHandlePatternV1.MatchString(ownership.SessionHandle) {
+		return fmt.Errorf("session handle must use session- followed by 64 lowercase hexadecimal characters")
+	}
+	if err := validateControlledSessionDockerEndpointV1(ownership.DockerEndpoint); err != nil {
+		return err
+	}
+	if !filepath.IsAbs(ownership.ChannelDirectory) || filepath.Clean(ownership.ChannelDirectory) != ownership.ChannelDirectory || !safeRecoveryIdentity(ownership.ChannelDirectory) {
+		return fmt.Errorf("channel directory must be a clean absolute path")
+	}
+	if err := validateControlledSessionContainerOwnershipStateV1(ownership.Controller, "controller"); err != nil {
+		return fmt.Errorf("controller: %w", err)
+	}
+	if err := validateControlledSessionContainerOwnershipStateV1(ownership.Workload, "workload"); err != nil {
+		return fmt.Errorf("workload: %w", err)
+	}
+	if ownership.Controller.ID == "" && ownership.Workload.ID != "" {
+		return fmt.Errorf("workload container ID cannot be recorded before the controller container ID")
+	}
+	if ownership.Controller.ID != "" && ownership.Workload.ID != "" && ownership.Controller.ID == ownership.Workload.ID {
+		return fmt.Errorf("controller and workload must name different containers")
+	}
+	return nil
+}
+
+func validateControlledSessionDockerEndpointV1(endpoint string) error {
+	if !safeRecoveryIdentity(endpoint) {
+		return fmt.Errorf("Docker endpoint must be nonempty safe text")
+	}
+	scheme, _, found := strings.Cut(endpoint, ":")
+	if !found || (strings.ToLower(scheme) != "unix" && strings.ToLower(scheme) != "npipe") {
+		return fmt.Errorf("Docker endpoint must be a local unix or npipe endpoint")
+	}
+	return nil
+}
+
+func validateControlledSessionContainerOwnershipV1(ownership ControlledSessionContainerOwnershipV1, role string) error {
+	if err := validateControlledSessionContainerOwnershipStateV1(ownership, role); err != nil {
+		return err
+	}
+	if ownership.ID == "" {
+		return fmt.Errorf("container ID must use 64 lowercase hexadecimal characters")
+	}
+	return nil
+}
+
+func validateControlledSessionContainerOwnershipStateV1(ownership ControlledSessionContainerOwnershipV1, role string) error {
+	if ownership.Role != role {
+		return fmt.Errorf("role must be %q", role)
+	}
+	if ownership.ID != "" && !controlledSessionContainerIDPatternV1.MatchString(ownership.ID) {
+		return fmt.Errorf("container ID must use 64 lowercase hexadecimal characters")
+	}
+	for label, value := range map[string]string{
+		"name": ownership.Name, "deployment ID": ownership.DeploymentID,
+		"generation reference": ownership.GenerationReference,
+	} {
+		if !safeRecoveryIdentity(value) {
+			return fmt.Errorf("%s must be nonempty safe text", label)
 		}
-		if activeCount == 0 || !activeExclusive && !firstWaiting.Exclusive {
-			return fmt.Errorf("live run queue leaves run %q waiting although it can start", firstWaiting.ID)
-		}
+	}
+	if !controlledSessionBuildIdentityPatternV1.MatchString(ownership.BuildIdentity) {
+		return fmt.Errorf("build identity must be a sha256 digest")
 	}
 	return nil
 }
@@ -287,8 +396,8 @@ func validateLiveRunV1(run LiveRunV1) error {
 			return err
 		}
 	}
-	if run.Status != LiveRunStatusActiveV1 && run.Status != LiveRunStatusWaitingV1 {
-		return fmt.Errorf("live run status must be active or waiting")
+	if run.Status != LiveRunStatusActiveV1 && run.Status != LiveRunStatusReadyV1 && run.Status != LiveRunStatusWaitingV1 {
+		return fmt.Errorf("live run status must be active, ready, or waiting")
 	}
 	if !run.Exclusive && (run.WritableMount != "" || len(run.WritablePaths) != 0) {
 		return fmt.Errorf("concurrent live run must not name a writable mount conflict")
@@ -304,8 +413,8 @@ func validateLiveRunV1(run LiveRunV1) error {
 	if run.Container != "" && !safeRecoveryIdentity(run.Container) {
 		return fmt.Errorf("live run container must be safe text")
 	}
-	if run.Status == LiveRunStatusWaitingV1 && run.Container != "" {
-		return fmt.Errorf("waiting live run must not name a container")
+	if run.Status != LiveRunStatusActiveV1 && run.Container != "" {
+		return fmt.Errorf("pending live run must not name a container")
 	}
 	return nil
 }
@@ -420,6 +529,32 @@ func RemoveControlMarkerV1(queue LiveRunQueueV1, id string) (LiveRunQueueV1, boo
 	return removeLiveQueueEntryV1(queue, id, LiveRunKindControlV1)
 }
 
+func ActivateReadyLiveRunV1(queue LiveRunQueueV1, id string) (LiveRunQueueV1, error) {
+	if err := ValidateLiveRunQueueV1(queue); err != nil {
+		return LiveRunQueueV1{}, err
+	}
+	if err := ValidateLiveRunIDV1(id); err != nil {
+		return LiveRunQueueV1{}, err
+	}
+	result := cloneLiveRunQueueV1(queue)
+	for index := range result.Runs {
+		run := &result.Runs[index]
+		if run.ID != id || run.Kind == LiveRunKindControlV1 {
+			continue
+		}
+		if run.Status != LiveRunStatusReadyV1 {
+			return LiveRunQueueV1{}, fmt.Errorf("live run %q is not ready", id)
+		}
+		run.Status = LiveRunStatusActiveV1
+		promoteLiveRunsV1(&result)
+		if err := ValidateLiveRunQueueV1(result); err != nil {
+			return LiveRunQueueV1{}, fmt.Errorf("validate queue after activating live run: %w", err)
+		}
+		return result, nil
+	}
+	return LiveRunQueueV1{}, fmt.Errorf("live run %q is not outstanding", id)
+}
+
 func CancelWaitingLiveRunsV1(queue LiveRunQueueV1) (LiveRunQueueV1, []LiveRunV1, error) {
 	if err := ValidateLiveRunQueueV1(queue); err != nil {
 		return LiveRunQueueV1{}, nil, err
@@ -428,7 +563,7 @@ func CancelWaitingLiveRunsV1(queue LiveRunQueueV1) (LiveRunQueueV1, []LiveRunV1,
 	retained := make([]LiveRunV1, 0, len(result.Runs))
 	canceled := []LiveRunV1{}
 	for _, entry := range result.Runs {
-		if entry.Kind != LiveRunKindControlV1 && entry.Status == LiveRunStatusWaitingV1 {
+		if entry.Kind != LiveRunKindControlV1 && entry.Status != LiveRunStatusActiveV1 {
 			canceled = append(canceled, entry)
 			continue
 		}
@@ -478,21 +613,26 @@ func ControlMarkersV1(queue LiveRunQueueV1) []ControlMarkerV1 {
 }
 
 func cloneLiveRunQueueV1(queue LiveRunQueueV1) LiveRunQueueV1 {
+	var controlledSessions []ControlledSessionOwnershipV1
+	if queue.ControlledSessions != nil {
+		controlledSessions = append([]ControlledSessionOwnershipV1{}, queue.ControlledSessions...)
+	}
 	var cleanup []LiveRunContainerCleanupV1
 	if queue.Cleanup != nil {
 		cleanup = append([]LiveRunContainerCleanupV1{}, queue.Cleanup...)
 	}
 	return LiveRunQueueV1{
-		Schema:  queue.Schema,
-		Runs:    append([]LiveRunV1{}, queue.Runs...),
-		Cleanup: cleanup,
+		Schema:             queue.Schema,
+		Runs:               append([]LiveRunV1{}, queue.Runs...),
+		ControlledSessions: controlledSessions,
+		Cleanup:            cleanup,
 	}
 }
 
 func liveRunCanStartNowV1(queue LiveRunQueueV1, candidate LiveRunV1) bool {
 	activeCount := 0
 	for _, run := range queue.Runs {
-		if run.Status == LiveRunStatusWaitingV1 {
+		if run.Status != LiveRunStatusActiveV1 {
 			return false
 		}
 		activeCount++
@@ -504,33 +644,31 @@ func liveRunCanStartNowV1(queue LiveRunQueueV1, candidate LiveRunV1) bool {
 }
 
 func promoteLiveRunsV1(queue *LiveRunQueueV1) {
-	activeCount := 0
-	activeExclusive := false
+	runnableCount := 0
+	runnableExclusive := false
+	readyCount := 0
 	firstWaiting := -1
 	for index, run := range queue.Runs {
 		if run.Status == LiveRunStatusWaitingV1 {
 			firstWaiting = index
 			break
 		}
-		activeCount++
-		activeExclusive = activeExclusive || run.Exclusive
+		runnableCount++
+		runnableExclusive = runnableExclusive || run.Exclusive
+		if run.Status == LiveRunStatusReadyV1 {
+			readyCount++
+		}
 	}
-	if firstWaiting < 0 || activeExclusive {
+	if firstWaiting < 0 || runnableExclusive || readyCount != 0 {
 		return
 	}
 	if queue.Runs[firstWaiting].Exclusive {
-		if activeCount == 0 {
-			if queue.Runs[firstWaiting].Kind == LiveRunKindControlV1 {
-				queue.Runs[firstWaiting].Status = LiveRunStatusReadyV1
-			} else {
-				queue.Runs[firstWaiting].Status = LiveRunStatusActiveV1
-			}
+		if runnableCount == 0 {
+			queue.Runs[firstWaiting].Status = LiveRunStatusReadyV1
 		}
 		return
 	}
-	for index := firstWaiting; index < len(queue.Runs) && !queue.Runs[index].Exclusive; index++ {
-		queue.Runs[index].Status = LiveRunStatusActiveV1
-	}
+	queue.Runs[firstWaiting].Status = LiveRunStatusReadyV1
 }
 
 func firstWaitingLiveRunV1(runs []LiveRunV1) *LiveRunV1 {

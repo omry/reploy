@@ -6,6 +6,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/omry/reploy/internal/endpointname"
+	"github.com/omry/reploy/internal/runtimeidentity"
 )
 
 var builtInControlOperations = map[string]bool{
@@ -40,6 +43,10 @@ func Resolve(source Syntax) (Document, error) {
 	if err != nil {
 		return Document{}, err
 	}
+	runtimeNetwork, err := resolveRuntimeNetwork(source.Environment.Runtime.Network)
+	if err != nil {
+		return Document{}, err
+	}
 	extended, err := resolveExtends(source)
 	if err != nil {
 		return Document{}, err
@@ -59,7 +66,7 @@ func Resolve(source Syntax) (Document, error) {
 			Applications:    map[string]Application{},
 			Components:      map[string]Component{},
 			AllowConcurrent: allowConcurrent,
-			Runtime:         EnvironmentRuntime{User: runtimeUser},
+			Runtime:         EnvironmentRuntime{User: runtimeUser, Network: runtimeNetwork},
 			Terminal:        Terminal{ColorEnv: strings.TrimSpace(source.Environment.Terminal.ColorEnv)},
 			Install:         resolveInstallSyntax(source.Environment.Install, variables),
 			Mounts:          map[string]EnvironmentMount{},
@@ -87,6 +94,48 @@ func Resolve(source Syntax) (Document, error) {
 	return document, nil
 }
 
+func resolveRuntimeNetwork(source RuntimeNetworkSyntax) (RuntimeNetwork, error) {
+	public, err := resolveNetworkAccess("environment.runtime.network.public", source.Public)
+	if err != nil {
+		return RuntimeNetwork{}, err
+	}
+	local, err := resolveNetworkAccess("environment.runtime.network.local", source.Local)
+	if err != nil {
+		return RuntimeNetwork{}, err
+	}
+	ambiguous, err := resolveAmbiguousNetworkAccess(source.Ambiguous)
+	if err != nil {
+		return RuntimeNetwork{}, err
+	}
+	return RuntimeNetwork{Public: public, Local: local, Ambiguous: ambiguous}, nil
+}
+
+func resolveNetworkAccess(field string, value string) (NetworkAccess, error) {
+	access := NetworkAccess(strings.TrimSpace(value))
+	if access == "" {
+		return NetworkAccessDeny, nil
+	}
+	switch access {
+	case NetworkAccessDeny, NetworkAccessAllow:
+		return access, nil
+	default:
+		return "", fmt.Errorf("%s must be allow or deny", field)
+	}
+}
+
+func resolveAmbiguousNetworkAccess(value string) (AmbiguousNetworkAccess, error) {
+	access := AmbiguousNetworkAccess(strings.TrimSpace(value))
+	if access == "" {
+		return AmbiguousNetworkAccessRequireBoth, nil
+	}
+	switch access {
+	case AmbiguousNetworkAccessRequireBoth, AmbiguousNetworkAccessAllow:
+		return access, nil
+	default:
+		return "", fmt.Errorf("environment.runtime.network.ambiguous must be require-both or allow")
+	}
+}
+
 func resolveRuntimeUser(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -102,17 +151,7 @@ func resolveRuntimeUser(value string) (string, error) {
 }
 
 func ValidateRuntimeUserName(value string) error {
-	if value == "" || len(value) > 32 {
-		return fmt.Errorf("must be a nonempty portable Unix user name no longer than 32 bytes")
-	}
-	for index, character := range value {
-		if character >= 'a' && character <= 'z' || character == '_' && index == 0 ||
-			index > 0 && (character >= '0' && character <= '9' || character == '_' || character == '-') {
-			continue
-		}
-		return fmt.Errorf("must be a portable lowercase Unix user name")
-	}
-	return nil
+	return runtimeidentity.ValidateUserName(value)
 }
 
 func resolveConcurrentRunPolicy(value string) (ConcurrentRunPolicy, error) {
@@ -569,6 +608,9 @@ func resolveWorkloads(source Syntax, extended extendedSyntax, document *Document
 	_ = command
 	workload := Workload{Command: source.Environment.Workload.Command, Endpoints: map[string]Endpoint{}}
 	for _, name := range sortedKeys(source.Environment.Workload.Endpoints) {
+		if err := endpointname.Validate(name); err != nil {
+			return fmt.Errorf("environment.workload.endpoints key %q: %w", name, err)
+		}
 		endpoint, err := resolveEndpoint("environment.workload.endpoints."+name, source.Environment.Workload.Endpoints[name])
 		if err != nil {
 			return err
@@ -585,7 +627,7 @@ func resolveWorkloads(source Syntax, extended extendedSyntax, document *Document
 	endpointReferences := map[string]int{}
 	for _, name := range sortedKeys(extended.Endpoints) {
 		item := extended.Endpoints[name]
-		endpointName, _ := referencedName("extends", item.Docker.Extends, environmentEndpointReferencePrefix)
+		endpointName, _ := referencedEndpointName("extends", item.Docker.Extends)
 		endpointReferences[endpointName]++
 		resolvedEndpoint := workload.Endpoints[endpointName]
 		stagingPort, err := resolveSyntaxInt(item.Docker.Publish.Staging, "docker.workload.endpoints."+name+".publish.staging")

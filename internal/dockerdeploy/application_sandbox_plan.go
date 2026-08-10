@@ -6,10 +6,14 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/runtimeidentity"
 )
 
 const applicationSeccompProfileBuiltinV1 = "builtin"
+const applicationGooglePublicDNSPrimaryV1 = "8.8.8.8"
+const applicationGooglePublicDNSSecondaryV1 = "8.8.4.4"
 
 type ApplicationKernelPolicyV1 struct {
 	DropAllCapabilities bool
@@ -26,18 +30,31 @@ type ApplicationKernelPolicyV1 struct {
 // renderer-specific flags.
 type ApplicationSandboxPlanV1 struct {
 	RuntimeUser     RuntimeUserPlan
+	Network         ApplicationNetworkPolicyV1
 	ReadOnlyRoot    bool
 	TemporaryHome   string
 	StartupVerifier deploy.ApplicationStartupVerifierV1
 	Kernel          ApplicationKernelPolicyV1
 }
 
+type ApplicationNetworkPolicyV1 struct {
+	Public    blueprint.NetworkAccess
+	Local     blueprint.NetworkAccess
+	Ambiguous blueprint.AmbiguousNetworkAccess
+}
+
 func newApplicationSandboxPlanV1(runtimeUser RuntimeUserPlan) ApplicationSandboxPlanV1 {
+	return newApplicationSandboxPlanWithNetworkV1(runtimeUser, blueprint.RuntimeNetwork{})
+}
+
+func newApplicationSandboxPlanWithNetworkV1(runtimeUser RuntimeUserPlan, network blueprint.RuntimeNetwork) ApplicationSandboxPlanV1 {
 	if runtimeUser.LocalUser == "" {
 		runtimeUser.LocalUser = runtimeLocalUserNameV1("", runtimeUser.UID)
 	}
+	network = normalizeRuntimeNetworkV1(network)
 	return ApplicationSandboxPlanV1{
 		RuntimeUser:     runtimeUser,
+		Network:         ApplicationNetworkPolicyV1{Public: network.Public, Local: network.Local, Ambiguous: network.Ambiguous},
 		ReadOnlyRoot:    true,
 		TemporaryHome:   environmentTemporaryHome,
 		StartupVerifier: deploy.ApplicationStartupVerifierContractV1(),
@@ -51,22 +68,42 @@ func newApplicationSandboxPlanV1(runtimeUser RuntimeUserPlan) ApplicationSandbox
 	}
 }
 
+func normalizeRuntimeNetworkV1(network blueprint.RuntimeNetwork) blueprint.RuntimeNetwork {
+	if network.Public == "" {
+		network.Public = blueprint.NetworkAccessDeny
+	}
+	if network.Local == "" {
+		network.Local = blueprint.NetworkAccessDeny
+	}
+	if network.Ambiguous == "" {
+		network.Ambiguous = blueprint.AmbiguousNetworkAccessRequireBoth
+	}
+	return network
+}
+
+func applicationDockerDNSResolversV1(network ApplicationNetworkPolicyV1) []string {
+	if network.Public == blueprint.NetworkAccessAllow && network.Local == blueprint.NetworkAccessDeny {
+		return []string{applicationGooglePublicDNSPrimaryV1, applicationGooglePublicDNSSecondaryV1}
+	}
+	return nil
+}
+
 func ValidateApplicationSandboxPlanV1(plan ApplicationSandboxPlanV1) error {
 	if plan.RuntimeUser.UID < 0 || plan.RuntimeUser.GID < 0 {
 		return fmt.Errorf("application sandbox requires a non-negative numeric UID and GID")
 	}
+	if err := validateApplicationNetworkAccessV1("public", plan.Network.Public); err != nil {
+		return err
+	}
+	if err := validateApplicationNetworkAccessV1("local", plan.Network.Local); err != nil {
+		return err
+	}
+	if err := validateApplicationAmbiguousNetworkAccessV1(plan.Network.Ambiguous); err != nil {
+		return err
+	}
 	wantUser := strconv.Itoa(plan.RuntimeUser.UID) + ":" + strconv.Itoa(plan.RuntimeUser.GID)
 	if plan.RuntimeUser.DockerUser != wantUser {
 		return fmt.Errorf("application sandbox Docker user must match its numeric UID and GID")
-	}
-	if plan.RuntimeUser.LocalUser == "" {
-		return fmt.Errorf("application sandbox requires a container-local user name")
-	}
-	if plan.RuntimeUser.UID == 0 && plan.RuntimeUser.LocalUser != "root" {
-		return fmt.Errorf("root application sandbox identity must use the local user name root")
-	}
-	if plan.RuntimeUser.UID != 0 && plan.RuntimeUser.LocalUser == "root" {
-		return fmt.Errorf("non-root application sandbox identity must not use the local user name root")
 	}
 	wantGroups, err := normalizeSupplementaryGIDsV1(plan.RuntimeUser.GID, plan.RuntimeUser.SupplementaryGIDs)
 	if err != nil {
@@ -75,10 +112,17 @@ func ValidateApplicationSandboxPlanV1(plan ApplicationSandboxPlanV1) error {
 	if !slices.Equal(plan.RuntimeUser.SupplementaryGIDs, wantGroups) {
 		return fmt.Errorf("application sandbox supplementary groups must be unique, sorted, and exclude the primary GID")
 	}
-	if plan.RuntimeUser.UID != 0 {
-		if plan.RuntimeUser.GID == 0 || slices.Contains(plan.RuntimeUser.SupplementaryGIDs, 0) {
-			return fmt.Errorf("non-root application sandbox identity must not include the root group")
-		}
+	identity := runtimeidentity.IdentityV1{
+		Username:          plan.RuntimeUser.LocalUser,
+		UID:               strconv.Itoa(plan.RuntimeUser.UID),
+		GID:               strconv.Itoa(plan.RuntimeUser.GID),
+		SupplementaryGIDs: make([]string, len(plan.RuntimeUser.SupplementaryGIDs)),
+	}
+	for index, gid := range plan.RuntimeUser.SupplementaryGIDs {
+		identity.SupplementaryGIDs[index] = strconv.Itoa(gid)
+	}
+	if err := runtimeidentity.ValidateIdentityV1(identity); err != nil {
+		return fmt.Errorf("application sandbox runtime identity: %w", err)
 	}
 	if !plan.ReadOnlyRoot {
 		return fmt.Errorf("application sandbox requires a read-only container root")
@@ -108,6 +152,24 @@ func ValidateApplicationSandboxPlanV1(plan ApplicationSandboxPlanV1) error {
 		return fmt.Errorf("application sandbox must prohibit host devices")
 	}
 	return nil
+}
+
+func validateApplicationNetworkAccessV1(name string, access blueprint.NetworkAccess) error {
+	switch access {
+	case blueprint.NetworkAccessDeny, blueprint.NetworkAccessAllow:
+		return nil
+	default:
+		return fmt.Errorf("application sandbox %s network access must be allow or deny", name)
+	}
+}
+
+func validateApplicationAmbiguousNetworkAccessV1(access blueprint.AmbiguousNetworkAccess) error {
+	switch access {
+	case blueprint.AmbiguousNetworkAccessRequireBoth, blueprint.AmbiguousNetworkAccessAllow:
+		return nil
+	default:
+		return fmt.Errorf("application sandbox ambiguous network access must be require-both or allow")
+	}
 }
 
 func applicationLocalAccountV1(plan ApplicationSandboxPlanV1) (deploy.ApplicationLocalAccountV1, error) {

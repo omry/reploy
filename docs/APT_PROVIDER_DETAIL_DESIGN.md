@@ -2127,6 +2127,8 @@ intersections with reserved system, Reploy, or provider paths are invalid.
 ```go
 type RuntimePolicyV1 struct {
     Schema          string
+    StartupVerifier ApplicationStartupVerifierV1
+    Network         RuntimeNetwork
     ProtectedPaths  []ProtectedPathV1
     Plans           []RuntimePlanV1
 }
@@ -2139,6 +2141,7 @@ type ProtectedPathV1 struct {
 
 type RuntimePlanV1 struct {
     ID          string
+    InboundTCP  []string
     Mounts      []RuntimeMountV1
     Executables []QualifiedOutput
 }
@@ -2150,11 +2153,20 @@ type RuntimeMountV1 struct {
 }
 ```
 
-`Schema` is `runtime-policy-v1`. Protected paths are unique normalized absolute
-paths sorted by path. Protected kind is `reploy-root`,
+`Schema` is `runtime-policy-v1`. `StartupVerifier` identifies the exact trusted
+application setup recipe embedded in the runtime image. `Network` records the
+effective independent `public` and `local` access values, each `allow` or
+`deny`, plus the `ambiguous` translation/tunneling policy, either `require-both`
+or `allow`. IPv4-mapped IPv6 sockets follow their embedded IPv4 class because
+Linux emits them as IPv4 packets. Protected paths are unique normalized
+absolute paths sorted by path.
+Protected kind is `reploy-root`,
 `provider-root`, `provider-leaf`, or `executable-path`; owner is the stable node
 or qualified-output identity. Plans use the stable command/workload/probe ID and
-are sorted by ID. Mounts are sorted by destination; `SourceKind` records only
+are sorted by ID. `InboundTCP` records sorted unique canonical decimal port
+strings for that exact container shape: declared ports belong only to the
+workload plan, while shell and transient command plans use an empty array. Mounts are sorted by
+destination; `SourceKind` records only
 the resolved kind (`file`, `directory`, or `generated`) and never a host source
 path. Executables are unique and sorted by qualified identity.
 
@@ -2169,10 +2181,13 @@ build identity input.
 Each one-shot command and `reploy shell` mounts a fresh 64 MiB tmpfs at
 `/mnt/reploy-home` for `HOME` and `TMPDIR`. The mount is mode `0700`, owned by
 the selected runtime UID/GID, and removed with the transient container. Docker
-starts the resolved executable directly under that final numeric identity; no
-root bootstrap helper is involved. Explicit interruption cleanup force-removes
-the transient container. Workload containers use the same bounded tmpfs-home
-policy at `/mnt/reploy-home`.
+starts only the trusted Reploy helper as container root with the minimal setup
+capabilities. The helper installs any required application-network rules,
+assumes the selected numeric identity, irreversibly drops its setup authority,
+verifies the final kernel state, and executes the resolved application argv.
+Explicit interruption cleanup force-removes the transient container. Workload
+containers use the same setup contract and bounded tmpfs-home policy at
+`/mnt/reploy-home`.
 
 The policy digest is
 `canonical.Sum("runtime-policy", "runtime-policy-v1", policy)`. It is recorded
@@ -2227,10 +2242,13 @@ allowed only when all shared environment mounts in the effective plans are
 read-only. Private per-run home storage and reserved `--output-file` staging do
 not make a plan writable, while `--output-dir` does.
 
-Queue entries exist only while waiting or active. They have opaque validated run
-IDs and retain enough data for fair arrival ordering, status display,
-cancellation, owning operation, selected generation, and active Docker
-container identity. There is no completed-run history or durable counter.
+Queue entries exist only while outstanding. Publicly they are waiting or active;
+internally, newly available capacity reserves one waiting entry as `ready` until
+its owner either cancels it or atomically claims it as active. A `ready` entry is
+still reported as waiting. Entries have opaque validated run IDs and retain
+enough data for fair arrival ordering, status display, cancellation, owning
+operation, selected generation, and active Docker container identity. There is
+no completed-run history or durable counter.
 `reploy runs list` shows the outstanding entries, and `reploy runs stop RUN_ID`
 cancels a waiter or stops an active container. A syntactically valid absent ID
 is a successful no-op reported as possibly already finished.

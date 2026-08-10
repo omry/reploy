@@ -94,6 +94,53 @@ func TestRuntimePlansV1RejectsWorkloadPlanMismatch(t *testing.T) {
 	}
 }
 
+func TestRuntimePlansV1RejectsNetworkPolicyMismatch(t *testing.T) {
+	document := runtimePlanDocument()
+	plan := DockerExecutionPlan{
+		Workload: &WorkloadExecutionPlan{},
+		Sandbox: newApplicationSandboxPlanWithNetworkV1(
+			RuntimeUserPlan{UID: 1000, GID: 1000, DockerUser: "1000:1000"},
+			blueprint.RuntimeNetwork{Public: blueprint.NetworkAccessAllow, Local: blueprint.NetworkAccessDeny, Ambiguous: blueprint.AmbiguousNetworkAccessRequireBoth},
+		),
+	}
+	_, err := RuntimePlansV1(document, plan)
+	if err == nil || !strings.Contains(err.Error(), "network policy does not match") {
+		t.Fatalf("network policy mismatch error = %v", err)
+	}
+}
+
+func TestRuntimePlansV1LocksInboundTCPOnlyForWorkload(t *testing.T) {
+	document := runtimePlanDocument()
+	document.Environment.Workload.Endpoints = map[string]blueprint.Endpoint{
+		"http":  {Scheme: "http", Port: 8080},
+		"admin": {Scheme: "http", Port: 8081},
+	}
+	dockerPlan := DockerExecutionPlan{
+		Sandbox: testApplicationSandboxPlanV1(1000, 1000),
+		Workload: &WorkloadExecutionPlan{Endpoints: map[string]EndpointExecutionPlan{
+			"http":  {ContainerPort: 8080},
+			"admin": {ContainerPort: 8081},
+		}},
+	}
+	plans, err := RuntimePlansV1(document, dockerPlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, plan := range plans {
+		want := []string{}
+		if plan.ID == runtimeWorkloadPlanID {
+			want = []string{"8080", "8081"}
+		}
+		if !reflect.DeepEqual(plan.InboundTCP, want) {
+			t.Fatalf("runtime plan %q inbound TCP = %#v, want %#v", plan.ID, plan.InboundTCP, want)
+		}
+	}
+	dockerPlan.Workload.Endpoints["http"] = EndpointExecutionPlan{ContainerPort: 9090}
+	if _, err := RuntimePlansV1(document, dockerPlan); err == nil || !strings.Contains(err.Error(), "endpoint \"http\"") {
+		t.Fatalf("endpoint mismatch error = %v", err)
+	}
+}
+
 func runtimePlanDocument() blueprint.Document {
 	return blueprint.Document{Environment: blueprint.Environment{
 		Applications: map[string]blueprint.Application{

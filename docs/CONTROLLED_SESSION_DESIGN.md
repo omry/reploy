@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-02
+updated: 2026-08-10
 summary: Capability-scoped execution sessions that inherit Reploy's global container sandbox.
 ---
 
@@ -9,10 +9,103 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
 ## Status
 
 - Decision state: Focused review complete; high-level decisions approved
-- Implementation state: Initial global sandbox prerequisites and trusted
-  application-startup verification implemented in the current slice;
-  controlled-session authorization, protocol, lifecycle, and Docker
-  orchestration remain later slices
+- Implementation state: Initial global sandbox prerequisites, trusted
+  application-startup verification, controlled-session authorization, the
+  framed protocol, lifecycle state machine, and immutable two-environment
+  Docker planning are implemented. The lease-private Linux session channel is
+  also implemented: it creates a fresh controller-owned Unix socket directory,
+  exposes it through a read-only controller-only bind, verifies the claiming
+  process's kernel-reported UID/GID, accepts one connection, removes the socket
+  pathname, sends the frozen `opened` authorization, and provides bounded,
+  serialized protocol I/O with distinct before-claim and after-claim failure
+  observations. The planner binds exact controller and
+  workload builds, runtime identities, mounts, masks, commands, and inert
+  lifecycle commands while networking remains disabled. Private environment
+  injection is rejected until its controlled-session launch path is wired.
+  The lifecycle state machine includes its output-finalization barrier and
+  timeout outcome. The synthetic PTY output pump
+  now preserves byte order with one bounded flow-control chunk at a time,
+  charges time already spent stopping the workload against the host-owned absolute
+  finalization deadline, cancels blocked delivery, closes the source, and
+  produces an immutable drained-or-failed status for the lifecycle barrier
+  before returning.
+  The Docker workload PTY adapter is implemented: it creates the frozen
+  workload plan inert, establishes the Engine attachment before start, applies
+  the initial and later dimensions through the Engine API, preserves exact
+  input and output bytes, independently observes the container exit code, and
+  exposes graceful and forced stop operations. The Docker controller adapter
+  is also implemented: it requires the exact lease-private channel socket
+  before container creation, creates the frozen controller plan inert, starts
+  it at most once, independently observes its exit, exposes graceful and forced
+  stop operations, captures the full container ID returned by creation, and
+  pins all later lifecycle operations to that exact container. The
+  backend-neutral session I/O bridge is implemented: it dispatches typed
+  controller requests to an injected lifecycle handler, applies only
+  lifecycle-accepted input and resize effects, forwards exact ordered PTY
+  output as protocol events, gives lifecycle events a separate prioritized
+  bounded write admission path, and reports request, backpressure, and
+  disconnect failures without owning the channel or containers. A failed event
+  write makes the framed transport terminal so a later event cannot be appended
+  to a potentially partial frame. The attached host lifecycle supervisor is
+  also implemented: it prepares inert resources, starts the controller before
+  the workload, activates only after workload setup succeeds, serializes
+  controller requests through the lifecycle machine, latches the first
+  termination cause, stops and independently observes the workload, finalizes
+  PTY output before the terminal result, waits boundedly for controller
+  completion and result acknowledgement, and removes both containers and the
+  private channel. A workload that starts before a later startup step fails is
+  still terminated and its output is finalized through the same barrier.
+  Before creating any session resource, the planned controller, workload, and
+  private-channel ownership plus the session, lease, boot, and exact verified
+  local Docker endpoint identities are now durably recorded in the existing
+  live-run state. Reploy monotonically
+  fills each exact full container ID after Docker creates it, and both IDs are
+  durable before either process starts. Verified cleanup removes that record;
+  failed or unverifiable partial-preparation cleanup retains it. Reploy now
+  derives the immutable watchdog cleanup manifest from the complete recorded
+  ownership before startup. It names only the exact containers and private
+  channel, carries the host boot identity and the same pinned local Docker
+  endpoint used to create both containers,
+  represents the currently absent lease networks and volumes as empty arrays,
+  and omits protocol authority. The watchdog is now launched from the same
+  Reploy executable after that manifest is frozen and before either container
+  starts. It runs in a separate host process session so terminal group signals
+  aimed at the attached operation do not also kill the watchdog. It
+  acknowledges readiness, watches a private parent-liveness pipe, and treats
+  EOF or any malformed control byte as parent loss. On loss it checks the
+  current boot identity and every exact container ownership label,
+  force-removes only matching manifested containers, verifies their absence,
+  and removes the manifested private channel directory. Successful verified
+  session cleanup sends the single disarm byte; the child independently
+  verifies the same resources once more before it exits, and the parent waits
+  boundedly for that exit. The child has no listener and accepts no later
+  resource selection. Because parent and child are the same executable, this
+  internal manifest has no independent schema-version marker. A ready
+  watchdog's premature exit is observed by the attached supervisor. Before
+  activation it fails startup; after activation it latches the distinct
+  `cleanup-containment-lost` cause, emits only a safe structured diagnostic
+  while the controller transport remains usable, and starts ordinary bounded
+  teardown without misreporting Docker observation as lost. Next-operation
+  restart reconciliation is also implemented: after a prior host boot or an
+  abandoned current-boot owner lease, Reploy discovers any container whose
+  full ID was not recorded by its frozen name, verifies every exact ownership
+  label, removes and verifies both containers and the private channel under one
+  bounded cleanup attempt, and retains incomplete ownership for a later retry.
+  The watchdog now receives a pre-created, exact private incident-receipt file
+  descriptor with its immutable manifest. On parent loss it durably records a
+  bounded canonical receipt containing only the parent-loss class, exact
+  controller and workload ownership, per-resource verified-absent-or-failed
+  cleanup outcomes, and the required recovery action. Successful disarm or an
+  observed premature watchdog exit removes the unused target. Lock-protected
+  host APIs list completed receipts without contacting Docker and acknowledge
+  one validated receipt explicitly. The exact target's inherited descriptor
+  holds an advisory lock until both the parent and watchdog close it, so
+  restart reconciliation cannot unlink an empty target while a surviving
+  watchdog can still write. Empty unlocked targets are not incidents, receipts
+  are never silently evicted, and new session startup fails closed at the
+  fixed retention bound. A watchdog-owned retry loop while Docker remains
+  unavailable is still a later ownership phase, and controlled-session
+  networking remains a later phase.
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution
@@ -24,8 +117,8 @@ or publication behavior.
 
 ## Decision Summary
 
-Reploy will let a controller such as OmegaFlow control one
-host-created session in an exact staged environment generation without
+Reploy will let a controller such as OmegaFlow control one host-created
+session between exact controller and workload environment generations without
 receiving Docker or arbitrary host authority.
 
 The controller owns the session from its perspective. A host Reploy operation
@@ -139,7 +232,8 @@ claim that basic validation proves provider resolution or build success.
    Docker authority.
 2. Preserve a long-lived shell and PTY across multiple controller operations.
 3. Keep terminal behavior faithful enough for interactive tools and recording.
-4. Bind every operation to one admitted run and exact environment generation.
+4. Bind every operation to one admitted run and exact controller and workload
+   environment generations.
 5. Make runtime termination independently verifiable by host Reploy.
 6. Deny workload code access to the host-controlled session channel.
 7. Keep network, mount, identity, secret, and output authority explicit.
@@ -206,7 +300,8 @@ The initial controlled-session work does not:
 
 **Lease**
 : Host Reploy's binding between one controller connection, admitted run,
-  generation, capability set, and the runtime resources created for it.
+  controller and workload generations, capability set, and the runtime
+  resources created for it.
 
 **Session handle**
 : An opaque identifier valid only within its lease. It never conveys arbitrary
@@ -215,9 +310,9 @@ The initial controlled-session work does not:
 **Session channel**
 : A private channel between the controller and the attached Host Reploy
   operation. It is created for one already planned lease and carries PTY data,
-  bounded controller requests, declared endpoint streams, and host-observed
-  lifecycle events. It grants no session-creation or general host-runtime
-  authority and is never mounted into the workload container.
+  bounded controller requests, and host-observed lifecycle events. It grants no
+  session-creation or general host-runtime authority and is never mounted into
+  the workload container.
 
 ## Architecture
 
@@ -228,7 +323,7 @@ Host attached Reploy operation
 ├── records their exact identities and starts the session watchdog
 ├── starts the controller and workload containers
 ├── owns the Docker TTY attachment and framed session protocol
-├── forwards only predeclared workload endpoints
+├── creates the lease-owned controller/workload network
 ├── monitors and cleans every leased runtime resource
 └── independently observes lifecycle completion
          ⇅
@@ -237,17 +332,20 @@ Host attached Reploy operation
 Controller container
 ├── controller orchestration
 ├── optional policy, inspection, or capture components
-└── optional controller-local endpoint adapter
+└── native clients for granted workload endpoints
 
 Workload container
 ├── untrusted workload shell on the Docker-managed PTY
 └── declared services and endpoints
 ```
 
-The host invocation selects the staged generation and complete runtime plan
-before either container starts. Host Reploy validates that fixed plan, admits
-one live run, creates both containers, and binds the session channel to the
-resulting lease. The controller never requests creation of a deployment or
+The host invocation selects separate controller and workload staging
+directories, validates both exact current generations and complete runtime
+plans, and resolves one declared controller command plus its forwarded
+arguments before either container starts. Host Reploy admits one live run,
+creates both containers, and binds the session channel to the resulting lease.
+The workload begins as an ordinary persistent shell without caller-supplied
+workload arguments. The controller never requests creation of a deployment or
 container and cannot select mounts, identity, environment, output destinations,
 networks, or another generation through the channel.
 
@@ -357,7 +455,8 @@ A controlled session adds orchestration, not a stronger or weaker workload
 sandbox. Its workload consumes the ordinary Reploy application-runtime policy.
 Relative to an ordinary Reploy shell or application command, it adds:
 
-- a controller-owned lease bound to one deployment generation and live run;
+- a controller-owned lease bound to exact controller and workload generations
+  and one workload live run;
 - a persistent PTY and typed host-mediated protocol;
 - a private controller-to-host session channel;
 - an immutable, prevalidated runtime plan;
@@ -375,15 +474,21 @@ runtime sandbox.
 Before starting either container, Host Reploy produces a host-side authorization
 record containing:
 
-- the deployment identity;
-- the exact current generation reference and build identity;
-- the admitted live-run identity;
-- the effective runtime plan;
-- the effective runtime identity inherited from the execution scope;
-- the network and endpoint grants;
-- the mount and source grants;
-- the permitted session and endpoint operations;
-- the lease lifetime and owner connection.
+- the controller and workload deployment identities;
+- both exact current generation references and build identities;
+- the opaque session handle and proposed live-run identity;
+- both effective runtime identities inherited from their execution scopes;
+- digests that bind both complete effective runtime plans, including commands,
+  environment, network, mounts, masks, and inert lifecycle commands;
+- the permitted session operations and logical endpoint identities.
+
+The authorization record is portable immutable data; it does not serialize a
+live connection or make ownership transferable. Host Reploy binds the record
+to its admitted live-run lease, permits exactly one controller connection to
+claim that lease, and treats that connection as the owner until it closes or
+Host Reploy cancels the session. Connection loss ends the lease. The initial
+protocol has no reconnect, ownership transfer, or operation that can extend the
+lease by presenting an authorization digest again.
 
 The controller does not receive a generic session-creation capability. After
 creation, protocol operations do not accept a deployment name, mount, identity,
@@ -391,6 +496,13 @@ environment key, output destination, network, or raw endpoint destination.
 They act only on the session and logical endpoint identities established by the
 host-created plan. A generation change invalidates admission of a pending
 session; it does not retarget a live session.
+
+Logical endpoint identities are the exact names declared by the resolved
+blueprint. Blueprint resolution and authorization validation share one
+Docker-style single path-component grammar: lowercase alphanumeric segments
+separated by `.`, `_`, `__`, or one or more `-`, with a 128-byte maximum. Full
+image-reference syntax is not accepted. This keeps the immutable capability
+record aligned with every blueprint that can reach runtime planning.
 
 A unique private endpoint and opaque handle prevent accidental cross-session
 use, but secrecy is not the sole security boundary. Isolation relies on:
@@ -414,11 +526,8 @@ bytes are never parsed as protocol messages.
 - `terminate`: request bounded graceful session termination.
 - `complete`: after Host Reploy has emitted `workload_outputs_finalized`, declare
   that the controller has finalized its client-owned results. It does not stop
-  an active workload and is rejected before workload output reaches a terminal
-  state.
-- `open_endpoint(request_id, endpoint_id)`: request one byte stream to a logical
-  endpoint fixed in the immutable session plan. `request_id` correlates the
-  result with this request; it is not the stream identity.
+  an active workload and is rejected until successful publication of the
+  workload-output-finalization event.
 - `acknowledge_terminated`: confirm receipt of the authoritative `terminated`
   event. This payload-free protocol handshake is mandatory housekeeping, not a
   granted capability, and is accepted only after Host Reploy has successfully
@@ -427,41 +536,42 @@ bytes are never parsed as protocol messages.
 Admission cancellation is host-owned and is not a session-protocol request.
 Host-terminal Ctrl-C while waiting removes the caller's queued operation. Once
 admitted, host cancellation terminates that caller's session and cleans its
-lease. The exact promotion-versus-cancellation boundary is a global admission
-queue invariant tracked as separate pre-release work.
+lease. The global admission queue reserves newly available capacity with an
+internal `ready` state. The owning caller atomically chooses under the operation
+lock between removing that unstarted reservation after cancellation and
+claiming it as active. That `ready`-to-`active` claim is the authoritative
+admission point; cancellation observed afterward uses normal active-operation
+cleanup and no canceled request is replayed.
 
 ### Session Events
 
-- `opened`: reports the effective dimensions, identity, generation, and fixed
-  session capabilities.
+- `opened`: reports the effective dimensions, both runtime identities and
+  generations, fixed session capabilities, and workload-output-finalization
+  timeout.
 - `output(bytes)`: ordered PTY output bytes.
 - `workload_exit(status, reason)`: reports host-observed workload-shell
   exit.
 - `terminating(cause)`: reports that the host-owned terminal transition began.
 - `diagnostic(code, message)`: reports protocol, runtime, or cleanup failure
   without embedding secret values.
-- `endpoint_opened(request_id, endpoint_id, stream_id)`: reports a successful
-  endpoint open and assigns its host-generated session-unique stream identity.
-- `endpoint_open_failed(request_id, endpoint_id, code, message)`: reports an
-  unsuccessful endpoint open without assigning a stream identity.
-- `endpoint_closed(stream_id, endpoint_id, reason)`: reports one forwarded
-  endpoint stream ending.
 - `workload_outputs_finalized(status, reason)`: establishes that no further
   workload output can arrive. `status` is `drained` when every byte was
   delivered and `failed` when bounded finalization had to close an incomplete
   output surface.
 
-Every well-formed `open_endpoint` request receives exactly one correlated
-`endpoint_opened` or `endpoint_open_failed` outcome. Request IDs are nonzero
-controller-generated 64-bit values and must be unique while a request is
-pending. Stream IDs are nonzero host-generated 64-bit values and are unique for
-the session. Protocol-invalid frames are handled as protocol errors rather than
-endpoint-open outcomes.
-
 Host Reploy emits the authoritative lease lifecycle result:
 
-- `terminated(cause, workload_status, controller_finalization_status,
-  cleanup_status, recovery_action)`.
+- `terminated(cause, workload_status, workload_output_finalization_status,
+  runtime_observation_status, controller_finalization_status, cleanup_status,
+  recovery_action)`.
+
+`runtime_observation_status` is `maintained` only when Host Reploy retained
+authoritative runtime observation through terminal-result creation. It is
+`lost` when observation failed at any earlier point, including after workload
+outputs were finalized or the controller completed. This independent monotonic
+fact prevents a late observation failure from being hidden by an earlier
+termination cause or otherwise successful statuses. A `lost` status always
+makes the session invalid, regardless of every other terminal field.
 
 `controller_finalization_status` reports the controller protocol outcome:
 `completed`, `lost`, `finalization-timeout`, `not-completed`, or
@@ -484,53 +594,36 @@ uses bounded buffers. A slow controller applies backpressure; Reploy does not
 silently drop or reorder terminal bytes. Limits and timeout diagnostics are
 explicit.
 
-PTY, endpoint, and lifecycle streams use independent bounded flow-control
-windows. A stalled browser transfer cannot indefinitely block terminal output,
-termination, or the authoritative lifecycle result.
+PTY and lifecycle streams use independent bounded flow-control windows.
 
 Host Reploy owns workload-output finalization; it never waits indefinitely for
 workload cooperation. Once termination begins, it rejects new output surfaces,
 performs bounded graceful shutdown followed by forced container stop, and
-continues draining the PTY plus every existing endpoint stream. The immutable
-session plan carries a finite output-finalization deadline. The initial
-implementation may use a fixed host-owned value, but the effective value is
-reported by `opened` and applies to workload shutdown, final buffered-byte
-delivery, and controller backpressure.
+continues draining the PTY. The immutable session plan carries a finite
+output-finalization deadline. Protocol v1 defines an initial host-owned default
+of 30 seconds; the effective value is reported by `opened` and applies to
+workload shutdown, final buffered-byte delivery, and controller backpressure.
 
 If every final byte is delivered and every output surface reaches EOF before
 the deadline, Host Reploy emits `workload_outputs_finalized(drained)` only after
 all earlier output has been consumed through its flow-control window. If the
 deadline expires, or a runtime error makes complete delivery unverifiable,
-Host Reploy forcibly closes the remaining surfaces and emits
-`workload_outputs_finalized(failed, reason)`. The multiplexing layer guarantees
-that no output frame can follow either outcome. Failure is explicit and cannot
-be converted into successful completion by `complete` or terminal
-acknowledgement.
+Host Reploy forcibly closes the remaining surfaces, records the failed outcome,
+and emits `workload_outputs_finalized(failed, reason)` while the controller
+transport remains intact. Any event-frame write failure is terminal: the frame
+header or payload may have been written partially, so Host Reploy closes the
+connection and never appends another event. That failure latches
+`controller_lost`; the output-finalization failure remains in the invoking host
+operation's result even though the damaged channel cannot carry it. The
+multiplexing layer guarantees that no output frame can follow a successfully
+emitted finalization outcome. Failure cannot be converted into successful
+completion by `complete` or terminal acknowledgement.
 
-The barrier covers every workload-originated output surface declared by the
-session plan. Initially these are the PTY and forwarded endpoint streams. A
-future workload output-file or output-directory contract joins the same
-barrier after its files are closed, validated, and published or have recorded
-an explicit failure; protocol v1 does not otherwise speculate about file
-payloads.
-
-Every endpoint byte frame in either direction carries its `stream_id`. Host
-Reploy assigns that ID only after the endpoint connection succeeds, never
-reuses it within the session, and rejects data or closure operations for an
-unknown or already closed ID. The logical `endpoint_id` remains the capability
-being exercised; it is not sufficient to distinguish concurrent connections
-to that endpoint.
-
-The initial implementation also enforces fixed Host Reploy maxima of 32 active
-streams per logical endpoint, 64 active endpoint streams per session, and 64
-new endpoint streams per second per session with a burst of 128. Reploy reserves
-capacity before dialing or allocating stream state and releases it when the
-stream closes. An excess `open_endpoint` request is not queued or dialed; it is
-rejected immediately with a correlated `endpoint_open_failed` event whose code
-is `resource_exhausted`.
-Blueprints and controllers cannot raise these host-owned limits. A future
-general Reploy configuration surface may make them operator-configurable after
-concrete use cases justify that surface.
+The barrier initially covers the PTY. A future workload output-file or
+output-directory contract joins the same barrier after its files are closed,
+validated, and published or have recorded an explicit failure; protocol v1
+does not otherwise speculate about file payloads. Native network traffic is not
+session output and does not pass through this barrier.
 
 A PTY merges standard output and standard error. The contract does not pretend
 to recover separate streams.
@@ -568,16 +661,18 @@ or impersonate the control connection.
 The session channel exists only between the intended controller and the
 attached Host Reploy operation. It is never mounted into the workload
 container. Its handshake binds the connection to the host-created lease, exact
-generation, protocol version, fixed capability set, and expected controller
-identity. Server-side checks enforce every operation; an opaque or private
-endpoint is not treated as authorization by itself.
+controller and workload generations, protocol version, fixed capability set,
+and expected controller identity. Server-side checks enforce every operation;
+an opaque or private endpoint is not treated as authorization by itself.
 
 The initial Linux transport is one Unix-domain socket in a fresh,
-lease-private host directory mounted only into the controller. Filesystem
-ownership and mode restrict access to the effective controller identity. The
-controller establishes one multiplexed connection, after which Host Reploy may
-remove the socket pathname. No endpoint path, token, or descriptor appears in
-the workload container, image metadata, or workload environment.
+lease-private host directory mounted read-only and only into the controller.
+Filesystem ownership and mode restrict access to the effective controller
+identity. The mount is a narrow protocol capability rather than a host input or
+shared-state grant, including when the controller runs as root. The controller
+establishes one multiplexed connection, after which Host Reploy may remove the
+socket pathname. No endpoint path, token, or descriptor appears in the workload
+container, image metadata, or workload environment.
 
 Host Reploy owns the Docker TTY attachment, keeps control framing separate from
 terminal bytes, and performs all signaling and process-tree teardown. The
@@ -589,9 +684,8 @@ sequences, fake exit messages, and protocol-looking output cannot create
 control or lifecycle events.
 
 Root workload code has more authority inside its own container, but it still
-cannot reach the host-controlled session channel. A forged terminal message,
-workload exit, or closed endpoint stream cannot become an authoritative
-successful termination.
+cannot reach the host-controlled session channel. A forged terminal message or
+workload exit cannot become an authoritative successful termination.
 
 ## Runtime Identity
 
@@ -634,7 +728,8 @@ generation rather than changing the staged generation.
 Root applies when the effective runtime UID is `0`: because staged or
 user-scope Reploy was invoked as root, or because a system-scope installation
 explicitly selected root. It is never inherited merely from the base image's
-configured `USER`.
+configured `USER`. Reploy preserves that root identity's effective primary GID
+rather than assuming or normalizing it to GID `0`.
 
 A root runtime identity does not emit a generic warning. With the global
 sandbox enforced, its additional authority is limited to container-scoped
@@ -836,54 +931,125 @@ All Reploy application runtime containers default to:
 - local network disabled.
 
 These are independent policy switches. A controlled workflow applies them
-separately to the controller and workload environments. Local
-denial includes host gateways, Docker peers outside the granted operation,
-loopback redirection, private and link-local address ranges, IPv6 local ranges,
-and infrastructure metadata endpoints.
+separately to the controller and workload environments. Local denial includes
+host-loopback redirection, private and link-local address ranges, IPv6 local
+ranges, and infrastructure metadata endpoints. Translation and tunneling
+ranges that can represent either public or local destinations require both
+grants by default. The initial coarse classifier follows the destination
+address; topology-resistant peer and gateway confinement belongs to the
+deferred L3 gateway design.
 
-The initial implementation preserves this coarse public/local policy intent
-and exact declared endpoint grants, using only backend isolation and endpoint
-primitives whose behavior Reploy can verify. A backend that cannot realize a
-requested combination fails closed. This slice does not introduce a custom
-packet gateway and must not claim destination-, port-, domain-, DNS-, or
-packet-level enforcement beyond what the selected primitive actually proves.
+The initial Linux/Docker implementation enforces this coarse public/local
+policy with IPv4 and IPv6 nftables rules inside each application container's
+network namespace. A trusted Reploy helper begins with only the setup
+capabilities needed to install those rules and assume the planned application
+identity. It then empties every capability set and the capability bounding
+set, locks securebits and `no-new-privileges`, verifies seccomp and the final
+kernel state, and executes the exact application argv. Reploy-issued execs use
+the same guarded authority-drop path. A raw Docker daemon client remains a
+trusted host operator outside this sandbox boundary.
+
+`public` classifies globally routable IP destinations. `local` classifies
+private, link-local, multicast, reserved, and infrastructure metadata
+destinations. `ambiguous` covers predefined translation and tunneling ranges;
+its default `require-both` admits them only when both ordinary classes are
+allowed. IPv4-mapped IPv6 socket addresses use the class of their embedded IPv4
+destination because Linux emits them as IPv4 packets. The temporary
+`ambiguous: allow` escape hatch admits the remaining ambiguous class
+independently. It is intentionally discouraged because an apparently public
+translated address may reach a local destination, and it should be deprecated
+once the deferred L3 gateway can enforce the underlying destination policy.
+Container-local loopback remains available and cannot address host loopback
+through the container network namespace. The backend configures the
+container's DNS path from the same two grants:
+
+| Public | Local | DNS path |
+| --- | --- | --- |
+| deny | deny | no DNS |
+| deny | allow | the host's configured resolver, preserving local, VPN, and split-DNS behavior |
+| allow | deny | the built-in Google Public DNS profile (`8.8.8.8`, `8.8.4.4`) |
+| allow | allow | the host's configured resolver, which normally provides both local and public resolution |
+
+For Docker, the local-capable path leaves DNS selection to Docker so it derives
+the container's resolver path from the host. The public-only path passes the
+selected Google Public DNS profile through Docker's per-container DNS
+configuration. Docker writes the resulting container resolver configuration:
+the default bridge normally receives host-derived resolver addresses, while a
+custom network exposes Docker's embedded resolver at `127.0.0.11` and forwards
+to the selected upstreams. Before installing the packet filter, the trusted
+startup helper reads those engine-authored resolver addresses and admits TCP
+and UDP port 53 only to them whenever either network class is granted. This is
+an engine-owned DNS exception, not general access to the resolver's address
+class.
+
+Resolver selection is host policy, not blueprint policy. Future Reploy host
+configuration may override the default local and public resolver choices. The
+backend does not classify or filter DNS answers. A local resolver may return a
+public address and a public resolver may return a private address, but every
+subsequent connection still passes the ordinary destination policy. When both
+ordinary classes are enabled, egress is unrestricted, but the packet filter
+remains in place to admit new inbound connections only on declared endpoint
+ports. The helper always applies the same identity and authority-drop invariant.
+A backend that cannot install and verify the policy fails closed.
+
+This slice does not introduce the deferred userland L3 gateway and must not
+claim domain-, URL-, DNS-content-, general outbound destination-port-, or
+audit-level policy.
 
 A controller may receive an explicit session-local grant to a declared
-workload endpoint. That grant is not treated as general local-network
-access.
+workload endpoint. Endpoint declarations remain the stable intent and the
+future enforcement unit, but the initial direct-network backend does not claim
+to enforce each declaration as a precise capability boundary.
 
 The first OmegaFlow prototype needs only:
 
 ```text
-controller browser -> Host Reploy -> one declared workload HTTP endpoint
+controller browser -> lease-private Docker network -> workload HTTP endpoint
 ```
 
-The controller and workload do not share a Docker network. Docker publishes
-only the declared workload port to an ephemeral host-loopback port. A
-controller-local adapter accepts Chromium connections on controller
-loopback and multiplexes their byte streams over the private session channel.
-Host Reploy maps the fixed logical endpoint identity to the loopback-published
-port. The protocol accepts no raw host, IP address, port, or URL destination.
-The workload cannot use this one-way forwarding path to reach the controller.
+The initial implementation attaches only the controller and workload to one
+fresh lease-owned, engine-internal Docker network. The immutable plans carry a
+separate session-network grant that admits that lease network inside both
+containers; it does not set or imply general `local: allow`. The initial backend
+admits the complete lease network in both directions. The controller uses
+ordinary native TCP to the workload's session-local network identity and
+declared port. Endpoint coordinates are resolved before startup as part of the
+immutable controller and workload plans; endpoint traffic never enters the
+private session channel and no workload port is published on the host.
 
-The loopback-published port is never disclosed to the controller, but any local
-host process that discovers it may connect while the session is active. The
-initial implementation accepts this host-local exposure; its session grant
-constrains the controller, not unrelated host processes. It must not claim
-per-lease endpoint privacy on a multi-user host. The port, adapter streams, and
-associated Docker state remain lease-owned and are removed with the session.
-The future L3 policy gateway must eliminate this direct host reachability or
-enforce equivalent per-lease access control. General public/local network denial
-remains a separate prerequisite; this endpoint forwarding path is not a general
-router, HTTP policy engine, or domain-aware firewall.
+This is intentionally a coarse pre-gateway boundary. Membership in the private
+network gives the controller reachability to workload ports beyond the declared
+endpoint and gives the workload network reachability toward the controller.
+The containers still receive no route to unrelated containers, the host local
+network, or the public Internet unless separately granted, and the controller
+must not expose sensitive listeners on its session-network interface. Reploy
+reports this limitation rather than describing endpoint declarations as fully
+enforced capabilities.
+
+The target L3 policy gateway hardens this direct native transport. It gives the
+controller and workload separate session network identities and permits TCP
+only from the controller to exact declared workload addresses and ports. It
+denies workload-initiated connections to the controller, undeclared workload
+ports, unrelated containers, and ungranted networks.
+
+Gateway policy, addresses, and network resources are lease-owned. Host Reploy
+installs them before either application can use the route, verifies the
+root-resistant policy, and removes or reconciles them during session teardown.
+After gateway parity is proven on the supported Docker, Podman, and Desktop
+backends, it replaces the coarse shared-network policy without changing how
+applications use native TCP. PTY, lifecycle, termination, and diagnostic
+traffic remain on the private session channel.
+
+General public/local network denial remains a separate prerequisite; neither
+endpoint backend is a general HTTP policy engine or domain-aware firewall.
 
 General network isolation and auditability are a separate design surface.
-Future work may include an HTTP/HTTPS proxy, destination policy, controlled
-DNS, and agent-sandbox audit records. HTTPS `CONNECT` can filter and audit a
+Future work may include an HTTP/HTTPS proxy, destination and DNS-content
+policy, and agent-sandbox audit records. HTTPS `CONNECT` can filter and audit a
 destination hostname without TLS interception, but cannot inspect encrypted
 URLs or content. Direct egress must be blocked to prevent proxy bypass.
-Redirects, DNS rebinding, CDNs, WebSockets, QUIC, and workload-to-network
-policy require explicit treatment.
+Redirects, DNS rebinding, CDNs, WebSockets, QUIC, and workload-to-network policy
+require explicit treatment.
 
 Until that design is implemented, rough public and local kill switches must
 fail closed and must not be described as domain-level isolation.
@@ -898,8 +1064,9 @@ For the OmegaFlow profile:
 - Host Reploy owns the Docker TTY attachment and external session supervision;
 - the shell runs on the Docker-managed PTY in the workload container;
 - the demonstrated web service runs in the workload environment;
-- Chromium reaches that service only through its controller-local adapter and
-  the one granted Host Reploy endpoint stream.
+- Chromium reaches that service over the lease-private native network; the
+  initial backend has the documented coarse shared-network gap and the target
+  gateway backend enforces the declared endpoint direction and port.
 
 Terminal-to-browser handoff is an OmegaFlow orchestration concern inside the
 controller. Reploy does not model beats, handoffs, browser actions, or capture
@@ -948,18 +1115,26 @@ preparing -> active -> terminating -> terminated
 
 The first accepted termination cause is latched and never rewritten. Causes
 include controller-requested termination, workload exit, host cancellation,
-controller loss, Docker-observation loss, and startup failure. Later events
-remain diagnostic observations. Workload status, controller finalization
-status, and pre-delivery cleanup success are reported separately in the session
-result, so a cleanup failure can fail the operation without hiding its original
-cause. Controller exit and delivery-tail cleanup are reported separately by the
-invoking host operation after teardown.
+controller loss, Docker-observation loss, cleanup-containment loss, and startup
+failure. Cleanup-containment loss means the ready session watchdog exited
+before verified disarm; it does not claim Docker observation was lost. Later
+events remain diagnostic observations. Workload status,
+workload-output-finalization status, runtime-observation status, controller
+finalization status, and pre-delivery cleanup success are reported separately
+in the session result, so a late observation or cleanup failure can fail the
+operation without hiding its original cause. Controller exit and delivery-tail
+cleanup are reported separately by the invoking host operation after teardown.
 
-Channel closure is never successful completion. The controller must explicitly
-send `complete` after receiving `workload_outputs_finalized` and finalizing its
-client-owned results; for OmegaFlow these include the recording artifacts.
-Repeated terminate or host cancel operations are idempotent. Input, resize, and
-new endpoint streams are rejected after `terminating` begins. A single
+Channel closure is never successful completion. A controller granted the
+`complete` operation must explicitly send `complete` after receiving
+`workload_outputs_finalized` and finalizing its client-owned results; for
+OmegaFlow these include the recording artifacts. Host Reploy does not open a
+controller-finalization wait when `complete` was not granted and records that
+controller as `not-completed` in the terminal result.
+Repeated terminate or host cancel operations are idempotent. Input and resize
+are rejected after `terminating` begins, and Host Reploy cancels any accepted
+input or resize operation still blocked in the runtime before it begins
+workload teardown. This cancellation does not stop request dispatch: a single
 `complete` remains valid during termination while Host Reploy is waiting for
 controller finalization. A `failed` workload-output result makes the session
 fail regardless of whether the controller preserves and finalizes partial
@@ -970,22 +1145,28 @@ Normal completion is:
 1. Host Reploy observes workload exit, or a controller or host operation
    requests termination.
 2. Host Reploy atomically latches the cause and enters `terminating`.
-3. Host Reploy performs bounded graceful termination followed by forced
-   termination when necessary.
+3. Host Reploy cancels any in-flight workload request, then performs bounded
+   graceful termination followed by forced termination when necessary.
 4. Host Reploy independently observes the exact workload container stopped.
 5. Host Reploy drains and closes every declared workload-output surface under
    the finite output-finalization deadline, then emits the one ordered
    `workload_outputs_finalized` outcome.
-6. Host Reploy gives the live controller a bounded finalization period in which
-   to close its client-owned output and send `complete`. A failed output outcome
-   remains a session failure even when partial client artifacts are finalized.
-7. Host Reploy removes the workload container, endpoint publication, temporary
-   mounts, networks, and every other lease resource not required to deliver the
-   final result. It keeps the controller and private session channel alive.
-8. Host Reploy records the original cause, controller-finalization result,
-   workload status, controller protocol status, and pre-delivery cleanup result,
-   then emits the one authoritative `terminated` event. Only successful event
-   delivery arms the acknowledgement wait.
+6. When the live controller was granted `complete`, Host Reploy gives it a
+   bounded finalization period only after that event is successfully published.
+   A response arriving while publication finishes is held until publication's
+   authoritative outcome is recorded; an earlier response is rejected. The
+   controller may then close its client-owned output and send `complete`.
+   Without that grant, Host Reploy skips the wait and records `not-completed`.
+   A failed output outcome remains a session failure even when partial client
+   artifacts are finalized.
+7. Host Reploy removes the workload container, temporary mounts, networks, and
+   every other lease resource not required to deliver the final result. It
+   keeps the controller and private session channel alive.
+8. Host Reploy records the original cause, workload status,
+   workload-output-finalization status, runtime-observation status,
+   controller-finalization status, and pre-delivery cleanup result, then emits
+   the one authoritative `terminated` event. Only successful event delivery
+   arms the acknowledgement wait.
 9. Host Reploy waits for a bounded `acknowledge_terminated` response. Channel
    closure is not an acknowledgement. Timeout or disconnect does not block
    teardown.
@@ -998,15 +1179,20 @@ A controller disconnect latches `controller_lost` and starts the same teardown.
 A workload exit is reported to the still-live controller so it can finalize
 its client-owned results; the session cannot succeed if the controller
 disappears before that finalization. Neither terminal output nor an
-endpoint-stream close can substitute for host-observed Docker state.
+application-level connection close can substitute for host-observed Docker
+state.
 
 ### Session Watchdog
 
 Host Reploy starts one short-lived watchdog for each live controlled session.
 It first creates inert Docker resources and durably records their exact
 identities. Before starting either container, it passes the watchdog an
-immutable cleanup manifest containing the exact lease, container, endpoint,
-network, volume, and host boot identities. The attached operation retains one
+immutable cleanup manifest containing the exact lease, container, network,
+volume, host boot, and verified local Docker endpoint identities. Controller
+and workload creation, attachment, start, observation, resize, stop, and
+cleanup use that one pinned endpoint; the watchdog and next-operation
+reconciliation reuse it instead of resolving the mutable active Docker context.
+The attached operation retains one
 end of a private parent pipe. A crash during inert resource creation leaves no
 untrusted code running and is handled by ordinary next-operation
 reconciliation.
@@ -1018,6 +1204,23 @@ only the manifested resources. The watchdog exposes no listener, accepts no
 later resource selection, and exits after verified cleanup. Although its
 underlying Docker connection has ordinary trusted-host authority, its code path
 is limited to the immutable resource set.
+
+The attached supervisor also observes the watchdog process itself. If a ready
+watchdog exits before workload activation, startup fails before workload code
+runs. If it exits while the workload is active, Host Reploy latches
+`cleanup-containment-lost`, sends a bounded structured diagnostic while the
+controller transport remains healthy, and begins normal teardown. The original
+termination cause still wins if termination had already begun. Verified host
+cleanup may complete the durable ownership record even though containment loss
+makes the session result unsuccessful.
+
+The attached operation creates the exact private incident-receipt target while
+it still holds the workload deployment lock and before it prepares the channel
+or either container. The watchdog receives only that inherited file descriptor;
+it cannot select a state path. Parent-liveness EOF or a malformed control byte
+writes one canonical receipt after the bounded cleanup attempt. The receipt
+records only fixed ownership and cleanup facts. Normal verified disarm and a
+host-observed watchdog failure remove the unused target.
 
 If Docker is unavailable, the watchdog retries until Docker returns or the host
 reboots. If both the attached operation and watchdog are killed, durable labels
@@ -1034,10 +1237,10 @@ networking are unavailable.
 
 Loss of authoritative Docker observation therefore immediately latches
 `runtime_observation_lost`, fails the recording, and closes its session and
-endpoint streams. The session is never resumed or accepted as valid after
-observation returns. Host Reploy and the watchdog retry Docker access and
-forcibly remove any survivors when control returns. Immediate termination while
-Docker itself is unreachable is not promised.
+network. The session is never resumed or accepted as valid after observation
+returns. Host Reploy and the watchdog retry Docker access and forcibly remove
+any survivors when control returns. Immediate termination while Docker itself
+is unreachable is not promised.
 
 A real host reboot ends the processes. The no-restart policy prevents their
 automatic return, and prior-boot queue entries are discarded under Reploy's
@@ -1046,8 +1249,9 @@ existing boot-session admission rules.
 ## Staging and Generation Semantics
 
 Basic preflight validation uses the existing `reploy validate` behavior.
-Creating a session requires a successfully staged and built current generation.
-The session is pinned to that generation for its complete lifetime.
+Creating a session requires successfully staged and built current controller
+and workload generations. The session is pinned to both generations for its
+complete lifetime.
 
 Updating a staging directory with the same environment follows ordinary
 stage-update behavior. Attempting to stage a different environment into the
@@ -1063,7 +1267,8 @@ An explicit forced replacement:
 - never treats force as permission to recursively delete the staging
   directory.
 
-A generation update never retargets a live controlled session.
+A controller or workload generation update never retargets a live controlled
+session.
 
 ## Audit and Diagnostics
 
@@ -1085,6 +1290,23 @@ Diagnostics identify which operation failed, what Reploy attempted, whether
 the session channel or Docker lifecycle was observed, what cleanup ran, and the
 safe next action.
 
+Crash containment includes a bounded durable incident receipt for failures
+that outlive the attached Host Reploy process. It records only
+allowlisted lifecycle, observation, exit-status, cleanup, and recovery facts.
+It does not duplicate PTY output, environment names or values, secrets,
+arbitrary container logs, or unrestricted Docker output. Host Reploy creates
+the exact private receipt target before startup and gives the watchdog only the
+narrow write authority needed for that target; the child does not select an
+arbitrary state path. Completed receipts are available through lock-protected
+list and explicit acknowledgement APIs that do not contact Docker. The parent
+and watchdog retain an advisory lock on the inherited target until both have
+closed it; an empty locked target is preserved because the surviving watchdog
+may still write, while an empty unlocked target is ignored and removed.
+Malformed or oversized receipts fail closed, completed receipts are not
+silently evicted, and the fixed retention bound blocks new session startup
+until receipts are handled. A parent-liveness EOF proves parent loss but cannot
+by itself distinguish `SIGKILL`, an OOM kill, or another abrupt process death.
+
 ## Resource and Timeout Policy
 
 Controlled sessions have explicit limits for:
@@ -1094,11 +1316,9 @@ Controlled sessions have explicit limits for:
 - termination grace;
 - buffered terminal output;
 - controller request size;
-- active endpoint streams and endpoint-open rate;
 - process, memory, CPU, and temporary-disk resources where supported.
 
-Limit failures produce a structured diagnostic. Endpoint-admission limits
-reject only the excess request as specified above; a timeout or session-wide
+Limit failures produce a structured diagnostic. A timeout or session-wide
 resource failure that makes safe continuation impossible produces bounded
 teardown. A timeout never converts into successful completion.
 
@@ -1120,27 +1340,35 @@ Implementation status: the canonical application sandbox plan and its identity
 and kernel baseline are implemented for persistent Compose workloads and
 transient application commands. Reploy now imports canonical supplementary
 groups, rejects root-group membership for non-root identities, starts transient
-commands directly as the final identity, drops all capabilities, enables
+commands through the trusted setup helper, drops all capabilities before the
+application starts, enables
 `no-new-privileges`, explicitly selects Docker's built-in seccomp profile, and
 prohibits privileged mode, host namespaces, and host devices in the common
 plan. Live Docker tests inspect both runtime paths. Trusted production startup
 verification is also implemented: Reploy packages the platform-specific probe
 in a final runtime layer, creates the locked container-local account there,
 records that layer outside the provider graph, and uses its fixed
-verify-and-exec contract as the outermost process for persistent
+sandbox-and-exec contract as the outermost process for persistent
 workloads, transient commands, shells, and lifecycle commands. The verifier
-fails closed unless `/proc/self/status` reports seccomp filtering,
-`no-new-privileges`, and empty effective, permitted, and bounding capability
+fails closed unless the calling thread's `/proc/thread-self/status` (or the
+compatible `/proc/self/task/<tid>/status`) reports seccomp filtering,
+`no-new-privileges`, and empty inheritable, effective, permitted, bounding, and
+ambient capability
 sets, then directly executes the exact application argv. Private-environment
 workloads use one additional fixed Reploy step: after verification, the probe
 executes the environment injector, which imports the private variables and then
-executes the unchanged application argv. Network denial and resource limits
-remain separate prerequisite slices. Root host authority is now enforced at
-runtime: host sources are classified as input, shared state, or explicit
-output; UID 0 is rejected for all three before container creation; and root
-output options are rejected before host-path preparation. Docker-managed
-volumes and tmpfs remain available to root. Ordinary binds also reject
-canonical host root, `/proc`,
+executes the unchanged application argv. The same helper now installs the
+default-deny application-network policy for persistent and transient containers
+while preserving exact declared inbound endpoints. Live Docker coverage
+exercises all four public/local combinations over IPv4 and IPv6, strict and
+escaped ambiguous-range handling, a globally reachable exception nested inside
+a reserved parent range, a root default-denial case, non-root authority removal,
+guarded exec, and host-loopback denial. Resource limits remain a
+separate prerequisite slice. Root host authority is now enforced at runtime:
+host sources are classified as input, shared state, or explicit output; UID 0 is
+rejected for all three before container creation; and root output options are
+rejected before host-path preparation. Docker-managed volumes and tmpfs remain
+available to root. Ordinary binds also reject canonical host root, `/proc`,
 `/dev`, and `/sys` sources plus equivalent protected filesystem mounts detected
 through native filesystem identity. Explicit non-root directory binds
 intentionally grant access to their remaining unmasked contents, including
@@ -1151,7 +1379,8 @@ launch-time scan as durable confinement.
 
 Using synthetic controller and workload images with networking disabled:
 
-- validate one immutable plan and admit its exact generation;
+- validate one immutable controller/workload plan pair and admit both exact
+  generations;
 - start both containers without giving the controller Docker access;
 - establish the private controller channel and external Docker TTY supervision;
 - implement ordered terminal bytes, initial dimensions, resize, ordinary
@@ -1168,13 +1397,16 @@ death, Host Reploy `SIGKILL`, watchdog interruption, Docker daemon restart with
 live-restore, Docker unavailability, and host-reboot recovery without touching
 unrelated resources.
 
-### Slice 4: Declared Endpoint Forwarding
+### Slice 4: Direct Session Networking
 
-Add the controller-local adapter and Host Reploy forwarding to one exact
-host-loopback-published workload endpoint. Prove Chromium can use HTTP and
-WebSocket streams while the workload cannot reach the controller and neither
-container receives unrelated local or public access. Keep general proxy, DNS,
-domain, redirect, QUIC, and audit policy outside this slice.
+Create one lease-private Docker network containing only the controller and
+workload. Resolve the declared workload endpoint into the immutable session
+plans and prove Chromium can use ordinary HTTP and WebSocket connections
+without host publication or access to unrelated containers, host-local
+networks, or the public Internet. Test and document the initial broader mutual
+reachability inside that two-container network. Keep precise directional and
+per-port enforcement, general proxy, DNS, domain, redirect, QUIC, and audit
+policy in the deferred L3 gateway slice.
 
 ### Slice 5: OmegaFlow Proof
 
@@ -1217,16 +1449,20 @@ lease protocol.
 
 ### Network Isolation and Audit
 
-After the coarse public/local kill switches, define a separate Reploy userland
-L3 policy gateway for finer network control. Its design should cover a
-capability-free application network namespace, one-shot route initialization,
-an isolated data path whose only peer is the gateway, private gateway control,
-root-resistant route invariants, direct-egress prevention, destination and
-port grants, DNS and IPv6 policy, metadata protection, auditing, resource
-limits, failure behavior, reconciliation, and portable Docker/Podman
-integration. The one-way, exact endpoint forwarding used by the initial
-controlled session remains intentionally narrower and does not depend on this
-later gateway.
+After the implemented coarse public/local kill switches, define a separate
+Reploy userland L3 policy gateway for finer network control. Its design should
+cover separate controller and workload network identities, a capability-free
+application network namespace, one-shot route initialization, an isolated data
+path whose only peer is the gateway, private gateway control, root-resistant
+route invariants, direct-egress prevention, directional destination and port
+grants, DNS and IPv6 policy, metadata protection, auditing, resource limits,
+failure behavior, reconciliation, and portable Docker/Podman integration.
+
+The gateway becomes the target controlled-session endpoint backend. It permits
+native controller-to-declared-workload TCP while denying the reverse direction
+and every undeclared destination. Migration requires functional parity on every
+supported backend and replaces the initial coarse shared-network policy without
+changing application traffic from native TCP.
 
 ### Disposable Writable Workspaces
 

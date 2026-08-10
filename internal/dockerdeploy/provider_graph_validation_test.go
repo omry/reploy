@@ -73,13 +73,14 @@ func TestPrepareProviderGraphValidationInspectsBaseOnlyGraph(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptor := providerBaseDescriptor(t, false)
+	descriptor := providerBaseDescriptor(t, true)
 	baseImage, err := realizedImageFromDescriptor(descriptor)
 	if err != nil {
 		t.Fatal(err)
 	}
 	policy := deploy.RuntimePolicyV1{
 		Schema: deploy.RuntimePolicySchemaV1, StartupVerifier: deploy.ApplicationStartupVerifierContractV1(),
+		Network:        blueprint.RuntimeNetwork{Public: blueprint.NetworkAccessDeny, Local: blueprint.NetworkAccessDeny, Ambiguous: blueprint.AmbiguousNetworkAccessRequireBoth},
 		ProtectedPaths: []deploy.ProtectedPathV1{}, Plans: []deploy.RuntimePlanV1{},
 	}
 	result, err := prepareProviderGraphValidation(
@@ -93,13 +94,17 @@ func TestPrepareProviderGraphValidationInspectsBaseOnlyGraph(t *testing.T) {
 			if candidate.ImageID != descriptor.ConfigDigest {
 				t.Fatalf("base inspection candidate = %#v", candidate)
 			}
-			return inspectedValidationCandidate(t, descriptor), nil
+			inspectedDescriptor := descriptor
+			inspectedDescriptor.AuthorReference = string(descriptor.ConfigDigest)
+			inspectedDescriptor.ImmutableReference = string(descriptor.ConfigDigest)
+			inspectedDescriptor.ManifestDigest = ""
+			return inspectedValidationCandidate(t, inspectedDescriptor), nil
 		},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Layers) != 0 || result.Final.Image.Image != baseImage {
+	if len(result.Layers) != 0 || result.Final.Image.Image != baseImage || !reflect.DeepEqual(result.Final.Image.Descriptor, descriptor) {
 		t.Fatalf("base-only validation plan = %#v", result)
 	}
 }

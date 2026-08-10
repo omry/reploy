@@ -3,15 +3,18 @@ package probe
 import (
 	"bytes"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
 )
 
 const validApplicationKernelStatus = `Name: reploy-probe
+CapInh: 0000000000000000
 CapPrm: 0000000000000000
 CapEff: 0000000000000000
 CapBnd: 0000000000000000
+CapAmb: 0000000000000000
 NoNewPrivs: 1
 Seccomp: 2
 `
@@ -19,6 +22,64 @@ Seccomp: 2
 func TestVerifyApplicationKernelStatusAcceptsRequiredSandbox(t *testing.T) {
 	if err := verifyApplicationKernelStatus([]byte(validApplicationKernelStatus)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReadApplicationKernelStatusPrefersThreadSelf(t *testing.T) {
+	want := []byte("thread-self")
+	content, err := readApplicationKernelStatusWithV1(
+		func(got string) ([]byte, error) {
+			if got != applicationKernelStatusPath {
+				t.Fatalf("read path = %q, want %q", got, applicationKernelStatusPath)
+			}
+			return want, nil
+		},
+		func() (string, error) {
+			t.Fatal("compatibility path requested when thread-self exists")
+			return "", nil
+		},
+	)
+	if err != nil || !bytes.Equal(content, want) {
+		t.Fatalf("content = %q, error = %v", content, err)
+	}
+}
+
+func TestReadApplicationKernelStatusFallsBackToCallingTask(t *testing.T) {
+	const fallback = "/proc/self/task/123/status"
+	want := []byte("calling-task")
+	var paths []string
+	content, err := readApplicationKernelStatusWithV1(
+		func(got string) ([]byte, error) {
+			paths = append(paths, got)
+			if got == applicationKernelStatusPath {
+				return nil, os.ErrNotExist
+			}
+			if got != fallback {
+				t.Fatalf("fallback path = %q, want %q", got, fallback)
+			}
+			return want, nil
+		},
+		func() (string, error) { return fallback, nil },
+	)
+	if err != nil || !bytes.Equal(content, want) {
+		t.Fatalf("content = %q, error = %v", content, err)
+	}
+	if !reflect.DeepEqual(paths, []string{applicationKernelStatusPath, fallback}) {
+		t.Fatalf("read paths = %#v", paths)
+	}
+}
+
+func TestReadApplicationKernelStatusDoesNotBypassPrimaryReadFailure(t *testing.T) {
+	want := errors.New("permission denied")
+	_, err := readApplicationKernelStatusWithV1(
+		func(string) ([]byte, error) { return nil, want },
+		func() (string, error) {
+			t.Fatal("compatibility path requested after non-absence failure")
+			return "", nil
+		},
+	)
+	if !errors.Is(err, want) {
+		t.Fatalf("error = %v, want wrapped %v", err, want)
 	}
 }
 
@@ -36,6 +97,8 @@ func TestVerifyApplicationKernelStatusFailsClosed(t *testing.T) {
 		{name: "effective capabilities", content: strings.ReplaceAll(validApplicationKernelStatus, "CapEff: 0000000000000000", "CapEff: 0000000000000001"), want: "CapEff is 0000000000000001"},
 		{name: "permitted capabilities", content: strings.ReplaceAll(validApplicationKernelStatus, "CapPrm: 0000000000000000", "CapPrm: 0000000000000400"), want: "CapPrm is 0000000000000400"},
 		{name: "bounding capabilities", content: strings.ReplaceAll(validApplicationKernelStatus, "CapBnd: 0000000000000000", "CapBnd: 000001ffffffffff"), want: "CapBnd is 000001ffffffffff"},
+		{name: "inheritable capabilities", content: strings.ReplaceAll(validApplicationKernelStatus, "CapInh: 0000000000000000", "CapInh: 0000000000000001"), want: "CapInh is 0000000000000001"},
+		{name: "ambient capabilities", content: strings.ReplaceAll(validApplicationKernelStatus, "CapAmb: 0000000000000000", "CapAmb: 0000000000000001"), want: "CapAmb is 0000000000000001"},
 		{name: "invalid capability", content: strings.ReplaceAll(validApplicationKernelStatus, "CapBnd: 0000000000000000", "CapBnd: not-hex"), want: "not hexadecimal"},
 	}
 	for _, test := range tests {

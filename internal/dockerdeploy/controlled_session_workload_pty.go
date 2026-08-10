@@ -1,0 +1,438 @@
+package dockerdeploy
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/omry/reploy/internal/controlledsession"
+)
+
+type dockerPTYAttachmentV1 interface {
+	io.ReadCloser
+	WriteContext(context.Context, []byte) error
+}
+
+type dockerWorkloadPTYBackendV1 struct {
+	bind                   func(context.Context, CommandSpec, time.Duration) (CommandSpec, commandRunner, error)
+	run                    commandRunner
+	recordContainerID      func(string) error
+	recordRollbackVerified func()
+	attach                 func(context.Context, CommandSpec, string, time.Duration) (dockerPTYAttachmentV1, error)
+	resize                 func(context.Context, CommandSpec, string, uint32, uint32, time.Duration) error
+	observe                func(context.Context, CommandSpec, string) (int, error)
+}
+
+type dockerWorkloadPTYWaitResultV1 struct {
+	status controlledsession.ProcessStatusV1
+	err    error
+}
+
+// DockerWorkloadPTYV1 is the narrow Docker boundary owned by the attached
+// controlled-session host operation. Closing it closes only the PTY
+// attachment; container cleanup remains the lifecycle supervisor's job.
+type DockerWorkloadPTYV1 struct {
+	plan        ControlledSessionContainerPlanV1
+	docker      CommandSpec
+	containerID string
+	backend     dockerWorkloadPTYBackendV1
+	attachment  dockerPTYAttachmentV1
+
+	operationMu sync.Mutex
+	stateMu     sync.Mutex
+	started     bool
+	outputTaken bool
+	cleaned     bool
+	waitDone    chan struct{}
+	waitResult  dockerWorkloadPTYWaitResultV1
+
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (workload *DockerWorkloadPTYV1) ContainerID() string {
+	return workload.containerID
+}
+
+// PrepareDockerWorkloadPTYV1 creates the exact workload container without
+// starting it and establishes the Docker PTY attachment before returning.
+func PrepareDockerWorkloadPTYV1(
+	ctx context.Context,
+	plan ControlledSessionContainerPlanV1,
+) (*DockerWorkloadPTYV1, error) {
+	return prepareDockerWorkloadPTYWithContainerIDV1(ctx, plan, nil, nil)
+}
+
+func prepareDockerWorkloadPTYWithContainerIDV1(
+	ctx context.Context,
+	plan ControlledSessionContainerPlanV1,
+	recordContainerID func(string) error,
+	recordRollbackVerified func(),
+) (*DockerWorkloadPTYV1, error) {
+	return prepareDockerWorkloadPTYV1(ctx, plan, dockerWorkloadPTYBackendV1{
+		bind:                   bindPinnedDockerCommandRunnerV1,
+		recordContainerID:      recordContainerID,
+		recordRollbackVerified: recordRollbackVerified,
+		attach:                 attachDockerContainerPTYV1,
+		resize:                 resizeDockerContainerPTYV1,
+		observe:                observeDockerContainerExitV1,
+	})
+}
+
+func prepareDockerWorkloadPTYV1(
+	ctx context.Context,
+	plan ControlledSessionContainerPlanV1,
+	backend dockerWorkloadPTYBackendV1,
+) (*DockerWorkloadPTYV1, error) {
+	plan = cloneControlledSessionContainerPlanV1(plan)
+	if err := ValidateControlledSessionContainerPlanV1(plan); err != nil {
+		return nil, fmt.Errorf("prepare controlled-session workload PTY: %w", err)
+	}
+	if plan.Role != ControlledSessionRoleWorkloadV1 {
+		return nil, fmt.Errorf("prepare controlled-session workload PTY: container role must be %q", ControlledSessionRoleWorkloadV1)
+	}
+	if (backend.bind == nil && backend.run == nil) || backend.attach == nil || backend.resize == nil || backend.observe == nil {
+		return nil, fmt.Errorf("prepare controlled-session workload PTY: backend is incomplete")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	create := controlledSessionCommandSpecV1(plan.Create)
+	if backend.bind != nil {
+		var err error
+		create, backend.run, err = backend.bind(ctx, create, defaultDockerPreflightTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("bind controlled-session workload Docker endpoint: %w", err)
+		}
+		if backend.run == nil {
+			return nil, fmt.Errorf("prepare controlled-session workload PTY: Docker endpoint binder returned no command runner")
+		}
+	}
+	var createOutput bytes.Buffer
+	var createErrorOutput bytes.Buffer
+	if err := backend.run(create, RunOptions{Context: ctx, Stdout: &createOutput, Stderr: &createErrorOutput}); err != nil {
+		if output := trimmedCommandOutput(createErrorOutput.String()); output != "" {
+			err = fmt.Errorf("%w\ncommand output:\n%s", err, output)
+		}
+		return nil, fmt.Errorf("create controlled-session workload container %q: %w", plan.Container, err)
+	}
+	containerID, err := parseDockerContainerIDV1(createOutput.String())
+	if err != nil {
+		return nil, fmt.Errorf("create controlled-session workload container %q: %w; refusing name-based cleanup because the created container identity is unknown", plan.Container, err)
+	}
+	if backend.recordContainerID != nil {
+		if err := backend.recordContainerID(containerID); err != nil {
+			recordErr := fmt.Errorf("record controlled-session workload container %q exact ID: %w", plan.Container, err)
+			if cleanupErr := rollbackControlledSessionWorkloadContainerV1(backend, plan, containerID); cleanupErr != nil {
+				retryErr := backend.recordContainerID(containerID)
+				if retryErr != nil {
+					retryErr = fmt.Errorf("retry controlled-session workload container %q exact ID after rollback failure: %w", plan.Container, retryErr)
+				}
+				return nil, errors.Join(recordErr, fmt.Errorf("remove inert controlled-session workload container %q after ownership-recording failure: %w", plan.Container, cleanupErr), retryErr)
+			}
+			if backend.recordRollbackVerified != nil {
+				backend.recordRollbackVerified()
+			}
+			return nil, recordErr
+		}
+	}
+	attachment, err := backend.attach(ctx, create, containerID, defaultDockerPreflightTimeout)
+	if err != nil {
+		attachErr := fmt.Errorf("attach controlled-session workload PTY for container %q before start: %w", plan.Container, err)
+		if cleanupErr := rollbackControlledSessionWorkloadContainerV1(backend, plan, containerID); cleanupErr != nil {
+			return nil, errors.Join(attachErr, fmt.Errorf("remove inert controlled-session workload container %q after attach failure: %w", plan.Container, cleanupErr))
+		}
+		if backend.recordRollbackVerified != nil {
+			backend.recordRollbackVerified()
+		}
+		return nil, attachErr
+	}
+	return &DockerWorkloadPTYV1{
+		plan: plan, docker: create, containerID: containerID, backend: backend, attachment: attachment, waitDone: make(chan struct{}),
+	}, nil
+}
+
+// Output returns the one ordered raw PTY output source. It may be claimed once
+// before Start so the output pump is ready before workload code can execute.
+func (workload *DockerWorkloadPTYV1) Output() (io.ReadCloser, error) {
+	workload.stateMu.Lock()
+	defer workload.stateMu.Unlock()
+	if workload.outputTaken {
+		return nil, fmt.Errorf("controlled-session workload PTY output is already claimed")
+	}
+	workload.outputTaken = true
+	return workload.attachment, nil
+}
+
+// Started reports whether Docker accepted the workload start. Start can fail
+// after this becomes true—for example, while applying the initial PTY size—so
+// the supervisor uses it to select the full teardown and output barrier.
+func (workload *DockerWorkloadPTYV1) Started() bool {
+	workload.stateMu.Lock()
+	defer workload.stateMu.Unlock()
+	return workload.started
+}
+
+// Start starts the already-attached inert container, begins independent exit
+// observation, and applies the immutable initial terminal dimensions before
+// returning success. Docker does not permit resizing a created container, so
+// the initial resize is the first post-start operation and activation must not
+// be declared until Start returns successfully.
+func (workload *DockerWorkloadPTYV1) Start(ctx context.Context) error {
+	workload.operationMu.Lock()
+	defer workload.operationMu.Unlock()
+
+	workload.stateMu.Lock()
+	if workload.started {
+		workload.stateMu.Unlock()
+		return fmt.Errorf("controlled-session workload container %q is already started", workload.plan.Container)
+	}
+	if !workload.outputTaken {
+		workload.stateMu.Unlock()
+		return fmt.Errorf("controlled-session workload PTY output must be claimed before container start")
+	}
+	workload.stateMu.Unlock()
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	start := CommandSpec{Name: workload.docker.Name, Args: []string{"start", workload.containerID}}
+	if err := workload.backend.run(start, RunOptions{Context: ctx}); err != nil {
+		startErr := fmt.Errorf("start attached controlled-session workload container %q: %w", workload.plan.Container, err)
+		closeErr := workload.Close()
+		cleanupErr := rollbackControlledSessionWorkloadContainerV1(workload.backend, workload.plan, workload.containerID)
+		if cleanupErr == nil {
+			workload.stateMu.Lock()
+			workload.cleaned = true
+			workload.stateMu.Unlock()
+		}
+		if closeErr != nil {
+			closeErr = fmt.Errorf("close controlled-session workload PTY after start failure: %w", closeErr)
+		}
+		if cleanupErr != nil {
+			cleanupErr = fmt.Errorf("remove controlled-session workload container %q after ambiguous start failure: %w", workload.plan.Container, cleanupErr)
+		}
+		return errors.Join(startErr, closeErr, cleanupErr)
+	}
+
+	workload.stateMu.Lock()
+	workload.started = true
+	workload.stateMu.Unlock()
+	go workload.observeExit()
+
+	columns, _ := strconv.ParseUint(workload.plan.InitialColumns, 10, 16)
+	rows, _ := strconv.ParseUint(workload.plan.InitialRows, 10, 16)
+	if err := workload.resizeLocked(ctx, uint32(columns), uint32(rows)); err != nil {
+		return fmt.Errorf("apply initial controlled-session workload PTY dimensions: %w", err)
+	}
+	return nil
+}
+
+// WriteInput writes all bytes exactly as supplied to the Docker PTY.
+func (workload *DockerWorkloadPTYV1) WriteInput(ctx context.Context, data []byte) error {
+	workload.operationMu.Lock()
+	defer workload.operationMu.Unlock()
+	if err := workload.requireStarted(); err != nil {
+		return err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := workload.attachment.WriteContext(ctx, data); err != nil {
+		return fmt.Errorf("write controlled-session workload PTY input: %w", err)
+	}
+	return nil
+}
+
+// Resize applies one terminal window size through Docker.
+func (workload *DockerWorkloadPTYV1) Resize(ctx context.Context, columns uint32, rows uint32) error {
+	workload.operationMu.Lock()
+	defer workload.operationMu.Unlock()
+	if err := workload.requireStarted(); err != nil {
+		return err
+	}
+	return workload.resizeLocked(ctx, columns, rows)
+}
+
+func (workload *DockerWorkloadPTYV1) resizeLocked(ctx context.Context, columns uint32, rows uint32) error {
+	if columns == 0 || columns > 65535 || rows == 0 || rows > 65535 {
+		return fmt.Errorf("controlled-session workload PTY dimensions must be between 1 and 65535")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := workload.backend.resize(
+		ctx,
+		workload.docker,
+		workload.containerID,
+		columns,
+		rows,
+		defaultDockerPreflightTimeout,
+	); err != nil {
+		return fmt.Errorf("resize controlled-session workload PTY to %dx%d: %w", columns, rows, err)
+	}
+	return nil
+}
+
+// RequestGracefulStop delivers SIGTERM to the workload container. The caller
+// owns the grace deadline and must follow with ForceStop if exit is not
+// observed in time.
+func (workload *DockerWorkloadPTYV1) RequestGracefulStop(ctx context.Context) error {
+	return workload.signal(ctx, "TERM", "request graceful stop for")
+}
+
+// ForceStop delivers SIGKILL to the workload container.
+func (workload *DockerWorkloadPTYV1) ForceStop(ctx context.Context) error {
+	return workload.signal(ctx, "KILL", "force stop")
+}
+
+func (workload *DockerWorkloadPTYV1) signal(ctx context.Context, signal string, action string) error {
+	workload.operationMu.Lock()
+	defer workload.operationMu.Unlock()
+	if err := workload.requireStarted(); err != nil {
+		return err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	command := CommandSpec{Name: workload.docker.Name, Args: []string{
+		"kill", "--signal", signal, workload.containerID,
+	}}
+	if err := workload.backend.run(command, RunOptions{Context: ctx}); err != nil {
+		return fmt.Errorf("%s controlled-session workload container %q: %w", action, workload.plan.Container, err)
+	}
+	return nil
+}
+
+// Wait returns the immutable Docker-observed exit status. Caller cancellation
+// stops only that wait; the independent host observation continues.
+func (workload *DockerWorkloadPTYV1) Wait(ctx context.Context) (controlledsession.ProcessStatusV1, error) {
+	workload.stateMu.Lock()
+	started := workload.started
+	workload.stateMu.Unlock()
+	if !started {
+		return controlledsession.ProcessStatusV1{}, fmt.Errorf("controlled-session workload container %q is not started", workload.plan.Container)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-workload.waitDone:
+		return workload.waitResult.status, workload.waitResult.err
+	case <-ctx.Done():
+		return controlledsession.ProcessStatusV1{}, fmt.Errorf("wait for controlled-session workload container %q: %w", workload.plan.Container, ctx.Err())
+	}
+}
+
+// Cleanup force-removes the exact planned workload container. Successful
+// cleanup is idempotent within this adapter; a failed attempt may be retried.
+// The lifecycle supervisor must finalize or close PTY output before calling it.
+func (workload *DockerWorkloadPTYV1) Cleanup(ctx context.Context) error {
+	workload.operationMu.Lock()
+	defer workload.operationMu.Unlock()
+
+	workload.stateMu.Lock()
+	if workload.cleaned {
+		workload.stateMu.Unlock()
+		return nil
+	}
+	workload.stateMu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cleanup := CommandSpec{Name: workload.docker.Name, Args: []string{"container", "rm", "--force", workload.containerID}}
+	if err := workload.backend.run(cleanup, RunOptions{Context: ctx}); err != nil && !isMissingContainerCleanupError(err) {
+		return fmt.Errorf("remove controlled-session workload container %q: %w", workload.plan.Container, err)
+	}
+	workload.stateMu.Lock()
+	workload.cleaned = true
+	workload.stateMu.Unlock()
+	return nil
+}
+
+func (workload *DockerWorkloadPTYV1) observeExit() {
+	code, err := workload.backend.observe(context.Background(), workload.docker, workload.containerID)
+	if err != nil {
+		workload.waitResult = dockerWorkloadPTYWaitResultV1{
+			status: controlledsession.ProcessStatusV1{
+				Kind: controlledsession.ProcessStatusUnavailableV1, Reason: "Docker workload observation was lost",
+			},
+			err: fmt.Errorf("observe controlled-session workload container %q exit: %w", workload.plan.Container, err),
+		}
+	} else {
+		exitCode := code
+		workload.waitResult = dockerWorkloadPTYWaitResultV1{
+			status: controlledsession.ProcessStatusV1{Kind: controlledsession.ProcessStatusExitedV1, Code: &exitCode},
+		}
+	}
+	close(workload.waitDone)
+}
+
+func (workload *DockerWorkloadPTYV1) requireStarted() error {
+	workload.stateMu.Lock()
+	defer workload.stateMu.Unlock()
+	if !workload.started {
+		return fmt.Errorf("controlled-session workload container %q is not started", workload.plan.Container)
+	}
+	if workload.cleaned {
+		return fmt.Errorf("controlled-session workload container %q is already cleaned", workload.plan.Container)
+	}
+	return nil
+}
+
+// Close closes only the PTY attachment and permanently unblocks its reader.
+func (workload *DockerWorkloadPTYV1) Close() error {
+	workload.closeOnce.Do(func() {
+		workload.closeErr = workload.attachment.Close()
+	})
+	return workload.closeErr
+}
+
+func controlledSessionCommandSpecV1(command ControlledSessionDockerCommandV1) CommandSpec {
+	return CommandSpec{Name: command.Name, Args: append([]string(nil), command.Args...)}
+}
+
+func rollbackControlledSessionWorkloadContainerV1(
+	backend dockerWorkloadPTYBackendV1,
+	plan ControlledSessionContainerPlanV1,
+	containerID string,
+) error {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultDockerPreflightTimeout)
+	defer cancel()
+	cleanup := CommandSpec{Name: plan.Cleanup.Name, Args: []string{"container", "rm", "--force", containerID}}
+	return backend.run(cleanup, RunOptions{Context: cleanupCtx})
+}
+
+func observeDockerContainerExitV1(ctx context.Context, docker CommandSpec, container string) (int, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	command := exec.CommandContext(ctx, docker.Name, "wait", container)
+	command.Dir = docker.Dir
+	if len(docker.Env) > 0 {
+		command.Env = append(os.Environ(), docker.Env...)
+	}
+	var output bytes.Buffer
+	command.Stdout = &output
+	command.Stderr = &output
+	if err := command.Run(); err != nil {
+		if diagnostic := trimmedCommandOutput(output.String()); diagnostic != "" {
+			return 0, fmt.Errorf("docker wait failed: %w\ncommand output:\n%s", err, diagnostic)
+		}
+		return 0, fmt.Errorf("docker wait failed: %w", err)
+	}
+	value := strings.TrimSpace(output.String())
+	code, err := strconv.ParseUint(value, 10, 8)
+	if err != nil || strconv.FormatUint(code, 10) != value {
+		return 0, fmt.Errorf("docker wait returned invalid exit code %q", value)
+	}
+	return int(code), nil
+}

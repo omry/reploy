@@ -3,6 +3,8 @@ package deploy
 import (
 	"fmt"
 	"path"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
@@ -28,6 +30,7 @@ const (
 type RuntimePolicyV1 struct {
 	Schema          string                       `json:"schema"`
 	StartupVerifier ApplicationStartupVerifierV1 `json:"startup_verifier"`
+	Network         blueprint.RuntimeNetwork     `json:"network"`
 	ProtectedPaths  []ProtectedPathV1            `json:"protected_paths"`
 	Plans           []RuntimePlanV1              `json:"plans"`
 }
@@ -40,6 +43,7 @@ type ProtectedPathV1 struct {
 
 type RuntimePlanV1 struct {
 	ID          string                      `json:"id"`
+	InboundTCP  []string                    `json:"inbound_tcp"`
 	Mounts      []RuntimeMountV1            `json:"mounts"`
 	Executables []providers.QualifiedOutput `json:"executables"`
 }
@@ -67,6 +71,15 @@ func ValidateRuntimePolicyV1(policy RuntimePolicyV1) error {
 	if err := ValidateApplicationStartupVerifierV1(policy.StartupVerifier, false); err != nil {
 		return fmt.Errorf("runtime policy startup verifier: %w", err)
 	}
+	if err := validateRuntimeNetworkAccessV1("public", policy.Network.Public); err != nil {
+		return err
+	}
+	if err := validateRuntimeNetworkAccessV1("local", policy.Network.Local); err != nil {
+		return err
+	}
+	if err := validateRuntimeAmbiguousNetworkAccessV1(policy.Network.Ambiguous); err != nil {
+		return err
+	}
 	for index, protected := range policy.ProtectedPaths {
 		if err := validateRuntimeAbsolutePath("protected path", protected.Path); err != nil {
 			return err
@@ -90,8 +103,22 @@ func ValidateRuntimePolicyV1(policy RuntimePolicyV1) error {
 		if index > 0 && policy.Plans[index-1].ID >= plan.ID {
 			return fmt.Errorf("runtime plans must be unique and sorted by ID")
 		}
-		if plan.Mounts == nil || plan.Executables == nil {
+		if plan.InboundTCP == nil || plan.Mounts == nil || plan.Executables == nil {
 			return fmt.Errorf("runtime plan %q collections must use arrays", plan.ID)
+		}
+		previousPort := 0
+		for portIndex, rawPort := range plan.InboundTCP {
+			port, err := strconv.Atoi(rawPort)
+			if err != nil || strconv.Itoa(port) != rawPort {
+				return fmt.Errorf("runtime plan %q inbound TCP ports must use canonical decimal strings", plan.ID)
+			}
+			if port < 1 || port > 65535 {
+				return fmt.Errorf("runtime plan %q inbound TCP port must be between 1 and 65535", plan.ID)
+			}
+			if portIndex > 0 && previousPort >= port {
+				return fmt.Errorf("runtime plan %q inbound TCP ports must be unique and sorted", plan.ID)
+			}
+			previousPort = port
 		}
 		for mountIndex, mount := range plan.Mounts {
 			if err := validateRuntimeAbsolutePath("mount destination", mount.Destination); err != nil {
@@ -122,6 +149,35 @@ func ValidateRuntimePolicyV1(policy RuntimePolicyV1) error {
 		}
 	}
 	return nil
+}
+
+func CanonicalRuntimeInboundTCPV1(values []int) []string {
+	ports := append([]int{}, values...)
+	slices.Sort(ports)
+	ports = slices.Compact(ports)
+	result := make([]string, len(ports))
+	for index, port := range ports {
+		result[index] = strconv.Itoa(port)
+	}
+	return result
+}
+
+func validateRuntimeNetworkAccessV1(name string, access blueprint.NetworkAccess) error {
+	switch access {
+	case blueprint.NetworkAccessDeny, blueprint.NetworkAccessAllow:
+		return nil
+	default:
+		return fmt.Errorf("runtime policy %s network access must be allow or deny", name)
+	}
+}
+
+func validateRuntimeAmbiguousNetworkAccessV1(access blueprint.AmbiguousNetworkAccess) error {
+	switch access {
+	case blueprint.AmbiguousNetworkAccessRequireBoth, blueprint.AmbiguousNetworkAccessAllow:
+		return nil
+	default:
+		return fmt.Errorf("runtime policy ambiguous network access must be require-both or allow")
+	}
 }
 
 func validateRuntimeReservedDestination(destination string) error {

@@ -147,6 +147,123 @@ func TestAdmitControlOperationV1ForceStopsActiveContainersBeforeMarker(t *testin
 	}
 }
 
+func TestAdmitControlOperationV1ForceStopsControlledSessionContainersAndRetainsOwnership(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	dir := plan.Workload.DeploymentDirectory
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := liveRunAdmissionFixtureV1(plan.LiveRunID, false)
+	run.Kind = deploy.LiveRunKindShellV1
+	run.GenerationReference = plan.Workload.GenerationReference
+	holdLiveRunLeaseV1(t, operation, run.ID)
+	if _, err := operation.AdmitLiveRunV1(run, false); err != nil {
+		t.Fatal(err)
+	}
+	ownership, err := operation.RecordControlledSessionOwnershipV1(controlledSessionOwnershipFromPlanV1(
+		plan, controlledSessionTestDockerEndpointV1, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	calls := []CommandSpec{}
+	result, err := admitControlOperationV1(t.Context(), dir, operation, ControlAdmissionInputV1{
+		Operation: deploy.ControlOperationStopV1, GenerationReference: run.GenerationReference,
+		Mode: ControlAdmissionForceV1,
+	}, controlOperationAdmissionBackendV1{
+		newID: func() (string, error) { return "control-0000000000000001", nil },
+		pause: func(context.Context, time.Duration) error { return nil },
+		await: AwaitControlAdmissionWithNoticeV1,
+		removeContainer: func(spec CommandSpec, _ RunOptions) error {
+			calls = append(calls, spec)
+			return nil
+		},
+	})
+	if err != nil || len(result.StoppedRuns) != 1 || result.StoppedRuns[0].ID != run.ID {
+		t.Fatalf("controlled-session force result = %#v, %v", result, err)
+	}
+	wantCalls := []CommandSpec{
+		TemporaryContainerStopCommand(dockerWorkloadTestContainerIDV1),
+		TemporaryContainerStopCommand(dockerControllerTestContainerIDV1),
+	}
+	if !reflect.DeepEqual(calls, wantCalls) {
+		t.Fatalf("controlled-session force calls = %#v", calls)
+	}
+	queue, _, err := result.Operation.ReadLiveRunQueueV1()
+	if err != nil || len(queue.ControlledSessions) != 1 || queue.ControlledSessions[0] != ownership {
+		t.Fatalf("retained controlled-session ownership = %#v, error=%v", queue.ControlledSessions, err)
+	}
+	if len(queue.Runs) != 1 || queue.Runs[0].Kind != deploy.LiveRunKindControlV1 {
+		t.Fatalf("controlled-session force queue = %#v", queue)
+	}
+	if err := CompleteControlAdmissionV1(result.Operation, result.Marker.ID, result.Lease); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdmitControlOperationV1ForcePreservesControlledSessionOnPartialStopFailure(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	dir := plan.Workload.DeploymentDirectory
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := liveRunAdmissionFixtureV1(plan.LiveRunID, false)
+	run.Kind = deploy.LiveRunKindShellV1
+	run.GenerationReference = plan.Workload.GenerationReference
+	holdLiveRunLeaseV1(t, operation, run.ID)
+	if _, err := operation.AdmitLiveRunV1(run, false); err != nil {
+		t.Fatal(err)
+	}
+	ownership, err := operation.RecordControlledSessionOwnershipV1(controlledSessionOwnershipFromPlanV1(
+		plan, controlledSessionTestDockerEndpointV1, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := errors.New("controller stop failed")
+	calls := []CommandSpec{}
+	result, err := admitControlOperationV1(t.Context(), dir, operation, ControlAdmissionInputV1{
+		Operation: deploy.ControlOperationStopV1, GenerationReference: run.GenerationReference,
+		Mode: ControlAdmissionForceV1,
+	}, controlOperationAdmissionBackendV1{
+		newID: func() (string, error) { return "control-0000000000000001", nil },
+		pause: func(context.Context, time.Duration) error { return nil },
+		await: AwaitControlAdmissionWithNoticeV1,
+		removeContainer: func(spec CommandSpec, _ RunOptions) error {
+			calls = append(calls, spec)
+			if len(calls) == 2 {
+				return want
+			}
+			return nil
+		},
+	})
+	if !errors.Is(err, want) || len(result.StoppedRuns) != 0 {
+		t.Fatalf("partial controlled-session stop result = %#v, %v", result, err)
+	}
+	wantCalls := []CommandSpec{
+		TemporaryContainerStopCommand(dockerWorkloadTestContainerIDV1),
+		TemporaryContainerStopCommand(dockerControllerTestContainerIDV1),
+	}
+	if !reflect.DeepEqual(calls, wantCalls) {
+		t.Fatalf("partial controlled-session stop calls = %#v", calls)
+	}
+	check, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check.Unlock()
+	queue, _, err := check.ReadLiveRunQueueV1()
+	if err != nil || len(queue.Runs) != 1 || queue.Runs[0].ID != run.ID ||
+		len(queue.ControlledSessions) != 1 || queue.ControlledSessions[0] != ownership ||
+		len(deploy.ControlMarkersV1(queue)) != 0 {
+		t.Fatalf("queue after partial controlled-session stop = %#v, error=%v", queue, err)
+	}
+}
+
 func TestAdmitControlOperationV1ForceFailurePreservesFailedAndLaterActiveRuns(t *testing.T) {
 	dir := t.TempDir()
 	operation, err := deploy.AcquireOperationLock(t.Context(), dir)

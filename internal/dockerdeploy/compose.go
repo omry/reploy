@@ -60,21 +60,44 @@ func runDockerCommand(spec CommandSpec, options RunOptions) error {
 }
 
 func bindDockerCommandRunnerV1(ctx context.Context, spec CommandSpec, timeout time.Duration) (commandRunner, error) {
+	_, run, err := bindPinnedDockerCommandRunnerV1(ctx, spec, timeout)
+	return run, err
+}
+
+func bindPinnedDockerCommandRunnerV1(
+	ctx context.Context,
+	spec CommandSpec,
+	timeout time.Duration,
+) (CommandSpec, commandRunner, error) {
 	if ctx == nil {
-		return nil, fmt.Errorf("bind Docker command runner requires a context")
+		return CommandSpec{}, nil, fmt.Errorf("bind Docker command runner requires a context")
 	}
 	_, end := buildprofile.Start(ctx, "Docker preflight")
 	endpoint, err := dockerPreflight(ctx, spec, effectiveDockerPreflightTimeout(timeout))
 	end(err)
 	if err != nil {
-		return nil, err
+		return CommandSpec{}, nil, err
 	}
 	executable := spec.Name
-	return func(command CommandSpec, options RunOptions) error {
+	pinned := pinDockerEndpointV1(spec, endpoint)
+	run := func(command CommandSpec, options RunOptions) error {
 		if command.Name != executable {
 			return fmt.Errorf("Docker operation changed executable from %q to %q", executable, command.Name)
 		}
 		return runCommandWithoutDockerPreflight(pinDockerEndpointV1(command, endpoint), options)
+	}
+	return pinned, run, nil
+}
+
+func commandRunnerForPinnedDockerEndpointV1(endpoint string, run commandRunner) (commandRunner, error) {
+	if run == nil {
+		return nil, fmt.Errorf("pin Docker endpoint requires a command runner")
+	}
+	if !localDockerEndpointV1(endpoint) {
+		return nil, fmt.Errorf("controlled-session Docker endpoint %q is not local", endpoint)
+	}
+	return func(spec CommandSpec, options RunOptions) error {
+		return run(pinDockerEndpointV1(spec, endpoint), options)
 	}, nil
 }
 

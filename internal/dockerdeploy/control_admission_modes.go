@@ -174,7 +174,7 @@ func controlDisruptionCountsV1(queue deploy.LiveRunQueueV1) (active int, waiting
 		switch entry.Status {
 		case deploy.LiveRunStatusActiveV1:
 			active++
-		case deploy.LiveRunStatusWaitingV1:
+		case deploy.LiveRunStatusReadyV1, deploy.LiveRunStatusWaitingV1:
 			waiting++
 		}
 	}
@@ -251,13 +251,13 @@ func stopActiveLiveRunsForControlV1(
 	}
 	stopped := []deploy.LiveRunV1{}
 	for _, run := range active {
-		if run.Container != "" {
+		for _, container := range liveRunContainerTargetsV1(queue, run) {
 			err := removeContainer(
-				TemporaryContainerStopCommand(run.Container),
+				TemporaryContainerStopCommand(container),
 				RunOptions{Context: ctx, DockerPreflightTimeout: dockerPreflightTimeout},
 			)
 			if err != nil && !isMissingContainerCleanupError(err) {
-				return stopped, fmt.Errorf("stop live run container %q: %w", run.Container, err)
+				return stopped, fmt.Errorf("stop live run container %q: %w", container, err)
 			}
 		}
 		_, removed, err := operation.RemoveLiveRunV1(run.ID)
