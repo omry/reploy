@@ -803,9 +803,16 @@ func controlledSessionContainerPlanV1(
 }
 
 func renderControlledSessionCreateV1(plan ControlledSessionContainerPlanV1) (ControlledSessionDockerCommandV1, error) {
+	createNetwork := plan.Network
+	if plan.SessionNetwork.Enabled && plan.Network == controlledSessionNetworkModeV1 {
+		// Docker refuses to connect a container created in none mode to a later
+		// network. The stopped container is staged on bridge; the session-network
+		// adapter removes that attachment before either process starts.
+		createNetwork = controlledSessionOrdinaryNetworkModeV1
+	}
 	args := []string{
 		"create", "--pull", "never", "--name", plan.Container,
-		"--network", plan.Network,
+		"--network", createNetwork,
 		"--user", "0:0",
 		"--cap-drop", "ALL",
 	}

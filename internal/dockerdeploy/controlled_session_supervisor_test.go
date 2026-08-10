@@ -198,7 +198,7 @@ func TestRunControlledSessionV1PreparesAttachesAndCleansLeaseNetwork(t *testing.
 		t.Fatal(err)
 	}
 	wantCalls := []string{"planned", "prepare-network", "network-id", "channel", "controller-container", "controller-id", "workload-container", "complete", "watchdog"}
-	if !reflect.DeepEqual(calls, wantCalls) || network.verifyCount != 2 || !network.cleaned || !network.cleanedBeforeController ||
+	if !reflect.DeepEqual(calls, wantCalls) || network.verifyCount != 3 || !network.cleaned || !network.cleanedBeforeController ||
 		result.SessionResult.CleanupStatus.Kind != controlledsession.CleanupStatusSucceededV1 ||
 		result.DeliveryTailCleanupStatus.Kind != controlledsession.CleanupStatusSucceededV1 || !watchdog.disarmed {
 		t.Fatalf("calls=%v verify=%d network-clean=%t result=%#v watchdog=%#v", calls, network.verifyCount, network.cleaned, result, watchdog)
@@ -1683,6 +1683,13 @@ func (network *fakeControlledSessionNetworkV1) Name() string { return network.na
 func (network *fakeControlledSessionNetworkV1) Subnets() []string {
 	return append([]string(nil), network.subnets...)
 }
+func (network *fakeControlledSessionNetworkV1) Realization() controlledSessionNetworkRealizationV1 {
+	realized, err := deriveControlledSessionNetworkRealizationV1(network.subnets)
+	if err != nil {
+		panic(err)
+	}
+	return realized
+}
 func (network *fakeControlledSessionNetworkV1) Attach(_ context.Context, controllerID string, workloadID string) error {
 	if network.controller.started || network.workload.started {
 		return fmt.Errorf("network attached after a session process started")
@@ -1696,6 +1703,14 @@ func (network *fakeControlledSessionNetworkV1) Attach(_ context.Context, control
 func (network *fakeControlledSessionNetworkV1) Verify(context.Context) error {
 	if !network.attached {
 		return fmt.Errorf("network verified before attachment")
+	}
+	network.verifyCount++
+	return network.verifyErr
+}
+
+func (network *fakeControlledSessionNetworkV1) VerifyStarted(context.Context) error {
+	if !network.controller.started || !network.workload.started {
+		return fmt.Errorf("network exact membership verified before both processes started")
 	}
 	network.verifyCount++
 	return network.verifyErr

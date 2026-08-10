@@ -87,8 +87,9 @@ func (engine *fakeDockerSessionNetworkEngineV1) run(spec CommandSpec, options Ru
 		if err := json.NewEncoder(options.Stdout).Encode(inspection); err != nil {
 			engine.t.Fatal(err)
 		}
-	case len(spec.Args) == 6 && slices.Equal(spec.Args[:3], []string{"network", "connect", "--alias"}):
-		alias, networkID, containerID := spec.Args[3], spec.Args[4], spec.Args[5]
+	case len(spec.Args) >= 8 && slices.Equal(spec.Args[:3], []string{"network", "connect", "--alias"}):
+		alias := spec.Args[3]
+		networkID, containerID := spec.Args[len(spec.Args)-2], spec.Args[len(spec.Args)-1]
 		if networkID != dockerSessionNetworkTestIDV1 {
 			engine.t.Fatalf("network connect ID = %q", networkID)
 		}
@@ -101,12 +102,36 @@ func (engine *fakeDockerSessionNetworkEngineV1) run(spec CommandSpec, options Ru
 		default:
 			engine.t.Fatalf("network connect alias = %q", alias)
 		}
+		realized, err := deriveControlledSessionNetworkRealizationV1([]string{"172.31.0.0/24"})
+		if err != nil {
+			engine.t.Fatal(err)
+		}
+		wantAddress := realized.ControllerAddresses[0]
+		if alias == engine.plan.Workload.SessionNetwork.Alias {
+			wantAddress = realized.WorkloadAddresses[0]
+		}
+		if !slices.Equal(spec.Args[4:len(spec.Args)-2], []string{"--ip", wantAddress}) {
+			engine.t.Fatalf("network connect address arguments = %#v, want %q", spec.Args, wantAddress)
+		}
 		engine.network.Containers[containerID] = dockerSessionNetworkContainerV1{Name: name}
+		inspection := engine.containers[containerID]
+		inspection.NetworkSettings.Networks[engine.plan.Controller.SessionNetwork.Name] = dockerSessionContainerNetworkV1{
+			Aliases: []string{alias}, IPAMConfig: &dockerSessionContainerIPAMConfigV1{IPv4Address: wantAddress},
+		}
+		engine.containers[containerID] = inspection
 	case len(spec.Args) == 5 && slices.Equal(spec.Args[:3], []string{"network", "disconnect", "--force"}):
-		if spec.Args[3] != dockerSessionNetworkTestIDV1 {
+		if spec.Args[3] == controlledSessionOrdinaryNetworkModeV1 {
+			inspection := engine.containers[spec.Args[4]]
+			delete(inspection.NetworkSettings.Networks, controlledSessionOrdinaryNetworkModeV1)
+			engine.containers[spec.Args[4]] = inspection
+		} else if spec.Args[3] == dockerSessionNetworkTestIDV1 {
+			inspection := engine.containers[spec.Args[4]]
+			delete(inspection.NetworkSettings.Networks, engine.plan.Controller.SessionNetwork.Name)
+			engine.containers[spec.Args[4]] = inspection
+			delete(engine.network.Containers, spec.Args[4])
+		} else {
 			engine.t.Fatalf("network disconnect ID = %q", spec.Args[3])
 		}
-		delete(engine.network.Containers, spec.Args[4])
 	case slices.Equal(spec.Args, []string{"network", "rm", dockerSessionNetworkTestIDV1}):
 		engine.exists = false
 	default:
@@ -123,8 +148,11 @@ func TestDockerSessionNetworkV1CreatesAttachesVerifiesAndRemovesExactNetwork(t *
 		t.Fatal(err)
 	}
 	if network.ID() != dockerSessionNetworkTestIDV1 || network.Name() != plan.Controller.SessionNetwork.Name ||
-		!reflect.DeepEqual(network.Subnets(), []string{"172.31.0.0/24"}) {
-		t.Fatalf("prepared network = ID %q name %q subnets %#v", network.ID(), network.Name(), network.Subnets())
+		!reflect.DeepEqual(network.Subnets(), []string{"172.31.0.0/24"}) ||
+		!reflect.DeepEqual(network.Realization(), controlledSessionNetworkRealizationV1{
+			Subnets: []string{"172.31.0.0/24"}, ControllerAddresses: []string{"172.31.0.2"}, WorkloadAddresses: []string{"172.31.0.3"},
+		}) {
+		t.Fatalf("prepared network = ID %q name %q realization %#v", network.ID(), network.Name(), network.Realization())
 	}
 	if err := network.Verify(t.Context()); err != nil {
 		t.Fatal(err)
@@ -150,8 +178,12 @@ func TestDockerSessionNetworkV1CreatesAttachesVerifiesAndRemovesExactNetwork(t *
 		"network inspect --format {{json .}} " + dockerSessionNetworkTestIDV1,
 		"container inspect --format {{json .}} " + dockerControllerTestContainerIDV1,
 		"container inspect --format {{json .}} " + dockerWorkloadTestContainerIDV1,
-		"network connect --alias controller " + dockerSessionNetworkTestIDV1 + " " + dockerControllerTestContainerIDV1,
-		"network connect --alias workload " + dockerSessionNetworkTestIDV1 + " " + dockerWorkloadTestContainerIDV1,
+		"network connect --alias controller --ip 172.31.0.2 " + dockerSessionNetworkTestIDV1 + " " + dockerControllerTestContainerIDV1,
+		"network disconnect --force bridge " + dockerControllerTestContainerIDV1,
+		"container inspect --format {{json .}} " + dockerControllerTestContainerIDV1,
+		"network connect --alias workload --ip 172.31.0.3 " + dockerSessionNetworkTestIDV1 + " " + dockerWorkloadTestContainerIDV1,
+		"network disconnect --force bridge " + dockerWorkloadTestContainerIDV1,
+		"container inspect --format {{json .}} " + dockerWorkloadTestContainerIDV1,
 		"network inspect --format {{json .}} " + dockerSessionNetworkTestIDV1,
 		"network inspect --format {{json .}} " + dockerSessionNetworkTestIDV1,
 		"network disconnect --force " + dockerSessionNetworkTestIDV1 + " " + dockerControllerTestContainerIDV1,
@@ -161,6 +193,131 @@ func TestDockerSessionNetworkV1CreatesAttachesVerifiesAndRemovesExactNetwork(t *
 	}
 	if got := commandArgsV1(engine.commands); !reflect.DeepEqual(got, wantCommands) {
 		t.Fatalf("Docker commands =\n%#v\nwant\n%#v", got, wantCommands)
+	}
+}
+
+func TestDockerSessionNetworkV1AttachesInertContainersThatRetainOrdinaryNetworking(t *testing.T) {
+	plan := controlledSessionOrdinaryBridgeNetworkPlanFixtureV1(t)
+	engine := newFakeDockerSessionNetworkEngineV1(t, plan)
+	network, err := prepareDockerSessionNetworkV1(t.Context(), plan, dockerSessionNetworkBackendV1{run: engine.run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := network.Attach(t.Context(), dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"network connect --alias controller --ip 172.31.0.2 " + dockerSessionNetworkTestIDV1 + " " + dockerControllerTestContainerIDV1,
+		"network connect --alias workload --ip 172.31.0.3 " + dockerSessionNetworkTestIDV1 + " " + dockerWorkloadTestContainerIDV1,
+	}
+	commands := commandArgsV1(engine.commands)
+	for _, expected := range want {
+		if !slices.Contains(commands, expected) {
+			t.Fatalf("ordinary-network attachment commands = %#v, missing %q", commands, expected)
+		}
+	}
+	if err := network.Cleanup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDockerSessionNetworkV1VerifiesStartedParticipantAddresses(t *testing.T) {
+	plan := controlledSessionNetworkPlanFixtureV1(t)
+	engine := newFakeDockerSessionNetworkEngineV1(t, plan)
+	network, err := prepareDockerSessionNetworkV1(t.Context(), plan, dockerSessionNetworkBackendV1{run: engine.run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := network.Attach(t.Context(), dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1); err != nil {
+		t.Fatal(err)
+	}
+	for containerID, address := range map[string]string{
+		dockerControllerTestContainerIDV1: "172.31.0.2",
+		dockerWorkloadTestContainerIDV1:   "172.31.0.3",
+	} {
+		inspection := engine.containers[containerID]
+		inspection.State.Running = true
+		connection := inspection.NetworkSettings.Networks[plan.Controller.SessionNetwork.Name]
+		connection.IPAddress = address
+		inspection.NetworkSettings.Networks[plan.Controller.SessionNetwork.Name] = connection
+		engine.containers[containerID] = inspection
+	}
+	if err := network.VerifyStarted(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	inspection := engine.containers[dockerWorkloadTestContainerIDV1]
+	connection := inspection.NetworkSettings.Networks[plan.Controller.SessionNetwork.Name]
+	connection.IPAddress = "172.31.0.4"
+	inspection.NetworkSettings.Networks[plan.Controller.SessionNetwork.Name] = connection
+	engine.containers[dockerWorkloadTestContainerIDV1] = inspection
+	if err := network.VerifyStarted(t.Context()); err == nil || !strings.Contains(err.Error(), `workload container address is "172.31.0.4" instead of "172.31.0.3"`) {
+		t.Fatalf("started address mismatch = %v", err)
+	}
+}
+
+func TestDeriveControlledSessionNetworkRealizationV1(t *testing.T) {
+	got, err := deriveControlledSessionNetworkRealizationV1([]string{"fd00:1::/64", "172.31.0.0/24"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := controlledSessionNetworkRealizationV1{
+		Subnets:             []string{"fd00:1::/64", "172.31.0.0/24"},
+		ControllerAddresses: []string{"172.31.0.2", "fd00:1::2"},
+		WorkloadAddresses:   []string{"172.31.0.3", "fd00:1::3"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("network realization = %#v, want %#v", got, want)
+	}
+	for _, test := range []struct {
+		name    string
+		subnets []string
+		want    string
+	}{
+		{name: "empty", want: "no participant addresses"},
+		{name: "noncanonical", subnets: []string{"172.31.0.1/24"}, want: "not canonical"},
+		{name: "duplicate family", subnets: []string{"172.31.0.0/24", "172.32.0.0/24"}, want: "multiple prefixes"},
+		{name: "too small", subnets: []string{"172.31.0.0/30"}, want: "no safe controller and workload addresses"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := deriveControlledSessionNetworkRealizationV1(test.subnets); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("realization error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestControlledSessionCreateWithPeerHostsV1(t *testing.T) {
+	plan := controlledSessionNetworkPlanFixtureV1(t).Controller
+	got, err := controlledSessionCreateWithPeerHostsV1(
+		controlledSessionCommandSpecV1(plan.Create), plan, []string{"172.31.0.3", "fd00:1::3"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entrypoint := slices.Index(got.Args, "--entrypoint")
+	if entrypoint < 4 || !slices.Equal(got.Args[entrypoint-4:entrypoint], []string{
+		"--add-host", "workload=172.31.0.3", "--add-host", "workload=fd00:1::3",
+	}) {
+		t.Fatalf("realized create arguments = %#v", got.Args)
+	}
+	if slices.Contains(plan.Create.Args, "--add-host") {
+		t.Fatalf("immutable plan create arguments were mutated: %#v", plan.Create.Args)
+	}
+	for _, test := range []struct {
+		name      string
+		addresses []string
+		want      string
+	}{
+		{name: "missing", want: "no peer addresses"},
+		{name: "noncanonical", addresses: []string{"172.031.0.3"}, want: "canonical"},
+		{name: "unsorted", addresses: []string{"fd00:1::3", "172.31.0.3"}, want: "sorted"},
+		{name: "duplicate", addresses: []string{"172.31.0.3", "172.31.0.3"}, want: "unique"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := controlledSessionCreateWithPeerHostsV1(controlledSessionCommandSpecV1(plan.Create), plan, test.addresses); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("peer-host realization error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 
@@ -294,7 +451,7 @@ func TestDockerSessionNetworkV1CleansPartialAmbiguousAttachment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workloadConnect := "network connect --alias workload " + dockerSessionNetworkTestIDV1 + " " + dockerWorkloadTestContainerIDV1
+	workloadConnect := "network connect --alias workload --ip 172.31.0.3 " + dockerSessionNetworkTestIDV1 + " " + dockerWorkloadTestContainerIDV1
 	engine.failBefore[workloadConnect] = errors.New("connect response lost")
 	if err := network.Attach(t.Context(), dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1); err == nil || !strings.Contains(err.Error(), "connect response lost") {
 		t.Fatalf("partial attach error = %v", err)
@@ -319,6 +476,12 @@ func TestDockerSessionNetworkV1VerifiesExactInertContainersBeforeAttachment(t *t
 			value.Config.Labels["io.reploy.session.live-run"] = "run-other"
 		}, want: "ownership label"},
 		{name: "running", mutate: func(value *dockerSessionContainerInspectionV1) { value.State.Running = true }, want: "must remain inert"},
+		{name: "additional network", mutate: func(value *dockerSessionContainerInspectionV1) {
+			value.NetworkSettings.Networks["other"] = dockerSessionContainerNetworkV1{}
+		}, want: "only the inert ordinary network staging attachment"},
+		{name: "missing bridge", mutate: func(value *dockerSessionContainerInspectionV1) {
+			delete(value.NetworkSettings.Networks, controlledSessionOrdinaryNetworkModeV1)
+		}, want: "only the inert ordinary network staging attachment"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -445,6 +608,19 @@ func controlledSessionNetworkPlanFixtureV1(t *testing.T) ControlledSessionExecut
 	return plan
 }
 
+func controlledSessionOrdinaryBridgeNetworkPlanFixtureV1(t *testing.T) ControlledSessionExecutionPlanV1 {
+	t.Helper()
+	input, backend := controlledSessionPlanFixtureV1(t)
+	input.EndpointIDs = []string{"browser"}
+	input.ControllerRuntime.Docker.Sandbox.Network.Local = "allow"
+	input.WorkloadRuntime.Docker.Sandbox.Network.Local = "allow"
+	plan, err := planControlledSessionV1(input, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return plan
+}
+
 func controlledSessionNetworkCreateArgsV1(plan ControlledSessionExecutionPlanV1) []string {
 	args := []string{"network", "create", "--driver", "bridge", "--internal"}
 	for _, label := range controlledSessionNetworkLabelsV1(plan.LiveRunID) {
@@ -478,5 +654,8 @@ func dockerSessionContainerInspectionFixtureV1(
 	inspection := dockerSessionContainerInspectionV1{ID: containerID, Name: "/" + plan.Container}
 	inspection.Config.Labels = controlledSessionContainerLabelMapV1(plan)
 	inspection.Config.Labels["org.example.inherited"] = "preserved"
+	inspection.NetworkSettings.Networks = map[string]dockerSessionContainerNetworkV1{
+		controlledSessionOrdinaryNetworkModeV1: {},
+	}
 	return inspection
 }
