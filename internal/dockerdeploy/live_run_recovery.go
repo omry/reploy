@@ -16,6 +16,8 @@ import (
 
 const liveRunRecoveryCleanupTimeoutV1 = 2 * time.Second
 
+type legacyControlledSessionDockerEndpointResolverV1 func(context.Context) (string, error)
+
 func recoverLiveRunQueueV1(
 	ctx context.Context,
 	operation *deploy.OperationLock,
@@ -24,6 +26,9 @@ func recoverLiveRunQueueV1(
 ) (deploy.LiveRunRecoveryV1, error) {
 	return recoverLiveRunQueueWithinV1(
 		ctx, operation, notice, removeContainer, liveRunRecoveryCleanupTimeoutV1,
+		func(ctx context.Context) (string, error) {
+			return verifiedLocalDockerEndpointV1(ctx, CommandSpec{Name: "docker"}, defaultDockerPreflightTimeout)
+		},
 	)
 }
 
@@ -33,6 +38,7 @@ func recoverLiveRunQueueWithinV1(
 	notice io.Writer,
 	removeContainer commandRunner,
 	cleanupTimeout time.Duration,
+	resolveLegacyDockerEndpoint legacyControlledSessionDockerEndpointResolverV1,
 ) (deploy.LiveRunRecoveryV1, error) {
 	recovery, err := operation.RecoverLiveRunQueueV1()
 	if err != nil {
@@ -87,7 +93,9 @@ func recoverLiveRunQueueWithinV1(
 			}
 			break
 		}
-		if err := cleanupControlledSessionRecoveryV1(cleanupContext, operation, ownership, removeContainer); err != nil {
+		if err := cleanupControlledSessionRecoveryV1(
+			cleanupContext, operation, ownership, removeContainer, resolveLegacyDockerEndpoint,
+		); err != nil {
 			if notice != nil {
 				fmt.Fprintf(notice,
 					"warning: deferred cleanup of recovered controlled session %q: %v\n",
@@ -115,15 +123,31 @@ func cleanupControlledSessionRecoveryV1(
 	operation *deploy.OperationLock,
 	ownership deploy.ControlledSessionOwnershipV1,
 	run commandRunner,
+	resolveLegacyDockerEndpoint legacyControlledSessionDockerEndpointResolverV1,
 ) error {
 	deploymentDir := filepath.Dir(filepath.Dir(operation.Path()))
 	expectedChannel := filepath.Join(deploymentDir, privateRuntimeMetadataDirectoryName, "sessions", ownership.LiveRunID)
 	if ownership.ChannelDirectory != expectedChannel {
 		return fmt.Errorf("refuse controlled-session recovery because channel directory %q is outside the exact deployment session path", ownership.ChannelDirectory)
 	}
+	endpoint := ownership.DockerEndpoint
+	if endpoint == "" {
+		if resolveLegacyDockerEndpoint == nil {
+			return fmt.Errorf("resolve legacy controlled-session Docker endpoint: resolver is unavailable")
+		}
+		var err error
+		endpoint, err = resolveLegacyDockerEndpoint(ctx)
+		if err != nil {
+			return fmt.Errorf("resolve legacy controlled-session Docker endpoint: %w", err)
+		}
+	}
+	pinnedRun, err := commandRunnerForPinnedDockerEndpointV1(endpoint, run)
+	if err != nil {
+		return fmt.Errorf("bind recovered controlled-session Docker endpoint: %w", err)
+	}
 	var cleanupErr error
 	for _, container := range []deploy.ControlledSessionContainerOwnershipV1{ownership.Workload, ownership.Controller} {
-		cleanupErr = errors.Join(cleanupErr, cleanupControlledSessionRecoveryContainerV1(ctx, ownership.LiveRunID, container, run))
+		cleanupErr = errors.Join(cleanupErr, cleanupControlledSessionRecoveryContainerV1(ctx, ownership.LiveRunID, container, pinnedRun))
 	}
 	cleanupErr = errors.Join(cleanupErr, removeControlledSessionChannelDirectoryV1(ownership.ChannelDirectory))
 	return cleanupErr

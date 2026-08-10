@@ -128,6 +128,9 @@ type controlledSessionSupervisorV1 struct {
 	controllerOwnershipIncomplete bool
 	cleanupManifest               deploy.ControlledSessionCleanupManifest
 	watchdog                      controlledSessionWatchdogRuntimeV1
+	watchdogExitObserved          bool
+	watchdogExitAfterTermination  bool
+	watchdogExitErr               error
 	preCleanupSucceeded           bool
 
 	transportHealthy bool
@@ -169,12 +172,16 @@ func RunControlledSessionV1(
 	if err := operation.RequireQueueEntryLeaseHeldV1(plan.LiveRunID); err != nil {
 		return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionV1(operation, plan.LiveRunID, fmt.Errorf("controlled-session admission ownership: %w", err))
 	}
+	dockerEndpoint, bindSessionDocker, err := bindControlledSessionDockerEndpointV1(ctx, controlledSessionCommandSpecV1(plan.Controller.Create))
+	if err != nil {
+		return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionV1(operation, plan.LiveRunID, fmt.Errorf("bind controlled-session Docker endpoint: %w", err))
+	}
 	operationReleaseAttempted := false
 	ownershipRecorded := false
 	partialPreparationCleanupVerified := false
 	controllerID := ""
 	persistOwnership := func(controllerID string, workloadID string) (deploy.ControlledSessionOwnershipV1, error) {
-		ownership := controlledSessionOwnershipFromPlanV1(plan, controllerID, workloadID)
+		ownership := controlledSessionOwnershipFromPlanV1(plan, dockerEndpoint, controllerID, workloadID)
 		recorded, err := operation.RecordControlledSessionOwnershipV1(ownership)
 		if err != nil {
 			return deploy.ControlledSessionOwnershipV1{}, fmt.Errorf("persist controlled-session ownership: %w", err)
@@ -192,16 +199,22 @@ func RunControlledSessionV1(
 			return &privateControlledSessionChannelRuntimeV1{channel: channel}, nil
 		},
 		prepareController: func(ctx context.Context, plan ControlledSessionContainerPlanV1) (controlledSessionControllerRuntimeV1, error) {
-			return prepareDockerControllerWithCleanupVerificationV1(ctx, plan, func() {
-				partialPreparationCleanupVerified = true
+			return prepareDockerControllerV1(ctx, plan, dockerControllerBackendV1{
+				bind: bindSessionDocker, observe: observeDockerContainerExitV1,
+				requireReadyChannel: requirePreparedControlledSessionControllerChannelV1,
+				recordNoContainer:   func() { partialPreparationCleanupVerified = true },
 			})
 		},
 		prepareWorkload: func(ctx context.Context, plan ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error) {
-			return prepareDockerWorkloadPTYWithContainerIDV1(ctx, plan, func(workloadID string) error {
-				_, err := persistOwnership(controllerID, workloadID)
-				return err
-			}, func() {
-				partialPreparationCleanupVerified = true
+			return prepareDockerWorkloadPTYV1(ctx, plan, dockerWorkloadPTYBackendV1{
+				bind: bindSessionDocker,
+				recordContainerID: func(workloadID string) error {
+					_, err := persistOwnership(controllerID, workloadID)
+					return err
+				},
+				recordRollbackVerified: func() { partialPreparationCleanupVerified = true },
+				attach:                 attachDockerContainerPTYV1, resize: resizeDockerContainerPTYV1,
+				observe: observeDockerContainerExitV1,
 			})
 		},
 		recordPlannedOwnership: func() error {
@@ -241,6 +254,24 @@ func RunControlledSessionV1(
 	return result, errors.Join(runErr, completionErr)
 }
 
+func bindControlledSessionDockerEndpointV1(
+	ctx context.Context,
+	docker CommandSpec,
+) (string, func(context.Context, CommandSpec, time.Duration) (CommandSpec, commandRunner, error), error) {
+	pinnedDocker, run, err := bindPinnedDockerCommandRunnerV1(ctx, docker, defaultDockerPreflightTimeout)
+	if err != nil {
+		return "", nil, err
+	}
+	endpoint := commandEnvironmentValueV1(pinnedDocker, "DOCKER_HOST")
+	bind := func(_ context.Context, spec CommandSpec, _ time.Duration) (CommandSpec, commandRunner, error) {
+		if spec.Name != pinnedDocker.Name {
+			return CommandSpec{}, nil, fmt.Errorf("controlled-session Docker executable changed from %q to %q", pinnedDocker.Name, spec.Name)
+		}
+		return pinDockerEndpointV1(spec, endpoint), run, nil
+	}
+	return endpoint, bind, nil
+}
+
 func controlledSessionChannelAbsentV1(path string) bool {
 	_, err := os.Lstat(path)
 	return errors.Is(err, os.ErrNotExist)
@@ -250,7 +281,7 @@ func controlledSessionPreparationCanCompleteV1(cleaned bool, ownershipRecorded b
 	return cleaned && (!ownershipRecorded || operationReleaseAttempted || partialCleanupVerified)
 }
 
-func controlledSessionOwnershipFromPlanV1(plan ControlledSessionExecutionPlanV1, controllerID string, workloadID string) deploy.ControlledSessionOwnershipV1 {
+func controlledSessionOwnershipFromPlanV1(plan ControlledSessionExecutionPlanV1, dockerEndpoint string, controllerID string, workloadID string) deploy.ControlledSessionOwnershipV1 {
 	container := func(plan ControlledSessionContainerPlanV1, id string) deploy.ControlledSessionContainerOwnershipV1 {
 		return deploy.ControlledSessionContainerOwnershipV1{
 			Role: string(plan.Role), ID: id, Name: plan.Container, DeploymentID: plan.DeploymentID,
@@ -259,6 +290,7 @@ func controlledSessionOwnershipFromPlanV1(plan ControlledSessionExecutionPlanV1,
 	}
 	return deploy.ControlledSessionOwnershipV1{
 		LiveRunID: plan.LiveRunID, SessionHandle: plan.Authorization.Handle,
+		DockerEndpoint:   dockerEndpoint,
 		ChannelDirectory: plan.Channel.HostDirectory,
 		Controller:       container(plan.Controller, controllerID), Workload: container(plan.Workload, workloadID),
 	}
@@ -390,8 +422,10 @@ func (supervisor *controlledSessionSupervisorV1) run(ctx context.Context) (Contr
 	supervisor.stopAndObserveWorkload()
 	supervisor.finalizeWorkloadOutput()
 	supervisor.waitForControllerFinalization()
+	supervisor.observeWatchdogExitIfDone()
 
 	preDeliveryCleanup, preDeliveryRecovery, cleanupErr := supervisor.cleanupWorkload()
+	supervisor.observeWatchdogExitIfDone()
 	supervisor.preCleanupSucceeded = preDeliveryCleanup.Kind == controlledsession.CleanupStatusSucceededV1
 	finish := supervisor.finishStatus(preDeliveryCleanup, preDeliveryRecovery)
 	transition, finishErr := supervisor.observe(controlledsession.ObservationV1{Kind: controlledsession.ObservationFinishedV1, Finish: &finish})
@@ -474,14 +508,30 @@ func (supervisor *controlledSessionSupervisorV1) prepare(ctx context.Context) er
 			return fmt.Errorf("launch controlled-session watchdog: %w", err)
 		}
 		supervisor.watchdog = watchdog
+		watchdogCtx, cancelWatchdogCtx := context.WithCancelCause(ctx)
+		defer cancelWatchdogCtx(nil)
+		go func() {
+			select {
+			case <-watchdog.Done():
+				cancelWatchdogCtx(unexpectedControlledSessionWatchdogExitV1(watchdog))
+			case <-watchdogCtx.Done():
+			}
+		}()
+		ctx = watchdogCtx
 	}
 	if err := controller.Start(ctx); err != nil {
+		if watchdogErr := supervisor.currentWatchdogExitError(); watchdogErr != nil {
+			return watchdogErr
+		}
 		return fmt.Errorf("start controlled-session controller: %w", err)
 	}
 	supervisor.controllerStarted = true
 	supervisor.controllerResult = observeControlledSessionProcessV1(controller.Wait)
 	transport, err := channel.Claim(ctx)
 	if err != nil {
+		if watchdogErr := supervisor.currentWatchdogExitError(); watchdogErr != nil {
+			return watchdogErr
+		}
 		return fmt.Errorf("claim controlled-session controller channel: %w", err)
 	}
 	bridge, err := controlledsession.StartSessionIOBridgeV1(transport, output, supervisor.handleRequest)
@@ -494,11 +544,37 @@ func (supervisor *controlledSessionSupervisorV1) prepare(ctx context.Context) er
 		if supervisor.workloadStarted {
 			supervisor.workloadResult = observeControlledSessionProcessV1(workload.Wait)
 		}
+		if watchdogErr := supervisor.currentWatchdogExitError(); watchdogErr != nil {
+			return watchdogErr
+		}
 		return fmt.Errorf("start controlled-session workload: %w", err)
 	}
 	supervisor.workloadStarted = true
 	supervisor.workloadResult = observeControlledSessionProcessV1(workload.Wait)
+	if watchdogErr := supervisor.currentWatchdogExitError(); watchdogErr != nil {
+		return watchdogErr
+	}
 	return nil
+}
+
+func unexpectedControlledSessionWatchdogExitV1(watchdog controlledSessionWatchdogRuntimeV1) error {
+	if err := watchdog.ExitError(); err != nil {
+		return fmt.Errorf("controlled-session cleanup watchdog exited unexpectedly: %w", err)
+	}
+	return fmt.Errorf("controlled-session cleanup watchdog exited unexpectedly")
+}
+
+func (supervisor *controlledSessionSupervisorV1) currentWatchdogExitError() error {
+	if supervisor.watchdog == nil {
+		return nil
+	}
+	select {
+	case <-supervisor.watchdog.Done():
+		supervisor.watchdogExitObserved = true
+		return unexpectedControlledSessionWatchdogExitV1(supervisor.watchdog)
+	default:
+		return nil
+	}
 }
 
 func validateControlledSessionCleanupManifestForRuntimeV1(
@@ -510,9 +586,9 @@ func validateControlledSessionCleanupManifestForRuntimeV1(
 	if err := deploy.ValidateControlledSessionCleanupManifest(manifest); err != nil {
 		return fmt.Errorf("validate controlled-session cleanup manifest: %w", err)
 	}
-	expected := controlledSessionOwnershipFromPlanV1(plan, controllerID, workloadID)
+	expected := controlledSessionOwnershipFromPlanV1(plan, manifest.DockerEndpoint, controllerID, workloadID)
 	if manifest.LiveRunID != expected.LiveRunID || manifest.ChannelDirectory != expected.ChannelDirectory ||
-		manifest.Controller != expected.Controller || manifest.Workload != expected.Workload {
+		manifest.DockerEndpoint != expected.DockerEndpoint || manifest.Controller != expected.Controller || manifest.Workload != expected.Workload {
 		return fmt.Errorf("controlled-session cleanup manifest does not match the exact prepared resources")
 	}
 	if len(manifest.Networks) != 0 || len(manifest.Volumes) != 0 {
@@ -591,6 +667,8 @@ func (supervisor *controlledSessionSupervisorV1) waitForTermination(ctx context.
 			outputDone = nil
 			supervisor.observeOutputTermination()
 		case <-supervisor.stateChanged:
+		case <-supervisor.watchdogDone():
+			supervisor.observeWatchdogExit()
 		case <-ctx.Done():
 			_, err := supervisor.observe(controlledsession.ObservationV1{
 				Kind: controlledsession.ObservationHostCancelV1, Reason: "host operation was canceled",
@@ -599,6 +677,51 @@ func (supervisor *controlledSessionSupervisorV1) waitForTermination(ctx context.
 				supervisor.diagnosticErr = errors.Join(supervisor.diagnosticErr, fmt.Errorf("record controlled-session host cancellation: %w", err))
 			}
 		}
+	}
+}
+
+func (supervisor *controlledSessionSupervisorV1) watchdogDone() <-chan struct{} {
+	if supervisor.watchdog == nil || supervisor.watchdogExitObserved {
+		return nil
+	}
+	return supervisor.watchdog.Done()
+}
+
+func (supervisor *controlledSessionSupervisorV1) observeWatchdogExit() {
+	if supervisor.watchdog == nil || supervisor.watchdogExitObserved {
+		return
+	}
+	supervisor.watchdogExitObserved = true
+	detail := unexpectedControlledSessionWatchdogExitV1(supervisor.watchdog)
+	supervisor.watchdogExitErr = detail
+	if supervisor.machine.Snapshot().State == controlledsession.StateTerminatedV1 {
+		supervisor.watchdogExitAfterTermination = true
+		supervisor.diagnosticErr = errors.Join(supervisor.diagnosticErr, detail)
+		return
+	}
+	_, observeErr := supervisor.observe(controlledsession.ObservationV1{
+		Kind:   controlledsession.ObservationCleanupContainmentLostV1,
+		Reason: "controlled-session cleanup containment was lost",
+	})
+	supervisor.diagnosticErr = errors.Join(supervisor.diagnosticErr, detail, observeErr)
+	if supervisor.transportHealthy && supervisor.bridge != nil {
+		if err := supervisor.sendPreFinalizationLifecycleEvent(controlledsession.EventV1{
+			Kind: controlledsession.EventDiagnosticV1,
+			Diagnostic: &controlledsession.DiagnosticV1{
+				Code:    "cleanup_containment_lost",
+				Message: "controlled-session cleanup containment was lost",
+			},
+		}); err != nil {
+			supervisor.loseTransport("send cleanup-containment-loss diagnostic", err)
+		}
+	}
+}
+
+func (supervisor *controlledSessionSupervisorV1) observeWatchdogExitIfDone() {
+	select {
+	case <-supervisor.watchdogDone():
+		supervisor.observeWatchdogExit()
+	default:
 	}
 }
 
@@ -825,6 +948,8 @@ func (supervisor *controlledSessionSupervisorV1) waitForControllerFinalization()
 			supervisor.observeControllerLoss("controller process exited during finalization", result.err)
 		case <-supervisor.bridge.RequestsDone():
 			supervisor.observeRequestFailure()
+		case <-supervisor.watchdogDone():
+			supervisor.observeWatchdogExit()
 		case <-timer.C:
 			_, err := supervisor.observe(controlledsession.ObservationV1{Kind: controlledsession.ObservationControllerFinalizationExpiredV1})
 			if err != nil && supervisor.machine.Snapshot().AwaitingControllerFinalization {
@@ -885,6 +1010,9 @@ func (supervisor *controlledSessionSupervisorV1) waitForResultAcknowledgement() 
 			return supervisor.machine.Snapshot().ResultAcknowledged
 		case result := <-supervisor.controllerResult:
 			supervisor.controllerObserved = &result
+		case <-supervisor.watchdogDone():
+			supervisor.observeWatchdogExit()
+			return supervisor.machine.Snapshot().ResultAcknowledged
 		case <-timer.C:
 			return supervisor.machine.Snapshot().ResultAcknowledged
 		}
@@ -897,6 +1025,7 @@ func (supervisor *controlledSessionSupervisorV1) cleanupDeliveryTail() (
 	controlledsession.CleanupStatusV1,
 	controlledsession.RecoveryActionV1,
 ) {
+	supervisor.observeWatchdogExitIfDone()
 	if supervisor.bridge != nil {
 		supervisor.bridge.StopRequests()
 	}
@@ -946,6 +1075,7 @@ func (supervisor *controlledSessionSupervisorV1) cleanupDeliveryTail() (
 		controllerCleanupErr := supervisor.controller.Cleanup(cleanupCtx)
 		cleanupCancel()
 		cleanupErr = errors.Join(cleanupErr, controllerCleanupErr)
+		supervisor.observeWatchdogExitIfDone()
 		if controllerCleanupErr == nil && supervisor.controllerOwnershipIncomplete {
 			if supervisor.backend.recordControllerRollback != nil {
 				supervisor.backend.recordControllerRollback()
@@ -958,22 +1088,24 @@ func (supervisor *controlledSessionSupervisorV1) cleanupDeliveryTail() (
 		status = supervisor.controllerObserved.status
 		cleanupErr = errors.Join(cleanupErr, supervisor.controllerObserved.err)
 	}
+	if supervisor.watchdog != nil && supervisor.preCleanupSucceeded {
+		supervisor.observeWatchdogExitIfDone()
+		if supervisor.watchdogExitObserved {
+			cleanupErr = errors.Join(cleanupErr, supervisor.watchdog.Close())
+		} else if cleanupErr == nil {
+			disarmCtx, disarmCancel := context.WithTimeout(context.Background(), supervisor.options.CleanupTimeout)
+			cleanupErr = errors.Join(cleanupErr, supervisor.watchdog.Disarm(disarmCtx))
+			disarmCancel()
+		}
+	}
+	if supervisor.watchdogExitAfterTermination {
+		cleanupErr = errors.Join(cleanupErr, supervisor.watchdogExitErr)
+	}
 	if cleanupErr != nil {
 		supervisor.diagnosticErr = errors.Join(supervisor.diagnosticErr, cleanupErr)
 		return status, controlledsession.CleanupStatusV1{
 			Kind: controlledsession.CleanupStatusFailedV1, Message: "controlled-session delivery-tail cleanup failed",
 		}, controlledsession.RecoveryRetryCleanupV1
-	}
-	if supervisor.watchdog != nil && supervisor.preCleanupSucceeded {
-		disarmCtx, disarmCancel := context.WithTimeout(context.Background(), supervisor.options.CleanupTimeout)
-		cleanupErr = errors.Join(cleanupErr, supervisor.watchdog.Disarm(disarmCtx))
-		disarmCancel()
-		if cleanupErr != nil {
-			supervisor.diagnosticErr = errors.Join(supervisor.diagnosticErr, cleanupErr)
-			return status, controlledsession.CleanupStatusV1{
-				Kind: controlledsession.CleanupStatusFailedV1, Message: "controlled-session delivery-tail cleanup failed",
-			}, controlledsession.RecoveryRetryCleanupV1
-		}
 	}
 	return status, controlledsession.CleanupStatusV1{Kind: controlledsession.CleanupStatusSucceededV1}, controlledsession.RecoveryNoneV1
 }

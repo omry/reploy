@@ -24,11 +24,39 @@ const (
 var controlledSessionWatchdogExecutableV1 = os.Executable
 
 type controlledSessionWatchdogProcessV1 struct {
-	pid       int
-	liveness  *os.File
-	done      chan error
-	once      sync.Once
-	disarmErr error
+	pid        int
+	liveness   *os.File
+	exited     chan struct{}
+	exitMu     sync.Mutex
+	exitErr    error
+	closeOnce  sync.Once
+	closeErr   error
+	disarmOnce sync.Once
+	disarmErr  error
+}
+
+func (watchdog *controlledSessionWatchdogProcessV1) Done() <-chan struct{} {
+	return watchdog.exited
+}
+
+func (watchdog *controlledSessionWatchdogProcessV1) ExitError() error {
+	select {
+	case <-watchdog.exited:
+		watchdog.exitMu.Lock()
+		defer watchdog.exitMu.Unlock()
+		return watchdog.exitErr
+	default:
+		return nil
+	}
+}
+
+func (watchdog *controlledSessionWatchdogProcessV1) Close() error {
+	watchdog.closeOnce.Do(func() {
+		if err := watchdog.liveness.Close(); err != nil {
+			watchdog.closeErr = fmt.Errorf("close controlled-session watchdog liveness pipe: %w", err)
+		}
+	})
+	return watchdog.closeErr
 }
 
 func startControlledSessionWatchdogV1(ctx context.Context, manifest deploy.ControlledSessionCleanupManifest) (controlledSessionWatchdogRuntimeV1, error) {
@@ -91,8 +119,16 @@ func startControlledSessionWatchdogV1(ctx context.Context, manifest deploy.Contr
 		return nil, fmt.Errorf("launch controlled-session watchdog child: %w", err)
 	}
 	_ = readyWrite.Close()
-	done := make(chan error, 1)
-	go func() { done <- command.Wait() }()
+	watchdog := &controlledSessionWatchdogProcessV1{
+		pid: command.Process.Pid, liveness: livenessWrite, exited: make(chan struct{}),
+	}
+	go func() {
+		err := command.Wait()
+		watchdog.exitMu.Lock()
+		watchdog.exitErr = err
+		watchdog.exitMu.Unlock()
+		close(watchdog.exited)
+	}()
 
 	readyResult := make(chan error, 1)
 	go func() {
@@ -113,11 +149,12 @@ func startControlledSessionWatchdogV1(ctx context.Context, manifest deploy.Contr
 		if err != nil {
 			_ = livenessWrite.Close()
 			_ = command.Process.Kill()
-			<-done
+			<-watchdog.exited
 			return nil, fmt.Errorf("wait for controlled-session watchdog readiness: %w", err)
 		}
-	case err := <-done:
+	case <-watchdog.exited:
 		_ = livenessWrite.Close()
+		err := watchdog.ExitError()
 		if err == nil {
 			return nil, fmt.Errorf("controlled-session watchdog exited before readiness")
 		}
@@ -125,25 +162,24 @@ func startControlledSessionWatchdogV1(ctx context.Context, manifest deploy.Contr
 	case <-ctx.Done():
 		_ = livenessWrite.Close()
 		_ = command.Process.Kill()
-		<-done
+		<-watchdog.exited
 		return nil, fmt.Errorf("wait for controlled-session watchdog readiness: %w", ctx.Err())
 	}
-	return &controlledSessionWatchdogProcessV1{pid: command.Process.Pid, liveness: livenessWrite, done: done}, nil
+	return watchdog, nil
 }
 
 func (watchdog *controlledSessionWatchdogProcessV1) Disarm(ctx context.Context) error {
-	watchdog.once.Do(func() {
+	watchdog.disarmOnce.Do(func() {
 		if count, err := watchdog.liveness.Write([]byte{controlledSessionWatchdogDisarmByte}); err != nil || count != 1 {
 			if err == nil {
 				err = io.ErrShortWrite
 			}
 			watchdog.disarmErr = fmt.Errorf("send controlled-session watchdog disarm signal: %w", err)
 		}
-		if err := watchdog.liveness.Close(); err != nil {
-			watchdog.disarmErr = errors.Join(watchdog.disarmErr, fmt.Errorf("close controlled-session watchdog liveness pipe: %w", err))
-		}
+		watchdog.disarmErr = errors.Join(watchdog.disarmErr, watchdog.Close())
 		select {
-		case err := <-watchdog.done:
+		case <-watchdog.exited:
+			err := watchdog.ExitError()
 			if err != nil {
 				watchdog.disarmErr = errors.Join(watchdog.disarmErr, fmt.Errorf("wait for controlled-session watchdog child: %w", err))
 			}
