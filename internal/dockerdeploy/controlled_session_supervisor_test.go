@@ -532,7 +532,9 @@ func TestRunControlledSessionV1RejectsCleanupResourcesNotInDurableOwnership(t *t
 			ownership := controlledSessionOwnershipFromPlanV1(plan, controlledSessionTestDockerEndpointV1, controllerID, workloadID)
 			ownership.BootSession = "boot-session"
 			manifest, manifestErr := deploy.ControlledSessionCleanupManifestFromOwnership(ownership)
-			manifest.Networks = []string{"unrelated-network"}
+			manifest.Networks = []deploy.ControlledSessionNetworkOwnershipV1{{
+				Role: deploy.ControlledSessionNetworkRoleV1, ID: strings.Repeat("e", 64), Name: "unrelated-network",
+			}}
 			return manifest, manifestErr
 		},
 		now: time.Now,

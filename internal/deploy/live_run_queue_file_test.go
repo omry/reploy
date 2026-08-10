@@ -127,6 +127,67 @@ func TestOperationLockRecordsExactControlledSessionOwnership(t *testing.T) {
 	}
 }
 
+func TestOperationLockRecordsControlledSessionNetworkBeforeContainers(t *testing.T) {
+	dir := t.TempDir()
+	lock, err := AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Unlock()
+	const runID = "run-0000000000000001"
+	const generation = "reploy/env/workload:g-current"
+	if _, err := lock.AdmitLiveRunV1(LiveRunV1{
+		ID: runID, Kind: LiveRunKindShellV1, Name: "controlled-session",
+		GenerationReference: generation, Exclusive: true,
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	complete := controlledSessionOwnershipFixtureV1(dir, runID, generation)
+	complete.NetworkName = "reploy-session-" + runID
+	complete.NetworkID = strings.Repeat("d", 64)
+	planned := complete
+	planned.NetworkID = ""
+	planned.Controller.ID = ""
+	planned.Workload.ID = ""
+	if _, err := lock.RecordControlledSessionOwnershipV1(planned); err != nil {
+		t.Fatal(err)
+	}
+	containerFirst := planned
+	containerFirst.Controller.ID = complete.Controller.ID
+	if _, err := lock.RecordControlledSessionOwnershipV1(containerFirst); err == nil || !strings.Contains(err.Error(), "before the network ID") {
+		t.Fatalf("container-first ownership error = %v", err)
+	}
+	networkPrepared := planned
+	networkPrepared.NetworkID = complete.NetworkID
+	recorded, err := lock.RecordControlledSessionOwnershipV1(networkPrepared)
+	if err != nil || recorded.NetworkID != complete.NetworkID || recorded.Controller.ID != "" {
+		t.Fatalf("network ownership = %#v, error=%v", recorded, err)
+	}
+	controllerPrepared := complete
+	controllerPrepared.Workload.ID = ""
+	recorded, err = lock.RecordControlledSessionOwnershipV1(controllerPrepared)
+	if err != nil || recorded.Controller.ID != complete.Controller.ID || recorded.Workload.ID != "" {
+		t.Fatalf("controller ownership = %#v, error=%v", recorded, err)
+	}
+	recorded, err = lock.RecordControlledSessionOwnershipV1(complete)
+	if err != nil {
+		t.Fatalf("complete network ownership = %#v, error=%v", recorded, err)
+	}
+	if recorded.NetworkID != complete.NetworkID || recorded.NetworkName != complete.NetworkName || recorded.Workload.ID != complete.Workload.ID {
+		t.Fatalf("recorded network ownership = %#v", recorded)
+	}
+	changedID := complete
+	changedID.NetworkID = strings.Repeat("e", 64)
+	if _, err := lock.RecordControlledSessionOwnershipV1(changedID); err == nil || !strings.Contains(err.Error(), "network ID changed") {
+		t.Fatalf("changed network ID error = %v", err)
+	}
+	changedName := complete
+	changedName.NetworkName = "other-network"
+	if _, err := lock.RecordControlledSessionOwnershipV1(changedName); err == nil || !strings.Contains(err.Error(), "immutable resource plan changed") {
+		t.Fatalf("changed network name error = %v", err)
+	}
+}
+
 func TestLiveRunQueueV1DecodesLegacyControlledSessionWithoutDockerEndpoint(t *testing.T) {
 	dir := t.TempDir()
 	bootSession, err := CurrentBootSessionIDV1()

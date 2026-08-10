@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ func TestControlledSessionIncidentRetrievalSurfaceIsReadOnlyAndAcknowledgedExpli
 	}
 
 	receipts, err := ListControlledSessionIncidentReceiptsV1(t.Context(), dir)
-	if err != nil || len(receipts) != 1 || receipts[0] != receipt {
+	if err != nil || len(receipts) != 1 || !reflect.DeepEqual(receipts[0], receipt) {
 		t.Fatalf("retrieved receipts = %#v, error=%v", receipts, err)
 	}
 	removed, err := AcknowledgeControlledSessionIncidentReceiptV1(t.Context(), dir, runID)
