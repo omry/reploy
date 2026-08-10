@@ -20,7 +20,9 @@ import (
 type ControlledSessionCleanupManifest struct {
 	LiveRunID        string                                `json:"live_run_id"`
 	BootSession      string                                `json:"boot_session"`
+	DockerEndpoint   string                                `json:"docker_endpoint"`
 	ChannelDirectory string                                `json:"channel_directory"`
+	IncidentReceipt  string                                `json:"incident_receipt"`
 	Controller       ControlledSessionContainerOwnershipV1 `json:"controller"`
 	Workload         ControlledSessionContainerOwnershipV1 `json:"workload"`
 	Networks         []string                              `json:"networks"`
@@ -34,10 +36,15 @@ func ControlledSessionCleanupManifestFromOwnership(ownership ControlledSessionOw
 	if err := validateControlledSessionOwnershipV1(ownership); err != nil {
 		return ControlledSessionCleanupManifest{}, fmt.Errorf("controlled-session cleanup manifest ownership: %w", err)
 	}
+	receiptPath, err := ControlledSessionIncidentReceiptPathV1(ownership.ChannelDirectory, ownership.LiveRunID)
+	if err != nil {
+		return ControlledSessionCleanupManifest{}, err
+	}
 	manifest := ControlledSessionCleanupManifest{
 		LiveRunID: ownership.LiveRunID, BootSession: ownership.BootSession,
-		ChannelDirectory: ownership.ChannelDirectory,
-		Controller:       ownership.Controller, Workload: ownership.Workload,
+		DockerEndpoint:   ownership.DockerEndpoint,
+		ChannelDirectory: ownership.ChannelDirectory, IncidentReceipt: receiptPath,
+		Controller: ownership.Controller, Workload: ownership.Workload,
 		Networks: []string{}, Volumes: []string{},
 	}
 	if err := ValidateControlledSessionCleanupManifest(manifest); err != nil {
@@ -53,6 +60,9 @@ func ValidateControlledSessionCleanupManifest(manifest ControlledSessionCleanupM
 	if err := validateBootSessionIDV1(manifest.BootSession); err != nil {
 		return fmt.Errorf("controlled-session cleanup manifest: %w", err)
 	}
+	if err := validateControlledSessionDockerEndpointV1(manifest.DockerEndpoint); err != nil {
+		return fmt.Errorf("controlled-session cleanup manifest: %w", err)
+	}
 	if !filepath.IsAbs(manifest.ChannelDirectory) || filepath.Clean(manifest.ChannelDirectory) != manifest.ChannelDirectory || !safeRecoveryIdentity(manifest.ChannelDirectory) {
 		return fmt.Errorf("controlled-session cleanup manifest channel directory must be a clean absolute path")
 	}
@@ -60,6 +70,10 @@ func ValidateControlledSessionCleanupManifest(manifest ControlledSessionCleanupM
 	if filepath.Base(manifest.ChannelDirectory) != manifest.LiveRunID || filepath.Base(sessionsDirectory) != "sessions" ||
 		filepath.Base(filepath.Dir(sessionsDirectory)) != ".reploy" {
 		return fmt.Errorf("controlled-session cleanup manifest channel directory must identify the live-run private session directory")
+	}
+	receiptPath, err := ControlledSessionIncidentReceiptPathV1(manifest.ChannelDirectory, manifest.LiveRunID)
+	if err != nil || manifest.IncidentReceipt != receiptPath {
+		return fmt.Errorf("controlled-session cleanup manifest incident receipt must identify the exact live-run receipt target")
 	}
 	if err := validateControlledSessionContainerOwnershipV1(manifest.Controller, "controller"); err != nil {
 		return fmt.Errorf("controlled-session cleanup manifest controller: %w", err)

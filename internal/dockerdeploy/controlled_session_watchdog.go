@@ -31,9 +31,18 @@ type controlledSessionWatchdogRuntimeV1 interface {
 
 type controlledSessionWatchdogCleanupBackendV1 struct {
 	currentBootSession func() (string, error)
+	bindDockerEndpoint func(string) error
 	inspectContainer   func(context.Context, string) (map[string]string, bool, error)
 	removeContainer    func(context.Context, string) error
 	removeChannel      func(string) error
+	now                func() time.Time
+	writeIncident      func(deploy.ControlledSessionIncidentReceiptV1) error
+}
+
+type controlledSessionWatchdogCleanupReportV1 struct {
+	controller deploy.ControlledSessionIncidentResourceStatusV1
+	workload   deploy.ControlledSessionIncidentResourceStatusV1
+	channel    deploy.ControlledSessionIncidentResourceStatusV1
 }
 
 // RunControlledSessionWatchdogChild handles the private same-executable child
@@ -61,7 +70,8 @@ func runControlledSessionWatchdogV1(
 ) error {
 	if manifestReader == nil || liveness == nil || ready == nil ||
 		backend.currentBootSession == nil || backend.inspectContainer == nil ||
-		backend.removeContainer == nil || backend.removeChannel == nil {
+		backend.removeContainer == nil || backend.removeChannel == nil ||
+		backend.now == nil || backend.writeIncident == nil {
 		return fmt.Errorf("watchdog backend is incomplete")
 	}
 	content, err := io.ReadAll(io.LimitReader(manifestReader, controlledSessionWatchdogManifestLimit+1))
@@ -74,6 +84,11 @@ func runControlledSessionWatchdogV1(
 	manifest, err := deploy.DecodeControlledSessionCleanupManifest(content)
 	if err != nil {
 		return err
+	}
+	if backend.bindDockerEndpoint != nil {
+		if err := backend.bindDockerEndpoint(manifest.DockerEndpoint); err != nil {
+			return fmt.Errorf("bind watchdog Docker endpoint: %w", err)
+		}
 	}
 	if len(manifest.Networks) != 0 || len(manifest.Volumes) != 0 {
 		return fmt.Errorf("cleanup manifest names resources unsupported by this watchdog")
@@ -91,13 +106,19 @@ func runControlledSessionWatchdogV1(
 	var signal [1]byte
 	// The exact byte requests disarm; EOF or any other result means parent
 	// loss. Both paths converge on exact cleanup verification before exit.
-	_, _ = io.ReadFull(liveness, signal[:])
+	count, signalErr := io.ReadFull(liveness, signal[:])
+	parentLost := signalErr != nil || count != 1 || signal[0] != controlledSessionWatchdogDisarmByte
 	if err := requireControlledSessionWatchdogBootV1(manifest, backend); err != nil {
 		return err
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), controlledSessionWatchdogCleanupTimeout)
 	defer cancel()
-	return cleanupControlledSessionFromWatchdogV1(cleanupCtx, manifest, backend)
+	report, cleanupErr := cleanupControlledSessionFromWatchdogWithReportV1(cleanupCtx, manifest, backend)
+	if !parentLost {
+		return cleanupErr
+	}
+	receipt := controlledSessionWatchdogIncidentReceiptV1(manifest, report, backend.now())
+	return errors.Join(cleanupErr, backend.writeIncident(receipt))
 }
 
 func requireControlledSessionWatchdogBootV1(
@@ -119,18 +140,76 @@ func cleanupControlledSessionFromWatchdogV1(
 	manifest deploy.ControlledSessionCleanupManifest,
 	backend controlledSessionWatchdogCleanupBackendV1,
 ) error {
+	_, err := cleanupControlledSessionFromWatchdogWithReportV1(ctx, manifest, backend)
+	return err
+}
+
+func cleanupControlledSessionFromWatchdogWithReportV1(
+	ctx context.Context,
+	manifest deploy.ControlledSessionCleanupManifest,
+	backend controlledSessionWatchdogCleanupBackendV1,
+) (controlledSessionWatchdogCleanupReportV1, error) {
+	report := controlledSessionWatchdogCleanupReportV1{
+		controller: deploy.ControlledSessionIncidentResourceCleanupFailedV1,
+		workload:   deploy.ControlledSessionIncidentResourceCleanupFailedV1,
+		channel:    deploy.ControlledSessionIncidentResourceCleanupFailedV1,
+	}
 	if backend.inspectContainer == nil || backend.removeContainer == nil || backend.removeChannel == nil {
-		return fmt.Errorf("watchdog cleanup backend is incomplete")
+		return report, fmt.Errorf("watchdog cleanup backend is incomplete")
 	}
 	if err := deploy.ValidateControlledSessionCleanupManifest(manifest); err != nil {
-		return err
+		return report, err
 	}
 	var cleanupErr error
-	for _, container := range []deploy.ControlledSessionContainerOwnershipV1{manifest.Workload, manifest.Controller} {
-		cleanupErr = errors.Join(cleanupErr, cleanupControlledSessionWatchdogContainerV1(ctx, manifest.LiveRunID, container, backend))
+	if err := cleanupControlledSessionWatchdogContainerV1(ctx, manifest.LiveRunID, manifest.Workload, backend); err != nil {
+		cleanupErr = errors.Join(cleanupErr, err)
+	} else {
+		report.workload = deploy.ControlledSessionIncidentResourceVerifiedAbsentV1
 	}
-	cleanupErr = errors.Join(cleanupErr, backend.removeChannel(manifest.ChannelDirectory))
-	return cleanupErr
+	if err := cleanupControlledSessionWatchdogContainerV1(ctx, manifest.LiveRunID, manifest.Controller, backend); err != nil {
+		cleanupErr = errors.Join(cleanupErr, err)
+	} else {
+		report.controller = deploy.ControlledSessionIncidentResourceVerifiedAbsentV1
+	}
+	if err := backend.removeChannel(manifest.ChannelDirectory); err != nil {
+		cleanupErr = errors.Join(cleanupErr, err)
+	} else {
+		report.channel = deploy.ControlledSessionIncidentResourceVerifiedAbsentV1
+	}
+	return report, cleanupErr
+}
+
+func controlledSessionWatchdogIncidentReceiptV1(
+	manifest deploy.ControlledSessionCleanupManifest,
+	report controlledSessionWatchdogCleanupReportV1,
+	recordedAt time.Time,
+) deploy.ControlledSessionIncidentReceiptV1 {
+	container := func(
+		ownership deploy.ControlledSessionContainerOwnershipV1,
+		status deploy.ControlledSessionIncidentResourceStatusV1,
+	) deploy.ControlledSessionIncidentContainerV1 {
+		return deploy.ControlledSessionIncidentContainerV1{
+			Role: ownership.Role, ID: ownership.ID, DeploymentID: ownership.DeploymentID,
+			GenerationReference: ownership.GenerationReference, BuildIdentity: ownership.BuildIdentity,
+			CleanupStatus: status,
+		}
+	}
+	cleanupStatus := deploy.ControlledSessionIncidentCleanupSucceededV1
+	recoveryAction := deploy.ControlledSessionIncidentRecoveryNoneV1
+	if report.controller != deploy.ControlledSessionIncidentResourceVerifiedAbsentV1 ||
+		report.workload != deploy.ControlledSessionIncidentResourceVerifiedAbsentV1 ||
+		report.channel != deploy.ControlledSessionIncidentResourceVerifiedAbsentV1 {
+		cleanupStatus = deploy.ControlledSessionIncidentCleanupFailedV1
+		recoveryAction = deploy.ControlledSessionIncidentRecoveryNextOperationV1
+	}
+	return deploy.ControlledSessionIncidentReceiptV1{
+		Schema: deploy.ControlledSessionIncidentReceiptSchemaV1, LiveRunID: manifest.LiveRunID,
+		BootSession: manifest.BootSession, RecordedAt: recordedAt.UTC().Format(time.RFC3339Nano),
+		Trigger:              deploy.ControlledSessionIncidentParentLostV1,
+		Controller:           container(manifest.Controller, report.controller),
+		Workload:             container(manifest.Workload, report.workload),
+		ChannelCleanupStatus: report.channel, CleanupStatus: cleanupStatus, RecoveryAction: recoveryAction,
+	}
 }
 
 func cleanupControlledSessionWatchdogContainerV1(
@@ -169,14 +248,26 @@ func cleanupControlledSessionWatchdogContainerV1(
 	return nil
 }
 
-func productionControlledSessionWatchdogCleanupBackendV1() controlledSessionWatchdogCleanupBackendV1 {
+func productionControlledSessionWatchdogCleanupBackendV1(receipt *os.File) controlledSessionWatchdogCleanupBackendV1 {
+	var dockerRun commandRunner
 	return controlledSessionWatchdogCleanupBackendV1{
 		currentBootSession: deploy.CurrentBootSessionIDV1,
-		inspectContainer:   inspectControlledSessionWatchdogContainerV1,
+		bindDockerEndpoint: func(endpoint string) error {
+			var err error
+			dockerRun, err = commandRunnerForPinnedDockerEndpointV1(endpoint, runCommandWithoutDockerPreflight)
+			return err
+		},
+		inspectContainer: func(ctx context.Context, containerID string) (map[string]string, bool, error) {
+			return inspectControlledSessionWatchdogContainerV1(ctx, containerID, dockerRun)
+		},
 		removeContainer: func(ctx context.Context, containerID string) error {
-			return runDockerCommand(CommandSpec{Name: "docker", Args: []string{"container", "rm", "--force", containerID}}, RunOptions{Context: ctx})
+			return dockerRun(CommandSpec{Name: "docker", Args: []string{"container", "rm", "--force", containerID}}, RunOptions{Context: ctx})
 		},
 		removeChannel: removeControlledSessionChannelDirectoryV1,
+		now:           time.Now,
+		writeIncident: func(incident deploy.ControlledSessionIncidentReceiptV1) error {
+			return deploy.WriteControlledSessionIncidentReceiptV1(receipt, incident)
+		},
 	}
 }
 
@@ -193,9 +284,9 @@ func removeControlledSessionChannelDirectoryV1(path string) error {
 	return nil
 }
 
-func inspectControlledSessionWatchdogContainerV1(ctx context.Context, containerID string) (map[string]string, bool, error) {
+func inspectControlledSessionWatchdogContainerV1(ctx context.Context, containerID string, run commandRunner) (map[string]string, bool, error) {
 	var output bytes.Buffer
-	err := runDockerCommand(CommandSpec{Name: "docker", Args: []string{
+	err := run(CommandSpec{Name: "docker", Args: []string{
 		"container", "inspect", "--format", "{{json .Id}} {{json .Config.Labels}}", containerID,
 	}}, RunOptions{Context: ctx, Stdout: &output, Stderr: &output})
 	if err != nil {

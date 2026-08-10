@@ -110,6 +110,34 @@ func TestRunCommandPassesDockerPreflightTimeout(t *testing.T) {
 	}
 }
 
+func TestCommandRunnerForPinnedDockerEndpointV1PinsEveryCommand(t *testing.T) {
+	const endpoint = "unix:///session-engine.sock"
+	var commands []CommandSpec
+	run, err := commandRunnerForPinnedDockerEndpointV1(endpoint, func(spec CommandSpec, _ RunOptions) error {
+		commands = append(commands, spec)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"container", "inspect", "abc"}, {"container", "rm", "--force", "abc"}} {
+		if err := run(CommandSpec{Name: "docker", Args: args, Env: []string{"DOCKER_CONTEXT=drifted"}}, RunOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, command := range commands {
+		if host, found := commandSpecEnvironmentValueV1(command, "DOCKER_HOST"); !found || host != endpoint {
+			t.Fatalf("pinned Docker host = %q, found=%t", host, found)
+		}
+		if contextName, found := commandSpecEnvironmentValueV1(command, "DOCKER_CONTEXT"); !found || contextName != "" {
+			t.Fatalf("pinned Docker context = %q, found=%t", contextName, found)
+		}
+	}
+	if _, err := commandRunnerForPinnedDockerEndpointV1("tcp://remote.example:2376", runCommandWithoutDockerPreflight); err == nil {
+		t.Fatal("remote endpoint was accepted")
+	}
+}
+
 func TestRunCommandWithoutDockerPreflightRunsKnownFollowup(t *testing.T) {
 	dir := t.TempDir()
 	writeFakeCommand(

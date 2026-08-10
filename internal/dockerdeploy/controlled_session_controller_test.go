@@ -12,7 +12,10 @@ import (
 	"github.com/omry/reploy/internal/controlledsession"
 )
 
-const dockerControllerTestContainerIDV1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const (
+	dockerControllerTestContainerIDV1     = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	controlledSessionTestDockerEndpointV1 = "unix:///var/run/docker.sock"
+)
 
 func TestDockerControllerV1OrdersChannelCreateStartAndExactLifecycle(t *testing.T) {
 	plan := controlledSessionControllerPlanFixtureV1(t)

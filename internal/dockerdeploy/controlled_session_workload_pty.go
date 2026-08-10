@@ -22,6 +22,7 @@ type dockerPTYAttachmentV1 interface {
 }
 
 type dockerWorkloadPTYBackendV1 struct {
+	bind                   func(context.Context, CommandSpec, time.Duration) (CommandSpec, commandRunner, error)
 	run                    commandRunner
 	recordContainerID      func(string) error
 	recordRollbackVerified func()
@@ -40,6 +41,7 @@ type dockerWorkloadPTYWaitResultV1 struct {
 // attachment; container cleanup remains the lifecycle supervisor's job.
 type DockerWorkloadPTYV1 struct {
 	plan        ControlledSessionContainerPlanV1
+	docker      CommandSpec
 	containerID string
 	backend     dockerWorkloadPTYBackendV1
 	attachment  dockerPTYAttachmentV1
@@ -76,7 +78,7 @@ func prepareDockerWorkloadPTYWithContainerIDV1(
 	recordRollbackVerified func(),
 ) (*DockerWorkloadPTYV1, error) {
 	return prepareDockerWorkloadPTYV1(ctx, plan, dockerWorkloadPTYBackendV1{
-		run:                    runDockerCommand,
+		bind:                   bindPinnedDockerCommandRunnerV1,
 		recordContainerID:      recordContainerID,
 		recordRollbackVerified: recordRollbackVerified,
 		attach:                 attachDockerContainerPTYV1,
@@ -97,13 +99,23 @@ func prepareDockerWorkloadPTYV1(
 	if plan.Role != ControlledSessionRoleWorkloadV1 {
 		return nil, fmt.Errorf("prepare controlled-session workload PTY: container role must be %q", ControlledSessionRoleWorkloadV1)
 	}
-	if backend.run == nil || backend.attach == nil || backend.resize == nil || backend.observe == nil {
+	if (backend.bind == nil && backend.run == nil) || backend.attach == nil || backend.resize == nil || backend.observe == nil {
 		return nil, fmt.Errorf("prepare controlled-session workload PTY: backend is incomplete")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	create := controlledSessionCommandSpecV1(plan.Create)
+	if backend.bind != nil {
+		var err error
+		create, backend.run, err = backend.bind(ctx, create, defaultDockerPreflightTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("bind controlled-session workload Docker endpoint: %w", err)
+		}
+		if backend.run == nil {
+			return nil, fmt.Errorf("prepare controlled-session workload PTY: Docker endpoint binder returned no command runner")
+		}
+	}
 	var createOutput bytes.Buffer
 	var createErrorOutput bytes.Buffer
 	if err := backend.run(create, RunOptions{Context: ctx, Stdout: &createOutput, Stderr: &createErrorOutput}); err != nil {
@@ -144,7 +156,7 @@ func prepareDockerWorkloadPTYV1(
 		return nil, attachErr
 	}
 	return &DockerWorkloadPTYV1{
-		plan: plan, containerID: containerID, backend: backend, attachment: attachment, waitDone: make(chan struct{}),
+		plan: plan, docker: create, containerID: containerID, backend: backend, attachment: attachment, waitDone: make(chan struct{}),
 	}, nil
 }
 
@@ -192,7 +204,7 @@ func (workload *DockerWorkloadPTYV1) Start(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	start := CommandSpec{Name: workload.plan.Start.Name, Args: []string{"start", workload.containerID}}
+	start := CommandSpec{Name: workload.docker.Name, Args: []string{"start", workload.containerID}}
 	if err := workload.backend.run(start, RunOptions{Context: ctx}); err != nil {
 		startErr := fmt.Errorf("start attached controlled-session workload container %q: %w", workload.plan.Container, err)
 		closeErr := workload.Close()
@@ -259,7 +271,7 @@ func (workload *DockerWorkloadPTYV1) resizeLocked(ctx context.Context, columns u
 	}
 	if err := workload.backend.resize(
 		ctx,
-		controlledSessionCommandSpecV1(workload.plan.Start),
+		workload.docker,
 		workload.containerID,
 		columns,
 		rows,
@@ -291,7 +303,7 @@ func (workload *DockerWorkloadPTYV1) signal(ctx context.Context, signal string, 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	command := CommandSpec{Name: workload.plan.Start.Name, Args: []string{
+	command := CommandSpec{Name: workload.docker.Name, Args: []string{
 		"kill", "--signal", signal, workload.containerID,
 	}}
 	if err := workload.backend.run(command, RunOptions{Context: ctx}); err != nil {
@@ -336,7 +348,7 @@ func (workload *DockerWorkloadPTYV1) Cleanup(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	cleanup := CommandSpec{Name: workload.plan.Cleanup.Name, Args: []string{"container", "rm", "--force", workload.containerID}}
+	cleanup := CommandSpec{Name: workload.docker.Name, Args: []string{"container", "rm", "--force", workload.containerID}}
 	if err := workload.backend.run(cleanup, RunOptions{Context: ctx}); err != nil && !isMissingContainerCleanupError(err) {
 		return fmt.Errorf("remove controlled-session workload container %q: %w", workload.plan.Container, err)
 	}
@@ -347,7 +359,7 @@ func (workload *DockerWorkloadPTYV1) Cleanup(ctx context.Context) error {
 }
 
 func (workload *DockerWorkloadPTYV1) observeExit() {
-	code, err := workload.backend.observe(context.Background(), controlledSessionCommandSpecV1(workload.plan.Start), workload.containerID)
+	code, err := workload.backend.observe(context.Background(), workload.docker, workload.containerID)
 	if err != nil {
 		workload.waitResult = dockerWorkloadPTYWaitResultV1{
 			status: controlledsession.ProcessStatusV1{
