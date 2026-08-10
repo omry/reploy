@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -117,6 +118,121 @@ func TestRunControlledSessionV1OwnsNormalLifecycle(t *testing.T) {
 	}
 	if string(events[indices[controlledsession.EventOutputV1]].Bytes) != "hello from workload\n" {
 		t.Fatalf("output events = %#v", events)
+	}
+}
+
+func TestRunControlledSessionV1PreparesAttachesAndCleansLeaseNetwork(t *testing.T) {
+	plan := controlledSessionNetworkPlanFixtureV1(t)
+	requests := make(chan controlledsession.RequestV1, 8)
+	controller := newFakeControlledSessionProcessV1()
+	workload := newFakeControlledSessionWorkloadV1(nil, 0)
+	transport := &fakeControlledSessionTransportV1{requests: requests}
+	transport.onEvent = func(event controlledsession.EventV1) {
+		switch event.Kind {
+		case controlledsession.EventWorkloadOutputsFinalizedV1:
+			requests <- controlledsession.RequestV1{Kind: controlledsession.RequestCompleteV1}
+		case controlledsession.EventTerminatedV1:
+			requests <- controlledsession.RequestV1{Kind: controlledsession.RequestAcknowledgeTerminatedV1}
+			code := 0
+			controller.exit <- controlledSessionProcessResultV1{status: controlledsession.ProcessStatusV1{Kind: controlledsession.ProcessStatusExitedV1, Code: &code}}
+			close(requests)
+		}
+	}
+	network := &fakeControlledSessionNetworkV1{
+		id: dockerSessionNetworkTestIDV1, name: plan.Controller.SessionNetwork.Name,
+		subnets: []string{"172.31.0.0/24"}, controller: controller, workload: workload,
+	}
+	channel := &fakeControlledSessionChannelV1{transport: transport}
+	calls := []string{}
+	watchdog := &fakeControlledSessionWatchdogV1{onDisarm: func() {
+		if !network.cleaned || !workload.cleaned || !controller.cleaned || !channel.closed {
+			t.Fatal("watchdog disarmed before the complete session-network cleanup tail")
+		}
+	}}
+
+	result, err := runControlledSessionV1(t.Context(), plan, testControlledSessionRunOptionsV1(), controlledSessionSupervisorBackendV1{
+		prepareNetwork: func(_ context.Context, _ ControlledSessionExecutionPlanV1, record func(string) error, _ func()) (controlledSessionNetworkRuntimeV1, error) {
+			calls = append(calls, "prepare-network")
+			if err := record(network.id); err != nil {
+				return nil, err
+			}
+			return network, nil
+		},
+		prepareChannel: func(ControlledSessionExecutionPlanV1) (controlledSessionChannelRuntimeV1, error) {
+			calls = append(calls, "channel")
+			return channel, nil
+		},
+		prepareController: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionControllerRuntimeV1, error) {
+			calls = append(calls, "controller-container")
+			return controller, nil
+		},
+		prepareWorkload: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error) {
+			calls = append(calls, "workload-container")
+			return workload, nil
+		},
+		recordPlannedOwnership: func() error { calls = append(calls, "planned"); return nil },
+		recordNetworkOwnership: func(id string) error {
+			if id != network.id || controller.started || workload.started {
+				t.Fatalf("network ownership = %q after starts %t/%t", id, controller.started, workload.started)
+			}
+			calls = append(calls, "network-id")
+			return nil
+		},
+		recordControllerOwnership: func(string) error { calls = append(calls, "controller-id"); return nil },
+		recordOwnership: func(controllerID string, workloadID string) (deploy.ControlledSessionCleanupManifest, error) {
+			calls = append(calls, "complete")
+			ownership := controlledSessionOwnershipWithNetworkFromPlanV1(plan, controlledSessionTestDockerEndpointV1, network.id, controllerID, workloadID)
+			ownership.BootSession = "boot-session"
+			return deploy.ControlledSessionCleanupManifestFromOwnership(ownership)
+		},
+		startWatchdog: func(_ context.Context, manifest deploy.ControlledSessionCleanupManifest) (controlledSessionWatchdogRuntimeV1, error) {
+			if len(manifest.Networks) != 1 || manifest.Networks[0].ID != network.id || !network.attached || controller.started || workload.started {
+				t.Fatalf("watchdog manifest/start order = %#v attached=%t started=%t/%t", manifest.Networks, network.attached, controller.started, workload.started)
+			}
+			calls = append(calls, "watchdog")
+			return watchdog, nil
+		},
+		now: time.Now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCalls := []string{"planned", "prepare-network", "network-id", "channel", "controller-container", "controller-id", "workload-container", "complete", "watchdog"}
+	if !reflect.DeepEqual(calls, wantCalls) || network.verifyCount != 2 || !network.cleaned || !network.cleanedBeforeController ||
+		result.SessionResult.CleanupStatus.Kind != controlledsession.CleanupStatusSucceededV1 ||
+		result.DeliveryTailCleanupStatus.Kind != controlledsession.CleanupStatusSucceededV1 || !watchdog.disarmed {
+		t.Fatalf("calls=%v verify=%d network-clean=%t result=%#v watchdog=%#v", calls, network.verifyCount, network.cleaned, result, watchdog)
+	}
+}
+
+func TestRunControlledSessionV1CleansInertResourcesWhenNetworkVerificationFails(t *testing.T) {
+	plan := controlledSessionNetworkPlanFixtureV1(t)
+	controller := newFakeControlledSessionProcessV1()
+	workload := newFakeControlledSessionWorkloadV1(nil, 0)
+	verifyErr := errors.New("injected session-network verification failure")
+	network := &fakeControlledSessionNetworkV1{
+		id: dockerSessionNetworkTestIDV1, name: plan.Controller.SessionNetwork.Name,
+		subnets: []string{"172.31.0.0/24"}, controller: controller, workload: workload, verifyErr: verifyErr,
+	}
+	channel := &fakeControlledSessionChannelV1{}
+
+	result, err := runControlledSessionV1(t.Context(), plan, testControlledSessionRunOptionsV1(), controlledSessionSupervisorBackendV1{
+		prepareNetwork: func(context.Context, ControlledSessionExecutionPlanV1, func(string) error, func()) (controlledSessionNetworkRuntimeV1, error) {
+			return network, nil
+		},
+		prepareChannel: func(ControlledSessionExecutionPlanV1) (controlledSessionChannelRuntimeV1, error) { return channel, nil },
+		prepareController: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionControllerRuntimeV1, error) {
+			return controller, nil
+		},
+		prepareWorkload: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error) {
+			return workload, nil
+		},
+		now: time.Now,
+	})
+	if !errors.Is(err, verifyErr) || controller.started || workload.started || !network.cleaned || !workload.cleaned || !controller.cleaned || !channel.closed ||
+		result.SessionResult.CleanupStatus.Kind != controlledsession.CleanupStatusSucceededV1 ||
+		result.DeliveryTailCleanupStatus.Kind != controlledsession.CleanupStatusSucceededV1 {
+		t.Fatalf("verification failure error=%v result=%#v starts=%t/%t cleanup=%t/%t/%t/%t", err, result, controller.started, workload.started, network.cleaned, workload.cleaned, controller.cleaned, channel.closed)
 	}
 }
 
@@ -539,7 +655,7 @@ func TestRunControlledSessionV1RejectsCleanupResourcesNotInDurableOwnership(t *t
 		},
 		now: time.Now,
 	})
-	if err == nil || !strings.Contains(err.Error(), "resources that this runtime does not create") {
+	if err == nil || !strings.Contains(err.Error(), "network that this runtime does not create") {
 		t.Fatalf("cleanup resource selection error = %v", err)
 	}
 	if controller.started || workload.started {
@@ -1530,6 +1646,53 @@ type fakeControlledSessionChannelV1 struct {
 	blockClaim   bool
 	claimStarted chan struct{}
 	claimOnce    sync.Once
+}
+
+type fakeControlledSessionNetworkV1 struct {
+	id                      string
+	name                    string
+	subnets                 []string
+	controller              *fakeControlledSessionProcessV1
+	workload                *fakeControlledSessionWorkloadV1
+	attached                bool
+	verifyCount             int
+	cleaned                 bool
+	cleanedBeforeController bool
+	cleanupErr              error
+	verifyErr               error
+}
+
+func (network *fakeControlledSessionNetworkV1) ID() string   { return network.id }
+func (network *fakeControlledSessionNetworkV1) Name() string { return network.name }
+func (network *fakeControlledSessionNetworkV1) Subnets() []string {
+	return append([]string(nil), network.subnets...)
+}
+func (network *fakeControlledSessionNetworkV1) Attach(_ context.Context, controllerID string, workloadID string) error {
+	if network.controller.started || network.workload.started {
+		return fmt.Errorf("network attached after a session process started")
+	}
+	if controllerID != dockerControllerTestContainerIDV1 || workloadID != dockerWorkloadTestContainerIDV1 {
+		return fmt.Errorf("network attached to unexpected containers")
+	}
+	network.attached = true
+	return nil
+}
+func (network *fakeControlledSessionNetworkV1) Verify(context.Context) error {
+	if !network.attached {
+		return fmt.Errorf("network verified before attachment")
+	}
+	network.verifyCount++
+	return network.verifyErr
+}
+func (network *fakeControlledSessionNetworkV1) Cleanup(context.Context) error {
+	if network.cleanupErr != nil {
+		return network.cleanupErr
+	}
+	if network.workload.cleaned && !network.controller.cleaned {
+		network.cleanedBeforeController = true
+	}
+	network.cleaned = true
+	return nil
 }
 
 type fakeControlledSessionWatchdogV1 struct {

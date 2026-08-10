@@ -10,6 +10,7 @@ func TestParseSandboxExecPlanV1PreservesPolicyIdentityAndArgv(t *testing.T) {
 	plan, err := parseSandboxExecPlanV1([]string{
 		"--uid", "501", "--gid", "20", "--groups", "33,44",
 		"--public", "allow", "--local", "deny", "--ambiguous", "allow", "--inbound-tcp", "8080,8443",
+		"--session-network-prefixes", "/run/reploy/network-prefixes",
 		"--", "/opt/app", "", "$(not-shell)",
 	}, true)
 	if err != nil {
@@ -17,6 +18,7 @@ func TestParseSandboxExecPlanV1PreservesPolicyIdentityAndArgv(t *testing.T) {
 	}
 	if plan.UID != 501 || plan.GID != 20 || !reflect.DeepEqual(plan.Groups, []uint32{33, 44}) ||
 		!plan.AllowPublic || plan.AllowLocal || !plan.AllowAmbiguous || !reflect.DeepEqual(plan.InboundTCP, []uint16{8080, 8443}) ||
+		plan.SessionNetworkPrefixes != "/run/reploy/network-prefixes" ||
 		!reflect.DeepEqual(plan.Argv, []string{"/opt/app", "", "$(not-shell)"}) {
 		t.Fatalf("plan = %#v", plan)
 	}
@@ -79,6 +81,7 @@ func TestParseSandboxExecPlanV1FailsClosed(t *testing.T) {
 		{name: "ambiguous policy", args: []string{"--uid", "1", "--gid", "2", "--public", "deny", "--local", "deny", "--ambiguous", "yes", "--", "/opt/app"}, want: "--ambiguous"},
 		{name: "groups", args: []string{"--uid", "1", "--gid", "2", "--groups", "44,33", "--public", "deny", "--local", "deny", "--ambiguous", "require-both", "--", "/opt/app"}, want: "unique and sorted"},
 		{name: "port", args: []string{"--uid", "1", "--gid", "2", "--public", "deny", "--local", "deny", "--ambiguous", "require-both", "--inbound-tcp", "0", "--", "/opt/app"}, want: "outside 1..65535"},
+		{name: "session prefix path", args: []string{"--uid", "1", "--gid", "2", "--public", "deny", "--local", "deny", "--ambiguous", "require-both", "--session-network-prefixes", "relative", "--", "/opt/app"}, want: "absolute clean path"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := parseSandboxExecPlanV1(test.args, true)
@@ -90,11 +93,13 @@ func TestParseSandboxExecPlanV1FailsClosed(t *testing.T) {
 }
 
 func TestRestrictedExecDoesNotAcceptNetworkSetupArguments(t *testing.T) {
-	for _, argument := range []string{"--public", "--local", "--ambiguous", "--inbound-tcp"} {
+	for _, argument := range []string{"--public", "--local", "--ambiguous", "--inbound-tcp", "--session-network-prefixes"} {
 		t.Run(argument, func(t *testing.T) {
 			value := "allow"
 			if argument == "--inbound-tcp" {
 				value = "8080"
+			} else if argument == "--session-network-prefixes" {
+				value = "/run/reploy/network-prefixes"
 			}
 			_, err := parseSandboxExecPlanV1([]string{
 				"--uid", "501", "--gid", "20", argument, value, "--", "/bin/true",
