@@ -18,6 +18,7 @@ type dockerControllerBackendV1 struct {
 	observe             func(context.Context, CommandSpec, string) (int, error)
 	requireReadyChannel func(ControlledSessionContainerPlanV1) error
 	recordNoContainer   func()
+	peerAddresses       []string
 }
 
 type dockerControllerWaitResultV1 struct {
@@ -96,7 +97,12 @@ func prepareDockerControllerV1(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	docker := controlledSessionCommandSpecV1(plan.Create)
+	docker, err := controlledSessionCreateWithPeerHostsV1(
+		controlledSessionCommandSpecV1(plan.Create), plan, backend.peerAddresses,
+	)
+	if err != nil {
+		return failBeforeCreate(fmt.Errorf("prepare controlled-session controller network realization: %w", err))
+	}
 	if backend.bind != nil {
 		var err error
 		docker, backend.run, err = backend.bind(ctx, docker, defaultDockerPreflightTimeout)
