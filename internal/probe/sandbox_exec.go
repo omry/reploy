@@ -43,7 +43,7 @@ func parseSandboxExecPlanV1(args []string, installRules bool) (sandboxExecPlanV1
 	local := set.String("local", "", "local network policy")
 	ambiguous := set.String("ambiguous", "", "ambiguous destination policy")
 	inbound := set.String("inbound-tcp", "", "comma-separated inbound TCP ports")
-	sessionNetworkPrefixes := set.String("session-network-prefixes", "", "trusted file containing session-network CIDRs")
+	sessionNetworkPrefixes := set.String("session-network-prefixes", "", "trusted file containing session-network CIDRs and participant addresses")
 	sessionNetworkPeer := set.String("session-network-peer", "", "fixed session-network peer alias")
 	if err := set.Parse(args[:separator]); err != nil {
 		return sandboxExecPlanV1{}, err

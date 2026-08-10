@@ -233,6 +233,15 @@ func controlledSessionControllerIntegrationPlanV1(
 	image string,
 	controllerCommand []string,
 ) ControlledSessionExecutionPlanV1 {
+	return controlledSessionControllerIntegrationPlanWithEndpointsV1(t, image, controllerCommand, nil)
+}
+
+func controlledSessionControllerIntegrationPlanWithEndpointsV1(
+	t *testing.T,
+	image string,
+	controllerCommand []string,
+	endpoints []ControlledSessionEndpointPlanV1,
+) ControlledSessionExecutionPlanV1 {
 	t.Helper()
 	liveRunID := "run-0000000000000001"
 	controllerRoot := shortControlledSessionChannelTestDirectoryV1(t)
@@ -258,19 +267,33 @@ func controlledSessionControllerIntegrationPlanV1(
 	controllerCurrent := CurrentBuild{Generation: deploy.EnvironmentGenerationState{
 		Reference: image, BuildLockDigest: canonical.Digest("sha256:" + strings.Repeat("4", 64)),
 	}}
+	controllerResourceName := uniqueDockerIntegrationName("reploy-session-controller")
+	controllerDockerPlan := DockerExecutionPlan{
+		EnvironmentID: "controller", DeploymentDir: controllerRoot, Phase: blueprint.PhaseStaged,
+		Image: image, ContainerName: controllerResourceName,
+		NetworkName: controllerResourceName,
+		Sandbox:     newApplicationSandboxPlanV1(identity),
+	}
+	workloadResourceName := uniqueDockerIntegrationName("reploy-session-workload")
+	workloadDockerPlan := DockerExecutionPlan{
+		EnvironmentID: "workload", DeploymentDir: workloadRoot, Phase: blueprint.PhaseStaged,
+		Image: image, ContainerName: workloadResourceName,
+		NetworkName: workloadResourceName,
+		Sandbox:     newApplicationSandboxPlanV1(identity),
+	}
+	controllerNetwork, workloadNetwork := disabledControlledSessionNetworkPlanV1(), disabledControlledSessionNetworkPlanV1()
+	if len(endpoints) != 0 {
+		controllerNetwork, workloadNetwork = controlledSessionNetworkPlansV1(workloadDockerPlan.NetworkName, liveRunID, endpoints)
+	}
 	controllerPlan, err := controlledSessionContainerPlanV1(
 		ControlledSessionRoleControllerV1,
 		liveRunID,
 		controllerCurrent,
-		DockerExecutionPlan{
-			EnvironmentID: "controller", DeploymentDir: controllerRoot, Phase: blueprint.PhaseStaged,
-			Image: image, ContainerName: uniqueDockerIntegrationName("reploy-session-controller"),
-			Sandbox: newApplicationSandboxPlanV1(identity),
-		},
+		controllerDockerPlan,
 		controllerCommand,
 		channel,
 		[]string{controllerRoot, workloadRoot},
-		disabledControlledSessionNetworkPlanV1(),
+		controllerNetwork,
 		0,
 		0,
 	)
@@ -284,15 +307,11 @@ func controlledSessionControllerIntegrationPlanV1(
 		ControlledSessionRoleWorkloadV1,
 		liveRunID,
 		workloadCurrent,
-		DockerExecutionPlan{
-			EnvironmentID: "workload", DeploymentDir: workloadRoot, Phase: blueprint.PhaseStaged,
-			Image: image, ContainerName: uniqueDockerIntegrationName("reploy-session-workload"),
-			Sandbox: newApplicationSandboxPlanV1(identity),
-		},
+		workloadDockerPlan,
 		[]string{"/bin/sh"},
-		ControlledSessionChannelPlanV1{},
+		channel,
 		[]string{controllerRoot, workloadRoot},
-		disabledControlledSessionNetworkPlanV1(),
+		workloadNetwork,
 		80,
 		24,
 	)
@@ -325,7 +344,7 @@ func controlledSessionControllerIntegrationPlanV1(
 				controlledsession.OperationResizeV1,
 				controlledsession.OperationTerminateV1,
 			},
-			EndpointIDs: []string{},
+			EndpointIDs: controlledSessionEndpointIDsV1(endpoints),
 		},
 	}
 	if err := ValidateControlledSessionExecutionPlanV1(plan); err != nil {
@@ -370,8 +389,17 @@ func buildControlledSessionControllerIntegrationImageV1(t *testing.T, ctx contex
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build controlled-session controller helper: %v\n%s", err, output)
 	}
+	networkHelper := filepath.Join(workspace, "session-network-helper")
+	build = exec.CommandContext(ctx, "go", "build", "-buildvcs=false", "-o", networkHelper, "./internal/dockerdeploy/testdata/session_network_helper")
+	build.Dir = repositoryRoot
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+runtime.GOARCH, "GOCACHE="+filepath.Join(workspace, "go-cache"))
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build controlled-session network helper: %v\n%s", err, output)
+	}
 	dockerfile := filepath.Join(workspace, "Dockerfile")
-	contents := "FROM " + baseTag + "\nCOPY --chmod=0555 session-channel-helper /session-channel-helper\n"
+	contents := "FROM " + baseTag + "\n" +
+		"COPY --chmod=0555 session-channel-helper /session-channel-helper\n" +
+		"COPY --chmod=0555 session-network-helper /session-network-helper\n"
 	if err := os.WriteFile(dockerfile, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}

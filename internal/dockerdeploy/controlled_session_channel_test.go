@@ -37,8 +37,11 @@ func TestWriteControlledSessionNetworkPolicyV1FreezesExactRealizedPrefixes(t *te
 	if err := os.MkdirAll(plan.Channel.HostDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	prefixes := []string{"fd00:1::/64", "172.31.0.0/24"}
-	if err := writeControlledSessionNetworkPolicyV1(plan, prefixes); err != nil {
+	realized, err := deriveControlledSessionNetworkRealizationV1([]string{"fd00:1::/64", "172.31.0.0/24"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeControlledSessionNetworkPolicyV1(plan, realized); err != nil {
 		t.Fatal(err)
 	}
 	policyPath := filepath.Join(plan.Channel.HostDirectory, controlledSessionNetworkPolicyFileNameV1)
@@ -50,10 +53,13 @@ func TestWriteControlledSessionNetworkPolicyV1FreezesExactRealizedPrefixes(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(content) != "172.31.0.0/24\nfd00:1::/64\n" || info.Mode().Perm() != 0o444 {
+	want := "prefix 172.31.0.0/24\nprefix fd00:1::/64\n" +
+		"controller 172.31.0.2\ncontroller fd00:1::2\n" +
+		"workload 172.31.0.3\nworkload fd00:1::3\n"
+	if string(content) != want || info.Mode().Perm() != 0o444 {
 		t.Fatalf("network policy input = %q mode=%#o", content, info.Mode().Perm())
 	}
-	if err := writeControlledSessionNetworkPolicyV1(plan, prefixes); err == nil || !strings.Contains(err.Error(), "file exists") {
+	if err := writeControlledSessionNetworkPolicyV1(plan, realized); err == nil || !strings.Contains(err.Error(), "file exists") {
 		t.Fatalf("network policy replacement error = %v", err)
 	}
 }
@@ -63,9 +69,14 @@ func TestWriteControlledSessionNetworkPolicyV1RejectsMissingOrInvalidRealization
 	if err := os.MkdirAll(plan.Channel.HostDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, prefixes := range [][]string{nil, {"172.31.0.1/24"}, {"172.31.0.0/24", "172.31.0.0/24"}} {
-		if err := writeControlledSessionNetworkPolicyV1(plan, prefixes); err == nil {
-			t.Fatalf("invalid network prefixes %#v passed", prefixes)
+	for _, realized := range []controlledSessionNetworkRealizationV1{
+		{},
+		{Subnets: []string{"172.31.0.1/24"}},
+		{Subnets: []string{"172.31.0.0/24", "172.31.0.0/24"}},
+		{Subnets: []string{"172.31.0.0/24"}, ControllerAddresses: []string{"172.31.0.9"}, WorkloadAddresses: []string{"172.31.0.3"}},
+	} {
+		if err := writeControlledSessionNetworkPolicyV1(plan, realized); err == nil {
+			t.Fatalf("invalid network realization %#v passed", realized)
 		}
 	}
 }

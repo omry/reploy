@@ -205,8 +205,14 @@ func TestPlanControlledSessionV1FreezesGrantedEndpointCoordinatesAndLeaseNetwork
 		t.Fatalf("session network grants = controller %#v workload %#v", plan.Controller.SessionNetwork, plan.Workload.SessionNetwork)
 	}
 	if plan.Controller.Network != controlledSessionNetworkModeV1 || plan.Workload.Network != controlledSessionNetworkModeV1 ||
-		!containsInOrder(plan.Controller.Create.Args, []string{"--network", "none"}) ||
-		!containsInOrder(plan.Workload.Create.Args, []string{"--network", "none"}) {
+		!containsInOrder(plan.Controller.Create.Args, []string{
+			"--network", controlledSessionOrdinaryNetworkModeV1,
+			"--user", "0:0", "--cap-drop", "ALL",
+		}) ||
+		!containsInOrder(plan.Workload.Create.Args, []string{
+			"--network", controlledSessionOrdinaryNetworkModeV1,
+			"--user", "0:0", "--cap-drop", "ALL",
+		}) {
 		t.Fatalf("inert Docker network modes = %q/%q", plan.Controller.Network, plan.Workload.Network)
 	}
 	wantOpenedEndpoints := []controlledsession.EndpointV2{
