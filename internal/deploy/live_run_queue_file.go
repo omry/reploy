@@ -129,9 +129,9 @@ func (lock *OperationLock) RecordLiveRunContainerV1(id string, container string)
 }
 
 // RecordControlledSessionOwnershipV1 durably binds the planned resources to an
-// active admitted shell and monotonically fills each exact container ID after
-// Docker returns it. The boot identity comes from the admitted run already
-// protected by this lock.
+// active admitted shell and monotonically fills each exact network and
+// container ID after Docker returns it. The boot identity comes from the
+// admitted run already protected by this lock.
 func (lock *OperationLock) RecordControlledSessionOwnershipV1(ownership ControlledSessionOwnershipV1) (ControlledSessionOwnershipV1, error) {
 	if lock == nil {
 		return ControlledSessionOwnershipV1{}, fmt.Errorf("record controlled session ownership requires an operation lock")
@@ -204,6 +204,8 @@ func mergeControlledSessionOwnershipV1(
 ) (ControlledSessionOwnershipV1, error) {
 	existingPlan := existing
 	requestedPlan := requested
+	existingPlan.NetworkID = ""
+	requestedPlan.NetworkID = ""
 	existingPlan.Controller.ID = ""
 	existingPlan.Workload.ID = ""
 	requestedPlan.Controller.ID = ""
@@ -212,21 +214,25 @@ func mergeControlledSessionOwnershipV1(
 		return ControlledSessionOwnershipV1{}, fmt.Errorf("immutable resource plan changed")
 	}
 	merged := existing
-	mergeID := func(current string, next string, role string) (string, error) {
+	mergeID := func(current string, next string, resource string) (string, error) {
 		if next == "" {
 			return current, nil
 		}
 		if current != "" && current != next {
-			return "", fmt.Errorf("%s container ID changed", role)
+			return "", fmt.Errorf("%s ID changed", resource)
 		}
 		return next, nil
 	}
 	var err error
-	merged.Controller.ID, err = mergeID(existing.Controller.ID, requested.Controller.ID, "controller")
+	merged.NetworkID, err = mergeID(existing.NetworkID, requested.NetworkID, "network")
 	if err != nil {
 		return ControlledSessionOwnershipV1{}, err
 	}
-	merged.Workload.ID, err = mergeID(existing.Workload.ID, requested.Workload.ID, "workload")
+	merged.Controller.ID, err = mergeID(existing.Controller.ID, requested.Controller.ID, "controller container")
+	if err != nil {
+		return ControlledSessionOwnershipV1{}, err
+	}
+	merged.Workload.ID, err = mergeID(existing.Workload.ID, requested.Workload.ID, "workload container")
 	if err != nil {
 		return ControlledSessionOwnershipV1{}, err
 	}

@@ -15,9 +15,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/omry/reploy/internal/deploy"
 )
 
-const controlledSessionNetworkRoleV1 = "network"
+const controlledSessionNetworkRoleV1 = deploy.ControlledSessionNetworkRoleV1
 
 type dockerSessionNetworkBackendV1 struct {
 	bind                   func(context.Context, CommandSpec, time.Duration) (CommandSpec, commandRunner, error)
@@ -407,7 +409,7 @@ func (network *DockerSessionNetworkV1) inspectV1(ctx context.Context) (dockerSes
 	err := network.backend.run(command, RunOptions{Context: ctx, Stdout: &output, Stderr: &output})
 	if err != nil {
 		message := trimmedCommandOutput(output.String())
-		if isMissingDockerNetworkErrorV1(err) || strings.Contains(strings.ToLower(message), "no such network") {
+		if isMissingDockerNetworkResponseV1(err, message) {
 			return dockerSessionNetworkInspectionV1{}, false, nil
 		}
 		if message != "" {
@@ -584,11 +586,16 @@ func parseDockerNetworkIDV1(output string) (string, error) {
 }
 
 func isMissingDockerNetworkErrorV1(err error) bool {
+	return isMissingDockerNetworkResponseV1(err, "")
+}
+
+func isMissingDockerNetworkResponseV1(err error, output string) bool {
 	if err == nil {
 		return false
 	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "no such network") || strings.Contains(message, "network") && strings.Contains(message, "not found")
+	message := strings.ToLower(err.Error() + " " + output)
+	return strings.Contains(message, "no such network") || strings.Contains(message, "no such object") ||
+		strings.Contains(message, "network") && strings.Contains(message, "not found")
 }
 
 func (network *DockerSessionNetworkV1) commandV1(args ...string) CommandSpec {

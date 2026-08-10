@@ -14,9 +14,9 @@ import (
 // selection a session watchdog may receive. It is derived from durable
 // ownership rather than accepting later resource choices.
 //
-// Networks and volumes are explicit arrays even while controlled sessions do
-// not create either resource. Future slices may populate them only after their
-// exact identities become part of durable ownership.
+// Networks and volumes are explicit arrays. Network entries carry the exact
+// immutable identity selected by durable ownership; volumes remain reserved
+// for a later resource slice.
 type ControlledSessionCleanupManifest struct {
 	LiveRunID        string                                `json:"live_run_id"`
 	BootSession      string                                `json:"boot_session"`
@@ -25,7 +25,7 @@ type ControlledSessionCleanupManifest struct {
 	IncidentReceipt  string                                `json:"incident_receipt"`
 	Controller       ControlledSessionContainerOwnershipV1 `json:"controller"`
 	Workload         ControlledSessionContainerOwnershipV1 `json:"workload"`
-	Networks         []string                              `json:"networks"`
+	Networks         []ControlledSessionNetworkOwnershipV1 `json:"networks"`
 	Volumes          []string                              `json:"volumes"`
 }
 
@@ -40,12 +40,18 @@ func ControlledSessionCleanupManifestFromOwnership(ownership ControlledSessionOw
 	if err != nil {
 		return ControlledSessionCleanupManifest{}, err
 	}
+	networks := []ControlledSessionNetworkOwnershipV1{}
+	if ownership.NetworkName != "" {
+		networks = append(networks, ControlledSessionNetworkOwnershipV1{
+			Role: ControlledSessionNetworkRoleV1, ID: ownership.NetworkID, Name: ownership.NetworkName,
+		})
+	}
 	manifest := ControlledSessionCleanupManifest{
 		LiveRunID: ownership.LiveRunID, BootSession: ownership.BootSession,
 		DockerEndpoint:   ownership.DockerEndpoint,
 		ChannelDirectory: ownership.ChannelDirectory, IncidentReceipt: receiptPath,
 		Controller: ownership.Controller, Workload: ownership.Workload,
-		Networks: []string{}, Volumes: []string{},
+		Networks: networks, Volumes: []string{},
 	}
 	if err := ValidateControlledSessionCleanupManifest(manifest); err != nil {
 		return ControlledSessionCleanupManifest{}, err
@@ -87,8 +93,13 @@ func ValidateControlledSessionCleanupManifest(manifest ControlledSessionCleanupM
 	if manifest.Networks == nil || manifest.Volumes == nil {
 		return fmt.Errorf("controlled-session cleanup manifest networks and volumes must use arrays")
 	}
-	if err := validateControlledSessionCleanupResourceIDs(manifest.Networks, "network"); err != nil {
-		return err
+	if len(manifest.Networks) > 1 {
+		return fmt.Errorf("controlled-session cleanup manifest may name only one network")
+	}
+	for index, network := range manifest.Networks {
+		if err := validateControlledSessionNetworkOwnershipV1(network); err != nil {
+			return fmt.Errorf("controlled-session cleanup manifest network %d: %w", index, err)
+		}
 	}
 	if err := validateControlledSessionCleanupResourceIDs(manifest.Volumes, "volume"); err != nil {
 		return err
