@@ -60,9 +60,15 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   now durably recorded in the existing live-run state. Reploy monotonically
   fills each exact full container ID after Docker creates it, and both IDs are
   durable before either process starts. Verified cleanup removes that record;
-  failed or unverifiable partial-preparation cleanup retains it. The watchdog
-  and restart reconciliation remain the next ownership phases, and
-  controlled-session networking remains a later phase.
+  failed or unverifiable partial-preparation cleanup retains it. Reploy now
+  derives the immutable watchdog cleanup manifest from the complete recorded
+  ownership before startup. It names only the exact containers and private
+  channel, carries the host boot identity,
+  represents the currently absent lease networks and volumes as empty arrays,
+  and omits protocol authority. The parent and watchdog will be the same
+  executable, so this internal manifest adds no independent schema-version
+  marker. Launching the watchdog and restart reconciliation remain the next
+  ownership phases, and controlled-session networking remains a later phase.
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution
