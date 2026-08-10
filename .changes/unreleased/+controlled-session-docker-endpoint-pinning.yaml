@@ -1,0 +1,2 @@
+kind: Security
+body: Pin controlled-session containers, watchdog cleanup, and restart reconciliation to one durably recorded local Docker endpoint.

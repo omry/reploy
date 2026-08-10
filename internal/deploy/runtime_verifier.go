@@ -66,9 +66,6 @@ func ValidateApplicationLocalAccountV1(account ApplicationLocalAccountV1) error 
 	if uid != 0 && account.Name == "root" {
 		return fmt.Errorf("application local non-root account must not be named root")
 	}
-	if uid == 0 && gid != 0 {
-		return fmt.Errorf("application local root account must use GID 0")
-	}
 	if uid != 0 && gid == 0 {
 		return fmt.Errorf("application local non-root account must not use GID 0")
 	}
