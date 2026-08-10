@@ -1,0 +1,2 @@
+kind: Security
+body: Keep a parent-loss controlled-session watchdog alive across temporary Docker daemon unavailability, retry exact cleanup with bounded attempts and capped backoff, and retain definitive failures for recovery.
