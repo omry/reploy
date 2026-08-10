@@ -173,12 +173,13 @@ func TestPlanRuntimeUserScopePolicy(t *testing.T) {
 	}
 	scope = blueprint.InstallScopeUser
 	root, err = planRuntimeUser(document, DockerPlanContext{
-		Phase: blueprint.PhaseInstalled, Scope: &scope, Host: blueprint.HostLinux, UID: 0, GID: 0,
+		Phase: blueprint.PhaseInstalled, Scope: &scope, Host: blueprint.HostLinux, UID: 0, GID: 1000,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(root.Warnings) != 2 || strings.Contains(strings.Join(root.Warnings, "\n"), "non-root identity") ||
+	if root.LocalUser != "root" || root.DockerUser != "0:1000" || len(root.Warnings) != 2 ||
+		strings.Contains(strings.Join(root.Warnings, "\n"), "non-root identity") ||
 		strings.Contains(strings.Join(root.Warnings, "\n"), "run as root inside its container") {
 		t.Fatalf("root current-user warnings = %#v", root.Warnings)
 	}

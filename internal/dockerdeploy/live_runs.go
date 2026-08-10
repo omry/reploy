@@ -131,8 +131,15 @@ func stopLiveRunV1(
 	result.Found = true
 	result.Run = run
 	if run.Status == deploy.LiveRunStatusActiveV1 {
+		removeContainer := backend.removeContainer
+		if ownership, found := controlledSessionOwnershipForLiveRunV1(queue, run.ID); found {
+			removeContainer, err = commandRunnerForPinnedDockerEndpointV1(ownership.DockerEndpoint, removeContainer)
+			if err != nil {
+				return result, fmt.Errorf("bind controlled-session Docker endpoint for live run %q: %w", run.ID, err)
+			}
+		}
 		for _, container := range liveRunContainerTargetsV1(queue, run) {
-			removeErr := backend.removeContainer(
+			removeErr := removeContainer(
 				TemporaryContainerCleanupCommand(container),
 				RunOptions{Context: ctx, DockerPreflightTimeout: dockerPreflightTimeout},
 			)
@@ -154,6 +161,18 @@ func stopLiveRunV1(
 	return result, nil
 }
 
+func controlledSessionOwnershipForLiveRunV1(
+	queue deploy.LiveRunQueueV1,
+	liveRunID string,
+) (deploy.ControlledSessionOwnershipV1, bool) {
+	for _, ownership := range queue.ControlledSessions {
+		if ownership.LiveRunID == liveRunID {
+			return ownership, true
+		}
+	}
+	return deploy.ControlledSessionOwnershipV1{}, false
+}
+
 // liveRunContainerTargetsV1 returns every exact container owned by a live run.
 // Workload-first ordering leaves the controller available to observe workload
 // termination for as long as possible. Controlled-session ownership remains
@@ -163,15 +182,12 @@ func liveRunContainerTargetsV1(queue deploy.LiveRunQueueV1, run deploy.LiveRunV1
 	if run.Container != "" {
 		targets = append(targets, run.Container)
 	}
-	for _, ownership := range queue.ControlledSessions {
-		if ownership.LiveRunID == run.ID {
-			if ownership.Workload.ID != "" {
-				targets = append(targets, ownership.Workload.ID)
-			}
-			if ownership.Controller.ID != "" {
-				targets = append(targets, ownership.Controller.ID)
-			}
-			break
+	if ownership, found := controlledSessionOwnershipForLiveRunV1(queue, run.ID); found {
+		if ownership.Workload.ID != "" {
+			targets = append(targets, ownership.Workload.ID)
+		}
+		if ownership.Controller.ID != "" {
+			targets = append(targets, ownership.Controller.ID)
 		}
 	}
 	return targets
