@@ -5,6 +5,7 @@ package probe
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -20,16 +21,20 @@ import (
 )
 
 type applicationNetworkPolicyV1 struct {
-	AllowPublic    bool
-	AllowLocal     bool
-	AllowAmbiguous bool
-	InboundTCP     []uint16
+	AllowPublic       bool
+	AllowLocal        bool
+	AllowAmbiguous    bool
+	InboundTCP        []uint16
+	SessionPeerCIDRs  []string
+	SessionLocalCIDRs []string
 }
 
 const applicationResponseStateMaskV1 uint32 = expr.CtStateBitESTABLISHED
 
 const applicationResolverConfigurationV1 = "/etc/resolv.conf"
+const applicationHostsConfigurationV1 = "/etc/hosts"
 const applicationResolverConfigurationLimitV1 = 64 * 1024
+const applicationSessionNetworkConfigurationLimitV1 = 4 * 1024
 
 var applicationRelatedICMPv4TypesV1 = []byte{3, 11, 12}
 var applicationRelatedICMPv6TypesV1 = []byte{1, 2, 3, 4}
@@ -75,7 +80,7 @@ func installApplicationNetworkPolicyV1(policy applicationNetworkPolicyV1) error 
 	slices.Sort(ports)
 	ports = slices.Compact(ports)
 	resolverCIDRs := []string{}
-	if policy.AllowPublic || policy.AllowLocal {
+	if applicationNetworkPolicyAllowsDNSV1(policy) {
 		var err error
 		resolverCIDRs, err = readApplicationResolverCIDRsV1(applicationResolverConfigurationV1)
 		if err != nil {
@@ -137,11 +142,16 @@ func replaceApplicationNetworkTableV1(connection *nftables.Conn, family nftables
 	if family == nftables.TableFamilyIPv6 {
 		addIPv6NeighborDiscoveryRulesV1(connection, table, input)
 	}
+	if err := addSessionPeerInputVerdictsV1(
+		connection, table, input, policy.SessionPeerCIDRs, policy.SessionLocalCIDRs, addressSize,
+	); err != nil {
+		return err
+	}
 	for _, port := range ports {
 		addTCPPortVerdictV1(connection, table, input, port, expr.VerdictAccept)
 	}
 
-	if policy.AllowPublic || policy.AllowLocal {
+	if applicationNetworkPolicyAllowsDNSV1(policy) {
 		if err := addDNSResolverVerdictsV1(connection, table, output, resolverCIDRs, addressSize); err != nil {
 			return err
 		}
@@ -158,6 +168,9 @@ func replaceApplicationNetworkTableV1(connection *nftables.Conn, family nftables
 	addEstablishedVerdictV1(connection, table, output, expr.VerdictAccept)
 	if family == nftables.TableFamilyIPv6 {
 		addIPv6NeighborDiscoveryRulesV1(connection, table, output)
+	}
+	if err := addCIDRVerdictsV1(connection, table, output, policy.SessionPeerCIDRs, addressSize, expr.VerdictAccept); err != nil {
+		return err
 	}
 	ambiguousVerdict := expr.VerdictDrop
 	if policy.AllowAmbiguous {
@@ -184,6 +197,182 @@ func replaceApplicationNetworkTableV1(connection *nftables.Conn, family nftables
 		connection.AddRule(&nftables.Rule{Table: table, Chain: output, Exprs: []expr.Any{&expr.Verdict{Kind: expr.VerdictAccept}}})
 	}
 	return nil
+}
+
+func applicationNetworkPolicyAllowsDNSV1(policy applicationNetworkPolicyV1) bool {
+	return policy.AllowPublic || policy.AllowLocal
+}
+
+var lookupApplicationSessionPeerIPsV1 = net.LookupIP
+var applicationInterfaceAddrsV1 = net.InterfaceAddrs
+
+// prepareApplicationSessionPeerV1 resolves only the fixed Docker-owned peer
+// alias while trusted startup code still owns the network namespace. It then
+// freezes that mapping in the container-local hosts file and returns exact
+// host prefixes for the firewall. Untrusted application code starts only
+// after the firewall is installed, so deny/deny does not require a DNS grant.
+func prepareApplicationSessionPeerV1(peer string, sessionSubnets []string, hostsPath string) ([]string, []string, error) {
+	if peer == "" {
+		if len(sessionSubnets) != 0 {
+			return nil, nil, fmt.Errorf("session-network prefixes require a peer alias")
+		}
+		return []string{}, []string{}, nil
+	}
+	if peer != "controller" && peer != "workload" {
+		return nil, nil, fmt.Errorf("session-network peer alias %q is invalid", peer)
+	}
+	if len(sessionSubnets) == 0 {
+		return nil, nil, fmt.Errorf("session-network peer alias requires realized prefixes")
+	}
+	allowed := make([]*net.IPNet, len(sessionSubnets))
+	for index, prefix := range sessionSubnets {
+		_, network, err := net.ParseCIDR(prefix)
+		if err != nil || network.String() != prefix {
+			return nil, nil, fmt.Errorf("session-network prefix %q is not canonical CIDR", prefix)
+		}
+		allowed[index] = network
+	}
+	addresses, err := lookupApplicationSessionPeerIPsV1(peer)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve fixed peer alias %q: %w", peer, err)
+	}
+	if len(addresses) == 0 {
+		return nil, nil, fmt.Errorf("resolve fixed peer alias %q: no addresses", peer)
+	}
+	exact := make([]string, 0, len(addresses))
+	hosts := make([]string, 0, len(addresses))
+	seen := map[string]struct{}{}
+	for _, address := range addresses {
+		canonical := address.String()
+		if canonical == "<nil>" {
+			return nil, nil, fmt.Errorf("resolve fixed peer alias %q: invalid address", peer)
+		}
+		permitted := false
+		for _, subnet := range allowed {
+			if subnet.Contains(address) {
+				permitted = true
+				break
+			}
+		}
+		if !permitted {
+			return nil, nil, fmt.Errorf("fixed peer alias %q resolved outside the realized session network", peer)
+		}
+		bits := 128
+		if address.To4() != nil {
+			canonical = address.To4().String()
+			bits = 32
+		}
+		prefix := fmt.Sprintf("%s/%d", canonical, bits)
+		if _, duplicate := seen[prefix]; duplicate {
+			continue
+		}
+		seen[prefix] = struct{}{}
+		exact = append(exact, prefix)
+		hosts = append(hosts, canonical+" "+peer+"\n")
+	}
+	sort.Strings(exact)
+	sort.Strings(hosts)
+	local, err := applicationSessionLocalCIDRsV1(allowed)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, peerCIDR := range exact {
+		peerIP, _, _ := net.ParseCIDR(peerCIDR)
+		foundFamily := false
+		for _, localCIDR := range local {
+			localIP, _, _ := net.ParseCIDR(localCIDR)
+			if (peerIP.To4() != nil) == (localIP.To4() != nil) {
+				foundFamily = true
+				break
+			}
+		}
+		if !foundFamily {
+			return nil, nil, fmt.Errorf("fixed peer alias %q has no same-family lease-local address", peer)
+		}
+	}
+	file, err := os.OpenFile(hostsPath, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open container hosts file: %w", err)
+	}
+	_, writeErr := file.WriteString(strings.Join(hosts, ""))
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
+		return nil, nil, fmt.Errorf("freeze fixed peer alias in container hosts file: %w", errors.Join(writeErr, closeErr))
+	}
+	return exact, local, nil
+}
+
+func applicationSessionLocalCIDRsV1(sessionSubnets []*net.IPNet) ([]string, error) {
+	addresses, err := applicationInterfaceAddrsV1()
+	if err != nil {
+		return nil, fmt.Errorf("inspect container interface addresses: %w", err)
+	}
+	result := map[string]struct{}{}
+	for _, address := range addresses {
+		ip, _, err := net.ParseCIDR(address.String())
+		if err != nil {
+			return nil, fmt.Errorf("parse container interface address %q: %w", address, err)
+		}
+		for _, subnet := range sessionSubnets {
+			if !subnet.Contains(ip) {
+				continue
+			}
+			bits := 128
+			if ipv4 := ip.To4(); ipv4 != nil {
+				ip = ipv4
+				bits = 32
+			}
+			result[fmt.Sprintf("%s/%d", ip, bits)] = struct{}{}
+			break
+		}
+	}
+	local := make([]string, 0, len(result))
+	for prefix := range result {
+		local = append(local, prefix)
+	}
+	sort.Strings(local)
+	if len(local) == 0 {
+		return nil, fmt.Errorf("container has no address in the realized session network")
+	}
+	return local, nil
+}
+
+func readApplicationSessionNetworkCIDRsV1(path string) ([]string, error) {
+	if path == "" {
+		return []string{}, nil
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	content, err := io.ReadAll(io.LimitReader(file, applicationSessionNetworkConfigurationLimitV1+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(content) > applicationSessionNetworkConfigurationLimitV1 {
+		return nil, fmt.Errorf("session-network configuration exceeds %d bytes", applicationSessionNetworkConfigurationLimitV1)
+	}
+	result := []string{}
+	previous := ""
+	for _, line := range strings.Split(strings.TrimSuffix(string(content), "\n"), "\n") {
+		if line == "" {
+			return nil, fmt.Errorf("session-network configuration contains an empty prefix")
+		}
+		_, network, err := net.ParseCIDR(line)
+		if err != nil || network.String() != line {
+			return nil, fmt.Errorf("session-network prefix %q is not canonical CIDR", line)
+		}
+		if previous != "" && previous >= line {
+			return nil, fmt.Errorf("session-network prefixes must be unique and sorted")
+		}
+		result = append(result, line)
+		previous = line
+	}
+	if len(result) == 0 {
+		return nil, fmt.Errorf("session-network configuration contains no prefixes")
+	}
+	return result, nil
 }
 
 func readApplicationResolverCIDRsV1(path string) ([]string, error) {
@@ -293,6 +482,33 @@ func addCIDRVerdictsV1(connection *nftables.Conn, table *nftables.Table, chain *
 	return nil
 }
 
+func addSessionPeerInputVerdictsV1(connection *nftables.Conn, table *nftables.Table, chain *nftables.Chain, peerCIDRs []string, localCIDRs []string, addressSize uint32) error {
+	for _, peerCIDR := range peerCIDRs {
+		for _, localCIDR := range localCIDRs {
+			expressions, err := sessionPeerInputVerdictExpressionsV1(peerCIDR, localCIDR, addressSize)
+			if err != nil {
+				return err
+			}
+			if expressions != nil {
+				connection.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: expressions})
+			}
+		}
+	}
+	return nil
+}
+
+func sessionPeerInputVerdictExpressionsV1(peerCIDR string, localCIDR string, addressSize uint32) ([]expr.Any, error) {
+	peer, err := addressCIDRMatchExpressionsV1(peerCIDR, addressSize, true)
+	if err != nil || peer == nil {
+		return nil, err
+	}
+	local, err := addressCIDRMatchExpressionsV1(localCIDR, addressSize, false)
+	if err != nil || local == nil {
+		return nil, err
+	}
+	return append(append(peer, local...), &expr.Verdict{Kind: expr.VerdictAccept}), nil
+}
+
 func addRelatedICMPErrorVerdictsV1(connection *nftables.Conn, table *nftables.Table, chain *nftables.Chain, family nftables.TableFamily) {
 	protocol := byte(unix.IPPROTO_ICMP)
 	types := applicationRelatedICMPv4TypesV1
@@ -362,21 +578,49 @@ func addIPv6NeighborDiscoveryRulesV1(connection *nftables.Conn, table *nftables.
 }
 
 func addCIDRVerdictV1(connection *nftables.Conn, table *nftables.Table, chain *nftables.Chain, cidr string, addressSize uint32, verdict expr.VerdictKind) error {
+	return addAddressCIDRVerdictV1(connection, table, chain, cidr, addressSize, false, verdict)
+}
+
+func addAddressCIDRVerdictV1(connection *nftables.Conn, table *nftables.Table, chain *nftables.Chain, cidr string, addressSize uint32, source bool, verdict expr.VerdictKind) error {
+	expressions, err := addressCIDRVerdictExpressionsV1(cidr, addressSize, source, verdict)
+	if err != nil || expressions == nil {
+		return err
+	}
+	connection.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: expressions})
+	return nil
+}
+
+func addressCIDRVerdictExpressionsV1(cidr string, addressSize uint32, source bool, verdict expr.VerdictKind) ([]expr.Any, error) {
+	expressions, err := addressCIDRMatchExpressionsV1(cidr, addressSize, source)
+	if err != nil || expressions == nil {
+		return expressions, err
+	}
+	return append(expressions, &expr.Verdict{Kind: verdict}), nil
+}
+
+func addressCIDRMatchExpressionsV1(cidr string, addressSize uint32, source bool) ([]expr.Any, error) {
 	ip, network, err := net.ParseCIDR(cidr)
 	if err != nil {
-		return fmt.Errorf("parse application network prefix %q: %w", cidr, err)
+		return nil, fmt.Errorf("parse application network prefix %q: %w", cidr, err)
 	}
 	offset := uint32(16)
+	if source {
+		offset = 12
+	}
 	address := ip.To4()
 	if addressSize == 16 {
 		offset = 24
+		if source {
+			offset = 8
+		}
 		address = ip.To16()
 	}
-	connection.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: []expr.Any{
+	if address == nil || addressSize == 4 && ip.To4() == nil || addressSize == 16 && ip.To4() != nil {
+		return nil, nil
+	}
+	return []expr.Any{
 		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: offset, Len: addressSize},
 		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: addressSize, Mask: network.Mask, Xor: make([]byte, addressSize)},
 		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: address},
-		&expr.Verdict{Kind: verdict},
-	}})
-	return nil
+	}, nil
 }

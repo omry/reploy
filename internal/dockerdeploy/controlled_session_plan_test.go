@@ -58,6 +58,63 @@ func TestPlanControlledSessionV1FreezesExactTwoEnvironmentAuthority(t *testing.T
 	}
 }
 
+func TestPlanControlledSessionV1PreservesExplicitOrdinaryNetworkGrantsWithEndpoints(t *testing.T) {
+	input, backend := controlledSessionPlanFixtureV1(t)
+	input.EndpointIDs = []string{"browser"}
+	input.ControllerRuntime.Docker.Sandbox.Network = ApplicationNetworkPolicyV1{
+		Public: blueprint.NetworkAccessAllow, Local: blueprint.NetworkAccessDeny,
+		Ambiguous: blueprint.AmbiguousNetworkAccessRequireBoth,
+	}
+	input.WorkloadRuntime.Docker.Sandbox.Network = ApplicationNetworkPolicyV1{
+		Public: blueprint.NetworkAccessDeny, Local: blueprint.NetworkAccessAllow,
+		Ambiguous: blueprint.AmbiguousNetworkAccessRequireBoth,
+	}
+	plan, err := planControlledSessionV1(input, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Controller.Network != controlledSessionOrdinaryNetworkModeV1 || plan.Workload.Network != controlledSessionOrdinaryNetworkModeV1 {
+		t.Fatalf("ordinary network modes = controller %q workload %q", plan.Controller.Network, plan.Workload.Network)
+	}
+	if !containsInOrder(plan.Controller.Create.Args, []string{
+		"--network", "bridge", "--user", "0:0", "--cap-drop", "ALL", "--cap-add", "NET_ADMIN",
+	}) || !containsInOrder(plan.Controller.Create.Args, []string{
+		"--dns", applicationGooglePublicDNSPrimaryV1, "--dns", applicationGooglePublicDNSSecondaryV1,
+	}) {
+		t.Fatalf("public-only controller create = %#v", plan.Controller.Create.Args)
+	}
+	if !containsInOrder(plan.Workload.Create.Args, []string{"--network", "bridge"}) ||
+		containsString(plan.Workload.Create.Args, "--dns") {
+		t.Fatalf("local-only workload create = %#v", plan.Workload.Create.Args)
+	}
+	for _, container := range []ControlledSessionContainerPlanV1{plan.Controller, plan.Workload} {
+		if !containsInOrder(container.Create.Args, []string{
+			"sandbox-exec", "--uid", container.RuntimeIdentity.UID,
+			"--gid", container.RuntimeIdentity.GID,
+			"--public", string(container.NetworkPolicy.Public),
+			"--local", string(container.NetworkPolicy.Local),
+			"--ambiguous", string(container.NetworkPolicy.Ambiguous),
+			"--session-network-prefixes", controlledSessionNetworkPolicyPathV1,
+			"--session-network-peer", container.SessionNetwork.PeerAlias,
+		}) {
+			t.Fatalf("%s sandbox create = %#v", container.Role, container.Create.Args)
+		}
+	}
+}
+
+func TestControlledSessionOrdinaryNetworkModeIncludesAmbiguousEscapeHatch(t *testing.T) {
+	policy := ApplicationNetworkPolicyV1{
+		Public: blueprint.NetworkAccessDeny, Local: blueprint.NetworkAccessDeny,
+		Ambiguous: blueprint.AmbiguousNetworkAccessAllow,
+	}
+	if got := controlledSessionDockerNetworkModeV1(policy); got != controlledSessionOrdinaryNetworkModeV1 {
+		t.Fatalf("ambiguous escape-hatch network mode = %q", got)
+	}
+	if !controlledSessionInstallsNetworkPolicyV1(policy, false) {
+		t.Fatal("ambiguous escape hatch did not install the application firewall")
+	}
+}
+
 func TestPlanControlledSessionV1BindsEveryCoveredInputToPlanDigests(t *testing.T) {
 	baseInput, backend := controlledSessionPlanFixtureV1(t)
 	base, err := planControlledSessionV1(baseInput, backend)
@@ -76,6 +133,9 @@ func TestPlanControlledSessionV1BindsEveryCoveredInputToPlanDigests(t *testing.T
 		{name: "controller identity", mutate: func(input *ControlledSessionPlanInputV1) {
 			input.ControllerRuntime.Docker.Sandbox = testApplicationSandboxPlanV1(2000, 2000)
 		}, controllerChanged: true},
+		{name: "controller network policy", mutate: func(input *ControlledSessionPlanInputV1) {
+			input.ControllerRuntime.Docker.Sandbox.Network.Public = blueprint.NetworkAccessAllow
+		}, controllerChanged: true},
 		{name: "controller mount", mutate: func(input *ControlledSessionPlanInputV1) {
 			input.ControllerRuntime.Docker.Mounts = []MountExecutionPlan{{Name: "cache", Mode: blueprint.MountVolume, Source: "controller-cache", Target: "/cache"}}
 		}, controllerChanged: true},
@@ -89,6 +149,9 @@ func TestPlanControlledSessionV1BindsEveryCoveredInputToPlanDigests(t *testing.T
 		}, workloadChanged: true},
 		{name: "workload identity", mutate: func(input *ControlledSessionPlanInputV1) {
 			input.WorkloadRuntime.Docker.Sandbox = testApplicationSandboxPlanV1(3000, 3000)
+		}, workloadChanged: true},
+		{name: "workload network policy", mutate: func(input *ControlledSessionPlanInputV1) {
+			input.WorkloadRuntime.Docker.Sandbox.Network.Local = blueprint.NetworkAccessAllow
 		}, workloadChanged: true},
 		{name: "workload mount", mutate: func(input *ControlledSessionPlanInputV1) {
 			input.WorkloadRuntime.Docker.Mounts = []MountExecutionPlan{{Name: "data", Mode: blueprint.MountVolume, Source: "workload-data", Target: "/data"}}
@@ -153,8 +216,22 @@ func TestPlanControlledSessionV1FreezesGrantedEndpointCoordinatesAndLeaseNetwork
 	if got := controlledSessionOpenedEndpointsV1(plan.Controller.SessionNetwork.Endpoints); !reflect.DeepEqual(got, wantOpenedEndpoints) {
 		t.Fatalf("planned opened endpoints = %#v, want %#v", got, wantOpenedEndpoints)
 	}
-	if _, err := controlledSessionPrivateChannelConfigV1(plan); err == nil || !strings.Contains(err.Error(), "require realized session-network attachment") {
-		t.Fatalf("controlledSessionPrivateChannelConfigV1(unrealized network) error = %v", err)
+	config, err := controlledSessionPrivateChannelConfigV1(plan)
+	if err != nil || !reflect.DeepEqual(config.Opened.Endpoints, wantOpenedEndpoints) {
+		t.Fatalf("controlledSessionPrivateChannelConfigV1 endpoints = %#v, error = %v", config.Opened.Endpoints, err)
+	}
+	for _, container := range []ControlledSessionContainerPlanV1{plan.Controller, plan.Workload} {
+		if !slices.Contains(container.SetupCapabilities, "NET_ADMIN") ||
+			!containsInOrder(container.Create.Args, []string{"sandbox-exec", "--uid", container.RuntimeIdentity.UID}) ||
+			!containsInOrder(container.Create.Args, []string{
+				"--public", string(container.NetworkPolicy.Public),
+				"--local", string(container.NetworkPolicy.Local),
+				"--ambiguous", string(container.NetworkPolicy.Ambiguous),
+				"--session-network-prefixes", controlledSessionNetworkPolicyPathV1,
+				"--session-network-peer", container.SessionNetwork.PeerAlias,
+			}) || !controlledSessionContainerCarriesNetworkPolicyV1(container, plan.Channel) {
+			t.Fatalf("%s container does not carry the immutable session-network firewall contract: %#v", container.Role, container)
+		}
 	}
 }
 
