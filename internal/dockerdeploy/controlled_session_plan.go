@@ -121,6 +121,21 @@ type ControlledSessionDockerCommandV1 struct {
 	Args []string `json:"args"`
 }
 
+func cloneControlledSessionContainerPlanV1(plan ControlledSessionContainerPlanV1) ControlledSessionContainerPlanV1 {
+	clone := plan
+	clone.SetupCapabilities = slices.Clone(plan.SetupCapabilities)
+	clone.SecurityOptions = slices.Clone(plan.SecurityOptions)
+	clone.Environment = slices.Clone(plan.Environment)
+	clone.Labels = slices.Clone(plan.Labels)
+	clone.Mounts = slices.Clone(plan.Mounts)
+	clone.Masks = slices.Clone(plan.Masks)
+	clone.Command = slices.Clone(plan.Command)
+	clone.Create.Args = slices.Clone(plan.Create.Args)
+	clone.Start.Args = slices.Clone(plan.Start.Args)
+	clone.Cleanup.Args = slices.Clone(plan.Cleanup.Args)
+	return clone
+}
+
 // PlanControlledSessionV1 derives the complete immutable Docker authority for
 // one prospective controller/workload run before admission. It is read-only
 // and creates no host or Docker resources.
