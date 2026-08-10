@@ -183,10 +183,9 @@ This file is the day-to-day queue for design and implementation gaps.
       that do not belong in blueprints, staging overrides, or installation
       state. Do not add a general configuration file until the accumulated use
       cases justify its scope, precedence, user/system ownership, validation,
-      and portability. Initial potential use case: overriding the otherwise
-      fixed host-owned limits for controlled-session endpoint streams and
-      connection-open rates. Also record host-owned DNS resolver configuration
-      used to provide DNS under the coarse application network grants. The
+      and portability. Initial potential use case: host-owned DNS resolver
+      configuration used to provide DNS under the coarse application network
+      grants. The
       default local-capable path should use the host's configured resolver so
       VPN and split-DNS behavior remains available; the public-only path should
       use the built-in Google Public DNS profile (`8.8.8.8`, `8.8.4.4`). Allow
@@ -195,17 +194,28 @@ This file is the day-to-day queue for design and implementation gaps.
 
 - [ ] `P2` Design and implement a Reploy userland L3 policy gateway. Keep this
       separate from the initial public/local kill switches and controlled
-      sessions. Define a capability-free application network namespace, a
-      one-shot route initializer, an isolated data path whose only peer is the
-      gateway, private gateway control, root-resistant route invariants,
-      IPv4/IPv6 and DNS policy, destination and port grants, auditing, resource
+      sessions. Define separate controller and workload network identities, a
+      capability-free application network namespace, a one-shot route
+      initializer, an isolated data path whose only peer is the gateway,
+      private gateway control, root-resistant route invariants, IPv4/IPv6 and
+      DNS policy, directional destination and port grants, auditing, resource
       limits, failure behavior, reconciliation, and Docker/Podman plus Desktop
       integration. Treat native engine primitives as fast paths rather than
-      exposing backend network modes as product policy. Replace or mediate the
-      initial controlled-session host-loopback endpoint publication so only the
-      lease-owned Host Reploy operation can reach the recorded application;
-      include multi-user-host tests proving unrelated local processes cannot
-      bypass the session endpoint grant. Replace the temporary, discouraged
+      exposing backend network modes as product policy.
+
+      Make the gateway the target controlled-session endpoint policy. Permit
+      native TCP from the controller only to declared workload addresses and
+      ports; deny workload-initiated access to the controller, undeclared
+      workload ports, unrelated containers, and ungranted networks. Preserve
+      native application traffic while replacing the initial coarse
+      two-container shared-network policy after parity is proven. Make every
+      gateway rule, address, and network resource lease-owned and reconcile it
+      during teardown. Include Docker, Podman, Desktop, hostile-root,
+      multi-user-host, concurrent-connection, interruption, and cleanup tests
+      proving the workload cannot reverse the route or bypass the endpoint
+      grant and unrelated local processes cannot reach the workload endpoint.
+
+      Replace the temporary, discouraged
       `environment.runtime.network.ambiguous: allow` escape hatch with precise
       translated-destination policy and deprecate that coarse override.
 
