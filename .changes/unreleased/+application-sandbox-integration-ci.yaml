@@ -1,0 +1,2 @@
+kind: Changed
+body: Run application sandbox Docker integration checks across the supported release integration runners.
