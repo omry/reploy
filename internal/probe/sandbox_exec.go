@@ -3,14 +3,15 @@ package probe
 import (
 	"flag"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
 
 type sandboxExecPlanV1 struct {
-	UID            int
-	GID            int
-	Groups         []int
+	UID            uint32
+	GID            uint32
+	Groups         []uint32
 	AllowPublic    bool
 	AllowLocal     bool
 	AllowAmbiguous bool
@@ -32,8 +33,8 @@ func parseSandboxExecPlanV1(args []string, installRules bool) (sandboxExecPlanV1
 	}
 	set := flag.NewFlagSet("sandbox-exec", flag.ContinueOnError)
 	set.SetOutput(new(strings.Builder))
-	uid := set.Int("uid", -1, "application UID")
-	gid := set.Int("gid", -1, "application GID")
+	uid := set.String("uid", "", "application UID")
+	gid := set.String("gid", "", "application GID")
 	groups := set.String("groups", "", "comma-separated supplementary GIDs")
 	public := set.String("public", "", "public network policy")
 	local := set.String("local", "", "local network policy")
@@ -46,10 +47,15 @@ func parseSandboxExecPlanV1(args []string, installRules bool) (sandboxExecPlanV1
 		return sandboxExecPlanV1{}, fmt.Errorf("unexpected positional sandbox arguments")
 	}
 	argv := args[separator+1:]
-	if *uid < 0 || *gid < 0 {
-		return sandboxExecPlanV1{}, fmt.Errorf("requires non-negative --uid and --gid")
+	parsedUID, err := parseCredentialV1(*uid)
+	if err != nil {
+		return sandboxExecPlanV1{}, fmt.Errorf("parse --uid: %w", err)
 	}
-	parsedGroups, err := parseDecimalListV1(*groups, 0, int(^uint(0)>>1))
+	parsedGID, err := parseCredentialV1(*gid)
+	if err != nil {
+		return sandboxExecPlanV1{}, fmt.Errorf("parse --gid: %w", err)
+	}
+	parsedGroups, err := parseCredentialListV1(*groups)
 	if err != nil {
 		return sandboxExecPlanV1{}, fmt.Errorf("parse --groups: %w", err)
 	}
@@ -77,11 +83,39 @@ func parseSandboxExecPlanV1(args []string, installRules bool) (sandboxExecPlanV1
 		ports[index] = uint16(value)
 	}
 	return sandboxExecPlanV1{
-		UID: *uid, GID: *gid, Groups: parsedGroups,
+		UID: parsedUID, GID: parsedGID, Groups: parsedGroups,
 		AllowPublic: allowPublic, AllowLocal: allowLocal, AllowAmbiguous: allowAmbiguous,
 		InboundTCP: ports, InstallRules: installRules,
 		Argv: append([]string(nil), argv...),
 	}, nil
+}
+
+func parseCredentialV1(value string) (uint32, error) {
+	parsed, err := strconv.ParseUint(value, 10, 32)
+	if err != nil || value == "" || len(value) > 1 && value[0] == '0' || parsed == math.MaxUint32 || strconv.FormatUint(parsed, 10) != value {
+		return 0, fmt.Errorf("%q must be a canonical unsigned 32-bit decimal value below %d", value, uint64(math.MaxUint32))
+	}
+	return uint32(parsed), nil
+}
+
+func parseCredentialListV1(value string) ([]uint32, error) {
+	if value == "" {
+		return []uint32{}, nil
+	}
+	result := []uint32{}
+	var previous uint32
+	for index, item := range strings.Split(value, ",") {
+		parsed, err := parseCredentialV1(item)
+		if err != nil {
+			return nil, err
+		}
+		if index > 0 && parsed <= previous {
+			return nil, fmt.Errorf("values must be unique and sorted")
+		}
+		result = append(result, parsed)
+		previous = parsed
+	}
+	return result, nil
 }
 
 func parseAmbiguousNetworkAccessV1(value string, allowPublic bool, allowLocal bool, required bool) (bool, error) {

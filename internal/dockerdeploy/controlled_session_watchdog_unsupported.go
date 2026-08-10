@@ -13,7 +13,7 @@ import (
 
 var controlledSessionWatchdogExecutableV1 = os.Executable
 
-func startControlledSessionWatchdogV1(context.Context, deploy.ControlledSessionCleanupManifest) (controlledSessionWatchdogRuntimeV1, error) {
+func startControlledSessionWatchdogV1(context.Context, deploy.ControlledSessionCleanupManifest, *deploy.ControlledSessionIncidentReceiptTargetV1) (controlledSessionWatchdogRuntimeV1, error) {
 	return nil, fmt.Errorf("controlled-session watchdog requires Linux")
 }
 
