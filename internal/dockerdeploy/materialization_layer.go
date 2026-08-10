@@ -301,11 +301,11 @@ func ValidateInspectedImageCandidateIdentity(candidate InspectedImageCandidate) 
 	if err := candidate.Descriptor.Validate(); err != nil {
 		return fmt.Errorf("validate inspected materialization descriptor: %w", err)
 	}
-	rootFSSubject, err := deploy.RootFSSubject(candidate.Descriptor.RootFSDiffIDs)
+	expected, err := realizedImageFromDescriptor(candidate.Descriptor)
 	if err != nil {
-		return fmt.Errorf("validate inspected materialization rootfs: %w", err)
+		return fmt.Errorf("validate inspected materialization descriptor image: %w", err)
 	}
-	if candidate.Image.Digest != candidate.Descriptor.ConfigDigest || candidate.Image.ConfigDigest != candidate.Descriptor.ConfigDigest || candidate.Image.RootFSSubject != rootFSSubject {
+	if candidate.Image != expected {
 		return fmt.Errorf("inspected materialization image identity does not match its Docker descriptor")
 	}
 	return nil
