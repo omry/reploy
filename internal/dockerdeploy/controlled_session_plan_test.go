@@ -93,6 +93,9 @@ func TestPlanControlledSessionV1BindsEveryCoveredInputToPlanDigests(t *testing.T
 		{name: "workload mount", mutate: func(input *ControlledSessionPlanInputV1) {
 			input.WorkloadRuntime.Docker.Mounts = []MountExecutionPlan{{Name: "data", Mode: blueprint.MountVolume, Source: "workload-data", Target: "/data"}}
 		}, workloadChanged: true},
+		{name: "endpoint grant", mutate: func(input *ControlledSessionPlanInputV1) {
+			input.EndpointIDs = []string{"browser"}
+		}, controllerChanged: true, workloadChanged: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -107,6 +110,130 @@ func TestPlanControlledSessionV1BindsEveryCoveredInputToPlanDigests(t *testing.T
 			workloadChanged := changed.Authorization.Workload.PlanDigest != base.Authorization.Workload.PlanDigest
 			if controllerChanged != test.controllerChanged || workloadChanged != test.workloadChanged {
 				t.Fatalf("digest changes = controller %t workload %t, want %t/%t", controllerChanged, workloadChanged, test.controllerChanged, test.workloadChanged)
+			}
+		})
+	}
+}
+
+func TestPlanControlledSessionV1FreezesGrantedEndpointCoordinatesAndLeaseNetwork(t *testing.T) {
+	input, backend := controlledSessionPlanFixtureV1(t)
+	input.EndpointIDs = []string{"socket", "browser"}
+	plan, err := planControlledSessionV1(input, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEndpoints := []ControlledSessionEndpointPlanV1{
+		{ID: "browser", Scheme: "http", Host: controlledsession.WorkloadEndpointHostV2, Port: "8080"},
+		{ID: "socket", Scheme: "ws", Host: controlledsession.WorkloadEndpointHostV2, Port: "9090"},
+	}
+	wantName := input.WorkloadRuntime.Docker.NetworkName + "-session-" + input.LiveRunID
+	if !reflect.DeepEqual(plan.Controller.SessionNetwork.Endpoints, wantEndpoints) ||
+		!reflect.DeepEqual(plan.Workload.SessionNetwork.Endpoints, wantEndpoints) ||
+		!slices.Equal(plan.Authorization.EndpointIDs, []string{"browser", "socket"}) {
+		t.Fatalf("endpoint grants = controller %#v workload %#v authorization %#v",
+			plan.Controller.SessionNetwork.Endpoints, plan.Workload.SessionNetwork.Endpoints, plan.Authorization.EndpointIDs)
+	}
+	if plan.Controller.SessionNetwork.Name != wantName || plan.Workload.SessionNetwork.Name != wantName ||
+		!plan.Controller.SessionNetwork.Internal || !plan.Workload.SessionNetwork.Internal ||
+		plan.Controller.SessionNetwork.Alias != controlledSessionControllerAliasV1 ||
+		plan.Controller.SessionNetwork.PeerAlias != controlledSessionWorkloadAliasV1 ||
+		plan.Workload.SessionNetwork.Alias != controlledSessionWorkloadAliasV1 ||
+		plan.Workload.SessionNetwork.PeerAlias != controlledSessionControllerAliasV1 {
+		t.Fatalf("session network grants = controller %#v workload %#v", plan.Controller.SessionNetwork, plan.Workload.SessionNetwork)
+	}
+	if plan.Controller.Network != controlledSessionNetworkModeV1 || plan.Workload.Network != controlledSessionNetworkModeV1 ||
+		!containsInOrder(plan.Controller.Create.Args, []string{"--network", "none"}) ||
+		!containsInOrder(plan.Workload.Create.Args, []string{"--network", "none"}) {
+		t.Fatalf("inert Docker network modes = %q/%q", plan.Controller.Network, plan.Workload.Network)
+	}
+	wantOpenedEndpoints := []controlledsession.EndpointV2{
+		{ID: "browser", Scheme: "http", Host: controlledsession.WorkloadEndpointHostV2, Port: 8080},
+		{ID: "socket", Scheme: "ws", Host: controlledsession.WorkloadEndpointHostV2, Port: 9090},
+	}
+	if got := controlledSessionOpenedEndpointsV1(plan.Controller.SessionNetwork.Endpoints); !reflect.DeepEqual(got, wantOpenedEndpoints) {
+		t.Fatalf("planned opened endpoints = %#v, want %#v", got, wantOpenedEndpoints)
+	}
+	if _, err := controlledSessionPrivateChannelConfigV1(plan); err == nil || !strings.Contains(err.Error(), "require realized session-network attachment") {
+		t.Fatalf("controlledSessionPrivateChannelConfigV1(unrealized network) error = %v", err)
+	}
+}
+
+func TestPlanControlledSessionV1RejectsUnknownDuplicateAndInvalidEndpointGrants(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		ids    []string
+		mutate func(*ControlledSessionPlanInputV1)
+		want   string
+	}{
+		{name: "unknown", ids: []string{"missing"}, want: "not declared"},
+		{name: "duplicate", ids: []string{"browser", "browser"}, want: "duplicated"},
+		{name: "invalid coordinate", ids: []string{"browser"}, mutate: func(input *ControlledSessionPlanInputV1) {
+			input.WorkloadRuntime.Docker.Workload.Endpoints["browser"] = EndpointExecutionPlan{Scheme: "HTTP", ContainerPort: 8080}
+		}, want: "does not match the resolved workload document"},
+		{name: "mismatched valid scheme", ids: []string{"browser"}, mutate: func(input *ControlledSessionPlanInputV1) {
+			input.WorkloadRuntime.Docker.Workload.Endpoints["browser"] = EndpointExecutionPlan{Scheme: "https", ContainerPort: 8080}
+		}, want: "does not match the resolved workload document"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input, backend := controlledSessionPlanFixtureV1(t)
+			input.EndpointIDs = test.ids
+			if test.mutate != nil {
+				test.mutate(&input)
+			}
+			if _, err := planControlledSessionV1(input, backend); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestPlanControlledSessionV1PreservesExactResolvedEndpointScheme(t *testing.T) {
+	input, backend := controlledSessionPlanFixtureV1(t)
+	scheme := "HTTP" + strings.Repeat("x", 40)
+	input.WorkloadRuntime.Document.Environment.Workload.Endpoints["browser"] = blueprint.Endpoint{Scheme: scheme, Port: 8080}
+	input.WorkloadCurrent.State.Blueprint = testResolvedBlueprintV1(t, input.WorkloadRuntime.Document)
+	input.WorkloadRuntime.Docker.Workload.Endpoints["browser"] = EndpointExecutionPlan{Scheme: scheme, ContainerPort: 8080}
+	input.EndpointIDs = []string{"browser"}
+
+	plan, err := planControlledSessionV1(input, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plan.Controller.SessionNetwork.Endpoints[0].Scheme; got != scheme {
+		t.Fatalf("planned endpoint scheme = %q, want exact resolved scheme %q", got, scheme)
+	}
+}
+
+func TestValidateControlledSessionExecutionPlanV1RejectsNetworkGrantExpansion(t *testing.T) {
+	input, backend := controlledSessionPlanFixtureV1(t)
+	input.EndpointIDs = []string{"browser"}
+	base, err := planControlledSessionV1(input, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*ControlledSessionExecutionPlanV1)
+		want   string
+	}{
+		{name: "network name", mutate: func(plan *ControlledSessionExecutionPlanV1) {
+			plan.Controller.SessionNetwork.Name = "other"
+		}, want: "lease-local network"},
+		{name: "external network", mutate: func(plan *ControlledSessionExecutionPlanV1) {
+			plan.Workload.SessionNetwork.Internal = false
+		}, want: "engine-internal"},
+		{name: "peer alias", mutate: func(plan *ControlledSessionExecutionPlanV1) {
+			plan.Controller.SessionNetwork.PeerAlias = controlledSessionControllerAliasV1
+		}, want: "fixed controller and workload"},
+		{name: "endpoint coordinate", mutate: func(plan *ControlledSessionExecutionPlanV1) {
+			plan.Controller.SessionNetwork.Endpoints[0].Port = "8081"
+		}, want: "lease-local network"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			plan := cloneControlledSessionExecutionPlanForTestV1(base)
+			test.mutate(&plan)
+			if err := ValidateControlledSessionExecutionPlanV1(plan); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want containing %q", err, test.want)
 			}
 		})
 	}
@@ -320,6 +447,18 @@ func controlledSessionPlanFixtureV1(t *testing.T) (ControlledSessionPlanInputV1,
 	controllerCurrent.State.Blueprint = testResolvedBlueprintV1(t, controllerRuntime.Document)
 
 	workloadCurrent, workloadRuntime := controlledSessionEnvironmentFixtureV1(t, "workload", "2", 1001)
+	workloadRuntime.Document.Environment.Workload = &blueprint.Workload{
+		Command: "serve",
+		Endpoints: map[string]blueprint.Endpoint{
+			"browser": {Scheme: "http", Port: 8080},
+			"socket":  {Scheme: "ws", Port: 9090},
+		},
+	}
+	workloadCurrent.State.Blueprint = testResolvedBlueprintV1(t, workloadRuntime.Document)
+	workloadRuntime.Docker.Workload = &WorkloadExecutionPlan{Endpoints: map[string]EndpointExecutionPlan{
+		"browser": {Scheme: "http", ContainerPort: 8080},
+		"socket":  {Scheme: "ws", ContainerPort: 9090},
+	}}
 	input := ControlledSessionPlanInputV1{
 		Handle: "session-" + strings.Repeat("a", 64), LiveRunID: "run-0000000000000001",
 		ControllerCurrent: controllerCurrent, ControllerRuntime: controllerRuntime,
@@ -376,6 +515,7 @@ func cloneControlledSessionExecutionPlanForTestV1(plan ControlledSessionExecutio
 func cloneControlledSessionContainerPlanForTestV1(plan ControlledSessionContainerPlanV1) ControlledSessionContainerPlanV1 {
 	clone := plan
 	clone.RuntimeIdentity.SupplementaryGIDs = append([]string{}, plan.RuntimeIdentity.SupplementaryGIDs...)
+	clone.SessionNetwork.Endpoints = append([]ControlledSessionEndpointPlanV1{}, plan.SessionNetwork.Endpoints...)
 	clone.SetupCapabilities = append([]string{}, plan.SetupCapabilities...)
 	clone.SecurityOptions = append([]string{}, plan.SecurityOptions...)
 	clone.Environment = append([]string{}, plan.Environment...)
