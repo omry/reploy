@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
@@ -102,6 +103,105 @@ func TestControlledSessionWatchdogParentLossRemovesOnlyManifestResources(t *test
 	}
 }
 
+func TestControlledSessionWatchdogRetriesParentLossCleanupWhileDockerIsUnavailable(t *testing.T) {
+	manifest := controlledSessionWatchdogManifestFixtureV1(t)
+	content, err := deploy.EncodeControlledSessionCleanupManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	containers := map[string]map[string]string{
+		manifest.Controller.ID: controlledSessionWatchdogLabelsV1(manifest.LiveRunID, manifest.Controller),
+		manifest.Workload.ID:   controlledSessionWatchdogLabelsV1(manifest.LiveRunID, manifest.Workload),
+	}
+	dockerAvailable := false
+	bootChecks := 0
+	probeCount := 0
+	var delays []time.Duration
+	var receipt deploy.ControlledSessionIncidentReceiptV1
+	backend := controlledSessionWatchdogCleanupBackendV1{
+		currentBootSession: func() (string, error) {
+			bootChecks++
+			return manifest.BootSession, nil
+		},
+		bindDockerEndpoint: func(string) error { return nil },
+		inspectContainer: func(_ context.Context, id string) (map[string]string, bool, error) {
+			if !dockerAvailable {
+				return nil, false, errors.New("Docker daemon unavailable")
+			}
+			labels, found := containers[id]
+			return labels, found, nil
+		},
+		removeContainer: func(_ context.Context, id string) error {
+			delete(containers, id)
+			return nil
+		},
+		removeChannel: func(string) error { return nil },
+		dockerUnavailable: func(context.Context) (bool, error) {
+			probeCount++
+			return !dockerAvailable, nil
+		},
+		waitRetry: func(delay time.Duration) {
+			delays = append(delays, delay)
+			dockerAvailable = true
+		},
+		now: func() time.Time { return time.Date(2026, 8, 10, 3, 0, 0, 0, time.UTC) },
+		writeIncident: func(value deploy.ControlledSessionIncidentReceiptV1) error {
+			receipt = value
+			return nil
+		},
+	}
+	if err := runControlledSessionWatchdogV1(bytes.NewReader(content), strings.NewReader(""), io.Discard, backend); err != nil {
+		t.Fatal(err)
+	}
+	if bootChecks != 3 || probeCount != 1 || !reflect.DeepEqual(delays, []time.Duration{time.Second}) {
+		t.Fatalf("boot checks=%d, probes=%d, retry delays=%v", bootChecks, probeCount, delays)
+	}
+	if len(containers) != 0 || receipt.CleanupStatus != deploy.ControlledSessionIncidentCleanupSucceededV1 ||
+		receipt.RecoveryAction != deploy.ControlledSessionIncidentRecoveryNoneV1 {
+		t.Fatalf("remaining containers=%v, incident receipt=%#v", containers, receipt)
+	}
+}
+
+func TestControlledSessionWatchdogStopsParentLossRetryAfterBootChanges(t *testing.T) {
+	manifest := controlledSessionWatchdogManifestFixtureV1(t)
+	content, err := deploy.EncodeControlledSessionCleanupManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootSession := manifest.BootSession
+	receiptWritten := false
+	err = runControlledSessionWatchdogV1(bytes.NewReader(content), strings.NewReader(""), io.Discard, controlledSessionWatchdogCleanupBackendV1{
+		currentBootSession: func() (string, error) { return bootSession, nil },
+		bindDockerEndpoint: func(string) error { return nil },
+		inspectContainer: func(context.Context, string) (map[string]string, bool, error) {
+			return nil, false, errors.New("Docker daemon unavailable")
+		},
+		removeContainer:   func(context.Context, string) error { return nil },
+		removeChannel:     func(string) error { return nil },
+		dockerUnavailable: func(context.Context) (bool, error) { return true, nil },
+		waitRetry: func(time.Duration) {
+			bootSession = "different-boot"
+		},
+		now: func() time.Time { return time.Unix(0, 0) },
+		writeIncident: func(deploy.ControlledSessionIncidentReceiptV1) error {
+			receiptWritten = true
+			return nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "different host boot") || receiptWritten {
+		t.Fatalf("boot-change result error=%v, receipt written=%t", err, receiptWritten)
+	}
+}
+
+func TestControlledSessionWatchdogRetryDelayIsCapped(t *testing.T) {
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 30 * time.Second, 30 * time.Second}
+	for attempt, expected := range want {
+		if got := controlledSessionWatchdogRetryDelayV1(attempt); got != expected {
+			t.Fatalf("attempt %d retry delay = %s, want %s", attempt, got, expected)
+		}
+	}
+}
+
 func TestControlledSessionWatchdogRefusesMismatchedOwnership(t *testing.T) {
 	manifest := controlledSessionWatchdogManifestFixtureV1(t)
 	removed := false
@@ -144,7 +244,11 @@ func TestControlledSessionWatchdogIncidentReceiptRecordsOnlyBoundedFailureStatus
 		},
 		removeContainer: func(context.Context, string) error { return nil },
 		removeChannel:   func(string) error { return nil },
-		now:             func() time.Time { return time.Date(2026, 8, 10, 3, 0, 0, 0, time.UTC) },
+		dockerUnavailable: func(context.Context) (bool, error) {
+			return false, nil
+		},
+		waitRetry: func(time.Duration) { t.Fatal("definitive cleanup failure must not retry") },
+		now:       func() time.Time { return time.Date(2026, 8, 10, 3, 0, 0, 0, time.UTC) },
 		writeIncident: func(value deploy.ControlledSessionIncidentReceiptV1) error {
 			receipt = value
 			return nil
@@ -161,6 +265,29 @@ func TestControlledSessionWatchdogIncidentReceiptRecordsOnlyBoundedFailureStatus
 		receipt.CleanupStatus != deploy.ControlledSessionIncidentCleanupFailedV1 ||
 		receipt.RecoveryAction != deploy.ControlledSessionIncidentRecoveryNextOperationV1 {
 		t.Fatalf("unsafe or incomplete incident receipt = %s", encoded)
+	}
+}
+
+func TestControlledSessionWatchdogClassifiesOnlyDockerProcessFailuresAsUnavailable(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		unavailable bool
+		wantErr     bool
+	}{
+		{name: "responsive"},
+		{name: "daemon command failed", err: &exec.ExitError{}, unavailable: true},
+		{name: "Docker executable unavailable", err: errors.New("cannot execute Docker"), wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			unavailable, err := controlledSessionWatchdogDockerUnavailableV1(t.Context(), func(CommandSpec, RunOptions) error {
+				return test.err
+			})
+			if unavailable != test.unavailable || (err != nil) != test.wantErr {
+				t.Fatalf("unavailable=%t, error=%v", unavailable, err)
+			}
+		})
 	}
 }
 
