@@ -29,6 +29,7 @@ type dockerWorkloadPTYBackendV1 struct {
 	attach                 func(context.Context, CommandSpec, string, time.Duration) (dockerPTYAttachmentV1, error)
 	resize                 func(context.Context, CommandSpec, string, uint32, uint32, time.Duration) error
 	observe                func(context.Context, CommandSpec, string) (int, error)
+	peerAddresses          []string
 }
 
 type dockerWorkloadPTYWaitResultV1 struct {
@@ -105,7 +106,12 @@ func prepareDockerWorkloadPTYV1(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	create := controlledSessionCommandSpecV1(plan.Create)
+	create, err := controlledSessionCreateWithPeerHostsV1(
+		controlledSessionCommandSpecV1(plan.Create), plan, backend.peerAddresses,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("prepare controlled-session workload network realization: %w", err)
+	}
 	if backend.bind != nil {
 		var err error
 		create, backend.run, err = backend.bind(ctx, create, defaultDockerPreflightTimeout)

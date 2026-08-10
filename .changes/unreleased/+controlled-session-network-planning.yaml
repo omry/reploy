@@ -1,2 +1,2 @@
 kind: Added
-body: Freeze and realize granted controlled-session workload endpoints and lease-private network identities, with protocol-v2 session-local coordinates, exact peer firewall grants, and ordinary public or local access preserved only when explicitly granted.
+body: Freeze, realize, recover, and verify lease-private controlled-session networks and granted workload endpoints, with protocol-v2 session-local coordinates, fixed participant addresses, exact peer firewall grants, and ordinary public or local access preserved only when explicitly granted.

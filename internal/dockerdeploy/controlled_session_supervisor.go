@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -68,8 +69,10 @@ type controlledSessionNetworkRuntimeV1 interface {
 	ID() string
 	Name() string
 	Subnets() []string
+	Realization() controlledSessionNetworkRealizationV1
 	Attach(context.Context, string, string) error
 	Verify(context.Context) error
+	VerifyStarted(context.Context) error
 	Cleanup(context.Context) error
 }
 
@@ -203,7 +206,7 @@ func RunControlledSessionV1(
 	ownershipRecorded := false
 	partialPreparationCleanupVerified := false
 	networkID := ""
-	var networkSubnets []string
+	var networkRealization controlledSessionNetworkRealizationV1
 	controllerID := ""
 	var incidentReceipt *deploy.ControlledSessionIncidentReceiptTargetV1
 	persistOwnership := func(controllerID string, workloadID string) (deploy.ControlledSessionOwnershipV1, error) {
@@ -219,12 +222,12 @@ func RunControlledSessionV1(
 		prepareNetwork: func(ctx context.Context, plan ControlledSessionExecutionPlanV1, record func(string) error, rollback func()) (controlledSessionNetworkRuntimeV1, error) {
 			network, err := prepareDockerSessionNetworkWithIDV1(ctx, plan, record, rollback)
 			if err == nil {
-				networkSubnets = network.Subnets()
+				networkRealization = network.Realization()
 			}
 			return network, err
 		},
 		prepareChannel: func(plan ControlledSessionExecutionPlanV1) (controlledSessionChannelRuntimeV1, error) {
-			channel, err := prepareControlledSessionChannelWithNetworkV1(plan, networkSubnets)
+			channel, err := prepareControlledSessionChannelWithNetworkV1(plan, networkRealization)
 			if err != nil {
 				partialPreparationCleanupVerified = controlledSessionChannelAbsentV1(plan.Channel.HostDirectory)
 				return nil, err
@@ -240,6 +243,7 @@ func RunControlledSessionV1(
 				bind: bindSessionDocker, observe: observeDockerContainerExitV1,
 				requireReadyChannel: requirePreparedControlledSessionControllerChannelV1,
 				recordNoContainer:   func() { partialPreparationCleanupVerified = true },
+				peerAddresses:       slices.Clone(networkRealization.WorkloadAddresses),
 			})
 		},
 		prepareWorkload: func(ctx context.Context, plan ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error) {
@@ -251,7 +255,8 @@ func RunControlledSessionV1(
 				},
 				recordRollbackVerified: func() { partialPreparationCleanupVerified = true },
 				attach:                 attachDockerContainerPTYV1, resize: resizeDockerContainerPTYV1,
-				observe: observeDockerContainerExitV1,
+				observe:       observeDockerContainerExitV1,
+				peerAddresses: slices.Clone(networkRealization.ControllerAddresses),
 			})
 		},
 		recordPlannedOwnership: func() error {
@@ -659,6 +664,11 @@ func (supervisor *controlledSessionSupervisorV1) prepare(ctx context.Context) er
 	}
 	supervisor.workloadStarted = true
 	supervisor.workloadResult = observeControlledSessionProcessV1(workload.Wait)
+	if supervisor.network != nil {
+		if err := supervisor.network.VerifyStarted(ctx); err != nil {
+			return fmt.Errorf("verify controlled-session network after workload startup: %w", err)
+		}
+	}
 	if watchdogErr := supervisor.currentWatchdogExitError(); watchdogErr != nil {
 		return watchdogErr
 	}
@@ -694,6 +704,16 @@ func validatePreparedControlledSessionNetworkRuntimeV1(network controlledSession
 		if index > 0 && subnets[index-1] >= subnet {
 			return fmt.Errorf("prepare controlled-session network: backend subnets must be unique and sorted")
 		}
+	}
+	want, err := deriveControlledSessionNetworkRealizationV1(subnets)
+	if err != nil {
+		return fmt.Errorf("prepare controlled-session network: %w", err)
+	}
+	got := network.Realization()
+	if !slices.Equal(got.Subnets, want.Subnets) ||
+		!slices.Equal(got.ControllerAddresses, want.ControllerAddresses) ||
+		!slices.Equal(got.WorkloadAddresses, want.WorkloadAddresses) {
+		return fmt.Errorf("prepare controlled-session network: backend returned invalid participant addresses")
 	}
 	return nil
 }

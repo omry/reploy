@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-10
+updated: 2026-08-11
 summary: Capability-scoped execution sessions that inherit Reploy's global container sandbox.
 ---
 
@@ -18,10 +18,11 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   process's kernel-reported UID/GID, accepts one connection, removes the socket
   pathname, sends the frozen `opened` authorization, and provides bounded,
   serialized protocol I/O with distinct before-claim and after-claim failure
-  observations. The planner binds exact controller and
-  workload builds, runtime identities, mounts, masks, commands, and inert
-  lifecycle commands while networking remains disabled. Private environment
-  injection is rejected until its controlled-session launch path is wired.
+  observations. The planner binds exact controller and workload builds,
+  runtime identities, mounts, masks, commands, and inert lifecycle commands.
+  Endpoint-bearing plans additionally bind their exact granted endpoints and
+  lease-private network identities. Private environment injection is rejected
+  until its controlled-session launch path is wired.
   The lifecycle state machine includes its output-finalization barrier and
   timeout outcome. The synthetic PTY output pump
   now preserves byte order with one bounded flow-control chunk at a time,
@@ -109,16 +110,25 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   watchdog rechecks the host boot identity before each attempt and uses capped
   backoff until Docker returns or the host reboots; a responsive daemon with a
   repeated definitive cleanup failure produces the bounded failed receipt for
-  next-operation recovery. Immutable controlled-session endpoint and network
-  planning is now implemented: the host resolves a sorted requested subset of
-  the exact workload generation's declared endpoints, freezes their schemes,
-  container ports, fixed lease-local `workload` identity, internal network
-  name, and reciprocal controller/workload aliases into both container-plan
-  digests, and prepares the protocol-v2 coordinates for `opened`. Container
-  creation remains inert on `network=none`, and channel preparation fails
-  closed for endpoint-bearing plans until the exact planned network has been
-  realized and attached. Network resource creation, attachment, cleanup
-  ownership, and sandbox admission remain later Slice 4 phases.
+  next-operation recovery. Direct controlled-session networking is now
+  implemented. The host resolves a sorted requested subset of the exact
+  workload generation's declared endpoints and freezes their schemes,
+  container ports, lease-local aliases, and internal network name into both
+  container-plan digests and the protocol-v2 `opened` coordinates. It creates
+  one exact engine-internal network, records it before startup, derives fixed
+  controller and workload addresses from the verified engine-assigned
+  prefixes, attaches only the two exact inert containers, and removes the
+  ordinary bridge staging attachment before starting a container that has no
+  separate public or local grant. The trusted bootstrap validates the fixed
+  peer mapping and admits only the exact peer addresses while preserving
+  separately granted ordinary networking. The watchdog, incident receipt, and
+  restart reconciler own and verify the same exact network. Live Docker
+  coverage proves native HTTP and WebSocket traffic, no host port publication,
+  denial of unrelated local and public peers, controller-loss cleanup, and
+  verified network absence after teardown. It also proves and documents the
+  initial coarse boundary: either participant can reach any listening port on
+  the other participant. Directional and per-port enforcement remain deferred
+  to the L3 gateway design.
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution
@@ -1432,12 +1442,21 @@ unrelated resources.
 
 Create one lease-private Docker network containing only the controller and
 workload. Resolve the declared workload endpoint into the immutable session
-plans and prove Chromium can use ordinary HTTP and WebSocket connections
-without host publication or access to unrelated containers, host-local
-networks, or the public Internet. Test and document the initial broader mutual
-reachability inside that two-container network. Keep precise directional and
-per-port enforcement, general proxy, DNS, domain, redirect, QUIC, and audit
-policy in the deferred L3 gateway slice.
+plans and prove controller clients can use ordinary HTTP and WebSocket
+connections without host publication or access to unrelated containers,
+host-local networks, or the public Internet. Test and document the initial
+broader mutual reachability inside that two-container network. Keep precise
+directional and per-port enforcement, general proxy, DNS, domain, redirect,
+QUIC, and audit policy in the deferred L3 gateway slice.
+
+Implementation status: complete for the initial Linux/Docker direct-network
+backend. Exact network ownership, deterministic participant addressing,
+startup firewall admission, protocol coordinates, watchdog and reconciliation
+cleanup, and native HTTP/WebSocket integration coverage are implemented. The
+integration proof also asserts that no workload port is published, unrelated
+local and public peers remain unreachable, and the documented bidirectional
+and undeclared-port reachability inside the two-container network remains
+visible rather than being misrepresented as endpoint-level enforcement.
 
 ### Slice 5: OmegaFlow Proof
 
