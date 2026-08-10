@@ -10,6 +10,7 @@ const (
 	CauseHostCancelV1             TerminationCauseV1 = "host-cancel"
 	CauseControllerLostV1         TerminationCauseV1 = "controller-lost"
 	CauseRuntimeObservationLostV1 TerminationCauseV1 = "runtime-observation-lost"
+	CauseCleanupContainmentLostV1 TerminationCauseV1 = "cleanup-containment-lost"
 	CauseStartupFailureV1         TerminationCauseV1 = "startup-failure"
 )
 
@@ -242,7 +243,8 @@ func validateRequiredSafeTextV1(field string, value string) error {
 func validTerminationCauseV1(cause TerminationCauseV1) bool {
 	switch cause {
 	case CauseControllerTerminateV1, CauseWorkloadExitV1, CauseHostCancelV1,
-		CauseControllerLostV1, CauseRuntimeObservationLostV1, CauseStartupFailureV1:
+		CauseControllerLostV1, CauseRuntimeObservationLostV1,
+		CauseCleanupContainmentLostV1, CauseStartupFailureV1:
 		return true
 	default:
 		return false

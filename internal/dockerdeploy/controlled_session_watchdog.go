@@ -23,6 +23,9 @@ const (
 )
 
 type controlledSessionWatchdogRuntimeV1 interface {
+	Done() <-chan struct{}
+	ExitError() error
+	Close() error
 	Disarm(context.Context) error
 }
 

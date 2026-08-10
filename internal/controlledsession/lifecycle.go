@@ -31,6 +31,7 @@ const (
 	ObservationHostCancelV1                        ObservationKindV1 = "host-cancel"
 	ObservationControllerLostV1                    ObservationKindV1 = "controller-lost"
 	ObservationRuntimeObservationLostV1            ObservationKindV1 = "runtime-observation-lost"
+	ObservationCleanupContainmentLostV1            ObservationKindV1 = "cleanup-containment-lost"
 	ObservationStartupFailureV1                    ObservationKindV1 = "startup-failure"
 	ObservationWorkloadOutputsFinalizedV1          ObservationKindV1 = "workload-outputs-finalized"
 	ObservationWorkloadOutputsPublishedV1          ObservationKindV1 = "workload-outputs-published"
@@ -210,6 +211,11 @@ func (machine *MachineV1) Observe(observation ObservationV1) (TransitionV1, erro
 		// surfaces. Keep that barrier pending until the supervisor explicitly
 		// reports failed closure or its bounded finalization deadline expires.
 		machine.finalizePreActivationOutputsForRuntimeObservationLossLocked(observation.Reason)
+	case ObservationCleanupContainmentLostV1:
+		if err := validateCauseObservationV1(observation); err != nil {
+			return transition, err
+		}
+		machine.latchLocked(CauseCleanupContainmentLostV1, &transition)
 	case ObservationStartupFailureV1:
 		if observation.WorkloadStatus != nil || observation.Finish != nil ||
 			(observation.WorkloadOutputPending && observation.WorkloadOutputFinalizationStatus != nil) {
