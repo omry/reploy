@@ -23,11 +23,15 @@ const (
 )
 
 type controlledSessionWatchdogRuntimeV1 interface {
+	Done() <-chan struct{}
+	ExitError() error
+	Close() error
 	Disarm(context.Context) error
 }
 
 type controlledSessionWatchdogCleanupBackendV1 struct {
 	currentBootSession func() (string, error)
+	bindDockerEndpoint func(string) error
 	inspectContainer   func(context.Context, string) (map[string]string, bool, error)
 	removeContainer    func(context.Context, string) error
 	removeChannel      func(string) error
@@ -57,7 +61,7 @@ func runControlledSessionWatchdogV1(
 	backend controlledSessionWatchdogCleanupBackendV1,
 ) error {
 	if manifestReader == nil || liveness == nil || ready == nil ||
-		backend.currentBootSession == nil || backend.inspectContainer == nil ||
+		backend.currentBootSession == nil || backend.bindDockerEndpoint == nil || backend.inspectContainer == nil ||
 		backend.removeContainer == nil || backend.removeChannel == nil {
 		return fmt.Errorf("watchdog backend is incomplete")
 	}
@@ -71,6 +75,9 @@ func runControlledSessionWatchdogV1(
 	manifest, err := deploy.DecodeControlledSessionCleanupManifest(content)
 	if err != nil {
 		return err
+	}
+	if err := backend.bindDockerEndpoint(manifest.DockerEndpoint); err != nil {
+		return fmt.Errorf("bind watchdog Docker endpoint: %w", err)
 	}
 	if len(manifest.Networks) != 0 || len(manifest.Volumes) != 0 {
 		return fmt.Errorf("cleanup manifest names resources unsupported by this watchdog")
@@ -167,11 +174,19 @@ func cleanupControlledSessionWatchdogContainerV1(
 }
 
 func productionControlledSessionWatchdogCleanupBackendV1() controlledSessionWatchdogCleanupBackendV1 {
+	var dockerRun commandRunner
 	return controlledSessionWatchdogCleanupBackendV1{
 		currentBootSession: deploy.CurrentBootSessionIDV1,
-		inspectContainer:   inspectControlledSessionWatchdogContainerV1,
+		bindDockerEndpoint: func(endpoint string) error {
+			var err error
+			dockerRun, err = commandRunnerForPinnedDockerEndpointV1(endpoint, runCommandWithoutDockerPreflight)
+			return err
+		},
+		inspectContainer: func(ctx context.Context, containerID string) (map[string]string, bool, error) {
+			return inspectControlledSessionWatchdogContainerV1(ctx, containerID, dockerRun)
+		},
 		removeContainer: func(ctx context.Context, containerID string) error {
-			return runDockerCommand(CommandSpec{Name: "docker", Args: []string{"container", "rm", "--force", containerID}}, RunOptions{Context: ctx})
+			return dockerRun(CommandSpec{Name: "docker", Args: []string{"container", "rm", "--force", containerID}}, RunOptions{Context: ctx})
 		},
 		removeChannel: removeControlledSessionChannelDirectoryV1,
 	}
@@ -190,9 +205,9 @@ func removeControlledSessionChannelDirectoryV1(path string) error {
 	return nil
 }
 
-func inspectControlledSessionWatchdogContainerV1(ctx context.Context, containerID string) (map[string]string, bool, error) {
+func inspectControlledSessionWatchdogContainerV1(ctx context.Context, containerID string, run commandRunner) (map[string]string, bool, error) {
 	var output bytes.Buffer
-	err := runDockerCommand(CommandSpec{Name: "docker", Args: []string{
+	err := run(CommandSpec{Name: "docker", Args: []string{
 		"container", "inspect", "--format", "{{json .Id}} {{json .Config.Labels}}", containerID,
 	}}, RunOptions{Context: ctx, Stdout: &output, Stderr: &output})
 	if err != nil {

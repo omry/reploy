@@ -1,0 +1,2 @@
+kind: Changed
+body: Report premature controlled-session watchdog exit as cleanup-containment loss, fail the session closed without misreporting Docker observation, and pin watchdog cleanup to the session's verified Docker endpoint.

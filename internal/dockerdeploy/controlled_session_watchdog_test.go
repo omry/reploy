@@ -24,6 +24,7 @@ func TestControlledSessionWatchdogDisarmIndependentlyVerifiesCleanup(t *testing.
 	channelVerified := false
 	err = runControlledSessionWatchdogV1(bytes.NewReader(content), bytes.NewReader([]byte{controlledSessionWatchdogDisarmByte}), &ready, controlledSessionWatchdogCleanupBackendV1{
 		currentBootSession: func() (string, error) { return manifest.BootSession, nil },
+		bindDockerEndpoint: func(string) error { return nil },
 		inspectContainer: func(context.Context, string) (map[string]string, bool, error) {
 			inspectCount++
 			return nil, false, nil
@@ -52,6 +53,10 @@ func TestControlledSessionWatchdogParentLossRemovesOnlyManifestResources(t *test
 	var operations []string
 	backend := controlledSessionWatchdogCleanupBackendV1{
 		currentBootSession: func() (string, error) { return manifest.BootSession, nil },
+		bindDockerEndpoint: func(endpoint string) error {
+			operations = append(operations, "endpoint:"+endpoint)
+			return nil
+		},
 		inspectContainer: func(_ context.Context, id string) (map[string]string, bool, error) {
 			operations = append(operations, "inspect:"+id)
 			labels, found := containers[id]
@@ -71,6 +76,7 @@ func TestControlledSessionWatchdogParentLossRemovesOnlyManifestResources(t *test
 		t.Fatal(err)
 	}
 	want := []string{
+		"endpoint:" + manifest.DockerEndpoint,
 		"inspect:" + manifest.Workload.ID, "remove:" + manifest.Workload.ID, "inspect:" + manifest.Workload.ID,
 		"inspect:" + manifest.Controller.ID, "remove:" + manifest.Controller.ID, "inspect:" + manifest.Controller.ID,
 		"channel:" + manifest.ChannelDirectory,
@@ -112,6 +118,7 @@ func TestControlledSessionWatchdogRejectsPriorBootBeforeReady(t *testing.T) {
 	var ready bytes.Buffer
 	err = runControlledSessionWatchdogV1(bytes.NewReader(content), strings.NewReader(""), &ready, controlledSessionWatchdogCleanupBackendV1{
 		currentBootSession: func() (string, error) { return "different-boot", nil },
+		bindDockerEndpoint: func(string) error { return nil },
 		inspectContainer: func(context.Context, string) (map[string]string, bool, error) {
 			return nil, false, errors.New("must not inspect")
 		},
@@ -139,6 +146,7 @@ func TestControlledSessionWatchdogRechecksBootBeforeParentLossCleanup(t *testing
 			}
 			return "different-boot", nil
 		},
+		bindDockerEndpoint: func(string) error { return nil },
 		inspectContainer: func(context.Context, string) (map[string]string, bool, error) {
 			cleanupCalled = true
 			return nil, false, nil
@@ -154,7 +162,7 @@ func TestControlledSessionWatchdogRechecksBootBeforeParentLossCleanup(t *testing
 func controlledSessionWatchdogManifestFixtureV1(t *testing.T) deploy.ControlledSessionCleanupManifest {
 	t.Helper()
 	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
-	ownership := controlledSessionOwnershipFromPlanV1(plan, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1)
+	ownership := controlledSessionOwnershipFromPlanV1(plan, controlledSessionTestDockerEndpointV1, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1)
 	ownership.BootSession = "boot-session"
 	manifest, err := deploy.ControlledSessionCleanupManifestFromOwnership(ownership)
 	if err != nil {
