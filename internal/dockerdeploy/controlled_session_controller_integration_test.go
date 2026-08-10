@@ -242,8 +242,10 @@ func controlledSessionControllerIntegrationPlanV1(
 		ContainerDirectory: controlledSessionChannelRootV1,
 		ContainerSocket:    path.Join(controlledSessionChannelRootV1, controlledSessionChannelSocketNameV1),
 	}
-	uid := os.Geteuid()
-	gid := os.Getegid()
+	_, uid, gid, _, err := currentHostRuntimeIdentityV1()
+	if err != nil {
+		t.Fatal(err)
+	}
 	identity := RuntimeUserPlan{LocalUser: "reploy", UID: uid, GID: gid, DockerUser: fmt.Sprintf("%d:%d", uid, gid)}
 	controllerCurrent := CurrentBuild{Generation: deploy.EnvironmentGenerationState{
 		Reference: image, BuildLockDigest: canonical.Digest("sha256:" + strings.Repeat("4", 64)),
