@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/omry/reploy/internal/deploy"
@@ -20,6 +23,8 @@ const (
 	controlledSessionWatchdogReadyByte      = byte(1)
 	controlledSessionWatchdogManifestLimit  = 64 * 1024
 	controlledSessionWatchdogCleanupTimeout = 30 * time.Second
+	controlledSessionWatchdogRetryInitial   = time.Second
+	controlledSessionWatchdogRetryMaximum   = 30 * time.Second
 )
 
 type controlledSessionWatchdogRuntimeV1 interface {
@@ -35,6 +40,8 @@ type controlledSessionWatchdogCleanupBackendV1 struct {
 	inspectContainer   func(context.Context, string) (map[string]string, bool, error)
 	removeContainer    func(context.Context, string) error
 	removeChannel      func(string) error
+	dockerUnavailable  func(context.Context) (bool, error)
+	waitRetry          func(time.Duration)
 	now                func() time.Time
 	writeIncident      func(deploy.ControlledSessionIncidentReceiptV1) error
 }
@@ -106,17 +113,67 @@ func runControlledSessionWatchdogV1(
 	// loss. Both paths converge on exact cleanup verification before exit.
 	count, signalErr := io.ReadFull(liveness, signal[:])
 	parentLost := signalErr != nil || count != 1 || signal[0] != controlledSessionWatchdogDisarmByte
-	if err := requireControlledSessionWatchdogBootV1(manifest, backend); err != nil {
-		return err
-	}
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), controlledSessionWatchdogCleanupTimeout)
-	defer cancel()
-	report, cleanupErr := cleanupControlledSessionFromWatchdogWithReportV1(cleanupCtx, manifest, backend)
 	if !parentLost {
+		if err := requireControlledSessionWatchdogBootV1(manifest, backend); err != nil {
+			return err
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), controlledSessionWatchdogCleanupTimeout)
+		defer cancel()
+		_, cleanupErr := cleanupControlledSessionFromWatchdogWithReportV1(cleanupCtx, manifest, backend)
 		return cleanupErr
 	}
-	receipt := controlledSessionWatchdogIncidentReceiptV1(manifest, report, backend.now())
-	return errors.Join(cleanupErr, backend.writeIncident(receipt))
+	return cleanupControlledSessionAfterParentLossV1(manifest, backend)
+}
+
+func cleanupControlledSessionAfterParentLossV1(
+	manifest deploy.ControlledSessionCleanupManifest,
+	backend controlledSessionWatchdogCleanupBackendV1,
+) error {
+	responsiveFailureConfirmed := false
+	for attempt := 0; ; attempt++ {
+		if err := requireControlledSessionWatchdogBootV1(manifest, backend); err != nil {
+			return err
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), controlledSessionWatchdogCleanupTimeout)
+		report, cleanupErr := cleanupControlledSessionFromWatchdogWithReportV1(cleanupCtx, manifest, backend)
+		cancel()
+		if cleanupErr == nil {
+			receipt := controlledSessionWatchdogIncidentReceiptV1(manifest, report, backend.now())
+			return backend.writeIncident(receipt)
+		}
+		if backend.dockerUnavailable == nil || backend.waitRetry == nil {
+			receipt := controlledSessionWatchdogIncidentReceiptV1(manifest, report, backend.now())
+			return errors.Join(cleanupErr, backend.writeIncident(receipt), fmt.Errorf("watchdog Docker retry backend is incomplete"))
+		}
+		probeCtx, probeCancel := context.WithTimeout(context.Background(), defaultDockerPreflightTimeout)
+		unavailable, probeErr := backend.dockerUnavailable(probeCtx)
+		probeCancel()
+		if probeErr != nil {
+			receipt := controlledSessionWatchdogIncidentReceiptV1(manifest, report, backend.now())
+			return errors.Join(cleanupErr, probeErr, backend.writeIncident(receipt))
+		}
+		if !unavailable {
+			if !responsiveFailureConfirmed {
+				responsiveFailureConfirmed = true
+				continue
+			}
+			receipt := controlledSessionWatchdogIncidentReceiptV1(manifest, report, backend.now())
+			return errors.Join(cleanupErr, backend.writeIncident(receipt))
+		}
+		responsiveFailureConfirmed = false
+		backend.waitRetry(controlledSessionWatchdogRetryDelayV1(attempt))
+	}
+}
+
+func controlledSessionWatchdogRetryDelayV1(attempt int) time.Duration {
+	delay := controlledSessionWatchdogRetryInitial
+	for step := 0; step < attempt && delay < controlledSessionWatchdogRetryMaximum; step++ {
+		delay *= 2
+		if delay > controlledSessionWatchdogRetryMaximum {
+			delay = controlledSessionWatchdogRetryMaximum
+		}
+	}
+	return delay
 }
 
 func requireControlledSessionWatchdogBootV1(
@@ -248,11 +305,15 @@ func cleanupControlledSessionWatchdogContainerV1(
 
 func productionControlledSessionWatchdogCleanupBackendV1(receipt *os.File) controlledSessionWatchdogCleanupBackendV1 {
 	var dockerRun commandRunner
+	var dockerEndpoint string
 	return controlledSessionWatchdogCleanupBackendV1{
 		currentBootSession: deploy.CurrentBootSessionIDV1,
 		bindDockerEndpoint: func(endpoint string) error {
 			var err error
 			dockerRun, err = commandRunnerForPinnedDockerEndpointV1(endpoint, runCommandWithoutDockerPreflight)
+			if err == nil {
+				dockerEndpoint = endpoint
+			}
 			return err
 		},
 		inspectContainer: func(ctx context.Context, containerID string) (map[string]string, bool, error) {
@@ -262,11 +323,69 @@ func productionControlledSessionWatchdogCleanupBackendV1(receipt *os.File) contr
 			return dockerRun(CommandSpec{Name: "docker", Args: []string{"container", "rm", "--force", containerID}}, RunOptions{Context: ctx})
 		},
 		removeChannel: removeControlledSessionChannelDirectoryV1,
-		now:           time.Now,
+		dockerUnavailable: func(ctx context.Context) (bool, error) {
+			return controlledSessionWatchdogDockerUnavailableV1(ctx, dockerEndpoint, probeControlledSessionWatchdogDockerV1)
+		},
+		waitRetry: time.Sleep,
+		now:       time.Now,
 		writeIncident: func(incident deploy.ControlledSessionIncidentReceiptV1) error {
 			return deploy.WriteControlledSessionIncidentReceiptV1(receipt, incident)
 		},
 	}
+}
+
+type controlledSessionWatchdogDockerProbeV1 func(context.Context, string) error
+
+func controlledSessionWatchdogDockerUnavailableV1(
+	ctx context.Context,
+	endpoint string,
+	probe controlledSessionWatchdogDockerProbeV1,
+) (bool, error) {
+	if probe == nil {
+		return false, fmt.Errorf("probe watchdog Docker daemon requires a probe")
+	}
+	err := probe(ctx, endpoint)
+	if err == nil {
+		return false, nil
+	}
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return true, nil
+	}
+	return false, fmt.Errorf("probe watchdog Docker daemon: %w", err)
+}
+
+func probeControlledSessionWatchdogDockerV1(ctx context.Context, endpoint string) error {
+	const prefix = "unix://"
+	if !strings.HasPrefix(strings.ToLower(endpoint), prefix) {
+		return fmt.Errorf("watchdog Docker endpoint %q is not a Unix socket", endpoint)
+	}
+	socketPath := endpoint[len(prefix):]
+	if socketPath == "" {
+		return fmt.Errorf("watchdog Docker endpoint has an empty Unix socket path")
+	}
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var dialer net.Dialer
+			return dialer.DialContext(ctx, "unix", socketPath)
+		},
+	}
+	defer transport.CloseIdleConnections()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker/_ping", nil)
+	if err != nil {
+		return fmt.Errorf("prepare watchdog Docker ping: %w", err)
+	}
+	response, err := transport.RoundTrip(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("watchdog Docker ping returned HTTP status %s", response.Status)
+	}
+	return nil
 }
 
 func removeControlledSessionChannelDirectoryV1(path string) error {
