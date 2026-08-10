@@ -4,20 +4,22 @@ import (
 	"flag"
 	"fmt"
 	"math"
+	"path"
 	"strconv"
 	"strings"
 )
 
 type sandboxExecPlanV1 struct {
-	UID            uint32
-	GID            uint32
-	Groups         []uint32
-	AllowPublic    bool
-	AllowLocal     bool
-	AllowAmbiguous bool
-	InboundTCP     []uint16
-	InstallRules   bool
-	Argv           []string
+	UID                    uint32
+	GID                    uint32
+	Groups                 []uint32
+	AllowPublic            bool
+	AllowLocal             bool
+	AllowAmbiguous         bool
+	InboundTCP             []uint16
+	SessionNetworkPrefixes string
+	InstallRules           bool
+	Argv                   []string
 }
 
 func parseSandboxExecPlanV1(args []string, installRules bool) (sandboxExecPlanV1, error) {
@@ -40,6 +42,7 @@ func parseSandboxExecPlanV1(args []string, installRules bool) (sandboxExecPlanV1
 	local := set.String("local", "", "local network policy")
 	ambiguous := set.String("ambiguous", "", "ambiguous destination policy")
 	inbound := set.String("inbound-tcp", "", "comma-separated inbound TCP ports")
+	sessionNetworkPrefixes := set.String("session-network-prefixes", "", "trusted file containing session-network CIDRs")
 	if err := set.Parse(args[:separator]); err != nil {
 		return sandboxExecPlanV1{}, err
 	}
@@ -61,6 +64,12 @@ func parseSandboxExecPlanV1(args []string, installRules bool) (sandboxExecPlanV1
 	}
 	if !installRules && *inbound != "" {
 		return sandboxExecPlanV1{}, fmt.Errorf("--inbound-tcp is not accepted by restricted-exec")
+	}
+	if !installRules && *sessionNetworkPrefixes != "" {
+		return sandboxExecPlanV1{}, fmt.Errorf("--session-network-prefixes is not accepted by restricted-exec")
+	}
+	if *sessionNetworkPrefixes != "" && (!path.IsAbs(*sessionNetworkPrefixes) || path.Clean(*sessionNetworkPrefixes) != *sessionNetworkPrefixes) {
+		return sandboxExecPlanV1{}, fmt.Errorf("--session-network-prefixes must be an absolute clean path")
 	}
 	parsedInbound, err := parseDecimalListV1(*inbound, 1, 65535)
 	if err != nil {
@@ -85,7 +94,7 @@ func parseSandboxExecPlanV1(args []string, installRules bool) (sandboxExecPlanV1
 	return sandboxExecPlanV1{
 		UID: parsedUID, GID: parsedGID, Groups: parsedGroups,
 		AllowPublic: allowPublic, AllowLocal: allowLocal, AllowAmbiguous: allowAmbiguous,
-		InboundTCP: ports, InstallRules: installRules,
+		InboundTCP: ports, SessionNetworkPrefixes: *sessionNetworkPrefixes, InstallRules: installRules,
 		Argv: append([]string(nil), argv...),
 	}, nil
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -63,8 +64,18 @@ type controlledSessionChannelRuntimeV1 interface {
 	Close() error
 }
 
+type controlledSessionNetworkRuntimeV1 interface {
+	ID() string
+	Name() string
+	Subnets() []string
+	Attach(context.Context, string, string) error
+	Verify(context.Context) error
+	Cleanup(context.Context) error
+}
+
 type privateControlledSessionChannelRuntimeV1 struct {
-	channel *controlledsession.PrivateChannelV1
+	channel           *controlledsession.PrivateChannelV1
+	networkPolicyPath string
 }
 
 func (runtime *privateControlledSessionChannelRuntimeV1) Claim(ctx context.Context) (controlledsession.ControllerTransportV1, error) {
@@ -72,14 +83,24 @@ func (runtime *privateControlledSessionChannelRuntimeV1) Claim(ctx context.Conte
 }
 
 func (runtime *privateControlledSessionChannelRuntimeV1) Close() error {
-	return runtime.channel.Close()
+	var policyErr error
+	if runtime.networkPolicyPath != "" {
+		policyErr = os.Remove(runtime.networkPolicyPath)
+		if errors.Is(policyErr, os.ErrNotExist) {
+			policyErr = nil
+		}
+	}
+	return errors.Join(policyErr, runtime.channel.Close())
 }
 
 type controlledSessionSupervisorBackendV1 struct {
+	prepareNetwork            func(context.Context, ControlledSessionExecutionPlanV1, func(string) error, func()) (controlledSessionNetworkRuntimeV1, error)
 	prepareChannel            func(ControlledSessionExecutionPlanV1) (controlledSessionChannelRuntimeV1, error)
 	prepareController         func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionControllerRuntimeV1, error)
 	prepareWorkload           func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error)
 	recordPlannedOwnership    func() error
+	recordNetworkOwnership    func(string) error
+	recordNetworkRollback     func()
 	recordControllerOwnership func(string) error
 	recordControllerRollback  func()
 	recordOwnership           func(string, string) (deploy.ControlledSessionCleanupManifest, error)
@@ -99,6 +120,7 @@ type controlledSessionSupervisorV1 struct {
 	machine *controlledsession.MachineV1
 
 	channel    controlledSessionChannelRuntimeV1
+	network    controlledSessionNetworkRuntimeV1
 	controller controlledSessionControllerRuntimeV1
 	workload   controlledSessionWorkloadRuntimeV1
 	bridge     *controlledsession.SessionIOBridgeV1
@@ -139,8 +161,9 @@ type controlledSessionSupervisorV1 struct {
 
 // RunControlledSessionV1 takes ownership of the admitted workload operation
 // lock. The caller must retain the live-run queue-entry lease until this call
-// returns. The supervisor durably records both exact inert containers and the
-// private channel before releasing the lock and starting either process.
+// returns. The supervisor durably records the exact private network, both inert
+// containers, and the private channel before releasing the lock and starting
+// either process.
 func RunControlledSessionV1(
 	ctx context.Context,
 	operation *deploy.OperationLock,
@@ -179,10 +202,12 @@ func RunControlledSessionV1(
 	operationReleaseAttempted := false
 	ownershipRecorded := false
 	partialPreparationCleanupVerified := false
+	networkID := ""
+	var networkSubnets []string
 	controllerID := ""
 	var incidentReceipt *deploy.ControlledSessionIncidentReceiptTargetV1
 	persistOwnership := func(controllerID string, workloadID string) (deploy.ControlledSessionOwnershipV1, error) {
-		ownership := controlledSessionOwnershipFromPlanV1(plan, dockerEndpoint, controllerID, workloadID)
+		ownership := controlledSessionOwnershipWithNetworkFromPlanV1(plan, dockerEndpoint, networkID, controllerID, workloadID)
 		recorded, err := operation.RecordControlledSessionOwnershipV1(ownership)
 		if err != nil {
 			return deploy.ControlledSessionOwnershipV1{}, fmt.Errorf("persist controlled-session ownership: %w", err)
@@ -191,13 +216,24 @@ func RunControlledSessionV1(
 		return recorded, nil
 	}
 	result, runErr := runControlledSessionV1(ctx, plan, options, controlledSessionSupervisorBackendV1{
+		prepareNetwork: func(ctx context.Context, plan ControlledSessionExecutionPlanV1, record func(string) error, rollback func()) (controlledSessionNetworkRuntimeV1, error) {
+			network, err := prepareDockerSessionNetworkWithIDV1(ctx, plan, record, rollback)
+			if err == nil {
+				networkSubnets = network.Subnets()
+			}
+			return network, err
+		},
 		prepareChannel: func(plan ControlledSessionExecutionPlanV1) (controlledSessionChannelRuntimeV1, error) {
-			channel, err := PrepareControlledSessionChannelV1(plan)
+			channel, err := prepareControlledSessionChannelWithNetworkV1(plan, networkSubnets)
 			if err != nil {
 				partialPreparationCleanupVerified = controlledSessionChannelAbsentV1(plan.Channel.HostDirectory)
 				return nil, err
 			}
-			return &privateControlledSessionChannelRuntimeV1{channel: channel}, nil
+			policyPath := ""
+			if plan.Controller.SessionNetwork.Enabled {
+				policyPath = filepath.Join(plan.Channel.HostDirectory, controlledSessionNetworkPolicyFileNameV1)
+			}
+			return &privateControlledSessionChannelRuntimeV1{channel: channel, networkPolicyPath: policyPath}, nil
 		},
 		prepareController: func(ctx context.Context, plan ControlledSessionContainerPlanV1) (controlledSessionControllerRuntimeV1, error) {
 			return prepareDockerControllerV1(ctx, plan, dockerControllerBackendV1{
@@ -231,6 +267,12 @@ func RunControlledSessionV1(
 			}
 			return nil
 		},
+		recordNetworkOwnership: func(exactNetworkID string) error {
+			networkID = exactNetworkID
+			_, err := persistOwnership("", "")
+			return err
+		},
+		recordNetworkRollback: func() { partialPreparationCleanupVerified = true },
 		recordControllerOwnership: func(exactControllerID string) error {
 			controllerID = exactControllerID
 			_, err := persistOwnership(exactControllerID, "")
@@ -305,18 +347,27 @@ func controlledSessionPreparationCanCompleteV1(cleaned bool, ownershipRecorded b
 }
 
 func controlledSessionOwnershipFromPlanV1(plan ControlledSessionExecutionPlanV1, dockerEndpoint string, controllerID string, workloadID string) deploy.ControlledSessionOwnershipV1 {
+	return controlledSessionOwnershipWithNetworkFromPlanV1(plan, dockerEndpoint, "", controllerID, workloadID)
+}
+
+func controlledSessionOwnershipWithNetworkFromPlanV1(plan ControlledSessionExecutionPlanV1, dockerEndpoint string, networkID string, controllerID string, workloadID string) deploy.ControlledSessionOwnershipV1 {
 	container := func(plan ControlledSessionContainerPlanV1, id string) deploy.ControlledSessionContainerOwnershipV1 {
 		return deploy.ControlledSessionContainerOwnershipV1{
 			Role: string(plan.Role), ID: id, Name: plan.Container, DeploymentID: plan.DeploymentID,
 			GenerationReference: plan.GenerationReference, BuildIdentity: string(plan.BuildIdentity),
 		}
 	}
-	return deploy.ControlledSessionOwnershipV1{
+	ownership := deploy.ControlledSessionOwnershipV1{
 		LiveRunID: plan.LiveRunID, SessionHandle: plan.Authorization.Handle,
 		DockerEndpoint:   dockerEndpoint,
 		ChannelDirectory: plan.Channel.HostDirectory,
 		Controller:       container(plan.Controller, controllerID), Workload: container(plan.Workload, workloadID),
 	}
+	if plan.Controller.SessionNetwork.Enabled {
+		ownership.NetworkID = networkID
+		ownership.NetworkName = plan.Controller.SessionNetwork.Name
+	}
+	return ownership
 }
 
 func finishControlledSessionOwnershipV1(
@@ -381,10 +432,14 @@ func runControlledSessionV1(
 	if backend.prepareChannel == nil || backend.prepareController == nil || backend.prepareWorkload == nil || backend.now == nil {
 		return ControlledSessionRunResultV1{}, fmt.Errorf("run controlled session: supervisor backend is incomplete")
 	}
+	if plan.Controller.SessionNetwork.Enabled && backend.prepareNetwork == nil {
+		return ControlledSessionRunResultV1{}, fmt.Errorf("run controlled session: session-network backend is incomplete")
+	}
 	ownershipCallbacksEnabled := backend.recordPlannedOwnership != nil ||
-		backend.recordControllerOwnership != nil || backend.recordOwnership != nil
+		backend.recordNetworkOwnership != nil || backend.recordControllerOwnership != nil || backend.recordOwnership != nil
 	if ownershipCallbacksEnabled && (backend.recordPlannedOwnership == nil ||
-		backend.recordControllerOwnership == nil || backend.recordOwnership == nil) {
+		backend.recordControllerOwnership == nil || backend.recordOwnership == nil ||
+		plan.Controller.SessionNetwork.Enabled && backend.recordNetworkOwnership == nil) {
 		return ControlledSessionRunResultV1{}, fmt.Errorf("run controlled session: ownership backend is incomplete")
 	}
 	machine, err := controlledsession.NewMachineV1(plan.Authorization)
@@ -472,6 +527,21 @@ func (supervisor *controlledSessionSupervisorV1) prepare(ctx context.Context) er
 			return err
 		}
 	}
+	if supervisor.plan.Controller.SessionNetwork.Enabled {
+		network, err := supervisor.backend.prepareNetwork(
+			ctx,
+			supervisor.plan,
+			supervisor.backend.recordNetworkOwnership,
+			supervisor.backend.recordNetworkRollback,
+		)
+		if err != nil {
+			return fmt.Errorf("prepare controlled-session network: %w", err)
+		}
+		supervisor.network = network
+		if err := validatePreparedControlledSessionNetworkRuntimeV1(network, supervisor.plan.Controller.SessionNetwork); err != nil {
+			return err
+		}
+	}
 	channel, err := supervisor.backend.prepareChannel(supervisor.plan)
 	if err != nil {
 		return fmt.Errorf("prepare controlled-session channel: %w", err)
@@ -512,13 +582,18 @@ func (supervisor *controlledSessionSupervisorV1) prepare(ctx context.Context) er
 	if err != nil {
 		return fmt.Errorf("claim controlled-session workload output: %w", err)
 	}
+	if supervisor.network != nil {
+		if err := supervisor.network.Attach(ctx, controller.ContainerID(), workload.ContainerID()); err != nil {
+			return fmt.Errorf("attach controlled-session network: %w", err)
+		}
+	}
 	if supervisor.backend.recordOwnership != nil {
 		manifest, err := supervisor.backend.recordOwnership(controller.ContainerID(), workload.ContainerID())
 		if err != nil {
 			return err
 		}
 		if err := validateControlledSessionCleanupManifestForRuntimeV1(
-			manifest, supervisor.plan, controller.ContainerID(), workload.ContainerID(),
+			manifest, supervisor.plan, controlledSessionRuntimeNetworkIDV1(supervisor.network), controller.ContainerID(), workload.ContainerID(),
 		); err != nil {
 			return err
 		}
@@ -542,6 +617,11 @@ func (supervisor *controlledSessionSupervisorV1) prepare(ctx context.Context) er
 		}()
 		ctx = watchdogCtx
 	}
+	if supervisor.network != nil {
+		if err := supervisor.network.Verify(ctx); err != nil {
+			return fmt.Errorf("verify controlled-session network before controller startup: %w", err)
+		}
+	}
 	if err := controller.Start(ctx); err != nil {
 		if watchdogErr := supervisor.currentWatchdogExitError(); watchdogErr != nil {
 			return watchdogErr
@@ -562,6 +642,11 @@ func (supervisor *controlledSessionSupervisorV1) prepare(ctx context.Context) er
 		return fmt.Errorf("start controlled-session I/O bridge: %w", err)
 	}
 	supervisor.bridge = bridge
+	if supervisor.network != nil {
+		if err := supervisor.network.Verify(ctx); err != nil {
+			return fmt.Errorf("verify controlled-session network before workload startup: %w", err)
+		}
+	}
 	if err := workload.Start(ctx); err != nil {
 		supervisor.workloadStarted = workload.Started()
 		if supervisor.workloadStarted {
@@ -576,6 +661,39 @@ func (supervisor *controlledSessionSupervisorV1) prepare(ctx context.Context) er
 	supervisor.workloadResult = observeControlledSessionProcessV1(workload.Wait)
 	if watchdogErr := supervisor.currentWatchdogExitError(); watchdogErr != nil {
 		return watchdogErr
+	}
+	return nil
+}
+
+func controlledSessionRuntimeNetworkIDV1(network controlledSessionNetworkRuntimeV1) string {
+	if network == nil {
+		return ""
+	}
+	return network.ID()
+}
+
+func validatePreparedControlledSessionNetworkRuntimeV1(network controlledSessionNetworkRuntimeV1, plan ControlledSessionNetworkPlanV1) error {
+	if network == nil {
+		return fmt.Errorf("prepare controlled-session network: backend returned no runtime")
+	}
+	if id, err := parseDockerNetworkIDV1(network.ID()); err != nil || id != network.ID() {
+		return fmt.Errorf("prepare controlled-session network: backend returned an invalid exact network ID")
+	}
+	if network.Name() != plan.Name {
+		return fmt.Errorf("prepare controlled-session network: backend returned network name %q instead of %q", network.Name(), plan.Name)
+	}
+	subnets := network.Subnets()
+	if len(subnets) == 0 {
+		return fmt.Errorf("prepare controlled-session network: backend returned no engine-assigned subnets")
+	}
+	for index, subnet := range subnets {
+		_, parsed, err := net.ParseCIDR(subnet)
+		if err != nil || parsed.String() != subnet {
+			return fmt.Errorf("prepare controlled-session network: backend returned noncanonical subnet %q", subnet)
+		}
+		if index > 0 && subnets[index-1] >= subnet {
+			return fmt.Errorf("prepare controlled-session network: backend subnets must be unique and sorted")
+		}
 	}
 	return nil
 }
@@ -603,19 +721,28 @@ func (supervisor *controlledSessionSupervisorV1) currentWatchdogExitError() erro
 func validateControlledSessionCleanupManifestForRuntimeV1(
 	manifest deploy.ControlledSessionCleanupManifest,
 	plan ControlledSessionExecutionPlanV1,
+	networkID string,
 	controllerID string,
 	workloadID string,
 ) error {
 	if err := deploy.ValidateControlledSessionCleanupManifest(manifest); err != nil {
 		return fmt.Errorf("validate controlled-session cleanup manifest: %w", err)
 	}
-	expected := controlledSessionOwnershipFromPlanV1(plan, manifest.DockerEndpoint, controllerID, workloadID)
+	expected := controlledSessionOwnershipWithNetworkFromPlanV1(plan, manifest.DockerEndpoint, networkID, controllerID, workloadID)
 	if manifest.LiveRunID != expected.LiveRunID || manifest.ChannelDirectory != expected.ChannelDirectory ||
 		manifest.DockerEndpoint != expected.DockerEndpoint || manifest.Controller != expected.Controller || manifest.Workload != expected.Workload {
 		return fmt.Errorf("controlled-session cleanup manifest does not match the exact prepared resources")
 	}
-	if len(manifest.Networks) != 0 || len(manifest.Volumes) != 0 {
-		return fmt.Errorf("controlled-session cleanup manifest names resources that this runtime does not create")
+	if plan.Controller.SessionNetwork.Enabled {
+		if len(manifest.Networks) != 1 || manifest.Networks[0].Role != deploy.ControlledSessionNetworkRoleV1 ||
+			manifest.Networks[0].ID != networkID || manifest.Networks[0].Name != plan.Controller.SessionNetwork.Name {
+			return fmt.Errorf("controlled-session cleanup manifest does not match the exact prepared network")
+		}
+	} else if len(manifest.Networks) != 0 {
+		return fmt.Errorf("controlled-session cleanup manifest names a network that this runtime does not create")
+	}
+	if len(manifest.Volumes) != 0 {
+		return fmt.Errorf("controlled-session cleanup manifest names volumes that this runtime does not create")
 	}
 	return nil
 }
@@ -991,13 +1118,20 @@ func (supervisor *controlledSessionSupervisorV1) cleanupWorkload() (
 	closeErr := supervisor.workload.Close()
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), supervisor.options.CleanupTimeout)
 	cleanupErr := supervisor.workload.Cleanup(cleanupCtx)
+	var networkErr error
+	if supervisor.network != nil {
+		networkErr = supervisor.network.Cleanup(cleanupCtx)
+		if networkErr == nil && supervisor.backend.recordNetworkRollback != nil {
+			supervisor.backend.recordNetworkRollback()
+		}
+	}
 	cancel()
-	err := errors.Join(closeErr, cleanupErr)
+	err := errors.Join(closeErr, cleanupErr, networkErr)
 	if err == nil {
 		return controlledsession.CleanupStatusV1{Kind: controlledsession.CleanupStatusSucceededV1}, controlledsession.RecoveryNoneV1, nil
 	}
 	return controlledsession.CleanupStatusV1{
-		Kind: controlledsession.CleanupStatusFailedV1, Message: "controlled-session workload cleanup failed",
+		Kind: controlledsession.CleanupStatusFailedV1, Message: "controlled-session pre-delivery cleanup failed",
 	}, controlledsession.RecoveryRetryCleanupV1, err
 }
 
@@ -1105,6 +1239,15 @@ func (supervisor *controlledSessionSupervisorV1) cleanupDeliveryTail() (
 			}
 			supervisor.controllerOwnershipIncomplete = false
 		}
+	}
+	if supervisor.network != nil {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), supervisor.options.CleanupTimeout)
+		networkErr := supervisor.network.Cleanup(cleanupCtx)
+		if networkErr == nil && supervisor.backend.recordNetworkRollback != nil {
+			supervisor.backend.recordNetworkRollback()
+		}
+		cleanupErr = errors.Join(cleanupErr, networkErr)
+		cleanupCancel()
 	}
 	status := controlledsession.ProcessStatusV1{Kind: controlledsession.ProcessStatusUnknownV1}
 	if supervisor.controllerObserved != nil {

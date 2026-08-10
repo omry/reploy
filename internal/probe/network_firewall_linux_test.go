@@ -47,6 +47,63 @@ func TestReadApplicationResolverCIDRsV1RejectsInvalidNameserver(t *testing.T) {
 	}
 }
 
+func TestReadApplicationSessionNetworkCIDRsV1RequiresCanonicalSortedPrefixes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "network-prefixes")
+	if err := os.WriteFile(path, []byte("172.31.0.0/24\nfd00:1::/64\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readApplicationSessionNetworkCIDRsV1(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"172.31.0.0/24", "fd00:1::/64"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("session-network CIDRs = %#v, want %#v", got, want)
+	}
+	for _, content := range []string{
+		"172.31.0.1/24\n",
+		"fd00:1::/64\n172.31.0.0/24\n",
+		"172.31.0.0/24\n172.31.0.0/24\n",
+		"\n",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readApplicationSessionNetworkCIDRsV1(path); err == nil {
+			t.Fatalf("invalid session-network configuration %q passed", content)
+		}
+	}
+}
+
+func TestSessionNetworkVerdictsMatchPeerSourceAndDestinationPrefixes(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		cidr        string
+		addressSize uint32
+		source      bool
+		wantOffset  uint32
+	}{
+		{name: "IPv4 input source", cidr: "172.31.0.0/24", addressSize: 4, source: true, wantOffset: 12},
+		{name: "IPv4 output destination", cidr: "172.31.0.0/24", addressSize: 4, wantOffset: 16},
+		{name: "IPv6 input source", cidr: "fd00:1::/64", addressSize: 16, source: true, wantOffset: 8},
+		{name: "IPv6 output destination", cidr: "fd00:1::/64", addressSize: 16, wantOffset: 24},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expressions, err := addressCIDRVerdictExpressionsV1(test.cidr, test.addressSize, test.source, expr.VerdictAccept)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload, ok := expressions[0].(*expr.Payload)
+			if !ok || payload.Offset != test.wantOffset || payload.Len != test.addressSize {
+				t.Fatalf("address payload = %#v, want offset %d length %d", expressions[0], test.wantOffset, test.addressSize)
+			}
+			verdict, ok := expressions[len(expressions)-1].(*expr.Verdict)
+			if !ok || verdict.Kind != expr.VerdictAccept {
+				t.Fatalf("address verdict = %#v", expressions[len(expressions)-1])
+			}
+		})
+	}
+}
+
 func TestApplicationResponseTrafficAcceptsOnlyEstablishedConnections(t *testing.T) {
 	if applicationResponseStateMaskV1 != expr.CtStateBitESTABLISHED || applicationResponseStateMaskV1&expr.CtStateBitRELATED != 0 {
 		t.Fatalf("response conntrack mask = %#x", applicationResponseStateMaskV1)
