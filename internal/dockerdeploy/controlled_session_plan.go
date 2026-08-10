@@ -625,10 +625,10 @@ func controlledSessionRestrictedArgvV1(plan ControlledSessionContainerPlanV1) []
 func controlledSessionRuntimeIdentityV1(user RuntimeUserPlan) controlledsession.RuntimeIdentityV1 {
 	groups := make([]string, len(user.SupplementaryGIDs))
 	for index, group := range user.SupplementaryGIDs {
-		groups[index] = strconv.Itoa(group)
+		groups[index] = runtimeIDStringV1(group)
 	}
 	return controlledsession.RuntimeIdentityV1{
-		Username: user.LocalUser, UID: strconv.Itoa(user.UID), GID: strconv.Itoa(user.GID), SupplementaryGIDs: groups,
+		Username: user.LocalUser, UID: runtimeIDStringV1(user.UID), GID: runtimeIDStringV1(user.GID), SupplementaryGIDs: groups,
 	}
 }
 

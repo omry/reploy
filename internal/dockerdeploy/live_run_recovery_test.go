@@ -268,6 +268,54 @@ func TestRecoverLiveRunQueueV1CleansLegacyControlledSessionWithoutDockerEndpoint
 	}
 }
 
+func TestRecoverLiveRunQueueV1PreservesDurableCrashReceiptAfterResourceCleanup(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	operation, err := deploy.AcquireOperationLock(t.Context(), plan.Workload.DeploymentDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	run := liveRunAdmissionFixtureV1(plan.LiveRunID, false)
+	run.Kind = deploy.LiveRunKindShellV1
+	run.GenerationReference = plan.Workload.GenerationReference
+	if _, err := operation.AdmitLiveRunV1(run, false); err != nil {
+		t.Fatal(err)
+	}
+	ownership := controlledSessionOwnershipFromPlanV1(plan, controlledSessionTestDockerEndpointV1, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1)
+	recorded, err := operation.RecordControlledSessionOwnershipV1(ownership)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := operation.PrepareControlledSessionIncidentReceiptV1(recorded.ChannelDirectory, recorded.LiveRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := controlledSessionIncidentRetrievalFixtureV1(recorded.LiveRunID)
+	receipt.BootSession = recorded.BootSession
+	if err := deploy.WriteControlledSessionIncidentReceiptV1(target.File(), receipt); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
+	containers := newControlledSessionRecoveryContainersV1(recorded)
+	if _, err := recoverLiveRunQueueV1(t.Context(), operation, nil, containers.run); err != nil {
+		t.Fatal(err)
+	}
+	queue, found, err := operation.ReadLiveRunQueueV1()
+	if err != nil || found || len(queue.ControlledSessions) != 0 {
+		t.Fatalf("queue after recovery = %#v, found=%t, error=%v", queue, found, err)
+	}
+	receipts, err := operation.ReadControlledSessionIncidentReceiptsV1()
+	if err != nil || len(receipts) != 1 || receipts[0] != receipt {
+		t.Fatalf("receipt after recovery = %#v, error=%v", receipts, err)
+	}
+	removed, err := operation.AcknowledgeControlledSessionIncidentReceiptV1(recorded.LiveRunID)
+	if err != nil || !removed {
+		t.Fatalf("acknowledge recovered receipt = %t, %v", removed, err)
+	}
+}
+
 func TestRecoverLiveRunQueueV1RetainsControlledSessionAfterLabelMismatchAndRetries(t *testing.T) {
 	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
 	operation, err := deploy.AcquireOperationLock(t.Context(), plan.Workload.DeploymentDirectory)

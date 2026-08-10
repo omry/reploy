@@ -48,7 +48,7 @@ func sandboxAndExecApplicationV1(plan sandboxExecPlanV1) error {
 	return verifyAndExecApplication(plan.Argv, readApplicationKernelStatus, execApplication)
 }
 
-func dropApplicationAuthorityV1(uid int, gid int, groups []int) error {
+func dropApplicationAuthorityV1(uid uint32, gid uint32, groups []uint32) error {
 	lastContent, err := os.ReadFile("/proc/sys/kernel/cap_last_cap")
 	if err != nil {
 		return fmt.Errorf("read last Linux capability: %w", err)
@@ -71,13 +71,20 @@ func dropApplicationAuthorityV1(uid int, gid int, groups []int) error {
 	if err := unix.Prctl(unix.PR_SET_SECUREBITS, secureBits, 0, 0, 0); err != nil {
 		return fmt.Errorf("lock application securebits: %w", err)
 	}
-	if err := unix.Setgroups(groups); err != nil {
+	// The x/sys credential wrappers use int even though Linux uid_t/gid_t are
+	// unsigned 32-bit values. Conversion here preserves the exact low 32 bits
+	// on 32-bit targets; parsing and validation remain architecture-neutral.
+	nativeGroups := make([]int, len(groups))
+	for index, group := range groups {
+		nativeGroups[index] = int(group)
+	}
+	if err := unix.Setgroups(nativeGroups); err != nil {
 		return fmt.Errorf("set application supplementary groups: %w", err)
 	}
-	if err := unix.Setresgid(gid, gid, gid); err != nil {
+	if err := unix.Setresgid(int(gid), int(gid), int(gid)); err != nil {
 		return fmt.Errorf("set application GID %d: %w", gid, err)
 	}
-	if err := unix.Setresuid(uid, uid, uid); err != nil {
+	if err := unix.Setresuid(int(uid), int(uid), int(uid)); err != nil {
 		return fmt.Errorf("set application UID %d: %w", uid, err)
 	}
 	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {

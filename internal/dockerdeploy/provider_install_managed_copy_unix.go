@@ -131,7 +131,7 @@ func copyProviderInstallManagedFileHandleV1(source *os.File, targetPath string, 
 
 func applyProviderInstallManagedMetadataV1(path string, mode os.FileMode, locked lockedProviderInstallV1) error {
 	if locked.Input.Install.Scope == InstallScopeSystem {
-		if err := os.Chown(path, locked.Input.Install.SystemUID, locked.Input.Install.SystemGID); err != nil {
+		if err := os.Chown(path, int(locked.Input.Install.SystemUID), int(locked.Input.Install.SystemGID)); err != nil {
 			return fmt.Errorf("set installed managed mount ownership for %s: %w", path, err)
 		}
 	}

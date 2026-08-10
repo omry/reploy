@@ -39,3 +39,26 @@ func TestRenderDockerInputsFromResolvedPlan(t *testing.T) {
 		t.Fatalf("inputs = %#v", inputs)
 	}
 }
+
+func TestRenderDockerInputsRejectsEndpointEnvironmentSuffixCollisions(t *testing.T) {
+	for _, names := range [][2]string{
+		{"api.v1", "api_v1"},
+		{"api--v1", "api__v1"},
+	} {
+		t.Run(names[0]+"/"+names[1], func(t *testing.T) {
+			plan := DockerExecutionPlan{
+				EnvironmentID: "demo", DeploymentDir: "/deployment", Phase: blueprint.PhaseStaged, Image: "reploy/demo:staging",
+				ContainerName: "demo-staging-abcd", NetworkName: "demo-staging-abcd", Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 501, GID: 20, DockerUser: "501:20"}),
+				Workload: &WorkloadExecutionPlan{Command: "server", Argv: []string{"server"}, Endpoints: map[string]EndpointExecutionPlan{
+					names[0]: {Scheme: "http", PublishAddress: "127.0.0.1", PublishedPort: 18080, ContainerPort: 8080},
+					names[1]: {Scheme: "http", PublishAddress: "127.0.0.1", PublishedPort: 18081, ContainerPort: 8081},
+				}},
+			}
+
+			_, err := RenderDockerInputs(plan, "demo")
+			if err == nil || !strings.Contains(err.Error(), "both map to Docker environment suffix") {
+				t.Fatalf("RenderDockerInputs() error = %v, want endpoint environment suffix collision", err)
+			}
+		})
+	}
+}

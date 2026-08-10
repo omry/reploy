@@ -19,20 +19,24 @@ const (
 	controlledSessionWatchdogManifestFD = 3
 	controlledSessionWatchdogLivenessFD = 4
 	controlledSessionWatchdogReadyFD    = 5
+	controlledSessionWatchdogReceiptFD  = 6
 )
 
 var controlledSessionWatchdogExecutableV1 = os.Executable
 
 type controlledSessionWatchdogProcessV1 struct {
-	pid        int
-	liveness   *os.File
-	exited     chan struct{}
-	exitMu     sync.Mutex
-	exitErr    error
-	closeOnce  sync.Once
-	closeErr   error
-	disarmOnce sync.Once
-	disarmErr  error
+	pid         int
+	liveness    *os.File
+	exited      chan struct{}
+	exitMu      sync.Mutex
+	exitErr     error
+	closeOnce   sync.Once
+	closeErr    error
+	disarmOnce  sync.Once
+	disarmErr   error
+	receipt     *deploy.ControlledSessionIncidentReceiptTargetV1
+	receiptOnce sync.Once
+	receiptErr  error
 }
 
 func (watchdog *controlledSessionWatchdogProcessV1) Done() <-chan struct{} {
@@ -56,12 +60,24 @@ func (watchdog *controlledSessionWatchdogProcessV1) Close() error {
 			watchdog.closeErr = fmt.Errorf("close controlled-session watchdog liveness pipe: %w", err)
 		}
 	})
-	return watchdog.closeErr
+	select {
+	case <-watchdog.exited:
+		watchdog.removeReceiptTarget()
+	default:
+	}
+	return errors.Join(watchdog.closeErr, watchdog.receiptErr)
 }
 
-func startControlledSessionWatchdogV1(ctx context.Context, manifest deploy.ControlledSessionCleanupManifest) (controlledSessionWatchdogRuntimeV1, error) {
+func startControlledSessionWatchdogV1(
+	ctx context.Context,
+	manifest deploy.ControlledSessionCleanupManifest,
+	receipt *deploy.ControlledSessionIncidentReceiptTargetV1,
+) (controlledSessionWatchdogRuntimeV1, error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if receipt == nil || receipt.File() == nil || receipt.Path() != manifest.IncidentReceipt {
+		return nil, fmt.Errorf("launch controlled-session watchdog requires the exact pre-created incident receipt target")
 	}
 	content, err := deploy.EncodeControlledSessionCleanupManifest(manifest)
 	if err != nil {
@@ -111,7 +127,7 @@ func startControlledSessionWatchdogV1(ctx context.Context, manifest deploy.Contr
 		return nil, fmt.Errorf("resolve Reploy executable for controlled-session watchdog: %w", err)
 	}
 	command := exec.Command(executable, controlledSessionWatchdogChildArgument)
-	command.ExtraFiles = []*os.File{manifestFile, livenessRead, readyWrite}
+	command.ExtraFiles = []*os.File{manifestFile, livenessRead, readyWrite, receipt.File()}
 	command.Stderr = os.Stderr
 	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := command.Start(); err != nil {
@@ -120,7 +136,7 @@ func startControlledSessionWatchdogV1(ctx context.Context, manifest deploy.Contr
 	}
 	_ = readyWrite.Close()
 	watchdog := &controlledSessionWatchdogProcessV1{
-		pid: command.Process.Pid, liveness: livenessWrite, exited: make(chan struct{}),
+		pid: command.Process.Pid, liveness: livenessWrite, exited: make(chan struct{}), receipt: receipt,
 	}
 	go func() {
 		err := command.Wait()
@@ -183,22 +199,33 @@ func (watchdog *controlledSessionWatchdogProcessV1) Disarm(ctx context.Context) 
 			if err != nil {
 				watchdog.disarmErr = errors.Join(watchdog.disarmErr, fmt.Errorf("wait for controlled-session watchdog child: %w", err))
 			}
+			watchdog.removeReceiptTarget()
 		case <-ctx.Done():
 			watchdog.disarmErr = errors.Join(watchdog.disarmErr, fmt.Errorf("wait for controlled-session watchdog child: %w", ctx.Err()))
 		}
 	})
-	return watchdog.disarmErr
+	return errors.Join(watchdog.disarmErr, watchdog.receiptErr)
+}
+
+func (watchdog *controlledSessionWatchdogProcessV1) removeReceiptTarget() {
+	watchdog.receiptOnce.Do(func() {
+		if watchdog.receipt != nil {
+			watchdog.receiptErr = watchdog.receipt.Remove()
+		}
+	})
 }
 
 func runControlledSessionWatchdogChildV1(stderr io.Writer) error {
 	manifestFile := os.NewFile(controlledSessionWatchdogManifestFD, "controlled-session-watchdog-manifest")
 	liveness := os.NewFile(controlledSessionWatchdogLivenessFD, "controlled-session-watchdog-parent")
 	ready := os.NewFile(controlledSessionWatchdogReadyFD, "controlled-session-watchdog-ready")
-	if manifestFile == nil || liveness == nil || ready == nil {
+	receipt := os.NewFile(controlledSessionWatchdogReceiptFD, "controlled-session-watchdog-incident-receipt")
+	if manifestFile == nil || liveness == nil || ready == nil || receipt == nil {
 		return fmt.Errorf("required inherited watchdog descriptors are unavailable")
 	}
 	defer manifestFile.Close()
 	defer liveness.Close()
 	defer ready.Close()
-	return runControlledSessionWatchdogV1(manifestFile, liveness, ready, productionControlledSessionWatchdogCleanupBackendV1())
+	defer receipt.Close()
+	return runControlledSessionWatchdogV1(manifestFile, liveness, ready, productionControlledSessionWatchdogCleanupBackendV1(receipt))
 }
