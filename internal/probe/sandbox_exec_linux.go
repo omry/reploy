@@ -33,11 +33,20 @@ func sandboxAndExecApplicationV1(plan sandboxExecPlanV1) error {
 		return fmt.Errorf("trusted sandbox setup must begin as container root")
 	}
 	if plan.InstallRules {
+		sessionSubnets, err := readApplicationSessionNetworkCIDRsV1(plan.SessionNetworkPrefixes)
+		if err != nil {
+			return fmt.Errorf("read application session-network prefixes: %w", err)
+		}
+		sessionPeerCIDRs, err := prepareApplicationSessionPeerV1(plan.SessionNetworkPeer, sessionSubnets, applicationHostsConfigurationV1)
+		if err != nil {
+			return fmt.Errorf("prepare application session-network peer: %w", err)
+		}
 		if err := installApplicationNetworkPolicyV1(applicationNetworkPolicyV1{
 			AllowPublic:    plan.AllowPublic,
 			AllowLocal:     plan.AllowLocal,
 			AllowAmbiguous: plan.AllowAmbiguous,
 			InboundTCP:     plan.InboundTCP,
+			SessionCIDRs:   sessionPeerCIDRs,
 		}); err != nil {
 			return fmt.Errorf("install application network policy: %w", err)
 		}

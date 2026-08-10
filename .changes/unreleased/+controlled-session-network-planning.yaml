@@ -1,2 +1,2 @@
 kind: Added
-body: Freeze granted controlled-session workload endpoints and lease-private network identities into immutable plans, with protocol-v2 session-local coordinates that remain fail-closed until the planned network is realized.
+body: Freeze and realize granted controlled-session workload endpoints and lease-private network identities, with protocol-v2 session-local coordinates, exact peer firewall grants, and ordinary public or local access preserved only when explicitly granted.

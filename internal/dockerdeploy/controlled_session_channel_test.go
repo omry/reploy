@@ -1,6 +1,8 @@
 package dockerdeploy
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -27,6 +29,44 @@ func TestControlledSessionPrivateChannelConfigV1UsesOnlyFrozenPlanAuthority(t *t
 		strings.Contains(strings.Join(plan.Workload.Environment, "\x00"), config.Opened.Authorization.Handle) ||
 		strings.Contains(strings.Join(plan.Workload.Create.Args, "\x00"), plan.Channel.ContainerSocket) {
 		t.Fatalf("workload plan exposes private channel authority: %#v", plan.Workload)
+	}
+}
+
+func TestWriteControlledSessionNetworkPolicyV1FreezesExactRealizedPrefixes(t *testing.T) {
+	plan := controlledSessionNetworkPlanFixtureV1(t)
+	if err := os.MkdirAll(plan.Channel.HostDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	prefixes := []string{"fd00:1::/64", "172.31.0.0/24"}
+	if err := writeControlledSessionNetworkPolicyV1(plan, prefixes); err != nil {
+		t.Fatal(err)
+	}
+	policyPath := filepath.Join(plan.Channel.HostDirectory, controlledSessionNetworkPolicyFileNameV1)
+	content, err := os.ReadFile(policyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(policyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "172.31.0.0/24\nfd00:1::/64\n" || info.Mode().Perm() != 0o444 {
+		t.Fatalf("network policy input = %q mode=%#o", content, info.Mode().Perm())
+	}
+	if err := writeControlledSessionNetworkPolicyV1(plan, prefixes); err == nil || !strings.Contains(err.Error(), "file exists") {
+		t.Fatalf("network policy replacement error = %v", err)
+	}
+}
+
+func TestWriteControlledSessionNetworkPolicyV1RejectsMissingOrInvalidRealization(t *testing.T) {
+	plan := controlledSessionNetworkPlanFixtureV1(t)
+	if err := os.MkdirAll(plan.Channel.HostDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, prefixes := range [][]string{nil, {"172.31.0.1/24"}, {"172.31.0.0/24", "172.31.0.0/24"}} {
+		if err := writeControlledSessionNetworkPolicyV1(plan, prefixes); err == nil {
+			t.Fatalf("invalid network prefixes %#v passed", prefixes)
+		}
 	}
 }
 
