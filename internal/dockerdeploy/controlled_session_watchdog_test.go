@@ -104,6 +104,130 @@ func TestControlledSessionWatchdogParentLossRemovesOnlyManifestResources(t *test
 	}
 }
 
+func TestControlledSessionWatchdogRemovesExactOwnedNetworkAfterContainers(t *testing.T) {
+	manifest := controlledSessionWatchdogManifestFixtureV1(t)
+	manifest.Networks = []deploy.ControlledSessionNetworkOwnershipV1{{
+		Role: deploy.ControlledSessionNetworkRoleV1, ID: strings.Repeat("e", 64), Name: "reploy-session-network",
+	}}
+	content, err := deploy.EncodeControlledSessionCleanupManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	networkExists := true
+	var operations []string
+	var receipt deploy.ControlledSessionIncidentReceiptV1
+	backend := controlledSessionWatchdogCleanupBackendV1{
+		currentBootSession: func() (string, error) { return manifest.BootSession, nil },
+		bindDockerEndpoint: func(string) error { return nil },
+		inspectContainer: func(_ context.Context, id string) (map[string]string, bool, error) {
+			operations = append(operations, "container:"+id)
+			return nil, false, nil
+		},
+		removeContainer: func(context.Context, string) error { return errors.New("absent containers must not be removed") },
+		inspectNetwork: func(_ context.Context, id string) (controlledSessionWatchdogNetworkInspectionV1, bool, error) {
+			operations = append(operations, "network:"+id)
+			if !networkExists {
+				return controlledSessionWatchdogNetworkInspectionV1{}, false, nil
+			}
+			return controlledSessionWatchdogNetworkInspectionV1{
+				ID: id, Name: manifest.Networks[0].Name,
+				Labels: map[string]string{
+					"io.reploy.session.live-run": manifest.LiveRunID,
+					"io.reploy.session.role":     deploy.ControlledSessionNetworkRoleV1,
+				},
+				Members: map[string]string{},
+			}, true, nil
+		},
+		removeNetwork: func(_ context.Context, id string) error {
+			operations = append(operations, "remove-network:"+id)
+			networkExists = false
+			return nil
+		},
+		removeChannel: func(string) error { operations = append(operations, "channel"); return nil },
+		now:           func() time.Time { return time.Date(2026, 8, 10, 3, 0, 0, 0, time.UTC) },
+		writeIncident: func(value deploy.ControlledSessionIncidentReceiptV1) error { receipt = value; return nil },
+	}
+	if err := runControlledSessionWatchdogV1(bytes.NewReader(content), strings.NewReader(""), io.Discard, backend); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"container:" + manifest.Workload.ID,
+		"container:" + manifest.Controller.ID,
+		"network:" + manifest.Networks[0].ID,
+		"remove-network:" + manifest.Networks[0].ID,
+		"network:" + manifest.Networks[0].ID,
+		"channel",
+	}
+	if !reflect.DeepEqual(operations, want) || networkExists {
+		t.Fatalf("network cleanup operations = %#v, exists=%t", operations, networkExists)
+	}
+	if len(receipt.Networks) != 1 || receipt.Networks[0].ID != manifest.Networks[0].ID ||
+		receipt.Networks[0].CleanupStatus != deploy.ControlledSessionIncidentResourceVerifiedAbsentV1 ||
+		receipt.CleanupStatus != deploy.ControlledSessionIncidentCleanupSucceededV1 {
+		t.Fatalf("network incident receipt = %#v", receipt)
+	}
+}
+
+func TestControlledSessionWatchdogRefusesMismatchedOrOccupiedNetwork(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*controlledSessionWatchdogNetworkInspectionV1)
+		want   string
+	}{
+		{name: "labels", mutate: func(value *controlledSessionWatchdogNetworkInspectionV1) {
+			value.Labels["io.reploy.session.live-run"] = "run-ffffffffffffffff"
+		}, want: "ownership labels"},
+		{name: "member", mutate: func(value *controlledSessionWatchdogNetworkInspectionV1) {
+			value.Members[strings.Repeat("f", 64)] = "unrelated"
+		}, want: "still has members"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manifest := controlledSessionWatchdogManifestFixtureV1(t)
+			manifest.Networks = []deploy.ControlledSessionNetworkOwnershipV1{{
+				Role: deploy.ControlledSessionNetworkRoleV1, ID: strings.Repeat("e", 64), Name: "reploy-session-network",
+			}}
+			removed := false
+			backend := controlledSessionWatchdogCleanupBackendV1{
+				inspectContainer: func(context.Context, string) (map[string]string, bool, error) { return nil, false, nil },
+				removeContainer:  func(context.Context, string) error { return nil },
+				inspectNetwork: func(_ context.Context, id string) (controlledSessionWatchdogNetworkInspectionV1, bool, error) {
+					inspection := controlledSessionWatchdogNetworkInspectionV1{
+						ID: id, Name: manifest.Networks[0].Name,
+						Labels: map[string]string{
+							"io.reploy.session.live-run": manifest.LiveRunID,
+							"io.reploy.session.role":     deploy.ControlledSessionNetworkRoleV1,
+						},
+						Members: map[string]string{},
+					}
+					test.mutate(&inspection)
+					return inspection, true, nil
+				},
+				removeNetwork: func(context.Context, string) error { removed = true; return nil },
+				removeChannel: func(string) error { return nil },
+			}
+			err := cleanupControlledSessionFromWatchdogV1(t.Context(), manifest, backend)
+			if err == nil || !strings.Contains(err.Error(), test.want) || removed {
+				t.Fatalf("network cleanup error=%v, removed=%t", err, removed)
+			}
+		})
+	}
+}
+
+func TestControlledSessionWatchdogRejectsIncompleteNetworkCleanupBackend(t *testing.T) {
+	manifest := controlledSessionWatchdogManifestFixtureV1(t)
+	manifest.Networks = []deploy.ControlledSessionNetworkOwnershipV1{{
+		Role: deploy.ControlledSessionNetworkRoleV1, ID: strings.Repeat("e", 64), Name: "reploy-session-network",
+	}}
+	err := cleanupControlledSessionFromWatchdogV1(t.Context(), manifest, controlledSessionWatchdogCleanupBackendV1{
+		inspectContainer: func(context.Context, string) (map[string]string, bool, error) { return nil, false, nil },
+		removeContainer:  func(context.Context, string) error { return nil },
+		removeChannel:    func(string) error { return nil },
+	})
+	if err == nil || !strings.Contains(err.Error(), "network cleanup backend is incomplete") {
+		t.Fatalf("incomplete network backend error = %v", err)
+	}
+}
+
 func TestControlledSessionWatchdogRetriesParentLossCleanupWhileDockerIsUnavailable(t *testing.T) {
 	manifest := controlledSessionWatchdogManifestFixtureV1(t)
 	content, err := deploy.EncodeControlledSessionCleanupManifest(manifest)
@@ -277,6 +401,9 @@ func TestControlledSessionWatchdogRefusesMismatchedOwnership(t *testing.T) {
 
 func TestControlledSessionWatchdogIncidentReceiptRecordsOnlyBoundedFailureStatus(t *testing.T) {
 	manifest := controlledSessionWatchdogManifestFixtureV1(t)
+	manifest.Networks = []deploy.ControlledSessionNetworkOwnershipV1{{
+		Role: deploy.ControlledSessionNetworkRoleV1, ID: strings.Repeat("e", 64), Name: "reploy-session-network",
+	}}
 	content, err := deploy.EncodeControlledSessionCleanupManifest(manifest)
 	if err != nil {
 		t.Fatal(err)
@@ -293,7 +420,11 @@ func TestControlledSessionWatchdogIncidentReceiptRecordsOnlyBoundedFailureStatus
 			return nil, false, nil
 		},
 		removeContainer: func(context.Context, string) error { return nil },
-		removeChannel:   func(string) error { return nil },
+		inspectNetwork: func(context.Context, string) (controlledSessionWatchdogNetworkInspectionV1, bool, error) {
+			return controlledSessionWatchdogNetworkInspectionV1{}, false, errors.New(sensitive)
+		},
+		removeNetwork: func(context.Context, string) error { return nil },
+		removeChannel: func(string) error { return nil },
 		dockerUnavailable: func(context.Context) (bool, error) {
 			return false, nil
 		},
@@ -312,6 +443,7 @@ func TestControlledSessionWatchdogIncidentReceiptRecordsOnlyBoundedFailureStatus
 		t.Fatal(encodeErr)
 	}
 	if bytes.Contains(encoded, []byte(sensitive)) || receipt.Workload.CleanupStatus != deploy.ControlledSessionIncidentResourceCleanupFailedV1 ||
+		len(receipt.Networks) != 1 || receipt.Networks[0].CleanupStatus != deploy.ControlledSessionIncidentResourceCleanupFailedV1 ||
 		receipt.CleanupStatus != deploy.ControlledSessionIncidentCleanupFailedV1 ||
 		receipt.RecoveryAction != deploy.ControlledSessionIncidentRecoveryNextOperationV1 {
 		t.Fatalf("unsafe or incomplete incident receipt = %s", encoded)
@@ -342,6 +474,28 @@ func TestControlledSessionWatchdogClassifiesOnlyUnreachableDockerEndpointsAsUnav
 			})
 			if unavailable != test.unavailable || (err != nil) != test.wantErr {
 				t.Fatalf("unavailable=%t, error=%v", unavailable, err)
+			}
+		})
+	}
+}
+
+func TestControlledSessionCleanupInspectorsRecognizeDockerNetworkNotFound(t *testing.T) {
+	inspectors := []struct {
+		name    string
+		inspect func(context.Context, string, commandRunner) (controlledSessionWatchdogNetworkInspectionV1, bool, error)
+	}{
+		{name: "watchdog", inspect: inspectControlledSessionWatchdogNetworkV1},
+		{name: "recovery", inspect: inspectControlledSessionRecoveryNetworkV1},
+	}
+	for _, inspector := range inspectors {
+		t.Run(inspector.name, func(t *testing.T) {
+			const message = "Error response from daemon: network eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee not found"
+			_, found, err := inspector.inspect(t.Context(), strings.Repeat("e", 64), func(_ CommandSpec, options RunOptions) error {
+				_, _ = io.WriteString(options.Stderr, message)
+				return errors.New("exit status 1")
+			})
+			if err != nil || found {
+				t.Fatalf("network-not-found inspection found=%t, error=%v", found, err)
 			}
 		})
 	}

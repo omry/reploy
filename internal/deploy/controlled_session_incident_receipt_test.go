@@ -37,6 +37,30 @@ func TestControlledSessionIncidentReceiptRoundTripHasOnlyAllowlistedFacts(t *tes
 	}
 }
 
+func TestControlledSessionIncidentReceiptValidatesExactNetworkIdentityAndOutcome(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*ControlledSessionIncidentReceiptV1)
+		want   string
+	}{
+		{name: "role", mutate: func(value *ControlledSessionIncidentReceiptV1) { value.Networks[0].Role = "other" }, want: "role"},
+		{name: "ID", mutate: func(value *ControlledSessionIncidentReceiptV1) { value.Networks[0].ID = "short" }, want: "64 lowercase"},
+		{name: "name", mutate: func(value *ControlledSessionIncidentReceiptV1) { value.Networks[0].Name = "" }, want: "name"},
+		{name: "outcome", mutate: func(value *ControlledSessionIncidentReceiptV1) { value.Networks[0].CleanupStatus = "unknown" }, want: "cleanup status"},
+		{name: "overall success", mutate: func(value *ControlledSessionIncidentReceiptV1) {
+			value.Networks[0].CleanupStatus = ControlledSessionIncidentResourceCleanupFailedV1
+		}, want: "every resource verified absent"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			receipt := controlledSessionIncidentReceiptFixtureV1("run-0000000000000001")
+			test.mutate(&receipt)
+			if err := ValidateControlledSessionIncidentReceiptV1(receipt); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("network receipt validation error = %v", err)
+			}
+		})
+	}
+}
+
 func TestOperationLockPreparesRetrievesAndAcknowledgesExactIncidentReceipt(t *testing.T) {
 	dir := t.TempDir()
 	lock, err := AcquireOperationLock(t.Context(), dir)
@@ -226,6 +250,10 @@ func controlledSessionIncidentReceiptFixtureV1(runID string) ControlledSessionIn
 		RecordedAt: time.Date(2026, 8, 10, 3, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
 		Trigger:    ControlledSessionIncidentParentLostV1,
 		Controller: container("controller", "c"), Workload: container("workload", "d"),
+		Networks: []ControlledSessionIncidentNetworkV1{{
+			Role: ControlledSessionNetworkRoleV1, ID: strings.Repeat("e", 64), Name: "reploy-session-network",
+			CleanupStatus: ControlledSessionIncidentResourceVerifiedAbsentV1,
+		}},
 		ChannelCleanupStatus: ControlledSessionIncidentResourceVerifiedAbsentV1,
 		CleanupStatus:        ControlledSessionIncidentCleanupSucceededV1,
 		RecoveryAction:       ControlledSessionIncidentRecoveryNoneV1,

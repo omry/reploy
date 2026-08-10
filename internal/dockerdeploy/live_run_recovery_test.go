@@ -307,7 +307,7 @@ func TestRecoverLiveRunQueueV1PreservesDurableCrashReceiptAfterResourceCleanup(t
 		t.Fatalf("queue after recovery = %#v, found=%t, error=%v", queue, found, err)
 	}
 	receipts, err := operation.ReadControlledSessionIncidentReceiptsV1()
-	if err != nil || len(receipts) != 1 || receipts[0] != receipt {
+	if err != nil || len(receipts) != 1 || !reflect.DeepEqual(receipts[0], receipt) {
 		t.Fatalf("receipt after recovery = %#v, error=%v", receipts, err)
 	}
 	removed, err := operation.AcknowledgeControlledSessionIncidentReceiptV1(recorded.LiveRunID)
@@ -357,17 +357,107 @@ func TestRecoverLiveRunQueueV1RetainsControlledSessionAfterLabelMismatchAndRetri
 	}
 }
 
+func TestRecoverLiveRunQueueV1DiscoversAndRemovesOwnedNetworkByFrozenName(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	operation, err := deploy.AcquireOperationLock(t.Context(), plan.Workload.DeploymentDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	run := liveRunAdmissionFixtureV1(plan.LiveRunID, false)
+	run.Kind = deploy.LiveRunKindShellV1
+	run.GenerationReference = plan.Workload.GenerationReference
+	if _, err := operation.AdmitLiveRunV1(run, false); err != nil {
+		t.Fatal(err)
+	}
+	ownership := controlledSessionOwnershipFromPlanV1(plan, controlledSessionTestDockerEndpointV1, "", "")
+	ownership.NetworkName = "reploy-session-" + plan.LiveRunID
+	recorded, err := operation.RecordControlledSessionOwnershipV1(ownership)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := newControlledSessionRecoveryContainersV1(recorded)
+	resources.byID = map[string]*controlledSessionRecoveryContainerFixtureV1{}
+	resources.byName = map[string]*controlledSessionRecoveryContainerFixtureV1{}
+	if _, err := recoverLiveRunQueueV1(t.Context(), operation, nil, resources.run); err != nil {
+		t.Fatal(err)
+	}
+	if resources.network != nil {
+		t.Fatalf("recovered network remains = %#v", resources.network)
+	}
+	wantNetworkInspects := []string{recorded.NetworkName, strings.Repeat("e", 64)}
+	if !reflect.DeepEqual(resources.networkInspects, wantNetworkInspects) {
+		t.Fatalf("network inspect targets = %#v, want %#v", resources.networkInspects, wantNetworkInspects)
+	}
+	if _, found, err := operation.ReadLiveRunQueueV1(); err != nil || found {
+		t.Fatalf("recovered network ownership remains: found=%t, error=%v", found, err)
+	}
+}
+
+func TestRecoverLiveRunQueueV1RetainsLabelMismatchedNetworkAndRetries(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	operation, err := deploy.AcquireOperationLock(t.Context(), plan.Workload.DeploymentDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	run := liveRunAdmissionFixtureV1(plan.LiveRunID, false)
+	run.Kind = deploy.LiveRunKindShellV1
+	run.GenerationReference = plan.Workload.GenerationReference
+	if _, err := operation.AdmitLiveRunV1(run, false); err != nil {
+		t.Fatal(err)
+	}
+	ownership := controlledSessionOwnershipFromPlanV1(
+		plan, controlledSessionTestDockerEndpointV1, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
+	)
+	ownership.NetworkID = strings.Repeat("e", 64)
+	ownership.NetworkName = "reploy-session-" + plan.LiveRunID
+	recorded, err := operation.RecordControlledSessionOwnershipV1(ownership)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := newControlledSessionRecoveryContainersV1(recorded)
+	resources.network.labels["io.reploy.session.live-run"] = "run-ffffffffffffffff"
+	var notice bytes.Buffer
+	if _, err := recoverLiveRunQueueV1(t.Context(), operation, &notice, resources.run); err != nil {
+		t.Fatal(err)
+	}
+	if resources.network == nil || !strings.Contains(notice.String(), "network") || !strings.Contains(notice.String(), "ownership labels") {
+		t.Fatalf("mismatched network was not retained: network=%#v notice=%q", resources.network, notice.String())
+	}
+	queue, found, err := operation.ReadLiveRunQueueV1()
+	if err != nil || !found || len(queue.ControlledSessions) != 1 {
+		t.Fatalf("retained network ownership = %#v, found=%t, error=%v", queue.ControlledSessions, found, err)
+	}
+	resources.network.labels["io.reploy.session.live-run"] = recorded.LiveRunID
+	if _, err := recoverLiveRunQueueV1(t.Context(), operation, nil, resources.run); err != nil {
+		t.Fatal(err)
+	}
+	if resources.network != nil {
+		t.Fatalf("retried network remains = %#v", resources.network)
+	}
+}
+
 type controlledSessionRecoveryContainerFixtureV1 struct {
 	id     string
 	name   string
 	labels map[string]string
 }
 
+type controlledSessionRecoveryNetworkFixtureV1 struct {
+	id      string
+	name    string
+	labels  map[string]string
+	members map[string]dockerSessionNetworkContainerV1
+}
+
 type controlledSessionRecoveryContainersV1 struct {
-	byID     map[string]*controlledSessionRecoveryContainerFixtureV1
-	byName   map[string]*controlledSessionRecoveryContainerFixtureV1
-	inspects []string
-	endpoint string
+	byID            map[string]*controlledSessionRecoveryContainerFixtureV1
+	byName          map[string]*controlledSessionRecoveryContainerFixtureV1
+	inspects        []string
+	endpoint        string
+	network         *controlledSessionRecoveryNetworkFixtureV1
+	networkInspects []string
 }
 
 func newControlledSessionRecoveryContainersV1(ownership deploy.ControlledSessionOwnershipV1) *controlledSessionRecoveryContainersV1 {
@@ -395,6 +485,20 @@ func newControlledSessionRecoveryContainersV1(ownership deploy.ControlledSession
 		}
 		containers.byID[container.id] = container
 		containers.byName[container.name] = container
+	}
+	if ownership.NetworkName != "" {
+		networkID := ownership.NetworkID
+		if networkID == "" {
+			networkID = strings.Repeat("e", 64)
+		}
+		containers.network = &controlledSessionRecoveryNetworkFixtureV1{
+			id: networkID, name: ownership.NetworkName,
+			labels: map[string]string{
+				"io.reploy.session.live-run": ownership.LiveRunID,
+				"io.reploy.session.role":     deploy.ControlledSessionNetworkRoleV1,
+			},
+			members: map[string]dockerSessionNetworkContainerV1{},
+		}
 	}
 	return containers
 }
@@ -431,6 +535,32 @@ func (containers *controlledSessionRecoveryContainersV1) run(spec CommandSpec, o
 		}
 		delete(containers.byID, container.id)
 		delete(containers.byName, container.name)
+		return nil
+	}
+	if len(spec.Args) >= 2 && spec.Args[0] == "network" && spec.Args[1] == "inspect" {
+		target := spec.Args[len(spec.Args)-1]
+		containers.networkInspects = append(containers.networkInspects, target)
+		network := containers.network
+		if network == nil || target != network.id && target != network.name {
+			return errors.New("No such network")
+		}
+		labels, err := json.Marshal(network.labels)
+		if err != nil {
+			return err
+		}
+		members, err := json.Marshal(network.members)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(options.Stdout, "%q %q %s %s", network.id, network.name, labels, members)
+		return err
+	}
+	if len(spec.Args) >= 2 && spec.Args[0] == "network" && spec.Args[1] == "rm" {
+		id := spec.Args[len(spec.Args)-1]
+		if containers.network == nil || containers.network.id != id {
+			return errors.New("No such network")
+		}
+		containers.network = nil
 		return nil
 	}
 	return fmt.Errorf("unexpected controlled-session recovery command: %#v", spec)

@@ -69,8 +69,18 @@ type ControlledSessionOwnershipV1 struct {
 	SessionHandle    string                                `json:"session_handle"`
 	DockerEndpoint   string                                `json:"docker_endpoint,omitempty"`
 	ChannelDirectory string                                `json:"channel_directory"`
+	NetworkID        string                                `json:"network_id,omitempty"`
+	NetworkName      string                                `json:"network_name,omitempty"`
 	Controller       ControlledSessionContainerOwnershipV1 `json:"controller"`
 	Workload         ControlledSessionContainerOwnershipV1 `json:"workload"`
+}
+
+const ControlledSessionNetworkRoleV1 = "network"
+
+type ControlledSessionNetworkOwnershipV1 struct {
+	Role string `json:"role"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type ControlledSessionContainerOwnershipV1 struct {
@@ -299,6 +309,18 @@ func validateControlledSessionOwnershipV1(ownership ControlledSessionOwnershipV1
 	if !filepath.IsAbs(ownership.ChannelDirectory) || filepath.Clean(ownership.ChannelDirectory) != ownership.ChannelDirectory || !safeRecoveryIdentity(ownership.ChannelDirectory) {
 		return fmt.Errorf("channel directory must be a clean absolute path")
 	}
+	if ownership.NetworkName == "" {
+		if ownership.NetworkID != "" {
+			return fmt.Errorf("network ID cannot be recorded without a network name")
+		}
+	} else {
+		if !safeRecoveryIdentity(ownership.NetworkName) {
+			return fmt.Errorf("network name must be nonempty safe text")
+		}
+		if ownership.NetworkID != "" && !controlledSessionContainerIDPatternV1.MatchString(ownership.NetworkID) {
+			return fmt.Errorf("network ID must use 64 lowercase hexadecimal characters")
+		}
+	}
 	if err := validateControlledSessionContainerOwnershipStateV1(ownership.Controller, "controller"); err != nil {
 		return fmt.Errorf("controller: %w", err)
 	}
@@ -308,8 +330,24 @@ func validateControlledSessionOwnershipV1(ownership ControlledSessionOwnershipV1
 	if ownership.Controller.ID == "" && ownership.Workload.ID != "" {
 		return fmt.Errorf("workload container ID cannot be recorded before the controller container ID")
 	}
+	if ownership.NetworkName != "" && ownership.NetworkID == "" && (ownership.Controller.ID != "" || ownership.Workload.ID != "") {
+		return fmt.Errorf("container IDs cannot be recorded before the network ID")
+	}
 	if ownership.Controller.ID != "" && ownership.Workload.ID != "" && ownership.Controller.ID == ownership.Workload.ID {
 		return fmt.Errorf("controller and workload must name different containers")
+	}
+	return nil
+}
+
+func validateControlledSessionNetworkOwnershipV1(ownership ControlledSessionNetworkOwnershipV1) error {
+	if ownership.Role != ControlledSessionNetworkRoleV1 {
+		return fmt.Errorf("role must be %q", ControlledSessionNetworkRoleV1)
+	}
+	if !controlledSessionContainerIDPatternV1.MatchString(ownership.ID) {
+		return fmt.Errorf("network ID must use 64 lowercase hexadecimal characters")
+	}
+	if !safeRecoveryIdentity(ownership.Name) {
+		return fmt.Errorf("network name must be nonempty safe text")
 	}
 	return nil
 }
