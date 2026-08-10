@@ -190,7 +190,9 @@ func RunControlledSessionV1(
 			return &privateControlledSessionChannelRuntimeV1{channel: channel}, nil
 		},
 		prepareController: func(ctx context.Context, plan ControlledSessionContainerPlanV1) (controlledSessionControllerRuntimeV1, error) {
-			return PrepareDockerControllerV1(ctx, plan)
+			return prepareDockerControllerWithCleanupVerificationV1(ctx, plan, func() {
+				partialPreparationCleanupVerified = true
+			})
 		},
 		prepareWorkload: func(ctx context.Context, plan ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error) {
 			return prepareDockerWorkloadPTYWithContainerIDV1(ctx, plan, func(workloadID string) error {
