@@ -105,6 +105,7 @@ func TestRecoverLiveRunQueueV1BoundsCleanupAcrossInventory(t *testing.T) {
 			return options.Context.Err()
 		},
 		20*time.Millisecond,
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +139,7 @@ func TestRecoverLiveRunQueueV1ReportsScheduledCleanupWhenDockerIsNotQueried(t *t
 	}
 	var notice bytes.Buffer
 	if _, err := recoverLiveRunQueueWithinV1(
-		context.Background(), operation, &notice, nil, time.Second,
+		context.Background(), operation, &notice, nil, time.Second, nil,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +190,7 @@ func TestRecoverLiveRunQueueV1CleansPartialControlledSessionByVerifiedName(t *te
 	if _, err := operation.AdmitLiveRunV1(run, false); err != nil {
 		t.Fatal(err)
 	}
-	ownership := controlledSessionOwnershipFromPlanV1(plan, "", "")
+	ownership := controlledSessionOwnershipFromPlanV1(plan, controlledSessionTestDockerEndpointV1, "", "")
 	recorded, err := operation.RecordControlledSessionOwnershipV1(ownership)
 	if err != nil {
 		t.Fatal(err)
@@ -219,6 +220,102 @@ func TestRecoverLiveRunQueueV1CleansPartialControlledSessionByVerifiedName(t *te
 	}
 }
 
+func TestRecoverLiveRunQueueV1CleansLegacyControlledSessionWithoutDockerEndpoint(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	operation, err := deploy.AcquireOperationLock(t.Context(), plan.Workload.DeploymentDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	bootSession, err := deploy.CurrentBootSessionIDV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownership := controlledSessionOwnershipFromPlanV1(
+		plan, controlledSessionTestDockerEndpointV1, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
+	)
+	ownership.BootSession = bootSession
+	ownership.DockerEndpoint = ""
+	queue := deploy.NewLiveRunQueueV1()
+	queue.ControlledSessions = []deploy.ControlledSessionOwnershipV1{ownership}
+	if err := operation.CommitLiveRunQueueV1(queue); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(ownership.ChannelDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	containers := newControlledSessionRecoveryContainersV1(ownership)
+	containers.endpoint = controlledSessionTestDockerEndpointV1
+	resolved := 0
+	recovery, err := recoverLiveRunQueueWithinV1(
+		t.Context(), operation, nil, containers.run, liveRunRecoveryCleanupTimeoutV1,
+		func(context.Context) (string, error) {
+			resolved++
+			return controlledSessionTestDockerEndpointV1, nil
+		},
+	)
+	if err != nil || len(recovery.ControlledSessions) != 1 {
+		t.Fatalf("legacy controlled-session recovery = %#v, error=%v", recovery, err)
+	}
+	if resolved != 1 {
+		t.Fatalf("legacy Docker endpoint resolutions = %d", resolved)
+	}
+	if len(containers.byID) != 0 {
+		t.Fatalf("legacy controlled-session containers remain = %#v", containers.byID)
+	}
+	if _, found, err := operation.ReadLiveRunQueueV1(); err != nil || found {
+		t.Fatalf("legacy queue remains: found=%t, error=%v", found, err)
+	}
+}
+
+func TestRecoverLiveRunQueueV1PreservesDurableCrashReceiptAfterResourceCleanup(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	operation, err := deploy.AcquireOperationLock(t.Context(), plan.Workload.DeploymentDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	run := liveRunAdmissionFixtureV1(plan.LiveRunID, false)
+	run.Kind = deploy.LiveRunKindShellV1
+	run.GenerationReference = plan.Workload.GenerationReference
+	if _, err := operation.AdmitLiveRunV1(run, false); err != nil {
+		t.Fatal(err)
+	}
+	ownership := controlledSessionOwnershipFromPlanV1(plan, controlledSessionTestDockerEndpointV1, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1)
+	recorded, err := operation.RecordControlledSessionOwnershipV1(ownership)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := operation.PrepareControlledSessionIncidentReceiptV1(recorded.ChannelDirectory, recorded.LiveRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := controlledSessionIncidentRetrievalFixtureV1(recorded.LiveRunID)
+	receipt.BootSession = recorded.BootSession
+	if err := deploy.WriteControlledSessionIncidentReceiptV1(target.File(), receipt); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
+	containers := newControlledSessionRecoveryContainersV1(recorded)
+	if _, err := recoverLiveRunQueueV1(t.Context(), operation, nil, containers.run); err != nil {
+		t.Fatal(err)
+	}
+	queue, found, err := operation.ReadLiveRunQueueV1()
+	if err != nil || found || len(queue.ControlledSessions) != 0 {
+		t.Fatalf("queue after recovery = %#v, found=%t, error=%v", queue, found, err)
+	}
+	receipts, err := operation.ReadControlledSessionIncidentReceiptsV1()
+	if err != nil || len(receipts) != 1 || receipts[0] != receipt {
+		t.Fatalf("receipt after recovery = %#v, error=%v", receipts, err)
+	}
+	removed, err := operation.AcknowledgeControlledSessionIncidentReceiptV1(recorded.LiveRunID)
+	if err != nil || !removed {
+		t.Fatalf("acknowledge recovered receipt = %t, %v", removed, err)
+	}
+}
+
 func TestRecoverLiveRunQueueV1RetainsControlledSessionAfterLabelMismatchAndRetries(t *testing.T) {
 	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
 	operation, err := deploy.AcquireOperationLock(t.Context(), plan.Workload.DeploymentDirectory)
@@ -232,7 +329,7 @@ func TestRecoverLiveRunQueueV1RetainsControlledSessionAfterLabelMismatchAndRetri
 	if _, err := operation.AdmitLiveRunV1(run, false); err != nil {
 		t.Fatal(err)
 	}
-	ownership := controlledSessionOwnershipFromPlanV1(plan, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1)
+	ownership := controlledSessionOwnershipFromPlanV1(plan, controlledSessionTestDockerEndpointV1, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1)
 	recorded, err := operation.RecordControlledSessionOwnershipV1(ownership)
 	if err != nil {
 		t.Fatal(err)
@@ -270,12 +367,14 @@ type controlledSessionRecoveryContainersV1 struct {
 	byID     map[string]*controlledSessionRecoveryContainerFixtureV1
 	byName   map[string]*controlledSessionRecoveryContainerFixtureV1
 	inspects []string
+	endpoint string
 }
 
 func newControlledSessionRecoveryContainersV1(ownership deploy.ControlledSessionOwnershipV1) *controlledSessionRecoveryContainersV1 {
 	containers := &controlledSessionRecoveryContainersV1{
-		byID:   map[string]*controlledSessionRecoveryContainerFixtureV1{},
-		byName: map[string]*controlledSessionRecoveryContainerFixtureV1{},
+		byID:     map[string]*controlledSessionRecoveryContainerFixtureV1{},
+		byName:   map[string]*controlledSessionRecoveryContainerFixtureV1{},
+		endpoint: ownership.DockerEndpoint,
 	}
 	for _, input := range []struct {
 		ownership deploy.ControlledSessionContainerOwnershipV1
@@ -301,6 +400,12 @@ func newControlledSessionRecoveryContainersV1(ownership deploy.ControlledSession
 }
 
 func (containers *controlledSessionRecoveryContainersV1) run(spec CommandSpec, options RunOptions) error {
+	if host, found := commandSpecEnvironmentValueV1(spec, "DOCKER_HOST"); !found || host != containers.endpoint {
+		return fmt.Errorf("controlled-session recovery command used Docker endpoint %q, want %q", host, containers.endpoint)
+	}
+	if contextName, found := commandSpecEnvironmentValueV1(spec, "DOCKER_CONTEXT"); !found || contextName != "" {
+		return fmt.Errorf("controlled-session recovery command retained Docker context %q", contextName)
+	}
 	if len(spec.Args) >= 2 && spec.Args[0] == "container" && spec.Args[1] == "inspect" {
 		target := spec.Args[len(spec.Args)-1]
 		containers.inspects = append(containers.inspects, target)

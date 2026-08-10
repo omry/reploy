@@ -54,7 +54,7 @@ func TestRunControlledSessionV1OwnsNormalLifecycle(t *testing.T) {
 		recordPlannedOwnership:    func() error { return nil },
 		recordControllerOwnership: func(string) error { return nil },
 		recordOwnership: func(controllerID string, workloadID string) (deploy.ControlledSessionCleanupManifest, error) {
-			ownership := controlledSessionOwnershipFromPlanV1(plan, controllerID, workloadID)
+			ownership := controlledSessionOwnershipFromPlanV1(plan, controlledSessionTestDockerEndpointV1, controllerID, workloadID)
 			ownership.BootSession = "boot-session"
 			return deploy.ControlledSessionCleanupManifestFromOwnership(ownership)
 		},
@@ -120,6 +120,40 @@ func TestRunControlledSessionV1OwnsNormalLifecycle(t *testing.T) {
 	}
 }
 
+func TestBindControlledSessionDockerEndpointV1SelectsOnceForBothContainers(t *testing.T) {
+	const endpoint = "unix:///session-engine.sock"
+	preflights := 0
+	restore := stubDockerPreflight(t, func(context.Context, CommandSpec, time.Duration) (string, error) {
+		preflights++
+		return endpoint, nil
+	})
+	defer restore()
+
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	selected, bind, err := bindControlledSessionDockerEndpointV1(t.Context(), controlledSessionCommandSpecV1(plan.Controller.Create))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != endpoint || preflights != 1 {
+		t.Fatalf("selected endpoint=%q preflights=%d", selected, preflights)
+	}
+	for _, container := range []ControlledSessionContainerPlanV1{plan.Controller, plan.Workload} {
+		pinned, run, err := bind(t.Context(), controlledSessionCommandSpecV1(container.Create), time.Second)
+		if err != nil || run == nil {
+			t.Fatalf("bind %s = %#v, %v", container.Role, pinned, err)
+		}
+		if host, found := commandSpecEnvironmentValueV1(pinned, "DOCKER_HOST"); !found || host != endpoint {
+			t.Fatalf("%s Docker host=%q found=%t", container.Role, host, found)
+		}
+		if contextName, found := commandSpecEnvironmentValueV1(pinned, "DOCKER_CONTEXT"); !found || contextName != "" {
+			t.Fatalf("%s Docker context=%q found=%t", container.Role, contextName, found)
+		}
+	}
+	if preflights != 1 {
+		t.Fatalf("container binding repeated endpoint preflight %d times", preflights)
+	}
+}
+
 func TestRunControlledSessionV1FailsClosedAfterWatchdogExit(t *testing.T) {
 	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
 	requests := make(chan controlledsession.RequestV1, 8)
@@ -162,7 +196,7 @@ func TestRunControlledSessionV1FailsClosedAfterWatchdogExit(t *testing.T) {
 			recordPlannedOwnership:    func() error { return nil },
 			recordControllerOwnership: func(string) error { return nil },
 			recordOwnership: func(controllerID string, workloadID string) (deploy.ControlledSessionCleanupManifest, error) {
-				ownership := controlledSessionOwnershipFromPlanV1(plan, controllerID, workloadID)
+				ownership := controlledSessionOwnershipFromPlanV1(plan, controlledSessionTestDockerEndpointV1, controllerID, workloadID)
 				ownership.BootSession = "boot-session"
 				return deploy.ControlledSessionCleanupManifestFromOwnership(ownership)
 			},
@@ -495,7 +529,7 @@ func TestRunControlledSessionV1RejectsCleanupResourcesNotInDurableOwnership(t *t
 		recordPlannedOwnership:    func() error { return nil },
 		recordControllerOwnership: func(string) error { return nil },
 		recordOwnership: func(controllerID string, workloadID string) (deploy.ControlledSessionCleanupManifest, error) {
-			ownership := controlledSessionOwnershipFromPlanV1(plan, controllerID, workloadID)
+			ownership := controlledSessionOwnershipFromPlanV1(plan, controlledSessionTestDockerEndpointV1, controllerID, workloadID)
 			ownership.BootSession = "boot-session"
 			manifest, manifestErr := deploy.ControlledSessionCleanupManifestFromOwnership(ownership)
 			manifest.Networks = []string{"unrelated-network"}
@@ -538,7 +572,7 @@ func TestRunControlledSessionV1DoesNotStartWhenWatchdogLaunchFails(t *testing.T)
 		recordPlannedOwnership:    func() error { return nil },
 		recordControllerOwnership: func(string) error { return nil },
 		recordOwnership: func(controllerID string, workloadID string) (deploy.ControlledSessionCleanupManifest, error) {
-			ownership := controlledSessionOwnershipFromPlanV1(plan, controllerID, workloadID)
+			ownership := controlledSessionOwnershipFromPlanV1(plan, controlledSessionTestDockerEndpointV1, controllerID, workloadID)
 			ownership.BootSession = "boot-session"
 			return deploy.ControlledSessionCleanupManifestFromOwnership(ownership)
 		},
@@ -589,7 +623,7 @@ func TestRunControlledSessionV1FailsStartupWhenReadyWatchdogExits(t *testing.T) 
 			recordPlannedOwnership:    func() error { return nil },
 			recordControllerOwnership: func(string) error { return nil },
 			recordOwnership: func(controllerID string, workloadID string) (deploy.ControlledSessionCleanupManifest, error) {
-				ownership := controlledSessionOwnershipFromPlanV1(plan, controllerID, workloadID)
+				ownership := controlledSessionOwnershipFromPlanV1(plan, controlledSessionTestDockerEndpointV1, controllerID, workloadID)
 				ownership.BootSession = "boot-session"
 				return deploy.ControlledSessionCleanupManifestFromOwnership(ownership)
 			},
@@ -710,7 +744,7 @@ func TestControlledSessionCleanupFailureRetainsDurableOwnership(t *testing.T) {
 		t.Fatalf("admission = %q, %v", status, err)
 	}
 	if _, err := operation.RecordControlledSessionOwnershipV1(controlledSessionOwnershipFromPlanV1(
-		plan, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
+		plan, controlledSessionTestDockerEndpointV1, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
 	)); err != nil {
 		t.Fatal(err)
 	}
@@ -741,7 +775,7 @@ func TestFinishControlledSessionOwnershipReacquiresAfterReleaseAttempt(t *testin
 		t.Fatalf("admission = %q, %v", status, err)
 	}
 	if _, err := operation.RecordControlledSessionOwnershipV1(controlledSessionOwnershipFromPlanV1(
-		plan, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
+		plan, controlledSessionTestDockerEndpointV1, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
 	)); err != nil {
 		t.Fatal(err)
 	}

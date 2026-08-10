@@ -80,6 +80,11 @@ func TestOperationLockRecordsExactControlledSessionOwnership(t *testing.T) {
 	planned := ownership
 	planned.Controller.ID = ""
 	planned.Workload.ID = ""
+	missingEndpoint := planned
+	missingEndpoint.DockerEndpoint = ""
+	if _, err := lock.RecordControlledSessionOwnershipV1(missingEndpoint); err == nil || !strings.Contains(err.Error(), "Docker endpoint must be recorded") {
+		t.Fatalf("missing Docker endpoint error = %v", err)
+	}
 	recorded, err := lock.RecordControlledSessionOwnershipV1(planned)
 	if err != nil {
 		t.Fatal(err)
@@ -119,6 +124,32 @@ func TestOperationLockRecordsExactControlledSessionOwnership(t *testing.T) {
 	}
 	if _, found, err := lock.ReadLiveRunQueueV1(); err != nil || found {
 		t.Fatalf("completed queue found=%t, error=%v", found, err)
+	}
+}
+
+func TestLiveRunQueueV1DecodesLegacyControlledSessionWithoutDockerEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	bootSession, err := CurrentBootSessionIDV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownership := controlledSessionOwnershipFixtureV1(
+		dir, "run-0000000000000001", "reploy/env/workload:g-current",
+	)
+	ownership.BootSession = bootSession
+	ownership.DockerEndpoint = ""
+	queue := NewLiveRunQueueV1()
+	queue.ControlledSessions = []ControlledSessionOwnershipV1{ownership}
+	content, err := EncodeLiveRunQueueV1(queue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(content, []byte("docker_endpoint")) {
+		t.Fatalf("legacy queue unexpectedly gained a Docker endpoint: %s", content)
+	}
+	decoded, err := DecodeLiveRunQueueV1(content)
+	if err != nil || !reflect.DeepEqual(decoded, queue) {
+		t.Fatalf("legacy queue = %#v, error=%v", decoded, err)
 	}
 }
 
@@ -208,6 +239,7 @@ func controlledSessionOwnershipFixtureV1(dir string, runID string, generation st
 	}
 	return ControlledSessionOwnershipV1{
 		LiveRunID: runID, SessionHandle: "session-" + strings.Repeat("a", 64),
+		DockerEndpoint:   "unix:///var/run/docker.sock",
 		ChannelDirectory: filepath.Join(dir, ".reploy", "sessions", runID),
 		Controller:       container("controller", strings.Repeat("a", 64), "controller", "reploy/env/controller:g-current", "1"),
 		Workload:         container("workload", strings.Repeat("b", 64), "workload", generation, "2"),

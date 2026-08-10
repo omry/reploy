@@ -76,6 +76,36 @@ func TestInstallLocalAccountFilesRealizesRootRuntimeAccount(t *testing.T) {
 	}
 }
 
+func TestInstallLocalAccountFilesPreservesRootGroupForNonzeroPrimaryGID(t *testing.T) {
+	root := t.TempDir()
+	passwd := filepath.Join(root, "passwd")
+	group := filepath.Join(root, "group")
+	if err := os.WriteFile(passwd, []byte("root:x:0:0:root:/root:/bin/sh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(group, []byte("root:x:0:\nusers:x:1000:\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := installLocalAccountFiles("root", "0", "1000", "/mnt/reploy-home", passwd, group); err != nil {
+		t.Fatal(err)
+	}
+	passwdContent, err := os.ReadFile(passwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groupContent, err := os.ReadFile(group)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(passwdContent); !strings.HasPrefix(got, "root:x:0:1000::/mnt/reploy-home:/sbin/nologin\n") {
+		t.Fatalf("root passwd = %q", got)
+	}
+	if got := string(groupContent); !strings.HasPrefix(got, "_reploy_gid_1000:x:1000:\n") ||
+		!strings.Contains(got, "root:x:0:\n") || !strings.Contains(got, "users:x:1000:\n") {
+		t.Fatalf("root group database = %q", got)
+	}
+}
+
 func TestInstallLocalAccountFilesRejectsNameCollisionAndSpecialDatabase(t *testing.T) {
 	root := t.TempDir()
 	passwd := filepath.Join(root, "passwd")
@@ -110,13 +140,12 @@ func TestInstallLocalAccountFilesRejectsPrivilegedGroupMismatch(t *testing.T) {
 		gid  string
 	}{
 		{name: "reploy", uid: "1000", gid: "0"},
-		{name: "root", uid: "0", gid: "1000"},
 	} {
 		err := installLocalAccountFiles(
 			account.name, account.uid, account.gid, "/mnt/reploy-home",
 			filepath.Join(root, account.name+"-passwd"), filepath.Join(root, account.name+"-group"),
 		)
-		if err == nil || !strings.Contains(err.Error(), "GID disagree") {
+		if err == nil || !strings.Contains(err.Error(), "must not use GID 0") {
 			t.Fatalf("account %#v error = %v", account, err)
 		}
 	}
