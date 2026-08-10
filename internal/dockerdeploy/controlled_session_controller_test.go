@@ -344,6 +344,36 @@ func TestDockerControllerV1RetriesFailedCleanup(t *testing.T) {
 	}
 }
 
+func TestDockerControllerV1TreatsMissingContainerAsCleaned(t *testing.T) {
+	plan := controlledSessionControllerPlanFixtureV1(t)
+	cleanupAttempts := 0
+	backend := dockerControllerBackendV1{
+		requireReadyChannel: func(ControlledSessionContainerPlanV1) error { return nil },
+		run: func(spec CommandSpec, options RunOptions) error {
+			writeDockerControllerTestCreateIDV1(plan, spec, options)
+			if reflect.DeepEqual(spec.Args, []string{"container", "rm", "--force", dockerControllerTestContainerIDV1}) {
+				cleanupAttempts++
+				return errors.New("Error response from daemon: No such container: " + dockerControllerTestContainerIDV1)
+			}
+			return nil
+		},
+		observe: func(context.Context, CommandSpec, string) (int, error) { return 0, nil },
+	}
+	controller, err := prepareDockerControllerV1(t.Context(), plan, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Cleanup(t.Context()); err != nil {
+		t.Fatalf("missing-container cleanup = %v", err)
+	}
+	if err := controller.Cleanup(t.Context()); err != nil {
+		t.Fatalf("repeated cleanup = %v", err)
+	}
+	if cleanupAttempts != 1 {
+		t.Fatalf("cleanup attempts = %d, want 1", cleanupAttempts)
+	}
+}
+
 func TestDockerControllerV1FreezesCallerOwnedPlanSlices(t *testing.T) {
 	plan := controlledSessionControllerPlanFixtureV1(t)
 	wantStart := []string{"start", dockerControllerTestContainerIDV1}

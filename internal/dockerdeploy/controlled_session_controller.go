@@ -42,6 +42,10 @@ type DockerControllerV1 struct {
 	waitResult  dockerControllerWaitResultV1
 }
 
+func (controller *DockerControllerV1) ContainerID() string {
+	return controller.containerID
+}
+
 // PrepareDockerControllerV1 verifies that the private channel is ready and
 // creates the exact controller container without starting it.
 func PrepareDockerControllerV1(
@@ -215,7 +219,7 @@ func (controller *DockerControllerV1) Cleanup(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	cleanup := controller.commandV1("container", "rm", "--force", controller.containerID)
-	if err := controller.backend.run(cleanup, RunOptions{Context: ctx}); err != nil {
+	if err := controller.backend.run(cleanup, RunOptions{Context: ctx}); err != nil && !isMissingContainerCleanupError(err) {
 		return fmt.Errorf("remove controlled-session controller container %q: %w", controller.plan.Container, err)
 	}
 	controller.stateMu.Lock()
