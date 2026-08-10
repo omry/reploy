@@ -15,10 +15,24 @@ func TestParseSandboxExecPlanV1PreservesPolicyIdentityAndArgv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.UID != 501 || plan.GID != 20 || !reflect.DeepEqual(plan.Groups, []int{33, 44}) ||
+	if plan.UID != 501 || plan.GID != 20 || !reflect.DeepEqual(plan.Groups, []uint32{33, 44}) ||
 		!plan.AllowPublic || plan.AllowLocal || !plan.AllowAmbiguous || !reflect.DeepEqual(plan.InboundTCP, []uint16{8080, 8443}) ||
 		!reflect.DeepEqual(plan.Argv, []string{"/opt/app", "", "$(not-shell)"}) {
 		t.Fatalf("plan = %#v", plan)
+	}
+}
+
+func TestParseSandboxExecPlanV1AcceptsFullUnsignedCredentialRange(t *testing.T) {
+	plan, err := parseSandboxExecPlanV1([]string{
+		"--uid", "4294967294", "--gid", "4294967293", "--groups", "2147483648,4294967292",
+		"--public", "deny", "--local", "deny", "--ambiguous", "require-both", "--", "/opt/app",
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.UID != 4294967294 || plan.GID != 4294967293 ||
+		!reflect.DeepEqual(plan.Groups, []uint32{2147483648, 4294967292}) {
+		t.Fatalf("full-range credentials = %#v", plan)
 	}
 }
 
@@ -58,7 +72,9 @@ func TestParseSandboxExecPlanV1FailsClosed(t *testing.T) {
 		want string
 	}{
 		{name: "separator", args: base[:len(base)-2], want: "requires --"},
-		{name: "identity", args: []string{"--uid", "-1", "--gid", "20", "--public", "deny", "--local", "deny", "--ambiguous", "require-both", "--", "/opt/app"}, want: "non-negative"},
+		{name: "identity", args: []string{"--uid", "-1", "--gid", "20", "--public", "deny", "--local", "deny", "--ambiguous", "require-both", "--", "/opt/app"}, want: "unsigned 32-bit"},
+		{name: "identity sentinel", args: []string{"--uid", "4294967295", "--gid", "20", "--public", "deny", "--local", "deny", "--ambiguous", "require-both", "--", "/opt/app"}, want: "below 4294967295"},
+		{name: "group overflow", args: []string{"--uid", "1", "--gid", "2", "--groups", "4294967296", "--public", "deny", "--local", "deny", "--ambiguous", "require-both", "--", "/opt/app"}, want: "unsigned 32-bit"},
 		{name: "policy", args: []string{"--uid", "1", "--gid", "2", "--public", "yes", "--local", "deny", "--ambiguous", "require-both", "--", "/opt/app"}, want: "--public"},
 		{name: "ambiguous policy", args: []string{"--uid", "1", "--gid", "2", "--public", "deny", "--local", "deny", "--ambiguous", "yes", "--", "/opt/app"}, want: "--ambiguous"},
 		{name: "groups", args: []string{"--uid", "1", "--gid", "2", "--groups", "44,33", "--public", "deny", "--local", "deny", "--ambiguous", "require-both", "--", "/opt/app"}, want: "unique and sorted"},

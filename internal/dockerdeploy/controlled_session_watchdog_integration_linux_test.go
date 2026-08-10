@@ -47,7 +47,16 @@ func proveControlledSessionWatchdogParentLossV1(
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := startControlledSessionWatchdogV1(ctx, manifest)
+	operation, err := deploy.AcquireOperationLock(ctx, plan.Workload.DeploymentDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptTarget, err := operation.PrepareControlledSessionIncidentReceiptV1(plan.Channel.HostDirectory, plan.LiveRunID)
+	unlockErr := operation.Unlock()
+	if err != nil || unlockErr != nil {
+		t.Fatalf("prepare incident receipt: %v; unlock: %v", err, unlockErr)
+	}
+	runtime, err := startControlledSessionWatchdogV1(ctx, manifest, receiptTarget)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,5 +91,15 @@ func proveControlledSessionWatchdogParentLossV1(
 	}
 	if _, statErr := os.Stat(plan.Channel.HostDirectory); !os.IsNotExist(statErr) {
 		t.Fatalf("watchdog left private channel directory: %v", statErr)
+	}
+	operation, err = deploy.AcquireExistingOperationLock(ctx, plan.Workload.DeploymentDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipts, readErr := operation.ReadControlledSessionIncidentReceiptsV1()
+	unlockErr = operation.Unlock()
+	if readErr != nil || unlockErr != nil || len(receipts) != 1 || receipts[0].LiveRunID != plan.LiveRunID ||
+		receipts[0].CleanupStatus != deploy.ControlledSessionIncidentCleanupSucceededV1 {
+		t.Fatalf("incident receipts = %#v, read=%v, unlock=%v", receipts, readErr, unlockErr)
 	}
 }
