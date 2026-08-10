@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/omry/reploy/internal/controlledsession"
+	"github.com/omry/reploy/internal/deploy"
 )
 
 func TestRunControlledSessionV1OwnsNormalLifecycle(t *testing.T) {
@@ -88,6 +91,386 @@ func TestRunControlledSessionV1OwnsNormalLifecycle(t *testing.T) {
 	}
 	if string(events[indices[controlledsession.EventOutputV1]].Bytes) != "hello from workload\n" {
 		t.Fatalf("output events = %#v", events)
+	}
+}
+
+func TestRunControlledSessionV1PersistsExactOwnershipBeforeStarting(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	controller := newFakeControlledSessionProcessV1()
+	workload := newFakeControlledSessionWorkloadV1(nil, 0)
+	channel := &fakeControlledSessionChannelV1{}
+	persistErr := errors.New("injected durable ownership failure")
+	calls := []string{}
+
+	result, err := runControlledSessionV1(t.Context(), plan, testControlledSessionRunOptionsV1(), controlledSessionSupervisorBackendV1{
+		prepareChannel: func(ControlledSessionExecutionPlanV1) (controlledSessionChannelRuntimeV1, error) {
+			calls = append(calls, "channel")
+			return channel, nil
+		},
+		prepareController: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionControllerRuntimeV1, error) {
+			calls = append(calls, "prepare-controller")
+			return controller, nil
+		},
+		prepareWorkload: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error) {
+			calls = append(calls, "prepare-workload")
+			return workload, nil
+		},
+		recordPlannedOwnership: func() error {
+			calls = append(calls, "planned")
+			if controller.started || workload.started {
+				t.Fatal("controlled-session process started before planned ownership")
+			}
+			return nil
+		},
+		recordControllerOwnership: func(controllerID string) error {
+			calls = append(calls, "controller")
+			if controllerID != dockerControllerTestContainerIDV1 {
+				t.Fatalf("controller ID = %q", controllerID)
+			}
+			return nil
+		},
+		recordOwnership: func(controllerID string, workloadID string) error {
+			calls = append(calls, "complete")
+			if controller.started || workload.started {
+				t.Fatal("controlled-session process started before durable ownership")
+			}
+			if controllerID != dockerControllerTestContainerIDV1 || workloadID != dockerWorkloadTestContainerIDV1 {
+				t.Fatalf("container IDs = %q / %q", controllerID, workloadID)
+			}
+			return persistErr
+		},
+		now: time.Now,
+	})
+	if !reflect.DeepEqual(calls, []string{"planned", "channel", "prepare-controller", "controller", "prepare-workload", "complete"}) || !errors.Is(err, persistErr) {
+		t.Fatalf("ownership persistence calls=%v, error=%v", calls, err)
+	}
+	if controller.started || workload.started {
+		t.Fatalf("started after persistence failure = controller %t workload %t", controller.started, workload.started)
+	}
+	if !controller.cleaned || !workload.cleaned || !channel.closed {
+		t.Fatalf("inert cleanup = controller %t workload %t channel %t", controller.cleaned, workload.cleaned, channel.closed)
+	}
+	if result.SessionResult.CleanupStatus.Kind != controlledsession.CleanupStatusSucceededV1 ||
+		result.DeliveryTailCleanupStatus.Kind != controlledsession.CleanupStatusSucceededV1 {
+		t.Fatalf("cleanup result = %#v", result)
+	}
+}
+
+func TestRunControlledSessionV1RecordsControllerOwnershipBeforeWorkloadPreparationFailure(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	controller := newFakeControlledSessionProcessV1()
+	channel := &fakeControlledSessionChannelV1{}
+	prepareErr := errors.New("injected workload preparation failure")
+	calls := []string{}
+
+	result, err := runControlledSessionV1(t.Context(), plan, testControlledSessionRunOptionsV1(), controlledSessionSupervisorBackendV1{
+		prepareChannel: func(ControlledSessionExecutionPlanV1) (controlledSessionChannelRuntimeV1, error) {
+			calls = append(calls, "channel")
+			return channel, nil
+		},
+		prepareController: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionControllerRuntimeV1, error) {
+			calls = append(calls, "prepare-controller")
+			return controller, nil
+		},
+		prepareWorkload: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error) {
+			calls = append(calls, "prepare-workload")
+			return nil, prepareErr
+		},
+		recordPlannedOwnership: func() error {
+			calls = append(calls, "planned")
+			return nil
+		},
+		recordControllerOwnership: func(controllerID string) error {
+			calls = append(calls, "controller")
+			if controllerID != dockerControllerTestContainerIDV1 {
+				t.Fatalf("controller ID = %q", controllerID)
+			}
+			return nil
+		},
+		recordOwnership: func(string, string) error {
+			t.Fatal("complete ownership recorded without a workload")
+			return nil
+		},
+		now: time.Now,
+	})
+	if !errors.Is(err, prepareErr) {
+		t.Fatalf("workload preparation error = %v", err)
+	}
+	if !reflect.DeepEqual(calls, []string{"planned", "channel", "prepare-controller", "controller", "prepare-workload"}) {
+		t.Fatalf("partial ownership calls = %v", calls)
+	}
+	if controller.started {
+		t.Fatal("controller started after workload preparation failed")
+	}
+	if !controller.cleaned || !channel.closed {
+		t.Fatalf("partial preparation cleanup = controller %t channel %t", controller.cleaned, channel.closed)
+	}
+	if result.SessionResult.CleanupStatus.Kind != controlledsession.CleanupStatusSucceededV1 ||
+		result.DeliveryTailCleanupStatus.Kind != controlledsession.CleanupStatusSucceededV1 {
+		t.Fatalf("cleanup result = %#v", result)
+	}
+}
+
+func TestRunControlledSessionV1ReportsVerifiedControllerRollbackAfterOwnershipFailure(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	controller := newFakeControlledSessionProcessV1()
+	channel := &fakeControlledSessionChannelV1{}
+	recordErr := errors.New("injected controller ownership failure")
+	rollbackVerified := false
+
+	result, err := runControlledSessionV1(t.Context(), plan, testControlledSessionRunOptionsV1(), controlledSessionSupervisorBackendV1{
+		prepareChannel: func(ControlledSessionExecutionPlanV1) (controlledSessionChannelRuntimeV1, error) {
+			return channel, nil
+		},
+		prepareController: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionControllerRuntimeV1, error) {
+			return controller, nil
+		},
+		prepareWorkload: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error) {
+			t.Fatal("workload preparation continued after controller ownership failed")
+			return nil, nil
+		},
+		recordPlannedOwnership: func() error { return nil },
+		recordControllerOwnership: func(string) error {
+			return recordErr
+		},
+		recordControllerRollback: func() { rollbackVerified = true },
+		recordOwnership: func(string, string) error {
+			t.Fatal("complete ownership recorded without a workload")
+			return nil
+		},
+		now: time.Now,
+	})
+	if !errors.Is(err, recordErr) || !rollbackVerified {
+		t.Fatalf("controller ownership error = %v, rollback verified = %t", err, rollbackVerified)
+	}
+	if !controller.cleaned || !channel.closed ||
+		result.DeliveryTailCleanupStatus.Kind != controlledsession.CleanupStatusSucceededV1 {
+		t.Fatalf("controller cleanup = %t, channel closed = %t, result = %#v", controller.cleaned, channel.closed, result)
+	}
+}
+
+func TestRunControlledSessionV1RetriesControllerOwnershipAfterRollbackFailure(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	controller := newFakeControlledSessionProcessV1()
+	channel := &fakeControlledSessionChannelV1{}
+	recordErr := errors.New("injected controller ownership failure")
+	cleanupErr := errors.New("injected controller rollback failure")
+	controller.cleanupErrs = []error{cleanupErr, nil}
+	recordCalls := 0
+	rollbackVerified := false
+
+	result, err := runControlledSessionV1(t.Context(), plan, testControlledSessionRunOptionsV1(), controlledSessionSupervisorBackendV1{
+		prepareChannel: func(ControlledSessionExecutionPlanV1) (controlledSessionChannelRuntimeV1, error) {
+			return channel, nil
+		},
+		prepareController: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionControllerRuntimeV1, error) {
+			return controller, nil
+		},
+		prepareWorkload: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error) {
+			t.Fatal("workload preparation continued after controller ownership failed")
+			return nil, nil
+		},
+		recordPlannedOwnership: func() error { return nil },
+		recordControllerOwnership: func(string) error {
+			recordCalls++
+			if recordCalls == 1 {
+				return recordErr
+			}
+			return nil
+		},
+		recordControllerRollback: func() { rollbackVerified = true },
+		recordOwnership: func(string, string) error {
+			t.Fatal("complete ownership recorded without a workload")
+			return nil
+		},
+		now: time.Now,
+	})
+	if !errors.Is(err, recordErr) || !errors.Is(err, cleanupErr) || recordCalls != 2 || !rollbackVerified {
+		t.Fatalf("controller ownership error = %v, calls = %d, rollback verified = %t", err, recordCalls, rollbackVerified)
+	}
+	if controller.cleanupAttempts != 2 || !controller.cleaned || !channel.closed ||
+		result.DeliveryTailCleanupStatus.Kind != controlledsession.CleanupStatusSucceededV1 {
+		t.Fatalf("controller cleanup attempts = %d, cleaned = %t, channel closed = %t, result = %#v", controller.cleanupAttempts, controller.cleaned, channel.closed, result)
+	}
+}
+
+func TestRunControlledSessionV1RejectsIncompleteOwnershipBackend(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	called := false
+	_, err := runControlledSessionV1(t.Context(), plan, testControlledSessionRunOptionsV1(), controlledSessionSupervisorBackendV1{
+		prepareChannel: func(ControlledSessionExecutionPlanV1) (controlledSessionChannelRuntimeV1, error) {
+			called = true
+			return nil, nil
+		},
+		prepareController: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionControllerRuntimeV1, error) {
+			called = true
+			return nil, nil
+		},
+		prepareWorkload: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error) {
+			called = true
+			return nil, nil
+		},
+		recordOwnership: func(string, string) error { return nil },
+		now:             time.Now,
+	})
+	if err == nil || !strings.Contains(err.Error(), "ownership backend is incomplete") {
+		t.Fatalf("incomplete ownership backend error = %v", err)
+	}
+	if called {
+		t.Fatal("incomplete ownership backend began preparation")
+	}
+}
+
+func TestControlledSessionChannelAbsentV1(t *testing.T) {
+	existing := t.TempDir()
+	if controlledSessionChannelAbsentV1(existing) {
+		t.Fatal("existing channel directory reported absent")
+	}
+	if !controlledSessionChannelAbsentV1(existing + "/missing") {
+		t.Fatal("missing channel directory not reported absent")
+	}
+}
+
+func TestControlledSessionPreparationCanCompleteV1(t *testing.T) {
+	tests := []struct {
+		name                      string
+		cleaned                   bool
+		ownershipRecorded         bool
+		operationReleaseAttempted bool
+		partialCleanupVerified    bool
+		want                      bool
+	}{
+		{name: "cleanup failed", ownershipRecorded: true, operationReleaseAttempted: true},
+		{name: "no ownership recorded", cleaned: true, want: true},
+		{name: "full ownership release attempted", cleaned: true, ownershipRecorded: true, operationReleaseAttempted: true, want: true},
+		{name: "partial ownership ambiguous", cleaned: true, ownershipRecorded: true},
+		{name: "channel absence verified", cleaned: true, ownershipRecorded: true, partialCleanupVerified: true, want: true},
+		{name: "workload rollback verified", cleaned: true, ownershipRecorded: true, partialCleanupVerified: true, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := controlledSessionPreparationCanCompleteV1(test.cleaned, test.ownershipRecorded, test.operationReleaseAttempted, test.partialCleanupVerified); got != test.want {
+				t.Fatalf("completion = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestControlledSessionCleanupFailureRetainsDurableOwnership(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	operation, err := deploy.AcquireOperationLock(t.Context(), plan.Workload.DeploymentDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, err := operation.AdmitLiveRunV1(deploy.LiveRunV1{
+		ID: plan.LiveRunID, Kind: deploy.LiveRunKindShellV1, Name: plan.Workload.DeploymentID,
+		GenerationReference: plan.Workload.GenerationReference, Exclusive: true,
+	}, false); err != nil || status != deploy.LiveRunStatusActiveV1 {
+		t.Fatalf("admission = %q, %v", status, err)
+	}
+	if _, err := operation.RecordControlledSessionOwnershipV1(controlledSessionOwnershipFromPlanV1(
+		plan, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
+	)); err != nil {
+		t.Fatal(err)
+	}
+	if err := finishControlledSessionOwnershipV1(t.Context(), plan.Workload.DeploymentDirectory, operation, false, plan.LiveRunID, false); err != nil {
+		t.Fatal(err)
+	}
+	check, err := deploy.AcquireOperationLock(t.Context(), plan.Workload.DeploymentDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check.Unlock()
+	queue, found, err := check.ReadLiveRunQueueV1()
+	if err != nil || !found || len(queue.Runs) != 1 || len(queue.ControlledSessions) != 1 {
+		t.Fatalf("retained queue = %#v, found=%t, error=%v", queue, found, err)
+	}
+}
+
+func TestFinishControlledSessionOwnershipReacquiresAfterReleaseAttempt(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	operation, err := deploy.AcquireOperationLock(t.Context(), plan.Workload.DeploymentDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, err := operation.AdmitLiveRunV1(deploy.LiveRunV1{
+		ID: plan.LiveRunID, Kind: deploy.LiveRunKindShellV1, Name: plan.Workload.DeploymentID,
+		GenerationReference: plan.Workload.GenerationReference, Exclusive: true,
+	}, false); err != nil || status != deploy.LiveRunStatusActiveV1 {
+		t.Fatalf("admission = %q, %v", status, err)
+	}
+	if _, err := operation.RecordControlledSessionOwnershipV1(controlledSessionOwnershipFromPlanV1(
+		plan, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
+	)); err != nil {
+		t.Fatal(err)
+	}
+	if err := operation.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	if err := finishControlledSessionOwnershipV1(
+		t.Context(), plan.Workload.DeploymentDirectory, operation, true, plan.LiveRunID, true,
+	); err != nil {
+		t.Fatal(err)
+	}
+	check, err := deploy.AcquireOperationLock(t.Context(), plan.Workload.DeploymentDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check.Unlock()
+	if queue, found, err := check.ReadLiveRunQueueV1(); err != nil || found {
+		t.Fatalf("completed queue = %#v, found=%t, error=%v", queue, found, err)
+	}
+}
+
+func TestRunControlledSessionV1RemovesAdmissionOnLockDirectoryMismatch(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	workloadDir := plan.Workload.DeploymentDirectory
+	operation, err := deploy.AcquireOperationLock(t.Context(), workloadDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, err := operation.AdmitLiveRunV1(deploy.LiveRunV1{
+		ID: plan.LiveRunID, Kind: deploy.LiveRunKindShellV1, Name: plan.Workload.DeploymentID,
+		GenerationReference: plan.Workload.GenerationReference, Exclusive: true,
+	}, false); err != nil || status != deploy.LiveRunStatusActiveV1 {
+		t.Fatalf("admission = %q, %v", status, err)
+	}
+	plan.Workload.DeploymentDirectory = t.TempDir()
+	if _, err := RunControlledSessionV1(t.Context(), operation, plan, testControlledSessionRunOptionsV1()); err == nil || !strings.Contains(err.Error(), "does not belong") {
+		t.Fatalf("lock-directory mismatch error = %v", err)
+	}
+	check, err := deploy.AcquireOperationLock(t.Context(), workloadDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check.Unlock()
+	if queue, found, err := check.ReadLiveRunQueueV1(); err != nil || found {
+		t.Fatalf("mismatched operation retained admission: %#v, found=%t, error=%v", queue, found, err)
+	}
+}
+
+func TestRunControlledSessionV1RequiresQueueEntryLease(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	operation, err := deploy.AcquireOperationLock(t.Context(), plan.Workload.DeploymentDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, err := operation.AdmitLiveRunV1(deploy.LiveRunV1{
+		ID: plan.LiveRunID, Kind: deploy.LiveRunKindShellV1, Name: plan.Workload.DeploymentID,
+		GenerationReference: plan.Workload.GenerationReference, Exclusive: true,
+	}, false); err != nil || status != deploy.LiveRunStatusActiveV1 {
+		t.Fatalf("admission = %q, %v", status, err)
+	}
+	if _, err := RunControlledSessionV1(t.Context(), operation, plan, testControlledSessionRunOptionsV1()); err == nil || !strings.Contains(err.Error(), "queue-entry lease") {
+		t.Fatalf("missing queue-entry lease error = %v", err)
+	}
+	check, err := deploy.AcquireOperationLock(t.Context(), plan.Workload.DeploymentDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check.Unlock()
+	if queue, found, err := check.ReadLiveRunQueueV1(); err != nil || found {
+		t.Fatalf("missing-lease operation retained admission: %#v, found=%t, error=%v", queue, found, err)
 	}
 }
 
@@ -784,6 +1167,12 @@ type fakeControlledSessionProcessV1 struct {
 	gracefulStopped bool
 	forceStopped    bool
 	cleaned         bool
+	cleanupAttempts int
+	cleanupErrs     []error
+}
+
+func (process *fakeControlledSessionProcessV1) ContainerID() string {
+	return dockerControllerTestContainerIDV1
 }
 
 func newFakeControlledSessionProcessV1() *fakeControlledSessionProcessV1 {
@@ -817,6 +1206,14 @@ func (process *fakeControlledSessionProcessV1) ForceStop(context.Context) error 
 }
 
 func (process *fakeControlledSessionProcessV1) Cleanup(context.Context) error {
+	process.cleanupAttempts++
+	if len(process.cleanupErrs) > 0 {
+		err := process.cleanupErrs[0]
+		process.cleanupErrs = process.cleanupErrs[1:]
+		if err != nil {
+			return err
+		}
+	}
 	process.cleaned = true
 	return nil
 }
@@ -841,6 +1238,10 @@ type fakeControlledSessionWorkloadV1 struct {
 	inputStartOnce    sync.Once
 	columns           uint32
 	rows              uint32
+}
+
+func (workload *fakeControlledSessionWorkloadV1) ContainerID() string {
+	return dockerWorkloadTestContainerIDV1
 }
 
 func newFakeControlledSessionWorkloadV1(output []byte, exitCode int) *fakeControlledSessionWorkloadV1 {

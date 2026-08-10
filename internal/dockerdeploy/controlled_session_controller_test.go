@@ -105,6 +105,7 @@ func TestDockerControllerV1OrdersChannelCreateStartAndExactLifecycle(t *testing.
 func TestPrepareDockerControllerV1RequiresReadyChannelBeforeCreate(t *testing.T) {
 	plan := controlledSessionControllerPlanFixtureV1(t)
 	run := false
+	verifiedNoContainer := false
 	_, err := prepareDockerControllerV1(t.Context(), plan, dockerControllerBackendV1{
 		requireReadyChannel: func(ControlledSessionContainerPlanV1) error {
 			return errors.New("channel socket missing")
@@ -113,10 +114,28 @@ func TestPrepareDockerControllerV1RequiresReadyChannelBeforeCreate(t *testing.T)
 			run = true
 			return nil
 		},
-		observe: func(context.Context, CommandSpec, string) (int, error) { return 0, nil },
+		observe:           func(context.Context, CommandSpec, string) (int, error) { return 0, nil },
+		recordNoContainer: func() { verifiedNoContainer = true },
 	})
-	if err == nil || !strings.Contains(err.Error(), "channel socket missing") || run {
-		t.Fatalf("prepare error = %v, Docker invoked = %t", err, run)
+	if err == nil || !strings.Contains(err.Error(), "channel socket missing") || run || !verifiedNoContainer {
+		t.Fatalf("prepare error = %v, Docker invoked = %t, no container verified = %t", err, run, verifiedNoContainer)
+	}
+}
+
+func TestPrepareDockerControllerV1ReportsVerifiedPreCreateBindFailure(t *testing.T) {
+	plan := controlledSessionControllerPlanFixtureV1(t)
+	bindErr := errors.New("injected Docker endpoint bind failure")
+	verifiedNoContainer := false
+	_, err := prepareDockerControllerV1(t.Context(), plan, dockerControllerBackendV1{
+		requireReadyChannel: func(ControlledSessionContainerPlanV1) error { return nil },
+		bind: func(context.Context, CommandSpec, time.Duration) (CommandSpec, commandRunner, error) {
+			return CommandSpec{}, nil, bindErr
+		},
+		observe:           func(context.Context, CommandSpec, string) (int, error) { return 0, nil },
+		recordNoContainer: func() { verifiedNoContainer = true },
+	})
+	if !errors.Is(err, bindErr) || !verifiedNoContainer {
+		t.Fatalf("prepare error = %v, no container verified = %t", err, verifiedNoContainer)
 	}
 }
 
@@ -138,6 +157,7 @@ func TestPrepareDockerControllerV1RejectsWorkloadAndIncompleteBackend(t *testing
 func TestPrepareDockerControllerV1DoesNotRemoveAfterAmbiguousCreateFailure(t *testing.T) {
 	plan := controlledSessionControllerPlanFixtureV1(t)
 	runs := []CommandSpec{}
+	verifiedNoContainer := false
 	_, err := prepareDockerControllerV1(t.Context(), plan, dockerControllerBackendV1{
 		requireReadyChannel: func(ControlledSessionContainerPlanV1) error { return nil },
 		run: func(spec CommandSpec, options RunOptions) error {
@@ -148,7 +168,8 @@ func TestPrepareDockerControllerV1DoesNotRemoveAfterAmbiguousCreateFailure(t *te
 			}
 			return nil
 		},
-		observe: func(context.Context, CommandSpec, string) (int, error) { return 0, nil },
+		observe:           func(context.Context, CommandSpec, string) (int, error) { return 0, nil },
+		recordNoContainer: func() { verifiedNoContainer = true },
 	})
 	if err == nil || !strings.Contains(err.Error(), "create response was lost") ||
 		!strings.Contains(err.Error(), "daemon response was lost") ||
@@ -157,6 +178,9 @@ func TestPrepareDockerControllerV1DoesNotRemoveAfterAmbiguousCreateFailure(t *te
 	}
 	if len(runs) != 1 || !reflect.DeepEqual(runs[0].Args, plan.Create.Args) {
 		t.Fatalf("ambiguous create failure invoked reconciliation: %#v", runs)
+	}
+	if verifiedNoContainer {
+		t.Fatal("ambiguous create failure reported that no container exists")
 	}
 }
 
@@ -341,6 +365,36 @@ func TestDockerControllerV1RetriesFailedCleanup(t *testing.T) {
 	}
 	if cleanupAttempts != 2 {
 		t.Fatalf("cleanup attempts = %d, want 2", cleanupAttempts)
+	}
+}
+
+func TestDockerControllerV1TreatsMissingContainerAsCleaned(t *testing.T) {
+	plan := controlledSessionControllerPlanFixtureV1(t)
+	cleanupAttempts := 0
+	backend := dockerControllerBackendV1{
+		requireReadyChannel: func(ControlledSessionContainerPlanV1) error { return nil },
+		run: func(spec CommandSpec, options RunOptions) error {
+			writeDockerControllerTestCreateIDV1(plan, spec, options)
+			if reflect.DeepEqual(spec.Args, []string{"container", "rm", "--force", dockerControllerTestContainerIDV1}) {
+				cleanupAttempts++
+				return errors.New("Error response from daemon: No such container: " + dockerControllerTestContainerIDV1)
+			}
+			return nil
+		},
+		observe: func(context.Context, CommandSpec, string) (int, error) { return 0, nil },
+	}
+	controller, err := prepareDockerControllerV1(t.Context(), plan, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Cleanup(t.Context()); err != nil {
+		t.Fatalf("missing-container cleanup = %v", err)
+	}
+	if err := controller.Cleanup(t.Context()); err != nil {
+		t.Fatalf("repeated cleanup = %v", err)
+	}
+	if cleanupAttempts != 1 {
+		t.Fatalf("cleanup attempts = %d, want 1", cleanupAttempts)
 	}
 }
 
