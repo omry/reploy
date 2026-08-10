@@ -198,10 +198,10 @@ func ValidateLiveRunQueueV1(queue LiveRunQueueV1) error {
 		}
 	}
 	seen := map[string]bool{}
-	inactiveSeen := false
-	activeCount := 0
-	activeExclusive := false
-	readyControlCount := 0
+	waitingSeen := false
+	runnableCount := 0
+	runnableExclusive := false
+	readyCount := 0
 	for index, run := range queue.Runs {
 		if err := validateLiveQueueEntryV1(run); err != nil {
 			return fmt.Errorf("live run queue entry %d: %w", index, err)
@@ -212,35 +212,37 @@ func ValidateLiveRunQueueV1(queue LiveRunQueueV1) error {
 		seen[run.ID] = true
 		switch run.Status {
 		case LiveRunStatusActiveV1:
-			if inactiveSeen {
-				return fmt.Errorf("live run queue has active entry %q after an inactive entry", run.ID)
+			if waitingSeen {
+				return fmt.Errorf("live run queue has runnable entry %q after a waiting entry", run.ID)
 			}
-			activeCount++
-			activeExclusive = activeExclusive || run.Exclusive
+			if readyCount != 0 {
+				return fmt.Errorf("live run queue has active entry %q after a ready reservation", run.ID)
+			}
+			runnableCount++
+			runnableExclusive = runnableExclusive || run.Exclusive
 		case LiveRunStatusReadyV1:
-			if run.Kind != LiveRunKindControlV1 {
-				return fmt.Errorf("only a control marker may be ready")
+			if waitingSeen {
+				return fmt.Errorf("live run queue has runnable entry %q after a waiting entry", run.ID)
 			}
-			if activeCount != 0 || readyControlCount != 0 {
-				return fmt.Errorf("ready control marker must be the only runnable queue entry")
-			}
-			readyControlCount++
-			inactiveSeen = true
+			runnableCount++
+			runnableExclusive = runnableExclusive || run.Exclusive
+			readyCount++
 		case LiveRunStatusWaitingV1:
-			inactiveSeen = true
+			waitingSeen = true
 		}
 	}
-	if activeExclusive && activeCount != 1 {
-		return fmt.Errorf("exclusive live run must be the only active run")
+	if runnableExclusive && runnableCount != 1 {
+		return fmt.Errorf("exclusive live run must be the only runnable entry")
 	}
-	if readyControlCount == 0 {
-		firstWaiting := firstWaitingLiveRunV1(queue.Runs)
-		if firstWaiting == nil {
-			return nil
-		}
-		if activeCount == 0 || !activeExclusive && !firstWaiting.Exclusive {
-			return fmt.Errorf("live run queue leaves run %q waiting although it can start", firstWaiting.ID)
-		}
+	if readyCount > 1 {
+		return fmt.Errorf("live run queue may reserve only one ready entry")
+	}
+	firstWaiting := firstWaitingLiveRunV1(queue.Runs)
+	if firstWaiting == nil {
+		return nil
+	}
+	if runnableCount == 0 || (readyCount == 0 && !runnableExclusive && !firstWaiting.Exclusive) {
+		return fmt.Errorf("live run queue leaves run %q waiting although it can start", firstWaiting.ID)
 	}
 	return nil
 }
@@ -287,8 +289,8 @@ func validateLiveRunV1(run LiveRunV1) error {
 			return err
 		}
 	}
-	if run.Status != LiveRunStatusActiveV1 && run.Status != LiveRunStatusWaitingV1 {
-		return fmt.Errorf("live run status must be active or waiting")
+	if run.Status != LiveRunStatusActiveV1 && run.Status != LiveRunStatusReadyV1 && run.Status != LiveRunStatusWaitingV1 {
+		return fmt.Errorf("live run status must be active, ready, or waiting")
 	}
 	if !run.Exclusive && (run.WritableMount != "" || len(run.WritablePaths) != 0) {
 		return fmt.Errorf("concurrent live run must not name a writable mount conflict")
@@ -304,8 +306,8 @@ func validateLiveRunV1(run LiveRunV1) error {
 	if run.Container != "" && !safeRecoveryIdentity(run.Container) {
 		return fmt.Errorf("live run container must be safe text")
 	}
-	if run.Status == LiveRunStatusWaitingV1 && run.Container != "" {
-		return fmt.Errorf("waiting live run must not name a container")
+	if run.Status != LiveRunStatusActiveV1 && run.Container != "" {
+		return fmt.Errorf("pending live run must not name a container")
 	}
 	return nil
 }
@@ -420,6 +422,32 @@ func RemoveControlMarkerV1(queue LiveRunQueueV1, id string) (LiveRunQueueV1, boo
 	return removeLiveQueueEntryV1(queue, id, LiveRunKindControlV1)
 }
 
+func ActivateReadyLiveRunV1(queue LiveRunQueueV1, id string) (LiveRunQueueV1, error) {
+	if err := ValidateLiveRunQueueV1(queue); err != nil {
+		return LiveRunQueueV1{}, err
+	}
+	if err := ValidateLiveRunIDV1(id); err != nil {
+		return LiveRunQueueV1{}, err
+	}
+	result := cloneLiveRunQueueV1(queue)
+	for index := range result.Runs {
+		run := &result.Runs[index]
+		if run.ID != id || run.Kind == LiveRunKindControlV1 {
+			continue
+		}
+		if run.Status != LiveRunStatusReadyV1 {
+			return LiveRunQueueV1{}, fmt.Errorf("live run %q is not ready", id)
+		}
+		run.Status = LiveRunStatusActiveV1
+		promoteLiveRunsV1(&result)
+		if err := ValidateLiveRunQueueV1(result); err != nil {
+			return LiveRunQueueV1{}, fmt.Errorf("validate queue after activating live run: %w", err)
+		}
+		return result, nil
+	}
+	return LiveRunQueueV1{}, fmt.Errorf("live run %q is not outstanding", id)
+}
+
 func CancelWaitingLiveRunsV1(queue LiveRunQueueV1) (LiveRunQueueV1, []LiveRunV1, error) {
 	if err := ValidateLiveRunQueueV1(queue); err != nil {
 		return LiveRunQueueV1{}, nil, err
@@ -428,7 +456,7 @@ func CancelWaitingLiveRunsV1(queue LiveRunQueueV1) (LiveRunQueueV1, []LiveRunV1,
 	retained := make([]LiveRunV1, 0, len(result.Runs))
 	canceled := []LiveRunV1{}
 	for _, entry := range result.Runs {
-		if entry.Kind != LiveRunKindControlV1 && entry.Status == LiveRunStatusWaitingV1 {
+		if entry.Kind != LiveRunKindControlV1 && entry.Status != LiveRunStatusActiveV1 {
 			canceled = append(canceled, entry)
 			continue
 		}
@@ -492,7 +520,7 @@ func cloneLiveRunQueueV1(queue LiveRunQueueV1) LiveRunQueueV1 {
 func liveRunCanStartNowV1(queue LiveRunQueueV1, candidate LiveRunV1) bool {
 	activeCount := 0
 	for _, run := range queue.Runs {
-		if run.Status == LiveRunStatusWaitingV1 {
+		if run.Status != LiveRunStatusActiveV1 {
 			return false
 		}
 		activeCount++
@@ -504,33 +532,31 @@ func liveRunCanStartNowV1(queue LiveRunQueueV1, candidate LiveRunV1) bool {
 }
 
 func promoteLiveRunsV1(queue *LiveRunQueueV1) {
-	activeCount := 0
-	activeExclusive := false
+	runnableCount := 0
+	runnableExclusive := false
+	readyCount := 0
 	firstWaiting := -1
 	for index, run := range queue.Runs {
 		if run.Status == LiveRunStatusWaitingV1 {
 			firstWaiting = index
 			break
 		}
-		activeCount++
-		activeExclusive = activeExclusive || run.Exclusive
+		runnableCount++
+		runnableExclusive = runnableExclusive || run.Exclusive
+		if run.Status == LiveRunStatusReadyV1 {
+			readyCount++
+		}
 	}
-	if firstWaiting < 0 || activeExclusive {
+	if firstWaiting < 0 || runnableExclusive || readyCount != 0 {
 		return
 	}
 	if queue.Runs[firstWaiting].Exclusive {
-		if activeCount == 0 {
-			if queue.Runs[firstWaiting].Kind == LiveRunKindControlV1 {
-				queue.Runs[firstWaiting].Status = LiveRunStatusReadyV1
-			} else {
-				queue.Runs[firstWaiting].Status = LiveRunStatusActiveV1
-			}
+		if runnableCount == 0 {
+			queue.Runs[firstWaiting].Status = LiveRunStatusReadyV1
 		}
 		return
 	}
-	for index := firstWaiting; index < len(queue.Runs) && !queue.Runs[index].Exclusive; index++ {
-		queue.Runs[index].Status = LiveRunStatusActiveV1
-	}
+	queue.Runs[firstWaiting].Status = LiveRunStatusReadyV1
 }
 
 func firstWaitingLiveRunV1(runs []LiveRunV1) *LiveRunV1 {
