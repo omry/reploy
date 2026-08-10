@@ -135,6 +135,22 @@ func TestApplicationSandboxPlanRejectsIdentityAndKernelEscapes(t *testing.T) {
 	}
 }
 
+func TestApplicationSandboxPlanAcceptsRootWithNonzeroPrimaryGID(t *testing.T) {
+	plan := newApplicationSandboxPlanV1(RuntimeUserPlan{
+		UID: 0, GID: 1000, SupplementaryGIDs: []int{0}, DockerUser: "0:1000",
+	})
+	if err := ValidateApplicationSandboxPlanV1(plan); err != nil {
+		t.Fatal(err)
+	}
+	account, err := applicationLocalAccountV1(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account.Name != "root" || account.UID != "0" || account.GID != "1000" {
+		t.Fatalf("local root account = %#v", account)
+	}
+}
+
 func TestApplicationNetworkPolicyControlsOnlySetupCapability(t *testing.T) {
 	for _, test := range []struct {
 		name      string
