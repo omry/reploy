@@ -17,6 +17,7 @@ type dockerControllerBackendV1 struct {
 	run                 commandRunner
 	observe             func(context.Context, CommandSpec, string) (int, error)
 	requireReadyChannel func(ControlledSessionContainerPlanV1) error
+	recordNoContainer   func()
 }
 
 type dockerControllerWaitResultV1 struct {
@@ -42,16 +43,29 @@ type DockerControllerV1 struct {
 	waitResult  dockerControllerWaitResultV1
 }
 
+func (controller *DockerControllerV1) ContainerID() string {
+	return controller.containerID
+}
+
 // PrepareDockerControllerV1 verifies that the private channel is ready and
 // creates the exact controller container without starting it.
 func PrepareDockerControllerV1(
 	ctx context.Context,
 	plan ControlledSessionContainerPlanV1,
 ) (*DockerControllerV1, error) {
+	return prepareDockerControllerWithCleanupVerificationV1(ctx, plan, nil)
+}
+
+func prepareDockerControllerWithCleanupVerificationV1(
+	ctx context.Context,
+	plan ControlledSessionContainerPlanV1,
+	recordNoContainer func(),
+) (*DockerControllerV1, error) {
 	return prepareDockerControllerV1(ctx, plan, dockerControllerBackendV1{
 		bind:                bindPinnedDockerCommandRunnerV1,
 		observe:             observeDockerContainerExitV1,
 		requireReadyChannel: requirePreparedControlledSessionControllerChannelV1,
+		recordNoContainer:   recordNoContainer,
 	})
 }
 
@@ -60,18 +74,24 @@ func prepareDockerControllerV1(
 	plan ControlledSessionContainerPlanV1,
 	backend dockerControllerBackendV1,
 ) (*DockerControllerV1, error) {
+	failBeforeCreate := func(err error) (*DockerControllerV1, error) {
+		if backend.recordNoContainer != nil {
+			backend.recordNoContainer()
+		}
+		return nil, err
+	}
 	plan = cloneControlledSessionContainerPlanV1(plan)
 	if err := ValidateControlledSessionContainerPlanV1(plan); err != nil {
-		return nil, fmt.Errorf("prepare controlled-session controller: %w", err)
+		return failBeforeCreate(fmt.Errorf("prepare controlled-session controller: %w", err))
 	}
 	if plan.Role != ControlledSessionRoleControllerV1 {
-		return nil, fmt.Errorf("prepare controlled-session controller: container role must be %q", ControlledSessionRoleControllerV1)
+		return failBeforeCreate(fmt.Errorf("prepare controlled-session controller: container role must be %q", ControlledSessionRoleControllerV1))
 	}
 	if (backend.bind == nil && backend.run == nil) || backend.observe == nil || backend.requireReadyChannel == nil {
-		return nil, fmt.Errorf("prepare controlled-session controller: backend is incomplete")
+		return failBeforeCreate(fmt.Errorf("prepare controlled-session controller: backend is incomplete"))
 	}
 	if err := backend.requireReadyChannel(plan); err != nil {
-		return nil, fmt.Errorf("prepare controlled-session controller channel: %w", err)
+		return failBeforeCreate(fmt.Errorf("prepare controlled-session controller channel: %w", err))
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -81,10 +101,10 @@ func prepareDockerControllerV1(
 		var err error
 		docker, backend.run, err = backend.bind(ctx, docker, defaultDockerPreflightTimeout)
 		if err != nil {
-			return nil, fmt.Errorf("bind controlled-session controller Docker endpoint: %w", err)
+			return failBeforeCreate(fmt.Errorf("bind controlled-session controller Docker endpoint: %w", err))
 		}
 		if backend.run == nil {
-			return nil, fmt.Errorf("prepare controlled-session controller: Docker endpoint binder returned no command runner")
+			return failBeforeCreate(fmt.Errorf("prepare controlled-session controller: Docker endpoint binder returned no command runner"))
 		}
 	}
 	var createOutput bytes.Buffer
@@ -215,7 +235,7 @@ func (controller *DockerControllerV1) Cleanup(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	cleanup := controller.commandV1("container", "rm", "--force", controller.containerID)
-	if err := controller.backend.run(cleanup, RunOptions{Context: ctx}); err != nil {
+	if err := controller.backend.run(cleanup, RunOptions{Context: ctx}); err != nil && !isMissingContainerCleanupError(err) {
 		return fmt.Errorf("remove controlled-session controller container %q: %w", controller.plan.Container, err)
 	}
 	controller.stateMu.Lock()
