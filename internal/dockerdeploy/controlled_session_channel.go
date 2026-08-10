@@ -38,6 +38,7 @@ func controlledSessionPrivateChannelConfigV1(plan ControlledSessionExecutionPlan
 		HostDirectory: plan.Channel.HostDirectory,
 		Opened: controlledsession.OpenedV1{
 			Authorization:                         plan.Authorization,
+			Endpoints:                             controlledSessionOpenedEndpointsV1(plan.Controller.SessionNetwork.Endpoints),
 			Columns:                               uint32(columns),
 			Rows:                                  uint32(rows),
 			OutputFinalizationTimeoutMilliseconds: controlledsession.DefaultOutputFinalizationTimeoutMillisecondsV1,

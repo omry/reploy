@@ -109,7 +109,14 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   watchdog rechecks the host boot identity before each attempt and uses capped
   backoff until Docker returns or the host reboots; a responsive daemon with a
   repeated definitive cleanup failure produces the bounded failed receipt for
-  next-operation recovery. Controlled-session networking remains a later phase.
+  next-operation recovery. Immutable controlled-session endpoint and network
+  planning is now implemented: the host resolves a sorted requested subset of
+  the exact workload generation's declared endpoints, freezes their schemes,
+  container ports, fixed lease-local `workload` identity, internal network
+  name, and reciprocal controller/workload aliases into both container-plan
+  digests, and publishes the coordinates in `opened`. Container creation
+  remains inert on `network=none`; network resource creation, attachment,
+  cleanup ownership, and sandbox admission remain later Slice 4 phases.
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution
@@ -550,8 +557,8 @@ cleanup and no canceled request is replayed.
 ### Session Events
 
 - `opened`: reports the effective dimensions, both runtime identities and
-  generations, fixed session capabilities, and workload-output-finalization
-  timeout.
+  generations, fixed session capabilities, the structured coordinates of
+  each granted workload endpoint, and the workload-output-finalization timeout.
 - `output(bytes)`: ordered PTY output bytes.
 - `workload_exit(status, reason)`: reports host-observed workload-shell
   exit.
@@ -1020,6 +1027,9 @@ ordinary native TCP to the workload's session-local network identity and
 declared port. Endpoint coordinates are resolved before startup as part of the
 immutable controller and workload plans; endpoint traffic never enters the
 private session channel and no workload port is published on the host.
+The coordinates themselves are typed `opened` metadata containing the logical
+endpoint ID, scheme, fixed lease-local `workload` host alias, and container
+port; publishing that bounded metadata does not proxy application traffic.
 
 This is intentionally a coarse pre-gateway boundary. Membership in the private
 network gives the controller reachability to workload ports beyond the declared

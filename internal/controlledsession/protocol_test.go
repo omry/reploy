@@ -39,7 +39,7 @@ func TestEventV1RoundTripsStrictTypedFrames(t *testing.T) {
 	authorization := testAuthorizationV1()
 	events := []EventV1{
 		{Kind: EventOpenedV1, Opened: &OpenedV1{
-			Authorization: authorization, Columns: 80, Rows: 24,
+			Authorization: authorization, Endpoints: testEndpointsV1(), Columns: 80, Rows: 24,
 			OutputFinalizationTimeoutMilliseconds: DefaultOutputFinalizationTimeoutMillisecondsV1,
 		}},
 		{Kind: EventOutputV1, Bytes: []byte{0, '\n', 0xff}},
@@ -216,7 +216,7 @@ func TestWireKindAssignmentsV1AreStable(t *testing.T) {
 func TestValidateEventV1RejectsInvalidOutputFinalizationOutcomes(t *testing.T) {
 	code := 0
 	tests := []EventV1{
-		{Kind: EventOpenedV1, Opened: &OpenedV1{Authorization: testAuthorizationV1(), Columns: 80, Rows: 24}},
+		{Kind: EventOpenedV1, Opened: &OpenedV1{Authorization: testAuthorizationV1(), Endpoints: testEndpointsV1(), Columns: 80, Rows: 24}},
 		{Kind: EventWorkloadOutputsFinalizedV1},
 		{Kind: EventWorkloadOutputsFinalizedV1, WorkloadOutputsFinalized: &WorkloadOutputsFinalizedV1{Status: WorkloadOutputFinalizationDrainedV1, Reason: "unexpected"}},
 		{Kind: EventWorkloadOutputsFinalizedV1, WorkloadOutputsFinalized: &WorkloadOutputsFinalizedV1{Status: WorkloadOutputFinalizationFailedV1}},

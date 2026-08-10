@@ -95,6 +95,7 @@ func PreparePrivateChannelV1(config PrivateChannelConfigV1) (*PrivateChannelV1, 
 	}
 	openedPayload := config.Opened
 	openedPayload.Authorization = cloneAuthorizationV1(config.Opened.Authorization)
+	openedPayload.Endpoints = append([]EndpointV1{}, config.Opened.Endpoints...)
 	opened := EventV1{Kind: EventOpenedV1, Opened: &openedPayload}
 	if err := ValidateEventV1(opened); err != nil {
 		return nil, fmt.Errorf("prepare controlled-session channel opened event: %w", err)

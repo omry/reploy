@@ -270,6 +270,7 @@ func controlledSessionControllerIntegrationPlanV1(
 		controllerCommand,
 		channel,
 		[]string{controllerRoot, workloadRoot},
+		disabledControlledSessionNetworkPlanV1(),
 		0,
 		0,
 	)
@@ -291,6 +292,7 @@ func controlledSessionControllerIntegrationPlanV1(
 		[]string{"/bin/sh"},
 		ControlledSessionChannelPlanV1{},
 		[]string{controllerRoot, workloadRoot},
+		disabledControlledSessionNetworkPlanV1(),
 		80,
 		24,
 	)

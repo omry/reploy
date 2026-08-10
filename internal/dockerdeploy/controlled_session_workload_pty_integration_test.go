@@ -140,6 +140,7 @@ func controlledSessionWorkloadIntegrationPlanV1(
 		[]string{"/bin/sh"},
 		ControlledSessionChannelPlanV1{},
 		[]string{root},
+		disabledControlledSessionNetworkPlanV1(),
 		columns,
 		rows,
 	)

@@ -1,0 +1,2 @@
+kind: Added
+body: Freeze granted controlled-session workload endpoints and lease-private network identities into immutable plans, and report their typed session-local coordinates in the opened event.
