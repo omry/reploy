@@ -8,6 +8,8 @@ import (
 	"io"
 	"regexp"
 	"unicode/utf8"
+
+	"github.com/omry/reploy/internal/endpointname"
 )
 
 const (
@@ -21,6 +23,9 @@ const (
 var frameMagicV1 = [4]byte{'R', 'P', 'S', 'N'}
 
 var protocolCodePatternV1 = regexp.MustCompile(`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$`)
+var endpointSchemePatternV1 = regexp.MustCompile(`^[a-z][a-z0-9+.-]*$`)
+
+const WorkloadEndpointHostV1 = "workload"
 
 type RequestKindV1 string
 
@@ -53,9 +58,20 @@ const (
 
 type OpenedV1 struct {
 	Authorization                         AuthorizationV1 `json:"authorization"`
+	Endpoints                             []EndpointV1    `json:"endpoints"`
 	Columns                               uint32          `json:"columns"`
 	Rows                                  uint32          `json:"rows"`
 	OutputFinalizationTimeoutMilliseconds uint32          `json:"output_finalization_timeout_milliseconds"`
+}
+
+// EndpointV1 is one immutable session-local coordinate granted to the
+// controller. Traffic uses native TCP; only these coordinates cross the
+// private session channel.
+type EndpointV1 struct {
+	ID     string `json:"id"`
+	Scheme string `json:"scheme"`
+	Host   string `json:"host"`
+	Port   uint32 `json:"port"`
 }
 
 type WorkloadExitV1 struct {
@@ -136,6 +152,9 @@ func ValidateEventV1(event EventV1) error {
 		if err := ValidateAuthorizationV1(event.Opened.Authorization); err != nil {
 			return fmt.Errorf("controlled-session opened event: %w", err)
 		}
+		if err := validateOpenedEndpointsV1(event.Opened.Endpoints, event.Opened.Authorization.EndpointIDs); err != nil {
+			return err
+		}
 		if !validDimensionsV1(event.Opened.Columns, event.Opened.Rows) {
 			return fmt.Errorf("controlled-session opened dimensions must be between 1 and 65535")
 		}
@@ -189,6 +208,40 @@ func ValidateEventV1(event EventV1) error {
 		}
 	default:
 		return fmt.Errorf("controlled-session event kind %q is unsupported", event.Kind)
+	}
+	return nil
+}
+
+func validateOpenedEndpointsV1(endpoints []EndpointV1, authorizedIDs []string) error {
+	if endpoints == nil {
+		return fmt.Errorf("controlled-session opened endpoints must use an array")
+	}
+	if len(endpoints) != len(authorizedIDs) {
+		return fmt.Errorf("controlled-session opened endpoints must match the authorized endpoint IDs")
+	}
+	for index, endpoint := range endpoints {
+		if endpoint.ID != authorizedIDs[index] {
+			return fmt.Errorf("controlled-session opened endpoint %d must match authorized endpoint ID %q", index, authorizedIDs[index])
+		}
+		if err := ValidateEndpointV1(endpoint); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ValidateEndpointV1(endpoint EndpointV1) error {
+	if err := endpointname.Validate(endpoint.ID); err != nil {
+		return fmt.Errorf("controlled-session endpoint ID %q: %w", endpoint.ID, err)
+	}
+	if len(endpoint.Scheme) > 32 || !endpointSchemePatternV1.MatchString(endpoint.Scheme) {
+		return fmt.Errorf("controlled-session endpoint %q scheme must use lowercase URL-scheme syntax", endpoint.ID)
+	}
+	if endpoint.Host != WorkloadEndpointHostV1 {
+		return fmt.Errorf("controlled-session endpoint %q host must be %q", endpoint.ID, WorkloadEndpointHostV1)
+	}
+	if endpoint.Port == 0 || endpoint.Port > 65535 {
+		return fmt.Errorf("controlled-session endpoint %q port must be between 1 and 65535", endpoint.ID)
 	}
 	return nil
 }

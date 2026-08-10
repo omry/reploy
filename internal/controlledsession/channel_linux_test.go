@@ -312,6 +312,7 @@ func TestControllerConnectionV1BoundsAndSerializesFlow(t *testing.T) {
 func TestPreparePrivateChannelV1FreezesOpenedAuthorization(t *testing.T) {
 	channel, config := prepareCurrentIdentityChannelV1(t)
 	config.Opened.Authorization.Handle = "session-" + strings.Repeat("b", 64)
+	config.Opened.Endpoints[0].Port = 9999
 	server, client := claimPrivateChannelV1(t, channel)
 	defer server.Close()
 	event, err := ReadEventV1(client)
@@ -320,6 +321,9 @@ func TestPreparePrivateChannelV1FreezesOpenedAuthorization(t *testing.T) {
 	}
 	if event.Opened.Authorization.Handle == config.Opened.Authorization.Handle {
 		t.Fatal("opened event followed caller mutation after channel preparation")
+	}
+	if event.Opened.Endpoints[0].Port == config.Opened.Endpoints[0].Port {
+		t.Fatal("opened endpoints followed caller mutation after channel preparation")
 	}
 }
 
@@ -349,7 +353,7 @@ func currentIdentityChannelConfigV1(t *testing.T) PrivateChannelConfigV1 {
 	config := PrivateChannelConfigV1{
 		HostDirectory: filepath.Join(shortChannelTestDirectoryV1(t), "session"),
 		Opened: OpenedV1{
-			Authorization: authorization, Columns: 80, Rows: 24,
+			Authorization: authorization, Endpoints: testEndpointsV1(), Columns: 80, Rows: 24,
 			OutputFinalizationTimeoutMilliseconds: DefaultOutputFinalizationTimeoutMillisecondsV1,
 		},
 	}
