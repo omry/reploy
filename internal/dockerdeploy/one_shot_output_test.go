@@ -135,14 +135,14 @@ func TestOneShotOutputOptionsAreExclusiveAndFileMustBeRegular(t *testing.T) {
 func TestOneShotOutputFileAssignsReservationToRuntimeUser(t *testing.T) {
 	root := t.TempDir()
 	final := filepath.Join(root, "result")
-	wantUID, wantGID := 991, 992
+	wantUID, wantGID := uint32(991), uint32(992)
 	var chownPath string
-	var chownUID, chownGID int
+	var chownUID, chownGID uint32
 
 	session, err := prepareOneShotOutputWithBackend("", final, RuntimeUserPlan{UID: wantUID, GID: wantGID}, oneShotOutputBackend{
-		currentUID: func() int { return 0 },
-		currentGID: func() int { return 0 },
-		chown: func(path string, uid int, gid int) error {
+		currentUID: func() uint32 { return 0 },
+		currentGID: func() uint32 { return 0 },
+		chown: func(path string, uid uint32, gid uint32) error {
 			chownPath, chownUID, chownGID = path, uid, gid
 			return nil
 		},
@@ -159,9 +159,9 @@ func TestOneShotOutputFileRemovesReservationWhenOwnershipFails(t *testing.T) {
 	root := t.TempDir()
 	final := filepath.Join(root, "result")
 	_, err := prepareOneShotOutputWithBackend("", final, RuntimeUserPlan{UID: 991, GID: 992}, oneShotOutputBackend{
-		currentUID: func() int { return 0 },
-		currentGID: func() int { return 0 },
-		chown:      func(string, int, int) error { return os.ErrPermission },
+		currentUID: func() uint32 { return 0 },
+		currentGID: func() uint32 { return 0 },
+		chown:      func(string, uint32, uint32) error { return os.ErrPermission },
 	})
 	if err == nil || !strings.Contains(err.Error(), "runtime user 991:992") {
 		t.Fatalf("ownership error = %v", err)
@@ -180,9 +180,9 @@ func TestOneShotOutputFileRejectsReservationReplacedBySymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := prepareOneShotOutputWithBackend("", final, RuntimeUserPlan{UID: 991, GID: 992}, oneShotOutputBackend{
-		currentUID: func() int { return 0 },
-		currentGID: func() int { return 0 },
-		chown: func(path string, _, _ int) error {
+		currentUID: func() uint32 { return 0 },
+		currentGID: func() uint32 { return 0 },
+		chown: func(path string, _, _ uint32) error {
 			if err := os.Remove(path); err != nil {
 				return err
 			}

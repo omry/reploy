@@ -18,7 +18,7 @@ func TestApplicationRenderersConsumeCanonicalSandboxPlan(t *testing.T) {
 		ContainerName: "demo-staging-abcd",
 		NetworkName:   "demo-staging-abcd",
 		Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{
-			UID: 501, GID: 20, SupplementaryGIDs: []int{33, 44}, DockerUser: "501:20",
+			UID: 501, GID: 20, SupplementaryGIDs: []uint32{33, 44}, DockerUser: "501:20",
 		}),
 		Workload: &WorkloadExecutionPlan{Argv: []string{"/bin/true"}, Endpoints: map[string]EndpointExecutionPlan{}},
 	}
@@ -99,7 +99,7 @@ func TestApplicationRenderersConsumeCanonicalSandboxPlan(t *testing.T) {
 
 func TestApplicationSandboxPlanRejectsIdentityAndKernelEscapes(t *testing.T) {
 	base := newApplicationSandboxPlanV1(RuntimeUserPlan{
-		UID: 501, GID: 20, SupplementaryGIDs: []int{33, 44}, DockerUser: "501:20",
+		UID: 501, GID: 20, SupplementaryGIDs: []uint32{33, 44}, DockerUser: "501:20",
 	})
 	tests := []struct {
 		name   string
@@ -107,8 +107,13 @@ func TestApplicationSandboxPlanRejectsIdentityAndKernelEscapes(t *testing.T) {
 		want   string
 	}{
 		{name: "root primary group", mutate: func(plan *ApplicationSandboxPlanV1) { plan.RuntimeUser.GID, plan.RuntimeUser.DockerUser = 0, "501:0" }, want: "root group"},
-		{name: "root supplementary group", mutate: func(plan *ApplicationSandboxPlanV1) { plan.RuntimeUser.SupplementaryGIDs = []int{0, 33} }, want: "root group"},
-		{name: "noncanonical groups", mutate: func(plan *ApplicationSandboxPlanV1) { plan.RuntimeUser.SupplementaryGIDs = []int{44, 33} }, want: "unique, sorted"},
+		{name: "root supplementary group", mutate: func(plan *ApplicationSandboxPlanV1) { plan.RuntimeUser.SupplementaryGIDs = []uint32{0, 33} }, want: "root group"},
+		{name: "unchanged UID sentinel", mutate: func(plan *ApplicationSandboxPlanV1) { plan.RuntimeUser.UID = runtimeIDUnchangedSentinelV1 }, want: "unsigned 32-bit UID"},
+		{name: "unchanged GID sentinel", mutate: func(plan *ApplicationSandboxPlanV1) { plan.RuntimeUser.GID = runtimeIDUnchangedSentinelV1 }, want: "unsigned 32-bit UID"},
+		{name: "unchanged supplementary GID sentinel", mutate: func(plan *ApplicationSandboxPlanV1) {
+			plan.RuntimeUser.SupplementaryGIDs = []uint32{33, runtimeIDUnchangedSentinelV1}
+		}, want: "unchanged-credential sentinel"},
+		{name: "noncanonical groups", mutate: func(plan *ApplicationSandboxPlanV1) { plan.RuntimeUser.SupplementaryGIDs = []uint32{44, 33} }, want: "unique, sorted"},
 		{name: "capabilities", mutate: func(plan *ApplicationSandboxPlanV1) { plan.Kernel.DropAllCapabilities = false }, want: "drop all"},
 		{name: "privilege escalation", mutate: func(plan *ApplicationSandboxPlanV1) { plan.Kernel.NoNewPrivileges = false }, want: "no-new-privileges"},
 		{name: "seccomp", mutate: func(plan *ApplicationSandboxPlanV1) { plan.Kernel.SeccompProfile = "" }, want: "seccomp"},
@@ -124,7 +129,7 @@ func TestApplicationSandboxPlanRejectsIdentityAndKernelEscapes(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			plan := base
-			plan.RuntimeUser.SupplementaryGIDs = append([]int(nil), base.RuntimeUser.SupplementaryGIDs...)
+			plan.RuntimeUser.SupplementaryGIDs = append([]uint32(nil), base.RuntimeUser.SupplementaryGIDs...)
 			plan.Kernel.HostNamespaces = []string{}
 			plan.Kernel.HostDevices = []string{}
 			test.mutate(&plan)
@@ -132,6 +137,22 @@ func TestApplicationSandboxPlanRejectsIdentityAndKernelEscapes(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestApplicationSandboxPlanAcceptsRootWithNonzeroPrimaryGID(t *testing.T) {
+	plan := newApplicationSandboxPlanV1(RuntimeUserPlan{
+		UID: 0, GID: 1000, SupplementaryGIDs: []uint32{0}, DockerUser: "0:1000",
+	})
+	if err := ValidateApplicationSandboxPlanV1(plan); err != nil {
+		t.Fatal(err)
+	}
+	account, err := applicationLocalAccountV1(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account.Name != "root" || account.UID != "0" || account.GID != "1000" {
+		t.Fatalf("local root account = %#v", account)
 	}
 }
 

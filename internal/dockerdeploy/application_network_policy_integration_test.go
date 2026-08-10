@@ -326,13 +326,13 @@ func networkPolicyIntegrationPlan(t *testing.T, image string, helper string, pub
 	}
 }
 
-func networkPolicyIntegrationWorkloadArgv(uid int, local []string, public []string, ambiguous string, publicException string, wantLocal bool, wantPublic bool, wantAmbiguous bool, wantPublicException bool, serve bool, dnsName string) []string {
+func networkPolicyIntegrationWorkloadArgv(uid uint32, local []string, public []string, ambiguous string, publicException string, wantLocal bool, wantPublic bool, wantAmbiguous bool, wantPublicException bool, serve bool, dnsName string) []string {
 	mode := "exit"
 	if serve {
 		mode = "serve"
 	}
 	return []string{
-		"/network-test", "workload", strconv.Itoa(uid),
+		"/network-test", "workload", runtimeIDStringV1(uid),
 		local[0], local[1], public[0], public[1], ambiguous, publicException,
 		strconv.FormatBool(wantLocal), strconv.FormatBool(wantPublic), strconv.FormatBool(wantAmbiguous), strconv.FormatBool(wantPublicException), mode,
 		dnsName, strconv.FormatBool(wantPublic || wantLocal),

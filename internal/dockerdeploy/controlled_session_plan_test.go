@@ -336,7 +336,7 @@ func controlledSessionPlanFixtureV1(t *testing.T) (ControlledSessionPlanInputV1,
 	return input, backend
 }
 
-func controlledSessionEnvironmentFixtureV1(t *testing.T, id string, digestCharacter string, uid int) (CurrentBuild, CurrentRuntimePlanV1) {
+func controlledSessionEnvironmentFixtureV1(t *testing.T, id string, digestCharacter string, uid uint32) (CurrentBuild, CurrentRuntimePlanV1) {
 	t.Helper()
 	document, platform := testSelectedPlatformDocumentV1(t)
 	document.Environment.ID = id

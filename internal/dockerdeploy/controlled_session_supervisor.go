@@ -180,6 +180,7 @@ func RunControlledSessionV1(
 	ownershipRecorded := false
 	partialPreparationCleanupVerified := false
 	controllerID := ""
+	var incidentReceipt *deploy.ControlledSessionIncidentReceiptTargetV1
 	persistOwnership := func(controllerID string, workloadID string) (deploy.ControlledSessionOwnershipV1, error) {
 		ownership := controlledSessionOwnershipFromPlanV1(plan, dockerEndpoint, controllerID, workloadID)
 		recorded, err := operation.RecordControlledSessionOwnershipV1(ownership)
@@ -218,8 +219,17 @@ func RunControlledSessionV1(
 			})
 		},
 		recordPlannedOwnership: func() error {
-			_, err := persistOwnership("", "")
-			return err
+			var err error
+			incidentReceipt, err = operation.PrepareControlledSessionIncidentReceiptV1(plan.Channel.HostDirectory, plan.LiveRunID)
+			if err != nil {
+				return fmt.Errorf("prepare controlled-session incident receipt: %w", err)
+			}
+			if _, err := persistOwnership("", ""); err != nil {
+				removeErr := incidentReceipt.Remove()
+				incidentReceipt = nil
+				return errors.Join(err, removeErr)
+			}
+			return nil
 		},
 		recordControllerOwnership: func(exactControllerID string) error {
 			controllerID = exactControllerID
@@ -244,9 +254,22 @@ func RunControlledSessionV1(
 			}
 			return manifest, nil
 		},
-		startWatchdog: startControlledSessionWatchdogV1,
-		now:           time.Now,
+		startWatchdog: func(ctx context.Context, manifest deploy.ControlledSessionCleanupManifest) (controlledSessionWatchdogRuntimeV1, error) {
+			watchdog, err := startControlledSessionWatchdogV1(ctx, manifest, incidentReceipt)
+			if err != nil {
+				removeErr := incidentReceipt.Remove()
+				incidentReceipt = nil
+				return nil, errors.Join(err, removeErr)
+			}
+			incidentReceipt = nil
+			return watchdog, nil
+		},
+		now: time.Now,
 	})
+	if incidentReceipt != nil {
+		runErr = errors.Join(runErr, incidentReceipt.Remove())
+		incidentReceipt = nil
+	}
 	cleaned := result.SessionResult.CleanupStatus.Kind == controlledsession.CleanupStatusSucceededV1 &&
 		result.DeliveryTailCleanupStatus.Kind == controlledsession.CleanupStatusSucceededV1
 	cleaned = controlledSessionPreparationCanCompleteV1(cleaned, ownershipRecorded, operationReleaseAttempted, partialPreparationCleanupVerified)

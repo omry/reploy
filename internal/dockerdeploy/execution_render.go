@@ -226,9 +226,9 @@ func sandboxApplicationArgvV1(plan DockerExecutionPlan, argv []string, installNe
 		mode = "sandbox-exec"
 	}
 	user := plan.Sandbox.RuntimeUser
-	result := []string{mode, "--uid", strconv.Itoa(user.UID), "--gid", strconv.Itoa(user.GID)}
+	result := []string{mode, "--uid", runtimeIDStringV1(user.UID), "--gid", runtimeIDStringV1(user.GID)}
 	if len(user.SupplementaryGIDs) != 0 {
-		result = append(result, "--groups", joinDecimalValuesV1(user.SupplementaryGIDs))
+		result = append(result, "--groups", joinRuntimeIDsV1(user.SupplementaryGIDs))
 	}
 	if installNetwork {
 		result = append(result,
@@ -277,23 +277,31 @@ func joinDecimalValuesV1(values []int) string {
 	return strings.Join(items, ",")
 }
 
+func joinRuntimeIDsV1(values []uint32) string {
+	items := make([]string, len(values))
+	for index, value := range values {
+		items[index] = runtimeIDStringV1(value)
+	}
+	return strings.Join(items, ",")
+}
+
 func temporaryHomeForPlan(plan DockerExecutionPlan) string {
 	return plan.Sandbox.TemporaryHome
 }
 
 func temporaryHomeMountForPlan(plan DockerExecutionPlan) string {
 	user := plan.Sandbox.RuntimeUser
-	return temporaryHomeForPlan(plan) + ":rw,noexec,nosuid,nodev,size=64m,mode=0700,uid=" + strconv.Itoa(user.UID) + ",gid=" + strconv.Itoa(user.GID)
+	return temporaryHomeForPlan(plan) + ":rw,noexec,nosuid,nodev,size=64m,mode=0700,uid=" + runtimeIDStringV1(user.UID) + ",gid=" + runtimeIDStringV1(user.GID)
 }
 
 func transientHomeMountForPlan(plan DockerExecutionPlan) string {
 	return temporaryHomeMountForPlan(plan)
 }
 
-func dockerSupplementaryGroupsV1(groups []int) []string {
+func dockerSupplementaryGroupsV1(groups []uint32) []string {
 	result := make([]string, len(groups))
 	for index, gid := range groups {
-		result[index] = strconv.Itoa(gid)
+		result[index] = runtimeIDStringV1(gid)
 	}
 	return result
 }

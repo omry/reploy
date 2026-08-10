@@ -39,7 +39,7 @@ func TestPrepareProviderInstallAccountChecksBulkDiskBeforeCreatingMissingAccount
 				}
 				return resolvedInstallOwner{
 					Spec: "service:service", UID: 991, GID: 992,
-					SupplementaryGIDs: []int{33, 44}, ContainerUser: "991:992",
+					SupplementaryGIDs: []uint32{33, 44}, ContainerUser: "991:992",
 				}, nil
 			},
 			creationReadiness: func(_ map[string]string, resolveErr error) (string, error) {
@@ -69,7 +69,7 @@ func TestPrepareProviderInstallAccountChecksBulkDiskBeforeCreatingMissingAccount
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Install.SystemUser != "service" || got.Install.SystemGroup != "service" || got.Install.SystemUID != 991 || got.Install.SystemGID != 992 || !reflect.DeepEqual(got.Install.SystemSupplementaryGIDs, []int{33, 44}) {
+	if got.Install.SystemUser != "service" || got.Install.SystemGroup != "service" || got.Install.SystemUID != 991 || got.Install.SystemGID != 992 || !reflect.DeepEqual(got.Install.SystemSupplementaryGIDs, []uint32{33, 44}) {
 		t.Fatalf("resolved install account = %#v", got.Install)
 	}
 	wantEvents := []string{"resolve", "check-create", "measure-bulk", "check-disk", "create", "resolve"}
@@ -109,7 +109,7 @@ func TestInspectProviderInstallAccountReportsExistingNumericIdentity(t *testing.
 		blueprint.SystemAccount{User: "service", Group: "service", OnMissing: "create"},
 		providerInstallAccountInspectionBackendV1{
 			resolve: func(map[string]string) (resolvedInstallOwner, error) {
-				return resolvedInstallOwner{UID: 991, GID: 992, SupplementaryGIDs: []int{33, 44}}, nil
+				return resolvedInstallOwner{UID: 991, GID: 992, SupplementaryGIDs: []uint32{33, 44}}, nil
 			},
 			creationReadiness: func(map[string]string, error) (string, error) {
 				t.Fatal("existing account checked creation readiness")
@@ -189,7 +189,7 @@ func TestPrepareProviderInstallAccountReusesExistingAccountWithoutCreationPrefli
 		input,
 		providerInstallAccountBackendV1{
 			resolve: func(map[string]string) (resolvedInstallOwner, error) {
-				return resolvedInstallOwner{UID: 991, GID: 992, SupplementaryGIDs: []int{33, 44}}, nil
+				return resolvedInstallOwner{UID: 991, GID: 992, SupplementaryGIDs: []uint32{33, 44}}, nil
 			},
 			creationReadiness: func(map[string]string, error) (string, error) {
 				unexpected("readiness")
@@ -212,7 +212,7 @@ func TestPrepareProviderInstallAccountReusesExistingAccountWithoutCreationPrefli
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Install.SystemUID != 991 || got.Install.SystemGID != 992 || !reflect.DeepEqual(got.Install.SystemSupplementaryGIDs, []int{33, 44}) {
+	if got.Install.SystemUID != 991 || got.Install.SystemGID != 992 || !reflect.DeepEqual(got.Install.SystemSupplementaryGIDs, []uint32{33, 44}) {
 		t.Fatalf("reused install account = %#v", got.Install)
 	}
 }

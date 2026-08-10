@@ -20,6 +20,10 @@ func TestControlledSessionCleanupManifestDerivesExactDurableOwnership(t *testing
 		manifest.Workload != ownership.Workload || len(manifest.Networks) != 0 || len(manifest.Volumes) != 0 {
 		t.Fatalf("cleanup manifest = %#v", manifest)
 	}
+	wantReceipt := filepath.Join(filepath.Dir(filepath.Dir(ownership.ChannelDirectory)), "incidents", ownership.LiveRunID+".json")
+	if manifest.IncidentReceipt != wantReceipt {
+		t.Fatalf("incident receipt = %q, want %q", manifest.IncidentReceipt, wantReceipt)
+	}
 	content, err := EncodeControlledSessionCleanupManifest(manifest)
 	if err != nil {
 		t.Fatal(err)
