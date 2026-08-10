@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestRequestV1RoundTripsBinarySafeFrames(t *testing.T) {
+func TestProtocolV2RequestsRoundTripBinarySafeFrames(t *testing.T) {
 	requests := []RequestV1{
 		{Kind: RequestInputV1, Bytes: []byte{0, 3, '\n', 0xff}},
 		{Kind: RequestResizeV1, Columns: 120, Rows: 40},
@@ -19,27 +19,27 @@ func TestRequestV1RoundTripsBinarySafeFrames(t *testing.T) {
 	}
 	var stream bytes.Buffer
 	for _, request := range requests {
-		if err := WriteRequestV1(&stream, request); err != nil {
-			t.Fatalf("WriteRequestV1(%s) error = %v", request.Kind, err)
+		if err := WriteRequestV2(&stream, request); err != nil {
+			t.Fatalf("WriteRequestV2(%s) error = %v", request.Kind, err)
 		}
 	}
 	for _, want := range requests {
-		got, err := ReadRequestV1(&stream)
+		got, err := ReadRequestV2(&stream)
 		if err != nil {
-			t.Fatalf("ReadRequestV1(%s) error = %v", want.Kind, err)
+			t.Fatalf("ReadRequestV2(%s) error = %v", want.Kind, err)
 		}
 		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("ReadRequestV1() = %#v, want %#v", got, want)
+			t.Fatalf("ReadRequestV2() = %#v, want %#v", got, want)
 		}
 	}
 }
 
-func TestEventV1RoundTripsStrictTypedFrames(t *testing.T) {
+func TestProtocolV2EventsRoundTripStrictTypedFrames(t *testing.T) {
 	code := 0
 	authorization := testAuthorizationV1()
 	events := []EventV1{
-		{Kind: EventOpenedV1, Opened: &OpenedV1{
-			Authorization: authorization, Columns: 80, Rows: 24,
+		{Kind: EventOpenedV1, Opened: &OpenedV2{
+			Authorization: authorization, Endpoints: testEndpointsV1(), Columns: 80, Rows: 24,
 			OutputFinalizationTimeoutMilliseconds: DefaultOutputFinalizationTimeoutMillisecondsV1,
 		}},
 		{Kind: EventOutputV1, Bytes: []byte{0, '\n', 0xff}},
@@ -65,45 +65,45 @@ func TestEventV1RoundTripsStrictTypedFrames(t *testing.T) {
 	}
 	var stream bytes.Buffer
 	for _, event := range events {
-		if err := WriteEventV1(&stream, event); err != nil {
-			t.Fatalf("WriteEventV1(%s) error = %v", event.Kind, err)
+		if err := WriteEventV2(&stream, event); err != nil {
+			t.Fatalf("WriteEventV2(%s) error = %v", event.Kind, err)
 		}
 	}
 	for _, want := range events {
-		got, err := ReadEventV1(&stream)
+		got, err := ReadEventV2(&stream)
 		if err != nil {
-			t.Fatalf("ReadEventV1(%s) error = %v", want.Kind, err)
+			t.Fatalf("ReadEventV2(%s) error = %v", want.Kind, err)
 		}
 		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("ReadEventV1() = %#v, want %#v", got, want)
+			t.Fatalf("ReadEventV2() = %#v, want %#v", got, want)
 		}
 	}
 }
 
-func TestFrameV1RejectsWrongProtocolDirectionAndUnboundedInput(t *testing.T) {
+func TestProtocolV2RejectsWrongDirectionAndUnboundedInput(t *testing.T) {
 	var event bytes.Buffer
-	if err := WriteEventV1(&event, EventV1{Kind: EventOutputV1, Bytes: []byte("hello")}); err != nil {
+	if err := WriteEventV2(&event, EventV1{Kind: EventOutputV1, Bytes: []byte("hello")}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadRequestV1(&event); err == nil || !strings.Contains(err.Error(), "not a controller request") {
-		t.Fatalf("ReadRequestV1(event) error = %v", err)
+	if _, err := ReadRequestV2(&event); err == nil || !strings.Contains(err.Error(), "not a controller request") {
+		t.Fatalf("ReadRequestV2(event) error = %v", err)
 	}
 
 	header := make([]byte, frameHeaderSizeV1)
 	copy(header, frameMagicV1[:])
-	header[4] = ProtocolVersionV1
+	header[4] = ProtocolVersionV2
 	header[5] = byte(wireRequestInputV1)
 	binary.BigEndian.PutUint32(header[6:], MaxFramePayloadV1+1)
-	if _, err := ReadRequestV1(bytes.NewReader(header)); err == nil || !strings.Contains(err.Error(), "exceeds") {
-		t.Fatalf("ReadRequestV1(oversized) error = %v", err)
+	if _, err := ReadRequestV2(bytes.NewReader(header)); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("ReadRequestV2(oversized) error = %v", err)
 	}
 }
 
-func TestFrameV1RejectsBadMagicVersionTruncationAndUnknownJSON(t *testing.T) {
+func TestProtocolV2RejectsBadMagicVersionTruncationAndUnknownJSON(t *testing.T) {
 	validHeader := func() []byte {
 		header := make([]byte, frameHeaderSizeV1)
 		copy(header, frameMagicV1[:])
-		header[4] = ProtocolVersionV1
+		header[4] = ProtocolVersionV2
 		header[5] = byte(wireRequestCompleteV1)
 		return header
 	}
@@ -113,7 +113,7 @@ func TestFrameV1RejectsBadMagicVersionTruncationAndUnknownJSON(t *testing.T) {
 		want string
 	}{
 		{name: "bad magic", data: append([]byte("NOPE"), validHeader()[4:]...), want: "magic"},
-		{name: "bad version", data: func() []byte { value := validHeader(); value[4] = 2; return value }(), want: "version 2"},
+		{name: "old version", data: func() []byte { value := validHeader(); value[4] = ProtocolVersionV1; return value }(), want: "version 1"},
 		{name: "short header", data: validHeader()[:5], want: "frame header"},
 		{name: "short payload", data: func() []byte {
 			value := validHeader()
@@ -124,55 +124,55 @@ func TestFrameV1RejectsBadMagicVersionTruncationAndUnknownJSON(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := ReadRequestV1(bytes.NewReader(test.data)); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("ReadRequestV1() error = %v, want containing %q", err, test.want)
+			if _, err := ReadRequestV2(bytes.NewReader(test.data)); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("ReadRequestV2() error = %v, want containing %q", err, test.want)
 			}
 		})
 	}
 
 	payload := []byte(`{"code":"bad","message":"failure","extra":true}`)
 	var framed bytes.Buffer
-	if err := writeFrameV1(&framed, wireEventDiagnosticV1, payload); err != nil {
+	if err := writeFrameV2(&framed, wireEventDiagnosticV1, payload); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadEventV1(&framed); err == nil || !strings.Contains(err.Error(), "unknown field") {
-		t.Fatalf("ReadEventV1(unknown JSON) error = %v", err)
+	if _, err := ReadEventV2(&framed); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("ReadEventV2(unknown JSON) error = %v", err)
 	}
 
 	duplicate := []byte(`{"code":"first","code":"second","message":"failure"}`)
 	framed.Reset()
-	if err := writeFrameV1(&framed, wireEventDiagnosticV1, duplicate); err != nil {
+	if err := writeFrameV2(&framed, wireEventDiagnosticV1, duplicate); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadEventV1(&framed); err == nil || !strings.Contains(err.Error(), "repeats field") {
-		t.Fatalf("ReadEventV1(duplicate JSON) error = %v", err)
+	if _, err := ReadEventV2(&framed); err == nil || !strings.Contains(err.Error(), "repeats field") {
+		t.Fatalf("ReadEventV2(duplicate JSON) error = %v", err)
 	}
 
 	caseVariant := []byte(`{"Code":"bad","message":"failure"}`)
 	framed.Reset()
-	if err := writeFrameV1(&framed, wireEventDiagnosticV1, caseVariant); err != nil {
+	if err := writeFrameV2(&framed, wireEventDiagnosticV1, caseVariant); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadEventV1(&framed); err == nil || !strings.Contains(err.Error(), "lowercase ASCII snake_case") {
-		t.Fatalf("ReadEventV1(case-variant JSON) error = %v", err)
+	if _, err := ReadEventV2(&framed); err == nil || !strings.Contains(err.Error(), "lowercase ASCII snake_case") {
+		t.Fatalf("ReadEventV2(case-variant JSON) error = %v", err)
 	}
 
 	caseVariantDuplicate := []byte(`{"code":"first","Code":"second","message":"failure"}`)
 	framed.Reset()
-	if err := writeFrameV1(&framed, wireEventDiagnosticV1, caseVariantDuplicate); err != nil {
+	if err := writeFrameV2(&framed, wireEventDiagnosticV1, caseVariantDuplicate); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadEventV1(&framed); err == nil || !strings.Contains(err.Error(), "lowercase ASCII snake_case") {
-		t.Fatalf("ReadEventV1(case-variant duplicate JSON) error = %v", err)
+	if _, err := ReadEventV2(&framed); err == nil || !strings.Contains(err.Error(), "lowercase ASCII snake_case") {
+		t.Fatalf("ReadEventV2(case-variant duplicate JSON) error = %v", err)
 	}
 
 	nestedCaseVariant := []byte(`{"cause":"workload-exit","workload_status":{"Kind":"exited","code":0},"workload_output_finalization_status":{"kind":"drained"},"runtime_observation_status":{"kind":"maintained"},"controller_finalization_status":{"kind":"completed"},"cleanup_status":{"kind":"succeeded"},"recovery_action":"none"}`)
 	framed.Reset()
-	if err := writeFrameV1(&framed, wireEventTerminatedV1, nestedCaseVariant); err != nil {
+	if err := writeFrameV2(&framed, wireEventTerminatedV1, nestedCaseVariant); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadEventV1(&framed); err == nil || !strings.Contains(err.Error(), "lowercase ASCII snake_case") {
-		t.Fatalf("ReadEventV1(nested case-variant JSON) error = %v", err)
+	if _, err := ReadEventV2(&framed); err == nil || !strings.Contains(err.Error(), "lowercase ASCII snake_case") {
+		t.Fatalf("ReadEventV2(nested case-variant JSON) error = %v", err)
 	}
 }
 
@@ -204,19 +204,39 @@ func TestWireKindAssignmentsV1AreStable(t *testing.T) {
 	}
 
 	var framed bytes.Buffer
-	if err := WriteRequestV1(&framed, RequestV1{Kind: RequestCompleteV1}); err != nil {
+	if err := WriteRequestV2(&framed, RequestV1{Kind: RequestCompleteV1}); err != nil {
 		t.Fatal(err)
 	}
-	want := []byte{'R', 'P', 'S', 'N', ProtocolVersionV1, 0x04, 0, 0, 0, 0}
+	want := []byte{'R', 'P', 'S', 'N', ProtocolVersionV2, 0x04, 0, 0, 0, 0}
 	if !bytes.Equal(framed.Bytes(), want) {
 		t.Fatalf("complete frame = %x, want %x", framed.Bytes(), want)
+	}
+}
+
+func TestProtocolV2ExpandedOpenedDoesNotReuseV1WireVersion(t *testing.T) {
+	authorization := testAuthorizationV1()
+	var framed bytes.Buffer
+	if err := WriteEventV2(&framed, EventV1{Kind: EventOpenedV1, Opened: &OpenedV2{
+		Authorization: authorization, Endpoints: testEndpointsV1(), Columns: 80, Rows: 24,
+		OutputFinalizationTimeoutMilliseconds: DefaultOutputFinalizationTimeoutMillisecondsV1,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := framed.Bytes()[4]; got != ProtocolVersionV2 {
+		t.Fatalf("expanded opened protocol version = %d, want %d", got, ProtocolVersionV2)
+	}
+
+	oldVersion := append([]byte(nil), framed.Bytes()...)
+	oldVersion[4] = ProtocolVersionV1
+	if _, err := ReadEventV2(bytes.NewReader(oldVersion)); err == nil || !strings.Contains(err.Error(), "version 1") {
+		t.Fatalf("ReadEventV2(v1 expanded opened) error = %v", err)
 	}
 }
 
 func TestValidateEventV1RejectsInvalidOutputFinalizationOutcomes(t *testing.T) {
 	code := 0
 	tests := []EventV1{
-		{Kind: EventOpenedV1, Opened: &OpenedV1{Authorization: testAuthorizationV1(), Columns: 80, Rows: 24}},
+		{Kind: EventOpenedV1, Opened: &OpenedV2{Authorization: testAuthorizationV1(), Endpoints: testEndpointsV1(), Columns: 80, Rows: 24}},
 		{Kind: EventWorkloadOutputsFinalizedV1},
 		{Kind: EventWorkloadOutputsFinalizedV1, WorkloadOutputsFinalized: &WorkloadOutputsFinalizedV1{Status: WorkloadOutputFinalizationDrainedV1, Reason: "unexpected"}},
 		{Kind: EventWorkloadOutputsFinalizedV1, WorkloadOutputsFinalized: &WorkloadOutputsFinalizedV1{Status: WorkloadOutputFinalizationFailedV1}},
@@ -233,7 +253,7 @@ func TestValidateEventV1RejectsInvalidOutputFinalizationOutcomes(t *testing.T) {
 	}
 }
 
-func TestReadEventV1RejectsWorkloadExitWithoutStatus(t *testing.T) {
+func TestReadEventV2RejectsWorkloadExitWithoutStatus(t *testing.T) {
 	result := ResultV1{
 		Cause:                            CauseWorkloadExitV1,
 		WorkloadStatus:                   ProcessStatusV1{Kind: ProcessStatusUnknownV1},
@@ -247,15 +267,15 @@ func TestReadEventV1RejectsWorkloadExitWithoutStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	var framed bytes.Buffer
-	if err := writeFrameV1(&framed, wireEventTerminatedV1, payload); err != nil {
+	if err := writeFrameV2(&framed, wireEventTerminatedV1, payload); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadEventV1(&framed); err == nil || !strings.Contains(err.Error(), "workload-exit termination requires a known workload status") {
-		t.Fatalf("ReadEventV1(workload exit without status) error = %v", err)
+	if _, err := ReadEventV2(&framed); err == nil || !strings.Contains(err.Error(), "workload-exit termination requires a known workload status") {
+		t.Fatalf("ReadEventV2(workload exit without status) error = %v", err)
 	}
 }
 
-func TestReadEventV1RejectsContradictoryRuntimeObservationLossResults(t *testing.T) {
+func TestReadEventV2RejectsContradictoryRuntimeObservationLossResults(t *testing.T) {
 	code := 0
 	valid := ResultV1{
 		Cause:                            CauseRuntimeObservationLostV1,
@@ -313,11 +333,11 @@ func TestReadEventV1RejectsContradictoryRuntimeObservationLossResults(t *testing
 				t.Fatal(err)
 			}
 			var framed bytes.Buffer
-			if err := writeFrameV1(&framed, wireEventTerminatedV1, payload); err != nil {
+			if err := writeFrameV2(&framed, wireEventTerminatedV1, payload); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := ReadEventV1(&framed); err == nil || !strings.Contains(err.Error(), test.wantError) {
-				t.Fatalf("ReadEventV1(contradictory terminated result) error = %v", err)
+			if _, err := ReadEventV2(&framed); err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("ReadEventV2(contradictory terminated result) error = %v", err)
 			}
 		})
 	}
@@ -354,36 +374,36 @@ func TestValidateEventV1RejectsInvalidProtocolCodes(t *testing.T) {
 	}
 }
 
-func TestReadRequestV1RejectsAcknowledgeTerminatedPayload(t *testing.T) {
+func TestReadRequestV2RejectsAcknowledgeTerminatedPayload(t *testing.T) {
 	var framed bytes.Buffer
-	if err := writeFrameV1(&framed, wireRequestAcknowledgeTerminatedV1, []byte{1}); err != nil {
+	if err := writeFrameV2(&framed, wireRequestAcknowledgeTerminatedV1, []byte{1}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadRequestV1(&framed); err == nil || !strings.Contains(err.Error(), "must not contain a payload") {
-		t.Fatalf("ReadRequestV1(acknowledge payload) error = %v", err)
+	if _, err := ReadRequestV2(&framed); err == nil || !strings.Contains(err.Error(), "must not contain a payload") {
+		t.Fatalf("ReadRequestV2(acknowledge payload) error = %v", err)
 	}
 }
 
-func FuzzReadRequestV1(f *testing.F) {
+func FuzzReadRequestV2(f *testing.F) {
 	f.Add([]byte{})
 	var valid bytes.Buffer
-	if err := WriteRequestV1(&valid, RequestV1{Kind: RequestInputV1, Bytes: []byte{0, 3, 0xff}}); err != nil {
+	if err := WriteRequestV2(&valid, RequestV1{Kind: RequestInputV1, Bytes: []byte{0, 3, 0xff}}); err != nil {
 		f.Fatal(err)
 	}
 	f.Add(valid.Bytes())
 	f.Fuzz(func(t *testing.T, content []byte) {
-		_, _ = ReadRequestV1(bytes.NewReader(content))
+		_, _ = ReadRequestV2(bytes.NewReader(content))
 	})
 }
 
-func FuzzReadEventV1(f *testing.F) {
+func FuzzReadEventV2(f *testing.F) {
 	f.Add([]byte{})
 	var valid bytes.Buffer
-	if err := WriteEventV1(&valid, EventV1{Kind: EventDiagnosticV1, Diagnostic: &DiagnosticV1{Code: "test", Message: "seed"}}); err != nil {
+	if err := WriteEventV2(&valid, EventV1{Kind: EventDiagnosticV1, Diagnostic: &DiagnosticV1{Code: "test", Message: "seed"}}); err != nil {
 		f.Fatal(err)
 	}
 	f.Add(valid.Bytes())
 	f.Fuzz(func(t *testing.T, content []byte) {
-		_, _ = ReadEventV1(bytes.NewReader(content))
+		_, _ = ReadEventV2(bytes.NewReader(content))
 	})
 }
