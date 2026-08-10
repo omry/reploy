@@ -66,7 +66,8 @@ func proveControlledSessionWatchdogParentLossV1(
 		t.Fatal(err)
 	}
 	select {
-	case err := <-watchdog.done:
+	case <-watchdog.exited:
+		err := watchdog.ExitError()
 		if err != nil {
 			t.Fatalf("watchdog parent-loss cleanup: %v", err)
 		}
