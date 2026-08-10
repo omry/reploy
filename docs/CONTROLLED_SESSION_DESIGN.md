@@ -728,7 +728,8 @@ generation rather than changing the staged generation.
 Root applies when the effective runtime UID is `0`: because staged or
 user-scope Reploy was invoked as root, or because a system-scope installation
 explicitly selected root. It is never inherited merely from the base image's
-configured `USER`.
+configured `USER`. Reploy preserves that root identity's effective primary GID
+rather than assuming or normalizing it to GID `0`.
 
 A root runtime identity does not emit a generic warning. With the global
 sandbox enforced, its additional authority is limited to container-scoped
