@@ -89,6 +89,18 @@ func bindPinnedDockerCommandRunnerV1(
 	return pinned, run, nil
 }
 
+func commandRunnerForPinnedDockerEndpointV1(endpoint string, run commandRunner) (commandRunner, error) {
+	if run == nil {
+		return nil, fmt.Errorf("pin Docker endpoint requires a command runner")
+	}
+	if !localDockerEndpointV1(endpoint) {
+		return nil, fmt.Errorf("controlled-session Docker endpoint %q is not local", endpoint)
+	}
+	return func(spec CommandSpec, options RunOptions) error {
+		return run(pinDockerEndpointV1(spec, endpoint), options)
+	}, nil
+}
+
 // runCommandWithoutDockerPreflight executes non-Docker commands and Docker
 // commands whose exact local endpoint was already pinned by runDockerCommand.
 // Recognizable unpinned Docker commands fail closed.

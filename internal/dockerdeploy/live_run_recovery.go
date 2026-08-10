@@ -121,9 +121,13 @@ func cleanupControlledSessionRecoveryV1(
 	if ownership.ChannelDirectory != expectedChannel {
 		return fmt.Errorf("refuse controlled-session recovery because channel directory %q is outside the exact deployment session path", ownership.ChannelDirectory)
 	}
+	pinnedRun, err := commandRunnerForPinnedDockerEndpointV1(ownership.DockerEndpoint, run)
+	if err != nil {
+		return fmt.Errorf("bind recovered controlled-session Docker endpoint: %w", err)
+	}
 	var cleanupErr error
 	for _, container := range []deploy.ControlledSessionContainerOwnershipV1{ownership.Workload, ownership.Controller} {
-		cleanupErr = errors.Join(cleanupErr, cleanupControlledSessionRecoveryContainerV1(ctx, ownership.LiveRunID, container, run))
+		cleanupErr = errors.Join(cleanupErr, cleanupControlledSessionRecoveryContainerV1(ctx, ownership.LiveRunID, container, pinnedRun))
 	}
 	cleanupErr = errors.Join(cleanupErr, removeControlledSessionChannelDirectoryV1(ownership.ChannelDirectory))
 	return cleanupErr

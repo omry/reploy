@@ -148,7 +148,7 @@ func TestStopLiveRunV1RemovesControlledSessionContainersAndRetainsOwnership(t *t
 		t.Fatal(err)
 	}
 	ownership, err := operation.RecordControlledSessionOwnershipV1(controlledSessionOwnershipFromPlanV1(
-		plan, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
+		plan, controlledSessionTestDockerEndpointV1, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
 	))
 	if err != nil {
 		t.Fatal(err)
@@ -204,7 +204,7 @@ func TestStopLiveRunV1SkipsUnrecordedControlledSessionContainerIDs(t *testing.T)
 		t.Fatal(err)
 	}
 	if _, err := operation.RecordControlledSessionOwnershipV1(controlledSessionOwnershipFromPlanV1(
-		plan, dockerControllerTestContainerIDV1, "",
+		plan, controlledSessionTestDockerEndpointV1, dockerControllerTestContainerIDV1, "",
 	)); err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestStopLiveRunV1PreservesControlledSessionOnPartialCleanupFailure(t *testi
 		t.Fatal(err)
 	}
 	ownership, err := operation.RecordControlledSessionOwnershipV1(controlledSessionOwnershipFromPlanV1(
-		plan, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
+		plan, controlledSessionTestDockerEndpointV1, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
 	))
 	if err != nil {
 		t.Fatal(err)

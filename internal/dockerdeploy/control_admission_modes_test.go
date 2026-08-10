@@ -162,7 +162,7 @@ func TestAdmitControlOperationV1ForceStopsControlledSessionContainersAndRetainsO
 		t.Fatal(err)
 	}
 	ownership, err := operation.RecordControlledSessionOwnershipV1(controlledSessionOwnershipFromPlanV1(
-		plan, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
+		plan, controlledSessionTestDockerEndpointV1, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
 	))
 	if err != nil {
 		t.Fatal(err)
@@ -218,7 +218,7 @@ func TestAdmitControlOperationV1ForcePreservesControlledSessionOnPartialStopFail
 		t.Fatal(err)
 	}
 	ownership, err := operation.RecordControlledSessionOwnershipV1(controlledSessionOwnershipFromPlanV1(
-		plan, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
+		plan, controlledSessionTestDockerEndpointV1, dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1,
 	))
 	if err != nil {
 		t.Fatal(err)
