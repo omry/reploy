@@ -118,8 +118,8 @@ func TestRuntimePlansV1LocksInboundTCPOnlyForWorkload(t *testing.T) {
 	dockerPlan := DockerExecutionPlan{
 		Sandbox: testApplicationSandboxPlanV1(1000, 1000),
 		Workload: &WorkloadExecutionPlan{Endpoints: map[string]EndpointExecutionPlan{
-			"http":  {ContainerPort: 8080},
-			"admin": {ContainerPort: 8081},
+			"http":  {Scheme: "http", ContainerPort: 8080},
+			"admin": {Scheme: "http", ContainerPort: 8081},
 		}},
 	}
 	plans, err := RuntimePlansV1(document, dockerPlan)
@@ -135,9 +135,13 @@ func TestRuntimePlansV1LocksInboundTCPOnlyForWorkload(t *testing.T) {
 			t.Fatalf("runtime plan %q inbound TCP = %#v, want %#v", plan.ID, plan.InboundTCP, want)
 		}
 	}
-	dockerPlan.Workload.Endpoints["http"] = EndpointExecutionPlan{ContainerPort: 9090}
+	dockerPlan.Workload.Endpoints["http"] = EndpointExecutionPlan{Scheme: "http", ContainerPort: 9090}
 	if _, err := RuntimePlansV1(document, dockerPlan); err == nil || !strings.Contains(err.Error(), "endpoint \"http\"") {
 		t.Fatalf("endpoint mismatch error = %v", err)
+	}
+	dockerPlan.Workload.Endpoints["http"] = EndpointExecutionPlan{Scheme: "https", ContainerPort: 8080}
+	if _, err := RuntimePlansV1(document, dockerPlan); err == nil || !strings.Contains(err.Error(), "endpoint \"http\"") {
+		t.Fatalf("endpoint scheme mismatch error = %v", err)
 	}
 }
 

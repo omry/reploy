@@ -22,6 +22,13 @@ func testAuthorizationV1() AuthorizationV1 {
 	}
 }
 
+func testEndpointsV1() []EndpointV2 {
+	return []EndpointV2{
+		{ID: "browser", Scheme: "http", Host: WorkloadEndpointHostV2, Port: 8080},
+		{ID: "terminal", Scheme: "https", Host: WorkloadEndpointHostV2, Port: 8443},
+	}
+}
+
 func TestAuthorizationV1ValidatesAndHashesCompletePlan(t *testing.T) {
 	authorization := testAuthorizationV1()
 	if err := ValidateAuthorizationV1(authorization); err != nil {

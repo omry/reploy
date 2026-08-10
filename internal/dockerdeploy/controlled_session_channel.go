@@ -26,6 +26,9 @@ func controlledSessionPrivateChannelConfigV1(plan ControlledSessionExecutionPlan
 	if err := ValidateControlledSessionExecutionPlanV1(plan); err != nil {
 		return controlledsession.PrivateChannelConfigV1{}, fmt.Errorf("prepare controlled-session channel plan: %w", err)
 	}
+	if plan.Controller.SessionNetwork.Enabled {
+		return controlledsession.PrivateChannelConfigV1{}, fmt.Errorf("prepare controlled-session channel: endpoint grants require realized session-network attachment")
+	}
 	columns, err := strconv.ParseUint(plan.Workload.InitialColumns, 10, 32)
 	if err != nil {
 		return controlledsession.PrivateChannelConfigV1{}, fmt.Errorf("prepare controlled-session channel initial columns: %w", err)
@@ -36,8 +39,9 @@ func controlledSessionPrivateChannelConfigV1(plan ControlledSessionExecutionPlan
 	}
 	return controlledsession.PrivateChannelConfigV1{
 		HostDirectory: plan.Channel.HostDirectory,
-		Opened: controlledsession.OpenedV1{
+		Opened: controlledsession.OpenedV2{
 			Authorization:                         plan.Authorization,
+			Endpoints:                             controlledSessionOpenedEndpointsV1(plan.Controller.SessionNetwork.Endpoints),
 			Columns:                               uint32(columns),
 			Rows:                                  uint32(rows),
 			OutputFinalizationTimeoutMilliseconds: controlledsession.DefaultOutputFinalizationTimeoutMillisecondsV1,

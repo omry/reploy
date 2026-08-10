@@ -27,7 +27,7 @@ const (
 // lease-private controller channel. HostDirectory must not already exist.
 type PrivateChannelConfigV1 struct {
 	HostDirectory string
-	Opened        OpenedV1
+	Opened        OpenedV2
 }
 
 // ChannelClaimErrorV1 distinguishes failures before an authorized controller
@@ -95,11 +95,12 @@ func PreparePrivateChannelV1(config PrivateChannelConfigV1) (*PrivateChannelV1, 
 	}
 	openedPayload := config.Opened
 	openedPayload.Authorization = cloneAuthorizationV1(config.Opened.Authorization)
+	openedPayload.Endpoints = append([]EndpointV2{}, config.Opened.Endpoints...)
 	opened := EventV1{Kind: EventOpenedV1, Opened: &openedPayload}
 	if err := ValidateEventV1(opened); err != nil {
 		return nil, fmt.Errorf("prepare controlled-session channel opened event: %w", err)
 	}
-	if err := WriteEventV1(io.Discard, opened); err != nil {
+	if err := WriteEventV2(io.Discard, opened); err != nil {
 		return nil, fmt.Errorf("prepare controlled-session channel opened frame: %w", err)
 	}
 	controllerIdentity := openedPayload.Authorization.Controller.RuntimeIdentity
@@ -130,7 +131,7 @@ func (channel *PrivateChannelV1) SocketPath() string {
 
 // Claim accepts the only controller connection, verifies its kernel-reported
 // identity, removes the listener pathname, and sends opened as the first event.
-// A failed claim is terminal; protocol v1 does not reconnect or transfer
+// A failed claim is terminal; protocol v2 does not reconnect or transfer
 // ownership.
 func (channel *PrivateChannelV1) Claim(ctx context.Context) (*ControllerConnectionV1, error) {
 	if ctx == nil || ctx.Done() == nil {
@@ -211,7 +212,7 @@ func (connection *ControllerConnectionV1) ReadRequest(ctx context.Context) (Requ
 	var request RequestV1
 	err := withConnectionDeadlineV1(ctx, connection.connection.SetReadDeadline, func() error {
 		var readErr error
-		request, readErr = ReadRequestV1(connection.connection)
+		request, readErr = ReadRequestV2(connection.connection)
 		return readErr
 	})
 	if err != nil {
@@ -233,7 +234,7 @@ func (connection *ControllerConnectionV1) WriteEvent(ctx context.Context, event 
 	connection.writeMu.Lock()
 	defer connection.writeMu.Unlock()
 	err := withConnectionDeadlineV1(ctx, connection.connection.SetWriteDeadline, func() error {
-		return WriteEventV1(connection.connection, event)
+		return WriteEventV2(connection.connection, event)
 	})
 	if err != nil {
 		closeErr := connection.Close()

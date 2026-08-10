@@ -35,8 +35,8 @@ func TestControlledSessionPrivateChannelDockerIntegration(t *testing.T) {
 	authorization := testControlledSessionChannelAuthorizationV1(t, identity)
 	channel, err := controlledsession.PreparePrivateChannelV1(controlledsession.PrivateChannelConfigV1{
 		HostDirectory: filepath.Join(shortControlledSessionChannelTestDirectoryV1(t), "session"),
-		Opened: controlledsession.OpenedV1{
-			Authorization: authorization, Columns: 80, Rows: 24,
+		Opened: controlledsession.OpenedV2{
+			Authorization: authorization, Endpoints: []controlledsession.EndpointV2{}, Columns: 80, Rows: 24,
 			OutputFinalizationTimeoutMilliseconds: controlledsession.DefaultOutputFinalizationTimeoutMillisecondsV1,
 		},
 	})

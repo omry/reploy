@@ -450,7 +450,7 @@ func TestSessionIOBridgeV1SendsOnlyLifecycleEventsAndValidatesConfiguration(t *t
 	}
 	for _, reserved := range []EventV1{
 		{Kind: EventOutputV1, Bytes: []byte("forged")},
-		{Kind: EventOpenedV1, Opened: &OpenedV1{}},
+		{Kind: EventOpenedV1, Opened: &OpenedV2{}},
 	} {
 		if err := bridge.SendLifecycleEvent(t.Context(), reserved); err == nil {
 			t.Fatalf("SendLifecycleEvent() accepted reserved event %q", reserved.Kind)

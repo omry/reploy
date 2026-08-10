@@ -100,7 +100,7 @@ func runtimeWorkloadInboundTCPV1(document blueprint.Document, dockerPlan DockerE
 	ports := make([]int, 0, len(document.Environment.Workload.Endpoints))
 	for name, endpoint := range document.Environment.Workload.Endpoints {
 		planned, found := dockerPlan.Workload.Endpoints[name]
-		if !found || planned.ContainerPort != endpoint.Port {
+		if !found || planned.Scheme != endpoint.Scheme || planned.ContainerPort != endpoint.Port {
 			return nil, fmt.Errorf("runtime workload endpoint %q does not match the resolved Docker plan", name)
 		}
 		ports = append(ports, endpoint.Port)
