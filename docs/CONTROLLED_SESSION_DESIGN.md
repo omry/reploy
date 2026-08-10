@@ -103,9 +103,13 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   restart reconciliation cannot unlink an empty target while a surviving
   watchdog can still write. Empty unlocked targets are not incidents, receipts
   are never silently evicted, and new session startup fails closed at the
-  fixed retention bound. A watchdog-owned retry loop while Docker remains
-  unavailable is still a later ownership phase, and controlled-session
-  networking remains a later phase.
+  fixed retention bound. After parent loss, each watchdog cleanup attempt is
+  bounded independently. A failure is retried only when a fixed probe of the
+  pinned Docker endpoint establishes that the daemon is unavailable. The
+  watchdog rechecks the host boot identity before each attempt and uses capped
+  backoff until Docker returns or the host reboots; a responsive daemon with a
+  repeated definitive cleanup failure produces the bounded failed receipt for
+  next-operation recovery. Controlled-session networking remains a later phase.
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution
@@ -1228,11 +1232,18 @@ writes one canonical receipt after the bounded cleanup attempt. The receipt
 records only fixed ownership and cleanup facts. Normal verified disarm and a
 host-observed watchdog failure remove the unused target.
 
-If Docker is unavailable, the watchdog retries until Docker returns or the host
-reboots. If both the attached operation and watchdog are killed, durable labels
-and deployment-scoped live-run state let the next locked Reploy operation
-reconcile the abandoned resources. This final fallback is eventual rather than
-immediate.
+After parent loss, the watchdog bounds each cleanup attempt and probes the
+exact pinned Docker endpoint after a failure. If the fixed Docker server probe
+fails because the daemon is unavailable, the watchdog rechecks the current
+host boot identity and retries with capped exponential backoff until Docker
+returns or the host reboots. When the probe shows that Docker recovered between
+the failed cleanup operation and the probe, the watchdog immediately repeats
+cleanup once. A repeated ownership mismatch, malformed runtime result,
+filesystem failure, or other failure while the daemon remains responsive
+produces the bounded failed receipt and retains next-operation recovery. If
+both the attached operation and watchdog are killed, durable labels and
+deployment-scoped live-run state let the next locked Reploy operation reconcile
+the abandoned resources. This final fallback is eventual rather than immediate.
 
 ### Docker Restart and Host Reboot
 
