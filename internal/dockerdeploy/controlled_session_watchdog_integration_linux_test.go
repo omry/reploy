@@ -41,6 +41,10 @@ func proveControlledSessionWatchdogParentLossV1(
 	if err != nil {
 		t.Fatal(err)
 	}
+	unavailable, err := controlledSessionWatchdogDockerUnavailableV1(ctx, dockerEndpoint, probeControlledSessionWatchdogDockerV1)
+	if err != nil || unavailable {
+		t.Fatalf("probe pinned Docker endpoint: unavailable=%t, error=%v", unavailable, err)
+	}
 	ownership := controlledSessionOwnershipFromPlanV1(plan, dockerEndpoint, controllerID, workloadID)
 	bootSession, err := deploy.CurrentBootSessionIDV1()
 	if err != nil {
