@@ -37,7 +37,11 @@ func proveControlledSessionWatchdogParentLossV1(
 	if err := os.MkdirAll(plan.Channel.HostDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	ownership := controlledSessionOwnershipFromPlanV1(plan, controllerID, workloadID)
+	dockerEndpoint, err := verifiedLocalDockerEndpointV1(ctx, controlledSessionCommandSpecV1(plan.Controller.Create), defaultDockerPreflightTimeout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownership := controlledSessionOwnershipFromPlanV1(plan, dockerEndpoint, controllerID, workloadID)
 	bootSession, err := deploy.CurrentBootSessionIDV1()
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +70,8 @@ func proveControlledSessionWatchdogParentLossV1(
 		t.Fatal(err)
 	}
 	select {
-	case err := <-watchdog.done:
+	case <-watchdog.exited:
+		err := watchdog.ExitError()
 		if err != nil {
 			t.Fatalf("watchdog parent-loss cleanup: %v", err)
 		}

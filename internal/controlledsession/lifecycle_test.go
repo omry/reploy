@@ -537,6 +537,16 @@ func TestLifecycleOutputFinalizationExpiryAcceptsLateWorkloadExit(t *testing.T) 
 				return err
 			},
 		},
+		{
+			name:  "cleanup containment lost",
+			cause: CauseCleanupContainmentLostV1,
+			start: func(machine *MachineV1) error {
+				_, err := machine.Observe(ObservationV1{
+					Kind: ObservationCleanupContainmentLostV1, Reason: "watchdog exited",
+				})
+				return err
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -706,6 +716,7 @@ func TestLifecycleFirstAcceptedCauseWinsConcurrentRace(t *testing.T) {
 		{Kind: ObservationHostCancelV1, Reason: "host interrupted"},
 		{Kind: ObservationControllerLostV1, Reason: "channel closed"},
 		{Kind: ObservationRuntimeObservationLostV1, Reason: "docker unavailable"},
+		{Kind: ObservationCleanupContainmentLostV1, Reason: "watchdog exited"},
 		{Kind: ObservationWorkloadExitV1, WorkloadStatus: &ProcessStatusV1{Kind: ProcessStatusExitedV1, Code: &code}},
 	}
 	var wait sync.WaitGroup

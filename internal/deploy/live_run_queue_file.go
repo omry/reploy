@@ -169,7 +169,7 @@ func (lock *OperationLock) RecordControlledSessionOwnershipV1(ownership Controll
 		return ControlledSessionOwnershipV1{}, fmt.Errorf("controlled session workload generation does not match admitted live run %q", ownership.LiveRunID)
 	}
 	ownership.BootSession = admitted.BootSession
-	if err := validateControlledSessionOwnershipV1(ownership); err != nil {
+	if err := validateCurrentControlledSessionOwnershipV1(ownership); err != nil {
 		return ControlledSessionOwnershipV1{}, err
 	}
 	insert := sort.Search(len(queue.ControlledSessions), func(index int) bool {
@@ -230,7 +230,7 @@ func mergeControlledSessionOwnershipV1(
 	if err != nil {
 		return ControlledSessionOwnershipV1{}, err
 	}
-	if err := validateControlledSessionOwnershipV1(merged); err != nil {
+	if err := validateCurrentControlledSessionOwnershipV1(merged); err != nil {
 		return ControlledSessionOwnershipV1{}, err
 	}
 	return merged, nil

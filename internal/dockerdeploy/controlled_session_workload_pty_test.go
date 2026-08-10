@@ -168,6 +168,78 @@ func TestDockerWorkloadPTYV1OrdersAttachStartResizeAndExactOperations(t *testing
 	}
 }
 
+func TestDockerWorkloadPTYV1PinsOneDockerEndpointForItsLifetime(t *testing.T) {
+	plan := controlledSessionWorkloadPlanFixtureV1(t)
+	const endpoint = "unix:///session-engine.sock"
+	var mu sync.Mutex
+	var commands []CommandSpec
+	record := func(spec CommandSpec) {
+		mu.Lock()
+		defer mu.Unlock()
+		commands = append(commands, spec)
+	}
+	binds := 0
+	backend := dockerWorkloadPTYBackendV1{
+		bind: func(_ context.Context, spec CommandSpec, _ time.Duration) (CommandSpec, commandRunner, error) {
+			binds++
+			return pinDockerEndpointV1(spec, endpoint), func(command CommandSpec, options RunOptions) error {
+				command = pinDockerEndpointV1(command, endpoint)
+				record(command)
+				writeDockerWorkloadCreateIDV1(command, options, plan)
+				return nil
+			}, nil
+		},
+		attach: func(_ context.Context, docker CommandSpec, _ string, _ time.Duration) (dockerPTYAttachmentV1, error) {
+			record(docker)
+			return &fakeDockerPTYAttachmentV1{}, nil
+		},
+		resize: func(_ context.Context, docker CommandSpec, _ string, _, _ uint32, _ time.Duration) error {
+			record(docker)
+			return nil
+		},
+		observe: func(_ context.Context, docker CommandSpec, _ string) (int, error) {
+			record(docker)
+			return 0, nil
+		},
+	}
+	workload, err := prepareDockerWorkloadPTYV1(t.Context(), plan, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workload.Output(); err != nil {
+		t.Fatal(err)
+	}
+	if err := workload.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workload.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := workload.RequestGracefulStop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := workload.ForceStop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := workload.Cleanup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	got := append([]CommandSpec(nil), commands...)
+	mu.Unlock()
+	if binds != 1 || len(got) < 8 {
+		t.Fatalf("endpoint binds=%d commands=%#v", binds, got)
+	}
+	for _, command := range got {
+		if host, found := commandSpecEnvironmentValueV1(command, "DOCKER_HOST"); !found || host != endpoint {
+			t.Fatalf("command %#v used Docker host %q, found=%t", command.Args, host, found)
+		}
+		if contextName, found := commandSpecEnvironmentValueV1(command, "DOCKER_CONTEXT"); !found || contextName != "" {
+			t.Fatalf("command %#v retained Docker context %q, found=%t", command.Args, contextName, found)
+		}
+	}
+}
+
 func TestDockerWorkloadPTYV1TreatsMissingContainerAsCleaned(t *testing.T) {
 	plan := controlledSessionWorkloadPlanFixtureV1(t)
 	cleanupAttempts := 0

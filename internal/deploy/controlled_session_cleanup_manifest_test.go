@@ -16,7 +16,7 @@ func TestControlledSessionCleanupManifestDerivesExactDurableOwnership(t *testing
 		t.Fatal(err)
 	}
 	if manifest.LiveRunID != ownership.LiveRunID || manifest.BootSession != ownership.BootSession ||
-		manifest.ChannelDirectory != ownership.ChannelDirectory || manifest.Controller != ownership.Controller ||
+		manifest.DockerEndpoint != ownership.DockerEndpoint || manifest.ChannelDirectory != ownership.ChannelDirectory || manifest.Controller != ownership.Controller ||
 		manifest.Workload != ownership.Workload || len(manifest.Networks) != 0 || len(manifest.Volumes) != 0 {
 		t.Fatalf("cleanup manifest = %#v", manifest)
 	}
@@ -30,6 +30,15 @@ func TestControlledSessionCleanupManifestDerivesExactDurableOwnership(t *testing
 	decoded, err := DecodeControlledSessionCleanupManifest(content)
 	if err != nil || !reflect.DeepEqual(decoded, manifest) {
 		t.Fatalf("decoded manifest = %#v, error=%v", decoded, err)
+	}
+}
+
+func TestControlledSessionCleanupManifestRejectsRemoteDockerEndpoint(t *testing.T) {
+	ownership := controlledSessionOwnershipFixtureV1(t.TempDir(), "run-0000000000000001", "reploy/env/workload:g-current")
+	ownership.BootSession = "boot-session"
+	ownership.DockerEndpoint = "tcp://builder.example:2376"
+	if _, err := ControlledSessionCleanupManifestFromOwnership(ownership); err == nil || !strings.Contains(err.Error(), "local unix or npipe") {
+		t.Fatalf("remote Docker endpoint error = %v", err)
 	}
 }
 

@@ -56,14 +56,16 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   private channel. A workload that starts before a later startup step fails is
   still terminated and its output is finalized through the same barrier.
   Before creating any session resource, the planned controller, workload, and
-  private-channel ownership plus the session, lease, and boot identities are
-  now durably recorded in the existing live-run state. Reploy monotonically
+  private-channel ownership plus the session, lease, boot, and exact verified
+  local Docker endpoint identities are now durably recorded in the existing
+  live-run state. Reploy monotonically
   fills each exact full container ID after Docker creates it, and both IDs are
   durable before either process starts. Verified cleanup removes that record;
   failed or unverifiable partial-preparation cleanup retains it. Reploy now
   derives the immutable watchdog cleanup manifest from the complete recorded
   ownership before startup. It names only the exact containers and private
-  channel, carries the host boot identity,
+  channel, carries the host boot identity and the same pinned local Docker
+  endpoint used to create both containers,
   represents the currently absent lease networks and volumes as empty arrays,
   and omits protocol authority. The watchdog is now launched from the same
   Reploy executable after that manifest is frozen and before either container
@@ -78,15 +80,20 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   verifies the same resources once more before it exits, and the parent waits
   boundedly for that exit. The child has no listener and accepts no later
   resource selection. Because parent and child are the same executable, this
-  internal manifest has no independent schema-version marker. Next-operation
+  internal manifest has no independent schema-version marker. A ready
+  watchdog's premature exit is observed by the attached supervisor. Before
+  activation it fails startup; after activation it latches the distinct
+  `cleanup-containment-lost` cause, emits only a safe structured diagnostic
+  while the controller transport remains usable, and starts ordinary bounded
+  teardown without misreporting Docker observation as lost. Next-operation
   restart reconciliation is also implemented: after a prior host boot or an
   abandoned current-boot owner lease, Reploy discovers any container whose
   full ID was not recorded by its frozen name, verifies every exact ownership
   label, removes and verifies both containers and the private channel under one
   bounded cleanup attempt, and retains incomplete ownership for a later retry.
-  A watchdog-owned retry loop while Docker remains unavailable is still a
-  later ownership phase, and controlled-session networking remains a later
-  phase.
+  A watchdog-owned retry loop while Docker remains unavailable and a bounded
+  durable post-crash diagnostic receipt are still later ownership phases, and
+  controlled-session networking remains a later phase.
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution
@@ -1095,13 +1102,15 @@ preparing -> active -> terminating -> terminated
 
 The first accepted termination cause is latched and never rewritten. Causes
 include controller-requested termination, workload exit, host cancellation,
-controller loss, Docker-observation loss, and startup failure. Later events
-remain diagnostic observations. Workload status, workload-output-finalization
-status, runtime-observation status, controller finalization status, and
-pre-delivery cleanup success are reported separately in the session result, so
-a late observation or cleanup failure can fail the operation without hiding
-its original cause. Controller exit and delivery-tail cleanup are reported
-separately by the invoking host operation after teardown.
+controller loss, Docker-observation loss, cleanup-containment loss, and startup
+failure. Cleanup-containment loss means the ready session watchdog exited
+before verified disarm; it does not claim Docker observation was lost. Later
+events remain diagnostic observations. Workload status,
+workload-output-finalization status, runtime-observation status, controller
+finalization status, and pre-delivery cleanup success are reported separately
+in the session result, so a late observation or cleanup failure can fail the
+operation without hiding its original cause. Controller exit and delivery-tail
+cleanup are reported separately by the invoking host operation after teardown.
 
 Channel closure is never successful completion. A controller granted the
 `complete` operation must explicitly send `complete` after receiving
@@ -1166,7 +1175,17 @@ Host Reploy starts one short-lived watchdog for each live controlled session.
 It first creates inert Docker resources and durably records their exact
 identities. Before starting either container, it passes the watchdog an
 immutable cleanup manifest containing the exact lease, container, network,
-volume, and host boot identities. The attached operation retains one
+volume, host boot, and verified local Docker endpoint identities. Controller
+and workload creation, attachment, start, observation, resize, stop, and
+cleanup use that one pinned endpoint; the watchdog and next-operation
+reconciliation reuse it instead of resolving the mutable active Docker context.
+Legacy `live-run-queue-v1` ownership written before endpoint pinning remains
+readable so abandoned resources do not become unrecoverable after upgrade.
+Because that state cannot identify the historical daemon, each legacy cleanup
+attempt resolves one currently selected verified local endpoint and pins every
+inspection and removal in that attempt to it; exact ownership labels still
+gate removal. Newly recorded controlled sessions always require the durable
+endpoint. The attached operation retains one
 end of a private parent pipe. A crash during inert resource creation leaves no
 untrusted code running and is handled by ordinary next-operation
 reconciliation.
@@ -1178,6 +1197,15 @@ only the manifested resources. The watchdog exposes no listener, accepts no
 later resource selection, and exits after verified cleanup. Although its
 underlying Docker connection has ordinary trusted-host authority, its code path
 is limited to the immutable resource set.
+
+The attached supervisor also observes the watchdog process itself. If a ready
+watchdog exits before workload activation, startup fails before workload code
+runs. If it exits while the workload is active, Host Reploy latches
+`cleanup-containment-lost`, sends a bounded structured diagnostic while the
+controller transport remains healthy, and begins normal teardown. The original
+termination cause still wins if termination had already begun. Verified host
+cleanup may complete the durable ownership record even though containment loss
+makes the session result unsuccessful.
 
 If Docker is unavailable, the watchdog retries until Docker returns or the host
 reboots. If both the attached operation and watchdog are killed, durable labels
@@ -1246,6 +1274,16 @@ duplicated into Reploy audit metadata.
 Diagnostics identify which operation failed, what Reploy attempted, whether
 the session channel or Docker lifecycle was observed, what cleanup ran, and the
 safe next action.
+
+The target crash-containment work adds a bounded durable incident receipt for
+failures that outlive the attached Host Reploy process. It records only
+allowlisted lifecycle, observation, exit-status, cleanup, and recovery facts.
+It does not duplicate PTY output, environment names or values, secrets,
+arbitrary container logs, or unrestricted Docker output. Host Reploy creates
+the exact private receipt target before startup and gives the watchdog only the
+narrow write authority needed for that target; the child does not select an
+arbitrary state path. A parent-liveness EOF proves parent loss but cannot by
+itself distinguish `SIGKILL`, an OOM kill, or another abrupt process death.
 
 ## Resource and Timeout Policy
 

@@ -9,6 +9,7 @@ import (
 	"io"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/omry/reploy/internal/canonical"
 )
@@ -66,6 +67,7 @@ type ControlledSessionOwnershipV1 struct {
 	LiveRunID        string                                `json:"live_run_id"`
 	BootSession      string                                `json:"boot_session"`
 	SessionHandle    string                                `json:"session_handle"`
+	DockerEndpoint   string                                `json:"docker_endpoint,omitempty"`
 	ChannelDirectory string                                `json:"channel_directory"`
 	Controller       ControlledSessionContainerOwnershipV1 `json:"controller"`
 	Workload         ControlledSessionContainerOwnershipV1 `json:"workload"`
@@ -289,6 +291,11 @@ func validateControlledSessionOwnershipV1(ownership ControlledSessionOwnershipV1
 	if !controlledSessionHandlePatternV1.MatchString(ownership.SessionHandle) {
 		return fmt.Errorf("session handle must use session- followed by 64 lowercase hexadecimal characters")
 	}
+	if ownership.DockerEndpoint != "" {
+		if err := validateControlledSessionDockerEndpointV1(ownership.DockerEndpoint); err != nil {
+			return err
+		}
+	}
 	if !filepath.IsAbs(ownership.ChannelDirectory) || filepath.Clean(ownership.ChannelDirectory) != ownership.ChannelDirectory || !safeRecoveryIdentity(ownership.ChannelDirectory) {
 		return fmt.Errorf("channel directory must be a clean absolute path")
 	}
@@ -303,6 +310,24 @@ func validateControlledSessionOwnershipV1(ownership ControlledSessionOwnershipV1
 	}
 	if ownership.Controller.ID != "" && ownership.Workload.ID != "" && ownership.Controller.ID == ownership.Workload.ID {
 		return fmt.Errorf("controller and workload must name different containers")
+	}
+	return nil
+}
+
+func validateCurrentControlledSessionOwnershipV1(ownership ControlledSessionOwnershipV1) error {
+	if ownership.DockerEndpoint == "" {
+		return fmt.Errorf("Docker endpoint must be recorded for a new controlled session")
+	}
+	return validateControlledSessionOwnershipV1(ownership)
+}
+
+func validateControlledSessionDockerEndpointV1(endpoint string) error {
+	if !safeRecoveryIdentity(endpoint) {
+		return fmt.Errorf("Docker endpoint must be nonempty safe text")
+	}
+	scheme, _, found := strings.Cut(endpoint, ":")
+	if !found || (strings.ToLower(scheme) != "unix" && strings.ToLower(scheme) != "npipe") {
+		return fmt.Errorf("Docker endpoint must be a local unix or npipe endpoint")
 	}
 	return nil
 }

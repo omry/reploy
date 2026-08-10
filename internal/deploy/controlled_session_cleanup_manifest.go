@@ -20,6 +20,7 @@ import (
 type ControlledSessionCleanupManifest struct {
 	LiveRunID        string                                `json:"live_run_id"`
 	BootSession      string                                `json:"boot_session"`
+	DockerEndpoint   string                                `json:"docker_endpoint"`
 	ChannelDirectory string                                `json:"channel_directory"`
 	Controller       ControlledSessionContainerOwnershipV1 `json:"controller"`
 	Workload         ControlledSessionContainerOwnershipV1 `json:"workload"`
@@ -31,11 +32,12 @@ type ControlledSessionCleanupManifest struct {
 // from the exact durable ownership record. The session handle is deliberately
 // omitted because cleanup does not need protocol authority.
 func ControlledSessionCleanupManifestFromOwnership(ownership ControlledSessionOwnershipV1) (ControlledSessionCleanupManifest, error) {
-	if err := validateControlledSessionOwnershipV1(ownership); err != nil {
+	if err := validateCurrentControlledSessionOwnershipV1(ownership); err != nil {
 		return ControlledSessionCleanupManifest{}, fmt.Errorf("controlled-session cleanup manifest ownership: %w", err)
 	}
 	manifest := ControlledSessionCleanupManifest{
 		LiveRunID: ownership.LiveRunID, BootSession: ownership.BootSession,
+		DockerEndpoint:   ownership.DockerEndpoint,
 		ChannelDirectory: ownership.ChannelDirectory,
 		Controller:       ownership.Controller, Workload: ownership.Workload,
 		Networks: []string{}, Volumes: []string{},
@@ -51,6 +53,9 @@ func ValidateControlledSessionCleanupManifest(manifest ControlledSessionCleanupM
 		return fmt.Errorf("controlled-session cleanup manifest live run ID: %w", err)
 	}
 	if err := validateBootSessionIDV1(manifest.BootSession); err != nil {
+		return fmt.Errorf("controlled-session cleanup manifest: %w", err)
+	}
+	if err := validateControlledSessionDockerEndpointV1(manifest.DockerEndpoint); err != nil {
 		return fmt.Errorf("controlled-session cleanup manifest: %w", err)
 	}
 	if !filepath.IsAbs(manifest.ChannelDirectory) || filepath.Clean(manifest.ChannelDirectory) != manifest.ChannelDirectory || !safeRecoveryIdentity(manifest.ChannelDirectory) {
