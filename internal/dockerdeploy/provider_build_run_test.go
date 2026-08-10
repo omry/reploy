@@ -795,9 +795,9 @@ func TestStagedProviderBuildRuntimeV1MapsSupportedHosts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantGroups := []int{33, 44}
+			wantGroups := []uint32{33, 44}
 			if test.goos == "windows" {
-				wantGroups = []int{}
+				wantGroups = []uint32{}
 			}
 			want := StagedProviderBuildRuntimeV1{Host: test.host, UID: 501, GID: 20, SupplementaryGIDs: wantGroups}
 			if !reflect.DeepEqual(got, want) {

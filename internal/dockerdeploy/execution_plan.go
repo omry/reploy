@@ -20,9 +20,9 @@ type DockerPlanContext struct {
 	Scope             *blueprint.InstallScope
 	GeneratedImage    string
 	Host              blueprint.HostOS
-	UID               int
-	GID               int
-	SupplementaryGIDs []int
+	UID               uint32
+	GID               uint32
+	SupplementaryGIDs []uint32
 	SystemUser        string
 	SystemGroup       string
 	PortOverrides     map[string]int
@@ -80,9 +80,9 @@ type RuntimeUserPlan struct {
 	User              string
 	Group             string
 	LocalUser         string
-	UID               int
-	GID               int
-	SupplementaryGIDs []int
+	UID               uint32
+	GID               uint32
+	SupplementaryGIDs []uint32
 	DockerUser        string
 	Warnings          []string
 }
@@ -319,13 +319,10 @@ func planRuntimeUser(document blueprint.Document, context DockerPlanContext) (Ru
 		return RuntimeUserPlan{}, err
 	}
 	if context.Phase == blueprint.PhaseStaged || context.Scope != nil && *context.Scope == blueprint.InstallScopeUser {
-		if context.UID < 0 || context.GID < 0 {
-			return RuntimeUserPlan{}, fmt.Errorf("current-user Docker plan requires numeric UID and GID")
-		}
 		plan := RuntimeUserPlan{
-			User: strconv.Itoa(context.UID), Group: strconv.Itoa(context.GID), UID: context.UID, GID: context.GID,
+			User: runtimeIDStringV1(context.UID), Group: runtimeIDStringV1(context.GID), UID: context.UID, GID: context.GID,
 			SupplementaryGIDs: supplementaryGIDs,
-			DockerUser:        strconv.Itoa(context.UID) + ":" + strconv.Itoa(context.GID),
+			DockerUser:        runtimeIDStringV1(context.UID) + ":" + runtimeIDStringV1(context.GID),
 			LocalUser:         runtimeLocalUserNameV1(document.Environment.Runtime.User, context.UID),
 		}
 		if context.Phase == blueprint.PhaseInstalled {
@@ -345,20 +342,20 @@ func planRuntimeUser(document blueprint.Document, context DockerPlanContext) (Ru
 		if context.Host != blueprint.HostLinux {
 			return RuntimeUserPlan{}, fmt.Errorf("%s system Docker installs are not supported", context.Host)
 		}
-		if context.SystemUser == "" || context.SystemGroup == "" || context.UID < 0 || context.GID < 0 {
+		if context.SystemUser == "" || context.SystemGroup == "" {
 			return RuntimeUserPlan{}, fmt.Errorf("system Docker plan requires resolved service account and numeric UID/GID")
 		}
 		return RuntimeUserPlan{
 			User: context.SystemUser, Group: context.SystemGroup, UID: context.UID, GID: context.GID,
 			SupplementaryGIDs: supplementaryGIDs,
-			DockerUser:        strconv.Itoa(context.UID) + ":" + strconv.Itoa(context.GID),
+			DockerUser:        runtimeIDStringV1(context.UID) + ":" + runtimeIDStringV1(context.GID),
 			LocalUser:         runtimeLocalUserNameV1(document.Environment.Runtime.User, context.UID),
 		}, nil
 	}
 	return RuntimeUserPlan{}, fmt.Errorf("cannot resolve Docker runtime user")
 }
 
-func runtimeLocalUserNameV1(configured string, uid int) string {
+func runtimeLocalUserNameV1(configured string, uid uint32) string {
 	if uid == 0 {
 		return "root"
 	}

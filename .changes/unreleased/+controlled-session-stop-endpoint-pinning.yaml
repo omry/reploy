@@ -1,0 +1,2 @@
+kind: Security
+body: Pin administrative controlled-session container stops to the session's durably recorded local Docker endpoint.

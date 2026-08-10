@@ -1,0 +1,2 @@
+kind: Added
+body: Persist bounded allowlisted controlled-session crash receipts and expose lock-protected retrieval and explicit acknowledgement APIs.

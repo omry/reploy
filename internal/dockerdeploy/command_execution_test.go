@@ -78,7 +78,7 @@ func TestMatchEnvironmentCommandLongestTriggerAndForwarding(t *testing.T) {
 func TestTransientAndShellCommandsUseDockerExecArgv(t *testing.T) {
 	mountDir := t.TempDir()
 	outputDir := t.TempDir()
-	plan := DockerExecutionPlan{DeploymentDir: t.TempDir(), Image: "reploy/demo:staging", ContainerName: "demo", Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 501, GID: 20, SupplementaryGIDs: []int{33, 44}, DockerUser: "501:20"}), Mounts: []MountExecutionPlan{{Mode: blueprint.MountManagedBind, Source: mountDir, Target: "/conf", ReadOnly: true}}}
+	plan := DockerExecutionPlan{DeploymentDir: t.TempDir(), Image: "reploy/demo:staging", ContainerName: "demo", Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 501, GID: 20, SupplementaryGIDs: []uint32{33, 44}, DockerUser: "501:20"}), Mounts: []MountExecutionPlan{{Mode: blueprint.MountManagedBind, Source: mountDir, Target: "/conf", ReadOnly: true}}}
 	output := &transientOutputMount{HostDirectory: outputDir, Variable: runtimeOutputFileVariable, ContainerPath: runtimeOutputRoot + "/output"}
 	spec, err := TransientCommandSpec(plan, ResolvedEnvironmentCommand{Argv: []string{"/opt/demo", ";rm", "$(touch pwned)"}}, output, true, false)
 	if err != nil {

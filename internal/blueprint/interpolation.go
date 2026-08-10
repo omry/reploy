@@ -188,15 +188,29 @@ func (context InterpolationContext) lookup(reference string) (any, error) {
 		}
 		return nil, fmt.Errorf("unknown interpolation root %q", parts[0])
 	}
-	for _, part := range parts[1:] {
+	for index := 1; index < len(parts); {
 		object, ok := value.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("interpolation reference %q cannot select %q from %T", reference, part, value)
+			return nil, fmt.Errorf("interpolation reference %q cannot select %q from %T", reference, parts[index], value)
 		}
-		value, ok = object[part]
+		value, index, ok = selectInterpolationMapKeyV1(object, parts, index)
 		if !ok {
 			return nil, fmt.Errorf("interpolation reference %q is unavailable", reference)
 		}
 	}
 	return value, nil
+}
+
+// selectInterpolationMapKeyV1 chooses the longest remaining dotted key in an
+// object. Ordinary single-component traversal remains the fallback, while a
+// logical endpoint such as "api.v1" stays addressable without introducing a
+// second interpolation syntax.
+func selectInterpolationMapKeyV1(object map[string]any, parts []string, start int) (any, int, bool) {
+	for end := len(parts); end > start; end-- {
+		key := strings.Join(parts[start:end], ".")
+		if value, ok := object[key]; ok {
+			return value, end, true
+		}
+	}
+	return nil, start, false
 }

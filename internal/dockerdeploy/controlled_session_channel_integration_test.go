@@ -139,14 +139,15 @@ func testControlledSessionChannelAuthorizationV1(t *testing.T, identity controll
 	t.Helper()
 	input, backend := controlledSessionPlanFixtureV1(t)
 	input.ControllerRuntime.Docker.Sandbox.RuntimeUser.LocalUser = identity.Username
-	uid, err := strconv.Atoi(identity.UID)
+	uidValue, err := strconv.ParseUint(identity.UID, 10, 32)
 	if err != nil {
 		t.Fatal(err)
 	}
-	gid, err := strconv.Atoi(identity.GID)
+	gidValue, err := strconv.ParseUint(identity.GID, 10, 32)
 	if err != nil {
 		t.Fatal(err)
 	}
+	uid, gid := uint32(uidValue), uint32(gidValue)
 	input.ControllerRuntime.Docker.Sandbox.RuntimeUser.UID = uid
 	input.ControllerRuntime.Docker.Sandbox.RuntimeUser.GID = gid
 	input.ControllerRuntime.Docker.Sandbox.RuntimeUser.DockerUser = fmt.Sprintf("%d:%d", uid, gid)

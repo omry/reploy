@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve a root caller's nonzero primary GID when building the container-local runtime account.
