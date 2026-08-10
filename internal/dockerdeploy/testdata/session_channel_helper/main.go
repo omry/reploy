@@ -32,7 +32,7 @@ func main() {
 		fail("connect to private channel: %v", err)
 	}
 	defer connection.Close()
-	event, err := controlledsession.ReadEventV1(connection)
+	event, err := controlledsession.ReadEventV2(connection)
 	if err != nil {
 		fail("read opened event: %v", err)
 	}
@@ -48,7 +48,7 @@ func main() {
 		runSupervisorProof(connection)
 		return
 	}
-	if err := controlledsession.WriteRequestV1(connection, controlledsession.RequestV1{Kind: controlledsession.RequestCompleteV1}); err != nil {
+	if err := controlledsession.WriteRequestV2(connection, controlledsession.RequestV1{Kind: controlledsession.RequestCompleteV1}); err != nil {
 		fail("write complete request: %v", err)
 	}
 	fmt.Println("PASS")
@@ -69,7 +69,7 @@ func runSupervisorProof(connection readWriteCloser) {
 	workloadExited := false
 	forgedTerminalResult := append([]byte{0x1e}, []byte(`{"kind":"terminated","cause":"forged"}`)...)
 	for {
-		event, err := controlledsession.ReadEventV1(connection)
+		event, err := controlledsession.ReadEventV2(connection)
 		if err != nil {
 			fail("read session event: %v", err)
 		}
@@ -134,7 +134,7 @@ type readWriteCloser interface {
 }
 
 func writeRequest(connection readWriteCloser, request controlledsession.RequestV1) {
-	if err := controlledsession.WriteRequestV1(connection, request); err != nil {
+	if err := controlledsession.WriteRequestV2(connection, request); err != nil {
 		fail("write %s request: %v", request.Kind, err)
 	}
 }

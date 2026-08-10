@@ -145,8 +145,8 @@ func prepareControlledSessionIOBridgeIntegrationV1(
 	authorization := testControlledSessionChannelAuthorizationV1(t, identity)
 	channel, err := controlledsession.PreparePrivateChannelV1(controlledsession.PrivateChannelConfigV1{
 		HostDirectory: filepath.Join(shortControlledSessionChannelTestDirectoryV1(t), "bridge"),
-		Opened: controlledsession.OpenedV1{
-			Authorization: authorization, Columns: 80, Rows: 24,
+		Opened: controlledsession.OpenedV2{
+			Authorization: authorization, Endpoints: []controlledsession.EndpointV2{}, Columns: 80, Rows: 24,
 			OutputFinalizationTimeoutMilliseconds: controlledsession.DefaultOutputFinalizationTimeoutMillisecondsV1,
 		},
 	})
@@ -170,7 +170,7 @@ func prepareControlledSessionIOBridgeIntegrationV1(
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	if opened, err := controlledsession.ReadEventV1(client); err != nil || opened.Kind != controlledsession.EventOpenedV1 {
+	if opened, err := controlledsession.ReadEventV2(client); err != nil || opened.Kind != controlledsession.EventOpenedV1 {
 		t.Fatalf("opened event = %#v, %v", opened, err)
 	}
 	claimed := <-claim
@@ -227,7 +227,7 @@ func prepareControlledSessionIOBridgeIntegrationV1(
 
 func writeSessionIORequestIntegrationV1(t *testing.T, client *net.UnixConn, request controlledsession.RequestV1) {
 	t.Helper()
-	if err := controlledsession.WriteRequestV1(client, request); err != nil {
+	if err := controlledsession.WriteRequestV2(client, request); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -257,7 +257,7 @@ func startSessionIOEventCaptureV1(client *net.UnixConn) *sessionIOEventCaptureV1
 	go func() {
 		defer close(capture.done)
 		for {
-			event, err := controlledsession.ReadEventV1(client)
+			event, err := controlledsession.ReadEventV2(client)
 			capture.mu.Lock()
 			if err != nil {
 				if !errors.Is(err, net.ErrClosed) {
