@@ -128,6 +128,9 @@ type controlledSessionSupervisorV1 struct {
 	controllerOwnershipIncomplete bool
 	cleanupManifest               deploy.ControlledSessionCleanupManifest
 	watchdog                      controlledSessionWatchdogRuntimeV1
+	watchdogExitObserved          bool
+	watchdogExitAfterTermination  bool
+	watchdogExitErr               error
 	preCleanupSucceeded           bool
 
 	transportHealthy bool
@@ -390,8 +393,10 @@ func (supervisor *controlledSessionSupervisorV1) run(ctx context.Context) (Contr
 	supervisor.stopAndObserveWorkload()
 	supervisor.finalizeWorkloadOutput()
 	supervisor.waitForControllerFinalization()
+	supervisor.observeWatchdogExitIfDone()
 
 	preDeliveryCleanup, preDeliveryRecovery, cleanupErr := supervisor.cleanupWorkload()
+	supervisor.observeWatchdogExitIfDone()
 	supervisor.preCleanupSucceeded = preDeliveryCleanup.Kind == controlledsession.CleanupStatusSucceededV1
 	finish := supervisor.finishStatus(preDeliveryCleanup, preDeliveryRecovery)
 	transition, finishErr := supervisor.observe(controlledsession.ObservationV1{Kind: controlledsession.ObservationFinishedV1, Finish: &finish})
@@ -474,14 +479,30 @@ func (supervisor *controlledSessionSupervisorV1) prepare(ctx context.Context) er
 			return fmt.Errorf("launch controlled-session watchdog: %w", err)
 		}
 		supervisor.watchdog = watchdog
+		watchdogCtx, cancelWatchdogCtx := context.WithCancelCause(ctx)
+		defer cancelWatchdogCtx(nil)
+		go func() {
+			select {
+			case <-watchdog.Done():
+				cancelWatchdogCtx(unexpectedControlledSessionWatchdogExitV1(watchdog))
+			case <-watchdogCtx.Done():
+			}
+		}()
+		ctx = watchdogCtx
 	}
 	if err := controller.Start(ctx); err != nil {
+		if watchdogErr := supervisor.currentWatchdogExitError(); watchdogErr != nil {
+			return watchdogErr
+		}
 		return fmt.Errorf("start controlled-session controller: %w", err)
 	}
 	supervisor.controllerStarted = true
 	supervisor.controllerResult = observeControlledSessionProcessV1(controller.Wait)
 	transport, err := channel.Claim(ctx)
 	if err != nil {
+		if watchdogErr := supervisor.currentWatchdogExitError(); watchdogErr != nil {
+			return watchdogErr
+		}
 		return fmt.Errorf("claim controlled-session controller channel: %w", err)
 	}
 	bridge, err := controlledsession.StartSessionIOBridgeV1(transport, output, supervisor.handleRequest)
@@ -494,11 +515,37 @@ func (supervisor *controlledSessionSupervisorV1) prepare(ctx context.Context) er
 		if supervisor.workloadStarted {
 			supervisor.workloadResult = observeControlledSessionProcessV1(workload.Wait)
 		}
+		if watchdogErr := supervisor.currentWatchdogExitError(); watchdogErr != nil {
+			return watchdogErr
+		}
 		return fmt.Errorf("start controlled-session workload: %w", err)
 	}
 	supervisor.workloadStarted = true
 	supervisor.workloadResult = observeControlledSessionProcessV1(workload.Wait)
+	if watchdogErr := supervisor.currentWatchdogExitError(); watchdogErr != nil {
+		return watchdogErr
+	}
 	return nil
+}
+
+func unexpectedControlledSessionWatchdogExitV1(watchdog controlledSessionWatchdogRuntimeV1) error {
+	if err := watchdog.ExitError(); err != nil {
+		return fmt.Errorf("controlled-session cleanup watchdog exited unexpectedly: %w", err)
+	}
+	return fmt.Errorf("controlled-session cleanup watchdog exited unexpectedly")
+}
+
+func (supervisor *controlledSessionSupervisorV1) currentWatchdogExitError() error {
+	if supervisor.watchdog == nil {
+		return nil
+	}
+	select {
+	case <-supervisor.watchdog.Done():
+		supervisor.watchdogExitObserved = true
+		return unexpectedControlledSessionWatchdogExitV1(supervisor.watchdog)
+	default:
+		return nil
+	}
 }
 
 func validateControlledSessionCleanupManifestForRuntimeV1(
@@ -591,6 +638,8 @@ func (supervisor *controlledSessionSupervisorV1) waitForTermination(ctx context.
 			outputDone = nil
 			supervisor.observeOutputTermination()
 		case <-supervisor.stateChanged:
+		case <-supervisor.watchdogDone():
+			supervisor.observeWatchdogExit()
 		case <-ctx.Done():
 			_, err := supervisor.observe(controlledsession.ObservationV1{
 				Kind: controlledsession.ObservationHostCancelV1, Reason: "host operation was canceled",
@@ -599,6 +648,51 @@ func (supervisor *controlledSessionSupervisorV1) waitForTermination(ctx context.
 				supervisor.diagnosticErr = errors.Join(supervisor.diagnosticErr, fmt.Errorf("record controlled-session host cancellation: %w", err))
 			}
 		}
+	}
+}
+
+func (supervisor *controlledSessionSupervisorV1) watchdogDone() <-chan struct{} {
+	if supervisor.watchdog == nil || supervisor.watchdogExitObserved {
+		return nil
+	}
+	return supervisor.watchdog.Done()
+}
+
+func (supervisor *controlledSessionSupervisorV1) observeWatchdogExit() {
+	if supervisor.watchdog == nil || supervisor.watchdogExitObserved {
+		return
+	}
+	supervisor.watchdogExitObserved = true
+	detail := unexpectedControlledSessionWatchdogExitV1(supervisor.watchdog)
+	supervisor.watchdogExitErr = detail
+	if supervisor.machine.Snapshot().State == controlledsession.StateTerminatedV1 {
+		supervisor.watchdogExitAfterTermination = true
+		supervisor.diagnosticErr = errors.Join(supervisor.diagnosticErr, detail)
+		return
+	}
+	_, observeErr := supervisor.observe(controlledsession.ObservationV1{
+		Kind:   controlledsession.ObservationCleanupContainmentLostV1,
+		Reason: "controlled-session cleanup containment was lost",
+	})
+	supervisor.diagnosticErr = errors.Join(supervisor.diagnosticErr, detail, observeErr)
+	if supervisor.transportHealthy && supervisor.bridge != nil {
+		if err := supervisor.sendPreFinalizationLifecycleEvent(controlledsession.EventV1{
+			Kind: controlledsession.EventDiagnosticV1,
+			Diagnostic: &controlledsession.DiagnosticV1{
+				Code:    "cleanup_containment_lost",
+				Message: "controlled-session cleanup containment was lost",
+			},
+		}); err != nil {
+			supervisor.loseTransport("send cleanup-containment-loss diagnostic", err)
+		}
+	}
+}
+
+func (supervisor *controlledSessionSupervisorV1) observeWatchdogExitIfDone() {
+	select {
+	case <-supervisor.watchdogDone():
+		supervisor.observeWatchdogExit()
+	default:
 	}
 }
 
@@ -825,6 +919,8 @@ func (supervisor *controlledSessionSupervisorV1) waitForControllerFinalization()
 			supervisor.observeControllerLoss("controller process exited during finalization", result.err)
 		case <-supervisor.bridge.RequestsDone():
 			supervisor.observeRequestFailure()
+		case <-supervisor.watchdogDone():
+			supervisor.observeWatchdogExit()
 		case <-timer.C:
 			_, err := supervisor.observe(controlledsession.ObservationV1{Kind: controlledsession.ObservationControllerFinalizationExpiredV1})
 			if err != nil && supervisor.machine.Snapshot().AwaitingControllerFinalization {
@@ -885,6 +981,9 @@ func (supervisor *controlledSessionSupervisorV1) waitForResultAcknowledgement() 
 			return supervisor.machine.Snapshot().ResultAcknowledged
 		case result := <-supervisor.controllerResult:
 			supervisor.controllerObserved = &result
+		case <-supervisor.watchdogDone():
+			supervisor.observeWatchdogExit()
+			return supervisor.machine.Snapshot().ResultAcknowledged
 		case <-timer.C:
 			return supervisor.machine.Snapshot().ResultAcknowledged
 		}
@@ -897,6 +996,7 @@ func (supervisor *controlledSessionSupervisorV1) cleanupDeliveryTail() (
 	controlledsession.CleanupStatusV1,
 	controlledsession.RecoveryActionV1,
 ) {
+	supervisor.observeWatchdogExitIfDone()
 	if supervisor.bridge != nil {
 		supervisor.bridge.StopRequests()
 	}
@@ -946,6 +1046,7 @@ func (supervisor *controlledSessionSupervisorV1) cleanupDeliveryTail() (
 		controllerCleanupErr := supervisor.controller.Cleanup(cleanupCtx)
 		cleanupCancel()
 		cleanupErr = errors.Join(cleanupErr, controllerCleanupErr)
+		supervisor.observeWatchdogExitIfDone()
 		if controllerCleanupErr == nil && supervisor.controllerOwnershipIncomplete {
 			if supervisor.backend.recordControllerRollback != nil {
 				supervisor.backend.recordControllerRollback()
@@ -958,22 +1059,24 @@ func (supervisor *controlledSessionSupervisorV1) cleanupDeliveryTail() (
 		status = supervisor.controllerObserved.status
 		cleanupErr = errors.Join(cleanupErr, supervisor.controllerObserved.err)
 	}
+	if supervisor.watchdog != nil && supervisor.preCleanupSucceeded {
+		supervisor.observeWatchdogExitIfDone()
+		if supervisor.watchdogExitObserved {
+			cleanupErr = errors.Join(cleanupErr, supervisor.watchdog.Close())
+		} else if cleanupErr == nil {
+			disarmCtx, disarmCancel := context.WithTimeout(context.Background(), supervisor.options.CleanupTimeout)
+			cleanupErr = errors.Join(cleanupErr, supervisor.watchdog.Disarm(disarmCtx))
+			disarmCancel()
+		}
+	}
+	if supervisor.watchdogExitAfterTermination {
+		cleanupErr = errors.Join(cleanupErr, supervisor.watchdogExitErr)
+	}
 	if cleanupErr != nil {
 		supervisor.diagnosticErr = errors.Join(supervisor.diagnosticErr, cleanupErr)
 		return status, controlledsession.CleanupStatusV1{
 			Kind: controlledsession.CleanupStatusFailedV1, Message: "controlled-session delivery-tail cleanup failed",
 		}, controlledsession.RecoveryRetryCleanupV1
-	}
-	if supervisor.watchdog != nil && supervisor.preCleanupSucceeded {
-		disarmCtx, disarmCancel := context.WithTimeout(context.Background(), supervisor.options.CleanupTimeout)
-		cleanupErr = errors.Join(cleanupErr, supervisor.watchdog.Disarm(disarmCtx))
-		disarmCancel()
-		if cleanupErr != nil {
-			supervisor.diagnosticErr = errors.Join(supervisor.diagnosticErr, cleanupErr)
-			return status, controlledsession.CleanupStatusV1{
-				Kind: controlledsession.CleanupStatusFailedV1, Message: "controlled-session delivery-tail cleanup failed",
-			}, controlledsession.RecoveryRetryCleanupV1
-		}
 	}
 	return status, controlledsession.CleanupStatusV1{Kind: controlledsession.CleanupStatusSucceededV1}, controlledsession.RecoveryNoneV1
 }
