@@ -168,9 +168,42 @@ func TestDockerWorkloadPTYV1OrdersAttachStartResizeAndExactOperations(t *testing
 	}
 }
 
+func TestDockerWorkloadPTYV1TreatsMissingContainerAsCleaned(t *testing.T) {
+	plan := controlledSessionWorkloadPlanFixtureV1(t)
+	cleanupAttempts := 0
+	workload, err := prepareDockerWorkloadPTYV1(t.Context(), plan, dockerWorkloadPTYBackendV1{
+		run: func(spec CommandSpec, options RunOptions) error {
+			writeDockerWorkloadCreateIDV1(spec, options, plan)
+			if reflect.DeepEqual(spec.Args, []string{"container", "rm", "--force", dockerWorkloadTestContainerIDV1}) {
+				cleanupAttempts++
+				return errors.New("Error response from daemon: No such container: " + dockerWorkloadTestContainerIDV1)
+			}
+			return nil
+		},
+		attach: func(context.Context, CommandSpec, string, time.Duration) (dockerPTYAttachmentV1, error) {
+			return &fakeDockerPTYAttachmentV1{}, nil
+		},
+		resize:  func(context.Context, CommandSpec, string, uint32, uint32, time.Duration) error { return nil },
+		observe: func(context.Context, CommandSpec, string) (int, error) { return 0, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workload.Cleanup(t.Context()); err != nil {
+		t.Fatalf("missing-container cleanup = %v", err)
+	}
+	if err := workload.Cleanup(t.Context()); err != nil {
+		t.Fatalf("repeated cleanup = %v", err)
+	}
+	if cleanupAttempts != 1 {
+		t.Fatalf("cleanup attempts = %d, want 1", cleanupAttempts)
+	}
+}
+
 func TestPrepareDockerWorkloadPTYV1RollsBackInertContainerAfterAttachFailure(t *testing.T) {
 	plan := controlledSessionWorkloadPlanFixtureV1(t)
 	runs := []CommandSpec{}
+	rollbackVerified := false
 	backend := dockerWorkloadPTYBackendV1{
 		run: func(spec CommandSpec, options RunOptions) error {
 			runs = append(runs, spec)
@@ -180,8 +213,9 @@ func TestPrepareDockerWorkloadPTYV1RollsBackInertContainerAfterAttachFailure(t *
 		attach: func(context.Context, CommandSpec, string, time.Duration) (dockerPTYAttachmentV1, error) {
 			return nil, errors.New("attach refused")
 		},
-		resize:  func(context.Context, CommandSpec, string, uint32, uint32, time.Duration) error { return nil },
-		observe: func(context.Context, CommandSpec, string) (int, error) { return 0, nil },
+		recordRollbackVerified: func() { rollbackVerified = true },
+		resize:                 func(context.Context, CommandSpec, string, uint32, uint32, time.Duration) error { return nil },
+		observe:                func(context.Context, CommandSpec, string) (int, error) { return 0, nil },
 	}
 	_, err := prepareDockerWorkloadPTYV1(t.Context(), plan, backend)
 	if err == nil || !strings.Contains(err.Error(), "before start") || !strings.Contains(err.Error(), "attach refused") {
@@ -190,6 +224,103 @@ func TestPrepareDockerWorkloadPTYV1RollsBackInertContainerAfterAttachFailure(t *
 	if len(runs) != 2 || !reflect.DeepEqual(runs[0].Args, plan.Create.Args) ||
 		!reflect.DeepEqual(runs[1].Args, []string{"container", "rm", "--force", dockerWorkloadTestContainerIDV1}) {
 		t.Fatalf("rollback commands = %#v", runs)
+	}
+	if !rollbackVerified {
+		t.Fatal("successful rollback was not reported")
+	}
+}
+
+func TestPrepareDockerWorkloadPTYV1RecordsExactIDBeforeAttachFailure(t *testing.T) {
+	plan := controlledSessionWorkloadPlanFixtureV1(t)
+	actions := []string{}
+	rollbackVerified := false
+	cleanupErr := errors.New("cleanup unavailable")
+	backend := dockerWorkloadPTYBackendV1{
+		run: func(spec CommandSpec, options RunOptions) error {
+			actions = append(actions, strings.Join(spec.Args, " "))
+			writeDockerWorkloadCreateIDV1(spec, options, plan)
+			if reflect.DeepEqual(spec.Args, []string{"container", "rm", "--force", dockerWorkloadTestContainerIDV1}) {
+				return cleanupErr
+			}
+			return nil
+		},
+		recordContainerID: func(containerID string) error {
+			actions = append(actions, "record "+containerID)
+			return nil
+		},
+		recordRollbackVerified: func() { rollbackVerified = true },
+		attach: func(_ context.Context, _ CommandSpec, containerID string, _ time.Duration) (dockerPTYAttachmentV1, error) {
+			actions = append(actions, "attach "+containerID)
+			return nil, errors.New("attach refused")
+		},
+		resize:  func(context.Context, CommandSpec, string, uint32, uint32, time.Duration) error { return nil },
+		observe: func(context.Context, CommandSpec, string) (int, error) { return 0, nil },
+	}
+	_, err := prepareDockerWorkloadPTYV1(t.Context(), plan, backend)
+	if err == nil || !strings.Contains(err.Error(), "attach refused") || !errors.Is(err, cleanupErr) {
+		t.Fatalf("attach and rollback error = %v", err)
+	}
+	want := []string{
+		strings.Join(plan.Create.Args, " "),
+		"record " + dockerWorkloadTestContainerIDV1,
+		"attach " + dockerWorkloadTestContainerIDV1,
+		"container rm --force " + dockerWorkloadTestContainerIDV1,
+	}
+	if !reflect.DeepEqual(actions, want) {
+		t.Fatalf("partial preparation actions = %#v, want %#v", actions, want)
+	}
+	if rollbackVerified {
+		t.Fatal("failed rollback was reported as verified")
+	}
+}
+
+func TestPrepareDockerWorkloadPTYV1RetriesExactIDAfterRollbackFailure(t *testing.T) {
+	plan := controlledSessionWorkloadPlanFixtureV1(t)
+	actions := []string{}
+	recordErr := errors.New("injected workload ownership failure")
+	cleanupErr := errors.New("injected workload rollback failure")
+	recordCalls := 0
+	rollbackVerified := false
+	backend := dockerWorkloadPTYBackendV1{
+		run: func(spec CommandSpec, options RunOptions) error {
+			actions = append(actions, strings.Join(spec.Args, " "))
+			writeDockerWorkloadCreateIDV1(spec, options, plan)
+			if reflect.DeepEqual(spec.Args, []string{"container", "rm", "--force", dockerWorkloadTestContainerIDV1}) {
+				return cleanupErr
+			}
+			return nil
+		},
+		recordContainerID: func(containerID string) error {
+			recordCalls++
+			actions = append(actions, "record "+containerID)
+			if recordCalls == 1 {
+				return recordErr
+			}
+			return nil
+		},
+		recordRollbackVerified: func() { rollbackVerified = true },
+		attach: func(context.Context, CommandSpec, string, time.Duration) (dockerPTYAttachmentV1, error) {
+			t.Fatal("attachment continued after ownership recording failed")
+			return nil, nil
+		},
+		resize:  func(context.Context, CommandSpec, string, uint32, uint32, time.Duration) error { return nil },
+		observe: func(context.Context, CommandSpec, string) (int, error) { return 0, nil },
+	}
+	_, err := prepareDockerWorkloadPTYV1(t.Context(), plan, backend)
+	if !errors.Is(err, recordErr) || !errors.Is(err, cleanupErr) || recordCalls != 2 {
+		t.Fatalf("workload preparation error = %v, record calls = %d", err, recordCalls)
+	}
+	want := []string{
+		strings.Join(plan.Create.Args, " "),
+		"record " + dockerWorkloadTestContainerIDV1,
+		"container rm --force " + dockerWorkloadTestContainerIDV1,
+		"record " + dockerWorkloadTestContainerIDV1,
+	}
+	if !reflect.DeepEqual(actions, want) {
+		t.Fatalf("partial preparation actions = %#v, want %#v", actions, want)
+	}
+	if rollbackVerified {
+		t.Fatal("failed rollback was reported as verified")
 	}
 }
 
