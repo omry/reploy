@@ -29,8 +29,13 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   finalization deadline, cancels blocked delivery, closes the source, and
   produces an immutable drained-or-failed status for the lifecycle barrier
   before returning.
-  Docker PTY wiring, controlled-session networking, and lifecycle orchestration
-  remain later slices.
+  The Docker workload PTY adapter is implemented: it creates the frozen
+  workload plan inert, establishes the Engine attachment before start, applies
+  the initial and later dimensions through the Engine API, preserves exact
+  input and output bytes, independently observes the container exit code, and
+  exposes graceful and forced stop operations. Controller launch, protocol/PTY
+  bridging, controlled-session networking, and lifecycle orchestration remain
+  later slices.
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution
