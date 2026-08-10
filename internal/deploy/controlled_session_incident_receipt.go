@@ -60,6 +60,16 @@ type ControlledSessionIncidentContainerV1 struct {
 	CleanupStatus       ControlledSessionIncidentResourceStatusV1 `json:"cleanup_status"`
 }
 
+// ControlledSessionIncidentNetworkV1 carries only the immutable network
+// identity and its allowlisted cleanup outcome. The ownership labels are the
+// receipt live-run ID and the fixed network role.
+type ControlledSessionIncidentNetworkV1 struct {
+	Role          string                                    `json:"role"`
+	ID            string                                    `json:"id"`
+	Name          string                                    `json:"name"`
+	CleanupStatus ControlledSessionIncidentResourceStatusV1 `json:"cleanup_status"`
+}
+
 // ControlledSessionIncidentReceiptV1 is the bounded durable evidence written
 // by the session watchdog after loss of its parent. The fixed fields cannot
 // carry PTY bytes, environment values, secrets, arbitrary logs, or raw Docker
@@ -72,6 +82,7 @@ type ControlledSessionIncidentReceiptV1 struct {
 	Trigger              ControlledSessionIncidentTriggerV1        `json:"trigger"`
 	Controller           ControlledSessionIncidentContainerV1      `json:"controller"`
 	Workload             ControlledSessionIncidentContainerV1      `json:"workload"`
+	Networks             []ControlledSessionIncidentNetworkV1      `json:"networks,omitempty"`
 	ChannelCleanupStatus ControlledSessionIncidentResourceStatusV1 `json:"channel_cleanup_status"`
 	CleanupStatus        ControlledSessionIncidentCleanupStatusV1  `json:"cleanup_status"`
 	RecoveryAction       ControlledSessionIncidentRecoveryActionV1 `json:"recovery_action"`
@@ -346,12 +357,32 @@ func ValidateControlledSessionIncidentReceiptV1(receipt ControlledSessionInciden
 	if receipt.Controller.ID == receipt.Workload.ID {
 		return fmt.Errorf("controlled-session incident receipt containers must be different")
 	}
+	if len(receipt.Networks) > 1 {
+		return fmt.Errorf("controlled-session incident receipt may name only one network")
+	}
+	for index, network := range receipt.Networks {
+		if network.Role != ControlledSessionNetworkRoleV1 {
+			return fmt.Errorf("controlled-session incident receipt network %d role must be %q", index, ControlledSessionNetworkRoleV1)
+		}
+		if !controlledSessionContainerIDPatternV1.MatchString(network.ID) {
+			return fmt.Errorf("controlled-session incident receipt network %d ID must use 64 lowercase hexadecimal characters", index)
+		}
+		if !safeRecoveryIdentity(network.Name) {
+			return fmt.Errorf("controlled-session incident receipt network %d name must be nonempty safe text", index)
+		}
+		if err := validateControlledSessionIncidentResourceStatusV1(network.CleanupStatus); err != nil {
+			return fmt.Errorf("controlled-session incident receipt network %d: %w", index, err)
+		}
+	}
 	if err := validateControlledSessionIncidentResourceStatusV1(receipt.ChannelCleanupStatus); err != nil {
 		return fmt.Errorf("controlled-session incident receipt channel: %w", err)
 	}
 	allSucceeded := receipt.Controller.CleanupStatus == ControlledSessionIncidentResourceVerifiedAbsentV1 &&
 		receipt.Workload.CleanupStatus == ControlledSessionIncidentResourceVerifiedAbsentV1 &&
 		receipt.ChannelCleanupStatus == ControlledSessionIncidentResourceVerifiedAbsentV1
+	for _, network := range receipt.Networks {
+		allSucceeded = allSucceeded && network.CleanupStatus == ControlledSessionIncidentResourceVerifiedAbsentV1
+	}
 	switch receipt.CleanupStatus {
 	case ControlledSessionIncidentCleanupSucceededV1:
 		if !allSucceeded || receipt.RecoveryAction != ControlledSessionIncidentRecoveryNoneV1 {
