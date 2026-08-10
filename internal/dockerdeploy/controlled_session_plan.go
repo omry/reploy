@@ -21,11 +21,13 @@ const (
 	ControlledSessionExecutionPlanSchemaV1 = "controlled-session-execution-plan-v1"
 	ControlledSessionContainerPlanSchemaV1 = "controlled-session-container-plan-v1"
 
-	controlledSessionNetworkModeV1       = "none"
-	controlledSessionControllerAliasV1   = "controller"
-	controlledSessionWorkloadAliasV1     = controlledsession.WorkloadEndpointHostV2
-	controlledSessionChannelRootV1       = "/run/reploy/session"
-	controlledSessionChannelSocketNameV1 = controlledsession.PrivateChannelSocketNameV1
+	controlledSessionNetworkModeV1           = "none"
+	controlledSessionControllerAliasV1       = "controller"
+	controlledSessionWorkloadAliasV1         = controlledsession.WorkloadEndpointHostV2
+	controlledSessionChannelRootV1           = "/run/reploy/session"
+	controlledSessionChannelSocketNameV1     = controlledsession.PrivateChannelSocketNameV1
+	controlledSessionNetworkPolicyFileNameV1 = "network-prefixes"
+	controlledSessionNetworkPolicyPathV1     = "/run/reploy/network-prefixes"
 )
 
 type ControlledSessionRoleV1 string
@@ -81,6 +83,7 @@ type ControlledSessionContainerPlanV1 struct {
 	Container           string                              `json:"container"`
 	RuntimeIdentity     controlledsession.RuntimeIdentityV1 `json:"runtime_identity"`
 	Network             string                              `json:"network"`
+	NetworkPolicy       ApplicationNetworkPolicyV1          `json:"network_policy"`
 	SessionNetwork      ControlledSessionNetworkPlanV1      `json:"session_network"`
 	ReadOnlyRoot        bool                                `json:"read_only_root"`
 	TemporaryHome       string                              `json:"temporary_home"`
@@ -259,7 +262,7 @@ func planControlledSessionV1(input ControlledSessionPlanInputV1, backend control
 		input.WorkloadCurrent,
 		input.WorkloadRuntime.Docker,
 		[]string{"/bin/sh"},
-		ControlledSessionChannelPlanV1{},
+		channel,
 		[]string{input.ControllerRuntime.Docker.DeploymentDir, input.WorkloadRuntime.Docker.DeploymentDir},
 		workloadNetwork,
 		input.InitialColumns,
@@ -357,6 +360,11 @@ func ValidateControlledSessionExecutionPlanV1(plan ControlledSessionExecutionPla
 	if !controlledSessionControllerCarriesChannelV1(plan.Controller, plan.Channel) {
 		return fmt.Errorf("controlled-session controller plan does not carry the exact private channel")
 	}
+	for _, container := range []ControlledSessionContainerPlanV1{plan.Controller, plan.Workload} {
+		if !controlledSessionContainerCarriesNetworkPolicyV1(container, plan.Channel) {
+			return fmt.Errorf("controlled-session %s plan does not carry the exact session-network policy input", container.Role)
+		}
+	}
 	protectedRoots := []string{controllerRoot, workloadRoot}
 	if err := validateControlledSessionMasksForRootsV1(plan.Controller, plan.Channel, protectedRoots); err != nil {
 		return fmt.Errorf("controlled-session controller plan: %w", err)
@@ -424,11 +432,20 @@ func ValidateControlledSessionContainerPlanV1(plan ControlledSessionContainerPla
 	if err := validateControlledSessionNetworkPlanV1(plan.SessionNetwork); err != nil {
 		return fmt.Errorf("container session network: %w", err)
 	}
+	if err := validateApplicationNetworkAccessV1("public", plan.NetworkPolicy.Public); err != nil {
+		return fmt.Errorf("container network policy: %w", err)
+	}
+	if err := validateApplicationNetworkAccessV1("local", plan.NetworkPolicy.Local); err != nil {
+		return fmt.Errorf("container network policy: %w", err)
+	}
+	if err := validateApplicationAmbiguousNetworkAccessV1(plan.NetworkPolicy.Ambiguous); err != nil {
+		return fmt.Errorf("container network policy: %w", err)
+	}
 	if !plan.ReadOnlyRoot || plan.TemporaryHome != environmentTemporaryHome || plan.StartupVerifier != deploy.ApplicationStartupVerifierPathV1 {
 		return fmt.Errorf("container plan does not preserve the application sandbox root and startup verifier")
 	}
-	if !slices.Equal(plan.SetupCapabilities, controlledSessionSetupCapabilitiesV1(plan.RuntimeIdentity.UID)) {
-		return fmt.Errorf("container setup capabilities do not match the restricted-exec contract")
+	if !slices.Equal(plan.SetupCapabilities, controlledSessionSetupCapabilitiesV1(plan.RuntimeIdentity.UID, plan.SessionNetwork.Enabled)) {
+		return fmt.Errorf("container setup capabilities do not match the session sandbox contract")
 	}
 	if !slices.Equal(plan.SecurityOptions, []string{"no-new-privileges=true", "seccomp=" + applicationSeccompProfileBuiltinV1}) {
 		return fmt.Errorf("container security options do not match the application sandbox")
@@ -457,6 +474,9 @@ func ValidateControlledSessionContainerPlanV1(plan ControlledSessionContainerPla
 		return err
 	}
 	if err := validateControlledSessionMountsV1(plan.Mounts); err != nil {
+		return err
+	}
+	if err := validateControlledSessionNetworkPolicyMountV1(plan); err != nil {
 		return err
 	}
 	if err := validateControlledSessionMasksV1(plan.Masks); err != nil {
@@ -710,6 +730,13 @@ func controlledSessionContainerPlanV1(
 			SourceKind: deploy.RuntimeMountSourceDirectory, Target: channel.ContainerDirectory, ReadOnly: true,
 		})
 	}
+	if sessionNetwork.Enabled {
+		mounts = append(mounts, ControlledSessionMountV1{
+			Name: "session-network-prefixes", Type: "bind",
+			Source:     filepath.Join(channel.HostDirectory, controlledSessionNetworkPolicyFileNameV1),
+			SourceKind: deploy.RuntimeMountSourceFile, Target: controlledSessionNetworkPolicyPathV1, ReadOnly: true,
+		})
+	}
 	sort.Slice(mounts, func(left int, right int) bool {
 		if mounts[left].Target != mounts[right].Target {
 			return mounts[left].Target < mounts[right].Target
@@ -741,10 +768,11 @@ func controlledSessionContainerPlanV1(
 		DeploymentID: dockerPlan.EnvironmentID, DeploymentDirectory: dockerPlan.DeploymentDir,
 		GenerationReference: current.Generation.Reference, BuildIdentity: current.Generation.BuildLockDigest,
 		Image: dockerPlan.Image, Container: dockerPlan.ContainerName + "-" + string(role) + "-" + liveRunID,
-		RuntimeIdentity: identity, Network: controlledSessionNetworkModeV1, SessionNetwork: sessionNetwork,
+		RuntimeIdentity: identity, Network: controlledSessionNetworkModeV1,
+		NetworkPolicy: dockerPlan.Sandbox.Network, SessionNetwork: sessionNetwork,
 		ReadOnlyRoot: dockerPlan.Sandbox.ReadOnlyRoot, TemporaryHome: dockerPlan.Sandbox.TemporaryHome,
 		StartupVerifier:   dockerPlan.Sandbox.StartupVerifier.Path,
-		SetupCapabilities: controlledSessionSetupCapabilitiesV1(identity.UID),
+		SetupCapabilities: controlledSessionSetupCapabilitiesV1(identity.UID, sessionNetwork.Enabled),
 		SecurityOptions:   []string{"no-new-privileges=true", "seccomp=" + dockerPlan.Sandbox.Kernel.SeccompProfile},
 		Environment:       environment, Labels: labels, Mounts: mounts, Masks: normalizedMasks,
 		Command: append([]string{}, command...), TTY: role == ControlledSessionRoleWorkloadV1,
@@ -830,9 +858,22 @@ func renderControlledSessionCreateV1(plan ControlledSessionContainerPlanV1) (Con
 
 func controlledSessionRestrictedArgvV1(plan ControlledSessionContainerPlanV1) []string {
 	identity := plan.RuntimeIdentity
-	result := []string{"restricted-exec", "--uid", identity.UID, "--gid", identity.GID}
+	mode := "restricted-exec"
+	if plan.SessionNetwork.Enabled {
+		mode = "sandbox-exec"
+	}
+	result := []string{mode, "--uid", identity.UID, "--gid", identity.GID}
 	if len(identity.SupplementaryGIDs) != 0 {
 		result = append(result, "--groups", strings.Join(identity.SupplementaryGIDs, ","))
+	}
+	if plan.SessionNetwork.Enabled {
+		result = append(result,
+			"--public", string(plan.NetworkPolicy.Public),
+			"--local", string(plan.NetworkPolicy.Local),
+			"--ambiguous", string(plan.NetworkPolicy.Ambiguous),
+			"--session-network-prefixes", controlledSessionNetworkPolicyPathV1,
+			"--session-network-peer", plan.SessionNetwork.PeerAlias,
+		)
 	}
 	result = append(result, "--")
 	return append(result, plan.Command...)
@@ -848,11 +889,15 @@ func controlledSessionRuntimeIdentityV1(user RuntimeUserPlan) controlledsession.
 	}
 }
 
-func controlledSessionSetupCapabilitiesV1(uid string) []string {
+func controlledSessionSetupCapabilitiesV1(uid string, installNetworkPolicy bool) []string {
 	result := []string{"SETGID", "SETPCAP"}
+	if installNetworkPolicy {
+		result = append(result, "NET_ADMIN")
+	}
 	if uid != "0" {
 		result = append(result, "SETUID")
 	}
+	sort.Strings(result)
 	return result
 }
 
@@ -904,7 +949,7 @@ func validateControlledSessionMountsV1(mounts []ControlledSessionMountV1) error 
 		switch mount.Type {
 		case "bind":
 			if !filepath.IsAbs(mount.Source) || filepath.Clean(mount.Source) != mount.Source {
-				return fmt.Errorf("container bind mount %q requires an absolute clean source", mount.Name)
+				return fmt.Errorf("container bind mount %q requires an absolute clean source, got %q", mount.Name, mount.Source)
 			}
 			if mount.SourceKind != deploy.RuntimeMountSourceDirectory && mount.SourceKind != deploy.RuntimeMountSourceFile {
 				return fmt.Errorf("container bind mount %q requires a file or directory source kind", mount.Name)
@@ -931,6 +976,40 @@ func validateControlledSessionMountsV1(mounts []ControlledSessionMountV1) error 
 		}
 	}
 	return nil
+}
+
+func validateControlledSessionNetworkPolicyMountV1(plan ControlledSessionContainerPlanV1) error {
+	want := ControlledSessionMountV1{
+		Name: "session-network-prefixes", Type: "bind",
+		SourceKind: deploy.RuntimeMountSourceFile, Target: controlledSessionNetworkPolicyPathV1, ReadOnly: true,
+	}
+	found := false
+	for _, mount := range plan.Mounts {
+		if mount.Name != want.Name {
+			continue
+		}
+		got := mount
+		got.Source = ""
+		if !reflect.DeepEqual(got, want) {
+			return fmt.Errorf("container session-network policy mount does not match the fixed session contract")
+		}
+		found = true
+	}
+	if found != plan.SessionNetwork.Enabled {
+		return fmt.Errorf("container session-network policy mount must match its network grant")
+	}
+	return nil
+}
+
+func controlledSessionContainerCarriesNetworkPolicyV1(plan ControlledSessionContainerPlanV1, channel ControlledSessionChannelPlanV1) bool {
+	wantSource := filepath.Join(channel.HostDirectory, controlledSessionNetworkPolicyFileNameV1)
+	found := false
+	for _, mount := range plan.Mounts {
+		if mount.Name == "session-network-prefixes" {
+			found = mount.Source == wantSource
+		}
+	}
+	return found == plan.SessionNetwork.Enabled
 }
 
 func validateControlledSessionMasksV1(masks []ControlledSessionMaskV1) error {
@@ -960,6 +1039,14 @@ func validateControlledSessionMasksForRootsV1(
 			mount.Type == "bind" &&
 			mount.Source == channel.HostDirectory &&
 			mount.Target == channel.ContainerDirectory {
+			continue
+		}
+		if plan.SessionNetwork.Enabled &&
+			mount.Name == "session-network-prefixes" &&
+			mount.Type == "bind" &&
+			mount.Source == filepath.Join(channel.HostDirectory, controlledSessionNetworkPolicyFileNameV1) &&
+			mount.SourceKind == deploy.RuntimeMountSourceFile &&
+			mount.Target == controlledSessionNetworkPolicyPathV1 && mount.ReadOnly {
 			continue
 		}
 		mounts = append(mounts, MountExecutionPlan{
