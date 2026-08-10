@@ -5,7 +5,6 @@ package probe
 import (
 	"bufio"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -32,7 +31,6 @@ type applicationNetworkPolicyV1 struct {
 const applicationResponseStateMaskV1 uint32 = expr.CtStateBitESTABLISHED
 
 const applicationResolverConfigurationV1 = "/etc/resolv.conf"
-const applicationHostsConfigurationV1 = "/etc/hosts"
 const applicationResolverConfigurationLimitV1 = 64 * 1024
 const applicationSessionNetworkConfigurationLimitV1 = 4 * 1024
 
@@ -208,12 +206,13 @@ var applicationInterfaceAddrsV1 = net.InterfaceAddrs
 
 // prepareApplicationSessionPeerV1 resolves only the fixed Docker-owned peer
 // alias while trusted startup code still owns the network namespace. It then
-// freezes that mapping in the container-local hosts file and returns exact
-// host prefixes for the firewall. Untrusted application code starts only
-// after the firewall is installed, so deny/deny does not require a DNS grant.
-func prepareApplicationSessionPeerV1(peer string, sessionSubnets []string, hostsPath string) ([]string, []string, error) {
+// verifies that Docker's frozen hosts mapping matches the host-selected
+// realization and returns exact host prefixes for the firewall. Untrusted
+// application code starts only after the firewall is installed, so deny/deny
+// does not require a DNS grant.
+func prepareApplicationSessionPeerV1(peer string, sessionSubnets []string, addresses []net.IP) ([]string, []string, error) {
 	if peer == "" {
-		if len(sessionSubnets) != 0 {
+		if len(sessionSubnets) != 0 || len(addresses) != 0 {
 			return nil, nil, fmt.Errorf("session-network prefixes require a peer alias")
 		}
 		return []string{}, []string{}, nil
@@ -232,15 +231,25 @@ func prepareApplicationSessionPeerV1(peer string, sessionSubnets []string, hosts
 		}
 		allowed[index] = network
 	}
-	addresses, err := lookupApplicationSessionPeerIPsV1(peer)
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolve fixed peer alias %q: %w", peer, err)
-	}
 	if len(addresses) == 0 {
-		return nil, nil, fmt.Errorf("resolve fixed peer alias %q: no addresses", peer)
+		return nil, nil, fmt.Errorf("fixed peer alias %q has no frozen addresses", peer)
+	}
+	resolved, err := lookupApplicationSessionPeerIPsV1(peer)
+	if err != nil {
+		return nil, nil, fmt.Errorf("verify fixed peer alias %q: %w", peer, err)
+	}
+	wantAddresses, err := canonicalApplicationSessionAddressesV1(addresses)
+	if err != nil {
+		return nil, nil, fmt.Errorf("validate fixed peer alias %q addresses: %w", peer, err)
+	}
+	gotAddresses, err := canonicalApplicationSessionAddressesV1(resolved)
+	if err != nil {
+		return nil, nil, fmt.Errorf("verify fixed peer alias %q addresses: %w", peer, err)
+	}
+	if !slices.Equal(gotAddresses, wantAddresses) {
+		return nil, nil, fmt.Errorf("fixed peer alias %q does not match the frozen session-network addresses", peer)
 	}
 	exact := make([]string, 0, len(addresses))
-	hosts := make([]string, 0, len(addresses))
 	seen := map[string]struct{}{}
 	for _, address := range addresses {
 		canonical := address.String()
@@ -268,10 +277,8 @@ func prepareApplicationSessionPeerV1(peer string, sessionSubnets []string, hosts
 		}
 		seen[prefix] = struct{}{}
 		exact = append(exact, prefix)
-		hosts = append(hosts, canonical+" "+peer+"\n")
 	}
 	sort.Strings(exact)
-	sort.Strings(hosts)
 	local, err := applicationSessionLocalCIDRsV1(allowed)
 	if err != nil {
 		return nil, nil, err
@@ -290,16 +297,21 @@ func prepareApplicationSessionPeerV1(peer string, sessionSubnets []string, hosts
 			return nil, nil, fmt.Errorf("fixed peer alias %q has no same-family lease-local address", peer)
 		}
 	}
-	file, err := os.OpenFile(hostsPath, os.O_WRONLY|os.O_APPEND, 0)
-	if err != nil {
-		return nil, nil, fmt.Errorf("open container hosts file: %w", err)
-	}
-	_, writeErr := file.WriteString(strings.Join(hosts, ""))
-	closeErr := file.Close()
-	if writeErr != nil || closeErr != nil {
-		return nil, nil, fmt.Errorf("freeze fixed peer alias in container hosts file: %w", errors.Join(writeErr, closeErr))
-	}
 	return exact, local, nil
+}
+
+func canonicalApplicationSessionAddressesV1(addresses []net.IP) ([]string, error) {
+	result := make([]string, 0, len(addresses))
+	for _, address := range addresses {
+		canonical := canonicalIPAddressV1(address)
+		if canonical == "<nil>" {
+			return nil, fmt.Errorf("invalid IP address")
+		}
+		result = append(result, canonical)
+	}
+	sort.Strings(result)
+	result = slices.Compact(result)
+	return result, nil
 }
 
 func applicationSessionLocalCIDRsV1(sessionSubnets []*net.IPNet) ([]string, error) {
@@ -337,42 +349,69 @@ func applicationSessionLocalCIDRsV1(sessionSubnets []*net.IPNet) ([]string, erro
 	return local, nil
 }
 
-func readApplicationSessionNetworkCIDRsV1(path string) ([]string, error) {
+type applicationSessionNetworkConfigurationV1 struct {
+	Prefixes []string
+	Peers    map[string][]net.IP
+}
+
+func readApplicationSessionNetworkConfigurationV1(path string) (applicationSessionNetworkConfigurationV1, error) {
 	if path == "" {
-		return []string{}, nil
+		return applicationSessionNetworkConfigurationV1{Prefixes: []string{}, Peers: map[string][]net.IP{}}, nil
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return applicationSessionNetworkConfigurationV1{}, err
 	}
 	defer file.Close()
 	content, err := io.ReadAll(io.LimitReader(file, applicationSessionNetworkConfigurationLimitV1+1))
 	if err != nil {
-		return nil, err
+		return applicationSessionNetworkConfigurationV1{}, err
 	}
 	if len(content) > applicationSessionNetworkConfigurationLimitV1 {
-		return nil, fmt.Errorf("session-network configuration exceeds %d bytes", applicationSessionNetworkConfigurationLimitV1)
+		return applicationSessionNetworkConfigurationV1{}, fmt.Errorf("session-network configuration exceeds %d bytes", applicationSessionNetworkConfigurationLimitV1)
 	}
-	result := []string{}
-	previous := ""
+	result := applicationSessionNetworkConfigurationV1{
+		Prefixes: []string{}, Peers: map[string][]net.IP{"controller": {}, "workload": {}},
+	}
+	sectionOrder := map[string]int{"prefix": 0, "controller": 1, "workload": 2}
+	previousSection := -1
+	previousValue := ""
 	for _, line := range strings.Split(strings.TrimSuffix(string(content), "\n"), "\n") {
-		if line == "" {
-			return nil, fmt.Errorf("session-network configuration contains an empty prefix")
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			return applicationSessionNetworkConfigurationV1{}, fmt.Errorf("session-network configuration line %q must contain a kind and value", line)
 		}
-		_, network, err := net.ParseCIDR(line)
-		if err != nil || network.String() != line {
-			return nil, fmt.Errorf("session-network prefix %q is not canonical CIDR", line)
+		section, found := sectionOrder[fields[0]]
+		if !found || section < previousSection || section == previousSection && previousValue >= fields[1] {
+			return applicationSessionNetworkConfigurationV1{}, fmt.Errorf("session-network configuration entries must be unique and sorted by kind and value")
 		}
-		if previous != "" && previous >= line {
-			return nil, fmt.Errorf("session-network prefixes must be unique and sorted")
+		previousSection = section
+		previousValue = fields[1]
+		if fields[0] == "prefix" {
+			_, network, err := net.ParseCIDR(fields[1])
+			if err != nil || network.String() != fields[1] {
+				return applicationSessionNetworkConfigurationV1{}, fmt.Errorf("session-network prefix %q is not canonical CIDR", fields[1])
+			}
+			result.Prefixes = append(result.Prefixes, fields[1])
+			continue
 		}
-		result = append(result, line)
-		previous = line
+		address := net.ParseIP(fields[1])
+		if address == nil || canonicalIPAddressV1(address) != fields[1] {
+			return applicationSessionNetworkConfigurationV1{}, fmt.Errorf("session-network %s address %q is not canonical", fields[0], fields[1])
+		}
+		result.Peers[fields[0]] = append(result.Peers[fields[0]], address)
 	}
-	if len(result) == 0 {
-		return nil, fmt.Errorf("session-network configuration contains no prefixes")
+	if len(result.Prefixes) == 0 || len(result.Peers["controller"]) == 0 || len(result.Peers["workload"]) == 0 {
+		return applicationSessionNetworkConfigurationV1{}, fmt.Errorf("session-network configuration requires prefixes and both participant addresses")
 	}
 	return result, nil
+}
+
+func canonicalIPAddressV1(address net.IP) string {
+	if ipv4 := address.To4(); ipv4 != nil {
+		return ipv4.String()
+	}
+	return address.String()
 }
 
 func readApplicationResolverCIDRsV1(path string) ([]string, error) {

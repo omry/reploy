@@ -3,7 +3,6 @@
 package probe
 
 import (
-	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -35,17 +34,17 @@ func TestReadApplicationResolverCIDRsV1(t *testing.T) {
 }
 
 func TestPrepareApplicationSessionPeerV1FreezesOnlyExactValidatedAddresses(t *testing.T) {
-	prior := lookupApplicationSessionPeerIPsV1
+	priorLookup := lookupApplicationSessionPeerIPsV1
 	priorInterfaces := applicationInterfaceAddrsV1
 	t.Cleanup(func() {
-		lookupApplicationSessionPeerIPsV1 = prior
+		lookupApplicationSessionPeerIPsV1 = priorLookup
 		applicationInterfaceAddrsV1 = priorInterfaces
 	})
 	lookupApplicationSessionPeerIPsV1 = func(peer string) ([]net.IP, error) {
 		if peer != "workload" {
 			t.Fatalf("peer = %q", peer)
 		}
-		return []net.IP{net.ParseIP("fd00:1::3"), net.ParseIP("172.31.0.3"), net.ParseIP("172.31.0.3")}, nil
+		return []net.IP{net.ParseIP("fd00:1::3"), net.ParseIP("172.31.0.3")}, nil
 	}
 	applicationInterfaceAddrsV1 = func() ([]net.Addr, error) {
 		return []net.Addr{
@@ -54,11 +53,8 @@ func TestPrepareApplicationSessionPeerV1FreezesOnlyExactValidatedAddresses(t *te
 			&net.IPNet{IP: net.ParseIP("172.30.0.2"), Mask: net.CIDRMask(24, 32)},
 		}, nil
 	}
-	hostsPath := filepath.Join(t.TempDir(), "hosts")
-	if err := os.WriteFile(hostsPath, []byte("127.0.0.1 localhost\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	got, local, err := prepareApplicationSessionPeerV1("workload", []string{"172.31.0.0/24", "fd00:1::/64"}, hostsPath)
+	addresses := []net.IP{net.ParseIP("fd00:1::3"), net.ParseIP("172.31.0.3")}
+	got, local, err := prepareApplicationSessionPeerV1("workload", []string{"172.31.0.0/24", "fd00:1::/64"}, addresses)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,42 +65,30 @@ func TestPrepareApplicationSessionPeerV1FreezesOnlyExactValidatedAddresses(t *te
 	if wantLocal := []string{"172.31.0.2/32", "fd00:1::2/128"}; !reflect.DeepEqual(local, wantLocal) {
 		t.Fatalf("exact lease-local CIDRs = %#v, want %#v", local, wantLocal)
 	}
-	content, err := os.ReadFile(hostsPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(content) != "127.0.0.1 localhost\n172.31.0.3 workload\nfd00:1::3 workload\n" {
-		t.Fatalf("hosts content = %q", content)
-	}
 }
 
 func TestPrepareApplicationSessionPeerV1RejectsUnresolvedOrOutOfNetworkAddress(t *testing.T) {
-	prior := lookupApplicationSessionPeerIPsV1
+	priorLookup := lookupApplicationSessionPeerIPsV1
 	priorInterfaces := applicationInterfaceAddrsV1
 	t.Cleanup(func() {
-		lookupApplicationSessionPeerIPsV1 = prior
+		lookupApplicationSessionPeerIPsV1 = priorLookup
 		applicationInterfaceAddrsV1 = priorInterfaces
 	})
 	applicationInterfaceAddrsV1 = func() ([]net.Addr, error) {
 		return []net.Addr{&net.IPNet{IP: net.ParseIP("172.31.1.2"), Mask: net.CIDRMask(24, 32)}}, nil
 	}
-	hostsPath := filepath.Join(t.TempDir(), "hosts")
-	if err := os.WriteFile(hostsPath, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
 	for _, test := range []struct {
 		name      string
 		addresses []net.IP
-		err       error
 	}{
-		{name: "lookup failure", err: errors.New("lookup failed")},
 		{name: "no addresses"},
 		{name: "outside lease", addresses: []net.IP{net.ParseIP("172.31.0.1")}},
+		{name: "invalid address", addresses: []net.IP{nil}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			lookupApplicationSessionPeerIPsV1 = func(string) ([]net.IP, error) { return test.addresses, test.err }
+			lookupApplicationSessionPeerIPsV1 = func(string) ([]net.IP, error) { return test.addresses, nil }
 			prefixes := []string{"172.31.1.0/24"}
-			if _, _, err := prepareApplicationSessionPeerV1("workload", prefixes, hostsPath); err == nil {
+			if _, _, err := prepareApplicationSessionPeerV1("workload", prefixes, test.addresses); err == nil {
 				t.Fatal("invalid peer resolution passed")
 			}
 		})
@@ -158,28 +142,35 @@ func TestReadApplicationResolverCIDRsV1RejectsInvalidNameserver(t *testing.T) {
 	}
 }
 
-func TestReadApplicationSessionNetworkCIDRsV1RequiresCanonicalSortedPrefixes(t *testing.T) {
+func TestReadApplicationSessionNetworkConfigurationV1RequiresCanonicalSortedValues(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "network-prefixes")
-	if err := os.WriteFile(path, []byte("172.31.0.0/24\nfd00:1::/64\n"), 0o600); err != nil {
+	content := "prefix 172.31.0.0/24\nprefix fd00:1::/64\n" +
+		"controller 172.31.0.2\ncontroller fd00:1::2\n" +
+		"workload 172.31.0.3\nworkload fd00:1::3\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := readApplicationSessionNetworkCIDRsV1(path)
+	got, err := readApplicationSessionNetworkConfigurationV1(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"172.31.0.0/24", "fd00:1::/64"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("session-network CIDRs = %#v, want %#v", got, want)
+	if want := []string{"172.31.0.0/24", "fd00:1::/64"}; !reflect.DeepEqual(got.Prefixes, want) ||
+		!reflect.DeepEqual(got.Peers["controller"], []net.IP{net.ParseIP("172.31.0.2"), net.ParseIP("fd00:1::2")}) ||
+		!reflect.DeepEqual(got.Peers["workload"], []net.IP{net.ParseIP("172.31.0.3"), net.ParseIP("fd00:1::3")}) {
+		t.Fatalf("session-network configuration = %#v", got)
 	}
 	for _, content := range []string{
-		"172.31.0.1/24\n",
-		"fd00:1::/64\n172.31.0.0/24\n",
-		"172.31.0.0/24\n172.31.0.0/24\n",
+		"prefix 172.31.0.1/24\ncontroller 172.31.0.2\nworkload 172.31.0.3\n",
+		"workload 172.31.0.3\nprefix 172.31.0.0/24\ncontroller 172.31.0.2\n",
+		"prefix 172.31.0.0/24\nprefix 172.31.0.0/24\ncontroller 172.31.0.2\nworkload 172.31.0.3\n",
+		"prefix 172.31.0.0/24\ncontroller 172.31.0.2\n",
+		"prefix 172.31.0.0/24\ncontroller 0172.31.0.2\nworkload 172.31.0.3\n",
 		"\n",
 	} {
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := readApplicationSessionNetworkCIDRsV1(path); err == nil {
+		if _, err := readApplicationSessionNetworkConfigurationV1(path); err == nil {
 			t.Fatalf("invalid session-network configuration %q passed", content)
 		}
 	}
