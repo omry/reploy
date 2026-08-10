@@ -1385,7 +1385,9 @@ effective numeric authority above. The account and its numeric identity are
 locked build inputs, so changing either makes reuse stale. The blueprint name
 is deliberately independent of a Windows domain account or Unix host account.
 An effective UID of zero uses the existing local name `root`; a blueprint
-cannot request root merely by naming it.
+cannot request root merely by naming it. Reploy preserves the effective primary
+GID even when UID zero was invoked with a nonzero GID; it does not normalize
+that runtime identity to `0:0`.
 
 An application runtime with effective UID zero cannot receive a host bind,
 whether read-only input or writable shared state. It also cannot use

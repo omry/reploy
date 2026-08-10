@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve valid unsigned 32-bit runtime UID and GID values when the Linux startup probe runs on 32-bit targets.

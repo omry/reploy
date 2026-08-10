@@ -170,12 +170,17 @@ func RunControlledSessionV1(
 	if err := operation.RequireQueueEntryLeaseHeldV1(plan.LiveRunID); err != nil {
 		return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionV1(operation, plan.LiveRunID, fmt.Errorf("controlled-session admission ownership: %w", err))
 	}
+	dockerEndpoint, bindSessionDocker, err := bindControlledSessionDockerEndpointV1(ctx, controlledSessionCommandSpecV1(plan.Controller.Create))
+	if err != nil {
+		return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionV1(operation, plan.LiveRunID, fmt.Errorf("bind controlled-session Docker endpoint: %w", err))
+	}
 	operationReleaseAttempted := false
 	ownershipRecorded := false
 	partialPreparationCleanupVerified := false
 	controllerID := ""
+	var incidentReceipt *deploy.ControlledSessionIncidentReceiptTargetV1
 	persistOwnership := func(controllerID string, workloadID string) (deploy.ControlledSessionOwnershipV1, error) {
-		ownership := controlledSessionOwnershipFromPlanV1(plan, controllerID, workloadID)
+		ownership := controlledSessionOwnershipFromPlanV1(plan, dockerEndpoint, controllerID, workloadID)
 		recorded, err := operation.RecordControlledSessionOwnershipV1(ownership)
 		if err != nil {
 			return deploy.ControlledSessionOwnershipV1{}, fmt.Errorf("persist controlled-session ownership: %w", err)
@@ -193,21 +198,36 @@ func RunControlledSessionV1(
 			return &privateControlledSessionChannelRuntimeV1{channel: channel}, nil
 		},
 		prepareController: func(ctx context.Context, plan ControlledSessionContainerPlanV1) (controlledSessionControllerRuntimeV1, error) {
-			return prepareDockerControllerWithCleanupVerificationV1(ctx, plan, func() {
-				partialPreparationCleanupVerified = true
+			return prepareDockerControllerV1(ctx, plan, dockerControllerBackendV1{
+				bind: bindSessionDocker, observe: observeDockerContainerExitV1,
+				requireReadyChannel: requirePreparedControlledSessionControllerChannelV1,
+				recordNoContainer:   func() { partialPreparationCleanupVerified = true },
 			})
 		},
 		prepareWorkload: func(ctx context.Context, plan ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error) {
-			return prepareDockerWorkloadPTYWithContainerIDV1(ctx, plan, func(workloadID string) error {
-				_, err := persistOwnership(controllerID, workloadID)
-				return err
-			}, func() {
-				partialPreparationCleanupVerified = true
+			return prepareDockerWorkloadPTYV1(ctx, plan, dockerWorkloadPTYBackendV1{
+				bind: bindSessionDocker,
+				recordContainerID: func(workloadID string) error {
+					_, err := persistOwnership(controllerID, workloadID)
+					return err
+				},
+				recordRollbackVerified: func() { partialPreparationCleanupVerified = true },
+				attach:                 attachDockerContainerPTYV1, resize: resizeDockerContainerPTYV1,
+				observe: observeDockerContainerExitV1,
 			})
 		},
 		recordPlannedOwnership: func() error {
-			_, err := persistOwnership("", "")
-			return err
+			var err error
+			incidentReceipt, err = operation.PrepareControlledSessionIncidentReceiptV1(plan.Channel.HostDirectory, plan.LiveRunID)
+			if err != nil {
+				return fmt.Errorf("prepare controlled-session incident receipt: %w", err)
+			}
+			if _, err := persistOwnership("", ""); err != nil {
+				removeErr := incidentReceipt.Remove()
+				incidentReceipt = nil
+				return errors.Join(err, removeErr)
+			}
+			return nil
 		},
 		recordControllerOwnership: func(exactControllerID string) error {
 			controllerID = exactControllerID
@@ -232,14 +252,45 @@ func RunControlledSessionV1(
 			}
 			return manifest, nil
 		},
-		startWatchdog: startControlledSessionWatchdogV1,
-		now:           time.Now,
+		startWatchdog: func(ctx context.Context, manifest deploy.ControlledSessionCleanupManifest) (controlledSessionWatchdogRuntimeV1, error) {
+			watchdog, err := startControlledSessionWatchdogV1(ctx, manifest, incidentReceipt)
+			if err != nil {
+				removeErr := incidentReceipt.Remove()
+				incidentReceipt = nil
+				return nil, errors.Join(err, removeErr)
+			}
+			incidentReceipt = nil
+			return watchdog, nil
+		},
+		now: time.Now,
 	})
+	if incidentReceipt != nil {
+		runErr = errors.Join(runErr, incidentReceipt.Remove())
+		incidentReceipt = nil
+	}
 	cleaned := result.SessionResult.CleanupStatus.Kind == controlledsession.CleanupStatusSucceededV1 &&
 		result.DeliveryTailCleanupStatus.Kind == controlledsession.CleanupStatusSucceededV1
 	cleaned = controlledSessionPreparationCanCompleteV1(cleaned, ownershipRecorded, operationReleaseAttempted, partialPreparationCleanupVerified)
 	completionErr := finishControlledSessionOwnershipV1(context.WithoutCancel(ctx), absoluteDir, operation, operationReleaseAttempted, plan.LiveRunID, cleaned)
 	return result, errors.Join(runErr, completionErr)
+}
+
+func bindControlledSessionDockerEndpointV1(
+	ctx context.Context,
+	docker CommandSpec,
+) (string, func(context.Context, CommandSpec, time.Duration) (CommandSpec, commandRunner, error), error) {
+	pinnedDocker, run, err := bindPinnedDockerCommandRunnerV1(ctx, docker, defaultDockerPreflightTimeout)
+	if err != nil {
+		return "", nil, err
+	}
+	endpoint := commandEnvironmentValueV1(pinnedDocker, "DOCKER_HOST")
+	bind := func(_ context.Context, spec CommandSpec, _ time.Duration) (CommandSpec, commandRunner, error) {
+		if spec.Name != pinnedDocker.Name {
+			return CommandSpec{}, nil, fmt.Errorf("controlled-session Docker executable changed from %q to %q", pinnedDocker.Name, spec.Name)
+		}
+		return pinDockerEndpointV1(spec, endpoint), run, nil
+	}
+	return endpoint, bind, nil
 }
 
 func controlledSessionChannelAbsentV1(path string) bool {
@@ -251,7 +302,7 @@ func controlledSessionPreparationCanCompleteV1(cleaned bool, ownershipRecorded b
 	return cleaned && (!ownershipRecorded || operationReleaseAttempted || partialCleanupVerified)
 }
 
-func controlledSessionOwnershipFromPlanV1(plan ControlledSessionExecutionPlanV1, controllerID string, workloadID string) deploy.ControlledSessionOwnershipV1 {
+func controlledSessionOwnershipFromPlanV1(plan ControlledSessionExecutionPlanV1, dockerEndpoint string, controllerID string, workloadID string) deploy.ControlledSessionOwnershipV1 {
 	container := func(plan ControlledSessionContainerPlanV1, id string) deploy.ControlledSessionContainerOwnershipV1 {
 		return deploy.ControlledSessionContainerOwnershipV1{
 			Role: string(plan.Role), ID: id, Name: plan.Container, DeploymentID: plan.DeploymentID,
@@ -260,6 +311,7 @@ func controlledSessionOwnershipFromPlanV1(plan ControlledSessionExecutionPlanV1,
 	}
 	return deploy.ControlledSessionOwnershipV1{
 		LiveRunID: plan.LiveRunID, SessionHandle: plan.Authorization.Handle,
+		DockerEndpoint:   dockerEndpoint,
 		ChannelDirectory: plan.Channel.HostDirectory,
 		Controller:       container(plan.Controller, controllerID), Workload: container(plan.Workload, workloadID),
 	}
@@ -554,9 +606,9 @@ func validateControlledSessionCleanupManifestForRuntimeV1(
 	if err := deploy.ValidateControlledSessionCleanupManifest(manifest); err != nil {
 		return fmt.Errorf("validate controlled-session cleanup manifest: %w", err)
 	}
-	expected := controlledSessionOwnershipFromPlanV1(plan, controllerID, workloadID)
+	expected := controlledSessionOwnershipFromPlanV1(plan, manifest.DockerEndpoint, controllerID, workloadID)
 	if manifest.LiveRunID != expected.LiveRunID || manifest.ChannelDirectory != expected.ChannelDirectory ||
-		manifest.Controller != expected.Controller || manifest.Workload != expected.Workload {
+		manifest.DockerEndpoint != expected.DockerEndpoint || manifest.Controller != expected.Controller || manifest.Workload != expected.Workload {
 		return fmt.Errorf("controlled-session cleanup manifest does not match the exact prepared resources")
 	}
 	if len(manifest.Networks) != 0 || len(manifest.Volumes) != 0 {

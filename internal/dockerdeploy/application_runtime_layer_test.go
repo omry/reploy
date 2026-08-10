@@ -69,6 +69,24 @@ func TestApplicationRuntimeLayerDockerfileAddsOnlyFixedVerifier(t *testing.T) {
 	}
 }
 
+func TestApplicationRuntimeLayerDockerfilePreservesRootPrimaryGID(t *testing.T) {
+	request := applicationRuntimeLayerTestRequest(t)
+	request.Account = deploy.ApplicationLocalAccountV1{
+		Schema: deploy.ApplicationLocalAccountSchemaV1,
+		Name:   "root",
+		UID:    "0",
+		GID:    "1000",
+		Home:   "/mnt/reploy-home",
+	}
+	content, err := ApplicationRuntimeLayerDockerfile(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `RUN ["/reploy-probe","install-local-account","root","0","1000","/mnt/reploy-home"]`; !strings.Contains(string(content), want) {
+		t.Fatalf("Dockerfile missing %q:\n%s", want, content)
+	}
+}
+
 func TestApplicationRuntimeLayerDockerfileRestoresInheritedUser(t *testing.T) {
 	request := applicationRuntimeLayerTestRequest(t)
 	request.Source.Config.User = "12345:23456"
