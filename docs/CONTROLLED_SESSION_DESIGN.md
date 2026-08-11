@@ -18,10 +18,11 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   process's kernel-reported UID/GID, accepts one connection, removes the socket
   pathname, sends the frozen `opened` authorization, and provides bounded,
   serialized protocol I/O with distinct before-claim and after-claim failure
-  observations. The planner binds exact controller and
-  workload builds, runtime identities, mounts, masks, commands, and inert
-  lifecycle commands while networking remains disabled. Private environment
-  injection is rejected until its controlled-session launch path is wired.
+  observations. The planner binds exact controller and workload builds,
+  runtime identities, mounts, masks, commands, and inert lifecycle commands.
+  Endpoint-bearing plans additionally bind their exact granted endpoints and
+  lease-private network identities. Private environment injection is rejected
+  until its controlled-session launch path is wired.
   The lifecycle state machine includes its output-finalization barrier and
   timeout outcome. The synthetic PTY output pump
   now preserves byte order with one bounded flow-control chunk at a time,
