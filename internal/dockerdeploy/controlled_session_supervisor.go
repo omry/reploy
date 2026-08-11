@@ -173,6 +173,21 @@ func RunControlledSessionV1(
 	plan ControlledSessionExecutionPlanV1,
 	options ControlledSessionRunOptionsV1,
 ) (ControlledSessionRunResultV1, error) {
+	return runControlledSessionWithControllerReservationV1(ctx, operation, nil, plan, options)
+}
+
+// runControlledSessionWithControllerReservationV1 additionally owns an
+// admitted controller-side reservation when controllerOperation is non-nil.
+// It records the same exact session ownership in both deployment queues before
+// releasing either lock, so recovery from either participant must verify the
+// old session absent before admitting replacement work.
+func runControlledSessionWithControllerReservationV1(
+	ctx context.Context,
+	operation *deploy.OperationLock,
+	controllerOperation *deploy.OperationLock,
+	plan ControlledSessionExecutionPlanV1,
+	options ControlledSessionRunOptionsV1,
+) (ControlledSessionRunResultV1, error) {
 	if operation == nil {
 		return ControlledSessionRunResultV1{}, fmt.Errorf("run controlled session requires an admitted operation lock")
 	}
@@ -181,28 +196,46 @@ func RunControlledSessionV1(
 	}
 	absoluteDir, err := filepath.Abs(plan.Workload.DeploymentDirectory)
 	if err != nil {
-		return ControlledSessionRunResultV1{}, releaseControlledSessionOperationV1(operation, fmt.Errorf("resolve controlled-session workload deployment directory: %w", err))
+		return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionPairV1(operation, controllerOperation, plan.LiveRunID, fmt.Errorf("resolve controlled-session workload deployment directory: %w", err))
 	}
 	if filepath.Dir(filepath.Dir(operation.Path())) != absoluteDir {
-		return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionV1(operation, plan.LiveRunID, fmt.Errorf("controlled-session operation lock does not belong to workload deployment %q", absoluteDir))
+		return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionPairV1(operation, controllerOperation, plan.LiveRunID, fmt.Errorf("controlled-session operation lock does not belong to workload deployment %q", absoluteDir))
+	}
+	if controllerOperation != nil {
+		if err := controllerOperation.RequireHeld(); err != nil {
+			return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionPairV1(operation, controllerOperation, plan.LiveRunID, err)
+		}
+		controllerDir, err := filepath.Abs(plan.Controller.DeploymentDirectory)
+		if err != nil {
+			return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionPairV1(operation, controllerOperation, plan.LiveRunID, fmt.Errorf("resolve controlled-session controller deployment directory: %w", err))
+		}
+		if filepath.Dir(filepath.Dir(controllerOperation.Path())) != controllerDir {
+			return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionPairV1(operation, controllerOperation, plan.LiveRunID, fmt.Errorf("controlled-session controller operation lock does not belong to deployment %q", controllerDir))
+		}
 	}
 	if ctx == nil || ctx.Done() == nil {
-		return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionV1(operation, plan.LiveRunID, fmt.Errorf("run controlled session: cancelable host context is required"))
+		return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionPairV1(operation, controllerOperation, plan.LiveRunID, fmt.Errorf("run controlled session: cancelable host context is required"))
 	}
 	if err := ValidateControlledSessionExecutionPlanV1(plan); err != nil {
-		return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionV1(operation, plan.LiveRunID, fmt.Errorf("run controlled session plan: %w", err))
+		return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionPairV1(operation, controllerOperation, plan.LiveRunID, fmt.Errorf("run controlled session plan: %w", err))
 	}
 	if err := validateControlledSessionRunOptionsV1(options); err != nil {
-		return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionV1(operation, plan.LiveRunID, err)
+		return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionPairV1(operation, controllerOperation, plan.LiveRunID, err)
 	}
 	if err := operation.RequireQueueEntryLeaseHeldV1(plan.LiveRunID); err != nil {
-		return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionV1(operation, plan.LiveRunID, fmt.Errorf("controlled-session admission ownership: %w", err))
+		return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionPairV1(operation, controllerOperation, plan.LiveRunID, fmt.Errorf("controlled-session admission ownership: %w", err))
+	}
+	if controllerOperation != nil {
+		if err := controllerOperation.RequireQueueEntryLeaseHeldV1(plan.LiveRunID); err != nil {
+			return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionPairV1(operation, controllerOperation, plan.LiveRunID, fmt.Errorf("controlled-session controller admission ownership: %w", err))
+		}
 	}
 	dockerEndpoint, bindSessionDocker, err := bindControlledSessionDockerEndpointV1(ctx, controlledSessionCommandSpecV1(plan.Controller.Create))
 	if err != nil {
-		return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionV1(operation, plan.LiveRunID, fmt.Errorf("bind controlled-session Docker endpoint: %w", err))
+		return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionPairV1(operation, controllerOperation, plan.LiveRunID, fmt.Errorf("bind controlled-session Docker endpoint: %w", err))
 	}
 	operationReleaseAttempted := false
+	controllerOperationReleaseAttempted := false
 	ownershipRecorded := false
 	partialPreparationCleanupVerified := false
 	networkID := ""
@@ -211,6 +244,11 @@ func RunControlledSessionV1(
 	var incidentReceipt *deploy.ControlledSessionIncidentReceiptTargetV1
 	persistOwnership := func(controllerID string, workloadID string) (deploy.ControlledSessionOwnershipV1, error) {
 		ownership := controlledSessionOwnershipWithNetworkFromPlanV1(plan, dockerEndpoint, networkID, controllerID, workloadID)
+		if controllerOperation != nil {
+			if _, err := controllerOperation.RecordControlledSessionOwnershipV1(ownership); err != nil {
+				return deploy.ControlledSessionOwnershipV1{}, fmt.Errorf("persist controlled-session controller ownership: %w", err)
+			}
+		}
 		recorded, err := operation.RecordControlledSessionOwnershipV1(ownership)
 		if err != nil {
 			return deploy.ControlledSessionOwnershipV1{}, fmt.Errorf("persist controlled-session ownership: %w", err)
@@ -299,6 +337,12 @@ func RunControlledSessionV1(
 			if err := operation.Unlock(); err != nil {
 				return deploy.ControlledSessionCleanupManifest{}, fmt.Errorf("release operation lock before controlled-session startup: %w", err)
 			}
+			if controllerOperation != nil {
+				controllerOperationReleaseAttempted = true
+				if err := controllerOperation.Unlock(); err != nil {
+					return deploy.ControlledSessionCleanupManifest{}, fmt.Errorf("release controller operation lock before controlled-session startup: %w", err)
+				}
+			}
 			return manifest, nil
 		},
 		startWatchdog: func(ctx context.Context, manifest deploy.ControlledSessionCleanupManifest) (controlledSessionWatchdogRuntimeV1, error) {
@@ -321,6 +365,13 @@ func RunControlledSessionV1(
 		result.DeliveryTailCleanupStatus.Kind == controlledsession.CleanupStatusSucceededV1
 	cleaned = controlledSessionPreparationCanCompleteV1(cleaned, ownershipRecorded, operationReleaseAttempted, partialPreparationCleanupVerified)
 	completionErr := finishControlledSessionOwnershipV1(context.WithoutCancel(ctx), absoluteDir, operation, operationReleaseAttempted, plan.LiveRunID, cleaned)
+	if controllerOperation != nil {
+		controllerCompletionErr := finishControlledSessionOwnershipV1(
+			context.WithoutCancel(ctx), plan.Controller.DeploymentDirectory, controllerOperation,
+			controllerOperationReleaseAttempted, plan.LiveRunID, cleaned,
+		)
+		completionErr = errors.Join(completionErr, controllerCompletionErr)
+	}
 	return result, errors.Join(runErr, completionErr)
 }
 
@@ -364,9 +415,11 @@ func controlledSessionOwnershipWithNetworkFromPlanV1(plan ControlledSessionExecu
 	}
 	ownership := deploy.ControlledSessionOwnershipV1{
 		LiveRunID: plan.LiveRunID, SessionHandle: plan.Authorization.Handle,
-		DockerEndpoint:   dockerEndpoint,
-		ChannelDirectory: plan.Channel.HostDirectory,
-		Controller:       container(plan.Controller, controllerID), Workload: container(plan.Workload, workloadID),
+		DockerEndpoint:                dockerEndpoint,
+		ControllerDeploymentDirectory: plan.Controller.DeploymentDirectory,
+		WorkloadDeploymentDirectory:   plan.Workload.DeploymentDirectory,
+		ChannelDirectory:              plan.Channel.HostDirectory,
+		Controller:                    container(plan.Controller, controllerID), Workload: container(plan.Workload, workloadID),
 	}
 	if plan.Controller.SessionNetwork.Enabled {
 		ownership.NetworkID = networkID
@@ -410,6 +463,35 @@ func removeUnstartedControlledSessionV1(operation *deploy.OperationLock, runID s
 		_, _, removeErr = operation.RemoveLiveRunV1(runID)
 	}
 	return releaseControlledSessionOperationV1(operation, errors.Join(cause, removeErr))
+}
+
+func removeUnstartedControlledSessionPairV1(
+	workload *deploy.OperationLock,
+	controller *deploy.OperationLock,
+	runID string,
+	cause error,
+) error {
+	result := cause
+	for _, reservation := range []struct {
+		role      string
+		operation *deploy.OperationLock
+	}{
+		{role: "workload", operation: workload},
+		{role: "controller", operation: controller},
+	} {
+		if reservation.operation == nil {
+			continue
+		}
+		if deploy.ValidateLiveRunIDV1(runID) == nil {
+			if _, _, err := reservation.operation.RemoveLiveRunV1(runID); err != nil {
+				result = errors.Join(result, fmt.Errorf("remove unstarted controlled-session %s reservation: %w", reservation.role, err))
+			}
+		}
+		if err := reservation.operation.Unlock(); err != nil {
+			result = errors.Join(result, fmt.Errorf("release controlled-session %s operation lock: %w", reservation.role, err))
+		}
+	}
+	return result
 }
 
 func releaseControlledSessionOperationV1(operation *deploy.OperationLock, cause error) error {

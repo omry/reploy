@@ -300,10 +300,12 @@ func controlledSessionOwnershipFixtureV1(dir string, runID string, generation st
 	}
 	return ControlledSessionOwnershipV1{
 		LiveRunID: runID, SessionHandle: "session-" + strings.Repeat("a", 64),
-		DockerEndpoint:   "unix:///var/run/docker.sock",
-		ChannelDirectory: filepath.Join(dir, ".reploy", "sessions", runID),
-		Controller:       container("controller", strings.Repeat("a", 64), "controller", "reploy/env/controller:g-current", "1"),
-		Workload:         container("workload", strings.Repeat("b", 64), "workload", generation, "2"),
+		DockerEndpoint:                "unix:///var/run/docker.sock",
+		ControllerDeploymentDirectory: dir + "-controller",
+		WorkloadDeploymentDirectory:   dir,
+		ChannelDirectory:              filepath.Join(dir, ".reploy", "sessions", runID),
+		Controller:                    container("controller", strings.Repeat("a", 64), "controller", "reploy/env/controller:g-current", "1"),
+		Workload:                      container("workload", strings.Repeat("b", 64), "workload", generation, "2"),
 	}
 }
 
