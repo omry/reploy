@@ -1,0 +1,2 @@
+kind: Added
+body: Allow controlled-session controllers to persist artifacts to an output directory or publish a staged output file without exposing the destination to the workload.
