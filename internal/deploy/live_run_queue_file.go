@@ -165,12 +165,27 @@ func (lock *OperationLock) RecordControlledSessionOwnershipV1(ownership Controll
 	if admitted.Container != "" {
 		return ControlledSessionOwnershipV1{}, fmt.Errorf("controlled session live run %q already names container %q", ownership.LiveRunID, admitted.Container)
 	}
-	if admitted.GenerationReference != ownership.Workload.GenerationReference {
-		return ControlledSessionOwnershipV1{}, fmt.Errorf("controlled session workload generation does not match admitted live run %q", ownership.LiveRunID)
-	}
 	ownership.BootSession = admitted.BootSession
 	if err := validateCurrentControlledSessionOwnershipV1(ownership); err != nil {
 		return ControlledSessionOwnershipV1{}, err
+	}
+	deploymentDirectory := filepath.Dir(filepath.Dir(path))
+	var participant ControlledSessionContainerOwnershipV1
+	var role string
+	switch deploymentDirectory {
+	case ownership.ControllerDeploymentDirectory:
+		participant = ownership.Controller
+		role = "controller"
+	case ownership.WorkloadDeploymentDirectory:
+		participant = ownership.Workload
+		role = "workload"
+	default:
+		return ControlledSessionOwnershipV1{}, fmt.Errorf(
+			"controlled session ownership does not name deployment directory %q", deploymentDirectory,
+		)
+	}
+	if admitted.GenerationReference != participant.GenerationReference {
+		return ControlledSessionOwnershipV1{}, fmt.Errorf("controlled session %s generation does not match admitted live run %q", role, ownership.LiveRunID)
 	}
 	insert := sort.Search(len(queue.ControlledSessions), func(index int) bool {
 		return queue.ControlledSessions[index].LiveRunID >= ownership.LiveRunID

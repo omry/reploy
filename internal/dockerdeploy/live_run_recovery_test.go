@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -68,6 +69,118 @@ func TestRecoverLiveRunQueueV1DefersAndRetriesExactContainerCleanup(t *testing.T
 	}
 	if err := operation.Unlock(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRecoverLiveRunQueueV1BlocksControllerAdmissionUntilSessionCleanupVerifiesAbsent(t *testing.T) {
+	input, planBackend := controlledSessionPlanFixtureV1(t)
+	plan, err := planControlledSessionV1(input, planBackend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operations := map[string]*deploy.OperationLock{}
+	leases := map[string]*deploy.QueueEntryLeaseV1{}
+	for _, participant := range []struct {
+		dir        string
+		name       string
+		generation string
+	}{
+		{dir: plan.Controller.DeploymentDirectory, name: plan.Controller.DeploymentID, generation: plan.Controller.GenerationReference},
+		{dir: plan.Workload.DeploymentDirectory, name: plan.Workload.DeploymentID, generation: plan.Workload.GenerationReference},
+	} {
+		operation, err := deploy.AcquireOperationLock(t.Context(), participant.dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		operations[participant.dir] = operation
+		lease, err := operation.AcquireLiveRunLeaseV1(plan.LiveRunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leases[participant.dir] = lease
+		if status, err := operation.AdmitLiveRunV1(deploy.LiveRunV1{
+			ID: plan.LiveRunID, Kind: deploy.LiveRunKindShellV1, Name: participant.name,
+			GenerationReference: participant.generation, Exclusive: true,
+		}, false); err != nil || status != deploy.LiveRunStatusActiveV1 {
+			t.Fatalf("participant admission = %q, %v", status, err)
+		}
+	}
+	ownership := controlledSessionOwnershipFromPlanV1(plan, "unix:///var/run/docker.sock", "", "")
+	for _, dir := range []string{plan.Controller.DeploymentDirectory, plan.Workload.DeploymentDirectory} {
+		if _, err := operations[dir].RecordControlledSessionOwnershipV1(ownership); err != nil {
+			t.Fatalf("record ownership in %q: %v", dir, err)
+		}
+		if err := operations[dir].Unlock(); err != nil {
+			t.Fatal(err)
+		}
+		if err := leases[dir].Release(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	controllerOperation, err := deploy.AcquireOperationLock(t.Context(), plan.Controller.DeploymentDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("Docker cleanup failed")
+	if _, err := recoverLiveRunQueueWithinV1(
+		t.Context(), controllerOperation, nil,
+		func(CommandSpec, RunOptions) error { return want },
+		time.Second, nil,
+	); !errors.Is(err, want) || !strings.Contains(err.Error(), "recovery remains incomplete") {
+		t.Fatalf("failed controller recovery error = %v", err)
+	}
+	queue, _, err := controllerOperation.ReadLiveRunQueueV1()
+	if err != nil || len(queue.Runs) != 0 || len(queue.ControlledSessions) != 1 {
+		t.Fatalf("retained controller reservation = %#v, %v", queue, err)
+	}
+
+	if _, err := recoverLiveRunQueueWithinV1(
+		t.Context(), controllerOperation, nil,
+		func(spec CommandSpec, options RunOptions) error {
+			if len(spec.Args) >= 2 && spec.Args[0] == "container" && spec.Args[1] == "inspect" {
+				_, _ = fmt.Fprintln(options.Stderr, "Error: No such container")
+				return errors.New("inspect failed")
+			}
+			return nil
+		},
+		time.Second, nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+	queue, found, err := controllerOperation.ReadLiveRunQueueV1()
+	if err != nil || found || len(queue.ControlledSessions) != 0 {
+		t.Fatalf("completed controller recovery = %#v, found=%t, %v", queue, found, err)
+	}
+	if err := controllerOperation.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCleanupControlledSessionRecoveryV1AcceptsParticipantFilesystemAlias(t *testing.T) {
+	input, planBackend := controlledSessionPlanFixtureV1(t)
+	plan, err := planControlledSessionV1(input, planBackend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := deploy.AcquireOperationLock(t.Context(), plan.Controller.DeploymentDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+
+	alias := filepath.Join(t.TempDir(), "controller-alias")
+	if err := os.Symlink(plan.Controller.DeploymentDirectory, alias); err != nil {
+		t.Skipf("create deployment alias: %v", err)
+	}
+	ownership := controlledSessionOwnershipFromPlanV1(plan, controlledSessionTestDockerEndpointV1, "", "")
+	ownership.ControllerDeploymentDirectory = alias
+	resources := newControlledSessionRecoveryContainersV1(ownership)
+	if err := cleanupControlledSessionRecoveryV1(t.Context(), operation, ownership, resources.run, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(resources.byID) != 0 {
+		t.Fatalf("controlled-session containers remain = %#v", resources.byID)
 	}
 }
 
@@ -337,8 +450,10 @@ func TestRecoverLiveRunQueueV1RetainsControlledSessionAfterLabelMismatchAndRetri
 	containers := newControlledSessionRecoveryContainersV1(recorded)
 	containers.byID[dockerWorkloadTestContainerIDV1].labels["io.reploy.session.live-run"] = "run-ffffffffffffffff"
 	var notice bytes.Buffer
-	if _, err := recoverLiveRunQueueV1(t.Context(), operation, &notice, containers.run); err != nil {
-		t.Fatal(err)
+	if _, err := recoverLiveRunQueueV1(t.Context(), operation, &notice, containers.run); err == nil ||
+		!strings.Contains(err.Error(), "recovery remains incomplete") ||
+		!strings.Contains(err.Error(), "ownership label") {
+		t.Fatalf("label-mismatch recovery error = %v", err)
 	}
 	queue, found, err := operation.ReadLiveRunQueueV1()
 	if err != nil || !found || len(queue.Runs) != 0 || len(queue.ControlledSessions) != 1 || queue.ControlledSessions[0] != recorded {
@@ -419,8 +534,10 @@ func TestRecoverLiveRunQueueV1RetainsLabelMismatchedNetworkAndRetries(t *testing
 	resources := newControlledSessionRecoveryContainersV1(recorded)
 	resources.network.labels["io.reploy.session.live-run"] = "run-ffffffffffffffff"
 	var notice bytes.Buffer
-	if _, err := recoverLiveRunQueueV1(t.Context(), operation, &notice, resources.run); err != nil {
-		t.Fatal(err)
+	if _, err := recoverLiveRunQueueV1(t.Context(), operation, &notice, resources.run); err == nil ||
+		!strings.Contains(err.Error(), "recovery remains incomplete") ||
+		!strings.Contains(err.Error(), "ownership labels") {
+		t.Fatalf("network-mismatch recovery error = %v", err)
 	}
 	if resources.network == nil || !strings.Contains(notice.String(), "network") || !strings.Contains(notice.String(), "ownership labels") {
 		t.Fatalf("mismatched network was not retained: network=%#v notice=%q", resources.network, notice.String())
