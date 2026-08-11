@@ -186,8 +186,8 @@ func TestPlanControlledSessionV1FreezesGrantedEndpointCoordinatesAndLeaseNetwork
 		t.Fatal(err)
 	}
 	wantEndpoints := []ControlledSessionEndpointPlanV1{
-		{ID: "browser", Scheme: "http", Host: controlledsession.WorkloadEndpointHostV2, Port: "8080"},
-		{ID: "socket", Scheme: "ws", Host: controlledsession.WorkloadEndpointHostV2, Port: "9090"},
+		{ID: "browser", Scheme: "http", Host: controlledsession.WorkloadEndpointHostV1, Port: "8080"},
+		{ID: "socket", Scheme: "ws", Host: controlledsession.WorkloadEndpointHostV1, Port: "9090"},
 	}
 	wantName := input.WorkloadRuntime.Docker.NetworkName + "-session-" + input.LiveRunID
 	if !reflect.DeepEqual(plan.Controller.SessionNetwork.Endpoints, wantEndpoints) ||
@@ -215,9 +215,9 @@ func TestPlanControlledSessionV1FreezesGrantedEndpointCoordinatesAndLeaseNetwork
 		}) {
 		t.Fatalf("inert Docker network modes = %q/%q", plan.Controller.Network, plan.Workload.Network)
 	}
-	wantOpenedEndpoints := []controlledsession.EndpointV2{
-		{ID: "browser", Scheme: "http", Host: controlledsession.WorkloadEndpointHostV2, Port: 8080},
-		{ID: "socket", Scheme: "ws", Host: controlledsession.WorkloadEndpointHostV2, Port: 9090},
+	wantOpenedEndpoints := []controlledsession.EndpointV1{
+		{ID: "browser", Scheme: "http", Host: controlledsession.WorkloadEndpointHostV1, Port: 8080},
+		{ID: "socket", Scheme: "ws", Host: controlledsession.WorkloadEndpointHostV1, Port: 9090},
 	}
 	if got := controlledSessionOpenedEndpointsV1(plan.Controller.SessionNetwork.Endpoints); !reflect.DeepEqual(got, wantOpenedEndpoints) {
 		t.Fatalf("planned opened endpoints = %#v, want %#v", got, wantOpenedEndpoints)

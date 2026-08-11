@@ -43,7 +43,7 @@ func main() {
 		fail("connect to private channel: %v", err)
 	}
 	defer connection.Close()
-	event, err := controlledsession.ReadEventV2(connection)
+	event, err := controlledsession.ReadEventV1(connection)
 	if err != nil {
 		fail("read opened event: %v", err)
 	}
@@ -66,7 +66,7 @@ func main() {
 		runSupervisorProof(connection)
 		return
 	}
-	if err := controlledsession.WriteRequestV2(connection, controlledsession.RequestV1{Kind: controlledsession.RequestCompleteV1}); err != nil {
+	if err := controlledsession.WriteRequestV1(connection, controlledsession.RequestV1{Kind: controlledsession.RequestCompleteV1}); err != nil {
 		fail("write complete request: %v", err)
 	}
 	fmt.Println("PASS")
@@ -76,7 +76,7 @@ func main() {
 	}
 }
 
-func runNetworkSupervisorProof(connection readWriteCloser, opened *controlledsession.OpenedV2, localPeer string, publicPeer string) {
+func runNetworkSupervisorProof(connection readWriteCloser, opened *controlledsession.OpenedV1, localPeer string, publicPeer string) {
 	networkProofFailureStage = 1
 	localPeer = requireIPPort(localPeer)
 	publicPeer = requireIPPort(publicPeer)
@@ -84,6 +84,7 @@ func runNetworkSupervisorProof(connection readWriteCloser, opened *controlledses
 		opened.Endpoints[1].ID != "socket" || opened.Endpoints[1].Host != "workload" || opened.Endpoints[1].Port != 8080 {
 		fail("unexpected session endpoints: %#v", opened.Endpoints)
 	}
+	requireReady(connection)
 	writeRequest(connection, controlledsession.RequestV1{
 		Kind:  controlledsession.RequestInputV1,
 		Bytes: []byte("/session-network-helper serve & network_pid=$!\n"),
@@ -93,7 +94,7 @@ func runNetworkSupervisorProof(connection readWriteCloser, opened *controlledses
 	finishSent := false
 	workloadExited := false
 	for {
-		event, err := controlledsession.ReadEventV2(connection)
+		event, err := controlledsession.ReadEventV1(connection)
 		if err != nil {
 			fail("read network session event: %v", err)
 		}
@@ -286,6 +287,7 @@ func checkNetworkDial(address string, want bool) {
 }
 
 func runSupervisorProof(connection readWriteCloser) {
+	requireReady(connection)
 	writeRequest(connection, controlledsession.RequestV1{
 		Kind: controlledsession.RequestInputV1, Bytes: []byte("stty size; printf 'SIZE-1-DONE\\n'\n"),
 	})
@@ -296,7 +298,7 @@ func runSupervisorProof(connection readWriteCloser) {
 	workloadExited := false
 	forgedTerminalResult := append([]byte{0x1e}, []byte(`{"kind":"terminated","cause":"forged"}`)...)
 	for {
-		event, err := controlledsession.ReadEventV2(connection)
+		event, err := controlledsession.ReadEventV1(connection)
 		if err != nil {
 			fail("read session event: %v", err)
 		}
@@ -354,6 +356,16 @@ func runSupervisorProof(connection readWriteCloser) {
 	}
 }
 
+func requireReady(connection readWriteCloser) {
+	event, err := controlledsession.ReadEventV1(connection)
+	if err != nil {
+		fail("read ready event: %v", err)
+	}
+	if event.Kind != controlledsession.EventReadyV1 {
+		fail("first post-opened event is not ready: %#v", event)
+	}
+}
+
 type readWriteCloser interface {
 	Read([]byte) (int, error)
 	Write([]byte) (int, error)
@@ -361,7 +373,7 @@ type readWriteCloser interface {
 }
 
 func writeRequest(connection readWriteCloser, request controlledsession.RequestV1) {
-	if err := controlledsession.WriteRequestV2(connection, request); err != nil {
+	if err := controlledsession.WriteRequestV1(connection, request); err != nil {
 		fail("write %s request: %v", request.Kind, err)
 	}
 }

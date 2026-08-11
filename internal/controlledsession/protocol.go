@@ -13,11 +13,7 @@ import (
 )
 
 const (
-	// ProtocolVersionV1 is the original wire version whose opened event did
-	// not contain endpoint coordinates. It remains reserved so the expanded
-	// opened event cannot be mistaken for the old strict JSON schema.
 	ProtocolVersionV1                                     = 1
-	ProtocolVersionV2                                     = 2
 	MaxFramePayloadV1                                     = 1 << 20
 	DefaultOutputFinalizationTimeoutMillisecondsV1 uint32 = 30_000
 	frameHeaderSizeV1                                     = 10
@@ -27,9 +23,9 @@ const (
 var frameMagicV1 = [4]byte{'R', 'P', 'S', 'N'}
 
 var protocolCodePatternV1 = regexp.MustCompile(`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$`)
-var endpointSchemePatternV2 = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*$`)
+var endpointSchemePatternV1 = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*$`)
 
-const WorkloadEndpointHostV2 = "workload"
+const WorkloadEndpointHostV1 = "workload"
 
 type RequestKindV1 string
 
@@ -52,6 +48,7 @@ type EventKindV1 string
 
 const (
 	EventOpenedV1                   EventKindV1 = "opened"
+	EventReadyV1                    EventKindV1 = "ready"
 	EventOutputV1                   EventKindV1 = "output"
 	EventWorkloadExitV1             EventKindV1 = "workload-exit"
 	EventTerminatingV1              EventKindV1 = "terminating"
@@ -60,20 +57,20 @@ const (
 	EventTerminatedV1               EventKindV1 = "terminated"
 )
 
-// OpenedV2 expands the original opened payload with immutable session-local
-// endpoint coordinates and therefore requires protocol wire version 2.
-type OpenedV2 struct {
+// OpenedV1 carries the immutable authorization, session-local endpoint
+// coordinates, terminal dimensions, and output-finalization deadline.
+type OpenedV1 struct {
 	Authorization                         AuthorizationV1 `json:"authorization"`
-	Endpoints                             []EndpointV2    `json:"endpoints"`
+	Endpoints                             []EndpointV1    `json:"endpoints"`
 	Columns                               uint32          `json:"columns"`
 	Rows                                  uint32          `json:"rows"`
 	OutputFinalizationTimeoutMilliseconds uint32          `json:"output_finalization_timeout_milliseconds"`
 }
 
-// EndpointV2 is one immutable session-local coordinate granted to the
+// EndpointV1 is one immutable session-local coordinate granted to the
 // controller. Traffic uses native TCP; only these coordinates cross the
 // private session channel.
-type EndpointV2 struct {
+type EndpointV1 struct {
 	ID     string `json:"id"`
 	Scheme string `json:"scheme"`
 	Host   string `json:"host"`
@@ -101,7 +98,7 @@ type WorkloadOutputsFinalizedV1 struct {
 type EventV1 struct {
 	Kind                     EventKindV1
 	Bytes                    []byte
-	Opened                   *OpenedV2
+	Opened                   *OpenedV1
 	WorkloadExit             *WorkloadExitV1
 	Terminating              *TerminatingV1
 	Diagnostic               *DiagnosticV1
@@ -127,6 +124,7 @@ const (
 	wireEventDiagnosticV1               wireKindV1 = 0x85
 	wireEventTerminatedV1               wireKindV1 = 0x86
 	wireEventWorkloadOutputsFinalizedV1 wireKindV1 = 0x87
+	wireEventReadyV1                    wireKindV1 = 0x88
 )
 
 func ValidateRequestV1(request RequestV1) error {
@@ -158,7 +156,7 @@ func ValidateEventV1(event EventV1) error {
 		if err := ValidateAuthorizationV1(event.Opened.Authorization); err != nil {
 			return fmt.Errorf("controlled-session opened event: %w", err)
 		}
-		if err := validateOpenedEndpointsV2(event.Opened.Endpoints, event.Opened.Authorization.EndpointIDs); err != nil {
+		if err := validateOpenedEndpointsV1(event.Opened.Endpoints, event.Opened.Authorization.EndpointIDs); err != nil {
 			return err
 		}
 		if !validDimensionsV1(event.Opened.Columns, event.Opened.Rows) {
@@ -166,6 +164,10 @@ func ValidateEventV1(event EventV1) error {
 		}
 		if event.Opened.OutputFinalizationTimeoutMilliseconds == 0 {
 			return fmt.Errorf("controlled-session opened event requires a finite output-finalization timeout")
+		}
+	case EventReadyV1:
+		if eventPayloadCountV1(event) != 0 {
+			return fmt.Errorf("controlled-session ready event must not contain a payload")
 		}
 	case EventOutputV1:
 		if event.Bytes == nil || eventPayloadCountV1(event) != 1 {
@@ -218,7 +220,7 @@ func ValidateEventV1(event EventV1) error {
 	return nil
 }
 
-func validateOpenedEndpointsV2(endpoints []EndpointV2, authorizedIDs []string) error {
+func validateOpenedEndpointsV1(endpoints []EndpointV1, authorizedIDs []string) error {
 	if endpoints == nil {
 		return fmt.Errorf("controlled-session opened endpoints must use an array")
 	}
@@ -229,22 +231,22 @@ func validateOpenedEndpointsV2(endpoints []EndpointV2, authorizedIDs []string) e
 		if endpoint.ID != authorizedIDs[index] {
 			return fmt.Errorf("controlled-session opened endpoint %d must match authorized endpoint ID %q", index, authorizedIDs[index])
 		}
-		if err := ValidateEndpointV2(endpoint); err != nil {
+		if err := ValidateEndpointV1(endpoint); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func ValidateEndpointV2(endpoint EndpointV2) error {
+func ValidateEndpointV1(endpoint EndpointV1) error {
 	if err := endpointname.Validate(endpoint.ID); err != nil {
 		return fmt.Errorf("controlled-session endpoint ID %q: %w", endpoint.ID, err)
 	}
-	if !endpointSchemePatternV2.MatchString(endpoint.Scheme) {
+	if !endpointSchemePatternV1.MatchString(endpoint.Scheme) {
 		return fmt.Errorf("controlled-session endpoint %q scheme must use URI-scheme syntax", endpoint.ID)
 	}
-	if endpoint.Host != WorkloadEndpointHostV2 {
-		return fmt.Errorf("controlled-session endpoint %q host must be %q", endpoint.ID, WorkloadEndpointHostV2)
+	if endpoint.Host != WorkloadEndpointHostV1 {
+		return fmt.Errorf("controlled-session endpoint %q host must be %q", endpoint.ID, WorkloadEndpointHostV1)
 	}
 	if endpoint.Port == 0 || endpoint.Port > 65535 {
 		return fmt.Errorf("controlled-session endpoint %q port must be between 1 and 65535", endpoint.ID)
@@ -252,16 +254,16 @@ func ValidateEndpointV2(endpoint EndpointV2) error {
 	return nil
 }
 
-func WriteRequestV2(writer io.Writer, request RequestV1) error {
+func WriteRequestV1(writer io.Writer, request RequestV1) error {
 	if err := ValidateRequestV1(request); err != nil {
 		return err
 	}
 	kind, payload := encodeRequestPayloadV1(request)
-	return writeFrameV2(writer, kind, payload)
+	return writeFrameV1(writer, kind, payload)
 }
 
-func ReadRequestV2(reader io.Reader) (RequestV1, error) {
-	kind, payload, err := readFrameV2(reader)
+func ReadRequestV1(reader io.Reader) (RequestV1, error) {
+	kind, payload, err := readFrameV1(reader)
 	if err != nil {
 		return RequestV1{}, err
 	}
@@ -275,7 +277,7 @@ func ReadRequestV2(reader io.Reader) (RequestV1, error) {
 	return request, nil
 }
 
-func WriteEventV2(writer io.Writer, event EventV1) error {
+func WriteEventV1(writer io.Writer, event EventV1) error {
 	if err := ValidateEventV1(event); err != nil {
 		return err
 	}
@@ -283,11 +285,11 @@ func WriteEventV2(writer io.Writer, event EventV1) error {
 	if err != nil {
 		return err
 	}
-	return writeFrameV2(writer, kind, payload)
+	return writeFrameV1(writer, kind, payload)
 }
 
-func ReadEventV2(reader io.Reader) (EventV1, error) {
-	kind, payload, err := readFrameV2(reader)
+func ReadEventV1(reader io.Reader) (EventV1, error) {
+	kind, payload, err := readFrameV1(reader)
 	if err != nil {
 		return EventV1{}, err
 	}
@@ -354,6 +356,8 @@ func encodeEventPayloadV1(event EventV1) (wireKindV1, []byte, error) {
 	switch event.Kind {
 	case EventOpenedV1:
 		return marshalEventPayloadV1(wireEventOpenedV1, event.Opened)
+	case EventReadyV1:
+		return wireEventReadyV1, nil, nil
 	case EventOutputV1:
 		return wireEventOutputV1, event.Bytes, nil
 	case EventWorkloadExitV1:
@@ -382,8 +386,13 @@ func marshalEventPayloadV1(kind wireKindV1, value any) (wireKindV1, []byte, erro
 func decodeEventPayloadV1(kind wireKindV1, payload []byte) (EventV1, error) {
 	switch kind {
 	case wireEventOpenedV1:
-		value := new(OpenedV2)
+		value := new(OpenedV1)
 		return EventV1{Kind: EventOpenedV1, Opened: value}, decodeStrictJSONV1("opened event", payload, value)
+	case wireEventReadyV1:
+		if len(payload) != 0 {
+			return EventV1{}, fmt.Errorf("controlled-session ready frame must not contain a payload")
+		}
+		return EventV1{Kind: EventReadyV1}, nil
 	case wireEventOutputV1:
 		return EventV1{Kind: EventOutputV1, Bytes: payload}, nil
 	case wireEventWorkloadExitV1:
@@ -424,13 +433,13 @@ func eventPayloadCountV1(event EventV1) int {
 	return count
 }
 
-func writeFrameV2(writer io.Writer, kind wireKindV1, payload []byte) error {
+func writeFrameV1(writer io.Writer, kind wireKindV1, payload []byte) error {
 	if len(payload) > MaxFramePayloadV1 {
 		return fmt.Errorf("controlled-session frame payload exceeds %d bytes", MaxFramePayloadV1)
 	}
 	header := make([]byte, frameHeaderSizeV1)
 	copy(header[:4], frameMagicV1[:])
-	header[4] = ProtocolVersionV2
+	header[4] = ProtocolVersionV1
 	header[5] = byte(kind)
 	binary.BigEndian.PutUint32(header[6:], uint32(len(payload)))
 	if err := writeAllV1(writer, header); err != nil {
@@ -442,7 +451,7 @@ func writeFrameV2(writer io.Writer, kind wireKindV1, payload []byte) error {
 	return nil
 }
 
-func readFrameV2(reader io.Reader) (wireKindV1, []byte, error) {
+func readFrameV1(reader io.Reader) (wireKindV1, []byte, error) {
 	header := make([]byte, frameHeaderSizeV1)
 	if _, err := io.ReadFull(reader, header); err != nil {
 		return 0, nil, fmt.Errorf("read controlled-session frame header: %w", err)
@@ -450,7 +459,7 @@ func readFrameV2(reader io.Reader) (wireKindV1, []byte, error) {
 	if !bytes.Equal(header[:4], frameMagicV1[:]) {
 		return 0, nil, fmt.Errorf("controlled-session frame magic is invalid")
 	}
-	if header[4] != ProtocolVersionV2 {
+	if header[4] != ProtocolVersionV1 {
 		return 0, nil, fmt.Errorf("controlled-session protocol version %d is unsupported", header[4])
 	}
 	length := binary.BigEndian.Uint32(header[6:])
