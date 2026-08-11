@@ -40,7 +40,7 @@ func TestPrivateChannelV1CreatesOneControllerOwnedClaim(t *testing.T) {
 		}{connection: connection, err: err}
 	}()
 	client := dialPrivateChannelV1(t, socket)
-	opened, err := ReadEventV2(client)
+	opened, err := ReadEventV1(client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestPrivateChannelV1CreatesOneControllerOwnedClaim(t *testing.T) {
 	}
 
 	wantRequest := RequestV1{Kind: RequestInputV1, Bytes: []byte{0, 3, 0xff}}
-	if err := WriteRequestV2(client, wantRequest); err != nil {
+	if err := WriteRequestV1(client, wantRequest); err != nil {
 		t.Fatal(err)
 	}
 	request, err := result.connection.ReadRequest(ctx)
@@ -74,7 +74,7 @@ func TestPrivateChannelV1CreatesOneControllerOwnedClaim(t *testing.T) {
 	if err := result.connection.WriteEvent(ctx, wantEvent); err != nil {
 		t.Fatal(err)
 	}
-	event, err := ReadEventV2(client)
+	event, err := ReadEventV1(client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestPrivateChannelV1RejectsMalformedAndOversizedRequests(t *testing.T) {
 		{name: "oversized", data: func() []byte {
 			header := make([]byte, frameHeaderSizeV1)
 			copy(header, frameMagicV1[:])
-			header[4] = ProtocolVersionV2
+			header[4] = ProtocolVersionV1
 			header[5] = byte(wireRequestInputV1)
 			binary.BigEndian.PutUint32(header[6:], MaxFramePayloadV1+1)
 			return header
@@ -220,7 +220,7 @@ func TestPrivateChannelV1RejectsMalformedAndOversizedRequests(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			channel, _ := prepareCurrentIdentityChannelV1(t)
 			server, client := claimPrivateChannelV1(t, channel)
-			if _, err := ReadEventV2(client); err != nil {
+			if _, err := ReadEventV1(client); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := client.Write(test.data); err != nil {
@@ -292,7 +292,7 @@ func TestControllerConnectionV1BoundsAndSerializesFlow(t *testing.T) {
 		}
 		got := make([]EventV1, 0, len(events))
 		for range events {
-			event, err := ReadEventV2(client)
+			event, err := ReadEventV1(client)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -315,7 +315,7 @@ func TestPreparePrivateChannelV1FreezesOpenedAuthorization(t *testing.T) {
 	config.Opened.Endpoints[0].Port = 9999
 	server, client := claimPrivateChannelV1(t, channel)
 	defer server.Close()
-	event, err := ReadEventV2(client)
+	event, err := ReadEventV1(client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +352,7 @@ func currentIdentityChannelConfigV1(t *testing.T) PrivateChannelConfigV1 {
 	authorization.Controller.RuntimeIdentity = identity
 	config := PrivateChannelConfigV1{
 		HostDirectory: filepath.Join(shortChannelTestDirectoryV1(t), "session"),
-		Opened: OpenedV2{
+		Opened: OpenedV1{
 			Authorization: authorization, Endpoints: testEndpointsV1(), Columns: 80, Rows: 24,
 			OutputFinalizationTimeoutMilliseconds: DefaultOutputFinalizationTimeoutMillisecondsV1,
 		},

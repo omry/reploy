@@ -114,7 +114,7 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   implemented. The host resolves a sorted requested subset of the exact
   workload generation's declared endpoints and freezes their schemes,
   container ports, lease-local aliases, and internal network name into both
-  container-plan digests and the protocol-v2 `opened` coordinates. It creates
+  container-plan digests and the protocol-v1 `opened` coordinates. It creates
   one exact engine-internal network, records it before startup, derives fixed
   controller and workload addresses from the verified engine-assigned
   prefixes, attaches only the two exact inert containers, and removes the
@@ -545,9 +545,8 @@ use, but secrecy is not the sole security boundary. Isolation relies on:
 ## Session Protocol
 
 The protocol is versioned, typed, length-framed, and binary-safe. The current
-wire version is 2; version 1 remains reserved for the earlier strict `opened`
-shape that did not contain endpoint coordinates. Terminal bytes are never
-parsed as protocol messages.
+and initial wire version is 1. Terminal bytes are never parsed as protocol
+messages.
 
 ### Controller Requests
 
@@ -578,6 +577,13 @@ cleanup and no canceled request is replayed.
 - `opened`: reports the effective dimensions, both runtime identities and
   generations, fixed session capabilities, the structured coordinates of
   each granted workload endpoint, and the workload-output-finalization timeout.
+  It means that the controller has claimed the authenticated channel; the
+  workload may not have started yet.
+- `ready`: reports that Host Reploy has started the workload, verified its
+  lease-private network when present, and activated the lifecycle. Ordinary
+  controller requests are rejected before this payload-free event. A
+  startup failure never emits `ready`; the controller can still acknowledge the
+  resulting `terminated` event.
 - `output(bytes)`: ordered PTY output bytes.
 - `workload_exit(status, reason)`: reports host-observed workload-shell
   exit.
@@ -630,7 +636,7 @@ Host Reploy owns workload-output finalization; it never waits indefinitely for
 workload cooperation. Once termination begins, it rejects new output surfaces,
 performs bounded graceful shutdown followed by forced container stop, and
 continues draining the PTY. The immutable session plan carries a finite
-output-finalization deadline. Protocol v2 defines an initial host-owned default
+output-finalization deadline. Protocol v1 defines an initial host-owned default
 of 30 seconds; the effective value is reported by `opened` and applies to
 workload shutdown, final buffered-byte delivery, and controller backpressure.
 
@@ -651,7 +657,7 @@ completion by `complete` or terminal acknowledgement.
 
 The barrier initially covers the PTY. A future workload output-file or
 output-directory contract joins the same barrier after its files are closed,
-validated, and published or have recorded an explicit failure; protocol v2
+validated, and published or have recorded an explicit failure; protocol v1
 does not otherwise speculate about file payloads. Native network traffic is not
 session output and does not pass through this barrier.
 
@@ -1122,6 +1128,8 @@ asciinema
 The proxy forwards input bytes, output bytes, resize operations, and terminal
 completion. This keeps asciinema and recording dependencies out of workload
 images while preserving the existing cast format and controller ownership.
+It consumes `opened` as channel metadata and does not forward controller
+requests until `ready`.
 
 The prototype must test:
 

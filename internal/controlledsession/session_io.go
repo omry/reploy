@@ -337,7 +337,7 @@ func (gate *sessionEventWriteGateV1) notifyLocked() {
 
 func isBridgeLifecycleEventV1(kind EventKindV1) bool {
 	switch kind {
-	case EventWorkloadExitV1, EventTerminatingV1, EventDiagnosticV1,
+	case EventReadyV1, EventWorkloadExitV1, EventTerminatingV1, EventDiagnosticV1,
 		EventWorkloadOutputsFinalizedV1, EventTerminatedV1:
 		return true
 	case EventOpenedV1, EventOutputV1:

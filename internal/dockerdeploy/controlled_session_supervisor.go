@@ -128,6 +128,8 @@ type controlledSessionSupervisorV1 struct {
 	workload   controlledSessionWorkloadRuntimeV1
 	bridge     *controlledsession.SessionIOBridgeV1
 
+	requestReadinessMu           sync.Mutex
+	controllerRequestsReady      bool
 	startupResolved              chan struct{}
 	resolveOnce                  sync.Once
 	stateChanged                 chan struct{}
@@ -579,6 +581,15 @@ func (supervisor *controlledSessionSupervisorV1) run(ctx context.Context) (Contr
 	if _, err := supervisor.observe(controlledsession.ObservationV1{Kind: controlledsession.ObservationActivatedV1}); err != nil {
 		return supervisor.finishStartupFailure(fmt.Errorf("activate controlled-session lifecycle: %w", err))
 	}
+	supervisor.requestReadinessMu.Lock()
+	readyErr := supervisor.sendLifecycleEvent(controlledsession.EventV1{Kind: controlledsession.EventReadyV1})
+	if readyErr == nil {
+		supervisor.controllerRequestsReady = true
+	}
+	supervisor.requestReadinessMu.Unlock()
+	if readyErr != nil {
+		supervisor.loseTransport("send ready event", readyErr)
+	}
 	supervisor.resolveStartup()
 
 	supervisor.waitForTermination(ctx)
@@ -861,12 +872,20 @@ func observeControlledSessionProcessV1(
 }
 
 func (supervisor *controlledSessionSupervisorV1) handleRequest(ctx context.Context, request controlledsession.RequestV1) error {
-	select {
-	case <-supervisor.startupResolved:
-	case <-ctx.Done():
-		return ctx.Err()
+	if request.Kind != controlledsession.RequestAcknowledgeTerminatedV1 {
+		supervisor.requestReadinessMu.Lock()
+		ready := supervisor.controllerRequestsReady
+		supervisor.requestReadinessMu.Unlock()
+		if !ready {
+			return fmt.Errorf("%w: requests are not accepted before ready", controlledsession.ErrRequestRejected)
+		}
 	}
 	if request.Kind == controlledsession.RequestAcknowledgeTerminatedV1 {
+		select {
+		case <-supervisor.startupResolved:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		select {
 		case <-supervisor.resultDeliveryStarted:
 			select {
