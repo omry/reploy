@@ -93,7 +93,7 @@ func TestRunControlledSessionV1OwnsNormalLifecycle(t *testing.T) {
 	}
 
 	events := transport.snapshotEvents()
-	if len(events) != 5 {
+	if len(events) != 6 {
 		t.Fatalf("events = %#v", events)
 	}
 	indices := map[controlledsession.EventKindV1]int{}
@@ -101,6 +101,7 @@ func TestRunControlledSessionV1OwnsNormalLifecycle(t *testing.T) {
 		indices[event.Kind] = index
 	}
 	for _, kind := range []controlledsession.EventKindV1{
+		controlledsession.EventReadyV1,
 		controlledsession.EventOutputV1,
 		controlledsession.EventWorkloadExitV1,
 		controlledsession.EventTerminatingV1,
@@ -111,13 +112,36 @@ func TestRunControlledSessionV1OwnsNormalLifecycle(t *testing.T) {
 			t.Fatalf("event %q missing from %#v", kind, events)
 		}
 	}
-	if indices[controlledsession.EventWorkloadExitV1] > indices[controlledsession.EventTerminatingV1] ||
+	if indices[controlledsession.EventReadyV1] > indices[controlledsession.EventWorkloadExitV1] ||
+		indices[controlledsession.EventWorkloadExitV1] > indices[controlledsession.EventTerminatingV1] ||
 		indices[controlledsession.EventOutputV1] > indices[controlledsession.EventWorkloadOutputsFinalizedV1] ||
 		indices[controlledsession.EventWorkloadOutputsFinalizedV1] > indices[controlledsession.EventTerminatedV1] {
 		t.Fatalf("event order = %#v", events)
 	}
 	if string(events[indices[controlledsession.EventOutputV1]].Bytes) != "hello from workload\n" {
 		t.Fatalf("output events = %#v", events)
+	}
+}
+
+func TestControlledSessionSupervisorRejectsRequestBeforeReady(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	machine, err := controlledsession.NewMachineV1(plan.Authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workload := newFakeControlledSessionWorkloadV1(nil, 0)
+	supervisor := &controlledSessionSupervisorV1{machine: machine, workload: workload}
+
+	err = supervisor.handleRequest(t.Context(), controlledsession.RequestV1{
+		Kind: controlledsession.RequestInputV1, Bytes: []byte("too early"),
+	})
+	if !errors.Is(err, controlledsession.ErrRequestRejected) || !strings.Contains(err.Error(), "before ready") {
+		t.Fatalf("pre-ready request error = %v", err)
+	}
+	select {
+	case <-workload.inputStarted:
+		t.Fatal("pre-ready request reached the workload")
+	default:
 	}
 }
 
@@ -1200,6 +1224,11 @@ func TestRunControlledSessionV1CleansPreparedResourcesAfterStartupFailure(t *tes
 	if !controller.cleaned || !workload.cleaned || !channel.closed {
 		t.Fatalf("cleanup = controller %t workload %t channel %t", controller.cleaned, workload.cleaned, channel.closed)
 	}
+	for _, event := range transport.snapshotEvents() {
+		if event.Kind == controlledsession.EventReadyV1 {
+			t.Fatalf("startup failure emitted ready: %#v", transport.snapshotEvents())
+		}
+	}
 }
 
 func TestRunControlledSessionV1RecordsHostCancellationDuringStartup(t *testing.T) {
@@ -1381,8 +1410,9 @@ func TestRunControlledSessionV1StopsWorkloadAfterOutputDeliveryFailure(t *testin
 	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
 	deliveryErr := errors.New("controller event transport failed")
 	transport := &fakeControlledSessionTransportV1{
-		requests: make(chan controlledsession.RequestV1),
-		writeErr: deliveryErr,
+		requests:     make(chan controlledsession.RequestV1),
+		writeErr:     deliveryErr,
+		writeErrKind: controlledsession.EventOutputV1,
 	}
 	controller := newFakeControlledSessionProcessV1()
 	workload := newFakeControlledSessionWorkloadV1(nil, 143)
@@ -1415,6 +1445,41 @@ func TestRunControlledSessionV1StopsWorkloadAfterOutputDeliveryFailure(t *testin
 		result.SessionResult.WorkloadOutputFinalizationStatus.Kind != controlledsession.WorkloadOutputFinalizationFailedV1 ||
 		result.ResultDelivered || !workload.gracefulStopped || !workload.cleaned {
 		t.Fatalf("delivery-loss result = %#v, workload = %#v", result, workload)
+	}
+}
+
+func TestRunControlledSessionV1StopsWorkloadAfterReadyDeliveryFailure(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	deliveryErr := errors.New("controller ready transport failed")
+	transport := &fakeControlledSessionTransportV1{
+		requests:     make(chan controlledsession.RequestV1),
+		writeErr:     deliveryErr,
+		writeErrKind: controlledsession.EventReadyV1,
+	}
+	controller := newFakeControlledSessionProcessV1()
+	workload := newFakeControlledSessionWorkloadV1(nil, 143)
+	workload.exitOnStart = false
+	channel := &fakeControlledSessionChannelV1{transport: transport}
+
+	result, err := runControlledSessionV1(t.Context(), plan, testControlledSessionRunOptionsV1(), controlledSessionSupervisorBackendV1{
+		prepareChannel: func(ControlledSessionExecutionPlanV1) (controlledSessionChannelRuntimeV1, error) {
+			return channel, nil
+		},
+		prepareController: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionControllerRuntimeV1, error) {
+			return controller, nil
+		},
+		prepareWorkload: func(context.Context, ControlledSessionContainerPlanV1) (controlledSessionWorkloadRuntimeV1, error) {
+			return workload, nil
+		},
+		now: time.Now,
+	})
+	if !errors.Is(err, deliveryErr) {
+		t.Fatalf("error = %v", err)
+	}
+	if result.SessionResult.Cause != controlledsession.CauseControllerLostV1 ||
+		result.ResultDelivered || !workload.gracefulStopped || !workload.cleaned || !controller.cleaned || !channel.closed {
+		t.Fatalf("ready-delivery-loss result = %#v, workload = %#v, controller cleaned = %t, channel closed = %t",
+			result, workload, controller.cleaned, channel.closed)
 	}
 }
 
@@ -1608,6 +1673,7 @@ type fakeControlledSessionTransportV1 struct {
 	onRequest         func(controlledsession.RequestV1)
 	onEvent           func(controlledsession.EventV1)
 	writeErr          error
+	writeErrKind      controlledsession.EventKindV1
 	blockEventKind    controlledsession.EventKindV1
 	eventWriteBlocked chan struct{}
 	releaseEventWrite chan struct{}
@@ -1629,11 +1695,12 @@ func (transport *fakeControlledSessionTransportV1) ReadRequest(ctx context.Conte
 }
 
 func (transport *fakeControlledSessionTransportV1) WriteEvent(ctx context.Context, event controlledsession.EventV1) error {
-	if transport.writeErr != nil {
-		return transport.writeErr
-	}
 	event.Bytes = append([]byte(nil), event.Bytes...)
 	transport.mu.Lock()
+	if transport.writeErr != nil && (transport.writeErrKind == "" || transport.writeErrKind == event.Kind) {
+		defer transport.mu.Unlock()
+		return transport.writeErr
+	}
 	transport.events = append(transport.events, event)
 	transport.mu.Unlock()
 	if transport.onEvent != nil {

@@ -95,7 +95,7 @@ func controlledSessionPrivateChannelConfigV1(plan ControlledSessionExecutionPlan
 	}
 	return controlledsession.PrivateChannelConfigV1{
 		HostDirectory: plan.Channel.HostDirectory,
-		Opened: controlledsession.OpenedV2{
+		Opened: controlledsession.OpenedV1{
 			Authorization:                         plan.Authorization,
 			Endpoints:                             controlledSessionOpenedEndpointsV1(plan.Controller.SessionNetwork.Endpoints),
 			Columns:                               uint32(columns),
