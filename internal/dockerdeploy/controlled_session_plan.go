@@ -45,6 +45,7 @@ type ControlledSessionPlanInputV1 struct {
 	ControllerRuntime            CurrentRuntimePlanV1
 	ControllerCommand            string
 	ControllerForwardedArguments []string
+	controllerOutput             *transientOutputMount
 	WorkloadCurrent              CurrentBuild
 	WorkloadRuntime              CurrentRuntimePlanV1
 	EndpointIDs                  []string
@@ -53,7 +54,7 @@ type ControlledSessionPlanInputV1 struct {
 }
 
 type controlledSessionPlanBackendV1 struct {
-	requireReady   func(CurrentBuild, CurrentRuntimePlanV1, string) error
+	requireReady   func(CurrentBuild, CurrentRuntimePlanV1, string, *transientOutputMount) error
 	resolveCommand func(blueprint.Document, CurrentBuild, DockerExecutionPlan, string, []string) (ResolvedEnvironmentCommand, error)
 }
 
@@ -203,13 +204,13 @@ func planControlledSessionV1(input ControlledSessionPlanInputV1, backend control
 	}
 	if err := validateControlledSessionCurrentRuntimeV1(
 		"controller", input.ControllerCurrent, input.ControllerRuntime,
-		runtimeCommandPlanID(input.ControllerCommand, false), backend.requireReady,
+		runtimeCommandPlanID(input.ControllerCommand, input.controllerOutput != nil), input.controllerOutput, backend.requireReady,
 	); err != nil {
 		return ControlledSessionExecutionPlanV1{}, err
 	}
 	if err := validateControlledSessionCurrentRuntimeV1(
 		"workload", input.WorkloadCurrent, input.WorkloadRuntime,
-		runtimeShellPlanID, backend.requireReady,
+		runtimeShellPlanID, nil, backend.requireReady,
 	); err != nil {
 		return ControlledSessionExecutionPlanV1{}, err
 	}
@@ -251,6 +252,7 @@ func planControlledSessionV1(input ControlledSessionPlanInputV1, backend control
 		channel,
 		[]string{input.ControllerRuntime.Docker.DeploymentDir, input.WorkloadRuntime.Docker.DeploymentDir},
 		controllerNetwork,
+		input.controllerOutput,
 		0,
 		0,
 	)
@@ -266,6 +268,7 @@ func planControlledSessionV1(input ControlledSessionPlanInputV1, backend control
 		channel,
 		[]string{input.ControllerRuntime.Docker.DeploymentDir, input.WorkloadRuntime.Docker.DeploymentDir},
 		workloadNetwork,
+		nil,
 		input.InitialColumns,
 		input.InitialRows,
 	)
@@ -462,6 +465,13 @@ func ValidateControlledSessionContainerPlanV1(plan ControlledSessionContainerPla
 	if plan.Role == ControlledSessionRoleControllerV1 {
 		wantEnvironment = append(wantEnvironment, "REPLOY_SESSION_SOCKET="+path.Join(controlledSessionChannelRootV1, controlledSessionChannelSocketNameV1))
 	}
+	outputEnvironment, err := validateControlledSessionOutputV1(plan)
+	if err != nil {
+		return err
+	}
+	if outputEnvironment != "" {
+		wantEnvironment = append(wantEnvironment, outputEnvironment)
+	}
 	if !slices.Equal(plan.Environment, wantEnvironment) {
 		return fmt.Errorf("container environment does not match the fixed session contract")
 	}
@@ -500,6 +510,42 @@ func ValidateControlledSessionContainerPlanV1(plan ControlledSessionContainerPla
 		return fmt.Errorf("container lifecycle commands do not reflect the immutable plan")
 	}
 	return nil
+}
+
+func validateControlledSessionOutputV1(plan ControlledSessionContainerPlanV1) (string, error) {
+	var output *ControlledSessionMountV1
+	for index := range plan.Mounts {
+		mount := &plan.Mounts[index]
+		if mount.Name != "controller-output" && mount.Target != runtimeOutputRoot {
+			continue
+		}
+		if output != nil {
+			return "", fmt.Errorf("container plan contains multiple controller output mounts")
+		}
+		output = mount
+	}
+	if output == nil {
+		return "", nil
+	}
+	if plan.Role != ControlledSessionRoleControllerV1 {
+		return "", fmt.Errorf("workload plan must not expose the controller output")
+	}
+	want := ControlledSessionMountV1{
+		Name: "controller-output", Type: "bind", Source: output.Source,
+		SourceKind: deploy.RuntimeMountSourceDirectory, Target: runtimeOutputRoot,
+	}
+	if !reflect.DeepEqual(*output, want) {
+		return "", fmt.Errorf("controller output mount does not match the fixed session contract")
+	}
+	for _, value := range plan.Environment {
+		switch value {
+		case runtimeOutputDirectoryVariable + "=" + runtimeOutputRoot:
+			return value, nil
+		case runtimeOutputFileVariable + "=" + path.Join(runtimeOutputRoot, runtimeOutputFileName):
+			return value, nil
+		}
+	}
+	return "", fmt.Errorf("controller output mount requires exactly one supported output environment coordinate")
 }
 
 func controlledSessionEndpointPlansV1(
@@ -675,9 +721,10 @@ func validateControlledSessionCurrentRuntimeV1(
 	current CurrentBuild,
 	runtime CurrentRuntimePlanV1,
 	planID string,
-	requireReady func(CurrentBuild, CurrentRuntimePlanV1, string) error,
+	output *transientOutputMount,
+	requireReady func(CurrentBuild, CurrentRuntimePlanV1, string, *transientOutputMount) error,
 ) error {
-	if err := requireReady(current, runtime, planID); err != nil {
+	if err := requireReady(current, runtime, planID, output); err != nil {
 		return fmt.Errorf("plan controlled session %s current build: %w", role, err)
 	}
 	document, err := blueprint.DecodeResolvedDocumentV1(current.State.Blueprint)
@@ -693,8 +740,8 @@ func validateControlledSessionCurrentRuntimeV1(
 	return nil
 }
 
-func requireControlledSessionRuntimeReadyV1(current CurrentBuild, runtime CurrentRuntimePlanV1, planID string) error {
-	sources, err := RuntimeHostSourcesV1(runtime.Docker, nil)
+func requireControlledSessionRuntimeReadyV1(current CurrentBuild, runtime CurrentRuntimePlanV1, planID string, output *transientOutputMount) error {
+	sources, err := RuntimeHostSourcesV1(runtime.Docker, output)
 	if err != nil {
 		return err
 	}
@@ -712,6 +759,7 @@ func controlledSessionContainerPlanV1(
 	channel ControlledSessionChannelPlanV1,
 	protectedDeploymentRoots []string,
 	sessionNetwork ControlledSessionNetworkPlanV1,
+	output *transientOutputMount,
 	columns uint32,
 	rows uint32,
 ) (ControlledSessionContainerPlanV1, error) {
@@ -733,6 +781,20 @@ func controlledSessionContainerPlanV1(
 		mounts = append(mounts, ControlledSessionMountV1{
 			Name: "session-channel", Type: "bind", Source: channel.HostDirectory,
 			SourceKind: deploy.RuntimeMountSourceDirectory, Target: channel.ContainerDirectory, ReadOnly: true,
+		})
+	}
+	if output != nil {
+		if role != ControlledSessionRoleControllerV1 {
+			return ControlledSessionContainerPlanV1{}, fmt.Errorf("controlled-session output may be exposed only to the controller")
+		}
+		if !filepath.IsAbs(output.HostDirectory) || filepath.Clean(output.HostDirectory) != output.HostDirectory ||
+			(output.Variable != runtimeOutputDirectoryVariable && output.Variable != runtimeOutputFileVariable) ||
+			output.ContainerPath == "" {
+			return ControlledSessionContainerPlanV1{}, fmt.Errorf("controlled-session controller output mount is incomplete")
+		}
+		mounts = append(mounts, ControlledSessionMountV1{
+			Name: "controller-output", Type: "bind", Source: output.HostDirectory,
+			SourceKind: deploy.RuntimeMountSourceDirectory, Target: runtimeOutputRoot,
 		})
 	}
 	if sessionNetwork.Enabled {
@@ -760,6 +822,9 @@ func controlledSessionContainerPlanV1(
 	environment := []string{"HOME=" + dockerPlan.Sandbox.TemporaryHome, "TMPDIR=" + dockerPlan.Sandbox.TemporaryHome}
 	if role == ControlledSessionRoleControllerV1 {
 		environment = append(environment, "REPLOY_SESSION_SOCKET="+channel.ContainerSocket)
+		if output != nil {
+			environment = append(environment, output.Variable+"="+output.ContainerPath)
+		}
 	}
 	labels := []ControlledSessionLabelV1{
 		{Name: "io.reploy.session.build", Value: string(current.Generation.BuildLockDigest)},
