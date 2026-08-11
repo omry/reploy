@@ -64,15 +64,17 @@ type LiveRunQueueV1 struct {
 }
 
 type ControlledSessionOwnershipV1 struct {
-	LiveRunID        string                                `json:"live_run_id"`
-	BootSession      string                                `json:"boot_session"`
-	SessionHandle    string                                `json:"session_handle"`
-	DockerEndpoint   string                                `json:"docker_endpoint,omitempty"`
-	ChannelDirectory string                                `json:"channel_directory"`
-	NetworkID        string                                `json:"network_id,omitempty"`
-	NetworkName      string                                `json:"network_name,omitempty"`
-	Controller       ControlledSessionContainerOwnershipV1 `json:"controller"`
-	Workload         ControlledSessionContainerOwnershipV1 `json:"workload"`
+	LiveRunID                     string                                `json:"live_run_id"`
+	BootSession                   string                                `json:"boot_session"`
+	SessionHandle                 string                                `json:"session_handle"`
+	DockerEndpoint                string                                `json:"docker_endpoint,omitempty"`
+	ControllerDeploymentDirectory string                                `json:"controller_deployment_directory,omitempty"`
+	WorkloadDeploymentDirectory   string                                `json:"workload_deployment_directory,omitempty"`
+	ChannelDirectory              string                                `json:"channel_directory"`
+	NetworkID                     string                                `json:"network_id,omitempty"`
+	NetworkName                   string                                `json:"network_name,omitempty"`
+	Controller                    ControlledSessionContainerOwnershipV1 `json:"controller"`
+	Workload                      ControlledSessionContainerOwnershipV1 `json:"workload"`
 }
 
 const ControlledSessionNetworkRoleV1 = "network"
@@ -306,6 +308,29 @@ func validateControlledSessionOwnershipV1(ownership ControlledSessionOwnershipV1
 			return err
 		}
 	}
+	if (ownership.ControllerDeploymentDirectory == "") != (ownership.WorkloadDeploymentDirectory == "") {
+		return fmt.Errorf("controller and workload deployment directories must be recorded together")
+	}
+	if ownership.ControllerDeploymentDirectory != "" {
+		for _, participant := range []struct {
+			role      string
+			directory string
+		}{
+			{role: "controller", directory: ownership.ControllerDeploymentDirectory},
+			{role: "workload", directory: ownership.WorkloadDeploymentDirectory},
+		} {
+			if !filepath.IsAbs(participant.directory) || filepath.Clean(participant.directory) != participant.directory || !safeRecoveryIdentity(participant.directory) {
+				return fmt.Errorf("%s deployment directory must be a clean absolute path", participant.role)
+			}
+		}
+		if ownership.ControllerDeploymentDirectory == ownership.WorkloadDeploymentDirectory {
+			return fmt.Errorf("controller and workload deployment directories must be distinct")
+		}
+		expectedChannel := filepath.Join(ownership.WorkloadDeploymentDirectory, ".reploy", "sessions", ownership.LiveRunID)
+		if ownership.ChannelDirectory != expectedChannel {
+			return fmt.Errorf("channel directory must belong to the workload deployment")
+		}
+	}
 	if !filepath.IsAbs(ownership.ChannelDirectory) || filepath.Clean(ownership.ChannelDirectory) != ownership.ChannelDirectory || !safeRecoveryIdentity(ownership.ChannelDirectory) {
 		return fmt.Errorf("channel directory must be a clean absolute path")
 	}
@@ -355,6 +380,9 @@ func validateControlledSessionNetworkOwnershipV1(ownership ControlledSessionNetw
 func validateCurrentControlledSessionOwnershipV1(ownership ControlledSessionOwnershipV1) error {
 	if ownership.DockerEndpoint == "" {
 		return fmt.Errorf("Docker endpoint must be recorded for a new controlled session")
+	}
+	if ownership.ControllerDeploymentDirectory == "" || ownership.WorkloadDeploymentDirectory == "" {
+		return fmt.Errorf("controller and workload deployment directories must be recorded for a new controlled session")
 	}
 	return validateControlledSessionOwnershipV1(ownership)
 }

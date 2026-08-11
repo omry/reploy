@@ -87,8 +87,10 @@ func recoverLiveRunQueueWithinV1(
 			)
 		}
 	}
+	var controlledSessionCleanupErr error
 	for _, ownership := range recovery.ControlledSessions {
 		if err := cleanupContext.Err(); err != nil {
+			controlledSessionCleanupErr = errors.Join(controlledSessionCleanupErr, err)
 			if notice != nil {
 				fmt.Fprintf(notice, "warning: deferred remaining recovered controlled-session cleanup: %v\n", err)
 			}
@@ -97,6 +99,7 @@ func recoverLiveRunQueueWithinV1(
 		if err := cleanupControlledSessionRecoveryV1(
 			cleanupContext, operation, ownership, removeContainer, resolveLegacyDockerEndpoint,
 		); err != nil {
+			controlledSessionCleanupErr = errors.Join(controlledSessionCleanupErr, err)
 			if notice != nil {
 				fmt.Fprintf(notice,
 					"warning: deferred cleanup of recovered controlled session %q: %v\n",
@@ -116,6 +119,9 @@ func recoverLiveRunQueueWithinV1(
 			)
 		}
 	}
+	if controlledSessionCleanupErr != nil {
+		return recovery, fmt.Errorf("controlled-session recovery remains incomplete: %w", controlledSessionCleanupErr)
+	}
 	return recovery, nil
 }
 
@@ -127,7 +133,14 @@ func cleanupControlledSessionRecoveryV1(
 	resolveLegacyDockerEndpoint legacyControlledSessionDockerEndpointResolverV1,
 ) error {
 	deploymentDir := filepath.Dir(filepath.Dir(operation.Path()))
-	expectedChannel := filepath.Join(deploymentDir, privateRuntimeMetadataDirectoryName, "sessions", ownership.LiveRunID)
+	ownerDeploymentDir := deploymentDir
+	if ownership.WorkloadDeploymentDirectory != "" {
+		if deploymentDir != ownership.ControllerDeploymentDirectory && deploymentDir != ownership.WorkloadDeploymentDirectory {
+			return fmt.Errorf("refuse controlled-session recovery because deployment %q is not an exact session participant", deploymentDir)
+		}
+		ownerDeploymentDir = ownership.WorkloadDeploymentDirectory
+	}
+	expectedChannel := filepath.Join(ownerDeploymentDir, privateRuntimeMetadataDirectoryName, "sessions", ownership.LiveRunID)
 	if ownership.ChannelDirectory != expectedChannel {
 		return fmt.Errorf("refuse controlled-session recovery because channel directory %q is outside the exact deployment session path", ownership.ChannelDirectory)
 	}
