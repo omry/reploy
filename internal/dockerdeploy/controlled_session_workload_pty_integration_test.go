@@ -141,6 +141,7 @@ func controlledSessionWorkloadIntegrationPlanV1(
 		ControlledSessionChannelPlanV1{},
 		[]string{root},
 		disabledControlledSessionNetworkPlanV1(),
+		nil,
 		columns,
 		rows,
 	)

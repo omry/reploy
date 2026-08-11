@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/controlledsession"
 	"github.com/omry/reploy/internal/deploy"
 )
 
@@ -30,7 +32,21 @@ func TestRunCurrentControlledSessionV1AdmitsExactPairAndDelegatesSupervisor(t *t
 
 	var acquired []string
 	operations := map[string]*deploy.OperationLock{}
-	wantResult := ControlledSessionRunResultV1{ResultDelivered: true}
+	wantResult := ControlledSessionRunResultV1{
+		SessionResult: controlledsession.ResultV1{
+			ControllerFinalizationStatus: controlledsession.ControllerFinalizationStatusV1{
+				Kind: controlledsession.ControllerFinalizationCompletedV1,
+			},
+		},
+		ResultDelivered: true,
+	}
+	outputMount := &transientOutputMount{
+		HostDirectory: filepath.Join(root, "output-staging"),
+		Variable:      runtimeOutputFileVariable,
+		ContainerPath: path.Join(runtimeOutputRoot, runtimeOutputFileName),
+	}
+	outputSession := &oneShotOutputSession{mount: outputMount}
+	published := false
 	options := testControlledSessionRunOptionsV1()
 	backend := currentControlledSessionRunBackendV1{
 		acquire: func(ctx context.Context, dir string) (*deploy.OperationLock, error) {
@@ -58,7 +74,30 @@ func TestRunCurrentControlledSessionV1AdmitsExactPairAndDelegatesSupervisor(t *t
 		privateEnv: func(string) (privateWorkloadEnvironmentV1, error) {
 			return privateWorkloadEnvironmentV1{}, nil
 		},
-		concurrency: func(_ blueprint.Document, _ DockerExecutionPlan, _ *transientOutputMount) (LiveRunConcurrencyDecisionV1, error) {
+		prepareOutput: func(outputDir string, outputFile string, user RuntimeUserPlan) (*oneShotOutputSession, error) {
+			if outputDir != "" || outputFile != "artifacts.json" || !reflect.DeepEqual(user, fixture.ControllerRuntime.Docker.Sandbox.RuntimeUser) {
+				t.Fatalf("output preparation = dir %q file %q user %#v", outputDir, outputFile, user)
+			}
+			return outputSession, nil
+		},
+		abortOutput: func(*oneShotOutputSession) error {
+			t.Fatal("completed controller output was aborted")
+			return nil
+		},
+		publishOutput: func(output *oneShotOutputSession) error {
+			if output != outputSession {
+				t.Fatalf("published output session = %#v", output)
+			}
+			published = true
+			return nil
+		},
+		concurrency: func(document blueprint.Document, _ DockerExecutionPlan, output *transientOutputMount) (LiveRunConcurrencyDecisionV1, error) {
+			if document.Environment.ID == fixture.ControllerRuntime.Document.Environment.ID && output != outputMount {
+				t.Fatal("controller concurrency check did not receive its output mount")
+			}
+			if document.Environment.ID == fixture.WorkloadRuntime.Document.Environment.ID && output != nil {
+				t.Fatal("workload concurrency check received the controller output mount")
+			}
 			return LiveRunConcurrencyDecisionV1{AllowsOverlap: false, WritableMount: "workspace", WritablePaths: []string{"/workspace"}}, nil
 		},
 		newRunID:  func() (string, error) { return "run-0000000000000043", nil },
@@ -90,7 +129,7 @@ func TestRunCurrentControlledSessionV1AdmitsExactPairAndDelegatesSupervisor(t *t
 			return operation, nil
 		},
 		plan: func(input ControlledSessionPlanInputV1) (ControlledSessionExecutionPlanV1, error) {
-			if input.Handle != "session-"+strings.Repeat("a", 64) || input.LiveRunID != "run-0000000000000043" || input.ControllerCommand != "inspect" || !reflect.DeepEqual(input.ControllerForwardedArguments, []string{"record"}) {
+			if input.Handle != "session-"+strings.Repeat("a", 64) || input.LiveRunID != "run-0000000000000043" || input.ControllerCommand != "inspect" || !reflect.DeepEqual(input.ControllerForwardedArguments, []string{"record"}) || input.controllerOutput != outputMount {
 				t.Fatalf("controlled-session plan input = %#v", input)
 			}
 			return planControlledSessionV1(input, planBackend)
@@ -138,6 +177,7 @@ func TestRunCurrentControlledSessionV1AdmitsExactPairAndDelegatesSupervisor(t *t
 		WorkloadDeploymentDir:   workloadDir,
 		ControllerCommand:       "inspect",
 		ControllerArguments:     []string{"record"},
+		OutputFile:              "artifacts.json",
 		InitialColumns:          100,
 		InitialRows:             28,
 		SupervisorOptions:       options,
@@ -147,6 +187,9 @@ func TestRunCurrentControlledSessionV1AdmitsExactPairAndDelegatesSupervisor(t *t
 	}
 	if !reflect.DeepEqual(got, wantResult) {
 		t.Fatalf("result = %#v, want %#v", got, wantResult)
+	}
+	if !published {
+		t.Fatal("completed controller output was not published")
 	}
 	if !reflect.DeepEqual(acquired, []string{workloadDir, controllerDir}) {
 		t.Fatalf("operation lock order = %#v", acquired)
@@ -194,6 +237,7 @@ func TestRunCurrentControlledSessionV1RejectsActiveControllerBeforeWorkloadAdmis
 	}
 
 	workloadAdmissionAttempted := false
+	outputAborted := false
 	_, err = runCurrentControlledSessionV1(t.Context(), CurrentControlledSessionRunInputV1{
 		ControllerDeploymentDir: controllerDir,
 		WorkloadDeploymentDir:   workloadDir,
@@ -206,6 +250,14 @@ func TestRunCurrentControlledSessionV1RejectsActiveControllerBeforeWorkloadAdmis
 			return currentControlledSessionRuntimeV1{current: fixture.WorkloadCurrent, plan: fixture.WorkloadRuntime}, nil
 		},
 		privateEnv: func(string) (privateWorkloadEnvironmentV1, error) { return privateWorkloadEnvironmentV1{}, nil },
+		prepareOutput: func(string, string, RuntimeUserPlan) (*oneShotOutputSession, error) {
+			return &oneShotOutputSession{}, nil
+		},
+		abortOutput: func(*oneShotOutputSession) error {
+			outputAborted = true
+			return nil
+		},
+		publishOutput: func(*oneShotOutputSession) error { return nil },
 		concurrency: func(blueprint.Document, DockerExecutionPlan, *transientOutputMount) (LiveRunConcurrencyDecisionV1, error) {
 			return LiveRunConcurrencyDecisionV1{AllowsOverlap: true}, nil
 		},
@@ -227,8 +279,8 @@ func TestRunCurrentControlledSessionV1RejectsActiveControllerBeforeWorkloadAdmis
 			return ControlledSessionRunResultV1{}, errors.New("must not run")
 		},
 	})
-	if !errors.Is(err, deploy.ErrLiveRunConflict) || workloadAdmissionAttempted {
-		t.Fatalf("controller conflict = workload attempted %t, error %v", workloadAdmissionAttempted, err)
+	if !errors.Is(err, deploy.ErrLiveRunConflict) || workloadAdmissionAttempted || !outputAborted {
+		t.Fatalf("controller conflict = workload attempted %t, output aborted %t, error %v", workloadAdmissionAttempted, outputAborted, err)
 	}
 
 	inspection, err := deploy.AcquireOperationLock(t.Context(), controllerDir)
@@ -264,6 +316,11 @@ func TestRunCurrentControlledSessionV1RejectsOneDeploymentBeforeLocking(t *testi
 		privateEnv: func(string) (privateWorkloadEnvironmentV1, error) {
 			return privateWorkloadEnvironmentV1{}, nil
 		},
+		prepareOutput: func(string, string, RuntimeUserPlan) (*oneShotOutputSession, error) {
+			return &oneShotOutputSession{}, nil
+		},
+		abortOutput:   func(*oneShotOutputSession) error { return nil },
+		publishOutput: func(*oneShotOutputSession) error { return nil },
 		concurrency: func(blueprint.Document, DockerExecutionPlan, *transientOutputMount) (LiveRunConcurrencyDecisionV1, error) {
 			return LiveRunConcurrencyDecisionV1{}, nil
 		},
@@ -317,6 +374,11 @@ func TestRunCurrentControlledSessionV1RejectsConfiguredPrivateEnvironmentBeforeP
 					return currentControlledSessionRuntimeV1{}, nil
 				},
 				privateEnv: preparePrivateWorkloadEnvironmentV1,
+				prepareOutput: func(string, string, RuntimeUserPlan) (*oneShotOutputSession, error) {
+					return &oneShotOutputSession{}, nil
+				},
+				abortOutput:   func(*oneShotOutputSession) error { return nil },
+				publishOutput: func(*oneShotOutputSession) error { return nil },
 				concurrency: func(blueprint.Document, DockerExecutionPlan, *transientOutputMount) (LiveRunConcurrencyDecisionV1, error) {
 					return LiveRunConcurrencyDecisionV1{}, nil
 				},

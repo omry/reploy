@@ -2,6 +2,8 @@ package dockerdeploy
 
 import (
 	"errors"
+	"path"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -381,7 +383,7 @@ func TestValidateControlledSessionExecutionPlanV1RejectsAuthorityAndCommandExpan
 
 func TestPlanControlledSessionV1RejectsStaleBuildInvalidDimensionsAndChannelOverlap(t *testing.T) {
 	input, backend := controlledSessionPlanFixtureV1(t)
-	backend.requireReady = func(CurrentBuild, CurrentRuntimePlanV1, string) error {
+	backend.requireReady = func(CurrentBuild, CurrentRuntimePlanV1, string, *transientOutputMount) error {
 		return errors.New("runtime build is missing or stale")
 	}
 	if _, err := planControlledSessionV1(input, backend); err == nil || !strings.Contains(err.Error(), "missing or stale") {
@@ -490,7 +492,7 @@ func TestValidateControlledSessionExecutionPlanV1RejectsSameDeploymentRoot(t *te
 func TestPlanControlledSessionV1UsesInvocationSpecificReadinessChecks(t *testing.T) {
 	input, backend := controlledSessionPlanFixtureV1(t)
 	var planIDs []string
-	backend.requireReady = func(_ CurrentBuild, _ CurrentRuntimePlanV1, planID string) error {
+	backend.requireReady = func(_ CurrentBuild, _ CurrentRuntimePlanV1, planID string, _ *transientOutputMount) error {
 		planIDs = append(planIDs, planID)
 		return nil
 	}
@@ -499,6 +501,86 @@ func TestPlanControlledSessionV1UsesInvocationSpecificReadinessChecks(t *testing
 	}
 	if !slices.Equal(planIDs, []string{runtimeCommandPlanID("inspect", false), runtimeShellPlanID}) {
 		t.Fatalf("readiness plan IDs = %#v", planIDs)
+	}
+}
+
+func TestPlanControlledSessionV1ExposesOutputOnlyToController(t *testing.T) {
+	input, backend := controlledSessionPlanFixtureV1(t)
+	output := &transientOutputMount{
+		HostDirectory: filepath.Join(t.TempDir(), "output"),
+		Variable:      runtimeOutputFileVariable,
+		ContainerPath: path.Join(runtimeOutputRoot, runtimeOutputFileName),
+	}
+	input.controllerOutput = output
+	var readinessOutputs []*transientOutputMount
+	var readinessPlanIDs []string
+	backend.requireReady = func(_ CurrentBuild, _ CurrentRuntimePlanV1, planID string, got *transientOutputMount) error {
+		readinessPlanIDs = append(readinessPlanIDs, planID)
+		readinessOutputs = append(readinessOutputs, got)
+		return nil
+	}
+
+	plan, err := planControlledSessionV1(input, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(readinessPlanIDs, []string{runtimeCommandPlanID("inspect", true), runtimeShellPlanID}) ||
+		len(readinessOutputs) != 2 || readinessOutputs[0] != output || readinessOutputs[1] != nil {
+		t.Fatalf("readiness checks = IDs %#v outputs %#v", readinessPlanIDs, readinessOutputs)
+	}
+	wantEnvironment := runtimeOutputFileVariable + "=" + path.Join(runtimeOutputRoot, runtimeOutputFileName)
+	if !slices.Contains(plan.Controller.Environment, wantEnvironment) {
+		t.Fatalf("controller environment = %#v", plan.Controller.Environment)
+	}
+	outputMount := slices.IndexFunc(plan.Controller.Mounts, func(mount ControlledSessionMountV1) bool {
+		return mount.Name == "controller-output"
+	})
+	if outputMount < 0 || plan.Controller.Mounts[outputMount].Source != output.HostDirectory ||
+		plan.Controller.Mounts[outputMount].Target != runtimeOutputRoot {
+		t.Fatalf("controller mounts = %#v", plan.Controller.Mounts)
+	}
+	if slices.Contains(plan.Workload.Environment, wantEnvironment) || slices.ContainsFunc(plan.Workload.Mounts, func(mount ControlledSessionMountV1) bool {
+		return mount.Name == "controller-output" || mount.Target == runtimeOutputRoot
+	}) {
+		t.Fatalf("workload received controller output: env %#v mounts %#v", plan.Workload.Environment, plan.Workload.Mounts)
+	}
+
+	mutated := cloneControlledSessionExecutionPlanForTestV1(plan)
+	mutated.Workload.Mounts = append(mutated.Workload.Mounts, plan.Controller.Mounts[outputMount])
+	slices.SortFunc(mutated.Workload.Mounts, func(left ControlledSessionMountV1, right ControlledSessionMountV1) int {
+		if left.Target != right.Target {
+			return strings.Compare(left.Target, right.Target)
+		}
+		return strings.Compare(left.Name, right.Name)
+	})
+	mutated.Workload.Environment = append(mutated.Workload.Environment, wantEnvironment)
+	mutated.Workload.Create, _ = renderControlledSessionCreateV1(mutated.Workload)
+	if err := ValidateControlledSessionExecutionPlanV1(mutated); err == nil || !strings.Contains(err.Error(), "workload plan must not expose") {
+		t.Fatalf("workload output mutation error = %v", err)
+	}
+}
+
+func TestPlanControlledSessionV1MasksProtectedPathsExposedByControllerOutput(t *testing.T) {
+	input, backend := controlledSessionPlanFixtureV1(t)
+	input.controllerOutput = &transientOutputMount{
+		HostDirectory: input.ControllerRuntime.Docker.DeploymentDir,
+		Variable:      runtimeOutputDirectoryVariable,
+		ContainerPath: runtimeOutputRoot,
+	}
+
+	plan, err := planControlledSessionV1(input, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ControlledSessionMaskV1{
+		{Kind: string(privateRuntimeMaskFileV1), Target: path.Join(runtimeOutputRoot, PrivateWorkloadEnvironmentFileName)},
+		{Kind: string(privateRuntimeMaskDirectoryV1), Target: path.Join(runtimeOutputRoot, privateRuntimeMetadataDirectoryName)},
+	}
+	if !reflect.DeepEqual(plan.Controller.Masks, want) {
+		t.Fatalf("controller masks = %#v, want %#v", plan.Controller.Masks, want)
+	}
+	if err := ValidateControlledSessionExecutionPlanV1(plan); err != nil {
+		t.Fatalf("ValidateControlledSessionExecutionPlanV1() error = %v", err)
 	}
 }
 
@@ -550,7 +632,7 @@ func controlledSessionPlanFixtureV1(t *testing.T) (ControlledSessionPlanInputV1,
 		InitialColumns: 80, InitialRows: 24,
 	}
 	backend := controlledSessionPlanBackendV1{
-		requireReady: func(CurrentBuild, CurrentRuntimePlanV1, string) error { return nil },
+		requireReady: func(CurrentBuild, CurrentRuntimePlanV1, string, *transientOutputMount) error { return nil },
 		resolveCommand: func(_ blueprint.Document, _ CurrentBuild, _ DockerExecutionPlan, name string, arguments []string) (ResolvedEnvironmentCommand, error) {
 			return ResolvedEnvironmentCommand{Name: name, Native: true, Argv: append([]string{"/opt/controller", name}, arguments...)}, nil
 		},
