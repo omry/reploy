@@ -128,7 +128,12 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   verified network absence after teardown. It also proves and documents the
   initial coarse boundary: either participant can reach any listening port on
   the other participant. Directional and per-port enforcement remain deferred
-  to the L3 gateway design.
+  to the L3 gateway design. Current-generation session composition now admits
+  the same live-run identity in both the controller and workload deployment
+  queues before startup. It records the exact session ownership in both queues
+  and removes both reservations only after verified cleanup, so an existing
+  controller run blocks admission and host-loss recovery from either
+  deployment fails closed until the abandoned session is verified absent.
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution

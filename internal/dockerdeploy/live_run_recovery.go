@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -87,8 +88,10 @@ func recoverLiveRunQueueWithinV1(
 			)
 		}
 	}
+	var controlledSessionCleanupErr error
 	for _, ownership := range recovery.ControlledSessions {
 		if err := cleanupContext.Err(); err != nil {
+			controlledSessionCleanupErr = errors.Join(controlledSessionCleanupErr, err)
 			if notice != nil {
 				fmt.Fprintf(notice, "warning: deferred remaining recovered controlled-session cleanup: %v\n", err)
 			}
@@ -97,6 +100,7 @@ func recoverLiveRunQueueWithinV1(
 		if err := cleanupControlledSessionRecoveryV1(
 			cleanupContext, operation, ownership, removeContainer, resolveLegacyDockerEndpoint,
 		); err != nil {
+			controlledSessionCleanupErr = errors.Join(controlledSessionCleanupErr, err)
 			if notice != nil {
 				fmt.Fprintf(notice,
 					"warning: deferred cleanup of recovered controlled session %q: %v\n",
@@ -116,6 +120,9 @@ func recoverLiveRunQueueWithinV1(
 			)
 		}
 	}
+	if controlledSessionCleanupErr != nil {
+		return recovery, fmt.Errorf("controlled-session recovery remains incomplete: %w", controlledSessionCleanupErr)
+	}
 	return recovery, nil
 }
 
@@ -127,7 +134,27 @@ func cleanupControlledSessionRecoveryV1(
 	resolveLegacyDockerEndpoint legacyControlledSessionDockerEndpointResolverV1,
 ) error {
 	deploymentDir := filepath.Dir(filepath.Dir(operation.Path()))
-	expectedChannel := filepath.Join(deploymentDir, privateRuntimeMetadataDirectoryName, "sessions", ownership.LiveRunID)
+	ownerDeploymentDir := deploymentDir
+	if ownership.WorkloadDeploymentDirectory != "" {
+		controllerParticipant := deploymentDir == ownership.ControllerDeploymentDirectory
+		workloadParticipant := deploymentDir == ownership.WorkloadDeploymentDirectory
+		if !controllerParticipant && !workloadParticipant {
+			var err error
+			controllerParticipant, err = sameControlledSessionDeploymentV1(deploymentDir, ownership.ControllerDeploymentDirectory)
+			if err != nil {
+				return fmt.Errorf("verify controlled-session controller participant: %w", err)
+			}
+			workloadParticipant, err = sameControlledSessionDeploymentV1(deploymentDir, ownership.WorkloadDeploymentDirectory)
+			if err != nil {
+				return fmt.Errorf("verify controlled-session workload participant: %w", err)
+			}
+		}
+		if controllerParticipant == workloadParticipant {
+			return fmt.Errorf("refuse controlled-session recovery because deployment %q is not an exact session participant", deploymentDir)
+		}
+		ownerDeploymentDir = ownership.WorkloadDeploymentDirectory
+	}
+	expectedChannel := filepath.Join(ownerDeploymentDir, privateRuntimeMetadataDirectoryName, "sessions", ownership.LiveRunID)
 	if ownership.ChannelDirectory != expectedChannel {
 		return fmt.Errorf("refuse controlled-session recovery because channel directory %q is outside the exact deployment session path", ownership.ChannelDirectory)
 	}
@@ -155,6 +182,18 @@ func cleanupControlledSessionRecoveryV1(
 	}
 	cleanupErr = errors.Join(cleanupErr, removeControlledSessionChannelDirectoryV1(ownership.ChannelDirectory))
 	return cleanupErr
+}
+
+func sameControlledSessionDeploymentV1(actual string, expected string) (bool, error) {
+	actualInfo, err := os.Stat(actual)
+	if err != nil {
+		return false, fmt.Errorf("inspect recovered deployment %q: %w", actual, err)
+	}
+	expectedInfo, err := os.Stat(expected)
+	if err != nil {
+		return false, fmt.Errorf("inspect recorded deployment %q: %w", expected, err)
+	}
+	return os.SameFile(actualInfo, expectedInfo), nil
 }
 
 func cleanupControlledSessionRecoveryNetworkV1(
