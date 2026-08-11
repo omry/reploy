@@ -45,11 +45,20 @@ func TestControlledSessionContainerPlansDockerIntegration(t *testing.T) {
 		}),
 	}
 	protectedRoots := []string{controllerRoot, workloadRoot}
+	controllerOutputDir := t.TempDir()
+	if err := os.Chmod(controllerOutputDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	controllerOutput := &transientOutputMount{
+		HostDirectory: controllerOutputDir,
+		Variable:      runtimeOutputDirectoryVariable,
+		ContainerPath: runtimeOutputRoot,
+	}
 
 	controller, err := controlledSessionContainerPlanV1(
 		ControlledSessionRoleControllerV1, liveRunID, current, basePlan,
-		[]string{"/bin/sh", "-c", "printf 'controlled-session-controller-pass\\n'"},
-		channel, protectedRoots, disabledControlledSessionNetworkPlanV1(), 0, 0,
+		[]string{"/bin/sh", "-c", "printf 'controlled-session-controller-pass\\n' > \"$REPLOY_OUTPUT_DIR/proof\" && printf 'controlled-session-controller-pass\\n'"},
+		channel, protectedRoots, disabledControlledSessionNetworkPlanV1(), controllerOutput, 0, 0,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -60,6 +69,10 @@ func TestControlledSessionContainerPlansDockerIntegration(t *testing.T) {
 	if strings.TrimSpace(output) != "controlled-session-controller-pass" {
 		t.Fatalf("controller output = %q", output)
 	}
+	written, err := os.ReadFile(filepath.Join(controllerOutputDir, "proof"))
+	if err != nil || string(written) != "controlled-session-controller-pass\n" {
+		t.Fatalf("controller persistent output = %q, %v", written, err)
+	}
 
 	workloadDockerPlan := basePlan
 	workloadDockerPlan.EnvironmentID = "workload"
@@ -67,7 +80,7 @@ func TestControlledSessionContainerPlansDockerIntegration(t *testing.T) {
 	workloadDockerPlan.ContainerName = uniqueDockerIntegrationName("reploy-session-plan")
 	workload, err := controlledSessionContainerPlanV1(
 		ControlledSessionRoleWorkloadV1, liveRunID, current, workloadDockerPlan,
-		[]string{"/bin/sh"}, ControlledSessionChannelPlanV1{}, protectedRoots, disabledControlledSessionNetworkPlanV1(), 80, 24,
+		[]string{"/bin/sh"}, ControlledSessionChannelPlanV1{}, protectedRoots, disabledControlledSessionNetworkPlanV1(), nil, 80, 24,
 	)
 	if err != nil {
 		t.Fatal(err)
