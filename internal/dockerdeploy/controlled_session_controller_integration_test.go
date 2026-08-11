@@ -294,6 +294,7 @@ func controlledSessionControllerIntegrationPlanWithEndpointsV1(
 		channel,
 		[]string{controllerRoot, workloadRoot},
 		controllerNetwork,
+		nil,
 		0,
 		0,
 	)
@@ -312,6 +313,7 @@ func controlledSessionControllerIntegrationPlanWithEndpointsV1(
 		channel,
 		[]string{controllerRoot, workloadRoot},
 		workloadNetwork,
+		nil,
 		80,
 		24,
 	)

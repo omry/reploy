@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-11
+updated: 2026-08-12
 summary: Capability-scoped execution sessions that inherit Reploy's global container sandbox.
 ---
 
@@ -134,6 +134,13 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   and removes both reservations only after verified cleanup, so an existing
   controller run blocks admission and host-loss recovery from either
   deployment fails closed until the abandoned session is verified absent.
+  Controller-owned outputs are now wired through the same prepared output-file
+  and output-directory contracts as ordinary app commands. The grant
+  participates in the controller's readiness and concurrency checks, is frozen
+  only into the controller container plan, and is never exposed to the
+  workload. Direct output directories persist across teardown outcomes;
+  staged output files are published only when the controller completed
+  artifact finalization.
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution
@@ -902,6 +909,21 @@ that mount. OmegaFlow finalizes and closes those files before sending
 `complete`, and ordinary container teardown leaves the host output intact. The
 session protocol therefore needs no artifact-transfer operation or separate
 publication mechanism.
+
+The controlled-session run input accepts mutually exclusive output-directory
+and output-file selections using the same underlying contract as an ordinary
+app command. A future public host CLI should expose those selections as
+`--output-dir` and `--output-file` without changing their semantics. Host Reploy
+prepares the destination against the controller's runtime identity before
+admission, includes the output grant in the controller command's readiness and
+concurrency checks, and freezes exactly one output mount and environment
+coordinate into the controller plan. The workload plan must carry neither. A
+direct output directory persists across every teardown outcome. A staged output
+file is published only when the controller has sent `complete`, which attests
+that its artifacts are closed and final; otherwise Reploy removes the
+unpublished reservation. Publication occurs after session teardown, and a
+publication failure is reported separately from the authoritative session
+result.
 
 For a non-root runtime identity, the existing direct output bind remains an
 explicit host-filesystem grant. A root-safe output-only contract is separate
