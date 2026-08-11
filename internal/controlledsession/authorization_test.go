@@ -22,10 +22,10 @@ func testAuthorizationV1() AuthorizationV1 {
 	}
 }
 
-func testEndpointsV1() []EndpointV2 {
-	return []EndpointV2{
-		{ID: "browser", Scheme: "http", Host: WorkloadEndpointHostV2, Port: 8080},
-		{ID: "terminal", Scheme: "https", Host: WorkloadEndpointHostV2, Port: 8443},
+func testEndpointsV1() []EndpointV1 {
+	return []EndpointV1{
+		{ID: "browser", Scheme: "http", Host: WorkloadEndpointHostV1, Port: 8080},
+		{ID: "terminal", Scheme: "https", Host: WorkloadEndpointHostV1, Port: 8443},
 	}
 }
 

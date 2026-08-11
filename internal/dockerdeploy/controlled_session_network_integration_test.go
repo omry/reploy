@@ -31,8 +31,8 @@ func TestControlledSessionNetworkingDockerIntegration(t *testing.T) {
 	image := buildControlledSessionControllerIntegrationImageV1(t, ctx)
 	localPeer, publicPeer := createControlledSessionNetworkIsolationPeersV1(t, ctx, image)
 	endpoints := []ControlledSessionEndpointPlanV1{
-		{ID: "browser", Scheme: "http", Host: controlledsession.WorkloadEndpointHostV2, Port: "8080"},
-		{ID: "socket", Scheme: "ws", Host: controlledsession.WorkloadEndpointHostV2, Port: "8080"},
+		{ID: "browser", Scheme: "http", Host: controlledsession.WorkloadEndpointHostV1, Port: "8080"},
+		{ID: "socket", Scheme: "ws", Host: controlledsession.WorkloadEndpointHostV1, Port: "8080"},
 	}
 	t.Run("trusted controller bootstrap", func(t *testing.T) {
 		proveControlledSessionNetworkControllerBootstrapV1(t, ctx, image, endpoints)

@@ -24,7 +24,7 @@ const (
 	controlledSessionNetworkModeV1           = "none"
 	controlledSessionOrdinaryNetworkModeV1   = "bridge"
 	controlledSessionControllerAliasV1       = "controller"
-	controlledSessionWorkloadAliasV1         = controlledsession.WorkloadEndpointHostV2
+	controlledSessionWorkloadAliasV1         = controlledsession.WorkloadEndpointHostV1
 	controlledSessionChannelRootV1           = "/run/reploy/session"
 	controlledSessionChannelSocketNameV1     = controlledsession.PrivateChannelSocketNameV1
 	controlledSessionNetworkPolicyFileNameV1 = "network-prefixes"
@@ -614,16 +614,16 @@ func validateControlledSessionEndpointPlanV1(endpoint ControlledSessionEndpointP
 	if err != nil || port == 0 || strconv.FormatUint(port, 10) != endpoint.Port {
 		return fmt.Errorf("controlled-session endpoint %q port must be a canonical decimal between 1 and 65535", endpoint.ID)
 	}
-	return controlledsession.ValidateEndpointV2(controlledsession.EndpointV2{
+	return controlledsession.ValidateEndpointV1(controlledsession.EndpointV1{
 		ID: endpoint.ID, Scheme: endpoint.Scheme, Host: endpoint.Host, Port: uint32(port),
 	})
 }
 
-func controlledSessionOpenedEndpointsV1(endpoints []ControlledSessionEndpointPlanV1) []controlledsession.EndpointV2 {
-	result := make([]controlledsession.EndpointV2, len(endpoints))
+func controlledSessionOpenedEndpointsV1(endpoints []ControlledSessionEndpointPlanV1) []controlledsession.EndpointV1 {
+	result := make([]controlledsession.EndpointV1, len(endpoints))
 	for index, endpoint := range endpoints {
 		port, _ := strconv.ParseUint(endpoint.Port, 10, 16)
-		result[index] = controlledsession.EndpointV2{
+		result[index] = controlledsession.EndpointV1{
 			ID: endpoint.ID, Scheme: endpoint.Scheme, Host: endpoint.Host, Port: uint32(port),
 		}
 	}
