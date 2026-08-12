@@ -11,17 +11,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	reploy "github.com/omry/reploy"
 	"github.com/omry/reploy/internal/blueprint"
-	"github.com/omry/reploy/internal/controlledsession"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/dockerdeploy"
 	"github.com/omry/reploy/internal/overrideui"
@@ -52,8 +49,6 @@ var dockerAppCommand = dockerdeploy.AppCommand
 var runOverrideEditor = overrideui.RunWithResult
 var runBuildProgress = overrideui.RunBuildProgress
 var inspectStagedOverrideValidation = dockerdeploy.InspectStagedOverrideValidation
-var runControlledSessionBroker = controlledsession.RunControllerBrokerV1
-var runControlledSessionAttachment = controlledsession.RunTerminalAttachmentV1
 
 func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 	if message := windowsWSLBoundaryError(runtime.GOOS, os.LookupEnv, os.Getwd); message != "" {
@@ -90,8 +85,6 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runBlueprintValidate(args[1:], stdout, stderr)
 	case "services":
 		return runServices(args[1:], stdout, stderr)
-	case "controlled-session":
-		return runControlledSession(args[1:], stdout, stderr)
 	default:
 		if isDeploymentCommand(args[0]) {
 			return runDocker(args, stdout, stderr, globalOptions)
@@ -104,90 +97,6 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		return printTopLevelUsageError(stderr, "unknown command: %s", args[0])
 	}
-}
-
-func runControlledSession(args []string, stdout io.Writer, stderr io.Writer) int {
-	if len(args) == 1 && isHelpArg(args[0]) {
-		printControlledSessionHelp(stdout)
-		return 0
-	}
-	if len(args) >= 1 && args[0] == "client" {
-		if len(args) == 2 && isHelpArg(args[1]) {
-			printControlledSessionClientHelp(stdout)
-			return 0
-		}
-		if len(args) != 1 {
-			fmt.Fprintln(stderr, "reploy controlled-session client usage error: unexpected argument")
-			printControlledSessionClientShortUsage(stderr)
-			return 2
-		}
-		return runControlledSessionClient(stdout, stderr)
-	}
-	if len(args) >= 1 && args[0] == "attach" {
-		if len(args) == 2 && isHelpArg(args[1]) {
-			printControlledSessionAttachHelp(stdout)
-			return 0
-		}
-		socket, err := parseControlledSessionAttachSocket(args[1:])
-		if err != nil {
-			fmt.Fprintf(stderr, "reploy controlled-session attach usage error: %v\n", err)
-			printControlledSessionAttachShortUsage(stderr)
-			return 2
-		}
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer cancel()
-		if err := runControlledSessionAttachment(ctx, controlledsession.TerminalAttachmentOptionsV1{
-			SocketPath: socket,
-			Input:      os.Stdin,
-			Output:     stdout,
-		}); err != nil {
-			fmt.Fprintf(stderr, "reploy controlled-session attach error: %v\n", err)
-			return 1
-		}
-		return 0
-	}
-	fmt.Fprintln(stderr, "reploy controlled-session usage error: expected client or attach")
-	printControlledSessionShortUsage(stderr)
-	return 2
-}
-
-func runControlledSessionClient(stdout io.Writer, stderr io.Writer) int {
-	socket := os.Getenv("REPLOY_SESSION_SOCKET")
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	err := runControlledSessionBroker(ctx, controlledsession.ControllerBrokerOptionsV1{
-		SessionSocket: socket,
-		TemporaryHome: controlledsession.ControllerTemporaryHomeV1,
-		Input:         os.Stdin,
-		Output:        stdout,
-	})
-	if err != nil {
-		fmt.Fprintf(stderr, "reploy controlled-session client error: %v\n", err)
-		return 1
-	}
-	return 0
-}
-
-func parseControlledSessionAttachSocket(args []string) (string, error) {
-	// The socket is deliberately the only public option. The broker chooses
-	// and reports it; the attachment does not discover or create a socket.
-	if len(args) == 1 && strings.HasPrefix(args[0], "--socket=") {
-		socket := strings.TrimPrefix(args[0], "--socket=")
-		if socket == "" {
-			return "", fmt.Errorf("--socket requires a value")
-		}
-		return socket, nil
-	}
-	if len(args) == 2 && args[0] == "--socket" && args[1] != "" {
-		return args[1], nil
-	}
-	if len(args) == 1 && args[0] == "--socket" {
-		return "", fmt.Errorf("--socket requires a value")
-	}
-	if len(args) == 0 {
-		return "", fmt.Errorf("--socket is required")
-	}
-	return "", fmt.Errorf("expected exactly --socket PATH")
 }
 
 func runEmbeddedServiceContainer(args []string, stdout io.Writer, stderr io.Writer, globalOptions globalDeploymentOptions) int {
@@ -3265,8 +3174,6 @@ Commands:
   install      Install or update a deployed host service
   uninstall    Remove an installed host service and Docker resources
   services     List Reploy-managed services
-  controlled-session
-               Run controller-side controlled-session integration commands
   index        Manage the cached blueprint shorthand index
   version      Print version information
 
@@ -3299,51 +3206,6 @@ Options:
   --version    Print version information
 
 Run 'reploy COMMAND --help' for command-specific options.
-`, "\n"))
-}
-
-func printControlledSessionShortUsage(output io.Writer) {
-	fmt.Fprintln(output, "Usage: reploy controlled-session {client | attach --socket PATH}")
-}
-
-func printControlledSessionHelp(output io.Writer) {
-	fmt.Fprint(output, strings.TrimLeft(`
-Usage: reploy controlled-session COMMAND
-
-Commands:
-  client                 Run the structured controller session broker
-  attach --socket PATH   Attach terminal bytes to a running broker
-
-Run 'reploy controlled-session COMMAND --help' for command-specific help.
-`, "\n"))
-}
-
-func printControlledSessionClientShortUsage(output io.Writer) {
-	fmt.Fprintln(output, "Usage: reploy controlled-session client")
-}
-
-func printControlledSessionClientHelp(output io.Writer) {
-	fmt.Fprint(output, strings.TrimLeft(`
-Usage: reploy controlled-session client
-
-Run the controller-side controlled-session broker. The command consumes the
-controller-private REPLOY_SESSION_SOCKET environment variable and exchanges
-versioned JSON Lines with the controller orchestrator on stdin and stdout.
-Human-readable diagnostics are written only to stderr.
-`, "\n"))
-}
-
-func printControlledSessionAttachShortUsage(output io.Writer) {
-	fmt.Fprintln(output, "Usage: reploy controlled-session attach --socket PATH")
-}
-
-func printControlledSessionAttachHelp(output io.Writer) {
-	fmt.Fprint(output, strings.TrimLeft(`
-Usage: reploy controlled-session attach --socket PATH
-
-Attach stdin, stdout, and terminal resize events to the private terminal socket
-reported by 'reploy controlled-session client'. Terminal bytes are forwarded
-unchanged; human-readable diagnostics are written only to stderr.
 `, "\n"))
 }
 

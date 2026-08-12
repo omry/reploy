@@ -109,6 +109,17 @@ func TestHelp(t *testing.T) {
 	}
 }
 
+func TestHostCLILeavesControllerSessionModesToFocusedClient(t *testing.T) {
+	code, stdout, stderr := runCLI("controlled-session")
+	if code != 2 || stdout != "" || !strings.Contains(stderr, "unknown command: controlled-session") {
+		t.Fatalf("controlled-session route code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	code, stdout, stderr = runCLI("--help")
+	if code != 0 || stderr != "" || strings.Contains(stdout, "controlled-session") {
+		t.Fatalf("host help retained controller session route: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
 func TestParseGlobalDeploymentOptionsDockerTimeout(t *testing.T) {
 	options, args, err := parseGlobalDeploymentOptions([]string{"--docker-timeout", "12s", "build"})
 	if err != nil {

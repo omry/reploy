@@ -13,13 +13,24 @@ import (
 	"github.com/omry/reploy/internal/canonical"
 )
 
-const ExtractedFileName = "reploy-probe"
+const (
+	ExtractedFileName              = "reploy-probe"
+	ExtractedSessionClientFileName = "reploy-session-client"
+)
 
 type ExtractedProbe struct {
 	Platform string
 	Path     string
 	Size     string
 	SHA256   canonical.Digest
+}
+
+type ExtractedSessionClient struct {
+	Platform string
+	Path     string
+	Size     string
+	SHA256   canonical.Digest
+	Release  ReleaseV1
 }
 
 // Extract writes only the selected helper into an existing private workspace.
@@ -65,7 +76,11 @@ func Extract(ctx context.Context, executable string, platform string, workspace 
 		return ExtractedProbe{}, fmt.Errorf("open embedded probe %s: %w", platform, err)
 	}
 	defer reader.Close()
-	return writeExtracted(ctx, workspace, manifestEntry, reader)
+	extracted, err := writeExtracted(ctx, workspace, ExtractedFileName, "probe", manifestEntry, reader)
+	if err != nil {
+		return ExtractedProbe{}, err
+	}
+	return ExtractedProbe{Platform: extracted.Platform, Path: extracted.Path, Size: extracted.Size, SHA256: extracted.SHA256}, nil
 }
 
 // Supports reports whether the release archive has a native helper for the
@@ -74,50 +89,113 @@ func Supports(platform string) bool {
 	return helperArchivePath(platform) != ""
 }
 
-func writeExtracted(ctx context.Context, workspace string, entry EntryV1, reader io.Reader) (result ExtractedProbe, resultErr error) {
-	targetPath := filepath.Join(workspace, ExtractedFileName)
+// ExtractSessionClient writes the matching controller-side session client into
+// an existing private workspace.
+func ExtractSessionClient(ctx context.Context, executable string, platform string, workspace string) (ExtractedSessionClient, error) {
+	if ctx == nil {
+		return ExtractedSessionClient{}, fmt.Errorf("session client extraction context is required")
+	}
+	if !SupportsSessionClient(platform) {
+		return ExtractedSessionClient{}, fmt.Errorf("no embedded session client supports platform %q", platform)
+	}
+	if workspace == "" || !filepath.IsAbs(workspace) || filepath.Clean(workspace) != workspace {
+		return ExtractedSessionClient{}, fmt.Errorf("session client extraction workspace must be an absolute clean path")
+	}
+	workspaceInfo, err := os.Lstat(workspace)
+	if err != nil {
+		return ExtractedSessionClient{}, fmt.Errorf("inspect session client extraction workspace: %w", err)
+	}
+	if !workspaceInfo.IsDir() || workspaceInfo.Mode()&os.ModeSymlink != 0 {
+		return ExtractedSessionClient{}, fmt.Errorf("session client extraction workspace must be a real directory: %s", workspace)
+	}
+	if err := ctx.Err(); err != nil {
+		return ExtractedSessionClient{}, fmt.Errorf("extract embedded session client %s: %w", platform, err)
+	}
+	archive, err := open(executable)
+	if err != nil {
+		return ExtractedSessionClient{}, err
+	}
+	defer archive.close()
+	var manifestEntry EntryV1
+	for _, candidate := range archive.manifest.SessionClients {
+		if candidate.Platform == platform {
+			manifestEntry = candidate
+			break
+		}
+	}
+	if manifestEntry.Platform == "" {
+		return ExtractedSessionClient{}, fmt.Errorf("embedded runtime archive omits session client platform %q", platform)
+	}
+	reader, err := archive.entries[manifestEntry.ArchivePath].Open()
+	if err != nil {
+		return ExtractedSessionClient{}, fmt.Errorf("open embedded session client %s: %w", platform, err)
+	}
+	defer reader.Close()
+	extracted, err := writeExtracted(ctx, workspace, ExtractedSessionClientFileName, "session client", manifestEntry, reader)
+	if err != nil {
+		return ExtractedSessionClient{}, err
+	}
+	return ExtractedSessionClient{
+		Platform: extracted.Platform, Path: extracted.Path, Size: extracted.Size,
+		SHA256: extracted.SHA256, Release: archive.manifest.Release,
+	}, nil
+}
+
+func SupportsSessionClient(platform string) bool {
+	return sessionClientArchivePath(platform) != ""
+}
+
+type extractedExecutable struct {
+	Platform string
+	Path     string
+	Size     string
+	SHA256   canonical.Digest
+}
+
+func writeExtracted(ctx context.Context, workspace string, filename string, kind string, entry EntryV1, reader io.Reader) (result extractedExecutable, resultErr error) {
+	targetPath := filepath.Join(workspace, filename)
 	target, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o500)
 	if err != nil {
-		return ExtractedProbe{}, fmt.Errorf("create extracted probe: %w", err)
+		return extractedExecutable{}, fmt.Errorf("create extracted %s: %w", kind, err)
 	}
 	committed := false
 	closed := false
 	defer func() {
 		if !closed {
 			if err := target.Close(); err != nil {
-				resultErr = errors.Join(resultErr, fmt.Errorf("close extracted probe: %w", err))
+				resultErr = errors.Join(resultErr, fmt.Errorf("close extracted %s: %w", kind, err))
 			}
 		}
 		if !committed {
 			if err := os.Remove(targetPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-				resultErr = errors.Join(resultErr, fmt.Errorf("remove incomplete extracted probe: %w", err))
+				resultErr = errors.Join(resultErr, fmt.Errorf("remove incomplete extracted %s: %w", kind, err))
 			}
 		}
 	}()
 	hash := sha256.New()
 	size, err := copyContext(ctx, io.MultiWriter(target, hash), reader)
 	if err != nil {
-		return ExtractedProbe{}, fmt.Errorf("extract embedded probe %s: %w", entry.Platform, err)
+		return extractedExecutable{}, fmt.Errorf("extract embedded %s %s: %w", kind, entry.Platform, err)
 	}
 	if strconv.FormatInt(size, 10) != entry.Size {
-		return ExtractedProbe{}, fmt.Errorf("extracted probe %s size does not match its manifest", entry.Platform)
+		return extractedExecutable{}, fmt.Errorf("extracted %s %s size does not match its manifest", kind, entry.Platform)
 	}
 	digest := canonical.Digest(fmt.Sprintf("sha256:%x", hash.Sum(nil)))
 	if digest != entry.SHA256 {
-		return ExtractedProbe{}, fmt.Errorf("extracted probe %s digest does not match its manifest", entry.Platform)
+		return extractedExecutable{}, fmt.Errorf("extracted %s %s digest does not match its manifest", kind, entry.Platform)
 	}
 	if err := target.Chmod(0o555); err != nil {
-		return ExtractedProbe{}, fmt.Errorf("protect extracted probe: %w", err)
+		return extractedExecutable{}, fmt.Errorf("protect extracted %s: %w", kind, err)
 	}
 	if err := target.Sync(); err != nil {
-		return ExtractedProbe{}, fmt.Errorf("sync extracted probe: %w", err)
+		return extractedExecutable{}, fmt.Errorf("sync extracted %s: %w", kind, err)
 	}
 	if err := target.Close(); err != nil {
-		return ExtractedProbe{}, fmt.Errorf("close extracted probe: %w", err)
+		return extractedExecutable{}, fmt.Errorf("close extracted %s: %w", kind, err)
 	}
 	closed = true
 	committed = true
-	return ExtractedProbe{Platform: entry.Platform, Path: targetPath, Size: entry.Size, SHA256: entry.SHA256}, nil
+	return extractedExecutable{Platform: entry.Platform, Path: targetPath, Size: entry.Size, SHA256: entry.SHA256}, nil
 }
 
 func copyContext(ctx context.Context, destination io.Writer, source io.Reader) (int64, error) {

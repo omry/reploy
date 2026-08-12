@@ -1,0 +1,2 @@
+kind: Added
+body: Embed matching focused Linux session clients in Reploy releases and prepare a release-pinned, controller-only image before controlled-session admission without exposing the tool to the workload image.

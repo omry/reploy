@@ -114,7 +114,11 @@ func packedProbeExecutable(t *testing.T) string {
 		{Platform: "linux/arm/v7", Path: writeProbeTestFile(t, dir, "arm-v7", "arm-v7")},
 		{Platform: "linux/arm64", Path: writeProbeTestFile(t, dir, "arm64", "arm64")},
 	}
-	if err := probearchive.Append(executable, inputs); err != nil {
+	controllers := []probearchive.SessionClientInput{
+		{Platform: "linux/amd64", Path: inputs[0].Path},
+		{Platform: "linux/arm64", Path: inputs[2].Path},
+	}
+	if err := probearchive.Append(executable, probearchive.ReleaseV1{Version: "test"}, inputs, controllers); err != nil {
 		t.Fatal(err)
 	}
 	return executable

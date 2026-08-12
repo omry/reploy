@@ -16,7 +16,7 @@ func TestExtractWritesOnlySelectedVerifiedProbe(t *testing.T) {
 	dir := t.TempDir()
 	executable := writeTestFile(t, dir, "reploy", []byte("prefix"), 0o755)
 	inputs := testHelpers(t, dir)
-	if err := Append(executable, inputs); err != nil {
+	if err := Append(executable, testRelease(), inputs, testSessionClients(t, dir)); err != nil {
 		t.Fatal(err)
 	}
 	workspace := filepath.Join(dir, "workspace")
@@ -60,7 +60,7 @@ func TestExtractWritesOnlySelectedVerifiedProbe(t *testing.T) {
 func TestExtractRejectsUnsupportedPlatformWorkspaceSymlinkAndExistingTarget(t *testing.T) {
 	dir := t.TempDir()
 	executable := writeTestFile(t, dir, "reploy", []byte("prefix"), 0o755)
-	if err := Append(executable, testHelpers(t, dir)); err != nil {
+	if err := Append(executable, testRelease(), testHelpers(t, dir), testSessionClients(t, dir)); err != nil {
 		t.Fatal(err)
 	}
 	workspace := filepath.Join(dir, "workspace")
@@ -95,7 +95,7 @@ func TestExtractRejectsUnsupportedPlatformWorkspaceSymlinkAndExistingTarget(t *t
 func TestExtractCancellationAndCorruptionLeaveNoPartialFile(t *testing.T) {
 	dir := t.TempDir()
 	executable := writeTestFile(t, dir, "reploy", []byte("prefix"), 0o755)
-	if err := Append(executable, testHelpers(t, dir)); err != nil {
+	if err := Append(executable, testRelease(), testHelpers(t, dir), testSessionClients(t, dir)); err != nil {
 		t.Fatal(err)
 	}
 	workspace := filepath.Join(dir, "cancelled")
@@ -145,10 +145,38 @@ func TestWriteExtractedRemovesFileAfterMidStreamCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	reader := &cancelAfterRead{cancel: cancel, content: []byte("partial helper bytes")}
 	entry := EntryV1{Platform: "linux/amd64", Size: "999"}
-	if _, err := writeExtracted(ctx, workspace, entry, reader); err == nil || !strings.Contains(err.Error(), "canceled") {
+	if _, err := writeExtracted(ctx, workspace, ExtractedFileName, "probe", entry, reader); err == nil || !strings.Contains(err.Error(), "canceled") {
 		t.Fatalf("mid-stream cancellation error = %v", err)
 	}
 	assertNoExtractedProbe(t, workspace)
+}
+
+func TestExtractSessionClientWritesMatchingReleaseExecutable(t *testing.T) {
+	dir := t.TempDir()
+	executable := writeTestFile(t, dir, "reploy", []byte("prefix"), 0o755)
+	sessionClients := testSessionClients(t, dir)
+	if err := Append(executable, testRelease(), testHelpers(t, dir), sessionClients); err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(dir, "controller-workspace")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	result, err := ExtractSessionClient(context.Background(), executable, "linux/arm64", workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile(sessionClients[1].Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(result.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) || result.Platform != "linux/arm64" || result.Path != filepath.Join(workspace, ExtractedSessionClientFileName) || result.Release != testRelease() {
+		t.Fatalf("session client extraction = %#v; content = %q", result, got)
+	}
 }
 
 type cancelAfterRead struct {

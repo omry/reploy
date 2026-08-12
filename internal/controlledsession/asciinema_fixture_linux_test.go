@@ -50,11 +50,11 @@ func TestTerminalAttachmentRunsBeneathPinnedUnmodifiedAsciinemaV1(t *testing.T) 
 	}
 
 	temporaryHome := shortControllerBrokerTempHomeV1(t)
-	reploy := filepath.Join(t.TempDir(), "reploy")
+	sessionClient := filepath.Join(t.TempDir(), "reploy-session-client")
 	linkerValue := "github.com/omry/reploy/internal/controlledsession.controllerTerminalAttachmentHomeV1=" + temporaryHome
-	build := exec.Command("go", "build", "-buildvcs=false", "-ldflags", "-X "+linkerValue, "-o", reploy, "../../cmd/reploy")
+	build := exec.Command("go", "build", "-buildvcs=false", "-ldflags", "-X "+linkerValue, "-o", sessionClient, "../../cmd/reploy-session-client")
 	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build Reploy fixture: %v\n%s", err, output)
+		t.Fatalf("build reploy-session-client fixture: %v\n%s", err, output)
 	}
 
 	hostListener, hostSocket := newControllerBrokerHostListenerV1(t)
@@ -86,7 +86,7 @@ func TestTerminalAttachmentRunsBeneathPinnedUnmodifiedAsciinemaV1(t *testing.T) 
 	}
 
 	cast := filepath.Join(t.TempDir(), "attachment.cast")
-	command := shellQuoteTerminalFixtureV1(reploy) + " controlled-session attach --socket " + shellQuoteTerminalFixtureV1(terminalSocket)
+	command := shellQuoteTerminalFixtureV1(sessionClient) + " attach --socket " + shellQuoteTerminalFixtureV1(terminalSocket)
 	record := exec.CommandContext(ctx, asciinema, "record", "--quiet", "--headless", "--window-size", "80x24", "--return", "--command", command, cast)
 	var recorderStderr bytes.Buffer
 	record.Stderr = &recorderStderr
@@ -174,15 +174,11 @@ func runControllerAsciinemaTestHostConnectionV1(listener *net.UnixListener) (res
 		CleanupStatus:                    CleanupStatusV1{Kind: CleanupStatusSucceededV1},
 		RecoveryAction:                   RecoveryNoneV1,
 	}
-	events := []EventV1{
+	openingEvents := []EventV1{
 		{Kind: EventOpenedV1, Opened: pointerToOpenedV1(testOpenedV1())},
 		{Kind: EventReadyV1},
-		{Kind: EventOutputV1, Bytes: []byte("recorded output\r\n")},
-		{Kind: EventWorkloadExitV1, WorkloadExit: &WorkloadExitV1{Status: result.WorkloadStatus}},
-		{Kind: EventTerminatingV1, Terminating: &TerminatingV1{Cause: CauseWorkloadExitV1}},
-		{Kind: EventWorkloadOutputsFinalizedV1, WorkloadOutputsFinalized: &WorkloadOutputsFinalizedV1{Status: WorkloadOutputFinalizationDrainedV1}},
 	}
-	for _, event := range events {
+	for _, event := range openingEvents {
 		if err := WriteEventV1(connection, event); err != nil {
 			return err
 		}
@@ -191,9 +187,33 @@ func runControllerAsciinemaTestHostConnectionV1(listener *net.UnixListener) (res
 	if err != nil || request.Kind != RequestResizeV1 || request.Columns != 80 || request.Rows != 24 {
 		return errors.Join(err, fmt.Errorf("host expected initial 80x24 resize, got %#v", request))
 	}
-	request, err = ReadRequestV1(connection)
-	if err != nil || request.Kind != RequestCompleteV1 {
-		return errors.Join(err, fmt.Errorf("host expected complete request, got %#v", request))
+	closingEvents := []EventV1{
+		{Kind: EventOutputV1, Bytes: []byte("recorded output\r\n")},
+		{Kind: EventWorkloadExitV1, WorkloadExit: &WorkloadExitV1{Status: result.WorkloadStatus}},
+		{Kind: EventTerminatingV1, Terminating: &TerminatingV1{Cause: CauseWorkloadExitV1}},
+		{Kind: EventWorkloadOutputsFinalizedV1, WorkloadOutputsFinalized: &WorkloadOutputsFinalizedV1{Status: WorkloadOutputFinalizationDrainedV1}},
+	}
+	for _, event := range closingEvents {
+		if err := WriteEventV1(connection, event); err != nil {
+			return err
+		}
+	}
+requests:
+	for {
+		request, err = ReadRequestV1(connection)
+		if err != nil {
+			return err
+		}
+		switch request.Kind {
+		case RequestResizeV1:
+			if request.Columns != 80 || request.Rows != 24 {
+				return fmt.Errorf("host expected 80x24 resize, got %#v", request)
+			}
+		case RequestCompleteV1:
+			break requests
+		default:
+			return fmt.Errorf("host expected resize or complete request, got %#v", request)
+		}
 	}
 	if err := WriteEventV1(connection, EventV1{Kind: EventTerminatedV1, Terminated: &result}); err != nil {
 		return err

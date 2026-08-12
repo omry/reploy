@@ -1,6 +1,6 @@
 //go:build linux
 
-package cli
+package sessionclientcmd
 
 import (
 	"bytes"
@@ -13,11 +13,11 @@ import (
 	"github.com/omry/reploy/internal/controlledsession"
 )
 
-func TestControlledSessionAttachCancelsOnSIGTERM(t *testing.T) {
-	original := runControlledSessionAttachment
-	t.Cleanup(func() { runControlledSessionAttachment = original })
+func TestMainCancelsAttachmentOnSIGTERM(t *testing.T) {
+	original := runTerminalAttachment
+	t.Cleanup(func() { runTerminalAttachment = original })
 	started := make(chan struct{})
-	runControlledSessionAttachment = func(ctx context.Context, _ controlledsession.TerminalAttachmentOptionsV1) error {
+	runTerminalAttachment = func(ctx context.Context, _ controlledsession.TerminalAttachmentOptionsV1) error {
 		close(started)
 		<-ctx.Done()
 		return ctx.Err()
@@ -25,11 +25,7 @@ func TestControlledSessionAttachCancelsOnSIGTERM(t *testing.T) {
 	result := make(chan int, 1)
 	var stdout, stderr bytes.Buffer
 	go func() {
-		result <- runControlledSession([]string{
-			"attach",
-			"--socket",
-			"/mnt/reploy-home/reploy-controlled-session-00000000000000000000000000000000/terminal.sock",
-		}, &stdout, &stderr)
+		result <- Main([]string{"attach", "--socket", "/run/reploy/terminal.sock"}, bytes.NewReader(nil), &stdout, &stderr)
 	}()
 	select {
 	case <-started:

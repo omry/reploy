@@ -15,12 +15,17 @@ func TestRunPacksExactProbeMatrix(t *testing.T) {
 	amd64 := writeFile(t, dir, "amd64", "amd64")
 	armv7 := writeFile(t, dir, "arm-v7", "arm-v7")
 	arm64 := writeFile(t, dir, "arm64", "arm64")
+	clientAMD64 := writeFile(t, dir, "session-client-amd64", "session-client-amd64")
+	clientARM64 := writeFile(t, dir, "session-client-arm64", "session-client-arm64")
 	var stderr bytes.Buffer
 	code := run([]string{
 		"--executable", executable,
 		"--linux-amd64", amd64,
 		"--linux-arm-v7", armv7,
 		"--linux-arm64", arm64,
+		"--session-client-linux-amd64", clientAMD64,
+		"--session-client-linux-arm64", clientARM64,
+		"--version", "1.2.3",
 	}, &stderr)
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("code = %d; stderr = %s", code, stderr.String())
