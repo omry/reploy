@@ -1248,6 +1248,10 @@ closes the private host connection, and therefore cannot be mistaken for
 successful completion. Repeated `terminate` remains idempotent and repeated
 valid resize requests remain ordinary operations.
 
+Each broker-to-host request write is bounded to one second. Expiration is a
+fatal transport failure, so host-side PTY backpressure cannot hold the broker's
+control loop indefinitely.
+
 The public `opened` projection contains only the operations granted to the
 controller, endpoint coordinates, terminal dimensions, and output-finalization
 timeout. It does not expose the host-internal authorization record or its
