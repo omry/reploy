@@ -1,8 +1,11 @@
 package controlledsession
 
 import (
+	"bufio"
 	"bytes"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -32,6 +35,100 @@ func TestControllerStreamReaderV1AcceptsExactRequests(t *testing.T) {
 	}
 	if _, err := reader.ReadRequest(); err != io.EOF {
 		t.Fatalf("terminal read error = %v, want EOF", err)
+	}
+}
+
+func TestControllerStreamV1PublicGoldenFixtures(t *testing.T) {
+	requests, err := os.Open(filepath.Join("..", "..", "testdata", "controlled-session", "client-v1-requests.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer requests.Close()
+	reader, err := NewControllerStreamReaderV1(requests)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRequests := []ControllerStreamRequestV1{
+		{Kind: ControllerStreamRequestResizeV1, Columns: 120, Rows: 40},
+		{Kind: ControllerStreamRequestTerminateV1},
+		{Kind: ControllerStreamRequestCompleteV1},
+		{Kind: ControllerStreamRequestAcknowledgeTerminatedV1},
+	}
+	for index, want := range wantRequests {
+		got, err := reader.ReadRequest()
+		if err != nil || got != want {
+			t.Fatalf("golden request %d = %#v, %v; want %#v", index, got, err, want)
+		}
+	}
+	if _, err := reader.ReadRequest(); err != io.EOF {
+		t.Fatalf("golden request trailer = %v, want EOF", err)
+	}
+
+	code := 0
+	events := []ControllerStreamEventV1{
+		{Kind: ControllerStreamEventBrokerReadyV1, TerminalSocket: "/mnt/reploy-home/reploy-controlled-session-0123456789abcdef0123456789abcdef/terminal.sock"},
+		{Kind: ControllerStreamEventOpenedV1, Opened: &ControllerStreamOpenedV1{
+			Operations: []OperationV1{OperationInputV1, OperationResizeV1, OperationTerminateV1, OperationCompleteV1},
+			Endpoints:  []EndpointV1{{ID: "api", Scheme: "http", Host: WorkloadEndpointHostV1, Port: 8080}},
+			Columns:    120, Rows: 40, OutputFinalizationTimeoutMilliseconds: DefaultOutputFinalizationTimeoutMillisecondsV1,
+		}},
+		{Kind: ControllerStreamEventReadyV1},
+		{Kind: ControllerStreamEventWorkloadExitV1, WorkloadExit: &WorkloadExitV1{Status: ProcessStatusV1{Kind: ProcessStatusExitedV1, Code: &code}}},
+		{Kind: ControllerStreamEventTerminatingV1, Terminating: &TerminatingV1{Cause: CauseWorkloadExitV1}},
+		{Kind: ControllerStreamEventDiagnosticV1, Diagnostic: &DiagnosticV1{Code: "future_diagnostic", Message: "A generic future diagnostic."}},
+		{Kind: ControllerStreamEventWorkloadOutputsFinalizedV1, WorkloadOutputsFinalized: &WorkloadOutputsFinalizedV1{Status: WorkloadOutputFinalizationDrainedV1}},
+		{Kind: ControllerStreamEventWorkloadOutputsFinalizedV1, WorkloadOutputsFinalized: &WorkloadOutputsFinalizedV1{Status: WorkloadOutputFinalizationFailedV1, Reason: "Output drain expired."}},
+		{Kind: ControllerStreamEventTerminatedV1, Terminated: &ResultV1{
+			Cause: CauseWorkloadExitV1, WorkloadStatus: ProcessStatusV1{Kind: ProcessStatusExitedV1, Code: &code},
+			WorkloadOutputFinalizationStatus: WorkloadOutputFinalizationStatusV1{Kind: WorkloadOutputFinalizationDrainedV1},
+			RuntimeObservationStatus:         RuntimeObservationStatusV1{Kind: RuntimeObservationMaintainedV1},
+			ControllerFinalizationStatus:     ControllerFinalizationStatusV1{Kind: ControllerFinalizationCompletedV1},
+			CleanupStatus:                    CleanupStatusV1{Kind: CleanupStatusSucceededV1}, RecoveryAction: RecoveryNoneV1,
+		}},
+		{Kind: ControllerStreamEventClientErrorV1, ClientError: &DiagnosticV1{Code: "future_client_error", Message: "A generic future client error."}},
+	}
+	var output bytes.Buffer
+	writer, err := NewControllerStreamWriterV1(&output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if err := writer.WriteEvent(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wantEvents, err := os.ReadFile(filepath.Join("..", "..", "testdata", "controlled-session", "client-v1-events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(output.Bytes(), wantEvents) {
+		t.Fatalf("public event fixture mismatch:\ngot:\n%s\nwant:\n%s", output.Bytes(), wantEvents)
+	}
+}
+
+func TestControllerStreamV1PublicInvalidRequestFixtureIsRejected(t *testing.T) {
+	fixture, err := os.Open(filepath.Join("..", "..", "testdata", "controlled-session", "client-v1-invalid-requests.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fixture.Close()
+	scanner := bufio.NewScanner(fixture)
+	line := 0
+	for scanner.Scan() {
+		line++
+		reader, err := NewControllerStreamReaderV1(strings.NewReader(scanner.Text() + "\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if request, err := reader.ReadRequest(); err == nil {
+			t.Fatalf("invalid public request line %d was accepted as %#v", line, request)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if line == 0 {
+		t.Fatal("invalid public request fixture is empty")
 	}
 }
 

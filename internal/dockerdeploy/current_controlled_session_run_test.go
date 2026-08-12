@@ -32,13 +32,17 @@ func TestRunCurrentControlledSessionV1AdmitsExactPairAndDelegatesSupervisor(t *t
 
 	var acquired []string
 	operations := map[string]*deploy.OperationLock{}
-	wantResult := ControlledSessionRunResultV1{
+	wantSupervisorResult := ControlledSessionRunResultV1{
 		SessionResult: controlledsession.ResultV1{
 			ControllerFinalizationStatus: controlledsession.ControllerFinalizationStatusV1{
 				Kind: controlledsession.ControllerFinalizationCompletedV1,
 			},
 		},
 		ResultDelivered: true,
+	}
+	wantResult := CurrentControlledSessionRunResultV1{
+		ControlledSessionRunResultV1: wantSupervisorResult,
+		ControllerOutput:             ControlledSessionControllerOutputStatusV1{Kind: ControlledSessionControllerOutputFilePublishedV1},
 	}
 	outputMount := &transientOutputMount{
 		HostDirectory: filepath.Join(root, "output-staging"),
@@ -187,7 +191,7 @@ func TestRunCurrentControlledSessionV1AdmitsExactPairAndDelegatesSupervisor(t *t
 			if err := controllerOperation.Unlock(); err != nil {
 				t.Fatal(err)
 			}
-			return wantResult, nil
+			return wantSupervisorResult, nil
 		},
 	}
 
@@ -455,6 +459,46 @@ func TestControlledSessionControllerPackageCleanupTimeoutV1IsAlwaysBounded(t *te
 	want := 17 * time.Second
 	if got := controlledSessionControllerPackageCleanupTimeoutV1(ControlledSessionRunOptionsV1{CleanupTimeout: want}); got != want {
 		t.Fatalf("configured controller package cleanup timeout = %s", got)
+	}
+}
+
+func TestFinalizeControlledSessionControllerOutputV1ReportsEveryDisposition(t *testing.T) {
+	tests := []struct {
+		name         string
+		outputDir    string
+		outputFile   string
+		finalization controlledsession.ControllerFinalizationStatusKindV1
+		publishErr   error
+		abortErr     error
+		want         ControlledSessionControllerOutputStatusV1
+		wantErr      string
+	}{
+		{name: "not requested", finalization: controlledsession.ControllerFinalizationCompletedV1, want: ControlledSessionControllerOutputStatusV1{Kind: ControlledSessionControllerOutputNotRequestedV1}},
+		{name: "directory retained", outputDir: "artifacts", finalization: controlledsession.ControllerFinalizationTimeoutV1, want: ControlledSessionControllerOutputStatusV1{Kind: ControlledSessionControllerOutputDirectoryRetainedV1}},
+		{name: "file published", outputFile: "cast", finalization: controlledsession.ControllerFinalizationCompletedV1, want: ControlledSessionControllerOutputStatusV1{Kind: ControlledSessionControllerOutputFilePublishedV1}},
+		{name: "file discarded", outputFile: "cast", finalization: controlledsession.ControllerFinalizationNotCompletedV1, want: ControlledSessionControllerOutputStatusV1{Kind: ControlledSessionControllerOutputFileDiscardedV1, Reason: "controller output file was discarded because controller finalization did not complete"}},
+		{name: "publication failed", outputFile: "cast", finalization: controlledsession.ControllerFinalizationCompletedV1, publishErr: errors.New("disk full"), want: ControlledSessionControllerOutputStatusV1{Kind: ControlledSessionControllerOutputFailedV1, Reason: "controller output publication failed"}, wantErr: "publish controlled-session controller output: disk full"},
+		{name: "discard failed", outputFile: "cast", finalization: controlledsession.ControllerFinalizationTimeoutV1, abortErr: errors.New("busy"), want: ControlledSessionControllerOutputStatusV1{Kind: ControlledSessionControllerOutputFailedV1, Reason: "controller output staging cleanup failed"}, wantErr: "abort controlled-session controller output: busy"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			published, aborted := false, false
+			got, err := finalizeControlledSessionControllerOutputV1(
+				test.outputDir, test.outputFile, test.finalization,
+				func() error { published = true; return test.publishErr },
+				func() error { aborted = true; return test.abortErr },
+			)
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("status = %#v, want %#v", got, test.want)
+			}
+			if test.wantErr == "" && err != nil || test.wantErr != "" && (err == nil || err.Error() != test.wantErr) {
+				t.Fatalf("error = %v, want %q", err, test.wantErr)
+			}
+			finalizing := test.finalization == controlledsession.ControllerFinalizationCompletedV1
+			if published != finalizing || aborted == finalizing {
+				t.Fatalf("callbacks = published %t aborted %t for finalization %q", published, aborted, test.finalization)
+			}
+		})
 	}
 }
 

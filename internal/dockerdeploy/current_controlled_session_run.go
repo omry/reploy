@@ -37,6 +37,26 @@ type CurrentControlledSessionRunInputV1 struct {
 	Notice                  io.Writer
 }
 
+type ControlledSessionControllerOutputKindV1 string
+
+const (
+	ControlledSessionControllerOutputNotRequestedV1      ControlledSessionControllerOutputKindV1 = "not-requested"
+	ControlledSessionControllerOutputDirectoryRetainedV1 ControlledSessionControllerOutputKindV1 = "directory-retained"
+	ControlledSessionControllerOutputFilePublishedV1     ControlledSessionControllerOutputKindV1 = "file-published"
+	ControlledSessionControllerOutputFileDiscardedV1     ControlledSessionControllerOutputKindV1 = "file-discarded"
+	ControlledSessionControllerOutputFailedV1            ControlledSessionControllerOutputKindV1 = "failed"
+)
+
+type ControlledSessionControllerOutputStatusV1 struct {
+	Kind   ControlledSessionControllerOutputKindV1 `json:"kind"`
+	Reason string                                  `json:"reason,omitempty"`
+}
+
+type CurrentControlledSessionRunResultV1 struct {
+	ControlledSessionRunResultV1
+	ControllerOutput ControlledSessionControllerOutputStatusV1
+}
+
 type currentControlledSessionRuntimeV1 struct {
 	current CurrentBuild
 	plan    CurrentRuntimePlanV1
@@ -68,7 +88,7 @@ type currentControlledSessionRunBackendV1 struct {
 func RunCurrentControlledSessionV1(
 	ctx context.Context,
 	input CurrentControlledSessionRunInputV1,
-) (ControlledSessionRunResultV1, error) {
+) (CurrentControlledSessionRunResultV1, error) {
 	return runCurrentControlledSessionV1(ctx, input, currentControlledSessionRunBackendV1{
 		acquire:           deploy.AcquireOperationLock,
 		loadRuntime:       loadCurrentControlledSessionRuntimeV1,
@@ -94,7 +114,7 @@ func runCurrentControlledSessionV1(
 	ctx context.Context,
 	input CurrentControlledSessionRunInputV1,
 	backend currentControlledSessionRunBackendV1,
-) (result ControlledSessionRunResultV1, err error) {
+) (result CurrentControlledSessionRunResultV1, err error) {
 	if ctx == nil {
 		return result, fmt.Errorf("run current controlled session requires a context")
 	}
@@ -183,16 +203,19 @@ func runCurrentControlledSessionV1(
 	if output == nil {
 		return result, fmt.Errorf("prepare controlled-session controller output returned no session")
 	}
+	if input.OutputDir != "" {
+		result.ControllerOutput.Kind = ControlledSessionControllerOutputDirectoryRetainedV1
+	} else if input.OutputFile == "" {
+		result.ControllerOutput.Kind = ControlledSessionControllerOutputNotRequestedV1
+	}
 	defer func() {
-		if result.SessionResult.ControllerFinalizationStatus.Kind == controlledsession.ControllerFinalizationCompletedV1 {
-			if outputErr := backend.publishOutput(output); outputErr != nil {
-				err = errors.Join(err, fmt.Errorf("publish controlled-session controller output: %w", outputErr))
-			}
-			return
-		}
-		if outputErr := backend.abortOutput(output); outputErr != nil {
-			err = errors.Join(err, fmt.Errorf("abort controlled-session controller output: %w", outputErr))
-		}
+		status, outputErr := finalizeControlledSessionControllerOutputV1(
+			input.OutputDir, input.OutputFile, result.SessionResult.ControllerFinalizationStatus.Kind,
+			func() error { return backend.publishOutput(output) },
+			func() error { return backend.abortOutput(output) },
+		)
+		result.ControllerOutput = status
+		err = errors.Join(err, outputErr)
 	}()
 	controllerConcurrency, err := backend.concurrency(controller.plan.Document, controller.plan.Docker, output.mount)
 	if err != nil {
@@ -281,7 +304,8 @@ func runCurrentControlledSessionV1(
 	controllerOperation := operations[controllerDir]
 	delete(operations, workloadDir)
 	delete(operations, controllerDir)
-	return backend.run(ctx, workloadOperation, controllerOperation, plan, input.SupervisorOptions)
+	result.ControlledSessionRunResultV1, err = backend.run(ctx, workloadOperation, controllerOperation, plan, input.SupervisorOptions)
+	return result, err
 }
 
 func controlledSessionControllerPackageCleanupTimeoutV1(options ControlledSessionRunOptionsV1) time.Duration {
@@ -289,6 +313,45 @@ func controlledSessionControllerPackageCleanupTimeoutV1(options ControlledSessio
 		return options.CleanupTimeout
 	}
 	return controlledSessionControllerPackageDefaultCleanupTimeoutV1
+}
+
+func finalizeControlledSessionControllerOutputV1(
+	outputDir string,
+	outputFile string,
+	finalization controlledsession.ControllerFinalizationStatusKindV1,
+	publish func() error,
+	abort func() error,
+) (ControlledSessionControllerOutputStatusV1, error) {
+	if finalization == controlledsession.ControllerFinalizationCompletedV1 {
+		if err := publish(); err != nil {
+			return ControlledSessionControllerOutputStatusV1{
+				Kind: ControlledSessionControllerOutputFailedV1, Reason: "controller output publication failed",
+			}, fmt.Errorf("publish controlled-session controller output: %w", err)
+		}
+		switch {
+		case outputFile != "":
+			return ControlledSessionControllerOutputStatusV1{Kind: ControlledSessionControllerOutputFilePublishedV1}, nil
+		case outputDir != "":
+			return ControlledSessionControllerOutputStatusV1{Kind: ControlledSessionControllerOutputDirectoryRetainedV1}, nil
+		default:
+			return ControlledSessionControllerOutputStatusV1{Kind: ControlledSessionControllerOutputNotRequestedV1}, nil
+		}
+	}
+	if err := abort(); err != nil {
+		return ControlledSessionControllerOutputStatusV1{
+			Kind: ControlledSessionControllerOutputFailedV1, Reason: "controller output staging cleanup failed",
+		}, fmt.Errorf("abort controlled-session controller output: %w", err)
+	}
+	if outputFile != "" {
+		return ControlledSessionControllerOutputStatusV1{
+			Kind:   ControlledSessionControllerOutputFileDiscardedV1,
+			Reason: "controller output file was discarded because controller finalization did not complete",
+		}, nil
+	}
+	if outputDir != "" {
+		return ControlledSessionControllerOutputStatusV1{Kind: ControlledSessionControllerOutputDirectoryRetainedV1}, nil
+	}
+	return ControlledSessionControllerOutputStatusV1{Kind: ControlledSessionControllerOutputNotRequestedV1}, nil
 }
 
 func controlledSessionDeploymentDirectoriesV1(controller string, workload string) (string, string, error) {
