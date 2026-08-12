@@ -1297,7 +1297,9 @@ resize, and terminal-end records so terminal bytes cannot be interpreted as
 control. The attachment switches its asciinema-owned PTY to raw mode while
 running, restores it on exit, forwards ordinary Ctrl-C as byte `0x03`, and
 translates `SIGWINCH` into resize records. It writes received output bytes to
-stdout unchanged and never writes diagnostics there.
+stdout unchanged and never writes diagnostics there. Input or resize already
+in flight when host termination latches is discarded without changing the
+termination cause or reporting controller loss.
 
 For an activated session, the broker sends terminal-end only after it has
 forwarded every earlier output byte and then received the ordered
