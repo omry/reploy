@@ -85,6 +85,8 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runBlueprintValidate(args[1:], stdout, stderr)
 	case "services":
 		return runServices(args[1:], stdout, stderr)
+	case "controlled-session":
+		return runControlledSession(args[1:], stdout, stderr, globalOptions)
 	default:
 		if isDeploymentCommand(args[0]) {
 			return runDocker(args, stdout, stderr, globalOptions)
@@ -3151,6 +3153,8 @@ func printHelp(output io.Writer) {
 Usage: reploy [--docker-timeout DURATION] COMMAND
 
 Commands:
+  controlled-session
+               Run a controller-managed workload session
   validate     Validate blueprint syntax and semantics
   stage        Create a staging directory
   overrides    Edit staged development overrides

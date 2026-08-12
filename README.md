@@ -85,3 +85,5 @@ full guide.
 
 Maintainer setup is documented in [`docs/MAINTAINING.md`](docs/MAINTAINING.md).
 Design notes live in [`docs/`](docs/).
+The public controlled-session host and controller boundaries are documented in
+[`website/docs/controlled-sessions.md`](website/docs/controlled-sessions.md).
