@@ -1137,21 +1137,21 @@ state. It provides only the PTY, endpoint, network, and lifecycle primitives.
 ## Asciinema Integration
 
 OmegaFlow retains unmodified asciinema as the initial terminal recorder. The
-Reploy binary embedded in the controller provides two distinct roles. A
-long-lived session broker owns the private Host Reploy channel and a local
-structured control stream to OmegaFlow. A short-lived terminal attachment owns
-only the PTY byte stream and resize propagation. OmegaFlow starts and supervises
-the broker as a separate long-lived process:
+focused `reploy-session-client` binary embedded in the controller provides two
+distinct roles. A long-lived session broker owns the private Host Reploy
+channel and a local structured control stream to OmegaFlow. A short-lived
+terminal attachment owns only the PTY byte stream and resize propagation.
+OmegaFlow starts and supervises the broker as a separate long-lived process:
 
 ```text
-reploy controlled-session client
+reploy-session-client client
 ```
 
 After the broker reports `broker-ready`, OmegaFlow starts unmodified asciinema,
 which records only the terminal attachment as an ordinary command:
 
 ```text
-asciinema rec -c "reploy controlled-session attach --socket PATH" CAST
+asciinema rec -c "reploy-session-client attach --socket PATH" CAST
 ```
 
 The broker's stdin and stdout carry only the versioned structured OmegaFlow
@@ -1189,7 +1189,7 @@ it records is still waiting for controller finalization.
 
 ### Controller-Side Public Stream
 
-`reploy controlled-session client` is the public OmegaFlow integration
+`reploy-session-client client` is the public OmegaFlow integration
 boundary inside the controller. It uses UTF-8 JSON Lines on stdin and stdout:
 one JSON object followed by one newline for each message. Every object contains
 exactly `schema: "reploy-controlled-session-client-v1"`, a `type`, and the
@@ -1692,10 +1692,10 @@ the private Host Reploy channel. It introduces no executable surface.
 
 #### Slice 5B: Embedded Controller Session Broker
 
-Add the controller-side broker as a subcommand of the monolithic Reploy binary.
-It consumes only the controller-private `REPLOY_SESSION_SOCKET`, owns the
-existing internal framed protocol, and exposes a versioned controller-local
-structured stream to OmegaFlow plus a private terminal socket. It forwards
+Add the controller-side broker implementation. It consumes only the
+controller-private `REPLOY_SESSION_SOCKET`, owns the existing internal framed
+protocol, and exposes a versioned controller-local structured stream to
+OmegaFlow plus a private terminal socket. It forwards
 trusted lifecycle events and locally validated controller requests, enforces
 the public-stream, socket, ordering, and bounded-backpressure contracts above,
 and remains alive through `complete`, terminal-result delivery, and
@@ -1704,8 +1704,8 @@ operations, slow consumers, attach timeout, socket loss, and non-Linux failure.
 
 #### Slice 5C: Terminal Attachment and Unmodified Asciinema
 
-Add the terminal attachment as a second Reploy subcommand. It connects only to
-the broker's private terminal socket, forwards exact stdin and stdout bytes,
+Add the terminal attachment implementation. It connects only to the broker's
+private terminal socket, forwards exact stdin and stdout bytes,
 propagates initial dimensions and resize, treats ordinary Ctrl-C as terminal
 input, and exits after the terminal output stream is drained. Focused tests
 cover raw and canonical modes, absence of double echo, byte ordering, large
@@ -1718,8 +1718,8 @@ an explicit reviewed dependency update rather than an unbounded download of
 the latest release.
 
 Implementation status: complete for the Linux controller boundary. The
-monolithic Reploy binary now provides `controlled-session attach`, validates
-and connects only to the broker-created private socket, switches an attached
+controller-side implementation validates and connects only to the
+broker-created private socket, switches an attached
 PTY to raw mode with restoration on exit, forwards exact stdin/stdout bytes,
 propagates initial dimensions and `SIGWINCH` resizes, preserves ordinary
 Ctrl-C as byte `0x03`, and maps drained, failed-finalization, transport, and
@@ -1733,14 +1733,42 @@ the broker accepts `complete` and finishes the lifecycle.
 
 #### Slice 5D: Controller Packaging
 
-Package the matching Reploy executable into a prepared controlled-session
-controller image and make the two subcommands available on `PATH`; do not ship
-or version a separate session-client executable. Pin host and controller
-compatibility through the Reploy release rather than publishing the private
-host wire protocol. Reject an unsupported or non-Linux controller image before
-starting either session container, with an actionable diagnostic. Tests prove
-the workload image cannot access the binary or private session socket merely
-because the controller can.
+Build one focused `reploy-session-client` executable per supported Linux
+architecture, package the matching executable into a prepared
+controlled-session controller image, and make its `client` and `attach` modes
+available on `PATH`. The helper contains only the controller-side session
+boundary; it is not another copy of the monolithic host command. Pin host and
+client compatibility through the Reploy release rather than publishing the
+private host wire protocol. Reject an unsupported or non-Linux controller image
+before starting either session container, with an actionable diagnostic. Tests
+prove the workload image cannot access the binary or private session socket
+merely because the controller can.
+
+Implementation status: complete for the controller packaging boundary. Release
+builds embed Linux `amd64` and `arm64` copies of the focused
+`reploy-session-client` command, bound to the host release metadata in the
+private runtime archive. The helper exposes `client` and `attach` modes from one
+binary per architecture, avoiding a second statically linked copy of the
+session code and exposing none of the host CLI or deployment-provider commands.
+A release-build size ceiling guards against accidentally returning to embedded
+monolithic host binaries. Session admission selects the controller generation's
+locked platform, rejects non-Linux or unsupported architectures before
+preparing output or admitting either container, extracts the matching
+executable into a private build workspace, and derives a controller-only image
+with one additional layer. The immutable controller plan binds that derived
+image, executable digest, source image, platform, and release; the workload
+plan remains bound to its untouched generation image and cannot carry the
+controller package. Successful teardown removes the temporary image reference
+and workspace; a cleanup failure is reported and retains the workspace as
+recovery evidence. Focused tests cover archive integrity and extraction,
+release mismatch, Dockerfile and one-layer invariants, plan isolation,
+lifecycle ownership, and early unsupported-platform rejection.
+
+Linux Docker integration builds a packaged release, proves both
+`reploy-session-client client` and `reploy-session-client attach` resolve
+through `PATH` in the derived controller image, enforces a size ceiling that
+would catch accidental re-embedding of the monolithic host command, and proves
+the source workload image does not gain the session client.
 
 #### Slice 5E: Public Host Invocation
 

@@ -220,7 +220,11 @@ func buildApplicationStartupVerifierIntegrationImageFromBase(
 		{Platform: "linux/arm/v7", Path: helperPath},
 		{Platform: "linux/arm64", Path: helperPath},
 	}
-	if err := probearchive.Append(carrierPath, inputs); err != nil {
+	controllers := []probearchive.SessionClientInput{
+		{Platform: "linux/amd64", Path: helperPath},
+		{Platform: "linux/arm64", Path: helperPath},
+	}
+	if err := probearchive.Append(carrierPath, probearchive.ReleaseV1{Version: "integration-test"}, inputs, controllers); err != nil {
 		t.Fatal(err)
 	}
 	previousLocator := locateApplicationRuntimeExecutable

@@ -298,7 +298,11 @@ func packIntegrationProbe(t *testing.T, _ blueprint.Platform) string {
 	if err := os.WriteFile(packed, []byte("reploy integration probe archive\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := probearchive.Append(packed, inputs); err != nil {
+	controllers := []probearchive.SessionClientInput{
+		{Platform: "linux/amd64", Path: inputs[0].Path},
+		{Platform: "linux/arm64", Path: inputs[2].Path},
+	}
+	if err := probearchive.Append(packed, probearchive.ReleaseV1{Version: "integration-test"}, inputs, controllers); err != nil {
 		t.Fatal(err)
 	}
 	return packed
