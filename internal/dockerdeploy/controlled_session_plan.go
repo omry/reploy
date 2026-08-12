@@ -42,6 +42,7 @@ type ControlledSessionPlanInputV1 struct {
 	Handle                       string
 	LiveRunID                    string
 	ControllerCurrent            CurrentBuild
+	ControllerPackage            ControlledSessionControllerPackageV1
 	ControllerRuntime            CurrentRuntimePlanV1
 	ControllerCommand            string
 	ControllerForwardedArguments []string
@@ -74,36 +75,37 @@ type ControlledSessionChannelPlanV1 struct {
 }
 
 type ControlledSessionContainerPlanV1 struct {
-	Schema              string                              `json:"schema"`
-	Role                ControlledSessionRoleV1             `json:"role"`
-	LiveRunID           string                              `json:"live_run_id"`
-	DeploymentID        string                              `json:"deployment_id"`
-	DeploymentDirectory string                              `json:"deployment_directory"`
-	GenerationReference string                              `json:"generation_reference"`
-	BuildIdentity       canonical.Digest                    `json:"build_identity"`
-	Image               string                              `json:"image"`
-	Container           string                              `json:"container"`
-	RuntimeIdentity     controlledsession.RuntimeIdentityV1 `json:"runtime_identity"`
-	Network             string                              `json:"network"`
-	NetworkPolicy       ApplicationNetworkPolicyV1          `json:"network_policy"`
-	SessionNetwork      ControlledSessionNetworkPlanV1      `json:"session_network"`
-	ReadOnlyRoot        bool                                `json:"read_only_root"`
-	TemporaryHome       string                              `json:"temporary_home"`
-	StartupVerifier     string                              `json:"startup_verifier"`
-	SetupCapabilities   []string                            `json:"setup_capabilities"`
-	SecurityOptions     []string                            `json:"security_options"`
-	Environment         []string                            `json:"environment"`
-	Labels              []ControlledSessionLabelV1          `json:"labels"`
-	Mounts              []ControlledSessionMountV1          `json:"mounts"`
-	Masks               []ControlledSessionMaskV1           `json:"masks"`
-	Command             []string                            `json:"command"`
-	TTY                 bool                                `json:"tty"`
-	OpenStdin           bool                                `json:"open_stdin"`
-	InitialColumns      string                              `json:"initial_columns"`
-	InitialRows         string                              `json:"initial_rows"`
-	Create              ControlledSessionDockerCommandV1    `json:"create"`
-	Start               ControlledSessionDockerCommandV1    `json:"start"`
-	Cleanup             ControlledSessionDockerCommandV1    `json:"cleanup"`
+	Schema              string                                `json:"schema"`
+	Role                ControlledSessionRoleV1               `json:"role"`
+	LiveRunID           string                                `json:"live_run_id"`
+	DeploymentID        string                                `json:"deployment_id"`
+	DeploymentDirectory string                                `json:"deployment_directory"`
+	GenerationReference string                                `json:"generation_reference"`
+	BuildIdentity       canonical.Digest                      `json:"build_identity"`
+	Image               string                                `json:"image"`
+	ControllerPackage   *ControlledSessionControllerPackageV1 `json:"controller_package,omitempty"`
+	Container           string                                `json:"container"`
+	RuntimeIdentity     controlledsession.RuntimeIdentityV1   `json:"runtime_identity"`
+	Network             string                                `json:"network"`
+	NetworkPolicy       ApplicationNetworkPolicyV1            `json:"network_policy"`
+	SessionNetwork      ControlledSessionNetworkPlanV1        `json:"session_network"`
+	ReadOnlyRoot        bool                                  `json:"read_only_root"`
+	TemporaryHome       string                                `json:"temporary_home"`
+	StartupVerifier     string                                `json:"startup_verifier"`
+	SetupCapabilities   []string                              `json:"setup_capabilities"`
+	SecurityOptions     []string                              `json:"security_options"`
+	Environment         []string                              `json:"environment"`
+	Labels              []ControlledSessionLabelV1            `json:"labels"`
+	Mounts              []ControlledSessionMountV1            `json:"mounts"`
+	Masks               []ControlledSessionMaskV1             `json:"masks"`
+	Command             []string                              `json:"command"`
+	TTY                 bool                                  `json:"tty"`
+	OpenStdin           bool                                  `json:"open_stdin"`
+	InitialColumns      string                                `json:"initial_columns"`
+	InitialRows         string                                `json:"initial_rows"`
+	Create              ControlledSessionDockerCommandV1      `json:"create"`
+	Start               ControlledSessionDockerCommandV1      `json:"start"`
+	Cleanup             ControlledSessionDockerCommandV1      `json:"cleanup"`
 }
 
 type ControlledSessionNetworkPlanV1 struct {
@@ -148,6 +150,10 @@ type ControlledSessionDockerCommandV1 struct {
 
 func cloneControlledSessionContainerPlanV1(plan ControlledSessionContainerPlanV1) ControlledSessionContainerPlanV1 {
 	clone := plan
+	if plan.ControllerPackage != nil {
+		controllerPackage := *plan.ControllerPackage
+		clone.ControllerPackage = &controllerPackage
+	}
 	clone.SessionNetwork.Endpoints = slices.Clone(plan.SessionNetwork.Endpoints)
 	clone.SetupCapabilities = slices.Clone(plan.SetupCapabilities)
 	clone.SecurityOptions = slices.Clone(plan.SecurityOptions)
@@ -255,6 +261,7 @@ func planControlledSessionV1(input ControlledSessionPlanInputV1, backend control
 		input.controllerOutput,
 		0,
 		0,
+		&input.ControllerPackage,
 	)
 	if err != nil {
 		return ControlledSessionExecutionPlanV1{}, fmt.Errorf("plan controlled session controller: %w", err)
@@ -271,6 +278,7 @@ func planControlledSessionV1(input ControlledSessionPlanInputV1, backend control
 		nil,
 		input.InitialColumns,
 		input.InitialRows,
+		nil,
 	)
 	if err != nil {
 		return ControlledSessionExecutionPlanV1{}, fmt.Errorf("plan controlled session workload: %w", err)
@@ -418,8 +426,26 @@ func ValidateControlledSessionContainerPlanV1(plan ControlledSessionContainerPla
 	if !filepath.IsAbs(plan.DeploymentDirectory) || filepath.Clean(plan.DeploymentDirectory) != plan.DeploymentDirectory {
 		return fmt.Errorf("container deployment directory must be an absolute clean path")
 	}
-	if strings.TrimSpace(plan.GenerationReference) == "" || plan.Image != plan.GenerationReference {
-		return fmt.Errorf("container image must be the exact generation reference")
+	if strings.TrimSpace(plan.GenerationReference) == "" {
+		return fmt.Errorf("container plan requires a generation reference")
+	}
+	if plan.Role == ControlledSessionRoleControllerV1 {
+		if plan.ControllerPackage == nil {
+			return fmt.Errorf("controller plan requires a controller package")
+		}
+		if err := ValidateControlledSessionControllerPackageV1(*plan.ControllerPackage); err != nil {
+			return fmt.Errorf("controller plan package: %w", err)
+		}
+		if plan.Image != string(plan.ControllerPackage.Image.Digest) {
+			return fmt.Errorf("controller image must be the exact packaged image")
+		}
+	} else {
+		if plan.ControllerPackage != nil {
+			return fmt.Errorf("workload plan must not carry a controller package")
+		}
+		if plan.Image != plan.GenerationReference {
+			return fmt.Errorf("workload image must be the exact generation reference")
+		}
 	}
 	if err := plan.BuildIdentity.Validate(); err != nil {
 		return fmt.Errorf("container build identity: %w", err)
@@ -762,7 +788,23 @@ func controlledSessionContainerPlanV1(
 	output *transientOutputMount,
 	columns uint32,
 	rows uint32,
+	controllerPackage *ControlledSessionControllerPackageV1,
 ) (ControlledSessionContainerPlanV1, error) {
+	image := dockerPlan.Image
+	if role == ControlledSessionRoleControllerV1 {
+		if controllerPackage == nil {
+			return ControlledSessionContainerPlanV1{}, fmt.Errorf("controlled-session controller requires a controller package")
+		}
+		if err := ValidateControlledSessionControllerPackageV1(*controllerPackage); err != nil {
+			return ControlledSessionContainerPlanV1{}, err
+		}
+		if controllerPackage.Platform != current.Lock.Platform || controllerPackage.SourceImage != current.Lock.FinalImage {
+			return ControlledSessionContainerPlanV1{}, fmt.Errorf("controlled-session controller package does not match the selected controller generation")
+		}
+		image = string(controllerPackage.Image.Digest)
+	} else if controllerPackage != nil {
+		return ControlledSessionContainerPlanV1{}, fmt.Errorf("controlled-session workload must not receive a controller package")
+	}
 	if err := ValidateApplicationSandboxPlanV1(dockerPlan.Sandbox); err != nil {
 		return ControlledSessionContainerPlanV1{}, err
 	}
@@ -845,7 +887,7 @@ func controlledSessionContainerPlanV1(
 		Schema: ControlledSessionContainerPlanSchemaV1, Role: role, LiveRunID: liveRunID,
 		DeploymentID: dockerPlan.EnvironmentID, DeploymentDirectory: dockerPlan.DeploymentDir,
 		GenerationReference: current.Generation.Reference, BuildIdentity: current.Generation.BuildLockDigest,
-		Image: dockerPlan.Image, Container: dockerPlan.ContainerName + "-" + string(role) + "-" + liveRunID,
+		Image: image, ControllerPackage: controllerPackage, Container: dockerPlan.ContainerName + "-" + string(role) + "-" + liveRunID,
 		RuntimeIdentity: identity, Network: controlledSessionDockerNetworkModeV1(dockerPlan.Sandbox.Network),
 		NetworkPolicy: dockerPlan.Sandbox.Network, SessionNetwork: sessionNetwork,
 		ReadOnlyRoot: dockerPlan.Sandbox.ReadOnlyRoot, TemporaryHome: dockerPlan.Sandbox.TemporaryHome,

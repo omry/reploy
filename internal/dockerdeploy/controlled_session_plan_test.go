@@ -13,6 +13,7 @@ import (
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/controlledsession"
 	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/providers"
 )
 
 func TestPlanControlledSessionV1FreezesExactTwoEnvironmentAuthority(t *testing.T) {
@@ -34,6 +35,13 @@ func TestPlanControlledSessionV1FreezesExactTwoEnvironmentAuthority(t *testing.T
 	}
 	if !slices.Equal(plan.Workload.Command, []string{"/bin/sh"}) || !plan.Workload.TTY || !plan.Workload.OpenStdin {
 		t.Fatalf("workload shell = command %#v tty=%t stdin=%t", plan.Workload.Command, plan.Workload.TTY, plan.Workload.OpenStdin)
+	}
+	if plan.Controller.ControllerPackage == nil || plan.Controller.Image != string(input.ControllerPackage.Image.Digest) ||
+		plan.Controller.Image == plan.Controller.GenerationReference {
+		t.Fatalf("controller package authority = %#v image %q", plan.Controller.ControllerPackage, plan.Controller.Image)
+	}
+	if plan.Workload.ControllerPackage != nil || plan.Workload.Image != plan.Workload.GenerationReference {
+		t.Fatalf("workload received controller package authority: package %#v image %q", plan.Workload.ControllerPackage, plan.Workload.Image)
 	}
 	if plan.Controller.Network != "none" || plan.Workload.Network != "none" {
 		t.Fatalf("session networks = %q / %q", plan.Controller.Network, plan.Workload.Network)
@@ -627,6 +635,7 @@ func controlledSessionPlanFixtureV1(t *testing.T) (ControlledSessionPlanInputV1,
 	input := ControlledSessionPlanInputV1{
 		Handle: "session-" + strings.Repeat("a", 64), LiveRunID: "run-0000000000000001",
 		ControllerCurrent: controllerCurrent, ControllerRuntime: controllerRuntime,
+		ControllerPackage: controlledSessionControllerPackageFixtureV1(controllerCurrent),
 		ControllerCommand: "inspect", ControllerForwardedArguments: []string{"target"},
 		WorkloadCurrent: workloadCurrent, WorkloadRuntime: workloadRuntime,
 		InitialColumns: 80, InitialRows: 24,
@@ -663,7 +672,35 @@ func controlledSessionEnvironmentFixtureV1(t *testing.T, id string, digestCharac
 		Image: generation.Reference, ContainerName: id + "-staging-deadbeef", NetworkName: id + "-staging-deadbeef",
 		Sandbox: testApplicationSandboxPlanV1(uid, uid),
 	}
-	return CurrentBuild{State: state, Generation: generation}, CurrentRuntimePlanV1{Document: document, Docker: dockerPlan}
+	lock := deploy.BuildLockV1{Platform: platform, FinalImage: providers.RealizedImageV1{
+		Digest: digest, ConfigDigest: digest, RootFSSubject: digest,
+	}}
+	return CurrentBuild{State: state, Generation: generation, Lock: lock}, CurrentRuntimePlanV1{Document: document, Docker: dockerPlan}
+}
+
+func controlledSessionControllerPackageFixtureV1(current CurrentBuild) ControlledSessionControllerPackageV1 {
+	imageDigest := canonical.Digest("sha256:" + strings.Repeat("f", 64))
+	return ControlledSessionControllerPackageV1{
+		Schema:      ControlledSessionControllerPackageSchemaV1,
+		Platform:    current.Lock.Platform,
+		Release:     currentControllerReleaseV1(),
+		Artifact:    canonical.Digest("sha256:" + strings.Repeat("e", 64)),
+		SourceImage: current.Lock.FinalImage,
+		Image:       providers.RealizedImageV1{Digest: imageDigest, ConfigDigest: imageDigest, RootFSSubject: imageDigest},
+		Executable:  controlledSessionControllerExecutableV1,
+	}
+}
+
+func controlledSessionControllerPackageFixtureForImageV1(current CurrentBuild, image string) ControlledSessionControllerPackageV1 {
+	controllerPackage := controlledSessionControllerPackageFixtureV1(current)
+	imageDigest := canonical.Digest(image)
+	if imageDigest.Validate() != nil {
+		imageDigest = canonical.Digest("sha256:" + strings.Repeat("d", 64))
+	}
+	controllerPackage.Image = providers.RealizedImageV1{
+		Digest: imageDigest, ConfigDigest: imageDigest, RootFSSubject: imageDigest,
+	}
+	return controllerPackage
 }
 
 func cloneControlledSessionExecutionPlanForTestV1(plan ControlledSessionExecutionPlanV1) ControlledSessionExecutionPlanV1 {
