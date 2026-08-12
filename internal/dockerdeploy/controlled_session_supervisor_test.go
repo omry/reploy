@@ -145,6 +145,40 @@ func TestControlledSessionSupervisorRejectsRequestBeforeReady(t *testing.T) {
 	}
 }
 
+func TestControlledSessionSupervisorIgnoresPTYRequestsRacingTerminatingEvent(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	machine, err := controlledsession.NewMachineV1(plan.Authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := machine.Observe(controlledsession.ObservationV1{Kind: controlledsession.ObservationActivatedV1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := machine.Observe(controlledsession.ObservationV1{
+		Kind: controlledsession.ObservationHostCancelV1, Reason: "test termination",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	workload := newFakeControlledSessionWorkloadV1(nil, 0)
+	supervisor := &controlledSessionSupervisorV1{
+		machine: machine, workload: workload, controllerRequestsReady: true,
+	}
+	for _, request := range []controlledsession.RequestV1{
+		{Kind: controlledsession.RequestInputV1, Bytes: []byte("late input")},
+		{Kind: controlledsession.RequestResizeV1, Columns: 120, Rows: 40},
+	} {
+		if err := supervisor.handleRequest(t.Context(), request); err != nil {
+			t.Fatalf("late %s request error = %v", request.Kind, err)
+		}
+	}
+	if input := workload.snapshotInput(); len(input) != 0 || workload.columns != 0 || workload.rows != 0 {
+		t.Fatalf("late PTY effects = input %q, dimensions %dx%d", input, workload.columns, workload.rows)
+	}
+	if snapshot := machine.Snapshot(); snapshot.State != controlledsession.StateTerminatingV1 || snapshot.Cause != controlledsession.CauseHostCancelV1 {
+		t.Fatalf("lifecycle changed by late PTY request: %#v", snapshot)
+	}
+}
+
 func TestRunControlledSessionV1PreparesAttachesAndCleansLeaseNetwork(t *testing.T) {
 	plan := controlledSessionNetworkPlanFixtureV1(t)
 	requests := make(chan controlledsession.RequestV1, 8)
@@ -313,11 +347,12 @@ func TestBindControlledSessionDockerEndpointV1SelectsOnceForBothContainers(t *te
 func TestRunControlledSessionV1FailsClosedAfterWatchdogExit(t *testing.T) {
 	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
 	requests := make(chan controlledsession.RequestV1, 8)
-	requests <- controlledsession.RequestV1{Kind: controlledsession.RequestInputV1, Bytes: []byte("ready")}
 	controller := newFakeControlledSessionProcessV1()
 	transport := &fakeControlledSessionTransportV1{requests: requests}
 	transport.onEvent = func(event controlledsession.EventV1) {
 		switch event.Kind {
+		case controlledsession.EventReadyV1:
+			requests <- controlledsession.RequestV1{Kind: controlledsession.RequestInputV1, Bytes: []byte("ready")}
 		case controlledsession.EventWorkloadOutputsFinalizedV1:
 			requests <- controlledsession.RequestV1{Kind: controlledsession.RequestCompleteV1}
 		case controlledsession.EventTerminatedV1:
