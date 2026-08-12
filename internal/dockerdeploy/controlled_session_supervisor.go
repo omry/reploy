@@ -910,6 +910,12 @@ func (supervisor *controlledSessionSupervisorV1) handleRequest(ctx context.Conte
 		default:
 		}
 	}
+	if snapshot := supervisor.machine.Snapshot(); snapshot.State == controlledsession.StateTerminatingV1 &&
+		(request.Kind == controlledsession.RequestInputV1 || request.Kind == controlledsession.RequestResizeV1) {
+		// Termination latches before its lifecycle event can reach the controller.
+		// Discard PTY traffic already in flight across that publication gap.
+		return nil
+	}
 	transition, err := supervisor.machine.ApplyRequest(request)
 	if err != nil {
 		return err
