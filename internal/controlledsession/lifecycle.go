@@ -347,28 +347,41 @@ func (machine *MachineV1) validateControllerFinishLocked(status ControllerFinali
 }
 
 func (machine *MachineV1) ApplyRequest(request RequestV1) (TransitionV1, error) {
+	transition, _, err := machine.applyRequestV1(request, false)
+	return transition, err
+}
+
+// ApplyRequestOrDiscardTerminatingPTYV1 applies a request under the lifecycle
+// lock, but treats authorized input and resize requests that lose a race with
+// authoritative termination as discarded. Structured controller requests and
+// unauthorized terminal requests retain the strict ApplyRequest behavior.
+func (machine *MachineV1) ApplyRequestOrDiscardTerminatingPTYV1(request RequestV1) (TransitionV1, bool, error) {
+	return machine.applyRequestV1(request, true)
+}
+
+func (machine *MachineV1) applyRequestV1(request RequestV1, discardTerminatingPTY bool) (TransitionV1, bool, error) {
 	machine.mu.Lock()
 	defer machine.mu.Unlock()
 	transition := TransitionV1{Before: machine.state, After: machine.state, Cause: machine.cause}
 	if err := ValidateRequestV1(request); err != nil {
-		return transition, fmt.Errorf("%w: %v", ErrRequestRejected, err)
+		return transition, false, fmt.Errorf("%w: %v", ErrRequestRejected, err)
 	}
 	// A terminal acknowledgement is protocol flow control, not a granted
 	// controller capability. Its lifecycle position is the authorization.
 	if request.Kind == RequestAcknowledgeTerminatedV1 {
 		if machine.state != StateTerminatedV1 || machine.result == nil || !machine.resultDelivered {
-			return transition, fmt.Errorf("%w: terminal result has not been delivered", ErrRequestRejected)
+			return transition, false, fmt.Errorf("%w: terminal result has not been delivered", ErrRequestRejected)
 		}
 		machine.resultAcknowledged = true
 		transition.RequestAccepted = true
 		transition.AwaitingResultAcknowledgement = false
 		transition.ResultAcknowledged = true
 		transition.Result = cloneResultV1(machine.result)
-		return transition, nil
+		return transition, false, nil
 	}
 	operation := operationForRequestV1(request.Kind)
 	if !containsOperationV1(machine.authorization.Operations, operation) {
-		return transition, fmt.Errorf("%w: operation %q was not granted", ErrRequestRejected, operation)
+		return transition, false, fmt.Errorf("%w: operation %q was not granted", ErrRequestRejected, operation)
 	}
 
 	switch machine.state {
@@ -378,26 +391,31 @@ func (machine *MachineV1) ApplyRequest(request RequestV1) (TransitionV1, error) 
 		case RequestTerminateV1:
 			machine.latchLocked(CauseControllerTerminateV1, &transition)
 		case RequestCompleteV1:
-			return transition, fmt.Errorf("%w: completion is valid only after workload outputs are finalized", ErrRequestRejected)
+			return transition, false, fmt.Errorf("%w: completion is valid only after workload outputs are finalized", ErrRequestRejected)
 		}
 	case StateTerminatingV1:
 		switch request.Kind {
+		case RequestInputV1, RequestResizeV1:
+			if discardTerminatingPTY {
+				return transition, true, nil
+			}
+			return transition, false, fmt.Errorf("%w: %s is not accepted while terminating", ErrRequestRejected, request.Kind)
 		case RequestTerminateV1:
 			// Repeated graceful termination is idempotent and does not alter
 			// output or controller finalization already in progress.
 		case RequestCompleteV1:
 			if machine.waitingOutputs || !machine.waitingFinalize || machine.controller.Kind != ControllerFinalizationActiveV1 {
-				return transition, fmt.Errorf("%w: completion requires finalized workload outputs and a pending controller finalization", ErrRequestRejected)
+				return transition, false, fmt.Errorf("%w: completion requires finalized workload outputs and a pending controller finalization", ErrRequestRejected)
 			}
 			machine.waitingFinalize = false
 			machine.controller = ControllerFinalizationStatusV1{Kind: ControllerFinalizationCompletedV1}
 		default:
-			return transition, fmt.Errorf("%w: %s is not accepted while terminating", ErrRequestRejected, request.Kind)
+			return transition, false, fmt.Errorf("%w: %s is not accepted while terminating", ErrRequestRejected, request.Kind)
 		}
 	case StatePreparingV1, StateTerminatedV1:
-		return transition, fmt.Errorf("%w: requests are not accepted while %s", ErrRequestRejected, machine.state)
+		return transition, false, fmt.Errorf("%w: requests are not accepted while %s", ErrRequestRejected, machine.state)
 	default:
-		return transition, fmt.Errorf("%w: lifecycle state %q is invalid", ErrRequestRejected, machine.state)
+		return transition, false, fmt.Errorf("%w: lifecycle state %q is invalid", ErrRequestRejected, machine.state)
 	}
 
 	transition.After = machine.state
@@ -409,7 +427,7 @@ func (machine *MachineV1) ApplyRequest(request RequestV1) (TransitionV1, error) 
 	transition.AwaitingResultAcknowledgement = machine.resultDelivered && !machine.resultAcknowledged
 	transition.RequestAccepted = true
 	transition.ResultAcknowledged = machine.resultAcknowledged
-	return transition, nil
+	return transition, false, nil
 }
 
 func (machine *MachineV1) latchLocked(cause TerminationCauseV1, transition *TransitionV1) {

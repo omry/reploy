@@ -117,6 +117,26 @@ func TestLifecycleOutputBarrierPrecedesControllerFinalization(t *testing.T) {
 	}
 }
 
+func TestLifecycleAtomicallyDiscardsAuthorizedPTYDuringTermination(t *testing.T) {
+	machine := activatedMachineV1(t)
+	if _, err := machine.Observe(ObservationV1{Kind: ObservationHostCancelV1, Reason: "test termination"}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, request := range []RequestV1{
+		{Kind: RequestInputV1, Bytes: []byte("late input")},
+		{Kind: RequestResizeV1, Columns: 120, Rows: 40},
+	} {
+		transition, discarded, err := machine.ApplyRequestOrDiscardTerminatingPTYV1(request)
+		if err != nil || !discarded {
+			t.Fatalf("terminating %s request = %#v, discarded %t, %v", request.Kind, transition, discarded, err)
+		}
+		if transition.Before != StateTerminatingV1 || transition.After != StateTerminatingV1 || transition.RequestAccepted {
+			t.Fatalf("discarded %s transition = %#v", request.Kind, transition)
+		}
+	}
+}
+
 func TestLifecycleRejectsCompletionUntilOutputFinalizationIsPublished(t *testing.T) {
 	machine := activatedMachineV1(t)
 	code := 0
