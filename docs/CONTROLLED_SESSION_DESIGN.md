@@ -912,18 +912,18 @@ publication mechanism.
 
 The controlled-session run input accepts mutually exclusive output-directory
 and output-file selections using the same underlying contract as an ordinary
-app command. A future public host CLI should expose those selections as
-`--output-dir` and `--output-file` without changing their semantics. Host Reploy
-prepares the destination against the controller's runtime identity before
-admission, includes the output grant in the controller command's readiness and
-concurrency checks, and freezes exactly one output mount and environment
-coordinate into the controller plan. The workload plan must carry neither. A
-direct output directory persists across every teardown outcome. A staged output
-file is published only when the controller has sent `complete`, which attests
-that its artifacts are closed and final; otherwise Reploy removes the
-unpublished reservation. Publication occurs after session teardown, and a
-publication failure is reported separately from the authoritative session
-result.
+app command. The planned public `reploy controlled-session run` command exposes
+those selections as `--output-dir` and `--output-file` without changing their
+semantics. Host Reploy prepares the destination against the controller's
+runtime identity before admission, includes the output grant in the controller
+command's readiness and concurrency checks, and freezes exactly one output
+mount and environment coordinate into the controller plan. The workload plan
+must carry neither. A direct output directory persists across every teardown
+outcome. A staged output file is published only when the controller has sent
+`complete`, which attests that its artifacts are closed and final; otherwise
+Reploy removes the unpublished reservation. Publication occurs after session
+teardown, and a publication failure is reported separately from the
+authoritative session result.
 
 For a non-root runtime identity, the existing direct output bind remains an
 explicit host-filesystem grant. A root-safe output-only contract is separate
@@ -1120,7 +1120,8 @@ fail closed and must not be described as domain-level isolation.
 For the OmegaFlow profile:
 
 - orchestration runs in the controller container;
-- asciinema and the session client run in the controller container;
+- asciinema, the long-lived Reploy session broker, and the short-lived Reploy
+  terminal attachment run in the controller container;
 - Playwright and Chromium run in the controller container;
 - Host Reploy owns the Docker TTY attachment and external session supervision;
 - the shell runs on the Docker-managed PTY in the workload container;
@@ -1135,23 +1136,180 @@ state. It provides only the PTY, endpoint, network, and lifecycle primitives.
 
 ## Asciinema Integration
 
-OmegaFlow retains asciinema as the initial terminal recorder. It records a
-local Reploy session-client command:
+OmegaFlow retains unmodified asciinema as the initial terminal recorder. The
+Reploy binary embedded in the controller provides two distinct roles. A
+long-lived session broker owns the private Host Reploy channel and a local
+structured control stream to OmegaFlow. A short-lived terminal attachment owns
+only the PTY byte stream and resize propagation. Asciinema records the terminal
+attachment as an ordinary command:
 
 ```text
-asciinema
-└── Reploy session client in the controller
-    ⇄ private session channel
-       ⇄ Host Reploy external supervisor
-          ⇄ Docker TTY attachment
-             ⇄ workload shell
+reploy controlled-session client
+asciinema rec -c "reploy controlled-session attach --socket PATH" CAST
 ```
 
-The proxy forwards input bytes, output bytes, resize operations, and terminal
-completion. This keeps asciinema and recording dependencies out of workload
-images while preserving the existing cast format and controller ownership.
-It consumes `opened` as channel metadata and does not forward controller
-requests until `ready`.
+The broker's stdin and stdout carry only the versioned structured OmegaFlow
+control stream; its stderr carries human diagnostics. The attachment's stdin
+and stdout carry only terminal bytes. `REPLOY_SESSION_SOCKET` is consumed
+implicitly by `client` and has no command-line override. The broker creates the
+terminal socket itself and reports its path to OmegaFlow before OmegaFlow
+starts asciinema; OmegaFlow does not choose or prepare that path.
+
+```text
+OmegaFlow
+├── Reploy session broker ⇄ private session channel ⇄ Host Reploy supervisor
+│       ⇅ controller-local structured control
+└── asciinema
+    └── Reploy terminal attachment ⇄ controller-local terminal socket
+                                      ⇄ session broker
+                                         ⇄ Docker TTY attachment
+                                            ⇄ workload shell
+```
+
+The attachment forwards input bytes, output bytes, resize operations, and
+terminal completion without interpreting terminal content. The broker consumes
+`opened` as channel metadata, does not forward controller requests until
+`ready`, and remains alive after the attachment exits. Terminal bytes never
+share the structured control stream, so hostile workload output cannot forge a
+lifecycle event.
+
+When workload output is fully drained, the attachment exits and asciinema
+closes its cast. OmegaFlow can then finalize the cast, screenshots, and rendered
+media before sending `complete` through the still-live broker. The broker
+receives the authoritative `terminated` result, forwards it to OmegaFlow,
+forwards OmegaFlow's acknowledgement to Host Reploy, and only then exits. This
+ordering avoids requiring asciinema to finalize a recording while the command
+it records is still waiting for controller finalization.
+
+### Controller-Side Public Stream
+
+`reploy controlled-session client` is the public OmegaFlow integration
+boundary inside the controller. It uses UTF-8 JSON Lines on stdin and stdout:
+one JSON object followed by one newline for each message. Every object contains
+exactly `schema: "reploy-controlled-session-client-v1"`, a `type`, and the
+fields defined for that type. Empty lines, duplicate or unknown fields,
+unknown types, invalid UTF-8, trailing data, and messages larger than 1 MiB
+including their newline are fatal protocol errors. Terminal bytes never appear
+in this stream. Human-readable diagnostics go only to stderr.
+
+The client preserves Host Reploy event order. `broker-ready` is the first
+successful-session event, followed by `opened` and then either `ready` or a
+startup-failure lifecycle; a fatal local failure may instead emit only
+`client-error`. After `ready`, `workload-exit` precedes `terminating` when
+workload exit caused termination; `terminating` precedes `workload-exit` when a
+controller request, host cancellation, or another host-observed failure caused
+termination. Diagnostics may appear at the lifecycle point that produced them.
+Within those ordering rules, the client emits:
+
+- `broker-ready(terminal_socket)`: the private terminal listener exists and
+  OmegaFlow may start the attachment beneath asciinema;
+- `opened(operations, endpoints, columns, rows,
+  output_finalization_timeout_milliseconds)`: the public projection of the
+  corresponding immutable Host Reploy event;
+- payload-free `ready`;
+- `workload-exit(status)`;
+- `terminating(cause)`;
+- `diagnostic(code, message)`;
+- `workload-outputs-finalized(status, reason?)`;
+- `terminated(result)`; and
+- `client-error(code, message)`, emitted best-effort only for a fatal local
+  broker or public-stream failure that is not already represented by a Host
+  Reploy lifecycle event.
+
+OmegaFlow may write only these request messages:
+
+- `resize(columns, rows)`;
+- payload-free `terminate`;
+- payload-free `complete`; and
+- payload-free `acknowledge-terminated`.
+
+Interactive input and ordinary terminal resize normally travel through the
+attachment; the structured `resize` request exists for headless controller
+orchestration. The broker validates request shape and local lifecycle ordering
+before writing the corresponding private Host Reploy request. There is no
+request-accepted response in v1: successful consumption of a JSON line proves
+only local validation and transport submission, not Host Reploy acceptance.
+Subsequent trusted lifecycle events and the terminal result are authoritative.
+A malformed, unauthorized, premature, duplicate `complete` or acknowledgement,
+or transport-rejected request is fatal, emits `client-error` when possible,
+closes the private host connection, and therefore cannot be mistaken for
+successful completion. Repeated `terminate` remains idempotent and repeated
+valid resize requests remain ordinary operations.
+
+The public `opened` projection contains only the operations granted to the
+controller, endpoint coordinates, terminal dimensions, and output-finalization
+timeout. It does not expose the host-internal authorization record or its
+generation, build, plan, or command digests. Those values remain private
+admission evidence and are not part of the OmegaFlow compatibility surface.
+
+The public stream version is part of the Reploy release contract. `client`
+uses v1 by default, and that default never silently changes to an incompatible
+version. A future incompatible version requires an explicit option such as
+`--protocol v2` and uses its matching schema value. Reploy supports and
+deprecates v1 under its normal public compatibility policy. V1 readers reject
+rather than ignore unknown message types or fields. The values of
+`diagnostic.code` and `client-error.code` are the exception: they are open
+machine-code enums matching `[a-z][a-z0-9_]*`, and consumers handle an unknown
+code as a generic diagnostic rather than a protocol violation. The framed
+`REPLOY_SESSION_SOCKET` protocol and the broker-to-attachment protocol remain
+private implementation contracts between matching copies of the same Reploy
+release.
+
+### Terminal Attachment Contract
+
+Before claiming `REPLOY_SESSION_SOCKET`, the broker creates a fresh randomized
+`reploy-controlled-session-<32 lowercase hexadecimal characters>` directory
+beneath the controller's fixed private temporary home `/mnt/reploy-home`, with
+directory mode `0700`, and creates `terminal.sock` there with socket mode
+`0600`. This fixed safe path grammar also makes the reported coordinate safe to
+shell-quote into asciinema's command option. The broker rejects symlinks and
+any path outside that temporary home, accepts one same-identity attachment,
+removes the socket pathname after acceptance, and removes the private directory
+on exit. The path cannot overlap the controller output, project source, image
+content, or workload filesystem.
+
+The broker emits `broker-ready` after the listener exists and then claims the
+Host Reploy channel. It allows ten seconds for the one attachment to connect.
+Before attachment, it may hold at most one complete private-protocol output
+frame and otherwise applies backpressure to Host Reploy. Attach timeout,
+unexpected attachment exit, malformed attachment traffic, or loss before the
+terminal-end marker is a fatal controller loss: the broker closes the Host
+Reploy connection and v1 does not reconnect or accept a replacement.
+
+The private attachment protocol length-frames terminal input, terminal output,
+resize, and terminal-end records so terminal bytes cannot be interpreted as
+control. The attachment switches its asciinema-owned PTY to raw mode while
+running, restores it on exit, forwards ordinary Ctrl-C as byte `0x03`, and
+translates `SIGWINCH` into resize records. It writes received output bytes to
+stdout unchanged and never writes diagnostics there.
+
+For an activated session, the broker sends terminal-end only after it has
+forwarded every earlier output byte and then received the ordered
+`workload_outputs_finalized` event. It sends a clean no-output terminal-end if
+the authoritative `terminated` event arrives before activation. The attachment
+exits after consuming terminal-end, allowing asciinema to close the cast while
+the broker remains connected for controller artifact finalization, `complete`,
+terminal-result delivery, and acknowledgement.
+
+The controller-side exit contract is:
+
+- `client` exits `0` only after it forwarded `terminated`, successfully
+  forwarded `acknowledge-terminated`, and observed clean Host Reploy channel
+  closure; it exits `1` for a local, protocol, transport, lifecycle, or
+  unacknowledged-result failure and `2` for command usage errors;
+- `attach` exits `0` after a drained or clean no-output terminal-end,
+  independently of the workload process status; it exits `1` for failed output
+  finalization or any local or transport failure and `2` for command usage
+  errors; and
+- workload success or failure is read only from the broker's structured
+  lifecycle result, never inferred from the attachment or asciinema exit code.
+
+If failed workload-output finalization makes `attach` and therefore asciinema
+exit nonzero, OmegaFlow still retains and finalizes every partial recording
+artifact that asciinema produced, sends `complete` after those files are
+closed, and consumes and acknowledges the authoritative `terminated` result.
+The recorder failure is evidence included in that result path, not permission
+to abandon the still-live broker.
 
 The prototype must test:
 
@@ -1493,13 +1651,151 @@ local and public peers remain unreachable, and the documented bidirectional
 and undeclared-port reachability inside the two-container network remains
 visible rather than being misrepresented as endpoint-level enforcement.
 
-### Slice 5: OmegaFlow Proof
+### Slice 5: OmegaFlow Integration Boundary and Proof
 
-Integrate OmegaFlow, asciinema, Playwright, and Chromium only after the generic
-session slices pass. Prove one persistent shell across multiple operations,
-faithful Ctrl-C recording, resize, terminal-to-browser handoff, explicit
-recording finalization into the controller's declared Reploy output destination,
-survival of that output across teardown, and actionable failure diagnostics.
+The OmegaFlow integration is divided into small public-boundary slices. Each
+sub-slice is one review unit and must complete its local review, commit, native
+stack publication, remote PR review cycle, and approval before the next
+sub-slice starts.
+
+#### Slice 5A: Freeze the Public Integration Contract
+
+Replace the provisional direct asciinema-to-session-client topology with the
+broker and terminal-attachment topology described above. Freeze the public
+command names, ownership boundaries, structured controller messages, terminal
+socket behavior, lifecycle ordering, exit-status rules, Linux-only support,
+and compatibility policy before exposing code. This documentation slice must
+also prove that terminal recording can finish before `complete` without losing
+the private Host Reploy channel. It introduces no executable surface.
+
+#### Slice 5B: Embedded Controller Session Broker
+
+Add the controller-side broker as a subcommand of the monolithic Reploy binary.
+It consumes only the controller-private `REPLOY_SESSION_SOCKET`, owns the
+existing internal framed protocol, and exposes a versioned controller-local
+structured stream to OmegaFlow plus a private terminal socket. It forwards
+trusted lifecycle events and locally validated controller requests, enforces
+the public-stream, socket, ordering, and bounded-backpressure contracts above,
+and remains alive through `complete`, terminal-result delivery, and
+acknowledgement. Tests cover invalid messages, premature and duplicate
+operations, slow consumers, attach timeout, socket loss, and non-Linux failure.
+
+#### Slice 5C: Terminal Attachment and Unmodified Asciinema
+
+Add the terminal attachment as a second Reploy subcommand. It connects only to
+the broker's private terminal socket, forwards exact stdin and stdout bytes,
+propagates initial dimensions and resize, treats ordinary Ctrl-C as terminal
+input, and exits after the terminal output stream is drained. Focused tests
+cover raw and canonical modes, absence of double echo, byte ordering, large
+output, abrupt disconnects, and exit-status propagation. An integration test
+runs the attachment beneath an unmodified supported asciinema release and
+proves the cast closes while the broker remains available for finalization.
+The initial supported recorder contract is asciinema CLI 3.x. CI pins one exact
+3.x release and checksum in repository test metadata; changing that fixture is
+an explicit reviewed dependency update rather than an unbounded download of
+the latest release.
+
+#### Slice 5D: Controller Packaging
+
+Package the matching Reploy executable into a prepared controlled-session
+controller image and make the two subcommands available on `PATH`; do not ship
+or version a separate session-client executable. Pin host and controller
+compatibility through the Reploy release rather than publishing the private
+host wire protocol. Reject an unsupported or non-Linux controller image before
+starting either session container, with an actionable diagnostic. Tests prove
+the workload image cannot access the binary or private session socket merely
+because the controller can.
+
+#### Slice 5E: Public Host Invocation
+
+Add the following public host command:
+
+```text
+reploy controlled-session run \
+  --controller-dir DIR --workload-dir DIR \
+  [--endpoint ID ...] --columns N --rows N \
+  [--output-file FILE | --output-dir DIR] \
+  [TIMEOUT OPTIONS] -- CONTROLLER_COMMAND [ARG ...]
+```
+
+It maps those exact selections into `RunCurrentControlledSessionV1`; the
+workload command remains the declared persistent shell. Endpoint flags are
+repeatable and optional, dimensions are required and range from 1 through
+65535, and the output options retain their existing mutually exclusive
+controller-only semantics.
+
+The timeout options, defaults, and inclusive override bounds are:
+
+| Option | Default | Bounds |
+| --- | ---: | ---: |
+| `--startup-timeout` | 30 seconds | 15 seconds to 5 minutes |
+| `--termination-grace` | 5 seconds | 100 milliseconds to 1 minute |
+| `--controller-finalization-timeout` | 5 minutes | 1 second to 1 hour |
+| `--result-acknowledgement-timeout` | 10 seconds | 1 second to 1 minute |
+| `--cleanup-timeout` | 30 seconds | 1 second to 5 minutes |
+
+The protocol-v1 workload-output-finalization timeout remains the host-owned
+30-second value reported by `opened`; it is not a public override in this
+slice. The 30-second startup default normally accommodates the broker's fixed
+ten-second attachment deadline plus controller preparation; neither deadline
+borrows from or extends the other. Timeout expiry never becomes successful
+completion.
+
+After successful argument parsing, stdout contains exactly one JSON object and
+one trailing newline with schema `reploy-controlled-session-run-result-v1`.
+Stderr contains human notices and diagnostics. The result has these stable
+fields, using JSON `null` when a phase never produced a value:
+
+- `schema`, `ok`, and `error`;
+- `session_result`;
+- `result_delivered` and `result_acknowledged`;
+- `controller_status`;
+- `controller_output`, whose `kind` is `not-requested`,
+  `directory-retained`, `file-published`, `file-discarded`, or `failed` and
+  whose optional `reason` is safe diagnostic text; `not-requested`,
+  `directory-retained`, and `file-published` are successful handling, while
+  `file-discarded` and `failed` are not;
+- `delivery_tail_cleanup_status`; and
+- `delivery_tail_recovery_action`.
+
+`ok` is true only when the invocation has no operational error, its cause is a
+controller-requested termination or a zero-code workload exit, workload output
+is drained, runtime observation is maintained, controller finalization is
+completed, pre-delivery and delivery-tail cleanup succeed, no recovery action
+is required, the terminal result was delivered and acknowledged, and requested
+controller-output publication succeeded. The command exits `0` exactly when
+`ok` is true, `1` after any other parsed invocation except the signal cases
+below, and `2` for a usage error, for which stdout remains empty. On Unix, a
+first `SIGINT` or `SIGTERM` cancels the admitted or queued host operation,
+completes bounded cleanup, emits the structured result, and exits `130` or
+`143` respectively; `ok` remains false. A non-Unix host's ordinary interactive
+cancellation maps to the same host-cancel result where the platform can
+represent it. `SIGKILL` cannot emit a result and relies on the existing
+watchdog and incident-receipt recovery contract.
+
+Tests cover usage errors, admission failure, host signal cancellation,
+controller-requested termination, completed and incomplete finalization,
+unacknowledged delivery, output publication, and private incident-receipt
+handling. Public-stream and host-result golden JSON fixtures cover every
+message and nullable-result shape, reject malformed input plus unknown message
+types and fields, and accept unknown well-formed `diagnostic.code` and
+`client-error.code` values as generic diagnostics. The OmegaFlow conformance
+fixture consumes those fixtures without importing Reploy's private framed
+protocol.
+
+#### Slice 5F: OmegaFlow Conformance Proof
+
+Run an OmegaFlow-shaped controller using the public host command, broker,
+terminal attachment, unmodified asciinema, Playwright, and Chromium. Prove one
+persistent shell across multiple operations, faithful Ctrl-C recording,
+resize, terminal-to-browser handoff, endpoint use, recording finalization into
+the declared controller output destination, survival of that output across
+teardown, and actionable failure diagnostics. A failed-output-finalization case
+must additionally prove that OmegaFlow preserves the partial cast, closes its
+artifacts, sends `complete`, consumes and acknowledges `terminated`, and still
+reports the session failure. The fixture is a conformance test for the generic
+Reploy boundary; OmegaFlow continues to own command completion, cwd reporting,
+action markers, browser orchestration, and media rendering.
 
 ### Slice 6: User-Facing Documentation
 
