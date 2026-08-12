@@ -144,6 +144,7 @@ func controlledSessionWorkloadIntegrationPlanV1(
 		nil,
 		columns,
 		rows,
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)

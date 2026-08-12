@@ -37,6 +37,13 @@ class ProbeTarget:
     pack_flag: str
 
 
+@dataclass(frozen=True)
+class ControllerTarget:
+    goarch: str
+    binary_name: str
+    pack_flag: str
+
+
 DEFAULT_TARGETS = (
     Target("linux", "amd64"),
     Target("linux", "arm64"),
@@ -55,6 +62,15 @@ PROBE_TARGETS = (
     ),
     ProbeTarget(
         "arm64", "", "reploy-probe-linux-arm64", "--linux-arm64"
+    ),
+)
+
+CONTROLLER_TARGETS = (
+    ControllerTarget(
+        "amd64", "reploy-controller-linux-amd64", "--controller-linux-amd64"
+    ),
+    ControllerTarget(
+        "arm64", "reploy-controller-linux-arm64", "--controller-linux-arm64"
     ),
 )
 
@@ -219,6 +235,14 @@ def dev_build_ldflags(root: Path, version: str) -> list[str]:
     return ldflags
 
 
+def ldflag_value(ldflags: list[str], name: str) -> str:
+    prefix = f"-X github.com/omry/reploy.{name}="
+    for value in ldflags:
+        if value.startswith(prefix):
+            return value.removeprefix(prefix)
+    return ""
+
+
 def display_path(path: Path, *, root: Path) -> str:
     try:
         return str(path.relative_to(root))
@@ -360,6 +384,39 @@ def build_probe_tools(
     return packer, tuple(helpers)
 
 
+def build_controller_tools(
+    *,
+    root: Path,
+    workdir: Path,
+    env: dict[str, str],
+    version: str,
+    build_ldflags: list[str],
+    strip: bool,
+    verbose: bool,
+) -> tuple[tuple[ControllerTarget, Path], ...]:
+    controllers: list[tuple[ControllerTarget, Path]] = []
+    for target in CONTROLLER_TARGETS:
+        output = workdir / target.binary_name
+        target_env = env.copy()
+        target_env.update(
+            {
+                "CGO_ENABLED": "0",
+                "GOOS": "linux",
+                "GOARCH": target.goarch,
+            }
+        )
+        target_env.pop("GOARM", None)
+        command = ["go", "build", "-buildvcs=false", "-trimpath"]
+        ldflags = [f"-X github.com/omry/reploy.Version={version}", *build_ldflags]
+        if strip:
+            ldflags.extend(["-s", "-w"])
+        command.extend(["-ldflags", " ".join(ldflags)])
+        command.extend(["-o", str(output), "./cmd/reploy"])
+        run(command, cwd=root, env=target_env, verbose=verbose)
+        controllers.append((target, output))
+    return tuple(controllers)
+
+
 def build_targets(
     *,
     root: Path,
@@ -387,6 +444,7 @@ def build_targets(
     env.setdefault("GOCACHE", default_go_cache())
     Path(env["GOCACHE"]).mkdir(parents=True, exist_ok=True)
     version = reploy_version(root)
+    build_ldflags = dev_build_ldflags(root, version)
 
     if clean and outdir.exists():
         shutil.rmtree(outdir)
@@ -401,6 +459,15 @@ def build_targets(
             root=root,
             workdir=Path(probe_temp),
             env=env,
+            strip=strip,
+            verbose=verbose,
+        )
+        controllers = build_controller_tools(
+            root=root,
+            workdir=Path(probe_temp),
+            env=env,
+            version=version,
+            build_ldflags=build_ldflags,
             strip=strip,
             verbose=verbose,
         )
@@ -427,7 +494,7 @@ def build_targets(
                     "-trimpath",
                 ]
                 ldflags = [f"-X github.com/omry/reploy.Version={version}"]
-                ldflags.extend(dev_build_ldflags(root, version))
+                ldflags.extend(build_ldflags)
                 if strip:
                     ldflags.extend(["-s", "-w"])
                 command.extend(["-ldflags", " ".join(ldflags)])
@@ -436,6 +503,17 @@ def build_targets(
                 pack_command = [str(packer), "--executable", str(staged_output)]
                 for probe_target, helper in helpers:
                     pack_command.extend([probe_target.pack_flag, str(helper)])
+                for controller_target, controller in controllers:
+                    pack_command.extend([controller_target.pack_flag, str(controller)])
+                pack_command.extend(["--version", version])
+                for flag, name in (
+                    ("--build-commit", "BuildCommit"),
+                    ("--build-dirty", "BuildDirty"),
+                    ("--build-timestamp", "BuildTimestamp"),
+                ):
+                    value = ldflag_value(build_ldflags, name)
+                    if value:
+                        pack_command.extend([flag, value])
                 run(pack_command, cwd=root, env=None, verbose=verbose)
                 os.replace(staged_output, output)
             finally:

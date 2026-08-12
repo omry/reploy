@@ -174,15 +174,11 @@ func runControllerAsciinemaTestHostConnectionV1(listener *net.UnixListener) (res
 		CleanupStatus:                    CleanupStatusV1{Kind: CleanupStatusSucceededV1},
 		RecoveryAction:                   RecoveryNoneV1,
 	}
-	events := []EventV1{
+	openingEvents := []EventV1{
 		{Kind: EventOpenedV1, Opened: pointerToOpenedV1(testOpenedV1())},
 		{Kind: EventReadyV1},
-		{Kind: EventOutputV1, Bytes: []byte("recorded output\r\n")},
-		{Kind: EventWorkloadExitV1, WorkloadExit: &WorkloadExitV1{Status: result.WorkloadStatus}},
-		{Kind: EventTerminatingV1, Terminating: &TerminatingV1{Cause: CauseWorkloadExitV1}},
-		{Kind: EventWorkloadOutputsFinalizedV1, WorkloadOutputsFinalized: &WorkloadOutputsFinalizedV1{Status: WorkloadOutputFinalizationDrainedV1}},
 	}
-	for _, event := range events {
+	for _, event := range openingEvents {
 		if err := WriteEventV1(connection, event); err != nil {
 			return err
 		}
@@ -191,9 +187,33 @@ func runControllerAsciinemaTestHostConnectionV1(listener *net.UnixListener) (res
 	if err != nil || request.Kind != RequestResizeV1 || request.Columns != 80 || request.Rows != 24 {
 		return errors.Join(err, fmt.Errorf("host expected initial 80x24 resize, got %#v", request))
 	}
-	request, err = ReadRequestV1(connection)
-	if err != nil || request.Kind != RequestCompleteV1 {
-		return errors.Join(err, fmt.Errorf("host expected complete request, got %#v", request))
+	closingEvents := []EventV1{
+		{Kind: EventOutputV1, Bytes: []byte("recorded output\r\n")},
+		{Kind: EventWorkloadExitV1, WorkloadExit: &WorkloadExitV1{Status: result.WorkloadStatus}},
+		{Kind: EventTerminatingV1, Terminating: &TerminatingV1{Cause: CauseWorkloadExitV1}},
+		{Kind: EventWorkloadOutputsFinalizedV1, WorkloadOutputsFinalized: &WorkloadOutputsFinalizedV1{Status: WorkloadOutputFinalizationDrainedV1}},
+	}
+	for _, event := range closingEvents {
+		if err := WriteEventV1(connection, event); err != nil {
+			return err
+		}
+	}
+requests:
+	for {
+		request, err = ReadRequestV1(connection)
+		if err != nil {
+			return err
+		}
+		switch request.Kind {
+		case RequestResizeV1:
+			if request.Columns != 80 || request.Rows != 24 {
+				return fmt.Errorf("host expected 80x24 resize, got %#v", request)
+			}
+		case RequestCompleteV1:
+			break requests
+		default:
+			return fmt.Errorf("host expected resize or complete request, got %#v", request)
+		}
 	}
 	if err := WriteEventV1(connection, EventV1{Kind: EventTerminatedV1, Terminated: &result}); err != nil {
 		return err

@@ -16,6 +16,7 @@ import (
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/controlledsession"
 	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/providers"
 )
 
 func TestDockerControllerIntegration(t *testing.T) {
@@ -266,7 +267,12 @@ func controlledSessionControllerIntegrationPlanWithEndpointsV1(
 	identity := RuntimeUserPlan{LocalUser: "reploy", UID: runtimeUID, GID: runtimeGID, DockerUser: fmt.Sprintf("%d:%d", runtimeUID, runtimeGID)}
 	controllerCurrent := CurrentBuild{Generation: deploy.EnvironmentGenerationState{
 		Reference: image, BuildLockDigest: canonical.Digest("sha256:" + strings.Repeat("4", 64)),
-	}}
+	}, Lock: deploy.BuildLockV1{Platform: blueprint.Platform{OS: "linux", Architecture: runtime.GOARCH, Canonical: "linux/" + runtime.GOARCH}, FinalImage: providers.RealizedImageV1{
+		Digest:        canonical.Digest("sha256:" + strings.Repeat("6", 64)),
+		ConfigDigest:  canonical.Digest("sha256:" + strings.Repeat("6", 64)),
+		RootFSSubject: canonical.Digest("sha256:" + strings.Repeat("6", 64)),
+	}}}
+	controllerPackage := controlledSessionControllerPackageFixtureForImageV1(controllerCurrent, image)
 	controllerResourceName := uniqueDockerIntegrationName("reploy-session-controller")
 	controllerDockerPlan := DockerExecutionPlan{
 		EnvironmentID: "controller", DeploymentDir: controllerRoot, Phase: blueprint.PhaseStaged,
@@ -297,6 +303,7 @@ func controlledSessionControllerIntegrationPlanWithEndpointsV1(
 		nil,
 		0,
 		0,
+		&controllerPackage,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -316,6 +323,7 @@ func controlledSessionControllerIntegrationPlanWithEndpointsV1(
 		nil,
 		80,
 		24,
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)

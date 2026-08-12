@@ -47,6 +47,8 @@ func TestRunCurrentControlledSessionV1AdmitsExactPairAndDelegatesSupervisor(t *t
 	}
 	outputSession := &oneShotOutputSession{mount: outputMount}
 	published := false
+	controllerPrepared := false
+	controllerCleaned := false
 	options := testControlledSessionRunOptionsV1()
 	backend := currentControlledSessionRunBackendV1{
 		acquire: func(ctx context.Context, dir string) (*deploy.OperationLock, error) {
@@ -73,6 +75,20 @@ func TestRunCurrentControlledSessionV1AdmitsExactPairAndDelegatesSupervisor(t *t
 		},
 		privateEnv: func(string) (privateWorkloadEnvironmentV1, error) {
 			return privateWorkloadEnvironmentV1{}, nil
+		},
+		prepareController: func(ctx context.Context, dir string, current CurrentBuild) (*preparedControlledSessionControllerV1, error) {
+			if ctx == nil || dir != controllerDir || !reflect.DeepEqual(current, fixture.ControllerCurrent) {
+				t.Fatalf("controller preparation = dir %q current %#v", dir, current)
+			}
+			controllerPrepared = true
+			return preparedControlledSessionControllerForTestV1(ctx, dir, current)
+		},
+		cleanupController: func(_ context.Context, prepared *preparedControlledSessionControllerV1) error {
+			if prepared == nil || !controllerPrepared {
+				t.Fatal("controller package cleanup did not receive the prepared package")
+			}
+			controllerCleaned = true
+			return nil
 		},
 		prepareOutput: func(outputDir string, outputFile string, user RuntimeUserPlan) (*oneShotOutputSession, error) {
 			if outputDir != "" || outputFile != "artifacts.json" || !reflect.DeepEqual(user, fixture.ControllerRuntime.Docker.Sandbox.RuntimeUser) {
@@ -131,6 +147,9 @@ func TestRunCurrentControlledSessionV1AdmitsExactPairAndDelegatesSupervisor(t *t
 		plan: func(input ControlledSessionPlanInputV1) (ControlledSessionExecutionPlanV1, error) {
 			if input.Handle != "session-"+strings.Repeat("a", 64) || input.LiveRunID != "run-0000000000000043" || input.ControllerCommand != "inspect" || !reflect.DeepEqual(input.ControllerForwardedArguments, []string{"record"}) || input.controllerOutput != outputMount {
 				t.Fatalf("controlled-session plan input = %#v", input)
+			}
+			if !reflect.DeepEqual(input.ControllerPackage, controlledSessionControllerPackageFixtureV1(fixture.ControllerCurrent)) {
+				t.Fatalf("controlled-session controller package = %#v", input.ControllerPackage)
 			}
 			return planControlledSessionV1(input, planBackend)
 		},
@@ -191,6 +210,9 @@ func TestRunCurrentControlledSessionV1AdmitsExactPairAndDelegatesSupervisor(t *t
 	if !published {
 		t.Fatal("completed controller output was not published")
 	}
+	if !controllerPrepared || !controllerCleaned {
+		t.Fatalf("controller package lifecycle = prepared %t cleaned %t", controllerPrepared, controllerCleaned)
+	}
 	if !reflect.DeepEqual(acquired, []string{workloadDir, controllerDir}) {
 		t.Fatalf("operation lock order = %#v", acquired)
 	}
@@ -249,7 +271,9 @@ func TestRunCurrentControlledSessionV1RejectsActiveControllerBeforeWorkloadAdmis
 			}
 			return currentControlledSessionRuntimeV1{current: fixture.WorkloadCurrent, plan: fixture.WorkloadRuntime}, nil
 		},
-		privateEnv: func(string) (privateWorkloadEnvironmentV1, error) { return privateWorkloadEnvironmentV1{}, nil },
+		privateEnv:        func(string) (privateWorkloadEnvironmentV1, error) { return privateWorkloadEnvironmentV1{}, nil },
+		prepareController: preparedControlledSessionControllerForTestV1,
+		cleanupController: func(context.Context, *preparedControlledSessionControllerV1) error { return nil },
 		prepareOutput: func(string, string, RuntimeUserPlan) (*oneShotOutputSession, error) {
 			return &oneShotOutputSession{}, nil
 		},
@@ -316,6 +340,8 @@ func TestRunCurrentControlledSessionV1RejectsOneDeploymentBeforeLocking(t *testi
 		privateEnv: func(string) (privateWorkloadEnvironmentV1, error) {
 			return privateWorkloadEnvironmentV1{}, nil
 		},
+		prepareController: preparedControlledSessionControllerForTestV1,
+		cleanupController: func(context.Context, *preparedControlledSessionControllerV1) error { return nil },
 		prepareOutput: func(string, string, RuntimeUserPlan) (*oneShotOutputSession, error) {
 			return &oneShotOutputSession{}, nil
 		},
@@ -373,7 +399,9 @@ func TestRunCurrentControlledSessionV1RejectsConfiguredPrivateEnvironmentBeforeP
 				loadRuntime: func(context.Context, *deploy.OperationLock, string, StagedProviderBuildRuntimeV1) (currentControlledSessionRuntimeV1, error) {
 					return currentControlledSessionRuntimeV1{}, nil
 				},
-				privateEnv: preparePrivateWorkloadEnvironmentV1,
+				privateEnv:        preparePrivateWorkloadEnvironmentV1,
+				prepareController: preparedControlledSessionControllerForTestV1,
+				cleanupController: func(context.Context, *preparedControlledSessionControllerV1) error { return nil },
 				prepareOutput: func(string, string, RuntimeUserPlan) (*oneShotOutputSession, error) {
 					return &oneShotOutputSession{}, nil
 				},
@@ -418,4 +446,20 @@ func TestRequireDistinctControlledSessionDeploymentFilesV1RejectsFilesystemAlias
 	if err == nil || !strings.Contains(err.Error(), "requires distinct") {
 		t.Fatalf("filesystem-alias error = %v", err)
 	}
+}
+
+func TestControlledSessionControllerPackageCleanupTimeoutV1IsAlwaysBounded(t *testing.T) {
+	if got := controlledSessionControllerPackageCleanupTimeoutV1(ControlledSessionRunOptionsV1{}); got != controlledSessionControllerPackageDefaultCleanupTimeoutV1 {
+		t.Fatalf("default controller package cleanup timeout = %s", got)
+	}
+	want := 17 * time.Second
+	if got := controlledSessionControllerPackageCleanupTimeoutV1(ControlledSessionRunOptionsV1{CleanupTimeout: want}); got != want {
+		t.Fatalf("configured controller package cleanup timeout = %s", got)
+	}
+}
+
+func preparedControlledSessionControllerForTestV1(_ context.Context, _ string, current CurrentBuild) (*preparedControlledSessionControllerV1, error) {
+	return &preparedControlledSessionControllerV1{
+		Package: controlledSessionControllerPackageFixtureV1(current),
+	}, nil
 }

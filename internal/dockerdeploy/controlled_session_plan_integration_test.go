@@ -12,6 +12,7 @@ import (
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/providers"
 )
 
 func TestControlledSessionContainerPlansDockerIntegration(t *testing.T) {
@@ -21,7 +22,7 @@ func TestControlledSessionContainerPlansDockerIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
-	image, _ := buildApplicationStartupVerifierIntegrationImage(t, ctx)
+	image, platform := buildApplicationStartupVerifierIntegrationImage(t, ctx)
 	controllerRoot := t.TempDir()
 	workloadRoot := t.TempDir()
 	liveRunID := "run-0000000000000001"
@@ -36,7 +37,11 @@ func TestControlledSessionContainerPlansDockerIntegration(t *testing.T) {
 	buildIdentity := canonical.Digest("sha256:" + strings.Repeat("1", 64))
 	current := CurrentBuild{Generation: deploy.EnvironmentGenerationState{
 		Reference: image, BuildLockDigest: buildIdentity,
-	}}
+	}, Lock: deploy.BuildLockV1{Platform: platform, FinalImage: providers.RealizedImageV1{
+		Digest:        canonical.Digest("sha256:" + strings.Repeat("2", 64)),
+		ConfigDigest:  canonical.Digest("sha256:" + strings.Repeat("2", 64)),
+		RootFSSubject: canonical.Digest("sha256:" + strings.Repeat("2", 64)),
+	}}}
 	basePlan := DockerExecutionPlan{
 		EnvironmentID: "controller", DeploymentDir: controllerRoot, Phase: blueprint.PhaseStaged,
 		Image: image, ContainerName: uniqueDockerIntegrationName("reploy-session-plan"),
@@ -59,6 +64,10 @@ func TestControlledSessionContainerPlansDockerIntegration(t *testing.T) {
 		ControlledSessionRoleControllerV1, liveRunID, current, basePlan,
 		[]string{"/bin/sh", "-c", "printf 'controlled-session-controller-pass\\n' > \"$REPLOY_OUTPUT_DIR/proof\" && printf 'controlled-session-controller-pass\\n'"},
 		channel, protectedRoots, disabledControlledSessionNetworkPlanV1(), controllerOutput, 0, 0,
+		func() *ControlledSessionControllerPackageV1 {
+			value := controlledSessionControllerPackageFixtureForImageV1(current, image)
+			return &value
+		}(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +90,7 @@ func TestControlledSessionContainerPlansDockerIntegration(t *testing.T) {
 	workload, err := controlledSessionContainerPlanV1(
 		ControlledSessionRoleWorkloadV1, liveRunID, current, workloadDockerPlan,
 		[]string{"/bin/sh"}, ControlledSessionChannelPlanV1{}, protectedRoots, disabledControlledSessionNetworkPlanV1(), nil, 80, 24,
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)

@@ -115,7 +115,7 @@ jobs:
           REPLOY_DOCKER_INTEGRATION: "1"
         run: >-
           go test -timeout 15m ./internal/dockerdeploy
-          -run '^(TestControlledSessionSupervisorDockerIntegration|TestControlledSessionNetworkingDockerIntegration)$'
+          -run '^(TestControlledSessionSupervisorDockerIntegration|TestControlledSessionNetworkingDockerIntegration|TestControlledSessionControllerPackageDockerIntegration)$'
 
       - name: Run CLI runtime integration
         if: ${{ matrix.persistent_install == false }}

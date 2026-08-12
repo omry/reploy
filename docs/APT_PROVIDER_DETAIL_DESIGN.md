@@ -1868,10 +1868,12 @@ The release build compiles exactly three static helpers:
 | `linux/arm/v7` | `CGO_ENABLED=0`, `GOARM=7` |
 
 Every Linux, macOS, and Windows Reploy release binary contains all three in a
-deterministic appended ZIP with one canonical `reploy-probe-archive-v1`
-manifest. Appending preserves the main executable's normal launch and metadata
-inspection. Reploy verifies the archive's closed layout, entry names, sizes,
-CRC values, and SHA-256 values before use. It extracts only the selected helper
+deterministic appended ZIP with one canonical `reploy-runtime-archive-v1`
+manifest. The same private runtime archive also carries the Linux controller
+executables used by controlled sessions. Appending preserves the main
+executable's normal launch and metadata inspection. Reploy verifies the
+archive's closed layout, entry names, sizes, CRC values, and SHA-256 values
+before use. Provider validation extracts only the selected helper
 as mode `0555` into an already-created private deployment workspace beneath:
 
 ```text
