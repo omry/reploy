@@ -1,0 +1,2 @@
+kind: Added
+body: Add the embedded `reploy controlled-session client` broker with a strict versioned controller stream and a private, bounded terminal transport for OmegaFlow-controlled workloads.
