@@ -1,0 +1,2 @@
+kind: Added
+body: Add the public `reploy controlled-session run` host command with bounded lifecycle options, signal-aware cancellation, and a stable structured result contract.
