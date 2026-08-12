@@ -1742,6 +1742,25 @@ starting either session container, with an actionable diagnostic. Tests prove
 the workload image cannot access the binary or private session socket merely
 because the controller can.
 
+Implementation status: complete for the controller packaging boundary. Release
+builds embed unarchived Linux `amd64` and `arm64` copies of the same monolithic
+Reploy command, bound to the host release metadata in the private runtime
+archive. Session admission selects the controller generation's locked platform,
+rejects non-Linux or unsupported architectures before preparing output or
+admitting either container, extracts the matching executable into a private
+build workspace, and derives a controller-only image with one additional layer.
+The immutable controller plan binds that derived image, executable digest,
+source image, platform, and release; the workload plan remains bound to its
+untouched generation image and cannot carry the controller package. Successful
+teardown removes the temporary image reference and workspace; a cleanup failure
+is reported and retains the workspace as recovery evidence. Focused tests cover archive
+integrity and extraction, release mismatch, Dockerfile and one-layer invariants,
+plan isolation, lifecycle ownership, and early unsupported-platform rejection.
+Linux Docker integration builds a packaged release, proves both
+`controlled-session client` and `controlled-session attach` resolve through
+`PATH` in the derived controller image, and proves the source workload image
+does not gain the Reploy command.
+
 #### Slice 5E: Public Host Invocation
 
 Add the following public host command:
