@@ -1248,6 +1248,10 @@ closes the private host connection, and therefore cannot be mistaken for
 successful completion. Repeated `terminate` remains idempotent and repeated
 valid resize requests remain ordinary operations.
 
+Each broker-to-host request write is bounded to one second. Expiration is a
+fatal transport failure, so host-side PTY backpressure cannot hold the broker's
+control loop indefinitely.
+
 The public `opened` projection contains only the operations granted to the
 controller, endpoint coordinates, terminal dimensions, and output-finalization
 timeout. It does not expose the host-internal authorization record or its
@@ -1282,6 +1286,10 @@ content, or workload filesystem.
 
 The broker emits `broker-ready` after the listener exists and then claims the
 Host Reploy channel. It allows ten seconds for the one attachment to connect.
+Request and disconnect monitoring begins as soon as that attachment is
+accepted, including while the host claim is still waiting for `opened`; input
+and the latest resize received in that interval join the same bounded
+pre-`ready` buffer. An attachment EOF in that interval fails immediately.
 Before attachment, it may hold at most one complete private-protocol output
 frame and otherwise applies backpressure to Host Reploy. Attach timeout,
 unexpected attachment exit, malformed attachment traffic, or loss before the
@@ -1293,7 +1301,9 @@ resize, and terminal-end records so terminal bytes cannot be interpreted as
 control. The attachment switches its asciinema-owned PTY to raw mode while
 running, restores it on exit, forwards ordinary Ctrl-C as byte `0x03`, and
 translates `SIGWINCH` into resize records. It writes received output bytes to
-stdout unchanged and never writes diagnostics there.
+stdout unchanged and never writes diagnostics there. Input or resize already
+in flight when host termination latches is discarded without changing the
+termination cause or reporting controller loss.
 
 For an activated session, the broker sends terminal-end only after it has
 forwarded every earlier output byte and then received the ordered

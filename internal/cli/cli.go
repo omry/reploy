@@ -19,6 +19,7 @@ import (
 
 	reploy "github.com/omry/reploy"
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/controlledsession"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/dockerdeploy"
 	"github.com/omry/reploy/internal/overrideui"
@@ -49,6 +50,7 @@ var dockerAppCommand = dockerdeploy.AppCommand
 var runOverrideEditor = overrideui.RunWithResult
 var runBuildProgress = overrideui.RunBuildProgress
 var inspectStagedOverrideValidation = dockerdeploy.InspectStagedOverrideValidation
+var runControlledSessionBroker = controlledsession.RunControllerBrokerV1
 
 func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 	if message := windowsWSLBoundaryError(runtime.GOOS, os.LookupEnv, os.Getwd); message != "" {
@@ -85,6 +87,8 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runBlueprintValidate(args[1:], stdout, stderr)
 	case "services":
 		return runServices(args[1:], stdout, stderr)
+	case "controlled-session":
+		return runControlledSession(args[1:], stdout, stderr)
 	default:
 		if isDeploymentCommand(args[0]) {
 			return runDocker(args, stdout, stderr, globalOptions)
@@ -97,6 +101,32 @@ func Main(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		return printTopLevelUsageError(stderr, "unknown command: %s", args[0])
 	}
+}
+
+func runControlledSession(args []string, stdout io.Writer, stderr io.Writer) int {
+	if (len(args) == 1 && isHelpArg(args[0])) || (len(args) == 2 && args[0] == "client" && isHelpArg(args[1])) {
+		printControlledSessionHelp(stdout)
+		return 0
+	}
+	if len(args) != 1 || args[0] != "client" {
+		fmt.Fprintln(stderr, "reploy controlled-session usage error: expected client")
+		printControlledSessionShortUsage(stderr)
+		return 2
+	}
+	socket := os.Getenv("REPLOY_SESSION_SOCKET")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err := runControlledSessionBroker(ctx, controlledsession.ControllerBrokerOptionsV1{
+		SessionSocket: socket,
+		TemporaryHome: controlledsession.ControllerTemporaryHomeV1,
+		Input:         os.Stdin,
+		Output:        stdout,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "reploy controlled-session client error: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func runEmbeddedServiceContainer(args []string, stdout io.Writer, stderr io.Writer, globalOptions globalDeploymentOptions) int {
@@ -3174,6 +3204,8 @@ Commands:
   install      Install or update a deployed host service
   uninstall    Remove an installed host service and Docker resources
   services     List Reploy-managed services
+  controlled-session
+               Run controller-side controlled-session integration commands
   index        Manage the cached blueprint shorthand index
   version      Print version information
 
@@ -3206,6 +3238,21 @@ Options:
   --version    Print version information
 
 Run 'reploy COMMAND --help' for command-specific options.
+`, "\n"))
+}
+
+func printControlledSessionShortUsage(output io.Writer) {
+	fmt.Fprintln(output, "Usage: reploy controlled-session client")
+}
+
+func printControlledSessionHelp(output io.Writer) {
+	fmt.Fprint(output, strings.TrimLeft(`
+Usage: reploy controlled-session client
+
+Run the controller-side controlled-session broker. The command consumes the
+controller-private REPLOY_SESSION_SOCKET environment variable and exchanges
+versioned JSON Lines with the controller orchestrator on stdin and stdout.
+Human-readable diagnostics are written only to stderr.
 `, "\n"))
 }
 
