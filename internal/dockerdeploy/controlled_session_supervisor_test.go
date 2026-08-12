@@ -347,11 +347,12 @@ func TestBindControlledSessionDockerEndpointV1SelectsOnceForBothContainers(t *te
 func TestRunControlledSessionV1FailsClosedAfterWatchdogExit(t *testing.T) {
 	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
 	requests := make(chan controlledsession.RequestV1, 8)
-	requests <- controlledsession.RequestV1{Kind: controlledsession.RequestInputV1, Bytes: []byte("ready")}
 	controller := newFakeControlledSessionProcessV1()
 	transport := &fakeControlledSessionTransportV1{requests: requests}
 	transport.onEvent = func(event controlledsession.EventV1) {
 		switch event.Kind {
+		case controlledsession.EventReadyV1:
+			requests <- controlledsession.RequestV1{Kind: controlledsession.RequestInputV1, Bytes: []byte("ready")}
 		case controlledsession.EventWorkloadOutputsFinalizedV1:
 			requests <- controlledsession.RequestV1{Kind: controlledsession.RequestCompleteV1}
 		case controlledsession.EventTerminatedV1:
