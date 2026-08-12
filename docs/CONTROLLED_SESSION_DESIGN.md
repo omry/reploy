@@ -1717,6 +1717,20 @@ The initial supported recorder contract is asciinema CLI 3.x. CI pins one exact
 an explicit reviewed dependency update rather than an unbounded download of
 the latest release.
 
+Implementation status: complete for the Linux controller boundary. The
+monolithic Reploy binary now provides `controlled-session attach`, validates
+and connects only to the broker-created private socket, switches an attached
+PTY to raw mode with restoration on exit, forwards exact stdin/stdout bytes,
+propagates initial dimensions and `SIGWINCH` resizes, preserves ordinary
+Ctrl-C as byte `0x03`, and maps drained, failed-finalization, transport, and
+usage outcomes to the frozen exit contract. Focused tests cover headless and
+terminal-shaped input, absence of local double echo, byte ordering, a maximum
+size output frame followed by additional output, resize, abrupt loss, and
+exit status. Linux CI downloads the exact asciinema 3.2.1 amd64 release asset
+declared in `testdata/controlled-session/asciinema-v3-linux-amd64.json`, checks
+its SHA-256 digest, and proves an unmodified recorder closes its cast before
+the broker accepts `complete` and finishes the lifecycle.
+
 #### Slice 5D: Controller Packaging
 
 Package the matching Reploy executable into a prepared controlled-session
