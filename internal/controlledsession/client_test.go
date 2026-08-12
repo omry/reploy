@@ -1,7 +1,10 @@
 package controlledsession
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"io"
 	"net"
 	"reflect"
 	"strings"
@@ -170,6 +173,51 @@ func TestSessionClientV1AcknowledgesStartupFailureBeforeReady(t *testing.T) {
 	}
 }
 
+func TestSessionClientV1KeepsPostTerminatedEOFOpenForAcknowledgement(t *testing.T) {
+	var events bytes.Buffer
+	opened := testOpenedV1()
+	terminated := EventV1{Kind: EventTerminatedV1, Terminated: &ResultV1{
+		Cause:                            CauseStartupFailureV1,
+		WorkloadStatus:                   ProcessStatusV1{Kind: ProcessStatusUnknownV1},
+		WorkloadOutputFinalizationStatus: WorkloadOutputFinalizationStatusV1{Kind: WorkloadOutputFinalizationDrainedV1},
+		RuntimeObservationStatus:         RuntimeObservationStatusV1{Kind: RuntimeObservationMaintainedV1},
+		ControllerFinalizationStatus:     ControllerFinalizationStatusV1{Kind: ControllerFinalizationStartupFailedV1},
+		CleanupStatus:                    CleanupStatusV1{Kind: CleanupStatusSucceededV1},
+		RecoveryAction:                   RecoveryNoneV1,
+	}}
+	if err := WriteEventV1(&events, EventV1{Kind: EventOpenedV1, Opened: &opened}); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteEventV1(&events, terminated); err != nil {
+		t.Fatal(err)
+	}
+	connection := &scriptedSessionClientConnectionV1{reader: bytes.NewReader(events.Bytes())}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	client, err := newSessionClientV1(ctx, connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if event, err := client.ReadEvent(ctx); err != nil || !reflect.DeepEqual(event, terminated) {
+		t.Fatalf("terminated event = %#v, error = %v", event, err)
+	}
+	if _, err := client.ReadEvent(ctx); !errors.Is(err, io.EOF) {
+		t.Fatalf("post-terminated read error = %v", err)
+	}
+	if connection.closed {
+		t.Fatal("post-terminated EOF closed the connection before acknowledgement")
+	}
+	wantRequest := RequestV1{Kind: RequestAcknowledgeTerminatedV1}
+	if err := client.WriteRequest(ctx, wantRequest); err != nil {
+		t.Fatal(err)
+	}
+	request, err := ReadRequestV1(bytes.NewReader(connection.writes.Bytes()))
+	if err != nil || !reflect.DeepEqual(request, wantRequest) {
+		t.Fatalf("acknowledgement = %#v, error = %v", request, err)
+	}
+}
+
 func TestSessionClientV1RequiresOpenedFirstAndRejectsRepeatedOpened(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -217,3 +265,40 @@ func testOpenedV1() OpenedV1 {
 }
 
 func pointerToOpenedV1(value OpenedV1) *OpenedV1 { return &value }
+
+type scriptedSessionClientConnectionV1 struct {
+	reader *bytes.Reader
+	writes bytes.Buffer
+	closed bool
+}
+
+func (connection *scriptedSessionClientConnectionV1) Read(payload []byte) (int, error) {
+	if connection.closed {
+		return 0, net.ErrClosed
+	}
+	return connection.reader.Read(payload)
+}
+
+func (connection *scriptedSessionClientConnectionV1) Write(payload []byte) (int, error) {
+	if connection.closed {
+		return 0, net.ErrClosed
+	}
+	return connection.writes.Write(payload)
+}
+
+func (connection *scriptedSessionClientConnectionV1) Close() error {
+	connection.closed = true
+	return nil
+}
+
+func (*scriptedSessionClientConnectionV1) LocalAddr() net.Addr {
+	return &net.UnixAddr{Name: "scripted-local", Net: "unix"}
+}
+
+func (*scriptedSessionClientConnectionV1) RemoteAddr() net.Addr {
+	return &net.UnixAddr{Name: "scripted-remote", Net: "unix"}
+}
+
+func (*scriptedSessionClientConnectionV1) SetDeadline(time.Time) error      { return nil }
+func (*scriptedSessionClientConnectionV1) SetReadDeadline(time.Time) error  { return nil }
+func (*scriptedSessionClientConnectionV1) SetWriteDeadline(time.Time) error { return nil }
