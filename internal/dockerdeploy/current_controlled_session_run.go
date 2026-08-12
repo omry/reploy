@@ -7,12 +7,15 @@ import (
 	"io"
 	"os"
 	"sort"
+	"time"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/controlledsession"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providerstore"
 )
+
+const controlledSessionControllerPackageDefaultCleanupTimeoutV1 = 30 * time.Second
 
 // CurrentControlledSessionRunInputV1 selects two exact current generations,
 // one declared controller command, and an optional controller-only output for
@@ -40,19 +43,21 @@ type currentControlledSessionRuntimeV1 struct {
 }
 
 type currentControlledSessionRunBackendV1 struct {
-	acquire       func(context.Context, string) (*deploy.OperationLock, error)
-	loadRuntime   func(context.Context, *deploy.OperationLock, string, StagedProviderBuildRuntimeV1) (currentControlledSessionRuntimeV1, error)
-	privateEnv    func(string) (privateWorkloadEnvironmentV1, error)
-	prepareOutput func(string, string, RuntimeUserPlan) (*oneShotOutputSession, error)
-	abortOutput   func(*oneShotOutputSession) error
-	publishOutput func(*oneShotOutputSession) error
-	concurrency   func(blueprint.Document, DockerExecutionPlan, *transientOutputMount) (LiveRunConcurrencyDecisionV1, error)
-	newRunID      func() (string, error)
-	newHandle     func() (string, error)
-	acquireLease  func(*deploy.OperationLock, string) (*deploy.QueueEntryLeaseV1, error)
-	await         func(context.Context, string, *deploy.OperationLock, deploy.LiveRunV1, bool, io.Writer) (*deploy.OperationLock, error)
-	plan          func(ControlledSessionPlanInputV1) (ControlledSessionExecutionPlanV1, error)
-	run           func(context.Context, *deploy.OperationLock, *deploy.OperationLock, ControlledSessionExecutionPlanV1, ControlledSessionRunOptionsV1) (ControlledSessionRunResultV1, error)
+	acquire           func(context.Context, string) (*deploy.OperationLock, error)
+	loadRuntime       func(context.Context, *deploy.OperationLock, string, StagedProviderBuildRuntimeV1) (currentControlledSessionRuntimeV1, error)
+	privateEnv        func(string) (privateWorkloadEnvironmentV1, error)
+	prepareController func(context.Context, string, CurrentBuild) (*preparedControlledSessionControllerV1, error)
+	cleanupController func(context.Context, *preparedControlledSessionControllerV1) error
+	prepareOutput     func(string, string, RuntimeUserPlan) (*oneShotOutputSession, error)
+	abortOutput       func(*oneShotOutputSession) error
+	publishOutput     func(*oneShotOutputSession) error
+	concurrency       func(blueprint.Document, DockerExecutionPlan, *transientOutputMount) (LiveRunConcurrencyDecisionV1, error)
+	newRunID          func() (string, error)
+	newHandle         func() (string, error)
+	acquireLease      func(*deploy.OperationLock, string) (*deploy.QueueEntryLeaseV1, error)
+	await             func(context.Context, string, *deploy.OperationLock, deploy.LiveRunV1, bool, io.Writer) (*deploy.OperationLock, error)
+	plan              func(ControlledSessionPlanInputV1) (ControlledSessionExecutionPlanV1, error)
+	run               func(context.Context, *deploy.OperationLock, *deploy.OperationLock, ControlledSessionExecutionPlanV1, ControlledSessionRunOptionsV1) (ControlledSessionRunResultV1, error)
 }
 
 // RunCurrentControlledSessionV1 validates and admits one exact controller and
@@ -65,15 +70,17 @@ func RunCurrentControlledSessionV1(
 	input CurrentControlledSessionRunInputV1,
 ) (ControlledSessionRunResultV1, error) {
 	return runCurrentControlledSessionV1(ctx, input, currentControlledSessionRunBackendV1{
-		acquire:       deploy.AcquireOperationLock,
-		loadRuntime:   loadCurrentControlledSessionRuntimeV1,
-		privateEnv:    preparePrivateWorkloadEnvironmentV1,
-		prepareOutput: prepareOneShotOutput,
-		abortOutput:   func(output *oneShotOutputSession) error { return output.abort() },
-		publishOutput: func(output *oneShotOutputSession) error { return output.publish() },
-		concurrency:   PlanLiveRunConcurrencyV1,
-		newRunID:      deploy.NewLiveRunIDV1,
-		newHandle:     controlledsession.NewHandleV1,
+		acquire:           deploy.AcquireOperationLock,
+		loadRuntime:       loadCurrentControlledSessionRuntimeV1,
+		privateEnv:        preparePrivateWorkloadEnvironmentV1,
+		prepareController: prepareControlledSessionControllerPackageV1,
+		cleanupController: cleanupControlledSessionControllerPackageV1,
+		prepareOutput:     prepareOneShotOutput,
+		abortOutput:       func(output *oneShotOutputSession) error { return output.abort() },
+		publishOutput:     func(output *oneShotOutputSession) error { return output.publish() },
+		concurrency:       PlanLiveRunConcurrencyV1,
+		newRunID:          deploy.NewLiveRunIDV1,
+		newHandle:         controlledsession.NewHandleV1,
 		acquireLease: func(operation *deploy.OperationLock, id string) (*deploy.QueueEntryLeaseV1, error) {
 			return operation.AcquireLiveRunLeaseV1(id)
 		},
@@ -94,7 +101,7 @@ func runCurrentControlledSessionV1(
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	if backend.acquire == nil || backend.loadRuntime == nil || backend.privateEnv == nil || backend.prepareOutput == nil || backend.abortOutput == nil || backend.publishOutput == nil || backend.concurrency == nil || backend.newRunID == nil || backend.newHandle == nil || backend.acquireLease == nil || backend.await == nil || backend.plan == nil || backend.run == nil {
+	if backend.acquire == nil || backend.loadRuntime == nil || backend.privateEnv == nil || backend.prepareController == nil || backend.cleanupController == nil || backend.prepareOutput == nil || backend.abortOutput == nil || backend.publishOutput == nil || backend.concurrency == nil || backend.newRunID == nil || backend.newHandle == nil || backend.acquireLease == nil || backend.await == nil || backend.plan == nil || backend.run == nil {
 		return result, fmt.Errorf("run current controlled session requires a complete backend")
 	}
 	controllerDir, workloadDir, err := controlledSessionDeploymentDirectoriesV1(input.ControllerDeploymentDir, input.WorkloadDeploymentDir)
@@ -148,6 +155,23 @@ func runCurrentControlledSessionV1(
 			return result, fmt.Errorf("plan controlled session does not yet support private environment injection for the %s", runtime.role)
 		}
 	}
+	preparedController, err := backend.prepareController(ctx, controllerDir, controller.current)
+	if err != nil {
+		return result, fmt.Errorf("prepare controlled-session controller package: %w", err)
+	}
+	if preparedController == nil {
+		return result, fmt.Errorf("prepare controlled-session controller package returned no package")
+	}
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			controlledSessionControllerPackageCleanupTimeoutV1(input.SupervisorOptions),
+		)
+		defer cleanupCancel()
+		if cleanupErr := backend.cleanupController(cleanupCtx, preparedController); cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("cleanup controlled-session controller package: %w", cleanupErr))
+		}
+	}()
 	output, err := backend.prepareOutput(
 		input.OutputDir,
 		input.OutputFile,
@@ -212,6 +236,7 @@ func runCurrentControlledSessionV1(
 		Handle:                       handle,
 		LiveRunID:                    runID,
 		ControllerCurrent:            controller.current,
+		ControllerPackage:            preparedController.Package,
 		ControllerRuntime:            controller.plan,
 		ControllerCommand:            input.ControllerCommand,
 		ControllerForwardedArguments: append([]string(nil), input.ControllerArguments...),
@@ -257,6 +282,13 @@ func runCurrentControlledSessionV1(
 	delete(operations, workloadDir)
 	delete(operations, controllerDir)
 	return backend.run(ctx, workloadOperation, controllerOperation, plan, input.SupervisorOptions)
+}
+
+func controlledSessionControllerPackageCleanupTimeoutV1(options ControlledSessionRunOptionsV1) time.Duration {
+	if options.CleanupTimeout > 0 {
+		return options.CleanupTimeout
+	}
+	return controlledSessionControllerPackageDefaultCleanupTimeoutV1
 }
 
 func controlledSessionDeploymentDirectoriesV1(controller string, workload string) (string, string, error) {
