@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-12
+updated: 2026-08-13
 summary: Capability-scoped execution sessions that inherit Reploy's global container sandbox.
 ---
 
@@ -140,7 +140,16 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   only into the controller container plan, and is never exposed to the
   workload. Direct output directories persist across teardown outcomes;
   staged output files are published only when the controller completed
-  artifact finalization.
+  artifact finalization. The public `reploy controlled-session run` host
+  command now maps exact controller/workload directories, endpoint grants,
+  dimensions, controller command arguments, output selection, and bounded
+  timeout overrides into that current-generation runtime. Parsed invocations
+  emit one stable nullable JSON result, including truthful controller-output
+  disposition and delivery-tail state; Unix interrupt and termination signals
+  cancel the host operation through bounded cleanup before preserving their
+  conventional exit statuses. Public golden fixtures freeze every controller
+  stream message, malformed request examples, and representative host-result
+  shapes without publishing the private framed or terminal transports.
 - Initial runtime: Linux containers under Docker
 - Motivating clients: OmegaFlow recording, sandboxed AI agents, security
   inspection, and untrusted-code execution
@@ -912,7 +921,7 @@ publication mechanism.
 
 The controlled-session run input accepts mutually exclusive output-directory
 and output-file selections using the same underlying contract as an ordinary
-app command. The planned public `reploy controlled-session run` command exposes
+app command. The public `reploy controlled-session run` command exposes
 those selections as `--output-dir` and `--output-file` without changing their
 semantics. Host Reploy prepares the destination against the controller's
 runtime identity before admission, includes the output grant in the controller
@@ -1770,7 +1779,7 @@ through `PATH` in the derived controller image, enforces a size ceiling that
 would catch accidental re-embedding of the monolithic host command, and proves
 the source workload image does not gain the session client.
 
-#### Slice 5E: Public Host Invocation
+#### Slice 5E: Public Host Invocation (implemented)
 
 Add the following public host command:
 

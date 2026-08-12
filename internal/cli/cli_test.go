@@ -109,14 +109,20 @@ func TestHelp(t *testing.T) {
 	}
 }
 
-func TestHostCLILeavesControllerSessionModesToFocusedClient(t *testing.T) {
+func TestHostCLIExposesOnlyControlledSessionHostRoute(t *testing.T) {
 	code, stdout, stderr := runCLI("controlled-session")
-	if code != 2 || stdout != "" || !strings.Contains(stderr, "unknown command: controlled-session") {
+	if code != 2 || stdout != "" || !strings.Contains(stderr, "expected command") {
 		t.Fatalf("controlled-session route code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	code, stdout, stderr = runCLI("--help")
-	if code != 0 || stderr != "" || strings.Contains(stdout, "controlled-session") {
-		t.Fatalf("host help retained controller session route: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	if code != 0 || stderr != "" || !strings.Contains(stdout, "controlled-session") {
+		t.Fatalf("host help omitted controlled-session route: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	for _, controllerMode := range []string{"client", "attach"} {
+		code, stdout, stderr = runCLI("controlled-session", controllerMode)
+		if code != 2 || stdout != "" || !strings.Contains(stderr, "unknown command") {
+			t.Fatalf("host accepted controller-only mode %q: code=%d stdout=%q stderr=%q", controllerMode, code, stdout, stderr)
+		}
 	}
 }
 
