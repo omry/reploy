@@ -45,6 +45,16 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install nox
 
+      - name: Install pinned asciinema integration fixture
+        run: |
+          fixture=testdata/controlled-session/asciinema-v3-linux-amd64.json
+          url=$(jq -r .url "$fixture")
+          sha256=$(jq -r .sha256 "$fixture")
+          curl --fail --location --silent --show-error "$url" --output "$RUNNER_TEMP/asciinema"
+          echo "$sha256  $RUNNER_TEMP/asciinema" | sha256sum --check --strict
+          chmod 0755 "$RUNNER_TEMP/asciinema"
+          echo "REPLOY_ASCIINEMA_FIXTURE=$RUNNER_TEMP/asciinema" >> "$GITHUB_ENV"
+
       - name: Run CI checks
         env:
           NO_UPDATE_NOTIFIER: "1"
