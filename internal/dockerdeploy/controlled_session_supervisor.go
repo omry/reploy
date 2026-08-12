@@ -910,9 +910,14 @@ func (supervisor *controlledSessionSupervisorV1) handleRequest(ctx context.Conte
 		default:
 		}
 	}
-	transition, err := supervisor.machine.ApplyRequest(request)
+	transition, discarded, err := supervisor.machine.ApplyRequestOrDiscardTerminatingPTYV1(request)
 	if err != nil {
 		return err
+	}
+	if discarded {
+		// Termination latches before its lifecycle event can reach the controller.
+		// Discard PTY traffic already in flight across that publication gap.
+		return nil
 	}
 	supervisor.recordTransition(transition)
 	if _, err := controlledsession.ApplyAcceptedWorkloadPTYRequestV1(ctx, supervisor.workload, request); err != nil {

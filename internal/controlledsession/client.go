@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 )
@@ -79,7 +80,14 @@ func (client *SessionClientV1) ReadEvent(ctx context.Context) (EventV1, error) {
 		return readErr
 	})
 	if err != nil {
-		return EventV1{}, errors.Join(fmt.Errorf("read controlled-session client event: %w", err), client.Close())
+		readErr := fmt.Errorf("read controlled-session client event: %w", err)
+		client.stateMu.RLock()
+		terminated := client.terminated
+		client.stateMu.RUnlock()
+		if terminated && errors.Is(err, io.EOF) {
+			return EventV1{}, readErr
+		}
+		return EventV1{}, errors.Join(readErr, client.Close())
 	}
 	if event.Kind == EventOpenedV1 {
 		return EventV1{}, errors.Join(fmt.Errorf("read controlled-session client event: opened may appear only once"), client.Close())
