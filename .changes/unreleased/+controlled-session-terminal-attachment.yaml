@@ -1,0 +1,2 @@
+kind: Added
+body: Add `reploy controlled-session attach` for recording controlled workload terminal streams beneath a pinned, unmodified asciinema 3.x client.
