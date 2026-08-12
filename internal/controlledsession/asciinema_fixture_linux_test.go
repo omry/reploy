@@ -187,18 +187,33 @@ func runControllerAsciinemaTestHostConnectionV1(listener *net.UnixListener) (res
 			return err
 		}
 	}
-	request, err := ReadRequestV1(connection)
-	if err != nil || request.Kind != RequestResizeV1 || request.Columns != 80 || request.Rows != 24 {
-		return errors.Join(err, fmt.Errorf("host expected initial 80x24 resize, got %#v", request))
-	}
-	request, err = ReadRequestV1(connection)
-	if err != nil || request.Kind != RequestCompleteV1 {
-		return errors.Join(err, fmt.Errorf("host expected complete request, got %#v", request))
+	sawInitialResize := false
+
+requests:
+	for {
+		request, err := ReadRequestV1(connection)
+		if err != nil {
+			return err
+		}
+		switch request.Kind {
+		case RequestResizeV1:
+			if request.Columns != 80 || request.Rows != 24 {
+				return fmt.Errorf("host expected 80x24 resize, got %#v", request)
+			}
+			sawInitialResize = true
+		case RequestCompleteV1:
+			if !sawInitialResize {
+				return fmt.Errorf("host received complete before initial 80x24 resize")
+			}
+			break requests
+		default:
+			return fmt.Errorf("host expected resize or complete request, got %#v", request)
+		}
 	}
 	if err := WriteEventV1(connection, EventV1{Kind: EventTerminatedV1, Terminated: &result}); err != nil {
 		return err
 	}
-	request, err = ReadRequestV1(connection)
+	request, err := ReadRequestV1(connection)
 	if err != nil || request.Kind != RequestAcknowledgeTerminatedV1 {
 		return errors.Join(err, fmt.Errorf("host expected acknowledge-terminated request, got %#v", request))
 	}
