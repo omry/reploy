@@ -35,7 +35,18 @@ printed JSON cannot forge control events.
 ## Prepare the two deployments
 
 Create and build separate staging deployments for the controller and workload.
-For example:
+At minimum, select the two prepared deployments and the declared controller
+command. This uses an `80` by `24` terminal and grants no workload endpoints:
+
+```bash
+reploy controlled-session run \
+  --controller-dir ./controller-staging \
+  --workload-dir ./workload-staging \
+  -- run-controller
+```
+
+Add only the optional selections the controller needs. A fully selected
+example is:
 
 ```bash
 reploy stage ./controller.blueprint.yaml --dir ./controller-staging
@@ -75,12 +86,23 @@ environment:
 ```text
 reploy controlled-session run \
   --controller-dir DIR --workload-dir DIR \
-  [--endpoint ID ...] --columns N --rows N \
+  [--endpoint ID ...] [--columns N --rows N] \
   [--output-file FILE | --output-dir DIR] \
   [TIMEOUT OPTIONS] -- CONTROLLER_COMMAND [ARG ...]
 ```
 
-For example:
+At minimum, select the two prepared deployments and the declared controller
+command. This uses an `80` by `24` terminal and grants no workload endpoints:
+
+```bash
+reploy controlled-session run \
+  --controller-dir ./controller-staging \
+  --workload-dir ./workload-staging \
+  -- run-controller
+```
+
+Add only the optional selections the controller needs. A fully selected
+example is:
 
 ```bash
 reploy controlled-session run \
@@ -92,10 +114,20 @@ reploy controlled-session run \
   -- run-controller
 ```
 
-`--endpoint` is optional and repeatable. Each value must name an endpoint
-declared by the exact workload generation. Terminal dimensions are required
-and must be from 1 through 65535. The command and every argument after `--` run
-in the controller; the workload always runs `/bin/sh` in its exact image.
+The full example selects each part of the session explicitly:
+
+| Selection | Meaning |
+| --- | --- |
+| `--controller-dir ./controller-staging` | Use the exact current generation in the prepared controller deployment. This image contains the controller program and receives the Reploy session client. |
+| `--workload-dir ./workload-staging` | Use the exact current generation in the prepared workload deployment. Reploy starts `/bin/sh` in this image. |
+| `--endpoint web` | Grant the controller access to the workload endpoint named `web`. This is optional, repeatable, and valid only for endpoints declared by the selected workload generation. |
+| `--columns 120 --rows 40` | Start the workload PTY at 120 columns by 40 rows. The pair is optional; omitting both uses `80` columns by `24` rows. If overriding the size, provide both values from 1 through 65535. |
+| `--output-dir ./session-artifacts` | Retain the controller's output directory at this host path after teardown. The destination is not exposed to the workload. Use `--output-file` instead when publishing one controller-created file. |
+| `-- run-controller` | `--` ends the host options. `run-controller` names the native command declared in the controller blueprint; it and any following arguments run only in the controller. |
+
+The controller and workload directories are required. Endpoint, terminal-size,
+and output selections are optional. The workload always runs `/bin/sh` in its
+exact image.
 
 The optional timeouts are:
 

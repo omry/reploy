@@ -20,6 +20,8 @@ import (
 const controlledSessionRunResultSchemaV1 = "reploy-controlled-session-run-result-v1"
 
 const (
+	controlledSessionDefaultColumns                       = 80
+	controlledSessionDefaultRows                          = 24
 	controlledSessionDefaultStartupTimeout                = 30 * time.Second
 	controlledSessionDefaultTerminationGrace              = 5 * time.Second
 	controlledSessionDefaultControllerFinalizationTimeout = 5 * time.Minute
@@ -147,6 +149,8 @@ func runControlledSession(args []string, stdout io.Writer, stderr io.Writer, glo
 
 func parseControlledSessionRunOptions(args []string) (controlledSessionRunCLIOptions, error) {
 	options := controlledSessionRunCLIOptions{
+		Columns:                       controlledSessionDefaultColumns,
+		Rows:                          controlledSessionDefaultRows,
 		StartupTimeout:                controlledSessionDefaultStartupTimeout,
 		TerminationGrace:              controlledSessionDefaultTerminationGrace,
 		ControllerFinalizationTimeout: controlledSessionDefaultControllerFinalizationTimeout,
@@ -246,11 +250,8 @@ func parseControlledSessionRunOptions(args []string) (controlledSessionRunCLIOpt
 	if strings.TrimSpace(options.WorkloadDir) == "" {
 		return controlledSessionRunCLIOptions{}, fmt.Errorf("--workload-dir is required")
 	}
-	if !columnsSet {
-		return controlledSessionRunCLIOptions{}, fmt.Errorf("--columns is required")
-	}
-	if !rowsSet {
-		return controlledSessionRunCLIOptions{}, fmt.Errorf("--rows is required")
+	if columnsSet != rowsSet {
+		return controlledSessionRunCLIOptions{}, fmt.Errorf("--columns and --rows must be provided together")
 	}
 	if options.OutputFile != "" && options.OutputDir != "" {
 		return controlledSessionRunCLIOptions{}, fmt.Errorf("--output-file and --output-dir are mutually exclusive")
@@ -368,7 +369,7 @@ func printControlledSessionShortUsage(output io.Writer) {
 }
 
 func printControlledSessionRunShortUsage(output io.Writer) {
-	fmt.Fprintln(output, "Usage: reploy controlled-session run --controller-dir DIR --workload-dir DIR [--endpoint ID ...] --columns N --rows N [--output-file FILE | --output-dir DIR] [TIMEOUT OPTIONS] -- CONTROLLER_COMMAND [ARG ...]")
+	fmt.Fprintln(output, "Usage: reploy controlled-session run --controller-dir DIR --workload-dir DIR [--endpoint ID ...] [--columns N --rows N] [--output-file FILE | --output-dir DIR] [TIMEOUT OPTIONS] -- CONTROLLER_COMMAND [ARG ...]")
 }
 
 func printControlledSessionHelp(output io.Writer) {
@@ -388,19 +389,19 @@ func printControlledSessionRunHelp(output io.Writer) {
 	printControlledSessionRunShortUsage(output)
 	fmt.Fprint(output, strings.TrimLeft(`
 
-The workload runs its declared persistent shell. CONTROLLER_COMMAND and all
+The workload runs /bin/sh in its selected image. CONTROLLER_COMMAND and all
 arguments after -- run only in the selected controller deployment.
 
 Required options:
-  --controller-dir DIR                 Controller deployment directory
-  --workload-dir DIR                   Workload deployment directory
-  --columns N                          Initial terminal columns, 1 through 65535
-  --rows N                             Initial terminal rows, 1 through 65535
+  --controller-dir DIR                 Prepared controller deployment directory
+  --workload-dir DIR                   Prepared workload deployment directory
 
 Optional selections:
   --endpoint ID                        Grant a declared workload endpoint; repeatable
-  --output-file FILE                   Publish one controller-created file
-  --output-dir DIR                     Retain a controller output directory
+  --columns N                          Columns 1-65535; default 80; requires --rows
+  --rows N                             Rows 1-65535; default 24; requires --columns
+  --output-file FILE                   Publish one controller-created file to the host
+  --output-dir DIR                     Retain the controller output directory on the host
 
 Timeouts:
   --startup-timeout DURATION           Default 30s; 15s through 5m
