@@ -1786,16 +1786,17 @@ Add the following public host command:
 ```text
 reploy controlled-session run \
   --controller-dir DIR --workload-dir DIR \
-  [--endpoint ID ...] --columns N --rows N \
+  [--endpoint ID ...] [--columns N --rows N] \
   [--output-file FILE | --output-dir DIR] \
   [TIMEOUT OPTIONS] -- CONTROLLER_COMMAND [ARG ...]
 ```
 
 It maps those exact selections into `RunCurrentControlledSessionV1`; the
-workload command remains the declared persistent shell. Endpoint flags are
-repeatable and optional, dimensions are required and range from 1 through
-65535, and the output options retain their existing mutually exclusive
-controller-only semantics.
+workload always runs `/bin/sh` in the selected image. Endpoint flags are
+repeatable and optional. Initial dimensions default to 80 columns by 24 rows;
+overrides require both flags, with each value ranging from 1 through 65535.
+The output options retain their existing mutually exclusive controller-only
+semantics.
 
 The timeout options, defaults, and inclusive override bounds are:
 
@@ -1909,9 +1910,11 @@ covers separate controller and workload staging, exact host invocation,
 controller client and attachment use, the strict JSON Lines stream, endpoint
 and output grants, lifecycle and failure handling, result and exit semantics,
 security defaults, and the initial Linux/Docker limitations. Focused OmegaFlow
-recording, sandboxed-agent, and security-inspection profiles demonstrate the
-same generic boundary without adding profile-specific Reploy authority. The
-site introduction and Capabilities navigation expose the guide.
+recording, sandboxed-agent, and security-inspection examples demonstrate the
+same generic boundary without adding integration-specific Reploy authority.
+The sandboxed-agent example places the agent and project in the workload while
+leaving only a small trusted session driver in the controller. The site
+introduction and Capabilities navigation expose the guide.
 
 ### Independent Pre-release Runtime Fixes
 

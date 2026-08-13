@@ -8,6 +8,12 @@ of a separate workload deployment. The controller can automate a terminal,
 reach explicitly selected workload endpoints, and retain its own artifacts
 without receiving implicit Docker or host authority.
 
+Common uses include running a sandboxed agent against a project, dynamically
+inspecting an application, and recording terminal-and-browser workflows.
+See [Integration examples](#integration-examples) for brief examples of each.
+
+![Controlled-session actors and operations](/img/controlled-session-overview.svg)
+
 The initial controlled-session runtime requires a Linux host running Docker;
 Docker Desktop on macOS or Windows is not supported for this capability.
 Reploy supports Linux `amd64` and `arm64` controller images and installs the
@@ -35,7 +41,18 @@ printed JSON cannot forge control events.
 ## Prepare the two deployments
 
 Create and build separate staging deployments for the controller and workload.
-For example:
+At minimum, select the two prepared deployments and the declared controller
+command. This uses an `80` by `24` terminal and grants no workload endpoints:
+
+```bash
+reploy controlled-session run \
+  --controller-dir ./controller-staging \
+  --workload-dir ./workload-staging \
+  -- run-controller
+```
+
+Add only the optional selections the controller needs. A fully selected
+example is:
 
 ```bash
 reploy stage ./controller.blueprint.yaml --dir ./controller-staging
@@ -75,12 +92,23 @@ environment:
 ```text
 reploy controlled-session run \
   --controller-dir DIR --workload-dir DIR \
-  [--endpoint ID ...] --columns N --rows N \
+  [--endpoint ID ...] [--columns N --rows N] \
   [--output-file FILE | --output-dir DIR] \
   [TIMEOUT OPTIONS] -- CONTROLLER_COMMAND [ARG ...]
 ```
 
-For example:
+At minimum, select the two prepared deployments and the declared controller
+command. This uses an `80` by `24` terminal and grants no workload endpoints:
+
+```bash
+reploy controlled-session run \
+  --controller-dir ./controller-staging \
+  --workload-dir ./workload-staging \
+  -- run-controller
+```
+
+Add only the optional selections the controller needs. A fully selected
+example is:
 
 ```bash
 reploy controlled-session run \
@@ -92,10 +120,20 @@ reploy controlled-session run \
   -- run-controller
 ```
 
-`--endpoint` is optional and repeatable. Each value must name an endpoint
-declared by the exact workload generation. Terminal dimensions are required
-and must be from 1 through 65535. The command and every argument after `--` run
-in the controller; the workload always runs `/bin/sh` in its exact image.
+The full example selects each part of the session explicitly:
+
+| Selection | Meaning |
+| --- | --- |
+| `--controller-dir ./controller-staging` | Use the exact current generation in the prepared controller deployment. This image contains the controller program and receives the Reploy session client. |
+| `--workload-dir ./workload-staging` | Use the exact current generation in the prepared workload deployment. Reploy starts `/bin/sh` in this image. |
+| `--endpoint web` | Grant the controller access to the workload endpoint named `web`. This is optional, repeatable, and valid only for endpoints declared by the selected workload generation. |
+| `--columns 120 --rows 40` | Start the workload PTY at 120 columns by 40 rows. The pair is optional; omitting both uses `80` columns by `24` rows. If overriding the size, provide both values from 1 through 65535. |
+| `--output-dir ./session-artifacts` | Retain the controller's output directory at this host path after teardown. The destination is not exposed to the workload. Use `--output-file` instead when publishing one controller-created file. |
+| `-- run-controller` | `--` ends the host options. `run-controller` names the native command declared in the controller blueprint; it and any following arguments run only in the controller. |
+
+The controller and workload directories are required. Endpoint, terminal-size,
+and output selections are optional. The workload always runs `/bin/sh` in its
+exact image.
 
 The optional timeouts are:
 
@@ -308,12 +346,13 @@ successful completion.
 
 ## Security defaults and limitations
 
-Controlled sessions use Reploy's ordinary application-container sandbox. They
-do not create a special weaker or stronger security tier. Both application
-containers use an explicit runtime identity, a read-only root filesystem plus
-declared writable storage, seccomp, `no-new-privileges`, and empty Linux
-capability sets. They receive no privileged mode, host namespaces, host
-devices, inherited host environment, or Docker socket.
+Both the controller container and the workload container use Reploy's ordinary
+application-container sandbox. Controlled sessions do not create a special
+weaker or stronger security tier. Each container uses an explicit runtime
+identity, a read-only root filesystem plus declared writable storage, seccomp,
+`no-new-privileges`, and empty Linux capability sets. Neither receives
+privileged mode, host namespaces, host devices, inherited host environment, or
+the Docker socket.
 
 Authority remains declaration-driven:
 
@@ -339,10 +378,43 @@ network has the coarse reachability described above. A backend that cannot
 establish the required Linux sandbox fails closed instead of silently
 degrading.
 
-## Integration profiles
+## Integration examples
 
-These profiles use the same generic boundary. They do not change the session
-abstraction or grant profile-specific host authority.
+These are example ways to build controllers on the same generic boundary, not
+named Reploy resources, configuration profiles, or selectable session modes.
+They do not change the session abstraction or grant integration-specific host
+authority. The agent and inspection examples illustrate uses of the generic
+boundary; the OmegaFlow example is backed by Reploy's conformance fixture.
+
+### Sandboxed agent
+
+Place the agent runtime and the project it can modify in the workload
+deployment. Keep only a small trusted session driver in the controller. The
+driver starts and observes the agent through the controlled terminal, retains
+transcripts or reports in the controller output directory, and uses only the
+workload endpoints explicitly needed for external observation.
+
+This placement contains the agent together with the code it executes. The
+agent receives neither the controller-private session socket nor the
+controller output directory, Docker socket, or host process authority. Policy
+that must remain outside the agent's control belongs in the trusted controller
+or host. The workload sandbox still does not provide domain-level egress
+policy, and secrets placed in the workload are visible to both the agent and
+the project code it runs.
+
+### Security inspection
+
+Place scanners and inspection orchestration in the controller and the target
+application in the workload. Use named endpoints for dynamic inspection and a
+controller output directory for findings and partial evidence. Treat terminal
+output, files, and service responses as hostile input, and retain the full
+structured result with the report so cleanup or observation failures remain
+visible.
+
+This profile supplies process separation and deny-oriented container defaults;
+it is not a network IDS, HTTP policy engine, malware containment guarantee, or
+content-sanitization layer. The controller/workload private-network limitation
+still applies.
 
 ### OmegaFlow recording
 
@@ -376,33 +448,6 @@ Reploy owns PTY bytes, endpoint coordinates, lifecycle truth, and bounded
 artifact retention. OmegaFlow continues to own command-completion detection,
 cwd reporting, action markers, terminal-to-browser handoff, browser actions,
 recording policy, redaction, and media rendering.
-
-### Sandboxed agent
-
-Place the agent runtime and policy code in the controller deployment and the
-project under test in the workload deployment. Drive its shell through the
-attachment or use structured resize for a headless terminal. Grant only named
-workload endpoints the agent needs and write transcripts or reports to a
-controller output directory.
-
-The split keeps project code and terminal output untrusted without giving the
-agent a Docker socket or host process authority. It does not make the trusted
-agent controller safe from the data and endpoints explicitly granted to it,
-and it does not provide domain-level egress policy.
-
-### Security inspection
-
-Place scanners and inspection orchestration in the controller and the target
-application in the workload. Use named endpoints for dynamic inspection and a
-controller output directory for findings and partial evidence. Treat terminal
-output, files, and service responses as hostile input, and retain the full
-structured result with the report so cleanup or observation failures remain
-visible.
-
-This profile supplies process separation and deny-oriented container defaults;
-it is not a network IDS, HTTP policy engine, malware containment guarantee, or
-content-sanitization layer. The controller/workload private-network limitation
-still applies.
 
 ## Compatibility fixtures
 

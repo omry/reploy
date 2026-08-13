@@ -1,0 +1,2 @@
+kind: Changed
+body: Default controlled-session terminals to 80 columns by 24 rows when both terminal-dimension options are omitted.
