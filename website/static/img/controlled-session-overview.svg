@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 390" role="img" aria-labelledby="title description">
+  <title id="title">Controlled-session actors and operations</title>
+  <desc id="description">A user starts host Reploy. Host Reploy starts controller and workload containers. The controller controls the workload, and output returns through host Reploy to the user.</desc>
+  <defs>
+    <marker id="start-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2f81f7"/>
+    </marker>
+    <marker id="control-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2da44e"/>
+    </marker>
+    <marker id="output-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#a371f7"/>
+    </marker>
+    <style>
+      .actor { fill: #202124; stroke: #9aa0a6; stroke-width: 2; }
+      .actor-label { fill: #f1f3f4; font: 18px sans-serif; text-anchor: middle; dominant-baseline: middle; }
+      .edge-label { fill: #f1f3f4; font: 16px sans-serif; text-anchor: middle; dominant-baseline: middle; }
+      .label-bg { fill: #202124; }
+      .start { fill: none; stroke: #2f81f7; stroke-width: 3; marker-end: url(#start-arrow); }
+      .control { fill: none; stroke: #2da44e; stroke-width: 3; marker-end: url(#control-arrow); }
+      .output { fill: none; stroke: #a371f7; stroke-width: 3; marker-end: url(#output-arrow); }
+    </style>
+  </defs>
+
+  <rect class="actor" x="35" y="162" width="120" height="56" rx="4"/>
+  <text class="actor-label" x="95" y="190">User</text>
+
+  <rect class="actor" x="283" y="162" width="144" height="56" rx="4"/>
+  <text class="actor-label" x="355" y="190">Host Reploy</text>
+
+  <rect class="actor" x="679.5" y="52" width="196" height="56" rx="4"/>
+  <text class="actor-label" x="777.5" y="80">Controller container</text>
+
+  <rect class="actor" x="679.5" y="282" width="196" height="56" rx="4"/>
+  <text class="actor-label" x="777.5" y="310">Workload container</text>
+
+  <path class="start" d="M 155 178 L 283 178"/>
+  <rect class="label-bg" x="170" y="145" width="95" height="24" rx="3"/>
+  <text class="edge-label" x="217.5" y="157">Start session</text>
+
+  <path class="output" d="M 283 202 L 155 202"/>
+  <rect class="label-bg" x="166" y="221" width="103" height="24" rx="3"/>
+  <text class="edge-label" x="217.5" y="233">Return output</text>
+
+  <path class="start" d="M 427 172 C 520 172 570 80 679.5 80"/>
+  <rect class="label-bg" x="520" y="90" width="50" height="24" rx="3"/>
+  <text class="edge-label" x="545" y="102">Start</text>
+
+  <path class="start" d="M 427 208 C 520 208 570 310 679.5 310"/>
+  <rect class="label-bg" x="520" y="278" width="50" height="24" rx="3"/>
+  <text class="edge-label" x="545" y="290">Start</text>
+
+  <path class="output" d="M 679.5 100 C 570 100 535 190 427 190"/>
+  <rect class="label-bg" x="490" y="140" width="116" height="24" rx="3"/>
+  <text class="edge-label" x="548" y="152">Session output</text>
+
+  <path class="control" d="M 735 108 L 735 282"/>
+  <rect class="label-bg" x="658" y="183" width="70" height="24" rx="3"/>
+  <text class="edge-label" x="693" y="195">Control</text>
+
+  <path class="output" d="M 820 282 L 820 108"/>
+  <rect class="label-bg" x="830" y="183" width="64" height="24" rx="3"/>
+  <text class="edge-label" x="862" y="195">Output</text>
+</svg>

@@ -1910,9 +1910,11 @@ covers separate controller and workload staging, exact host invocation,
 controller client and attachment use, the strict JSON Lines stream, endpoint
 and output grants, lifecycle and failure handling, result and exit semantics,
 security defaults, and the initial Linux/Docker limitations. Focused OmegaFlow
-recording, sandboxed-agent, and security-inspection profiles demonstrate the
-same generic boundary without adding profile-specific Reploy authority. The
-site introduction and Capabilities navigation expose the guide.
+recording, sandboxed-agent, and security-inspection examples demonstrate the
+same generic boundary without adding integration-specific Reploy authority.
+The sandboxed-agent example places the agent and project in the workload while
+leaving only a small trusted session driver in the controller. The site
+introduction and Capabilities navigation expose the guide.
 
 ### Independent Pre-release Runtime Fixes
 
