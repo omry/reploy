@@ -115,11 +115,11 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   workload generation's declared endpoints and freezes their schemes,
   container ports, lease-local aliases, and internal network name into both
   container-plan digests and the protocol-v1 `opened` coordinates. It creates
-  one exact engine-internal network, records it before startup, derives fixed
-  controller and workload addresses from the verified engine-assigned
-  prefixes, attaches only the two exact inert containers, and removes the
-  ordinary bridge staging attachment before starting a container that has no
-  separate public or local grant. The trusted bootstrap validates the fixed
+  one exact engine-internal network, records it before startup, and derives
+  fixed controller and workload addresses from a verified Reploy-selected
+  private prefix. It attaches only the two exact inert containers and removes
+  the ordinary bridge staging attachment before starting a container that has
+  no separate public or local grant. The trusted bootstrap validates the fixed
   peer mapping and admits only the exact peer addresses while preserving
   separately granted ordinary networking. The watchdog, incident receipt, and
   restart reconciler own and verify the same exact network. Live Docker
@@ -1086,6 +1086,18 @@ private session channel and no workload port is published on the host.
 The coordinates themselves are typed `opened` metadata containing the logical
 endpoint ID, scheme, fixed lease-local `workload` host alias, and container
 port; publishing that bounded metadata does not proxy application traffic.
+
+For each session, Reploy reads the pinned Docker daemon's configured default
+address pools and deterministically proposes an IPv4 `/29` within them. When
+the daemon has no configured pools, Reploy uses Docker's documented built-in
+IPv4 pools. It then creates the Docker network with that explicit subnet. A
+definitive Docker subnet-overlap response advances to another deterministic
+candidate, bounded to 64 attempts; ambiguous or unrelated discovery or creation
+failures do not retry. Reploy verifies the exact selected subnet and gateway
+before freezing the controller and workload addresses into their peer host
+mappings and trusted firewall input. This explicit IPAM ownership is required
+because Docker accepts fixed participant addresses only on networks created
+with a user-configured subnet.
 
 This is intentionally a coarse pre-gateway boundary. Membership in the private
 network gives the controller reachability to workload ports beyond the declared

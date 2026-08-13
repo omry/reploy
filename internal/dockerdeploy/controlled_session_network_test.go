@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"reflect"
 	"slices"
 	"strings"
@@ -16,19 +17,25 @@ import (
 const dockerSessionNetworkTestIDV1 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 
 type fakeDockerSessionNetworkEngineV1 struct {
-	t          *testing.T
-	plan       ControlledSessionExecutionPlanV1
-	network    dockerSessionNetworkInspectionV1
-	containers map[string]dockerSessionContainerInspectionV1
-	exists     bool
+	t                   *testing.T
+	plan                ControlledSessionExecutionPlanV1
+	network             dockerSessionNetworkInspectionV1
+	containers          map[string]dockerSessionContainerInspectionV1
+	exists              bool
+	defaultAddressPools []dockerDefaultAddressPoolV1
 
 	commands   []CommandSpec
 	failBefore map[string]error
 	failAfter  map[string]error
+	failOutput map[string]string
 }
 
 func newFakeDockerSessionNetworkEngineV1(t *testing.T, plan ControlledSessionExecutionPlanV1) *fakeDockerSessionNetworkEngineV1 {
 	t.Helper()
+	subnet, err := controlledSessionNetworkSubnetCandidateV1(plan.LiveRunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	engine := &fakeDockerSessionNetworkEngineV1{
 		t:    t,
 		plan: plan,
@@ -39,13 +46,14 @@ func newFakeDockerSessionNetworkEngineV1(t *testing.T, plan ControlledSessionExe
 			Driver:   "bridge",
 			Internal: true,
 			IPAM: dockerSessionNetworkIPAMV1{Config: []dockerSessionNetworkIPAMConfigV1{
-				{Subnet: "172.31.0.0/24"},
+				{Subnet: subnet.String(), Gateway: subnet.Addr().Next().String()},
 			}},
 			Containers: map[string]dockerSessionNetworkContainerV1{},
 			Labels:     controlledSessionNetworkLabelMapV1(plan.LiveRunID),
 		},
 		failBefore: map[string]error{},
 		failAfter:  map[string]error{},
+		failOutput: map[string]string{},
 	}
 	engine.containers = map[string]dockerSessionContainerInspectionV1{
 		dockerControllerTestContainerIDV1: dockerSessionContainerInspectionFixtureV1(plan.Controller, dockerControllerTestContainerIDV1),
@@ -58,10 +66,34 @@ func (engine *fakeDockerSessionNetworkEngineV1) run(spec CommandSpec, options Ru
 	engine.commands = append(engine.commands, spec)
 	key := strings.Join(spec.Args, " ")
 	if err := engine.failBefore[key]; err != nil {
+		if output := engine.failOutput[key]; output != "" {
+			writeStringV1(engine.t, options.Stderr, output)
+		}
 		return err
 	}
 	switch {
-	case slices.Equal(spec.Args, controlledSessionNetworkCreateArgsV1(engine.plan)):
+	case slices.Equal(spec.Args, controlledSessionNetworkInfoArgsV1()):
+		if options.Stdout == nil {
+			engine.t.Fatal("Docker info received no stdout")
+		}
+		if err := json.NewEncoder(options.Stdout).Encode(engine.defaultAddressPools); err != nil {
+			engine.t.Fatal(err)
+		}
+	case len(spec.Args) > 2 && slices.Equal(spec.Args[:2], []string{"network", "create"}):
+		subnetIndex := slices.Index(spec.Args, "--subnet")
+		gatewayIndex := slices.Index(spec.Args, "--gateway")
+		if subnetIndex < 0 || subnetIndex+1 >= len(spec.Args) || gatewayIndex < 0 || gatewayIndex+1 >= len(spec.Args) || spec.Args[len(spec.Args)-1] != engine.plan.Controller.SessionNetwork.Name {
+			engine.t.Fatalf("network create arguments = %#v", spec.Args)
+		}
+		initialSubnet, err := controlledSessionNetworkSubnetCandidateV1(engine.plan.LiveRunID, 0)
+		if err != nil {
+			engine.t.Fatal(err)
+		}
+		if engine.defaultAddressPools != nil || spec.Args[subnetIndex+1] != initialSubnet.String() {
+			engine.network.IPAM.Config = []dockerSessionNetworkIPAMConfigV1{{
+				Subnet: spec.Args[subnetIndex+1], Gateway: spec.Args[gatewayIndex+1],
+			}}
+		}
 		engine.exists = true
 		writeStringV1(engine.t, options.Stdout, dockerSessionNetworkTestIDV1+"\n")
 	case slices.Equal(spec.Args, []string{"network", "inspect", "--format", "{{json .}}", dockerSessionNetworkTestIDV1}):
@@ -102,7 +134,7 @@ func (engine *fakeDockerSessionNetworkEngineV1) run(spec CommandSpec, options Ru
 		default:
 			engine.t.Fatalf("network connect alias = %q", alias)
 		}
-		realized, err := deriveControlledSessionNetworkRealizationV1([]string{"172.31.0.0/24"})
+		realized, err := deriveControlledSessionNetworkRealizationV1([]string{engine.network.IPAM.Config[0].Subnet})
 		if err != nil {
 			engine.t.Fatal(err)
 		}
@@ -142,16 +174,17 @@ func (engine *fakeDockerSessionNetworkEngineV1) run(spec CommandSpec, options Ru
 
 func TestDockerSessionNetworkV1CreatesAttachesVerifiesAndRemovesExactNetwork(t *testing.T) {
 	plan := controlledSessionNetworkPlanFixtureV1(t)
+	wantRealization := controlledSessionNetworkTestRealizationV1(t, plan, 0)
+	controllerAddress := wantRealization.ControllerAddresses[0]
+	workloadAddress := wantRealization.WorkloadAddresses[0]
 	engine := newFakeDockerSessionNetworkEngineV1(t, plan)
 	network, err := prepareDockerSessionNetworkV1(t.Context(), plan, dockerSessionNetworkBackendV1{run: engine.run})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if network.ID() != dockerSessionNetworkTestIDV1 || network.Name() != plan.Controller.SessionNetwork.Name ||
-		!reflect.DeepEqual(network.Subnets(), []string{"172.31.0.0/24"}) ||
-		!reflect.DeepEqual(network.Realization(), controlledSessionNetworkRealizationV1{
-			Subnets: []string{"172.31.0.0/24"}, ControllerAddresses: []string{"172.31.0.2"}, WorkloadAddresses: []string{"172.31.0.3"},
-		}) {
+		!reflect.DeepEqual(network.Subnets(), wantRealization.Subnets) ||
+		!reflect.DeepEqual(network.Realization(), wantRealization) {
 		t.Fatalf("prepared network = ID %q name %q realization %#v", network.ID(), network.Name(), network.Realization())
 	}
 	if err := network.Verify(t.Context()); err != nil {
@@ -173,15 +206,16 @@ func TestDockerSessionNetworkV1CreatesAttachesVerifiesAndRemovesExactNetwork(t *
 		t.Fatal("network still exists after verified cleanup")
 	}
 	wantCommands := []string{
+		strings.Join(controlledSessionNetworkInfoArgsV1(), " "),
 		strings.Join(controlledSessionNetworkCreateArgsV1(plan), " "),
 		"network inspect --format {{json .}} " + dockerSessionNetworkTestIDV1,
 		"network inspect --format {{json .}} " + dockerSessionNetworkTestIDV1,
 		"container inspect --format {{json .}} " + dockerControllerTestContainerIDV1,
 		"container inspect --format {{json .}} " + dockerWorkloadTestContainerIDV1,
-		"network connect --alias controller --ip 172.31.0.2 " + dockerSessionNetworkTestIDV1 + " " + dockerControllerTestContainerIDV1,
+		"network connect --alias controller --ip " + controllerAddress + " " + dockerSessionNetworkTestIDV1 + " " + dockerControllerTestContainerIDV1,
 		"network disconnect --force bridge " + dockerControllerTestContainerIDV1,
 		"container inspect --format {{json .}} " + dockerControllerTestContainerIDV1,
-		"network connect --alias workload --ip 172.31.0.3 " + dockerSessionNetworkTestIDV1 + " " + dockerWorkloadTestContainerIDV1,
+		"network connect --alias workload --ip " + workloadAddress + " " + dockerSessionNetworkTestIDV1 + " " + dockerWorkloadTestContainerIDV1,
 		"network disconnect --force bridge " + dockerWorkloadTestContainerIDV1,
 		"container inspect --format {{json .}} " + dockerWorkloadTestContainerIDV1,
 		"network inspect --format {{json .}} " + dockerSessionNetworkTestIDV1,
@@ -198,6 +232,7 @@ func TestDockerSessionNetworkV1CreatesAttachesVerifiesAndRemovesExactNetwork(t *
 
 func TestDockerSessionNetworkV1AttachesInertContainersThatRetainOrdinaryNetworking(t *testing.T) {
 	plan := controlledSessionOrdinaryBridgeNetworkPlanFixtureV1(t)
+	realized := controlledSessionNetworkTestRealizationV1(t, plan, 0)
 	engine := newFakeDockerSessionNetworkEngineV1(t, plan)
 	network, err := prepareDockerSessionNetworkV1(t.Context(), plan, dockerSessionNetworkBackendV1{run: engine.run})
 	if err != nil {
@@ -207,8 +242,8 @@ func TestDockerSessionNetworkV1AttachesInertContainersThatRetainOrdinaryNetworki
 		t.Fatal(err)
 	}
 	want := []string{
-		"network connect --alias controller --ip 172.31.0.2 " + dockerSessionNetworkTestIDV1 + " " + dockerControllerTestContainerIDV1,
-		"network connect --alias workload --ip 172.31.0.3 " + dockerSessionNetworkTestIDV1 + " " + dockerWorkloadTestContainerIDV1,
+		"network connect --alias controller --ip " + realized.ControllerAddresses[0] + " " + dockerSessionNetworkTestIDV1 + " " + dockerControllerTestContainerIDV1,
+		"network connect --alias workload --ip " + realized.WorkloadAddresses[0] + " " + dockerSessionNetworkTestIDV1 + " " + dockerWorkloadTestContainerIDV1,
 	}
 	commands := commandArgsV1(engine.commands)
 	for _, expected := range want {
@@ -223,6 +258,7 @@ func TestDockerSessionNetworkV1AttachesInertContainersThatRetainOrdinaryNetworki
 
 func TestDockerSessionNetworkV1VerifiesStartedParticipantAddresses(t *testing.T) {
 	plan := controlledSessionNetworkPlanFixtureV1(t)
+	realized := controlledSessionNetworkTestRealizationV1(t, plan, 0)
 	engine := newFakeDockerSessionNetworkEngineV1(t, plan)
 	network, err := prepareDockerSessionNetworkV1(t.Context(), plan, dockerSessionNetworkBackendV1{run: engine.run})
 	if err != nil {
@@ -232,8 +268,8 @@ func TestDockerSessionNetworkV1VerifiesStartedParticipantAddresses(t *testing.T)
 		t.Fatal(err)
 	}
 	for containerID, address := range map[string]string{
-		dockerControllerTestContainerIDV1: "172.31.0.2",
-		dockerWorkloadTestContainerIDV1:   "172.31.0.3",
+		dockerControllerTestContainerIDV1: realized.ControllerAddresses[0],
+		dockerWorkloadTestContainerIDV1:   realized.WorkloadAddresses[0],
 	} {
 		inspection := engine.containers[containerID]
 		inspection.State.Running = true
@@ -247,16 +283,18 @@ func TestDockerSessionNetworkV1VerifiesStartedParticipantAddresses(t *testing.T)
 	}
 	inspection := engine.containers[dockerWorkloadTestContainerIDV1]
 	connection := inspection.NetworkSettings.Networks[plan.Controller.SessionNetwork.Name]
-	connection.IPAddress = "172.31.0.4"
+	connection.IPAddress = "203.0.113.1"
 	inspection.NetworkSettings.Networks[plan.Controller.SessionNetwork.Name] = connection
 	engine.containers[dockerWorkloadTestContainerIDV1] = inspection
-	if err := network.VerifyStarted(t.Context()); err == nil || !strings.Contains(err.Error(), `workload container address is "172.31.0.4" instead of "172.31.0.3"`) {
+	wantError := `workload container address is "203.0.113.1" instead of "` + realized.WorkloadAddresses[0] + `"`
+	if err := network.VerifyStarted(t.Context()); err == nil || !strings.Contains(err.Error(), wantError) {
 		t.Fatalf("started address mismatch = %v", err)
 	}
 }
 
 func TestDockerSessionNetworkV1AcceptsAnAlreadyExitedWorkload(t *testing.T) {
 	plan := controlledSessionNetworkPlanFixtureV1(t)
+	realized := controlledSessionNetworkTestRealizationV1(t, plan, 0)
 	engine := newFakeDockerSessionNetworkEngineV1(t, plan)
 	network, err := prepareDockerSessionNetworkV1(t.Context(), plan, dockerSessionNetworkBackendV1{run: engine.run})
 	if err != nil {
@@ -268,7 +306,7 @@ func TestDockerSessionNetworkV1AcceptsAnAlreadyExitedWorkload(t *testing.T) {
 	controller := engine.containers[dockerControllerTestContainerIDV1]
 	controller.State.Running = true
 	connection := controller.NetworkSettings.Networks[plan.Controller.SessionNetwork.Name]
-	connection.IPAddress = "172.31.0.2"
+	connection.IPAddress = realized.ControllerAddresses[0]
 	controller.NetworkSettings.Networks[plan.Controller.SessionNetwork.Name] = connection
 	engine.containers[dockerControllerTestContainerIDV1] = controller
 	delete(engine.network.Containers, dockerWorkloadTestContainerIDV1)
@@ -311,6 +349,186 @@ func TestDeriveControlledSessionNetworkRealizationV1(t *testing.T) {
 				t.Fatalf("realization error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestControlledSessionNetworkSubnetCandidatesV1AreBoundedDeterministicAndUnique(t *testing.T) {
+	const liveRunID = "run-0123456789abcdef"
+	pools, err := controlledSessionNetworkSubnetPoolsFromConfigV1(controlledSessionDockerBuiltinAddressPoolsV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]struct{}{}
+	for attempt := 0; attempt < controlledSessionNetworkAllocationAttemptsV1; attempt++ {
+		first, err := controlledSessionNetworkSubnetCandidateV1(liveRunID, attempt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := controlledSessionNetworkSubnetCandidateV1(liveRunID, attempt)
+		if err != nil || first != second {
+			t.Fatalf("candidate %d is not deterministic: %s, %s, %v", attempt, first, second, err)
+		}
+		if first.Bits() != controlledSessionNetworkSubnetBitsV1 || first != first.Masked() {
+			t.Fatalf("candidate %d = %s", attempt, first)
+		}
+		if !slices.ContainsFunc(pools, func(pool controlledSessionNetworkSubnetPoolV1) bool {
+			return pool.Prefix.Contains(first.Addr())
+		}) {
+			t.Fatalf("candidate %d = %s outside Docker built-in pools", attempt, first)
+		}
+		if _, duplicate := seen[first.String()]; duplicate {
+			t.Fatalf("candidate %d duplicated %s", attempt, first)
+		}
+		seen[first.String()] = struct{}{}
+	}
+	for _, test := range []struct {
+		liveRunID string
+		attempt   int
+	}{
+		{liveRunID: "run-invalid"},
+		{liveRunID: liveRunID, attempt: -1},
+		{liveRunID: liveRunID, attempt: controlledSessionNetworkAllocationAttemptsV1},
+	} {
+		if _, err := controlledSessionNetworkSubnetCandidateV1(test.liveRunID, test.attempt); err == nil {
+			t.Fatalf("invalid candidate input passed: %#v", test)
+		}
+	}
+}
+
+func TestControlledSessionNetworkSubnetPoolsV1UseDockerConfigurationOrBuiltinDefaults(t *testing.T) {
+	custom := []dockerDefaultAddressPoolV1{{Base: "10.240.0.0/16", Size: 24}}
+	encoded, err := json.Marshal(custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pools, err := parseControlledSessionNetworkSubnetPoolsV1(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pools) != 1 || pools[0].Prefix.String() != "10.240.0.0/16" || pools[0].AllocationBits != 24 {
+		t.Fatalf("custom Docker address pools = %#v", pools)
+	}
+
+	pools, err = parseControlledSessionNetworkSubnetPoolsV1([]byte("null\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pools) != len(controlledSessionDockerBuiltinAddressPoolsV1) || slices.ContainsFunc(pools, func(pool controlledSessionNetworkSubnetPoolV1) bool {
+		return netip.MustParsePrefix("10.0.0.0/8").Contains(pool.Prefix.Addr())
+	}) {
+		t.Fatalf("Docker built-in address pools = %#v", pools)
+	}
+}
+
+func TestControlledSessionNetworkSubnetPoolsV1RejectMalformedOrUnusableConfiguration(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{name: "invalid JSON", content: `{`, want: "decode Docker default address pools"},
+		{name: "invalid base", content: `[{"Base":"bad","Size":24}]`, want: "base \"bad\" is invalid"},
+		{name: "noncanonical base", content: `[{"Base":"10.1.0.1/16","Size":24}]`, want: "not canonical"},
+		{name: "invalid size", content: `[{"Base":"10.1.0.0/16","Size":12}]`, want: "size 12 is invalid"},
+		{name: "overlap", content: `[{"Base":"10.0.0.0/8","Size":24},{"Base":"10.1.0.0/16","Size":24}]`, want: "overlaps"},
+		{name: "no usable IPv4 pool", content: `[{"Base":"fd00::/64","Size":80},{"Base":"10.0.0.0/30","Size":30}]`, want: "no IPv4 default address pool"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := parseControlledSessionNetworkSubnetPoolsV1([]byte(test.content)); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("parse error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestPrepareDockerSessionNetworkV1UsesConfiguredDockerAddressPool(t *testing.T) {
+	plan := controlledSessionNetworkPlanFixtureV1(t)
+	configured := []dockerDefaultAddressPoolV1{{Base: "10.240.0.0/16", Size: 24}}
+	pools, err := controlledSessionNetworkSubnetPoolsFromConfigV1(configured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := newFakeDockerSessionNetworkEngineV1(t, plan)
+	engine.defaultAddressPools = configured
+	network, err := prepareDockerSessionNetworkV1(t.Context(), plan, dockerSessionNetworkBackendV1{run: engine.run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subnet, err := controlledSessionNetworkSubnetCandidateFromPoolsV1(plan.LiveRunID, pools, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(network.Subnets(), []string{subnet.String()}) || !pools[0].Prefix.Contains(subnet.Addr()) {
+		t.Fatalf("configured-pool network subnets = %#v, want candidate within %s", network.Subnets(), pools[0].Prefix)
+	}
+	if got := commandArgsV1(engine.commands[:2]); !reflect.DeepEqual(got, []string{
+		strings.Join(controlledSessionNetworkInfoArgsV1(), " "),
+		strings.Join(controlledSessionNetworkCreateArgsFromPoolsV1(plan, pools, 0), " "),
+	}) {
+		t.Fatalf("configured-pool commands = %#v", got)
+	}
+	if err := network.Cleanup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPrepareDockerSessionNetworkV1FailsClosedWhenAddressPoolDiscoveryFails(t *testing.T) {
+	plan := controlledSessionNetworkPlanFixtureV1(t)
+	commands := []CommandSpec{}
+	_, err := prepareDockerSessionNetworkV1(t.Context(), plan, dockerSessionNetworkBackendV1{
+		run: func(spec CommandSpec, options RunOptions) error {
+			commands = append(commands, spec)
+			writeStringV1(t, options.Stderr, "daemon unavailable")
+			return errors.New("exit status 1")
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "inspect Docker default address pools") || !strings.Contains(err.Error(), "daemon unavailable") {
+		t.Fatalf("address-pool discovery error = %v", err)
+	}
+	if len(commands) != 1 || !slices.Equal(commands[0].Args, controlledSessionNetworkInfoArgsV1()) {
+		t.Fatalf("address-pool discovery commands = %#v", commandArgsV1(commands))
+	}
+}
+
+func TestPrepareDockerSessionNetworkV1RetriesOnlyDefinitiveSubnetOverlap(t *testing.T) {
+	plan := controlledSessionNetworkPlanFixtureV1(t)
+	engine := newFakeDockerSessionNetworkEngineV1(t, plan)
+	firstCreate := strings.Join(controlledSessionNetworkCreateArgsV1(plan, 0), " ")
+	engine.failBefore[firstCreate] = errors.New("exit status 1")
+	engine.failOutput[firstCreate] = "Error response from daemon: invalid pool request: Pool overlaps with other one on this address space"
+	network, err := prepareDockerSessionNetworkV1(t.Context(), plan, dockerSessionNetworkBackendV1{run: engine.run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := controlledSessionNetworkTestRealizationV1(t, plan, 1)
+	if !reflect.DeepEqual(network.Realization(), want) {
+		t.Fatalf("realization after collision = %#v, want %#v", network.Realization(), want)
+	}
+	commands := commandArgsV1(engine.commands)
+	if len(commands) < 4 || commands[0] != strings.Join(controlledSessionNetworkInfoArgsV1(), " ") || commands[1] != firstCreate || commands[2] != strings.Join(controlledSessionNetworkCreateArgsV1(plan, 1), " ") || !strings.HasPrefix(commands[3], "network inspect ") {
+		t.Fatalf("collision retry commands = %#v", commands)
+	}
+	if err := network.Cleanup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPrepareDockerSessionNetworkV1BoundsSubnetOverlapRetries(t *testing.T) {
+	plan := controlledSessionNetworkPlanFixtureV1(t)
+	commands := []CommandSpec{}
+	_, err := prepareDockerSessionNetworkV1(t.Context(), plan, dockerSessionNetworkBackendV1{
+		run: func(spec CommandSpec, options RunOptions) error {
+			commands = append(commands, spec)
+			if slices.Equal(spec.Args, controlledSessionNetworkInfoArgsV1()) {
+				writeStringV1(t, options.Stdout, "null\n")
+				return nil
+			}
+			writeStringV1(t, options.Stderr, "invalid pool request: Pool overlaps with other one on this address space")
+			return errors.New("exit status 1")
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "rejected 64 subnet candidates as overlapping") || len(commands) != controlledSessionNetworkAllocationAttemptsV1+1 {
+		t.Fatalf("bounded allocation error = %v, commands = %d", err, len(commands))
 	}
 }
 
@@ -370,6 +588,10 @@ func TestPrepareDockerSessionNetworkV1DoesNotGuessAfterAmbiguousCreate(t *testin
 	_, err := prepareDockerSessionNetworkV1(t.Context(), plan, dockerSessionNetworkBackendV1{
 		run: func(spec CommandSpec, options RunOptions) error {
 			commands = append(commands, spec)
+			if slices.Equal(spec.Args, controlledSessionNetworkInfoArgsV1()) {
+				writeStringV1(t, options.Stdout, "null\n")
+				return nil
+			}
 			writeStringV1(t, options.Stderr, "daemon response was lost")
 			return errors.New("create response was lost")
 		},
@@ -378,7 +600,7 @@ func TestPrepareDockerSessionNetworkV1DoesNotGuessAfterAmbiguousCreate(t *testin
 		!strings.Contains(err.Error(), "did not return an exact network ID") {
 		t.Fatalf("ambiguous create error = %v", err)
 	}
-	if len(commands) != 1 || !slices.Equal(commands[0].Args, controlledSessionNetworkCreateArgsV1(plan)) {
+	if len(commands) != 2 || !slices.Equal(commands[0].Args, controlledSessionNetworkInfoArgsV1()) || !slices.Equal(commands[1].Args, controlledSessionNetworkCreateArgsV1(plan)) {
 		t.Fatalf("ambiguous create commands = %#v", commands)
 	}
 }
@@ -404,6 +626,7 @@ func TestPrepareDockerSessionNetworkV1RecordsExactIDBeforeInspectionAndRollsBack
 		t.Fatalf("recorded IDs = %#v", recorded)
 	}
 	want := []string{
+		strings.Join(controlledSessionNetworkInfoArgsV1(), " "),
 		strings.Join(controlledSessionNetworkCreateArgsV1(plan), " "),
 		"network rm " + dockerSessionNetworkTestIDV1,
 		"network inspect --format {{json .}} " + dockerSessionNetworkTestIDV1,
@@ -452,6 +675,10 @@ func TestPrepareDockerSessionNetworkV1RejectsInspectionMismatchAndRemovesExactID
 		}, want: "ownership labels"},
 		{name: "no subnet", mutate: func(value *dockerSessionNetworkInspectionV1) { value.IPAM.Config = nil }, want: "no assigned subnet"},
 		{name: "invalid subnet", mutate: func(value *dockerSessionNetworkInspectionV1) { value.IPAM.Config[0].Subnet = "172.31.0.1/24" }, want: "canonical CIDR"},
+		{name: "different subnet", mutate: func(value *dockerSessionNetworkInspectionV1) {
+			value.IPAM.Config[0] = dockerSessionNetworkIPAMConfigV1{Subnet: "192.0.2.0/29", Gateway: "192.0.2.1"}
+		}, want: "selected subnets"},
+		{name: "gateway", mutate: func(value *dockerSessionNetworkInspectionV1) { value.IPAM.Config[0].Gateway = "192.0.2.1" }, want: "gateway"},
 		{name: "unexpected member", mutate: func(value *dockerSessionNetworkInspectionV1) {
 			value.Containers[strings.Repeat("e", 64)] = dockerSessionNetworkContainerV1{Name: "intruder"}
 		}, want: "network members"},
@@ -474,12 +701,13 @@ func TestPrepareDockerSessionNetworkV1RejectsInspectionMismatchAndRemovesExactID
 
 func TestDockerSessionNetworkV1CleansPartialAmbiguousAttachment(t *testing.T) {
 	plan := controlledSessionNetworkPlanFixtureV1(t)
+	realized := controlledSessionNetworkTestRealizationV1(t, plan, 0)
 	engine := newFakeDockerSessionNetworkEngineV1(t, plan)
 	network, err := prepareDockerSessionNetworkV1(t.Context(), plan, dockerSessionNetworkBackendV1{run: engine.run})
 	if err != nil {
 		t.Fatal(err)
 	}
-	workloadConnect := "network connect --alias workload --ip 172.31.0.3 " + dockerSessionNetworkTestIDV1 + " " + dockerWorkloadTestContainerIDV1
+	workloadConnect := "network connect --alias workload --ip " + realized.WorkloadAddresses[0] + " " + dockerSessionNetworkTestIDV1 + " " + dockerWorkloadTestContainerIDV1
 	engine.failBefore[workloadConnect] = errors.New("connect response lost")
 	if err := network.Attach(t.Context(), dockerControllerTestContainerIDV1, dockerWorkloadTestContainerIDV1); err == nil || !strings.Contains(err.Error(), "connect response lost") {
 		t.Fatalf("partial attach error = %v", err)
@@ -636,6 +864,23 @@ func controlledSessionNetworkPlanFixtureV1(t *testing.T) ControlledSessionExecut
 	return plan
 }
 
+func controlledSessionNetworkTestRealizationV1(
+	t *testing.T,
+	plan ControlledSessionExecutionPlanV1,
+	attempt int,
+) controlledSessionNetworkRealizationV1 {
+	t.Helper()
+	subnet, err := controlledSessionNetworkSubnetCandidateV1(plan.LiveRunID, attempt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	realized, err := deriveControlledSessionNetworkRealizationV1([]string{subnet.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return realized
+}
+
 func controlledSessionOrdinaryBridgeNetworkPlanFixtureV1(t *testing.T) ControlledSessionExecutionPlanV1 {
 	t.Helper()
 	input, backend := controlledSessionPlanFixtureV1(t)
@@ -649,12 +894,39 @@ func controlledSessionOrdinaryBridgeNetworkPlanFixtureV1(t *testing.T) Controlle
 	return plan
 }
 
-func controlledSessionNetworkCreateArgsV1(plan ControlledSessionExecutionPlanV1) []string {
-	args := []string{"network", "create", "--driver", "bridge", "--internal"}
+func controlledSessionNetworkCreateArgsV1(plan ControlledSessionExecutionPlanV1, attempts ...int) []string {
+	attempt := 0
+	if len(attempts) != 0 {
+		attempt = attempts[0]
+	}
+	pools, err := controlledSessionNetworkSubnetPoolsFromConfigV1(controlledSessionDockerBuiltinAddressPoolsV1)
+	if err != nil {
+		panic(err)
+	}
+	return controlledSessionNetworkCreateArgsFromPoolsV1(plan, pools, attempt)
+}
+
+func controlledSessionNetworkCreateArgsFromPoolsV1(
+	plan ControlledSessionExecutionPlanV1,
+	pools []controlledSessionNetworkSubnetPoolV1,
+	attempt int,
+) []string {
+	subnet, err := controlledSessionNetworkSubnetCandidateFromPoolsV1(plan.LiveRunID, pools, attempt)
+	if err != nil {
+		panic(err)
+	}
+	args := []string{
+		"network", "create", "--driver", "bridge", "--internal", "--ipv6=false",
+		"--subnet", subnet.String(), "--gateway", subnet.Addr().Next().String(),
+	}
 	for _, label := range controlledSessionNetworkLabelsV1(plan.LiveRunID) {
 		args = append(args, "--label", label.Name+"="+label.Value)
 	}
 	return append(args, plan.Controller.SessionNetwork.Name)
+}
+
+func controlledSessionNetworkInfoArgsV1() []string {
+	return []string{"info", "--format", "{{json .DefaultAddressPools}}"}
 }
 
 func commandArgsV1(commands []CommandSpec) []string {

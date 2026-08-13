@@ -787,7 +787,7 @@ func validatePreparedControlledSessionNetworkRuntimeV1(network controlledSession
 	}
 	subnets := network.Subnets()
 	if len(subnets) == 0 {
-		return fmt.Errorf("prepare controlled-session network: backend returned no engine-assigned subnets")
+		return fmt.Errorf("prepare controlled-session network: backend returned no selected subnets")
 	}
 	for index, subnet := range subnets {
 		_, parsed, err := net.ParseCIDR(subnet)
