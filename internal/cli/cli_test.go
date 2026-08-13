@@ -2606,6 +2606,35 @@ func TestNoArgsUsesDefaultStagingDirByDefault(t *testing.T) {
 	}
 }
 
+func TestNoArgsInvalidStateNamesBlueprintAndStateFile(t *testing.T) {
+	workDir := t.TempDir()
+	t.Chdir(workDir)
+	statePath := filepath.Join(workDir, dockerdeploy.DefaultDeploymentDir, dockerdeploy.StateFileName)
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := deploy.StateV1{
+		Schema: deploy.StateSchemaV1,
+		Blueprint: blueprint.ResolvedDocumentV1(
+			`{"schema":"blueprint-resolved-v1","document":{"Environment":{"ID":"omegaconf-inspector","RunAs":{}}}}`,
+		),
+	}
+	content, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := runCLI()
+	if code != 1 || stdout != "" || !strings.Contains(stderr, "decode deployment state "+statePath) ||
+		!strings.Contains(stderr, `resolved blueprint for environment "omegaconf-inspector"`) ||
+		!strings.Contains(stderr, `unknown field "RunAs"`) {
+		t.Fatalf("code/stdout/stderr = %d/%q/%q", code, stdout, stderr)
+	}
+}
+
 func TestNoArgsUsesCurrentDeploymentDirByDefault(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")

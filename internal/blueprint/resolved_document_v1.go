@@ -38,6 +38,9 @@ func DecodeResolvedDocumentV1(payload ResolvedDocumentV1) (Document, error) {
 	decoder.DisallowUnknownFields()
 	var envelope resolvedDocumentEnvelopeV1
 	if err := decoder.Decode(&envelope); err != nil {
+		if environmentID := resolvedDocumentEnvironmentIDV1(payload); environmentID != "" {
+			return Document{}, fmt.Errorf("decode resolved blueprint for environment %q: %w", environmentID, err)
+		}
 		return Document{}, fmt.Errorf("decode resolved blueprint: %w", err)
 	}
 	var extra any
@@ -61,6 +64,20 @@ func DecodeResolvedDocumentV1(payload ResolvedDocumentV1) (Document, error) {
 		return Document{}, fmt.Errorf("rebuild resolved blueprint provider contributions: %w", err)
 	}
 	return envelope.Document, nil
+}
+
+func resolvedDocumentEnvironmentIDV1(payload ResolvedDocumentV1) string {
+	var probe struct {
+		Document struct {
+			Environment struct {
+				ID string
+			}
+		}
+	}
+	if json.Unmarshal([]byte(payload), &probe) != nil {
+		return ""
+	}
+	return probe.Document.Environment.ID
 }
 
 func ResolvedDocumentDigestV1(payload ResolvedDocumentV1) (canonical.Digest, error) {
