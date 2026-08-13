@@ -3,6 +3,8 @@ package dockerdeploy
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -21,6 +23,17 @@ import (
 )
 
 const controlledSessionNetworkRoleV1 = deploy.ControlledSessionNetworkRoleV1
+
+const (
+	controlledSessionNetworkSubnetBitsV1         = 29
+	controlledSessionNetworkAllocationAttemptsV1 = 64
+)
+
+var controlledSessionNetworkSubnetPoolsV1 = []netip.Prefix{
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+}
 
 var errControlledSessionNetworkActivationPendingV1 = errors.New("controlled-session network activation is not fully visible yet")
 
@@ -49,7 +62,8 @@ type dockerSessionNetworkIPAMV1 struct {
 }
 
 type dockerSessionNetworkIPAMConfigV1 struct {
-	Subnet string `json:"Subnet"`
+	Subnet  string `json:"Subnet"`
+	Gateway string `json:"Gateway"`
 }
 
 type dockerSessionNetworkContainerV1 struct {
@@ -181,26 +195,50 @@ func prepareDockerSessionNetworkV1(
 	}
 	networkPlan := plan.Controller.SessionNetwork
 	labels := controlledSessionNetworkLabelsV1(plan.LiveRunID)
-	create := docker
-	create.Args = []string{"network", "create", "--driver", "bridge", "--internal"}
-	for _, label := range labels {
-		create.Args = append(create.Args, "--label", label.Name+"="+label.Value)
-	}
-	create.Args = append(create.Args, networkPlan.Name)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	if err := backend.run(create, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
-		if output := trimmedCommandOutput(stderr.String()); output != "" {
-			err = fmt.Errorf("%w\ncommand output:\n%s", err, output)
+	var networkID string
+	var selectedSubnet string
+	for attempt := 0; attempt < controlledSessionNetworkAllocationAttemptsV1; attempt++ {
+		subnet, err := controlledSessionNetworkSubnetCandidateV1(plan.LiveRunID, attempt)
+		if err != nil {
+			return nil, fmt.Errorf("select controlled-session network subnet: %w", err)
 		}
-		return nil, fmt.Errorf("create controlled-session network %q: %w; refusing cleanup because the creating attempt did not return an exact network ID", networkPlan.Name, err)
-	}
-	networkID, err := parseDockerNetworkIDV1(stdout.String())
-	if err != nil {
-		return nil, fmt.Errorf("create controlled-session network %q: %w; refusing name-based cleanup because the created network identity is unknown", networkPlan.Name, err)
+		create := docker
+		create.Args = []string{
+			"network", "create", "--driver", "bridge", "--internal", "--ipv6=false",
+			"--subnet", subnet.String(), "--gateway", subnet.Addr().Next().String(),
+		}
+		for _, label := range labels {
+			create.Args = append(create.Args, "--label", label.Name+"="+label.Value)
+		}
+		create.Args = append(create.Args, networkPlan.Name)
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		if err := backend.run(create, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
+			output := trimmedCommandOutput(stderr.String())
+			if isDockerNetworkSubnetOverlapV1(output) {
+				if attempt+1 < controlledSessionNetworkAllocationAttemptsV1 {
+					continue
+				}
+				return nil, fmt.Errorf(
+					"allocate controlled-session network %q: Docker rejected %d private subnet candidates as overlapping",
+					networkPlan.Name, controlledSessionNetworkAllocationAttemptsV1,
+				)
+			}
+			if output != "" {
+				err = fmt.Errorf("%w\ncommand output:\n%s", err, output)
+			}
+			return nil, fmt.Errorf("create controlled-session network %q: %w; refusing cleanup because the creating attempt did not return an exact network ID", networkPlan.Name, err)
+		}
+		networkID, err = parseDockerNetworkIDV1(stdout.String())
+		if err != nil {
+			return nil, fmt.Errorf("create controlled-session network %q: %w; refusing name-based cleanup because the created network identity is unknown", networkPlan.Name, err)
+		}
+		selectedSubnet = subnet.String()
+		break
 	}
 	network := &DockerSessionNetworkV1{
-		plan: plan, network: networkPlan, docker: docker, networkID: networkID, backend: backend,
+		plan: plan, network: networkPlan, docker: docker, networkID: networkID,
+		subnets: []string{selectedSubnet}, backend: backend,
 	}
 	if backend.recordNetworkID != nil {
 		if err := backend.recordNetworkID(networkID); err != nil {
@@ -229,6 +267,7 @@ func prepareDockerSessionNetworkV1(
 		networkPlan.Name,
 		controlledSessionNetworkLabelMapV1(plan.LiveRunID),
 		map[string]string{},
+		network.subnets,
 	)
 	if err != nil {
 		return nil, network.rollbackAfterPreparationFailureV1(
@@ -236,7 +275,6 @@ func prepareDockerSessionNetworkV1(
 			false,
 		)
 	}
-	network.subnets = subnets
 	realized, err := deriveControlledSessionNetworkRealizationV1(subnets)
 	if err != nil {
 		return nil, network.rollbackAfterPreparationFailureV1(
@@ -246,6 +284,32 @@ func prepareDockerSessionNetworkV1(
 	}
 	network.realized = realized
 	return network, nil
+}
+
+func controlledSessionNetworkSubnetCandidateV1(liveRunID string, attempt int) (netip.Prefix, error) {
+	if err := deploy.ValidateLiveRunIDV1(liveRunID); err != nil {
+		return netip.Prefix{}, err
+	}
+	if attempt < 0 || attempt >= controlledSessionNetworkAllocationAttemptsV1 {
+		return netip.Prefix{}, fmt.Errorf("allocation attempt must be in 0..%d", controlledSessionNetworkAllocationAttemptsV1-1)
+	}
+	pool := controlledSessionNetworkSubnetPoolsV1[attempt%len(controlledSessionNetworkSubnetPoolsV1)]
+	round := uint64(attempt / len(controlledSessionNetworkSubnetPoolsV1))
+	digest := sha256.Sum256([]byte(liveRunID + "\x00" + pool.String()))
+	slotBits := controlledSessionNetworkSubnetBitsV1 - pool.Bits()
+	slotMask := uint64(1<<slotBits) - 1
+	start := binary.BigEndian.Uint64(digest[:8]) & slotMask
+	stride := (binary.BigEndian.Uint64(digest[8:16]) & slotMask) | 1
+	slot := (start + round*stride) & slotMask
+	base := pool.Addr().As4()
+	address := binary.BigEndian.Uint32(base[:]) + uint32(slot<<uint(32-controlledSessionNetworkSubnetBitsV1))
+	var encoded [4]byte
+	binary.BigEndian.PutUint32(encoded[:], address)
+	return netip.PrefixFrom(netip.AddrFrom4(encoded), controlledSessionNetworkSubnetBitsV1), nil
+}
+
+func isDockerNetworkSubnetOverlapV1(output string) bool {
+	return strings.Contains(strings.ToLower(output), "pool overlaps with other one on this address space")
 }
 
 // Attach verifies the exact controller and workload inert containers, connects
@@ -546,14 +610,14 @@ func (network *DockerSessionNetworkV1) verifyLockedV1(ctx context.Context, requi
 		network.network.Name,
 		controlledSessionNetworkLabelMapV1(network.plan.LiveRunID),
 		wantContainers,
+		network.subnets,
 	)
 	if err != nil {
 		return fmt.Errorf("verify controlled-session network %q: %w", network.network.Name, err)
 	}
-	if len(network.subnets) != 0 && !slices.Equal(network.subnets, subnets) {
-		return fmt.Errorf("verify controlled-session network %q: engine-assigned subnets changed", network.network.Name)
+	if !slices.Equal(network.subnets, subnets) {
+		return fmt.Errorf("verify controlled-session network %q: selected subnets changed", network.network.Name)
 	}
-	network.subnets = subnets
 	return nil
 }
 
@@ -596,6 +660,7 @@ func (network *DockerSessionNetworkV1) Cleanup(ctx context.Context) error {
 		network.network.Name,
 		controlledSessionNetworkLabelMapV1(network.plan.LiveRunID),
 		actualContainers,
+		network.subnets,
 	); err != nil {
 		return fmt.Errorf("refuse controlled-session network %q cleanup: %w", network.network.Name, err)
 	}
@@ -797,6 +862,7 @@ func validateDockerSessionNetworkInspectionV1(
 	wantName string,
 	wantLabels map[string]string,
 	wantContainers map[string]string,
+	wantSubnets []string,
 ) ([]string, error) {
 	if inspection.ID != wantID {
 		return nil, fmt.Errorf("Docker returned full network ID %q instead of %q", inspection.ID, wantID)
@@ -826,6 +892,7 @@ func validateDockerSessionNetworkInspectionV1(
 		}
 	}
 	subnets := make([]string, 0, len(inspection.IPAM.Config))
+	gateways := map[string]string{}
 	for _, config := range inspection.IPAM.Config {
 		if config.Subnet == "" {
 			continue
@@ -835,6 +902,7 @@ func validateDockerSessionNetworkInspectionV1(
 			return nil, fmt.Errorf("network subnet %q is not canonical CIDR", config.Subnet)
 		}
 		subnets = append(subnets, config.Subnet)
+		gateways[config.Subnet] = config.Gateway
 	}
 	sort.Strings(subnets)
 	if len(subnets) == 0 {
@@ -843,6 +911,16 @@ func validateDockerSessionNetworkInspectionV1(
 	for index := 1; index < len(subnets); index++ {
 		if subnets[index-1] == subnets[index] {
 			return nil, fmt.Errorf("network inspection contains duplicate subnet %q", subnets[index])
+		}
+	}
+	if !slices.Equal(subnets, wantSubnets) {
+		return nil, fmt.Errorf("network subnets %q do not match the selected subnets %q", subnets, wantSubnets)
+	}
+	for _, subnet := range subnets {
+		prefix, _ := netip.ParsePrefix(subnet)
+		wantGateway := prefix.Addr().Next().String()
+		if gateways[subnet] != wantGateway {
+			return nil, fmt.Errorf("network subnet %q gateway is %q instead of %q", subnet, gateways[subnet], wantGateway)
 		}
 	}
 	return subnets, nil
