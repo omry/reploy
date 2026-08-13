@@ -91,6 +91,19 @@ def _install_release_build_dependencies(session: nox.Session) -> None:
     session.install(*BUILD_DEPENDENCIES)
 
 
+def _python_package_tests(session: nox.Session) -> None:
+    session.run(
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "packaging/python",
+        "-p",
+        "test_*.py",
+    )
+
+
 def _release_build_smoke(session: nox.Session) -> None:
     session.run("python", "-m", "py_compile", *PY_COMPILE_FILES)
     with tempfile.TemporaryDirectory(prefix="reploy-release-build-smoke-") as temp_dir:
@@ -140,6 +153,12 @@ def release_build_smoke(session: nox.Session) -> None:
     _release_build_smoke(session)
 
 
+@nox.session(name="python-package-tests", python="3.12")
+def python_package_tests(session: nox.Session) -> None:
+    _install_release_build_dependencies(session)
+    _python_package_tests(session)
+
+
 @nox.session(name="docs-build", python=False)
 def docs_build(session: nox.Session) -> None:
     _docs_build(session)
@@ -148,6 +167,7 @@ def docs_build(session: nox.Session) -> None:
 @nox.session(python="3.12")
 def ci(session: nox.Session) -> None:
     _install_release_build_dependencies(session)
+    _python_package_tests(session)
     _go_test(session)
     _cli_smoke(session)
     _release_build_smoke(session)
