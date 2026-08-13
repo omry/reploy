@@ -115,6 +115,7 @@ Docker-managed user-scope permanent installs with Docker Desktop.
 
 ## Read Next
 
+- [Run a controlled session](/docs/controlled-sessions)
 - [Install an app](/docs/install-an-app)
 - [Publish app blueprints](/docs/author-deployments)
 - [Blueprint structure](/docs/blueprint-structure)
