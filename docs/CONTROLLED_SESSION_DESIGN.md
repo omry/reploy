@@ -1894,7 +1894,7 @@ while the public host command still reports the session failure. The fixture
 adds no OmegaFlow code, private-protocol dependency, runtime dependency
 installer, or public Reploy surface.
 
-### Slice 6: User-Facing Documentation
+### Slice 6: User-Facing Documentation (implemented)
 
 After the generic runtime and at least one integration profile are proven,
 publish user-facing documentation before public release. Explain the
@@ -1903,6 +1903,15 @@ controlled session, the capability, endpoint, output, lifecycle, and failure
 contracts, and the security defaults and limitations. Include focused examples
 for OmegaFlow recording, sandboxed agents, and security inspection without
 presenting any one profile as the controlled-session abstraction itself.
+
+Implementation status: complete. The public controlled-session guide now
+covers separate controller and workload staging, exact host invocation,
+controller client and attachment use, the strict JSON Lines stream, endpoint
+and output grants, lifecycle and failure handling, result and exit semantics,
+security defaults, and the initial Linux/Docker limitations. Focused OmegaFlow
+recording, sandboxed-agent, and security-inspection profiles demonstrate the
+same generic boundary without adding profile-specific Reploy authority. The
+site introduction and Capabilities navigation expose the guide.
 
 ### Independent Pre-release Runtime Fixes
 
