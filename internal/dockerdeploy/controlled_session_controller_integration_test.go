@@ -418,10 +418,11 @@ func buildControlledSessionControllerIntegrationImageV1(t *testing.T, ctx contex
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build controlled-session controller image: %v\n%s", err, output)
 	}
+	imageID := strings.TrimSpace(runDockerIntegration(t, ctx, "image", "inspect", "--format", "{{.Id}}", image))
 	t.Cleanup(func() {
 		if output, err := exec.CommandContext(context.Background(), "docker", "image", "rm", image).CombinedOutput(); err != nil {
 			t.Errorf("remove controlled-session controller image: %v\n%s", err, output)
 		}
 	})
-	return image
+	return imageID
 }

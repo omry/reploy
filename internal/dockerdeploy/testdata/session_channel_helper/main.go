@@ -84,12 +84,11 @@ func runNetworkSupervisorProof(connection readWriteCloser, opened *controlledses
 		opened.Endpoints[1].ID != "socket" || opened.Endpoints[1].Host != "workload" || opened.Endpoints[1].Port != 8080 {
 		fail("unexpected session endpoints: %#v", opened.Endpoints)
 	}
-	requireReady(connection)
+	output := requireReady(connection)
 	writeRequest(connection, controlledsession.RequestV1{
 		Kind:  controlledsession.RequestInputV1,
 		Bytes: []byte("/session-network-helper serve & network_pid=$!\n"),
 	})
-	var output []byte
 	checksLaunched := false
 	finishSent := false
 	workloadExited := false
@@ -287,11 +286,10 @@ func checkNetworkDial(address string, want bool) {
 }
 
 func runSupervisorProof(connection readWriteCloser) {
-	requireReady(connection)
+	output := requireReady(connection)
 	writeRequest(connection, controlledsession.RequestV1{
 		Kind: controlledsession.RequestInputV1, Bytes: []byte("stty size; printf 'SIZE-1-DONE\\n'\n"),
 	})
-	var output []byte
 	resized := false
 	interruptStarted := false
 	interruptSent := false
@@ -356,13 +354,21 @@ func runSupervisorProof(connection readWriteCloser) {
 	}
 }
 
-func requireReady(connection readWriteCloser) {
-	event, err := controlledsession.ReadEventV1(connection)
-	if err != nil {
-		fail("read ready event: %v", err)
-	}
-	if event.Kind != controlledsession.EventReadyV1 {
-		fail("first post-opened event is not ready: %#v", event)
+func requireReady(connection readWriteCloser) []byte {
+	var output []byte
+	for {
+		event, err := controlledsession.ReadEventV1(connection)
+		if err != nil {
+			fail("read ready event: %v", err)
+		}
+		switch event.Kind {
+		case controlledsession.EventOutputV1:
+			output = append(output, event.Bytes...)
+		case controlledsession.EventReadyV1:
+			return output
+		default:
+			fail("unexpected pre-ready event: %#v", event)
+		}
 	}
 }
 
