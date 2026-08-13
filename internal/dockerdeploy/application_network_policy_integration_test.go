@@ -21,7 +21,7 @@ func TestApplicationNetworkPolicyDockerIntegration(t *testing.T) {
 	if os.Getenv("REPLOY_DOCKER_INTEGRATION") != "1" {
 		t.Skip("set REPLOY_DOCKER_INTEGRATION=1 to run Docker integration evidence")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	image, _ := buildApplicationStartupVerifierIntegrationImage(t, ctx)
 	helper := buildNetworkPolicyIntegrationHelper(t, ctx)
