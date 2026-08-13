@@ -1,0 +1,2 @@
+kind: Fixed
+body: Create controlled-session Docker networks with collision-checked explicit private subnets so their fixed controller and workload addresses work consistently across supported Docker runtimes.
