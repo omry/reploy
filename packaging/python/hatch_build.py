@@ -6,6 +6,7 @@ from pathlib import Path
 import shlex
 import subprocess
 import sys
+import tempfile
 from typing import Any
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
@@ -115,32 +116,46 @@ def _script_for_build(
     return binary, binary_name
 
 
-def _build_reploy_binary(*, repo_root: Path, target: str) -> None:
-    subprocess.run(
-        [
-            sys.executable,
-            str(repo_root / "tools" / "build_reploy"),
-            "--root",
-            str(repo_root),
-            "--target",
-            target,
-        ],
-        check=True,
-    )
+def _build_reploy_binary(
+    *, repo_root: Path, target: str, binary_name: str
+) -> Path:
+    dist_dir = repo_root / "dist"
+    dist_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=".reploy-python-build-", dir=dist_dir
+    ) as temp:
+        outdir = Path(temp) / "output"
+        subprocess.run(
+            [
+                sys.executable,
+                str(repo_root / "tools" / "build_reploy"),
+                "--root",
+                str(repo_root),
+                "--outdir",
+                str(outdir),
+                "--target",
+                target,
+            ],
+            check=True,
+        )
+        staged_binary = outdir / target / binary_name
+        if not staged_binary.is_file():
+            raise RuntimeError(
+                f"automatic tools/build_reploy --target {target} did not create "
+                f"the expected binary: {staged_binary}"
+            )
+
+        binary = dist_dir / target / binary_name
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(staged_binary, binary)
+        return binary
 
 
 def _ensure_reploy_binary(*, repo_root: Path, target: str, binary_name: str) -> Path:
-    binary = repo_root / "dist" / target / binary_name
-    if binary.is_file():
-        return binary
-
-    _build_reploy_binary(repo_root=repo_root, target=target)
-    if binary.is_file():
-        return binary
-
-    raise RuntimeError(
-        f"missing Reploy binary for {target}: {binary}; "
-        f"automatic tools/build_reploy --target {target} did not create it"
+    return _build_reploy_binary(
+        repo_root=repo_root,
+        target=target,
+        binary_name=binary_name,
     )
 
 
