@@ -1,0 +1,2 @@
+kind: Changed
+body: Increase macOS Integration timeout headroom while performance improvements are tracked separately.
