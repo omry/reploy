@@ -115,6 +115,56 @@ func TestResolveInstallParserCompletesUpgradedDependencyClosure(t *testing.T) {
 	}
 }
 
+func TestResolveInstallParserAcceptsOptionalEmptyMarkerAcrossChunks(t *testing.T) {
+	parser, err := NewResolveInstallParserV1("amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunks := []string{
+		"Inst dovecot-sieve (1:2.4.1-4 Debian:13/stable [amd64]) [",
+		"]\nInst libssl3t64 [3.0.13-0ubuntu3.11] ",
+		"(3.0.13-0ubuntu3.12 Ubuntu:24.04/noble-updates [amd64]) []\n",
+	}
+	for _, chunk := range chunks {
+		if _, err := parser.Write([]byte(chunk)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	changes, err := parser.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ResolvePlanPackageV1{
+		{Name: "dovecot-sieve", ResolverArchitecture: "amd64", SelectedVersion: "1:2.4.1-4"},
+		{Name: "libssl3t64", ResolverArchitecture: "amd64", CurrentVersion: "3.0.13-0ubuntu3.11", SelectedVersion: "3.0.13-0ubuntu3.12"},
+	}
+	if !reflect.DeepEqual(changes, want) {
+		t.Fatalf("changes = %#v, want %#v", changes, want)
+	}
+}
+
+func TestResolveInstallParserRejectsMalformedTrailingMarkers(t *testing.T) {
+	tests := []string{
+		"Inst hello (2.10-3 Debian:13/stable [amd64]) [amd64]\n",
+		"Inst hello (2.10-3 Debian:13/stable [amd64]) [] []\n",
+		"Inst hello (2.10-3 Debian:13/stable [amd64]) [ ]\n",
+		"Inst hello (2.10-3 Debian:13/stable [amd64])[]\n",
+		"Inst hello (2.10-3 Debian:13/stable [amd64]) [] extra\n",
+	}
+	for _, input := range tests {
+		t.Run(input, func(t *testing.T) {
+			parser, err := NewResolveInstallParserV1("amd64")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = parser.Write([]byte(input))
+			if _, err := parser.Finish(); err == nil || !strings.Contains(err.Error(), "malformed") {
+				t.Fatalf("err = %v, want malformed record", err)
+			}
+		})
+	}
+}
+
 func TestCompleteResolvePlanRejectsMissingAndConflictingInstallEvidence(t *testing.T) {
 	marker := ResolvePlanV1{Schema: ResolvePlanSchemaV1, Packages: []ResolvePlanPackageV1{{
 		Name: "hello", ResolverArchitecture: "amd64", SelectedVersion: "1",
