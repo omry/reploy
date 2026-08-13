@@ -242,14 +242,19 @@ func runNoCommand(stdout io.Writer, stderr io.Writer) int {
 
 func runDockerDeploymentSummary(stdout io.Writer, stderr io.Writer) int {
 	dir := resolveImplicitDeploymentDir(dockerdeploy.DefaultDeploymentDir, false, io.Discard)
-	content, err := os.ReadFile(filepath.Join(dir, dockerdeploy.StateFileName))
+	statePath := filepath.Join(dir, dockerdeploy.StateFileName)
+	displayStatePath, pathErr := filepath.Abs(statePath)
+	if pathErr != nil {
+		displayStatePath = filepath.Clean(statePath)
+	}
+	content, err := os.ReadFile(statePath)
 	if err != nil {
-		fmt.Fprintf(stderr, "reploy error: %v\n", err)
+		fmt.Fprintf(stderr, "reploy error: read deployment state %s: %v\n", displayStatePath, err)
 		return 1
 	}
 	state, err := deploy.DecodeStateV1(content)
 	if err != nil {
-		fmt.Fprintf(stderr, "reploy error: %v\n", err)
+		fmt.Fprintf(stderr, "reploy error: decode deployment state %s: %v\n", displayStatePath, err)
 		return 1
 	}
 	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
