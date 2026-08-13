@@ -33,8 +33,13 @@ const sidebars = {
     },
     {
       type: 'category',
+      label: 'Capabilities',
+      items: ['controlled-sessions'],
+    },
+    {
+      type: 'category',
       label: 'Project',
-      items: ['controlled-sessions', 'support-matrix', 'version-support', 'release'],
+      items: ['support-matrix', 'version-support', 'release'],
     },
   ],
 };
