@@ -1,0 +1,2 @@
+kind: Fixed
+body: Accept valid APT install transaction records with one trailing empty marker.
