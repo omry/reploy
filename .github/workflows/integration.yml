@@ -117,6 +117,38 @@ jobs:
           go test -timeout 15m ./internal/dockerdeploy
           -run '^(TestControlledSessionSupervisorDockerIntegration|TestControlledSessionNetworkingDockerIntegration|TestControlledSessionControllerPackageDockerIntegration)$'
 
+      - name: Install pinned OmegaFlow conformance fixtures
+        if: matrix.name == 'Linux amd64'
+        run: |
+          asciinema_fixture=testdata/controlled-session/asciinema-v3-linux-amd64.json
+          asciinema_url=$(jq -r .url "$asciinema_fixture")
+          asciinema_sha256=$(jq -r .sha256 "$asciinema_fixture")
+          curl --fail --location --silent --show-error "$asciinema_url" --output "$RUNNER_TEMP/asciinema"
+          echo "$asciinema_sha256  $RUNNER_TEMP/asciinema" | sha256sum --check --strict
+          chmod 0755 "$RUNNER_TEMP/asciinema"
+
+          conformance_fixture=testdata/controlled-session/omegaflow-conformance-v1.json
+          playwright_url=$(jq -r '.packages[] | select(.name == "playwright") | .url' "$conformance_fixture")
+          playwright_sha256=$(jq -r '.packages[] | select(.name == "playwright") | .sha256' "$conformance_fixture")
+          playwright_core_url=$(jq -r '.packages[] | select(.name == "playwright-core") | .url' "$conformance_fixture")
+          playwright_core_sha256=$(jq -r '.packages[] | select(.name == "playwright-core") | .sha256' "$conformance_fixture")
+          curl --fail --location --silent --show-error "$playwright_url" --output "$RUNNER_TEMP/playwright.tgz"
+          curl --fail --location --silent --show-error "$playwright_core_url" --output "$RUNNER_TEMP/playwright-core.tgz"
+          echo "$playwright_sha256  $RUNNER_TEMP/playwright.tgz" | sha256sum --check --strict
+          echo "$playwright_core_sha256  $RUNNER_TEMP/playwright-core.tgz" | sha256sum --check --strict
+
+          echo "REPLOY_ASCIINEMA_FIXTURE=$RUNNER_TEMP/asciinema" >> "$GITHUB_ENV"
+          echo "REPLOY_PLAYWRIGHT_FIXTURE=$RUNNER_TEMP/playwright.tgz" >> "$GITHUB_ENV"
+          echo "REPLOY_PLAYWRIGHT_CORE_FIXTURE=$RUNNER_TEMP/playwright-core.tgz" >> "$GITHUB_ENV"
+
+      - name: Run OmegaFlow controlled-session conformance
+        if: matrix.name == 'Linux amd64'
+        env:
+          REPLOY_DOCKER_INTEGRATION: "1"
+        run: >-
+          go test -count=1 -timeout 15m ./internal/dockerdeploy
+          -run '^TestOmegaFlowControlledSessionConformanceDockerIntegration$'
+
       - name: Run CLI runtime integration
         if: ${{ matrix.persistent_install == false }}
         env:

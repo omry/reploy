@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -140,7 +141,8 @@ func TestTerminalAttachmentRunsBeneathPinnedUnmodifiedAsciinemaV1(t *testing.T) 
 
 func readAsciinemaFixtureMetadataV1(t *testing.T) asciinemaFixtureMetadataV1 {
 	t.Helper()
-	payload, err := os.ReadFile("../../testdata/controlled-session/asciinema-v3-linux-amd64.json")
+	fixturePath := "../../testdata/controlled-session/asciinema-v3-linux-" + runtime.GOARCH + ".json"
+	payload, err := os.ReadFile(fixturePath)
 	if err != nil {
 		t.Fatal(err)
 	}

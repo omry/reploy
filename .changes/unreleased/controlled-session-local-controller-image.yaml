@@ -1,0 +1,2 @@
+kind: Fixed
+body: Allow controlled-session controller packaging to use the locked local image identity when a staged generation has no registry digest.
