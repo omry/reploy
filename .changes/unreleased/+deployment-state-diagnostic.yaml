@@ -1,0 +1,2 @@
+kind: Fixed
+body: Identify the deployment-state file and environment when a stored resolved blueprint cannot be decoded.

@@ -55,3 +55,14 @@ func TestDecodeResolvedDocumentV1RejectsUnknownAndNoncanonicalData(t *testing.T)
 		t.Fatalf("empty payload error = %v", err)
 	}
 }
+
+func TestDecodeResolvedDocumentV1NamesEnvironmentOnInvalidDocument(t *testing.T) {
+	payload := ResolvedDocumentV1(
+		`{"schema":"blueprint-resolved-v1","document":{"Environment":{"ID":"demo","RunAs":{}}}}`,
+	)
+	_, err := DecodeResolvedDocumentV1(payload)
+	if err == nil || !strings.Contains(err.Error(), `resolved blueprint for environment "demo"`) ||
+		!strings.Contains(err.Error(), `unknown field "RunAs"`) {
+		t.Fatalf("invalid resolved blueprint error = %v", err)
+	}
+}
