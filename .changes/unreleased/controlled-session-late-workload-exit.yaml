@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve the controller channel when workload-exit observation arrives after the controlled-session output-finalization deadline.
