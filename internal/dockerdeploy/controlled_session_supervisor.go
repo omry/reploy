@@ -1055,6 +1055,16 @@ func (supervisor *controlledSessionSupervisorV1) observeWorkloadResult(result co
 		return
 	}
 	if supervisor.transportHealthy {
+		// The output-finalization deadline also bounds lifecycle events that
+		// precede the one authoritative finalization outcome. If workload exit
+		// observation arrives after that deadline, omitting this advisory event
+		// must not be misclassified as loss of an otherwise healthy controller
+		// transport. The terminal result still carries the recorded status.
+		deadline := supervisor.terminationDeadline()
+		if !supervisor.backend.now().Before(deadline) {
+			supervisor.recordLateWorkloadExitPublicationV1()
+			return
+		}
 		if err := supervisor.sendPreFinalizationLifecycleEvent(controlledsession.EventV1{
 			Kind:         controlledsession.EventWorkloadExitV1,
 			WorkloadExit: &controlledsession.WorkloadExitV1{Status: result.status},
@@ -1062,6 +1072,10 @@ func (supervisor *controlledSessionSupervisorV1) observeWorkloadResult(result co
 			supervisor.loseTransport("send workload exit", err)
 		}
 	}
+}
+
+func (supervisor *controlledSessionSupervisorV1) recordLateWorkloadExitPublicationV1() {
+	supervisor.diagnosticErr = errors.Join(supervisor.diagnosticErr, fmt.Errorf("controlled-session workload exit was observed after its publication deadline"))
 }
 
 func (supervisor *controlledSessionSupervisorV1) observeControllerLoss(reason string, detail error) {

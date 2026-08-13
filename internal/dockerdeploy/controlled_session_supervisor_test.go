@@ -179,6 +179,42 @@ func TestControlledSessionSupervisorIgnoresPTYRequestsRacingTerminatingEvent(t *
 	}
 }
 
+func TestControlledSessionSupervisorPreservesTransportForLateWorkloadExitV1(t *testing.T) {
+	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
+	machine, err := controlledsession.NewMachineV1(plan.Authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := machine.Observe(controlledsession.ObservationV1{Kind: controlledsession.ObservationActivatedV1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := machine.Observe(controlledsession.ObservationV1{
+		Kind: controlledsession.ObservationHostCancelV1, Reason: "test termination",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	code := 0
+	supervisor := &controlledSessionSupervisorV1{
+		machine: machine, transportHealthy: true,
+		terminationAt: now.Add(-controlledSessionOutputFinalizationTimeoutV1),
+		backend:       controlledSessionSupervisorBackendV1{now: func() time.Time { return now }},
+	}
+	supervisor.observeWorkloadResult(controlledSessionProcessResultV1{
+		status: controlledsession.ProcessStatusV1{Kind: controlledsession.ProcessStatusExitedV1, Code: &code},
+	})
+	if !supervisor.transportHealthy {
+		t.Fatal("late workload-exit observation poisoned the controller transport")
+	}
+	snapshot := machine.Snapshot()
+	if snapshot.WorkloadStatus.Kind != controlledsession.ProcessStatusExitedV1 || snapshot.WorkloadStatus.Code == nil || *snapshot.WorkloadStatus.Code != code {
+		t.Fatalf("late workload status = %#v", snapshot.WorkloadStatus)
+	}
+	if supervisor.diagnosticErr == nil || !strings.Contains(supervisor.diagnosticErr.Error(), "after its publication deadline") {
+		t.Fatalf("late workload-exit diagnostic = %v", supervisor.diagnosticErr)
+	}
+}
+
 func TestRunControlledSessionV1PreparesAttachesAndCleansLeaseNetwork(t *testing.T) {
 	plan := controlledSessionNetworkPlanFixtureV1(t)
 	requests := make(chan controlledsession.RequestV1, 8)

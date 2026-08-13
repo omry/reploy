@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,47 @@ import (
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
 )
+
+func TestInspectControlledSessionControllerSourceAcceptsLocalGenerationTagV1(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configID := canonical.Digest("sha256:" + strings.Repeat("4", 64))
+	diffID := canonical.Digest("sha256:" + strings.Repeat("5", 64))
+	rootFS, err := deploy.RootFSSubject([]canonical.Digest{diffID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := CurrentBuild{
+		Generation: deploy.EnvironmentGenerationState{Reference: "reploy/env/controller:g-current"},
+		Lock: deploy.BuildLockV1{
+			Platform: platform,
+			FinalImage: providers.RealizedImageV1{
+				Digest: configID, ConfigDigest: configID, RootFSSubject: rootFS,
+			},
+		},
+	}
+	inspection := fmt.Sprintf(
+		`[{"Id":%q,"RepoDigests":[],"Os":"linux","Architecture":"amd64","RootFS":{"Layers":[%q]},"Config":{}}]`,
+		configID,
+		diffID,
+	)
+	var calls [][]string
+	source, err := inspectControlledSessionControllerSourceV1(t.Context(), current, func(_ context.Context, args ...string) (string, error) {
+		calls = append(calls, append([]string{}, args...))
+		return inspection, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || strings.Join(calls[0], " ") != "image inspect "+current.Generation.Reference {
+		t.Fatalf("Docker inspection calls = %#v", calls)
+	}
+	if source.Descriptor.AuthorReference != string(configID) || source.Descriptor.ImmutableReference != string(configID) || source.Image != current.Lock.FinalImage {
+		t.Fatalf("controller source = %#v", source)
+	}
+}
 
 func TestControlledSessionControllerPackageDockerfileAddsOnlyControllerTool(t *testing.T) {
 	source := applicationRuntimeLayerTestRequest(t).Source

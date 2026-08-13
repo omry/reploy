@@ -1870,6 +1870,30 @@ reports the session failure. The fixture is a conformance test for the generic
 Reploy boundary; OmegaFlow continues to own command completion, cwd reporting,
 action markers, browser orchestration, and media rendering.
 
+Implementation status: complete for the initial Linux `amd64` conformance
+profile. A repository-owned OmegaFlow-shaped controller drives only the public
+JSON Lines broker stream and the terminal attachment beneath unmodified,
+checksum-pinned asciinema 3.2.1. The public host command runs it against two
+ordinary current staged deployments. The controller proves shell continuity
+across marked operations and Ctrl-C, a later resize, a terminal-started HTTP
+service reached by checksum-pinned Playwright 1.55.0 and Chromium, and retained
+cast, text, screenshot, and proof artifacts in the declared output directory.
+The browser controller base is pinned by multi-platform image digest; the
+conformance run is initially required in Linux `amd64` CI while the independent
+client packaging and Docker integration suites continue to cover Linux
+`arm64`.
+
+The same fixture injects a host-side PTY-observation timeout by suspending the
+public host process, after it publishes `terminating`, across the absolute
+output-finalization deadline. The controller, recorder, and private channel
+remain live while the workload exits. After the host resumes, the fixture
+proves the actionable failed-finalization event reaches the OmegaFlow-shaped
+controller, which retains and closes the partial cast, records the failure,
+sends `complete`, consumes `terminated`, acknowledges it, and exits cleanly
+while the public host command still reports the session failure. The fixture
+adds no OmegaFlow code, private-protocol dependency, runtime dependency
+installer, or public Reploy surface.
+
 ### Slice 6: User-Facing Documentation
 
 After the generic runtime and at least one integration profile are proven,

@@ -228,7 +228,11 @@ func inspectControlledSessionControllerSourceV1(ctx context.Context, current Cur
 	if err != nil {
 		return InspectedImageCandidate{}, fmt.Errorf("inspect controlled-session controller generation %q: %w", current.Generation.Reference, err)
 	}
-	inspection, err := parseDockerImageInspectionDetails(current.Generation.Reference, current.Lock.Platform, []byte(output))
+	// Reploy generation references are local mutable tags and deliberately do
+	// not have registry RepoDigests. Parse the inspected record through the
+	// immutable config identity already frozen in the build lock; the parser
+	// then also proves that the generation tag still resolves to that ID.
+	inspection, err := parseDockerImageInspectionDetails(string(current.Lock.FinalImage.ConfigDigest), current.Lock.Platform, []byte(output))
 	if err != nil {
 		return InspectedImageCandidate{}, fmt.Errorf("inspect controlled-session controller generation %q: %w", current.Generation.Reference, err)
 	}
