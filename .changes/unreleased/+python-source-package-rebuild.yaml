@@ -1,0 +1,2 @@
+kind: Fixed
+body: Rebuild the native Reploy executable for local Python source installs instead of silently reusing an existing unverified dist binary.
