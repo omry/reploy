@@ -38,29 +38,51 @@ func DecodeResolvedDocumentV1(payload ResolvedDocumentV1) (Document, error) {
 	decoder.DisallowUnknownFields()
 	var envelope resolvedDocumentEnvelopeV1
 	if err := decoder.Decode(&envelope); err != nil {
-		return Document{}, fmt.Errorf("decode resolved blueprint: %w", err)
+		return Document{}, resolvedDocumentDecodeErrorV1(resolvedDocumentEnvironmentIDV1(payload), err)
 	}
+	environmentID := envelope.Document.Environment.ID
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		if err == nil {
-			return Document{}, fmt.Errorf("resolved blueprint contains trailing JSON")
+			return Document{}, resolvedDocumentDecodeErrorV1(environmentID, fmt.Errorf("resolved blueprint contains trailing JSON"))
 		}
-		return Document{}, fmt.Errorf("decode resolved blueprint trailer: %w", err)
+		return Document{}, resolvedDocumentDecodeErrorV1(environmentID, fmt.Errorf("decode resolved blueprint trailer: %w", err))
 	}
 	if envelope.Schema != ResolvedDocumentSchemaV1 {
-		return Document{}, fmt.Errorf("resolved blueprint schema must be %q", ResolvedDocumentSchemaV1)
+		return Document{}, resolvedDocumentDecodeErrorV1(environmentID, fmt.Errorf("resolved blueprint schema must be %q", ResolvedDocumentSchemaV1))
 	}
 	canonicalPayload, err := EncodeResolvedDocumentV1(envelope.Document)
 	if err != nil {
-		return Document{}, err
+		return Document{}, resolvedDocumentDecodeErrorV1(environmentID, err)
 	}
 	if canonicalPayload != payload {
-		return Document{}, fmt.Errorf("resolved blueprint is not in its canonical wire form")
+		return Document{}, resolvedDocumentDecodeErrorV1(environmentID, fmt.Errorf("resolved blueprint is not in its canonical wire form"))
 	}
 	if err := envelope.Document.Environment.RebuildProviderContributions(); err != nil {
-		return Document{}, fmt.Errorf("rebuild resolved blueprint provider contributions: %w", err)
+		return Document{}, resolvedDocumentDecodeErrorV1(environmentID, fmt.Errorf("rebuild resolved blueprint provider contributions: %w", err))
 	}
 	return envelope.Document, nil
+}
+
+func resolvedDocumentDecodeErrorV1(environmentID string, err error) error {
+	if environmentID != "" {
+		return fmt.Errorf("decode resolved blueprint for environment %q: %w", environmentID, err)
+	}
+	return fmt.Errorf("decode resolved blueprint: %w", err)
+}
+
+func resolvedDocumentEnvironmentIDV1(payload ResolvedDocumentV1) string {
+	var probe struct {
+		Document struct {
+			Environment struct {
+				ID string
+			}
+		}
+	}
+	if json.Unmarshal([]byte(payload), &probe) != nil {
+		return ""
+	}
+	return probe.Document.Environment.ID
 }
 
 func ResolvedDocumentDigestV1(payload ResolvedDocumentV1) (canonical.Digest, error) {

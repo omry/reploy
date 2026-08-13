@@ -55,3 +55,36 @@ func TestDecodeResolvedDocumentV1RejectsUnknownAndNoncanonicalData(t *testing.T)
 		t.Fatalf("empty payload error = %v", err)
 	}
 }
+
+func TestDecodeResolvedDocumentV1NamesEnvironmentOnInvalidDocument(t *testing.T) {
+	payload := ResolvedDocumentV1(
+		`{"schema":"blueprint-resolved-v1","document":{"Environment":{"ID":"demo","RunAs":{}}}}`,
+	)
+	_, err := DecodeResolvedDocumentV1(payload)
+	if err == nil || !strings.Contains(err.Error(), `resolved blueprint for environment "demo"`) ||
+		!strings.Contains(err.Error(), `unknown field "RunAs"`) {
+		t.Fatalf("invalid resolved blueprint error = %v", err)
+	}
+}
+
+func TestDecodeResolvedDocumentV1NamesEnvironmentOnPostDecodeFailures(t *testing.T) {
+	payload, err := EncodeResolvedDocumentV1(Document{Environment: Environment{ID: "demo"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		payload ResolvedDocumentV1
+	}{
+		{name: "trailing JSON", payload: payload + `{}`},
+		{name: "schema", payload: ResolvedDocumentV1(strings.Replace(string(payload), ResolvedDocumentSchemaV1, "blueprint-resolved-v2", 1))},
+		{name: "canonical wire form", payload: " " + payload},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := DecodeResolvedDocumentV1(test.payload)
+			if err == nil || !strings.Contains(err.Error(), `decode resolved blueprint for environment "demo"`) {
+				t.Fatalf("invalid resolved blueprint error = %v", err)
+			}
+		})
+	}
+}
