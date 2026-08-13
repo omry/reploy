@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-04
+updated: 2026-08-14
 summary: Active planning surface for Reploy design and implementation gaps.
 ---
 
@@ -30,14 +30,6 @@ This file is the day-to-day queue for design and implementation gaps.
   user action.
 
 ## Pre-release
-
-- [ ] `P1` Accept APT install transaction records with the optional trailing
-      empty marker. Current APT versions may emit valid `Inst` records ending
-      in `) []`, which Reploy currently rejects as malformed. Accept exactly
-      the known optional ` []` suffix while preserving the existing package,
-      version, and architecture checks. Add regression coverage for ordinary
-      installs and upgrades, streaming chunk boundaries, and rejection of
-      nonempty, duplicated, or otherwise malformed trailing markers.
 
 - [ ] `P2` Add explicit controlled runtime command aliases for validated
       executable outputs. Keep provider exports non-public by default, and let
@@ -166,6 +158,13 @@ This file is the day-to-day queue for design and implementation gaps.
       as the representative application.
 
 ## Post-v1
+
+- [ ] `P2` Inventory and organize the repository `temp/` directory.
+      Identify which files are disposable scratch artifacts, active private
+      working notes, or durable project documentation. Remove obsolete files
+      only after explicit review, move durable documents to an appropriate
+      maintained location, and leave `temp/` with a small documented purpose
+      and structure that prevents it from becoming an unindexed document store.
 
 - [ ] `P2` Design explicit remote Docker support.
       Replace today's rejected ambient `DOCKER_HOST` and remote-context behavior
