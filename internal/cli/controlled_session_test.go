@@ -39,6 +39,18 @@ func TestParseControlledSessionRunOptionsMapsExactSelectionsAndDefaults(t *testi
 	}
 }
 
+func TestParseControlledSessionRunOptionsDefaultsTerminalDimensions(t *testing.T) {
+	options, err := parseControlledSessionRunOptions([]string{
+		"--controller-dir=controller", "--workload-dir=workload", "--", "record",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Columns != controlledSessionDefaultColumns || options.Rows != controlledSessionDefaultRows {
+		t.Fatalf("dimensions = %dx%d, want %dx%d", options.Columns, options.Rows, controlledSessionDefaultColumns, controlledSessionDefaultRows)
+	}
+}
+
 func TestParseControlledSessionRunOptionsAppliesInclusiveTimeoutBounds(t *testing.T) {
 	options, err := parseControlledSessionRunOptions([]string{
 		"--controller-dir=c", "--workload-dir=w", "--columns=1", "--rows=65535",
@@ -66,7 +78,8 @@ func TestParseControlledSessionRunOptionsRejectsUsageErrors(t *testing.T) {
 		{name: "missing delimiter", args: base[:4], want: "must follow --"},
 		{name: "missing command", args: base[:5], want: "CONTROLLER_COMMAND"},
 		{name: "missing controller", args: []string{"--workload-dir=w", "--columns=80", "--rows=24", "--", "controller"}, want: "--controller-dir is required"},
-		{name: "missing columns", args: []string{"--controller-dir=c", "--workload-dir=w", "--rows=24", "--", "controller"}, want: "--columns is required"},
+		{name: "only rows", args: []string{"--controller-dir=c", "--workload-dir=w", "--rows=24", "--", "controller"}, want: "--columns and --rows must be provided together"},
+		{name: "only columns", args: []string{"--controller-dir=c", "--workload-dir=w", "--columns=80", "--", "controller"}, want: "--columns and --rows must be provided together"},
 		{name: "zero rows", args: []string{"--controller-dir=c", "--workload-dir=w", "--columns=80", "--rows=0", "--", "controller"}, want: "1 through 65535"},
 		{name: "large columns", args: []string{"--controller-dir=c", "--workload-dir=w", "--columns=65536", "--rows=24", "--", "controller"}, want: "1 through 65535"},
 		{name: "both outputs", args: []string{"--controller-dir=c", "--workload-dir=w", "--columns=80", "--rows=24", "--output-dir=d", "--output-file=f", "--", "controller"}, want: "mutually exclusive"},
@@ -202,6 +215,23 @@ func TestControlledSessionRunUsageErrorLeavesStdoutEmpty(t *testing.T) {
 	code := Main([]string{"controlled-session", "run", "--controller-dir=c"}, &stdout, &stderr)
 	if code != 2 || stdout.String() != "" || !strings.Contains(stderr.String(), "usage error") {
 		t.Fatalf("usage result code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestControlledSessionRunHelpDocumentsOptionalDefaultDimensions(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"controlled-session", "run", "--help"}, &stdout, &stderr)
+	if code != 0 || stderr.String() != "" {
+		t.Fatalf("help code=%d stderr=%q", code, stderr.String())
+	}
+	for _, want := range []string{
+		"[--columns N --rows N]",
+		"Columns 1-65535; default 80; requires --rows",
+		"Rows 1-65535; default 24; requires --columns",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("help is missing %q:\n%s", want, stdout.String())
+		}
 	}
 }
 
