@@ -1,0 +1,10 @@
+FROM scratch
+
+COPY --chmod=0755 probe /probe
+COPY --chmod=0755 posix-ipc-probe /posix-ipc-probe
+COPY --chown=100:100 --chmod=6755 probe /probe-setid
+COPY --chmod=0755 probe /probe-filecap
+RUN ["/probe", "stamp-filecap", "/probe-filecap"]
+
+ENTRYPOINT ["/probe"]
+CMD ["supervisor"]
