@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-06
+updated: 2026-08-14
 summary: Current parking lot for longer-term product directions outside the near-term release path.
 ---
 
@@ -75,6 +75,19 @@ Open questions:
   represented in staging state?
 - Can the generated app control script stay identical across Docker Engine,
   Docker Desktop, Colima/Lima, and VM-backed runtimes?
+
+### Isolated Multi-Identity Workloads
+
+Some applications need several image-local UIDs and GIDs while remaining
+untrusted and isolated from host accounts and other workloads. Reploy's
+backend-neutral threat model, identity boundary, lifecycle terminology, and
+acceptance ledger are recorded in
+[`MULTI_IDENTITY_SECURITY_CONTRACT.md`](MULTI_IDENTITY_SECURITY_CONTRACT.md).
+
+That contract does not select a runtime or define public blueprint schema. Its
+next gate is a disposable backend feasibility probe; product integration may
+begin only after the mechanism proves that undeclared identities remain
+unusable.
 
 ### Podman Userland Backend
 
