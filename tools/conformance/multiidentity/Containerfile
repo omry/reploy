@@ -1,0 +1,9 @@
+FROM scratch
+
+COPY --chmod=0755 probe /probe
+COPY --chown=1999:2999 --chmod=6755 probe /probe-setid
+COPY --chmod=0755 probe /probe-filecap
+RUN ["/probe", "stamp-filecap", "/probe-filecap"]
+
+ENTRYPOINT ["/probe"]
+CMD ["supervisor"]
