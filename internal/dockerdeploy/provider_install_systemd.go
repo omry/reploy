@@ -24,8 +24,17 @@ func providerInstallSystemdFileV1(plan providerInstallationPlanV1, dockerPath st
 	if dockerPath == "" || !filepath.IsAbs(dockerPath) || filepath.Clean(dockerPath) != dockerPath {
 		return nil, fmt.Errorf("install systemd file requires an absolute clean Docker path")
 	}
+	if strings.ContainsRune(plan.Installation.TargetDir, '"') {
+		return nil, fmt.Errorf("install systemd file target directory contains a double quote unsupported by systemd executable paths")
+	}
+	if strings.ContainsRune(plan.Installation.TargetDir, '\\') {
+		return nil, fmt.Errorf("install systemd file target directory contains a backslash unsupported by systemd paths")
+	}
+	if strings.ContainsRune(dockerPath, '"') {
+		return nil, fmt.Errorf("install systemd file Docker path contains a double quote unsupported by systemd executable paths")
+	}
 
-	workingDirectory, err := systemdInstallArgumentV1(systemdPath(plan.Installation.TargetDir))
+	workingDirectory, err := systemdInstallWorkingDirectoryV1(systemdPath(plan.Installation.TargetDir))
 	if err != nil {
 		return nil, err
 	}
@@ -82,6 +91,15 @@ WantedBy=multi-user.target
 	}}, nil
 }
 
+func systemdInstallWorkingDirectoryV1(value string) (string, error) {
+	for _, char := range value {
+		if char < 0x20 || char == 0x7f {
+			return "", fmt.Errorf("systemd install working directory contains a control character")
+		}
+	}
+	return strings.ReplaceAll(value, "%", "%%"), nil
+}
+
 func systemdInstallCommandV1(arguments []string) (string, error) {
 	if len(arguments) == 0 {
 		return "", fmt.Errorf("systemd install command requires arguments")
@@ -106,6 +124,7 @@ func systemdInstallArgumentV1(value string) (string, error) {
 	escaped := strings.NewReplacer(
 		`\`, `\\`,
 		`"`, `\"`,
+		`$`, `$$`,
 		`%`, `%%`,
 	).Replace(value)
 	return `"` + escaped + `"`, nil
