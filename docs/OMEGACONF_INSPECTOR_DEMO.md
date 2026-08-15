@@ -230,9 +230,9 @@ path, and keeps the project path workspace-relative:
 ```bash
 reploy stage ./reploy/omegaconf-inspector.blueprint.yaml
 reploy build
-./reploy-staging/omegaconf-inspector config init
-./reploy-staging/omegaconf-inspector config check
-./reploy-staging/omegaconf-inspector up
+./reploy-staging/appctl config init
+./reploy-staging/appctl config check
+./reploy-staging/appctl up
 reploy test
 ```
 

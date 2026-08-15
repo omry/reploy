@@ -46,7 +46,7 @@ formatting, color, terminal behavior, and fallback output in one place.
 The installed control script keeps the normal user-facing command:
 
 ```bash
-arbiterctl status
+appctl status
 ```
 
 Internally, the thin wrapper delegates to embedded Reploy. Reploy loads the
@@ -59,7 +59,7 @@ Runtime detail can remain available through an explicit lower-level command,
 for example:
 
 ```bash
-arbiterctl runtime status
+appctl runtime status
 ```
 
 The exact debug command name is not part of this design.
@@ -81,7 +81,7 @@ template error.
 | `{{ reploy.health }}` | Health summary: `pass`, `fail`, `unknown`, `not_declared`, or `unsupported`. |
 | `{{ reploy.url }}` | Primary app URL when Reploy can derive one from installed state or blueprint metadata. |
 | `{{ reploy.install_dir }}` | Installed deployment directory. |
-| `{{ reploy.control_name }}` | Generated app control command name, such as `arbiterctl`. |
+| `{{ reploy.control_name }}` | Generated app control command name, such as `appctl`. |
 
 ### Runtime Variables
 
@@ -163,8 +163,8 @@ Default output is rendered text.
 Future machine-readable output can use the same resolved status model:
 
 ```bash
-arbiterctl status --format json
-arbiterctl status --format yaml
+appctl status --format json
+appctl status --format yaml
 ```
 
 For machine output, Reploy should return structured resolved values rather than

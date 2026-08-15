@@ -195,7 +195,7 @@ func TestStagedControlSurfaceAdoptsInstalledControlFiles(t *testing.T) {
 		Environment: blueprint.Environment{ID: "demo", ControlScript: "democtl"},
 	}
 	spec := controlScriptSpec{
-		Mode: controlScriptModeDeployed, TargetDir: stagingDir, AppID: "demo", ControlScript: "democtl",
+		Mode: controlScriptModeDeployed, TargetDir: stagingDir, ControlScript: "democtl",
 	}
 	if err := os.WriteFile(filepath.Join(stagingDir, "democtl"), []byte(renderControlScript(spec)), 0o755); err != nil {
 		t.Fatal(err)
@@ -227,7 +227,7 @@ func TestStagedControlSurfaceAdoptsInstalledControlFiles(t *testing.T) {
 
 func TestStagedPowerShellControlScriptUsesScriptDirectory(t *testing.T) {
 	content := renderPowerShellControlScript(controlScriptSpec{
-		Mode: controlScriptModeStaged, AppID: "demo", ControlScript: "democtl.ps1",
+		Mode: controlScriptModeStaged, ControlScript: "democtl.ps1",
 	})
 	if !strings.Contains(content, "$TargetDir = $PSScriptRoot") {
 		t.Fatalf("staged PowerShell wrapper is not relocatable:\n%s", content)

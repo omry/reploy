@@ -75,7 +75,6 @@ func planStagedControlSurfaceV1(deploymentDir string, document blueprint.Documen
 	spec := controlScriptSpec{
 		Mode:          controlScriptModeStaged,
 		TargetDir:     absoluteDir,
-		AppID:         document.Environment.ID,
 		ControlScript: controlScript,
 	}
 	files := []stagedControlFileV1{
@@ -197,7 +196,6 @@ func stagedControlSurfaceMatchesInstalledV1(deploymentDir string, document bluep
 	spec := controlScriptSpec{
 		Mode:          controlScriptModeDeployed,
 		TargetDir:     deploymentDir,
-		AppID:         document.Environment.ID,
 		ControlScript: controlScript,
 	}
 	expected := map[string][]byte{

@@ -98,12 +98,13 @@ Run `reploy` with no arguments inside or beside a staging deployment to see the
 active app, useful lifecycle commands, and a small app-command sample. Use
 `reploy app` when you want the complete app-specific command list.
 
-The staging directory also contains an app-named control script, such as
-`examplectl`, for local runtime and app commands:
+The staging directory also contains the standard `appctl` control script for
+local runtime and app commands. A blueprint may override the basename with
+`environment.control_script`:
 
 ```bash
-./reploy-staging/examplectl status
-./reploy-staging/examplectl config check --live
+./reploy-staging/appctl status
+./reploy-staging/appctl config check --live
 ```
 
 For app-specific commands, the control script delegates to the Reploy runtime
@@ -194,12 +195,12 @@ commands require a current build and tell you to run `reploy build` when one is
 missing. Use `reploy build --no-cache` when you need to rerun resolution and
 image construction explicitly.
 
-If the app exposes configuration commands, run them through the app-named
+If the app exposes configuration commands, run them through the deployment
 control command in the staging directory. The exact commands are app-specific.
 Use `reploy app` to show the complete app-command list.
 
 ```bash
-./reploy-staging/examplectl config check
+./reploy-staging/appctl config check
 reploy app
 ```
 
@@ -244,13 +245,13 @@ port.
 sudo reploy install --scope system --to /opt/example2 --service example2 --port 8082
 ```
 
-After install, operate the service through the generated app control script
-inside the target directory, such as `/opt/example/examplectl`:
+After install, operate the service through the generated deployment control
+script inside the target directory, such as `/opt/example/appctl`:
 
 ```bash
-/opt/example/examplectl status
-/opt/example/examplectl logs
-/opt/example/examplectl restart
+/opt/example/appctl status
+/opt/example/appctl logs
+/opt/example/appctl restart
 ```
 
 Only commands marked as deployed commands in the blueprint are exposed through

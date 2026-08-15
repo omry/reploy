@@ -5,12 +5,12 @@ import (
 	"testing"
 )
 
-func TestResolveNamesDefaultsControlScriptToEnvironmentID(t *testing.T) {
+func TestResolveNamesDefaultsControlScriptToAppctl(t *testing.T) {
 	id, control, err := resolveNames(EnvironmentSyntax{ID: "arbiter"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id != "arbiter" || control != "arbiter" {
+	if id != "arbiter" || control != "appctl" {
 		t.Fatalf("id/control = %q/%q", id, control)
 	}
 }

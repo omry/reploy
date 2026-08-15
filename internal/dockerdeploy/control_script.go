@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/omry/reploy/internal/blueprint"
 )
 
 type controlScriptMode string
@@ -17,12 +19,7 @@ const (
 type controlScriptSpec struct {
 	Mode          controlScriptMode
 	TargetDir     string
-	AppID         string
 	ControlScript string
-}
-
-func powerShellControlScriptName(appID string) string {
-	return controlScriptName(appID) + ".ps1"
 }
 
 func renderPowerShellControlScript(spec controlScriptSpec) string {
@@ -58,7 +55,7 @@ exec "$reploy_bin" _control --dir "$target_dir" --script-name "$control_script" 
 }
 
 func controlScriptWrapperAssignments(spec controlScriptSpec) string {
-	controlScript := defaultString(spec.ControlScript, controlScriptName(spec.AppID))
+	controlScript := defaultString(spec.ControlScript, blueprint.DefaultControlScriptName)
 	if spec.Mode == controlScriptModeStaged {
 		return fmt.Sprintf(`target_dir="${REPLOY_DEPLOY_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}"
 control_script=%s

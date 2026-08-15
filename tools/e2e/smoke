@@ -347,7 +347,7 @@ def docker_managed_install() -> bool:
 
 def control_script_command(install_dir: Path, *args: str) -> list[str]:
     if sys.platform.startswith(("win32", "cygwin", "msys")):
-        script = install_dir / "smoke-app.ps1"
+        script = install_dir / "appctl.ps1"
         return [
             "powershell",
             "-NoProfile",
@@ -357,7 +357,7 @@ def control_script_command(install_dir: Path, *args: str) -> list[str]:
             str(script),
             *args,
         ]
-    return [str(install_dir / "smoke-app"), *args]
+    return [str(install_dir / "appctl"), *args]
 
 
 def update_env_file(path: Path, updates: dict[str, str]) -> None:
