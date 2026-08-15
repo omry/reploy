@@ -218,8 +218,6 @@ func pathContains(parent string, child string) bool {
 	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))
 }
 
-func controlScriptName(appID string) string { return dockerNameSlug(appID, "app") + "ctl" }
-
 func systemdPath(elements ...string) string {
 	normalized := make([]string, 0, len(elements))
 	for _, element := range elements {

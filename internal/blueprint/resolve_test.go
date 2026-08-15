@@ -17,7 +17,7 @@ func TestResolveProducesTypedEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if document.Environment.ControlScript != "demo" {
+	if document.Environment.ControlScript != "appctl" {
 		t.Fatalf("control script = %q", document.Environment.ControlScript)
 	}
 	if document.Environment.AllowConcurrent != ConcurrentRunAuto {

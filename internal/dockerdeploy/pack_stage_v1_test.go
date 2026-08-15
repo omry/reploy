@@ -38,7 +38,7 @@ func TestStagePackDesiredStateV1CreatesStateAndControlSurface(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(entries) != 2 || entries[0].Name() != ReployInternalDir || !entries[0].IsDir() ||
-		entries[1].Name() != "omegaconf-inspector" || entries[1].IsDir() {
+		entries[1].Name() != "appctl" || entries[1].IsDir() {
 		t.Fatalf("staging entries = %#v", entries)
 	}
 	internalEntries, err := os.ReadDir(filepath.Join(dir, ReployInternalDir))
@@ -53,7 +53,7 @@ func TestStagePackDesiredStateV1CreatesStateAndControlSurface(t *testing.T) {
 		t.Fatalf("internal entries = %q", names)
 	}
 	for _, path := range []string{
-		filepath.Join(dir, "omegaconf-inspector"),
+		filepath.Join(dir, "appctl"),
 		filepath.Join(dir, filepath.FromSlash(embeddedRuntimeFileName())),
 		filepath.Join(dir, filepath.FromSlash(stagedControlManifestPathV1)),
 	} {

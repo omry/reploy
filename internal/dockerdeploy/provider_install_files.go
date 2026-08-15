@@ -61,7 +61,6 @@ func providerInstallControlFilesV1(plan providerInstallationPlanV1) ([]providerI
 	spec := controlScriptSpec{
 		Mode:          mode,
 		TargetDir:     plan.Installation.TargetDir,
-		AppID:         plan.Docker.EnvironmentID,
 		ControlScript: plan.ControlScript,
 	}
 	runtimePath, err := embeddedRuntimeExecutable()

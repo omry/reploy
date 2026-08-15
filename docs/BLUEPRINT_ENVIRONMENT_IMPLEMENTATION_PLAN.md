@@ -51,7 +51,7 @@ Initial scope:
 Keep the model's private backlog out of the public schema. Existing Reploy CLI
 and deployment capabilities remain unless the model explicitly records a
 conflict. The intentional changes are the new schema, direct control-script
-default (`environment.id`, without `ctl`), generated-image materialization, and
+default (`appctl`), generated-image materialization, and
 removal of private health/success-variable protocols.
 
 ## Implementation Principles
@@ -168,7 +168,7 @@ Implement:
 
 - Metadata and reserved interpolation roots: `blueprint`, `environment`,
   `docker`, `reploy`, `user`, `system`.
-- Portable `environment.id`; optional `control_script` defaults directly to ID.
+- Portable `environment.id`; optional `control_script` defaults to `appctl`.
   Reject unsafe/reserved filenames and native-trigger collisions with control
   operations.
 - Blueprint compatibility; the required `environment.base` root; vars,

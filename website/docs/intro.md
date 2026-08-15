@@ -68,11 +68,11 @@ reploy stage omegaconf-inspector-demo
 reploy build
 
 # Create and validate the demo service config through the staged app command.
-./reploy-staging/omegaconf-inspector config init
-./reploy-staging/omegaconf-inspector config check
+./reploy-staging/appctl config init
+./reploy-staging/appctl config check
 
 # Start the staged app.
-./reploy-staging/omegaconf-inspector up
+./reploy-staging/appctl up
 
 # Run the blueprint-defined checks against staging.
 reploy test
@@ -82,7 +82,7 @@ Then install from the tested staging state:
 
 ```bash
 reploy install --scope user --to "$PWD/omegaconf-inspector-installed"
-./omegaconf-inspector-installed/omegaconf-inspector status
+./omegaconf-inspector-installed/appctl status
 ```
 
 The blueprint defines default install values such as the target path and

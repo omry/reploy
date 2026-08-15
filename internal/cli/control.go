@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/dockerdeploy"
 )
 
@@ -24,7 +25,7 @@ func runEmbeddedControl(args []string, stdout io.Writer, stderr io.Writer, globa
 	options, err := parseEmbeddedControlOptions(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy control usage error: %v\n", err)
-		printEmbeddedControlUsage(stderr, embeddedControlUsageContext{ScriptName: "reployctl"})
+		printEmbeddedControlUsage(stderr, embeddedControlUsageContext{ScriptName: blueprint.DefaultControlScriptName})
 		return 2
 	}
 	metadata, found, err := dockerdeploy.LoadEmbeddedControlMetadataV1(context.Background(), options.Dir)
@@ -37,8 +38,8 @@ func runEmbeddedControl(args []string, stdout io.Writer, stderr io.Writer, globa
 		return 1
 	}
 	scriptName := options.ScriptName
-	if strings.TrimSpace(scriptName) == "" || scriptName == "reployctl" {
-		scriptName = embeddedControlDefaultString(metadata.ControlScript, "reployctl")
+	if strings.TrimSpace(scriptName) == "" || scriptName == blueprint.DefaultControlScriptName {
+		scriptName = embeddedControlDefaultString(metadata.ControlScript, blueprint.DefaultControlScriptName)
 	}
 	context := embeddedControlUsageContext{
 		Dir:         options.Dir,
@@ -160,7 +161,7 @@ func parseEmbeddedControlOptions(args []string) (embeddedControlOptions, error) 
 		return embeddedControlOptions{}, fmt.Errorf("--dir is required")
 	}
 	if strings.TrimSpace(options.ScriptName) == "" {
-		options.ScriptName = "reployctl"
+		options.ScriptName = blueprint.DefaultControlScriptName
 	}
 	return options, nil
 }
@@ -173,7 +174,7 @@ type embeddedControlUsageContext struct {
 }
 
 func printEmbeddedControlUsage(output io.Writer, context embeddedControlUsageContext) {
-	scriptName := embeddedControlDefaultString(context.ScriptName, "reployctl")
+	scriptName := embeddedControlDefaultString(context.ScriptName, blueprint.DefaultControlScriptName)
 	fmt.Fprintf(output, "usage: %s COMMAND [ARGS...]\n", scriptName)
 	fmt.Fprintln(output, "commands:")
 	for _, command := range []string{"up", "down", "restart", "status", "logs", "health"} {
@@ -207,7 +208,7 @@ func printEmbeddedControlUsage(output io.Writer, context embeddedControlUsageCon
 }
 
 func printEmbeddedControlLogsHelp(output io.Writer, context embeddedControlUsageContext) {
-	scriptName := embeddedControlDefaultString(context.ScriptName, "reployctl")
+	scriptName := embeddedControlDefaultString(context.ScriptName, blueprint.DefaultControlScriptName)
 	fmt.Fprintf(output, "Usage: %s logs [OPTIONS]\n", scriptName)
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Show workload logs.")

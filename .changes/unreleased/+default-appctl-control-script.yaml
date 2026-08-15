@@ -1,0 +1,2 @@
+kind: Changed
+body: Default generated staged and installed control scripts to `appctl` while preserving explicit `environment.control_script` overrides.

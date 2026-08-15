@@ -3618,7 +3618,7 @@ Usage: reploy [--docker-timeout DURATION] stage APP_REF [OPTIONS]
 Create a staging directory from an app blueprint reference.
 Use --update to refresh an existing staging directory, optionally from a new ref.
 Use --remove to stop and remove a staging deployment and its directory.
-Stage records desired state and generates the app-named control command without building.
+Stage records desired state and generates the deployment control command without building.
 Build explicitly or let staged up/restart build on demand.
 A new stage from a local blueprint imports overrides.yaml beside that blueprint.
 

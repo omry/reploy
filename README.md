@@ -61,18 +61,18 @@ reploy stage "$APP_REF"
 reploy build
 
 # Configure and operate the app through its staging-owned command.
-./reploy-staging/omegaconf-inspector config init
-./reploy-staging/omegaconf-inspector config check
+./reploy-staging/appctl config init
+./reploy-staging/appctl config check
 
 # Start and test the staged service.
-./reploy-staging/omegaconf-inspector up
+./reploy-staging/appctl up
 reploy test
 
 # Install the tested staging workspace for the current user.
 reploy install --scope user --to "$PWD/omegaconf-inspector-installed"
 
 # Tail logs through the installed app control script.
-./omegaconf-inspector-installed/omegaconf-inspector logs --tail=100
+./omegaconf-inspector-installed/appctl logs --tail=100
 ```
 
 Read the [app installation guide](https://reploy.yadan.net/docs/install-an-app)

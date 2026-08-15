@@ -2802,7 +2802,7 @@ func TestDockerStageHelp(t *testing.T) {
 		"reploy [--docker-timeout DURATION] stage --update [APP_REF] [OPTIONS]",
 		"Create a staging directory from an app blueprint reference.",
 		"Use --update to refresh an existing staging directory",
-		"Stage records desired state and generates the app-named control command without building.",
+		"Stage records desired state and generates the deployment control command without building.",
 		"Build explicitly or let staged up/restart build on demand.",
 		"Indexed shorthand from the Reploy blueprint index:",
 		"arbiter-server==0.4.2",
@@ -4133,9 +4133,9 @@ func TestDockerStageEnvironmentBlueprintCreatesAndRestagesCurrentDemo(t *testing
 	if len(entries) != wantEntryCount ||
 		entries[0].Name() != dockerdeploy.ReployInternalDir ||
 		!entries[0].IsDir() ||
-		entries[1].Name() != "omegaconf-inspector" ||
+		entries[1].Name() != "appctl" ||
 		(runtime.GOOS != "windows" && entries[2].Name() != deploy.PackageOverridesFilename) ||
-		(runtime.GOOS == "windows" && (entries[2].Name() != "omegaconf-inspector.ps1" || entries[3].Name() != deploy.PackageOverridesFilename)) {
+		(runtime.GOOS == "windows" && (entries[2].Name() != "appctl.ps1" || entries[3].Name() != deploy.PackageOverridesFilename)) {
 		t.Fatalf("staging entries = %#v", entries)
 	}
 	overrides, found, err := deploy.ReadPackageOverridesV1(deployDir)
