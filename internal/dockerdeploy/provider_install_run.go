@@ -61,6 +61,7 @@ type providerInstallPlanningV1 struct {
 type providerInstallationPlanV1 struct {
 	Installation  deploy.InstallationStateV1
 	ControlScript string
+	Document      blueprint.Document
 	Docker        DockerExecutionPlan
 	Rendered      DockerRenderedInputs
 	PathUpdates   []PathUpdateAction

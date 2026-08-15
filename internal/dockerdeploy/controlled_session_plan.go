@@ -55,7 +55,7 @@ type ControlledSessionPlanInputV1 struct {
 }
 
 type controlledSessionPlanBackendV1 struct {
-	requireReady   func(CurrentBuild, CurrentRuntimePlanV1, string, *transientOutputMount) error
+	requireReady   func(CurrentBuild, CurrentRuntimePlanV1, DockerExecutionPlan, string, *transientOutputMount) error
 	resolveCommand func(blueprint.Document, CurrentBuild, DockerExecutionPlan, string, []string) (ResolvedEnvironmentCommand, error)
 }
 
@@ -208,14 +208,24 @@ func planControlledSessionV1(input ControlledSessionPlanInputV1, backend control
 	if !found || !commandDefinition.NativeCommand {
 		return ControlledSessionExecutionPlanV1{}, fmt.Errorf("plan controlled session controller command %q is not a declared native command", input.ControllerCommand)
 	}
+	controllerDockerPlan, err := effectiveCommandDockerPlanV1(
+		input.ControllerRuntime.Document,
+		input.ControllerRuntime.Docker,
+		input.ControllerCommand,
+	)
+	if err != nil {
+		return ControlledSessionExecutionPlanV1{}, fmt.Errorf("plan controlled session controller mounts: %w", err)
+	}
 	if err := validateControlledSessionCurrentRuntimeV1(
 		"controller", input.ControllerCurrent, input.ControllerRuntime,
+		controllerDockerPlan,
 		runtimeCommandPlanID(input.ControllerCommand, input.controllerOutput != nil), input.controllerOutput, backend.requireReady,
 	); err != nil {
 		return ControlledSessionExecutionPlanV1{}, err
 	}
 	if err := validateControlledSessionCurrentRuntimeV1(
 		"workload", input.WorkloadCurrent, input.WorkloadRuntime,
+		input.WorkloadRuntime.Docker,
 		runtimeShellPlanID, nil, backend.requireReady,
 	); err != nil {
 		return ControlledSessionExecutionPlanV1{}, err
@@ -223,7 +233,7 @@ func planControlledSessionV1(input ControlledSessionPlanInputV1, backend control
 	controllerCommand, err := backend.resolveCommand(
 		input.ControllerRuntime.Document,
 		input.ControllerCurrent,
-		input.ControllerRuntime.Docker,
+		controllerDockerPlan,
 		input.ControllerCommand,
 		input.ControllerForwardedArguments,
 	)
@@ -253,7 +263,7 @@ func planControlledSessionV1(input ControlledSessionPlanInputV1, backend control
 		ControlledSessionRoleControllerV1,
 		input.LiveRunID,
 		input.ControllerCurrent,
-		input.ControllerRuntime.Docker,
+		controllerDockerPlan,
 		controllerCommand.Argv,
 		channel,
 		[]string{input.ControllerRuntime.Docker.DeploymentDir, input.WorkloadRuntime.Docker.DeploymentDir},
@@ -746,11 +756,12 @@ func validateControlledSessionCurrentRuntimeV1(
 	role string,
 	current CurrentBuild,
 	runtime CurrentRuntimePlanV1,
+	sourcePlan DockerExecutionPlan,
 	planID string,
 	output *transientOutputMount,
-	requireReady func(CurrentBuild, CurrentRuntimePlanV1, string, *transientOutputMount) error,
+	requireReady func(CurrentBuild, CurrentRuntimePlanV1, DockerExecutionPlan, string, *transientOutputMount) error,
 ) error {
-	if err := requireReady(current, runtime, planID, output); err != nil {
+	if err := requireReady(current, runtime, sourcePlan, planID, output); err != nil {
 		return fmt.Errorf("plan controlled session %s current build: %w", role, err)
 	}
 	document, err := blueprint.DecodeResolvedDocumentV1(current.State.Blueprint)
@@ -766,8 +777,8 @@ func validateControlledSessionCurrentRuntimeV1(
 	return nil
 }
 
-func requireControlledSessionRuntimeReadyV1(current CurrentBuild, runtime CurrentRuntimePlanV1, planID string, output *transientOutputMount) error {
-	sources, err := RuntimeHostSourcesV1(runtime.Docker, output)
+func requireControlledSessionRuntimeReadyV1(current CurrentBuild, runtime CurrentRuntimePlanV1, sourcePlan DockerExecutionPlan, planID string, output *transientOutputMount) error {
+	sources, err := RuntimeHostSourcesV1(sourcePlan, output)
 	if err != nil {
 		return err
 	}

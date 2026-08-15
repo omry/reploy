@@ -102,9 +102,30 @@ environment:
       deployed_command: true
       forward_flags: [--live]
       argv: [config, check]
+    config_init:
+      executable: application.server
+      trigger: [config, init]
+      native_command: true
+      deployed_command: true
+      argv: [config, init]
+      mounts:
+        config:
+          writable: true
   workload:
     command: serve
 ```
+
+`commands.<name>.mounts` is an optional sparse override of existing named
+environment mounts. Each entry must contain exactly one explicit boolean
+`writable` field; unknown mounts and fields that could change the mount source,
+target, backend mode, or update policy are rejected. Commands without overrides
+inherit the environment contract unchanged.
+
+The override applies to transient native and lifecycle command containers. It
+does not alter the environment plan or the persistent workload, even when that
+workload selects the same command. A workload with a read-only mount remains
+read-only while a command mounts the same storage writable, although the
+workload may observe changes to the underlying files.
 
 ## Mounts
 
@@ -116,7 +137,6 @@ environment:
   mounts:
     config:
       target: /conf
-      writable: true
       update_policy: preserve
     data:
       target: /data
@@ -136,16 +156,19 @@ docker:
 ```
 
 `update_policy` is `preserve`, `replace`, or `unmanaged`. `writable` controls
-runtime access; read-only mounts also determine the default `auto` concurrency
-policy.
+the default runtime access and defaults to `false`. A command may override only
+that permission for its own container as described above.
 
 ## Concurrency
 
 `allow_concurrent` accepts `yes`, `no`, or `auto` and defaults to `auto`. In
 automatic mode, concurrent app commands and shell sessions are allowed only
-when all of their mounts are read-only. A blocked caller may use `--wait` to
-queue in FIFO order. `reploy runs list` and `reploy runs stop RUN_ID` inspect or
-stop active and waiting runs.
+when all of their effective mounts are read-only. A command with any effective
+writable mount is exclusive: it waits for active read-only commands, and new
+read-only commands wait while it runs. The persistent workload does not
+participate in this command-admission queue. A blocked caller may use `--wait`
+to queue in FIFO order. `reploy runs list` and `reploy runs stop RUN_ID` inspect
+or stop active and waiting runs.
 
 ## Installation
 

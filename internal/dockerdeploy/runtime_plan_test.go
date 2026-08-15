@@ -13,6 +13,12 @@ import (
 
 func TestRuntimePlansV1CoversWorkloadShellCommandsAndOutputVariant(t *testing.T) {
 	document := runtimePlanDocument()
+	checkCommand := document.Environment.Commands["check"]
+	checkCommand.Mounts = map[string]blueprint.CommandMountOverride{
+		"config": {Writable: true},
+		"data":   {Writable: false},
+	}
+	document.Environment.Commands["check"] = checkCommand
 	plan := DockerExecutionPlan{Sandbox: testApplicationSandboxPlanV1(1000, 1000), Workload: &WorkloadExecutionPlan{}, Mounts: []MountExecutionPlan{
 		{Name: "data", Mode: blueprint.MountVolume, Target: "/mnt/data", ReadOnly: false},
 		{Name: "config", Mode: blueprint.MountManagedBind, Source: filepath.Join(t.TempDir(), "config"), Target: "/mnt/config", ReadOnly: true},
@@ -34,23 +40,44 @@ func TestRuntimePlansV1CoversWorkloadShellCommandsAndOutputVariant(t *testing.T)
 		t.Fatalf("command executables = %#v", check.Executables)
 	}
 	if !reflect.DeepEqual(check.Mounts, []deploy.RuntimeMountV1{
-		{Destination: "/mnt/config", SourceKind: deploy.RuntimeMountSourceDirectory, ReadOnly: true},
-		{Destination: "/mnt/data", SourceKind: deploy.RuntimeMountSourceGenerated},
+		{Destination: "/mnt/config", SourceKind: deploy.RuntimeMountSourceDirectory},
+		{Destination: "/mnt/data", SourceKind: deploy.RuntimeMountSourceGenerated, ReadOnly: true},
 		{Destination: environmentTemporaryHome, SourceKind: deploy.RuntimeMountSourceGenerated},
 	}) {
 		t.Fatalf("command mounts = %#v", check.Mounts)
 	}
 	output := runtimePlanByID(t, plans, "command/check/output")
-	if output.Mounts[len(output.Mounts)-1] != (deploy.RuntimeMountV1{Destination: runtimeOutputRoot, SourceKind: deploy.RuntimeMountSourceDirectory}) {
+	if !reflect.DeepEqual(output.Mounts[:len(output.Mounts)-1], check.Mounts) || output.Mounts[len(output.Mounts)-1] != (deploy.RuntimeMountV1{Destination: runtimeOutputRoot, SourceKind: deploy.RuntimeMountSourceDirectory}) {
 		t.Fatalf("output mounts = %#v", output.Mounts)
 	}
 	shell := runtimePlanByID(t, plans, "shell")
-	if len(shell.Executables) != 0 || len(shell.Mounts) != 3 {
+	if len(shell.Executables) != 0 || !reflect.DeepEqual(shell.Mounts, []deploy.RuntimeMountV1{
+		{Destination: "/mnt/config", SourceKind: deploy.RuntimeMountSourceDirectory, ReadOnly: true},
+		{Destination: "/mnt/data", SourceKind: deploy.RuntimeMountSourceGenerated},
+		{Destination: environmentTemporaryHome, SourceKind: deploy.RuntimeMountSourceGenerated},
+	}) {
 		t.Fatalf("shell plan = %#v", shell)
 	}
 	workload := runtimePlanByID(t, plans, "workload")
 	if !reflect.DeepEqual(workload.Executables, []providers.QualifiedOutput{{Component: "application/application/python", Name: "demo"}}) {
 		t.Fatalf("workload executables = %#v", workload.Executables)
+	}
+	if !reflect.DeepEqual(workload.Mounts, shell.Mounts) {
+		t.Fatalf("workload mount overrides leaked from command: %#v", workload.Mounts)
+	}
+}
+
+func TestEffectiveCommandDockerPlanV1RejectsUnknownMountWithoutMutatingBase(t *testing.T) {
+	document := runtimePlanDocument()
+	command := document.Environment.Commands["check"]
+	command.Mounts = map[string]blueprint.CommandMountOverride{"missing": {Writable: true}}
+	document.Environment.Commands["check"] = command
+	base := DockerExecutionPlan{Mounts: []MountExecutionPlan{{Name: "config", ReadOnly: true}}}
+	if _, err := effectiveCommandDockerPlanV1(document, base, "check"); err == nil || !strings.Contains(err.Error(), "unknown Docker mount") {
+		t.Fatalf("unknown override error = %v", err)
+	}
+	if !base.Mounts[0].ReadOnly {
+		t.Fatal("base plan was mutated")
 	}
 }
 

@@ -1,6 +1,7 @@
 package blueprint
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -38,6 +39,46 @@ func TestResolvedDocumentV1RoundTripsNumericAndVariableValues(t *testing.T) {
 	second, err := DocumentDigestV1(decoded)
 	if err != nil || first != second {
 		t.Fatalf("digests = %q, %q, %v", first, second, err)
+	}
+}
+
+func TestResolvedDocumentV1PreservesSparseCommandMountOverrides(t *testing.T) {
+	document := Document{Environment: Environment{
+		ID: "demo",
+		Commands: map[string]Command{
+			"plain": {Executable: "application.server"},
+			"mutate": {
+				Executable: "application.server",
+				Mounts:     map[string]CommandMountOverride{"config": {Writable: true}},
+			},
+		},
+	}}
+	payload, err := EncodeResolvedDocumentV1(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var encoded struct {
+		Document struct {
+			Environment struct {
+				Commands map[string]map[string]json.RawMessage
+			}
+		}
+	}
+	if err := json.Unmarshal([]byte(payload), &encoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := encoded.Document.Environment.Commands["plain"]["Mounts"]; found {
+		t.Fatalf("plain command encoded an empty mount override: %s", payload)
+	}
+	if _, found := encoded.Document.Environment.Commands["mutate"]["Mounts"]; !found {
+		t.Fatalf("mutating command omitted its mount override: %s", payload)
+	}
+	decoded, err := DecodeResolvedDocumentV1(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.Environment.Commands["mutate"].Mounts["config"].Writable {
+		t.Fatalf("decoded commands = %#v", decoded.Environment.Commands)
 	}
 }
 

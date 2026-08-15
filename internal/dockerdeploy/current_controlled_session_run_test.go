@@ -267,6 +267,7 @@ func TestRunCurrentControlledSessionV1RejectsActiveControllerBeforeWorkloadAdmis
 	_, err = runCurrentControlledSessionV1(t.Context(), CurrentControlledSessionRunInputV1{
 		ControllerDeploymentDir: controllerDir,
 		WorkloadDeploymentDir:   workloadDir,
+		ControllerCommand:       fixture.ControllerCommand,
 	}, currentControlledSessionRunBackendV1{
 		acquire: deploy.AcquireOperationLock,
 		loadRuntime: func(_ context.Context, _ *deploy.OperationLock, dir string, _ StagedProviderBuildRuntimeV1) (currentControlledSessionRuntimeV1, error) {

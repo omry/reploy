@@ -56,18 +56,29 @@ func RuntimePlansV1(document blueprint.Document, dockerPlan DockerExecutionPlan)
 	}
 	for _, name := range commandNames {
 		command := document.Environment.Commands[name]
+		commandDockerPlan, err := effectiveCommandDockerPlanV1(document, dockerPlan, name)
+		if err != nil {
+			return nil, err
+		}
+		commandMounts, err := runtimeMountsV1(commandDockerPlan)
+		if err != nil {
+			return nil, err
+		}
+		commandWithHome := appendRuntimeMountV1(commandMounts, deploy.RuntimeMountV1{
+			Destination: temporaryHomeForPlan(commandDockerPlan), SourceKind: deploy.RuntimeMountSourceGenerated,
+		})
 		output, err := runtimeCommandOutputV1(document, name)
 		if err != nil {
 			return nil, err
 		}
 		executables := []providers.QualifiedOutput{output}
 		plans = append(plans, deploy.RuntimePlanV1{
-			ID: runtimeCommandPlanID(name, false), InboundTCP: []string{}, Mounts: cloneRuntimeMountsV1(withHome), Executables: executables,
+			ID: runtimeCommandPlanID(name, false), InboundTCP: []string{}, Mounts: cloneRuntimeMountsV1(commandWithHome), Executables: executables,
 		})
 		if command.NativeCommand || command.DeployedCommand {
 			plans = append(plans, deploy.RuntimePlanV1{
 				ID: runtimeCommandPlanID(name, true), InboundTCP: []string{},
-				Mounts: appendRuntimeMountV1(withHome, deploy.RuntimeMountV1{
+				Mounts: appendRuntimeMountV1(commandWithHome, deploy.RuntimeMountV1{
 					Destination: runtimeOutputRoot, SourceKind: deploy.RuntimeMountSourceDirectory,
 				}),
 				Executables: executables,
