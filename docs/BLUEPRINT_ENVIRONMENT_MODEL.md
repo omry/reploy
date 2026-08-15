@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-08
+updated: 2026-08-16
 summary: Normative blueprint environment, workload, application, provider contribution, lifecycle, and Docker rendering model.
 supersedes: docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md
 ---
@@ -999,6 +999,82 @@ local source or upstream-version form that it cannot materialize.
 
 The same application/package ownership model can be extended to other build
 and packaging systems later.
+
+## Embedded Built-In Tools
+
+Until the portable-tool repository is implemented, Reploy ships a deliberately
+small catalog of reviewed tool definitions inside the binary. These definitions
+are versioned implementation data, not a general repository or an extension
+point. Changing one requires a new Reploy binary. Runtime tools contribute their
+selected definition-closure digest to provider identity.
+
+The concrete catalog structure, exact target tuple, acquisition composition,
+and selected-closure identity are specified by the
+[Portable Tool Definition Design](PORTABLE_TOOL_DEFINITION_DESIGN.md). This
+section defines the user-facing blueprint behavior and current support surface.
+
+The initial runtime tool is Playwright 1.61.0 with its Python binding and
+Chromium selection:
+
+```yaml
+environment:
+  base:
+    image: python:3.13-slim-bookworm
+    exports:
+      python:
+        executable: /usr/local/bin/python
+  applications:
+    application:
+      packages:
+        tools:
+          - tool: playwright
+            version: "1.61.0"
+            binding: python
+            select: [chromium]
+```
+
+All four request fields are required. The embedded definition declares the
+complete Python requirement roots (`playwright==1.61.0`, `pyee>=13,<14`, and
+`greenlet>=3.1.1,<4.0.0`), pins the exact Linux AMD64 Playwright wheel, and
+records its bundled Node.js 24.17.0 and `playwright-core`
+1.61.1-beta-1782139630000 constituents. The Python provider resolves the
+declared closure and rejects a Playwright wheel whose filename, tags, size, or
+SHA-256 digest differs from the definition.
+
+Each supported target is exact to the platform, `/etc/os-release` `ID` and
+`VERSION_ID`, native package architecture, and package manager. Reploy does not
+infer a target from the image tag and does not merge package lists across OS
+generations. Providers select one exact target after observing the base image,
+and retain the selected definition closure in locked provider identity. Shared
+tool, release, binding, and payload records may be reused explicitly; target
+leaves retain only the compatibility and package data specific to their exact
+OS and architecture.
+
+The reviewed native Chromium dependencies are also definition-owned. The
+`chromium` selection includes Playwright's coupled full Chromium, Chromium
+Headless Shell, and FFmpeg payloads. Reploy acquires their exact revisions,
+verifies their sizes and SHA-256 digests, then materializes them with networking
+disabled. Neither resolution nor materialization invokes `playwright install`
+or `playwright install-deps`. The final image sets
+`PLAYWRIGHT_BROWSERS_PATH` to the Reploy-owned browser directory and disables
+Playwright's browser download and garbage-collection behavior. The application
+continues to run as the configured non-root runtime user.
+
+This built-in definition supports Debian 12 (`bookworm`), Ubuntu 25.10
+(`questing`), and Ubuntu 26.04 LTS (`resolute`) on `linux/amd64`, with the
+Python binding and `chromium` selection. Other versions, bindings, browsers,
+operating systems, or architectures fail before artifact acquisition. Ubuntu
+targets own their `t64` package names independently from Debian. The prebuilt
+Microsoft Playwright image is neither required nor used.
+
+The existing local-source `tool:java` build requirement is also defined in the
+embedded catalog for Debian 12, Debian 13, Ubuntu 25.10, and Ubuntu 26.04. Its
+ownership behavior is unchanged: it contributes Java only to the isolated
+source builder and does not add Java to the application runtime. The current
+WIP uses each distribution's default JRE package; that is transitional because
+it maps one tool request to different Java versions. The versioned definition
+model requires an explicit Java upstream version before this becomes a stable
+support contract.
 
 ## Possible Shape
 
