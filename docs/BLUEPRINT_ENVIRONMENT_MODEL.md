@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-08
+updated: 2026-08-16
 summary: Normative blueprint environment, workload, application, provider contribution, lifecycle, and Docker rendering model.
 supersedes: docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md
 ---
@@ -999,6 +999,90 @@ local source or upstream-version form that it cannot materialize.
 
 The same application/package ownership model can be extended to other build
 and packaging systems later.
+
+## Proposed Embedded Built-In Tools
+
+This section describes the support surface proposed for the embedded
+portable-tool implementation. The current blueprint schema does not yet accept
+`packages.tools`; the example and behavior below become normative only when
+that implementation lands.
+
+Until the portable-tool repository is implemented, Reploy will ship a
+deliberately small catalog of reviewed tool definitions inside the binary.
+These definitions will be versioned implementation data, not a general
+repository or an extension point. Changing one will require a new Reploy
+binary. Runtime tools will contribute their selected definition-closure digest
+to provider identity.
+
+The concrete catalog structure, exact target tuple, acquisition composition,
+and selected-closure identity are specified by the
+[Portable Tool Definition Design](PORTABLE_TOOL_DEFINITION_DESIGN.md). This
+section defines the proposed user-facing blueprint behavior and support
+surface.
+
+The initial runtime tool will be Playwright 1.61.0 with its Python binding and
+Chromium selection:
+
+```yaml
+environment:
+  base:
+    image: python:3.13-slim-bookworm
+    exports:
+      python:
+        executable: /usr/local/bin/python
+  applications:
+    application:
+      packages:
+        tools:
+          # Proposed; not accepted by the current blueprint schema.
+          - tool: playwright
+            version: "1.61.0"
+            binding: python
+            select: [chromium]
+```
+
+All four request fields will be required. The embedded definition will declare
+the complete Python requirement roots (`playwright==1.61.0`, `pyee>=13,<14`,
+and `greenlet>=3.1.1,<4.0.0`), pin the exact Linux AMD64 Playwright wheel, and
+record its bundled Node.js 24.17.0 and `playwright-core`
+1.61.1-beta-1782139630000 constituents. The Python provider will resolve the
+declared closure and reject a Playwright wheel whose filename, tags, size, or
+SHA-256 digest differs from the definition.
+
+Each supported target will be exact to the platform, `/etc/os-release` `ID` and
+`VERSION_ID`, native package architecture, and package manager. Reploy will not
+infer a target from the image tag or merge package lists across OS generations.
+Providers will select one exact target after observing the base image and retain
+the selected definition closure in locked provider identity. Shared tool,
+release, binding, and payload records may be reused explicitly; target leaves
+will retain only the compatibility and package data specific to their exact OS
+and architecture.
+
+The reviewed native Chromium dependencies will also be definition-owned. The
+`chromium` selection will include Playwright's coupled full Chromium, Chromium
+Headless Shell, and FFmpeg payloads. Reploy will acquire their exact revisions,
+verify their sizes and SHA-256 digests, then materialize them with networking
+disabled. Neither resolution nor materialization will invoke `playwright
+install` or `playwright install-deps`. The final image will set
+`PLAYWRIGHT_BROWSERS_PATH` to the Reploy-owned browser directory and disable
+Playwright's browser download and garbage-collection behavior. The application
+will continue to run as the configured non-root runtime user.
+
+This built-in definition will support Debian 12 (`bookworm`), Ubuntu 25.10
+(`questing`), and Ubuntu 26.04 LTS (`resolute`) on `linux/amd64`, with the
+Python binding and `chromium` selection. Other versions, bindings, browsers,
+operating systems, or architectures will fail before artifact acquisition.
+Ubuntu targets will own their `t64` package names independently from Debian.
+The prebuilt Microsoft Playwright image will be neither required nor used.
+
+The existing local-source `tool:java` build requirement will also be defined in
+the embedded catalog for Debian 12, Debian 13, Ubuntu 25.10, and Ubuntu 26.04.
+Its ownership behavior will remain unchanged: it will contribute Java only to
+the isolated source builder and will not add Java to the application runtime.
+The planned bridge will use each distribution's default JRE package; that is
+transitional because it maps one tool request to different Java versions. The
+versioned definition model requires an explicit Java upstream version before
+this becomes a stable support contract.
 
 ## Possible Shape
 
