@@ -1,0 +1,2 @@
+kind: Fixed
+body: Render systemd directive values safely and reject unrepresentable executable paths so system-scope installations start reliably.
