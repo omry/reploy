@@ -195,6 +195,11 @@ type Command struct {
 	ForwardFlags    []string
 	Argv            []string
 	Order           []ArgumentSegment
+	Mounts          map[string]CommandMountOverride `json:",omitempty"`
+}
+
+type CommandMountOverride struct {
+	Writable bool
 }
 
 func (environment Environment) ResolveExecutableProfile(reference string) (string, Executable, bool) {

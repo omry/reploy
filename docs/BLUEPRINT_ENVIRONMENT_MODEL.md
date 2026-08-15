@@ -272,6 +272,45 @@ transient container is removed when the command exits. Selecting a command as
 `environment.workload.command` is the only operation that promotes it to the
 persistent container entrypoint.
 
+A command may sparsely override writability for an existing named environment
+mount without changing the environment contract:
+
+```yaml
+environment:
+  mounts:
+    config:
+      target: /deployment
+      update_policy: preserve
+  commands:
+    bootstrap:
+      executable: application.server
+      trigger: [bootstrap]
+      native_command: true
+      argv: [bootstrap]
+      mounts:
+        config:
+          writable: true
+```
+
+Each `commands.<name>.mounts.<mount>` entry requires exactly one explicit
+boolean `writable` field. The mount must already exist in
+`environment.mounts`; source, target, backend mode, and update policy remain
+environment- and backend-owned. Both writable upgrades and read-only downgrades
+are supported. An omitted or empty command mount map leaves the environment
+permissions unchanged.
+
+The effective permissions apply to every transient execution of that command,
+including native, lifecycle, output-producing, and controlled-session
+controller containers. They do not apply when the same command is selected as
+the persistent workload entrypoint, and they never mutate the workload or shell
+plan. A read-only workload may therefore remain active while a command mounts
+the same storage writable. Read-only prevents workload writes but does not
+snapshot the storage: the workload may observe concurrent file changes, and an
+application that requires a stopped service must place mutation in an
+appropriate lifecycle boundary or perform an explicit stop/restart. Atomic file
+replacement is the application-level way to avoid partial reads while the
+service remains active.
+
 Standard output, standard error, and the exit status are the normal one-shot
 results. A caller that needs files may select one explicit output contract.
 `reploy app --output-dir DIR COMMAND` mounts the caller-selected host directory
@@ -363,9 +402,18 @@ schema error; multi-service composition is intentionally out of scope.
 shell sessions may overlap within one deployment. Its values are `yes`, `no`,
 and `auto`; omission means `auto`. `yes` permits overlap, `no` serializes every
 run, and `auto` permits overlap only when every shared environment mount in the
-effective run plans is read-only. Private per-run home storage and the hidden
+effective per-command run plan is read-only. A command mount writability
+override participates in this calculation. A command with any effective
+writable mount is exclusive in both directions: it waits for already-active
+read-only commands, and read-only commands wait while it is active. Private
+per-run home storage and the hidden
 atomic staging used by `--output-file` are not shared writable mounts.
 `--output-dir` is a writable shared mount and therefore makes `auto` exclusive.
+
+The persistent workload is not a live-command queue participant. Its read-only
+mount neither blocks commands nor becomes writable when a mutating command is
+admitted; the two containers may access the same underlying storage
+concurrently under their independently rendered permissions.
 
 An exclusive run fails immediately when another run is active or waiting unless
 the caller passes `--wait`. The short error identifies the policy and
@@ -1038,6 +1086,16 @@ environment:
       deployed_command: true
       forward_flags: [--live]
       argv: [config, check]
+
+    config_init:
+      executable: application.arbiter_server
+      trigger: [config, init]
+      native_command: true
+      deployed_command: true
+      argv: [config, init]
+      mounts:
+        config:
+          writable: true
 
   workload:
     command: server

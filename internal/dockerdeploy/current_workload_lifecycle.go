@@ -137,12 +137,16 @@ func runCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLif
 	runOptions.Context = ctx
 	executor := LifecycleExecutor{
 		RunCommand: func(commandCtx context.Context, command ResolvedEnvironmentCommand) error {
-			invocation, err := CommandRuntimeInvocationV1(input.Plan.Docker, command.Name, nil)
+			commandPlan, err := effectiveCommandDockerPlanV1(input.Plan.Document, input.Plan.Docker, command.Name)
+			if err != nil {
+				return err
+			}
+			invocation, err := CommandRuntimeInvocationV1(commandPlan, command.Name, nil)
 			if err != nil {
 				return err
 			}
 			return runPublished(commandCtx, invocation, func(runCtx context.Context, gated CurrentBuild) error {
-				spec, err := backend.transient(input.Plan.Docker, command, nil, false, false)
+				spec, err := backend.transient(commandPlan, command, nil, false, false)
 				if err != nil {
 					return err
 				}

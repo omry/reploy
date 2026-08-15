@@ -217,7 +217,15 @@ func runCurrentControlledSessionV1(
 		result.ControllerOutput = status
 		err = errors.Join(err, outputErr)
 	}()
-	controllerConcurrency, err := backend.concurrency(controller.plan.Document, controller.plan.Docker, output.mount)
+	controllerCommandPlan, err := effectiveCommandDockerPlanV1(
+		controller.plan.Document,
+		controller.plan.Docker,
+		input.ControllerCommand,
+	)
+	if err != nil {
+		return result, fmt.Errorf("plan controlled-session controller mounts: %w", err)
+	}
+	controllerConcurrency, err := backend.concurrency(controller.plan.Document, controllerCommandPlan, output.mount)
 	if err != nil {
 		return result, fmt.Errorf("plan controlled-session controller concurrency: %w", err)
 	}

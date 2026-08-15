@@ -111,6 +111,16 @@ func TestDecodeRejectsEnvironmentExecutablesAlias(t *testing.T) {
 	}
 }
 
+func TestDecodeRejectsCommandMountAuthorityExpansion(t *testing.T) {
+	value := strings.Replace(minimalBlueprint,
+		"    serve:\n      executable: application.server\n      argv: [serve]\n",
+		"    serve:\n      executable: application.server\n      argv: [serve]\n      mounts:\n        data:\n          writable: true\n          target: /other\n", 1)
+	_, err := Decode([]byte(value))
+	if err == nil || !strings.Contains(err.Error(), "field target not found") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestDecodeRejectsExecutableComponentField(t *testing.T) {
 	value := strings.Replace(minimalBlueprint, "          binary: demo-server", "          component: application\n          binary: demo-server", 1)
 	_, err := Decode([]byte(value))

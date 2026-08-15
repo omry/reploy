@@ -118,13 +118,18 @@ type ExecutableSyntax struct {
 }
 
 type CommandSyntax struct {
-	Executable      string   `yaml:"executable"`
-	Trigger         []string `yaml:"trigger"`
-	NativeCommand   any      `yaml:"native_command"`
-	DeployedCommand any      `yaml:"deployed_command"`
-	ForwardFlags    []string `yaml:"forward_flags"`
-	Argv            []string `yaml:"argv"`
-	Order           []string `yaml:"order"`
+	Executable      string                        `yaml:"executable"`
+	Trigger         []string                      `yaml:"trigger"`
+	NativeCommand   any                           `yaml:"native_command"`
+	DeployedCommand any                           `yaml:"deployed_command"`
+	ForwardFlags    []string                      `yaml:"forward_flags"`
+	Argv            []string                      `yaml:"argv"`
+	Order           []string                      `yaml:"order"`
+	Mounts          map[string]CommandMountSyntax `yaml:"mounts"`
+}
+
+type CommandMountSyntax struct {
+	Writable any `yaml:"writable"`
 }
 
 type WorkloadSyntax struct {

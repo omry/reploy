@@ -147,7 +147,7 @@ func planProviderInstallationV1(ctx context.Context, input providerInstallPlanni
 	}
 	plan := providerInstallationPlanV1{
 		Installation: installation, ControlScript: document.Environment.ControlScript,
-		Docker: dockerPlan, Rendered: rendered,
+		Document: document, Docker: dockerPlan, Rendered: rendered,
 		PathUpdates: pathUpdates, PreservePaths: preservePaths,
 		AfterInstall: afterInstall, Start: start, Backend: backend,
 	}
