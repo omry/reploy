@@ -17,7 +17,7 @@ func TestPythonLocalOverridesV1ExtractsSortedLocatorsWithoutFilesystemReads(t *t
 		Providers: map[string]map[string]deploy.ResolvedPackageOverrideChoiceV1{
 			"python": {
 				"other":    {Version: "2.0"},
-				"demo-pkg": {Path: missing},
+				"demo-pkg": {Path: missing, Exclude: []string{"recordings/.omegaflow"}},
 			},
 		},
 	}
@@ -25,7 +25,10 @@ func TestPythonLocalOverridesV1ExtractsSortedLocatorsWithoutFilesystemReads(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []PythonLocalOverrideV1{{Distribution: "demo-pkg", HostDir: missing}}
+	want := []PythonLocalOverrideV1{{
+		Distribution: "demo-pkg", HostDir: missing,
+		Exclude: []string{"recordings/.omegaflow"},
+	}}
 	if !reflect.DeepEqual(overrides, want) {
 		t.Fatalf("local overrides = %#v, want %#v", overrides, want)
 	}
@@ -40,8 +43,14 @@ func TestObserveSelectedPythonLocalSourcesDoesNotReadUnselectedPaths(t *testing.
 	if err := os.WriteFile(filepath.Join(selected, "pyproject.toml"), []byte("[project]\nname='demo'\nversion='1.0'\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Mkdir(filepath.Join(selected, "generated"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(selected, "generated", "state"), []byte("state"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	overrides := []PythonLocalOverrideV1{
-		{Distribution: "demo", HostDir: selected},
+		{Distribution: "demo", HostDir: selected, Exclude: []string{"generated"}},
 		{Distribution: "unused", HostDir: filepath.Join(root, "missing")},
 	}
 	sources, err := ObserveSelectedPythonLocalSources(overrides, []string{"demo"})
@@ -49,8 +58,14 @@ func TestObserveSelectedPythonLocalSourcesDoesNotReadUnselectedPaths(t *testing.
 		t.Fatal(err)
 	}
 	if len(sources) != 1 || sources[0].Distribution != "demo" ||
-		sources[0].HostDir != selected || len(sources[0].Manifest.Entries) == 0 {
+		sources[0].HostDir != selected || len(sources[0].Manifest.Entries) == 0 ||
+		!reflect.DeepEqual(sources[0].Manifest.Exclude, []string{"generated"}) {
 		t.Fatalf("local sources = %#v", sources)
+	}
+	for _, entry := range sources[0].Manifest.Entries {
+		if entry.Path == "generated" || strings.HasPrefix(entry.Path, "generated/") {
+			t.Fatalf("selected source retained excluded path: %#v", entry)
+		}
 	}
 }
 
@@ -175,5 +190,53 @@ func TestObservePythonSourceManifestCanonicalizesDepthFirstTraversal(t *testing.
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("manifest paths = %#v, want %#v", got, want)
+	}
+}
+
+func TestObservePythonSourceManifestAppliesExactExclusionsAndBindsIntent(t *testing.T) {
+	sourceDir := t.TempDir()
+	for name, content := range map[string]string{
+		"pyproject.toml":                   "[build-system]\n",
+		"recordings/keep.txt":              "keep\n",
+		"recordings/.omegaflow/state.json": "generated\n",
+	} {
+		filename := filepath.Join(sourceDir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filename, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	manifest, digest, err := ObservePythonSourceManifestWithExclusions(
+		sourceDir, []string{"recordings/.omegaflow"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(manifest.Exclude, []string{"recordings/.omegaflow"}) {
+		t.Fatalf("manifest exclusions = %#v", manifest.Exclude)
+	}
+	for _, entry := range manifest.Entries {
+		if entry.Path == "recordings/.omegaflow" || strings.HasPrefix(entry.Path, "recordings/.omegaflow/") {
+			t.Fatalf("excluded source entry was observed: %#v", entry)
+		}
+	}
+	withoutIntent, withoutIntentDigest, err := ObservePythonSourceManifestWithExclusions(
+		sourceDir, []string{"missing-generated-state"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, baselineDigest, err := ObservePythonSourceManifest(sourceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(withoutIntent.Entries, baseline.Entries) {
+		t.Fatalf("nonexistent exclusion changed selected entries: %#v / %#v", withoutIntent.Entries, baseline.Entries)
+	}
+	if withoutIntentDigest == baselineDigest || digest == baselineDigest {
+		t.Fatal("source exclusion intent did not participate in the source-input digest")
 	}
 }
