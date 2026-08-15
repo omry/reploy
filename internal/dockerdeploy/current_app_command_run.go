@@ -147,6 +147,10 @@ func runCurrentAppCommandV1(ctx context.Context, input CurrentAppCommandRunInput
 	if err != nil {
 		return err
 	}
+	commandDockerPlan, err := effectiveCommandDockerPlanV1(planned.Document, planned.Docker, command.Name)
+	if err != nil {
+		return err
+	}
 	output, err := backend.prepareOutput(input.OutputDir, input.OutputFile, planned.Docker.Sandbox.RuntimeUser)
 	if err != nil {
 		return err
@@ -160,11 +164,11 @@ func runCurrentAppCommandV1(ctx context.Context, input CurrentAppCommandRunInput
 		}
 		return cause
 	}
-	invocation, err := backend.invocation(planned.Docker, command.Name, output.mount)
+	invocation, err := backend.invocation(commandDockerPlan, command.Name, output.mount)
 	if err != nil {
 		return abort(err)
 	}
-	concurrency, err := backend.concurrency(document, planned.Docker, output.mount)
+	concurrency, err := backend.concurrency(planned.Document, commandDockerPlan, output.mount)
 	if err != nil {
 		return abort(err)
 	}
@@ -218,7 +222,7 @@ func runCurrentAppCommandV1(ctx context.Context, input CurrentAppCommandRunInput
 			))
 		}
 		interactive := runOptions.Stdin != nil
-		execution, err := backend.execution(planned.Docker, command, output.mount, runID, interactive, interactive && input.TTY)
+		execution, err := backend.execution(commandDockerPlan, command, output.mount, runID, interactive, interactive && input.TTY)
 		if err != nil {
 			return removeAdmittedTransientBeforeCreateV1(operation, runID, err)
 		}

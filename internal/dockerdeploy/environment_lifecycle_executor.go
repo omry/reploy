@@ -4,19 +4,24 @@ import (
 	"context"
 	"io"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 )
 
-func environmentLifecycleExecutor(options RuntimeOptions, plan DockerExecutionPlan, policy deploy.RuntimePolicyV1, stdout io.Writer, stderr io.Writer) LifecycleExecutor {
+func environmentLifecycleExecutor(options RuntimeOptions, document blueprint.Document, plan DockerExecutionPlan, policy deploy.RuntimePolicyV1, stdout io.Writer, stderr io.Writer) LifecycleExecutor {
 	return LifecycleExecutor{
 		RunCommand: func(ctx context.Context, command ResolvedEnvironmentCommand) error {
-			if err := validateLifecycleRuntimeHostSourcesV1(policy, plan, command.Name); err != nil {
+			commandPlan, err := effectiveCommandDockerPlanV1(document, plan, command.Name)
+			if err != nil {
+				return err
+			}
+			if err := validateLifecycleRuntimeHostSourcesV1(policy, commandPlan, command.Name); err != nil {
 				return err
 			}
 			if _, err := preparePrivateWorkloadEnvironmentV1(options.Dir); err != nil {
 				return err
 			}
-			spec, err := TransientCommandSpec(plan, command, nil, false, false)
+			spec, err := TransientCommandSpec(commandPlan, command, nil, false, false)
 			if err != nil {
 				return err
 			}

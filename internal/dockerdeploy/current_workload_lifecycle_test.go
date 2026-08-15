@@ -34,7 +34,10 @@ func TestRunCurrentWorkloadLifecycleV1GatesEveryCreatedContainer(t *testing.T) {
 	backend := currentWorkloadLifecycleTestBackend(t, lifecycle, &order)
 	err = runCurrentWorkloadLifecycleV1(t.Context(), CurrentWorkloadLifecycleInputV1{
 		Operation: operation, Environment: "demo", DeploymentDir: dir, Action: "up",
-		Plan: CurrentRuntimePlanV1{Docker: DockerExecutionPlan{ContainerName: "demo"}},
+		Plan: CurrentRuntimePlanV1{
+			Document: blueprint.Document{Environment: blueprint.Environment{Commands: map[string]blueprint.Command{"check": {}}}},
+			Docker:   DockerExecutionPlan{ContainerName: "demo"},
+		},
 	}, backend)
 	if err != nil {
 		t.Fatal(err)
@@ -48,6 +51,52 @@ func TestRunCurrentWorkloadLifecycleV1GatesEveryCreatedContainer(t *testing.T) {
 	}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("lifecycle order = %v, want %v", order, want)
+	}
+}
+
+func TestRunCurrentWorkloadLifecycleV1UsesEffectiveCommandMounts(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = operation.Unlock() })
+	command := ResolvedEnvironmentCommand{Name: "check", Argv: []string{"/opt/check"}}
+	lifecycle := LifecyclePlan{Operations: []LifecycleOperation{{Kind: LifecycleCommand, Event: "before_start", Command: &command}}}
+	order := []string{}
+	backend := currentWorkloadLifecycleTestBackend(t, lifecycle, &order)
+	basePlan := DockerExecutionPlan{
+		ContainerName: "demo",
+		Mounts: []MountExecutionPlan{{
+			Name: "config", Mode: blueprint.MountManagedBind, Source: t.TempDir(),
+			SourceKind: deploy.RuntimeMountSourceDirectory, Target: "/config", ReadOnly: true,
+		}},
+	}
+	backend.runPublished = func(ctx context.Context, input PublishedRuntimeContainerInput, run PublishedRuntimeContainerRunnerV1) error {
+		order = append(order, "gate "+input.Invocation.PlanID)
+		if !input.DockerPlan.Mounts[0].ReadOnly || len(input.Invocation.Sources) != 1 || input.Invocation.Sources[0].ReadOnly {
+			t.Fatalf("published plan = %#v, sources = %#v", input.DockerPlan.Mounts, input.Invocation.Sources)
+		}
+		return run(ctx, CurrentBuild{})
+	}
+	backend.transient = func(plan DockerExecutionPlan, command ResolvedEnvironmentCommand, _ *transientOutputMount, _ bool, _ bool) (CommandSpec, error) {
+		order = append(order, "transient "+command.Name)
+		if plan.Mounts[0].ReadOnly {
+			t.Fatalf("transient plan = %#v", plan.Mounts)
+		}
+		return CommandSpec{Name: "transient"}, nil
+	}
+	err = runCurrentWorkloadLifecycleV1(t.Context(), CurrentWorkloadLifecycleInputV1{
+		Operation: operation, Environment: "demo", DeploymentDir: dir, Action: "up",
+		Plan: CurrentRuntimePlanV1{
+			Document: blueprint.Document{Environment: blueprint.Environment{Commands: map[string]blueprint.Command{
+				"check": {Mounts: map[string]blueprint.CommandMountOverride{"config": {Writable: true}}},
+			}}},
+			Docker: basePlan,
+		},
+	}, backend)
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -103,7 +152,10 @@ func TestRunCurrentWorkloadLifecycleV1RejectsMasksChangedByBeforeStart(t *testin
 	}
 	err = runCurrentWorkloadLifecycleV1(t.Context(), CurrentWorkloadLifecycleInputV1{
 		Operation: operation, Environment: "demo", DeploymentDir: deploymentDir, Action: "up",
-		Plan:                CurrentRuntimePlanV1{Docker: plan},
+		Plan: CurrentRuntimePlanV1{
+			Document: blueprint.Document{Environment: blueprint.Environment{Commands: map[string]blueprint.Command{"prepare": {}}}},
+			Docker:   plan,
+		},
 		PrivateRuntimeMasks: masks,
 	}, backend)
 	if err == nil || !strings.Contains(err.Error(), "runtime bind sources changed after runtime inputs were rendered") {

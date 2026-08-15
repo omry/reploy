@@ -49,6 +49,66 @@ func TestRunCurrentAppCommandV1OrdersStaleCheckOutputGateAndContainer(t *testing
 	}
 }
 
+func TestRunCurrentAppCommandV1UsesEffectiveMountsForAdmissionAndExecution(t *testing.T) {
+	dir := t.TempDir()
+	current, _ := runtimeCurrentBuildFixture(t)
+	planned := CurrentRuntimePlanV1{
+		Document: blueprint.Document{Environment: blueprint.Environment{
+			AllowConcurrent: blueprint.ConcurrentRunAuto,
+			Commands: map[string]blueprint.Command{"export": {
+				Mounts: map[string]blueprint.CommandMountOverride{"config": {Writable: true}},
+			}},
+		}},
+		Docker: DockerExecutionPlan{
+			ContainerName: "demo",
+			Mounts:        []MountExecutionPlan{{Name: "config", Target: "/config", ReadOnly: true}},
+		},
+	}
+	order := []string{}
+	backend := currentAppCommandRunTestBackend(t, dir, current, planned, &order)
+	assertWritable := func(stage string, plan DockerExecutionPlan) {
+		t.Helper()
+		if len(plan.Mounts) != 1 || plan.Mounts[0].ReadOnly {
+			t.Fatalf("%s plan = %#v", stage, plan.Mounts)
+		}
+	}
+	backend.invocation = func(plan DockerExecutionPlan, _ string, _ *transientOutputMount) (RuntimeInvocationV1, error) {
+		order = append(order, "invocation")
+		assertWritable("invocation", plan)
+		return RuntimeInvocationV1{PlanID: runtimeCommandPlanID("export", true)}, nil
+	}
+	backend.concurrency = func(document blueprint.Document, plan DockerExecutionPlan, output *transientOutputMount) (LiveRunConcurrencyDecisionV1, error) {
+		order = append(order, "concurrency")
+		assertWritable("concurrency", plan)
+		return PlanLiveRunConcurrencyV1(document, plan, output)
+	}
+	backend.await = func(_ context.Context, _ string, operation *deploy.OperationLock, candidate deploy.LiveRunV1, _ bool, _ io.Writer) (*deploy.OperationLock, error) {
+		order = append(order, "admit")
+		if !candidate.Exclusive || candidate.WritableMount != "config" || !reflect.DeepEqual(candidate.WritablePaths, []string{"/config"}) {
+			t.Fatalf("candidate = %#v", candidate)
+		}
+		return operation, nil
+	}
+	backend.runPublished = func(ctx context.Context, input PublishedRuntimeContainerInput, run PublishedRuntimeContainerRunnerV1) error {
+		order = append(order, "final gate")
+		if len(input.DockerPlan.Mounts) != 1 || !input.DockerPlan.Mounts[0].ReadOnly {
+			t.Fatalf("published base plan = %#v", input.DockerPlan.Mounts)
+		}
+		return run(ctx, current)
+	}
+	backend.execution = func(plan DockerExecutionPlan, _ ResolvedEnvironmentCommand, _ *transientOutputMount, _ string, _ bool, _ bool) (TransientContainerExecutionV1, error) {
+		order = append(order, "execution")
+		assertWritable("execution", plan)
+		return TransientContainerExecutionV1{Container: "demo-run-0000000000000001"}, nil
+	}
+	if err := runCurrentAppCommandV1(t.Context(), CurrentAppCommandRunInputV1{
+		DeploymentDir: dir, Arguments: []string{"export"},
+		RunOptions: RunOptions{Stdin: strings.NewReader(""), Stdout: io.Discard},
+	}, backend); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunCurrentAppCommandV1DoesNotReserveOutputForStaleBuild(t *testing.T) {
 	dir := t.TempDir()
 	current, _ := runtimeCurrentBuildFixture(t)
@@ -196,6 +256,12 @@ func currentAppCommandRunTestBackend(
 	order *[]string,
 ) currentAppCommandRunBackendV1 {
 	t.Helper()
+	if planned.Document.Environment.Commands == nil {
+		planned.Document.Environment.Commands = map[string]blueprint.Command{}
+	}
+	if _, found := planned.Document.Environment.Commands["export"]; !found {
+		planned.Document.Environment.Commands["export"] = blueprint.Command{}
+	}
 	return currentAppCommandRunBackendV1{
 		acquire: func(ctx context.Context, got string) (*deploy.OperationLock, error) {
 			*order = append(*order, "acquire")

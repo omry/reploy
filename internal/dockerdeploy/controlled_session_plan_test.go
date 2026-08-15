@@ -391,7 +391,7 @@ func TestValidateControlledSessionExecutionPlanV1RejectsAuthorityAndCommandExpan
 
 func TestPlanControlledSessionV1RejectsStaleBuildInvalidDimensionsAndChannelOverlap(t *testing.T) {
 	input, backend := controlledSessionPlanFixtureV1(t)
-	backend.requireReady = func(CurrentBuild, CurrentRuntimePlanV1, string, *transientOutputMount) error {
+	backend.requireReady = func(CurrentBuild, CurrentRuntimePlanV1, DockerExecutionPlan, string, *transientOutputMount) error {
 		return errors.New("runtime build is missing or stale")
 	}
 	if _, err := planControlledSessionV1(input, backend); err == nil || !strings.Contains(err.Error(), "missing or stale") {
@@ -500,7 +500,7 @@ func TestValidateControlledSessionExecutionPlanV1RejectsSameDeploymentRoot(t *te
 func TestPlanControlledSessionV1UsesInvocationSpecificReadinessChecks(t *testing.T) {
 	input, backend := controlledSessionPlanFixtureV1(t)
 	var planIDs []string
-	backend.requireReady = func(_ CurrentBuild, _ CurrentRuntimePlanV1, planID string, _ *transientOutputMount) error {
+	backend.requireReady = func(_ CurrentBuild, _ CurrentRuntimePlanV1, _ DockerExecutionPlan, planID string, _ *transientOutputMount) error {
 		planIDs = append(planIDs, planID)
 		return nil
 	}
@@ -509,6 +509,37 @@ func TestPlanControlledSessionV1UsesInvocationSpecificReadinessChecks(t *testing
 	}
 	if !slices.Equal(planIDs, []string{runtimeCommandPlanID("inspect", false), runtimeShellPlanID}) {
 		t.Fatalf("readiness plan IDs = %#v", planIDs)
+	}
+}
+
+func TestPlanControlledSessionV1UsesControllerCommandMountOverrides(t *testing.T) {
+	input, backend := controlledSessionPlanFixtureV1(t)
+	input.ControllerRuntime.Docker.Mounts = []MountExecutionPlan{{
+		Name: "config", Mode: blueprint.MountVolume, Source: "controller-config",
+		SourceKind: deploy.RuntimeMountSourceGenerated, Target: "/config", ReadOnly: true,
+	}}
+	command := input.ControllerRuntime.Document.Environment.Commands["inspect"]
+	command.Mounts = map[string]blueprint.CommandMountOverride{"config": {Writable: true}}
+	input.ControllerRuntime.Document.Environment.Commands["inspect"] = command
+	input.ControllerCurrent.State.Blueprint = testResolvedBlueprintV1(t, input.ControllerRuntime.Document)
+
+	var readinessPlans []DockerExecutionPlan
+	backend.requireReady = func(_ CurrentBuild, _ CurrentRuntimePlanV1, sourcePlan DockerExecutionPlan, _ string, _ *transientOutputMount) error {
+		readinessPlans = append(readinessPlans, sourcePlan)
+		return nil
+	}
+	plan, err := planControlledSessionV1(input, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(readinessPlans) != 2 || readinessPlans[0].Mounts[0].ReadOnly {
+		t.Fatalf("readiness plans = %#v", readinessPlans)
+	}
+	if len(plan.Controller.Mounts) == 0 || plan.Controller.Mounts[0].Name != "config" || plan.Controller.Mounts[0].ReadOnly {
+		t.Fatalf("controller mounts = %#v", plan.Controller.Mounts)
+	}
+	if !input.ControllerRuntime.Docker.Mounts[0].ReadOnly {
+		t.Fatal("controller base plan was mutated")
 	}
 }
 
@@ -522,7 +553,7 @@ func TestPlanControlledSessionV1ExposesOutputOnlyToController(t *testing.T) {
 	input.controllerOutput = output
 	var readinessOutputs []*transientOutputMount
 	var readinessPlanIDs []string
-	backend.requireReady = func(_ CurrentBuild, _ CurrentRuntimePlanV1, planID string, got *transientOutputMount) error {
+	backend.requireReady = func(_ CurrentBuild, _ CurrentRuntimePlanV1, _ DockerExecutionPlan, planID string, got *transientOutputMount) error {
 		readinessPlanIDs = append(readinessPlanIDs, planID)
 		readinessOutputs = append(readinessOutputs, got)
 		return nil
@@ -641,7 +672,9 @@ func controlledSessionPlanFixtureV1(t *testing.T) (ControlledSessionPlanInputV1,
 		InitialColumns: 80, InitialRows: 24,
 	}
 	backend := controlledSessionPlanBackendV1{
-		requireReady: func(CurrentBuild, CurrentRuntimePlanV1, string, *transientOutputMount) error { return nil },
+		requireReady: func(CurrentBuild, CurrentRuntimePlanV1, DockerExecutionPlan, string, *transientOutputMount) error {
+			return nil
+		},
 		resolveCommand: func(_ blueprint.Document, _ CurrentBuild, _ DockerExecutionPlan, name string, arguments []string) (ResolvedEnvironmentCommand, error) {
 			return ResolvedEnvironmentCommand{Name: name, Native: true, Argv: append([]string{"/opt/controller", name}, arguments...)}, nil
 		},

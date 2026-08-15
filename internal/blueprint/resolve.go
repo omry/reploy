@@ -585,13 +585,48 @@ func resolveExecutablesAndCommands(source Syntax, document *Document) error {
 			}
 			triggerOwner[triggerKey] = name
 		}
+		mounts, err := resolveCommandMountOverrides(name, item.Mounts, document.Environment.Mounts)
+		if err != nil {
+			return err
+		}
 		document.Environment.Commands[name] = Command{
 			Executable: item.Executable, Trigger: append([]string(nil), item.Trigger...),
 			NativeCommand: native, DeployedCommand: deployed,
 			ForwardFlags: append([]string(nil), item.ForwardFlags...), Argv: append([]string(nil), item.Argv...), Order: order,
+			Mounts: mounts,
 		}
 	}
 	return nil
+}
+
+func resolveCommandMountOverrides(
+	commandName string,
+	source map[string]CommandMountSyntax,
+	environmentMounts map[string]EnvironmentMount,
+) (map[string]CommandMountOverride, error) {
+	if len(source) == 0 {
+		return nil, nil
+	}
+	field := "environment.commands." + commandName + ".mounts"
+	result := make(map[string]CommandMountOverride, len(source))
+	for _, name := range sortedKeys(source) {
+		if err := validateObjectName(field, name); err != nil {
+			return nil, err
+		}
+		if _, found := environmentMounts[name]; !found {
+			return nil, fmt.Errorf("%s.%s references unknown environment mount %q", field, name, name)
+		}
+		item := source[name]
+		if item.Writable == nil {
+			return nil, fmt.Errorf("%s.%s.writable is required", field, name)
+		}
+		writable, err := resolveSyntaxBool(item.Writable, field+"."+name+".writable")
+		if err != nil {
+			return nil, err
+		}
+		result[name] = CommandMountOverride{Writable: writable}
+	}
+	return result, nil
 }
 
 func resolveWorkloads(source Syntax, extended extendedSyntax, document *Document) error {

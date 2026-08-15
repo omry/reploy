@@ -1,0 +1,2 @@
+kind: Added
+body: Allow individual environment commands to override writability for existing named mounts without weakening workload permissions.

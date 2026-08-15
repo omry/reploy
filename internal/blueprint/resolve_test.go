@@ -573,6 +573,55 @@ func TestResolveRejectsInvalidReadinessAndCommandExposure(t *testing.T) {
 	}
 }
 
+func TestResolveCommandMountWritabilityOverrides(t *testing.T) {
+	value := strings.Replace(minimalBlueprint,
+		"    serve:\n      executable: application.server\n      argv: [serve]\n",
+		"    serve:\n      executable: application.server\n      argv: [serve]\n      mounts:\n        data:\n          writable: false\n", 1)
+	source, err := Decode([]byte(value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := Resolve(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	override := document.Environment.Commands["serve"].Mounts["data"]
+	if override.Writable {
+		t.Fatalf("command mount override = %#v", override)
+	}
+}
+
+func TestResolveRejectsInvalidCommandMountOverrides(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		mount    string
+		writable string
+		want     string
+	}{
+		{name: "unknown mount", mount: "missing", writable: "true", want: `references unknown environment mount "missing"`},
+		{name: "missing writable", mount: "data", want: "writable is required"},
+		{name: "non-boolean writable", mount: "data", writable: "sometimes", want: "must resolve to a boolean"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			entry := "        " + test.mount + ":\n"
+			if test.writable != "" {
+				entry += "          writable: " + test.writable + "\n"
+			}
+			value := strings.Replace(minimalBlueprint,
+				"    serve:\n      executable: application.server\n      argv: [serve]\n",
+				"    serve:\n      executable: application.server\n      argv: [serve]\n      mounts:\n"+entry, 1)
+			source, err := Decode([]byte(value))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = Resolve(source)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestResolveRejectsDuplicateMountReferenceThatLeavesPathUnmapped(t *testing.T) {
 	value := strings.Replace(minimalBlueprint,
 		"    data:\n      target: /data\n      writable: true\n      update_policy: preserve\n",
