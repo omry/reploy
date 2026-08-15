@@ -1,6 +1,6 @@
 {
   "id": "demo",
-  "control_script": "demo",
+  "control_script": "appctl",
   "component": {
     "Type": "python",
     "Base": null,

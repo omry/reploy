@@ -36,7 +36,7 @@ environment:
 ```yaml
 environment:
   id: example                 # Required stable environment name.
-  control_script: example     # Optional generated command name; defaults to id.
+  control_script: customctl   # Optional generated command override; defaults to appctl.
   vars: {}                    # Values used by blueprint interpolation.
   base:                       # Required base image root.
     image: debian:13          # Required OCI image reference.

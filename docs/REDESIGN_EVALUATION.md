@@ -367,7 +367,7 @@ explicit opt-in later.
 
 **State:** complete; implemented and reviewed.
 
-The app-named control command now appears at stage time. It locates the
+The deployment control command now appears at stage time. It locates the
 stage-owned runtime at `.reploy/bin/reploy` relative to the command itself, so
 moving the complete staging directory does not introduce an external executable
 or workspace dependency. Each user-managed staging directory owns one runtime
@@ -377,7 +377,7 @@ copy; `stage --update` refreshes it when Reploy changes.
 
 **Implemented ownership and lifecycle:**
 
-- stage creates the app-named wrapper and embedded runtime without building;
+- stage creates the deployment wrapper and embedded runtime without building;
 - a private canonical manifest tracks generated paths and content identities;
 - update refreshes changed generated files and removes an obsolete renamed
   wrapper only while it still matches the managed identity;
@@ -390,7 +390,7 @@ copy; `stage --update` refreshes it when Reploy changes.
 
 **Verification evidence:**
 
-- a moved staging directory retains a working app-named control command;
+- a moved staging directory retains a working deployment control command;
 - no external workspace path is required;
 - staged and installed help share the intended command model; and
 - stage, rebuild, and cleanup update or remove the surface predictably; and
@@ -1014,7 +1014,8 @@ Resolved implementation:
 - the internal `serve` workload command remains;
 - `config init` remains staging-only;
 - `config check`, `config show`, and `version` remain staged and deployed; and
-- public walkthroughs use the app-named staged and installed control commands.
+- public walkthroughs use the standard staged and installed deployment control
+  commands.
 
 The local demo flow now builds before invoking `config init`:
 

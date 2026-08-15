@@ -84,7 +84,7 @@ The environment node has this top-level shape:
 ```yaml
 environment:
   id: example                 # Stable environment and resource name.
-  control_script: example     # Optional generated command name; defaults to id.
+  control_script: customctl   # Optional generated command override; defaults to appctl.
   vars: {}                    # Blueprint interpolation values.
   base: {}                    # Required base image root.
   packages: {}                # Environment-owned package contributions.
@@ -1012,7 +1012,6 @@ blueprint:
 
 environment:
   id: arbiter
-  control_script: arbiter
   vars:
     config_name: arbiter-server
   base:
@@ -1728,18 +1727,18 @@ requests it.
 
 An environment has one generated command surface, named by
 `environment.control_script`. The field is optional and defaults directly to
-`environment.id`; for example, environment `arbiter` generates `arbiter`, not
-`arbiterctl`. This intentionally replaces the existing `ctl` suffix convention.
-An explicit value overrides the default. The value must be a portable basename
+`appctl`; for example, environment `arbiter-server` generates `appctl` at both
+staged and installed deployment roots. An explicit value overrides the default.
+The value must be a portable basename
 using letters, numbers, `.`, `_`, or `-`; path separators, whitespace, absolute
 paths, `.` and `..` are invalid. Reploy adds platform-specific filename details
 such as `.ps1`. All native command triggers and service operations are exposed
 through that script, and native triggers may not collide with built-in control
 operations such as `up`, `down`, `restart`, `status`, or `logs`.
 
-Because `environment.id` supplies the default filename and also contributes to
-install, container, and generated-resource identities, it must satisfy the same
-portable-basename rules even when `control_script` is overridden. Reploy also
+Because `environment.id` contributes to install, container, and generated-resource
+identities, it must satisfy the portable-basename rules independently of the
+control script. Reploy also
 rejects platform-reserved filenames such as Windows device names.
 
 `environment.applications.<application>.executables` contains named invocation

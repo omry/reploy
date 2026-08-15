@@ -15,9 +15,9 @@ Arbiter or another domain-specific service.
 STAGING=/tmp/reploy-omegaconf-inspector-demo
 reploy stage omegaconf-inspector-demo --dir "$STAGING"
 reploy build --dir "$STAGING"
-"$STAGING/omegaconf-inspector" config init
-"$STAGING/omegaconf-inspector" config check
-"$STAGING/omegaconf-inspector" up
+"$STAGING/appctl" config init
+"$STAGING/appctl" config check
+"$STAGING/appctl" up
 reploy test --dir "$STAGING"
 ```
 
@@ -28,9 +28,9 @@ STAGING=/tmp/reploy-omegaconf-inspector-demo
 reploy stage file:examples/omegaconf-inspector/reploy --dir "$STAGING"
 reploy overrides --dir "$STAGING"
 reploy build --dir "$STAGING"
-"$STAGING/omegaconf-inspector" config init
-"$STAGING/omegaconf-inspector" config check
-"$STAGING/omegaconf-inspector" up
+"$STAGING/appctl" config init
+"$STAGING/appctl" config check
+"$STAGING/appctl" up
 reploy test --dir "$STAGING"
 ```
 
@@ -47,9 +47,9 @@ directory:
 ```bash
 INSTALL="$PWD/omegaconf-inspector-installed"
 reploy install --dir "$STAGING" --scope user --to "$INSTALL"
-"$INSTALL/omegaconf-inspector" status
-"$INSTALL/omegaconf-inspector" config show
-"$INSTALL/omegaconf-inspector" logs
+"$INSTALL/appctl" status
+"$INSTALL/appctl" config show
+"$INSTALL/appctl" logs
 ```
 
 ## Local Python Development

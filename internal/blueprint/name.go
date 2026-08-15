@@ -10,6 +10,8 @@ var portableNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 var providerIdentifierPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 var pythonDistributionNamePattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$`)
 
+const DefaultControlScriptName = "appctl"
+
 var windowsReservedNames = map[string]bool{
 	"CON": true, "PRN": true, "AUX": true, "NUL": true,
 	"COM1": true, "COM2": true, "COM3": true, "COM4": true, "COM5": true,
@@ -25,7 +27,7 @@ func resolveNames(environment EnvironmentSyntax) (string, string, error) {
 	}
 	controlScript := strings.TrimSpace(environment.ControlScript)
 	if controlScript == "" {
-		controlScript = id
+		controlScript = DefaultControlScriptName
 	}
 	if err := validatePortableName("environment.control_script", controlScript); err != nil {
 		return "", "", err
