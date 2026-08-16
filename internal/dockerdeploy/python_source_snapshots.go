@@ -9,12 +9,14 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
+	"github.com/omry/reploy/internal/deploy"
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
 )
 
@@ -161,6 +163,16 @@ func validatePythonSourceManifestV1(manifest PythonSourceManifestV1) error {
 	if manifest.Entries == nil {
 		return fmt.Errorf("entries must use an array")
 	}
+	if manifest.Exclude == nil {
+		return fmt.Errorf("exclude must use an array")
+	}
+	exclusions, err := deploy.NormalizePackageOverrideExclusionsV1(manifest.Exclude)
+	if err != nil {
+		return fmt.Errorf("exclusions: %w", err)
+	}
+	if !slices.Equal(exclusions, manifest.Exclude) {
+		return fmt.Errorf("exclusions must be unique and sorted")
+	}
 	directories := map[string]struct{}{".": {}}
 	for index, entry := range manifest.Entries {
 		if entry.Path == "" || entry.Path == "." || path.IsAbs(entry.Path) || path.Clean(entry.Path) != entry.Path ||
@@ -279,7 +291,7 @@ func stageOnePythonSourceSnapshot(source PythonLocalSource, destination string) 
 	if err := os.Chmod(destination, 0o555); err != nil {
 		return err
 	}
-	observed, digest, err := ObservePythonSourceManifest(destination)
+	observed, digest, err := ObservePythonSourceManifestWithExclusions(destination, source.Manifest.Exclude)
 	if err != nil {
 		return err
 	}
