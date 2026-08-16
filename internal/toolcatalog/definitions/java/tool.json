@@ -1,0 +1,15 @@
+{
+  "schema": "portable-tool-v1",
+  "id": "tool:java",
+  "name": "java",
+  "summary": "Eclipse Temurin Java Development Kit",
+  "upstream": "https://adoptium.net/temurin/releases/",
+  "source": "https://github.com/adoptium/temurin21-binaries",
+  "license": "https://openjdk.org/legal/gplv2+ce.html",
+  "releases": [
+    {
+      "id": "tool:java/releases/21.0.12+8/revisions/1/manifest",
+      "digest": "sha256:820bc4c5ed5cfa16ad5606ad60cb98ecc1b900d621cb66008c9d4645b37a6b92"
+    }
+  ]
+}
