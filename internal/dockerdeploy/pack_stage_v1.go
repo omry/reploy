@@ -186,6 +186,7 @@ func localBlueprintInitialPackageOverridesV1(
 			}
 			stagedPackages[packageID] = deploy.PackageOverrideChoiceV1{
 				Path: path, Version: choice.Version,
+				Exclude: append([]string{}, choice.Exclude...),
 			}
 		}
 		staged.Environment.PackageOverrides[provider] = stagedPackages

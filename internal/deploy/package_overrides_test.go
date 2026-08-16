@@ -23,8 +23,11 @@ func TestPackageOverridesRoundTripAndResolve(t *testing.T) {
 		},
 		PackageOverrides: map[string]map[string]PackageOverrideChoiceV1{
 			"python": {
-				"Demo_Pkg": {Path: "{{ workspace_root }}/demo"},
-				"other":    {Version: "2.4.0"},
+				"Demo_Pkg": {
+					Path:    "{{ workspace_root }}/demo",
+					Exclude: []string{"recordings/.omegaflow", ".venv"},
+				},
+				"other": {Version: "2.4.0"},
 			},
 		},
 	}}
@@ -51,6 +54,9 @@ func TestPackageOverridesRoundTripAndResolve(t *testing.T) {
 	if got := resolved.Providers["python"]["demo-pkg"].Path; got != filepath.Join(dir, "workspace", "demo") {
 		t.Fatalf("resolved local path = %q", got)
 	}
+	if got := resolved.Providers["python"]["demo-pkg"].Exclude; len(got) != 2 || got[0] != ".venv" || got[1] != "recordings/.omegaflow" {
+		t.Fatalf("resolved exclusions = %#v", got)
+	}
 	if got := resolved.Providers["python"]["other"].Version; got != "2.4.0" {
 		t.Fatalf("resolved version = %q", got)
 	}
@@ -62,8 +68,11 @@ func TestPackageOverridesRoundTripAndResolve(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(intent.Choices) != 2 ||
-		intent.Choices[0] != (PackageOverrideIntentChoiceV1{Provider: "python", Package: "demo-pkg", Kind: "local"}) ||
-		intent.Choices[1] != (PackageOverrideIntentChoiceV1{Provider: "python", Package: "other", Kind: "version", Version: "2.4.0"}) {
+		intent.Choices[0].Provider != "python" || intent.Choices[0].Package != "demo-pkg" ||
+		intent.Choices[0].Kind != "local" || len(intent.Choices[0].Exclude) != 2 ||
+		intent.Choices[0].Exclude[0] != ".venv" || intent.Choices[0].Exclude[1] != "recordings/.omegaflow" ||
+		intent.Choices[1].Provider != "python" || intent.Choices[1].Package != "other" ||
+		intent.Choices[1].Kind != "version" || intent.Choices[1].Version != "2.4.0" {
 		t.Fatalf("intent = %#v", intent)
 	}
 	if len(intent.Additions) != 1 ||
@@ -237,6 +246,11 @@ func TestPackageOverridesRejectInvalidShape(t *testing.T) {
 		{name: "multiple documents", yaml: "environment:\n  id: demo\n  package_overrides: {}\n---\n{}\n", want: "multiple YAML documents"},
 		{name: "both choices", yaml: "environment:\n  id: demo\n  package_overrides:\n    python:\n      demo: {path: ../demo, version: 1.0}\n", want: "exactly one"},
 		{name: "neither choice", yaml: "environment:\n  id: demo\n  package_overrides:\n    python:\n      demo: {}\n", want: "exactly one"},
+		{name: "exclude on version", yaml: "environment:\n  id: demo\n  package_overrides:\n    python:\n      demo: {version: 1.0, exclude: [recordings]}\n", want: "requires a local path"},
+		{name: "absolute exclude", yaml: "environment:\n  id: demo\n  package_overrides:\n    python:\n      demo: {path: ../demo, exclude: [/recordings]}\n", want: "canonical relative path"},
+		{name: "escaping exclude", yaml: "environment:\n  id: demo\n  package_overrides:\n    python:\n      demo: {path: ../demo, exclude: [../recordings]}\n", want: "canonical relative path"},
+		{name: "glob exclude", yaml: "environment:\n  id: demo\n  package_overrides:\n    python:\n      demo: {path: ../demo, exclude: ['recordings/*']}\n", want: "canonical relative path"},
+		{name: "duplicate exclude", yaml: "environment:\n  id: demo\n  package_overrides:\n    python:\n      demo: {path: ../demo, exclude: [recordings, recordings]}\n", want: "duplicate path"},
 		{name: "missing mappings", yaml: "environment:\n  id: demo\n", want: "package_overrides must use a mapping"},
 		{name: "variable cycle", yaml: "environment:\n  id: demo\n  vars: {a: '{{ b }}', b: '{{ a }}'}\n  package_overrides: {}\n", want: "cycle"},
 		{name: "unsupported addition provider", yaml: "environment:\n  id: demo\n  package_additions: {apt: [default-jre-headless]}\n  package_overrides: {}\n", want: "use os"},
