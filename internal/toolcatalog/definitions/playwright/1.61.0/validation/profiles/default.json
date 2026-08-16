@@ -1,0 +1,8 @@
+{
+  "schema": "portable-tool-validation-profile-v1",
+  "id": "tool:playwright/releases/1.61.0/validation/profiles/default",
+  "tool": "playwright",
+  "version": "1.61.0",
+  "validator": "playwright-python-browser",
+  "network": "none"
+}
