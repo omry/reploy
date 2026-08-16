@@ -284,9 +284,14 @@ func inspectSourceDistributionArchive(filename string) (SourceDistributionMetada
 			)
 		}
 	}
-	if root == "" || paths[root] != tar.TypeDir {
+	if root == "" {
 		return SourceDistributionMetadataV1{}, fmt.Errorf(
-			"Python source distribution must contain one explicit top-level directory",
+			"Python source distribution must contain exactly one top-level directory",
+		)
+	}
+	if rootType, found := paths[root]; found && rootType != tar.TypeDir {
+		return SourceDistributionMetadataV1{}, fmt.Errorf(
+			"Python source distribution top-level path %q must be a directory", root,
 		)
 	}
 	for name := range paths {
@@ -294,6 +299,12 @@ func inspectSourceDistributionArchive(filename string) (SourceDistributionMetada
 			if _, found := symlinks[parent]; found {
 				return SourceDistributionMetadataV1{}, fmt.Errorf(
 					"Python source distribution path %q traverses symbolic-link ancestor %q",
+					name, parent,
+				)
+			}
+			if parentType, found := paths[parent]; found && parentType != tar.TypeDir {
+				return SourceDistributionMetadataV1{}, fmt.Errorf(
+					"Python source distribution path %q traverses non-directory ancestor %q",
 					name, parent,
 				)
 			}

@@ -1,6 +1,6 @@
 ---
 status: Draft
-updated: 2026-08-01
+updated: 2026-08-16
 summary: Federated, TUF-authenticated Reploy repositories for published blueprints and portable tool definitions.
 ---
 
@@ -920,6 +920,12 @@ the publisher tool, not in consumer warnings for direct BURLs.
 
 ## Portable Tool Contract
 
+The concrete record decomposition, exact-target model, acquisition composition,
+and selected-closure identity are defined in the
+[Portable Tool Definition Design](PORTABLE_TOOL_DEFINITION_DESIGN.md). This
+section owns the public repository-facing contract; the focused design owns how
+one tool release is represented and resolved.
+
 ### Definition Shape and Safety Boundary
 
 A tool definition represents:
@@ -1064,8 +1070,13 @@ The existing local project recipe form remains build-only:
 
 ```yaml
 requires:
-  - tool:java
+  - tool:java==21
 ```
+
+Build-only recipe requirements use the same compact version and revision
+grammar as runtime tools. Omitting the version selects the newest eligible
+release under the shared rule; resolution and the build lock still retain the
+exact upstream version and definition revision.
 
 ### Playwright
 
@@ -1075,7 +1086,7 @@ compatible browser payloads; contribute reviewed target-specific OS roots;
 acquire browser payloads through a named Reploy-owned primitive without
 exposing project source, host credentials, or arbitrary paths; materialize
 offline; and lock platform, browser revision, provenance, artifact digest, and
-definition digest.
+release and selected-closure digests.
 
 Browser selection is explicit because payloads are large and materially change
 requirements. Omitting it lists supported browsers. Multiple browsers produce
@@ -1086,6 +1097,21 @@ OmegaFlow definition may support only `chromium` and uses the `python` binding.
 The tool exports the supported Playwright CLI into the application executable
 namespace. Browser payload executables remain internal unless the definition
 deliberately exposes a stable named interface.
+
+An interim built-in bridge implements the approved initial Python/Chromium
+profile before the repository protocol exists. Its artifact acquisition remains
+a closed, reviewed primitive. This bridge is not an official repository, does
+not accept external definitions, and does not satisfy the publication, trust,
+lifecycle, or multi-browser portions of this design. The current flat,
+complete-per-target JSON files are a work-in-progress checkpoint and will be
+migrated to the explicit record composition in the Portable Tool Definition
+Design before release.
+
+Target selection continues to use validated base-profile evidence inside
+provider resolution; image-reference parsing and cross-generation package
+unions are not target-selection mechanisms. The selected package roots and
+definition closure remain part of locked provider identity so cache validation
+can re-establish the same target choice.
 
 ### Unsupported Dynamic Installers
 
@@ -1114,8 +1140,8 @@ is not reserved in the initial public schema.
    and implement disposable global object caching and validated offline import.
 5. Publish the independently updated official repository and generated
    documentation.
-6. Move Java's existing portable-tool mapping from Go switches into an official
-   definition without changing its current project-owned build-only behavior.
+6. Migrate Java's interim embedded definition into an official definition
+   without changing its current project-owned build-only behavior.
 7. Add the reviewed Playwright resolver primitive, definition, OS matrix,
    documentation, and integration evidence.
 
