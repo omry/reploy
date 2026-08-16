@@ -61,6 +61,46 @@ func TestSourceDistributionValidationAndExtraction(t *testing.T) {
 	}
 }
 
+func TestSourceDistributionAcceptsImplicitSingleRoot(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "demo_pkg-1.2.3.tar.gz")
+	writeTestSourceDistribution(t, archive, []testSourceDistributionEntry{
+		{name: "demo_pkg-1.2.3/pyproject.toml", kind: tar.TypeReg, content: "[build-system]\n"},
+		{name: "demo_pkg-1.2.3/PKG-INFO", kind: tar.TypeReg, content: "Name: Demo-Pkg\nVersion: 1.2.3\n\n"},
+		{name: "demo_pkg-1.2.3/src/demo.py", kind: tar.TypeReg, content: "value = 1\n"},
+	})
+	descriptor, metadata, err := DescribeSourceDistributionFileV1(
+		archive, "sdists/demo_pkg-1.2.3.tar.gz",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptor.Kind != "sdist" || metadata.Root != "demo_pkg-1.2.3" {
+		t.Fatalf("descriptor/metadata = %#v / %#v", descriptor, metadata)
+	}
+	destination := t.TempDir()
+	if _, err := ExtractSourceDistributionFileV1(archive, destination); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(destination, "demo_pkg-1.2.3", "src", "demo.py"))
+	if err != nil || string(content) != "value = 1\n" {
+		t.Fatalf("implicit-root extracted file = %q, %v", content, err)
+	}
+}
+
+func TestSourceDistributionRejectsExplicitNonDirectoryRoot(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "demo-1.tar.gz")
+	writeTestSourceDistribution(t, archive, []testSourceDistributionEntry{
+		{name: "demo-1", kind: tar.TypeReg, content: "not a directory"},
+		{name: "demo-1/pyproject.toml", kind: tar.TypeReg, content: "[build-system]\n"},
+		{name: "demo-1/PKG-INFO", kind: tar.TypeReg, content: "Name: demo\nVersion: 1\n\n"},
+	})
+	if _, _, err := DescribeSourceDistributionFileV1(
+		archive, "sdists/demo-1.tar.gz",
+	); err == nil || !strings.Contains(err.Error(), "top-level path \"demo-1\" must be a directory") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestSourceDistributionRejectsUnsafeArchiveShapes(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -104,6 +144,21 @@ func TestSourceDistributionRejectsUnsafeArchiveShapes(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestSourceDistributionRejectsExplicitNonDirectoryAncestor(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "demo-1.tar.gz")
+	writeTestSourceDistribution(t, archive, []testSourceDistributionEntry{
+		{name: "demo-1/pyproject.toml", kind: tar.TypeReg, content: "[build-system]\n"},
+		{name: "demo-1/PKG-INFO", kind: tar.TypeReg, content: "Name: demo\nVersion: 1\n\n"},
+		{name: "demo-1/src", kind: tar.TypeReg, content: "not a directory"},
+		{name: "demo-1/src/demo.py", kind: tar.TypeReg, content: "value = 1\n"},
+	})
+	if _, _, err := DescribeSourceDistributionFileV1(
+		archive, "sdists/demo-1.tar.gz",
+	); err == nil || !strings.Contains(err.Error(), "non-directory ancestor") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
