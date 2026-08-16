@@ -1,0 +1,56 @@
+{
+  "schema": "portable-tool-release-contract-v1",
+  "id": "tool:playwright/releases/1.61.0/contract",
+  "contexts": [
+    "runtime"
+  ],
+  "binding": {
+    "options": [
+      "python"
+    ],
+    "required": true,
+    "default": ""
+  },
+  "selections": {
+    "options": [
+      "chromium"
+    ],
+    "minimum": "1",
+    "defaults": []
+  },
+  "runtime": {
+    "install_root": "/opt/reploy/tools/playwright/ms-playwright",
+    "environment": [
+      {
+        "name": "PLAYWRIGHT_BROWSERS_PATH",
+        "value": "/opt/reploy/tools/playwright/ms-playwright"
+      },
+      {
+        "name": "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD",
+        "value": "1"
+      },
+      {
+        "name": "PLAYWRIGHT_SKIP_BROWSER_GC",
+        "value": "1"
+      }
+    ]
+  },
+  "probes": [
+    {
+      "path": "/opt/reploy/tools/playwright/bin/playwright",
+      "args": [
+        "--version"
+      ],
+      "network": "none"
+    }
+  ],
+  "exports": [
+    {
+      "name": "playwright",
+      "path": "/opt/reploy/tools/playwright/bin/playwright"
+    }
+  ],
+  "resolver_primitives": [
+    "https-sha256"
+  ]
+}
