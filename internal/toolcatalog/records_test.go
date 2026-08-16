@@ -291,6 +291,16 @@ func TestValidateLoadedRecordV1RejectsInvalidFieldsBySchema(t *testing.T) {
 			value.Version = "1!2"
 			return &value
 		}(), want: "release manifest ID must be"},
+		{name: "manifest duplicate alias", value: func() any {
+			value := *(values[1].(*ReleaseManifestV1))
+			value.Aliases = []string{"1", "1"}
+			return &value
+		}(), want: "unique, sorted"},
+		{name: "manifest exact-version alias", value: func() any {
+			value := *(values[1].(*ReleaseManifestV1))
+			value.Aliases = []string{"1.2.3"}
+			return &value
+		}(), want: "different from the exact version"},
 		{name: "manifest equivalent provenance", value: func() any {
 			value := *(values[1].(*ReleaseManifestV1))
 			value.Provenance = []string{"https://example.com/a", "https://example.com/%61"}
