@@ -1,0 +1,80 @@
+{
+  "schema": "portable-tool-release-manifest-v1",
+  "id": "tool:playwright/releases/1.61.0/revisions/1/manifest",
+  "tool": "playwright",
+  "version": "1.61.0",
+  "aliases": [],
+  "revision": "1",
+  "contract": {
+    "id": "tool:playwright/releases/1.61.0/contract",
+    "digest": "sha256:a94cfd067c520e7d82f0021fc4a6fe38aa54cdf192f3658de81f55a5b8c12957"
+  },
+  "targets": [
+    {
+      "id": "tool:playwright/releases/1.61.0/targets/debian/12/amd64",
+      "digest": "sha256:4184ba07b25677050ec8a105fe4de2e836cfe0514708e1d769e26977f89e475f"
+    },
+    {
+      "id": "tool:playwright/releases/1.61.0/targets/ubuntu/25.10/amd64",
+      "digest": "sha256:26d55ee05bfdf96243dd3ac4af57f22faf209c33d70840264bcff4e3a449a4d0"
+    },
+    {
+      "id": "tool:playwright/releases/1.61.0/targets/ubuntu/26.04/amd64",
+      "digest": "sha256:0285ce2e15ab55e6e21e2f1f4180ad30c6a9187671daeca6bb271384a177b8b3"
+    }
+  ],
+  "artifact_sources": [
+    {
+      "artifact_sha256": "sha256:13113b963ac22fffdad898a677591028e4397c46c1daa9e61811258eed6e35b5",
+      "artifact": {
+        "id": "tool:playwright/releases/1.61.0/payloads/chromium/chromium-linux-amd64",
+        "digest": "sha256:3f8d11940676b7d08f43aa80b60ec29b57ede0b16bf3a46850881ec5e4e9eed3"
+      },
+      "source": {
+        "id": "tool:playwright/releases/1.61.0/revisions/1/sources/chromium-linux-amd64",
+        "digest": "sha256:4513c141db907b9f02701f3e417f9af18400811d6153cbb3a69f13f0aad86dec"
+      }
+    },
+    {
+      "artifact_sha256": "sha256:410c9407d5de3fea80d9398666be06f2aa09154a3fa7b327dc254e336bb4c4b7",
+      "artifact": {
+        "id": "tool:playwright/releases/1.61.0/payloads/chromium/chromium-headless-shell-linux-amd64",
+        "digest": "sha256:8d6962b36ea3434fc094fdb6f9ab1f785282b021d140cb91bab47ec175cc5b8c"
+      },
+      "source": {
+        "id": "tool:playwright/releases/1.61.0/revisions/1/sources/chromium-headless-shell-linux-amd64",
+        "digest": "sha256:0171b6cb123c4508ba35ee98e9e61ce35bf69f59944824103ce6f9a841d1b5f8"
+      }
+    },
+    {
+      "artifact_sha256": "sha256:54f3b39f6eab832e33458c1dd7da0b5682aedab3b09ae731b5c59fa12fd2024e",
+      "artifact": {
+        "id": "tool:playwright/releases/1.61.0/bindings/python/artifacts/linux-amd64",
+        "digest": "sha256:4916bc1ce08bcdfaa0d1f33eddeee61b2a05e4753bfd0c261a8e1c2138d549ac"
+      },
+      "source": {
+        "id": "tool:playwright/releases/1.61.0/revisions/1/sources/python-linux-amd64",
+        "digest": "sha256:02d81d76c0762dad2a90aea6578947f8e5cc58c1dc0460ed26ad5249032f45da"
+      }
+    },
+    {
+      "artifact_sha256": "sha256:ebc74fc5b94830176a3c2914ae96bd8bc7f6a91f4f33890230f84a172ee61ccc",
+      "artifact": {
+        "id": "tool:playwright/releases/1.61.0/payloads/chromium/ffmpeg-linux-amd64",
+        "digest": "sha256:e0a64049a4e4cce3ec74df79046e9c86897be8141bb87b9de865ec37ff974dd9"
+      },
+      "source": {
+        "id": "tool:playwright/releases/1.61.0/revisions/1/sources/ffmpeg-linux-amd64",
+        "digest": "sha256:0d7b7f6f57895bc2cb3794a0dad32218b4efe9d3d5469eee1a062028692faa6e"
+      }
+    }
+  ],
+  "provenance": [
+    "https://github.com/microsoft/playwright-python/releases/tag/v1.61.0",
+    "https://pypi.org/project/playwright/1.61.0/"
+  ],
+  "validation_profile": {
+    "id": "tool:playwright/releases/1.61.0/validation/profiles/default",
+    "digest": "sha256:f4e255bce4ba8cd01791575b94cc23e5883186abed8ccf265805e80f09245a13"
+  }
+}
