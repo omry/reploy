@@ -1,0 +1,18 @@
+{
+  "schema": "portable-tool-payload-v1",
+  "id": "tool:java/releases/21.0.12+8/payloads/jdk-linux-amd64",
+  "selection": "",
+  "name": "jdk",
+  "revision": "8",
+  "upstream_version": "21.0.12+8",
+  "platform": "linux/amd64",
+  "logical_path": "tools/java/21.0.12+8/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12_8.tar.gz",
+  "kind": "jdk-archive",
+  "size": "207486543",
+  "sha256": "sha256:e4446ff06a276155697597cc0f1b15da004ff083f4964a35271ecee567177370",
+  "entries": "542",
+  "unpacked_size": "361144464",
+  "install_directory": "jdk-21.0.12+8",
+  "archive_root": "jdk-21.0.12+8",
+  "executable": "jdk-21.0.12+8/bin/java"
+}
