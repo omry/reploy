@@ -417,74 +417,74 @@ definition in one flat directory. A representative layout is:
 internal/toolcatalog/definitions/
   java/
     tool.json
-    versions/
-      21/
-        revisions/
-          1/
-            manifest.json
-            contract.json
-            sources/
-              runtime-linux-amd64.json
-              runtime-linux-arm64.json
-            payloads/
-              runtime-linux-amd64.json
-              runtime-linux-arm64.json
-            package-sets/
-              debian-runtime-amd64.json
-            targets/
-              debian/
-                12/
-                  amd64.json
-                  arm64.json
-              ubuntu/
-                26.04/
-                  amd64.json
-                  arm64.json
-            validation/
-              fixtures/
-                debian-12-amd64.json
-                ubuntu-26.04-amd64.json
-              profiles/
-                default.json
+    21/
+      contract.json
+      payloads/
+        jdk-linux-amd64.json
+      targets/
+        debian/
+          12/
+            amd64.json
+          13/
+            amd64.json
+        ubuntu/
+          25.10/
+            amd64.json
+          26.04/
+            amd64.json
+      validation/
+        fixtures/
+          debian-12-amd64.json
+          debian-13-amd64.json
+          ubuntu-25.10-amd64.json
+          ubuntu-26.04-amd64.json
+        profiles/
+          default.json
+      revisions/
+        1/
+          manifest.json
+          sources/
+            jdk-linux-amd64.json
   playwright/
     tool.json
-    versions/
-      1.61.0/
-        revisions/
-          1/
-            manifest.json
-            contract.json
-            sources/
-              python-linux-amd64.json
-              chromium-linux-amd64.json
-            bindings/
-              python/
-                contract.json
-                linux-amd64.json
-                linux-arm64.json
-            payloads/
-              chromium/
-                linux-amd64.json
-                linux-arm64.json
-            package-sets/
-              debian-12-amd64.json
-              ubuntu-t64-amd64.json
-            targets/
-              debian/
-                12/
-                  amd64.json
-              ubuntu/
-                25.10/
-                  amd64.json
-                26.04/
-                  amd64.json
-            validation/
-              fixtures/
-                debian-12-amd64.json
-                ubuntu-25.10-amd64.json
-                ubuntu-26.04-amd64.json
-              profiles/
-                default.json
+    1.61.0/
+      contract.json
+      bindings/
+        python/
+          contract.json
+          linux-amd64.json
+      package-sets/
+        debian-12-amd64.json
+        ubuntu-t64-amd64.json
+      payloads/
+        chromium/
+          chromium-headless-shell-linux-amd64.json
+          chromium-linux-amd64.json
+          ffmpeg-linux-amd64.json
+      targets/
+        debian/
+          12/
+            amd64.json
+        ubuntu/
+          25.10/
+            amd64.json
+          26.04/
+            amd64.json
+      validation/
+        fixtures/
+          debian-12-amd64.json
+          ubuntu-25.10-amd64.json
+          ubuntu-26.04-amd64.json
+        profiles/
+          default.json
+      revisions/
+        1/
+          manifest.json
+          sources/
+            python-linux-amd64.json
+            chromium-linux-amd64.json
+            chromium-headless-shell-linux-amd64.json
+            ffmpeg-linux-amd64.json
 ```
 
 The tree is organizational, not an inheritance mechanism. Every semantic edge
@@ -494,6 +494,10 @@ not determine identity. The catalog may retain multiple canonical records with
 the same semantic ID and different digests when different immutable release
 revisions reference them. One exact pair must resolve to exactly one canonical
 record.
+
+Each exact scheme-native tool version is a directory immediately below its
+tool. A redundant `versions/` wrapper adds no ownership or identity information
+and is therefore omitted.
 
 Architecture remains visible in target and artifact filenames because those
 records make architecture-specific claims. It disappears from files whose
@@ -769,13 +773,18 @@ different purposes:
   version, definition revision, and release-manifest digest. Adding a target
   produces a new immutable revision and therefore new provenance.
 - **Selected-closure identity** hashes the tool name and exact scheme-native
-  tool version, the canonical resolved release-contract and target projections,
-  the normalized parameter values, the exact selected binding, payload, and
-  package-set records, and selected export, probe, and selection values used by
-  the request. It excludes unselected availability, validation-fixture and
-  validation-profile references, the release manifest, definition revision,
-  artifact source records, and retrieval URLs. The full contract and target
-  records remain covered transitively by release provenance.
+  tool version, the canonical resolved contract projection (chosen context,
+  binding, selections, normalized parameter values, runtime, exports, and
+  probes), the canonical resolved target projection, the exact selected
+  binding, payload, and package-set records, and selected export, probe, and
+  selection values used by the request. The target projection retains the exact
+  target identity, unconditional references, selected binding and selection
+  contributions, target probes, and other materialization behavior. Both
+  projections exclude unselected availability and validation-fixture and
+  validation-profile references. The identity also excludes the release
+  manifest, definition revision, artifact source records, and retrieval URLs;
+  the full contract and target records remain covered transitively by release
+  provenance.
 
 The selected-closure identity input is an object with exactly five members:
 `tool`, `version`, `contract`, `target`, and `records`. `tool` and `version` are
