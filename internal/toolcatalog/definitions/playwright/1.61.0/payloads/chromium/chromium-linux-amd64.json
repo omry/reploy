@@ -1,0 +1,18 @@
+{
+  "schema": "portable-tool-payload-v1",
+  "id": "tool:playwright/releases/1.61.0/payloads/chromium/chromium-linux-amd64",
+  "selection": "chromium",
+  "name": "chromium",
+  "revision": "1228",
+  "upstream_version": "149.0.7827.55",
+  "platform": "linux/amd64",
+  "logical_path": "tools/playwright/1.61.0/chromium-1228-linux-amd64.zip",
+  "kind": "playwright-browser-archive",
+  "size": "185646494",
+  "sha256": "sha256:13113b963ac22fffdad898a677591028e4397c46c1daa9e61811258eed6e35b5",
+  "entries": "308",
+  "unpacked_size": "396335288",
+  "install_directory": "chromium-1228",
+  "archive_root": "chrome-linux64",
+  "executable": "chrome-linux64/chrome"
+}

@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	dockerreference "github.com/distribution/reference"
 )
 
 func validateLoadedRecordV1(record loadedRecordV1) error {
@@ -39,6 +41,14 @@ func validateLoadedRecordV1(record loadedRecordV1) error {
 		prefix := fmt.Sprintf("tool:%s/releases/%s/revisions/%s/manifest", value.Tool, value.Version, value.Revision)
 		if value.ID != prefix {
 			return fmt.Errorf("release manifest ID must be %q", prefix)
+		}
+		if value.Aliases == nil || len(value.Aliases) > maxDefinitionReferences {
+			return fmt.Errorf("release aliases must use a bounded array")
+		}
+		for index, alias := range value.Aliases {
+			if !validRecordSegmentV1(alias) || alias == value.Version || index > 0 && value.Aliases[index-1] >= alias {
+				return fmt.Errorf("release aliases must be canonical, unique, sorted, and different from the exact version")
+			}
 		}
 		if err := validateRecordReferenceV1(value.Contract); err != nil {
 			return fmt.Errorf("release contract: %w", err)
@@ -313,9 +323,61 @@ func validateLoadedRecordV1(record loadedRecordV1) error {
 			return fmt.Errorf("native package-set identity is incomplete")
 		}
 		return requireNonemptySortedStringsV1("native package requirements", value.Requirements)
+	case *IntegrationFixtureRecordV1:
+		if record.Schema != IntegrationFixtureSchemaV1 || value.Schema != IntegrationFixtureSchemaV1 || value.ID != record.ID {
+			return fmt.Errorf("integration fixture identity is inconsistent")
+		}
+		if err := validateTargetIdentityV1(value.Target); err != nil {
+			return fmt.Errorf("integration fixture target: %w", err)
+		}
+		expectedSuffix := fmt.Sprintf("/validation/fixtures/%s-%s-%s", value.Target.OSReleaseID, value.Target.VersionID, value.Target.OCIArchitecture)
+		if !strings.HasSuffix(value.ID, expectedSuffix) {
+			return fmt.Errorf("integration fixture ID must end with %q", expectedSuffix)
+		}
+		if !validBaseImageReferenceV1(value.BaseImage) {
+			return fmt.Errorf("integration fixture base image must be a canonical tagged OCI reference")
+		}
+		if err := value.BaseImageDigest.Validate(); err != nil {
+			return fmt.Errorf("integration fixture base image digest: %w", err)
+		}
+		if value.Context != "build" && value.Context != "runtime" {
+			return fmt.Errorf("integration fixture context is unsupported")
+		}
+		if value.Binding != "" && !validRecordIdentifierV1(value.Binding) {
+			return fmt.Errorf("integration fixture binding is invalid")
+		}
+		return validateSortedUniqueStringsV1("integration fixture selections", value.Selections, false)
+	case *ValidationProfileRecordV1:
+		if record.Schema != ValidationProfileSchemaV1 || value.Schema != ValidationProfileSchemaV1 || value.ID != record.ID || !validRecordIdentifierV1(value.Tool) || !validRecordSegmentV1(value.Version) {
+			return fmt.Errorf("validation profile identity is inconsistent")
+		}
+		expectedID := fmt.Sprintf("tool:%s/releases/%s/validation/profiles/default", value.Tool, value.Version)
+		if value.ID != expectedID {
+			return fmt.Errorf("validation profile ID must be %q", expectedID)
+		}
+		if value.Validator != "java-jdk" && value.Validator != "playwright-python-browser" {
+			return fmt.Errorf("validation profile validator is unsupported")
+		}
+		if value.Network != "none" {
+			return fmt.Errorf("validation profile must disable networking")
+		}
+		return nil
 	default:
 		return fmt.Errorf("unsupported record value %T", record.Value)
 	}
+}
+
+func validBaseImageReferenceV1(value string) bool {
+	if !validRecordTokenV1(value) || strings.ToLower(value) != value || strings.ContainsAny(value, "@?#") || strings.Contains(value, "://") {
+		return false
+	}
+	named, err := dockerreference.ParseNormalizedNamed(value)
+	if err != nil || named.String() != value {
+		return false
+	}
+	_, tagged := named.(dockerreference.NamedTagged)
+	_, digested := named.(dockerreference.Canonical)
+	return tagged && !digested
 }
 
 func validateProbeV1(probe RecordProbeV1) error {

@@ -27,6 +27,7 @@ func validRecordValuesV1() []any {
 		},
 		&ReleaseManifestV1{
 			Schema: ReleaseManifestSchemaV1, ID: release + "/revisions/1/manifest", Tool: "demo", Version: "1.2.3", Revision: "1",
+			Aliases:  []string{"1"},
 			Contract: recordTestReference(release + "/contract"), Targets: []RecordReferenceV1{recordTestReference(target)},
 			ArtifactSources: []ArtifactSourceMappingV1{}, Provenance: []string{"https://example.com/releases/1.2.3"},
 			ValidationProfile: recordTestReference(release + "/validation/profiles/default"),
@@ -77,6 +78,19 @@ func validRecordValuesV1() []any {
 			Schema: NativePackageSetSchemaV1, ID: release + "/package-sets/debian-runtime-amd64", Manager: "apt",
 			Requirements: []string{"libasound2", "libnss3"},
 		},
+		&IntegrationFixtureRecordV1{
+			Schema: IntegrationFixtureSchemaV1, ID: release + "/validation/fixtures/debian-12-amd64",
+			Target: TargetIdentityV1{
+				Platform: "linux/amd64", OSReleaseID: "debian", VersionID: "12", OCIArchitecture: "amd64",
+				NativeArchitecture: "amd64", PackageManager: "apt",
+			},
+			BaseImage: "docker.io/library/debian:12-slim", BaseImageDigest: recordTestDigest,
+			Context: "build", Binding: "", Selections: []string{},
+		},
+		&ValidationProfileRecordV1{
+			Schema: ValidationProfileSchemaV1, ID: release + "/validation/profiles/default",
+			Tool: "demo", Version: "1.2.3", Validator: "java-jdk", Network: "none",
+		},
 	}
 }
 
@@ -99,6 +113,10 @@ func recordIDV1(value any) string {
 	case *ArtifactSourceRecordV1:
 		return record.ID
 	case *NativePackageSetV1:
+		return record.ID
+	case *IntegrationFixtureRecordV1:
+		return record.ID
+	case *ValidationProfileRecordV1:
 		return record.ID
 	default:
 		panic(fmt.Sprintf("unsupported record %T", value))
@@ -124,6 +142,10 @@ func recordSchemaV1(value any) string {
 	case *ArtifactSourceRecordV1:
 		return record.Schema
 	case *NativePackageSetV1:
+		return record.Schema
+	case *IntegrationFixtureRecordV1:
+		return record.Schema
+	case *ValidationProfileRecordV1:
 		return record.Schema
 	default:
 		panic(fmt.Sprintf("unsupported record %T", value))
@@ -243,6 +265,16 @@ func TestValidateLoadedRecordV1RejectsInvalidFieldsBySchema(t *testing.T) {
 	}{
 		{name: "tool URL query", value: func() any { value := *(values[0].(*ToolRecordV1)); value.Source += "?token=secret"; return &value }(), want: "credential-free HTTPS"},
 		{name: "manifest revision", value: func() any { value := *(values[1].(*ReleaseManifestV1)); value.Revision = "01"; return &value }(), want: "canonical decimal"},
+		{name: "manifest duplicate alias", value: func() any {
+			value := *(values[1].(*ReleaseManifestV1))
+			value.Aliases = []string{"1", "1"}
+			return &value
+		}(), want: "unique, sorted"},
+		{name: "manifest exact-version alias", value: func() any {
+			value := *(values[1].(*ReleaseManifestV1))
+			value.Aliases = []string{"1.2.3"}
+			return &value
+		}(), want: "different from the exact version"},
 		{name: "manifest equivalent provenance", value: func() any {
 			value := *(values[1].(*ReleaseManifestV1))
 			value.Provenance = []string{"https://example.com/a", "https://example.com/%61"}
@@ -277,6 +309,16 @@ func TestValidateLoadedRecordV1RejectsInvalidFieldsBySchema(t *testing.T) {
 			return &value
 		}(), want: "must be unique"},
 		{name: "package manager", value: func() any { value := *(values[8].(*NativePackageSetV1)); value.Manager = "dnf"; return &value }(), want: "identity is incomplete"},
+		{name: "fixture base image", value: func() any {
+			value := *(values[9].(*IntegrationFixtureRecordV1))
+			value.BaseImage = "https://example.com/image:tag"
+			return &value
+		}(), want: "canonical tagged OCI reference"},
+		{name: "profile network", value: func() any {
+			value := *(values[10].(*ValidationProfileRecordV1))
+			value.Network = "default"
+			return &value
+		}(), want: "disable networking"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
