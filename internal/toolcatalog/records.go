@@ -28,6 +28,8 @@ const (
 	PayloadRecordSchemaV1        = "portable-tool-payload-v1"
 	ArtifactSourceRecordSchemaV1 = "portable-tool-artifact-source-v1"
 	NativePackageSetSchemaV1     = "portable-tool-package-set-v1"
+	IntegrationFixtureSchemaV1   = "portable-tool-integration-fixture-v1"
+	ValidationProfileSchemaV1    = "portable-tool-validation-profile-v1"
 	ValidationEvidenceSchemaV1   = "portable-tool-validation-evidence-v1"
 	SelectedClosureIdentityV1    = "portable-tool-selected-closure-v1"
 	portableToolRecordIdentityV1 = "portable-tool-record-v1"
@@ -62,6 +64,7 @@ type ReleaseManifestV1 struct {
 	ID                string                    `json:"id"`
 	Tool              string                    `json:"tool"`
 	Version           string                    `json:"version"`
+	Aliases           []string                  `json:"aliases"`
 	Revision          string                    `json:"revision"`
 	Contract          RecordReferenceV1         `json:"contract"`
 	Targets           []RecordReferenceV1       `json:"targets"`
@@ -219,6 +222,26 @@ type NativePackageSetV1 struct {
 	Requirements []string `json:"requirements"`
 }
 
+type IntegrationFixtureRecordV1 struct {
+	Schema          string           `json:"schema"`
+	ID              string           `json:"id"`
+	Target          TargetIdentityV1 `json:"target"`
+	BaseImage       string           `json:"base_image"`
+	BaseImageDigest canonical.Digest `json:"base_image_digest"`
+	Context         string           `json:"context"`
+	Binding         string           `json:"binding"`
+	Selections      []string         `json:"selections"`
+}
+
+type ValidationProfileRecordV1 struct {
+	Schema    string `json:"schema"`
+	ID        string `json:"id"`
+	Tool      string `json:"tool"`
+	Version   string `json:"version"`
+	Validator string `json:"validator"`
+	Network   string `json:"network"`
+}
+
 type ValidationEvidenceV1 struct {
 	Schema                string             `json:"schema"`
 	Tool                  string             `json:"tool"`
@@ -283,6 +306,10 @@ func decodeRecordV1(filename string, payload []byte) (loadedRecordV1, error) {
 		value = &ArtifactSourceRecordV1{}
 	case NativePackageSetSchemaV1:
 		value = &NativePackageSetV1{}
+	case IntegrationFixtureSchemaV1:
+		value = &IntegrationFixtureRecordV1{}
+	case ValidationProfileSchemaV1:
+		value = &ValidationProfileRecordV1{}
 	default:
 		return loadedRecordV1{}, fmt.Errorf("decode %s: unsupported schema %q", filename, header.Schema)
 	}
