@@ -1,0 +1,30 @@
+{
+  "schema": "portable-tool-target-v1",
+  "id": "tool:java/releases/21.0.12+8/targets/debian/13/amd64",
+  "target": {
+    "platform": "linux/amd64",
+    "os_release_id": "debian",
+    "version_id": "13",
+    "oci_architecture": "amd64",
+    "native_architecture": "amd64",
+    "package_manager": "apt"
+  },
+  "package_sets": [],
+  "bindings": [],
+  "payloads": [
+    {
+      "id": "tool:java/releases/21.0.12+8/payloads/jdk-linux-amd64",
+      "digest": "sha256:8c0ffd54b2f11e038591d085ad2ee9f069040b0f6dc19a9cc49bb6dfe6907143"
+    }
+  ],
+  "selections": [],
+  "probes": [],
+  "integration_fixture": {
+    "id": "tool:java/releases/21.0.12+8/validation/fixtures/debian-13-amd64",
+    "digest": "sha256:9f13bee447f65d62ce70cd9005b4be5669b5f1d48ed5f5be4720bb91b9aa38e4"
+  },
+  "validation_profile": {
+    "id": "tool:java/releases/21.0.12+8/validation/profiles/default",
+    "digest": "sha256:078ca84e6406903e0f2caee7ac5d06b0ee9baeb0d619eb4ac6365fb35d68a1bc"
+  }
+}
