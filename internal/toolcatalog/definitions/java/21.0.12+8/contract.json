@@ -1,0 +1,39 @@
+{
+  "schema": "portable-tool-release-contract-v1",
+  "id": "tool:java/releases/21.0.12+8/contract",
+  "contexts": [
+    "build"
+  ],
+  "binding": {
+    "options": [],
+    "required": false,
+    "default": ""
+  },
+  "selections": {
+    "options": [],
+    "minimum": "0",
+    "defaults": []
+  },
+  "probes": [
+    {
+      "path": "/opt/reploy/tools/java/jdk-21.0.12+8/bin/java",
+      "args": [
+        "-version"
+      ],
+      "network": "none"
+    }
+  ],
+  "exports": [
+    {
+      "name": "java",
+      "path": "/opt/reploy/tools/java/jdk-21.0.12+8/bin/java"
+    },
+    {
+      "name": "javac",
+      "path": "/opt/reploy/tools/java/jdk-21.0.12+8/bin/javac"
+    }
+  ],
+  "resolver_primitives": [
+    "https-sha256"
+  ]
+}
