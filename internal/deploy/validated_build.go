@@ -52,8 +52,9 @@ func PackageOverridesDigestV1(overrides PackageOverridesV1) (canonical.Digest, e
 		return "", err
 	}
 	// EncodePackageOverridesV1 normalizes YAML map ordering, scalar spelling,
-	// and omitted optional fields. Hash that normalized representation so every
-	// value accepted by the sidecar schema has a stable identity.
+	// exclusion ordering, and omitted optional fields. Hash that normalized
+	// representation so every value accepted by the sidecar schema has a stable
+	// identity.
 	return canonical.Sum("package-overrides", "package-overrides-v1", string(content))
 }
 

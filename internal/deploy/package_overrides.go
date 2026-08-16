@@ -127,11 +127,30 @@ func EncodePackageOverridesV1(overrides PackageOverridesV1) ([]byte, error) {
 	if err := ValidatePackageOverridesV1(overrides); err != nil {
 		return nil, err
 	}
+	overrides = canonicalPackageOverridesV1(overrides)
 	content, err := yaml.Marshal(overrides)
 	if err != nil {
 		return nil, fmt.Errorf("encode package overrides: %w", err)
 	}
 	return content, nil
+}
+
+// canonicalPackageOverridesV1 returns an encoding copy whose semantically
+// unordered exclusion lists use their stable lexical order. Validation must
+// run first; copying the nested mappings avoids mutating caller-owned values.
+func canonicalPackageOverridesV1(overrides PackageOverridesV1) PackageOverridesV1 {
+	canonicalOverrides := make(map[string]map[string]PackageOverrideChoiceV1, len(overrides.Environment.PackageOverrides))
+	for provider, packages := range overrides.Environment.PackageOverrides {
+		canonicalPackages := make(map[string]PackageOverrideChoiceV1, len(packages))
+		for packageID, choice := range packages {
+			exclusions, _ := NormalizePackageOverrideExclusionsV1(choice.Exclude)
+			choice.Exclude = exclusions
+			canonicalPackages[packageID] = choice
+		}
+		canonicalOverrides[provider] = canonicalPackages
+	}
+	overrides.Environment.PackageOverrides = canonicalOverrides
+	return overrides
 }
 
 func ValidatePackageOverridesV1(overrides PackageOverridesV1) error {
