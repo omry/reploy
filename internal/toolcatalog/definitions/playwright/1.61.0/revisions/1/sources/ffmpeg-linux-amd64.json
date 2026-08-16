@@ -1,0 +1,13 @@
+{
+  "schema": "portable-tool-artifact-source-v1",
+  "id": "tool:playwright/releases/1.61.0/revisions/1/sources/ffmpeg-linux-amd64",
+  "sha256": "sha256:ebc74fc5b94830176a3c2914ae96bd8bc7f6a91f4f33890230f84a172ee61ccc",
+  "size": "2376500",
+  "resolver": "https-sha256",
+  "mirrors": [
+    "https://playwright.download.prss.microsoft.com/dbazure/download/playwright/builds/ffmpeg/1011/ffmpeg-linux.zip"
+  ],
+  "provenance": [
+    "https://raw.githubusercontent.com/microsoft/playwright/v1.61.0/packages/playwright-core/browsers.json"
+  ]
+}
