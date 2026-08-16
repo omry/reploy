@@ -122,6 +122,32 @@ func TestPackageOverridesDigestV1NormalizesEmptyOptionalVars(t *testing.T) {
 	}
 }
 
+func TestPackageOverridesDigestV1NormalizesExclusionOrder(t *testing.T) {
+	first := EmptyPackageOverridesV1("demo")
+	first.Environment.PackageOverrides["python"] = map[string]PackageOverrideChoiceV1{
+		"demo": {Path: "../demo", Exclude: []string{"recordings/.omegaflow", ".venv"}},
+	}
+	second := EmptyPackageOverridesV1("demo")
+	second.Environment.PackageOverrides["python"] = map[string]PackageOverrideChoiceV1{
+		"demo": {Path: "../demo", Exclude: []string{".venv", "recordings/.omegaflow"}},
+	}
+
+	firstDigest, err := PackageOverridesDigestV1(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondDigest, err := PackageOverridesDigestV1(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstDigest != secondDigest {
+		t.Fatalf("equivalent exclusion orders have different digests: %s != %s", firstDigest, secondDigest)
+	}
+	if got := first.Environment.PackageOverrides["python"]["demo"].Exclude; !reflect.DeepEqual(got, []string{"recordings/.omegaflow", ".venv"}) {
+		t.Fatalf("digest mutated caller exclusions: %#v", got)
+	}
+}
+
 func TestValidateValidatedBuildV1RejectsUnsafeImageReference(t *testing.T) {
 	platform, err := blueprint.ParsePlatform("linux/amd64")
 	if err != nil {
