@@ -310,9 +310,12 @@ explicit opt-in later.
 **Approved implementation contract:**
 
 - Reploy observes and copies an immutable projection containing every selected
-  local-source entry except VCS metadata. Generated environments, caches, and
-  other development files remain visible to the declared build backend; the
-  backend alone decides whether they enter the sdist.
+  local-source entry except VCS metadata and exact subtrees explicitly excluded
+  by the local override. Exclusions are literal input-selection paths, are
+  applied before entry metadata is read, and participate in source identity.
+  Other generated environments, caches, and development files remain visible
+  to the declared build backend; the backend alone decides whether they enter
+  the sdist.
 - Every explicit image build with a selected local Python project performs the
   complete source projection, sdist build, validation, and wheel build before
   deciding whether later provider layers or the final environment image are
@@ -721,11 +724,12 @@ the source manifest:
 - The virtual environment's Python symlink resolves to the system interpreter,
   correctly triggering the escape check.
 
-Slice 12 replaced that generic snapshot boundary with a complete provisional
-input (excluding VCS metadata), followed by backend-defined sdist creation and
-Reploy-owned sdist validation. Generated development state may be visible to
-the backend but does not enter the retained artifact unless the project's
-packaging metadata selects it.
+Slice 12 replaced that generic snapshot boundary with a provisional input,
+followed by backend-defined sdist creation and Reploy-owned sdist validation.
+The input excludes VCS metadata and may now exclude exact developer-declared
+subtrees. Other generated development state may be visible to the backend but
+does not enter the retained artifact unless the project's packaging metadata
+selects it.
 
 That historical diagnostic also exposed excessive internal context and used
 the ambiguous phrase `workspace root`. Slice 12 now reports source-input,

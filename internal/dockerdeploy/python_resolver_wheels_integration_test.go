@@ -152,8 +152,8 @@ func TestPythonLocalSourceResolverIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	pyproject := `[build-system]
-requires = ["setuptools>=77"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "demo-server"
@@ -177,7 +177,9 @@ demo-server = "demo_server:main"
 	); err != nil {
 		t.Fatal(err)
 	}
-	manifest, digest, err := ObservePythonSourceManifest(sourceDir)
+	manifest, digest, err := ObservePythonSourceManifestWithExclusions(
+		sourceDir, []string{".venv-demo"},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,6 +190,9 @@ demo-server = "demo_server:main"
 	snapshots, err := StagePythonLocalSourceSnapshots(artifacts, localSources)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(snapshots[0].HostDir, ".venv-demo")); !os.IsNotExist(err) {
+		t.Fatalf("excluded .venv-demo entered immutable source snapshot: %v", err)
 	}
 	probeWorkspace := buildIntegrationProbeWorkspace(t, platform)
 	session, err := OpenPythonResolverSession(ctx, descriptor, probeWorkspace, artifacts)
