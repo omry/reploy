@@ -297,8 +297,11 @@ Staging package overrides are not blueprint or request-overlay entries. A
 staging directory may contain `overrides.yaml`, an explicit sparse
 environment overlay whose `environment.id` must match the retained blueprint.
 For each provider-owned package identifier it selects exactly one local `path`
-or upstream `version`. During `reploy build`, inspection of a selected local
-source produces a `ResolvedSourceInput`
+or upstream `version`. A local mapping may also contain an `exclude` array of
+exact canonical source-relative subtrees. These are literal paths rather than
+glob patterns; Reploy applies them before observing entry metadata and binds
+the normalized list into local-source identity. During `reploy build`,
+inspection of a selected local source produces a `ResolvedSourceInput`
 containing the source-input digest, retained source-artifact digest,
 build-environment digest, builder/toolchain profile, settings, ecosystem
 metadata, and output-artifact digest. The resolved request and its digest live
@@ -3040,26 +3043,20 @@ Repository searches find none of the symbols, paths, labels, tags, commands, or
 serialized fields listed in the cutover table; an old-state fixture fails
 without mutation.
 
-## Phase 2/3 Task Crosswalk
+## Implementation Slice Acceptance Gates
 
-`BLUEPRINT_ENVIRONMENT_IMPLEMENTATION_PLAN.md` assigns stable `P2-*` and `P3-*`
-IDs to every Phase 2 and Phase 3 implementation or gate obligation. Each ID
-appears exactly once below. A task is complete only when the named slice's gate
-passes; work done in an earlier slice is provisional until that one gate.
+The provider implementation was organized into six detailed-design slices.
+Each slice is complete only when its named acceptance gate passes; work done in
+an earlier slice is provisional until that gate.
 
-| Detailed-design slice | Phase 2 task IDs | Phase 3 task IDs | Acceptance gate |
-| --- | --- | --- | --- |
-| Slice 1: Canonical foundations and schema | P2-17 | — | Parser, normalization, identifier, overlay atomicity, and canonical identity tests |
-| Slice 2: Provider graph with existing Python behavior | P2-01, P2-02, P2-03, P2-04, P2-05, P2-06, P2-12, P2-14, P2-18, P2-19, P2-20, P2-24, P2-25, P2-26 | — | Existing Python through graph executor; synthetic supplier-selection graph tests; public APT still rejected |
-| Slice 3: Artifact store and Docker transaction backend | P2-07, P2-08, P2-09, P2-10, P2-11, P2-13, P2-21, P2-27 | P3-01, P3-02, P3-03, P3-04, P3-05, P3-06, P3-07, P3-08, P3-09, P3-10, P3-11, P3-12, P3-13, P3-14, P3-15, P3-18, P3-19, P3-20, P3-21, P3-22, P3-23 | Fake-Docker command tests plus ordinary `docker build` on minimum Engine 24.0 and current Desktop-hosted Engine; no direct Buildx |
-| Slice 4: APT resolver and offline layer | P2-15 | — | APT schema and real-container resolver/materializer matrix; public APT remains rejected |
-| Slice 5: Cross-provider Python | P2-16, P2-22 | — | APT-supplied Python, two component interpreter/venv pairs, Python-base plus native APT libraries, then public APT enablement |
-| Slice 6: Public build cutover | P2-23 | P3-16, P3-17 | Full tests, CLI Docker smoke, install/store transfer, recovery, cleanup, mount/runtime failures, and legacy-removal assertions |
-
-The crosswalk is bidirectional for this scope: every Phase 2/3 ID names one
-slice, and every detailed-design slice owns at least one Phase 2/3 ID. Adding,
-splitting, or moving a Phase 2/3 task requires updating both documents and the
-coverage check that compares their ID sets and rejects duplicate mappings.
+| Detailed-design slice | Acceptance gate |
+| --- | --- |
+| Slice 1: Canonical foundations and schema | Parser, normalization, identifier, overlay atomicity, and canonical identity tests |
+| Slice 2: Provider graph with existing Python behavior | Existing Python through graph executor; synthetic supplier-selection graph tests; public APT still rejected |
+| Slice 3: Artifact store and Docker transaction backend | Fake-Docker command tests plus ordinary `docker build` on minimum Engine 24.0 and current Desktop-hosted Engine; no direct Buildx |
+| Slice 4: APT resolver and offline layer | APT schema and real-container resolver/materializer matrix; public APT remains rejected |
+| Slice 5: Cross-provider Python | APT-supplied Python, two component interpreter/venv pairs, Python-base plus native APT libraries, then public APT enablement |
+| Slice 6: Public build cutover | Full tests, CLI Docker smoke, install/store transfer, recovery, cleanup, mount/runtime failures, and legacy-removal assertions |
 
 ## Approved Prototype Decisions
 
