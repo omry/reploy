@@ -1,0 +1,15 @@
+{
+  "schema": "portable-tool-v1",
+  "id": "tool:playwright",
+  "name": "playwright",
+  "summary": "Playwright browser automation runtime",
+  "upstream": "https://playwright.dev/",
+  "source": "https://github.com/microsoft/playwright-python",
+  "license": "https://github.com/microsoft/playwright-python/blob/main/LICENSE",
+  "releases": [
+    {
+      "id": "tool:playwright/releases/1.61.0/revisions/1/manifest",
+      "digest": "sha256:06cd4de38b7784c547939e62f3c45b9fccce755e3c8c42275cca682c7ac11b41"
+    }
+  ]
+}
