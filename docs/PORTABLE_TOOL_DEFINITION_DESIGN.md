@@ -317,6 +317,21 @@ A native package set contains:
 Package sets are reusable only through explicit references. They do not contain
 OS matching expressions and cannot select themselves.
 
+### Integration Fixture and Validation Profile Records
+
+An integration-fixture record binds one exact target tuple to a tagged base
+image, its platform-specific immutable image digest, and the context, binding,
+and selections that CI must exercise. A validation-profile record names the
+reviewed Reploy-owned validator for one tool release and requires network-free
+validation. Release manifests and target leaves reference these records by
+canonical digest; placeholder or unresolved validation references are not
+valid catalog data.
+
+These records describe required validation work. The resulting pass/fail
+evidence remains external to definition identity as described below, avoiding
+a cycle in which validating a definition changes the definition being
+validated.
+
 ## Catalog Layout
 
 The filesystem layout follows semantic ownership rather than placing every
@@ -326,61 +341,74 @@ definition in one flat directory. A representative layout is:
 internal/toolcatalog/definitions/
   java/
     tool.json
-    versions/
-      21/
-        revisions/
-          1/
-            manifest.json
-            contract.json
-            sources/
-              runtime-linux-amd64.json
-              runtime-linux-arm64.json
-            payloads/
-              runtime-linux-amd64.json
-              runtime-linux-arm64.json
-            package-sets/
-              debian-runtime-amd64.json
-            targets/
-              debian/
-                12/
-                  amd64.json
-                  arm64.json
-              ubuntu/
-                26.04/
-                  amd64.json
-                  arm64.json
+    21.0.12+8/
+      contract.json
+      payloads/
+        jdk-linux-amd64.json
+      targets/
+        debian/
+          12/
+            amd64.json
+          13/
+            amd64.json
+        ubuntu/
+          25.10/
+            amd64.json
+          26.04/
+            amd64.json
+      validation/
+        fixtures/
+          debian-12-amd64.json
+          debian-13-amd64.json
+          ubuntu-25.10-amd64.json
+          ubuntu-26.04-amd64.json
+        profiles/
+          default.json
+      revisions/
+        1/
+          manifest.json
+          sources/
+            jdk-linux-amd64.json
   playwright/
     tool.json
-    versions/
-      1.61.0/
-        revisions/
-          1/
-            manifest.json
-            contract.json
-            sources/
-              python-linux-amd64.json
-              chromium-linux-amd64.json
-            bindings/
-              python/
-                contract.json
-                linux-amd64.json
-                linux-arm64.json
-            payloads/
-              chromium/
-                linux-amd64.json
-                linux-arm64.json
-            package-sets/
-              debian-12-amd64.json
-              ubuntu-t64-amd64.json
-            targets/
-              debian/
-                12/
-                  amd64.json
-              ubuntu/
-                25.10/
-                  amd64.json
-                26.04/
-                  amd64.json
+    1.61.0/
+      contract.json
+      bindings/
+        python/
+          contract.json
+          linux-amd64.json
+      package-sets/
+        debian-12-amd64.json
+        ubuntu-t64-amd64.json
+      payloads/
+        chromium/
+          chromium-headless-shell-linux-amd64.json
+          chromium-linux-amd64.json
+          ffmpeg-linux-amd64.json
+      targets/
+        debian/
+          12/
+            amd64.json
+        ubuntu/
+          25.10/
+            amd64.json
+          26.04/
+            amd64.json
+      validation/
+        fixtures/
+          debian-12-amd64.json
+          ubuntu-25.10-amd64.json
+          ubuntu-26.04-amd64.json
+        profiles/
+          default.json
+      revisions/
+        1/
+          manifest.json
+          sources/
+            python-linux-amd64.json
+            chromium-linux-amd64.json
+            chromium-headless-shell-linux-amd64.json
+            ffmpeg-linux-amd64.json
 ```
 
 The tree is organizational, not an inheritance mechanism. Every semantic edge
@@ -390,6 +418,10 @@ not determine identity. The catalog may retain multiple canonical records with
 the same semantic ID and different digests when different immutable release
 revisions reference them. One exact pair must resolve to exactly one canonical
 record.
+
+Each exact upstream version is a directory immediately below its tool. A
+redundant `versions/` wrapper adds no ownership or identity information and is
+therefore omitted.
 
 Architecture remains visible in target and artifact filenames because those
 records make architecture-specific claims. It disappears from files whose
@@ -612,10 +644,14 @@ different purposes:
   definition revision, and release-manifest digest. Adding a target produces a
   new immutable revision and therefore new provenance.
 - **Selected-closure identity** hashes the tool name and exact upstream version,
-  the release contract, and only the exact target, binding, payload,
-  package-set, export, probe, and selection records used by the request. It
-  excludes the release manifest, definition revision, artifact source records,
-  and retrieval URLs.
+  the resolved contract contribution (chosen context, binding, selections,
+  runtime, exports, and probes), the resolved target contribution, and only the
+  exact binding, payload, and package-set records used by the request. The
+  target contribution retains the exact target identity, unconditional
+  references, selected binding and selection references, target probes, and
+  validation references; it excludes unselected availability advertised by
+  the full target record. The identity also excludes the release manifest,
+  definition revision, artifact source records, and retrieval URLs.
 
 Locks retain both. Diagnostics can therefore identify the definition release
 that authorized a build without making unrelated records part of that build's
@@ -819,6 +855,11 @@ Definition JSON uses the record schemas named in this document with a
 decimal strings. Parsing is strict: duplicate members, unknown fields, invalid
 UTF-8, noncanonical IDs or decimal strings, and values outside core structural
 limits are errors before references are resolved.
+
+Each release manifest records the exact upstream version and an explicit,
+sorted list of accepted public version aliases. Resolution matches only that
+exact version or one of those aliases; generic catalog code does not infer
+tool-specific major-version semantics.
 
 The release contract represents the singular binding request as sorted
 `options`, a `required` boolean, and an optional `default`. It represents the
