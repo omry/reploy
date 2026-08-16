@@ -1,0 +1,19 @@
+{
+  "schema": "portable-tool-integration-fixture-v1",
+  "id": "tool:playwright/releases/1.61.0/validation/fixtures/debian-12-amd64",
+  "target": {
+    "platform": "linux/amd64",
+    "os_release_id": "debian",
+    "version_id": "12",
+    "oci_architecture": "amd64",
+    "native_architecture": "amd64",
+    "package_manager": "apt"
+  },
+  "base_image": "docker.io/library/debian:12-slim",
+  "base_image_digest": "sha256:362e64223cc0da95422b3b13c045186fc0a81250e765d31c025fbddf257f6143",
+  "context": "runtime",
+  "binding": "python",
+  "selections": [
+    "chromium"
+  ]
+}
