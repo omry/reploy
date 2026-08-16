@@ -639,8 +639,9 @@ unrelated option does not invalidate every provider node.
 All providers use one common identity contract when a staging package override
 builds an artifact from local source. The source path locates the source for
 the local build but is not content identity. Reploy observes a canonical
-source-input digest, while the provider defines and validates the closed source
-artifact that crosses into the final build. The identity also binds the
+source-input digest over both the selected entries and any explicit input
+exclusions, while the provider defines and validates the closed source artifact
+that crosses into the final build. The identity also binds the
 versioned builder and toolchain profile, every relevant build setting, and a
 build-environment digest covering the selected platform, immutable upstream
 image, and selected toolchain evidence.
@@ -812,7 +813,31 @@ the blueprint. It names `environment.id`, may replace the base reference at
 `environment.package_overrides`. Absence of `environment.base` means **From
 blueprint**. Each package mapping selects either a local source path or a
 specific version from that provider's normal upstream source. The two package
-forms are mutually exclusive.
+forms are mutually exclusive. A local-path mapping may also declare `exclude`,
+an array of exact source-relative paths whose named entry and descendants are
+withheld from the immutable source input:
+
+```yaml
+environment:
+  id: omegaflow
+  vars:
+    workspace_root: /home/me/src
+  package_overrides:
+    python:
+      omegaflow:
+        path: "{{ workspace_root }}/omegaflow"
+        exclude:
+          - recordings/.omegaflow
+```
+
+Each exclusion is a canonical relative path using `/`. Absolute paths,
+escaping `..` components, backslashes, glob syntax, and duplicates are
+rejected. The list is normalized into lexical order for identity. Reploy
+matches each path literally and excludes that path and its complete subtree;
+it does not read `.gitignore` or interpret ignore-file patterns. Exclusion is
+performed during source walking before file metadata beneath the excluded path
+is read, so generated FIFOs may be excluded deliberately. A FIFO or other
+unsupported special file that remains selected is still a hard error.
 
 The same sidecar may contain explicit development-only package roots beneath
 `environment.package_additions`. These are install requests, unlike source
@@ -876,8 +901,9 @@ mappings on the user's behalf, but resolution must not add inferred packages,
 resolved dependencies, hashes, or selected artifacts to it. Those results
 belong in the generated build lock and closed bundle. Relative local paths are
 resolved from the sidecar's directory; absolute paths are also valid. Physical
-paths never enter resolved content identity. Installation consumes the staged
-bundle and never reads the sidecar or original source checkout.
+paths never enter resolved content identity; the normalized exclusion intent
+does. Installation consumes the staged bundle and never reads the sidecar or
+original source checkout.
 
 `reploy overrides [--dir DIR]` opens the native editor for the current,
 default, or explicitly selected staging directory and loads an existing
@@ -892,6 +918,9 @@ the current user's home is expanded when Reploy uses the override. It lists
 explicit blueprint, selected-option, and deployment-added package requirements
 first with a distinct shaded background; override-only mappings follow. These
 variables belong to the sidecar and are not blueprint variables.
+The editor displays the number of exclusions and preserves an existing local
+choice's `exclude` list, but does not yet provide controls for authoring it; add
+or change exclusions directly in `overrides.yaml`.
 
 `V` saves the current choices and runs the normal build pipeline as an optional
 trial validation. Success means the selected versions exist, dependency
@@ -977,6 +1006,8 @@ environment:
     python:
       arbiter-server:
         path: "{{ workspace_root }}/server"
+        exclude:
+          - recordings/.arbiter
       arbiter-imap:
         path: "{{ workspace_root }}/plugins/imap"
       arbiter-smtp:
