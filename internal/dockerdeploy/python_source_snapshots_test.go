@@ -86,7 +86,8 @@ func TestStagePythonLocalSourceSnapshotsCopiesOnlyManifestEntries(t *testing.T) 
 func TestStagePythonLocalSourceSnapshotsExplainsInvalidManifestOrder(t *testing.T) {
 	sourceDir := t.TempDir()
 	manifest := PythonSourceManifestV1{
-		Schema: pythonSourceManifestSchemaV1,
+		Schema:  pythonSourceManifestSchemaV1,
+		Exclude: []string{},
 		Entries: []PythonSourceManifestEntryV1{
 			{Path: "zeta", Kind: "directory", Mode: "0755"},
 			{Path: "alpha", Kind: "directory", Mode: "0755"},
