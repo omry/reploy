@@ -55,6 +55,19 @@ func TestCanonicalPackageRequestV1RejectsPackageManagerOptions(t *testing.T) {
 	}
 }
 
+func TestValidatePackageRootRequirementV1(t *testing.T) {
+	for _, requirement := range []string{"demo", "demo[http]>=1.2,<2", "demo==1.2.3"} {
+		if err := ValidatePackageRootRequirementV1(requirement); err != nil {
+			t.Errorf("ValidatePackageRootRequirementV1(%q): %v", requirement, err)
+		}
+	}
+	for _, requirement := range []string{"demo ???", "demo[", "demo @ https://example.invalid/demo.whl", "demo; python_version > '3'"} {
+		if err := ValidatePackageRootRequirementV1(requirement); err == nil {
+			t.Errorf("ValidatePackageRootRequirementV1(%q) succeeded", requirement)
+		}
+	}
+}
+
 func TestProviderRequestDistributionsV1ReturnsSortedDirectRoots(t *testing.T) {
 	zeta, err := CanonicalPackageRequestV1("Zeta[extra]>=1")
 	if err != nil {

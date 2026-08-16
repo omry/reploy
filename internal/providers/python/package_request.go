@@ -8,6 +8,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	pep440 "github.com/aquasecurity/go-pep440-version"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/providers"
 )
@@ -58,6 +59,50 @@ func ValidateCanonicalPackageRequestV1(request providers.CanonicalPackageRequest
 	}
 	if !bytes.Equal(actual, expected) {
 		return fmt.Errorf("Python package request is not canonically normalized")
+	}
+	return nil
+}
+
+// ValidatePackageRootRequirementV1 validates the complete, resolver-supported
+// grammar for a direct distribution root. Catalog records intentionally exclude
+// direct URLs and environment markers because those would make an immutable
+// root depend on external location or runtime state.
+func ValidatePackageRootRequirementV1(requirement string) error {
+	request, err := CanonicalPackageRequestV1(requirement)
+	if err != nil {
+		return err
+	}
+	value := request.Value["requirement"].(string)
+	if strings.IndexFunc(value, unicode.IsSpace) >= 0 {
+		return fmt.Errorf("Python package root requirement must not contain whitespace")
+	}
+	name := requirementNamePattern.FindString(value)
+	if name == "" {
+		return fmt.Errorf("invalid Python package root requirement %q", requirement)
+	}
+	remainder := strings.TrimPrefix(value, name)
+	if strings.HasPrefix(remainder, "[") {
+		end := strings.IndexByte(remainder, ']')
+		if end < 0 {
+			return fmt.Errorf("invalid Python package root requirement %q", requirement)
+		}
+		extras := strings.Split(remainder[1:end], ",")
+		if len(extras) == 0 {
+			return fmt.Errorf("invalid Python package root requirement %q", requirement)
+		}
+		for _, extra := range extras {
+			if extra == "" || requirementNamePattern.FindString(extra) != extra {
+				return fmt.Errorf("invalid Python package root requirement %q", requirement)
+			}
+		}
+		remainder = remainder[end+1:]
+	}
+	if remainder == "" {
+		return nil
+	}
+	specifiers, err := pep440.NewSpecifiers(remainder)
+	if err != nil || specifiers.String() != remainder {
+		return fmt.Errorf("invalid Python package root requirement %q", requirement)
 	}
 	return nil
 }
