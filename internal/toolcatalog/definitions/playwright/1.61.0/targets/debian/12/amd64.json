@@ -1,0 +1,60 @@
+{
+  "schema": "portable-tool-target-v1",
+  "id": "tool:playwright/releases/1.61.0/targets/debian/12/amd64",
+  "target": {
+    "platform": "linux/amd64",
+    "os_release_id": "debian",
+    "version_id": "12",
+    "oci_architecture": "amd64",
+    "native_architecture": "amd64",
+    "package_manager": "apt"
+  },
+  "package_sets": [
+    {
+      "id": "tool:playwright/releases/1.61.0/package-sets/debian-12-amd64",
+      "digest": "sha256:e482c59ada36c1a6e859db1b289736934f83faa7892813d3b7b233591588f760"
+    }
+  ],
+  "bindings": [
+    {
+      "name": "python",
+      "contract": {
+        "id": "tool:playwright/releases/1.61.0/bindings/python/contract",
+        "digest": "sha256:08caaf2865c1b10c5c5d56ab5742fa59a0f4b50339bec69069df408cfd5915ba"
+      },
+      "artifact": {
+        "id": "tool:playwright/releases/1.61.0/bindings/python/artifacts/linux-amd64",
+        "digest": "sha256:4916bc1ce08bcdfaa0d1f33eddeee61b2a05e4753bfd0c261a8e1c2138d549ac"
+      }
+    }
+  ],
+  "payloads": [],
+  "selections": [
+    {
+      "name": "chromium",
+      "payloads": [
+        {
+          "id": "tool:playwright/releases/1.61.0/payloads/chromium/chromium-headless-shell-linux-amd64",
+          "digest": "sha256:8d6962b36ea3434fc094fdb6f9ab1f785282b021d140cb91bab47ec175cc5b8c"
+        },
+        {
+          "id": "tool:playwright/releases/1.61.0/payloads/chromium/chromium-linux-amd64",
+          "digest": "sha256:3f8d11940676b7d08f43aa80b60ec29b57ede0b16bf3a46850881ec5e4e9eed3"
+        },
+        {
+          "id": "tool:playwright/releases/1.61.0/payloads/chromium/ffmpeg-linux-amd64",
+          "digest": "sha256:e0a64049a4e4cce3ec74df79046e9c86897be8141bb87b9de865ec37ff974dd9"
+        }
+      ]
+    }
+  ],
+  "probes": [],
+  "integration_fixture": {
+    "id": "tool:playwright/releases/1.61.0/validation/fixtures/debian-12-amd64",
+    "digest": "sha256:8cb57f2ae8a82998d927da555d89c9e0337de429cc809d4a6ab3e46b70e668b1"
+  },
+  "validation_profile": {
+    "id": "tool:playwright/releases/1.61.0/validation/profiles/default",
+    "digest": "sha256:f4e255bce4ba8cd01791575b94cc23e5883186abed8ccf265805e80f09245a13"
+  }
+}
