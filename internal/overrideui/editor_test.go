@@ -29,7 +29,7 @@ func TestNewModelLoadsExistingOverridesAndBlueprintRoots(t *testing.T) {
 	overrides.Environment.Base = &deploy.BaseImageOverrideV1{Image: "python:3.13-slim"}
 	overrides.Environment.Vars["workspace_root"] = filepath.Dir(project)
 	overrides.Environment.PackageOverrides["python"] = map[string]deploy.PackageOverrideChoiceV1{
-		"demo":  {Path: "{{ workspace_root }}/demo"},
+		"demo":  {Path: "{{ workspace_root }}/demo", Exclude: []string{"recordings/.omegaflow"}},
 		"extra": {Version: "2.0"},
 	}
 	commitOverrides(t, dir, overrides)
@@ -54,11 +54,15 @@ func TestNewModelLoadsExistingOverridesAndBlueprintRoots(t *testing.T) {
 	if len(m.items) != 3 {
 		t.Fatalf("items = %#v", m.items)
 	}
-	if m.items[0].Package != "other" || !m.items[0].Explicit || m.items[0].Choice != (deploy.PackageOverrideChoiceV1{}) {
+	if m.items[0].Package != "other" || !m.items[0].Explicit || !m.items[0].Choice.Empty() {
 		t.Fatalf("blueprint root = %#v", m.items[0])
 	}
 	if m.items[1].Package != "demo" || m.items[1].Explicit || m.items[1].Choice.Path == "" {
 		t.Fatalf("demo item = %#v", m.items[1])
+	}
+	if !reflect.DeepEqual(m.items[1].Choice.Exclude, []string{"recordings/.omegaflow"}) ||
+		!reflect.DeepEqual(m.buildRaw().Environment.PackageOverrides["python"]["demo"].Exclude, []string{"recordings/.omegaflow"}) {
+		t.Fatalf("editor did not preserve local-source exclusions: %#v", m.items[1].Choice)
 	}
 	if m.items[2].Package != "extra" || m.items[2].Explicit || m.items[2].Choice.Version != "2.0" {
 		t.Fatalf("extra item = %#v", m.items[2])
@@ -628,7 +632,10 @@ func TestMainViewFitsNarrowTerminal(t *testing.T) {
 	m := editorModelForInteraction(t)
 	m.width = 48
 	m.height = 24
-	m.items[0].Choice = deploy.PackageOverrideChoiceV1{Path: "/a/very/long/path/to/a/local/project/that/must/not-overflow"}
+	m.items[0].Choice = deploy.PackageOverrideChoiceV1{
+		Path:    "/a/very/long/path/to/a/local/project/that/must/not-overflow",
+		Exclude: []string{"recordings/.omegaflow"},
+	}
 	m.items = append(m.items, overrideItem{
 		Provider: "python",
 		Package:  "a-long-package-name-that-is-only-an-override",
@@ -649,16 +656,25 @@ func TestMainViewFitsNarrowTerminal(t *testing.T) {
 	if !strings.Contains(view, "override-only") {
 		t.Fatalf("narrow view lost override-only classification:\n%s", view)
 	}
+	if !strings.Contains(view, "1 excluded") {
+		t.Fatalf("narrow view hid the local source exclusion count:\n%s", view)
+	}
 }
 
 func TestMainViewShowsFullLocalPathWhenTerminalHasRoom(t *testing.T) {
 	m := editorModelForInteraction(t)
 	m.width = 140
 	path := "/home/omry/dev/reploy/examples/omegaconf-inspector"
-	m.items[0].Choice = deploy.PackageOverrideChoiceV1{Path: path}
+	m.items[0].Choice = deploy.PackageOverrideChoiceV1{
+		Path:    path,
+		Exclude: []string{"recordings/.omegaflow"},
+	}
 	view := m.View()
-	if !strings.Contains(view, "local · "+path) {
+	if !strings.Contains(view, path) {
 		t.Fatalf("wide view truncated the local source path:\n%s", view)
+	}
+	if !strings.Contains(view, "1 excluded") {
+		t.Fatalf("wide view hid the local source exclusion count:\n%s", view)
 	}
 }
 
@@ -899,7 +915,7 @@ func TestResetRemovesOverrideOnlyRowButRetainsExplicitDependency(t *testing.T) {
 	m.cursor = 0
 	updated, _ = m.updateKey(tea.KeyMsg{Type: tea.KeyDelete})
 	m = updated.(*model)
-	if len(m.items) != 1 || m.items[0].Choice != (deploy.PackageOverrideChoiceV1{}) {
+	if len(m.items) != 1 || !m.items[0].Choice.Empty() {
 		t.Fatalf("reset explicit items = %#v", m.items)
 	}
 }
@@ -1079,6 +1095,25 @@ func TestLocalSourceEditorPrefillsWorkspaceRelativeSelection(t *testing.T) {
 	m = updated.(*model)
 	if m.screen != screenPath || m.input.Value() != "reploy/examples/omegaconf-inspector" {
 		t.Fatalf("local source input = %q on screen %v", m.input.Value(), m.screen)
+	}
+}
+
+func TestLocalSourceEditorPreservesExclusionsWhenReselectingPath(t *testing.T) {
+	workspace := t.TempDir()
+	project := pythonProject(t, filepath.Join(workspace, "demo"), "demo")
+	m := editorModelForInteraction(t)
+	m.workspaceResolved = workspace
+	m.items[0].Choice = deploy.PackageOverrideChoiceV1{
+		Path:    "{{ workspace_root }}/demo",
+		Exclude: []string{"recordings/.omegaflow"},
+	}
+	m.screen = screenPath
+	m.input.SetValue(project)
+	m.results = []string{}
+	updated, _ := m.updatePath(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(*model)
+	if !reflect.DeepEqual(m.items[0].Choice.Exclude, []string{"recordings/.omegaflow"}) {
+		t.Fatalf("reselected local path dropped exclusions: %#v", m.items[0].Choice)
 	}
 }
 

@@ -297,8 +297,11 @@ Staging package overrides are not blueprint or request-overlay entries. A
 staging directory may contain `overrides.yaml`, an explicit sparse
 environment overlay whose `environment.id` must match the retained blueprint.
 For each provider-owned package identifier it selects exactly one local `path`
-or upstream `version`. During `reploy build`, inspection of a selected local
-source produces a `ResolvedSourceInput`
+or upstream `version`. A local mapping may also contain an `exclude` array of
+exact canonical source-relative subtrees. These are literal paths rather than
+glob patterns; Reploy applies them before observing entry metadata and binds
+the normalized list into local-source identity. During `reploy build`,
+inspection of a selected local source produces a `ResolvedSourceInput`
 containing the source-input digest, retained source-artifact digest,
 build-environment digest, builder/toolchain profile, settings, ecosystem
 metadata, and output-artifact digest. The resolved request and its digest live
