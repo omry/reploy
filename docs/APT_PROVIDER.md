@@ -336,12 +336,16 @@ match.
 
 When a staging package override selects local Python source, its filesystem
 path is only a local build input. Reploy observes an immutable path-free input
-digest while withholding VCS metadata, then lets the declared Python build
-backend define the package boundary by producing an sdist. The backend sees
-ordinary generated directories and caches; Reploy does not decide package
-contents with a generic ignore list. Reploy validates and retains exactly one
-closed `.tar.gz` sdist, securely extracts that retained artifact, and builds
-the wheel only from the extraction.
+digest while withholding VCS metadata and any exact relative subtrees listed
+by the selected override's optional `exclude` array, then lets the declared
+Python build backend define the package boundary by producing an sdist.
+Exclusions are literal forward-slash paths, not glob or ignore-file patterns;
+they are applied before Reploy reads metadata beneath the selected path and are
+part of source-input identity. Selected FIFOs and other unsupported special
+files remain errors. Apart from these explicit input exclusions, the backend
+sees ordinary generated directories and caches. Reploy validates and retains
+exactly one closed `.tar.gz` sdist, securely extracts that retained artifact,
+and builds the wheel only from the extraction.
 
 A selected snapshot may contain project-owned `.reploy.yaml` build metadata.
 The initial strict recipe declares either `pep517` or `setuptools-legacy` and
