@@ -51,6 +51,14 @@ func validateLoadedRecordV1(record loadedRecordV1) error {
 		if value.ID != prefix {
 			return fmt.Errorf("release manifest ID must be %q", prefix)
 		}
+		if value.Aliases == nil || len(value.Aliases) > maxDefinitionReferences {
+			return fmt.Errorf("release aliases must use a bounded array")
+		}
+		for index, alias := range value.Aliases {
+			if !validRecordSegmentV1(alias) || alias == value.Version || index > 0 && value.Aliases[index-1] >= alias {
+				return fmt.Errorf("release aliases must be canonical, unique, sorted, and different from the exact version")
+			}
+		}
 		if err := validateRecordReferenceV1(value.Contract); err != nil {
 			return fmt.Errorf("release contract: %w", err)
 		}

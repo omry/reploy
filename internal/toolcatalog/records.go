@@ -66,6 +66,7 @@ type ReleaseManifestV1 struct {
 	ID                string                    `json:"id"`
 	Tool              string                    `json:"tool"`
 	Version           string                    `json:"version"`
+	Aliases           []string                  `json:"aliases"`
 	Revision          string                    `json:"revision"`
 	Contract          RecordReferenceV1         `json:"contract"`
 	Targets           []RecordReferenceV1       `json:"targets"`
