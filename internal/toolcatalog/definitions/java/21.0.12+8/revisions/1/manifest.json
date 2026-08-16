@@ -1,0 +1,52 @@
+{
+  "schema": "portable-tool-release-manifest-v1",
+  "id": "tool:java/releases/21.0.12+8/revisions/1/manifest",
+  "tool": "java",
+  "version": "21.0.12+8",
+  "aliases": [
+    "21"
+  ],
+  "revision": "1",
+  "contract": {
+    "id": "tool:java/releases/21.0.12+8/contract",
+    "digest": "sha256:e700d2d231b24cc166f392298008ad2a219bcf9c07140fa398f359ca39c277a9"
+  },
+  "targets": [
+    {
+      "id": "tool:java/releases/21.0.12+8/targets/debian/12/amd64",
+      "digest": "sha256:d4dd4bccbfaeb678774043ac9b88ce172cfd46a2485a0fb6f607a0b0e59f1b27"
+    },
+    {
+      "id": "tool:java/releases/21.0.12+8/targets/debian/13/amd64",
+      "digest": "sha256:b7530765863ca72b295ecf8f7326dd93b8bb6c956511f61c3bae3d86ebbf3adb"
+    },
+    {
+      "id": "tool:java/releases/21.0.12+8/targets/ubuntu/25.10/amd64",
+      "digest": "sha256:c2253993feeaea2c1c180f6ad0d55e20843cf925613c658e343adc2b7eaa7b6a"
+    },
+    {
+      "id": "tool:java/releases/21.0.12+8/targets/ubuntu/26.04/amd64",
+      "digest": "sha256:3b185a184d4ba5af0e92c2e05e247e10d34687ef046985fbeeedd432f5487a19"
+    }
+  ],
+  "artifact_sources": [
+    {
+      "artifact_sha256": "sha256:e4446ff06a276155697597cc0f1b15da004ff083f4964a35271ecee567177370",
+      "artifact": {
+        "id": "tool:java/releases/21.0.12+8/payloads/jdk-linux-amd64",
+        "digest": "sha256:8c0ffd54b2f11e038591d085ad2ee9f069040b0f6dc19a9cc49bb6dfe6907143"
+      },
+      "source": {
+        "id": "tool:java/releases/21.0.12+8/revisions/1/sources/jdk-linux-amd64",
+        "digest": "sha256:575f2c5cbebf404b5eafddbc68e8073456eb79eaed4d471691958e984fa65c2f"
+      }
+    }
+  ],
+  "provenance": [
+    "https://github.com/adoptium/temurin21-binaries/releases/tag/jdk-21.0.12%2B8"
+  ],
+  "validation_profile": {
+    "id": "tool:java/releases/21.0.12+8/validation/profiles/default",
+    "digest": "sha256:078ca84e6406903e0f2caee7ac5d06b0ee9baeb0d619eb4ac6365fb35d68a1bc"
+  }
+}
