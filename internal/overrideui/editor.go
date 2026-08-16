@@ -1024,7 +1024,11 @@ func (m *model) viewMain() string {
 			source = item.Provider + " provider"
 		}
 		if item.Choice.Path != "" {
-			source = "local · " + item.Choice.Path
+			if len(item.Choice.Exclude) == 0 {
+				source = "local · " + item.Choice.Path
+			} else {
+				source = fmt.Sprintf("local · %d excluded · %s", len(item.Choice.Exclude), item.Choice.Path)
+			}
 		}
 		if item.Choice.Version != "" {
 			if item.Provider == "python" {
@@ -1099,7 +1103,7 @@ func (m *model) viewMain() string {
 }
 
 func (m *model) isUnusedOverride(item overrideItem) bool {
-	if item.Choice == (deploy.PackageOverrideChoiceV1{}) {
+	if item.Choice.Empty() {
 		return false
 	}
 	for _, unused := range m.unusedOverrides {
@@ -1484,7 +1488,7 @@ func (m *model) updateMain(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *model) updateChoose(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "esc":
-		if !m.current().Explicit && m.current().Choice == (deploy.PackageOverrideChoiceV1{}) {
+		if !m.current().Explicit && m.current().Choice.Empty() {
 			m.resetCurrentOverride()
 		}
 		m.screen = screenMain
@@ -1733,7 +1737,10 @@ func (m *model) updatePath(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "Choose a project directory, enter a path relative to the workspace, or enter an absolute path."
 			return m, nil
 		}
-		m.items[m.cursor].Choice = deploy.PackageOverrideChoiceV1{Path: storedPath(m.workspaceResolved, selected)}
+		m.items[m.cursor].Choice = deploy.PackageOverrideChoiceV1{
+			Path:    storedPath(m.workspaceResolved, selected),
+			Exclude: append([]string{}, m.items[m.cursor].Choice.Exclude...),
+		}
 		m.input.Blur()
 		m.screen = screenMain
 		m.dirty = true
@@ -2063,7 +2070,7 @@ func (m *model) refreshDiscoveredItems() {
 				item.Sources = append([]string{}, sources...)
 			}
 		} else if item.Discovered {
-			if item.Choice == (deploy.PackageOverrideChoiceV1{}) {
+			if item.Choice.Empty() {
 				continue
 			}
 			item.Discovered = false
