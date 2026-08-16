@@ -1,0 +1,3 @@
+kind: Fixed
+body: Allow local Python overrides to exclude exact generated subtrees before source observation, and accept valid Hatchling source distributions whose single root directory is implicit in archive entries.
+time: 2026-08-16T05:45:00+08:00
