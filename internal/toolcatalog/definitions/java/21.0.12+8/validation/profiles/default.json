@@ -1,0 +1,8 @@
+{
+  "schema": "portable-tool-validation-profile-v1",
+  "id": "tool:java/releases/21.0.12+8/validation/profiles/default",
+  "tool": "java",
+  "version": "21.0.12+8",
+  "validator": "java-jdk",
+  "network": "none"
+}
