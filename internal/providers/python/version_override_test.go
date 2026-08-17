@@ -21,3 +21,16 @@ func TestPackageOverrideVersionUsesPEP440ValidationAndOrdering(t *testing.T) {
 		t.Fatalf("final release comparison = %d, want newer than development release", compared)
 	}
 }
+
+func TestValidateInterpreterVersionV1(t *testing.T) {
+	for _, value := range []string{"3.11", "3.13.2"} {
+		if err := ValidateInterpreterVersionV1(value); err != nil {
+			t.Errorf("ValidateInterpreterVersionV1(%q): %v", value, err)
+		}
+	}
+	for _, value := range []string{"banana", "3..11", "03.11", "3", "999999999999999999999.1"} {
+		if err := ValidateInterpreterVersionV1(value); err == nil {
+			t.Errorf("ValidateInterpreterVersionV1(%q) succeeded", value)
+		}
+	}
+}
