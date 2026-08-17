@@ -1,6 +1,6 @@
 ---
 status: Accepted
-updated: 2026-08-16
+updated: 2026-08-17
 summary: Accepted composition, targeting, acquisition, identity, and validation model for proposed embedded portable-tool definitions.
 refines: docs/REPOSITORY_DESIGN.md
 ---
@@ -14,6 +14,12 @@ the proposed embedded catalog. It refines the portable-tool contract in
 `REPOSITORY_DESIGN.md` and the proposed built-in tool behavior in
 `BLUEPRINT_ENVIRONMENT_MODEL.md`. Acceptance fixes the intended design; it does
 not claim that the implementation is present in this revision.
+
+Delivery sequencing, reviewable task boundaries, migration of the current WIP,
+and per-slice acceptance evidence are defined by the
+[Portable Tool Definition Implementation Plan](PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md).
+That plan implements this document but does not override its normative design
+decisions.
 
 The immediate implementation scope is `tool:java` and `tool:playwright`.
 Repository publication, TUF metadata, publisher authorization, and lifecycle
