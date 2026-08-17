@@ -8,6 +8,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	pep440 "github.com/aquasecurity/go-pep440-version"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/providers"
 )
@@ -60,6 +61,74 @@ func ValidateCanonicalPackageRequestV1(request providers.CanonicalPackageRequest
 		return fmt.Errorf("Python package request is not canonically normalized")
 	}
 	return nil
+}
+
+// ValidatePackageRootRequirementV1 validates the complete, resolver-supported
+// grammar for a direct distribution root. Catalog records intentionally exclude
+// direct URLs and environment markers because those would make an immutable
+// root depend on external location or runtime state.
+func ValidatePackageRootRequirementV1(requirement string) error {
+	_, err := PackageRootDistributionNameV1(requirement)
+	return err
+}
+
+// PackageRootDistributionNameV1 validates a complete direct root requirement
+// and returns its normalized distribution name.
+func PackageRootDistributionNameV1(requirement string) (string, error) {
+	request, err := CanonicalPackageRequestV1(requirement)
+	if err != nil {
+		return "", err
+	}
+	value := request.Value["requirement"].(string)
+	if strings.IndexFunc(value, unicode.IsSpace) >= 0 {
+		return "", fmt.Errorf("Python package root requirement must not contain whitespace")
+	}
+	name := requirementNamePattern.FindString(value)
+	if !validPackageRequirementIdentifierV1(name) {
+		return "", fmt.Errorf("invalid Python package root requirement %q", requirement)
+	}
+	remainder := strings.TrimPrefix(value, name)
+	if strings.HasPrefix(remainder, "[") {
+		end := strings.IndexByte(remainder, ']')
+		if end < 0 {
+			return "", fmt.Errorf("invalid Python package root requirement %q", requirement)
+		}
+		extras := strings.Split(remainder[1:end], ",")
+		if len(extras) == 0 {
+			return "", fmt.Errorf("invalid Python package root requirement %q", requirement)
+		}
+		for _, extra := range extras {
+			if !validPackageRequirementIdentifierV1(extra) {
+				return "", fmt.Errorf("invalid Python package root requirement %q", requirement)
+			}
+		}
+		remainder = remainder[end+1:]
+	}
+	if remainder == "" {
+		return NormalizeDistributionName(name), nil
+	}
+	specifiers, err := pep440.NewSpecifiers(remainder)
+	if err != nil || specifiers.String() != remainder {
+		return "", fmt.Errorf("invalid Python package root requirement %q", requirement)
+	}
+	return NormalizeDistributionName(name), nil
+}
+
+func validPackageRequirementIdentifierV1(value string) bool {
+	if value == "" || !asciiAlphaNumericV1(value[0]) || !asciiAlphaNumericV1(value[len(value)-1]) {
+		return false
+	}
+	for _, character := range value {
+		if character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '.' || character == '_' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func asciiAlphaNumericV1(value byte) bool {
+	return value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z' || value >= '0' && value <= '9'
 }
 
 // ProviderRequestDistributionsV1 returns the normalized direct distribution
