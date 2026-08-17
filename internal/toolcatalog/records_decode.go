@@ -73,6 +73,9 @@ func decodeRecordV1(filename string, payload []byte) (loadedRecordV1, error) {
 		return loadedRecordV1{}, fmt.Errorf("decode %s: %w", filename, err)
 	}
 	record := loadedRecordV1{ID: header.ID, Schema: header.Schema, Path: filename, Value: value}
+	if err := validateLoadedRecordV1(record); err != nil {
+		return loadedRecordV1{}, fmt.Errorf("validate %s: %w", filename, err)
+	}
 	digest, err := canonical.Sum("portable-tool-record", portableToolRecordIdentityV1, value)
 	if err != nil {
 		return loadedRecordV1{}, fmt.Errorf("digest %s: %w", filename, err)
