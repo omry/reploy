@@ -1,6 +1,7 @@
 package python
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -51,6 +52,68 @@ func TestCanonicalPackageRequestV1RejectsPackageManagerOptions(t *testing.T) {
 		}
 		if err := ValidateCanonicalPackageRequestV1(request); err == nil {
 			t.Fatalf("ValidateCanonicalPackageRequestV1(%q) succeeded", requirement)
+		}
+	}
+}
+
+func TestPackageRootDistributionNameV1(t *testing.T) {
+	for _, requirement := range []string{"demo", "demo[http]>=1.2,<2", "demo==1.2.3", "demo[a,b,c]", "d", "demo[http]"} {
+		name, err := PackageRootDistributionNameV1(requirement)
+		if err != nil {
+			t.Errorf("PackageRootDistributionNameV1(%q): %v", requirement, err)
+		}
+		if want := strings.Split(strings.Split(requirement, "[")[0], "=")[0]; name != want {
+			t.Errorf("PackageRootDistributionNameV1(%q) = %q, want %q", requirement, name, want)
+		}
+	}
+	for _, testCase := range []struct {
+		name        string
+		requirement string
+	}{
+		{name: "whitespace", requirement: "demo ???"},
+		{name: "trailing dash", requirement: "demo-"},
+		{name: "trailing dots", requirement: "demo.."},
+		{name: "invalid extra", requirement: "demo[http-]"},
+		{name: "unterminated extras", requirement: "demo["},
+		{name: "empty extras", requirement: "demo[]"},
+		{name: "unsorted extras", requirement: "demo[b,a]"},
+		{name: "duplicate extras", requirement: "demo[a,a]"},
+		{name: "direct URL", requirement: "demo @ https://example.invalid/demo.whl"},
+		{name: "environment marker", requirement: "demo; python_version > '3'"},
+		{name: "empty", requirement: ""},
+	} {
+		if _, err := PackageRootDistributionNameV1(testCase.requirement); err == nil {
+			t.Errorf("%s: PackageRootDistributionNameV1(%q) succeeded", testCase.name, testCase.requirement)
+		}
+	}
+}
+
+func TestPackageRootDistributionNameV1Limits(t *testing.T) {
+	longName := strings.Repeat("a", 4096)
+	if name, err := PackageRootDistributionNameV1(longName); err != nil || name != longName {
+		t.Errorf("long distribution name = %q, %v", name, err)
+	}
+	manyExtras := make([]string, 128)
+	for index := range manyExtras {
+		manyExtras[index] = fmt.Sprintf("e%04d", index)
+	}
+	requirement := "demo[" + strings.Join(manyExtras, ",") + "]"
+	if name, err := PackageRootDistributionNameV1(requirement); err != nil || name != "demo" {
+		t.Errorf("many extras = %q, %v", name, err)
+	}
+	if _, err := PackageRootDistributionNameV1("demo[" + strings.Repeat("a,", 64) + "a]"); err == nil {
+		t.Error("many duplicate extras succeeded")
+	}
+}
+
+func TestPackageRootDistributionNameV1NormalizesIdentically(t *testing.T) {
+	for _, requirement := range []string{"Demo", "DEMO", "demo", "De_mo", "De-mo", "de.mo"} {
+		name, err := PackageRootDistributionNameV1(requirement)
+		if err != nil {
+			t.Fatalf("PackageRootDistributionNameV1(%q): %v", requirement, err)
+		}
+		if name != NormalizeDistributionName(requirement) {
+			t.Errorf("PackageRootDistributionNameV1(%q) = %q, want %q", requirement, name, NormalizeDistributionName(requirement))
 		}
 	}
 }
