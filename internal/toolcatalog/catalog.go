@@ -88,6 +88,9 @@ func loadCatalogV1(files fs.FS, root string) (*CatalogV1, error) {
 	if err := catalog.verifyReferenceDepthV1(); err != nil {
 		return nil, err
 	}
+	if err := catalog.validateCatalogGraphV1(); err != nil {
+		return nil, err
+	}
 	if err := catalog.validateReleaseGraphsV1(); err != nil {
 		return nil, err
 	}
