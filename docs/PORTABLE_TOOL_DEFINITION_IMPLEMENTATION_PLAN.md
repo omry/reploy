@@ -383,10 +383,23 @@ Non-goals: filesystem catalog discovery or acquisition.
 ### PTD-07: Load Bounded Hierarchical Portable Tool Catalogs
 
 Scope: add injected-filesystem loading, ownership and namespace discovery,
-aggregate byte/record/edge/depth limits, and duplicate/digest checks.
+reference edge and depth limits, and duplicate/digest checks. The normative
+design defines no aggregate byte or record-count ceiling, so this slice adds
+none, and `bounded` here does not mean a ceiling on catalog size. It means
+three properties that hold however large the catalog is: each record's parse is
+bounded by the per-unit limits before that record is decoded; traversal and
+recursion are bounded by the edge and depth limits; and no allocation, buffer,
+or traversal is ever sized by a count a record declares, only by content the
+loader has already observed. Loading a catalog of `n` records therefore costs
+work and retention linear in `n`, which is the operator's own embedded input,
+rather than work a record can inflate.
 
-Acceptance: limits apply before unbounded work; misplaced and duplicate records
-fail; synthetic loader tests pass; no tool-specific case enters the loader.
+Acceptance: per-record limits apply before each record is decoded; no
+allocation or traversal is sized by a declared count rather than observed
+content; loader work and retention stay linear in the records actually present,
+proven by a synthetic wide-catalog case rather than asserted; misplaced and
+duplicate records fail; synthetic loader tests pass; no tool-specific case
+enters the loader.
 
 Non-goals: graph semantics or request resolution.
 
