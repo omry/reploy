@@ -571,12 +571,31 @@ for every portable-tool record and do not substitute the public record schema
 for either token. Digest output is exactly `sha256:` followed by 64 lowercase
 hexadecimal characters.
 
-Core schema policy also places non-raiseable limits on individual and aggregate
-definition bytes, record count, reference-edge count and depth, string and
-array sizes, and selected-closure contributions. Definitions cannot raise those
-limits. Publication and consumption apply the same versioned limits before
-allocating or traversing the complete graph, preventing an authenticated but
-pathological definition from exhausting client or repository resources.
+Core schema policy places non-raiseable limits on what a single unit may
+contain: individual definition bytes, JSON nesting depth and member count,
+string sizes, reference-edge depth, and per-record array sizes. Definitions
+cannot raise those limits. Publication and consumption apply the same versioned
+limits before decoding a record, so one malformed or hostile file cannot exhaust
+a parser.
+
+No upper limit is defined on a definition as a whole. Neither the number of
+packages, payloads, records, or closure contributions, nor any aggregate data
+size, is bounded by a declared ceiling. This is deliberate rather than pending.
+No basis for such a number exists: the tools a definition may describe are
+open-ended, so measuring the tools already embedded establishes a floor and
+never a ceiling; and Reploy is general purpose, running on hardware from large
+servers to single-board computers, so no allocation budget generalizes across
+clients. A definition is as large as the tool it describes genuinely requires,
+and a selected closure is as large as the request it resolves genuinely
+requires.
+
+An aggregate ceiling becomes answerable only alongside repository publication
+and publisher authorization. Those introduce definitions authored by someone
+other than the client's operator, and with them the question of which client
+must be able to consume any published definition. That question, not a number
+chosen in advance, is what would determine the limit. Until then every
+definition is embedded and first-party, the per-unit limits above bound what any
+single record or file may contain, and nothing bounds their sum.
 
 ## Acquisition Model
 
