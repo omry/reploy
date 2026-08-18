@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-06
+updated: 2026-08-14
 summary: Current parking lot for longer-term product directions outside the near-term release path.
 ---
 
@@ -76,6 +76,22 @@ Open questions:
 - Can the generated app control script stay identical across Docker Engine,
   Docker Desktop, Colima/Lima, and VM-backed runtimes?
 
+### Isolated Multi-Identity Workloads
+
+Some applications need several image-local UIDs and GIDs while remaining
+untrusted and isolated from host accounts and other workloads. Reploy's threat
+model, identity boundary, lifecycle terminology, and acceptance ledger are
+recorded in
+[`MULTI_IDENTITY_SECURITY_CONTRACT.md`](MULTI_IDENTITY_SECURITY_CONTRACT.md).
+
+The initial capability will be Podman-only and provide two explicit profiles:
+an exact mapping of accepted identities and a bounded contiguous range. Docker
+Engine must reject both profiles before workload mutation, even where it can
+approximate the range profile. Product integration may begin only after
+repeated probes prove private, non-overlapping subordinate mappings, each
+profile's identity boundary, and loss of identity-changing authority before
+untrusted application execution. No public blueprint schema is defined yet.
+
 ### Podman Userland Backend
 
 Evaluate Podman as a uniform user-scope backend for Reploy. Podman is
@@ -86,8 +102,9 @@ closer across platforms: stage, build, run, install, generated control script,
 and uninstall would all exercise installed-app behavior without requiring
 Linux root/systemd system services for the common user-scope case.
 
-This should be evaluated as a backend option, not assumed as a replacement for
-the current Docker/systemd and Docker-managed paths. On macOS and Windows,
+Multi-identity workloads make Podman a required second backend, but that does
+not make it a general replacement for the current Docker/systemd and
+Docker-managed paths. On macOS and Windows,
 Podman containers still run on the host machine inside a Linux VM, so the
 security and lifecycle promises are VM-backed userland promises rather than
 native OS service promises. On Linux, rootless Podman depends on host
