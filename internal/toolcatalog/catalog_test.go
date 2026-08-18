@@ -46,14 +46,9 @@ func catalogTestFilesV1(t *testing.T) fstest.MapFS {
 	place("demo/releases/1.2.3/validation/profiles/default.json", profile)
 	fixture := values[9].(*IntegrationFixtureRecordV1)
 	place("demo/releases/1.2.3/validation/fixtures/debian-12-amd64.json", fixture)
-	bindingContract := values[4].(*BindingContractV1)
-	place("demo/releases/1.2.3/bindings/python/contract.json", bindingContract)
-
-	artifact := *(values[5].(*BindingArtifactRecordV1))
-	artifact.Contract = ref(bindingContract.ID)
-	artifact.SHA256 = recordTestDigest
-	artifact.Size = "42"
-	place("demo/releases/1.2.3/bindings/python/artifacts/linux-amd64.json", &artifact)
+	// The sample target advertises no binding, so a binding contract and artifact
+	// would be orphaned catalog data. Reachability rejects orphans, so the
+	// fixture stays closed rather than carrying records nothing selects.
 
 	payload := &PayloadRecordV1{Schema: PayloadRecordSchemaV1,
 		ID: release + "/payloads/demo-linux-amd64", Name: "demo",
