@@ -21,8 +21,11 @@ func composeTestRecordsV1(extra ...any) map[string]loadedRecordV1 {
 		Schema: PayloadRecordSchemaV1, Digest: recordTestDigest,
 		Value: &PayloadRecordV1{Schema: PayloadRecordSchemaV1,
 			ID:   "tool:demo/releases/1.2.3/payloads/demo-linux-amd64",
-			Name: "demo", Platform: "linux/amd64",
-			LogicalPath: "tools/demo/demo.tar.gz", InstallDirectory: "demo"},
+			Name: "demo", Revision: "1", UpstreamVersion: "1.2.3", Platform: "linux/amd64",
+			LogicalPath: "tools/demo/demo.tar.gz", Kind: "jdk-archive",
+			Size: "42", SHA256: recordTestDigest, Resolver: "https-sha256",
+			Entries: "2", UnpackedSize: "84", InstallDirectory: "demo-1",
+			ArchiveRoot: "demo", Executable: "demo/bin/demo"},
 	}
 	add := func(value any) {
 		id := recordIDV1(value)
