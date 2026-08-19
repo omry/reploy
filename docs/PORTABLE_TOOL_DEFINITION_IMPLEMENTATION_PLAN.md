@@ -22,7 +22,7 @@ This plan is structured as input to the existing AWD function:
 global:swe:deliver-design-stack(docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md, all)
 ```
 
-The only delivery task IDs are `PTD-01` through `PTD-24`. The preparation
+The only delivery task IDs are `PTD-01` through `PTD-25`. The preparation
 gates are prerequisites, not implementation tasks, commits, or pull requests.
 `deliver-design-stack` may read this plan before preparation is complete, but
 must pause on an unmet preparation gate.
@@ -86,7 +86,7 @@ sources, not as pull requests:
 | Retired PR | Parked extraction source | Feeds |
 | --- | --- | --- |
 | 83 | `b39985d247e5` (from `9e9cb456db0d`, originally `e5ee84bb5ccb`) | `PTD-01` through `PTD-06` |
-| 85 | `37ca781bd6cb` (from `b680caaa834e`) | `PTD-07` through `PTD-11` |
+| 85 | `37ca781bd6cb` (from `b680caaa834e`) | `PTD-07` through `PTD-12` |
 
 The parked sources are evidence, not authority. Where they disagree with the
 normative design, the design wins and the difference is recorded as a truth fix.
@@ -143,7 +143,7 @@ retired content exactly.
 ### Slice Ownership Rule
 
 Every hunk of the parked extraction sources belongs to exactly one task in
-`PTD-01` through `PTD-11`, or is explicitly excluded. Ownership is recorded per
+`PTD-01` through `PTD-12`, or is explicitly excluded. Ownership is recorded per
 slice as that slice is built, not as one up-front ledger. Each slice records:
 
 - changes retained without semantic modification;
@@ -156,7 +156,7 @@ Shared files may be split into responsibility-named files. File movement does
 not justify behavior changes. No source hunk may be unowned, multiply owned, or
 silently dropped.
 
-Gate evidence: after `PTD-11`, cumulative accounting proves the parked sources
+Gate evidence: after `PTD-12`, cumulative accounting proves the parked sources
 are fully consumed by the delivered slices plus the recorded truth fixes and
 recorded exclusions. An unexplained residue blocks campaign completion.
 
@@ -202,9 +202,9 @@ queue from this document.
 flowchart TD
     PREP["Preparation gates"] --> FOUNDATION["PTD-01..06\nRecord foundation"]
     FOUNDATION --> CATALOG["PTD-07..11\nCatalog and definitions"]
-    CATALOG --> ACQUIRE["PTD-12..16\nRequests and materialization"]
-    ACQUIRE --> PROVIDERS["PTD-17..23\nProvider integration and validation"]
-    PROVIDERS --> FINAL["PTD-24\nFinal cutover"]
+    CATALOG --> ACQUIRE["PTD-13..16\nRequests and materialization"]
+    ACQUIRE --> PROVIDERS["PTD-18..23\nProvider integration and validation"]
+    PROVIDERS --> FINAL["PTD-25\nFinal cutover"]
 ```
 
 ## Review Phasing
@@ -214,7 +214,7 @@ not wait for it. Construction and review are separate phases with separate
 evidence.
 
 A constructed prefix may be reviewed before the rest of `PTD-01` through
-`PTD-11` exists, and reviewing early is preferred: a finding that rewrites
+`PTD-12` exists, and reviewing early is preferred: a finding that rewrites
 history invalidates every slice above it, so the cost of a low finding grows
 with stack height.
 
@@ -244,8 +244,8 @@ Review phase, once remote review capacity is available:
 
 Accepted risk: deferring remote review lets a finding in a low slice cascade
 into every slice above it. Local deep review and full local checks at every
-commit are the mitigation, not an equivalent substitute. Tasks from `PTD-12`
-onward are not constructed until the `PTD-01` through `PTD-11` stack has been
+commit are the mitigation, not an equivalent substitute. Tasks from `PTD-13`
+onward are not constructed until the `PTD-01` through `PTD-12` stack has been
 reviewed and approved.
 
 A discovery may refine mechanics inside accepted scope. A discovery changing
@@ -264,22 +264,23 @@ the campaign until durable authority is updated.
 | PTD-06 | Validate Release Graphs and External Evidence | PTD-05 | PR 83 source |
 | PTD-07 | Load Bounded Hierarchical Portable Tool Catalogs | PTD-06 | PR 85 source |
 | PTD-08 | Validate Catalog Graphs and Acquisition Mappings | PTD-07 | PR 85 source |
-| PTD-09 | Resolve Canonical Portable Tool Selected Closures | PTD-08 | PR 85 source and truth fixes |
-| PTD-10 | Embed the Java Portable Tool Definition | PTD-09 | PR 85 source |
-| PTD-11 | Embed the Playwright Portable Tool Definition | PTD-10 | PR 85 source |
-| PTD-12 | Parse Canonical Portable Tool Requests | PTD-11 | New work |
-| PTD-13 | Acquire Pinned Artifacts with Bounded Mirror Fallback | PTD-12 | New work |
-| PTD-14 | Enforce Artifact Acquisition Network Policy | PTD-13 | New work |
-| PTD-15 | Materialize Verified Archives Safely and Offline | PTD-14 | New work |
-| PTD-16 | Run Portable Tool Probes Without Network Access | PTD-15 | New work |
-| PTD-17 | Compile Selected Closures into Provider Plans and Locks | PTD-16 | New work |
-| PTD-18 | Cut Java Build Tools Over to the Portable Catalog | PTD-17 | New work |
-| PTD-19 | Materialize the Playwright Python Binding | PTD-18 | New work |
-| PTD-20 | Materialize Playwright Chromium Payloads | PTD-19 | New work |
-| PTD-21 | Derive Portable Tool Integration Cases and Evidence | PTD-20 | New work |
-| PTD-22 | Validate Every Advertised Java Tuple Through Reploy | PTD-21 | New work |
-| PTD-23 | Validate Every Advertised Playwright Tuple Through Reploy | PTD-22 | New work |
-| PTD-24 | Remove the Flat WIP and Finalize Portable Tool Documentation | PTD-23 | New work |
+| PTD-09 | Select Canonical Portable Tool Release Candidates | PTD-08 | PR 85 source and truth fixes |
+| PTD-10 | Resolve Selected Closures by Joint Constraint Solving | PTD-09 | New work |
+| PTD-11 | Embed the Java Portable Tool Definition | PTD-10 | PR 85 source |
+| PTD-12 | Embed the Playwright Portable Tool Definition | PTD-11 | PR 85 source |
+| PTD-13 | Parse Canonical Portable Tool Requests | PTD-12 | New work |
+| PTD-14 | Acquire Pinned Artifacts with Bounded Mirror Fallback | PTD-13 | New work |
+| PTD-15 | Enforce Artifact Acquisition Network Policy | PTD-14 | New work |
+| PTD-16 | Materialize Verified Archives Safely and Offline | PTD-15 | New work |
+| PTD-17 | Run Portable Tool Probes Without Network Access | PTD-16 | New work |
+| PTD-18 | Compile Selected Closures into Provider Plans and Locks | PTD-17 | New work |
+| PTD-19 | Cut Java Build Tools Over to the Portable Catalog | PTD-18 | New work |
+| PTD-20 | Materialize the Playwright Python Binding | PTD-19 | New work |
+| PTD-21 | Materialize Playwright Chromium Payloads | PTD-20 | New work |
+| PTD-22 | Derive Portable Tool Integration Cases and Evidence | PTD-21 | New work |
+| PTD-23 | Validate Every Advertised Java Tuple Through Reploy | PTD-22 | New work |
+| PTD-24 | Validate Every Advertised Playwright Tuple Through Reploy | PTD-23 | New work |
+| PTD-25 | Remove the Flat WIP and Finalize Portable Tool Documentation | PTD-24 | New work |
 
 ## Task Specifications
 
@@ -417,7 +418,7 @@ share a support tuple do not collide; validation acquires no bytes.
 
 Non-goals: selecting a release or target.
 
-### PTD-09: Resolve Canonical Portable Tool Selected Closures
+### PTD-09: Select Canonical Portable Tool Release Candidates
 
 Scope: load each tool record's immutable version scheme and, when an opaque
 requirement omits its version, normalize it to exact equality with that
@@ -436,7 +437,33 @@ Try ordered-scheme candidates by descending scheme-native version and then
 descending definition revision; an opaque request has one exact version and
 tries its definition revisions newest first unless pinned.
 
-Only then resolve the surviving scoped candidates as one bounded deterministic
+Acceptance: the plural model replaces all stale singular-field use;
+unsupported requests fail before acquisition; every record placed in a
+candidate is cloned, including the validation profile, so a returned candidate
+cannot alias loaded catalog state; a client-incompatible newest
+candidate falls back to an older compatible release instead of failing; a
+versionless opaque request resolves to the tool record's `default_version`
+rather than reaching enumeration without an exact coordinate; an exact
+definition-revision pin such as `tool:java==21~2` restricts enumeration rather
+than being overridden by newest-first ordering; an unpinned opaque request with
+several eligible definition revisions selects the newest rather than catalog
+order; and every surviving candidate carries the contribution union its own
+references produce, so a candidate removed for an intrinsic conflict is
+removed before any joint solving sees it.
+
+This slice was split from the original single task before coding, as that task
+permitted. Candidate selection is per requirement and is largely carried by the
+parked source; joint solving is across requirements and has no parked basis at
+all, the parked resolver containing no scope, partition, assignment, or
+backtracking logic. Reviewing both as one unit would have exceeded the largest
+slice this campaign has reviewed, which took eight rounds.
+
+Non-goals: joint constraint solving across requirements, which belongs to
+`PTD-10`; downloading or materializing artifacts.
+
+### PTD-10: Resolve Selected Closures by Joint Constraint Solving
+
+Scope: resolve the candidates surviving `PTD-09` as one bounded deterministic
 constraint problem against the active provider graph for each scope,
 partitioned so that isolated package-manager, filesystem, environment, export,
 and capability domains do not constrain one another while domains genuinely
@@ -454,33 +481,22 @@ multiple matching target leaves within one candidate as invalid definition data
 rather than a fallback choice, and recheck that the provider inputs used for
 joint solving have not changed before acquisition.
 
-Acceptance: the plural model replaces all stale singular-field use; validation
-and source-only data do not affect selected identity; every selected behavior
-does; unsupported requests fail before acquisition; every record placed in a
-selected closure is cloned, including the validation profile, so a returned
-closure cannot alias loaded catalog state; a client-incompatible newest
-candidate falls back to an older compatible release instead of failing; a
-versionless opaque request resolves to the tool record's `default_version`
-rather than reaching enumeration without an exact coordinate; an exact
-definition-revision pin such as `tool:java==21~2` restricts enumeration rather
-than being overridden by newest-first ordering; an unpinned opaque request with
-several eligible definition revisions selects the newest rather than catalog
-order; requirements in an isolated source-builder scope and an application
-runtime scope do not constrain each other except through genuinely shared
-domains; a provider-input change between
-solving and acquisition is detected by the pre-acquisition recheck rather than
-acquired from a stale assignment; request input
-order cannot change the result; and exceeding the assignment cap fails
-closed rather than returning a partial or order-dependent result.
+Acceptance: validation and source-only data do not affect selected identity
+while every selected behavior does; every record placed in a selected closure
+is cloned, including the validation profile, so a returned closure cannot alias
+loaded catalog state; requirements in an isolated source-builder scope and an
+application runtime scope do not constrain each other except through genuinely shared
+domains; a first-ordered combination that conflicts in a shared domain
+backtracks to a valid combination rather than failing the request; request
+input order cannot change the result; exceeding the assignment cap fails closed
+rather than returning a partial or order-dependent result; and a provider-input
+change between solving and acquisition is detected by the pre-acquisition
+recheck rather than acquired from a stale assignment.
 
-This slice carries the whole candidate-selection and joint-solving
-responsibility described in the normative design. If it cannot be reviewed
-coherently as one unit, it splits before coding and the task IDs and authority
-are updated first.
+Non-goals: candidate enumeration and per-request reduction, which belong to
+`PTD-09`; downloading or materializing artifacts.
 
-Non-goals: downloading or materializing artifacts.
-
-### PTD-10: Embed the Java Portable Tool Definition
+### PTD-11: Embed the Java Portable Tool Definition
 
 Scope: add Java tool, release, target, Temurin JDK payload/source, fixture, and
 profile records for public `tool:java==21` on the accepted AMD64 matrix. Use
@@ -493,7 +509,7 @@ build context.
 
 Non-goals: replacing the current hard-coded Java consumer path.
 
-### PTD-11: Embed the Playwright Portable Tool Definition
+### PTD-12: Embed the Playwright Portable Tool Definition
 
 Scope: add the Playwright release, Python binding and wheel, Chromium,
 Headless Shell and FFmpeg payloads, APT package sets, targets, fixtures, and
@@ -506,7 +522,7 @@ payloads and no unselected availability.
 
 Non-goals: installing the binding or browser payloads.
 
-### PTD-12: Parse Canonical Portable Tool Requests
+### PTD-13: Parse Canonical Portable Tool Requests
 
 Scope: implement the shared compact `tool:` grammar, the full version
 constraint grammar including ranges as well as exact versions, optional exact
@@ -524,7 +540,7 @@ catalog/provider work; parser and blueprint tests cover Java and Playwright.
 
 Non-goals: catalog resolution or compatibility parsing for unreleased syntax.
 
-### PTD-13: Acquire Pinned Artifacts with Bounded Mirror Fallback
+### PTD-14: Acquire Pinned Artifacts with Bounded Mirror Fallback
 
 Scope: add verified cache lookup, ordered bounded mirrors, non-raiseable core
 limits on the number of mirrors, attempts per mirror, and aggregate attempts,
@@ -541,7 +557,7 @@ credential-free.
 
 Non-goals: extraction or tool-specific installation.
 
-### PTD-14: Enforce Artifact Acquisition Network Policy
+### PTD-15: Enforce Artifact Acquisition Network Policy
 
 Scope: constrain locator schemes, proxies, redirects, public destinations, DNS
 resolution and pinning, redirect-hop revalidation, rebinding, and redaction.
@@ -553,7 +569,7 @@ network tests cover mixed answers and every redirect boundary.
 Non-goals: arbitrary downloader plugins or strict source-host allowlists beyond
 the accepted content-verification model.
 
-### PTD-15: Materialize Verified Archives Safely and Offline
+### PTD-16: Materialize Verified Archives Safely and Offline
 
 Scope: implement reviewed archive primitives, fixed destinations, traversal and
 link defenses, special-entry rejection, metadata normalization, resource
@@ -565,7 +581,7 @@ complete or exactly restored; data never selects commands.
 
 Non-goals: provider integration or runtime probes.
 
-### PTD-16: Run Portable Tool Probes Without Network Access
+### PTD-17: Run Portable Tool Probes Without Network Access
 
 Scope: add fixed validator-owned probe executors with exact argv, environment,
 working directory, time/output/resource bounds, forced network disablement, and
@@ -577,7 +593,7 @@ networking; timeout, output, and exit failures are deterministic.
 Non-goals: treating a probe result as support without matching fixture and
 selected-closure evidence.
 
-### PTD-17: Compile Selected Closures into Provider Plans and Locks
+### PTD-18: Compile Selected Closures into Provider Plans and Locks
 
 Scope: translate selected artifacts, packages, bindings, exports, and probes
 into provider DAG responsibilities; compile the selected closure's contract
@@ -587,7 +603,7 @@ identities into plans and locks together with the complete release provenance,
 meaning the tool, its scheme-native version, and the exact definition revision
 that authorized the build, so two revisions sharing a byte-identical closure
 remain distinguishable; and persist each artifact's acquisition provenance from
-PTD-13 into the lock.
+PTD-14 into the lock.
 
 Acceptance: unrelated availability does not invalidate a plan; selected
 behavior does; acquisition precedes offline materialization; locked replay does
@@ -605,7 +621,7 @@ operation.
 
 Non-goals: tool-specific branches in generic provider code.
 
-### PTD-18: Cut Java Build Tools Over to the Portable Catalog
+### PTD-19: Cut Java Build Tools Over to the Portable Catalog
 
 Scope: replace name-only `tool:java`, `default-jre-headless`, and
 `/usr/bin/java` switches with the selected Temurin closure in the isolated
@@ -617,7 +633,7 @@ and their obsolete tests are removed.
 
 Non-goals: runtime Java or other Java versions.
 
-### PTD-19: Materialize the Playwright Python Binding
+### PTD-20: Materialize the Playwright Python Binding
 
 Scope: translate the binding contract into Python roots and exact wheel
 constraints; verify wheel filename, tags, size, digest, interpreter support,
@@ -629,7 +645,7 @@ Playwright installer and downloads no browser.
 
 Non-goals: browser extraction or other bindings.
 
-### PTD-20: Materialize Playwright Chromium Payloads
+### PTD-21: Materialize Playwright Chromium Payloads
 
 Scope: acquire and materialize coupled Chromium, Headless Shell, and FFmpeg;
 contribute target APT roots; configure Reploy-owned browser placement and
@@ -641,7 +657,7 @@ user launches Chromium; conflicts fail before publication.
 
 Non-goals: WebKit, Firefox, Node binding, or Microsoft Playwright images.
 
-### PTD-21: Derive Portable Tool Integration Cases and Evidence
+### PTD-22: Derive Portable Tool Integration Cases and Evidence
 
 Scope: derive runnable cases from release manifests for every target, binding,
 selection set, and parameter assignment; execute fixtures through ordinary
@@ -655,7 +671,7 @@ Java- or Playwright-specific command logic.
 
 Non-goals: completing either tool's support matrix in this slice.
 
-### PTD-22: Validate Every Advertised Java Tuple Through Reploy
+### PTD-23: Validate Every Advertised Java Tuple Through Reploy
 
 Scope: run the manifest-derived Java cases on every advertised Java target and
 record current external evidence using the fixed Java probe.
@@ -666,7 +682,7 @@ stale, or mismatched evidence fails CI; no AMD64 result establishes ARM64.
 
 Non-goals: Playwright validation, runtime Java, or additional Java versions.
 
-### PTD-23: Validate Every Advertised Playwright Tuple Through Reploy
+### PTD-24: Validate Every Advertised Playwright Tuple Through Reploy
 
 Scope: run the manifest-derived Playwright cases on every advertised target and
 record current external evidence using the fixed Python/browser probe.
@@ -678,7 +694,7 @@ AMD64-only claim establishes other support.
 
 Non-goals: other bindings, browsers, targets, or architectures.
 
-### PTD-24: Remove the Flat WIP and Finalize Portable Tool Documentation
+### PTD-25: Remove the Flat WIP and Finalize Portable Tool Documentation
 
 Scope: verify no flat definition, aggregate digest behavior, or compatibility
 path exists anywhere in the delivered tree; remove any remaining scaffolding
@@ -697,7 +713,7 @@ selections, distributions, or architectures.
 
 The campaign is complete only when:
 
-- `PTD-01` through `PTD-24` map one-to-one to approved current-head PRs in
+- `PTD-01` through `PTD-25` map one-to-one to approved current-head PRs in
   dependency order;
 - PRs 81 and 82 remain unchanged and approved;
 - the retired WIP pull requests remain closed and their parked sources are
