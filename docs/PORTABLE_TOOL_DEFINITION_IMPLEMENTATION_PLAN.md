@@ -264,8 +264,9 @@ the campaign until durable authority is updated.
 | PTD-06 | Validate Release Graphs and External Evidence | PTD-05 | PR 83 source |
 | PTD-07 | Load Bounded Hierarchical Portable Tool Catalogs | PTD-06 | PR 85 source |
 | PTD-08 | Validate Catalog Graphs and Acquisition Mappings | PTD-07 | PR 85 source |
-| PTD-09 | Resolve Canonical Portable Tool Selected Closures | PTD-08 | PR 85 source and truth fixes |
-| PTD-10 | Embed the Java Portable Tool Definition | PTD-09 | PR 85 source |
+| PTD-09 | Select Canonical Portable Tool Release Candidates | PTD-08 | PR 85 source and truth fixes |
+| PTD-09B | Resolve Selected Closures by Joint Constraint Solving | PTD-09 | New work |
+| PTD-10 | Embed the Java Portable Tool Definition | PTD-09B | PR 85 source |
 | PTD-11 | Embed the Playwright Portable Tool Definition | PTD-10 | PR 85 source |
 | PTD-12 | Parse Canonical Portable Tool Requests | PTD-11 | New work |
 | PTD-13 | Acquire Pinned Artifacts with Bounded Mirror Fallback | PTD-12 | New work |
@@ -417,7 +418,7 @@ share a support tuple do not collide; validation acquires no bytes.
 
 Non-goals: selecting a release or target.
 
-### PTD-09: Resolve Canonical Portable Tool Selected Closures
+### PTD-09: Select Canonical Portable Tool Release Candidates
 
 Scope: load each tool record's immutable version scheme and, when an opaque
 requirement omits its version, normalize it to exact equality with that
@@ -436,7 +437,34 @@ Try ordered-scheme candidates by descending scheme-native version and then
 descending definition revision; an opaque request has one exact version and
 tries its definition revisions newest first unless pinned.
 
-Only then resolve the surviving scoped candidates as one bounded deterministic
+Acceptance: the plural model replaces all stale singular-field use; validation
+and source-only data do not affect selected identity; every selected behavior
+does; unsupported requests fail before acquisition; every record placed in a
+selected closure is cloned, including the validation profile, so a returned
+closure cannot alias loaded catalog state; a client-incompatible newest
+candidate falls back to an older compatible release instead of failing; a
+versionless opaque request resolves to the tool record's `default_version`
+rather than reaching enumeration without an exact coordinate; an exact
+definition-revision pin such as `tool:java==21~2` restricts enumeration rather
+than being overridden by newest-first ordering; an unpinned opaque request with
+several eligible definition revisions selects the newest rather than catalog
+order; and every surviving candidate carries the contribution union its own
+references produce, so a candidate removed for an intrinsic conflict is
+removed before any joint solving sees it.
+
+This slice was split from the original single task before coding, as that task
+permitted. Candidate selection is per requirement and is largely carried by the
+parked source; joint solving is across requirements and has no parked basis at
+all, the parked resolver containing no scope, partition, assignment, or
+backtracking logic. Reviewing both as one unit would have exceeded the largest
+slice this campaign has reviewed, which took eight rounds.
+
+Non-goals: joint constraint solving across requirements, which belongs to
+`PTD-09B`; downloading or materializing artifacts.
+
+### PTD-09B: Resolve Selected Closures by Joint Constraint Solving
+
+Scope: resolve the candidates surviving `PTD-09` as one bounded deterministic
 constraint problem against the active provider graph for each scope,
 partitioned so that isolated package-manager, filesystem, environment, export,
 and capability domains do not constrain one another while domains genuinely
@@ -454,31 +482,17 @@ multiple matching target leaves within one candidate as invalid definition data
 rather than a fallback choice, and recheck that the provider inputs used for
 joint solving have not changed before acquisition.
 
-Acceptance: the plural model replaces all stale singular-field use; validation
-and source-only data do not affect selected identity; every selected behavior
-does; unsupported requests fail before acquisition; every record placed in a
-selected closure is cloned, including the validation profile, so a returned
-closure cannot alias loaded catalog state; a client-incompatible newest
-candidate falls back to an older compatible release instead of failing; a
-versionless opaque request resolves to the tool record's `default_version`
-rather than reaching enumeration without an exact coordinate; an exact
-definition-revision pin such as `tool:java==21~2` restricts enumeration rather
-than being overridden by newest-first ordering; an unpinned opaque request with
-several eligible definition revisions selects the newest rather than catalog
-order; requirements in an isolated source-builder scope and an application
+Acceptance: requirements in an isolated source-builder scope and an application
 runtime scope do not constrain each other except through genuinely shared
-domains; a provider-input change between
-solving and acquisition is detected by the pre-acquisition recheck rather than
-acquired from a stale assignment; request input
-order cannot change the result; and exceeding the assignment cap fails
-closed rather than returning a partial or order-dependent result.
+domains; a first-ordered combination that conflicts in a shared domain
+backtracks to a valid combination rather than failing the request; request
+input order cannot change the result; exceeding the assignment cap fails closed
+rather than returning a partial or order-dependent result; and a provider-input
+change between solving and acquisition is detected by the pre-acquisition
+recheck rather than acquired from a stale assignment.
 
-This slice carries the whole candidate-selection and joint-solving
-responsibility described in the normative design. If it cannot be reviewed
-coherently as one unit, it splits before coding and the task IDs and authority
-are updated first.
-
-Non-goals: downloading or materializing artifacts.
+Non-goals: candidate enumeration and per-request reduction, which belong to
+`PTD-09`; downloading or materializing artifacts.
 
 ### PTD-10: Embed the Java Portable Tool Definition
 
