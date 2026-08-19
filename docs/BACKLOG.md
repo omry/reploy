@@ -68,6 +68,20 @@ This file is the day-to-day queue for design and implementation gaps.
       commands, including account-name resolution, stable Windows mapping, and
       explicit confirmation that no accidental `0:0` identity is selected.
 
+- [ ] `P1` Implement runtime mount integrity checks 2 and 3.
+      `BLUEPRINT_ENVIRONMENT_MODEL.md` specifies three mount-plan checks
+      against the exact immutable image; only check 1 (reserved destinations)
+      exists, at blueprint validation. Implement check 2 (destination absent or
+      an empty real directory, validated ancestors, `lstat` plus a one-entry
+      read) and check 3 (overlay subtree does not intersect provider roots,
+      exclusive leaf claims, or executable link chains), enforced against the
+      complete effective mount plan immediately before creating every runtime
+      container. Check 2 needs an image-side inspection operation the probe
+      helper protocol does not yet define. The design section is the
+      specification; the standing review decision is recorded in
+      `docs/.review/BLUEPRINT_ENVIRONMENT_MODEL.md` (B1-1) and both status
+      notes are updated when this lands.
+
 - [ ] `P1` Define root-safe explicit output-file and output-dir contracts.
       Preserve the prohibition on arbitrary host binds while treating a
       caller-selected output destination as a narrow explicit grant. For

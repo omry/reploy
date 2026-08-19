@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-16
+updated: 2026-08-19
 summary: Normative blueprint environment, workload, application, provider contribution, lifecycle, and Docker rendering model.
 supersedes: docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md
 ---
@@ -2164,8 +2164,14 @@ contents. After resolving `extends`, interpolation, and backend-generated
 mounts, Reploy normalizes every final container destination and treats it as a
 claim over that path and all descendants.
 
-Every blueprint or Reploy-generated runtime mount passes three independent
-checks against the exact immutable image:
+Every blueprint or Reploy-generated runtime mount is subject to three
+independent checks against the exact immutable image. Check 1 is enforced at
+blueprint validation today. Checks 2 and 3 are specified here but are not yet
+implemented: check 2 needs an image-side inspection the probe helper does not
+yet provide, and no code compares mount destinations against the protected
+runtime set. Until that work lands — tracked in `BACKLOG.md`, with the standing
+review decision recorded in `.review/BLUEPRINT_ENVIRONMENT_MODEL.md` — checks 2
+and 3 are design intent rather than enforced behavior:
 
 1. Its destination is a normalized absolute path other than `/` and does not
    overlap `/dev`, `/proc`, `/sys`, `/run/secrets`, or Docker-managed
@@ -2209,12 +2215,15 @@ behavior of the exact immutable image. An exclusive root, including a complete
 Python venv, is protected as a subtree and therefore already covers its
 interpreter without a generic execution-chain model.
 
-Reploy performs these checks against the complete effective mount plan
+These checks are specified to run against the complete effective mount plan
 immediately before creating every workload or transient runtime container,
-including native commands, lifecycle actions, and `reploy shell`. This catches
+including native commands, lifecycle actions, and `reploy shell`, so they catch
 backend-generated mounts and plans that differ between staging and deployment.
+Today only check 1 runs, and at blueprint validation rather than at that
+enforcement point.
 Allowed, empty application mountpoints remain valid. A mount-plan change does
-not invalidate provider layers, but an unsafe plan cannot run them.
+not invalidate provider layers, but an unsafe plan must not run them once these
+checks are enforced.
 
 This keeps the workload-visible container contract stable while allowing Docker
 backend to choose the host storage/mount mechanism. It does not claim that this

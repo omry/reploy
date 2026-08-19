@@ -1,6 +1,6 @@
 ---
 status: Accepted
-updated: 2026-08-17
+updated: 2026-08-20
 summary: Accepted composition, targeting, acquisition, identity, and validation model for proposed embedded portable-tool definitions.
 refines: docs/REPOSITORY_DESIGN.md
 ---
@@ -26,6 +26,12 @@ Repository publication, TUF metadata, publisher authorization, and lifecycle
 policy remain owned by `REPOSITORY_DESIGN.md`. The embedded catalog will be an
 implementation bridge, but its definition boundaries are intended to carry
 forward into published tool definitions.
+
+Rules in this document assigned to publication are performed by the static
+definition validation gate. While the catalog is embedded there is no
+publication phase, so that gate runs at build time over the first-party
+definitions; repository publication will later run the same checks before
+advertising a release.
 
 A separate implementation WIP uses flat, complete JSON files as a checkpoint;
 those files are not the final schema described here or part of this design-only
@@ -84,9 +90,18 @@ compatibility reader for that format.
 9. Every acquired artifact is identified by its exact byte size and SHA-256
    digest. Locators and upstream provenance authorize where Reploy may obtain
    those bytes, but do not replace content verification.
-10. One artifact may declare an ordered, statically bounded mirror set. Reploy
+10. The release manifest maps one artifact content identity to one source
+    record, which declares an ordered, statically bounded mirror set. Reploy
     automatically falls back between those locators under core network and
     resource limits while requiring every mirror to produce the same bytes.
+    Artifact records neither declare nor reference mirrors, which is what keeps
+    a mirror change out of selected-closure identity.
+
+11. No ceiling is declared on the size of a definition, in records, packages,
+    payloads, contributions, or bytes. This is a decision rather than a pending
+    item; the Canonical Encoding and Structural Limits section records why, and
+    names repository publication as the trigger that would make an aggregate
+    ceiling answerable.
 
 ## Terminology
 
@@ -280,9 +295,25 @@ contract and advertised by the target. Every advertised binding has exactly one
 entry; an unadvertised symbol cannot have one. Each entry references exactly one
 binding contract and the target-compatible binding artifacts it selects, plus
 any binding-specific native package-set references and export or probe values.
-Binding inference chooses a public symbol first, and resolution traverses only
-that entry. Record names and reverse artifact-to-contract references are never
-used as selection conventions.
+Resolution traverses only the entry for the resolved symbol. Record names and
+reverse artifact-to-contract references are never used as selection
+conventions.
+
+Binding inference resolves one public symbol in this order, and stops at the
+first that applies:
+
+1. an explicit supported binding named by the request;
+2. the release contract's declared `default`, when it advertises one;
+3. the `REPOSITORY_DESIGN.md` rule that a binding matching an already active
+   application provider may be inferred when several are advertised;
+4. the sole advertised binding, when the target advertises exactly one.
+
+An unresolved required binding is an error listing the supported values. The
+contract default outranks the active-provider match deliberately: a declared
+default is a definition author's decision, while an active provider is ambient
+build state, and letting ambient state choose would make the resolved binding —
+which is part of request, lock, cache, and diagnostics identity — depend on
+something the request does not express.
 
 The selection contribution mapping is keyed by symbols declared in the release
 contract and advertised by the target. Every advertised selection has exactly
@@ -534,12 +565,14 @@ single oversized definition and complete per-target duplication.
 9. The selected closure is a canonical, order-independent union. Contributions
    with the same semantic key deduplicate only when their complete canonical
    value or referenced digest is identical. Otherwise resolution fails.
-10. Semantic keys include provider requirement identity, artifact logical path,
-    artifact install destination, environment-variable name, executable or
-    capability export name, and probe identity. Payload-owned directory trees
-    may share an unowned parent but cannot overlap each other's owned paths.
-    Identical environment values and exports deduplicate; conflicting values or
-    destinations fail before acquisition.
+10. Semantic keys are provider requirement identity, artifact logical path,
+    artifact install destination, environment-variable name, and executable or
+    capability export name. Payload-owned directory trees may share an unowned
+    parent but cannot overlap each other's owned paths. Identical environment
+    values and exports deduplicate; conflicting values or destinations fail
+    before acquisition. Probes are not a semantic key: byte-identical probes
+    deduplicate, and the same executable invoked with different arguments is two
+    checks rather than a conflict, so both run.
 
 These rules make repetition an explicit authoring tradeoff without making the
 resolved result depend on merge order.
@@ -578,7 +611,7 @@ cannot raise those limits. Publication and consumption apply the same versioned
 limits before decoding a record, so one malformed or hostile file cannot exhaust
 a parser.
 
-No upper limit is defined on a definition as a whole. Neither the number of
+No upper limit is defined on the size of a definition. Neither the number of
 packages, payloads, records, or closure contributions, nor any aggregate data
 size, is bounded by a declared ceiling. This is deliberate rather than pending.
 No basis for such a number exists: the tools a definition may describe are
@@ -596,6 +629,12 @@ must be able to consume any published definition. That question, not a number
 chosen in advance, is what would determine the limit. Until then every
 definition is embedded and first-party, the per-unit limits above bound what any
 single record or file may contain, and nothing bounds their sum.
+
+One definition-wide ceiling does exist and is unrelated to size: a definition
+whose required integration coverage exceeds the core cap is rejected, as
+described under Reploy Integration Validation. That cap bounds the CI work a
+definition can demand, which is a shared and measurable resource, rather than
+the memory a client must have, which is not.
 
 ## Acquisition Model
 
@@ -708,15 +747,18 @@ Archive handling belongs to a named Reploy-owned primitive, not to executable
 definition logic. Every primitive enforces path normalization and destination
 containment, rejects duplicate normalized paths and unsafe special entries,
 applies core entry-count and unpacked-size limits, and installs into a new
-destination atomically. It never restores archive-supplied user or group
-ownership, ACLs, extended attributes, file capabilities, platform security
-descriptors, or other privileged metadata. Reploy applies core-defined ownership
-and mode normalization, removes group/world write and privileged bits, and
-preserves ordinary read or declared executable access only as required by the
-payload contract. Symbolic or hard links are rejected unless the primitive
-explicitly supports them and proves that both the link and target remain within
-the owned archive tree. Device nodes, sockets, FIFOs, absolute paths, escaping
-paths, and encrypted entries are never allowed.
+destination atomically by extracting into a temporary location it owns and
+publishing that location under the final path in one step, so an interrupted
+extraction is never observable as a partial install. It never restores
+archive-supplied user or group ownership, ACLs, extended attributes, file
+capabilities, platform security descriptors, or other privileged metadata.
+Reploy applies core-defined ownership and mode normalization, removes
+group/world write and privileged bits, and preserves ordinary read or declared
+executable access only as required by the payload contract. Symbolic or hard
+links are rejected unless the primitive explicitly supports them and proves
+that both the link and target remain within the owned archive tree. Device
+nodes, sockets, FIFOs, absolute paths, escaping paths, and encrypted entries
+are never allowed.
 
 Definition-provided inventory values may tighten limits or describe the vetted
 archive, but cannot raise core safety caps or disable checks. Selected payload
@@ -743,13 +785,18 @@ Reploy resolves all pending tool requirements in this order:
    and manager-native architecture.
 3. For each normalized requirement, enumerate authorized release revisions
    satisfying its version constraint and, when supplied, its exact
-   definition-revision pin. Require the running Reploy version and primitive set
-   to satisfy each candidate release contract; require exactly one target leaf
-   matching the observed base; apply binding inference and validate the context,
-   selection set, and parameter values against that target; then traverse the
-   selected references and construct the candidate contribution union. A
-   client, target, binding, selection, parameter, or intrinsic contribution
-   conflict removes that candidate before joint solving.
+   definition-revision pin. Version selection follows the shared rules in
+   `REPOSITORY_DESIGN.md` unchanged and is not restated here: a revision
+   constraint is valid only alongside an exact upstream version, an omitted
+   ordered-scheme constraint selects the highest compatible non-yanked stable
+   version and then its highest eligible revision, and prereleases are excluded
+   unless the request names one. Require the running Reploy version and
+   primitive set to satisfy each candidate release contract; require exactly
+   one target leaf matching the observed base; apply binding inference and
+   validate the context, selection set, and parameter values against that
+   target; then traverse the selected references and construct the candidate
+   contribution union. A client, target, binding, selection, parameter, or
+   intrinsic contribution conflict removes that candidate before joint solving.
 4. Resolve the remaining scoped candidates as one constraint problem against
    the active provider graph for each scope and every provider or destination
    domain shared by those scopes. Requirements are ordered by canonical scope
@@ -861,9 +908,9 @@ provenance but preserves selected-closure identity. Changing the expected
 artifact size, SHA-256 digest, extraction contract, or destination changes the
 selected closure.
 
-This replaces the current aggregate definition digest, where every known target
-contributes to one digest and an unrelated target addition invalidates existing
-build identity.
+This replaces the aggregate definition digest used by the flat WIP definitions,
+where every known target contributed to one digest and an unrelated target
+addition invalidated existing build identity.
 
 ## Tool-Specific Decisions
 
@@ -941,14 +988,17 @@ Before definitions can be embedded, validation must reject:
   option not covered by a maximal group;
 - a parameter domain that is not finite and enumerable or whose required
   integration-coverage product exceeds the core cap;
+- a target parameter constraint that changes its contract parameter's type or
+  required/default behavior, widens its contract-level domain, or narrows that
+  domain so it excludes the contract default;
 - malformed integration fixtures or validation profiles, validation references
   outside their release namespace, or fixtures whose target tuple disagrees
   with the referencing target;
 - artifacts without exact size and SHA-256 metadata;
 - an externally acquired artifact without exactly one source mapping, or a
   mapping whose key and expected artifact SHA-256 fields disagree, whose source
-  or artifact reference has a canonical record-digest mismatch, or whose size
-  authority or resolver primitive is inconsistent;
+  or artifact reference has a canonical record-digest mismatch, or whose
+  resolver primitive is inconsistent with the artifact record it maps;
 - an artifact-source mapping that is not reachable from any advertised target;
 - artifact locators or provenance that violate the selected primitive's
   retrieval contract;
@@ -1036,6 +1086,11 @@ file's presence, an AMD64 result for an ARM64 leaf, or a manually asserted
 result is not sufficient.
 
 ## Migration from the Flat WIP Definitions
+
+This section records the migration this design intends. It is not a delivery
+tracker: sequencing, per-step status, and acceptance evidence belong to the
+implementation plan named under Status and Authority, which is the authority
+when the two disagree.
 
 1. Replace the flat loader with strict record parsing and explicit reference
    resolution. Do not retain a compatibility path for the unreleased format.
