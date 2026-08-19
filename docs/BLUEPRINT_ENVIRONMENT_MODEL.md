@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-16
+updated: 2026-08-19
 summary: Normative blueprint environment, workload, application, provider contribution, lifecycle, and Docker rendering model.
 supersedes: docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md
 ---
@@ -267,7 +267,12 @@ workload type.
 Every command invocation is one-shot by default and is expected to exit with a
 status. In Docker, Reploy runs it in a transient container created from the same
 materialized environment image, as the effective runtime user, with the same
-managed paths and application configuration as the workload container. The
+managed paths and, except for private environment values, the same application
+configuration as the workload container. Private `.env` assignments are
+injected only into the persistent workload; a transient command or lifecycle
+container validates the file, sees the masked placeholder, and does not receive
+the values. Whether transient commands should gain an equivalent private
+injection contract is an open decision tracked in `BACKLOG.md`. The
 transient container is removed when the command exits. Selecting a command as
 `environment.workload.command` is the only operation that promotes it to the
 persistent container entrypoint.
@@ -1664,7 +1669,11 @@ temporary home are writable.
 
 During `reploy build`, final-image validation applies the portable-access rule
 to every runtime-exposed output and validates every compiled mount destination
-against the exact resulting image. A changed runtime plan makes the build stale.
+against the reserved-path rules and the compiled protected runtime set.
+Inspecting destinations inside the exact resulting image — mount-integrity
+check 2 under Runtime Mount Integrity — is not yet implemented, so emptiness
+and ancestry are not verified there. A changed runtime plan makes the build
+stale.
 Immediately before container creation, Reploy performs only host-side checks
 for the matching recorded plan and declared mount-source existence, kind, and
 read/write policy. It creates no separate access-preflight container and stores
@@ -2164,8 +2173,18 @@ contents. After resolving `extends`, interpolation, and backend-generated
 mounts, Reploy normalizes every final container destination and treats it as a
 claim over that path and all descendants.
 
-Every blueprint or Reploy-generated runtime mount passes three independent
-checks against the exact immutable image:
+Every blueprint or Reploy-generated runtime mount is subject to three
+independent checks against the exact immutable image. Checks 1 and 3 are
+enforced: check 1 at blueprint validation and again on every compiled
+runtime-plan mount, and check 3 whenever the runtime policy is compiled, with
+the protected set derived from Reploy's roots, provider-exclusive roots, and
+referenced executable link chains, and recomputed from the build lock before
+runtime containers run. Check 2 is specified here but not yet implemented: it
+needs an image-side inspection the probe helper does not provide, so nothing
+verifies that a destination is absent or an empty real directory in the image.
+That work is tracked in `BACKLOG.md`, with the standing review decision
+recorded in `.review/BLUEPRINT_ENVIRONMENT_MODEL.md`; until it lands, check 2
+is design intent rather than enforced behavior:
 
 1. Its destination is a normalized absolute path other than `/` and does not
    overlap `/dev`, `/proc`, `/sys`, `/run/secrets`, or Docker-managed
@@ -2209,10 +2228,13 @@ behavior of the exact immutable image. An exclusive root, including a complete
 Python venv, is protected as a subtree and therefore already covers its
 interpreter without a generic execution-chain model.
 
-Reploy performs these checks against the complete effective mount plan
-immediately before creating every workload or transient runtime container,
-including native commands, lifecycle actions, and `reploy shell`. This catches
-backend-generated mounts and plans that differ between staging and deployment.
+Checks 1 and 3 run against the complete effective mount plan immediately
+before creating every workload or transient runtime container, including
+native commands, lifecycle actions, and `reploy shell`: the pre-container
+staleness check recompiles the runtime policy from the build lock, and a plan
+failing either check reads as stale and cannot run, so backend-generated
+mounts and plans that differ between staging and deployment are caught.
+Check 2 does not run anywhere yet.
 Allowed, empty application mountpoints remain valid. A mount-plan change does
 not invalidate provider layers, but an unsafe plan cannot run them.
 
@@ -2318,8 +2340,13 @@ Persisted phase `staged` selects `publish.staging`; phase `installed` selects
 staging/deployed vocabulary even though the state values are staged/installed.
 
 Published addresses should normally use loopback, with `127.0.0.1` as the
-recommended default. Existing wildcard publication remains supported for
-services intentionally exposed beyond the host. For readiness, Reploy converts
+recommended default. An omitted `bind.address` resolves to `0.0.0.0` and an
+omitted `publish.address` resolves to `127.0.0.1`; these are the implemented
+defaults, stated here so omission behavior is not implementation-invented.
+Existing wildcard publication remains supported for services intentionally
+exposed beyond the host. A canonical grammar for accepted address forms —
+hostnames, bracketed and scoped IPv6, wildcards — is not yet defined and is
+tracked in `BACKLOG.md`. For readiness, Reploy converts
 `0.0.0.0` to `127.0.0.1` and `::` to `::1`; this changes only the client probe
 target, not Docker publication. IPv6 addresses are bracketed when constructing
 URLs.
