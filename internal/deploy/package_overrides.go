@@ -7,7 +7,9 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -43,8 +45,13 @@ type BaseImageOverrideV1 struct {
 // PackageOverrideChoiceV1 selects exactly one local source or exact upstream
 // version. A mapping never requests installation by itself.
 type PackageOverrideChoiceV1 struct {
-	Path    string `yaml:"path,omitempty"`
-	Version string `yaml:"version,omitempty"`
+	Path    string   `yaml:"path,omitempty"`
+	Version string   `yaml:"version,omitempty"`
+	Exclude []string `yaml:"exclude,omitempty"`
+}
+
+func (choice PackageOverrideChoiceV1) Empty() bool {
+	return choice.Path == "" && choice.Version == "" && len(choice.Exclude) == 0
 }
 
 // ResolvedPackageOverridesV1 contains interpolated, normalized lookup keys and
@@ -59,6 +66,7 @@ type ResolvedPackageOverridesV1 struct {
 type ResolvedPackageOverrideChoiceV1 struct {
 	Path    string
 	Version string
+	Exclude []string
 }
 
 // PackageOverrideIntentV1 is the path-free build input retained in the lock.
@@ -78,10 +86,11 @@ type PackageAdditionIntentV1 struct {
 }
 
 type PackageOverrideIntentChoiceV1 struct {
-	Provider string `json:"provider"`
-	Package  string `json:"package"`
-	Kind     string `json:"kind"`
-	Version  string `json:"version"`
+	Provider string   `json:"provider"`
+	Package  string   `json:"package"`
+	Kind     string   `json:"kind"`
+	Version  string   `json:"version"`
+	Exclude  []string `json:"exclude,omitempty"`
 }
 
 func EmptyPackageOverridesV1(environmentID string) PackageOverridesV1 {
@@ -118,11 +127,30 @@ func EncodePackageOverridesV1(overrides PackageOverridesV1) ([]byte, error) {
 	if err := ValidatePackageOverridesV1(overrides); err != nil {
 		return nil, err
 	}
+	overrides = canonicalPackageOverridesV1(overrides)
 	content, err := yaml.Marshal(overrides)
 	if err != nil {
 		return nil, fmt.Errorf("encode package overrides: %w", err)
 	}
 	return content, nil
+}
+
+// canonicalPackageOverridesV1 returns an encoding copy whose semantically
+// unordered exclusion lists use their stable lexical order. Validation must
+// run first; copying the nested mappings avoids mutating caller-owned values.
+func canonicalPackageOverridesV1(overrides PackageOverridesV1) PackageOverridesV1 {
+	canonicalOverrides := make(map[string]map[string]PackageOverrideChoiceV1, len(overrides.Environment.PackageOverrides))
+	for provider, packages := range overrides.Environment.PackageOverrides {
+		canonicalPackages := make(map[string]PackageOverrideChoiceV1, len(packages))
+		for packageID, choice := range packages {
+			exclusions, _ := NormalizePackageOverrideExclusionsV1(choice.Exclude)
+			choice.Exclude = exclusions
+			canonicalPackages[packageID] = choice
+		}
+		canonicalOverrides[provider] = canonicalPackages
+	}
+	overrides.Environment.PackageOverrides = canonicalOverrides
+	return overrides
 }
 
 func ValidatePackageOverridesV1(overrides PackageOverridesV1) error {
@@ -202,9 +230,44 @@ func ValidatePackageOverridesV1(overrides PackageOverridesV1) error {
 			if version != "" && (strings.HasPrefix(version, "-") || containsControl(version)) {
 				return fmt.Errorf("package override %s.%s version must be plain version text", provider, packageID)
 			}
+			exclusions, err := NormalizePackageOverrideExclusionsV1(choice.Exclude)
+			if err != nil {
+				return fmt.Errorf("package override %s.%s exclude: %w", provider, packageID, err)
+			}
+			if len(exclusions) != 0 && pathValue == "" {
+				return fmt.Errorf("package override %s.%s exclude requires a local path", provider, packageID)
+			}
 		}
 	}
 	return nil
+}
+
+// NormalizePackageOverrideExclusionsV1 validates exact source-relative paths
+// and returns their stable lexical order. Entries select the named path and
+// its descendants; they are deliberately not glob or ignore-file patterns.
+func NormalizePackageOverrideExclusionsV1(exclusions []string) ([]string, error) {
+	normalized := append([]string{}, exclusions...)
+	for index, exclusion := range normalized {
+		if exclusion == "" || strings.TrimSpace(exclusion) != exclusion ||
+			!utf8.ValidString(exclusion) || containsControl(exclusion) ||
+			path.IsAbs(exclusion) || path.Clean(exclusion) != exclusion ||
+			strings.ContainsAny(exclusion, `\:*?[]`) || exclusion == "." ||
+			exclusion == ".." || strings.HasPrefix(exclusion, "../") {
+			return nil, fmt.Errorf("entry %d must be a canonical relative path using forward slashes", index)
+		}
+		for _, component := range strings.Split(exclusion, "/") {
+			if component == "" || component == "." || component == ".." {
+				return nil, fmt.Errorf("entry %d must be a canonical relative path using forward slashes", index)
+			}
+		}
+	}
+	sort.Strings(normalized)
+	for index := 1; index < len(normalized); index++ {
+		if normalized[index-1] == normalized[index] {
+			return nil, fmt.Errorf("contains duplicate path %q", normalized[index])
+		}
+	}
+	return normalized, nil
 }
 
 // NormalizePackageAdditionV1 validates a provider-native development package
@@ -355,7 +418,14 @@ func ResolvePackageOverridesV1(
 			}
 			owners[normalized] = packageID
 
-			resolvedChoice := ResolvedPackageOverrideChoiceV1{Version: choice.Version}
+			exclusions, err := NormalizePackageOverrideExclusionsV1(choice.Exclude)
+			if err != nil {
+				return ResolvedPackageOverridesV1{}, fmt.Errorf("package override %s.%s exclude: %w", provider, packageID, err)
+			}
+			resolvedChoice := ResolvedPackageOverrideChoiceV1{
+				Version: choice.Version,
+				Exclude: exclusions,
+			}
 			if choice.Path != "" {
 				interpolated, err := blueprint.ResolveEnvironmentVariableString(choice.Path, variables)
 				if err != nil {
@@ -420,6 +490,7 @@ func (overrides ResolvedPackageOverridesV1) Intent() (PackageOverrideIntentV1, e
 			switch {
 			case choice.Path != "" && choice.Version == "":
 				item.Kind = "local"
+				item.Exclude = append([]string{}, choice.Exclude...)
 			case choice.Path == "" && choice.Version != "":
 				item.Kind = "version"
 				item.Version = choice.Version
@@ -486,9 +557,19 @@ func ValidatePackageOverrideIntentV1(intent PackageOverrideIntentV1) error {
 			if choice.Version != "" {
 				return fmt.Errorf("local package override intent %s.%s must not contain a version", choice.Provider, choice.Package)
 			}
+			exclusions, err := NormalizePackageOverrideExclusionsV1(choice.Exclude)
+			if err != nil {
+				return fmt.Errorf("local package override intent %s.%s exclude: %w", choice.Provider, choice.Package, err)
+			}
+			if !slices.Equal(exclusions, choice.Exclude) {
+				return fmt.Errorf("local package override intent %s.%s exclusions must be unique and sorted", choice.Provider, choice.Package)
+			}
 		case "version":
 			if choice.Version == "" || strings.HasPrefix(choice.Version, "-") || containsControl(choice.Version) {
 				return fmt.Errorf("version package override intent %s.%s must contain plain version text", choice.Provider, choice.Package)
+			}
+			if len(choice.Exclude) != 0 {
+				return fmt.Errorf("version package override intent %s.%s must not contain exclusions", choice.Provider, choice.Package)
 			}
 		default:
 			return fmt.Errorf("package override intent %s.%s has unsupported kind %q", choice.Provider, choice.Package, choice.Kind)
