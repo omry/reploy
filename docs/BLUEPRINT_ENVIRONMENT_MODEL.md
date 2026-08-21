@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-08
+updated: 2026-08-19
 summary: Normative blueprint environment, workload, application, provider contribution, lifecycle, and Docker rendering model.
 supersedes: docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md
 ---
@@ -267,7 +267,12 @@ workload type.
 Every command invocation is one-shot by default and is expected to exit with a
 status. In Docker, Reploy runs it in a transient container created from the same
 materialized environment image, as the effective runtime user, with the same
-managed paths and application configuration as the workload container. The
+managed paths and, except for private environment values, the same application
+configuration as the workload container. Private `.env` assignments are
+injected only into the persistent workload; a transient command or lifecycle
+container validates the file, sees the masked placeholder, and does not receive
+the values. Whether transient commands should gain an equivalent private
+injection contract is an open decision tracked in `BACKLOG.md`. The
 transient container is removed when the command exits. Selecting a command as
 `environment.workload.command` is the only operation that promotes it to the
 persistent container entrypoint.
@@ -615,8 +620,8 @@ directory identity used to name Docker resources: directory identity answers
 which deployment owns a resource, while overlay content answers which software
 that deployment requested.
 
-The canonical overlay contains fully qualified component/option selections and
-component-qualified typed provider additions. Entries are schema-normalized,
+The canonical overlay contains fully qualified application/option selections and
+contribution-qualified typed provider additions. Entries are schema-normalized,
 deduplicated, and sorted; raw CLI strings are not canonical identity. Every
 update validates the complete overlay against the current blueprint and applies
 atomically under the deployment operation lock.
@@ -639,8 +644,9 @@ unrelated option does not invalidate every provider node.
 All providers use one common identity contract when a staging package override
 builds an artifact from local source. The source path locates the source for
 the local build but is not content identity. Reploy observes a canonical
-source-input digest, while the provider defines and validates the closed source
-artifact that crosses into the final build. The identity also binds the
+source-input digest over both the selected entries and any explicit input
+exclusions, while the provider defines and validates the closed source artifact
+that crosses into the final build. The identity also binds the
 versioned builder and toolchain profile, every relevant build setting, and a
 build-environment digest covering the selected platform, immutable upstream
 image, and selected toolchain evidence.
@@ -812,7 +818,31 @@ the blueprint. It names `environment.id`, may replace the base reference at
 `environment.package_overrides`. Absence of `environment.base` means **From
 blueprint**. Each package mapping selects either a local source path or a
 specific version from that provider's normal upstream source. The two package
-forms are mutually exclusive.
+forms are mutually exclusive. A local-path mapping may also declare `exclude`,
+an array of exact source-relative paths whose named entry and descendants are
+withheld from the immutable source input:
+
+```yaml
+environment:
+  id: omegaflow
+  vars:
+    workspace_root: /home/me/src
+  package_overrides:
+    python:
+      omegaflow:
+        path: "{{ workspace_root }}/omegaflow"
+        exclude:
+          - recordings/.omegaflow
+```
+
+Each exclusion is a canonical relative path using `/`. Absolute paths,
+escaping `..` components, backslashes, glob syntax, and duplicates are
+rejected. The list is normalized into lexical order for identity. Reploy
+matches each path literally and excludes that path and its complete subtree;
+it does not read `.gitignore` or interpret ignore-file patterns. Exclusion is
+performed during source walking before file metadata beneath the excluded path
+is read, so generated FIFOs may be excluded deliberately. A FIFO or other
+unsupported special file that remains selected is still a hard error.
 
 The same sidecar may contain explicit development-only package roots beneath
 `environment.package_additions`. These are install requests, unlike source
@@ -876,8 +906,9 @@ mappings on the user's behalf, but resolution must not add inferred packages,
 resolved dependencies, hashes, or selected artifacts to it. Those results
 belong in the generated build lock and closed bundle. Relative local paths are
 resolved from the sidecar's directory; absolute paths are also valid. Physical
-paths never enter resolved content identity. Installation consumes the staged
-bundle and never reads the sidecar or original source checkout.
+paths never enter resolved content identity; the normalized exclusion intent
+does. Installation consumes the staged bundle and never reads the sidecar or
+original source checkout.
 
 `reploy overrides [--dir DIR]` opens the native editor for the current,
 default, or explicitly selected staging directory and loads an existing
@@ -892,6 +923,9 @@ the current user's home is expanded when Reploy uses the override. It lists
 explicit blueprint, selected-option, and deployment-added package requirements
 first with a distinct shaded background; override-only mappings follow. These
 variables belong to the sidecar and are not blueprint variables.
+The editor displays the number of exclusions and preserves an existing local
+choice's `exclude` list, but does not yet provide controls for authoring it; add
+or change exclusions directly in `overrides.yaml`.
 
 `V` saves the current choices and runs the normal build pipeline as an optional
 trial validation. Success means the selected versions exist, dependency
@@ -977,6 +1011,8 @@ environment:
     python:
       arbiter-server:
         path: "{{ workspace_root }}/server"
+        exclude:
+          - recordings/.arbiter
       arbiter-imap:
         path: "{{ workspace_root }}/plugins/imap"
       arbiter-smtp:
@@ -999,6 +1035,94 @@ local source or upstream-version form that it cannot materialize.
 
 The same application/package ownership model can be extended to other build
 and packaging systems later.
+
+## Proposed Embedded Built-In Tools
+
+This section describes the support surface proposed for the embedded
+portable-tool implementation. The current blueprint schema does not yet accept
+`packages.tools`; the example and behavior below become normative only when
+that implementation lands.
+
+Until the portable-tool repository is implemented, Reploy will ship a
+deliberately small catalog of reviewed tool definitions inside the binary.
+These definitions will be versioned implementation data, not a general
+repository or an extension point. Changing one will require a new Reploy
+binary. Runtime tools will contribute their selected definition-closure digest
+to provider identity.
+
+The concrete catalog structure, exact target tuple, acquisition composition,
+and selected-closure identity are specified by the
+[Portable Tool Definition Design](PORTABLE_TOOL_DEFINITION_DESIGN.md). This
+section defines the proposed user-facing blueprint behavior and support
+surface.
+
+The initial runtime tool will be Playwright 1.61.0 with its Python binding and
+Chromium selection:
+
+```yaml
+environment:
+  base:
+    image: python:3.13-slim-bookworm
+    exports:
+      python:
+        executable: /usr/local/bin/python
+  applications:
+    application:
+      packages:
+        tools:
+          # Proposed; not accepted by the current blueprint schema.
+          - tool: playwright
+            version: "1.61.0"
+            binding: python
+            select: [chromium]
+```
+
+`tool` and `select` will be required. When `version` is omitted, Reploy will
+select the newest eligible upstream release and definition revision, matching
+the repository-backed resolver; explicitly naming `version: "1.61.0"` as above
+will constrain that selection. Because `python` is the only binding, Reploy
+will infer it when `binding` is omitted; explicitly naming `binding: python` as
+above will be equivalent. The embedded definition will declare the complete
+Python requirement roots (`playwright==1.61.0`, `pyee>=13,<14`, and
+`greenlet>=3.1.1,<4.0.0`), pin the exact Linux AMD64 Playwright wheel, and
+record its bundled Node.js 24.17.0 and `playwright-core`
+1.61.1-beta-1782139630000 constituents. The Python provider will resolve the
+declared closure and reject a Playwright wheel whose filename, tags, size, or
+SHA-256 digest differs from the definition.
+
+Each supported target will be exact to the platform, `/etc/os-release` `ID` and
+`VERSION_ID`, native package architecture, and package manager. Reploy will not
+infer a target from the image tag or merge package lists across OS generations.
+Providers will select one exact target after observing the base image and retain
+the selected definition closure in locked provider identity. Shared tool,
+release, binding, and payload records may be reused explicitly; target leaves
+will retain only the compatibility and package data specific to their exact OS
+and architecture.
+
+The reviewed native Chromium dependencies will also be definition-owned. The
+`chromium` selection will include Playwright's coupled full Chromium, Chromium
+Headless Shell, and FFmpeg payloads. Reploy will acquire their exact revisions,
+verify their sizes and SHA-256 digests, then materialize them with networking
+disabled. Neither resolution nor materialization will invoke `playwright
+install` or `playwright install-deps`. The final image will set
+`PLAYWRIGHT_BROWSERS_PATH` to the Reploy-owned browser directory and disable
+Playwright's browser download and garbage-collection behavior. The application
+will continue to run as the configured non-root runtime user.
+
+This built-in definition will support Debian 12 (`bookworm`), Ubuntu 25.10
+(`questing`), and Ubuntu 26.04 LTS (`resolute`) on `linux/amd64`, with the
+Python binding and `chromium` selection. Other versions, bindings, browsers,
+operating systems, or architectures will fail before artifact acquisition.
+Ubuntu targets will own their `t64` package names independently from Debian.
+The prebuilt Microsoft Playwright image will be neither required nor used.
+
+The existing local-source Java build requirement will become `tool:java==21`
+and resolve definition revision 1 to Eclipse Temurin JDK `21.0.12+8` in the
+embedded catalog for Debian 12, Debian 13, Ubuntu 25.10, and Ubuntu 26.04. Its
+ownership behavior will remain unchanged: it will contribute the pinned JDK,
+including `java` and `javac`, only to the isolated source builder and will not
+add Java to the application runtime. Distribution-default Java packages are not
+a fallback.
 
 ## Possible Shape
 
@@ -1545,7 +1669,11 @@ temporary home are writable.
 
 During `reploy build`, final-image validation applies the portable-access rule
 to every runtime-exposed output and validates every compiled mount destination
-against the exact resulting image. A changed runtime plan makes the build stale.
+against the reserved-path rules and the compiled protected runtime set.
+Inspecting destinations inside the exact resulting image — mount-integrity
+check 2 under Runtime Mount Integrity — is not yet implemented, so emptiness
+and ancestry are not verified there. A changed runtime plan makes the build
+stale.
 Immediately before container creation, Reploy performs only host-side checks
 for the matching recorded plan and declared mount-source existence, kind, and
 read/write policy. It creates no separate access-preflight container and stores
@@ -2045,8 +2173,18 @@ contents. After resolving `extends`, interpolation, and backend-generated
 mounts, Reploy normalizes every final container destination and treats it as a
 claim over that path and all descendants.
 
-Every blueprint or Reploy-generated runtime mount passes three independent
-checks against the exact immutable image:
+Every blueprint or Reploy-generated runtime mount is subject to three
+independent checks against the exact immutable image. Checks 1 and 3 are
+enforced: check 1 at blueprint validation and again on every compiled
+runtime-plan mount, and check 3 whenever the runtime policy is compiled, with
+the protected set derived from Reploy's roots, provider-exclusive roots, and
+referenced executable link chains, and recomputed from the build lock before
+runtime containers run. Check 2 is specified here but not yet implemented: it
+needs an image-side inspection the probe helper does not provide, so nothing
+verifies that a destination is absent or an empty real directory in the image.
+That work is tracked in `BACKLOG.md`, with the standing review decision
+recorded in `.review/BLUEPRINT_ENVIRONMENT_MODEL.md`; until it lands, check 2
+is design intent rather than enforced behavior:
 
 1. Its destination is a normalized absolute path other than `/` and does not
    overlap `/dev`, `/proc`, `/sys`, `/run/secrets`, or Docker-managed
@@ -2090,10 +2228,13 @@ behavior of the exact immutable image. An exclusive root, including a complete
 Python venv, is protected as a subtree and therefore already covers its
 interpreter without a generic execution-chain model.
 
-Reploy performs these checks against the complete effective mount plan
-immediately before creating every workload or transient runtime container,
-including native commands, lifecycle actions, and `reploy shell`. This catches
-backend-generated mounts and plans that differ between staging and deployment.
+Checks 1 and 3 run against the complete effective mount plan immediately
+before creating every workload or transient runtime container, including
+native commands, lifecycle actions, and `reploy shell`: the pre-container
+staleness check recompiles the runtime policy from the build lock, and a plan
+failing either check reads as stale and cannot run, so backend-generated
+mounts and plans that differ between staging and deployment are caught.
+Check 2 does not run anywhere yet.
 Allowed, empty application mountpoints remain valid. A mount-plan change does
 not invalidate provider layers, but an unsafe plan cannot run them.
 
@@ -2103,10 +2244,15 @@ exact blueprint can run under a non-container backend. A future backend with a
 different runtime filesystem model would need to define whether it supports
 `container` paths or introduce another workload-visible path mapping.
 
-Staging and deployed execution use the same materialized image, container-side
-endpoint scheme and port, runtime user, mounts, application configuration, and
-readiness behavior. Backend identity such as container names, managed host
-paths, and published host ports may differ where isolation requires it. Docker
+Staging and deployed execution use the same provider layers, container-side
+endpoint scheme and port, mounts, and readiness behavior. The materialized
+image and runtime user are also shared, unless installation selects a
+different numeric authority, which rebuilds only the final account/verifier
+layer and records that identity-specific image in the installed lock.
+Application configuration is shared except deployment-local private
+environment values, which later installs deliberately preserve. Backend
+identity such as container names, managed host paths, and published host
+ports may differ where isolation requires it. Docker
 publication does not change an endpoint's scheme; `scheme` is declared once on
 the environment endpoint and inherited by every scope.
 
@@ -2199,8 +2345,13 @@ Persisted phase `staged` selects `publish.staging`; phase `installed` selects
 staging/deployed vocabulary even though the state values are staged/installed.
 
 Published addresses should normally use loopback, with `127.0.0.1` as the
-recommended default. Existing wildcard publication remains supported for
-services intentionally exposed beyond the host. For readiness, Reploy converts
+recommended default. An omitted `bind.address` resolves to `0.0.0.0` and an
+omitted `publish.address` resolves to `127.0.0.1`; these are the implemented
+defaults, stated here so omission behavior is not implementation-invented.
+Existing wildcard publication remains supported for services intentionally
+exposed beyond the host. A canonical grammar for accepted address forms —
+hostnames, bracketed and scoped IPv6, wildcards — is not yet defined and is
+tracked in `BACKLOG.md`. For readiness, Reploy converts
 `0.0.0.0` to `127.0.0.1` and `::` to `::1`; this changes only the client probe
 target, not Docker publication. IPv6 addresses are bracketed when constructing
 URLs.

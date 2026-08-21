@@ -160,7 +160,7 @@ package architecture. Initial mappings are:
 | `linux/arm64` and supported arm64 variants | `arm64` |
 | `linux/arm/v7` | `armhf` |
 
-An environment without an APT component may support other backend platforms,
+An environment without an APT-backed OS package contribution may support other backend platforms,
 but the initial APT provider rejects a selected platform absent from this table.
 An OCI CPU variant may constrain base/backend selection while still mapping to
 the same Debian package architecture.
@@ -205,10 +205,10 @@ the workload report identity-dependent mount permission failures. Linux system
 scope uses the resolved service account. The base image's configured `USER` is
 never the implicit runtime identity.
 
-## Proposed Blueprint Shape
+## Blueprint Shape
 
 Simple requirements remain strings. A requirement becomes structured when it
-exports a command to another component:
+exports a command to another provider contribution:
 
 ```yaml
 blueprint:
@@ -223,7 +223,7 @@ environment:
       - ca-certificates
       - libmagic1
   applications:
-    application:
+    arbiter:
       packages:
         os:
           - python3
@@ -306,22 +306,22 @@ packages:
 ```
 
 Options and deployment-local direct additions normalize through this same
-typed request. `reploy bundle add-package COMPONENT REQUIREMENT...` adds APT
-roots to a named APT component; `remove-package` removes exact normalized
-request entries. Once parsed, these commands cannot introduce a broader APT
-grammar.
+typed request. `reploy bundle add-package CONTRIBUTION REQUIREMENT...` adds APT
+roots to a canonical APT contribution such as `application/arbiter/os`;
+`remove-package` removes exact normalized request entries. Once parsed, these
+commands cannot introduce a broader APT grammar.
 
 ### Deployment Request Identity
 
-The blueprint is not the whole provider request. Enabled component options and
-direct package additions form the canonical request overlay defined by
+The blueprint is not the whole provider request. Enabled application options
+and direct package additions form the canonical request overlay defined by
 `BLUEPRINT_ENVIRONMENT_MODEL.md`. It lives in existing directory-scoped
 deployment state, is updated atomically under the deployment operation lock,
-and contains sorted fully qualified selections plus component-qualified typed
-provider additions. A directory-path-derived Docker resource identity is not a
+and contains sorted application-qualified selections plus contribution-qualified
+typed provider additions. A directory-path-derived Docker resource identity is not a
 request identity.
 
-The effective provider request identity binds the normalized component
+The effective provider request identity binds the normalized contribution
 requests, canonical overlay digest, selected target-platform record, and only
 the staging override selections relevant to the resolved closure. A version
 override contributes its canonical provider-owned version selection; a local
@@ -414,7 +414,7 @@ hierarchical timing report after the result or diagnostic. The report expands
 provider resolution, local-source snapshot, sdist and wheel construction,
 portable build tools, provider layers, final validation, publication, and
 Docker subprocesses. Its labels contain only Reploy-owned operation names and
-validated package or component names; it does not record paths, environment
+validated package, application, or contribution names; it does not record paths, environment
 variables, command arguments, or backend output.
 
 An explicit `reploy build` with selected local Python projects does not use
@@ -429,20 +429,21 @@ Docker's current local author reference and avoids a registry request when its
 immutable descriptor matches. This path does not walk the complete
 provider-store closure.
 
-### Public Provider Names and Options
+### Public Application, Contribution, and Option Names
 
-Component, option, and executable-output names use
-`[a-z][a-z0-9_-]*`. `base` is the required reserved root component and cannot
-be used for another component; `.`, `/`, and `,` remain reserved qualification
-and CLI separators. Component names are blueprint-global; option and output
-names are supplier-local. Thus
-`python_env_3.arbiter_server` is a valid qualified output.
+Application, option, and executable-output names use
+`[a-z][a-z0-9_-]*`. `base` is the reserved base contribution. Canonical
+provider contributions are `environment/<provider>` and
+`application/<application>/<provider>`; `.`, `/`, and `,` remain reserved
+qualification and CLI separators. Application names are blueprint-global;
+option and output names are owner-local. Thus `application.arbiter_server` is
+a valid application-qualified executable reference.
 
 An option contains `description` plus the additive request field owned by its
 provider. Python options use `requirements`; APT options use `packages`, with
-the exact item syntax documented above. Options cannot replace component type,
-interpreter selection, identity, or other structural fields, and cannot contain
-nested options.
+the exact item syntax documented above. Options cannot replace provider
+selection, interpreter selection, application identity, or other structural
+fields, and cannot contain nested options.
 
 ### Exported Executable Semantics
 
@@ -457,7 +458,7 @@ output only with an explicit normalized absolute path:
       executable: /opt/custom/bin/python3
 ```
 
-`exports` is a map keyed by the component-local output name. Each entry requires
+`exports` is a map keyed by the contribution-local output name. Each entry requires
 `executable`; `discover` is not a valid field.
 
 The initial versioned well-known-tool profile contains exactly one mapping:
@@ -489,7 +490,7 @@ Reploy resolves the selected path without searching for alternatives or other
 executables. It rejects cycles and paths escaping the image. For each ordinary
 path and terminal file, literal `dpkg-query -S` must identify an installed
 package key whose exact status tuple appears in the complete locked APT node.
-The owner may come from any component in that shared node; Reploy records the
+The owner may come from any contribution in that shared node; Reploy records the
 actual owner and does not reconstruct a per-root dependency graph.
 
 An unowned symlink hop is accepted only when the chain enters the alternatives
@@ -509,7 +510,7 @@ the package's normal operating-system semantics. Reploy's absolute invocation
 path prevents an outer command-name lookup through `PATH`; it does not claim
 that the invoked package code performs no internal `PATH` lookup.
 
-Logical output names must be unique within a component. Provider resolution
+Logical output names must be unique within a contribution. Provider resolution
 records the source package even though consumers request only the logical
 command. The output record contains the complete selected link/alternatives
 chain and the actual terminal owner from the locked APT node.
@@ -589,7 +590,7 @@ Every base-image export requires an explicit absolute `executable` path. Reploy
 does not list the whole image, search its `PATH`, or probe candidate files.
 Bounded search within an explicitly declared directory may be considered later
 if a concrete need justifies its ambiguity and validation rules. The OCI image
-belongs to the environment's root component rather than the Docker runtime
+belongs to the environment's reserved base contribution rather than the Docker runtime
 section; another OCI-compatible backend may realize the same base contract.
 
 Exports define the executables that Reploy may resolve, validate, track, and
@@ -714,11 +715,11 @@ first whose observed actual value is compatible, and adds only that selected
 edge to the final graph and lock. Because this edge always points to an
 initialized supplier, automatic selection cannot introduce a cycle.
 
-An executable candidate supplied by an APT component contains at least:
+An executable candidate supplied by an APT contribution contains at least:
 
 ```yaml
 provider: apt
-component: system
+contribution: application/arbiter/os
 name: python
 package: python3
 package_version: 3.11.2-1+deb12u1
@@ -845,7 +846,7 @@ without following symlinks. Existing ancestors outside the Reploy namespace
 must be real directories rather than symlinks, non-directories, or mountpoints.
 The Reploy namespace and provider-root ancestors must either be absent for safe
 creation or carry exact ownership evidence from an earlier accepted Reploy
-layer. The component leaf must be absent. The backend then creates and claims
+layer. The contribution leaf must be absent. The backend then creates and claims
 the root using no-follow operations. Provider recipes use fixed destinations
 beneath that root, and final validation checks the declared root and outputs.
 V1 does not export or scan the produced layer to prove write confinement.
@@ -870,7 +871,7 @@ index for a package manager's shared domain. Artifact listings are streamed
 with bounded memory and need not be retained after protected-path checks.
 Deployment state records the exclusive-root ownership evidence and declared
 executable evidence rather than attributing every system file to a blueprint
-component.
+contribution.
 
 ### Runtime Overlay Validation
 
@@ -896,7 +897,7 @@ exclusive provider leaf, an executable's validated invocation/link/terminal
 path, or a Reploy-protected path. It also rejects any destination inside an
 exclusive provider root, because the root protects its complete subtree.
 Executable-chain protection includes outputs selected from the immutable base
-image even when they are not owned by a materialized provider component.
+image even when they are not owned by a materialized provider contribution.
 
 The separately validated executable chain contributes every link and terminal
 path to the protected set. During `reploy build`, Reploy compiles every
@@ -1096,7 +1097,7 @@ Materialization must:
 ### Internal Materialization Recipe Contract
 
 `MaterializationStep` is a private provider-to-backend contract, not blueprint
-schema. Blueprint authors declare component intent; a provider returns a fixed,
+schema. Blueprint authors declare application-owned contribution intent; a provider returns a fixed,
 versioned recipe. For the initial Docker backend, the complete provider-node
 recipe compiles to exactly one step and therefore one BuildKit `RUN`.
 
@@ -1139,9 +1140,9 @@ A private `GeneratedExecutableOperand` declares a recipe role, exact
 provider-derived invocation path beneath a protected provider-owned root, and a
 validation policy before the transaction runs. A fixed trusted recipe may use
 such a path after its fixed generating operation. In particular, a Python
-component first verifies that its selected base/APT executable is Python and
+contribution first verifies that its selected base/APT executable is Python and
 records its actual compatible version, uses that interpreter to create the
-component venv, and may then use the venv's controlled interpreter entry to
+application venv, and may then use the venv's controlled interpreter entry to
 populate that same venv. This does not require the host backend to pause a
 single `RUN`: the venv entry is a link or copy derived from the already
 validated interpreter, not a separately sourced Python installation. Full
@@ -1196,8 +1197,9 @@ The restricted bundle-resolver runner and the materialization script each set
 declared `TMPDIR` as empty provider-owned transaction scratch, writes the fixed
 additive provider APT configuration there, and removes the scratch before
 accepting the bundle-resolver result or image layer. The generated file does
-not replace the base image's normal APT configuration tree. The scratch size
-limit and exact generated configuration bytes are transaction inputs. Neither
+not replace the base image's normal APT configuration tree. The scratch
+preparation/removal policy and exact generated configuration bytes are
+transaction inputs. Neither
 profile inherits proxy, locale, `DPKG_*`, debconf override, shell-option, host,
 or base-image environment variables. Repository source and trust configuration
 remain filesystem state of the immutable base image rather than forwarded
@@ -1205,8 +1207,10 @@ environment. Reploy's own mandatory tools still use validated absolute paths;
 the fixed `PATH` exists for APT/dpkg children and maintainer scripts that locate
 standard system tools.
 
-The provider resource-limit design still defines the numeric scratch and other
-limits; whatever values it selects become profile/transaction inputs.
+Reploy defines no numeric artifact, byte, path, scratch, layer, or label quota.
+The actual filesystem, archive-format, backend, and kernel constraints still
+apply. Resource exhaustion fails the transaction cleanly and removes any
+unpublished output.
 
 Each profile identifier, version, exact bindings, umask, scratch policy, and APT
 configuration content participate in the corresponding bundle-resolver or
@@ -1552,7 +1556,7 @@ The materializer performs the equivalent checks immediately before its first
 persistent change: the selected absolute executable must still be Python, its
 actual version must still be parseable and compatible, and its evidence must
 still match the exact prefix. Python does not create a temporary venv merely to
-prove `venv` support; creation of the real component venv is the authoritative
+prove `venv` support; creation of the real application venv is the authoritative
 fixed-recipe check. Failure commits no provider layer and identifies the
 selected interpreter so the author can supply a package set that provides
 `venv` or choose another supplier.
@@ -1650,9 +1654,9 @@ The exact root encoding remains a private Python recipe decision and must map
 the globally unique application identity to a safe deterministic path. It must
 also keep the generated interpreter path space-free and within the target's
 direct-shebang length limit; a bounded digest segment may represent a longer
-component name. The bootstrap interpreter path is a resolved upstream provider
-output. A change to the component, interpreter output, wheel bundle, or Python
-recipe version invalidates that component's Python node without invalidating
+application name. The bootstrap interpreter path is a resolved upstream provider
+output. A change to the application contribution, interpreter output, wheel
+bundle, or Python recipe version invalidates that contribution's Python node without invalidating
 independent Python nodes.
 
 For the first slice, the Python interpreter is a resolution-time and
@@ -1720,7 +1724,7 @@ direct path and symlink/alternatives selection, not the
 transitive programs, ELF loader, shared libraries, or subprocesses used by the
 executable. Those are trusted contents and behavior of the exact realized
 image. Provider-specific invariants may be stronger; Python entry-point wrappers
-must name their own component environment's interpreter.
+must name their own application environment's interpreter.
 
 On Docker and Podman, Reploy stores only the validation schema,
 root-filesystem-subject digest, and canonical record digest in Reploy-reserved
@@ -1798,7 +1802,7 @@ fingerprint reuses the exact wheel bundle, while changed evidence reruns the
 Python resolver.
 
 V1 requires a local-only transitive distribution to also appear as an explicit
-component package request. This gives the resolver a discovery root without
+contribution package request. This gives the resolver a discovery root without
 speculatively inspecting every local mapping. Published transitives remain
 demand-discovered normally.
 
@@ -2087,15 +2091,16 @@ archive layout, compatibility loaders, or test obligations on this local lock.
 Invalidation follows graph edges:
 
 ```text
-APT component package change -> APT node + dependent Python node
+APT contribution package change -> APT node + dependent Python node
 Python requirement change -> Python node only
 port/mount/readiness change -> neither provider node
 ```
 
-Normal start, restart, and staged app commands reuse recorded provider results
-and generated images. When the build is missing or stale, those operations may
-run the same provider pipeline as `reploy build`; observation and stop actions
-never resolve package sources or refresh artifacts.
+Normal start and restart may visibly run the same provider pipeline as
+`reploy build` when the build is missing or stale. Staged application commands
+require a current build and direct the user to run `reploy build` when it is
+missing or stale. Observation and stop actions never resolve package sources or
+refresh artifacts.
 
 ## Validation and Failure Rules
 
@@ -2128,7 +2133,7 @@ Reploy fails before final image publication when:
 - a logical command has no compatible active supplier, or candidate
   dependencies are cyclic;
 - the interpreter's logical version does not satisfy the Python constraint;
-- the selected Python/package set cannot create the required real component
+- the selected Python/package set cannot create the required real application
   environment, with guidance to supply `venv` or select another interpreter;
 - a transaction command position contains ordinary data, or a validated or
   generated executable operand lacks the required path and evidence checks;
@@ -2144,7 +2149,7 @@ Reploy fails before final image publication when:
 - a final runtime mount plan overlays a protected provider root, exact exclusive
   provider leaf, or recorded executable-chain path;
 
-Errors name the component, provider, package, requested output, selected base,
+Errors name the application or contribution, provider, package, requested output, selected base,
 and failing phase where applicable.
 
 ## Inspection and User Experience
@@ -2153,16 +2158,17 @@ and failing phase where applicable.
 materialized state:
 
 ```text
-component system [apt]
+contribution application/arbiter/os [apt]
   requested: python3, ca-certificates, libmagic1
   resolved: python3=3.11.2-1+deb12u1 [amd64] ...
   exports: python -> /usr/bin/python3
 
-component application [python]
+contribution application/arbiter/python [python]
   interpreter requirement: python >=3.11,<3.12
-  selected source: system.python
+  selected contribution: application/arbiter/os
+  selected output: python
   logical version: 3.11.2
-  environment: /opt/reploy/providers/python/application
+  environment: /opt/reploy/providers/python/arbiter
 ```
 
 `reploy validate BLUEPRINT` performs syntax and semantic validation without

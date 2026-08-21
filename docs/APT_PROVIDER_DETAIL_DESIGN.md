@@ -1,7 +1,7 @@
 ---
 status: Active
-updated: 2026-07-22
-summary: Concrete implementation design for the provider graph, APT/dpkg bundles, generated image layers, and cross-provider executable consumption.
+updated: 2026-08-22
+summary: Implemented local-Docker design for the provider graph, APT/dpkg bundles, generated image layers, and cross-provider executable consumption.
 implements: docs/APT_PROVIDER.md
 ---
 
@@ -12,12 +12,12 @@ implements: docs/APT_PROVIDER.md
 This document maps the accepted contracts in
 [`APT_PROVIDER.md`](APT_PROVIDER.md) and
 [`BLUEPRINT_ENVIRONMENT_MODEL.md`](BLUEPRINT_ENVIRONMENT_MODEL.md) onto concrete
-Go types, package boundaries, state files, Docker operations, and implementation
-gates. Those documents remain authoritative for product semantics. If this
+Go types, package boundaries, state files, Docker operations, and the historical
+delivery gates used to land them. Those documents remain authoritative for product semantics. If this
 document disagrees with either one, implementation stops and the conceptual
 contract is reconciled first.
 
-This design covers the initial local Docker implementation:
+This design documents the implemented local Docker architecture:
 
 - one selected Linux OCI platform per build;
 - an immutable APT/dpkg-compatible base image;
@@ -33,16 +33,31 @@ requires a separate design. Blueprint-defined repositories and credentials,
 application-configuration transport, RPM/APK providers, and application-output
 version matching also remain outside this design.
 
-## Required Behavioral Changes
+## Implementation Status and Known Gaps
 
-The current implementation is a useful prototype but is not the target
-architecture. The detailed design deliberately replaces these assumptions:
+The provider graph, shared APT authority, closed APT bundle, offline provider
+layer, application-scoped Python nodes, build locks, and cross-provider
+executable consumption described here are implemented. The public blueprint
+owns applications and their `os` and `python` package contributions; the
+internal `blueprint.Component` map is a derived provider projection while
+lower-level provider APIs migrate to first-class contribution identities.
 
-| Current prototype | Required design |
+Known implementation discrepancies are tracked in [`BACKLOG.md`](BACKLOG.md),
+not silently normalized in this design. The APT install-record parser still
+rejects the valid optional trailing empty ` []` marker emitted by current APT,
+and bundle CLI help and diagnostics still expose obsolete component terminology.
+Those are implementation backlog items; this true-up changes no runtime
+behavior.
+
+## Implemented Behavioral Cutover
+
+The implemented architecture replaced these prototype assumptions:
+
+| Previous prototype | Implemented design |
 | --- | --- |
-| `ComponentTypePython` only | discriminated Python and APT component schemas |
-| optional components represented as separate components | options nested under their owning component |
-| one aggregated Python provider request | one node per Python component |
+| `ComponentTypePython` only | public `os` and `python` package contributions, projected to typed provider components internally |
+| optional components represented as separate components | options nested under their owning application |
+| one aggregated Python provider request | one node per application Python contribution |
 | provider interface resolves one ecosystem as a unit | provider-owned node planning plus per-node resolution |
 | Python selected through base-image `PATH` | typed logical executable requirement and absolute validated path |
 | public executable profiles drive Python output discovery | exact wheel metadata drives the provider output catalog |
@@ -53,8 +68,8 @@ architecture. The detailed design deliberately replaces these assumptions:
 | runtime startup may build without saying so | staged up and restart visibly ensure a current build; app commands and installed runtime operations never build |
 | mutable state embeds prototype bundle structures | versioned request overlay, local build lock, and generation pointer |
 
-Existing types may be adapted during migration, but they must not be extended in
-ways that preserve these obsolete assumptions as permanent contracts.
+Compatibility recovery is limited to explicitly recognized legacy files. New
+code must not revive these obsolete public assumptions.
 
 ## Package Ownership
 
@@ -62,19 +77,19 @@ The implementation is divided as follows:
 
 | Package | Responsibility |
 | --- | --- |
-| `internal/blueprint` | Decode and normalize blueprint compatibility, the required base root, provider components, options, exports, and interpreter requirements. |
+| `internal/blueprint` | Decode and normalize blueprint compatibility, the required base, environment packages, applications, options, executable profiles, and interpreter requirements; derive internal provider contributions. |
 | `internal/canonical` | Canonical JSON encoding and domain-separated SHA-256 identities. |
 | `internal/providerstore` | Deployment-owned immutable raw artifact and content-record publication by digest. No mutable global index. |
 | `internal/providers` | Provider registry, node planning contracts, graph model, common bundle/output/transaction types. |
 | `internal/providers/apt` | APT request parsing, resolver profile, package closure, artifact inspection, and offline materialization recipe. |
-| `internal/providers/python` | Per-component wheel closure, interpreter consumption, venv materialization, and console-script catalog. |
+| `internal/providers/python` | Per-application-contribution wheel closure, interpreter consumption, venv materialization, and console-script catalog. |
 | `internal/dockerdeploy` | OCI platform selection, Docker inspection/probing, exact-prefix validation, BuildKit rendering, image references, and cutover. |
 | `internal/deploy` | Backend-neutral OCI/runtime records, versioned directory state, request overlay, local build lock, atomic state publication, and operation locking. |
 | `internal/cli` | `build`, bundle option/addition commands, platform/cache flags, and user-facing diagnostics. |
 
-`internal/blueprint` must not import provider implementations. The public schema
-is an explicit discriminated union owned by the blueprint package. Provider
-implementations consume its resolved typed values through `internal/providers`.
+`internal/blueprint` does not import provider implementations. It owns the
+public application/package schema and derives typed internal contribution
+values consumed through `internal/providers`.
 
 ## Public Schema Representation
 
@@ -108,87 +123,80 @@ checked during platform selection; the APT provider then applies its narrower
 Linux/amd64, Linux/arm64, and Linux/arm/v7 mapping. The resolved blueprint never
 stores an unparsed platform string or hard-codes distribution release versions.
 
-### Provider identifiers
+### Public identifiers and contribution identities
 
-Add a dedicated `validateProviderIdentifier` instead of reusing the existing
-artifact-filename validator. It accepts exactly `[a-z][a-z0-9_-]*`.
+`validateProviderIdentifier` accepts exactly `[a-z][a-z0-9_-]*` and is used for
+application, option, and executable-output names. Package/distribution names
+remain provider-native and do not use this grammar.
 
-It is used for component, option, and executable-output names. `base` is the
-required reserved root component and cannot be used for another component.
-Package/distribution names remain provider-native and do not use this grammar.
+Canonical contribution identities are exactly `base`,
+`environment/<provider>`, and
+`application/<application>/<provider>`. Public provider keys are currently
+`os` and `python`; the public YAML never exposes `type: apt`. The `os` key
+selects the system-package provider detected from the immutable base image.
 
-### Components
+### Applications and derived provider contributions
 
-Extend the resolved model with an explicit union:
+The resolved public model has this shape:
 
 ```go
-type Component struct {
-    Type        ComponentType
-    Base        *BaseComponent
-    Python      *PythonComponent
-    APT         *APTComponent
-    Options     map[string]ComponentOption
+type Environment struct {
+    Base         BaseComponent
+    Packages     EnvironmentPackages
+    Applications map[string]Application
 }
 
-type BaseComponent struct {
-    Image   string
-    Exports map[string]BaseExecutableExport
+type EnvironmentPackages struct {
+    OS []APTPackageRequest
 }
 
-type BaseExecutableExport struct {
-    Executable string
+type Application struct {
+    Packages    ApplicationPackages
+    Options     map[string]ApplicationOption
+    Executables map[string]Executable
 }
 
-type PythonComponent struct {
-    Interpreter CommandRequirement
-    Requirements []string
+type ApplicationPackages struct {
+    OS     []APTPackageRequest
+    Python *PythonComponent
 }
 
-type APTComponent struct {
-    Packages []APTPackageRequest
+type ApplicationOption struct {
+    Description string
+    Packages    ApplicationOptionPackages
 }
 
-type ComponentOption struct {
-    Description        string
-    PythonRequirements []string
-    APTPackages        []APTPackageRequest
+type ApplicationOptionPackages struct {
+    OS     []APTPackageRequest
+    Python *PythonOptionPackages
 }
 ```
 
-The syntax struct may expose the union's known fields so YAML unknown-field
-rejection remains available. Semantic resolution then rejects a field that does
-not belong to the selected type. In particular:
+The required `base` supplies the immutable OCI image and explicit base exports.
+Environment `packages.os` contributes to `environment/os`; application
+`packages.os` and OS option packages contribute to
+`application/<application>/os`; application `packages.python` and Python
+option packages contribute to `application/<application>/python`. All active OS
+contributions share one APT authority node, while each active application
+Python contribution plans an independent Python node.
 
-- exactly one component named `base` is required; it omits `type`, requires a
-  nonempty OCI image reference, accepts only `image` and `exports`, and
-  normalizes to the internal root-component kind;
-- every base export requires one normalized absolute `executable` path; base
-  discovery is not supported;
-- Python accepts `interpreter`, `requirements`, and Python option
-  `requirements`;
-- APT accepts `packages` and APT option `packages`;
-- neither option accepts `type`, `interpreter`, or nested `options`; and
-- the initial Python and APT providers reject an active component whose
-  effective request is empty. A component containing only disabled options
-  produces no active provider node.
-
-`ComponentType` has exactly the internal values `base`, `python`, and `apt`.
-The public `base` entry has no `type` field; resolution assigns `base`. Every
-other component requires exactly one supported `type`. A resolved `Component`
-must have exactly the matching pointer set and all other union pointers nil.
-This invariant is checked when YAML is resolved, before overlay entries or
-provider planning are considered.
+`Environment.Components` is not serialized. `RebuildProviderContributions`
+derives it using the internal `ComponentType` values `base`, `apt`, and
+`python`, preserving provider implementation contracts without making those
+types public blueprint syntax. Every base export still requires one normalized
+absolute executable path, and provider contributions with no effective request
+remain inactive.
 
 Effective requests are computed after validating the complete overlay. Direct
-component requirements, selected option requirements, and targeted direct
+contribution requirements, selected application options, and targeted direct
 package additions are normalized into provider-owned records, deduplicated by
-their canonical encoding, and sorted by canonical byte order. Component and
-option maps are likewise emitted as sorted name/value entries in identity
-records. Disabled options contribute nothing. A non-base component with no
-effective request is inactive and creates no node. Naming an inactive or
-missing component as an explicit supplier fails semantic resolution before
-`Plan`; a provider also rejects an empty active request defensively. There is
-no later phase that silently activates a component or changes this result.
+their canonical encoding, and sorted by canonical byte order. Internal
+contribution and option maps are likewise emitted as sorted name/value entries in identity
+records. Disabled options contribute nothing. A contribution with no effective
+request is inactive and creates no node. Naming an inactive or missing
+contribution as an explicit supplier fails semantic resolution before `Plan`;
+a provider also rejects an empty active request defensively. There is no later
+phase that silently activates a contribution or changes this result.
 
 An omitted Python interpreter normalizes immediately to:
 
@@ -221,7 +229,7 @@ Every declared export requires an absolute normalized `Executable`; `discover`
 is rejected as an unknown field.
 
 `apt-package-request-v1` encodes `Name`, optional `Version`, and exports sorted
-by output name. Identical requests contributed by the component, selected
+by output name. Identical requests contributed by the contribution, selected
 options, or direct additions deduplicate. Two effective roots with the same
 package name but different versions or different export declarations are an
 order-dependent conflict and fail resolved-request construction before APT is
@@ -244,10 +252,12 @@ type CommandRequirement struct {
 }
 ```
 
-`Command` uses the provider identifier grammar. `Supplier`, when present, is an
-active component name or `base`. The Python provider owns interpretation of its
-version constraint. Command requirements have no generic capability-name list;
-each consuming provider validates the fixed prerequisites of its own recipe.
+`Command` uses the provider identifier grammar. Public Python syntax accepts
+`base` or an application package-provider key such as `os`; resolution expands
+the latter to the canonical application contribution identity. The Python
+provider owns interpretation of the version constraint. Command requirements
+have no generic capability-name list; each consuming provider validates the
+fixed prerequisites of its own recipe.
 
 ## Deployment Request Overlay
 
@@ -261,44 +271,47 @@ type RequestOverlayV1 struct {
 }
 
 type QualifiedOption struct {
-    Component string
+    Application string
     Option    string
 }
 
 type DirectPackageRequest struct {
-    Component string
+    Contribution string
     Package   CanonicalPackageRequest
 }
 
 ```
 
 `Schema` is exactly `overlay-v1`. Selected options are unique and sorted by
-`(component, option)`. Direct packages are unique by their complete canonical
-package request and sorted by `(component, package schema, canonical package
+`(application, option)`. Direct packages are unique by their complete canonical
+package request and sorted by `(contribution, package schema, canonical package
 bytes)`. Empty arrays are encoded as arrays, not null; an absent overlay file
 normalizes to the canonical empty `overlay-v1` value. Its digest is
 `canonical.Sum("request-overlay", "overlay-v1", overlay)`.
 
 The provider for a direct package request is derived from the target
-component's resolved type and is not stored separately. `CanonicalPackageRequest`
+contribution's resolved internal type and is not stored separately. `CanonicalPackageRequest`
 is the provider-owned structured form also produced when resolving a package
-declared in the blueprint. The overlay decoder uses the component type to
+declared in the blueprint. The overlay decoder uses the contribution type to
 select that provider's package schema.
 
 `add-package` parses and validates every CLI requirement before beginning the
 overlay write. For APT, it stores the parsed `APTPackageRequest` name and exact
 version fields with no exports rather than retaining `name=version`. Python
 uses the same canonical resolved requirement record as a blueprint Python
-requirement. A missing component, unsupported direct-package capability,
-syntax error, or payload that does not match the component type rejects the
+requirement. A missing contribution, unsupported direct-package capability,
+syntax error, or payload that does not match the contribution type rejects the
 whole command and leaves the overlay unchanged.
 
 Staging package overrides are not blueprint or request-overlay entries. A
 staging directory may contain `overrides.yaml`, an explicit sparse
 environment overlay whose `environment.id` must match the retained blueprint.
 For each provider-owned package identifier it selects exactly one local `path`
-or upstream `version`. During `reploy build`, inspection of a selected local
-source produces a `ResolvedSourceInput`
+or upstream `version`. A local mapping may also contain an `exclude` array of
+exact canonical source-relative subtrees. These are literal paths rather than
+glob patterns; Reploy applies them before observing entry metadata and binds
+the normalized list into local-source identity. During `reploy build`,
+inspection of a selected local source produces a `ResolvedSourceInput`
 containing the source-input digest, retained source-artifact digest,
 build-environment digest, builder/toolchain profile, settings, ecosystem
 metadata, and output-artifact digest. The resolved request and its digest live
@@ -314,7 +327,7 @@ the complete active dependency graph.
 
 For v1, a distribution available only from a local mapping cannot be discovered
 after the upstream resolver has already failed to find that transitive. The
-user must also add it as an explicit component package request. Published
+user must also add it as an explicit contribution package request. Published
 transitives remain discoverable through the normal closure and can activate a
 matching override without becoming explicit roots.
 
@@ -325,7 +338,7 @@ root is unset for a new sidecar and may be configured inside the editor. When
 configured, the editor stores it in sidecar-local
 `environment.vars.workspace_root` and uses it for common-root-relative paths;
 otherwise selected paths remain absolute. Paths outside a configured root also
-remain absolute. Explicit component requirements appear first with a distinct
+remain absolute. Explicit blueprint requirements appear first with a distinct
 shaded background; override-only mappings appear afterward.
 
 ```go
@@ -433,10 +446,10 @@ The public commands are:
 ```text
 reploy bundle options
 reploy bundle list
-reploy bundle add COMPONENT/OPTION[,OPTION...]
-reploy bundle remove COMPONENT/OPTION[,OPTION...]
-reploy bundle add-package COMPONENT REQUIREMENT...
-reploy bundle remove-package COMPONENT REQUIREMENT...
+reploy bundle add APPLICATION/OPTION[,OPTION...]
+reploy bundle remove APPLICATION/OPTION[,OPTION...]
+reploy bundle add-package CONTRIBUTION REQUIREMENT...
+reploy bundle remove-package CONTRIBUTION REQUIREMENT...
 reploy bundle clean
 ```
 
@@ -445,7 +458,7 @@ they do not inspect a prepared wheelhouse. `clean` removes the deployment-owned
 provider store without invalidating an already built image. `reploy build`
 replaces the prototype `bundle prepare` and `bundle check` operations. The
 prototype `bundle upgrade` command has no direct replacement: authors change a
-blueprint constraint or an exact component-qualified overlay request and then
+blueprint constraint or an exact contribution-qualified overlay request and then
 build. `bundle list-options`, `bundle prepare`, `bundle check`, and `bundle
 upgrade` are removed at cutover rather than retained as aliases.
 
@@ -515,7 +528,7 @@ boundaries requires a schema/identity review:
 
 | Owning package | Types |
 | --- | --- |
-| `internal/blueprint` | `Compatibility`, `Platform`, `Component`, `BaseComponent`, `BaseExecutableExport`, `PythonComponent`, `APTComponent`, `ComponentOption`, `APTPackageRequest`, `ExecutableExport`, `CommandRequirement` |
+| `internal/blueprint` | `Compatibility`, `Platform`, `EnvironmentPackages`, `Application`, `ApplicationPackages`, `ApplicationOption`, `ApplicationOptionPackages`, `PythonOptionPackages`, `BaseComponent`, `BaseExecutableExport`, `PythonComponent`, `APTPackageRequest`, `ExecutableExport`, `CommandRequirement`, plus the derived internal `Component` projection |
 | `internal/canonical` | `Digest`, `Envelope`, and the validated canonical value/object implementation |
 | `internal/deploy` | `RequestOverlayV1`, `QualifiedOption`, `DirectPackageRequest`, `ImageDescriptor`, `BaseConfig`, `ConfigEnvironmentVariable`, `RuntimePolicyV1`, `ProtectedPathV1`, `RuntimePlanV1`, `RuntimeMountV1`, `StateV1`, `EnvironmentGenerationState`, `BuildLockV1`, `ProviderGraphLockV1`, `NodeLockV1`, `PendingBuildV1`, `PendingCandidateV1`, `CleanupItemV1` |
 | `internal/providerstore` | `ArtifactDescriptor`, `StoreObjectRef`, immutable publication and reachability |
@@ -549,10 +562,10 @@ In particular, `providerstore` uses `canonical.Envelope`, not a provider-owned
 metadata type; common owner/alternatives extension points use validated
 canonical envelopes, not imports of `providers/apt`; and deployment records use
 backend-neutral values owned by `deploy` rather than importing `dockerdeploy`.
-The current imports from `internal/providers/python` to `internal/deploy` are
-prototype debt, not an exception to this graph. Slice 2 moves deployment pack
-and request adaptation above the provider boundary before accepting the new
-provider contracts.
+Provider implementations do not import `internal/deploy`. The registry adapter
+may import deployment-owned overlay and override records because it is the
+boundary that translates deployment intent into provider requests; that
+adapter does not make deployment state part of a provider contract.
 
 Every schema field named `Schema` must contain the table's exact schema value.
 Decoders reject unknown schema values, unknown object keys, missing required
@@ -583,9 +596,9 @@ package value is the provider's normalized requirement record under
 `python-package-request-v1`.
 
 `blueprint-resolved-v1` is the canonical projection of the complete resolved
-`blueprint.Blueprint` after defaults, `extends`, interpolation, union
+`blueprint.Document` after defaults, `extends`, interpolation, schema
 validation, and provider normalization. It includes runtime and Docker policy,
-not only provider components, because those fields participate in build
+not only provider contributions, because those fields participate in build
 staleness. It excludes YAML spelling/order, comments, source locations, and
 staging package overrides. Its digest is
 `canonical.Sum("resolved-blueprint", "blueprint-resolved-v1", projection)`.
@@ -730,9 +743,10 @@ observes candidates, returns the selected evidence in `ResolveResult`, and only
 then constructs the complete immutable profile. Thus no input type pretends
 that selection occurred before the consuming resolver ran.
 
-`ProviderPlanV1.Schema` is `provider-plan-v1`. `NodeID` is `base` for the root, `apt` for the combined dpkg authority, and
-`python/<component>` for a component-scoped Python node. Because `/` is not a
-provider identifier character, these forms cannot collide. The plan contains
+`ProviderPlanV1.Schema` is `provider-plan-v1`. `NodeID` is `base` for the root,
+`apt` for the combined dpkg authority, and
+`python/application/<application>` for an application-scoped Python node.
+These forms cannot collide with provider identifiers. The plan contains
 the sorted `NodeSpec` records plus explicit structural edges; node
 lists use `NodeID` byte order and edge lists use `(supplier, consumer,
 requirement ID)` byte order.
@@ -1686,9 +1700,10 @@ fails the node. Transaction failure publishes no prefix or build lock.
 
 ## Executable Outputs
 
-Output identity is always `(supplier component, output name)`. The provider node
-is recorded separately because one shared APT node may contain several supplier
-components.
+Output identity is always `(supplier contribution, output name)`, represented
+by the existing internal `SupplierComponent` field. The provider node is
+recorded separately because one shared APT node may contain several supplier
+contributions.
 
 ```go
 type ResolvedOutput struct {
@@ -2851,16 +2866,17 @@ format, filesystem, Docker, and kernel constraints; it does not invent numeric
 artifact, path, scratch, layer-growth, or label quotas. Resource exhaustion
 fails the operation and removes unpublished output.
 
-## Prototype Cutover and Removal
+## Historical Prototype Cutover and Removal
 
-The provider graph is a hard cutover from the current prototype. Reploy does
+The provider graph was delivered as a hard cutover from the prototype. Reploy does
 not decode, translate, or preserve prototype deployment state. A state file
 with the old integer `schema_version`, `bundle`, `materialization`, or `images`
 shape fails with `state.legacy_unsupported` and concise guidance to recreate
 that staged or installed deployment. The loader does not inspect legacy roots
 or guess target components, and failure leaves the directory untouched.
 
-Removal is split only to keep intermediate implementation slices buildable:
+The removal work was split only to keep intermediate implementation slices
+buildable. This table is retained as historical cutover evidence:
 
 | Prototype surface | Replacement | Cutover slice | Required removal assertion |
 | --- | --- | --- | --- |
@@ -2877,11 +2893,12 @@ and CLI fixtures that characterize the prototype are deleted or rewritten to
 assert the replacement contract; they are not carried forward as compatibility
 tests.
 
-## Implementation Sequence
+## Historical Implementation Sequence
 
-Every slice starts from a repository that passes the preceding slice gate and
-must leave the repository buildable with all still-supported public behavior.
-The entry condition and produced result are explicit:
+The six completed slices below record the delivery sequence. Imperative and
+future wording in their original task lists is historical gate language, not
+remaining work. Each slice started from a repository that passed the preceding
+gate and left the repository buildable with all supported public behavior.
 
 | Slice | Entry condition | Parent contract made mandatory in this slice | Produced result |
 | --- | --- | --- | --- |
@@ -3040,26 +3057,20 @@ Repository searches find none of the symbols, paths, labels, tags, commands, or
 serialized fields listed in the cutover table; an old-state fixture fails
 without mutation.
 
-## Phase 2/3 Task Crosswalk
+## Completed Implementation Slice Acceptance Gates
 
-`BLUEPRINT_ENVIRONMENT_IMPLEMENTATION_PLAN.md` assigns stable `P2-*` and `P3-*`
-IDs to every Phase 2 and Phase 3 implementation or gate obligation. Each ID
-appears exactly once below. A task is complete only when the named slice's gate
-passes; work done in an earlier slice is provisional until that one gate.
+The provider implementation was organized into six detailed-design slices. All
+six gates were completed during the provider cutover; the table records the
+evidence boundary used for each slice.
 
-| Detailed-design slice | Phase 2 task IDs | Phase 3 task IDs | Acceptance gate |
-| --- | --- | --- | --- |
-| Slice 1: Canonical foundations and schema | P2-17 | — | Parser, normalization, identifier, overlay atomicity, and canonical identity tests |
-| Slice 2: Provider graph with existing Python behavior | P2-01, P2-02, P2-03, P2-04, P2-05, P2-06, P2-12, P2-14, P2-18, P2-19, P2-20, P2-24, P2-25, P2-26 | — | Existing Python through graph executor; synthetic supplier-selection graph tests; public APT still rejected |
-| Slice 3: Artifact store and Docker transaction backend | P2-07, P2-08, P2-09, P2-10, P2-11, P2-13, P2-21, P2-27 | P3-01, P3-02, P3-03, P3-04, P3-05, P3-06, P3-07, P3-08, P3-09, P3-10, P3-11, P3-12, P3-13, P3-14, P3-15, P3-18, P3-19, P3-20, P3-21, P3-22, P3-23 | Fake-Docker command tests plus ordinary `docker build` on minimum Engine 24.0 and current Desktop-hosted Engine; no direct Buildx |
-| Slice 4: APT resolver and offline layer | P2-15 | — | APT schema and real-container resolver/materializer matrix; public APT remains rejected |
-| Slice 5: Cross-provider Python | P2-16, P2-22 | — | APT-supplied Python, two component interpreter/venv pairs, Python-base plus native APT libraries, then public APT enablement |
-| Slice 6: Public build cutover | P2-23 | P3-16, P3-17 | Full tests, CLI Docker smoke, install/store transfer, recovery, cleanup, mount/runtime failures, and legacy-removal assertions |
-
-The crosswalk is bidirectional for this scope: every Phase 2/3 ID names one
-slice, and every detailed-design slice owns at least one Phase 2/3 ID. Adding,
-splitting, or moving a Phase 2/3 task requires updating both documents and the
-coverage check that compares their ID sets and rejects duplicate mappings.
+| Detailed-design slice | Acceptance gate |
+| --- | --- |
+| Slice 1: Canonical foundations and schema | Parser, normalization, identifier, overlay atomicity, and canonical identity tests |
+| Slice 2: Provider graph with existing Python behavior | Existing Python through graph executor; synthetic supplier-selection graph tests; public APT still rejected |
+| Slice 3: Artifact store and Docker transaction backend | Fake-Docker command tests plus ordinary `docker build` on minimum Engine 24.0 and current Desktop-hosted Engine; no direct Buildx |
+| Slice 4: APT resolver and offline layer | APT schema and real-container resolver/materializer matrix; public APT remains rejected |
+| Slice 5: Cross-provider Python | APT-supplied Python, two component interpreter/venv pairs, Python-base plus native APT libraries, then public APT enablement |
+| Slice 6: Public build cutover | Full tests, CLI Docker smoke, install/store transfer, recovery, cleanup, mount/runtime failures, and legacy-removal assertions |
 
 ## Approved Prototype Decisions
 
@@ -3087,17 +3098,16 @@ The prototype review established these implementation constraints:
 The remaining implementation evidence is attached to the corresponding slice
 gates rather than reopening these policies.
 
-## Completion Criteria
+## Current Completion Evidence
 
-This detailed design is implementation-ready when:
+The architecture is implemented: cross-boundary records have owning packages
+and versioned encodings; the five prototype decisions above have concrete
+values; the prototype bundle, materialization, image-tag, and prepared-state
+surfaces were hard-cut; and build, install, and stale-runtime behavior is
+covered by the provider and deployment test suites. The historical slice gates
+above are the durable delivery record; no separate APT implementation plan is
+required for current work.
 
-- every proposed type has one owning Go package and versioned serialization
-  where it crosses a process or persistence boundary;
-- the five prototype decisions above have recorded evidence and exact values;
-- current `providers.Bundle`, `Materialization`, directory image tags, and
-  `PreparedFingerprint` have explicit hard-cut removal tasks;
-- top-level `reploy build`, install's explicit use of the same build pipeline,
-  and runtime stale-build behavior are reflected consistently in user
-  documentation and CLI tests; and
-- the implementation plan links each Phase 2/3 task to one slice and gate in
-  this document.
+The remaining APT parser and public CLI terminology discrepancies are explicit
+backlog items. Their presence is a deferral, not evidence that the implemented
+provider architecture is still a prototype.
