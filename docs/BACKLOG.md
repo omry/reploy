@@ -39,6 +39,13 @@ This file is the day-to-day queue for design and implementation gaps.
       installs and upgrades, streaming chunk boundaries, and rejection of
       nonempty, duplicated, or otherwise malformed trailing markers.
 
+- [ ] `P2` Align bundle CLI terminology with application-owned provider
+      contributions. Update `bundle options`, `add`, `remove`, `add-package`,
+      and `remove-package` help, usage errors, progress text, and CLI tests to
+      use application/option selections and canonical contribution targets
+      such as `application/<application>/os`. Do not rename the internal Go
+      `Component` projection solely for cosmetic consistency.
+
 - [ ] `P2` Add explicit controlled runtime command aliases for validated
       executable outputs. Keep provider exports non-public by default, and let
       a blueprint opt into mapping ordinary command names such as `rustc` to
@@ -67,6 +74,37 @@ This file is the day-to-day queue for design and implementation gaps.
       across staged and installed current-user workloads and transient
       commands, including account-name resolution, stable Windows mapping, and
       explicit confirmation that no accidental `0:0` identity is selected.
+
+- [ ] `P2` Decide private environment injection for transient commands.
+      Private `.env` assignments reach only the persistent workload via the
+      FIFO relay; app-command and lifecycle containers validate the file and
+      see the masked placeholder but never receive the values. Decide whether
+      transient commands should gain an equivalent private injection contract
+      or the workload-only boundary is permanent, then update the one-shot
+      command paragraph in `BLUEPRINT_ENVIRONMENT_MODEL.md` and the standing
+      decision in `docs/.review/BLUEPRINT_ENVIRONMENT_MODEL.md` (E-2).
+
+- [ ] `P2` Define a canonical endpoint address grammar.
+      `BLUEPRINT_ENVIRONMENT_MODEL.md` now states the implemented omission
+      defaults (bind `0.0.0.0`, publish `127.0.0.1`) but accepted address
+      forms — hostnames, bracketed and scoped IPv6, wildcards — remain
+      undefined while they feed Docker exposure, readiness URLs, and network
+      policy. Define the grammar and normative defaults; standing decision in
+      `docs/.review/BLUEPRINT_ENVIRONMENT_MODEL.md` (E-3).
+
+- [ ] `P1` Implement runtime mount integrity check 2.
+      `BLUEPRINT_ENVIRONMENT_MODEL.md` specifies three mount-plan checks
+      against the exact immutable image. Checks 1 and 3 are enforced (reserved
+      destinations plus protected-set overlap, compiled into the runtime
+      policy and recomputed from the build lock before containers run). Check
+      2 — destination absent or an empty real directory in the image, with
+      validated ancestors, `lstat` plus a one-entry read — is not: it needs an
+      image-side inspection operation the probe helper protocol does not yet
+      define. The design section is the specification; the standing review
+      decision, including the correction that narrowed this entry from checks
+      2-3 to check 2, is recorded in
+      `docs/.review/BLUEPRINT_ENVIRONMENT_MODEL.md` (B1-1). Update the status
+      notes there and in the design section when this lands.
 
 - [ ] `P1` Define root-safe explicit output-file and output-dir contracts.
       Preserve the prohibition on arbitrary host binds while treating a
