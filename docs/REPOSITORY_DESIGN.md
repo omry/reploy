@@ -1,6 +1,6 @@
 ---
 status: Draft
-updated: 2026-08-01
+updated: 2026-08-22
 summary: Federated, TUF-authenticated Reploy repositories for published blueprints and portable tool definitions.
 ---
 
@@ -521,9 +521,10 @@ An exact upstream version still permits any eligible revision. The compact
 selector `2.4.0~1` pins both version `2.4.0` and revision `1`; `2.4.0` alone pins
 the version while selecting its newest eligible revision. Revision constraints
 are valid only with an exact upstream version. Because some version schemes may
-use `~` themselves, structured `version` and `revision` fields and equivalent
-CLI options provide the unambiguous form. Repository records and locks always
-store the two coordinates separately.
+use `~` themselves, structured surfaces expose the two coordinates separately—
+for example, tool requirements use `version` and `definition_revision`—and
+equivalent CLI options provide the unambiguous form. Repository records and
+locks always store the two coordinates separately.
 
 New unconstrained resolution may select a newer upstream version and revision.
 A range-constrained update may move within the range and then select the newest
@@ -906,7 +907,7 @@ versions and targets, required external repositories, validation evidence, and
 source provenance. Tool pages additionally show:
 
 - supported downstream versions, operating systems, releases, architectures,
-  bindings, and selectable parameters;
+  bindings, and selection dimensions and combinations;
 - exact root OS packages contributed per target profile;
 - executable and capability interfaces;
 - build-only or runtime placement;
@@ -920,6 +921,12 @@ the publisher tool, not in consumer warnings for direct BURLs.
 
 ## Portable Tool Contract
 
+The concrete record decomposition, exact-target model, acquisition composition,
+and selected-closure identity are defined in the
+[Portable Tool Definition Design](PORTABLE_TOOL_DEFINITION_DESIGN.md). This
+section owns the public repository-facing contract; the focused design owns how
+one tool release is represented and resolved.
+
 ### Definition Shape and Safety Boundary
 
 A tool definition represents:
@@ -930,16 +937,16 @@ A tool definition represents:
 - human summary, upstream and licensing provenance;
 - exact OS-provider root packages per target;
 - named executable and capability exports with target-specific validation;
-- strict parameter schemas and supported values;
+- strict binding and selection schemas with supported combinations;
 - zero or more application-facing bindings;
 - named Reploy-owned resolver primitives for curated non-package artifacts;
 - network behavior, final-image placement, and documentation metadata.
 
-Unknown fields, schemas, primitives, targets, parameter values, or executable
-contracts fail closed. Definitions cannot provide executable implementation
-code. A future primitive requires a reviewed Reploy implementation and release;
-ordinary definition updates may only select primitives the client already
-supports.
+Unknown fields, schemas, primitives, targets, binding or selection values, or
+executable contracts fail closed. Definitions cannot provide executable
+implementation code. A future primitive requires a reviewed Reploy
+implementation and release; ordinary definition updates may only select
+primitives the client already supports.
 
 A runtime tool belongs to the application that declares it. Public executables
 become application-scoped executable outputs and are validated in the
@@ -951,54 +958,88 @@ builder.
 ### Tool Requirements and Definition Revisions
 
 Tool requirements accept a compact string or a structured mapping. Both
-normalize immediately to the same internal surface, qualified name, symbolic
-selections, version requirement, revision, repository pin, binding, and typed
-parameter fields:
+normalize immediately to the same canonical request. Compact form is reserved
+for optionless requests and carries only the qualified name, version
+requirement, and optional exact definition revision:
 
 ```yaml
 tools:
-  - "tool:acme/playwright[chromium,webkit]>=1.55.0,<1.56.0"
+  - "tool:java==21"
 ```
 
 The equivalent structured requirement is:
 
 ```yaml
 tools:
-  - tool: acme/playwright
-    select: [chromium, webkit]
-    version: ">=1.55.0,<1.56.0"
+  - tool: java
+    version: "==21"
 ```
 
-The compact grammar is:
+The compact version suffix is optional and uses the selected asset's version
+scheme. Exact upstream version `==21` still selects the newest eligible Reploy
+definition revision; `==21~2` pins both coordinates. A definition-revision pin
+is valid only with an exact upstream version.
 
-```text
-tool:<qualified-name>[<selection>,...]<version-requirement>
-```
-
-The bracketed portion is optional and contains definition-declared symbolic
-selections. It is normalized as an order-independent set. The version suffix
-is also optional and uses the selected asset's version-scheme grammar. Exact
-upstream version `==21` still selects the newest eligible Reploy revision;
-`==21~2` pins both coordinates. Syntax that is ambiguous under the selected
-version scheme, plus repository pins, bindings, and complex keyed or typed
-parameters, requires the structured mapping. Unknown selections or missing
-required selections fail with the target-supported values.
-
-The public structured `version` field is an upstream-facing constraint, not a
-definition revision:
+Bindings or selections require the structured mapping. The public structured
+`version` field is an upstream-facing constraint, not a definition revision;
+`definition_revision` is the optional exact revision pin. `binding` accepts a
+scalar, a list, or the quoted value `"*"` for all advertised bindings. `select`
+maps each definition-declared selection dimension to a scalar or list:
 
 ```yaml
 tools:
   - tool: acme/playwright
-    version: ">=1.55.0,<1.56.0"
+    version: "1.61.0"
+    definition_revision: 2
+    binding: "*"
+    select:
+      browser: [webkit, chromium]
 ```
+
+Binding and selection scalars normalize to singleton sets, and lists normalize
+to sorted sets. Unknown fields, dimensions, or values, duplicate values, empty
+lists, and a wildcard mixed with explicit values are invalid. No compact
+bracket grammar is defined. Missing required selections fail with the
+target-supported values.
+
+#### Same-Scope Requirement Merging
+
+Requirements for one `(resolution scope, qualified tool)` are conjunctive and
+normalize into one canonical requirement group before release selection. The
+group retains a sorted, duplicate-free set of normalized version constraints;
+a candidate must satisfy every member rather than relying on a parser-specific
+range rewrite. Identical constraints deduplicate. Explicit definition-revision
+pins must either be absent or all name the same revision, and the resulting pin
+remains valid only with an exact upstream version accepted by every constraint.
+An empty version intersection, conflicting revision pins, or different use
+contexts in one group is an incompatible merge.
+
+Binding demands are cumulative. Explicit binding sets union, `"*"` dominates
+all other binding demands, and otherwise an omitted binding retains one
+inference demand. During
+candidate evaluation Reploy resolves that inference against the candidate
+target and active providers, then unions the inferred result with every
+explicit demand. Selection values likewise union by dimension; omission adds
+no value. The resulting binding set and complete normalized selection map must
+match one exact support case advertised by the candidate target. Thus merging
+never drops a requested binding or selection, and two individually harmless
+requests may still be incompatible when their union is not an advertised case.
+
+Canonical group identity includes the scope, tool name, sorted constraint set,
+revision pin, context, binding inference flag, explicit binding demand, and
+dimension-keyed selection union. Original request locations remain diagnostic
+provenance but do not affect identity. The same tool in different application
+or source-builder scopes is resolved separately; provider and destination
+conflicts across genuinely shared domains are handled by the joint solver, not
+by same-scope request merging.
 
 Tool requirements use the shared asset versioning and Reploy revision model
 defined above. The surface calls that common revision a definition revision. It
 may correct packages, target data, validation, acquisition, or documentation
 for one exact upstream version without changing that version. Requirements may
-specify an exact `revision` only when `version` is exact; otherwise resolution
-selects the newest eligible revision after selecting the upstream version.
+specify an exact `definition_revision` only when `version` is exact; otherwise
+resolution selects the newest eligible revision after selecting the upstream
+version.
 
 ### Bindings
 
@@ -1007,38 +1048,40 @@ For example, one Playwright tool owns browser payloads, OS requirements,
 validation, and commands while `python` and `node` bindings contribute their
 respective ecosystem packages.
 
-An explicit supported binding wins. If only one exists, Reploy infers it. When
-several exist, Reploy may infer exactly one matching an already active
-application provider; ambiguity lists supported values. An explicit binding
-may activate its provider. The initial requirement selects at most one binding.
+An explicit supported binding set wins, and `"*"` expands to every advertised
+binding. When binding is omitted, Reploy selects bindings matching active
+application providers or infers the sole advertised binding; unresolved
+ambiguity lists the supported values and requires an explicit choice. An
+explicit binding may activate its provider.
 
 Bindings are strict provider mappings, not arbitrary package-manager
 expressions. Their constraints merge with ordinary application constraints so
-the same ecosystem package is resolved and installed once. Selected or inferred
-binding is part of request, lock, cache, diagnostics, and documentation
-identity.
+the same ecosystem package is resolved and installed once. The resolved
+binding set is sorted and participates in request, lock, cache, diagnostics,
+and documentation identity.
 
-### Parameters and Sub-payloads
+### Selections and Sub-payloads
 
-A definition may expose symbolic selections for declared sub-payloads and
-strict typed parameters for other bounded choices:
+A definition may expose named symbolic selection dimensions for declared
+sub-payloads:
 
 ```yaml
 tools:
   - tool: acme/playwright
-    select: [chromium, webkit]
+    select:
+      browser: [chromium, webkit]
 ```
 
-Selections and parameters declare names or symbols, types, required/default
-behavior, allowed values, and target availability. Missing required or
-unsupported values fail before acquisition and list target-supported values. A
-selection or parameter cannot introduce a URL, command, package expression, or
-undeclared repository object.
+Selections declare dimension names, symbols, required behavior, allowed exact
+combinations, and target availability. Missing required or unsupported values
+fail before acquisition and list target-supported values. A selection cannot
+introduce a URL, command, package expression, or undeclared repository object.
 
-Multiple selections contribute one normalized, deduplicated, order-independent
-union of common and selection-specific provider requirements. Publication
-rejects definitions whose selectable payloads contain incompatible exact
-requirements.
+The normalized dimension-to-set map must match one explicitly advertised
+combination; Reploy never infers a Cartesian product. Selected contributions
+form one normalized, deduplicated, order-independent union of common and
+selection-specific provider requirements. Publication rejects definitions
+whose selectable payloads contain incompatible exact requirements.
 
 ### Runtime Placement and Provider Composition
 
@@ -1051,6 +1094,10 @@ environment:
       packages:
         tools:
           - tool: acme/playwright
+            version: "1.61.0"
+            binding: python
+            select:
+              browser: chromium
 ```
 
 The selected definition contributes ecosystem packages, artifacts, OS package
@@ -1064,8 +1111,13 @@ The existing local project recipe form remains build-only:
 
 ```yaml
 requires:
-  - tool:java
+  - tool:java==21
 ```
+
+Build-only recipe requirements use the same compact version and revision
+grammar as runtime tools. Omitting the version selects the newest eligible
+release under the shared rule; resolution and the build lock still retain the
+exact upstream version and definition revision.
 
 ### Playwright
 
@@ -1075,7 +1127,7 @@ compatible browser payloads; contribute reviewed target-specific OS roots;
 acquire browser payloads through a named Reploy-owned primitive without
 exposing project source, host credentials, or arbitrary paths; materialize
 offline; and lock platform, browser revision, provenance, artifact digest, and
-definition digest.
+release and selected-closure digests.
 
 Browser selection is explicit because payloads are large and materially change
 requirements. Omitting it lists supported browsers. Multiple browsers produce
@@ -1086,6 +1138,21 @@ OmegaFlow definition may support only `chromium` and uses the `python` binding.
 The tool exports the supported Playwright CLI into the application executable
 namespace. Browser payload executables remain internal unless the definition
 deliberately exposes a stable named interface.
+
+An interim built-in bridge will implement the approved initial Python/Chromium
+profile before the repository protocol exists. Its artifact acquisition will
+remain a closed, reviewed primitive. This bridge will not be an official
+repository, accept external definitions, or satisfy the publication, trust,
+lifecycle, or multi-browser portions of this design. A separate implementation
+WIP uses flat, complete-per-target JSON files as a checkpoint; those files will
+be migrated to the explicit record composition in the Portable Tool Definition
+Design before release.
+
+Target selection continues to use validated base-profile evidence inside
+provider resolution; image-reference parsing and cross-generation package
+unions are not target-selection mechanisms. The selected package roots and
+definition closure remain part of locked provider identity so cache validation
+can re-establish the same target choice.
 
 ### Unsupported Dynamic Installers
 
@@ -1114,8 +1181,8 @@ is not reserved in the initial public schema.
    and implement disposable global object caching and validated offline import.
 5. Publish the independently updated official repository and generated
    documentation.
-6. Move Java's existing portable-tool mapping from Go switches into an official
-   definition without changing its current project-owned build-only behavior.
+6. Migrate Java's interim embedded definition into an official definition
+   without changing its current project-owned build-only behavior.
 7. Add the reviewed Playwright resolver primitive, definition, OS matrix,
    documentation, and integration evidence.
 
