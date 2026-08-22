@@ -87,6 +87,9 @@ func decodeRecordV1(filename string, payload []byte) (loadedRecordV1, error) {
 		return loadedRecordV1{}, fmt.Errorf("decode %s: %w", filename, err)
 	}
 	record := loadedRecordV1{ID: header.ID, Schema: header.Schema, Path: filename, Value: value}
+	if err := validateLoadedRecordV1(record); err != nil {
+		return loadedRecordV1{}, fmt.Errorf("validate %s: %w", filename, err)
+	}
 	digest, err := canonical.Sum("portable-tool-record", portableToolRecordIdentityV1, value)
 	if err != nil {
 		return loadedRecordV1{}, fmt.Errorf("digest %s: %w", filename, err)
@@ -606,6 +609,9 @@ func hasURLDotSegmentV1(value string) bool {
 func validateSortedUniqueStringsV1(field string, values []string, allowEmpty bool) error {
 	if values == nil {
 		return fmt.Errorf("%s must use an array", field)
+	}
+	if len(values) > maxDefinitionReferences {
+		return fmt.Errorf("%s must use at most %d entries", field, maxDefinitionReferences)
 	}
 	for index, value := range values {
 		if !allowEmpty && value == "" || strings.TrimSpace(value) != value || containsControlV1(value) || index > 0 && values[index-1] >= value {
