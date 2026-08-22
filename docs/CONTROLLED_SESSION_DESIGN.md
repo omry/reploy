@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-13
+updated: 2026-08-22
 summary: Capability-scoped execution sessions that inherit Reploy's global container sandbox.
 ---
 
@@ -155,9 +155,12 @@ summary: Capability-scoped execution sessions that inherit Reploy's global conta
   inspection, and untrusted-code execution
 
 This document records the decisions for a reusable Reploy controlled-session
-capability and the global Reploy container sandbox policy on which it depends.
-It does not define OmegaFlow recording syntax, browser actions, media formats,
-or publication behavior.
+capability and its delta from the global Reploy application-runtime model. The
+normative global identity, mount, private-environment, output, network, and
+sandbox contracts remain owned by
+[`BLUEPRINT_ENVIRONMENT_MODEL.md`](BLUEPRINT_ENVIRONMENT_MODEL.md). This
+document does not define OmegaFlow recording syntax, browser actions, media
+formats, or publication behavior.
 
 ## Decision Summary
 
@@ -181,45 +184,19 @@ A controlled session provides:
 - access to explicitly granted workload endpoints;
 - generation-bound admission, lifecycle, cleanup, and recovery.
 
-These are global Reploy container defaults, not additional treatment for
-controlled sessions:
+Both controller and workload containers are application runtimes governed by
+the global contracts in
+[`BLUEPRINT_ENVIRONMENT_MODEL.md`](BLUEPRINT_ENVIRONMENT_MODEL.md). Controlled
+sessions do not redefine those defaults or inherit the separate construction
+authority of provider-resolution, build, validation, or materialization
+containers.
 
-- no public or local network access;
-- no host application-data paths unless explicitly granted by a runtime
-  contract;
-- no inherited host environment;
-- no Docker, runtime, or daemon socket;
-- no privileged container;
-- no Linux capabilities unless separately and explicitly designed;
-- verified seccomp and `no-new-privileges`;
-- no host namespaces or host devices;
-- runtime identity inherited from the Reploy execution scope for application
-  containers;
-- read-only project source access only when explicitly granted.
-
-This baseline applies to every container Reploy creates. Provider-resolution,
-build, validation, and materialization helpers may receive narrowly scoped
-root, network, capability, or filesystem grants required by their provider
-contract. Those are explicit construction authorities, not implicit exceptions
-or authorities inherited by application containers.
-
-Every application image receives a container-local account. Its blueprint name
-is `environment.runtime.user`, defaulting to `reploy`; it is not a host account
-selector or an authority grant. Staged and installed user-scope containers use
-the invoking Unix user's numeric identity, while native Windows maps the
-invoking SID to a stable nonzero Linux UID/GID. Installed system-scope
-containers use the host account selected by
-`environment.install.system.account`. The current Linux-container backend
-materializes the local account through Linux account databases; other target-OS
-backends may realize the same contract differently.
-
-Root remains an explicit runtime identity, but selecting it does not produce a
-generic runtime warning. Reploy instead rejects prohibited combinations with
-precise diagnostics. Root does not implicitly grant capabilities, host input
-or shared-state mounts, network access, privileged mode, or daemon access.
-Root-safe `--output-file` and `--output-dir` are separate global runtime
-contracts and remain rejected until their focused pre-release review and
-implementation are complete.
+The session-specific rule is that Host Reploy freezes each role's complete
+effective runtime plan before admission. The controller can exercise only the
+session operations and workload endpoints in that plan; it cannot add mounts,
+environment inputs, network grants, identities, capabilities, output
+destinations, or runtime authority after startup. Current global root-output
+restrictions also apply unchanged to controller output options.
 
 ## Context
 
@@ -241,11 +218,15 @@ unrelated containers, images, mounts, secrets, and host paths. Installing every
 controller implementation inside its workload would erase the trust boundary
 and burden workload blueprints with controller-specific details.
 
-Distribution of portable controller dependencies is a separate concern defined
-in [`REPOSITORY_DESIGN.md`](REPOSITORY_DESIGN.md).
-Controlled sessions consume a prepared controller environment; they do not
-define tool repositories, Playwright browser acquisition, or application
-blueprint distribution.
+Distribution of portable controller dependencies is a separate concern. The
+accepted concrete tool-definition model is defined in
+[`PORTABLE_TOOL_DEFINITION_DESIGN.md`](PORTABLE_TOOL_DEFINITION_DESIGN.md), its
+delivery sequence in
+[`PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md`](PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md),
+and repository publication and trust in
+[`REPOSITORY_DESIGN.md`](REPOSITORY_DESIGN.md). Controlled sessions consume a
+prepared controller environment; they do not define tool acquisition,
+repository publication, or application blueprint distribution.
 
 Reploy already has useful foundations:
 
@@ -253,8 +234,9 @@ Reploy already has useful foundations:
 - provider build locks and current-build verification;
 - attached transient shell execution;
 - live-run admission, cancellation, generation checks, and cleanup;
-- managed mounts, private workload environment injection, and endpoint
-  publication;
+- managed mounts, persistent-workload private environment injection, and
+  endpoint publication; controlled sessions currently reject either role when
+  that deployment configures private environment values;
 - deployment-scoped crash-recovery state.
 
 The missing capability is a programmable, capability-scoped session contract
@@ -439,59 +421,23 @@ undeclared paths, or undeclared networks.
 - session-control integrity and lifecycle truth;
 - private outputs and diagnostics until their owning client publishes them.
 
-## Global Reploy Container Sandbox
+## Inherited Global Reploy Container Sandbox
 
-Controlled sessions do not receive a special sandbox tier. Every container
-Reploy creates starts with the same deny-oriented baseline:
+Controlled sessions do not receive a special sandbox tier. Both roles consume
+the ordinary application-runtime plan and its fail-closed backend realization
+defined in
+[`BLUEPRINT_ENVIRONMENT_MODEL.md`](BLUEPRINT_ENVIRONMENT_MODEL.md). That
+authority owns numeric runtime identity, root restrictions, mounts and masks,
+private environment behavior, output grants, public and local network policy,
+capability removal, seccomp, `no-new-privileges`, namespaces, devices, runtime
+sockets, and writable-storage boundaries.
 
-- verified seccomp and `no-new-privileges`;
-- no Docker or runtime socket;
-- no privileged mode;
-- no host namespaces or host devices;
-- no inherited host environment;
-- no undeclared mount, network, capability, or secret access.
-
-Purpose-specific container classes then receive only their declared authority.
-The application-runtime class includes:
-
-- staged workloads, commands, and shells;
-- installed user-scope workloads, commands, and shells;
-- installed system-scope workloads, commands, and shells;
-- controlled-session workload containers.
-
-The effective blueprint, installation scope, and host invocation determine
-identity, mounts, environment, endpoints, and other explicit grants before
-startup. The controller cannot expand or change them or select arbitrary host
-paths, Docker resources, identities, or networks.
-
-Every application runtime container:
-
-- uses an explicit numeric runtime identity rather than the image's configured
-  `USER`;
-- drops all Linux capabilities unless a separately designed feature grants a
-  specific capability;
-- enables `no-new-privileges`;
-- uses a verified seccomp filter;
-- receives no privileged mode, host namespace, host device, or runtime socket;
-- uses a read-only container root filesystem plus only declared writable
-  storage;
-- receives no public or local network access unless explicitly granted;
-- receives only declared mounts and private environment inputs;
-- is subject to bounded process, memory, CPU, temporary-storage, and output
-  policy where supported.
-
-Reploy explicitly requests Docker's built-in seccomp profile. Before launching
-untrusted application code, the trusted runtime bootstrap verifies that filter
-mode and `no-new-privileges` are active and that the effective, permitted, and
-bounding capability sets are empty. An engine or platform that cannot prove
-this baseline cannot run Reploy application containers under this policy; it
-does not silently degrade only because the selected identity is non-root.
-
-Provider-resolution, build, validation, and materialization containers execute
-package managers and other purpose-specific operations. Their provider
-contracts must separately declare and justify any root identity, network,
-capability, writable filesystem, or host-input access. Controlled sessions and
-application containers never inherit those construction authorities.
+Host Reploy resolves those global contracts independently for the controller
+and workload before session admission. The session then binds both complete
+plans and does not expose a protocol operation that can expand or replace any
+of their authority. Provider construction containers remain outside the
+controlled-session application-runtime boundary and do not lend their
+purpose-specific authority to either role.
 
 ## Controlled-Session Delta
 
@@ -741,168 +687,34 @@ workload exit cannot become an authoritative successful termination.
 
 ## Runtime Identity
 
-### Effective Runtime Identity
+Host Reploy resolves the controller and workload identities through the
+ordinary application-runtime contract in
+[`BLUEPRINT_ENVIRONMENT_MODEL.md`](BLUEPRINT_ENVIRONMENT_MODEL.md), including
+scope-derived numeric authority and target-specific account realization. It
+freezes both effective identities into the immutable authorization record and
+reports them in `opened`.
 
-Every Reploy application runtime container uses the ordinary Reploy runtime
-identity:
-
-- staged execution uses the invoking host user's numeric identity;
-- installed user-scope execution uses the invoking host user's numeric
-  identity;
-- installed system-scope execution uses the host account explicitly selected
-  by `environment.install.system.account`, resolved to its numeric identity.
-
-Using the invoking Unix identity for user-scope execution preserves ordinary
-host file ownership and avoids predictable permission failures. Native Windows
-instead derives a stable nonzero Linux UID/GID from the invoking SID. The
-container image's configured `USER` is not the runtime authority. Reploy passes
-the effective numeric `UID:GID` and applicable supplementary GIDs, supplies its
-ordinary transient writable home, and adds a real local account named by
-`environment.runtime.user` (default `reploy`) to the final runtime layer. The
-name and numeric identity are locked build inputs. A non-root account with a
-root primary or supplementary group is rejected rather than importing
-privileged group membership into the container.
-
-A controlled-session client inherits this identity and cannot override it. A
-different system-scope identity is an installation configuration decision, not
-a session capability.
-
-The local account is an OS-neutral blueprint concept with target-specific
-realization. The initial Linux-container backend writes `/etc/passwd` and
-`/etc/group`; runtime mounts may not overlap those generated account-database
-paths. A future native target backend may use its own account mechanism.
-If an installation selects a different numeric account, Reploy preserves the
-provider layers and rebuilds the final runtime-account layer for the installed
-generation rather than changing the staged generation.
-
-### Root Runtime Identity
-
-Root applies when the effective runtime UID is `0`: because staged or
-user-scope Reploy was invoked as root, or because a system-scope installation
-explicitly selected root. It is never inherited merely from the base image's
-configured `USER`. Reploy preserves that root identity's effective primary GID
-rather than assuming or normalizing it to GID `0`.
-
-A root runtime identity does not emit a generic warning. With the global
-sandbox enforced, its additional authority is limited to container-scoped
-root-owned image content, declared persistent storage, and processes using the
-same identity. Prohibited combinations fail with diagnostics that identify the
-specific rejected authority. If a future capability grants root broader
-authority, that capability's explicit opt-in surface must disclose the added
-risk rather than making ordinary root execution noisy.
-
-A root runtime identity does not imply:
-
-- Docker or daemon access;
-- privileged container mode;
-- additional capabilities;
-- host input or shared-state mounts;
-- public or local networking;
-- access to other sessions or deployments.
-
-Additional Linux capabilities, if ever supported for application runtime
-containers, are separate explicit grants and require their own threat analysis.
+A controlled-session client cannot override either identity. Selecting a
+different system-scope identity remains an installation decision, not a
+session capability. The global root restrictions also apply unchanged; root
+does not make the private session channel visible to the workload or grant
+Docker, additional capabilities, host inputs, network access, or authority over
+another deployment.
 
 ## Source and Filesystem Access
 
-No host path is visible by default.
+Each role receives only the mounts in its independently resolved global runtime
+plan. Their validation, sensitive-path masking, host-bind restrictions, root
+rules, mount-integrity checks, and local-engine assumptions remain defined by
+[`BLUEPRINT_ENVIRONMENT_MODEL.md`](BLUEPRINT_ENVIRONMENT_MODEL.md).
 
-Non-root application containers may receive explicitly declared read-only or
-writable host binds from the effective Reploy runtime plan. Writable binds
-support declared configuration, data, and output paths. They are not arbitrary
-paths selected through a command or session protocol, and Reploy validates that
-the effective runtime identity can use them safely.
-
-The ordinary source grant is an explicit read-only bind mount rooted at an
-approved project directory. A client cannot turn it into an arbitrary host-path
-selector through the session protocol. Original project source is never exposed
-through a writable bind.
-
-An explicit host directory bind grants access to every unmasked entry below
-that directory. Read-only mode prevents ordinary file mutation, but does not
-neutralize Unix sockets, device nodes, FIFOs, or nested mount points. Reploy
-does not recursively scan a live source tree: such a scan has unbounded launch
-cost and provides only a race-prone point-in-time observation. A caller that
-requires stronger isolation must use no host bind or a future filtered-copy
-workspace. This is a deliberate narrowing of the direct-bind security
-contract, not a claim that active host objects have been confined.
-
-Direct host binds also trust the selected host pathname namespace to remain
-stable until Docker establishes the mount. Reploy does not defend against a
-separate host-side actor retargeting the source path during launch or using
-Docker daemon access to alter the container. Such actors already hold authority
-outside the controller/workload isolation boundary. The launched workload
-cannot create this race itself because Docker establishes its mounts before
-starting the workload process.
-
-Generic remote Docker daemons are unsupported. Reploy requires a local Unix
-socket or Windows named-pipe endpoint, including the local endpoint presented
-by Docker Desktop. This prevents local validation and output contracts from
-silently applying to paths, ports, images, identities, and lifecycle state on
-another machine. A future remote-Docker design requires explicit input upload,
-output extraction and local publication, image placement, port forwarding,
-authentication, cleanup, and recovery semantics rather than inherited Docker
-context behavior.
-
-On native Linux, the operator must run Reploy directly in the host namespace
-served by the local Docker Engine. Running Reploy inside a container with a
-host socket mounted, or placing a local Unix-socket proxy in front of another
-daemon, is unsupported because the Docker API cannot prove that Reploy and the
-daemon resolve host paths in the same mount namespace. Unix-socket and
-named-pipe classification rejects ordinary remote Docker configuration; it is
-not a security attestation for an operator-controlled socket. Docker Desktop
-is the intentional exception because its native client integration supplies the
-supported host-path sharing and port-forwarding contract.
-
-Ordinary host binds reject the host filesystem root and canonical sources at
-or below `/proc`, `/dev`, or `/sys`, including symlink aliases. On Linux,
-Reploy also rejects bind mounts that expose the same filesystem root and checks
-filesystem identity so procfs, sysfs, cgroup hierarchies, device filesystems,
-and kernel control or observation filesystems remain prohibited when exposed
-through another path. Linux proc magic links are rejected before canonical
-resolution, including when procfs is reached through a symlink alias, so they
-cannot resolve differently for Reploy and Docker. Where Linux reports mount
-identity, Reploy rejects aliases of every mount rooted below `/proc`, `/dev`,
-or `/sys` while preserving unrelated mounts of the same filesystem type. On
-Linux kernels without no-magic-link path resolution, direct paths remain
-available but symlinked host sources fail closed. On macOS, native devfs and
-procfs sources are likewise rejected.
-Containers keep Docker's container-scoped `/proc` and restricted `/dev`; those
-are not host binds. Hardware or host-observation access, if later justified by
-a compelling use case, requires a separately designed explicit capability
-rather than an ordinary mount.
-
-Root inside any Reploy application container may not receive host input or
-shared-state binds, including read-only binds. Read-only prevents modification
-but does not make exposed content confidential from container root. Reploy
-validates the complete effective mount plan and rejects the application-runtime
-launch before Docker can create a container with a prohibited bind source. A
-separately validated output-only bind is a narrow explicit result grant, not
-general host filesystem authority.
-
-Root application containers may use image content, Docker-managed volumes,
-tmpfs, or a disposable copied workspace because those do not expose the
-original host path. An existing Docker-managed volume is allowed only when the
-effective environment plan already declares it; no command or session request
-may select an arbitrary volume by name. Root can read, mutate, and change
-ownership throughout an authorized persistent volume. Fresh scratch storage is
-Reploy-owned and scoped to the operation or lease.
-
-Until disposable copied workspaces are implemented, a root operation that
-needs local project source is unsupported rather than weakened with a host
-bind.
-
-This is an explicit global application-runtime policy, independent of the
-Docker daemon's UID mapping. Additional bind categories require a later design
-decision justified by a compelling use case; they are not implementation escape
-hatches.
-
-The original project source is never writable by a Reploy application runtime
-container. Workloads, recordings, or agents that require source mutation must
-use an explicitly requested disposable writable copy. A portable writable-copy
-implementation is a separate design. Likely implementations include an
-ephemeral copied volume, a temporary image plus container layer, or a
-platform-specific copy-on-write filesystem.
+The controlled-session protocol cannot select a host path, named volume, mount
+mode, source grant, or mask. Host Reploy freezes those inputs before admission,
+binds them into the corresponding controller or workload plan digest, and keeps
+the workload from receiving controller-only filesystem grants. Original project
+source therefore remains read-only when the global plan exposes it; workflows
+that require mutation still depend on the separately designed disposable-copy
+capability.
 
 ### Explicit Runtime Outputs
 
@@ -940,51 +752,27 @@ global pre-release work rather than controlled-session behavior. Until that
 work lands, Reploy rejects root with either output option before contacting
 Docker.
 
-The target root `--output-file` contract retains fresh private staging,
-single-regular-file validation, race-free atomic publication without overwrite,
-and interruption recovery. It additionally requires a focused review of link
-behavior plus ownership and mode normalization before publication. The target
-root `--output-dir` contract permits a direct bind only to an explicitly
-selected, initially empty dedicated directory and defines ownership
-normalization and failure retention. Neither output exception grants access to
-the destination parent, source, configuration, staging state, or unrelated host
-data.
-
 ### Sensitive Path Masks
 
-Every source grant supports exclusion masks. Reploy always protects any exposed
-deployment `.env` and `.reploy` path using its existing private-runtime mask
-rules. A project-source grant additionally masks `.env` and `.reploy` at the
-granted source root by default. The effective runtime plan may add validated
-relative file or directory masks for project-specific sensitive material.
-
-Mask planning must:
-
-- reject absolute and escaping paths;
-- resolve host symlinks defensively;
-- distinguish files and directories;
-- apply masks to every visible alias of a parent bind;
-- reject conflicting nested mount types;
-- snapshot and revalidate realized mount sources immediately before creation;
-- fail closed when a mask cannot be enforced.
-
-Read-only source does not replace masking: root inside a container may read a
-read-only sensitive file.
+Both plans retain every sensitive-path mask produced by the global runtime
+planner. The session protocol cannot remove or weaken a mask, and the private
+channel mount cannot overlap project source, controller output, or the
+application mount plan. Exact mask validation and realization remain owned by
+[`BLUEPRINT_ENVIRONMENT_MODEL.md`](BLUEPRINT_ENVIRONMENT_MODEL.md).
 
 ## Secrets and Environment
 
-Host process environment is never inherited wholesale.
+Both roles inherit the global rule that host process environment is not copied
+wholesale and blueprint variables are not automatic process environment. The
+session protocol cannot add an environment key or value after admission.
 
-Blueprint variables remain interpolation values, not automatic workload
-environment variables. Deployment-local `.env` values continue to use
-Reploy's private one-shot environment injection. The host file is not mounted
-and is masked from every visible parent bind.
-
-A runtime operation may narrow explicitly declared environment inputs but
-cannot invent additional ones. Names and values must not appear in image
-metadata, container configuration, Docker command lines, build locks, Reploy
-state, or generated diagnostics. Workload output is untrusted; Reploy cannot
-prevent a workload from printing values it receives.
+The current controlled-session launch path does not implement private `.env`
+injection. Host Reploy validates and masks the deployment-local file under the
+global contract, but rejects the session before planning when either the
+controller or workload deployment contains configured private values. A future
+session injection contract requires separate design and implementation; it is
+not implied by the existing persistent-workload injector or by the open policy
+decision for ordinary transient commands.
 
 OmegaFlow remains responsible for deciding which capture artifacts may be
 published. Reploy provides bounded private output mechanisms, not
@@ -992,76 +780,14 @@ media-specific allowlisting.
 
 ## Network and Endpoints
 
-All Reploy application runtime containers default to:
-
-- public Internet disabled;
-- local network disabled.
-
-These are independent policy switches. A controlled workflow applies them
-separately to the controller and workload environments. Local denial includes
-host-loopback redirection, private and link-local address ranges, IPv6 local
-ranges, and infrastructure metadata endpoints. Translation and tunneling
-ranges that can represent either public or local destinations require both
-grants by default. The initial coarse classifier follows the destination
-address; topology-resistant peer and gateway confinement belongs to the
-deferred L3 gateway design.
-
-The initial Linux/Docker implementation enforces this coarse public/local
-policy with IPv4 and IPv6 nftables rules inside each application container's
-network namespace. A trusted Reploy helper begins with only the setup
-capabilities needed to install those rules and assume the planned application
-identity. It then empties every capability set and the capability bounding
-set, locks securebits and `no-new-privileges`, verifies seccomp and the final
-kernel state, and executes the exact application argv. Reploy-issued execs use
-the same guarded authority-drop path. A raw Docker daemon client remains a
-trusted host operator outside this sandbox boundary.
-
-`public` classifies globally routable IP destinations. `local` classifies
-private, link-local, multicast, reserved, and infrastructure metadata
-destinations. `ambiguous` covers predefined translation and tunneling ranges;
-its default `require-both` admits them only when both ordinary classes are
-allowed. IPv4-mapped IPv6 socket addresses use the class of their embedded IPv4
-destination because Linux emits them as IPv4 packets. The temporary
-`ambiguous: allow` escape hatch admits the remaining ambiguous class
-independently. It is intentionally discouraged because an apparently public
-translated address may reach a local destination, and it should be deprecated
-once the deferred L3 gateway can enforce the underlying destination policy.
-Container-local loopback remains available and cannot address host loopback
-through the container network namespace. The backend configures the
-container's DNS path from the same two grants:
-
-| Public | Local | DNS path |
-| --- | --- | --- |
-| deny | deny | no DNS |
-| deny | allow | the host's configured resolver, preserving local, VPN, and split-DNS behavior |
-| allow | deny | the built-in Google Public DNS profile (`8.8.8.8`, `8.8.4.4`) |
-| allow | allow | the host's configured resolver, which normally provides both local and public resolution |
-
-For Docker, the local-capable path leaves DNS selection to Docker so it derives
-the container's resolver path from the host. The public-only path passes the
-selected Google Public DNS profile through Docker's per-container DNS
-configuration. Docker writes the resulting container resolver configuration:
-the default bridge normally receives host-derived resolver addresses, while a
-custom network exposes Docker's embedded resolver at `127.0.0.11` and forwards
-to the selected upstreams. Before installing the packet filter, the trusted
-startup helper reads those engine-authored resolver addresses and admits TCP
-and UDP port 53 only to them whenever either network class is granted. This is
-an engine-owned DNS exception, not general access to the resolver's address
-class.
-
-Resolver selection is host policy, not blueprint policy. Future Reploy host
-configuration may override the default local and public resolver choices. The
-backend does not classify or filter DNS answers. A local resolver may return a
-public address and a public resolver may return a private address, but every
-subsequent connection still passes the ordinary destination policy. When both
-ordinary classes are enabled, egress is unrestricted, but the packet filter
-remains in place to admit new inbound connections only on declared endpoint
-ports. The helper always applies the same identity and authority-drop invariant.
-A backend that cannot install and verify the policy fails closed.
-
-This slice does not introduce the deferred userland L3 gateway and must not
-claim domain-, URL-, DNS-content-, general outbound destination-port-, or
-audit-level policy.
+Each role's ordinary `public`, `local`, and `ambiguous` grants, DNS selection,
+endpoint publication, and fail-closed backend realization come from its
+immutable global application plan under
+[`BLUEPRINT_ENVIRONMENT_MODEL.md`](BLUEPRINT_ENVIRONMENT_MODEL.md). A
+controlled session applies those plans independently and does not redefine the
+global address classes, resolver policy, or sandbox setup. Its separate
+session-network grant admits only the lease network described below and does
+not set or imply `local: allow`.
 
 A controller may receive an explicit session-local grant to a declared
 workload endpoint. Endpoint declarations remain the stable intent and the
@@ -1122,8 +848,9 @@ backends, it replaces the coarse shared-network policy without changing how
 applications use native TCP. PTY, lifecycle, termination, and diagnostic
 traffic remain on the private session channel.
 
-General public/local network denial remains a separate prerequisite; neither
-endpoint backend is a general HTTP policy engine or domain-aware firewall.
+The implemented global public/local kill switches remain in force for both
+roles; neither endpoint backend is a general HTTP policy engine or domain-aware
+firewall.
 
 General network isolation and auditability are a separate design surface.
 Future work may include an HTTP/HTTPS proxy, destination and DNS-content
@@ -1133,8 +860,9 @@ URLs or content. Direct egress must be blocked to prevent proxy bypass.
 Redirects, DNS rebinding, CDNs, WebSockets, QUIC, and workload-to-network policy
 require explicit treatment.
 
-Until that design is implemented, rough public and local kill switches must
-fail closed and must not be described as domain-level isolation.
+Until that finer design is implemented, the coarse public and local kill
+switches continue to fail closed and must not be described as domain-level
+isolation.
 
 ## Browser and Terminal Placement
 
@@ -1586,18 +1314,17 @@ by itself distinguish `SIGKILL`, an OOM kill, or another abrupt process death.
 
 ## Resource and Timeout Policy
 
-Controlled sessions have explicit limits for:
+The current controlled-session implementation enforces bounded public timeout
+options for startup, termination grace, controller finalization, result
+acknowledgement, and cleanup, together with the fixed protocol-v1 workload
+output-finalization timeout. It also bounds terminal buffers, controller
+request sizes, and transport backpressure.
 
-- startup and handshake;
-- idle or total session duration when requested by policy;
-- termination grace;
-- buffered terminal output;
-- controller request size;
-- process, memory, CPU, and temporary-disk resources where supported.
-
-Limit failures produce a structured diagnostic. A timeout or session-wide
-resource failure that makes safe continuation impossible produces bounded
-teardown. A timeout never converts into successful completion.
+Process, memory, CPU, and temporary-disk limits remain a separate global
+runtime prerequisite rather than implemented controlled-session policy. A
+limit failure produces a structured diagnostic; a timeout that makes safe
+continuation impossible produces bounded teardown and never converts into
+successful completion.
 
 ## Implementation Plan
 
@@ -1607,50 +1334,14 @@ and a separate commit.
 
 ### Slice 1: Global Sandbox Prerequisites
 
-Apply the approved identity, seccomp, `no-new-privileges`, capability,
-namespace, device, mount, mask, secret, network, and root rules consistently to
-ordinary Reploy application containers. Prove staged workloads, installed
-workloads, transient commands, shells, and later controlled sessions consume
-the same baseline. This is global runtime work, not controlled-session code.
-
-Implementation status: the canonical application sandbox plan and its identity
-and kernel baseline are implemented for persistent Compose workloads and
-transient application commands. Reploy now imports canonical supplementary
-groups, rejects root-group membership for non-root identities, starts transient
-commands through the trusted setup helper, drops all capabilities before the
-application starts, enables
-`no-new-privileges`, explicitly selects Docker's built-in seccomp profile, and
-prohibits privileged mode, host namespaces, and host devices in the common
-plan. Live Docker tests inspect both runtime paths. Trusted production startup
-verification is also implemented: Reploy packages the platform-specific probe
-in a final runtime layer, creates the locked container-local account there,
-records that layer outside the provider graph, and uses its fixed
-sandbox-and-exec contract as the outermost process for persistent
-workloads, transient commands, shells, and lifecycle commands. The verifier
-fails closed unless the calling thread's `/proc/thread-self/status` (or the
-compatible `/proc/self/task/<tid>/status`) reports seccomp filtering,
-`no-new-privileges`, and empty inheritable, effective, permitted, bounding, and
-ambient capability
-sets, then directly executes the exact application argv. Private-environment
-workloads use one additional fixed Reploy step: after verification, the probe
-executes the environment injector, which imports the private variables and then
-executes the unchanged application argv. The same helper now installs the
-default-deny application-network policy for persistent and transient containers
-while preserving exact declared inbound endpoints. Live Docker coverage
-exercises all four public/local combinations over IPv4 and IPv6, strict and
-escaped ambiguous-range handling, a globally reachable exception nested inside
-a reserved parent range, a root default-denial case, non-root authority removal,
-guarded exec, and host-loopback denial. Resource limits remain a
-separate prerequisite slice. Root host authority is now enforced at runtime:
-host sources are classified as input, shared state, or explicit output; UID 0 is
-rejected for all three before container creation; and root output options are
-rejected before host-path preparation. Docker-managed volumes and tmpfs remain
-available to root. Ordinary binds also reject canonical host root, `/proc`,
-`/dev`, and `/sys` sources plus equivalent protected filesystem mounts detected
-through native filesystem identity. Explicit non-root directory binds
-intentionally grant access to their remaining unmasked contents, including
-nested active objects; this narrowed contract avoids representing a recursive
-launch-time scan as durable confinement.
+Controlled sessions depend on the global application-runtime contract in
+[`BLUEPRINT_ENVIRONMENT_MODEL.md`](BLUEPRINT_ENVIRONMENT_MODEL.md); this slice
+does not restate or privately implement it. The shared identity, kernel,
+network, mount, mask, and root restrictions are implemented and consumed by
+persistent workloads, transient commands, shells, lifecycle commands, and
+controlled-session plans. Global process, memory, CPU, and temporary-disk
+limits remain a separate prerequisite. The Blueprint's existing mount-integrity
+follow-up also remains global backlog rather than controlled-session work.
 
 ### Slice 2: Controlled-Session Lifecycle Core
 
@@ -1943,11 +1634,13 @@ concurrent sessions per controller.
 
 ### Reploy Repositories and Portable Tools
 
-Define and implement the independently updated, federated repository mechanism
-and its portable tool surface for capabilities such as Java and Playwright in
-[`REPOSITORY_DESIGN.md`](REPOSITORY_DESIGN.md).
-This is a controller packaging dependency, not part of the session transport or
-lease protocol.
+The concrete portable-tool composition and acquisition model is accepted in
+[`PORTABLE_TOOL_DEFINITION_DESIGN.md`](PORTABLE_TOOL_DEFINITION_DESIGN.md), and
+its delivery is owned by
+[`PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md`](PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md).
+Repository publication, TUF metadata, and publisher trust remain deferred under
+[`REPOSITORY_DESIGN.md`](REPOSITORY_DESIGN.md). These are controller packaging
+dependencies, not part of the session transport or lease protocol.
 
 ### Network Isolation and Audit
 
@@ -1995,20 +1688,11 @@ analysis. Privileged application containers remain outside this design.
   defining an OmegaFlow-only security tier.
 - Host Reploy remains in both the PTY and lifecycle paths; the containers do not
   receive a direct control connection to one another.
-- Staged and installed user-scope application containers retain practical host
-  ownership through their effective numeric identity and receive a predictable
-  container-local account name.
-- Installed system-scope application containers use the configured host
-  service account's numeric identity under the blueprint's container-local
-  account name.
-- Root application containers are possible but receive no implicit additional
-  authority; prohibited combinations fail with precise diagnostics.
-- Root application containers never receive host input or shared-state binds;
-  local source requires the separately designed disposable-copy capability.
-  Explicit root output-only binds remain unavailable until their separate
-  pre-release contract is reviewed and implemented.
-- Strong default network denial and arbitrary sensitive-path masks require new
-  implementation work.
-- Disposable writable source is intentionally more expensive and deferred.
+- Controller and workload plans inherit global identity, mounts, masks,
+  environment, output, and ordinary network policy; the session adds only its
+  frozen role-specific grants.
+- Precise directional and per-endpoint L3 isolation, global resource quotas,
+  disposable writable source, root-safe output grants, and a controlled-session
+  private-environment path remain separate work.
 - Verified termination requires independent runtime observation; session
   protocol success alone is never sufficient.
