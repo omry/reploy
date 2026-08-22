@@ -1,0 +1,728 @@
+package toolcatalog
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/netip"
+	"net/url"
+	"path"
+	"reflect"
+	"regexp"
+	"strconv"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/omry/reploy/internal/canonical"
+)
+
+const (
+	maxDefinitionFileBytes       = 1 << 20
+	maxDefinitionJSONDepth       = 32
+	maxDefinitionJSONMembers     = 4096
+	maxDefinitionJSONStringBytes = 64 << 10
+	maxDefinitionReferences      = 1024
+)
+
+var canonicalDecimalPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)$`)
+
+type recordHeaderV1 struct {
+	Schema string `json:"schema"`
+	ID     string `json:"id"`
+}
+
+type loadedRecordV1 struct {
+	ID     string
+	Schema string
+	Digest canonical.Digest
+	Path   string
+	Value  any
+}
+
+func decodeRecordV1(filename string, payload []byte) (loadedRecordV1, error) {
+	if err := validateStrictJSONV1(payload); err != nil {
+		return loadedRecordV1{}, fmt.Errorf("decode %s: %w", filename, err)
+	}
+	var header recordHeaderV1
+	if err := json.Unmarshal(payload, &header); err != nil {
+		return loadedRecordV1{}, fmt.Errorf("decode %s header: %w", filename, err)
+	}
+	if header.Schema == "" {
+		return loadedRecordV1{}, fmt.Errorf("decode %s: record schema is required", filename)
+	}
+	if header.ID == "" {
+		return loadedRecordV1{}, fmt.Errorf("decode %s: record ID is required", filename)
+	}
+	var value any
+	switch header.Schema {
+	case ToolRecordSchemaV1:
+		value = &ToolRecordV1{}
+	case ReleaseManifestSchemaV1:
+		value = &ReleaseManifestV1{}
+	case ReleaseContractSchemaV1:
+		value = &ReleaseContractV1{}
+	case TargetRecordSchemaV1:
+		value = &TargetRecordV1{}
+	case BindingContractSchemaV1:
+		value = &BindingContractV1{}
+	case BindingArtifactSchemaV1:
+		value = &BindingArtifactRecordV1{}
+	case PayloadRecordSchemaV1:
+		value = &PayloadRecordV1{}
+	case ArtifactSourceRecordSchemaV1:
+		value = &ArtifactSourceRecordV1{}
+	case NativePackageSetSchemaV1:
+		value = &NativePackageSetV1{}
+	case IntegrationFixtureSchemaV1:
+		value = &IntegrationFixtureRecordV1{}
+	case ValidationProfileSchemaV1:
+		value = &ValidationProfileRecordV1{}
+	default:
+		return loadedRecordV1{}, fmt.Errorf("decode %s: unsupported schema %q", filename, header.Schema)
+	}
+	if err := decodeExactJSONV1(payload, value); err != nil {
+		return loadedRecordV1{}, fmt.Errorf("decode %s: %w", filename, err)
+	}
+	record := loadedRecordV1{ID: header.ID, Schema: header.Schema, Path: filename, Value: value}
+	digest, err := canonical.Sum("portable-tool-record", portableToolRecordIdentityV1, value)
+	if err != nil {
+		return loadedRecordV1{}, fmt.Errorf("digest %s: %w", filename, err)
+	}
+	record.Digest = digest
+	return record, nil
+}
+
+func decodeValidationEvidenceV1(filename string, payload []byte) (ValidationEvidenceV1, error) {
+	if err := validateStrictJSONV1(payload); err != nil {
+		return ValidationEvidenceV1{}, fmt.Errorf("decode %s: %w", filename, err)
+	}
+	var evidence ValidationEvidenceV1
+	if err := decodeExactJSONV1(payload, &evidence); err != nil {
+		return ValidationEvidenceV1{}, fmt.Errorf("decode %s: %w", filename, err)
+	}
+	return evidence, nil
+}
+
+func decodeExactJSONV1(payload []byte, target any) error {
+	targetType := reflect.TypeOf(target)
+	for targetType.Kind() == reflect.Pointer {
+		targetType = targetType.Elem()
+	}
+	if err := validateExactJSONMembersV1(payload, targetType); err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("trailing JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+func validateExactJSONMembersV1(payload json.RawMessage, target reflect.Type) error {
+	if bytes.Equal(bytes.TrimSpace(payload), []byte("null")) {
+		if target.Kind() == reflect.Pointer {
+			return nil
+		}
+		return fmt.Errorf("JSON null is not valid for %s", target)
+	}
+	for target.Kind() == reflect.Pointer {
+		target = target.Elem()
+	}
+	switch target.Kind() {
+	case reflect.Struct:
+		var members map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &members); err != nil {
+			return nil
+		}
+		fields := make(map[string]reflect.Type, target.NumField())
+		requiredFields := make([]string, 0, target.NumField())
+		for index := 0; index < target.NumField(); index++ {
+			field := target.Field(index)
+			if !field.IsExported() {
+				continue
+			}
+			tag := strings.Split(field.Tag.Get("json"), ",")
+			name := tag[0]
+			if name == "-" {
+				continue
+			}
+			if name == "" {
+				name = field.Name
+			}
+			fields[name] = field.Type
+			if !containsRecordValueV1(tag[1:], "omitempty") {
+				requiredFields = append(requiredFields, name)
+			}
+		}
+		for name, value := range members {
+			fieldType, exists := fields[name]
+			if !exists {
+				return fmt.Errorf("unknown field %q", name)
+			}
+			if err := validateExactJSONMembersV1(value, fieldType); err != nil {
+				return err
+			}
+		}
+		for _, name := range requiredFields {
+			if _, exists := members[name]; !exists {
+				return fmt.Errorf("required field %q is missing", name)
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		var elements []json.RawMessage
+		if err := json.Unmarshal(payload, &elements); err != nil {
+			return nil
+		}
+		for _, element := range elements {
+			if err := validateExactJSONMembersV1(element, target.Elem()); err != nil {
+				return err
+			}
+		}
+	case reflect.Map:
+		var members map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &members); err != nil {
+			return nil
+		}
+		for _, value := range members {
+			if err := validateExactJSONMembersV1(value, target.Elem()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateStrictJSONV1(payload []byte) error {
+	if len(payload) == 0 || len(payload) > maxDefinitionFileBytes {
+		return fmt.Errorf("record size must be between 1 and %d bytes", maxDefinitionFileBytes)
+	}
+	if !utf8.Valid(payload) {
+		return fmt.Errorf("record must be valid UTF-8")
+	}
+	if err := validateJSONStringSurrogatesV1(payload); err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	members := 0
+	if err := scanStrictJSONValueV1(decoder, 0, &members); err != nil {
+		return err
+	}
+	if token, err := decoder.Token(); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("trailing JSON token %v", token)
+		}
+		return err
+	}
+	return nil
+}
+
+func validateJSONStringSurrogatesV1(payload []byte) error {
+	inString := false
+	for index := 0; index < len(payload); index++ {
+		if !inString {
+			if payload[index] == '"' {
+				inString = true
+			}
+			continue
+		}
+		switch payload[index] {
+		case '"':
+			inString = false
+		case '\\':
+			if index+1 >= len(payload) {
+				return fmt.Errorf("invalid JSON string escape")
+			}
+			if payload[index+1] != 'u' {
+				index++
+				continue
+			}
+			value, ok := parseJSONHexQuadV1(payload, index+2)
+			if !ok {
+				return fmt.Errorf("invalid JSON Unicode escape")
+			}
+			if value >= 0xdc00 && value <= 0xdfff {
+				return fmt.Errorf("JSON string contains an unpaired UTF-16 surrogate escape")
+			}
+			if value >= 0xd800 && value <= 0xdbff {
+				if index+12 > len(payload) || payload[index+6] != '\\' || payload[index+7] != 'u' {
+					return fmt.Errorf("JSON string contains an unpaired UTF-16 surrogate escape")
+				}
+				low, validLow := parseJSONHexQuadV1(payload, index+8)
+				if !validLow || low < 0xdc00 || low > 0xdfff {
+					return fmt.Errorf("JSON string contains an unpaired UTF-16 surrogate escape")
+				}
+				index += 11
+				continue
+			}
+			index += 5
+		}
+	}
+	return nil
+}
+
+func parseJSONHexQuadV1(payload []byte, start int) (uint16, bool) {
+	if start+4 > len(payload) {
+		return 0, false
+	}
+	parsed, err := strconv.ParseUint(string(payload[start:start+4]), 16, 16)
+	return uint16(parsed), err == nil
+}
+
+func scanStrictJSONValueV1(decoder *json.Decoder, depth int, members *int) error {
+	if depth > maxDefinitionJSONDepth {
+		return fmt.Errorf("JSON nesting exceeds %d", maxDefinitionJSONDepth)
+	}
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	switch value := token.(type) {
+	case json.Delim:
+		switch value {
+		case '{':
+			seen := map[string]bool{}
+			for decoder.More() {
+				nameToken, err := decoder.Token()
+				if err != nil {
+					return err
+				}
+				name, ok := nameToken.(string)
+				if !ok {
+					return fmt.Errorf("object member name is not a string")
+				}
+				if seen[name] {
+					return fmt.Errorf("duplicate object member %q", name)
+				}
+				if len(name) > maxDefinitionJSONStringBytes {
+					return fmt.Errorf("object member name exceeds %d bytes", maxDefinitionJSONStringBytes)
+				}
+				seen[name] = true
+				(*members)++
+				if *members > maxDefinitionJSONMembers {
+					return fmt.Errorf("JSON member count exceeds %d", maxDefinitionJSONMembers)
+				}
+				if err := scanStrictJSONValueV1(decoder, depth+1, members); err != nil {
+					return err
+				}
+			}
+			_, err := decoder.Token()
+			return err
+		case '[':
+			for decoder.More() {
+				(*members)++
+				if *members > maxDefinitionJSONMembers {
+					return fmt.Errorf("JSON member count exceeds %d", maxDefinitionJSONMembers)
+				}
+				if err := scanStrictJSONValueV1(decoder, depth+1, members); err != nil {
+					return err
+				}
+			}
+			_, err := decoder.Token()
+			return err
+		default:
+			return fmt.Errorf("unexpected JSON delimiter %q", value)
+		}
+	case string:
+		if len(value) > maxDefinitionJSONStringBytes {
+			return fmt.Errorf("JSON string exceeds %d bytes", maxDefinitionJSONStringBytes)
+		}
+	case json.Number:
+		return fmt.Errorf("JSON numbers are not supported; encode schema quantities as decimal strings")
+	case bool, nil:
+		return nil
+	default:
+		return fmt.Errorf("unsupported JSON token %T", token)
+	}
+	return nil
+}
+
+func validateRecordReferenceV1(reference RecordReferenceV1) error {
+	if err := validateRecordIDV1(reference.ID); err != nil {
+		return err
+	}
+	if err := reference.Digest.Validate(); err != nil {
+		return fmt.Errorf("reference %q digest: %w", reference.ID, err)
+	}
+	return nil
+}
+
+func validateRecordIDV1(value string) error {
+	if value == "" || strings.TrimSpace(value) != value || !strings.HasPrefix(value, "tool:") {
+		return fmt.Errorf("record ID %q must be a canonical tool-qualified ID", value)
+	}
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' {
+			continue
+		}
+		switch character {
+		case '.', '+', '-', '_', ':', '/':
+		case '%':
+			if index+2 >= len(value) {
+				return fmt.Errorf("record ID %q contains an incomplete percent escape", value)
+			}
+			if _, ok := uppercaseHexValueV1(value[index+1]); !ok {
+				return fmt.Errorf("record ID %q percent escapes must use uppercase hexadecimal", value)
+			}
+			if _, ok := uppercaseHexValueV1(value[index+2]); !ok {
+				return fmt.Errorf("record ID %q percent escapes must use uppercase hexadecimal", value)
+			}
+			index += 2
+		default:
+			return fmt.Errorf("record ID %q contains unsupported character %q", value, character)
+		}
+	}
+	segments := strings.Split(value, "/")
+	toolName := strings.TrimPrefix(segments[0], "tool:")
+	if !validRecordIdentifierV1(toolName) {
+		return fmt.Errorf("record ID %q has an invalid tool name", value)
+	}
+	for index, segment := range segments {
+		if segment == "" || segment == "." || segment == ".." {
+			return fmt.Errorf("record ID %q contains an invalid path segment", value)
+		}
+		if index != 2 && strings.Contains(segment, "%") {
+			return fmt.Errorf("record ID %q contains an escape outside its version segment", value)
+		}
+	}
+	if len(segments) == 1 {
+		return nil
+	}
+	if len(segments) < 4 || segments[1] != "releases" {
+		return fmt.Errorf("record ID %q must use a tool release namespace", value)
+	}
+	if _, err := decodeToolVersionSegmentV1(segments[2]); err != nil {
+		return fmt.Errorf("record ID %q version segment: %w", value, err)
+	}
+	return nil
+}
+
+func validRecordIdentifierV1(value string) bool {
+	if value == "" || value[0] < 'a' || value[0] > 'z' {
+		return false
+	}
+	for _, character := range value[1:] {
+		if character < 'a' || character > 'z' {
+			if character < '0' || character > '9' {
+				if character != '-' {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+func validateCanonicalDecimalV1(field string, value string, positive bool) error {
+	if !canonicalDecimalPattern.MatchString(value) {
+		return fmt.Errorf("%s must be a canonical decimal string", field)
+	}
+	parsed, err := strconv.ParseUint(value, 10, 63)
+	if err != nil || positive && parsed == 0 {
+		return fmt.Errorf("%s must be a bounded positive decimal string", field)
+	}
+	return nil
+}
+
+func validateReferenceListV1(field string, references []RecordReferenceV1) error {
+	if references == nil || len(references) > maxDefinitionReferences {
+		return fmt.Errorf("%s must use an array with at most %d entries", field, maxDefinitionReferences)
+	}
+	for index, reference := range references {
+		if err := validateRecordReferenceV1(reference); err != nil {
+			return fmt.Errorf("%s[%d]: %w", field, index, err)
+		}
+		if index > 0 && references[index-1].ID >= reference.ID {
+			return fmt.Errorf("%s must be unique and sorted by ID", field)
+		}
+	}
+	return nil
+}
+
+func validateSourceURLV1(raw string) error {
+	canonicalURL, err := canonicalSourceURLV1(raw)
+	if err != nil {
+		return err
+	}
+	if raw != canonicalURL {
+		return fmt.Errorf("source URL must use canonical spelling %q", canonicalURL)
+	}
+	return nil
+}
+
+func canonicalSourceURLV1(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "https" || parsed.Opaque != "" || parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil || parsed.ForceQuery || parsed.RawQuery != "" || parsed.Fragment != "" || strings.Contains(raw, "#") || parsed.Host != strings.ToLower(parsed.Host) || strings.HasSuffix(parsed.Hostname(), ".") || parsed.Port() == "443" || !asciiURLHostV1(parsed.Hostname()) || !canonicalPercentEscapesV1(parsed.EscapedPath()) || hasURLDotSegmentV1(parsed.Path) {
+		return "", fmt.Errorf("source URL must be a canonical credential-free HTTPS URL without query or fragment")
+	}
+	port := parsed.Port()
+	if strings.HasSuffix(parsed.Host, ":") || port != "" && (!canonicalDecimalPattern.MatchString(port) || port == "0") {
+		return "", fmt.Errorf("source URL must use a canonical authority")
+	}
+	if port != "" {
+		parsedPort, err := strconv.ParseUint(port, 10, 16)
+		if err != nil || parsedPort == 0 {
+			return "", fmt.Errorf("source URL must use a canonical authority")
+		}
+	}
+	host := parsed.Hostname()
+	if address, err := netip.ParseAddr(host); err == nil {
+		if address.Zone() != "" {
+			return "", fmt.Errorf("source URL must use a canonical authority")
+		}
+		host = address.String()
+		if address.Is6() {
+			host = "[" + host + "]"
+		}
+	} else if strings.Contains(host, ":") || numericURLHostV1(host) {
+		return "", fmt.Errorf("source URL must use a canonical authority")
+	}
+	if port != "" {
+		host += ":" + port
+	}
+	escapedPath := parsed.EscapedPath()
+	if escapedPath == "" {
+		escapedPath = "/"
+	}
+	return "https://" + host + canonicalSourcePathV1(escapedPath), nil
+}
+
+func numericURLHostV1(host string) bool {
+	if host == "" {
+		return false
+	}
+	for _, component := range strings.Split(host, ".") {
+		if component == "" {
+			return false
+		}
+		decimal := true
+		for _, character := range component {
+			if character < '0' || character > '9' {
+				decimal = false
+				break
+			}
+		}
+		if decimal {
+			continue
+		}
+		if len(component) <= 2 || !strings.HasPrefix(component, "0x") {
+			return false
+		}
+		for _, character := range component[2:] {
+			if character < '0' || character > '9' && (character < 'a' || character > 'f') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func canonicalSourcePathV1(escapedPath string) string {
+	var normalized strings.Builder
+	normalized.Grow(len(escapedPath))
+	for index := 0; index < len(escapedPath); index++ {
+		if escapedPath[index] != '%' {
+			normalized.WriteByte(escapedPath[index])
+			continue
+		}
+		value, err := strconv.ParseUint(escapedPath[index+1:index+3], 16, 8)
+		if err != nil {
+			normalized.WriteString(escapedPath[index:])
+			break
+		}
+		character := byte(value)
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune("-._~", rune(character)) {
+			normalized.WriteByte(character)
+		} else {
+			normalized.WriteString(escapedPath[index : index+3])
+		}
+		index += 2
+	}
+	return normalized.String()
+}
+
+func asciiURLHostV1(host string) bool {
+	for _, character := range host {
+		if character > unicode.MaxASCII || unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
+}
+
+func canonicalPercentEscapesV1(value string) bool {
+	for index := 0; index < len(value); index++ {
+		if value[index] != '%' {
+			continue
+		}
+		if index+2 >= len(value) || !uppercaseHexV1(value[index+1]) || !uppercaseHexV1(value[index+2]) {
+			return false
+		}
+		index += 2
+	}
+	return true
+}
+
+func uppercaseHexV1(value byte) bool {
+	return value >= '0' && value <= '9' || value >= 'A' && value <= 'F'
+}
+
+func hasURLDotSegmentV1(value string) bool {
+	for _, segment := range strings.Split(value, "/") {
+		if segment == "." || segment == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func validateSortedUniqueStringsV1(field string, values []string, allowEmpty bool) error {
+	if values == nil {
+		return fmt.Errorf("%s must use an array", field)
+	}
+	for index, value := range values {
+		if !allowEmpty && value == "" || strings.TrimSpace(value) != value || containsControlV1(value) || index > 0 && values[index-1] >= value {
+			return fmt.Errorf("%s must contain unique sorted canonical values", field)
+		}
+	}
+	return nil
+}
+
+func validateRecordPathV1(value string, allowDot bool) error {
+	if value == "." && allowDot {
+		return nil
+	}
+	if value == "" || containsControlV1(value) || path.IsAbs(value) || path.Clean(value) != value ||
+		strings.Contains(value, `\`) {
+		return fmt.Errorf("path %q must be a canonical relative slash path", value)
+	}
+	for _, segment := range strings.Split(value, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return fmt.Errorf("path %q contains an invalid segment", value)
+		}
+	}
+	return nil
+}
+
+func validateAbsoluteRecordPathV1(value string) error {
+	if value == "" || containsControlV1(value) || !path.IsAbs(value) || path.Clean(value) != value || value == "/" ||
+		strings.Contains(value, `\`) {
+		return fmt.Errorf("path %q must be a canonical absolute non-root slash path", value)
+	}
+	return nil
+}
+
+func encodeToolVersionSegmentV1(value string) (string, error) {
+	if !validRecordTokenV1(value) || !utf8.ValidString(value) {
+		return "", fmt.Errorf("tool version must be canonical UTF-8 text")
+	}
+	encodeDots := value == "." || value == ".."
+	const hex = "0123456789ABCDEF"
+	var encoded strings.Builder
+	encoded.Grow(len(value))
+	for _, character := range []byte(value) {
+		literal := character >= 'a' && character <= 'z' ||
+			character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' ||
+			strings.ContainsRune(".+-_", rune(character))
+		if literal && !(encodeDots && character == '.') {
+			encoded.WriteByte(character)
+			continue
+		}
+		encoded.WriteByte('%')
+		encoded.WriteByte(hex[character>>4])
+		encoded.WriteByte(hex[character&0x0f])
+	}
+	return encoded.String(), nil
+}
+
+func decodeToolVersionSegmentV1(value string) (string, error) {
+	if value == "" {
+		return "", fmt.Errorf("encoded tool version must not be empty")
+	}
+	decoded := make([]byte, 0, len(value))
+	for index := 0; index < len(value); index++ {
+		if value[index] != '%' {
+			decoded = append(decoded, value[index])
+			continue
+		}
+		if index+2 >= len(value) {
+			return "", fmt.Errorf("encoded tool version contains an incomplete escape")
+		}
+		high, highOK := uppercaseHexValueV1(value[index+1])
+		low, lowOK := uppercaseHexValueV1(value[index+2])
+		if !highOK || !lowOK {
+			return "", fmt.Errorf("encoded tool version escapes must use uppercase hexadecimal")
+		}
+		decoded = append(decoded, high<<4|low)
+		index += 2
+	}
+	version := string(decoded)
+	canonical, err := encodeToolVersionSegmentV1(version)
+	if err != nil || canonical != value {
+		return "", fmt.Errorf("encoded tool version is not canonical")
+	}
+	return version, nil
+}
+
+func uppercaseHexValueV1(value byte) (byte, bool) {
+	switch {
+	case value >= '0' && value <= '9':
+		return value - '0', true
+	case value >= 'A' && value <= 'F':
+		return value - 'A' + 10, true
+	default:
+		return 0, false
+	}
+}
+
+func validRecordTokenV1(value string) bool {
+	return value != "" && strings.TrimSpace(value) == value && !containsControlV1(value)
+}
+
+func containsControlV1(value string) bool {
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return true
+		}
+	}
+	return false
+}
+
+func validRecordSegmentV1(value string) bool {
+	if !validRecordTokenV1(value) || value == "." || value == ".." {
+		return false
+	}
+	for _, character := range value {
+		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' {
+			continue
+		}
+		switch character {
+		case '.', '+', '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func requireNonemptySortedStringsV1(field string, values []string) error {
+	if err := validateSortedUniqueStringsV1(field, values, false); err != nil {
+		return err
+	}
+	if len(values) == 0 {
+		return fmt.Errorf("%s must not be empty", field)
+	}
+	return nil
+}
