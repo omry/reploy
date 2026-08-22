@@ -1,7 +1,7 @@
 ---
 status: Active
-updated: 2026-08-08
-summary: Normative blueprint environment, workload, application, provider contribution, lifecycle, and Docker rendering model.
+updated: 2026-08-22
+summary: Normative provider-neutral blueprint environment, workload, application, package-request, lifecycle, and backend-rendering model.
 supersedes: docs/CROSS_PLATFORM_INSTALL_LOCATIONS.md
 ---
 
@@ -215,26 +215,13 @@ capability. Reploy never relies on a floating Dockerfile syntax tag,
 `DOCKER_DEFAULT_PLATFORM`, or another backend default. A frontend or capability
 profile change creates a different rendered transaction and cache identity.
 
-APT compatibility is distribution-name and release-number independent. The
-initial provider selects its Debian/Ubuntu behavior profile when parsed
-`/etc/os-release` `ID` or one exact whitespace-delimited `ID_LIKE` token equals
-`debian` or `ubuntu`; substring matching is forbidden. It records the exact OS
-fields without using them as an allowlist and accepts past, future, or derived
-releases only when all required APT/dpkg schemas and runtime behavior probes
-pass. Representative release images belong to the CI matrix, not the blueprint
-schema or runtime acceptance table.
-
-Package providers map this selected OCI platform through a provider-owned,
-versioned architecture table. The initial APT provider supports
-`linux/amd64` -> Debian `amd64`, `linux/arm64` -> Debian `arm64`, and
-`linux/arm/v7` -> Debian `armhf`; supported CPU variants retain the same Debian
-architecture while still constraining base and backend selection. Before APT
-resolution, Reploy requires the base's `dpkg --print-architecture` result to
-match that mapping and requires `dpkg --print-foreign-architectures` to be
-empty. Only the mapped native architecture and Debian's architecture-independent
-`all` packages may participate. APT package state is keyed by binary package
-name plus Debian architecture, while author requests remain
-architecture-neutral.
+Each package provider maps the selected OCI platform through a provider-owned,
+versioned compatibility and native-architecture profile. The provider validates
+that the observed base image satisfies that profile before resolution; a
+platform declaration alone never proves provider compatibility. Provider-family
+detection, native architecture mappings, multi-architecture policy, and package
+state identity belong to the provider refinement. The initial APT rules are
+defined in [`APT_PROVIDER.md`](APT_PROVIDER.md#target-platform-contract).
 
 ## One Primary Workload, Plus Native Commands
 
@@ -267,7 +254,12 @@ workload type.
 Every command invocation is one-shot by default and is expected to exit with a
 status. In Docker, Reploy runs it in a transient container created from the same
 materialized environment image, as the effective runtime user, with the same
-managed paths and application configuration as the workload container. The
+managed paths and, except for private environment values, the same application
+configuration as the workload container. Private `.env` assignments are
+injected only into the persistent workload; a transient command or lifecycle
+container validates the file, sees the masked placeholder, and does not receive
+the values. Whether transient commands should gain an equivalent private
+injection contract is an open decision tracked in `BACKLOG.md`. The
 transient container is removed when the command exits. Selecting a command as
 `environment.workload.command` is the only operation that promotes it to the
 persistent container entrypoint.
@@ -615,8 +607,8 @@ directory identity used to name Docker resources: directory identity answers
 which deployment owns a resource, while overlay content answers which software
 that deployment requested.
 
-The canonical overlay contains fully qualified component/option selections and
-component-qualified typed provider additions. Entries are schema-normalized,
+The canonical overlay contains fully qualified application/option selections and
+contribution-qualified typed provider additions. Entries are schema-normalized,
 deduplicated, and sorted; raw CLI strings are not canonical identity. Every
 update validates the complete overlay against the current blueprint and applies
 atomically under the deployment operation lock.
@@ -639,8 +631,9 @@ unrelated option does not invalidate every provider node.
 All providers use one common identity contract when a staging package override
 builds an artifact from local source. The source path locates the source for
 the local build but is not content identity. Reploy observes a canonical
-source-input digest, while the provider defines and validates the closed source
-artifact that crosses into the final build. The identity also binds the
+source-input digest over both the selected entries and any explicit input
+exclusions, while the provider defines and validates the closed source artifact
+that crosses into the final build. The identity also binds the
 versioned builder and toolchain profile, every relevant build setting, and a
 build-environment digest covering the selected platform, immutable upstream
 image, and selected toolchain evidence.
@@ -671,13 +664,16 @@ artifact, or installed artifact is absent is an error at the earliest phase
 that can establish the absence: normally resolution/materialization, or runtime
 preflight if installed state has drifted.
 
-### Provider Expansion Gate
+### Provider Refinement Boundary
 
-The accepted APT/dpkg provider and cross-provider executable-output design is
-defined in [`APT_PROVIDER.md`](APT_PROVIDER.md) and is part of this model. APT is
-the first additional component provider after Python. Its public enablement is
-still gated on the common provider graph, bundle-to-image-layer pipeline, and
-APT-specific implementation evidence described in the detailed design.
+This model owns the public placement and composition of `os` and `python`
+package contributions, the provider graph visible through their effects, and
+the common closed-bundle, offline-materialization, output, identity, and trust
+invariants. Provider-specific product semantics refine this model rather than
+becoming additional Blueprint schema. The initial APT refinement is
+[`APT_PROVIDER.md`](APT_PROVIDER.md); its concrete Go and Docker realization and
+historical delivery evidence are in
+[`APT_PROVIDER_DETAIL_DESIGN.md`](APT_PROVIDER_DETAIL_DESIGN.md).
 
 Every additional provider must contribute a closed bundle artifact set and a
 deterministic offline layer recipe; it must not introduce provider-specific
@@ -685,45 +681,13 @@ runtime volumes, startup installers, or cache lifecycles. Go, Rust, RPM/DNF,
 and Alpine/APK remain future shapes used to test the generality of that
 contract; they are not commitments for v1.
 
-System-package providers fit the same two-phase contract. An APT/dpkg provider
-may use APT during bundling to resolve a closed `.deb` dependency set, then
-install that set offline with `apt-get`/`dpkg` in a generated image layer.
-RPM/DNF and Alpine/APK providers would likewise bundle closed, checksummed
-package sets and install them offline in provider-owned layers. Package-manager
-databases and system files belong in the derived image, never in startup-time
-runtime caches.
-
-APT v1 performs no generic executable discovery. Its versioned well-known-tool
-profile recognizes exactly the `python3` root package request and publishes the
-logical `python` candidate at `/usr/bin/python3`; any other APT output requires
-an explicit normalized absolute path. The mapping is not proof that the path is
-Python or that it has a particular version. The consuming Python resolver
-checks the candidate inside its existing container against the exact immutable
-supplier prefix before network work. Failure identifies the mapping and shows
-the explicit `exports.python.executable` form. No path search or additional
-probe container is used.
-
-APT output ownership is validated after materialization against the complete
-locked APT node, which is one shared dpkg authority across all OS contributions.
-Reploy resolves only the already selected path and uses literal `dpkg-query -S`
-to identify its terminal's installed package key, whose exact status tuple must
-appear in the locked closure; it stores no per-root dependency graph. Ordinary
-unowned link hops fail. If the selected
-chain enters the alternatives directory, read-only `update-alternatives
---query` must confirm the link group and selected value, and the terminal must
-still be owned by a locked package. Reploy does not enumerate or change
-alternatives. Failure may be avoided by explicitly declaring the direct
-terminal path when that path itself satisfies the ownership rule.
-
-Concise provider request strings are parsed into provider-owned typed records;
-they are never forwarded as package-manager expressions. The initial APT
-provider accepts only exact Debian binary package names and the Debian
-`name=exact-version` convention. It excludes paths, release and architecture
-selectors, patterns, ranges, dependency expressions, and options, verifies an
-exact package-cache match, and renders the typed result itself. Structured
-entries use the same request grammar when adding fields such as exports. The
-complete rules are in
-[the APT package-request contract](APT_PROVIDER.md#apt-package-request-grammar).
+System-package providers fit the same two-phase contract. They resolve a closed,
+checksummed native-package set during bundling and install only that set in an
+offline provider-owned layer. Package-manager databases and system files belong
+in the derived image, never in startup-time runtime caches. Provider request
+grammar, well-known output mappings, native ownership checks, alternatives, and
+package-database mechanics are provider-owned. The complete initial rules are in
+the [APT package-request and output contract](APT_PROVIDER.md).
 
 Providers define physical node grouping according to materialization semantics.
 Each application's Python contribution becomes one independently materialized
@@ -814,6 +778,40 @@ blueprint**. Each package mapping selects either a local source path or a
 specific version from that provider's normal upstream source. The two package
 forms are mutually exclusive.
 
+Implementation status: `exclude` is implemented in dependent
+[PR 82](https://github.com/omry/reploy/pull/82), as tracked in the
+[Portable Tool Definition Implementation Plan](PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md),
+but is not yet available from PR 81's current base. The strict decoder at this
+base rejects the key as unknown. Once PR 82 is rebased onto this authority and
+lands, the source-identity rule above and every exclusion rule and example
+below describe supported behavior.
+
+The accepted contract permits a local-path mapping to declare `exclude`, an
+array of exact source-relative paths whose named entry and descendants are
+withheld from the immutable source input:
+
+```yaml
+environment:
+  id: omegaflow
+  vars:
+    workspace_root: /home/me/src
+  package_overrides:
+    python:
+      omegaflow:
+        path: "{{ workspace_root }}/omegaflow"
+        exclude:
+          - recordings/.omegaflow
+```
+
+Each exclusion is a canonical relative path using `/`. Absolute paths,
+escaping `..` components, backslashes, glob syntax, and duplicates are
+rejected. The list is normalized into lexical order for identity. Reploy
+matches each path literally and excludes that path and its complete subtree;
+it does not read `.gitignore` or interpret ignore-file patterns. Exclusion is
+performed during source walking before file metadata beneath the excluded path
+is read, so generated FIFOs may be excluded deliberately. A FIFO or other
+unsupported special file that remains selected is still a hard error.
+
 The same sidecar may contain explicit development-only package roots beneath
 `environment.package_additions`. These are install requests, unlike source
 mappings. The `os` key selects the OS provider supported by the chosen base
@@ -876,8 +874,9 @@ mappings on the user's behalf, but resolution must not add inferred packages,
 resolved dependencies, hashes, or selected artifacts to it. Those results
 belong in the generated build lock and closed bundle. Relative local paths are
 resolved from the sidecar's directory; absolute paths are also valid. Physical
-paths never enter resolved content identity. Installation consumes the staged
-bundle and never reads the sidecar or original source checkout.
+paths never enter resolved content identity; the normalized exclusion intent
+does. Installation consumes the staged bundle and never reads the sidecar or
+original source checkout.
 
 `reploy overrides [--dir DIR]` opens the native editor for the current,
 default, or explicitly selected staging directory and loads an existing
@@ -891,7 +890,11 @@ may be absolute or use `~/path`; its original spelling stays in the sidecar and
 the current user's home is expanded when Reploy uses the override. It lists
 explicit blueprint, selected-option, and deployment-added package requirements
 first with a distinct shaded background; override-only mappings follow. These
-variables belong to the sidecar and are not blueprint variables.
+variables belong to the sidecar and are not blueprint variables. After
+local-source-exclusion delivery, the editor displays the number of exclusions
+and preserves an existing local choice's `exclude` list, but does not provide
+controls for authoring it; add or change exclusions directly in
+`overrides.yaml`.
 
 `V` saves the current choices and runs the normal build pipeline as an optional
 trial validation. Success means the selected versions exist, dependency
@@ -965,8 +968,9 @@ environment:
 ```
 
 Python `requirements` use normal Python requirement syntax. The published
-blueprint above contains no local development paths. A developer may add the
-following explicit sidecar to its staging directory:
+blueprint above contains no local development paths. Once local-source
+exclusions are delivered, a developer may add the following explicit sidecar
+to its staging directory:
 
 ```yaml
 environment:
@@ -977,6 +981,8 @@ environment:
     python:
       arbiter-server:
         path: "{{ workspace_root }}/server"
+        exclude:
+          - recordings/.arbiter
       arbiter-imap:
         path: "{{ workspace_root }}/plugins/imap"
       arbiter-smtp:
@@ -999,6 +1005,50 @@ local source or upstream-version form that it cannot materialize.
 
 The same application/package ownership model can be extended to other build
 and packaging systems later.
+
+## Proposed Portable Tool Requests
+
+The current blueprint schema does not yet accept `packages.tools`; this public
+request boundary becomes normative when that implementation lands. Runtime tool
+requests live under
+`environment.applications.<application>.packages.tools`. Project-owned
+source-build requirements use the same request forms beneath `.reploy.yaml`
+`requires`; their containing node determines runtime or build-only ownership.
+
+An optionless request may use compact scalar form, for example
+`tool:java==21`. A request with options uses a mapping:
+
+```yaml
+environment:
+  applications:
+    application:
+      packages:
+        tools:
+          - tool: playwright
+            version: "1.61.0"
+            binding: python
+            select:
+              browser: chromium
+```
+
+`tool` is required. `version` constrains the upstream-facing tool version and
+`definition_revision` may pin one exact definition revision. `binding` accepts
+one binding, a list, or the quoted value `"*"`; omission uses only the inference
+allowed by the selected definition. `select` maps each definition-declared
+selection dimension to one value or a list. Binding and selection fields are
+valid only when the selected tool contract permits them, and a required
+selection dimension may not be omitted. Scalars and lists normalize to sorted
+sets, so author ordering does not change request identity.
+
+Resolution selects an exact target after observing the base image, rejects an
+unsupported tool, version, revision, target, binding, or selection combination
+before acquisition, and binds the canonical request plus selected definition
+closure into provider and build-lock identity. The concrete record graph,
+catalog contents, target tuples, payloads, native dependencies, acquisition,
+materialization, and selected-closure encoding are owned by the
+[Portable Tool Definition Design](PORTABLE_TOOL_DEFINITION_DESIGN.md). Its
+[implementation plan](PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md) tracks
+delivery without overriding either design authority.
 
 ## Possible Shape
 
@@ -1220,46 +1270,25 @@ name/value pairs. The profile identifier/version, exact bindings, shell-state
 policy, scratch policy, and referenced configuration inputs are canonical
 transaction inputs. Changing a provider-owned fixed value requires a new
 profile version; recorded digests detect drift and participate in cache/lock
-identity. The APT provider's initial profiles are defined in
-[`APT_PROVIDER.md`](APT_PROVIDER.md); other providers require separately
-versioned profiles.
+identity. Every provider refinement defines its own separately versioned
+profiles.
 
 A provider-controlled child environment isolates caller and workload state; it
-does not sanitize the immutable base image itself. In particular, the APT
-provider treats the selected base's APT/dpkg executables, package database,
-configuration, source definitions, keyrings, and hooks as trusted base-image
-state transitively bound by the exact base digest. Its generated `APT_CONFIG`
-is an additive fixed provider input, while required safety settings use final
-explicit arguments where ordering matters. No caller package-manager or proxy
-environment is inherited, and materialization remains network-free. This is an
-input-isolation and reproducibility boundary, not a sandbox against a malicious
-base image.
+does not sanitize the immutable base image itself. Each provider refinement
+names the base-image tools, configuration, trust roots, and package state it
+consumes, all transitively bound by the exact base digest. No caller package-
+manager, proxy, or workload environment is inherited. This is an input-
+isolation and reproducibility boundary, not a sandbox against a malicious base
+image.
 
-APT resolution refreshes an initially empty private index directory, treats any
-enabled-source acquisition error as fatal, resolves only from that fresh index
-set, and discards it with resolver scratch. Offline materialization never
-refreshes or consults repository indexes.
-
-The immutable base image is the trust boundary for APT itself, its source and
-key configuration, credentials, and repository trust policy. Reploy runs update
-against fresh private indexes and treats any error APT reports as fatal, but it
-does not parse or rewrite source trust options or reconstruct a second
-release-to-index authentication chain. For each downloaded `.deb`, Reploy
-inspects package metadata and records its exact size and SHA-256. Raw source
-configuration and APT output are not persisted, and any displayed diagnostic is
-provider-redacted or replaced by a structured error.
-
-APT materialization requires a clean audited package database before changing
-it and snapshots the complete installed package state. After installation it
-audits again and compares the full state delta: no package may be removed, and
-only exact bundle-origin additions or recorded base-to-bundle upgrades may
-change. Base-origin and unrelated package state must remain unchanged.
-
-The same transaction uses an initially empty private APT archive cache and,
-immediately before installation, verifies the locked path, size, and digest of
-every mounted package artifact. It passes all verified artifacts explicitly;
-`--no-download` plus network isolation makes any undeclared requirement fail
-rather than drawing from a base-image cache.
+Networked resolution uses fresh private scratch, treats acquisition errors as
+fatal, records exact artifact metadata and content digests, and does not persist
+raw credential-bearing configuration or unredacted provider output.
+Materialization starts from provider-validated state, verifies every locked
+artifact immediately before use, permits only the provider-declared state
+transition, and remains network-free. The provider refinement defines the exact
+trust, audit, cache, and package-manager mechanisms that satisfy these common
+requirements.
 
 Initial bundle resolvers, probes, and materializers receive stdin from
 `/dev/null` and no controlling terminal. A provider-specific profile may impose
@@ -1295,9 +1324,9 @@ silently ignore unsupported execution or security properties. Materialization
 network policy is always `none`.
 
 This is the selected baseline carrier contract, not implementation-readiness
-approval. The APT/dpkg provider draft's
-[review status](APT_PROVIDER.md#review-status) records the remaining provider
-design work before implementation.
+approval. Provider refinements record their own implementation evidence and
+remaining discrepancies; the implemented APT status is summarized in
+[`APT_PROVIDER_DETAIL_DESIGN.md`](APT_PROVIDER_DETAIL_DESIGN.md#current-completion-evidence).
 
 Blueprint text and resolved values are never interpolated into the script
 source. Dynamic values reach the fixed script only through validated positional
@@ -1545,7 +1574,11 @@ temporary home are writable.
 
 During `reploy build`, final-image validation applies the portable-access rule
 to every runtime-exposed output and validates every compiled mount destination
-against the exact resulting image. A changed runtime plan makes the build stale.
+against the reserved-path rules and the compiled protected runtime set.
+Inspecting destinations inside the exact resulting image — mount-integrity
+check 2 under Runtime Mount Integrity — is not yet implemented, so emptiness
+and ancestry are not verified there. A changed runtime plan makes the build
+stale.
 Immediately before container creation, Reploy performs only host-side checks
 for the matching recorded plan and declared mount-source existence, kind, and
 read/write policy. It creates no separate access-preflight container and stores
@@ -2045,8 +2078,18 @@ contents. After resolving `extends`, interpolation, and backend-generated
 mounts, Reploy normalizes every final container destination and treats it as a
 claim over that path and all descendants.
 
-Every blueprint or Reploy-generated runtime mount passes three independent
-checks against the exact immutable image:
+Every blueprint or Reploy-generated runtime mount is subject to three
+independent checks against the exact immutable image. Checks 1 and 3 are
+enforced: check 1 at blueprint validation and again on every compiled
+runtime-plan mount, and check 3 whenever the runtime policy is compiled, with
+the protected set derived from Reploy's roots, provider-exclusive roots, and
+referenced executable link chains, and recomputed from the build lock before
+runtime containers run. Check 2 is specified here but not yet implemented: it
+needs an image-side inspection the probe helper does not provide, so nothing
+verifies that a destination is absent or an empty real directory in the image.
+That work is tracked in `BACKLOG.md`, with the standing review decision
+recorded in `.review/BLUEPRINT_ENVIRONMENT_MODEL.md`; until it lands, check 2
+is design intent rather than enforced behavior:
 
 1. Its destination is a normalized absolute path other than `/` and does not
    overlap `/dev`, `/proc`, `/sys`, `/run/secrets`, or Docker-managed
@@ -2090,10 +2133,13 @@ behavior of the exact immutable image. An exclusive root, including a complete
 Python venv, is protected as a subtree and therefore already covers its
 interpreter without a generic execution-chain model.
 
-Reploy performs these checks against the complete effective mount plan
-immediately before creating every workload or transient runtime container,
-including native commands, lifecycle actions, and `reploy shell`. This catches
-backend-generated mounts and plans that differ between staging and deployment.
+Checks 1 and 3 run against the complete effective mount plan immediately
+before creating every workload or transient runtime container, including
+native commands, lifecycle actions, and `reploy shell`: the pre-container
+staleness check recompiles the runtime policy from the build lock, and a plan
+failing either check reads as stale and cannot run, so backend-generated
+mounts and plans that differ between staging and deployment are caught.
+Check 2 does not run anywhere yet.
 Allowed, empty application mountpoints remain valid. A mount-plan change does
 not invalidate provider layers, but an unsafe plan cannot run them.
 
@@ -2103,10 +2149,15 @@ exact blueprint can run under a non-container backend. A future backend with a
 different runtime filesystem model would need to define whether it supports
 `container` paths or introduce another workload-visible path mapping.
 
-Staging and deployed execution use the same materialized image, container-side
-endpoint scheme and port, runtime user, mounts, application configuration, and
-readiness behavior. Backend identity such as container names, managed host
-paths, and published host ports may differ where isolation requires it. Docker
+Staging and deployed execution use the same provider layers, container-side
+endpoint scheme and port, mounts, and readiness behavior. The materialized
+image and runtime user are also shared, unless installation selects a
+different numeric authority, which rebuilds only the final account/verifier
+layer and records that identity-specific image in the installed lock.
+Application configuration is shared except deployment-local private
+environment values, which later installs deliberately preserve. Backend
+identity such as container names, managed host paths, and published host
+ports may differ where isolation requires it. Docker
 publication does not change an endpoint's scheme; `scheme` is declared once on
 the environment endpoint and inherited by every scope.
 
@@ -2199,8 +2250,13 @@ Persisted phase `staged` selects `publish.staging`; phase `installed` selects
 staging/deployed vocabulary even though the state values are staged/installed.
 
 Published addresses should normally use loopback, with `127.0.0.1` as the
-recommended default. Existing wildcard publication remains supported for
-services intentionally exposed beyond the host. For readiness, Reploy converts
+recommended default. An omitted `bind.address` resolves to `0.0.0.0` and an
+omitted `publish.address` resolves to `127.0.0.1`; these are the implemented
+defaults, stated here so omission behavior is not implementation-invented.
+Existing wildcard publication remains supported for services intentionally
+exposed beyond the host. A canonical grammar for accepted address forms —
+hostnames, bracketed and scoped IPv6, wildcards — is not yet defined and is
+tracked in `BACKLOG.md`. For readiness, Reploy converts
 `0.0.0.0` to `127.0.0.1` and `::` to `::1`; this changes only the client probe
 target, not Docker publication. IPv6 addresses are bracketed when constructing
 URLs.
@@ -2470,9 +2526,10 @@ called out and resolved deliberately rather than silently dropping the feature.
 The initial implementation supports the base root and application-owned Python
 and OS package contributions through APT; Docker;
 cross-provider executable consumption; at most one primary workload; native
-one-shot commands; and HTTP readiness. APT becomes publicly usable only after
-its provider-graph, resolver, materializer, cross-provider Python, and public
-build gates pass. Image materialization uses deterministic, versioned recipes
+one-shot commands; and HTTP readiness. The APT provider graph, resolver,
+offline materializer, cross-provider Python path, and public build cutover are
+implemented; remaining discrepancies are explicit backlog items. Image
+materialization uses deterministic, versioned recipes
 and input-addressed provider nodes. This promises stable identity for the same
 exact resolved inputs, not byte-identical image bytes after every uncached
 rebuild. Generated bundle manifests, layer graphs, and BuildKit integration are
