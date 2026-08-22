@@ -128,6 +128,8 @@ func TestStagePackDesiredStateV1ImportsLocalBlueprintSidecarOnCreate(t *testing.
     python:
       omegaconf-inspector:
         path: "{{ workspace_root }}/checkout"
+        exclude:
+          - recordings/.omegaflow
 `)
 	if err := os.WriteFile(filepath.Join(sourceDir, deploy.PackageOverridesFilename), sidecar, 0o600); err != nil {
 		t.Fatal(err)
@@ -148,6 +150,9 @@ func TestStagePackDesiredStateV1ImportsLocalBlueprintSidecarOnCreate(t *testing.
 	choice := staged.Environment.PackageOverrides["python"]["omegaconf-inspector"]
 	if choice.Path != "{{ workspace_root }}/checkout" {
 		t.Fatalf("staged path = %q", choice.Path)
+	}
+	if !reflect.DeepEqual(choice.Exclude, []string{"recordings/.omegaflow"}) {
+		t.Fatalf("staged exclusions = %#v", choice.Exclude)
 	}
 	if got := staged.Environment.Vars["workspace_root"]; got != filepath.Dir(localProject) {
 		t.Fatalf("staged workspace_root = %#v, want %q", got, filepath.Dir(localProject))
