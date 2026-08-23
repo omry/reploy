@@ -108,16 +108,23 @@ type RecordEnvironmentVariableV1 struct {
 }
 
 type TargetRecordV1 struct {
-	Schema              string              `json:"schema"`
-	ID                  string              `json:"id"`
-	Target              TargetIdentityV1    `json:"target"`
-	PackageSets         []RecordReferenceV1 `json:"package_sets"`
-	Bindings            []TargetBindingV1   `json:"bindings"`
-	Payloads            []RecordReferenceV1 `json:"payloads"`
-	Selections          []TargetSelectionV1 `json:"selections"`
-	Exports             []ToolExportV1      `json:"exports"`
-	IntegrationFixtures []RecordReferenceV1 `json:"integration_fixtures"`
-	ValidationProfiles  []RecordReferenceV1 `json:"validation_profiles"`
+	Schema              string                `json:"schema"`
+	ID                  string                `json:"id"`
+	Target              TargetIdentityV1      `json:"target"`
+	SupportCases        []TargetSupportCaseV1 `json:"support_cases"`
+	PackageSets         []RecordReferenceV1   `json:"package_sets"`
+	Bindings            []TargetBindingV1     `json:"bindings"`
+	Payloads            []RecordReferenceV1   `json:"payloads"`
+	Selections          []TargetSelectionV1   `json:"selections"`
+	Exports             []ToolExportV1        `json:"exports"`
+	IntegrationFixtures []RecordReferenceV1   `json:"integration_fixtures"`
+	ValidationProfiles  []RecordReferenceV1   `json:"validation_profiles"`
+}
+
+type TargetSupportCaseV1 struct {
+	Context    string              `json:"context"`
+	Bindings   []string            `json:"bindings"`
+	Selections map[string][]string `json:"selections"`
 }
 
 type TargetIdentityV1 struct {

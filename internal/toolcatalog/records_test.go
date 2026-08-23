@@ -49,7 +49,8 @@ func validRecordValuesV1() []any {
 				Platform: "linux/amd64", OSReleaseID: "debian", VersionID: "12", OCIArchitecture: "amd64",
 				NativeArchitecture: "amd64", PackageManager: "apt",
 			},
-			PackageSets: []RecordReferenceV1{}, Bindings: []TargetBindingV1{},
+			SupportCases: []TargetSupportCaseV1{{Context: "build", Bindings: []string{}, Selections: map[string][]string{}}},
+			PackageSets:  []RecordReferenceV1{}, Bindings: []TargetBindingV1{},
 			Payloads:   []RecordReferenceV1{recordTestReference(release + "/payloads/demo-linux-amd64")},
 			Selections: []TargetSelectionV1{}, Exports: []ToolExportV1{},
 			IntegrationFixtures: []RecordReferenceV1{recordTestReference(release + "/validation/fixtures/debian-12-amd64")},
@@ -248,6 +249,10 @@ func TestTargetRecordExpressesPluralContributionShape(t *testing.T) {
 			Platform: "linux", OSReleaseID: "debian", VersionID: "12",
 			OCIArchitecture: "amd64", NativeArchitecture: "x86_64", PackageManager: "apt",
 		},
+		SupportCases: []TargetSupportCaseV1{
+			{Context: "runtime", Bindings: []string{"node"}, Selections: map[string][]string{"browser": {"firefox"}}},
+			{Context: "build", Bindings: []string{"python"}, Selections: map[string][]string{"browser": {"chromium"}}},
+		},
 		Bindings: []TargetBindingV1{
 			{Name: "python", Contract: recordTestReference("tool:demo/binding/python"), Artifacts: []RecordReferenceV1{
 				recordTestReference("tool:demo/binding/python/linux-amd64"),
@@ -270,6 +275,9 @@ func TestTargetRecordExpressesPluralContributionShape(t *testing.T) {
 	if len(target.Bindings) < 2 || len(target.Bindings[0].Artifacts) < 2 {
 		t.Error("target must carry multiple bindings and multiple binding artifacts")
 	}
+	if len(target.SupportCases) != 2 || target.SupportCases[0].Bindings[0] != "node" {
+		t.Error("target must carry explicit context, binding-set, and selection-map support cases")
+	}
 	if len(target.Selections) < 2 || target.Selections[0].Dimension != "browser" || len(target.Selections[0].Payloads) < 2 {
 		t.Error("target must carry dimensioned selections and multiple coupled payloads")
 	}
@@ -282,6 +290,7 @@ func TestCloneHelpersReturnIndependentValues(t *testing.T) {
 	original := &TargetRecordV1{
 		Schema:             TargetRecordSchemaV1,
 		ID:                 "tool:demo/target/debian/12/amd64",
+		SupportCases:       []TargetSupportCaseV1{{Context: "build", Bindings: []string{"python"}, Selections: map[string][]string{"browser": {"chromium"}}}},
 		Selections:         []TargetSelectionV1{{Dimension: "browser", Value: "chromium", Payloads: []RecordReferenceV1{recordTestReference("tool:demo/payload/chromium")}}},
 		Exports:            []ToolExportV1{{Name: "demo", Path: "/opt/demo/bin/demo"}},
 		ValidationProfiles: []RecordReferenceV1{recordTestReference("tool:demo/profile/default")},
@@ -295,6 +304,8 @@ func TestCloneHelpersReturnIndependentValues(t *testing.T) {
 	original.IntegrationFixtures = []RecordReferenceV1{recordTestReference("tool:demo/fixture/one")}
 
 	clone := cloneTargetRecordV1(original)
+	clone.SupportCases[0].Bindings[0] = "node"
+	clone.SupportCases[0].Selections["browser"][0] = "firefox"
 	clone.Selections[0].Value = "firefox"
 	clone.Selections[0].Payloads[0] = recordTestReference("tool:demo/payload/firefox")
 	clone.Exports[0].Name = "other"
@@ -306,6 +317,9 @@ func TestCloneHelpersReturnIndependentValues(t *testing.T) {
 
 	if original.Bindings[0].Artifacts[0].ID != "tool:demo/binding/python/linux-amd64" {
 		t.Error("clone shares binding artifact storage with the original record")
+	}
+	if original.SupportCases[0].Bindings[0] != "python" || original.SupportCases[0].Selections["browser"][0] != "chromium" {
+		t.Error("clone shares support-case storage with the original record")
 	}
 	if original.Bindings[0].Exports[0].Name != "demo" || original.Bindings[0].ValidationProfiles[0].ID != "tool:demo/profile/python" {
 		t.Error("clone shares binding export or validation-profile storage with the original record")
@@ -405,6 +419,14 @@ func TestRecordModelUsesFinalBindingSelectionAndValidationShape(t *testing.T) {
 			},
 			required:  []string{`"executables":["bin/java","bin/javac"]`},
 			forbidden: []string{`"executable":`},
+		},
+		{
+			name: "target support case",
+			value: TargetSupportCaseV1{
+				Context: "build", Bindings: []string{"python"}, Selections: map[string][]string{"browser": {"chromium"}},
+			},
+			required:  []string{`"context":"build"`, `"bindings":["python"]`, `"selections":{"browser":["chromium"]}`},
+			forbidden: []string{`"values"`},
 		},
 		{
 			name: "target selection",
@@ -541,9 +563,10 @@ func TestEveryCloneHelperReturnsIndependentStorage(t *testing.T) {
 		}},
 		{"target", func() any {
 			value := &TargetRecordV1{PackageSets: references, Payloads: references, IntegrationFixtures: references, ValidationProfiles: references,
-				Bindings:   []TargetBindingV1{{Name: "python", Artifacts: references, Payloads: references, PackageSets: references, Exports: exports, ValidationProfiles: references}},
-				Selections: []TargetSelectionV1{{Dimension: "browser", Value: "chromium", Payloads: references, PackageSets: references, Exports: exports, ValidationProfiles: references}},
-				Exports:    exports}
+				SupportCases: []TargetSupportCaseV1{{Context: "build", Bindings: []string{"python"}, Selections: map[string][]string{"browser": {"chromium"}}}},
+				Bindings:     []TargetBindingV1{{Name: "python", Artifacts: references, Payloads: references, PackageSets: references, Exports: exports, ValidationProfiles: references}},
+				Selections:   []TargetSelectionV1{{Dimension: "browser", Value: "chromium", Payloads: references, PackageSets: references, Exports: exports, ValidationProfiles: references}},
+				Exports:      exports}
 			result := cloneTargetRecordV1(value)
 			return [2]any{value, &result}
 		}},

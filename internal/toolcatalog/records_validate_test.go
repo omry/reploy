@@ -463,6 +463,22 @@ func TestRebuiltRecordShapesAreValidatedV1(t *testing.T) {
 		{name: "target profile namespace", index: 3, wantSub: "validation profile", mutate: func(value any) {
 			value.(*TargetRecordV1).ValidationProfiles = []RecordReferenceV1{recordTestReference("tool:other/releases/1.2.3/validation/profiles/default")}
 		}},
+		{name: "target support cases absent", index: 3, wantSub: "support cases", mutate: func(value any) {
+			value.(*TargetRecordV1).SupportCases = nil
+		}},
+		{name: "target support case selections absent", index: 3, wantSub: "dimension-keyed map", mutate: func(value any) {
+			value.(*TargetRecordV1).SupportCases[0].Selections = nil
+		}},
+		{name: "target support cases duplicate", index: 3, wantSub: "unique and sorted", mutate: func(value any) {
+			target := value.(*TargetRecordV1)
+			target.SupportCases = append(target.SupportCases, cloneTargetSupportCasesV1(target.SupportCases)...)
+		}},
+		{name: "target support cases unsorted", index: 3, wantSub: "unique and sorted", mutate: func(value any) {
+			value.(*TargetRecordV1).SupportCases = []TargetSupportCaseV1{
+				{Context: "runtime", Bindings: []string{}, Selections: map[string][]string{}},
+				{Context: "build", Bindings: []string{}, Selections: map[string][]string{}},
+			}
+		}},
 		{name: "target binding payload namespace", index: 3, wantSub: "payload record", mutate: func(value any) {
 			binding := targetBindingWithArtifactV1(release + "/bindings/python/artifacts/linux-amd64")[0]
 			binding.Payloads = []RecordReferenceV1{recordTestReference("tool:other/releases/1.2.3/payloads/demo-linux-amd64")}
