@@ -35,6 +35,7 @@ func cloneReleaseContractV1(value *ReleaseContractV1) ReleaseContractV1 {
 
 func cloneTargetRecordV1(value *TargetRecordV1) TargetRecordV1 {
 	result := *value
+	result.SupportCases = cloneTargetSupportCasesV1(value.SupportCases)
 	result.PackageSets = append([]RecordReferenceV1{}, value.PackageSets...)
 	result.Bindings = cloneTargetBindingsV1(value.Bindings)
 	result.Payloads = append([]RecordReferenceV1{}, value.Payloads...)
@@ -42,6 +43,15 @@ func cloneTargetRecordV1(value *TargetRecordV1) TargetRecordV1 {
 	result.Exports = append([]ToolExportV1{}, value.Exports...)
 	result.IntegrationFixtures = append([]RecordReferenceV1{}, value.IntegrationFixtures...)
 	result.ValidationProfiles = append([]RecordReferenceV1{}, value.ValidationProfiles...)
+	return result
+}
+
+func cloneTargetSupportCasesV1(values []TargetSupportCaseV1) []TargetSupportCaseV1 {
+	result := append([]TargetSupportCaseV1{}, values...)
+	for index := range result {
+		result[index].Bindings = append([]string{}, values[index].Bindings...)
+		result[index].Selections = cloneStringSetMapV1(values[index].Selections)
+	}
 	return result
 }
 
