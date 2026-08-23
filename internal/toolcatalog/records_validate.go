@@ -211,6 +211,53 @@ func validateLoadedRecordV1(record loadedRecordV1) error {
 		if err := validateTargetRecordIDV1(value.ID, value.Target); err != nil {
 			return err
 		}
+		if value.SupportCases == nil || len(value.SupportCases) == 0 || len(value.SupportCases) > maxDefinitionValidationCases {
+			return fmt.Errorf("target support cases must use between 1 and %d entries", maxDefinitionValidationCases)
+		}
+		var previousSupportCase []byte
+		for index, supportCase := range value.SupportCases {
+			if supportCase.Context != "build" && supportCase.Context != "runtime" {
+				return fmt.Errorf("target support case %d has invalid context %q", index, supportCase.Context)
+			}
+			if err := validateSortedUniqueStringsV1("target support case bindings", supportCase.Bindings, false); err != nil {
+				return err
+			}
+			for _, binding := range supportCase.Bindings {
+				if !validRecordIdentifierV1(binding) {
+					return fmt.Errorf("target support case binding %q must be a canonical identifier", binding)
+				}
+			}
+			if supportCase.Selections == nil {
+				return fmt.Errorf("target support case %d selections must be a dimension-keyed map", index)
+			}
+			dimensionNames := make([]string, 0, len(supportCase.Selections))
+			for dimension := range supportCase.Selections {
+				dimensionNames = append(dimensionNames, dimension)
+			}
+			sort.Strings(dimensionNames)
+			for _, dimension := range dimensionNames {
+				selections := supportCase.Selections[dimension]
+				if !validRecordIdentifierV1(dimension) {
+					return fmt.Errorf("target support case selection dimension %q must be a canonical identifier", dimension)
+				}
+				if err := requireNonemptySortedStringsV1("target support case selection values", selections); err != nil {
+					return err
+				}
+				for _, selection := range selections {
+					if !validRecordIdentifierV1(selection) {
+						return fmt.Errorf("target support case selection %q/%q must use canonical identifiers", dimension, selection)
+					}
+				}
+			}
+			encoded, err := canonical.Marshal(supportCase)
+			if err != nil {
+				return fmt.Errorf("encode target support case %d: %w", index, err)
+			}
+			if index > 0 && bytes.Compare(previousSupportCase, encoded) >= 0 {
+				return fmt.Errorf("target support cases must be unique and sorted")
+			}
+			previousSupportCase = encoded
+		}
 		releasePrefix := strings.Join(strings.Split(value.ID, "/")[:3], "/")
 		if len(value.IntegrationFixtures) == 0 {
 			return fmt.Errorf("target integration fixtures must not be empty")
