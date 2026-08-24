@@ -95,6 +95,9 @@ func loadCatalogV1(files fs.FS, root string) (*CatalogV1, error) {
 	if err := catalog.verifyReferenceDepthV1(); err != nil {
 		return nil, err
 	}
+	if err := catalog.validateCatalogGraphV1(); err != nil {
+		return nil, err
+	}
 	if err := catalog.validateReleaseGraphsV1(); err != nil {
 		return nil, err
 	}
@@ -336,9 +339,12 @@ func (catalog *CatalogV1) resolvedViewV1(root recordKeyV1) (map[string]loadedRec
 	return view, nil
 }
 
-// catalogReferenceV1 is one outgoing record reference.
+// catalogReferenceV1 is one outgoing record reference together with the record
+// schemas that may legitimately satisfy it. Schema expectations are consumed
+// by catalog-wide PTD-08 reference validation, not by record-local parsing.
 type catalogReferenceV1 struct {
 	Reference RecordReferenceV1
+	Schemas   []string
 }
 
 // catalogReferencesV1 enumerates every outgoing reference a record declares.
@@ -348,72 +354,72 @@ type catalogReferenceV1 struct {
 // binding- and selection-scoped package sets, so enumerating the parked shape
 // would silently omit edges from traversal and from any check built on it.
 func catalogReferencesV1(value any) []catalogReferenceV1 {
-	ref := func(reference RecordReferenceV1) catalogReferenceV1 {
-		return catalogReferenceV1{Reference: reference}
+	ref := func(reference RecordReferenceV1, schemas ...string) catalogReferenceV1 {
+		return catalogReferenceV1{Reference: reference, Schemas: schemas}
 	}
 	result := []catalogReferenceV1{}
 	switch record := value.(type) {
 	case *ToolRecordV1:
 		for _, reference := range record.Releases {
-			result = append(result, ref(reference))
+			result = append(result, ref(reference, ReleaseManifestSchemaV1))
 		}
 	case *ReleaseManifestV1:
-		result = append(result, ref(record.Contract))
+		result = append(result, ref(record.Contract, ReleaseContractSchemaV1))
 		for _, reference := range record.Targets {
-			result = append(result, ref(reference))
+			result = append(result, ref(reference, TargetRecordSchemaV1))
 		}
 		for _, mapping := range record.ArtifactSources {
 			result = append(result,
-				ref(mapping.Artifact),
-				ref(mapping.Source))
+				ref(mapping.Artifact, BindingArtifactSchemaV1, PayloadRecordSchemaV1),
+				ref(mapping.Source, ArtifactSourceRecordSchemaV1))
 		}
 		for _, reference := range record.ValidationProfiles {
-			result = append(result, ref(reference))
+			result = append(result, ref(reference, ValidationProfileSchemaV1))
 		}
 	case *TargetRecordV1:
 		for _, reference := range record.IntegrationFixtures {
-			result = append(result, ref(reference))
+			result = append(result, ref(reference, IntegrationFixtureSchemaV1))
 		}
 		for _, reference := range record.PackageSets {
-			result = append(result, ref(reference))
+			result = append(result, ref(reference, NativePackageSetSchemaV1))
 		}
 		for _, binding := range record.Bindings {
-			result = append(result, ref(binding.Contract))
+			result = append(result, ref(binding.Contract, BindingContractSchemaV1))
 			for _, reference := range binding.Artifacts {
-				result = append(result, ref(reference))
+				result = append(result, ref(reference, BindingArtifactSchemaV1))
 			}
 			for _, reference := range binding.Payloads {
-				result = append(result, ref(reference))
+				result = append(result, ref(reference, PayloadRecordSchemaV1))
 			}
 			for _, reference := range binding.PackageSets {
-				result = append(result, ref(reference))
+				result = append(result, ref(reference, NativePackageSetSchemaV1))
 			}
 			for _, reference := range binding.ValidationProfiles {
-				result = append(result, ref(reference))
+				result = append(result, ref(reference, ValidationProfileSchemaV1))
 			}
 		}
 		for _, reference := range record.Payloads {
-			result = append(result, ref(reference))
+			result = append(result, ref(reference, PayloadRecordSchemaV1))
 		}
 		for _, selection := range record.Selections {
 			for _, reference := range selection.Payloads {
-				result = append(result, ref(reference))
+				result = append(result, ref(reference, PayloadRecordSchemaV1))
 			}
 			for _, reference := range selection.PackageSets {
-				result = append(result, ref(reference))
+				result = append(result, ref(reference, NativePackageSetSchemaV1))
 			}
 			for _, reference := range selection.ValidationProfiles {
-				result = append(result, ref(reference))
+				result = append(result, ref(reference, ValidationProfileSchemaV1))
 			}
 		}
 		for _, reference := range record.ValidationProfiles {
-			result = append(result, ref(reference))
+			result = append(result, ref(reference, ValidationProfileSchemaV1))
 		}
 	case *BindingArtifactRecordV1:
-		result = append(result, ref(record.Contract))
+		result = append(result, ref(record.Contract, BindingContractSchemaV1))
 	case *IntegrationFixtureRecordV1:
 		for _, reference := range record.ValidationProfiles {
-			result = append(result, ref(reference))
+			result = append(result, ref(reference, ValidationProfileSchemaV1))
 		}
 	}
 	return result

@@ -167,19 +167,66 @@ func TestLoadCatalogBoundsEachRecordRatherThanTheCatalogV1(t *testing.T) {
 
 	// The same catalog with many small extra records is not rejected for being
 	// wide: no record-count or aggregate-byte ceiling exists. Materialize the
-	// records rather than merely asserting this property over the baseline.
+	// records and make each one reachable rather than merely asserting this
+	// property over the baseline.
 	files = catalogTestFilesV1(t)
 	const width = 1024
+	packageSets := make([]RecordReferenceV1, 0, width)
 	for index := 0; index < width; index++ {
 		name := fmt.Sprintf("wide-%04d", index)
 		value := *(validRecordValuesV1()[8].(*NativePackageSetV1))
 		value.ID = "tool:demo/releases/1.2.3/package-sets/" + name
+		digest, sumErr := canonical.Sum("portable-tool-record", portableToolRecordIdentityV1, &value)
+		if sumErr != nil {
+			t.Fatal(sumErr)
+		}
 		payload, marshalErr := json.Marshal(&value)
 		if marshalErr != nil {
 			t.Fatal(marshalErr)
 		}
 		files["catalog/demo/releases/1.2.3/package-sets/"+name+".json"] = &fstest.MapFile{Data: payload}
+		packageSets = append(packageSets, RecordReferenceV1{ID: value.ID, Digest: digest})
 	}
+	var target TargetRecordV1
+	if unmarshalErr := json.Unmarshal(files["catalog/demo/releases/1.2.3/targets/debian/12/amd64.json"].Data, &target); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
+	}
+	target.PackageSets = packageSets
+	targetDigest, sumErr := canonical.Sum("portable-tool-record", portableToolRecordIdentityV1, &target)
+	if sumErr != nil {
+		t.Fatal(sumErr)
+	}
+	targetPayload, marshalErr := json.Marshal(&target)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	files["catalog/demo/releases/1.2.3/targets/debian/12/amd64.json"] = &fstest.MapFile{Data: targetPayload}
+
+	var manifest ReleaseManifestV1
+	if unmarshalErr := json.Unmarshal(files["catalog/demo/releases/1.2.3/revisions/1/manifest.json"].Data, &manifest); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
+	}
+	manifest.Targets[0].Digest = targetDigest
+	manifestDigest, sumErr := canonical.Sum("portable-tool-record", portableToolRecordIdentityV1, &manifest)
+	if sumErr != nil {
+		t.Fatal(sumErr)
+	}
+	manifestPayload, marshalErr := json.Marshal(&manifest)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	files["catalog/demo/releases/1.2.3/revisions/1/manifest.json"] = &fstest.MapFile{Data: manifestPayload}
+
+	var tool ToolRecordV1
+	if unmarshalErr := json.Unmarshal(files["catalog/demo/tool.json"].Data, &tool); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
+	}
+	tool.Releases[0].Digest = manifestDigest
+	toolPayload, marshalErr := json.Marshal(&tool)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	files["catalog/demo/tool.json"] = &fstest.MapFile{Data: toolPayload}
 	catalog, err := loadCatalogV1(files, "catalog")
 	if err != nil {
 		t.Fatalf("wide catalog rejected: %v", err)
