@@ -31,16 +31,6 @@ This file is the day-to-day queue for design and implementation gaps.
 
 ## Pre-release
 
-- [ ] `P1` Align committed portable-tool candidate selection with canonical
-      constraint groups. The committed `PTD-09` slice at `37ca781bd6cb`
-      exposes one exact `ToolRequestV1.Version` and performs exact-or-alias
-      lookup, so it cannot validate the full conjunction retained by `PTD-15`.
-      During the bottom-up stack rebuild, accept canonical groups, load each
-      tool's immutable version scheme, parse every retained constraint, reject
-      an empty intersection before candidate enumeration, and add satisfiable
-      and empty-conjunction coverage for `semver`, `pep440`, `integer`, and
-      `opaque`. Revalidate the owning implementation commit and all descendants.
-
 - [ ] `P1` Accept APT install transaction records with the optional trailing
       empty marker. Current APT versions may emit valid `Inst` records ending
       in `) []`, which Reploy currently rejects as malformed. Accept exactly
