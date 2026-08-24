@@ -130,6 +130,37 @@ func TestPackageRootDistributionNameV1NormalizesIdentically(t *testing.T) {
 	}
 }
 
+func TestPackageRootRequirementsCompatibleV1(t *testing.T) {
+	for _, testCase := range []struct {
+		name         string
+		requirements []string
+		want         bool
+	}{
+		{name: "compatible bounds", requirements: []string{"demo>=1", "demo<3"}, want: true},
+		{name: "compatible prefix and bound", requirements: []string{"demo==1.*", "demo>=1.5"}, want: true},
+		{name: "incompatible bounds", requirements: []string{"demo>=3", "demo<3"}, want: false},
+		{name: "incompatible exact pins", requirements: []string{"demo==1", "demo==2"}, want: false},
+		{name: "excluded exact pin", requirements: []string{"demo==1", "demo!=1"}, want: false},
+		{name: "exact pin in excluded prefix", requirements: []string{"demo==1.2", "demo!=1.*"}, want: false},
+		{name: "excluded prefix", requirements: []string{"demo>=1", "demo<2", "demo!=1.*"}, want: false},
+		{name: "tiled excluded prefixes", requirements: []string{"demo>=1", "demo<3", "demo!=1.*", "demo!=2.*"}, want: false},
+		{name: "unsupported form stays resolver authority", requirements: []string{"demo==1rc1", "demo==2rc1"}, want: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			compatible, err := PackageRootRequirementsCompatibleV1(testCase.requirements)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if compatible != testCase.want {
+				t.Errorf("compatible = %t, want %t", compatible, testCase.want)
+			}
+		})
+	}
+	if _, err := PackageRootRequirementsCompatibleV1([]string{"demo>=1", "other<3"}); err == nil {
+		t.Fatal("different distributions succeeded")
+	}
+}
+
 func TestProviderRequestDistributionsV1ReturnsSortedDirectRoots(t *testing.T) {
 	zeta, err := CanonicalPackageRequestV1("Zeta[extra]>=1")
 	if err != nil {
