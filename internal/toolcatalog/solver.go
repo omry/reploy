@@ -1,0 +1,1167 @@
+package toolcatalog
+
+import (
+	"bytes"
+	"fmt"
+	"path"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/canonical"
+	pythonprovider "github.com/omry/reploy/internal/providers/python"
+)
+
+const (
+	maxJointAssignmentStatesV1        = 1024
+	operationSnapshotIdentityV1       = "portable-tool-operation-snapshot-v1"
+	ActiveProviderConstraintsSchemaV1 = "active-provider-constraints-v1"
+)
+
+// ProviderDomainSetV1 names the provider and destination authority domains
+// visible from one canonical resolution scope. Equal names mean that two
+// scopes genuinely share that authority; unequal names keep their constraints
+// isolated.
+type ProviderDomainSetV1 struct {
+	Scope          string `json:"scope"`
+	PackageManager string `json:"package_manager"`
+	Filesystem     string `json:"filesystem"`
+	Environment    string `json:"environment"`
+	Exports        string `json:"exports"`
+	Capabilities   string `json:"capabilities"`
+}
+
+// ReleaseCandidateSetV1 is the PTD-09 output for one canonical requirement
+// group. PTD-10 orders these sets independently of request input order.
+type ReleaseCandidateSetV1 struct {
+	Group      CanonicalRequirementGroupV1
+	Candidates []ReleaseCandidateV1
+}
+
+// ConstraintSourceV1 identifies the canonical input that introduced an active
+// provider constraint. Kind describes the source family, such as blueprint or
+// lock-state, while ID is a stable identifier within that family.
+type ConstraintSourceV1 struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+}
+
+type ActiveNativePackageConstraintV1 struct {
+	Manager      string   `json:"manager"`
+	Requirements []string `json:"requirements"`
+	Repositories []string `json:"repositories"`
+}
+
+type ActivePythonBindingConstraintV1 struct {
+	Name            string   `json:"name"`
+	Requirements    []string `json:"requirements"`
+	SupportedPython []string `json:"supported_python"`
+}
+
+type ActiveFilesystemConstraintV1 struct {
+	Path   string           `json:"path"`
+	Digest canonical.Digest `json:"digest"`
+}
+
+// ActiveProviderConstraintSourceV1 groups the constraints introduced by one
+// stable source. Scope selects an existing ProviderDomainSetV1; callers cannot
+// invent domain identities independently of the active provider graph.
+type ActiveProviderConstraintSourceV1 struct {
+	Scope          string                            `json:"scope"`
+	Source         ConstraintSourceV1                `json:"source"`
+	NativePackages []ActiveNativePackageConstraintV1 `json:"native_packages"`
+	PythonBindings []ActivePythonBindingConstraintV1 `json:"python_bindings"`
+	InstallRoots   []string                          `json:"install_roots"`
+	OwnedPaths     []ActiveFilesystemConstraintV1    `json:"owned_paths"`
+	Artifacts      []ActiveFilesystemConstraintV1    `json:"artifacts"`
+	Environment    []RecordEnvironmentVariableV1     `json:"environment"`
+	Exports        []ToolExportV1                    `json:"exports"`
+	Capabilities   []ToolExportV1                    `json:"capabilities"`
+}
+
+// ActiveProviderConstraintsV1 is an explicit snapshot of constraints already
+// present in the provider graph. Sources must be supplied as a canonical array,
+// including an empty array when the active graph contributes no constraints.
+type ActiveProviderConstraintsV1 struct {
+	Schema  string                             `json:"schema"`
+	Sources []ActiveProviderConstraintSourceV1 `json:"sources"`
+}
+
+// ResolutionOperationInputsV1 carries the complete canonical inputs that must
+// remain fixed after joint solving. The selected candidate constraints are
+// added by the solver before the immutable snapshot is sealed.
+type ResolutionOperationInputsV1 struct {
+	Blueprint       canonical.Envelope          `json:"blueprint"`
+	Reploy          canonical.Envelope          `json:"reploy"`
+	Platform        canonical.Envelope          `json:"platform"`
+	Catalog         canonical.Envelope          `json:"catalog"`
+	ActiveProviders ActiveProviderConstraintsV1 `json:"active_providers"`
+}
+
+// ImmutableOperationSnapshotV1 is the complete canonical operation payload.
+// A string owns its bytes, so acquisition can carry it unchanged without
+// aliasing maps supplied by the caller.
+type ImmutableOperationSnapshotV1 struct {
+	CanonicalJSON string           `json:"canonical_json"`
+	Digest        canonical.Digest `json:"digest"`
+}
+
+type ReleaseProvenanceV1 struct {
+	Tool           string           `json:"tool"`
+	Version        string           `json:"version"`
+	Revision       string           `json:"revision"`
+	ManifestDigest canonical.Digest `json:"manifest_digest"`
+}
+
+// SelectedContractProjectionV1 contains only behavior selected from a release
+// contract. Bindings is nil when no binding was selected, as required by the
+// selected-closure identity schema.
+type SelectedContractProjectionV1 struct {
+	Context    string              `json:"context"`
+	Bindings   []string            `json:"bindings"`
+	Selections map[string][]string `json:"selections"`
+	Runtime    *RecordRuntimeV1    `json:"runtime"`
+	Exports    []ToolExportV1      `json:"exports"`
+}
+
+type SelectedTargetBindingV1 struct {
+	Name        string              `json:"name"`
+	Contract    RecordReferenceV1   `json:"contract"`
+	Artifacts   []RecordReferenceV1 `json:"artifacts"`
+	PackageSets []RecordReferenceV1 `json:"package_sets"`
+	Exports     []ToolExportV1      `json:"exports"`
+}
+
+type SelectedTargetSelectionV1 struct {
+	Dimension   string              `json:"dimension"`
+	Value       string              `json:"value"`
+	Payloads    []RecordReferenceV1 `json:"payloads"`
+	PackageSets []RecordReferenceV1 `json:"package_sets"`
+	Exports     []ToolExportV1      `json:"exports"`
+}
+
+type SelectedTargetProjectionV1 struct {
+	Identity    TargetIdentityV1            `json:"identity"`
+	PackageSets []RecordReferenceV1         `json:"package_sets"`
+	Bindings    []SelectedTargetBindingV1   `json:"bindings"`
+	Payloads    []RecordReferenceV1         `json:"payloads"`
+	Selections  []SelectedTargetSelectionV1 `json:"selections"`
+	Exports     []ToolExportV1              `json:"exports"`
+}
+
+type SelectedBindingContractRecordV1 struct {
+	Reference RecordReferenceV1 `json:"reference"`
+	Record    BindingContractV1 `json:"record"`
+}
+
+type SelectedBindingArtifactRecordV1 struct {
+	Reference RecordReferenceV1       `json:"reference"`
+	Record    BindingArtifactRecordV1 `json:"record"`
+}
+
+type SelectedPayloadRecordV1 struct {
+	Reference RecordReferenceV1 `json:"reference"`
+	Record    PayloadRecordV1   `json:"record"`
+}
+
+type SelectedPackageSetRecordV1 struct {
+	Reference RecordReferenceV1  `json:"reference"`
+	Record    NativePackageSetV1 `json:"record"`
+}
+
+type SelectedClosureRecordsV1 struct {
+	BindingContracts []SelectedBindingContractRecordV1 `json:"binding_contracts"`
+	BindingArtifacts []SelectedBindingArtifactRecordV1 `json:"binding_artifacts"`
+	Payloads         []SelectedPayloadRecordV1         `json:"payloads"`
+	PackageSets      []SelectedPackageSetRecordV1      `json:"package_sets"`
+}
+
+// SelectedClosureV1 owns every selected record and every validation record it
+// returns. Validation records authorize support but remain outside Identity.
+type SelectedClosureV1 struct {
+	Scope      string                       `json:"scope"`
+	Provenance ReleaseProvenanceV1          `json:"provenance"`
+	Contract   SelectedContractProjectionV1 `json:"contract"`
+	Target     SelectedTargetProjectionV1   `json:"target"`
+	Records    SelectedClosureRecordsV1     `json:"records"`
+	Fixture    IntegrationFixtureRecordV1   `json:"fixture"`
+	Profiles   []ValidationProfileRecordV1  `json:"profiles"`
+	Identity   canonical.Digest             `json:"identity"`
+}
+
+type JointResolutionV1 struct {
+	Closures      []SelectedClosureV1          `json:"closures"`
+	Snapshot      ImmutableOperationSnapshotV1 `json:"snapshot"`
+	VisitedStates string                       `json:"visited_states"`
+}
+
+type orderedCandidateSetV1 struct {
+	group      CanonicalRequirementGroupV1
+	candidates []ReleaseCandidateV1
+	groupBytes []byte
+	domains    ProviderDomainSetV1
+}
+
+// ResolveSelectedClosuresV1 jointly solves PTD-09 candidate sets. Candidate
+// enumeration and canonical group construction deliberately remain outside
+// this method.
+func (catalog *CatalogV1) ResolveSelectedClosuresV1(sets []ReleaseCandidateSetV1,
+	domains []ProviderDomainSetV1, operation ResolutionOperationInputsV1) (JointResolutionV1, error) {
+	ordered, err := catalog.prepareCandidateSetsV1(sets, domains)
+	if err != nil {
+		return JointResolutionV1{}, err
+	}
+	if err := validateOperationInputsV1(operation, domains); err != nil {
+		return JointResolutionV1{}, err
+	}
+	chosen, visited, err := catalog.solveCandidateSetsV1(
+		ordered, operation.ActiveProviders, maxJointAssignmentStatesV1)
+	if err != nil {
+		return JointResolutionV1{}, err
+	}
+	closures := make([]SelectedClosureV1, 0, len(chosen))
+	for index, candidate := range chosen {
+		closure, err := catalog.finalizeSelectedClosureV1(ordered[index].group, candidate)
+		if err != nil {
+			return JointResolutionV1{}, fmt.Errorf("finalize %s/%s: %w",
+				ordered[index].group.Scope, ordered[index].group.Tool, err)
+		}
+		closures = append(closures, closure)
+	}
+	snapshot, err := buildOperationSnapshotV1(operation, ordered, chosen, closures)
+	if err != nil {
+		return JointResolutionV1{}, err
+	}
+	return JointResolutionV1{
+		Closures: closures, Snapshot: snapshot, VisitedStates: strconv.Itoa(visited),
+	}, nil
+}
+
+func validateOperationInputsV1(inputs ResolutionOperationInputsV1,
+	domains []ProviderDomainSetV1) error {
+	for _, item := range []struct {
+		name  string
+		value canonical.Envelope
+	}{
+		{name: "blueprint", value: inputs.Blueprint},
+		{name: "Reploy", value: inputs.Reploy},
+		{name: "platform", value: inputs.Platform},
+		{name: "catalog", value: inputs.Catalog},
+	} {
+		if item.value.Schema == "" || item.value.Value == nil {
+			return fmt.Errorf("operation %s snapshot input must be complete", item.name)
+		}
+		if _, err := canonical.Marshal(item.value); err != nil {
+			return fmt.Errorf("operation %s snapshot input: %w", item.name, err)
+		}
+	}
+	return validateActiveProviderConstraintsV1(inputs.ActiveProviders, domains)
+}
+
+func validateActiveProviderConstraintsV1(active ActiveProviderConstraintsV1,
+	domains []ProviderDomainSetV1) error {
+	if active.Schema != ActiveProviderConstraintsSchemaV1 || active.Sources == nil ||
+		len(active.Sources) > maxDefinitionReferences {
+		return fmt.Errorf("active provider constraints must use schema %q and a bounded sources array",
+			ActiveProviderConstraintsSchemaV1)
+	}
+	domainsByScope := make(map[string]struct{}, len(domains))
+	for _, item := range domains {
+		domainsByScope[item.Scope] = struct{}{}
+	}
+	previousKey := ""
+	for index, item := range active.Sources {
+		if _, exists := domainsByScope[item.Scope]; !exists {
+			return fmt.Errorf("active provider constraint source %d names unknown scope %q", index, item.Scope)
+		}
+		if !validConstraintSourcePartV1(item.Source.Kind) || !validConstraintSourcePartV1(item.Source.ID) {
+			return fmt.Errorf("active provider constraint source %d must have canonical provenance", index)
+		}
+		key := item.Scope + "\x00" + item.Source.Kind + "\x00" + item.Source.ID
+		if index > 0 && previousKey >= key {
+			return fmt.Errorf("active provider constraint sources must be unique and sorted by scope and provenance")
+		}
+		previousKey = key
+		if err := validateActiveProviderConstraintSourceV1(index, item); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validConstraintSourcePartV1(value string) bool {
+	return value != "" && strings.TrimSpace(value) == value && !containsControlV1(value)
+}
+
+func validateActiveProviderConstraintSourceV1(index int,
+	source ActiveProviderConstraintSourceV1) error {
+	prefix := fmt.Sprintf("active provider constraint source %d", index)
+	if err := validateCanonicalConstraintListV1(prefix+" native packages", source.NativePackages,
+		func(item ActiveNativePackageConstraintV1) error {
+			if item.Manager != "apt" {
+				return fmt.Errorf("unsupported native package manager %q", item.Manager)
+			}
+			if err := validateSortedUniqueStringsV1("requirements", item.Requirements, false); err != nil {
+				return err
+			}
+			if err := validateSortedUniqueStringsV1("repositories", item.Repositories, false); err != nil {
+				return err
+			}
+			if len(item.Requirements) == 0 && len(item.Repositories) == 0 {
+				return fmt.Errorf("must contribute a requirement or repository")
+			}
+			packages := make(map[string]string, len(item.Requirements))
+			for _, requirement := range item.Requirements {
+				parsed, err := blueprint.ParseAPTPackageRequest(requirement)
+				if err != nil {
+					return err
+				}
+				if previous, exists := packages[parsed.Name]; exists {
+					return fmt.Errorf("requirements %q and %q name the same package %q",
+						previous, requirement, parsed.Name)
+				}
+				packages[parsed.Name] = requirement
+			}
+			return nil
+		}); err != nil {
+		return err
+	}
+	if err := validateCanonicalConstraintListV1(prefix+" Python bindings", source.PythonBindings,
+		func(item ActivePythonBindingConstraintV1) error {
+			if !validRecordIdentifierV1(item.Name) {
+				return fmt.Errorf("binding name must be canonical")
+			}
+			if err := validateSortedUniqueStringsV1("requirements", item.Requirements, false); err != nil {
+				return err
+			}
+			if err := validateSortedUniqueStringsV1("supported Python", item.SupportedPython, false); err != nil {
+				return err
+			}
+			if len(item.Requirements) == 0 && len(item.SupportedPython) == 0 {
+				return fmt.Errorf("must contribute a requirement or interpreter constraint")
+			}
+			distributions := make(map[string]string, len(item.Requirements))
+			for _, requirement := range item.Requirements {
+				distribution, err := pythonprovider.PackageRootDistributionNameV1(requirement)
+				if err != nil {
+					return err
+				}
+				if previous, exists := distributions[distribution]; exists {
+					return fmt.Errorf("requirements %q and %q name the same distribution %q",
+						previous, requirement, distribution)
+				}
+				distributions[distribution] = requirement
+			}
+			for _, version := range item.SupportedPython {
+				if err := pythonprovider.ValidateInterpreterVersionV1(version); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+		return err
+	}
+	if err := validateSortedUniqueStringsV1(prefix+" install roots", source.InstallRoots, false); err != nil {
+		return err
+	}
+	for _, root := range source.InstallRoots {
+		if err := validateAbsoluteRecordPathV1(root); err != nil {
+			return fmt.Errorf("%s install root %q: %w", prefix, root, err)
+		}
+	}
+	validateFilesystem := func(item ActiveFilesystemConstraintV1) error {
+		if item.Path == "" || path.Clean(item.Path) != item.Path || containsControlV1(item.Path) {
+			return fmt.Errorf("path must be canonical")
+		}
+		if err := item.Digest.Validate(); err != nil {
+			return err
+		}
+		return nil
+	}
+	if err := validateCanonicalConstraintListV1(prefix+" owned paths", source.OwnedPaths,
+		validateFilesystem); err != nil {
+		return err
+	}
+	if err := validateCanonicalConstraintListV1(prefix+" artifacts", source.Artifacts,
+		validateFilesystem); err != nil {
+		return err
+	}
+	if err := validateCanonicalConstraintListV1(prefix+" environment", source.Environment,
+		func(item RecordEnvironmentVariableV1) error {
+			if !validEnvironmentNameV1(item.Name) || containsControlV1(item.Value) {
+				return fmt.Errorf("environment entry must be canonical")
+			}
+			return nil
+		}); err != nil {
+		return err
+	}
+	if err := validateExportsV1(prefix+" exports", source.Exports); err != nil {
+		return err
+	}
+	if err := validateExportsV1(prefix+" capabilities", source.Capabilities); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateCanonicalConstraintListV1[T any](field string, values []T,
+	validate func(T) error) error {
+	if values == nil || len(values) > maxDefinitionReferences {
+		return fmt.Errorf("%s must use a bounded array", field)
+	}
+	var previous []byte
+	for index, item := range values {
+		if err := validate(item); err != nil {
+			return fmt.Errorf("%s[%d]: %w", field, index, err)
+		}
+		encoded, err := canonical.Marshal(item)
+		if err != nil {
+			return fmt.Errorf("%s[%d]: %w", field, index, err)
+		}
+		if index > 0 && bytes.Compare(previous, encoded) >= 0 {
+			return fmt.Errorf("%s must contain unique canonical values in sorted order", field)
+		}
+		previous = encoded
+	}
+	return nil
+}
+
+func (catalog *CatalogV1) prepareCandidateSetsV1(sets []ReleaseCandidateSetV1,
+	domains []ProviderDomainSetV1) ([]orderedCandidateSetV1, error) {
+	if len(sets) == 0 {
+		return nil, fmt.Errorf("joint tool resolution requires at least one candidate set")
+	}
+	domainsByScope := make(map[string]ProviderDomainSetV1, len(domains))
+	for _, item := range domains {
+		if item.Scope == "" || item.PackageManager == "" || item.Filesystem == "" ||
+			item.Environment == "" || item.Exports == "" || item.Capabilities == "" {
+			return nil, fmt.Errorf("provider domains for scope %q must name every authority domain", item.Scope)
+		}
+		if _, duplicate := domainsByScope[item.Scope]; duplicate {
+			return nil, fmt.Errorf("provider domains repeat scope %q", item.Scope)
+		}
+		domainsByScope[item.Scope] = item
+	}
+	ordered := make([]orderedCandidateSetV1, 0, len(sets))
+	seenGroups := make(map[string]struct{}, len(sets))
+	for _, set := range sets {
+		if err := validateCanonicalRequirementGroupV1(set.Group); err != nil {
+			return nil, fmt.Errorf("candidate group %q/%q: %w", set.Group.Scope, set.Group.Tool, err)
+		}
+		groupKey := set.Group.Scope + "\x00" + set.Group.Tool
+		if _, duplicate := seenGroups[groupKey]; duplicate {
+			return nil, fmt.Errorf("candidate sets repeat canonical group %s/%s", set.Group.Scope, set.Group.Tool)
+		}
+		seenGroups[groupKey] = struct{}{}
+		domainSet, exists := domainsByScope[set.Group.Scope]
+		if !exists {
+			return nil, fmt.Errorf("candidate group %s/%s has no provider-domain mapping",
+				set.Group.Scope, set.Group.Tool)
+		}
+		if len(set.Candidates) == 0 {
+			return nil, fmt.Errorf("candidate group %s/%s has no surviving candidate",
+				set.Group.Scope, set.Group.Tool)
+		}
+		toolKey, exists := catalog.tools[set.Group.Tool]
+		if !exists {
+			return nil, fmt.Errorf("portable tool %q is not defined", set.Group.Tool)
+		}
+		tool, ok := catalog.records[toolKey].Value.(*ToolRecordV1)
+		if !ok {
+			return nil, fmt.Errorf("portable tool %q does not resolve to a tool record", set.Group.Tool)
+		}
+		candidates := append([]ReleaseCandidateV1{}, set.Candidates...)
+		for _, candidate := range candidates {
+			if candidate.Scope != set.Group.Scope || candidate.Manifest.Tool != set.Group.Tool {
+				return nil, fmt.Errorf("candidate %q does not belong to canonical group %s/%s",
+					candidate.Manifest.ID, set.Group.Scope, set.Group.Tool)
+			}
+		}
+		sort.SliceStable(candidates, func(left int, right int) bool {
+			versionOrder := compareToolVersionsV1(tool.VersionScheme,
+				candidates[left].Manifest.Version, candidates[right].Manifest.Version)
+			if versionOrder != 0 {
+				return versionOrder > 0
+			}
+			revisionOrder := compareCanonicalDecimalV1(
+				candidates[left].Manifest.Revision, candidates[right].Manifest.Revision)
+			if revisionOrder != 0 {
+				return revisionOrder > 0
+			}
+			return candidates[left].Manifest.ID < candidates[right].Manifest.ID
+		})
+		for index := 1; index < len(candidates); index++ {
+			if candidates[index-1].Manifest.Version == candidates[index].Manifest.Version &&
+				candidates[index-1].Manifest.Revision == candidates[index].Manifest.Revision {
+				return nil, fmt.Errorf("candidate group %s/%s repeats release coordinate %s~%s",
+					set.Group.Scope, set.Group.Tool, candidates[index].Manifest.Version,
+					candidates[index].Manifest.Revision)
+			}
+		}
+		groupBytes, err := canonical.Marshal(set.Group)
+		if err != nil {
+			return nil, fmt.Errorf("canonical candidate group %s/%s: %w", set.Group.Scope, set.Group.Tool, err)
+		}
+		ordered = append(ordered, orderedCandidateSetV1{
+			group: set.Group, candidates: candidates, groupBytes: groupBytes, domains: domainSet,
+		})
+	}
+	sort.SliceStable(ordered, func(left int, right int) bool {
+		if ordered[left].group.Scope != ordered[right].group.Scope {
+			return ordered[left].group.Scope < ordered[right].group.Scope
+		}
+		if ordered[left].group.Tool != ordered[right].group.Tool {
+			return ordered[left].group.Tool < ordered[right].group.Tool
+		}
+		return bytes.Compare(ordered[left].groupBytes, ordered[right].groupBytes) < 0
+	})
+	return ordered, nil
+}
+
+func compareCanonicalDecimalV1(left string, right string) int {
+	if len(left) != len(right) {
+		if len(left) < len(right) {
+			return -1
+		}
+		return 1
+	}
+	return strings.Compare(left, right)
+}
+
+func (catalog *CatalogV1) solveCandidateSetsV1(sets []orderedCandidateSetV1,
+	active ActiveProviderConstraintsV1, limit int) ([]ReleaseCandidateV1, int, error) {
+	if limit < 1 {
+		return nil, 0, fmt.Errorf("joint assignment state cap must be positive")
+	}
+	selected := make([]ReleaseCandidateV1, 0, len(sets))
+	visited := 0
+	lastConflict := ""
+	var search func(int) (bool, error)
+	search = func(index int) (bool, error) {
+		if index == len(sets) {
+			return true, nil
+		}
+		for _, candidate := range sets[index].candidates {
+			visited++
+			if visited > limit {
+				return false, fmt.Errorf("joint assignment visited-state cap %d exceeded before a complete assignment", limit)
+			}
+			selected = append(selected, candidate)
+			conflict, err := catalog.assignmentConflictV1(sets, selected, active)
+			if err != nil {
+				return false, err
+			}
+			if conflict == "" {
+				complete, err := search(index + 1)
+				if err != nil {
+					return false, err
+				}
+				if complete {
+					return true, nil
+				}
+			} else {
+				lastConflict = conflict
+			}
+			selected = selected[:len(selected)-1]
+		}
+		return false, nil
+	}
+	complete, err := search(0)
+	if err != nil {
+		return nil, visited, err
+	}
+	if !complete {
+		groups := make([]string, 0, len(sets))
+		for _, set := range sets {
+			groups = append(groups, set.group.Scope+"/"+set.group.Tool)
+		}
+		if lastConflict == "" {
+			lastConflict = "every candidate combination was incompatible"
+		}
+		return nil, visited, fmt.Errorf("no complete assignment for incompatible requirements %s: %s",
+			strings.Join(groups, ", "), lastConflict)
+	}
+	return append([]ReleaseCandidateV1{}, selected...), visited, nil
+}
+
+type semanticClaimV1 struct {
+	owner string
+	value string
+}
+
+type ownedPathClaimV1 struct {
+	owner string
+	path  string
+	value string
+}
+
+type bindingRequirementClaimV1 struct {
+	owners       []string
+	requirements []string
+}
+
+type pythonInterpreterClaimV1 struct {
+	owners      []string
+	constraints [][]string
+	supported   []string
+}
+
+type assignmentClaimsV1 struct {
+	semantic            map[string]semanticClaimV1
+	paths               map[string][]ownedPathClaimV1
+	installRoots        map[string][]ownedPathClaimV1
+	bindingRequirements map[string]bindingRequirementClaimV1
+	pythonInterpreters  map[string]pythonInterpreterClaimV1
+}
+
+func (catalog *CatalogV1) assignmentConflictV1(sets []orderedCandidateSetV1,
+	candidates []ReleaseCandidateV1, active ActiveProviderConstraintsV1) (string, error) {
+	claims := assignmentClaimsV1{
+		semantic: make(map[string]semanticClaimV1), paths: make(map[string][]ownedPathClaimV1),
+		installRoots:        make(map[string][]ownedPathClaimV1),
+		bindingRequirements: make(map[string]bindingRequirementClaimV1),
+		pythonInterpreters:  make(map[string]pythonInterpreterClaimV1),
+	}
+	if conflict, err := catalog.addActiveProviderClaimsV1(&claims, sets, active); err != nil {
+		return "", err
+	} else if conflict != "" {
+		return conflict, nil
+	}
+	for index, candidate := range candidates {
+		owner := constraintOwnerLabelV1(ConstraintSourceV1{
+			Kind: "tool-candidate",
+			ID: sets[index].group.Scope + "/" + sets[index].group.Tool + "@" +
+				candidate.Manifest.Version + "~" + candidate.Manifest.Revision,
+		})
+		if conflict, err := catalog.addCandidateClaimsV1(&claims, sets[index].domains, owner, candidate); err != nil {
+			return "", err
+		} else if conflict != "" {
+			return conflict, nil
+		}
+	}
+	return "", nil
+}
+
+func constraintOwnerLabelV1(source ConstraintSourceV1) string {
+	return source.Kind + " " + strconv.Quote(source.ID)
+}
+
+func activeConstraintOwnerLabelV1(source ActiveProviderConstraintSourceV1) string {
+	return constraintOwnerLabelV1(source.Source) + " in scope " + strconv.Quote(source.Scope)
+}
+
+func (catalog *CatalogV1) addActiveProviderClaimsV1(claims *assignmentClaimsV1,
+	sets []orderedCandidateSetV1, active ActiveProviderConstraintsV1) (string, error) {
+	domainsByScope := make(map[string]ProviderDomainSetV1, len(sets))
+	for _, set := range sets {
+		domainsByScope[set.domains.Scope] = set.domains
+	}
+	for _, source := range active.Sources {
+		domains, exists := domainsByScope[source.Scope]
+		if !exists {
+			return "", fmt.Errorf("active provider constraint source %s names unavailable scope %q",
+				activeConstraintOwnerLabelV1(source), source.Scope)
+		}
+		owner := activeConstraintOwnerLabelV1(source)
+		for _, packages := range source.NativePackages {
+			for _, requirement := range packages.Requirements {
+				parsed, err := blueprint.ParseAPTPackageRequest(requirement)
+				if err != nil {
+					return "", err
+				}
+				if conflict := addSemanticClaimV1(claims, "package requirement",
+					domains.PackageManager, packages.Manager+"/"+parsed.Name, requirement, owner); conflict != "" {
+					return conflict, nil
+				}
+			}
+			for _, repository := range packages.Repositories {
+				if conflict := addSemanticClaimV1(claims, "package repository requirement",
+					domains.PackageManager, packages.Manager+"/"+repository, repository, owner); conflict != "" {
+					return conflict, nil
+				}
+			}
+		}
+		for _, binding := range source.PythonBindings {
+			if len(binding.SupportedPython) != 0 {
+				if conflict := addPythonInterpreterClaimV1(claims, domains.PackageManager,
+					binding.SupportedPython, owner); conflict != "" {
+					return conflict, nil
+				}
+			}
+			for _, requirement := range binding.Requirements {
+				distribution, err := pythonprovider.PackageRootDistributionNameV1(requirement)
+				if err != nil {
+					return "", err
+				}
+				if conflict, err := addBindingRequirementClaimV1(claims,
+					domains.PackageManager, binding.Name+"/"+distribution, requirement, owner); err != nil {
+					return "", err
+				} else if conflict != "" {
+					return conflict, nil
+				}
+			}
+		}
+		for _, root := range source.InstallRoots {
+			if conflict := addInstallRootClaimV1(claims, domains.Filesystem, root, owner); conflict != "" {
+				return conflict, nil
+			}
+		}
+		for _, owned := range source.OwnedPaths {
+			if conflict := addOwnedPathClaimV1(claims, domains.Filesystem,
+				owned.Path, string(owned.Digest), owner); conflict != "" {
+				return conflict, nil
+			}
+		}
+		for _, artifact := range source.Artifacts {
+			if conflict := addSemanticClaimV1(claims, "artifact logical path", domains.Filesystem,
+				artifact.Path, string(artifact.Digest), owner); conflict != "" {
+				return conflict, nil
+			}
+		}
+		for _, variable := range source.Environment {
+			if conflict := addSemanticClaimV1(claims, "environment", domains.Environment,
+				variable.Name, variable.Value, owner); conflict != "" {
+				return conflict, nil
+			}
+		}
+		for _, exported := range source.Exports {
+			if conflict := addSemanticClaimV1(claims, "export", domains.Exports,
+				exported.Name, exported.Path, owner); conflict != "" {
+				return conflict, nil
+			}
+		}
+		for _, capability := range source.Capabilities {
+			if conflict := addSemanticClaimV1(claims, "capability", domains.Capabilities,
+				capability.Name, capability.Path, owner); conflict != "" {
+				return conflict, nil
+			}
+		}
+	}
+	return "", nil
+}
+
+func addSemanticClaimV1(claims *assignmentClaimsV1, kind string, domain string,
+	key string, value string, owner string) string {
+	claimKey := kind + "\x00" + domain + "\x00" + key
+	previous, exists := claims.semantic[claimKey]
+	if exists && previous.value != value {
+		return fmt.Sprintf("%s conflict in domain %q on %q between %s and %s",
+			kind, domain, key, previous.owner, owner)
+	}
+	if !exists {
+		claims.semantic[claimKey] = semanticClaimV1{owner: owner, value: value}
+	}
+	return ""
+}
+
+func addBindingRequirementClaimV1(claims *assignmentClaimsV1, domain string,
+	key string, requirement string, owner string) (string, error) {
+	if claims.bindingRequirements == nil {
+		claims.bindingRequirements = make(map[string]bindingRequirementClaimV1)
+	}
+	claimKey := domain + "\x00" + key
+	previous, exists := claims.bindingRequirements[claimKey]
+	if !exists {
+		claims.bindingRequirements[claimKey] = bindingRequirementClaimV1{
+			owners: []string{owner}, requirements: []string{requirement},
+		}
+		return "", nil
+	}
+	requirements := append(append([]string{}, previous.requirements...), requirement)
+	compatible, err := pythonprovider.PackageRootRequirementsCompatibleV1(requirements)
+	if err != nil {
+		return "", err
+	}
+	if !compatible {
+		return fmt.Sprintf("binding requirement conflict in domain %q on %q among %s",
+			domain, key, formatSourcedConstraintsV1(
+				append(append([]string{}, previous.owners...), owner), requirements)), nil
+	}
+	previous.requirements = requirements
+	previous.owners = append(previous.owners, owner)
+	claims.bindingRequirements[claimKey] = previous
+	return "", nil
+}
+
+func addPythonInterpreterClaimV1(claims *assignmentClaimsV1, domain string,
+	supported []string, owner string) string {
+	if claims.pythonInterpreters == nil {
+		claims.pythonInterpreters = make(map[string]pythonInterpreterClaimV1)
+	}
+	previous, exists := claims.pythonInterpreters[domain]
+	if !exists {
+		claims.pythonInterpreters[domain] = pythonInterpreterClaimV1{
+			owners: []string{owner}, constraints: [][]string{append([]string{}, supported...)},
+			supported: append([]string{}, supported...),
+		}
+		return ""
+	}
+	available := make(map[string]struct{}, len(previous.supported))
+	for _, version := range previous.supported {
+		available[version] = struct{}{}
+	}
+	intersection := make([]string, 0, len(supported))
+	for _, version := range supported {
+		if _, ok := available[version]; ok {
+			intersection = append(intersection, version)
+		}
+	}
+	if len(intersection) == 0 {
+		return fmt.Sprintf("Python interpreter conflict in domain %q among %s",
+			domain, formatSourcedStringSetsV1(
+				append(append([]string{}, previous.owners...), owner),
+				append(append([][]string{}, previous.constraints...), supported)))
+	}
+	previous.supported = intersection
+	previous.owners = append(previous.owners, owner)
+	previous.constraints = append(previous.constraints, append([]string{}, supported...))
+	claims.pythonInterpreters[domain] = previous
+	return ""
+}
+
+func formatSourcedConstraintsV1(owners []string, values []string) string {
+	parts := make([]string, 0, len(values))
+	for index, value := range values {
+		parts = append(parts, strconv.Quote(value)+" from "+owners[index])
+	}
+	return strings.Join(parts, ", ")
+}
+
+func formatSourcedStringSetsV1(owners []string, values [][]string) string {
+	parts := make([]string, 0, len(values))
+	for index, value := range values {
+		parts = append(parts, fmt.Sprintf("%q from %s", value, owners[index]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func addOwnedPathClaimV1(claims *assignmentClaimsV1, domain string, claimedPath string,
+	value string, owner string) string {
+	cleaned := path.Clean(claimedPath)
+	duplicate := false
+	for _, previous := range claims.paths[domain] {
+		if !pathsOverlapV1(previous.path, cleaned) {
+			continue
+		}
+		if previous.path == cleaned && previous.value == value {
+			duplicate = true
+			continue
+		}
+		return fmt.Sprintf("filesystem conflict in domain %q between %s path %q and %s path %q",
+			domain, previous.owner, previous.path, owner, cleaned)
+	}
+	if duplicate {
+		return ""
+	}
+	claims.paths[domain] = append(claims.paths[domain], ownedPathClaimV1{
+		owner: owner, path: cleaned, value: value,
+	})
+	return ""
+}
+
+func addInstallRootClaimV1(claims *assignmentClaimsV1, domain string,
+	claimedPath string, owner string) string {
+	if claims.installRoots == nil {
+		claims.installRoots = make(map[string][]ownedPathClaimV1)
+	}
+	cleaned := path.Clean(claimedPath)
+	for _, previous := range claims.installRoots[domain] {
+		if !pathsOverlapV1(previous.path, cleaned) {
+			continue
+		}
+		if previous.path == cleaned {
+			return ""
+		}
+		return fmt.Sprintf("filesystem conflict in domain %q between %s path %q and %s path %q",
+			domain, previous.owner, previous.path, owner, cleaned)
+	}
+	claims.installRoots[domain] = append(claims.installRoots[domain], ownedPathClaimV1{
+		owner: owner, path: cleaned, value: cleaned,
+	})
+	return ""
+}
+
+func pathsOverlapV1(left string, right string) bool {
+	if left == right {
+		return true
+	}
+	return strings.HasPrefix(left, right+"/") || strings.HasPrefix(right, left+"/")
+}
+
+func (catalog *CatalogV1) addCandidateClaimsV1(claims *assignmentClaimsV1,
+	domains ProviderDomainSetV1, owner string, candidate ReleaseCandidateV1) (string, error) {
+	if candidate.Contract.Runtime != nil {
+		if candidate.Contract.Runtime.InstallRoot != "" {
+			if conflict := addInstallRootClaimV1(claims, domains.Filesystem,
+				candidate.Contract.Runtime.InstallRoot, owner); conflict != "" {
+				return conflict, nil
+			}
+		}
+		for _, variable := range candidate.Contract.Runtime.Environment {
+			if conflict := addSemanticClaimV1(claims, "environment", domains.Environment,
+				variable.Name, variable.Value, owner); conflict != "" {
+				return conflict, nil
+			}
+		}
+	}
+	for _, exported := range candidate.Exports {
+		if conflict := addSemanticClaimV1(claims, "export", domains.Exports,
+			exported.Name, exported.Path, owner); conflict != "" {
+			return conflict, nil
+		}
+		if conflict := addSemanticClaimV1(claims, "capability", domains.Capabilities,
+			exported.Name, exported.Path, owner); conflict != "" {
+			return conflict, nil
+		}
+	}
+	for _, reference := range candidate.Contributions {
+		record, err := catalog.exactRecordV1(reference)
+		if err != nil {
+			return "", err
+		}
+		value := string(reference.Digest)
+		switch selected := record.Value.(type) {
+		case *NativePackageSetV1:
+			for _, requirement := range selected.Requirements {
+				packageName := requirement
+				if selected.Manager == "apt" {
+					parsed, err := blueprint.ParseAPTPackageRequest(requirement)
+					if err != nil {
+						return "", err
+					}
+					packageName = parsed.Name
+				}
+				if conflict := addSemanticClaimV1(claims, "package requirement",
+					domains.PackageManager, selected.Manager+"/"+packageName, requirement, owner); conflict != "" {
+					return conflict, nil
+				}
+			}
+			for _, repository := range selected.Repositories {
+				if conflict := addSemanticClaimV1(claims, "package repository requirement",
+					domains.PackageManager, selected.Manager+"/"+repository, repository, owner); conflict != "" {
+					return conflict, nil
+				}
+			}
+		case *PayloadRecordV1:
+			if conflict := addSemanticClaimV1(claims, "artifact logical path", domains.Filesystem,
+				selected.LogicalPath, value, owner); conflict != "" {
+				return conflict, nil
+			}
+			installDirectory := selected.InstallDirectory
+			if candidate.Contract.Runtime != nil && candidate.Contract.Runtime.InstallRoot != "" {
+				installDirectory = path.Join(candidate.Contract.Runtime.InstallRoot, installDirectory)
+			}
+			if conflict := addOwnedPathClaimV1(claims, domains.Filesystem,
+				installDirectory, value, owner); conflict != "" {
+				return conflict, nil
+			}
+		case *BindingArtifactRecordV1:
+			if conflict := addSemanticClaimV1(claims, "artifact logical path", domains.Filesystem,
+				selected.Filename, value, owner); conflict != "" {
+				return conflict, nil
+			}
+		case *BindingContractV1:
+			// Binding requirements are ecosystem-provider constraints. The
+			// package-manager domain is the shared provider authority available
+			// in the current record model.
+			if conflict := addPythonInterpreterClaimV1(claims, domains.PackageManager,
+				selected.SupportedPython, owner); conflict != "" {
+				return conflict, nil
+			}
+			for _, requirement := range selected.Requirements {
+				distribution, err := pythonprovider.PackageRootDistributionNameV1(requirement)
+				if err != nil {
+					return "", err
+				}
+				if conflict, err := addBindingRequirementClaimV1(claims,
+					domains.PackageManager, selected.Name+"/"+distribution, requirement, owner); err != nil {
+					return "", err
+				} else if conflict != "" {
+					return conflict, nil
+				}
+			}
+		}
+	}
+	return "", nil
+}
+
+func (catalog *CatalogV1) exactRecordV1(reference RecordReferenceV1) (loadedRecordV1, error) {
+	record, exists := catalog.records[recordKeyV1{ID: reference.ID, Digest: reference.Digest}]
+	if !exists || record.ID != reference.ID || record.Digest != reference.Digest {
+		return loadedRecordV1{}, fmt.Errorf("reference %q does not resolve to its exact record", reference.ID)
+	}
+	return record, nil
+}
+
+func (catalog *CatalogV1) finalizeSelectedClosureV1(group CanonicalRequirementGroupV1,
+	candidate ReleaseCandidateV1) (SelectedClosureV1, error) {
+	contract := SelectedContractProjectionV1{
+		Context: group.Context, Selections: cloneSelectionMapV1(candidate.Selections),
+		Runtime: cloneRuntimeV1(candidate.Contract.Runtime),
+		Exports: append([]ToolExportV1{}, candidate.Contract.Exports...),
+	}
+	if len(candidate.Bindings) != 0 {
+		contract.Bindings = append([]string{}, candidate.Bindings...)
+	}
+	if contract.Selections == nil {
+		contract.Selections = map[string][]string{}
+	}
+	target := selectedTargetProjectionV1(candidate)
+	records, err := catalog.selectedClosureRecordsV1(candidate.Contributions)
+	if err != nil {
+		return SelectedClosureV1{}, err
+	}
+	identityInput := struct {
+		Tool     string                       `json:"tool"`
+		Version  string                       `json:"version"`
+		Contract SelectedContractProjectionV1 `json:"contract"`
+		Target   SelectedTargetProjectionV1   `json:"target"`
+		Records  []RecordReferenceV1          `json:"records"`
+	}{
+		Tool: group.Tool, Version: candidate.Manifest.Version, Contract: contract,
+		Target: target, Records: canonicalReferenceUnionV1(candidate.Contributions),
+	}
+	identity, err := canonical.Sum("portable-tool-selected-closure", SelectedClosureIdentityV1, identityInput)
+	if err != nil {
+		return SelectedClosureV1{}, fmt.Errorf("selected-closure identity: %w", err)
+	}
+	manifestDigest, err := canonical.Sum("portable-tool-record", portableToolRecordIdentityV1, candidate.Manifest)
+	if err != nil {
+		return SelectedClosureV1{}, fmt.Errorf("release provenance: %w", err)
+	}
+	profiles := make([]ValidationProfileRecordV1, 0, len(candidate.Profiles))
+	for index := range candidate.Profiles {
+		profiles = append(profiles, cloneValidationProfileV1(&candidate.Profiles[index]))
+	}
+	return SelectedClosureV1{
+		Scope: group.Scope,
+		Provenance: ReleaseProvenanceV1{
+			Tool: group.Tool, Version: candidate.Manifest.Version, Revision: candidate.Manifest.Revision,
+			ManifestDigest: manifestDigest,
+		},
+		Contract: contract, Target: target, Records: records,
+		Fixture: cloneIntegrationFixtureV1(&candidate.Fixture), Profiles: profiles, Identity: identity,
+	}, nil
+}
+
+func selectedTargetProjectionV1(candidate ReleaseCandidateV1) SelectedTargetProjectionV1 {
+	result := SelectedTargetProjectionV1{
+		Identity:    candidate.Target.Target,
+		PackageSets: append([]RecordReferenceV1{}, candidate.Target.PackageSets...),
+		Bindings:    make([]SelectedTargetBindingV1, 0, len(candidate.Bindings)),
+		Payloads:    append([]RecordReferenceV1{}, candidate.Target.Payloads...),
+		Selections:  []SelectedTargetSelectionV1{},
+		Exports:     append([]ToolExportV1{}, candidate.Target.Exports...),
+	}
+	for _, name := range candidate.Bindings {
+		binding, found := targetBindingEntryV1(&candidate.Target, name)
+		if !found {
+			continue
+		}
+		result.Bindings = append(result.Bindings, SelectedTargetBindingV1{
+			Name: name, Contract: binding.Contract,
+			Artifacts:   append([]RecordReferenceV1{}, binding.Artifacts...),
+			PackageSets: append([]RecordReferenceV1{}, binding.PackageSets...),
+			Exports:     append([]ToolExportV1{}, binding.Exports...),
+		})
+	}
+	dimensions := make([]string, 0, len(candidate.Selections))
+	for dimension := range candidate.Selections {
+		dimensions = append(dimensions, dimension)
+	}
+	sort.Strings(dimensions)
+	for _, dimension := range dimensions {
+		for _, value := range candidate.Selections[dimension] {
+			for _, selected := range candidate.Target.Selections {
+				if selected.Dimension != dimension || selected.Value != value {
+					continue
+				}
+				result.Selections = append(result.Selections, SelectedTargetSelectionV1{
+					Dimension: dimension, Value: value,
+					Payloads:    append([]RecordReferenceV1{}, selected.Payloads...),
+					PackageSets: append([]RecordReferenceV1{}, selected.PackageSets...),
+					Exports:     append([]ToolExportV1{}, selected.Exports...),
+				})
+				break
+			}
+		}
+	}
+	return result
+}
+
+func (catalog *CatalogV1) selectedClosureRecordsV1(references []RecordReferenceV1) (SelectedClosureRecordsV1, error) {
+	result := SelectedClosureRecordsV1{
+		BindingContracts: []SelectedBindingContractRecordV1{},
+		BindingArtifacts: []SelectedBindingArtifactRecordV1{},
+		Payloads:         []SelectedPayloadRecordV1{}, PackageSets: []SelectedPackageSetRecordV1{},
+	}
+	for _, reference := range canonicalReferenceUnionV1(references) {
+		record, err := catalog.exactRecordV1(reference)
+		if err != nil {
+			return SelectedClosureRecordsV1{}, err
+		}
+		switch value := record.Value.(type) {
+		case *BindingContractV1:
+			result.BindingContracts = append(result.BindingContracts, SelectedBindingContractRecordV1{
+				Reference: reference, Record: cloneBindingContractV1(value),
+			})
+		case *BindingArtifactRecordV1:
+			result.BindingArtifacts = append(result.BindingArtifacts, SelectedBindingArtifactRecordV1{
+				Reference: reference, Record: cloneBindingArtifactV1(value),
+			})
+		case *PayloadRecordV1:
+			result.Payloads = append(result.Payloads, SelectedPayloadRecordV1{
+				Reference: reference, Record: clonePayloadRecordV1(value),
+			})
+		case *NativePackageSetV1:
+			result.PackageSets = append(result.PackageSets, SelectedPackageSetRecordV1{
+				Reference: reference, Record: cloneNativePackageSetV1(value),
+			})
+		default:
+			return SelectedClosureRecordsV1{}, fmt.Errorf("selected contribution %q has unsupported record type %T",
+				reference.ID, record.Value)
+		}
+	}
+	return result, nil
+}
+
+func buildOperationSnapshotV1(inputs ResolutionOperationInputsV1, sets []orderedCandidateSetV1,
+	candidates []ReleaseCandidateV1, closures []SelectedClosureV1) (ImmutableOperationSnapshotV1, error) {
+	type selectedConstraintsV1 struct {
+		Group      CanonicalRequirementGroupV1  `json:"group"`
+		Domains    ProviderDomainSetV1          `json:"domains"`
+		Provenance ReleaseProvenanceV1          `json:"provenance"`
+		Contract   SelectedContractProjectionV1 `json:"contract"`
+		Target     SelectedTargetProjectionV1   `json:"target"`
+		Records    SelectedClosureRecordsV1     `json:"records"`
+		Fixture    IntegrationFixtureRecordV1   `json:"fixture"`
+		Profiles   []ValidationProfileRecordV1  `json:"profiles"`
+	}
+	selected := make([]selectedConstraintsV1, 0, len(candidates))
+	for index := range candidates {
+		profiles := make([]ValidationProfileRecordV1, 0, len(closures[index].Profiles))
+		for profileIndex := range closures[index].Profiles {
+			profiles = append(profiles, cloneValidationProfileV1(&closures[index].Profiles[profileIndex]))
+		}
+		selected = append(selected, selectedConstraintsV1{
+			Group: sets[index].group, Domains: sets[index].domains, Provenance: closures[index].Provenance,
+			Contract: closures[index].Contract, Target: closures[index].Target,
+			Records: closures[index].Records, Fixture: cloneIntegrationFixtureV1(&closures[index].Fixture),
+			Profiles: profiles,
+		})
+	}
+	payload := struct {
+		Inputs      ResolutionOperationInputsV1 `json:"inputs"`
+		Constraints []selectedConstraintsV1     `json:"constraints"`
+	}{Inputs: inputs, Constraints: selected}
+	encoded, err := canonical.Marshal(payload)
+	if err != nil {
+		return ImmutableOperationSnapshotV1{}, fmt.Errorf("operation snapshot: %w", err)
+	}
+	digest, err := canonical.Sum("portable-tool-operation-snapshot", operationSnapshotIdentityV1, payload)
+	if err != nil {
+		return ImmutableOperationSnapshotV1{}, fmt.Errorf("operation snapshot identity: %w", err)
+	}
+	return ImmutableOperationSnapshotV1{CanonicalJSON: string(encoded), Digest: digest}, nil
+}
