@@ -3,17 +3,17 @@ artifact: swe-design-review-attestation
 schema_version: 2
 scope_key: 4288e5336b3329ba610c14ee8eee2615dff4b85f8037754801b69b02d8cd4547
 scope: {"kind": "path", "primary_target": "docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md", "repository": "/home/omry/dev/reploy", "selector": "docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md"}
-review_content_identity_sha256: 1b06aea7da8f39586c34c38e8c04b100adca25fc23517b7bc293438e198b223e
-target_content_identity_sha256: 4ff3f205d34e1899c266025cb1caae47db2521f8bf02e226a36e88446d95e9e1
-baseline_content_identity_sha256: dd3801d3a138679925bcf2c96da233f7bd94b340ad293c58f7b088294b071d61
-target_documents: [{"path": "docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md", "repository": "/home/omry/dev/reploy", "sha256": "c60e0dfc109214d84f9b4424258c4b54faea3137d5807114870f05da9dccf292"}]
-baseline_documents: [{"path": "docs/PORTABLE_TOOL_DEFINITION_DESIGN.md", "repository": "/home/omry/dev/reploy", "sha256": "cc5a7ac158d0bfa72609c991262ae5be9911b3369b39f127b4281ad400a719f1"}]
+review_content_identity_sha256: 7110334915a34c30dfda75a38ede87759e2faf50a22e39deef907b43b8d2cf86
+target_content_identity_sha256: d26c57b3a83ccc7b933fda1c8c3f53bbeed488477f16c224146673d17ad18f3d
+baseline_content_identity_sha256: d5fdcc919e1919e5563b2b3f4203c84b71d56617ef438f9607684892ce2371b7
+target_documents: [{"path": "docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md", "repository": "/home/omry/dev/reploy", "sha256": "04532f9798025ef07ed8742d1318a8b18f10da6ef73454b5b029db26aebc807d"}]
+baseline_documents: [{"path": "docs/PORTABLE_TOOL_DEFINITION_DESIGN.md", "repository": "/home/omry/dev/reploy", "sha256": "9f5a0ff43539d4b50b39949a1783e2238473217529685fa665b319819bd472a6"}]
 document_repository: "/home/omry/dev/reploy"
 document_path: "docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md"
-document_revision_provenance: "b5c85d51139babe14df1ab258be65530c8020dd0"
-document_sha256: c60e0dfc109214d84f9b4424258c4b54faea3137d5807114870f05da9dccf292
+document_revision_provenance: "2a9745c91aad28b570b50715481baefbf40b5c75"
+document_sha256: 04532f9798025ef07ed8742d1318a8b18f10da6ef73454b5b029db26aebc807d
 verdict: clean
-attested_at: 2026-08-22T16:09:18Z
+attested_at: 2026-08-25T21:21:16Z
 ---
 <!-- swe-design-review-attestation:v2 -->
 
