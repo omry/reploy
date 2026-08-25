@@ -1,0 +1,2 @@
+kind: Added
+body: Add strict localized YAML imports and conflict-only extension for first-party portable tool catalog authoring, with exact source manifests.
