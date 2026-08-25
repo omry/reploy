@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-22
+updated: 2026-08-26
 summary: Active composition, targeting, acquisition, identity, and validation model for proposed embedded portable-tool definitions.
 refines: docs/REPOSITORY_DESIGN.md
 ---
@@ -46,6 +46,8 @@ compatibility reader for that format.
 - Model a tool version independently from an operating-system release.
 - Express support for an exact OS generation and architecture without copying
   the complete tool definition into every target file.
+- Keep large version families maintainable without copying invariant authoring
+  fields into every version file.
 - Allow native packages, pinned upstream artifacts, and ecosystem bindings to
   participate in one explicitly composed tool.
 - Make unsupported OS, architecture, binding, and selection combinations fail
@@ -64,8 +66,8 @@ compatibility reader for that format.
 - Normalizing literal package names across distributions.
 - Claiming architecture support merely because Reploy can build that OCI
   architecture.
-- General-purpose inheritance, templating, or conditional expressions inside
-  definition files.
+- General-purpose or runtime inheritance, templating, conditional expressions,
+  or value overrides inside definition files.
 - Designing every future tool category before the initial Java, Playwright, and
   asciinema definitions are complete.
 
@@ -82,8 +84,11 @@ compatibility reader for that format.
 4. Tool-wide, release-wide, binding, payload, and reusable native-package data
    live in separate records. Target leaves compose them through explicit,
    digest-checked references.
-5. Composition is a closed graph. There is no implicit inheritance, overlay,
-   package fallback, or closest-version matching.
+5. Canonical composition is a closed graph. There is no implicit inheritance,
+   overlay, package fallback, or closest-version matching. Before canonical
+   composition, the first-party authoring loader may resolve the bounded,
+   authoring-only imports and localized single-parent extension defined below;
+   neither construct survives into a catalog record.
 6. Tools may mix acquisition strategies. Prefer pinned upstream artifacts for
    portable versioned payloads and native packages for system libraries or
    distribution-coupled tools.
@@ -106,6 +111,11 @@ compatibility reader for that format.
     item; the Canonical Encoding and Structural Limits section records why, and
     names repository publication as the trigger that would make an aggregate
     ceiling answerable.
+12. Authoring files may share invariant fields through explicit local imports
+    and one typed `extends` edge. Resolution is deterministic and conflict-only:
+    a child may add an absent field but cannot replace or merge a field already
+    supplied by its parent. Fully resolved records remain explicit, strict, and
+    independently digest checked.
 
 ## Terminology
 
@@ -313,7 +323,7 @@ selected closure's canonical union deduplicates identical contribution
 references; validation-profile references remain outside closure identity.
 References are typed, acyclic, and intra-tool. This does not introduce a
 generic component record, general cross-tool dependencies, or configuration
-inheritance.
+inheritance in the canonical graph.
 
 A binding request resolves to a set:
 
@@ -475,6 +485,122 @@ evidence remains external to definition identity as described below, avoiding
 a cycle in which validating a definition changes the definition being
 validated.
 
+## Authoring Imports and Localized Extension
+
+The embedded catalog has a first-party authoring layer before canonical record
+composition. It exists to share invariant typed fields across target and
+version families without making inheritance part of the catalog, resolver, or
+runtime contract. This is the same localized pattern used by blueprint
+environment/backend `extends`: references are explicit, the extension is
+kind-restricted, and conflicting ownership fails instead of applying an
+override.
+
+Each authoring source is one UTF-8, single-document YAML file containing a typed
+record fragment with exactly `kind`, optional `imports`, optional `extends`, and
+`fields`. Its data model is the JSON-compatible subset of YAML: mappings have
+unique string keys; sequences and JSON null, boolean, number, and string scalars
+are accepted; explicit tags, anchors, aliases, merge keys, non-string mapping
+keys, timestamps, binary values, non-finite numbers, and other YAML-specific
+scalar forms are rejected. The source byte limit is enforced before parsing,
+and the structural field, member, scalar, and depth limits are enforced while
+constructing this node model.
+
+`kind` is a nonempty string naming the canonical record schema the resolved
+fragment must produce. `fields` is a mapping of canonical record fields other
+than `schema`; the loader inserts `kind` as that field after extension.
+`extends`, when present, is one import-alias string. `imports` is a mapping whose
+optional reserved `root` member is a nonempty string and whose only other member
+is the alias named by `extends`; that member is exactly a mapping containing one
+nonempty string `path`. `imports` without `extends`, an `extends` without its one
+matching import, and any unused or additional import alias are invalid.
+
+The generator receives an explicit ordered-independent set of entry
+descriptors. Each descriptor pairs one authoring source file with its exact
+intended catalog-relative `.json` output path. Duplicate source entries and
+duplicate output paths are invalid, and output paths pass the existing PTD-11
+catalog-path validation unchanged. An entry may extend exactly one imported
+fragment of the same `kind`. Imported files may themselves import and extend,
+but have no output path and are not emitted merely because they were imported.
+An imported file is emitted only when it also has its own explicit entry
+descriptor and resolves to a complete valid record.
+
+For example, given this source tree:
+
+```text
+java/
+  common.yaml
+  versions/
+    21.yaml
+    shared/
+      temurin.yaml
+```
+
+`java/versions/21.yaml` may declare:
+
+```yaml
+kind: portable-tool-release-contract-v1
+imports:
+  root: ../
+  common:
+    path: /common.yaml
+extends: common
+fields:
+  # Version-specific fields omitted.
+```
+
+`imports.root` is an authoring path anchor, not a general variable. It is
+one nonempty file-relative directory path, resolved once relative to the entry
+file. It cannot begin with `/`. Imported files inherit that exact root and
+cannot redeclare it. A path beginning with `/` is relative to the declared
+logical root, never the host filesystem root. Every other path is relative to
+the file containing that import, so an import from `versions/21.yaml` with path
+`shared/temurin.yaml` resolves to `versions/shared/temurin.yaml`; `./` is
+unnecessary and has no special role. Using a root-relative path requires
+`imports.root`.
+
+The generator is given one trusted source-tree boundary for the tool. Paths use
+`/` separators; backslashes, empty segments, and platform-specific volume or
+drive prefixes are invalid. The boundary, resolved root, entry files, imported
+files, and every traversed directory must be non-symlink regular files or
+directories as appropriate. The resolved root and every source must remain
+within the trusted boundary after lexical normalization. Root-relative paths
+cannot contain `.` or `..` segments. Absolute filesystem paths, URL imports,
+imports from another tool, and paths that escape either the resolved root or
+trusted tool boundary are invalid. Import aliases are local to one file, unique,
+and match `[a-z][a-z0-9_]{0,63}`; `root` is reserved. Normalized paths relative
+to the trusted boundary, rather than lexical aliases, identify files for cycle,
+entry-duplicate, and collision detection. The same normalized source may be the
+parent of multiple entry closures; it is read, parsed, and represented in the
+source manifest once, while cycle detection is evaluated independently along
+each entry's parent chain.
+
+Extension copies the fully resolved parent fragment and adds child fields. It
+does not perform scalar replacement, list concatenation, map overlay, deletion,
+or interpolation. A field present in both parent and child is an error,
+including a structured field: authors split independently reusable behavior
+into an existing typed record instead of partially merging that field. The
+resolved entry must decode as one complete ordinary record and pass all current
+record-local and graph validation. `imports`, `root`, import aliases, source
+paths, and `extends` are authoring metadata and are absent from canonical bytes,
+record identity, selected-closure identity, and runtime state.
+
+Import and extension resolution follows only entry and `extends` parent edges
+and is bounded by non-raiseable core limits on files, total source bytes, depth,
+aliases, and resolved fields. Missing files, kind mismatches, cycles, ambiguous
+or unused aliases, conflicting fields, incomplete resolved entries, and any
+limit violation fail before canonical composition. Diagnostics identify the
+entry, complete import and extension chain, and conflicting source locations.
+
+Each source is opened and read once. The loader hashes those exact raw bytes and
+parses the same in-memory bytes, so generation observes one source snapshot per
+file. Generation records the reachable transitive authoring closure as a
+manifest sorted by normalized `/`-separated source path relative to the trusted
+tool boundary, with the SHA-256 of each source's exact raw bytes. That manifest
+is build and review evidence, not catalog data, and cannot change canonical
+output when the fully resolved record bytes are unchanged. The existing
+composer receives only cloned, fully-resolved typed records at the explicit
+entry output paths and remains the sole canonical-byte writer.
+
 ## Catalog Layout
 
 The filesystem layout follows semantic ownership rather than placing every
@@ -554,13 +680,14 @@ internal/toolcatalog/definitions/
                 default.json
 ```
 
-The tree is organizational, not an inheritance mechanism. Every semantic edge
-is an explicit record reference. A record is looked up and persisted by the
-`(id, digest)` pair carried by that reference; relative filesystem ancestry does
-not determine identity. The catalog may retain multiple canonical records with
-the same semantic ID and different digests when different immutable release
-revisions reference them. One exact pair must resolve to exactly one canonical
-record.
+The emitted catalog tree is organizational, not an inheritance mechanism.
+Authoring imports and extension are resolved before this tree is written. Every
+semantic edge in the emitted tree is an explicit record reference. A record is
+looked up and persisted by the `(id, digest)` pair carried by that reference;
+relative filesystem ancestry does not determine identity. The catalog may
+retain multiple canonical records with the same semantic ID and different
+digests when different immutable release revisions reference them. One exact
+pair must resolve to exactly one canonical record.
 
 Architecture remains visible in target and artifact filenames because those
 records make architecture-specific claims. It disappears from files whose
@@ -586,8 +713,9 @@ single oversized definition and complete per-target duplication.
    record ID in one resolved release graph, and incompatible exact package
    requirements are errors. The same record ID at different digests may coexist
    in the catalog only when separate immutable release revisions select them.
-6. There are no overlays. A child cannot add to, delete from, or override a
-   parent because there are no semantic parents.
+6. There are no canonical or runtime overlays. Canonical records have no
+   semantic parents. The authoring-only extension above is resolved away before
+   these rules apply and cannot replace, delete, or merge a parent field.
 7. There is no implicit fallback between OS versions, architectures, package
    managers, bindings, payload variants, or acquisition strategies.
 8. Reusable records are allowed only when their complete semantics are truly
@@ -602,8 +730,8 @@ single oversized definition and complete per-target duplication.
     values and exports deduplicate; conflicting values or destinations fail
     before acquisition.
 
-These rules make repetition an explicit authoring tradeoff without making the
-resolved result depend on merge order.
+These rules, together with conflict-only authoring extension, reduce repetition
+without making canonical output depend on merge order.
 
 Mirror failover is not semantic fallback under rule 7. Every mirror in one
 source record is authorized only to supply the same size- and checksum-identified
