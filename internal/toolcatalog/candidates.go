@@ -31,7 +31,7 @@ type CanonicalBindingDemandV1 struct {
 
 // CanonicalRequirementGroupV1 is the merged request for one qualified tool in
 // one resolution scope. Public request parsing and same-scope merging belong to
-// PTD-15; PTD-09 consumes their canonical result through this internal API.
+// PTD-16; PTD-09 consumes their canonical result through this internal API.
 type CanonicalRequirementGroupV1 struct {
 	Scope              string
 	Tool               string
