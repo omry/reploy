@@ -1,0 +1,2 @@
+kind: Added
+body: Compose typed portable-tool definitions into deterministic, digest-checked canonical catalog records before embedding.
