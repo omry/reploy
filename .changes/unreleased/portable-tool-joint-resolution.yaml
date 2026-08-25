@@ -1,0 +1,2 @@
+kind: Added
+body: Resolve portable-tool candidate groups with bounded deterministic backtracking, domain-aware conflict checks, canonical selected-closure identities, and immutable operation snapshots.
