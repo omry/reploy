@@ -56,31 +56,8 @@ func decodeRecordV1(filename string, payload []byte) (loadedRecordV1, error) {
 	if header.ID == "" {
 		return loadedRecordV1{}, fmt.Errorf("decode %s: record ID is required", filename)
 	}
-	var value any
-	switch header.Schema {
-	case ToolRecordSchemaV1:
-		value = &ToolRecordV1{}
-	case ReleaseManifestSchemaV1:
-		value = &ReleaseManifestV1{}
-	case ReleaseContractSchemaV1:
-		value = &ReleaseContractV1{}
-	case TargetRecordSchemaV1:
-		value = &TargetRecordV1{}
-	case BindingContractSchemaV1:
-		value = &BindingContractV1{}
-	case BindingArtifactSchemaV1:
-		value = &BindingArtifactRecordV1{}
-	case PayloadRecordSchemaV1:
-		value = &PayloadRecordV1{}
-	case ArtifactSourceRecordSchemaV1:
-		value = &ArtifactSourceRecordV1{}
-	case NativePackageSetSchemaV1:
-		value = &NativePackageSetV1{}
-	case IntegrationFixtureSchemaV1:
-		value = &IntegrationFixtureRecordV1{}
-	case ValidationProfileSchemaV1:
-		value = &ValidationProfileRecordV1{}
-	default:
+	value, supported := newPortableToolRecordValueV1(header.Schema)
+	if !supported {
 		return loadedRecordV1{}, fmt.Errorf("decode %s: unsupported schema %q", filename, header.Schema)
 	}
 	if err := decodeExactJSONV1(payload, value); err != nil {
@@ -96,6 +73,35 @@ func decodeRecordV1(filename string, payload []byte) (loadedRecordV1, error) {
 	}
 	record.Digest = digest
 	return record, nil
+}
+
+func newPortableToolRecordValueV1(schema string) (PortableToolRecordV1, bool) {
+	switch schema {
+	case ToolRecordSchemaV1:
+		return &ToolRecordV1{}, true
+	case ReleaseManifestSchemaV1:
+		return &ReleaseManifestV1{}, true
+	case ReleaseContractSchemaV1:
+		return &ReleaseContractV1{}, true
+	case TargetRecordSchemaV1:
+		return &TargetRecordV1{}, true
+	case BindingContractSchemaV1:
+		return &BindingContractV1{}, true
+	case BindingArtifactSchemaV1:
+		return &BindingArtifactRecordV1{}, true
+	case PayloadRecordSchemaV1:
+		return &PayloadRecordV1{}, true
+	case ArtifactSourceRecordSchemaV1:
+		return &ArtifactSourceRecordV1{}, true
+	case NativePackageSetSchemaV1:
+		return &NativePackageSetV1{}, true
+	case IntegrationFixtureSchemaV1:
+		return &IntegrationFixtureRecordV1{}, true
+	case ValidationProfileSchemaV1:
+		return &ValidationProfileRecordV1{}, true
+	default:
+		return nil, false
+	}
 }
 
 func decodeValidationEvidenceV1(filename string, payload []byte) (ValidationEvidenceV1, error) {
