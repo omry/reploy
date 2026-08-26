@@ -1,0 +1,2 @@
+kind: Added
+body: Embed the canonical Eclipse Temurin JDK 21 portable-tool definition for the validated AMD64 build matrix.

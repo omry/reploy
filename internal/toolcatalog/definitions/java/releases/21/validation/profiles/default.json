@@ -1,0 +1,1 @@
+{"id":"tool:java/releases/21/validation/profiles/default","probes":[{"args":["-version"],"path":"/opt/reploy/tools/java/jdk-21.0.12+8/bin/java"}],"schema":"portable-tool-validation-profile-v1","tool":"java","version":"21"}

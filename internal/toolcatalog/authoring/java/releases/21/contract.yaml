@@ -1,0 +1,17 @@
+kind: portable-tool-release-contract-v1
+fields:
+  id: tool:java/releases/21/contract
+  contexts: [build]
+  supported_reploy: ">=0.0.0"
+  binding:
+    options: []
+  selections:
+    dimensions: []
+    combinations: []
+  exports:
+    - name: java
+      path: /opt/reploy/tools/java/jdk-21.0.12+8/bin/java
+    - name: javac
+      path: /opt/reploy/tools/java/jdk-21.0.12+8/bin/javac
+  resolver_primitives: [https-sha256]
+  compatibility_constraints: [portable-archive-v1]
