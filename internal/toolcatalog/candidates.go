@@ -9,6 +9,7 @@ import (
 
 	pep440 "github.com/aquasecurity/go-pep440-version"
 	"github.com/aquasecurity/go-version/pkg/semver"
+	"github.com/omry/reploy/internal/toolrequest"
 )
 
 // Candidate selection for portable tool requests.
@@ -19,28 +20,11 @@ import (
 // that separate requirements do not conflict in a shared provider domain is
 // joint solving, which belongs to PTD-10.
 
-// CanonicalBindingDemandV1 preserves the cumulative binding demand retained
-// by same-scope request merging. Inference and explicit bindings are
-// independent because an omitted request merged with an explicit request must
-// retain both demands. All dominates both and is canonical only by itself.
-type CanonicalBindingDemandV1 struct {
-	All      bool
-	Infer    bool
-	Explicit []string
-}
-
-// CanonicalRequirementGroupV1 is the merged request for one qualified tool in
-// one resolution scope. Public request parsing and same-scope merging belong to
-// PTD-16; PTD-09 consumes their canonical result through this internal API.
-type CanonicalRequirementGroupV1 struct {
-	Scope              string
-	Tool               string
-	VersionConstraints []string
-	DefinitionRevision string
-	Context            string
-	Binding            CanonicalBindingDemandV1
-	Selections         map[string][]string
-}
+// CanonicalBindingDemandV1 and CanonicalRequirementGroupV1 remain exported
+// from toolcatalog for solver callers while their catalog-independent parser
+// representation lives in internal/toolrequest.
+type CanonicalBindingDemandV1 = toolrequest.CanonicalBindingDemandV1
+type CanonicalRequirementGroupV1 = toolrequest.CanonicalRequirementGroupV1
 
 // ClientCapabilitiesV1 describes the running client a candidate must satisfy.
 type ClientCapabilitiesV1 struct {
