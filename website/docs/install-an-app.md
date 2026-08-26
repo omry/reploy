@@ -26,7 +26,7 @@ the app is still being developed.
   <TabItem value="linux">
 
 ```bash
-curl -fsSL https://reploy.yadan.net/install.sh | sh
+curl -fsSL https://reploy.cli.dev/install.sh | sh
 ```
 
 The installer places `reploy` in `$HOME/.local/bin/reploy` by default and
@@ -36,13 +36,13 @@ prints a PATH hint when needed.
   <TabItem value="windows">
 
 ```powershell
-irm https://reploy.yadan.net/install.ps1 | iex
+irm https://reploy.cli.dev/install.ps1 | iex
 ```
 
 From `cmd.exe`, invoke PowerShell explicitly:
 
 ```batch
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://reploy.yadan.net/install.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://reploy.cli.dev/install.ps1 | iex"
 ```
 
 The installer places `reploy.exe` in
@@ -53,7 +53,7 @@ hint when needed.
   <TabItem value="macos">
 
 ```bash
-curl -fsSL https://reploy.yadan.net/install.sh | sh
+curl -fsSL https://reploy.cli.dev/install.sh | sh
 ```
 
 The installer places `reploy` in `$HOME/.local/bin/reploy` by default and

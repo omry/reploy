@@ -3,7 +3,7 @@
 [![CI](https://github.com/omry/reploy/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/omry/reploy/actions/workflows/ci.yml)
 [![Go version](https://img.shields.io/github/go-mod/go-version/omry/reploy)](go.mod)
 [![Release](https://img.shields.io/github/v/release/omry/reploy?include_prereleases)](https://github.com/omry/reploy/releases)
-[![Docs](https://img.shields.io/badge/docs-reploy.yadan.net-blue)](https://reploy.yadan.net/)
+[![Docs](https://img.shields.io/badge/docs-reploy.cli.dev-blue)](https://reploy.cli.dev/)
 [![License](https://img.shields.io/github/license/omry/reploy)](LICENSE)
 
 Reploy is an experimental deployment lifecycle tool for services.
@@ -23,22 +23,22 @@ supported runtime.
 Install the latest release binary:
 
 ```bash
-curl -fsSL https://reploy.yadan.net/install.sh | sh
+curl -fsSL https://reploy.cli.dev/install.sh | sh
 ```
 
 On Windows, use the PowerShell installer:
 
 ```powershell
-irm https://reploy.yadan.net/install.ps1 | iex
+irm https://reploy.cli.dev/install.ps1 | iex
 ```
 
 From `cmd.exe`, invoke PowerShell explicitly:
 
 ```batch
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://reploy.yadan.net/install.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://reploy.cli.dev/install.ps1 | iex"
 ```
 
-See the [installation docs](https://reploy.yadan.net/docs/install-reploy) for
+See the [installation docs](https://reploy.cli.dev/docs/install-reploy) for
 script options and other installation methods.
 
 ## Quickstart
@@ -75,12 +75,12 @@ reploy install --scope user --to "$PWD/omegaconf-inspector-installed"
 ./omegaconf-inspector-installed/appctl logs --tail=100
 ```
 
-Read the [app installation guide](https://reploy.yadan.net/docs/install-an-app)
+Read the [app installation guide](https://reploy.cli.dev/docs/install-an-app)
 for the full staging and install workflow.
 
 ## Documentation
 
-Read the [Reploy documentation](https://reploy.yadan.net/docs/intro) for the
+Read the [Reploy documentation](https://reploy.cli.dev/docs/intro) for the
 full guide.
 
 Maintainer setup is documented in [`docs/MAINTAINING.md`](docs/MAINTAINING.md).

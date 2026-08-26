@@ -14,7 +14,7 @@ user-owned bin directory.
   <TabItem value="linux">
 
 ```bash
-curl -fsSL https://reploy.yadan.net/install.sh | sh
+curl -fsSL https://reploy.cli.dev/install.sh | sh
 ```
 
 By default this installs to:
@@ -27,13 +27,13 @@ $HOME/.local/bin/reploy
   <TabItem value="windows">
 
 ```powershell
-irm https://reploy.yadan.net/install.ps1 | iex
+irm https://reploy.cli.dev/install.ps1 | iex
 ```
 
 From `cmd.exe`, invoke PowerShell explicitly:
 
 ```batch
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://reploy.yadan.net/install.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://reploy.cli.dev/install.ps1 | iex"
 ```
 
 By default this installs to:
@@ -46,7 +46,7 @@ By default this installs to:
   <TabItem value="macos">
 
 ```bash
-curl -fsSL https://reploy.yadan.net/install.sh | sh
+curl -fsSL https://reploy.cli.dev/install.sh | sh
 ```
 
 By default this installs to:
@@ -126,10 +126,10 @@ asset.
 ## Example
 
 ```bash
-curl -fsSL https://reploy.yadan.net/install.sh | sh -s -- --to "$HOME/bin" --version 0.2.0.dev1
+curl -fsSL https://reploy.cli.dev/install.sh | sh -s -- --to "$HOME/bin" --version 0.2.0.dev1
 ```
 
 ```powershell
-irm https://reploy.yadan.net/install.ps1 | iex
+irm https://reploy.cli.dev/install.ps1 | iex
 & "$env:LOCALAPPDATA\Programs\Reploy\bin\reploy.exe" --version
 ```
