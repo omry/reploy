@@ -1,0 +1,13 @@
+kind: portable-tool-v1
+fields:
+  id: tool:java
+  name: java
+  version_scheme: integer
+  summary: Eclipse Temurin Java Development Kit
+  upstream: https://adoptium.net/temurin/releases/
+  source: https://github.com/adoptium/temurin21-binaries
+  license: https://openjdk.org/legal/gplv2+ce.html
+  documentation: https://adoptium.net/installation/
+  releases:
+    - id: tool:java/releases/21/revisions/1/manifest
+      digest: ""

@@ -1,0 +1,16 @@
+[
+  {"SourcePath":"java/tool.yaml","OutputPath":"java/tool.json"},
+  {"SourcePath":"java/releases/21/contract.yaml","OutputPath":"java/releases/21/contract.json"},
+  {"SourcePath":"java/releases/21/payloads/jdk-linux-amd64.yaml","OutputPath":"java/releases/21/payloads/jdk-linux-amd64.json"},
+  {"SourcePath":"java/releases/21/revisions/1/manifest.yaml","OutputPath":"java/releases/21/revisions/1/manifest.json"},
+  {"SourcePath":"java/releases/21/revisions/1/sources/jdk-linux-amd64.yaml","OutputPath":"java/releases/21/revisions/1/sources/jdk-linux-amd64.json"},
+  {"SourcePath":"java/releases/21/targets/debian/12/amd64.yaml","OutputPath":"java/releases/21/targets/debian/12/amd64.json"},
+  {"SourcePath":"java/releases/21/targets/debian/13/amd64.yaml","OutputPath":"java/releases/21/targets/debian/13/amd64.json"},
+  {"SourcePath":"java/releases/21/targets/ubuntu/25.10/amd64.yaml","OutputPath":"java/releases/21/targets/ubuntu/25.10/amd64.json"},
+  {"SourcePath":"java/releases/21/targets/ubuntu/26.04/amd64.yaml","OutputPath":"java/releases/21/targets/ubuntu/26.04/amd64.json"},
+  {"SourcePath":"java/releases/21/validation/fixtures/debian-12-amd64.yaml","OutputPath":"java/releases/21/validation/fixtures/debian-12-amd64.json"},
+  {"SourcePath":"java/releases/21/validation/fixtures/debian-13-amd64.yaml","OutputPath":"java/releases/21/validation/fixtures/debian-13-amd64.json"},
+  {"SourcePath":"java/releases/21/validation/fixtures/ubuntu-25.10-amd64.yaml","OutputPath":"java/releases/21/validation/fixtures/ubuntu-25.10-amd64.json"},
+  {"SourcePath":"java/releases/21/validation/fixtures/ubuntu-26.04-amd64.yaml","OutputPath":"java/releases/21/validation/fixtures/ubuntu-26.04-amd64.json"},
+  {"SourcePath":"java/releases/21/validation/profiles/default.yaml","OutputPath":"java/releases/21/validation/profiles/default.json"}
+]

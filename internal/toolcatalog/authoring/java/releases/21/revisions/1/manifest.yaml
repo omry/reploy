@@ -1,0 +1,21 @@
+kind: portable-tool-release-manifest-v1
+fields:
+  id: tool:java/releases/21/revisions/1/manifest
+  tool: java
+  version: "21"
+  aliases: []
+  revision: "1"
+  contract: {id: tool:java/releases/21/contract, digest: ""}
+  targets:
+    - {id: tool:java/releases/21/targets/debian/12/amd64, digest: ""}
+    - {id: tool:java/releases/21/targets/debian/13/amd64, digest: ""}
+    - {id: tool:java/releases/21/targets/ubuntu/25.10/amd64, digest: ""}
+    - {id: tool:java/releases/21/targets/ubuntu/26.04/amd64, digest: ""}
+  artifact_sources:
+    - artifact_sha256: sha256:e4446ff06a276155697597cc0f1b15da004ff083f4964a35271ecee567177370
+      artifact: {id: tool:java/releases/21/payloads/jdk-linux-amd64, digest: ""}
+      source: {id: tool:java/releases/21/revisions/1/sources/jdk-linux-amd64, digest: ""}
+  provenance:
+    - https://github.com/adoptium/temurin21-binaries/releases/tag/jdk-21.0.12%2B8
+  validation_profiles:
+    - {id: tool:java/releases/21/validation/profiles/default, digest: ""}
