@@ -1,0 +1,30 @@
+kind: portable-tool-release-manifest-v1
+fields:
+  id: tool:playwright/releases/1.61.0/revisions/1/manifest
+  tool: playwright
+  version: 1.61.0
+  aliases: []
+  revision: "1"
+  contract: {id: tool:playwright/releases/1.61.0/contract, digest: ""}
+  targets:
+    - {id: tool:playwright/releases/1.61.0/targets/debian/12/amd64, digest: ""}
+    - {id: tool:playwright/releases/1.61.0/targets/ubuntu/25.10/amd64, digest: ""}
+    - {id: tool:playwright/releases/1.61.0/targets/ubuntu/26.04/amd64, digest: ""}
+  artifact_sources:
+    - artifact_sha256: sha256:13113b963ac22fffdad898a677591028e4397c46c1daa9e61811258eed6e35b5
+      artifact: {id: tool:playwright/releases/1.61.0/payloads/chromium/chromium-linux-amd64, digest: ""}
+      source: {id: tool:playwright/releases/1.61.0/revisions/1/sources/chromium-linux-amd64, digest: ""}
+    - artifact_sha256: sha256:410c9407d5de3fea80d9398666be06f2aa09154a3fa7b327dc254e336bb4c4b7
+      artifact: {id: tool:playwright/releases/1.61.0/payloads/chromium/chromium-headless-shell-linux-amd64, digest: ""}
+      source: {id: tool:playwright/releases/1.61.0/revisions/1/sources/chromium-headless-shell-linux-amd64, digest: ""}
+    - artifact_sha256: sha256:54f3b39f6eab832e33458c1dd7da0b5682aedab3b09ae731b5c59fa12fd2024e
+      artifact: {id: tool:playwright/releases/1.61.0/bindings/python/artifacts/linux-amd64, digest: ""}
+      source: {id: tool:playwright/releases/1.61.0/revisions/1/sources/python-linux-amd64, digest: ""}
+    - artifact_sha256: sha256:ebc74fc5b94830176a3c2914ae96bd8bc7f6a91f4f33890230f84a172ee61ccc
+      artifact: {id: tool:playwright/releases/1.61.0/payloads/chromium/ffmpeg-linux-amd64, digest: ""}
+      source: {id: tool:playwright/releases/1.61.0/revisions/1/sources/ffmpeg-linux-amd64, digest: ""}
+  provenance:
+    - https://github.com/microsoft/playwright-python/releases/tag/v1.61.0
+    - https://pypi.org/project/playwright/1.61.0/
+  validation_profiles:
+    - {id: tool:playwright/releases/1.61.0/validation/profiles/default, digest: ""}
