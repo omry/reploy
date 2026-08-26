@@ -1,0 +1,15 @@
+kind: portable-tool-binding-v1
+fields:
+  id: tool:playwright/releases/1.61.0/bindings/python/contract
+  name: python
+  package: playwright
+  requirements:
+    - greenlet>=3.1.1,<4.0.0
+    - playwright==1.61.0
+    - pyee>=13,<14
+  supported_python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+  supported_tags: [py3-none-manylinux1_x86_64]
+  bundled_components:
+    - {name: nodejs, version: 24.17.0, path: playwright/driver/node}
+    - {name: playwright-core, version: 1.61.1-beta-1782139630000, path: playwright/driver/package}
+  cli: {name: playwright, path: /opt/reploy/tools/playwright/bin/playwright}

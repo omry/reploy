@@ -1,0 +1,12 @@
+kind: portable-tool-integration-fixture-v1
+fields:
+  id: tool:playwright/releases/1.61.0/validation/fixtures/ubuntu-2604-amd64
+  name: ubuntu-2604-amd64
+  target: {platform: linux/amd64, os_release_id: ubuntu, version_id: "26.04", oci_architecture: amd64, native_architecture: amd64, package_manager: apt}
+  base_image: docker.io/library/ubuntu:26.04
+  base_image_digest: sha256:7b202b0e2e0028c6250f5fcf41d04df492d145a1654c6995a6553f0c1f6f1960
+  context: runtime
+  bindings: [python]
+  selections: {browser: [chromium]}
+  validation_profiles:
+    - {id: tool:playwright/releases/1.61.0/validation/profiles/default, digest: ""}

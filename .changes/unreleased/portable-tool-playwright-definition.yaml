@@ -1,0 +1,2 @@
+kind: Added
+body: Embed the canonical Playwright 1.61.0 Python and Chromium portable-tool definition for the validated AMD64 runtime matrix.

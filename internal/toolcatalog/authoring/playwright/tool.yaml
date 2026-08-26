@@ -1,0 +1,12 @@
+kind: portable-tool-v1
+fields:
+  id: tool:playwright
+  name: playwright
+  version_scheme: semver
+  summary: Playwright browser automation runtime
+  upstream: https://playwright.dev/
+  source: https://github.com/microsoft/playwright-python
+  license: https://github.com/microsoft/playwright-python/blob/main/LICENSE
+  documentation: https://playwright.dev/python/docs/intro
+  releases:
+    - {id: tool:playwright/releases/1.61.0/revisions/1/manifest, digest: ""}

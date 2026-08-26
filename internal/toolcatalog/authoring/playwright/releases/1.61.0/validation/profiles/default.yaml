@@ -1,0 +1,8 @@
+kind: portable-tool-validation-profile-v1
+fields:
+  id: tool:playwright/releases/1.61.0/validation/profiles/default
+  tool: playwright
+  version: 1.61.0
+  probes:
+    - path: /opt/reploy/tools/playwright/bin/playwright
+      args: [screenshot, --browser, chromium, "about:blank", /tmp/reploy-playwright-validation.png]
