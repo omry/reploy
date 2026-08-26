@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/omry/reploy/internal/toolrequest"
 	"gopkg.in/yaml.v3"
 )
 
@@ -76,6 +77,10 @@ type ApplicationSyntax struct {
 type ApplicationPackagesSyntax struct {
 	OS     []APTPackageRequestSyntax `yaml:"os"`
 	Python *PythonPackagesSyntax     `yaml:"python"`
+	Tools  []toolrequest.SyntaxV1    `yaml:"tools"`
+
+	// ToolsFieldPresent distinguishes omission from an explicit YAML null.
+	ToolsFieldPresent bool `yaml:"-"`
 }
 
 type PythonPackagesSyntax struct {

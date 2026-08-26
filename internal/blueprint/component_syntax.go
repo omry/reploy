@@ -35,13 +35,18 @@ func (application *ApplicationSyntax) UnmarshalYAML(node *yaml.Node) error {
 }
 
 func (packages *ApplicationPackagesSyntax) UnmarshalYAML(node *yaml.Node) error {
-	if _, err := validateSyntaxMapping(node, "application packages", map[string]bool{
-		"os": true, "python": true,
-	}); err != nil {
+	present, err := validateSyntaxMapping(node, "application packages", map[string]bool{
+		"os": true, "python": true, "tools": true,
+	})
+	if err != nil {
 		return err
 	}
 	type plain ApplicationPackagesSyntax
-	return node.Decode((*plain)(packages))
+	if err := node.Decode((*plain)(packages)); err != nil {
+		return err
+	}
+	packages.ToolsFieldPresent = present["tools"]
+	return nil
 }
 
 func (packages *PythonPackagesSyntax) UnmarshalYAML(node *yaml.Node) error {
