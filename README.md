@@ -4,6 +4,7 @@
 [![Go version](https://img.shields.io/github/go-mod/go-version/omry/reploy)](go.mod)
 [![Release](https://img.shields.io/github/v/release/omry/reploy?include_prereleases)](https://github.com/omry/reploy/releases)
 [![Docs](https://img.shields.io/badge/docs-reploy.cli.dev-blue)](https://reploy.cli.dev/)
+[![ecosystem: cli.dev](https://cli.dev/img/badges/cli-dev-ecosystem.svg)](https://cli.dev)
 [![License](https://img.shields.io/github/license/omry/reploy)](LICENSE)
 
 Reploy is an experimental deployment lifecycle tool for services.
