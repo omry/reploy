@@ -1,0 +1,17 @@
+kind: portable-tool-payload-v1
+fields:
+  id: tool:playwright/releases/1.61.0/payloads/chromium/ffmpeg-linux-amd64
+  name: ffmpeg
+  revision: "1011"
+  upstream_version: "1011"
+  platform: linux/amd64
+  logical_path: tools/playwright/1.61.0/ffmpeg-1011-linux-amd64.zip
+  kind: playwright-browser-archive
+  size: "2376500"
+  sha256: sha256:ebc74fc5b94830176a3c2914ae96bd8bc7f6a91f4f33890230f84a172ee61ccc
+  resolver: https-sha256
+  entries: "2"
+  unpacked_size: "5127582"
+  install_directory: ffmpeg-1011
+  archive_root: "."
+  executables: [ffmpeg-linux]

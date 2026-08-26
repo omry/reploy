@@ -1,0 +1,23 @@
+kind: portable-tool-release-contract-v1
+fields:
+  id: tool:playwright/releases/1.61.0/contract
+  contexts: [runtime]
+  supported_reploy: ">=0.0.0"
+  binding:
+    options: [python]
+  selections:
+    dimensions:
+      - name: browser
+        options: [chromium]
+    combinations:
+      - browser: [chromium]
+  runtime:
+    install_root: /opt/reploy/tools/playwright/ms-playwright
+    environment:
+      - {name: PLAYWRIGHT_BROWSERS_PATH, value: /opt/reploy/tools/playwright/ms-playwright}
+      - {name: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD, value: "1"}
+      - {name: PLAYWRIGHT_SKIP_BROWSER_GC, value: "1"}
+  exports:
+    - {name: playwright, path: /opt/reploy/tools/playwright/bin/playwright}
+  resolver_primitives: [https-sha256]
+  compatibility_constraints: [portable-archive-v1]

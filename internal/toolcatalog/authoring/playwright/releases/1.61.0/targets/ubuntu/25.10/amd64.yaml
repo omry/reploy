@@ -1,0 +1,33 @@
+kind: portable-tool-target-v1
+fields:
+  id: tool:playwright/releases/1.61.0/targets/ubuntu/25.10/amd64
+  target: {platform: linux/amd64, os_release_id: ubuntu, version_id: "25.10", oci_architecture: amd64, native_architecture: amd64, package_manager: apt}
+  support_cases:
+    - {context: runtime, bindings: [python], selections: {browser: [chromium]}}
+  package_sets: []
+  bindings:
+    - name: python
+      contract: {id: tool:playwright/releases/1.61.0/bindings/python/contract, digest: ""}
+      artifacts:
+        - {id: tool:playwright/releases/1.61.0/bindings/python/artifacts/linux-amd64, digest: ""}
+      payloads: []
+      package_sets: []
+      exports: []
+      validation_profiles: []
+  payloads: []
+  selections:
+    - dimension: browser
+      value: chromium
+      payloads:
+        - {id: tool:playwright/releases/1.61.0/payloads/chromium/chromium-headless-shell-linux-amd64, digest: ""}
+        - {id: tool:playwright/releases/1.61.0/payloads/chromium/chromium-linux-amd64, digest: ""}
+        - {id: tool:playwright/releases/1.61.0/payloads/chromium/ffmpeg-linux-amd64, digest: ""}
+      package_sets:
+        - {id: tool:playwright/releases/1.61.0/package-sets/ubuntu-t64-amd64, digest: ""}
+      exports: []
+      validation_profiles: []
+  exports: []
+  integration_fixtures:
+    - {id: tool:playwright/releases/1.61.0/validation/fixtures/ubuntu-2510-amd64, digest: ""}
+  validation_profiles:
+    - {id: tool:playwright/releases/1.61.0/validation/profiles/default, digest: ""}

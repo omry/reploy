@@ -1,0 +1,1 @@
+{"id":"tool:playwright/releases/1.61.0/validation/profiles/default","probes":[{"args":["screenshot","--browser","chromium","about:blank","/tmp/reploy-playwright-validation.png"],"path":"/opt/reploy/tools/playwright/bin/playwright"}],"schema":"portable-tool-validation-profile-v1","tool":"playwright","version":"1.61.0"}

@@ -1,0 +1,9 @@
+kind: portable-tool-artifact-source-v1
+fields:
+  id: tool:playwright/releases/1.61.0/revisions/1/sources/chromium-headless-shell-linux-amd64
+  sha256: sha256:410c9407d5de3fea80d9398666be06f2aa09154a3fa7b327dc254e336bb4c4b7
+  mirrors:
+    - https://storage.googleapis.com/chrome-for-testing-public/149.0.7827.55/linux64/chrome-headless-shell-linux64.zip
+  provenance:
+    - https://raw.githubusercontent.com/microsoft/playwright/v1.61.0/packages/playwright-core/browsers.json
+  diagnostics: []
