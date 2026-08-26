@@ -27,8 +27,8 @@ func TestEmbeddedCatalogMatchesCanonicalAuthoringV1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load embedded authoring: %v", err)
 	}
-	if len(result.Records) != 35 || len(result.Sources) != 35 {
-		t.Fatalf("authoring emitted %d records from %d sources, want 35 and 35", len(result.Records), len(result.Sources))
+	if len(result.Records) != 59 || len(result.Sources) != 59 {
+		t.Fatalf("authoring emitted %d records from %d sources, want 59 and 59", len(result.Records), len(result.Sources))
 	}
 	for _, record := range result.Records {
 		payload, err := fs.ReadFile(definitionFilesV1, "definitions/"+record.Path)
@@ -39,8 +39,184 @@ func TestEmbeddedCatalogMatchesCanonicalAuthoringV1(t *testing.T) {
 			t.Errorf("embedded record %q differs from canonical authoring output", record.Path)
 		}
 	}
-	if catalog, err := loadCatalogV1(definitionFilesV1, "definitions"); err != nil || !reflect.DeepEqual(catalog.Names(), []string{"java", "playwright"}) {
+	if catalog, err := loadCatalogV1(definitionFilesV1, "definitions"); err != nil || !reflect.DeepEqual(catalog.Names(), []string{"asciinema", "java", "playwright"}) {
 		t.Fatalf("embedded catalog = names %v, error %v", catalogNamesV1(catalog), err)
+	}
+}
+
+func TestEmbeddedAsciinemaCatalogSelectsEveryPinnedTargetV1(t *testing.T) {
+	catalog := mustLoadEmbeddedCatalogV1()
+	vettedTargets := []struct {
+		target          TargetIdentityV1
+		baseImage       string
+		baseImageDigest canonical.Digest
+		payload         string
+	}{
+		{asciinemaTargetV1("debian", "12", "amd64"), "docker.io/library/debian:12-slim", "sha256:362e64223cc0da95422b3b13c045186fc0a81250e765d31c025fbddf257f6143", "asciinema-linux-amd64"},
+		{asciinemaTargetV1("debian", "12", "arm64"), "docker.io/library/debian:12-slim", "sha256:362e64223cc0da95422b3b13c045186fc0a81250e765d31c025fbddf257f6143", "asciinema-linux-arm64"},
+		{asciinemaTargetV1("debian", "13", "amd64"), "docker.io/library/debian:13-slim", "sha256:38a76d01668772e381ad2826d876627c89e7133e2f8a0f5d567306798b0f2a16", "asciinema-linux-amd64"},
+		{asciinemaTargetV1("debian", "13", "arm64"), "docker.io/library/debian:13-slim", "sha256:38a76d01668772e381ad2826d876627c89e7133e2f8a0f5d567306798b0f2a16", "asciinema-linux-arm64"},
+		{asciinemaTargetV1("ubuntu", "25.10", "amd64"), "docker.io/library/ubuntu:25.10", "sha256:e0b84ef30bbe766773e6056c60a3e706712e4119508e3da12516f1eddd6f761b", "asciinema-linux-amd64"},
+		{asciinemaTargetV1("ubuntu", "25.10", "arm64"), "docker.io/library/ubuntu:25.10", "sha256:e0b84ef30bbe766773e6056c60a3e706712e4119508e3da12516f1eddd6f761b", "asciinema-linux-arm64"},
+		{asciinemaTargetV1("ubuntu", "26.04", "amd64"), "docker.io/library/ubuntu:26.04", "sha256:7b202b0e2e0028c6250f5fcf41d04df492d145a1654c6995a6553f0c1f6f1960", "asciinema-linux-amd64"},
+		{asciinemaTargetV1("ubuntu", "26.04", "arm64"), "docker.io/library/ubuntu:26.04", "sha256:7b202b0e2e0028c6250f5fcf41d04df492d145a1654c6995a6553f0c1f6f1960", "asciinema-linux-arm64"},
+	}
+	for _, vetted := range vettedTargets {
+		candidates, err := catalog.SelectReleaseCandidatesV1(asciinemaGroupV1("==3.2.1", "build"), vetted.target,
+			ClientCapabilitiesV1{ReployVersion: "1.0.0", ResolverPrimitives: []string{"https-sha256"}}, nil)
+		if err != nil {
+			t.Fatalf("select asciinema for %s %s %s: %v", vetted.target.OSReleaseID, vetted.target.VersionID, vetted.target.OCIArchitecture, err)
+		}
+		if len(candidates) != 1 {
+			t.Fatalf("asciinema candidate count = %d, want 1", len(candidates))
+		}
+		candidate := candidates[0]
+		if candidate.Manifest.Version != "3.2.1" || candidate.Manifest.Revision != "1" ||
+			len(candidate.Bindings) != 0 || !reflect.DeepEqual(candidate.Selections, map[string][]string{}) ||
+			candidate.Fixture.Target != vetted.target || candidate.Fixture.BaseImage != vetted.baseImage ||
+			candidate.Fixture.BaseImageDigest != vetted.baseImageDigest || len(candidate.Profiles) != 1 {
+			t.Fatalf("selected asciinema candidate = %#v", candidate)
+		}
+		ids := referenceIDsV1(candidate.Contributions)
+		if len(ids) != 1 || !strings.HasSuffix(ids[0], "/payloads/"+vetted.payload) {
+			t.Fatalf("asciinema contributions = %v, want payload %q", ids, vetted.payload)
+		}
+
+		result, err := catalog.ResolveSelectedClosuresV1(
+			[]ReleaseCandidateSetV1{{Group: asciinemaGroupV1("==3.2.1", "build"), Candidates: candidates}},
+			solverTestDomainsV1(false)[1:], solverTestOperationV1())
+		if err != nil {
+			t.Fatalf("resolve asciinema closure: %v", err)
+		}
+		closure := result.Closures[0]
+		if len(closure.Records.Payloads) != 1 || len(closure.Records.BindingContracts) != 0 ||
+			len(closure.Records.BindingArtifacts) != 0 || len(closure.Records.PackageSets) != 0 ||
+			len(closure.Profiles) != 1 || closure.Fixture.ID == "" || closure.Identity == "" {
+			t.Fatalf("resolved asciinema closure = %#v", closure)
+		}
+	}
+}
+
+func TestEmbeddedAsciinemaCatalogPinsArtifactInventoryV1(t *testing.T) {
+	manifest := embeddedRecordV1[*ReleaseManifestV1](t, "tool:asciinema/releases/3.2.1/revisions/1/manifest")
+	if len(manifest.Targets) != 8 || len(manifest.ArtifactSources) != 2 || len(manifest.ValidationProfiles) != 1 {
+		t.Fatalf("embedded asciinema manifest = %#v", manifest)
+	}
+	payloads := []struct {
+		id, platform, logicalPath, size, sha256 string
+	}{
+		{"asciinema-linux-amd64", "linux/amd64", "tools/asciinema/3.2.1/asciinema-x86_64-unknown-linux-gnu", "7983848", "sha256:1b405bbda565b33c3c4718de67fedc3535580603c0694b1ff3fb04f363430a20"},
+		{"asciinema-linux-arm64", "linux/arm64", "tools/asciinema/3.2.1/asciinema-aarch64-unknown-linux-gnu", "7138888", "sha256:b516a6d896844c0ffbc96e0a55afe4cbcc79216abde0fc64fdda4e39bee421ea"},
+	}
+	for _, want := range payloads {
+		payload := embeddedRecordV1[*PayloadRecordV1](t, "tool:asciinema/releases/3.2.1/payloads/"+want.id)
+		if payload.UpstreamVersion != "3.2.1" || payload.Revision != "1" || payload.Platform != want.platform ||
+			payload.LogicalPath != want.logicalPath || payload.Kind != "raw-executable" || payload.Size != want.size ||
+			payload.UnpackedSize != want.size || payload.SHA256 != canonical.Digest(want.sha256) || payload.Entries != "1" ||
+			payload.InstallDirectory != "asciinema-3.2.1" || payload.ArchiveRoot != "." ||
+			!reflect.DeepEqual(payload.Executables, []string{"asciinema"}) {
+			t.Fatalf("embedded asciinema payload %q = %#v", want.id, payload)
+		}
+		source := embeddedRecordV1[*ArtifactSourceRecordV1](t, "tool:asciinema/releases/3.2.1/revisions/1/sources/"+want.id)
+		if source.SHA256 != payload.SHA256 || len(source.Mirrors) != 1 ||
+			!strings.HasPrefix(source.Mirrors[0], "https://github.com/asciinema/asciinema/releases/download/v3.2.1/") ||
+			!reflect.DeepEqual(source.Provenance, []string{"https://github.com/asciinema/asciinema/releases/tag/v3.2.1"}) || len(source.Diagnostics) != 0 {
+			t.Fatalf("embedded asciinema source %q = %#v", want.id, source)
+		}
+	}
+	profile := embeddedRecordV1[*ValidationProfileRecordV1](t, "tool:asciinema/releases/3.2.1/validation/profiles/default")
+	if !reflect.DeepEqual(profile.Probes, []RecordProbeV1{{
+		Path: "/opt/reploy/tools/asciinema/asciinema-3.2.1/asciinema", Args: []string{"--version"},
+	}}) {
+		t.Fatalf("embedded asciinema validation profile = %#v", profile)
+	}
+}
+
+func TestEmbeddedAsciinemaCatalogRejectsUnsupportedRequestsBeforeAcquisitionV1(t *testing.T) {
+	catalog := mustLoadEmbeddedCatalogV1()
+	tests := []struct {
+		name    string
+		group   CanonicalRequirementGroupV1
+		target  TargetIdentityV1
+		wantSub string
+	}{
+		{name: "runtime context", group: asciinemaGroupV1("==3.2.1", "runtime"), target: asciinemaTargetV1("debian", "12", "amd64"), wantSub: "context"},
+		{name: "wrong version", group: asciinemaGroupV1("==3.1.0", "build"), target: asciinemaTargetV1("debian", "12", "amd64"), wantSub: "empty intersection"},
+		{name: "unsupported OS", group: asciinemaGroupV1("==3.2.1", "build"), target: asciinemaTargetV1("ubuntu", "24.04", "amd64"), wantSub: "no target leaf"},
+		{name: "inconsistent architecture", group: asciinemaGroupV1("==3.2.1", "build"), target: func() TargetIdentityV1 {
+			target := asciinemaTargetV1("debian", "12", "amd64")
+			target.OCIArchitecture = "arm64"
+			return target
+		}(), wantSub: "inconsistent"},
+		{name: "unsupported binding", group: func() CanonicalRequirementGroupV1 {
+			group := asciinemaGroupV1("==3.2.1", "build")
+			group.Binding = CanonicalBindingDemandV1{Explicit: []string{"python"}}
+			return group
+		}(), target: asciinemaTargetV1("debian", "12", "amd64"), wantSub: "binding"},
+		{name: "unsupported selection", group: func() CanonicalRequirementGroupV1 {
+			group := asciinemaGroupV1("==3.2.1", "build")
+			group.Selections = map[string][]string{"distribution": {"gnu"}}
+			return group
+		}(), target: asciinemaTargetV1("debian", "12", "amd64"), wantSub: "selection"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := catalog.SelectReleaseCandidatesV1(testCase.group, testCase.target,
+				ClientCapabilitiesV1{ReployVersion: "1.0.0", ResolverPrimitives: []string{"https-sha256"}}, nil)
+			if err == nil || !strings.Contains(err.Error(), testCase.wantSub) {
+				t.Fatalf("error = %v, want substring %q", err, testCase.wantSub)
+			}
+		})
+	}
+}
+
+func TestEmbeddedAsciinemaV2ComparisonIsDistinctAndUnpublishedV1(t *testing.T) {
+	catalog := mustLoadEmbeddedCatalogV1()
+	tool := embeddedRecordV1[*ToolRecordV1](t, "tool:asciinema")
+	if len(tool.Releases) != 1 || !strings.Contains(tool.Releases[0].ID, "/releases/3.2.1/") {
+		t.Fatalf("published asciinema releases = %v, want only 3.2.1", tool.Releases)
+	}
+	for key := range catalog.records {
+		if strings.HasPrefix(key.ID, "tool:asciinema/releases/2") {
+			t.Fatalf("non-published asciinema v2 record %q is embedded", key.ID)
+		}
+	}
+
+	candidates, err := catalog.SelectReleaseCandidatesV1(asciinemaGroupV1("==3.2.1", "build"), asciinemaTargetV1("debian", "12", "amd64"),
+		ClientCapabilitiesV1{ReployVersion: "1.0.0", ResolverPrimitives: []string{"https-sha256"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v3, err := catalog.ResolveSelectedClosuresV1(
+		[]ReleaseCandidateSetV1{{Group: asciinemaGroupV1("==3.2.1", "build"), Candidates: candidates}},
+		solverTestDomainsV1(false)[1:], solverTestOperationV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	v3Closure := v3.Closures[0]
+	v2Contract := v3Closure.Contract
+	v2Contract.Exports = []ToolExportV1{{Name: "asciinema", Path: "/opt/reploy/tools/asciinema/asciinema-2.4.0/bin/asciinema"}}
+	v2Target := v3Closure.Target
+	v2PayloadDigest := canonical.Digest("sha256:2222222222222222222222222222222222222222222222222222222222222222")
+	v2Target.Payloads = []RecordReferenceV1{{ID: "tool:asciinema/releases/2.4.0/payloads/python-package", Digest: v2PayloadDigest}}
+	v2IdentityInput := struct {
+		Tool     string                       `json:"tool"`
+		Version  string                       `json:"version"`
+		Contract SelectedContractProjectionV1 `json:"contract"`
+		Target   SelectedTargetProjectionV1   `json:"target"`
+		Records  []RecordReferenceV1          `json:"records"`
+	}{
+		Tool: "asciinema", Version: "2.4.0", Contract: v2Contract, Target: v2Target,
+		Records: []RecordReferenceV1{{ID: "tool:asciinema/releases/2.4.0/payloads/python-package", Digest: v2PayloadDigest}},
+	}
+	v2Identity, err := canonical.Sum("portable-tool-selected-closure", SelectedClosureIdentityV1, v2IdentityInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v3Closure.Provenance.Version == v2IdentityInput.Version || v3Closure.Identity == v2Identity ||
+		v3Closure.Contract.Exports[0].Path == v2Contract.Exports[0].Path ||
+		v3Closure.Target.Payloads[0].ID == v2Target.Payloads[0].ID {
+		t.Fatalf("asciinema v2 comparison did not retain distinct coordinates and closure layout")
 	}
 }
 
@@ -308,6 +484,18 @@ func javaGroupV1(version string, context string) CanonicalRequirementGroupV1 {
 		Scope: "source-builder", Tool: "java", VersionConstraints: []string{version}, Context: context,
 		Binding: CanonicalBindingDemandV1{Infer: true}, Selections: map[string][]string{},
 	}
+}
+
+func asciinemaGroupV1(version string, context string) CanonicalRequirementGroupV1 {
+	return CanonicalRequirementGroupV1{
+		Scope: "source-builder", Tool: "asciinema", VersionConstraints: []string{version}, Context: context,
+		Binding: CanonicalBindingDemandV1{Infer: true}, Selections: map[string][]string{},
+	}
+}
+
+func asciinemaTargetV1(osID string, version string, architecture string) TargetIdentityV1 {
+	return TargetIdentityV1{Platform: "linux/" + architecture, OSReleaseID: osID, VersionID: version,
+		OCIArchitecture: architecture, NativeArchitecture: architecture, PackageManager: "apt"}
 }
 
 func javaTargetV1(osID string, version string) TargetIdentityV1 {

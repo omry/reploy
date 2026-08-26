@@ -1,0 +1,13 @@
+kind: portable-tool-v1
+fields:
+  id: tool:asciinema
+  name: asciinema
+  version_scheme: semver
+  summary: Terminal session recorder and player
+  upstream: https://asciinema.org/
+  source: https://github.com/asciinema/asciinema
+  license: https://github.com/asciinema/asciinema/blob/v3.2.1/LICENSE
+  documentation: https://docs.asciinema.org/manual/cli/
+  releases:
+    - id: tool:asciinema/releases/3.2.1/revisions/1/manifest
+      digest: ""

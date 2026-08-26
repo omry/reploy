@@ -1,0 +1,8 @@
+kind: portable-tool-validation-profile-v1
+fields:
+  id: tool:asciinema/releases/3.2.1/validation/profiles/default
+  tool: asciinema
+  version: 3.2.1
+  probes:
+    - path: /opt/reploy/tools/asciinema/asciinema-3.2.1/asciinema
+      args: [--version]

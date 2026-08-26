@@ -1,0 +1,1 @@
+{"id":"tool:asciinema/releases/3.2.1/validation/profiles/default","probes":[{"args":["--version"],"path":"/opt/reploy/tools/asciinema/asciinema-3.2.1/asciinema"}],"schema":"portable-tool-validation-profile-v1","tool":"asciinema","version":"3.2.1"}
