@@ -24,7 +24,9 @@ requires:
 	}
 	if !recipe.Found || recipe.Project != "omegaconf" ||
 		recipe.Build != PythonBuildTypeSetuptoolsLegacy ||
-		len(recipe.Tools) != 1 || recipe.Tools[0] != "java" {
+		len(recipe.Tools) != 1 || recipe.Tools[0] != "java" ||
+		len(recipe.Requirements) != 1 || recipe.Requirements[0].Scope != "source-builder:omegaconf" ||
+		recipe.Requirements[0].Context != "build" || recipe.Requirements[0].Tool != "java" {
 		t.Fatalf("recipe = %#v", recipe)
 	}
 	if err := recipe.Digest.Validate(); err != nil {
@@ -48,7 +50,7 @@ requires: []
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !recipe.Found || recipe.Build != PythonBuildTypePEP517 || len(recipe.Tools) != 0 {
+	if !recipe.Found || recipe.Build != PythonBuildTypePEP517 || len(recipe.Tools) != 0 || len(recipe.Requirements) != 0 {
 		t.Fatalf("recipe = %#v", recipe)
 	}
 }
@@ -58,7 +60,7 @@ func TestReadPythonLocalSourceRecipeV1DoesNotRequireRecipe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recipe.Found || recipe.Tools == nil {
+	if recipe.Found || recipe.Tools == nil || recipe.Requirements == nil {
 		t.Fatalf("missing recipe = %#v", recipe)
 	}
 }
@@ -84,10 +86,10 @@ func TestReadPythonLocalSourceRecipeV1RejectsInvalidContracts(t *testing.T) {
 			want:      "does not match selected package",
 		},
 		{
-			name:      "unknown tool",
-			recipe:    "schema: 1\nproject: demo\ntype: python\nbuild: pep517\nrequires: [tool:make]\n",
+			name:      "invalid tool",
+			recipe:    "schema: 1\nproject: demo\ntype: python\nbuild: pep517\nrequires: [tool:Make]\n",
 			pyproject: "[build-system]\nrequires=[]\n",
-			want:      "supports tool:java",
+			want:      "tool name",
 		},
 		{
 			name:      "pep517 missing build system",
@@ -123,6 +125,37 @@ func TestReadPythonLocalSourceRecipeV1RejectsInvalidContracts(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestReadPythonLocalSourceRecipeV1CanonicalizesStructuredToolRequests(t *testing.T) {
+	dir := t.TempDir()
+	writeLocalRecipeTestFile(t, dir, "pyproject.toml", "[build-system]\nrequires=[]\n")
+	writeLocalRecipeTestFile(t, dir, LocalSourceRecipeFilename, `schema: 1
+project: demo
+type: python
+build: pep517
+requires:
+  - tool: playwright
+    version: ">=1.60"
+    binding: python
+    select: {browser: [webkit, chromium]}
+  - tool: playwright
+    version: "<2"
+    binding: "*"
+`)
+	recipe, err := ReadPythonLocalSourceRecipeV1(dir, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recipe.Requirements) != 1 || len(recipe.Tools) != 1 || recipe.Tools[0] != "playwright" {
+		t.Fatalf("recipe = %#v", recipe)
+	}
+	requirement := recipe.Requirements[0]
+	if requirement.Scope != "source-builder:demo" || requirement.Context != "build" ||
+		strings.Join(requirement.VersionConstraints, ",") != "<2,>=1.60" || !requirement.Binding.All ||
+		strings.Join(requirement.Selections["browser"], ",") != "chromium,webkit" {
+		t.Fatalf("requirement = %#v", requirement)
 	}
 }
 

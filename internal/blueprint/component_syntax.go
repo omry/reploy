@@ -36,7 +36,7 @@ func (application *ApplicationSyntax) UnmarshalYAML(node *yaml.Node) error {
 
 func (packages *ApplicationPackagesSyntax) UnmarshalYAML(node *yaml.Node) error {
 	if _, err := validateSyntaxMapping(node, "application packages", map[string]bool{
-		"os": true, "python": true,
+		"os": true, "python": true, "tools": true,
 	}); err != nil {
 		return err
 	}
