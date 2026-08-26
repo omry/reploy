@@ -441,6 +441,26 @@ func TestResolveRejectsOptionSpecificPythonInterpreter(t *testing.T) {
 	}
 }
 
+func TestResolveRejectsOptionSpecificPortableToolsFieldWhenEmpty(t *testing.T) {
+	for _, tools := range []string{"[]", "null"} {
+		t.Run(tools, func(t *testing.T) {
+			option := strings.Replace(
+				"      options:\n        debug:\n          description: Install debugging support.\n          packages:\n            os: [curl]\n            tools: TOOLS\n      executables:\n",
+				"TOOLS", tools, 1,
+			)
+			value := strings.Replace(minimalBlueprint, "      executables:\n", option, 1)
+			source, err := Decode([]byte(value))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = Resolve(source)
+			if err == nil || !strings.Contains(err.Error(), "options.debug.packages.tools is not valid") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
 func TestDecodeRejectsProviderOwnedApplicationFields(t *testing.T) {
 	tests := []struct {
 		name string

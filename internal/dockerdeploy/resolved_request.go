@@ -304,6 +304,9 @@ func BuildResolvedRequestWithPackageOverridesV1(
 			packageOverrides.EnvironmentID, document.Environment.ID,
 		)
 	}
+	if err := rejectUnplannedRuntimePortableToolsV1(document); err != nil {
+		return providers.ResolvedRequestV1{}, err
+	}
 	document, err := documentWithPackageAdditionsV1(document, packageOverrides)
 	if err != nil {
 		return providers.ResolvedRequestV1{}, err
@@ -393,6 +396,31 @@ func BuildResolvedRequestWithPackageOverridesV1(
 		return providers.ResolvedRequestV1{}, err
 	}
 	return result, nil
+}
+
+func rejectUnplannedRuntimePortableToolsV1(document blueprint.Document) error {
+	applicationNames := make([]string, 0, len(document.Environment.Applications))
+	for applicationName := range document.Environment.Applications {
+		applicationNames = append(applicationNames, applicationName)
+	}
+	sort.Strings(applicationNames)
+	for _, applicationName := range applicationNames {
+		requirements := document.Environment.Applications[applicationName].Packages.Tools
+		if len(requirements) == 0 {
+			continue
+		}
+		toolNames := make([]string, 0, len(requirements))
+		for _, requirement := range requirements {
+			toolNames = append(toolNames, requirement.Tool)
+		}
+		sort.Strings(toolNames)
+		return fmt.Errorf(
+			"application %q requests runtime portable tools %v, but catalog-backed provider planning is not yet available",
+			applicationName,
+			toolNames,
+		)
+	}
+	return nil
 }
 
 func documentWithPackageAdditionsV1(

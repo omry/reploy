@@ -7,11 +7,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/omry/reploy/internal/canonical"
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
+	"github.com/omry/reploy/internal/toolrequest"
 	"github.com/pelletier/go-toml/v2"
 	"gopkg.in/yaml.v3"
 )
@@ -29,27 +29,30 @@ const (
 // an immutable selected local-source snapshot. Found=false means the project
 // did not opt into the recipe contract.
 type PythonLocalSourceRecipeV1 struct {
-	Found   bool
-	Project string
-	Build   string
-	Tools   []string
-	Digest  canonical.Digest
+	Found        bool
+	Project      string
+	Build        string
+	Requirements []toolrequest.CanonicalRequirementGroupV1
+	// Tools is the temporary name-only projection consumed by the existing
+	// build-tool bridge until catalog resolution replaces that provider path.
+	Tools  []string
+	Digest canonical.Digest
 }
 
 type localSourceRecipeSyntaxV1 struct {
-	Schema   int      `yaml:"schema"`
-	Project  string   `yaml:"project"`
-	Type     string   `yaml:"type"`
-	Build    string   `yaml:"build"`
-	Requires []string `yaml:"requires"`
+	Schema   int                    `yaml:"schema"`
+	Project  string                 `yaml:"project"`
+	Type     string                 `yaml:"type"`
+	Build    string                 `yaml:"build"`
+	Requires []toolrequest.SyntaxV1 `yaml:"requires"`
 }
 
 type localSourceRecipeIdentityV1 struct {
-	Schema  string   `json:"schema"`
-	Project string   `json:"project"`
-	Type    string   `json:"type"`
-	Build   string   `json:"build"`
-	Tools   []string `json:"tools"`
+	Schema       string                                    `json:"schema"`
+	Project      string                                    `json:"project"`
+	Type         string                                    `json:"type"`
+	Build        string                                    `json:"build"`
+	Requirements []toolrequest.CanonicalRequirementGroupV1 `json:"requirements"`
 }
 
 // ReadPythonLocalSourceRecipeV1 reads only the selected immutable snapshot.
@@ -67,7 +70,9 @@ func ReadPythonLocalSourceRecipeV1(
 	filename := filepath.Join(sourceDir, LocalSourceRecipeFilename)
 	info, err := os.Lstat(filename)
 	if errors.Is(err, os.ErrNotExist) {
-		return PythonLocalSourceRecipeV1{Found: false, Tools: []string{}}, nil
+		return PythonLocalSourceRecipeV1{
+			Found: false, Requirements: []toolrequest.CanonicalRequirementGroupV1{}, Tools: []string{},
+		}, nil
 	}
 	if err != nil {
 		return PythonLocalSourceRecipeV1{}, fmt.Errorf("inspect local source recipe for %q: %w", distribution, err)
@@ -166,27 +171,19 @@ func normalizePythonLocalSourceRecipeV1(
 			"local source recipe for %q requires must use an array", distribution,
 		)
 	}
-	tools := make([]string, 0, len(syntax.Requires))
-	seen := map[string]bool{}
-	for _, requirement := range syntax.Requires {
-		tool, err := normalizePortableBuildToolV1(requirement)
-		if err != nil {
-			return PythonLocalSourceRecipeV1{}, fmt.Errorf(
-				"local source recipe for %q requirement %q: %w", distribution, requirement, err,
-			)
-		}
-		if seen[tool] {
-			return PythonLocalSourceRecipeV1{}, fmt.Errorf(
-				"local source recipe for %q contains duplicate requirement %q", distribution, requirement,
-			)
-		}
-		seen[tool] = true
-		tools = append(tools, tool)
+	set, err := toolrequest.NormalizeAndMergeV1(
+		syntax.Requires, "source-builder:"+distribution, "build", "requires",
+	)
+	if err != nil {
+		return PythonLocalSourceRecipeV1{}, fmt.Errorf("local source recipe for %q: %w", distribution, err)
 	}
-	sort.Strings(tools)
+	tools := make([]string, 0, len(set.Groups))
+	for _, requirement := range set.Groups {
+		tools = append(tools, requirement.Tool)
+	}
 	identity := localSourceRecipeIdentityV1{
 		Schema: LocalSourceRecipeIdentitySchemaV1, Project: distribution,
-		Type: "python", Build: syntax.Build, Tools: append([]string{}, tools...),
+		Type: "python", Build: syntax.Build, Requirements: append([]toolrequest.CanonicalRequirementGroupV1{}, set.Groups...),
 	}
 	digest, err := canonical.Sum("local-source-build-recipe", LocalSourceRecipeIdentitySchemaV1, identity)
 	if err != nil {
@@ -194,18 +191,22 @@ func normalizePythonLocalSourceRecipeV1(
 	}
 	return PythonLocalSourceRecipeV1{
 		Found: true, Project: distribution, Build: syntax.Build,
-		Tools: tools, Digest: digest,
+		Requirements: set.Groups, Tools: tools, Digest: digest,
 	}, nil
 }
 
-func normalizePortableBuildToolV1(requirement string) (string, error) {
-	if requirement == "" || strings.TrimSpace(requirement) != requirement {
-		return "", fmt.Errorf("portable build-tool requirement must be nonempty and have no surrounding whitespace")
+func legacyPortableBuildToolNamesV1(recipe PythonLocalSourceRecipeV1) ([]string, error) {
+	for _, requirement := range recipe.Requirements {
+		if len(requirement.VersionConstraints) != 0 || requirement.DefinitionRevision != "" ||
+			requirement.Binding.All || !requirement.Binding.Infer || len(requirement.Binding.Explicit) != 0 ||
+			len(requirement.Selections) != 0 {
+			return nil, fmt.Errorf(
+				"local source recipe for %q portable tool %q requires catalog resolution before source-builder provider work; the legacy bridge supports only an optionless tool name with inferred bindings",
+				recipe.Project, requirement.Tool,
+			)
+		}
 	}
-	if requirement != "tool:java" {
-		return "", fmt.Errorf("unsupported portable build-tool requirement; v1 supports tool:java")
-	}
-	return strings.TrimPrefix(requirement, "tool:"), nil
+	return append([]string{}, recipe.Tools...), nil
 }
 
 func validatePythonLocalSourceBuildLayoutV1(sourceDir string, buildType string) error {

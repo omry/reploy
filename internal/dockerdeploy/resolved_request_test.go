@@ -434,6 +434,55 @@ func TestBuildResolvedRequestV1RejectsUndeclaredPlatform(t *testing.T) {
 	}
 }
 
+func TestBuildResolvedRequestV1RejectsUnplannedRuntimePortableTools(t *testing.T) {
+	source, err := blueprint.Decode([]byte(`
+blueprint:
+  schema: 1
+  version: test
+  compatibility: {platforms: [linux/amd64]}
+environment:
+  id: demo
+  base: {image: docker.io/library/debian:13-slim}
+  applications:
+    z-tools:
+      packages: {tools: [tool:asciinema==3.2.1]}
+    a-tools:
+      packages: {tools: [tool:playwright==1.61.0, tool:java==21]}
+docker: {}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := blueprint.Resolve(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(document.Environment.Applications["a-tools"].Packages.Tools) != 2 {
+		t.Fatalf("runtime tool demand was not retained: %#v", document.Environment.Applications)
+	}
+	_, err = BuildResolvedRequestV1(
+		document,
+		deploy.EmptyRequestOverlayV1(),
+		document.Blueprint.Compatibility.Platforms[0],
+		[]providers.ResolvedSourceInput{},
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), `application "a-tools" requests runtime portable tools [java playwright]`) ||
+		!strings.Contains(err.Error(), "provider planning is not yet available") {
+		t.Fatalf("unplanned runtime tool error = %v", err)
+	}
+
+	withoutTools := resolvedRequestTestDocument()
+	if _, err := BuildResolvedRequestV1(
+		withoutTools,
+		deploy.EmptyRequestOverlayV1(),
+		withoutTools.Blueprint.Compatibility.Platforms[0],
+		[]providers.ResolvedSourceInput{},
+	); err != nil {
+		t.Fatalf("request without runtime tool demand: %v", err)
+	}
+}
+
 func resolvedRequestTestDocument() blueprint.Document {
 	platform, err := blueprint.ParsePlatform("linux/amd64")
 	if err != nil {
