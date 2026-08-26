@@ -9,6 +9,7 @@ import (
 
 	"github.com/omry/reploy/internal/endpointname"
 	"github.com/omry/reploy/internal/runtimeidentity"
+	"github.com/omry/reploy/internal/toolrequest"
 )
 
 var builtInControlOperations = map[string]bool{
@@ -230,14 +231,29 @@ func resolveApplication(field string, name string, item ApplicationSyntax) (Appl
 		return Application{}, err
 	}
 	application.Packages.Python = python
+	toolSet, err := toolrequest.NormalizeAndMergeV1(
+		item.Packages.Tools, "application:"+name, "runtime", field+".packages.tools",
+	)
+	if err != nil {
+		return Application{}, err
+	}
+	application.Packages.Tools = toolSet.Groups
+	application.Packages.ToolSources = toolSet.Sources
 	hasOS := len(osPackages) != 0
 	hasPython := python != nil
+	hasTools := len(toolSet.Groups) != 0
 	for _, optionName := range sortedKeys(item.Options) {
 		optionField := field + ".options." + optionName
 		if err := validateProviderIdentifier(field+".options", optionName); err != nil {
 			return Application{}, err
 		}
 		optionSource := item.Options[optionName]
+		if len(optionSource.Packages.Tools) != 0 {
+			return Application{}, fmt.Errorf(
+				"%s.packages.tools is not valid; portable tools belong to the owning application's packages",
+				optionField,
+			)
+		}
 		description := strings.TrimSpace(optionSource.Description)
 		if description == "" {
 			return Application{}, fmt.Errorf("%s.description is required", optionField)
@@ -285,7 +301,7 @@ func resolveApplication(field string, name string, item ApplicationSyntax) (Appl
 			)
 		}
 	}
-	if !hasOS && !hasPython {
+	if !hasOS && !hasPython && !hasTools {
 		return Application{}, fmt.Errorf("%s must declare packages or package options", field)
 	}
 	return application, nil

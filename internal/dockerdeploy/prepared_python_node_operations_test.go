@@ -354,6 +354,64 @@ func TestPreparedPythonNodeOperationsRequestsToolsFromSelectedRecipeBeforeBuild(
 	}
 }
 
+func TestPreparedPythonNodeOperationsRejectsToolDemandLostByLegacyBridge(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		requires string
+	}{
+		{name: "version constraint", requires: "  - tool:java==999\n"},
+		{name: "definition revision", requires: "  - tool: java\n    definition_revision: 2\n"},
+		{name: "explicit binding", requires: "  - tool: java\n    binding: jre\n"},
+		{name: "wildcard binding", requires: "  - tool: java\n    binding: \"*\"\n"},
+		{name: "selection", requires: "  - tool: java\n    select: {distribution: temurin}\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, err := providerstore.NewStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			artifacts, cleanup, err := PreparePythonResolverArtifacts(store, []providerstore.ArtifactDescriptor{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cleanup()
+			sourceDir := t.TempDir()
+			for name, content := range map[string]string{
+				"setup.py":                "from setuptools import setup\n",
+				"pyproject.toml":          "[tool.ruff]\n",
+				LocalSourceRecipeFilename: "schema: 1\nproject: omegaconf\ntype: python\nbuild: setuptools-legacy\nrequires:\n" + test.requires,
+			} {
+				if err := os.WriteFile(filepath.Join(sourceDir, name), []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			session := &PythonResolverSession{artifacts: artifacts, buildTools: []PortableBuildToolEvidenceV1{}}
+			operations := PreparedPythonNodeOperations{Store: store, Artifacts: artifacts}
+			_, _, err = operations.materializeLocalOverrides(
+				context.Background(), session,
+				providers.ValidatedExecutableInput{}, providers.ExecutableRequirement{},
+				providers.ExecutableEvidence{}, rendererDigest("a"), "application",
+				[]PythonLocalOverrideV1{{Distribution: "omegaconf", HostDir: sourceDir}},
+				[]providers.ResolvedSourceInput{}, []providerstore.ArtifactDescriptor{},
+			)
+			if err == nil || !strings.Contains(err.Error(), "requires catalog resolution before source-builder provider work") {
+				t.Fatalf("error = %v", err)
+			}
+			var required *pythonBuildToolsRequiredError
+			if errors.As(err, &required) {
+				t.Fatalf("constraint was reduced to a name-only tool request: %v", err)
+			}
+			entries, readErr := os.ReadDir(artifacts.OutputHostDir)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("project build ran before the constrained demand failed: %#v", entries)
+			}
+		})
+	}
+}
+
 func writeDockerdeployTestSourceDistribution(
 	t *testing.T,
 	filename string,

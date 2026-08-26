@@ -3,6 +3,8 @@ package blueprint
 import (
 	"strings"
 	"time"
+
+	"github.com/omry/reploy/internal/toolrequest"
 )
 
 // Document is the fully resolved schema-1 blueprint consumed by Reploy.
@@ -76,8 +78,10 @@ type Application struct {
 }
 
 type ApplicationPackages struct {
-	OS     []APTPackageRequest
-	Python *PythonComponent
+	OS          []APTPackageRequest
+	Python      *PythonComponent
+	Tools       []toolrequest.CanonicalRequirementGroupV1
+	ToolSources map[string][]string `json:"-"`
 }
 
 type ApplicationOption struct {

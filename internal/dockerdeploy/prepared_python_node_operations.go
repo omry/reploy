@@ -350,8 +350,12 @@ func (operations PreparedPythonNodeOperations) materializeLocalOverrides(
 		if err != nil {
 			return nil, nil, err
 		}
+		legacyTools, err := legacyPortableBuildToolNamesV1(recipe)
+		if err != nil {
+			return nil, nil, err
+		}
 		recipes[snapshot.Distribution] = recipe
-		for _, tool := range recipe.Tools {
+		for _, tool := range legacyTools {
 			if !session.HasPortableBuildToolV1(tool) {
 				missingTools[tool] = true
 			}

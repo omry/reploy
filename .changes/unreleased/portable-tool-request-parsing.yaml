@@ -1,0 +1,2 @@
+kind: Added
+body: Accept and canonically merge compact and structured portable-tool requests in application packages and local-source build recipes.

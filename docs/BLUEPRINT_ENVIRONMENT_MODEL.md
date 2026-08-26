@@ -1006,11 +1006,9 @@ local source or upstream-version form that it cannot materialize.
 The same application/package ownership model can be extended to other build
 and packaging systems later.
 
-## Proposed Portable Tool Requests
+## Portable Tool Requests
 
-The current blueprint schema does not yet accept `packages.tools`; this public
-request boundary becomes normative when that implementation lands. Runtime tool
-requests live under
+The blueprint schema accepts runtime tool requests under
 `environment.applications.<application>.packages.tools`. Project-owned
 source-build requirements use the same request forms beneath `.reploy.yaml`
 `requires`; their containing node determines runtime or build-only ownership.
@@ -1039,6 +1037,15 @@ selection dimension to one value or a list. Binding and selection fields are
 valid only when the selected tool contract permits them, and a required
 selection dimension may not be omitted. Scalars and lists normalize to sorted
 sets, so author ordering does not change request identity.
+
+Repeated requests for the same tool in one application scope merge
+field-by-field into one canonical demand. Version constraints accumulate;
+exact definition revisions and context must agree; explicit bindings and
+selection values union; omitted bindings retain inference; and
+`binding: "*"` dominates other binding demands. The complete merged demand is
+retained in resolved-document identity, while source locations remain
+diagnostic only. This parsing boundary does not itself acquire artifacts,
+materialize tools, or integrate provider plans.
 
 Resolution selects an exact target after observing the base image, rejects an
 unsupported tool, version, revision, target, binding, or selection combination
