@@ -1,0 +1,12 @@
+kind: portable-tool-integration-fixture-v1
+fields:
+  id: tool:java/releases/21/validation/fixtures/ubuntu-2510-amd64
+  name: ubuntu-2510-amd64
+  target: {platform: linux/amd64, os_release_id: ubuntu, version_id: "25.10", oci_architecture: amd64, native_architecture: amd64, package_manager: apt}
+  base_image: docker.io/library/ubuntu:25.10
+  base_image_digest: sha256:e0b84ef30bbe766773e6056c60a3e706712e4119508e3da12516f1eddd6f761b
+  context: build
+  bindings: []
+  selections: {}
+  validation_profiles:
+    - {id: tool:java/releases/21/validation/profiles/default, digest: ""}

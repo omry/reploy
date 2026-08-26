@@ -1,0 +1,16 @@
+kind: portable-tool-target-v1
+fields:
+  id: tool:java/releases/21/targets/ubuntu/26.04/amd64
+  target: {platform: linux/amd64, os_release_id: ubuntu, version_id: "26.04", oci_architecture: amd64, native_architecture: amd64, package_manager: apt}
+  support_cases:
+    - {context: build, bindings: [], selections: {}}
+  package_sets: []
+  bindings: []
+  payloads:
+    - {id: tool:java/releases/21/payloads/jdk-linux-amd64, digest: ""}
+  selections: []
+  exports: []
+  integration_fixtures:
+    - {id: tool:java/releases/21/validation/fixtures/ubuntu-2604-amd64, digest: ""}
+  validation_profiles:
+    - {id: tool:java/releases/21/validation/profiles/default, digest: ""}

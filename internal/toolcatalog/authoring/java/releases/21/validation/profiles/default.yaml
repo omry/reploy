@@ -1,0 +1,8 @@
+kind: portable-tool-validation-profile-v1
+fields:
+  id: tool:java/releases/21/validation/profiles/default
+  tool: java
+  version: "21"
+  probes:
+    - path: /opt/reploy/tools/java/jdk-21.0.12+8/bin/java
+      args: [-version]
