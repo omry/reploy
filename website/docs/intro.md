@@ -59,7 +59,7 @@ without learning a domain-specific app first.
 
 ```bash
 # Install the Reploy CLI.
-curl -fsSL https://reploy.yadan.net/install.sh | sh
+curl -fsSL https://reploy.cli.dev/install.sh | sh
 
 # Create a staging workspace for the demo. The default is reploy-staging/.
 reploy stage omegaconf-inspector-demo

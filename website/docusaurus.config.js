@@ -6,7 +6,7 @@ const config = {
   tagline: 'Cross-platform app installs from portable blueprints.',
   favicon: 'img/reploy-mark.svg',
 
-  url: 'https://reploy.yadan.net',
+  url: 'https://reploy.cli.dev',
   baseUrl: '/',
   organizationName: 'omry',
   projectName: 'reploy',
