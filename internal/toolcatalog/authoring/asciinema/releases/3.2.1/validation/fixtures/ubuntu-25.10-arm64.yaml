@@ -1,0 +1,12 @@
+kind: portable-tool-integration-fixture-v1
+fields:
+  id: tool:asciinema/releases/3.2.1/validation/fixtures/ubuntu-2510-arm64
+  name: ubuntu-2510-arm64
+  target: {platform: linux/arm64, os_release_id: ubuntu, version_id: "25.10", oci_architecture: arm64, native_architecture: arm64, package_manager: apt}
+  base_image: docker.io/library/ubuntu:25.10
+  base_image_digest: sha256:e0b84ef30bbe766773e6056c60a3e706712e4119508e3da12516f1eddd6f761b
+  context: build
+  bindings: []
+  selections: {}
+  validation_profiles:
+    - {id: tool:asciinema/releases/3.2.1/validation/profiles/default, digest: ""}

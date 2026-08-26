@@ -1,0 +1,2 @@
+kind: Added
+body: Embed the canonical asciinema 3.2.1 portable-tool definition for the pinned AMD64 and ARM64 build matrix.

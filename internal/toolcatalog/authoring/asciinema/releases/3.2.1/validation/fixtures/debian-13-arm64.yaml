@@ -1,0 +1,12 @@
+kind: portable-tool-integration-fixture-v1
+fields:
+  id: tool:asciinema/releases/3.2.1/validation/fixtures/debian-13-arm64
+  name: debian-13-arm64
+  target: {platform: linux/arm64, os_release_id: debian, version_id: "13", oci_architecture: arm64, native_architecture: arm64, package_manager: apt}
+  base_image: docker.io/library/debian:13-slim
+  base_image_digest: sha256:38a76d01668772e381ad2826d876627c89e7133e2f8a0f5d567306798b0f2a16
+  context: build
+  bindings: []
+  selections: {}
+  validation_profiles:
+    - {id: tool:asciinema/releases/3.2.1/validation/profiles/default, digest: ""}
