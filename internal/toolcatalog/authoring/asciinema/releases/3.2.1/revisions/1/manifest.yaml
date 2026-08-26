@@ -1,0 +1,28 @@
+kind: portable-tool-release-manifest-v1
+fields:
+  id: tool:asciinema/releases/3.2.1/revisions/1/manifest
+  tool: asciinema
+  version: 3.2.1
+  aliases: []
+  revision: "1"
+  contract: {id: tool:asciinema/releases/3.2.1/contract, digest: ""}
+  targets:
+    - {id: tool:asciinema/releases/3.2.1/targets/debian/12/amd64, digest: ""}
+    - {id: tool:asciinema/releases/3.2.1/targets/debian/12/arm64, digest: ""}
+    - {id: tool:asciinema/releases/3.2.1/targets/debian/13/amd64, digest: ""}
+    - {id: tool:asciinema/releases/3.2.1/targets/debian/13/arm64, digest: ""}
+    - {id: tool:asciinema/releases/3.2.1/targets/ubuntu/25.10/amd64, digest: ""}
+    - {id: tool:asciinema/releases/3.2.1/targets/ubuntu/25.10/arm64, digest: ""}
+    - {id: tool:asciinema/releases/3.2.1/targets/ubuntu/26.04/amd64, digest: ""}
+    - {id: tool:asciinema/releases/3.2.1/targets/ubuntu/26.04/arm64, digest: ""}
+  artifact_sources:
+    - artifact_sha256: sha256:1b405bbda565b33c3c4718de67fedc3535580603c0694b1ff3fb04f363430a20
+      artifact: {id: tool:asciinema/releases/3.2.1/payloads/asciinema-linux-amd64, digest: ""}
+      source: {id: tool:asciinema/releases/3.2.1/revisions/1/sources/asciinema-linux-amd64, digest: ""}
+    - artifact_sha256: sha256:b516a6d896844c0ffbc96e0a55afe4cbcc79216abde0fc64fdda4e39bee421ea
+      artifact: {id: tool:asciinema/releases/3.2.1/payloads/asciinema-linux-arm64, digest: ""}
+      source: {id: tool:asciinema/releases/3.2.1/revisions/1/sources/asciinema-linux-arm64, digest: ""}
+  provenance:
+    - https://github.com/asciinema/asciinema/releases/tag/v3.2.1
+  validation_profiles:
+    - {id: tool:asciinema/releases/3.2.1/validation/profiles/default, digest: ""}

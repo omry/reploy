@@ -1,0 +1,9 @@
+kind: portable-tool-artifact-source-v1
+fields:
+  id: tool:asciinema/releases/3.2.1/revisions/1/sources/asciinema-linux-arm64
+  sha256: sha256:b516a6d896844c0ffbc96e0a55afe4cbcc79216abde0fc64fdda4e39bee421ea
+  mirrors:
+    - https://github.com/asciinema/asciinema/releases/download/v3.2.1/asciinema-aarch64-unknown-linux-gnu
+  provenance:
+    - https://github.com/asciinema/asciinema/releases/tag/v3.2.1
+  diagnostics: []

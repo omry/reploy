@@ -1,0 +1,15 @@
+kind: portable-tool-release-contract-v1
+fields:
+  id: tool:asciinema/releases/3.2.1/contract
+  contexts: [build]
+  supported_reploy: ">=0.0.0"
+  binding:
+    options: []
+  selections:
+    dimensions: []
+    combinations: []
+  exports:
+    - name: asciinema
+      path: /opt/reploy/tools/asciinema/asciinema-3.2.1/asciinema
+  resolver_primitives: [https-sha256]
+  compatibility_constraints: [raw-executable-v1]

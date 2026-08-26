@@ -1,0 +1,16 @@
+kind: portable-tool-target-v1
+fields:
+  id: tool:asciinema/releases/3.2.1/targets/ubuntu/25.10/arm64
+  target: {platform: linux/arm64, os_release_id: ubuntu, version_id: "25.10", oci_architecture: arm64, native_architecture: arm64, package_manager: apt}
+  support_cases:
+    - {context: build, bindings: [], selections: {}}
+  package_sets: []
+  bindings: []
+  payloads:
+    - {id: tool:asciinema/releases/3.2.1/payloads/asciinema-linux-arm64, digest: ""}
+  selections: []
+  exports: []
+  integration_fixtures:
+    - {id: tool:asciinema/releases/3.2.1/validation/fixtures/ubuntu-2510-arm64, digest: ""}
+  validation_profiles:
+    - {id: tool:asciinema/releases/3.2.1/validation/profiles/default, digest: ""}

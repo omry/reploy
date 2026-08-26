@@ -1,0 +1,17 @@
+kind: portable-tool-payload-v1
+fields:
+  id: tool:asciinema/releases/3.2.1/payloads/asciinema-linux-arm64
+  name: asciinema
+  revision: "1"
+  upstream_version: 3.2.1
+  platform: linux/arm64
+  logical_path: tools/asciinema/3.2.1/asciinema-aarch64-unknown-linux-gnu
+  kind: raw-executable
+  size: "7138888"
+  sha256: sha256:b516a6d896844c0ffbc96e0a55afe4cbcc79216abde0fc64fdda4e39bee421ea
+  resolver: https-sha256
+  entries: "1"
+  unpacked_size: "7138888"
+  install_directory: asciinema-3.2.1
+  archive_root: .
+  executables: [asciinema]
