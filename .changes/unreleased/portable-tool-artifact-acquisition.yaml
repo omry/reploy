@@ -1,0 +1,2 @@
+kind: Added
+body: Add bounded, verified portable-tool artifact acquisition with ordered mirror fallback, atomic provider-store publication, and credential-free failure provenance.
