@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -31,15 +32,22 @@ func TestAcquireArtifactUsesVerifiedCacheWithoutNetworking(t *testing.T) {
 		t.Fatal(err)
 	}
 	var requests atomic.Int32
+	var resolutions atomic.Int32
 	client := acquisitionTestClient(func(*http.Request) (*http.Response, error) {
 		requests.Add(1)
 		return nil, errors.New("unexpected network request")
 	})
+	network := acquisitionTestNetwork()
+	network.resolve = func(context.Context, string) ([]netip.Addr, error) {
+		resolutions.Add(1)
+		return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+	}
 
 	result, err := store.AcquireArtifact(context.Background(), AcquisitionRequest{
 		Artifact: descriptor,
 		Source:   ArtifactSource{ID: "tool:demo/source", SHA256: descriptor.SHA256, Mirrors: []string{"https://mirror.example.test/artifact"}},
-		Client:   client,
+		client:   client,
+		network:  network,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -49,6 +57,9 @@ func TestAcquireArtifactUsesVerifiedCacheWithoutNetworking(t *testing.T) {
 	}
 	if requests.Load() != 0 {
 		t.Fatalf("cache hit made %d network requests", requests.Load())
+	}
+	if resolutions.Load() != 0 {
+		t.Fatalf("cache hit made %d DNS resolutions", resolutions.Load())
 	}
 }
 
@@ -106,7 +117,8 @@ func TestAcquireArtifactFallsBackInDeclaredOrderAndRecordsFailures(t *testing.T)
 			SHA256:  descriptor.SHA256,
 			Mirrors: []string{"https://mirror.example.test/status", "https://mirror.example.test/wrong", "https://mirror.example.test/good"},
 		},
-		Client:      client,
+		client:      client,
+		network:     acquisitionTestNetwork(),
 		OperationID: "fallback-test",
 	})
 	if err != nil {
@@ -184,7 +196,8 @@ func TestAcquireArtifactClassifiesPublicationFailureBeforeCancel(t *testing.T) {
 		Source: ArtifactSource{
 			ID: "source", SHA256: descriptor.SHA256, Mirrors: []string{"https://mirror.example.test/publish"},
 		},
-		Client:      client,
+		client:      client,
+		network:     acquisitionTestNetwork(),
 		OperationID: "publication-failure-test",
 	})
 	if conflictErr != nil {
@@ -236,7 +249,8 @@ func TestAcquireArtifactRecordsSizeMismatchAndCleansStaging(t *testing.T) {
 			policy.MaxAttempts = 1
 			return policy
 		}(),
-		Client:      client,
+		client:      client,
+		network:     acquisitionTestNetwork(),
 		OperationID: "size-mismatch-test",
 	})
 	if err == nil || !strings.Contains(err.Error(), "outcome=size-mismatch") {
@@ -294,7 +308,8 @@ func TestAcquireArtifactFallsBackAfterTransportError(t *testing.T) {
 			Mirrors: []string{"https://mirror.example.test/offline", "https://mirror.example.test/good"},
 		},
 		Policy:      policy,
-		Client:      client,
+		client:      client,
+		network:     acquisitionTestNetwork(),
 		OperationID: "transport-fallback-test",
 	})
 	if err != nil {
@@ -331,7 +346,8 @@ func TestAcquireArtifactStopsBeforeExceedingAggregateBytes(t *testing.T) {
 			Mirrors: []string{"https://mirror.example.test/first", "https://mirror.example.test/second"},
 		},
 		Policy:      policy,
-		Client:      client,
+		client:      client,
+		network:     acquisitionTestNetwork(),
 		OperationID: "aggregate-bytes-test",
 	})
 	if err == nil || !strings.Contains(err.Error(), "aggregate byte limit reached before the next attempt") {
@@ -364,7 +380,8 @@ func TestAcquireArtifactRecordsAttemptTimeoutAndCleansStaging(t *testing.T) {
 		Artifact:    descriptor,
 		Source:      ArtifactSource{ID: "source", SHA256: descriptor.SHA256, Mirrors: []string{"https://mirror.example.test/attempt-timeout"}},
 		Policy:      policy,
-		Client:      client,
+		client:      client,
+		network:     acquisitionTestNetwork(),
 		OperationID: "attempt-timeout-test",
 	})
 	if err == nil || !strings.Contains(err.Error(), "outcome=timeout") {
@@ -407,8 +424,9 @@ func TestAcquireArtifactFallsBackAfterAttemptTimeoutDuringPublication(t *testing
 				"https://mirror.example.test/good",
 			},
 		},
-		Policy: policy,
-		Client: client,
+		Policy:  policy,
+		client:  client,
+		network: acquisitionTestNetwork(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -449,7 +467,8 @@ func TestAcquireArtifactRecordsAggregateTimeoutAndDoesNotRetry(t *testing.T) {
 			Mirrors: []string{"https://mirror.example.test/first", "https://mirror.example.test/second"},
 		},
 		Policy:      policy,
-		Client:      client,
+		client:      client,
+		network:     acquisitionTestNetwork(),
 		OperationID: "aggregate-timeout-test",
 	})
 	if err == nil || !strings.Contains(err.Error(), "total acquisition time limit reached") || !strings.Contains(err.Error(), "outcome=timeout") {
@@ -474,7 +493,8 @@ func TestAcquireArtifactExhaustionIsDeterministicAndDoesNotPublish(t *testing.T)
 	request := AcquisitionRequest{
 		Artifact:    descriptor,
 		Source:      ArtifactSource{ID: "source", SHA256: descriptor.SHA256, Mirrors: []string{"https://mirror.example.test/a"}},
-		Client:      client,
+		client:      client,
+		network:     acquisitionTestNetwork(),
 		OperationID: "exhaustion-test",
 	}
 	_, err = store.AcquireArtifact(context.Background(), request)
@@ -516,7 +536,8 @@ func TestAcquireArtifactEnforcesAttemptCapsAndTighteningOnly(t *testing.T) {
 			Mirrors: []string{"https://mirror.example.test/first", "https://mirror.example.test/second"},
 		},
 		Policy:      policy,
-		Client:      client,
+		client:      client,
+		network:     acquisitionTestNetwork(),
 		OperationID: "caps-test",
 	})
 	if err == nil {
@@ -532,7 +553,8 @@ func TestAcquireArtifactEnforcesAttemptCapsAndTighteningOnly(t *testing.T) {
 		Artifact: descriptor,
 		Source:   ArtifactSource{ID: "source", SHA256: descriptor.SHA256, Mirrors: []string{"https://mirror.example.test/only"}},
 		Policy:   tooLarge,
-		Client:   client,
+		client:   client,
+		network:  acquisitionTestNetwork(),
 	}); err == nil || !strings.Contains(err.Error(), "core cap") {
 		t.Fatalf("raised cap was accepted: %v", err)
 	}
@@ -557,7 +579,8 @@ func TestAcquireArtifactBoundsRedirectsWithoutLeakingTarget(t *testing.T) {
 		Artifact:    descriptor,
 		Source:      ArtifactSource{ID: "source", SHA256: descriptor.SHA256, Mirrors: []string{"https://mirror.example.test/start"}},
 		Policy:      policy,
-		Client:      client,
+		client:      client,
+		network:     acquisitionTestNetwork(),
 		OperationID: "redirect-test",
 	})
 	if err == nil || !strings.Contains(err.Error(), "outcome=redirect") || strings.Contains(err.Error(), "/end") {
@@ -586,7 +609,8 @@ func TestAcquireArtifactAllowsQueryOnRedirectTargetWithoutRecordingIt(t *testing
 		Source: ArtifactSource{
 			ID: "source", SHA256: descriptor.SHA256, Mirrors: []string{"https://mirror.example.test/start"},
 		},
-		Client: client,
+		client:  client,
+		network: acquisitionTestNetwork(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -617,6 +641,14 @@ func (roundTrip acquisitionRoundTripper) RoundTrip(request *http.Request) (*http
 
 func acquisitionTestClient(roundTrip acquisitionRoundTripper) *http.Client {
 	return &http.Client{Transport: roundTrip}
+}
+
+func acquisitionTestNetwork() *acquisitionNetwork {
+	return &acquisitionNetwork{
+		resolve: func(context.Context, string) ([]netip.Addr, error) {
+			return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+		},
+	}
 }
 
 func acquisitionTestResponse(request *http.Request, status int, body string, location string) *http.Response {
