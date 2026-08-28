@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -89,7 +88,11 @@ type AcquisitionRequest struct {
 	Source      ArtifactSource
 	Policy      AcquisitionPolicy
 	OperationID string
-	Client      *http.Client
+	// client and network are package-internal hermetic test seams. They are
+	// intentionally unavailable to ordinary callers, whose requests always
+	// use the safe production transport.
+	client  *http.Client
+	network *acquisitionNetwork
 }
 
 // AcquisitionAttempt is the in-memory summary of one failed network attempt.
@@ -246,7 +249,6 @@ func AcquireArtifact(ctx context.Context, store Store, request AcquisitionReques
 }
 
 var (
-	errRejectedRedirect   = errors.New("redirect rejected by acquisition bounds")
 	errAcquisitionAttempt = errors.New("artifact acquisition attempt failed")
 	errAcquisitionStorage = errors.New("artifact acquisition storage failure")
 )
@@ -264,9 +266,13 @@ func (store Store) acquireAttempt(
 	remaining int64,
 	expectedSize int64,
 ) (acquisitionObservation, bool, error) {
-	client, redirectCounter := cloneAcquisitionClient(request.Client, policy.MaxRedirects)
+	client, redirectCounter := cloneAcquisitionClient(request.client, request.network, policy.MaxRedirects)
+	defer client.CloseIdleConnections()
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, mirror, nil)
 	if err != nil {
+		return acquisitionObservation{AcquisitionAttempt: AcquisitionAttempt{Mirror: mirror, Attempt: attempt, Outcome: AcquisitionOutcomeTransport}}, false, err
+	}
+	if err := pinAcquisitionRequest(httpRequest, request.network); err != nil {
 		return acquisitionObservation{AcquisitionAttempt: AcquisitionAttempt{Mirror: mirror, Attempt: attempt, Outcome: AcquisitionOutcomeTransport}}, false, err
 	}
 	response, err := client.Do(httpRequest)
@@ -343,27 +349,6 @@ func (store Store) acquireAttempt(
 	return observation, true, nil
 }
 
-type acquisitionRedirectCounter struct {
-	count int
-}
-
-func cloneAcquisitionClient(base *http.Client, maxRedirects int) (*http.Client, *acquisitionRedirectCounter) {
-	client := http.Client{}
-	if base != nil {
-		client = *base
-	}
-	client.Jar = nil
-	redirects := &acquisitionRedirectCounter{}
-	client.CheckRedirect = func(request *http.Request, _ []*http.Request) error {
-		redirects.count++
-		if redirects.count > maxRedirects || !credentialFreeRedirectURL(request.URL) {
-			return errRejectedRedirect
-		}
-		return nil
-	}
-	return &client, redirects
-}
-
 func validateArtifactSource(source ArtifactSource, artifact ArtifactDescriptor) error {
 	if source.ID == "" || len(source.ID) > 512 || strings.IndexFunc(source.ID, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
 		return fmt.Errorf("artifact acquisition source identity is invalid")
@@ -438,26 +423,6 @@ func validateAcquisitionOperationID(operationID string) error {
 func newAcquisitionOperationID() string {
 	sequence := acquisitionOperationSequence.Add(1)
 	return fmt.Sprintf("acquisition-%d-%d", time.Now().UTC().UnixNano(), sequence)
-}
-
-func credentialFreeAcquisitionURLString(raw string) bool {
-	parsed, err := url.Parse(raw)
-	return err == nil && credentialFreeAcquisitionURL(parsed)
-}
-
-func credentialFreeAcquisitionURL(parsed *url.URL) bool {
-	return credentialFreeURL(parsed, false)
-}
-
-func credentialFreeRedirectURL(parsed *url.URL) bool {
-	return credentialFreeURL(parsed, true)
-}
-
-func credentialFreeURL(parsed *url.URL, allowQuery bool) bool {
-	if parsed == nil || parsed.Scheme != "https" || parsed.Opaque != "" || parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" || strings.ContainsAny(parsed.String(), "\r\n") {
-		return false
-	}
-	return allowQuery || (!parsed.ForceQuery && parsed.RawQuery == "")
 }
 
 func classifyAcquisitionError(ctx context.Context, err error) string {

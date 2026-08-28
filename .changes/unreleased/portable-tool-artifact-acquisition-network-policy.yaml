@@ -1,0 +1,2 @@
+kind: Security
+body: Enforce HTTPS-only portable-tool artifact acquisition with proxy-free transport, public DNS pinning, redirect revalidation, and sensitive-target redaction.
