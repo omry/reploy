@@ -12,23 +12,10 @@ import (
 	"strings"
 )
 
-func requireAbsentArchiveDestination(path string) error {
-	info, err := os.Lstat(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("inspect archive destination: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("archive destination already exists as a symbolic link: %s", path)
-	}
-	return fmt.Errorf("archive destination already exists: %s", path)
-}
-
 type archiveMaterializer struct {
 	ctx              context.Context
 	stage            string
+	stageRoot        *os.Root
 	request          validatedArchiveMaterializationRequest
 	archivePaths     map[string]struct{}
 	nodes            map[string]archiveMaterializedNode
@@ -140,13 +127,13 @@ func (materializer *archiveMaterializer) acceptDirectory(destinationPath string)
 	if err := materializer.ensureParent(destinationPath); err != nil {
 		return err
 	}
-	pathOnDisk := filepath.Join(materializer.stage, filepath.FromSlash(destinationPath))
-	if info, err := os.Lstat(pathOnDisk); err == nil {
+	pathInStage := filepath.FromSlash(destinationPath)
+	if info, err := materializer.stageRoot.Lstat(pathInStage); err == nil {
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("archive directory %q collides with a non-directory", destinationPath)
 		}
 	} else if errors.Is(err, fs.ErrNotExist) {
-		if err := os.Mkdir(pathOnDisk, 0o700); err != nil {
+		if err := materializer.stageRoot.Mkdir(pathInStage, 0o700); err != nil {
 			return fmt.Errorf("create archive directory %q: %w", destinationPath, err)
 		}
 	} else {
@@ -169,8 +156,8 @@ func (materializer *archiveMaterializer) acceptRegular(destinationPath string, s
 	if err := materializer.ensureParent(destinationPath); err != nil {
 		return err
 	}
-	pathOnDisk := filepath.Join(materializer.stage, filepath.FromSlash(destinationPath))
-	file, err := os.OpenFile(pathOnDisk, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	pathInStage := filepath.FromSlash(destinationPath)
+	file, err := materializer.stageRoot.OpenFile(pathInStage, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("create archive member %q: %w", destinationPath, err)
 	}
@@ -232,8 +219,8 @@ func (materializer *archiveMaterializer) ensureParent(destinationPath string) er
 		if err := materializer.reservePortableDestination(current); err != nil {
 			return err
 		}
-		pathOnDisk := filepath.Join(materializer.stage, filepath.FromSlash(current))
-		if info, err := os.Lstat(pathOnDisk); err == nil {
+		pathInStage := filepath.FromSlash(current)
+		if info, err := materializer.stageRoot.Lstat(pathInStage); err == nil {
 			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 				return fmt.Errorf("archive path %q has a non-directory parent %q", destinationPath, current)
 			}
@@ -241,7 +228,7 @@ func (materializer *archiveMaterializer) ensureParent(destinationPath string) er
 				materializer.nodes[current] = archiveMaterializedNode{kind: ArchiveEntryKindDirectory}
 			}
 		} else if errors.Is(err, fs.ErrNotExist) {
-			if err := os.Mkdir(pathOnDisk, 0o700); err != nil {
+			if err := materializer.stageRoot.Mkdir(pathInStage, 0o700); err != nil {
 				return fmt.Errorf("create archive parent %q: %w", current, err)
 			}
 			materializer.nodes[current] = archiveMaterializedNode{kind: ArchiveEntryKindDirectory}
@@ -287,13 +274,13 @@ func archivePathWithin(root string, member string) bool {
 	return root == "." || member == root || strings.HasPrefix(member, root+"/")
 }
 
-func normalizeMaterializedTree(root string) error {
+func normalizeMaterializedTree(root *os.Root) error {
 	directories := []string{}
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+	err := fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		isDirectory, err := normalizeMaterializedEntry(path, entry)
+		isDirectory, err := normalizeMaterializedEntry(root, path)
 		if err != nil {
 			return err
 		}
@@ -306,23 +293,35 @@ func normalizeMaterializedTree(root string) error {
 		return err
 	}
 	for index := len(directories) - 1; index >= 0; index-- {
-		if err := syncStoreDirectory(directories[index]); err != nil {
+		if err := syncArchiveMaterializationDirectory(root, directories[index]); err != nil {
 			return fmt.Errorf("sync materialized directory %s: %w", directories[index], err)
 		}
 	}
 	return nil
 }
 
-func normalizeMaterializedEntry(path string, entry fs.DirEntry) (bool, error) {
-	info, err := entry.Info()
+func normalizeMaterializedEntry(root *os.Root, path string) (bool, error) {
+	info, err := root.Lstat(filepath.FromSlash(path))
 	if err != nil {
 		return false, err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		return false, fmt.Errorf("materialized archive contains a symbolic link: %s", path)
 	}
+	file, err := root.Open(filepath.FromSlash(path))
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return false, err
+	}
+	if !os.SameFile(info, openedInfo) {
+		return false, fmt.Errorf("materialized archive entry changed identity: %s", path)
+	}
 	if info.IsDir() {
-		if err := os.Chmod(path, 0o555); err != nil {
+		if err := file.Chmod(0o555); err != nil {
 			return false, fmt.Errorf("normalize materialized directory %s: %w", path, err)
 		}
 		return true, nil
@@ -331,35 +330,4 @@ func normalizeMaterializedEntry(path string, entry fs.DirEntry) (bool, error) {
 		return false, fmt.Errorf("materialized archive contains an unsupported special entry: %s", path)
 	}
 	return false, nil
-}
-
-func cleanupArchiveMaterializationWorkspace(root string) {
-	if _, err := os.Lstat(root); err != nil {
-		return
-	}
-	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		_ = cleanupArchiveMaterializationEntry(path, entry)
-		return nil
-	})
-	_ = os.RemoveAll(root)
-}
-
-func cleanupArchiveMaterializationEntry(path string, entry fs.DirEntry) error {
-	if entry.Type()&os.ModeSymlink != 0 {
-		return os.Remove(path)
-	}
-	info, err := entry.Info()
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return os.Remove(path)
-	}
-	if info.IsDir() {
-		return os.Chmod(path, 0o700)
-	}
-	return os.Chmod(path, 0o600)
 }
