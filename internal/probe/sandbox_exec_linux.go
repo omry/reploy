@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -31,6 +32,15 @@ func sandboxAndExecApplicationV1(plan sandboxExecPlanV1) error {
 	defer runtime.UnlockOSThread()
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("trusted sandbox setup must begin as container root")
+	}
+	statusFile := (*os.File)(nil)
+	if plan.RecordExitStatus {
+		var err error
+		statusFile, err = createPortableToolExitStatusFileV1()
+		if err != nil {
+			return err
+		}
+		defer statusFile.Close()
 	}
 	if plan.InstallRules {
 		sessionNetwork, err := readApplicationSessionNetworkConfigurationV1(plan.SessionNetworkPrefixes)
@@ -57,7 +67,23 @@ func sandboxAndExecApplicationV1(plan sandboxExecPlanV1) error {
 	if err := dropApplicationAuthorityV1(plan.UID, plan.GID, plan.Groups); err != nil {
 		return err
 	}
-	return verifyAndExecApplication(plan.Argv, readApplicationKernelStatus, execApplication)
+	environment, err := sandboxExecEnvironmentV1(plan.EnvironmentProfile, os.Environ())
+	if err != nil {
+		return err
+	}
+	return verifyAndExecApplication(plan.Argv, readApplicationKernelStatus, func(argv []string) error {
+		if statusFile != nil {
+			// Re-exec only after the thread-scoped authority transition. The new
+			// Go runtime therefore starts entirely unprivileged and can safely
+			// supervise the literal application argv to record its exit status.
+			return syscall.Exec(
+				"/proc/self/exe",
+				portableToolObservedExecArgvV1(int(statusFile.Fd()), plan, argv),
+				environment,
+			)
+		}
+		return syscall.Exec(argv[0], argv, environment)
+	})
 }
 
 func dropApplicationAuthorityV1(uid uint32, gid uint32, groups []uint32) error {
