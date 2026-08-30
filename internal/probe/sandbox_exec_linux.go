@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -57,7 +58,13 @@ func sandboxAndExecApplicationV1(plan sandboxExecPlanV1) error {
 	if err := dropApplicationAuthorityV1(plan.UID, plan.GID, plan.Groups); err != nil {
 		return err
 	}
-	return verifyAndExecApplication(plan.Argv, readApplicationKernelStatus, execApplication)
+	environment, err := sandboxExecEnvironmentV1(plan.EnvironmentProfile, os.Environ())
+	if err != nil {
+		return err
+	}
+	return verifyAndExecApplication(plan.Argv, readApplicationKernelStatus, func(argv []string) error {
+		return syscall.Exec(argv[0], argv, environment)
+	})
 }
 
 func dropApplicationAuthorityV1(uid uint32, gid uint32, groups []uint32) error {
