@@ -13,6 +13,7 @@ type sandboxExecPlanV1 struct {
 	UID                    uint32
 	GID                    uint32
 	Groups                 []uint32
+	EnvironmentProfile     string
 	AllowPublic            bool
 	AllowLocal             bool
 	AllowAmbiguous         bool
@@ -39,6 +40,7 @@ func parseSandboxExecPlanV1(args []string, installRules bool) (sandboxExecPlanV1
 	uid := set.String("uid", "", "application UID")
 	gid := set.String("gid", "", "application GID")
 	groups := set.String("groups", "", "comma-separated supplementary GIDs")
+	environmentProfile := set.String("environment-profile", "", "fixed application environment profile")
 	public := set.String("public", "", "public network policy")
 	local := set.String("local", "", "local network policy")
 	ambiguous := set.String("ambiguous", "", "ambiguous destination policy")
@@ -73,6 +75,12 @@ func parseSandboxExecPlanV1(args []string, installRules bool) (sandboxExecPlanV1
 	if !installRules && *sessionNetworkPeer != "" {
 		return sandboxExecPlanV1{}, fmt.Errorf("--session-network-peer is not accepted by restricted-exec")
 	}
+	if installRules && *environmentProfile != "" {
+		return sandboxExecPlanV1{}, fmt.Errorf("--environment-profile is not accepted by sandbox-exec")
+	}
+	if !installRules && *environmentProfile != "" && *environmentProfile != PortableToolEnvironmentProfileV1 {
+		return sandboxExecPlanV1{}, fmt.Errorf("--environment-profile must be %s", PortableToolEnvironmentProfileV1)
+	}
 	if *sessionNetworkPrefixes != "" && (!path.IsAbs(*sessionNetworkPrefixes) || path.Clean(*sessionNetworkPrefixes) != *sessionNetworkPrefixes) {
 		return sandboxExecPlanV1{}, fmt.Errorf("--session-network-prefixes must be an absolute clean path")
 	}
@@ -103,11 +111,45 @@ func parseSandboxExecPlanV1(args []string, installRules bool) (sandboxExecPlanV1
 		ports[index] = uint16(value)
 	}
 	return sandboxExecPlanV1{
-		UID: parsedUID, GID: parsedGID, Groups: parsedGroups,
+		UID: parsedUID, GID: parsedGID, Groups: parsedGroups, EnvironmentProfile: *environmentProfile,
 		AllowPublic: allowPublic, AllowLocal: allowLocal, AllowAmbiguous: allowAmbiguous,
 		InboundTCP: ports, SessionNetworkPrefixes: *sessionNetworkPrefixes, SessionNetworkPeer: *sessionNetworkPeer, InstallRules: installRules,
 		Argv: append([]string(nil), argv...),
 	}, nil
+}
+
+const PortableToolEnvironmentProfileV1 = "portable-tool-v1"
+
+type EnvironmentVariableV1 struct {
+	Name  string
+	Value string
+}
+
+// PortableToolEnvironmentV1 returns a fresh copy of the fixed environment
+// installed by restricted-exec for portable-tool validation probes.
+func PortableToolEnvironmentV1() []EnvironmentVariableV1 {
+	return []EnvironmentVariableV1{
+		{Name: "HOME", Value: "/tmp"},
+		{Name: "LANG", Value: "C"},
+		{Name: "LC_ALL", Value: "C"},
+		{Name: "PATH", Value: "/usr/bin:/bin"},
+		{Name: "TMPDIR", Value: "/tmp"},
+	}
+}
+
+func sandboxExecEnvironmentV1(profile string, inherited []string) ([]string, error) {
+	if profile == "" {
+		return append([]string(nil), inherited...), nil
+	}
+	if profile != PortableToolEnvironmentProfileV1 {
+		return nil, fmt.Errorf("unsupported application environment profile %q", profile)
+	}
+	variables := PortableToolEnvironmentV1()
+	environment := make([]string, len(variables))
+	for index, variable := range variables {
+		environment[index] = variable.Name + "=" + variable.Value
+	}
+	return environment, nil
 }
 
 func parseCredentialV1(value string) (uint32, error) {
