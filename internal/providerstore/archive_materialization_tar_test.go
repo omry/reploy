@@ -33,7 +33,7 @@ func TestArchiveMaterializationTarExtractsIntoTransaction(t *testing.T) {
 	if content, err := os.ReadFile(filepath.Join(materializer.stage, "bin", "tool")); err != nil || string(content) != "abc" {
 		t.Fatalf("materialized content = %q, %v", content, err)
 	}
-	if err := normalizeMaterializedTree(materializer.stage); err != nil {
+	if err := normalizeMaterializedTree(materializer.stageRoot); err != nil {
 		t.Fatal(err)
 	}
 	assertArchiveMaterializedDirectoryMode(t, filepath.Join(materializer.stage, "bin"))
