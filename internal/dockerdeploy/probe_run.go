@@ -56,6 +56,55 @@ func openImageValidationSession(
 	workspace PreparedProbeWorkspace,
 	aptWorkspace *PreparedAPTResolverWorkspace,
 ) (*ImageValidationSession, error) {
+	return openImageValidationSessionWithCreate(
+		ctx, descriptor, workspace, aptWorkspace, imageValidationCreateCommandSpecWithAPT,
+	)
+}
+
+type imageValidationCreateSpec func(
+	descriptor deploy.ImageDescriptor,
+	workspace PreparedProbeWorkspace,
+	aptWorkspace *PreparedAPTResolverWorkspace,
+) (CommandSpec, string, error)
+
+type imageValidationCleanupContext func(context.Context) (context.Context, context.CancelFunc)
+
+func openImageValidationSessionWithCreate(
+	ctx context.Context,
+	descriptor deploy.ImageDescriptor,
+	workspace PreparedProbeWorkspace,
+	aptWorkspace *PreparedAPTResolverWorkspace,
+	create imageValidationCreateSpec,
+) (*ImageValidationSession, error) {
+	return openImageValidationSessionWithCreateContext(ctx, descriptor, workspace, aptWorkspace, create, nil)
+}
+
+// openImageValidationSessionWithCreateBounded is the cancellation-aware
+// variant used by bounded probe executors. Existing validation callers retain
+// the historical create-before-cancellation behavior through
+// openImageValidationSessionWithCreate.
+func openImageValidationSessionWithCreateBounded(
+	ctx context.Context,
+	descriptor deploy.ImageDescriptor,
+	workspace PreparedProbeWorkspace,
+	aptWorkspace *PreparedAPTResolverWorkspace,
+	create imageValidationCreateSpec,
+	newCleanupContext imageValidationCleanupContext,
+) (*ImageValidationSession, error) {
+	if newCleanupContext == nil {
+		return nil, fmt.Errorf("bounded image validation cleanup context is required")
+	}
+	return openImageValidationSessionWithCreateContext(ctx, descriptor, workspace, aptWorkspace, create, newCleanupContext)
+}
+
+func openImageValidationSessionWithCreateContext(
+	ctx context.Context,
+	descriptor deploy.ImageDescriptor,
+	workspace PreparedProbeWorkspace,
+	aptWorkspace *PreparedAPTResolverWorkspace,
+	create imageValidationCreateSpec,
+	newCleanupContext imageValidationCleanupContext,
+) (*ImageValidationSession, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("image validation session context is required")
 	}
@@ -68,21 +117,28 @@ func openImageValidationSession(
 	if descriptor.Platform.OS != "linux" {
 		return nil, fmt.Errorf("image validation requires a Linux image")
 	}
-	spec, containerName, err := imageValidationCreateCommandSpecWithAPT(descriptor, workspace, aptWorkspace)
+	if create == nil {
+		return nil, fmt.Errorf("image validation create policy is required")
+	}
+	spec, containerName, err := create(descriptor, workspace, aptWorkspace)
 	if err != nil {
 		return nil, err
 	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	runDocker, err := bindImageValidationCommandRunner(context.WithoutCancel(ctx), spec, 0)
+	createContext := context.WithoutCancel(ctx)
+	if newCleanupContext != nil {
+		createContext = ctx
+	}
+	runDocker, err := bindImageValidationCommandRunner(createContext, spec, 0)
 	if err != nil {
 		return nil, imageValidationCommandError("create", descriptor.Platform.Canonical, stderr.String(), err)
 	}
-	if err := runDocker(spec, RunOptions{Context: context.WithoutCancel(ctx), Stdout: &stdout, Stderr: &stderr}); err != nil {
+	if err := runDocker(spec, RunOptions{Context: createContext, Stdout: &stdout, Stderr: &stderr}); err != nil {
 		return nil, imageValidationCommandError("create", descriptor.Platform.Canonical, stderr.String(), err)
 	}
 	if err := ctx.Err(); err != nil {
-		cleanupErr := removeImageValidationContainer(context.WithoutCancel(ctx), containerName, runDocker)
+		cleanupErr := removeImageValidationContainerAfterSetupFailure(ctx, createContext, containerName, runDocker, newCleanupContext)
 		return nil, errors.Join(fmt.Errorf("open image validation session: %w", err), cleanupErr)
 	}
 	stderr.Reset()
@@ -91,12 +147,28 @@ func openImageValidationSession(
 		RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr},
 	); err != nil {
 		startErr := imageValidationCommandError("start", descriptor.Platform.Canonical, stderr.String(), err)
-		cleanupErr := removeImageValidationContainer(context.WithoutCancel(ctx), containerName, runDocker)
+		cleanupErr := removeImageValidationContainerAfterSetupFailure(ctx, createContext, containerName, runDocker, newCleanupContext)
 		return nil, errors.Join(startErr, cleanupErr)
 	}
 	return &ImageValidationSession{
 		descriptor: descriptor, workspace: workspace, aptWorkspace: aptWorkspace, containerName: containerName, runDocker: runDocker,
 	}, nil
+}
+
+func removeImageValidationContainerAfterSetupFailure(
+	parent context.Context,
+	createContext context.Context,
+	containerName string,
+	runDocker commandRunner,
+	newCleanupContext imageValidationCleanupContext,
+) error {
+	cleanupContext := createContext
+	cancelCleanup := func() {}
+	if newCleanupContext != nil {
+		cleanupContext, cancelCleanup = newCleanupContext(parent)
+	}
+	defer cancelCleanup()
+	return removeImageValidationContainer(cleanupContext, containerName, runDocker)
 }
 
 func (session *ImageValidationSession) runDockerCommand(spec CommandSpec, options RunOptions) error {
