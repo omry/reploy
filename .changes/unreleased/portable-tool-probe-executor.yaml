@@ -1,0 +1,2 @@
+kind: Added
+body: Run portable-tool validation-profile probes through a fixed networkless executor with bounded resources and canonical process evidence.
