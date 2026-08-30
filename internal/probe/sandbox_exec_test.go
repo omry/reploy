@@ -115,3 +115,75 @@ func TestRestrictedExecDoesNotAcceptNetworkSetupArguments(t *testing.T) {
 		})
 	}
 }
+
+func TestRestrictedExecAcceptsOnlyThePortableToolEnvironmentProfile(t *testing.T) {
+	plan, err := parseSandboxExecPlanV1([]string{
+		"--uid", "65532", "--gid", "65532", "--groups", "",
+		"--environment-profile", PortableToolEnvironmentProfileV1,
+		"--", "/opt/demo/bin/demo", "--version",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.EnvironmentProfile != PortableToolEnvironmentProfileV1 {
+		t.Fatalf("environment profile = %q", plan.EnvironmentProfile)
+	}
+	if !reflect.DeepEqual(plan.Argv, []string{"/opt/demo/bin/demo", "--version"}) {
+		t.Fatalf("argv = %#v", plan.Argv)
+	}
+
+	for _, test := range []struct {
+		name         string
+		installRules bool
+		profile      string
+		want         string
+	}{
+		{name: "unknown restricted profile", profile: "image-controlled", want: PortableToolEnvironmentProfileV1},
+		{name: "sandbox profile", installRules: true, profile: PortableToolEnvironmentProfileV1, want: "not accepted by sandbox-exec"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			args := []string{"--uid", "501", "--gid", "20", "--environment-profile", test.profile}
+			if test.installRules {
+				args = append(args, "--public", "deny", "--local", "deny", "--ambiguous", "require-both")
+			}
+			args = append(args, "--", "/bin/true")
+			_, err := parseSandboxExecPlanV1(args, test.installRules)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestSandboxExecEnvironmentV1ReplacesInheritedEnvironmentForPortableTools(t *testing.T) {
+	inherited := []string{"PATH=/image/bin", "LD_PRELOAD=/image/evil.so"}
+	got, err := sandboxExecEnvironmentV1(PortableToolEnvironmentProfileV1, inherited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"HOME=/tmp",
+		"LANG=C",
+		"LC_ALL=C",
+		"PATH=/usr/bin:/bin",
+		"TMPDIR=/tmp",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("portable-tool environment = %#v, want %#v", got, want)
+	}
+	if reflect.DeepEqual(got, inherited) {
+		t.Fatalf("portable-tool environment retained image values: %#v", got)
+	}
+
+	passthrough, err := sandboxExecEnvironmentV1("", inherited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(passthrough, inherited) {
+		t.Fatalf("default environment = %#v, want %#v", passthrough, inherited)
+	}
+	passthrough[0] = "changed"
+	if inherited[0] == "changed" {
+		t.Fatal("default environment aliases inherited input")
+	}
+}
