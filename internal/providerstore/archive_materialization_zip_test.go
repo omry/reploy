@@ -41,7 +41,7 @@ func TestArchiveMaterializationZipExtractsIntoTransaction(t *testing.T) {
 	if err := materializer.validateExpectedInventory(); err != nil {
 		t.Fatal(err)
 	}
-	if err := normalizeMaterializedTree(materializer.stage); err != nil {
+	if err := normalizeMaterializedTree(materializer.stageRoot); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(materializer.stage, "playwright", "node")

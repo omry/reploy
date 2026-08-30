@@ -32,7 +32,7 @@ func TestArchiveMaterializationTransactionWritesInventoryAndModes(t *testing.T) 
 		t.Fatalf("materialized content = %q, %v", content, err)
 	}
 	assertArchiveMaterializedRegularMode(t, filepath.Join(materializer.stage, "bin", "tool"), true)
-	if err := normalizeMaterializedTree(materializer.stage); err != nil {
+	if err := normalizeMaterializedTree(materializer.stageRoot); err != nil {
 		t.Fatal(err)
 	}
 	assertArchiveMaterializedDirectoryMode(t, filepath.Join(materializer.stage, "docs"))
@@ -123,7 +123,11 @@ func TestArchiveMaterializationTransactionCleansWorkspace(t *testing.T) {
 	if err := os.WriteFile(marker, []byte("staged"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cleanupArchiveMaterializationWorkspace(materializer.stage)
+	if err := materializer.stageRoot.Close(); err != nil {
+		t.Fatal(err)
+	}
+	materializer.stageRoot = nil
+	cleanupArchiveMaterializationWorkspaceForTest(t, materializer.stage)
 	if _, err := os.Lstat(materializer.stage); !os.IsNotExist(err) {
 		t.Fatalf("workspace still exists after cleanup: %v", err)
 	}
@@ -149,13 +153,13 @@ func TestArchiveMaterializationTransactionCleansWorkspaceAfterSymlink(t *testing
 		t.Fatal(err)
 	}
 
-	cleanupArchiveMaterializationWorkspace(stage)
+	cleanupArchiveMaterializationWorkspaceForTest(t, stage)
 	if _, err := os.Lstat(stage); !os.IsNotExist(err) {
 		t.Fatalf("workspace still exists after cleanup following symlink: %v", err)
 	}
 }
 
-func TestCleanupArchiveMaterializationEntryUnknownTypeSymlinkDoesNotChmodTarget(t *testing.T) {
+func TestArchiveMaterializationWorkspaceCleanupDoesNotChmodSymlinkTarget(t *testing.T) {
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")
 	if err := os.Mkdir(workspace, 0o700); err != nil {
@@ -169,24 +173,13 @@ func TestCleanupArchiveMaterializationEntryUnknownTypeSymlinkDoesNotChmodTarget(
 	if err := os.Symlink(target, symlink); err != nil {
 		t.Skipf("symbolic links are unavailable: %v", err)
 	}
-	linkInfo, err := os.Lstat(symlink)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	info, err := os.Stat(target)
 	if err != nil {
 		t.Fatal(err)
 	}
 	targetMode := info.Mode().Perm()
 
-	entry := unknownTypeArchiveCleanupEntry{info: linkInfo}
-	if err := cleanupArchiveMaterializationEntry(symlink, entry); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Lstat(symlink); !os.IsNotExist(err) {
-		t.Fatalf("symlink still exists after cleanup: %v", err)
-	}
+	cleanupArchiveMaterializationWorkspaceForTest(t, workspace)
 	info, err = os.Stat(target)
 	if err != nil {
 		t.Fatal(err)
@@ -196,35 +189,25 @@ func TestCleanupArchiveMaterializationEntryUnknownTypeSymlinkDoesNotChmodTarget(
 	}
 }
 
-type unknownTypeArchiveCleanupEntry struct {
-	info fs.FileInfo
-}
-
-func (entry unknownTypeArchiveCleanupEntry) Name() string               { return entry.info.Name() }
-func (entry unknownTypeArchiveCleanupEntry) IsDir() bool                { return false }
-func (entry unknownTypeArchiveCleanupEntry) Type() fs.FileMode          { return 0 }
-func (entry unknownTypeArchiveCleanupEntry) Info() (fs.FileInfo, error) { return entry.info, nil }
-
-func TestNormalizeMaterializedEntryUnknownTypeDirectoryUsesInfo(t *testing.T) {
+func TestNormalizeMaterializedEntryDirectoryUsesHandleMetadata(t *testing.T) {
 	root := t.TempDir()
 	directory := filepath.Join(root, "directory")
 	if err := os.Mkdir(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Lstat(directory)
+	rootHandle, err := os.OpenRoot(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	entry := unknownTypeArchiveNormalizationEntry{info: info}
-	isDirectory, err := normalizeMaterializedEntry(directory, entry)
+	defer rootHandle.Close()
+	isDirectory, err := normalizeMaterializedEntry(rootHandle, "directory")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !isDirectory {
-		t.Fatal("unknown-type directory was not classified as a directory")
+		t.Fatal("directory was not classified from handle metadata")
 	}
-	info, err = os.Stat(directory)
+	info, err := os.Stat(directory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,15 +215,6 @@ func TestNormalizeMaterializedEntryUnknownTypeDirectoryUsesInfo(t *testing.T) {
 		t.Fatalf("normalized directory mode = %o, want 555", mode)
 	}
 }
-
-type unknownTypeArchiveNormalizationEntry struct {
-	info fs.FileInfo
-}
-
-func (entry unknownTypeArchiveNormalizationEntry) Name() string               { return entry.info.Name() }
-func (entry unknownTypeArchiveNormalizationEntry) IsDir() bool                { return false }
-func (entry unknownTypeArchiveNormalizationEntry) Type() fs.FileMode          { return 0 }
-func (entry unknownTypeArchiveNormalizationEntry) Info() (fs.FileInfo, error) { return entry.info, nil }
 
 func TestArchiveMaterializationTransactionNormalizesNonExecutableRegularFileMode(t *testing.T) {
 	materializer, _ := newArchiveTransactionTestMaterializer(t, 1, 4)
@@ -264,7 +238,7 @@ func TestPublishArchiveMaterializedDirectoryDoesNotReplaceExistingDestination(t 
 	if err := os.Mkdir(destination, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := publishArchiveMaterializedDirectory(stage, destination); err == nil {
+	if err := publishArchiveMaterializedDirectoryForTest(stage, destination); err == nil {
 		t.Fatal("publication unexpectedly replaced an existing destination")
 	}
 	if _, err := os.Stat(marker); err != nil {
@@ -290,7 +264,7 @@ func TestPublishArchiveMaterializedDirectoryPublishesStage(t *testing.T) {
 		t.Fatal(err)
 	}
 	destination := filepath.Join(root, "destination")
-	if err := publishArchiveMaterializedDirectory(stage, destination); err != nil {
+	if err := publishArchiveMaterializedDirectoryForTest(stage, destination); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(stage); !os.IsNotExist(err) {
@@ -316,7 +290,7 @@ func TestPublishArchiveMaterializedDirectoryPreservesReadOnlyStageMode(t *testin
 	}
 	destination := filepath.Join(root, "destination")
 	t.Cleanup(func() { _ = os.Chmod(destination, 0o700) })
-	if err := publishArchiveMaterializedDirectory(stage, destination); err != nil {
+	if err := publishArchiveMaterializedDirectoryForTest(stage, destination); err != nil {
 		t.Fatal(err)
 	}
 	assertArchiveMaterializedDirectoryMode(t, destination)
@@ -333,17 +307,63 @@ func newArchiveTransactionTestMaterializer(t *testing.T, entryLimit uint64, size
 	if err := os.Mkdir(stage, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { cleanupArchiveMaterializationWorkspace(stage) })
+	stageRoot, err := os.OpenRoot(stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = stageRoot.Close()
+		cleanupArchiveMaterializationWorkspaceForTest(t, stage)
+	})
 	request := ArchiveMaterializationRequest{InstallDirectory: "install", ArchiveRoot: "."}
 	return &archiveMaterializer{
 		ctx:              context.Background(),
 		stage:            stage,
+		stageRoot:        stageRoot,
 		request:          validatedArchiveMaterializationRequest{ArchiveMaterializationRequest: request, archiveRoot: ".", entryLimit: entryLimit, sizeLimit: sizeLimit},
 		archivePaths:     map[string]struct{}{},
 		nodes:            map[string]archiveMaterializedNode{".": {kind: ArchiveEntryKindDirectory}},
 		destinationPaths: map[string]string{portableArchiveDestinationKey("."): "."},
 		executablePaths:  map[string]string{},
 	}, root
+}
+
+func cleanupArchiveMaterializationWorkspaceForTest(t *testing.T, path string) {
+	t.Helper()
+	root, err := os.OpenRoot(path)
+	if err == nil {
+		prepareArchiveMaterializationWorkspaceCleanup(root)
+		_ = root.Close()
+	}
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func publishArchiveMaterializedDirectoryForTest(stage string, destination string) error {
+	parent, err := os.Open(filepath.Dir(stage))
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	stageDirectory, err := openArchiveMaterializationStageDirectoryForTest(stage)
+	if err != nil {
+		return err
+	}
+	if stageDirectory != nil {
+		defer stageDirectory.Close()
+	}
+	_, err = publishArchiveMaterializedDirectory(parent, stageDirectory, filepath.Base(stage), filepath.Base(destination))
+	return err
+}
+
+func openArchiveMaterializationStageDirectoryForTest(stage string) (*os.File, error) {
+	root, err := os.OpenRoot(stage)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return openArchiveMaterializationStageDirectory(root)
 }
 
 func fileMode(t *testing.T, path string) fs.FileMode {

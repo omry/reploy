@@ -6,60 +6,45 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"golang.org/x/sys/unix"
 )
 
 // publishArchiveMaterializedDirectory uses renamex_np with RENAME_EXCL,
-// the Darwin atomic no-replace directory rename.
-func publishArchiveMaterializedDirectory(stage string, destination string) error {
-	stageDirectory, err := os.Open(stage)
-	if err != nil {
-		return fmt.Errorf("open archive materialization stage directory: %w", err)
-	}
-	defer stageDirectory.Close()
+// the Darwin atomic no-replace directory rename. Both names are resolved
+// relative to the destination-root handle that owns the transaction.
+func publishArchiveMaterializedDirectory(parent *os.File, stageDirectory *os.File, stage string, destination string) (bool, error) {
 	info, err := stageDirectory.Stat()
 	if err != nil {
-		return fmt.Errorf("inspect archive materialization stage directory: %w", err)
+		return false, fmt.Errorf("inspect archive materialization stage directory: %w", err)
 	}
 	originalMode := info.Mode().Perm()
-	sourceParent, err := os.Open(filepath.Dir(stage))
-	if err != nil {
-		return fmt.Errorf("open archive materialization stage parent: %w", err)
-	}
-	defer sourceParent.Close()
-	destinationParent, err := os.Open(filepath.Dir(destination))
-	if err != nil {
-		return fmt.Errorf("open archive materialization destination parent: %w", err)
-	}
-	defer destinationParent.Close()
 	// Darwin/XNU rename authorization requires add-subdirectory rights on the
 	// source directory, so a normalized 0555 stage needs a private temporary
 	// owner-write bit.
 	ownerWriteAdded := originalMode&0o200 == 0
 	if ownerWriteAdded {
 		if err := stageDirectory.Chmod(originalMode | 0o200); err != nil {
-			return fmt.Errorf("temporarily enable stage directory owner-write permission: %w", err)
+			return false, fmt.Errorf("temporarily enable stage directory owner-write permission: %w", err)
 		}
 	}
 
-	renameErr := unix.RenamexNp(stage, destination, unix.RENAME_EXCL)
+	renameErr := unix.RenameatxNp(int(parent.Fd()), stage, int(parent.Fd()), destination, unix.RENAME_EXCL)
 	var restoreErr error
 	if ownerWriteAdded {
 		restoreErr = stageDirectory.Chmod(originalMode)
 	}
 	if renameErr != nil {
-		return errors.Join(
+		return false, errors.Join(
 			fmt.Errorf("rename archive materialization directory without replacement: %w", renameErr),
 			archiveMaterializationDarwinRestoreError(restoreErr),
 		)
 	}
 	if restoreErr != nil {
-		rollbackErr := unix.RenamexNp(destination, stage, unix.RENAME_EXCL)
+		rollbackErr := unix.RenameatxNp(int(parent.Fd()), destination, int(parent.Fd()), stage, unix.RENAME_EXCL)
 		retryRestoreErr := stageDirectory.Chmod(originalMode)
 		if rollbackErr == nil {
-			return errors.Join(
+			return false, errors.Join(
 				archiveMaterializationDarwinRestoreError(restoreErr),
 				archiveMaterializationDarwinRetryRestoreError(retryRestoreErr),
 			)
@@ -68,29 +53,26 @@ func publishArchiveMaterializedDirectory(stage string, destination string) error
 			// The destination remains published with its normalized mode. Sync
 			// the published directory and both rename parents below.
 		} else {
-			return errors.Join(
+			return true, errors.Join(
 				archiveMaterializationDarwinRestoreError(restoreErr),
 				archiveMaterializationDarwinRollbackError(rollbackErr),
 				archiveMaterializationDarwinRetryRestoreError(retryRestoreErr),
 			)
 		}
 	}
-	if err := syncArchiveMaterializationDarwinPublication(stageDirectory, sourceParent, destinationParent); err != nil {
-		return err
+	if err := syncArchiveMaterializationDarwinPublication(stageDirectory, parent); err != nil {
+		return true, err
 	}
-	return nil
+	return true, nil
 }
 
-func syncArchiveMaterializationDarwinPublication(stageDirectory *os.File, sourceParent *os.File, destinationParent *os.File) error {
+func syncArchiveMaterializationDarwinPublication(stageDirectory *os.File, parent *os.File) error {
 	var syncErr error
 	if err := stageDirectory.Sync(); err != nil {
 		syncErr = fmt.Errorf("sync published archive materialization directory: %w", err)
 	}
-	if err := sourceParent.Sync(); err != nil {
-		syncErr = errors.Join(syncErr, fmt.Errorf("sync archive materialization stage parent after publication: %w", err))
-	}
-	if err := destinationParent.Sync(); err != nil {
-		syncErr = errors.Join(syncErr, fmt.Errorf("sync archive materialization destination parent after publication: %w", err))
+	if err := parent.Sync(); err != nil {
+		syncErr = errors.Join(syncErr, fmt.Errorf("sync archive materialization destination root after publication: %w", err))
 	}
 	return syncErr
 }

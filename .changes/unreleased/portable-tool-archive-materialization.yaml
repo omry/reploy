@@ -1,0 +1,2 @@
+kind: Added
+body: Add bounded offline portable-tool archive materialization from verified provider-store artifacts with handle-bound staging and atomic no-replace publication.
