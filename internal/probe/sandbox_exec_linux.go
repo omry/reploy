@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -32,6 +33,15 @@ func sandboxAndExecApplicationV1(plan sandboxExecPlanV1) error {
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("trusted sandbox setup must begin as container root")
 	}
+	statusFile := (*os.File)(nil)
+	if plan.RecordExitStatus {
+		var err error
+		statusFile, err = createPortableToolExitStatusFileV1()
+		if err != nil {
+			return err
+		}
+		defer statusFile.Close()
+	}
 	if plan.InstallRules {
 		sessionNetwork, err := readApplicationSessionNetworkConfigurationV1(plan.SessionNetworkPrefixes)
 		if err != nil {
@@ -54,10 +64,26 @@ func sandboxAndExecApplicationV1(plan sandboxExecPlanV1) error {
 			return fmt.Errorf("install application network policy: %w", err)
 		}
 	}
+	environment, err := sandboxExecEnvironmentV1(plan.EnvironmentProfile, os.Environ())
+	if err != nil {
+		return err
+	}
+	if statusFile != nil {
+		// The status supervisor must remain outside the application's signal
+		// authority. It starts a separate helper that performs the complete
+		// authority drop immediately before directly execing the application.
+		return syscall.Exec(
+			"/proc/self/exe",
+			portableToolObservedExecArgvV1(int(statusFile.Fd()), plan, plan.Argv),
+			environment,
+		)
+	}
 	if err := dropApplicationAuthorityV1(plan.UID, plan.GID, plan.Groups); err != nil {
 		return err
 	}
-	return verifyAndExecApplication(plan.Argv, readApplicationKernelStatus, execApplication)
+	return verifyAndExecApplication(plan.Argv, readApplicationKernelStatus, func(argv []string) error {
+		return syscall.Exec(argv[0], argv, environment)
+	})
 }
 
 func dropApplicationAuthorityV1(uid uint32, gid uint32, groups []uint32) error {

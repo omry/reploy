@@ -23,6 +23,7 @@ type ImageValidationSession struct {
 	aptWorkspace  *PreparedAPTResolverWorkspace
 	containerName string
 	runDocker     commandRunner
+	verifyCleanup imageValidationCleanupOwnershipVerifier
 	aptBase       *APTBaseValidation
 	closed        bool
 }
@@ -56,6 +57,81 @@ func openImageValidationSession(
 	workspace PreparedProbeWorkspace,
 	aptWorkspace *PreparedAPTResolverWorkspace,
 ) (*ImageValidationSession, error) {
+	return openImageValidationSessionWithCreate(
+		ctx, descriptor, workspace, aptWorkspace, imageValidationCreateCommandSpecWithAPT,
+	)
+}
+
+type imageValidationCreateSpec func(
+	descriptor deploy.ImageDescriptor,
+	workspace PreparedProbeWorkspace,
+	aptWorkspace *PreparedAPTResolverWorkspace,
+) (CommandSpec, string, error)
+
+type imageValidationCleanupContext func(context.Context) (context.Context, context.CancelFunc)
+
+var errImageValidationContainerAbsent = errors.New("image validation container is absent")
+
+// imageValidationCleanupOwnershipVerifier returns nil only when the named
+// container is still owned by the bounded session that is about to remove it.
+// Legacy validation sessions do not install one.
+type imageValidationCleanupOwnershipVerifier func(context.Context, string, commandRunner) error
+
+func openImageValidationSessionWithCreate(
+	ctx context.Context,
+	descriptor deploy.ImageDescriptor,
+	workspace PreparedProbeWorkspace,
+	aptWorkspace *PreparedAPTResolverWorkspace,
+	create imageValidationCreateSpec,
+) (*ImageValidationSession, error) {
+	return openImageValidationSessionWithCreateContext(ctx, descriptor, workspace, aptWorkspace, create, nil, nil)
+}
+
+// openImageValidationSessionWithCreateBounded is the cancellation-aware
+// variant used by bounded probe executors. Existing validation callers retain
+// the historical create-before-cancellation behavior through
+// openImageValidationSessionWithCreate.
+func openImageValidationSessionWithCreateBounded(
+	ctx context.Context,
+	descriptor deploy.ImageDescriptor,
+	workspace PreparedProbeWorkspace,
+	aptWorkspace *PreparedAPTResolverWorkspace,
+	create imageValidationCreateSpec,
+	newCleanupContext imageValidationCleanupContext,
+) (*ImageValidationSession, error) {
+	if newCleanupContext == nil {
+		return nil, fmt.Errorf("bounded image validation cleanup context is required")
+	}
+	return openImageValidationSessionWithCreateContext(ctx, descriptor, workspace, aptWorkspace, create, newCleanupContext, nil)
+}
+
+func openImageValidationSessionWithCreateOwnedBounded(
+	ctx context.Context,
+	descriptor deploy.ImageDescriptor,
+	workspace PreparedProbeWorkspace,
+	aptWorkspace *PreparedAPTResolverWorkspace,
+	create imageValidationCreateSpec,
+	newCleanupContext imageValidationCleanupContext,
+	verifyCleanup imageValidationCleanupOwnershipVerifier,
+) (*ImageValidationSession, error) {
+	if verifyCleanup == nil {
+		return nil, fmt.Errorf("bounded image validation cleanup ownership verifier is required")
+	}
+	if newCleanupContext == nil {
+		return nil, fmt.Errorf("bounded image validation cleanup context is required")
+	}
+	return openImageValidationSessionWithCreateContext(ctx, descriptor, workspace, aptWorkspace, create, newCleanupContext, verifyCleanup)
+}
+
+func openImageValidationSessionWithCreateContext(
+	ctx context.Context,
+	descriptor deploy.ImageDescriptor,
+	workspace PreparedProbeWorkspace,
+	aptWorkspace *PreparedAPTResolverWorkspace,
+	create imageValidationCreateSpec,
+	newCleanupContext imageValidationCleanupContext,
+	verifyCleanup imageValidationCleanupOwnershipVerifier,
+) (*ImageValidationSession, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("image validation session context is required")
 	}
@@ -68,21 +144,33 @@ func openImageValidationSession(
 	if descriptor.Platform.OS != "linux" {
 		return nil, fmt.Errorf("image validation requires a Linux image")
 	}
-	spec, containerName, err := imageValidationCreateCommandSpecWithAPT(descriptor, workspace, aptWorkspace)
+	if create == nil {
+		return nil, fmt.Errorf("image validation create policy is required")
+	}
+	spec, containerName, err := create(descriptor, workspace, aptWorkspace)
 	if err != nil {
 		return nil, err
 	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	runDocker, err := bindImageValidationCommandRunner(context.WithoutCancel(ctx), spec, 0)
+	createContext := context.WithoutCancel(ctx)
+	if newCleanupContext != nil {
+		createContext = ctx
+	}
+	runDocker, err := bindImageValidationCommandRunner(createContext, spec, 0)
 	if err != nil {
 		return nil, imageValidationCommandError("create", descriptor.Platform.Canonical, stderr.String(), err)
 	}
-	if err := runDocker(spec, RunOptions{Context: context.WithoutCancel(ctx), Stdout: &stdout, Stderr: &stderr}); err != nil {
-		return nil, imageValidationCommandError("create", descriptor.Platform.Canonical, stderr.String(), err)
+	if err := runDocker(spec, RunOptions{Context: createContext, Stdout: &stdout, Stderr: &stderr}); err != nil {
+		createErr := imageValidationCommandError("create", descriptor.Platform.Canonical, stderr.String(), err)
+		if newCleanupContext != nil && (ctx.Err() != nil || verifyCleanup != nil) {
+			cleanupErr := removeImageValidationContainerAfterSetupFailure(ctx, createContext, containerName, runDocker, newCleanupContext, verifyCleanup)
+			return nil, errors.Join(createErr, cleanupErr)
+		}
+		return nil, createErr
 	}
 	if err := ctx.Err(); err != nil {
-		cleanupErr := removeImageValidationContainer(context.WithoutCancel(ctx), containerName, runDocker)
+		cleanupErr := removeImageValidationContainerAfterSetupFailure(ctx, createContext, containerName, runDocker, newCleanupContext, verifyCleanup)
 		return nil, errors.Join(fmt.Errorf("open image validation session: %w", err), cleanupErr)
 	}
 	stderr.Reset()
@@ -91,12 +179,29 @@ func openImageValidationSession(
 		RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr},
 	); err != nil {
 		startErr := imageValidationCommandError("start", descriptor.Platform.Canonical, stderr.String(), err)
-		cleanupErr := removeImageValidationContainer(context.WithoutCancel(ctx), containerName, runDocker)
+		cleanupErr := removeImageValidationContainerAfterSetupFailure(ctx, createContext, containerName, runDocker, newCleanupContext, verifyCleanup)
 		return nil, errors.Join(startErr, cleanupErr)
 	}
 	return &ImageValidationSession{
-		descriptor: descriptor, workspace: workspace, aptWorkspace: aptWorkspace, containerName: containerName, runDocker: runDocker,
+		descriptor: descriptor, workspace: workspace, aptWorkspace: aptWorkspace, containerName: containerName, runDocker: runDocker, verifyCleanup: verifyCleanup,
 	}, nil
+}
+
+func removeImageValidationContainerAfterSetupFailure(
+	parent context.Context,
+	createContext context.Context,
+	containerName string,
+	runDocker commandRunner,
+	newCleanupContext imageValidationCleanupContext,
+	verifyCleanup imageValidationCleanupOwnershipVerifier,
+) error {
+	cleanupContext := createContext
+	cancelCleanup := func() {}
+	if newCleanupContext != nil {
+		cleanupContext, cancelCleanup = newCleanupContext(parent)
+	}
+	defer cancelCleanup()
+	return removeImageValidationContainerWithOwnership(cleanupContext, containerName, runDocker, verifyCleanup)
 }
 
 func (session *ImageValidationSession) runDockerCommand(spec CommandSpec, options RunOptions) error {
@@ -377,7 +482,7 @@ func (session *ImageValidationSession) Close(ctx context.Context) error {
 	if ctx == nil {
 		return fmt.Errorf("close image validation session context is required")
 	}
-	if err := removeImageValidationContainer(ctx, session.containerName, session.runDockerCommand); err != nil {
+	if err := removeImageValidationContainerWithOwnership(ctx, session.containerName, session.runDockerCommand, session.verifyCleanup); err != nil {
 		return err
 	}
 	session.closed = true
@@ -489,6 +594,23 @@ func removeImageValidationContainer(ctx context.Context, containerName string, r
 		return markProviderHelperCleanupError(fmt.Errorf("remove image validation container %s: %w", containerName, err))
 	}
 	return nil
+}
+
+func removeImageValidationContainerWithOwnership(
+	ctx context.Context,
+	containerName string,
+	runDocker commandRunner,
+	verify imageValidationCleanupOwnershipVerifier,
+) error {
+	if verify != nil {
+		if err := verify(ctx, containerName, runDocker); err != nil {
+			if errors.Is(err, errImageValidationContainerAbsent) {
+				return nil
+			}
+			return markProviderHelperCleanupError(fmt.Errorf("refuse image validation container cleanup: %w", err))
+		}
+	}
+	return removeImageValidationContainer(ctx, containerName, runDocker)
 }
 
 func dockerMountArgument(fields ...string) (string, error) {
