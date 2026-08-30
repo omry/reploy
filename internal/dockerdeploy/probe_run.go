@@ -56,6 +56,24 @@ func openImageValidationSession(
 	workspace PreparedProbeWorkspace,
 	aptWorkspace *PreparedAPTResolverWorkspace,
 ) (*ImageValidationSession, error) {
+	return openImageValidationSessionWithCreate(
+		ctx, descriptor, workspace, aptWorkspace, imageValidationCreateCommandSpecWithAPT,
+	)
+}
+
+type imageValidationCreateSpec func(
+	descriptor deploy.ImageDescriptor,
+	workspace PreparedProbeWorkspace,
+	aptWorkspace *PreparedAPTResolverWorkspace,
+) (CommandSpec, string, error)
+
+func openImageValidationSessionWithCreate(
+	ctx context.Context,
+	descriptor deploy.ImageDescriptor,
+	workspace PreparedProbeWorkspace,
+	aptWorkspace *PreparedAPTResolverWorkspace,
+	create imageValidationCreateSpec,
+) (*ImageValidationSession, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("image validation session context is required")
 	}
@@ -68,7 +86,10 @@ func openImageValidationSession(
 	if descriptor.Platform.OS != "linux" {
 		return nil, fmt.Errorf("image validation requires a Linux image")
 	}
-	spec, containerName, err := imageValidationCreateCommandSpecWithAPT(descriptor, workspace, aptWorkspace)
+	if create == nil {
+		return nil, fmt.Errorf("image validation create policy is required")
+	}
+	spec, containerName, err := create(descriptor, workspace, aptWorkspace)
 	if err != nil {
 		return nil, err
 	}

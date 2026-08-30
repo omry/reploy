@@ -36,7 +36,7 @@ function HomepageHeader() {
             <span />
           </div>
           <pre>
-            <code>{`curl -fsSL https://reploy.yadan.net/install.sh | sh
+            <code>{`curl -fsSL https://reploy.cli.dev/install.sh | sh
 reploy stage <app-blueprint-ref>
 reploy install --scope user --to <install-dir>
 <install-dir>/<app>ctl status`}</code>
