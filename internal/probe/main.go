@@ -11,6 +11,20 @@ import (
 )
 
 func Main(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
+	if len(args) >= 1 && args[0] == "portable-tool-observed-exec-v1" {
+		if err := runPortableToolObservedExecV1(args[1:], stdin, stdout, stderr); err != nil {
+			_, _ = fmt.Fprintf(stderr, "reploy-probe: portable-tool observed exec: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if len(args) == 1 && args[0] == "read-portable-tool-exit-status-v1" {
+		if err := readPortableToolExitStatusV1(stdout); err != nil {
+			_, _ = fmt.Fprintf(stderr, "reploy-probe: read portable-tool exit status: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	if len(args) == 2 && args[0] == "install-runtime-verifier" {
 		if err := installApplicationRuntimeVerifier(args[1]); err != nil {
 			_, _ = fmt.Fprintf(stderr, "reploy-probe: install application runtime verifier: %v\n", err)
