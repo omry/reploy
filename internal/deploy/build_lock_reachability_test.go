@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
@@ -93,6 +94,148 @@ func TestBuildLockStoreClosureLoadsExactTransitiveObjects(t *testing.T) {
 			t.Fatalf("closure[%d] = %#v, want %#v", index, closure[index], want[index])
 		}
 	}
+}
+
+func TestBuildLockStoreClosureIncludesVerifiedPortableToolArtifacts(t *testing.T) {
+	_, store, lock, keepReference, _ := buildReachabilityFixture(t)
+	portableArtifact, err := store.Publish(context.Background(), "portable/demo.tar", "tar", strings.NewReader("portable"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.PortableTools = portableToolReachabilityLockV1(t, &lock, portableArtifact)
+	closure, err := BuildLockStoreClosure(lock, store, acceptBuildLockProfile, acceptBuildLockBundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	portableReference, _ := portableArtifact.StoreObjectRef()
+	want := map[providerstore.StoreObjectRef]bool{
+		keepReference: true, portableReference: true,
+		lock.Nodes[0].BundleManifest: true, lock.ValidationRecord: true,
+	}
+	if len(closure) != len(want) {
+		t.Fatalf("closure = %#v", closure)
+	}
+	for _, reference := range closure {
+		if !want[reference] {
+			t.Fatalf("unexpected closure reference %#v", reference)
+		}
+	}
+}
+
+func portableToolReachabilityLockV1(t *testing.T, build *BuildLockV1, artifact providerstore.ArtifactDescriptor) *providers.PortableToolLockV1 {
+	t.Helper()
+	recordValue := canonical.Object{
+		"schema": "portable-tool-payload-v1", "id": "tool:demo/releases/1.0.0/payloads/demo",
+		"logical_path": artifact.LogicalPath, "kind": artifact.Kind, "size": artifact.Size, "sha256": string(artifact.SHA256),
+	}
+	recordDigest, err := canonical.Sum("portable-tool-record", "portable-tool-record-v1", recordValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := providers.PortableToolSelectedRecordV1{
+		Reference: providers.PortableToolRecordReferenceV1{ID: recordValue["id"].(string), Digest: recordDigest},
+		Record:    providers.CanonicalProviderData{Schema: "portable-tool-payload-v1", Value: recordValue},
+	}
+	plan := providers.PortableToolPlanV1{
+		Schema: providers.PortableToolPlanSchemaV1,
+		Tools: []providers.PortableToolPlanEntryV1{{
+			Scope: "application", SelectedClosureDigest: buildLockTestDigest("8"),
+			Provenance: providers.PortableToolReleaseProvenanceV1{
+				Tool: "demo", Version: "1.0.0", Revision: "1", ManifestDigest: buildLockTestDigest("9"),
+			},
+			Responsibilities: providers.PortableToolResponsibilitiesV1{
+				BindingContracts: []providers.PortableToolSelectedRecordV1{}, BindingArtifacts: []providers.PortableToolSelectedRecordV1{},
+				Payloads: []providers.PortableToolSelectedRecordV1{record}, NativePackageSets: []providers.PortableToolSelectedRecordV1{},
+			},
+			Exports: []providers.PortableToolExportV1{}, ValidationProfiles: []providers.PortableToolValidationProfileV1{},
+		}},
+	}
+	baseRequest, err := providers.CanonicalBaseProviderRequestV1(providers.BaseProviderRequestV1{
+		Image: build.Base.AuthorReference, Exports: map[string]blueprint.BaseExecutableExport{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseNode, err := providers.BaseNodeSpec(baseRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	build.BasePlanDigest, err = providers.ProviderNodePlanDigest(baseNode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aptNode := providers.NodeSpec{
+		ID: "apt", Provider: blueprint.ComponentTypeAPT, Components: []string{"system"},
+		Request:            providers.CanonicalProviderRequest{Schema: "apt-provider-request-v1", Provider: blueprint.ComponentTypeAPT, Value: canonical.Object{}},
+		OutputDeclarations: []providers.OutputDeclaration{},
+		Requirements: providers.RequirementDeclaration{
+			Executables: []providers.ExecutableRequirement{}, Files: []providers.FileRequirement{},
+			ProviderData: providers.CanonicalProviderData{Schema: "apt-requirements-v1", Value: canonical.Object{}},
+		},
+	}
+	aptPlanDigest, err := providers.ProviderNodePlanDigest(aptNode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	build.Nodes[0].PlanDigest = aptPlanDigest
+	sourceValue := canonical.Object{
+		"schema": providers.PortableToolArtifactSourceRecordSchemaV1,
+		"id":     "tool:demo/releases/1.0.0/revisions/1/sources/demo", "sha256": string(artifact.SHA256),
+		"mirrors": []any{"https://mirror.example/demo.tar"}, "provenance": []any{"https://upstream.example/demo.tar"}, "diagnostics": []any{},
+	}
+	sourceDigest, err := canonical.Sum("portable-tool-record", "portable-tool-record-v1", sourceValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := providers.PortableToolSelectedRecordV1{
+		Reference: providers.PortableToolRecordReferenceV1{ID: sourceValue["id"].(string), Digest: sourceDigest},
+		Record:    providers.CanonicalProviderData{Schema: providers.PortableToolArtifactSourceRecordSchemaV1, Value: sourceValue},
+	}
+	manifestValue := canonical.Object{
+		"schema": providers.PortableToolReleaseManifestRecordSchemaV1,
+		"id":     "tool:demo/releases/1.0.0/revisions/1/manifest",
+		"tool":   "demo", "version": "1.0.0", "revision": "1",
+		"aliases": []any{}, "provenance": []any{}, "targets": []any{}, "validation_profiles": []any{},
+		"contract": canonical.Object{"id": "tool:demo/releases/1.0.0/contract", "digest": string(buildLockTestDigest("7"))},
+		"artifact_sources": []any{canonical.Object{
+			"artifact_sha256": string(artifact.SHA256),
+			"artifact":        canonical.Object{"id": record.Reference.ID, "digest": string(record.Reference.Digest)},
+			"source":          canonical.Object{"id": source.Reference.ID, "digest": string(source.Reference.Digest)},
+		}},
+	}
+	manifestDigest, err := canonical.Sum("portable-tool-record", "portable-tool-record-v1", manifestValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := providers.PortableToolSelectedRecordV1{
+		Reference: providers.PortableToolRecordReferenceV1{ID: manifestValue["id"].(string), Digest: manifestDigest},
+		Record:    providers.CanonicalProviderData{Schema: providers.PortableToolReleaseManifestRecordSchemaV1, Value: manifestValue},
+	}
+	plan.Tools[0].Provenance.ManifestDigest = manifest.Reference.Digest
+	domain := providers.PortableToolDomainAuthorityV1{ID: "application", Owner: "base"}
+	dag, err := providers.BuildPortableToolProviderDAGV1(
+		providers.ProviderPlanV1{Schema: providers.ProviderPlanSchemaV1, Nodes: []providers.NodeSpec{aptNode, baseNode}, Edges: []providers.ProviderEdgeV1{}},
+		plan,
+		[]providers.PortableToolProviderDomainSetV1{{
+			Scope: "application", PackageManager: domain, Binding: domain, Filesystem: domain,
+			Environment: domain, Exports: domain, Capabilities: domain,
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	portableLock, err := providers.BuildPortableToolLockV1(dag, []providers.PortableToolReleaseManifestInputV1{{
+		Scope: "application", Tool: "demo", Manifest: manifest,
+	}}, []providers.PortableToolArtifactAcquisitionInputV1{{
+		Scope: "application", Tool: "demo", Artifact: record.Reference, Descriptor: artifact, Source: source,
+		Provenance: providerstore.AcquisitionProvenance{
+			Outcome: providerstore.AcquisitionOutcomeCacheHit, SourceID: source.Reference.ID,
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &portableLock
 }
 
 func TestReusableBuildLockStoreClosureTrustsExactDebVerificationStamp(t *testing.T) {
