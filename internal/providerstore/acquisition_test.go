@@ -618,6 +618,9 @@ func TestAcquireArtifactAllowsQueryOnRedirectTargetWithoutRecordingIt(t *testing
 	if result.Provenance.SuccessfulMirror != "https://mirror.example.test/start" {
 		t.Fatalf("successful mirror = %q", result.Provenance.SuccessfulMirror)
 	}
+	if result.Provenance.Redirects != 1 {
+		t.Fatalf("successful redirect hops = %d, want 1", result.Provenance.Redirects)
+	}
 	if strings.Contains(fmt.Sprintf("%#v", result.Provenance), "secret") {
 		t.Fatalf("redirect query leaked into provenance: %#v", result.Provenance)
 	}
