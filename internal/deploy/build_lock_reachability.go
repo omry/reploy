@@ -207,6 +207,25 @@ func loadBuildLockStoreClosure(
 			orderedArtifacts = append(orderedArtifacts, buildLockClosureArtifact{NodeID: node.NodeID, Descriptor: artifact})
 		}
 	}
+	if lock.PortableTools != nil {
+		for _, acquisition := range lock.PortableTools.Acquisitions {
+			reference, err := acquisition.Descriptor.StoreObjectRef()
+			if err != nil {
+				return buildLockStoreClosurePlan{}, fmt.Errorf("portable tool artifact %q: %w", acquisition.Artifact.ID, err)
+			}
+			addStoreClosureReference(objects, reference)
+			if previous, found := artifacts[reference]; found && previous.Size != acquisition.Descriptor.Size {
+				return buildLockStoreClosurePlan{}, fmt.Errorf("build lock blob %s has conflicting artifact sizes %s and %s", reference.Digest, previous.Size, acquisition.Descriptor.Size)
+			}
+			if _, found := artifacts[reference]; !found {
+				artifacts[reference] = acquisition.Descriptor
+			}
+			orderedArtifacts = append(orderedArtifacts, buildLockClosureArtifact{
+				NodeID:     providers.NodeID("portable-tool:" + acquisition.Scope + "/" + acquisition.Tool),
+				Descriptor: acquisition.Descriptor,
+			})
+		}
+	}
 	result := make([]providerstore.StoreObjectRef, 0, len(objects))
 	for _, reference := range objects {
 		result = append(result, reference)
