@@ -25,6 +25,7 @@ type ProviderBuildCompletionInput struct {
 	Base             deploy.ImageDescriptor
 	BaseCatalog      []providers.RealizedOutput
 	Graph            providers.GraphExecutionResult
+	PortableTools    *providers.PortableToolLockV1
 	Validation       ProviderGraphValidationPlan
 	StartupVerifier  deploy.ApplicationStartupVerifierV1
 	RunValidation    FullImageValidationRunner
@@ -160,7 +161,7 @@ func completeProviderBuild(
 	lock, err := backend.assemble(assembleCtx, store, BuildLockAssemblyInput{
 		BlueprintDigest: blueprintDigest, ResolvedRequest: input.ResolvedRequest,
 		Overlay: input.Overlay, PackageOverrides: input.PackageOverrides,
-		Base: input.Base, Graph: input.Graph,
+		Base: input.Base, Graph: input.Graph, PortableTools: input.PortableTools,
 		RuntimePolicy:    policy,
 		RuntimeLayer:     finalized.RuntimeLayer,
 		ValidationRecord: finalized.Validation.Final.Reference, FinalImage: finalized.Image.Image,
