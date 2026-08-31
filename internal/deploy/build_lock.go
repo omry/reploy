@@ -17,20 +17,21 @@ import (
 const BuildLockSchemaV1 = "lock-v1"
 
 type BuildLockV1 struct {
-	Schema                string                       `json:"schema"`
-	BlueprintDigest       canonical.Digest             `json:"blueprint_digest"`
-	Overlay               RequestOverlayV1             `json:"overlay"`
-	PackageOverrides      PackageOverrideIntentV1      `json:"package_overrides"`
-	ResolvedRequestDigest canonical.Digest             `json:"resolved_request_digest"`
-	Platform              blueprint.Platform           `json:"platform"`
-	Base                  ImageDescriptor              `json:"base"`
-	Graph                 ProviderGraphLockV1          `json:"graph"`
-	Nodes                 []NodeLockV1                 `json:"nodes"`
-	Catalog               []providers.RealizedOutput   `json:"catalog"`
-	RuntimePolicy         RuntimePolicyV1              `json:"runtime_policy"`
-	RuntimeLayer          ApplicationRuntimeLayerV1    `json:"runtime_layer"`
-	ValidationRecord      providerstore.StoreObjectRef `json:"validation_record"`
-	FinalImage            providers.RealizedImageV1    `json:"final_image"`
+	Schema                string                        `json:"schema"`
+	BlueprintDigest       canonical.Digest              `json:"blueprint_digest"`
+	Overlay               RequestOverlayV1              `json:"overlay"`
+	PackageOverrides      PackageOverrideIntentV1       `json:"package_overrides"`
+	ResolvedRequestDigest canonical.Digest              `json:"resolved_request_digest"`
+	Platform              blueprint.Platform            `json:"platform"`
+	Base                  ImageDescriptor               `json:"base"`
+	Graph                 ProviderGraphLockV1           `json:"graph"`
+	Nodes                 []NodeLockV1                  `json:"nodes"`
+	Catalog               []providers.RealizedOutput    `json:"catalog"`
+	PortableTools         *providers.PortableToolLockV1 `json:"portable_tools,omitempty"`
+	RuntimePolicy         RuntimePolicyV1               `json:"runtime_policy"`
+	RuntimeLayer          ApplicationRuntimeLayerV1     `json:"runtime_layer"`
+	ValidationRecord      providerstore.StoreObjectRef  `json:"validation_record"`
+	FinalImage            providers.RealizedImageV1     `json:"final_image"`
 }
 
 type ProviderGraphLockV1 struct {
@@ -147,6 +148,14 @@ func ValidateBuildLockV1(lock BuildLockV1, validateProfileOwner providers.Requir
 	if err := validateBuildLockCatalog(lock.Catalog, graphNodes, lock.Nodes); err != nil {
 		return err
 	}
+	if lock.PortableTools != nil {
+		if err := providers.ValidatePortableToolLockV1(*lock.PortableTools); err != nil {
+			return fmt.Errorf("build lock portable tools: %w", err)
+		}
+		if err := validateBuildLockPortableToolPlan(lock); err != nil {
+			return err
+		}
+	}
 	if err := validateBuildLockImageLineage(lock); err != nil {
 		return err
 	}
@@ -169,6 +178,40 @@ func ValidateBuildLockV1(lock BuildLockV1, validateProfileOwner providers.Requir
 	}
 	if err := lock.FinalImage.Validate(); err != nil {
 		return fmt.Errorf("build lock final image: %w", err)
+	}
+	return nil
+}
+
+func validateBuildLockPortableToolPlan(lock BuildLockV1) error {
+	plan := lock.PortableTools.Plan.ProviderPlan
+	if !reflect.DeepEqual(plan.Edges, lock.Graph.Edges) {
+		return fmt.Errorf("build lock portable tool provider plan edges do not match the locked graph")
+	}
+	if len(plan.Nodes) != len(lock.Graph.Nodes) {
+		return fmt.Errorf("build lock portable tool provider plan nodes do not match the locked graph")
+	}
+	locked := make(map[providers.NodeID]NodeLockV1, len(lock.Nodes))
+	for _, node := range lock.Nodes {
+		locked[node.NodeID] = node
+	}
+	for index, node := range plan.Nodes {
+		if node.ID != lock.Graph.Nodes[index] {
+			return fmt.Errorf("build lock portable tool provider plan nodes do not match the locked graph")
+		}
+		if node.ID == "base" {
+			continue
+		}
+		lockedNode, exists := locked[node.ID]
+		if !exists || lockedNode.Provider != node.Provider {
+			return fmt.Errorf("build lock portable tool provider node %q does not match its locked provider", node.ID)
+		}
+		digest, err := providers.ProviderNodePlanDigest(node)
+		if err != nil {
+			return fmt.Errorf("build lock portable tool provider node %q: %w", node.ID, err)
+		}
+		if digest != lockedNode.PlanDigest {
+			return fmt.Errorf("build lock portable tool provider node %q plan identity does not match its node lock", node.ID)
+		}
 	}
 	return nil
 }

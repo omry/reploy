@@ -22,6 +22,10 @@ const (
 	portableToolValidationProfileSchemaV1 = "portable-tool-validation-profile-v1"
 	portableToolRecordIdentityKindV1      = "portable-tool-record"
 	portableToolRecordIdentitySchemaV1    = "portable-tool-record-v1"
+
+	// PortableToolArtifactSourceRecordSchemaV1 identifies the manifest-owned
+	// source records carried across the provider-neutral lock boundary.
+	PortableToolArtifactSourceRecordSchemaV1 = "portable-tool-artifact-source-v1"
 )
 
 // PortableToolPlanV1 is the canonical provider-neutral projection of one or

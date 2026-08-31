@@ -20,6 +20,7 @@ type BuildLockAssemblyInput struct {
 	PackageOverrides deploy.PackageOverrideIntentV1
 	Base             deploy.ImageDescriptor
 	Graph            providers.GraphExecutionResult
+	PortableTools    *providers.PortableToolLockV1
 	RuntimePolicy    deploy.RuntimePolicyV1
 	RuntimeLayer     deploy.ApplicationRuntimeLayerV1
 	ValidationRecord providerstore.StoreObjectRef
@@ -140,6 +141,14 @@ func AssembleBuildLock(
 		})
 	}
 	sort.Slice(locks, func(left int, right int) bool { return locks[left].NodeID < locks[right].NodeID })
+	var portableTools *providers.PortableToolLockV1
+	if input.PortableTools != nil {
+		if err := providers.ValidatePortableToolLockV1(*input.PortableTools); err != nil {
+			return deploy.BuildLockV1{}, fmt.Errorf("assemble build lock portable tools: %w", err)
+		}
+		cloned := providers.ClonePortableToolLockV1(*input.PortableTools)
+		portableTools = &cloned
+	}
 	lock := deploy.BuildLockV1{
 		Schema: deploy.BuildLockSchemaV1, BlueprintDigest: input.BlueprintDigest,
 		Overlay: input.Overlay, PackageOverrides: input.PackageOverrides,
@@ -148,6 +157,7 @@ func AssembleBuildLock(
 			Nodes: graphNodes, Edges: append([]providers.ProviderEdgeV1{}, input.Graph.SelectedEdges...),
 		},
 		Nodes: locks, Catalog: append([]providers.RealizedOutput{}, input.Graph.Catalog...),
+		PortableTools: portableTools,
 		RuntimePolicy: input.RuntimePolicy, RuntimeLayer: input.RuntimeLayer,
 		ValidationRecord: input.ValidationRecord, FinalImage: input.FinalImage,
 	}
