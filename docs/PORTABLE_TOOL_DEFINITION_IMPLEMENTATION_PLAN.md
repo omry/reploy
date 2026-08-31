@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-26
+updated: 2026-08-31
 summary: Reviewable delivery plan for portable-tool authoring, definitions, and the embedded Java, Playwright, and asciinema implementations.
 implements: docs/PORTABLE_TOOL_DEFINITION_DESIGN.md
 ---
@@ -22,15 +22,22 @@ This plan is structured as input to the existing AWD function:
 global:swe:deliver-design-stack(docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md, all)
 ```
 
-The only delivery task IDs are `PTD-01` through `PTD-29`. The preparation
-gates are prerequisites, not implementation tasks, commits, or pull requests.
-`deliver-design-stack` may read this plan before preparation is complete, but
-must pause on an unmet preparation gate.
+The delivery milestone IDs are `PTD-01` through `PTD-29`. `PTD-21` and
+`PTD-22` are milestone containers whose first-class delivery IDs are
+`PTD-21.1` through `PTD-21.5` and `PTD-22.1` through `PTD-22.3`; every other
+milestone is itself one delivery item. The preparation gates are prerequisites,
+not implementation tasks, commits, or pull requests. `deliver-design-stack`
+may read this plan before preparation is complete, but must pause on an unmet
+preparation gate.
 
 Plan revision note (2026-08-26): localized portable-tool authoring was inserted
 as PTD-12 after PTD-11 completed. No former PTD-12-or-later delivery slice had
 been constructed. PTD-01 through PTD-11 therefore retain their identities;
 former PTD-12 through PTD-28 are renamed PTD-13 through PTD-29 respectively.
+
+Plan revision note (2026-08-31): PTD-21 and PTD-22 were split before
+construction into eight review-sized child delivery items. The parent milestone
+identities and PTD-23-through-PTD-29 numbering remain unchanged.
 
 No AWD function change is part of this plan. Preparation verifies the already
 retired oversized WIP pull requests and their parked extraction sources, repairs
@@ -42,8 +49,8 @@ per phase rather than all at once. Construction uses the submission and
 synchronization functions to publish each slice as a draft, and does not use
 `deliver-design-stack`, whose slice contract ends in a completed remote PR
 cycle. Review uses `swe:local-stack-review` bottom-up and then `swe:pr-cycle`
-per task. `deliver-design-stack` governs a task end to end only once remote
-review capacity is available for that task.
+per delivery item. `deliver-design-stack` governs a delivery item end to end
+only once remote review capacity is available for that item.
 
 ## Scope
 
@@ -188,6 +195,15 @@ and PR 82 rebased directly onto it. This plan is part of PR 81 and introduces no
 third prerequisite slice. Each `PTD-*` task is then constructed or restacked
 above PR 82 in exact dependency order:
 
+`PTD-21` and `PTD-22` are milestone containers rather than delivery slices.
+Their explicitly enumerated child slices are first-class delivery items: each
+owns one commit and one PR, while the parent milestone owns neither. `PTD-21`
+completes only when `PTD-21.1` through `PTD-21.5` have current-head approval;
+`PTD-22` completes only when `PTD-22.1` through `PTD-22.3` do. `PTD-22.1`
+depends directly on `PTD-21.5`, but cannot activate until the complete `PTD-21`
+milestone has converged. References below to a task as a construction or review
+unit mean one delivery item, including these child slices.
+
 1. Build one coherent commit that compiles and passes its focused tests.
 2. Keep the worktree clean after each commit and preserve excluded WIP.
 3. Publish a new task through the ordinary submission function, or synchronize
@@ -206,7 +222,7 @@ or approval.
 
 ### Construction Handoff Gate
 
-Before constructing a given task:
+Before constructing a given delivery item:
 
 - the task's dependencies are constructed, locally reviewed, passing their
   checks, and present in the stack in exact order;
@@ -245,12 +261,13 @@ A constructed prefix may be reviewed before the rest of `PTD-01` through
 history invalidates every slice above it, so the cost of a low finding grows
 with stack height.
 
-Construction phase, per task, without remote review:
+Construction phase, per delivery item, without remote review:
 
 1. Verify all dependencies are constructed, locally reviewed, and passing their
    checks. Remote approval is not a construction prerequisite.
 2. Establish intent, owned scope, acceptance criteria, and non-goals from this
-   plan and the normative design.
+   plan and the normative design. A milestone container supplies shared scope
+   but does not own an implementation commit or PR.
 3. Split again before coding if the responsibility cannot be reviewed
    coherently; task IDs and authority must be updated before execution.
 4. Pair behavior with focused positive, negative, limit, and identity tests.
@@ -263,8 +280,9 @@ Review phase, once remote review capacity is available:
 
 1. Review the constructed stack bottom-up from the protected rebased and
    approved PR 82 head.
-2. Complete one remote PR cycle per task in stack order, marking each PR ready
-   only when its review begins.
+2. Complete one remote PR cycle per delivery item in stack order, marking each
+   PR ready only when its review begins. Close a milestone only after every
+   child slice has current-head approval evidence.
 3. Treat any finding that rewrites history as invalidating review evidence for
    every affected slice above it, and restack and re-review that suffix.
 4. Do not mark the campaign complete until every constructed task has
@@ -304,8 +322,16 @@ the campaign until durable authority is updated.
 | PTD-18 | Enforce Artifact Acquisition Network Policy | PTD-17 | New work |
 | PTD-19 | Materialize Verified Archives Safely and Offline | PTD-18 | New work |
 | PTD-20 | Run Portable Tool Probes Without Network Access | PTD-19 | New work |
-| PTD-21 | Compile Selected Closures into Provider Plans and Locks | PTD-20 | New work |
-| PTD-22 | Cut Java Build Tools Over to the Portable Catalog | PTD-21 | New work |
+| PTD-21 | Compile Selected Closures into Provider Plans and Locks | PTD-20 | Parent milestone; no owning PR |
+| PTD-21.1 | Define Provider-Neutral Portable-Tool Plan Contracts | PTD-20 | New work |
+| PTD-21.2 | Compile Selected Closures into Deterministic Provider Responsibilities | PTD-21.1 | New work |
+| PTD-21.3 | Integrate Portable-Tool Responsibilities into Provider DAG Planning | PTD-21.2 | New work |
+| PTD-21.4 | Persist Portable-Tool Plans and Acquisition Provenance in Build Locks | PTD-21.3 | New work |
+| PTD-21.5 | Schedule Selected Validation Profiles with Contract Runtime Projection | PTD-21.4 | New work; closes PTD-20 deferrals |
+| PTD-22 | Cut Java Build Tools Over to the Portable Catalog | PTD-21 | Parent milestone; no owning PR |
+| PTD-22.1 | Resolve Java Builder Demands Through the Portable Catalog | PTD-21.5 | New work; activates only after PTD-21 convergence |
+| PTD-22.2 | Materialize Selected Temurin Java in the Isolated Builder | PTD-22.1 | New work |
+| PTD-22.3 | Remove Legacy Java Switches and Prove the Cutover | PTD-22.2 | New work |
 | PTD-23 | Materialize the Playwright Python Binding | PTD-22 | New work |
 | PTD-24 | Materialize Playwright Chromium Payloads | PTD-23 | New work |
 | PTD-25 | Derive Portable Tool Integration Cases and Evidence | PTD-24 | New work |
@@ -821,6 +847,80 @@ operation.
 
 Non-goals: tool-specific branches in generic provider code.
 
+The milestone is delivered through these first-class slices:
+
+#### PTD-21.1: Define Provider-Neutral Portable-Tool Plan Contracts
+
+Scope: define canonical provider-neutral plan data for selected closure
+identity, release provenance, contract runtime projection, contribution
+responsibilities, and selected validation-profile references without activating
+provider execution.
+
+Acceptance: canonical validation rejects incomplete, aliased, unsorted,
+duplicate, or conflicting plan data; selected-closure identity remains
+independent from validation references and unrelated availability; generic plan
+contracts contain no Java, Playwright, or asciinema branch.
+
+Non-goals: provider execution, tool-specific materialization, or build-lock
+persistence.
+
+#### PTD-21.2: Compile Selected Closures into Deterministic Provider Responsibilities
+
+Scope: compile selected artifacts, native package sets, bindings, payloads,
+exports, runtime projection, and release provenance into the provider-neutral
+plan contracts.
+
+Acceptance: input ordering and unrelated catalog availability cannot change
+compiled output; selected behavior and contribution conflicts do change or
+reject it; the compiler remains provider-generic and tool-agnostic.
+
+Non-goals: acquisition, offline materialization, or locked replay.
+
+#### PTD-21.3: Integrate Portable-Tool Responsibilities into Provider DAG Planning
+
+Scope: integrate compiled responsibilities with the existing provider DAG so
+acquisition precedes network-disabled materialization and each selected
+package, binding, payload, export, environment, and capability domain remains
+explicit.
+
+Acceptance: plan validation proves dependency order and rejects missing or
+conflicting responsibilities; acquisition precedes offline materialization;
+existing APT, Python, and base provider boundaries remain generic.
+
+Non-goals: Java builder cutover, Playwright binding materialization, or browser
+materialization.
+
+#### PTD-21.4: Persist Portable-Tool Plans and Acquisition Provenance in Build Locks
+
+Scope: bind selected closure, manifest, artifact, base-image, provider, and
+complete release-provenance identities into canonical build locks together with
+each artifact acquisition outcome.
+
+Acceptance: locked replay uses the persisted plan and verified artifacts
+without consulting moving catalog or network state; definition revisions that
+share one closure remain distinguishable; acquisition provenance records either
+the successful declared locator or that a verified-cache hit contacted none;
+redirect hops remain sanitized diagnostics and historical locators remain
+explicitly historical.
+
+Non-goals: runtime Java, repository transport, or new trust and publication
+policy.
+
+#### PTD-21.5: Schedule Selected Validation Profiles with Contract Runtime Projection
+
+Scope: carry selected validation-profile references into production validation
+scheduling and invoke the PTD-20 fixed executor with the selected contract
+install root and environment projection.
+
+Acceptance: production scheduling invokes the fixed executor for selected
+profiles; contract environment values, including `PLAYWRIGHT_BROWSERS_PATH`,
+reach validation without weakening fixed policy; validation references and
+evidence remain outside selected-closure identity; both imported PTD-20
+deferrals receive evidence-backed closure.
+
+Non-goals: support advertisement, Playwright payload materialization, or
+definition-controlled executor policy.
+
 ### PTD-22: Cut Java Build Tools Over to the Portable Catalog
 
 Scope: replace name-only `tool:java`, `default-jre-headless`, and
@@ -832,6 +932,50 @@ images do not; unsupported targets fail before download; hard-coded Java paths
 and their obsolete tests are removed.
 
 Non-goals: runtime Java or other Java versions.
+
+The milestone is delivered through these first-class slices:
+
+#### PTD-22.1: Resolve Java Builder Demands Through the Portable Catalog
+
+Scope: replace name-only local-source Java build-tool detection with canonical
+build-scope tool requirements, embedded-catalog selection, and the PTD-21
+compiled plan.
+
+Acceptance: `tool:java==21` resolves the exact selected Temurin closure for the
+isolated source-builder scope; unsupported targets fail before acquisition;
+runtime application scopes and final-image requirements do not receive
+build-only Java.
+
+Non-goals: runtime Java, other Java versions, or other tool-specific builder
+branches.
+
+#### PTD-22.2: Materialize Selected Temurin Java in the Isolated Builder
+
+Scope: acquire the selected pinned Temurin payload, materialize it offline
+through reviewed primitives into the disposable local-source builder prefix,
+and expose only the selected `java` and `javac` exports there.
+
+Acceptance: exact `java` and `javac` are present in selected source builds;
+materialization uses verified bytes without network access; the final
+application image and workload provider graph remain unchanged; cleanup leaves
+no accepted partial builder installation.
+
+Non-goals: Java runtime images, distribution-default Java fallback, or
+additional architectures.
+
+#### PTD-22.3: Remove Legacy Java Switches and Prove the Cutover
+
+Scope: remove `default-jre-headless` and `/usr/bin/java` assumptions and their
+obsolete tests, validate Java through selected exports and profiles, and prove
+build-only containment end to end.
+
+Acceptance: no hard-coded Java build-tool switch remains; focused positive and
+unsupported-target tests exercise the catalog-backed path; selected builds
+receive `java` and `javac` while final application images do not; repository
+validation passes with legacy tests removed or replaced.
+
+Non-goals: runtime Java, other Java versions, or Playwright and asciinema
+materialization.
 
 ### PTD-23: Materialize the Playwright Python Binding
 
@@ -935,8 +1079,11 @@ architectures.
 
 The campaign is complete only when:
 
-- `PTD-01` through `PTD-29` map one-to-one to approved current-head PRs in
-  dependency order;
+- every delivery item maps one-to-one to an approved current-head PR in
+  dependency order: `PTD-01` through `PTD-20`, `PTD-21.1` through `PTD-21.5`,
+  `PTD-22.1` through `PTD-22.3`, and `PTD-23` through `PTD-29`; the `PTD-21`
+  and `PTD-22` milestone containers own no PR and close only when all of their
+  child slices are approved;
 - PR 81 remains approved at the protected repaired head; PR 82's base equals
   that exact head and PR 82 remains approved at its protected rebased head;
 - the retired WIP pull requests remain closed and their parked sources are
