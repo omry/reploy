@@ -1,13 +1,12 @@
 package python
 
 import (
-	"regexp"
 	"strings"
+
+	"github.com/omry/reploy/internal/portabletool"
 )
 
 const ProviderName = "python"
-
-var distributionSeparatorPattern = regexp.MustCompile(`[-_.]+`)
 
 func WheelFilenameRequirement(filename string) (string, bool) {
 	if !strings.HasSuffix(filename, ".whl") {
@@ -22,5 +21,5 @@ func WheelFilenameRequirement(filename string) (string, bool) {
 }
 
 func NormalizeDistributionName(name string) string {
-	return distributionSeparatorPattern.ReplaceAllString(strings.ToLower(strings.TrimSpace(name)), "-")
+	return portabletool.NormalizePythonDistributionNameV1(name)
 }
