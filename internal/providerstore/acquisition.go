@@ -115,7 +115,11 @@ type AcquisitionProvenance struct {
 	Outcome          string
 	SourceID         string
 	SuccessfulMirror string
-	Attempts         []AcquisitionAttempt
+	// Redirects is the number of sanitized redirect hops followed by the
+	// successful attempt. Redirect target locators are deliberately never
+	// retained in acquisition provenance.
+	Redirects int
+	Attempts  []AcquisitionAttempt
 }
 
 type AcquisitionResult struct {
@@ -226,6 +230,7 @@ func (store Store) AcquireArtifact(ctx context.Context, request AcquisitionReque
 					Outcome:          AcquisitionOutcomeNetwork,
 					SourceID:         request.Source.ID,
 					SuccessfulMirror: mirror,
+					Redirects:        observation.Redirects,
 					Attempts:         failures,
 				},
 			}, nil
@@ -373,6 +378,13 @@ func validateArtifactSource(source ArtifactSource, artifact ArtifactDescriptor) 
 		seen[mirror] = struct{}{}
 	}
 	return nil
+}
+
+// ValidateArtifactSource applies the same immutable source and locator checks
+// used by acquisition. Lock decoders use it to reject source evidence that
+// could never have authorized a production acquisition.
+func ValidateArtifactSource(source ArtifactSource, artifact ArtifactDescriptor) error {
+	return validateArtifactSource(source, artifact)
 }
 
 func validateAcquisitionPolicy(policy AcquisitionPolicy, source ArtifactSource, artifact ArtifactDescriptor) error {
