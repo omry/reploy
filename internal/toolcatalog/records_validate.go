@@ -2,8 +2,8 @@ package toolcatalog
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
-	"path"
 	"sort"
 	"strings"
 	"unicode"
@@ -11,9 +11,8 @@ import (
 	pep440 "github.com/aquasecurity/go-pep440-version"
 	"github.com/aquasecurity/go-version/pkg/semver"
 	dockerreference "github.com/distribution/reference"
-	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
-	pythonprovider "github.com/omry/reploy/internal/providers/python"
+	"github.com/omry/reploy/internal/portabletool"
 )
 
 const (
@@ -374,219 +373,15 @@ func validateLoadedRecordV1(record loadedRecordV1) error {
 		}
 		return nil
 	case *BindingContractV1:
-		if record.Schema != BindingContractSchemaV1 || value.Schema != BindingContractSchemaV1 || value.ID != record.ID || !validRecordIdentifierV1(value.Name) || !validPackageNameV1(value.Package) {
-			return fmt.Errorf("binding contract is incomplete")
-		}
-		if err := validateBindingContractIDV1(value.ID, value.Name); err != nil {
-			return err
-		}
-		if !validRecordIdentifierV1(value.CLI.Name) || validateAbsoluteRecordPathV1(value.CLI.Path) != nil {
-			return fmt.Errorf("binding CLI must use a canonical name and absolute path")
-		}
-		if err := requireNonemptySortedStringsV1("binding requirements", value.Requirements); err != nil {
-			return err
-		}
-		distributions := make(map[string]string, len(value.Requirements))
-		for _, requirement := range value.Requirements {
-			distribution, err := pythonprovider.PackageRootDistributionNameV1(requirement)
-			if err != nil {
-				return fmt.Errorf("binding requirement %q: %w", requirement, err)
-			}
-			if previous, found := distributions[distribution]; found {
-				return fmt.Errorf("binding requirements %q and %q name the same distribution %q", previous, requirement, distribution)
-			}
-			distributions[distribution] = requirement
-		}
-		if err := requireNonemptySortedStringsV1("supported Python", value.SupportedPython); err != nil {
-			return err
-		}
-		if value.BundledComponents == nil || len(value.BundledComponents) > maxDefinitionReferences {
-			return fmt.Errorf("binding contract bundled components must use a bounded array")
-		}
-		for index, component := range value.BundledComponents {
-			if !validRecordIdentifierV1(component.Name) || !validRecordSegmentV1(component.Version) || validateRecordPathV1(component.Path, false) != nil {
-				return fmt.Errorf("binding contract bundled component %d is not canonical", index)
-			}
-			if index > 0 && value.BundledComponents[index-1].Name >= component.Name {
-				return fmt.Errorf("binding contract bundled components must be unique and sorted by name")
-			}
-		}
-		for _, version := range value.SupportedPython {
-			if err := pythonprovider.ValidateInterpreterVersionV1(version); err != nil {
-				return fmt.Errorf("supported Python version %q: %w", version, err)
-			}
-		}
-		if err := requireNonemptySortedStringsV1("binding supported tags", value.SupportedTags); err != nil {
-			return err
-		}
-		for _, tag := range value.SupportedTags {
-			segments := strings.Split(tag, "-")
-			if len(segments) != 3 || !validWheelTagGroupV1(segments[0]) || !validWheelTagGroupV1(segments[1]) || !validWheelTagGroupV1(segments[2]) {
-				return fmt.Errorf("binding supported tag %q must be a canonical three-part wheel tag", tag)
-			}
-		}
-		return nil
+		return validateSharedRecordV1(record, value.Schema, value.ID)
 	case *BindingArtifactRecordV1:
-		if record.Schema != BindingArtifactSchemaV1 || value.Schema != BindingArtifactSchemaV1 || value.ID != record.ID || !validRecordIdentifierV1(value.Binding) || !validPlatformV1(value.Platform) || validateRecordPathV1(value.Filename, false) != nil || path.Dir(value.Filename) != "." {
-			return fmt.Errorf("binding artifact identity is incomplete")
-		}
-		if err := validateBindingArtifactIDV1(value.ID, value.Binding, value.Platform); err != nil {
-			return err
-		}
-		if value.Resolver != "https-sha256" {
-			return fmt.Errorf("binding artifact resolver %q is unsupported", value.Resolver)
-		}
-		if !validRecordIdentifierV1(value.Name) || !validRecordSegmentV1(value.EcosystemVersion) {
-			return fmt.Errorf("binding artifact component name and ecosystem version must be canonical")
-		}
-		if err := validateRecordReferenceV1(value.Contract); err != nil {
-			return fmt.Errorf("binding artifact contract: %w", err)
-		}
-		artifactSegments := strings.Split(value.ID, "/")
-		expectedContract := strings.Join(artifactSegments[:5], "/") + "/contract"
-		if value.Contract.ID != expectedContract {
-			return fmt.Errorf("binding artifact contract reference must be %q", expectedContract)
-		}
-		if err := validateBindingArtifactCompatibilityV1(value); err != nil {
-			return err
-		}
-		filenameParts := strings.Split(strings.TrimSuffix(value.Filename, ".whl"), "-")
-		if len(filenameParts) < 2 || filenameParts[0] != strings.ReplaceAll(pythonprovider.NormalizeDistributionName(value.Name), "-", "_") || filenameParts[1] != value.EcosystemVersion {
-			return fmt.Errorf("binding artifact name and ecosystem version must match the wheel filename %q", value.Filename)
-		}
-		if err := validateCanonicalDecimalV1("binding artifact size", value.Size, true); err != nil {
-			return err
-		}
-		if err := value.SHA256.Validate(); err != nil {
-			return fmt.Errorf("binding artifact digest: %w", err)
-		}
-		if value.BundledComponents == nil || len(value.BundledComponents) > maxDefinitionReferences {
-			return fmt.Errorf("binding artifact bundled components must use a bounded array")
-		}
-		for index, component := range value.BundledComponents {
-			if !validRecordIdentifierV1(component.Name) || !validRecordSegmentV1(component.Version) || validateRecordPathV1(component.Path, false) != nil || index > 0 && value.BundledComponents[index-1].Name >= component.Name {
-				return fmt.Errorf("binding artifact bundled components must be complete, unique, and sorted")
-			}
-		}
-		return nil
+		return validateSharedRecordV1(record, value.Schema, value.ID)
 	case *PayloadRecordV1:
-		if record.Schema != PayloadRecordSchemaV1 || value.Schema != PayloadRecordSchemaV1 || value.ID != record.ID || !validRecordIdentifierV1(value.Name) || !validRecordSegmentV1(value.Revision) || !validRecordSegmentV1(value.UpstreamVersion) || !validPlatformV1(value.Platform) || !supportedPayloadKindV1(value.Kind) {
-			return fmt.Errorf("payload identity is incomplete")
-		}
-		if err := validatePayloadIDV1(value); err != nil {
-			return err
-		}
-		if value.Resolver != "https-sha256" {
-			return fmt.Errorf("payload resolver %q is unsupported", value.Resolver)
-		}
-		if err := validateRecordPathV1(value.LogicalPath, false); err != nil {
-			return fmt.Errorf("payload logical path: %w", err)
-		}
-		if err := validateCanonicalDecimalV1("payload size", value.Size, true); err != nil {
-			return err
-		}
-		if err := validateCanonicalDecimalV1("payload entries", value.Entries, true); err != nil {
-			return err
-		}
-		if err := validateCanonicalDecimalV1("payload unpacked size", value.UnpackedSize, true); err != nil {
-			return err
-		}
-		if err := value.SHA256.Validate(); err != nil {
-			return fmt.Errorf("payload digest: %w", err)
-		}
-		if err := validateRecordPathV1(value.InstallDirectory, false); err != nil {
-			return fmt.Errorf("payload install directory: %w", err)
-		}
-		if err := validateRecordPathV1(value.ArchiveRoot, true); err != nil {
-			return fmt.Errorf("payload archive root: %w", err)
-		}
-		if err := requireNonemptySortedStringsV1("payload executables", value.Executables); err != nil {
-			return err
-		}
-		for _, executable := range value.Executables {
-			if err := validateRecordPathV1(executable, false); err != nil {
-				return fmt.Errorf("payload executable: %w", err)
-			}
-			if value.ArchiveRoot != "." && executable != value.ArchiveRoot && !strings.HasPrefix(executable, value.ArchiveRoot+"/") {
-				return fmt.Errorf("payload executable %q is outside archive root %q", executable, value.ArchiveRoot)
-			}
-		}
-		if path.Dir(value.InstallDirectory) != "." {
-			return fmt.Errorf("payload paths are inconsistent")
-		}
-		if value.Kind == "raw-executable" && (value.Entries != "1" || value.UnpackedSize != value.Size || value.ArchiveRoot != "." || len(value.Executables) != 1) {
-			return fmt.Errorf("raw executable payload inventory is inconsistent")
-		}
-		return nil
+		return validateSharedRecordV1(record, value.Schema, value.ID)
 	case *ArtifactSourceRecordV1:
-		if record.Schema != ArtifactSourceRecordSchemaV1 || value.Schema != ArtifactSourceRecordSchemaV1 || value.ID != record.ID {
-			return fmt.Errorf("artifact source identity is inconsistent")
-		}
-		if err := validateArtifactSourceIDV1(value.ID); err != nil {
-			return err
-		}
-		if err := value.SHA256.Validate(); err != nil {
-			return fmt.Errorf("artifact source digest: %w", err)
-		}
-		if len(value.Mirrors) == 0 || len(value.Mirrors) > maxDefinitionArtifactMirrors {
-			return fmt.Errorf("artifact source mirrors must contain between 1 and %d entries", maxDefinitionArtifactMirrors)
-		}
-		seenMirrors := make(map[string]struct{}, len(value.Mirrors))
-		for index, mirror := range value.Mirrors {
-			if err := validateSourceURLV1(mirror); err != nil {
-				return fmt.Errorf("artifact source mirror %d: %w", index, err)
-			}
-			if _, exists := seenMirrors[mirror]; exists {
-				return fmt.Errorf("artifact source mirrors must be unique")
-			}
-			seenMirrors[mirror] = struct{}{}
-		}
-		if len(value.Provenance) == 0 || len(value.Provenance) > maxDefinitionReferences {
-			return fmt.Errorf("artifact source provenance must use a nonempty bounded array")
-		}
-		previousProvenance := ""
-		for index, provenance := range value.Provenance {
-			if err := validateSourceURLV1(provenance); err != nil {
-				return fmt.Errorf("artifact source provenance %d: %w", index, err)
-			}
-			if index > 0 && previousProvenance >= provenance {
-				return fmt.Errorf("artifact source provenance must be unique and sorted")
-			}
-			previousProvenance = provenance
-		}
-		if err := validateSortedUniqueStringsV1("artifact source diagnostics", value.Diagnostics, false); err != nil {
-			return err
-		}
-
-		return nil
+		return validateSharedRecordV1(record, value.Schema, value.ID)
 	case *NativePackageSetV1:
-		if record.Schema != NativePackageSetSchemaV1 || value.Schema != NativePackageSetSchemaV1 || value.ID != record.ID || value.Manager != "apt" {
-			return fmt.Errorf("native package-set identity is incomplete")
-		}
-		if err := validateNativePackageSetIDV1(value.ID); err != nil {
-			return err
-		}
-		if err := requireNonemptySortedStringsV1("native package requirements", value.Requirements); err != nil {
-			return err
-		}
-		if err := validateSortedUniqueStringsV1("native package repositories", value.Repositories, false); err != nil {
-			return err
-		}
-		if err := validateSortedUniqueStringsV1("native package validation metadata", value.ValidationMetadata, false); err != nil {
-			return err
-		}
-		packages := make(map[string]string, len(value.Requirements))
-		for _, requirement := range value.Requirements {
-			parsed, err := blueprint.ParseAPTPackageRequest(requirement)
-			if err != nil {
-				return fmt.Errorf("native package requirement %q: %w", requirement, err)
-			}
-			if previous, found := packages[parsed.Name]; found {
-				return fmt.Errorf("native package requirements %q and %q name the same package %q", previous, requirement, parsed.Name)
-			}
-			packages[parsed.Name] = requirement
-		}
-		return nil
+		return validateSharedRecordV1(record, value.Schema, value.ID)
 	case *IntegrationFixtureRecordV1:
 		if record.Schema != IntegrationFixtureSchemaV1 || value.Schema != IntegrationFixtureSchemaV1 || value.ID != record.ID || !validRecordIdentifierV1(value.Name) {
 			return fmt.Errorf("integration fixture identity is inconsistent")
@@ -642,24 +437,25 @@ func validateLoadedRecordV1(record loadedRecordV1) error {
 		}
 		return validateProfileReferenceListV1("integration fixture validation profiles", value.ValidationProfiles, strings.Join(segments[:3], "/"), false)
 	case *ValidationProfileRecordV1:
-		if record.Schema != ValidationProfileSchemaV1 || value.Schema != ValidationProfileSchemaV1 || value.ID != record.ID || !validRecordIdentifierV1(value.Tool) {
-			return fmt.Errorf("validation profile identity is inconsistent")
-		}
-		versionSegment, err := encodeToolVersionSegmentV1(value.Version)
-		if err != nil {
-			return fmt.Errorf("validation profile version: %w", err)
-		}
-		expectedPrefix := fmt.Sprintf("tool:%s/releases/%s/validation/profiles/", value.Tool, versionSegment)
-		if !strings.HasPrefix(value.ID, expectedPrefix) || !validRecordIdentifierV1(strings.TrimPrefix(value.ID, expectedPrefix)) {
-			return fmt.Errorf("validation profile ID must use a canonical name beneath %q", expectedPrefix)
-		}
-		if err := validateProbeListV1("validation profile probes", value.Probes, false); err != nil {
-			return err
-		}
-		return nil
+		return validateSharedRecordV1(record, value.Schema, value.ID)
 	default:
 		return fmt.Errorf("unsupported record value %T", record.Value)
 	}
+}
+
+func validateSharedRecordV1(record loadedRecordV1, schema, id string) error {
+	if record.Schema != schema || record.ID != id {
+		return fmt.Errorf("portable tool record identity is inconsistent")
+	}
+	payload, err := canonical.Marshal(record.Value)
+	if err != nil {
+		return fmt.Errorf("canonical portable tool record: %w", err)
+	}
+	var value canonical.Object
+	if err := json.Unmarshal(payload, &value); err != nil {
+		return fmt.Errorf("decode canonical portable tool record: %w", err)
+	}
+	return portabletool.ValidateRecordEnvelopeV1(canonical.Envelope{Schema: schema, Value: value})
 }
 
 // Artifact source mappings carry the size and digest of a concrete downloadable
@@ -901,30 +697,6 @@ func validateProbeV1(probe RecordProbeV1) error {
 	return nil
 }
 
-func validateProbeListV1(field string, probes []RecordProbeV1, allowEmpty bool) error {
-	if probes == nil || len(probes) > maxDefinitionReferences || !allowEmpty && len(probes) == 0 {
-		if allowEmpty {
-			return fmt.Errorf("%s must use a bounded array", field)
-		}
-		return fmt.Errorf("%s must use a nonempty bounded array", field)
-	}
-	var previous []byte
-	for index, probe := range probes {
-		if err := validateProbeV1(probe); err != nil {
-			return fmt.Errorf("%s[%d]: %w", field, index, err)
-		}
-		key, err := canonical.Marshal(probe)
-		if err != nil {
-			return fmt.Errorf("%s[%d] canonical form: %w", field, index, err)
-		}
-		if index > 0 && bytes.Compare(previous, key) >= 0 {
-			return fmt.Errorf("%s must be unique and sorted", field)
-		}
-		previous = key
-	}
-	return nil
-}
-
 func validateExportsV1(field string, exports []ToolExportV1) error {
 	if exports == nil || len(exports) > maxDefinitionReferences {
 		return fmt.Errorf("%s must use a bounded array", field)
@@ -1075,17 +847,6 @@ func validateReleaseContractIDV1(id string) error {
 	return nil
 }
 
-func validateBindingContractIDV1(id string, binding string) error {
-	segments := strings.Split(id, "/")
-	if len(segments) != 6 || segments[1] != "releases" || segments[3] != "bindings" || segments[4] != binding || segments[5] != "contract" {
-		return fmt.Errorf("binding contract ID must use tool:<name>/releases/<encoded-version>/bindings/%s/contract", binding)
-	}
-	if _, err := decodeToolVersionSegmentV1(segments[2]); err != nil {
-		return fmt.Errorf("binding contract ID version: %w", err)
-	}
-	return nil
-}
-
 func validateBindingArtifactIDV1(id string, binding string, platform string) error {
 	segments := strings.Split(id, "/")
 	expectedPlatform := strings.ReplaceAll(platform, "/", "-")
@@ -1096,165 +857,6 @@ func validateBindingArtifactIDV1(id string, binding string, platform string) err
 		return fmt.Errorf("binding artifact ID version: %w", err)
 	}
 	return nil
-}
-
-func validateBindingArtifactCompatibilityV1(value *BindingArtifactRecordV1) error {
-	if err := requireNonemptySortedStringsV1("binding artifact tags", value.Tags); err != nil {
-		return err
-	}
-	filenameTags, err := wheelFilenameTagsV1(value.Filename)
-	if err != nil {
-		return fmt.Errorf("binding artifact filename: %w", err)
-	}
-	if compareRecordStringSlicesV1(filenameTags, value.Tags) != 0 {
-		return fmt.Errorf("binding artifact tags must exactly match the expanded wheel filename tags")
-	}
-	for _, tag := range value.Tags {
-		segments := strings.Split(tag, "-")
-		if len(segments) != 3 || !validWheelTagGroupV1(segments[0]) || !validWheelTagGroupV1(segments[1]) || !validWheelTagGroupV1(segments[2]) {
-			return fmt.Errorf("binding artifact wheel tag %q is invalid", tag)
-		}
-		if !wheelPlatformTagCompatibleV1(segments[2], value.Platform) {
-			return fmt.Errorf("binding artifact wheel tag %q is incompatible with platform %q", tag, value.Platform)
-		}
-	}
-	specifiers, err := pep440.NewSpecifiers(value.RequiresPython)
-	if err != nil || specifiers.String() != value.RequiresPython {
-		return fmt.Errorf("binding artifact requires_python must be a canonical PEP 440 specifier set")
-	}
-	return nil
-}
-
-func wheelFilenameTagsV1(filename string) ([]string, error) {
-	if !strings.HasSuffix(filename, ".whl") {
-		return nil, fmt.Errorf("wheel filename must end in .whl")
-	}
-	parts := strings.Split(strings.TrimSuffix(filename, ".whl"), "-")
-	if len(parts) != 5 && len(parts) != 6 {
-		return nil, fmt.Errorf("wheel filename must contain distribution, version, Python, ABI, and platform tags")
-	}
-	if !validWheelDistributionV1(parts[0]) {
-		return nil, fmt.Errorf("wheel filename contains an invalid distribution or version")
-	}
-	version, err := pep440.Parse(parts[1])
-	if err != nil || version.String() != parts[1] {
-		return nil, fmt.Errorf("wheel filename contains an invalid distribution or version")
-	}
-	if len(parts) == 6 && !validWheelBuildTagV1(parts[2]) {
-		return nil, fmt.Errorf("wheel filename contains an invalid build tag")
-	}
-	pythonTags := strings.Split(parts[len(parts)-3], ".")
-	abiTags := strings.Split(parts[len(parts)-2], ".")
-	platformTags := strings.Split(parts[len(parts)-1], ".")
-	expandedTagCount := 1
-	for _, group := range [][]string{pythonTags, abiTags, platformTags} {
-		if len(group) > maxDefinitionReferences/expandedTagCount {
-			return nil, fmt.Errorf("wheel filename expands to more than %d compatibility tags", maxDefinitionReferences)
-		}
-		expandedTagCount *= len(group)
-		for _, component := range group {
-			if !validWheelTagComponentV1(component) {
-				return nil, fmt.Errorf("wheel filename contains an invalid compatibility tag")
-			}
-		}
-	}
-	tags := make([]string, 0, expandedTagCount)
-	for _, pythonTag := range pythonTags {
-		for _, abiTag := range abiTags {
-			for _, platformTag := range platformTags {
-				tags = append(tags, pythonTag+"-"+abiTag+"-"+platformTag)
-			}
-		}
-	}
-	sort.Strings(tags)
-	for index := 1; index < len(tags); index++ {
-		if tags[index-1] == tags[index] {
-			return nil, fmt.Errorf("wheel filename compatibility tags must be unique")
-		}
-	}
-	return tags, nil
-}
-
-func validWheelDistributionV1(component string) bool {
-	if component == "" || component[0] == '_' {
-		return false
-	}
-	for _, character := range component {
-		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '_' {
-			continue
-		}
-		return false
-	}
-	return strings.ReplaceAll(pythonprovider.NormalizeDistributionName(component), "-", "_") == component
-}
-
-func validWheelBuildTagV1(tag string) bool {
-	if tag == "" || tag[0] < '0' || tag[0] > '9' {
-		return false
-	}
-	for _, character := range tag[1:] {
-		if character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' || character >= '0' && character <= '9' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func validWheelTagGroupV1(group string) bool {
-	for _, component := range strings.Split(group, ".") {
-		if !validWheelTagComponentV1(component) {
-			return false
-		}
-	}
-	return true
-}
-
-func validWheelTagComponentV1(component string) bool {
-	if component == "" {
-		return false
-	}
-	for _, character := range component {
-		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '_' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func wheelPlatformTagCompatibleV1(tag string, platform string) bool {
-	if tag == "any" {
-		return true
-	}
-	architecture := ""
-	switch platform {
-	case "linux/amd64":
-		architecture = "x86_64"
-	case "linux/arm64":
-		architecture = "aarch64"
-	default:
-		return false
-	}
-	suffix := "_" + architecture
-	if !strings.HasSuffix(tag, suffix) {
-		return false
-	}
-	policy := strings.TrimSuffix(tag, suffix)
-	if policy == "linux" || policy == "manylinux2014" {
-		return true
-	}
-	if policy == "manylinux1" || policy == "manylinux2010" {
-		// PEP 513 and PEP 571 defined these policies for x86_64 and i686 only.
-		// aarch64 support first appears in manylinux2014 under PEP 599, so an
-		// ARM64 interpreter never selects a manylinux1 or manylinux2010 wheel.
-		return architecture == "x86_64"
-	}
-	if components, found := strings.CutPrefix(policy, "manylinux_"); found {
-		parts := strings.Split(components, "_")
-		return len(parts) == 2 && canonicalDecimalPattern.MatchString(parts[0]) && canonicalDecimalPattern.MatchString(parts[1])
-	}
-	return false
 }
 
 func validateArtifactSourceIDV1(id string) error {
@@ -1282,33 +884,12 @@ func validateNativePackageSetIDV1(id string) error {
 	return nil
 }
 
-func validPackageNameV1(value string) bool {
-	if value == "" || value[0] < 'a' || value[0] > 'z' {
-		return false
-	}
-	for _, character := range value[1:] {
-		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' {
-			continue
-		}
-		switch character {
-		case '.', '-', '_':
-		default:
-			return false
-		}
-	}
-	return true
-}
-
 func supportedArchitectureV1(value string) bool {
 	return value == "amd64" || value == "arm64"
 }
 
 func validPlatformV1(value string) bool {
 	return value == "linux/amd64" || value == "linux/arm64"
-}
-
-func supportedPayloadKindV1(value string) bool {
-	return value == "jdk-archive" || value == "playwright-browser-archive" || value == "raw-executable"
 }
 
 func validEnvironmentNameV1(value string) bool {
