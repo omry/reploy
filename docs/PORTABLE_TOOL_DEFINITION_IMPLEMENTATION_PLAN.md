@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-31
+updated: 2026-09-01
 summary: Reviewable delivery plan for portable-tool authoring, definitions, and the embedded Java, Playwright, and asciinema implementations.
 implements: docs/PORTABLE_TOOL_DEFINITION_DESIGN.md
 ---
@@ -38,6 +38,20 @@ former PTD-12 through PTD-28 are renamed PTD-13 through PTD-29 respectively.
 Plan revision note (2026-08-31): PTD-21 and PTD-22 were split before
 construction into eight review-sized child delivery items. The parent milestone
 identities and PTD-23-through-PTD-29 numbering remain unchanged.
+
+Plan correction note (2026-09-01): PTD-21.4 review exposed duplicate ownership
+of canonical portable-tool record structures and validation between catalog
+loading and locked replay. Delivery now inserts one behavior-preserving
+shared-record-contract corrective prerequisite after PTD-21.3 and before the
+PTD-21.4 lock-persistence PR. The corrective prerequisite owns one foundation
+commit and PR but is not a `PTD-*` delivery item or milestone and does not
+change PTD-21.4's unique commit and PR mapping. It passes the ordinary
+submission, synchronization, local-review, remote-review, and current-head
+approval gates before PTD-21.4 review. It moves the already accepted record
+shapes, strict nested decoding, and record-local validation below both
+consumers while preserving canonical bytes and digests. PTD-21.4 then owns only
+lock-specific construction, authorization, provenance, graph binding, and
+reachability.
 
 No AWD function change is part of this plan. Preparation verifies the already
 retired oversized WIP pull requests and their parked extraction sources, repairs
@@ -892,19 +906,23 @@ materialization.
 
 #### PTD-21.4: Persist Portable-Tool Plans and Acquisition Provenance in Build Locks
 
-Scope: bind selected closure, manifest, artifact, base-image, provider, and
-complete release-provenance identities into canonical build locks together with
-each artifact acquisition outcome.
+Scope: on the approved shared-record-contract corrective prerequisite, bind
+selected closure, manifest, artifact, base-image, provider, and complete
+release-provenance identities into canonical build locks together with each
+artifact acquisition outcome.
 
-Acceptance: locked replay uses the persisted plan and verified artifacts
-without consulting moving catalog or network state; definition revisions that
-share one closure remain distinguishable; acquisition provenance records either
-the successful declared locator or that a verified-cache hit contacted none;
-redirect hops remain sanitized diagnostics and historical locators remain
-explicitly historical.
+Acceptance: the approved corrective prerequisite makes catalog loading and
+locked replay consume the same record types and record-local validator without
+parallel schema models and preserves canonical record bytes and digests;
+PTD-21.4 preserves canonical lock bytes and digests while locked replay uses
+the persisted plan and verified artifacts without consulting moving catalog or
+network state; definition revisions that share one closure remain
+distinguishable; acquisition provenance records either the successful declared
+locator or that a verified-cache hit contacted none; redirect hops remain
+sanitized diagnostics and historical locators remain explicitly historical.
 
-Non-goals: runtime Java, repository transport, or new trust and publication
-policy.
+Non-goals: changing portable-tool record schemas or identity, runtime Java,
+repository transport, or new trust and publication policy.
 
 #### PTD-21.5: Schedule Selected Validation Profiles with Contract Runtime Projection
 
@@ -1084,6 +1102,8 @@ The campaign is complete only when:
   `PTD-22.1` through `PTD-22.3`, and `PTD-23` through `PTD-29`; the `PTD-21`
   and `PTD-22` milestone containers own no PR and close only when all of their
   child slices are approved;
+- the shared-record-contract corrective prerequisite has current-head approval
+  and remains in the exact ancestry after PTD-21.3 and before PTD-21.4;
 - PR 81 remains approved at the protected repaired head; PR 82's base equals
   that exact head and PR 82 remains approved at its protected rebased head;
 - the retired WIP pull requests remain closed and their parked sources are
