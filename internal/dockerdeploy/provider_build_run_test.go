@@ -13,6 +13,7 @@ import (
 	"github.com/omry/reploy/internal/buildprogress"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providers/registry"
 	"github.com/omry/reploy/internal/providerstore"
 )
@@ -36,11 +37,13 @@ func TestRunProviderBuildV1HoldsOneLockAcrossPreparationAndExecution(t *testing.
 	want := LockedProviderBuildExecutionResultV1{Reused: true}
 	var progress strings.Builder
 	var buildEvents []buildprogress.Event
+	portableTools := &providers.PortableToolLockV1{}
 
 	result, err := runProviderBuildV1(t.Context(), ProviderBuildRunInputV1{
 		DeploymentDir: dir, NoCache: true,
-		Runtime:  StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
-		Progress: &progress,
+		Runtime:       StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
+		PortableTools: portableTools,
+		Progress:      &progress,
 		BuildProgress: func(event buildprogress.Event) {
 			buildEvents = append(buildEvents, event)
 		},
@@ -65,7 +68,7 @@ func TestRunProviderBuildV1HoldsOneLockAcrossPreparationAndExecution(t *testing.
 			if err := input.Preparation.Operation.RequireHeld(); err != nil {
 				t.Fatal(err)
 			}
-			if !input.RunOptions.NoCache || len(input.SourceWheels) != 0 || len(input.LocalOverrides) != 0 || input.Progress != &progress || input.BuildProgress == nil {
+			if !input.RunOptions.NoCache || len(input.SourceWheels) != 0 || len(input.LocalOverrides) != 0 || input.PortableTools != portableTools || input.Progress != &progress || input.BuildProgress == nil {
 				t.Fatalf("execution input = %#v", input)
 			}
 			return want, nil

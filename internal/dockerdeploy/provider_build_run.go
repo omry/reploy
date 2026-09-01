@@ -23,6 +23,7 @@ type ProviderBuildRunInputV1 struct {
 	NoCache         bool
 	Verify          bool
 	ValidateChoices bool
+	PortableTools   *providers.PortableToolLockV1
 	Progress        io.Writer
 	BuildProgress   buildprogress.Reporter
 	RunOptions      RunOptions
@@ -37,6 +38,7 @@ type LockedProviderBuildRunInputV1 struct {
 	NoCache         bool
 	Verify          bool
 	ValidateChoices bool
+	PortableTools   *providers.PortableToolLockV1
 	Progress        io.Writer
 	BuildProgress   buildprogress.Reporter
 	RunOptions      RunOptions
@@ -171,6 +173,7 @@ func runProviderBuildV1(
 		NoCache:         input.NoCache,
 		Verify:          input.Verify,
 		ValidateChoices: input.ValidateChoices,
+		PortableTools:   input.PortableTools,
 		Progress:        input.Progress, BuildProgress: input.BuildProgress,
 		RunOptions: input.RunOptions,
 	}, backend)
@@ -458,6 +461,7 @@ func runLockedProviderBuildV1(
 		Preparation:     preparation,
 		SourceWheels:    []providerstore.ArtifactDescriptor{},
 		LocalOverrides:  localOverrides,
+		PortableTools:   input.PortableTools,
 		RunValidation:   nil,
 		ValidateChoices: input.ValidateChoices,
 		Progress:        input.Progress, BuildProgress: input.BuildProgress, RunOptions: options,
