@@ -121,6 +121,9 @@ func ValidateBuildLockV1(lock BuildLockV1, validateProfileOwner providers.Requir
 	if lock.Base.Platform != lock.Platform {
 		return fmt.Errorf("build lock base platform does not match selected platform")
 	}
+	if lock.PortableTools == nil && lock.BasePlanDigest != "" {
+		return fmt.Errorf("build lock base plan digest requires portable tools")
+	}
 	graphNodes, err := validateProviderGraphLock(lock.Graph)
 	if err != nil {
 		return err
