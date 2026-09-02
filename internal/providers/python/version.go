@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	pep440 "github.com/aquasecurity/go-pep440-version"
+	"github.com/omry/reploy/internal/portabletool"
 )
 
 // ValidatePackageVersionV1 accepts one exact Python distribution version.
@@ -24,24 +25,7 @@ func ValidatePackageVersionV1(value string) error {
 // ValidateInterpreterVersionV1 accepts the canonical major.minor or
 // major.minor.patch release form used by portable binding compatibility lists.
 func ValidateInterpreterVersionV1(value string) error {
-	parts := strings.Split(value, ".")
-	if len(parts) < 2 || len(parts) > 3 {
-		return fmt.Errorf("Python interpreter version %q must use major.minor or major.minor.patch", value)
-	}
-	for _, part := range parts {
-		if part == "" || len(part) > 1 && part[0] == '0' {
-			return fmt.Errorf("Python interpreter version %q is not canonical", value)
-		}
-		for _, character := range part {
-			if character < '0' || character > '9' {
-				return fmt.Errorf("Python interpreter version %q is not canonical", value)
-			}
-		}
-		if _, err := strconv.Atoi(part); err != nil {
-			return fmt.Errorf("Python interpreter version %q has an out-of-range component", value)
-		}
-	}
-	return nil
+	return portabletool.ValidatePythonInterpreterVersionV1(value)
 }
 
 // ComparePackageVersionsV1 compares valid PEP 440 versions.
