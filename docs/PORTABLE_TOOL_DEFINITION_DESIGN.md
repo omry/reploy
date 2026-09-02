@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-26
+updated: 2026-09-01
 summary: Active composition, targeting, acquisition, identity, and validation model for proposed embedded portable-tool definitions.
 refines: docs/REPOSITORY_DESIGN.md
 ---
@@ -35,6 +35,23 @@ RFC 8785 canonical bytes for each record and embeds those exact bytes. Catalog
 generation does not acquire or execute the tools described by the records.
 Repository publication will later run the same validation and canonical
 emission before advertising a release.
+
+Canonical portable-tool record contracts have one consumer-neutral owner.
+Their versioned field shapes, exact nested-member decoding, per-record bounds,
+canonical spelling rules, and record-local validation must be implemented once
+below both catalog and provider planning. Catalog loading, embedded-catalog
+generation, and locked replay consume that same contract implementation; they
+must not maintain parallel record structures or validators for the same schema.
+
+The catalog remains responsible for discovery, authoring resolution, graph
+composition, publication validation, and canonical emission. Provider planning
+and build locks remain responsible for selected responsibilities, execution
+ordering, lock-specific cross-record authorization, acquisition outcomes, and
+binding the persisted plan to the build graph. The shared record-contract layer
+does not own catalog graph semantics or provider and build-lock policy, and it
+must not depend on either consumer. Consolidating the already accepted record
+contracts under this ownership does not change their JSON shapes, canonical
+bytes, identity inputs, or digests.
 
 A separate implementation WIP uses flat, complete JSON files as a checkpoint;
 those files are not the final schema described here or part of this design-only
