@@ -2,7 +2,6 @@ package toolcatalog
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -13,16 +12,28 @@ import (
 	dockerreference "github.com/distribution/reference"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/portabletool"
+	"github.com/omry/reploy/internal/providerstore"
 )
 
 const (
 	maxDefinitionValidationCases = 1024
-	maxDefinitionArtifactMirrors = 8
+	maxDefinitionArtifactMirrors = providerstore.CoreMaxArtifactMirrors
 )
 
 func validateLoadedRecordV1(record loadedRecordV1) error {
 	if err := validateRecordIDV1(record.ID); err != nil {
 		return err
+	}
+	switch record.Schema {
+	case ReleaseManifestSchemaV1, BindingContractSchemaV1, BindingArtifactSchemaV1, PayloadRecordSchemaV1, ArtifactSourceRecordSchemaV1, NativePackageSetSchemaV1, ValidationProfileSchemaV1:
+		envelope, err := portableToolRecordEnvelopeV1(record.Value)
+		if err != nil {
+			return err
+		}
+		if valueID, _ := envelope.Value["id"].(string); valueID != record.ID {
+			return fmt.Errorf("catalog record value ID must match loaded record ID %q", record.ID)
+		}
+		return portabletool.ValidateRecordEnvelopeV1(envelope)
 	}
 	switch value := record.Value.(type) {
 	case *ToolRecordV1:
@@ -77,8 +88,6 @@ func validateLoadedRecordV1(record loadedRecordV1) error {
 			return fmt.Errorf("opaque default version %q must name an advertised release", value.DefaultVersion)
 		}
 		return nil
-	case *ReleaseManifestV1:
-		return validateSharedRecordV1(record, value.Schema, value.ID)
 	case *ReleaseContractV1:
 		if record.Schema != ReleaseContractSchemaV1 || value.Schema != ReleaseContractSchemaV1 || value.ID != record.ID {
 			return fmt.Errorf("release contract identity is inconsistent")
@@ -290,16 +299,6 @@ func validateLoadedRecordV1(record loadedRecordV1) error {
 			return err
 		}
 		return nil
-	case *BindingContractV1:
-		return validateSharedRecordV1(record, value.Schema, value.ID)
-	case *BindingArtifactRecordV1:
-		return validateSharedRecordV1(record, value.Schema, value.ID)
-	case *PayloadRecordV1:
-		return validateSharedRecordV1(record, value.Schema, value.ID)
-	case *ArtifactSourceRecordV1:
-		return validateSharedRecordV1(record, value.Schema, value.ID)
-	case *NativePackageSetV1:
-		return validateSharedRecordV1(record, value.Schema, value.ID)
 	case *IntegrationFixtureRecordV1:
 		if record.Schema != IntegrationFixtureSchemaV1 || value.Schema != IntegrationFixtureSchemaV1 || value.ID != record.ID || !validRecordIdentifierV1(value.Name) {
 			return fmt.Errorf("integration fixture identity is inconsistent")
@@ -354,26 +353,9 @@ func validateLoadedRecordV1(record loadedRecordV1) error {
 			}
 		}
 		return validateProfileReferenceListV1("integration fixture validation profiles", value.ValidationProfiles, strings.Join(segments[:3], "/"), false)
-	case *ValidationProfileRecordV1:
-		return validateSharedRecordV1(record, value.Schema, value.ID)
 	default:
 		return fmt.Errorf("unsupported record value %T", record.Value)
 	}
-}
-
-func validateSharedRecordV1(record loadedRecordV1, schema, id string) error {
-	if record.Schema != schema || record.ID != id {
-		return fmt.Errorf("portable tool record identity is inconsistent")
-	}
-	payload, err := canonical.Marshal(record.Value)
-	if err != nil {
-		return fmt.Errorf("canonical portable tool record: %w", err)
-	}
-	var value canonical.Object
-	if err := json.Unmarshal(payload, &value); err != nil {
-		return fmt.Errorf("decode canonical portable tool record: %w", err)
-	}
-	return portabletool.ValidateRecordEnvelopeV1(canonical.Envelope{Schema: schema, Value: value})
 }
 
 // Artifact source mappings carry the size and digest of a concrete downloadable
