@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/omry/reploy/internal/canonical"
+	"github.com/omry/reploy/internal/portabletool"
 )
 
 const (
@@ -15,13 +16,13 @@ const (
 	// plan exchanged between closure compilation and provider planning.
 	PortableToolPlanSchemaV1 = "portable-tool-plan-v1"
 
-	portableToolBindingContractSchemaV1   = "portable-tool-binding-v1"
-	portableToolBindingArtifactSchemaV1   = "portable-tool-binding-artifact-v1"
-	portableToolPayloadSchemaV1           = "portable-tool-payload-v1"
-	portableToolPackageSetSchemaV1        = "portable-tool-package-set-v1"
-	portableToolValidationProfileSchemaV1 = "portable-tool-validation-profile-v1"
+	portableToolBindingContractSchemaV1   = portabletool.BindingContractSchemaV1
+	portableToolBindingArtifactSchemaV1   = portabletool.BindingArtifactSchemaV1
+	portableToolPayloadSchemaV1           = portabletool.PayloadRecordSchemaV1
+	portableToolPackageSetSchemaV1        = portabletool.NativePackageSetSchemaV1
+	portableToolValidationProfileSchemaV1 = portabletool.ValidationProfileSchemaV1
 	portableToolRecordIdentityKindV1      = "portable-tool-record"
-	portableToolRecordIdentitySchemaV1    = "portable-tool-record-v1"
+	portableToolRecordIdentitySchemaV1    = portabletool.RecordIdentitySchemaV1
 )
 
 // PortableToolPlanV1 is the canonical provider-neutral projection of one or
@@ -84,10 +85,7 @@ type PortableToolResponsibilitiesV1 struct {
 
 // PortableToolRecordReferenceV1 identifies one exact immutable catalog
 // record. IDs are canonical tool-qualified record IDs.
-type PortableToolRecordReferenceV1 struct {
-	ID     string           `json:"id"`
-	Digest canonical.Digest `json:"digest"`
-}
+type PortableToolRecordReferenceV1 = portabletool.RecordReferenceV1
 
 // PortableToolSelectedRecordV1 retains both the exact record reference and
 // its canonical provider-owned data. Record is a canonical.Envelope alias,

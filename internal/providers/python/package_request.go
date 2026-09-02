@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/omry/reploy/internal/canonical"
+	"github.com/omry/reploy/internal/portabletool"
 	"github.com/omry/reploy/internal/providers"
 )
 
@@ -63,11 +64,11 @@ func ValidateCanonicalPackageRequestV1(request providers.CanonicalPackageRequest
 }
 
 func PackageRootDistributionNameV1(requirement string) (string, error) {
-	return providers.PythonPackageRootDistributionNameV1(requirement)
+	return portabletool.PythonPackageRootDistributionNameV1(requirement)
 }
 
 func PackageRootRequirementsCompatibleV1(requirements []string) (bool, error) {
-	return providers.PythonPackageRootRequirementsCompatibleV1(requirements)
+	return portabletool.PythonPackageRootRequirementsCompatibleV1(requirements)
 }
 
 // ProviderRequestDistributionsV1 returns the normalized direct distribution
