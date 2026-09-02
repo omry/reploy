@@ -25,6 +25,8 @@ func TestCompleteProviderBuildOrdersValidationAssemblyAndPublication(t *testing.
 	input, operation, store := providerBuildCompletionFixture(t)
 	defer operation.Unlock()
 	input.NoCache = true
+	portableTools := &providers.PortableToolLockV1{}
+	input.PortableTools = portableTools
 	validationReference := providerstore.StoreObjectRef{Kind: providerstore.ValidationRecordKind, Digest: rendererDigest("a")}
 	finalImage := providers.RealizedImageV1{Digest: rendererDigest("b"), ConfigDigest: rendererDigest("b"), RootFSSubject: input.Validation.Final.Image.Image.RootFSSubject}
 	runtimeLayer := testApplicationRuntimeLayerV1(t, input.ResolvedRequest.Platform, input.Validation.Final.Image.Image, finalImage)
@@ -55,7 +57,7 @@ func TestCompleteProviderBuildOrdersValidationAssemblyAndPublication(t *testing.
 		},
 		assemble: func(_ context.Context, gotStore providerstore.Store, got BuildLockAssemblyInput) (deploy.BuildLockV1, error) {
 			order = append(order, "assemble")
-			if gotStore.Root() != store.Root() || got.BlueprintDigest != blueprintDigest || got.ValidationRecord != validationReference || got.FinalImage != finalImage || got.RuntimeLayer != runtimeLayer || !reflect.DeepEqual(got.Graph, input.Graph) || !reflect.DeepEqual(got.RuntimePolicy, input.Validation.Final.RuntimePolicy) {
+			if gotStore.Root() != store.Root() || got.BlueprintDigest != blueprintDigest || got.ValidationRecord != validationReference || got.FinalImage != finalImage || got.RuntimeLayer != runtimeLayer || got.PortableTools != portableTools || !reflect.DeepEqual(got.Graph, input.Graph) || !reflect.DeepEqual(got.RuntimePolicy, input.Validation.Final.RuntimePolicy) {
 				t.Fatalf("assembly input = %#v", got)
 			}
 			return wantLock, nil
