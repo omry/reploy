@@ -20,6 +20,7 @@ type BuildLockAssemblyInput struct {
 	PackageOverrides deploy.PackageOverrideIntentV1
 	Base             deploy.ImageDescriptor
 	Graph            providers.GraphExecutionResult
+	PortableTools    *providers.PortableToolLockV1
 	RuntimePolicy    deploy.RuntimePolicyV1
 	RuntimeLayer     deploy.ApplicationRuntimeLayerV1
 	ValidationRecord providerstore.StoreObjectRef
@@ -140,14 +141,27 @@ func AssembleBuildLock(
 		})
 	}
 	sort.Slice(locks, func(left int, right int) bool { return locks[left].NodeID < locks[right].NodeID })
+	var portableTools *providers.PortableToolLockV1
+	var basePlanDigest canonical.Digest
+	if input.PortableTools != nil {
+		portableTools, err = rebindPortableToolLockProviderPlanV1(input.PortableTools, input.Graph.Plan)
+		if err != nil {
+			return deploy.BuildLockV1{}, err
+		}
+		basePlanDigest, err = providers.ProviderNodePlanDigest(nodesByID["base"])
+		if err != nil {
+			return deploy.BuildLockV1{}, fmt.Errorf("assemble build lock portable tool base plan: %w", err)
+		}
+	}
 	lock := deploy.BuildLockV1{
 		Schema: deploy.BuildLockSchemaV1, BlueprintDigest: input.BlueprintDigest,
 		Overlay: input.Overlay, PackageOverrides: input.PackageOverrides,
 		ResolvedRequestDigest: requestDigest, Platform: input.ResolvedRequest.Platform,
-		Base: input.Base, Graph: deploy.ProviderGraphLockV1{
+		Base: input.Base, BasePlanDigest: basePlanDigest, Graph: deploy.ProviderGraphLockV1{
 			Nodes: graphNodes, Edges: append([]providers.ProviderEdgeV1{}, input.Graph.SelectedEdges...),
 		},
 		Nodes: locks, Catalog: append([]providers.RealizedOutput{}, input.Graph.Catalog...),
+		PortableTools: portableTools,
 		RuntimePolicy: input.RuntimePolicy, RuntimeLayer: input.RuntimeLayer,
 		ValidationRecord: input.ValidationRecord, FinalImage: input.FinalImage,
 	}
@@ -158,6 +172,27 @@ func AssembleBuildLock(
 		return deploy.BuildLockV1{}, fmt.Errorf("assemble build lock closure: %w", err)
 	}
 	return lock, nil
+}
+
+func rebindPortableToolLockProviderPlanV1(
+	lock *providers.PortableToolLockV1,
+	providerPlan providers.ProviderPlanV1,
+) (*providers.PortableToolLockV1, error) {
+	if err := providers.ValidatePortableToolLockV1(*lock); err != nil {
+		return nil, fmt.Errorf("assemble build lock portable tools: %w", err)
+	}
+	plan, err := providers.BuildPortableToolProviderDAGV1(
+		providerPlan, lock.Plan.PortableToolPlan, lock.Plan.Domains,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("assemble build lock portable tools against effective provider plan: %w", err)
+	}
+	rebound := providers.ClonePortableToolLockV1(*lock)
+	rebound.Plan = plan
+	if err := providers.ValidatePortableToolLockV1(rebound); err != nil {
+		return nil, fmt.Errorf("assemble build lock rebound portable tools: %w", err)
+	}
+	return &rebound, nil
 }
 
 func validateGraphLockAssemblyShape(input BuildLockAssemblyInput) error {
