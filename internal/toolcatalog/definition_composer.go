@@ -6,26 +6,12 @@ import (
 	"sort"
 
 	"github.com/omry/reploy/internal/canonical"
+	"github.com/omry/reploy/internal/portabletool"
 )
 
-// PortableToolRecordV1 is the closed set of records accepted by the portable
-// tool definition composer. The unexported marker keeps arbitrary authoring
-// values out while allowing callers to pass pointers to the exported records.
-type PortableToolRecordV1 interface {
-	portableToolRecordV1()
-}
-
-func (*ToolRecordV1) portableToolRecordV1()               {}
-func (*ReleaseManifestV1) portableToolRecordV1()          {}
-func (*ReleaseContractV1) portableToolRecordV1()          {}
-func (*TargetRecordV1) portableToolRecordV1()             {}
-func (*BindingContractV1) portableToolRecordV1()          {}
-func (*BindingArtifactRecordV1) portableToolRecordV1()    {}
-func (*PayloadRecordV1) portableToolRecordV1()            {}
-func (*ArtifactSourceRecordV1) portableToolRecordV1()     {}
-func (*NativePackageSetV1) portableToolRecordV1()         {}
-func (*IntegrationFixtureRecordV1) portableToolRecordV1() {}
-func (*ValidationProfileRecordV1) portableToolRecordV1()  {}
+// PortableToolRecordV1 is retained as a compatibility alias for the shared
+// canonical portable-tool record contract.
+type PortableToolRecordV1 = portabletool.RecordV1
 
 // PortableToolDefinitionRecordV1 places one typed authoring record at its
 // intended catalog path. References must name an exact record ID. A missing
