@@ -168,6 +168,15 @@ func TestBuildLockV1AcceptsValidatedProviderNode(t *testing.T) {
 	}
 }
 
+func TestBuildLockV1RejectsBasePlanDigestWithoutPortableTools(t *testing.T) {
+	lock := validBuildLock(t)
+	lock.BasePlanDigest = buildLockTestDigest("8")
+
+	if _, err := BuildLockDigestV1(lock, acceptBuildLockProfile); err == nil || !strings.Contains(err.Error(), "requires portable tools") {
+		t.Fatalf("base plan digest validation error = %v", err)
+	}
+}
+
 func TestBuildLockV1RejectsDisconnectedImageLineage(t *testing.T) {
 	t.Run("provider upstream", func(t *testing.T) {
 		lock := validBuildLock(t)

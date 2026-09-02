@@ -103,6 +103,54 @@ func TestValidateProviderPlanV1AcceptsExplicitSupplierEdge(t *testing.T) {
 	if err := ValidateProviderPlanV1(plan); err != nil {
 		t.Fatal(err)
 	}
+	if err := ValidateProviderSelectedEdgesV1(plan, plan.Edges); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateProviderSelectedEdgesV1AcceptsResolvedImplicitSupplier(t *testing.T) {
+	baseOutput := OutputDeclaration{
+		SupplierComponent: "base", Name: "python", Kind: OutputKindExecutable,
+		CandidatePath: "/usr/local/bin/python", Provenance: providerData("base-export-v1"),
+	}
+	requirement := ExecutableRequirement{
+		ID: "interpreter", Command: "python", ValidationPolicy: ValidationPolicyCompatible,
+	}
+	plan := ProviderPlanV1{
+		Schema: ProviderPlanSchemaV1,
+		Nodes:  []NodeSpec{basePlanNode(baseOutput), pythonPlanNode("application", requirement)},
+		Edges:  []ProviderEdgeV1{},
+	}
+	selected := []ProviderEdgeV1{{
+		Supplier: "base", Consumer: "python/application", RequirementID: "interpreter",
+		Output: QualifiedOutput{Component: "base", Name: "python"},
+	}}
+	if err := ValidateProviderSelectedEdgesV1(plan, selected); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name     string
+		selected []ProviderEdgeV1
+		want     string
+	}{
+		{name: "missing selection", selected: []ProviderEdgeV1{}, want: "has no selected edge"},
+		{name: "wrong command", selected: []ProviderEdgeV1{{
+			Supplier: "base", Consumer: "python/application", RequirementID: "interpreter",
+			Output: QualifiedOutput{Component: "base", Name: "python3"},
+		}}, want: "does not match its executable requirement"},
+		{name: "unknown requirement", selected: []ProviderEdgeV1{{
+			Supplier: "base", Consumer: "python/application", RequirementID: "other",
+			Output: QualifiedOutput{Component: "base", Name: "python"},
+		}}, want: "does not match an executable requirement"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := ValidateProviderSelectedEdgesV1(plan, test.selected); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validation error = %v, want %q", err, test.want)
+			}
+		})
+	}
 }
 
 func TestValidateProviderPlanV1RejectsMalformedRecords(t *testing.T) {
