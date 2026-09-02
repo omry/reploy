@@ -1,26 +1,27 @@
 ---
 artifact: swe-design-review-attestation
-schema_version: 2
+schema_version: 3
 scope_key: 4288e5336b3329ba610c14ee8eee2615dff4b85f8037754801b69b02d8cd4547
 scope: {"kind": "path", "primary_target": "docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md", "repository": "/home/omry/dev/reploy", "selector": "docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md"}
-review_content_identity_sha256: 7110334915a34c30dfda75a38ede87759e2faf50a22e39deef907b43b8d2cf86
-target_content_identity_sha256: d26c57b3a83ccc7b933fda1c8c3f53bbeed488477f16c224146673d17ad18f3d
-baseline_content_identity_sha256: d5fdcc919e1919e5563b2b3f4203c84b71d56617ef438f9607684892ce2371b7
-target_documents: [{"path": "docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md", "repository": "/home/omry/dev/reploy", "sha256": "04532f9798025ef07ed8742d1318a8b18f10da6ef73454b5b029db26aebc807d"}]
-baseline_documents: [{"path": "docs/PORTABLE_TOOL_DEFINITION_DESIGN.md", "repository": "/home/omry/dev/reploy", "sha256": "9f5a0ff43539d4b50b39949a1783e2238473217529685fa665b319819bd472a6"}]
+review_content_identity_sha256: 2aa5109b253b7445e49c8ab8825df7967f0e9b1b66124a1eee21e24c56fa6961
+target_content_identity_sha256: 6a49b47bc7de73e0af1094bd3b7ec96ee622830032c19a3e9a669d67aab472a7
+baseline_content_identity_sha256: dae0bab05a19ca44b34a2678c28ec00b315d23fdffd43035c6228ff18c3a3c14
+target_documents: [{"path": "docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md", "repository": "/home/omry/dev/reploy", "sha256": "52422a63c0ef05f4e95b9d1223da95ca74db87fe546cd1454f45a8e646779928"}]
+baseline_documents: [{"path": "docs/PORTABLE_TOOL_DEFINITION_DESIGN.md", "repository": "/home/omry/dev/reploy", "sha256": "bd02f5450b2940b3a960f6419994aa9c4e5e65ccb4dc5365b4d17ac233b49d9d"}]
+design_dependency_documents: [{"path": "docs/PORTABLE_TOOL_DEFINITION_DESIGN.md", "repository": "/home/omry/dev/reploy", "sha256": "bd02f5450b2940b3a960f6419994aa9c4e5e65ccb4dc5365b4d17ac233b49d9d"}]
 document_repository: "/home/omry/dev/reploy"
 document_path: "docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md"
-document_revision_provenance: "2a9745c91aad28b570b50715481baefbf40b5c75"
-document_sha256: 04532f9798025ef07ed8742d1318a8b18f10da6ef73454b5b029db26aebc807d
+document_revision_provenance: "5d3e49f375e0"
+document_sha256: 52422a63c0ef05f4e95b9d1223da95ca74db87fe546cd1454f45a8e646779928
 verdict: clean
-attested_at: 2026-08-25T21:21:16Z
+attested_at: 2026-09-01T10:18:56Z
 ---
-<!-- swe-design-review-attestation:v2 -->
+<!-- swe-design-review-attestation:v3 -->
 
 # SWE design-review attestation
 
 Review freshness is determined by the target and baseline document bytes
-listed in the version-2 header. Revisions are provenance only.
+listed in the version-3 header. Revisions are provenance only.
 
 ## Durable review state
 
