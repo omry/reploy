@@ -292,6 +292,8 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 		Image: completionInput.Graph.PrefixImages[0], Catalog: completionInput.BaseCatalog,
 	}
 	localOverrides := []PythonLocalOverrideV1{{Distribution: "demo-server", HostDir: "/tmp/demo-server"}}
+	portableTools := &providers.PortableToolLockV1{}
+	completionInput.PortableTools = portableTools
 	input := LockedProviderBuildExecutionInputV1{
 		Preparation: LockedProviderBuildPreparationV1{
 			Operation: operation, Store: store, Environment: completionInput.Environment,
@@ -305,6 +307,7 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 		},
 		SourceWheels:   []providerstore.ArtifactDescriptor{},
 		LocalOverrides: localOverrides,
+		PortableTools:  portableTools,
 		RunValidation:  completionInput.RunValidation,
 	}
 	wantState := deploy.StateV1{Schema: deploy.StateSchemaV1}
@@ -328,7 +331,7 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 		},
 		complete: func(_ context.Context, gotOperation *deploy.OperationLock, gotStore providerstore.Store, got ProviderBuildCompletionInput) (ProviderBuildCompletionResult, error) {
 			order = append(order, "complete")
-			if gotOperation != operation || gotStore.Root() != store.Root() || !reflect.DeepEqual(got.ResolvedRequest, completionInput.ResolvedRequest) || !reflect.DeepEqual(got.Graph, completionInput.Graph) || !reflect.DeepEqual(got.Validation, completionInput.Validation) || !got.NoCache || got.RunValidation == nil || got.RunOptions.Context == nil {
+			if gotOperation != operation || gotStore.Root() != store.Root() || !reflect.DeepEqual(got.ResolvedRequest, completionInput.ResolvedRequest) || !reflect.DeepEqual(got.Graph, completionInput.Graph) || got.PortableTools != completionInput.PortableTools || !reflect.DeepEqual(got.Validation, completionInput.Validation) || !got.NoCache || got.RunValidation == nil || got.RunOptions.Context == nil {
 				t.Fatalf("completion input = %#v", got)
 			}
 			return ProviderBuildCompletionResult{State: wantState, Lock: wantLock}, nil
