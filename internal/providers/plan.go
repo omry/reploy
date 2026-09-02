@@ -204,6 +204,82 @@ func ValidateProviderPlanV1(plan ProviderPlanV1) error {
 	return nil
 }
 
+// ValidateProviderSelectedEdgesV1 verifies the runtime supplier selected for
+// every executable requirement against the structural provider plan. Explicit
+// suppliers remain exact plan edges; requirements without an explicit
+// supplier may select only a declared output from an earlier planned node.
+func ValidateProviderSelectedEdgesV1(plan ProviderPlanV1, selected []ProviderEdgeV1) error {
+	if err := ValidateProviderPlanV1(plan); err != nil {
+		return err
+	}
+	if selected == nil {
+		return fmt.Errorf("provider selected edges must use an array")
+	}
+	order, err := StableProviderInitializationOrder(plan)
+	if err != nil {
+		return err
+	}
+	rank := make(map[NodeID]int, len(order))
+	for index, node := range order {
+		rank[node] = index
+	}
+	nodes := make(map[NodeID]NodeSpec, len(plan.Nodes))
+	requirements := make(map[string]ExecutableRequirement)
+	for _, node := range plan.Nodes {
+		nodes[node.ID] = node
+		for _, requirement := range node.Requirements.Executables {
+			requirements[edgeRequirementKey(node.ID, requirement.ID)] = requirement
+		}
+	}
+	explicit := make(map[string]ProviderEdgeV1, len(plan.Edges))
+	for _, edge := range plan.Edges {
+		explicit[edgeRequirementKey(edge.Consumer, edge.RequirementID)] = edge
+	}
+	seen := make(map[string]bool, len(selected))
+	adjacency := make(map[NodeID][]NodeID, len(nodes))
+	for index, edge := range selected {
+		if index > 0 && compareProviderEdges(selected[index-1], edge) >= 0 {
+			return fmt.Errorf("provider selected edges must be unique and sorted by supplier, consumer, and requirement ID")
+		}
+		supplier, supplierExists := nodes[edge.Supplier]
+		_, consumerExists := nodes[edge.Consumer]
+		if !supplierExists || !consumerExists || edge.Supplier == edge.Consumer || edge.Consumer == "base" {
+			return fmt.Errorf("provider selected edge %q -> %q is invalid", edge.Supplier, edge.Consumer)
+		}
+		key := edgeRequirementKey(edge.Consumer, edge.RequirementID)
+		requirement, exists := requirements[key]
+		if !exists {
+			return fmt.Errorf("provider selected edge for %q does not match an executable requirement", edge.RequirementID)
+		}
+		if seen[key] {
+			return fmt.Errorf("provider executable requirement %q on node %q has multiple selected edges", edge.RequirementID, edge.Consumer)
+		}
+		if edge.Output.Name != requirement.Command || requirement.Supplier != "" && edge.Output.Component != requirement.Supplier {
+			return fmt.Errorf("provider selected edge for %q does not match its executable requirement", edge.RequirementID)
+		}
+		if !nodeDeclaresOutput(supplier, edge.Output) {
+			return fmt.Errorf("provider selected edge for %q references undeclared output %s.%s", edge.RequirementID, edge.Output.Component, edge.Output.Name)
+		}
+		if expected, exists := explicit[key]; exists && edge != expected {
+			return fmt.Errorf("provider selected edge for explicit requirement %q does not match the structural plan", edge.RequirementID)
+		}
+		if rank[edge.Supplier] >= rank[edge.Consumer] {
+			return fmt.Errorf("provider selected edge for %q does not select an earlier planned node", edge.RequirementID)
+		}
+		seen[key] = true
+		adjacency[edge.Supplier] = append(adjacency[edge.Supplier], edge.Consumer)
+	}
+	for key := range requirements {
+		if !seen[key] {
+			return fmt.Errorf("provider executable requirement %q has no selected edge", key)
+		}
+	}
+	if err := rejectProviderPlanCycles(plan.Nodes, adjacency); err != nil {
+		return fmt.Errorf("provider selected edges: %w", err)
+	}
+	return nil
+}
+
 func ValidateNodeSpec(node NodeSpec) error {
 	if err := validateNodeID(node.ID, node.Provider, node.Components); err != nil {
 		return err
