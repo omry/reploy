@@ -330,9 +330,17 @@ func verifyLockedImagesV1(
 	}, runtimeImage); err != nil {
 		return 0, fmt.Errorf("verify cached application runtime layer: %w", err)
 	}
+	// The runtime image is the final image, so it reruns the exact locked
+	// portable-tool profiles. Layer and base revalidation above deliberately
+	// schedule none, matching how the fresh build produced its evidence.
+	portableTools, err := PortableToolFinalImageScheduleFromBuildLockV1(lock.PortableTools)
+	if err != nil {
+		return 0, err
+	}
 	runtimeRecord, err := ValidateImage(ctx, FullImageValidationInput{
 		Image: runtimeImage, Profiles: append([]providers.RequirementProfile{}, profiles...),
-		Outputs: append([]providers.RealizedOutput{}, outputs...), RuntimePolicy: lock.RuntimePolicy,
+		Outputs:       append([]providers.RealizedOutput{}, outputs...),
+		PortableTools: portableTools, RuntimePolicy: lock.RuntimePolicy,
 	}, registry.ValidateRequirementProfileV1, run)
 	if err != nil {
 		return 0, fmt.Errorf("verify application runtime image contents: %w", err)

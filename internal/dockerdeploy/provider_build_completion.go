@@ -288,8 +288,27 @@ func validateProviderBuildCompletionInput(input ProviderBuildCompletionInput, po
 			return err
 		}
 	}
+	// The final schedule is exempt from the graph-layer comparison, so it must
+	// be bound to the portable-tool lock separately. Otherwise completion could
+	// validate one schedule while assembling a lock claiming other profiles.
+	expectedSchedule, err := PortableToolFinalImageScheduleFromBuildLockV1(input.PortableTools)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(input.Validation.Final.PortableTools, expectedSchedule) {
+		return fmt.Errorf("provider build final validation portable-tool schedule does not match the portable-tool lock")
+	}
 	if len(input.Validation.Layers) != 0 {
-		if !reflect.DeepEqual(input.Validation.Final, input.Validation.Layers[len(input.Validation.Layers)-1]) {
+		last := input.Validation.Layers[len(input.Validation.Layers)-1]
+		// Portable-tool profiles describe the completed image, so the final
+		// input carries the schedule that cumulative layer prefixes omit.
+		// Every other field must still match the final graph layer exactly.
+		if !portableToolScheduleAbsentV1(last.PortableTools) {
+			return fmt.Errorf("provider build graph layer validation must not schedule portable tools")
+		}
+		comparable := input.Validation.Final
+		comparable.PortableTools = last.PortableTools
+		if !reflect.DeepEqual(comparable, last) {
 			return fmt.Errorf("provider build final validation does not match the final graph layer")
 		}
 	} else if len(input.Graph.Materializations) == 0 {

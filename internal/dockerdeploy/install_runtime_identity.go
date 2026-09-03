@@ -84,6 +84,13 @@ func buildInstalledRuntimeIdentityWithV1(
 	for _, node := range source.Lock.Nodes {
 		profiles = append(profiles, node.RequirementProfile)
 	}
+	// Reattach the locked portable-tool schedule so the republished validation
+	// record carries the same portable evidence the staged build proved,
+	// rather than silently omitting it.
+	portableTools, err := PortableToolFinalImageScheduleFromBuildLockV1(source.Lock.PortableTools)
+	if err != nil {
+		return installedRuntimeIdentityBuildV1{}, err
+	}
 	runner := ProviderFullImageValidationRunner{Store: store}
 	options.Context = ctx
 	finalized, err := backend.finalize(
@@ -93,6 +100,7 @@ func buildInstalledRuntimeIdentityWithV1(
 		FullImageValidationInput{
 			Image: upstream, Profiles: profiles,
 			Outputs:       append([]providers.RealizedOutput{}, source.Lock.Catalog...),
+			PortableTools: portableTools,
 			RuntimePolicy: source.Lock.RuntimePolicy,
 		},
 		registry.ValidateRequirementProfileV1,
