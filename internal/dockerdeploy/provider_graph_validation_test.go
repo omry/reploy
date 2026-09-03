@@ -47,7 +47,7 @@ func TestPrepareProviderGraphValidationBuildsCumulativeLayerAndFinalInputs(t *te
 	}
 	inspections := 0
 	plan, err := prepareProviderGraphValidation(
-		context.Background(), fixture.lock.Base, fixture.request.EarlierCatalog, graph, fixture.lock.RuntimePolicy,
+		context.Background(), fixture.lock.Base, fixture.request.EarlierCatalog, graph, nil, fixture.lock.RuntimePolicy,
 		func(_ context.Context, candidate BuiltImageCandidate, platform blueprint.Platform) (InspectedImageCandidate, error) {
 			inspections++
 			if candidate.ImageID != layerImage.ConfigDigest || platform != fixture.request.Platform {
@@ -89,7 +89,7 @@ func TestPrepareProviderGraphValidationInspectsBaseOnlyGraph(t *testing.T) {
 			Profiles: []providers.RequirementProfile{}, ValidationEvidence: []providers.ValidationEvidence{},
 			PrefixImages: []providers.RealizedImageV1{baseImage}, Materializations: []providers.GraphNodeMaterializeResult{},
 			Catalog: []providers.RealizedOutput{},
-		}, policy,
+		}, nil, policy,
 		func(_ context.Context, candidate BuiltImageCandidate, _ blueprint.Platform) (InspectedImageCandidate, error) {
 			if candidate.ImageID != descriptor.ConfigDigest {
 				t.Fatalf("base inspection candidate = %#v", candidate)
@@ -130,14 +130,14 @@ func TestPrepareProviderGraphValidationRejectsChangedLayerAndCatalogDrift(t *tes
 		}},
 		Catalog: []providers.RealizedOutput{},
 	}
-	_, err = prepareProviderGraphValidation(context.Background(), fixture.lock.Base, fixture.request.EarlierCatalog, graph, fixture.lock.RuntimePolicy, func(context.Context, BuiltImageCandidate, blueprint.Platform) (InspectedImageCandidate, error) {
+	_, err = prepareProviderGraphValidation(context.Background(), fixture.lock.Base, fixture.request.EarlierCatalog, graph, nil, fixture.lock.RuntimePolicy, func(context.Context, BuiltImageCandidate, blueprint.Platform) (InspectedImageCandidate, error) {
 		return InspectedImageCandidate{}, nil
 	})
 	if err == nil || !strings.Contains(err.Error(), "catalog") {
 		t.Fatalf("catalog drift error = %v", err)
 	}
 	graph.Catalog = append([]providers.RealizedOutput{}, fixture.request.EarlierCatalog...)
-	_, err = prepareProviderGraphValidation(context.Background(), fixture.lock.Base, fixture.request.EarlierCatalog, graph, fixture.lock.RuntimePolicy, func(context.Context, BuiltImageCandidate, blueprint.Platform) (InspectedImageCandidate, error) {
+	_, err = prepareProviderGraphValidation(context.Background(), fixture.lock.Base, fixture.request.EarlierCatalog, graph, nil, fixture.lock.RuntimePolicy, func(context.Context, BuiltImageCandidate, blueprint.Platform) (InspectedImageCandidate, error) {
 		changed := inspectedValidationCandidate(t, providerBaseDescriptor(t, false))
 		return changed, nil
 	})
