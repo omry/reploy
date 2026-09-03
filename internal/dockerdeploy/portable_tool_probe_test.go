@@ -37,7 +37,7 @@ func TestRunPortableToolValidationProfileUsesFixedDirectExecutionPolicy(t *testi
 	}
 	commands := stubPortableToolProbeCommands(t, responses)
 
-	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile)
+	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestRunPortableToolValidationProfileSetupUsesLifecycleDeadline(t *testing.T
 			return nil
 		}, nil
 	}
-	if _, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile); err != nil {
+	if _, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !bindHasDeadline || time.Until(bindDeadline) <= 0 || time.Until(bindDeadline) > time.Second {
@@ -560,7 +560,7 @@ func TestRunPortableToolValidationProfileStartsFreshCleanupAfterProbeTimeout(t *
 		}, nil
 	}
 	started := time.Now()
-	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile)
+	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -606,7 +606,7 @@ func TestRunPortableToolValidationProfilePreCanceledContextDoesNotStartCleanup(t
 			return nil
 		}, nil
 	}
-	if _, err := RunPortableToolValidationProfile(ctx, descriptor, workspace, profile); !errors.Is(err, context.Canceled) {
+	if _, err := RunPortableToolValidationProfile(ctx, descriptor, workspace, profile, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("pre-canceled probe error = %v, want context cancellation", err)
 	}
 	if rmStarted {
@@ -660,7 +660,7 @@ func TestRunPortableToolValidationProfileStalledCleanupReturnsInfrastructureErro
 		}, nil
 	}
 	started := time.Now()
-	if _, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile); err == nil || !strings.Contains(err.Error(), "remove image validation container") {
+	if _, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil); err == nil || !strings.Contains(err.Error(), "remove image validation container") {
 		t.Fatalf("stalled cleanup error = %v, want cleanup infrastructure error", err)
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
@@ -684,7 +684,7 @@ func TestRunPortableToolValidationProfileEvidenceIsCanonicalAndDigestStable(t *t
 	profile := portableToolValidationProfile(toolcatalog.RecordProbeV1{Path: "/opt/demo/bin/demo", Args: []string{"--version"}})
 	responses := []portableToolProbeStubResponse{{stdout: []byte("demo 1.2.3\n"), stderr: []byte("diagnostic\n")}}
 	stubPortableToolProbeCommands(t, responses)
-	first, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile)
+	first, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -718,7 +718,7 @@ func TestRunPortableToolValidationProfileEvidenceDoesNotAliasProfileArguments(t 
 	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
 	profile := portableToolValidationProfile(toolcatalog.RecordProbeV1{Path: "/opt/demo/bin/demo", Args: []string{"--version"}})
 	stubPortableToolProbeCommands(t, []portableToolProbeStubResponse{{stdout: []byte("demo 1.2.3\n")}})
-	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile)
+	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -744,7 +744,7 @@ func TestPortableToolProbeEvidenceDigestBindsExactValidationProfile(t *testing.T
 	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
 	profile := portableToolValidationProfile(toolcatalog.RecordProbeV1{Path: "/opt/demo/bin/demo", Args: []string{"--version"}})
 	stubPortableToolProbeCommands(t, []portableToolProbeStubResponse{{stdout: []byte("demo 1.2.3\n")}})
-	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile)
+	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -818,7 +818,7 @@ func TestRunPortableToolValidationProfileRecordsDescriptorIdentity(t *testing.T)
 	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
 	profile := portableToolValidationProfile(toolcatalog.RecordProbeV1{Path: "/opt/demo/bin/demo", Args: []string{"--version"}})
 	stubPortableToolProbeCommands(t, []portableToolProbeStubResponse{{stdout: []byte("demo 1.2.3\n")}})
-	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile)
+	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -850,7 +850,7 @@ func TestPortableToolProbeEvidenceDigestSeparatesRootFSSubjects(t *testing.T) {
 	var first, second PortableToolProbeEvidenceV1
 	if !t.Run("first-rootfs", func(t *testing.T) {
 		var err error
-		first, err = RunPortableToolValidationProfile(context.Background(), firstDescriptor, workspace, profile)
+		first, err = RunPortableToolValidationProfile(context.Background(), firstDescriptor, workspace, profile, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -859,7 +859,7 @@ func TestPortableToolProbeEvidenceDigestSeparatesRootFSSubjects(t *testing.T) {
 	}
 	if !t.Run("second-rootfs", func(t *testing.T) {
 		var err error
-		second, err = RunPortableToolValidationProfile(context.Background(), secondDescriptor, workspace, profile)
+		second, err = RunPortableToolValidationProfile(context.Background(), secondDescriptor, workspace, profile, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -890,7 +890,7 @@ func TestPortableToolProbeEvidenceDigestRejectsMalformedDescriptorIdentity(t *te
 	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
 	profile := portableToolValidationProfile(toolcatalog.RecordProbeV1{Path: "/opt/demo/bin/demo", Args: []string{"--version"}})
 	stubPortableToolProbeCommands(t, []portableToolProbeStubResponse{{stdout: []byte("demo 1.2.3\n")}})
-	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile)
+	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -946,7 +946,7 @@ func TestRunPortableToolValidationProfileClassifiesExitAndTimeout(t *testing.T) 
 		}
 		return context.WithTimeout(parent, 10*time.Millisecond)
 	}
-	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile)
+	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -981,7 +981,7 @@ func TestPortableToolProbeEvidenceDigestValidatesExitCodeRange(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			stubPortableToolProbeCommands(t, []portableToolProbeStubResponse{{exitStatus: "1"}})
-			evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile)
+			evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1005,7 +1005,7 @@ func TestRunPortableToolValidationProfileTreatsPrimaryExitErrorAsInfrastructure(
 	exitErr := portableToolExitError(t, 23)
 	wrappedExitErr := fmt.Errorf("primary Docker exec failed: %w", exitErr)
 	stubPortableToolProbeCommands(t, []portableToolProbeStubResponse{{err: wrappedExitErr}})
-	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile)
+	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil)
 	if err == nil || !errors.Is(err, exitErr) {
 		t.Fatalf("primary exec error = %v, want wrapped Docker exit error", err)
 	}
@@ -1027,7 +1027,7 @@ func TestRunPortableToolValidationProfileRejectsMalformedOrMissingTrustedExitSta
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			stubPortableToolProbeCommands(t, []portableToolProbeStubResponse{test.response})
-			evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile)
+			evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil)
 			if err == nil || !strings.Contains(err.Error(), "trusted portable-tool exit status") {
 				t.Fatalf("trusted status error = %v, want infrastructure error", err)
 			}
@@ -1046,7 +1046,7 @@ func TestRunPortableToolValidationProfileBoundsObservedOutput(t *testing.T) {
 	stderr := bytes.Repeat([]byte("err"), 64*1024)
 	canceled := false
 	stubPortableToolProbeCommands(t, []portableToolProbeStubResponse{{stdout: stdout, stderr: stderr, contextCanceled: &canceled}})
-	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile)
+	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1068,7 +1068,7 @@ func TestPortableToolProbeEvidenceDigestRejectsTruncatedOutputSizeOverflow(t *te
 	stubPortableToolProbeCommands(t, []portableToolProbeStubResponse{{
 		stdout: bytes.Repeat([]byte("x"), portableToolProbeOutputLimit+1),
 	}})
-	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile)
+	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1088,7 +1088,7 @@ func TestPortableToolProbeEvidenceDigestRequiresExactTruncatedOutputSentinel(t *
 	stubPortableToolProbeCommands(t, []portableToolProbeStubResponse{{
 		stdout: bytes.Repeat([]byte("x"), portableToolProbeOutputLimit+1),
 	}})
-	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile)
+	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1115,7 +1115,7 @@ func TestPortableToolProbeEvidenceDigestRejectsTruncatedOutputDigestTampering(t 
 	stubPortableToolProbeCommands(t, []portableToolProbeStubResponse{{
 		stdout: bytes.Repeat([]byte("x"), portableToolProbeOutputLimit+1),
 	}})
-	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile)
+	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1138,7 +1138,7 @@ func TestPortableToolProbeEvidenceDigestRejectsOutputLimitExitCode(t *testing.T)
 	stubPortableToolProbeCommands(t, []portableToolProbeStubResponse{{
 		stdout: bytes.Repeat([]byte("x"), portableToolProbeOutputLimit+1),
 	}})
-	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile)
+	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1170,7 +1170,7 @@ func TestRunPortableToolValidationProfileClassifiesOutputLimitWithTermination(t 
 	stubPortableToolProbeCommands(t, []portableToolProbeStubResponse{{
 		stdout: bytes.Repeat([]byte("x"), portableToolProbeOutputLimit+1), err: runErr,
 	}})
-	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile)
+	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil)
 	if err != nil {
 		t.Fatalf("terminated output-limit probe error = %v, want evidence", err)
 	}
@@ -1195,7 +1195,7 @@ func TestRunPortableToolValidationProfileRejectsInvalidProfileBeforeDocker(t *te
 		called = true
 		return nil, errors.New("Docker must not be reached")
 	}
-	if _, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile); err == nil {
+	if _, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil); err == nil {
 		t.Fatal("invalid profile unexpectedly succeeded")
 	}
 	if called {
@@ -1211,7 +1211,7 @@ func TestRunPortableToolValidationProfileDoesNotMaskInfrastructureFailureWithOut
 	stubPortableToolProbeCommands(t, []portableToolProbeStubResponse{{
 		stdout: bytes.Repeat([]byte("x"), portableToolProbeOutputLimit+1), err: infraErr,
 	}})
-	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile)
+	evidence, err := RunPortableToolValidationProfile(context.Background(), descriptor, workspace, profile, nil)
 	if err == nil || !errors.Is(err, infraErr) {
 		t.Fatalf("infrastructure error = %v, want Docker transport failure", err)
 	}
