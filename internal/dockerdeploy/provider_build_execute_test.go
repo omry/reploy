@@ -31,7 +31,7 @@ func TestExecuteLockedProviderBuildV1ReturnsExactReuseWithoutBackendWork(t *test
 			fail()
 			return providers.GraphExecutionResult{}, nil
 		},
-		prepareValidation: func(context.Context, deploy.ImageDescriptor, []providers.RealizedOutput, providers.GraphExecutionResult, deploy.RuntimePolicyV1) (ProviderGraphValidationPlan, error) {
+		prepareValidation: func(context.Context, deploy.ImageDescriptor, []providers.RealizedOutput, providers.GraphExecutionResult, *providers.PortableToolLockV1, deploy.RuntimePolicyV1) (ProviderGraphValidationPlan, error) {
 			fail()
 			return ProviderGraphValidationPlan{}, nil
 		},
@@ -86,7 +86,7 @@ func TestExecuteLockedProviderBuildV1RepublishesRuntimeOnlyDocumentUpdate(t *tes
 			fail()
 			return providers.GraphExecutionResult{}, nil
 		},
-		prepareValidation: func(context.Context, deploy.ImageDescriptor, []providers.RealizedOutput, providers.GraphExecutionResult, deploy.RuntimePolicyV1) (ProviderGraphValidationPlan, error) {
+		prepareValidation: func(context.Context, deploy.ImageDescriptor, []providers.RealizedOutput, providers.GraphExecutionResult, *providers.PortableToolLockV1, deploy.RuntimePolicyV1) (ProviderGraphValidationPlan, error) {
 			fail()
 			return ProviderGraphValidationPlan{}, nil
 		},
@@ -322,7 +322,7 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 			}
 			return completionInput.Graph, nil
 		},
-		prepareValidation: func(_ context.Context, base deploy.ImageDescriptor, catalog []providers.RealizedOutput, graph providers.GraphExecutionResult, policy deploy.RuntimePolicyV1) (ProviderGraphValidationPlan, error) {
+		prepareValidation: func(_ context.Context, base deploy.ImageDescriptor, catalog []providers.RealizedOutput, graph providers.GraphExecutionResult, _ *providers.PortableToolLockV1, policy deploy.RuntimePolicyV1) (ProviderGraphValidationPlan, error) {
 			order = append(order, "validation")
 			if !reflect.DeepEqual(base, completionInput.Base) || !reflect.DeepEqual(catalog, completionInput.BaseCatalog) || !reflect.DeepEqual(graph, completionInput.Graph) || !reflect.DeepEqual(policy, completionInput.Validation.Final.RuntimePolicy) {
 				t.Fatal("validation input changed")
@@ -370,7 +370,7 @@ func TestExecuteLockedProviderBuildV1StopsAfterGraphFailure(t *testing.T) {
 		executeGraph: func(context.Context, PreparedPythonGraphExecutionInput) (providers.GraphExecutionResult, error) {
 			return providers.GraphExecutionResult{}, want
 		},
-		prepareValidation: func(context.Context, deploy.ImageDescriptor, []providers.RealizedOutput, providers.GraphExecutionResult, deploy.RuntimePolicyV1) (ProviderGraphValidationPlan, error) {
+		prepareValidation: func(context.Context, deploy.ImageDescriptor, []providers.RealizedOutput, providers.GraphExecutionResult, *providers.PortableToolLockV1, deploy.RuntimePolicyV1) (ProviderGraphValidationPlan, error) {
 			t.Fatal("failed graph prepared validation")
 			return ProviderGraphValidationPlan{}, nil
 		},
@@ -394,7 +394,7 @@ func TestExecuteLockedProviderBuildV1RequiresValidationRunnerBeforeGraph(t *test
 			t.Fatal("missing validation runner reached graph execution")
 			return providers.GraphExecutionResult{}, nil
 		},
-		prepareValidation: func(context.Context, deploy.ImageDescriptor, []providers.RealizedOutput, providers.GraphExecutionResult, deploy.RuntimePolicyV1) (ProviderGraphValidationPlan, error) {
+		prepareValidation: func(context.Context, deploy.ImageDescriptor, []providers.RealizedOutput, providers.GraphExecutionResult, *providers.PortableToolLockV1, deploy.RuntimePolicyV1) (ProviderGraphValidationPlan, error) {
 			return ProviderGraphValidationPlan{}, nil
 		},
 		complete: func(context.Context, *deploy.OperationLock, providerstore.Store, ProviderBuildCompletionInput) (ProviderBuildCompletionResult, error) {
@@ -424,7 +424,7 @@ func TestExecuteLockedProviderBuildV1RejectsReleasedPreparationLock(t *testing.T
 			t.Fatal("released lock reached graph execution")
 			return providers.GraphExecutionResult{}, nil
 		},
-		prepareValidation: func(context.Context, deploy.ImageDescriptor, []providers.RealizedOutput, providers.GraphExecutionResult, deploy.RuntimePolicyV1) (ProviderGraphValidationPlan, error) {
+		prepareValidation: func(context.Context, deploy.ImageDescriptor, []providers.RealizedOutput, providers.GraphExecutionResult, *providers.PortableToolLockV1, deploy.RuntimePolicyV1) (ProviderGraphValidationPlan, error) {
 			return ProviderGraphValidationPlan{}, nil
 		},
 		complete: func(context.Context, *deploy.OperationLock, providerstore.Store, ProviderBuildCompletionInput) (ProviderBuildCompletionResult, error) {
