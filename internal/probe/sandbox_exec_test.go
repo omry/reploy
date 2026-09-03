@@ -199,7 +199,7 @@ func TestParseSandboxExecPlanV1RestrictsPortableToolExitStatusRecording(t *testi
 
 func TestSandboxExecEnvironmentV1ReplacesInheritedEnvironmentForPortableTools(t *testing.T) {
 	inherited := []string{"PATH=/image/bin", "LD_PRELOAD=/image/evil.so"}
-	got, err := sandboxExecEnvironmentV1(PortableToolEnvironmentProfileV1, inherited)
+	got, err := sandboxExecEnvironmentV1(PortableToolEnvironmentProfileV1, nil, inherited)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +217,7 @@ func TestSandboxExecEnvironmentV1ReplacesInheritedEnvironmentForPortableTools(t 
 		t.Fatalf("portable-tool environment retained image values: %#v", got)
 	}
 
-	passthrough, err := sandboxExecEnvironmentV1("", inherited)
+	passthrough, err := sandboxExecEnvironmentV1("", nil, inherited)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,5 +227,94 @@ func TestSandboxExecEnvironmentV1ReplacesInheritedEnvironmentForPortableTools(t 
 	passthrough[0] = "changed"
 	if inherited[0] == "changed" {
 		t.Fatal("default environment aliases inherited input")
+	}
+}
+
+func TestParseContractEnvironmentV1RejectsFixedProfileNames(t *testing.T) {
+	for _, name := range []string{"HOME", "LANG", "LC_ALL", "PATH", "TMPDIR"} {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseContractEnvironmentV1([]string{name + "=/attacker"}, PortableToolEnvironmentProfileV1)
+			if err == nil || !strings.Contains(err.Error(), "owned by environment profile") {
+				t.Fatalf("contract entry %q error = %v", name, err)
+			}
+		})
+	}
+}
+
+func TestParseContractEnvironmentV1RejectsMalformedEntries(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		values  []string
+		profile string
+		want    string
+	}{
+		{name: "missing separator", values: []string{"PLAYWRIGHT_BROWSERS_PATH"}, profile: PortableToolEnvironmentProfileV1, want: "must use NAME=VALUE"},
+		{name: "lowercase name", values: []string{"playwright=/opt"}, profile: PortableToolEnvironmentProfileV1, want: "must match"},
+		{name: "leading digit", values: []string{"1TOOL=/opt"}, profile: PortableToolEnvironmentProfileV1, want: "must match"},
+		{name: "invalid trailing character", values: []string{"TOOL-A=/opt"}, profile: PortableToolEnvironmentProfileV1, want: "must match"},
+		{name: "lowercase trailing character", values: []string{"TOOLa=/opt"}, profile: PortableToolEnvironmentProfileV1, want: "must match"},
+		{name: "control character", values: []string{"TOOL=/opt\x01"}, profile: PortableToolEnvironmentProfileV1, want: "control character"},
+		{name: "unsorted", values: []string{"TOOL_B=/b", "TOOL_A=/a"}, profile: PortableToolEnvironmentProfileV1, want: "unique and sorted"},
+		{name: "duplicate", values: []string{"TOOL_A=/a", "TOOL_A=/a"}, profile: PortableToolEnvironmentProfileV1, want: "unique and sorted"},
+		{name: "without profile", values: []string{"TOOL_A=/a"}, profile: "", want: "requires environment profile"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := parseContractEnvironmentV1(test.values, test.profile)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestParseSandboxExecPlanV1CarriesContractEnvironmentEntries(t *testing.T) {
+	plan, err := parseSandboxExecPlanV1([]string{
+		"--uid", "65532", "--gid", "65532", "--groups", "",
+		"--environment-profile", PortableToolEnvironmentProfileV1,
+		"--environment-entry", "JAVA_HOME=/opt/tool/jdk",
+		"--environment-entry", "PLAYWRIGHT_BROWSERS_PATH=/opt/tool/browsers",
+		"--", "/opt/tool/bin/java", "-version",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []EnvironmentVariableV1{
+		{Name: "JAVA_HOME", Value: "/opt/tool/jdk"},
+		{Name: "PLAYWRIGHT_BROWSERS_PATH", Value: "/opt/tool/browsers"},
+	}
+	if !reflect.DeepEqual(plan.ContractEnvironment, want) {
+		t.Fatalf("contract environment = %#v, want %#v", plan.ContractEnvironment, want)
+	}
+}
+
+func TestSandboxExecEnvironmentV1AppendsContractEntriesAfterFixedProfile(t *testing.T) {
+	contract := []EnvironmentVariableV1{
+		{Name: "JAVA_HOME", Value: "/opt/tool/jdk"},
+		{Name: "PLAYWRIGHT_BROWSERS_PATH", Value: "/opt/tool/browsers"},
+	}
+	got, err := sandboxExecEnvironmentV1(
+		PortableToolEnvironmentProfileV1, contract, []string{"PATH=/image/bin", "PLAYWRIGHT_BROWSERS_PATH=/image/evil"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"HOME=/tmp",
+		"LANG=C",
+		"LC_ALL=C",
+		"PATH=/usr/bin:/bin",
+		"TMPDIR=/tmp",
+		"JAVA_HOME=/opt/tool/jdk",
+		"PLAYWRIGHT_BROWSERS_PATH=/opt/tool/browsers",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("environment = %#v, want %#v", got, want)
+	}
+}
+
+func TestSandboxExecEnvironmentV1RejectsContractEntriesWithoutAProfile(t *testing.T) {
+	_, err := sandboxExecEnvironmentV1("", []EnvironmentVariableV1{{Name: "TOOL_A", Value: "/a"}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "require an application environment profile") {
+		t.Fatalf("error = %v", err)
 	}
 }

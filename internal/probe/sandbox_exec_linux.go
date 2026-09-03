@@ -64,7 +64,7 @@ func sandboxAndExecApplicationV1(plan sandboxExecPlanV1) error {
 			return fmt.Errorf("install application network policy: %w", err)
 		}
 	}
-	environment, err := sandboxExecEnvironmentV1(plan.EnvironmentProfile, os.Environ())
+	environment, err := sandboxExecEnvironmentV1(plan.EnvironmentProfile, plan.ContractEnvironment, os.Environ())
 	if err != nil {
 		return err
 	}

@@ -21,6 +21,7 @@ import (
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	reployprobe "github.com/omry/reploy/internal/probe"
+	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/toolcatalog"
 )
 
@@ -58,9 +59,15 @@ var newPortableToolProbeCleanupContext = func(parent context.Context) (context.C
 }
 
 type PortableToolProbePolicyV1 struct {
-	NetworkDisabled      bool                                      `json:"network_disabled"`
-	WorkingDirectory     string                                    `json:"working_directory"`
+	NetworkDisabled  bool   `json:"network_disabled"`
+	WorkingDirectory string `json:"working_directory"`
+	// Environment is the executor-owned fixed profile. ContractEnvironment is
+	// the selected closure's additional runtime projection. They are recorded
+	// separately so evidence proves the fixed set was applied unchanged and
+	// shows exactly what the contract added on top of it.
 	Environment          []toolcatalog.RecordEnvironmentVariableV1 `json:"environment"`
+	ContractEnvironment  []toolcatalog.RecordEnvironmentVariableV1 `json:"contract_environment"`
+	InstallRoot          string                                    `json:"install_root"`
 	TimeoutMillis        string                                    `json:"timeout_milliseconds"`
 	CleanupTimeoutMillis string                                    `json:"cleanup_timeout_milliseconds"`
 	OutputLimitBytes     string                                    `json:"output_limit_bytes"`
@@ -107,6 +114,7 @@ func RunPortableToolValidationProfile(
 	descriptor deploy.ImageDescriptor,
 	workspace PreparedProbeWorkspace,
 	profile toolcatalog.ValidationProfileRecordV1,
+	runtime *providers.PortableToolRuntimeProjectionV1,
 ) (PortableToolProbeEvidenceV1, error) {
 	if ctx == nil {
 		return PortableToolProbeEvidenceV1{}, fmt.Errorf("portable-tool probe context is required")
@@ -126,6 +134,10 @@ func RunPortableToolValidationProfile(
 		return PortableToolProbeEvidenceV1{}, fmt.Errorf("portable-tool probe rootfs subject: %w", err)
 	}
 	profile = clonePortableToolValidationProfileV1(profile)
+	policy, contractEnvironment, err := portableToolProbePolicyV1(runtime)
+	if err != nil {
+		return PortableToolProbeEvidenceV1{}, err
+	}
 	evidence := PortableToolProbeEvidenceV1{
 		Schema:            PortableToolProbeEvidenceSchemaV1,
 		ExecutorVersion:   PortableToolProbeExecutorV1,
@@ -133,11 +145,11 @@ func RunPortableToolValidationProfile(
 		ProfileDefinition: profile,
 		SubjectRootFS:     subjectRootFS,
 		Platform:          descriptor.Platform,
-		Policy:            fixedPortableToolProbePolicyV1(),
+		Policy:            policy,
 		Results:           make([]PortableToolProbeResultV1, 0, len(profile.Probes)),
 	}
 	for _, declared := range profile.Probes {
-		result, err := runPortableToolProbe(ctx, descriptor, workspace, declared)
+		result, err := runPortableToolProbe(ctx, descriptor, workspace, declared, contractEnvironment)
 		if err != nil {
 			return PortableToolProbeEvidenceV1{}, err
 		}
@@ -154,6 +166,7 @@ func runPortableToolProbe(
 	descriptor deploy.ImageDescriptor,
 	workspace PreparedProbeWorkspace,
 	declared toolcatalog.RecordProbeV1,
+	contractEnvironment []string,
 ) (result PortableToolProbeResultV1, resultErr error) {
 	probeCtx, cancel := newPortableToolProbeContext(ctx)
 	defer cancel()
@@ -191,9 +204,12 @@ func runPortableToolProbe(
 		"--gid", strconv.Itoa(portableToolProbeUnprivilegedID),
 		"--groups", "",
 		"--environment-profile", reployprobe.PortableToolEnvironmentProfileV1,
-		"--record-exit-status",
-		"--", declared.Path,
 	}
+	// Contract entries are additional to the fixed profile. restricted-exec
+	// independently rejects any entry that would replace a fixed name, so the
+	// executor's own policy cannot be weakened by what a closure declares.
+	args = append(args, contractEnvironment...)
+	args = append(args, "--record-exit-status", "--", declared.Path)
 	args = append(args, declared.Args...)
 	runErr := session.runDockerCommand(
 		CommandSpec{Name: "docker", Args: args},
@@ -425,6 +441,43 @@ func portableToolProbeCPULimitDockerValueV1() string {
 	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%d.%03d", whole, fraction), "0"), ".")
 }
 
+// portableToolProbePolicyV1 derives the effective probe policy and the exact
+// restricted-exec arguments carrying the contract runtime environment. The
+// fixed policy is never rewritten: a contract entry that names a fixed
+// variable is rejected here rather than applied, so a definition can add
+// values such as PLAYWRIGHT_BROWSERS_PATH but cannot relax PATH, TMPDIR, or
+// any other executor-owned setting.
+func portableToolProbePolicyV1(
+	runtime *providers.PortableToolRuntimeProjectionV1,
+) (PortableToolProbePolicyV1, []string, error) {
+	policy := fixedPortableToolProbePolicyV1()
+	policy.ContractEnvironment = []toolcatalog.RecordEnvironmentVariableV1{}
+	if runtime == nil {
+		return policy, nil, nil
+	}
+	if err := providers.ValidatePortableToolRuntimeProjectionV1(*runtime); err != nil {
+		return PortableToolProbePolicyV1{}, nil, fmt.Errorf("portable-tool probe runtime projection: %w", err)
+	}
+	fixed := make(map[string]struct{}, len(policy.Environment))
+	for _, variable := range policy.Environment {
+		fixed[variable.Name] = struct{}{}
+	}
+	policy.InstallRoot = runtime.InstallRoot
+	arguments := make([]string, 0, 2*len(runtime.Environment))
+	for _, variable := range runtime.Environment {
+		if _, reserved := fixed[variable.Name]; reserved {
+			return PortableToolProbePolicyV1{}, nil, fmt.Errorf(
+				"portable-tool contract environment %q is owned by the fixed probe policy", variable.Name,
+			)
+		}
+		policy.ContractEnvironment = append(policy.ContractEnvironment, toolcatalog.RecordEnvironmentVariableV1{
+			Name: variable.Name, Value: variable.Value,
+		})
+		arguments = append(arguments, "--environment-entry", variable.Name+"="+variable.Value)
+	}
+	return policy, arguments, nil
+}
+
 func fixedPortableToolProbePolicyV1() PortableToolProbePolicyV1 {
 	return PortableToolProbePolicyV1{
 		NetworkDisabled: true, WorkingDirectory: portableToolProbeWorkdir,
@@ -480,8 +533,8 @@ func validatePortableToolProbeEvidenceV1(evidence PortableToolProbeEvidenceV1) e
 	if err := evidence.Platform.Validate(); err != nil {
 		return fmt.Errorf("portable-tool probe evidence platform is invalid: %w", err)
 	}
-	if !reflect.DeepEqual(evidence.Policy, fixedPortableToolProbePolicyV1()) {
-		return fmt.Errorf("portable-tool probe evidence policy is not the fixed executor policy")
+	if err := validatePortableToolProbePolicyV1(evidence.Policy); err != nil {
+		return err
 	}
 	if len(evidence.Results) == 0 {
 		return fmt.Errorf("portable-tool probe evidence results must use a nonempty array")
@@ -661,4 +714,51 @@ func (output *boundedPortableToolProbeOutput) Evidence() PortableToolProbeOutput
 func digestPortableToolProbeBytes(content []byte) canonical.Digest {
 	digest := sha256.Sum256(content)
 	return canonical.Digest("sha256:" + hex.EncodeToString(digest[:]))
+}
+
+// validatePortableToolProbePolicyV1 proves that recorded evidence carries the
+// executor's fixed policy unchanged. Contract additions are compared
+// separately: they may add environment entries and an install root, but the
+// fixed policy fields must remain byte-identical and no contract entry may
+// name a fixed variable.
+func validatePortableToolProbePolicyV1(policy PortableToolProbePolicyV1) error {
+	contract := policy.ContractEnvironment
+	installRoot := policy.InstallRoot
+	policy.ContractEnvironment = nil
+	policy.InstallRoot = ""
+	if !reflect.DeepEqual(policy, fixedPortableToolProbePolicyV1()) {
+		return fmt.Errorf("portable-tool probe evidence policy is not the fixed executor policy")
+	}
+	if contract == nil {
+		return fmt.Errorf("portable-tool probe evidence contract environment must use an explicit array")
+	}
+	if len(contract) != 0 && installRoot == "" {
+		return fmt.Errorf("portable-tool probe evidence contract environment requires a contract install root")
+	}
+	if installRoot != "" {
+		runtime := providers.PortableToolRuntimeProjectionV1{
+			InstallRoot: installRoot,
+			Environment: make([]providers.PortableToolEnvironmentVariableV1, len(contract)),
+		}
+		for index, variable := range contract {
+			runtime.Environment[index] = providers.PortableToolEnvironmentVariableV1{
+				Name: variable.Name, Value: variable.Value,
+			}
+		}
+		if err := providers.ValidatePortableToolRuntimeProjectionV1(runtime); err != nil {
+			return fmt.Errorf("portable-tool probe evidence contract runtime projection: %w", err)
+		}
+	}
+	fixed := make(map[string]struct{}, len(policy.Environment))
+	for _, variable := range policy.Environment {
+		fixed[variable.Name] = struct{}{}
+	}
+	for _, variable := range contract {
+		if _, reserved := fixed[variable.Name]; reserved {
+			return fmt.Errorf(
+				"portable-tool probe evidence contract environment %q is owned by the fixed probe policy", variable.Name,
+			)
+		}
+	}
+	return nil
 }
