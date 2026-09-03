@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-09-01
+updated: 2026-09-04
 summary: Reviewable delivery plan for portable-tool authoring, definitions, and the embedded Java, Playwright, and asciinema implementations.
 implements: docs/PORTABLE_TOOL_DEFINITION_DESIGN.md
 ---
@@ -52,6 +52,20 @@ shapes, strict nested decoding, and record-local validation below both
 consumers while preserving canonical bytes and digests. PTD-21.4 then owns only
 lock-specific construction, authorization, provenance, graph binding, and
 reachability.
+
+Plan correction note (2026-09-04): PTD-21.5 review exposed a premature
+production-invocation requirement. PTD-21 plans and locks portable-tool work,
+but no selected portable-tool closure is materialized into a concrete image
+until later delivery slices, and the manifest-derived production integration
+harness is not introduced until PTD-25. PTD-21.5 therefore owns deterministic
+schedule projection and the image-neutral execution boundary, including the
+PTD-20 contract-environment handoff. PTD-25 owns the first production caller:
+for each derived integration case, the harness supplies the exact image that
+ordinary Reploy materialization produced and the exact selected schedule. The
+boundary never classifies an image as build or runtime, infers scope from image
+placement, or routes an entire portable-tool lock to one image. This corrects
+delivery order without changing the portable-tool design or its validation
+and evidence model.
 
 No AWD function change is part of this plan. Preparation verifies the already
 retired oversized WIP pull requests and their parked extraction sources, repairs
@@ -341,14 +355,14 @@ the campaign until durable authority is updated.
 | PTD-21.2 | Compile Selected Closures into Deterministic Provider Responsibilities | PTD-21.1 | New work |
 | PTD-21.3 | Integrate Portable-Tool Responsibilities into Provider DAG Planning | PTD-21.2 | New work |
 | PTD-21.4 | Persist Portable-Tool Plans and Acquisition Provenance in Build Locks | PTD-21.3 | New work |
-| PTD-21.5 | Schedule Selected Validation Profiles with Contract Runtime Projection | PTD-21.4 | New work; closes PTD-20 deferrals |
+| PTD-21.5 | Schedule Selected Validation Profiles with Contract Runtime Projection | PTD-21.4 | New work; closes the PTD-20 contract-environment handoff; production invocation closes in PTD-25 |
 | PTD-22 | Cut Java Build Tools Over to the Portable Catalog | PTD-21 | Parent milestone; no owning PR |
 | PTD-22.1 | Resolve Java Builder Demands Through the Portable Catalog | PTD-21.5 | New work; activates only after PTD-21 convergence |
 | PTD-22.2 | Materialize Selected Temurin Java in the Isolated Builder | PTD-22.1 | New work |
 | PTD-22.3 | Remove Legacy Java Switches and Prove the Cutover | PTD-22.2 | New work |
 | PTD-23 | Materialize the Playwright Python Binding | PTD-22 | New work |
 | PTD-24 | Materialize Playwright Chromium Payloads | PTD-23 | New work |
-| PTD-25 | Derive Portable Tool Integration Cases and Evidence | PTD-24 | New work |
+| PTD-25 | Derive Portable Tool Integration Cases and Evidence | PTD-24 | New work; closes the PTD-20 production-caller deferral through the PTD-21.5 boundary |
 | PTD-26 | Validate Every Advertised Java Tuple Through Reploy | PTD-25 | New work |
 | PTD-27 | Validate Every Advertised Playwright Tuple Through Reploy | PTD-26 | New work |
 | PTD-28 | Validate Every Advertised Asciinema Tuple Through Reploy | PTD-27 | New work |
@@ -849,7 +863,7 @@ Acceptance: unrelated availability does not invalidate a plan; selected
 behavior does; acquisition precedes offline materialization; locked replay does
 not consult moving catalog or network state; contribution conflicts fail; and
 the selected runtime install root and environment projection reach the provider
-plan, so contract-owned final-image placement and environment values such as
+plan, so contract-owned installation placement and environment values such as
 Playwright's browser placement and download suppression are not silently
 dropped; the lock records the authorizing source record together with the
 acquisition outcome, which is either the successful declared source locator for
@@ -926,18 +940,27 @@ repository transport, or new trust and publication policy.
 
 #### PTD-21.5: Schedule Selected Validation Profiles with Contract Runtime Projection
 
-Scope: carry selected validation-profile references into production validation
-scheduling and invoke the PTD-20 fixed executor with the selected contract
-install root and environment projection.
+Scope: project selected locked validation-profile references into deterministic
+provider-neutral schedules, and provide an image-neutral validation boundary
+that invokes the PTD-20 fixed executor with the selected contract install root
+and environment projection when a usage owner supplies the exact schedule and
+the exact inspected image containing that selected closure.
 
-Acceptance: production scheduling invokes the fixed executor for selected
-profiles; contract environment values, including `PLAYWRIGHT_BROWSERS_PATH`,
-reach validation without weakening fixed policy; validation references and
-evidence remain outside selected-closure identity; both imported PTD-20
-deferrals receive evidence-backed closure.
+Acceptance: locked replay projects the exact selected profiles without reading
+moving catalog state; scope selection is exact and does not infer image
+placement from tool metadata; the boundary invokes the fixed executor once for
+each caller-supplied scheduled profile; contract environment values, including
+`PLAYWRIGHT_BROWSERS_PATH`, reach validation without weakening fixed policy;
+observations are attributed to the exact locked profile and image root
+filesystem; validation references and evidence remain outside selected-closure
+identity. This slice closes the PTD-20 contract-environment handoff; PTD-25
+closes the deferred production-caller integration against real materialized
+case images.
 
-Non-goals: support advertisement, Playwright payload materialization, or
-definition-controlled executor policy.
+Non-goals: choosing which image contains a resolution scope, invoking profiles
+before a usage owner has materialized the selected closure, support
+advertisement, Playwright payload materialization, or definition-controlled
+executor policy.
 
 ### PTD-22: Cut Java Build Tools Over to the Portable Catalog
 
@@ -1025,14 +1048,18 @@ Scope: derive runnable cases from release manifests and the exact support cases
 advertised by each target leaf; execute fixtures
 through ordinary Reploy resolution and materialization; persist external
 evidence bound to the manifest, selected closure, context, target, immutable
-base image, fixture, and validator.
+base image, fixture, and validator. For each materialized case image, select the
+case's exact locked validation schedule and invoke the PTD-21.5 image-neutral
+boundary; image ownership and scope selection remain harness responsibilities.
 
 Acceptance: missing or excessive context, target, binding, or selection
 coverage fails before execution; no case is inferred by cross-producing
 release-wide contexts with target or option availability; handwritten case
-lists and evidence cannot advertise support; negative fixtures prove unsupported requests fail before
-acquisition; the generic harness contains no Java- or Playwright-specific
-command logic.
+lists and evidence cannot advertise support; every selected profile is invoked
+against the exact image produced for its case, with no build/runtime image
+classification or whole-lock routing; negative fixtures prove unsupported
+requests fail before acquisition; the generic harness contains no Java- or
+Playwright-specific command logic.
 
 Non-goals: completing any tool's support matrix in this slice.
 
