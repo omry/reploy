@@ -8,6 +8,7 @@ import (
 
 	"github.com/omry/reploy/internal/buildprofile"
 	"github.com/omry/reploy/internal/canonical"
+	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/probe"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providers/registry"
@@ -22,6 +23,45 @@ var prepareFullValidationProbeWorkspace = PrepareProbeWorkspace
 var prepareFullValidationAPTWorkspace = PrepareAPTResolverWorkspace
 var openFullValidationSession = OpenImageValidationSession
 var openFullAPTValidationSession = OpenAPTImageValidationSession
+var runFullValidationPortableToolSchedule = runPortableToolScheduleIfSelectedV1
+
+// runPortableToolScheduleIfSelectedV1 skips scheduling entirely when no
+// portable tool was selected, so builds without portable tools neither start
+// a probe container nor produce portable-tool evidence.
+//
+// A selected schedule gets its own probe workspace. The fixed executor opens
+// a fresh container per probe and the container name is derived from the
+// workspace directory, so reusing the caller's still-open validation
+// workspace would collide with that held container.
+func runPortableToolScheduleIfSelectedV1(
+	ctx context.Context,
+	store providerstore.Store,
+	descriptor deploy.ImageDescriptor,
+	schedule providers.PortableToolValidationScheduleV1,
+) (scheduled []PortableToolScheduledEvidenceV1, resultErr error) {
+	// validateFullImageValidationInput already rejected a malformed non-absent
+	// schedule, so an empty entry list is the only skip case.
+	if len(schedule.Entries) == 0 {
+		return nil, nil
+	}
+	workspaceCtx, endWorkspace := buildprofile.Start(ctx, "Prepare portable tool validation workspace")
+	workspace, cleanup, err := prepareFullValidationProbeWorkspace(workspaceCtx, store, descriptor.Platform)
+	endWorkspace(err)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if providerHelperCleanupFailed(resultErr) {
+			// The probe container may still exist, so its workspace mount
+			// must be retained for abandoned-helper recovery.
+			return
+		}
+		if cleanupErr := cleanup(); cleanupErr != nil {
+			scheduled, resultErr = nil, errors.Join(resultErr, cleanupErr)
+		}
+	}()
+	return RunPortableToolValidationScheduleV1(ctx, descriptor, workspace, schedule)
+}
 
 // Run performs one complete image validation in one held networkless
 // container. Provider scratch and the embedded probe workspace are
@@ -169,6 +209,18 @@ func (runner ProviderFullImageValidationRunner) Run(
 		}
 		outputs = append(outputs, aptOutputs...)
 	}
+	// Portable-tool validation runs outside the held session: the fixed
+	// executor owns its own fresh, networkless container per probe so a
+	// timeout cannot leak work into another observation.
+	scheduled, err := runFullValidationPortableToolSchedule(ctx, runner.Store, input.Image.Descriptor, input.PortableTools)
+	if err != nil {
+		return nil, nil, err
+	}
+	portableToolEvidence, err := PortableToolValidationEvidenceV1(input.Image.Image.RootFSSubject, scheduled)
+	if err != nil {
+		return nil, nil, err
+	}
+	profiles = append(profiles, portableToolEvidence...)
 	sort.Slice(profiles, func(left int, right int) bool { return profiles[left].ProfileDigest < profiles[right].ProfileDigest })
 	sort.Slice(outputs, func(left int, right int) bool {
 		if outputs[left].Output.Component != outputs[right].Output.Component {

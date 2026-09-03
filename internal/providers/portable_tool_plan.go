@@ -193,7 +193,7 @@ func validatePortableToolPlanEntryV1(entry PortableToolPlanEntryV1) error {
 		return err
 	}
 	if entry.Runtime != nil {
-		if err := validatePortableToolRuntimeProjectionV1(*entry.Runtime); err != nil {
+		if err := ValidatePortableToolRuntimeProjectionV1(*entry.Runtime); err != nil {
 			return err
 		}
 	}
@@ -233,7 +233,10 @@ func validatePortableToolReleaseProvenanceV1(provenance PortableToolReleaseProve
 	return nil
 }
 
-func validatePortableToolRuntimeProjectionV1(runtime PortableToolRuntimeProjectionV1) error {
+// ValidatePortableToolRuntimeProjectionV1 strictly validates one contract
+// runtime projection. Consumers outside plan validation, such as validation
+// scheduling, revalidate the projection they are about to apply.
+func ValidatePortableToolRuntimeProjectionV1(runtime PortableToolRuntimeProjectionV1) error {
 	if err := validateAbsolutePortableLinuxPath("portable tool runtime install root", runtime.InstallRoot); err != nil {
 		return err
 	}

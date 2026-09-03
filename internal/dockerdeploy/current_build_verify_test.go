@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -231,6 +232,17 @@ func TestVerifyLockedImagesV1ExplainsMissingProviderLayer(t *testing.T) {
 
 func TestVerifyLockedImagesV1RerunsCumulativeLayerValidation(t *testing.T) {
 	_, _, _, lock, _ := newPreparedAPTGraphReuseFixture(t)
+	// A locked portable-tool section must reach the final runtime image only,
+	// so revalidation reruns the exact locked profiles instead of verifying a
+	// portable-tool build without ever executing its probes.
+	planFixture := newPreparedPythonGraphReuseFixture(t)
+	portableToolLock := portableToolLockForValidationScheduleV1(t, planFixture.request.Plan, planFixture.request.NodeID)
+	portableToolSchedule, err := PortableToolFinalImageScheduleFromBuildLockV1(&portableToolLock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.PortableTools = &portableToolLock
+	portableToolScheduled := 0
 	config := deploy.BaseConfig{
 		Schema: deploy.BaseConfigSchemaV1, Environment: []deploy.ConfigEnvironmentVariable{},
 		Entrypoint: []string{}, Command: []string{}, OnBuild: []string{}, Volumes: []string{},
@@ -290,9 +302,26 @@ func TestVerifyLockedImagesV1RerunsCumulativeLayerValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The recorded final-prefix evidence includes the locked portable-tool
+	// profile, exactly as the original build produced it.
+	recordedPortable, err := PortableToolValidationEvidenceV1(
+		runtimeImage.RootFSSubject,
+		[]PortableToolScheduledEvidenceV1{{
+			Scope:   portableToolSchedule.Entries[0].Scope,
+			Tool:    portableToolSchedule.Entries[0].Tool,
+			Profile: portableToolSchedule.Entries[0].Profile.Reference,
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordedProfiles := append([]providers.ValidationEvidence{runtimeEvidence}, recordedPortable...)
+	sort.Slice(recordedProfiles, func(left int, right int) bool {
+		return recordedProfiles[left].ProfileDigest < recordedProfiles[right].ProfileDigest
+	})
 	record := deploy.PrefixValidationV1{
 		Schema: deploy.PrefixValidationSchemaV1, SubjectRootFS: runtimeImage.RootFSSubject,
-		Profiles: []providers.ValidationEvidence{runtimeEvidence}, RuntimePolicy: policyDigest,
+		Profiles: recordedProfiles, RuntimePolicy: policyDigest,
 		ExposedOutputs: []providers.ExecutableEvidence{},
 	}
 	referenceDigest, err := deploy.PrefixValidationDigest(record)
@@ -337,8 +366,29 @@ func TestVerifyLockedImagesV1RerunsCumulativeLayerValidation(t *testing.T) {
 				len(input.Outputs) != 0 {
 				t.Fatalf("layer validation input = %#v", input)
 			}
+			if len(input.PortableTools.Entries) != 0 {
+				portableToolScheduled++
+				if input.Image.Image != runtimeImage {
+					t.Fatalf("portable-tool schedule reached a non-final image: %#v", input.Image.Image)
+				}
+			}
 			if input.Image.Image == runtimeImage {
-				return []providers.ValidationEvidence{runtimeEvidence}, []providers.ExecutableEvidence{}, nil
+				if len(input.PortableTools.Entries) == 0 {
+					t.Fatal("final runtime image validated without the locked portable-tool schedule")
+				}
+				portableEvidence, evidenceErr := PortableToolValidationEvidenceV1(
+					runtimeImage.RootFSSubject,
+					[]PortableToolScheduledEvidenceV1{{
+						Scope:   portableToolSchedule.Entries[0].Scope,
+						Tool:    portableToolSchedule.Entries[0].Tool,
+						Profile: portableToolSchedule.Entries[0].Profile.Reference,
+					}},
+				)
+				if evidenceErr != nil {
+					t.Fatal(evidenceErr)
+				}
+				return append([]providers.ValidationEvidence{runtimeEvidence}, portableEvidence...),
+					[]providers.ExecutableEvidence{}, nil
 			}
 			return []providers.ValidationEvidence{evidence}, []providers.ExecutableEvidence{}, nil
 		},

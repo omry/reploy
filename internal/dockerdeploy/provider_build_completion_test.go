@@ -25,8 +25,16 @@ func TestCompleteProviderBuildOrdersValidationAssemblyAndPublication(t *testing.
 	input, operation, store := providerBuildCompletionFixture(t)
 	defer operation.Unlock()
 	input.NoCache = true
-	portableTools := &providers.PortableToolLockV1{}
+	// A real portable-tool lock, because completion now binds the final
+	// validation schedule to it rather than accepting an unvalidated placeholder.
+	portableToolLock := portableToolLockForValidationScheduleV1(t, input.Graph.Plan, input.Graph.Plan.Nodes[0].ID)
+	portableTools := &portableToolLock
 	input.PortableTools = portableTools
+	portableToolSchedule, err := PortableToolFinalImageScheduleFromBuildLockV1(portableTools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Validation.Final.PortableTools = portableToolSchedule
 	validationReference := providerstore.StoreObjectRef{Kind: providerstore.ValidationRecordKind, Digest: rendererDigest("a")}
 	finalImage := providers.RealizedImageV1{Digest: rendererDigest("b"), ConfigDigest: rendererDigest("b"), RootFSSubject: input.Validation.Final.Image.Image.RootFSSubject}
 	runtimeLayer := testApplicationRuntimeLayerV1(t, input.ResolvedRequest.Platform, input.Validation.Final.Image.Image, finalImage)

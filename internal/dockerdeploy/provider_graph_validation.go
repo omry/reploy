@@ -27,9 +27,10 @@ func PrepareProviderGraphValidation(
 	base deploy.ImageDescriptor,
 	baseCatalog []providers.RealizedOutput,
 	graph providers.GraphExecutionResult,
+	portableTools *providers.PortableToolLockV1,
 	policy deploy.RuntimePolicyV1,
 ) (ProviderGraphValidationPlan, error) {
-	return prepareProviderGraphValidation(ctx, base, baseCatalog, graph, policy, InspectBuiltImageCandidate)
+	return prepareProviderGraphValidation(ctx, base, baseCatalog, graph, portableTools, policy, InspectBuiltImageCandidate)
 }
 
 func prepareProviderGraphValidation(
@@ -37,6 +38,7 @@ func prepareProviderGraphValidation(
 	base deploy.ImageDescriptor,
 	baseCatalog []providers.RealizedOutput,
 	graph providers.GraphExecutionResult,
+	portableTools *providers.PortableToolLockV1,
 	policy deploy.RuntimePolicyV1,
 	inspect providerGraphImageInspector,
 ) (ProviderGraphValidationPlan, error) {
@@ -104,6 +106,23 @@ func prepareProviderGraphValidation(
 		}
 		if err := validateFullImageValidationInput(final, registry.ValidateRequirementProfileV1); err != nil {
 			return ProviderGraphValidationPlan{}, fmt.Errorf("prepare provider graph base validation: %w", err)
+		}
+	}
+	// Portable-tool profiles describe the completed image, so they are
+	// scheduled once on the final input rather than on every cumulative layer
+	// prefix. The schedule comes from the persisted lock, so locked replay
+	// validates the exact locked profiles without consulting catalog state.
+	if portableTools != nil {
+		schedule, err := PortableToolFinalImageScheduleFromBuildLockV1(portableTools)
+		if err != nil {
+			return ProviderGraphValidationPlan{}, fmt.Errorf("prepare portable tool validation schedule: %w", err)
+		}
+		// Only the final input carries the schedule. Cumulative layer prefixes
+		// deliberately do not, so the probes run exactly once against the
+		// image the deployment actually ships.
+		final.PortableTools = schedule
+		if err := validateFullImageValidationInput(final, registry.ValidateRequirementProfileV1); err != nil {
+			return ProviderGraphValidationPlan{}, fmt.Errorf("prepare portable tool validation: %w", err)
 		}
 	}
 	return ProviderGraphValidationPlan{Layers: layers, Final: final}, nil

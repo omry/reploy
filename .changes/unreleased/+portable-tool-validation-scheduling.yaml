@@ -1,0 +1,2 @@
+kind: Added
+body: Schedule selected portable-tool validation profiles during image validation, running each profile's probes through the fixed networkless executor with the selected closure's contract install root and environment, and carry the locked schedule through build completion, reuse verification, and runtime-identity adaptation.
