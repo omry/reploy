@@ -42,6 +42,7 @@ type providerBuildExecutionBackend struct {
 		deploy.ImageDescriptor,
 		[]providers.RealizedOutput,
 		providers.GraphExecutionResult,
+		*providers.PortableToolLockV1,
 		deploy.RuntimePolicyV1,
 	) (ProviderGraphValidationPlan, error)
 	complete func(
@@ -285,7 +286,7 @@ func executeLockedProviderBuildV1(
 	}
 	validationCtx, endValidationPlan := buildprofile.Start(ctx, "Prepare final image validation")
 	validation, err := backend.prepareValidation(
-		validationCtx, preparedBase.Descriptor, preparedBase.Catalog, graph, policy,
+		validationCtx, preparedBase.Descriptor, preparedBase.Catalog, graph, input.PortableTools, policy,
 	)
 	endValidationPlan(err)
 	if err != nil {
