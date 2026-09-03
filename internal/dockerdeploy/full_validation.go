@@ -13,10 +13,20 @@ import (
 )
 
 type FullImageValidationInput struct {
-	Image         InspectedImageCandidate
-	Profiles      []providers.RequirementProfile
-	Outputs       []providers.RealizedOutput
+	Image    InspectedImageCandidate
+	Profiles []providers.RequirementProfile
+	Outputs  []providers.RealizedOutput
+	// PortableTools carries the validation profiles the usage owner selected
+	// for this exact image. Its zero value schedules no portable-tool
+	// validation.
+	PortableTools providers.PortableToolValidationScheduleV1
 	RuntimePolicy deploy.RuntimePolicyV1
+}
+
+// portableToolScheduleAbsentV1 reports the zero-value schedule so callers that
+// select no portable tool need not construct an empty one.
+func portableToolScheduleAbsentV1(schedule providers.PortableToolValidationScheduleV1) bool {
+	return schedule.Schema == "" && len(schedule.Entries) == 0
 }
 
 type FullImageValidationRunner func(
@@ -145,6 +155,11 @@ func validateFullImageValidationInput(input FullImageValidationInput, validatePr
 	if validateProfileOwner == nil {
 		return fmt.Errorf("full validation profile owner validator is required")
 	}
+	if !portableToolScheduleAbsentV1(input.PortableTools) {
+		if err := providers.ValidatePortableToolValidationScheduleV1(input.PortableTools); err != nil {
+			return fmt.Errorf("full validation portable tools: %w", err)
+		}
+	}
 	profileDigests := map[string]bool{}
 	for index, profile := range input.Profiles {
 		digest, err := providers.RequirementProfileDigest(profile, validateProfileOwner)
@@ -182,13 +197,18 @@ func validateFullImageEvidence(
 	outputs []providers.ExecutableEvidence,
 	validateProfileOwner providers.RequirementProfileOwnerValidator,
 ) error {
-	expectedProfiles := make(map[string]bool, len(input.Profiles))
+	expectedProfiles := make(map[string]bool, len(input.Profiles)+len(input.PortableTools.Entries))
 	for _, profile := range input.Profiles {
 		digest, err := providers.RequirementProfileDigest(profile, validateProfileOwner)
 		if err != nil {
 			return err
 		}
 		expectedProfiles[string(digest)] = true
+	}
+	// Scheduled portable-tool profiles are validated in the same pass and are
+	// identified by their exact locked record reference.
+	for _, entry := range input.PortableTools.Entries {
+		expectedProfiles[string(entry.Profile.Reference.Digest)] = true
 	}
 	if len(profiles) != len(expectedProfiles) {
 		return fmt.Errorf("full validation returned %d profile records, want %d", len(profiles), len(expectedProfiles))
