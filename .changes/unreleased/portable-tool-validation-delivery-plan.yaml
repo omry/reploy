@@ -1,0 +1,2 @@
+kind: Docs
+body: Clarify portable-tool delivery so validation schedules remain image-neutral and the integration harness owns validation of exact materialized case images.
