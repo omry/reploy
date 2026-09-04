@@ -14,7 +14,7 @@ func TestBuildPortableToolProviderDAGV1ProjectsResponsibilitiesAndDependencies(t
 	dag, err := BuildPortableToolProviderDAGV1(
 		portableToolProviderPlanFixtureV1(),
 		representativePortableToolPlanV1(),
-		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application")},
+		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo")},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -114,14 +114,14 @@ func TestBuildPortableToolProviderDAGV1SortsDomainsAndClonesInputs(t *testing.T)
 		t.Fatal(err)
 	}
 	domains := []PortableToolProviderDomainSetV1{
-		portableToolProviderDomainV1("other"),
-		portableToolProviderDomainV1("application"),
+		portableToolProviderDomainV1("application:other"),
+		portableToolProviderDomainV1("application:demo"),
 	}
 	dag, err := BuildPortableToolProviderDAGV1(providerPlan, portablePlan, domains)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := []string{dag.Domains[0].Scope, dag.Domains[1].Scope}; !reflect.DeepEqual(got, []string{"application", "other"}) {
+	if got := []string{dag.Domains[0].Scope, dag.Domains[1].Scope}; !reflect.DeepEqual(got, []string{"application:demo", "application:other"}) {
 		t.Fatalf("domain order = %#v", got)
 	}
 	portableAfter, _ := canonical.Marshal(portablePlan)
@@ -141,12 +141,12 @@ func TestBuildPortableToolProviderDAGV1MapsOneDomainPerDistinctScope(t *testing.
 	plan := portableToolProviderTwoToolsOneScopePlanV1()
 	dag, err := BuildPortableToolProviderDAGV1(
 		portableToolProviderPlanFixtureV1(), plan,
-		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application")},
+		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo")},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(dag.Domains) != 1 || dag.Domains[0].Scope != "application" {
+	if len(dag.Domains) != 1 || dag.Domains[0].Scope != "application:demo" {
 		t.Fatalf("domains = %#v", dag.Domains)
 	}
 	if len(dag.PortableToolPlan.Tools) != 2 || dag.PortableToolPlan.Tools[0].Provenance.Tool == dag.PortableToolPlan.Tools[1].Provenance.Tool {
@@ -156,7 +156,7 @@ func TestBuildPortableToolProviderDAGV1MapsOneDomainPerDistinctScope(t *testing.
 
 func TestBuildPortableToolProviderDAGV1ValidatesDomainOwnersAndProjectsThem(t *testing.T) {
 	basePlan := portableToolProviderPlanFixtureV1()
-	validDomains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application")}
+	validDomains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo")}
 	tests := []struct {
 		name   string
 		mutate func([]PortableToolProviderDomainSetV1)
@@ -180,7 +180,7 @@ func TestBuildPortableToolProviderDAGV1ValidatesDomainOwnersAndProjectsThem(t *t
 	}
 
 	twoScopePlan := portableToolProviderTwoScopePlanV1()
-	twoDomains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application"), portableToolProviderDomainV1("other")}
+	twoDomains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")}
 	twoDomains[1].Capabilities.ID = twoDomains[0].Capabilities.ID
 	twoDomains[1].Capabilities.Owner = "base"
 	if _, err := BuildPortableToolProviderDAGV1(basePlan, twoScopePlan, twoDomains); err == nil || !strings.Contains(err.Error(), "conflicting owners") {
@@ -218,7 +218,7 @@ func TestBuildPortableToolProviderDAGV1OmitsBarrierWithoutAcquisitionWork(t *tes
 	plan.Tools[0].Responsibilities.Payloads = []PortableToolSelectedRecordV1{}
 	dag, err := BuildPortableToolProviderDAGV1(
 		portableToolProviderPlanFixtureV1(), plan,
-		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application")},
+		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo")},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -237,12 +237,12 @@ func TestBuildPortableToolProviderDAGV1OmitsBarrierWithoutAcquisitionWork(t *tes
 func TestValidatePortableToolProviderDAGV1InvokesExistingProviderValidators(t *testing.T) {
 	providerPlan := portableToolProviderPlanFixtureV1()
 	providerPlan.Schema = "provider-plan-v2"
-	if _, err := BuildPortableToolProviderDAGV1(providerPlan, representativePortableToolPlanV1(), []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application")}); err == nil || !strings.Contains(err.Error(), "provider plan") {
+	if _, err := BuildPortableToolProviderDAGV1(providerPlan, representativePortableToolPlanV1(), []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo")}); err == nil || !strings.Contains(err.Error(), "provider plan") {
 		t.Fatalf("invalid provider plan error = %v", err)
 	}
 	portablePlan := representativePortableToolPlanV1()
 	portablePlan.Schema = "portable-tool-plan-v2"
-	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), portablePlan, []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application")}); err == nil || !strings.Contains(err.Error(), "portable tool plan") {
+	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), portablePlan, []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo")}); err == nil || !strings.Contains(err.Error(), "portable tool plan") {
 		t.Fatalf("invalid portable plan error = %v", err)
 	}
 }
@@ -355,7 +355,7 @@ func TestBuildPortableToolProviderDAGV1RejectsSharedDomainConflicts(t *testing.T
 			test.mutate(plan)
 			_, err := BuildPortableToolProviderDAGV1(
 				portableToolProviderPlanFixtureV1(), plan,
-				[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application"), portableToolProviderDomainV1("other")},
+				[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")},
 			)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want %q", err, test.want)
@@ -365,7 +365,7 @@ func TestBuildPortableToolProviderDAGV1RejectsSharedDomainConflicts(t *testing.T
 	// Isolated authority domains do not conflict merely because scopes share a
 	// name or selected value.
 	plan := portableToolProviderTwoScopePlanV1()
-	isolated := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application"), portableToolProviderDomainV1("other")}
+	isolated := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")}
 	isolated[1].Environment.ID = "other-environment"
 	isolated[1].Exports.ID = "other-exports"
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), plan, isolated); err != nil {
@@ -374,7 +374,7 @@ func TestBuildPortableToolProviderDAGV1RejectsSharedDomainConflicts(t *testing.T
 
 	capabilityConflictPlan := portableToolProviderTwoScopePlanV1()
 	capabilityConflictPlan.Tools[1].Exports[0].Path = "/other/export"
-	capabilityConflictDomains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application"), portableToolProviderDomainV1("other")}
+	capabilityConflictDomains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")}
 	capabilityConflictDomains[1].Exports.ID = "other-exports"
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), capabilityConflictPlan, capabilityConflictDomains); err == nil || !strings.Contains(err.Error(), "shared-domain conflict") {
 		t.Fatalf("shared capability conflict was not rejected: %v", err)
@@ -382,7 +382,7 @@ func TestBuildPortableToolProviderDAGV1RejectsSharedDomainConflicts(t *testing.T
 
 	fullyIsolatedPlan := portableToolProviderTwoScopePlanV1()
 	fullyIsolatedPlan.Tools[1].Exports[0].Path = "/other/export"
-	fullyIsolatedDomains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application"), portableToolProviderDomainV1("other")}
+	fullyIsolatedDomains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")}
 	fullyIsolatedDomains[1].Exports = PortableToolDomainAuthorityV1{ID: "other-exports", Owner: "base"}
 	fullyIsolatedDomains[1].Capabilities = PortableToolDomainAuthorityV1{ID: "other-capabilities", Owner: "base"}
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), fullyIsolatedPlan, fullyIsolatedDomains); err != nil {
@@ -397,7 +397,7 @@ func TestBuildPortableToolProviderDAGV1ComparesNativePackageSemantics(t *testing
 	setPortableToolPackageSemanticsV1(firstPackage, []string{"foo=1"}, []string{"main"})
 	setPortableToolTestRecordID(&secondPackage.Reference, &secondPackage.Record, "tool:demo/releases/1.2.3/package-sets/other")
 	setPortableToolPackageSemanticsV1(secondPackage, []string{"foo=1"}, []string{"main"})
-	domains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application"), portableToolProviderDomainV1("other")}
+	domains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")}
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), plan, domains); err != nil {
 		t.Fatalf("identical package requirements rejected: %v", err)
 	}
@@ -431,7 +431,7 @@ func TestBuildPortableToolProviderDAGV1ComparesBindingPythonSemantics(t *testing
 	setPortableToolBindingPythonSemanticsV1(firstContract, []string{"demo>=1"}, []string{"3.11", "3.12"})
 	setPortableToolTestRecordID(&secondContract.Reference, &secondContract.Record, "tool:demo/releases/1.2.3/bindings/other/contract")
 	setPortableToolBindingPythonSemanticsV1(secondContract, []string{"demo<3"}, []string{"3.12", "3.13"})
-	domains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application"), portableToolProviderDomainV1("other")}
+	domains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")}
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), plan, domains); err != nil {
 		t.Fatalf("compatible Python constraints rejected: %v", err)
 	}
@@ -518,7 +518,7 @@ func TestBuildPortableToolProviderDAGV1AllowsAndRejectsFilesystemPathClaims(t *t
 			test.mutate(plan)
 			_, err := BuildPortableToolProviderDAGV1(
 				portableToolProviderPlanFixtureV1(), plan,
-				[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application"), portableToolProviderDomainV1("other")},
+				[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")},
 			)
 			if test.wantError == "" {
 				if err != nil {
@@ -540,7 +540,7 @@ func TestBuildPortableToolProviderDAGV1ResolvesRelativePayloadDestinations(t *te
 	setPortableToolPayloadPathsV1(firstPayload, "browser", "payload/demo")
 	setPortableToolTestRecordID(&secondPayload.Reference, &secondPayload.Record, "tool:demo/releases/1.2.3/payloads/other")
 	setPortableToolPayloadPathsV1(secondPayload, "browser", "payload/other")
-	domains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application"), portableToolProviderDomainV1("other")}
+	domains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")}
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), plan, domains); err != nil {
 		t.Fatalf("identical relative destinations under separate roots rejected: %v", err)
 	}
@@ -559,7 +559,7 @@ func TestBuildPortableToolProviderDAGV1ClaimsPayloadLogicalPathByDigest(t *testi
 	plan.Tools[1].Runtime.InstallRoot = "/opt/second"
 	setPortableToolPayloadPathsV1(&plan.Tools[0].Responsibilities.Payloads[0], "browser", "payload/shared")
 	setPortableToolPayloadPathsV1(&plan.Tools[1].Responsibilities.Payloads[0], "browser", "payload/shared")
-	domains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application"), portableToolProviderDomainV1("other")}
+	domains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")}
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), plan, domains); err != nil {
 		t.Fatalf("equal logical path and digest rejected: %v", err)
 	}
@@ -591,7 +591,7 @@ func portableToolProviderDAGFixtureV1(t *testing.T) PortableToolProviderDAGV1 {
 	dag, err := BuildPortableToolProviderDAGV1(
 		portableToolProviderPlanFixtureV1(),
 		representativePortableToolPlanV1(),
-		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application")},
+		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo")},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -604,7 +604,7 @@ func portableToolProviderTwoScopeDAGFixtureV1(t *testing.T) PortableToolProvider
 	dag, err := BuildPortableToolProviderDAGV1(
 		portableToolProviderPlanFixtureV1(),
 		portableToolProviderTwoScopePlanV1(),
-		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application"), portableToolProviderDomainV1("other")},
+		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -639,7 +639,7 @@ func portableToolProviderDomainV1(scope string) PortableToolProviderDomainSetV1 
 func portableToolProviderTwoScopePlanV1() PortableToolPlanV1 {
 	plan := clonePortableToolPlanForTest(representativePortableToolPlanV1())
 	second := clonePortableToolPlanForTest(plan).Tools[0]
-	second.Scope = "other"
+	second.Scope = "application:other"
 	second.SelectedClosureDigest = canonical.Digest("sha256:abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd")
 	plan.Tools = append(plan.Tools, second)
 	sort.Slice(plan.Tools, func(left, right int) bool { return plan.Tools[left].Scope < plan.Tools[right].Scope })

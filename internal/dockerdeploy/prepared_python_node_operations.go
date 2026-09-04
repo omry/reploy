@@ -45,21 +45,6 @@ func (operations PreparedPythonNodeOperations) Preparer(
 		ReusableWheels: append([]providerstore.ArtifactDescriptor{}, operations.ReusableWheels...),
 		ValidateCached: operations.validateCached,
 		ResolveFresh:   operations.resolveFresh,
-		PrepareBuildTools: func(ctx context.Context, tools []string) (PythonBuildToolEnvironmentV1, error) {
-			writeProviderBuildProgress(
-				operations.Progress, "preparing build tools %s",
-				strings.Join(tools, ", "),
-			)
-			return PreparePythonBuildToolEnvironmentV1(ctx, PythonBuildToolEnvironmentInputV1{
-				Store: operations.Store, Upstream: descriptor, Workspace: workspace,
-				FinalImageConfig: cloneImageConfigPolicy(operations.FinalImageConfig),
-				Tools:            append([]string{}, tools...),
-				RunOptions:       operations.RunOptions,
-			})
-		},
-		PrepareRetryArtifacts: func() (PreparedPythonResolverArtifacts, func(), error) {
-			return PreparePythonResolverArtifacts(operations.Store, operations.ReusableWheels)
-		},
 	}
 }
 
@@ -343,31 +328,19 @@ func (operations PreparedPythonNodeOperations) materializeLocalOverrides(
 	if err != nil {
 		return nil, nil, err
 	}
-	missingTools := map[string]bool{}
 	recipes := make(map[string]PythonLocalSourceRecipeV1, len(snapshots))
 	for _, snapshot := range snapshots {
 		recipe, err := ReadPythonLocalSourceRecipeV1(snapshot.HostDir, snapshot.Distribution)
 		if err != nil {
 			return nil, nil, err
 		}
-		legacyTools, err := legacyPortableBuildToolNamesV1(recipe)
-		if err != nil {
-			return nil, nil, err
+		if len(recipe.Requirements) != 0 {
+			return nil, nil, fmt.Errorf(
+				"local source recipe for %q requires a portable source-builder environment before Python resolution",
+				snapshot.Distribution,
+			)
 		}
 		recipes[snapshot.Distribution] = recipe
-		for _, tool := range legacyTools {
-			if !session.HasPortableBuildToolV1(tool) {
-				missingTools[tool] = true
-			}
-		}
-	}
-	if len(missingTools) != 0 {
-		tools := make([]string, 0, len(missingTools))
-		for tool := range missingTools {
-			tools = append(tools, tool)
-		}
-		sort.Strings(tools)
-		return nil, nil, &pythonBuildToolsRequiredError{Tools: tools}
 	}
 	projectKind := "project"
 	if len(distributions) != 1 {
@@ -397,7 +370,7 @@ func (operations PreparedPythonNodeOperations) materializeLocalOverrides(
 		}
 		if recipe.Found {
 			settings, err := pythonprovider.CanonicalSourceBuildSettingsV2(
-				recipe.Build, recipe.Digest, recipe.Tools,
+				recipe.Build, recipe.Digest,
 			)
 			if err != nil {
 				return nil, nil, err

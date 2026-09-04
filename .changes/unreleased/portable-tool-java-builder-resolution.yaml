@@ -1,0 +1,2 @@
+kind: Changed
+body: Resolve canonical source-builder Java 21 requirements through the embedded portable-tool catalog and remove the legacy Python-owned distribution Java bridge.

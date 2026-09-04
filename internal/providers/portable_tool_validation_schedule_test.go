@@ -13,7 +13,7 @@ func portableToolValidationScheduleDAGFixtureV1(t *testing.T) PortableToolProvid
 	dag, err := BuildPortableToolProviderDAGV1(
 		portableToolProviderPlanFixtureV1(),
 		representativePortableToolPlanV1(),
-		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application")},
+		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo")},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +121,8 @@ func TestValidatePortableToolValidationScheduleV1RejectsMalformedSchedules(t *te
 	}{
 		{name: "schema", mutate: func(s *PortableToolValidationScheduleV1) { s.Schema = "other" }, want: "schema must be"},
 		{name: "nil entries", mutate: func(s *PortableToolValidationScheduleV1) { s.Entries = nil }, want: "explicit array"},
-		{name: "missing scope", mutate: func(s *PortableToolValidationScheduleV1) { s.Entries[0].Scope = "" }, want: "requires a scope"},
+		{name: "missing scope", mutate: func(s *PortableToolValidationScheduleV1) { s.Entries[0].Scope = "" }, want: "application:<owner>"},
+		{name: "unqualified scope", mutate: func(s *PortableToolValidationScheduleV1) { s.Entries[0].Scope = "application" }, want: "application:<owner>"},
 		{name: "missing tool", mutate: func(s *PortableToolValidationScheduleV1) { s.Entries[0].Tool = "" }, want: "requires a tool"},
 		{
 			name:   "profile digest",
@@ -177,7 +178,7 @@ func TestPortableToolValidationScheduleFromPlanV1OrdersByScopeThenToolThenProfil
 		portableToolTestValidationProfile("tool:alpha/releases/1.0.0/validation/profiles/only", canonical.Object{"name": "only"}),
 	}
 	third := first
-	third.Scope = "system"
+	third.Scope = "source-builder:system"
 	third.ValidationProfiles = []PortableToolValidationProfileV1{
 		portableToolTestValidationProfile("tool:demo/releases/1.2.3/validation/profiles/sys", canonical.Object{"name": "sys"}),
 	}
@@ -191,10 +192,10 @@ func TestPortableToolValidationScheduleFromPlanV1OrdersByScopeThenToolThenProfil
 		scope string
 		tool  string
 	}{
-		{scope: "application", tool: "alpha"},
-		{scope: "application", tool: "demo"},
-		{scope: "application", tool: "demo"},
-		{scope: "system", tool: "demo"},
+		{scope: "application:demo", tool: "alpha"},
+		{scope: "application:demo", tool: "demo"},
+		{scope: "application:demo", tool: "demo"},
+		{scope: "source-builder:system", tool: "demo"},
 	}
 	if len(schedule.Entries) != len(want) {
 		t.Fatalf("entries = %d, want %d", len(schedule.Entries), len(want))
@@ -215,7 +216,7 @@ func TestPortableToolValidationScheduleForScopeV1SelectsOnlyTheExactScope(t *tes
 	plan := representativePortableToolPlanV1()
 	application := plan.Tools[0]
 	build := application
-	build.Scope = "java-build"
+	build.Scope = "source-builder:java-build"
 	build.Runtime = nil
 	plan.Tools = []PortableToolPlanEntryV1{application, build}
 	schedule, err := portableToolValidationScheduleFromPlanV1(plan)
@@ -223,14 +224,14 @@ func TestPortableToolValidationScheduleForScopeV1SelectsOnlyTheExactScope(t *tes
 		t.Fatal(err)
 	}
 
-	selected, err := PortableToolValidationScheduleForScopeV1(schedule, "java-build")
+	selected, err := PortableToolValidationScheduleForScopeV1(schedule, "source-builder:java-build")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if selected.Schema != PortableToolValidationScheduleSchemaV1 || len(selected.Entries) != 1 {
 		t.Fatalf("selected schedule = %#v", selected)
 	}
-	if selected.Entries[0].Scope != "java-build" || selected.Entries[0].Runtime != nil {
+	if selected.Entries[0].Scope != "source-builder:java-build" || selected.Entries[0].Runtime != nil {
 		t.Fatalf("selected entry = %#v", selected.Entries[0])
 	}
 	selected.Entries[0].Profile.Record.Value["schema"] = "mutated"
@@ -238,7 +239,7 @@ func TestPortableToolValidationScheduleForScopeV1SelectsOnlyTheExactScope(t *tes
 		t.Fatal("scope selection aliases the complete schedule")
 	}
 
-	empty, err := PortableToolValidationScheduleForScopeV1(schedule, "unused")
+	empty, err := PortableToolValidationScheduleForScopeV1(schedule, "application:unused")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,8 +254,12 @@ func TestPortableToolValidationScheduleForScopeV1RejectsInvalidInput(t *testing.
 		!strings.Contains(err.Error(), "scope must not be empty") {
 		t.Fatalf("empty scope error = %v", err)
 	}
+	if _, err := PortableToolValidationScheduleForScopeV1(schedule, "application"); err == nil ||
+		!strings.Contains(err.Error(), "application:<owner>") {
+		t.Fatalf("unqualified scope error = %v", err)
+	}
 	schedule.Schema = "other"
-	if _, err := PortableToolValidationScheduleForScopeV1(schedule, "application"); err == nil {
+	if _, err := PortableToolValidationScheduleForScopeV1(schedule, "application:demo"); err == nil {
 		t.Fatal("invalid schedule was accepted")
 	}
 }

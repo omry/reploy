@@ -116,6 +116,43 @@ func TestExecuteLockedProviderBuildV1RepublishesRuntimeOnlyDocumentUpdate(t *tes
 	}
 }
 
+func TestExecuteLockedProviderBuildV1PreservesReusedPortableToolProvenance(t *testing.T) {
+	input, _, _, _, _ := providerBuildPreparationFixture(t)
+	currentLock, desiredPortableTools := portableToolReuseBuildLocksV1(t)
+	document, _ := testSelectedPlatformDocumentV1(t)
+	publicationLock, err := rebindCurrentBuildLockV1(currentLock, document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := CurrentBuild{Lock: currentLock}
+	var progress strings.Builder
+	published := 0
+	result, err := executeLockedProviderBuildV1(t.Context(), LockedProviderBuildExecutionInputV1{
+		SourceWheels: []providerstore.ArtifactDescriptor{}, LocalOverrides: []PythonLocalOverrideV1{},
+		Progress: &progress,
+		Preparation: LockedProviderBuildPreparationV1{
+			Operation: input.Operation, Store: input.Store, Environment: input.Environment,
+			DeploymentDir: input.DeploymentDir, portableTools: &desiredPortableTools,
+			Current: &current, ReusableLock: &currentLock, PublicationLock: &publicationLock,
+			Loaded: LoadedBuildRequestV1{Document: document}, Reused: true,
+		},
+	}, providerBuildExecutionBackend{
+		publishBuild: func(_ context.Context, _ *deploy.OperationLock, _ providerstore.Store, got BuildPublicationInput) (deploy.StateV1, error) {
+			published++
+			if !reflect.DeepEqual(got.Lock, publicationLock) {
+				t.Fatalf("published lock = %#v, want prepared publication lock", got.Lock)
+			}
+			return deploy.StateV1{Schema: deploy.StateSchemaV1}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if published != 1 || !result.Reused || !result.Republished || !reflect.DeepEqual(result.Lock, publicationLock) {
+		t.Fatalf("published=%d result=%#v", published, result)
+	}
+}
+
 func TestExecuteLockedProviderBuildV1ValidatesAnExactCurrentBuildWithoutReplacingIt(t *testing.T) {
 	input, _, current, _, _ := providerBuildPreparationFixture(t)
 	lock := current.Lock
@@ -298,6 +335,7 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 		Preparation: LockedProviderBuildPreparationV1{
 			Operation: operation, Store: store, Environment: completionInput.Environment,
 			DeploymentDir: completionInput.DeploymentDir, DockerPlan: completionInput.DockerPlan,
+			portableTools: portableTools,
 			Loaded: LoadedBuildRequestV1{
 				State: deploy.StateV1{Overlay: completionInput.Overlay}, Document: completionInput.Document,
 				PackageOverrides: completionInput.PackageOverrides, Request: candidateRequest,
@@ -307,7 +345,6 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 		},
 		SourceWheels:   []providerstore.ArtifactDescriptor{},
 		LocalOverrides: localOverrides,
-		PortableTools:  portableTools,
 		RunValidation:  completionInput.RunValidation,
 	}
 	wantState := deploy.StateV1{Schema: deploy.StateSchemaV1}

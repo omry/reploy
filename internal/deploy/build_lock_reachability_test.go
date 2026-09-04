@@ -142,7 +142,7 @@ func portableToolReachabilityLockV1(t *testing.T, build *BuildLockV1, artifact p
 	plan := providers.PortableToolPlanV1{
 		Schema: providers.PortableToolPlanSchemaV1,
 		Tools: []providers.PortableToolPlanEntryV1{{
-			Scope: "application", SelectedClosureDigest: buildLockTestDigest("8"),
+			Scope: "application:demo", SelectedClosureDigest: buildLockTestDigest("8"),
 			Provenance: providers.PortableToolReleaseProvenanceV1{
 				Tool: "demo", Version: "1.0.0", Revision: "1", ManifestDigest: buildLockTestDigest("9"),
 			},
@@ -222,7 +222,7 @@ func portableToolReachabilityLockV1(t *testing.T, build *BuildLockV1, artifact p
 		providers.ProviderPlanV1{Schema: providers.ProviderPlanSchemaV1, Nodes: []providers.NodeSpec{aptNode, baseNode}, Edges: []providers.ProviderEdgeV1{}},
 		plan,
 		[]providers.PortableToolProviderDomainSetV1{{
-			Scope: "application", PackageManager: domain, Binding: domain, Filesystem: domain,
+			Scope: "application:demo", PackageManager: domain, Binding: domain, Filesystem: domain,
 			Environment: domain, Exports: domain, Capabilities: domain,
 		}},
 	)
@@ -230,9 +230,9 @@ func portableToolReachabilityLockV1(t *testing.T, build *BuildLockV1, artifact p
 		t.Fatal(err)
 	}
 	portableLock, err := providers.BuildPortableToolLockV1(dag, []providers.PortableToolReleaseManifestInputV1{{
-		Scope: "application", Tool: "demo", Manifest: manifest,
+		Scope: "application:demo", Tool: "demo", Manifest: manifest,
 	}}, []providers.PortableToolArtifactAcquisitionInputV1{{
-		Scope: "application", Tool: "demo", Artifact: record.Reference, Descriptor: artifact, Source: source,
+		Scope: "application:demo", Tool: "demo", Artifact: record.Reference, Descriptor: artifact, Source: source,
 		Provenance: providerstore.AcquisitionProvenance{
 			Outcome: providerstore.AcquisitionOutcomeCacheHit, SourceID: source.Reference.ID,
 		},

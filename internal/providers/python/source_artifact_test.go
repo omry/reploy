@@ -94,7 +94,7 @@ func TestNewResolvedSourceInputV1BindsInspectedWheelMetadata(t *testing.T) {
 
 func TestCanonicalSourceBuildSettingsV2BindsLocalRecipe(t *testing.T) {
 	settings, err := CanonicalSourceBuildSettingsV2(
-		SourceBuildTypeLegacy, schemaTestDigest("8"), []string{"java"},
+		SourceBuildTypeLegacy, schemaTestDigest("8"),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -103,6 +103,9 @@ func TestCanonicalSourceBuildSettingsV2BindsLocalRecipe(t *testing.T) {
 		settings.Value["build_type"] != SourceBuildTypeLegacy ||
 		settings.Value["recipe_digest"] != string(schemaTestDigest("8")) {
 		t.Fatalf("settings = %#v", settings)
+	}
+	if _, found := settings.Value["tools"]; found {
+		t.Fatalf("Python source-build settings retained name-only portable tools: %#v", settings)
 	}
 	if err := ValidateSourceBuildIdentityV2(SourceBuilderProfileV2, settings); err != nil {
 		t.Fatal(err)

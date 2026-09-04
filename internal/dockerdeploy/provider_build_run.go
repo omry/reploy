@@ -374,8 +374,9 @@ func runLockedProviderBuildV1(
 	preparationInput := LockedProviderBuildPreparationInputV1{
 		Operation: input.Operation, Store: input.Store, Environment: document.Environment.ID,
 		DeploymentDir: deploymentDir, PackageOverrides: packageOverrideIntent, BaseImage: baseImage,
-		Sources:    reuseSources,
-		DockerPlan: dockerPlan, NoCache: input.NoCache, ValidatedCandidate: func() *ValidatedBuildCandidateV1 {
+		Sources:       reuseSources,
+		PortableTools: input.PortableTools,
+		DockerPlan:    dockerPlan, NoCache: input.NoCache, ValidatedCandidate: func() *ValidatedBuildCandidateV1 {
 			if validatedCandidateFound {
 				return &validatedCandidate
 			}
@@ -461,7 +462,6 @@ func runLockedProviderBuildV1(
 		Preparation:     preparation,
 		SourceWheels:    []providerstore.ArtifactDescriptor{},
 		LocalOverrides:  localOverrides,
-		PortableTools:   input.PortableTools,
 		RunValidation:   nil,
 		ValidateChoices: input.ValidateChoices,
 		Progress:        input.Progress, BuildProgress: input.BuildProgress, RunOptions: options,

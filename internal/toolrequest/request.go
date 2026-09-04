@@ -184,11 +184,8 @@ func requestSelectionsSyntaxV1(node *yaml.Node) (map[string]SetSyntaxV1, error) 
 // NormalizeAndMergeV1 normalizes one container's requests and merges demands
 // only within its caller-supplied canonical resolution scope.
 func NormalizeAndMergeV1(requests []SyntaxV1, scope string, context string, sourcePrefix string) (CanonicalSetV1, error) {
-	if !validTokenV1(scope) {
-		return CanonicalSetV1{}, fmt.Errorf("portable tool resolution scope is invalid")
-	}
-	if !validIdentifierV1(context) {
-		return CanonicalSetV1{}, fmt.Errorf("portable tool context %q is invalid", context)
+	if err := ValidateResolutionScopeContextV1(scope, context); err != nil {
+		return CanonicalSetV1{}, err
 	}
 	groups := map[string]CanonicalRequirementGroupV1{}
 	sources := map[string][]string{}
@@ -216,6 +213,78 @@ func NormalizeAndMergeV1(requests []SyntaxV1, scope string, context string, sour
 		result.Groups = append(result.Groups, groups[tool])
 	}
 	return result, nil
+}
+
+// ValidateResolutionScopeV1 requires the final owner-qualified identity used
+// by portable-tool requests, plans, locks, and validation schedules.
+func ValidateResolutionScopeV1(scope string) error {
+	kind, owner, qualified := strings.Cut(scope, ":")
+	validOwner := false
+	if qualified && !strings.Contains(owner, ":") {
+		switch kind {
+		case "application":
+			validOwner = validApplicationScopeOwnerV1(owner)
+		case "source-builder":
+			validOwner = validSourceBuilderScopeOwnerV1(owner)
+		}
+	}
+	if !validOwner {
+		return fmt.Errorf(
+			"portable tool resolution scope %q must be application:<owner> or source-builder:<owner>",
+			scope,
+		)
+	}
+	return nil
+}
+
+// ValidateResolutionScopeContextV1 binds the two public usage contexts to
+// their owning scope kinds. Runtime tools belong to an application; build
+// tools belong to one isolated source builder.
+func ValidateResolutionScopeContextV1(scope string, context string) error {
+	if err := ValidateResolutionScopeV1(scope); err != nil {
+		return err
+	}
+	kind, _, _ := strings.Cut(scope, ":")
+	expected := "runtime"
+	if kind == "source-builder" {
+		expected = "build"
+	}
+	if context != expected {
+		return fmt.Errorf("portable tool resolution scope %q requires context %q, not %q", scope, expected, context)
+	}
+	return nil
+}
+
+func validApplicationScopeOwnerV1(value string) bool {
+	if value == "" || value[0] < 'a' || value[0] > 'z' {
+		return false
+	}
+	for _, character := range value[1:] {
+		if character < 'a' || character > 'z' {
+			if character < '0' || character > '9' {
+				if character != '-' && character != '_' {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+func validSourceBuilderScopeOwnerV1(value string) bool {
+	if value == "" || !asciiLowerAlphaNumericV1(value[0]) || !asciiLowerAlphaNumericV1(value[len(value)-1]) {
+		return false
+	}
+	for index := 1; index < len(value)-1; index++ {
+		if !asciiLowerAlphaNumericV1(value[index]) && value[index] != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func asciiLowerAlphaNumericV1(character byte) bool {
+	return character >= 'a' && character <= 'z' || character >= '0' && character <= '9'
 }
 
 func normalizeV1(syntax SyntaxV1, scope string, context string) (CanonicalRequirementGroupV1, error) {

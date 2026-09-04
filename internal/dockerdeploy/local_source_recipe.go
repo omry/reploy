@@ -33,10 +33,7 @@ type PythonLocalSourceRecipeV1 struct {
 	Project      string
 	Build        string
 	Requirements []toolrequest.CanonicalRequirementGroupV1
-	// Tools is the temporary name-only projection consumed by the existing
-	// build-tool bridge until catalog resolution replaces that provider path.
-	Tools  []string
-	Digest canonical.Digest
+	Digest       canonical.Digest
 }
 
 type localSourceRecipeSyntaxV1 struct {
@@ -71,7 +68,7 @@ func ReadPythonLocalSourceRecipeV1(
 	info, err := os.Lstat(filename)
 	if errors.Is(err, os.ErrNotExist) {
 		return PythonLocalSourceRecipeV1{
-			Found: false, Requirements: []toolrequest.CanonicalRequirementGroupV1{}, Tools: []string{},
+			Found: false, Requirements: []toolrequest.CanonicalRequirementGroupV1{},
 		}, nil
 	}
 	if err != nil {
@@ -177,10 +174,6 @@ func normalizePythonLocalSourceRecipeV1(
 	if err != nil {
 		return PythonLocalSourceRecipeV1{}, fmt.Errorf("local source recipe for %q: %w", distribution, err)
 	}
-	tools := make([]string, 0, len(set.Groups))
-	for _, requirement := range set.Groups {
-		tools = append(tools, requirement.Tool)
-	}
 	identity := localSourceRecipeIdentityV1{
 		Schema: LocalSourceRecipeIdentitySchemaV1, Project: distribution,
 		Type: "python", Build: syntax.Build, Requirements: append([]toolrequest.CanonicalRequirementGroupV1{}, set.Groups...),
@@ -191,22 +184,8 @@ func normalizePythonLocalSourceRecipeV1(
 	}
 	return PythonLocalSourceRecipeV1{
 		Found: true, Project: distribution, Build: syntax.Build,
-		Requirements: set.Groups, Tools: tools, Digest: digest,
+		Requirements: set.Groups, Digest: digest,
 	}, nil
-}
-
-func legacyPortableBuildToolNamesV1(recipe PythonLocalSourceRecipeV1) ([]string, error) {
-	for _, requirement := range recipe.Requirements {
-		if len(requirement.VersionConstraints) != 0 || requirement.DefinitionRevision != "" ||
-			requirement.Binding.All || !requirement.Binding.Infer || len(requirement.Binding.Explicit) != 0 ||
-			len(requirement.Selections) != 0 {
-			return nil, fmt.Errorf(
-				"local source recipe for %q portable tool %q requires catalog resolution before source-builder provider work; the legacy bridge supports only an optionless tool name with inferred bindings",
-				recipe.Project, requirement.Tool,
-			)
-		}
-	}
-	return append([]string{}, recipe.Tools...), nil
 }
 
 func validatePythonLocalSourceBuildLayoutV1(sourceDir string, buildType string) error {

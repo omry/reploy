@@ -161,7 +161,7 @@ func portableToolTestScheduleV1(t *testing.T, profile toolcatalog.ValidationProf
 	return providers.PortableToolValidationScheduleV1{
 		Schema: providers.PortableToolValidationScheduleSchemaV1,
 		Entries: []providers.PortableToolScheduledValidationV1{{
-			Scope: "application", Tool: "demo",
+			Scope: "application:demo", Tool: "demo",
 			Profile: providers.PortableToolValidationProfileV1{
 				Reference: providers.PortableToolRecordReferenceV1{ID: profile.ID, Digest: digest},
 				Record:    providers.CanonicalProviderData{Schema: profile.Schema, Value: value},
@@ -210,7 +210,7 @@ func TestRunPortableToolValidationScheduleV1InvokesTheFixedExecutorPerProfile(t 
 	if invocations[0].runtime == nil || !reflect.DeepEqual(*invocations[0].runtime, *portableToolContractRuntimeV1()) {
 		t.Fatalf("invoked runtime = %#v", invocations[0].runtime)
 	}
-	if len(scheduled) != 1 || scheduled[0].Scope != "application" || scheduled[0].Tool != "demo" ||
+	if len(scheduled) != 1 || scheduled[0].Scope != "application:demo" || scheduled[0].Tool != "demo" ||
 		scheduled[0].Profile != schedule.Entries[0].Profile.Reference {
 		t.Fatalf("scheduled evidence = %#v", scheduled)
 	}
@@ -315,7 +315,7 @@ func TestPortableToolValidationEvidenceV1BindsTheLockedProfileReference(t *testi
 		Digest: canonical.Digest("sha256:" + strings.Repeat("cd", 32)),
 	}
 	evidence, err := PortableToolValidationEvidenceV1(subject, []PortableToolScheduledEvidenceV1{{
-		Scope: "application", Tool: "demo", Profile: reference,
+		Scope: "application:demo", Tool: "demo", Profile: reference,
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -560,9 +560,9 @@ func TestPortableToolValidationEvidenceV1CollapsesRepeatedProfileDigests(t *test
 		Digest: canonical.Digest("sha256:" + strings.Repeat("ef", 32)),
 	}
 	evidence, err := PortableToolValidationEvidenceV1(subject, []PortableToolScheduledEvidenceV1{
-		{Scope: "application", Tool: "demo", Profile: shared},
-		{Scope: "system", Tool: "demo", Profile: shared},
-		{Scope: "application", Tool: "alpha", Profile: other},
+		{Scope: "application:demo", Tool: "demo", Profile: shared},
+		{Scope: "source-builder:system", Tool: "demo", Profile: shared},
+		{Scope: "application:demo", Tool: "alpha", Profile: other},
 	})
 	if err != nil {
 		t.Fatal(err)

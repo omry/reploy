@@ -39,14 +39,14 @@ func solverTestActiveSourceV1(scope string, kind string, id string) ActiveProvid
 	}
 }
 
-func solverTestDomainsV1(sharedExports bool) []ProviderDomainSetV1 {
+func solverTestBuildDomainsV1(sharedExports bool) []ProviderDomainSetV1 {
 	application := ProviderDomainSetV1{
-		Scope: "application", PackageManager: "application/packages",
+		Scope: "source-builder:demo", PackageManager: "application/packages",
 		Filesystem: "application/filesystem", Environment: "application/environment",
 		Exports: "application/exports", Capabilities: "application/capabilities",
 	}
 	source := ProviderDomainSetV1{
-		Scope: "source-builder", PackageManager: "source-builder/packages",
+		Scope: "source-builder:other", PackageManager: "source-builder/packages",
 		Filesystem: "source-builder/filesystem", Environment: "source-builder/environment",
 		Exports: "source-builder/exports", Capabilities: "source-builder/capabilities",
 	}
@@ -55,6 +55,23 @@ func solverTestDomainsV1(sharedExports bool) []ProviderDomainSetV1 {
 		application.Capabilities = "shared/capabilities"
 		source.Exports = application.Exports
 		source.Capabilities = application.Capabilities
+	}
+	return []ProviderDomainSetV1{application, source}
+}
+
+func solverTestDomainsV1(sharedExports bool) []ProviderDomainSetV1 {
+	application := ProviderDomainSetV1{
+		Scope: "application:demo", PackageManager: "application/packages",
+		Filesystem: "application/filesystem", Environment: "application/environment",
+		Exports: "application/exports", Capabilities: "application/capabilities",
+	}
+	source := ProviderDomainSetV1{
+		Scope: "source-builder:demo", PackageManager: "source-builder/packages",
+		Filesystem: "source-builder/filesystem", Environment: "source-builder/environment",
+		Exports: "source-builder/exports", Capabilities: "source-builder/capabilities",
+	}
+	if sharedExports {
+		source.Exports = application.Exports
 	}
 	return []ProviderDomainSetV1{application, source}
 }
@@ -73,7 +90,7 @@ func solverTestCandidateSetsV1(t *testing.T, catalog *CatalogV1) (ReleaseCandida
 		t.Fatalf("select application candidate: %v", err)
 	}
 	sourceGroup := candidateTestGroupV1()
-	sourceGroup.Scope = "source-builder"
+	sourceGroup.Scope = "source-builder:other"
 	sourceCandidates, err := catalog.SelectReleaseCandidatesV1(
 		sourceGroup, candidateTestObservedV1(), candidateTestClientV1(), nil)
 	if err != nil {
@@ -112,7 +129,7 @@ func solverTestAddRecordV1(t *testing.T, catalog *CatalogV1, value any) RecordRe
 func TestResolveSelectedClosuresBacktracksDeterministicallyAcrossSharedDomainsV1(t *testing.T) {
 	catalog := candidateTestCatalogV1(t)
 	application, source := solverTestCandidateSetsV1(t, catalog)
-	domains := solverTestDomainsV1(true)
+	domains := solverTestBuildDomainsV1(true)
 
 	first, err := catalog.ResolveSelectedClosuresV1(
 		[]ReleaseCandidateSetV1{source, application}, []ProviderDomainSetV1{domains[1], domains[0]},
@@ -125,9 +142,9 @@ func TestResolveSelectedClosuresBacktracksDeterministicallyAcrossSharedDomainsV1
 	if err != nil {
 		t.Fatalf("resolve canonical input: %v", err)
 	}
-	if len(first.Closures) != 2 || first.Closures[0].Scope != "application" ||
-		first.Closures[1].Scope != "source-builder" {
-		t.Fatalf("closure order = %+v, want application then source-builder", first.Closures)
+	if len(first.Closures) != 2 || first.Closures[0].Scope != "source-builder:demo" ||
+		first.Closures[1].Scope != "source-builder:other" {
+		t.Fatalf("closure order = %+v, want demo then other source-builder", first.Closures)
 	}
 	if first.Closures[0].Provenance.Version != "1.2.3" ||
 		first.Closures[1].Provenance.Version != "1.2.3" {
@@ -146,7 +163,7 @@ func TestResolveSelectedClosuresBacktracksDeterministicallyAcrossSharedDomainsV1
 func TestResolveSelectedClosuresFallsBackAcrossDefinitionRevisionsV1(t *testing.T) {
 	catalog := candidateTestCatalogV1(t)
 	application, source := solverTestCandidateSetsV1(t, catalog)
-	domains := solverTestDomainsV1(true)
+	domains := solverTestBuildDomainsV1(true)
 
 	compatible := source.Candidates[1]
 	compatible.Manifest = cloneReleaseManifestV1(&compatible.Manifest)
@@ -181,7 +198,7 @@ func TestResolveSelectedClosuresKeepsIsolatedScopesIndependentV1(t *testing.T) {
 	catalog := candidateTestCatalogV1(t)
 	application, source := solverTestCandidateSetsV1(t, catalog)
 	result, err := catalog.ResolveSelectedClosuresV1(
-		[]ReleaseCandidateSetV1{source, application}, solverTestDomainsV1(false), solverTestOperationV1())
+		[]ReleaseCandidateSetV1{source, application}, solverTestBuildDomainsV1(false), solverTestOperationV1())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +347,7 @@ func TestAssignmentClaimsRespectEveryProviderDomainPartitionV1(t *testing.T) {
 			application := applicationBase
 			source := sourceBase
 			testCase.mutate(&application, &source)
-			domains := solverTestDomainsV1(false)
+			domains := solverTestBuildDomainsV1(false)
 			sets := []orderedCandidateSetV1{
 				{group: applicationSet.Group, domains: domains[0]},
 				{group: sourceSet.Group, domains: domains[1]},
@@ -365,7 +382,7 @@ func TestRuntimeClaimsKeepFilesystemAndEnvironmentDomainsIndependentV1(t *testin
 		InstallRoot: "/opt/demo",
 		Environment: []RecordEnvironmentVariableV1{{Name: "DEMO_HOME", Value: "source-builder"}},
 	}
-	domains := solverTestDomainsV1(false)
+	domains := solverTestBuildDomainsV1(false)
 	domains[1].Filesystem = domains[0].Filesystem
 	sets := []orderedCandidateSetV1{
 		{group: applicationSet.Group, domains: domains[0]},
@@ -398,7 +415,7 @@ func TestBindingRequirementClaimsAllowCompatibleProviderConstraintsV1(t *testing
 	application.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &bindingLeft)}
 	source.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &bindingRight)}
 
-	domains := solverTestDomainsV1(false)
+	domains := solverTestBuildDomainsV1(false)
 	domains[1].PackageManager = domains[0].PackageManager
 	sets := []orderedCandidateSetV1{
 		{group: applicationSet.Group, domains: domains[0]},
@@ -435,7 +452,7 @@ func TestBindingClaimsRequireSharedPythonInterpreterV1(t *testing.T) {
 	application.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &bindingLeft)}
 	source.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &bindingRight)}
 
-	domains := solverTestDomainsV1(false)
+	domains := solverTestBuildDomainsV1(false)
 	domains[1].PackageManager = domains[0].PackageManager
 	sets := []orderedCandidateSetV1{
 		{group: applicationSet.Group, domains: domains[0]},
@@ -475,7 +492,7 @@ func TestPayloadClaimsUseEffectiveRuntimeDestinationV1(t *testing.T) {
 	application.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &payloadLeft)}
 	source.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &payloadRight)}
 
-	domains := solverTestDomainsV1(false)
+	domains := solverTestBuildDomainsV1(false)
 	domains[1].Filesystem = domains[0].Filesystem
 	sets := []orderedCandidateSetV1{
 		{group: applicationSet.Group, domains: domains[0]},
@@ -513,7 +530,7 @@ func TestNativePackageRepositoryRequirementsAreClaimedWithoutOverConstrainingV1(
 	left.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &packageLeft)}
 	right.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &packageRight)}
 
-	domains := solverTestDomainsV1(false)
+	domains := solverTestBuildDomainsV1(false)
 	domains[1].PackageManager = domains[0].PackageManager
 	sets := []orderedCandidateSetV1{
 		{group: applicationSet.Group, domains: domains[0]},
@@ -557,14 +574,14 @@ func TestActiveProviderConstraintsBacktrackAndAttributeConflictsV1(t *testing.T)
 	compatible.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &bindingCompatible)}
 	sourceSet.Candidates = []ReleaseCandidateV1{conflicting, compatible}
 
-	activeSource := solverTestActiveSourceV1("source-builder", "blueprint", "application/runtime")
+	activeSource := solverTestActiveSourceV1("source-builder:other", "blueprint", "application/runtime")
 	activeSource.PythonBindings = []ActivePythonBindingConstraintV1{{
 		Name: "python", Requirements: []string{"demo==1.2.3"}, SupportedPython: []string{},
 	}}
 	operation := solverTestOperationV1()
 	operation.ActiveProviders = solverTestActiveProvidersV1(activeSource)
 	result, err := catalog.ResolveSelectedClosuresV1(
-		[]ReleaseCandidateSetV1{sourceSet}, solverTestDomainsV1(false), operation)
+		[]ReleaseCandidateSetV1{sourceSet}, solverTestBuildDomainsV1(false), operation)
 	if err != nil {
 		t.Fatalf("resolve against active provider constraints: %v", err)
 	}
@@ -580,9 +597,9 @@ func TestActiveProviderConstraintsBacktrackAndAttributeConflictsV1(t *testing.T)
 
 	sourceSet.Candidates = sourceSet.Candidates[:1]
 	_, err = catalog.ResolveSelectedClosuresV1(
-		[]ReleaseCandidateSetV1{sourceSet}, solverTestDomainsV1(false), operation)
+		[]ReleaseCandidateSetV1{sourceSet}, solverTestBuildDomainsV1(false), operation)
 	if err == nil || !strings.Contains(err.Error(), `blueprint "application/runtime"`) ||
-		!strings.Contains(err.Error(), `tool-candidate "source-builder/demo@2.0.0~1"`) ||
+		!strings.Contains(err.Error(), `tool-candidate "source-builder:other/demo@2.0.0~1"`) ||
 		!strings.Contains(err.Error(), `"demo==1.2.3" from blueprint`) ||
 		!strings.Contains(err.Error(), `"demo>=2" from tool-candidate`) {
 		t.Errorf("active-provider conflict diagnostic = %v, want both stable sources", err)
@@ -598,7 +615,7 @@ func TestActiveProviderConstraintsAcceptEveryCanonicalFamilyV1(t *testing.T) {
 	applicationSet.Candidates[0].Contributions = append(
 		applicationSet.Candidates[0].Contributions, solverTestAddRecordV1(t, catalog, &binding))
 	digest := canonical.Digest("sha256:" + strings.Repeat("e", 64))
-	source := solverTestActiveSourceV1("application", "active-provider", "application/current")
+	source := solverTestActiveSourceV1("source-builder:demo", "active-provider", "application/current")
 	source.NativePackages = []ActiveNativePackageConstraintV1{{
 		Manager: "apt", Requirements: []string{"curl"}, Repositories: []string{"debian-main"},
 	}}
@@ -614,7 +631,7 @@ func TestActiveProviderConstraintsAcceptEveryCanonicalFamilyV1(t *testing.T) {
 	operation := solverTestOperationV1()
 	operation.ActiveProviders = solverTestActiveProvidersV1(source)
 	result, err := catalog.ResolveSelectedClosuresV1(
-		[]ReleaseCandidateSetV1{applicationSet}, solverTestDomainsV1(false)[:1], operation)
+		[]ReleaseCandidateSetV1{applicationSet}, solverTestBuildDomainsV1(false)[:1], operation)
 	if err != nil {
 		t.Fatalf("resolve with every canonical active constraint family: %v", err)
 	}
@@ -635,12 +652,12 @@ func TestActiveProviderConstraintsRespectIsolatedDomainsV1(t *testing.T) {
 	binding := cloneBindingContractV1(validRecordValuesV1()[4].(*BindingContractV1))
 	binding.Requirements = []string{"demo>=2"}
 	application.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &binding)}
-	domains := solverTestDomainsV1(false)
+	domains := solverTestBuildDomainsV1(false)
 	sets := []orderedCandidateSetV1{
 		{group: applicationSet.Group, domains: domains[0]},
 		{group: sourceSet.Group, domains: domains[1]},
 	}
-	activeSource := solverTestActiveSourceV1("source-builder", "lock-state", "source-builder/python")
+	activeSource := solverTestActiveSourceV1("source-builder:other", "lock-state", "source-builder/python")
 	activeSource.PythonBindings = []ActivePythonBindingConstraintV1{{
 		Name: "python", Requirements: []string{"demo==1"}, SupportedPython: []string{},
 	}}
@@ -658,29 +675,29 @@ func TestActiveOnlyProviderScopeUsesCompleteDomainMappingV1(t *testing.T) {
 	binding.Requirements = []string{"demo>=2"}
 	candidate.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &binding)}
 	applicationSet.Candidates = []ReleaseCandidateV1{candidate}
-	activeSource := solverTestActiveSourceV1("source-builder", "lock-state", "source-builder/python")
+	activeSource := solverTestActiveSourceV1("source-builder:other", "lock-state", "source-builder/python")
 	activeSource.PythonBindings = []ActivePythonBindingConstraintV1{{
 		Name: "python-alt", Requirements: []string{"demo==1"}, SupportedPython: []string{},
 	}}
 	operation := solverTestOperationV1()
 	operation.ActiveProviders = solverTestActiveProvidersV1(activeSource)
 
-	isolatedDomains := solverTestDomainsV1(false)
+	isolatedDomains := solverTestBuildDomainsV1(false)
 	isolated, err := catalog.ResolveSelectedClosuresV1(
 		[]ReleaseCandidateSetV1{applicationSet}, isolatedDomains, operation)
 	if err != nil {
 		t.Fatalf("active-only isolated scope resolution: %v", err)
 	}
-	if count := strings.Count(isolated.Snapshot.CanonicalJSON, `"scope":"source-builder"`); count != 2 {
+	if count := strings.Count(isolated.Snapshot.CanonicalJSON, `"scope":"source-builder:other"`); count != 2 {
 		t.Errorf("active-only scope appears %d times in operation snapshot, want source and domain mapping", count)
 	}
-	sharedDomains := solverTestDomainsV1(false)
+	sharedDomains := solverTestBuildDomainsV1(false)
 	sharedDomains[1].PackageManager = sharedDomains[0].PackageManager
 	_, err = catalog.ResolveSelectedClosuresV1(
 		[]ReleaseCandidateSetV1{applicationSet}, sharedDomains, operation)
 	if err == nil || !strings.Contains(err.Error(), "binding requirement conflict") ||
 		!strings.Contains(err.Error(), `lock-state "source-builder/python"`) ||
-		!strings.Contains(err.Error(), `tool-candidate "application/demo@1.2.3~1"`) {
+		!strings.Contains(err.Error(), `tool-candidate "source-builder:demo/demo@1.2.3~1"`) {
 		t.Errorf("active-only shared scope conflict = %v, want source-attributed package conflict", err)
 	}
 }
@@ -692,21 +709,21 @@ func TestActiveProviderConstraintDiagnosticsRetainCumulativeSourcesV1(t *testing
 	binding := cloneBindingContractV1(validRecordValuesV1()[4].(*BindingContractV1))
 	binding.Requirements = []string{"demo>=4"}
 	candidate.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &binding)}
-	first := solverTestActiveSourceV1("application", "blueprint", "application/base")
+	first := solverTestActiveSourceV1("source-builder:demo", "blueprint", "application/base")
 	first.PythonBindings = []ActivePythonBindingConstraintV1{{
 		Name: "python", Requirements: []string{"demo>=1"}, SupportedPython: []string{},
 	}}
-	second := solverTestActiveSourceV1("application", "lock-state", "application/lock")
+	second := solverTestActiveSourceV1("source-builder:demo", "lock-state", "application/lock")
 	second.PythonBindings = []ActivePythonBindingConstraintV1{{
 		Name: "python", Requirements: []string{"demo<3"}, SupportedPython: []string{},
 	}}
-	domains := solverTestDomainsV1(false)
+	domains := solverTestBuildDomainsV1(false)
 	sets := []orderedCandidateSetV1{{group: applicationSet.Group, domains: domains[0]}}
 	conflict, err := catalog.assignmentConflictV1(sets, []ReleaseCandidateV1{candidate}, domains,
 		solverTestActiveProvidersV1(first, second))
 	for _, source := range []string{
 		`blueprint "application/base"`, `lock-state "application/lock"`,
-		`tool-candidate "application/demo@1.2.3~1"`,
+		`tool-candidate "source-builder:demo/demo@1.2.3~1"`,
 	} {
 		if err != nil || !strings.Contains(conflict, source) {
 			t.Fatalf("cumulative conflict = %q, %v; missing source %q", conflict, err, source)
@@ -717,7 +734,7 @@ func TestActiveProviderConstraintDiagnosticsRetainCumulativeSourcesV1(t *testing
 func TestActiveProviderConstraintsSeedEveryClaimFamilyV1(t *testing.T) {
 	catalog := candidateTestCatalogV1(t)
 	applicationSet, _ := solverTestCandidateSetsV1(t, catalog)
-	domains := solverTestDomainsV1(false)
+	domains := solverTestBuildDomainsV1(false)
 	sets := []orderedCandidateSetV1{{group: applicationSet.Group, domains: domains[0]}}
 	otherDigest := canonical.Digest("sha256:" + strings.Repeat("f", 64))
 
@@ -789,13 +806,13 @@ func TestActiveProviderConstraintsSeedEveryClaimFamilyV1(t *testing.T) {
 			candidate.Contract.Runtime = nil
 			candidate.Contributions = []RecordReferenceV1{}
 			candidate.Exports = []ToolExportV1{}
-			source := solverTestActiveSourceV1("application", "blueprint", "application/runtime")
+			source := solverTestActiveSourceV1("source-builder:demo", "blueprint", "application/runtime")
 			testCase.mutate(&candidate, &source)
 			conflict, err := catalog.assignmentConflictV1(sets, []ReleaseCandidateV1{candidate}, domains,
 				solverTestActiveProvidersV1(source))
 			if err != nil || !strings.Contains(conflict, testCase.want) ||
 				!strings.Contains(conflict, `blueprint "application/runtime"`) ||
-				!strings.Contains(conflict, `tool-candidate "application/demo@1.2.3~1"`) {
+				!strings.Contains(conflict, `tool-candidate "source-builder:demo/demo@1.2.3~1"`) {
 				t.Errorf("active %s conflict = %q, %v; want %q with both sources",
 					testCase.name, conflict, err, testCase.want)
 			}
@@ -808,10 +825,10 @@ func TestResolveSelectedClosuresReportsNoCompleteAssignmentV1(t *testing.T) {
 	application, source := solverTestCandidateSetsV1(t, catalog)
 	source.Candidates = source.Candidates[:1]
 	_, err := catalog.ResolveSelectedClosuresV1(
-		[]ReleaseCandidateSetV1{source, application}, solverTestDomainsV1(true), solverTestOperationV1())
+		[]ReleaseCandidateSetV1{source, application}, solverTestBuildDomainsV1(true), solverTestOperationV1())
 	if err == nil || !strings.Contains(err.Error(), "no complete assignment") ||
-		!strings.Contains(err.Error(), "application/demo") ||
-		!strings.Contains(err.Error(), "source-builder/demo") ||
+		!strings.Contains(err.Error(), "source-builder:demo/demo") ||
+		!strings.Contains(err.Error(), "source-builder:other/demo") ||
 		!strings.Contains(err.Error(), "export conflict") {
 		t.Errorf("incompatible assignment error = %v", err)
 	}
@@ -821,12 +838,12 @@ func TestJointAssignmentCapFailsClosedV1(t *testing.T) {
 	catalog := candidateTestCatalogV1(t)
 	application, source := solverTestCandidateSetsV1(t, catalog)
 	ordered, err := catalog.prepareCandidateSetsV1(
-		[]ReleaseCandidateSetV1{source, application}, solverTestDomainsV1(true))
+		[]ReleaseCandidateSetV1{source, application}, solverTestBuildDomainsV1(true))
 	if err != nil {
 		t.Fatal(err)
 	}
 	chosen, visited, err := catalog.solveCandidateSetsV1(
-		ordered, solverTestDomainsV1(true), solverTestActiveProvidersV1(), 1)
+		ordered, solverTestBuildDomainsV1(true), solverTestActiveProvidersV1(), 1)
 	if err == nil || !strings.Contains(err.Error(), "visited-state cap 1 exceeded") {
 		t.Fatalf("cap error = %v, want fail-closed diagnostic", err)
 	}
@@ -844,7 +861,7 @@ func TestSelectedClosureIdentityExcludesValidationAndSourceOnlyDataV1(t *testing
 		t.Fatal(err)
 	}
 	base, err := catalog.ResolveSelectedClosuresV1(
-		[]ReleaseCandidateSetV1{{Group: group, Candidates: candidates}}, solverTestDomainsV1(false)[:1],
+		[]ReleaseCandidateSetV1{{Group: group, Candidates: candidates}}, solverTestBuildDomainsV1(false)[:1],
 		solverTestOperationV1())
 	if err != nil {
 		t.Fatal(err)
@@ -861,7 +878,7 @@ func TestSelectedClosureIdentityExcludesValidationAndSourceOnlyDataV1(t *testing
 	metadataOnly.Profiles[0].Probes[0].Args[0] = "--changed-validation"
 	metadata, err := catalog.ResolveSelectedClosuresV1(
 		[]ReleaseCandidateSetV1{{Group: group, Candidates: []ReleaseCandidateV1{metadataOnly}}},
-		solverTestDomainsV1(false)[:1], solverTestOperationV1())
+		solverTestBuildDomainsV1(false)[:1], solverTestOperationV1())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -878,7 +895,7 @@ func TestSelectedClosureIdentityExcludesValidationAndSourceOnlyDataV1(t *testing
 	validationOnly.Profiles[0].Probes[0].Args[0] = "--validation-only"
 	validationResult, err := catalog.ResolveSelectedClosuresV1(
 		[]ReleaseCandidateSetV1{{Group: group, Candidates: []ReleaseCandidateV1{validationOnly}}},
-		solverTestDomainsV1(false)[:1], solverTestOperationV1())
+		solverTestBuildDomainsV1(false)[:1], solverTestOperationV1())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -895,7 +912,7 @@ func TestSelectedClosureIdentityExcludesValidationAndSourceOnlyDataV1(t *testing
 	behavior.Contract.Exports = []ToolExportV1{{Name: "demo", Path: "/opt/changed/bin/demo"}}
 	behaviorResult, err := catalog.ResolveSelectedClosuresV1(
 		[]ReleaseCandidateSetV1{{Group: group, Candidates: []ReleaseCandidateV1{behavior}}},
-		solverTestDomainsV1(false)[:1], solverTestOperationV1())
+		solverTestBuildDomainsV1(false)[:1], solverTestOperationV1())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -914,7 +931,7 @@ func TestSelectedClosureAndOperationSnapshotOwnTheirDataV1(t *testing.T) {
 	}
 	operation := solverTestOperationV1()
 	result, err := catalog.ResolveSelectedClosuresV1(
-		[]ReleaseCandidateSetV1{{Group: group, Candidates: candidates}}, solverTestDomainsV1(false)[:1], operation)
+		[]ReleaseCandidateSetV1{{Group: group, Candidates: candidates}}, solverTestBuildDomainsV1(false)[:1], operation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -925,7 +942,7 @@ func TestSelectedClosureAndOperationSnapshotOwnTheirDataV1(t *testing.T) {
 		t.Error("the immutable operation snapshot aliases caller-owned input")
 	}
 	changedOperation, err := catalog.ResolveSelectedClosuresV1(
-		[]ReleaseCandidateSetV1{{Group: group, Candidates: candidates}}, solverTestDomainsV1(false)[:1], operation)
+		[]ReleaseCandidateSetV1{{Group: group, Candidates: candidates}}, solverTestBuildDomainsV1(false)[:1], operation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -944,7 +961,7 @@ func TestSelectedClosureAndOperationSnapshotOwnTheirDataV1(t *testing.T) {
 		t.Error("the immutable operation snapshot aliases returned closure data")
 	}
 	again, err := catalog.ResolveSelectedClosuresV1(
-		[]ReleaseCandidateSetV1{{Group: group, Candidates: candidates}}, solverTestDomainsV1(false)[:1],
+		[]ReleaseCandidateSetV1{{Group: group, Candidates: candidates}}, solverTestBuildDomainsV1(false)[:1],
 		solverTestOperationV1())
 	if err != nil {
 		t.Fatal(err)
@@ -964,13 +981,13 @@ func TestOperationSnapshotOwnsActiveProviderConstraintsV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := solverTestActiveSourceV1("application", "active-provider", "application/environment")
+	source := solverTestActiveSourceV1("source-builder:demo", "active-provider", "application/environment")
 	source.Environment = []RecordEnvironmentVariableV1{{Name: "ACTIVE_ONLY", Value: "original"}}
 	operation := solverTestOperationV1()
 	operation.ActiveProviders = solverTestActiveProvidersV1(source)
 	result, err := catalog.ResolveSelectedClosuresV1(
 		[]ReleaseCandidateSetV1{{Group: group, Candidates: candidates}},
-		solverTestDomainsV1(false)[:1], operation)
+		solverTestBuildDomainsV1(false)[:1], operation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -983,7 +1000,7 @@ func TestOperationSnapshotOwnsActiveProviderConstraintsV1(t *testing.T) {
 	}
 	changed, err := catalog.ResolveSelectedClosuresV1(
 		[]ReleaseCandidateSetV1{{Group: group, Candidates: candidates}},
-		solverTestDomainsV1(false)[:1], operation)
+		solverTestBuildDomainsV1(false)[:1], operation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1048,14 +1065,14 @@ func TestResolveSelectedClosuresRequiresCompleteInputsAndProviderDomainsV1(t *te
 	}
 	incomplete := solverTestOperationV1()
 	incomplete.Catalog = canonical.Envelope{}
-	if _, err := catalog.ResolveSelectedClosuresV1(set, solverTestDomainsV1(false)[:1], incomplete); err == nil ||
+	if _, err := catalog.ResolveSelectedClosuresV1(set, solverTestBuildDomainsV1(false)[:1], incomplete); err == nil ||
 		!strings.Contains(err.Error(), "catalog snapshot input must be complete") {
 		t.Errorf("incomplete operation error = %v", err)
 	}
 	missingActive := solverTestOperationV1()
 	missingActive.ActiveProviders = ActiveProviderConstraintsV1{}
 	if _, err := catalog.ResolveSelectedClosuresV1(
-		set, solverTestDomainsV1(false)[:1], missingActive); err == nil ||
+		set, solverTestBuildDomainsV1(false)[:1], missingActive); err == nil ||
 		!strings.Contains(err.Error(), "active provider constraints") {
 		t.Errorf("missing active-provider snapshot error = %v", err)
 	}
@@ -1064,16 +1081,16 @@ func TestResolveSelectedClosuresRequiresCompleteInputsAndProviderDomainsV1(t *te
 	unknown.Environment = []RecordEnvironmentVariableV1{{Name: "DEMO_HOME", Value: "active"}}
 	unknownScope.ActiveProviders = solverTestActiveProvidersV1(unknown)
 	if _, err := catalog.ResolveSelectedClosuresV1(
-		set, solverTestDomainsV1(false)[:1], unknownScope); err == nil ||
+		set, solverTestBuildDomainsV1(false)[:1], unknownScope); err == nil ||
 		!strings.Contains(err.Error(), "unknown scope") {
 		t.Errorf("unknown active-provider scope error = %v", err)
 	}
 	badProvenance := solverTestOperationV1()
-	bad := solverTestActiveSourceV1("application", "blueprint\n", "application/runtime")
+	bad := solverTestActiveSourceV1("source-builder:demo", "blueprint\n", "application/runtime")
 	bad.Environment = []RecordEnvironmentVariableV1{{Name: "DEMO_HOME", Value: "active"}}
 	badProvenance.ActiveProviders = solverTestActiveProvidersV1(bad)
 	if _, err := catalog.ResolveSelectedClosuresV1(
-		set, solverTestDomainsV1(false)[:1], badProvenance); err == nil ||
+		set, solverTestBuildDomainsV1(false)[:1], badProvenance); err == nil ||
 		!strings.Contains(err.Error(), "canonical provenance") {
 		t.Errorf("noncanonical active-provider provenance error = %v", err)
 	}

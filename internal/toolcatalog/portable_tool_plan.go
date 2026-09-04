@@ -7,6 +7,7 @@ import (
 
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/toolrequest"
 )
 
 // CompilePortableToolPlanV1 projects selected catalog closures into the
@@ -38,6 +39,9 @@ func CompilePortableToolPlanV1(closures []SelectedClosureV1) (providers.Portable
 }
 
 func compilePortableToolPlanEntryV1(closure *SelectedClosureV1) (providers.PortableToolPlanEntryV1, error) {
+	if err := toolrequest.ValidateResolutionScopeContextV1(closure.Scope, closure.Contract.Context); err != nil {
+		return providers.PortableToolPlanEntryV1{}, err
+	}
 	responsibilities, err := compilePortableToolResponsibilitiesV1(&closure.Records)
 	if err != nil {
 		return providers.PortableToolPlanEntryV1{}, err

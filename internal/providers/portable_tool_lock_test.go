@@ -307,7 +307,7 @@ func TestBuildPortableToolLockV1AuthorizesSelectedArtifactsByContentGroup(t *tes
 		t.Fatal(err)
 	}
 	lock, err := BuildPortableToolLockV1(groupedDAG, []PortableToolReleaseManifestInputV1{{
-		Scope: "application", Tool: "demo", Manifest: manifest,
+		Scope: "application:demo", Tool: "demo", Manifest: manifest,
 	}}, inputs)
 	if err != nil {
 		t.Fatal(err)
@@ -339,7 +339,7 @@ func TestPortableToolLockDistinguishesReleaseRevisionsSharingAClosure(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondReleases := []PortableToolReleaseManifestInputV1{{Scope: "application", Tool: "demo", Manifest: secondManifest}}
+	secondReleases := []PortableToolReleaseManifestInputV1{{Scope: "application:demo", Tool: "demo", Manifest: secondManifest}}
 	second, err := BuildPortableToolLockV1(secondDAG, secondReleases, secondInputs)
 	if err != nil {
 		t.Fatal(err)
@@ -419,7 +419,7 @@ func portableToolLockFixtureV1(t *testing.T) (PortableToolProviderDAGV1, []Porta
 	)
 	inputs := []PortableToolArtifactAcquisitionInputV1{
 		{
-			Scope: "application", Tool: "demo", Artifact: binding.Reference,
+			Scope: "application:demo", Tool: "demo", Artifact: binding.Reference,
 			Descriptor: providerstore.ArtifactDescriptor{LogicalPath: "bindings/demo-1.2.3-py3-none-any.whl", Kind: "wheel", Size: "12", SHA256: portableToolTestDigest},
 			Source:     bindingSource,
 			Provenance: providerstore.AcquisitionProvenance{
@@ -428,7 +428,7 @@ func portableToolLockFixtureV1(t *testing.T) (PortableToolProviderDAGV1, []Porta
 			},
 		},
 		{
-			Scope: "application", Tool: "demo", Artifact: payload.Reference,
+			Scope: "application:demo", Tool: "demo", Artifact: payload.Reference,
 			Descriptor: providerstore.ArtifactDescriptor{LogicalPath: "payloads/demo.tar", Kind: "jdk-archive", Size: "34", SHA256: portableToolLockPayloadDigest},
 			Source:     payloadSource,
 			Provenance: providerstore.AcquisitionProvenance{
@@ -441,12 +441,12 @@ func portableToolLockFixtureV1(t *testing.T) (PortableToolProviderDAGV1, []Porta
 	plan.Tools[0].Provenance.ManifestDigest = manifest.Reference.Digest
 	dag, err := BuildPortableToolProviderDAGV1(
 		portableToolProviderPlanFixtureV1(), plan,
-		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application")},
+		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo")},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return dag, []PortableToolReleaseManifestInputV1{{Scope: "application", Tool: "demo", Manifest: manifest}}, inputs
+	return dag, []PortableToolReleaseManifestInputV1{{Scope: "application:demo", Tool: "demo", Manifest: manifest}}, inputs
 }
 
 func portableToolLockManifestV1(tool, version, revision string, inputs []PortableToolArtifactAcquisitionInputV1, profile PortableToolRecordReferenceV1) PortableToolSelectedRecordV1 {

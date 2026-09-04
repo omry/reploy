@@ -172,7 +172,7 @@ func TestBuildResolvedRequestPackageAdditionActivatesOSProviderWithoutMutatingBl
 
 	intent := deploy.EmptyPackageOverrideIntentV1(document.Environment.ID)
 	intent.Additions = []deploy.PackageAdditionIntentV1{{
-		Provider: "os", Requirement: "default-jre-headless",
+		Provider: "os", Requirement: "curl",
 	}}
 	request, err := BuildResolvedRequestWithPackageOverridesV1(
 		document, deploy.EmptyRequestOverlayV1(), intent,
@@ -192,7 +192,7 @@ func TestBuildResolvedRequestPackageAdditionActivatesOSProviderWithoutMutatingBl
 	}
 	packageValue := osComponent.Request.Value["components"].([]any)[0].(canonical.Object)["packages"].([]any)[0].(canonical.Object)
 	value := packageValue["value"].(canonical.Object)
-	if value["name"] != "default-jre-headless" {
+	if value["name"] != "curl" {
 		t.Fatalf("OS package request = %#v", packageValue)
 	}
 	if _, exists := document.Environment.Components["environment/os"]; exists {
@@ -434,7 +434,7 @@ func TestBuildResolvedRequestV1RejectsUndeclaredPlatform(t *testing.T) {
 	}
 }
 
-func TestBuildResolvedRequestV1RejectsUnplannedRuntimePortableTools(t *testing.T) {
+func TestBuildResolvedRequestV1RejectsUnresolvedRuntimePortableTools(t *testing.T) {
 	source, err := blueprint.Decode([]byte(`
 blueprint:
   schema: 1
@@ -467,9 +467,9 @@ docker: {}
 		[]providers.ResolvedSourceInput{},
 	)
 	if err == nil ||
-		!strings.Contains(err.Error(), `application "a-tools" requests runtime portable tools [java playwright]`) ||
-		!strings.Contains(err.Error(), "provider planning is not yet available") {
-		t.Fatalf("unplanned runtime tool error = %v", err)
+		!strings.Contains(err.Error(), `application "a-tools" has unresolved runtime portable tools [java playwright]`) ||
+		!strings.Contains(err.Error(), "ordinary provider-request boundary") {
+		t.Fatalf("unresolved runtime tool error = %v", err)
 	}
 
 	withoutTools := resolvedRequestTestDocument()

@@ -11,6 +11,7 @@ import (
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
+	"github.com/omry/reploy/internal/toolrequest"
 )
 
 const (
@@ -434,7 +435,10 @@ func (catalog *CatalogV1) prepareCandidateSetsV1(sets []ReleaseCandidateSetV1,
 	}
 	domainsByScope := make(map[string]ProviderDomainSetV1, len(domains))
 	for _, item := range domains {
-		if item.Scope == "" || item.PackageManager == "" || item.Filesystem == "" ||
+		if err := toolrequest.ValidateResolutionScopeV1(item.Scope); err != nil {
+			return nil, fmt.Errorf("provider domains: %w", err)
+		}
+		if item.PackageManager == "" || item.Filesystem == "" ||
 			item.Environment == "" || item.Exports == "" || item.Capabilities == "" {
 			return nil, fmt.Errorf("provider domains for scope %q must name every authority domain", item.Scope)
 		}

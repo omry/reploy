@@ -131,8 +131,8 @@ func (catalog *CatalogV1) SelectReleaseCandidatesV1(group CanonicalRequirementGr
 }
 
 func validateCanonicalRequirementGroupV1(group CanonicalRequirementGroupV1) error {
-	if !validRecordTokenV1(group.Scope) {
-		return fmt.Errorf("resolution scope is invalid")
+	if err := toolrequest.ValidateResolutionScopeContextV1(group.Scope, group.Context); err != nil {
+		return err
 	}
 	if !validRecordIdentifierV1(group.Tool) {
 		return fmt.Errorf("tool name %q is invalid", group.Tool)
@@ -146,9 +146,6 @@ func validateCanonicalRequirementGroupV1(group CanonicalRequirementGroupV1) erro
 		if err := validateCanonicalDecimalV1("tool definition revision", group.DefinitionRevision, true); err != nil {
 			return err
 		}
-	}
-	if !validRecordIdentifierV1(group.Context) {
-		return fmt.Errorf("tool context %q is invalid", group.Context)
 	}
 	if group.Binding.All {
 		if group.Binding.Infer || len(group.Binding.Explicit) != 0 {

@@ -17,7 +17,6 @@ type LockedProviderBuildExecutionInputV1 struct {
 	Preparation     LockedProviderBuildPreparationV1
 	SourceWheels    []providerstore.ArtifactDescriptor
 	LocalOverrides  []PythonLocalOverrideV1
-	PortableTools   *providers.PortableToolLockV1
 	ValidateChoices bool
 	RunValidation   FullImageValidationRunner
 	Progress        io.Writer
@@ -312,7 +311,7 @@ func executeLockedProviderBuildV1(
 		ResolvedRequest: resolvedRequest, Overlay: preparation.Loaded.State.Overlay,
 		PackageOverrides: relevantPackageOverrides,
 		Base:             preparedBase.Descriptor, BaseCatalog: preparedBase.Catalog,
-		Graph: graph, PortableTools: input.PortableTools, Validation: validation,
+		Graph: graph, PortableTools: preparation.portableTools, Validation: validation,
 		StartupVerifier: preparation.StartupVerifier,
 		ValidateChoices: input.ValidateChoices, ValidatedInputs: preparation.ValidatedInputs,
 		NoCache:       preparation.NoCache,

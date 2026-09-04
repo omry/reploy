@@ -171,23 +171,12 @@ func NewResolvedSourceInputWithBuildV2(
 func CanonicalSourceBuildSettingsV2(
 	buildType string,
 	recipeDigest canonical.Digest,
-	tools []string,
 ) (providers.CanonicalProviderData, error) {
 	if buildType != SourceBuildTypePEP517 && buildType != SourceBuildTypeLegacy {
 		return providers.CanonicalProviderData{}, fmt.Errorf("Python local recipe build type %q is unsupported", buildType)
 	}
 	if err := recipeDigest.Validate(); err != nil {
 		return providers.CanonicalProviderData{}, fmt.Errorf("Python local recipe digest: %w", err)
-	}
-	toolValues := make([]any, len(tools))
-	for index, tool := range tools {
-		if tool == "" || strings.TrimSpace(tool) != tool {
-			return providers.CanonicalProviderData{}, fmt.Errorf("Python local recipe tool must be nonempty plain text")
-		}
-		if index > 0 && tools[index-1] >= tool {
-			return providers.CanonicalProviderData{}, fmt.Errorf("Python local recipe tools must be unique and sorted")
-		}
-		toolValues[index] = tool
 	}
 	return providers.CanonicalProviderData{
 		Schema: SourceBuildSettingsSchemaV2,
@@ -198,7 +187,6 @@ func CanonicalSourceBuildSettingsV2(
 			"network":             "default",
 			"recipe_digest":       string(recipeDigest),
 			"source_input_schema": SourceInputManifestSchemaV1,
-			"tools":               toolValues,
 			"uv_sources":          false,
 			"vcs_metadata":        false,
 		},
@@ -292,24 +280,15 @@ func ValidateSourceBuildIdentityV2(
 }
 
 func validateSourceBuildSettingsV2(settings providers.CanonicalProviderData) error {
-	if settings.Schema != SourceBuildSettingsSchemaV2 || len(settings.Value) != 9 {
+	if settings.Schema != SourceBuildSettingsSchemaV2 || len(settings.Value) != 8 {
 		return fmt.Errorf("Python local recipe build settings must use schema %q and its exact shape", SourceBuildSettingsSchemaV2)
 	}
 	buildType, buildOK := settings.Value["build_type"].(string)
 	recipeText, recipeOK := settings.Value["recipe_digest"].(string)
-	toolValues, toolsOK := settings.Value["tools"].([]any)
-	if !buildOK || !recipeOK || !toolsOK {
+	if !buildOK || !recipeOK {
 		return fmt.Errorf("Python local recipe build settings have invalid typed fields")
 	}
-	tools := make([]string, len(toolValues))
-	for index, value := range toolValues {
-		tool, ok := value.(string)
-		if !ok {
-			return fmt.Errorf("Python local recipe build setting tool %d must be text", index)
-		}
-		tools[index] = tool
-	}
-	expected, err := CanonicalSourceBuildSettingsV2(buildType, canonical.Digest(recipeText), tools)
+	expected, err := CanonicalSourceBuildSettingsV2(buildType, canonical.Digest(recipeText))
 	if err != nil {
 		return err
 	}
