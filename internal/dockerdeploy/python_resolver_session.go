@@ -27,7 +27,6 @@ type PythonResolverSession struct {
 	runDocker     commandRunner
 	observations  map[string]probe.ExecutableObservationV1
 	inspected     map[string]string
-	buildTools    []PortableBuildToolEvidenceV1
 	stopped       bool
 	closed        bool
 }
@@ -49,11 +48,10 @@ const (
 )
 
 type pythonSourceBuildEnvironmentV1 struct {
-	Schema      string                        `json:"schema"`
-	Platform    blueprint.Platform            `json:"platform"`
-	Upstream    providers.RealizedImageV1     `json:"upstream"`
-	Interpreter providers.ExecutableEvidence  `json:"interpreter"`
-	BuildTools  []PortableBuildToolEvidenceV1 `json:"build_tools,omitempty"`
+	Schema      string                       `json:"schema"`
+	Platform    blueprint.Platform           `json:"platform"`
+	Upstream    providers.RealizedImageV1    `json:"upstream"`
+	Interpreter providers.ExecutableEvidence `json:"interpreter"`
 }
 
 // OpenPythonResolverSession starts the one disposable consumer container used
@@ -502,7 +500,6 @@ func (session *PythonResolverSession) SourceBuildEnvironmentDigest(
 		Platform:    session.descriptor.Platform,
 		Upstream:    upstream,
 		Interpreter: interpreter,
-		BuildTools:  append([]PortableBuildToolEvidenceV1{}, session.buildTools...),
 	}
 	return canonical.Sum(
 		"python-source-build-environment", pythonSourceBuildEnvironmentSchemaV1, environment,

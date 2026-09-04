@@ -9,6 +9,7 @@ import (
 
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/portabletool"
+	"github.com/omry/reploy/internal/toolrequest"
 )
 
 const (
@@ -179,7 +180,7 @@ func CanonicalPortableToolPlanBytesV1(plan PortableToolPlanV1) ([]byte, error) {
 }
 
 func validatePortableToolPlanEntryV1(entry PortableToolPlanEntryV1) error {
-	if err := validatePortableIdentifier("portable tool plan scope", entry.Scope); err != nil {
+	if err := validatePortableToolScopeV1(entry.Scope); err != nil {
 		return err
 	}
 	if err := entry.SelectedClosureDigest.Validate(); err != nil {
@@ -207,6 +208,10 @@ func validatePortableToolPlanEntryV1(entry PortableToolPlanEntryV1) error {
 		return err
 	}
 	return nil
+}
+
+func validatePortableToolScopeV1(scope string) error {
+	return toolrequest.ValidateResolutionScopeV1(scope)
 }
 
 func portableToolReleaseNamespaceV1(provenance PortableToolReleaseProvenanceV1) (string, error) {

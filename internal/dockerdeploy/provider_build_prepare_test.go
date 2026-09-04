@@ -164,6 +164,37 @@ func TestPrepareLockedProviderBuildV1RealizesBaseAfterStaleReuse(t *testing.T) {
 	}
 }
 
+func TestPrepareLockedProviderBuildV1SnapshotsPortableToolSelection(t *testing.T) {
+	input, loaded, current, selected, prepared := providerBuildPreparationFixture(t)
+	fixture := newPreparedPythonGraphReuseFixture(t)
+	portableTools := buildLockAssemblyPortableToolsV1(
+		t, fixture.store, fixture.request.Plan, fixture.request.NodeID,
+	)
+	input.PortableTools = &portableTools
+	order := []string{}
+	backend := providerBuildPreparationTestBackend(t, loaded, current, selected, prepared, &order)
+	backend.matches = func(_ CurrentBuild, reuse CurrentBuildReuseInput) (bool, error) {
+		order = append(order, "match")
+		if reuse.PortableTools == input.PortableTools || !reflect.DeepEqual(*reuse.PortableTools, portableTools) {
+			t.Fatalf("reuse portable tools were not snapshotted: %#v", reuse.PortableTools)
+		}
+		return false, nil
+	}
+
+	result, err := prepareLockedProviderBuildV1(t.Context(), input, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.portableTools == nil || result.portableTools == input.PortableTools ||
+		!reflect.DeepEqual(*result.portableTools, portableTools) {
+		t.Fatalf("preparation portable tools were not snapshotted: %#v", result.portableTools)
+	}
+	portableTools.Plan.PortableToolPlan.Tools[0].Responsibilities.Payloads[0].Record.Value["entries"] = "mutated"
+	if reflect.DeepEqual(*result.portableTools, portableTools) {
+		t.Fatal("preparation portable tools alias the caller-owned lock")
+	}
+}
+
 func TestPrepareLockedProviderBuildV1DropsAutomaticSourcesBeforeExecution(t *testing.T) {
 	input, loaded, _, selected, prepared := providerBuildPreparationFixture(t)
 	source := testPythonResolvedSource(
