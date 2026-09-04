@@ -160,7 +160,7 @@ func buildLockAssemblyPortableToolsV1(
 	plan := providers.PortableToolPlanV1{
 		Schema: providers.PortableToolPlanSchemaV1,
 		Tools: []providers.PortableToolPlanEntryV1{{
-			Scope: "application", SelectedClosureDigest: rendererDigest("8"),
+			Scope: "application:demo", SelectedClosureDigest: rendererDigest("8"),
 			Provenance: providers.PortableToolReleaseProvenanceV1{
 				Tool: "demo", Version: "1.0.0", Revision: "1", ManifestDigest: rendererDigest("9"),
 			},
@@ -209,16 +209,16 @@ func buildLockAssemblyPortableToolsV1(
 	plan.Tools[0].Provenance.ManifestDigest = manifest.Reference.Digest
 	domain := providers.PortableToolDomainAuthorityV1{ID: "application", Owner: owner}
 	dag, err := providers.BuildPortableToolProviderDAGV1(providerPlan, plan, []providers.PortableToolProviderDomainSetV1{{
-		Scope: "application", PackageManager: domain, Binding: domain, Filesystem: domain,
+		Scope: "application:demo", PackageManager: domain, Binding: domain, Filesystem: domain,
 		Environment: domain, Exports: domain, Capabilities: domain,
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	lock, err := providers.BuildPortableToolLockV1(dag, []providers.PortableToolReleaseManifestInputV1{{
-		Scope: "application", Tool: "demo", Manifest: manifest,
+		Scope: "application:demo", Tool: "demo", Manifest: manifest,
 	}}, []providers.PortableToolArtifactAcquisitionInputV1{{
-		Scope: "application", Tool: "demo", Artifact: artifact.Reference, Descriptor: descriptor, Source: source,
+		Scope: "application:demo", Tool: "demo", Artifact: artifact.Reference, Descriptor: descriptor, Source: source,
 		Provenance: providerstore.AcquisitionProvenance{Outcome: providerstore.AcquisitionOutcomeCacheHit, SourceID: source.Reference.ID},
 	}})
 	if err != nil {

@@ -153,6 +153,52 @@ func TestMergeV1RejectsConflictingRevisionPins(t *testing.T) {
 	}
 }
 
+func TestNormalizeAndMergeV1RejectsNoncanonicalResolutionScopes(t *testing.T) {
+	requests := decodeRequestsV1(t, "- tool: java\n")
+	for _, scope := range []string{
+		"application", "source-builder", "application:", "other:demo",
+		"application:Demo", "application:demo.example", "source-builder:demo_thing",
+		"source-builder:demo-", "source-builder:demo:other",
+	} {
+		if _, err := NormalizeAndMergeV1(requests, scope, "runtime", "tools"); err == nil ||
+			!strings.Contains(err.Error(), "application:<owner>") {
+			t.Fatalf("scope %q error = %v", scope, err)
+		}
+	}
+}
+
+func TestNormalizeAndMergeV1AcceptsExistingOwnerGrammars(t *testing.T) {
+	requests := decodeRequestsV1(t, "- tool: java\n")
+	for _, test := range []struct {
+		scope   string
+		context string
+	}{
+		{scope: "application:web_api", context: "runtime"},
+		{scope: "source-builder:2to3", context: "build"},
+	} {
+		if _, err := NormalizeAndMergeV1(requests, test.scope, test.context, "tools"); err != nil {
+			t.Fatalf("scope %q: %v", test.scope, err)
+		}
+	}
+}
+
+func TestNormalizeAndMergeV1RejectsScopeContextMismatch(t *testing.T) {
+	requests := decodeRequestsV1(t, "- tool: java\n")
+	for _, test := range []struct {
+		scope   string
+		context string
+		want    string
+	}{
+		{scope: "application:web", context: "build", want: `requires context "runtime"`},
+		{scope: "source-builder:demo", context: "runtime", want: `requires context "build"`},
+	} {
+		if _, err := NormalizeAndMergeV1(requests, test.scope, test.context, "tools"); err == nil ||
+			!strings.Contains(err.Error(), test.want) {
+			t.Fatalf("scope %q context %q error = %v", test.scope, test.context, err)
+		}
+	}
+}
+
 func decodeRequestsV1(t *testing.T, content string) []SyntaxV1 {
 	t.Helper()
 	var requests []SyntaxV1
