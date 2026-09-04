@@ -19,7 +19,7 @@ func candidateTestObservedV1() TargetIdentityV1 {
 
 func candidateTestGroupV1() CanonicalRequirementGroupV1 {
 	return CanonicalRequirementGroupV1{
-		Scope: "application", Tool: "demo", Context: "build", Binding: CanonicalBindingDemandV1{Infer: true},
+		Scope: "source-builder:demo", Tool: "demo", Context: "build", Binding: CanonicalBindingDemandV1{Infer: true},
 		Selections: map[string][]string{},
 	}
 }
@@ -44,8 +44,8 @@ func TestSelectReleaseCandidatesAcceptsACanonicalGroupV1(t *testing.T) {
 		t.Fatalf("candidate count = %d, want 1", len(candidates))
 	}
 	candidate := candidates[0]
-	if candidate.Scope != "application" || candidate.Manifest.Version != "1.2.3" {
-		t.Errorf("candidate identity = %q/%q, want application/1.2.3", candidate.Scope, candidate.Manifest.Version)
+	if candidate.Scope != "source-builder:demo" || candidate.Manifest.Version != "1.2.3" {
+		t.Errorf("candidate identity = %q/%q, want source-builder:demo/1.2.3", candidate.Scope, candidate.Manifest.Version)
 	}
 	if len(candidate.Contributions) == 0 || len(candidate.Profiles) == 0 {
 		t.Error("candidate omitted its selected contribution or validation records")
@@ -433,7 +433,7 @@ func TestResolveCandidateSupportTupleRequiresAnExactCaseV1(t *testing.T) {
 		SupportCases: []TargetSupportCaseV1{{Context: "build", Bindings: []string{"python"},
 			Selections: map[string][]string{"browser": {"chromium"}}}},
 	}
-	group := CanonicalRequirementGroupV1{Scope: "application", Tool: "demo", Context: "build",
+	group := CanonicalRequirementGroupV1{Scope: "source-builder:demo", Tool: "demo", Context: "build",
 		Binding:    CanonicalBindingDemandV1{Explicit: []string{"python"}},
 		Selections: map[string][]string{"browser": {"chromium"}}}
 	tuple, err := resolveCandidateSupportTupleV1(contract, target, group, nil)

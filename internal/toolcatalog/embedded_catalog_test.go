@@ -481,14 +481,14 @@ func TestEmbeddedJavaCatalogRejectsUnsupportedRequestsBeforeAcquisitionV1(t *tes
 
 func javaGroupV1(version string, context string) CanonicalRequirementGroupV1 {
 	return CanonicalRequirementGroupV1{
-		Scope: "source-builder", Tool: "java", VersionConstraints: []string{version}, Context: context,
+		Scope: "source-builder:demo", Tool: "java", VersionConstraints: []string{version}, Context: context,
 		Binding: CanonicalBindingDemandV1{Infer: true}, Selections: map[string][]string{},
 	}
 }
 
 func asciinemaGroupV1(version string, context string) CanonicalRequirementGroupV1 {
 	return CanonicalRequirementGroupV1{
-		Scope: "source-builder", Tool: "asciinema", VersionConstraints: []string{version}, Context: context,
+		Scope: "source-builder:demo", Tool: "asciinema", VersionConstraints: []string{version}, Context: context,
 		Binding: CanonicalBindingDemandV1{Infer: true}, Selections: map[string][]string{},
 	}
 }
@@ -505,7 +505,7 @@ func javaTargetV1(osID string, version string) TargetIdentityV1 {
 
 func playwrightGroupV1(version string, context string) CanonicalRequirementGroupV1 {
 	return CanonicalRequirementGroupV1{
-		Scope: "application", Tool: "playwright", VersionConstraints: []string{version}, Context: context,
+		Scope: "application:demo", Tool: "playwright", VersionConstraints: []string{version}, Context: context,
 		Binding: CanonicalBindingDemandV1{Infer: true}, Selections: map[string][]string{"browser": {"chromium"}},
 	}
 }

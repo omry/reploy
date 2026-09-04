@@ -21,6 +21,7 @@ type LockedProviderBuildPreparationInputV1 struct {
 	BaseImage          string
 	Sources            []providers.ResolvedSourceInput
 	DockerPlan         DockerExecutionPlan
+	PortableTools      *providers.PortableToolLockV1
 	NoCache            bool
 	ValidatedCandidate *ValidatedBuildCandidateV1
 	ValidatedInputs    ValidatedBuildInputsV1
@@ -32,6 +33,7 @@ type LockedProviderBuildPreparationV1 struct {
 	Environment      string
 	DeploymentDir    string
 	DockerPlan       DockerExecutionPlan
+	portableTools    *providers.PortableToolLockV1
 	Loaded           LoadedBuildRequestV1
 	SelectedBase     SelectedProviderBase
 	PreparedBase     *PreparedProviderBase
@@ -118,6 +120,14 @@ func prepareLockedProviderBuildV1(
 	if backend.recover == nil || backend.load == nil || backend.loadVerifier == nil || backend.selectCachedBase == nil || backend.selectBase == nil || backend.validateCurrent == nil || backend.lockedSources == nil || backend.matches == nil || backend.cacheAvailable == nil || backend.realizeBase == nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build requires a complete backend")
 	}
+	var portableTools *providers.PortableToolLockV1
+	if input.PortableTools != nil {
+		if err := providers.ValidatePortableToolLockV1(*input.PortableTools); err != nil {
+			return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build portable tools: %w", err)
+		}
+		cloned := providers.ClonePortableToolLockV1(*input.PortableTools)
+		portableTools = &cloned
+	}
 
 	state, found, err := input.Operation.ReadStateV1()
 	if err != nil {
@@ -161,7 +171,7 @@ func prepareLockedProviderBuildV1(
 	}
 	result := LockedProviderBuildPreparationV1{
 		Operation: input.Operation, Store: input.Store, Environment: input.Environment,
-		DeploymentDir: input.DeploymentDir, DockerPlan: input.DockerPlan,
+		DeploymentDir: input.DeploymentDir, DockerPlan: input.DockerPlan, portableTools: portableTools,
 		Loaded: loaded, Recovered: recovered,
 		ValidatedCandidate: input.ValidatedCandidate, ValidatedInputs: input.ValidatedInputs,
 		NoCache: input.NoCache, StartupVerifier: startupVerifier,
@@ -217,11 +227,12 @@ func prepareLockedProviderBuildV1(
 			ResolvedRequest: candidate.request, Overlay: loaded.State.Overlay,
 			PackageOverrides: candidate.packageOverrides, Base: selected.Descriptor,
 			Document: loaded.Document, DockerPlan: input.DockerPlan, StartupVerifier: startupVerifier,
+			PortableTools: portableTools,
 		})
 		if err != nil || !matches {
 			return false, err
 		}
-		publicationLock, err := rebindCurrentBuildLockV1(candidate.current.Lock, loaded.Document)
+		publicationLock, err := rebindCurrentBuildLockV1(candidate.current.Lock, loaded.Document, portableTools)
 		if err != nil {
 			return false, err
 		}

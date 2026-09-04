@@ -85,6 +85,23 @@ cycle. Review uses `swe:local-stack-review` bottom-up and then `swe:pr-cycle`
 per delivery item. `deliver-design-stack` governs a delivery item end to end
 only once remote review capacity is available for that item.
 
+## Release and Intermediate-State Policy
+
+The complete PTD campaign is one unreleased product change. It is released
+only after every `PTD-*` delivery item is complete, the assembled stack has
+passed its final review and validation gates, and no intentionally incomplete
+integration boundary remains. Individual delivery items and pull requests are
+review checkpoints, not deployable compatibility boundaries.
+
+Every intermediate head must compile and pass the checks appropriate to its
+implemented scope, but it does not need to preserve the behavior of an earlier
+partial PTD state. Do not add adapters, dual paths, fallbacks, or
+consumer-specific orchestration solely to keep an intermediate head
+functional. A slice either adds its part of the final ownership boundary or
+fails closed at an explicit unmet boundary until the owning downstream slice
+lands. Intermediate heads must not simulate later materialization through a
+legacy provider, package, executable path, or validation path.
+
 ## Scope
 
 Complete the accepted embedded portable-tool bridge for:
@@ -992,39 +1009,48 @@ The milestone is delivered through these first-class slices:
 #### PTD-22.1: Resolve Java Builder Demands Through the Portable Catalog
 
 Scope: replace name-only local-source Java build-tool detection with canonical
-build-scope tool requirements, embedded-catalog selection, and the PTD-21
-compiled plan.
+build-scope tool requirements, consumer-neutral embedded-catalog selection,
+and the PTD-21 compiled plan. Remove the Python-owned APT installation,
+resolver-session restart, and executable-probe bridge instead of adapting that
+intermediate path to the selected plan.
 
 Acceptance: `tool:java==21` resolves the exact selected Temurin closure for the
 isolated source-builder scope; unsupported targets fail before acquisition;
 runtime application scopes and final-image requirements do not receive
-build-only Java.
+build-only Java; Python provider and resolver code contains no Java-specific
+package, executable-path, catalog-solving, or portable-plan retry logic.
 
-Non-goals: runtime Java, other Java versions, or other tool-specific builder
-branches.
+Non-goals: materializing the selected closure, preserving the legacy Java
+builder path on this intermediate head, runtime Java, other Java versions, or
+other tool-specific builder branches.
 
 #### PTD-22.2: Materialize Selected Temurin Java in the Isolated Builder
 
 Scope: acquire the selected pinned Temurin payload, materialize it offline
-through reviewed primitives into the disposable local-source builder prefix,
-and expose only the selected `java` and `javac` exports there.
+through reviewed primitives into the disposable source-builder environment,
+and expose only the selected `java` and `javac` exports there before the Python
+source-build consumer is opened.
 
 Acceptance: exact `java` and `javac` are present in selected source builds;
-materialization uses verified bytes without network access; the final
-application image and workload provider graph remain unchanged; cleanup leaves
-no accepted partial builder installation.
+the generic portable-tool coordinator, rather than Python tooling, owns the
+selected plan, acquisition, materialization, validation schedule, and prepared
+builder environment; materialization uses verified bytes without network
+access; the final application image and workload provider graph remain
+unchanged; cleanup leaves no accepted partial builder installation.
 
 Non-goals: Java runtime images, distribution-default Java fallback, or
 additional architectures.
 
-#### PTD-22.3: Remove Legacy Java Switches and Prove the Cutover
+#### PTD-22.3: Prove the Java Builder Cutover
 
-Scope: remove `default-jre-headless` and `/usr/bin/java` assumptions and their
-obsolete tests, validate selected exports and validation-profile projection
-through focused cutover checks, and prove build-only containment end to end.
+Scope: verify that the `default-jre-headless` and `/usr/bin/java` assumptions
+removed in PTD-22.1 have not reappeared, validate selected exports and
+validation-profile projection through focused cutover checks, and prove
+build-only containment end to end.
 
-Acceptance: no hard-coded Java build-tool switch remains; focused positive and
-unsupported-target tests exercise the catalog-backed path; selected builds
+Acceptance: no hard-coded Java build-tool switch remains anywhere in the
+source-builder path; focused positive and unsupported-target tests exercise
+the catalog-backed path; selected builds
 receive `java` and `javac` while final application images do not; repository
 validation passes with legacy tests removed or replaced. These focused checks
 produce no external support evidence and do not make PTD-22.3 the generic
@@ -1061,12 +1087,15 @@ Non-goals: WebKit, Firefox, Node binding, or Microsoft Playwright images.
 
 Scope: derive runnable cases from release manifests and the exact support cases
 advertised by each target leaf; execute fixtures
-through ordinary Reploy resolution and materialization; persist external
-evidence bound to the manifest, selected closure, context, target, immutable
-base image, fixture, and validator. A harness-owned callback receives the exact
-inspected materialization result while that result still exists, selects the
-case's exact locked scope and validation schedule, and invokes the PTD-21.5
-image-neutral boundary before the result is retained, released, or cleaned up.
+through ordinary Reploy resolution and materialization; replace the
+pre-integration runtime-request rejection boundary with the generic portable
+tool production caller before exercising application-scoped cases; persist
+external evidence bound to the manifest, selected closure, context, target,
+immutable base image, fixture, and validator. A harness-owned callback receives
+the exact inspected materialization result while that result still exists,
+selects the case's exact locked scope and validation schedule, and invokes the
+PTD-21.5 image-neutral boundary before the result is retained, released, or
+cleaned up.
 Image ownership, lifecycle, and scope selection remain harness responsibilities.
 
 Acceptance: missing or excessive context, target, binding, or selection
