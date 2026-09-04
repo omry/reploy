@@ -12,7 +12,7 @@ import (
 )
 
 func TestCompilePortableToolPlanV1ProjectsFullClosure(t *testing.T) {
-	closure := portableToolCompilerClosureV1("scope-a", "demo", "1.2.3")
+	closure := portableToolCompilerClosureV1("application:demo", "demo", "1.2.3")
 	plan, err := CompilePortableToolPlanV1([]SelectedClosureV1{closure})
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func TestCompilePortableToolPlanV1ProjectsFullClosure(t *testing.T) {
 }
 
 func TestCompilePortableToolPlanV1IncludesBindingContractCLIExports(t *testing.T) {
-	closure := portableToolCompilerClosureV1("scope-a", "demo", "1.2.3")
+	closure := portableToolCompilerClosureV1("application:demo", "demo", "1.2.3")
 	closure.Contract.Exports = nil
 	closure.Target.Bindings[0].Exports = nil
 	plan, err := CompilePortableToolPlanV1([]SelectedClosureV1{closure})
@@ -85,7 +85,7 @@ func TestCompilePortableToolPlanV1IncludesBindingContractCLIExports(t *testing.T
 }
 
 func TestCompilePortableToolPlanV1RejectsBindingContractCLIExportConflict(t *testing.T) {
-	closure := portableToolCompilerClosureV1("scope-a", "demo", "1.2.3")
+	closure := portableToolCompilerClosureV1("application:demo", "demo", "1.2.3")
 	closure.Records.BindingContracts[0].Record.CLI.Path = "/opt/other/bin/python"
 	closure.Records.BindingContracts[0].Reference = portableToolCompilerReferenceV1(
 		closure.Records.BindingContracts[0].Record,
@@ -96,9 +96,18 @@ func TestCompilePortableToolPlanV1RejectsBindingContractCLIExportConflict(t *tes
 	}
 }
 
+func TestCompilePortableToolPlanV1RejectsScopeContextMismatch(t *testing.T) {
+	closure := portableToolCompilerClosureV1("application:demo", "demo", "1.2.3")
+	closure.Contract.Context = "build"
+	if _, err := CompilePortableToolPlanV1([]SelectedClosureV1{closure}); err == nil ||
+		!strings.Contains(err.Error(), `resolution scope "application:demo" requires context "runtime", not "build"`) {
+		t.Fatalf("error = %v, want scope/context mismatch", err)
+	}
+}
+
 func TestCompilePortableToolPlanV1IsOrderingInvariantAndDoesNotMutateInput(t *testing.T) {
-	first := portableToolCompilerClosureV1("scope-a", "demo", "1.2.3")
-	second := portableToolCompilerClosureV1("scope-b", "demo", "1.2.3")
+	first := portableToolCompilerClosureV1("application:demo", "demo", "1.2.3")
+	second := portableToolCompilerClosureV1("application:other", "demo", "1.2.3")
 	portableToolCompilerAddSecondRecordSetV1(&first)
 	portableToolCompilerAddSecondRecordSetV1(&second)
 	ordered, err := CompilePortableToolPlanV1([]SelectedClosureV1{first, second})
@@ -162,8 +171,8 @@ func TestCompilePortableToolPlanV1RejectsCrossToolConflicts(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			first := portableToolCompilerClosureV1("scope-a", "demo", "1.2.3")
-			second := portableToolCompilerClosureV1("scope-a", "other", "2.0.0")
+			first := portableToolCompilerClosureV1("application:demo", "demo", "1.2.3")
+			second := portableToolCompilerClosureV1("application:demo", "other", "2.0.0")
 			test.mutate(&second)
 			if _, err := CompilePortableToolPlanV1([]SelectedClosureV1{first, second}); err == nil ||
 				!strings.Contains(err.Error(), test.want) {
@@ -174,7 +183,7 @@ func TestCompilePortableToolPlanV1RejectsCrossToolConflicts(t *testing.T) {
 }
 
 func TestCompilePortableToolPlanV1SelectedChangesAlterOutput(t *testing.T) {
-	base := portableToolCompilerClosureV1("scope-a", "demo", "1.2.3")
+	base := portableToolCompilerClosureV1("application:demo", "demo", "1.2.3")
 	baseBytes, err := portableToolPlanBytesV1(base)
 	if err != nil {
 		t.Fatal(err)
@@ -197,7 +206,7 @@ func TestCompilePortableToolPlanV1SelectedChangesAlterOutput(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			candidate := portableToolCompilerClosureV1("scope-a", "demo", "1.2.3")
+			candidate := portableToolCompilerClosureV1("application:demo", "demo", "1.2.3")
 			test.mutate(&candidate)
 			changed, err := portableToolPlanBytesV1(candidate)
 			if err != nil {
@@ -226,7 +235,7 @@ func TestCompilePortableToolPlanV1RejectsConflictingRuntimeAndExports(t *testing
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			closure := portableToolCompilerClosureV1("scope-a", "demo", "1.2.3")
+			closure := portableToolCompilerClosureV1("application:demo", "demo", "1.2.3")
 			test.mutate(&closure)
 			if _, err := CompilePortableToolPlanV1([]SelectedClosureV1{closure}); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want %q", err, test.want)
@@ -236,7 +245,7 @@ func TestCompilePortableToolPlanV1RejectsConflictingRuntimeAndExports(t *testing
 }
 
 func TestCompilePortableToolPlanV1FinalValidationRejectsReferenceMismatch(t *testing.T) {
-	closure := portableToolCompilerClosureV1("scope-a", "demo", "1.2.3")
+	closure := portableToolCompilerClosureV1("application:demo", "demo", "1.2.3")
 	closure.Records.Payloads[0].Reference.Digest = portableToolCompilerDigestV1("wrong-reference")
 	if _, err := CompilePortableToolPlanV1([]SelectedClosureV1{closure}); err == nil ||
 		!strings.Contains(err.Error(), "does not match carried record digest") {
@@ -248,7 +257,7 @@ func TestCompilePortableToolPlanV1EmptyInputAndProfileReferences(t *testing.T) {
 	if _, err := CompilePortableToolPlanV1(nil); err == nil || !strings.Contains(err.Error(), "at least one entry") {
 		t.Fatalf("empty input error = %v", err)
 	}
-	closure := portableToolCompilerClosureV1("scope-a", "demo", "1.2.3")
+	closure := portableToolCompilerClosureV1("application:demo", "demo", "1.2.3")
 	plan, err := CompilePortableToolPlanV1([]SelectedClosureV1{closure})
 	if err != nil {
 		t.Fatal(err)

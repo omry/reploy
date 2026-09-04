@@ -250,18 +250,18 @@ func TestImageValidationSessionDPKGPackageStateQueryIsFixedAndLiteral(t *testing
 func TestImageValidationSessionAlternativeQueryIsFixedAndReadOnly(t *testing.T) {
 	descriptor := testProbeImageDescriptor(t, "linux/amd64")
 	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
-	restore := stubImageValidationCommands(t, []byte("Name: java\nLink: /usr/bin/java\nValue: /usr/lib/jvm/java/bin/java\n"), nil)
+	restore := stubImageValidationCommands(t, []byte("Name: editor\nLink: /usr/bin/editor\nValue: /usr/bin/vim.basic\n"), nil)
 	defer restore()
 	session, err := OpenImageValidationSession(context.Background(), descriptor, workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.QueryAlternative(context.Background(), "java"); err != nil {
+	if _, err := session.QueryAlternative(context.Background(), "editor"); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
 		"exec", "--user", "0:0", "--workdir", "/", imageProbeContainerName(workspace.HostDir),
-		"/usr/bin/update-alternatives", "--query", "java",
+		"/usr/bin/update-alternatives", "--query", "editor",
 	}
 	if !reflect.DeepEqual(recordedImageValidationCommands[2].Args, want) {
 		t.Fatalf("alternatives command = %#v", recordedImageValidationCommands[2])

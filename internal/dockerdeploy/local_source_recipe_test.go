@@ -24,7 +24,6 @@ requires:
 	}
 	if !recipe.Found || recipe.Project != "omegaconf" ||
 		recipe.Build != PythonBuildTypeSetuptoolsLegacy ||
-		len(recipe.Tools) != 1 || recipe.Tools[0] != "java" ||
 		len(recipe.Requirements) != 1 || recipe.Requirements[0].Scope != "source-builder:omegaconf" ||
 		recipe.Requirements[0].Context != "build" || recipe.Requirements[0].Tool != "java" {
 		t.Fatalf("recipe = %#v", recipe)
@@ -50,7 +49,7 @@ requires: []
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !recipe.Found || recipe.Build != PythonBuildTypePEP517 || len(recipe.Tools) != 0 || len(recipe.Requirements) != 0 {
+	if !recipe.Found || recipe.Build != PythonBuildTypePEP517 || len(recipe.Requirements) != 0 {
 		t.Fatalf("recipe = %#v", recipe)
 	}
 }
@@ -60,7 +59,7 @@ func TestReadPythonLocalSourceRecipeV1DoesNotRequireRecipe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recipe.Found || recipe.Tools == nil || recipe.Requirements == nil {
+	if recipe.Found || recipe.Requirements == nil {
 		t.Fatalf("missing recipe = %#v", recipe)
 	}
 }
@@ -148,7 +147,7 @@ requires:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(recipe.Requirements) != 1 || len(recipe.Tools) != 1 || recipe.Tools[0] != "playwright" {
+	if len(recipe.Requirements) != 1 {
 		t.Fatalf("recipe = %#v", recipe)
 	}
 	requirement := recipe.Requirements[0]
