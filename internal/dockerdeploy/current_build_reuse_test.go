@@ -20,6 +20,60 @@ func TestCurrentBuildMatchesExactCanonicalInputs(t *testing.T) {
 	}
 }
 
+func TestPortableToolSelectionMatchesCurrentBuildV1InvalidatesChangedClosure(t *testing.T) {
+	fixture := newPreparedPythonGraphReuseFixture(t)
+	current := buildLockAssemblyPortableToolsV1(
+		t, fixture.store, fixture.request.Plan, fixture.request.NodeID,
+	)
+	requested := current
+	requested.Plan.PortableToolPlan = clonePortableToolPlanForReuseTestV1(
+		current.Plan.PortableToolPlan,
+	)
+	requested.Plan.PortableToolPlan.Tools[0].SelectedClosureDigest = rendererDigest("f")
+
+	matched, err := portableToolSelectionMatchesCurrentBuildV1(&current, &requested)
+	if err != nil || matched {
+		t.Fatalf("matched=%v error=%v", matched, err)
+	}
+	matched, err = portableToolSelectionMatchesCurrentBuildV1(&current, &current)
+	if err != nil || !matched {
+		t.Fatalf("exact selection matched=%v error=%v", matched, err)
+	}
+	matched, err = portableToolSelectionMatchesCurrentBuildV1(nil, &requested)
+	if err != nil || matched {
+		t.Fatalf("missing selection matched=%v error=%v", matched, err)
+	}
+}
+
+func TestPortableToolSelectionsMatchCurrentBuildV1IgnoresNonMaterializationMetadata(t *testing.T) {
+	fixture := newPreparedPythonGraphReuseFixture(t)
+	portableTools := buildLockAssemblyPortableToolsV1(
+		t, fixture.store, fixture.request.Plan, fixture.request.NodeID,
+	)
+	current := portableTools.Plan.PortableToolPlan
+	requested := buildLockAssemblyPortableToolsV1(
+		t, fixture.store, fixture.request.Plan, fixture.request.NodeID,
+	).Plan.PortableToolPlan
+	payload := &requested.Tools[0].Responsibilities.Payloads[0]
+	payload.Record.Value["entries"] = "2"
+	digest, err := canonical.Sum("portable-tool-record", "portable-tool-record-v1", payload.Record.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload.Reference.Digest = digest
+
+	matched, err := portableToolSelectionsMatchCurrentBuildV1(current, requested)
+	if err != nil || !matched {
+		t.Fatalf("unchanged selected closure matched=%v error=%v", matched, err)
+	}
+}
+
+func clonePortableToolPlanForReuseTestV1(plan providers.PortableToolPlanV1) providers.PortableToolPlanV1 {
+	clone := plan
+	clone.Tools = append([]providers.PortableToolPlanEntryV1{}, plan.Tools...)
+	return clone
+}
+
 func TestRebindCurrentBuildLockV1UpdatesOnlyDesiredBlueprintIdentity(t *testing.T) {
 	current, input := currentBuildReuseFixture(t)
 	input.Document.Environment.ControlScript = "updated-control"
@@ -29,7 +83,7 @@ func TestRebindCurrentBuildLockV1UpdatesOnlyDesiredBlueprintIdentity(t *testing.
 	if err != nil || !matched {
 		t.Fatalf("matched=%v error=%v", matched, err)
 	}
-	rebound, err := rebindCurrentBuildLockV1(current.Lock, input.Document)
+	rebound, err := rebindCurrentBuildLockV1(current.Lock, input.Document, current.Lock.PortableTools)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,6 +95,65 @@ func TestRebindCurrentBuildLockV1UpdatesOnlyDesiredBlueprintIdentity(t *testing.
 	if rebound.BlueprintDigest == current.Lock.BlueprintDigest {
 		t.Fatal("runtime-only document update retained the obsolete blueprint digest")
 	}
+}
+
+func TestRebindCurrentBuildLockV1PublishesOwnedDesiredPortableToolLock(t *testing.T) {
+	current, desired := portableToolReuseBuildLocksV1(t)
+	document, _ := testSelectedPlatformDocumentV1(t)
+	rebound, err := rebindCurrentBuildLockV1(current, document, &desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebound.PortableTools == nil || rebound.PortableTools == &desired || rebound.PortableTools == current.PortableTools ||
+		!reflect.DeepEqual(*rebound.PortableTools, desired) {
+		t.Fatalf("rebound portable tools = %#v, want owned desired snapshot", rebound.PortableTools)
+	}
+	desired.Releases[0].Manifest.Record.Value["aliases"] = []any{"mutated-desired"}
+	current.PortableTools.Releases[0].Manifest.Record.Value["aliases"] = []any{"mutated-current"}
+	if !reflect.DeepEqual(rebound.PortableTools.Releases[0].Manifest.Record.Value["aliases"], []any{"stable"}) {
+		t.Fatal("rebound portable tools alias caller or current lock")
+	}
+}
+
+func portableToolReuseBuildLocksV1(t *testing.T) (deploy.BuildLockV1, providers.PortableToolLockV1) {
+	t.Helper()
+	fixture := newPreparedPythonGraphReuseFixture(t)
+	current := fixture.lock
+	portableTools := buildLockAssemblyPortableToolsV1(
+		t, fixture.store, fixture.request.Plan, fixture.request.NodeID,
+	)
+	for _, node := range fixture.request.Plan.Nodes {
+		if node.ID != "base" {
+			continue
+		}
+		current.Base.AuthorReference, _ = node.Request.Value["image"].(string)
+		var err error
+		current.BasePlanDigest, err = providers.ProviderNodePlanDigest(node)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	current.PortableTools = &portableTools
+	if err := deploy.ValidateBuildLockV1(current, registry.ValidateRequirementProfileV1); err != nil {
+		t.Fatal(err)
+	}
+
+	desired := providers.ClonePortableToolLockV1(portableTools)
+	desired.Releases[0].Manifest.Record.Value["aliases"] = []any{"stable"}
+	manifestDigest, err := canonical.Sum(
+		"portable-tool-record",
+		"portable-tool-record-v1",
+		desired.Releases[0].Manifest.Record.Value,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired.Releases[0].Manifest.Reference.Digest = manifestDigest
+	desired.Plan.PortableToolPlan.Tools[0].Provenance.ManifestDigest = manifestDigest
+	if err := providers.ValidatePortableToolLockV1(desired); err != nil {
+		t.Fatal(err)
+	}
+	return current, desired
 }
 
 func TestCurrentBuildMatchesIgnoresDeploymentLocalState(t *testing.T) {

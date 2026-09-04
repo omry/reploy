@@ -25,6 +25,24 @@ func TestValidatePortableToolPlanV1AcceptsRepresentativePlan(t *testing.T) {
 	}
 }
 
+func TestValidatePortableToolPlanV1AcceptsCanonicalOwnedScopes(t *testing.T) {
+	for _, scope := range []string{"application:web", "source-builder:omegaconf"} {
+		plan := representativePortableToolPlanV1()
+		plan.Tools[0].Scope = scope
+		if err := ValidatePortableToolPlanV1(plan); err != nil {
+			t.Fatalf("scope %q: %v", scope, err)
+		}
+	}
+}
+
+func TestValidatePortableToolPlanV1RejectsUnqualifiedScope(t *testing.T) {
+	plan := representativePortableToolPlanV1()
+	plan.Tools[0].Scope = "application"
+	if err := ValidatePortableToolPlanV1(plan); err == nil || !strings.Contains(err.Error(), "application:<owner>") {
+		t.Fatalf("error = %v, want canonical owned-scope requirement", err)
+	}
+}
+
 func TestCanonicalPortableToolPlanBytesV1IsDeterministic(t *testing.T) {
 	plan := representativePortableToolPlanV1()
 	first, err := CanonicalPortableToolPlanBytesV1(plan)
@@ -73,7 +91,7 @@ func TestValidatePortableToolPlanV1RejectsNilCollectionsAndRequiredFields(t *tes
 func TestValidatePortableToolPlanV1RejectsToolOrderingAndDuplicates(t *testing.T) {
 	valid := representativePortableToolPlanV1()
 	second := clonePortableToolPlanForTest(valid).Tools[0]
-	second.Scope = "source-builder"
+	second.Scope = "source-builder:other"
 	retargetPortableToolTestEntry(&second, "demo", "other")
 	valid.Tools = append(valid.Tools, second)
 	if err := ValidatePortableToolPlanV1(valid); err != nil {
@@ -373,7 +391,7 @@ func representativePortableToolPlanV1() PortableToolPlanV1 {
 	return PortableToolPlanV1{
 		Schema: PortableToolPlanSchemaV1,
 		Tools: []PortableToolPlanEntryV1{{
-			Scope:                 "application",
+			Scope:                 "application:demo",
 			SelectedClosureDigest: portableToolTestDigest,
 			Provenance: PortableToolReleaseProvenanceV1{
 				Tool: "demo", Version: "1.2.3", Revision: "1", ManifestDigest: portableToolTestDigest,

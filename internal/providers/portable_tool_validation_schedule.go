@@ -63,6 +63,9 @@ func PortableToolValidationScheduleForScopeV1(
 	if scope == "" {
 		return PortableToolValidationScheduleV1{}, fmt.Errorf("portable tool validation schedule scope must not be empty")
 	}
+	if err := validatePortableToolScopeV1(scope); err != nil {
+		return PortableToolValidationScheduleV1{}, fmt.Errorf("portable tool validation schedule scope: %w", err)
+	}
 	selected := PortableToolValidationScheduleV1{
 		Schema:  PortableToolValidationScheduleSchemaV1,
 		Entries: []PortableToolScheduledValidationV1{},
@@ -110,8 +113,8 @@ func ValidatePortableToolValidationScheduleV1(schedule PortableToolValidationSch
 		return fmt.Errorf("portable tool validation schedule entries must use an explicit array")
 	}
 	for index, entry := range schedule.Entries {
-		if entry.Scope == "" {
-			return fmt.Errorf("portable tool validation schedule entry %d requires a scope", index)
+		if err := validatePortableToolScopeV1(entry.Scope); err != nil {
+			return fmt.Errorf("portable tool validation schedule entry %d scope: %w", index, err)
 		}
 		if entry.Tool == "" {
 			return fmt.Errorf("portable tool validation schedule entry %d requires a tool", index)

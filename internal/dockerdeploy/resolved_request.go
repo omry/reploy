@@ -304,7 +304,7 @@ func BuildResolvedRequestWithPackageOverridesV1(
 			packageOverrides.EnvironmentID, document.Environment.ID,
 		)
 	}
-	if err := rejectUnplannedRuntimePortableToolsV1(document); err != nil {
+	if err := rejectUnresolvedRuntimePortableToolsV1(document); err != nil {
 		return providers.ResolvedRequestV1{}, err
 	}
 	document, err := documentWithPackageAdditionsV1(document, packageOverrides)
@@ -398,7 +398,10 @@ func BuildResolvedRequestWithPackageOverridesV1(
 	return result, nil
 }
 
-func rejectUnplannedRuntimePortableToolsV1(document blueprint.Document) error {
+// rejectUnresolvedRuntimePortableToolsV1 protects the ordinary provider-request
+// boundary from silently discarding canonical portable-tool requirements. The
+// portable-tool production caller must consume them before invoking this path.
+func rejectUnresolvedRuntimePortableToolsV1(document blueprint.Document) error {
 	applicationNames := make([]string, 0, len(document.Environment.Applications))
 	for applicationName := range document.Environment.Applications {
 		applicationNames = append(applicationNames, applicationName)
@@ -415,7 +418,7 @@ func rejectUnplannedRuntimePortableToolsV1(document blueprint.Document) error {
 		}
 		sort.Strings(toolNames)
 		return fmt.Errorf(
-			"application %q requests runtime portable tools %v, but catalog-backed provider planning is not yet available",
+			"application %q has unresolved runtime portable tools %v at the ordinary provider-request boundary",
 			applicationName,
 			toolNames,
 		)

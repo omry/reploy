@@ -18,6 +18,7 @@ type CurrentBuildReuseInput struct {
 	Document         blueprint.Document
 	DockerPlan       DockerExecutionPlan
 	StartupVerifier  deploy.ApplicationStartupVerifierV1
+	PortableTools    *providers.PortableToolLockV1
 }
 
 // CurrentBuildMatches returns false for a valid but changed build input. It
@@ -41,6 +42,15 @@ func CurrentBuildMatches(current CurrentBuild, input CurrentBuildReuseInput) (bo
 	}
 	if err := validateGenerationBuildLock(current.Generation, current.Lock, registry.ValidateRequirementProfileV1); err != nil {
 		return false, fmt.Errorf("current build reuse: %w", err)
+	}
+	portableToolsMatch, err := portableToolSelectionMatchesCurrentBuildV1(
+		current.Lock.PortableTools, input.PortableTools,
+	)
+	if err != nil {
+		return false, err
+	}
+	if !portableToolsMatch {
+		return false, nil
 	}
 	requestDigest, err := providers.ResolvedRequestDigest(input.ResolvedRequest, registry.ValidateResolvedRequestOwnersV1)
 	if err != nil {
@@ -113,10 +123,63 @@ func CurrentBuildMatches(current CurrentBuild, input CurrentBuildReuseInput) (bo
 	return true, nil
 }
 
+func portableToolSelectionMatchesCurrentBuildV1(
+	current *providers.PortableToolLockV1,
+	requested *providers.PortableToolLockV1,
+) (bool, error) {
+	if current == nil || requested == nil {
+		return current == nil && requested == nil, nil
+	}
+	if err := providers.ValidatePortableToolLockV1(*current); err != nil {
+		return false, fmt.Errorf("current build reuse portable tools: %w", err)
+	}
+	if err := providers.ValidatePortableToolLockV1(*requested); err != nil {
+		return false, fmt.Errorf("requested build portable tools: %w", err)
+	}
+	return portableToolSelectionsMatchCurrentBuildV1(
+		current.Plan.PortableToolPlan,
+		requested.Plan.PortableToolPlan,
+	)
+}
+
+// portableToolSelectionsMatchCurrentBuildV1 compares materialization identity,
+// not release provenance or validation metadata. The validated plan ordering
+// makes the scope/tool/digest tuples directly comparable.
+func portableToolSelectionsMatchCurrentBuildV1(
+	current providers.PortableToolPlanV1,
+	requested providers.PortableToolPlanV1,
+) (bool, error) {
+	if err := providers.ValidatePortableToolPlanV1(current); err != nil {
+		return false, fmt.Errorf("current build reuse portable tools: %w", err)
+	}
+	if err := providers.ValidatePortableToolPlanV1(requested); err != nil {
+		return false, fmt.Errorf("requested build portable tools: %w", err)
+	}
+	if len(current.Tools) != len(requested.Tools) {
+		return false, nil
+	}
+	for index := range current.Tools {
+		currentTool := current.Tools[index]
+		requestedTool := requested.Tools[index]
+		if currentTool.Scope != requestedTool.Scope ||
+			currentTool.Provenance.Tool != requestedTool.Provenance.Tool ||
+			currentTool.SelectedClosureDigest != requestedTool.SelectedClosureDigest {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // rebindCurrentBuildLockV1 returns a lock for the desired resolved document
 // while preserving the exact validated image, provider closure, and runtime
-// policy of a build that already passed CurrentBuildMatches.
-func rebindCurrentBuildLockV1(lock deploy.BuildLockV1, document blueprint.Document) (deploy.BuildLockV1, error) {
+// policy of a build that already passed CurrentBuildMatches. Portable-tool
+// metadata comes from the preparation-owned desired lock; reuse equivalence
+// deliberately compares only materialization identity.
+func rebindCurrentBuildLockV1(
+	lock deploy.BuildLockV1,
+	document blueprint.Document,
+	portableTools *providers.PortableToolLockV1,
+) (deploy.BuildLockV1, error) {
 	blueprintPayload, err := blueprint.EncodeResolvedDocumentV1(document)
 	if err != nil {
 		return deploy.BuildLockV1{}, err
@@ -127,6 +190,11 @@ func rebindCurrentBuildLockV1(lock deploy.BuildLockV1, document blueprint.Docume
 	}
 	rebound := lock
 	rebound.BlueprintDigest = blueprintDigest
+	rebound.PortableTools = nil
+	if portableTools != nil {
+		cloned := providers.ClonePortableToolLockV1(*portableTools)
+		rebound.PortableTools = &cloned
+	}
 	if err := deploy.ValidateBuildLockV1(rebound, registry.ValidateRequirementProfileV1); err != nil {
 		return deploy.BuildLockV1{}, fmt.Errorf("rebind current build lock: %w", err)
 	}

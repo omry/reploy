@@ -123,7 +123,7 @@ func TestStagePackDesiredStateV1ImportsLocalBlueprintSidecarOnCreate(t *testing.
     workspace_root: ..
   package_additions:
     os:
-      - default-jre-headless
+      - git
   package_overrides:
     python:
       omegaconf-inspector:
@@ -160,7 +160,7 @@ func TestStagePackDesiredStateV1ImportsLocalBlueprintSidecarOnCreate(t *testing.
 	if staged.Environment.Base == nil || staged.Environment.Base.Image != "python:3.13-slim" {
 		t.Fatalf("staged base override = %#v", staged.Environment.Base)
 	}
-	if got := staged.Environment.PackageAdditions["os"]; len(got) != 1 || got[0] != "default-jre-headless" {
+	if got := staged.Environment.PackageAdditions["os"]; len(got) != 1 || got[0] != "git" {
 		t.Fatalf("staged package additions = %#v", staged.Environment.PackageAdditions)
 	}
 
