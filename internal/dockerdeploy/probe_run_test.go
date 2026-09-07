@@ -446,3 +446,36 @@ func mustCanonicalProbeResponse(t *testing.T, response probe.ResponseV1) []byte 
 	}
 	return encoded
 }
+
+func TestImageValidationSessionPathAbsenceCheckIsFixed(t *testing.T) {
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
+	restore := stubImageValidationCommands(t, nil, nil)
+	defer restore()
+	session, err := OpenImageValidationSession(context.Background(), descriptor, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.ValidatePathsAbsent(context.Background(), []string{"/opt/reploy/tools/java/jdk-21.0.12+8", "/opt/reploy/exports"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"exec", "--user", "0:0", "--workdir", "/", imageProbeContainerName(workspace.HostDir),
+		"/bin/sh", "-c", `for candidate in "$@"; do test ! -e "$candidate" && test ! -L "$candidate" || exit 1; done`, "reploy-validation",
+		"/opt/reploy/tools/java/jdk-21.0.12+8", "/opt/reploy/exports",
+	}
+	if !reflect.DeepEqual(recordedImageValidationCommands[2].Args, want) {
+		t.Fatalf("path-absence command = %#v", recordedImageValidationCommands[2])
+	}
+	for _, invalid := range [][]string{nil, {}, {"relative"}, {"/opt/reploy,x"}, {"/opt/reploy\nx"}} {
+		if err := session.ValidatePathsAbsent(context.Background(), invalid); err == nil {
+			t.Fatalf("invalid path set %#v accepted", invalid)
+		}
+	}
+	if len(recordedImageValidationCommands) != 3 {
+		t.Fatalf("invalid path sets reached Docker: %#v", recordedImageValidationCommands)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}

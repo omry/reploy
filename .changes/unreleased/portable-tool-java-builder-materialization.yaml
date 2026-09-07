@@ -1,0 +1,2 @@
+kind: Changed
+body: Acquire and offline-materialize the selected Temurin JDK into a validated disposable source-builder image that exposes only the selected java and javac exports before local-source Python builds run, and lock its acquisition provenance in the build lock.

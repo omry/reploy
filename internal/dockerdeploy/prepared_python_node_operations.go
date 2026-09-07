@@ -28,6 +28,7 @@ type PreparedPythonNodeOperations struct {
 	Artifacts              PreparedPythonResolverArtifacts
 	ReusableWheels         []providerstore.ArtifactDescriptor
 	LocalOverrides         []PythonLocalOverrideV1
+	SourceBuilder          *SourceBuilderPortableToolsV1
 	Progress               io.Writer
 	ShowApplicationContext bool
 	RunOptions             RunOptions
@@ -38,7 +39,7 @@ func (operations PreparedPythonNodeOperations) Preparer(
 	descriptor deploy.ImageDescriptor,
 	workspace PreparedProbeWorkspace,
 ) PythonNodePreparer {
-	return PythonNodePreparer{
+	preparer := PythonNodePreparer{
 		Descriptor:     descriptor,
 		Workspace:      workspace,
 		Artifacts:      operations.Artifacts,
@@ -46,6 +47,21 @@ func (operations PreparedPythonNodeOperations) Preparer(
 		ValidateCached: operations.validateCached,
 		ResolveFresh:   operations.resolveFresh,
 	}
+	if operations.SourceBuilder != nil {
+		preparer.PrepareBuilder = operations.prepareSourceBuilder
+	}
+	return preparer
+}
+
+var prepareSourceBuilderEnvironmentV1 = PrepareSourceBuilderEnvironmentV1
+
+// prepareSourceBuilder builds this node's disposable source-builder image
+// from its prefix image before the resolver session that consumes it opens.
+func (operations PreparedPythonNodeOperations) prepareSourceBuilder(
+	ctx context.Context,
+	upstream deploy.ImageDescriptor,
+) (*SourceBuilderEnvironmentV1, error) {
+	return prepareSourceBuilderEnvironmentV1(ctx, operations.Store, operations.SourceBuilder, upstream, operations.RunOptions)
 }
 
 func (operations PreparedPythonNodeOperations) validateCached(
@@ -335,10 +351,9 @@ func (operations PreparedPythonNodeOperations) materializeLocalOverrides(
 			return nil, nil, err
 		}
 		if len(recipe.Requirements) != 0 {
-			return nil, nil, fmt.Errorf(
-				"local source recipe for %q requires a portable source-builder environment before Python resolution",
-				snapshot.Distribution,
-			)
+			if err := session.requireSourceBuilderRecipe(snapshot.Distribution, recipe); err != nil {
+				return nil, nil, err
+			}
 		}
 		recipes[snapshot.Distribution] = recipe
 	}

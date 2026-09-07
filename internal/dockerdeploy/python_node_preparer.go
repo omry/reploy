@@ -24,9 +24,16 @@ type PythonFreshNodeResolver func(
 	providers.ResolveNodeRequest,
 ) (providers.ResolveResult, providers.GraphConsumerValidation, error)
 
+// PythonSourceBuilderPreparer prepares the disposable source-builder image
+// for one Python node from its prefix image. It is set only when the build
+// resolved portable tools for isolated source builders.
+type PythonSourceBuilderPreparer func(context.Context, deploy.ImageDescriptor) (*SourceBuilderEnvironmentV1, error)
+
 // PythonNodePreparer owns the resolver-container lifecycle for one Python
-// graph node. Portable-tool resolution and source-builder environment
-// preparation happen before this consumer boundary.
+// graph node. Portable-tool resolution happens before this consumer boundary;
+// when portable tools were resolved, the prepared source-builder image is
+// built, validated, and consumed as the resolver container's image, so the
+// selected exports exist before the session opens.
 type PythonNodePreparer struct {
 	Descriptor     deploy.ImageDescriptor
 	Workspace      PreparedProbeWorkspace
@@ -34,6 +41,7 @@ type PythonNodePreparer struct {
 	ReusableWheels []providerstore.ArtifactDescriptor
 	ValidateCached PythonCachedNodeValidator
 	ResolveFresh   PythonFreshNodeResolver
+	PrepareBuilder PythonSourceBuilderPreparer
 }
 
 var openPythonNodePreparationSession = OpenPythonResolverSession
@@ -57,8 +65,29 @@ func (preparer PythonNodePreparer) Prepare(
 	if err := validatePythonResolverReusableArtifacts(request.Resolve.ReusableArtifacts, preparer.ReusableWheels); err != nil {
 		return providers.GraphNodePreparation{}, err
 	}
+	descriptor := preparer.Descriptor
+	var environment *SourceBuilderEnvironmentV1
+	if preparer.PrepareBuilder != nil {
+		builderCtx, endBuilder := buildprofile.Start(ctx, "Prepare source-builder environment")
+		prepared, prepareErr := preparer.PrepareBuilder(builderCtx, preparer.Descriptor)
+		endBuilder(prepareErr)
+		if prepareErr != nil {
+			return providers.GraphNodePreparation{}, prepareErr
+		}
+		if prepared == nil {
+			return providers.GraphNodePreparation{}, fmt.Errorf("source-builder preparation returned no environment")
+		}
+		environment = prepared
+		descriptor = environment.Descriptor
+		defer func() {
+			if cleanupErr := environment.Cleanup(context.WithoutCancel(ctx)); cleanupErr != nil {
+				result = providers.GraphNodePreparation{}
+				err = errors.Join(err, cleanupErr)
+			}
+		}()
+	}
 	sessionCtx, endSession := buildprofile.Start(ctx, "Open Python resolver session")
-	session, err := openPythonNodePreparationSession(sessionCtx, preparer.Descriptor, preparer.Workspace, preparer.Artifacts)
+	session, err := openPythonNodePreparationSession(sessionCtx, descriptor, preparer.Workspace, preparer.Artifacts)
 	endSession(err)
 	if err != nil {
 		return providers.GraphNodePreparation{}, err
@@ -69,6 +98,11 @@ func (preparer PythonNodePreparer) Prepare(
 			err = errors.Join(err, closeErr)
 		}
 	}()
+	if environment != nil {
+		if err := session.BindSourceBuilder(environment); err != nil {
+			return providers.GraphNodePreparation{}, err
+		}
+	}
 
 	var cachedMismatch error
 	if request.CachedResolution != nil {

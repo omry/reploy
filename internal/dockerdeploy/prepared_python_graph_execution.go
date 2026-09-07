@@ -27,6 +27,7 @@ type PreparedPythonGraphExecutionInput struct {
 	Sources          []providers.ResolvedSourceInput
 	SourceWheels     []providerstore.ArtifactDescriptor
 	LocalOverrides   []PythonLocalOverrideV1
+	SourceBuilder    *SourceBuilderPortableToolsV1
 	CurrentLock      *deploy.BuildLockV1
 	FinalImageConfig providers.ImageConfigPolicy
 	Progress         io.Writer
@@ -62,6 +63,7 @@ func ExecutePreparedPythonGraph(
 	}
 	for id, config := range reuse.NodeConfigs {
 		config.LocalOverrides = append([]PythonLocalOverrideV1{}, input.LocalOverrides...)
+		config.SourceBuilder = input.SourceBuilder
 		reuse.NodeConfigs[id] = config
 	}
 	backend, cleanup, err := preparePythonGraphExecutionBackend(

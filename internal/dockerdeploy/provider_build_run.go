@@ -23,7 +23,6 @@ type ProviderBuildRunInputV1 struct {
 	NoCache         bool
 	Verify          bool
 	ValidateChoices bool
-	PortableTools   *providers.PortableToolLockV1
 	Progress        io.Writer
 	BuildProgress   buildprogress.Reporter
 	RunOptions      RunOptions
@@ -38,7 +37,6 @@ type LockedProviderBuildRunInputV1 struct {
 	NoCache         bool
 	Verify          bool
 	ValidateChoices bool
-	PortableTools   *providers.PortableToolLockV1
 	Progress        io.Writer
 	BuildProgress   buildprogress.Reporter
 	RunOptions      RunOptions
@@ -173,7 +171,6 @@ func runProviderBuildV1(
 		NoCache:         input.NoCache,
 		Verify:          input.Verify,
 		ValidateChoices: input.ValidateChoices,
-		PortableTools:   input.PortableTools,
 		Progress:        input.Progress, BuildProgress: input.BuildProgress,
 		RunOptions: input.RunOptions,
 	}, backend)
@@ -374,9 +371,10 @@ func runLockedProviderBuildV1(
 	preparationInput := LockedProviderBuildPreparationInputV1{
 		Operation: input.Operation, Store: input.Store, Environment: document.Environment.ID,
 		DeploymentDir: deploymentDir, PackageOverrides: packageOverrideIntent, BaseImage: baseImage,
-		Sources:       reuseSources,
-		PortableTools: input.PortableTools,
-		DockerPlan:    dockerPlan, NoCache: input.NoCache, ValidatedCandidate: func() *ValidatedBuildCandidateV1 {
+		Sources:        reuseSources,
+		LocalOverrides: localOverrides,
+		ReployVersion:  deploy.ToolVersion,
+		DockerPlan:     dockerPlan, NoCache: input.NoCache, ValidatedCandidate: func() *ValidatedBuildCandidateV1 {
 			if validatedCandidateFound {
 				return &validatedCandidate
 			}
