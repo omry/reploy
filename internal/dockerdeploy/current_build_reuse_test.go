@@ -26,23 +26,25 @@ func TestPortableToolSelectionMatchesCurrentBuildV1InvalidatesChangedClosure(t *
 	current := buildLockAssemblyPortableToolsV1(
 		t, fixture.store, fixture.request.Plan, fixture.request.NodeID,
 	)
-	requested := current
-	requested.Plan.PortableToolPlan = clonePortableToolPlanForReuseTestV1(
-		current.Plan.PortableToolPlan,
-	)
-	requested.Plan.PortableToolPlan.Tools[0].SelectedClosureDigest = rendererDigest("f")
+	requested := clonePortableToolPlanForReuseTestV1(current.Plan.PortableToolPlan)
+	requested.Tools[0].SelectedClosureDigest = rendererDigest("f")
 
 	matched, err := portableToolSelectionMatchesCurrentBuildV1(&current, &requested)
 	if err != nil || matched {
 		t.Fatalf("matched=%v error=%v", matched, err)
 	}
-	matched, err = portableToolSelectionMatchesCurrentBuildV1(&current, &current)
+	exact := current.Plan.PortableToolPlan
+	matched, err = portableToolSelectionMatchesCurrentBuildV1(&current, &exact)
 	if err != nil || !matched {
 		t.Fatalf("exact selection matched=%v error=%v", matched, err)
 	}
 	matched, err = portableToolSelectionMatchesCurrentBuildV1(nil, &requested)
 	if err != nil || matched {
 		t.Fatalf("missing selection matched=%v error=%v", matched, err)
+	}
+	matched, err = portableToolSelectionMatchesCurrentBuildV1(&current, nil)
+	if err != nil || matched {
+		t.Fatalf("dropped selection matched=%v error=%v", matched, err)
 	}
 }
 

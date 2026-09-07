@@ -27,6 +27,7 @@ type PreparedPythonGraphExecutionInput struct {
 	Sources          []providers.ResolvedSourceInput
 	SourceWheels     []providerstore.ArtifactDescriptor
 	LocalOverrides   []PythonLocalOverrideV1
+	SourceBuilder    *SourceBuilderCoordinatorV1
 	CurrentLock      *deploy.BuildLockV1
 	FinalImageConfig providers.ImageConfigPolicy
 	Progress         io.Writer
@@ -60,8 +61,10 @@ func ExecutePreparedPythonGraph(
 	if err != nil {
 		return providers.GraphExecutionResult{}, err
 	}
+	dropSourceBuilderPythonCachedResolutionsV1(input.Plan, input.CurrentLock, reuse.CachedResolutions)
 	for id, config := range reuse.NodeConfigs {
 		config.LocalOverrides = append([]PythonLocalOverrideV1{}, input.LocalOverrides...)
+		config.SourceBuilder = input.SourceBuilder
 		reuse.NodeConfigs[id] = config
 	}
 	backend, cleanup, err := preparePythonGraphExecutionBackend(
@@ -92,6 +95,25 @@ func ExecutePreparedPythonGraph(
 		Validators:  registry.OwnerValidatorsForNode,
 		PrepareNode: prepareNode, MaterializeNode: materializeNode,
 	})
+}
+
+// A source-builder lock proves which portable tools were selected for the
+// previous build, but the coordinator that prepares those tools is driven by
+// fresh Python resolution. Preserve reusable wheel candidates while forcing
+// each Python node through that resolution path again.
+func dropSourceBuilderPythonCachedResolutionsV1(
+	plan providers.ProviderPlanV1,
+	current *deploy.BuildLockV1,
+	cached map[providers.NodeID]providers.ResolveResult,
+) {
+	if current == nil || !portableToolPlanHasSourceBuilderScopesV1(current.PortableTools) {
+		return
+	}
+	for _, node := range plan.Nodes {
+		if node.Provider == blueprint.ComponentTypePython {
+			delete(cached, node.ID)
+		}
+	}
 }
 
 func providerGraphProgressCallbacks(

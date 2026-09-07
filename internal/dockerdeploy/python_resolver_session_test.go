@@ -271,6 +271,7 @@ func TestPythonResolverSessionBuildsSdistThenWheelWithSelectedInterpreterAndPinn
 	changedUpstream := *session
 	changedUpstream.descriptor.ConfigDigest = canonical.Digest("sha256:" + strings.Repeat("f", 64))
 	changedUpstream.descriptor.ImmutableReference = string(changedUpstream.descriptor.ConfigDigest)
+	changedUpstream.upstream = changedUpstream.descriptor
 	changedUpstreamDigest, err := changedUpstream.SourceBuildEnvironmentDigest(interpreter.Evidence)
 	if err != nil {
 		t.Fatal(err)

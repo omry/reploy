@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -87,7 +88,7 @@ func executeLockedProviderBuildV1(
 	ctx context.Context,
 	input LockedProviderBuildExecutionInputV1,
 	backend providerBuildExecutionBackend,
-) (LockedProviderBuildExecutionResultV1, error) {
+) (result LockedProviderBuildExecutionResultV1, resultErr error) {
 	if ctx == nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute locked provider build requires a context")
 	}
@@ -248,6 +249,17 @@ func executeLockedProviderBuildV1(
 	options := input.RunOptions
 	options.Context = ctx
 	options.Progress = input.Progress
+	coordinator := NewSourceBuilderCoordinatorV1(SourceBuilderCoordinatorInputV1{
+		Store: preparation.Store, Base: preparedBase.Descriptor, ProviderPlan: preparedBase.Plan,
+		BlueprintDigest: preparation.BlueprintDigest, ReployVersion: preparation.ReployVersion,
+		RunOptions: options,
+	})
+	defer func() {
+		if cleanupErr := coordinator.Cleanup(); cleanupErr != nil {
+			result = LockedProviderBuildExecutionResultV1{}
+			resultErr = errors.Join(resultErr, cleanupErr)
+		}
+	}()
 	graphCtx, endGraph := buildprofile.Start(ctx, "Execute provider graph")
 	graphOptions := options
 	graphOptions.Context = graphCtx
@@ -256,12 +268,17 @@ func executeLockedProviderBuildV1(
 		BaseCatalog: preparedBase.Catalog, Sources: preparation.Loaded.Request.Sources,
 		SourceWheels:   append([]providerstore.ArtifactDescriptor{}, input.SourceWheels...),
 		LocalOverrides: append([]PythonLocalOverrideV1{}, input.LocalOverrides...),
+		SourceBuilder:  coordinator,
 		CurrentLock:    preparation.ReusableLock, FinalImageConfig: preparation.FinalImageConfig,
 		Progress: input.Progress, BuildProgress: input.BuildProgress, RunOptions: graphOptions,
 	})
 	endGraph(err)
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute provider graph: %w", err)
+	}
+	portableTools := coordinator.PortableToolLock()
+	if err := coordinator.Cleanup(); err != nil {
+		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("cleanup source-builder portable tools: %w", err)
 	}
 	writeProviderBuildProgress(input.Progress, "assembling environment runtime plan")
 	buildprogress.Report(input.BuildProgress, buildprogress.Event{
@@ -311,7 +328,7 @@ func executeLockedProviderBuildV1(
 		ResolvedRequest: resolvedRequest, Overlay: preparation.Loaded.State.Overlay,
 		PackageOverrides: relevantPackageOverrides,
 		Base:             preparedBase.Descriptor, BaseCatalog: preparedBase.Catalog,
-		Graph: graph, PortableTools: preparation.portableTools, Validation: validation,
+		Graph: graph, PortableTools: portableTools, Validation: validation,
 		StartupVerifier: preparation.StartupVerifier,
 		ValidateChoices: input.ValidateChoices, ValidatedInputs: preparation.ValidatedInputs,
 		NoCache:       preparation.NoCache,

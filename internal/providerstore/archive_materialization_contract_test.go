@@ -203,6 +203,11 @@ func TestArchiveMaterializationContractRequestValidation(t *testing.T) {
 		mutate func(*ArchiveMaterializationRequest)
 	}{
 		{name: "unsupported-format", mutate: func(request *ArchiveMaterializationRequest) { request.Format = "rar" }},
+		{name: "unsupported-symbolic-link-policy", mutate: func(request *ArchiveMaterializationRequest) { request.SymbolicLinkPolicy = "follow" }},
+		{name: "zip-symbolic-link-policy", mutate: func(request *ArchiveMaterializationRequest) {
+			request.Format = ArchiveFormatZip
+			request.SymbolicLinkPolicy = ArchiveSymbolicLinkPolicyMaterializeRegularTarget
+		}},
 		{name: "unclean-destination", mutate: func(request *ArchiveMaterializationRequest) {
 			request.DestinationRoot += string(filepath.Separator) + "."
 		}},
