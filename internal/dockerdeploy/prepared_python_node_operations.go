@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -28,6 +29,7 @@ type PreparedPythonNodeOperations struct {
 	Artifacts              PreparedPythonResolverArtifacts
 	ReusableWheels         []providerstore.ArtifactDescriptor
 	LocalOverrides         []PythonLocalOverrideV1
+	SourceBuilder          *SourceBuilderCoordinatorV1
 	Progress               io.Writer
 	ShowApplicationContext bool
 	RunOptions             RunOptions
@@ -38,7 +40,7 @@ func (operations PreparedPythonNodeOperations) Preparer(
 	descriptor deploy.ImageDescriptor,
 	workspace PreparedProbeWorkspace,
 ) PythonNodePreparer {
-	return PythonNodePreparer{
+	preparer := PythonNodePreparer{
 		Descriptor:     descriptor,
 		Workspace:      workspace,
 		Artifacts:      operations.Artifacts,
@@ -46,6 +48,7 @@ func (operations PreparedPythonNodeOperations) Preparer(
 		ValidateCached: operations.validateCached,
 		ResolveFresh:   operations.resolveFresh,
 	}
+	return preparer
 }
 
 func (operations PreparedPythonNodeOperations) validateCached(
@@ -202,7 +205,7 @@ func (operations PreparedPythonNodeOperations) resolveFresh(
 	if len(directOverrides) != 0 {
 		effectiveSources, effectiveWheels, err = operations.materializeLocalOverrides(
 			ctx, session, consumer.EnvironmentLauncher, requirement, interpreter,
-			buildEnvironmentDigest, node.Components[0], directOverrides, effectiveSources, effectiveWheels,
+			node.Components[0], directOverrides, effectiveSources, effectiveWheels,
 		)
 		if err != nil {
 			return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
@@ -241,7 +244,7 @@ func (operations PreparedPythonNodeOperations) resolveFresh(
 		}
 		effectiveSources, effectiveWheels, err = operations.materializeLocalOverrides(
 			ctx, session, consumer.EnvironmentLauncher, requirement, interpreter,
-			buildEnvironmentDigest, node.Components[0], selected, effectiveSources, effectiveWheels,
+			node.Components[0], selected, effectiveSources, effectiveWheels,
 		)
 		if err != nil {
 			return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
@@ -304,12 +307,11 @@ func (operations PreparedPythonNodeOperations) materializeLocalOverrides(
 	launcher providers.ValidatedExecutableInput,
 	requirement providers.ExecutableRequirement,
 	interpreter providers.ExecutableEvidence,
-	buildEnvironmentDigest canonical.Digest,
 	component string,
 	selected []PythonLocalOverrideV1,
 	effectiveSources []providers.ResolvedSourceInput,
 	effectiveWheels []providerstore.ArtifactDescriptor,
-) ([]providers.ResolvedSourceInput, []providerstore.ArtifactDescriptor, error) {
+) (resultSources []providers.ResolvedSourceInput, resultWheels []providerstore.ArtifactDescriptor, resultErr error) {
 	distributions := make([]string, len(selected))
 	for index, override := range selected {
 		distributions[index] = override.Distribution
@@ -329,18 +331,46 @@ func (operations PreparedPythonNodeOperations) materializeLocalOverrides(
 		return nil, nil, err
 	}
 	recipes := make(map[string]PythonLocalSourceRecipeV1, len(snapshots))
+	selectedRecipes := make([]SourceBuilderSelectedRecipeV1, 0, len(snapshots))
+	requiresPortableTools := false
 	for _, snapshot := range snapshots {
 		recipe, err := ReadPythonLocalSourceRecipeV1(snapshot.HostDir, snapshot.Distribution)
 		if err != nil {
 			return nil, nil, err
 		}
 		if len(recipe.Requirements) != 0 {
-			return nil, nil, fmt.Errorf(
-				"local source recipe for %q requires a portable source-builder environment before Python resolution",
-				snapshot.Distribution,
-			)
+			requiresPortableTools = true
 		}
 		recipes[snapshot.Distribution] = recipe
+		selectedRecipes = append(selectedRecipes, SourceBuilderSelectedRecipeV1{
+			Distribution: snapshot.Distribution, Recipe: recipe,
+		})
+	}
+	buildSession := session
+	buildLauncher := launcher
+	buildInterpreter := interpreter
+	if requiresPortableTools {
+		if operations.SourceBuilder == nil {
+			return nil, nil, fmt.Errorf("selected local source recipes require a portable source-builder coordinator")
+		}
+		var cleanup func() error
+		buildSession, buildLauncher, buildInterpreter, cleanup, err = operations.openSourceBuilderSession(
+			ctx, session, requirement, interpreter, selectedRecipes,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer func() {
+			if cleanupErr := cleanup(); cleanupErr != nil {
+				resultSources = nil
+				resultWheels = nil
+				resultErr = errors.Join(resultErr, cleanupErr)
+			}
+		}()
+	}
+	buildEnvironmentDigest, err := buildSession.SourceBuildEnvironmentDigest(buildInterpreter)
+	if err != nil {
+		return nil, nil, err
 	}
 	projectKind := "project"
 	if len(distributions) != 1 {
@@ -355,7 +385,7 @@ func (operations PreparedPythonNodeOperations) materializeLocalOverrides(
 		)}),
 	)
 	sdistCtx, endSdist := buildprofile.Start(ctx, "Build source distributions")
-	err = session.BuildSourceDistributions(sdistCtx, launcher, requirement, interpreter, snapshots)
+	err = buildSession.BuildSourceDistributions(sdistCtx, buildLauncher, requirement, buildInterpreter, snapshots)
 	endSdist(err)
 	if err != nil {
 		return nil, nil, err
@@ -389,7 +419,7 @@ func (operations PreparedPythonNodeOperations) materializeLocalOverrides(
 		return nil, nil, err
 	}
 	wheelCtx, endWheels := buildprofile.Start(ctx, "Build local wheels")
-	err = session.BuildSourceWheels(wheelCtx, launcher, requirement, interpreter, preparedDistributions)
+	err = buildSession.BuildSourceWheels(wheelCtx, buildLauncher, requirement, buildInterpreter, preparedDistributions)
 	endWheels(err)
 	if err != nil {
 		return nil, nil, err
@@ -407,6 +437,72 @@ func (operations PreparedPythonNodeOperations) materializeLocalOverrides(
 		return nil, nil, err
 	}
 	return merged, stagedWheels, nil
+}
+
+var preparePythonSourceBuilderWorkspaceV1 = PrepareProbeWorkspace
+var openPythonSourceBuilderSessionV1 = OpenPythonResolverSession
+var validatePythonSourceBuilderConsumerV1 = ValidatePythonConsumer
+var selectPythonSourceBuilderInterpreterV1 = SelectPythonInterpreter
+
+// openSourceBuilderSession prepares and opens the distinct source-build
+// consumer only after immutable selected recipes require portable tools. The
+// dependency resolver session remains open on the unmodified node prefix.
+func (operations PreparedPythonNodeOperations) openSourceBuilderSession(
+	ctx context.Context,
+	resolver *PythonResolverSession,
+	requirement providers.ExecutableRequirement,
+	interpreter providers.ExecutableEvidence,
+	selected []SourceBuilderSelectedRecipeV1,
+) (*PythonResolverSession, providers.ValidatedExecutableInput, providers.ExecutableEvidence, func() error, error) {
+	noCleanup := func() error { return nil }
+	environment, err := operations.SourceBuilder.Prepare(ctx, resolver.descriptor, selected)
+	if err != nil {
+		return nil, providers.ValidatedExecutableInput{}, providers.ExecutableEvidence{}, noCleanup, err
+	}
+	workspace, cleanupWorkspace, err := preparePythonSourceBuilderWorkspaceV1(
+		ctx, operations.Store, environment.Descriptor.Platform,
+	)
+	if err != nil {
+		return nil, providers.ValidatedExecutableInput{}, providers.ExecutableEvidence{}, noCleanup,
+			errors.Join(err, environment.Cleanup(context.WithoutCancel(ctx)))
+	}
+	buildSession, err := openPythonSourceBuilderSessionV1(
+		ctx, environment.Descriptor, workspace, operations.Artifacts,
+	)
+	if err != nil {
+		return nil, providers.ValidatedExecutableInput{}, providers.ExecutableEvidence{}, noCleanup,
+			errors.Join(err, cleanupWorkspace(), environment.Cleanup(context.WithoutCancel(ctx)))
+	}
+	cleanup := func() error {
+		return errors.Join(
+			buildSession.Close(context.WithoutCancel(ctx)),
+			cleanupWorkspace(),
+			environment.Cleanup(context.WithoutCancel(ctx)),
+		)
+	}
+	if err := buildSession.BindSourceBuilder(environment); err != nil {
+		return nil, providers.ValidatedExecutableInput{}, providers.ExecutableEvidence{}, noCleanup,
+			errors.Join(err, cleanup())
+	}
+	consumer, err := validatePythonSourceBuilderConsumerV1(ctx, buildSession, operations.FinalImageConfig)
+	if err != nil {
+		return nil, providers.ValidatedExecutableInput{}, providers.ExecutableEvidence{}, noCleanup,
+			errors.Join(err, cleanup())
+	}
+	candidate := providers.RealizedOutput{
+		SupplierNode:      providers.NodeID(interpreter.Output.Component),
+		SupplierComponent: interpreter.Output.Component,
+		Name:              interpreter.Output.Name,
+		Candidate:         providers.ExecutableCandidate{InvocationPath: interpreter.InvocationPath},
+	}
+	selectedInterpreter, err := selectPythonSourceBuilderInterpreterV1(
+		ctx, buildSession, consumer.EnvironmentLauncher, requirement, []providers.RealizedOutput{candidate},
+	)
+	if err != nil {
+		return nil, providers.ValidatedExecutableInput{}, providers.ExecutableEvidence{}, noCleanup,
+			errors.Join(err, cleanup())
+	}
+	return buildSession, consumer.EnvironmentLauncher, selectedInterpreter, cleanup, nil
 }
 
 func filterPythonSourcesForBuildEnvironment(

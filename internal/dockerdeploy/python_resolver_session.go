@@ -21,6 +21,8 @@ import (
 
 type PythonResolverSession struct {
 	descriptor    deploy.ImageDescriptor
+	upstream      deploy.ImageDescriptor
+	sourceBuilder *SourceBuilderEnvironmentV1
 	workspace     PreparedProbeWorkspace
 	artifacts     PreparedPythonResolverArtifacts
 	containerName string
@@ -48,15 +50,16 @@ const (
 )
 
 type pythonSourceBuildEnvironmentV1 struct {
-	Schema      string                       `json:"schema"`
-	Platform    blueprint.Platform           `json:"platform"`
-	Upstream    providers.RealizedImageV1    `json:"upstream"`
-	Interpreter providers.ExecutableEvidence `json:"interpreter"`
+	Schema        string                                 `json:"schema"`
+	Platform      blueprint.Platform                     `json:"platform"`
+	Builder       providers.RealizedImageV1              `json:"builder"`
+	Interpreter   providers.ExecutableEvidence           `json:"interpreter"`
+	PortableTools []SourceBuilderPortableToolSelectionV1 `json:"portable_tools,omitempty"`
 }
 
-// OpenPythonResolverSession starts the one disposable consumer container used
-// for Python prerequisite validation and, later, wheel resolution. Its public
-// methods expose only fixed provider-owned operations.
+// OpenPythonResolverSession starts a disposable consumer container used for
+// Python prerequisite validation, wheel resolution, or selected source
+// builds. Its public methods expose only fixed provider-owned operations.
 func OpenPythonResolverSession(
 	ctx context.Context,
 	descriptor deploy.ImageDescriptor,
@@ -125,10 +128,43 @@ func OpenPythonResolverSession(
 		return nil, errors.Join(startErr, cleanupErr)
 	}
 	return &PythonResolverSession{
-		descriptor: descriptor, workspace: workspace, artifacts: artifacts, containerName: containerName, runDocker: runDocker,
+		descriptor: descriptor, upstream: descriptor, workspace: workspace, artifacts: artifacts, containerName: containerName, runDocker: runDocker,
 		observations: map[string]probe.ExecutableObservationV1{},
 		inspected:    map[string]string{},
 	}, nil
+}
+
+// BindSourceBuilder records that this session's container was created from
+// a prepared source-builder image. Source-build environment identity binds
+// the exact builder image and portable-tool selections, and source-build
+// commands see only the selected exports.
+func (session *PythonResolverSession) BindSourceBuilder(environment *SourceBuilderEnvironmentV1) error {
+	if session == nil || session.closed || session.stopped {
+		return fmt.Errorf("Python resolver session is not open")
+	}
+	if environment == nil {
+		return fmt.Errorf("Python resolver session requires a prepared source-builder environment")
+	}
+	if !reflect.DeepEqual(environment.Descriptor, session.descriptor) {
+		return fmt.Errorf("Python resolver session container was not created from the prepared source-builder image")
+	}
+	if err := environment.Upstream.Validate(); err != nil {
+		return fmt.Errorf("source-builder upstream descriptor: %w", err)
+	}
+	if environment.ExportsDirectory == "" || !path.IsAbs(environment.ExportsDirectory) || path.Clean(environment.ExportsDirectory) != environment.ExportsDirectory {
+		return fmt.Errorf("source-builder exports directory must be an absolute clean path")
+	}
+	session.upstream = environment.Upstream
+	session.sourceBuilder = environment
+	return nil
+}
+
+func (session *PythonResolverSession) sourceBuildPath() string {
+	fixed := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	if session.sourceBuilder == nil {
+		return fixed
+	}
+	return session.sourceBuilder.ExportsDirectory + ":" + fixed
 }
 
 func (session *PythonResolverSession) runDockerCommand(spec CommandSpec, options RunOptions) error {
@@ -491,15 +527,18 @@ func (session *PythonResolverSession) SourceBuildEnvironmentDigest(
 		interpreter.Facts.Value["version"] != version {
 		return "", fmt.Errorf("Python source build environment interpreter was not inspected in this container")
 	}
-	upstream, err := realizedImageFromDescriptor(session.descriptor)
+	builder, err := realizedImageFromDescriptor(session.descriptor)
 	if err != nil {
 		return "", err
 	}
 	environment := pythonSourceBuildEnvironmentV1{
 		Schema:      pythonSourceBuildEnvironmentSchemaV1,
 		Platform:    session.descriptor.Platform,
-		Upstream:    upstream,
+		Builder:     builder,
 		Interpreter: interpreter,
+	}
+	if session.sourceBuilder != nil {
+		environment.PortableTools = append([]SourceBuilderPortableToolSelectionV1{}, session.sourceBuilder.Selections...)
 	}
 	return canonical.Sum(
 		"python-source-build-environment", pythonSourceBuildEnvironmentSchemaV1, environment,
@@ -644,7 +683,7 @@ func (session *PythonResolverSession) runWheelEnvironmentCommand(
 		"exec", "--user", "0:0", "--workdir", "/", session.containerName,
 		launcher.Evidence.InvocationPath, "-i",
 		"HOME=/tmp", "LANG=C", "LC_ALL=C",
-		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "TMPDIR=/tmp",
+		"PATH=" + session.sourceBuildPath(), "TMPDIR=/tmp",
 		"PYTHONNOUSERSITE=1", "PYTHONPATH=" + pythonSourceBuilderRoot,
 		"UV_CACHE_DIR=" + pythonSourceUVCacheRoot, "UV_PYTHON=" + interpreter, "UV_PYTHON_DOWNLOADS=never",
 	}

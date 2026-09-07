@@ -14,4 +14,5 @@ fields:
   unpacked_size: "5127582"
   install_directory: ffmpeg-1011
   archive_root: "."
+  symbolic_link_policy: reject
   executables: [ffmpeg-linux]

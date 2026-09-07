@@ -15,6 +15,7 @@ import (
 type PreparedPythonNodeConfig struct {
 	ReusableWheels []providerstore.ArtifactDescriptor
 	LocalOverrides []PythonLocalOverrideV1
+	SourceBuilder  *SourceBuilderCoordinatorV1
 }
 
 type PreparedAPTNodeConfig struct {
@@ -126,6 +127,7 @@ func PreparePreparedPythonGraphBackend(
 				FinalImageConfig: cloneImageConfigPolicy(finalImageConfig), Artifacts: artifacts,
 				ReusableWheels:         append([]providerstore.ArtifactDescriptor{}, config.ReusableWheels...),
 				LocalOverrides:         append([]PythonLocalOverrideV1{}, config.LocalOverrides...),
+				SourceBuilder:          config.SourceBuilder,
 				Progress:               options.Progress,
 				ShowApplicationContext: showApplicationContext,
 				RunOptions:             options,

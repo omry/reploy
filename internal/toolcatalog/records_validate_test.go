@@ -410,6 +410,12 @@ func TestNewRecordFieldsAreValidated(t *testing.T) {
 			mutate: func(v any) { v.(*BindingArtifactRecordV1).EcosystemVersion = "9.9.9" }},
 		{name: "payload resolver unsupported", index: 6, wantSub: "resolver",
 			mutate: func(v any) { v.(*PayloadRecordV1).Resolver = "" }},
+		{name: "payload symbolic-link policy unsupported", index: 6, wantSub: "symbolic-link policy",
+			mutate: func(v any) { v.(*PayloadRecordV1).SymbolicLinkPolicy = "follow" }},
+		{name: "payload symbolic-link materialization requires tar", index: 6, wantSub: "requires a tar.gz payload",
+			mutate: func(v any) {
+				v.(*PayloadRecordV1).SymbolicLinkPolicy = PayloadSymbolicLinkPolicyMaterializeRegularTargetV1
+			}},
 		{name: "fixture selection capitalized", index: 9, wantSub: "canonical identifiers",
 			mutate: func(v any) { v.(*IntegrationFixtureRecordV1).Selections = map[string][]string{"browser": {"Chromium"}} }},
 		{name: "fixture selection contains a space", index: 9, wantSub: "canonical identifiers",

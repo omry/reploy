@@ -76,7 +76,8 @@ func validRecordValuesV1() []any {
 			Revision: "1228", UpstreamVersion: "149.0.0", Platform: "linux/amd64", LogicalPath: "tools/demo/chromium.zip",
 			Kind: "playwright-browser-archive", Size: "42", SHA256: recordTestDigest, Resolver: "https-sha256",
 			Entries: "2", UnpackedSize: "84",
-			InstallDirectory: "chromium-1228", ArchiveRoot: "chrome-linux", Executables: []string{"chrome-linux/chrome", "chrome-linux/chrome-wrapper"},
+			InstallDirectory: "chromium-1228", ArchiveRoot: "chrome-linux", SymbolicLinkPolicy: PayloadSymbolicLinkPolicyRejectV1,
+			Executables: []string{"chrome-linux/chrome", "chrome-linux/chrome-wrapper"},
 		},
 		&ArtifactSourceRecordV1{
 			Schema: ArtifactSourceRecordSchemaV1, ID: release + "/revisions/1/sources/chromium-linux-amd64",
@@ -413,11 +414,12 @@ func TestRecordModelUsesFinalBindingSelectionAndValidationShape(t *testing.T) {
 			forbidden: []string{`"cli":"`},
 		},
 		{
-			name: "payload executables",
+			name: "payload materialization",
 			value: PayloadRecordV1{
-				Executables: []string{"bin/java", "bin/javac"},
+				SymbolicLinkPolicy: PayloadSymbolicLinkPolicyMaterializeRegularTargetV1,
+				Executables:        []string{"bin/java", "bin/javac"},
 			},
-			required:  []string{`"executables":["bin/java","bin/javac"]`},
+			required:  []string{`"symbolic_link_policy":"materialize-regular-target"`, `"executables":["bin/java","bin/javac"]`},
 			forbidden: []string{`"executable":`},
 		},
 		{

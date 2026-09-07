@@ -25,8 +25,10 @@ type PythonFreshNodeResolver func(
 ) (providers.ResolveResult, providers.GraphConsumerValidation, error)
 
 // PythonNodePreparer owns the resolver-container lifecycle for one Python
-// graph node. Portable-tool resolution and source-builder environment
-// preparation happen before this consumer boundary.
+// graph node. It always opens dependency resolution on the unmodified node
+// prefix. A distinct source-build consumer is prepared later, and only when
+// dependency resolution selects an immutable local snapshot whose recipe
+// declares portable tools.
 type PythonNodePreparer struct {
 	Descriptor     deploy.ImageDescriptor
 	Workspace      PreparedProbeWorkspace
@@ -69,7 +71,6 @@ func (preparer PythonNodePreparer) Prepare(
 			err = errors.Join(err, closeErr)
 		}
 	}()
-
 	var cachedMismatch error
 	if request.CachedResolution != nil {
 		cachedCtx, endCached := buildprofile.Start(ctx, "Validate cached Python resolution")
