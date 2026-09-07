@@ -271,7 +271,7 @@ func validatePortableToolCatalogPayloadV1(value canonical.Object) error {
 	var record portableToolCatalogPayloadV1
 	if err := decodePortableToolCatalogRecordV1(value, schema, []string{
 		"schema", "id", "name", "revision", "upstream_version", "platform", "logical_path", "kind",
-		"size", "sha256", "resolver", "entries", "unpacked_size", "install_directory", "archive_root", "executables",
+		"size", "sha256", "resolver", "entries", "unpacked_size", "install_directory", "archive_root", "symbolic_link_policy", "executables",
 	}, &record); err != nil {
 		return err
 	}
@@ -314,6 +314,15 @@ func validatePortableToolCatalogPayloadV1(value canonical.Object) error {
 	}
 	if err := validatePortableToolCatalogPathV1(record.ArchiveRoot, true); err != nil {
 		return fmt.Errorf("payload archive root: %w", err)
+	}
+	switch record.SymbolicLinkPolicy {
+	case PayloadSymbolicLinkPolicyRejectV1:
+	case PayloadSymbolicLinkPolicyMaterializeRegularTargetV1:
+		if !strings.HasSuffix(record.LogicalPath, ".tar.gz") && !strings.HasSuffix(record.LogicalPath, ".tgz") {
+			return fmt.Errorf("payload symbolic-link policy %q requires a tar.gz payload", record.SymbolicLinkPolicy)
+		}
+	default:
+		return fmt.Errorf("payload symbolic-link policy %q is unsupported", record.SymbolicLinkPolicy)
 	}
 	if err := validatePortableToolCatalogSortedStringsV1("payload executables", record.Executables, true); err != nil {
 		return err

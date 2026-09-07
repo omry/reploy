@@ -22,8 +22,10 @@ type archiveMaterializer struct {
 	destinationPaths map[string]string
 	executablePaths  map[string]string
 	entries          []ArchiveMaterializationEntry
+	symbolicLinks    []archiveSymbolicLink
 	entryCount       uint64
 	unpackedSize     uint64
+	materializedSize uint64
 }
 
 type archiveMaterializedNode struct {
@@ -31,31 +33,20 @@ type archiveMaterializedNode struct {
 	explicit bool
 }
 
+type archiveSymbolicLink struct {
+	archivePath           string
+	destinationPath       string
+	targetArchivePath     string
+	targetDestinationPath string
+	executable            bool
+}
+
 func (materializer *archiveMaterializer) accept(rawPath string, kind string, size int64, content io.Reader) error {
 	if err := materializer.ctx.Err(); err != nil {
 		return err
 	}
 	directory := kind == ArchiveEntryKindDirectory
-	archivePath, err := normalizeArchivePath(rawPath, directory)
-	if err != nil {
-		return fmt.Errorf("archive member %q: %w", rawPath, err)
-	}
-	if !archivePathWithin(materializer.request.archiveRoot, archivePath) {
-		return fmt.Errorf("archive member %q is outside archive root %q", archivePath, materializer.request.ArchiveRoot)
-	}
-	if _, exists := materializer.archivePaths[archivePath]; exists {
-		return fmt.Errorf("archive contains duplicate normalized member path %q", archivePath)
-	}
-	if materializer.entryCount >= archiveMaterializationMaxEntries {
-		return fmt.Errorf("archive entry count exceeds core limit %d", archiveMaterializationMaxEntries)
-	}
-	materializer.entryCount++
-	if materializer.entryCount > materializer.request.entryLimit {
-		return fmt.Errorf("archive entry count %d exceeds expected count %d", materializer.entryCount, materializer.request.entryLimit)
-	}
-	materializer.archivePaths[archivePath] = struct{}{}
-
-	destinationPath, err := materializer.destinationPath(archivePath)
+	archivePath, destinationPath, err := materializer.acceptPath(rawPath, directory)
 	if err != nil {
 		return err
 	}
@@ -70,11 +61,15 @@ func (materializer *archiveMaterializer) accept(rawPath string, kind string, siz
 		if uint64(size) > materializer.request.sizeLimit-materializer.unpackedSize {
 			return fmt.Errorf("archive unpacked size exceeds expected or core limit")
 		}
+		if uint64(size) > archiveMaterializationMaxUnpackedBytes-materializer.materializedSize {
+			return fmt.Errorf("archive materialized size exceeds core limit %d", archiveMaterializationMaxUnpackedBytes)
+		}
 		_, declaredExecutable := materializer.executablePaths[archivePath]
 		if err := materializer.acceptRegular(destinationPath, size, content, declaredExecutable); err != nil {
 			return err
 		}
 		materializer.unpackedSize += uint64(size)
+		materializer.materializedSize += uint64(size)
 		if _, declared := materializer.executablePaths[archivePath]; declared {
 			materializer.executablePaths[archivePath] = destinationPath
 		}
@@ -84,6 +79,33 @@ func (materializer *archiveMaterializer) accept(rawPath string, kind string, siz
 		ArchivePath: archivePath, DestinationPath: destinationPath, Kind: kind, Size: strconv.FormatInt(size, 10),
 	})
 	return nil
+}
+
+func (materializer *archiveMaterializer) acceptPath(rawPath string, directory bool) (string, string, error) {
+	archivePath, err := normalizeArchivePath(rawPath, directory)
+	if err != nil {
+		return "", "", fmt.Errorf("archive member %q: %w", rawPath, err)
+	}
+	if !archivePathWithin(materializer.request.archiveRoot, archivePath) {
+		return "", "", fmt.Errorf("archive member %q is outside archive root %q", archivePath, materializer.request.ArchiveRoot)
+	}
+	if _, exists := materializer.archivePaths[archivePath]; exists {
+		return "", "", fmt.Errorf("archive contains duplicate normalized member path %q", archivePath)
+	}
+	if materializer.entryCount >= archiveMaterializationMaxEntries {
+		return "", "", fmt.Errorf("archive entry count exceeds core limit %d", archiveMaterializationMaxEntries)
+	}
+	materializer.entryCount++
+	if materializer.entryCount > materializer.request.entryLimit {
+		return "", "", fmt.Errorf("archive entry count %d exceeds expected count %d", materializer.entryCount, materializer.request.entryLimit)
+	}
+	materializer.archivePaths[archivePath] = struct{}{}
+
+	destinationPath, err := materializer.destinationPath(archivePath)
+	if err != nil {
+		return "", "", err
+	}
+	return archivePath, destinationPath, nil
 }
 
 func (materializer *archiveMaterializer) destinationPath(archivePath string) (string, error) {

@@ -129,7 +129,7 @@ func portableToolReachabilityLockV1(t *testing.T, build *BuildLockV1, artifact p
 		"name": "demo", "revision": "1", "upstream_version": "1.0.0", "platform": "linux/amd64",
 		"logical_path": artifact.LogicalPath, "kind": artifact.Kind, "size": artifact.Size, "sha256": string(artifact.SHA256),
 		"resolver": "https-sha256", "entries": "1", "unpacked_size": artifact.Size,
-		"install_directory": "demo", "archive_root": "demo-root", "executables": []any{"demo-root/bin/demo"},
+		"install_directory": "demo", "archive_root": "demo-root", "symbolic_link_policy": "reject", "executables": []any{"demo-root/bin/demo"},
 	}
 	recordDigest, err := canonical.Sum("portable-tool-record", "portable-tool-record-v1", recordValue)
 	if err != nil {

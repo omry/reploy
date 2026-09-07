@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -118,7 +119,7 @@ func TestExecuteLockedProviderBuildV1RepublishesRuntimeOnlyDocumentUpdate(t *tes
 
 func TestExecuteLockedProviderBuildV1PreservesReusedPortableToolProvenance(t *testing.T) {
 	input, _, _, _, _ := providerBuildPreparationFixture(t)
-	currentLock, desiredPortableTools := portableToolReuseBuildLocksV1(t)
+	currentLock, _ := portableToolReuseBuildLocksV1(t)
 	document, _ := testSelectedPlatformDocumentV1(t)
 	publicationLock, err := rebindCurrentBuildLockV1(currentLock, document)
 	if err != nil {
@@ -132,8 +133,8 @@ func TestExecuteLockedProviderBuildV1PreservesReusedPortableToolProvenance(t *te
 		Progress: &progress,
 		Preparation: LockedProviderBuildPreparationV1{
 			Operation: input.Operation, Store: input.Store, Environment: input.Environment,
-			DeploymentDir: input.DeploymentDir, portableTools: &desiredPortableTools,
-			Current: &current, ReusableLock: &currentLock, PublicationLock: &publicationLock,
+			DeploymentDir: input.DeploymentDir,
+			Current:       &current, ReusableLock: &currentLock, PublicationLock: &publicationLock,
 			Loaded: LoadedBuildRequestV1{Document: document}, Reused: true,
 		},
 	}, providerBuildExecutionBackend{
@@ -329,13 +330,21 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 		Image: completionInput.Graph.PrefixImages[0], Catalog: completionInput.BaseCatalog,
 	}
 	localOverrides := []PythonLocalOverrideV1{{Distribution: "demo-server", HostDir: "/tmp/demo-server"}}
-	portableTools := &providers.PortableToolLockV1{}
-	completionInput.PortableTools = portableTools
+	var sourceOwner providers.NodeID
+	for _, node := range prepared.Plan.Nodes {
+		if node.Provider == blueprint.ComponentTypePython {
+			sourceOwner = node.ID
+		}
+	}
+	sourceLock := buildLockAssemblyPortableToolsV1(t, store, prepared.Plan, sourceOwner)
+	sourceWorkspace := t.TempDir()
+	sourceTools := &SourceBuilderPortableToolsV1{Plan: &SourceBuilderPortableToolPlanV1{}, Lock: sourceLock, workspace: sourceWorkspace}
+	completionInput.PortableTools = &sourceLock
 	input := LockedProviderBuildExecutionInputV1{
 		Preparation: LockedProviderBuildPreparationV1{
 			Operation: operation, Store: store, Environment: completionInput.Environment,
 			DeploymentDir: completionInput.DeploymentDir, DockerPlan: completionInput.DockerPlan,
-			portableTools: portableTools,
+			BlueprintDigest: rendererDigest("b"), ReployVersion: "1.0.0",
 			Loaded: LoadedBuildRequestV1{
 				State: deploy.StateV1{Overlay: completionInput.Overlay}, Document: completionInput.Document,
 				PackageOverrides: completionInput.PackageOverrides, Request: candidateRequest,
@@ -354,13 +363,18 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 		executeGraph: func(_ context.Context, got PreparedPythonGraphExecutionInput) (providers.GraphExecutionResult, error) {
 			order = append(order, "graph")
 			if !reflect.DeepEqual(got.Plan, prepared.Plan) || !reflect.DeepEqual(got.Sources, candidateRequest.Sources) ||
-				!reflect.DeepEqual(got.LocalOverrides, localOverrides) || got.CurrentLock != nil || got.RunOptions.Context == nil {
+				!reflect.DeepEqual(got.LocalOverrides, localOverrides) || got.SourceBuilder == nil || got.CurrentLock != nil || got.RunOptions.Context == nil {
 				t.Fatalf("graph input = %#v", got)
 			}
+			got.SourceBuilder.latest = sourceTools
+			got.SourceBuilder.tools = append(got.SourceBuilder.tools, sourceTools)
 			return completionInput.Graph, nil
 		},
 		prepareValidation: func(_ context.Context, base deploy.ImageDescriptor, catalog []providers.RealizedOutput, graph providers.GraphExecutionResult, policy deploy.RuntimePolicyV1) (ProviderGraphValidationPlan, error) {
 			order = append(order, "validation")
+			if _, err := os.Stat(sourceWorkspace); !os.IsNotExist(err) {
+				t.Fatalf("source-builder workspace still existed when publication began: %v", err)
+			}
 			if !reflect.DeepEqual(base, completionInput.Base) || !reflect.DeepEqual(catalog, completionInput.BaseCatalog) || !reflect.DeepEqual(graph, completionInput.Graph) || !reflect.DeepEqual(policy, completionInput.Validation.Final.RuntimePolicy) {
 				t.Fatal("validation input changed")
 			}
@@ -368,7 +382,7 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 		},
 		complete: func(_ context.Context, gotOperation *deploy.OperationLock, gotStore providerstore.Store, got ProviderBuildCompletionInput) (ProviderBuildCompletionResult, error) {
 			order = append(order, "complete")
-			if gotOperation != operation || gotStore.Root() != store.Root() || !reflect.DeepEqual(got.ResolvedRequest, completionInput.ResolvedRequest) || !reflect.DeepEqual(got.Graph, completionInput.Graph) || got.PortableTools != completionInput.PortableTools || !reflect.DeepEqual(got.Validation, completionInput.Validation) || !got.NoCache || got.RunValidation == nil || got.RunOptions.Context == nil {
+			if gotOperation != operation || gotStore.Root() != store.Root() || !reflect.DeepEqual(got.ResolvedRequest, completionInput.ResolvedRequest) || !reflect.DeepEqual(got.Graph, completionInput.Graph) || !reflect.DeepEqual(got.PortableTools, completionInput.PortableTools) || !reflect.DeepEqual(got.Validation, completionInput.Validation) || !got.NoCache || got.RunValidation == nil || got.RunOptions.Context == nil {
 				t.Fatalf("completion input = %#v", got)
 			}
 			return ProviderBuildCompletionResult{State: wantState, Lock: wantLock}, nil
@@ -379,6 +393,9 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 	}
 	if result.Reused || !reflect.DeepEqual(result.State, wantState) || !reflect.DeepEqual(result.Lock, wantLock) || !reflect.DeepEqual(order, []string{"graph", "validation", "complete"}) {
 		t.Fatalf("result/order = %#v/%#v", result, order)
+	}
+	if _, err := os.Stat(sourceWorkspace); !os.IsNotExist(err) {
+		t.Fatalf("source-builder workspace was not removed after the build: %v", err)
 	}
 }
 

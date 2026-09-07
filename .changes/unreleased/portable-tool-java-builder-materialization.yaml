@@ -1,0 +1,2 @@
+kind: Changed
+body: After dependency resolution selects a local Python source, acquire and offline-materialize its selected Temurin JDK into a validated disposable source-builder image that exposes only java and javac for that source build, and lock the acquisition provenance in the build lock.
