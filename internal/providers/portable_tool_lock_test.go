@@ -354,6 +354,53 @@ func TestPortableToolLockDistinguishesReleaseRevisionsSharingAClosure(t *testing
 	}
 }
 
+func TestPortableToolLockIncludesPayloadSymbolicLinkPolicyIdentityV1(t *testing.T) {
+	firstDAG, firstReleases, firstInputs := portableToolLockFixtureV1(t)
+	first, err := BuildPortableToolLockV1(firstDAG, firstReleases, firstInputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	secondPlan := clonePortableToolPlanForPortableToolDAGV1(firstDAG.PortableToolPlan)
+	payload := &secondPlan.Tools[0].Responsibilities.Payloads[0]
+	payload.Record.Value["symbolic_link_policy"] = "materialize-regular-target"
+	refreshPortableToolTestRecordDigest(&payload.Reference, payload.Record)
+	secondInputs := append([]PortableToolArtifactAcquisitionInputV1{}, firstInputs...)
+	secondInputs[1].Artifact = payload.Reference
+	secondPlan.Tools[0].SelectedClosureDigest, err = canonical.Sum(
+		"portable-tool-selected-closure", "portable-tool-selected-closure-v1",
+		canonical.Object{"payload": canonical.Object{"id": payload.Reference.ID, "digest": string(payload.Reference.Digest)}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondManifest := portableToolLockManifestV1("demo", "1.2.3", "1", secondInputs, secondPlan.Tools[0].ValidationProfiles[0].Reference)
+	secondPlan.Tools[0].Provenance.ManifestDigest = secondManifest.Reference.Digest
+	secondDAG, err := BuildPortableToolProviderDAGV1(firstDAG.ProviderPlan, secondPlan, firstDAG.Domains)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := BuildPortableToolLockV1(secondDAG, []PortableToolReleaseManifestInputV1{{
+		Scope: "application:demo", Tool: "demo", Manifest: secondManifest,
+	}}, secondInputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstBytes, err := CanonicalPortableToolLockBytesV1(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondBytes, err := CanonicalPortableToolLockBytesV1(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(firstBytes, secondBytes) ||
+		first.Plan.PortableToolPlan.Tools[0].SelectedClosureDigest == second.Plan.PortableToolPlan.Tools[0].SelectedClosureDigest ||
+		second.Plan.PortableToolPlan.Tools[0].Responsibilities.Payloads[0].Record.Value["symbolic_link_policy"] != "materialize-regular-target" {
+		t.Fatal("payload symbolic-link policy did not change and persist in portable-tool lock identity")
+	}
+}
+
 func portableToolLockFixtureV1(t *testing.T) (PortableToolProviderDAGV1, []PortableToolReleaseManifestInputV1, []PortableToolArtifactAcquisitionInputV1) {
 	t.Helper()
 	plan := clonePortableToolPlanForPortableToolDAGV1(representativePortableToolPlanV1())
@@ -381,10 +428,10 @@ func portableToolLockFixtureV1(t *testing.T) (PortableToolProviderDAGV1, []Porta
 	setPortableToolTestRecordID(&payload.Reference, &payload.Record, "tool:demo/releases/1.2.3/payloads/demo-linux-amd64")
 	payload.Record.Value = canonical.Object{
 		"schema": portableToolPayloadSchemaV1, "id": payload.Reference.ID, "name": "demo", "revision": "1",
-		"upstream_version": "1.2.3", "platform": "linux/amd64", "logical_path": "payloads/demo.tar",
+		"upstream_version": "1.2.3", "platform": "linux/amd64", "logical_path": "payloads/demo.tar.gz",
 		"kind": "jdk-archive", "size": "34", "sha256": string(portableToolLockPayloadDigest),
 		"resolver": "https-sha256", "entries": "1", "unpacked_size": "34",
-		"install_directory": "demo", "archive_root": "demo-root", "executables": []any{"demo-root/bin/demo"},
+		"install_directory": "demo", "archive_root": "demo-root", "symbolic_link_policy": "reject", "executables": []any{"demo-root/bin/demo"},
 	}
 	refreshPortableToolTestRecordDigest(&payload.Reference, payload.Record)
 	packageSet := &plan.Tools[0].Responsibilities.NativePackageSets[0]
@@ -429,7 +476,7 @@ func portableToolLockFixtureV1(t *testing.T) (PortableToolProviderDAGV1, []Porta
 		},
 		{
 			Scope: "application:demo", Tool: "demo", Artifact: payload.Reference,
-			Descriptor: providerstore.ArtifactDescriptor{LogicalPath: "payloads/demo.tar", Kind: "jdk-archive", Size: "34", SHA256: portableToolLockPayloadDigest},
+			Descriptor: providerstore.ArtifactDescriptor{LogicalPath: "payloads/demo.tar.gz", Kind: "jdk-archive", Size: "34", SHA256: portableToolLockPayloadDigest},
 			Source:     payloadSource,
 			Provenance: providerstore.AcquisitionProvenance{
 				OperationID: "local-cache-operation", Outcome: providerstore.AcquisitionOutcomeCacheHit,

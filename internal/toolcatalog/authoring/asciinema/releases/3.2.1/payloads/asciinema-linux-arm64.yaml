@@ -14,4 +14,5 @@ fields:
   unpacked_size: "7138888"
   install_directory: asciinema-3.2.1
   archive_root: .
+  symbolic_link_policy: reject
   executables: [asciinema]

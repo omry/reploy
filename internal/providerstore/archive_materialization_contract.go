@@ -18,9 +18,18 @@ import (
 // provider materializer.
 type ArchiveFormat string
 
+// ArchiveSymbolicLinkPolicy controls whether a materializer may accept a
+// symbolic-link archive member. The zero value rejects links. The only
+// supported opt-in resolves an in-tree link whose direct target is a regular
+// archive member and writes an ordinary file at the link path.
+type ArchiveSymbolicLinkPolicy string
+
 const (
 	ArchiveFormatTarGz ArchiveFormat = "tar.gz"
 	ArchiveFormatZip   ArchiveFormat = "zip"
+
+	ArchiveSymbolicLinkPolicyReject                   ArchiveSymbolicLinkPolicy = "reject"
+	ArchiveSymbolicLinkPolicyMaterializeRegularTarget ArchiveSymbolicLinkPolicy = "materialize-regular-target"
 
 	CoreMaxArchiveEntries        = 10_000
 	CoreMaxArchiveUnpackedBytes  = 1 << 30
@@ -34,8 +43,9 @@ const (
 )
 
 const (
-	ArchiveEntryKindDirectory = "directory"
-	ArchiveEntryKindRegular   = "regular"
+	ArchiveEntryKindDirectory    = "directory"
+	ArchiveEntryKindRegular      = "regular"
+	ArchiveEntryKindSymbolicLink = "symbolic-link"
 )
 
 // ArchiveMaterializationRequest is the immutable, definition-selected
@@ -50,6 +60,7 @@ type ArchiveMaterializationRequest struct {
 	ExpectedEntryCount   string
 	ExpectedUnpackedSize string
 	ExecutablePaths      []string
+	SymbolicLinkPolicy   ArchiveSymbolicLinkPolicy
 }
 
 // ArchiveMaterializationEntry is one normalized archive member observed by
@@ -86,6 +97,16 @@ func validateArchiveMaterializationRequest(request ArchiveMaterializationRequest
 	case ArchiveFormatTarGz, ArchiveFormatZip:
 	default:
 		return validatedArchiveMaterializationRequest{}, fmt.Errorf("archive materialization format %q is unsupported", request.Format)
+	}
+	switch request.SymbolicLinkPolicy {
+	case "", ArchiveSymbolicLinkPolicyReject:
+		request.SymbolicLinkPolicy = ArchiveSymbolicLinkPolicyReject
+	case ArchiveSymbolicLinkPolicyMaterializeRegularTarget:
+		if request.Format != ArchiveFormatTarGz {
+			return validatedArchiveMaterializationRequest{}, fmt.Errorf("archive symbolic-link policy %q is unsupported for format %q", request.SymbolicLinkPolicy, request.Format)
+		}
+	default:
+		return validatedArchiveMaterializationRequest{}, fmt.Errorf("archive symbolic-link policy %q is unsupported", request.SymbolicLinkPolicy)
 	}
 	if err := validateArchiveDestinationRoot(request.DestinationRoot); err != nil {
 		return validatedArchiveMaterializationRequest{}, err

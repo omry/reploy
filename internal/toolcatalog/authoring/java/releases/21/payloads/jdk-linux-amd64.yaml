@@ -14,6 +14,7 @@ fields:
   unpacked_size: "361144464"
   install_directory: jdk-21.0.12+8
   archive_root: jdk-21.0.12+8
+  symbolic_link_policy: materialize-regular-target
   executables:
     - jdk-21.0.12+8/bin/java
     - jdk-21.0.12+8/bin/javac

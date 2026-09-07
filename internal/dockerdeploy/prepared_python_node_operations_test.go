@@ -19,6 +19,39 @@ import (
 	"github.com/omry/reploy/internal/providerstore"
 )
 
+func TestDropSourceBuilderPythonCachedResolutionsPreservesArtifactCandidates(t *testing.T) {
+	fixture := newPreparedPythonGraphReuseFixture(t)
+	pythonNode := fixture.request.NodeID
+	aptNode := providers.NodeID("apt/environment")
+	reuse := PreparedPythonGraphReuse{
+		ReusableArtifacts: map[providers.NodeID][]providerstore.StoreObjectRef{
+			pythonNode: {{Kind: providerstore.BlobKind, Digest: rendererDigest("e")}},
+		},
+		CachedResolutions: map[providers.NodeID]providers.ResolveResult{
+			pythonNode: {},
+			aptNode:    {},
+		},
+	}
+	plan := fixture.request.Plan
+	plan.Nodes = append(plan.Nodes, providers.NodeSpec{ID: aptNode, Provider: blueprint.ComponentTypeAPT})
+	current := fixture.lock
+	portableTools := buildLockAssemblyPortableToolsV1(t, fixture.store, fixture.request.Plan, pythonNode)
+	portableTools.Plan.PortableToolPlan.Tools[0].Scope = sourceBuilderRecipeScopePrefixV1 + "demo"
+	current.PortableTools = &portableTools
+
+	dropSourceBuilderPythonCachedResolutionsV1(plan, &current, reuse.CachedResolutions)
+
+	if _, found := reuse.CachedResolutions[pythonNode]; found {
+		t.Fatalf("source-builder Python resolution was retained: %#v", reuse.CachedResolutions)
+	}
+	if _, found := reuse.CachedResolutions[aptNode]; !found {
+		t.Fatalf("unrelated APT resolution was dropped: %#v", reuse.CachedResolutions)
+	}
+	if len(reuse.ReusableArtifacts[pythonNode]) != 1 {
+		t.Fatalf("reusable Python artifacts changed: %#v", reuse.ReusableArtifacts)
+	}
+}
+
 func TestPreparedPythonNodeOperationsResolvesAndIngestsWheelsInSession(t *testing.T) {
 	descriptor := testProbeImageDescriptor(t, "linux/amd64")
 	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
@@ -339,11 +372,11 @@ func TestPreparedPythonNodeOperationsRejectsUnpreparedPortableRequirementsBefore
 	_, _, err = operations.materializeLocalOverrides(
 		context.Background(), session,
 		providers.ValidatedExecutableInput{}, providers.ExecutableRequirement{},
-		providers.ExecutableEvidence{}, rendererDigest("a"), "application",
+		providers.ExecutableEvidence{}, "application",
 		[]PythonLocalOverrideV1{{Distribution: "demo", HostDir: sourceDir}},
 		[]providers.ResolvedSourceInput{}, []providerstore.ArtifactDescriptor{},
 	)
-	if err == nil || !strings.Contains(err.Error(), "requires a portable source-builder environment before Python resolution") {
+	if err == nil || !strings.Contains(err.Error(), "require a portable source-builder coordinator") {
 		t.Fatalf("error = %v", err)
 	}
 	entries, readErr := os.ReadDir(artifacts.OutputHostDir)

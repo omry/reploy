@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/buildprofile"
+	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
@@ -20,8 +22,9 @@ type LockedProviderBuildPreparationInputV1 struct {
 	PackageOverrides   deploy.PackageOverrideIntentV1
 	BaseImage          string
 	Sources            []providers.ResolvedSourceInput
+	LocalOverrides     []PythonLocalOverrideV1
+	ReployVersion      string
 	DockerPlan         DockerExecutionPlan
-	PortableTools      *providers.PortableToolLockV1
 	NoCache            bool
 	ValidatedCandidate *ValidatedBuildCandidateV1
 	ValidatedInputs    ValidatedBuildInputsV1
@@ -33,7 +36,8 @@ type LockedProviderBuildPreparationV1 struct {
 	Environment      string
 	DeploymentDir    string
 	DockerPlan       DockerExecutionPlan
-	portableTools    *providers.PortableToolLockV1
+	BlueprintDigest  canonical.Digest
+	ReployVersion    string
 	Loaded           LoadedBuildRequestV1
 	SelectedBase     SelectedProviderBase
 	PreparedBase     *PreparedProviderBase
@@ -120,13 +124,8 @@ func prepareLockedProviderBuildV1(
 	if backend.recover == nil || backend.load == nil || backend.loadVerifier == nil || backend.selectCachedBase == nil || backend.selectBase == nil || backend.validateCurrent == nil || backend.lockedSources == nil || backend.matches == nil || backend.cacheAvailable == nil || backend.realizeBase == nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build requires a complete backend")
 	}
-	var portableTools *providers.PortableToolLockV1
-	if input.PortableTools != nil {
-		if err := providers.ValidatePortableToolLockV1(*input.PortableTools); err != nil {
-			return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build portable tools: %w", err)
-		}
-		cloned := providers.ClonePortableToolLockV1(*input.PortableTools)
-		portableTools = &cloned
+	if input.LocalOverrides == nil {
+		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build local overrides must use an array")
 	}
 
 	state, found, err := input.Operation.ReadStateV1()
@@ -169,9 +168,14 @@ func prepareLockedProviderBuildV1(
 	if err := deploy.ValidateApplicationStartupVerifierV1(startupVerifier, true); err != nil {
 		return LockedProviderBuildPreparationV1{}, err
 	}
+	blueprintDigest, err := blueprint.DocumentDigestV1(loaded.Document)
+	if err != nil {
+		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build blueprint digest: %w", err)
+	}
 	result := LockedProviderBuildPreparationV1{
 		Operation: input.Operation, Store: input.Store, Environment: input.Environment,
-		DeploymentDir: input.DeploymentDir, DockerPlan: input.DockerPlan, portableTools: portableTools,
+		DeploymentDir: input.DeploymentDir, DockerPlan: input.DockerPlan,
+		BlueprintDigest: blueprintDigest, ReployVersion: input.ReployVersion,
 		Loaded: loaded, Recovered: recovered,
 		ValidatedCandidate: input.ValidatedCandidate, ValidatedInputs: input.ValidatedInputs,
 		NoCache: input.NoCache, StartupVerifier: startupVerifier,
@@ -223,11 +227,22 @@ func prepareLockedProviderBuildV1(
 		}
 	}
 	tryReuse := func(candidate reuseCandidate, selected SelectedProviderBase) (bool, error) {
+		// Source-builder requirements can be re-resolved only after dependency
+		// selection snapshots the relevant local sources. A prior source-builder
+		// lock therefore forces graph execution instead of turning its old plan
+		// into self-fulfilling desired state. Unused mappings remain untouched.
+		if portableToolPlanHasSourceBuilderScopesV1(candidate.current.Lock.PortableTools) {
+			return false, nil
+		}
+		var portableToolPlan *providers.PortableToolPlanV1
+		if candidate.current.Lock.PortableTools != nil {
+			portableToolPlan = &candidate.current.Lock.PortableTools.Plan.PortableToolPlan
+		}
 		matches, err := backend.matches(candidate.current, CurrentBuildReuseInput{
 			ResolvedRequest: candidate.request, Overlay: loaded.State.Overlay,
 			PackageOverrides: candidate.packageOverrides, Base: selected.Descriptor,
 			Document: loaded.Document, DockerPlan: input.DockerPlan, StartupVerifier: startupVerifier,
-			PortableTools: portableTools,
+			PortableToolPlan: portableToolPlan,
 		})
 		if err != nil || !matches {
 			return false, err
@@ -324,6 +339,18 @@ func prepareLockedProviderBuildV1(
 	result.PreparedBase = &prepared
 	result.FinalImageConfig = config
 	return result, nil
+}
+
+func portableToolPlanHasSourceBuilderScopesV1(lock *providers.PortableToolLockV1) bool {
+	if lock == nil {
+		return false
+	}
+	for _, tool := range lock.Plan.PortableToolPlan.Tools {
+		if strings.HasPrefix(tool.Scope, sourceBuilderRecipeScopePrefixV1) {
+			return true
+		}
+	}
+	return false
 }
 
 // Exact image reuse needs only a real cache root. It deliberately does not

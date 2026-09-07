@@ -447,6 +447,41 @@ func (session *ImageValidationSession) ValidateBuildScratchAbsent(ctx context.Co
 	return nil
 }
 
+// ValidatePathsAbsent performs the fixed absence check for exact absolute
+// paths, rejecting existing entries and dangling symbolic links alike. Paths
+// travel only as positional arguments to the fixed shell body; data never
+// selects the command.
+func (session *ImageValidationSession) ValidatePathsAbsent(ctx context.Context, paths []string) error {
+	if session == nil || session.closed {
+		return fmt.Errorf("image validation session is not open")
+	}
+	if ctx == nil {
+		return fmt.Errorf("image validation path-absence context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("validate image path absence: %w", err)
+	}
+	if len(paths) == 0 {
+		return fmt.Errorf("image validation path-absence check requires at least one path")
+	}
+	for _, candidate := range paths {
+		if err := validateMountOptionPath("path", candidate, true); err != nil {
+			return fmt.Errorf("image validation path-absence check: %w", err)
+		}
+	}
+	args := []string{
+		"exec", "--user", "0:0", "--workdir", "/", session.containerName,
+		"/bin/sh", "-c", `for candidate in "$@"; do test ! -e "$candidate" && test ! -L "$candidate" || exit 1; done`, "reploy-validation",
+	}
+	args = append(args, paths...)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := session.runDockerCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
+		return fmt.Errorf("image validation requires %s to be absent: %w", strings.Join(paths, ", "), imageValidationCommandError("path absence", session.descriptor.Platform.Canonical, stderr.String(), err))
+	}
+	return nil
+}
+
 func validImageAlternativeGroup(value string) bool {
 	if value == "" || value[0] == '-' {
 		return false

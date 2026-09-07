@@ -17,6 +17,9 @@ const (
 	ValidationEvidenceSchemaV1   = "portable-tool-validation-evidence-v1"
 	SelectedClosureIdentityV1    = "portable-tool-selected-closure-v1"
 	RecordIdentitySchemaV1       = "portable-tool-record-v1"
+
+	PayloadSymbolicLinkPolicyRejectV1                   = "reject"
+	PayloadSymbolicLinkPolicyMaterializeRegularTargetV1 = "materialize-regular-target"
 )
 
 // RecordV1 is the closed set of canonical portable-tool record contracts.
@@ -198,22 +201,23 @@ type BundledComponentV1 struct {
 }
 
 type PayloadRecordV1 struct {
-	Schema           string           `json:"schema"`
-	ID               string           `json:"id"`
-	Name             string           `json:"name"`
-	Revision         string           `json:"revision"`
-	UpstreamVersion  string           `json:"upstream_version"`
-	Platform         string           `json:"platform"`
-	LogicalPath      string           `json:"logical_path"`
-	Kind             string           `json:"kind"`
-	Size             string           `json:"size"`
-	SHA256           canonical.Digest `json:"sha256"`
-	Resolver         string           `json:"resolver"`
-	Entries          string           `json:"entries"`
-	UnpackedSize     string           `json:"unpacked_size"`
-	InstallDirectory string           `json:"install_directory"`
-	ArchiveRoot      string           `json:"archive_root"`
-	Executables      []string         `json:"executables"`
+	Schema             string           `json:"schema"`
+	ID                 string           `json:"id"`
+	Name               string           `json:"name"`
+	Revision           string           `json:"revision"`
+	UpstreamVersion    string           `json:"upstream_version"`
+	Platform           string           `json:"platform"`
+	LogicalPath        string           `json:"logical_path"`
+	Kind               string           `json:"kind"`
+	Size               string           `json:"size"`
+	SHA256             canonical.Digest `json:"sha256"`
+	Resolver           string           `json:"resolver"`
+	Entries            string           `json:"entries"`
+	UnpackedSize       string           `json:"unpacked_size"`
+	InstallDirectory   string           `json:"install_directory"`
+	ArchiveRoot        string           `json:"archive_root"`
+	SymbolicLinkPolicy string           `json:"symbolic_link_policy"`
+	Executables        []string         `json:"executables"`
 }
 
 type ArtifactSourceRecordV1 struct {

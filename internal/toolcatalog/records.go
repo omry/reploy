@@ -3,20 +3,22 @@ package toolcatalog
 import "github.com/omry/reploy/internal/portabletool"
 
 const (
-	ToolRecordSchemaV1           = portabletool.ToolRecordSchemaV1
-	ReleaseManifestSchemaV1      = portabletool.ReleaseManifestSchemaV1
-	ReleaseContractSchemaV1      = portabletool.ReleaseContractSchemaV1
-	TargetRecordSchemaV1         = portabletool.TargetRecordSchemaV1
-	BindingContractSchemaV1      = portabletool.BindingContractSchemaV1
-	BindingArtifactSchemaV1      = portabletool.BindingArtifactSchemaV1
-	PayloadRecordSchemaV1        = portabletool.PayloadRecordSchemaV1
-	ArtifactSourceRecordSchemaV1 = portabletool.ArtifactSourceRecordSchemaV1
-	NativePackageSetSchemaV1     = portabletool.NativePackageSetSchemaV1
-	IntegrationFixtureSchemaV1   = portabletool.IntegrationFixtureSchemaV1
-	ValidationProfileSchemaV1    = portabletool.ValidationProfileSchemaV1
-	ValidationEvidenceSchemaV1   = portabletool.ValidationEvidenceSchemaV1
-	SelectedClosureIdentityV1    = portabletool.SelectedClosureIdentityV1
-	portableToolRecordIdentityV1 = portabletool.RecordIdentitySchemaV1
+	ToolRecordSchemaV1                                  = portabletool.ToolRecordSchemaV1
+	ReleaseManifestSchemaV1                             = portabletool.ReleaseManifestSchemaV1
+	ReleaseContractSchemaV1                             = portabletool.ReleaseContractSchemaV1
+	TargetRecordSchemaV1                                = portabletool.TargetRecordSchemaV1
+	BindingContractSchemaV1                             = portabletool.BindingContractSchemaV1
+	BindingArtifactSchemaV1                             = portabletool.BindingArtifactSchemaV1
+	PayloadRecordSchemaV1                               = portabletool.PayloadRecordSchemaV1
+	ArtifactSourceRecordSchemaV1                        = portabletool.ArtifactSourceRecordSchemaV1
+	NativePackageSetSchemaV1                            = portabletool.NativePackageSetSchemaV1
+	IntegrationFixtureSchemaV1                          = portabletool.IntegrationFixtureSchemaV1
+	ValidationProfileSchemaV1                           = portabletool.ValidationProfileSchemaV1
+	ValidationEvidenceSchemaV1                          = portabletool.ValidationEvidenceSchemaV1
+	SelectedClosureIdentityV1                           = portabletool.SelectedClosureIdentityV1
+	PayloadSymbolicLinkPolicyRejectV1                   = portabletool.PayloadSymbolicLinkPolicyRejectV1
+	PayloadSymbolicLinkPolicyMaterializeRegularTargetV1 = portabletool.PayloadSymbolicLinkPolicyMaterializeRegularTargetV1
+	portableToolRecordIdentityV1                        = portabletool.RecordIdentitySchemaV1
 )
 
 type RecordReferenceV1 = portabletool.RecordReferenceV1

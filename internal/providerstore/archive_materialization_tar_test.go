@@ -56,12 +56,12 @@ func TestArchiveMaterializationTarRejectsHeadersAndMetadata(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			if test.name == "nil" {
-				if err := validateTarHeader(nil); err == nil {
+				if err := validateTarHeader(nil, ArchiveSymbolicLinkPolicyReject); err == nil {
 					t.Fatal("nil tar header accepted")
 				}
 				return
 			}
-			if err := validateTarHeader(&test.header); err == nil {
+			if err := validateTarHeader(&test.header, ArchiveSymbolicLinkPolicyReject); err == nil {
 				t.Fatalf("unsafe tar header accepted: %#v", test.header)
 			}
 		})
@@ -88,6 +88,127 @@ func TestArchiveMaterializationTarRejectsHeadersAndMetadata(t *testing.T) {
 	err := extractTarArchiveForTest(t, materializer, makeTarGz(t, []archiveTestEntry{{header: tar.Header{Name: "dir", Typeflag: tar.TypeDir, Size: 1}}}))
 	if err == nil || !strings.Contains(err.Error(), "nonzero payload") {
 		t.Fatalf("nonzero directory payload error = %v", err)
+	}
+}
+
+func TestArchiveMaterializationTarMaterializesContainedRegularSymbolicLink(t *testing.T) {
+	materializer, _ := newArchiveTransactionTestMaterializer(t, 2, 7)
+	materializer.request.SymbolicLinkPolicy = ArchiveSymbolicLinkPolicyMaterializeRegularTarget
+	materializer.executablePaths["jdk/legal/jdk.compiler/LICENSE"] = ""
+	err := extractTarArchiveForTest(t, materializer, makeTarGz(t, []archiveTestEntry{
+		{header: tar.Header{Name: "jdk/legal/jdk.compiler/LICENSE", Typeflag: tar.TypeSymlink, Linkname: "../java.base/LICENSE"}},
+		{header: tar.Header{Name: "jdk/legal/java.base/LICENSE", Typeflag: tar.TypeReg}, content: "license"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := materializer.validateExpectedInventory(); err != nil {
+		t.Fatal(err)
+	}
+	if err := materializer.validateExecutablePaths(); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := filepath.Join(materializer.stage, "jdk", "legal", "jdk.compiler", "LICENSE")
+	content, err := os.ReadFile(linkPath)
+	if err != nil || string(content) != "license" {
+		t.Fatalf("materialized symbolic-link content = %q, %v", content, err)
+	}
+	info, err := os.Lstat(linkPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("materialized symbolic-link mode = %v, want regular file", info.Mode())
+	}
+	assertArchiveMaterializedRegularMode(t, linkPath, true)
+	if len(materializer.entries) != 2 || materializer.entries[0].Kind != ArchiveEntryKindSymbolicLink || materializer.entries[0].Size != "0" {
+		t.Fatalf("observed inventory = %#v", materializer.entries)
+	}
+	if err := normalizeMaterializedTree(materializer.stageRoot); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestArchiveMaterializationTarSymbolicLinkDoesNotInheritExecutableMode(t *testing.T) {
+	materializer, _ := newArchiveTransactionTestMaterializer(t, 2, 4)
+	materializer.request.SymbolicLinkPolicy = ArchiveSymbolicLinkPolicyMaterializeRegularTarget
+	materializer.executablePaths["jdk/bin/java"] = ""
+	err := extractTarArchiveForTest(t, materializer, makeTarGz(t, []archiveTestEntry{
+		{header: tar.Header{Name: "jdk/bin/java", Typeflag: tar.TypeReg}, content: "java"},
+		{header: tar.Header{Name: "jdk/bin/java-alias", Typeflag: tar.TypeSymlink, Linkname: "java"}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertArchiveMaterializedRegularMode(t, filepath.Join(materializer.stage, "jdk", "bin", "java"), true)
+	assertArchiveMaterializedRegularMode(t, filepath.Join(materializer.stage, "jdk", "bin", "java-alias"), false)
+}
+
+func TestArchiveMaterializationTarRejectsUnsafeSymbolicLinks(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries []archiveTestEntry
+		wantErr string
+	}{
+		{
+			name: "escape",
+			entries: []archiveTestEntry{
+				{header: tar.Header{Name: "jdk/target", Typeflag: tar.TypeReg}, content: "x"},
+				{header: tar.Header{Name: "jdk/link", Typeflag: tar.TypeSymlink, Linkname: "../../target"}},
+			},
+			wantErr: "does not resolve to a contained archive path",
+		},
+		{
+			name: "absolute",
+			entries: []archiveTestEntry{
+				{header: tar.Header{Name: "target", Typeflag: tar.TypeReg}, content: "x"},
+				{header: tar.Header{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "/target"}},
+			},
+			wantErr: "relative UTF-8 slash path",
+		},
+		{
+			name: "backslash",
+			entries: []archiveTestEntry{
+				{header: tar.Header{Name: "target", Typeflag: tar.TypeReg}, content: "x"},
+				{header: tar.Header{Name: "link", Typeflag: tar.TypeSymlink, Linkname: `..\target`}},
+			},
+			wantErr: "relative UTF-8 slash path",
+		},
+		{
+			name: "missing-target",
+			entries: []archiveTestEntry{
+				{header: tar.Header{Name: "other", Typeflag: tar.TypeReg}, content: "x"},
+				{header: tar.Header{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "missing"}},
+			},
+			wantErr: "not a direct regular-file archive member",
+		},
+		{
+			name: "directory-target",
+			entries: []archiveTestEntry{
+				{header: tar.Header{Name: "directory", Typeflag: tar.TypeDir}},
+				{header: tar.Header{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "directory"}},
+			},
+			wantErr: "not a direct regular-file archive member",
+		},
+		{
+			name: "link-chain",
+			entries: []archiveTestEntry{
+				{header: tar.Header{Name: "target", Typeflag: tar.TypeReg}, content: "x"},
+				{header: tar.Header{Name: "first", Typeflag: tar.TypeSymlink, Linkname: "target"}},
+				{header: tar.Header{Name: "second", Typeflag: tar.TypeSymlink, Linkname: "first"}},
+			},
+			wantErr: "not a direct regular-file archive member",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			materializer, _ := newArchiveTransactionTestMaterializer(t, uint64(len(test.entries)), 1)
+			materializer.request.SymbolicLinkPolicy = ArchiveSymbolicLinkPolicyMaterializeRegularTarget
+			err := extractTarArchiveForTest(t, materializer, makeTarGz(t, test.entries))
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("symbolic-link error = %v, want substring %q", err, test.wantErr)
+			}
+		})
 	}
 }
 

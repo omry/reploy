@@ -66,7 +66,8 @@ func providerBuildPreparationFixture(t *testing.T) (
 	input := LockedProviderBuildPreparationInputV1{
 		Operation: operation, Store: store, Environment: "current-test", DeploymentDir: dir,
 		PackageOverrides: packageOverrides,
-		Sources:          []providers.ResolvedSourceInput{}, DockerPlan: DockerExecutionPlan{Sandbox: testApplicationSandboxPlanV1(1000, 1000)},
+		Sources:          []providers.ResolvedSourceInput{}, LocalOverrides: []PythonLocalOverrideV1{}, ReployVersion: "1.0.0",
+		DockerPlan: DockerExecutionPlan{Sandbox: testApplicationSandboxPlanV1(1000, 1000)},
 	}
 	return input, loaded, current, selected, prepared
 }
@@ -164,20 +165,17 @@ func TestPrepareLockedProviderBuildV1RealizesBaseAfterStaleReuse(t *testing.T) {
 	}
 }
 
-func TestPrepareLockedProviderBuildV1SnapshotsPortableToolSelection(t *testing.T) {
+func TestPrepareLockedProviderBuildV1DefersSourceBuilderReuseUntilSelectedSnapshots(t *testing.T) {
 	input, loaded, current, selected, prepared := providerBuildPreparationFixture(t)
 	fixture := newPreparedPythonGraphReuseFixture(t)
-	portableTools := buildLockAssemblyPortableToolsV1(
-		t, fixture.store, fixture.request.Plan, fixture.request.NodeID,
-	)
-	input.PortableTools = &portableTools
+	lock := buildLockAssemblyPortableToolsV1(t, fixture.store, fixture.request.Plan, fixture.request.NodeID)
+	lock.Plan.PortableToolPlan.Tools[0].Scope = "source-builder:demo"
+	current.Lock.PortableTools = &lock
+	input.LocalOverrides = []PythonLocalOverrideV1{{Distribution: "demo", HostDir: filepath.Join(t.TempDir(), "uninspected")}}
 	order := []string{}
 	backend := providerBuildPreparationTestBackend(t, loaded, current, selected, prepared, &order)
-	backend.matches = func(_ CurrentBuild, reuse CurrentBuildReuseInput) (bool, error) {
-		order = append(order, "match")
-		if reuse.PortableTools == input.PortableTools || !reflect.DeepEqual(*reuse.PortableTools, portableTools) {
-			t.Fatalf("reuse portable tools were not snapshotted: %#v", reuse.PortableTools)
-		}
+	backend.matches = func(_ CurrentBuild, _ CurrentBuildReuseInput) (bool, error) {
+		t.Fatal("source-builder lock was treated as desired state before dependency selection")
 		return false, nil
 	}
 
@@ -185,13 +183,23 @@ func TestPrepareLockedProviderBuildV1SnapshotsPortableToolSelection(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.portableTools == nil || result.portableTools == input.PortableTools ||
-		!reflect.DeepEqual(*result.portableTools, portableTools) {
-		t.Fatalf("preparation portable tools were not snapshotted: %#v", result.portableTools)
+	if result.Reused || result.PreparedBase == nil || result.BlueprintDigest.Validate() != nil || result.ReployVersion != input.ReployVersion {
+		t.Fatalf("preparation metadata = %#v", result)
 	}
-	portableTools.Plan.PortableToolPlan.Tools[0].Responsibilities.Payloads[0].Record.Value["entries"] = "mutated"
-	if reflect.DeepEqual(*result.portableTools, portableTools) {
-		t.Fatal("preparation portable tools alias the caller-owned lock")
+}
+
+func TestPrepareLockedProviderBuildV1RequiresLocalOverridesArrayAndCompleteBackend(t *testing.T) {
+	input, loaded, current, selected, prepared := providerBuildPreparationFixture(t)
+	order := []string{}
+	backend := providerBuildPreparationTestBackend(t, loaded, current, selected, prepared, &order)
+	input.LocalOverrides = nil
+	if _, err := prepareLockedProviderBuildV1(t.Context(), input, backend); err == nil || !strings.Contains(err.Error(), "local overrides must use an array") {
+		t.Fatalf("error = %v", err)
+	}
+	input.LocalOverrides = []PythonLocalOverrideV1{}
+	backend.realizeBase = nil
+	if _, err := prepareLockedProviderBuildV1(t.Context(), input, backend); err == nil || !strings.Contains(err.Error(), "complete backend") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

@@ -921,6 +921,42 @@ func TestSelectedClosureIdentityExcludesValidationAndSourceOnlyDataV1(t *testing
 	}
 }
 
+func TestSelectedClosureIdentityIncludesPayloadSymbolicLinkPolicyV1(t *testing.T) {
+	catalog := candidateTestCatalogV1(t)
+	group := candidateTestGroupV1()
+	candidates, err := catalog.SelectReleaseCandidatesV1(
+		group, candidateTestObservedV1(), candidateTestClientV1(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := clonePayloadRecordV1(validRecordValuesV1()[6].(*PayloadRecordV1))
+	payload.LogicalPath = "tools/demo/chromium.tar.gz"
+	payload.SymbolicLinkPolicy = PayloadSymbolicLinkPolicyRejectV1
+	rejectReference := solverTestAddRecordV1(t, catalog, &payload)
+	payload.SymbolicLinkPolicy = PayloadSymbolicLinkPolicyMaterializeRegularTargetV1
+	materializeReference := solverTestAddRecordV1(t, catalog, &payload)
+	if rejectReference.Digest == materializeReference.Digest {
+		t.Fatal("payload symbolic-link policy did not change the canonical record digest")
+	}
+
+	resolve := func(reference RecordReferenceV1) canonical.Digest {
+		candidate := candidates[0]
+		candidate.Target = cloneTargetRecordV1(&candidate.Target)
+		candidate.Target.Payloads = []RecordReferenceV1{reference}
+		candidate.Contributions = []RecordReferenceV1{reference}
+		result, err := catalog.ResolveSelectedClosuresV1(
+			[]ReleaseCandidateSetV1{{Group: group, Candidates: []ReleaseCandidateV1{candidate}}},
+			solverTestBuildDomainsV1(false)[:1], solverTestOperationV1())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result.Closures[0].Identity
+	}
+	if rejectIdentity, materializeIdentity := resolve(rejectReference), resolve(materializeReference); rejectIdentity == materializeIdentity {
+		t.Fatal("payload symbolic-link policy did not change selected-closure identity")
+	}
+}
+
 func TestSelectedClosureAndOperationSnapshotOwnTheirDataV1(t *testing.T) {
 	catalog := candidateTestCatalogV1(t)
 	group := candidateTestGroupV1()

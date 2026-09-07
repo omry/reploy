@@ -14,4 +14,5 @@ fields:
   unpacked_size: "272987776"
   install_directory: chromium_headless_shell-1228
   archive_root: chrome-headless-shell-linux64
+  symbolic_link_policy: reject
   executables: [chrome-headless-shell-linux64/chrome-headless-shell]

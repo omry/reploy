@@ -147,7 +147,7 @@ func buildLockAssemblyPortableToolsV1(
 		"name": "demo", "revision": "1", "upstream_version": "1.0.0", "platform": "linux/amd64",
 		"logical_path": descriptor.LogicalPath, "kind": descriptor.Kind, "size": descriptor.Size, "sha256": string(descriptor.SHA256),
 		"resolver": "https-sha256", "entries": "1", "unpacked_size": descriptor.Size,
-		"install_directory": "demo", "archive_root": "demo-root", "executables": []any{"demo-root/bin/demo"},
+		"install_directory": "demo", "archive_root": "demo-root", "symbolic_link_policy": "reject", "executables": []any{"demo-root/bin/demo"},
 	}
 	recordDigest, err := canonical.Sum("portable-tool-record", "portable-tool-record-v1", recordValue)
 	if err != nil {

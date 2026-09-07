@@ -113,7 +113,7 @@ func TestEmbeddedAsciinemaCatalogPinsArtifactInventoryV1(t *testing.T) {
 		if payload.UpstreamVersion != "3.2.1" || payload.Revision != "1" || payload.Platform != want.platform ||
 			payload.LogicalPath != want.logicalPath || payload.Kind != "raw-executable" || payload.Size != want.size ||
 			payload.UnpackedSize != want.size || payload.SHA256 != canonical.Digest(want.sha256) || payload.Entries != "1" ||
-			payload.InstallDirectory != "asciinema-3.2.1" || payload.ArchiveRoot != "." ||
+			payload.InstallDirectory != "asciinema-3.2.1" || payload.ArchiveRoot != "." || payload.SymbolicLinkPolicy != PayloadSymbolicLinkPolicyRejectV1 ||
 			!reflect.DeepEqual(payload.Executables, []string{"asciinema"}) {
 			t.Fatalf("embedded asciinema payload %q = %#v", want.id, payload)
 		}
@@ -439,6 +439,7 @@ func TestEmbeddedJavaCatalogSelectsVettedBuildDefinitionV1(t *testing.T) {
 		payload.Entries != "542" || payload.UnpackedSize != "361144464" || payload.Resolver != "https-sha256" ||
 		payload.LogicalPath != "tools/java/21.0.12+8/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12_8.tar.gz" ||
 		payload.InstallDirectory != "jdk-21.0.12+8" || payload.ArchiveRoot != "jdk-21.0.12+8" ||
+		payload.SymbolicLinkPolicy != PayloadSymbolicLinkPolicyMaterializeRegularTargetV1 ||
 		!reflect.DeepEqual(payload.Executables, []string{"jdk-21.0.12+8/bin/java", "jdk-21.0.12+8/bin/javac"}) {
 		t.Fatalf("embedded Java payload = %#v", payload)
 	}
