@@ -13,7 +13,6 @@ import (
 	"github.com/omry/reploy/internal/buildprogress"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
-	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providers/registry"
 	"github.com/omry/reploy/internal/providerstore"
 )
@@ -37,13 +36,11 @@ func TestRunProviderBuildV1HoldsOneLockAcrossPreparationAndExecution(t *testing.
 	want := LockedProviderBuildExecutionResultV1{Reused: true}
 	var progress strings.Builder
 	var buildEvents []buildprogress.Event
-	portableTools := &providers.PortableToolLockV1{}
 
 	result, err := runProviderBuildV1(t.Context(), ProviderBuildRunInputV1{
 		DeploymentDir: dir, NoCache: true,
-		Runtime:       StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
-		PortableTools: portableTools,
-		Progress:      &progress,
+		Runtime:  StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
+		Progress: &progress,
 		BuildProgress: func(event buildprogress.Event) {
 			buildEvents = append(buildEvents, event)
 		},
@@ -55,20 +52,20 @@ func TestRunProviderBuildV1HoldsOneLockAcrossPreparationAndExecution(t *testing.
 			if err := input.Operation.RequireHeld(); err != nil {
 				t.Fatal(err)
 			}
-			if input.Environment != document.Environment.ID || input.DeploymentDir != dir || !input.NoCache || input.Store.Root() != filepath.Join(dir, ".reploy", "provider-store") || len(input.Sources) != 0 || input.BaseImage != baseOverride || input.PortableTools != portableTools {
+			if input.Environment != document.Environment.ID || input.DeploymentDir != dir || !input.NoCache || input.Store.Root() != filepath.Join(dir, ".reploy", "provider-store") || len(input.Sources) != 0 || input.BaseImage != baseOverride || input.LocalOverrides == nil || len(input.LocalOverrides) != 0 || input.ReployVersion != deploy.ToolVersion {
 				t.Fatalf("preparation input = %#v", input)
 			}
 			if input.DockerPlan.EnvironmentID != "demo" || input.DockerPlan.Phase != blueprint.PhaseStaged || input.DockerPlan.Image != providerBuildPlanImage || input.DockerPlan.Scope != nil || input.DockerPlan.Sandbox.RuntimeUser.UID != 1001 || input.DockerPlan.Sandbox.RuntimeUser.GID != 1002 {
 				t.Fatalf("Docker plan = %#v", input.DockerPlan)
 			}
-			return LockedProviderBuildPreparationV1{Operation: input.Operation, Store: input.Store, portableTools: input.PortableTools}, nil
+			return LockedProviderBuildPreparationV1{Operation: input.Operation, Store: input.Store}, nil
 		},
 		execute: func(_ context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
 			order = append(order, "execute")
 			if err := input.Preparation.Operation.RequireHeld(); err != nil {
 				t.Fatal(err)
 			}
-			if !input.RunOptions.NoCache || len(input.SourceWheels) != 0 || len(input.LocalOverrides) != 0 || input.Preparation.portableTools != portableTools || input.Progress != &progress || input.BuildProgress == nil {
+			if !input.RunOptions.NoCache || len(input.SourceWheels) != 0 || len(input.LocalOverrides) != 0 || input.Preparation.sourceBuilder != nil || input.Progress != &progress || input.BuildProgress == nil {
 				t.Fatalf("execution input = %#v", input)
 			}
 			return want, nil

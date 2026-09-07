@@ -18,7 +18,7 @@ type CurrentBuildReuseInput struct {
 	Document         blueprint.Document
 	DockerPlan       DockerExecutionPlan
 	StartupVerifier  deploy.ApplicationStartupVerifierV1
-	PortableTools    *providers.PortableToolLockV1
+	PortableToolPlan *providers.PortableToolPlanV1
 }
 
 // CurrentBuildMatches returns false for a valid but changed build input. It
@@ -44,7 +44,7 @@ func CurrentBuildMatches(current CurrentBuild, input CurrentBuildReuseInput) (bo
 		return false, fmt.Errorf("current build reuse: %w", err)
 	}
 	portableToolsMatch, err := portableToolSelectionMatchesCurrentBuildV1(
-		current.Lock.PortableTools, input.PortableTools,
+		current.Lock.PortableTools, input.PortableToolPlan,
 	)
 	if err != nil {
 		return false, err
@@ -123,9 +123,13 @@ func CurrentBuildMatches(current CurrentBuild, input CurrentBuildReuseInput) (bo
 	return true, nil
 }
 
+// portableToolSelectionMatchesCurrentBuildV1 compares the current lock's
+// selected portable tools with the plan the coordinator resolved for the
+// desired build. The desired side is a plan rather than a lock because
+// acquisition provenance does not exist before the reuse decision.
 func portableToolSelectionMatchesCurrentBuildV1(
 	current *providers.PortableToolLockV1,
-	requested *providers.PortableToolLockV1,
+	requested *providers.PortableToolPlanV1,
 ) (bool, error) {
 	if current == nil || requested == nil {
 		return current == nil && requested == nil, nil
@@ -133,13 +137,7 @@ func portableToolSelectionMatchesCurrentBuildV1(
 	if err := providers.ValidatePortableToolLockV1(*current); err != nil {
 		return false, fmt.Errorf("current build reuse portable tools: %w", err)
 	}
-	if err := providers.ValidatePortableToolLockV1(*requested); err != nil {
-		return false, fmt.Errorf("requested build portable tools: %w", err)
-	}
-	return portableToolSelectionsMatchCurrentBuildV1(
-		current.Plan.PortableToolPlan,
-		requested.Plan.PortableToolPlan,
-	)
+	return portableToolSelectionsMatchCurrentBuildV1(current.Plan.PortableToolPlan, *requested)
 }
 
 // portableToolSelectionsMatchCurrentBuildV1 compares the selected release and

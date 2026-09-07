@@ -7,6 +7,7 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/buildprofile"
+	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
@@ -20,8 +21,9 @@ type LockedProviderBuildPreparationInputV1 struct {
 	PackageOverrides   deploy.PackageOverrideIntentV1
 	BaseImage          string
 	Sources            []providers.ResolvedSourceInput
+	LocalOverrides     []PythonLocalOverrideV1
+	ReployVersion      string
 	DockerPlan         DockerExecutionPlan
-	PortableTools      *providers.PortableToolLockV1
 	NoCache            bool
 	ValidatedCandidate *ValidatedBuildCandidateV1
 	ValidatedInputs    ValidatedBuildInputsV1
@@ -33,7 +35,7 @@ type LockedProviderBuildPreparationV1 struct {
 	Environment      string
 	DeploymentDir    string
 	DockerPlan       DockerExecutionPlan
-	portableTools    *providers.PortableToolLockV1
+	sourceBuilder    *SourceBuilderPortableToolPlanV1
 	Loaded           LoadedBuildRequestV1
 	SelectedBase     SelectedProviderBase
 	PreparedBase     *PreparedProviderBase
@@ -66,15 +68,16 @@ type providerBuildPreparationBackend struct {
 		providers.RequirementProfileOwnerValidator,
 		providers.ResolvedBundleOwnerValidator,
 	) (bool, error)
-	load             func(*deploy.OperationLock, deploy.PackageOverrideIntentV1, string, []providers.ResolvedSourceInput) (LoadedBuildRequestV1, error)
-	loadVerifier     func(blueprint.Platform) (deploy.ApplicationStartupVerifierV1, error)
-	selectCachedBase func(context.Context, providers.ResolvedRequestV1) (SelectedProviderBase, bool, error)
-	selectBase       func(context.Context, providers.ResolvedRequestV1) (SelectedProviderBase, error)
-	validateCurrent  currentBuildLoader
-	lockedSources    func(deploy.BuildLockV1) ([]providers.ResolvedSourceInput, error)
-	matches          func(CurrentBuild, CurrentBuildReuseInput) (bool, error)
-	cacheAvailable   func(deploy.BuildLockV1, providerstore.Store) (bool, error)
-	realizeBase      func(context.Context, providerstore.Store, SelectedProviderBase) (PreparedProviderBase, error)
+	load              func(*deploy.OperationLock, deploy.PackageOverrideIntentV1, string, []providers.ResolvedSourceInput) (LoadedBuildRequestV1, error)
+	loadVerifier      func(blueprint.Platform) (deploy.ApplicationStartupVerifierV1, error)
+	selectCachedBase  func(context.Context, providers.ResolvedRequestV1) (SelectedProviderBase, bool, error)
+	selectBase        func(context.Context, providers.ResolvedRequestV1) (SelectedProviderBase, error)
+	validateCurrent   currentBuildLoader
+	lockedSources     func(deploy.BuildLockV1) ([]providers.ResolvedSourceInput, error)
+	matches           func(CurrentBuild, CurrentBuildReuseInput) (bool, error)
+	cacheAvailable    func(deploy.BuildLockV1, providerstore.Store) (bool, error)
+	realizeBase       func(context.Context, providerstore.Store, SelectedProviderBase) (PreparedProviderBase, error)
+	planSourceBuilder func(context.Context, PlanSourceBuilderPortableToolsInputV1) (*SourceBuilderPortableToolPlanV1, error)
 }
 
 // PrepareLockedProviderBuildV1 performs the read/recovery and reuse boundary
@@ -87,16 +90,17 @@ func PrepareLockedProviderBuildV1(
 	input LockedProviderBuildPreparationInputV1,
 ) (LockedProviderBuildPreparationV1, error) {
 	return prepareLockedProviderBuildV1(ctx, input, providerBuildPreparationBackend{
-		recover:          RecoverPendingPublication,
-		load:             LoadBuildRequestWithPackageOverridesV1,
-		loadVerifier:     LoadApplicationStartupVerifierV1,
-		selectCachedBase: SelectCachedProviderBase,
-		selectBase:       SelectProviderBase,
-		validateCurrent:  ValidateCurrentBuild,
-		lockedSources:    buildLockSelectedSourcesV1,
-		matches:          CurrentBuildMatches,
-		cacheAvailable:   providerBuildCacheAvailable,
-		realizeBase:      RealizeSelectedProviderBase,
+		recover:           RecoverPendingPublication,
+		load:              LoadBuildRequestWithPackageOverridesV1,
+		loadVerifier:      LoadApplicationStartupVerifierV1,
+		selectCachedBase:  SelectCachedProviderBase,
+		selectBase:        SelectProviderBase,
+		validateCurrent:   ValidateCurrentBuild,
+		lockedSources:     buildLockSelectedSourcesV1,
+		matches:           CurrentBuildMatches,
+		cacheAvailable:    providerBuildCacheAvailable,
+		realizeBase:       RealizeSelectedProviderBase,
+		planSourceBuilder: PlanSourceBuilderPortableToolsV1,
 	})
 }
 
@@ -117,16 +121,11 @@ func prepareLockedProviderBuildV1(
 	if input.Sources == nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build sources must use an array")
 	}
-	if backend.recover == nil || backend.load == nil || backend.loadVerifier == nil || backend.selectCachedBase == nil || backend.selectBase == nil || backend.validateCurrent == nil || backend.lockedSources == nil || backend.matches == nil || backend.cacheAvailable == nil || backend.realizeBase == nil {
+	if backend.recover == nil || backend.load == nil || backend.loadVerifier == nil || backend.selectCachedBase == nil || backend.selectBase == nil || backend.validateCurrent == nil || backend.lockedSources == nil || backend.matches == nil || backend.cacheAvailable == nil || backend.realizeBase == nil || backend.planSourceBuilder == nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build requires a complete backend")
 	}
-	var portableTools *providers.PortableToolLockV1
-	if input.PortableTools != nil {
-		if err := providers.ValidatePortableToolLockV1(*input.PortableTools); err != nil {
-			return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build portable tools: %w", err)
-		}
-		cloned := providers.ClonePortableToolLockV1(*input.PortableTools)
-		portableTools = &cloned
+	if input.LocalOverrides == nil {
+		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build local overrides must use an array")
 	}
 
 	state, found, err := input.Operation.ReadStateV1()
@@ -169,9 +168,34 @@ func prepareLockedProviderBuildV1(
 	if err := deploy.ValidateApplicationStartupVerifierV1(startupVerifier, true); err != nil {
 		return LockedProviderBuildPreparationV1{}, err
 	}
+	blueprintDigest, err := blueprint.DocumentDigestV1(loaded.Document)
+	if err != nil {
+		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build blueprint digest: %w", err)
+	}
+	// Source-builder portable tools are resolved per selected base so exact
+	// reuse compares selected identities before any network work. The plan for
+	// one base descriptor is computed once and shared by every reuse attempt.
+	sourceBuilderPlans := map[canonical.Digest]*SourceBuilderPortableToolPlanV1{}
+	planSourceBuilder := func(selected SelectedProviderBase) (*SourceBuilderPortableToolPlanV1, error) {
+		if plan, found := sourceBuilderPlans[selected.Descriptor.ConfigDigest]; found {
+			return plan, nil
+		}
+		planCtx, endPlan := buildprofile.Start(ctx, "Plan source-builder portable tools")
+		plan, err := backend.planSourceBuilder(planCtx, PlanSourceBuilderPortableToolsInputV1{
+			Store: input.Store, Base: selected.Descriptor, ProviderPlan: selected.Plan,
+			LocalOverrides:  append([]PythonLocalOverrideV1{}, input.LocalOverrides...),
+			BlueprintDigest: blueprintDigest, ReployVersion: input.ReployVersion,
+		})
+		endPlan(err)
+		if err != nil {
+			return nil, fmt.Errorf("plan source-builder portable tools: %w", err)
+		}
+		sourceBuilderPlans[selected.Descriptor.ConfigDigest] = plan
+		return plan, nil
+	}
 	result := LockedProviderBuildPreparationV1{
 		Operation: input.Operation, Store: input.Store, Environment: input.Environment,
-		DeploymentDir: input.DeploymentDir, DockerPlan: input.DockerPlan, portableTools: portableTools,
+		DeploymentDir: input.DeploymentDir, DockerPlan: input.DockerPlan,
 		Loaded: loaded, Recovered: recovered,
 		ValidatedCandidate: input.ValidatedCandidate, ValidatedInputs: input.ValidatedInputs,
 		NoCache: input.NoCache, StartupVerifier: startupVerifier,
@@ -223,11 +247,19 @@ func prepareLockedProviderBuildV1(
 		}
 	}
 	tryReuse := func(candidate reuseCandidate, selected SelectedProviderBase) (bool, error) {
+		sourceBuilder, err := planSourceBuilder(selected)
+		if err != nil {
+			return false, err
+		}
+		var portableToolPlan *providers.PortableToolPlanV1
+		if sourceBuilder != nil {
+			portableToolPlan = &sourceBuilder.Plan
+		}
 		matches, err := backend.matches(candidate.current, CurrentBuildReuseInput{
 			ResolvedRequest: candidate.request, Overlay: loaded.State.Overlay,
 			PackageOverrides: candidate.packageOverrides, Base: selected.Descriptor,
 			Document: loaded.Document, DockerPlan: input.DockerPlan, StartupVerifier: startupVerifier,
-			PortableTools: portableTools,
+			PortableToolPlan: portableToolPlan,
 		})
 		if err != nil || !matches {
 			return false, err
@@ -311,6 +343,11 @@ func prepareLockedProviderBuildV1(
 	// provider execution, local sources must re-enter through fresh wheel
 	// construction rather than through the prior lock.
 	result.Loaded.Request.Sources = []providers.ResolvedSourceInput{}
+	sourceBuilder, err := planSourceBuilder(selected)
+	if err != nil {
+		return LockedProviderBuildPreparationV1{}, err
+	}
+	result.sourceBuilder = sourceBuilder
 	realizeCtx, endRealize := buildprofile.Start(ctx, "Inspect and realize base image")
 	prepared, err := backend.realizeBase(realizeCtx, input.Store, selected)
 	endRealize(err)

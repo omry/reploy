@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -35,8 +36,9 @@ type LockedProviderBuildExecutionResultV1 struct {
 }
 
 type providerBuildExecutionBackend struct {
-	executeGraph      func(context.Context, PreparedPythonGraphExecutionInput) (providers.GraphExecutionResult, error)
-	prepareValidation func(
+	materializeSourceBuilder func(context.Context, providerstore.Store, *SourceBuilderPortableToolPlanV1) (*SourceBuilderPortableToolsV1, error)
+	executeGraph             func(context.Context, PreparedPythonGraphExecutionInput) (providers.GraphExecutionResult, error)
+	prepareValidation        func(
 		context.Context,
 		deploy.ImageDescriptor,
 		[]providers.RealizedOutput,
@@ -70,13 +72,14 @@ func ExecuteLockedProviderBuildV1(
 		input.RunValidation = runner.Run
 	}
 	return executeLockedProviderBuildV1(ctx, input, providerBuildExecutionBackend{
-		executeGraph:          ExecutePreparedPythonGraph,
-		prepareValidation:     PrepareProviderGraphValidation,
-		complete:              CompleteProviderBuild,
-		publishBuild:          PublishBuild,
-		publishValidated:      PublishValidatedBuild,
-		verifyReference:       VerifyEnvironmentGenerationReference,
-		retryValidatedCleanup: RetryValidatedBuildCleanup,
+		materializeSourceBuilder: MaterializeSourceBuilderPortableToolsV1,
+		executeGraph:             ExecutePreparedPythonGraph,
+		prepareValidation:        PrepareProviderGraphValidation,
+		complete:                 CompleteProviderBuild,
+		publishBuild:             PublishBuild,
+		publishValidated:         PublishValidatedBuild,
+		verifyReference:          VerifyEnvironmentGenerationReference,
+		retryValidatedCleanup:    RetryValidatedBuildCleanup,
 		discardValidated: func(ctx context.Context, operation *deploy.OperationLock, environment, deploymentDir string) error {
 			return DiscardValidatedBuild(ctx, operation, environment, deploymentDir, input.Progress)
 		},
@@ -87,7 +90,7 @@ func executeLockedProviderBuildV1(
 	ctx context.Context,
 	input LockedProviderBuildExecutionInputV1,
 	backend providerBuildExecutionBackend,
-) (LockedProviderBuildExecutionResultV1, error) {
+) (result LockedProviderBuildExecutionResultV1, resultErr error) {
 	if ctx == nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute locked provider build requires a context")
 	}
@@ -248,6 +251,32 @@ func executeLockedProviderBuildV1(
 	options := input.RunOptions
 	options.Context = ctx
 	options.Progress = input.Progress
+	var sourceBuilder *SourceBuilderPortableToolsV1
+	var portableTools *providers.PortableToolLockV1
+	if preparation.sourceBuilder != nil {
+		if backend.materializeSourceBuilder == nil {
+			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute locked provider build requires source-builder materialization")
+		}
+		writeProviderBuildProgress(input.Progress, "acquiring and materializing source-builder portable tools")
+		toolsCtx, endTools := buildprofile.Start(ctx, "Materialize source-builder portable tools")
+		materialized, err := backend.materializeSourceBuilder(toolsCtx, preparation.Store, preparation.sourceBuilder)
+		endTools(err)
+		if err != nil {
+			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("materialize source-builder portable tools: %w", err)
+		}
+		if materialized == nil {
+			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("source-builder materialization returned no portable tools")
+		}
+		sourceBuilder = materialized
+		defer func() {
+			if cleanupErr := sourceBuilder.Cleanup(); cleanupErr != nil {
+				result = LockedProviderBuildExecutionResultV1{}
+				resultErr = errors.Join(resultErr, cleanupErr)
+			}
+		}()
+		lock := providers.ClonePortableToolLockV1(sourceBuilder.Lock)
+		portableTools = &lock
+	}
 	graphCtx, endGraph := buildprofile.Start(ctx, "Execute provider graph")
 	graphOptions := options
 	graphOptions.Context = graphCtx
@@ -256,6 +285,7 @@ func executeLockedProviderBuildV1(
 		BaseCatalog: preparedBase.Catalog, Sources: preparation.Loaded.Request.Sources,
 		SourceWheels:   append([]providerstore.ArtifactDescriptor{}, input.SourceWheels...),
 		LocalOverrides: append([]PythonLocalOverrideV1{}, input.LocalOverrides...),
+		SourceBuilder:  sourceBuilder,
 		CurrentLock:    preparation.ReusableLock, FinalImageConfig: preparation.FinalImageConfig,
 		Progress: input.Progress, BuildProgress: input.BuildProgress, RunOptions: graphOptions,
 	})
@@ -311,7 +341,7 @@ func executeLockedProviderBuildV1(
 		ResolvedRequest: resolvedRequest, Overlay: preparation.Loaded.State.Overlay,
 		PackageOverrides: relevantPackageOverrides,
 		Base:             preparedBase.Descriptor, BaseCatalog: preparedBase.Catalog,
-		Graph: graph, PortableTools: preparation.portableTools, Validation: validation,
+		Graph: graph, PortableTools: portableTools, Validation: validation,
 		StartupVerifier: preparation.StartupVerifier,
 		ValidateChoices: input.ValidateChoices, ValidatedInputs: preparation.ValidatedInputs,
 		NoCache:       preparation.NoCache,
