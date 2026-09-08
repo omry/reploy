@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-04
+updated: 2026-09-04
 summary: Active planning surface for Reploy design and implementation gaps.
 ---
 
@@ -352,6 +352,20 @@ This file is the day-to-day queue for design and implementation gaps.
       than a Rust-specific `PATH` path. Add version, platform, cache-reuse,
       shell, and Cargo-subprocess coverage, and do not depend on a host
       toolchain or a networked `rustup` bootstrap during materialization.
+
+- [ ] `P2` Add official standalone Node.js portable-tool support.
+      Model the Node.js runtime as `tool:node` with exact versioned,
+      platform-specific artifacts, offline materialization, and explicit
+      executable exports. Keep it independently usable in build and runtime
+      scopes without making a Node ecosystem provider own or install a hidden
+      second runtime.
+
+- [ ] `P2` Add a Node application provider.
+      Resolve Node ecosystem packages and lock data into a closed offline
+      bundle, materialize an application-owned contribution, and consume a
+      compatible runtime selected through `tool:node`. Preserve the standalone
+      tool/provider ownership boundary; merge compatible runtime demands within
+      one resolution scope and reject incompatible demands before acquisition.
 
 - [ ] `P2` Add official Playwright portable tool support.
       Add the reviewed resolver primitive and official `tool:playwright`
