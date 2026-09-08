@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-09-04
+updated: 2026-09-08
 summary: Reviewable delivery plan for portable-tool authoring, definitions, and the embedded Java, Playwright, and asciinema implementations.
 implements: docs/PORTABLE_TOOL_DEFINITION_DESIGN.md
 ---
@@ -22,13 +22,13 @@ This plan is structured as input to the existing AWD function:
 global:swe:deliver-design-stack(docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md, all)
 ```
 
-The delivery milestone IDs are `PTD-01` through `PTD-29`. `PTD-21` and
-`PTD-22` are milestone containers whose first-class delivery IDs are
-`PTD-21.1` through `PTD-21.5` and `PTD-22.1` through `PTD-22.3`; every other
-milestone is itself one delivery item. The preparation gates are prerequisites,
-not implementation tasks, commits, or pull requests. `deliver-design-stack`
-may read this plan before preparation is complete, but must pause on an unmet
-preparation gate.
+The delivery milestone IDs are `PTD-01` through `PTD-29`. `PTD-21`, `PTD-22`,
+and `PTD-23` are milestone containers whose first-class delivery IDs are
+`PTD-21.1` through `PTD-21.5`, `PTD-22.1` through `PTD-22.3`, and `PTD-23.1`
+through `PTD-23.3`; every other milestone is itself one delivery item. The
+preparation gates are prerequisites, not implementation tasks, commits, or
+pull requests. `deliver-design-stack` may read this plan before preparation is
+complete, but must pause on an unmet preparation gate.
 
 Plan revision note (2026-08-26): localized portable-tool authoring was inserted
 as PTD-12 after PTD-11 completed. No former PTD-12-or-later delivery slice had
@@ -38,6 +38,14 @@ former PTD-12 through PTD-28 are renamed PTD-13 through PTD-29 respectively.
 Plan revision note (2026-08-31): PTD-21 and PTD-22 were split before
 construction into eight review-sized child delivery items. The parent milestone
 identities and PTD-23-through-PTD-29 numbering remain unchanged.
+
+Plan revision note (2026-09-08): PTD-23 was split before construction into
+three review-sized child delivery items. The parent milestone and
+PTD-24-through-PTD-29 identities remain unchanged. The child slices implement
+portable Python-binding projection, verification, and materialization as
+generic mechanisms. Playwright remains the first catalog definition and the
+tool-specific acceptance case; production code must not branch on Playwright,
+Node.js, or `playwright-core` identities.
 
 Plan correction note (2026-09-01): PTD-21.4 review exposed duplicate ownership
 of canonical portable-tool record structures and validation between catalog
@@ -249,11 +257,12 @@ before PTD-21.5. Each corrective predecessor owns one commit and PR, is not a
 ancestry. Each `PTD-*` task is then constructed or restacked above PR 82 in
 exact dependency order:
 
-`PTD-21` and `PTD-22` are milestone containers rather than delivery slices.
-Their explicitly enumerated child slices are first-class delivery items: each
-owns one commit and one PR, while the parent milestone owns neither. `PTD-21`
-completes only when `PTD-21.1` through `PTD-21.5` have current-head approval;
-`PTD-22` completes only when `PTD-22.1` through `PTD-22.3` do. `PTD-22.1`
+`PTD-21`, `PTD-22`, and `PTD-23` are milestone containers rather than delivery
+slices. Their explicitly enumerated child slices are first-class delivery
+items: each owns one commit and one PR, while the parent milestone owns neither.
+`PTD-21` completes only when `PTD-21.1` through `PTD-21.5` have current-head
+approval; `PTD-22` completes only when `PTD-22.1` through `PTD-22.3` do; and
+`PTD-23` completes only when `PTD-23.1` through `PTD-23.3` do. `PTD-22.1`
 depends directly on `PTD-21.5`, but cannot activate until the complete `PTD-21`
 milestone has converged. References below to a task as a construction or review
 unit mean one delivery item, including these child slices.
@@ -386,8 +395,11 @@ the campaign until durable authority is updated.
 | PTD-22.1 | Resolve Java Builder Demands Through the Portable Catalog | PTD-21.5 | New work; activates only after PTD-21 convergence |
 | PTD-22.2 | Materialize Selected Temurin Java in the Isolated Builder | PTD-22.1 | New work |
 | PTD-22.3 | Remove Legacy Java Switches and Prove the Cutover | PTD-22.2 | New work |
-| PTD-23 | Materialize the Playwright Python Binding | PTD-22 | New work |
-| PTD-24 | Materialize Playwright Chromium Payloads | PTD-23 | New work |
+| PTD-23 | Materialize Portable Python Bindings | PTD-22 | Parent milestone; no owning PR |
+| PTD-23.1 | Project Portable Python Binding Contracts into Provider Inputs | PTD-22.3 | New work; activates only after PTD-22 convergence |
+| PTD-23.2 | Acquire and Verify Exact Portable Python Binding Wheels | PTD-23.1 | New work |
+| PTD-23.3 | Materialize Portable Python Bindings Offline | PTD-23.2 | New work |
+| PTD-24 | Materialize Playwright Chromium Payloads | PTD-23.3 | New work |
 | PTD-25 | Derive Portable Tool Integration Cases and Evidence | PTD-24 | New work; closes the PTD-20 production-caller deferral through the PTD-21.5 boundary |
 | PTD-26 | Validate Every Advertised Java Tuple Through Reploy | PTD-25 | New work |
 | PTD-27 | Validate Every Advertised Playwright Tuple Through Reploy | PTD-26 | New work |
@@ -1059,17 +1071,93 @@ production caller; that caller remains owned by PTD-25.
 Non-goals: runtime Java, other Java versions, or Playwright and asciinema
 materialization.
 
-### PTD-23: Materialize the Playwright Python Binding
+### PTD-23: Materialize Portable Python Bindings
 
-Scope: translate the binding contract into Python roots and exact wheel
-constraints; verify wheel filename, tags, size, digest, interpreter support,
-bundled Node, and `playwright-core`; materialize offline.
+PTD-23 is a milestone container. It owns no implementation commit or pull
+request; its complete scope is owned exclusively by PTD-23.1 through PTD-23.3.
 
-Acceptance: index resolution cannot substitute different bytes or metadata;
-unsupported interpreters fail before acquisition; installation invokes no
-Playwright installer and downloads no browser.
+Scope: implement the generic portable Python-binding path from selected binding
+contracts and artifacts into Python provider roots, exact wheel constraints,
+verified acquisition, content inspection, declared CLI placement, and offline
+materialization. Playwright 1.61.0 is the first catalog-defined consumer and
+acceptance case, not a production-code dispatch identity.
 
-Non-goals: browser extraction or other bindings.
+Acceptance: production projection, acquisition, verification, and
+materialization code contains no Playwright-, Node.js-, or
+`playwright-core`-specific branch; catalog data supplies all tool and bundled
+component identities, requirements, paths, versions, and expected artifact
+metadata. Index resolution cannot substitute different bytes or metadata;
+unsupported interpreters fail before binding-artifact acquisition; installation
+invokes no upstream installer and downloads no browser. The Playwright catalog
+files and focused acceptance evidence remain tool-specific.
+
+Non-goals: browser extraction, another ecosystem binding, additional
+Playwright definitions, or the generic ordinary-build production caller owned
+by PTD-25.
+
+The milestone is delivered through these first-class slices:
+
+#### PTD-23.1: Project Portable Python Binding Contracts into Provider Inputs
+
+Scope: decode selected portable Python binding contracts and artifacts from the
+provider-neutral plan; merge their exact root requirements into the owning
+application's Python request; represent mandatory exact-wheel constraints; and
+gate the selected interpreter against the contract and artifact compatibility
+declarations before any binding-artifact acquisition. The projection is generic
+over canonical binding records and does not read or recognize a tool name.
+
+Acceptance: input ordering cannot change the projected Python request;
+identical requirements and artifacts deduplicate while incompatible roots,
+wheel identities, interpreter ranges, provider ownership, or application scope
+fail deterministically; an unsupported interpreter reaches no
+binding-artifact acquisition callback; and tests use both neutral synthetic
+bindings and the selected Playwright records without introducing a
+Playwright-specific production path.
+
+Non-goals: artifact download, wheel content inspection, installation, browser
+payloads, or ordinary-build production integration.
+
+#### PTD-23.2: Acquire and Verify Exact Portable Python Binding Wheels
+
+Scope: extend the common embedded manifest/source projection and verified
+acquisition path to selected binding artifacts; inspect each acquired wheel
+against its selected record and contract; and bind filename, distribution,
+ecosystem version, wheel tags, size, digest, `Requires-Python`, declared bundled
+component paths and metadata, and acquisition provenance into the portable-tool
+lock. Inspection is generic over binding records; Playwright catalog data names
+Node.js and `playwright-core` and supplies their expected paths and versions.
+
+Acceptance: only the exact manifest-authorized artifact reaches inspection;
+size or digest mismatch is rejected before wheel parsing; filename, metadata,
+tags, interpreter compatibility, or bundled-component mismatch is rejected
+before resolver staging; hostile synthetic wheels cover malformed and
+conflicting content; and a focused exact-artifact check proves the Playwright
+wheel matches its catalog declarations without executing its bundled programs.
+
+Non-goals: Python dependency resolution, wheel installation, browser payload
+acquisition or extraction, or tool-specific acquisition and inspection code.
+
+#### PTD-23.3: Materialize Portable Python Bindings Offline
+
+Scope: stage verified binding wheels as mandatory direct constraints in the
+existing Python dependency graph, resolve the remaining contract roots through
+the Python provider, materialize the closed wheel set through the existing
+network-disabled transaction, and expose the catalog-declared CLI at its exact
+selected path. All mechanics are generic over portable Python binding inputs;
+Playwright is only the selected catalog fixture.
+
+Acceptance: an index candidate cannot replace the selected binding wheel or
+change its inspected metadata; the exact selected wheel participates in the
+application's ordinary Python closure; materialization installs only the closed
+wheel set with networking disabled; the declared CLI resolves to the generated
+Python console script; and command and network assertions prove that neither an
+upstream installer nor browser acquisition is invoked. Focused Playwright
+evidence demonstrates these generic guarantees without adding a
+Playwright-specific production branch.
+
+Non-goals: Chromium, Headless Shell, or FFmpeg materialization; target APT
+roots; another ecosystem binding; additional catalog definitions; or the
+PTD-25 ordinary-build production caller.
 
 ### PTD-24: Materialize Playwright Chromium Payloads
 
@@ -1173,9 +1261,9 @@ The campaign is complete only when:
 
 - every delivery item maps one-to-one to an approved current-head PR in
   dependency order: `PTD-01` through `PTD-20`, `PTD-21.1` through `PTD-21.5`,
-  `PTD-22.1` through `PTD-22.3`, and `PTD-23` through `PTD-29`; the `PTD-21`
-  and `PTD-22` milestone containers own no PR and close only when all of their
-  child slices are approved;
+  `PTD-22.1` through `PTD-22.3`, `PTD-23.1` through `PTD-23.3`, and `PTD-24`
+  through `PTD-29`; the `PTD-21`, `PTD-22`, and `PTD-23` milestone containers
+  own no PR and close only when all of their child slices are approved;
 - the shared-record-contract corrective prerequisite has current-head approval
   and remains in the exact ancestry after PTD-21.3 and before PTD-21.4;
 - the plan-only corrective predecessor has current-head approval and remains in
