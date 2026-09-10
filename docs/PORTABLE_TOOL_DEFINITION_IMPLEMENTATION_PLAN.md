@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-09-08
+updated: 2026-09-10
 summary: Reviewable delivery plan for portable-tool authoring, definitions, and the embedded Java, Playwright, and asciinema implementations.
 implements: docs/PORTABLE_TOOL_DEFINITION_DESIGN.md
 ---
@@ -46,6 +46,23 @@ portable Python-binding projection, verification, and materialization as
 generic mechanisms. Playwright remains the first catalog definition and the
 tool-specific acceptance case; production code must not branch on Playwright,
 Node.js, or `playwright-core` identities.
+
+Plan revision note (2026-09-10): the PTD-23 child contracts were tightened
+before construction to make their canonical handoffs, execution order,
+pre-acquisition compatibility gate, exact-wheel constraint, bounded wheel
+inspection, locked replay, and CLI publication responsibilities explicit. The
+clarification does not add another ecosystem binding or change the accepted
+portable-tool design. Generic in PTD-23 means generic over selected portable
+Python-wheel binding records; it does not mean one provider implementation for
+unrelated ecosystem package formats.
+Deep design review on the same date additionally aligned artifact cardinality
+with schema v1, completed the interpreter-observation seam, made the existing
+all-selected-artifacts lock invariant explicit, bounded wheel expansion,
+required reuse of the existing Python wheel parser, ordered export publication
+after binding materialization, and bound alias collisions and link payloads to
+their computed Python-runtime targets. A follow-up review bound wheel
+compatibility to existing portable-record and Python-provider behavior, adding
+only the missing provider-owned pre-acquisition Python/ABI check.
 
 Plan correction note (2026-09-01): PTD-21.4 review exposed duplicate ownership
 of canonical portable-tool record structures and validation between catalog
@@ -1082,6 +1099,31 @@ verified acquisition, content inspection, declared CLI placement, and offline
 materialization. Playwright 1.61.0 is the first catalog-defined consumer and
 acceptance case, not a production-code dispatch identity.
 
+The milestone has three explicit immutable handoffs. PTD-23.1 produces a
+canonical application-scoped Python-binding projection from the selected
+portable-tool plan and the resolved application-provider inputs. The projection
+retains the scope, owning Python component, selected-closure identity, exact
+binding contract and schema-v1 artifact reference, canonical root requirements,
+artifact-declared compatibility, exact-wheel constraint, and the selected CLI
+export; it contains no locator, acquired path, or acquisition outcome. Schema
+v1 selects exactly one binding artifact per binding and target platform. After
+the owning Python resolver has observed its interpreter, PTD-23.1's pure
+eligibility gate validates that exact artifact. PTD-23.2 joins the complete
+projection to manifest-authorized acquisition results and produces
+verified-wheel inputs whose descriptors and observed wheel metadata remain
+bound to the exact selected artifact references. PTD-23.3 is the only child
+that may offer the compatibility-validated verified bytes to the Python
+resolver or publish the CLI. Artifact eligibility does not rewrite
+selected-closure identity: every artifact selected by the closure is still
+acquired, verified, locked, and installed.
+
+Production dispatch in all three children is by the canonical record schema,
+reviewed resolver primitive, resolution scope, and provider/domain owner. Tool,
+distribution, CLI, and bundled-component names are data and are never dispatch
+keys. The Playwright catalog and exact-artifact acceptance fixture may name
+Playwright, Node.js, and `playwright-core`; neutral synthetic fixtures must
+exercise the same production entry points with different names.
+
 Acceptance: production projection, acquisition, verification, and
 materialization code contains no Playwright-, Node.js-, or
 `playwright-core`-specific branch; catalog data supplies all tool and bundled
@@ -1099,20 +1141,97 @@ The milestone is delivered through these first-class slices:
 
 #### PTD-23.1: Project Portable Python Binding Contracts into Provider Inputs
 
-Scope: decode selected portable Python binding contracts and artifacts from the
-provider-neutral plan; merge their exact root requirements into the owning
-application's Python request; represent mandatory exact-wheel constraints; and
-gate the selected interpreter against the contract and artifact compatibility
-declarations before any binding-artifact acquisition. The projection is generic
-over canonical binding records and does not read or recognize a tool name.
+Scope: add one pure projection boundary that consumes a validated
+provider-neutral portable-tool plan plus the canonical resolved application
+component requests, and returns a freshly allocated canonical component-request
+set plus the canonical Python-binding projection described above. It runs
+before provider node planning and portable DAG construction. An
+`application:<owner>` scope maps only to
+`application/<owner>/python`; any other scope or component owner is rejected.
+When the application already has a Python contribution, preserve its explicit
+interpreter request and merge the binding requirements into it. When a selected
+sole or explicit Python binding is the application's first Python contribution,
+create that canonical contribution with the Python provider's established
+default `python` interpreter requirement. Do not mutate the blueprint, selected
+plan, or caller-owned request values.
 
-Acceptance: input ordering cannot change the projected Python request;
-identical requirements and artifacts deduplicate while incompatible roots,
-wheel identities, interpreter ranges, provider ownership, or application scope
-fail deterministically; an unsupported interpreter reaches no
-binding-artifact acquisition callback; and tests use both neutral synthetic
-bindings and the selected Playwright records without introducing a
-Playwright-specific production path.
+Decode binding contracts and artifacts only through their shared strict record
+contracts. Join every artifact to its exact contract reference, require the
+contract CLI to equal one selected plan export, and normalize every root and
+artifact distribution through the Python provider grammar. Key one group by
+owning component and normalized contract package. Under schema v1 it has
+exactly one contract, exactly one target-platform artifact, and the contract
+roots; a second artifact for the same binding and target would collide with the
+canonical binding-artifact ID and is not a candidate-selection mechanism.
+Identical requirements and exact record references deduplicate. The same
+semantic key with different contracts, artifact references, wheel identity,
+package identity, provider owner, scope, or selected CLI fails before provider
+planning.
+
+Emit one exact-wheel constraint per owning component and normalized
+distribution. A constraint retains the exact artifact reference and its
+declared filename, distribution, ecosystem version, tags, size, digest, and
+`Requires-Python`; it is not a
+version override, index preference, local-source override, filesystem path, or
+acquisition result.
+
+Add a pure pre-acquisition compatibility gate over the projection and the
+Python provider's observed canonical interpreter evidence. Invoke it at the
+existing Python resolver lifecycle seam immediately after interpreter
+resolution and before wheel preparation; do not probe or resolve the
+interpreter a second time. Reuse the shared portable-record filename-tag
+expansion and target-platform compatibility validation; PTD-23 does not add a
+second wheel-tag parser or platform-policy table. Reuse the Python provider's
+canonical interpreter-version and PEP 440 checks, existing inspected-wheel tag
+representation, and ordinary pip resolver as the final compatibility
+authority.
+
+Add only the missing provider-owned pure Python/ABI eligibility helper needed
+before acquisition. Extend the existing fixed interpreter inspection, in the
+same invocation, to emit the normalized implementation and canonical ABI tag
+alongside the complete version. Replace `python-interpreter-facts-v1` and every
+dependent provider profile and recipe identity with their next versions in
+this slice; do not add a dual reader or compatibility path for the unreleased
+format. The helper consumes those facts and the already expanded, validated
+artifact tags; it performs no subprocess, filesystem, network, or acquisition
+operation. Generic `py3` and exact `py<major><minor>` tags match the observed
+Python release with ABI `none`. A `cp<major><minor>` tag requires CPython and
+the matching release; ABI `none` is generic to that interpreter, an exact
+`cp<major><minor>` ABI must equal the observed canonical ABI, and `abi3`
+requires CPython at or above the tag's encoded release. Any other Python/ABI
+form fails closed before acquisition. The platform component must already have
+passed the shared portable-record target-platform check and is not
+reinterpreted by this helper.
+
+The interpreter's major and minor release must be present in each contract's
+`supported_python`. Its complete release must satisfy the artifact's canonical
+`Requires-Python`, and at least one filename-derived artifact tag must be both
+contract-advertised and compatible with the observed interpreter/ABI facts and
+selected target platform. The gate validates every constraint as one
+deterministic set before invoking any acquisition callback; failure acquires
+nothing. PTD-23.2 repeats all record-to-wheel facts observable from the bytes,
+but does not weaken this earlier eligibility gate. PTD-23.1 owns and unit-tests
+the inspection-evidence transition, seam, and gate; PTD-23.3 wires the
+acquisition and wheel-preparation callback into it.
+
+Acceptance: reversing tools, contracts, artifacts, or component requests emits
+byte-identical projected requests and sidecar projection; projection creates
+the missing Python contribution when required and cannot attach one
+application's binding to another; compatible duplicate inputs collapse while
+conflicting roots, exact artifacts, interpreter evidence, owners, scopes, or
+CLI exports fail with stable diagnostics. Tests cover two neutrally named
+synthetic tools in one application, the same records in isolated applications,
+an existing explicit Python request, a tool-only application, and the selected
+Playwright records. Neutral fixtures cover generic Python tags, CPython-specific
+tags, stable-ABI tags, and a nonmatching implementation or ABI. Differential
+fixtures prove that every supported Python/ABI decision agrees with the
+ordinary pip resolver; unsupported forms fail closed. Each unsupported minor
+version, complete `Requires-Python` release, interpreter implementation, ABI
+tag, and platform tag case proves that the binding-artifact acquisition
+callback was invoked zero times.
+Production files contain no literal identity check or dispatch on a tool,
+package, CLI, or bundled-component name; comparisons between canonical data
+values remain required validation.
 
 Non-goals: artifact download, wheel content inspection, installation, browser
 payloads, or ordinary-build production integration.
@@ -1120,40 +1239,160 @@ payloads, or ordinary-build production integration.
 #### PTD-23.2: Acquire and Verify Exact Portable Python Binding Wheels
 
 Scope: extend the common embedded manifest/source projection and verified
-acquisition path to selected binding artifacts; inspect each acquired wheel
-against its selected record and contract; and bind filename, distribution,
-ecosystem version, wheel tags, size, digest, `Requires-Python`, declared bundled
-component paths and metadata, and acquisition provenance into the portable-tool
-lock. Inspection is generic over binding records; Playwright catalog data names
-Node.js and `playwright-core` and supplies their expected paths and versions.
+acquisition path to every exact binding-artifact reference in the PTD-23.1
+projection. Resolve each artifact through its selected release manifest and
+source record; reuse the PTD-17 and PTD-18 cache, mirror, network, cleanup, and
+provenance behavior unchanged; and require the returned
+provider-store descriptor to match the record's filename, wheel kind, decimal
+size, and digest before opening the wheel. The verified bytes are read only
+from that descriptor; no index candidate, caller path, or filename discovered
+from a directory may select them.
 
-Acceptance: only the exact manifest-authorized artifact reaches inspection;
-size or digest mismatch is rejected before wheel parsing; filename, metadata,
-tags, interpreter compatibility, or bundled-component mismatch is rejected
-before resolver staging; hostile synthetic wheels cover malformed and
-conflicting content; and a focused exact-artifact check proves the Playwright
-wheel matches its catalog declarations without executing its bundled programs.
+Extend or refactor the Python provider's existing descriptor-stable wheel
+inspection, metadata, tag, and console-script readers into the one shared
+data-driven primitive used by both ordinary and portable wheels; do not add a
+parallel parser. Apply fixed non-raiseable limits for archive entries, total
+declared uncompressed size, normalized path length, individual inspected
+metadata, and aggregate inspected bytes. Reuse the core archive ceilings of
+10,000 entries, 1 GiB total declared uncompressed bytes, 4,096 UTF-8 path bytes,
+and 255 UTF-8 bytes per path component. Sum ZIP uncompressed sizes with
+overflow-safe arithmetic before reading member content. Limit each selected
+`METADATA`, `WHEEL`, and `entry_points.txt` member to 1 MiB uncompressed and
+their aggregate to 4 MiB; definitions cannot tune any ceiling. Reject
+duplicate normalized paths,
+absolute or escaping paths, encrypted entries, unsupported entry kinds,
+ambiguous or mismatched `.dist-info` roots, duplicate consumed singleton
+fields, and malformed consumed fields. Unknown metadata fields and entry-point
+sections are streamed and ignored within those bounds. Require filename
+distribution and version, expanded filename tags, core `METADATA` Name,
+Version, and `Requires-Python`, and the selected console-script name to agree
+exactly with the artifact and contract after their defined canonical
+normalization. Require `WHEEL` to carry
+one supported `Wheel-Version`, one boolean `Root-Is-Purelib`, and at least one
+unique canonical `Tag`; expand and sort the internal tags as bounded observed
+metadata, but do not substitute them for the artifact's filename-derived
+compatibility tags or require the two sets to be equal. Retain the observed
+internal tags and console-script entry point as verified wheel metadata for
+PTD-23.3. Require every declared bundled-component path to identify a nonempty
+regular file or nonempty directory prefix in the wheel and reject conflicting
+declared paths.
+Do not extract the wheel or execute a bundled program during inspection.
+
+Bundled-component names and versions are reviewed declaration metadata covered
+by the binding contract and artifact record digests and by the exact wheel
+content digest. PTD-23.2 requires contract/artifact metadata equality and
+observed path/type presence; it does not infer a component version from an
+executable, a package-specific metadata file, or a component name. Adding such
+inference would be a new inspection primitive and design change, not an
+identity-specific branch in this slice.
+
+Return one immutable verified-wheel input per exact selected artifact, sorted
+by application scope, normalized distribution, and artifact reference. It
+retains the selected scope and closure identity, contract and artifact
+references, acquired descriptor, observed wheel metadata, selected console
+script, and acquisition outcome. The portable-tool lock remains normalized:
+the selected plan records bind all expected metadata, and the existing
+acquisition entry binds descriptor and source outcome rather than copying a
+second mutable metadata structure into the lock. Preserve the existing
+one-acquisition-per-selected-artifact invariant. Locked replay reopens every
+exact descriptor and repeats inspection before resolver staging; it performs
+no acquisition when the verified store objects are present and fails closed
+when any is missing or inconsistent.
+
+Acceptance: only an exact manifest-authorized descriptor reaches inspection;
+size or digest mismatch is rejected before ZIP parsing; any filename,
+`.dist-info`, Name, Version, `Requires-Python`, filename-derived compatibility
+tag, console-script, bundled-path, record-reference, scope, or closure mismatch
+is rejected before resolver staging; malformed internal `WHEEL` tags fail
+without treating a valid unequal internal tag set as an artifact mismatch.
+Hostile synthetic wheels cover every bound and malformed, duplicate, escaping,
+encrypted, ambiguous, missing, and conflicting case.
+Cache-hit and locked-replay tests prove zero network calls and repeat
+inspection. A focused exact-artifact check proves that the Playwright wheel
+matches its catalog declarations and contains every declared bundled path
+without executing Node.js, Playwright, or another bundled program. A neutral
+synthetic wheel passes the same production primitive.
 
 Non-goals: Python dependency resolution, wheel installation, browser payload
 acquisition or extraction, or tool-specific acquisition and inspection code.
 
 #### PTD-23.3: Materialize Portable Python Bindings Offline
 
-Scope: stage verified binding wheels as mandatory direct constraints in the
-existing Python dependency graph, resolve the remaining contract roots through
-the Python provider, materialize the closed wheel set through the existing
-network-disabled transaction, and expose the catalog-declared CLI at its exact
-selected path. All mechanics are generic over portable Python binding inputs;
-Playwright is only the selected catalog fixture.
+Scope: at the Python resolver seam defined by PTD-23.1, run the compatibility
+gate once over the already observed interpreter, acquire and verify the exact
+PTD-23.2 artifact set, and join each artifact reference to its exact
+verified-wheel input and projected component constraint. Stage each descriptor
+read-only under a deterministic collision-checked resolver path. Extend the
+existing Python resolver input—not the public blueprint syntax—with a mandatory
+direct constraint from the normalized distribution to that staged local wheel.
+The selected wheel is also a direct root in the component request. The resolver may
+use its ordinary controlled network path for the remaining contract roots and
+transitive dependencies, but the selected distribution can be satisfied only
+by the staged descriptor with the selected digest. A missing, duplicate, or
+different descriptor, or a resolver output whose selected distribution has
+different bytes or inspected metadata, fails before bundle publication.
 
-Acceptance: an index candidate cannot replace the selected binding wheel or
-change its inspected metadata; the exact selected wheel participates in the
-application's ordinary Python closure; materialization installs only the closed
-wheel set with networking disabled; the declared CLI resolves to the generated
-Python console script; and command and network assertions prove that neither an
-upstream installer nor browser acquisition is invoked. Focused Playwright
-evidence demonstrates these generic guarantees without adding a
-Playwright-specific production branch.
+Feed the resulting complete closed wheel set into the existing Python bundle
+and network-disabled materialization transaction. Installation consumes only
+mounted closed wheels, uses the selected application interpreter, and runs no
+tool-supplied installer or hook outside the Python provider's fixed install
+recipe. Retain the exact selected binding wheel and its verification identity in
+the provider bundle and lock/store reachability; do not reinterpret it as a
+local-source wheel or an index-selected artifact.
+
+Extend the provider-neutral portable operation dependencies without changing
+their ownership: every binding artifact acquisition still reaches the common
+acquisition barrier, the barrier precedes every binding artifact
+materialization, every binding artifact materialization precedes that
+contract's matching export, and the export precedes its capability.
+Reject a contract CLI that cannot be joined uniquely to its export and
+capability operations. This ordering is part of canonical DAG and locked-replay
+validation, so an executor cannot publish an alias or capability before the
+owning Python transaction succeeds.
+
+After the Python transaction has generated and validated the contract-selected
+console script inside the owning application's Python runtime root, satisfy the
+portable export operation with one fixed Reploy-owned alias publication
+primitive. Atomically create the catalog-declared absolute CLI path as a
+symbolic link to that exact generated console script. Create any missing parent
+directories at mode `0755` only after the exact export path has been accepted by
+the selected filesystem and export domains. Anchor every destination operation
+in the provider-owned staging root, walk parent components without following
+links, reject non-directory or pre-existing unowned destinations, and publish a
+same-directory temporary link with a no-replace rename. The filesystem mutation
+uses staging-root-relative handles, but the link payload is the canonical
+final-image absolute path of the generated Python console script and must never
+contain the host staging-root prefix. Validate that image path separately and
+prove it is within the owning Python runtime root; after publication, resolve
+the link in final-image path space and require that exact target. Neither path
+may conflict with another selected filesystem or export claim. An otherwise
+identical declared alias destination deduplicates only when its computed
+Python-runtime target and exact binding identity are also identical; two
+application scopes cannot silently make one shared alias point at different
+virtual environments. The definition supplies only the canonical export name
+and path; it cannot supply link syntax,
+commands, or an alternate target. Failure publishes neither a usable alias nor
+a successful portable-tool materialization result, and ordinary provider
+rollback removes any staged partial state.
+
+Acceptance: an index containing the same version with different bytes, a newer
+version, or a matching name with different metadata cannot replace the selected
+wheel; the exact wheel is present once in the application's ordinary Python
+closure; and resolver output is invariant to input order. Materialization
+installs only the closed wheel set with networking disabled. Missing, duplicate,
+or mismatched selected wheels and console scripts, alias destination escape,
+filesystem/export collision, interrupted alias publication, and locked-replay
+descriptor drift all fail closed with cleanup. The declared CLI resolves to the
+generated Python console script in final-image path space, contains no host
+staging prefix, and remains application-scoped. A focused DAG test proves the
+barrier/materialization/export/capability order, and a
+shared-export-domain test rejects two application runtimes competing for one
+alias destination. Command and network assertions prove that neither an
+upstream installer nor browser acquisition is invoked. Two neutral synthetic
+bindings and focused Playwright evidence exercise the same production resolver,
+transaction, and alias primitive without literal production checks or dispatch
+against Playwright, Node.js, `playwright-core`, package, CLI, or
+bundled-component names.
 
 Non-goals: Chromium, Headless Shell, or FFmpeg materialization; target APT
 roots; another ecosystem binding; additional catalog definitions; or the
