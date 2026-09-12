@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-09-10
+updated: 2026-09-12
 summary: Reviewable delivery plan for portable-tool authoring, definitions, and the embedded Java, Playwright, and asciinema implementations.
 implements: docs/PORTABLE_TOOL_DEFINITION_DESIGN.md
 ---
@@ -23,9 +23,10 @@ global:swe:deliver-design-stack(docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLA
 ```
 
 The delivery milestone IDs are `PTD-01` through `PTD-29`. `PTD-21`, `PTD-22`,
-and `PTD-23` are milestone containers whose first-class delivery IDs are
-`PTD-21.1` through `PTD-21.5`, `PTD-22.1` through `PTD-22.3`, and `PTD-23.1`
-through `PTD-23.3`; every other milestone is itself one delivery item. The
+and `PTD-23` are milestone containers, and `PTD-23.1` is a nested delivery
+container. Their first-class delivery IDs are `PTD-21.1` through `PTD-21.5`,
+`PTD-22.1` through `PTD-22.3`, `PTD-23.1.1` through `PTD-23.1.8`, `PTD-23.2`,
+and `PTD-23.3`; every other milestone is itself one delivery item. The
 preparation gates are prerequisites, not implementation tasks, commits, or
 pull requests. `deliver-design-stack` may read this plan before preparation is
 complete, but must pause on an unmet preparation gate.
@@ -68,6 +69,19 @@ the provider-owned pre-acquisition gate compares those facts with the selected
 interpreter's pip-derived compatible-tag evidence before any artifact is
 acquired. This remains one generic wheel eligibility mechanism rather than
 tool-specific logic, a second parser, or a second compatibility engine.
+
+Plan revision note (2026-09-12): PTD-23.1 was split before publication of its
+implementation into eight review-sized child delivery items. PTD-23.1 is now a
+nested container and owns no implementation commit or pull request. Its
+existing technical contract is preserved and owned exactly once across
+PTD-23.1.1 through PTD-23.1.7. PTD-23.1.8 also corrects an omission in the
+prior task text by making explicit the final-image compatibility-preservation
+check required by the accepted design's validation-profile and final-image
+integration contracts. PTD-23.2 and PTD-23.3 retain their identities and
+scopes, with PTD-23.2 depending on the completed PTD-23.1.8 handoff. This is a
+delivery-boundary and implementation-plan correction; it does not amend the
+accepted portable-tool design, support envelope, schema-v1 artifact
+cardinality, or Python provider ownership.
 
 Plan correction note (2026-09-01): PTD-21.4 review exposed duplicate ownership
 of canonical portable-tool record structures and validation between catalog
@@ -280,14 +294,17 @@ ancestry. Each `PTD-*` task is then constructed or restacked above PR 82 in
 exact dependency order:
 
 `PTD-21`, `PTD-22`, and `PTD-23` are milestone containers rather than delivery
-slices. Their explicitly enumerated child slices are first-class delivery
-items: each owns one commit and one PR, while the parent milestone owns neither.
+slices, and `PTD-23.1` is a nested container rather than a delivery slice.
+Their explicitly enumerated leaf slices are first-class delivery items: each
+owns one commit and one PR, while a container owns neither.
 `PTD-21` completes only when `PTD-21.1` through `PTD-21.5` have current-head
 approval; `PTD-22` completes only when `PTD-22.1` through `PTD-22.3` do; and
-`PTD-23` completes only when `PTD-23.1` through `PTD-23.3` do. `PTD-22.1`
-depends directly on `PTD-21.5`, but cannot activate until the complete `PTD-21`
-milestone has converged. References below to a task as a construction or review
-unit mean one delivery item, including these child slices.
+`PTD-23.1` completes only when `PTD-23.1.1` through `PTD-23.1.8` do. `PTD-23`
+completes only when the nested `PTD-23.1` container and delivery items
+`PTD-23.2` and `PTD-23.3` do. `PTD-22.1` depends directly on `PTD-21.5`, but
+cannot activate until the complete `PTD-21` milestone has converged. References
+below to a task as a construction or review unit mean one delivery item,
+including these leaf slices.
 
 1. Build one coherent commit that compiles and passes its focused tests.
 2. Keep the worktree clean after each commit and preserve excluded WIP.
@@ -418,8 +435,16 @@ the campaign until durable authority is updated.
 | PTD-22.2 | Materialize Selected Temurin Java in the Isolated Builder | PTD-22.1 | New work |
 | PTD-22.3 | Remove Legacy Java Switches and Prove the Cutover | PTD-22.2 | New work |
 | PTD-23 | Materialize Portable Python Bindings | PTD-22 | Parent milestone; no owning PR |
-| PTD-23.1 | Project Portable Python Binding Contracts into Provider Inputs | PTD-22.3 | New work; activates only after PTD-22 convergence |
-| PTD-23.2 | Acquire and Verify Exact Portable Python Binding Wheels | PTD-23.1 | New work |
+| PTD-23.1 | Project Portable Python Binding Contracts into Provider Inputs | PTD-22.3 | Nested container; no owning PR; activates only after PTD-22 convergence |
+| PTD-23.1.1 | Canonicalize Python Support Claims | PTD-22.3 | New work; activates only after PTD-22 convergence |
+| PTD-23.1.2 | Prove Requires-Python Coverage | PTD-23.1.1 | New work |
+| PTD-23.1.3 | Project Wheel Platform Policy | PTD-23.1.2 | New work |
+| PTD-23.1.4 | Project Binding Records into Python Provider Inputs | PTD-23.1.3 | New work |
+| PTD-23.1.5 | Cut Over Python Interpreter Evidence V2 | PTD-23.1.4 | New work; atomic unreleased-format cutover |
+| PTD-23.1.6 | Decide Portable-Wheel Eligibility | PTD-23.1.5 | New work |
+| PTD-23.1.7 | Enforce Portable-Wheel Eligibility in Resolver Paths | PTD-23.1.6 | New work |
+| PTD-23.1.8 | Preserve Portable-Wheel Compatibility in Final-Image Validation | PTD-23.1.7 | New work; contract-first post-materialization check; completes PTD-23.1 |
+| PTD-23.2 | Acquire and Verify Exact Portable Python Binding Wheels | PTD-23.1.8 | New work |
 | PTD-23.3 | Materialize Portable Python Bindings Offline | PTD-23.2 | New work |
 | PTD-24 | Materialize Playwright Chromium Payloads | PTD-23.3 | New work |
 | PTD-25 | Derive Portable Tool Integration Cases and Evidence | PTD-24 | New work; closes the PTD-20 production-caller deferral through the PTD-21.5 boundary |
@@ -1096,7 +1121,8 @@ materialization.
 ### PTD-23: Materialize Portable Python Bindings
 
 PTD-23 is a milestone container. It owns no implementation commit or pull
-request; its complete scope is owned exclusively by PTD-23.1 through PTD-23.3.
+request; its complete scope is owned by the nested PTD-23.1 container and the
+PTD-23.2 and PTD-23.3 delivery items.
 
 Scope: implement the generic portable Python-binding path from selected binding
 contracts and artifacts into Python provider roots, exact wheel constraints,
@@ -1148,69 +1174,87 @@ The milestone is delivered through these first-class slices:
 
 #### PTD-23.1: Project Portable Python Binding Contracts into Provider Inputs
 
-Scope: add one pure projection boundary that consumes a validated
-provider-neutral portable-tool plan plus the canonical resolved application
-component requests, and returns a freshly allocated canonical component-request
-set plus the canonical Python-binding projection described above. It runs
-before provider node planning and portable DAG construction. An
-`application:<owner>` scope maps only to
-`application/<owner>/python`; any other scope or component owner is rejected.
-When the application already has a Python contribution, preserve its explicit
-interpreter request and merge the binding requirements into it. When a selected
-sole or explicit Python binding is the application's first Python contribution,
-create that canonical contribution with the Python provider's established
-default `python` interpreter requirement. Do not mutate the blueprint, selected
-plan, or caller-owned request values.
+PTD-23.1 is a nested delivery container. It owns no implementation commit or
+pull request; its complete scope is owned exclusively by PTD-23.1.1 through
+PTD-23.1.8.
 
-Decode binding contracts and artifacts only through their shared strict record
-contracts. Join every artifact to its exact contract reference, require the
-contract CLI to equal one selected plan export, and normalize every root and
-artifact distribution through the Python provider grammar. Key one group by
-owning component and normalized contract package. Under schema v1 it has
-exactly one contract, exactly one target-platform artifact, and the contract
-roots; a second artifact for the same binding and target would collide with the
-canonical binding-artifact ID and is not a candidate-selection mechanism.
-Identical requirements and exact record references deduplicate. The same
-semantic key with different contracts, artifact references, wheel identity,
-package identity, provider owner, scope, or selected CLI fails before provider
-planning.
+Scope: establish the canonical Python support claims, static
+`Requires-Python` proof, shared wheel-platform policy, binding projection,
+interpreter evidence, pure runtime eligibility decision, resolver enforcement,
+and the contract-first final-image compatibility check that downstream
+materialization invokes after installation. Completing these delivery
+contracts allows PTD-23.2 construction to begin; it does not place final-image
+runtime validation before acquisition or materialization. The child sequence
+preserves the existing PTD-23.1 contract across PTD-23.1.1 through
+PTD-23.1.7, makes the previously omitted design-required final-image handoff
+explicit in PTD-23.1.8, and introduces no compatibility adapter between child
+heads.
 
-Before joint candidate selection, add one provider-owned canonical
-`supported_python` claim model and use it everywhere these records constrain an
-interpreter. Over normalized final interpreter releases, a canonical
-major/minor claim denotes the closed-open interval from that minor's `.0`
-release through, but excluding, the next minor; a canonical
+Acceptance: every responsibility and fixture previously owned by PTD-23.1 is
+owned exactly once by PTD-23.1.1 through PTD-23.1.7; PTD-23.1.8 exclusively
+owns the newly explicit final-image compatibility-preservation check. Every
+child compiles, passes its focused checks, and maps one-to-one to a
+current-head-approved pull request. PTD-23.1 closes only after PTD-23.1.1
+through PTD-23.1.8 do.
+
+Non-goals: an owning commit or pull request for this container, artifact
+download, wheel content inspection, installation, browser payloads, or
+ordinary-build production integration.
+
+#### PTD-23.1.1: Canonicalize Python Support Claims
+
+Scope: before joint candidate selection, add one provider-owned canonical
+`supported_python` claim model and use it everywhere portable binding records
+constrain an interpreter. Over normalized final interpreter releases, a
+canonical major/minor claim denotes the closed-open interval from that minor's
+`.0` release through, but excluding, the next minor; a canonical
 major/minor/patch claim denotes that exact complete release. Normalize a set by
 sorting numerically by major, minor, and optional patch with the series before
 its patches, removing duplicate claims, and removing exact patch claims already
 subsumed by a minor-series claim. Intersect two normalized sets with one linear
 merge: equal minor-series claims retain that series, a series and one of its
-patches retain the patch, unequal series or unequal exact
-patches do not intersect, and the bounded results are normalized again.
+patches retain the patch, unequal series or unequal exact patches do not
+intersect, and the bounded results are normalized again.
+
 Refactor the existing generic Python interpreter claim path in the joint
 solver, including active-provider constraints, to use this operation instead
 of literal string intersection. This is the sole interpreter-claim
-representation; selection, projection, and the later observed-runtime check
-must not grow independent minor/patch matching rules.
+representation; selection, projection, static coverage, and observed-runtime
+checks must not grow independent minor/patch matching rules.
 
-Correct the existing target-composition coverage check in the same slice so
-its static guarantee agrees with that claim model before selection can reach
-the runtime gate. For an exact-patch claim, an artifact covers the claim when
-its canonical `Requires-Python` admits that release. For a minor-series claim,
+Acceptance: normalization is deterministic, idempotent, bounded, and invariant
+to input order. Joint-selection fixtures cover two neutral bindings and an
+active-provider constraint at mixed minor-series and exact-patch granularity,
+retaining the exact patch when it belongs to the series and rejecting unequal
+series and unequal exact patches. Contract fixtures distinguish a matching
+minor series, an exact matching patch release, and a nonmatching patch release.
+
+Non-goals: parsing `Requires-Python`, projecting binding records, observing an
+interpreter, wheel eligibility, or artifact acquisition.
+
+#### PTD-23.1.2: Prove Requires-Python Coverage
+
+Scope: correct the existing target-composition coverage check so its static
+guarantee agrees with the PTD-23.1.1 claim model before selection can reach the
+runtime gate. For an exact-patch claim, an artifact covers the claim when its
+canonical `Requires-Python` admits that release. For a minor-series claim,
 coverage requires proof that the schema-v1 target artifact's canonical
 `Requires-Python` admits the complete closed-open minor interval; admitting
 only `.0`, a finite prefix, or an interval with an excluded release does not
-cover the series. Put the proof in one provider-owned pure helper over the
-canonical claim representation. Refactor the Python provider's existing
-normalized-release specifier evaluator into one parsed conjunction with
-inclusive or exclusive lower and upper bounds, optional exact or prefix
-equality, and exact or prefix exclusions; keep
-`InterpreterVersionSatisfies` as a consumer of that same representation. The
-coverage helper uses overflow-checked minor successors and proves that the
-claimed point or interval is a subset of the parsed constraint, including that
-no exclusion cuts the interval; the same representation also answers the
-weaker nonempty-overlap question for an individual artifact. Contradictory
-constraints and a minor whose successor cannot be represented fail closed.
+cover the series.
+
+Put the proof in one provider-owned pure helper over the canonical claim
+representation. Refactor the Python provider's existing normalized-release
+specifier evaluator into one parsed conjunction with inclusive or exclusive
+lower and upper bounds, optional exact or prefix equality, and exact or prefix
+exclusions; keep `InterpreterVersionSatisfies` as a consumer of that same
+representation. The helper uses overflow-checked minor successors and proves
+that the claimed point or interval is a subset of the parsed constraint,
+including that no exclusion cuts the interval; the same representation also
+answers the weaker nonempty-overlap question for an individual artifact.
+Contradictory constraints and a minor whose successor cannot be represented
+fail closed.
+
 Record validation continues to use the existing PEP 440 parser for general
 `Requires-Python` validity, but a form outside the provider's existing
 normalized-release subset fails closed when asked to prove complete
@@ -1219,49 +1263,116 @@ introduce a second specifier parser. Reuse it from both
 `validateBindingArtifactAgainstContractV1` and
 `validateBindingInterpreterCoverageV1`, preserving the existing rule that an
 individual artifact must overlap the contract and strengthening the target
-artifact to cover every advertised claim. This is a corrective prerequisite
-inside PTD-23.1, not a new artifact-selection mechanism or a Playwright
-exception.
+artifact to cover every advertised claim. This is a corrective prerequisite,
+not a new artifact-selection mechanism or a Playwright exception.
+
+Acceptance: static fixtures prove that `supported_python: ["3.14"]` accepts
+complete-series coverage such as `Requires-Python: >=3.14,<3.15` but rejects a
+`.0`-only or finite-prefix range such as `>=3.14,<3.14.1` and rejects a range
+with a release exclusion; the corresponding exact-patch claim remains a
+point-membership check. Boundary fixtures cover the largest accepted numeric
+component without overflow or unbounded enumeration.
+
+Non-goals: selecting among multiple artifacts, wheel-platform policy,
+interpreter inspection, runtime eligibility, or artifact acquisition.
+
+#### PTD-23.1.3: Project Wheel Platform Policy
+
+Scope: refactor the existing shared portable-record filename-tag expansion and
+target-platform compatibility validator behind one pure platform-policy
+projection. The same boundary both validates and returns the normalized kind,
+architecture, and optional minimum glibc release for each platform tag; PTD-23
+does not add a second wheel-tag parser or platform-policy table.
+
+The one policy mapping recognizes `any`, `linux_<arch>`, legacy `manylinux1` as
+glibc 2.5 on x86_64, `manylinux2010` as glibc 2.12 on x86_64,
+`manylinux2014` as glibc 2.17 on x86_64 or aarch64, and versioned
+`manylinux_<major>_<minor>` tags only when the major is 2 and the encoded minor
+is at least 5 for x86_64 or 17 for aarch64. A syntactically numeric versioned
+tag with another major or a lower architecture floor projects as unsupported
+and fails closed. Record validation continues to use this projection for
+syntax and selected-target architecture; later Python-provider slices consume
+the same result for runtime-dependent decisions.
+
+Acceptance: shared-policy fixtures cover `any`, native Linux, every legacy
+manylinux alias, both permitted architectures, versioned floors below, equal
+to, and above each architecture minimum, and unsupported policy majors. Record
+validation and provider consumers receive identical normalized projections;
+production code contains no second platform mapping.
+
+Non-goals: inspecting libc, deciding runtime tag membership, invoking pip, or
+artifact acquisition.
+
+#### PTD-23.1.4: Project Binding Records into Python Provider Inputs
+
+Scope: add one pure projection boundary that consumes a validated
+provider-neutral portable-tool plan plus the canonical resolved application
+component requests, and returns a freshly allocated canonical
+component-request set plus the canonical Python-binding projection described
+by PTD-23. It runs before provider node planning and portable DAG construction.
+An `application:<owner>` scope maps only to
+`application/<owner>/python`; any other scope or component owner is rejected.
+When the application already has a Python contribution, preserve its explicit
+interpreter request and merge the binding requirements into it. When a
+selected sole or explicit Python binding is the application's first Python
+contribution, create that canonical contribution with the Python provider's
+established default `python` interpreter requirement. Do not mutate the
+blueprint, selected plan, or caller-owned request values.
+
+Decode binding contracts and artifacts only through their shared strict record
+contracts. Join every artifact to its exact contract reference, require the
+contract CLI to equal one selected plan export, and normalize every root and
+artifact distribution through the Python provider grammar. Key one group by
+owning component and normalized contract package. Under schema v1 it has
+exactly one contract, exactly one target-platform artifact, and the contract
+roots; a second artifact for the same binding and target would collide with
+the canonical binding-artifact ID and is not a candidate-selection mechanism.
+Identical requirements and exact record references deduplicate. The same
+semantic key with different contracts, artifact references, wheel identity,
+package identity, provider owner, scope, or selected CLI fails before provider
+planning.
+
+Before any interpreter probe, restrict the projected tag input to the initial
+support envelope: generic `py<major>` and `py<major><minor>` or
+`cp<major><minor>` interpreter tags; ABI `none`, exact CPython ABIs, or `abi3`
+whose encoded CPython release is at least 3.2; and the supported `any`, native
+Linux, and PTD-23.1.3 manylinux platform forms. Platform `any` is eligible only
+with ABI `none`, so every ABI-bearing `*-any` tuple fails before inspection.
+Any other syntactically valid Python, ABI, or platform form fails closed before
+inspection and acquisition until the shared support envelope is extended.
 
 Emit one exact-wheel constraint per owning component and normalized
 distribution. A constraint retains the exact artifact reference and its
 declared filename, distribution, ecosystem version, tags, size, digest, and
-`Requires-Python`; it is not a
-version override, index preference, local-source override, filesystem path, or
-acquisition result.
+`Requires-Python`; it is not a version override, index preference,
+local-source override, filesystem path, or acquisition result. Collect the
+bounded `tested_tags` input for each owning component from the union of the
+already expanded, contract-matching artifact tags using PTD-23.1.3's shared
+projection.
 
-Add a pure pre-acquisition compatibility gate over the projection and the
-Python provider's observed canonical interpreter evidence. Invoke it at the
-existing Python resolver lifecycle seam immediately after interpreter
-resolution and before wheel preparation; do not probe or resolve the
-interpreter a second time. Reuse the shared portable-record filename-tag
-expansion and target-platform compatibility validation; PTD-23 does not add a
-second wheel-tag parser or a second platform-policy table. Refactor that
-existing validator behind one shared pure platform-policy projection which
-both validates and returns the normalized kind, architecture, and optional
-minimum glibc release for each platform tag. The one policy mapping recognizes
-`any`, `linux_<arch>`, legacy `manylinux1` as glibc 2.5 on x86_64,
-`manylinux2010` as glibc 2.12 on x86_64, `manylinux2014` as glibc 2.17 on
-x86_64 or aarch64, and versioned `manylinux_<major>_<minor>` tags only when the
-major is 2 and the encoded minor is at least 5 for x86_64 or 17 for aarch64.
-A syntactically numeric versioned tag with another major or a lower
-architecture floor projects as unsupported and fails closed. Record validation
-continues to use the projection for syntax and selected-target architecture;
-the Python provider consumes its result for the runtime-dependent decision.
-Reuse the Python provider's canonical interpreter-version and PEP 440 checks,
-existing inspected-wheel tag representation, and ordinary pip resolver as the
-final compatibility authority.
+Acceptance: reversing tools, contracts, artifacts, or component requests emits
+byte-identical projected requests and sidecar projection. Projection creates
+the missing Python contribution when required and cannot attach one
+application's binding to another. Compatible duplicate inputs collapse while
+conflicting roots, exact artifacts, owners, scopes, package identities, or CLI
+exports fail with stable diagnostics. Tests cover two neutrally named
+synthetic tools in one application, the same records in isolated applications,
+an existing explicit Python request, a tool-only application, and the selected
+Playwright records.
 
-Add only the missing provider-owned pure runtime wheel-eligibility helper
-needed before acquisition. Extend the existing fixed interpreter inspection,
-in the same invocation, to emit the normalized Python implementation,
-canonical ABI tag, normalized libc implementation and canonical nonnegative
-major/minor release pair, and two canonical sorted unique string arrays:
-`tested_tags` and its `compatible_tags` subset. Before provider planning,
-collect `tested_tags` from the union of the already expanded, contract-matching
-artifact tags for the owning Python component. Pass that exact bounded set and
-the selected target architecture to the fixed probe as validated data, never
-as executable source; the returned `tested_tags` must equal it exactly.
+Non-goals: interpreter inspection or evidence, runtime eligibility, artifact
+download, wheel content inspection, installation, or a filesystem path in the
+projection.
+
+#### PTD-23.1.5: Cut Over Python Interpreter Evidence V2
+
+Scope: extend the existing fixed interpreter inspection, in the same
+invocation, to emit the normalized Python implementation, canonical ABI tag,
+normalized libc implementation and canonical nonnegative major/minor release
+pair, and two canonical sorted unique string arrays: `tested_tags` and its
+`compatible_tags` subset. Pass PTD-23.1.4's exact bounded tested-tag set and the
+selected target architecture to the fixed probe as validated data, never as
+executable source; the returned `tested_tags` must equal it exactly.
 
 Use one provider-owned command-prefix helper for both the probe and the
 ordinary resolver: each invokes the selected interpreter in isolated mode
@@ -1273,42 +1384,59 @@ the existing provider-controlled work directory and environment remain in
 force. The probe imports that pip installation's
 `pip._vendor.packaging.tags` implementation, enumerates `sys_tags()` once, and
 emits only the tested tags present in that set. This read-only step performs no
-network operation, artifact acquisition, or wheel parsing. The
-existing record expansion and reference-count ceilings bound its candidate
-input and canonical output; a missing pip tag generator, execution failure,
-malformed or duplicate evidence, an output tag outside `tested_tags`, or any
-other partial result fails inspection before acquisition. Pip's own tag
-generator therefore remains the one runtime compatibility engine and observes
-its executable/architecture checks, libc detection, free-threaded and other ABI
-rules, and optional `_manylinux` policy hooks without copying them into Reploy.
-Replace `python-interpreter-facts-v1` and every dependent provider profile and
-recipe identity with their next versions in this slice; do not add a dual reader
-or compatibility path for the unreleased format. The pure helper consumes the
-validated facts and already projected artifact tags; it performs no subprocess,
-filesystem, network, import, callback, or acquisition operation.
+network operation, artifact acquisition, or wheel parsing.
 
-Before invoking the probe, the shared projection restricts the initial support
-envelope to generic `py<major>` and `py<major><minor>` or
-`cp<major><minor>` interpreter tags; ABI `none`, exact CPython ABIs, or `abi3`
-whose encoded CPython release is at least 3.2; and the supported `any`, native
-Linux, and projected manylinux platform forms above. Platform `any` is eligible
-only with ABI `none`, so every ABI-bearing `*-any` tuple fails before
-inspection. Any other syntactically valid Python, ABI, or platform form also
-fails closed before acquisition until the shared support envelope is extended.
-For a candidate with a manylinux platform, that envelope additionally requires
-the inspected libc implementation to be `glibc` with observed major exactly 2;
-unknown libc, a non-glibc implementation, or any other observed major fails
-before membership is considered. This is the initial runtime support boundary,
-not a second policy-floor or tag-compatibility calculation.
+The existing record expansion and reference-count ceilings bound the probe's
+candidate input and canonical output. A missing pip tag generator, execution
+failure, malformed or duplicate evidence, an output tag outside `tested_tags`,
+or any other partial result fails inspection before acquisition. Pip's tag
+generator remains the one runtime compatibility engine and observes its
+executable and architecture checks, libc detection, free-threaded and other
+ABI rules, and optional `_manylinux` policy hooks without copying them into
+Reploy. Replace `python-interpreter-facts-v1` and every dependent provider
+profile and recipe identity with their next versions in this slice; do not add
+a dual reader or compatibility path for the unreleased format.
+
+Acceptance: inspection fixtures cover an absent `_manylinux` module, callable
+decisions of `True`, `False`, and `None`, including non-monotonic policy
+results, each legacy compatibility boolean, and raising hooks as observed
+through the selected pip tag generator. Separate fixtures reject missing or
+malformed pip tag evidence, a tested-tag mismatch, duplicates, and an accepted
+tag outside the tested set before acquisition. An adversarial import-shadow
+fixture places a fake `pip` package in the resolver work directory and proves
+that the probe and resolver retain the shared isolated command prefix and
+import the selected interpreter's installed pip without diverging before
+artifact acquisition. Conflicting or aliased interpreter evidence fails with
+stable diagnostics.
+
+Non-goals: implementing a second tag-compatibility engine, deciding portable
+wheel eligibility, resolver lifecycle enforcement, or artifact acquisition.
+
+#### PTD-23.1.6: Decide Portable-Wheel Eligibility
+
+Scope: add only the missing provider-owned pure runtime wheel-eligibility
+helper over the PTD-23.1.4 projection and validated PTD-23.1.5 interpreter
+facts. It performs no subprocess, filesystem, network, import, callback, or
+acquisition operation. Reuse the Python provider's canonical interpreter
+version and PEP 440 checks, existing inspected-wheel tag representation, and
+ordinary pip resolver as the final compatibility authority.
+
+The projection entering this helper has already passed PTD-23.1.4's static
+support envelope. For a candidate with a manylinux platform, the runtime
+boundary additionally requires the inspected libc implementation to be
+`glibc` with observed major exactly 2; unknown libc, a non-glibc
+implementation, or any other observed major fails before membership is
+considered. This is an observed-runtime guard, not a second policy-floor or
+tag-compatibility calculation.
 
 For every candidate inside that envelope, runtime compatibility means exact
-membership of its canonical three-part tag in the inspected `compatible_tags`
-subset. The helper must not reconstruct generic-version ordering, CPython or
-`abi3` rules, ABI flags, libc floors, architecture compatibility, or
-`_manylinux` decisions from the diagnostic fact fields. Thus an older generic
-tag on a newer interpreter, a debug or free-threaded ABI, native Linux, and
-every legacy or versioned manylinux policy follow the selected interpreter's
-own pip result. The provider does not parse wheel filenames, infer
+membership of its canonical three-part tag in the inspected
+`compatible_tags` subset. The helper must not reconstruct generic-version
+ordering, CPython or `abi3` rules, ABI flags, libc floors, architecture
+compatibility, or `_manylinux` decisions from diagnostic fields. Thus an older
+generic tag on a newer interpreter, a debug or free-threaded ABI, native Linux,
+and every legacy or versioned manylinux policy follow the selected
+interpreter's pip result. The provider does not parse wheel filenames, infer
 architectures, invoke policy hooks, or duplicate the shared support mapping.
 
 At least one entry in each contract's `supported_python` must match the
@@ -1317,71 +1445,77 @@ while a canonical major/minor/patch entry requires exact equality with the
 observed complete release. The complete release must also satisfy the
 artifact's canonical `Requires-Python`, and at least one filename-derived
 artifact tag must be both contract-advertised and compatible with the observed
-interpreter/ABI facts and selected target platform. The gate validates every
-constraint as one deterministic set before invoking any acquisition callback; failure acquires
-nothing. PTD-23.2 repeats all record-to-wheel facts observable from the bytes,
-but does not weaken this earlier eligibility gate. PTD-23.1 owns and unit-tests
-the inspection-evidence transition, seam, and gate; PTD-23.3 wires the
-acquisition and wheel-preparation callback into it.
+interpreter, ABI facts, and selected target platform.
 
-Acceptance: reversing tools, contracts, artifacts, or component requests emits
-byte-identical projected requests and sidecar projection; projection creates
-the missing Python contribution when required and cannot attach one
-application's binding to another; compatible duplicate inputs collapse while
-conflicting roots, exact artifacts, interpreter evidence, owners, scopes, or
-CLI exports fail with stable diagnostics. Tests cover two neutrally named
-synthetic tools in one application, the same records in isolated applications,
-an existing explicit Python request, a tool-only application, and the selected
-Playwright records. Neutral fixtures cover generic Python tags, including an
-older `py<major><minor>` on a newer interpreter, CPython-specific tags,
-stable-ABI tags at and above the CPython 3.2 floor, rejection of pre-3.2
-`abi3` tags, acceptance of `abi3` on a GIL-enabled debug CPython ABI, rejection
-of `abi3` on a free-threaded CPython ABI, and a nonmatching implementation or
-ABI. Contract fixtures cover a matching
-major/minor series, an exact matching patch release, and a nonmatching patch
-release. Joint-selection fixtures cover two neutral bindings and an active
-provider constraint at mixed minor-series and exact-patch granularity,
-retaining the exact patch when it belongs to the series and rejecting unequal
-series and unequal exact patches. Static coverage fixtures prove that
-`supported_python: ["3.14"]` accepts complete-series coverage such as
-`Requires-Python: >=3.14,<3.15` but rejects a `.0`-only or finite-prefix range
-such as `>=3.14,<3.14.1` and rejects a range with a release exclusion; the
-corresponding exact-patch claim remains a point-membership check. Boundary
-fixtures cover the largest accepted numeric component without overflow or
-unbounded enumeration. Platform fixtures cover generic and CPython
-`*-none-any`, rejection of exact-ABI and `abi3` `*-any` tuples, native Linux,
-every legacy manylinux alias, and versioned
+Acceptance: neutral fixtures cover generic Python tags, including an older
+`py<major><minor>` on a newer interpreter, CPython-specific tags, stable-ABI
+tags at and above the CPython 3.2 floor, rejection of pre-3.2 `abi3`, acceptance
+of `abi3` on a GIL-enabled debug CPython ABI, rejection of `abi3` on a
+free-threaded CPython ABI, and a nonmatching implementation or ABI. Platform
+fixtures cover generic and CPython `*-none-any`, rejection of exact-ABI and
+`abi3` `*-any`, native Linux, every legacy manylinux alias, and versioned
 manylinux floors below, equal to, and above the observed glibc release on each
-permitted architecture. Separate fixtures cover versioned floors below the
-architecture minimum and unsupported policy or observed glibc majors on both
-architectures; unknown and non-glibc runtimes fail every manylinux case.
-Those runtime-boundary fixtures include otherwise matching
-`compatible_tags` evidence and still prove zero artifact-acquisition callbacks,
-so pip membership cannot bypass the bounded libc guard.
-Inspection fixtures cover an absent `_manylinux` module, callable decisions of
-`True`, `False`, and `None` (including non-monotonic policy results), each
-legacy compatibility boolean, and raising hooks as observed through the
-selected pip tag generator. A hook-rejected tag remains absent even when the
-observed glibc release is high enough; the corresponding test proves that the
-artifact acquisition callback was invoked zero times. Separate fixtures reject
-missing or malformed pip tag evidence, a tested-tag mismatch, duplicates, and
-an accepted tag outside the tested set before acquisition. An adversarial
-import-shadow fixture places a fake `pip` package in the resolver work
-directory and proves that the probe and resolver both retain the shared
-isolated command prefix, import the selected interpreter's installed pip, and
-cannot diverge before artifact acquisition. Differential fixtures prove that
-every supported Python/ABI/platform decision
-agrees with the ordinary pip resolver; unsupported forms fail closed. Each
-unsupported minor version, complete `Requires-Python` release, interpreter
-implementation, ABI tag, libc implementation or release, and platform tag
-case—including every below-minimum or unsupported-major manylinux case—proves
-that the binding-artifact acquisition callback was invoked zero times.
-Production files contain no literal identity check or dispatch on a tool,
-package, CLI, or bundled-component name; comparisons between canonical data
-values remain required validation.
+permitted architecture. Separate fixtures cover floors below the architecture
+minimum and unsupported policy or observed glibc majors on both architectures;
+unknown and non-glibc runtimes fail every manylinux case. Differential fixtures
+prove every supported Python, ABI, and platform decision agrees with the
+ordinary pip resolver; unsupported forms fail closed.
 
-Non-goals: artifact download, wheel content inspection, installation, browser
-payloads, or ordinary-build production integration.
+Non-goals: invoking an interpreter, resolver lifecycle integration, an
+acquisition callback, or final-image revalidation.
+
+#### PTD-23.1.7: Enforce Portable-Wheel Eligibility in Resolver Paths
+
+Scope: invoke PTD-23.1.6's pure gate at the existing Python resolver lifecycle
+seam immediately after interpreter resolution and before wheel preparation in
+every fresh and cached resolver path. Consume the already observed interpreter
+facts; do not probe or resolve the interpreter a second time. Validate every
+projected constraint as one deterministic set before invoking any acquisition
+callback. Failure acquires nothing. PTD-23.2 repeats all record-to-wheel facts
+observable from acquired bytes but does not weaken this earlier eligibility
+gate; PTD-23.3 wires the acquisition and wheel-preparation callback into the
+validated seam.
+
+Acceptance: fresh and cached paths invoke one identical gate over the complete
+constraint set. Every unsupported minor version, complete `Requires-Python`
+release, interpreter implementation, ABI tag, libc implementation or release,
+and platform tag case, including every below-minimum or unsupported-major
+manylinux case, proves that the binding-artifact acquisition callback was
+invoked zero times. A hook-rejected tag remains absent even when the observed
+glibc release is high enough, and corresponding tests prove zero acquisition.
+Otherwise matching `compatible_tags` evidence cannot bypass the bounded libc
+guard. Reordering constraints does not change the result or diagnostics.
+
+Non-goals: a second interpreter probe, artifact acquisition or inspection,
+wheel installation, CLI publication, or final-image validation.
+
+#### PTD-23.1.8: Preserve Portable-Wheel Compatibility in Final-Image Validation
+
+Scope: extend the existing Python full-image validation profile to preserve
+the portable-wheel compatibility decision made before acquisition. Decode the
+locked PTD-23.1.5 evidence, rerun the same fixed interpreter inspection once
+inside the final image using the locked `tested_tags`, and require the fresh
+canonical version, implementation, ABI, libc identity and release, tested-tag
+set, and compatible-tag subset to equal the locked binding evidence. Reuse the
+PTD-23.1.1 claim and PTD-23.1.2 specifier semantics; do not create an
+independent version matcher or compatibility engine. Ordinary Python profiles
+whose evidence contains no tested tags retain their existing compatible-version
+policy. This slice defines and tests the existing profile's contract before
+PTD-23.2 construction; the check runs only after PTD-23.3 has materialized the
+binding and the PTD-25 production caller supplies that final image to the
+existing validation boundary, never before wheel acquisition or installation.
+
+Acceptance: focused final-image fixtures reject drift in version,
+implementation, ABI, libc, tested tags, or compatible tags with stable
+diagnostics. Unchanged portable-binding evidence passes, and ordinary Python
+profiles without portable tested tags continue to accept the same compatible
+version transitions as before. Production files contain no literal identity
+check or dispatch on a tool, package, CLI, or bundled-component name;
+comparisons between canonical data values remain required validation.
+
+Non-goals: changing eligibility, acquiring or inspecting artifacts,
+installation, alias publication, browser payloads, or the PTD-25
+ordinary-build production caller.
 
 #### PTD-23.2: Acquire and Verify Exact Portable Python Binding Wheels
 
@@ -1479,13 +1613,16 @@ acquisition or extraction, or tool-specific acquisition and inspection code.
 
 #### PTD-23.3: Materialize Portable Python Bindings Offline
 
-Scope: at the Python resolver seam defined by PTD-23.1, run the compatibility
-gate once over the already observed interpreter, acquire and verify the exact
-PTD-23.2 artifact set, and join each artifact reference to its exact
-verified-wheel input and projected component constraint. Stage each descriptor
-read-only under a deterministic collision-checked resolver path. Extend the
-existing Python resolver input—not the public blueprint syntax—with a mandatory
-direct constraint from the normalized distribution to that staged local wheel.
+Scope: at the Python resolver seam defined by PTD-23.1, consume the eligibility
+decision already enforced over the observed interpreter, invoke PTD-23.2's
+owned acquisition and verification path for the exact artifact set, and join
+each artifact reference to its exact verified-wheel input and projected
+component constraint. PTD-23.3 owns this orchestration and callback wiring; it
+does not reimplement the PTD-23.1 gate or PTD-23.2 acquisition and inspection
+primitives. Stage each descriptor read-only under a deterministic
+collision-checked resolver path. Extend the existing Python resolver input—not
+the public blueprint syntax—with a mandatory direct constraint from the
+normalized distribution to that staged local wheel.
 The selected wheel is also a direct root in the component request. The resolver may
 use its ordinary controlled network path for the remaining contract roots and
 transitive dependencies, but the selected distribution can be satisfied only
@@ -1661,8 +1798,9 @@ The campaign is complete only when:
 
 - every delivery item maps one-to-one to an approved current-head PR in
   dependency order: `PTD-01` through `PTD-20`, `PTD-21.1` through `PTD-21.5`,
-  `PTD-22.1` through `PTD-22.3`, `PTD-23.1` through `PTD-23.3`, and `PTD-24`
-  through `PTD-29`; the `PTD-21`, `PTD-22`, and `PTD-23` milestone containers
+  `PTD-22.1` through `PTD-22.3`, `PTD-23.1.1` through `PTD-23.1.8`,
+  `PTD-23.2`, `PTD-23.3`, and `PTD-24` through `PTD-29`; the `PTD-21`,
+  `PTD-22`, and `PTD-23` milestone containers and nested `PTD-23.1` container
   own no PR and close only when all of their child slices are approved;
 - the shared-record-contract corrective prerequisite has current-head approval
   and remains in the exact ancestry after PTD-21.3 and before PTD-21.4;
