@@ -336,8 +336,15 @@ func validateActiveProviderConstraintSourceV1(index int,
 			if err := validateSortedUniqueStringsV1("requirements", item.Requirements, false); err != nil {
 				return err
 			}
-			if err := validateSortedUniqueStringsV1("supported Python", item.SupportedPython, false); err != nil {
+			if item.SupportedPython == nil || len(item.SupportedPython) > maxDefinitionReferences {
+				return fmt.Errorf("supported Python must use a bounded array")
+			}
+			claims, err := pythonprovider.NormalizeSupportedPythonClaimsV1(item.SupportedPython)
+			if err != nil {
 				return err
+			}
+			if !stringSlicesEqualV1(claims, item.SupportedPython) {
+				return fmt.Errorf("supported Python claims are not canonically normalized")
 			}
 			if len(item.Requirements) == 0 && len(item.SupportedPython) == 0 {
 				return fmt.Errorf("must contribute a requirement or interpreter constraint")
@@ -790,28 +797,41 @@ func addBindingRequirementClaimV1(claims *assignmentClaimsV1, domain string,
 	return "", nil
 }
 
+func stringSlicesEqualV1(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func addPythonInterpreterClaimV1(claims *assignmentClaimsV1, domain string,
 	supported []string, owner string) string {
+	normalized, err := pythonprovider.NormalizeSupportedPythonClaimsV1(supported)
+	if err != nil {
+		return fmt.Sprintf("invalid Python interpreter claim from %s: %v", owner, err)
+	}
+	if len(normalized) == 0 {
+		return ""
+	}
 	if claims.pythonInterpreters == nil {
 		claims.pythonInterpreters = make(map[string]pythonInterpreterClaimV1)
 	}
 	previous, exists := claims.pythonInterpreters[domain]
 	if !exists {
 		claims.pythonInterpreters[domain] = pythonInterpreterClaimV1{
-			owners: []string{owner}, constraints: [][]string{append([]string{}, supported...)},
-			supported: append([]string{}, supported...),
+			owners: []string{owner}, constraints: [][]string{append([]string{}, normalized...)},
+			supported: append([]string{}, normalized...),
 		}
 		return ""
 	}
-	available := make(map[string]struct{}, len(previous.supported))
-	for _, version := range previous.supported {
-		available[version] = struct{}{}
-	}
-	intersection := make([]string, 0, len(supported))
-	for _, version := range supported {
-		if _, ok := available[version]; ok {
-			intersection = append(intersection, version)
-		}
+	intersection, err := pythonprovider.IntersectSupportedPythonClaimsV1(previous.supported, normalized)
+	if err != nil {
+		return fmt.Sprintf("invalid Python interpreter claim from %s: %v", owner, err)
 	}
 	if len(intersection) == 0 {
 		return fmt.Sprintf("Python interpreter conflict in domain %q among %s",

@@ -66,6 +66,34 @@ func TestValidateRecordEnvelopeV1RejectsNoncanonicalRecordID(t *testing.T) {
 	}
 }
 
+func TestValidateRecordEnvelopeV1RequiresNormalizedSupportedPythonClaims(t *testing.T) {
+	t.Parallel()
+	for _, claims := range [][]any{
+		{"3.10.1", "3.10"},
+		{"3.10", "3.10.1"},
+		{"3.10", "3.9"},
+		{"3.10.1", "3.10.1"},
+	} {
+		value := readDefinitionObjectV1(t, "playwright/releases/1.61.0/bindings/python/contract.json")
+		value["supported_python"] = claims
+		if err := portabletool.ValidateRecordEnvelopeV1(canonical.Envelope{
+			Schema: portabletool.BindingContractSchemaV1,
+			Value:  value,
+		}); err == nil {
+			t.Errorf("non-normalized supported Python claims %#v were accepted", claims)
+		}
+	}
+
+	value := readDefinitionObjectV1(t, "playwright/releases/1.61.0/bindings/python/contract.json")
+	value["supported_python"] = []any{"3.9", "3.10.1", "3.10.2"}
+	if err := portabletool.ValidateRecordEnvelopeV1(canonical.Envelope{
+		Schema: portabletool.BindingContractSchemaV1,
+		Value:  value,
+	}); err != nil {
+		t.Fatalf("normalized exact patch claims were rejected: %v", err)
+	}
+}
+
 func TestValidateRecordEnvelopeV1RejectsShortPayloadID(t *testing.T) {
 	t.Parallel()
 	value := readDefinitionObjectV1(t, "playwright/releases/1.61.0/payloads/chromium/chromium-linux-amd64.json")
