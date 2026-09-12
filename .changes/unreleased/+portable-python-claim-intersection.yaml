@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve compatible Python minor-series and exact-patch claims when portable bindings share an interpreter domain.

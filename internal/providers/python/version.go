@@ -7,6 +7,7 @@ import (
 
 	pep440 "github.com/aquasecurity/go-pep440-version"
 	"github.com/omry/reploy/internal/portabletool"
+	providerapi "github.com/omry/reploy/internal/providers"
 )
 
 // ValidatePackageVersionV1 accepts one exact Python distribution version.
@@ -26,6 +27,14 @@ func ValidatePackageVersionV1(value string) error {
 // major.minor.patch release form used by portable binding compatibility lists.
 func ValidateInterpreterVersionV1(value string) error {
 	return portabletool.ValidatePythonInterpreterVersionV1(value)
+}
+
+func NormalizeSupportedPythonClaimsV1(values []string) ([]string, error) {
+	return providerapi.NormalizeSupportedPythonClaimsV1(values)
+}
+
+func IntersectSupportedPythonClaimsV1(left, right []string) ([]string, error) {
+	return providerapi.IntersectSupportedPythonClaimsV1(left, right)
 }
 
 // ComparePackageVersionsV1 compares valid PEP 440 versions.
