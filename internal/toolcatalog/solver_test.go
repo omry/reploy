@@ -1,6 +1,7 @@
 package toolcatalog
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -446,9 +447,9 @@ func TestBindingClaimsRequireSharedPythonInterpreterV1(t *testing.T) {
 	source := sourceSet.Candidates[1]
 
 	bindingLeft := cloneBindingContractV1(validRecordValuesV1()[4].(*BindingContractV1))
-	bindingLeft.SupportedPython = []string{"3.11", "3.12"}
+	bindingLeft.SupportedPython = []string{"3.12"}
 	bindingRight := cloneBindingContractV1(&bindingLeft)
-	bindingRight.SupportedPython = []string{"3.12", "3.13"}
+	bindingRight.SupportedPython = []string{"3.12.2"}
 	application.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &bindingLeft)}
 	source.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &bindingRight)}
 
@@ -464,13 +465,25 @@ func TestBindingClaimsRequireSharedPythonInterpreterV1(t *testing.T) {
 		t.Fatalf("overlapping supported Python sets conflict = %q, %v", conflict, err)
 	}
 
+	bindingLeft.SupportedPython = []string{"3.12.2"}
+	application.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &bindingLeft)}
 	bindingDisjoint := cloneBindingContractV1(&bindingLeft)
-	bindingDisjoint.SupportedPython = []string{"3.13"}
+	bindingDisjoint.SupportedPython = []string{"3.12.3"}
 	source.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &bindingDisjoint)}
 	conflict, err := catalog.assignmentConflictV1(
 		sets, []ReleaseCandidateV1{application, source}, domains, solverTestActiveProvidersV1())
 	if err != nil || !strings.Contains(conflict, "Python interpreter conflict") {
 		t.Fatalf("disjoint supported Python sets conflict = %q, %v", conflict, err)
+	}
+
+	bindingLeft.SupportedPython = []string{"3.12"}
+	application.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &bindingLeft)}
+	bindingDisjoint.SupportedPython = []string{"3.13"}
+	source.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &bindingDisjoint)}
+	conflict, err = catalog.assignmentConflictV1(
+		sets, []ReleaseCandidateV1{application, source}, domains, solverTestActiveProvidersV1())
+	if err != nil || !strings.Contains(conflict, "Python interpreter conflict") {
+		t.Fatalf("unequal minor-series claims conflict = %q, %v", conflict, err)
 	}
 }
 
@@ -620,7 +633,7 @@ func TestActiveProviderConstraintsAcceptEveryCanonicalFamilyV1(t *testing.T) {
 		Manager: "apt", Requirements: []string{"curl"}, Repositories: []string{"debian-main"},
 	}}
 	source.PythonBindings = []ActivePythonBindingConstraintV1{{
-		Name: "python", Requirements: []string{"support>=1"}, SupportedPython: []string{"3.11"},
+		Name: "python", Requirements: []string{"support>=1"}, SupportedPython: []string{"3.11.4"},
 	}}
 	source.InstallRoots = []string{"/srv/active"}
 	source.OwnedPaths = []ActiveFilesystemConstraintV1{{Path: "/srv/active/data", Digest: digest}}
@@ -642,6 +655,32 @@ func TestActiveProviderConstraintsAcceptEveryCanonicalFamilyV1(t *testing.T) {
 		if !strings.Contains(result.Snapshot.CanonicalJSON, value) {
 			t.Errorf("operation snapshot omitted active constraint family %s", value)
 		}
+	}
+}
+
+func TestActiveProviderPythonClaimRetainsCumulativeIntersectionV1(t *testing.T) {
+	catalog := candidateTestCatalogV1(t)
+	domains := solverTestBuildDomainsV1(false)
+	source := solverTestActiveSourceV1(
+		"source-builder:demo", "active-provider", "application/current")
+	source.PythonBindings = []ActivePythonBindingConstraintV1{{
+		Name: "python", SupportedPython: []string{"3.11"},
+	}}
+	claims := assignmentClaimsV1{}
+	if conflict, err := catalog.addActiveProviderClaimsV1(
+		&claims, domains[:1], solverTestActiveProvidersV1(source)); err != nil || conflict != "" {
+		t.Fatalf("seed active-provider series claim = %q, %v", conflict, err)
+	}
+	if conflict := addPythonInterpreterClaimV1(
+		&claims, domains[0].PackageManager, []string{"3.11.4"}, "matching exact patch"); conflict != "" {
+		t.Fatalf("intersect active-provider series with exact patch: %s", conflict)
+	}
+	if got := claims.pythonInterpreters[domains[0].PackageManager].supported; !reflect.DeepEqual(got, []string{"3.11.4"}) {
+		t.Fatalf("retained supported Python = %#v, want exact intersection", got)
+	}
+	if conflict := addPythonInterpreterClaimV1(
+		&claims, domains[0].PackageManager, []string{"3.11.5"}, "unequal exact patch"); !strings.Contains(conflict, "Python interpreter conflict") {
+		t.Fatalf("later unequal exact patch conflict = %q", conflict)
 	}
 }
 
@@ -762,10 +801,10 @@ func TestActiveProviderConstraintsSeedEveryClaimFamilyV1(t *testing.T) {
 		{name: "Python interpreter", want: "Python interpreter conflict", mutate: func(candidate *ReleaseCandidateV1, source *ActiveProviderConstraintSourceV1) {
 			binding := cloneBindingContractV1(validRecordValuesV1()[4].(*BindingContractV1))
 			binding.Requirements = []string{"demo>=1"}
-			binding.SupportedPython = []string{"3.12"}
+			binding.SupportedPython = []string{"3.12.1"}
 			candidate.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &binding)}
 			source.PythonBindings = []ActivePythonBindingConstraintV1{{
-				Name: "python", Requirements: []string{}, SupportedPython: []string{"3.11"},
+				Name: "python", Requirements: []string{}, SupportedPython: []string{"3.12.2"},
 			}}
 		}},
 		{name: "install root", want: "filesystem conflict", mutate: func(candidate *ReleaseCandidateV1, source *ActiveProviderConstraintSourceV1) {

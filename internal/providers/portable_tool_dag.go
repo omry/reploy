@@ -565,7 +565,7 @@ func validatePortableToolProviderSharedClaimsV1(
 	claims := make(map[string]claim)
 	filesystemClaims := make(map[string][]portableToolFilesystemClaimV1)
 	pythonRequirements := make(map[string][]string)
-	pythonSupported := make(map[string][][]string)
+	pythonSupported := make(map[string][]string)
 	addClaim := func(key, value, owner string) error {
 		if previous, exists := claims[key]; exists {
 			if previous.value != value {
@@ -619,10 +619,20 @@ func validatePortableToolProviderSharedClaimsV1(
 				}
 				if supportedPresent {
 					key := domain.PackageManager.ID
-					pythonSupported[key] = append(pythonSupported[key], supported)
-					if !portableToolPythonSupportedIntersectionV1(pythonSupported[key]) {
+					intersection, err := NormalizeSupportedPythonClaimsV1(supported)
+					if err != nil {
+						return fmt.Errorf("binding contract supported Python: %w", err)
+					}
+					if previous, found := pythonSupported[key]; found {
+						intersection, err = IntersectSupportedPythonClaimsV1(previous, intersection)
+						if err != nil {
+							return fmt.Errorf("binding contract supported Python: %w", err)
+						}
+					}
+					if len(intersection) == 0 {
 						return fmt.Errorf("portable tool provider shared-domain conflict on Python interpreter domain %q", key)
 					}
+					pythonSupported[key] = intersection
 				}
 			}
 		}

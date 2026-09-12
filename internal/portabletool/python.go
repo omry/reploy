@@ -148,35 +148,6 @@ func PythonPackageRootRequirementsCompatibleV1(requirements []string) (bool, err
 	return !portableToolPythonIntervalCoveredV1(interval, excludedPrefixes), nil
 }
 
-// portableToolPythonSupportedIntersectionV1 reports whether all nonempty
-// supported-Python sets share at least one version. Empty sets are unconstrained
-// in the same way as an omitted binding constraint.
-func PythonSupportedIntersectionV1(supported [][]string) bool {
-	var intersection map[string]struct{}
-	for _, values := range supported {
-		if len(values) == 0 {
-			continue
-		}
-		current := make(map[string]struct{}, len(values))
-		for _, value := range values {
-			current[value] = struct{}{}
-		}
-		if intersection == nil {
-			intersection = current
-			continue
-		}
-		for value := range intersection {
-			if _, exists := current[value]; !exists {
-				delete(intersection, value)
-			}
-		}
-		if len(intersection) == 0 {
-			return false
-		}
-	}
-	return true
-}
-
 type portableToolPythonRequirementBoundV1 struct {
 	version   []int
 	inclusive bool

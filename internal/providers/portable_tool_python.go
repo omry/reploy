@@ -14,7 +14,3 @@ func PythonPackageRootDistributionNameV1(requirement string) (string, error) {
 func PythonPackageRootRequirementsCompatibleV1(requirements []string) (bool, error) {
 	return portabletool.PythonPackageRootRequirementsCompatibleV1(requirements)
 }
-
-func portableToolPythonSupportedIntersectionV1(supported [][]string) bool {
-	return portabletool.PythonSupportedIntersectionV1(supported)
-}

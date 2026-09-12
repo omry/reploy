@@ -181,13 +181,8 @@ func validatePortableToolCatalogBindingContractV1(value canonical.Object) error 
 		}
 		distributions[distribution] = requirement
 	}
-	if err := validatePortableToolCatalogSortedStringsV1("supported Python", record.SupportedPython, true); err != nil {
+	if err := validatePortableToolSupportedPythonClaimsV1(record.SupportedPython); err != nil {
 		return err
-	}
-	for _, version := range record.SupportedPython {
-		if err := ValidatePythonInterpreterVersionV1(version); err != nil {
-			return fmt.Errorf("supported Python version %q: %w", version, err)
-		}
 	}
 	if record.BundledComponents == nil || len(record.BundledComponents) > portableToolCatalogMaxReferencesV1 {
 		return fmt.Errorf("binding contract bundled components must use a bounded array")
@@ -208,6 +203,36 @@ func validatePortableToolCatalogBindingContractV1(value canonical.Object) error 
 		if len(segments) != 3 || !portableToolCatalogWheelTagGroupV1(segments[0]) || !portableToolCatalogWheelTagGroupV1(segments[1]) || !portableToolCatalogWheelTagGroupV1(segments[2]) {
 			return fmt.Errorf("binding supported tag %q must be a canonical three-part wheel tag", tag)
 		}
+	}
+	return nil
+}
+
+func validatePortableToolSupportedPythonClaimsV1(values []string) error {
+	if values == nil {
+		return fmt.Errorf("supported Python must use an array")
+	}
+	if len(values) == 0 {
+		return fmt.Errorf("supported Python must not be empty")
+	}
+	if len(values) > portableToolCatalogMaxReferencesV1 {
+		return fmt.Errorf("supported Python must use at most %d entries", portableToolCatalogMaxReferencesV1)
+	}
+	var previous []int
+	for _, value := range values {
+		if err := ValidatePythonInterpreterVersionV1(value); err != nil {
+			return fmt.Errorf("supported Python version %q: %w", value, err)
+		}
+		current, ok := portableToolPythonParseReleaseVersionV1(value)
+		if !ok {
+			return fmt.Errorf("supported Python version %q is not canonical", value)
+		}
+		if previous != nil {
+			comparison := portableToolPythonCompareReleaseVersionsV1(previous, current)
+			if comparison >= 0 || len(previous) == 2 && previous[0] == current[0] && previous[1] == current[1] {
+				return fmt.Errorf("supported Python must contain numerically sorted normalized claims")
+			}
+		}
+		previous = current
 	}
 	return nil
 }

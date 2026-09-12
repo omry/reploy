@@ -435,6 +435,20 @@ func TestBuildPortableToolProviderDAGV1ComparesBindingPythonSemantics(t *testing
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), plan, domains); err != nil {
 		t.Fatalf("compatible Python constraints rejected: %v", err)
 	}
+	mixedGranularity := clonePortableToolPlanForTest(plan)
+	setPortableToolBindingPythonSemanticsV1(&mixedGranularity.Tools[0].Responsibilities.BindingContracts[0], []string{"demo>=1"}, []string{"3.12"})
+	setPortableToolBindingPythonSemanticsV1(&mixedGranularity.Tools[1].Responsibilities.BindingContracts[0], []string{"demo<3"}, []string{"3.12.7"})
+	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), mixedGranularity, domains); err != nil {
+		t.Fatalf("compatible Python series and exact patch rejected: %v", err)
+	}
+
+	disjointExactPatches := clonePortableToolPlanForTest(plan)
+	setPortableToolBindingPythonSemanticsV1(&disjointExactPatches.Tools[0].Responsibilities.BindingContracts[0], []string{"demo>=1"}, []string{"3.12.6"})
+	setPortableToolBindingPythonSemanticsV1(&disjointExactPatches.Tools[1].Responsibilities.BindingContracts[0], []string{"demo<3"}, []string{"3.12.7"})
+	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), disjointExactPatches, domains); err == nil || !strings.Contains(err.Error(), "shared-domain conflict") {
+		t.Fatalf("disjoint exact Python patches were not rejected: %v", err)
+	}
+
 	canonicalArrays := clonePortableToolPlanForTest(plan)
 	canonicalContract := &canonicalArrays.Tools[1].Responsibilities.BindingContracts[0]
 	canonicalContract.Record.Value["requirements"] = []any{"demo<3"}

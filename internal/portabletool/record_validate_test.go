@@ -9,6 +9,7 @@ import (
 
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/portabletool"
+	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/toolcatalog"
 )
 
@@ -63,6 +64,59 @@ func TestValidateRecordEnvelopeV1RejectsNoncanonicalRecordID(t *testing.T) {
 		Value:  value,
 	}); err == nil {
 		t.Fatal("noncanonical record ID was accepted")
+	}
+}
+
+func TestValidateRecordEnvelopeV1RequiresNormalizedSupportedPythonClaims(t *testing.T) {
+	t.Parallel()
+	for _, claims := range [][]any{
+		{"3.10.1", "3.10"},
+		{"3.10", "3.10.1"},
+		{"3.10", "3.9"},
+		{"3.10.1", "3.10.1"},
+	} {
+		value := readDefinitionObjectV1(t, "playwright/releases/1.61.0/bindings/python/contract.json")
+		value["supported_python"] = claims
+		if err := portabletool.ValidateRecordEnvelopeV1(canonical.Envelope{
+			Schema: portabletool.BindingContractSchemaV1,
+			Value:  value,
+		}); err == nil {
+			t.Errorf("non-normalized supported Python claims %#v were accepted", claims)
+		}
+	}
+
+	value := readDefinitionObjectV1(t, "playwright/releases/1.61.0/bindings/python/contract.json")
+	value["supported_python"] = []any{"3.9", "3.10.1", "3.10.2"}
+	if err := portabletool.ValidateRecordEnvelopeV1(canonical.Envelope{
+		Schema: portabletool.BindingContractSchemaV1,
+		Value:  value,
+	}); err != nil {
+		t.Fatalf("normalized exact patch claims were rejected: %v", err)
+	}
+}
+
+func TestProviderCanonicalSupportedPythonClaimsSatisfyRecordBoundaryV1(t *testing.T) {
+	t.Parallel()
+	for _, input := range [][]string{
+		{"3.10.2", "3.9", "3.10", "3.10.1", "3.9", "4.0.1"},
+		{"3.12.2", "3.12.1", "3.11"},
+	} {
+		normalized, err := providers.NormalizeSupportedPythonClaimsV1(input)
+		if err != nil {
+			t.Fatalf("normalize %#v: %v", input, err)
+		}
+		claims := make([]any, len(normalized))
+		for index, claim := range normalized {
+			claims[index] = claim
+		}
+		value := readDefinitionObjectV1(t, "playwright/releases/1.61.0/bindings/python/contract.json")
+		value["supported_python"] = claims
+		if err := portabletool.ValidateRecordEnvelopeV1(canonical.Envelope{
+			Schema: portabletool.BindingContractSchemaV1,
+			Value:  value,
+		}); err != nil {
+			t.Fatalf("provider canonical claims %#v rejected at record boundary: %v", normalized, err)
+		}
 	}
 }
 
