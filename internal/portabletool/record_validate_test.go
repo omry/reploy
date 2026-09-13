@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/omry/reploy/internal/canonical"
@@ -64,6 +65,52 @@ func TestValidateRecordEnvelopeV1RejectsNoncanonicalRecordID(t *testing.T) {
 		Value:  value,
 	}); err == nil {
 		t.Fatal("noncanonical record ID was accepted")
+	}
+}
+
+func TestValidateBindingRecordReferencesV1(t *testing.T) {
+	t.Parallel()
+	digest := canonical.Digest("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	contract := portabletool.RecordReferenceV1{
+		ID: "tool:demo/releases/1.0.0/bindings/python/contract", Digest: digest,
+	}
+	artifact := portabletool.RecordReferenceV1{
+		ID: "tool:demo/releases/1.0.0/bindings/python/artifacts/linux-amd64", Digest: digest,
+	}
+	if err := portabletool.ValidateBindingRecordReferencesV1(contract, artifact); err != nil {
+		t.Fatalf("valid binding references: %v", err)
+	}
+	for _, test := range []struct {
+		name     string
+		contract portabletool.RecordReferenceV1
+		artifact portabletool.RecordReferenceV1
+	}{
+		{name: "malformed contract", contract: portabletool.RecordReferenceV1{ID: "contract", Digest: digest}, artifact: artifact},
+		{name: "swapped categories", contract: artifact, artifact: contract},
+		{name: "different release binding", contract: contract, artifact: portabletool.RecordReferenceV1{ID: "tool:other/releases/1.0.0/bindings/python/artifacts/linux-amd64", Digest: digest}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if err := portabletool.ValidateBindingRecordReferencesV1(test.contract, test.artifact); err == nil {
+				t.Fatal("invalid binding references were accepted")
+			}
+		})
+	}
+}
+
+func TestValidateBindingBundledComponentAgreementV1(t *testing.T) {
+	t.Parallel()
+	declared := []portabletool.BundledComponentV1{{Name: "runtime", Version: "1.0.0", Path: "demo/runtime"}}
+	if err := portabletool.ValidateBindingBundledComponentAgreementV1(declared, append([]portabletool.BundledComponentV1{}, declared...)); err != nil {
+		t.Fatalf("matching bundled component: %v", err)
+	}
+	if err := portabletool.ValidateBindingBundledComponentAgreementV1(declared, nil); err == nil {
+		t.Fatal("missing bundled component was accepted")
+	}
+	mismatched := append([]portabletool.BundledComponentV1{}, declared...)
+	mismatched[0].Version = "2.0.0"
+	if err := portabletool.ValidateBindingBundledComponentAgreementV1(declared, mismatched); err == nil {
+		t.Fatal("mismatched bundled component was accepted")
 	}
 }
 
@@ -192,6 +239,20 @@ func TestProjectWheelPlatformV1UsesOneBoundedManylinuxPolicy(t *testing.T) {
 	}
 	if _, err := portabletool.ProjectWheelPlatformForTargetV1("any", "darwin/amd64"); err == nil {
 		t.Fatal("any wheel platform was accepted for an unsupported target")
+	}
+}
+
+func TestProjectWheelFilenameV1ReturnsCanonicalIdentityAndExpandedTags(t *testing.T) {
+	t.Parallel()
+	projection, err := portabletool.ProjectWheelFilenameV1("demo_pkg-1.2.0-py3.cp313-none-manylinux1_x86_64.whl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projection.Distribution != "demo-pkg" || projection.EcosystemVersion != "1.2.0" || !reflect.DeepEqual(projection.Tags, []string{
+		"cp313-none-manylinux1_x86_64",
+		"py3-none-manylinux1_x86_64",
+	}) {
+		t.Fatalf("wheel filename projection = %#v", projection)
 	}
 }
 
