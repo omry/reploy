@@ -47,6 +47,26 @@ func PythonPackageRootDistributionNameV1(requirement string) (string, error) {
 	return portableToolPythonNormalizeDistributionNameV1(name), nil
 }
 
+// ValidatePythonPackageRootRequirementsV1 requires one canonical package-root
+// requirement per normalized distribution, matching binding-contract records.
+func ValidatePythonPackageRootRequirementsV1(requirements []string) error {
+	if len(requirements) > portableToolCatalogMaxReferencesV1 {
+		return fmt.Errorf("Python package root requirements must use at most %d entries", portableToolCatalogMaxReferencesV1)
+	}
+	distributions := make(map[string]string, len(requirements))
+	for _, requirement := range requirements {
+		distribution, err := PythonPackageRootDistributionNameV1(requirement)
+		if err != nil {
+			return err
+		}
+		if previous, found := distributions[distribution]; found {
+			return fmt.Errorf("Python package root requirements %q and %q name the same distribution %q", previous, requirement, distribution)
+		}
+		distributions[distribution] = requirement
+	}
+	return nil
+}
+
 // PythonPackageRootRequirementsCompatibleV1 reports whether ordinary release
 // constraints for one direct distribution have a nonempty intersection.
 // Complex PEP 440 forms remain resolver authority and are ignored here, so
