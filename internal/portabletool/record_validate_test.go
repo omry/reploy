@@ -132,6 +132,91 @@ func TestValidateRecordEnvelopeV1RejectsShortPayloadID(t *testing.T) {
 	}
 }
 
+func TestProjectWheelPlatformV1UsesOneBoundedManylinuxPolicy(t *testing.T) {
+	t.Parallel()
+	accepted := []struct {
+		tag, kind, architecture, major, minor string
+	}{
+		{"any", portabletool.WheelPlatformAnyV1, "", "", ""},
+		{"linux_x86_64", portabletool.WheelPlatformLinuxV1, "x86_64", "", ""},
+		{"linux_aarch64", portabletool.WheelPlatformLinuxV1, "aarch64", "", ""},
+		{"manylinux1_x86_64", portabletool.WheelPlatformManylinuxV1, "x86_64", "2", "5"},
+		{"manylinux2010_x86_64", portabletool.WheelPlatformManylinuxV1, "x86_64", "2", "12"},
+		{"manylinux2014_x86_64", portabletool.WheelPlatformManylinuxV1, "x86_64", "2", "17"},
+		{"manylinux2014_aarch64", portabletool.WheelPlatformManylinuxV1, "aarch64", "2", "17"},
+		{"manylinux_2_5_x86_64", portabletool.WheelPlatformManylinuxV1, "x86_64", "2", "5"},
+		{"manylinux_2_6_x86_64", portabletool.WheelPlatformManylinuxV1, "x86_64", "2", "6"},
+		{"manylinux_2_17_aarch64", portabletool.WheelPlatformManylinuxV1, "aarch64", "2", "17"},
+		{"manylinux_2_40_aarch64", portabletool.WheelPlatformManylinuxV1, "aarch64", "2", "40"},
+	}
+	for _, test := range accepted {
+		test := test
+		t.Run(test.tag, func(t *testing.T) {
+			t.Parallel()
+			projection, err := portabletool.ProjectWheelPlatformV1(test.tag)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if projection.Kind != test.kind || projection.Architecture != test.architecture || projection.MinimumGlibcMajor != test.major || projection.MinimumGlibcMinor != test.minor {
+				t.Fatalf("projection = %#v", projection)
+			}
+		})
+	}
+	for _, tag := range []string{
+		"manylinux1_aarch64", "manylinux2010_aarch64",
+		"manylinux_2_4_x86_64", "manylinux_2_16_aarch64",
+		"manylinux_1_17_aarch64", "manylinux_3_17_aarch64",
+		"manylinux_02_17_aarch64", "manylinux_2_017_aarch64",
+		"manylinux_x_17_aarch64", "musllinux_1_2_x86_64", "linux_ppc64le",
+	} {
+		if _, err := portabletool.ProjectWheelPlatformV1(tag); err == nil {
+			t.Errorf("unsupported platform %q was accepted", tag)
+		}
+	}
+	if _, err := portabletool.ProjectWheelPlatformForTargetV1("linux_x86_64", "linux/arm64"); err == nil {
+		t.Fatal("x86_64 wheel platform was accepted for arm64 target")
+	}
+	direct, err := portabletool.ProjectWheelPlatformV1("manylinux_2_17_aarch64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	targeted, err := portabletool.ProjectWheelPlatformForTargetV1("manylinux_2_17_aarch64", "linux/arm64")
+	if err != nil {
+		t.Fatalf("matching manylinux platform was rejected: %v", err)
+	}
+	if targeted != direct {
+		t.Fatalf("target projection %#v differs from direct projection %#v", targeted, direct)
+	}
+	if projection, err := portabletool.ProjectWheelPlatformForTargetV1("any", "linux/amd64"); err != nil || projection.Kind != portabletool.WheelPlatformAnyV1 {
+		t.Fatalf("any platform did not project for a supported target: %#v, %v", projection, err)
+	}
+	if _, err := portabletool.ProjectWheelPlatformForTargetV1("any", "darwin/amd64"); err == nil {
+		t.Fatal("any wheel platform was accepted for an unsupported target")
+	}
+}
+
+func TestValidateRecordEnvelopeV1UsesWheelPlatformProjection(t *testing.T) {
+	t.Parallel()
+	value := readDefinitionObjectV1(t, "playwright/releases/1.61.0/bindings/python/linux-amd64.json")
+	value["filename"] = "playwright-1.61.0-py3-none-manylinux_2_5_x86_64.whl"
+	value["tags"] = []any{"py3-none-manylinux_2_5_x86_64"}
+	if err := portabletool.ValidateRecordEnvelopeV1(canonical.Envelope{
+		Schema: portabletool.BindingArtifactSchemaV1,
+		Value:  value,
+	}); err != nil {
+		t.Fatalf("supported projected platform was rejected: %v", err)
+	}
+
+	value["filename"] = "playwright-1.61.0-py3-none-manylinux_3_17_x86_64.whl"
+	value["tags"] = []any{"py3-none-manylinux_3_17_x86_64"}
+	if err := portabletool.ValidateRecordEnvelopeV1(canonical.Envelope{
+		Schema: portabletool.BindingArtifactSchemaV1,
+		Value:  value,
+	}); err == nil {
+		t.Fatal("record validation accepted an unsupported manylinux policy major")
+	}
+}
+
 func TestToolcatalogCompatibilityAliasPreservesCanonicalIdentity(t *testing.T) {
 	t.Parallel()
 	shared := &portabletool.BindingContractV1{

@@ -788,33 +788,108 @@ func portableToolCatalogWheelTagComponentV1(value string) bool {
 }
 
 func portableToolCatalogWheelPlatformCompatibleV1(tag, platform string) bool {
+	_, err := ProjectWheelPlatformForTargetV1(tag, platform)
+	return err == nil
+}
+
+// WheelPlatformProjectionV1 is the single portable-tool wheel platform
+// policy projection. It deliberately contains only the policy facts needed
+// by record validation and provider runtime guards; pip remains the runtime
+// compatibility authority.
+type WheelPlatformProjectionV1 struct {
+	Kind              string
+	Architecture      string
+	MinimumGlibcMajor string
+	MinimumGlibcMinor string
+}
+
+const (
+	WheelPlatformAnyV1       = "any"
+	WheelPlatformLinuxV1     = "linux"
+	WheelPlatformManylinuxV1 = "manylinux"
+)
+
+// ProjectWheelPlatformV1 validates and projects one canonical wheel platform
+// tag. Unsupported policy aliases, numeric versions, architectures, and
+// floors are rejected so all consumers share this one fail-closed table.
+func ProjectWheelPlatformV1(tag string) (WheelPlatformProjectionV1, error) {
 	if tag == "any" {
-		return true
+		return WheelPlatformProjectionV1{Kind: WheelPlatformAnyV1}, nil
 	}
 	architecture := ""
-	switch platform {
+	if strings.HasSuffix(tag, "_x86_64") {
+		architecture = "x86_64"
+	} else if strings.HasSuffix(tag, "_aarch64") {
+		architecture = "aarch64"
+	} else {
+		return WheelPlatformProjectionV1{}, fmt.Errorf("wheel platform %q has an unsupported architecture", tag)
+	}
+	policy := strings.TrimSuffix(tag, "_"+architecture)
+	projection := WheelPlatformProjectionV1{Architecture: architecture}
+	switch policy {
+	case "linux":
+		projection.Kind = WheelPlatformLinuxV1
+	case "manylinux1":
+		if architecture != "x86_64" {
+			return WheelPlatformProjectionV1{}, fmt.Errorf("wheel platform %q is unsupported on %s", tag, architecture)
+		}
+		projection.Kind, projection.MinimumGlibcMajor, projection.MinimumGlibcMinor = WheelPlatformManylinuxV1, "2", "5"
+	case "manylinux2010":
+		if architecture != "x86_64" {
+			return WheelPlatformProjectionV1{}, fmt.Errorf("wheel platform %q is unsupported on %s", tag, architecture)
+		}
+		projection.Kind, projection.MinimumGlibcMajor, projection.MinimumGlibcMinor = WheelPlatformManylinuxV1, "2", "12"
+	case "manylinux2014":
+		projection.Kind, projection.MinimumGlibcMajor, projection.MinimumGlibcMinor = WheelPlatformManylinuxV1, "2", "17"
+	default:
+		version, found := strings.CutPrefix(policy, "manylinux_")
+		if !found {
+			return WheelPlatformProjectionV1{}, fmt.Errorf("wheel platform %q uses an unsupported policy", tag)
+		}
+		parts := strings.Split(version, "_")
+		if len(parts) != 2 || validatePortableToolCatalogDecimalV1("manylinux major", parts[0], false) != nil || validatePortableToolCatalogDecimalV1("manylinux minor", parts[1], false) != nil {
+			return WheelPlatformProjectionV1{}, fmt.Errorf("wheel platform %q has an invalid manylinux version", tag)
+		}
+		if parts[0] != "2" {
+			return WheelPlatformProjectionV1{}, fmt.Errorf("wheel platform %q uses unsupported manylinux major %q", tag, parts[0])
+		}
+		minimum := uint64(5)
+		if architecture == "aarch64" {
+			minimum = 17
+		}
+		minor, _ := strconv.ParseUint(parts[1], 10, 63)
+		if minor < minimum {
+			return WheelPlatformProjectionV1{}, fmt.Errorf("wheel platform %q is below the %s architecture floor", tag, architecture)
+		}
+		projection.Kind, projection.MinimumGlibcMajor, projection.MinimumGlibcMinor = WheelPlatformManylinuxV1, parts[0], parts[1]
+	}
+	return projection, nil
+}
+
+// ProjectWheelPlatformForTargetV1 additionally proves that a projected
+// architecture belongs to the selected Linux target. The any policy is
+// architecture independent.
+func ProjectWheelPlatformForTargetV1(tag, target string) (WheelPlatformProjectionV1, error) {
+	projection, err := ProjectWheelPlatformV1(tag)
+	if err != nil {
+		return WheelPlatformProjectionV1{}, err
+	}
+	architecture := ""
+	switch target {
 	case "linux/amd64":
 		architecture = "x86_64"
 	case "linux/arm64":
 		architecture = "aarch64"
 	default:
-		return false
+		return WheelPlatformProjectionV1{}, fmt.Errorf("wheel target %q is unsupported", target)
 	}
-	if !strings.HasSuffix(tag, "_"+architecture) {
-		return false
+	if projection.Kind == WheelPlatformAnyV1 {
+		return projection, nil
 	}
-	policy := strings.TrimSuffix(tag, "_"+architecture)
-	if policy == "linux" || policy == "manylinux2014" {
-		return true
+	if projection.Architecture != architecture {
+		return WheelPlatformProjectionV1{}, fmt.Errorf("wheel platform %q does not match target %q", tag, target)
 	}
-	if policy == "manylinux1" || policy == "manylinux2010" {
-		return architecture == "x86_64"
-	}
-	if version, found := strings.CutPrefix(policy, "manylinux_"); found {
-		parts := strings.Split(version, "_")
-		return len(parts) == 2 && validatePortableToolCatalogDecimalV1("manylinux major", parts[0], false) == nil && validatePortableToolCatalogDecimalV1("manylinux minor", parts[1], false) == nil
-	}
-	return false
+	return projection, nil
 }
 
 func portableToolCatalogStringsEqualV1(left, right []string) bool {
