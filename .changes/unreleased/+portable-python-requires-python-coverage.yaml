@@ -1,0 +1,2 @@
+kind: Fixed
+body: Require portable Python binding artifacts to cover each advertised Python minor series completely.
