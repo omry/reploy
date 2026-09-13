@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/omry/reploy/internal/canonical"
@@ -192,6 +193,20 @@ func TestProjectWheelPlatformV1UsesOneBoundedManylinuxPolicy(t *testing.T) {
 	}
 	if _, err := portabletool.ProjectWheelPlatformForTargetV1("any", "darwin/amd64"); err == nil {
 		t.Fatal("any wheel platform was accepted for an unsupported target")
+	}
+}
+
+func TestProjectWheelFilenameV1ReturnsCanonicalIdentityAndExpandedTags(t *testing.T) {
+	t.Parallel()
+	projection, err := portabletool.ProjectWheelFilenameV1("demo_pkg-1.2.0-py3.cp313-none-manylinux1_x86_64.whl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projection.Distribution != "demo-pkg" || projection.EcosystemVersion != "1.2.0" || !reflect.DeepEqual(projection.Tags, []string{
+		"cp313-none-manylinux1_x86_64",
+		"py3-none-manylinux1_x86_64",
+	}) {
+		t.Fatalf("wheel filename projection = %#v", projection)
 	}
 }
 

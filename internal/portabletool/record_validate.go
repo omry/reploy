@@ -267,11 +267,11 @@ func validatePortableToolCatalogBindingArtifactV1(value canonical.Object) error 
 	if record.Contract.ID != expectedContract {
 		return fmt.Errorf("binding artifact contract reference must be %q", expectedContract)
 	}
-	if err := validatePortableToolCatalogBindingCompatibilityV1(record); err != nil {
+	filename, err := validatePortableToolCatalogBindingCompatibilityV1(record)
+	if err != nil {
 		return err
 	}
-	filenameParts := strings.Split(strings.TrimSuffix(record.Filename, ".whl"), "-")
-	if len(filenameParts) < 2 || filenameParts[0] != strings.ReplaceAll(portableToolPythonNormalizeDistributionNameV1(record.Name), "-", "_") || filenameParts[1] != record.EcosystemVersion {
+	if filename.Distribution != portableToolPythonNormalizeDistributionNameV1(record.Name) || filename.EcosystemVersion != record.EcosystemVersion {
 		return fmt.Errorf("binding artifact name and ecosystem version must match the wheel filename %q", record.Filename)
 	}
 	if err := validatePortableToolCatalogDecimalV1("binding artifact size", record.Size, true); err != nil {
@@ -515,50 +515,60 @@ func decodePortableToolCatalogRecordV1(value canonical.Object, schema string, fi
 	return nil
 }
 
-func validatePortableToolCatalogBindingCompatibilityV1(record portableToolCatalogBindingArtifactV1) error {
+func validatePortableToolCatalogBindingCompatibilityV1(record portableToolCatalogBindingArtifactV1) (WheelFilenameProjectionV1, error) {
 	if err := validatePortableToolCatalogSortedStringsV1("binding artifact tags", record.Tags, true); err != nil {
-		return err
+		return WheelFilenameProjectionV1{}, err
 	}
-	filenameTags, err := portableToolCatalogWheelFilenameTagsV1(record.Filename)
+	filename, err := ProjectWheelFilenameV1(record.Filename)
 	if err != nil {
-		return fmt.Errorf("binding artifact filename: %w", err)
+		return WheelFilenameProjectionV1{}, fmt.Errorf("binding artifact filename: %w", err)
 	}
-	if !portableToolCatalogStringsEqualV1(filenameTags, record.Tags) {
-		return fmt.Errorf("binding artifact tags must exactly match the expanded wheel filename tags")
+	if !portableToolCatalogStringsEqualV1(filename.Tags, record.Tags) {
+		return WheelFilenameProjectionV1{}, fmt.Errorf("binding artifact tags must exactly match the expanded wheel filename tags")
 	}
 	for _, tag := range record.Tags {
 		segments := strings.Split(tag, "-")
 		if len(segments) != 3 || !portableToolCatalogWheelTagGroupV1(segments[0]) || !portableToolCatalogWheelTagGroupV1(segments[1]) || !portableToolCatalogWheelTagGroupV1(segments[2]) {
-			return fmt.Errorf("binding artifact wheel tag %q is invalid", tag)
+			return WheelFilenameProjectionV1{}, fmt.Errorf("binding artifact wheel tag %q is invalid", tag)
 		}
 		if !portableToolCatalogWheelPlatformCompatibleV1(segments[2], record.Platform) {
-			return fmt.Errorf("binding artifact wheel tag %q is incompatible with platform %q", tag, record.Platform)
+			return WheelFilenameProjectionV1{}, fmt.Errorf("binding artifact wheel tag %q is incompatible with platform %q", tag, record.Platform)
 		}
 	}
 	specifiers, err := pep440.NewSpecifiers(record.RequiresPython)
 	if err != nil || specifiers.String() != record.RequiresPython {
-		return fmt.Errorf("binding artifact requires_python must be a canonical PEP 440 specifier set")
+		return WheelFilenameProjectionV1{}, fmt.Errorf("binding artifact requires_python must be a canonical PEP 440 specifier set")
 	}
-	return nil
+	return filename, nil
 }
 
-func portableToolCatalogWheelFilenameTagsV1(filename string) ([]string, error) {
+// WheelFilenameProjectionV1 is the canonical identity and expanded
+// compatibility-tag projection of one wheel filename.
+type WheelFilenameProjectionV1 struct {
+	Distribution     string
+	EcosystemVersion string
+	Tags             []string
+}
+
+// ProjectWheelFilenameV1 parses one canonical wheel filename without reading
+// the wheel or applying runtime eligibility policy.
+func ProjectWheelFilenameV1(filename string) (WheelFilenameProjectionV1, error) {
 	if !strings.HasSuffix(filename, ".whl") {
-		return nil, fmt.Errorf("wheel filename must end in .whl")
+		return WheelFilenameProjectionV1{}, fmt.Errorf("wheel filename must end in .whl")
 	}
 	parts := strings.Split(strings.TrimSuffix(filename, ".whl"), "-")
 	if len(parts) != 5 && len(parts) != 6 {
-		return nil, fmt.Errorf("wheel filename must contain distribution, version, Python, ABI, and platform tags")
+		return WheelFilenameProjectionV1{}, fmt.Errorf("wheel filename must contain distribution, version, Python, ABI, and platform tags")
 	}
 	if !portableToolCatalogWheelDistributionV1(parts[0]) {
-		return nil, fmt.Errorf("wheel filename contains an invalid distribution or version")
+		return WheelFilenameProjectionV1{}, fmt.Errorf("wheel filename contains an invalid distribution or version")
 	}
 	version, err := pep440.Parse(parts[1])
 	if err != nil || version.String() != parts[1] {
-		return nil, fmt.Errorf("wheel filename contains an invalid distribution or version")
+		return WheelFilenameProjectionV1{}, fmt.Errorf("wheel filename contains an invalid distribution or version")
 	}
 	if len(parts) == 6 && !portableToolCatalogWheelBuildTagV1(parts[2]) {
-		return nil, fmt.Errorf("wheel filename contains an invalid build tag")
+		return WheelFilenameProjectionV1{}, fmt.Errorf("wheel filename contains an invalid build tag")
 	}
 	groups := [][]string{
 		strings.Split(parts[len(parts)-3], "."), strings.Split(parts[len(parts)-2], "."), strings.Split(parts[len(parts)-1], "."),
@@ -566,12 +576,12 @@ func portableToolCatalogWheelFilenameTagsV1(filename string) ([]string, error) {
 	count := 1
 	for _, group := range groups {
 		if len(group) == 0 || len(group) > portableToolCatalogMaxReferencesV1/count {
-			return nil, fmt.Errorf("wheel filename expands to more than %d compatibility tags", portableToolCatalogMaxReferencesV1)
+			return WheelFilenameProjectionV1{}, fmt.Errorf("wheel filename expands to more than %d compatibility tags", portableToolCatalogMaxReferencesV1)
 		}
 		count *= len(group)
 		for _, component := range group {
 			if !portableToolCatalogWheelTagComponentV1(component) {
-				return nil, fmt.Errorf("wheel filename contains an invalid compatibility tag")
+				return WheelFilenameProjectionV1{}, fmt.Errorf("wheel filename contains an invalid compatibility tag")
 			}
 		}
 	}
@@ -586,10 +596,14 @@ func portableToolCatalogWheelFilenameTagsV1(filename string) ([]string, error) {
 	sort.Strings(tags)
 	for index := 1; index < len(tags); index++ {
 		if tags[index-1] == tags[index] {
-			return nil, fmt.Errorf("wheel filename compatibility tags must be unique")
+			return WheelFilenameProjectionV1{}, fmt.Errorf("wheel filename compatibility tags must be unique")
 		}
 	}
-	return tags, nil
+	return WheelFilenameProjectionV1{
+		Distribution:     portableToolPythonNormalizeDistributionNameV1(parts[0]),
+		EcosystemVersion: parts[1],
+		Tags:             tags,
+	}, nil
 }
 
 func validatePortableToolCatalogProbeV1(probe portableToolCatalogProbeV1) error {
