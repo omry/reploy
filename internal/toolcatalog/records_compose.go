@@ -223,7 +223,7 @@ func validateBindingArtifactAgainstContractV1(contract *BindingContractV1, artif
 	if !compatibleTag {
 		return fmt.Errorf("artifact tags are incompatible with the binding contract")
 	}
-	pythonSpecifiers, err := pep440.NewSpecifiers(artifact.RequiresPython)
+	_, err = pep440.NewSpecifiers(artifact.RequiresPython)
 	if err != nil {
 		return fmt.Errorf("requires_python is invalid")
 	}
@@ -240,9 +240,13 @@ func validateBindingArtifactAgainstContractV1(contract *BindingContractV1, artif
 			return fmt.Errorf("bundled component %q does not match the contract", declared.Name)
 		}
 	}
-	for _, version := range contract.SupportedPython {
-		parsed, err := pep440.Parse(version)
-		if err == nil && pythonSpecifiers.Check(parsed) {
+	claims, err := pythonprovider.NormalizeSupportedPythonClaimsV1(contract.SupportedPython)
+	if err != nil {
+		return fmt.Errorf("contract supported Python claims are invalid: %w", err)
+	}
+	for _, claim := range claims {
+		covered, err := pythonprovider.PythonRequiresPythonIntersectsClaimV1(artifact.RequiresPython, claim)
+		if err == nil && covered {
 			return nil
 		}
 	}
@@ -285,21 +289,21 @@ func validateTargetBindingsAgainstContractsV1(records map[string]loadedRecordV1,
 }
 
 func validateBindingInterpreterCoverageV1(contract *BindingContractV1, artifacts []*BindingArtifactRecordV1) error {
-	for _, version := range contract.SupportedPython {
-		parsed, err := pep440.Parse(version)
-		if err != nil {
-			return fmt.Errorf("contract interpreter %q is invalid", version)
-		}
+	claims, err := pythonprovider.NormalizeSupportedPythonClaimsV1(contract.SupportedPython)
+	if err != nil {
+		return fmt.Errorf("contract supported Python claims are invalid: %w", err)
+	}
+	for _, claim := range claims {
 		covered := false
 		for _, artifact := range artifacts {
-			specifiers, err := pep440.NewSpecifiers(artifact.RequiresPython)
+			matches, err := pythonprovider.PythonRequiresPythonCoversClaimV1(artifact.RequiresPython, claim)
 			if err != nil {
-				return fmt.Errorf("artifact %q requires_python is invalid", artifact.ID)
+				return fmt.Errorf("artifact %q requires_python is invalid: %w", artifact.ID, err)
 			}
-			covered = covered || specifiers.Check(parsed)
+			covered = covered || matches
 		}
 		if !covered {
-			return fmt.Errorf("binding %q has no artifact covering interpreter %q", contract.Name, version)
+			return fmt.Errorf("binding %q has no artifact covering interpreter %q", contract.Name, claim)
 		}
 	}
 	return nil

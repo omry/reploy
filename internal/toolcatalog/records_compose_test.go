@@ -202,6 +202,31 @@ func TestBindingInterpreterCoverageRequiresEveryAdvertisedVersionV1(t *testing.T
 	}
 }
 
+func TestBindingInterpreterCoverageProvesCompleteMinorSeriesV1(t *testing.T) {
+	contract := &BindingContractV1{Name: "python", SupportedPython: []string{"3.14"}}
+	complete := &BindingArtifactRecordV1{ID: "complete", RequiresPython: ">=3.14,<3.15"}
+	if err := validateBindingInterpreterCoverageV1(contract, []*BindingArtifactRecordV1{complete}); err != nil {
+		t.Fatalf("complete minor coverage rejected: %v", err)
+	}
+	for _, requiresPython := range []string{"==3.14.0", ">=3.14,<3.14.1", ">=3.14,<3.15,!=3.14.1", ">=3.14,<3.15,!=3.14.1.0.*"} {
+		artifact := &BindingArtifactRecordV1{ID: "partial", RequiresPython: requiresPython}
+		if err := validateBindingInterpreterCoverageV1(contract, []*BindingArtifactRecordV1{artifact}); err == nil {
+			t.Errorf("partial minor coverage %q was accepted", requiresPython)
+		}
+	}
+	contract.SupportedPython = []string{"3.14.0"}
+	point := &BindingArtifactRecordV1{ID: "point", RequiresPython: ">=3.14,<3.14.1"}
+	if err := validateBindingInterpreterCoverageV1(contract, []*BindingArtifactRecordV1{point}); err != nil {
+		t.Fatalf("exact patch point coverage rejected: %v", err)
+	}
+	for _, requiresPython := range []string{"==3.14.0+vendor", "!=3.14.0+vendor"} {
+		local := &BindingArtifactRecordV1{ID: "local", RequiresPython: requiresPython}
+		if err := validateBindingInterpreterCoverageV1(contract, []*BindingArtifactRecordV1{local}); err == nil {
+			t.Errorf("local-version constraint %q was treated as public-release coverage", requiresPython)
+		}
+	}
+}
+
 func TestBindingArtifactsAgreeWithContractAndExactReferencesV1(t *testing.T) {
 	values := validRecordValuesV1()
 	contract := values[4].(*BindingContractV1)
