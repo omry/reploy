@@ -1,0 +1,2 @@
+kind: Fixed
+body: Reject unsupported manylinux policy versions and architecture floors in portable Python binding artifacts.
