@@ -1,0 +1,2 @@
+kind: Fixed
+body: Reject internally contradictory portable Python package-root requirements before provider resolution.
