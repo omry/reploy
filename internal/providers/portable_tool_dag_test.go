@@ -435,6 +435,22 @@ func TestBuildPortableToolProviderDAGV1ComparesBindingPythonSemantics(t *testing
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), plan, domains); err != nil {
 		t.Fatalf("compatible Python constraints rejected: %v", err)
 	}
+	for _, requirement := range []string{"demo>=1rc1,<2", "demo>1rc1,<2", "demo>=1!2", "demo===1.*", "demo===v1.0"} {
+		complexDuplicate := clonePortableToolPlanForTest(plan)
+		setPortableToolBindingPythonSemanticsV1(&complexDuplicate.Tools[0].Responsibilities.BindingContracts[0], []string{requirement}, []string{"3.12"})
+		setPortableToolBindingPythonSemanticsV1(&complexDuplicate.Tools[1].Responsibilities.BindingContracts[0], []string{requirement}, []string{"3.12"})
+		if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), complexDuplicate, domains); err != nil {
+			t.Fatalf("duplicate complex Python requirement %q rejected: %v", requirement, err)
+		}
+	}
+	for _, requirement := range []string{"demo>=3,<3", "demo==1,==2", "demo==1.*,!=1.*", "demo===1.*,==1.*"} {
+		contradictory := clonePortableToolPlanForTest(plan)
+		setPortableToolBindingPythonSemanticsV1(&contradictory.Tools[0].Responsibilities.BindingContracts[0], []string{requirement}, []string{"3.12"})
+		setPortableToolBindingPythonSemanticsV1(&contradictory.Tools[1].Responsibilities.BindingContracts[0], []string{requirement}, []string{"3.12"})
+		if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), contradictory, domains); err == nil {
+			t.Fatalf("contradictory Python requirement %q was accepted", requirement)
+		}
+	}
 	mixedGranularity := clonePortableToolPlanForTest(plan)
 	setPortableToolBindingPythonSemanticsV1(&mixedGranularity.Tools[0].Responsibilities.BindingContracts[0], []string{"demo>=1"}, []string{"3.12"})
 	setPortableToolBindingPythonSemanticsV1(&mixedGranularity.Tools[1].Responsibilities.BindingContracts[0], []string{"demo<3"}, []string{"3.12.7"})

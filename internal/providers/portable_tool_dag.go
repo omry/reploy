@@ -605,13 +605,6 @@ func validatePortableToolProviderSharedClaimsV1(
 					}
 					key := domain.PackageManager.ID + "\x00" + distribution
 					pythonRequirements[key] = append(pythonRequirements[key], requirement)
-					compatible, err := PythonPackageRootRequirementsCompatibleV1(pythonRequirements[key])
-					if err != nil {
-						return fmt.Errorf("binding contract requirements for %q: %w", distribution, err)
-					}
-					if !compatible {
-						return fmt.Errorf("portable tool provider shared-domain conflict on Python package %q", strings.ReplaceAll(key, "\x00", "/"))
-					}
 				}
 				supported, supportedPresent, err := portableToolStringListFieldV1(selected.Record.Value, "supported_python")
 				if err != nil {
@@ -669,6 +662,21 @@ func validatePortableToolProviderSharedClaimsV1(
 					return err
 				}
 			}
+		}
+	}
+	pythonRequirementKeys := make([]string, 0, len(pythonRequirements))
+	for key := range pythonRequirements {
+		pythonRequirementKeys = append(pythonRequirementKeys, key)
+	}
+	sort.Strings(pythonRequirementKeys)
+	for _, key := range pythonRequirementKeys {
+		compatible, err := PythonPackageRootRequirementsCompatibleV1(pythonRequirements[key])
+		if err != nil {
+			_, distribution, _ := strings.Cut(key, "\x00")
+			return fmt.Errorf("binding contract requirements for %q: %w", distribution, err)
+		}
+		if !compatible {
+			return fmt.Errorf("portable tool provider shared-domain conflict on Python package %q", strings.ReplaceAll(key, "\x00", "/"))
 		}
 	}
 	return nil

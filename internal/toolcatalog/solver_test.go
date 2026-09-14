@@ -1,6 +1,7 @@
 package toolcatalog
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -427,6 +428,29 @@ func TestBindingRequirementClaimsAllowCompatibleProviderConstraintsV1(t *testing
 		solverTestActiveProvidersV1()); err != nil || conflict != "" {
 		t.Fatalf("compatible binding requirements conflict = %q, %v", conflict, err)
 	}
+	for _, requirement := range []string{"demo>=1rc1,<2", "demo>1rc1,<2", "demo>=1!2"} {
+		bindingLeft.Requirements = []string{requirement}
+		bindingRight.Requirements = []string{requirement}
+		application.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &bindingLeft)}
+		source.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &bindingRight)}
+		if conflict, err := catalog.assignmentConflictV1(
+			sets, []ReleaseCandidateV1{application, source}, domains,
+			solverTestActiveProvidersV1()); err != nil || conflict != "" {
+			t.Fatalf("duplicate complex binding requirement %q conflict = %q, %v", requirement, conflict, err)
+		}
+	}
+	for _, requirement := range []string{"demo>=3,<3", "demo==1,==2", "demo==1.*,!=1.*"} {
+		bindingLeft.Requirements = []string{requirement}
+		bindingRight.Requirements = []string{requirement}
+		application.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &bindingLeft)}
+		source.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &bindingRight)}
+		conflict, err := catalog.assignmentConflictV1(
+			sets, []ReleaseCandidateV1{application, source}, domains,
+			solverTestActiveProvidersV1())
+		if err == nil && conflict == "" {
+			t.Fatalf("contradictory binding requirement %q was accepted", requirement)
+		}
+	}
 
 	bindingLeft.Requirements = []string{"demo==1"}
 	bindingRight.Name = "python-alt"
@@ -438,6 +462,110 @@ func TestBindingRequirementClaimsAllowCompatibleProviderConstraintsV1(t *testing
 	if err != nil || !strings.Contains(conflict, "binding requirement conflict") {
 		t.Fatalf("differently named bindings for one distribution conflict = %q, %v", conflict, err)
 	}
+}
+
+func TestSolveCandidateSetsDeduplicatesSharedPythonRootsV1(t *testing.T) {
+	catalog, sets, domains := solverTestSharedPythonRootSetsV1(t, 32)
+	chosen, visited, err := catalog.solveCandidateSetsV1(
+		sets, domains, solverTestActiveProvidersV1(), len(sets))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chosen) != len(sets) || visited != len(sets) {
+		t.Fatalf("shared-root solve = %d chosen, %d visited; want %d of each",
+			len(chosen), visited, len(sets))
+	}
+}
+
+func BenchmarkSolveCandidateSetsSharedPythonRootsV1(b *testing.B) {
+	for _, count := range []int{16, 32, 64, 1024} {
+		b.Run(fmt.Sprintf("roots-%d", count), func(b *testing.B) {
+			catalog, sets, domains := solverTestSharedPythonRootSetsV1(b, count)
+			b.ResetTimer()
+			for range b.N {
+				if _, _, err := catalog.solveCandidateSetsV1(
+					sets, domains, solverTestActiveProvidersV1(), len(sets)); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkSolveCandidateSetsDistinctPythonRootsV1(b *testing.B) {
+	for _, count := range []int{16, 32, 64} {
+		b.Run(fmt.Sprintf("roots-%d", count), func(b *testing.B) {
+			specifiersPerRoot := 1024 / count
+			requirements := make([]string, count)
+			for index := range requirements {
+				requirements[index] = "demo" + strings.Repeat(">=1,", specifiersPerRoot-1) +
+					fmt.Sprintf(">=1.%d", index)
+			}
+			catalog, sets, domains := solverTestPythonRootSetsV1(b, requirements)
+			b.ResetTimer()
+			for range b.N {
+				if _, _, err := catalog.solveCandidateSetsV1(
+					sets, domains, solverTestActiveProvidersV1(), len(sets)); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func solverTestSharedPythonRootSetsV1(tb testing.TB, count int) (*CatalogV1,
+	[]orderedCandidateSetV1, []ProviderDomainSetV1) {
+	tb.Helper()
+	specifiers := make([]string, 1024)
+	for index := range specifiers {
+		specifiers[index] = ">=1"
+	}
+	requirements := make([]string, count)
+	for index := range requirements {
+		requirements[index] = "demo" + strings.Join(specifiers, ",")
+	}
+	return solverTestPythonRootSetsV1(tb, requirements)
+}
+
+func solverTestPythonRootSetsV1(tb testing.TB, requirements []string) (*CatalogV1,
+	[]orderedCandidateSetV1, []ProviderDomainSetV1) {
+	tb.Helper()
+	catalog := &CatalogV1{records: make(map[recordKeyV1]loadedRecordV1)}
+	domain := ProviderDomainSetV1{
+		Scope: "source-builder:shared", PackageManager: "shared/packages",
+		Filesystem: "shared/filesystem", Environment: "shared/environment",
+		Exports: "shared/exports", Capabilities: "shared/capabilities",
+	}
+	sets := make([]orderedCandidateSetV1, len(requirements))
+	for index := range sets {
+		binding := &BindingContractV1{
+			Schema: BindingContractSchemaV1,
+			ID:     fmt.Sprintf("tool:solver-benchmark/releases/1/bindings/python-%d/contract", index),
+			Name:   fmt.Sprintf("python-%d", index), Package: "demo",
+			Requirements:    []string{requirements[index]},
+			SupportedPython: []string{}, SupportedTags: []string{}, BundledComponents: []BundledComponentV1{},
+			CLI: ToolExportV1{Name: "demo", Path: "/opt/demo/bin/demo"},
+		}
+		digest, err := canonical.Sum("portable-tool-record", portableToolRecordIdentityV1, binding)
+		if err != nil {
+			tb.Fatal(err)
+		}
+		reference := RecordReferenceV1{ID: binding.ID, Digest: digest}
+		catalog.records[recordKeyV1{ID: binding.ID, Digest: digest}] = loadedRecordV1{
+			ID: binding.ID, Schema: binding.Schema, Digest: digest, Value: binding,
+		}
+		sets[index] = orderedCandidateSetV1{
+			group: CanonicalRequirementGroupV1{
+				Scope: fmt.Sprintf("source-builder:root-%d", index), Tool: "demo", Context: "build",
+			},
+			candidates: []ReleaseCandidateV1{{
+				Manifest:      ReleaseManifestV1{Version: "1", Revision: "1"},
+				Contributions: []RecordReferenceV1{reference},
+			}},
+			domains: domain,
+		}
+	}
+	return catalog, sets, []ProviderDomainSetV1{domain}
 }
 
 func TestBindingClaimsRequireSharedPythonInterpreterV1(t *testing.T) {
@@ -616,6 +744,121 @@ func TestActiveProviderConstraintsBacktrackAndAttributeConflictsV1(t *testing.T)
 		!strings.Contains(err.Error(), `"demo==1.2.3" from blueprint`) ||
 		!strings.Contains(err.Error(), `"demo>=2" from tool-candidate`) {
 		t.Errorf("active-provider conflict diagnostic = %v, want both stable sources", err)
+	}
+}
+
+func TestActivePythonRootUsesCandidateExactWitnessV1(t *testing.T) {
+	catalog := candidateTestCatalogV1(t)
+	applicationSet, _ := solverTestCandidateSetsV1(t, catalog)
+	candidate := applicationSet.Candidates[0]
+	binding := cloneBindingContractV1(validRecordValuesV1()[4].(*BindingContractV1))
+	binding.Requirements = []string{"demo==1!2.3"}
+	candidate.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &binding)}
+	applicationSet.Candidates = []ReleaseCandidateV1{candidate}
+
+	activeSource := solverTestActiveSourceV1("source-builder:demo", "lock-state", "application/python")
+	activeSource.PythonBindings = []ActivePythonBindingConstraintV1{{
+		Name: "python", Requirements: []string{"demo==1!2.*"}, SupportedPython: []string{},
+	}}
+	operation := solverTestOperationV1()
+	operation.ActiveProviders = solverTestActiveProvidersV1(activeSource)
+	result, err := catalog.ResolveSelectedClosuresV1(
+		[]ReleaseCandidateSetV1{applicationSet}, solverTestBuildDomainsV1(false), operation)
+	if err != nil {
+		t.Fatalf("resolve active epoch prefix with candidate witness: %v", err)
+	}
+	if len(result.Closures) != 1 || result.VisitedStates != "1" {
+		t.Errorf("epoch-prefix witness solve = %+v, visited %s; want one closure in one state",
+			result.Closures, result.VisitedStates)
+	}
+}
+
+func TestUnprovenPythonRootBacktracksToCompatibleCandidateV1(t *testing.T) {
+	catalog := candidateTestCatalogV1(t)
+	_, sourceSet := solverTestCandidateSetsV1(t, catalog)
+	newest := sourceSet.Candidates[0]
+	older := sourceSet.Candidates[1]
+	unproven := cloneBindingContractV1(validRecordValuesV1()[4].(*BindingContractV1))
+	unproven.Requirements = []string{"demo==1!2.*"}
+	exact := cloneBindingContractV1(&unproven)
+	exact.Requirements = []string{"demo==1!2.3"}
+	newest.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &unproven)}
+	older.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &exact)}
+	sourceSet.Candidates = []ReleaseCandidateV1{newest, older}
+
+	result, err := catalog.ResolveSelectedClosuresV1(
+		[]ReleaseCandidateSetV1{sourceSet}, solverTestBuildDomainsV1(false), solverTestOperationV1())
+	if err != nil {
+		t.Fatalf("backtrack from unproven Python root: %v", err)
+	}
+	if len(result.Closures) != 1 || result.Closures[0].Provenance.Version != "1.2.3" ||
+		result.VisitedStates != "2" {
+		t.Errorf("unproven-root fallback = closures %+v visited %s; want 1.2.3 after two states",
+			result.Closures, result.VisitedStates)
+	}
+}
+
+func TestArbitraryPythonRootBacktracksToCompatibleCandidateV1(t *testing.T) {
+	catalog := candidateTestCatalogV1(t)
+	_, sourceSet := solverTestCandidateSetsV1(t, catalog)
+	newest := sourceSet.Candidates[0]
+	older := sourceSet.Candidates[1]
+	arbitrary := cloneBindingContractV1(validRecordValuesV1()[4].(*BindingContractV1))
+	arbitrary.Requirements = []string{"demo===v1.0"}
+	exact := cloneBindingContractV1(&arbitrary)
+	exact.Requirements = []string{"demo==0.9"}
+	newest.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &arbitrary)}
+	older.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &exact)}
+	sourceSet.Candidates = []ReleaseCandidateV1{newest, older}
+
+	activeSource := solverTestActiveSourceV1("source-builder:other", "lock-state", "source-builder/python")
+	activeSource.PythonBindings = []ActivePythonBindingConstraintV1{{
+		Name: "python", Requirements: []string{"demo<1"}, SupportedPython: []string{},
+	}}
+	operation := solverTestOperationV1()
+	operation.ActiveProviders = solverTestActiveProvidersV1(activeSource)
+	result, err := catalog.ResolveSelectedClosuresV1(
+		[]ReleaseCandidateSetV1{sourceSet}, solverTestBuildDomainsV1(false), operation)
+	if err != nil {
+		t.Fatalf("backtrack from incompatible arbitrary Python root: %v", err)
+	}
+	if len(result.Closures) != 1 || result.Closures[0].Provenance.Version != "1.2.3" ||
+		result.VisitedStates != "2" {
+		t.Errorf("arbitrary-root fallback = closures %+v visited %s; want 1.2.3 after two states",
+			result.Closures, result.VisitedStates)
+	}
+}
+
+func TestPythonRootProofBudgetBacktracksToExactCandidateV1(t *testing.T) {
+	catalog := candidateTestCatalogV1(t)
+	_, sourceSet := solverTestCandidateSetsV1(t, catalog)
+	newest := sourceSet.Candidates[0]
+	older := sourceSet.Candidates[1]
+	overBudget := cloneBindingContractV1(validRecordValuesV1()[4].(*BindingContractV1))
+	overBudget.Requirements = []string{"demo>=1,>=2"}
+	exact := cloneBindingContractV1(&overBudget)
+	exact.Requirements = []string{"demo==2"}
+	newest.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &overBudget)}
+	older.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &exact)}
+	sourceSet.Candidates = []ReleaseCandidateV1{newest, older}
+
+	activeSource := solverTestActiveSourceV1("source-builder:other", "lock-state", "source-builder/python")
+	activeSource.PythonBindings = []ActivePythonBindingConstraintV1{{
+		Name: "python", Requirements: []string{
+			"demo" + strings.Repeat(">=1,", 1022) + ">=1",
+		}, SupportedPython: []string{},
+	}}
+	operation := solverTestOperationV1()
+	operation.ActiveProviders = solverTestActiveProvidersV1(activeSource)
+	result, err := catalog.ResolveSelectedClosuresV1(
+		[]ReleaseCandidateSetV1{sourceSet}, solverTestBuildDomainsV1(false), operation)
+	if err != nil {
+		t.Fatalf("backtrack from aggregate Python proof budget: %v", err)
+	}
+	if len(result.Closures) != 1 || result.Closures[0].Provenance.Version != "1.2.3" ||
+		result.VisitedStates != "2" {
+		t.Errorf("proof-budget fallback = closures %+v visited %s; want 1.2.3 after two states",
+			result.Closures, result.VisitedStates)
 	}
 }
 
@@ -888,6 +1131,47 @@ func TestJointAssignmentCapFailsClosedV1(t *testing.T) {
 	}
 	if chosen != nil || visited != 2 {
 		t.Errorf("cap result = chosen %v visited %d, want nil and 2", chosen, visited)
+	}
+}
+
+func TestPythonRootPartialConflictsPruneBeforeStateCapV1(t *testing.T) {
+	requirements := make([]string, 10)
+	for index := range requirements {
+		requirements[index] = "demo==2"
+	}
+	catalog, sets, domains := solverTestPythonRootSetsV1(t, requirements)
+
+	conflictingBinding := &BindingContractV1{
+		Schema: BindingContractSchemaV1,
+		ID:     "tool:solver-cap/releases/1/bindings/python-conflict/contract",
+		Name:   "python-conflict", Package: "demo",
+		Requirements:    []string{"demo==1"},
+		SupportedPython: []string{}, SupportedTags: []string{}, BundledComponents: []BundledComponentV1{},
+		CLI: ToolExportV1{Name: "demo", Path: "/opt/demo/bin/demo"},
+	}
+	conflictingReference := solverTestAddRecordV1(t, catalog, conflictingBinding)
+	conflicting := sets[0].candidates[0]
+	conflicting.Manifest.Version = "2"
+	conflicting.Contributions = []RecordReferenceV1{conflictingReference}
+	compatible := sets[0].candidates[0]
+	compatible.Manifest.Version = "1"
+	sets[0].candidates = []ReleaseCandidateV1{conflicting, compatible}
+	for index := 1; index < len(sets); index++ {
+		newer := sets[index].candidates[0]
+		newer.Manifest.Version = "2"
+		older := sets[index].candidates[0]
+		older.Manifest.Version = "1"
+		sets[index].candidates = []ReleaseCandidateV1{newer, older}
+	}
+
+	chosen, visited, err := catalog.solveCandidateSetsV1(
+		sets, domains, solverTestActiveProvidersV1(), 1024)
+	if err != nil {
+		t.Fatalf("partial Python-root pruning before state cap: %v", err)
+	}
+	if len(chosen) != len(sets) || chosen[0].Manifest.Version != "1" || visited != 13 {
+		t.Fatalf("partial root pruning = %d chosen, first version %q, %d visited; want 10, 1, 13",
+			len(chosen), chosen[0].Manifest.Version, visited)
 	}
 }
 
