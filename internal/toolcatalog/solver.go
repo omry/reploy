@@ -549,6 +549,8 @@ func (catalog *CatalogV1) solveCandidateSetsV1(sets []orderedCandidateSetV1,
 	selected := make([]ReleaseCandidateV1, 0, len(sets))
 	visited := 0
 	lastConflict := ""
+	bindingCompatibility := make(bindingCompatibilityCacheV1)
+	bindingDistributions := make(map[string]string)
 	var search func(int) (bool, error)
 	search = func(index int) (bool, error) {
 		if index == len(sets) {
@@ -560,7 +562,8 @@ func (catalog *CatalogV1) solveCandidateSetsV1(sets []orderedCandidateSetV1,
 				return false, fmt.Errorf("joint assignment visited-state cap %d exceeded before a complete assignment", limit)
 			}
 			selected = append(selected, candidate)
-			conflict, err := catalog.assignmentConflictV1(sets, selected, domains, active)
+			conflict, err := catalog.assignmentConflictWithBindingCacheV1(
+				sets, selected, domains, active, bindingCompatibility, bindingDistributions)
 			if err != nil {
 				return false, err
 			}
@@ -611,7 +614,15 @@ type ownedPathClaimV1 struct {
 type bindingRequirementClaimV1 struct {
 	owners       []string
 	requirements []string
+	seen         map[string]struct{}
 }
+
+type bindingCompatibilityResultV1 struct {
+	compatible bool
+	err        error
+}
+
+type bindingCompatibilityCacheV1 map[string]bindingCompatibilityResultV1
 
 type pythonInterpreterClaimV1 struct {
 	owners      []string
@@ -620,21 +631,33 @@ type pythonInterpreterClaimV1 struct {
 }
 
 type assignmentClaimsV1 struct {
-	semantic            map[string]semanticClaimV1
-	paths               map[string][]ownedPathClaimV1
-	installRoots        map[string][]ownedPathClaimV1
-	bindingRequirements map[string]bindingRequirementClaimV1
-	pythonInterpreters  map[string]pythonInterpreterClaimV1
+	semantic             map[string]semanticClaimV1
+	paths                map[string][]ownedPathClaimV1
+	installRoots         map[string][]ownedPathClaimV1
+	bindingRequirements  map[string]bindingRequirementClaimV1
+	bindingDistributions map[string]string
+	pythonInterpreters   map[string]pythonInterpreterClaimV1
 }
 
 func (catalog *CatalogV1) assignmentConflictV1(sets []orderedCandidateSetV1,
 	candidates []ReleaseCandidateV1, domains []ProviderDomainSetV1,
 	active ActiveProviderConstraintsV1) (string, error) {
+	return catalog.assignmentConflictWithBindingCacheV1(sets, candidates, domains, active, nil, nil)
+}
+
+func (catalog *CatalogV1) assignmentConflictWithBindingCacheV1(sets []orderedCandidateSetV1,
+	candidates []ReleaseCandidateV1, domains []ProviderDomainSetV1,
+	active ActiveProviderConstraintsV1, bindingCompatibility bindingCompatibilityCacheV1,
+	bindingDistributions map[string]string) (string, error) {
+	if bindingDistributions == nil {
+		bindingDistributions = make(map[string]string)
+	}
 	claims := assignmentClaimsV1{
 		semantic: make(map[string]semanticClaimV1), paths: make(map[string][]ownedPathClaimV1),
-		installRoots:        make(map[string][]ownedPathClaimV1),
-		bindingRequirements: make(map[string]bindingRequirementClaimV1),
-		pythonInterpreters:  make(map[string]pythonInterpreterClaimV1),
+		installRoots:         make(map[string][]ownedPathClaimV1),
+		bindingRequirements:  make(map[string]bindingRequirementClaimV1),
+		bindingDistributions: bindingDistributions,
+		pythonInterpreters:   make(map[string]pythonInterpreterClaimV1),
 	}
 	if conflict, err := catalog.addActiveProviderClaimsV1(&claims, domains, active); err != nil {
 		return "", err
@@ -647,13 +670,15 @@ func (catalog *CatalogV1) assignmentConflictV1(sets []orderedCandidateSetV1,
 			ID: sets[index].group.Scope + "/" + sets[index].group.Tool + "@" +
 				candidate.Manifest.Version + "~" + candidate.Manifest.Revision,
 		})
-		if conflict, err := catalog.addCandidateClaimsV1(&claims, sets[index].domains, owner, candidate); err != nil {
+		if conflict, err := catalog.addCandidateClaimsForAssignmentV1(
+			&claims, sets[index].domains, owner, candidate); err != nil {
 			return "", err
 		} else if conflict != "" {
 			return conflict, nil
 		}
 	}
-	return "", nil
+	return validateBindingRequirementClaimsV1(
+		&claims, len(candidates) == len(sets), bindingCompatibility)
 }
 
 func constraintOwnerLabelV1(source ConstraintSourceV1) string {
@@ -703,12 +728,8 @@ func (catalog *CatalogV1) addActiveProviderClaimsV1(claims *assignmentClaimsV1,
 				}
 			}
 			for _, requirement := range binding.Requirements {
-				distribution, err := pythonprovider.PackageRootDistributionNameV1(requirement)
-				if err != nil {
-					return "", err
-				}
-				if conflict, err := addBindingRequirementClaimV1(claims,
-					domains.PackageManager, distribution, requirement, owner); err != nil {
+				if conflict, err := addBindingRequirementTextClaimV1(
+					claims, domains.PackageManager, requirement, owner); err != nil {
 					return "", err
 				} else if conflict != "" {
 					return conflict, nil
@@ -778,22 +799,74 @@ func addBindingRequirementClaimV1(claims *assignmentClaimsV1, domain string,
 	if !exists {
 		claims.bindingRequirements[claimKey] = bindingRequirementClaimV1{
 			owners: []string{owner}, requirements: []string{requirement},
+			seen: map[string]struct{}{requirement: {}},
 		}
 		return "", nil
 	}
-	requirements := append(append([]string{}, previous.requirements...), requirement)
-	compatible, err := pythonprovider.PackageRootRequirementsCompatibleV1(requirements)
-	if err != nil {
-		return "", err
+	if _, duplicate := previous.seen[requirement]; duplicate {
+		return "", nil
 	}
-	if !compatible {
-		return fmt.Sprintf("binding requirement conflict in domain %q on %q among %s",
-			domain, key, formatSourcedConstraintsV1(
-				append(append([]string{}, previous.owners...), owner), requirements)), nil
-	}
-	previous.requirements = requirements
+	previous.requirements = append(previous.requirements, requirement)
 	previous.owners = append(previous.owners, owner)
+	previous.seen[requirement] = struct{}{}
 	claims.bindingRequirements[claimKey] = previous
+	return "", nil
+}
+
+func addBindingRequirementTextClaimV1(claims *assignmentClaimsV1, domain string,
+	requirement string, owner string) (string, error) {
+	if claims.bindingDistributions == nil {
+		claims.bindingDistributions = make(map[string]string)
+	}
+	cacheKey := domain + "\x00" + requirement
+	distribution, found := claims.bindingDistributions[cacheKey]
+	if !found {
+		var err error
+		distribution, err = pythonprovider.PackageRootDistributionNameV1(requirement)
+		if err != nil {
+			return "", err
+		}
+		claims.bindingDistributions[cacheKey] = distribution
+	}
+	return addBindingRequirementClaimV1(claims, domain, distribution, requirement, owner)
+}
+
+func validateBindingRequirementClaimsV1(claims *assignmentClaimsV1, complete bool,
+	compatibility bindingCompatibilityCacheV1) (string, error) {
+	keys := make([]string, 0, len(claims.bindingRequirements))
+	for key := range claims.bindingRequirements {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, claimKey := range keys {
+		claim := claims.bindingRequirements[claimKey]
+		cacheKey := claimKey + "\x00" + strings.Join(claim.requirements, "\x00")
+		result, found := compatibility[cacheKey]
+		if !found {
+			result.compatible, result.err = pythonprovider.PackageRootRequirementsCompatibleV1(claim.requirements)
+			if compatibility != nil {
+				compatibility[cacheKey] = result
+			}
+		}
+		compatible, err := result.compatible, result.err
+		if err != nil {
+			if pythonprovider.PackageRootCompatibilityUnprovenV1(err) {
+				if !complete {
+					continue
+				}
+				domain, key, _ := strings.Cut(claimKey, "\x00")
+				return fmt.Sprintf("binding requirement compatibility in domain %q on %q cannot be proven among %s",
+					domain, key, formatSourcedConstraintsV1(claim.owners, claim.requirements)), nil
+			}
+			return "", err
+		}
+		if compatible {
+			continue
+		}
+		domain, key, _ := strings.Cut(claimKey, "\x00")
+		return fmt.Sprintf("binding requirement conflict in domain %q on %q among %s",
+			domain, key, formatSourcedConstraintsV1(claim.owners, claim.requirements)), nil
+	}
 	return "", nil
 }
 
@@ -917,6 +990,11 @@ func pathsOverlapV1(left string, right string) bool {
 
 func (catalog *CatalogV1) addCandidateClaimsV1(claims *assignmentClaimsV1,
 	domains ProviderDomainSetV1, owner string, candidate ReleaseCandidateV1) (string, error) {
+	return catalog.addCandidateClaimsForAssignmentV1(claims, domains, owner, candidate)
+}
+
+func (catalog *CatalogV1) addCandidateClaimsForAssignmentV1(claims *assignmentClaimsV1,
+	domains ProviderDomainSetV1, owner string, candidate ReleaseCandidateV1) (string, error) {
 	if candidate.Contract.Runtime != nil {
 		if candidate.Contract.Runtime.InstallRoot != "" {
 			if conflict := addInstallRootClaimV1(claims, domains.Filesystem,
@@ -996,12 +1074,8 @@ func (catalog *CatalogV1) addCandidateClaimsV1(claims *assignmentClaimsV1,
 				return conflict, nil
 			}
 			for _, requirement := range selected.Requirements {
-				distribution, err := pythonprovider.PackageRootDistributionNameV1(requirement)
-				if err != nil {
-					return "", err
-				}
-				if conflict, err := addBindingRequirementClaimV1(claims,
-					domains.PackageManager, distribution, requirement, owner); err != nil {
+				if conflict, err := addBindingRequirementTextClaimV1(
+					claims, domains.PackageManager, requirement, owner); err != nil {
 					return "", err
 				} else if conflict != "" {
 					return conflict, nil

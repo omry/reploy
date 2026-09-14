@@ -1,6 +1,7 @@
 package portabletool
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -11,6 +12,12 @@ import (
 
 	pep440 "github.com/aquasecurity/go-pep440-version"
 )
+
+const portableToolPythonMaxPackageRootSpecifiersV1 = portableToolCatalogMaxReferencesV1
+
+// ErrPythonPackageRootCompatibilityUnprovenV1 marks a valid conjunction whose
+// nonempty intersection cannot be established by the bounded local proof.
+var ErrPythonPackageRootCompatibilityUnprovenV1 = errors.New("Python package root compatibility cannot be proven for the admitted PEP 440 constraints")
 
 // PythonPackageRootDistributionNameV1 extracts the immutable direct
 // distribution identity from a binding requirement.
@@ -39,26 +46,70 @@ func PythonPackageRootDistributionNameV1(requirement string) (string, error) {
 		return "", fmt.Errorf("Python package root requirement %q must not request extras", requirement)
 	}
 	if remainder != "" {
+		if strings.Count(remainder, ",")+1 > portableToolPythonMaxPackageRootSpecifiersV1 {
+			return "", fmt.Errorf("Python package root requirement must use at most %d version specifiers", portableToolPythonMaxPackageRootSpecifiersV1)
+		}
+		if strings.Contains(remainder, "||") {
+			return "", fmt.Errorf("invalid Python package root requirement %q", requirement)
+		}
 		specifiers, err := pep440.NewSpecifiers(remainder)
 		if err != nil || specifiers.String() != remainder {
 			return "", fmt.Errorf("invalid Python package root requirement %q", requirement)
+		}
+		for _, raw := range strings.Split(remainder, ",") {
+			if _, _, ok := portableToolPythonSplitVersionSpecifierV1(raw); !ok {
+				return "", fmt.Errorf("invalid Python package root requirement %q", requirement)
+			}
 		}
 	}
 	return portableToolPythonNormalizeDistributionNameV1(name), nil
 }
 
-// PythonPackageRootRequirementsCompatibleV1 reports whether ordinary release
-// constraints for one direct distribution have a nonempty intersection.
-// Complex PEP 440 forms remain resolver authority and are ignored here, so
-// this local check rejects only conjunctions it can prove unsatisfiable.
-func PythonPackageRootRequirementsCompatibleV1(requirements []string) (bool, error) {
-	interval := portableToolPythonRequirementIntervalV1{
-		lower: portableToolPythonRequirementBoundV1{version: []int{0}, inclusive: true, set: true},
+// ValidatePythonPackageRootRequirementsV1 requires one canonical package-root
+// requirement per normalized distribution, matching binding-contract records.
+func ValidatePythonPackageRootRequirementsV1(requirements []string) error {
+	if len(requirements) > portableToolCatalogMaxReferencesV1 {
+		return fmt.Errorf("Python package root requirements must use at most %d entries", portableToolCatalogMaxReferencesV1)
 	}
-	distribution := ""
-	excludedExact := make([][]int, 0)
-	excludedPrefixes := make([]portableToolPythonRequirementIntervalV1, 0)
+	distributions := make(map[string]string, len(requirements))
 	for _, requirement := range requirements {
+		distribution, err := PythonPackageRootDistributionNameV1(requirement)
+		if err != nil {
+			return err
+		}
+		if previous, found := distributions[distribution]; found {
+			return fmt.Errorf("Python package root requirements %q and %q name the same distribution %q", previous, requirement, distribution)
+		}
+		distributions[distribution] = requirement
+	}
+	return nil
+}
+
+// PythonPackageRootRequirementsCompatibleV1 reports whether constraints for
+// one direct distribution have a nonempty intersection. Exact PEP 440 pins,
+// including prerelease, local, and arbitrary equality, are checked against the
+// complete conjunction. A valid form that the bounded interval model cannot
+// represent fails closed unless an exact candidate proves the full conjunction.
+func PythonPackageRootRequirementsCompatibleV1(requirements []string) (bool, error) {
+	distribution := ""
+	uniqueRequirements := make([]string, 0, len(requirements))
+	seenRequirements := make(map[string]struct{}, len(requirements))
+	totalSpecifiers := 0
+	for _, requirement := range requirements {
+		if _, found := seenRequirements[requirement]; found {
+			continue
+		}
+		seenRequirements[requirement] = struct{}{}
+		trimmed := strings.TrimSpace(requirement)
+		name := portableToolPythonRequirementNamePatternV1.FindString(trimmed)
+		remainder := strings.TrimPrefix(trimmed, name)
+		if remainder != "" {
+			specifierCount := strings.Count(remainder, ",") + 1
+			if specifierCount > portableToolPythonMaxPackageRootSpecifiersV1-totalSpecifiers {
+				return false, ErrPythonPackageRootCompatibilityUnprovenV1
+			}
+			totalSpecifiers += specifierCount
+		}
 		currentDistribution, err := PythonPackageRootDistributionNameV1(requirement)
 		if err != nil {
 			return false, err
@@ -69,14 +120,71 @@ func PythonPackageRootRequirementsCompatibleV1(requirements []string) (bool, err
 			return false, fmt.Errorf("Python package root requirements name different distributions %q and %q",
 				distribution, currentDistribution)
 		}
+		uniqueRequirements = append(uniqueRequirements, requirement)
+	}
+	if len(uniqueRequirements) == 0 {
+		return true, nil
+	}
+
+	interval := portableToolPythonRequirementIntervalV1{
+		lower: portableToolPythonRequirementBoundV1{version: []int{0}, inclusive: true, set: true},
+	}
+	excludedExact := make([][]int, 0)
+	excludedPrefixes := make([]portableToolPythonRequirementIntervalV1, 0)
+	parsedRequirements := make([]pep440.Specifiers, 0, len(uniqueRequirements))
+	parsedNonArbitrarySpecifiers := make([]pep440.Specifiers, 0, len(uniqueRequirements))
+	proofCandidates := []pep440.Version{pep440.MustParse("0")}
+	arbitraryCandidate := ""
+	arbitraryCandidateSet := false
+	arbitraryCandidateConflict := false
+	hasNonArbitrarySpecifier := false
+	exactCandidate := ""
+	exactCandidatePriority := -1
+	unrepresentedConstraint := false
+	for _, requirement := range uniqueRequirements {
 		name := portableToolPythonRequirementNamePatternV1.FindString(requirement)
 		remainder := strings.TrimPrefix(requirement, name)
+		if remainder != "" {
+			specifiers, err := pep440.NewSpecifiers(remainder)
+			if err != nil {
+				return false, fmt.Errorf("invalid Python package root requirement")
+			}
+			parsedRequirements = append(parsedRequirements, specifiers)
+		}
 		for _, raw := range strings.Split(remainder, ",") {
 			if raw == "" {
 				continue
 			}
 			operator, expectedText, ok := portableToolPythonSplitVersionSpecifierV1(raw)
-			if !ok || operator == "===" {
+			if !ok {
+				return false, fmt.Errorf("invalid Python package root requirement")
+			}
+			if operator == "===" {
+				if !arbitraryCandidateSet {
+					arbitraryCandidate = expectedText
+					arbitraryCandidateSet = true
+				} else if !strings.EqualFold(arbitraryCandidate, expectedText) {
+					arbitraryCandidateConflict = true
+				}
+			} else {
+				hasNonArbitrarySpecifier = true
+				specifiers, err := pep440.NewSpecifiers(raw)
+				if err != nil {
+					return false, fmt.Errorf("invalid Python package root requirement")
+				}
+				parsedNonArbitrarySpecifiers = append(parsedNonArbitrarySpecifiers, specifiers)
+			}
+			if operator == "==" && !strings.HasSuffix(expectedText, ".*") {
+				priority := 0
+				if strings.Contains(expectedText, "+") {
+					priority = 1
+				}
+				if priority > exactCandidatePriority {
+					exactCandidate = expectedText
+					exactCandidatePriority = priority
+				}
+			}
+			if operator == "===" {
 				continue
 			}
 			if strings.Contains(expectedText, "+") {
@@ -85,15 +193,28 @@ func PythonPackageRootRequirementsCompatibleV1(requirements []string) (bool, err
 			wildcard := strings.HasSuffix(expectedText, ".*")
 			if wildcard {
 				expectedText = strings.TrimSuffix(expectedText, ".*")
+			} else if operator != "===" {
+				if candidate, err := pep440.Parse(expectedText); err == nil {
+					proofCandidates = append(proofCandidates, candidate)
+					proofCandidates = append(proofCandidates, portableToolPythonProofSuccessorsV1(candidate)...)
+				}
 			}
 			expected, ok := portableToolPythonParseReleaseVersionV1(expectedText)
 			if !ok {
+				unrepresentedConstraint = true
 				continue
+			}
+			if wildcard {
+				if successor, found := portableToolPythonNextPrefixV1(expected); found {
+					text := portableToolPythonReleaseVersionTextV1(successor)
+					proofCandidates = append(proofCandidates, portableToolPythonParseProofCandidatesV1(text+".dev0", text)...)
+				}
 			}
 			switch operator {
 			case "==":
 				if wildcard {
 					if !portableToolPythonConstrainPrefixV1(&interval, expected) {
+						unrepresentedConstraint = true
 						continue
 					}
 				} else {
@@ -108,6 +229,8 @@ func PythonPackageRootRequirementsCompatibleV1(requirements []string) (bool, err
 							lower: portableToolPythonRequirementBoundV1{version: expected, inclusive: true, set: true},
 							upper: portableToolPythonRequirementBoundV1{version: upper, inclusive: false, set: true},
 						})
+					} else {
+						unrepresentedConstraint = true
 					}
 				} else {
 					excludedExact = append(excludedExact, expected)
@@ -122,15 +245,65 @@ func PythonPackageRootRequirementsCompatibleV1(requirements []string) (bool, err
 				portableToolPythonConstrainUpperV1(&interval, expected, false)
 			case "~=":
 				if len(expected) < 2 {
+					unrepresentedConstraint = true
 					continue
 				}
 				portableToolPythonConstrainLowerV1(&interval, expected, true)
-				portableToolPythonConstrainPrefixV1(&interval, expected[:len(expected)-1])
+				if !portableToolPythonConstrainPrefixV1(&interval, expected[:len(expected)-1]) {
+					unrepresentedConstraint = true
+				}
 			}
 		}
 	}
+	if arbitraryCandidateSet {
+		if arbitraryCandidateConflict {
+			return false, nil
+		}
+		if !hasNonArbitrarySpecifier {
+			return true, nil
+		}
+		candidate, err := pep440.Parse(arbitraryCandidate)
+		if err != nil {
+			// An arbitrary literal outside the normalized release grammar
+			// cannot satisfy a normal PEP 440 specifier.
+			return false, nil
+		}
+		for _, specifiers := range parsedNonArbitrarySpecifiers {
+			if !specifiers.Check(candidate) {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+	if exactCandidatePriority >= 0 {
+		candidate, err := pep440.Parse(exactCandidate)
+		if err != nil {
+			return false, fmt.Errorf("invalid exact Python package version")
+		}
+		for _, specifiers := range parsedRequirements {
+			if !specifiers.Check(candidate) {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
 	if portableToolPythonIntervalEmptyV1(interval) {
 		return false, nil
+	}
+	if unrepresentedConstraint {
+		for _, candidate := range proofCandidates {
+			compatible := true
+			for _, specifiers := range parsedRequirements {
+				if !specifiers.Check(candidate) {
+					compatible = false
+					break
+				}
+			}
+			if compatible {
+				return true, nil
+			}
+		}
+		return false, ErrPythonPackageRootCompatibilityUnprovenV1
 	}
 	if portableToolPythonIntervalSingletonV1(interval) {
 		for _, excluded := range excludedExact {
@@ -261,6 +434,45 @@ func portableToolPythonIntervalCoveredV1(allowed portableToolPythonRequirementIn
 }
 
 var portableToolPythonRequirementNamePatternV1 = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*`)
+
+var portableToolPythonVersionPhasePatternV1 = regexp.MustCompile(`^(.*(?:a|b|rc|\.post|\.dev))([0-9]+)$`)
+
+func portableToolPythonProofSuccessorsV1(version pep440.Version) []pep440.Version {
+	canonical := version.String()
+	nextRelease := portableToolPythonParseProofCandidatesV1(version.BaseVersion()+".1.dev0", version.BaseVersion()+".1")
+	phase := portableToolPythonVersionPhasePatternV1.FindStringSubmatch(canonical)
+	if phase == nil {
+		return nextRelease
+	}
+	serial, err := strconv.ParseUint(phase[2], 10, 64)
+	if err != nil || serial == ^uint64(0) {
+		return nextRelease
+	}
+	successor := phase[1] + strconv.FormatUint(serial+1, 10)
+	if strings.HasSuffix(phase[1], ".dev") {
+		return append(portableToolPythonParseProofCandidatesV1(successor), nextRelease...)
+	}
+	return append(portableToolPythonParseProofCandidatesV1(successor+".dev0", successor), nextRelease...)
+}
+
+func portableToolPythonParseProofCandidatesV1(values ...string) []pep440.Version {
+	result := make([]pep440.Version, 0, len(values))
+	for _, value := range values {
+		candidate, err := pep440.Parse(value)
+		if err == nil {
+			result = append(result, candidate)
+		}
+	}
+	return result
+}
+
+func portableToolPythonReleaseVersionTextV1(version []int) string {
+	parts := make([]string, len(version))
+	for index, component := range version {
+		parts[index] = strconv.Itoa(component)
+	}
+	return strings.Join(parts, ".")
+}
 
 func portableToolPythonValidRequirementIdentifierV1(value string) bool {
 	if value == "" || !portableToolPythonASCIIAlphaNumericV1(value[0]) || !portableToolPythonASCIIAlphaNumericV1(value[len(value)-1]) {

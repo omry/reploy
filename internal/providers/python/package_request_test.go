@@ -116,6 +116,10 @@ func TestPackageRootDistributionNameV1Limits(t *testing.T) {
 	if _, err := PackageRootDistributionNameV1(longSpecifier); err != nil {
 		t.Errorf("long specifier set = %v", err)
 	}
+	tooManySpecifiers := "demo" + strings.Repeat(">=1,", 1024) + ">=1"
+	if _, err := PackageRootDistributionNameV1(tooManySpecifiers); err == nil {
+		t.Error("over-limit specifier set succeeded")
+	}
 }
 
 func TestPackageRootDistributionNameV1NormalizesIdentically(t *testing.T) {
@@ -144,8 +148,32 @@ func TestPackageRootRequirementsCompatibleV1(t *testing.T) {
 		{name: "exact pin in excluded prefix", requirements: []string{"demo==1.2", "demo!=1.*"}, want: false},
 		{name: "excluded prefix", requirements: []string{"demo>=1", "demo<2", "demo!=1.*"}, want: false},
 		{name: "tiled excluded prefixes", requirements: []string{"demo>=1", "demo<3", "demo!=1.*", "demo!=2.*"}, want: false},
-		{name: "unsupported form stays resolver authority", requirements: []string{"demo==1rc1", "demo==2rc1"}, want: true},
-		{name: "local labels stay resolver authority", requirements: []string{"demo==1+abc", "demo!=1+def"}, want: true},
+		{name: "conflicting prerelease pins", requirements: []string{"demo==1rc1", "demo==2rc1"}, want: false},
+		{name: "matching prerelease pin and range", requirements: []string{"demo==1rc1", "demo>=1rc1,<2"}, want: true},
+		{name: "single prerelease range", requirements: []string{"demo>=1rc1,<2"}, want: true},
+		{name: "strict prerelease range", requirements: []string{"demo>1rc1,<2"}, want: true},
+		{name: "narrow strict prerelease range", requirements: []string{"demo>1rc1,<1rc2"}, want: true},
+		{name: "strict post release lower bounds", requirements: []string{"demo>1rc1", "demo>1.post1"}, want: true},
+		{name: "strict prerelease outside excluded prefix", requirements: []string{"demo>1rc1", "demo!=1.*"}, want: true},
+		{name: "duplicate prerelease range", requirements: []string{"demo>=1rc1,<2", "demo>=1rc1,<2"}, want: true},
+		{name: "single epoch range", requirements: []string{"demo>=1!2"}, want: true},
+		{name: "duplicate epoch range", requirements: []string{"demo>=1!2", "demo>=1!2"}, want: true},
+		{name: "conflicting local pins", requirements: []string{"demo==1+abc", "demo==1+def"}, want: false},
+		{name: "matching local pin and public equality", requirements: []string{"demo==1+abc", "demo==1"}, want: true},
+		{name: "conflicting arbitrary equality pins", requirements: []string{"demo===1+abc", "demo===1+def"}, want: false},
+		{name: "matching arbitrary and normalized equality", requirements: []string{"demo===1.0", "demo==1"}, want: true},
+		{name: "matching arbitrary and differently spelled normalized equality", requirements: []string{"demo===1.0", "demo==1.0.0"}, want: true},
+		{name: "arbitrary spelling conflicts with normalized local equality", requirements: []string{"demo===1", "demo==1+abc"}, want: false},
+		{name: "arbitrary wildcard literal", requirements: []string{"demo===1.*"}, want: true},
+		{name: "arbitrary noncanonical version literal", requirements: []string{"demo===v1.0"}, want: true},
+		{name: "arbitrary noncanonical literal with normalized equality", requirements: []string{"demo===v1.0", "demo==1"}, want: true},
+		{name: "matching arbitrary wildcard literals", requirements: []string{"demo===1.*", "demo===1.*"}, want: true},
+		{name: "conflicting arbitrary wildcard literals", requirements: []string{"demo===1.*", "demo===2.*"}, want: false},
+		{name: "conflicting arbitrary normalized spellings", requirements: []string{"demo===v1.0", "demo===1.0"}, want: false},
+		{name: "arbitrary wildcard cannot satisfy normal prefix", requirements: []string{"demo===1.*", "demo==1.*"}, want: false},
+		{name: "single contradictory range", requirements: []string{"demo>=3,<3"}, want: false},
+		{name: "single contradictory exact pins", requirements: []string{"demo==1,==2"}, want: false},
+		{name: "single fully excluded prefix", requirements: []string{"demo==1.*,!=1.*"}, want: false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			compatible, err := PackageRootRequirementsCompatibleV1(testCase.requirements)
@@ -159,6 +187,66 @@ func TestPackageRootRequirementsCompatibleV1(t *testing.T) {
 	}
 	if _, err := PackageRootRequirementsCompatibleV1([]string{"demo>=1", "other<3"}); err == nil {
 		t.Fatal("different distributions succeeded")
+	}
+	maxComponent := fmt.Sprintf("%d", int(^uint(0)>>1))
+	for _, requirements := range [][]string{
+		{"demo=1"},
+		{"demo>=2||==1"},
+		{"demo>=2||=1,==1"},
+		{"demo>=1!2", "demo<1!1"},
+		{"demo>=2rc1", "demo<1rc1"},
+		{"demo>=2rc1,<1rc1"},
+		{"demo==" + maxComponent + ".*", "demo!=" + maxComponent + ".*"},
+	} {
+		if compatible, err := PackageRootRequirementsCompatibleV1(requirements); err == nil || compatible {
+			t.Errorf("unrepresented constraints %q = compatible %t, error %v", requirements, compatible, err)
+		}
+	}
+	firstHalf := "demo" + strings.Repeat(">=1rc1,", 511) + ">=1rc1"
+	secondOverHalf := "demo" + strings.Repeat(">=1rc1,", 512) + ">=1rc2"
+	if compatible, err := PackageRootRequirementsCompatibleV1([]string{firstHalf, secondOverHalf}); err == nil || compatible {
+		t.Errorf("over-limit aggregate specifiers = compatible %t, error %v", compatible, err)
+	}
+}
+
+func BenchmarkPackageRootRequirementsCompatibleV1DuplicateExactRoots(b *testing.B) {
+	requirements := make([]string, 1024)
+	for index := range requirements {
+		requirements[index] = "demo==1"
+	}
+	requirements[len(requirements)-1] = "demo===1.0"
+	b.ResetTimer()
+	for range b.N {
+		compatible, err := PackageRootRequirementsCompatibleV1(requirements)
+		if err != nil || !compatible {
+			b.Fatalf("compatible = %v, error = %v", compatible, err)
+		}
+	}
+}
+
+func BenchmarkPackageRootRequirementsCompatibleV1PrereleaseSpecifierLimit(b *testing.B) {
+	requirement := "demo" + strings.Repeat(">=1rc1,", 1023) + ">=1rc1"
+	b.ResetTimer()
+	for range b.N {
+		compatible, err := PackageRootRequirementsCompatibleV1([]string{requirement})
+		if err != nil || !compatible {
+			b.Fatalf("compatible = %v, error = %v", compatible, err)
+		}
+	}
+}
+
+func BenchmarkPackageRootRequirementsCompatibleV1DuplicateWideRoots(b *testing.B) {
+	requirement := "demo" + strings.Repeat(">=1rc1,", 1023) + ">=1rc1"
+	requirements := make([]string, 1024)
+	for index := range requirements {
+		requirements[index] = requirement
+	}
+	b.ResetTimer()
+	for range b.N {
+		compatible, err := PackageRootRequirementsCompatibleV1(requirements)
+		if err != nil || !compatible {
+			b.Fatalf("compatible = %v, error = %v", compatible, err)
+		}
 	}
 }
 

@@ -2,6 +2,7 @@ package python
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -69,6 +70,10 @@ func PackageRootDistributionNameV1(requirement string) (string, error) {
 
 func PackageRootRequirementsCompatibleV1(requirements []string) (bool, error) {
 	return portabletool.PythonPackageRootRequirementsCompatibleV1(requirements)
+}
+
+func PackageRootCompatibilityUnprovenV1(err error) bool {
+	return errors.Is(err, portabletool.ErrPythonPackageRootCompatibilityUnprovenV1)
 }
 
 // ProviderRequestDistributionsV1 returns the normalized direct distribution
