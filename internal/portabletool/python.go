@@ -39,25 +39,51 @@ func PythonPackageRootDistributionNameV1(requirement string) (string, error) {
 		return "", fmt.Errorf("Python package root requirement %q must not request extras", requirement)
 	}
 	if remainder != "" {
+		if strings.Contains(remainder, "||") {
+			return "", fmt.Errorf("invalid Python package root requirement %q", requirement)
+		}
 		specifiers, err := pep440.NewSpecifiers(remainder)
 		if err != nil || specifiers.String() != remainder {
 			return "", fmt.Errorf("invalid Python package root requirement %q", requirement)
+		}
+		for _, raw := range strings.Split(remainder, ",") {
+			if _, _, ok := portableToolPythonSplitVersionSpecifierV1(raw); !ok {
+				return "", fmt.Errorf("invalid Python package root requirement %q", requirement)
+			}
 		}
 	}
 	return portableToolPythonNormalizeDistributionNameV1(name), nil
 }
 
-// PythonPackageRootRequirementsCompatibleV1 reports whether ordinary release
-// constraints for one direct distribution have a nonempty intersection.
-// Complex PEP 440 forms remain resolver authority and are ignored here, so
-// this local check rejects only conjunctions it can prove unsatisfiable.
-func PythonPackageRootRequirementsCompatibleV1(requirements []string) (bool, error) {
-	interval := portableToolPythonRequirementIntervalV1{
-		lower: portableToolPythonRequirementBoundV1{version: []int{0}, inclusive: true, set: true},
+// ValidatePythonPackageRootRequirementsV1 requires one canonical package-root
+// requirement per normalized distribution, matching binding-contract records.
+func ValidatePythonPackageRootRequirementsV1(requirements []string) error {
+	if len(requirements) > portableToolCatalogMaxReferencesV1 {
+		return fmt.Errorf("Python package root requirements must use at most %d entries", portableToolCatalogMaxReferencesV1)
 	}
+	distributions := make(map[string]string, len(requirements))
+	for _, requirement := range requirements {
+		distribution, err := PythonPackageRootDistributionNameV1(requirement)
+		if err != nil {
+			return err
+		}
+		if previous, found := distributions[distribution]; found {
+			return fmt.Errorf("Python package root requirements %q and %q name the same distribution %q", previous, requirement, distribution)
+		}
+		distributions[distribution] = requirement
+	}
+	return nil
+}
+
+// PythonPackageRootRequirementsCompatibleV1 reports whether constraints for
+// one direct distribution have a nonempty intersection. Exact PEP 440 pins,
+// including prerelease, local, and arbitrary equality, are checked against the
+// complete conjunction. A valid form that the bounded interval model cannot
+// represent fails closed unless an exact candidate proves the full conjunction.
+func PythonPackageRootRequirementsCompatibleV1(requirements []string) (bool, error) {
 	distribution := ""
-	excludedExact := make([][]int, 0)
-	excludedPrefixes := make([]portableToolPythonRequirementIntervalV1, 0)
+	uniqueRequirements := make([]string, 0, len(requirements))
+	seenRequirements := make(map[string]struct{}, len(requirements))
 	for _, requirement := range requirements {
 		currentDistribution, err := PythonPackageRootDistributionNameV1(requirement)
 		if err != nil {
@@ -69,14 +95,57 @@ func PythonPackageRootRequirementsCompatibleV1(requirements []string) (bool, err
 			return false, fmt.Errorf("Python package root requirements name different distributions %q and %q",
 				distribution, currentDistribution)
 		}
+		if _, found := seenRequirements[requirement]; found {
+			continue
+		}
+		seenRequirements[requirement] = struct{}{}
+		uniqueRequirements = append(uniqueRequirements, requirement)
+	}
+	if len(uniqueRequirements) <= 1 {
+		return true, nil
+	}
+
+	interval := portableToolPythonRequirementIntervalV1{
+		lower: portableToolPythonRequirementBoundV1{version: []int{0}, inclusive: true, set: true},
+	}
+	excludedExact := make([][]int, 0)
+	excludedPrefixes := make([]portableToolPythonRequirementIntervalV1, 0)
+	parsedRequirements := make([]pep440.Specifiers, 0, len(uniqueRequirements))
+	exactCandidate := ""
+	exactCandidatePriority := -1
+	unrepresentedConstraint := false
+	for _, requirement := range uniqueRequirements {
 		name := portableToolPythonRequirementNamePatternV1.FindString(requirement)
 		remainder := strings.TrimPrefix(requirement, name)
+		if remainder != "" {
+			specifiers, err := pep440.NewSpecifiers(remainder)
+			if err != nil {
+				return false, fmt.Errorf("invalid Python package root requirement")
+			}
+			parsedRequirements = append(parsedRequirements, specifiers)
+		}
 		for _, raw := range strings.Split(remainder, ",") {
 			if raw == "" {
 				continue
 			}
 			operator, expectedText, ok := portableToolPythonSplitVersionSpecifierV1(raw)
-			if !ok || operator == "===" {
+			if !ok {
+				return false, fmt.Errorf("invalid Python package root requirement")
+			}
+			if operator == "===" || operator == "==" && !strings.HasSuffix(expectedText, ".*") {
+				priority := 0
+				if strings.Contains(expectedText, "+") {
+					priority = 1
+				}
+				if operator == "===" {
+					priority = 2
+				}
+				if priority > exactCandidatePriority {
+					exactCandidate = expectedText
+					exactCandidatePriority = priority
+				}
+			}
+			if operator == "===" {
 				continue
 			}
 			if strings.Contains(expectedText, "+") {
@@ -88,12 +157,14 @@ func PythonPackageRootRequirementsCompatibleV1(requirements []string) (bool, err
 			}
 			expected, ok := portableToolPythonParseReleaseVersionV1(expectedText)
 			if !ok {
+				unrepresentedConstraint = true
 				continue
 			}
 			switch operator {
 			case "==":
 				if wildcard {
 					if !portableToolPythonConstrainPrefixV1(&interval, expected) {
+						unrepresentedConstraint = true
 						continue
 					}
 				} else {
@@ -108,6 +179,8 @@ func PythonPackageRootRequirementsCompatibleV1(requirements []string) (bool, err
 							lower: portableToolPythonRequirementBoundV1{version: expected, inclusive: true, set: true},
 							upper: portableToolPythonRequirementBoundV1{version: upper, inclusive: false, set: true},
 						})
+					} else {
+						unrepresentedConstraint = true
 					}
 				} else {
 					excludedExact = append(excludedExact, expected)
@@ -122,12 +195,30 @@ func PythonPackageRootRequirementsCompatibleV1(requirements []string) (bool, err
 				portableToolPythonConstrainUpperV1(&interval, expected, false)
 			case "~=":
 				if len(expected) < 2 {
+					unrepresentedConstraint = true
 					continue
 				}
 				portableToolPythonConstrainLowerV1(&interval, expected, true)
-				portableToolPythonConstrainPrefixV1(&interval, expected[:len(expected)-1])
+				if !portableToolPythonConstrainPrefixV1(&interval, expected[:len(expected)-1]) {
+					unrepresentedConstraint = true
+				}
 			}
 		}
+	}
+	if exactCandidatePriority >= 0 {
+		candidate, err := pep440.Parse(exactCandidate)
+		if err != nil {
+			return false, fmt.Errorf("invalid exact Python package version")
+		}
+		for _, specifiers := range parsedRequirements {
+			if !specifiers.Check(candidate) {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+	if unrepresentedConstraint {
+		return false, fmt.Errorf("Python package root compatibility cannot be proven for the admitted PEP 440 constraints")
 	}
 	if portableToolPythonIntervalEmptyV1(interval) {
 		return false, nil

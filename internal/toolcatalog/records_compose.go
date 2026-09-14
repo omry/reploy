@@ -9,6 +9,7 @@ import (
 	pep440 "github.com/aquasecurity/go-pep440-version"
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
+	"github.com/omry/reploy/internal/portabletool"
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
 )
 
@@ -227,18 +228,8 @@ func validateBindingArtifactAgainstContractV1(contract *BindingContractV1, artif
 	if err != nil {
 		return fmt.Errorf("requires_python is invalid")
 	}
-	bundled := make(map[string]BundledComponentV1, len(artifact.BundledComponents))
-	for _, component := range artifact.BundledComponents {
-		bundled[component.Name] = component
-	}
-	for _, declared := range contract.BundledComponents {
-		present, exists := bundled[declared.Name]
-		if !exists {
-			return fmt.Errorf("contract declares bundled component %q which the artifact does not bundle", declared.Name)
-		}
-		if present.Version != declared.Version || present.Path != declared.Path {
-			return fmt.Errorf("bundled component %q does not match the contract", declared.Name)
-		}
+	if err := portabletool.ValidateBindingBundledComponentAgreementV1(contract.BundledComponents, artifact.BundledComponents); err != nil {
+		return err
 	}
 	claims, err := pythonprovider.NormalizeSupportedPythonClaimsV1(contract.SupportedPython)
 	if err != nil {

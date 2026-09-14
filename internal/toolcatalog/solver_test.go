@@ -427,6 +427,17 @@ func TestBindingRequirementClaimsAllowCompatibleProviderConstraintsV1(t *testing
 		solverTestActiveProvidersV1()); err != nil || conflict != "" {
 		t.Fatalf("compatible binding requirements conflict = %q, %v", conflict, err)
 	}
+	for _, requirement := range []string{"demo>=1rc1,<2", "demo>=1!2"} {
+		bindingLeft.Requirements = []string{requirement}
+		bindingRight.Requirements = []string{requirement}
+		application.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &bindingLeft)}
+		source.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &bindingRight)}
+		if conflict, err := catalog.assignmentConflictV1(
+			sets, []ReleaseCandidateV1{application, source}, domains,
+			solverTestActiveProvidersV1()); err != nil || conflict != "" {
+			t.Fatalf("duplicate complex binding requirement %q conflict = %q, %v", requirement, conflict, err)
+		}
+	}
 
 	bindingLeft.Requirements = []string{"demo==1"}
 	bindingRight.Name = "python-alt"
