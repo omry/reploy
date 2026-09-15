@@ -1,0 +1,2 @@
+kind: Added
+body: Validate portable Python binding wheels against the selected interpreter before acquisition.
