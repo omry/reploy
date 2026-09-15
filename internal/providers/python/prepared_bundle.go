@@ -18,6 +18,7 @@ import (
 	"github.com/omry/reploy/internal/canonical"
 	providerapi "github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
+	"github.com/omry/reploy/internal/wheelinventory"
 )
 
 var requirementNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*`)
@@ -334,15 +335,23 @@ func pathJoin(parts ...string) string {
 }
 
 func inspectWheel(filename string) (inspectedWheel, error) {
-	archive, err := zip.OpenReader(filename)
+	file, err := os.Open(filename)
 	if err != nil {
 		return inspectedWheel{}, err
 	}
-	defer archive.Close()
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return inspectedWheel{}, err
+	}
+	archive, err := wheelinventory.Read(context.Background(), file, info.Size())
+	if err != nil {
+		return inspectedWheel{}, err
+	}
 	metadataFiles := []*zip.File{}
 	wheelFiles := []*zip.File{}
 	entryPointFiles := []*zip.File{}
-	for _, file := range archive.File {
+	for _, file := range archive.Files {
 		if strings.Count(file.Name, "/") == 1 && strings.HasSuffix(file.Name, ".dist-info/METADATA") {
 			metadataFiles = append(metadataFiles, file)
 		}
@@ -379,10 +388,11 @@ func inspectWheel(filename string) (inspectedWheel, error) {
 	if wheelName != normalized || wheelVersion != version {
 		return inspectedWheel{}, fmt.Errorf("wheel filename identifies %s==%s but metadata identifies %s==%s", wheelName, wheelVersion, normalized, version)
 	}
-	digest, err := fileSHA256(filename)
-	if err != nil {
+	hash := sha256.New()
+	if _, err := io.Copy(hash, io.NewSectionReader(file, 0, info.Size())); err != nil {
 		return inspectedWheel{}, err
 	}
+	digest := fmt.Sprintf("%x", hash.Sum(nil))
 	tags, err := readWheelTags(wheelFiles[0])
 	if err != nil {
 		return inspectedWheel{}, err
@@ -459,12 +469,12 @@ func InspectWheelDeclaredDependenciesReaderV1(
 		}
 		allowed[distribution] = struct{}{}
 	}
-	archive, err := zip.NewReader(archiveReader, size)
+	archive, err := wheelinventory.Read(context.Background(), archiveReader, size)
 	if err != nil {
 		return nil, err
 	}
 	var metadata *zip.File
-	for _, file := range archive.File {
+	for _, file := range archive.Files {
 		if strings.Count(file.Name, "/") == 1 && strings.HasSuffix(file.Name, ".dist-info/METADATA") {
 			if metadata != nil {
 				return nil, fmt.Errorf("wheel must contain exactly one .dist-info/METADATA file")
