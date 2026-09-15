@@ -8,14 +8,16 @@ import (
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
+	pythonprovider "github.com/omry/reploy/internal/providers/python"
 	"github.com/omry/reploy/internal/providers/registry"
 	"github.com/omry/reploy/internal/providerstore"
 )
 
 type PreparedPythonNodeConfig struct {
-	ReusableWheels []providerstore.ArtifactDescriptor
-	LocalOverrides []PythonLocalOverrideV1
-	SourceBuilder  *SourceBuilderCoordinatorV1
+	ReusableWheels       []providerstore.ArtifactDescriptor
+	LocalOverrides       []PythonLocalOverrideV1
+	PortableToolBindings *pythonprovider.PortableToolPythonComponentV1
+	SourceBuilder        *SourceBuilderCoordinatorV1
 }
 
 type PreparedAPTNodeConfig struct {
@@ -127,6 +129,7 @@ func PreparePreparedPythonGraphBackend(
 				FinalImageConfig: cloneImageConfigPolicy(finalImageConfig), Artifacts: artifacts,
 				ReusableWheels:         append([]providerstore.ArtifactDescriptor{}, config.ReusableWheels...),
 				LocalOverrides:         append([]PythonLocalOverrideV1{}, config.LocalOverrides...),
+				PortableToolBindings:   config.PortableToolBindings,
 				SourceBuilder:          config.SourceBuilder,
 				Progress:               options.Progress,
 				ShowApplicationContext: showApplicationContext,

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/probe"
 	"github.com/omry/reploy/internal/providers"
@@ -25,7 +26,7 @@ func TestPythonResolverSessionProbesAndInspectsInOneContainer(t *testing.T) {
 	artifacts := testPreparedPythonResolverArtifacts(t)
 	request, responseRecord := pythonResolverProbeExchange()
 	response := mustCanonicalProbeResponse(t, responseRecord)
-	commands, probeInput := stubPythonResolverCommands(t, response, []byte("3.13.2\n"), nil)
+	commands, probeInput := stubPythonResolverCommands(t, response, pythonInspectionOutputV2ForTest("3.13.2", nil, nil), nil)
 
 	session, err := OpenPythonResolverSession(context.Background(), descriptor, workspace, artifacts)
 	if err != nil {
@@ -36,12 +37,12 @@ func TestPythonResolverSessionProbesAndInspectsInOneContainer(t *testing.T) {
 	}
 	launcher := pythonResolverSessionInput(t, session, responseRecord.Observations[0], providers.ExecutableRoleEnvironmentLauncher)
 	interpreter := pythonResolverSessionInput(t, session, responseRecord.Observations[1], providers.ExecutableRoleSelectedOutput)
-	version, err := session.InspectInterpreter(context.Background(), launcher, interpreter)
+	facts, err := session.InspectInterpreter(context.Background(), launcher, interpreter, []string{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version != "3.13.2" {
-		t.Fatalf("version = %q", version)
+	if facts.Version != "3.13.2" {
+		t.Fatalf("facts = %#v", facts)
 	}
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatal(err)
@@ -58,12 +59,16 @@ func TestPythonResolverSessionProbesAndInspectsInOneContainer(t *testing.T) {
 		"--mount", "type=bind,source=" + artifacts.OutputHostDir + ",target=" + pythonResolverOutputContainerDir,
 		"--entrypoint", ProbeContainerExecutable, string(descriptor.ConfigDigest), "hold",
 	}
+	inspection, err := pythonprovider.InterpreterInspectionArgv("/usr/bin/python3", []string{}, "x86_64")
+	if err != nil {
+		t.Fatal(err)
+	}
 	wantInspect := []string{
 		"exec", "--user", "0:0", "--workdir", "/", name,
 		"/usr/bin/env", "-i", "HOME=/tmp", "LANG=C", "LC_ALL=C",
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "TMPDIR=/tmp",
-		"/usr/bin/python3", "-I", "-S", "-c", `import sys; print(".".join(map(str, sys.version_info[:3])))`,
 	}
+	wantInspect = append(wantInspect, inspection...)
 	want := [][]string{
 		wantCreate,
 		{"start", name},
@@ -84,6 +89,29 @@ func TestPythonResolverSessionProbesAndInspectsInOneContainer(t *testing.T) {
 	}
 }
 
+func TestPythonInspectionArchitecturePreservesSupportedProviderPlatforms(t *testing.T) {
+	for platform, want := range map[string]string{
+		"linux/amd64":    "x86_64",
+		"linux/arm64":    "aarch64",
+		"linux/arm64/v8": "aarch64",
+		"linux/arm/v7":   "armv7l",
+	} {
+		t.Run(platform, func(t *testing.T) {
+			parsed, err := blueprint.ParsePlatform(platform)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := pythonInspectionArchitectureV2(parsed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != want {
+				t.Fatalf("inspection architecture = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestPythonResolverSessionRejectsWrongTypedRolesBeforeExec(t *testing.T) {
 	descriptor := testProbeImageDescriptor(t, "linux/amd64")
 	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
@@ -94,7 +122,7 @@ func TestPythonResolverSessionRejectsWrongTypedRolesBeforeExec(t *testing.T) {
 	}
 	launcher := rendererExecutable("cleanenv", providers.ExecutableRoleCarrier, "/usr/bin/env")
 	interpreter := rendererExecutable("interpreter", providers.ExecutableRoleSelectedOutput, "/usr/bin/python3")
-	if _, err := session.InspectInterpreter(context.Background(), launcher, interpreter); err == nil || !strings.Contains(err.Error(), "environment-launcher") {
+	if _, err := session.InspectInterpreter(context.Background(), launcher, interpreter, []string{}); err == nil || !strings.Contains(err.Error(), "environment-launcher") {
 		t.Fatalf("wrong launcher error = %v", err)
 	}
 	if len(*commands) != 2 {
@@ -115,7 +143,7 @@ func TestPythonResolverSessionRequiresSameContainerProbeBeforeInspection(t *test
 	}
 	launcher := rendererExecutable("cleanenv", providers.ExecutableRoleEnvironmentLauncher, "/usr/bin/env")
 	interpreter := rendererExecutable("interpreter", providers.ExecutableRoleSelectedOutput, "/usr/bin/python3")
-	if _, err := session.InspectInterpreter(context.Background(), launcher, interpreter); err == nil || !strings.Contains(err.Error(), "was not probed in this container") {
+	if _, err := session.InspectInterpreter(context.Background(), launcher, interpreter, []string{}); err == nil || !strings.Contains(err.Error(), "was not probed in this container") {
 		t.Fatalf("unprobed inspection error = %v", err)
 	}
 	if len(*commands) != 2 {
@@ -225,7 +253,7 @@ func TestPythonResolverSessionBuildsSdistThenWheelWithSelectedInterpreterAndPinn
 	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
 	artifacts := testPreparedPythonResolverArtifacts(t)
 	request, responseRecord := pythonResolverProbeExchange()
-	commands, _ := stubPythonResolverCommands(t, mustCanonicalProbeResponse(t, responseRecord), []byte("3.13.2\n"), nil)
+	commands, _ := stubPythonResolverCommands(t, mustCanonicalProbeResponse(t, responseRecord), pythonInspectionOutputV2ForTest("3.13.2", nil, nil), nil)
 	session, err := OpenPythonResolverSession(context.Background(), descriptor, workspace, artifacts)
 	if err != nil {
 		t.Fatal(err)
@@ -239,6 +267,7 @@ func TestPythonResolverSessionBuildsSdistThenWheelWithSelectedInterpreterAndPinn
 	}
 	interpreter, _, err := session.InspectAndBindInterpreter(
 		context.Background(), launcher, requirement, providers.QualifiedOutput{Component: "base", Name: "interpreter"},
+		[]string{},
 	)
 	if err != nil {
 		t.Fatal(err)

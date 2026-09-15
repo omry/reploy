@@ -148,7 +148,7 @@ func TestProviderFullImageValidationRunnerValidatesPythonProfileAndOutputFromOne
 		observations = append(observations, directExecutableObservation(inspection.ID, inspection.InvocationPath))
 	}
 	response := mustCanonicalProbeResponse(t, probe.ResponseV1{Schema: probe.ResponseSchemaV1, Observations: observations})
-	version := input.Profiles[0].SelectedExecutables[0].Facts.Value["version"].(string)
+	inspectionOutput := pythonInspectionOutputFromFactsV2ForTest(t, input.Profiles[0].SelectedExecutables[0].Facts)
 	commands := []CommandSpec{}
 	runImageValidationFollowupCommand = func(spec CommandSpec, options RunOptions) error {
 		commands = append(commands, spec)
@@ -159,7 +159,7 @@ func TestProviderFullImageValidationRunnerValidatesPythonProfileAndOutputFromOne
 			_, _ = options.Stdout.Write(response)
 			return nil
 		}
-		_, _ = options.Stdout.Write([]byte(version + "\n"))
+		_, _ = options.Stdout.Write(inspectionOutput)
 		return nil
 	}
 	profiles, outputs, err := (ProviderFullImageValidationRunner{}).Run(context.Background(), input)

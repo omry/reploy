@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-22
+updated: 2026-09-15
 summary: Subdesign for closed .deb package layers, provider outputs, and Python runtime dependencies.
 refines: docs/BLUEPRINT_ENVIRONMENT_MODEL.md
 ---
@@ -1502,16 +1502,25 @@ does not enumerate link groups, choose an alternative, or accept an unregistered
 alternatives link. Both commands run inside the already-required consuming or
 final-validation container.
 
-The consuming provider then applies semantic validation as the first operation
-in its disposable bundle resolver. For Python, it can execute:
+The consuming provider applies semantic validation as the first operation in
+its disposable bundle resolver. For Python, it invokes the selected absolute
+interpreter with a fixed isolated command prefix:
 
 ```text
-/usr/bin/python3 -I -S -c
-  import sys; print(".".join(map(str, sys.version_info[:3])))
+/usr/bin/python3 -I -c <provider-owned probe> <tested-tags-json> <architecture>
 ```
 
-It then checks the requested Python version constraint and separately verifies
-that the interpreter can create a virtual environment.
+The provider-controlled environment and working directory remain in force.
+System-site initialization stays enabled so the probe and ordinary
+`python -I -m pip` resolver import the same selected interpreter's installed
+pip tag generator, while isolated mode excludes current-directory, user-site,
+and environment-controlled import shadows. The bounded tested-tag set and
+selected architecture are validated data, never executable source. The strict
+result records the complete Python version, implementation, ABI, libc identity
+and release, the exact tested tags, and their compatible subset. The probe does
+no network work, artifact acquisition, or wheel parsing. The provider then
+checks the requested Python version constraint and separately verifies that the
+interpreter can create a virtual environment.
 
 Package and logical versions are distinct:
 

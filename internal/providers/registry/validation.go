@@ -64,7 +64,7 @@ func RequirementProfileSelectedSourcesV1(
 		}
 		return []providers.ResolvedSourceInput{}, nil
 	case blueprint.ComponentTypePython:
-		return pythonprovider.RequirementProfileSelectedSourcesV1(profile)
+		return pythonprovider.RequirementProfileSelectedSourcesV2(profile)
 	default:
 		return nil, fmt.Errorf("provider %q does not have a requirement profile", provider)
 	}

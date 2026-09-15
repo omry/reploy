@@ -16,9 +16,9 @@ func TestValidatePythonProfileObservationRunsFixedInspectionInHeldSession(t *tes
 	input := completion.Validation.Final
 	profile := input.Profiles[0]
 	locked := profile.SelectedExecutables[0]
-	version, ok := locked.Facts.Value["version"].(string)
-	if !ok {
-		t.Fatalf("locked interpreter facts = %#v", locked.Facts)
+	lockedFacts, err := pythonprovider.DecodeInterpreterFactsV2(locked.Facts)
+	if err != nil {
+		t.Fatal(err)
 	}
 	launcher := directExecutableObservation("shared_launcher", pythonLauncherPath)
 	interpreter := directExecutableObservation("shared_interpreter", locked.InvocationPath)
@@ -29,7 +29,7 @@ func TestValidatePythonProfileObservationRunsFixedInspectionInHeldSession(t *tes
 	commands := []CommandSpec{}
 	runImageValidationFollowupCommand = func(spec CommandSpec, options RunOptions) error {
 		commands = append(commands, spec)
-		_, _ = options.Stdout.Write([]byte(version + "\n"))
+		_, _ = options.Stdout.Write(pythonInspectionOutputFromFactsV2ForTest(t, locked.Facts))
 		return nil
 	}
 	session := &ImageValidationSession{descriptor: input.Image.Descriptor, containerName: "held-validation"}
@@ -37,10 +37,14 @@ func TestValidatePythonProfileObservationRunsFixedInspectionInHeldSession(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fresh.Facts.Value["version"] != version || fresh.Terminal.Size != "2" {
+	if fresh.Facts.Value["version"] != lockedFacts.Version || fresh.Terminal.Size != "2" {
 		t.Fatalf("fresh interpreter evidence = %#v", fresh)
 	}
-	inspection, err := pythonprovider.InterpreterInspectionArgv(locked.InvocationPath)
+	targetArchitecture, err := pythonInspectionArchitectureV2(input.Image.Descriptor.Platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := pythonprovider.InterpreterInspectionArgv(locked.InvocationPath, lockedFacts.TestedTags, targetArchitecture)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +65,6 @@ func TestValidatePythonProfileObservationRejectsRequestDriftAndIncompatibleVersi
 	input := completion.Validation.Final
 	profile := input.Profiles[0]
 	locked := profile.SelectedExecutables[0]
-	version := locked.Facts.Value["version"].(string)
 	launcher := directExecutableObservation("shared_launcher", pythonLauncherPath)
 	interpreter := directExecutableObservation("shared_interpreter", locked.InvocationPath)
 	interpreter.Terminal.Size = "2"
@@ -69,7 +72,7 @@ func TestValidatePythonProfileObservationRejectsRequestDriftAndIncompatibleVersi
 	previous := runImageValidationFollowupCommand
 	t.Cleanup(func() { runImageValidationFollowupCommand = previous })
 	runImageValidationFollowupCommand = func(_ CommandSpec, options RunOptions) error {
-		_, _ = options.Stdout.Write([]byte(version + "\n"))
+		_, _ = options.Stdout.Write(pythonInspectionOutputFromFactsV2ForTest(t, locked.Facts))
 		return nil
 	}
 	session := &ImageValidationSession{descriptor: input.Image.Descriptor, containerName: "held-validation"}
@@ -82,7 +85,7 @@ func TestValidatePythonProfileObservationRejectsRequestDriftAndIncompatibleVersi
 	}
 
 	runImageValidationFollowupCommand = func(_ CommandSpec, options RunOptions) error {
-		_, _ = options.Stdout.Write([]byte("0.0.0\n"))
+		_, _ = options.Stdout.Write(pythonInspectionOutputV2ForTest("0.0.0", nil, nil))
 		return nil
 	}
 	if _, err := validatePythonProfileObservation(context.Background(), session, profile, launcher, interpreter); err == nil || !strings.Contains(err.Error(), "does not satisfy") {

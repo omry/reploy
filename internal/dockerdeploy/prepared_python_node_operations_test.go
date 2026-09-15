@@ -85,7 +85,8 @@ func TestPreparedPythonNodeOperationsResolvesAndIngestsWheelsInSession(t *testin
 	interpreterObservation := pythonConsumerObservation("interpreter", "/usr/bin/python3")
 	interpreterResponse := probe.ResponseV1{Schema: probe.ResponseSchemaV1, Observations: []probe.ExecutableObservationV1{interpreterObservation}}
 	artifacts := testPreparedPythonResolverArtifacts(t)
-	commands := stubPythonInterpreterSelectionCommands(t, mustCanonicalProbeResponse(t, interpreterResponse), []string{"3.13.2\n"}, func() error {
+	testedTags := []string{"py3-none-any"}
+	commands := stubPythonInterpreterSelectionCommands(t, mustCanonicalProbeResponse(t, interpreterResponse), []string{string(pythonInspectionOutputV2ForTest("3.13.2", testedTags, testedTags))}, func() error {
 		writePythonIntegrationWheel(t, filepath.Join(artifacts.OutputHostDir, "demo_server-1.0-py3-none-any.whl"))
 		return nil
 	})
@@ -108,6 +109,9 @@ func TestPreparedPythonNodeOperationsResolvesAndIngestsWheelsInSession(t *testin
 		},
 		FinalImageConfig: pythonConsumerTestImageConfig(),
 		Artifacts:        artifacts,
+		PortableToolBindings: &pythonprovider.PortableToolPythonComponentV1{
+			TestedTags: testedTags,
+		},
 		LocalOverrides: []PythonLocalOverrideV1{{
 			Distribution: "unused", HostDir: filepath.Join(t.TempDir(), "missing"),
 		}},
@@ -140,10 +144,18 @@ func TestPreparedPythonNodeOperationsResolvesAndIngestsWheelsInSession(t *testin
 	if len(*commands) != 7 {
 		t.Fatalf("commands = %#v", *commands)
 	}
+	inspection, err := pythonprovider.InterpreterInspectionArgv("/usr/bin/python3", testedTags, "x86_64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspectArgs := (*commands)[3].Args
+	if len(inspectArgs) < len(inspection) || !reflect.DeepEqual(inspectArgs[len(inspectArgs)-len(inspection):], inspection) {
+		t.Fatalf("interpreter inspection command = %#v, want suffix %#v", inspectArgs, inspection)
+	}
 	if !containsInOrder((*commands)[4].Args, []string{
 		"/usr/bin/env", "-i", "HOME=/tmp", "LANG=C", "LC_ALL=C",
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "TMPDIR=/tmp",
-		"/usr/bin/python3", "-m", "pip", "--disable-pip-version-check", "wheel",
+		"/usr/bin/python3", "-I", "-m", "pip", "--disable-pip-version-check", "wheel",
 	}) {
 		t.Fatalf("wheel resolver command = %#v", (*commands)[4].Args)
 	}
@@ -156,6 +168,49 @@ func TestPreparedPythonNodeOperationsResolvesAndIngestsWheelsInSession(t *testin
 	}
 	if !reflect.DeepEqual((*commands)[5].Args, []string{"kill", "--signal", "KILL", session.containerName}) || (*commands)[6].Args[0] != "rm" {
 		t.Fatalf("resolver shutdown commands = %#v", (*commands)[5:])
+	}
+}
+
+func TestPreparedPythonNodeOperationsStopsWhenInterpreterCannotImportPip(t *testing.T) {
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
+	request := preparedPythonResolveRequest(t, descriptor)
+	interpreterObservation := pythonConsumerObservation("interpreter", "/usr/bin/python3")
+	interpreterResponse := probe.ResponseV1{Schema: probe.ResponseSchemaV1, Observations: []probe.ExecutableObservationV1{interpreterObservation}}
+	resolverCalls := 0
+	commands := stubPythonInterpreterSelectionCommands(
+		t, mustCanonicalProbeResponse(t, interpreterResponse), []string{"error:No module named pip"},
+		func() error { resolverCalls++; return nil },
+	)
+	artifacts := testPreparedPythonResolverArtifacts(t)
+	session, err := OpenPythonResolverSession(context.Background(), descriptor, workspace, artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close(context.Background()) })
+	session.observations[pythonCarrierRequirementID] = pythonConsumerObservation(pythonCarrierRequirementID, pythonCarrierPath)
+	session.observations[pythonLauncherRequirementID] = pythonConsumerObservation(pythonLauncherRequirementID, pythonLauncherPath)
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	operations := PreparedPythonNodeOperations{
+		Store: store, Artifacts: artifacts,
+		Validators: providers.ProviderOwnerValidators{
+			Profile: pythonprovider.ValidateRequirementProfileV1,
+			Bundle:  pythonprovider.ValidateResolvedBundlePayloadV1,
+		},
+		FinalImageConfig: pythonConsumerTestImageConfig(),
+	}
+	_, _, err = operations.resolveFresh(context.Background(), session, request)
+	if err == nil || !strings.Contains(err.Error(), "No module named pip") {
+		t.Fatalf("inspection failure = %v", err)
+	}
+	if resolverCalls != 0 {
+		t.Fatalf("pip resolver ran %d times after interpreter inspection failed", resolverCalls)
+	}
+	if len(*commands) != 4 {
+		t.Fatalf("commands before inspection failure = %#v", *commands)
 	}
 }
 
@@ -178,7 +233,7 @@ func TestPreparedPythonNodeOperationsExcludesCorruptReusableWheelBeforePip(t *te
 		t.Fatal(err)
 	}
 	defer cleanup()
-	commands := stubPythonInterpreterSelectionCommands(t, mustCanonicalProbeResponse(t, interpreterResponse), []string{"3.13.2\n"}, func() error {
+	commands := stubPythonInterpreterSelectionCommands(t, mustCanonicalProbeResponse(t, interpreterResponse), []string{string(pythonInspectionOutputV2ForTest("3.13.2", nil, nil))}, func() error {
 		writePythonIntegrationWheel(t, filepath.Join(artifacts.OutputHostDir, "demo_server-1.0-py3-none-any.whl"))
 		return nil
 	})
@@ -259,7 +314,7 @@ func TestPreparedPythonNodeOperationsBuildsOnlySelectedLocalSource(t *testing.T)
 		t.Fatal(err)
 	}
 	workCalls := 0
-	commands := stubPythonInterpreterSelectionCommands(t, mustCanonicalProbeResponse(t, interpreterResponse), []string{"3.13.2\n"}, func() error {
+	commands := stubPythonInterpreterSelectionCommands(t, mustCanonicalProbeResponse(t, interpreterResponse), []string{string(pythonInspectionOutputV2ForTest("3.13.2", nil, nil))}, func() error {
 		workCalls++
 		if workCalls == 1 {
 			writeDockerdeployTestSourceDistribution(

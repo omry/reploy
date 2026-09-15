@@ -26,8 +26,9 @@ func WheelResolverArgv(
 	sources []providers.ResolvedSourceInput,
 	reusable []providerstore.ArtifactDescriptor,
 ) ([]string, error) {
-	if interpreter == "" || !path.IsAbs(interpreter) || path.Clean(interpreter) != interpreter || strings.Contains(interpreter, `\`) {
-		return nil, fmt.Errorf("Python wheel resolver interpreter must be a normalized absolute path")
+	prefix, err := IsolatedInterpreterCommandPrefixV2(interpreter)
+	if err != nil {
+		return nil, fmt.Errorf("Python wheel resolver interpreter: %w", err)
 	}
 	decoded, err := decodeCanonicalProviderRequestV1(request)
 	if err != nil {
@@ -37,11 +38,10 @@ func WheelResolverArgv(
 	if err != nil {
 		return nil, err
 	}
-	argv := []string{
-		interpreter, "-m", "pip", "--disable-pip-version-check",
+	argv := append(prefix,
+		"-m", "pip", "--disable-pip-version-check",
 		"wheel", "--no-cache-dir", "--progress-bar", "off",
-		"--find-links", ResolverInputDirectory, "--wheel-dir", ResolverOutputDirectory,
-	}
+		"--find-links", ResolverInputDirectory, "--wheel-dir", ResolverOutputDirectory)
 	if len(constraints) != 0 {
 		argv = append(argv, "--constraint", ResolverSourceConstraintsPath)
 	}
