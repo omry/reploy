@@ -137,6 +137,9 @@ func (operations PreparedPythonNodeOperations) validateCached(
 	if err != nil {
 		return providers.GraphConsumerValidation{}, err
 	}
+	if err := operations.validatePortableToolEligibility(observed, request.Platform); err != nil {
+		return providers.GraphConsumerValidation{}, err
+	}
 	lockedBytes, err := canonical.Marshal(locked)
 	if err != nil {
 		return providers.GraphConsumerValidation{}, fmt.Errorf("encode locked Python interpreter evidence: %w", err)
@@ -185,6 +188,9 @@ func (operations PreparedPythonNodeOperations) resolveFresh(
 	}
 	interpreter, err := SelectPythonInterpreterWithTags(ctx, session, consumer.EnvironmentLauncher, requirement, candidates, testedTags)
 	if err != nil {
+		return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
+	}
+	if err := operations.validatePortableToolEligibility(interpreter, request.Platform); err != nil {
 		return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
 	}
 	verifiedWheels, err := FilterVerifiedPythonResolverArtifacts(session.artifacts, operations.ReusableWheels)
@@ -308,6 +314,21 @@ func (operations PreparedPythonNodeOperations) resolveFresh(
 		return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
 	}
 	return resolution, consumer, nil
+}
+
+func (operations PreparedPythonNodeOperations) validatePortableToolEligibility(
+	interpreter providers.ExecutableEvidence,
+	platform blueprint.Platform,
+) error {
+	if operations.PortableToolBindings == nil {
+		return nil
+	}
+	if err := pythonprovider.ValidatePortableToolPythonBindingsV1(
+		*operations.PortableToolBindings, interpreter, platform,
+	); err != nil {
+		return fmt.Errorf("validate portable Python wheel eligibility: %w", err)
+	}
+	return nil
 }
 
 func (operations PreparedPythonNodeOperations) materializeLocalOverrides(
