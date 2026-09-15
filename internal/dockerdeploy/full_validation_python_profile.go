@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/probe"
@@ -74,6 +75,9 @@ func validatePythonProfileObservation(
 			locked.InvocationPath, err,
 		)
 	}
+	if err := validatePortablePythonFinalImageFacts(lockedFacts, facts); err != nil {
+		return providers.ExecutableEvidence{}, err
+	}
 	matches, err := pythonprovider.InterpreterVersionSatisfies(requirement.VersionConstraint, facts.Version)
 	if err != nil {
 		return providers.ExecutableEvidence{}, err
@@ -92,6 +96,37 @@ func validatePythonProfileObservation(
 		return providers.ExecutableEvidence{}, fmt.Errorf("validate Python image profile interpreter: %w", err)
 	}
 	return fresh, nil
+}
+
+func validatePortablePythonFinalImageFacts(
+	locked pythonprovider.InterpreterInspectionFactsV2,
+	fresh pythonprovider.InterpreterInspectionFactsV2,
+) error {
+	if len(locked.TestedTags) == 0 {
+		return nil
+	}
+	if fresh.Version != locked.Version {
+		return fmt.Errorf("portable Python final-image interpreter version changed from %q to %q", locked.Version, fresh.Version)
+	}
+	if fresh.Implementation != locked.Implementation {
+		return fmt.Errorf("portable Python final-image interpreter implementation changed from %q to %q", locked.Implementation, fresh.Implementation)
+	}
+	if fresh.ABI != locked.ABI {
+		return fmt.Errorf("portable Python final-image interpreter ABI changed from %q to %q", locked.ABI, fresh.ABI)
+	}
+	if fresh.Libc != locked.Libc {
+		return fmt.Errorf("portable Python final-image interpreter libc changed from %q to %q", locked.Libc, fresh.Libc)
+	}
+	if fresh.LibcMajor != locked.LibcMajor || fresh.LibcMinor != locked.LibcMinor {
+		return fmt.Errorf(
+			"portable Python final-image interpreter libc release changed from %s.%s to %s.%s",
+			locked.LibcMajor, locked.LibcMinor, fresh.LibcMajor, fresh.LibcMinor,
+		)
+	}
+	if !slices.Equal(fresh.CompatibleTags, locked.CompatibleTags) {
+		return fmt.Errorf("portable Python final-image interpreter compatible tags changed")
+	}
+	return nil
 }
 
 func (session *ImageValidationSession) runPythonInterpreterInspection(
