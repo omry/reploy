@@ -161,7 +161,7 @@ func (resolver WheelNodeResolver) Resolve(
 		SelectedExecutables: []providerapi.ExecutableEvidence{interpreter},
 		SelectedFiles:       []providerapi.FileEvidence{},
 		Platform:            input.Platform,
-		Facts:               CanonicalProfileFactsV1(request.Component, selectedSources),
+		Facts:               CanonicalProfileFactsV2(request.Component, selectedSources),
 	}
 	profileDigest, err := providerapi.RequirementProfileDigest(profile, ValidateRequirementProfileV1)
 	if err != nil {

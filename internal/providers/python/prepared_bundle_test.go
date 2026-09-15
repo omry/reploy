@@ -240,7 +240,7 @@ func TestWheelNodeResolverRequiresResolvedSourceArtifactDigest(t *testing.T) {
 	if len(result.SelectedSources) != 1 || !reflect.DeepEqual(result.SelectedSources[0], source) {
 		t.Fatalf("selected sources = %#v", result.SelectedSources)
 	}
-	component, profileSources, err := decodeProfileFactsV1(result.Profile.Facts)
+	component, profileSources, err := decodeProfileFactsV2(result.Profile.Facts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +304,7 @@ func preparedNodeTestPlan(t *testing.T, requirement string) (providerapi.Provide
 	catalogEvidence.Terminal.RequirementID = ""
 	catalogEvidence.Facts = providerapi.CanonicalProviderData{Schema: "base-python-facts-v1", Value: canonical.Object{}}
 	selectedEvidence := schemaTestInterpreterEvidence()
-	selectedEvidence.Facts = CanonicalInterpreterFactsV1("3.13.2")
+	selectedEvidence.Facts = CanonicalInterpreterFactsV2(testInterpreterFactsV2("3.13.2", nil, nil))
 	catalog := []providerapi.RealizedOutput{{
 		SupplierComponent: "base", SupplierNode: "base", Name: "python",
 		Candidate: providerapi.ExecutableCandidate{InvocationPath: "/usr/bin/python3", Provenance: baseOutput.Provenance},

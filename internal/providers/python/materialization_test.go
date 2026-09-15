@@ -61,7 +61,7 @@ func TestComponentProviderMaterializeBuildsClosedOfflineTransaction(t *testing.T
 	wantArgv := []providerapi.TypedArgument{
 		{Kind: providerapi.TypedArgumentValidatedExecutable, ExecutableID: "carrier"},
 		{Kind: providerapi.TypedArgumentLiteral, Literal: "-eu"},
-		{Kind: providerapi.TypedArgumentMountedArtifact, MountID: "script", RelativePath: "scripts/python-materialize-v1.sh"},
+		{Kind: providerapi.TypedArgumentMountedArtifact, MountID: "script", RelativePath: "scripts/python-materialize-v2.sh"},
 		{Kind: providerapi.TypedArgumentValidatedExecutable, ExecutableID: "interpreter"},
 		{Kind: providerapi.TypedArgumentGeneratedExecutable, GeneratedID: "venv_python"},
 		{Kind: providerapi.TypedArgumentLiteral, Literal: "/opt/reploy/providers/python/application"},
@@ -98,7 +98,7 @@ func TestComponentProviderMaterializeRejectsBundleInterpreterDrift(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bundle.Interpreter.Facts = CanonicalInterpreterFactsV1("3.12.9")
+	bundle.Interpreter.Facts = CanonicalInterpreterFactsV2(testInterpreterFactsV2("3.12.9", nil, nil))
 	data, err := CanonicalBundleDataV1(request.Component, bundle)
 	if err != nil {
 		t.Fatal(err)
