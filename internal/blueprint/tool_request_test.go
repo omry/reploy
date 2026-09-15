@@ -19,15 +19,11 @@ func TestResolveApplicationPortableToolsV1(t *testing.T) {
             definition_revision: 1
             binding: python
             select: {browser: [webkit, chromium]}
-          - tool: asciinema
-            version: "3.2.1"
+          - tool: ripgrep
+            version: "14.1.1"
 `)
 	got := document.Environment.Applications["web"].Packages.Tools
 	want := []toolrequest.CanonicalRequirementGroupV1{
-		{
-			Scope: "application:web", Tool: "asciinema", VersionConstraints: []string{"3.2.1"}, Context: "runtime",
-			Binding: toolrequest.CanonicalBindingDemandV1{Infer: true, Explicit: []string{}}, Selections: map[string][]string{},
-		},
 		{
 			Scope: "application:web", Tool: "java", VersionConstraints: []string{"==21"}, Context: "runtime",
 			Binding: toolrequest.CanonicalBindingDemandV1{Infer: true, Explicit: []string{}}, Selections: map[string][]string{},
@@ -36,6 +32,10 @@ func TestResolveApplicationPortableToolsV1(t *testing.T) {
 			Scope: "application:web", Tool: "playwright", VersionConstraints: []string{"1.61.0"}, DefinitionRevision: "1", Context: "runtime",
 			Binding:    toolrequest.CanonicalBindingDemandV1{Explicit: []string{"python"}},
 			Selections: map[string][]string{"browser": {"chromium", "webkit"}},
+		},
+		{
+			Scope: "application:web", Tool: "ripgrep", VersionConstraints: []string{"14.1.1"}, Context: "runtime",
+			Binding: toolrequest.CanonicalBindingDemandV1{Infer: true, Explicit: []string{}}, Selections: map[string][]string{},
 		},
 	}
 	if !reflect.DeepEqual(got, want) {

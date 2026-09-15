@@ -1,7 +1,7 @@
 ---
 status: Active
-updated: 2026-09-12
-summary: Reviewable delivery plan for portable-tool authoring, definitions, and the embedded Java, Playwright, and asciinema implementations.
+updated: 2026-09-15
+summary: Reviewable delivery plan for portable-tool authoring, definitions, and the embedded Java and Playwright implementations.
 implements: docs/PORTABLE_TOOL_DEFINITION_DESIGN.md
 ---
 
@@ -22,14 +22,16 @@ This plan is structured as input to the existing AWD function:
 global:swe:deliver-design-stack(docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md, all)
 ```
 
-The delivery milestone IDs are `PTD-01` through `PTD-29`. `PTD-21`, `PTD-22`,
-and `PTD-23` are milestone containers, and `PTD-23.1` is a nested delivery
-container. Their first-class delivery IDs are `PTD-21.1` through `PTD-21.5`,
-`PTD-22.1` through `PTD-22.3`, `PTD-23.1.1` through `PTD-23.1.8`, `PTD-23.2`,
-and `PTD-23.3`; every other milestone is itself one delivery item. The
-preparation gates are prerequisites, not implementation tasks, commits, or
-pull requests. `deliver-design-stack` may read this plan before preparation is
-complete, but must pause on an unmet preparation gate.
+The active milestone IDs are `PTD-01` through `PTD-14`, `PTD-16` through
+`PTD-27`, and `PTD-29`; `PTD-15` and `PTD-28` are retired. `PTD-21`, `PTD-22`,
+and `PTD-23` are milestone containers, and `PTD-23.1` and `PTD-23.2` are nested
+delivery containers. Their first-class delivery IDs are `PTD-21.1` through
+`PTD-21.5`, `PTD-22.1` through `PTD-22.3`, `PTD-23.1.1` through `PTD-23.1.8`,
+`PTD-23.2.1` through `PTD-23.2.5`, and `PTD-23.3`; every other active milestone
+is itself one delivery item. The preparation gates are prerequisites, not
+implementation tasks, commits, or pull requests. `deliver-design-stack` may
+read this plan before preparation is complete, but must pause on an unmet
+preparation gate.
 
 Plan revision note (2026-08-26): localized portable-tool authoring was inserted
 as PTD-12 after PTD-11 completed. No former PTD-12-or-later delivery slice had
@@ -82,6 +84,16 @@ scopes, with PTD-23.2 depending on the completed PTD-23.1.8 handoff. This is a
 delivery-boundary and implementation-plan correction; it does not amend the
 accepted portable-tool design, support envelope, schema-v1 artifact
 cardinality, or Python provider ownership.
+
+Plan revision note (2026-09-15): the catalog definition and future validation
+work for asciinema were removed before Reploy's first release, retiring PTD-15
+and PTD-28 without replacement. The independently pinned recorder used by
+controlled sessions remains outside the portable-tool catalog. PTD-23.2 was
+also split before construction into five review-sized child delivery items.
+PTD-23.2 is now a nested container and owns no implementation commit or pull
+request; its existing acquisition and verification contract is preserved and
+owned exactly once across PTD-23.2.1 through PTD-23.2.5. PTD-23.3 now depends
+on the completed PTD-23.2.5 handoff.
 
 Plan correction note (2026-09-01): PTD-21.4 review exposed duplicate ownership
 of canonical portable-tool record structures and validation between catalog
@@ -152,9 +164,6 @@ Complete the accepted embedded portable-tool bridge for:
 
 - Eclipse Temurin JDK 21, used only by isolated local-source builders;
 - Playwright 1.61.0 with the Python binding and explicit Chromium selection;
-- asciinema 3.2.1 using the existing pinned GNU/Linux AMD64 and ARM64 release
-  assets on Debian 12, Debian 13, Ubuntu 25.10, and Ubuntu 26.04 for both
-  architectures;
 - Debian 12 and the accepted Ubuntu targets on Linux AMD64, plus Debian 13 for
   Java;
 - strict records, bounded catalog loading, deterministic resolution, verified
@@ -167,12 +176,10 @@ is therefore a public contract at any point in this campaign, so the design's
 requirement that the two formats never coexist publicly is satisfied by never
 introducing the flat one, and no compatibility reader is needed.
 
-Repository publication, TUF metadata, publisher authorization, implementation
-of additional tool versions including asciinema v2 and other Playwright
-bindings or browsers remain outside this campaign. Asciinema 3.2.1 for the
-eight pinned Debian, Ubuntu, and architecture tuples is in scope, and v2 is
-retained as a design comparison to ensure that
-materially different major versions could coexist without implementing v2 now.
+Repository publication, TUF metadata, publisher authorization, and additional
+Playwright bindings or browsers remain outside this campaign. Asciinema is not
+provided through the portable-tool catalog; the independently pinned recorder
+used by controlled sessions remains outside this campaign.
 
 ## Current Stack Prerequisites
 
@@ -294,7 +301,8 @@ ancestry. Each `PTD-*` task is then constructed or restacked above PR 82 in
 exact dependency order:
 
 `PTD-21`, `PTD-22`, and `PTD-23` are milestone containers rather than delivery
-slices, and `PTD-23.1` is a nested container rather than a delivery slice.
+slices, and `PTD-23.1` and `PTD-23.2` are nested containers rather than delivery
+slices.
 Their explicitly enumerated leaf slices are first-class delivery items: each
 owns one commit and one PR, while a container owns neither.
 The sole authorized review-subdivision exception is `PTD-23.1.4`, which remains
@@ -304,10 +312,11 @@ PR 148 for production binding projection, and PR 150 for acceptance
 hardening. `PTD-23.1.4` completes, and `PTD-23.1.5` may activate, only when all
 three PRs retain current-head approval in that order.
 `PTD-21` completes only when `PTD-21.1` through `PTD-21.5` have current-head
-approval; `PTD-22` completes only when `PTD-22.1` through `PTD-22.3` do; and
-`PTD-23.1` completes only when `PTD-23.1.1` through `PTD-23.1.8` do. `PTD-23`
-completes only when the nested `PTD-23.1` container and delivery items
-`PTD-23.2` and `PTD-23.3` do. `PTD-22.1` depends directly on `PTD-21.5`, but
+approval; `PTD-22` completes only when `PTD-22.1` through `PTD-22.3` do;
+`PTD-23.1` completes only when `PTD-23.1.1` through `PTD-23.1.8` do; and
+`PTD-23.2` completes only when `PTD-23.2.1` through `PTD-23.2.5` do. `PTD-23`
+completes only when the nested `PTD-23.1` and `PTD-23.2` containers and delivery
+item `PTD-23.3` do. `PTD-22.1` depends directly on `PTD-21.5`, but
 cannot activate until the complete `PTD-21` milestone has converged. References
 below to a task as a construction or review unit mean one delivery item,
 including these leaf slices.
@@ -352,9 +361,9 @@ queue from this document.
 ```mermaid
 flowchart TD
     PREP["Preparation gates"] --> FOUNDATION["PTD-01..06\nRecord foundation"]
-    FOUNDATION --> CATALOG["PTD-07..15\nCatalog authoring and definitions"]
+    FOUNDATION --> CATALOG["PTD-07..14\nCatalog authoring and definitions"]
     CATALOG --> ACQUIRE["PTD-16..20\nRequests, acquisition, and probes"]
-    ACQUIRE --> PROVIDERS["PTD-21..28\nProvider integration and validation"]
+    ACQUIRE --> PROVIDERS["PTD-21..27\nProvider integration and validation"]
     PROVIDERS --> FINAL["PTD-29\nFinal cutover"]
 ```
 
@@ -365,7 +374,7 @@ not wait for it. Construction and review are separate phases with separate
 evidence.
 
 A constructed prefix may be reviewed before the rest of `PTD-01` through
-`PTD-15` exists, and reviewing early is preferred: a finding that rewrites
+`PTD-14` exists, and reviewing early is preferred: a finding that rewrites
 history invalidates every slice above it, so the cost of a low finding grows
 with stack height.
 
@@ -399,7 +408,7 @@ Review phase, once remote review capacity is available:
 Accepted risk: deferring remote review lets a finding in a low slice cascade
 into every slice above it. Local deep review and full local checks at every
 commit are the mitigation, not an equivalent substitute. Tasks from `PTD-16`
-onward are not constructed until the `PTD-01` through `PTD-15` stack has been
+onward are not constructed until the `PTD-01` through `PTD-14` stack has been
 reviewed and approved.
 
 A discovery may refine mechanics inside accepted scope. A discovery changing
@@ -424,8 +433,7 @@ the campaign until durable authority is updated.
 | PTD-12 | Load Localized Portable Tool Authoring | PTD-11 | New work |
 | PTD-13 | Embed the Java Portable Tool Definition | PTD-12 | PR 85 source |
 | PTD-14 | Embed the Playwright Portable Tool Definition | PTD-13 | PR 85 source |
-| PTD-15 | Embed the Asciinema Portable Tool Definition | PTD-14 | New work |
-| PTD-16 | Parse Canonical Portable Tool Requests | PTD-15 | New work |
+| PTD-16 | Parse Canonical Portable Tool Requests | PTD-14 | New work |
 | PTD-17 | Acquire Pinned Artifacts with Bounded Mirror Fallback | PTD-16 | New work |
 | PTD-18 | Enforce Artifact Acquisition Network Policy | PTD-17 | New work |
 | PTD-19 | Materialize Verified Archives Safely and Offline | PTD-18 | New work |
@@ -450,14 +458,18 @@ the campaign until durable authority is updated.
 | PTD-23.1.6 | Decide Portable-Wheel Eligibility | PTD-23.1.5 | New work |
 | PTD-23.1.7 | Enforce Portable-Wheel Eligibility in Resolver Paths | PTD-23.1.6 | New work |
 | PTD-23.1.8 | Preserve Portable-Wheel Compatibility in Final-Image Validation | PTD-23.1.7 | New work; contract-first post-materialization check; completes PTD-23.1 |
-| PTD-23.2 | Acquire and Verify Exact Portable Python Binding Wheels | PTD-23.1.8 | New work |
-| PTD-23.3 | Materialize Portable Python Bindings Offline | PTD-23.2 | New work |
+| PTD-23.2 | Acquire and Verify Exact Portable Python Binding Wheels | PTD-23.1.8 | Nested container; no owning PR |
+| PTD-23.2.1 | Inventory Wheel Archives Safely and Within Fixed Bounds | PTD-23.1.8 | New work |
+| PTD-23.2.2 | Inspect Wheel Metadata Through One Descriptor-Stable Primitive | PTD-23.2.1 | New work |
+| PTD-23.2.3 | Acquire Manifest-Authorized Portable Binding Wheels | PTD-23.2.2 | New work |
+| PTD-23.2.4 | Verify Portable Binding Wheels Against Selected Contracts | PTD-23.2.3 | New work |
+| PTD-23.2.5 | Produce Replay-Stable Verified-Wheel Inputs | PTD-23.2.4 | New work; completes PTD-23.2 |
+| PTD-23.3 | Materialize Portable Python Bindings Offline | PTD-23.2.5 | New work |
 | PTD-24 | Materialize Playwright Chromium Payloads | PTD-23.3 | New work |
 | PTD-25 | Derive Portable Tool Integration Cases and Evidence | PTD-24 | New work; closes the PTD-20 production-caller deferral through the PTD-21.5 boundary |
 | PTD-26 | Validate Every Advertised Java Tuple Through Reploy | PTD-25 | New work |
 | PTD-27 | Validate Every Advertised Playwright Tuple Through Reploy | PTD-26 | New work |
-| PTD-28 | Validate Every Advertised Asciinema Tuple Through Reploy | PTD-27 | New work |
-| PTD-29 | Remove the Flat WIP and Finalize Portable Tool Documentation | PTD-28 | New work |
+| PTD-29 | Remove the Flat WIP and Finalize Portable Tool Documentation | PTD-27 | New work |
 
 ## Task Specifications
 
@@ -815,31 +827,6 @@ payloads and no unselected availability.
 
 Non-goals: installing the binding or browser payloads.
 
-### PTD-15: Embed the Asciinema Portable Tool Definition
-
-Scope: add asciinema 3.2.1; two architecture-specific GNU/Linux payloads and
-their GitHub-hosted artifact sources; eight exact target leaves and fixtures for
-Debian 12, Debian 13, Ubuntu 25.10, and Ubuntu 26.04 on AMD64 and ARM64; and one
-shared validation profile and probe through the canonical catalog generator.
-Keep the release contract, profile, and payload records independent of the
-target variants, with each target leaf explicitly referencing the applicable
-architecture payload.
-
-Acceptance: every advertised artifact has bounded ordered GitHub source
-records, exact size and SHA-256 identity, target coverage, and matching fixture
-metadata using the repository's existing pinned 3.2.1 data; catalog generation
-emits exactly eight independently addressable leaves and fixtures while
-retaining only two payload records and one shared profile; static validation
-succeeds without acquisition, materialization, provider integration, or probe
-execution. A non-published v2
-comparison models its materially different packaging and layout alongside the
-3.2.1 release and demonstrates that both major versions have distinct
-coordinates and closures without implementing or advertising v2.
-
-Non-goals: asciinema v2 implementation or support advertisement; acquisition,
-materialization, provider integration, or probe execution before their owning
-slices.
-
 ### PTD-16: Parse Canonical Portable Tool Requests
 
 Scope: implement the compact scalar form for simple tool requirements and the
@@ -871,7 +858,7 @@ binding demand, and otherwise omission retains an inference demand whose result
 unions with explicit values; selection sets union by dimension.
 The complete canonical merged demand is retained for catalog resolution and
 participates in request identity, while source locations remain only diagnostic
-provenance. Parser and blueprint tests cover Java, Playwright, and asciinema,
+provenance. Parser and blueprint tests cover Java, Playwright, and a neutral tool,
 including conflicting pins, retention of multiple version constraints,
 cumulative bindings, and canonical selection unions without loading catalog
 data. Scheme-specific syntax and empty-intersection coverage belong to
@@ -929,7 +916,7 @@ executable references and argv through a fixed Reploy-owned executor that owns
 the environment, working directory, time/output/resource bounds, forced network
 disablement, and canonical observed evidence.
 
-Acceptance: Java, Playwright, and asciinema profiles declare their probes once
+Acceptance: Java and Playwright profiles declare their probes once
 and variants reference those profiles; probes use no shell; declarations cannot
 enable networking or relax executor bounds; timeout, output, and exit failures
 are deterministic.
@@ -978,7 +965,7 @@ provider execution.
 Acceptance: canonical validation rejects incomplete, aliased, unsorted,
 duplicate, or conflicting plan data; selected-closure identity remains
 independent from validation references and unrelated availability; generic plan
-contracts contain no Java, Playwright, or asciinema branch.
+contracts contain no Java or Playwright branch.
 
 Non-goals: provider execution, tool-specific materialization, or build-lock
 persistence.
@@ -1121,14 +1108,13 @@ validation passes with legacy tests removed or replaced. These focused checks
 produce no external support evidence and do not make PTD-22.3 the generic
 production caller; that caller remains owned by PTD-25.
 
-Non-goals: runtime Java, other Java versions, or Playwright and asciinema
-materialization.
+Non-goals: runtime Java, other Java versions, or Playwright materialization.
 
 ### PTD-23: Materialize Portable Python Bindings
 
 PTD-23 is a milestone container. It owns no implementation commit or pull
-request; its complete scope is owned by the nested PTD-23.1 container and the
-PTD-23.2 and PTD-23.3 delivery items.
+request; its complete scope is owned by the nested PTD-23.1 and PTD-23.2
+containers and the PTD-23.3 delivery item.
 
 Scope: implement the generic portable Python-binding path from selected binding
 contracts and artifacts into Python provider roots, exact wheel constraints,
@@ -1525,98 +1511,179 @@ ordinary-build production caller.
 
 #### PTD-23.2: Acquire and Verify Exact Portable Python Binding Wheels
 
-Scope: extend the common embedded manifest/source projection and verified
-acquisition path to every exact binding-artifact reference in the PTD-23.1
-projection. Resolve each artifact through its selected release manifest and
-source record; reuse the PTD-17 and PTD-18 cache, mirror, network, cleanup, and
-provenance behavior unchanged; and require the returned
-provider-store descriptor to match the record's filename, wheel kind, decimal
-size, and digest before opening the wheel. The verified bytes are read only
-from that descriptor; no index candidate, caller path, or filename discovered
-from a directory may select them.
+PTD-23.2 is a nested delivery container. It owns no implementation commit or
+pull request; its complete scope is owned exclusively by PTD-23.2.1 through
+PTD-23.2.5.
 
-Extend or refactor the Python provider's existing descriptor-stable wheel
-inspection, metadata, tag, and console-script readers into the one shared
-data-driven primitive used by both ordinary and portable wheels; do not add a
-parallel parser. Apply fixed non-raiseable limits for archive entries, total
-declared uncompressed size, normalized path length, individual inspected
-metadata, and aggregate inspected bytes. Reuse the core archive ceilings of
-10,000 entries, 1 GiB total declared uncompressed bytes, 4,096 UTF-8 path bytes,
-and 255 UTF-8 bytes per path component. Sum ZIP uncompressed sizes with
-overflow-safe arithmetic before reading member content. Limit each selected
-`METADATA`, `WHEEL`, and `entry_points.txt` member to 1 MiB uncompressed and
-their aggregate to 4 MiB; definitions cannot tune any ceiling. Reject
-duplicate normalized paths,
-absolute or escaping paths, encrypted entries, unsupported entry kinds,
-ambiguous or mismatched `.dist-info` roots, duplicate consumed singleton
-fields, and malformed consumed fields. Unknown metadata fields and entry-point
-sections are streamed and ignored within those bounds. Require filename
-distribution and version, expanded filename tags, core `METADATA` Name,
-Version, and `Requires-Python`, and the selected console-script name to agree
-exactly with the artifact and contract after their defined canonical
-normalization. Require `WHEEL` to carry
-one supported `Wheel-Version`, one boolean `Root-Is-Purelib`, and at least one
-unique canonical `Tag`. Validate each internal `Tag` as one already-expanded
-canonical compatibility-tag triple with the same shared single-tag validator
-used on filename-expansion output, then sort the unique results as observed
-metadata; a dot-compressed internal component is malformed, and PTD-23.2 does
-not add a second tag parser. Require the internal-tag set to have a nonempty
-exact-tag intersection with the filename-derived tags that PTD-23.1 matched in
-the selected interpreter's compatible-tag set; intersection only with a
-filename tag rejected by that pre-acquisition gate does not count. Do not
-require equality or subset in either direction. Valid compressed and metadata
-representations may differ, while an internal claim with no runtime-compatible
-filename intersection is a contradictory wheel and fails inspection. Internal
-tags never add candidate eligibility or replace the filename-derived
-compatibility tags used by the pre-acquisition gate and pip. Retain the
-observed internal tags and console-script entry point as verified wheel
-metadata for PTD-23.3. Require
-every declared bundled-component path to identify a nonempty regular file or
-nonempty directory prefix in the wheel and reject conflicting declared paths.
-Do not extract the wheel or execute a bundled program during inspection.
+Scope: extend the common acquisition and Python wheel-inspection paths from the
+PTD-23.1 projection to immutable, replay-stable verified-wheel inputs. The
+children separately own bounded archive inventory, shared metadata inspection,
+manifest-authorized acquisition, selected-contract verification, and replay
+orchestration. No child may weaken PTD-17 or PTD-18 acquisition policy, select
+bytes from a directory or index candidate, introduce a second wheel parser, or
+dispatch on Playwright, Node.js, `playwright-core`, distribution, CLI, or
+bundled-component identity.
 
-Bundled-component names and versions are reviewed declaration metadata covered
-by the binding contract and artifact record digests and by the exact wheel
-content digest. PTD-23.2 requires contract/artifact metadata equality and
-observed path/type presence; it does not infer a component version from an
-executable, a package-specific metadata file, or a component name. Adding such
-inference would be a new inspection primitive and design change, not an
-identity-specific branch in this slice.
+Acceptance: every responsibility and fixture in this container is owned exactly
+once by PTD-23.2.1 through PTD-23.2.5. Each child compiles, passes focused
+checks, and maps one-to-one to a current-head-approved pull request. PTD-23.2
+closes only after all five children do.
 
-Return one immutable verified-wheel input per exact selected artifact, sorted
-by application scope, normalized distribution, and artifact reference. It
-retains the selected scope and closure identity, contract and artifact
-references, acquired descriptor, observed wheel metadata, selected console
-script, and acquisition outcome. The portable-tool lock remains normalized:
-the selected plan records bind all expected metadata, and the existing
-acquisition entry binds descriptor and source outcome rather than copying a
-second mutable metadata structure into the lock. Preserve the existing
-one-acquisition-per-selected-artifact invariant. Locked replay reopens every
-exact descriptor and repeats inspection before resolver staging; it performs
-no acquisition when the verified store objects are present and fails closed
-when any is missing or inconsistent.
+Non-goals: an owning commit or pull request for this container, Python
+dependency resolution, wheel installation, browser payload acquisition or
+extraction, or tool-specific acquisition and inspection code.
 
-Acceptance: only an exact manifest-authorized descriptor reaches inspection;
-size or digest mismatch is rejected before ZIP parsing; any filename,
-`.dist-info`, Name, Version, `Requires-Python`, filename-derived compatibility
-tag, console-script, bundled-path, record-reference, scope, or closure mismatch
-is rejected before resolver staging; malformed internal `WHEEL` tags fail,
-while valid unequal sets pass only when an internal tag exactly matches a
-filename-derived tag accepted for the selected runtime. Fixtures cover equal
-sets, overlapping unequal compressed sets, a filename-compatible wheel whose
-internal tags are entirely disjoint, and a mixed compatible/incompatible
-compressed filename whose internal tags overlap only the incompatible member.
-Hostile synthetic wheels cover every bound and malformed, duplicate, escaping,
-encrypted, ambiguous, missing, and conflicting case.
-Cache-hit and locked-replay tests prove zero network calls and repeat
-inspection. A focused exact-artifact check proves that the Playwright wheel
-matches its catalog declarations and contains every declared bundled path
-without executing Node.js, Playwright, or another bundled program. A neutral
-synthetic wheel passes the same production primitive.
+#### PTD-23.2.1: Inventory Wheel Archives Safely and Within Fixed Bounds
 
-Non-goals: Python dependency resolution, wheel installation, browser payload
-acquisition or extraction, or tool-specific acquisition and inspection code.
+Scope: extract the structural ZIP walk from the Python provider's existing
+wheel readers into one shared internal wheel-inventory primitive and cut every
+ordinary wheel inspection path over to it without changing accepted metadata
+semantics. Refactor and reuse the provider store's existing bounded ZIP
+central-directory preflight below both archive materialization and wheel
+inventory. Run it over the same descriptor-bound open regular file before
+`zip.NewReader` can allocate entry records. Replace direct `zip.OpenReader`
+calls with that open-once boundary so preflight and metadata parsing cannot
+observe different bytes. Preserve the preflight's ZIP64 and ambiguous-offset
+checks, and bind its fixed declared and actual record-count, total
+central-directory-byte, and per-record name/extra/comment metadata bounds to
+the same core ceilings; do not introduce a second central-directory parser.
+Then apply fixed non-raiseable limits of 10,000 archive entries, 1 GiB
+total declared uncompressed bytes, 4,096 UTF-8 bytes per normalized path, and
+255 UTF-8 bytes per path component. Sum declared uncompressed sizes with
+overflow-safe arithmetic before reading member content. Reject duplicate
+normalized paths, absolute or escaping paths, encrypted entries, unsupported
+entry kinds, empty normalized paths or interior path components, and ambiguous
+file/directory-prefix collisions. For a directory entry, strip exactly one
+terminal slash before component validation and retain its directory kind for
+collision checks; a terminal slash on a regular-file entry is malformed.
+Definitions and callers cannot tune any ceiling. The inventory identifies
+regular files and nonempty directory prefixes without extraction or execution.
 
+Acceptance: ordinary wheel inspection uses the shared inventory; hostile
+synthetic archives cover every bound, overflow, duplicate, escaping, encrypted,
+unsupported-kind, and file/directory-conflict case; valid ZIP and ZIP64 wheels
+remain accepted. Forged declared counts, excessive actual records, oversized
+central-directory metadata, malformed ZIP64 metadata, and ambiguous raw offsets
+fail in the shared preflight before the standard ZIP reader allocates entries;
+no member content is read before the complete structural inventory passes.
+
+Non-goals: parsing `METADATA`, `WHEEL`, or `entry_points.txt`; portable
+binding acquisition or contract verification; changing wheel eligibility.
+
+#### PTD-23.2.2: Inspect Wheel Metadata Through One Descriptor-Stable Primitive
+
+Scope: refactor the existing Python wheel metadata, compatibility-tag, and
+console-script readers onto the PTD-23.2.1 inventory as one descriptor-stable,
+data-driven primitive shared by ordinary and portable wheels. The caller
+supplies the exact descriptor and corresponding file; the primitive proves
+filename, kind, decimal size, and digest before consuming metadata. Limit each
+selected `METADATA`, `WHEEL`, and `entry_points.txt` member to 1 MiB
+uncompressed and aggregate consumed metadata to 4 MiB. Reject ambiguous or
+mismatched `.dist-info` roots, duplicate consumed singleton fields, and
+malformed consumed fields; stream and ignore unknown metadata fields and
+entry-point sections within the same bounds. Require canonical filename
+distribution and version to equal core `METADATA` Name and Version, retain
+one canonical `Requires-Python`, and require `WHEEL` to carry one supported
+`Wheel-Version`, one boolean `Root-Is-Purelib`, and at least one unique
+canonical `Tag`. Validate internal tags with the same shared single-tag
+validator used by filename expansion; dot-compressed internal components are
+malformed. Retain unique sorted filename tags, internal tags, console scripts,
+and inventory paths as observed metadata.
+
+Acceptance: ordinary source and prepared-wheel paths use this one primitive;
+descriptor mismatch fails before metadata parsing; focused fixtures cover
+bounded metadata, malformed or duplicate singleton fields, dist-info
+ambiguity, filename/core identity mismatch, wheel-version and purelib rules,
+compressed filename tags, canonical internal tags, and console-script parsing.
+No parallel metadata or tag parser remains.
+
+Non-goals: acquiring bytes, deciding portable eligibility, matching a selected
+binding contract, or interpreting bundled-component versions.
+
+#### PTD-23.2.3: Acquire Manifest-Authorized Portable Binding Wheels
+
+Scope: extend the common embedded manifest/source projection and PTD-17/PTD-18
+verified acquisition path to every exact binding-artifact reference in the
+PTD-23.1 projection. Resolve each artifact only through its selected release
+manifest and source record. Reuse cache, bounded mirror, network, cleanup, and
+provenance behavior unchanged. Require the returned provider-store descriptor
+to match the binding record's filename, wheel kind, decimal size, and digest
+before exposing it to PTD-23.2.4. A locator, caller path, directory filename, or
+index candidate cannot select the bytes. Preserve exactly one acquisition per
+selected artifact.
+
+Acceptance: missing, duplicate, mismatched, or unauthorized manifest/source
+mappings fail before network access or wheel inspection; descriptor size,
+digest, kind, and filename mismatches fail before opening the ZIP; cache-hit
+tests prove zero network calls; acquisition outcomes retain exact source
+provenance.
+
+Non-goals: wheel metadata inspection, selected-contract verification, locked
+replay, resolver staging, or acquisition-policy changes.
+
+#### PTD-23.2.4: Verify Portable Binding Wheels Against Selected Contracts
+
+Scope: join each PTD-23.1 binding projection, the same validated interpreter
+evidence already consumed by its pre-acquisition gate, PTD-23.2.3 acquired
+descriptor, and PTD-23.2.2 observed metadata through one pure verification
+boundary. Refactor the existing provider-owned tag-membership helper so both
+the unchanged PTD-23.1 error-returning gate and this boundary obtain the exact
+sorted subset of filename tags eligible for that evidence; do not implement or
+maintain a second compatibility calculation. Require the artifact and contract
+distribution, version, filename, expanded filename
+tags, core Name, Version, and `Requires-Python` to agree after their defined
+canonical normalization. Require exactly one well-formed `[console_scripts]`
+entry for the selected `CLI.Name`; validate its target with the shared generic
+entry-point syntax rules and retain that target as digest-authenticated observed
+wheel metadata. Schema v1 declares no independent expected entry-point target,
+so verification does not invent a cross-record equality or dispatch on the
+observed target.
+Require the internal-tag set to have a nonempty exact intersection with the
+filename-derived tags accepted for the selected interpreter by PTD-23.1;
+intersection only with a filename tag rejected by that pre-acquisition gate
+does not count. Do not require equality or subset in either direction, and
+never let internal tags add eligibility or replace the tags supplied to pip.
+Require every declared bundled-component path to identify a nonempty regular
+file or nonempty directory prefix in the inspected wheel and reject conflicting
+declared paths. Component names and versions remain reviewed declaration data;
+do not infer versions by executing or interpreting bundled content.
+
+Acceptance: any selected reference, scope, closure, record metadata,
+`Requires-Python`, compatibility tag, console-script, or bundled-path mismatch
+fails before resolver staging. Fixtures cover equal tag sets, overlapping
+unequal compressed sets, fully disjoint internal tags, and overlap only with an
+incompatible filename member. A neutral synthetic wheel exercises the same
+production boundary as the focused Playwright wheel.
+
+Non-goals: acquisition, extraction, installation, dependency resolution,
+component-version inference, or tool-specific verification branches.
+
+#### PTD-23.2.5: Produce Replay-Stable Verified-Wheel Inputs
+
+Scope: orchestrate PTD-23.2.3 acquisition, PTD-23.2.2 descriptor-stable
+inspection, and PTD-23.2.4 verification in that order into one immutable
+verified-wheel input per exact selected artifact, sorted by
+application scope, normalized distribution, and artifact reference. Each input
+retains selected scope and closure identity, contract and artifact references,
+acquired descriptor, observed wheel metadata, selected console script, and
+acquisition outcome. Keep the portable-tool lock normalized: selected plan
+records bind expected metadata and the existing acquisition entry binds the
+descriptor and source outcome rather than duplicating mutable wheel metadata.
+Locked replay reopens every exact descriptor and repeats PTD-23.2.2 inspection
+and PTD-23.2.4 verification before resolver staging; it performs no acquisition
+when verified store objects are present and fails closed when any is missing or
+inconsistent.
+
+Acceptance: ordering and identity are deterministic; duplicate acquisition or
+verified inputs fail; locked replay makes zero network calls and repeats
+inspection; missing or inconsistent store objects fail closed. A focused
+exact-artifact check proves the Playwright wheel matches its catalog
+declarations and contains every declared bundled path without executing
+Node.js, Playwright, or another bundled program. The neutral synthetic wheel
+passes the same orchestration.
+
+Non-goals: offering bytes to pip, wheel installation, alias publication,
+browser payloads, or the PTD-25 ordinary-build production caller.
 #### PTD-23.3: Materialize Portable Python Bindings Offline
 
 Scope: at the Python resolver seam defined by PTD-23.1, consume the eligibility
@@ -1766,22 +1833,6 @@ AMD64-only claim establishes other support.
 
 Non-goals: other bindings, browsers, targets, or architectures.
 
-### PTD-28: Validate Every Advertised Asciinema Tuple Through Reploy
-
-Scope: run the manifest-derived asciinema cases on all eight advertised Debian,
-Ubuntu, and architecture tuples and record current external evidence using its
-definition-supplied profile probe.
-
-Acceptance: each exact target builds through Reploy, materializes the verified
-GitHub-hosted artifact offline, reports asciinema 3.2.1, and
-records matching current evidence; missing, stale, or mismatched evidence fails
-CI; evidence from one distribution, OS generation, or architecture cannot
-establish another tuple; this is the first slice that claims end-to-end
-asciinema build and probe acceptance; no result advertises asciinema v2.
-
-Non-goals: asciinema v2, Apple/Darwin or Linux musl payloads, or additional
-target OS generations and architectures.
-
 ### PTD-29: Remove the Flat WIP and Finalize Portable Tool Documentation
 
 Scope: verify no flat definition, aggregate digest behavior, or compatibility
@@ -1794,20 +1845,22 @@ support derives from current evidence; full Go, Docker integration, release,
 documentation, and hygiene checks pass; every design goal, non-goal, migration
 step, and deferral has an evidence-backed disposition.
 
-Non-goals: repository transport, TUF, additional tools beyond Java, Playwright,
-and asciinema, additional versions, bindings, selections, distributions, or
+Non-goals: repository transport, TUF, additional tools beyond Java and
+Playwright, additional versions, bindings, selections, distributions, or
 architectures.
 
 ## Campaign Completion Gate
 
 The campaign is complete only when:
 
-- every delivery item maps one-to-one to an approved current-head PR in
-  dependency order: `PTD-01` through `PTD-20`, `PTD-21.1` through `PTD-21.5`,
-  `PTD-22.1` through `PTD-22.3`, `PTD-23.1.1` through `PTD-23.1.8`,
-  `PTD-23.2`, `PTD-23.3`, and `PTD-24` through `PTD-29`; the `PTD-21`,
-  `PTD-22`, and `PTD-23` milestone containers and nested `PTD-23.1` container
-  own no PR and close only when all of their child slices are approved;
+- every active delivery item maps one-to-one to an approved current-head PR in
+  dependency order: `PTD-01` through `PTD-14`, `PTD-16` through `PTD-20`,
+  `PTD-21.1` through `PTD-21.5`, `PTD-22.1` through `PTD-22.3`,
+  `PTD-23.1.1` through `PTD-23.1.8`, `PTD-23.2.1` through `PTD-23.2.5`,
+  `PTD-23.3`, `PTD-24` through `PTD-27`, and `PTD-29`; the `PTD-21`, `PTD-22`,
+  and `PTD-23` milestone containers and nested `PTD-23.1` and `PTD-23.2`
+  containers own no PR and close only when all of their child slices are
+  approved;
 - the shared-record-contract corrective prerequisite has current-head approval
   and remains in the exact ancestry after PTD-21.3 and before PTD-21.4;
 - the plan-only corrective predecessor has current-head approval and remains in

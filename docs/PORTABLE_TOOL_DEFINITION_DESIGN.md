@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-09-01
+updated: 2026-09-15
 summary: Active composition, targeting, acquisition, identity, and validation model for proposed embedded portable-tool definitions.
 refines: docs/REPOSITORY_DESIGN.md
 ---
@@ -21,8 +21,7 @@ and per-slice acceptance evidence are defined by the
 That plan implements this document but does not override its normative design
 decisions.
 
-The immediate implementation scope is `tool:java`, `tool:playwright`, and
-`tool:asciinema==3.2.1`.
+The immediate implementation scope is `tool:java` and `tool:playwright`.
 Repository publication, TUF metadata, publisher authorization, and lifecycle
 policy remain owned by `REPOSITORY_DESIGN.md`. The embedded catalog will be an
 implementation bridge, but its definition boundaries are intended to carry
@@ -85,8 +84,10 @@ compatibility reader for that format.
   architecture.
 - General-purpose or runtime inheritance, templating, conditional expressions,
   or value overrides inside definition files.
-- Designing every future tool category before the initial Java, Playwright, and
-  asciinema definitions are complete.
+- Designing every future tool category before the initial Java and Playwright
+  definitions are complete.
+- Providing asciinema through the portable-tool catalog. The independently
+  pinned recorder used by controlled sessions remains outside this design.
 
 ## Decision Summary
 
@@ -386,6 +387,13 @@ initial Playwright Python binding these include:
 - supported Python versions and wheel tags;
 - bundled Node.js and `playwright-core` constituent metadata;
 - the Playwright CLI export.
+
+For a Python binding, the CLI export declares the selected console-script name
+and its final installed path. Schema v1 does not independently declare the
+wheel's `module:function` entry-point target. Wheel inspection requires one
+well-formed entry for the selected name and retains its target as observed
+metadata authenticated by the exact wheel digest; it does not infer a second
+cross-record equality value or dispatch on that target.
 
 ### Binding Artifact Record
 
@@ -940,6 +948,14 @@ that both the link and target remain within the owned archive tree. Device
 nodes, sockets, FIFOs, absolute paths, escaping paths, and encrypted entries
 are never allowed.
 
+Before constructing a standard ZIP reader that allocates from central-directory
+records, every ZIP-backed primitive uses one shared Reploy-owned preflight over
+the descriptor-bound bytes. The preflight bounds declared and actual record
+counts, total central-directory bytes, and per-record name, extra-field, and
+comment metadata; preserves ZIP64 validation; and rejects ambiguous directory
+offsets. Archive extraction and wheel inspection reuse this boundary rather
+than maintaining parallel central-directory parsers.
+
 Definition-provided inventory values may tighten limits or describe the vetted
 archive, but cannot raise core safety caps or disable checks. Selected payload
 destinations are collision-checked before extraction, and materialization runs
@@ -1251,9 +1267,8 @@ On a compatible integration runner, Java's definition-supplied profile probe
 checks the executable and confirms the requested Java version. Playwright's
 definition-supplied profile probes import every selected binding, launch each
 selected browser, load a local page, and exit cleanly. The Reploy-owned probe
-executor disables networking and enforces the fixed execution bounds.
-Asciinema's definition-supplied profile probe reports exact version `3.2.1`.
-A probe failure fails that integration-validation job and produces no
+executor disables networking and enforces the fixed execution bounds. A probe
+failure fails that integration-validation job and produces no
 successful support record; it does not make cross-platform build
 materialization depend on executing the target binary. Negative fixtures verify
 that unsupported contexts, OS versions, architectures, bindings, and selections
@@ -1438,35 +1453,6 @@ targets. ARM64 is not advertised for Java or Playwright until every artifact,
 native dependency, materialization rule, and definition-supplied
 validation-profile probe for the exact target succeeds.
 
-The initial asciinema implementation is upstream `3.2.1` for build use on the
-following exact target tuples:
-
-| OS ID | OS version | OCI architecture | Package manager | Native architecture | Upstream payload |
-| --- | --- | --- | --- | --- | --- |
-| `debian` | `12` | `amd64` | `apt` | `amd64` | `asciinema-x86_64-unknown-linux-gnu` |
-| `debian` | `12` | `arm64` | `apt` | `arm64` | `asciinema-aarch64-unknown-linux-gnu` |
-| `debian` | `13` | `amd64` | `apt` | `amd64` | `asciinema-x86_64-unknown-linux-gnu` |
-| `debian` | `13` | `arm64` | `apt` | `arm64` | `asciinema-aarch64-unknown-linux-gnu` |
-| `ubuntu` | `25.10` | `amd64` | `apt` | `amd64` | `asciinema-x86_64-unknown-linux-gnu` |
-| `ubuntu` | `25.10` | `arm64` | `apt` | `arm64` | `asciinema-aarch64-unknown-linux-gnu` |
-| `ubuntu` | `26.04` | `amd64` | `apt` | `amd64` | `asciinema-x86_64-unknown-linux-gnu` |
-| `ubuntu` | `26.04` | `arm64` | `apt` | `arm64` | `asciinema-aarch64-unknown-linux-gnu` |
-
-Here `apt` is the observed target package manager and the provider for any
-native package roots; asciinema itself is acquired from the pinned GitHub
-release asset rather than from an APT repository.
-
-These eight tuples are pinned initial support claims, not a moving
-"latest two" policy. Each has its own target leaf and integration fixture, but
-the leaves share one release contract and validation profile. The four AMD64
-leaves exact-reference one payload record and the four ARM64 leaves
-exact-reference the other, so the existing explicit-reference composition and
-catalog generator declare target-independent metadata once without target
-inheritance. Both GitHub-hosted GNU/Linux release assets are pinned by size and
-SHA-256. The upstream Apple/Darwin and AMD64-only Linux musl assets are not
-advertised. Asciinema v2 remains a non-published coexistence analysis; it is
-neither implemented nor advertised.
-
 Validation evidence is external to definition identity. Schema v1 records the
 tool, upstream version, definition revision, manifest digest, selected-closure
 digest, context, exact target tuple, immutable base-image digest, binding set
@@ -1475,7 +1461,6 @@ validator-output digest. Only a passing record whose immutable fields match the
 selected manifest and closure can contribute to the generated support matrix.
 
 These decisions settle the initial wire representation and support claims.
-Additional Java or asciinema versions, additional asciinema target OS
-generations or payload variants, runtime Java, Playwright bindings or browsers,
-Java or Playwright ARM64, and repository publication remain explicit later
+Additional Java versions, runtime Java, Playwright bindings or browsers, Java
+or Playwright ARM64, and repository publication remain explicit later
 extensions; none is inferred from the initial embedded records.
