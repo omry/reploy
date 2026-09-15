@@ -101,17 +101,16 @@ func TestPreparedPythonNodeOperationsResolvesAndIngestsWheelsInSession(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	portableToolBindings := portablePythonExecutionProjectionForTest("application/application/python").Components[0]
 	operations := PreparedPythonNodeOperations{
 		Store: store,
 		Validators: providers.ProviderOwnerValidators{
 			Profile: pythonprovider.ValidateRequirementProfileV1,
 			Bundle:  pythonprovider.ValidateResolvedBundlePayloadV1,
 		},
-		FinalImageConfig: pythonConsumerTestImageConfig(),
-		Artifacts:        artifacts,
-		PortableToolBindings: &pythonprovider.PortableToolPythonComponentV1{
-			TestedTags: testedTags,
-		},
+		FinalImageConfig:     pythonConsumerTestImageConfig(),
+		Artifacts:            artifacts,
+		PortableToolBindings: &portableToolBindings,
 		LocalOverrides: []PythonLocalOverrideV1{{
 			Distribution: "unused", HostDir: filepath.Join(t.TempDir(), "missing"),
 		}},
@@ -168,6 +167,107 @@ func TestPreparedPythonNodeOperationsResolvesAndIngestsWheelsInSession(t *testin
 	}
 	if !reflect.DeepEqual((*commands)[5].Args, []string{"kill", "--signal", "KILL", session.containerName}) || (*commands)[6].Args[0] != "rm" {
 		t.Fatalf("resolver shutdown commands = %#v", (*commands)[5:])
+	}
+}
+
+func TestPreparedPythonNodeOperationsRejectsIneligiblePortableWheelBeforeFreshResolution(t *testing.T) {
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
+	request := preparedPythonResolveRequest(t, descriptor)
+	interpreterResponse := probe.ResponseV1{Schema: probe.ResponseSchemaV1, Observations: []probe.ExecutableObservationV1{
+		pythonConsumerObservation("interpreter", "/usr/bin/python3"),
+	}}
+	testedTags := []string{"py3-none-any"}
+	resolverCalls := 0
+	stubPythonInterpreterSelectionCommands(
+		t, mustCanonicalProbeResponse(t, interpreterResponse),
+		[]string{string(pythonInspectionOutputV2ForTest("3.13.2", testedTags, testedTags))},
+		func() error { resolverCalls++; return nil },
+	)
+	artifacts := testPreparedPythonResolverArtifacts(t)
+	session, err := OpenPythonResolverSession(context.Background(), descriptor, workspace, artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close(context.Background()) })
+	session.observations[pythonCarrierRequirementID] = pythonConsumerObservation(pythonCarrierRequirementID, pythonCarrierPath)
+	session.observations[pythonLauncherRequirementID] = pythonConsumerObservation(pythonLauncherRequirementID, pythonLauncherPath)
+	component := portablePythonExecutionProjectionForTest("application/application/python").Components[0]
+	component.Bindings[0].SupportedPython = []string{"3.12"}
+	component.Bindings[0].Wheel.RequiresPython = ">=3.12,<3.13"
+	operations := PreparedPythonNodeOperations{
+		FinalImageConfig:     pythonConsumerTestImageConfig(),
+		Artifacts:            artifacts,
+		PortableToolBindings: &component,
+	}
+
+	_, _, err = operations.resolveFresh(context.Background(), session, request)
+	if err == nil || !strings.Contains(err.Error(), "does not support inspected interpreter 3.13.2") {
+		t.Fatalf("portable wheel eligibility error = %v", err)
+	}
+	if resolverCalls != 0 {
+		t.Fatalf("wheel resolver ran %d times after portable eligibility failed", resolverCalls)
+	}
+}
+
+func TestPreparedPythonNodeOperationsRejectsIneligiblePortableWheelInCachedPath(t *testing.T) {
+	fixture := newPreparedPythonGraphReuseFixture(t)
+	reuse, err := LoadPreparedPythonGraphReuse(
+		fixture.store, fixture.request.Plan, fixture.request.Platform,
+		fixture.request.SourceCandidates, fixture.sourceWheels, &fixture.lock,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := reuse.NodeConfigs[fixture.request.NodeID]
+	artifacts, cleanup, err := PreparePythonResolverArtifacts(fixture.store, config.ReusableWheels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cleanup)
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
+	interpreterResponse := probe.ResponseV1{Schema: probe.ResponseSchemaV1, Observations: []probe.ExecutableObservationV1{
+		pythonConsumerObservation("interpreter", "/usr/bin/python3"),
+	}}
+	testedTags := []string{"py3-none-any"}
+	resolverCalls := 0
+	stubPythonInterpreterSelectionCommands(
+		t, mustCanonicalProbeResponse(t, interpreterResponse),
+		[]string{string(pythonInspectionOutputV2ForTest("3.13.2", testedTags, testedTags))},
+		func() error { resolverCalls++; return nil },
+	)
+	session, err := OpenPythonResolverSession(context.Background(), descriptor, workspace, artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close(context.Background()) })
+	session.observations[pythonCarrierRequirementID] = pythonConsumerObservation(pythonCarrierRequirementID, pythonCarrierPath)
+	session.observations[pythonLauncherRequirementID] = pythonConsumerObservation(pythonLauncherRequirementID, pythonLauncherPath)
+	component := portablePythonExecutionProjectionForTest("application/application/python").Components[0]
+	component.Bindings[0].SupportedPython = []string{"3.12"}
+	component.Bindings[0].Wheel.RequiresPython = ">=3.12,<3.13"
+	fixture.request.ReusableArtifacts = reuse.ReusableArtifacts[fixture.request.NodeID]
+	operations := PreparedPythonNodeOperations{
+		Store: fixture.store,
+		Validators: providers.ProviderOwnerValidators{
+			Profile: pythonprovider.ValidateRequirementProfileV1,
+			Bundle:  pythonprovider.ValidateResolvedBundlePayloadV1,
+		},
+		FinalImageConfig:     pythonConsumerTestImageConfig(),
+		Artifacts:            artifacts,
+		ReusableWheels:       config.ReusableWheels,
+		PortableToolBindings: &component,
+	}
+
+	_, err = operations.validateCached(
+		context.Background(), session, fixture.request, reuse.CachedResolutions[fixture.request.NodeID],
+	)
+	if err == nil || !strings.Contains(err.Error(), "does not support inspected interpreter 3.13.2") {
+		t.Fatalf("cached portable wheel eligibility error = %v", err)
+	}
+	if resolverCalls != 0 {
+		t.Fatalf("wheel resolver ran %d times during cached portable eligibility validation", resolverCalls)
 	}
 }
 
