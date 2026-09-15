@@ -19,6 +19,20 @@ func SelectPythonInterpreter(
 	requirement providers.ExecutableRequirement,
 	candidates []providers.RealizedOutput,
 ) (providers.ExecutableEvidence, error) {
+	return SelectPythonInterpreterWithTags(ctx, session, launcher, requirement, candidates, []string{})
+}
+
+// SelectPythonInterpreterWithTags performs the same single interpreter
+// selection while asking the fixed inspection to test only the bounded tags
+// projected for this Python component.
+func SelectPythonInterpreterWithTags(
+	ctx context.Context,
+	session *PythonResolverSession,
+	launcher providers.ValidatedExecutableInput,
+	requirement providers.ExecutableRequirement,
+	candidates []providers.RealizedOutput,
+	testedTags []string,
+) (providers.ExecutableEvidence, error) {
 	if ctx == nil {
 		return providers.ExecutableEvidence{}, fmt.Errorf("select Python interpreter requires a context")
 	}
@@ -63,7 +77,7 @@ func SelectPythonInterpreter(
 			continue
 		}
 		output := providers.QualifiedOutput{Component: candidate.SupplierComponent, Name: candidate.Name}
-		selected, version, err := session.InspectAndBindInterpreter(ctx, launcher, requirement, output)
+		selected, facts, err := session.InspectAndBindInterpreter(ctx, launcher, requirement, output, testedTags)
 		if err != nil {
 			candidateErr := fmt.Errorf(
 				"Python interpreter candidate %s.%s at %s is not a usable Python interpreter; configure an explicit Python interpreter executable path: %w",
@@ -75,7 +89,7 @@ func SelectPythonInterpreter(
 			lastInvalidCandidate = candidateErr.Error()
 			continue
 		}
-		matches, err := pythonprovider.InterpreterVersionSatisfies(requirement.VersionConstraint, version)
+		matches, err := pythonprovider.InterpreterVersionSatisfies(requirement.VersionConstraint, facts.Version)
 		if err != nil {
 			return providers.ExecutableEvidence{}, err
 		}

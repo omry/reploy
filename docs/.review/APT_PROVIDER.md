@@ -1,26 +1,27 @@
 ---
 artifact: swe-design-review-attestation
-schema_version: 2
-scope_key: bd8b79396ed3ab3d8e062279e409430bcf54daf5acf561e1b5d63f4302f9edc4
-scope: {"kind": "path", "primary_target": "docs/APT_PROVIDER.md", "repository": "/home/omry/dev/reploy", "selector": "docs/APT_PROVIDER.md"}
-review_content_identity_sha256: 3cb75520f49dee8255a7bc807e55670c1c59c75981b5753cb3c94ad29749b593
-target_content_identity_sha256: 5c8bcb33496743ccef81f81684cf38482d1a9b225e096f47b328b95ea049a68a
-baseline_content_identity_sha256: 9f98a355bf1d27e1c417bb5080a2f86eda476110f89ccf264d5ba02f7ee8d13b
-target_documents: [{"path": "docs/APT_PROVIDER.md", "repository": "/home/omry/dev/reploy", "sha256": "be2008134ae557cf275893325fcd7caae7588ced609c5dc05bf142ad0a6aa60c"}]
-baseline_documents: [{"path": "docs/BLUEPRINT_ENVIRONMENT_MODEL.md", "repository": "/home/omry/dev/reploy", "sha256": "8969ffde4d2f20d2e02fb530d0e9688ed63d9dd8962a9a700473d4a6a54e7ef4"}]
-document_repository: "/home/omry/dev/reploy"
+schema_version: 4
+scope_key: 65b7fe1d45c88c7805c4b9fcd8ce6d6d69dc0e4b962ecdbf253f7e8a872b4662
+scope: {"kind": "path", "primary_target": "docs/APT_PROVIDER.md", "repository": ".", "selector": "docs/APT_PROVIDER.md"}
+review_content_identity_sha256: 5c23192cdcbc74302da21994a357b4fe52adee05272cafdf1f4316d69cf29637
+target_content_identity_sha256: 01b5c3c3907d236c5e62773a80426585be85e44b1d86518411b1efe555a1ca15
+baseline_content_identity_sha256: 58468667dc4b7ccc1b53ece6069a0c768862bc3447a74f838ba9c1edfb6a12c9
+target_documents: [{"path": "docs/APT_PROVIDER.md", "repository": ".", "sha256": "b6d439338beb432953f9dae5a00dda7db78340c2309778b44ce0d920b8e873d3"}]
+baseline_documents: [{"path": "docs/BLUEPRINT_ENVIRONMENT_MODEL.md", "repository": ".", "sha256": "9c9f8af518952cdea721ebdaea548930ee5456833d618eb54735b2c0431badd3"}]
+design_dependency_documents: [{"path": "docs/BLUEPRINT_ENVIRONMENT_MODEL.md", "repository": ".", "sha256": "9c9f8af518952cdea721ebdaea548930ee5456833d618eb54735b2c0431badd3"}]
+document_repository: "."
 document_path: "docs/APT_PROVIDER.md"
-document_revision_provenance: "a13e17402b578d5f6c6922ac82773ad2f116237f"
-document_sha256: be2008134ae557cf275893325fcd7caae7588ced609c5dc05bf142ad0a6aa60c
+document_revision_provenance: "9affd2736d3767b4ea9847fb76585e218c805470"
+document_sha256: b6d439338beb432953f9dae5a00dda7db78340c2309778b44ce0d920b8e873d3
 verdict: clean
-attested_at: 2026-08-22T19:51:20Z
+attested_at: 2026-09-15T07:02:11Z
 ---
-<!-- swe-design-review-attestation:v2 -->
+<!-- swe-design-review-attestation:v4 -->
 
 # SWE design-review attestation
 
 Review freshness is determined by the target and baseline document bytes
-listed in the version-2 header. Revisions are provenance only.
+listed in the version-4 header. Revisions are provenance only.
 
 ## Durable review state
 

@@ -29,6 +29,7 @@ type PreparedPythonNodeOperations struct {
 	Artifacts              PreparedPythonResolverArtifacts
 	ReusableWheels         []providerstore.ArtifactDescriptor
 	LocalOverrides         []PythonLocalOverrideV1
+	PortableToolBindings   *pythonprovider.PortableToolPythonComponentV1
 	SourceBuilder          *SourceBuilderCoordinatorV1
 	Progress               io.Writer
 	ShowApplicationContext bool
@@ -128,7 +129,11 @@ func (operations PreparedPythonNodeOperations) validateCached(
 		SupplierNode: providers.NodeID(locked.Output.Component), SupplierComponent: locked.Output.Component,
 		Name: locked.Output.Name, Candidate: providers.ExecutableCandidate{InvocationPath: locked.InvocationPath},
 	}
-	observed, err := SelectPythonInterpreter(ctx, session, consumer.EnvironmentLauncher, requirement, []providers.RealizedOutput{candidate})
+	testedTags := []string{}
+	if operations.PortableToolBindings != nil {
+		testedTags = append(testedTags, operations.PortableToolBindings.TestedTags...)
+	}
+	observed, err := SelectPythonInterpreterWithTags(ctx, session, consumer.EnvironmentLauncher, requirement, []providers.RealizedOutput{candidate}, testedTags)
 	if err != nil {
 		return providers.GraphConsumerValidation{}, err
 	}
@@ -174,7 +179,11 @@ func (operations PreparedPythonNodeOperations) resolveFresh(
 	}
 	requirement := node.Requirements.Executables[0]
 	candidates := append([]providers.RealizedOutput{}, candidateGroups[0].Outputs...)
-	interpreter, err := SelectPythonInterpreter(ctx, session, consumer.EnvironmentLauncher, requirement, candidates)
+	testedTags := []string{}
+	if operations.PortableToolBindings != nil {
+		testedTags = append(testedTags, operations.PortableToolBindings.TestedTags...)
+	}
+	interpreter, err := SelectPythonInterpreterWithTags(ctx, session, consumer.EnvironmentLauncher, requirement, candidates, testedTags)
 	if err != nil {
 		return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
 	}
@@ -442,6 +451,10 @@ func (operations PreparedPythonNodeOperations) materializeLocalOverrides(
 var preparePythonSourceBuilderWorkspaceV1 = PrepareProbeWorkspace
 var openPythonSourceBuilderSessionV1 = OpenPythonResolverSession
 var validatePythonSourceBuilderConsumerV1 = ValidatePythonConsumer
+
+// Source-builder inspection deliberately remains tag-less. Portable binding
+// tested tags describe runtime-wheel compatibility for the application node;
+// they are not compatibility claims for the isolated source-build image.
 var selectPythonSourceBuilderInterpreterV1 = SelectPythonInterpreter
 
 // openSourceBuilderSession prepares and opens the distinct source-build
