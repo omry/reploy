@@ -1,0 +1,2 @@
+kind: Added
+body: Reject final images that drift from locked portable Python interpreter and wheel-tag evidence.
