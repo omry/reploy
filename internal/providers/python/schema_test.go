@@ -118,7 +118,7 @@ func TestPythonOwnerValidatorsBindProfileAndBundlePayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	interpreter := schemaTestInterpreterEvidence()
-	interpreter.Facts = CanonicalInterpreterFactsV1("3.13.2")
+	interpreter.Facts = CanonicalInterpreterFactsV2(testInterpreterFactsV2("3.13.2", nil, nil))
 	platform, err := blueprint.ParsePlatform("linux/amd64")
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +133,24 @@ func TestPythonOwnerValidatorsBindProfileAndBundlePayload(t *testing.T) {
 			ProviderData: providers.CanonicalProviderData{Schema: request.Schema, Value: request.Value},
 		},
 		SelectedExecutables: []providers.ExecutableEvidence{interpreter}, SelectedFiles: []providers.FileEvidence{},
-		Platform: platform, Facts: CanonicalProfileFactsV1("application", []providers.ResolvedSourceInput{}),
+		Platform: platform, Facts: CanonicalProfileFactsV2("application", []providers.ResolvedSourceInput{}),
+	}
+	legacyProfile := profile
+	legacyProfile.Facts = providers.CanonicalProviderData{
+		Schema: "python-profile-facts-v1",
+		Value:  canonical.Object{"component": "application", "sources": []any{}},
+	}
+	if err := ValidateRequirementProfileV1(legacyProfile); err == nil || !strings.Contains(err.Error(), ProfileFactsSchemaV2) {
+		t.Fatalf("legacy profile facts error = %v", err)
+	}
+	legacyInterpreter := profile
+	legacyInterpreter.SelectedExecutables = append([]providers.ExecutableEvidence{}, profile.SelectedExecutables...)
+	legacyInterpreter.SelectedExecutables[0].Facts = providers.CanonicalProviderData{
+		Schema: "python-interpreter-facts-v1",
+		Value:  canonical.Object{"consumer_kind": "python", "version": "3.13.2"},
+	}
+	if err := ValidateRequirementProfileV1(legacyInterpreter); err == nil || !strings.Contains(err.Error(), InterpreterFactsSchemaV2) {
+		t.Fatalf("legacy interpreter facts error = %v", err)
 	}
 	profileDigest, err := providers.RequirementProfileDigest(profile, ValidateRequirementProfileV1)
 	if err != nil {
@@ -184,7 +201,7 @@ func TestPythonOwnerValidatorsBindProfileAndBundlePayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	wrongRecipe := payload
-	wrongRecipe.RecipeVersion = "python-v2"
+	wrongRecipe.RecipeVersion = "python-v1"
 	if err := ValidateResolvedBundlePayloadV1(wrongRecipe); err == nil || !strings.Contains(err.Error(), "recipe version") {
 		t.Fatalf("recipe mismatch error = %v", err)
 	}
@@ -238,6 +255,6 @@ func schemaTestInterpreterEvidence() providers.ExecutableEvidence {
 			Schema: providers.PortableAccessSchemaV1, Profile: providers.PortableOutputAccessV1,
 			Paths: []providers.AccessPathEvidence{{Path: "/usr/bin/python3", Kind: "regular", Mode: "0755", Required: "other-read-execute"}},
 		},
-		Facts: canonical.Envelope{Schema: "python-interpreter-facts-v1", Value: canonical.Object{}},
+		Facts: CanonicalInterpreterFactsV2(testInterpreterFactsV2("3.12.9", nil, nil)),
 	}
 }

@@ -28,7 +28,7 @@ type PythonResolverSession struct {
 	containerName string
 	runDocker     commandRunner
 	observations  map[string]probe.ExecutableObservationV1
-	inspected     map[string]string
+	inspected     map[string]pythonprovider.InterpreterInspectionFactsV2
 	stopped       bool
 	closed        bool
 }
@@ -46,10 +46,10 @@ const (
 	pythonSourceBuildRoot                = "/tmp/reploy-source-build"
 	pythonSourceBuilderRoot              = "/tmp/reploy-source-builder"
 	pythonSourceUVCacheRoot              = "/tmp/reploy-uv-cache"
-	pythonSourceBuildEnvironmentSchemaV1 = "python-source-build-environment-v1"
+	pythonSourceBuildEnvironmentSchemaV2 = "python-source-build-environment-v2"
 )
 
-type pythonSourceBuildEnvironmentV1 struct {
+type pythonSourceBuildEnvironmentV2 struct {
 	Schema        string                                 `json:"schema"`
 	Platform      blueprint.Platform                     `json:"platform"`
 	Builder       providers.RealizedImageV1              `json:"builder"`
@@ -130,7 +130,7 @@ func OpenPythonResolverSession(
 	return &PythonResolverSession{
 		descriptor: descriptor, upstream: descriptor, workspace: workspace, artifacts: artifacts, containerName: containerName, runDocker: runDocker,
 		observations: map[string]probe.ExecutableObservationV1{},
-		inspected:    map[string]string{},
+		inspected:    map[string]pythonprovider.InterpreterInspectionFactsV2{},
 	}, nil
 }
 
@@ -252,33 +252,41 @@ func (session *PythonResolverSession) InspectAndBindInterpreter(
 	launcher providers.ValidatedExecutableInput,
 	requirement providers.ExecutableRequirement,
 	output providers.QualifiedOutput,
-) (providers.ValidatedExecutableInput, string, error) {
+	testedTags []string,
+) (providers.ValidatedExecutableInput, pythonprovider.InterpreterInspectionFactsV2, error) {
+	targetArchitecture, err := pythonInspectionArchitectureV2(session.descriptor.Platform)
+	if err != nil {
+		return providers.ValidatedExecutableInput{}, pythonprovider.InterpreterInspectionFactsV2{}, err
+	}
 	inspectionInput, err := session.ValidatedExecutableInput(
 		providers.ExecutableRoleSelectedOutput,
 		requirement,
 		output,
 		providers.CanonicalProviderData{
-			Schema: "python-interpreter-inspection-v1",
-			Value:  canonical.Object{"consumer_kind": "python"},
+			Schema: "python-interpreter-inspection-v2",
+			Value: canonical.Object{
+				"consumer_kind": "python", "target_architecture": targetArchitecture,
+				"tested_tags": append([]string{}, testedTags...),
+			},
 		},
 	)
 	if err != nil {
-		return providers.ValidatedExecutableInput{}, "", err
+		return providers.ValidatedExecutableInput{}, pythonprovider.InterpreterInspectionFactsV2{}, err
 	}
-	version, err := session.InspectInterpreter(ctx, launcher, inspectionInput)
+	facts, err := session.InspectInterpreter(ctx, launcher, inspectionInput, testedTags)
 	if err != nil {
-		return providers.ValidatedExecutableInput{}, "", err
+		return providers.ValidatedExecutableInput{}, pythonprovider.InterpreterInspectionFactsV2{}, err
 	}
 	selected, err := session.ValidatedExecutableInput(
 		providers.ExecutableRoleSelectedOutput,
 		requirement,
 		output,
-		pythonprovider.CanonicalInterpreterFactsV1(version),
+		pythonprovider.CanonicalInterpreterFactsV2(facts),
 	)
 	if err != nil {
-		return providers.ValidatedExecutableInput{}, "", err
+		return providers.ValidatedExecutableInput{}, pythonprovider.InterpreterInspectionFactsV2{}, err
 	}
-	return selected, version, nil
+	return selected, facts, nil
 }
 
 // InspectInterpreter runs only Python's fixed isolated inspection through an
@@ -287,27 +295,28 @@ func (session *PythonResolverSession) InspectInterpreter(
 	ctx context.Context,
 	launcher providers.ValidatedExecutableInput,
 	interpreter providers.ValidatedExecutableInput,
-) (string, error) {
+	testedTags []string,
+) (pythonprovider.InterpreterInspectionFactsV2, error) {
 	if session == nil || session.closed || session.stopped {
-		return "", fmt.Errorf("Python resolver session is not open")
+		return pythonprovider.InterpreterInspectionFactsV2{}, fmt.Errorf("Python resolver session is not open")
 	}
 	if ctx == nil {
-		return "", fmt.Errorf("Python interpreter inspection context is required")
+		return pythonprovider.InterpreterInspectionFactsV2{}, fmt.Errorf("Python interpreter inspection context is required")
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return pythonprovider.InterpreterInspectionFactsV2{}, err
 	}
 	if err := providers.ValidateValidatedExecutableInput(launcher); err != nil {
-		return "", fmt.Errorf("Python resolver environment launcher: %w", err)
+		return pythonprovider.InterpreterInspectionFactsV2{}, fmt.Errorf("Python resolver environment launcher: %w", err)
 	}
 	if launcher.Role != providers.ExecutableRoleEnvironmentLauncher {
-		return "", fmt.Errorf("Python resolver environment launcher role must be %q", providers.ExecutableRoleEnvironmentLauncher)
+		return pythonprovider.InterpreterInspectionFactsV2{}, fmt.Errorf("Python resolver environment launcher role must be %q", providers.ExecutableRoleEnvironmentLauncher)
 	}
 	if err := providers.ValidateValidatedExecutableInput(interpreter); err != nil {
-		return "", fmt.Errorf("Python resolver interpreter: %w", err)
+		return pythonprovider.InterpreterInspectionFactsV2{}, fmt.Errorf("Python resolver interpreter: %w", err)
 	}
 	if interpreter.Role != providers.ExecutableRoleSelectedOutput {
-		return "", fmt.Errorf("Python resolver interpreter role must be %q", providers.ExecutableRoleSelectedOutput)
+		return pythonprovider.InterpreterInspectionFactsV2{}, fmt.Errorf("Python resolver interpreter role must be %q", providers.ExecutableRoleSelectedOutput)
 	}
 	for _, required := range []struct {
 		name       string
@@ -318,7 +327,7 @@ func (session *PythonResolverSession) InspectInterpreter(
 	} {
 		observation, found := session.observations[required.executable.ID]
 		if !found {
-			return "", fmt.Errorf("Python resolver %s %q was not probed in this container", required.name, required.executable.Evidence.InvocationPath)
+			return pythonprovider.InterpreterInspectionFactsV2{}, fmt.Errorf("Python resolver %s %q was not probed in this container", required.name, required.executable.Evidence.InvocationPath)
 		}
 		requirement := providers.ExecutableRequirement{
 			ID: required.executable.ID, Command: required.executable.Evidence.Output.Name,
@@ -328,15 +337,19 @@ func (session *PythonResolverSession) InspectInterpreter(
 			Requirement: &requirement, Output: required.executable.Evidence.Output, Facts: required.executable.Evidence.Facts,
 		})
 		if err != nil {
-			return "", fmt.Errorf("Python resolver %s probe evidence: %w", required.name, err)
+			return pythonprovider.InterpreterInspectionFactsV2{}, fmt.Errorf("Python resolver %s probe evidence: %w", required.name, err)
 		}
 		if !reflect.DeepEqual(expected, required.executable.Evidence) {
-			return "", fmt.Errorf("Python resolver %s evidence does not match this container's probe", required.name)
+			return pythonprovider.InterpreterInspectionFactsV2{}, fmt.Errorf("Python resolver %s evidence does not match this container's probe", required.name)
 		}
 	}
-	inspection, err := pythonprovider.InterpreterInspectionArgv(interpreter.Evidence.InvocationPath)
+	targetArchitecture, err := pythonInspectionArchitectureV2(session.descriptor.Platform)
 	if err != nil {
-		return "", err
+		return pythonprovider.InterpreterInspectionFactsV2{}, err
+	}
+	inspection, err := pythonprovider.InterpreterInspectionArgv(interpreter.Evidence.InvocationPath, testedTags, targetArchitecture)
+	if err != nil {
+		return pythonprovider.InterpreterInspectionFactsV2{}, err
 	}
 	args := []string{
 		"exec", "--user", "0:0", "--workdir", "/", session.containerName,
@@ -348,14 +361,33 @@ func (session *PythonResolverSession) InspectInterpreter(
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	if err := session.runDockerCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{Context: ctx, Stdout: &stdout, Stderr: &stderr}); err != nil {
-		return "", pythonResolverCommandError("inspect interpreter", session.descriptor.Platform.Canonical, stderr.String(), err)
+		return pythonprovider.InterpreterInspectionFactsV2{}, pythonResolverCommandError("inspect interpreter", session.descriptor.Platform.Canonical, stderr.String(), err)
 	}
-	version, err := pythonprovider.ParseInterpreterInspectionOutput(stdout.Bytes())
+	facts, err := pythonprovider.ParseInterpreterInspectionOutput(stdout.Bytes(), testedTags)
 	if err != nil {
+		return pythonprovider.InterpreterInspectionFactsV2{}, err
+	}
+	session.inspected[interpreter.Evidence.InvocationPath] = facts
+	return facts, nil
+}
+
+func pythonInspectionArchitectureV2(platform blueprint.Platform) (string, error) {
+	if err := platform.Validate(); err != nil {
 		return "", err
 	}
-	session.inspected[interpreter.Evidence.InvocationPath] = version
-	return version, nil
+	switch platform.Architecture {
+	case "amd64":
+		return "x86_64", nil
+	case "arm64":
+		return "aarch64", nil
+	case "arm":
+		if platform.Variant == "v7" {
+			return "armv7l", nil
+		}
+	default:
+		return "", fmt.Errorf("Python interpreter inspection target architecture %q is unsupported", platform.Canonical)
+	}
+	return "", fmt.Errorf("Python interpreter inspection target architecture %q is unsupported", platform.Canonical)
 }
 
 // ResolveWheels runs the one provider-owned pip invocation after the selected
@@ -522,17 +554,17 @@ func (session *PythonResolverSession) SourceBuildEnvironmentDigest(
 	if session == nil || session.closed || session.stopped {
 		return "", fmt.Errorf("Python resolver session is not open")
 	}
-	version, inspected := session.inspected[interpreter.InvocationPath]
-	if !inspected || interpreter.Facts.Schema != pythonprovider.InterpreterFactsSchemaV1 ||
-		interpreter.Facts.Value["version"] != version {
+	inspectedFacts, inspected := session.inspected[interpreter.InvocationPath]
+	facts, err := pythonprovider.DecodeInterpreterFactsV2(interpreter.Facts)
+	if err != nil || !inspected || !reflect.DeepEqual(facts, inspectedFacts) {
 		return "", fmt.Errorf("Python source build environment interpreter was not inspected in this container")
 	}
 	builder, err := realizedImageFromDescriptor(session.descriptor)
 	if err != nil {
 		return "", err
 	}
-	environment := pythonSourceBuildEnvironmentV1{
-		Schema:      pythonSourceBuildEnvironmentSchemaV1,
+	environment := pythonSourceBuildEnvironmentV2{
+		Schema:      pythonSourceBuildEnvironmentSchemaV2,
 		Platform:    session.descriptor.Platform,
 		Builder:     builder,
 		Interpreter: interpreter,
@@ -541,7 +573,7 @@ func (session *PythonResolverSession) SourceBuildEnvironmentDigest(
 		environment.PortableTools = append([]SourceBuilderPortableToolSelectionV1{}, session.sourceBuilder.Selections...)
 	}
 	return canonical.Sum(
-		"python-source-build-environment", pythonSourceBuildEnvironmentSchemaV1, environment,
+		"python-source-build-environment", pythonSourceBuildEnvironmentSchemaV2, environment,
 	)
 }
 
@@ -665,8 +697,9 @@ func (session *PythonResolverSession) validateWheelOperationInputs(
 	if !reflect.DeepEqual(expected.Evidence, interpreter) {
 		return fmt.Errorf("Python wheel operation interpreter evidence does not match this container")
 	}
-	version, inspected := session.inspected[interpreter.InvocationPath]
-	if !inspected || interpreter.Facts.Schema != pythonprovider.InterpreterFactsSchemaV1 || interpreter.Facts.Value["version"] != version {
+	inspectedFacts, inspected := session.inspected[interpreter.InvocationPath]
+	facts, err := pythonprovider.DecodeInterpreterFactsV2(interpreter.Facts)
+	if err != nil || !inspected || !reflect.DeepEqual(facts, inspectedFacts) {
 		return fmt.Errorf("Python wheel operation interpreter was not inspected in this container")
 	}
 	return nil

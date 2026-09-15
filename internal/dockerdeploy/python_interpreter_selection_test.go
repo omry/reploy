@@ -16,7 +16,10 @@ func TestSelectPythonInterpreterUsesFirstCompatibleObservedRuntime(t *testing.T)
 	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
 	_, exchange := pythonResolverProbeExchange()
 	interpreterResponse := probe.ResponseV1{Schema: probe.ResponseSchemaV1, Observations: []probe.ExecutableObservationV1{exchange.Observations[1]}}
-	commands := stubPythonInterpreterSelectionCommands(t, mustCanonicalProbeResponse(t, interpreterResponse), []string{"3.10.14\n", "3.13.2\n"}, nil)
+	commands := stubPythonInterpreterSelectionCommands(t, mustCanonicalProbeResponse(t, interpreterResponse), []string{
+		string(pythonInspectionOutputV2ForTest("3.10.14", nil, nil)),
+		string(pythonInspectionOutputV2ForTest("3.13.2", nil, nil)),
+	}, nil)
 	session, err := OpenPythonResolverSession(context.Background(), descriptor, workspace, testPreparedPythonResolverArtifacts(t))
 	if err != nil {
 		t.Fatal(err)
@@ -122,8 +125,12 @@ func stubPythonInterpreterSelectionCommands(t *testing.T, probeResponse []byte, 
 			if inspectionIndex >= len(inspectionResponses) {
 				return errors.New("unexpected interpreter inspection")
 			}
-			_, _ = options.Stdout.Write([]byte(inspectionResponses[inspectionIndex]))
+			response := inspectionResponses[inspectionIndex]
 			inspectionIndex++
+			if strings.HasPrefix(response, "error:") {
+				return errors.New(strings.TrimPrefix(response, "error:"))
+			}
+			_, _ = options.Stdout.Write([]byte(response))
 			return nil
 		}, nil
 	}

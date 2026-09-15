@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/omry/reploy/internal/blueprint"
-	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
@@ -32,20 +31,20 @@ func sourceBuilderTestEnvironment(t *testing.T, builder deploy.ImageDescriptor, 
 func sourceBuilderTestInterpreter() providers.ExecutableEvidence {
 	return providers.ExecutableEvidence{
 		InvocationPath: "/usr/bin/python3",
-		Facts:          providers.CanonicalProviderData{Schema: pythonprovider.InterpreterFactsSchemaV1, Value: canonical.Object{"version": "3.13.2"}},
+		Facts:          pythonInterpreterFactsV2ForTest("3.13.2"),
 	}
 }
 
 func TestPythonResolverSessionSourceBuildEnvironmentIdentityBindsExactBuilderAndSelections(t *testing.T) {
 	upstream := sourceBuilderTestImageDescriptor(t, "1")
-	plain := &PythonResolverSession{descriptor: upstream, upstream: upstream, inspected: map[string]string{"/usr/bin/python3": "3.13.2"}}
+	plain := &PythonResolverSession{descriptor: upstream, upstream: upstream, inspected: map[string]pythonprovider.InterpreterInspectionFactsV2{"/usr/bin/python3": pythonInspectionFactsV2ForTest("3.13.2", nil, nil)}}
 	interpreter := sourceBuilderTestInterpreter()
 	plainDigest, err := plain.SourceBuildEnvironmentDigest(interpreter)
 	if err != nil {
 		t.Fatal(err)
 	}
 	firstBuilder := sourceBuilderTestImageDescriptor(t, "2")
-	first := &PythonResolverSession{descriptor: firstBuilder, upstream: firstBuilder, containerName: "first", inspected: map[string]string{"/usr/bin/python3": "3.13.2"}}
+	first := &PythonResolverSession{descriptor: firstBuilder, upstream: firstBuilder, containerName: "first", inspected: map[string]pythonprovider.InterpreterInspectionFactsV2{"/usr/bin/python3": pythonInspectionFactsV2ForTest("3.13.2", nil, nil)}}
 	if err := first.BindSourceBuilder(sourceBuilderTestEnvironment(t, firstBuilder, upstream)); err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +53,7 @@ func TestPythonResolverSessionSourceBuildEnvironmentIdentityBindsExactBuilderAnd
 		t.Fatal(err)
 	}
 	secondBuilder := sourceBuilderTestImageDescriptor(t, "3")
-	second := &PythonResolverSession{descriptor: secondBuilder, upstream: secondBuilder, containerName: "second", inspected: map[string]string{"/usr/bin/python3": "3.13.2"}}
+	second := &PythonResolverSession{descriptor: secondBuilder, upstream: secondBuilder, containerName: "second", inspected: map[string]pythonprovider.InterpreterInspectionFactsV2{"/usr/bin/python3": pythonInspectionFactsV2ForTest("3.13.2", nil, nil)}}
 	if err := second.BindSourceBuilder(sourceBuilderTestEnvironment(t, secondBuilder, upstream)); err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +82,26 @@ func TestPythonResolverSessionSourceBuildEnvironmentIdentityBindsExactBuilderAnd
 	mismatched := &PythonResolverSession{descriptor: upstream, upstream: upstream, containerName: "other"}
 	if err := mismatched.BindSourceBuilder(sourceBuilderTestEnvironment(t, firstBuilder, upstream)); err == nil || !strings.Contains(err.Error(), "not created from the prepared source-builder image") {
 		t.Fatalf("mismatched bind error = %v", err)
+	}
+}
+
+func TestPythonResolverSessionRejectsConflictingFactsForInspectedInterpreterPath(t *testing.T) {
+	upstream := sourceBuilderTestImageDescriptor(t, "1")
+	inspected := pythonInspectionFactsV2ForTest("3.13.2", []string{"py3-none-any"}, []string{"py3-none-any"})
+	session := &PythonResolverSession{
+		descriptor: upstream,
+		upstream:   upstream,
+		inspected: map[string]pythonprovider.InterpreterInspectionFactsV2{
+			"/usr/bin/python3": inspected,
+		},
+	}
+	interpreter := sourceBuilderTestInterpreter()
+	interpreter.Facts = pythonprovider.CanonicalInterpreterFactsV2(
+		pythonInspectionFactsV2ForTest("3.13.2", []string{"py3-none-any"}, []string{}),
+	)
+	if _, err := session.SourceBuildEnvironmentDigest(interpreter); err == nil ||
+		!strings.Contains(err.Error(), "interpreter was not inspected in this container") {
+		t.Fatalf("conflicting interpreter facts error = %v", err)
 	}
 }
 

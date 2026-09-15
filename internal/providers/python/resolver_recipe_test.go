@@ -34,7 +34,7 @@ func TestWheelResolverArgvUsesOnePipClosureWithOptionalSourceConstraints(t *test
 		t.Fatal(err)
 	}
 	want := []string{
-		"/usr/bin/python3", "-m", "pip", "--disable-pip-version-check", "wheel", "--no-cache-dir",
+		"/usr/bin/python3", "-I", "-m", "pip", "--disable-pip-version-check", "wheel", "--no-cache-dir",
 		"--progress-bar", "off", "--find-links", ResolverInputDirectory,
 		"--wheel-dir", ResolverOutputDirectory, "--constraint", ResolverSourceConstraintsPath, "demo>=1",
 	}
