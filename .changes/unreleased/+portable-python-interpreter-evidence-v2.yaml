@@ -1,0 +1,2 @@
+kind: Changed
+body: Record complete isolated Python interpreter compatibility facts before resolving packages.

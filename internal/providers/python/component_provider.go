@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	RecipeVersion                = "python-v1"
-	MaterializationRecipeVersion = "python-materialize-v1"
+	RecipeVersion                = "python-v2"
+	MaterializationRecipeVersion = "python-materialize-v2"
 	InstallRoot                  = "/opt/reploy/providers/python"
 	BundleMount                  = "/reploy-bundle"
 )

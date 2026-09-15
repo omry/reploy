@@ -263,6 +263,10 @@ func executeLockedProviderBuildV1(
 	graphCtx, endGraph := buildprofile.Start(ctx, "Execute provider graph")
 	graphOptions := options
 	graphOptions.Context = graphCtx
+	// The ordinary build path deliberately leaves PortablePython unset: its
+	// request loader rejects unresolved runtime portable tools before provider
+	// preparation. The generic portable-tool production caller owns supplying
+	// that projection when it replaces the rejection boundary.
 	graph, err := backend.executeGraph(graphCtx, PreparedPythonGraphExecutionInput{
 		Store: preparation.Store, Plan: preparedBase.Plan, BaseDescriptor: preparedBase.Descriptor,
 		BaseCatalog: preparedBase.Catalog, Sources: preparation.Loaded.Request.Sources,

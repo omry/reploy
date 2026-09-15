@@ -10,7 +10,9 @@ import (
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/buildprogress"
 	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/portabletool"
 	"github.com/omry/reploy/internal/providers"
+	pythonprovider "github.com/omry/reploy/internal/providers/python"
 	"github.com/omry/reploy/internal/providerstore"
 )
 
@@ -112,6 +114,12 @@ func TestExecutePreparedPythonGraphDerivesAllReuseFromCurrentLock(t *testing.T) 
 	fixture := newPreparedPythonGraphReuseFixture(t)
 	descriptor := fixture.lock.Base
 	localOverrides := []PythonLocalOverrideV1{{Distribution: "demo-server", HostDir: "/tmp/demo-server"}}
+	node, found := graphBackendNode(fixture.request.Plan, fixture.request.NodeID)
+	if !found || len(node.Components) != 1 {
+		t.Fatal("Python fixture node is missing")
+	}
+	component := node.Components[0]
+	portablePython := portablePythonExecutionProjectionForTest(component)
 	previousPrepare := preparePythonGraphExecutionBackend
 	previousExecute := executePreparedPythonProviderGraph
 	t.Cleanup(func() {
@@ -142,6 +150,7 @@ func TestExecutePreparedPythonGraphDerivesAllReuseFromCurrentLock(t *testing.T) 
 		Store: fixture.store, Plan: fixture.request.Plan, BaseDescriptor: descriptor,
 		BaseCatalog: fixture.request.EarlierCatalog, Sources: fixture.request.SourceCandidates, SourceWheels: fixture.sourceWheels, CurrentLock: &fixture.lock,
 		LocalOverrides:   localOverrides,
+		PortablePython:   &portablePython,
 		FinalImageConfig: pythonConsumerTestImageConfig(),
 	})
 	if err != nil {
@@ -156,6 +165,10 @@ func TestExecutePreparedPythonGraphDerivesAllReuseFromCurrentLock(t *testing.T) 
 	if !reflect.DeepEqual(configs[fixture.request.NodeID].LocalOverrides, localOverrides) {
 		t.Fatalf("local overrides = %#v", configs[fixture.request.NodeID].LocalOverrides)
 	}
+	bindings := configs[fixture.request.NodeID].PortableToolBindings
+	if bindings == nil || bindings.Component != component || !reflect.DeepEqual(bindings.TestedTags, []string{"py3-none-any"}) {
+		t.Fatalf("portable Python node bindings = %#v", bindings)
+	}
 	if _, found := execution.CachedResolutions[fixture.request.NodeID]; !found {
 		t.Fatalf("cached resolutions = %#v", execution.CachedResolutions)
 	}
@@ -165,6 +178,36 @@ func TestExecutePreparedPythonGraphDerivesAllReuseFromCurrentLock(t *testing.T) 
 	}
 	if execution.BaseImage != wantBase || execution.Validators == nil || execution.PrepareNode == nil || execution.MaterializeNode == nil {
 		t.Fatalf("execution request = %#v", execution)
+	}
+}
+
+func portablePythonExecutionProjectionForTest(component string) pythonprovider.PortableToolPythonProjectionV1 {
+	closureDigest := rendererDigest("a")
+	contractDigest := rendererDigest("b")
+	artifactDigest := rendererDigest("c")
+	tag := "py3-none-any"
+	return pythonprovider.PortableToolPythonProjectionV1{
+		Schema: pythonprovider.PortableToolPythonProjectionSchemaV1,
+		Components: []pythonprovider.PortableToolPythonComponentV1{{
+			Component: component, TestedTags: []string{tag},
+			Bindings: []pythonprovider.PortableToolPythonBindingV1{{
+				Scope: "application:application", Component: component,
+				SelectedClosureDigest: closureDigest, Distribution: "demo-server",
+				Contract: providers.PortableToolRecordReferenceV1{
+					ID: "tool:demo/releases/1.0.0/bindings/python/contract", Digest: contractDigest,
+				},
+				Artifact: providers.PortableToolRecordReferenceV1{
+					ID: "tool:demo/releases/1.0.0/bindings/python/artifacts/linux-amd64", Digest: artifactDigest,
+				},
+				Requirements: []string{"demo-server==1.0"}, SupportedPython: []string{"3.13"}, SupportedTags: []string{tag},
+				CLI: portabletool.ToolExportV1{Name: "demo", Path: "/opt/demo/bin/demo"},
+				Wheel: pythonprovider.PortableToolExactWheelConstraintV1{
+					Platform: "linux/amd64", Filename: "demo_server-1.0-py3-none-any.whl",
+					Distribution: "demo-server", EcosystemVersion: "1.0", Tags: []string{tag},
+					Size: "1", SHA256: artifactDigest, RequiresPython: ">=3.13,<3.14",
+				},
+			}},
+		}},
 	}
 }
 

@@ -14,27 +14,59 @@ import (
 )
 
 const (
-	ProfileFactsSchemaV1        = "python-profile-facts-v1"
-	InterpreterFactsSchemaV1    = "python-interpreter-facts-v1"
+	ProfileFactsSchemaV2        = "python-profile-facts-v2"
 	ConsoleScriptOutputSchemaV1 = "python-console-script-v1"
 )
 
-func CanonicalProfileFactsV1(component string, sources []providers.ResolvedSourceInput) providers.CanonicalProviderData {
+func CanonicalProfileFactsV2(component string, sources []providers.ResolvedSourceInput) providers.CanonicalProviderData {
 	values := make([]any, 0, len(sources))
 	for _, source := range sources {
 		values = append(values, sourceValue(source))
 	}
 	return providers.CanonicalProviderData{
-		Schema: ProfileFactsSchemaV1,
+		Schema: ProfileFactsSchemaV2,
 		Value:  canonical.Object{"component": component, "sources": values},
 	}
 }
 
-func CanonicalInterpreterFactsV1(version string) providers.CanonicalProviderData {
+func CanonicalInterpreterFactsV2(facts InterpreterInspectionFactsV2) providers.CanonicalProviderData {
 	return providers.CanonicalProviderData{
-		Schema: InterpreterFactsSchemaV1,
-		Value:  canonical.Object{"consumer_kind": "python", "version": version},
+		Schema: InterpreterFactsSchemaV2,
+		Value: canonical.Object{
+			"version": facts.Version, "implementation": facts.Implementation, "abi": facts.ABI,
+			"libc": facts.Libc, "libc_major": facts.LibcMajor, "libc_minor": facts.LibcMinor,
+			"tested_tags":     append([]string{}, facts.TestedTags...),
+			"compatible_tags": append([]string{}, facts.CompatibleTags...),
+		},
 	}
+}
+
+// DecodeInterpreterFactsV2 validates and decodes the complete interpreter
+// evidence carried by Python profiles and bundles.
+func DecodeInterpreterFactsV2(data providers.CanonicalProviderData) (InterpreterInspectionFactsV2, error) {
+	if data.Schema != InterpreterFactsSchemaV2 || len(data.Value) != 8 {
+		return InterpreterInspectionFactsV2{}, fmt.Errorf("Python interpreter facts must use schema %q and the exact value shape", InterpreterFactsSchemaV2)
+	}
+	encoded, err := canonical.Marshal(data.Value)
+	if err != nil {
+		return InterpreterInspectionFactsV2{}, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	var facts InterpreterInspectionFactsV2
+	if err := decoder.Decode(&facts); err != nil {
+		return InterpreterInspectionFactsV2{}, fmt.Errorf("decode Python interpreter facts: %w", err)
+	}
+	if err := requireJSONEOF(decoder); err != nil {
+		return InterpreterInspectionFactsV2{}, err
+	}
+	if err := validateInspectionFactsV2(facts, facts.TestedTags); err != nil {
+		return InterpreterInspectionFactsV2{}, err
+	}
+	if err := requireCanonicalData(data, CanonicalInterpreterFactsV2(facts), "Python interpreter facts"); err != nil {
+		return InterpreterInspectionFactsV2{}, err
+	}
+	return facts, nil
 }
 
 func ValidateRequirementProfileV1(profile providers.RequirementProfile) error {
@@ -47,7 +79,7 @@ func ValidateRequirementProfileV1(profile providers.RequirementProfile) error {
 	if err != nil {
 		return fmt.Errorf("Python profile request: %w", err)
 	}
-	component, _, err := decodeProfileFactsV1(profile.Facts)
+	component, _, err := decodeProfileFactsV2(profile.Facts)
 	if err != nil {
 		return err
 	}
@@ -72,36 +104,32 @@ func ValidateRequirementProfileV1(profile providers.RequirementProfile) error {
 	if interpreter.RequirementID != "interpreter" {
 		return fmt.Errorf("Python profile selected executable must be the interpreter")
 	}
-	if interpreter.Facts.Schema != InterpreterFactsSchemaV1 || len(interpreter.Facts.Value) != 2 {
-		return fmt.Errorf("Python interpreter facts must use schema %q and the exact value shape", InterpreterFactsSchemaV1)
+	facts, err := DecodeInterpreterFactsV2(interpreter.Facts)
+	if err != nil {
+		return err
 	}
-	kind, kindOK := interpreter.Facts.Value["consumer_kind"].(string)
-	version, versionOK := interpreter.Facts.Value["version"].(string)
-	if !kindOK || kind != "python" || !versionOK {
-		return fmt.Errorf("Python interpreter facts have invalid fields")
+	if _, valid := parseReleaseVersion(facts.Version); !valid {
+		return fmt.Errorf("Python interpreter version %q is not a normalized release version", facts.Version)
 	}
-	if _, valid := parseReleaseVersion(version); !valid {
-		return fmt.Errorf("Python interpreter version %q is not a normalized release version", version)
-	}
-	return requireCanonicalData(interpreter.Facts, CanonicalInterpreterFactsV1(version), "Python interpreter facts")
+	return nil
 }
 
-// RequirementProfileSelectedSourcesV1 returns the selected local sources
+// RequirementProfileSelectedSourcesV2 returns the selected local sources
 // already bound into a validated Python profile.
-func RequirementProfileSelectedSourcesV1(profile providers.RequirementProfile) ([]providers.ResolvedSourceInput, error) {
+func RequirementProfileSelectedSourcesV2(profile providers.RequirementProfile) ([]providers.ResolvedSourceInput, error) {
 	if err := ValidateRequirementProfileV1(profile); err != nil {
 		return nil, err
 	}
-	_, sources, err := decodeProfileFactsV1(profile.Facts)
+	_, sources, err := decodeProfileFactsV2(profile.Facts)
 	if err != nil {
 		return nil, err
 	}
 	return append([]providers.ResolvedSourceInput{}, sources...), nil
 }
 
-func decodeProfileFactsV1(data providers.CanonicalProviderData) (string, []providers.ResolvedSourceInput, error) {
-	if data.Schema != ProfileFactsSchemaV1 || len(data.Value) != 2 {
-		return "", nil, fmt.Errorf("Python profile facts must use schema %q and the exact value shape", ProfileFactsSchemaV1)
+func decodeProfileFactsV2(data providers.CanonicalProviderData) (string, []providers.ResolvedSourceInput, error) {
+	if data.Schema != ProfileFactsSchemaV2 || len(data.Value) != 2 {
+		return "", nil, fmt.Errorf("Python profile facts must use schema %q and the exact value shape", ProfileFactsSchemaV2)
 	}
 	var wire struct {
 		Component string                          `json:"component"`
@@ -136,7 +164,7 @@ func decodeProfileFactsV1(data providers.CanonicalProviderData) (string, []provi
 			return "", nil, err
 		}
 	}
-	expected := CanonicalProfileFactsV1(wire.Component, wire.Sources)
+	expected := CanonicalProfileFactsV2(wire.Component, wire.Sources)
 	if err := requireCanonicalData(data, expected, "Python profile facts"); err != nil {
 		return "", nil, err
 	}

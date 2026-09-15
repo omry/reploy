@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	pythonMaterializationEnvironment = "python-v1"
+	pythonMaterializationEnvironment = "python-v2"
 	pythonMaterializationUmask       = "0022"
 	pythonScriptMountID              = "script"
 	pythonWheelMountID               = "wheels"
