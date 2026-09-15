@@ -297,6 +297,12 @@ exact dependency order:
 slices, and `PTD-23.1` is a nested container rather than a delivery slice.
 Their explicitly enumerated leaf slices are first-class delivery items: each
 owns one commit and one PR, while a container owns neither.
+The sole authorized review-subdivision exception is `PTD-23.1.4`, which remains
+one delivery item and introduces no additional `PTD-*` identifiers. Its
+contiguous three-PR sequence is PR 149 for shared binding-contract hardening,
+PR 148 for production binding projection, and PR 150 for acceptance
+hardening. `PTD-23.1.4` completes, and `PTD-23.1.5` may activate, only when all
+three PRs retain current-head approval in that order.
 `PTD-21` completes only when `PTD-21.1` through `PTD-21.5` have current-head
 approval; `PTD-22` completes only when `PTD-22.1` through `PTD-22.3` do; and
 `PTD-23.1` completes only when `PTD-23.1.1` through `PTD-23.1.8` do. `PTD-23`
@@ -439,7 +445,7 @@ the campaign until durable authority is updated.
 | PTD-23.1.1 | Canonicalize Python Support Claims | PTD-22.3 | New work; activates only after PTD-22 convergence |
 | PTD-23.1.2 | Prove Requires-Python Coverage | PTD-23.1.1 | New work |
 | PTD-23.1.3 | Project Wheel Platform Policy | PTD-23.1.2 | New work |
-| PTD-23.1.4 | Project Binding Records into Python Provider Inputs | PTD-23.1.3 | New work |
+| PTD-23.1.4 | Project Binding Records into Python Provider Inputs | PTD-23.1.3 | New work; one delivery item reviewed through contiguous PRs 149 (contract hardening), 148 (production projection), and 150 (acceptance hardening); all three require current-head approval |
 | PTD-23.1.5 | Cut Over Python Interpreter Evidence V2 | PTD-23.1.4 | New work; atomic unreleased-format cutover |
 | PTD-23.1.6 | Decide Portable-Wheel Eligibility | PTD-23.1.5 | New work |
 | PTD-23.1.7 | Enforce Portable-Wheel Eligibility in Resolver Paths | PTD-23.1.6 | New work |
