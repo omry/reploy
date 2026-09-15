@@ -451,6 +451,10 @@ func (operations PreparedPythonNodeOperations) materializeLocalOverrides(
 var preparePythonSourceBuilderWorkspaceV1 = PrepareProbeWorkspace
 var openPythonSourceBuilderSessionV1 = OpenPythonResolverSession
 var validatePythonSourceBuilderConsumerV1 = ValidatePythonConsumer
+
+// Source-builder inspection deliberately remains tag-less. Portable binding
+// tested tags describe runtime-wheel compatibility for the application node;
+// they are not compatibility claims for the isolated source-build image.
 var selectPythonSourceBuilderInterpreterV1 = SelectPythonInterpreter
 
 // openSourceBuilderSession prepares and opens the distinct source-build
