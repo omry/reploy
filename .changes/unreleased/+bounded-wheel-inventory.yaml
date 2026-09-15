@@ -1,0 +1,2 @@
+kind: Security
+body: Validate wheel archive structure and fixed resource limits before reading Python metadata or bundled blueprint content, using the same bounded ZIP preflight as archive materialization.
