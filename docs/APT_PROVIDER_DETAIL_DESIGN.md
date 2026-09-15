@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-22
+updated: 2026-09-15
 summary: Implemented local-Docker design for the provider graph, APT/dpkg bundles, generated image layers, and cross-provider executable consumption.
 implements: docs/APT_PROVIDER.md
 ---
@@ -1603,8 +1603,8 @@ Environment names match `[A-Za-z_][A-Za-z0-9_]*`, are unique and sorted, and
 the profile always sets `InheritNone`. `Umask` is four lowercase octal digits.
 Secrets are not transaction fields.
 
-The initial Python transaction uses recipe `python-materialize-v1` and child
-environment `python-v1` with `InheritNone=true`, `Umask=0022`, and no variables.
+The Python transaction uses recipe `python-materialize-v2` and child environment
+`python-v2` with `InheritNone=true`, `Umask=0022`, and no variables.
 It runs as numeric root from `/` with `NetworkPolicy=none`. Its read-only script
 mount is keyed by the provider-owned script digest; its read-only wheel mount is
 keyed by the complete resolved-bundle identity. The selected interpreter is a
@@ -1960,13 +1960,21 @@ commands.
 For the built-in `python3` mapping, the APT provider publishes only the
 singleton candidate path and mapping provenance. The consuming Python node
 validates it as the first step inside its existing bundle-resolver container,
-before network or source work. Its typed adapter uses fixed `-I -S -c` arguments
-and provider-owned code to require a Python implementation and parse its actual
-version, ABI, and platform. A missing path, non-Python executable, or
-unparseable version fails with the mapping identity and an example using
-`exports.python.executable`; the resolver performs no path search or fallback
-discovery. The materializer proves `venv` support by creating the real component
-venv; it does not create a disposable venv first.
+before network or source work. Its typed adapter invokes the selected absolute
+interpreter with fixed `-I -c` arguments under the provider-owned clean
+environment and working directory. System-site initialization remains enabled
+so the probe can import the selected interpreter's installed
+`pip._vendor.packaging.tags`; isolated mode still excludes current-directory,
+user-site, and environment-controlled import shadows. A bounded, sorted, unique
+tested-tag set and selected architecture are passed as validated data, never
+interpolated into the provider-owned probe. The strict V2 result records the
+complete Python version, implementation, ABI, libc identity and release, the
+exact tested tags, and their compatible subset. The probe performs no path
+search, fallback discovery, network access, acquisition, or wheel parsing. A
+missing path, non-Python executable, missing installed pip, or malformed facts
+fails with the mapping identity and an example using
+`exports.python.executable`. The materializer proves `venv` support by creating
+the real component venv; it does not create a disposable venv first.
 
 Python then resolves/builds wheels in a disposable resolver container based on
 that exact upstream prefix. An exact complete Python bundle hit skips the

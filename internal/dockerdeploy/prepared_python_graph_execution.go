@@ -13,6 +13,7 @@ import (
 	"github.com/omry/reploy/internal/buildprogress"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
+	pythonprovider "github.com/omry/reploy/internal/providers/python"
 	"github.com/omry/reploy/internal/providers/registry"
 	"github.com/omry/reploy/internal/providerstore"
 )
@@ -27,6 +28,7 @@ type PreparedPythonGraphExecutionInput struct {
 	Sources          []providers.ResolvedSourceInput
 	SourceWheels     []providerstore.ArtifactDescriptor
 	LocalOverrides   []PythonLocalOverrideV1
+	PortablePython   *pythonprovider.PortableToolPythonProjectionV1
 	SourceBuilder    *SourceBuilderCoordinatorV1
 	CurrentLock      *deploy.BuildLockV1
 	FinalImageConfig providers.ImageConfigPolicy
@@ -62,8 +64,16 @@ func ExecutePreparedPythonGraph(
 		return providers.GraphExecutionResult{}, err
 	}
 	dropSourceBuilderPythonCachedResolutionsV1(input.Plan, input.CurrentLock, reuse.CachedResolutions)
+	bindingsByComponent, err := portablePythonProjectionComponentsV1(input.Plan, input.PortablePython)
+	if err != nil {
+		return providers.GraphExecutionResult{}, err
+	}
 	for id, config := range reuse.NodeConfigs {
 		config.LocalOverrides = append([]PythonLocalOverrideV1{}, input.LocalOverrides...)
+		node, found := graphBackendNode(input.Plan, id)
+		if found && len(node.Components) == 1 {
+			config.PortableToolBindings = bindingsByComponent[node.Components[0]]
+		}
 		config.SourceBuilder = input.SourceBuilder
 		reuse.NodeConfigs[id] = config
 	}
@@ -95,6 +105,41 @@ func ExecutePreparedPythonGraph(
 		Validators:  registry.OwnerValidatorsForNode,
 		PrepareNode: prepareNode, MaterializeNode: materializeNode,
 	})
+}
+
+func portablePythonProjectionComponentsV1(
+	plan providers.ProviderPlanV1,
+	projection *pythonprovider.PortableToolPythonProjectionV1,
+) (map[string]*pythonprovider.PortableToolPythonComponentV1, error) {
+	result := map[string]*pythonprovider.PortableToolPythonComponentV1{}
+	if projection == nil {
+		return result, nil
+	}
+	if _, err := pythonprovider.CanonicalPortableToolPythonProjectionBytesV1(*projection); err != nil {
+		return nil, err
+	}
+	pythonComponents := map[string]struct{}{}
+	for _, node := range plan.Nodes {
+		if node.Provider == blueprint.ComponentTypePython && len(node.Components) == 1 {
+			pythonComponents[node.Components[0]] = struct{}{}
+		}
+	}
+	for _, component := range projection.Components {
+		if _, found := pythonComponents[component.Component]; !found {
+			return nil, fmt.Errorf("portable Python projection component %q has no planned Python node", component.Component)
+		}
+		clone := component
+		clone.TestedTags = append([]string{}, component.TestedTags...)
+		clone.Bindings = append([]pythonprovider.PortableToolPythonBindingV1{}, component.Bindings...)
+		for index := range clone.Bindings {
+			clone.Bindings[index].Requirements = append([]string{}, component.Bindings[index].Requirements...)
+			clone.Bindings[index].SupportedPython = append([]string{}, component.Bindings[index].SupportedPython...)
+			clone.Bindings[index].SupportedTags = append([]string{}, component.Bindings[index].SupportedTags...)
+			clone.Bindings[index].Wheel.Tags = append([]string{}, component.Bindings[index].Wheel.Tags...)
+		}
+		result[component.Component] = &clone
+	}
+	return result, nil
 }
 
 // A source-builder lock proves which portable tools were selected for the

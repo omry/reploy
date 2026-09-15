@@ -12,7 +12,7 @@ import (
 	"github.com/omry/reploy/internal/providerstore"
 )
 
-const materializationScriptLogicalPath = "scripts/python-materialize-v1.sh"
+const materializationScriptLogicalPath = "scripts/python-materialize-v2.sh"
 
 const materializationScriptV1 = `#!/bin/sh
 set -eu

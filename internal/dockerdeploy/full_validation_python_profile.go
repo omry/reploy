@@ -63,26 +63,30 @@ func validatePythonProfileObservation(
 		return providers.ExecutableEvidence{}, fmt.Errorf("validate Python image profile interpreter before execution: %w", err)
 	}
 
-	version, err := session.runPythonInterpreterInspection(ctx, locked.InvocationPath)
+	lockedFacts, err := pythonprovider.DecodeInterpreterFactsV2(locked.Facts)
+	if err != nil {
+		return providers.ExecutableEvidence{}, fmt.Errorf("validate Python image profile interpreter facts: %w", err)
+	}
+	facts, err := session.runPythonInterpreterInspection(ctx, locked.InvocationPath, lockedFacts.TestedTags)
 	if err != nil {
 		return providers.ExecutableEvidence{}, fmt.Errorf(
 			"Python interpreter at %s is not usable; configure an explicit Python interpreter executable path: %w",
 			locked.InvocationPath, err,
 		)
 	}
-	matches, err := pythonprovider.InterpreterVersionSatisfies(requirement.VersionConstraint, version)
+	matches, err := pythonprovider.InterpreterVersionSatisfies(requirement.VersionConstraint, facts.Version)
 	if err != nil {
 		return providers.ExecutableEvidence{}, err
 	}
 	if !matches {
 		return providers.ExecutableEvidence{}, fmt.Errorf(
 			"Python interpreter at %s has version %s, which does not satisfy %q; configure an explicit Python interpreter executable path",
-			locked.InvocationPath, version, requirement.VersionConstraint,
+			locked.InvocationPath, facts.Version, requirement.VersionConstraint,
 		)
 	}
 	fresh, err := ExecutableEvidenceFromProbe(interpreterObservation, ProbeExecutableBinding{
 		Requirement: &requirement, Output: locked.Output,
-		Facts: pythonprovider.CanonicalInterpreterFactsV1(version),
+		Facts: pythonprovider.CanonicalInterpreterFactsV2(facts),
 	})
 	if err != nil {
 		return providers.ExecutableEvidence{}, fmt.Errorf("validate Python image profile interpreter: %w", err)
@@ -90,19 +94,27 @@ func validatePythonProfileObservation(
 	return fresh, nil
 }
 
-func (session *ImageValidationSession) runPythonInterpreterInspection(ctx context.Context, interpreterPath string) (string, error) {
+func (session *ImageValidationSession) runPythonInterpreterInspection(
+	ctx context.Context,
+	interpreterPath string,
+	testedTags []string,
+) (pythonprovider.InterpreterInspectionFactsV2, error) {
 	if session == nil || session.closed {
-		return "", fmt.Errorf("image validation session is not open")
+		return pythonprovider.InterpreterInspectionFactsV2{}, fmt.Errorf("image validation session is not open")
 	}
 	if ctx == nil {
-		return "", fmt.Errorf("image validation Python inspection context is required")
+		return pythonprovider.InterpreterInspectionFactsV2{}, fmt.Errorf("image validation Python inspection context is required")
 	}
 	if err := ctx.Err(); err != nil {
-		return "", fmt.Errorf("run image validation Python inspection: %w", err)
+		return pythonprovider.InterpreterInspectionFactsV2{}, fmt.Errorf("run image validation Python inspection: %w", err)
 	}
-	inspection, err := pythonprovider.InterpreterInspectionArgv(interpreterPath)
+	targetArchitecture, err := pythonInspectionArchitectureV2(session.descriptor.Platform)
 	if err != nil {
-		return "", err
+		return pythonprovider.InterpreterInspectionFactsV2{}, err
+	}
+	inspection, err := pythonprovider.InterpreterInspectionArgv(interpreterPath, testedTags, targetArchitecture)
+	if err != nil {
+		return pythonprovider.InterpreterInspectionFactsV2{}, err
 	}
 	args := []string{
 		"exec", "--user", "0:0", "--workdir", "/", session.containerName,
@@ -116,7 +128,7 @@ func (session *ImageValidationSession) runPythonInterpreterInspection(ctx contex
 	if err := session.runDockerCommand(CommandSpec{Name: "docker", Args: args}, RunOptions{
 		Context: ctx, Stdout: &stdout, Stderr: &stderr,
 	}); err != nil {
-		return "", imageValidationCommandError("Python interpreter inspection", session.descriptor.Platform.Canonical, stderr.String(), err)
+		return pythonprovider.InterpreterInspectionFactsV2{}, imageValidationCommandError("Python interpreter inspection", session.descriptor.Platform.Canonical, stderr.String(), err)
 	}
-	return pythonprovider.ParseInterpreterInspectionOutput(stdout.Bytes())
+	return pythonprovider.ParseInterpreterInspectionOutput(stdout.Bytes(), testedTags)
 }

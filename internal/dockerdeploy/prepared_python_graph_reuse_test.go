@@ -401,7 +401,7 @@ func newPreparedPythonGraphReuseFixtureWithManifest(t *testing.T, sourceManifest
 	interpreter := request.EarlierCatalog[0].Evidence
 	interpreter.RequirementID = "interpreter"
 	interpreter.Terminal.RequirementID = "interpreter"
-	interpreter.Facts = pythonprovider.CanonicalInterpreterFactsV1("3.13.2")
+	interpreter.Facts = pythonInterpreterFactsV2ForTest("3.13.2")
 	resolution, err := providers.ResolveProviderNode(
 		context.Background(), request,
 		pythonprovider.WheelNodeResolver{
