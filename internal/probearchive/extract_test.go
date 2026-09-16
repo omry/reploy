@@ -1,8 +1,10 @@
 package probearchive
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -177,6 +179,85 @@ func TestExtractSessionClientWritesMatchingReleaseExecutable(t *testing.T) {
 	if string(got) != string(want) || result.Platform != "linux/arm64" || result.Path != filepath.Join(workspace, ExtractedSessionClientFileName) || result.Release != testRelease() {
 		t.Fatalf("session client extraction = %#v; content = %q", result, got)
 	}
+}
+
+func TestRuntimeArchiveCallersPreflightCentralRecordMetadata(t *testing.T) {
+	dir := t.TempDir()
+	executable := writeTestFile(t, dir, "reploy", []byte("prefix"), 0o755)
+	if err := Append(executable, testRelease(), testHelpers(t, dir), testSessionClients(t, dir)); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := os.ReadFile(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive = appendCentralRecordExtra(t, archive)
+	if err := os.WriteFile(executable, archive, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(executable); err == nil || !strings.Contains(err.Error(), "central directory") {
+		t.Fatalf("Verify over-limit archive error = %v", err)
+	}
+	workspace := filepath.Join(dir, "probe-workspace")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Extract(context.Background(), executable, "linux/amd64", workspace); err == nil || !strings.Contains(err.Error(), "central directory") {
+		t.Fatalf("Extract over-limit archive error = %v", err)
+	}
+	clientWorkspace := filepath.Join(dir, "client-workspace")
+	if err := os.Mkdir(clientWorkspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ExtractSessionClient(context.Background(), executable, "linux/amd64", clientWorkspace); err == nil || !strings.Contains(err.Error(), "central directory") {
+		t.Fatalf("ExtractSessionClient over-limit archive error = %v", err)
+	}
+	if err := Append(executable, testRelease(), testHelpers(t, dir), testSessionClients(t, dir)); err == nil || !strings.Contains(err.Error(), "central directory") {
+		t.Fatalf("Append over-limit archive error = %v", err)
+	}
+	got, err := os.ReadFile(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, archive) {
+		t.Fatal("Append changed an existing over-limit archive")
+	}
+}
+
+func appendCentralRecordExtra(t *testing.T, archive []byte) []byte {
+	t.Helper()
+	const (
+		eocdSignature          = uint32(0x06054b50)
+		centralHeaderSignature = uint32(0x02014b50)
+		extraPayloadSize       = 4094
+	)
+	eocd := bytes.LastIndex(archive, []byte{'P', 'K', 5, 6})
+	if eocd < 0 || binary.LittleEndian.Uint32(archive[eocd:eocd+4]) != eocdSignature {
+		t.Fatal("runtime archive has no EOCD")
+	}
+	centralOffset := int(binary.LittleEndian.Uint32(archive[eocd+16 : eocd+20]))
+	if centralOffset < 0 || centralOffset+46 > eocd || binary.LittleEndian.Uint32(archive[centralOffset:centralOffset+4]) != centralHeaderSignature {
+		t.Fatal("runtime archive has no central record")
+	}
+	nameSize := int(binary.LittleEndian.Uint16(archive[centralOffset+28 : centralOffset+30]))
+	extraSize := int(binary.LittleEndian.Uint16(archive[centralOffset+30 : centralOffset+32]))
+	extraOffset := centralOffset + 46 + nameSize
+	if extraOffset+extraSize > eocd {
+		t.Fatal("runtime archive central record is truncated")
+	}
+	const fieldID = uint16(0xcafe)
+	extra := make([]byte, 4+extraPayloadSize)
+	binary.LittleEndian.PutUint16(extra[0:2], fieldID)
+	binary.LittleEndian.PutUint16(extra[2:4], extraPayloadSize)
+	result := make([]byte, 0, len(archive)+len(extra))
+	result = append(result, archive[:extraOffset]...)
+	result = append(result, extra...)
+	result = append(result, archive[extraOffset:]...)
+	newEOCD := eocd + len(extra)
+	binary.LittleEndian.PutUint16(result[centralOffset+30:centralOffset+32], uint16(extraSize+len(extra)))
+	directorySize := binary.LittleEndian.Uint32(result[newEOCD+12 : newEOCD+16])
+	binary.LittleEndian.PutUint32(result[newEOCD+12:newEOCD+16], directorySize+uint32(len(extra)))
+	return result
 }
 
 type cancelAfterRead struct {

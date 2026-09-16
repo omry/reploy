@@ -22,7 +22,7 @@ func (materializer *archiveMaterializer) extractZipFile(file *os.File) error {
 	if err != nil {
 		return fmt.Errorf("inspect zip archive: %w", err)
 	}
-	if err := preflightZipCentralDirectory(materializer.ctx, file, info.Size()); err != nil {
+	if err := PreflightZipCentralDirectory(materializer.ctx, file, info.Size()); err != nil {
 		return fmt.Errorf("zip central directory preflight: %w", err)
 	}
 	reader, err := zip.NewReader(file, info.Size())
@@ -32,10 +32,10 @@ func (materializer *archiveMaterializer) extractZipFile(file *os.File) error {
 	return materializer.extractZip(reader)
 }
 
-// preflightZipCentralDirectory bounds ZIP directory parsing before zip.Reader
+// PreflightZipCentralDirectory bounds ZIP directory parsing before zip.Reader
 // can allocate one File per central-directory record. It counts fixed-size
 // central headers instead of trusting the forgeable EOCD record count.
-func preflightZipCentralDirectory(ctx context.Context, file *os.File, size int64) error {
+func PreflightZipCentralDirectory(ctx context.Context, reader io.ReaderAt, size int64) error {
 	const (
 		directoryEndSignature    = uint32(0x06054b50)
 		directory64LocSignature  = uint32(0x07064b50)
@@ -58,7 +58,7 @@ func preflightZipCentralDirectory(ctx context.Context, file *os.File, size int64
 		tailSize = size
 	}
 	tail := make([]byte, int(tailSize))
-	if err := readZipPreflightAt(file, size-tailSize, tail); err != nil {
+	if err := readZipPreflightAt(reader, size-tailSize, tail); err != nil {
 		return err
 	}
 	eocdIndex := -1
@@ -83,7 +83,7 @@ func preflightZipCentralDirectory(ctx context.Context, file *os.File, size int64
 	// These are archive/zip's ZIP64 sentinel values. A missing or invalid
 	// locator is not an error: archive/zip keeps the classic EOCD values.
 	if declaredRecords == 0xffff || directorySize == 0xffff || directoryOffset == 0xffffffff {
-		found, zip64Offset, zip64Records, zip64Size, zip64DirectoryOffset, err := readZip64DirectoryEnd(file, size, eocdOffset, directory64LocLen, directory64LocSignature, directory64EndLen, directory64EndSignature)
+		found, zip64Offset, zip64Records, zip64Size, zip64DirectoryOffset, err := readZip64DirectoryEnd(reader, size, eocdOffset, directory64LocLen, directory64LocSignature, directory64EndLen, directory64EndSignature)
 		if err != nil {
 			return err
 		}
@@ -115,7 +115,7 @@ func preflightZipCentralDirectory(ctx context.Context, file *os.File, size int64
 	// also present at the raw directory offset. Reject that ambiguous case so
 	// the bounded scan below covers the same directory that zip.NewReader uses.
 	if directoryOffset < uint64(directoryStart) {
-		valid, err := zipDirectoryHeaderAt(file, size, int64(directoryOffset))
+		valid, err := zipDirectoryHeaderAt(reader, size, int64(directoryOffset))
 		if err != nil {
 			return err
 		}
@@ -133,7 +133,7 @@ func preflightZipCentralDirectory(ctx context.Context, file *os.File, size int64
 		if remaining < directoryHeaderLen {
 			return zip.ErrFormat
 		}
-		if err := readZipPreflightAt(file, offset, header[:]); err != nil {
+		if err := readZipPreflightAt(reader, offset, header[:]); err != nil {
 			return err
 		}
 		if binary.LittleEndian.Uint32(header[:4]) != directoryHeaderSignature {
@@ -161,7 +161,7 @@ func preflightZipCentralDirectory(ctx context.Context, file *os.File, size int64
 	return nil
 }
 
-func zipDirectoryHeaderAt(file *os.File, size int64, offset int64) (bool, error) {
+func zipDirectoryHeaderAt(reader io.ReaderAt, size int64, offset int64) (bool, error) {
 	const (
 		directoryHeaderLen = 46
 		zip64ExtraID       = 0x0001
@@ -170,7 +170,7 @@ func zipDirectoryHeaderAt(file *os.File, size int64, offset int64) (bool, error)
 		return false, nil
 	}
 	var header [directoryHeaderLen]byte
-	if err := readZipPreflightAt(file, offset, header[:]); err != nil {
+	if err := readZipPreflightAt(reader, offset, header[:]); err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 			return false, nil
 		}
@@ -187,7 +187,7 @@ func zipDirectoryHeaderAt(file *os.File, size int64, offset int64) (bool, error)
 		return false, nil
 	}
 	extra := make([]byte, int(extraSize))
-	if err := readZipPreflightAt(file, offset+directoryHeaderLen+nameSize, extra); err != nil {
+	if err := readZipPreflightAt(reader, offset+directoryHeaderLen+nameSize, extra); err != nil {
 		return false, err
 	}
 	needUncompressedSize := binary.LittleEndian.Uint32(header[24:28]) == 0xffffffff
@@ -221,13 +221,13 @@ func zipDirectoryHeaderAt(file *os.File, size int64, offset int64) (bool, error)
 	return !needCompressedSize && !needHeaderOffset, nil
 }
 
-func readZip64DirectoryEnd(file *os.File, size int64, eocdOffset int64, locatorLen int, locatorSignature uint32, recordLen int, recordSignature uint32) (bool, int64, uint64, uint64, uint64, error) {
+func readZip64DirectoryEnd(reader io.ReaderAt, size int64, eocdOffset int64, locatorLen int, locatorSignature uint32, recordLen int, recordSignature uint32) (bool, int64, uint64, uint64, uint64, error) {
 	if eocdOffset < int64(locatorLen) {
 		return false, 0, 0, 0, 0, nil
 	}
 	var locator [20]byte
 	locatorOffset := eocdOffset - int64(locatorLen)
-	if err := readZipPreflightAt(file, locatorOffset, locator[:]); err != nil {
+	if err := readZipPreflightAt(reader, locatorOffset, locator[:]); err != nil {
 		return false, 0, 0, 0, 0, err
 	}
 	if binary.LittleEndian.Uint32(locator[:4]) != locatorSignature || binary.LittleEndian.Uint32(locator[4:8]) != 0 || binary.LittleEndian.Uint32(locator[16:20]) != 1 {
@@ -238,7 +238,7 @@ func readZip64DirectoryEnd(file *os.File, size int64, eocdOffset int64, locatorL
 		return false, 0, 0, 0, 0, zip.ErrFormat
 	}
 	var record [56]byte
-	if err := readZipPreflightAt(file, int64(zip64Offset), record[:]); err != nil {
+	if err := readZipPreflightAt(reader, int64(zip64Offset), record[:]); err != nil {
 		return false, 0, 0, 0, 0, err
 	}
 	if binary.LittleEndian.Uint32(record[:4]) != recordSignature || binary.LittleEndian.Uint64(record[4:12]) < 44 {
@@ -251,8 +251,8 @@ func readZip64DirectoryEnd(file *os.File, size int64, eocdOffset int64, locatorL
 	return true, int64(zip64Offset), binary.LittleEndian.Uint64(record[32:40]), binary.LittleEndian.Uint64(record[40:48]), binary.LittleEndian.Uint64(record[48:56]), nil
 }
 
-func readZipPreflightAt(file *os.File, offset int64, buffer []byte) error {
-	count, err := file.ReadAt(buffer, offset)
+func readZipPreflightAt(reader io.ReaderAt, offset int64, buffer []byte) error {
+	count, err := reader.ReadAt(buffer, offset)
 	if err != nil {
 		return err
 	}
@@ -325,4 +325,9 @@ func validateZipMetadata(header *zip.FileHeader) error {
 		return fmt.Errorf("zip archive member %q has a malformed extra field", header.Name)
 	}
 	return nil
+}
+
+// ValidateZipMetadata applies the shared ZIP extra-field safety policy.
+func ValidateZipMetadata(header *zip.FileHeader) error {
+	return validateZipMetadata(header)
 }
