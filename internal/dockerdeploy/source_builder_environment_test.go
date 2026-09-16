@@ -4,7 +4,9 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -105,8 +107,8 @@ func TestMaterializeSourceBuilderPortableToolsV1AcquiresThenMaterializesOfflineA
 	stub := &sourceBuilderMaterializationStub{}
 	tools, _ := materializeSourceBuilderJavaForTest(t, stub, "alpha", "beta")
 	defer tools.Cleanup()
-	if !reflect.DeepEqual(stub.order, []string{"acquire", "acquire", "materialize"}) {
-		t.Fatalf("order = %#v, want every acquisition before one materialization of the shared payload", stub.order)
+	if !reflect.DeepEqual(stub.order, []string{"acquire", "materialize"}) {
+		t.Fatalf("order = %#v, want one acquisition before one materialization of the shared payload", stub.order)
 	}
 	wantSHA := canonical.Digest("sha256:e4446ff06a276155697597cc0f1b15da004ff083f4964a35271ecee567177370")
 	for _, request := range stub.acquisitions {
@@ -175,6 +177,119 @@ func TestMaterializeSourceBuilderPortableToolsV1AcquiresThenMaterializesOfflineA
 	}
 	if err := tools.Cleanup(); err != nil {
 		t.Fatalf("second cleanup = %v", err)
+	}
+}
+
+func TestAcquireSourceBuilderPortableToolArtifactsV1BindingWheel(t *testing.T) {
+	previous := acquireSourceBuilderArtifactV1
+	t.Cleanup(func() { acquireSourceBuilderArtifactV1 = previous })
+	const filename = "demo-1.0-py3-none-any.whl"
+	digest := canonical.Digest("sha256:e4446ff06a276155697597cc0f1b15da004ff083f4964a35271ecee567177370")
+	artifact := providers.PortableToolRecordReferenceV1{ID: "tool:demo/releases/1.0/bindings/python/artifacts/linux-amd64", Digest: digest}
+	descriptor := providerstore.ArtifactDescriptor{LogicalPath: "wheels/" + filename, Kind: "wheel", Size: "123", SHA256: digest}
+	source := providers.PortableToolSelectedRecordV1{Reference: providers.PortableToolRecordReferenceV1{ID: "tool:demo/releases/1.0/sources/wheel", Digest: digest}}
+	records := toolcatalog.EmbeddedPortableToolLockRecordSetV1{Artifacts: []toolcatalog.EmbeddedPortableToolArtifactSourceV1{{
+		Scope: "application:demo", Tool: "demo", Artifact: artifact, Descriptor: descriptor, Source: source,
+		Mirrors: []string{"https://example.org/demo.whl"},
+	}}}
+	calls := 0
+	acquireSourceBuilderArtifactV1 = func(_ context.Context, _ providerstore.Store, request providerstore.AcquisitionRequest) (providerstore.AcquisitionResult, error) {
+		calls++
+		if request.Artifact != descriptor || request.Source.ID != source.Reference.ID || request.Source.SHA256 != digest ||
+			!reflect.DeepEqual(request.Source.Mirrors, records.Artifacts[0].Mirrors) || request.Policy != providerstore.DefaultAcquisitionPolicy() {
+			t.Fatalf("binding acquisition request = %#v", request)
+		}
+		return providerstore.AcquisitionResult{Artifact: request.Artifact, Provenance: providerstore.AcquisitionProvenance{
+			Outcome: providerstore.AcquisitionOutcomeCacheHit, SourceID: request.Source.ID,
+		}}, nil
+	}
+	acquired, inputs, err := acquireSourceBuilderPortableToolArtifactsV1(context.Background(), providerstore.Store{}, records)
+	if err != nil || calls != 1 || acquired[artifact] != descriptor || len(inputs) != 1 || inputs[0].Descriptor != descriptor ||
+		inputs[0].Source.Reference != source.Reference || inputs[0].Provenance.Outcome != providerstore.AcquisitionOutcomeCacheHit {
+		t.Fatalf("acquired = %#v, inputs = %#v, calls = %d, err = %v", acquired, inputs, calls, err)
+	}
+}
+
+func TestAcquireSourceBuilderPortableToolArtifactsV1RejectsBindingDescriptorMismatch(t *testing.T) {
+	previous := acquireSourceBuilderArtifactV1
+	t.Cleanup(func() { acquireSourceBuilderArtifactV1 = previous })
+	digest := canonical.Digest("sha256:e4446ff06a276155697597cc0f1b15da004ff083f4964a35271ecee567177370")
+	descriptor := providerstore.ArtifactDescriptor{LogicalPath: "wheels/demo-1.0-py3-none-any.whl", Kind: "wheel", Size: "123", SHA256: digest}
+	records := toolcatalog.EmbeddedPortableToolLockRecordSetV1{Artifacts: []toolcatalog.EmbeddedPortableToolArtifactSourceV1{{
+		Artifact: providers.PortableToolRecordReferenceV1{ID: "binding-wheel", Digest: digest}, Descriptor: descriptor,
+	}}}
+	acquireSourceBuilderArtifactV1 = func(_ context.Context, _ providerstore.Store, request providerstore.AcquisitionRequest) (providerstore.AcquisitionResult, error) {
+		wrong := request.Artifact
+		wrong.Size = "124"
+		return providerstore.AcquisitionResult{Artifact: wrong}, nil
+	}
+	acquired, inputs, err := acquireSourceBuilderPortableToolArtifactsV1(context.Background(), providerstore.Store{}, records)
+	if err == nil || !strings.Contains(err.Error(), "does not match its selected descriptor") || acquired != nil || inputs != nil {
+		t.Fatalf("acquired = %#v, inputs = %#v, err = %v", acquired, inputs, err)
+	}
+}
+
+func TestAcquireSourceBuilderPortableToolArtifactsV1DeduplicatesSharedBindingWheel(t *testing.T) {
+	previous := acquireSourceBuilderArtifactV1
+	t.Cleanup(func() { acquireSourceBuilderArtifactV1 = previous })
+	digest := canonical.Digest("sha256:e4446ff06a276155697597cc0f1b15da004ff083f4964a35271ecee567177370")
+	artifact := providers.PortableToolRecordReferenceV1{ID: "binding-wheel", Digest: digest}
+	descriptor := providerstore.ArtifactDescriptor{LogicalPath: "wheels/demo-1.0-py3-none-any.whl", Kind: "wheel", Size: "123", SHA256: digest}
+	source := providers.PortableToolSelectedRecordV1{Reference: providers.PortableToolRecordReferenceV1{ID: "wheel-source", Digest: digest}}
+	first := toolcatalog.EmbeddedPortableToolArtifactSourceV1{Scope: "application:first", Tool: "demo", Artifact: artifact, Descriptor: descriptor, Source: source, Mirrors: []string{"https://example.org/demo.whl"}}
+	second := first
+	second.Scope = "application:second"
+	records := toolcatalog.EmbeddedPortableToolLockRecordSetV1{Artifacts: []toolcatalog.EmbeddedPortableToolArtifactSourceV1{first, second}}
+	calls := 0
+	acquireSourceBuilderArtifactV1 = func(_ context.Context, _ providerstore.Store, request providerstore.AcquisitionRequest) (providerstore.AcquisitionResult, error) {
+		calls++
+		return providerstore.AcquisitionResult{Artifact: request.Artifact, Provenance: providerstore.AcquisitionProvenance{
+			OperationID: "one-operation", Outcome: providerstore.AcquisitionOutcomeCacheHit, SourceID: request.Source.ID,
+		}}, nil
+	}
+	acquired, inputs, err := acquireSourceBuilderPortableToolArtifactsV1(context.Background(), providerstore.Store{}, records)
+	if err != nil || calls != 1 || len(acquired) != 1 || len(inputs) != 2 ||
+		inputs[0].Scope != first.Scope || inputs[1].Scope != second.Scope ||
+		inputs[0].Provenance.OperationID != "one-operation" || inputs[1].Provenance.OperationID != "one-operation" {
+		t.Fatalf("acquired = %#v, inputs = %#v, calls = %d, err = %v", acquired, inputs, calls, err)
+	}
+	conflicting := second
+	conflicting.Mirrors = []string{"https://example.org/other.whl"}
+	records.Artifacts[1] = conflicting
+	calls = 0
+	if _, _, err := acquireSourceBuilderPortableToolArtifactsV1(context.Background(), providerstore.Store{}, records); err == nil ||
+		!strings.Contains(err.Error(), "conflicting descriptors or sources") || calls != 0 {
+		t.Fatalf("conflicting source error = %v, calls = %d; want pre-acquisition rejection", err, calls)
+	}
+}
+
+func TestAcquireSourceBuilderPortableToolArtifactsV1BindingWheelVerifiedCacheHit(t *testing.T) {
+	content := []byte("cached binding wheel bytes")
+	digest := canonical.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(content)))
+	descriptor := providerstore.ArtifactDescriptor{
+		LogicalPath: "wheels/demo-1.0-py3-none-any.whl", Kind: "wheel", Size: fmt.Sprint(len(content)), SHA256: digest,
+	}
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PublishExpected(context.Background(), descriptor, bytes.NewReader(content)); err != nil {
+		t.Fatal(err)
+	}
+	records := toolcatalog.EmbeddedPortableToolLockRecordSetV1{Artifacts: []toolcatalog.EmbeddedPortableToolArtifactSourceV1{{
+		Scope: "application:demo", Tool: "demo",
+		Artifact: providers.PortableToolRecordReferenceV1{ID: "binding-wheel", Digest: digest}, Descriptor: descriptor,
+		Source:  providers.PortableToolSelectedRecordV1{Reference: providers.PortableToolRecordReferenceV1{ID: "wheel-source", Digest: digest}},
+		Mirrors: []string{"https://127.0.0.1:1/unreachable.whl"},
+	}}}
+	acquired, inputs, err := acquireSourceBuilderPortableToolArtifactsV1(context.Background(), store, records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acquired[records.Artifacts[0].Artifact] != descriptor || len(inputs) != 1 ||
+		inputs[0].Provenance.Outcome != providerstore.AcquisitionOutcomeCacheHit ||
+		inputs[0].Provenance.SourceID != "wheel-source" || len(inputs[0].Provenance.Attempts) != 0 {
+		t.Fatalf("verified cache acquisition = %#v, inputs = %#v", acquired, inputs)
 	}
 }
 

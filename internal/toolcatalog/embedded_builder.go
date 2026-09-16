@@ -2,10 +2,12 @@ package toolcatalog
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 
 	"github.com/aquasecurity/go-version/pkg/semver"
 
+	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
 )
@@ -66,8 +68,8 @@ type EmbeddedPortableToolLockRecordSetV1 struct {
 
 // EmbeddedPortableToolLockRecordsV1 resolves, from the immutable embedded
 // catalog, the release manifest that authorized each selected closure and the
-// artifact-source record mapped to every selected payload. It reads catalog
-// records only; it performs no acquisition.
+// artifact-source record mapped to every selected payload or binding artifact.
+// It reads catalog records only; it performs no acquisition.
 func EmbeddedPortableToolLockRecordsV1(closures []SelectedClosureV1) (EmbeddedPortableToolLockRecordSetV1, error) {
 	catalog := mustLoadEmbeddedCatalogV1()
 	result := EmbeddedPortableToolLockRecordSetV1{
@@ -91,13 +93,23 @@ func EmbeddedPortableToolLockRecordsV1(closures []SelectedClosureV1) (EmbeddedPo
 				Record:    manifestRecord,
 			},
 		})
-		if len(closure.Records.BindingArtifacts) != 0 {
-			return EmbeddedPortableToolLockRecordSetV1{}, fmt.Errorf(
-				"selected closure %d (%s/%s) selects binding artifacts, which the embedded lock-record projection does not acquire yet",
-				index, closure.Scope, closure.Provenance.Tool,
-			)
+		seenArtifacts := make(map[RecordReferenceV1]struct{}, len(closure.Records.BindingArtifacts)+len(closure.Records.Payloads))
+		for _, bindingArtifact := range closure.Records.BindingArtifacts {
+			if _, exists := seenArtifacts[bindingArtifact.Reference]; exists {
+				return EmbeddedPortableToolLockRecordSetV1{}, fmt.Errorf("selected closure %d (%s/%s) repeats artifact %s", index, closure.Scope, closure.Provenance.Tool, bindingArtifact.Reference.ID)
+			}
+			seenArtifacts[bindingArtifact.Reference] = struct{}{}
+			artifact, err := catalog.embeddedBindingArtifactSourceV1(closure, manifest, bindingArtifact)
+			if err != nil {
+				return EmbeddedPortableToolLockRecordSetV1{}, fmt.Errorf("selected closure %d (%s/%s): %w", index, closure.Scope, closure.Provenance.Tool, err)
+			}
+			result.Artifacts = append(result.Artifacts, artifact)
 		}
 		for _, payload := range closure.Records.Payloads {
+			if _, exists := seenArtifacts[payload.Reference]; exists {
+				return EmbeddedPortableToolLockRecordSetV1{}, fmt.Errorf("selected closure %d (%s/%s) repeats artifact %s", index, closure.Scope, closure.Provenance.Tool, payload.Reference.ID)
+			}
+			seenArtifacts[payload.Reference] = struct{}{}
 			artifact, err := catalog.embeddedArtifactSourceV1(closure, manifest, payload)
 			if err != nil {
 				return EmbeddedPortableToolLockRecordSetV1{}, fmt.Errorf("selected closure %d (%s/%s): %w", index, closure.Scope, closure.Provenance.Tool, err)
@@ -131,45 +143,149 @@ func (catalog *CatalogV1) embeddedArtifactSourceV1(
 	manifest *ReleaseManifestV1,
 	payload SelectedPayloadRecordV1,
 ) (EmbeddedPortableToolArtifactSourceV1, error) {
-	for _, mapping := range manifest.ArtifactSources {
-		if mapping.Artifact.ID != payload.Reference.ID || mapping.Artifact.Digest != payload.Reference.Digest {
+	return catalog.embeddedSelectedArtifactSourceV1(
+		closure, manifest, payload.Reference, &payload.Record, PayloadRecordSchemaV1,
+	)
+}
+
+func (catalog *CatalogV1) embeddedBindingArtifactSourceV1(
+	closure *SelectedClosureV1,
+	manifest *ReleaseManifestV1,
+	artifact SelectedBindingArtifactRecordV1,
+) (EmbeddedPortableToolArtifactSourceV1, error) {
+	return catalog.embeddedSelectedArtifactSourceV1(
+		closure, manifest, artifact.Reference, &artifact.Record, BindingArtifactSchemaV1,
+	)
+}
+
+func (catalog *CatalogV1) embeddedSelectedArtifactSourceV1(
+	closure *SelectedClosureV1,
+	manifest *ReleaseManifestV1,
+	artifactReference RecordReferenceV1,
+	artifactValue any,
+	expectedSchema string,
+) (EmbeddedPortableToolArtifactSourceV1, error) {
+	if closure == nil || manifest == nil {
+		return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("embedded artifact source projection requires a closure and release manifest")
+	}
+	loaded, err := catalog.exactRecordV1(artifactReference)
+	if err != nil {
+		return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("selected %s %s: %w", expectedSchema, artifactReference.ID, err)
+	}
+	if loaded.Schema != expectedSchema {
+		return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("selected artifact %s resolves to schema %q, want %q", artifactReference.ID, loaded.Schema, expectedSchema)
+	}
+	selectedDigest, err := canonical.Sum("portable-tool-record", portableToolRecordIdentityV1, artifactValue)
+	if err != nil {
+		return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("selected artifact %s identity: %w", artifactReference.ID, err)
+	}
+	if selectedDigest != artifactReference.Digest || loaded.Digest != artifactReference.Digest {
+		return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("selected artifact %s record does not match its exact reference digest", artifactReference.ID)
+	}
+
+	var (
+		artifactSHA256 canonical.Digest
+		artifactSize   string
+		descriptor     providerstore.ArtifactDescriptor
+	)
+	switch record := artifactValue.(type) {
+	case *BindingArtifactRecordV1:
+		if record.ID != artifactReference.ID {
+			return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("selected binding artifact %s record ID is %q", artifactReference.ID, record.ID)
+		}
+		if record.Filename == "" || path.Base(record.Filename) != record.Filename {
+			return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("selected binding artifact %s filename is not a single basename", artifactReference.ID)
+		}
+		artifactSHA256, artifactSize = record.SHA256, record.Size
+		descriptor = providerstore.ArtifactDescriptor{
+			LogicalPath: "wheels/" + record.Filename,
+			Kind:        "wheel",
+			Size:        record.Size,
+			SHA256:      record.SHA256,
+		}
+	case *PayloadRecordV1:
+		if record.ID != artifactReference.ID {
+			return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("selected payload %s record ID is %q", artifactReference.ID, record.ID)
+		}
+		artifactSHA256, artifactSize = record.SHA256, record.Size
+		descriptor = providerstore.ArtifactDescriptor{
+			LogicalPath: record.LogicalPath,
+			Kind:        record.Kind,
+			Size:        record.Size,
+			SHA256:      record.SHA256,
+		}
+	default:
+		return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("selected artifact %s has unsupported record type %T", artifactReference.ID, artifactValue)
+	}
+	if expectedSchema == BindingArtifactSchemaV1 {
+		binding, ok := artifactValue.(*BindingArtifactRecordV1)
+		if !ok || binding.Filename == "" || descriptor.LogicalPath != "wheels/"+binding.Filename || descriptor.Kind != "wheel" {
+			return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("selected binding artifact %s does not produce an exact wheel descriptor", artifactReference.ID)
+		}
+	}
+	if artifactSize == "" || artifactSHA256 == "" {
+		return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("selected artifact %s has incomplete content identity", artifactReference.ID)
+	}
+	if err := descriptor.Validate(); err != nil {
+		return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("selected artifact %s descriptor: %w", artifactReference.ID, err)
+	}
+
+	var mapping *ArtifactSourceMappingV1
+	for index := range manifest.ArtifactSources {
+		candidate := &manifest.ArtifactSources[index]
+		if candidate.Artifact.ID != artifactReference.ID || candidate.Artifact.Digest != artifactReference.Digest {
 			continue
 		}
-		if mapping.ArtifactSHA256 != payload.Record.SHA256 {
-			return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("manifest source mapping for %s names content %s but the payload records %s", payload.Reference.ID, mapping.ArtifactSHA256, payload.Record.SHA256)
+		if mapping != nil {
+			return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("release manifest %s has duplicate source mappings for artifact %s", manifest.ID, artifactReference.ID)
 		}
-		record, exists := catalog.records[recordKeyV1{ID: mapping.Source.ID, Digest: mapping.Source.Digest}]
-		if !exists {
-			return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("embedded catalog has no source record %s at digest %s", mapping.Source.ID, mapping.Source.Digest)
-		}
-		source, ok := record.Value.(*ArtifactSourceRecordV1)
-		if !ok {
-			return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("catalog record %s is not an artifact source", mapping.Source.ID)
-		}
-		if source.SHA256 != payload.Record.SHA256 {
-			return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("source record %s authorizes content %s, not payload content %s", source.ID, source.SHA256, payload.Record.SHA256)
-		}
-		sourceRecord, err := portableToolRecordEnvelopeV1(source)
-		if err != nil {
-			return EmbeddedPortableToolArtifactSourceV1{}, err
-		}
-		descriptor := providerstore.ArtifactDescriptor{
-			LogicalPath: payload.Record.LogicalPath, Kind: payload.Record.Kind,
-			Size: payload.Record.Size, SHA256: payload.Record.SHA256,
-		}
-		if err := descriptor.Validate(); err != nil {
-			return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("payload %s artifact descriptor: %w", payload.Reference.ID, err)
-		}
-		return EmbeddedPortableToolArtifactSourceV1{
-			Scope: closure.Scope, Tool: closure.Provenance.Tool,
-			Artifact:   providers.PortableToolRecordReferenceV1{ID: payload.Reference.ID, Digest: payload.Reference.Digest},
-			Descriptor: descriptor,
-			Source: providers.PortableToolSelectedRecordV1{
-				Reference: providers.PortableToolRecordReferenceV1{ID: mapping.Source.ID, Digest: mapping.Source.Digest},
-				Record:    sourceRecord,
-			},
-			Mirrors: append([]string{}, source.Mirrors...),
-		}, nil
+		mapping = candidate
 	}
-	return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("release manifest %s maps no source for payload %s", manifest.ID, payload.Reference.ID)
+	if mapping == nil {
+		return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("release manifest %s maps no source for artifact %s", manifest.ID, artifactReference.ID)
+	}
+	if mapping.ArtifactSHA256 != artifactSHA256 {
+		return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("manifest source mapping for %s names content %s but the selected artifact records %s", artifactReference.ID, mapping.ArtifactSHA256, artifactSHA256)
+	}
+
+	sourceRecord, err := catalog.exactRecordV1(mapping.Source)
+	if err != nil {
+		return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("embedded catalog source record %s: %w", mapping.Source.ID, err)
+	}
+	if sourceRecord.Schema != ArtifactSourceRecordSchemaV1 {
+		return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("catalog record %s is not an artifact source", mapping.Source.ID)
+	}
+	source, ok := sourceRecord.Value.(*ArtifactSourceRecordV1)
+	if !ok || source.ID != mapping.Source.ID {
+		return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("catalog record %s is not an artifact source", mapping.Source.ID)
+	}
+	sourceDigest, err := canonical.Sum("portable-tool-record", portableToolRecordIdentityV1, source)
+	if err != nil {
+		return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("source record %s identity: %w", source.ID, err)
+	}
+	if sourceDigest != mapping.Source.Digest || sourceRecord.Digest != mapping.Source.Digest {
+		return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("source record %s does not match its exact reference digest", source.ID)
+	}
+	if source.SHA256 != artifactSHA256 {
+		return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("source record %s authorizes content %s, not selected artifact content %s", source.ID, source.SHA256, artifactSHA256)
+	}
+	if err := providerstore.ValidateArtifactSource(providerstore.ArtifactSource{
+		ID: source.ID, SHA256: source.SHA256, Mirrors: source.Mirrors,
+	}, descriptor); err != nil {
+		return EmbeddedPortableToolArtifactSourceV1{}, fmt.Errorf("source record %s: %w", source.ID, err)
+	}
+	sourceEnvelope, err := portableToolRecordEnvelopeV1(source)
+	if err != nil {
+		return EmbeddedPortableToolArtifactSourceV1{}, err
+	}
+	return EmbeddedPortableToolArtifactSourceV1{
+		Scope: closure.Scope, Tool: closure.Provenance.Tool,
+		Artifact:   providers.PortableToolRecordReferenceV1{ID: artifactReference.ID, Digest: artifactReference.Digest},
+		Descriptor: descriptor,
+		Source: providers.PortableToolSelectedRecordV1{
+			Reference: providers.PortableToolRecordReferenceV1{ID: mapping.Source.ID, Digest: mapping.Source.Digest},
+			Record:    sourceEnvelope,
+		},
+		Mirrors: append([]string{}, source.Mirrors...),
+	}, nil
 }

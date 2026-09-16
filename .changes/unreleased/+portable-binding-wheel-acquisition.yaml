@@ -1,0 +1,2 @@
+kind: Added
+body: Acquire selected portable Python binding wheels through the existing verified artifact store using their manifest-authorized sources and exact wheel descriptors.
