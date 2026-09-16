@@ -3,18 +3,18 @@ artifact: swe-design-review-attestation
 schema_version: 4
 scope_key: 7f593bbf4f634d1f066241317dac65a1993dabfe4bbaae8736c47b71229e995e
 scope: {"kind": "path", "primary_target": "docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md", "repository": ".", "selector": "docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md"}
-review_content_identity_sha256: c8afc553d9b15ca8dfd21f3e921d4a658178f4edf65a17625cea1db85cf2b953
-target_content_identity_sha256: e8f273802ee0d2fc71d43bffde1ffc07b49dd1a70162a18d85e28f67e1eb4422
+review_content_identity_sha256: 25b18cbaa4ab3ed8f6c32fb6b97f9bee6ebbdfa0a8614d0ec4321e3c5b28c2ba
+target_content_identity_sha256: 8894c08c93096ccbb3112efc1a4f69320a524fc247b844ae45f96925424fad28
 baseline_content_identity_sha256: 8614e05b1522bfe076c217e13833e17685541b3b8dce8c5f942e984decb0b70d
-target_documents: [{"path": "docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md", "repository": ".", "sha256": "7a8fe81a6acdedbdd2f86481a6c996b7b59f2f8432997637ed0e366e0011d224"}]
+target_documents: [{"path": "docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md", "repository": ".", "sha256": "92c4776358ec3c9ca7d566a25d91fff91e9dd26372a6cb01acbb76cab838ba53"}]
 baseline_documents: [{"path": "docs/PORTABLE_TOOL_DEFINITION_DESIGN.md", "repository": ".", "sha256": "b14209e832d7dbbcc393028a6c92dd26872e0cbf213bd5c0e276729a70ebce55"}]
 design_dependency_documents: [{"path": "docs/PORTABLE_TOOL_DEFINITION_DESIGN.md", "repository": ".", "sha256": "b14209e832d7dbbcc393028a6c92dd26872e0cbf213bd5c0e276729a70ebce55"}]
 document_repository: "."
 document_path: "docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md"
-document_revision_provenance: "4c4200866985792cb0f79f13090ba7903d1d4d4e"
-document_sha256: 7a8fe81a6acdedbdd2f86481a6c996b7b59f2f8432997637ed0e366e0011d224
+document_revision_provenance: "f4065fca098289f79e08e712eaf3feb577a700a0"
+document_sha256: 92c4776358ec3c9ca7d566a25d91fff91e9dd26372a6cb01acbb76cab838ba53
 verdict: clean
-attested_at: 2026-09-16T12:32:08Z
+attested_at: 2026-09-16T20:23:56Z
 ---
 <!-- swe-design-review-attestation:v4 -->
 
