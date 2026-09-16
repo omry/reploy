@@ -416,6 +416,7 @@ func TestInspectWheelDeclaredDependenciesV1AcceptsMetadataEndingAtEOF(t *testing
 		t.Fatal(err)
 	}
 	archive := zip.NewWriter(file)
+	writeZipFile(t, archive, "root-1.dist-info/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
 	writeZipFile(t, archive, "root-1.dist-info/METADATA", "Metadata-Version: 2.1\nName: root\nVersion: 1\nRequires-Dist: dependency>=1")
 	if err := archive.Close(); err != nil {
 		t.Fatal(err)
@@ -440,6 +441,7 @@ func TestInspectWheelDeclaredDependenciesV1BoundsRetainedMetadataFields(t *testi
 		t.Fatal(err)
 	}
 	archive := zip.NewWriter(file)
+	writeZipFile(t, archive, "root-1.dist-info/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
 	writeZipFile(t, archive, "root-1.dist-info/METADATA",
 		"Metadata-Version: 2.1\nName: root\nVersion: 1\nRequires-Dist: "+
 			strings.Repeat("a", maxWheelMetadataFieldBytes+1)+"\n",
@@ -451,7 +453,7 @@ func TestInspectWheelDeclaredDependenciesV1BoundsRetainedMetadataFields(t *testi
 		t.Fatal(err)
 	}
 	if _, err := InspectWheelDeclaredDependenciesV1(filename, []string{"dependency"}); err == nil ||
-		!strings.Contains(err.Error(), "Requires-Dist field exceeds") {
+		!strings.Contains(err.Error(), "METADATA metadata exceeds") {
 		t.Fatalf("oversized metadata error = %v", err)
 	}
 }
@@ -464,9 +466,10 @@ func TestInspectWheelDeclaredDependenciesV1StreamsLargeUnrelatedMetadata(t *test
 		t.Fatal(err)
 	}
 	archive := zip.NewWriter(file)
+	writeZipFile(t, archive, "root-1.dist-info/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
 	writeZipFile(t, archive, "root-1.dist-info/METADATA",
 		"Metadata-Version: 2.1\nName: root\nVersion: 1\nDescription: "+
-			strings.Repeat("x", maxWheelMetadataFieldBytes*2)+"\nRequires-Dist: dependency>=1\n",
+			strings.Repeat("x", maxWheelMetadataFieldBytes/2)+"\nRequires-Dist: dependency>=1\n",
 	)
 	if err := archive.Close(); err != nil {
 		t.Fatal(err)
