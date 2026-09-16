@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -154,27 +155,9 @@ func MaterializeSourceBuilderPortableToolsV1(
 		return nil, fmt.Errorf("create source-builder materialization root: %w", err)
 	}
 
-	acquired := make(map[providers.PortableToolRecordReferenceV1]providerstore.ArtifactDescriptor, len(records.Artifacts))
-	acquisitions := make([]providers.PortableToolArtifactAcquisitionInputV1, 0, len(records.Artifacts))
-	for _, artifact := range records.Artifacts {
-		acquireCtx, endAcquire := buildprofile.Start(ctx, "Acquire portable tool artifact: "+artifact.Descriptor.LogicalPath)
-		outcome, err := acquireSourceBuilderArtifactV1(acquireCtx, store, providerstore.AcquisitionRequest{
-			Artifact: artifact.Descriptor,
-			Source:   providerstore.ArtifactSource{ID: artifact.Source.Reference.ID, SHA256: artifact.Descriptor.SHA256, Mirrors: artifact.Mirrors},
-			Policy:   providerstore.DefaultAcquisitionPolicy(),
-		})
-		endAcquire(err)
-		if err != nil {
-			return nil, fmt.Errorf("acquire portable tool artifact %s: %w", artifact.Artifact.ID, err)
-		}
-		if outcome.Artifact != artifact.Descriptor {
-			return nil, fmt.Errorf("acquired portable tool artifact %s does not match its selected descriptor", artifact.Artifact.ID)
-		}
-		acquired[artifact.Artifact] = outcome.Artifact
-		acquisitions = append(acquisitions, providers.PortableToolArtifactAcquisitionInputV1{
-			Scope: artifact.Scope, Tool: artifact.Tool, Artifact: artifact.Artifact,
-			Descriptor: outcome.Artifact, Source: artifact.Source, Provenance: outcome.Provenance,
-		})
+	acquired, acquisitions, err := acquireSourceBuilderPortableToolArtifactsV1(ctx, store, records)
+	if err != nil {
+		return nil, err
 	}
 	lock, err := providers.BuildPortableToolLockV1(plan.DAG, records.Releases, acquisitions)
 	if err != nil {
@@ -261,6 +244,56 @@ func MaterializeSourceBuilderPortableToolsV1(
 		return nil, err
 	}
 	return tools, nil
+}
+
+// acquireSourceBuilderPortableToolArtifactsV1 acquires each selected payload
+// or binding wheel once through the common verified store path. The embedded
+// projection has already authorized all manifest and source mappings.
+func acquireSourceBuilderPortableToolArtifactsV1(
+	ctx context.Context,
+	store providerstore.Store,
+	records toolcatalog.EmbeddedPortableToolLockRecordSetV1,
+) (map[providers.PortableToolRecordReferenceV1]providerstore.ArtifactDescriptor, []providers.PortableToolArtifactAcquisitionInputV1, error) {
+	selected := make(map[providers.PortableToolRecordReferenceV1]toolcatalog.EmbeddedPortableToolArtifactSourceV1, len(records.Artifacts))
+	for _, artifact := range records.Artifacts {
+		if previous, exists := selected[artifact.Artifact]; exists {
+			if previous.Descriptor != artifact.Descriptor || previous.Source.Reference != artifact.Source.Reference ||
+				!slices.Equal(previous.Mirrors, artifact.Mirrors) {
+				return nil, nil, fmt.Errorf("selected portable tool artifact %s has conflicting descriptors or sources", artifact.Artifact.ID)
+			}
+			continue
+		}
+		selected[artifact.Artifact] = artifact
+	}
+	acquired := make(map[providers.PortableToolRecordReferenceV1]providerstore.ArtifactDescriptor, len(records.Artifacts))
+	acquisitions := make([]providers.PortableToolArtifactAcquisitionInputV1, 0, len(records.Artifacts))
+	outcomes := make(map[providers.PortableToolRecordReferenceV1]providerstore.AcquisitionResult, len(selected))
+	for _, artifact := range records.Artifacts {
+		outcome, exists := outcomes[artifact.Artifact]
+		if !exists {
+			acquireCtx, endAcquire := buildprofile.Start(ctx, "Acquire portable tool artifact: "+artifact.Descriptor.LogicalPath)
+			var err error
+			outcome, err = acquireSourceBuilderArtifactV1(acquireCtx, store, providerstore.AcquisitionRequest{
+				Artifact: artifact.Descriptor,
+				Source:   providerstore.ArtifactSource{ID: artifact.Source.Reference.ID, SHA256: artifact.Descriptor.SHA256, Mirrors: artifact.Mirrors},
+				Policy:   providerstore.DefaultAcquisitionPolicy(),
+			})
+			endAcquire(err)
+			if err != nil {
+				return nil, nil, fmt.Errorf("acquire portable tool artifact %s: %w", artifact.Artifact.ID, err)
+			}
+			if outcome.Artifact != artifact.Descriptor {
+				return nil, nil, fmt.Errorf("acquired portable tool artifact %s does not match its selected descriptor", artifact.Artifact.ID)
+			}
+			outcomes[artifact.Artifact] = outcome
+		}
+		acquired[artifact.Artifact] = outcome.Artifact
+		acquisitions = append(acquisitions, providers.PortableToolArtifactAcquisitionInputV1{
+			Scope: artifact.Scope, Tool: artifact.Tool, Artifact: artifact.Artifact,
+			Descriptor: outcome.Artifact, Source: artifact.Source, Provenance: outcome.Provenance,
+		})
+	}
+	return acquired, acquisitions, nil
 }
 
 // sourceBuilderClaimDestinationV1 records which artifact owns one image
