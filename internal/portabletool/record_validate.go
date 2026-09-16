@@ -121,10 +121,10 @@ func ValidateBindingWheelTagsForPlatformV1(tags []string, platform string) error
 		return fmt.Errorf("binding artifact platform %q is unsupported", platform)
 	}
 	for _, tag := range tags {
-		segments := strings.Split(tag, "-")
-		if len(segments) != 3 || !portableToolCatalogWheelTagGroupV1(segments[0]) || !portableToolCatalogWheelTagGroupV1(segments[1]) || !portableToolCatalogWheelTagGroupV1(segments[2]) {
+		if err := ValidateWheelTagV1(tag); err != nil {
 			return fmt.Errorf("binding artifact wheel tag %q is invalid", tag)
 		}
+		segments := strings.Split(tag, "-")
 		if _, err := ProjectWheelPlatformForTargetV1(segments[2], platform); err != nil {
 			return fmt.Errorf("binding artifact wheel tag %q is incompatible with platform %q", tag, platform)
 		}
@@ -308,8 +308,7 @@ func validatePortableToolCatalogBindingContractV1(value canonical.Object) error 
 		return err
 	}
 	for _, tag := range record.SupportedTags {
-		segments := strings.Split(tag, "-")
-		if len(segments) != 3 || !portableToolCatalogWheelTagGroupV1(segments[0]) || !portableToolCatalogWheelTagGroupV1(segments[1]) || !portableToolCatalogWheelTagGroupV1(segments[2]) {
+		if err := ValidateWheelTagV1(tag); err != nil {
 			return fmt.Errorf("binding supported tag %q must be a canonical three-part wheel tag", tag)
 		}
 	}
@@ -691,7 +690,11 @@ func ProjectWheelFilenameV1(filename string) (WheelFilenameProjectionV1, error) 
 	for _, pythonTag := range groups[0] {
 		for _, abiTag := range groups[1] {
 			for _, platformTag := range groups[2] {
-				tags = append(tags, pythonTag+"-"+abiTag+"-"+platformTag)
+				tag := pythonTag + "-" + abiTag + "-" + platformTag
+				if err := ValidateWheelTagV1(tag); err != nil {
+					return WheelFilenameProjectionV1{}, fmt.Errorf("wheel filename contains an invalid compatibility tag")
+				}
+				tags = append(tags, tag)
 			}
 		}
 	}
@@ -881,13 +884,20 @@ func portableToolCatalogWheelBuildTagV1(value string) bool {
 	return true
 }
 
-func portableToolCatalogWheelTagGroupV1(value string) bool {
-	for _, component := range strings.Split(value, ".") {
+// ValidateWheelTagV1 validates one exact canonical three-part wheel tag.
+// Compatibility groups in wheel filenames may use dots for expansion, but an
+// expanded tag itself must contain exactly three nonempty components.
+func ValidateWheelTagV1(tag string) error {
+	components := strings.Split(tag, "-")
+	if len(components) != 3 {
+		return fmt.Errorf("wheel tag must contain exactly three hyphen-separated components")
+	}
+	for _, component := range components {
 		if !portableToolCatalogWheelTagComponentV1(component) {
-			return false
+			return fmt.Errorf("wheel tag component %q is not canonical", component)
 		}
 	}
-	return true
+	return nil
 }
 
 func portableToolCatalogWheelTagComponentV1(value string) bool {
