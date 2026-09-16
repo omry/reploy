@@ -304,6 +304,18 @@ func normalizeArchivePath(value string, directory bool) (string, error) {
 	return normalized, nil
 }
 
+// NormalizeArchivePath applies the provider-store archive path policy without
+// touching archive contents. It is shared by bounded archive inventories.
+func NormalizeArchivePath(value string, directory bool) (string, error) {
+	return normalizeArchivePath(value, directory)
+}
+
+// PortableArchiveDestinationKey returns the collision key used for archive
+// destinations after Unicode normalization and case folding.
+func PortableArchiveDestinationKey(value string) string {
+	return portableArchiveDestinationKey(value)
+}
+
 func validateArchivePathComponentBytes(component string) error {
 	if uint64(len(component)) > archiveMaterializationMaxComponentBytes {
 		return fmt.Errorf("path component exceeds %d UTF-8 bytes", archiveMaterializationMaxComponentBytes)

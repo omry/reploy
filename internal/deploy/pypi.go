@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/omry/reploy/internal/wheelinventory"
 )
 
 const defaultPyPIBaseURL = "https://pypi.org"
@@ -263,12 +266,12 @@ func extractPackFromWheel(cacheRoot string, packageName string, version string, 
 	blueprintFilename := filepath.Base(cleanBlueprintPath)
 	targetDir := pypiBlueprintCacheDir(cacheRoot, packageName, version, sha256, cacheDir)
 	targetBlueprintPath := filepath.Join(targetDir, blueprintFilename)
-	reader, err := zip.OpenReader(wheelPath)
+	reader, err := wheelinventory.Open(context.Background(), wheelPath)
 	if err != nil {
 		return "", fmt.Errorf("open wheel archive: %w", err)
 	}
 	defer reader.Close()
-	blueprintContent, blueprintMode, err := readBlueprintFromWheel(reader.File, cleanBlueprintPath)
+	blueprintContent, blueprintMode, err := readBlueprintFromWheel(reader.Files, cleanBlueprintPath)
 	if err != nil {
 		return "", fmt.Errorf(
 			"read blueprint from PyPI wheel %s==%s (%s): %w",
@@ -300,7 +303,7 @@ func extractPackFromWheel(cacheRoot string, packageName string, version string, 
 	if archiveDir != "." {
 		prefix = archiveDir + "/"
 	}
-	for _, file := range reader.File {
+	for _, file := range reader.Files {
 		if file.Name == archiveDir {
 			continue
 		}
@@ -389,12 +392,12 @@ func readBlueprintContentFromWheel(wheelPath string, blueprintPath string) ([]by
 	if err != nil {
 		return nil, err
 	}
-	reader, err := zip.OpenReader(wheelPath)
+	reader, err := wheelinventory.Open(context.Background(), wheelPath)
 	if err != nil {
 		return nil, fmt.Errorf("open wheel archive: %w", err)
 	}
 	defer reader.Close()
-	content, _, err := readBlueprintFromWheel(reader.File, cleanBlueprintPath)
+	content, _, err := readBlueprintFromWheel(reader.Files, cleanBlueprintPath)
 	if err != nil {
 		return nil, err
 	}
