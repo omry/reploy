@@ -1653,8 +1653,16 @@ wheel metadata. Schema v1 declares no independent expected entry-point target,
 so verification does not invent a cross-record equality or dispatch on the
 observed target.
 Require the internal-tag set to have a nonempty exact intersection with the
-filename-derived tags accepted for the selected interpreter by PTD-23.1;
-intersection only with a filename tag rejected by that pre-acquisition gate
+filename-derived tags accepted for the selected interpreter by PTD-23.1, or,
+for a wheel declaring `Root-Is-Purelib: true`, an internal `any`-platform tag
+with the same Python and ABI components as one such eligible filename tag.
+The already eligible filename tag proves those Python and ABI dimensions;
+the internal `any` tag does not require a separate interpreter probe or add
+another filename tag. This case accommodates the catalog-pinned Playwright
+wheel, whose filename is platform-limited but
+whose internal tag is `py3-none-any`; it does not broaden the selected
+platform or claim that its bundled Node.js binary is platform-independent.
+Intersection only with a filename tag rejected by the pre-acquisition gate
 does not count. Do not require equality or subset in either direction, and
 never let internal tags add eligibility or replace the tags supplied to pip.
 Require every declared bundled-component path to identify a nonempty regular
@@ -1665,9 +1673,10 @@ do not infer versions by executing or interpreting bundled content.
 Acceptance: any selected reference, scope, closure, record metadata,
 `Requires-Python`, compatibility tag, console-script, or bundled-path mismatch
 fails before resolver staging. Fixtures cover equal tag sets, overlapping
-unequal compressed sets, fully disjoint internal tags, and overlap only with an
-incompatible filename member. A neutral synthetic wheel exercises the same
-production boundary as the focused Playwright wheel.
+unequal compressed sets, fully disjoint internal tags, overlap only with an
+incompatible filename member, and the bounded internally generic tag case.
+A neutral synthetic wheel exercises the same production boundary as the
+focused Playwright wheel, including its catalog-pinned exact artifact.
 
 Non-goals: acquisition, extraction, installation, dependency resolution,
 component-version inference, or tool-specific verification branches.

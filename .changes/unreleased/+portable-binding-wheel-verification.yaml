@@ -1,0 +1,2 @@
+kind: Added
+body: Verify selected portable Python binding wheels against their contracts, interpreter compatibility, observed metadata, console scripts, and bundled component paths before resolver staging.
