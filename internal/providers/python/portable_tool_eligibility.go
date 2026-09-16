@@ -65,21 +65,46 @@ func validatePortableToolPythonBindingTagsV1(
 	binding PortableToolPythonBindingV1,
 	facts InterpreterInspectionFactsV2,
 ) error {
+	_, err := portableToolPythonBindingEligibleFilenameTagsV1(binding, facts)
+	return err
+}
+
+// portableToolPythonBindingEligibleFilenameTagsV1 returns the exact sorted
+// subset of the selected wheel's expanded filename tags that the selected
+// interpreter accepted. The contract-advertised subset remains the first
+// filter: a compatible tag that was not advertised by the binding cannot make
+// an artifact eligible. The manylinux libc guard is deliberately kept here so
+// the pre-acquisition gate and post-acquisition verifier share one decision.
+func portableToolPythonBindingEligibleFilenameTagsV1(
+	binding PortableToolPythonBindingV1,
+	facts InterpreterInspectionFactsV2,
+) ([]string, error) {
 	lastReason := ""
-	for _, tag := range binding.SupportedTags {
+	eligible := []string{}
+	for _, tag := range binding.Wheel.Tags {
+		if !containsSortedStringV1(binding.SupportedTags, tag) {
+			continue
+		}
 		parts := strings.Split(tag, "-")
+		if len(parts) != 3 {
+			return nil, fmt.Errorf("portable Python binding %q supported tag %q is malformed", binding.Distribution, tag)
+		}
 		platform, err := portabletool.ProjectWheelPlatformV1(parts[2])
 		if err != nil {
-			return fmt.Errorf("portable Python binding %q supported tag %q: %w", binding.Distribution, tag, err)
+			return nil, fmt.Errorf("portable Python binding %q supported tag %q: %w", binding.Distribution, tag, err)
 		}
 		if platform.Kind == portabletool.WheelPlatformManylinuxV1 && (facts.Libc != "glibc" || facts.LibcMajor != "2") {
 			lastReason = fmt.Sprintf("tag %q requires observed glibc major 2", tag)
 			continue
 		}
 		if containsSortedStringV1(facts.CompatibleTags, tag) {
-			return nil
+			eligible = append(eligible, tag)
+			continue
 		}
 		lastReason = fmt.Sprintf("tag %q is absent from the inspected interpreter's compatible tags", tag)
 	}
-	return fmt.Errorf("portable Python binding %q has no eligible wheel tag: %s", binding.Distribution, lastReason)
+	if len(eligible) != 0 {
+		return eligible, nil
+	}
+	return nil, fmt.Errorf("portable Python binding %q has no eligible wheel tag: %s", binding.Distribution, lastReason)
 }
