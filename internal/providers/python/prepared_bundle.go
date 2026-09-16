@@ -1,7 +1,6 @@
 package python
 
 import (
-	"archive/zip"
 	"bufio"
 	"bytes"
 	"context"
@@ -18,7 +17,6 @@ import (
 	"github.com/omry/reploy/internal/canonical"
 	providerapi "github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
-	"github.com/omry/reploy/internal/wheelinventory"
 )
 
 var requirementNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*`)
@@ -84,7 +82,7 @@ func InspectPreparedWheelDistributionsV1(ctx context.Context, dir string) ([]str
 		if !info.Mode().IsRegular() {
 			return nil, fmt.Errorf("Python resolver output %q must be a regular wheel", entry.Name())
 		}
-		wheel, err := inspectWheel(filepath.Join(dir, entry.Name()))
+		wheel, err := inspectWheel(ctx, filepath.Join(dir, entry.Name()))
 		if err != nil {
 			return nil, fmt.Errorf("inspect Python wheel %s: %w", entry.Name(), err)
 		}
@@ -254,7 +252,7 @@ func publishPreparedWheels(
 		if !info.Mode().IsRegular() {
 			return nil, nil, nil, nil, fmt.Errorf("Python resolver output %q must be a regular wheel", entry.Name())
 		}
-		wheel, err := inspectWheel(filepath.Join(dir, entry.Name()))
+		wheel, err := inspectWheel(ctx, filepath.Join(dir, entry.Name()))
 		if err != nil {
 			return nil, nil, nil, nil, fmt.Errorf("inspect Python wheel %s: %w", entry.Name(), err)
 		}
@@ -334,132 +332,42 @@ func pathJoin(parts ...string) string {
 	return strings.Join(parts, "/")
 }
 
-func inspectWheel(filename string) (inspectedWheel, error) {
-	file, err := os.Open(filename)
+func inspectWheel(ctx context.Context, filename string) (inspectedWheel, error) {
+	observed, err := inspectWheelPath(ctx, filename, "wheels/"+filepath.Base(filename), nil)
 	if err != nil {
 		return inspectedWheel{}, err
 	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return inspectedWheel{}, err
+	scripts := make(map[string]string, len(observed.ConsoleScripts))
+	for _, script := range observed.ConsoleScripts {
+		scripts[script.Name] = script.Target
 	}
-	archive, err := wheelinventory.Read(context.Background(), file, info.Size())
-	if err != nil {
-		return inspectedWheel{}, err
-	}
-	metadataFiles := []*zip.File{}
-	wheelFiles := []*zip.File{}
-	entryPointFiles := []*zip.File{}
-	for _, file := range archive.Files {
-		if strings.Count(file.Name, "/") == 1 && strings.HasSuffix(file.Name, ".dist-info/METADATA") {
-			metadataFiles = append(metadataFiles, file)
-		}
-		if strings.Count(file.Name, "/") == 1 && strings.HasSuffix(file.Name, ".dist-info/WHEEL") {
-			wheelFiles = append(wheelFiles, file)
-		}
-		if strings.Count(file.Name, "/") == 1 && strings.HasSuffix(file.Name, ".dist-info/entry_points.txt") {
-			entryPointFiles = append(entryPointFiles, file)
-		}
-	}
-	if len(metadataFiles) != 1 {
-		return inspectedWheel{}, fmt.Errorf("wheel must contain exactly one .dist-info/METADATA file")
-	}
-	if len(wheelFiles) != 1 {
-		return inspectedWheel{}, fmt.Errorf("wheel must contain exactly one .dist-info/WHEEL file")
-	}
-	if len(entryPointFiles) > 1 {
-		return inspectedWheel{}, fmt.Errorf("wheel must contain at most one .dist-info/entry_points.txt file")
-	}
-	distInfo := strings.TrimSuffix(metadataFiles[0].Name, "METADATA")
-	if wheelFiles[0].Name != distInfo+"WHEEL" || len(entryPointFiles) == 1 && entryPointFiles[0].Name != distInfo+"entry_points.txt" {
-		return inspectedWheel{}, fmt.Errorf("wheel metadata files must belong to the same .dist-info directory")
-	}
-	name, version, err := readWheelMetadata(metadataFiles[0])
-	if err != nil {
-		return inspectedWheel{}, err
-	}
-	normalized := NormalizeDistributionName(name)
-	filenameRequirement, ok := WheelFilenameRequirement(filepath.Base(filename))
-	if !ok {
-		return inspectedWheel{}, fmt.Errorf("invalid wheel filename")
-	}
-	wheelName, wheelVersion, _ := strings.Cut(filenameRequirement, "==")
-	if wheelName != normalized || wheelVersion != version {
-		return inspectedWheel{}, fmt.Errorf("wheel filename identifies %s==%s but metadata identifies %s==%s", wheelName, wheelVersion, normalized, version)
-	}
-	hash := sha256.New()
-	if _, err := io.Copy(hash, io.NewSectionReader(file, 0, info.Size())); err != nil {
-		return inspectedWheel{}, err
-	}
-	digest := fmt.Sprintf("%x", hash.Sum(nil))
-	tags, err := readWheelTags(wheelFiles[0])
-	if err != nil {
-		return inspectedWheel{}, err
-	}
-	scripts := map[string]string{}
-	if len(entryPointFiles) == 1 {
-		scripts, err = readConsoleScripts(entryPointFiles[0])
-		if err != nil {
-			return inspectedWheel{}, err
-		}
-	}
-	return inspectedWheel{
-		Distribution: normalized, Version: version, Filename: filepath.Base(filename), SHA256: digest,
-		Tags: tags, ConsoleScripts: scripts,
-	}, nil
+	return inspectedWheel{Distribution: observed.Distribution, Version: observed.Version,
+		Filename: observed.Filename, SHA256: strings.TrimPrefix(string(observed.Artifact.SHA256), "sha256:"),
+		Tags: observed.InternalTags, ConsoleScripts: scripts}, nil
 }
 
-func readWheelMetadata(file *zip.File) (string, string, error) {
-	reader, err := file.Open()
-	if err != nil {
-		return "", "", err
-	}
-	defer reader.Close()
-	headers, err := readSelectedWheelMetadata(reader, nil)
-	if err != nil {
-		return "", "", err
-	}
-	name := headers.Name
-	version := headers.Version
-	if name == "" || version == "" {
-		return "", "", fmt.Errorf("wheel metadata requires Name and Version")
-	}
-	return name, version, nil
-}
-
-// InspectWheelDeclaredDependenciesV1 returns the normalized Requires-Dist names
-// from an already verified wheel that are also present in resolvedDistributions.
-// It does not evaluate environment markers and cannot request installation; new
-// direct dependencies belong in the provider request.
+// InspectWheelDeclaredDependenciesV1 reads the shared verified wheel inspection
+// and returns only dependency names present in the resolved distribution set.
 func InspectWheelDeclaredDependenciesV1(filename string, resolvedDistributions []string) ([]string, error) {
-	file, err := os.Open(filename)
+	observed, err := inspectWheelPath(context.Background(), filename, "wheels/"+filepath.Base(filename), nil)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, err
-	}
-	return InspectWheelDeclaredDependenciesReaderV1(file, info.Size(), resolvedDistributions)
+	return selectedWheelDependencies(observed.DeclaredDependencies, resolvedDistributions)
 }
 
-// InspectWheelDeclaredDependenciesReaderV1 is the descriptor-stable form used
-// for verified provider-store artifacts. The caller owns reader and must keep
-// it open through the call.
-func InspectWheelDeclaredDependenciesReaderV1(
-	archiveReader io.ReaderAt,
-	size int64,
-	resolvedDistributions []string,
-) ([]string, error) {
-	if archiveReader == nil {
-		return nil, fmt.Errorf("inspect wheel dependencies requires a reader")
+// InspectWheelDeclaredDependenciesReaderV1 inspects the exact descriptor-bound
+// wheel. The caller owns reader and keeps it open through the call.
+func InspectWheelDeclaredDependenciesReaderV1(reader io.ReaderAt, size int64, descriptor providerstore.ArtifactDescriptor, resolvedDistributions []string) ([]string, error) {
+	observed, err := InspectWheelReaderV1(context.Background(), reader, size, filepath.Base(descriptor.LogicalPath), descriptor)
+	if err != nil {
+		return nil, err
 	}
-	if size < 0 {
-		return nil, fmt.Errorf("inspect wheel dependencies requires a nonnegative size")
-	}
-	allowed := make(map[string]struct{}, len(resolvedDistributions))
+	return selectedWheelDependencies(observed.DeclaredDependencies, resolvedDistributions)
+}
+
+func selectedWheelDependencies(dependencies, resolvedDistributions []string) ([]string, error) {
+	allowed := make(map[string]bool, len(resolvedDistributions))
 	for index, distribution := range resolvedDistributions {
 		if distribution == "" || NormalizeDistributionName(distribution) != distribution {
 			return nil, fmt.Errorf("resolved Python distribution %d is not normalized", index)
@@ -467,50 +375,14 @@ func InspectWheelDeclaredDependenciesReaderV1(
 		if index > 0 && resolvedDistributions[index-1] >= distribution {
 			return nil, fmt.Errorf("resolved Python distributions must be unique and sorted")
 		}
-		allowed[distribution] = struct{}{}
+		allowed[distribution] = true
 	}
-	archive, err := wheelinventory.Read(context.Background(), archiveReader, size)
-	if err != nil {
-		return nil, err
-	}
-	var metadata *zip.File
-	for _, file := range archive.Files {
-		if strings.Count(file.Name, "/") == 1 && strings.HasSuffix(file.Name, ".dist-info/METADATA") {
-			if metadata != nil {
-				return nil, fmt.Errorf("wheel must contain exactly one .dist-info/METADATA file")
-			}
-			metadata = file
-		}
-	}
-	if metadata == nil {
-		return nil, fmt.Errorf("wheel must contain exactly one .dist-info/METADATA file")
-	}
-	reader, err := metadata.Open()
-	if err != nil {
-		return nil, err
-	}
-	defer reader.Close()
-	seen := map[string]struct{}{}
 	result := []string{}
-	err = readWheelMetadataFields(reader, func(requirement string) error {
-		distribution, err := RequirementDistributionName(requirement)
-		if err != nil {
-			return fmt.Errorf("wheel Requires-Dist %q: %w", requirement, err)
+	for _, name := range dependencies {
+		if allowed[name] {
+			result = append(result, name)
 		}
-		if _, present := allowed[distribution]; !present {
-			return nil
-		}
-		if _, found := seen[distribution]; found {
-			return nil
-		}
-		seen[distribution] = struct{}{}
-		result = append(result, distribution)
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
-	sort.Strings(result)
 	return result, nil
 }
 
@@ -519,39 +391,35 @@ type selectedWheelMetadata struct {
 	Version string
 }
 
-// readSelectedWheelMetadata parses only the fields Reploy consumes. Unknown
-// fields are streamed and discarded, so a large metadata description cannot
-// cause memory use proportional to the complete METADATA file.
-func readSelectedWheelMetadata(reader io.Reader, onRequirement func(string) error) (selectedWheelMetadata, error) {
-	return readSelectedCoreMetadata(reader, "wheel metadata", onRequirement)
+func readSelectedCoreMetadata(reader io.Reader, subject string, onRequirement func(string) error) (selectedWheelMetadata, error) {
+	var identity selectedWheelMetadata
+	seen := map[string]bool{}
+	err := readMetadataFields(reader, subject, func(name string) bool {
+		return name == "name" || name == "version" || name == "requires-dist" && onRequirement != nil
+	}, func(name, value string) error {
+		if name != "requires-dist" && seen[name] {
+			return fmt.Errorf("%s contains duplicate %s fields", subject, canonicalWheelMetadataFieldName(name))
+		}
+		seen[name] = true
+		switch name {
+		case "name":
+			identity.Name = value
+		case "version":
+			identity.Version = value
+		case "requires-dist":
+			return onRequirement(value)
+		}
+		return nil
+	})
+	return identity, err
 }
 
-func readSelectedCoreMetadata(
-	reader io.Reader,
-	subject string,
-	onRequirement func(string) error,
-) (selectedWheelMetadata, error) {
-	var result selectedWheelMetadata
-	err := readCoreMetadataFieldsWithIdentity(reader, subject, &result, onRequirement)
-	return result, err
-}
-
-func readWheelMetadataFields(reader io.Reader, onRequirement func(string) error) error {
-	return readCoreMetadataFieldsWithIdentity(reader, "wheel metadata", nil, onRequirement)
-}
-
-func readCoreMetadataFieldsWithIdentity(
-	reader io.Reader,
-	subject string,
-	identity *selectedWheelMetadata,
-	onRequirement func(string) error,
-) error {
+// readMetadataFields streams unknown fields without retaining their values.
+func readMetadataFields(reader io.Reader, subject string, selected func(string) bool, onField func(string, string) error) error {
 	buffered := bufio.NewReader(reader)
 	currentName := ""
 	currentValue := []byte(nil)
 	currentSelected := false
-	seenName := false
-	seenVersion := false
 
 	flush := func() error {
 		if currentName == "" {
@@ -563,30 +431,10 @@ func readCoreMetadataFieldsWithIdentity(
 			return nil
 		}
 		value := string(bytes.TrimSpace(currentValue))
-		switch currentName {
-		case "name":
-			if seenName {
-				return fmt.Errorf("%s contains duplicate Name fields", subject)
-			}
-			seenName = true
-			if identity != nil {
-				identity.Name = value
-			}
-		case "version":
-			if seenVersion {
-				return fmt.Errorf("%s contains duplicate Version fields", subject)
-			}
-			seenVersion = true
-			if identity != nil {
-				identity.Version = value
-			}
-		case "requires-dist":
-			if onRequirement != nil {
-				if err := onRequirement(value); err != nil {
-					return err
-				}
-			}
+		if err := onField(currentName, value); err != nil {
+			return err
 		}
+
 		currentName = ""
 		currentValue = nil
 		currentSelected = false
@@ -665,8 +513,7 @@ func readCoreMetadataFieldsWithIdentity(
 						return fmt.Errorf("%s contains invalid field name %q", subject, name)
 					}
 					currentName = strings.ToLower(string(name))
-					currentSelected = identity != nil && (currentName == "name" || currentName == "version") ||
-						onRequirement != nil && currentName == "requires-dist"
+					currentSelected = selected(currentName)
 					foundColon = true
 					if err := appendValue(fragment[colon+1:]); err != nil {
 						return err
@@ -717,69 +564,6 @@ func canonicalWheelMetadataFieldName(name string) string {
 	default:
 		return name
 	}
-}
-
-func readWheelTags(file *zip.File) ([]string, error) {
-	reader, err := file.Open()
-	if err != nil {
-		return nil, err
-	}
-	defer reader.Close()
-	seen := map[string]bool{}
-	tags := []string{}
-	scanner := bufio.NewScanner(reader)
-	for scanner.Scan() {
-		if value, ok := strings.CutPrefix(scanner.Text(), "Tag:"); ok {
-			tag := strings.TrimSpace(value)
-			if tag == "" {
-				return nil, fmt.Errorf("wheel contains an empty compatibility tag")
-			}
-			if !seen[tag] {
-				seen[tag] = true
-				tags = append(tags, tag)
-			}
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	if len(tags) == 0 {
-		return nil, fmt.Errorf("wheel metadata contains no compatibility tags")
-	}
-	sort.Strings(tags)
-	return tags, nil
-}
-
-func readConsoleScripts(file *zip.File) (map[string]string, error) {
-	reader, err := file.Open()
-	if err != nil {
-		return nil, err
-	}
-	defer reader.Close()
-	scripts := map[string]string{}
-	inConsoleScripts := false
-	scanner := bufio.NewScanner(reader)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			inConsoleScripts = line == "[console_scripts]"
-			continue
-		}
-		if !inConsoleScripts || line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		name, target, ok := strings.Cut(line, "=")
-		name = strings.TrimSpace(name)
-		target = strings.TrimSpace(target)
-		if !ok || name == "" || target == "" || strings.ContainsAny(name, `/\`) {
-			return nil, fmt.Errorf("invalid console script entry %q", line)
-		}
-		if _, duplicate := scripts[name]; duplicate {
-			return nil, fmt.Errorf("duplicate console script entry %q", name)
-		}
-		scripts[name] = target
-	}
-	return scripts, scanner.Err()
 }
 
 func validateCanonicalRequestedDistributions(request PythonProviderRequestV1, artifacts map[string]inspectedWheel) error {
