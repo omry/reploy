@@ -2,14 +2,12 @@ package python
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path"
-	"path/filepath"
 	"reflect"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
@@ -49,56 +47,27 @@ type SourceMetadataV2 struct {
 // DescribeSourceWheelFileV1 reads normal wheel metadata and computes the
 // descriptor that must be used to publish the same bytes.
 func DescribeSourceWheelFileV1(filename string, logicalPath string) (providerstore.ArtifactDescriptor, SourceWheelMetadataV1, error) {
-	info, err := os.Lstat(filename)
+	observed, err := inspectWheelPath(context.Background(), filename, logicalPath, nil)
 	if err != nil {
 		return providerstore.ArtifactDescriptor{}, SourceWheelMetadataV1{}, err
 	}
-	if !info.Mode().IsRegular() {
-		return providerstore.ArtifactDescriptor{}, SourceWheelMetadataV1{}, fmt.Errorf("Python source wheel %q must be a regular file", filepath.Base(filename))
-	}
-	wheel, err := inspectWheel(filename)
-	if err != nil {
-		return providerstore.ArtifactDescriptor{}, SourceWheelMetadataV1{}, err
-	}
-	descriptor := providerstore.ArtifactDescriptor{
-		LogicalPath: logicalPath,
-		Kind:        "wheel",
-		Size:        strconv.FormatInt(info.Size(), 10),
-		SHA256:      canonical.Digest("sha256:" + wheel.SHA256),
-	}
-	if err := descriptor.Validate(); err != nil {
-		return providerstore.ArtifactDescriptor{}, SourceWheelMetadataV1{}, fmt.Errorf("Python source wheel descriptor: %w", err)
-	}
-	if path.Base(descriptor.LogicalPath) != filepath.Base(filename) {
-		return providerstore.ArtifactDescriptor{}, SourceWheelMetadataV1{}, fmt.Errorf("Python source wheel descriptor does not identify %q", filepath.Base(filename))
-	}
-	metadata := SourceWheelMetadataV1{
-		Distribution: wheel.Distribution, Version: wheel.Version, Tags: append([]string{}, wheel.Tags...),
-	}
+	metadata := SourceWheelMetadataV1{Distribution: observed.Distribution, Version: observed.Version, Tags: observed.InternalTags}
 	if err := validateSourceWheelMetadataV1(metadata); err != nil {
 		return providerstore.ArtifactDescriptor{}, SourceWheelMetadataV1{}, err
 	}
-	return descriptor, metadata, nil
+	return observed.Artifact, metadata, nil
 }
 
-// InspectSourceWheelFileV1 reads normal wheel metadata and binds it to the
-// supplied artifact descriptor before that wheel is offered to pip.
+// InspectSourceWheelFileV1 verifies the supplied descriptor before parsing any
+// metadata from the same open file.
 func InspectSourceWheelFileV1(filename string, descriptor providerstore.ArtifactDescriptor) (SourceWheelMetadataV1, error) {
-	if err := descriptor.Validate(); err != nil {
-		return SourceWheelMetadataV1{}, fmt.Errorf("Python source wheel descriptor: %w", err)
-	}
-	if descriptor.Kind != "wheel" || path.Base(descriptor.LogicalPath) != filepath.Base(filename) {
-		return SourceWheelMetadataV1{}, fmt.Errorf("Python source wheel descriptor does not identify %q", filepath.Base(filename))
-	}
-	observed, metadata, err := DescribeSourceWheelFileV1(filename, descriptor.LogicalPath)
+	observed, err := inspectWheelPath(context.Background(), filename, descriptor.LogicalPath, &descriptor)
 	if err != nil {
 		return SourceWheelMetadataV1{}, err
 	}
-	if descriptor.SHA256 != observed.SHA256 {
-		return SourceWheelMetadataV1{}, fmt.Errorf("Python source wheel %q digest does not match its descriptor", filepath.Base(filename))
-	}
-	if descriptor.Size != observed.Size {
-		return SourceWheelMetadataV1{}, fmt.Errorf("Python source wheel %q size does not match its descriptor", filepath.Base(filename))
+	metadata := SourceWheelMetadataV1{Distribution: observed.Distribution, Version: observed.Version, Tags: observed.InternalTags}
+	if err := validateSourceWheelMetadataV1(metadata); err != nil {
+		return SourceWheelMetadataV1{}, err
 	}
 	return metadata, nil
 }

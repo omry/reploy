@@ -1,0 +1,2 @@
+kind: Security
+body: Verify wheel descriptors before reading bounded metadata, and consistently validate wheel identity, tags, and console scripts across source and prepared Python wheels.
