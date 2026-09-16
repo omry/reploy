@@ -338,7 +338,7 @@ func DirectPythonDependenciesFromBuildLock(store providerstore.Store, lock deplo
 			var inspectErr error
 			if infoErr == nil {
 				dependencies, inspectErr = pythonprovider.InspectWheelDeclaredDependenciesReaderV1(
-					file, info.Size(), resolvedDistributions,
+					file, info.Size(), artifact, resolvedDistributions,
 				)
 			}
 			verifyErr := providerstore.VerifyOpenArtifact(file, artifact)
