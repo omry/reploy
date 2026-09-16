@@ -287,7 +287,7 @@ func TestValidatePortableToolLockedCatalogRecordsV1RejectsIncompleteSelectedReco
 	}
 }
 
-func TestBuildPortableToolLockV1AuthorizesSelectedArtifactsByContentGroup(t *testing.T) {
+func TestBuildPortableToolLockV1RejectsSourceMappedOnlyToAnotherSelectedArtifact(t *testing.T) {
 	dag, _, inputs := portableToolLockFixtureV1(t)
 	plan := clonePortableToolPlanForPortableToolDAGV1(dag.PortableToolPlan)
 	payload := &plan.Tools[0].Responsibilities.Payloads[0]
@@ -306,14 +306,11 @@ func TestBuildPortableToolLockV1AuthorizesSelectedArtifactsByContentGroup(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	lock, err := BuildPortableToolLockV1(groupedDAG, []PortableToolReleaseManifestInputV1{{
+	_, err = BuildPortableToolLockV1(groupedDAG, []PortableToolReleaseManifestInputV1{{
 		Scope: "application:demo", Tool: "demo", Manifest: manifest,
 	}}, inputs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(lock.Acquisitions) != 2 || lock.Acquisitions[0].Descriptor.SHA256 != lock.Acquisitions[1].Descriptor.SHA256 {
-		t.Fatalf("content-group acquisitions = %#v", lock.Acquisitions)
+	if err == nil || !strings.Contains(err.Error(), "release manifest must authorize the selected content and source record once") {
+		t.Fatalf("lock error = %v, want exact selected-artifact authorization rejection", err)
 	}
 }
 
@@ -494,6 +491,35 @@ func portableToolLockFixtureV1(t *testing.T) (PortableToolProviderDAGV1, []Porta
 		t.Fatal(err)
 	}
 	return dag, []PortableToolReleaseManifestInputV1{{Scope: "application:demo", Tool: "demo", Manifest: manifest}}, inputs
+}
+
+func TestPortableToolManifestSourceAuthorizationRequiresExactArtifactReference(t *testing.T) {
+	artifactA := PortableToolRecordReferenceV1{ID: "tool:demo/releases/1.0.0/bindings/python/artifacts/a", Digest: portableToolTestDigest}
+	artifactB := PortableToolRecordReferenceV1{ID: "tool:demo/releases/1.0.0/bindings/python/artifacts/b", Digest: portableToolTestDigest}
+	source := PortableToolRecordReferenceV1{ID: "tool:demo/releases/1.0.0/revisions/1/sources/wheel", Digest: portableToolTestDigest}
+	descriptor := providerstore.ArtifactDescriptor{LogicalPath: "wheels/demo.whl", Kind: "wheel", Size: "10", SHA256: portableToolTestDigest}
+	manifest := PortableToolSelectedRecordV1{Record: CanonicalProviderData{Value: canonical.Object{
+		"artifact_sources": []any{canonical.Object{
+			"artifact":        canonical.Object{"id": artifactB.ID, "digest": string(artifactB.Digest)},
+			"artifact_sha256": string(descriptor.SHA256),
+			"source":          canonical.Object{"id": source.ID, "digest": string(source.Digest)},
+		}},
+	}}}
+	acquisition := PortableToolArtifactAcquisitionLockV1{
+		Scope: "application:demo", Tool: "demo", Artifact: artifactA,
+		Descriptor: descriptor, Source: PortableToolSelectedRecordV1{Reference: source},
+	}
+	selected := map[string]portableToolLockArtifactV1{}
+	for _, reference := range []PortableToolRecordReferenceV1{artifactA, artifactB} {
+		selected[portableToolAcquisitionKeyV1(acquisition.Scope, acquisition.Tool, reference)] = portableToolLockArtifactV1{
+			artifact: PortableToolSelectedRecordV1{Reference: reference, Record: CanonicalProviderData{Value: canonical.Object{
+				"sha256": string(descriptor.SHA256), "size": descriptor.Size,
+			}}},
+		}
+	}
+	if err := validatePortableToolManifestSourceAuthorizationV1(manifest, acquisition, selected); err == nil || !strings.Contains(err.Error(), "authorize the selected content") {
+		t.Fatalf("authorization error = %v, want exact artifact-reference rejection", err)
+	}
 }
 
 func portableToolLockManifestV1(tool, version, revision string, inputs []PortableToolArtifactAcquisitionInputV1, profile PortableToolRecordReferenceV1) PortableToolSelectedRecordV1 {

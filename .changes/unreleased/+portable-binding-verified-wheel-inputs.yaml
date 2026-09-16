@@ -1,0 +1,2 @@
+kind: Added
+body: Produce replay-stable verified-wheel inputs for selected portable Python bindings, with exact store reopening and offline locked replay.

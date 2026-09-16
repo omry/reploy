@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"bytes"
 	"fmt"
 	"path"
 	"sort"
@@ -52,6 +53,55 @@ type PortableToolArtifactAcquisitionInputV1 struct {
 	Descriptor providerstore.ArtifactDescriptor
 	Source     PortableToolSelectedRecordV1
 	Provenance providerstore.AcquisitionProvenance
+}
+
+// ValidatePortableToolArtifactSourceAuthorizationV1 checks the same release,
+// artifact, and source mapping used by lock validation before an artifact may
+// be acquired. It does not depend on an acquisition outcome.
+func ValidatePortableToolArtifactSourceAuthorizationV1(
+	entry PortableToolPlanEntryV1,
+	artifact PortableToolSelectedRecordV1,
+	source PortableToolSelectedRecordV1,
+	manifest PortableToolSelectedRecordV1,
+	descriptor providerstore.ArtifactDescriptor,
+) error {
+	plan := PortableToolPlanV1{Schema: PortableToolPlanSchemaV1, Tools: []PortableToolPlanEntryV1{entry}}
+	if err := ValidatePortableToolPlanV1(plan); err != nil {
+		return fmt.Errorf("selected plan entry: %w", err)
+	}
+	release := PortableToolReleaseManifestLockV1{Scope: entry.Scope, Tool: entry.Provenance.Tool, Manifest: manifest}
+	if err := validatePortableToolReleaseManifestLockV1(release, entry); err != nil {
+		return fmt.Errorf("selected release manifest: %w", err)
+	}
+	selected := portableToolLockArtifactsV1(plan)
+	key := portableToolAcquisitionKeyV1(entry.Scope, entry.Provenance.Tool, artifact.Reference)
+	member, found := selected[key]
+	if !found || member.artifact.Reference != artifact.Reference {
+		return fmt.Errorf("artifact is not selected by the plan entry")
+	}
+	selectedBytes, err := canonical.Marshal(member.artifact)
+	if err != nil {
+		return err
+	}
+	artifactBytes, err := canonical.Marshal(artifact)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(selectedBytes, artifactBytes) {
+		return fmt.Errorf("artifact record does not match the selected plan entry")
+	}
+	historical, err := portableToolSourceStringArrayV1(source, "provenance")
+	if err != nil {
+		return err
+	}
+	acquisition := PortableToolArtifactAcquisitionLockV1{
+		Scope: entry.Scope, Tool: entry.Provenance.Tool, Artifact: artifact.Reference,
+		Descriptor: descriptor, Source: source,
+		Outcome: PortableToolAcquisitionOutcomeLockV1{
+			Kind: providerstore.AcquisitionOutcomeCacheHit, RedirectHops: "0", HistoricalLocators: historical,
+		},
+	}
+	return validatePortableToolArtifactAcquisitionLockV1(acquisition, entry, artifact, manifest, selected)
 }
 
 type PortableToolArtifactAcquisitionLockV1 struct {
@@ -449,7 +499,7 @@ func validatePortableToolManifestSourceAuthorizationV1(
 		if !artifactOK || !sourceOK || digest == "" {
 			return fmt.Errorf("release manifest artifact source %d is incomplete", index)
 		}
-		if digest != acquisition.Descriptor.SHA256 || source != acquisition.Source.Reference {
+		if artifact != acquisition.Artifact || digest != acquisition.Descriptor.SHA256 || source != acquisition.Source.Reference {
 			continue
 		}
 		selected, exists := selectedArtifacts[portableToolAcquisitionKeyV1(acquisition.Scope, acquisition.Tool, artifact)]
@@ -532,8 +582,14 @@ func portableToolObjectStringV1(value canonical.Object, field string) string {
 }
 
 func portableToolObjectDigestV1(value canonical.Object, field string) canonical.Digest {
-	result, _ := value[field].(string)
-	return canonical.Digest(result)
+	switch result := value[field].(type) {
+	case string:
+		return canonical.Digest(result)
+	case canonical.Digest:
+		return result
+	default:
+		return ""
+	}
 }
 
 func portableToolObjectArrayV1(value canonical.Object, field string) ([]any, error) {
