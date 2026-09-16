@@ -1,0 +1,2 @@
+kind: Security
+body: Validate wheel and embedded runtime archive structure and fixed resource limits before reading archive members, using the same bounded ZIP preflight as archive materialization.

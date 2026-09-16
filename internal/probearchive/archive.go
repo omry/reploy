@@ -7,6 +7,7 @@ package probearchive
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/omry/reploy/internal/canonical"
+	"github.com/omry/reploy/internal/providerstore"
 )
 
 const (
@@ -317,6 +319,17 @@ func open(executable string) (*openedArchive, error) {
 	if err != nil {
 		_ = file.Close()
 		return nil, fmt.Errorf("inspect Reploy executable runtime archive: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, fmt.Errorf("Reploy executable runtime archive must be a regular file: %s", executable)
+	}
+	if err := providerstore.PreflightZipCentralDirectory(context.Background(), file, info.Size()); err != nil {
+		_ = file.Close()
+		if errors.Is(err, zip.ErrFormat) {
+			return nil, ErrNotEmbedded
+		}
+		return nil, fmt.Errorf("preflight embedded runtime archive: %w", err)
 	}
 	reader, err := zip.NewReader(file, info.Size())
 	if err != nil {
