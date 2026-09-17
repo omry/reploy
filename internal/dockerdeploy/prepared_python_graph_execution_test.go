@@ -185,6 +185,51 @@ func TestExecutePreparedPythonGraphDerivesAllReuseFromCurrentLock(t *testing.T) 
 	}
 }
 
+func TestPortableToolPythonSelectionPlanDeduplicatesMultiBindingTool(t *testing.T) {
+	fresh, _ := portableToolPythonFreshNeutralFixtureV1(t)
+	const namespace = "tool:fixture-tool/releases/1.0.0"
+	entry := &fresh.Plan.Tools[0]
+	contract := portabletool.BindingContractV1{
+		Schema: portabletool.BindingContractSchemaV1, ID: namespace + "/bindings/python-alt/contract",
+		Name: "python-alt", Package: "neutral-alt", Requirements: []string{"neutral-alt==1.0.0"},
+		SupportedPython: []string{"3.12"}, SupportedTags: []string{"py3-none-any"},
+		BundledComponents: []portabletool.BundledComponentV1{},
+		CLI:               portabletool.ToolExportV1{Name: "neutral-alt-cli", Path: "/opt/neutral/bin/neutral-alt-cli"},
+	}
+	contractRecord := portableToolPythonFreshRecordV1(t, contract)
+	contractReference := portableToolPythonFreshReferenceV1(t, contract.ID, contractRecord)
+	artifact := portabletool.BindingArtifactRecordV1{
+		Schema: portabletool.BindingArtifactSchemaV1, ID: namespace + "/bindings/python-alt/artifacts/linux-amd64",
+		Binding: "python-alt", Contract: contractReference, Name: "neutral-alt", EcosystemVersion: "1.0.0",
+		Platform: "linux/amd64", Filename: "neutral_alt-1.0.0-py3-none-any.whl",
+		Size: "1", SHA256: portableToolPythonFreshDigestV1(t, "neutral-alt-wheel"), Resolver: "https-sha256",
+		Tags: []string{"py3-none-any"}, RequiresPython: ">=3.12,<3.13",
+		BundledComponents: []portabletool.BundledComponentV1{},
+	}
+	artifactRecord := portableToolPythonFreshRecordV1(t, artifact)
+	artifactReference := portableToolPythonFreshReferenceV1(t, artifact.ID, artifactRecord)
+	entry.Responsibilities.BindingContracts = append([]providers.PortableToolSelectedRecordV1{{Reference: contractReference, Record: contractRecord}}, entry.Responsibilities.BindingContracts...)
+	entry.Responsibilities.BindingArtifacts = append([]providers.PortableToolSelectedRecordV1{{Reference: artifactReference, Record: artifactRecord}}, entry.Responsibilities.BindingArtifacts...)
+	entry.Exports = append([]providers.PortableToolExportV1{{Name: contract.CLI.Name, Path: contract.CLI.Path}}, entry.Exports...)
+
+	selected, projection, err := portableToolPythonSelectionPlanV1(fresh.Plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projection.Components) != 1 || len(projection.Components[0].Bindings) != 2 {
+		t.Fatalf("projection = %#v, want one component with two bindings", projection)
+	}
+	if len(selected.Tools) != 1 {
+		t.Fatalf("selected tools = %#v, want one entry for the multi-binding tool", selected.Tools)
+	}
+	if got := len(selected.Tools[0].Responsibilities.BindingContracts); got != 2 {
+		t.Fatalf("selected binding contracts = %d, want complete selected entry", got)
+	}
+	if err := providers.ValidatePortableToolPlanV1(selected); err != nil {
+		t.Fatalf("deduplicated selected plan is invalid: %v", err)
+	}
+}
+
 func portablePythonExecutionProjectionForTest(component string) pythonprovider.PortableToolPythonProjectionV1 {
 	closureDigest := rendererDigest("a")
 	contractDigest := rendererDigest("b")

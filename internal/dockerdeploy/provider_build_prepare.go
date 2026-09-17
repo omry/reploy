@@ -234,6 +234,12 @@ func prepareLockedProviderBuildV1(
 		if portableToolPlanHasSourceBuilderScopesV1(candidate.current.Lock.PortableTools) {
 			return false, nil
 		}
+		// Application-scoped Python bindings need the graph to reopen and
+		// reverify their exact locked wheels. Reusing the prior provider bundle
+		// would allow a substituted selected wheel to bypass that boundary.
+		if portableToolPlanHasPythonBindingScopesV1(candidate.current.Lock.PortableTools) {
+			return false, nil
+		}
 		var portableToolPlan *providers.PortableToolPlanV1
 		if candidate.current.Lock.PortableTools != nil {
 			portableToolPlan = &candidate.current.Lock.PortableTools.Plan.PortableToolPlan

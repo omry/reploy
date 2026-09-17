@@ -1,0 +1,2 @@
+kind: Fixed
+body: Reverify locked portable Python binding wheels from their exact stored descriptors and retain their normalized lock provenance through rebuilt provider bundles.
