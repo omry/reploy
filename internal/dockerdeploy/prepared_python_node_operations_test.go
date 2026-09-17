@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"os"
@@ -18,6 +19,117 @@ import (
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
 	"github.com/omry/reploy/internal/providerstore"
 )
+
+func TestPreparedPythonNodeOperationsFreshPortableWheelUsesProductionResolverSeam(t *testing.T) {
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
+	request := preparedPythonResolveRequest(t, descriptor)
+	fresh := portableToolPythonFreshPlaywrightFixtureV1(t, "application:application")
+	component := fresh.Projection.Components[0]
+	if component.Component != "application/application/python" || len(component.Bindings) != 1 {
+		t.Fatalf("portable projection = %#v", fresh.Projection)
+	}
+	testedTags := append([]string{}, component.TestedTags...)
+	interpreterResponse := probe.ResponseV1{Schema: probe.ResponseSchemaV1, Observations: []probe.ExecutableObservationV1{
+		pythonConsumerObservation("interpreter", "/usr/bin/python3"),
+	}}
+	artifacts := testPreparedPythonResolverArtifacts(t)
+	portableContent := portableToolPythonFreshResolverWheelV1(t)
+	const portableFilename = "playwright-1.61.0-py3-none-manylinux1_x86_64.whl"
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedDescriptor, err := store.Publish(
+		context.Background(), "wheels/"+portableFilename, "wheel", bytes.NewReader(portableContent),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := pythonprovider.InspectWheelReaderV1(
+		context.Background(), bytes.NewReader(portableContent), int64(len(portableContent)), portableFilename, selectedDescriptor,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inspection.ConsoleScripts) != 1 {
+		t.Fatalf("portable wheel inspection = %#v", inspection)
+	}
+	selected := []pythonprovider.PortableToolVerifiedWheelInputV1{{
+		Scope: component.Bindings[0].Scope, Tool: fresh.Plan.Tools[0].Provenance.Tool,
+		SelectedClosureDigest: component.Bindings[0].SelectedClosureDigest,
+		Contract:              component.Bindings[0].Contract, Artifact: component.Bindings[0].Artifact,
+		Descriptor: selectedDescriptor, Inspection: inspection,
+		EligibleFilenameTags: append([]string{}, testedTags...),
+		ConsoleScript:        inspection.ConsoleScripts[0],
+	}}
+	producerCalls := 0
+	previousProducer := producePortableToolPythonFreshWheelsV1
+	t.Cleanup(func() { producePortableToolPythonFreshWheelsV1 = previousProducer })
+	producePortableToolPythonFreshWheelsV1 = func(
+		_ context.Context,
+		_ providerstore.Store,
+		_ pythonprovider.PortableToolPythonProjectionV1,
+		requests []pythonprovider.PortableToolPythonVerifiedWheelRequestV1,
+	) ([]pythonprovider.PortableToolVerifiedWheelInputV1, error) {
+		producerCalls++
+		if len(requests) != 1 || requests[0].Interpreter.Facts.Schema != pythonprovider.InterpreterFactsSchemaV2 {
+			t.Fatalf("fresh producer requests = %#v", requests)
+		}
+		return selected, nil
+	}
+	commands := stubPythonInterpreterSelectionCommands(
+		t, mustCanonicalProbeResponse(t, interpreterResponse),
+		[]string{string(pythonInspectionOutputV2ForTest("3.12.2", testedTags, testedTags))},
+		func() error {
+			writePythonIntegrationWheel(t, filepath.Join(artifacts.OutputHostDir, "demo_server-1.0-py3-none-any.whl"))
+			return os.WriteFile(filepath.Join(artifacts.OutputHostDir, portableFilename), portableContent, 0o600)
+		},
+	)
+	session, err := OpenPythonResolverSession(context.Background(), descriptor, workspace, artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close(context.Background()) })
+	session.observations[pythonCarrierRequirementID] = pythonConsumerObservation(pythonCarrierRequirementID, pythonCarrierPath)
+	session.observations[pythonLauncherRequirementID] = pythonConsumerObservation(pythonLauncherRequirementID, pythonLauncherPath)
+	operations := PreparedPythonNodeOperations{
+		Store: store,
+		Validators: providers.ProviderOwnerValidators{
+			Profile: pythonprovider.ValidateRequirementProfileV1,
+			Bundle:  pythonprovider.ValidateResolvedBundlePayloadV1,
+		},
+		FinalImageConfig:      pythonConsumerTestImageConfig(),
+		Artifacts:             artifacts,
+		LocalOverrides:        []PythonLocalOverrideV1{},
+		PortableToolBindings:  &component,
+		PortableToolFreshPlan: &fresh,
+		verifiedArtifacts:     map[canonical.Digest]string{},
+	}
+	resolution, _, err := operations.resolveFresh(context.Background(), session, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := pythonprovider.DecodeCanonicalBundleDataV1(component.Component, resolution.Bundle.Payload.ProviderPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedCount := 0
+	for _, wheel := range bundle.Wheels {
+		if wheel.Distribution == "playwright" {
+			selectedCount++
+			if wheel.Artifact != selectedDescriptor {
+				t.Fatalf("selected bundle wheel = %#v, want descriptor %#v", wheel, selectedDescriptor)
+			}
+		}
+	}
+	if producerCalls != 1 || selectedCount != 1 {
+		t.Fatalf("producer calls = %d, selected bundle wheels = %d, bundle = %#v", producerCalls, selectedCount, bundle.Wheels)
+	}
+	if len(*commands) < 5 || !containsInOrder((*commands)[4].Args, []string{"playwright"}) {
+		t.Fatalf("resolver command does not contain the selected direct root: %#v", *commands)
+	}
+}
 
 func TestDropSourceBuilderPythonCachedResolutionsPreservesArtifactCandidates(t *testing.T) {
 	fixture := newPreparedPythonGraphReuseFixture(t)
@@ -85,7 +197,7 @@ func TestPreparedPythonNodeOperationsResolvesAndIngestsWheelsInSession(t *testin
 	interpreterObservation := pythonConsumerObservation("interpreter", "/usr/bin/python3")
 	interpreterResponse := probe.ResponseV1{Schema: probe.ResponseSchemaV1, Observations: []probe.ExecutableObservationV1{interpreterObservation}}
 	artifacts := testPreparedPythonResolverArtifacts(t)
-	testedTags := []string{"py3-none-any"}
+	testedTags := []string{}
 	commands := stubPythonInterpreterSelectionCommands(t, mustCanonicalProbeResponse(t, interpreterResponse), []string{string(pythonInspectionOutputV2ForTest("3.13.2", testedTags, testedTags))}, func() error {
 		writePythonIntegrationWheel(t, filepath.Join(artifacts.OutputHostDir, "demo_server-1.0-py3-none-any.whl"))
 		return nil
@@ -101,16 +213,14 @@ func TestPreparedPythonNodeOperationsResolvesAndIngestsWheelsInSession(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	portableToolBindings := portablePythonExecutionProjectionForTest("application/application/python").Components[0]
 	operations := PreparedPythonNodeOperations{
 		Store: store,
 		Validators: providers.ProviderOwnerValidators{
 			Profile: pythonprovider.ValidateRequirementProfileV1,
 			Bundle:  pythonprovider.ValidateResolvedBundlePayloadV1,
 		},
-		FinalImageConfig:     pythonConsumerTestImageConfig(),
-		Artifacts:            artifacts,
-		PortableToolBindings: &portableToolBindings,
+		FinalImageConfig: pythonConsumerTestImageConfig(),
+		Artifacts:        artifacts,
 		LocalOverrides: []PythonLocalOverrideV1{{
 			Distribution: "unused", HostDir: filepath.Join(t.TempDir(), "missing"),
 		}},
