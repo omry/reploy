@@ -5,16 +5,17 @@ import (
 	"path"
 	"sort"
 
-	"github.com/omry/reploy/internal/blueprint"
 	providerapi "github.com/omry/reploy/internal/providers"
 )
 
 const (
-	pythonMaterializationEnvironment = "python-v2"
+	pythonMaterializationEnvironment = "python-v3"
 	pythonMaterializationUmask       = "0022"
 	pythonScriptMountID              = "script"
 	pythonWheelMountID               = "wheels"
 	pythonVenvExecutableID           = "venv_python"
+	pythonOutputValidationMarker     = "--reploy-python-output"
+	pythonWheelArgumentMarker        = "--reploy-python-wheel"
 )
 
 // Materialize closes a verified Python bundle into the typed, offline recipe
@@ -41,10 +42,10 @@ func (ComponentProvider) Materialize(input providerapi.MaterializeInput) (provid
 		return providerapi.MaterializationTransaction{}, fmt.Errorf("Python bundle interpreter does not match its requirement profile")
 	}
 
-	venvRoot := path.Join(
-		InstallRoot,
-		blueprint.ContributionRuntimeOwner(request.Component, blueprint.ContributionProviderPython),
-	)
+	venvRoot, err := RuntimeRootV1(request.Component)
+	if err != nil {
+		return providerapi.MaterializationTransaction{}, fmt.Errorf("resolve Python runtime root: %w", err)
+	}
 	venvPython := path.Join(venvRoot, "bin", "python")
 	arguments := []providerapi.TypedArgument{
 		{Kind: providerapi.TypedArgumentValidatedExecutable, ExecutableID: input.Carrier.ID},
@@ -54,6 +55,21 @@ func (ComponentProvider) Materialize(input providerapi.MaterializeInput) (provid
 		{Kind: providerapi.TypedArgumentGeneratedExecutable, GeneratedID: pythonVenvExecutableID},
 		{Kind: providerapi.TypedArgumentLiteral, Literal: venvRoot},
 	}
+	// The fixed provider recipe validates every generated console-script
+	// wrapper after pip has installed the closed wheel set. Keep the marker and
+	// paths as typed literals: they are provider-owned canonical bundle data,
+	// never definition-supplied shell fragments.
+	arguments = append(arguments, providerapi.TypedArgument{
+		Kind: providerapi.TypedArgumentLiteral, Literal: pythonOutputValidationMarker,
+	})
+	for _, output := range bundle.Outputs {
+		arguments = append(arguments, providerapi.TypedArgument{
+			Kind: providerapi.TypedArgumentLiteral, Literal: output.Path,
+		})
+	}
+	arguments = append(arguments, providerapi.TypedArgument{
+		Kind: providerapi.TypedArgumentLiteral, Literal: pythonWheelArgumentMarker,
+	})
 	for _, wheel := range bundle.Wheels {
 		arguments = append(arguments, providerapi.TypedArgument{
 			Kind: providerapi.TypedArgumentMountedArtifact, MountID: pythonWheelMountID, RelativePath: wheel.Artifact.LogicalPath,

@@ -189,6 +189,87 @@ func TestBuildAndAcceptMaterializationLayerRunsEvidenceAfterInspection(t *testin
 	}
 }
 
+func TestBuildAndAcceptMaterializationLayerMountsCompleteClosedWheelSet(t *testing.T) {
+	store, request := materializationLayerFixture(t)
+	transaction := request.Transaction
+	transaction.Argv[2].RelativePath = transaction.Script.LogicalPath
+	first := providerstore.ArtifactDescriptor{LogicalPath: "wheels/alpha.whl", Kind: "wheel", Size: "10", SHA256: rendererDigest("6")}
+	second := providerstore.ArtifactDescriptor{LogicalPath: "wheels/beta.whl", Kind: "wheel", Size: "11", SHA256: rendererDigest("7")}
+	transaction.Argv[6].RelativePath = first.LogicalPath
+	transaction.Argv = append(transaction.Argv, providers.TypedArgument{
+		Kind: providers.TypedArgumentMountedArtifact, MountID: "wheels", RelativePath: second.LogicalPath,
+	})
+	bundle := acceptanceBundle(transaction, request.Platform)
+	bundle.Payload.Artifacts = []providerstore.ArtifactDescriptor{transaction.Script, first, second}
+	var gotFiles []MaterializationMountFile
+	result, err := buildAndAcceptMaterializationLayer(
+		context.Background(), store, transaction, bundle, request.Platform,
+		func(context.Context, MaterializationEvidenceInput) ([]providers.RealizedGeneratedExecutable, []providers.RealizedOutput, error) {
+			return []providers.RealizedGeneratedExecutable{acceptedGeneratedExecutable(transaction)}, []providers.RealizedOutput{}, nil
+		}, nil, RunOptions{},
+		func(_ providerstore.Store, got MaterializationLayerRequest, _ RunOptions) (MaterializationLayerCandidate, error) {
+			gotFiles = append([]MaterializationMountFile{}, got.MountInputs[1].Files...)
+			key, digest, keyErr := MaterializationAssemblyKey(transaction, request.Platform)
+			return MaterializationLayerCandidate{Built: BuiltImageCandidate{ImageID: rendererDigest("8")}, AssemblyKey: key, AssemblyKeyDigest: digest}, keyErr
+		},
+		func(_ context.Context, _ MaterializationLayerCandidate, _ MaterializationLayerRequest) (InspectedMaterializationLayerCandidate, error) {
+			return acceptedMaterializationCandidate(t, transaction, request.Platform), nil
+		},
+		func(context.Context, BuiltImageCandidate, providers.RealizedImageV1) error { return nil },
+		func(context.Context, BuiltImageCandidate) error { return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFiles := []MaterializationMountFile{{RelativePath: first.LogicalPath, Artifact: first}, {RelativePath: second.LogicalPath, Artifact: second}}
+	if !reflect.DeepEqual(gotFiles, wantFiles) || result.Image.Digest != rendererDigest("7") {
+		t.Fatalf("wheel mount files = %#v; result = %#v", gotFiles, result)
+	}
+}
+
+func TestBuildAndAcceptMaterializationLayerRejectsMissingGeneratedConsoleScriptAndRollsBack(t *testing.T) {
+	store, request := materializationLayerFixture(t)
+	transaction := request.Transaction
+	transaction.Argv[2].RelativePath = transaction.Script.LogicalPath
+	transaction.GeneratedExecutables = []providers.GeneratedExecutableDeclaration{
+		{ID: "output_serve", Path: "/opt/reploy/providers/python/web/bin/serve", ExclusiveRoot: "/opt/reploy/providers/python/web", ValidationPolicy: providers.ValidationPolicyCompatible},
+		{ID: "venv_python", Path: "/opt/reploy/providers/python/web/bin/python", ExclusiveRoot: "/opt/reploy/providers/python/web", ValidationPolicy: providers.ValidationPolicyCompatible},
+	}
+	transaction.Argv = append(transaction.Argv,
+		providers.TypedArgument{Kind: providers.TypedArgumentLiteral, Literal: "--reploy-python-output"},
+		providers.TypedArgument{Kind: providers.TypedArgumentLiteral, Literal: "/opt/reploy/providers/python/web/bin/serve"},
+	)
+	wheel := providerstore.ArtifactDescriptor{LogicalPath: "hydra.whl", Kind: "wheel", Size: "10", SHA256: rendererDigest("6")}
+	bundle := acceptanceBundle(transaction, request.Platform)
+	bundle.Payload.Artifacts = []providerstore.ArtifactDescriptor{wheel, transaction.Script}
+	candidate := BuiltImageCandidate{ImageID: rendererDigest("7")}
+	removed := false
+	result, err := buildAndAcceptMaterializationLayer(
+		context.Background(), store, transaction, bundle, request.Platform,
+		func(context.Context, MaterializationEvidenceInput) ([]providers.RealizedGeneratedExecutable, []providers.RealizedOutput, error) {
+			return []providers.RealizedGeneratedExecutable{}, []providers.RealizedOutput{}, nil
+		}, nil, RunOptions{},
+		func(_ providerstore.Store, _ MaterializationLayerRequest, _ RunOptions) (MaterializationLayerCandidate, error) {
+			key, digest, keyErr := MaterializationAssemblyKey(transaction, request.Platform)
+			return MaterializationLayerCandidate{Built: candidate, AssemblyKey: key, AssemblyKeyDigest: digest}, keyErr
+		},
+		func(_ context.Context, _ MaterializationLayerCandidate, _ MaterializationLayerRequest) (InspectedMaterializationLayerCandidate, error) {
+			return acceptedMaterializationCandidate(t, transaction, request.Platform), nil
+		},
+		func(context.Context, BuiltImageCandidate, providers.RealizedImageV1) error {
+			t.Fatal("rejected candidate was retained")
+			return nil
+		},
+		func(_ context.Context, got BuiltImageCandidate) error {
+			removed = got == candidate
+			return nil
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "count") || !removed || !reflect.DeepEqual(result, providers.GraphNodeMaterializeResult{}) {
+		t.Fatalf("result = %#v; removed = %t; error = %v", result, removed, err)
+	}
+}
+
 func TestBuildAndAcceptMaterializationLayerRejectsBindingBeforeBuild(t *testing.T) {
 	store, request := materializationLayerFixture(t)
 	bundle := acceptanceBundle(request.Transaction, request.Platform)

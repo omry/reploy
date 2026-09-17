@@ -80,6 +80,32 @@ func TestRenderMaterializationArgvResolvesTypedOperandsWithoutInterpretation(t *
 	}
 }
 
+func TestRenderMaterializationArgvPreservesPythonOutputValidationArguments(t *testing.T) {
+	transaction := rendererTransaction()
+	transaction.GeneratedExecutables = []providers.GeneratedExecutableDeclaration{
+		{ID: "output_serve", Path: "/opt/reploy/providers/python/web/bin/serve", ExclusiveRoot: "/opt/reploy/providers/python/web", ValidationPolicy: providers.ValidationPolicyCompatible},
+		{ID: "venv_python", Path: "/opt/reploy/providers/python/web/bin/python", ExclusiveRoot: "/opt/reploy/providers/python/web", ValidationPolicy: providers.ValidationPolicyCompatible},
+	}
+	transaction.Argv = append(transaction.Argv,
+		providers.TypedArgument{Kind: providers.TypedArgumentLiteral, Literal: "--reploy-python-output"},
+		providers.TypedArgument{Kind: providers.TypedArgumentLiteral, Literal: "/opt/reploy/providers/python/web/bin/serve"},
+	)
+	argv, err := RenderMaterializationArgv(transaction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"/usr/bin/env", "-i", "/bin/sh", "-c", materializationChildEnvironmentProgram, "python-v1", "0022",
+		"/bin/sh", "-eu", "/.reploy-build/script/python-web.sh", "/usr/bin/python3",
+		"/opt/reploy/providers/python/web/bin/python", "$(touch /tmp/not-shell)",
+		"/.reploy-build/wheels/hydra.whl", "--reploy-python-output",
+		"/opt/reploy/providers/python/web/bin/serve",
+	}
+	if !reflect.DeepEqual(argv, want) {
+		t.Fatalf("argv = %#v, want %#v", argv, want)
+	}
+}
+
 func TestRenderMaterializationArgvRejectsInvalidTransaction(t *testing.T) {
 	transaction := rendererTransaction()
 	transaction.Argv[0] = providers.TypedArgument{Kind: providers.TypedArgumentLiteral, Literal: "/bin/sh"}
