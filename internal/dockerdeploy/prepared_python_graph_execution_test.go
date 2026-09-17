@@ -119,7 +119,7 @@ func TestExecutePreparedPythonGraphDerivesAllReuseFromCurrentLock(t *testing.T) 
 		t.Fatal("Python fixture node is missing")
 	}
 	component := node.Components[0]
-	portablePython := portablePythonExecutionProjectionForTest(component)
+	portablePython := portableToolPythonFreshPlaywrightFixtureV1(t, "application:application")
 	previousPrepare := preparePythonGraphExecutionBackend
 	previousExecute := executePreparedPythonProviderGraph
 	t.Cleanup(func() {
@@ -166,11 +166,15 @@ func TestExecutePreparedPythonGraphDerivesAllReuseFromCurrentLock(t *testing.T) 
 		t.Fatalf("local overrides = %#v", configs[fixture.request.NodeID].LocalOverrides)
 	}
 	bindings := configs[fixture.request.NodeID].PortableToolBindings
-	if bindings == nil || bindings.Component != component || !reflect.DeepEqual(bindings.TestedTags, []string{"py3-none-any"}) {
+	if bindings == nil || bindings.Component != component ||
+		!reflect.DeepEqual(bindings.TestedTags, []string{"py3-none-manylinux1_x86_64"}) {
 		t.Fatalf("portable Python node bindings = %#v", bindings)
 	}
-	if _, found := execution.CachedResolutions[fixture.request.NodeID]; !found {
-		t.Fatalf("cached resolutions = %#v", execution.CachedResolutions)
+	if configs[fixture.request.NodeID].PortableToolFreshPlan != &portablePython {
+		t.Fatalf("portable Python fresh plan was not retained in node config")
+	}
+	if _, found := execution.CachedResolutions[fixture.request.NodeID]; found {
+		t.Fatalf("unauthenticated cached binding resolution was retained: %#v", execution.CachedResolutions)
 	}
 	wantBase, err := realizedImageFromDescriptor(descriptor)
 	if err != nil {

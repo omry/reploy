@@ -30,6 +30,7 @@ type PreparedPythonNodeOperations struct {
 	ReusableWheels         []providerstore.ArtifactDescriptor
 	LocalOverrides         []PythonLocalOverrideV1
 	PortableToolBindings   *pythonprovider.PortableToolPythonComponentV1
+	PortableToolFreshPlan  *PortableToolPythonFreshPlanV1
 	SourceBuilder          *SourceBuilderCoordinatorV1
 	Progress               io.Writer
 	ShowApplicationContext bool
@@ -197,6 +198,21 @@ func (operations PreparedPythonNodeOperations) resolveFresh(
 	if err != nil {
 		return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
 	}
+	var selectedPortableWheels []pythonprovider.PortableToolVerifiedWheelInputV1
+	if operations.PortableToolBindings != nil {
+		selectedPortableWheels, err = acquirePortableToolPythonFreshWheelsV1(
+			ctx, operations.Store, operations.PortableToolFreshPlan,
+			*operations.PortableToolBindings, interpreter,
+		)
+		if err != nil {
+			return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
+		}
+		if err := StagePythonPortableVerifiedWheels(
+			session.artifacts, operations.Store, verifiedWheels, selectedPortableWheels,
+		); err != nil {
+			return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
+		}
+	}
 	buildEnvironmentDigest, err := session.SourceBuildEnvironmentDigest(interpreter)
 	if err != nil {
 		return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
@@ -235,7 +251,7 @@ func (operations PreparedPythonNodeOperations) resolveFresh(
 		)
 		err = session.ResolveWheels(
 			resolveCtx, consumer.EnvironmentLauncher, requirement, interpreter,
-			node.Request, effectiveSources, effectiveWheels, nil,
+			node.Request, effectiveSources, effectiveWheels, selectedPortableWheels,
 		)
 		endResolve(err)
 		if err != nil {
@@ -286,6 +302,7 @@ func (operations PreparedPythonNodeOperations) resolveFresh(
 	}
 	effectiveRequest.SourceCandidates = effectiveSources
 	resolver := pythonprovider.WheelNodeResolver{
+		SelectedPortableWheels: selectedPortableWheels,
 		ResolveInterpreter: func(
 			_ context.Context,
 			gotRequirement providers.ExecutableRequirement,
