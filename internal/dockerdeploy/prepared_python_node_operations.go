@@ -235,7 +235,7 @@ func (operations PreparedPythonNodeOperations) resolveFresh(
 		)
 		err = session.ResolveWheels(
 			resolveCtx, consumer.EnvironmentLauncher, requirement, interpreter,
-			node.Request, effectiveSources, effectiveWheels,
+			node.Request, effectiveSources, effectiveWheels, nil,
 		)
 		endResolve(err)
 		if err != nil {

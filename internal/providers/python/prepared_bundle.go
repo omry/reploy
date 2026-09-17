@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -41,8 +42,9 @@ type InterpreterEvidenceResolver func(
 // WheelNodeResolver validates one interpreter, runs the backend-owned wheel
 // resolver, and ingests its closed output into canonical provider records.
 type WheelNodeResolver struct {
-	ResolveInterpreter InterpreterEvidenceResolver
-	PrepareWheels      func(context.Context, providerapi.ResolveInput, providerapi.ExecutableEvidence) (string, error)
+	ResolveInterpreter     InterpreterEvidenceResolver
+	PrepareWheels          func(context.Context, providerapi.ResolveInput, providerapi.ExecutableEvidence) (string, error)
+	SelectedPortableWheels []PortableToolVerifiedWheelInputV1
 }
 
 type inspectedWheel struct {
@@ -142,7 +144,7 @@ func (resolver WheelNodeResolver) Resolve(
 	if dir == "" {
 		return providerapi.ResolveResult{}, fmt.Errorf("prepare Python wheels returned no output directory")
 	}
-	wheels, artifacts, outputs, selectedSources, err := publishPreparedWheels(ctx, dir, sink, request, input.SourceCandidates)
+	wheels, artifacts, outputs, selectedSources, err := publishPreparedWheels(ctx, dir, sink, request, input.SourceCandidates, resolver.SelectedPortableWheels)
 	if err != nil {
 		return providerapi.ResolveResult{}, err
 	}
@@ -230,6 +232,7 @@ func publishPreparedWheels(
 	sink providerapi.ArtifactSink,
 	request PythonProviderRequestV1,
 	sources []providerapi.ResolvedSourceInput,
+	selected []PortableToolVerifiedWheelInputV1,
 ) ([]PythonWheelV1, []providerstore.ArtifactDescriptor, []PythonConsoleScriptV1, []providerapi.ResolvedSourceInput, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -272,6 +275,9 @@ func publishPreparedWheels(
 		return nil, nil, nil, nil, fmt.Errorf("prepared Python bundle contains no wheels: %s", dir)
 	}
 	if err := validateCanonicalRequestedDistributions(request, byDistribution); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if err := validateSelectedPortableWheelOutputs(ctx, dir, byDistribution, selected); err != nil {
 		return nil, nil, nil, nil, err
 	}
 	selectedSources, err := selectResolvedSourceArtifacts(sources, byDistribution)
@@ -326,6 +332,51 @@ func publishPreparedWheels(
 	}
 	sort.Slice(artifacts, func(left int, right int) bool { return artifacts[left].LogicalPath < artifacts[right].LogicalPath })
 	return wheels, artifacts, outputs, selectedSources, nil
+}
+
+func validateSelectedPortableWheelOutputs(
+	ctx context.Context,
+	dir string,
+	outputs map[string]inspectedWheel,
+	selected []PortableToolVerifiedWheelInputV1,
+) error {
+	seen := make(map[string]struct{}, len(selected))
+	for _, input := range selected {
+		distribution := NormalizeDistributionName(input.Inspection.Distribution)
+		if distribution == "" || distribution != input.Inspection.Distribution {
+			return fmt.Errorf("selected portable wheel has invalid normalized distribution %q", input.Inspection.Distribution)
+		}
+		if _, exists := seen[distribution]; exists {
+			return fmt.Errorf("selected portable wheel distribution %q is duplicated", distribution)
+		}
+		seen[distribution] = struct{}{}
+		output, found := outputs[distribution]
+		if !found {
+			return fmt.Errorf("selected portable wheel distribution %q is missing from resolver output", distribution)
+		}
+		if output.Filename != input.Inspection.Filename ||
+			output.SHA256 != strings.TrimPrefix(string(input.Descriptor.SHA256), "sha256:") {
+			return fmt.Errorf("selected portable wheel distribution %q has different bytes or filename", distribution)
+		}
+		observed, err := inspectWheelPath(ctx, filepath.Join(dir, output.Filename), input.Descriptor.LogicalPath, &input.Descriptor)
+		if err != nil {
+			return fmt.Errorf("inspect selected portable wheel output %q: %w", distribution, err)
+		}
+		if !reflect.DeepEqual(observed, input.Inspection) {
+			return fmt.Errorf("selected portable wheel distribution %q has different inspected metadata", distribution)
+		}
+		matchedScript := false
+		for _, script := range observed.ConsoleScripts {
+			if script == input.ConsoleScript {
+				matchedScript = true
+				break
+			}
+		}
+		if !matchedScript {
+			return fmt.Errorf("selected portable wheel distribution %q is missing its selected console script", distribution)
+		}
+	}
+	return nil
 }
 
 func pathJoin(parts ...string) string {
