@@ -188,6 +188,31 @@ func TestPrepareLockedProviderBuildV1DefersSourceBuilderReuseUntilSelectedSnapsh
 	}
 }
 
+func TestPrepareLockedProviderBuildV1ReplaysLockedPythonBindingsBeforeBundleReuse(t *testing.T) {
+	input, loaded, current, selected, prepared := providerBuildPreparationFixture(t)
+	locked := newPortableToolPythonLockedTestFixture(t)
+	current.Lock.PortableTools = &locked.lock
+	order := []string{}
+	backend := providerBuildPreparationTestBackend(t, loaded, current, selected, prepared, &order)
+	backend.matches = func(_ CurrentBuild, _ CurrentBuildReuseInput) (bool, error) {
+		t.Fatal("locked Python binding reused its cached provider bundle")
+		return false, nil
+	}
+
+	result, err := prepareLockedProviderBuildV1(t.Context(), input, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Reused || result.PreparedBase == nil || result.ReusableLock == nil {
+		t.Fatalf("result = %#v", result)
+	}
+	if !reflect.DeepEqual(order, []string{
+		"recover", "load", "current", "cache", "locked-sources", "cached-select", "select", "realize",
+	}) {
+		t.Fatalf("order = %#v", order)
+	}
+}
+
 func TestPrepareLockedProviderBuildV1RequiresLocalOverridesArrayAndCompleteBackend(t *testing.T) {
 	input, loaded, current, selected, prepared := providerBuildPreparationFixture(t)
 	order := []string{}

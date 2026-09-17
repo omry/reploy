@@ -31,6 +31,7 @@ type PreparedPythonNodeOperations struct {
 	LocalOverrides         []PythonLocalOverrideV1
 	PortableToolBindings   *pythonprovider.PortableToolPythonComponentV1
 	PortableToolFreshPlan  *PortableToolPythonFreshPlanV1
+	PortableToolLockedPlan *PortableToolPythonLockedPlanV1
 	SourceBuilder          *SourceBuilderCoordinatorV1
 	Progress               io.Writer
 	ShowApplicationContext bool
@@ -200,10 +201,17 @@ func (operations PreparedPythonNodeOperations) resolveFresh(
 	}
 	var selectedPortableWheels []pythonprovider.PortableToolVerifiedWheelInputV1
 	if operations.PortableToolBindings != nil {
-		selectedPortableWheels, err = acquirePortableToolPythonFreshWheelsV1(
-			ctx, operations.Store, operations.PortableToolFreshPlan,
-			*operations.PortableToolBindings, interpreter,
-		)
+		if operations.PortableToolLockedPlan != nil {
+			selectedPortableWheels, err = acquirePortableToolPythonLockedWheelsV1(
+				ctx, operations.Store, operations.PortableToolLockedPlan,
+				*operations.PortableToolBindings, interpreter,
+			)
+		} else {
+			selectedPortableWheels, err = acquirePortableToolPythonFreshWheelsV1(
+				ctx, operations.Store, operations.PortableToolFreshPlan,
+				*operations.PortableToolBindings, interpreter,
+			)
+		}
 		if err != nil {
 			return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
 		}

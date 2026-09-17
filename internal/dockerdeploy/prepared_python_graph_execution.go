@@ -21,20 +21,24 @@ import (
 // PreparedPythonGraphExecutionInput contains the complete temporary Python
 // graph path until APT joins the same registry-backed executor.
 type PreparedPythonGraphExecutionInput struct {
-	Store            providerstore.Store
-	Plan             providers.ProviderPlanV1
-	BaseDescriptor   deploy.ImageDescriptor
-	BaseCatalog      []providers.RealizedOutput
-	Sources          []providers.ResolvedSourceInput
-	SourceWheels     []providerstore.ArtifactDescriptor
-	LocalOverrides   []PythonLocalOverrideV1
-	PortablePython   *PortableToolPythonFreshPlanV1
-	SourceBuilder    *SourceBuilderCoordinatorV1
-	CurrentLock      *deploy.BuildLockV1
-	FinalImageConfig providers.ImageConfigPolicy
-	Progress         io.Writer
-	BuildProgress    buildprogress.Reporter
-	RunOptions       RunOptions
+	Store          providerstore.Store
+	Plan           providers.ProviderPlanV1
+	BaseDescriptor deploy.ImageDescriptor
+	BaseCatalog    []providers.RealizedOutput
+	Sources        []providers.ResolvedSourceInput
+	SourceWheels   []providerstore.ArtifactDescriptor
+	LocalOverrides []PythonLocalOverrideV1
+	PortablePython *PortableToolPythonFreshPlanV1
+	// DesiredPortableToolPlan identifies the application-scoped portable
+	// selections for this graph. A nil value means that the graph has no
+	// current runtime portable-tool selection; an old lock must not supply one.
+	DesiredPortableToolPlan *providers.PortableToolPlanV1
+	SourceBuilder           *SourceBuilderCoordinatorV1
+	CurrentLock             *deploy.BuildLockV1
+	FinalImageConfig        providers.ImageConfigPolicy
+	Progress                io.Writer
+	BuildProgress           buildprogress.Reporter
+	RunOptions              RunOptions
 }
 
 var preparePythonGraphExecutionBackend = PreparePreparedPythonGraphBackend
@@ -64,12 +68,68 @@ func ExecutePreparedPythonGraph(
 		return providers.GraphExecutionResult{}, err
 	}
 	dropSourceBuilderPythonCachedResolutionsV1(input.Plan, input.CurrentLock, reuse.CachedResolutions)
+	lockedBindingComponents, err := portableToolPythonBindingComponentsV1(input.CurrentLock)
+	if err != nil {
+		return providers.GraphExecutionResult{}, err
+	}
+	// A current lock can contain a binding that the desired graph no longer
+	// selects. Its cached provider bundle is not evidence for the new graph,
+	// even when the provider node itself is unchanged.
+	dropPortableToolPythonCachedResolutionsV1(
+		input.Plan, lockedBindingComponents, reuse.CachedResolutions,
+	)
+	desiredBindingPlan := providers.PortableToolPlanV1{
+		Schema: providers.PortableToolPlanSchemaV1,
+		Tools:  []providers.PortableToolPlanEntryV1{},
+	}
+	desiredBindingCount := 0
+	if input.DesiredPortableToolPlan != nil {
+		var err error
+		desiredBindingPlan, _, err = portableToolPythonSelectionPlanV1(*input.DesiredPortableToolPlan)
+		if err != nil {
+			return providers.GraphExecutionResult{}, fmt.Errorf("desired portable Python selection: %w", err)
+		}
+		desiredBindingCount = len(desiredBindingPlan.Tools)
+	}
 	var projection *pythonprovider.PortableToolPythonProjectionV1
+	var lockedPortablePython *PortableToolPythonLockedPlanV1
 	if input.PortablePython != nil {
 		if err := validatePortableToolPythonFreshPlanV1(input.PortablePython); err != nil {
 			return providers.GraphExecutionResult{}, err
 		}
+		if input.DesiredPortableToolPlan != nil {
+			freshBindingPlan, _, err := portableToolPythonSelectionPlanV1(input.PortablePython.Plan)
+			if err != nil {
+				return providers.GraphExecutionResult{}, fmt.Errorf("fresh portable Python selection: %w", err)
+			}
+			matches, err := portableToolPythonPlansMatchCurrentBuildV1(freshBindingPlan, desiredBindingPlan)
+			if err != nil {
+				return providers.GraphExecutionResult{}, fmt.Errorf("compare fresh portable Python selection: %w", err)
+			}
+			if !matches {
+				return providers.GraphExecutionResult{}, fmt.Errorf("fresh portable Python selection does not match desired selection")
+			}
+		}
 		projection = &input.PortablePython.Projection
+	} else if input.CurrentLock != nil && input.CurrentLock.PortableTools != nil {
+		matches, err := portableToolPythonSelectionsMatchCurrentBuildV1(
+			input.CurrentLock.PortableTools, input.DesiredPortableToolPlan,
+		)
+		if err != nil {
+			return providers.GraphExecutionResult{}, err
+		}
+		if matches && len(lockedBindingComponents) != 0 {
+			lockedPortablePython, err = buildPortableToolPythonLockedPlanV1(input.CurrentLock.PortableTools)
+			if err != nil {
+				return providers.GraphExecutionResult{}, err
+			}
+			if lockedPortablePython != nil {
+				projection = &lockedPortablePython.Projection
+			}
+		}
+	}
+	if input.PortablePython == nil && desiredBindingCount != 0 && lockedPortablePython == nil {
+		return providers.GraphExecutionResult{}, fmt.Errorf("desired portable Python selection requires a fresh plan when locked selection does not match")
 	}
 	bindingsByComponent, err := portablePythonProjectionComponentsV1(input.Plan, projection)
 	if err != nil {
@@ -82,9 +142,10 @@ func ExecutePreparedPythonGraph(
 			config.PortableToolBindings = bindingsByComponent[node.Components[0]]
 			if config.PortableToolBindings != nil {
 				config.PortableToolFreshPlan = input.PortablePython
-				// PTD-23.3.3 owns authenticated locked replay. Until that
-				// path is supplied, a selected binding always takes the fresh
-				// orchestration path instead of accepting a cached resolution.
+				config.PortableToolLockedPlan = lockedPortablePython
+				// Selected bindings always repeat the provider-owned locked
+				// descriptor and contract checks. A cached Python bundle is
+				// not sufficient evidence for the selected binding.
 				delete(reuse.CachedResolutions, id)
 			}
 		}
@@ -119,6 +180,131 @@ func ExecutePreparedPythonGraph(
 		Validators:  registry.OwnerValidatorsForNode,
 		PrepareNode: prepareNode, MaterializeNode: materializeNode,
 	})
+}
+
+func portableToolPythonBindingComponentsV1(
+	current *deploy.BuildLockV1,
+) (map[string]struct{}, error) {
+	result := map[string]struct{}{}
+	if current == nil || current.PortableTools == nil {
+		return result, nil
+	}
+	if err := providers.ValidatePortableToolLockV1(*current.PortableTools); err != nil {
+		return nil, fmt.Errorf("current portable Python lock: %w", err)
+	}
+	_, projection, err := pythonprovider.ProjectPortableToolPythonBindingsV1(
+		current.PortableTools.Plan.PortableToolPlan, []providers.ResolvedComponentRequestV1{},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("current portable Python projection: %w", err)
+	}
+	for _, component := range projection.Components {
+		if len(component.Bindings) != 0 {
+			result[component.Component] = struct{}{}
+		}
+	}
+	return result, nil
+}
+
+func dropPortableToolPythonCachedResolutionsV1(
+	plan providers.ProviderPlanV1,
+	components map[string]struct{},
+	cached map[providers.NodeID]providers.ResolveResult,
+) {
+	if len(components) == 0 || len(cached) == 0 {
+		return
+	}
+	for _, node := range plan.Nodes {
+		if node.Provider != blueprint.ComponentTypePython || len(node.Components) != 1 {
+			continue
+		}
+		if _, found := components[node.Components[0]]; found {
+			delete(cached, node.ID)
+		}
+	}
+}
+
+// portableToolPythonSelectionsMatchCurrentBuildV1 compares only the
+// application-scoped Python binding selections. Source-builder portable tools
+// are planned and retained by their separate coordinator.
+func portableToolPythonSelectionsMatchCurrentBuildV1(
+	current *providers.PortableToolLockV1,
+	desired *providers.PortableToolPlanV1,
+) (bool, error) {
+	currentPlan := providers.PortableToolPlanV1{
+		Schema: providers.PortableToolPlanSchemaV1,
+		Tools:  []providers.PortableToolPlanEntryV1{},
+	}
+	if current != nil {
+		if err := providers.ValidatePortableToolLockV1(*current); err != nil {
+			return false, fmt.Errorf("current portable Python lock: %w", err)
+		}
+		var err error
+		currentPlan, _, err = portableToolPythonSelectionPlanV1(current.Plan.PortableToolPlan)
+		if err != nil {
+			return false, fmt.Errorf("current portable Python selection: %w", err)
+		}
+	}
+	desiredPlan := providers.PortableToolPlanV1{
+		Schema: providers.PortableToolPlanSchemaV1,
+		Tools:  []providers.PortableToolPlanEntryV1{},
+	}
+	if desired != nil {
+		var err error
+		desiredPlan, _, err = portableToolPythonSelectionPlanV1(*desired)
+		if err != nil {
+			return false, fmt.Errorf("desired portable Python selection: %w", err)
+		}
+	}
+	return portableToolPythonPlansMatchCurrentBuildV1(currentPlan, desiredPlan)
+}
+
+func portableToolPythonPlansMatchCurrentBuildV1(
+	current providers.PortableToolPlanV1,
+	desired providers.PortableToolPlanV1,
+) (bool, error) {
+	if len(current.Tools) == 0 || len(desired.Tools) == 0 {
+		return len(current.Tools) == 0 && len(desired.Tools) == 0, nil
+	}
+	return portableToolSelectionsMatchCurrentBuildV1(current, desired)
+}
+
+func portableToolPythonSelectionPlanV1(
+	plan providers.PortableToolPlanV1,
+) (providers.PortableToolPlanV1, pythonprovider.PortableToolPythonProjectionV1, error) {
+	_, projection, err := pythonprovider.ProjectPortableToolPythonBindingsV1(
+		plan, []providers.ResolvedComponentRequestV1{},
+	)
+	if err != nil {
+		return providers.PortableToolPlanV1{}, pythonprovider.PortableToolPythonProjectionV1{}, err
+	}
+	selected := providers.PortableToolPlanV1{
+		Schema: providers.PortableToolPlanSchemaV1,
+		Tools:  []providers.PortableToolPlanEntryV1{},
+	}
+	selectedTools := map[string]struct{}{}
+	for _, component := range projection.Components {
+		for _, binding := range component.Bindings {
+			entry, err := portableToolPythonPlanEntryForBindingV1(plan, binding)
+			if err != nil {
+				return providers.PortableToolPlanV1{}, pythonprovider.PortableToolPythonProjectionV1{}, err
+			}
+			toolKey := portableToolCompletionPlanKeyV1(entry.Scope, entry.Provenance.Tool)
+			if _, found := selectedTools[toolKey]; found {
+				continue
+			}
+			selectedTools[toolKey] = struct{}{}
+			selected.Tools = append(selected.Tools, entry)
+		}
+	}
+	sort.Slice(selected.Tools, func(left, right int) bool {
+		return portableToolCompletionPlanKeyV1(
+			selected.Tools[left].Scope, selected.Tools[left].Provenance.Tool,
+		) < portableToolCompletionPlanKeyV1(
+			selected.Tools[right].Scope, selected.Tools[right].Provenance.Tool,
+		)
+	})
+	return selected, projection, nil
 }
 
 func portablePythonProjectionComponentsV1(
