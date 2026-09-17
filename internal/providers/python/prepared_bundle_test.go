@@ -105,6 +105,54 @@ func TestWheelNodeResolverReturnsCanonicalBundleThroughGraph(t *testing.T) {
 	}
 }
 
+func TestSelectedPortableWheelOutputMustMatchExactVerifiedInput(t *testing.T) {
+	dir := t.TempDir()
+	filename := "demo_server-1.2.3-py3-none-any.whl"
+	writeTestWheel(t, dir, filename, "Demo-Server", "1.2.3", map[string]string{"demo-server": "demo:main"})
+	path := filepath.Join(dir, filename)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256(content)
+	descriptor := providerstore.ArtifactDescriptor{
+		LogicalPath: "wheels/" + filename, Kind: "wheel", Size: strconv.Itoa(len(content)),
+		SHA256: canonical.Digest(fmt.Sprintf("sha256:%x", hash)),
+	}
+	inspection, err := inspectWheelPath(context.Background(), path, descriptor.LogicalPath, &descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := PortableToolVerifiedWheelInputV1{
+		Descriptor: descriptor, Inspection: inspection, ConsoleScript: inspection.ConsoleScripts[0],
+	}
+	output, err := inspectWheel(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputs := map[string]inspectedWheel{output.Distribution: output}
+	if err := validateSelectedPortableWheelOutputs(context.Background(), dir, outputs, []PortableToolVerifiedWheelInputV1{selected}); err != nil {
+		t.Fatal(err)
+	}
+	changed := selected
+	changed.Inspection.Version = "9.9"
+	if err := validateSelectedPortableWheelOutputs(context.Background(), dir, outputs, []PortableToolVerifiedWheelInputV1{changed}); err == nil || !strings.Contains(err.Error(), "metadata") {
+		t.Fatalf("metadata mismatch error = %v", err)
+	}
+	if err := validateSelectedPortableWheelOutputs(context.Background(), dir, nil, []PortableToolVerifiedWheelInputV1{selected}); err == nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("missing selected output error = %v", err)
+	}
+	if err := validateSelectedPortableWheelOutputs(context.Background(), dir, outputs, []PortableToolVerifiedWheelInputV1{selected, selected}); err == nil || !strings.Contains(err.Error(), "duplicated") {
+		t.Fatalf("duplicate selected output error = %v", err)
+	}
+	if err := os.WriteFile(path, []byte("different wheel bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSelectedPortableWheelOutputs(context.Background(), dir, outputs, []PortableToolVerifiedWheelInputV1{selected}); err == nil {
+		t.Fatal("different selected wheel bytes were accepted")
+	}
+}
+
 func TestWheelNodeResolverRejectsUnexpectedOrLinkedOutput(t *testing.T) {
 	for _, test := range []struct {
 		name  string
