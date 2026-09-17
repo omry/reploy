@@ -1,0 +1,2 @@
+kind: Added
+body: Wire selected portable Python bindings through manifest-authorized fresh wheel acquisition and the production resolver path without name-based dispatch.

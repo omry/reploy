@@ -187,6 +187,46 @@ func TestStagePythonPortableVerifiedWheelsRequiresExactReadOnlyInput(t *testing.
 	}
 }
 
+func TestStagePythonPortableVerifiedWheelsReplacesSupersededReusableFilename(t *testing.T) {
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const logicalPath = "wheels/demo-1-py3-none-any.whl"
+	stale, err := store.Publish(context.Background(), logicalPath, "wheel", strings.NewReader("stale wheel"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedDescriptor, err := store.Publish(context.Background(), logicalPath, "wheel", strings.NewReader("selected wheel"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, cleanup, err := PreparePythonResolverArtifacts(store, []providerstore.ArtifactDescriptor{stale})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cleanup)
+	selected := []pythonprovider.PortableToolVerifiedWheelInputV1{{
+		Descriptor: selectedDescriptor,
+		Inspection: pythonprovider.WheelInspectionV1{
+			Artifact: selectedDescriptor, Distribution: "demo", Filename: filepath.Base(logicalPath),
+		},
+	}}
+	if err := StagePythonPortableVerifiedWheels(
+		prepared, store, []providerstore.ArtifactDescriptor{stale}, selected,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyPythonPortableVerifiedWheels(prepared, selected); err != nil {
+		t.Fatal(err)
+	}
+	if got := FilterSupersededPythonResolverArtifacts(
+		[]providerstore.ArtifactDescriptor{stale}, selected,
+	); len(got) != 0 {
+		t.Fatalf("superseded reusable wheels = %#v", got)
+	}
+}
+
 func TestResetPythonResolverOutputRemovesOnlyRegularPrivateFiles(t *testing.T) {
 	prepared := testPreparedPythonResolverArtifacts(t)
 	for _, name := range []string{"first.whl", "second.whl"} {

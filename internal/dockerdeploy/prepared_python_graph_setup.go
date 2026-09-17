@@ -14,10 +14,11 @@ import (
 )
 
 type PreparedPythonNodeConfig struct {
-	ReusableWheels       []providerstore.ArtifactDescriptor
-	LocalOverrides       []PythonLocalOverrideV1
-	PortableToolBindings *pythonprovider.PortableToolPythonComponentV1
-	SourceBuilder        *SourceBuilderCoordinatorV1
+	ReusableWheels        []providerstore.ArtifactDescriptor
+	LocalOverrides        []PythonLocalOverrideV1
+	PortableToolBindings  *pythonprovider.PortableToolPythonComponentV1
+	PortableToolFreshPlan *PortableToolPythonFreshPlanV1
+	SourceBuilder         *SourceBuilderCoordinatorV1
 }
 
 type PreparedAPTNodeConfig struct {
@@ -130,6 +131,7 @@ func PreparePreparedPythonGraphBackend(
 				ReusableWheels:         append([]providerstore.ArtifactDescriptor{}, config.ReusableWheels...),
 				LocalOverrides:         append([]PythonLocalOverrideV1{}, config.LocalOverrides...),
 				PortableToolBindings:   config.PortableToolBindings,
+				PortableToolFreshPlan:  config.PortableToolFreshPlan,
 				SourceBuilder:          config.SourceBuilder,
 				Progress:               options.Progress,
 				ShowApplicationContext: showApplicationContext,

@@ -94,6 +94,7 @@ func StagePythonPortableVerifiedWheels(
 		reusableByFilename[filename] = artifact
 	}
 	selectedByFilename := make(map[string]providerstore.ArtifactDescriptor, len(selected))
+	supersededByFilename := make(map[string]providerstore.ArtifactDescriptor, len(selected))
 	selectedDistributions := make(map[string]struct{}, len(selected))
 	for _, input := range selected {
 		artifact := input.Descriptor
@@ -117,7 +118,10 @@ func StagePythonPortableVerifiedWheels(
 			return fmt.Errorf("selected Python resolver wheel %q is duplicated", filename)
 		}
 		if prior, found := reusableByFilename[filename]; found && prior != artifact {
-			return fmt.Errorf("selected Python resolver wheels collide at %q", filename)
+			if prior.SHA256 == artifact.SHA256 {
+				return fmt.Errorf("selected Python resolver wheels collide at %q", filename)
+			}
+			supersededByFilename[filename] = prior
 		}
 		selectedByFilename[filename] = artifact
 	}
@@ -125,6 +129,7 @@ func StagePythonPortableVerifiedWheels(
 		return fmt.Errorf("make Python resolver input writable for selected wheels: %w", err)
 	}
 	created := []string{}
+	replaced := map[string]providerstore.ArtifactDescriptor{}
 	defer func() {
 		if protectErr := os.Chmod(prepared.InputHostDir, 0o500); protectErr != nil {
 			err = errors.Join(err, fmt.Errorf("restore Python resolver input protection: %w", protectErr))
@@ -134,8 +139,23 @@ func StagePythonPortableVerifiedWheels(
 				err = errors.Join(err, fmt.Errorf("make Python resolver input writable for cleanup: %w", writeErr))
 			}
 			for _, filename := range created {
-				if removeErr := os.Remove(filepath.Join(prepared.InputHostDir, filename)); removeErr != nil {
+				if removeErr := os.Remove(filepath.Join(prepared.InputHostDir, filename)); removeErr != nil && !os.IsNotExist(removeErr) {
 					err = errors.Join(err, fmt.Errorf("remove staged selected Python resolver wheel %q: %w", filename, removeErr))
+				}
+			}
+			for filename, artifact := range replaced {
+				source, inspectErr := store.InspectArtifactPath(artifact)
+				if inspectErr != nil {
+					err = errors.Join(err, fmt.Errorf("inspect superseded Python resolver wheel %q for rollback: %w", filename, inspectErr))
+					continue
+				}
+				destination := filepath.Join(prepared.InputHostDir, filename)
+				if restoreErr := os.Link(source, destination); restoreErr != nil {
+					err = errors.Join(err, fmt.Errorf("restore superseded Python resolver wheel %q: %w", filename, restoreErr))
+					continue
+				}
+				if verifyErr := providerstore.VerifyArtifactFile(destination, artifact); verifyErr != nil {
+					err = errors.Join(err, fmt.Errorf("verify restored superseded Python resolver wheel %q: %w", filename, verifyErr))
 				}
 			}
 			if protectErr := os.Chmod(prepared.InputHostDir, 0o500); protectErr != nil {
@@ -158,10 +178,20 @@ func StagePythonPortableVerifiedWheels(
 			if _, found := reusableByFilename[filename]; !found {
 				return fmt.Errorf("selected Python resolver wheel destination %q is pre-existing and unowned", filename)
 			}
-			if err := providerstore.VerifyArtifactFile(destination, artifact); err != nil {
-				return fmt.Errorf("selected Python resolver wheel %q conflicts with staged input: %w", filename, err)
+			if prior, superseded := supersededByFilename[filename]; superseded {
+				if err := providerstore.VerifyArtifactFile(destination, prior); err != nil {
+					return fmt.Errorf("superseded Python resolver wheel %q is not the verified reusable input: %w", filename, err)
+				}
+				if err := os.Remove(destination); err != nil {
+					return fmt.Errorf("remove superseded Python resolver wheel %q: %w", filename, err)
+				}
+				replaced[filename] = prior
+			} else {
+				if err := providerstore.VerifyArtifactFile(destination, artifact); err != nil {
+					return fmt.Errorf("selected Python resolver wheel %q conflicts with staged input: %w", filename, err)
+				}
+				continue
 			}
-			continue
 		} else if !os.IsNotExist(statErr) {
 			return fmt.Errorf("inspect selected Python resolver wheel destination %q: %w", filename, statErr)
 		}
@@ -178,6 +208,29 @@ func StagePythonPortableVerifiedWheels(
 		}
 	}
 	return nil
+}
+
+// FilterSupersededPythonResolverArtifacts removes reusable candidates whose
+// resolver filename is now owned by an exact selected portable wheel. The
+// staging operation has already verified and replaced any prior bytes at that
+// path, so downstream resolver inputs must describe only the selected owner.
+func FilterSupersededPythonResolverArtifacts(
+	reusable []providerstore.ArtifactDescriptor,
+	selected []pythonprovider.PortableToolVerifiedWheelInputV1,
+) []providerstore.ArtifactDescriptor {
+	selectedFilenames := make(map[string]struct{}, len(selected))
+	for _, input := range selected {
+		selectedFilenames[filepath.Base(filepath.FromSlash(input.Descriptor.LogicalPath))] = struct{}{}
+	}
+	filtered := make([]providerstore.ArtifactDescriptor, 0, len(reusable))
+	for _, artifact := range reusable {
+		filename := filepath.Base(filepath.FromSlash(artifact.LogicalPath))
+		if _, superseded := selectedFilenames[filename]; superseded {
+			continue
+		}
+		filtered = append(filtered, artifact)
+	}
+	return filtered
 }
 
 // VerifyPythonPortableVerifiedWheels checks the exact staged bytes immediately
