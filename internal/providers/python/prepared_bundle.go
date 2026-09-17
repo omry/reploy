@@ -284,6 +284,10 @@ func publishPreparedWheels(
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	runtimeRoot, err := RuntimeRootV1(request.Component)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("resolve Python runtime root: %w", err)
+	}
 	sort.Slice(inspected, func(left int, right int) bool { return inspected[left].Filename < inspected[right].Filename })
 	wheels := make([]PythonWheelV1, 0, len(inspected))
 	artifacts := make([]providerstore.ArtifactDescriptor, 0, len(inspected))
@@ -318,10 +322,7 @@ func publishPreparedWheels(
 		for name, entryPoint := range wheel.ConsoleScripts {
 			outputs = append(outputs, PythonConsoleScriptV1{
 				Name: name, Distribution: wheel.Distribution, EntryPoint: entryPoint,
-				Path: InstallRoot + "/" + blueprint.ContributionRuntimeOwner(
-					request.Component,
-					blueprint.ContributionProviderPython,
-				) + "/bin/" + name,
+				Path: runtimeRoot + "/bin/" + name,
 			})
 		}
 	}

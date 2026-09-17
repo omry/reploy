@@ -288,9 +288,11 @@ func ValidateBundleV1(component string, bundle PythonBundleV1) error {
 			return fmt.Errorf("Python wheel artifact must be directly beneath wheels")
 		}
 	}
-	root := "/opt/reploy/providers/python/" +
-		blueprint.ContributionRuntimeOwner(component, blueprint.ContributionProviderPython) +
-		"/bin/"
+	runtimeRoot, err := RuntimeRootV1(component)
+	if err != nil {
+		return err
+	}
+	root := runtimeRoot + "/bin/"
 	for index, output := range bundle.Outputs {
 		if index > 0 && bundle.Outputs[index-1].Name >= output.Name {
 			return fmt.Errorf("Python console scripts must be unique and sorted by name")
