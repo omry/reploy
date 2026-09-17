@@ -90,10 +90,10 @@ func TestStagePythonResolverSourceConstraintsProtectsDeterministicInput(t *testi
 	source := testPythonResolvedSource(
 		"application", "demo", "1.0", canonical.Digest("sha256:"+strings.Repeat("a", 64)), wheel.SHA256,
 	)
-	if err := StagePythonResolverSourceConstraints(prepared, request, []providers.ResolvedSourceInput{source}, []providerstore.ArtifactDescriptor{wheel}); err != nil {
+	if err := StagePythonResolverSourceConstraints(prepared, request, []providers.ResolvedSourceInput{source}, []providerstore.ArtifactDescriptor{wheel}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := StagePythonResolverSourceConstraints(prepared, request, []providers.ResolvedSourceInput{source}, []providerstore.ArtifactDescriptor{wheel}); err != nil {
+	if err := StagePythonResolverSourceConstraints(prepared, request, []providers.ResolvedSourceInput{source}, []providerstore.ArtifactDescriptor{wheel}, nil); err != nil {
 		t.Fatal("replace source constraints:", err)
 	}
 	content, err := os.ReadFile(filepath.Join(prepared.InputHostDir, filepath.Base(pythonprovider.ResolverSourceConstraintsPath)))
@@ -110,6 +110,80 @@ func TestStagePythonResolverSourceConstraintsProtectsDeterministicInput(t *testi
 	}
 	if hasPOSIXPermissionBits() && info.Mode().Perm() != 0o500 {
 		t.Fatalf("input mode = %o after constraints, want 500", info.Mode().Perm())
+	}
+}
+
+func TestStagePythonPortableVerifiedWheelsRequiresExactReadOnlyInput(t *testing.T) {
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wheel, err := store.Publish(context.Background(), "wheels/demo-1-py3-none-any.whl", "wheel", strings.NewReader("selected wheel"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, cleanup, err := PreparePythonResolverArtifacts(store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	selected := []pythonprovider.PortableToolVerifiedWheelInputV1{{
+		Descriptor: wheel,
+		Inspection: pythonprovider.WheelInspectionV1{
+			Artifact: wheel, Distribution: "demo", Filename: filepath.Base(wheel.LogicalPath),
+		},
+	}}
+	if err := StagePythonPortableVerifiedWheels(prepared, store, nil, append(selected, selected[0])); err == nil || !strings.Contains(err.Error(), "duplicated") {
+		t.Fatalf("duplicate selected wheel error = %v", err)
+	}
+	if entries, err := os.ReadDir(prepared.InputHostDir); err != nil || len(entries) != 0 {
+		t.Fatalf("duplicate preflight mutated resolver input: %v, %v", entries, err)
+	}
+	other, err := store.Publish(context.Background(), "wheels/other-1-py3-none-any.whl", "wheel", strings.NewReader("other wheel"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflictingDistribution := pythonprovider.PortableToolVerifiedWheelInputV1{
+		Descriptor: other,
+		Inspection: pythonprovider.WheelInspectionV1{
+			Artifact: other, Distribution: "demo", Filename: filepath.Base(other.LogicalPath),
+		},
+	}
+	if err := StagePythonPortableVerifiedWheels(prepared, store, nil, append(selected, conflictingDistribution)); err == nil || !strings.Contains(err.Error(), "distribution") {
+		t.Fatalf("duplicate distribution error = %v", err)
+	}
+	if entries, err := os.ReadDir(prepared.InputHostDir); err != nil || len(entries) != 0 {
+		t.Fatalf("duplicate distribution preflight mutated resolver input: %v, %v", entries, err)
+	}
+	if err := StagePythonPortableVerifiedWheels(prepared, store, nil, selected); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyPythonPortableVerifiedWheels(prepared, selected); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(prepared.InputHostDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasPOSIXPermissionBits() && info.Mode().Perm() != 0o500 {
+		t.Fatalf("input mode = %o, want 500", info.Mode().Perm())
+	}
+	conflict := wheel
+	conflict.LogicalPath = "other/" + filepath.Base(wheel.LogicalPath)
+	if err := StagePythonPortableVerifiedWheels(prepared, store, []providerstore.ArtifactDescriptor{conflict}, selected); err == nil || !strings.Contains(err.Error(), "collide") {
+		t.Fatalf("selected wheel collision error = %v", err)
+	}
+	if err := os.Chmod(prepared.InputHostDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(prepared.InputHostDir, filepath.Base(wheel.LogicalPath))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(prepared.InputHostDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyPythonPortableVerifiedWheels(prepared, selected); err == nil {
+		t.Fatal("missing selected wheel was accepted")
 	}
 }
 

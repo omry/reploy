@@ -400,6 +400,7 @@ func (session *PythonResolverSession) ResolveWheels(
 	request providers.CanonicalProviderRequest,
 	sources []providers.ResolvedSourceInput,
 	reusable []providerstore.ArtifactDescriptor,
+	selected []pythonprovider.PortableToolVerifiedWheelInputV1,
 ) error {
 	if session == nil || session.closed || session.stopped {
 		return fmt.Errorf("Python resolver session is not open")
@@ -413,10 +414,13 @@ func (session *PythonResolverSession) ResolveWheels(
 	if err := session.validateWheelOperationInputs(launcher, requirement, interpreter); err != nil {
 		return err
 	}
-	if err := StagePythonResolverSourceConstraints(session.artifacts, request, sources, reusable); err != nil {
+	if err := VerifyPythonPortableVerifiedWheels(session.artifacts, selected); err != nil {
 		return err
 	}
-	resolverArgv, err := pythonprovider.WheelResolverArgv(interpreter.InvocationPath, request, sources, reusable)
+	if err := StagePythonResolverSourceConstraints(session.artifacts, request, sources, reusable, selected); err != nil {
+		return err
+	}
+	resolverArgv, err := pythonprovider.WheelResolverArgv(interpreter.InvocationPath, request, sources, reusable, selected)
 	if err != nil {
 		return err
 	}

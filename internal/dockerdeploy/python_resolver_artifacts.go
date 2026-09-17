@@ -35,11 +35,12 @@ func StagePythonResolverSourceConstraints(
 	request providers.CanonicalProviderRequest,
 	sources []providers.ResolvedSourceInput,
 	reusable []providerstore.ArtifactDescriptor,
+	selected []pythonprovider.PortableToolVerifiedWheelInputV1,
 ) error {
 	if err := validatePreparedPythonResolverArtifacts(prepared); err != nil {
 		return err
 	}
-	content, err := pythonprovider.WheelResolverSourceConstraints(request, sources, reusable)
+	content, err := pythonprovider.WheelResolverSourceConstraints(request, sources, reusable, selected)
 	if err != nil {
 		return err
 	}
@@ -62,6 +63,146 @@ func StagePythonResolverSourceConstraints(
 	}
 	if protectErr != nil {
 		return fmt.Errorf("restore Python resolver input protection: %w", protectErr)
+	}
+	return nil
+}
+
+// StagePythonPortableVerifiedWheels adds exact, already verified binding wheels
+// to the resolver's read-only input directory. A reusable wheel may share the
+// path only when it has precisely the same descriptor.
+func StagePythonPortableVerifiedWheels(
+	prepared PreparedPythonResolverArtifacts,
+	store providerstore.Store,
+	reusable []providerstore.ArtifactDescriptor,
+	selected []pythonprovider.PortableToolVerifiedWheelInputV1,
+) (err error) {
+	if err := validatePreparedPythonResolverArtifacts(prepared); err != nil {
+		return err
+	}
+	if len(selected) == 0 {
+		return nil
+	}
+	reusableByFilename := make(map[string]providerstore.ArtifactDescriptor, len(reusable))
+	for _, artifact := range reusable {
+		if err := artifact.Validate(); err != nil {
+			return fmt.Errorf("reusable Python resolver wheel: %w", err)
+		}
+		filename := filepath.Base(filepath.FromSlash(artifact.LogicalPath))
+		if prior, found := reusableByFilename[filename]; found && prior != artifact {
+			return fmt.Errorf("reusable Python resolver wheels collide at %q", filename)
+		}
+		reusableByFilename[filename] = artifact
+	}
+	selectedByFilename := make(map[string]providerstore.ArtifactDescriptor, len(selected))
+	selectedDistributions := make(map[string]struct{}, len(selected))
+	for _, input := range selected {
+		artifact := input.Descriptor
+		if err := artifact.Validate(); err != nil {
+			return fmt.Errorf("selected Python resolver wheel: %w", err)
+		}
+		filename := filepath.Base(filepath.FromSlash(artifact.LogicalPath))
+		if artifact.Kind != "wheel" || !strings.HasSuffix(strings.ToLower(filename), ".whl") ||
+			input.Inspection.Artifact != artifact || input.Inspection.Filename != filename {
+			return fmt.Errorf("selected Python resolver wheel %q has inconsistent descriptor or inspection", artifact.LogicalPath)
+		}
+		distribution := input.Inspection.Distribution
+		if distribution == "" || pythonprovider.NormalizeDistributionName(distribution) != distribution {
+			return fmt.Errorf("selected Python resolver wheel %q has invalid normalized distribution", artifact.LogicalPath)
+		}
+		if _, found := selectedDistributions[distribution]; found {
+			return fmt.Errorf("selected Python resolver distribution %q is duplicated", distribution)
+		}
+		selectedDistributions[distribution] = struct{}{}
+		if _, found := selectedByFilename[filename]; found {
+			return fmt.Errorf("selected Python resolver wheel %q is duplicated", filename)
+		}
+		if prior, found := reusableByFilename[filename]; found && prior != artifact {
+			return fmt.Errorf("selected Python resolver wheels collide at %q", filename)
+		}
+		selectedByFilename[filename] = artifact
+	}
+	if err := os.Chmod(prepared.InputHostDir, 0o700); err != nil {
+		return fmt.Errorf("make Python resolver input writable for selected wheels: %w", err)
+	}
+	created := []string{}
+	defer func() {
+		if protectErr := os.Chmod(prepared.InputHostDir, 0o500); protectErr != nil {
+			err = errors.Join(err, fmt.Errorf("restore Python resolver input protection: %w", protectErr))
+		}
+		if err != nil {
+			if writeErr := os.Chmod(prepared.InputHostDir, 0o700); writeErr != nil {
+				err = errors.Join(err, fmt.Errorf("make Python resolver input writable for cleanup: %w", writeErr))
+			}
+			for _, filename := range created {
+				if removeErr := os.Remove(filepath.Join(prepared.InputHostDir, filename)); removeErr != nil {
+					err = errors.Join(err, fmt.Errorf("remove staged selected Python resolver wheel %q: %w", filename, removeErr))
+				}
+			}
+			if protectErr := os.Chmod(prepared.InputHostDir, 0o500); protectErr != nil {
+				err = errors.Join(err, fmt.Errorf("restore Python resolver input protection after cleanup: %w", protectErr))
+			}
+		}
+	}()
+	filenames := make([]string, 0, len(selectedByFilename))
+	for filename := range selectedByFilename {
+		filenames = append(filenames, filename)
+	}
+	sort.Strings(filenames)
+	for _, filename := range filenames {
+		artifact := selectedByFilename[filename]
+		destination := filepath.Join(prepared.InputHostDir, filename)
+		if info, statErr := os.Lstat(destination); statErr == nil {
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("selected Python resolver wheel destination %q is not a regular file", filename)
+			}
+			if _, found := reusableByFilename[filename]; !found {
+				return fmt.Errorf("selected Python resolver wheel destination %q is pre-existing and unowned", filename)
+			}
+			if err := providerstore.VerifyArtifactFile(destination, artifact); err != nil {
+				return fmt.Errorf("selected Python resolver wheel %q conflicts with staged input: %w", filename, err)
+			}
+			continue
+		} else if !os.IsNotExist(statErr) {
+			return fmt.Errorf("inspect selected Python resolver wheel destination %q: %w", filename, statErr)
+		}
+		source, err := store.InspectArtifactPath(artifact)
+		if err != nil {
+			return fmt.Errorf("inspect selected Python resolver wheel %q: %w", filename, err)
+		}
+		if err := os.Link(source, destination); err != nil {
+			return fmt.Errorf("stage selected Python resolver wheel %q: %w", filename, err)
+		}
+		created = append(created, filename)
+		if err := providerstore.VerifyArtifactFile(destination, artifact); err != nil {
+			return fmt.Errorf("verify staged selected Python resolver wheel %q: %w", filename, err)
+		}
+	}
+	return nil
+}
+
+// VerifyPythonPortableVerifiedWheels checks the exact staged bytes immediately
+// before the resolver consumes them. Selected wheels are mandatory inputs,
+// unlike optional reusable candidates.
+func VerifyPythonPortableVerifiedWheels(
+	prepared PreparedPythonResolverArtifacts,
+	selected []pythonprovider.PortableToolVerifiedWheelInputV1,
+) error {
+	if err := validatePreparedPythonResolverArtifacts(prepared); err != nil {
+		return err
+	}
+	for _, input := range selected {
+		artifact := input.Descriptor
+		if err := artifact.Validate(); err != nil {
+			return fmt.Errorf("selected Python resolver wheel: %w", err)
+		}
+		filename := filepath.Base(filepath.FromSlash(artifact.LogicalPath))
+		if artifact.Kind != "wheel" || !strings.HasSuffix(strings.ToLower(filename), ".whl") ||
+			input.Inspection.Artifact != artifact || input.Inspection.Filename != filename {
+			return fmt.Errorf("selected Python resolver wheel %q has inconsistent descriptor or inspection", artifact.LogicalPath)
+		}
+		if err := providerstore.VerifyArtifactFile(filepath.Join(prepared.InputHostDir, filename), artifact); err != nil {
+			return fmt.Errorf("verify selected Python resolver wheel %q: %w", filename, err)
+		}
 	}
 	return nil
 }

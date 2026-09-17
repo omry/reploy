@@ -96,7 +96,7 @@ func TestPythonResolverWheelIntegration(t *testing.T) {
 		"application", "demo-server", "1.0",
 		canonical.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256([]byte("demo source")))), wheel.SHA256,
 	)
-	if err := session.ResolveWheels(ctx, consumer.EnvironmentLauncher, requirement, interpreter, request, []providers.ResolvedSourceInput{source}, []providerstore.ArtifactDescriptor{wheel}); err != nil {
+	if err := session.ResolveWheels(ctx, consumer.EnvironmentLauncher, requirement, interpreter, request, []providers.ResolvedSourceInput{source}, []providerstore.ArtifactDescriptor{wheel}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := session.Stop(ctx); err != nil {
@@ -304,7 +304,7 @@ demo-server = "demo_server:main"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := session.ResolveWheels(ctx, consumer.EnvironmentLauncher, requirement, interpreter, request, sources, wheels); err != nil {
+	if err := session.ResolveWheels(ctx, consumer.EnvironmentLauncher, requirement, interpreter, request, sources, wheels, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := session.Stop(ctx); err != nil {
