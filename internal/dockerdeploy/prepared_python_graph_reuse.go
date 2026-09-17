@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"path"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -51,7 +50,10 @@ func LoadPreparedPythonGraphReuse(
 	if err != nil {
 		return PreparedPythonGraphReuse{}, err
 	}
-	exclusiveRoots := plannedAPTExclusiveRoots(plan)
+	exclusiveRoots, err := plannedAPTExclusiveRoots(plan)
+	if err != nil {
+		return PreparedPythonGraphReuse{}, err
+	}
 	for id, node := range nodes {
 		switch node.Provider {
 		case blueprint.ComponentTypeAPT:
@@ -284,21 +286,22 @@ func reusableAPTArchives(store providerstore.Store, bundle aptprovider.BundleV1)
 	return debs
 }
 
-func plannedAPTExclusiveRoots(plan providers.ProviderPlanV1) []string {
+func plannedAPTExclusiveRoots(plan providers.ProviderPlanV1) ([]string, error) {
 	roots := []string{}
 	for _, node := range plan.Nodes {
 		if node.Provider != blueprint.ComponentTypePython {
 			continue
 		}
 		for _, component := range node.Components {
-			roots = append(roots, path.Join(
-				pythonprovider.InstallRoot,
-				blueprint.ContributionRuntimeOwner(component, blueprint.ContributionProviderPython),
-			))
+			root, err := pythonprovider.RuntimeRootV1(component)
+			if err != nil {
+				return nil, fmt.Errorf("planned Python runtime root for %q: %w", component, err)
+			}
+			roots = append(roots, root)
 		}
 	}
 	sort.Strings(roots)
-	return roots
+	return roots, nil
 }
 
 func validateCurrentPythonSourceWheels(

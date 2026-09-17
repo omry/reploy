@@ -1603,8 +1603,8 @@ Environment names match `[A-Za-z_][A-Za-z0-9_]*`, are unique and sorted, and
 the profile always sets `InheritNone`. `Umask` is four lowercase octal digits.
 Secrets are not transaction fields.
 
-The Python transaction uses recipe `python-materialize-v2` and child environment
-`python-v2` with `InheritNone=true`, `Umask=0022`, and no variables.
+The Python transaction uses recipe `python-materialize-v3` and child environment
+`python-v3` with `InheritNone=true`, `Umask=0022`, and no variables.
 It runs as numeric root from `/` with `NetworkPolicy=none`. Its read-only script
 mount is keyed by the provider-owned script digest; its read-only wheel mount is
 keyed by the complete resolved-bundle identity. The selected interpreter is a

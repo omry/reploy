@@ -1,0 +1,2 @@
+kind: Added
+body: Install the closed portable Python binding wheel set without network access and validate its generated console scripts in the application runtime.

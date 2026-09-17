@@ -201,7 +201,7 @@ func TestPythonOwnerValidatorsBindProfileAndBundlePayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	wrongRecipe := payload
-	wrongRecipe.RecipeVersion = "python-v1"
+	wrongRecipe.RecipeVersion = "python-v2"
 	if err := ValidateResolvedBundlePayloadV1(wrongRecipe); err == nil || !strings.Contains(err.Error(), "recipe version") {
 		t.Fatalf("recipe mismatch error = %v", err)
 	}
