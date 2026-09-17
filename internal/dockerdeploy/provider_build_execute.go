@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"sort"
 
 	"github.com/omry/reploy/internal/buildprofile"
 	"github.com/omry/reploy/internal/buildprogress"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
+	pythonprovider "github.com/omry/reploy/internal/providers/python"
 	"github.com/omry/reploy/internal/providerstore"
 )
 
@@ -280,9 +282,20 @@ func executeLockedProviderBuildV1(
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute provider graph: %w", err)
 	}
-	portableTools := coordinator.PortableToolLock()
-	if err := coordinator.Cleanup(); err != nil {
-		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("cleanup source-builder portable tools: %w", err)
+	portableTools, portableToolsErr := portableToolLockForCompletedGraphV1(
+		coordinator.PortableToolLock(), preparation.ReusableLock,
+	)
+	cleanupErr := coordinator.Cleanup()
+	if portableToolsErr != nil {
+		if cleanupErr != nil {
+			cleanupErr = fmt.Errorf("cleanup source-builder portable tools: %w", cleanupErr)
+		}
+		return LockedProviderBuildExecutionResultV1{}, errors.Join(
+			portableToolsErr, cleanupErr,
+		)
+	}
+	if cleanupErr != nil {
+		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("cleanup source-builder portable tools: %w", cleanupErr)
 	}
 	writeProviderBuildProgress(input.Progress, "assembling environment runtime plan")
 	buildprogress.Report(input.BuildProgress, buildprogress.Event{
@@ -348,6 +361,165 @@ func executeLockedProviderBuildV1(
 	return LockedProviderBuildExecutionResultV1{
 		State: completed.State, Lock: completed.Lock, Validated: completed.Validated,
 	}, nil
+}
+
+// portableToolLockForCompletedGraphV1 preserves the normalized portable lock
+// that authorized application-scoped Python replay when the source-builder
+// coordinator did not construct a replacement. The graph has already reopened
+// and reverified every selected binding before this handoff.
+func portableToolLockForCompletedGraphV1(
+	coordinated *providers.PortableToolLockV1,
+	reusable *deploy.BuildLockV1,
+) (*providers.PortableToolLockV1, error) {
+	var retained *providers.PortableToolLockV1
+	if reusable != nil && reusable.PortableTools != nil {
+		keys, err := portableToolPythonBindingPlanKeysV1(*reusable.PortableTools)
+		if err != nil {
+			return nil, fmt.Errorf("select replayed portable Python bindings: %w", err)
+		}
+		retained, err = portableToolLockForPlanKeysV1(*reusable.PortableTools, keys)
+		if err != nil {
+			return nil, fmt.Errorf("retain replayed portable Python bindings: %w", err)
+		}
+	}
+	if coordinated == nil {
+		return retained, nil
+	}
+	if retained == nil {
+		lock := providers.ClonePortableToolLockV1(*coordinated)
+		return &lock, nil
+	}
+	merged, err := mergePortableToolLocksV1(*coordinated, *retained)
+	if err != nil {
+		return nil, fmt.Errorf("combine coordinated and replayed portable tools: %w", err)
+	}
+	return &merged, nil
+}
+
+func portableToolPythonBindingPlanKeysV1(lock providers.PortableToolLockV1) (map[string]struct{}, error) {
+	if err := providers.ValidatePortableToolLockV1(lock); err != nil {
+		return nil, err
+	}
+	_, projection, err := pythonprovider.ProjectPortableToolPythonBindingsV1(
+		lock.Plan.PortableToolPlan, []providers.ResolvedComponentRequestV1{},
+	)
+	if err != nil {
+		return nil, err
+	}
+	keys := make(map[string]struct{})
+	for _, component := range projection.Components {
+		for _, binding := range component.Bindings {
+			entry, err := portableToolPythonPlanEntryForBindingV1(lock.Plan.PortableToolPlan, binding)
+			if err != nil {
+				return nil, err
+			}
+			keys[portableToolCompletionPlanKeyV1(entry.Scope, entry.Provenance.Tool)] = struct{}{}
+		}
+	}
+	return keys, nil
+}
+
+func portableToolLockForPlanKeysV1(
+	lock providers.PortableToolLockV1,
+	keys map[string]struct{},
+) (*providers.PortableToolLockV1, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	cloned := providers.ClonePortableToolLockV1(lock)
+	plan := providers.PortableToolPlanV1{Schema: providers.PortableToolPlanSchemaV1, Tools: []providers.PortableToolPlanEntryV1{}}
+	scopes := make(map[string]struct{})
+	for _, entry := range cloned.Plan.PortableToolPlan.Tools {
+		if _, found := keys[portableToolCompletionPlanKeyV1(entry.Scope, entry.Provenance.Tool)]; !found {
+			continue
+		}
+		plan.Tools = append(plan.Tools, entry)
+		scopes[entry.Scope] = struct{}{}
+	}
+	domains := make([]providers.PortableToolProviderDomainSetV1, 0, len(scopes))
+	for _, domain := range cloned.Plan.Domains {
+		if _, found := scopes[domain.Scope]; found {
+			domains = append(domains, domain)
+		}
+	}
+	dag, err := providers.BuildPortableToolProviderDAGV1(cloned.Plan.ProviderPlan, plan, domains)
+	if err != nil {
+		return nil, err
+	}
+	result := providers.PortableToolLockV1{
+		Schema: providers.PortableToolLockSchemaV1, Plan: dag,
+		Releases:     []providers.PortableToolReleaseManifestLockV1{},
+		Acquisitions: []providers.PortableToolArtifactAcquisitionLockV1{},
+	}
+	for _, release := range cloned.Releases {
+		if _, found := keys[portableToolCompletionPlanKeyV1(release.Scope, release.Tool)]; found {
+			result.Releases = append(result.Releases, release)
+		}
+	}
+	for _, acquisition := range cloned.Acquisitions {
+		if _, found := keys[portableToolCompletionPlanKeyV1(acquisition.Scope, acquisition.Tool)]; found {
+			result.Acquisitions = append(result.Acquisitions, acquisition)
+		}
+	}
+	if err := providers.ValidatePortableToolLockV1(result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func mergePortableToolLocksV1(
+	left providers.PortableToolLockV1,
+	right providers.PortableToolLockV1,
+) (providers.PortableToolLockV1, error) {
+	if err := providers.ValidatePortableToolLockV1(left); err != nil {
+		return providers.PortableToolLockV1{}, fmt.Errorf("first lock: %w", err)
+	}
+	if err := providers.ValidatePortableToolLockV1(right); err != nil {
+		return providers.PortableToolLockV1{}, fmt.Errorf("second lock: %w", err)
+	}
+	if !reflect.DeepEqual(left.Plan.ProviderPlan, right.Plan.ProviderPlan) {
+		return providers.PortableToolLockV1{}, fmt.Errorf("portable locks use different provider plans")
+	}
+	left = providers.ClonePortableToolLockV1(left)
+	right = providers.ClonePortableToolLockV1(right)
+	plan := providers.PortableToolPlanV1{
+		Schema: providers.PortableToolPlanSchemaV1,
+		Tools:  append(left.Plan.PortableToolPlan.Tools, right.Plan.PortableToolPlan.Tools...),
+	}
+	sort.Slice(plan.Tools, func(i, j int) bool {
+		return portableToolCompletionPlanKeyV1(plan.Tools[i].Scope, plan.Tools[i].Provenance.Tool) <
+			portableToolCompletionPlanKeyV1(plan.Tools[j].Scope, plan.Tools[j].Provenance.Tool)
+	})
+	domains := append(left.Plan.Domains, right.Plan.Domains...)
+	sort.Slice(domains, func(i, j int) bool { return domains[i].Scope < domains[j].Scope })
+	dag, err := providers.BuildPortableToolProviderDAGV1(left.Plan.ProviderPlan, plan, domains)
+	if err != nil {
+		return providers.PortableToolLockV1{}, err
+	}
+	result := providers.PortableToolLockV1{
+		Schema: providers.PortableToolLockSchemaV1, Plan: dag,
+		Releases:     append(left.Releases, right.Releases...),
+		Acquisitions: append(left.Acquisitions, right.Acquisitions...),
+	}
+	sort.Slice(result.Releases, func(i, j int) bool {
+		return portableToolCompletionPlanKeyV1(result.Releases[i].Scope, result.Releases[i].Tool) <
+			portableToolCompletionPlanKeyV1(result.Releases[j].Scope, result.Releases[j].Tool)
+	})
+	sort.Slice(result.Acquisitions, func(i, j int) bool {
+		leftKey := portableToolCompletionPlanKeyV1(result.Acquisitions[i].Scope, result.Acquisitions[i].Tool) + "\x00" +
+			result.Acquisitions[i].Artifact.ID + "\x00" + string(result.Acquisitions[i].Artifact.Digest)
+		rightKey := portableToolCompletionPlanKeyV1(result.Acquisitions[j].Scope, result.Acquisitions[j].Tool) + "\x00" +
+			result.Acquisitions[j].Artifact.ID + "\x00" + string(result.Acquisitions[j].Artifact.Digest)
+		return leftKey < rightKey
+	})
+	if err := providers.ValidatePortableToolLockV1(result); err != nil {
+		return providers.PortableToolLockV1{}, err
+	}
+	return result, nil
+}
+
+func portableToolCompletionPlanKeyV1(scope string, tool string) string {
+	return scope + "\x00" + tool
 }
 
 func writeValidatedBuildCleanupWarning(output io.Writer, record deploy.ValidatedBuildV1) {
