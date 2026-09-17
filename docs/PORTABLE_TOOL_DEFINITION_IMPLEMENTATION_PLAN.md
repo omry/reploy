@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-09-15
+updated: 2026-09-17
 summary: Reviewable delivery plan for portable-tool authoring, definitions, and the embedded Java and Playwright implementations.
 implements: docs/PORTABLE_TOOL_DEFINITION_DESIGN.md
 ---
@@ -24,12 +24,14 @@ global:swe:deliver-design-stack(docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLA
 
 The active milestone IDs are `PTD-01` through `PTD-14`, `PTD-16` through
 `PTD-27`, and `PTD-29`; `PTD-15` and `PTD-28` are retired. `PTD-21`, `PTD-22`,
-and `PTD-23` are milestone containers, and `PTD-23.1` and `PTD-23.2` are nested
-delivery containers. Their first-class delivery IDs are `PTD-21.1` through
+and `PTD-23` are milestone containers, and `PTD-23.1`, `PTD-23.2`,
+and `PTD-23.3` are nested delivery containers. Their first-class delivery IDs
+are `PTD-21.1` through
 `PTD-21.5`, `PTD-22.1` through `PTD-22.3`, `PTD-23.1.1` through `PTD-23.1.8`,
-`PTD-23.2.1` through `PTD-23.2.5`, and `PTD-23.3`; every other active milestone
-is itself one delivery item. The preparation gates are prerequisites, not
-implementation tasks, commits, or pull requests. `deliver-design-stack` may
+`PTD-23.2.1` through `PTD-23.2.5`, and `PTD-23.3.1` through
+`PTD-23.3.7`; every other active milestone is itself one delivery item. The
+preparation gates are prerequisites, not implementation tasks, commits, or pull
+requests. `deliver-design-stack` may
 read this plan before preparation is complete, but must pause on an unmet
 preparation gate.
 
@@ -94,6 +96,17 @@ PTD-23.2 is now a nested container and owns no implementation commit or pull
 request; its existing acquisition and verification contract is preserved and
 owned exactly once across PTD-23.2.1 through PTD-23.2.5. PTD-23.3 now depends
 on the completed PTD-23.2.5 handoff.
+
+Plan revision note (2026-09-17): PTD-23.3 is split into seven dependent,
+review-sized child delivery items. PTD-23.3 is a nested container and owns no
+implementation commit or pull request. PTD-23.3.1 owns the verified-wheel
+resolver input seam already constructed; the remaining children separately own
+fresh orchestration, locked replay and identity retention, offline installation,
+CLI alias publication, canonical operation order, and integrated acceptance.
+The original PTD-23.3 technical and acceptance contract below remains in force
+across the children. PTD-24 depends on the completed PTD-23.3.7 handoff. This
+changes delivery boundaries only; it does not amend the accepted design or
+expand Playwright support.
 
 Plan correction note (2026-09-01): PTD-21.4 review exposed duplicate ownership
 of canonical portable-tool record structures and validation between catalog
@@ -301,8 +314,8 @@ ancestry. Each `PTD-*` task is then constructed or restacked above PR 82 in
 exact dependency order:
 
 `PTD-21`, `PTD-22`, and `PTD-23` are milestone containers rather than delivery
-slices, and `PTD-23.1` and `PTD-23.2` are nested containers rather than delivery
-slices.
+slices, and `PTD-23.1`, `PTD-23.2`, and `PTD-23.3` are nested containers rather
+than delivery slices.
 Their explicitly enumerated leaf slices are first-class delivery items: each
 owns one commit and one PR, while a container owns neither.
 The sole authorized review-subdivision exception is `PTD-23.1.4`, which remains
@@ -314,9 +327,9 @@ three PRs retain current-head approval in that order.
 `PTD-21` completes only when `PTD-21.1` through `PTD-21.5` have current-head
 approval; `PTD-22` completes only when `PTD-22.1` through `PTD-22.3` do;
 `PTD-23.1` completes only when `PTD-23.1.1` through `PTD-23.1.8` do; and
-`PTD-23.2` completes only when `PTD-23.2.1` through `PTD-23.2.5` do. `PTD-23`
-completes only when the nested `PTD-23.1` and `PTD-23.2` containers and delivery
-item `PTD-23.3` do. `PTD-22.1` depends directly on `PTD-21.5`, but
+`PTD-23.2` completes only when `PTD-23.2.1` through `PTD-23.2.5` do;
+`PTD-23.3` completes only when `PTD-23.3.1` through `PTD-23.3.7` do. `PTD-23`
+completes only when all three nested containers do. `PTD-22.1` depends directly on `PTD-21.5`, but
 cannot activate until the complete `PTD-21` milestone has converged. References
 below to a task as a construction or review unit mean one delivery item,
 including these leaf slices.
@@ -464,8 +477,15 @@ the campaign until durable authority is updated.
 | PTD-23.2.3 | Acquire Manifest-Authorized Portable Binding Wheels | PTD-23.2.2 | New work |
 | PTD-23.2.4 | Verify Portable Binding Wheels Against Selected Contracts | PTD-23.2.3 | New work |
 | PTD-23.2.5 | Produce Replay-Stable Verified-Wheel Inputs | PTD-23.2.4 | New work; completes PTD-23.2 |
-| PTD-23.3 | Materialize Portable Python Bindings Offline | PTD-23.2.5 | New work |
-| PTD-24 | Materialize Playwright Chromium Payloads | PTD-23.3 | New work |
+| PTD-23.3 | Materialize Portable Python Bindings Offline (container) | PTD-23.2.5 | No owning PR |
+| PTD-23.3.1 | Constrain Resolver to Exact Verified Binding Wheels | PTD-23.2.5 | New work |
+| PTD-23.3.2 | Wire Fresh Binding Orchestration | PTD-23.3.1 | New work |
+| PTD-23.3.3 | Reverify Locked Bindings and Retain Identity | PTD-23.3.2 | New work |
+| PTD-23.3.4 | Install the Closed Python Wheel Set Offline | PTD-23.3.3 | New work |
+| PTD-23.3.5 | Publish Application-Scoped Python CLI Aliases | PTD-23.3.4 | New work |
+| PTD-23.3.6 | Enforce Portable Binding Operation Order | PTD-23.3.5 | New work |
+| PTD-23.3.7 | Prove Neutral and Playwright Binding Acceptance | PTD-23.3.6 | New work |
+| PTD-24 | Materialize Playwright Chromium Payloads | PTD-23.3.7 | New work |
 | PTD-25 | Derive Portable Tool Integration Cases and Evidence | PTD-24 | New work; closes the PTD-20 production-caller deferral through the PTD-21.5 boundary |
 | PTD-26 | Validate Every Advertised Java Tuple Through Reploy | PTD-25 | New work |
 | PTD-27 | Validate Every Advertised Playwright Tuple Through Reploy | PTD-26 | New work |
@@ -1113,8 +1133,8 @@ Non-goals: runtime Java, other Java versions, or Playwright materialization.
 ### PTD-23: Materialize Portable Python Bindings
 
 PTD-23 is a milestone container. It owns no implementation commit or pull
-request; its complete scope is owned by the nested PTD-23.1 and PTD-23.2
-containers and the PTD-23.3 delivery item.
+request; its complete scope is owned by the nested PTD-23.1, PTD-23.2, and
+PTD-23.3 containers.
 
 Scope: implement the generic portable Python-binding path from selected binding
 contracts and artifacts into Python provider roots, exact wheel constraints,
@@ -1707,7 +1727,12 @@ passes the same orchestration.
 
 Non-goals: offering bytes to pip, wheel installation, alias publication,
 browser payloads, or the PTD-25 ordinary-build production caller.
+
 #### PTD-23.3: Materialize Portable Python Bindings Offline
+
+PTD-23.3 is a nested delivery container. It owns no implementation commit or
+pull request. Its complete scope and acceptance contract below are owned
+exactly once across PTD-23.3.1 through PTD-23.3.7.
 
 Scope: at the Python resolver seam defined by PTD-23.1, consume the eligibility
 decision already enforced over the observed interpreter, invoke PTD-23.2's
@@ -1791,6 +1816,126 @@ bundled-component names.
 Non-goals: Chromium, Headless Shell, or FFmpeg materialization; target APT
 roots; another ecosystem binding; additional catalog definitions; or the
 PTD-25 ordinary-build production caller.
+
+#### PTD-23.3.1: Constrain Resolver to Exact Verified Binding Wheels
+
+Scope: extend the existing Python resolver's supplied input seam to stage
+PTD-23.2.5 verified descriptors read-only under deterministic,
+collision-checked paths; render each selected distribution as a direct root
+with a mandatory local-wheel constraint; and compare resolver output bytes,
+filename, inspected metadata, and selected console script before publication.
+Leave production acquisition and caller wiring to PTD-23.3.2.
+
+Acceptance: supplied verified inputs cannot be replaced by an index candidate
+or an unowned staged file; missing, duplicate, conflicting, or changed inputs
+and output fail before bundle publication. Input permutation produces the same
+roots and constraints. Existing resolution with no selected bindings retains
+its behavior. Focused neutral wheel tests exercise the actual resolver seam.
+
+Non-goals: production acquisition, locked replay, installation, alias
+publication, or canonical portable operation dependencies.
+
+#### PTD-23.3.2: Wire Fresh Binding Orchestration
+
+Scope: after the existing interpreter eligibility gate, join every selected
+binding artifact reference to its projected component constraint and invoke
+PTD-23.2.5 fresh acquisition and verification once per selected artifact.
+Pass those inputs through PTD-23.3.1's production resolver seam and retain the
+selected wheel in the ordinary Python bundle without treating it as a local
+source or index selection.
+
+Acceptance: the production fresh path resolves the exact selected wheel once
+per application closure; unauthorized or inconsistent joins fail before
+network access or resolver staging. Neutral fixtures and Playwright's exact
+selected binding exercise the same path without name-based dispatch.
+
+Non-goals: locked replay, offline installation, alias publication, or browser
+payload acquisition.
+
+#### PTD-23.3.3: Reverify Locked Bindings and Retain Identity
+
+Scope: wire PTD-23.2.5's locked replay through the same resolver input path,
+reopening and reverifying each exact store descriptor with zero acquisition.
+Retain the selected binding descriptor, source outcome, and verification
+identity in the provider bundle and lock/store reachability using existing
+ownership and normalized lock records.
+
+Acceptance: replay uses no network, repeats inspection and contract
+verification, and rejects missing or drifted descriptors before staging. A
+cached Python bundle cannot silently substitute a different selected binding;
+all retained references remain reachable from the lock and store.
+
+Non-goals: installing wheels, publishing aliases, or changing the acquisition
+policy.
+
+#### PTD-23.3.4: Install the Closed Python Wheel Set Offline
+
+Scope: feed the complete closed resolver output into the existing Python
+bundle and network-disabled materialization transaction. Use the selected
+application interpreter and the Python provider's fixed install recipe, then
+identify and validate the contract-selected generated console script within
+the owning application's runtime root.
+
+Acceptance: installation reads only mounted closed wheels and makes no network
+call, upstream installer call, or browser acquisition. Missing, duplicate, or
+mismatched selected wheels or console scripts fail with ordinary provider
+rollback and no successful materialization result.
+
+Non-goals: alias publication or canonical DAG dependency changes.
+
+#### PTD-23.3.5: Publish Application-Scoped Python CLI Aliases
+
+Scope: after PTD-23.3.4 proves the generated console script, implement one
+fixed Reploy-owned export primitive. Anchor destination operations in the
+provider staging root, reject symlinked or unowned parents and destinations,
+create missing parents at mode `0755` only after domain acceptance, and publish
+a same-directory temporary symlink with no-replace rename. Use only the
+canonical final-image absolute Python-runtime target as the link payload;
+validate the target and final-image resolution without a host staging prefix.
+Enforce filesystem/export claims and shared-destination deduplication by exact
+runtime target and binding identity.
+
+Acceptance: path escape, conflicting application scopes, pre-existing
+unowned destinations, interrupted publication, or wrong final-image target
+fails closed with rollback and no usable alias. The definition controls only
+name and destination, not link syntax, commands, or targets.
+
+Non-goals: browser aliases, new public syntax, or canonical DAG validation.
+
+#### PTD-23.3.6: Enforce Portable Binding Operation Order
+
+Scope: extend the provider-neutral canonical DAG and locked-replay validation
+so every binding acquisition reaches the common barrier, the barrier precedes
+its materialization, materialization precedes its matching export, and export
+precedes its capability. Require a unique contract CLI-to-export-and-capability
+join without changing operation ownership.
+
+Acceptance: DAG and replay tests reject missing, extra, ambiguous, or reordered
+edges; no alias or capability can become successful before the owning Python
+transaction. A shared export domain rejects distinct application runtimes
+competing for one destination.
+
+Non-goals: Python wheel acquisition, installation, or alias filesystem
+mutation.
+
+#### PTD-23.3.7: Prove Neutral and Playwright Binding Acceptance
+
+Scope: exercise the complete production resolver, closed-wheel transaction,
+fixed alias primitive, and portable operation DAG with two neutral synthetic
+bindings and the selected Playwright wheel. Cover input order, substitution,
+missing and duplicate artifacts, script mismatch, alias escape and collision,
+interrupted publication, locked descriptor drift, cleanup, and network and
+command boundaries.
+
+Acceptance: the exact wheel appears once in the application's Python closure;
+the declared CLI resolves to its generated console script in final-image path
+space; fresh and locked behavior meets all PTD-23.3 parent acceptance clauses.
+Assertions prove no upstream installer or browser acquisition and no
+production dispatch on Playwright, Node.js, `playwright-core`, package, CLI,
+or bundled-component names. Full required checks pass on the exact candidate.
+
+Non-goals: Chromium, Headless Shell, FFmpeg, target APT roots, the PTD-25
+ordinary-build caller, or PTD-27 advertised-tuple validation.
 
 ### PTD-24: Materialize Playwright Chromium Payloads
 
@@ -1880,10 +2025,10 @@ The campaign is complete only when:
   dependency order: `PTD-01` through `PTD-14`, `PTD-16` through `PTD-20`,
   `PTD-21.1` through `PTD-21.5`, `PTD-22.1` through `PTD-22.3`,
   `PTD-23.1.1` through `PTD-23.1.8`, `PTD-23.2.1` through `PTD-23.2.5`,
-  `PTD-23.3`, `PTD-24` through `PTD-27`, and `PTD-29`; the `PTD-21`, `PTD-22`,
-  and `PTD-23` milestone containers and nested `PTD-23.1` and `PTD-23.2`
-  containers own no PR and close only when all of their child slices are
-  approved;
+  `PTD-23.3.1` through `PTD-23.3.7`, `PTD-24` through `PTD-27`, and
+  `PTD-29`; the `PTD-21`, `PTD-22`, and `PTD-23` milestone containers and nested
+  `PTD-23.1`, `PTD-23.2`, and `PTD-23.3` containers own no PR and close only
+  when all of their child slices are approved;
 - the shared-record-contract corrective prerequisite has current-head approval
   and remains in the exact ancestry after PTD-21.3 and before PTD-21.4;
 - the plan-only corrective predecessor has current-head approval and remains in
