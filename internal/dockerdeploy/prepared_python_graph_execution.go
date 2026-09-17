@@ -28,7 +28,7 @@ type PreparedPythonGraphExecutionInput struct {
 	Sources          []providers.ResolvedSourceInput
 	SourceWheels     []providerstore.ArtifactDescriptor
 	LocalOverrides   []PythonLocalOverrideV1
-	PortablePython   *pythonprovider.PortableToolPythonProjectionV1
+	PortablePython   *PortableToolPythonFreshPlanV1
 	SourceBuilder    *SourceBuilderCoordinatorV1
 	CurrentLock      *deploy.BuildLockV1
 	FinalImageConfig providers.ImageConfigPolicy
@@ -64,7 +64,14 @@ func ExecutePreparedPythonGraph(
 		return providers.GraphExecutionResult{}, err
 	}
 	dropSourceBuilderPythonCachedResolutionsV1(input.Plan, input.CurrentLock, reuse.CachedResolutions)
-	bindingsByComponent, err := portablePythonProjectionComponentsV1(input.Plan, input.PortablePython)
+	var projection *pythonprovider.PortableToolPythonProjectionV1
+	if input.PortablePython != nil {
+		if err := validatePortableToolPythonFreshPlanV1(input.PortablePython); err != nil {
+			return providers.GraphExecutionResult{}, err
+		}
+		projection = &input.PortablePython.Projection
+	}
+	bindingsByComponent, err := portablePythonProjectionComponentsV1(input.Plan, projection)
 	if err != nil {
 		return providers.GraphExecutionResult{}, err
 	}
@@ -73,6 +80,13 @@ func ExecutePreparedPythonGraph(
 		node, found := graphBackendNode(input.Plan, id)
 		if found && len(node.Components) == 1 {
 			config.PortableToolBindings = bindingsByComponent[node.Components[0]]
+			if config.PortableToolBindings != nil {
+				config.PortableToolFreshPlan = input.PortablePython
+				// PTD-23.3.3 owns authenticated locked replay. Until that
+				// path is supplied, a selected binding always takes the fresh
+				// orchestration path instead of accepting a cached resolution.
+				delete(reuse.CachedResolutions, id)
+			}
 		}
 		config.SourceBuilder = input.SourceBuilder
 		reuse.NodeConfigs[id] = config
