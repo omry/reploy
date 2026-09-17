@@ -154,6 +154,80 @@ func TestExecuteLockedProviderBuildV1PreservesReusedPortableToolProvenance(t *te
 	}
 }
 
+func TestPortableToolLockForCompletedGraphPreservesLockedPythonReplay(t *testing.T) {
+	fixture := newPortableToolPythonLockedTestFixture(t)
+	reusable := &deploy.BuildLockV1{PortableTools: &fixture.lock}
+
+	got, err := portableToolLockForCompletedGraphV1(nil, reusable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || !reflect.DeepEqual(*got, fixture.lock) {
+		t.Fatalf("completed portable lock = %#v, want %#v", got, fixture.lock)
+	}
+	got.Acquisitions[0].Outcome.RedirectHops = "9"
+	if reusable.PortableTools.Acquisitions[0].Outcome.RedirectHops == "9" {
+		t.Fatal("completed portable lock aliases the reusable lock")
+	}
+}
+
+func TestPortableToolLockForCompletedGraphMergesCurrentSourceToolsAndDropsStaleOnes(t *testing.T) {
+	fixture := newPortableToolPythonLockedTestFixture(t)
+	providerPlan := fixture.lock.Plan.ProviderPlan
+	owner := providerPlan.Nodes[len(providerPlan.Nodes)-1].ID
+	source := buildLockAssemblyPortableToolsV1(t, fixture.store, providerPlan, owner)
+	source = portableToolLockWithScopeForCompletionTestV1(t, source, "source-builder:demo")
+	mixed, err := mergePortableToolLocksV1(source, fixture.lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reusable := &deploy.BuildLockV1{PortableTools: &mixed}
+
+	got, err := portableToolLockForCompletedGraphV1(&source, reusable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || !reflect.DeepEqual(*got, mixed) {
+		t.Fatalf("completed mixed portable lock = %#v, want %#v", got, mixed)
+	}
+
+	got, err = portableToolLockForCompletedGraphV1(nil, reusable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || !reflect.DeepEqual(*got, fixture.lock) {
+		t.Fatalf("completed replay-only portable lock = %#v, want %#v", got, fixture.lock)
+	}
+}
+
+func portableToolLockWithScopeForCompletionTestV1(
+	t *testing.T,
+	lock providers.PortableToolLockV1,
+	scope string,
+) providers.PortableToolLockV1 {
+	t.Helper()
+	lock = providers.ClonePortableToolLockV1(lock)
+	if len(lock.Plan.PortableToolPlan.Tools) != 1 || len(lock.Plan.Domains) != 1 ||
+		len(lock.Releases) != 1 || len(lock.Acquisitions) != 1 {
+		t.Fatalf("portable completion fixture is not singular: %#v", lock)
+	}
+	lock.Plan.PortableToolPlan.Tools[0].Scope = scope
+	lock.Plan.Domains[0].Scope = scope
+	lock.Releases[0].Scope = scope
+	lock.Acquisitions[0].Scope = scope
+	dag, err := providers.BuildPortableToolProviderDAGV1(
+		lock.Plan.ProviderPlan, lock.Plan.PortableToolPlan, lock.Plan.Domains,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.Plan = dag
+	if err := providers.ValidatePortableToolLockV1(lock); err != nil {
+		t.Fatal(err)
+	}
+	return lock
+}
+
 func TestExecuteLockedProviderBuildV1ValidatesAnExactCurrentBuildWithoutReplacingIt(t *testing.T) {
 	input, _, current, _, _ := providerBuildPreparationFixture(t)
 	lock := current.Lock

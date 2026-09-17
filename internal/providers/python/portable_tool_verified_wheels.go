@@ -215,6 +215,18 @@ func (input PortableToolVerifiedWheelInputV1) PortableToolArtifactAcquisitionInp
 	}, nil
 }
 
+// PortableToolPythonArtifactSourceFromRecordV1 decodes the selected source
+// record into the provider-store source envelope used to reopen an exact
+// locked artifact. The source record remains the authority for its mirror
+// list; callers do not need to duplicate that decoding at the deployment
+// boundary.
+func PortableToolPythonArtifactSourceFromRecordV1(
+	selected providerapi.PortableToolSelectedRecordV1,
+	descriptor providerstore.ArtifactDescriptor,
+) (providerstore.ArtifactSource, error) {
+	return portableToolPythonSourceFromSelectedRecordV1(selected, descriptor)
+}
+
 func preflightPortableToolPythonVerifiedWheelRequestV1(request PortableToolPythonVerifiedWheelRequestV1) error {
 	switch request.Mode {
 	case PortableToolVerifiedWheelFreshV1:
