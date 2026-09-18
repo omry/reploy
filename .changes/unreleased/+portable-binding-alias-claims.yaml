@@ -1,0 +1,2 @@
+kind: Fixed
+body: Reject conflicting selected portable Python CLI destinations before materialization.
