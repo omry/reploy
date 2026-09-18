@@ -2,6 +2,7 @@ package providers
 
 import (
 	"bytes"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -44,6 +45,29 @@ func TestBuildPortableToolLockV1PersistsExactPlanSourcesAndSanitizedOutcomes(t *
 	dag.PortableToolPlan.Tools[0].Provenance.Revision = "9"
 	if lock.Acquisitions[0].Source.Record.Value["mirrors"].([]any)[0] != "https://mirror.example/demo.whl" || lock.Plan.PortableToolPlan.Tools[0].Provenance.Revision != "1" {
 		t.Fatal("portable tool lock did not clone its construction inputs")
+	}
+}
+
+func TestValidatePortableToolLockV1RejectsBindingOperationOrderDrift(t *testing.T) {
+	dag, releases, inputs := portableToolLockFixtureV1(t)
+	lock, err := BuildPortableToolLockV1(dag, releases, inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	materializationID := portableToolOperationIDV1("application:demo", "demo", PortableToolOperationBindingArtifactMaterializationV1,
+		"tool:demo/releases/1.2.3/bindings/demo/artifacts/linux-amd64")
+	exportID := portableToolOperationIDV1("application:demo", "demo", PortableToolOperationExportV1, "demo")
+	for index, dependency := range lock.Plan.Dependencies {
+		if dependency.Prerequisite == materializationID && dependency.Dependent == exportID {
+			lock.Plan.Dependencies[index] = PortableToolProviderDependencyV1{Prerequisite: exportID, Dependent: materializationID}
+			break
+		}
+	}
+	sort.Slice(lock.Plan.Dependencies, func(left, right int) bool {
+		return portableToolDependencyCompareV1(lock.Plan.Dependencies[left], lock.Plan.Dependencies[right]) < 0
+	})
+	if err := ValidatePortableToolLockV1(lock); err == nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("binding operation order drift was accepted: %v", err)
 	}
 }
 
@@ -406,7 +430,7 @@ func portableToolLockFixtureV1(t *testing.T) (PortableToolProviderDAGV1, []Porta
 		"schema": portableToolBindingContractSchemaV1, "id": contract.Reference.ID,
 		"name": "demo", "package": "demo", "requirements": []any{"demo==1.2.3"},
 		"supported_python": []any{"3.10"}, "supported_tags": []any{"py3-none-any"},
-		"bundled_components": []any{}, "cli": canonical.Object{"name": "demo", "path": "/opt/demo/bin/demo"},
+		"bundled_components": []any{}, "cli": canonical.Object{"name": "demo", "path": "/usr/local/bin/demo"},
 	}
 	refreshPortableToolTestRecordDigest(&contract.Reference, contract.Record)
 	binding := &plan.Tools[0].Responsibilities.BindingArtifacts[0]
@@ -440,7 +464,7 @@ func portableToolLockFixtureV1(t *testing.T) (PortableToolProviderDAGV1, []Porta
 	profile := &plan.Tools[0].ValidationProfiles[0]
 	profile.Record.Value = canonical.Object{
 		"schema": portableToolValidationProfileSchemaV1, "id": profile.Reference.ID, "tool": "demo", "version": "1.2.3",
-		"probes": []any{canonical.Object{"path": "/opt/demo/bin/demo", "args": []any{"--version"}}},
+		"probes": []any{canonical.Object{"path": "/usr/local/bin/demo", "args": []any{"--version"}}},
 	}
 	refreshPortableToolTestRecordDigest(&profile.Reference, profile.Record)
 	bindingSource := portableToolTestSelectedRecord(

@@ -59,8 +59,8 @@ func TestBuildPortableToolProviderDAGV1ProjectsResponsibilitiesAndDependencies(t
 			materializations = append(materializations, operation.ID)
 		}
 	}
-	if len(dag.Dependencies) != len(acquisitions)+len(materializations) {
-		t.Fatalf("dependencies = %d, want linear acquisition barrier %d", len(dag.Dependencies), len(acquisitions)+len(materializations))
+	if len(dag.Dependencies) != len(acquisitions)+len(materializations)+len(dag.PortableToolPlan.Tools[0].Exports)+1 {
+		t.Fatalf("dependencies = %d, want barrier plus binding export ordering", len(dag.Dependencies))
 	}
 	dependencySet := make(map[string]struct{}, len(dag.Dependencies))
 	for _, dependency := range dag.Dependencies {
@@ -74,9 +74,15 @@ func TestBuildPortableToolProviderDAGV1ProjectsResponsibilitiesAndDependencies(t
 			if dependent.Kind != PortableToolOperationBindingArtifactMaterializationV1 && dependent.Kind != PortableToolOperationPayloadMaterializationV1 {
 				t.Fatalf("barrier dependency has non-materialization dependent: %#v", dependency)
 			}
-		} else if dependent.Kind != PortableToolOperationAcquisitionBarrierV1 ||
-			(prerequisite.Kind != PortableToolOperationBindingArtifactAcquisitionV1 && prerequisite.Kind != PortableToolOperationPayloadAcquisitionV1) {
-			t.Fatalf("dependency does not use acquisition barrier: %#v", dependency)
+		} else if dependent.Kind == PortableToolOperationAcquisitionBarrierV1 {
+			if prerequisite.Kind != PortableToolOperationBindingArtifactAcquisitionV1 && prerequisite.Kind != PortableToolOperationPayloadAcquisitionV1 {
+				t.Fatalf("dependency does not use acquisition barrier: %#v", dependency)
+			}
+		} else if prerequisite.Kind != PortableToolOperationBindingArtifactMaterializationV1 &&
+			(prerequisite.Kind != PortableToolOperationExportV1 || dependent.Kind != PortableToolOperationCapabilityV1) {
+			t.Fatalf("dependency is not a binding materialization or export ordering edge: %#v", dependency)
+		} else if prerequisite.Kind == PortableToolOperationBindingArtifactMaterializationV1 && dependent.Kind != PortableToolOperationExportV1 {
+			t.Fatalf("binding materialization edge does not target export: %#v", dependency)
 		}
 	}
 	for _, acquisitionID := range acquisitions {
@@ -88,6 +94,20 @@ func TestBuildPortableToolProviderDAGV1ProjectsResponsibilitiesAndDependencies(t
 		if _, found := dependencySet[barrier.ID+"\x00"+materializationID]; !found {
 			t.Fatalf("acquisition barrier is missing %s -> %s", barrier.ID, materializationID)
 		}
+	}
+	for _, operation := range dag.Operations {
+		if operation.Kind != PortableToolOperationExportV1 {
+			continue
+		}
+		capabilityID := portableToolOperationIDV1(operation.Scope, operation.Tool, PortableToolOperationCapabilityV1, operation.Export.Name)
+		if _, found := dependencySet[operation.ID+"\x00"+capabilityID]; !found {
+			t.Fatalf("export %s does not precede capability %s", operation.ID, capabilityID)
+		}
+	}
+	materialization := portableToolProviderOperationByKindV1(dag.Operations, PortableToolOperationBindingArtifactMaterializationV1)
+	export := portableToolProviderOperationByIDV1(dag.Operations, portableToolOperationIDV1("application:demo", "demo", PortableToolOperationExportV1, "demo"))
+	if materialization == nil || export == nil || !portableToolProviderDependencyReachableV1(dag.Dependencies, materialization.ID, export.ID) {
+		t.Fatalf("binding materialization does not precede its export: %#v -> %#v", materialization, export)
 	}
 	for _, acquisitionID := range acquisitions {
 		for _, materializationID := range materializations {
@@ -102,8 +122,303 @@ func TestBuildPortableToolProviderDAGV1ProjectsResponsibilitiesAndDependencies(t
 	}
 }
 
+func TestBuildPortableToolProviderDAGV1OrdersBindingExportAndCapability(t *testing.T) {
+	dag, _, _ := portableToolLockFixtureV1(t)
+	materializationID := portableToolOperationIDV1("application:demo", "demo", PortableToolOperationBindingArtifactMaterializationV1,
+		"tool:demo/releases/1.2.3/bindings/demo/artifacts/linux-amd64")
+	exportID := portableToolOperationIDV1("application:demo", "demo", PortableToolOperationExportV1, "demo")
+	capabilityID := portableToolOperationIDV1("application:demo", "demo", PortableToolOperationCapabilityV1, "demo")
+	dependencies := make(map[string]struct{}, len(dag.Dependencies))
+	for _, dependency := range dag.Dependencies {
+		dependencies[dependency.Prerequisite+"\x00"+dependency.Dependent] = struct{}{}
+	}
+	for _, edge := range [][2]string{{materializationID, exportID}, {exportID, capabilityID}} {
+		if _, found := dependencies[edge[0]+"\x00"+edge[1]]; !found {
+			t.Fatalf("missing binding ordering edge %s -> %s", edge[0], edge[1])
+		}
+	}
+	if _, found := dependencies[materializationID+"\x00"+capabilityID]; found {
+		t.Fatal("binding materialization has a direct capability edge")
+	}
+	if !portableToolProviderDependencyReachableV1(dag.Dependencies, materializationID, capabilityID) {
+		t.Fatal("binding materialization does not transitively precede capability")
+	}
+}
+
+func TestBuildPortableToolProviderDAGV1RejectsBindingCLIJoinDrift(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*PortableToolPlanV1)
+		want   string
+	}{
+		{name: "missing CLI", mutate: func(plan *PortableToolPlanV1) {
+			contract := &plan.Tools[0].Responsibilities.BindingContracts[0]
+			delete(contract.Record.Value, "cli")
+			refreshPortableToolTestRecordDigest(&contract.Reference, contract.Record)
+		}, want: "CLI is required"},
+		{name: "CLI path mismatch", mutate: func(plan *PortableToolPlanV1) {
+			contract := &plan.Tools[0].Responsibilities.BindingContracts[0]
+			contract.Record.Value["cli"].(canonical.Object)["path"] = "/opt/demo/bin/other"
+			refreshPortableToolTestRecordDigest(&contract.Reference, contract.Record)
+			artifact := &plan.Tools[0].Responsibilities.BindingArtifacts[0]
+			artifact.Record.Value["contract"].(canonical.Object)["digest"] = string(contract.Reference.Digest)
+			refreshPortableToolTestRecordDigest(&artifact.Reference, artifact.Record)
+		}, want: "exactly one export and capability"},
+		{name: "unknown artifact contract", mutate: func(plan *PortableToolPlanV1) {
+			artifact := &plan.Tools[0].Responsibilities.BindingArtifacts[0]
+			artifact.Record.Value["contract"].(canonical.Object)["id"] = "tool:demo/releases/1.2.3/bindings/other/contract"
+			refreshPortableToolTestRecordDigest(&artifact.Reference, artifact.Record)
+		}, want: "unknown binding contract"},
+		{name: "identity-only contract", mutate: func(plan *PortableToolPlanV1) {
+			contract := &plan.Tools[0].Responsibilities.BindingContracts[0]
+			contract.Record.Value = canonical.Object{
+				"schema": contract.Record.Schema, "id": contract.Reference.ID, "name": "demo",
+			}
+			refreshPortableToolTestRecordDigest(&contract.Reference, contract.Record)
+			artifact := &plan.Tools[0].Responsibilities.BindingArtifacts[0]
+			artifact.Record.Value["contract"].(canonical.Object)["digest"] = string(contract.Reference.Digest)
+			refreshPortableToolTestRecordDigest(&artifact.Reference, artifact.Record)
+		}, want: "CLI is required"},
+		{name: "missing artifact contract", mutate: func(plan *PortableToolPlanV1) {
+			artifact := &plan.Tools[0].Responsibilities.BindingArtifacts[0]
+			delete(artifact.Record.Value, "contract")
+			refreshPortableToolTestRecordDigest(&artifact.Reference, artifact.Record)
+		}, want: "contract reference is required"},
+		{name: "extra CLI field", mutate: func(plan *PortableToolPlanV1) {
+			contract := &plan.Tools[0].Responsibilities.BindingContracts[0]
+			contract.Record.Value["cli"].(canonical.Object)["unexpected"] = "value"
+			refreshPortableToolTestRecordDigest(&contract.Reference, contract.Record)
+		}, want: "exactly canonical name and path"},
+		{name: "extra artifact contract field", mutate: func(plan *PortableToolPlanV1) {
+			artifact := &plan.Tools[0].Responsibilities.BindingArtifacts[0]
+			artifact.Record.Value["contract"].(canonical.Object)["unexpected"] = "value"
+			refreshPortableToolTestRecordDigest(&artifact.Reference, artifact.Record)
+		}, want: "exactly canonical id and digest"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dag, _, _ := portableToolLockFixtureV1(t)
+			plan := clonePortableToolPlanForTest(dag.PortableToolPlan)
+			test.mutate(&plan)
+			if _, err := BuildPortableToolProviderDAGV1(dag.ProviderPlan, plan, dag.Domains); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestBuildPortableToolProviderDAGV1RejectsMultipleArtifactsForOneBindingContract(t *testing.T) {
+	plan := representativePortableToolPlanV1()
+	duplicate := clonePortableToolRecordsForTest(plan.Tools[0].Responsibilities.BindingArtifacts)[0]
+	setPortableToolTestRecordID(
+		&duplicate.Reference,
+		&duplicate.Record,
+		"tool:demo/releases/1.2.3/bindings/demo/artifacts/linux-arm64",
+	)
+	plan.Tools[0].Responsibilities.BindingArtifacts = append(
+		plan.Tools[0].Responsibilities.BindingArtifacts,
+		duplicate,
+	)
+	if _, err := BuildPortableToolProviderDAGV1(
+		portableToolProviderPlanFixtureV1(), plan,
+		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo")},
+	); err == nil || !strings.Contains(err.Error(), "exactly one selected binding artifact") {
+		t.Fatalf("multiple binding artifacts were accepted: %v", err)
+	}
+}
+
+func TestBuildPortableToolProviderDAGV1RejectsMultipleBindingContractsForOneExport(t *testing.T) {
+	plan := representativePortableToolPlanV1()
+	entry := &plan.Tools[0]
+	contract := clonePortableToolRecordsForTest(entry.Responsibilities.BindingContracts)[0]
+	setPortableToolTestRecordID(
+		&contract.Reference,
+		&contract.Record,
+		"tool:demo/releases/1.2.3/bindings/other/contract",
+	)
+	artifact := clonePortableToolRecordsForTest(entry.Responsibilities.BindingArtifacts)[0]
+	setPortableToolTestRecordID(
+		&artifact.Reference,
+		&artifact.Record,
+		"tool:demo/releases/1.2.3/bindings/other/artifacts/linux-amd64",
+	)
+	artifact.Record.Value["binding"] = "other"
+	artifact.Record.Value["filename"] = "other-1.2.3-py3-none-any.whl"
+	artifact.Record.Value["contract"] = canonical.Object{
+		"id": contract.Reference.ID, "digest": string(contract.Reference.Digest),
+	}
+	refreshPortableToolTestRecordDigest(&artifact.Reference, artifact.Record)
+	entry.Responsibilities.BindingContracts = append(entry.Responsibilities.BindingContracts, contract)
+	entry.Responsibilities.BindingArtifacts = append(entry.Responsibilities.BindingArtifacts, artifact)
+
+	if _, err := BuildPortableToolProviderDAGV1(
+		portableToolProviderPlanFixtureV1(), plan,
+		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo")},
+	); err == nil || !strings.Contains(err.Error(), "export-path") {
+		t.Fatalf("multiple binding contracts sharing one export were accepted: %v", err)
+	}
+}
+
+func TestBuildPortableToolProviderDAGV1RejectsSharedExportDestinationAcrossRuntimes(t *testing.T) {
+	plan := portableToolProviderTwoScopePlanV1()
+	plan.Tools[1].Runtime.InstallRoot = "/opt/other"
+	plan.Tools[1].Exports[0].Path = plan.Tools[0].Exports[0].Path
+	setPortableToolBindingCLIPathV1(&plan.Tools[1], plan.Tools[1].Exports[0].Path)
+	_, err := BuildPortableToolProviderDAGV1(
+		portableToolProviderPlanFixtureV1(), plan,
+		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")},
+	)
+	if err == nil || !strings.Contains(err.Error(), "export-path") {
+		t.Fatalf("shared export destination was accepted: %v", err)
+	}
+}
+
+func TestBuildPortableToolProviderDAGV1RejectsExportFilesystemOverlap(t *testing.T) {
+	plan := representativePortableToolPlanV1()
+	plan.Tools[0].Exports[0].Path = "/opt/demo/bin/demo-alias"
+	setPortableToolBindingCLIPathV1(&plan.Tools[0], "/opt/demo/bin/demo-alias")
+	_, err := BuildPortableToolProviderDAGV1(
+		portableToolProviderPlanFixtureV1(), plan,
+		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo")},
+	)
+	if err == nil || !strings.Contains(err.Error(), "filesystem-domain conflict") {
+		t.Fatalf("export overlapping runtime filesystem claim was accepted: %v", err)
+	}
+}
+
+func TestBuildPortableToolProviderDAGV1RejectsBindingAliasAcrossExportDomains(t *testing.T) {
+	_, err := BuildPortableToolProviderDAGV1(
+		portableToolProviderPlanFixtureV1(), portableToolProviderTwoScopePlanV1(),
+		portableToolProviderDistinctAliasDomainsV1(),
+	)
+	if err == nil || !strings.Contains(err.Error(), "export-path") {
+		t.Fatalf("binding aliases in separate export domains were accepted: %v", err)
+	}
+}
+
+func TestBuildPortableToolProviderDAGV1RejectsBindingAliasAgainstOrdinaryExportAcrossDomains(t *testing.T) {
+	plan := portableToolProviderTwoScopePlanWithDistinctAliasesV1()
+	ordinary := &plan.Tools[1]
+	ordinary.Responsibilities.BindingContracts = []PortableToolSelectedRecordV1{}
+	ordinary.Responsibilities.BindingArtifacts = []PortableToolSelectedRecordV1{}
+	ordinary.Exports[0].Name = "ordinary"
+	ordinary.Exports[0].Path = plan.Tools[0].Exports[0].Path
+	sort.Slice(ordinary.Exports, func(left, right int) bool { return ordinary.Exports[left].Name < ordinary.Exports[right].Name })
+	if _, err := BuildPortableToolProviderDAGV1(
+		portableToolProviderPlanFixtureV1(), plan,
+		portableToolProviderDistinctAliasDomainsV1(),
+	); err == nil || !strings.Contains(err.Error(), "export-path") {
+		t.Fatalf("binding alias and ordinary export sharing a path were accepted: %v", err)
+	}
+}
+
+func TestBuildPortableToolProviderDAGV1AllowsDistinctOrdinaryExportsSharingPath(t *testing.T) {
+	plan := portableToolProviderTwoScopePlanV1()
+	for index := range plan.Tools {
+		plan.Tools[index].Responsibilities.BindingContracts = []PortableToolSelectedRecordV1{}
+		plan.Tools[index].Responsibilities.BindingArtifacts = []PortableToolSelectedRecordV1{}
+	}
+	plan.Tools[1].Exports[0].Name = "ordinary"
+	plan.Tools[1].Exports[0].Path = plan.Tools[0].Exports[0].Path
+	sort.Slice(plan.Tools[1].Exports, func(left, right int) bool {
+		return plan.Tools[1].Exports[left].Name < plan.Tools[1].Exports[right].Name
+	})
+	if _, err := BuildPortableToolProviderDAGV1(
+		portableToolProviderPlanFixtureV1(), plan,
+		[]PortableToolProviderDomainSetV1{
+			portableToolProviderDomainV1("application:demo"),
+			portableToolProviderDomainV1("application:other"),
+		},
+	); err != nil {
+		t.Fatalf("distinct ordinary exports sharing a path were rejected: %v", err)
+	}
+}
+
+func TestBuildPortableToolProviderDAGV1AllowsOrdinaryExportInsideRuntime(t *testing.T) {
+	plan := representativePortableToolPlanV1()
+	plan.Tools[0].Responsibilities.BindingContracts = []PortableToolSelectedRecordV1{}
+	plan.Tools[0].Responsibilities.BindingArtifacts = []PortableToolSelectedRecordV1{}
+	plan.Tools[0].Exports[0].Path = "/opt/demo/bin/demo"
+	if _, err := BuildPortableToolProviderDAGV1(
+		portableToolProviderPlanFixtureV1(), plan,
+		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo")},
+	); err != nil {
+		t.Fatalf("ordinary export inside runtime rejected: %v", err)
+	}
+}
+
+func TestBuildPortableToolProviderDAGV1RejectsAliasInsidePythonRuntime(t *testing.T) {
+	plan := representativePortableToolPlanV1()
+	pythonPath := "/opt/reploy/providers/python/application/demo/bin/demo"
+	plan.Tools[0].Exports[0].Path = pythonPath
+	setPortableToolBindingCLIPathV1(&plan.Tools[0], pythonPath)
+	if _, err := BuildPortableToolProviderDAGV1(
+		portableToolProviderPlanFixtureV1(), plan,
+		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo")},
+	); err == nil || !strings.Contains(err.Error(), "filesystem-domain conflict") {
+		t.Fatalf("alias inside Python runtime was accepted: %v", err)
+	}
+}
+
+func TestPortableToolPythonRuntimeRootV1BoundsLongApplication(t *testing.T) {
+	root, err := portableToolPythonRuntimeRootV1("application:" + strings.Repeat("long-application-name-", 20) + "4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(root+"/bin/python")+3 > 127 || !strings.Contains(root, "/application/_") {
+		t.Fatalf("long application runtime root = %q", root)
+	}
+}
+
+func TestBuildPortableToolProviderDAGV1RejectsConflictingExportAliasClaims(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(PortableToolPlanV1)
+	}{
+		{name: "different alias target", mutate: func(plan PortableToolPlanV1) {
+			entry := &plan.Tools[1]
+			entry.Exports[0].Name = "other"
+			entry.Exports[0].Path = "/opt/demo/bin/demo"
+			setPortableToolBindingCLINameAndPathV1(entry, "other", "/opt/demo/bin/demo")
+			sort.Slice(entry.Exports, func(left, right int) bool { return entry.Exports[left].Name < entry.Exports[right].Name })
+		}},
+		{name: "overlapping destinations", mutate: func(plan PortableToolPlanV1) {
+			plan.Tools[1].Exports[0].Path = "/opt/demo/bin/demo/sub"
+			setPortableToolBindingCLINameAndPathV1(&plan.Tools[1], "demo", "/opt/demo/bin/demo/sub")
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			plan := portableToolProviderTwoScopePlanV1()
+			test.mutate(plan)
+			domains := []PortableToolProviderDomainSetV1{
+				portableToolProviderDomainV1("application:demo"),
+				portableToolProviderDomainV1("application:other"),
+			}
+			domains[1].Binding.ID = "binding-other"
+			domains[1].Filesystem.ID = "filesystem-other"
+			domains[1].Capabilities.ID = "capabilities-other"
+			if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), plan, domains); err == nil || !strings.Contains(err.Error(), "shared") {
+				t.Fatalf("conflicting export alias claim was accepted: %v", err)
+			}
+		})
+	}
+}
+
+func setPortableToolBindingCLINameAndPathV1(entry *PortableToolPlanEntryV1, name, cliPath string) {
+	contract := &entry.Responsibilities.BindingContracts[0]
+	cli := contract.Record.Value["cli"].(canonical.Object)
+	cli["name"] = name
+	cli["path"] = cliPath
+	refreshPortableToolTestRecordDigest(&contract.Reference, contract.Record)
+	artifact := &entry.Responsibilities.BindingArtifacts[0]
+	artifact.Record.Value["contract"].(canonical.Object)["digest"] = string(contract.Reference.Digest)
+	refreshPortableToolTestRecordDigest(&artifact.Reference, artifact.Record)
+	refreshPortableToolBindingArtifactContractsForTest(entry)
+}
+
 func TestBuildPortableToolProviderDAGV1SortsDomainsAndClonesInputs(t *testing.T) {
-	portablePlan := portableToolProviderTwoScopePlanV1()
+	portablePlan := portableToolProviderTwoScopePlanWithDistinctAliasesV1()
 	providerPlan := portableToolProviderPlanFixtureV1()
 	portableBefore, err := canonical.Marshal(portablePlan)
 	if err != nil {
@@ -113,10 +428,8 @@ func TestBuildPortableToolProviderDAGV1SortsDomainsAndClonesInputs(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	domains := []PortableToolProviderDomainSetV1{
-		portableToolProviderDomainV1("application:other"),
-		portableToolProviderDomainV1("application:demo"),
-	}
+	domains := portableToolProviderDistinctAliasDomainsV1()
+	domains[0], domains[1] = domains[1], domains[0]
 	dag, err := BuildPortableToolProviderDAGV1(providerPlan, portablePlan, domains)
 	if err != nil {
 		t.Fatal(err)
@@ -139,6 +452,12 @@ func TestBuildPortableToolProviderDAGV1SortsDomainsAndClonesInputs(t *testing.T)
 
 func TestBuildPortableToolProviderDAGV1MapsOneDomainPerDistinctScope(t *testing.T) {
 	plan := portableToolProviderTwoToolsOneScopePlanV1()
+	setPortableToolBindingCLINameAndPathV1(&plan.Tools[1], "other", "/usr/local/bin/other")
+	plan.Tools[1].Exports[0].Name = "other"
+	plan.Tools[1].Exports[0].Path = "/usr/local/bin/other"
+	sort.Slice(plan.Tools[1].Exports, func(left, right int) bool {
+		return plan.Tools[1].Exports[left].Name < plan.Tools[1].Exports[right].Name
+	})
 	dag, err := BuildPortableToolProviderDAGV1(
 		portableToolProviderPlanFixtureV1(), plan,
 		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo")},
@@ -214,6 +533,7 @@ func TestBuildPortableToolProviderDAGV1ValidatesDomainOwnersAndProjectsThem(t *t
 
 func TestBuildPortableToolProviderDAGV1OmitsBarrierWithoutAcquisitionWork(t *testing.T) {
 	plan := representativePortableToolPlanV1()
+	plan.Tools[0].Responsibilities.BindingContracts = []PortableToolSelectedRecordV1{}
 	plan.Tools[0].Responsibilities.BindingArtifacts = []PortableToolSelectedRecordV1{}
 	plan.Tools[0].Responsibilities.Payloads = []PortableToolSelectedRecordV1{}
 	dag, err := BuildPortableToolProviderDAGV1(
@@ -226,8 +546,8 @@ func TestBuildPortableToolProviderDAGV1OmitsBarrierWithoutAcquisitionWork(t *tes
 	if barrier := portableToolProviderOperationByKindV1(dag.Operations, PortableToolOperationAcquisitionBarrierV1); barrier != nil {
 		t.Fatalf("unexpected acquisition barrier operation: %#v", barrier)
 	}
-	if len(dag.Dependencies) != 0 {
-		t.Fatalf("dependencies = %#v, want none", dag.Dependencies)
+	if len(dag.Dependencies) != len(plan.Tools[0].Exports) {
+		t.Fatalf("dependencies = %#v, want one export -> capability edge per export", dag.Dependencies)
 	}
 	if err := ValidatePortableToolProviderDAGV1(dag); err != nil {
 		t.Fatal(err)
@@ -342,6 +662,7 @@ func TestBuildPortableToolProviderDAGV1RejectsSharedDomainConflicts(t *testing.T
 		}, want: "shared-domain conflict"},
 		{name: "export", mutate: func(plan PortableToolPlanV1) {
 			plan.Tools[1].Exports[0].Path = "/other/export"
+			setPortableToolBindingCLIPathV1(&plan.Tools[1], "/other/export")
 		}, want: "shared-domain conflict"},
 		{name: "selected record digest", mutate: func(plan PortableToolPlanV1) {
 			selected := &plan.Tools[1].Responsibilities.Payloads[0]
@@ -353,10 +674,11 @@ func TestBuildPortableToolProviderDAGV1RejectsSharedDomainConflicts(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			plan := portableToolProviderTwoScopePlanV1()
 			test.mutate(plan)
-			_, err := BuildPortableToolProviderDAGV1(
-				portableToolProviderPlanFixtureV1(), plan,
-				[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")},
-			)
+			domains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")}
+			if test.name != "export" {
+				domains[1].Exports.ID = "exports-other"
+			}
+			_, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), plan, domains)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want %q", err, test.want)
 			}
@@ -364,8 +686,8 @@ func TestBuildPortableToolProviderDAGV1RejectsSharedDomainConflicts(t *testing.T
 	}
 	// Isolated authority domains do not conflict merely because scopes share a
 	// name or selected value.
-	plan := portableToolProviderTwoScopePlanV1()
-	isolated := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")}
+	plan := portableToolProviderTwoScopePlanWithDistinctAliasesV1()
+	isolated := portableToolProviderDistinctAliasDomainsV1()
 	isolated[1].Environment.ID = "other-environment"
 	isolated[1].Exports.ID = "other-exports"
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), plan, isolated); err != nil {
@@ -374,6 +696,7 @@ func TestBuildPortableToolProviderDAGV1RejectsSharedDomainConflicts(t *testing.T
 
 	capabilityConflictPlan := portableToolProviderTwoScopePlanV1()
 	capabilityConflictPlan.Tools[1].Exports[0].Path = "/other/export"
+	setPortableToolBindingCLIPathV1(&capabilityConflictPlan.Tools[1], "/other/export")
 	capabilityConflictDomains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")}
 	capabilityConflictDomains[1].Exports.ID = "other-exports"
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), capabilityConflictPlan, capabilityConflictDomains); err == nil || !strings.Contains(err.Error(), "shared-domain conflict") {
@@ -382,22 +705,26 @@ func TestBuildPortableToolProviderDAGV1RejectsSharedDomainConflicts(t *testing.T
 
 	fullyIsolatedPlan := portableToolProviderTwoScopePlanV1()
 	fullyIsolatedPlan.Tools[1].Exports[0].Path = "/other/export"
+	setPortableToolBindingCLIPathV1(&fullyIsolatedPlan.Tools[1], "/other/export")
 	fullyIsolatedDomains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")}
 	fullyIsolatedDomains[1].Exports = PortableToolDomainAuthorityV1{ID: "other-exports", Owner: "base"}
 	fullyIsolatedDomains[1].Capabilities = PortableToolDomainAuthorityV1{ID: "other-capabilities", Owner: "base"}
+	fullyIsolatedDomains[1].Binding = PortableToolDomainAuthorityV1{ID: "other-binding", Owner: "python/application"}
+	fullyIsolatedDomains[1].Filesystem = PortableToolDomainAuthorityV1{ID: "other-filesystem", Owner: "python/application"}
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), fullyIsolatedPlan, fullyIsolatedDomains); err != nil {
 		t.Fatalf("split export and capability domains rejected: %v", err)
 	}
 }
 
 func TestBuildPortableToolProviderDAGV1ComparesNativePackageSemantics(t *testing.T) {
-	plan := portableToolProviderTwoScopePlanV1()
+	plan := portableToolProviderTwoScopePlanWithDistinctAliasesV1()
 	firstPackage := &plan.Tools[0].Responsibilities.NativePackageSets[0]
 	secondPackage := &plan.Tools[1].Responsibilities.NativePackageSets[0]
 	setPortableToolPackageSemanticsV1(firstPackage, []string{"foo=1"}, []string{"main"})
 	setPortableToolTestRecordID(&secondPackage.Reference, &secondPackage.Record, "tool:demo/releases/1.2.3/package-sets/other")
 	setPortableToolPackageSemanticsV1(secondPackage, []string{"foo=1"}, []string{"main"})
-	domains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")}
+	domains := portableToolProviderDistinctAliasDomainsV1()
+	domains[1].Exports.ID = "exports-other"
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), plan, domains); err != nil {
 		t.Fatalf("identical package requirements rejected: %v", err)
 	}
@@ -425,13 +752,19 @@ func TestBuildPortableToolProviderDAGV1ComparesNativePackageSemantics(t *testing
 }
 
 func TestBuildPortableToolProviderDAGV1ComparesBindingPythonSemantics(t *testing.T) {
-	plan := portableToolProviderTwoScopePlanV1()
+	plan := portableToolProviderTwoScopePlanWithDistinctAliasesV1()
 	firstContract := &plan.Tools[0].Responsibilities.BindingContracts[0]
 	secondContract := &plan.Tools[1].Responsibilities.BindingContracts[0]
 	setPortableToolBindingPythonSemanticsV1(firstContract, []string{"demo>=1"}, []string{"3.11", "3.12"})
 	setPortableToolTestRecordID(&secondContract.Reference, &secondContract.Record, "tool:demo/releases/1.2.3/bindings/other/contract")
 	setPortableToolBindingPythonSemanticsV1(secondContract, []string{"demo<3"}, []string{"3.12", "3.13"})
+	refreshPortableToolBindingArtifactContractsForTest(&plan.Tools[0])
+	refreshPortableToolBindingArtifactContractsForTest(&plan.Tools[1])
 	domains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")}
+	domains[1].Binding.ID = "binding-other"
+	domains[1].Filesystem.ID = "filesystem-other"
+	domains[1].Exports.ID = "exports-other"
+	domains[1].Capabilities.ID = "capabilities-other"
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), plan, domains); err != nil {
 		t.Fatalf("compatible Python constraints rejected: %v", err)
 	}
@@ -439,6 +772,8 @@ func TestBuildPortableToolProviderDAGV1ComparesBindingPythonSemantics(t *testing
 		complexDuplicate := clonePortableToolPlanForTest(plan)
 		setPortableToolBindingPythonSemanticsV1(&complexDuplicate.Tools[0].Responsibilities.BindingContracts[0], []string{requirement}, []string{"3.12"})
 		setPortableToolBindingPythonSemanticsV1(&complexDuplicate.Tools[1].Responsibilities.BindingContracts[0], []string{requirement}, []string{"3.12"})
+		refreshPortableToolBindingArtifactContractsForTest(&complexDuplicate.Tools[0])
+		refreshPortableToolBindingArtifactContractsForTest(&complexDuplicate.Tools[1])
 		if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), complexDuplicate, domains); err != nil {
 			t.Fatalf("duplicate complex Python requirement %q rejected: %v", requirement, err)
 		}
@@ -447,6 +782,8 @@ func TestBuildPortableToolProviderDAGV1ComparesBindingPythonSemantics(t *testing
 		contradictory := clonePortableToolPlanForTest(plan)
 		setPortableToolBindingPythonSemanticsV1(&contradictory.Tools[0].Responsibilities.BindingContracts[0], []string{requirement}, []string{"3.12"})
 		setPortableToolBindingPythonSemanticsV1(&contradictory.Tools[1].Responsibilities.BindingContracts[0], []string{requirement}, []string{"3.12"})
+		refreshPortableToolBindingArtifactContractsForTest(&contradictory.Tools[0])
+		refreshPortableToolBindingArtifactContractsForTest(&contradictory.Tools[1])
 		if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), contradictory, domains); err == nil {
 			t.Fatalf("contradictory Python requirement %q was accepted", requirement)
 		}
@@ -454,6 +791,8 @@ func TestBuildPortableToolProviderDAGV1ComparesBindingPythonSemantics(t *testing
 	mixedGranularity := clonePortableToolPlanForTest(plan)
 	setPortableToolBindingPythonSemanticsV1(&mixedGranularity.Tools[0].Responsibilities.BindingContracts[0], []string{"demo>=1"}, []string{"3.12"})
 	setPortableToolBindingPythonSemanticsV1(&mixedGranularity.Tools[1].Responsibilities.BindingContracts[0], []string{"demo<3"}, []string{"3.12.7"})
+	refreshPortableToolBindingArtifactContractsForTest(&mixedGranularity.Tools[0])
+	refreshPortableToolBindingArtifactContractsForTest(&mixedGranularity.Tools[1])
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), mixedGranularity, domains); err != nil {
 		t.Fatalf("compatible Python series and exact patch rejected: %v", err)
 	}
@@ -461,6 +800,8 @@ func TestBuildPortableToolProviderDAGV1ComparesBindingPythonSemantics(t *testing
 	disjointExactPatches := clonePortableToolPlanForTest(plan)
 	setPortableToolBindingPythonSemanticsV1(&disjointExactPatches.Tools[0].Responsibilities.BindingContracts[0], []string{"demo>=1"}, []string{"3.12.6"})
 	setPortableToolBindingPythonSemanticsV1(&disjointExactPatches.Tools[1].Responsibilities.BindingContracts[0], []string{"demo<3"}, []string{"3.12.7"})
+	refreshPortableToolBindingArtifactContractsForTest(&disjointExactPatches.Tools[0])
+	refreshPortableToolBindingArtifactContractsForTest(&disjointExactPatches.Tools[1])
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), disjointExactPatches, domains); err == nil || !strings.Contains(err.Error(), "shared-domain conflict") {
 		t.Fatalf("disjoint exact Python patches were not rejected: %v", err)
 	}
@@ -470,18 +811,21 @@ func TestBuildPortableToolProviderDAGV1ComparesBindingPythonSemantics(t *testing
 	canonicalContract.Record.Value["requirements"] = []any{"demo<3"}
 	canonicalContract.Record.Value["supported_python"] = []any{"3.12", "3.13"}
 	refreshPortableToolTestRecordDigest(&canonicalContract.Reference, canonicalContract.Record)
+	refreshPortableToolBindingArtifactContractsForTest(&canonicalArrays.Tools[1])
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), canonicalArrays, domains); err != nil {
 		t.Fatalf("canonical binding arrays rejected: %v", err)
 	}
 
 	noCommonRequirements := clonePortableToolPlanForTest(plan)
 	setPortableToolBindingPythonSemanticsV1(&noCommonRequirements.Tools[1].Responsibilities.BindingContracts[0], []string{"demo<1"}, []string{"3.12", "3.13"})
+	refreshPortableToolBindingArtifactContractsForTest(&noCommonRequirements.Tools[1])
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), noCommonRequirements, domains); err == nil || !strings.Contains(err.Error(), "shared-domain conflict") {
 		t.Fatalf("non-overlapping Python requirements were not rejected: %v", err)
 	}
 
 	noCommonSupportedPython := clonePortableToolPlanForTest(plan)
 	setPortableToolBindingPythonSemanticsV1(&noCommonSupportedPython.Tools[1].Responsibilities.BindingContracts[0], []string{"demo<3"}, []string{"3.13"})
+	refreshPortableToolBindingArtifactContractsForTest(&noCommonSupportedPython.Tools[1])
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), noCommonSupportedPython, domains); err == nil || !strings.Contains(err.Error(), "shared-domain conflict") {
 		t.Fatalf("non-overlapping supported Python versions were not rejected: %v", err)
 	}
@@ -504,6 +848,13 @@ func setPortableToolBindingPythonSemanticsV1(selected *PortableToolSelectedRecor
 	selected.Record.Value["requirements"] = append([]string{}, requirements...)
 	selected.Record.Value["supported_python"] = append([]string{}, supported...)
 	refreshPortableToolTestRecordDigest(&selected.Reference, selected.Record)
+}
+
+func setPortableToolBindingCLIPathV1(entry *PortableToolPlanEntryV1, cliPath string) {
+	contract := &entry.Responsibilities.BindingContracts[0]
+	contract.Record.Value["cli"].(canonical.Object)["path"] = cliPath
+	refreshPortableToolTestRecordDigest(&contract.Reference, contract.Record)
+	refreshPortableToolBindingArtifactContractsForTest(entry)
 }
 
 func TestBuildPortableToolProviderDAGV1AllowsAndRejectsFilesystemPathClaims(t *testing.T) {
@@ -542,13 +893,17 @@ func TestBuildPortableToolProviderDAGV1AllowsAndRejectsFilesystemPathClaims(t *t
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			plan := portableToolProviderTwoScopePlanV1()
+			plan := portableToolProviderTwoScopePlanWithDistinctAliasesV1()
 			secondPayload := &plan.Tools[1].Responsibilities.Payloads[0]
 			setPortableToolTestRecordID(&secondPayload.Reference, &secondPayload.Record, "tool:demo/releases/1.2.3/payloads/other")
 			test.mutate(plan)
+			domains := portableToolProviderDistinctAliasSharedFilesystemDomainsV1()
+			domains[1].Exports.ID = "exports-other"
+			// Keep the filesystem cases independent from PTD-23.3.6's shared
+			// export destination claim.
 			_, err := BuildPortableToolProviderDAGV1(
 				portableToolProviderPlanFixtureV1(), plan,
-				[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")},
+				domains,
 			)
 			if test.wantError == "" {
 				if err != nil {
@@ -562,7 +917,7 @@ func TestBuildPortableToolProviderDAGV1AllowsAndRejectsFilesystemPathClaims(t *t
 }
 
 func TestBuildPortableToolProviderDAGV1ResolvesRelativePayloadDestinations(t *testing.T) {
-	plan := portableToolProviderTwoScopePlanV1()
+	plan := portableToolProviderTwoScopePlanWithDistinctAliasesV1()
 	plan.Tools[0].Runtime.InstallRoot = "/opt/first"
 	plan.Tools[1].Runtime.InstallRoot = "/opt/second"
 	firstPayload := &plan.Tools[0].Responsibilities.Payloads[0]
@@ -570,7 +925,8 @@ func TestBuildPortableToolProviderDAGV1ResolvesRelativePayloadDestinations(t *te
 	setPortableToolPayloadPathsV1(firstPayload, "browser", "payload/demo")
 	setPortableToolTestRecordID(&secondPayload.Reference, &secondPayload.Record, "tool:demo/releases/1.2.3/payloads/other")
 	setPortableToolPayloadPathsV1(secondPayload, "browser", "payload/other")
-	domains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")}
+	domains := portableToolProviderDistinctAliasSharedFilesystemDomainsV1()
+	domains[1].Exports.ID = "exports-other"
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), plan, domains); err != nil {
 		t.Fatalf("identical relative destinations under separate roots rejected: %v", err)
 	}
@@ -584,12 +940,13 @@ func TestBuildPortableToolProviderDAGV1ResolvesRelativePayloadDestinations(t *te
 }
 
 func TestBuildPortableToolProviderDAGV1ClaimsPayloadLogicalPathByDigest(t *testing.T) {
-	plan := portableToolProviderTwoScopePlanV1()
+	plan := portableToolProviderTwoScopePlanWithDistinctAliasesV1()
 	plan.Tools[0].Runtime.InstallRoot = "/opt/first"
 	plan.Tools[1].Runtime.InstallRoot = "/opt/second"
 	setPortableToolPayloadPathsV1(&plan.Tools[0].Responsibilities.Payloads[0], "browser", "payload/shared")
 	setPortableToolPayloadPathsV1(&plan.Tools[1].Responsibilities.Payloads[0], "browser", "payload/shared")
-	domains := []PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")}
+	domains := portableToolProviderDistinctAliasSharedFilesystemDomainsV1()
+	domains[1].Exports.ID = "exports-other"
 	if _, err := BuildPortableToolProviderDAGV1(portableToolProviderPlanFixtureV1(), plan, domains); err != nil {
 		t.Fatalf("equal logical path and digest rejected: %v", err)
 	}
@@ -631,10 +988,11 @@ func portableToolProviderDAGFixtureV1(t *testing.T) PortableToolProviderDAGV1 {
 
 func portableToolProviderTwoScopeDAGFixtureV1(t *testing.T) PortableToolProviderDAGV1 {
 	t.Helper()
+	domains := portableToolProviderDistinctAliasDomainsV1()
 	dag, err := BuildPortableToolProviderDAGV1(
 		portableToolProviderPlanFixtureV1(),
-		portableToolProviderTwoScopePlanV1(),
-		[]PortableToolProviderDomainSetV1{portableToolProviderDomainV1("application:demo"), portableToolProviderDomainV1("application:other")},
+		portableToolProviderTwoScopePlanWithDistinctAliasesV1(),
+		domains,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -666,6 +1024,24 @@ func portableToolProviderDomainV1(scope string) PortableToolProviderDomainSetV1 
 	}
 }
 
+func portableToolProviderDistinctAliasDomainsV1() []PortableToolProviderDomainSetV1 {
+	domains := []PortableToolProviderDomainSetV1{
+		portableToolProviderDomainV1("application:demo"),
+		portableToolProviderDomainV1("application:other"),
+	}
+	domains[1].Binding.ID = "binding-other"
+	domains[1].Filesystem.ID = "filesystem-other"
+	domains[1].Exports.ID = "exports-other"
+	domains[1].Capabilities.ID = "capabilities-other"
+	return domains
+}
+
+func portableToolProviderDistinctAliasSharedFilesystemDomainsV1() []PortableToolProviderDomainSetV1 {
+	domains := portableToolProviderDistinctAliasDomainsV1()
+	domains[1].Filesystem.ID = domains[0].Filesystem.ID
+	return domains
+}
+
 func portableToolProviderTwoScopePlanV1() PortableToolPlanV1 {
 	plan := clonePortableToolPlanForTest(representativePortableToolPlanV1())
 	second := clonePortableToolPlanForTest(plan).Tools[0]
@@ -676,10 +1052,29 @@ func portableToolProviderTwoScopePlanV1() PortableToolPlanV1 {
 	return plan
 }
 
+func portableToolProviderTwoScopePlanWithDistinctAliasesV1() PortableToolPlanV1 {
+	plan := portableToolProviderTwoScopePlanV1()
+	contract := &plan.Tools[1].Responsibilities.BindingContracts[0]
+	setPortableToolTestRecordID(&contract.Reference, &contract.Record, "tool:demo/releases/1.2.3/bindings/other/contract")
+	artifact := &plan.Tools[1].Responsibilities.BindingArtifacts[0]
+	setPortableToolTestRecordID(&artifact.Reference, &artifact.Record, "tool:demo/releases/1.2.3/bindings/other/artifacts/linux-amd64")
+	artifact.Record.Value["name"] = "other"
+	artifact.Record.Value["filename"] = "other-1.2.3-py3-none-any.whl"
+	refreshPortableToolTestRecordDigest(&artifact.Reference, artifact.Record)
+	refreshPortableToolBindingArtifactContractsForTest(&plan.Tools[1])
+	plan.Tools[1].Exports[0].Path = "/usr/local/bin/demo-other"
+	setPortableToolBindingCLIPathV1(&plan.Tools[1], plan.Tools[1].Exports[0].Path)
+	return plan
+}
+
 func portableToolProviderTwoToolsOneScopePlanV1() PortableToolPlanV1 {
 	plan := clonePortableToolPlanForTest(representativePortableToolPlanV1())
 	second := clonePortableToolPlanForTest(plan).Tools[0]
 	retargetPortableToolTestEntry(&second, "demo", "other")
+	artifact := &second.Responsibilities.BindingArtifacts[0]
+	artifact.Record.Value["name"] = "other"
+	artifact.Record.Value["filename"] = "other-1.2.3-py3-none-any.whl"
+	refreshPortableToolTestRecordDigest(&artifact.Reference, artifact.Record)
 	plan.Tools = append(plan.Tools, second)
 	sort.Slice(plan.Tools, func(left, right int) bool {
 		if plan.Tools[left].Scope != plan.Tools[right].Scope {
