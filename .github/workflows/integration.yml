@@ -85,7 +85,9 @@ jobs:
 
       - name: Preload provider Docker integration fixture
         if: matrix.name == 'Linux amd64'
-        run: docker pull python:3.13-slim
+        run: |
+          docker pull python:3.13-slim
+          docker pull python:3.12-slim
 
       - name: Run provider Docker integration tests
         if: matrix.name == 'Linux amd64'
@@ -93,7 +95,7 @@ jobs:
           REPLOY_DOCKER_INTEGRATION: "1"
         run: >-
           go test -timeout 10m ./internal/dockerdeploy
-          -run '^(TestTypedMaterializationLayerDockerIntegration|TestPreparedPythonGraphDockerIntegration|TestPreparedAPTPythonGraphDockerIntegration|TestPreparedAPTPythonTwoInterpreterDockerIntegration|TestPreparedAPTPythonNativeLibraryDockerIntegration|TestPythonResolverWheelIntegration)$'
+          -run '^(TestTypedMaterializationLayerDockerIntegration|TestPreparedPythonGraphDockerIntegration|TestPreparedPythonGraphDockerIntegrationPTD2337NeutralBindings|TestPreparedAPTPythonGraphDockerIntegration|TestPreparedAPTPythonTwoInterpreterDockerIntegration|TestPreparedAPTPythonNativeLibraryDockerIntegration|TestPythonResolverWheelIntegration)$'
 
       - name: Run private workload isolation integration tests
         env:
