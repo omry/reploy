@@ -82,6 +82,7 @@ func PreparePreparedPythonGraphBackend(
 	operations := make(map[providers.NodeID]PreparedPythonNodeOperations)
 	aptOperations := make(map[providers.NodeID]PreparedAPTNodeOperations)
 	verifiedArtifacts := make(map[providers.NodeID]map[canonical.Digest]string)
+	portableBindings := make(map[providers.NodeID]*pythonprovider.PortableToolPythonComponentV1)
 	artifactCleanups := []func(){}
 	showApplicationContext := providerPlanApplicationCount(plan) > 1
 	cleanupArtifacts := func() {
@@ -126,6 +127,7 @@ func PreparePreparedPythonGraphBackend(
 			artifactCleanups = append(artifactCleanups, cleanupArtifactsForNode)
 			verified := map[canonical.Digest]string{}
 			verifiedArtifacts[node.ID] = verified
+			portableBindings[node.ID] = config.PortableToolBindings
 			operations[node.ID] = PreparedPythonNodeOperations{
 				Store: store, Validators: validators,
 				FinalImageConfig: cloneImageConfigPolicy(finalImageConfig), Artifacts: artifacts,
@@ -166,6 +168,7 @@ func PreparePreparedPythonGraphBackend(
 			RunEvidence: evidence.Run, RetainLayer: RetainVerifiedProviderLayer,
 			RunOptions:        options,
 			verifiedArtifacts: verifiedArtifacts,
+			portableBindings:  portableBindings,
 		},
 	}, cleanupAll, nil
 }
