@@ -36,6 +36,12 @@ type materializationCandidateRetainer func(
 	providers.RealizedImageV1,
 ) error
 type materializationCandidateRemover func(context.Context, BuiltImageCandidate) error
+type acceptedMaterializationLayerFinalizer func(
+	context.Context,
+	InspectedImageCandidate,
+	providers.GraphNodeMaterializeResult,
+	RunOptions,
+) (BuiltImageCandidate, InspectedImageCandidate, error)
 
 // BuildAndAcceptMaterializationLayer builds one provider layer and returns a
 // graph result only after immutable inspection and exact generated/public
@@ -90,6 +96,27 @@ func buildAndAcceptMaterializationLayer(
 	retain materializationCandidateRetainer,
 	remove materializationCandidateRemover,
 ) (providers.GraphNodeMaterializeResult, error) {
+	return buildAndAcceptMaterializationLayerWithFinalizer(
+		ctx, store, transaction, bundle, platform, runEvidence, verifiedArtifacts,
+		options, build, inspect, retain, remove, nil,
+	)
+}
+
+func buildAndAcceptMaterializationLayerWithFinalizer(
+	ctx context.Context,
+	store providerstore.Store,
+	transaction providers.MaterializationTransaction,
+	bundle providers.ResolvedBundle,
+	platform blueprint.Platform,
+	runEvidence MaterializationEvidenceRunner,
+	verifiedArtifacts map[canonical.Digest]string,
+	options RunOptions,
+	build materializationLayerBuilder,
+	inspect materializationLayerInspector,
+	retain materializationCandidateRetainer,
+	remove materializationCandidateRemover,
+	finalize acceptedMaterializationLayerFinalizer,
+) (providers.GraphNodeMaterializeResult, error) {
 	if ctx == nil {
 		return providers.GraphNodeMaterializeResult{}, fmt.Errorf("materialization acceptance requires a context")
 	}
@@ -134,13 +161,35 @@ func buildAndAcceptMaterializationLayer(
 	if err != nil {
 		return rejectMaterializationCandidate(ctx, built.Built, err, remove)
 	}
+	retainedCandidate := built.Built
+	if finalize != nil {
+		finalizeCtx, endFinalize := buildprofile.Start(ctx, "Publish provider aliases")
+		aliasCandidate, aliasImage, finalizeErr := finalize(finalizeCtx, inspected.Image, accepted, options)
+		endFinalize(finalizeErr)
+		if finalizeErr != nil {
+			if aliasCandidate.ImageID.Validate() == nil {
+				_, finalizeErr = rejectMaterializationCandidate(ctx, aliasCandidate, finalizeErr, remove)
+			}
+			return rejectMaterializationCandidate(ctx, built.Built, finalizeErr, remove)
+		}
+		if err := aliasImage.Image.Validate(); err != nil {
+			_, cleanupErr := rejectMaterializationCandidate(ctx, aliasCandidate, fmt.Errorf("inspect provider alias image: %w", err), remove)
+			return rejectMaterializationCandidate(ctx, built.Built, cleanupErr, remove)
+		}
+		if err := remove(context.WithoutCancel(ctx), built.Built); err != nil {
+			_, cleanupErr := rejectMaterializationCandidate(ctx, aliasCandidate, fmt.Errorf("remove temporary pre-alias provider layer: %w", err), remove)
+			return rejectMaterializationCandidate(ctx, built.Built, cleanupErr, remove)
+		}
+		retainedCandidate = aliasCandidate
+		accepted.Image = aliasImage.Image
+	}
 	retainCtx, endRetain := buildprofile.Start(ctx, "Retain provider layer")
-	err = retain(retainCtx, built.Built, accepted.Image)
+	err = retain(retainCtx, retainedCandidate, accepted.Image)
 	endRetain(err)
 	if err != nil {
 		return rejectMaterializationCandidate(
 			ctx,
-			built.Built,
+			retainedCandidate,
 			fmt.Errorf("retain verified provider layer: %w", err),
 			remove,
 		)
