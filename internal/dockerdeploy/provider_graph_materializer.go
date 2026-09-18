@@ -7,6 +7,7 @@ import (
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/providers"
+	pythonprovider "github.com/omry/reploy/internal/providers/python"
 	"github.com/omry/reploy/internal/providers/registry"
 	"github.com/omry/reploy/internal/providerstore"
 )
@@ -18,6 +19,7 @@ type ProviderGraphMaterializer struct {
 	RetainLayer       materializationCandidateRetainer
 	RunOptions        RunOptions
 	verifiedArtifacts map[providers.NodeID]map[canonical.Digest]string
+	portableBindings  map[providers.NodeID]*pythonprovider.PortableToolPythonComponentV1
 }
 
 var materializeProviderGraphNode = registry.MaterializeNode
@@ -51,17 +53,47 @@ func (materializer ProviderGraphMaterializer) Materialize(
 	}
 	options := materializer.RunOptions
 	options.Context = ctx
-	result, err := buildAndAcceptProviderGraphLayer(
-		ctx,
-		materializer.Store,
-		transaction,
-		request.Input.Bundle,
-		materializer.Platform,
-		materializer.RunEvidence,
-		materializer.verifiedArtifacts[request.Node.ID],
-		materializer.RetainLayer,
-		options,
-	)
+	var result providers.GraphNodeMaterializeResult
+	bindings := materializer.portableBindings[request.Node.ID]
+	if bindings != nil && len(bindings.Bindings) != 0 {
+		aliases, planErr := planPortablePythonAliasesV1(bindings, transaction)
+		if planErr != nil {
+			return providers.GraphNodeMaterializeResult{}, fmt.Errorf("plan provider graph node %q Python aliases: %w", request.Node.ID, planErr)
+		}
+		if len(aliases) == 0 {
+			return providers.GraphNodeMaterializeResult{}, fmt.Errorf("provider graph node %q selected Python bindings have no aliases", request.Node.ID)
+		}
+		result, err = buildAndAcceptMaterializationLayerWithFinalizer(
+			ctx, materializer.Store, transaction, request.Input.Bundle,
+			materializer.Platform, materializer.RunEvidence,
+			materializer.verifiedArtifacts[request.Node.ID], options,
+			BuildMaterializationLayer, InspectMaterializationLayerCandidate,
+			materializer.RetainLayer, RemoveBuiltImageCandidate,
+			func(
+				finalizeCtx context.Context,
+				source InspectedImageCandidate,
+				_ providers.GraphNodeMaterializeResult,
+				finalizeOptions RunOptions,
+			) (BuiltImageCandidate, InspectedImageCandidate, error) {
+				return buildAndValidatePortablePythonAliasLayerV1(
+					finalizeCtx, materializer.Store, source, aliases,
+					materializer.Platform, finalizeOptions,
+				)
+			},
+		)
+	} else {
+		result, err = buildAndAcceptProviderGraphLayer(
+			ctx,
+			materializer.Store,
+			transaction,
+			request.Input.Bundle,
+			materializer.Platform,
+			materializer.RunEvidence,
+			materializer.verifiedArtifacts[request.Node.ID],
+			materializer.RetainLayer,
+			options,
+		)
+	}
 	if err != nil {
 		return providers.GraphNodeMaterializeResult{}, fmt.Errorf("build provider graph node %q: %w", request.Node.ID, err)
 	}
