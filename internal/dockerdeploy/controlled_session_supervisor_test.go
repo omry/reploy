@@ -1641,6 +1641,8 @@ func TestRunControlledSessionV1CancelsBlockedInputBeforeStoppingWorkload(t *test
 	transport := &fakeControlledSessionTransportV1{requests: requests}
 	transport.onEvent = func(event controlledsession.EventV1) {
 		switch event.Kind {
+		case controlledsession.EventReadyV1:
+			requests <- controlledsession.RequestV1{Kind: controlledsession.RequestInputV1, Bytes: []byte("blocked")}
 		case controlledsession.EventWorkloadOutputsFinalizedV1:
 			requests <- controlledsession.RequestV1{Kind: controlledsession.RequestCompleteV1}
 		case controlledsession.EventTerminatedV1:
@@ -1674,7 +1676,6 @@ func TestRunControlledSessionV1CancelsBlockedInputBeforeStoppingWorkload(t *test
 			err    error
 		}{result: result, err: err}
 	}()
-	requests <- controlledsession.RequestV1{Kind: controlledsession.RequestInputV1, Bytes: []byte("blocked")}
 	select {
 	case <-workload.inputStarted:
 	case <-time.After(2 * time.Second):
