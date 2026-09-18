@@ -1,0 +1,2 @@
+kind: Fixed
+body: Order portable binding exports and capabilities after their owning materialization and reject conflicting application export destinations.

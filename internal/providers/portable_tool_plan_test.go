@@ -388,6 +388,37 @@ func TestValidatePortableToolPlanV1AllowsAggregateCollectionsAboveLegacyLimit(t 
 }
 
 func representativePortableToolPlanV1() PortableToolPlanV1 {
+	contract := portableToolTestSelectedRecord(
+		portableToolBindingContractSchemaV1,
+		"tool:demo/releases/1.2.3/bindings/demo/contract",
+		canonical.Object{
+			"name":               "demo",
+			"package":            "demo",
+			"requirements":       []any{"demo==1.2.3"},
+			"supported_python":   []any{"3.10"},
+			"supported_tags":     []any{"py3-none-any"},
+			"bundled_components": []any{},
+			"cli":                canonical.Object{"name": "demo", "path": "/usr/local/bin/demo"},
+		},
+	)
+	artifact := portableToolTestSelectedRecord(
+		portableToolBindingArtifactSchemaV1,
+		"tool:demo/releases/1.2.3/bindings/demo/artifacts/linux-amd64",
+		canonical.Object{
+			"binding":            "demo",
+			"contract":           canonical.Object{"id": contract.Reference.ID, "digest": string(contract.Reference.Digest)},
+			"name":               "demo",
+			"ecosystem_version":  "1.2.3",
+			"platform":           "linux/amd64",
+			"filename":           "demo-1.2.3-py3-none-any.whl",
+			"size":               "12",
+			"sha256":             string(portableToolTestDigest),
+			"resolver":           "https-sha256",
+			"tags":               []any{"py3-none-any"},
+			"requires_python":    ">=3.10",
+			"bundled_components": []any{},
+		},
+	)
 	return PortableToolPlanV1{
 		Schema: PortableToolPlanSchemaV1,
 		Tools: []PortableToolPlanEntryV1{{
@@ -401,16 +432,8 @@ func representativePortableToolPlanV1() PortableToolPlanV1 {
 				Environment: []PortableToolEnvironmentVariableV1{{Name: "DEMO_HOME", Value: "/opt/demo"}, {Name: "PATH", Value: "/opt/demo/bin"}},
 			},
 			Responsibilities: PortableToolResponsibilitiesV1{
-				BindingContracts: []PortableToolSelectedRecordV1{portableToolTestSelectedRecord(
-					portableToolBindingContractSchemaV1,
-					"tool:demo/releases/1.2.3/bindings/demo/contract",
-					canonical.Object{"name": "demo"},
-				)},
-				BindingArtifacts: []PortableToolSelectedRecordV1{portableToolTestSelectedRecord(
-					portableToolBindingArtifactSchemaV1,
-					"tool:demo/releases/1.2.3/bindings/demo/artifacts/linux-amd64",
-					canonical.Object{"name": "demo"},
-				)},
+				BindingContracts: []PortableToolSelectedRecordV1{contract},
+				BindingArtifacts: []PortableToolSelectedRecordV1{artifact},
 				Payloads: []PortableToolSelectedRecordV1{portableToolTestSelectedRecord(
 					portableToolPayloadSchemaV1,
 					"tool:demo/releases/1.2.3/payloads/demo",
@@ -422,7 +445,7 @@ func representativePortableToolPlanV1() PortableToolPlanV1 {
 					canonical.Object{"manager": "apt"},
 				)},
 			},
-			Exports: []PortableToolExportV1{{Name: "demo", Path: "/opt/demo/bin/demo"}, {Name: "helper", Path: "/opt/demo/bin/helper"}},
+			Exports: []PortableToolExportV1{{Name: "demo", Path: "/usr/local/bin/demo"}, {Name: "helper", Path: "/usr/local/bin/helper"}},
 			ValidationProfiles: []PortableToolValidationProfileV1{portableToolTestValidationProfile(
 				"tool:demo/releases/1.2.3/validation/profiles/default",
 				canonical.Object{"name": "default"},
@@ -496,6 +519,7 @@ func retargetPortableToolTestEntry(entry *PortableToolPlanEntryV1, oldTool strin
 			newTool,
 		)
 	}
+	refreshPortableToolBindingArtifactContractsForTest(entry)
 }
 
 func retargetPortableToolTestRecord(
@@ -542,6 +566,46 @@ func reversionPortableToolTestEntry(entry *PortableToolPlanEntryV1, oldVersion s
 			strings.Replace(entry.ValidationProfiles[index].Reference.ID, "/releases/"+oldEncoded+"/", "/releases/"+newEncoded+"/", 1),
 		)
 	}
+	refreshPortableToolBindingArtifactContractsForTest(entry)
+}
+
+func refreshPortableToolBindingArtifactContractsForTest(entry *PortableToolPlanEntryV1) {
+	contracts := make(map[string]PortableToolRecordReferenceV1, len(entry.Responsibilities.BindingContracts))
+	for _, contract := range entry.Responsibilities.BindingContracts {
+		if bindingIndex := strings.Index(contract.Reference.ID, "/bindings/"); bindingIndex >= 0 {
+			contracts[contract.Reference.ID[bindingIndex:]] = contract.Reference
+		}
+	}
+	for index := range entry.Responsibilities.BindingArtifacts {
+		artifact := &entry.Responsibilities.BindingArtifacts[index]
+		contract, ok := artifact.Record.Value["contract"].(canonical.Object)
+		if !ok {
+			continue
+		}
+		contractID, ok := contract["id"].(string)
+		if !ok {
+			continue
+		}
+		bindingIndex := strings.Index(contractID, "/bindings/")
+		if bindingIndex < 0 {
+			continue
+		}
+		reference, found := contracts[contractID[bindingIndex:]]
+		if !found && len(contracts) == 1 {
+			// Some fixtures retarget the contract record ID directly. The artifact
+			// link is still repaired to the sole contract in this entry.
+			for _, candidate := range contracts {
+				reference = candidate
+			}
+			found = true
+		}
+		if found {
+			contract["id"] = reference.ID
+			contract["digest"] = string(reference.Digest)
+		}
+		artifact.Record.Value["contract"] = contract
+		refreshPortableToolTestRecordDigest(&artifact.Reference, artifact.Record)
+	}
 }
 
 func clonePortableToolPlanForTest(plan PortableToolPlanV1) PortableToolPlanV1 {
@@ -561,11 +625,9 @@ func clonePortableToolPlanForTest(plan PortableToolPlanV1) PortableToolPlanV1 {
 		entry.Responsibilities.Payloads = clonePortableToolRecordsForTest(plan.Tools[index].Responsibilities.Payloads)
 		entry.Responsibilities.NativePackageSets = clonePortableToolRecordsForTest(plan.Tools[index].Responsibilities.NativePackageSets)
 		for profileIndex := range entry.ValidationProfiles {
-			value := canonical.Object{}
-			for key, item := range entry.ValidationProfiles[profileIndex].Record.Value {
-				value[key] = item
-			}
-			entry.ValidationProfiles[profileIndex].Record.Value = value
+			entry.ValidationProfiles[profileIndex].Record.Value = clonePortableToolCanonicalObjectV1(
+				entry.ValidationProfiles[profileIndex].Record.Value,
+			)
 		}
 	}
 	return result
@@ -574,11 +636,7 @@ func clonePortableToolPlanForTest(plan PortableToolPlanV1) PortableToolPlanV1 {
 func clonePortableToolRecordsForTest(records []PortableToolSelectedRecordV1) []PortableToolSelectedRecordV1 {
 	result := append([]PortableToolSelectedRecordV1(nil), records...)
 	for index := range result {
-		value := canonical.Object{}
-		for key, item := range result[index].Record.Value {
-			value[key] = item
-		}
-		result[index].Record.Value = value
+		result[index].Record.Value = clonePortableToolCanonicalObjectV1(result[index].Record.Value)
 	}
 	return result
 }

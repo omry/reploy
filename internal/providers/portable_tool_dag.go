@@ -2,6 +2,7 @@ package providers
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"path"
 	"reflect"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
+	"github.com/omry/reploy/internal/portabletool"
 )
 
 const (
@@ -96,6 +98,14 @@ type portableToolFilesystemClaimV1 struct {
 	owner string
 }
 
+type portableToolExportClaimV1 struct {
+	path     string
+	target   string
+	identity string
+	owner    string
+	binding  bool
+}
+
 // BuildPortableToolProviderDAGV1 composes a validated provider plan and a
 // validated portable-tool plan. It does not execute, acquire, materialize, or
 // persist any operation; it only builds and validates the structural graph.
@@ -114,7 +124,10 @@ func BuildPortableToolProviderDAGV1(
 	if err != nil {
 		return PortableToolProviderDAGV1{}, err
 	}
-	operations, dependencies := expectedPortableToolProviderGraphV1(portableToolPlan, domainByScope)
+	operations, dependencies, err := expectedPortableToolProviderGraphV1(portableToolPlan, domainByScope)
+	if err != nil {
+		return PortableToolProviderDAGV1{}, fmt.Errorf("portable tool provider graph: %w", err)
+	}
 	dag := PortableToolProviderDAGV1{
 		Schema:           PortableToolProviderDAGSchemaV1,
 		ProviderPlan:     cloneProviderPlanForPortableToolDAGV1(providerPlan),
@@ -152,7 +165,10 @@ func ValidatePortableToolProviderDAGV1(dag PortableToolProviderDAGV1) error {
 	if dag.Operations == nil || dag.Dependencies == nil {
 		return fmt.Errorf("portable tool provider operations and dependencies must use arrays")
 	}
-	expectedOperations, expectedDependencies := expectedPortableToolProviderGraphV1(dag.PortableToolPlan, domainByScope)
+	expectedOperations, expectedDependencies, err := expectedPortableToolProviderGraphV1(dag.PortableToolPlan, domainByScope)
+	if err != nil {
+		return fmt.Errorf("portable tool provider graph: %w", err)
+	}
 	if err := validatePortableToolProviderOperationsV1(dag.Operations, expectedOperations); err != nil {
 		return err
 	}
@@ -267,13 +283,18 @@ func portableToolProviderDomainsEqualV1(left, right []PortableToolProviderDomain
 func expectedPortableToolProviderGraphV1(
 	plan PortableToolPlanV1,
 	domainByScope map[string]PortableToolProviderDomainSetV1,
-) ([]PortableToolProviderOperationV1, []PortableToolProviderDependencyV1) {
+) ([]PortableToolProviderOperationV1, []PortableToolProviderDependencyV1, error) {
 	operations := make([]PortableToolProviderOperationV1, 0)
 	acquisitionIDs := make([]string, 0)
 	materializationIDs := make([]string, 0)
+	joinEdges := make([]PortableToolProviderDependencyV1, 0)
 	for _, entry := range plan.Tools {
 		domain := domainByScope[entry.Scope]
 		tool := entry.Provenance.Tool
+		bindingJoins, err := portableToolBindingExportJoinsV1(entry)
+		if err != nil {
+			return nil, nil, err
+		}
 		for _, selected := range entry.Responsibilities.BindingContracts {
 			operations = append(operations, portableToolRecordOperationV1(entry, selected.Reference, PortableToolOperationBindingContractV1, domain.Binding))
 		}
@@ -283,6 +304,12 @@ func expectedPortableToolProviderGraphV1(
 			operations = append(operations, acquire, materialize)
 			acquisitionIDs = append(acquisitionIDs, acquire.ID)
 			materializationIDs = append(materializationIDs, materialize.ID)
+			if exportName, found := bindingJoins[portableToolRecordReferenceKeyV1(selected.Reference)]; found {
+				joinEdges = append(joinEdges, PortableToolProviderDependencyV1{
+					Prerequisite: materialize.ID,
+					Dependent:    portableToolOperationIDV1(entry.Scope, tool, PortableToolOperationExportV1, exportName),
+				})
+			}
 		}
 		for _, selected := range entry.Responsibilities.Payloads {
 			acquire := portableToolRecordOperationV1(entry, selected.Reference, PortableToolOperationPayloadAcquisitionV1, domain.Filesystem)
@@ -322,13 +349,17 @@ func expectedPortableToolProviderGraphV1(
 				Scope: entry.Scope, Tool: tool, Kind: PortableToolOperationCapabilityV1,
 				Domain: domain.Capabilities.ID, Owner: domain.Capabilities.Owner, Export: &capability,
 			})
+			joinEdges = append(joinEdges, PortableToolProviderDependencyV1{
+				Prerequisite: portableToolOperationIDV1(entry.Scope, tool, PortableToolOperationExportV1, exported.Name),
+				Dependent:    portableToolOperationIDV1(entry.Scope, tool, PortableToolOperationCapabilityV1, exported.Name),
+			})
 		}
 	}
 	barrier := PortableToolProviderOperationV1{
 		ID:   portableToolAcquisitionBarrierOperationIDV1,
 		Kind: PortableToolOperationAcquisitionBarrierV1,
 	}
-	dependencies := make([]PortableToolProviderDependencyV1, 0, len(acquisitionIDs)+len(materializationIDs))
+	dependencies := make([]PortableToolProviderDependencyV1, 0, len(acquisitionIDs)+len(materializationIDs)+len(joinEdges))
 	if len(acquisitionIDs) > 0 || len(materializationIDs) > 0 {
 		operations = append(operations, barrier)
 		for _, acquisitionID := range acquisitionIDs {
@@ -338,6 +369,7 @@ func expectedPortableToolProviderGraphV1(
 			dependencies = append(dependencies, PortableToolProviderDependencyV1{Prerequisite: barrier.ID, Dependent: materializationID})
 		}
 	}
+	dependencies = append(dependencies, joinEdges...)
 	sort.Slice(operations, func(left int, right int) bool { return operations[left].ID < operations[right].ID })
 	sort.Slice(dependencies, func(left int, right int) bool {
 		if dependencies[left].Prerequisite != dependencies[right].Prerequisite {
@@ -345,10 +377,132 @@ func expectedPortableToolProviderGraphV1(
 		}
 		return dependencies[left].Dependent < dependencies[right].Dependent
 	})
-	return operations, dependencies
+	return operations, dependencies, nil
 }
 
 const portableToolAcquisitionBarrierOperationIDV1 = "portable-tool|acquisition-barrier"
+
+// portableToolBindingExportJoinsV1 resolves the contract-owned CLI to the
+// single export operation that publishes it. The binding artifact carries the
+// exact contract reference, so this join also prevents an artifact from
+// silently publishing another binding's CLI.
+func portableToolBindingExportJoinsV1(entry PortableToolPlanEntryV1) (map[string]string, error) {
+	contracts := make(map[string]PortableToolSelectedRecordV1, len(entry.Responsibilities.BindingContracts))
+	contractExports := make(map[string]PortableToolExportV1, len(entry.Responsibilities.BindingContracts))
+	for _, selected := range entry.Responsibilities.BindingContracts {
+		key := portableToolRecordReferenceKeyV1(selected.Reference)
+		contracts[key] = selected
+		cli, present, err := portableToolBindingCLIExportV1(selected)
+		if err != nil {
+			return nil, fmt.Errorf("binding contract %q CLI: %w", selected.Reference.ID, err)
+		}
+		if !present {
+			return nil, fmt.Errorf("binding contract %q CLI is required", selected.Reference.ID)
+		}
+		exported, err := portableToolFindBindingExportV1(entry.Exports, cli)
+		if err != nil {
+			return nil, fmt.Errorf("binding contract %q CLI: %w", selected.Reference.ID, err)
+		}
+		contractExports[key] = exported
+	}
+
+	joins := make(map[string]string, len(entry.Responsibilities.BindingArtifacts))
+	artifactsByContract := make(map[string]int, len(contracts))
+	for _, selected := range entry.Responsibilities.BindingArtifacts {
+		contractReference, present, err := portableToolBindingArtifactContractReferenceV1(selected)
+		if err != nil {
+			return nil, fmt.Errorf("binding artifact %q contract: %w", selected.Reference.ID, err)
+		}
+		if !present {
+			return nil, fmt.Errorf("binding artifact %q contract reference is required", selected.Reference.ID)
+		}
+		contractKey := portableToolRecordReferenceKeyV1(contractReference)
+		if _, found := contracts[contractKey]; !found {
+			return nil, fmt.Errorf("binding artifact %q references unknown binding contract %q", selected.Reference.ID, contractReference.ID)
+		}
+		exported, found := contractExports[contractKey]
+		if !found {
+			return nil, fmt.Errorf("binding artifact %q references a binding contract without a CLI export", selected.Reference.ID)
+		}
+		artifactsByContract[contractKey]++
+		if artifactsByContract[contractKey] > 1 {
+			return nil, fmt.Errorf("binding contract %q must have exactly one selected binding artifact", contracts[contractKey].Reference.ID)
+		}
+		joins[portableToolRecordReferenceKeyV1(selected.Reference)] = exported.Name
+	}
+	for contractKey, exported := range contractExports {
+		if artifactsByContract[contractKey] != 1 {
+			return nil, fmt.Errorf("binding contract %q has no selected binding artifact for CLI export %q", contracts[contractKey].Reference.ID, exported.Name)
+		}
+	}
+	return joins, nil
+}
+
+func portableToolBindingCLIExportV1(selected PortableToolSelectedRecordV1) (PortableToolExportV1, bool, error) {
+	raw, present := selected.Record.Value["cli"]
+	if !present {
+		return PortableToolExportV1{}, false, nil
+	}
+	object, ok := portableToolCanonicalMapV1(raw)
+	if !ok {
+		return PortableToolExportV1{}, true, fmt.Errorf("must be an object")
+	}
+	if len(object) != 2 {
+		return PortableToolExportV1{}, true, fmt.Errorf("must contain exactly canonical name and path fields")
+	}
+	name, nameOK := object["name"].(string)
+	cliPath, pathOK := object["path"].(string)
+	if !nameOK || !pathOK {
+		return PortableToolExportV1{}, true, fmt.Errorf("must contain string name and path")
+	}
+	cli := PortableToolExportV1{Name: name, Path: cliPath}
+	if err := portabletool.ValidateBindingCLIExportV1(portabletool.ToolExportV1{Name: name, Path: cliPath}); err != nil {
+		return PortableToolExportV1{}, true, err
+	}
+	return cli, true, nil
+}
+
+func portableToolFindBindingExportV1(exports []PortableToolExportV1, cli PortableToolExportV1) (PortableToolExportV1, error) {
+	var match PortableToolExportV1
+	count := 0
+	for _, exported := range exports {
+		if exported.Name != cli.Name {
+			continue
+		}
+		if cli.Path != "" && exported.Path != cli.Path {
+			continue
+		}
+		match = exported
+		count++
+	}
+	if count != 1 {
+		if count == 0 {
+			return PortableToolExportV1{}, fmt.Errorf("must join exactly one export and capability (name %q, path %q)", cli.Name, cli.Path)
+		}
+		return PortableToolExportV1{}, fmt.Errorf("must join exactly one export and capability for CLI %q", cli.Name)
+	}
+	return match, nil
+}
+
+func portableToolBindingArtifactContractReferenceV1(selected PortableToolSelectedRecordV1) (PortableToolRecordReferenceV1, bool, error) {
+	raw, present := selected.Record.Value["contract"]
+	if !present {
+		return PortableToolRecordReferenceV1{}, false, nil
+	}
+	object, ok := portableToolCanonicalMapV1(raw)
+	if !ok || len(object) != 2 {
+		return PortableToolRecordReferenceV1{}, true, fmt.Errorf("must contain exactly canonical id and digest fields")
+	}
+	reference, ok := portableToolObjectReferenceV1(object)
+	if !ok {
+		return PortableToolRecordReferenceV1{}, true, fmt.Errorf("must contain a valid record reference")
+	}
+	return reference, true, nil
+}
+
+func portableToolRecordReferenceKeyV1(reference PortableToolRecordReferenceV1) string {
+	return reference.ID + "\x00" + string(reference.Digest)
+}
 
 func portableToolRecordOperationV1(
 	entry PortableToolPlanEntryV1,
@@ -564,6 +718,8 @@ func validatePortableToolProviderSharedClaimsV1(
 	}
 	claims := make(map[string]claim)
 	filesystemClaims := make(map[string][]portableToolFilesystemClaimV1)
+	exportClaims := make(map[string][]portableToolExportClaimV1)
+	bindingExportClaims := make([]portableToolExportClaimV1, 0)
 	pythonRequirements := make(map[string][]string)
 	pythonSupported := make(map[string][]string)
 	addClaim := func(key, value, owner string) error {
@@ -589,6 +745,68 @@ func validatePortableToolProviderSharedClaimsV1(
 		for _, semanticClaim := range semanticClaims {
 			if err := addClaim(operation.Domain+"\x00"+semanticClaim.key, semanticClaim.value, operation.ID); err != nil {
 				return err
+			}
+		}
+		if operation.Kind == PortableToolOperationExportV1 && operation.Export != nil {
+			// Export names are the normal semantic key, but a shared export
+			// domain also owns the destination path. Alias destinations are
+			// compared by overlap, target, and binding identity so the DAG
+			// cannot accept a lock that the alias publisher will reject.
+			toolRuntimeRoot := ""
+			if entry.Runtime != nil {
+				toolRuntimeRoot = entry.Runtime.InstallRoot
+			}
+			target := path.Join(toolRuntimeRoot, "bin", operation.Export.Name)
+			matched := false
+			for _, selected := range entry.Responsibilities.BindingContracts {
+				cli, present, err := portableToolBindingCLIExportV1(selected)
+				if err != nil {
+					return fmt.Errorf("binding contract %q CLI: %w", selected.Reference.ID, err)
+				}
+				if present && cli.Name == operation.Export.Name && cli.Path == operation.Export.Path {
+					matched = true
+					pythonRuntimeRoot, err := portableToolPythonRuntimeRootV1(operation.Scope)
+					if err != nil {
+						return err
+					}
+					target = path.Join(pythonRuntimeRoot, "bin", operation.Export.Name)
+					if err := addPortableToolFilesystemClaimV1(filesystemClaims, domain.Filesystem.ID,
+						pythonRuntimeRoot, pythonRuntimeRoot, "python-runtime", operation.ID); err != nil {
+						return err
+					}
+					artifactDigest := canonical.Digest("")
+					for _, artifact := range entry.Responsibilities.BindingArtifacts {
+						if contractReference, present, err := portableToolBindingArtifactContractReferenceV1(artifact); err == nil && present && contractReference.Digest == selected.Reference.Digest {
+							artifactDigest = artifact.Reference.Digest
+							break
+						}
+					}
+					bindingIdentity, err := canonical.Sum(
+						"portable-tool-binding-claim", "portable-tool-binding-claim-v1",
+						struct {
+							Scope          string
+							Closure        canonical.Digest
+							ContractDigest canonical.Digest
+							ArtifactDigest canonical.Digest
+						}{operation.Scope, entry.SelectedClosureDigest, selected.Reference.Digest, artifactDigest},
+					)
+					if err != nil {
+						return fmt.Errorf("binding contract %q identity: %w", selected.Reference.ID, err)
+					}
+					if err := addPortableToolExportClaimV1(exportClaims, operation.Domain, operation.Export.Path,
+						target, string(bindingIdentity), operation.ID, true); err != nil {
+						return err
+					}
+					bindingExportClaims = append(bindingExportClaims, portableToolExportClaimV1{
+						path: operation.Export.Path, target: target, identity: string(bindingIdentity), owner: operation.ID, binding: true,
+					})
+				}
+			}
+			if !matched {
+				if err := addPortableToolExportClaimV1(exportClaims, operation.Domain, operation.Export.Path,
+					target, "export:"+operation.Export.Name, operation.ID, false); err != nil {
+					return err
+				}
 			}
 		}
 		if operation.Kind == PortableToolOperationBindingContractV1 && operation.Record != nil {
@@ -660,6 +878,40 @@ func validatePortableToolProviderSharedClaimsV1(
 				if err := addPortableToolFilesystemClaimV1(filesystemClaims, operation.Domain, destination,
 					string(selected.Reference.Digest), kind, operation.ID); err != nil {
 					return err
+				}
+			}
+		}
+	}
+	filesystemDomains := make([]string, 0, len(filesystemClaims))
+	for domain := range filesystemClaims {
+		filesystemDomains = append(filesystemDomains, domain)
+	}
+	sort.Strings(filesystemDomains)
+	// Alias destinations are consumed by the Python alias planner globally,
+	// across export authorities. Compare each binding claim with every export
+	// claim here so a distinct export domain cannot hide an ordinary export that
+	// would make the alias planner reject the selected plan. Ordinary exports
+	// may intentionally publish distinct names from one source path.
+	allExportClaims := make([]portableToolExportClaimV1, 0)
+	for _, claimsForDomain := range exportClaims {
+		allExportClaims = append(allExportClaims, claimsForDomain...)
+	}
+	for _, exported := range bindingExportClaims {
+		for _, previous := range allExportClaims {
+			if !portableToolLinuxPathsOverlapV1(exported.path, previous.path) {
+				continue
+			}
+			if exported.path == previous.path && exported.target == previous.target && exported.identity == previous.identity {
+				continue
+			}
+			return fmt.Errorf("portable tool provider shared filesystem-domain conflict on %q (export-path) between %s and %s", exported.path, exported.owner, previous.owner)
+		}
+	}
+	for _, exported := range bindingExportClaims {
+		for _, filesystemDomain := range filesystemDomains {
+			for _, filesystem := range filesystemClaims[filesystemDomain] {
+				if portableToolLinuxPathsOverlapV1(exported.path, filesystem.path) {
+					return fmt.Errorf("portable tool provider shared filesystem-domain conflict on %q (export-path) between %s and %s", exported.path, exported.owner, filesystem.owner)
 				}
 			}
 		}
@@ -831,6 +1083,29 @@ func addPortableToolFilesystemClaimV1(
 	return nil
 }
 
+func addPortableToolExportClaimV1(
+	claims map[string][]portableToolExportClaimV1,
+	domain, claimedPath, target, identity, owner string,
+	binding bool,
+) error {
+	for _, previous := range claims[domain] {
+		if !portableToolLinuxPathsOverlapV1(previous.path, claimedPath) {
+			continue
+		}
+		if previous.path == claimedPath && previous.target == target && previous.identity == identity {
+			return nil
+		}
+		if !binding && !previous.binding && previous.path == claimedPath {
+			continue
+		}
+		return fmt.Errorf("portable tool provider shared filesystem-domain conflict on %q (export-path) between %s and %s", claimedPath, previous.owner, owner)
+	}
+	claims[domain] = append(claims[domain], portableToolExportClaimV1{
+		path: claimedPath, target: target, identity: identity, owner: owner, binding: binding,
+	})
+	return nil
+}
+
 func portableToolLinuxPathsOverlapV1(left, right string) bool {
 	left = path.Clean(left)
 	right = path.Clean(right)
@@ -841,6 +1116,20 @@ func portableToolLinuxPathsOverlapV1(left, right string) bool {
 		return false
 	}
 	return strings.HasPrefix(left, right+"/") || strings.HasPrefix(right, left+"/")
+}
+
+func portableToolPythonRuntimeRootV1(scope string) (string, error) {
+	application, ok := strings.CutPrefix(scope, "application:")
+	if !ok || application == "" {
+		return "", fmt.Errorf("portable Python binding scope %q has no application owner", scope)
+	}
+	owner := blueprint.ApplicationID(application)
+	root := path.Join("/opt/reploy/providers/python", owner)
+	if len(path.Join(root, "bin", "python"))+3 <= 127 {
+		return root, nil
+	}
+	digest := sha256.Sum256([]byte(owner))
+	return path.Join("/opt/reploy/providers/python", "application", "_"+fmt.Sprintf("%x", digest)), nil
 }
 
 func portableToolRecordResponsibilityKindV1(kind string) string {
