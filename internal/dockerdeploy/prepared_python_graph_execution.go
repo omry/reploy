@@ -135,6 +135,19 @@ func ExecutePreparedPythonGraph(
 	if err != nil {
 		return providers.GraphExecutionResult{}, err
 	}
+	if projection != nil {
+		selectedPlan := providers.PortableToolPlanV1{}
+		if input.DesiredPortableToolPlan != nil {
+			selectedPlan = *input.DesiredPortableToolPlan
+		} else if input.PortablePython != nil {
+			selectedPlan = input.PortablePython.Plan
+		} else if lockedPortablePython != nil {
+			selectedPlan = lockedPortablePython.Plan
+		}
+		if err := validatePortablePythonAliasSelectionClaimsV1(selectedPlan, bindingsByComponent); err != nil {
+			return providers.GraphExecutionResult{}, fmt.Errorf("selected portable Python aliases: %w", err)
+		}
+	}
 	for id, config := range reuse.NodeConfigs {
 		config.LocalOverrides = append([]PythonLocalOverrideV1{}, input.LocalOverrides...)
 		node, found := graphBackendNode(input.Plan, id)
