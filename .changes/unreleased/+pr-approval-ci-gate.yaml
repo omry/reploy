@@ -1,0 +1,2 @@
+kind: Fixed
+body: Require all pull request CI jobs to pass before recording approval.
