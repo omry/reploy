@@ -33,6 +33,15 @@ func (preparedTestSink) Publish(_ context.Context, logicalPath string, kind stri
 	}, nil
 }
 
+type recordingPreparedTestSink struct {
+	published int
+}
+
+func (sink *recordingPreparedTestSink) Publish(ctx context.Context, logicalPath string, kind string, reader io.Reader) (providerstore.ArtifactDescriptor, error) {
+	sink.published++
+	return (preparedTestSink{}).Publish(ctx, logicalPath, kind, reader)
+}
+
 func TestWheelNodeResolverReturnsCanonicalBundleThroughGraph(t *testing.T) {
 	dir := t.TempDir()
 	writeTestWheel(t, dir, "demo_server-1.2.3-py3-none-any.whl", "Demo-Server", "1.2.3", map[string]string{"demo-server": "demo:main"})
@@ -150,6 +159,102 @@ func TestSelectedPortableWheelOutputMustMatchExactVerifiedInput(t *testing.T) {
 	}
 	if err := validateSelectedPortableWheelOutputs(context.Background(), dir, outputs, []PortableToolVerifiedWheelInputV1{selected}); err == nil {
 		t.Fatal("different selected wheel bytes were accepted")
+	}
+}
+
+func TestWheelNodeResolverRejectsSelectedWheelSubstitutionsBeforePublication(t *testing.T) {
+	const selectedFilename = "demo_server-1.2.3-py3-none-any.whl"
+
+	cloneSelected := func(t *testing.T, dir string) PortableToolVerifiedWheelInputV1 {
+		t.Helper()
+		inspection, err := inspectWheelPath(context.Background(), filepath.Join(dir, selectedFilename), "wheels/"+selectedFilename, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(inspection.ConsoleScripts) != 1 {
+			t.Fatalf("selected wheel console scripts = %#v", inspection.ConsoleScripts)
+		}
+		return PortableToolVerifiedWheelInputV1{
+			Descriptor:    inspection.Artifact,
+			Inspection:    inspection,
+			ConsoleScript: inspection.ConsoleScripts[0],
+		}
+	}
+
+	tests := []struct {
+		name      string
+		write     func(*testing.T, string)
+		selected  func(*testing.T, string, string) PortableToolVerifiedWheelInputV1
+		wantError string
+	}{
+		{
+			name: "same distribution and version with changed bytes",
+			write: func(t *testing.T, dir string) {
+				writeTestWheel(t, dir, selectedFilename, "Demo-Server", "1.2.3", map[string]string{"demo-server": "demo:replacement"})
+			},
+			selected: func(t *testing.T, selectedDir, _ string) PortableToolVerifiedWheelInputV1 {
+				return cloneSelected(t, selectedDir)
+			},
+			wantError: "different bytes or filename",
+		},
+		{
+			name: "newer version for selected distribution",
+			write: func(t *testing.T, dir string) {
+				writeTestWheel(t, dir, "demo_server-1.3.0-py3-none-any.whl", "Demo-Server", "1.3.0", map[string]string{"demo-server": "demo:main"})
+			},
+			selected: func(t *testing.T, selectedDir, _ string) PortableToolVerifiedWheelInputV1 {
+				return cloneSelected(t, selectedDir)
+			},
+			wantError: "different bytes or filename",
+		},
+		{
+			name: "matching distribution with changed inspected metadata",
+			write: func(t *testing.T, dir string) {
+				writeTestWheel(t, dir, selectedFilename, "Demo-Server", "1.2.3", map[string]string{"demo-server": "demo:replacement"})
+			},
+			selected: func(t *testing.T, selectedDir, outputDir string) PortableToolVerifiedWheelInputV1 {
+				selected := cloneSelected(t, outputDir)
+				original := cloneSelected(t, selectedDir)
+				selected.Inspection.ConsoleScripts = original.Inspection.ConsoleScripts
+				selected.ConsoleScript = original.ConsoleScript
+				return selected
+			},
+			wantError: "different inspected metadata",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			selectedDir := t.TempDir()
+			writeTestWheel(t, selectedDir, selectedFilename, "Demo-Server", "1.2.3", map[string]string{"demo-server": "demo:main"})
+			outputDir := t.TempDir()
+			test.write(t, outputDir)
+			selected := test.selected(t, selectedDir, outputDir)
+			plan, platform, upstream, catalog, selectedEvidence := preparedNodeTestPlan(t, "demo-server")
+			sink := &recordingPreparedTestSink{}
+			resolver := WheelNodeResolver{
+				SelectedPortableWheels: []PortableToolVerifiedWheelInputV1{selected},
+				PrepareWheels: func(context.Context, providerapi.ResolveInput, providerapi.ExecutableEvidence) (string, error) {
+					return outputDir, nil
+				},
+				ResolveInterpreter: func(context.Context, providerapi.ExecutableRequirement, []providerapi.RealizedOutput, providerapi.RealizedImageV1, blueprint.Platform) (providerapi.ExecutableEvidence, error) {
+					return selectedEvidence, nil
+				},
+			}
+			_, err := providerapi.ResolveProviderNode(context.Background(), providerapi.ResolveNodeRequest{
+				Plan: plan, NodeID: "python/application", EarlierCatalog: catalog,
+				Platform: platform, SourceCandidates: []providerapi.ResolvedSourceInput{}, Upstream: upstream,
+				ReusableArtifacts: []providerstore.StoreObjectRef{},
+			}, resolver, sink, providerapi.ProviderOwnerValidators{
+				Profile: ValidateRequirementProfileV1, Bundle: ValidateResolvedBundlePayloadV1,
+			})
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("error = %v, want substring %q", err, test.wantError)
+			}
+			if sink.published != 0 {
+				t.Fatalf("selected wheel substitution published %d artifacts before rejection", sink.published)
+			}
+		})
 	}
 }
 
