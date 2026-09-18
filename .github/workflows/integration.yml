@@ -95,7 +95,7 @@ jobs:
           REPLOY_DOCKER_INTEGRATION: "1"
         run: >-
           go test -timeout 10m ./internal/dockerdeploy
-          -run '^(TestTypedMaterializationLayerDockerIntegration|TestPreparedPythonGraphDockerIntegration|TestPreparedPythonGraphDockerIntegrationPTD2337NeutralBindings|TestPreparedAPTPythonGraphDockerIntegration|TestPreparedAPTPythonTwoInterpreterDockerIntegration|TestPreparedAPTPythonNativeLibraryDockerIntegration|TestPythonResolverWheelIntegration)$'
+          -run '^(TestTypedMaterializationLayerDockerIntegration|TestPreparedPythonGraphDockerIntegration|TestPreparedPythonGraphDockerIntegrationPTD2337NeutralBindings|TestPreparedPythonGraphDockerIntegrationPTD2337PlaywrightBinding|TestPreparedAPTPythonGraphDockerIntegration|TestPreparedAPTPythonTwoInterpreterDockerIntegration|TestPreparedAPTPythonNativeLibraryDockerIntegration|TestPythonResolverWheelIntegration)$'
 
       - name: Run private workload isolation integration tests
         env:
