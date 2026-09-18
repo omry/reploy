@@ -1,0 +1,2 @@
+kind: Added
+body: Publish selected portable Python binding commands as application-scoped aliases to their validated console scripts.
