@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-09-15
+updated: 2026-09-22
 summary: Active composition, targeting, acquisition, identity, and validation model for proposed embedded portable-tool definitions.
 refines: docs/REPOSITORY_DESIGN.md
 ---
@@ -124,11 +124,9 @@ compatibility reader for that format.
     Artifact records neither declare nor reference mirrors, which is what keeps
     a mirror change out of selected-closure identity.
 
-11. No ceiling is declared on the size of a definition, in records, packages,
-    payloads, contributions, or bytes. This is a decision rather than a pending
-    item; the Canonical Encoding and Structural Limits section records why, and
-    names repository publication as the trigger that would make an aggregate
-    ceiling answerable.
+11. Embedded definitions retain the existing per-unit limits. External
+    repository consumption additionally requires the selected-operation
+    aggregate budgets in `REPOSITORY_DESIGN.md` before publication begins.
 12. Authoring files may share invariant fields through explicit local imports
     and one typed `extends` edge. Resolution is deterministic and conflict-only:
     a child may add an absent field but cannot replace or merge a field already
@@ -378,10 +376,10 @@ whose required contributions depend on an interaction among selected values
 rather than the union of their pair entries is therefore not representable and
 must not be advertised under schema v1.
 
-### Binding Contract Record
+### Python Binding Contract Record
 
-A binding contract owns ecosystem semantics shared across targets. For the
-initial Playwright Python binding these include:
+A `portable-tool-python-binding-v1` record owns Python ecosystem semantics
+shared across targets. For the initial Playwright binding these include:
 
 - exact Python requirement roots;
 - supported Python versions and wheel tags;
@@ -395,10 +393,10 @@ well-formed entry for the selected name and retains its target as observed
 metadata authenticated by the exact wheel digest; it does not infer a second
 cross-record equality value or dispatch on that target.
 
-### Binding Artifact Record
+### Python Wheel Artifact Record
 
-A binding artifact record owns one exact platform-specific ecosystem artifact,
-such as a Playwright Python wheel:
+A `portable-tool-python-wheel-artifact-v1` record owns one exact
+platform-specific Python wheel:
 
 - component name and exact ecosystem version;
 - OCI platform, ecosystem compatibility tags, and any additional compatibility
@@ -407,10 +405,12 @@ such as a Playwright Python wheel:
 - the reviewed resolver primitive and provider materialization metadata;
 - the binding contract that consumes the artifact.
 
-This separation permits a binding contract to remain constant while its wheel
-or other artifact differs by architecture. Like a payload record, an externally
-acquired binding artifact has an exact content identity and is eligible for one
-release-manifest source mapping.
+This separation permits a Python binding contract to remain constant while its
+wheel differs by architecture. Like a payload record, an externally acquired
+wheel artifact has an exact content identity and is eligible for one
+release-manifest source mapping. The generic binding selection and contribution
+structure does not imply a generic ecosystem artifact schema. A different
+ecosystem requires its own reviewed record kind and provider primitive.
 
 ### Payload Record
 
@@ -795,30 +795,64 @@ cannot raise those limits. Publication and consumption apply the same versioned
 limits before decoding a record, so one malformed or hostile file cannot exhaust
 a parser.
 
-No upper limit is defined on the size of a definition. Neither the number of
-packages, payloads, records, or closure contributions, nor any aggregate data
-size, is bounded by a declared ceiling. This is deliberate rather than pending.
-No basis for such a number exists: the tools a definition may describe are
-open-ended, so measuring the tools already embedded establishes a floor and
-never a ceiling; and Reploy is general purpose, running on hardware from large
-servers to single-board computers, so no allocation budget generalizes across
-clients. A definition is as large as the tool it describes genuinely requires,
-and a selected closure is as large as the request it resolves genuinely
-requires.
-
-An aggregate ceiling becomes answerable only alongside repository publication
-and publisher authorization. Those introduce definitions authored by someone
-other than the client's operator, and with them the question of which client
-must be able to consume any published definition. That question, not a number
-chosen in advance, is what would determine the limit. Until then every
-definition is embedded and first-party, the per-unit limits above bound what any
-single record or file may contain, and nothing bounds their sum.
+The embedded bootstrap currently has no aggregate definition-size ceiling.
+Per-unit bounds alone do not bound a selected graph assembled from many valid
+records. Before independently operated repositories publish tool definitions,
+the consumer and publisher must apply the aggregate selected-operation budgets
+defined in `REPOSITORY_DESIGN.md`. Those budgets cover work across a selected
+union, while the record limits above continue to protect each decoded unit.
+Their numeric values require representative workload measurements and a
+versioned compatibility decision before external publication; the Java and
+Playwright bootstrap alone cannot establish a general ceiling.
+This external-publication trust boundary is narrower than the provider-neutral
+blueprint model: it does not impose a generic numeric quota on local provider
+transactions, artifact listings, or safe-artifact publication.
 
 One definition-wide ceiling does exist and is unrelated to size: a definition
 whose required integration coverage exceeds the core cap is rejected, as
 described under Reploy Integration Validation. That cap bounds the CI work a
 definition can demand, which is a shared and measurable resource, rather than
 the memory a client must have, which is not.
+
+## Provider Handoffs and Materialization Boundaries
+
+The selected closure, provider-neutral responsibilities, provider domains,
+Python binding projection, verified acquisition result, and persisted lock
+have distinct jobs. In process, a validated selection is handed to providers
+through an immutable, construction-controlled value; providers derive views
+from it rather than accepting independently mutable copies and proving their
+equality repeatedly. The same rule applies to a verified artifact result.
+Repository bytes and persisted locks still receive full strict decoding,
+record-digest, graph, source-authorization, and selected-closure checks at
+their respective trust boundaries. Internal handoffs do not replace validation
+of externally constructed or deserialized data.
+
+The provider plan retains domain ownership and deterministic semantic and
+filesystem collision detection across scopes. Acquisition finishes before
+offline materialization; a binding's materialization precedes its CLI export,
+and the export precedes its capability. The lock retains enough canonical
+selected input and ordering identity to validate replay. An operation or
+authority projection that is a deterministic function of those retained
+inputs may be derived on demand instead of persisted as a second authority.
+
+For a Python CLI export, Reploy validates the selected destination, binding
+identity, and computed absolute target under the owning Python runtime. It
+checks the source image for destination and ancestor collisions, then writes
+the accepted claims directly as sorted, deterministic Linux tar directory and
+symlink entries. No host-side published alias is part of the materialization
+contract. The resulting image must retain its source configuration and pass
+final-image inspection proving each link's exact target and executable output.
+Failure leaves no accepted image or usable alias. Publishers control only the
+declarative name and destination, never symlink syntax or an arbitrary target.
+
+Selected validation profiles remain outside selected-closure identity but are
+locked with the release that authorized them. The usage owner selects the
+exact image and scope; a derived schedule feeds the fixed, networkless,
+resource-bounded executor. Passing evidence binds the observed image root
+filesystem, exact profile reference, and runtime projection supplied to the
+probe. Each required execution runs; stored evidence may coalesce only when
+those inputs are identical. Container ownership and bounded cleanup checks
+remain executor responsibilities.
 
 ## Acquisition Model
 

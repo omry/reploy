@@ -1,27 +1,27 @@
 ---
 artifact: swe-design-review-attestation
-schema_version: 3
-scope_key: 5d8374de514061f9e5a61419966683c8a8f995c50d286d61751b5e644664b6aa
-scope: {"kind": "path", "primary_target": "docs/REPOSITORY_DESIGN.md", "repository": "/home/omry/dev/reploy", "selector": "docs/REPOSITORY_DESIGN.md"}
-review_content_identity_sha256: a2bf2257e8859c58943d1b977705a8030ff856bc16e96aaa6617705172a1a8e2
-target_content_identity_sha256: 838e07dac6c828eb648e92c7ca1fe0ee2247bd5c2798b2635d902bc603068ef5
-baseline_content_identity_sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
-target_documents: [{"path": "docs/REPOSITORY_DESIGN.md", "repository": "/home/omry/dev/reploy", "sha256": "779db18a8bfa2a8863b917f138966b871261d423843cddb1fbe2284bd02cbf2b"}]
+schema_version: 4
+scope_key: 79997c63f8940ef40d881dc169edf2ad383734721ff20b54cb2d4ff8229339ee
+scope: {"kind": "path", "primary_target": "docs/REPOSITORY_DESIGN.md", "repository": ".", "selector": "docs/REPOSITORY_DESIGN.md"}
+review_content_identity_sha256: 9fc79c57d97198407da3ab616ef7df1357f931ee85cada117372113c07383261
+target_content_identity_sha256: 6ea86bb27b69ba9c0660678cd8a839137510614da68ea01f115b52b4ed98e5c9
+baseline_content_identity_sha256: null
+target_documents: [{"path": "docs/REPOSITORY_DESIGN.md", "repository": ".", "sha256": "454e6b632ad4513119b3d15b0e157b03644bb94e6cb0a70e0e98d832a1d017d4"}]
 baseline_documents: []
 design_dependency_documents: []
-document_repository: "/home/omry/dev/reploy"
+document_repository: "."
 document_path: "docs/REPOSITORY_DESIGN.md"
-document_revision_provenance: "9248fa2f3d6d6a4578ab0399a0b5e6e6b69eab13"
-document_sha256: 779db18a8bfa2a8863b917f138966b871261d423843cddb1fbe2284bd02cbf2b
+document_revision_provenance: "9c814e87fd6a42ecb2dfe0fecf56f4a400bf1922"
+document_sha256: 454e6b632ad4513119b3d15b0e157b03644bb94e6cb0a70e0e98d832a1d017d4
 verdict: clean
-attested_at: 2026-08-22T14:19:59Z
+attested_at: 2026-09-22T20:27:34Z
 ---
-<!-- swe-design-review-attestation:v3 -->
+<!-- swe-design-review-attestation:v4 -->
 
 # SWE design-review attestation
 
 Review freshness is determined by the target and baseline document bytes
-listed in the version-3 header. Revisions are provenance only.
+listed in the version-4 header. Revisions are provenance only.
 
 ## Durable review state
 

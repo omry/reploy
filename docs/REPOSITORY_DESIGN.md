@@ -1,6 +1,6 @@
 ---
 status: Draft
-updated: 2026-08-22
+updated: 2026-09-22
 summary: Federated, TUF-authenticated Reploy repositories for published blueprints and portable tool definitions.
 ---
 
@@ -59,6 +59,9 @@ deployment rather than remaining dependent on a global cache.
 - Tool definitions are declarative data interpreted through reviewed
   Reploy-owned primitives. They cannot contain arbitrary commands, scripts,
   package-manager expressions, or generic download instructions.
+- External tool-definition consumption has aggregate work budgets in addition
+  to per-record, per-artifact, and per-archive limits. Authenticated publication
+  cannot raise a client's core limits.
 
 ## Terminology
 
@@ -948,12 +951,50 @@ implementation code. A future primitive requires a reviewed Reploy
 implementation and release; ordinary definition updates may only select
 primitives the client already supports.
 
+### Aggregate Consumption Budgets
+
+TUF authentication and publisher authorization establish who published bytes;
+they do not make an unbounded definition safe to traverse or materialize.
+Before accepting externally published tool definitions, Reploy must enforce
+versioned, non-raiseable core budgets over the complete selected operation in
+addition to the limits on individual records, network attempts, artifacts, and
+archives. Repository metadata and index decoding have their own aggregate
+response, entry, and parsing limits before any asset is selected.
+
+The selected-operation preflight counts distinct canonical records and their
+total decoded canonical bytes, reference edges traversed, selected artifact
+identities, provider claims or operations, and validation probes that will run.
+It sums declared acquisition bytes and declared unpacked bytes where the
+record supplies them. Formats such as Python wheels without a declared
+unpacked-size field must enforce their existing per-artifact inspection bound
+and an aggregate observed unpacked-byte bound before installation. Reused
+immutable records and artifacts count once for storage and acquisition; a
+materialization or probe repeated in distinct scopes counts each time it
+executes. All additions use overflow-checked arithmetic. The preflight fails
+before artifact download, image mutation, or probe execution with the exceeded
+declared dimension and observed limit; incremental traversal and observed-byte
+limits prevent unbounded work after preflight. Publication applies the same
+core rules to each advertised support case, and consumption rechecks the exact
+selected union of scopes because independently valid cases can exceed a
+combined operation budget.
+
+Budget values and counting rules are a client compatibility contract, not
+publisher-controlled fields or selected-closure identity. A local operator may
+choose lower operational limits but cannot raise core limits through repository
+data. The first external-publication implementation must set and test concrete
+values against representative definitions and supported client sizes before
+publishing them as a compatibility commitment. The embedded bootstrap may
+remain below those aggregate ceilings without introducing a second definition
+format. Locked replay revalidates the retained selected closure and operation
+against the consuming client's supported budget version without contacting the
+repository; it never silently truncates a closure.
+
 A runtime tool belongs to the application that declares it. Public executables
 become application-scoped executable outputs and are validated in the
-materialized application environment. Colliding exports are errors unless a
-future explicit alias design resolves them. A build-only tool declared by a
-local project recipe exposes executables only within that isolated source
-builder.
+materialized application environment. Colliding exports are errors unless
+the focused portable-tool design's explicit alias rules resolve them. A
+build-only tool declared by a local project recipe exposes executables only
+within that isolated source builder.
 
 ### Tool Requirements and Definition Revisions
 
