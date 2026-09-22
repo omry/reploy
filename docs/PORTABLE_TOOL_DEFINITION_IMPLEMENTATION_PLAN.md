@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-09-17
+updated: 2026-09-22
 summary: Reviewable delivery plan for portable-tool authoring, definitions, and the embedded Java and Playwright implementations.
 implements: docs/PORTABLE_TOOL_DEFINITION_DESIGN.md
 ---
@@ -107,6 +107,20 @@ The original PTD-23.3 technical and acceptance contract below remains in force
 across the children. PTD-24 depends on the completed PTD-23.3.7 handoff. This
 changes delivery boundaries only; it does not amend the accepted design or
 expand Playwright support.
+
+Plan correction note (2026-09-22): after PTD-23.3.7, the focused
+[Portable Tool Simplification Stack](PORTABLE_TOOL_SIMPLIFICATION_STACK.md)
+corrects the embedded bootstrap before PTD-24 begins. Its five independently
+reviewed PRs update the Python record schema names, alias layer, internal
+handoffs, derived provider graph, and validation scheduling in that order.
+The accepted PTD-23.3.5 host-staging and PTD-23.3.6 persisted-operation
+mechanics describe the completed historical slices; the correction stack
+supersedes those mechanics while preserving their acceptance guarantees.
+Every correction PR receives its own local stamp and remote PR cycle. PTD-24
+depends on the corrected, approved stack tip as well as PTD-23.3.7. The
+`PTD-24` identity and scope do not split or change. External repository
+consumption budgets are a pre-publication gate in `REPOSITORY_DESIGN.md`, not
+an embedded-bootstrap implementation slice.
 
 Plan correction note (2026-09-01): PTD-21.4 review exposed duplicate ownership
 of canonical portable-tool record structures and validation between catalog
@@ -485,7 +499,7 @@ the campaign until durable authority is updated.
 | PTD-23.3.5 | Publish Application-Scoped Python CLI Aliases | PTD-23.3.4 | New work |
 | PTD-23.3.6 | Enforce Portable Binding Operation Order | PTD-23.3.5 | New work |
 | PTD-23.3.7 | Prove Neutral and Playwright Binding Acceptance | PTD-23.3.6 | New work |
-| PTD-24 | Materialize Playwright Chromium Payloads | PTD-23.3.7 | New work |
+| PTD-24 | Materialize Playwright Chromium Payloads | PTD-23.3.7, then PTD-S5 corrective stack tip | New work |
 | PTD-25 | Derive Portable Tool Integration Cases and Evidence | PTD-24 | New work; closes the PTD-20 production-caller deferral through the PTD-21.5 boundary |
 | PTD-26 | Validate Every Advertised Java Tuple Through Reploy | PTD-25 | New work |
 | PTD-27 | Validate Every Advertised Playwright Tuple Through Reploy | PTD-26 | New work |
@@ -1939,6 +1953,9 @@ ordinary-build caller, or PTD-27 advertised-tuple validation.
 
 ### PTD-24: Materialize Playwright Chromium Payloads
 
+Prerequisite: complete the approved portable-tool simplification stack above
+the PTD-23.3.7 head before constructing this slice.
+
 Scope: acquire and materialize coupled Chromium, Headless Shell, and FFmpeg;
 contribute target APT roots; configure Reploy-owned browser placement and
 disable Playwright download and garbage collection.
@@ -2029,6 +2046,8 @@ The campaign is complete only when:
   `PTD-29`; the `PTD-21`, `PTD-22`, and `PTD-23` milestone containers and nested
   `PTD-23.1`, `PTD-23.2`, and `PTD-23.3` containers own no PR and close only
   when all of their child slices are approved;
+- the five corrective simplification PRs remain approved at their exact heads
+  in order after PTD-23.3.7 and before PTD-24;
 - the shared-record-contract corrective prerequisite has current-head approval
   and remains in the exact ancestry after PTD-21.3 and before PTD-21.4;
 - the plan-only corrective predecessor has current-head approval and remains in
