@@ -283,10 +283,10 @@ func TestValidatePortableToolLockedCatalogRecordsV1RejectsIncompleteSelectedReco
 		}, want: "portable-tool-payload-v1 record must contain exactly the canonical fields"},
 		{name: "missing binding contract requirements", mutate: func(plan *PortableToolPlanV1) {
 			delete(plan.Tools[0].Responsibilities.BindingContracts[0].Record.Value, "requirements")
-		}, want: "portable-tool-binding-v1 record must contain exactly the canonical fields"},
+		}, want: "portable-tool-python-binding-v1 record must contain exactly the canonical fields"},
 		{name: "extra binding artifact field", mutate: func(plan *PortableToolPlanV1) {
 			plan.Tools[0].Responsibilities.BindingArtifacts[0].Record.Value["unexpected"] = "value"
-		}, want: "portable-tool-binding-artifact-v1 record must contain exactly the canonical fields"},
+		}, want: "portable-tool-python-wheel-artifact-v1 record must contain exactly the canonical fields"},
 		{name: "nested binding artifact field", mutate: func(plan *PortableToolPlanV1) {
 			plan.Tools[0].Responsibilities.BindingArtifacts[0].Record.Value["contract"].(canonical.Object)["unexpected"] = "value"
 		}, want: "unknown field \"unexpected\""},
