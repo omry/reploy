@@ -40,6 +40,26 @@ func TestValidateRecordEnvelopeV1AcceptsEmbeddedRecordKinds(t *testing.T) {
 	}
 }
 
+func TestValidateRecordEnvelopeV1RejectsRetiredGenericBindingKinds(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		schema string
+		path   string
+	}{
+		{"portable-tool-binding-v1", "playwright/releases/1.61.0/bindings/python/contract.json"},
+		{"portable-tool-binding-artifact-v1", "playwright/releases/1.61.0/bindings/python/linux-amd64.json"},
+	} {
+		t.Run(test.schema, func(t *testing.T) {
+			t.Parallel()
+			value := readDefinitionObjectV1(t, test.path)
+			value["schema"] = test.schema
+			if err := portabletool.ValidateRecordEnvelopeV1(canonical.Envelope{Schema: test.schema, Value: value}); err == nil {
+				t.Fatal("retired generic binding kind was accepted")
+			}
+		})
+	}
+}
+
 func TestValidateRecordEnvelopeV1RejectsUnknownNestedField(t *testing.T) {
 	t.Parallel()
 	value := readDefinitionObjectV1(t, "playwright/releases/1.61.0/bindings/python/contract.json")

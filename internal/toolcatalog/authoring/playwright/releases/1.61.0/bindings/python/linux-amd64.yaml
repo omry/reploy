@@ -1,4 +1,4 @@
-kind: portable-tool-binding-artifact-v1
+kind: portable-tool-python-wheel-artifact-v1
 fields:
   id: tool:playwright/releases/1.61.0/bindings/python/artifacts/linux-amd64
   binding: python
