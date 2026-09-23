@@ -1,4 +1,4 @@
-kind: portable-tool-binding-v1
+kind: portable-tool-python-binding-v1
 fields:
   id: tool:playwright/releases/1.61.0/bindings/python/contract
   name: python

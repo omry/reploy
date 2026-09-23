@@ -200,6 +200,20 @@ func TestValidationEvidenceConstructsAndClonesIndependently(t *testing.T) {
 	}
 }
 
+func TestDecodeRecordV1RejectsRetiredGenericBindingKinds(t *testing.T) {
+	for _, schema := range []string{
+		"portable-tool-binding-v1",
+		"portable-tool-binding-artifact-v1",
+	} {
+		t.Run(schema, func(t *testing.T) {
+			payload := []byte(fmt.Sprintf(`{"schema":%q,"id":"tool:demo/releases/1.2.3/bindings/python/contract"}`, schema))
+			if _, err := decodeRecordV1("retired.json", payload); err == nil || !strings.Contains(err.Error(), "unsupported schema") {
+				t.Fatalf("retired schema %q was not rejected as unsupported: %v", schema, err)
+			}
+		})
+	}
+}
+
 func TestValidRecordValuesV1ConstructEveryRecordFamily(t *testing.T) {
 	schemas := map[string]bool{
 		ToolRecordSchemaV1:           false,

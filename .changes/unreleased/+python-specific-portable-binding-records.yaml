@@ -1,0 +1,2 @@
+kind: Changed
+body: Use Python-specific binding and wheel artifact record kinds in the portable-tool catalog.
