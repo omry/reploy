@@ -2,7 +2,7 @@ package providers
 
 import (
 	"bytes"
-	"sort"
+	"encoding/json"
 	"strconv"
 	"strings"
 	"testing"
@@ -48,26 +48,67 @@ func TestBuildPortableToolLockV1PersistsExactPlanSourcesAndSanitizedOutcomes(t *
 	}
 }
 
-func TestValidatePortableToolLockV1RejectsBindingOperationOrderDrift(t *testing.T) {
+func TestPortableToolLockV1DerivesBindingOperationOrder(t *testing.T) {
 	dag, releases, inputs := portableToolLockFixtureV1(t)
 	lock, err := BuildPortableToolLockV1(dag, releases, inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operations, dependencies, err := DerivePortableToolProviderGraphV1(lock.Plan)
 	if err != nil {
 		t.Fatal(err)
 	}
 	materializationID := portableToolOperationIDV1("application:demo", "demo", PortableToolOperationBindingArtifactMaterializationV1,
 		"tool:demo/releases/1.2.3/bindings/demo/artifacts/linux-amd64")
 	exportID := portableToolOperationIDV1("application:demo", "demo", PortableToolOperationExportV1, "demo")
-	for index, dependency := range lock.Plan.Dependencies {
-		if dependency.Prerequisite == materializationID && dependency.Dependent == exportID {
-			lock.Plan.Dependencies[index] = PortableToolProviderDependencyV1{Prerequisite: exportID, Dependent: materializationID}
-			break
-		}
+	if !portableToolProviderDependencyReachableV1(dependencies, materializationID, exportID) {
+		t.Fatal("derived binding materialization does not precede export")
 	}
-	sort.Slice(lock.Plan.Dependencies, func(left, right int) bool {
-		return portableToolDependencyCompareV1(lock.Plan.Dependencies[left], lock.Plan.Dependencies[right]) < 0
-	})
-	if err := ValidatePortableToolLockV1(lock); err == nil || !strings.Contains(err.Error(), "missing") {
-		t.Fatalf("binding operation order drift was accepted: %v", err)
+	if len(operations) == 0 {
+		t.Fatal("derived operations are missing")
+	}
+	encoded, err := CanonicalPortableToolLockBytesV1(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shape struct {
+		Plan map[string]json.RawMessage `json:"plan"`
+	}
+	if err := json.Unmarshal(encoded, &shape); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := shape.Plan["operations"]; exists {
+		t.Fatal("lock persisted derivable operations")
+	}
+	if _, exists := shape.Plan["dependencies"]; exists {
+		t.Fatal("lock persisted derivable dependencies")
+	}
+}
+
+func TestPortableToolLockV1EquivalentAcquisitionOrderHasCanonicalBytes(t *testing.T) {
+	dag, releases, inputs := portableToolLockFixtureV1(t)
+	first, err := BuildPortableToolLockV1(dag, releases, inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reversed := append([]PortableToolArtifactAcquisitionInputV1{}, inputs...)
+	for left, right := 0, len(reversed)-1; left < right; left, right = left+1, right-1 {
+		reversed[left], reversed[right] = reversed[right], reversed[left]
+	}
+	second, err := BuildPortableToolLockV1(dag, releases, reversed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstBytes, err := CanonicalPortableToolLockBytesV1(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondBytes, err := CanonicalPortableToolLockBytesV1(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(firstBytes, secondBytes) {
+		t.Fatal("equivalent acquisition order changed canonical lock bytes")
 	}
 }
 

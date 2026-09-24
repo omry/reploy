@@ -1,0 +1,2 @@
+kind: Changed
+body: Derive portable-tool provider operations and ordering from the selected plan and domains instead of storing duplicate graph authority in build locks.
