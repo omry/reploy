@@ -79,16 +79,14 @@ type PortableToolProviderDependencyV1 struct {
 	Dependent    string `json:"dependent"`
 }
 
-// PortableToolProviderDAGV1 carries the existing provider plan unchanged in
-// meaning, the compiled portable-tool plan, explicit authority domains, and
-// the deterministic portable operation DAG.
+// PortableToolProviderDAGV1 retains the selected inputs and explicit domain
+// authority. Operations and ordering edges are derived from these inputs and
+// are not a second, independently mutable lock authority.
 type PortableToolProviderDAGV1 struct {
-	Schema           string                             `json:"schema"`
-	ProviderPlan     ProviderPlanV1                     `json:"provider_plan"`
-	PortableToolPlan PortableToolPlanV1                 `json:"portable_tool_plan"`
-	Domains          []PortableToolProviderDomainSetV1  `json:"domains"`
-	Operations       []PortableToolProviderOperationV1  `json:"operations"`
-	Dependencies     []PortableToolProviderDependencyV1 `json:"dependencies"`
+	Schema           string                            `json:"schema"`
+	ProviderPlan     ProviderPlanV1                    `json:"provider_plan"`
+	PortableToolPlan PortableToolPlanV1                `json:"portable_tool_plan"`
+	Domains          []PortableToolProviderDomainSetV1 `json:"domains"`
 }
 
 type portableToolFilesystemClaimV1 struct {
@@ -120,21 +118,15 @@ func BuildPortableToolProviderDAGV1(
 	if err := ValidatePortableToolPlanV1(portableToolPlan); err != nil {
 		return PortableToolProviderDAGV1{}, fmt.Errorf("portable tool plan: %w", err)
 	}
-	orderedDomains, domainByScope, err := preparePortableToolProviderDomainsV1(providerPlan, portableToolPlan, domains)
+	orderedDomains, _, err := preparePortableToolProviderDomainsV1(providerPlan, portableToolPlan, domains)
 	if err != nil {
 		return PortableToolProviderDAGV1{}, err
-	}
-	operations, dependencies, err := expectedPortableToolProviderGraphV1(portableToolPlan, domainByScope)
-	if err != nil {
-		return PortableToolProviderDAGV1{}, fmt.Errorf("portable tool provider graph: %w", err)
 	}
 	dag := PortableToolProviderDAGV1{
 		Schema:           PortableToolProviderDAGSchemaV1,
 		ProviderPlan:     cloneProviderPlanForPortableToolDAGV1(providerPlan),
 		PortableToolPlan: clonePortableToolPlanForPortableToolDAGV1(portableToolPlan),
 		Domains:          orderedDomains,
-		Operations:       operations,
-		Dependencies:     dependencies,
 	}
 	if err := ValidatePortableToolProviderDAGV1(dag); err != nil {
 		return PortableToolProviderDAGV1{}, fmt.Errorf("validate portable tool provider DAG: %w", err)
@@ -162,20 +154,17 @@ func ValidatePortableToolProviderDAGV1(dag PortableToolProviderDAGV1) error {
 	if !portableToolProviderDomainsEqualV1(orderedDomains, dag.Domains) {
 		return fmt.Errorf("portable tool provider domains must be unique and sorted by scope")
 	}
-	if dag.Operations == nil || dag.Dependencies == nil {
-		return fmt.Errorf("portable tool provider operations and dependencies must use arrays")
-	}
-	expectedOperations, expectedDependencies, err := expectedPortableToolProviderGraphV1(dag.PortableToolPlan, domainByScope)
+	operations, dependencies, err := expectedPortableToolProviderGraphV1(dag.PortableToolPlan, domainByScope)
 	if err != nil {
 		return fmt.Errorf("portable tool provider graph: %w", err)
 	}
-	if err := validatePortableToolProviderOperationsV1(dag.Operations, expectedOperations); err != nil {
+	if err := validatePortableToolProviderOperationsV1(operations); err != nil {
 		return err
 	}
-	if err := validatePortableToolProviderDependenciesV1(dag.Operations, dag.Dependencies, expectedDependencies); err != nil {
+	if err := validatePortableToolProviderDependenciesV1(operations, dependencies); err != nil {
 		return err
 	}
-	if err := validatePortableToolProviderSharedClaimsV1(dag.PortableToolPlan, dag.Operations, domainByScope); err != nil {
+	if err := validatePortableToolProviderSharedClaimsV1(dag.PortableToolPlan, operations, domainByScope); err != nil {
 		return err
 	}
 	if _, err := canonical.Marshal(dag); err != nil {
@@ -195,6 +184,19 @@ func CanonicalPortableToolProviderDAGBytesV1(dag PortableToolProviderDAGV1) ([]b
 		return nil, fmt.Errorf("portable tool provider DAG canonical form: %w", err)
 	}
 	return encoded, nil
+}
+
+// DerivePortableToolProviderGraphV1 returns the canonical operation and edge
+// views after validating the retained selected inputs and domain authorities.
+func DerivePortableToolProviderGraphV1(dag PortableToolProviderDAGV1) ([]PortableToolProviderOperationV1, []PortableToolProviderDependencyV1, error) {
+	if err := ValidatePortableToolProviderDAGV1(dag); err != nil {
+		return nil, nil, err
+	}
+	_, domains, err := preparePortableToolProviderDomainsV1(dag.ProviderPlan, dag.PortableToolPlan, dag.Domains)
+	if err != nil {
+		return nil, nil, err
+	}
+	return expectedPortableToolProviderGraphV1(dag.PortableToolPlan, domains)
 }
 
 func preparePortableToolProviderDomainsV1(
@@ -528,11 +530,7 @@ func portableToolOperationIDV1(scope, tool, kind, key string) string {
 
 func validatePortableToolProviderOperationsV1(
 	operations []PortableToolProviderOperationV1,
-	expected []PortableToolProviderOperationV1,
 ) error {
-	if len(operations) != len(expected) {
-		return fmt.Errorf("portable tool provider operations must contain exactly the selected responsibilities")
-	}
 	seen := make(map[string]struct{}, len(operations))
 	for index, operation := range operations {
 		if operation.ID == "" || containsPortableControl(operation.ID) {
@@ -545,16 +543,6 @@ func validatePortableToolProviderOperationsV1(
 			return fmt.Errorf("portable tool provider operation %q is duplicated", operation.ID)
 		}
 		seen[operation.ID] = struct{}{}
-		if operation.ID != expected[index].ID {
-			return fmt.Errorf("portable tool provider operation %q is unknown or incorrectly ordered", operation.ID)
-		}
-		matches, err := portableToolCanonicalEqualV1(operation, expected[index])
-		if err != nil {
-			return err
-		}
-		if !matches {
-			return fmt.Errorf("portable tool provider operation %q does not match its selected responsibility", operation.ID)
-		}
 		if err := validatePortableToolProviderOperationFieldsV1(operation); err != nil {
 			return fmt.Errorf("portable tool provider operation %q: %w", operation.ID, err)
 		}
@@ -606,11 +594,7 @@ func validatePortableToolProviderOperationFieldsV1(operation PortableToolProvide
 func validatePortableToolProviderDependenciesV1(
 	operations []PortableToolProviderOperationV1,
 	dependencies []PortableToolProviderDependencyV1,
-	expected []PortableToolProviderDependencyV1,
 ) error {
-	if len(dependencies) != len(expected) {
-		return fmt.Errorf("portable tool provider dependencies must exactly match the canonical acquisition barrier")
-	}
 	operationSet := make(map[string]struct{}, len(operations))
 	for _, operation := range operations {
 		operationSet[operation.ID] = struct{}{}
@@ -637,16 +621,6 @@ func validatePortableToolProviderDependenciesV1(
 			return fmt.Errorf("portable tool provider dependency is duplicated")
 		}
 		seen[key] = struct{}{}
-	}
-	for _, dependency := range expected {
-		key := dependency.Prerequisite + "\x00" + dependency.Dependent
-		if _, exists := seen[key]; !exists {
-			return fmt.Errorf("portable tool provider dependency from %q to %q is missing", dependency.Prerequisite, dependency.Dependent)
-		}
-		reverse := dependency.Dependent + "\x00" + dependency.Prerequisite
-		if _, exists := seen[reverse]; exists {
-			return fmt.Errorf("portable tool provider dependency from %q to %q is reversed", dependency.Prerequisite, dependency.Dependent)
-		}
 	}
 	if err := rejectPortableToolProviderOperationCyclesV1(operations, dependencies); err != nil {
 		return err

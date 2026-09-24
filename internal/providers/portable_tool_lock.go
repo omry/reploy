@@ -528,22 +528,6 @@ func clonePortableToolLockPlanV1(plan PortableToolProviderDAGV1) PortableToolPro
 	result.ProviderPlan = cloneProviderPlanForPortableToolDAGV1(plan.ProviderPlan)
 	result.PortableToolPlan = clonePortableToolPlanForPortableToolDAGV1(plan.PortableToolPlan)
 	result.Domains = append([]PortableToolProviderDomainSetV1{}, plan.Domains...)
-	result.Operations = append([]PortableToolProviderOperationV1{}, plan.Operations...)
-	for index := range result.Operations {
-		if plan.Operations[index].Record != nil {
-			value := *plan.Operations[index].Record
-			result.Operations[index].Record = &value
-		}
-		if plan.Operations[index].Environment != nil {
-			value := *plan.Operations[index].Environment
-			result.Operations[index].Environment = &value
-		}
-		if plan.Operations[index].Export != nil {
-			value := *plan.Operations[index].Export
-			result.Operations[index].Export = &value
-		}
-	}
-	result.Dependencies = append([]PortableToolProviderDependencyV1{}, plan.Dependencies...)
 	return result
 }
 
