@@ -2,6 +2,7 @@ package providers
 
 import (
 	"bytes"
+	"encoding/json"
 	"reflect"
 	"sort"
 	"strings"
@@ -9,6 +10,20 @@ import (
 
 	"github.com/omry/reploy/internal/canonical"
 )
+
+type portableToolProviderGraphViewV1 struct {
+	Operations   []PortableToolProviderOperationV1
+	Dependencies []PortableToolProviderDependencyV1
+}
+
+func portableToolProviderGraphViewForTestV1(t *testing.T, dag PortableToolProviderDAGV1) portableToolProviderGraphViewV1 {
+	t.Helper()
+	operations, dependencies, err := DerivePortableToolProviderGraphV1(dag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return portableToolProviderGraphViewV1{Operations: operations, Dependencies: dependencies}
+}
 
 func TestBuildPortableToolProviderDAGV1ProjectsResponsibilitiesAndDependencies(t *testing.T) {
 	dag, err := BuildPortableToolProviderDAGV1(
@@ -25,8 +40,9 @@ func TestBuildPortableToolProviderDAGV1ProjectsResponsibilitiesAndDependencies(t
 	if !reflect.DeepEqual(dag.ProviderPlan, portableToolProviderPlanFixtureV1()) {
 		t.Fatal("provider plan was not carried unchanged")
 	}
+	view := portableToolProviderGraphViewForTestV1(t, dag)
 	counts := map[string]int{}
-	for _, operation := range dag.Operations {
+	for _, operation := range view.Operations {
 		counts[operation.Kind]++
 	}
 	wantCounts := map[string]int{
@@ -45,13 +61,13 @@ func TestBuildPortableToolProviderDAGV1ProjectsResponsibilitiesAndDependencies(t
 	if !reflect.DeepEqual(counts, wantCounts) {
 		t.Fatalf("operation kinds = %#v, want %#v", counts, wantCounts)
 	}
-	barrier := portableToolProviderOperationByKindV1(dag.Operations, PortableToolOperationAcquisitionBarrierV1)
+	barrier := portableToolProviderOperationByKindV1(view.Operations, PortableToolOperationAcquisitionBarrierV1)
 	if barrier == nil {
 		t.Fatal("acquisition barrier operation is missing")
 	}
 	acquisitions := make([]string, 0)
 	materializations := make([]string, 0)
-	for _, operation := range dag.Operations {
+	for _, operation := range view.Operations {
 		if strings.HasSuffix(operation.Kind, "-acquisition") {
 			acquisitions = append(acquisitions, operation.ID)
 		}
@@ -59,14 +75,14 @@ func TestBuildPortableToolProviderDAGV1ProjectsResponsibilitiesAndDependencies(t
 			materializations = append(materializations, operation.ID)
 		}
 	}
-	if len(dag.Dependencies) != len(acquisitions)+len(materializations)+len(dag.PortableToolPlan.Tools[0].Exports)+1 {
-		t.Fatalf("dependencies = %d, want barrier plus binding export ordering", len(dag.Dependencies))
+	if len(view.Dependencies) != len(acquisitions)+len(materializations)+len(dag.PortableToolPlan.Tools[0].Exports)+1 {
+		t.Fatalf("dependencies = %d, want barrier plus binding export ordering", len(view.Dependencies))
 	}
-	dependencySet := make(map[string]struct{}, len(dag.Dependencies))
-	for _, dependency := range dag.Dependencies {
+	dependencySet := make(map[string]struct{}, len(view.Dependencies))
+	for _, dependency := range view.Dependencies {
 		dependencySet[dependency.Prerequisite+"\x00"+dependency.Dependent] = struct{}{}
-		prerequisite := portableToolProviderOperationByIDV1(dag.Operations, dependency.Prerequisite)
-		dependent := portableToolProviderOperationByIDV1(dag.Operations, dependency.Dependent)
+		prerequisite := portableToolProviderOperationByIDV1(view.Operations, dependency.Prerequisite)
+		dependent := portableToolProviderOperationByIDV1(view.Operations, dependency.Dependent)
 		if prerequisite == nil || dependent == nil {
 			t.Fatalf("dependency = %#v, operations = %#v -> %#v", dependency, prerequisite, dependent)
 		}
@@ -95,7 +111,7 @@ func TestBuildPortableToolProviderDAGV1ProjectsResponsibilitiesAndDependencies(t
 			t.Fatalf("acquisition barrier is missing %s -> %s", barrier.ID, materializationID)
 		}
 	}
-	for _, operation := range dag.Operations {
+	for _, operation := range view.Operations {
 		if operation.Kind != PortableToolOperationExportV1 {
 			continue
 		}
@@ -104,14 +120,14 @@ func TestBuildPortableToolProviderDAGV1ProjectsResponsibilitiesAndDependencies(t
 			t.Fatalf("export %s does not precede capability %s", operation.ID, capabilityID)
 		}
 	}
-	materialization := portableToolProviderOperationByKindV1(dag.Operations, PortableToolOperationBindingArtifactMaterializationV1)
-	export := portableToolProviderOperationByIDV1(dag.Operations, portableToolOperationIDV1("application:demo", "demo", PortableToolOperationExportV1, "demo"))
-	if materialization == nil || export == nil || !portableToolProviderDependencyReachableV1(dag.Dependencies, materialization.ID, export.ID) {
+	materialization := portableToolProviderOperationByKindV1(view.Operations, PortableToolOperationBindingArtifactMaterializationV1)
+	export := portableToolProviderOperationByIDV1(view.Operations, portableToolOperationIDV1("application:demo", "demo", PortableToolOperationExportV1, "demo"))
+	if materialization == nil || export == nil || !portableToolProviderDependencyReachableV1(view.Dependencies, materialization.ID, export.ID) {
 		t.Fatalf("binding materialization does not precede its export: %#v -> %#v", materialization, export)
 	}
 	for _, acquisitionID := range acquisitions {
 		for _, materializationID := range materializations {
-			if !portableToolProviderDependencyReachableV1(dag.Dependencies, acquisitionID, materializationID) {
+			if !portableToolProviderDependencyReachableV1(view.Dependencies, acquisitionID, materializationID) {
 				t.Fatalf("acquisition %s does not transitively precede materialization %s", acquisitionID, materializationID)
 			}
 		}
@@ -124,12 +140,13 @@ func TestBuildPortableToolProviderDAGV1ProjectsResponsibilitiesAndDependencies(t
 
 func TestBuildPortableToolProviderDAGV1OrdersBindingExportAndCapability(t *testing.T) {
 	dag, _, _ := portableToolLockFixtureV1(t)
+	view := portableToolProviderGraphViewForTestV1(t, dag)
 	materializationID := portableToolOperationIDV1("application:demo", "demo", PortableToolOperationBindingArtifactMaterializationV1,
 		"tool:demo/releases/1.2.3/bindings/demo/artifacts/linux-amd64")
 	exportID := portableToolOperationIDV1("application:demo", "demo", PortableToolOperationExportV1, "demo")
 	capabilityID := portableToolOperationIDV1("application:demo", "demo", PortableToolOperationCapabilityV1, "demo")
-	dependencies := make(map[string]struct{}, len(dag.Dependencies))
-	for _, dependency := range dag.Dependencies {
+	dependencies := make(map[string]struct{}, len(view.Dependencies))
+	for _, dependency := range view.Dependencies {
 		dependencies[dependency.Prerequisite+"\x00"+dependency.Dependent] = struct{}{}
 	}
 	for _, edge := range [][2]string{{materializationID, exportID}, {exportID, capabilityID}} {
@@ -140,7 +157,7 @@ func TestBuildPortableToolProviderDAGV1OrdersBindingExportAndCapability(t *testi
 	if _, found := dependencies[materializationID+"\x00"+capabilityID]; found {
 		t.Fatal("binding materialization has a direct capability edge")
 	}
-	if !portableToolProviderDependencyReachableV1(dag.Dependencies, materializationID, capabilityID) {
+	if !portableToolProviderDependencyReachableV1(view.Dependencies, materializationID, capabilityID) {
 		t.Fatal("binding materialization does not transitively precede capability")
 	}
 }
@@ -518,7 +535,8 @@ func TestBuildPortableToolProviderDAGV1ValidatesDomainOwnersAndProjectsThem(t *t
 			owners[authority.ID] = authority.Owner
 		}
 	}
-	for _, operation := range dag.Operations {
+	view := portableToolProviderGraphViewForTestV1(t, dag)
+	for _, operation := range view.Operations {
 		if operation.Kind == PortableToolOperationAcquisitionBarrierV1 {
 			if operation.Owner != "" {
 				t.Fatalf("acquisition barrier owner = %q, want empty", operation.Owner)
@@ -543,11 +561,12 @@ func TestBuildPortableToolProviderDAGV1OmitsBarrierWithoutAcquisitionWork(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if barrier := portableToolProviderOperationByKindV1(dag.Operations, PortableToolOperationAcquisitionBarrierV1); barrier != nil {
+	view := portableToolProviderGraphViewForTestV1(t, dag)
+	if barrier := portableToolProviderOperationByKindV1(view.Operations, PortableToolOperationAcquisitionBarrierV1); barrier != nil {
 		t.Fatalf("unexpected acquisition barrier operation: %#v", barrier)
 	}
-	if len(dag.Dependencies) != len(plan.Tools[0].Exports) {
-		t.Fatalf("dependencies = %#v, want one export -> capability edge per export", dag.Dependencies)
+	if len(view.Dependencies) != len(plan.Tools[0].Exports) {
+		t.Fatalf("dependencies = %#v, want one export -> capability edge per export", view.Dependencies)
 	}
 	if err := ValidatePortableToolProviderDAGV1(dag); err != nil {
 		t.Fatal(err)
@@ -595,49 +614,48 @@ func TestValidatePortableToolProviderDAGV1RejectsDomainMappingErrors(t *testing.
 	}
 }
 
-func TestValidatePortableToolProviderDAGV1RejectsMalformedDependenciesAndCycles(t *testing.T) {
-	valid := portableToolProviderDAGFixtureV1(t)
-	tests := []struct {
-		name   string
-		mutate func(*PortableToolProviderDAGV1)
-		want   string
-	}{
-		{name: "missing", mutate: func(dag *PortableToolProviderDAGV1) { dag.Dependencies = dag.Dependencies[:1] }, want: "exactly"},
-		{name: "unknown", mutate: func(dag *PortableToolProviderDAGV1) { dag.Dependencies[0].Prerequisite = "unknown-operation" }, want: "unknown"},
-		{name: "reversed", mutate: func(dag *PortableToolProviderDAGV1) {
-			dag.Dependencies[0].Prerequisite, dag.Dependencies[0].Dependent = dag.Dependencies[0].Dependent, dag.Dependencies[0].Prerequisite
-			sort.Slice(dag.Dependencies, func(left, right int) bool {
-				return portableToolDependencyCompareV1(dag.Dependencies[left], dag.Dependencies[right]) < 0
-			})
-		}, want: "missing|reversed"},
-		{name: "cycle", mutate: func(dag *PortableToolProviderDAGV1) {
-			edge := dag.Dependencies[0]
-			dag.Dependencies = append(dag.Dependencies, PortableToolProviderDependencyV1{Prerequisite: edge.Dependent, Dependent: edge.Prerequisite})
-			sort.Slice(dag.Dependencies, func(left, right int) bool {
-				return portableToolDependencyCompareV1(dag.Dependencies[left], dag.Dependencies[right]) < 0
-			})
-		}, want: "exactly"},
-		{name: "operation order", mutate: func(dag *PortableToolProviderDAGV1) {
-			dag.Operations[0], dag.Operations[1] = dag.Operations[1], dag.Operations[0]
-		}, want: "sorted|incorrectly ordered"},
-		{name: "wrong materialization policy", mutate: func(dag *PortableToolProviderDAGV1) {
-			for index := range dag.Operations {
-				if strings.HasSuffix(dag.Operations[index].Kind, "-materialization") {
-					dag.Operations[index].Network = "network"
-					break
-				}
-			}
-		}, want: "does not match"},
+func TestPortableToolProviderDAGV1DerivesOrderingWithoutPersistedOperations(t *testing.T) {
+	dag := portableToolProviderDAGFixtureV1(t)
+	view := portableToolProviderGraphViewForTestV1(t, dag)
+	if len(view.Operations) == 0 || len(view.Dependencies) == 0 {
+		t.Fatal("selected inputs did not derive a provider graph")
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			candidate := clonePortableToolProviderDAGV1(valid)
-			test.mutate(&candidate)
-			if err := ValidatePortableToolProviderDAGV1(candidate); err == nil || !portableToolErrorContainsAnyV1(err.Error(), test.want) {
-				t.Fatalf("error = %v, want one of %q", err, test.want)
-			}
-		})
+	encoded, err := CanonicalPortableToolProviderDAGBytesV1(dag)
+	if err != nil {
+		t.Fatal(err)
 	}
+	var shape map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &shape); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := shape["operations"]; exists {
+		t.Fatal("derived operations were persisted as lock authority")
+	}
+	if _, exists := shape["dependencies"]; exists {
+		t.Fatal("derived dependencies were persisted as lock authority")
+	}
+	previousShape := struct {
+		Schema           string                             `json:"schema"`
+		ProviderPlan     ProviderPlanV1                     `json:"provider_plan"`
+		PortableToolPlan PortableToolPlanV1                 `json:"portable_tool_plan"`
+		Domains          []PortableToolProviderDomainSetV1  `json:"domains"`
+		Operations       []PortableToolProviderOperationV1  `json:"operations"`
+		Dependencies     []PortableToolProviderDependencyV1 `json:"dependencies"`
+	}{dag.Schema, dag.ProviderPlan, dag.PortableToolPlan, dag.Domains, view.Operations, view.Dependencies}
+	previousBytes, err := canonical.Marshal(previousShape)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) >= len(previousBytes) {
+		t.Fatalf("derived lock shape did not shrink: current=%d previous=%d", len(encoded), len(previousBytes))
+	}
+	decoder := json.NewDecoder(bytes.NewReader(previousBytes))
+	decoder.DisallowUnknownFields()
+	var decoded PortableToolProviderDAGV1
+	if err := decoder.Decode(&decoded); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("persisted redundant operation fields were accepted: %v", err)
+	}
+	t.Logf("provider DAG canonical bytes: %d -> %d (-%d)", len(previousBytes), len(encoded), len(previousBytes)-len(encoded))
 }
 
 func TestRejectPortableToolProviderOperationCyclesV1Defensively(t *testing.T) {
@@ -1130,22 +1148,6 @@ func portableToolProviderDependencyReachableV1(dependencies []PortableToolProvid
 func clonePortableToolProviderDAGV1(dag PortableToolProviderDAGV1) PortableToolProviderDAGV1 {
 	result := dag
 	result.Domains = append([]PortableToolProviderDomainSetV1{}, dag.Domains...)
-	result.Operations = append([]PortableToolProviderOperationV1{}, dag.Operations...)
-	for index, operation := range result.Operations {
-		if operation.Record != nil {
-			record := *operation.Record
-			result.Operations[index].Record = &record
-		}
-		if operation.Environment != nil {
-			environment := *operation.Environment
-			result.Operations[index].Environment = &environment
-		}
-		if operation.Export != nil {
-			exported := *operation.Export
-			result.Operations[index].Export = &exported
-		}
-	}
-	result.Dependencies = append([]PortableToolProviderDependencyV1{}, dag.Dependencies...)
 	result.ProviderPlan = cloneProviderPlanForPortableToolDAGV1(dag.ProviderPlan)
 	result.PortableToolPlan = clonePortableToolPlanForPortableToolDAGV1(dag.PortableToolPlan)
 	return result
