@@ -20,7 +20,9 @@ import (
 // attributed to the exact profile it was asked to run.
 func portableToolStubEvidenceV1(
 	t *testing.T,
+	descriptor deploy.ImageDescriptor,
 	invoked toolcatalog.ValidationProfileRecordV1,
+	runtime *providers.PortableToolRuntimeProjectionV1,
 	outcome string,
 	results int,
 ) PortableToolProbeEvidenceV1 {
@@ -30,18 +32,39 @@ func portableToolStubEvidenceV1(
 		t.Fatal(err)
 	}
 	observed := make([]PortableToolProbeResultV1, 0, results)
+	emptyOutput := newBoundedPortableToolProbeOutput(portableToolProbeOutputLimit, nil).Evidence()
 	for index := 0; index < results && index < len(invoked.Probes); index++ {
 		exit := "0"
-		result := PortableToolProbeResultV1{Probe: invoked.Probes[index], Outcome: outcome}
+		result := PortableToolProbeResultV1{
+			Probe: invoked.Probes[index], Outcome: outcome,
+			Stdout: emptyOutput, Stderr: emptyOutput,
+		}
 		if outcome == PortableToolProbeOutcomePassV1 {
 			result.ExitCode = &exit
+		} else if outcome == PortableToolProbeOutcomeExitV1 {
+			exit = "1"
+			result.ExitCode = &exit
+		} else if outcome == PortableToolProbeOutcomeOutputLimitV1 {
+			bounded := newBoundedPortableToolProbeOutput(portableToolProbeOutputLimit, nil)
+			_, _ = bounded.Write(make([]byte, portableToolProbeOutputLimit+1))
+			result.Stdout = bounded.Evidence()
 		}
 		observed = append(observed, result)
 	}
+	subject, err := deploy.RootFSSubject(descriptor.RootFSDiffIDs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, _, err := portableToolProbePolicyV1(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return PortableToolProbeEvidenceV1{
+		Schema: PortableToolProbeEvidenceSchemaV1, ExecutorVersion: PortableToolProbeExecutorV1,
 		Profile:           providers.PortableToolRecordReferenceV1{ID: invoked.ID, Digest: digest},
 		ProfileDefinition: invoked,
-		Results:           observed,
+		SubjectRootFS:     subject, Platform: descriptor.Platform, Policy: policy,
+		Results: observed,
 	}
 }
 
@@ -171,6 +194,19 @@ func portableToolTestScheduleV1(t *testing.T, profile toolcatalog.ValidationProf
 	}
 }
 
+func portableToolMaterializationTestInputV1(
+	t *testing.T,
+	image InspectedImageCandidate,
+	schedule providers.PortableToolValidationScheduleV1,
+) PortableToolMaterializationValidationInputV1 {
+	t.Helper()
+	selected, err := constructScheduledPortableToolProfiles(schedule)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return PortableToolMaterializationValidationInputV1{Image: image, selected: selected}
+}
+
 // Production scheduling invokes the fixed executor once per selected profile,
 // with that closure's contract runtime projection.
 func TestRunPortableToolValidationScheduleV1InvokesTheFixedExecutorPerProfile(t *testing.T) {
@@ -188,16 +224,16 @@ func TestRunPortableToolValidationScheduleV1InvokesTheFixedExecutorPerProfile(t 
 	t.Cleanup(func() { runScheduledPortableToolValidationProfile = previous })
 	runScheduledPortableToolValidationProfile = func(
 		_ context.Context,
-		_ deploy.ImageDescriptor,
+		gotDescriptor deploy.ImageDescriptor,
 		_ PreparedProbeWorkspace,
 		invoked toolcatalog.ValidationProfileRecordV1,
 		runtime *providers.PortableToolRuntimeProjectionV1,
 	) (PortableToolProbeEvidenceV1, error) {
 		invocations = append(invocations, invocation{profile: invoked, runtime: runtime})
-		return portableToolStubEvidenceV1(t, invoked, PortableToolProbeOutcomePassV1, 1), nil
+		return portableToolStubEvidenceV1(t, gotDescriptor, invoked, runtime, PortableToolProbeOutcomePassV1, 1), nil
 	}
 
-	scheduled, err := RunPortableToolValidationScheduleV1(context.Background(), descriptor, workspace, schedule)
+	evidence, err := RunPortableToolValidationScheduleV1(context.Background(), descriptor, workspace, schedule)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,9 +246,10 @@ func TestRunPortableToolValidationScheduleV1InvokesTheFixedExecutorPerProfile(t 
 	if invocations[0].runtime == nil || !reflect.DeepEqual(*invocations[0].runtime, *portableToolContractRuntimeV1()) {
 		t.Fatalf("invoked runtime = %#v", invocations[0].runtime)
 	}
-	if len(scheduled) != 1 || scheduled[0].Scope != "application:demo" || scheduled[0].Tool != "demo" ||
-		scheduled[0].Profile != schedule.Entries[0].Profile.Reference {
-		t.Fatalf("scheduled evidence = %#v", scheduled)
+	if len(evidence) != 1 || evidence[0].PortableToolProfileID != schedule.Entries[0].Profile.Reference.ID ||
+		evidence[0].ProfileDigest != schedule.Entries[0].Profile.Reference.Digest ||
+		evidence[0].PortableToolRuntimeDigest == "" {
+		t.Fatalf("scheduled evidence = %#v", evidence)
 	}
 }
 
@@ -232,16 +269,16 @@ func TestRunPortableToolValidationScheduleV1RejectsNonPassingObservations(t *tes
 		{name: "exit failure", outcome: PortableToolProbeOutcomeExitV1, results: 1, want: "reported exit-failure"},
 		{name: "timeout", outcome: PortableToolProbeOutcomeTimeoutV1, results: 1, want: "reported timeout"},
 		{name: "output limit", outcome: PortableToolProbeOutcomeOutputLimitV1, results: 1, want: "reported output-limit"},
-		{name: "missing observation", outcome: PortableToolProbeOutcomePassV1, results: 0, want: "observed 0 of 1 declared probes"},
+		{name: "missing observation", outcome: PortableToolProbeOutcomePassV1, results: 0, want: "invalid evidence"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			previous := runScheduledPortableToolValidationProfile
 			t.Cleanup(func() { runScheduledPortableToolValidationProfile = previous })
 			runScheduledPortableToolValidationProfile = func(
-				_ context.Context, _ deploy.ImageDescriptor, _ PreparedProbeWorkspace,
-				invoked toolcatalog.ValidationProfileRecordV1, _ *providers.PortableToolRuntimeProjectionV1,
+				_ context.Context, gotDescriptor deploy.ImageDescriptor, _ PreparedProbeWorkspace,
+				invoked toolcatalog.ValidationProfileRecordV1, runtime *providers.PortableToolRuntimeProjectionV1,
 			) (PortableToolProbeEvidenceV1, error) {
-				return portableToolStubEvidenceV1(t, invoked, test.outcome, test.results), nil
+				return portableToolStubEvidenceV1(t, gotDescriptor, invoked, runtime, test.outcome, test.results), nil
 			}
 			_, err := RunPortableToolValidationScheduleV1(context.Background(), descriptor, workspace, schedule)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
@@ -306,21 +343,19 @@ func TestRunPortableToolValidationScheduleV1PropagatesExecutorFailure(t *testing
 	}
 }
 
-// Evidence is bound to the exact locked profile reference, which keeps it
-// outside selected-closure identity.
-func TestPortableToolValidationEvidenceV1BindsTheLockedProfileReference(t *testing.T) {
+// Durable evidence identifies the exact locked profile and runtime inputs.
+func TestPortableToolValidationEvidenceBindsTheLockedProfileAndRuntime(t *testing.T) {
 	subject := canonical.Digest("sha256:" + strings.Repeat("ab", 32))
 	reference := providers.PortableToolRecordReferenceV1{
 		ID:     "tool:demo/releases/1.2.3/validation/profiles/default",
 		Digest: canonical.Digest("sha256:" + strings.Repeat("cd", 32)),
 	}
-	evidence, err := PortableToolValidationEvidenceV1(subject, []PortableToolScheduledEvidenceV1{{
-		Scope: "application:demo", Tool: "demo", Profile: reference,
-	}})
+	evidence, err := providers.NewPortableToolValidationEvidence(subject, reference, portableToolContractRuntimeV1())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(evidence) != 1 || evidence[0].SubjectRootFS != subject || evidence[0].ProfileDigest != reference.Digest {
+	if evidence.SubjectRootFS != subject || evidence.ProfileDigest != reference.Digest ||
+		evidence.PortableToolProfileID != reference.ID || evidence.PortableToolRuntimeDigest == "" {
 		t.Fatalf("evidence = %#v", evidence)
 	}
 }
@@ -342,9 +377,9 @@ func TestValidatePortableToolMaterializationV1AcceptsAnEmptyScheduleWithoutRunni
 		Entries: []providers.PortableToolScheduledValidationV1{},
 	}
 	evidence, err := ValidatePortableToolMaterializationV1(
-		context.Background(), providerstore.Store{}, PortableToolMaterializationValidationInputV1{
-			Image: inspectedValidationCandidate(t, descriptor), Schedule: empty,
-		},
+		context.Background(), providerstore.Store{}, portableToolMaterializationTestInputV1(
+			t, inspectedValidationCandidate(t, descriptor), empty,
+		),
 	)
 	if err != nil || evidence == nil || len(evidence) != 0 || prepared {
 		t.Fatalf("empty schedule evidence = %#v, prepared = %v, err = %v", evidence, prepared, err)
@@ -462,11 +497,11 @@ func TestValidatePortableToolMaterializationV1RunsASelectedSchedule(t *testing.T
 	var observedDescriptor deploy.ImageDescriptor
 	runScheduledPortableToolValidationProfile = func(
 		_ context.Context, gotDescriptor deploy.ImageDescriptor, _ PreparedProbeWorkspace,
-		invoked toolcatalog.ValidationProfileRecordV1, _ *providers.PortableToolRuntimeProjectionV1,
+		invoked toolcatalog.ValidationProfileRecordV1, runtime *providers.PortableToolRuntimeProjectionV1,
 	) (PortableToolProbeEvidenceV1, error) {
 		ran = true
 		observedDescriptor = gotDescriptor
-		return portableToolStubEvidenceV1(t, invoked, PortableToolProbeOutcomePassV1, 1), nil
+		return portableToolStubEvidenceV1(t, gotDescriptor, invoked, runtime, PortableToolProbeOutcomePassV1, 1), nil
 	}
 	previousWorkspace := preparePortableToolValidationWorkspace
 	t.Cleanup(func() { preparePortableToolValidationWorkspace = previousWorkspace })
@@ -477,9 +512,7 @@ func TestValidatePortableToolMaterializationV1RunsASelectedSchedule(t *testing.T
 		return workspace, func() error { cleaned = true; return nil }, nil
 	}
 	evidence, err := ValidatePortableToolMaterializationV1(
-		context.Background(), providerstore.Store{}, PortableToolMaterializationValidationInputV1{
-			Image: candidate, Schedule: schedule,
-		},
+		context.Background(), providerstore.Store{}, portableToolMaterializationTestInputV1(t, candidate, schedule),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -526,16 +559,14 @@ func TestValidatePortableToolMaterializationV1UsesItsOwnProbeWorkspace(t *testin
 	t.Cleanup(func() { runScheduledPortableToolValidationProfile = previous })
 	var observed PreparedProbeWorkspace
 	runScheduledPortableToolValidationProfile = func(
-		_ context.Context, _ deploy.ImageDescriptor, workspace PreparedProbeWorkspace,
-		invoked toolcatalog.ValidationProfileRecordV1, _ *providers.PortableToolRuntimeProjectionV1,
+		_ context.Context, gotDescriptor deploy.ImageDescriptor, workspace PreparedProbeWorkspace,
+		invoked toolcatalog.ValidationProfileRecordV1, runtime *providers.PortableToolRuntimeProjectionV1,
 	) (PortableToolProbeEvidenceV1, error) {
 		observed = workspace
-		return portableToolStubEvidenceV1(t, invoked, PortableToolProbeOutcomePassV1, 1), nil
+		return portableToolStubEvidenceV1(t, gotDescriptor, invoked, runtime, PortableToolProbeOutcomePassV1, 1), nil
 	}
 	if _, err := ValidatePortableToolMaterializationV1(
-		context.Background(), providerstore.Store{}, PortableToolMaterializationValidationInputV1{
-			Image: candidate, Schedule: schedule,
-		},
+		context.Background(), providerstore.Store{}, portableToolMaterializationTestInputV1(t, candidate, schedule),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -547,31 +578,37 @@ func TestValidatePortableToolMaterializationV1UsesItsOwnProbeWorkspace(t *testin
 	}
 }
 
-// R1-1: two closures selecting the same profile contribute one rootfs-bound
-// evidence record even when both probes must run with different contracts.
-func TestPortableToolValidationEvidenceV1CollapsesRepeatedProfileDigests(t *testing.T) {
-	subject := canonical.Digest("sha256:" + strings.Repeat("ab", 32))
-	shared := providers.PortableToolRecordReferenceV1{
-		ID:     "tool:demo/releases/1.2.3/validation/profiles/default",
-		Digest: canonical.Digest("sha256:" + strings.Repeat("cd", 32)),
+// Every selected case executes even when it shares a profile. Only identical
+// profile, image, and runtime inputs may coalesce in durable evidence.
+func TestRunPortableToolValidationScheduleV1CoalescesOnlyIdenticalInputs(t *testing.T) {
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
+	profile := portableToolValidationProfile(toolcatalog.RecordProbeV1{Path: "/opt/demo/bin/demo", Args: []string{}})
+	schedule := portableToolTestScheduleV1(t, profile)
+	same := schedule.Entries[0]
+	same.Scope = "source-builder:alpha"
+	different := schedule.Entries[0]
+	different.Scope = "source-builder:beta"
+	different.Runtime = &providers.PortableToolRuntimeProjectionV1{
+		InstallRoot: "/opt/other", Environment: []providers.PortableToolEnvironmentVariableV1{},
 	}
-	other := providers.PortableToolRecordReferenceV1{
-		ID:     "tool:alpha/releases/1.0.0/validation/profiles/default",
-		Digest: canonical.Digest("sha256:" + strings.Repeat("ef", 32)),
+	schedule.Entries = append(schedule.Entries, same, different)
+	runs := 0
+	previous := runScheduledPortableToolValidationProfile
+	t.Cleanup(func() { runScheduledPortableToolValidationProfile = previous })
+	runScheduledPortableToolValidationProfile = func(
+		_ context.Context, gotDescriptor deploy.ImageDescriptor, _ PreparedProbeWorkspace,
+		invoked toolcatalog.ValidationProfileRecordV1, runtime *providers.PortableToolRuntimeProjectionV1,
+	) (PortableToolProbeEvidenceV1, error) {
+		runs++
+		return portableToolStubEvidenceV1(t, gotDescriptor, invoked, runtime, PortableToolProbeOutcomePassV1, 1), nil
 	}
-	evidence, err := PortableToolValidationEvidenceV1(subject, []PortableToolScheduledEvidenceV1{
-		{Scope: "application:demo", Tool: "demo", Profile: shared},
-		{Scope: "source-builder:system", Tool: "demo", Profile: shared},
-		{Scope: "application:demo", Tool: "alpha", Profile: other},
-	})
+	evidence, err := RunPortableToolValidationScheduleV1(context.Background(), descriptor, workspace, schedule)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(evidence) != 2 {
-		t.Fatalf("evidence = %d records, want 2 distinct profile digests: %#v", len(evidence), evidence)
-	}
-	if evidence[0].ProfileDigest != shared.Digest || evidence[1].ProfileDigest != other.Digest {
-		t.Fatalf("evidence digests = %#v", evidence)
+	if runs != 3 || len(evidence) != 2 || evidence[0].PortableToolRuntimeDigest == evidence[1].PortableToolRuntimeDigest {
+		t.Fatalf("runs = %d, evidence = %#v", runs, evidence)
 	}
 }
 
@@ -623,5 +660,72 @@ func TestRunPortableToolValidationScheduleV1RejectsMisattributedEvidence(t *test
 				t.Fatalf("error = %v", err)
 			}
 		})
+	}
+}
+
+func TestRunPortableToolValidationScheduleV1RejectsObservationDrift(t *testing.T) {
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
+	profile := portableToolValidationProfile(toolcatalog.RecordProbeV1{Path: "/opt/demo/bin/demo", Args: []string{}})
+	schedule := portableToolTestScheduleV1(t, profile)
+	for _, test := range []struct {
+		name   string
+		mutate func(*PortableToolProbeEvidenceV1)
+		want   string
+	}{
+		{name: "image subject", mutate: func(e *PortableToolProbeEvidenceV1) {
+			e.SubjectRootFS = canonical.Digest("sha256:" + strings.Repeat("99", 32))
+		}, want: "different image subject"},
+		{name: "runtime projection", mutate: func(e *PortableToolProbeEvidenceV1) {
+			e.Policy.InstallRoot = "/opt/other"
+		}, want: "different runtime projection"},
+		{name: "truncated pass output", mutate: func(e *PortableToolProbeEvidenceV1) {
+			bounded := newBoundedPortableToolProbeOutput(portableToolProbeOutputLimit, nil)
+			_, _ = bounded.Write(make([]byte, portableToolProbeOutputLimit+1))
+			e.Results[0].Stdout = bounded.Evidence()
+		}, want: "invalid evidence"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			previous := runScheduledPortableToolValidationProfile
+			t.Cleanup(func() { runScheduledPortableToolValidationProfile = previous })
+			runScheduledPortableToolValidationProfile = func(
+				_ context.Context, gotDescriptor deploy.ImageDescriptor, _ PreparedProbeWorkspace,
+				invoked toolcatalog.ValidationProfileRecordV1, runtime *providers.PortableToolRuntimeProjectionV1,
+			) (PortableToolProbeEvidenceV1, error) {
+				observed := portableToolStubEvidenceV1(t, gotDescriptor, invoked, runtime, PortableToolProbeOutcomePassV1, 1)
+				test.mutate(&observed)
+				return observed, nil
+			}
+			if evidence, err := RunPortableToolValidationScheduleV1(context.Background(), descriptor, workspace, schedule); err == nil ||
+				!strings.Contains(err.Error(), test.want) || evidence != nil {
+				t.Fatalf("evidence = %#v, error = %v", evidence, err)
+			}
+		})
+	}
+}
+
+func TestValidatePortableToolMaterializationV1RejectsWorkspaceCleanupFailure(t *testing.T) {
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	profile := portableToolValidationProfile(toolcatalog.RecordProbeV1{Path: "/opt/demo/bin/demo", Args: []string{}})
+	input := portableToolMaterializationTestInputV1(
+		t, inspectedValidationCandidate(t, descriptor), portableToolTestScheduleV1(t, profile),
+	)
+	cleanupErr := errors.New("probe workspace cleanup failed")
+	previousWorkspace := preparePortableToolValidationWorkspace
+	t.Cleanup(func() { preparePortableToolValidationWorkspace = previousWorkspace })
+	preparePortableToolValidationWorkspace = func(_ context.Context, _ providerstore.Store, _ blueprint.Platform) (PreparedProbeWorkspace, func() error, error) {
+		return testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir()), func() error { return cleanupErr }, nil
+	}
+	previousRun := runScheduledPortableToolValidationProfile
+	t.Cleanup(func() { runScheduledPortableToolValidationProfile = previousRun })
+	runScheduledPortableToolValidationProfile = func(
+		_ context.Context, gotDescriptor deploy.ImageDescriptor, _ PreparedProbeWorkspace,
+		invoked toolcatalog.ValidationProfileRecordV1, runtime *providers.PortableToolRuntimeProjectionV1,
+	) (PortableToolProbeEvidenceV1, error) {
+		return portableToolStubEvidenceV1(t, gotDescriptor, invoked, runtime, PortableToolProbeOutcomePassV1, 1), nil
+	}
+	evidence, err := ValidatePortableToolMaterializationV1(context.Background(), providerstore.Store{}, input)
+	if !errors.Is(err, cleanupErr) || evidence != nil {
+		t.Fatalf("evidence = %#v, error = %v", evidence, err)
 	}
 }

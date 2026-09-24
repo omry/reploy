@@ -119,16 +119,20 @@ func TestJavaSourceBuilderCutoverRemainsContainedToDisposableBuilder(t *testing.
 	if !reflect.DeepEqual(environment.Exports, wantExports) || environment.ExportsDirectory != SourceBuilderExportsDirectoryV1 {
 		t.Fatalf("builder exports = %#v at %q", environment.Exports, environment.ExportsDirectory)
 	}
-	if len(environment.Schedule.Entries) != 1 ||
-		environment.Schedule.Entries[0].Scope != "source-builder:demo-server" ||
-		environment.Schedule.Entries[0].Tool != "java" ||
-		environment.Schedule.Entries[0].Profile.Reference.ID != "tool:java/releases/21/validation/profiles/default" ||
-		environment.Schedule.Entries[0].Runtime != nil {
-		t.Fatalf("builder validation schedule = %#v", environment.Schedule)
+	schedule, err := providers.PortableToolValidationScheduleFromLockV1(coordinator.tools[0].Lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(schedule.Entries) != 1 ||
+		schedule.Entries[0].Scope != "source-builder:demo-server" ||
+		schedule.Entries[0].Tool != "java" ||
+		schedule.Entries[0].Profile.Reference.ID != "tool:java/releases/21/validation/profiles/default" ||
+		schedule.Entries[0].Runtime != nil {
+		t.Fatalf("builder validation schedule = %#v", schedule)
 	}
 	profile, err := toolcatalog.DecodePortableToolValidationProfileV1(
-		environment.Schedule.Entries[0].Profile.Reference,
-		environment.Schedule.Entries[0].Profile.Record,
+		schedule.Entries[0].Profile.Reference,
+		schedule.Entries[0].Profile.Record,
 	)
 	if err != nil {
 		t.Fatal(err)
