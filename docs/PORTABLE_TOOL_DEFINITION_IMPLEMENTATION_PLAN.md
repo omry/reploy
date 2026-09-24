@@ -1078,6 +1078,18 @@ before a usage owner has materialized the selected closure, adding an interim
 caller to an unrelated image path, support advertisement, Playwright payload
 materialization, or definition-controlled executor policy.
 
+PTD-S5 corrective handoff: a usage owner derives its selected validation
+profiles from the validated lock when the exact materialized image is ready.
+The image-neutral boundary receives a construction-controlled, decoded
+scheduled-profile view rather than a separately retained mutable schedule.
+Every selected case runs every declared probe through the fixed executor;
+passing evidence records the exact profile ID and digest, observed root
+filesystem, and selected runtime-projection digest. Repeated observations
+coalesce only when those identities match. Invalid attribution, incomplete or
+truncated observations, non-passing outcomes, and cleanup failures yield no
+passing evidence. Locked replay reads the profile record from the lock, not
+the embedded catalog or network.
+
 ### PTD-22: Cut Java Build Tools Over to the Portable Catalog
 
 Scope: replace name-only `tool:java`, `default-jre-headless`, and

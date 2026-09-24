@@ -1,0 +1,2 @@
+kind: Fixed
+body: Bind portable-tool validation evidence to the exact locked profile, image root filesystem, and contract runtime inputs; retain separate evidence when those inputs differ.

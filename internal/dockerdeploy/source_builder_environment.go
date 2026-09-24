@@ -56,7 +56,6 @@ type SourceBuilderPortableToolsV1 struct {
 	Lock           providers.PortableToolLockV1
 	Selections     []SourceBuilderPortableToolSelectionV1
 	Exports        []providers.PortableToolExportV1
-	Schedule       providers.PortableToolValidationScheduleV1
 	workspace      string
 	contextDir     string
 	copies         []sourceBuilderCopyV1
@@ -164,12 +163,6 @@ func MaterializeSourceBuilderPortableToolsV1(
 		return nil, fmt.Errorf("lock source-builder portable tools: %w", err)
 	}
 	tools.Lock = lock
-	schedule, err := providers.PortableToolValidationScheduleFromLockV1(lock)
-	if err != nil {
-		return nil, err
-	}
-	tools.Schedule = schedule
-
 	exports := map[string]providers.PortableToolExportV1{}
 	destinations := map[string]canonical.Digest{}
 	for _, entry := range plan.Plan.Tools {
@@ -504,7 +497,6 @@ type SourceBuilderEnvironmentV1 struct {
 	ExportsDirectory string
 	Selections       []SourceBuilderPortableToolSelectionV1
 	Recipes          map[string]SourceBuilderRecipeIdentityV1
-	Schedule         providers.PortableToolValidationScheduleV1
 	Evidence         []providers.ValidationEvidence
 	candidate        BuiltImageCandidate
 	removed          bool
@@ -583,7 +575,7 @@ func PrepareSourceBuilderEnvironmentV1(
 		Upstream: upstream, candidate: candidate,
 		Exports: append([]providers.PortableToolExportV1{}, tools.Exports...), ExportsDirectory: SourceBuilderExportsDirectoryV1,
 		Selections: append([]SourceBuilderPortableToolSelectionV1{}, tools.Selections...),
-		Recipes:    tools.Plan.Recipes, Schedule: tools.Schedule,
+		Recipes:    tools.Plan.Recipes,
 	}
 	fail := func(err error) (*SourceBuilderEnvironmentV1, error) {
 		if cleanupErr := environment.Cleanup(context.WithoutCancel(ctx)); cleanupErr != nil {
@@ -603,10 +595,15 @@ func PrepareSourceBuilderEnvironmentV1(
 	}
 	environment.Descriptor = inspected.Descriptor
 	environment.Image = inspected
+	// Derive the image's selected validation cases from its validated lock at
+	// the point of use. There is no independently mutable schedule retained by
+	// either the materialized tools or the prepared environment.
+	validationInput, err := PortableToolMaterializationValidationInputFromLockV1(inspected, tools.Lock)
+	if err != nil {
+		return fail(fmt.Errorf("schedule source-builder portable tools: %w", err))
+	}
 	validateCtx, endValidate := buildprofile.Start(ctx, "Validate source-builder portable tools")
-	evidence, err := validateSourceBuilderMaterializationV1(validateCtx, store, PortableToolMaterializationValidationInputV1{
-		Image: inspected, Schedule: tools.Schedule,
-	})
+	evidence, err := validateSourceBuilderMaterializationV1(validateCtx, store, validationInput)
 	endValidate(err)
 	if err != nil {
 		return fail(fmt.Errorf("validate source-builder portable tools: %w", err))

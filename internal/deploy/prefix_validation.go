@@ -47,8 +47,8 @@ func ValidatePrefixValidation(record PrefixValidationV1) error {
 		if evidence.SubjectRootFS != record.SubjectRootFS {
 			return fmt.Errorf("prefix validation profile %s binds a different rootfs subject", evidence.ProfileDigest)
 		}
-		if index > 0 && record.Profiles[index-1].ProfileDigest >= evidence.ProfileDigest {
-			return fmt.Errorf("prefix validation profiles must be unique and sorted by profile digest")
+		if index > 0 && !validationEvidenceLess(record.Profiles[index-1], evidence) {
+			return fmt.Errorf("prefix validation profiles must be unique and sorted by profile and runtime identity")
 		}
 	}
 	if err := record.RuntimePolicy.Validate(); err != nil {
@@ -63,6 +63,16 @@ func ValidatePrefixValidation(record PrefixValidationV1) error {
 		}
 	}
 	return nil
+}
+
+func validationEvidenceLess(left, right providers.ValidationEvidence) bool {
+	if left.ProfileDigest != right.ProfileDigest {
+		return left.ProfileDigest < right.ProfileDigest
+	}
+	if left.PortableToolProfileID != right.PortableToolProfileID {
+		return left.PortableToolProfileID < right.PortableToolProfileID
+	}
+	return left.PortableToolRuntimeDigest < right.PortableToolRuntimeDigest
 }
 
 func PrefixValidationDigest(record PrefixValidationV1) (canonical.Digest, error) {

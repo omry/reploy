@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"testing"
 
@@ -94,6 +95,37 @@ func TestPrefixValidationRejectsIncompleteOrMismatchedEvidence(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestPrefixValidationKeepsDistinctPortableToolRuntimeEvidence(t *testing.T) {
+	record := validPrefixValidation()
+	profile := providers.PortableToolRecordReferenceV1{
+		ID:     "tool:demo/releases/1.2.3/validation/profiles/default",
+		Digest: prefixValidationTestDigest("2"),
+	}
+	first, err := providers.NewPortableToolValidationEvidence(record.SubjectRootFS, profile, &providers.PortableToolRuntimeProjectionV1{
+		InstallRoot: "/opt/demo", Environment: []providers.PortableToolEnvironmentVariableV1{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := providers.NewPortableToolValidationEvidence(record.SubjectRootFS, profile, &providers.PortableToolRuntimeProjectionV1{
+		InstallRoot: "/opt/other", Environment: []providers.PortableToolEnvironmentVariableV1{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Profiles = []providers.ValidationEvidence{first, second}
+	sort.Slice(record.Profiles, func(left, right int) bool {
+		return validationEvidenceLess(record.Profiles[left], record.Profiles[right])
+	})
+	if err := ValidatePrefixValidation(record); err != nil {
+		t.Fatal(err)
+	}
+	record.Profiles[1] = record.Profiles[0]
+	if err := ValidatePrefixValidation(record); err == nil || !strings.Contains(err.Error(), "unique") {
+		t.Fatalf("duplicate runtime evidence error = %v", err)
 	}
 }
 

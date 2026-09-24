@@ -139,9 +139,13 @@ func TestMaterializeSourceBuilderPortableToolsV1AcquiresThenMaterializesOfflineA
 		!reflect.DeepEqual(tools.Lock.Plan, tools.Plan.DAG) {
 		t.Fatalf("lock = %#v", tools.Lock)
 	}
-	if len(tools.Schedule.Entries) != 2 || tools.Schedule.Entries[0].Scope != "source-builder:alpha" ||
-		tools.Schedule.Entries[0].Profile.Reference.ID != "tool:java/releases/21/validation/profiles/default" || tools.Schedule.Entries[0].Runtime != nil {
-		t.Fatalf("schedule = %#v", tools.Schedule)
+	schedule, err := providers.PortableToolValidationScheduleFromLockV1(tools.Lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(schedule.Entries) != 2 || schedule.Entries[0].Scope != "source-builder:alpha" ||
+		schedule.Entries[0].Profile.Reference.ID != "tool:java/releases/21/validation/profiles/default" || schedule.Entries[0].Runtime != nil {
+		t.Fatalf("schedule = %#v", schedule)
 	}
 	if len(tools.Selections) != 2 || tools.Selections[1].Scope != "source-builder:beta" || tools.Selections[1].Tool != "java" ||
 		tools.Selections[1].SelectedClosureDigest != tools.Plan.Plan.Tools[1].SelectedClosureDigest {
@@ -609,7 +613,13 @@ func stubSourceBuilderEnvironment(t *testing.T, stub *sourceBuilderEnvironmentSt
 	}
 	validateSourceBuilderMaterializationV1 = func(_ context.Context, _ providerstore.Store, input PortableToolMaterializationValidationInputV1) ([]providers.ValidationEvidence, error) {
 		stub.order = append(stub.order, "validate")
-		stub.schedule = input.Schedule
+		stub.schedule = providers.PortableToolValidationScheduleV1{
+			Schema:  providers.PortableToolValidationScheduleSchemaV1,
+			Entries: make([]providers.PortableToolScheduledValidationV1, len(input.selected)),
+		}
+		for index, selected := range input.selected {
+			stub.schedule.Entries[index] = selected.entry
+		}
 		if !reflect.DeepEqual(input.Image, stub.inspected) {
 			t.Fatalf("validated image %#v, want the inspected builder image", input.Image)
 		}
@@ -660,7 +670,11 @@ func TestPrepareSourceBuilderEnvironmentV1BuildsInspectsValidatesThenCleansUp(t 
 	if !reflect.DeepEqual(environmentStub.upstream, upstream) || environmentStub.contextDir != tools.contextDir || string(environmentStub.dockerfile) != string(wantDockerfile) {
 		t.Fatalf("layer build input = %#v / %s / %s", environmentStub.upstream, environmentStub.contextDir, environmentStub.dockerfile)
 	}
-	if !reflect.DeepEqual(environmentStub.schedule, tools.Schedule) || len(environment.Evidence) != 1 {
+	wantSchedule, err := providers.PortableToolValidationScheduleFromLockV1(tools.Lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(environmentStub.schedule, wantSchedule) || len(environment.Evidence) != 1 {
 		t.Fatalf("validated schedule/evidence = %#v / %#v", environmentStub.schedule, environment.Evidence)
 	}
 	if !reflect.DeepEqual(environment.Descriptor, builder) || !reflect.DeepEqual(environment.Upstream, upstream) ||
