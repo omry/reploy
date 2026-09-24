@@ -2,7 +2,6 @@ package dockerdeploy
 
 import (
 	"archive/tar"
-	"bytes"
 	"compress/gzip"
 	"context"
 	"os"
@@ -18,27 +17,26 @@ import (
 	"github.com/omry/reploy/internal/providers"
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
 	"github.com/omry/reploy/internal/providerstore"
+	"github.com/omry/reploy/internal/toolcatalog"
 )
 
 func TestPreparedPythonNodeOperationsFreshPortableWheelUsesProductionResolverSeam(t *testing.T) {
 	descriptor := testProbeImageDescriptor(t, "linux/amd64")
 	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
 	request := preparedPythonResolveRequest(t, descriptor)
-	fresh := portableToolPythonFreshPlaywrightFixtureV1(t, "application:application")
-	component := fresh.Projection.Components[0]
+	fixture := newPortableToolPythonLockedTestFixture(t)
+	fresh := fixture.fresh
+	component := fixture.component
 	if component.Component != "application/application/python" || len(component.Bindings) != 1 {
-		t.Fatalf("portable projection = %#v", fresh.Projection)
+		t.Fatalf("portable projection = %#v", component)
 	}
 	testedTags := append([]string{}, component.TestedTags...)
 	interpreterResponse := probe.ResponseV1{Schema: probe.ResponseSchemaV1, Observations: []probe.ExecutableObservationV1{
 		pythonConsumerObservation("interpreter", "/usr/bin/python3"),
 	}}
-	portableContent := portableToolPythonFreshResolverWheelV1(t)
+	portableContent := fixture.content
 	const portableFilename = "playwright-1.61.0-py3-none-manylinux1_x86_64.whl"
-	store, err := providerstore.NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := fixture.store
 	staleDescriptor, err := store.Publish(
 		context.Background(), "wheels/"+portableFilename, "wheel", strings.NewReader("superseded portable wheel"),
 	)
@@ -52,43 +50,11 @@ func TestPreparedPythonNodeOperationsFreshPortableWheelUsesProductionResolverSea
 		t.Fatal(err)
 	}
 	t.Cleanup(cleanupArtifacts)
-	selectedDescriptor, err := store.Publish(
-		context.Background(), "wheels/"+portableFilename, "wheel", bytes.NewReader(portableContent),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	inspection, err := pythonprovider.InspectWheelReaderV1(
-		context.Background(), bytes.NewReader(portableContent), int64(len(portableContent)), portableFilename, selectedDescriptor,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(inspection.ConsoleScripts) != 1 {
-		t.Fatalf("portable wheel inspection = %#v", inspection)
-	}
-	selected := []pythonprovider.PortableToolVerifiedWheelInputV1{{
-		Scope: component.Bindings[0].Scope, Tool: fresh.Plan.Tools[0].Provenance.Tool,
-		SelectedClosureDigest: component.Bindings[0].SelectedClosureDigest,
-		Contract:              component.Bindings[0].Contract, Artifact: component.Bindings[0].Artifact,
-		Descriptor: selectedDescriptor, Inspection: inspection,
-		EligibleFilenameTags: append([]string{}, testedTags...),
-		ConsoleScript:        inspection.ConsoleScripts[0],
-	}}
-	producerCalls := 0
-	previousProducer := producePortableToolPythonFreshWheelsV1
-	t.Cleanup(func() { producePortableToolPythonFreshWheelsV1 = previousProducer })
-	producePortableToolPythonFreshWheelsV1 = func(
-		_ context.Context,
-		_ providerstore.Store,
-		_ pythonprovider.PortableToolPythonProjectionV1,
-		requests []pythonprovider.PortableToolPythonVerifiedWheelRequestV1,
-	) ([]pythonprovider.PortableToolVerifiedWheelInputV1, error) {
-		producerCalls++
-		if len(requests) != 1 || requests[0].Interpreter.Facts.Schema != pythonprovider.InterpreterFactsSchemaV2 {
-			t.Fatalf("fresh producer requests = %#v", requests)
-		}
-		return selected, nil
+	selectedDescriptor := fixture.descriptor
+	previousRecords := portableToolPythonFreshLockRecordsV1
+	t.Cleanup(func() { portableToolPythonFreshLockRecordsV1 = previousRecords })
+	portableToolPythonFreshLockRecordsV1 = func([]toolcatalog.SelectedClosureV1) (toolcatalog.EmbeddedPortableToolLockRecordSetV1, error) {
+		return fixture.records, nil
 	}
 	commands := stubPythonInterpreterSelectionCommands(
 		t, mustCanonicalProbeResponse(t, interpreterResponse),
@@ -136,8 +102,8 @@ func TestPreparedPythonNodeOperationsFreshPortableWheelUsesProductionResolverSea
 			}
 		}
 	}
-	if producerCalls != 1 || selectedCount != 1 {
-		t.Fatalf("producer calls = %d, selected bundle wheels = %d, bundle = %#v", producerCalls, selectedCount, bundle.Wheels)
+	if selectedCount != 1 {
+		t.Fatalf("selected bundle wheels = %d, bundle = %#v", selectedCount, bundle.Wheels)
 	}
 	if len(*commands) < 5 || !containsInOrder((*commands)[4].Args, []string{"playwright"}) {
 		t.Fatalf("resolver command does not contain the selected direct root: %#v", *commands)

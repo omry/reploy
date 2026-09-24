@@ -412,16 +412,22 @@ func portableToolPythonBindingPlanKeysV1(lock providers.PortableToolLockV1) (map
 	if err := providers.ValidatePortableToolLockV1(lock); err != nil {
 		return nil, err
 	}
-	_, projection, err := pythonprovider.ProjectPortableToolPythonBindingsV1(
-		lock.Plan.PortableToolPlan, []providers.ResolvedComponentRequestV1{},
-	)
+	selection, err := pythonprovider.NewPortableToolPythonSelectionV1(lock.Plan.PortableToolPlan)
+	if err != nil {
+		return nil, err
+	}
+	projection, err := selection.Projection()
 	if err != nil {
 		return nil, err
 	}
 	keys := make(map[string]struct{})
 	for _, component := range projection.Components {
 		for _, binding := range component.Bindings {
-			entry, err := portableToolPythonPlanEntryForBindingV1(lock.Plan.PortableToolPlan, binding)
+			selectedBinding, err := selection.Binding(component.Component, binding.Distribution)
+			if err != nil {
+				return nil, err
+			}
+			entry, err := selectedBinding.PlanEntry()
 			if err != nil {
 				return nil, err
 			}

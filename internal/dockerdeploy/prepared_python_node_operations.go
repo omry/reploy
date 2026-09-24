@@ -201,19 +201,27 @@ func (operations PreparedPythonNodeOperations) resolveFresh(
 	}
 	var selectedPortableWheels []pythonprovider.PortableToolVerifiedWheelInputV1
 	if operations.PortableToolBindings != nil {
+		var handoffs []pythonprovider.PortableToolPythonVerifiedWheelHandoffV1
 		if operations.PortableToolLockedPlan != nil {
-			selectedPortableWheels, err = acquirePortableToolPythonLockedWheelsV1(
+			handoffs, err = acquirePortableToolPythonLockedHandoffsV1(
 				ctx, operations.Store, operations.PortableToolLockedPlan,
 				*operations.PortableToolBindings, interpreter,
 			)
 		} else {
-			selectedPortableWheels, err = acquirePortableToolPythonFreshWheelsV1(
+			handoffs, err = acquirePortableToolPythonFreshHandoffsV1(
 				ctx, operations.Store, operations.PortableToolFreshPlan,
 				*operations.PortableToolBindings, interpreter,
 			)
 		}
 		if err != nil {
 			return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
+		}
+		selectedPortableWheels = make([]pythonprovider.PortableToolVerifiedWheelInputV1, len(handoffs))
+		for index, handoff := range handoffs {
+			selectedPortableWheels[index], err = handoff.MaterializationInput()
+			if err != nil {
+				return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
+			}
 		}
 		if err := StagePythonPortableVerifiedWheels(
 			session.artifacts, operations.Store, verifiedWheels, selectedPortableWheels,
