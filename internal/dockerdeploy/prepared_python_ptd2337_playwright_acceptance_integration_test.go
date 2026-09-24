@@ -28,14 +28,15 @@ import (
 func TestPortableToolPythonPTD2337TwoNeutralSyntheticWheels(t *testing.T) {
 	ctx := context.Background()
 	fresh, _ := portableToolPythonFreshTwoNeutralFixtureV1(t)
-	if len(fresh.Projection.Components) != 1 || len(fresh.Projection.Components[0].Bindings) != 2 {
-		t.Fatalf("two-neutral projection = %#v", fresh.Projection)
+	component := portableToolPythonFreshComponentForTestV1(t, &fresh)
+	if len(component.Bindings) != 2 {
+		t.Fatalf("two-neutral projection = %#v", component)
 	}
 	store, err := providerstore.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, binding := range fresh.Projection.Components[0].Bindings {
+	for _, binding := range component.Bindings {
 		module := distributionUnderscoreV1(binding.Distribution)
 		content := preparedPTD2337NeutralBindingWheelV1(
 			t, module, binding.Distribution, binding.CLI.Name,
@@ -111,9 +112,9 @@ func TestPreparedPythonGraphDockerIntegrationPTD2337PlaywrightBinding(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	component := fresh.Projection.Components[0]
+	component := portableToolPythonFreshComponentForTestV1(t, &fresh)
 	if len(component.Bindings) != 1 || len(fresh.Plan.Tools) != 1 || len(fresh.Plan.Tools[0].Exports) != 1 {
-		t.Fatalf("embedded Playwright selection = %#v, projection = %#v", fresh.Plan, fresh.Projection)
+		t.Fatalf("embedded Playwright selection = %#v, component = %#v", fresh.Plan, component)
 	}
 	binding := component.Bindings[0]
 	wheelContent := ptd2337SyntheticPlaywrightWheelV1(t)
@@ -243,7 +244,6 @@ func TestPreparedPythonGraphDockerIntegrationPTD2337PlaywrightBinding(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	fresh.Projection = projection
 	component = projection.Components[0]
 	binding = component.Bindings[0]
 	if binding.Wheel.Size != wheel.Size || binding.Wheel.SHA256 != wheel.SHA256 {
@@ -335,7 +335,7 @@ func TestPreparedPythonGraphDockerIntegrationPTD2337PlaywrightBinding(t *testing
 		BaseCatalog: preparedBase.Catalog, Sources: request.Sources,
 		SourceWheels: []providerstore.ArtifactDescriptor{},
 		PortablePython: &PortableToolPythonFreshPlanV1{
-			Plan: fresh.Plan, Projection: projection, Closures: fresh.Closures,
+			Plan: fresh.Plan, Closures: fresh.Closures,
 		},
 		DesiredPortableToolPlan: &fresh.Plan,
 		LocalOverrides:          dependencyOverrides,

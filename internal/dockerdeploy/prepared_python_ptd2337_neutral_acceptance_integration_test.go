@@ -84,10 +84,10 @@ func TestPreparedPythonGraphDockerIntegrationPTD2337NeutralBindings(t *testing.T
 		t.Fatal(err)
 	}
 	fresh, records := portableToolPythonFreshTwoNeutralFixtureV1(t)
-	if len(fresh.Projection.Components) != 1 || len(fresh.Projection.Components[0].Bindings) != 2 {
-		t.Fatalf("two-neutral projection = %#v", fresh.Projection)
+	component := portableToolPythonFreshComponentForTestV1(t, &fresh)
+	if len(component.Bindings) != 2 {
+		t.Fatalf("two-neutral projection = %#v", component)
 	}
-	component := fresh.Projection.Components[0]
 
 	wheels := map[string]struct {
 		module  string
@@ -121,7 +121,7 @@ func TestPreparedPythonGraphDockerIntegrationPTD2337NeutralBindings(t *testing.T
 		descriptors[binding.Distribution] = wheel
 	}
 	rebindPortableToolPythonFreshTwoNeutralRecordsV1(t, &fresh, &records, descriptors)
-	component = fresh.Projection.Components[0]
+	component = portableToolPythonFreshComponentForTestV1(t, &fresh)
 
 	previousRecords := portableToolPythonFreshLockRecordsV1
 	t.Cleanup(func() { portableToolPythonFreshLockRecordsV1 = previousRecords })
@@ -171,7 +171,7 @@ func TestPreparedPythonGraphDockerIntegrationPTD2337NeutralBindings(t *testing.T
 		BaseCatalog: preparedBase.Catalog, Sources: request.Sources,
 		SourceWheels: []providerstore.ArtifactDescriptor{},
 		PortablePython: &PortableToolPythonFreshPlanV1{
-			Plan: fresh.Plan, Projection: projection, Closures: fresh.Closures,
+			Plan: fresh.Plan, Closures: fresh.Closures,
 		},
 		DesiredPortableToolPlan: &fresh.Plan,
 		FinalImageConfig:        finalImageConfig,
@@ -268,11 +268,11 @@ func rebindPortableToolPythonFreshTwoNeutralRecordsV1(
 	descriptors map[string]providerstore.ArtifactDescriptor,
 ) {
 	t.Helper()
-	if fresh == nil || records == nil || len(fresh.Plan.Tools) != 1 || len(fresh.Projection.Components) != 1 || len(fresh.Closures) != 1 {
+	if fresh == nil || records == nil || len(fresh.Plan.Tools) != 1 || len(fresh.Closures) != 1 {
 		t.Fatalf("two-neutral rebind inputs = fresh=%#v records=%#v", fresh, records)
 	}
 	entry := &fresh.Plan.Tools[0]
-	component := fresh.Projection.Components[0]
+	component := portableToolPythonFreshComponentForTestV1(t, fresh)
 	const namespace = "tool:fixture-tool/releases/1.0.0"
 
 	artifactReferences := make(map[string]providers.PortableToolRecordReferenceV1, len(component.Bindings))
@@ -469,13 +469,6 @@ func rebindPortableToolPythonFreshTwoNeutralRecordsV1(
 	}
 	closure.Identity = identity
 	entry.SelectedClosureDigest = identity
-	_, projection, err := pythonprovider.ProjectPortableToolPythonBindingsV1(
-		fresh.Plan, []providers.ResolvedComponentRequestV1{},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fresh.Projection = projection
 	if err := validatePortableToolPythonFreshPlanV1(fresh); err != nil {
 		t.Fatalf("rebound two-neutral fresh plan: %v", err)
 	}
@@ -540,11 +533,6 @@ func portableToolPythonFreshTwoNeutralFixtureV1(t *testing.T) (
 		return entry.Responsibilities.BindingArtifacts[left].Reference.ID < entry.Responsibilities.BindingArtifacts[right].Reference.ID
 	})
 	sort.Slice(entry.Exports, func(left, right int) bool { return entry.Exports[left].Name < entry.Exports[right].Name })
-	_, projection, err := pythonprovider.ProjectPortableToolPythonBindingsV1(fresh.Plan, []providers.ResolvedComponentRequestV1{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	fresh.Projection = projection
 	records.Artifacts = append(records.Artifacts, toolcatalog.EmbeddedPortableToolArtifactSourceV1{
 		Scope: "application:neutral", Tool: "fixture-tool", Artifact: artifactReference,
 		Descriptor: providerstore.ArtifactDescriptor{

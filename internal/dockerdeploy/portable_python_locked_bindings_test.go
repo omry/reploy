@@ -36,17 +36,47 @@ func TestBuildPortableToolPythonLockedPlanUsesPersistedRecordsOnly(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan == nil || len(plan.Projection.Components) != 1 || len(plan.Projection.Components[0].Bindings) != 1 {
+	if plan == nil {
+		t.Fatal("locked plan is missing")
+	}
+	projection, err := plan.selection.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projection.Components) != 1 || len(projection.Components[0].Bindings) != 1 {
 		t.Fatalf("locked plan = %#v", plan)
 	}
-	if plan.Projection.Components[0].Bindings[0].Artifact != fixture.binding.Artifact {
-		t.Fatalf("locked binding = %#v", plan.Projection.Components[0].Bindings[0])
+	if projection.Components[0].Bindings[0].Artifact != fixture.binding.Artifact {
+		t.Fatalf("locked binding = %#v", projection.Components[0].Bindings[0])
+	}
+}
+
+func TestBuildPortableToolPythonLockedPlanDetachesSourceLock(t *testing.T) {
+	fixture := newPortableToolPythonLockedTestFixture(t)
+	plan, err := buildPortableToolPythonLockedPlanV1(&fixture.lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalDescriptor := plan.lock.Acquisitions[0].Descriptor
+	fixture.lock.Plan.PortableToolPlan.Tools[0].Scope = "application:substituted"
+	fixture.lock.Acquisitions[0].Descriptor.LogicalPath = "wheels/substituted.whl"
+	projection, err := plan.selection.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projection.Components) != 1 || projection.Components[0].Bindings[0].Scope != fixture.binding.Scope ||
+		plan.lock.Acquisitions[0].Descriptor != originalDescriptor {
+		t.Fatalf("locked selection aliases caller lock: %#v", plan)
 	}
 }
 
 func TestPortableToolPythonLockedAcquisitionIncludesSelectedTool(t *testing.T) {
 	fixture := newPortableToolPythonLockedTestFixture(t)
-	entry, err := portableToolPythonPlanEntryForBindingV1(fixture.plan.Plan, fixture.binding)
+	selected, err := fixture.plan.selection.Binding(fixture.component.Component, fixture.binding.Distribution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := selected.PlanEntry()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +94,7 @@ func TestPortableToolPythonLockedAcquisitionIncludesSelectedTool(t *testing.T) {
 	}
 }
 
-func TestAcquirePortableToolPythonLockedWheelsReopensExactStoreObject(t *testing.T) {
+func TestAcquirePortableToolPythonLockedHandoffsReopensExactStoreObject(t *testing.T) {
 	fixture := newPortableToolPythonLockedTestFixture(t)
 	facts := pythonprovider.InterpreterInspectionFactsV2{
 		Version: "3.12.2", Implementation: "cpython", ABI: "cp312",
@@ -72,17 +102,20 @@ func TestAcquirePortableToolPythonLockedWheelsReopensExactStoreObject(t *testing
 		TestedTags:     append([]string{}, fixture.component.TestedTags...),
 		CompatibleTags: append([]string{}, fixture.component.TestedTags...),
 	}
-	verified, err := acquirePortableToolPythonLockedWheelsV1(
-		context.Background(), fixture.store, fixture.plan,
-		fixture.component, providers.ExecutableEvidence{Facts: pythonprovider.CanonicalInterpreterFactsV2(facts)},
+	handoffs, err := acquirePortableToolPythonLockedHandoffsV1(
+		context.Background(), fixture.store, fixture.plan, fixture.component,
+		providers.ExecutableEvidence{Facts: pythonprovider.CanonicalInterpreterFactsV2(facts)},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(verified) != 1 || verified[0].Descriptor != fixture.descriptor ||
-		verified[0].Provenance.OperationID != "locked-replay" ||
-		verified[0].Source.Reference != fixture.source.Reference {
-		t.Fatalf("locked verified wheels = %#v", verified)
+	if len(handoffs) != 1 {
+		t.Fatalf("locked verified handoffs = %d", len(handoffs))
+	}
+	input, err := handoffs[0].MaterializationInput()
+	if err != nil || input.Descriptor != fixture.descriptor || input.Provenance.OperationID != "locked-replay" ||
+		input.Source.Reference != fixture.source.Reference {
+		t.Fatalf("locked materialization input = %#v, error = %v", input, err)
 	}
 }
 
@@ -118,7 +151,7 @@ func TestAcquirePortableToolPythonLockedWheelsRejectsMissingOrDriftedObjectBefor
 				TestedTags:     append([]string{}, fixture.component.TestedTags...),
 				CompatibleTags: append([]string{}, fixture.component.TestedTags...),
 			}
-			_, err = acquirePortableToolPythonLockedWheelsV1(
+			_, err = acquirePortableToolPythonLockedHandoffsV1(
 				context.Background(), fixture.store, fixture.plan,
 				fixture.component, providers.ExecutableEvidence{Facts: pythonprovider.CanonicalInterpreterFactsV2(facts)},
 			)
@@ -503,6 +536,9 @@ type portableToolPythonLockedTestFixtureV1 struct {
 	store      providerstore.Store
 	lock       providers.PortableToolLockV1
 	plan       *PortableToolPythonLockedPlanV1
+	fresh      PortableToolPythonFreshPlanV1
+	records    toolcatalog.EmbeddedPortableToolLockRecordSetV1
+	content    []byte
 	component  pythonprovider.PortableToolPythonComponentV1
 	binding    pythonprovider.PortableToolPythonBindingV1
 	source     providers.PortableToolSelectedRecordV1
@@ -590,6 +626,7 @@ func newPortableToolPythonLockedTestFixture(t *testing.T) portableToolPythonLock
 		t.Fatal(err)
 	}
 	binding := projection.Components[0].Bindings[0]
+	fresh.Closures[0].Provenance.ManifestDigest = manifest.Reference.Digest
 
 	providerPlan := preparedPythonResolveRequest(t, testProbeImageDescriptor(t, "linux/amd64")).Plan
 	domain := providers.PortableToolDomainAuthorityV1{ID: "application", Owner: providerPlan.Nodes[1].ID}
@@ -640,8 +677,9 @@ func newPortableToolPythonLockedTestFixture(t *testing.T) portableToolPythonLock
 		t.Fatal(err)
 	}
 	return portableToolPythonLockedTestFixtureV1{
-		store: store, lock: lock, plan: lockedPlan, component: projection.Components[0],
-		binding: binding, source: source.Source, descriptor: descriptor,
+		store: store, lock: lock, plan: lockedPlan, fresh: fresh, records: records, content: content,
+		component: projection.Components[0],
+		binding:   binding, source: source.Source, descriptor: descriptor,
 	}
 }
 
