@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
@@ -18,94 +20,62 @@ import (
 	"github.com/omry/reploy/internal/providerstore"
 )
 
-func TestPortablePythonAliasArchiveUsesPrimitiveStagingPayload(t *testing.T) {
-	stagingRoot := t.TempDir()
-	contextDir := t.TempDir()
-	linkPath := portablePythonAliasStagingPathV1(stagingRoot, portablePythonAliasSpecV1{Destination: "/usr/local/bin/tool"})
-	if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
-		t.Fatal(err)
+func TestPortablePythonAliasArchiveDerivesSortedDeterministicEntries(t *testing.T) {
+	first := portablePythonAliasSpecV1{
+		Name: "alpha", Component: "app", Destination: "/usr/local/bin/alpha",
+		Target: "/opt/reploy/providers/python/app/bin/alpha", BindingIdentity: "binding-alpha",
 	}
-	if err := createPortablePythonAliasStagedEntryV1(linkPath, "/opt/reploy/providers/python/app/bin/tool"); err != nil {
-		t.Fatal(err)
+	second := portablePythonAliasSpecV1{
+		Name: "con", Component: "app", Destination: "/usr/local/bin/con",
+		Target: "/opt/reploy/providers/python/app/bin/con", BindingIdentity: "binding-con",
 	}
-	alias := portablePythonAliasSpecV1{
-		Name: "tool", Destination: "/usr/local/bin/tool", Target: "/opt/reploy/providers/python/app/bin/tool",
-	}
-	if err := writePortablePythonAliasArchiveV1(contextDir, stagingRoot, []portablePythonAliasSpecV1{alias}, nil); err != nil {
-		t.Fatal(err)
-	}
-	archiveFile, err := os.Open(filepath.Join(contextDir, portablePythonAliasArchiveV1))
-	if err != nil {
-		t.Fatal(err)
-	}
-	reader := tar.NewReader(archiveFile)
-	var headers []tar.Header
-	for {
-		header, err := reader.Next()
-		if err == io.EOF {
-			break
+	write := func(aliases []portablePythonAliasSpecV1) []byte {
+		t.Helper()
+		contextDir := t.TempDir()
+		if err := writePortablePythonAliasArchiveV1(contextDir, aliases, []string{"/usr/local/bin", "/usr/local"}); err != nil {
+			t.Fatal(err)
 		}
+		archive, err := os.ReadFile(filepath.Join(contextDir, portablePythonAliasArchiveV1))
 		if err != nil {
 			t.Fatal(err)
 		}
-		headers = append(headers, *header)
+		return archive
 	}
-	if err := archiveFile.Close(); err != nil {
-		t.Fatal(err)
+	archive := write([]portablePythonAliasSpecV1{second, first, first})
+	if other := write([]portablePythonAliasSpecV1{first, second}); !bytes.Equal(archive, other) {
+		t.Fatal("alias archive changed with claim order or exact duplicate")
 	}
-	if len(headers) != 1 || headers[0].Name != "usr/local/bin/tool" || headers[0].Typeflag != tar.TypeSymlink || headers[0].Linkname != alias.Target {
-		t.Fatalf("alias archive headers = %#v", headers)
-	}
-	missingContext := t.TempDir()
-	if err := writePortablePythonAliasArchiveV1(missingContext, stagingRoot, []portablePythonAliasSpecV1{alias}, []string{"/usr/local", "/usr/local/bin"}); err != nil {
-		t.Fatal(err)
-	}
-	missingFile, err := os.Open(filepath.Join(missingContext, portablePythonAliasArchiveV1))
-	if err != nil {
-		t.Fatal(err)
-	}
-	missingReader := tar.NewReader(missingFile)
-	for _, expectedName := range []string{"usr/local", "usr/local/bin", "usr/local/bin/tool"} {
-		header, err := missingReader.Next()
+	reader := tar.NewReader(bytes.NewReader(archive))
+	for index, expected := range []struct {
+		name, target string
+		kind         byte
+	}{
+		{"usr/local", "", tar.TypeDir},
+		{"usr/local/bin", "", tar.TypeDir},
+		{"usr/local/bin/alpha", first.Target, tar.TypeSymlink},
+		{"usr/local/bin/con", second.Target, tar.TypeSymlink},
+	} {
+		header, err := reader.Next()
 		if err != nil {
-			t.Fatalf("missing-parent archive next %q: %v", expectedName, err)
+			t.Fatalf("archive entry %d: %v", index, err)
 		}
-		if header.Name != expectedName {
-			t.Fatalf("missing-parent archive header = %#v, want %q", header, expectedName)
-		}
-		if expectedName != "usr/local/bin/tool" && (header.Typeflag != tar.TypeDir || header.Mode != 0o755) {
-			t.Fatalf("missing-parent archive directory header = %#v", header)
+		if header.Name != expected.name || header.Linkname != expected.target || header.Typeflag != expected.kind || !header.ModTime.Equal(time.Unix(0, 0).UTC()) {
+			t.Fatalf("archive entry %d = %#v", index, header)
 		}
 	}
-	if err := missingFile.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(linkPath); err != nil {
-		t.Fatal(err)
-	}
-	if err := createPortablePythonAliasStagedEntryV1(linkPath, "/wrong"); err != nil {
-		t.Fatal(err)
-	}
-	if err := writePortablePythonAliasArchiveV1(t.TempDir(), stagingRoot, []portablePythonAliasSpecV1{alias}, nil); err == nil || !strings.Contains(err.Error(), "resolves") {
-		t.Fatalf("staged payload mismatch error = %v", err)
+	if _, err := reader.Next(); err != io.EOF {
+		t.Fatalf("archive has an extra entry: %v", err)
 	}
 }
 
-func TestPortablePythonAliasArchiveSupportsLongRuntimeAndDestinationPaths(t *testing.T) {
-	stagingRoot := t.TempDir()
-	contextDir := t.TempDir()
-	name := "tool"
+func TestPortablePythonAliasArchiveSupportsLongLinuxDestinationsOnAnyHost(t *testing.T) {
+	component := "app"
+	name := "con"
 	destination := "/usr/local/" + strings.Repeat("a", 120) + "/" + strings.Repeat("b", 120) + "/" + name
-	target := "/opt/reploy/providers/python/application/_" + strings.Repeat("c", 64) + "/bin/" + name
-	linkPath := portablePythonAliasStagingPathV1(stagingRoot, portablePythonAliasSpecV1{Destination: destination})
-	if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := createPortablePythonAliasStagedEntryV1(linkPath, target); err != nil {
-		t.Fatal(err)
-	}
-	alias := portablePythonAliasSpecV1{Name: name, Destination: destination, Target: target}
-	if err := writePortablePythonAliasArchiveV1(contextDir, stagingRoot, []portablePythonAliasSpecV1{alias}, []string{filepath.ToSlash(filepath.Dir(destination))}); err != nil {
+	target := "/opt/reploy/providers/python/app/bin/" + name
+	alias := portablePythonAliasSpecV1{Name: name, Component: component, Destination: destination, Target: target, BindingIdentity: "binding-con"}
+	contextDir := t.TempDir()
+	if err := writePortablePythonAliasArchiveV1(contextDir, []portablePythonAliasSpecV1{alias}, []string{filepath.ToSlash(filepath.Dir(destination))}); err != nil {
 		t.Fatal(err)
 	}
 	archiveFile, err := os.Open(filepath.Join(contextDir, portablePythonAliasArchiveV1))
@@ -114,46 +84,48 @@ func TestPortablePythonAliasArchiveSupportsLongRuntimeAndDestinationPaths(t *tes
 	}
 	defer archiveFile.Close()
 	reader := tar.NewReader(archiveFile)
-	var found bool
 	for {
 		header, err := reader.Next()
 		if err == io.EOF {
-			break
+			t.Fatal("long Linux alias symlink missing from archive")
 		}
 		if err != nil {
 			t.Fatal(err)
 		}
 		if header.Typeflag == tar.TypeSymlink {
-			found = true
 			if header.Name != strings.TrimPrefix(destination, "/") || header.Linkname != target {
 				t.Fatalf("long alias header = %#v", header)
 			}
+			break
 		}
-	}
-	if !found {
-		t.Fatal("long alias symlink missing from archive")
 	}
 }
 
-func TestPortablePythonAliasArchiveRejectsUnexpectedStagedEntry(t *testing.T) {
-	stagingRoot := t.TempDir()
-	contextDir := t.TempDir()
-	alias := portablePythonAliasSpecV1{
-		Name: "tool", Destination: "/usr/local/bin/tool", Target: "/opt/reploy/providers/python/app/bin/tool",
+func TestPortablePythonAliasArchiveRejectsInvalidClaimsBeforeWriting(t *testing.T) {
+	valid := portablePythonAliasSpecV1{
+		Name: "tool", Component: "app", Destination: "/usr/local/bin/tool",
+		Target: "/opt/reploy/providers/python/app/bin/tool", BindingIdentity: "binding-tool",
 	}
-	linkPath := portablePythonAliasStagingPathV1(stagingRoot, alias)
-	if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := createPortablePythonAliasStagedEntryV1(linkPath, alias.Target); err != nil {
-		t.Fatal(err)
-	}
-	extra := filepath.Join(filepath.Dir(linkPath), "unowned-entry")
-	if err := createPortablePythonAliasStagedEntryV1(extra, alias.Target); err != nil {
-		t.Fatal(err)
-	}
-	if err := writePortablePythonAliasArchiveV1(contextDir, stagingRoot, []portablePythonAliasSpecV1{alias}, nil); err == nil || !strings.Contains(err.Error(), "unexpected entry") {
-		t.Fatalf("unexpected staged entry error = %v", err)
+	for _, test := range []struct {
+		name string
+		edit func(*portablePythonAliasSpecV1)
+	}{
+		{"wrong target", func(alias *portablePythonAliasSpecV1) { alias.Target = "/wrong" }},
+		{"unsafe destination", func(alias *portablePythonAliasSpecV1) { alias.Destination = "/usr/local/../tool" }},
+		{"unsafe name", func(alias *portablePythonAliasSpecV1) { alias.Name = "../tool" }},
+		{"missing binding", func(alias *portablePythonAliasSpecV1) { alias.BindingIdentity = "" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			alias := valid
+			test.edit(&alias)
+			contextDir := t.TempDir()
+			if err := writePortablePythonAliasArchiveV1(contextDir, []portablePythonAliasSpecV1{alias}, nil); err == nil {
+				t.Fatal("invalid claim produced an alias archive")
+			}
+			if _, err := os.Stat(filepath.Join(contextDir, portablePythonAliasArchiveV1)); !os.IsNotExist(err) {
+				t.Fatalf("invalid claim left an archive: %v", err)
+			}
+		})
 	}
 }
 
@@ -168,6 +140,20 @@ func TestNormalizePortablePythonAliasSpecsRejectsSharedDestinationCollision(t *t
 	other.Output.Component = "other"
 	if _, err := normalizePortablePythonAliasSpecsV1([]portablePythonAliasSpecV1{base, other}); err == nil || !strings.Contains(err.Error(), "conflicting") {
 		t.Fatalf("collision error = %v", err)
+	}
+	other = base
+	other.BindingIdentity = "binding-b"
+	if _, err := normalizePortablePythonAliasSpecsV1([]portablePythonAliasSpecV1{base, other}); err == nil || !strings.Contains(err.Error(), "conflicting") {
+		t.Fatalf("binding collision error = %v", err)
+	}
+	other = base
+	other.Name = "child"
+	other.Destination = "/usr/local/bin/tool/child"
+	other.Target = "/opt/reploy/providers/python/app/bin/child"
+	other.BindingIdentity = "binding-child"
+	other.Output.Name = "child"
+	if _, err := normalizePortablePythonAliasSpecsV1([]portablePythonAliasSpecV1{base, other}); err == nil || !strings.Contains(err.Error(), "overlap") {
+		t.Fatalf("overlapping destination error = %v", err)
 	}
 }
 
@@ -215,6 +201,10 @@ func TestBuildAndValidatePortablePythonAliasLayerProvesFinalImageBeforeReturn(t 
 		if !reflect.DeepEqual(upstream, source.Descriptor) || !strings.Contains(string(dockerfile), "ADD --chown=0:0") {
 			t.Fatalf("alias build inputs = %s, %s", upstream.ImmutableReference, dockerfile)
 		}
+		workspaceEntries, err := os.ReadDir(filepath.Dir(gotContext))
+		if err != nil || len(workspaceEntries) != 1 || workspaceEntries[0].Name() != "context" {
+			t.Fatalf("alias build workspace contains host staging entries: entries=%#v err=%v", workspaceEntries, err)
+		}
 		archiveFile, err := os.Open(filepath.Join(gotContext, portablePythonAliasArchiveV1))
 		if err != nil {
 			t.Fatal(err)
@@ -222,7 +212,7 @@ func TestBuildAndValidatePortablePythonAliasLayerProvesFinalImageBeforeReturn(t 
 		reader := tar.NewReader(archiveFile)
 		header, err := reader.Next()
 		_ = archiveFile.Close()
-		if err != nil || header.Linkname != alias.Target {
+		if err != nil || header.Typeflag != tar.TypeSymlink || header.Linkname != alias.Target {
 			t.Fatalf("alias archive header = %#v, %v", header, err)
 		}
 		return BuiltImageCandidate{ImageID: imageID}, nil
@@ -254,6 +244,60 @@ func TestBuildAndValidatePortablePythonAliasLayerProvesFinalImageBeforeReturn(t 
 	}
 	if _, err := os.Stat(filepath.Dir(contextDir)); !os.IsNotExist(err) {
 		t.Fatalf("alias staging workspace still exists: %v", err)
+	}
+}
+
+func TestValidatePortablePythonAliasFinalImageRejectsSubstitutedLink(t *testing.T) {
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias := portablePythonAliasSpecV1{
+		Name: "tool", Component: "app", Destination: "/usr/local/bin/tool",
+		Target: "/opt/reploy/providers/python/app/bin/tool", BindingIdentity: "binding-tool",
+	}
+	previous := collectPortablePythonAliasEvidenceV1
+	t.Cleanup(func() { collectPortablePythonAliasEvidenceV1 = previous })
+	collectPortablePythonAliasEvidenceV1 = func(context.Context, providerstore.Store, deploy.ImageDescriptor, []FullImageExecutableProbe) ([]providers.ExecutableEvidence, error) {
+		return []providers.ExecutableEvidence{{
+			InvocationPath: alias.Destination,
+			LinkChain: []providers.LinkEvidence{{
+				Path: alias.Destination, Target: "/opt/reploy/providers/python/other/bin/tool",
+				ResolvedPath: "/opt/reploy/providers/python/other/bin/tool",
+			}},
+			Terminal: providers.FileEvidence{Path: "/opt/reploy/providers/python/other/bin/tool"},
+		}}, nil
+	}
+	err = validatePortablePythonAliasFinalImageEvidenceV1(context.Background(), store, testProbeImageDescriptor(t, "linux/amd64"), []portablePythonAliasSpecV1{alias})
+	if err == nil || !strings.Contains(err.Error(), "link target") {
+		t.Fatalf("substituted final-image link error = %v", err)
+	}
+}
+
+func TestBuildAndValidatePortablePythonAliasLayerRejectsInterruptedBuild(t *testing.T) {
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := portablePythonAliasLayerTestSource(t)
+	alias := portablePythonAliasSpecV1{
+		Name: "tool", Component: "app", Destination: "/usr/local/bin/tool",
+		Target: "/opt/reploy/providers/python/app/bin/tool", BindingIdentity: "binding-tool",
+	}
+	previousBuild, previousDestinations := buildPortablePythonAliasLayerV1, inspectPortablePythonAliasDestinationsV1
+	t.Cleanup(func() {
+		buildPortablePythonAliasLayerV1 = previousBuild
+		inspectPortablePythonAliasDestinationsV1 = previousDestinations
+	})
+	inspectPortablePythonAliasDestinationsV1 = func(context.Context, providerstore.Store, deploy.ImageDescriptor, []string) ([]string, error) {
+		return nil, nil
+	}
+	buildPortablePythonAliasLayerV1 = func(context.Context, providerstore.Store, deploy.ImageDescriptor, string, []byte, RunOptions) (BuiltImageCandidate, error) {
+		return BuiltImageCandidate{}, errors.New("interrupted alias layer build")
+	}
+	candidate, inspected, err := buildAndValidatePortablePythonAliasLayerV1(context.Background(), store, source, []portablePythonAliasSpecV1{alias}, source.Descriptor.Platform, RunOptions{})
+	if err == nil || !strings.Contains(err.Error(), "interrupted alias layer build") || candidate.ImageID != "" || inspected.Descriptor.ConfigDigest != "" {
+		t.Fatalf("interrupted alias layer result candidate=%#v inspected=%#v err=%v", candidate, inspected, err)
 	}
 }
 

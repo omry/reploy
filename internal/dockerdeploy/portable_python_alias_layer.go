@@ -4,8 +4,6 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,11 +14,11 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/portabletool"
 	"github.com/omry/reploy/internal/providers"
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
 	"github.com/omry/reploy/internal/providerstore"
@@ -82,22 +80,16 @@ func buildAndValidatePortablePythonAliasLayerV1(
 	if err != nil {
 		return BuiltImageCandidate{}, InspectedImageCandidate{}, err
 	}
-	stagingRoot := filepath.Join(workspace, "staging")
 	contextDir := filepath.Join(workspace, "context")
-	if err := os.Mkdir(stagingRoot, 0o700); err != nil {
-		_ = os.RemoveAll(workspace)
-		return BuiltImageCandidate{}, InspectedImageCandidate{}, fmt.Errorf("create Python alias staging root: %w", err)
-	}
 	if err := os.Mkdir(contextDir, 0o700); err != nil {
 		_ = os.RemoveAll(workspace)
 		return BuiltImageCandidate{}, InspectedImageCandidate{}, fmt.Errorf("create Python alias build context: %w", err)
 	}
-	// The staging tree is used only for the root-anchored primitive. The Docker
-	// context contains the generated archive alone, so no host staging path or
-	// generated target can leak into the image.
+	// The Docker context contains only the archive derived from validated
+	// final-image claims. No alias is published on the build host.
 	defer func() {
 		if cleanupErr := os.RemoveAll(workspace); cleanupErr != nil {
-			cleanupErr = fmt.Errorf("remove Python alias staging workspace: %w", cleanupErr)
+			cleanupErr = fmt.Errorf("remove Python alias build workspace: %w", cleanupErr)
 			if resultErr == nil {
 				resultErr = cleanupErr
 			} else {
@@ -106,7 +98,6 @@ func buildAndValidatePortablePythonAliasLayerV1(
 		}
 	}()
 
-	claims := make(portablePythonAliasClaimsV1, len(aliases))
 	destinations := make([]string, 0, len(aliases))
 	for _, alias := range aliases {
 		destinations = append(destinations, alias.Destination)
@@ -115,31 +106,7 @@ func buildAndValidatePortablePythonAliasLayerV1(
 	if err != nil {
 		return BuiltImageCandidate{}, InspectedImageCandidate{}, fmt.Errorf("check Python alias source-image destinations: %w", err)
 	}
-	published := make([]portablePythonAliasSpecV1, 0, len(aliases))
-	for _, alias := range aliases {
-		// The final image uses Linux paths, but the build host may be Windows.
-		// Keep the rooted publication primitive while mapping each destination
-		// to a host-safe staging basename. In particular, a Linux component such
-		// as "con" is a reserved Windows device name and cannot be staged using
-		// the destination itself.
-		destination := portablePythonAliasStagingPathV1(stagingRoot, alias)
-		newAlias, err := publishPortablePythonAliasV1(
-			stagingRoot, destination, alias.Target, alias.BindingIdentity, claims,
-		)
-		if err != nil {
-			return BuiltImageCandidate{}, InspectedImageCandidate{}, fmt.Errorf("publish Python alias %q: %w", alias.Name, err)
-		}
-		if newAlias {
-			published = append(published, alias)
-		}
-	}
-	if len(published) == 0 {
-		// A fresh staging root cannot contain an already-owned alias. This branch
-		// is reachable only when the input contained exact duplicates; no layer
-		// is required for an empty overlay.
-		return BuiltImageCandidate{}, source, nil
-	}
-	if err := writePortablePythonAliasArchiveV1(contextDir, stagingRoot, published, missingParents); err != nil {
+	if err := writePortablePythonAliasArchiveV1(contextDir, aliases, missingParents); err != nil {
 		return BuiltImageCandidate{}, InspectedImageCandidate{}, err
 	}
 	dockerfile, err := portablePythonAliasDockerfileV1()
@@ -164,7 +131,7 @@ func buildAndValidatePortablePythonAliasLayerV1(
 	if err := validatePortablePythonAliasLayerImageV1(source, inspected, platform); err != nil {
 		return candidate, InspectedImageCandidate{}, err
 	}
-	if err := validatePortablePythonAliasFinalImageEvidenceV1(ctx, store, inspected.Descriptor, published); err != nil {
+	if err := validatePortablePythonAliasFinalImageEvidenceV1(ctx, store, inspected.Descriptor, aliases); err != nil {
 		return candidate, InspectedImageCandidate{}, err
 	}
 	return candidate, inspected, nil
@@ -174,14 +141,17 @@ func normalizePortablePythonAliasSpecsV1(input []portablePythonAliasSpecV1) ([]p
 	result := append([]portablePythonAliasSpecV1{}, input...)
 	for index := range result {
 		alias := &result[index]
-		if alias.Name == "" || !utf8.ValidString(alias.Name) || strings.ContainsAny(alias.Name, "\x00\r\n") {
-			return nil, fmt.Errorf("Python alias name must be nonempty valid text")
+		if err := validatePortablePythonAliasBindingIdentityV1(alias.BindingIdentity); err != nil {
+			return nil, err
 		}
 		if err := validatePortablePythonAliasDestinationV1(alias.Destination); err != nil {
 			return nil, err
 		}
-		if strings.ContainsAny(alias.Target, "\x00\r\n") {
-			return nil, fmt.Errorf("Python alias %q target contains unsafe control characters", alias.Name)
+		if err := portabletool.ValidateBindingCLIExportV1(portabletool.ToolExportV1{Name: alias.Name, Path: alias.Destination}); err != nil {
+			return nil, fmt.Errorf("Python alias %q selected CLI: %w", alias.Name, err)
+		}
+		if err := validatePortablePythonAliasTargetV1(alias.Target); err != nil {
+			return nil, err
 		}
 		if alias.Output.Name == "" {
 			alias.Output.Name = alias.Name
@@ -194,6 +164,9 @@ func normalizePortablePythonAliasSpecsV1(input []portablePythonAliasSpecV1) ([]p
 		}
 		if alias.Output.Name != alias.Name {
 			return nil, fmt.Errorf("Python alias %q output name %q does not match the selected CLI name", alias.Name, alias.Output.Name)
+		}
+		if alias.Component != "" && alias.Component != alias.Output.Component {
+			return nil, fmt.Errorf("Python alias %q output component %q does not match its owner %q", alias.Name, alias.Output.Component, alias.Component)
 		}
 		runtimeRoot, err := pythonprovider.RuntimeRootV1(alias.Output.Component)
 		if err != nil {
@@ -233,7 +206,7 @@ func normalizePortablePythonAliasSpecsV1(input []portablePythonAliasSpecV1) ([]p
 		}
 		// Exact target and binding identity is the only supported deduplication.
 	}
-	return unique, nil
+	return validatePortablePythonAliasSpecClaimsV1(unique)
 }
 
 func validatePortablePythonAliasLayerImageV1(source, candidate InspectedImageCandidate, platform blueprint.Platform) error {
@@ -271,13 +244,15 @@ func portablePythonAliasDockerfileV1() ([]byte, error) {
 	return output.Bytes(), nil
 }
 
-func portablePythonAliasStagingPathV1(stagingRoot string, alias portablePythonAliasSpecV1) string {
-	digest := sha256.Sum256([]byte(alias.Destination))
-	name := "alias-" + hex.EncodeToString(digest[:])
-	return filepath.Join(stagingRoot, "aliases", name)
-}
-
-func writePortablePythonAliasArchiveV1(contextDir, stagingRoot string, aliases []portablePythonAliasSpecV1, missingParents []string) error {
+func writePortablePythonAliasArchiveV1(contextDir string, aliases []portablePythonAliasSpecV1, missingParents []string) error {
+	var err error
+	aliases, err = normalizePortablePythonAliasSpecsV1(aliases)
+	if err != nil {
+		return fmt.Errorf("validate Python alias archive claims: %w", err)
+	}
+	if len(aliases) == 0 {
+		return fmt.Errorf("Python alias archive requires at least one alias")
+	}
 	missing := make(map[string]struct{}, len(missingParents))
 	for _, parent := range missingParents {
 		if err := validatePortablePythonAliasDestinationV1(parent); err != nil {
@@ -301,43 +276,6 @@ func writePortablePythonAliasArchiveV1(contextDir, stagingRoot string, aliases [
 			_ = os.Remove(archivePath)
 		}
 	}()
-	expectedEntries := map[string]bool{"aliases": true}
-	for _, alias := range aliases {
-		stagedPath := portablePythonAliasStagingPathV1(stagingRoot, alias)
-		relative, err := filepath.Rel(stagingRoot, stagedPath)
-		if err != nil || relative == "." || filepath.IsAbs(relative) {
-			return fmt.Errorf("derive Python alias staging path %q: %w", stagedPath, err)
-		}
-		expectedEntries[relative] = false
-	}
-	if err := filepath.WalkDir(stagingRoot, func(current string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if current == stagingRoot {
-			return nil
-		}
-		relative, err := filepath.Rel(stagingRoot, current)
-		if err != nil || relative == "." || filepath.IsAbs(relative) {
-			return fmt.Errorf("derive Python alias staging entry %q: %w", current, err)
-		}
-		expectedDirectory, expected := expectedEntries[relative]
-		if !expected {
-			return fmt.Errorf("Python alias staging root contains an unexpected entry %q", filepath.ToSlash(relative))
-		}
-		if expectedDirectory {
-			if !entry.IsDir() {
-				return fmt.Errorf("Python alias staging entry %q must be a directory", filepath.ToSlash(relative))
-			}
-			return nil
-		}
-		if !entry.IsDir() && entry.Type()&os.ModeSymlink == 0 && !entry.Type().IsRegular() {
-			return fmt.Errorf("Python alias staging entry %q must be a private alias record", filepath.ToSlash(relative))
-		}
-		return nil
-	}); err != nil {
-		return fmt.Errorf("inspect Python alias staging tree: %w", err)
-	}
 	parents := make([]string, 0, len(aliases))
 	parentSet := make(map[string]struct{}, len(aliases))
 	links := make([]struct {
@@ -345,19 +283,10 @@ func writePortablePythonAliasArchiveV1(contextDir, stagingRoot string, aliases [
 		target string
 	}, 0, len(aliases))
 	for _, alias := range aliases {
-		stagedPath := portablePythonAliasStagingPathV1(stagingRoot, alias)
-		target, err := readPortablePythonAliasStagedEntryV1(stagedPath)
-		if err != nil {
-			return fmt.Errorf("read staged Python alias %q: %w", alias.Name, err)
-		}
-		target = normalizePortablePythonAliasTargetV1(target)
-		if target != alias.Target {
-			return fmt.Errorf("staged Python alias %q resolves to %q, want %q", alias.Name, target, alias.Target)
-		}
 		links = append(links, struct {
 			name   string
 			target string
-		}{name: strings.TrimPrefix(alias.Destination, "/"), target: target})
+		}{name: strings.TrimPrefix(alias.Destination, "/"), target: alias.Target})
 		for parent := path.Dir(strings.TrimPrefix(alias.Destination, "/")); parent != "."; parent = path.Dir(parent) {
 			if _, exists := parentSet[parent]; exists {
 				break
