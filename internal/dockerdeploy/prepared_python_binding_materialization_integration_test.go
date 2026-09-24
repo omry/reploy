@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"os"
-	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -20,10 +19,8 @@ import (
 
 // TestPreparedPythonGraphDockerIntegrationPortableNeutralBinding exercises the
 // selected binding path through resolver staging and the production Python
-// materialization transaction. The fixture producer is replaced only to keep
-// this test independent of the external portable-tool catalog transport; the
-// wheel still travels through the deployment store, resolver, bundle, and
-// offline materialization layer.
+// materialization transaction. The selected records are rebound to a local
+// wheel so the real verified-wheel producer can run without external traffic.
 func TestPreparedPythonGraphDockerIntegrationPortableNeutralBinding(t *testing.T) {
 	if os.Getenv("REPLOY_DOCKER_INTEGRATION") != "1" {
 		t.Skip("set REPLOY_DOCKER_INTEGRATION=1 to run Docker integration evidence")
@@ -57,59 +54,19 @@ func TestPreparedPythonGraphDockerIntegrationPortableNeutralBinding(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	inspection, err := pythonprovider.InspectWheelReaderV1(
-		ctx, bytes.NewReader(wheelContent), int64(len(wheelContent)), wheelFilename, wheel,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(inspection.ConsoleScripts) != 1 || inspection.ConsoleScripts[0].Name != "neutral-cli" {
-		t.Fatalf("portable binding wheel inspection = %#v", inspection)
-	}
-
 	fresh, records := portableToolPythonFreshNeutralFixtureV1(t)
-	component := fresh.Projection.Components[0]
+	rebindPortableToolPythonFreshNeutralWheelV1(t, &fresh, &records, wheel)
+	component := portableToolPythonFreshComponentForTestV1(t, &fresh)
 	binding := component.Bindings[0]
 	if component.Component != "application/neutral/python" || binding.Distribution != "neutral-binding" {
-		t.Fatalf("neutral portable projection = %#v", fresh.Projection)
+		t.Fatalf("neutral portable projection = %#v", component)
 	}
-	// The neutral fixture supplies the provider-owned record joins while this
-	// test's store supplies the exact executable wheel bytes.
-	records.Artifacts[0].Descriptor = wheel
 	previousRecords := portableToolPythonFreshLockRecordsV1
-	previousProducer := producePortableToolPythonFreshWheelsV1
 	t.Cleanup(func() {
 		portableToolPythonFreshLockRecordsV1 = previousRecords
-		producePortableToolPythonFreshWheelsV1 = previousProducer
 	})
 	portableToolPythonFreshLockRecordsV1 = func([]toolcatalog.SelectedClosureV1) (toolcatalog.EmbeddedPortableToolLockRecordSetV1, error) {
 		return records, nil
-	}
-	producePortableToolPythonFreshWheelsV1 = func(
-		_ context.Context,
-		_ providerstore.Store,
-		gotProjection pythonprovider.PortableToolPythonProjectionV1,
-		requests []pythonprovider.PortableToolPythonVerifiedWheelRequestV1,
-	) ([]pythonprovider.PortableToolVerifiedWheelInputV1, error) {
-		if len(requests) != 1 || len(gotProjection.Components) != 1 || gotProjection.Components[0].Component != component.Component {
-			t.Fatalf("portable binding producer inputs = %#v, %#v", gotProjection, requests)
-		}
-		request := requests[0]
-		if !reflect.DeepEqual(request.Binding, binding) || request.Acquisition.Artifact != wheel {
-			t.Fatalf("portable binding producer request = %#v", request)
-		}
-		return []pythonprovider.PortableToolVerifiedWheelInputV1{{
-			Scope:                 binding.Scope,
-			Tool:                  fresh.Plan.Tools[0].Provenance.Tool,
-			SelectedClosureDigest: binding.SelectedClosureDigest,
-			Contract:              binding.Contract,
-			Artifact:              binding.Artifact,
-			Descriptor:            wheel,
-			Inspection:            inspection,
-			EligibleFilenameTags:  append([]string{}, component.TestedTags...),
-			ConsoleScript:         inspection.ConsoleScripts[0],
-			Source:                request.SourceRecord,
-		}}, nil
 	}
 
 	components, projection, err := pythonprovider.ProjectPortableToolPythonBindingsV1(
@@ -154,7 +111,7 @@ func TestPreparedPythonGraphDockerIntegrationPortableNeutralBinding(t *testing.T
 		BaseCatalog: preparedBase.Catalog, Sources: request.Sources,
 		SourceWheels: []providerstore.ArtifactDescriptor{},
 		PortablePython: &PortableToolPythonFreshPlanV1{
-			Plan: fresh.Plan, Projection: projection, Closures: fresh.Closures,
+			Plan: fresh.Plan, Closures: fresh.Closures,
 		},
 		DesiredPortableToolPlan: &fresh.Plan,
 		FinalImageConfig:        finalImageConfig,

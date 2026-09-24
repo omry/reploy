@@ -10,14 +10,12 @@ import (
 	"github.com/omry/reploy/internal/providerstore"
 )
 
-// PortableToolPythonLockedPlanV1 carries the selected portable Python
-// projection together with the persisted lock that authorizes replay. The
-// lock is the only source of release and acquisition records on this path;
-// the embedded catalog is deliberately not consulted.
+// PortableToolPythonLockedPlanV1 owns a validated snapshot of the persisted
+// lock and its derived Python selection. Neither the plan nor its projection
+// is retained as an independently mutable authority.
 type PortableToolPythonLockedPlanV1 struct {
-	Plan       providers.PortableToolPlanV1
-	Projection pythonprovider.PortableToolPythonProjectionV1
-	Lock       providers.PortableToolLockV1
+	lock      providers.PortableToolLockV1
+	selection *pythonprovider.PortableToolPythonSelectionV1
 }
 
 // portableToolPlanHasPythonBindingScopesV1 reports whether a portable lock
@@ -64,103 +62,59 @@ func buildPortableToolPythonLockedPlanV1(
 		return nil, fmt.Errorf("locked portable Python plan: %w", err)
 	}
 	cloned := providers.ClonePortableToolLockV1(*lock)
-	plan := cloned.Plan.PortableToolPlan
-	_, projection, err := pythonprovider.ProjectPortableToolPythonBindingsV1(
-		plan, []providers.ResolvedComponentRequestV1{},
-	)
+	selection, err := pythonprovider.NewPortableToolPythonSelectionV1(cloned.Plan.PortableToolPlan)
 	if err != nil {
-		return nil, fmt.Errorf("locked portable Python projection: %w", err)
+		return nil, fmt.Errorf("locked portable Python selection: %w", err)
 	}
-	result := &PortableToolPythonLockedPlanV1{
-		Plan: plan, Projection: projection, Lock: cloned,
-	}
-	if err := validatePortableToolPythonLockedPlanV1(result); err != nil {
-		return nil, err
-	}
-	return result, nil
+	return &PortableToolPythonLockedPlanV1{lock: cloned, selection: selection}, nil
 }
 
-func validatePortableToolPythonLockedPlanV1(input *PortableToolPythonLockedPlanV1) error {
-	if input == nil {
-		return fmt.Errorf("locked portable Python plan is required")
-	}
-	if err := providers.ValidatePortableToolLockV1(input.Lock); err != nil {
-		return fmt.Errorf("locked portable Python lock: %w", err)
-	}
-	if err := providers.ValidatePortableToolPlanV1(input.Plan); err != nil {
-		return fmt.Errorf("locked portable Python plan: %w", err)
-	}
-	planBytes, err := providers.CanonicalPortableToolPlanBytesV1(input.Plan)
-	if err != nil {
-		return fmt.Errorf("locked portable Python plan: %w", err)
-	}
-	lockedPlanBytes, err := providers.CanonicalPortableToolPlanBytesV1(input.Lock.Plan.PortableToolPlan)
-	if err != nil {
-		return fmt.Errorf("locked portable Python lock plan: %w", err)
-	}
-	if !bytes.Equal(planBytes, lockedPlanBytes) {
-		return fmt.Errorf("locked portable Python plan does not match its lock")
-	}
-	_, expectedProjection, err := pythonprovider.ProjectPortableToolPythonBindingsV1(
-		input.Plan, []providers.ResolvedComponentRequestV1{},
-	)
-	if err != nil {
-		return fmt.Errorf("locked portable Python projection from plan: %w", err)
-	}
-	projectionBytes, err := pythonprovider.CanonicalPortableToolPythonProjectionBytesV1(input.Projection)
-	if err != nil {
-		return fmt.Errorf("locked portable Python projection: %w", err)
-	}
-	expectedProjectionBytes, err := pythonprovider.CanonicalPortableToolPythonProjectionBytesV1(expectedProjection)
-	if err != nil {
-		return fmt.Errorf("locked portable Python projection from plan: %w", err)
-	}
-	if !bytes.Equal(projectionBytes, expectedProjectionBytes) {
-		return fmt.Errorf("locked portable Python projection does not exactly match its plan")
-	}
-	for _, component := range input.Projection.Components {
-		for index, binding := range component.Bindings {
-			entry, err := portableToolPythonPlanEntryForBindingV1(input.Plan, binding)
-			if err != nil {
-				return fmt.Errorf("locked portable Python binding %d in component %q: %w", index, component.Component, err)
-			}
-			if _, err := portableToolPythonLockedAcquisitionForBindingV1(input.Lock, entry, binding); err != nil {
-				return fmt.Errorf("locked portable Python binding %d in component %q: %w", index, component.Component, err)
-			}
-		}
-	}
-	return nil
-}
-
-// acquirePortableToolPythonLockedWheelsV1 builds replay requests from the
-// persisted lock and sends them through the provider's locked-replay mode.
-// No embedded catalog lookup or acquisition callback is reachable here.
-func acquirePortableToolPythonLockedWheelsV1(
+// acquirePortableToolPythonLockedHandoffsV1 reopens only descriptor-bound
+// store bytes from the validated lock; no embedded catalog or network path is
+// reachable.
+func acquirePortableToolPythonLockedHandoffsV1(
 	ctx context.Context,
 	store providerstore.Store,
 	input *PortableToolPythonLockedPlanV1,
 	component pythonprovider.PortableToolPythonComponentV1,
 	interpreter providers.ExecutableEvidence,
-) ([]pythonprovider.PortableToolVerifiedWheelInputV1, error) {
-	if input == nil {
-		return nil, fmt.Errorf("locked portable Python bindings require their selected lock")
-	}
-	if err := validatePortableToolPythonLockedPlanV1(input); err != nil {
+) ([]pythonprovider.PortableToolPythonVerifiedWheelHandoffV1, error) {
+	selection, handoffs, err := preparePortableToolPythonLockedWheelsV1(input, component, interpreter)
+	if err != nil {
 		return nil, err
 	}
+	return pythonprovider.ProducePortableToolPythonSelectedWheelsV1(ctx, store, selection, component.Component, handoffs)
+}
+
+func preparePortableToolPythonLockedWheelsV1(
+	input *PortableToolPythonLockedPlanV1,
+	component pythonprovider.PortableToolPythonComponentV1,
+	interpreter providers.ExecutableEvidence,
+) (*pythonprovider.PortableToolPythonSelectionV1, []*pythonprovider.PortableToolPythonWheelHandoffV1, error) {
+	if input == nil {
+		return nil, nil, fmt.Errorf("locked portable Python bindings require their selected lock")
+	}
+	if input.selection == nil {
+		return nil, nil, fmt.Errorf("locked portable Python plan is required")
+	}
+	selection := input.selection
+	projection, err := selection.Projection()
+	if err != nil {
+		return nil, nil, err
+	}
 	var selected *pythonprovider.PortableToolPythonComponentV1
-	for index := range input.Projection.Components {
-		candidate := &input.Projection.Components[index]
+	for index := range projection.Components {
+		candidate := &projection.Components[index]
 		if candidate.Component != component.Component {
 			continue
 		}
 		if selected != nil {
-			return nil, fmt.Errorf("locked portable Python component %q is duplicated", component.Component)
+			return nil, nil, fmt.Errorf("locked portable Python component %q is duplicated", component.Component)
 		}
 		selected = candidate
 	}
 	if selected == nil {
-		return nil, fmt.Errorf("locked portable Python component %q is absent from its projection", component.Component)
+		return nil, nil, fmt.Errorf("locked portable Python component %q is absent from its projection", component.Component)
 	}
 	componentBytes, err := pythonprovider.CanonicalPortableToolPythonProjectionBytesV1(
 		pythonprovider.PortableToolPythonProjectionV1{
@@ -169,7 +123,7 @@ func acquirePortableToolPythonLockedWheelsV1(
 		},
 	)
 	if err != nil {
-		return nil, fmt.Errorf("locked portable Python component: %w", err)
+		return nil, nil, fmt.Errorf("locked portable Python component: %w", err)
 	}
 	selectedBytes, err := pythonprovider.CanonicalPortableToolPythonProjectionBytesV1(
 		pythonprovider.PortableToolPythonProjectionV1{
@@ -178,66 +132,36 @@ func acquirePortableToolPythonLockedWheelsV1(
 		},
 	)
 	if err != nil {
-		return nil, fmt.Errorf("locked portable Python projected component: %w", err)
+		return nil, nil, fmt.Errorf("locked portable Python projected component: %w", err)
 	}
 	if !bytes.Equal(componentBytes, selectedBytes) {
-		return nil, fmt.Errorf("locked portable Python component does not match its projection")
+		return nil, nil, fmt.Errorf("locked portable Python component does not match its projection")
 	}
-	requests := make([]pythonprovider.PortableToolPythonVerifiedWheelRequestV1, 0, len(component.Bindings))
+	handoffs := make([]*pythonprovider.PortableToolPythonWheelHandoffV1, 0, len(component.Bindings))
 	for index, binding := range component.Bindings {
-		entry, err := portableToolPythonPlanEntryForBindingV1(input.Plan, binding)
+		selectedBinding, err := selection.Binding(component.Component, binding.Distribution)
 		if err != nil {
-			return nil, fmt.Errorf("locked portable Python binding %d: %w", index, err)
+			return nil, nil, fmt.Errorf("locked portable Python binding %d: %w", index, err)
 		}
-		contract, err := portableToolPythonSelectedRecordV1(
-			entry.Responsibilities.BindingContracts, binding.Contract, "contract",
-		)
+		entry, err := selectedBinding.PlanEntry()
 		if err != nil {
-			return nil, fmt.Errorf("locked portable Python binding %d: %w", index, err)
+			return nil, nil, fmt.Errorf("locked portable Python binding %d: %w", index, err)
 		}
-		artifact, err := portableToolPythonSelectedRecordV1(
-			entry.Responsibilities.BindingArtifacts, binding.Artifact, "artifact",
-		)
+		manifest, err := portableToolPythonLockedReleaseForEntryV1(input.lock, entry)
 		if err != nil {
-			return nil, fmt.Errorf("locked portable Python binding %d: %w", index, err)
+			return nil, nil, fmt.Errorf("locked portable Python binding %d: %w", index, err)
 		}
-		manifest, err := portableToolPythonLockedReleaseForEntryV1(input.Lock, entry)
+		acquisition, err := portableToolPythonLockedAcquisitionForBindingV1(input.lock, entry, binding)
 		if err != nil {
-			return nil, fmt.Errorf("locked portable Python binding %d: %w", index, err)
+			return nil, nil, fmt.Errorf("locked portable Python binding %d: %w", index, err)
 		}
-		acquisition, err := portableToolPythonLockedAcquisitionForBindingV1(input.Lock, entry, binding)
+		handoff, err := selectedBinding.LockedWheel(manifest, acquisition, interpreter)
 		if err != nil {
-			return nil, fmt.Errorf("locked portable Python binding %d: %w", index, err)
+			return nil, nil, fmt.Errorf("locked portable Python binding %d: %w", index, err)
 		}
-		source, err := pythonprovider.PortableToolPythonArtifactSourceFromRecordV1(
-			acquisition.Source, acquisition.Descriptor,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("locked portable Python binding %d source: %w", index, err)
-		}
-		requests = append(requests, pythonprovider.PortableToolPythonVerifiedWheelRequestV1{
-			SelectedPlanEntry: entry, Component: component, Binding: binding,
-			ContractRecord: contract, ArtifactRecord: artifact,
-			ManifestRecord: manifest, Interpreter: interpreter,
-			Acquisition: providerstore.AcquisitionRequest{
-				Artifact: acquisition.Descriptor, Source: source,
-				Policy: providerstore.DefaultAcquisitionPolicy(),
-			},
-			Mode:              pythonprovider.PortableToolVerifiedWheelLockedReplayV1,
-			LockedAcquisition: &acquisition,
-		})
+		handoffs = append(handoffs, handoff)
 	}
-	verified, err := pythonprovider.ProducePortableToolPythonVerifiedWheelsV1(
-		ctx, store,
-		pythonprovider.PortableToolPythonProjectionV1{
-			Schema:     pythonprovider.PortableToolPythonProjectionSchemaV1,
-			Components: []pythonprovider.PortableToolPythonComponentV1{component},
-		}, requests,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("produce locked portable Python wheels: %w", err)
-	}
-	return verified, nil
+	return selection, handoffs, nil
 }
 
 func portableToolPythonLockedReleaseForEntryV1(

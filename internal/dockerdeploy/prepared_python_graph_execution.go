@@ -93,12 +93,18 @@ func ExecutePreparedPythonGraph(
 	}
 	var projection *pythonprovider.PortableToolPythonProjectionV1
 	var lockedPortablePython *PortableToolPythonLockedPlanV1
+	var freshSelectedPlan providers.PortableToolPlanV1
 	if input.PortablePython != nil {
 		if err := validatePortableToolPythonFreshPlanV1(input.PortablePython); err != nil {
 			return providers.GraphExecutionResult{}, err
 		}
+		var err error
+		freshSelectedPlan, err = input.PortablePython.sealed.selection.Plan()
+		if err != nil {
+			return providers.GraphExecutionResult{}, err
+		}
 		if input.DesiredPortableToolPlan != nil {
-			freshBindingPlan, _, err := portableToolPythonSelectionPlanV1(input.PortablePython.Plan)
+			freshBindingPlan, _, err := portableToolPythonSelectionPlanV1(freshSelectedPlan)
 			if err != nil {
 				return providers.GraphExecutionResult{}, fmt.Errorf("fresh portable Python selection: %w", err)
 			}
@@ -110,7 +116,11 @@ func ExecutePreparedPythonGraph(
 				return providers.GraphExecutionResult{}, fmt.Errorf("fresh portable Python selection does not match desired selection")
 			}
 		}
-		projection = &input.PortablePython.Projection
+		derived, err := input.PortablePython.sealed.selection.Projection()
+		if err != nil {
+			return providers.GraphExecutionResult{}, err
+		}
+		projection = &derived
 	} else if input.CurrentLock != nil && input.CurrentLock.PortableTools != nil {
 		matches, err := portableToolPythonSelectionsMatchCurrentBuildV1(
 			input.CurrentLock.PortableTools, input.DesiredPortableToolPlan,
@@ -124,7 +134,11 @@ func ExecutePreparedPythonGraph(
 				return providers.GraphExecutionResult{}, err
 			}
 			if lockedPortablePython != nil {
-				projection = &lockedPortablePython.Projection
+				derived, err := lockedPortablePython.selection.Projection()
+				if err != nil {
+					return providers.GraphExecutionResult{}, err
+				}
+				projection = &derived
 			}
 		}
 	}
@@ -140,9 +154,9 @@ func ExecutePreparedPythonGraph(
 		if input.DesiredPortableToolPlan != nil {
 			selectedPlan = *input.DesiredPortableToolPlan
 		} else if input.PortablePython != nil {
-			selectedPlan = input.PortablePython.Plan
+			selectedPlan = freshSelectedPlan
 		} else if lockedPortablePython != nil {
-			selectedPlan = lockedPortablePython.Plan
+			selectedPlan = lockedPortablePython.lock.Plan.PortableToolPlan
 		}
 		if err := validatePortablePythonAliasSelectionClaimsV1(selectedPlan, bindingsByComponent); err != nil {
 			return providers.GraphExecutionResult{}, fmt.Errorf("selected portable Python aliases: %w", err)
@@ -285,9 +299,11 @@ func portableToolPythonPlansMatchCurrentBuildV1(
 func portableToolPythonSelectionPlanV1(
 	plan providers.PortableToolPlanV1,
 ) (providers.PortableToolPlanV1, pythonprovider.PortableToolPythonProjectionV1, error) {
-	_, projection, err := pythonprovider.ProjectPortableToolPythonBindingsV1(
-		plan, []providers.ResolvedComponentRequestV1{},
-	)
+	selection, err := pythonprovider.NewPortableToolPythonSelectionV1(plan)
+	if err != nil {
+		return providers.PortableToolPlanV1{}, pythonprovider.PortableToolPythonProjectionV1{}, err
+	}
+	projection, err := selection.Projection()
 	if err != nil {
 		return providers.PortableToolPlanV1{}, pythonprovider.PortableToolPythonProjectionV1{}, err
 	}
@@ -298,7 +314,11 @@ func portableToolPythonSelectionPlanV1(
 	selectedTools := map[string]struct{}{}
 	for _, component := range projection.Components {
 		for _, binding := range component.Bindings {
-			entry, err := portableToolPythonPlanEntryForBindingV1(plan, binding)
+			selectedBinding, err := selection.Binding(component.Component, binding.Distribution)
+			if err != nil {
+				return providers.PortableToolPlanV1{}, pythonprovider.PortableToolPythonProjectionV1{}, err
+			}
+			entry, err := selectedBinding.PlanEntry()
 			if err != nil {
 				return providers.PortableToolPlanV1{}, pythonprovider.PortableToolPythonProjectionV1{}, err
 			}

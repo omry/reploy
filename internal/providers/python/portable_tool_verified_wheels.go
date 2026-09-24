@@ -26,7 +26,7 @@ const (
 	PortableToolVerifiedWheelLockedReplayV1 PortableToolVerifiedWheelModeV1 = "locked-replay"
 )
 
-// PortableToolPythonVerifiedWheelRequestV1 is the complete input for one
+// portableToolPythonVerifiedWheelRequestV1 is the complete input for one
 // selected portable binding wheel. The selected plan entry and projection are
 // repeated per request intentionally: verification can therefore authenticate
 // every output without consulting mutable global state.
@@ -37,7 +37,7 @@ const (
 // against the selected release before network access or replay.
 // LockedAcquisition must be supplied for locked replay and is the existing
 // provider lock entry, rather than a new replay schema.
-type PortableToolPythonVerifiedWheelRequestV1 struct {
+type portableToolPythonVerifiedWheelRequestV1 struct {
 	SelectedPlanEntry providerapi.PortableToolPlanEntryV1
 	Component         PortableToolPythonComponentV1
 	Binding           PortableToolPythonBindingV1
@@ -69,18 +69,18 @@ type PortableToolVerifiedWheelInputV1 struct {
 	Provenance            providerstore.AcquisitionProvenance
 }
 
-// ProducePortableToolPythonVerifiedWheelsV1 acquires (or reopens during
+// producePortableToolPythonVerifiedWheelsV1 acquires (or reopens during
 // locked replay), inspects, and verifies selected portable Python wheels.
 // Every request is checked for structural and acquisition conflicts before
 // the first acquisition begins. Results are sorted by application scope,
 // distribution, and exact artifact reference. The complete selected
 // projection is required so a partial request set cannot silently omit a
 // binding.
-func ProducePortableToolPythonVerifiedWheelsV1(
+func producePortableToolPythonVerifiedWheelsV1(
 	ctx context.Context,
 	store providerstore.Store,
 	projection PortableToolPythonProjectionV1,
-	requests []PortableToolPythonVerifiedWheelRequestV1,
+	requests []portableToolPythonVerifiedWheelRequestV1,
 ) ([]PortableToolVerifiedWheelInputV1, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("portable Python verified-wheel context is required")
@@ -105,17 +105,17 @@ func ProducePortableToolPythonVerifiedWheelsV1(
 		if !found || !reflect.DeepEqual(component, requests[index].Component) {
 			return nil, fmt.Errorf("portable Python verified-wheel request %d does not match the selected projection component", index)
 		}
-		if err := preflightPortableToolPythonVerifiedWheelRequestV1(requests[index]); err != nil {
+		if err := preflightportableToolPythonVerifiedWheelRequestV1(requests[index]); err != nil {
 			return nil, fmt.Errorf("portable Python verified-wheel request %d: %w", index, err)
 		}
 	}
 	seenOutputs := make(map[string]struct{}, len(requests))
 	seenBindings := make(map[string]struct{}, len(requests))
-	artifactDeclarations := make(map[string]PortableToolPythonVerifiedWheelRequestV1, len(requests))
+	artifactDeclarations := make(map[string]portableToolPythonVerifiedWheelRequestV1, len(requests))
 	requestKeys := make([]string, len(requests))
 	type acquisitionDeclaration struct {
 		index   int
-		request PortableToolPythonVerifiedWheelRequestV1
+		request portableToolPythonVerifiedWheelRequestV1
 	}
 	declarations := make(map[string]acquisitionDeclaration, len(requests))
 	for index := range requests {
@@ -215,19 +215,7 @@ func (input PortableToolVerifiedWheelInputV1) PortableToolArtifactAcquisitionInp
 	}, nil
 }
 
-// PortableToolPythonArtifactSourceFromRecordV1 decodes the selected source
-// record into the provider-store source envelope used to reopen an exact
-// locked artifact. The source record remains the authority for its mirror
-// list; callers do not need to duplicate that decoding at the deployment
-// boundary.
-func PortableToolPythonArtifactSourceFromRecordV1(
-	selected providerapi.PortableToolSelectedRecordV1,
-	descriptor providerstore.ArtifactDescriptor,
-) (providerstore.ArtifactSource, error) {
-	return portableToolPythonSourceFromSelectedRecordV1(selected, descriptor)
-}
-
-func preflightPortableToolPythonVerifiedWheelRequestV1(request PortableToolPythonVerifiedWheelRequestV1) error {
+func preflightportableToolPythonVerifiedWheelRequestV1(request portableToolPythonVerifiedWheelRequestV1) error {
 	switch request.Mode {
 	case PortableToolVerifiedWheelFreshV1:
 		if request.LockedAcquisition != nil {
@@ -357,7 +345,7 @@ type portableToolVerifiedWheelArtifactV1 struct {
 func preparePortableToolPythonVerifiedWheelV1(
 	ctx context.Context,
 	store providerstore.Store,
-	request PortableToolPythonVerifiedWheelRequestV1,
+	request portableToolPythonVerifiedWheelRequestV1,
 ) (portableToolVerifiedWheelArtifactV1, error) {
 	descriptor := request.Acquisition.Artifact
 	provenance := providerstore.AcquisitionProvenance{}
@@ -404,7 +392,7 @@ func preparePortableToolPythonVerifiedWheelV1(
 }
 
 func verifyPortableToolPythonVerifiedWheelV1(
-	request PortableToolPythonVerifiedWheelRequestV1,
+	request portableToolPythonVerifiedWheelRequestV1,
 	prepared portableToolVerifiedWheelArtifactV1,
 ) (PortableToolVerifiedWheelInputV1, error) {
 	verified, err := VerifyPortableToolPythonBindingV1(PortableToolPythonBindingVerificationInputV1{
@@ -438,15 +426,15 @@ func portableToolVerifiedWheelDescriptorV1(binding PortableToolPythonBindingV1) 
 	}
 }
 
-func portableToolVerifiedWheelKeyV1(request PortableToolPythonVerifiedWheelRequestV1) string {
+func portableToolVerifiedWheelKeyV1(request portableToolPythonVerifiedWheelRequestV1) string {
 	return request.Binding.Scope + "\x00" + request.SelectedPlanEntry.Provenance.Tool + "\x00" + portableToolVerifiedWheelArtifactKeyV1(request)
 }
 
-func portableToolVerifiedWheelArtifactKeyV1(request PortableToolPythonVerifiedWheelRequestV1) string {
+func portableToolVerifiedWheelArtifactKeyV1(request portableToolPythonVerifiedWheelRequestV1) string {
 	return request.Binding.Artifact.ID + "\x00" + string(request.Binding.Artifact.Digest)
 }
 
-func portableToolVerifiedWheelAcquisitionKeyV1(request PortableToolPythonVerifiedWheelRequestV1) (string, error) {
+func portableToolVerifiedWheelAcquisitionKeyV1(request portableToolPythonVerifiedWheelRequestV1) (string, error) {
 	source := request.SourceRecord
 	if request.Mode == PortableToolVerifiedWheelLockedReplayV1 {
 		source = request.LockedAcquisition.Source
@@ -463,7 +451,7 @@ func portableToolVerifiedWheelAcquisitionKeyV1(request PortableToolPythonVerifie
 }
 
 func comparePortableToolVerifiedWheelAcquisitionDeclarationsV1(
-	left, right PortableToolPythonVerifiedWheelRequestV1,
+	left, right portableToolPythonVerifiedWheelRequestV1,
 ) error {
 	if left.Mode != right.Mode {
 		return fmt.Errorf("shared artifact uses both fresh and locked-replay modes")
@@ -520,7 +508,7 @@ func portableToolVerifiedWheelInputKeyV1(input PortableToolVerifiedWheelInputV1)
 	return input.Scope + "\x00" + input.Inspection.Distribution + "\x00" + input.Artifact.ID + "\x00" + string(input.Artifact.Digest)
 }
 
-func validatePortableToolLockedAcquisitionV1(request PortableToolPythonVerifiedWheelRequestV1, expected providerstore.ArtifactDescriptor) error {
+func validatePortableToolLockedAcquisitionV1(request portableToolPythonVerifiedWheelRequestV1, expected providerstore.ArtifactDescriptor) error {
 	lock := request.LockedAcquisition
 	if lock.Scope != request.Binding.Scope || lock.Tool != request.SelectedPlanEntry.Provenance.Tool || lock.Artifact != request.Binding.Artifact {
 		return fmt.Errorf("locked acquisition does not bind the selected scope, tool, or artifact reference")
@@ -554,7 +542,7 @@ func validatePortableToolLockedAcquisitionV1(request PortableToolPythonVerifiedW
 	return nil
 }
 
-func portableToolLockedReplayValuesV1(request PortableToolPythonVerifiedWheelRequestV1) (providerstore.ArtifactDescriptor, providerstore.AcquisitionProvenance, providerapi.PortableToolSelectedRecordV1, error) {
+func portableToolLockedReplayValuesV1(request portableToolPythonVerifiedWheelRequestV1) (providerstore.ArtifactDescriptor, providerstore.AcquisitionProvenance, providerapi.PortableToolSelectedRecordV1, error) {
 	lock := request.LockedAcquisition
 	if lock == nil {
 		return providerstore.ArtifactDescriptor{}, providerstore.AcquisitionProvenance{}, providerapi.PortableToolSelectedRecordV1{}, fmt.Errorf("locked replay requires a lock entry")

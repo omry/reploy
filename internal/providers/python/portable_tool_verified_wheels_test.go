@@ -17,7 +17,7 @@ import (
 func producePortableToolPythonVerifiedWheelsForTestV1(
 	ctx context.Context,
 	store providerstore.Store,
-	requests []PortableToolPythonVerifiedWheelRequestV1,
+	requests []portableToolPythonVerifiedWheelRequestV1,
 ) ([]PortableToolVerifiedWheelInputV1, error) {
 	components := map[string]PortableToolPythonComponentV1{}
 	for _, request := range requests {
@@ -33,10 +33,10 @@ func producePortableToolPythonVerifiedWheelsForTestV1(
 	sort.Slice(projection.Components, func(i, j int) bool {
 		return projection.Components[i].Component < projection.Components[j].Component
 	})
-	return ProducePortableToolPythonVerifiedWheelsV1(ctx, store, projection, requests)
+	return producePortableToolPythonVerifiedWheelsV1(ctx, store, projection, requests)
 }
 
-func TestProducePortableToolPythonVerifiedWheelsV1FreshAndDetached(t *testing.T) {
+func TestPortableToolPythonVerifiedWheelsV1FreshAndDetached(t *testing.T) {
 	request, descriptor, content := portableToolVerifiedWheelRequestFixtureV1(t, PortableToolVerifiedWheelFreshV1)
 	root := t.TempDir()
 	store, err := providerstore.NewStore(root)
@@ -46,7 +46,7 @@ func TestProducePortableToolPythonVerifiedWheelsV1FreshAndDetached(t *testing.T)
 	if _, err := store.PublishExpected(context.Background(), descriptor, bytes.NewReader(content)); err != nil {
 		t.Fatal(err)
 	}
-	result, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), store, []PortableToolPythonVerifiedWheelRequestV1{request})
+	result, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), store, []portableToolPythonVerifiedWheelRequestV1{request})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,15 +61,15 @@ func TestProducePortableToolPythonVerifiedWheelsV1FreshAndDetached(t *testing.T)
 	}
 }
 
-func TestProducePortableToolPythonVerifiedWheelsV1RejectsDuplicateBeforeAcquisition(t *testing.T) {
+func TestPortableToolPythonVerifiedWheelsV1RejectsDuplicateBeforeAcquisition(t *testing.T) {
 	request, _, _ := portableToolVerifiedWheelRequestFixtureV1(t, PortableToolVerifiedWheelFreshV1)
-	_, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), providerstore.Store{}, []PortableToolPythonVerifiedWheelRequestV1{request, request})
+	_, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), providerstore.Store{}, []portableToolPythonVerifiedWheelRequestV1{request, request})
 	if err == nil || !strings.Contains(err.Error(), "duplicates exact artifact acquisition") {
 		t.Fatalf("error = %v, want duplicate preflight error", err)
 	}
 }
 
-func TestProducePortableToolPythonVerifiedWheelsV1RejectsIncompleteProjectionBeforeAcquisition(t *testing.T) {
+func TestPortableToolPythonVerifiedWheelsV1RejectsIncompleteProjectionBeforeAcquisition(t *testing.T) {
 	first, _, _ := portableToolVerifiedWheelRequestFixtureV1(t, PortableToolVerifiedWheelFreshV1)
 	second, _, _ := portableToolVerifiedWheelRequestFixtureV1(t, PortableToolVerifiedWheelFreshV1)
 	portableToolVerifiedWheelSetScopeV1(&second, "application:z", "application/z/python")
@@ -77,17 +77,17 @@ func TestProducePortableToolPythonVerifiedWheelsV1RejectsIncompleteProjectionBef
 		Schema:     PortableToolPythonProjectionSchemaV1,
 		Components: []PortableToolPythonComponentV1{first.Component, second.Component},
 	}
-	_, err := ProducePortableToolPythonVerifiedWheelsV1(context.Background(), providerstore.Store{}, projection, []PortableToolPythonVerifiedWheelRequestV1{first})
+	_, err := producePortableToolPythonVerifiedWheelsV1(context.Background(), providerstore.Store{}, projection, []portableToolPythonVerifiedWheelRequestV1{first})
 	if err == nil || !strings.Contains(err.Error(), "cover 1 of 2 selected bindings") {
 		t.Fatalf("error = %v, want incomplete projection rejection", err)
 	}
 }
 
-func TestProducePortableToolPythonVerifiedWheelsV1RejectsMixedModesForDistinctArtifactsBeforeAcquisition(t *testing.T) {
+func TestPortableToolPythonVerifiedWheelsV1RejectsMixedModesForDistinctArtifactsBeforeAcquisition(t *testing.T) {
 	fresh, descriptor, _ := portableToolVerifiedWheelRequestFixtureV1(t, PortableToolVerifiedWheelFreshV1)
 	replay := portableToolVerifiedWheelDistinctToolReplayRequestV1(t, descriptor)
-	for _, request := range []PortableToolPythonVerifiedWheelRequestV1{fresh, replay} {
-		if err := preflightPortableToolPythonVerifiedWheelRequestV1(request); err != nil {
+	for _, request := range []portableToolPythonVerifiedWheelRequestV1{fresh, replay} {
+		if err := preflightportableToolPythonVerifiedWheelRequestV1(request); err != nil {
 			t.Fatalf("fixture is not a valid individual request: %v", err)
 		}
 	}
@@ -95,8 +95,8 @@ func TestProducePortableToolPythonVerifiedWheelsV1RejectsMixedModesForDistinctAr
 		Schema:     PortableToolPythonProjectionSchemaV1,
 		Components: []PortableToolPythonComponentV1{fresh.Component, replay.Component},
 	}
-	_, err := ProducePortableToolPythonVerifiedWheelsV1(context.Background(), providerstore.Store{}, projection,
-		[]PortableToolPythonVerifiedWheelRequestV1{fresh, replay})
+	_, err := producePortableToolPythonVerifiedWheelsV1(context.Background(), providerstore.Store{}, projection,
+		[]portableToolPythonVerifiedWheelRequestV1{fresh, replay})
 	if err == nil || !strings.Contains(err.Error(), "must use one acquisition mode") {
 		t.Fatalf("error = %v, want mixed-mode rejection before acquisition", err)
 	}
@@ -105,7 +105,7 @@ func TestProducePortableToolPythonVerifiedWheelsV1RejectsMixedModesForDistinctAr
 	}
 }
 
-func TestProducePortableToolPythonVerifiedWheelsV1FreshSharedArtifactAcquiredOnce(t *testing.T) {
+func TestPortableToolPythonVerifiedWheelsV1FreshSharedArtifactAcquiredOnce(t *testing.T) {
 	first, descriptor, content := portableToolVerifiedWheelRequestFixtureV1(t, PortableToolVerifiedWheelFreshV1)
 	second, _, _ := portableToolVerifiedWheelRequestFixtureV1(t, PortableToolVerifiedWheelFreshV1)
 	portableToolVerifiedWheelSetScopeV1(&first, "application:z", "application/z/python")
@@ -117,7 +117,7 @@ func TestProducePortableToolPythonVerifiedWheelsV1FreshSharedArtifactAcquiredOnc
 	if _, err := store.PublishExpected(context.Background(), descriptor, bytes.NewReader(content)); err != nil {
 		t.Fatal(err)
 	}
-	result, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), store, []PortableToolPythonVerifiedWheelRequestV1{first, second})
+	result, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), store, []portableToolPythonVerifiedWheelRequestV1{first, second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestProducePortableToolPythonVerifiedWheelsV1FreshSharedArtifactAcquiredOnc
 	}
 }
 
-func TestProducePortableToolPythonVerifiedWheelsV1FreshSharedBytesDifferentRevisions(t *testing.T) {
+func TestPortableToolPythonVerifiedWheelsV1FreshSharedBytesDifferentRevisions(t *testing.T) {
 	first, descriptor, content := portableToolVerifiedWheelRequestFixtureV1(t, PortableToolVerifiedWheelFreshV1)
 	second, _, _ := portableToolVerifiedWheelRequestFixtureV1(t, PortableToolVerifiedWheelFreshV1)
 	portableToolVerifiedWheelSetScopeV1(&first, "application:a", "application/a/python")
@@ -139,7 +139,7 @@ func TestProducePortableToolPythonVerifiedWheelsV1FreshSharedBytesDifferentRevis
 	if _, err := store.PublishExpected(context.Background(), descriptor, bytes.NewReader(content)); err != nil {
 		t.Fatal(err)
 	}
-	result, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), store, []PortableToolPythonVerifiedWheelRequestV1{second, first})
+	result, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), store, []portableToolPythonVerifiedWheelRequestV1{second, first})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestProducePortableToolPythonVerifiedWheelsV1FreshSharedBytesDifferentRevis
 	}
 }
 
-func TestProducePortableToolPythonVerifiedWheelsV1RejectsConflictingSharedSourceBeforeAcquisition(t *testing.T) {
+func TestPortableToolPythonVerifiedWheelsV1RejectsConflictingSharedSourceBeforeAcquisition(t *testing.T) {
 	first, _, _ := portableToolVerifiedWheelRequestFixtureV1(t, PortableToolVerifiedWheelFreshV1)
 	second, _, _ := portableToolVerifiedWheelRequestFixtureV1(t, PortableToolVerifiedWheelFreshV1)
 	portableToolVerifiedWheelSetScopeV1(&first, "application:z", "application/z/python")
@@ -158,19 +158,19 @@ func TestProducePortableToolPythonVerifiedWheelsV1RejectsConflictingSharedSource
 	secondSource.Reference.Digest = portableToolVerifiedWheelSourceDigestV1(t, secondSource.Record.Value)
 	second.SourceRecord = secondSource
 	second.Acquisition.Source.Mirrors = []string{"https://other.invalid/demo.whl"}
-	_, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), providerstore.Store{}, []PortableToolPythonVerifiedWheelRequestV1{first, second})
+	_, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), providerstore.Store{}, []portableToolPythonVerifiedWheelRequestV1{first, second})
 	if err == nil || !strings.Contains(err.Error(), "release manifest must authorize") {
 		t.Fatalf("error = %v, want pre-acquisition source authorization rejection", err)
 	}
 }
 
-func TestProducePortableToolPythonVerifiedWheelsV1RejectsSharedPolicyConflict(t *testing.T) {
+func TestPortableToolPythonVerifiedWheelsV1RejectsSharedPolicyConflict(t *testing.T) {
 	first, _, _ := portableToolVerifiedWheelRequestFixtureV1(t, PortableToolVerifiedWheelFreshV1)
 	second, _, _ := portableToolVerifiedWheelRequestFixtureV1(t, PortableToolVerifiedWheelFreshV1)
 	portableToolVerifiedWheelSetScopeV1(&first, "application:z", "application/z/python")
 	portableToolVerifiedWheelSetScopeV1(&second, "application:a", "application/a/python")
 	second.Acquisition.Policy = providerstore.DefaultAcquisitionPolicy()
-	_, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), providerstore.Store{}, []PortableToolPythonVerifiedWheelRequestV1{first, second})
+	_, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), providerstore.Store{}, []portableToolPythonVerifiedWheelRequestV1{first, second})
 	if err == nil || !strings.Contains(err.Error(), "acquisition policy or operation ID differs") {
 		t.Fatalf("error = %v, want pre-acquisition policy conflict", err)
 	}
@@ -179,7 +179,7 @@ func TestProducePortableToolPythonVerifiedWheelsV1RejectsSharedPolicyConflict(t 
 // The repository does not store the catalog-pinned Playwright wheel because
 // it is large. When supplied by the caller, run it through the complete
 // acquisition, inspection, and binding-verification orchestration.
-func TestProducePortableToolPythonVerifiedWheelsV1SelectedPlaywrightWheel(t *testing.T) {
+func TestPortableToolPythonVerifiedWheelsV1SelectedPlaywrightWheel(t *testing.T) {
 	wheelPath := os.Getenv("REPLOY_TEST_PLAYWRIGHT_WHEEL")
 	if wheelPath == "" {
 		t.Skip("REPLOY_TEST_PLAYWRIGHT_WHEEL is not set")
@@ -224,7 +224,7 @@ func TestProducePortableToolPythonVerifiedWheelsV1SelectedPlaywrightWheel(t *tes
 	sourceRecord := providers.PortableToolSelectedRecordV1{Reference: sourceReference, Record: sourceRecordData}
 	manifest := providers.PortableToolSelectedRecordV1{Reference: manifestReference, Record: manifestRecord}
 	mirror := sourceRecordData.Value["mirrors"].([]any)[0].(string)
-	request := PortableToolPythonVerifiedWheelRequestV1{
+	request := portableToolPythonVerifiedWheelRequestV1{
 		SelectedPlanEntry: plan.Tools[0], Component: component, Binding: binding,
 		ContractRecord: plan.Tools[0].Responsibilities.BindingContracts[0], ArtifactRecord: plan.Tools[0].Responsibilities.BindingArtifacts[0],
 		SourceRecord: sourceRecord, ManifestRecord: manifest, Interpreter: providers.ExecutableEvidence{Facts: CanonicalInterpreterFactsV2(facts)},
@@ -243,7 +243,7 @@ func TestProducePortableToolPythonVerifiedWheelsV1SelectedPlaywrightWheel(t *tes
 	if _, err := store.PublishExpected(context.Background(), descriptor, wheel); err != nil {
 		t.Fatal(err)
 	}
-	result, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), store, []PortableToolPythonVerifiedWheelRequestV1{request})
+	result, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), store, []portableToolPythonVerifiedWheelRequestV1{request})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestProducePortableToolPythonVerifiedWheelsV1SelectedPlaywrightWheel(t *tes
 	}
 }
 
-func TestProducePortableToolPythonVerifiedWheelsV1SortsSharedArtifactPerScope(t *testing.T) {
+func TestPortableToolPythonVerifiedWheelsV1SortsSharedArtifactPerScope(t *testing.T) {
 	first, descriptor, content := portableToolVerifiedWheelRequestFixtureV1(t, PortableToolVerifiedWheelLockedReplayV1)
 	second, _, _ := portableToolVerifiedWheelRequestFixtureV1(t, PortableToolVerifiedWheelLockedReplayV1)
 	first.SelectedPlanEntry.Scope = "application:z"
@@ -279,7 +279,7 @@ func TestProducePortableToolPythonVerifiedWheelsV1SortsSharedArtifactPerScope(t 
 	if _, err := store.PublishExpected(context.Background(), descriptor, bytes.NewReader(content)); err != nil {
 		t.Fatal(err)
 	}
-	result, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), store, []PortableToolPythonVerifiedWheelRequestV1{first, second})
+	result, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), store, []portableToolPythonVerifiedWheelRequestV1{first, second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestProducePortableToolPythonVerifiedWheelsV1SortsSharedArtifactPerScope(t 
 	}
 }
 
-func TestProducePortableToolPythonVerifiedWheelsV1LockedReplayUsesStoreOnly(t *testing.T) {
+func TestPortableToolPythonVerifiedWheelsV1LockedReplayUsesStoreOnly(t *testing.T) {
 	request, descriptor, content := portableToolVerifiedWheelRequestFixtureV1(t, PortableToolVerifiedWheelLockedReplayV1)
 	root := t.TempDir()
 	store, err := providerstore.NewStore(root)
@@ -302,7 +302,7 @@ func TestProducePortableToolPythonVerifiedWheelsV1LockedReplayUsesStoreOnly(t *t
 	if _, err := store.PublishExpected(context.Background(), descriptor, bytes.NewReader(content)); err != nil {
 		t.Fatal(err)
 	}
-	result, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), store, []PortableToolPythonVerifiedWheelRequestV1{request})
+	result, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), store, []portableToolPythonVerifiedWheelRequestV1{request})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestProducePortableToolPythonVerifiedWheelsV1LockedReplayUsesStoreOnly(t *t
 	}
 }
 
-func TestProducePortableToolPythonVerifiedWheelsV1LockedReplaySharedBytesDifferentOutcomes(t *testing.T) {
+func TestPortableToolPythonVerifiedWheelsV1LockedReplaySharedBytesDifferentOutcomes(t *testing.T) {
 	first, descriptor, content := portableToolVerifiedWheelRequestFixtureV1(t, PortableToolVerifiedWheelLockedReplayV1)
 	second, _, _ := portableToolVerifiedWheelRequestFixtureV1(t, PortableToolVerifiedWheelLockedReplayV1)
 	portableToolVerifiedWheelSetScopeV1(&first, "application:a", "application/a/python")
@@ -326,7 +326,7 @@ func TestProducePortableToolPythonVerifiedWheelsV1LockedReplaySharedBytesDiffere
 	if _, err := store.PublishExpected(context.Background(), descriptor, bytes.NewReader(content)); err != nil {
 		t.Fatal(err)
 	}
-	result, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), store, []PortableToolPythonVerifiedWheelRequestV1{second, first})
+	result, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), store, []portableToolPythonVerifiedWheelRequestV1{second, first})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +335,7 @@ func TestProducePortableToolPythonVerifiedWheelsV1LockedReplaySharedBytesDiffere
 	}
 }
 
-func TestProducePortableToolPythonVerifiedWheelsV1LockedReplayFailsMissingOrCorruptStore(t *testing.T) {
+func TestPortableToolPythonVerifiedWheelsV1LockedReplayFailsMissingOrCorruptStore(t *testing.T) {
 	request, descriptor, content := portableToolVerifiedWheelRequestFixtureV1(t, PortableToolVerifiedWheelLockedReplayV1)
 	for _, test := range []struct {
 		name    string
@@ -367,17 +367,17 @@ func TestProducePortableToolPythonVerifiedWheelsV1LockedReplayFailsMissingOrCorr
 			if test.prepare != nil {
 				test.prepare(t, store)
 			}
-			if _, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), store, []PortableToolPythonVerifiedWheelRequestV1{request}); err == nil || !strings.Contains(err.Error(), test.want) {
+			if _, err := producePortableToolPythonVerifiedWheelsForTestV1(context.Background(), store, []portableToolPythonVerifiedWheelRequestV1{request}); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want %q", err, test.want)
 			}
 		})
 	}
 }
 
-func portableToolVerifiedWheelRequestFixtureV1(t *testing.T, mode PortableToolVerifiedWheelModeV1) (PortableToolPythonVerifiedWheelRequestV1, providerstore.ArtifactDescriptor, []byte) {
+func portableToolVerifiedWheelRequestFixtureV1(t *testing.T, mode PortableToolVerifiedWheelModeV1) (portableToolPythonVerifiedWheelRequestV1, providerstore.ArtifactDescriptor, []byte) {
 	t.Helper()
 	verification, descriptor := portableToolPythonBindingVerificationFixtureV1(t, "")
-	input := PortableToolPythonVerifiedWheelRequestV1{
+	input := portableToolPythonVerifiedWheelRequestV1{
 		SelectedPlanEntry: verification.SelectedPlanEntry,
 		Component:         verification.Component,
 		Binding:           verification.Binding,
@@ -428,7 +428,7 @@ func portableToolVerifiedWheelRequestFixtureV1(t *testing.T, mode PortableToolVe
 	return input, descriptor, content
 }
 
-func portableToolVerifiedWheelDistinctToolReplayRequestV1(t *testing.T, descriptor providerstore.ArtifactDescriptor) PortableToolPythonVerifiedWheelRequestV1 {
+func portableToolVerifiedWheelDistinctToolReplayRequestV1(t *testing.T, descriptor providerstore.ArtifactDescriptor) portableToolPythonVerifiedWheelRequestV1 {
 	t.Helper()
 	plan := portableToolPythonPlanForTest(t, "application:z", "two", "demo", "demo==1.0.0")
 	artifact := &plan.Tools[0].Responsibilities.BindingArtifacts[0]
@@ -448,7 +448,7 @@ func portableToolVerifiedWheelDistinctToolReplayRequestV1(t *testing.T, descript
 	facts := portablePythonEligibilityFactsForTest(component.TestedTags, "cpython", "cp312")
 	facts.Version = "3.12.2"
 	facts.CompatibleTags = append([]string{}, binding.SupportedTags...)
-	return PortableToolPythonVerifiedWheelRequestV1{
+	return portableToolPythonVerifiedWheelRequestV1{
 		SelectedPlanEntry: plan.Tools[0], Component: component, Binding: binding,
 		ContractRecord: plan.Tools[0].Responsibilities.BindingContracts[0], ArtifactRecord: *artifact,
 		SourceRecord: source, ManifestRecord: manifest,
@@ -468,7 +468,7 @@ func portableToolVerifiedWheelDistinctToolReplayRequestV1(t *testing.T, descript
 	}
 }
 
-func portableToolVerifiedWheelSetScopeV1(request *PortableToolPythonVerifiedWheelRequestV1, scope, component string) {
+func portableToolVerifiedWheelSetScopeV1(request *portableToolPythonVerifiedWheelRequestV1, scope, component string) {
 	request.SelectedPlanEntry.Scope = scope
 	request.Binding.Scope = scope
 	request.Binding.Component = component
@@ -480,7 +480,7 @@ func portableToolVerifiedWheelSetScopeV1(request *PortableToolPythonVerifiedWhee
 	}
 }
 
-func portableToolVerifiedWheelSetSecondRevisionSourceV1(t *testing.T, request *PortableToolPythonVerifiedWheelRequestV1, descriptor providerstore.ArtifactDescriptor) {
+func portableToolVerifiedWheelSetSecondRevisionSourceV1(t *testing.T, request *portableToolPythonVerifiedWheelRequestV1, descriptor providerstore.ArtifactDescriptor) {
 	t.Helper()
 	request.SelectedPlanEntry.Provenance.Revision = "2"
 	source := portableToolVerifiedWheelSourceRecordV1(t, descriptor,

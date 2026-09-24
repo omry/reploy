@@ -17,7 +17,7 @@ func portablePythonAliasPlanFixtureV1(
 ) (pythonprovider.PortableToolPythonComponentV1, providers.MaterializationTransaction, providers.PortableToolPlanV1) {
 	t.Helper()
 	fresh := portableToolPythonFreshPlaywrightFixtureV1(t, scope)
-	component := fresh.Projection.Components[0]
+	component := portableToolPythonFreshComponentForTestV1(t, &fresh)
 	transaction := rendererTransaction()
 	transaction.NodeID = portablePythonAliasNodeIDV1(component.Component)
 	transaction.RecipeVersion = pythonprovider.MaterializationRecipeVersion
