@@ -906,7 +906,8 @@ func TestPortableRuntimePayloadsLockedMaterializesCompleteSelectedSet(t *testing
 	}
 	if strings.Count(string(dockerfile), "COPY --chown=0:0 --chmod=a=rX") != 3 ||
 		strings.Count(string(dockerfile), "COPY --chown=0:0 --chmod=0555") != 3 ||
-		strings.Contains(string(dockerfile), "RUN ") || strings.Contains(string(dockerfile), "playwright install") ||
+		strings.Count(string(dockerfile), "RUN --network=none [\"/bin/chmod\",\"-R\",\"a=rX\",") != 1 ||
+		strings.Contains(string(dockerfile), "playwright install") ||
 		!strings.Contains(string(dockerfile), "ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=\"1\"") {
 		t.Fatalf("runtime payload layer = %s", dockerfile)
 	}
