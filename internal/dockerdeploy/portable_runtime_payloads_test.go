@@ -397,7 +397,7 @@ func TestPortableRuntimePayloadImageChecksCollisionBeforeBuild(t *testing.T) {
 	}
 	defer payloads.Cleanup()
 	executables, err := collectPortableRuntimeFileEvidenceV1(payloads)
-	if err != nil || len(executables) != 3 {
+	if err != nil || len(executables) != 4 {
 		t.Fatalf("staged executable evidence = %#v, %v", executables, err)
 	}
 	previousCollision, previousBuild := requirePortableRuntimeDestinationsAbsentV1, buildPortableRuntimePayloadLayerV1
@@ -624,6 +624,37 @@ func TestPortableRuntimePayloadImageRejectsStagingMutationAfterMaterialization(t
 				t.Fatalf("staging mutation reached collision/build: collision checks=%d builds=%d", collisionChecks, builds)
 			}
 		})
+	}
+}
+
+func TestPortableRuntimePayloadImageRejectsArchiveMutationBeforeBuild(t *testing.T) {
+	fixture := newPortableToolPythonLockedTestFixture(t)
+	stubPortableRuntimeArchives(t, 0)
+	payloads, err := MaterializePortableRuntimePayloadsLockedV1(context.Background(), fixture.store, fixture.lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer payloads.Cleanup()
+	archive, err := os.OpenFile(filepath.Join(payloads.contextDir, portableRuntimePayloadArchiveV1), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, writeErr := archive.Write([]byte("changed"))
+	if err := errors.Join(writeErr, archive.Close()); err != nil {
+		t.Fatal(err)
+	}
+	previousCollision, previousBuild := requirePortableRuntimeDestinationsAbsentV1, buildPortableRuntimePayloadLayerV1
+	t.Cleanup(func() {
+		requirePortableRuntimeDestinationsAbsentV1, buildPortableRuntimePayloadLayerV1 = previousCollision, previousBuild
+	})
+	requirePortableRuntimeDestinationsAbsentV1 = func(context.Context, providerstore.Store, deploy.ImageDescriptor, []string) error { return nil }
+	buildPortableRuntimePayloadLayerV1 = func(context.Context, providerstore.Store, deploy.ImageDescriptor, string, []byte, RunOptions) (BuiltImageCandidate, error) {
+		t.Fatal("changed runtime archive reached image build")
+		return BuiltImageCandidate{}, nil
+	}
+	if _, err := PreparePortableRuntimePayloadLayerV1(context.Background(), fixture.store, payloads, testProbeImageDescriptor(t, "linux/amd64"), RunOptions{}); err == nil ||
+		!strings.Contains(err.Error(), "archive digest differs") {
+		t.Fatalf("changed runtime archive was accepted: %v", err)
 	}
 }
 
@@ -904,11 +935,45 @@ func TestPortableRuntimePayloadsLockedMaterializesCompleteSelectedSet(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(string(dockerfile), "COPY --chown=0:0 --chmod=a=rX") != 3 ||
-		strings.Count(string(dockerfile), "COPY --chown=0:0 --chmod=0555") != 3 ||
-		strings.Contains(string(dockerfile), "RUN ") || strings.Contains(string(dockerfile), "playwright install") ||
+	if strings.Count(string(dockerfile), `ADD --chown=0:0 ["portable-runtime-payload-v1.tar","/"]`) != 1 ||
+		strings.Contains(string(dockerfile), "COPY ") || strings.Contains(string(dockerfile), "RUN ") ||
+		strings.Contains(string(dockerfile), "playwright install") ||
 		!strings.Contains(string(dockerfile), "ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=\"1\"") {
 		t.Fatalf("runtime payload layer = %s", dockerfile)
+	}
+	archive, err := os.Open(filepath.Join(result.contextDir, portableRuntimePayloadArchiveV1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	want := make(map[string]portableRuntimeInventoryEntryV1, len(result.sealedInventory))
+	for _, item := range result.sealedInventory {
+		want[strings.TrimPrefix(item.path, "/")] = item
+	}
+	reader := tar.NewReader(archive)
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		item, found := want[strings.TrimSuffix(header.Name, "/")]
+		if !found {
+			t.Fatalf("unselected runtime archive entry %q", header.Name)
+		}
+		delete(want, strings.TrimSuffix(header.Name, "/"))
+		if header.Mode != int64(item.mode) || header.Uid != 0 || header.Gid != 0 || header.Size != item.size {
+			t.Fatalf("runtime archive entry %q metadata = %#v, want %#v", header.Name, header, item)
+		}
+		if item.kind == providerstore.ArchiveEntryKindDirectory && header.Typeflag != tar.TypeDir ||
+			item.kind == providerstore.ArchiveEntryKindRegular && header.Typeflag != tar.TypeReg {
+			t.Fatalf("runtime archive entry %q kind = %d, want %s", header.Name, header.Typeflag, item.kind)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("runtime archive omitted %d selected entries", len(want))
 	}
 }
 

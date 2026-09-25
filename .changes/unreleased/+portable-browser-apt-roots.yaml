@@ -1,0 +1,2 @@
+kind: Added
+body: Project selected portable browser dependency roots through the existing APT transaction and verify a compatible AMD64 Chromium launch without privileged runtime setup.
