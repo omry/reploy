@@ -24,14 +24,14 @@ global:swe:deliver-design-stack(docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLA
 
 The active milestone IDs are `PTD-01` through `PTD-14`, `PTD-16` through
 `PTD-27`, and `PTD-29`; `PTD-15` and `PTD-28` are retired. `PTD-21`, `PTD-22`,
-and `PTD-23` are milestone containers, and `PTD-23.1`, `PTD-23.2`,
+`PTD-23`, and `PTD-24` are milestone containers, and `PTD-23.1`, `PTD-23.2`,
 and `PTD-23.3` are nested delivery containers. Their first-class delivery IDs
 are `PTD-21.1` through
 `PTD-21.5`, `PTD-22.1` through `PTD-22.3`, `PTD-23.1.1` through `PTD-23.1.8`,
 `PTD-23.2.1` through `PTD-23.2.5`, and `PTD-23.3.1` through
-`PTD-23.3.7`; every other active milestone is itself one delivery item. The
-preparation gates are prerequisites, not implementation tasks, commits, or pull
-requests. `deliver-design-stack` may
+`PTD-23.3.7`, and `PTD-24.1` through `PTD-24.2`; every other active milestone
+is itself one delivery item. The preparation gates are prerequisites, not
+implementation tasks, commits, or pull requests. `deliver-design-stack` may
 read this plan before preparation is complete, but must pause on an unmet
 preparation gate.
 
@@ -118,9 +118,22 @@ mechanics describe the completed historical slices; the correction stack
 supersedes those mechanics while preserving their acceptance guarantees.
 Every correction PR receives its own local stamp and remote PR cycle. PTD-24
 depends on the corrected, approved stack tip as well as PTD-23.3.7. The
-`PTD-24` identity and scope do not split or change. External repository
-consumption budgets are a pre-publication gate in `REPOSITORY_DESIGN.md`, not
-an embedded-bootstrap implementation slice.
+`PTD-24` scope remains unchanged; its subsequent delivery split is recorded
+below. External repository consumption budgets are a pre-publication gate in
+`REPOSITORY_DESIGN.md`, not an embedded-bootstrap implementation slice.
+
+Plan revision note (2026-09-25): PTD-24 is split before construction into
+two dependent, review-sized children. This stamped plan correction owns one
+plan-only commit and PR after the approved PTD-S5 tip and before `PTD-24.1`;
+it is not a `PTD-*` delivery item and must retain current-head approval in the
+exact ancestry. `PTD-24` remains the milestone container and owns no
+implementation commit or PR. `PTD-24.1` acquires and locks the complete selected
+Chromium payload set, then materializes it offline at the Reploy-owned browser
+root with its runtime environment. `PTD-24.2` contributes the exact target APT
+roots and proves non-root Chromium launch and failure isolation. Each child
+owns one commit, PR, local review, required checks, and remote PR cycle before
+the next activates. The accepted PTD-24 behavior and PTD-25 production-caller
+boundary are unchanged; no browser, binding, target, or support claim is added.
 
 Plan correction note (2026-09-01): PTD-21.4 review exposed duplicate ownership
 of canonical portable-tool record structures and validation between catalog
@@ -327,9 +340,9 @@ before PTD-21.5. Each corrective predecessor owns one commit and PR, is not a
 ancestry. Each `PTD-*` task is then constructed or restacked above PR 82 in
 exact dependency order:
 
-`PTD-21`, `PTD-22`, and `PTD-23` are milestone containers rather than delivery
-slices, and `PTD-23.1`, `PTD-23.2`, and `PTD-23.3` are nested containers rather
-than delivery slices.
+`PTD-21`, `PTD-22`, `PTD-23`, and `PTD-24` are milestone containers rather than
+delivery slices, and `PTD-23.1`, `PTD-23.2`, and `PTD-23.3` are nested
+containers rather than delivery slices.
 Their explicitly enumerated leaf slices are first-class delivery items: each
 owns one commit and one PR, while a container owns neither.
 The sole authorized review-subdivision exception is `PTD-23.1.4`, which remains
@@ -343,7 +356,9 @@ approval; `PTD-22` completes only when `PTD-22.1` through `PTD-22.3` do;
 `PTD-23.1` completes only when `PTD-23.1.1` through `PTD-23.1.8` do; and
 `PTD-23.2` completes only when `PTD-23.2.1` through `PTD-23.2.5` do;
 `PTD-23.3` completes only when `PTD-23.3.1` through `PTD-23.3.7` do. `PTD-23`
-completes only when all three nested containers do. `PTD-22.1` depends directly on `PTD-21.5`, but
+completes only when all three nested containers do. `PTD-24` completes only
+when `PTD-24.1` through `PTD-24.2` have current-head approval. `PTD-22.1`
+depends directly on `PTD-21.5`, but
 cannot activate until the complete `PTD-21` milestone has converged. References
 below to a task as a construction or review unit mean one delivery item,
 including these leaf slices.
@@ -499,8 +514,10 @@ the campaign until durable authority is updated.
 | PTD-23.3.5 | Publish Application-Scoped Python CLI Aliases | PTD-23.3.4 | New work |
 | PTD-23.3.6 | Enforce Portable Binding Operation Order | PTD-23.3.5 | New work |
 | PTD-23.3.7 | Prove Neutral and Playwright Binding Acceptance | PTD-23.3.6 | New work |
-| PTD-24 | Materialize Playwright Chromium Payloads | PTD-23.3.7, then PTD-S5 corrective stack tip | New work |
-| PTD-25 | Derive Portable Tool Integration Cases and Evidence | PTD-24 | New work; closes the PTD-20 production-caller deferral through the PTD-21.5 boundary |
+| PTD-24 | Materialize Playwright Chromium Payloads | PTD-23.3.7, PTD-S5 corrective stack tip, then approved PTD-24 plan-only correction | Milestone container; no owning PR |
+| PTD-24.1 | Materialize Coupled Chromium Payloads Offline | approved PTD-24 plan-only correction after PTD-S5 | New work |
+| PTD-24.2 | Contribute Browser APT Roots and Prove Chromium Launch | PTD-24.1 | New work; completes PTD-24 |
+| PTD-25 | Derive Portable Tool Integration Cases and Evidence | PTD-24.2 | New work; closes the PTD-20 production-caller deferral through the PTD-21.5 boundary |
 | PTD-26 | Validate Every Advertised Java Tuple Through Reploy | PTD-25 | New work |
 | PTD-27 | Validate Every Advertised Playwright Tuple Through Reploy | PTD-26 | New work |
 | PTD-29 | Remove the Flat WIP and Finalize Portable Tool Documentation | PTD-27 | New work |
@@ -1963,20 +1980,79 @@ or bundled-component names. Full required checks pass on the exact candidate.
 Non-goals: Chromium, Headless Shell, FFmpeg, target APT roots, the PTD-25
 ordinary-build caller, or PTD-27 advertised-tuple validation.
 
-### PTD-24: Materialize Playwright Chromium Payloads
+### PTD-24: Materialize Playwright Chromium Payloads (container)
 
 Prerequisite: complete the approved portable-tool simplification stack above
-the PTD-23.3.7 head before constructing this slice.
+the PTD-23.3.7 head, then obtain current-head approval for this stamped
+plan-only correction before constructing `PTD-24.1`.
 
-Scope: acquire and materialize coupled Chromium, Headless Shell, and FFmpeg;
-contribute target APT roots; configure Reploy-owned browser placement and
-disable Playwright download and garbage collection.
+Scope across `PTD-24.1` through `PTD-24.2`: acquire and materialize coupled
+Chromium, Headless Shell, and FFmpeg; contribute target APT roots; configure
+Reploy-owned browser placement and disable Playwright download and garbage
+collection. The container owns no commit or PR, and its children must preserve
+the selected closure and operation ordering established by PTD-23 and the
+simplification stack.
 
 Acceptance: all exact payloads are present; materialization is offline and
 never invokes `playwright install` or `install-deps`; the non-root application
 user launches Chromium; conflicts fail before publication.
 
 Non-goals: WebKit, Firefox, Node binding, or Microsoft Playwright images.
+
+#### PTD-24.1: Materialize Coupled Chromium Payloads Offline
+
+Scope: project the selected Chromium entry's exact three payload descriptors
+and manifest-owned sources into the production acquisition and lock handoff.
+Acquire or reuse verified Chromium, Chromium Headless Shell, and FFmpeg bytes
+through the existing bounded store mechanism before materialization; retain
+the selected source and acquisition outcomes in the lock. Locked replay must
+reverify selected descriptors and use verified cached bytes without consulting
+the embedded catalog or network. Consume only this verified selected handoff
+through the existing reviewed archive primitive to install the complete
+coupled set at the Reploy-owned browser root. Preserve exact archive inventory, path,
+executable, ownership, mode, size, and digest checks, with collision detection
+before publication and cleanup of failed staging. Project the release
+contract's `PLAYWRIGHT_BROWSERS_PATH`, download-suppression, and
+garbage-collection-suppression environment values into the final image without
+running Playwright's installer or building an alternate browser downloader.
+
+Acceptance: the selected closure requires all three exact payloads and no
+unselected payload; missing, duplicate, substituted, truncated, or
+misattributed bytes fail before materialization. Equivalent shared selections
+coalesce only identical acquisitions. Chromium, Headless Shell, and FFmpeg
+land at their exact selected paths; fresh and locked materialization is
+offline and deterministic. Missing or conflicting destinations, unsafe
+archives, interrupted extraction, incorrect modes, and substituted final-image
+content cannot produce a successful materialization; failed staging is cleaned
+and a partial set is never accepted. Focused fresh and locked tests prove the
+acquisition barrier, manifest authorization, provenance, zero-network replay,
+and no `playwright install` or `install-deps`. Browser capability and support
+evidence remain incomplete and fail closed until PTD-24.2 supplies target APT
+roots and launch proof.
+
+Non-goals: native APT roots, browser launch, the PTD-25 ordinary-build caller,
+or additional browser selections.
+
+#### PTD-24.2: Contribute Browser APT Roots and Prove Chromium Launch
+
+Scope: feed the selected target's exact browser package-set roots into the
+existing APT provider transaction, preserving target ownership and conflict
+checks. Complete one contract-level final-image acceptance path for a
+compatible advertised AMD64 target: the non-root application user launches
+selected Chromium with the Reploy-owned browser path and download suppression.
+Keep the generic manifest-derived production caller and exhaustive
+per-advertised-tuple evidence in PTD-25 and PTD-27.
+
+Acceptance: APT roots come only from the selected target, never from
+Playwright's `install-deps` or another target's package set. Missing native
+dependencies, package-root collisions, publication conflicts, network access
+during materialization, wrong browser ownership, and failed non-root launch
+produce no passing result. Focused tests cover every selected package-set
+projection and a compatible target fixture proves the complete coupled
+payload set can launch Chromium without privileged runtime setup.
+
+Non-goals: PTD-25 case generation and evidence persistence, validating every
+advertised tuple, WebKit, Firefox, Node, ARM64, or broader support claims.
 
 ### PTD-25: Derive Portable Tool Integration Cases and Evidence
 
@@ -2054,12 +2130,15 @@ The campaign is complete only when:
   dependency order: `PTD-01` through `PTD-14`, `PTD-16` through `PTD-20`,
   `PTD-21.1` through `PTD-21.5`, `PTD-22.1` through `PTD-22.3`,
   `PTD-23.1.1` through `PTD-23.1.8`, `PTD-23.2.1` through `PTD-23.2.5`,
-  `PTD-23.3.1` through `PTD-23.3.7`, `PTD-24` through `PTD-27`, and
-  `PTD-29`; the `PTD-21`, `PTD-22`, and `PTD-23` milestone containers and nested
-  `PTD-23.1`, `PTD-23.2`, and `PTD-23.3` containers own no PR and close only
+  `PTD-23.3.1` through `PTD-23.3.7`, `PTD-24.1` through `PTD-24.2`,
+  `PTD-25` through `PTD-27`, and `PTD-29`; the `PTD-21`, `PTD-22`, `PTD-23`,
+  and `PTD-24` milestone containers and nested `PTD-23.1`, `PTD-23.2`, and
+  `PTD-23.3` containers own no PR and close only
   when all of their child slices are approved;
 - the five corrective simplification PRs remain approved at their exact heads
-  in order after PTD-23.3.7 and before PTD-24;
+  in order after PTD-23.3.7 and before PTD-24.1;
+- the stamped PTD-24 plan-only corrective predecessor retains current-head
+  approval in the exact ancestry after PTD-S5 and before PTD-24.1;
 - the shared-record-contract corrective prerequisite has current-head approval
   and remains in the exact ancestry after PTD-21.3 and before PTD-21.4;
 - the plan-only corrective predecessor has current-head approval and remains in
