@@ -89,6 +89,10 @@ jobs:
           docker pull python:3.13-slim
           docker pull python:3.12-slim
 
+      - name: Preload pinned Chromium launch fixture
+        if: matrix.name == 'Linux amd64'
+        run: docker pull --platform linux/amd64 docker.io/library/ubuntu@sha256:7b202b0e2e0028c6250f5fcf41d04df492d145a1654c6995a6553f0c1f6f1960
+
       - name: Run provider Docker integration tests
         if: matrix.name == 'Linux amd64'
         env:
@@ -96,6 +100,14 @@ jobs:
         run: >-
           go test -timeout 10m ./internal/dockerdeploy
           -run '^(TestTypedMaterializationLayerDockerIntegration|TestPreparedPythonGraphDockerIntegration|TestPreparedPythonGraphDockerIntegrationPTD2337NeutralBindings|TestPreparedPythonGraphDockerIntegrationPTD2337PlaywrightBinding|TestPreparedAPTPythonGraphDockerIntegration|TestPreparedAPTPythonTwoInterpreterDockerIntegration|TestPreparedAPTPythonNativeLibraryDockerIntegration|TestPythonResolverWheelIntegration)$'
+
+      - name: Prove selected Chromium launches as non-root
+        if: matrix.name == 'Linux amd64'
+        env:
+          REPLOY_DOCKER_INTEGRATION: "1"
+        run: >-
+          go test -count=1 -timeout 30m ./internal/dockerdeploy
+          -run '^TestPortableChromiumUbuntu2604DockerIntegration$'
 
       - name: Run private workload isolation integration tests
         env:

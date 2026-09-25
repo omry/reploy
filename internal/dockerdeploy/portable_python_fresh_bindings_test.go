@@ -418,14 +418,18 @@ func portableToolPythonFreshDigestV1(t *testing.T, seed string) canonical.Digest
 
 func portableToolPythonFreshPlaywrightFixtureV1(t *testing.T, applicationScope string) PortableToolPythonFreshPlanV1 {
 	t.Helper()
+	return portableToolPythonFreshPlaywrightFixtureForTargetV1(t, applicationScope, toolcatalog.TargetIdentityV1{
+		Platform: "linux/amd64", OSReleaseID: "debian", VersionID: "12",
+		OCIArchitecture: "amd64", NativeArchitecture: "amd64", PackageManager: "apt",
+	})
+}
+
+func portableToolPythonFreshPlaywrightFixtureForTargetV1(t *testing.T, applicationScope string, target toolcatalog.TargetIdentityV1) PortableToolPythonFreshPlanV1 {
+	t.Helper()
 	group := toolcatalog.CanonicalRequirementGroupV1{
 		Scope: applicationScope, Tool: "playwright", VersionConstraints: []string{"==1.61.0"}, Context: "runtime",
 		Binding:    toolcatalog.CanonicalBindingDemandV1{Infer: true},
 		Selections: map[string][]string{"browser": {"chromium"}},
-	}
-	target := toolcatalog.TargetIdentityV1{
-		Platform: "linux/amd64", OSReleaseID: "debian", VersionID: "12",
-		OCIArchitecture: "amd64", NativeArchitecture: "amd64", PackageManager: "apt",
 	}
 	domains := []toolcatalog.ProviderDomainSetV1{{
 		Scope: applicationScope, PackageManager: applicationScope + "/packages",

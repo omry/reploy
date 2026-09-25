@@ -1,8 +1,10 @@
 package dockerdeploy
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,11 +17,14 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/portabletool"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
 	"github.com/omry/reploy/internal/toolcatalog"
 )
+
+const portableRuntimePayloadArchiveV1 = "portable-runtime-payload-v1.tar"
 
 // PortableRuntimePayloadsV1 is an offline, disposable build context. Nothing
 // in it is accepted as browser support until the native-package and launch
@@ -49,6 +54,7 @@ type PortableRuntimePayloadsV1 struct {
 	// tree and final-image checks; neither is allowed to derive authority from
 	// a live, caller-mutable tree after this handoff.
 	sealedInventory []portableRuntimeInventoryEntryV1
+	archiveDigest   canonical.Digest
 }
 
 var acquirePortableRuntimePayloadV1 = providerstore.AcquireArtifact
@@ -381,7 +387,73 @@ func MaterializePortableRuntimePayloadsLockedV1(
 		return nil, fmt.Errorf("normalize runtime payload inventory: %w", err)
 	}
 	materialized.sealedInventory = sealedInventory
+	archiveDigest, err := writePortableRuntimePayloadArchiveV1(ctx, materialized)
+	if err != nil {
+		return nil, fmt.Errorf("seal runtime payload archive: %w", err)
+	}
+	materialized.archiveDigest = archiveDigest
 	return materialized, nil
+}
+
+// Build a deterministic Linux layer from the sealed inventory, not host mode
+// bits. Docker ADD extracts this archive without running a command or relying
+// on the configured user in the upstream image.
+func writePortableRuntimePayloadArchiveV1(ctx context.Context, payloads *PortableRuntimePayloadsV1) (digest canonical.Digest, resultErr error) {
+	archivePath := filepath.Join(payloads.contextDir, portableRuntimePayloadArchiveV1)
+	file, err := os.OpenFile(archivePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", err
+	}
+	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
+	hash := sha256.New()
+	writer := tar.NewWriter(io.MultiWriter(file, hash))
+	defer func() {
+		resultErr = errors.Join(resultErr, writer.Close())
+		if resultErr == nil {
+			digest = canonical.Digest(fmt.Sprintf("sha256:%x", hash.Sum(nil)))
+		}
+	}()
+	for _, item := range payloads.sealedInventory {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		name := strings.TrimPrefix(item.path, "/")
+		if name == "" || path.Clean(name) != name || strings.HasPrefix(name, "../") {
+			return "", fmt.Errorf("runtime payload archive path %q is invalid", item.path)
+		}
+		header := &tar.Header{Name: name, Mode: int64(item.mode.Perm()), Uid: 0, Gid: 0, Format: tar.FormatPAX}
+		switch item.kind {
+		case providerstore.ArchiveEntryKindDirectory:
+			header.Name += "/"
+			header.Typeflag = tar.TypeDir
+		case providerstore.ArchiveEntryKindRegular:
+			header.Typeflag = tar.TypeReg
+			header.Size = item.size
+		default:
+			return "", fmt.Errorf("runtime payload archive entry %s has unsupported kind %q", item.path, item.kind)
+		}
+		if err := writer.WriteHeader(header); err != nil {
+			return "", err
+		}
+		if item.kind != providerstore.ArchiveEntryKindRegular {
+			continue
+		}
+		stagedPath := filepath.Join(payloads.contextDir, "rootfs", filepath.FromSlash(name))
+		staged, err := os.Open(stagedPath)
+		if err != nil {
+			return "", err
+		}
+		hash := sha256.New()
+		written, copyErr := io.Copy(io.MultiWriter(writer, hash), staged)
+		closeErr := staged.Close()
+		if err := errors.Join(copyErr, closeErr); err != nil {
+			return "", err
+		}
+		if written != item.size || canonical.Digest(fmt.Sprintf("sha256:%x", hash.Sum(nil))) != item.digest {
+			return "", fmt.Errorf("runtime payload archive entry %s differs from sealed staging", item.path)
+		}
+	}
+	return "", nil
 }
 
 func portableRuntimeExecutableDestinationV1(root, installDirectory, archiveRoot, executable string) (string, error) {
@@ -411,11 +483,8 @@ func portableRuntimeExecutableDestinationV1(root, installDirectory, archiveRoot,
 	return path.Join(root, installDirectory, relative), nil
 }
 
-// portableRuntimeDockerfileV1 realizes the selected Linux modes in the image
-// itself. The bulk copy uses symbolic a=rX so directories remain traversable
-// while ordinary files are read-only, independent of host mode reporting. Each
-// selected executable is then overlaid with a fixed 0555 copy. All overlays
-// stay below an already collision-checked selected destination.
+// portableRuntimeDockerfileV1 extracts the sealed Linux layer without relying
+// on binaries, shell, or the configured USER in the upstream image.
 func portableRuntimeDockerfileV1(copies []sourceBuilderCopyV1, executablePaths []string) ([]byte, error) {
 	if len(copies) == 0 {
 		return nil, fmt.Errorf("runtime payload layer requires at least one materialized tree")
@@ -436,14 +505,6 @@ func portableRuntimeDockerfileV1(copies []sourceBuilderCopyV1, executablePaths [
 			return nil, fmt.Errorf("runtime payload copy destination %q repeats", copy.Destination)
 		}
 		seenDestinations[copy.Destination] = struct{}{}
-		operands, err := json.Marshal([]string{copy.Source, copy.Destination})
-		if err != nil {
-			return nil, err
-		}
-		if bytes.ContainsAny(operands, "\n\r") {
-			return nil, fmt.Errorf("runtime payload copy operands contain line breaks")
-		}
-		fmt.Fprintf(&output, "COPY --chown=0:0 --chmod=a=rX %s\n", operands)
 	}
 	seenExecutables := map[string]struct{}{}
 	for _, executable := range executablePaths {
@@ -454,7 +515,6 @@ func portableRuntimeDockerfileV1(copies []sourceBuilderCopyV1, executablePaths [
 			return nil, fmt.Errorf("runtime executable destination %s repeats", executable)
 		}
 		seenExecutables[executable] = struct{}{}
-		var source string
 		found := false
 		for _, copy := range copies {
 			prefix := copy.Destination + "/"
@@ -465,28 +525,20 @@ func portableRuntimeDockerfileV1(copies []sourceBuilderCopyV1, executablePaths [
 			if relative == "" || relative == "." || path.IsAbs(relative) || path.Clean(relative) != relative {
 				return nil, fmt.Errorf("runtime executable destination %s does not name a file below %s", executable, copy.Destination)
 			}
-			source = path.Join(copy.Source, relative)
 			found = true
 			break
 		}
 		if !found {
 			return nil, fmt.Errorf("runtime executable destination %s is outside selected copies", executable)
 		}
-		operands, err := json.Marshal([]string{source, executable})
-		if err != nil {
-			return nil, err
-		}
-		if bytes.ContainsAny(operands, "\n\r") {
-			return nil, fmt.Errorf("runtime executable operands contain line breaks")
-		}
-		fmt.Fprintf(&output, "COPY --chown=0:0 --chmod=0555 %s\n", operands)
 	}
+	fmt.Fprintf(&output, "ADD --chown=0:0 [\"%s\",\"/\"]\n", portableRuntimePayloadArchiveV1)
 	return output.Bytes(), nil
 }
 
-// Dockerfile produces only fixed COPY and ENV instructions from the validated
-// lock. The caller must collision-check the upstream image and inspect and
-// validate the resulting image before accepting it.
+// Dockerfile produces only fixed ADD and ENV instructions from the validated
+// lock. The caller must collision-check
+// the upstream image and inspect and validate the result before accepting it.
 func (payloads *PortableRuntimePayloadsV1) Dockerfile() ([]byte, error) {
 	if payloads == nil || payloads.workspace == "" {
 		return nil, fmt.Errorf("runtime payloads have been cleaned up")
