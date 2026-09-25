@@ -622,7 +622,9 @@ func comparePortableRuntimeInventoryV1(
 		// mode, size, and content digest.
 		if observedItem.kind != expectedItem.kind || observedItem.mode != expectedItem.mode ||
 			observedItem.size != expectedItem.size || observedItem.digest != expectedItem.digest {
-			return fmt.Errorf("runtime inventory entry %s differs from verified offline staging", imagePath)
+			return fmt.Errorf("runtime inventory entry %s differs from verified offline staging: observed kind=%s mode=%#o size=%d digest=%s; expected kind=%s mode=%#o size=%d digest=%s",
+				imagePath, observedItem.kind, observedItem.mode, observedItem.size, observedItem.digest,
+				expectedItem.kind, expectedItem.mode, expectedItem.size, expectedItem.digest)
 		}
 	}
 	return nil

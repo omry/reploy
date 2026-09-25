@@ -414,8 +414,10 @@ func portableRuntimeExecutableDestinationV1(root, installDirectory, archiveRoot,
 // portableRuntimeDockerfileV1 realizes the selected Linux modes in the image
 // itself. The bulk copy uses symbolic a=rX so directories remain traversable
 // while ordinary files are read-only, independent of host mode reporting. Each
-// selected executable is then overlaid with a fixed 0555 copy. All overlays
-// stay below an already collision-checked selected destination.
+// selected executable is then overlaid with a fixed 0555 copy. Docker creates
+// the COPY destination itself with 0755 even when --chmod is set, so one
+// network-disabled chmod seals those exact selected roots after all copies.
+// All overlays stay below an already collision-checked selected destination.
 func portableRuntimeDockerfileV1(copies []sourceBuilderCopyV1, executablePaths []string) ([]byte, error) {
 	if len(copies) == 0 {
 		return nil, fmt.Errorf("runtime payload layer requires at least one materialized tree")
@@ -481,12 +483,24 @@ func portableRuntimeDockerfileV1(copies []sourceBuilderCopyV1, executablePaths [
 		}
 		fmt.Fprintf(&output, "COPY --chown=0:0 --chmod=0555 %s\n", operands)
 	}
+	chmod := []string{"/bin/chmod", "0555"}
+	for _, copy := range copies {
+		chmod = append(chmod, copy.Destination)
+	}
+	operands, err := json.Marshal(chmod)
+	if err != nil {
+		return nil, err
+	}
+	if bytes.ContainsAny(operands, "\n\r") {
+		return nil, fmt.Errorf("runtime payload chmod operands contain line breaks")
+	}
+	fmt.Fprintf(&output, "RUN --network=none %s\n", operands)
 	return output.Bytes(), nil
 }
 
-// Dockerfile produces only fixed COPY and ENV instructions from the validated
-// lock. The caller must collision-check the upstream image and inspect and
-// validate the resulting image before accepting it.
+// Dockerfile produces only fixed COPY, network-disabled root-mode sealing, and
+// ENV instructions from the validated lock. The caller must collision-check
+// the upstream image and inspect and validate the result before accepting it.
 func (payloads *PortableRuntimePayloadsV1) Dockerfile() ([]byte, error) {
 	if payloads == nil || payloads.workspace == "" {
 		return nil, fmt.Errorf("runtime payloads have been cleaned up")
