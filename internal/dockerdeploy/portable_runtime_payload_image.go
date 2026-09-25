@@ -55,7 +55,7 @@ func (image *PortableRuntimePayloadImageV1) Cleanup(ctx context.Context) error {
 }
 
 // PreparePortableRuntimePayloadLayerV1 checks upstream destinations before
-// COPY, builds only from verified offline staging, and compares the exact
+// ADD, builds only from verified offline staging, and compares the exact
 // selected destination inventory in the resulting image with staged entries.
 // It returns no capability or support evidence.
 func PreparePortableRuntimePayloadLayerV1(
@@ -102,6 +102,9 @@ func PreparePortableRuntimePayloadLayerV1(
 	if err := requirePortableRuntimeDestinationsAbsentV1(ctx, store, upstream, destinations); err != nil {
 		return nil, fmt.Errorf("runtime payload destination collision: %w", err)
 	}
+	if err := verifyPortableRuntimePayloadArchiveV1(payloads); err != nil {
+		return nil, fmt.Errorf("runtime payload archive changed before build: %w", err)
+	}
 	expected := append([]portableRuntimeInventoryEntryV1(nil), payloads.sealedInventory...)
 	options.Context = ctx
 	candidate, err := buildPortableRuntimePayloadLayerV1(ctx, store, upstream, payloads.contextDir, dockerfile, options)
@@ -132,10 +135,30 @@ func PreparePortableRuntimePayloadLayerV1(
 	return result, nil
 }
 
+func verifyPortableRuntimePayloadArchiveV1(payloads *PortableRuntimePayloadsV1) error {
+	if payloads.archiveDigest == "" {
+		return fmt.Errorf("runtime payload archive has no sealed digest")
+	}
+	file, err := os.Open(filepath.Join(payloads.contextDir, portableRuntimePayloadArchiveV1))
+	if err != nil {
+		return err
+	}
+	hash := sha256.New()
+	_, copyErr := io.Copy(hash, file)
+	closeErr := file.Close()
+	if err := errors.Join(copyErr, closeErr); err != nil {
+		return err
+	}
+	if canonical.Digest(fmt.Sprintf("sha256:%x", hash.Sum(nil))) != payloads.archiveDigest {
+		return fmt.Errorf("runtime payload archive digest differs from sealed authority")
+	}
+	return nil
+}
+
 // requirePortableRuntimeDestinationsAbsent performs the candidate-specific
-// preflight needed by ordinary COPY destinations. In addition to preserving
+// preflight needed by archive ADD destinations. In addition to preserving
 // the exact-destination absence check, it rejects a symlink anywhere in the
-// upstream destination ancestor chain: Docker COPY can follow such a link in
+// upstream destination ancestor chain: Docker ADD can follow such a link in
 // the previous image state even when the selected child destination itself is
 // absent.
 func requirePortableRuntimeDestinationsAbsent(
@@ -622,7 +645,9 @@ func comparePortableRuntimeInventoryV1(
 		// mode, size, and content digest.
 		if observedItem.kind != expectedItem.kind || observedItem.mode != expectedItem.mode ||
 			observedItem.size != expectedItem.size || observedItem.digest != expectedItem.digest {
-			return fmt.Errorf("runtime inventory entry %s differs from verified offline staging", imagePath)
+			return fmt.Errorf("runtime inventory entry %s differs from verified offline staging: observed kind=%s mode=%#o size=%d digest=%s; expected kind=%s mode=%#o size=%d digest=%s",
+				imagePath, observedItem.kind, observedItem.mode, observedItem.size, observedItem.digest,
+				expectedItem.kind, expectedItem.mode, expectedItem.size, expectedItem.digest)
 		}
 	}
 	return nil
