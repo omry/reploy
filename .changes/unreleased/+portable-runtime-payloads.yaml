@@ -1,0 +1,2 @@
+kind: Added
+body: Materialize selected portable browser payloads from verified, locked artifacts without running upstream installers or downloading during locked replay.
