@@ -15,4 +15,4 @@ fields:
   install_directory: chromium-1228
   archive_root: chrome-linux64
   symbolic_link_policy: reject
-  executables: [chrome-linux64/chrome]
+  executables: [chrome-linux64/chrome, chrome-linux64/chrome_crashpad_handler]

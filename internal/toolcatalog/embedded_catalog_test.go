@@ -127,18 +127,19 @@ func TestEmbeddedPlaywrightCatalogPinsArtifactInventoryV1(t *testing.T) {
 		t.Fatalf("Playwright bundled components = %#v", binding.BundledComponents)
 	}
 	payloads := []struct {
-		id, revision, upstream, size, sha256, entries, unpacked, root, executable string
+		id, revision, upstream, size, sha256, entries, unpacked, root string
+		executables                                                   []string
 	}{
-		{"chromium/chromium-headless-shell-linux-amd64", "1228", "149.0.7827.55", "119778157", "sha256:410c9407d5de3fea80d9398666be06f2aa09154a3fa7b327dc254e336bb4c4b7", "287", "272987776", "chrome-headless-shell-linux64", "chrome-headless-shell-linux64/chrome-headless-shell"},
-		{"chromium/chromium-linux-amd64", "1228", "149.0.7827.55", "185646494", "sha256:13113b963ac22fffdad898a677591028e4397c46c1daa9e61811258eed6e35b5", "308", "396335288", "chrome-linux64", "chrome-linux64/chrome"},
-		{"chromium/ffmpeg-linux-amd64", "1011", "1011", "2376500", "sha256:ebc74fc5b94830176a3c2914ae96bd8bc7f6a91f4f33890230f84a172ee61ccc", "2", "5127582", ".", "ffmpeg-linux"},
+		{"chromium/chromium-headless-shell-linux-amd64", "1228", "149.0.7827.55", "119778157", "sha256:410c9407d5de3fea80d9398666be06f2aa09154a3fa7b327dc254e336bb4c4b7", "287", "272987776", "chrome-headless-shell-linux64", []string{"chrome-headless-shell-linux64/chrome-headless-shell"}},
+		{"chromium/chromium-linux-amd64", "1228", "149.0.7827.55", "185646494", "sha256:13113b963ac22fffdad898a677591028e4397c46c1daa9e61811258eed6e35b5", "308", "396335288", "chrome-linux64", []string{"chrome-linux64/chrome", "chrome-linux64/chrome_crashpad_handler"}},
+		{"chromium/ffmpeg-linux-amd64", "1011", "1011", "2376500", "sha256:ebc74fc5b94830176a3c2914ae96bd8bc7f6a91f4f33890230f84a172ee61ccc", "2", "5127582", ".", []string{"ffmpeg-linux"}},
 	}
 	for _, want := range payloads {
 		payload := embeddedRecordV1[*PayloadRecordV1](t, "tool:playwright/releases/1.61.0/payloads/"+want.id)
 		if payload.Revision != want.revision || payload.UpstreamVersion != want.upstream || payload.Size != want.size ||
 			payload.SHA256 != canonical.Digest(want.sha256) || payload.Entries != want.entries ||
 			payload.UnpackedSize != want.unpacked || payload.ArchiveRoot != want.root ||
-			!reflect.DeepEqual(payload.Executables, []string{want.executable}) {
+			!reflect.DeepEqual(payload.Executables, want.executables) {
 			t.Fatalf("embedded Playwright payload %q = %#v", want.id, payload)
 		}
 	}
