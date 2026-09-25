@@ -28,9 +28,11 @@ type RequirementProfile struct {
 }
 
 type ValidationEvidence struct {
-	Schema        string           `json:"schema"`
-	SubjectRootFS canonical.Digest `json:"subject_rootfs"`
-	ProfileDigest canonical.Digest `json:"profile_digest"`
+	Schema                    string           `json:"schema"`
+	SubjectRootFS             canonical.Digest `json:"subject_rootfs"`
+	ProfileDigest             canonical.Digest `json:"profile_digest"`
+	PortableToolProfileID     string           `json:"portable_tool_profile_id,omitempty"`
+	PortableToolRuntimeDigest canonical.Digest `json:"portable_tool_runtime_digest,omitempty"`
 }
 
 type ExecutableEvidence struct {
@@ -173,6 +175,37 @@ func NewValidationEvidence(subject canonical.Digest, profileDigest canonical.Dig
 	return evidence, nil
 }
 
+// NewPortableToolValidationEvidence binds a passing portable-tool profile to
+// the exact runtime inputs used by the probe. An absent runtime is distinct
+// from an explicitly selected runtime with an empty environment.
+func NewPortableToolValidationEvidence(
+	subject canonical.Digest,
+	profile PortableToolRecordReferenceV1,
+	runtime *PortableToolRuntimeProjectionV1,
+) (ValidationEvidence, error) {
+	if err := validatePortableToolRecordReferenceV1(profile); err != nil {
+		return ValidationEvidence{}, fmt.Errorf("portable tool validation profile: %w", err)
+	}
+	if runtime != nil {
+		if err := ValidatePortableToolRuntimeProjectionV1(*runtime); err != nil {
+			return ValidationEvidence{}, fmt.Errorf("portable tool validation runtime: %w", err)
+		}
+	}
+	runtimeDigest, err := canonical.Sum("portable-tool-validation-runtime", "portable-tool-validation-runtime-v1", runtime)
+	if err != nil {
+		return ValidationEvidence{}, err
+	}
+	evidence := ValidationEvidence{
+		Schema: ValidationEvidenceSchemaV1, SubjectRootFS: subject,
+		ProfileDigest: profile.Digest, PortableToolProfileID: profile.ID,
+		PortableToolRuntimeDigest: runtimeDigest,
+	}
+	if err := evidence.Validate(); err != nil {
+		return ValidationEvidence{}, err
+	}
+	return evidence, nil
+}
+
 func (evidence ValidationEvidence) Validate() error {
 	if evidence.Schema != ValidationEvidenceSchemaV1 {
 		return fmt.Errorf("validation evidence schema must be %q", ValidationEvidenceSchemaV1)
@@ -182,6 +215,16 @@ func (evidence ValidationEvidence) Validate() error {
 	}
 	if err := evidence.ProfileDigest.Validate(); err != nil {
 		return fmt.Errorf("validation evidence profile digest: %w", err)
+	}
+	if evidence.PortableToolProfileID != "" || evidence.PortableToolRuntimeDigest != "" {
+		if err := validatePortableToolRecordReferenceV1(PortableToolRecordReferenceV1{
+			ID: evidence.PortableToolProfileID, Digest: evidence.ProfileDigest,
+		}); err != nil {
+			return fmt.Errorf("validation evidence portable tool profile: %w", err)
+		}
+		if err := evidence.PortableToolRuntimeDigest.Validate(); err != nil {
+			return fmt.Errorf("validation evidence portable tool runtime: %w", err)
+		}
 	}
 	return nil
 }

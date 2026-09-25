@@ -130,6 +130,39 @@ func TestValidationEvidenceBindsSubjectAndProfile(t *testing.T) {
 	}
 }
 
+func TestPortableToolValidationEvidenceBindsDistinctRuntimeInputs(t *testing.T) {
+	profile := PortableToolRecordReferenceV1{
+		ID: "tool:demo/releases/1.2.3/validation/profiles/default", Digest: testDigest("b"),
+	}
+	first := &PortableToolRuntimeProjectionV1{
+		InstallRoot: "/opt/demo", Environment: []PortableToolEnvironmentVariableV1{},
+	}
+	second := &PortableToolRuntimeProjectionV1{
+		InstallRoot: "/opt/other", Environment: []PortableToolEnvironmentVariableV1{},
+	}
+	a, err := NewPortableToolValidationEvidence(testDigest("a"), profile, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := NewPortableToolValidationEvidence(testDigest("a"), profile, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	absent, err := NewPortableToolValidationEvidence(testDigest("a"), profile, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.PortableToolRuntimeDigest == b.PortableToolRuntimeDigest ||
+		a.PortableToolRuntimeDigest == absent.PortableToolRuntimeDigest ||
+		a.PortableToolProfileID != profile.ID {
+		t.Fatalf("runtime evidence identities overlap: %#v %#v %#v", a, b, absent)
+	}
+	a.PortableToolRuntimeDigest = ""
+	if err := a.Validate(); err == nil {
+		t.Fatal("portable-tool evidence without its runtime identity was accepted")
+	}
+}
+
 func cloneRequirementProfileForTest(profile RequirementProfile) RequirementProfile {
 	result := profile
 	result.Declaration.Executables = append([]ExecutableRequirement{}, profile.Declaration.Executables...)
