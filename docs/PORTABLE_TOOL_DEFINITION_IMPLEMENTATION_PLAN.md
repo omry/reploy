@@ -24,13 +24,14 @@ global:swe:deliver-design-stack(docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLA
 
 The active milestone IDs are `PTD-01` through `PTD-14`, `PTD-16` through
 `PTD-27`, and `PTD-29`; `PTD-15` and `PTD-28` are retired. `PTD-21`, `PTD-22`,
-`PTD-23`, and `PTD-24` are milestone containers, and `PTD-23.1`, `PTD-23.2`,
-and `PTD-23.3` are nested delivery containers. Their first-class delivery IDs
-are `PTD-21.1` through
+`PTD-23`, `PTD-24`, and `PTD-25` are milestone containers, and `PTD-23.1`,
+`PTD-23.2`, and `PTD-23.3` are nested delivery containers. Their first-class
+delivery IDs are `PTD-21.1` through
 `PTD-21.5`, `PTD-22.1` through `PTD-22.3`, `PTD-23.1.1` through `PTD-23.1.8`,
 `PTD-23.2.1` through `PTD-23.2.5`, and `PTD-23.3.1` through
-`PTD-23.3.7`, and `PTD-24.1` through `PTD-24.2`; every other active milestone
-is itself one delivery item. The preparation gates are prerequisites, not
+`PTD-23.3.7`, `PTD-24.1` through `PTD-24.2`, and `PTD-25.1` through
+`PTD-25.6`; every other active milestone is itself one delivery item. The
+preparation gates are prerequisites, not
 implementation tasks, commits, or pull requests. `deliver-design-stack` may
 read this plan before preparation is complete, but must pause on an unmet
 preparation gate.
@@ -134,6 +135,19 @@ roots and proves non-root Chromium launch and failure isolation. Each child
 owns one commit, PR, local review, required checks, and remote PR cycle before
 the next activates. The accepted PTD-24 behavior and PTD-25 production-caller
 boundary are unchanged; no browser, binding, target, or support claim is added.
+
+Plan revision note (2026-09-25): PTD-25 is split before construction into six
+dependent, review-sized children. This stamped plan-only correction owns one
+commit and PR above the approved PTD-24.2 head and before `PTD-25.1`; it is
+not a `PTD-*` delivery item and must retain current-head approval in the exact
+ancestry. `PTD-25` owns no implementation commit or PR. The children separately
+own exact case enumeration and coverage preflight, build-context exact-image
+validation, generic application materialization, application exact-image
+validation, external evidence persistence, and integrated harness
+acceptance. Each child owns one commit, PR, local review, required checks, and
+remote PR cycle before the next
+activates. The accepted validation and evidence contracts and PTD-26/27
+support-matrix ownership are unchanged.
 
 Plan correction note (2026-09-01): PTD-21.4 review exposed duplicate ownership
 of canonical portable-tool record structures and validation between catalog
@@ -340,9 +354,9 @@ before PTD-21.5. Each corrective predecessor owns one commit and PR, is not a
 ancestry. Each `PTD-*` task is then constructed or restacked above PR 82 in
 exact dependency order:
 
-`PTD-21`, `PTD-22`, `PTD-23`, and `PTD-24` are milestone containers rather than
-delivery slices, and `PTD-23.1`, `PTD-23.2`, and `PTD-23.3` are nested
-containers rather than delivery slices.
+`PTD-21`, `PTD-22`, `PTD-23`, `PTD-24`, and `PTD-25` are milestone containers
+rather than delivery slices, and `PTD-23.1`, `PTD-23.2`, and `PTD-23.3` are
+nested containers rather than delivery slices.
 Their explicitly enumerated leaf slices are first-class delivery items: each
 owns one commit and one PR, while a container owns neither.
 The sole authorized review-subdivision exception is `PTD-23.1.4`, which remains
@@ -357,8 +371,9 @@ approval; `PTD-22` completes only when `PTD-22.1` through `PTD-22.3` do;
 `PTD-23.2` completes only when `PTD-23.2.1` through `PTD-23.2.5` do;
 `PTD-23.3` completes only when `PTD-23.3.1` through `PTD-23.3.7` do. `PTD-23`
 completes only when all three nested containers do. `PTD-24` completes only
-when `PTD-24.1` through `PTD-24.2` have current-head approval. `PTD-22.1`
-depends directly on `PTD-21.5`, but
+when `PTD-24.1` through `PTD-24.2` have current-head approval. `PTD-25`
+completes only when `PTD-25.1` through `PTD-25.6` have current-head approval.
+`PTD-22.1` depends directly on `PTD-21.5`, but
 cannot activate until the complete `PTD-21` milestone has converged. References
 below to a task as a construction or review unit mean one delivery item,
 including these leaf slices.
@@ -517,8 +532,14 @@ the campaign until durable authority is updated.
 | PTD-24 | Materialize Playwright Chromium Payloads | PTD-23.3.7, PTD-S5 corrective stack tip, then approved PTD-24 plan-only correction | Milestone container; no owning PR |
 | PTD-24.1 | Materialize Coupled Chromium Payloads Offline | approved PTD-24 plan-only correction after PTD-S5 | New work |
 | PTD-24.2 | Contribute Browser APT Roots and Prove Chromium Launch | PTD-24.1 | New work; completes PTD-24 |
-| PTD-25 | Derive Portable Tool Integration Cases and Evidence | PTD-24.2 | New work; closes the PTD-20 production-caller deferral through the PTD-21.5 boundary |
-| PTD-26 | Validate Every Advertised Java Tuple Through Reploy | PTD-25 | New work |
+| PTD-25 | Derive Portable Tool Integration Cases and Evidence | PTD-24.2, then approved PTD-25 plan-only correction | Milestone container; no owning PR |
+| PTD-25.1 | Derive Exact Integration Cases and Coverage Preflight | approved PTD-25 plan-only correction after PTD-24.2 | New work |
+| PTD-25.2 | Validate Build Cases Against Their Exact Materialized Images | PTD-25.1 | New work |
+| PTD-25.3 | Materialize Generic Application-Scoped Portable Requests | PTD-25.2 | New work |
+| PTD-25.4 | Validate the Exact Application Image | PTD-25.3 | New work |
+| PTD-25.5 | Persist and Match External Validation Evidence | PTD-25.4 | New work |
+| PTD-25.6 | Prove the Generic Integration Harness End to End | PTD-25.5 | New work; completes PTD-25 |
+| PTD-26 | Validate Every Advertised Java Tuple Through Reploy | PTD-25.6 | New work |
 | PTD-27 | Validate Every Advertised Playwright Tuple Through Reploy | PTD-26 | New work |
 | PTD-29 | Remove the Flat WIP and Finalize Portable Tool Documentation | PTD-27 | New work |
 
@@ -2054,7 +2075,11 @@ payload set can launch Chromium without privileged runtime setup.
 Non-goals: PTD-25 case generation and evidence persistence, validating every
 advertised tuple, WebKit, Firefox, Node, ARM64, or broader support claims.
 
-### PTD-25: Derive Portable Tool Integration Cases and Evidence
+### PTD-25: Derive Portable Tool Integration Cases and Evidence (container)
+
+Prerequisite: current-head approval for the stamped PTD-25 plan-only correction
+above the approved PTD-24.2 head. This container owns no implementation commit
+or PR; its contract is delivered by `PTD-25.1` through `PTD-25.6` in order.
 
 Scope: derive runnable cases from release manifests and the exact support cases
 advertised by each target leaf; execute fixtures
@@ -2080,6 +2105,130 @@ Playwright-specific command logic. A missing callback invocation or failed
 profile produces no successful evidence for that case.
 
 Non-goals: completing any tool's support matrix in this slice.
+
+#### PTD-25.1: Derive Exact Integration Cases and Coverage Preflight
+
+Scope: enumerate bounded runnable cases from resolved release manifests and
+each target leaf's exact support-case list. Resolve each case's referenced
+fixture and selected validation profiles and compare the resulting set with
+the advertised context, target, binding set, and normalized selection map.
+Reject missing, duplicate, unadvertised, or cross-produced cases before any
+fixture acquisition or image construction. Keep case derivation independent of
+Java- and Playwright-specific commands.
+
+Acceptance: deterministic case identity and ordering cover every and only
+advertised support tuple; malformed or excess fixture coverage fails closed.
+Negative unit fixtures prove unsupported context, target, binding, and
+selection requests stop before acquisition. No case execution or support
+evidence is claimed by this slice.
+
+Non-goals: ordinary-build callback wiring, application materialization,
+external evidence persistence, or running the full support matrix.
+
+#### PTD-25.2: Validate Build Cases Against Their Exact Materialized Images
+
+Scope: introduce the harness-owned callback at the ordinary Reploy
+build-context materialization handoff. While the inspected result still exists,
+the harness selects only the case's exact locked resolution scope and
+validation schedule and passes its exact image to the PTD-21.5 image-neutral
+boundary. The harness owns that inspected image's retention, release, and
+cleanup through the ordinary build handoff; the boundary does not infer image
+placement from tool or runtime metadata.
+
+Acceptance: a representative manifest-derived build case invokes every
+selected profile against the actual materialized image, exactly once under
+the existing coalescing rules. Missing callback invocation, wrong image,
+wrong scope, failed probe, or cleanup failure produces no passing observation.
+The generic callback contains no Java-specific probe command or whole-lock
+routing. Observations are not yet external support evidence.
+
+Non-goals: application-scoped request activation, external evidence
+persistence, or completing Java tuple coverage.
+
+#### PTD-25.3: Materialize Generic Application-Scoped Portable Requests
+
+Scope: consume canonical application tool requirements through the same
+catalog selection, provider merge, acquisition authorization, and locked
+schedule projection used by ordinary Reploy builds, then materialize the
+selected closure into the correct application image through the existing
+verified-byte and offline provider primitives. Replace the unresolved-request
+rejection only for the now-consumed generic path; keep it effective for any
+request that cannot traverse the complete materialization path. No interim
+provider-specific or catalog-name hook is introduced, and no support evidence
+is declared before case validation.
+
+Acceptance: one compatible application request passed through ordinary Reploy
+resolution yields its exact selected closure in the final application image
+with a scoped locked schedule; fresh materialization and locked replay preserve
+the existing offline and provenance guarantees. Unsupported context, target,
+binding, selection, or conflicting provider contribution fails before
+acquisition. Build-only Java is not routed into an application image, and no
+incomplete runtime request is silently discarded or treated as supported.
+Focused tests cover the complete materialization path and fail-closed cases.
+
+Non-goals: final-image validation callback execution, external support evidence, or
+additional runtime-tool support claims.
+
+#### PTD-25.4: Validate the Exact Application Image
+
+Scope: complete the generic integration caller for an application-scoped case
+by invoking the harness-owned callback with the exact application image
+materialized by PTD-25.3 and its locked scope schedule before the inspected
+result is retained, released, or cleaned up. The callback invokes the
+PTD-21.5 image-neutral boundary; the harness retains image ownership and
+lifecycle responsibility through this application-image handoff, separate
+from source-builder images.
+
+Acceptance: a representative application case invokes every selected profile
+on the actual final image with no build/runtime image classification or
+whole-lock routing. Missing or substituted materialization, wrong image or
+scope, failed profile, callback omission, interrupted build, or cleanup failure
+cannot produce a passing observation. Requests outside the completed generic
+path continue to fail before acquisition; no profile execution is delegated
+to a tool-specific branch.
+
+Non-goals: external evidence persistence, exhaustive target coverage, or
+adding Java runtime or further Playwright options.
+
+#### PTD-25.5: Persist and Match External Validation Evidence
+
+Scope: persist successful harness observations as the existing portable-tool
+validation-evidence v1 record outside definition identity. Bind each record to
+the exact manifest and selected closure, context, target, immutable base-image
+digest, binding set, selection map, fixture, validator version, result, and
+output digest. Provide a strict current-evidence matcher for the derived case
+set; do not infer support from a record's presence alone.
+
+Acceptance: failing, missing, stale, hand-authored, substituted, or
+wrong-target records cannot establish a passing case. Matching records remain
+external to manifest and selected-closure digests; changing any bound input
+invalidates current evidence. Storage and matching tests cover atomic failure
+and exact identity without claiming all advertised tuples have been run.
+
+Non-goals: completing Java or Playwright support matrices or embedding
+validation results in definitions.
+
+#### PTD-25.6: Prove the Generic Integration Harness End to End
+
+Scope: exercise the complete derived-case path through ordinary Reploy
+resolution, acquisition, materialization, exact-image callback, fixed profile
+executor, and external evidence persistence in focused integration jobs.
+Include representative build and application cases and negative cases that
+must fail before acquisition. Run current-evidence matching only for the
+representative cases exercised here; provide the same reusable complete-set
+gate for PTD-26 and PTD-27, where exhaustive per-tool tuple execution and
+current-evidence checks occur. Neither a handwritten case list nor a record
+outside the project-controlled evidence workflow can advertise support.
+
+Acceptance: every selected representative case uses its own exact image,
+locked scope, and validation schedule, and missing callback, failed profile,
+or incomplete evidence makes that case fail. The generic harness contains no
+Java- or Playwright-specific command logic, no whole-lock routing, and no
+premature claim that the full advertised matrix is validated. Focused unit,
+repository, and relevant Docker integration checks pass.
+
+Non-goals: completing Java or Playwright matrix evidence, new bindings or
+browsers, or broader support claims.
 
 ### PTD-26: Validate Every Advertised Java Tuple Through Reploy
 
@@ -2131,14 +2280,16 @@ The campaign is complete only when:
   `PTD-21.1` through `PTD-21.5`, `PTD-22.1` through `PTD-22.3`,
   `PTD-23.1.1` through `PTD-23.1.8`, `PTD-23.2.1` through `PTD-23.2.5`,
   `PTD-23.3.1` through `PTD-23.3.7`, `PTD-24.1` through `PTD-24.2`,
-  `PTD-25` through `PTD-27`, and `PTD-29`; the `PTD-21`, `PTD-22`, `PTD-23`,
-  and `PTD-24` milestone containers and nested `PTD-23.1`, `PTD-23.2`, and
-  `PTD-23.3` containers own no PR and close only
+  `PTD-25.1` through `PTD-25.6`, `PTD-26`, `PTD-27`, and `PTD-29`; the
+  `PTD-21`, `PTD-22`, `PTD-23`, `PTD-24`, and `PTD-25` milestone containers
+  and nested `PTD-23.1`, `PTD-23.2`, and `PTD-23.3` containers own no PR and close only
   when all of their child slices are approved;
 - the five corrective simplification PRs remain approved at their exact heads
   in order after PTD-23.3.7 and before PTD-24.1;
 - the stamped PTD-24 plan-only corrective predecessor retains current-head
   approval in the exact ancestry after PTD-S5 and before PTD-24.1;
+- the stamped PTD-25 plan-only corrective predecessor retains current-head
+  approval in the exact ancestry after PTD-24.2 and before PTD-25.1;
 - the shared-record-contract corrective prerequisite has current-head approval
   and remains in the exact ancestry after PTD-21.3 and before PTD-21.4;
 - the plan-only corrective predecessor has current-head approval and remains in
