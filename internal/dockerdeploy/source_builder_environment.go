@@ -532,6 +532,53 @@ func PrepareSourceBuilderEnvironmentV1(
 	upstream deploy.ImageDescriptor,
 	options RunOptions,
 ) (*SourceBuilderEnvironmentV1, error) {
+	return prepareSourceBuilderEnvironmentV1(ctx, store, tools, upstream, options, PortableToolMaterializationValidationInputFromLockV1)
+}
+
+// ValidateSourceBuilderBuildCaseV1 uses the ordinary builder materialization
+// handoff for one derived integration case. It returns observations only after
+// the exact inspected image has been validated and then removed successfully.
+// These observations are not external support evidence.
+func ValidateSourceBuilderBuildCaseV1(
+	ctx context.Context,
+	store providerstore.Store,
+	tools *SourceBuilderPortableToolsV1,
+	upstream deploy.ImageDescriptor,
+	options RunOptions,
+	caseV1 toolcatalog.IntegrationCaseV1,
+	scope string,
+) ([]providers.ValidationEvidence, error) {
+	if tools == nil || tools.Plan == nil {
+		return nil, fmt.Errorf("portable-tool build case requires a materialized builder plan")
+	}
+	if caseV1.Target.Target != caseV1.Fixture.Target || caseV1.Fixture.Target != tools.Plan.Target ||
+		caseV1.Fixture.Target.Platform != upstream.Platform.Canonical {
+		return nil, fmt.Errorf("portable-tool build case target does not match the materialized builder image")
+	}
+	if upstream.ManifestDigest != caseV1.Fixture.BaseImageDigest {
+		return nil, fmt.Errorf("portable-tool build case upstream manifest digest does not match the fixture base image digest")
+	}
+	environment, err := prepareSourceBuilderEnvironmentV1(ctx, store, tools, upstream, options,
+		func(image InspectedImageCandidate, lock providers.PortableToolLockV1) (PortableToolMaterializationValidationInputV1, error) {
+			return PortableToolBuildCaseValidationInputFromLockV1(image, lock, caseV1, scope)
+		})
+	if err != nil {
+		return nil, err
+	}
+	if err := environment.Cleanup(context.WithoutCancel(ctx)); err != nil {
+		return nil, fmt.Errorf("cleanup source-builder build case: %w", err)
+	}
+	return append([]providers.ValidationEvidence{}, environment.Evidence...), nil
+}
+
+func prepareSourceBuilderEnvironmentV1(
+	ctx context.Context,
+	store providerstore.Store,
+	tools *SourceBuilderPortableToolsV1,
+	upstream deploy.ImageDescriptor,
+	options RunOptions,
+	selectValidationInput func(InspectedImageCandidate, providers.PortableToolLockV1) (PortableToolMaterializationValidationInputV1, error),
+) (*SourceBuilderEnvironmentV1, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("prepare source-builder environment requires a context")
 	}
@@ -598,7 +645,7 @@ func PrepareSourceBuilderEnvironmentV1(
 	// Derive the image's selected validation cases from its validated lock at
 	// the point of use. There is no independently mutable schedule retained by
 	// either the materialized tools or the prepared environment.
-	validationInput, err := PortableToolMaterializationValidationInputFromLockV1(inspected, tools.Lock)
+	validationInput, err := selectValidationInput(inspected, tools.Lock)
 	if err != nil {
 		return fail(fmt.Errorf("schedule source-builder portable tools: %w", err))
 	}
@@ -607,6 +654,9 @@ func PrepareSourceBuilderEnvironmentV1(
 	endValidate(err)
 	if err != nil {
 		return fail(fmt.Errorf("validate source-builder portable tools: %w", err))
+	}
+	if err := requirePortableToolValidationEvidenceForInputV1(validationInput, evidence); err != nil {
+		return fail(fmt.Errorf("validate source-builder portable-tool observations: %w", err))
 	}
 	environment.Evidence = evidence
 	return environment, nil
