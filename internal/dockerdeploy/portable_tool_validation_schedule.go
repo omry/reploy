@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 
 	"github.com/omry/reploy/internal/buildprofile"
@@ -45,6 +46,148 @@ func PortableToolMaterializationValidationInputFromLockV1(
 		return PortableToolMaterializationValidationInputV1{}, err
 	}
 	return PortableToolMaterializationValidationInputV1{Image: image, selected: selected}, nil
+}
+
+// PortableToolBuildCaseValidationInputFromLockV1 binds one catalog-derived
+// build case to the exact resolution scope in the materialized lock. The
+// caller owns the scope: neither tool identity nor runtime metadata chooses
+// which image or lock entries belong to the case.
+func PortableToolBuildCaseValidationInputFromLockV1(
+	image InspectedImageCandidate,
+	lock providers.PortableToolLockV1,
+	closures []toolcatalog.SelectedClosureV1,
+	caseV1 toolcatalog.IntegrationCaseV1,
+	scope string,
+) (PortableToolMaterializationValidationInputV1, error) {
+	if err := requireCatalogDerivedBuildCaseV1(caseV1); err != nil {
+		return PortableToolMaterializationValidationInputV1{}, err
+	}
+	if caseV1.Support.Context != "build" || caseV1.Fixture.Context != "build" ||
+		caseV1.Manifest.Tool == "" || caseV1.ManifestReference.Digest == "" {
+		return PortableToolMaterializationValidationInputV1{}, fmt.Errorf("portable-tool build case requires a derived build-context case")
+	}
+	if err := caseV1.ID.Validate(); err != nil {
+		return PortableToolMaterializationValidationInputV1{}, fmt.Errorf("portable-tool build case identity: %w", err)
+	}
+	schedule, err := providers.PortableToolValidationScheduleFromLockV1(lock)
+	if err != nil {
+		return PortableToolMaterializationValidationInputV1{}, err
+	}
+	scoped, err := providers.PortableToolValidationScheduleForScopeV1(schedule, scope)
+	if err != nil {
+		return PortableToolMaterializationValidationInputV1{}, err
+	}
+	if len(scoped.Entries) == 0 || len(scoped.Entries) != len(caseV1.Fixture.ValidationProfiles) ||
+		len(caseV1.Profiles) != len(caseV1.Fixture.ValidationProfiles) {
+		return PortableToolMaterializationValidationInputV1{}, fmt.Errorf("portable-tool build case scope %q has no exact selected profile set", scope)
+	}
+	var locked *providers.PortableToolPlanEntryV1
+	for _, entry := range lock.Plan.PortableToolPlan.Tools {
+		if entry.Scope == scope && entry.Provenance.Tool == caseV1.Manifest.Tool &&
+			entry.Provenance.ManifestDigest == caseV1.ManifestReference.Digest {
+			if locked != nil {
+				return PortableToolMaterializationValidationInputV1{}, fmt.Errorf("portable-tool build case scope %q selects duplicate releases", scope)
+			}
+			copy := entry
+			locked = &copy
+		}
+	}
+	if locked == nil {
+		return PortableToolMaterializationValidationInputV1{}, fmt.Errorf("portable-tool build case scope %q selects a different release", scope)
+	}
+	matchedClosure := false
+	for _, closure := range closures {
+		if closure.Scope != scope || closure.Provenance.Tool != caseV1.Manifest.Tool {
+			continue
+		}
+		if matchedClosure {
+			return PortableToolMaterializationValidationInputV1{}, fmt.Errorf("portable-tool build case scope %q has duplicate selected closures", scope)
+		}
+		matchedClosure = true
+		if closure.Identity != locked.SelectedClosureDigest ||
+			closure.Provenance.ManifestDigest != caseV1.ManifestReference.Digest ||
+			closure.Target.Identity != caseV1.Target.Target ||
+			closure.Contract.Context != caseV1.Support.Context ||
+			!slices.Equal(closure.Contract.Bindings, caseV1.Support.Bindings) ||
+			!sameBuildCaseSelectionsV1(closure.Contract.Selections, caseV1.Support.Selections) ||
+			!reflect.DeepEqual(closure.Fixture, caseV1.Fixture) {
+			return PortableToolMaterializationValidationInputV1{}, fmt.Errorf("portable-tool build case scope %q selects a different support tuple or closure", scope)
+		}
+	}
+	if !matchedClosure {
+		return PortableToolMaterializationValidationInputV1{}, fmt.Errorf("portable-tool build case scope %q has no selected closure", scope)
+	}
+	for index, entry := range scoped.Entries {
+		if entry.Tool != caseV1.Manifest.Tool || entry.Profile.Reference != caseV1.Fixture.ValidationProfiles[index] ||
+			caseV1.Profiles[index].ID != entry.Profile.Reference.ID {
+			return PortableToolMaterializationValidationInputV1{}, fmt.Errorf("portable-tool build case scope %q selects a different validation profile", scope)
+		}
+	}
+	selected, err := constructScheduledPortableToolProfiles(scoped)
+	if err != nil {
+		return PortableToolMaterializationValidationInputV1{}, err
+	}
+	return PortableToolMaterializationValidationInputV1{Image: image, selected: selected}, nil
+}
+
+func requireCatalogDerivedBuildCaseV1(caseV1 toolcatalog.IntegrationCaseV1) error {
+	cases, err := toolcatalog.EmbeddedIntegrationCasesV1()
+	if err != nil {
+		return fmt.Errorf("derive portable-tool build cases: %w", err)
+	}
+	for _, derived := range cases {
+		if derived.ID == caseV1.ID {
+			if reflect.DeepEqual(derived, caseV1) {
+				return nil
+			}
+			return fmt.Errorf("portable-tool build case differs from its catalog-derived case")
+		}
+	}
+	return fmt.Errorf("portable-tool build case is not catalog-derived")
+}
+
+func sameBuildCaseSelectionsV1(left, right map[string][]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for dimension, values := range left {
+		other, ok := right[dimension]
+		if !ok || !slices.Equal(values, other) {
+			return false
+		}
+	}
+	return true
+}
+
+// requirePortableToolValidationEvidenceForInputV1 refuses a successful
+// handoff unless the callback returned exactly the evidence implied by its
+// locked schedule and inspected image. Identical selected profiles coalesce.
+func requirePortableToolValidationEvidenceForInputV1(
+	input PortableToolMaterializationValidationInputV1,
+	evidence []providers.ValidationEvidence,
+) error {
+	subject, err := deploy.RootFSSubject(input.Image.Descriptor.RootFSDiffIDs)
+	if err != nil {
+		return err
+	}
+	expected := make(map[providers.ValidationEvidence]struct{}, len(input.selected))
+	for _, selected := range input.selected {
+		item, err := providers.NewPortableToolValidationEvidence(subject, selected.entry.Profile.Reference, selected.entry.Runtime)
+		if err != nil {
+			return err
+		}
+		expected[item] = struct{}{}
+	}
+	if len(evidence) != len(expected) {
+		return fmt.Errorf("portable-tool validation callback returned %d observations, want %d", len(evidence), len(expected))
+	}
+	for _, item := range evidence {
+		if _, ok := expected[item]; !ok {
+			return fmt.Errorf("portable-tool validation callback returned an observation for a different image or profile")
+		}
+		delete(expected, item)
+	}
+	return nil
 }
 
 // ValidatePortableToolMaterializationV1 is the production acceptance boundary

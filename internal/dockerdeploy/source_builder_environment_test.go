@@ -575,6 +575,8 @@ type sourceBuilderEnvironmentStub struct {
 	upstream        deploy.ImageDescriptor
 	inspected       InspectedImageCandidate
 	validateErr     error
+	removeErr       error
+	evidenceMode    string
 	schedule        providers.PortableToolValidationScheduleV1
 	removed         []BuiltImageCandidate
 }
@@ -626,12 +628,26 @@ func stubSourceBuilderEnvironment(t *testing.T, stub *sourceBuilderEnvironmentSt
 		if stub.validateErr != nil {
 			return nil, stub.validateErr
 		}
-		return []providers.ValidationEvidence{{Schema: "test-evidence", SubjectRootFS: input.Image.Image.RootFSSubject, ProfileDigest: rendererDigest("1")}}, nil
+		var evidence []providers.ValidationEvidence
+		for _, selected := range input.selected {
+			item, err := providers.NewPortableToolValidationEvidence(input.Image.Image.RootFSSubject, selected.entry.Profile.Reference, selected.entry.Runtime)
+			if err != nil {
+				return nil, err
+			}
+			evidence = append(evidence, item)
+		}
+		switch stub.evidenceMode {
+		case "missing":
+			return nil, nil
+		case "wrong image":
+			evidence[0].SubjectRootFS = canonical.Digest("sha256:" + strings.Repeat("f", 64))
+		}
+		return evidence, nil
 	}
 	removeSourceBuilderLayerV1 = func(_ context.Context, got BuiltImageCandidate) error {
 		stub.order = append(stub.order, "remove")
 		stub.removed = append(stub.removed, got)
-		return nil
+		return stub.removeErr
 	}
 }
 
@@ -708,6 +724,222 @@ func TestPrepareSourceBuilderEnvironmentV1RemovesTheImageWhenValidationFails(t *
 	}
 	if !reflect.DeepEqual(environmentStub.order, []string{"collision-check", "build", "inspect", "validate", "remove"}) {
 		t.Fatalf("order = %#v", environmentStub.order)
+	}
+}
+
+func buildIntegrationCaseForSourceBuilderTest(t *testing.T) toolcatalog.IntegrationCaseV1 {
+	t.Helper()
+	cases, err := toolcatalog.EmbeddedIntegrationCasesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, caseV1 := range cases {
+		if caseV1.Support.Context == "build" && caseV1.Fixture.Target == sourceBuilderJavaTarget("debian", "12") {
+			return caseV1
+		}
+	}
+	t.Fatal("embedded catalog has no representative Debian build case")
+	return toolcatalog.IntegrationCaseV1{}
+}
+
+func sourceBuilderCaseUpstreamForTest(t *testing.T, caseV1 toolcatalog.IntegrationCaseV1) deploy.ImageDescriptor {
+	t.Helper()
+	upstream := sourceBuilderTestImageDescriptor(t, "1")
+	upstream.AuthorReference = caseV1.Fixture.BaseImage
+	upstream.ImmutableReference = "docker.io/library/debian@" + string(caseV1.Fixture.BaseImageDigest)
+	upstream.ManifestDigest = caseV1.Fixture.BaseImageDigest
+	if err := upstream.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return upstream
+}
+
+func TestValidateSourceBuilderBuildCaseV1UsesExactImageAndScope(t *testing.T) {
+	stub := &sourceBuilderMaterializationStub{}
+	tools, store := materializeSourceBuilderJavaForTest(t, stub, "alpha", "beta")
+	defer tools.Cleanup()
+	caseV1 := buildIntegrationCaseForSourceBuilderTest(t)
+	scope := tools.Plan.Recipes["alpha"].Scope
+	wholeSchedule, err := providers.PortableToolValidationScheduleFromLockV1(tools.Lock)
+	if err != nil || len(wholeSchedule.Entries) != 2 {
+		t.Fatalf("representative locked build needs two scopes, got %#v, %v", wholeSchedule, err)
+	}
+	image := sourceBuilderTestImageDescriptor(t, "2")
+	environmentStub := &sourceBuilderEnvironmentStub{}
+	stubSourceBuilderEnvironment(t, environmentStub, image)
+	evidence, err := ValidateSourceBuilderBuildCaseV1(
+		context.Background(), store, tools, sourceBuilderCaseUpstreamForTest(t, caseV1), RunOptions{}, caseV1, scope,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(environmentStub.order, []string{"collision-check", "build", "inspect", "validate", "remove"}) ||
+		len(environmentStub.schedule.Entries) != 1 ||
+		environmentStub.schedule.Entries[0].Scope != scope ||
+		environmentStub.schedule.Entries[0].Profile.Reference != caseV1.Fixture.ValidationProfiles[0] || len(evidence) != 1 ||
+		evidence[0].SubjectRootFS != environmentStub.inspected.Image.RootFSSubject {
+		t.Fatalf("build case did not validate the exact inspected image and selected scope: order=%v schedule=%#v evidence=%#v", environmentStub.order, environmentStub.schedule, evidence)
+	}
+	if len(environmentStub.removed) != 1 {
+		t.Fatalf("builder image removed %d times, want once", len(environmentStub.removed))
+	}
+}
+
+func TestValidateSourceBuilderBuildCaseV1FailsClosed(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*toolcatalog.IntegrationCaseV1, *string)
+		want   string
+	}{
+		{"wrong scope", func(_ *toolcatalog.IntegrationCaseV1, scope *string) { *scope = "source-builder:other" }, "exact selected profile set"},
+		{"wrong release", func(caseV1 *toolcatalog.IntegrationCaseV1, _ *string) {
+			caseV1.ManifestReference.Digest = canonical.Digest("sha256:" + strings.Repeat("f", 64))
+		}, "catalog-derived"},
+		{"wrong profile", func(caseV1 *toolcatalog.IntegrationCaseV1, _ *string) {
+			caseV1.Fixture.ValidationProfiles[0].Digest = canonical.Digest("sha256:" + strings.Repeat("f", 64))
+		}, "catalog-derived"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stub := &sourceBuilderMaterializationStub{}
+			tools, store := materializeSourceBuilderJavaForTest(t, stub, "alpha")
+			defer tools.Cleanup()
+			caseV1 := buildIntegrationCaseForSourceBuilderTest(t)
+			scope := tools.Plan.Recipes["alpha"].Scope
+			test.change(&caseV1, &scope)
+			environmentStub := &sourceBuilderEnvironmentStub{}
+			stubSourceBuilderEnvironment(t, environmentStub, sourceBuilderTestImageDescriptor(t, "2"))
+			evidence, err := ValidateSourceBuilderBuildCaseV1(
+				context.Background(), store, tools, sourceBuilderCaseUpstreamForTest(t, caseV1), RunOptions{}, caseV1, scope,
+			)
+			wantOrder := []string{"collision-check", "build", "inspect", "remove"}
+			if test.name != "wrong scope" {
+				wantOrder = nil
+			}
+			if err == nil || evidence != nil || !strings.Contains(err.Error(), test.want) ||
+				!reflect.DeepEqual(environmentStub.order, wantOrder) {
+				t.Fatalf("invalid case yielded evidence=%#v, error=%v, order=%v", evidence, err, environmentStub.order)
+			}
+		})
+	}
+}
+
+func TestValidateSourceBuilderBuildCaseV1RejectsWrongTargetBeforeImageBuild(t *testing.T) {
+	stub := &sourceBuilderMaterializationStub{}
+	tools, store := materializeSourceBuilderJavaForTest(t, stub, "alpha")
+	defer tools.Cleanup()
+	caseV1 := buildIntegrationCaseForSourceBuilderTest(t)
+	caseV1.Fixture.Target.VersionID = "13"
+	environmentStub := &sourceBuilderEnvironmentStub{}
+	stubSourceBuilderEnvironment(t, environmentStub, sourceBuilderTestImageDescriptor(t, "2"))
+	evidence, err := ValidateSourceBuilderBuildCaseV1(
+		context.Background(), store, tools, sourceBuilderCaseUpstreamForTest(t, caseV1), RunOptions{},
+		caseV1, tools.Plan.Recipes["alpha"].Scope,
+	)
+	if err == nil || evidence != nil || !strings.Contains(err.Error(), "target does not match") || len(environmentStub.order) != 0 {
+		t.Fatalf("wrong target yielded evidence=%#v, error=%v, order=%v", evidence, err, environmentStub.order)
+	}
+}
+
+func TestValidateSourceBuilderBuildCaseV1RejectsWrongFixtureBaseBeforeImageBuild(t *testing.T) {
+	stub := &sourceBuilderMaterializationStub{}
+	tools, store := materializeSourceBuilderJavaForTest(t, stub, "alpha")
+	defer tools.Cleanup()
+	caseV1 := buildIntegrationCaseForSourceBuilderTest(t)
+	upstream := sourceBuilderCaseUpstreamForTest(t, caseV1)
+	otherDigest := canonical.Digest("sha256:" + strings.Repeat("f", 64))
+	upstream.ImmutableReference = "docker.io/library/debian@" + string(otherDigest)
+	upstream.ManifestDigest = otherDigest
+	if err := upstream.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	environmentStub := &sourceBuilderEnvironmentStub{}
+	stubSourceBuilderEnvironment(t, environmentStub, sourceBuilderTestImageDescriptor(t, "2"))
+	evidence, err := ValidateSourceBuilderBuildCaseV1(
+		context.Background(), store, tools, upstream, RunOptions{},
+		caseV1, tools.Plan.Recipes["alpha"].Scope,
+	)
+	if err == nil || evidence != nil || !strings.Contains(err.Error(), "fixture base image digest") || len(environmentStub.order) != 0 {
+		t.Fatalf("substituted fixture base yielded evidence=%#v, error=%v, order=%v", evidence, err, environmentStub.order)
+	}
+}
+
+func TestValidateSourceBuilderBuildCaseV1RejectsSubstitutedCaseFixtureBeforeImageBuild(t *testing.T) {
+	stub := &sourceBuilderMaterializationStub{}
+	tools, store := materializeSourceBuilderJavaForTest(t, stub, "alpha")
+	defer tools.Cleanup()
+	caseV1 := buildIntegrationCaseForSourceBuilderTest(t)
+	caseV1.Fixture.BaseImageDigest = canonical.Digest("sha256:" + strings.Repeat("f", 64))
+	upstream := sourceBuilderCaseUpstreamForTest(t, caseV1)
+	environmentStub := &sourceBuilderEnvironmentStub{}
+	stubSourceBuilderEnvironment(t, environmentStub, sourceBuilderTestImageDescriptor(t, "2"))
+	evidence, err := ValidateSourceBuilderBuildCaseV1(
+		context.Background(), store, tools, upstream, RunOptions{},
+		caseV1, tools.Plan.Recipes["alpha"].Scope,
+	)
+	if err == nil || evidence != nil || !strings.Contains(err.Error(), "catalog-derived") || len(environmentStub.order) != 0 {
+		t.Fatalf("substituted case fixture yielded evidence=%#v, error=%v, order=%v", evidence, err, environmentStub.order)
+	}
+}
+
+func TestValidateSourceBuilderBuildCaseV1RejectsDifferentSelectedTuple(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*toolcatalog.SelectedClosureV1)
+	}{
+		{"bindings", func(closure *toolcatalog.SelectedClosureV1) { closure.Contract.Bindings = []string{"other"} }},
+		{"selections", func(closure *toolcatalog.SelectedClosureV1) {
+			closure.Contract.Selections = map[string][]string{"variant": {"other"}}
+		}},
+		{"fixture", func(closure *toolcatalog.SelectedClosureV1) {
+			closure.Fixture.BaseImageDigest = canonical.Digest("sha256:" + strings.Repeat("f", 64))
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stub := &sourceBuilderMaterializationStub{}
+			tools, store := materializeSourceBuilderJavaForTest(t, stub, "alpha")
+			defer tools.Cleanup()
+			caseV1 := buildIntegrationCaseForSourceBuilderTest(t)
+			test.change(&tools.Plan.Closures[0])
+			environmentStub := &sourceBuilderEnvironmentStub{}
+			stubSourceBuilderEnvironment(t, environmentStub, sourceBuilderTestImageDescriptor(t, "2"))
+			evidence, err := ValidateSourceBuilderBuildCaseV1(
+				context.Background(), store, tools, sourceBuilderCaseUpstreamForTest(t, caseV1), RunOptions{},
+				caseV1, tools.Plan.Recipes["alpha"].Scope,
+			)
+			if err == nil || evidence != nil || !strings.Contains(err.Error(), "different support tuple or closure") ||
+				!reflect.DeepEqual(environmentStub.order, []string{"collision-check", "build", "inspect", "remove"}) {
+				t.Fatalf("different %s yielded evidence=%#v, error=%v, order=%v", test.name, evidence, err, environmentStub.order)
+			}
+		})
+	}
+}
+
+func TestValidateSourceBuilderBuildCaseV1RejectsMissingWrongAndUncleanObservations(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		stub sourceBuilderEnvironmentStub
+		want string
+	}{
+		{"missing callback evidence", sourceBuilderEnvironmentStub{evidenceMode: "missing"}, "returned 0 observations"},
+		{"wrong image evidence", sourceBuilderEnvironmentStub{evidenceMode: "wrong image"}, "different image or profile"},
+		{"failed probe", sourceBuilderEnvironmentStub{validateErr: errors.New("probe failed")}, "probe failed"},
+		{"failed cleanup", sourceBuilderEnvironmentStub{removeErr: errors.New("remove failed")}, "remove failed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stub := &sourceBuilderMaterializationStub{}
+			tools, store := materializeSourceBuilderJavaForTest(t, stub, "alpha")
+			defer tools.Cleanup()
+			caseV1 := buildIntegrationCaseForSourceBuilderTest(t)
+			environmentStub := &test.stub
+			stubSourceBuilderEnvironment(t, environmentStub, sourceBuilderTestImageDescriptor(t, "2"))
+			evidence, err := ValidateSourceBuilderBuildCaseV1(
+				context.Background(), store, tools, sourceBuilderCaseUpstreamForTest(t, caseV1), RunOptions{},
+				caseV1, tools.Plan.Recipes["alpha"].Scope,
+			)
+			if err == nil || evidence != nil || !strings.Contains(err.Error(), test.want) || len(environmentStub.removed) != 1 {
+				t.Fatalf("failed case yielded evidence=%#v, error=%v, removed=%v", evidence, err, environmentStub.removed)
+			}
+		})
 	}
 }
 
