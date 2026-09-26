@@ -2,6 +2,7 @@ package toolcatalog
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 
 	"github.com/omry/reploy/internal/canonical"
@@ -133,4 +134,55 @@ func (catalog *CatalogV1) DeriveIntegrationCasesV1() ([]IntegrationCaseV1, error
 // first-party catalog for integration harnesses.
 func EmbeddedIntegrationCasesV1() ([]IntegrationCaseV1, error) {
 	return mustLoadEmbeddedCatalogV1().DeriveIntegrationCasesV1()
+}
+
+// EmbeddedSelectedClosureForIntegrationCaseV1 reconstructs the complete
+// selected closure for one authenticated catalog case and caller-owned scope.
+// Unlike a caller-supplied closure or lock digest, its runtime, exports,
+// target contributions, and selected records come from embedded definitions.
+func EmbeddedSelectedClosureForIntegrationCaseV1(caseV1 IntegrationCaseV1, scope string) (SelectedClosureV1, error) {
+	catalog := mustLoadEmbeddedCatalogV1()
+	cases, err := catalog.DeriveIntegrationCasesV1()
+	if err != nil {
+		return SelectedClosureV1{}, err
+	}
+	authenticated := false
+	for _, derived := range cases {
+		if derived.ID == caseV1.ID && reflect.DeepEqual(derived, caseV1) {
+			authenticated = true
+			break
+		}
+	}
+	if !authenticated {
+		return SelectedClosureV1{}, fmt.Errorf("portable-tool integration case is not catalog-derived")
+	}
+	view, err := catalog.resolvedViewV1(recordKeyV1{ID: caseV1.ManifestReference.ID, Digest: caseV1.ManifestReference.Digest})
+	if err != nil {
+		return SelectedClosureV1{}, err
+	}
+	contractRecord, err := resolvedRecordV1(view, caseV1.Manifest.Contract)
+	if err != nil {
+		return SelectedClosureV1{}, err
+	}
+	contract, ok := contractRecord.Value.(*ReleaseContractV1)
+	if !ok {
+		return SelectedClosureV1{}, fmt.Errorf("integration case contract is not a release contract")
+	}
+	tuple := supportTupleV1{Context: caseV1.Support.Context, Bindings: caseV1.Support.Bindings, Selections: caseV1.Support.Selections}
+	if err := validateTupleContributionsV1(view, contract, &caseV1.Target, tuple); err != nil {
+		return SelectedClosureV1{}, err
+	}
+	contributions, exports, err := candidateContributionsV1(view, contract, &caseV1.Target, tuple)
+	if err != nil {
+		return SelectedClosureV1{}, err
+	}
+	candidate := ReleaseCandidateV1{
+		Scope: scope, Manifest: caseV1.Manifest, Contract: *contract, Target: caseV1.Target,
+		Fixture: caseV1.Fixture, Profiles: caseV1.Profiles,
+		Bindings: caseV1.Support.Bindings, Selections: caseV1.Support.Selections,
+		Contributions: contributions, Exports: exports,
+	}
+	return catalog.finalizeSelectedClosureV1(CanonicalRequirementGroupV1{
+		Scope: scope, Tool: caseV1.Manifest.Tool, Context: caseV1.Support.Context,
+	}, candidate)
 }
