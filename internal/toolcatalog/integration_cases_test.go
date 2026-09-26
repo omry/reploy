@@ -97,3 +97,34 @@ func TestDeriveIntegrationCasesV1FailsCoverageBeforeExecution(t *testing.T) {
 		})
 	}
 }
+
+func TestEmbeddedSelectedClosureForIntegrationCaseV1AuthenticatesCompleteCase(t *testing.T) {
+	cases, err := EmbeddedIntegrationCasesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, caseV1 := range cases {
+		scope := "application:integration-case"
+		if caseV1.Support.Context == "build" {
+			scope = "source-builder:integration-case"
+		}
+		closure, err := EmbeddedSelectedClosureForIntegrationCaseV1(caseV1, scope)
+		if err != nil {
+			t.Fatalf("derive %s closure: %v", caseV1.ID, err)
+		}
+		if closure.Scope != scope || closure.Provenance.ManifestDigest != caseV1.ManifestReference.Digest ||
+			closure.Target.Identity != caseV1.Target.Target || !reflect.DeepEqual(closure.Fixture, caseV1.Fixture) ||
+			!reflect.DeepEqual(closure.Profiles, caseV1.Profiles) {
+			t.Fatalf("derived closure does not bind case %s", caseV1.ID)
+		}
+		if _, err := CompilePortableToolPlanV1([]SelectedClosureV1{closure}); err != nil {
+			t.Fatalf("compile %s closure: %v", caseV1.ID, err)
+		}
+	}
+	changed := cases[0]
+	changed.Fixture.BaseImageDigest = canonical.Digest("sha256:" + strings.Repeat("f", 64))
+	if _, err := EmbeddedSelectedClosureForIntegrationCaseV1(changed, "source-builder:integration-case"); err == nil ||
+		!strings.Contains(err.Error(), "catalog-derived") {
+		t.Fatalf("mutated case yielded error %v", err)
+	}
+}
