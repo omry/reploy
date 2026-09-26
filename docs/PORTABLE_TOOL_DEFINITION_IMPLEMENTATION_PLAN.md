@@ -25,11 +25,12 @@ global:swe:deliver-design-stack(docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLA
 The active milestone IDs are `PTD-01` through `PTD-14`, `PTD-16` through
 `PTD-27`, and `PTD-29`; `PTD-15` and `PTD-28` are retired. `PTD-21`, `PTD-22`,
 `PTD-23`, `PTD-24`, and `PTD-25` are milestone containers, and `PTD-23.1`,
-`PTD-23.2`, and `PTD-23.3` are nested delivery containers. Their first-class
+`PTD-23.2`, `PTD-23.3`, and `PTD-25.3` are nested delivery containers. Their first-class
 delivery IDs are `PTD-21.1` through
 `PTD-21.5`, `PTD-22.1` through `PTD-22.3`, `PTD-23.1.1` through `PTD-23.1.8`,
 `PTD-23.2.1` through `PTD-23.2.5`, and `PTD-23.3.1` through
-`PTD-23.3.7`, `PTD-24.1` through `PTD-24.2`, and `PTD-25.1` through
+`PTD-23.3.7`, `PTD-24.1` through `PTD-24.2`, `PTD-25.1` through
+`PTD-25.2`, `PTD-25.3.1` through `PTD-25.3.3`, and `PTD-25.4` through
 `PTD-25.6`; every other active milestone is itself one delivery item. The
 preparation gates are prerequisites, not
 implementation tasks, commits, or pull requests. `deliver-design-stack` may
@@ -148,6 +149,19 @@ acceptance. Each child owns one commit, PR, local review, required checks, and
 remote PR cycle before the next
 activates. The accepted validation and evidence contracts and PTD-26/27
 support-matrix ownership are unchanged.
+
+Plan revision note (2026-09-26): implementation review after PTD-25.2 showed
+that PTD-25.3 crosses three independently testable boundaries. PTD-25.3 is
+therefore a nested container, not one implementation PR. A plan-only correction
+is stamped and approved above the PTD-25.2 head before PTD-25.3.1 begins.
+PTD-25.3.1 owns canonical application selection and provider-conflict preflight;
+PTD-25.3.2 owns selected Python binding acquisition and locked graph replay;
+PTD-25.3.3 owns runtime payload layering, final-image lock assembly, and the
+ordinary request-boundary switch. Each owns one commit, PR, local review,
+required checks, and remote PR cycle in that order. Until PTD-25.3.3 proves
+the entire path, ordinary application requests remain rejected. The parent
+PTD-25.3 acceptance contract and later PTD-25.4 through PTD-25.6 contracts
+are unchanged.
 
 Plan correction note (2026-09-01): PTD-21.4 review exposed duplicate ownership
 of canonical portable-tool record structures and validation between catalog
@@ -355,8 +369,8 @@ ancestry. Each `PTD-*` task is then constructed or restacked above PR 82 in
 exact dependency order:
 
 `PTD-21`, `PTD-22`, `PTD-23`, `PTD-24`, and `PTD-25` are milestone containers
-rather than delivery slices, and `PTD-23.1`, `PTD-23.2`, and `PTD-23.3` are
-nested containers rather than delivery slices.
+rather than delivery slices, and `PTD-23.1`, `PTD-23.2`, `PTD-23.3`, and
+`PTD-25.3` are nested containers rather than delivery slices.
 Their explicitly enumerated leaf slices are first-class delivery items: each
 owns one commit and one PR, while a container owns neither.
 The sole authorized review-subdivision exception is `PTD-23.1.4`, which remains
@@ -371,8 +385,10 @@ approval; `PTD-22` completes only when `PTD-22.1` through `PTD-22.3` do;
 `PTD-23.2` completes only when `PTD-23.2.1` through `PTD-23.2.5` do;
 `PTD-23.3` completes only when `PTD-23.3.1` through `PTD-23.3.7` do. `PTD-23`
 completes only when all three nested containers do. `PTD-24` completes only
-when `PTD-24.1` through `PTD-24.2` have current-head approval. `PTD-25`
-completes only when `PTD-25.1` through `PTD-25.6` have current-head approval.
+when `PTD-24.1` through `PTD-24.2` have current-head approval. `PTD-25.3`
+completes only when `PTD-25.3.1` through `PTD-25.3.3` have current-head
+approval. `PTD-25` completes only when `PTD-25.1`, `PTD-25.2`, `PTD-25.3`,
+and `PTD-25.4` through `PTD-25.6` have current-head approval.
 `PTD-22.1` depends directly on `PTD-21.5`, but
 cannot activate until the complete `PTD-21` milestone has converged. References
 below to a task as a construction or review unit mean one delivery item,
@@ -535,8 +551,11 @@ the campaign until durable authority is updated.
 | PTD-25 | Derive Portable Tool Integration Cases and Evidence | PTD-24.2, then approved PTD-25 plan-only correction | Milestone container; no owning PR |
 | PTD-25.1 | Derive Exact Integration Cases and Coverage Preflight | approved PTD-25 plan-only correction after PTD-24.2 | New work |
 | PTD-25.2 | Validate Build Cases Against Their Exact Materialized Images | PTD-25.1 | New work |
-| PTD-25.3 | Materialize Generic Application-Scoped Portable Requests | PTD-25.2 | New work |
-| PTD-25.4 | Validate the Exact Application Image | PTD-25.3 | New work |
+| PTD-25.3 | Materialize Generic Application-Scoped Portable Requests | PTD-25.2, then approved PTD-25.3 plan-only correction | Nested container; no owning PR |
+| PTD-25.3.1 | Select Application Requirements and Preflight Provider Conflicts | approved PTD-25.3 plan-only correction after PTD-25.2 | New work |
+| PTD-25.3.2 | Acquire and Replay Selected Python Bindings | PTD-25.3.1 | New work |
+| PTD-25.3.3 | Materialize Runtime Payloads in the Final Application Image | PTD-25.3.2 | New work; completes PTD-25.3 |
+| PTD-25.4 | Validate the Exact Application Image | PTD-25.3.3 | New work |
 | PTD-25.5 | Persist and Match External Validation Evidence | PTD-25.4 | New work |
 | PTD-25.6 | Prove the Generic Integration Harness End to End | PTD-25.5 | New work; completes PTD-25 |
 | PTD-26 | Validate Every Advertised Java Tuple Through Reploy | PTD-25.6 | New work |
@@ -2079,7 +2098,9 @@ advertised tuple, WebKit, Firefox, Node, ARM64, or broader support claims.
 
 Prerequisite: current-head approval for the stamped PTD-25 plan-only correction
 above the approved PTD-24.2 head. This container owns no implementation commit
-or PR; its contract is delivered by `PTD-25.1` through `PTD-25.6` in order.
+or PR; its contract is delivered by `PTD-25.1`, `PTD-25.2`,
+`PTD-25.3.1` through `PTD-25.3.3`, and `PTD-25.4` through `PTD-25.6`
+in order.
 
 Scope: derive runnable cases from release manifests and the exact support cases
 advertised by each target leaf; execute fixtures
@@ -2147,6 +2168,10 @@ persistence, or completing Java tuple coverage.
 
 #### PTD-25.3: Materialize Generic Application-Scoped Portable Requests
 
+This is a nested delivery container. Its complete acceptance contract is
+delivered by PTD-25.3.1 through PTD-25.3.3 in order; it has no separate commit
+or PR.
+
 Scope: consume canonical application tool requirements through the same
 catalog selection, provider merge, acquisition authorization, and locked
 schedule projection used by ordinary Reploy builds, then materialize the
@@ -2168,6 +2193,67 @@ Focused tests cover the complete materialization path and fail-closed cases.
 
 Non-goals: final-image validation callback execution, external support evidence, or
 additional runtime-tool support claims.
+
+#### PTD-25.3.1: Select Application Requirements and Preflight Provider Conflicts
+
+Scope: derive the exact canonical application requirement groups from the
+resolved document, observe the selected base target, and select and jointly
+resolve them with the embedded catalog. Project the active ordinary provider
+contributions and their application domains into the same immutable operation
+snapshot and provider DAG, rejecting incompatible packages, paths, environment,
+exports, capabilities, binding, context, target, or selection before any tool
+acquisition. Keep the ordinary unresolved-request rejection in place; this
+slice creates no application image and makes no runtime support claim.
+
+Acceptance: deterministic planning yields only the requested application
+scopes and exact selected closures, while build-only Java cannot satisfy a
+runtime request. Negative cases for unsupported selection and conflicting
+ordinary provider contributions fail before acquisition. A request with no
+selected application tools preserves existing ordinary-build behavior.
+
+Non-goals: Python binding acquisition, runtime payload extraction, request
+boundary activation, or final-image validation.
+
+#### PTD-25.3.2: Acquire and Replay Selected Python Bindings
+
+Scope: pass the complete selected application plan and closures into the
+existing prepared Python graph binding path. Fresh execution obtains eligible
+binding wheels only through the provider-owned verified-byte handoff; locked
+execution reopens and revalidates the exact selected descriptors and refuses
+stale or substituted bindings. Preserve the selected plan and acquisition
+records for the later payload and lock handoff. Ordinary application requests
+remain rejected until PTD-25.3.3 completes the whole path.
+
+Acceptance: focused fresh and locked graph tests prove the selected binding
+and export aliases are present in the materialized provider image, that the
+selected plan matches the catalog-derived closure, and that substituted,
+missing, or conflicting binding records fail without a passing graph result.
+No payload-only tool or incomplete request is accepted by the ordinary path.
+
+Non-goals: runtime payload acquisition or final application image assembly,
+request boundary activation, or support evidence.
+
+#### PTD-25.3.3: Materialize Runtime Payloads in the Final Application Image
+
+Scope: finish generic application production by acquiring selected runtime
+payloads through catalog-authorized sources, constructing or replaying the
+complete locked portable-tool schedule, and layering the offline verified
+payloads into the exact final application image. Bind that image and schedule
+to ordinary build completion and cleanup. Only after the complete path is
+connected may the ordinary provider-request boundary consume and stop
+rejecting those application requirements; any unconsumed or unsupported
+request still fails closed before acquisition.
+
+Acceptance: an ordinary Reploy application build yields the exact selected
+closure in its final image and a matching scoped locked schedule on both fresh
+materialization and locked replay. Wrong target, missing bytes, changed
+provenance, provider conflict, omitted payload, or incomplete consumption
+cannot publish a successful build. No Java-only build requirement enters an
+application image. The parent PTD-25.3 acceptance is satisfied; no callback
+or external support evidence is yet claimed.
+
+Non-goals: exact-image harness callback, external evidence persistence, or
+additional supported tool tuples.
 
 #### PTD-25.4: Validate the Exact Application Image
 
@@ -2280,9 +2366,10 @@ The campaign is complete only when:
   `PTD-21.1` through `PTD-21.5`, `PTD-22.1` through `PTD-22.3`,
   `PTD-23.1.1` through `PTD-23.1.8`, `PTD-23.2.1` through `PTD-23.2.5`,
   `PTD-23.3.1` through `PTD-23.3.7`, `PTD-24.1` through `PTD-24.2`,
-  `PTD-25.1` through `PTD-25.6`, `PTD-26`, `PTD-27`, and `PTD-29`; the
+  `PTD-25.1`, `PTD-25.2`, `PTD-25.3.1` through `PTD-25.3.3`,
+  `PTD-25.4` through `PTD-25.6`, `PTD-26`, `PTD-27`, and `PTD-29`; the
   `PTD-21`, `PTD-22`, `PTD-23`, `PTD-24`, and `PTD-25` milestone containers
-  and nested `PTD-23.1`, `PTD-23.2`, and `PTD-23.3` containers own no PR and close only
+  and nested `PTD-23.1`, `PTD-23.2`, `PTD-23.3`, and `PTD-25.3` containers own no PR and close only
   when all of their child slices are approved;
 - the five corrective simplification PRs remain approved at their exact heads
   in order after PTD-23.3.7 and before PTD-24.1;
@@ -2290,6 +2377,8 @@ The campaign is complete only when:
   approval in the exact ancestry after PTD-S5 and before PTD-24.1;
 - the stamped PTD-25 plan-only corrective predecessor retains current-head
   approval in the exact ancestry after PTD-24.2 and before PTD-25.1;
+- the stamped PTD-25.3 plan-only corrective predecessor retains current-head
+  approval in the exact ancestry after PTD-25.2 and before PTD-25.3.1;
 - the shared-record-contract corrective prerequisite has current-head approval
   and remains in the exact ancestry after PTD-21.3 and before PTD-21.4;
 - the plan-only corrective predecessor has current-head approval and remains in
