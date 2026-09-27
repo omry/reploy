@@ -27,10 +27,15 @@ const (
 type ProviderDomainSetV1 struct {
 	Scope          string `json:"scope"`
 	PackageManager string `json:"package_manager"`
-	Filesystem     string `json:"filesystem"`
-	Environment    string `json:"environment"`
-	Exports        string `json:"exports"`
-	Capabilities   string `json:"capabilities"`
+	// Binding names the provider-owned Python binding/package authority. It is
+	// distinct from PackageManager because the APT transaction is shared while
+	// application Python roots remain isolated. Older callers that omit Binding
+	// retain the historical package-manager behavior.
+	Binding      string `json:"binding,omitempty"`
+	Filesystem   string `json:"filesystem"`
+	Environment  string `json:"environment"`
+	Exports      string `json:"exports"`
+	Capabilities string `json:"capabilities"`
 }
 
 // ReleaseCandidateSetV1 is the PTD-09 output for one canonical requirement
@@ -55,9 +60,21 @@ type ActiveNativePackageConstraintV1 struct {
 }
 
 type ActivePythonBindingConstraintV1 struct {
-	Name            string   `json:"name"`
-	Requirements    []string `json:"requirements"`
-	SupportedPython []string `json:"supported_python"`
+	Name                   string                             `json:"name"`
+	Requirements           []string                           `json:"requirements"`
+	SupportedPython        []string                           `json:"supported_python"`
+	InterpreterConstraints []string                           `json:"interpreter_constraints,omitempty"`
+	Overrides              []ActivePythonOverrideConstraintV1 `json:"overrides,omitempty"`
+}
+
+// ActivePythonOverrideConstraintV1 carries ordinary Python package override
+// intent into joint resolution. Version overrides are ordinary exact package
+// constraints; local overrides remain explicit so a selected portable wheel
+// can be rejected before acquisition rather than by a later projection pass.
+type ActivePythonOverrideConstraintV1 struct {
+	Distribution string `json:"distribution"`
+	Kind         string `json:"kind"`
+	Version      string `json:"version,omitempty"`
 }
 
 type ActiveFilesystemConstraintV1 struct {
@@ -346,15 +363,57 @@ func validateActiveProviderConstraintSourceV1(index int,
 			if !stringSlicesEqualV1(claims, item.SupportedPython) {
 				return fmt.Errorf("supported Python claims are not canonically normalized")
 			}
-			if len(item.Requirements) == 0 && len(item.SupportedPython) == 0 {
+			if item.InterpreterConstraints != nil {
+				if len(item.InterpreterConstraints) > maxDefinitionReferences {
+					return fmt.Errorf("interpreter constraints must use a bounded array")
+				}
+				if err := validateSortedUniqueStringsV1("interpreter constraints", item.InterpreterConstraints, false); err != nil {
+					return err
+				}
+				for _, constraint := range item.InterpreterConstraints {
+					if _, err := pythonprovider.PythonRequiresPythonIntersectsClaimV1(constraint, "3.0"); err != nil {
+						return fmt.Errorf("interpreter constraint %q: %w", constraint, err)
+					}
+				}
+			}
+			if item.Overrides != nil {
+				if len(item.Overrides) > maxDefinitionReferences {
+					return fmt.Errorf("overrides must use a bounded array")
+				}
+				previousDistribution := ""
+				for index, override := range item.Overrides {
+					if override.Distribution == "" || pythonprovider.NormalizeDistributionName(override.Distribution) != override.Distribution {
+						return fmt.Errorf("override %d distribution must be normalized", index)
+					}
+					if index > 0 && previousDistribution >= override.Distribution {
+						return fmt.Errorf("overrides must be unique and sorted by distribution")
+					}
+					previousDistribution = override.Distribution
+					switch override.Kind {
+					case "local":
+						if override.Version != "" {
+							return fmt.Errorf("local override %q must not contain a version", override.Distribution)
+						}
+					case "version":
+						if err := pythonprovider.ValidatePackageVersionV1(override.Version); err != nil {
+							return fmt.Errorf("version override %q: %w", override.Distribution, err)
+						}
+					default:
+						return fmt.Errorf("override %q has unsupported kind %q", override.Distribution, override.Kind)
+					}
+				}
+			}
+			if len(item.Requirements) == 0 && len(item.SupportedPython) == 0 &&
+				len(item.InterpreterConstraints) == 0 && len(item.Overrides) == 0 {
 				return fmt.Errorf("must contribute a requirement or interpreter constraint")
 			}
 			distributions := make(map[string]string, len(item.Requirements))
 			for _, requirement := range item.Requirements {
-				distribution, err := pythonprovider.PackageRootDistributionNameV1(requirement)
+				projected, err := pythonprovider.ProjectOrdinaryRequirementClaimV1(requirement)
 				if err != nil {
 					return err
 				}
+				distribution := projected.Distribution
 				if previous, exists := distributions[distribution]; exists {
 					return fmt.Errorf("requirements %q and %q name the same distribution %q",
 						previous, requirement, distribution)
@@ -625,18 +684,34 @@ type bindingCompatibilityResultV1 struct {
 type bindingCompatibilityCacheV1 map[string]bindingCompatibilityResultV1
 
 type pythonInterpreterClaimV1 struct {
-	owners      []string
-	constraints [][]string
-	supported   []string
+	owners             []string
+	constraints        [][]string
+	supported          []string
+	versionOwners      []string
+	versionConstraints []string
 }
 
 type assignmentClaimsV1 struct {
 	semantic             map[string]semanticClaimV1
 	paths                map[string][]ownedPathClaimV1
 	installRoots         map[string][]ownedPathClaimV1
+	ordinaryPaths        map[string][]ownedPathClaimV1
+	aliases              map[string][]ownedPathClaimV1
 	bindingRequirements  map[string]bindingRequirementClaimV1
 	bindingDistributions map[string]string
 	pythonInterpreters   map[string]pythonInterpreterClaimV1
+	pythonOverrides      map[string]map[string]pythonOverrideClaimV1
+	pythonSources        map[string]map[string]pythonSourceClaimV1
+}
+
+type pythonSourceClaimV1 struct {
+	owners   []string
+	unproven bool
+}
+
+type pythonOverrideClaimV1 struct {
+	owners []string
+	local  bool
 }
 
 func (catalog *CatalogV1) assignmentConflictV1(sets []orderedCandidateSetV1,
@@ -655,9 +730,13 @@ func (catalog *CatalogV1) assignmentConflictWithBindingCacheV1(sets []orderedCan
 	claims := assignmentClaimsV1{
 		semantic: make(map[string]semanticClaimV1), paths: make(map[string][]ownedPathClaimV1),
 		installRoots:         make(map[string][]ownedPathClaimV1),
+		ordinaryPaths:        make(map[string][]ownedPathClaimV1),
+		aliases:              make(map[string][]ownedPathClaimV1),
 		bindingRequirements:  make(map[string]bindingRequirementClaimV1),
 		bindingDistributions: bindingDistributions,
 		pythonInterpreters:   make(map[string]pythonInterpreterClaimV1),
+		pythonOverrides:      make(map[string]map[string]pythonOverrideClaimV1),
+		pythonSources:        make(map[string]map[string]pythonSourceClaimV1),
 	}
 	if conflict, err := catalog.addActiveProviderClaimsV1(&claims, domains, active); err != nil {
 		return "", err
@@ -721,18 +800,60 @@ func (catalog *CatalogV1) addActiveProviderClaimsV1(claims *assignmentClaimsV1,
 			}
 		}
 		for _, binding := range source.PythonBindings {
+			bindingDomain := providerBindingDomainV1(domains)
 			if len(binding.SupportedPython) != 0 {
-				if conflict := addPythonInterpreterClaimV1(claims, domains.PackageManager,
+				if conflict := addPythonInterpreterClaimV1(claims, bindingDomain,
 					binding.SupportedPython, owner); conflict != "" {
 					return conflict, nil
 				}
 			}
 			for _, requirement := range binding.Requirements {
-				if conflict, err := addBindingRequirementTextClaimV1(
-					claims, domains.PackageManager, requirement, owner); err != nil {
+				projected, err := pythonprovider.ProjectOrdinaryRequirementClaimV1(requirement)
+				if err != nil {
 					return "", err
-				} else if conflict != "" {
+				}
+				if projected.SourceKind != "" {
+					if claims.pythonSources == nil {
+						claims.pythonSources = make(map[string]map[string]pythonSourceClaimV1)
+					}
+					if claims.pythonSources[bindingDomain] == nil {
+						claims.pythonSources[bindingDomain] = make(map[string]pythonSourceClaimV1)
+					}
+					sourceClaim := claims.pythonSources[bindingDomain][projected.Distribution]
+					sourceClaim.owners = append(sourceClaim.owners, owner)
+					sourceClaim.unproven = sourceClaim.unproven || projected.Root == ""
+					claims.pythonSources[bindingDomain][projected.Distribution] = sourceClaim
+				}
+				if projected.Root != "" {
+					if conflict, err := addBindingRequirementTextClaimV1(
+						claims, bindingDomain, projected.Root, owner); err != nil {
+						return "", err
+					} else if conflict != "" {
+						return conflict, nil
+					}
+				}
+			}
+			for _, constraint := range binding.InterpreterConstraints {
+				if conflict := addPythonInterpreterConstraintV1(claims, bindingDomain, constraint, owner); conflict != "" {
 					return conflict, nil
+				}
+			}
+			for _, override := range binding.Overrides {
+				switch override.Kind {
+				case "version":
+					if conflict := addPythonOverrideClaimV1(claims, bindingDomain, override.Distribution, false, owner); conflict != "" {
+						return conflict, nil
+					}
+					if conflict, err := addBindingRequirementTextClaimV1(
+						claims, bindingDomain, override.Distribution+"=="+override.Version, owner); err != nil {
+						return "", err
+					} else if conflict != "" {
+						return conflict, nil
+					}
+				case "local":
+					if conflict := addPythonOverrideClaimV1(claims, bindingDomain, override.Distribution, true, owner); conflict != "" {
+						return conflict, nil
+					}
 				}
 			}
 		}
@@ -742,7 +863,7 @@ func (catalog *CatalogV1) addActiveProviderClaimsV1(claims *assignmentClaimsV1,
 			}
 		}
 		for _, owned := range source.OwnedPaths {
-			if conflict := addOwnedPathClaimV1(claims, domains.Filesystem,
+			if conflict := addOrdinaryPathClaimV1(claims, domains.Filesystem,
 				owned.Path, string(owned.Digest), owner); conflict != "" {
 				return conflict, nil
 			}
@@ -902,6 +1023,17 @@ func addPythonInterpreterClaimV1(claims *assignmentClaimsV1, domain string,
 		}
 		return ""
 	}
+	if len(previous.supported) == 0 {
+		if conflict := validatePythonInterpreterConstraintsV1(
+			normalized, previous.versionConstraints, previous.versionOwners, owner, normalized, domain); conflict != "" {
+			return conflict
+		}
+		previous.supported = append([]string{}, normalized...)
+		previous.owners = append(previous.owners, owner)
+		previous.constraints = append(previous.constraints, append([]string{}, supported...))
+		claims.pythonInterpreters[domain] = previous
+		return ""
+	}
 	intersection, err := pythonprovider.IntersectSupportedPythonClaimsV1(previous.supported, normalized)
 	if err != nil {
 		return fmt.Sprintf("invalid Python interpreter claim from %s: %v", owner, err)
@@ -912,10 +1044,98 @@ func addPythonInterpreterClaimV1(claims *assignmentClaimsV1, domain string,
 				append(append([]string{}, previous.owners...), owner),
 				append(append([][]string{}, previous.constraints...), supported)))
 	}
+	if conflict := validatePythonInterpreterConstraintsV1(
+		intersection, previous.versionConstraints, previous.versionOwners, owner, supported, domain); conflict != "" {
+		return conflict
+	}
 	previous.supported = intersection
 	previous.owners = append(previous.owners, owner)
 	previous.constraints = append(previous.constraints, append([]string{}, supported...))
 	claims.pythonInterpreters[domain] = previous
+	return ""
+}
+
+func addPythonInterpreterConstraintV1(claims *assignmentClaimsV1, domain string,
+	constraint string, owner string) string {
+	if _, err := pythonprovider.PythonRequiresPythonIntersectsClaimV1(constraint, "3.0"); err != nil {
+		return fmt.Sprintf("invalid Python interpreter constraint from %s: %v", owner, err)
+	}
+	if claims.pythonInterpreters == nil {
+		claims.pythonInterpreters = make(map[string]pythonInterpreterClaimV1)
+	}
+	previous := claims.pythonInterpreters[domain]
+	if conflict := validatePythonInterpreterConstraintsV1(
+		previous.supported, append(previous.versionConstraints, constraint),
+		append(previous.versionOwners, owner), owner, nil, domain); conflict != "" {
+		return conflict
+	}
+	previous.versionConstraints = append(previous.versionConstraints, constraint)
+	previous.versionOwners = append(previous.versionOwners, owner)
+	claims.pythonInterpreters[domain] = previous
+	return ""
+}
+
+func validatePythonInterpreterConstraintsV1(supported, constraints, owners []string,
+	newOwner string, newSupported []string, domain string) string {
+	if len(supported) == 0 || len(constraints) == 0 {
+		return ""
+	}
+	for _, constraint := range constraints {
+		compatible := false
+		for _, claim := range supported {
+			intersects, err := pythonprovider.PythonRequiresPythonIntersectsClaimV1(constraint, claim)
+			if err != nil {
+				return fmt.Sprintf("invalid Python interpreter constraint in domain %q: %v", domain, err)
+			}
+			if intersects {
+				compatible = true
+				break
+			}
+		}
+		if compatible {
+			continue
+		}
+		if len(newSupported) != 0 {
+			constraintOwners := append(append([]string{}, owners...), newOwner)
+			constraintValues := append([][]string{}, make([][]string, len(constraints))...)
+			for i, value := range constraints {
+				constraintValues[i] = []string{value}
+			}
+			constraintValues = append(constraintValues, append([]string{}, newSupported...))
+			return fmt.Sprintf("Python interpreter conflict in domain %q among %s",
+				domain, formatSourcedStringSetsV1(
+					constraintOwners, constraintValues))
+		}
+		constraintOwners := append([]string{}, owners...)
+		constraintValues := append([]string{}, constraints...)
+		return fmt.Sprintf("Python interpreter conflict in domain %q among %s",
+			domain, formatSourcedConstraintsV1(
+				constraintOwners, constraintValues))
+	}
+	return ""
+}
+
+func addPythonOverrideClaimV1(claims *assignmentClaimsV1, domain, distribution string,
+	local bool, owner string) string {
+	if claims.pythonOverrides == nil {
+		claims.pythonOverrides = make(map[string]map[string]pythonOverrideClaimV1)
+	}
+	byDistribution := claims.pythonOverrides[domain]
+	if byDistribution == nil {
+		byDistribution = make(map[string]pythonOverrideClaimV1)
+		claims.pythonOverrides[domain] = byDistribution
+	}
+	previous := byDistribution[distribution]
+	if previous.local == local && len(previous.owners) != 0 {
+		previous.owners = append(previous.owners, owner)
+		byDistribution[distribution] = previous
+		return ""
+	}
+	if len(previous.owners) != 0 && previous.local != local {
+		return fmt.Sprintf("Python package override conflict in domain %q on %q between %s and %s",
+			domain, distribution, previous.owners[0], owner)
+	}
+	byDistribution[distribution] = pythonOverrideClaimV1{owners: []string{owner}, local: local}
 	return ""
 }
 
@@ -950,6 +1170,27 @@ func addOwnedPathClaimV1(claims *assignmentClaimsV1, domain string, claimedPath 
 		return fmt.Sprintf("filesystem conflict in domain %q between %s path %q and %s path %q",
 			domain, previous.owner, previous.path, owner, cleaned)
 	}
+	for _, previous := range claims.ordinaryPaths[domain] {
+		if pathsOverlapV1(previous.path, cleaned) {
+			if previous.owner == owner {
+				continue
+			}
+			return fmt.Sprintf("filesystem conflict in domain %q between %s path %q and %s path %q",
+				domain, previous.owner, previous.path, owner, cleaned)
+		}
+	}
+	for _, previous := range claims.aliases[domain] {
+		if pathsOverlapV1(previous.path, cleaned) {
+			// An export may name a file inside its own payload directory.
+			// Equality or an alias above the directory would instead replace
+			// the directory itself, so those remain conflicts.
+			if previous.owner == owner && strings.HasPrefix(previous.path, cleaned+"/") {
+				continue
+			}
+			return fmt.Sprintf("filesystem conflict in domain %q between %s path %q and %s path %q",
+				domain, previous.owner, previous.path, owner, cleaned)
+		}
+	}
 	if duplicate {
 		return ""
 	}
@@ -964,6 +1205,9 @@ func addInstallRootClaimV1(claims *assignmentClaimsV1, domain string,
 	if claims.installRoots == nil {
 		claims.installRoots = make(map[string][]ownedPathClaimV1)
 	}
+	if claims.ordinaryPaths == nil {
+		claims.ordinaryPaths = make(map[string][]ownedPathClaimV1)
+	}
 	cleaned := path.Clean(claimedPath)
 	for _, previous := range claims.installRoots[domain] {
 		if !pathsOverlapV1(previous.path, cleaned) {
@@ -975,8 +1219,112 @@ func addInstallRootClaimV1(claims *assignmentClaimsV1, domain string,
 		return fmt.Sprintf("filesystem conflict in domain %q between %s path %q and %s path %q",
 			domain, previous.owner, previous.path, owner, cleaned)
 	}
+	for _, previous := range claims.ordinaryPaths[domain] {
+		if pathsOverlapV1(previous.path, cleaned) {
+			if previous.owner == owner {
+				continue
+			}
+			return fmt.Sprintf("filesystem conflict in domain %q between %s path %q and %s path %q",
+				domain, previous.owner, previous.path, owner, cleaned)
+		}
+	}
 	claims.installRoots[domain] = append(claims.installRoots[domain], ownedPathClaimV1{
 		owner: owner, path: cleaned, value: cleaned,
+	})
+	return ""
+}
+
+func addOrdinaryPathClaimV1(claims *assignmentClaimsV1, domain, claimedPath, value, owner string) string {
+	if claims.ordinaryPaths == nil {
+		claims.ordinaryPaths = make(map[string][]ownedPathClaimV1)
+	}
+	if claims.installRoots == nil {
+		claims.installRoots = make(map[string][]ownedPathClaimV1)
+	}
+	if claims.paths == nil {
+		claims.paths = make(map[string][]ownedPathClaimV1)
+	}
+	if claims.aliases == nil {
+		claims.aliases = make(map[string][]ownedPathClaimV1)
+	}
+	cleaned := path.Clean(claimedPath)
+	for _, previous := range claims.ordinaryPaths[domain] {
+		if !pathsOverlapV1(previous.path, cleaned) {
+			continue
+		}
+		if previous.path == cleaned && previous.value == value {
+			return ""
+		}
+		return fmt.Sprintf("filesystem conflict in domain %q between %s path %q and %s path %q",
+			domain, previous.owner, previous.path, owner, cleaned)
+	}
+	for _, previous := range claims.installRoots[domain] {
+		if pathsOverlapV1(previous.path, cleaned) {
+			if previous.owner == owner {
+				continue
+			}
+			return fmt.Sprintf("filesystem conflict in domain %q between %s path %q and %s path %q",
+				domain, previous.owner, previous.path, owner, cleaned)
+		}
+	}
+	for _, previous := range claims.paths[domain] {
+		if pathsOverlapV1(previous.path, cleaned) {
+			return fmt.Sprintf("filesystem conflict in domain %q between %s path %q and %s path %q",
+				domain, previous.owner, previous.path, owner, cleaned)
+		}
+	}
+	for _, previous := range claims.aliases[domain] {
+		if pathsOverlapV1(previous.path, cleaned) {
+			return fmt.Sprintf("filesystem conflict in domain %q between %s path %q and %s path %q",
+				domain, previous.owner, previous.path, owner, cleaned)
+		}
+	}
+	claims.ordinaryPaths[domain] = append(claims.ordinaryPaths[domain], ownedPathClaimV1{
+		owner: owner, path: cleaned, value: value,
+	})
+	return ""
+}
+
+func addAliasPathClaimV1(claims *assignmentClaimsV1, domain, claimedPath, value, owner string) string {
+	if claims.aliases == nil {
+		claims.aliases = make(map[string][]ownedPathClaimV1)
+	}
+	if claims.paths == nil {
+		claims.paths = make(map[string][]ownedPathClaimV1)
+	}
+	if claims.ordinaryPaths == nil {
+		claims.ordinaryPaths = make(map[string][]ownedPathClaimV1)
+	}
+	cleaned := path.Clean(claimedPath)
+	for _, previous := range claims.aliases[domain] {
+		if !pathsOverlapV1(previous.path, cleaned) {
+			continue
+		}
+		if previous.path == cleaned && (previous.value == value || previous.owner == owner) {
+			// Distinct export names owned by one closure may refer to the
+			// same executable. Export-name claims remain separate.
+			return ""
+		}
+		return fmt.Sprintf("filesystem conflict in domain %q between %s path %q and %s path %q",
+			domain, previous.owner, previous.path, owner, cleaned)
+	}
+	for _, previous := range claims.paths[domain] {
+		if pathsOverlapV1(previous.path, cleaned) {
+			if previous.owner == owner && strings.HasPrefix(cleaned, previous.path+"/") {
+				continue
+			}
+			return fmt.Sprintf("filesystem conflict in domain %q between %s path %q and %s path %q",
+				domain, previous.owner, previous.path, owner, cleaned)
+		}
+	}
+	for _, previous := range claims.ordinaryPaths[domain] {
+		if pathsOverlapV1(previous.path, cleaned) {
+			return fmt.Sprintf("filesystem conflict in domain %q between %s path %q and %s path %q",
+				domain, previous.owner, previous.path, owner, cleaned)
+		}
+	}
+	claims.aliases[domain] = append(claims.aliases[domain], ownedPathClaimV1{
+		owner: owner, path: cleaned, value: value,
 	})
 	return ""
 }
@@ -1016,6 +1364,10 @@ func (catalog *CatalogV1) addCandidateClaimsForAssignmentV1(claims *assignmentCl
 		}
 		if conflict := addSemanticClaimV1(claims, "capability", domains.Capabilities,
 			exported.Name, exported.Path, owner); conflict != "" {
+			return conflict, nil
+		}
+		if conflict := addAliasPathClaimV1(claims, domains.Filesystem,
+			exported.Path, exported.Name+"\x00"+exported.Path, owner); conflict != "" {
 			return conflict, nil
 		}
 	}
@@ -1061,21 +1413,44 @@ func (catalog *CatalogV1) addCandidateClaimsForAssignmentV1(claims *assignmentCl
 				return conflict, nil
 			}
 		case *BindingArtifactRecordV1:
+			bindingDomain := providerBindingDomainV1(domains)
+			distribution, err := pythonprovider.PackageRootDistributionNameV1(selected.Name)
+			if err != nil {
+				return "", err
+			}
+			if source, found := claims.pythonSources[bindingDomain][distribution]; found {
+				return fmt.Sprintf("Python source requirement conflict in domain %q on selected exact wheel %q between %s and %s",
+					bindingDomain, distribution, strings.Join(source.owners, ", "), owner), nil
+			}
 			if conflict := addSemanticClaimV1(claims, "artifact logical path", domains.Filesystem,
 				selected.Filename, value, owner); conflict != "" {
 				return conflict, nil
 			}
 		case *BindingContractV1:
 			// Binding requirements are ecosystem-provider constraints. The
-			// package-manager domain is the shared provider authority available
-			// in the current record model.
-			if conflict := addPythonInterpreterClaimV1(claims, domains.PackageManager,
+			// binding domain is the provider authority available in the current
+			// record model. Keep it separate from the shared native transaction so
+			// application Python roots cannot constrain one another.
+			bindingDomain := providerBindingDomainV1(domains)
+			if conflict := addPythonInterpreterClaimV1(claims, bindingDomain,
 				selected.SupportedPython, owner); conflict != "" {
 				return conflict, nil
 			}
 			for _, requirement := range selected.Requirements {
+				distribution, err := pythonprovider.PackageRootDistributionNameV1(requirement)
+				if err != nil {
+					return "", err
+				}
+				if source, found := claims.pythonSources[bindingDomain][distribution]; found && source.unproven {
+					return fmt.Sprintf("Python source requirement compatibility in domain %q on %q cannot be proven between %s and %s",
+						bindingDomain, distribution, strings.Join(source.owners, ", "), owner), nil
+				}
+				if override, found := claims.pythonOverrides[bindingDomain][distribution]; found && override.local {
+					return fmt.Sprintf("Python package override conflict in domain %q on %q between %s and %s",
+						bindingDomain, distribution, strings.Join(override.owners, ", "), owner), nil
+				}
 				if conflict, err := addBindingRequirementTextClaimV1(
-					claims, domains.PackageManager, requirement, owner); err != nil {
+					claims, bindingDomain, requirement, owner); err != nil {
 					return "", err
 				} else if conflict != "" {
 					return conflict, nil
@@ -1084,6 +1459,13 @@ func (catalog *CatalogV1) addCandidateClaimsForAssignmentV1(claims *assignmentCl
 		}
 	}
 	return "", nil
+}
+
+func providerBindingDomainV1(domains ProviderDomainSetV1) string {
+	if domains.Binding != "" {
+		return domains.Binding
+	}
+	return domains.PackageManager
 }
 
 func (catalog *CatalogV1) exactRecordV1(reference RecordReferenceV1) (loadedRecordV1, error) {

@@ -351,6 +351,30 @@ func TestProjectPortableToolPythonBindingsV1ChecksExistingDependencyRootsWithExt
 	}
 }
 
+func TestProjectOrdinaryRequirementClaimV1(t *testing.T) {
+	for _, testCase := range []struct {
+		requirement, distribution, root, sourceKind string
+	}{
+		{"Demo[extra]>=1,<2; python_version < '4'", "demo", "demo>=1,<2", ""},
+		{"demo @ https://example.invalid/demo-1.5-py3-none-any.whl", "demo", "demo==1.5", "direct URL"},
+		{"./demo-1.5-py3-none-any.whl", "demo", "demo==1.5", "local path"},
+		{"demo @ https://example.invalid/demo.tar.gz", "demo", "", "direct URL"},
+	} {
+		got, err := ProjectOrdinaryRequirementClaimV1(testCase.requirement)
+		if err != nil {
+			t.Errorf("%q: %v", testCase.requirement, err)
+			continue
+		}
+		if got.Distribution != testCase.distribution || got.Root != testCase.root || got.SourceKind != testCase.sourceKind {
+			t.Errorf("%q: got %+v, want distribution %q root %q source %q", testCase.requirement, got,
+				testCase.distribution, testCase.root, testCase.sourceKind)
+		}
+	}
+	if _, err := ProjectOrdinaryRequirementClaimV1("https://example.invalid/unknown.tar.gz"); err == nil {
+		t.Fatal("unverifiable source distribution passed")
+	}
+}
+
 func TestPortableToolPythonRequirementIdentityV1ClassifiesMarkerQualifiedArchives(t *testing.T) {
 	for _, filename := range []string{
 		"archive.zip", "archive-1.0-py3-none-any.whl", "archive.tar.bz2", "archive.tbz",
