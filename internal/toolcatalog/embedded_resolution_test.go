@@ -81,6 +81,28 @@ func TestResolveEmbeddedPortableToolPlanV1RejectsUnsupportedTargetBeforeResoluti
 	}
 }
 
+func TestResolveEmbeddedPortableToolPlanByScopeV1UsesSelectedScopeBindings(t *testing.T) {
+	group := playwrightGroupV1("==1.61.0", "runtime")
+	target := playwrightTargetV1("debian", "12")
+	client := ClientCapabilitiesV1{ReployVersion: "1.0.0", ResolverPrimitives: []string{"https-sha256"}}
+	domains := solverTestDomainsV1(false)[:1]
+	bindings := map[string][]string{
+		group.Scope:         {"python"},
+		"application:other": {"Python"}, // This invalid foreign claim must not leak into the selected scope.
+	}
+	plan, _, err := ResolveEmbeddedPortableToolPlanByScopeV1(
+		[]CanonicalRequirementGroupV1{group}, target, client, bindings, domains, solverTestOperationV1())
+	if err != nil || len(plan.Tools) != 1 {
+		t.Fatalf("selected-scope binding inference = %#v, %v", plan, err)
+	}
+	bindings[group.Scope] = []string{"Python"}
+	_, _, err = ResolveEmbeddedPortableToolPlanByScopeV1(
+		[]CanonicalRequirementGroupV1{group}, target, client, bindings, domains, solverTestOperationV1())
+	if err == nil || !strings.Contains(err.Error(), "active bindings") {
+		t.Fatalf("invalid selected-scope bindings error = %v", err)
+	}
+}
+
 func javaOwnedBuilderGroupV1() CanonicalRequirementGroupV1 {
 	group := javaGroupV1("==21", "build")
 	group.Scope = "source-builder:omegaconf"

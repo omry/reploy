@@ -367,6 +367,7 @@ func TestAssignmentClaimsRespectEveryProviderDomainPartitionV1(t *testing.T) {
 			}
 		})
 	}
+
 }
 
 func TestRuntimeClaimsKeepFilesystemAndEnvironmentDomainsIndependentV1(t *testing.T) {
@@ -490,6 +491,7 @@ func BenchmarkSolveCandidateSetsSharedPythonRootsV1(b *testing.B) {
 			}
 		})
 	}
+
 }
 
 func BenchmarkSolveCandidateSetsDistinctPythonRootsV1(b *testing.B) {
@@ -973,6 +975,21 @@ func TestActiveOnlyProviderScopeUsesCompleteDomainMappingV1(t *testing.T) {
 	if count := strings.Count(isolated.Snapshot.CanonicalJSON, `"scope":"source-builder:other"`); count != 2 {
 		t.Errorf("active-only scope appears %d times in operation snapshot, want source and domain mapping", count)
 	}
+	bindingDomains := solverTestBuildDomainsV1(false)
+	bindingDomains[1].PackageManager = bindingDomains[0].PackageManager
+	bindingDomains[0].Binding = "application/python"
+	bindingDomains[1].Binding = "source-builder/python"
+	if _, err := catalog.ResolveSelectedClosuresV1(
+		[]ReleaseCandidateSetV1{applicationSet}, bindingDomains, operation); err != nil {
+		t.Fatalf("isolated Python bindings conflicted through shared native package manager: %v", err)
+	}
+	bindingDomains[1].Binding = bindingDomains[0].Binding
+	_, err = catalog.ResolveSelectedClosuresV1(
+		[]ReleaseCandidateSetV1{applicationSet}, bindingDomains, operation)
+	if err == nil || !strings.Contains(err.Error(), "binding requirement conflict") {
+		t.Errorf("shared Python binding domain error = %v, want binding requirement conflict", err)
+	}
+
 	sharedDomains := solverTestBuildDomainsV1(false)
 	sharedDomains[1].PackageManager = sharedDomains[0].PackageManager
 	_, err = catalog.ResolveSelectedClosuresV1(
@@ -1365,6 +1382,170 @@ func TestOperationSnapshotOwnsActiveProviderConstraintsV1(t *testing.T) {
 	}
 	if changed.Snapshot.Digest == snapshotDigest {
 		t.Error("changed active-provider provenance and constraints reused the operation snapshot")
+	}
+}
+
+func TestJointResolutionBacktracksForOrdinaryPythonInterpreterConstraintV1(t *testing.T) {
+	catalog := candidateTestCatalogV1(t)
+	_, sourceSet := solverTestCandidateSetsV1(t, catalog)
+	newest := sourceSet.Candidates[0]
+	older := sourceSet.Candidates[1]
+
+	newestBinding := cloneBindingContractV1(validRecordValuesV1()[4].(*BindingContractV1))
+	newestBinding.SupportedPython = []string{"3.13"}
+	olderBinding := cloneBindingContractV1(&newestBinding)
+	olderBinding.SupportedPython = []string{"3.14"}
+	newest.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &newestBinding)}
+	older.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &olderBinding)}
+	sourceSet.Candidates = []ReleaseCandidateV1{newest, older}
+
+	source := solverTestActiveSourceV1("source-builder:other", "provider-plan", "application/python")
+	source.PythonBindings = []ActivePythonBindingConstraintV1{{
+		Name: "python", Requirements: []string{}, SupportedPython: []string{},
+		InterpreterConstraints: []string{">=3.14"}, Overrides: nil,
+	}}
+	operation := solverTestOperationV1()
+	operation.ActiveProviders = solverTestActiveProvidersV1(source)
+	result, err := catalog.ResolveSelectedClosuresV1(
+		[]ReleaseCandidateSetV1{sourceSet}, solverTestBuildDomainsV1(false), operation)
+	if err != nil {
+		t.Fatalf("ordinary interpreter constraint should backtrack: %v", err)
+	}
+	if len(result.Closures) != 1 || result.Closures[0].Provenance.Version != "1.2.3" || result.VisitedStates != "2" {
+		t.Fatalf("ordinary interpreter selection = %+v, visited %s; want older compatible candidate after two states",
+			result.Closures, result.VisitedStates)
+	}
+	if !strings.Contains(result.Snapshot.CanonicalJSON, `"interpreter_constraints":[">=3.14"]`) {
+		t.Fatalf("ordinary interpreter constraint missing from immutable snapshot: %s", result.Snapshot.CanonicalJSON)
+	}
+	changedSource := source
+	changedSource.PythonBindings = append([]ActivePythonBindingConstraintV1{}, source.PythonBindings...)
+	changedSource.PythonBindings[0].InterpreterConstraints = []string{">=3.14.1,<3.15"}
+	changedOperation := solverTestOperationV1()
+	changedOperation.ActiveProviders = solverTestActiveProvidersV1(changedSource)
+	changed, err := catalog.ResolveSelectedClosuresV1(
+		[]ReleaseCandidateSetV1{sourceSet}, solverTestBuildDomainsV1(false), changedOperation)
+	if err != nil {
+		t.Fatalf("changed compatible interpreter constraint: %v", err)
+	}
+	if changed.Snapshot.Digest == result.Snapshot.Digest {
+		t.Fatal("changing only the ordinary interpreter constraint reused the operation snapshot")
+	}
+}
+
+func TestJointResolutionBacktracksAndRejectsOrdinaryPythonOverridesV1(t *testing.T) {
+	t.Run("version override participates in candidate solving", func(t *testing.T) {
+		catalog := candidateTestCatalogV1(t)
+		_, sourceSet := solverTestCandidateSetsV1(t, catalog)
+		newest := sourceSet.Candidates[0]
+		older := sourceSet.Candidates[1]
+		newestBinding := cloneBindingContractV1(validRecordValuesV1()[4].(*BindingContractV1))
+		newestBinding.Requirements = []string{"demo==1.2.3"}
+		olderBinding := cloneBindingContractV1(&newestBinding)
+		olderBinding.Requirements = []string{"demo==2"}
+		newest.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &newestBinding)}
+		older.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &olderBinding)}
+		sourceSet.Candidates = []ReleaseCandidateV1{newest, older}
+		source := solverTestActiveSourceV1("source-builder:other", "provider-plan", "application/python")
+		source.PythonBindings = []ActivePythonBindingConstraintV1{{
+			Name: "python", Requirements: []string{}, SupportedPython: []string{},
+			Overrides: []ActivePythonOverrideConstraintV1{{Distribution: "demo", Kind: "version", Version: "2"}},
+		}}
+		operation := solverTestOperationV1()
+		operation.ActiveProviders = solverTestActiveProvidersV1(source)
+		result, err := catalog.ResolveSelectedClosuresV1(
+			[]ReleaseCandidateSetV1{sourceSet}, solverTestBuildDomainsV1(false), operation)
+		if err != nil {
+			t.Fatalf("version override should backtrack: %v", err)
+		}
+		if len(result.Closures) != 1 || result.Closures[0].Provenance.Version != "1.2.3" || result.VisitedStates != "2" {
+			t.Fatalf("version override selection = %+v, visited %s; want older compatible candidate after two states",
+				result.Closures, result.VisitedStates)
+		}
+		if !strings.Contains(result.Snapshot.CanonicalJSON, `"kind":"version"`) {
+			t.Fatalf("version override missing from immutable snapshot: %s", result.Snapshot.CanonicalJSON)
+		}
+	})
+
+	t.Run("local override rejects selected portable distribution", func(t *testing.T) {
+		catalog := candidateTestCatalogV1(t)
+		_, sourceSet := solverTestCandidateSetsV1(t, catalog)
+		candidate := sourceSet.Candidates[1]
+		binding := cloneBindingContractV1(validRecordValuesV1()[4].(*BindingContractV1))
+		candidate.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &binding)}
+		sourceSet.Candidates = []ReleaseCandidateV1{candidate}
+		source := solverTestActiveSourceV1("source-builder:other", "provider-plan", "application/python")
+		source.PythonBindings = []ActivePythonBindingConstraintV1{{
+			Name: "python", Requirements: []string{}, SupportedPython: []string{},
+			Overrides: []ActivePythonOverrideConstraintV1{{Distribution: "demo", Kind: "local"}},
+		}}
+		operation := solverTestOperationV1()
+		operation.ActiveProviders = solverTestActiveProvidersV1(source)
+		if _, err := catalog.ResolveSelectedClosuresV1(
+			[]ReleaseCandidateSetV1{sourceSet}, solverTestBuildDomainsV1(false), operation); err == nil ||
+			!strings.Contains(err.Error(), "Python package override conflict") {
+			t.Fatalf("local override conflict = %v", err)
+		}
+	})
+}
+
+func TestSharedFilesystemClaimsRejectOrdinaryOverlapWithPayloadAndAliasV1(t *testing.T) {
+	catalog := candidateTestCatalogV1(t)
+	_, sourceSet := solverTestCandidateSetsV1(t, catalog)
+	digest := canonical.Digest("sha256:" + strings.Repeat("a", 64))
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*ReleaseCandidateV1, *ActiveProviderConstraintSourceV1)
+	}{
+		{
+			name: "runtime root",
+			mutate: func(candidate *ReleaseCandidateV1, source *ActiveProviderConstraintSourceV1) {
+				source.OwnedPaths = []ActiveFilesystemConstraintV1{{Path: "/opt/shared", Digest: digest}}
+				candidate.Contract.Runtime = &RecordRuntimeV1{InstallRoot: "/opt/shared/bin"}
+			},
+		},
+		{
+			name: "payload",
+			mutate: func(candidate *ReleaseCandidateV1, source *ActiveProviderConstraintSourceV1) {
+				source.OwnedPaths = []ActiveFilesystemConstraintV1{{Path: "/opt/shared", Digest: digest}}
+				payload := clonePayloadRecordV1(validRecordValuesV1()[6].(*PayloadRecordV1))
+				payload.InstallDirectory = "/opt/shared/bin"
+				candidate.Contributions = []RecordReferenceV1{solverTestAddRecordV1(t, catalog, &payload)}
+			},
+		},
+		{
+			name: "alias",
+			mutate: func(candidate *ReleaseCandidateV1, source *ActiveProviderConstraintSourceV1) {
+				source.OwnedPaths = []ActiveFilesystemConstraintV1{{Path: "/opt/shared", Digest: digest}}
+				candidate.Exports = []ToolExportV1{{Name: "demo", Path: "/opt/shared/bin/demo"}}
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			candidate := sourceSet.Candidates[1]
+			source := solverTestActiveSourceV1("source-builder:other", "provider-plan", "application/filesystem")
+			testCase.mutate(&candidate, &source)
+			operation := solverTestOperationV1()
+			operation.ActiveProviders = solverTestActiveProvidersV1(source)
+			_, err := catalog.ResolveSelectedClosuresV1(
+				[]ReleaseCandidateSetV1{{Group: sourceSet.Group, Candidates: []ReleaseCandidateV1{candidate}}},
+				solverTestBuildDomainsV1(false), operation)
+			if err == nil || !strings.Contains(err.Error(), "filesystem conflict") {
+				t.Fatalf("ordinary %s overlap error = %v", testCase.name, err)
+			}
+		})
+	}
+
+	candidate := sourceSet.Candidates[1]
+	candidate.Contract.Runtime = &RecordRuntimeV1{InstallRoot: "/opt/other"}
+	source := solverTestActiveSourceV1("source-builder:other", "provider-plan", "application/filesystem")
+	source.OwnedPaths = []ActiveFilesystemConstraintV1{{Path: "/opt/shared", Digest: digest}}
+	operation := solverTestOperationV1()
+	operation.ActiveProviders = solverTestActiveProvidersV1(source)
+	if _, err := catalog.ResolveSelectedClosuresV1(
+		[]ReleaseCandidateSetV1{{Group: sourceSet.Group, Candidates: []ReleaseCandidateV1{candidate}}},
+		solverTestBuildDomainsV1(false), operation); err != nil {
+		t.Fatalf("disjoint ordinary executable path rejected: %v", err)
 	}
 }
 
