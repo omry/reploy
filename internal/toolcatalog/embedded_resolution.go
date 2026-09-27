@@ -45,6 +45,34 @@ func ResolveEmbeddedPortableToolPlanV1(
 	domains []ProviderDomainSetV1,
 	operation ResolutionOperationInputsV1,
 ) (providers.PortableToolPlanV1, JointResolutionV1, error) {
+	return resolveEmbeddedPortableToolPlanByScopeV1(groups, target, client,
+		map[string][]string{"": activeBindings}, domains, operation)
+}
+
+// ResolveEmbeddedPortableToolPlanByScopeV1 is the application-aware variant
+// of ResolveEmbeddedPortableToolPlanV1. Binding inference is evaluated with
+// the active ordinary providers for the candidate's own resolution scope;
+// providers from another application cannot influence an omitted binding.
+func ResolveEmbeddedPortableToolPlanByScopeV1(
+	groups []CanonicalRequirementGroupV1,
+	target TargetIdentityV1,
+	client ClientCapabilitiesV1,
+	activeBindingsByScope map[string][]string,
+	domains []ProviderDomainSetV1,
+	operation ResolutionOperationInputsV1,
+) (providers.PortableToolPlanV1, JointResolutionV1, error) {
+	return resolveEmbeddedPortableToolPlanByScopeV1(groups, target, client,
+		activeBindingsByScope, domains, operation)
+}
+
+func resolveEmbeddedPortableToolPlanByScopeV1(
+	groups []CanonicalRequirementGroupV1,
+	target TargetIdentityV1,
+	client ClientCapabilitiesV1,
+	activeBindingsByScope map[string][]string,
+	domains []ProviderDomainSetV1,
+	operation ResolutionOperationInputsV1,
+) (providers.PortableToolPlanV1, JointResolutionV1, error) {
 	catalog := mustLoadEmbeddedCatalogV1()
 	if err := validateTargetIdentityV1(target); err != nil {
 		return providers.PortableToolPlanV1{}, JointResolutionV1{}, err
@@ -54,6 +82,10 @@ func ResolveEmbeddedPortableToolPlanV1(
 
 	sets := make([]ReleaseCandidateSetV1, 0, len(groups))
 	for index, group := range groups {
+		activeBindings := activeBindingsByScope[group.Scope]
+		if activeBindings == nil {
+			activeBindings = activeBindingsByScope[""]
+		}
 		candidates, err := catalog.SelectReleaseCandidatesV1(group, target, client, activeBindings)
 		if err != nil {
 			return providers.PortableToolPlanV1{}, JointResolutionV1{}, fmt.Errorf(
