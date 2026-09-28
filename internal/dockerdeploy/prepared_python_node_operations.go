@@ -37,6 +37,7 @@ type PreparedPythonNodeOperations struct {
 	ShowApplicationContext bool
 	RunOptions             RunOptions
 	verifiedArtifacts      map[canonical.Digest]string
+	portableAcquisitions   *portablePythonAcquisitionCollectorV1
 }
 
 func (operations PreparedPythonNodeOperations) Preparer(
@@ -215,6 +216,11 @@ func (operations PreparedPythonNodeOperations) resolveFresh(
 		}
 		if err != nil {
 			return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
+		}
+		if operations.portableAcquisitions != nil {
+			if err := operations.portableAcquisitions.add(handoffs); err != nil {
+				return providers.ResolveResult{}, providers.GraphConsumerValidation{}, err
+			}
 		}
 		selectedPortableWheels = make([]pythonprovider.PortableToolVerifiedWheelInputV1, len(handoffs))
 		for index, handoff := range handoffs {

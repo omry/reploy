@@ -21,6 +21,7 @@ import (
 	"github.com/omry/reploy/internal/providers"
 	pythonprovider "github.com/omry/reploy/internal/providers/python"
 	"github.com/omry/reploy/internal/providerstore"
+	"github.com/omry/reploy/internal/toolcatalog"
 )
 
 // TestPreparedPythonGraphPTD2337LockedReplayAcceptance drives the real
@@ -42,6 +43,8 @@ func TestPreparedPythonGraphPTD2337LockedReplayAcceptance(t *testing.T) {
 	if _, err := reuse.store.PublishExpected(context.Background(), locked.descriptor, bytes.NewReader(lockedContent)); err != nil {
 		t.Fatal(err)
 	}
+	alignPTD2337LockedClosureToPlanV1(t, &locked.fresh)
+	locked.lock.Plan.PortableToolPlan = locked.fresh.Plan
 	for _, node := range reuse.request.Plan.Nodes {
 		if node.ID != "base" {
 			continue
@@ -183,15 +186,32 @@ func TestPreparedPythonGraphPTD2337LockedReplayAcceptance(t *testing.T) {
 
 	stubPTD2337LockedReplayResolver(t, &resolverInputDir, &resolverOutputDir, locked.component.TestedTags)
 	base := reuse.lock.Base
-	result, err := ExecutePreparedPythonGraph(context.Background(), PreparedPythonGraphExecutionInput{
+	domains, err := applicationPortableProviderDomainsV1(locked.fresh.Plan, reuse.request.Plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dag, err := providers.BuildPortableToolProviderDAGV1(reuse.request.Plan, locked.fresh.Plan, domains)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, projection, err := pythonprovider.ProjectPortableToolPythonBindingsV1(locked.fresh.Plan, []providers.ResolvedComponentRequestV1{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := &ApplicationPortableToolPlanV1{Plan: locked.fresh.Plan, DAG: dag, Closures: locked.fresh.Closures, PythonProjection: projection}
+	sealSyntheticApplicationPortablePythonSelectionForTest(t, selected, base, pythonConsumerTestImageConfig())
+	bound, err := ExecuteApplicationPortablePythonGraphV1(context.Background(), selected, PreparedPythonGraphExecutionInput{
 		Store: reuse.store, Plan: reuse.request.Plan, BaseDescriptor: base,
 		BaseCatalog: reuse.request.EarlierCatalog, Sources: reuse.request.SourceCandidates,
 		SourceWheels: reuse.sourceWheels, CurrentLock: &reuse.lock,
-		DesiredPortableToolPlan: &locked.lock.Plan.PortableToolPlan,
-		FinalImageConfig:        pythonConsumerTestImageConfig(),
+		FinalImageConfig: pythonConsumerTestImageConfig(),
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	result := bound.Graph
+	if len(bound.Acquisitions) != 1 || bound.Acquisitions[0].Descriptor != locked.descriptor {
+		t.Fatalf("replayed selected acquisition = %#v", bound.Acquisitions)
 	}
 	if configs[reuse.request.NodeID].PortableToolLockedPlan == nil || configs[reuse.request.NodeID].PortableToolFreshPlan != nil {
 		t.Fatalf("locked graph config = %#v", configs[reuse.request.NodeID])
@@ -222,6 +242,47 @@ func TestPreparedPythonGraphPTD2337LockedReplayAcceptance(t *testing.T) {
 		t.Fatalf("locked alias target %q is absent from transaction declarations %#v", aliases[0].Target, transaction.GeneratedExecutables)
 	}
 	assertPTD2337LockedAliasPublication(t, reuse.store, aliases[0])
+}
+
+func alignPTD2337LockedClosureToPlanV1(t *testing.T, fresh *PortableToolPythonFreshPlanV1) {
+	t.Helper()
+	if fresh == nil || len(fresh.Plan.Tools) != 1 || len(fresh.Closures) != 1 || len(fresh.Plan.Tools[0].Responsibilities.BindingArtifacts) != 1 {
+		t.Fatal("locked PTD-23.3.7 fixture has no single selected binding artifact")
+	}
+	selected := fresh.Plan.Tools[0].Responsibilities.BindingArtifacts[0]
+	size, ok := selected.Record.Value["size"].(string)
+	if !ok {
+		t.Fatalf("locked PTD-23.3.7 selected artifact size = %#v", selected.Record.Value["size"])
+	}
+	sha256Value, ok := selected.Record.Value["sha256"].(string)
+	if !ok {
+		t.Fatalf("locked PTD-23.3.7 selected artifact sha256 = %#v", selected.Record.Value["sha256"])
+	}
+	closure := &fresh.Closures[0]
+	found := false
+	for index := range closure.Records.BindingArtifacts {
+		artifact := &closure.Records.BindingArtifacts[index]
+		if artifact.Reference.ID != selected.Reference.ID {
+			continue
+		}
+		artifact.Reference = toolcatalog.RecordReferenceV1{ID: selected.Reference.ID, Digest: selected.Reference.Digest}
+		artifact.Record.Size = size
+		artifact.Record.SHA256 = canonical.Digest(sha256Value)
+		found = true
+	}
+	if !found {
+		t.Fatalf("locked PTD-23.3.7 closure has no artifact %q", selected.Reference.ID)
+	}
+	for bindingIndex := range closure.Target.Bindings {
+		for artifactIndex := range closure.Target.Bindings[bindingIndex].Artifacts {
+			artifact := &closure.Target.Bindings[bindingIndex].Artifacts[artifactIndex]
+			if artifact.ID == selected.Reference.ID {
+				artifact.Digest = selected.Reference.Digest
+			}
+		}
+	}
+	closure.Identity = ptd2337PortableToolClosureIdentityV1(t, *closure)
+	fresh.Plan.Tools[0].SelectedClosureDigest = closure.Identity
 }
 
 func acceptedGeneratedExecutableForDeclaration(declaration providers.GeneratedExecutableDeclaration) providers.RealizedGeneratedExecutable {
