@@ -166,19 +166,38 @@ func TestPreparedPythonGraphDockerIntegrationPTD2337NeutralBindings(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := ExecutePreparedPythonGraph(ctx, PreparedPythonGraphExecutionInput{
+	domains, err := applicationPortableProviderDomainsV1(fresh.Plan, preparedBase.Plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dag, err := providers.BuildPortableToolProviderDAGV1(preparedBase.Plan, fresh.Plan, domains)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := &ApplicationPortableToolPlanV1{Plan: fresh.Plan, DAG: dag, Closures: fresh.Closures, PythonProjection: projection}
+	sealSyntheticApplicationPortablePythonSelectionForTest(t, selected, preparedBase.Descriptor, finalImageConfig)
+	bound, err := ExecuteApplicationPortablePythonGraphV1(ctx, selected, PreparedPythonGraphExecutionInput{
 		Store: store, Plan: preparedBase.Plan, BaseDescriptor: preparedBase.Descriptor,
 		BaseCatalog: preparedBase.Catalog, Sources: request.Sources,
-		SourceWheels: []providerstore.ArtifactDescriptor{},
-		PortablePython: &PortableToolPythonFreshPlanV1{
-			Plan: fresh.Plan, Closures: fresh.Closures,
-		},
-		DesiredPortableToolPlan: &fresh.Plan,
-		FinalImageConfig:        finalImageConfig,
-		RunOptions:              RunOptions{Stdout: os.Stdout, Stderr: os.Stderr},
+		SourceWheels:     []providerstore.ArtifactDescriptor{},
+		FinalImageConfig: finalImageConfig,
+		RunOptions:       RunOptions{Stdout: os.Stdout, Stderr: os.Stderr},
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	result := bound.Graph
+	if len(bound.Acquisitions) != 2 {
+		t.Fatalf("retained binding acquisitions = %#v", bound.Acquisitions)
+	}
+	for _, acquisition := range bound.Acquisitions {
+		matched := false
+		for _, descriptor := range descriptors {
+			matched = matched || acquisition.Descriptor == descriptor
+		}
+		if acquisition.Scope != fresh.Plan.Tools[0].Scope || !matched {
+			t.Fatalf("retained unselected binding acquisition = %#v", acquisition)
+		}
 	}
 	if len(result.Materializations) != 1 || len(result.Bundles) != 1 {
 		t.Fatalf("two-neutral graph result = %#v", result)
