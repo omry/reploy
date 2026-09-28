@@ -39,6 +39,7 @@ type PreparedPythonGraphExecutionInput struct {
 	Progress                io.Writer
 	BuildProgress           buildprogress.Reporter
 	RunOptions              RunOptions
+	portableAcquisitions    *portablePythonAcquisitionCollectorV1
 }
 
 var preparePythonGraphExecutionBackend = PreparePreparedPythonGraphBackend
@@ -94,6 +95,16 @@ func ExecutePreparedPythonGraph(
 	var projection *pythonprovider.PortableToolPythonProjectionV1
 	var lockedPortablePython *PortableToolPythonLockedPlanV1
 	var freshSelectedPlan providers.PortableToolPlanV1
+	var freshProjection *pythonprovider.PortableToolPythonProjectionV1
+	lockedSelectionMatches := false
+	if input.CurrentLock != nil && input.CurrentLock.PortableTools != nil {
+		lockedSelectionMatches, err = portableToolPythonSelectionsMatchCurrentBuildV1(
+			input.CurrentLock.PortableTools, input.DesiredPortableToolPlan,
+		)
+		if err != nil {
+			return providers.GraphExecutionResult{}, err
+		}
+	}
 	if input.PortablePython != nil {
 		if err := validatePortableToolPythonFreshPlanV1(input.PortablePython); err != nil {
 			return providers.GraphExecutionResult{}, err
@@ -120,27 +131,27 @@ func ExecutePreparedPythonGraph(
 		if err != nil {
 			return providers.GraphExecutionResult{}, err
 		}
-		projection = &derived
-	} else if input.CurrentLock != nil && input.CurrentLock.PortableTools != nil {
-		matches, err := portableToolPythonSelectionsMatchCurrentBuildV1(
-			input.CurrentLock.PortableTools, input.DesiredPortableToolPlan,
-		)
+		freshProjection = &derived
+	}
+	if lockedSelectionMatches && len(lockedBindingComponents) != 0 {
+		lockedPortablePython, err = buildPortableToolPythonLockedPlanV1(input.CurrentLock.PortableTools)
 		if err != nil {
 			return providers.GraphExecutionResult{}, err
 		}
-		if matches && len(lockedBindingComponents) != 0 {
-			lockedPortablePython, err = buildPortableToolPythonLockedPlanV1(input.CurrentLock.PortableTools)
+		if lockedPortablePython != nil {
+			derived, err := lockedPortablePython.selection.Projection()
 			if err != nil {
 				return providers.GraphExecutionResult{}, err
 			}
-			if lockedPortablePython != nil {
-				derived, err := lockedPortablePython.selection.Projection()
-				if err != nil {
-					return providers.GraphExecutionResult{}, err
-				}
-				projection = &derived
-			}
+			projection = &derived
+			// A fresh plan is only the fallback. Once the persisted lock is
+			// selected, keep it out of node configuration so locked replay is
+			// the sole acquisition mode observed by the graph.
+			input.PortablePython = nil
 		}
+	}
+	if projection == nil {
+		projection = freshProjection
 	}
 	if input.PortablePython == nil && desiredBindingCount != 0 && lockedPortablePython == nil {
 		return providers.GraphExecutionResult{}, fmt.Errorf("desired portable Python selection requires a fresh plan when locked selection does not match")
@@ -170,6 +181,7 @@ func ExecutePreparedPythonGraph(
 			if config.PortableToolBindings != nil {
 				config.PortableToolFreshPlan = input.PortablePython
 				config.PortableToolLockedPlan = lockedPortablePython
+				config.portableAcquisitions = input.portableAcquisitions
 				// Selected bindings always repeat the provider-owned locked
 				// descriptor and contract checks. A cached Python bundle is
 				// not sufficient evidence for the selected binding.
