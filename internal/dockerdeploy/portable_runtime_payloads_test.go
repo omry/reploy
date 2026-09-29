@@ -45,6 +45,118 @@ func TestPortableRuntimePayloadImageAcceptsExactFinalInventory(t *testing.T) {
 	}
 }
 
+func portableRuntimePayloadsWithoutPayloadForTest(t *testing.T, keepEnvironment bool) (providerstore.Store, *PortableRuntimePayloadsV1) {
+	t.Helper()
+	fixture := newPortableToolPythonLockedTestFixture(t)
+	plan := providers.ClonePortableToolLockV1(fixture.lock)
+	plan.Plan.PortableToolPlan.Tools[0].Responsibilities.Payloads = []providers.PortableToolSelectedRecordV1{}
+	if !keepEnvironment {
+		plan.Plan.PortableToolPlan.Tools[0].Runtime.Environment = []providers.PortableToolEnvironmentVariableV1{}
+	}
+	retained := []providers.PortableToolArtifactAcquisitionLockV1{}
+	for _, acquisition := range plan.Acquisitions {
+		if acquisition.Artifact == plan.Plan.PortableToolPlan.Tools[0].Responsibilities.BindingArtifacts[0].Reference {
+			retained = append(retained, acquisition)
+		}
+	}
+	plan.Acquisitions = retained
+	dag, err := providers.BuildPortableToolProviderDAGV1(plan.Plan.ProviderPlan, plan.Plan.PortableToolPlan, plan.Plan.Domains)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Plan = dag
+	if err := providers.ValidatePortableToolLockV1(plan); err != nil {
+		t.Fatal(err)
+	}
+	payloads, err := MaterializePortableRuntimePayloadsLockedV1(t.Context(), fixture.store, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fixture.store, payloads
+}
+
+func TestPortableRuntimeEnvironmentWithoutPayloadStillProducesOfflineLayer(t *testing.T) {
+	_, payloads := portableRuntimePayloadsWithoutPayloadForTest(t, true)
+	defer payloads.Cleanup()
+	if payloads.workspace == "" || len(payloads.copies) != 0 || len(payloads.Environment) == 0 {
+		t.Fatalf("environment-only layer was discarded: workspace %q, copies %d, environment %#v", payloads.workspace, len(payloads.copies), payloads.Environment)
+	}
+	dockerfile, err := payloads.Dockerfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(dockerfile, []byte("ADD ")) || !bytes.Contains(dockerfile, []byte("ENV PLAYWRIGHT_BROWSERS_PATH=")) {
+		t.Fatalf("environment-only Dockerfile = %s", dockerfile)
+	}
+}
+
+func TestPortableRuntimeWithoutPayloadOrEnvironmentHasNoLayer(t *testing.T) {
+	_, payloads := portableRuntimePayloadsWithoutPayloadForTest(t, false)
+	defer payloads.Cleanup()
+	if payloads.workspace != "" || len(payloads.Environment) != 0 || len(payloads.copies) != 0 {
+		t.Fatalf("unselected runtime layer was staged: workspace %q, environment %#v, copies %#v", payloads.workspace, payloads.Environment, payloads.copies)
+	}
+	if _, err := payloads.Dockerfile(); err == nil || !strings.Contains(err.Error(), "cleaned up") {
+		t.Fatalf("unselected runtime Dockerfile error = %v", err)
+	}
+}
+
+func TestPortableRuntimeEnvironmentOnlyLayerPreservesRootFSAndSelectedValues(t *testing.T) {
+	store, payloads := portableRuntimePayloadsWithoutPayloadForTest(t, true)
+	defer payloads.Cleanup()
+	upstream := testProbeImageDescriptor(t, "linux/amd64")
+	resultDescriptor := upstream
+	resultDescriptor.ConfigDigest = rendererDigest("c")
+	resultDescriptor.ImmutableReference = string(resultDescriptor.ConfigDigest)
+	image, err := realizedImageFromDescriptor(resultDescriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousBuild, previousInspect, previousRemove, previousCollision := buildPortableRuntimePayloadLayerV1,
+		inspectPortableRuntimePayloadLayerV1, removePortableRuntimePayloadLayerV1, requirePortableRuntimeDestinationsAbsentV1
+	t.Cleanup(func() {
+		buildPortableRuntimePayloadLayerV1, inspectPortableRuntimePayloadLayerV1 = previousBuild, previousInspect
+		removePortableRuntimePayloadLayerV1, requirePortableRuntimeDestinationsAbsentV1 = previousRemove, previousCollision
+	})
+	requirePortableRuntimeDestinationsAbsentV1 = func(context.Context, providerstore.Store, deploy.ImageDescriptor, []string) error {
+		t.Fatal("environment-only layer performed a payload destination probe")
+		return nil
+	}
+	buildPortableRuntimePayloadLayerV1 = func(_ context.Context, _ providerstore.Store, got deploy.ImageDescriptor, _ string, dockerfile []byte, _ RunOptions) (BuiltImageCandidate, error) {
+		if got.ConfigDigest != upstream.ConfigDigest || bytes.Contains(dockerfile, []byte("ADD ")) || !bytes.Contains(dockerfile, []byte("ENV PLAYWRIGHT_BROWSERS_PATH=")) {
+			t.Fatalf("environment-only build input changed: %s", dockerfile)
+		}
+		return BuiltImageCandidate{ImageID: resultDescriptor.ConfigDigest}, nil
+	}
+	inspectPortableRuntimePayloadLayerV1 = func(context.Context, BuiltImageCandidate, blueprint.Platform) (InspectedImageCandidate, error) {
+		variables := make([]deploy.ConfigEnvironmentVariable, 0, len(payloads.Environment))
+		for _, variable := range payloads.Environment {
+			variables = append(variables, deploy.ConfigEnvironmentVariable{Name: variable.Name, Value: variable.Value})
+		}
+		return InspectedImageCandidate{Descriptor: resultDescriptor, Image: image, Config: deploy.BaseConfig{Environment: variables}}, nil
+	}
+	removePortableRuntimePayloadLayerV1 = func(context.Context, BuiltImageCandidate) error { return nil }
+	layer, err := PreparePortableRuntimePayloadLayerV1(t.Context(), store, payloads, upstream, RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layer.Image.Image != image {
+		t.Fatalf("environment-only image = %#v", layer.Image.Image)
+	}
+	if err := layer.Cleanup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	resultDescriptor.RootFSDiffIDs = []canonical.Digest{rendererDigest("d")}
+	changedImage, err := realizedImageFromDescriptor(resultDescriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image = changedImage
+	if _, err := PreparePortableRuntimePayloadLayerV1(t.Context(), store, payloads, upstream, RunOptions{}); err == nil || !strings.Contains(err.Error(), "changed the upstream filesystem") {
+		t.Fatalf("environment-only filesystem substitution error = %v", err)
+	}
+}
+
 func TestPortableRuntimePayloadImageLimitsIncludeSelectedRootAndTarFraming(t *testing.T) {
 	const root = "/opt/reploy/tools/playwright/browser"
 	want := map[string]portableRuntimeInventoryEntryV1{

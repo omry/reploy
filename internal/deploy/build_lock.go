@@ -29,6 +29,7 @@ type BuildLockV1 struct {
 	Nodes                 []NodeLockV1                  `json:"nodes"`
 	Catalog               []providers.RealizedOutput    `json:"catalog"`
 	PortableTools         *providers.PortableToolLockV1 `json:"portable_tools,omitempty"`
+	PortableRuntimeLayer  *PortableRuntimeLayerV1       `json:"portable_runtime_layer,omitempty"`
 	RuntimePolicy         RuntimePolicyV1               `json:"runtime_policy"`
 	RuntimeLayer          ApplicationRuntimeLayerV1     `json:"runtime_layer"`
 	ValidationRecord      providerstore.StoreObjectRef  `json:"validation_record"`
@@ -159,6 +160,9 @@ func ValidateBuildLockV1(lock BuildLockV1, validateProfileOwner providers.Requir
 		if err := validateBuildLockPortableToolPlan(lock); err != nil {
 			return err
 		}
+	}
+	if err := validateBuildLockPortableRuntimeLayerV1(lock); err != nil {
+		return err
 	}
 	if err := validateBuildLockImageLineage(lock); err != nil {
 		return err
@@ -309,6 +313,12 @@ func validateBuildLockImageLineage(lock BuildLockV1) error {
 			)
 		}
 		current = node.Result
+	}
+	if lock.PortableRuntimeLayer != nil {
+		if lock.PortableRuntimeLayer.Upstream != current {
+			return fmt.Errorf("build lock portable runtime layer upstream does not match the final graph prefix")
+		}
+		current = lock.PortableRuntimeLayer.Result
 	}
 	if lock.RuntimeLayer.Upstream != current {
 		return fmt.Errorf("build lock runtime layer upstream does not match the final graph prefix")

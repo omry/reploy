@@ -68,17 +68,20 @@ func PreparePortableRuntimePayloadLayerV1(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if payloads == nil || payloads.workspace == "" || len(payloads.copies) == 0 {
-		return nil, fmt.Errorf("prepare runtime payload layer requires staged payloads")
+	if payloads == nil || payloads.workspace == "" || (len(payloads.copies) == 0 && len(payloads.authorityEnvironment) == 0) {
+		return nil, fmt.Errorf("prepare runtime payload layer requires staged payloads or selected environment")
 	}
 	if err := payloads.validateAuthorityV1(); err != nil {
 		return nil, err
 	}
-	if len(payloads.sealedInventory) == 0 {
+	environmentOnly := len(payloads.copies) == 0
+	if !environmentOnly && len(payloads.sealedInventory) == 0 {
 		return nil, fmt.Errorf("runtime payloads have no sealed staging inventory")
 	}
-	if err := verifyPortableRuntimeStagingV1(payloads, payloads.sealedInventory); err != nil {
-		return nil, err
+	if !environmentOnly {
+		if err := verifyPortableRuntimeStagingV1(payloads, payloads.sealedInventory); err != nil {
+			return nil, err
+		}
 	}
 	if err := upstream.Validate(); err != nil {
 		return nil, err
@@ -99,11 +102,13 @@ func PreparePortableRuntimePayloadLayerV1(
 	for index, copy := range payloads.copies {
 		destinations[index] = copy.Destination
 	}
-	if err := requirePortableRuntimeDestinationsAbsentV1(ctx, store, upstream, destinations); err != nil {
-		return nil, fmt.Errorf("runtime payload destination collision: %w", err)
-	}
-	if err := verifyPortableRuntimePayloadArchiveV1(payloads); err != nil {
-		return nil, fmt.Errorf("runtime payload archive changed before build: %w", err)
+	if !environmentOnly {
+		if err := requirePortableRuntimeDestinationsAbsentV1(ctx, store, upstream, destinations); err != nil {
+			return nil, fmt.Errorf("runtime payload destination collision: %w", err)
+		}
+		if err := verifyPortableRuntimePayloadArchiveV1(payloads); err != nil {
+			return nil, fmt.Errorf("runtime payload archive changed before build: %w", err)
+		}
 	}
 	expected := append([]portableRuntimeInventoryEntryV1(nil), payloads.sealedInventory...)
 	options.Context = ctx
@@ -125,11 +130,22 @@ func PreparePortableRuntimePayloadLayerV1(
 	if inspected.Descriptor.Platform != upstream.Platform {
 		return fail(fmt.Errorf("runtime payload image platform differs from upstream"))
 	}
+	if environmentOnly {
+		upstreamImage, err := realizedImageFromDescriptor(upstream)
+		if err != nil {
+			return fail(err)
+		}
+		if inspected.Image.RootFSSubject != upstreamImage.RootFSSubject {
+			return fail(fmt.Errorf("runtime environment-only layer changed the upstream filesystem"))
+		}
+	}
 	if err := requirePortableRuntimeImageEnvironmentV1(inspected, payloads.authorityEnvironment); err != nil {
 		return fail(err)
 	}
-	if err := verifyPortableRuntimeInventoryV1(ctx, store, inspected, expected); err != nil {
-		return fail(err)
+	if !environmentOnly {
+		if err := verifyPortableRuntimeInventoryV1(ctx, store, inspected, expected); err != nil {
+			return fail(err)
+		}
 	}
 	result.Image = inspected
 	return result, nil

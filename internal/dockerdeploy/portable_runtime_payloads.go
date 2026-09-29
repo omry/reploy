@@ -253,7 +253,7 @@ func MaterializePortableRuntimePayloadsLockedV1(
 	claims := map[string]selectedPayload{}
 	environment := map[string]string{}
 	for _, entry := range authorityLock.Plan.PortableToolPlan.Tools {
-		if entry.Runtime == nil || len(entry.Responsibilities.Payloads) == 0 {
+		if entry.Runtime == nil {
 			continue
 		}
 		for _, variable := range entry.Runtime.Environment {
@@ -261,6 +261,9 @@ func MaterializePortableRuntimePayloadsLockedV1(
 				return nil, fmt.Errorf("conflicting runtime environment %s", variable.Name)
 			}
 			environment[variable.Name] = variable.Value
+		}
+		if len(entry.Responsibilities.Payloads) == 0 {
+			continue
 		}
 		for _, record := range entry.Responsibilities.Payloads {
 			encoded, err := json.Marshal(record.Record.Value)
@@ -298,8 +301,31 @@ func MaterializePortableRuntimePayloadsLockedV1(
 			selected = append(selected, selectedPayload{payload: payload, descriptor: acquisition.Descriptor, root: entry.Runtime.InstallRoot})
 		}
 	}
+	authorityEnvironment := make([]providers.PortableToolEnvironmentVariableV1, 0, len(environment))
+	for name, value := range environment {
+		authorityEnvironment = append(authorityEnvironment, providers.PortableToolEnvironmentVariableV1{Name: name, Value: value})
+	}
+	sort.Slice(authorityEnvironment, func(i, j int) bool { return authorityEnvironment[i].Name < authorityEnvironment[j].Name })
 	if len(selected) == 0 {
-		return nil, fmt.Errorf("locked plan selects no runtime payloads")
+		materialized := &PortableRuntimePayloadsV1{
+			Lock:                 providers.ClonePortableToolLockV1(authorityLock),
+			authorityLock:        authorityLock,
+			Environment:          append([]providers.PortableToolEnvironmentVariableV1{}, authorityEnvironment...),
+			authorityEnvironment: append([]providers.PortableToolEnvironmentVariableV1{}, authorityEnvironment...),
+		}
+		if len(authorityEnvironment) == 0 {
+			return materialized, nil
+		}
+		workspace, err := store.NewWorkspace("runtime-environment-*")
+		if err != nil {
+			return nil, err
+		}
+		materialized.workspace = workspace
+		materialized.contextDir = filepath.Join(workspace, "context")
+		if err := os.MkdirAll(materialized.contextDir, 0o700); err != nil {
+			return nil, errors.Join(err, materialized.Cleanup())
+		}
+		return materialized, nil
 	}
 	for _, item := range selected {
 		file, err := openVerifiedPortableRuntimePayloadV1(store, item.descriptor)
@@ -314,11 +340,6 @@ func MaterializePortableRuntimePayloadsLockedV1(
 	if err != nil {
 		return nil, err
 	}
-	authorityEnvironment := make([]providers.PortableToolEnvironmentVariableV1, 0, len(environment))
-	for name, value := range environment {
-		authorityEnvironment = append(authorityEnvironment, providers.PortableToolEnvironmentVariableV1{Name: name, Value: value})
-	}
-	sort.Slice(authorityEnvironment, func(i, j int) bool { return authorityEnvironment[i].Name < authorityEnvironment[j].Name })
 	materialized := &PortableRuntimePayloadsV1{
 		Lock:                 providers.ClonePortableToolLockV1(authorityLock),
 		Environment:          append([]providers.PortableToolEnvironmentVariableV1(nil), authorityEnvironment...),
@@ -546,9 +567,15 @@ func (payloads *PortableRuntimePayloadsV1) Dockerfile() ([]byte, error) {
 	if err := payloads.validateAuthorityV1(); err != nil {
 		return nil, err
 	}
-	result, err := portableRuntimeDockerfileV1(payloads.copies, payloads.executablePaths)
-	if err != nil {
-		return nil, err
+	var result []byte
+	if len(payloads.copies) == 0 && len(payloads.authorityEnvironment) != 0 {
+		result = []byte("# syntax=" + MaterializationDockerfileSyntax + "\nARG REPLOY_BASE_IMAGE=scratch\nFROM ${REPLOY_BASE_IMAGE}\n")
+	} else {
+		var err error
+		result, err = portableRuntimeDockerfileV1(payloads.copies, payloads.executablePaths)
+		if err != nil {
+			return nil, err
+		}
 	}
 	for _, variable := range payloads.authorityEnvironment {
 		if !slices.ContainsFunc(payloads.authorityLock.Plan.PortableToolPlan.Tools, func(entry providers.PortableToolPlanEntryV1) bool {
