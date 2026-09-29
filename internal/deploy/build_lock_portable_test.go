@@ -160,3 +160,87 @@ func TestValidateBuildLockV1AcceptsPortableRuntimeSelectedSupplier(t *testing.T)
 		t.Fatal(err)
 	}
 }
+
+func addPortableRuntimeLayerForTest(t *testing.T, lock *BuildLockV1) {
+	t.Helper()
+	if lock.PortableTools == nil {
+		t.Fatal("portable runtime layer fixture requires a selected lock")
+	}
+	image := providers.RealizedImageV1{
+		Digest: buildLockTestDigest("c"), ConfigDigest: buildLockTestDigest("d"), RootFSSubject: buildLockTestDigest("e"),
+	}
+	transaction, err := PortableRuntimeLayerTransactionDigestV1(*lock.PortableTools, lock.RuntimeLayer.Upstream, image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.PortableRuntimeLayer = &PortableRuntimeLayerV1{
+		Schema: PortableRuntimeLayerSchemaV1, Upstream: lock.RuntimeLayer.Upstream,
+		Result: image, TransactionDigest: transaction,
+	}
+	lock.RuntimeLayer.Upstream = image
+	lock.RuntimeLayer.TransactionDigest, err = ApplicationRuntimeLayerTransactionDigestV1(
+		lock.RuntimeLayer.Verifier, lock.RuntimeLayer.Account, image, lock.Platform,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateBuildLockV1RejectsInvalidPortableRuntimeLayer(t *testing.T) {
+	newLock := func(t *testing.T) BuildLockV1 {
+		t.Helper()
+		_, store, lock, _, _ := buildReachabilityFixture(t)
+		artifact, err := store.Publish(context.Background(), "portable/demo.tar", "jdk-archive", strings.NewReader("portable"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		lock.PortableTools = portableToolReachabilityLockV1(t, &lock, artifact)
+		addPortableRuntimeLayerForTest(t, &lock)
+		if err := ValidateBuildLockV1(lock, acceptBuildLockProfile); err != nil {
+			t.Fatal(err)
+		}
+		return lock
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, *BuildLockV1)
+		want   string
+	}{
+		{"schema", func(_ *testing.T, lock *BuildLockV1) { lock.PortableRuntimeLayer.Schema = "other" }, "schema must"},
+		{"invalid result", func(_ *testing.T, lock *BuildLockV1) {
+			lock.PortableRuntimeLayer.Result.Digest = ""
+		}, "portable runtime layer result"},
+		{"invalid upstream", func(_ *testing.T, lock *BuildLockV1) {
+			lock.PortableRuntimeLayer.Upstream.Digest = ""
+		}, "portable runtime layer transaction"},
+		{"transaction", func(_ *testing.T, lock *BuildLockV1) {
+			lock.PortableRuntimeLayer.TransactionDigest = buildLockTestDigest("f")
+		}, "transaction digest differs"},
+		{"unchanged image", func(_ *testing.T, lock *BuildLockV1) {
+			lock.PortableRuntimeLayer.Result = lock.PortableRuntimeLayer.Upstream
+		}, "did not change"},
+		{"wrong upstream", func(t *testing.T, lock *BuildLockV1) {
+			lock.PortableRuntimeLayer.Upstream.Digest = buildLockTestDigest("f")
+			var err error
+			lock.PortableRuntimeLayer.TransactionDigest, err = PortableRuntimeLayerTransactionDigestV1(
+				*lock.PortableTools, lock.PortableRuntimeLayer.Upstream, lock.PortableRuntimeLayer.Result,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}, "upstream does not match"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			lock := newLock(t)
+			test.mutate(t, &lock)
+			if err := ValidateBuildLockV1(lock, acceptBuildLockProfile); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validation error = %v, want %q", err, test.want)
+			}
+		})
+	}
+	lock := validBuildLock(t)
+	lock.PortableRuntimeLayer = newLock(t).PortableRuntimeLayer
+	if err := ValidateBuildLockV1(lock, acceptBuildLockProfile); err == nil || !strings.Contains(err.Error(), "no selected application") {
+		t.Fatalf("unselected layer validation error = %v", err)
+	}
+}
