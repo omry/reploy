@@ -121,3 +121,159 @@ func TestRecoverPendingImageReferencesKeepsFirstGeneration(t *testing.T) {
 		t.Fatalf("removed = %#v, want %#v", removed, want)
 	}
 }
+
+func TestRecoverPendingImageReferencesWithLocksCleansPortableIntermediateExactly(t *testing.T) {
+	dir, pending := pendingReferenceFixture(t)
+	oldImage := providers.RealizedImageV1{
+		Digest: pending.Old.ImageDigest, ConfigDigest: pending.Old.ImageDigest,
+		RootFSSubject: pending.Old.RootFSSubject,
+	}
+	candidateLock := &deploy.BuildLockV1{PortableRuntimeLayer: &deploy.PortableRuntimeLayerV1{Result: pending.Candidate.Image}}
+	oldLock := &deploy.BuildLockV1{PortableRuntimeLayer: &deploy.PortableRuntimeLayerV1{Result: oldImage}}
+	var removed []string
+	remove := func(_ context.Context, image providers.RealizedImageV1, references EnvironmentImageReferences, kind EnvironmentReferenceKind, _ string, _ string) error {
+		reference, err := selectEnvironmentReference(references, kind)
+		if err != nil {
+			return err
+		}
+		removed = append(removed, "image:"+string(image.ConfigDigest)+":"+reference)
+		return nil
+	}
+	removePortable := func(_ context.Context, image providers.RealizedImageV1, generation, _ string, _ string) error {
+		removed = append(removed, "portable:"+string(image.ConfigDigest)+":"+generation)
+		return nil
+	}
+	removePortableDigest := func(_ context.Context, image providers.RealizedImageV1, _ string, _ string) error {
+		removed = append(removed, "digest:"+string(image.ConfigDigest))
+		return nil
+	}
+	removePortableDigestReference := func(_ context.Context, reference, _, _ string) error {
+		removed = append(removed, "digest-reference:"+reference)
+		return nil
+	}
+	if err := recoverPendingImageReferencesWithLocks(
+		context.Background(), pending, deploy.PendingRecoveryDiscardCandidate, &oldImage,
+		candidateLock, oldLock, "demo", dir, remove, removePortable, removePortableDigest, removePortableDigestReference,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 4 || !strings.HasPrefix(removed[2], "portable:"+string(pending.Candidate.Image.ConfigDigest)+":") ||
+		removed[3] != "digest:"+string(pending.Candidate.Image.ConfigDigest) {
+		t.Fatalf("discard cleanup = %#v", removed)
+	}
+	removed = nil
+	if err := recoverPendingImageReferencesWithLocks(
+		context.Background(), pending, deploy.PendingRecoveryKeepCandidate, &oldImage,
+		candidateLock, oldLock, "demo", dir, remove, removePortable, removePortableDigest, removePortableDigestReference,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 5 || !strings.HasPrefix(removed[2], "portable:"+string(oldImage.ConfigDigest)+":") ||
+		removed[3] != "digest:"+string(oldImage.ConfigDigest) ||
+		removed[4] != "digest:"+string(pending.Candidate.Image.ConfigDigest) {
+		t.Fatalf("keep cleanup = %#v", removed)
+	}
+	removed = nil
+	pending.Old = nil
+	if err := recoverPendingImageReferencesWithLocks(
+		context.Background(), pending, deploy.PendingRecoveryKeepCandidate, nil,
+		candidateLock, nil, "demo", dir, remove, removePortable, removePortableDigest, removePortableDigestReference,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 2 || !strings.HasPrefix(removed[0], "image:"+string(pending.Candidate.Image.ConfigDigest)+":") ||
+		removed[1] != "digest:"+string(pending.Candidate.Image.ConfigDigest) {
+		t.Fatalf("first-generation keep cleanup = %#v", removed)
+	}
+}
+
+func TestRecoverPendingImageReferencesWithLocksDiscardsPreLockWithoutCandidateLock(t *testing.T) {
+	dir, pending := pendingReferenceFixture(t)
+	pending.Old = nil
+	pending.Phase = deploy.PendingBuildPhaseValidated
+	var removed []removedReference
+	remove := func(_ context.Context, image providers.RealizedImageV1, references EnvironmentImageReferences, kind EnvironmentReferenceKind, _ string, _ string) error {
+		reference, err := selectEnvironmentReference(references, kind)
+		if err != nil {
+			return err
+		}
+		removed = append(removed, removedReference{image: image, reference: reference, kind: kind})
+		return nil
+	}
+	removePortable := func(context.Context, providers.RealizedImageV1, string, string, string) error {
+		t.Fatal("pre-lock discard attempted portable cleanup without a candidate lock")
+		return nil
+	}
+	removePortableDigest := func(context.Context, providers.RealizedImageV1, string, string) error {
+		t.Fatal("pre-lock discard attempted digest cleanup without a candidate lock")
+		return nil
+	}
+	removePortableDigestReference := func(context.Context, string, string, string) error {
+		t.Fatal("pre-lock discard attempted provisional digest cleanup without a recorded alias")
+		return nil
+	}
+	if err := recoverPendingImageReferencesWithLocks(
+		context.Background(), pending, deploy.PendingRecoveryDiscardCandidate, nil,
+		nil, nil, "demo", dir, remove, removePortable, removePortableDigest, removePortableDigestReference,
+	); err != nil {
+		t.Fatal(err)
+	}
+	want := []removedReference{
+		{image: pending.Candidate.Image, reference: pending.Candidate.GenerationReference, kind: EnvironmentReferenceGeneration},
+		{image: pending.Candidate.Image, reference: pending.Candidate.TemporaryReference, kind: EnvironmentReferenceTemporary},
+	}
+	if !reflect.DeepEqual(removed, want) {
+		t.Fatalf("pre-lock discard cleanup = %#v, want %#v", removed, want)
+	}
+}
+
+func TestRecoverPendingImageReferencesWithLocksRemovesRecordedPortableDigestAfterPreLockCrash(t *testing.T) {
+	dir, pending := pendingReferenceFixture(t)
+	pending.Old = nil
+	portableImage := providers.RealizedImageV1{
+		Digest: rendererDigest("a"), ConfigDigest: rendererDigest("a"), RootFSSubject: rendererDigest("b"),
+	}
+	provisional, err := NewEnvironmentPortableRuntimeLayerReference(
+		portableImage.ConfigDigest, "demo", dir,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending.Cleanup = []deploy.CleanupItemV1{{
+		Kind: deploy.CleanupKindTemporaryImageReference, Identity: provisional,
+	}}
+	for _, phase := range []string{deploy.PendingBuildPhaseValidated, deploy.PendingBuildPhaseGenerationCreated} {
+		t.Run(phase, func(t *testing.T) {
+			pending.Phase = phase
+			aliases := map[string]bool{provisional: true}
+			remove := func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error {
+				return nil
+			}
+			removePortable := func(context.Context, providers.RealizedImageV1, string, string, string) error {
+				t.Fatal("pre-lock discard attempted generation portable cleanup without a candidate lock")
+				return nil
+			}
+			removePortableDigest := func(context.Context, providers.RealizedImageV1, string, string) error {
+				t.Fatal("pre-lock discard attempted digest portable cleanup without a candidate lock")
+				return nil
+			}
+			removePortableDigestReference := func(_ context.Context, reference, _, _ string) error {
+				if !aliases[reference] {
+					t.Fatalf("provisional alias %q was not present at crash recovery", reference)
+				}
+				delete(aliases, reference)
+				return nil
+			}
+			if err := recoverPendingImageReferencesWithLocks(
+				context.Background(), pending, deploy.PendingRecoveryDiscardCandidate, nil,
+				nil, nil, "demo", dir, remove, removePortable, removePortableDigest,
+				removePortableDigestReference,
+			); err != nil {
+				t.Fatal(err)
+			}
+			if aliases[provisional] {
+				t.Fatalf("provisional alias %q survived %s crash recovery", provisional, phase)
+			}
+		})
+	}
+}

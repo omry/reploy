@@ -33,6 +33,18 @@ func TestOperationLockRoundTripsValidatedBuild(t *testing.T) {
 	if err := lock.CommitValidatedBuildV1(record); err != nil {
 		t.Fatal(err)
 	}
+	discarding := record
+	discarding.Discarding = true
+	if err := lock.CommitValidatedBuildV1(discarding); err != nil {
+		t.Fatal(err)
+	}
+	retained, found, err := lock.ReadValidatedBuildV1()
+	if err != nil || !found || !retained.Discarding {
+		t.Fatalf("discard intent not retained: found=%t err=%v record=%#v", found, err, retained)
+	}
+	if err := lock.CommitValidatedBuildV1(record); err != nil {
+		t.Fatal(err)
+	}
 	loaded, found, err := lock.ReadValidatedBuildV1()
 	if err != nil || !found || !reflect.DeepEqual(loaded, record) {
 		t.Fatalf("loaded = %#v, found=%v, err=%v", loaded, found, err)
@@ -42,6 +54,12 @@ func TestOperationLockRoundTripsValidatedBuild(t *testing.T) {
 	}
 	if _, found, err := lock.ReadValidatedBuildV1(); err != nil || found {
 		t.Fatalf("validated build remained: found=%v err=%v", found, err)
+	}
+	discarding.Discarded = true
+	discarding.PendingStorageCleanup = true
+	discarding.PendingCleanup = nil
+	if err := ValidateValidatedBuildV1(discarding); err == nil || !strings.Contains(err.Error(), "still be discarding") {
+		t.Fatalf("conflicting discard phases error = %v", err)
 	}
 }
 

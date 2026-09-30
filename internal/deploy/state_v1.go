@@ -9,6 +9,7 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
+	"github.com/omry/reploy/internal/providers"
 )
 
 const StateSchemaV1 = "state-v1"
@@ -31,7 +32,17 @@ type StateV1 struct {
 // StagingStateV1 marks a deployment as staged. Staging-only package overrides
 // live in the private sidecar rather than deployment state.
 type StagingStateV1 struct {
-	Schema string `json:"schema"`
+	Schema   string                `json:"schema"`
+	Retiring *RetiringGenerationV1 `json:"retiring,omitempty"`
+}
+
+// RetiringGenerationV1 keeps the exact former owner's Docker reference
+// authority across a force-replacement state commit until cleanup completes.
+type RetiringGenerationV1 struct {
+	Environment          string                     `json:"environment"`
+	Generation           EnvironmentGenerationState `json:"generation"`
+	FinalImage           providers.RealizedImageV1  `json:"final_image"`
+	PortableRuntimeLayer *providers.RealizedImageV1 `json:"portable_runtime_layer,omitempty"`
 }
 
 func ValidateStateV1(state StateV1) error {
@@ -58,6 +69,9 @@ func ValidateStateV1(state StateV1) error {
 		if state.Deployment != nil {
 			return fmt.Errorf("state cannot contain both staging and installed deployment facts")
 		}
+		if state.Staging.Retiring != nil && state.Current != nil {
+			return fmt.Errorf("staging cannot retire a generation while another generation is current")
+		}
 	}
 	if state.Current != nil {
 		if err := ValidateEnvironmentGenerationState(*state.Current); err != nil {
@@ -72,9 +86,33 @@ func ValidateStateV1(state StateV1) error {
 	return nil
 }
 
-func ValidateStagingStateV1(state StagingStateV1, _ blueprint.Document) error {
+func ValidateStagingStateV1(state StagingStateV1, document blueprint.Document) error {
 	if state.Schema != StagingStateSchemaV1 {
 		return fmt.Errorf("staging state schema must be %q", StagingStateSchemaV1)
+	}
+	if state.Retiring != nil {
+		retiring := state.Retiring
+		if err := blueprint.ValidateEnvironmentID("retiring environment", retiring.Environment); err != nil {
+			return err
+		}
+		if retiring.Environment == document.Environment.ID {
+			return fmt.Errorf("retiring generation must belong to a different environment")
+		}
+		if err := ValidateEnvironmentGenerationState(retiring.Generation); err != nil {
+			return fmt.Errorf("retiring generation: %w", err)
+		}
+		if err := retiring.FinalImage.Validate(); err != nil {
+			return fmt.Errorf("retiring final image: %w", err)
+		}
+		if retiring.Generation.ImageDigest != retiring.FinalImage.Digest ||
+			retiring.Generation.RootFSSubject != retiring.FinalImage.RootFSSubject {
+			return fmt.Errorf("retiring final image does not match its generation")
+		}
+		if retiring.PortableRuntimeLayer != nil {
+			if err := retiring.PortableRuntimeLayer.Validate(); err != nil {
+				return fmt.Errorf("retiring portable runtime layer: %w", err)
+			}
+		}
 	}
 	return nil
 }
