@@ -22,6 +22,7 @@ func acceptRecoveryBundleOwner(providers.ResolvedBundleIdentityV1) error { retur
 func TestPreparePendingPublicationRecoveryDiscardsInterruptedFirstBuildWithoutCandidateLock(t *testing.T) {
 	dir, pending := pendingReferenceFixture(t)
 	pending.Old = nil
+	pending.Phase = deploy.PendingBuildPhaseValidated
 	store, err := providerstore.NewStore(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -34,8 +35,85 @@ func TestPreparePendingPublicationRecoveryDiscardsInterruptedFirstBuildWithoutCa
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Decision != deploy.PendingRecoveryDiscardCandidate || plan.SelectedLock != nil || loads != 0 {
-		t.Fatalf("decision = %q, selected lock = %#v, loads = %d", plan.Decision, plan.SelectedLock, loads)
+	if plan.Decision != deploy.PendingRecoveryDiscardCandidate || plan.SelectedLock != nil || plan.CandidateLock != nil || loads != 0 {
+		t.Fatalf("decision = %q, selected lock = %#v, candidate lock = %#v, loads = %d", plan.Decision, plan.SelectedLock, plan.CandidateLock, loads)
+	}
+}
+
+func TestRecoverPendingPublicationRemovesRecordedPortableDigestAfterPreLockCrash(t *testing.T) {
+	for _, phase := range []string{deploy.PendingBuildPhaseValidated, deploy.PendingBuildPhaseGenerationCreated} {
+		t.Run(phase, func(t *testing.T) {
+			stubNoAbandonedBuildReferences(t)
+			dir, pending := pendingReferenceFixture(t)
+			pending.Old = nil
+			pending.Phase = deploy.PendingBuildPhaseValidated
+			portableImage := providers.RealizedImageV1{
+				Digest: rendererDigest("a"), ConfigDigest: rendererDigest("a"), RootFSSubject: rendererDigest("b"),
+			}
+			provisional, err := NewEnvironmentPortableRuntimeLayerReference(
+				portableImage.ConfigDigest, "demo", dir,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending.Cleanup = []deploy.CleanupItemV1{{
+				Kind: deploy.CleanupKindTemporaryImageReference, Identity: provisional,
+			}}
+			operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer operation.Unlock()
+			if err := operation.WritePendingBuild(pending); err != nil {
+				t.Fatal(err)
+			}
+			if phase == deploy.PendingBuildPhaseGenerationCreated {
+				if err := operation.AdvancePendingBuildPhase(phase); err != nil {
+					t.Fatal(err)
+				}
+			}
+			store, err := providerstore.NewStore(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			aliases := map[string]bool{
+				pending.Candidate.GenerationReference: true,
+				pending.Candidate.TemporaryReference:  true,
+				provisional:                           true,
+			}
+			previousDocker := runDockerOutput
+			t.Cleanup(func() { runDockerOutput = previousDocker })
+			runDockerOutput = func(_ context.Context, args ...string) (string, error) {
+				if len(args) >= 5 && args[0] == "image" && args[1] == "ls" {
+					reference := args[len(args)-1]
+					if !aliases[reference] {
+						return "", nil
+					}
+					if reference == provisional {
+						return string(portableImage.ConfigDigest), nil
+					}
+					return string(pending.Candidate.Image.ConfigDigest), nil
+				}
+				if len(args) == 4 && args[0] == "image" && args[1] == "rm" && args[2] == "--force" {
+					delete(aliases, args[3])
+					return "", nil
+				}
+				t.Fatalf("unexpected Docker recovery command: %v", args)
+				return "", nil
+			}
+			if _, err := RecoverPendingPublication(
+				t.Context(), operation, store, nil, "demo", dir,
+				acceptRecoveryProfileOwner, acceptRecoveryBundleOwner,
+			); err != nil {
+				t.Fatal(err)
+			}
+			if aliases[provisional] {
+				t.Fatalf("provisional alias %q survived %s crash recovery", provisional, phase)
+			}
+			if _, found, err := operation.ReadPendingBuild(); err != nil || found {
+				t.Fatalf("pending after crash recovery: found=%v err=%v", found, err)
+			}
+		})
 	}
 }
 
