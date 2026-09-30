@@ -30,6 +30,7 @@ type ValidatedBuildV1 struct {
 	BuildLockDigest        canonical.Digest            `json:"build_lock_digest"`
 	Image                  providers.RealizedImageV1   `json:"image"`
 	ImageReference         string                      `json:"image_reference"`
+	PortableRuntimeLayer   *ValidatedBuildReferenceV1  `json:"portable_runtime_layer,omitempty"`
 	PendingCleanup         []ValidatedBuildReferenceV1 `json:"pending_cleanup,omitempty"`
 	// PendingStorageCleanup keeps successful validation authoritative while
 	// superseded locks or provider-store objects await another cleanup attempt.
@@ -83,6 +84,14 @@ func ValidateValidatedBuildV1(record ValidatedBuildV1) error {
 	); err != nil {
 		return err
 	}
+	if record.PortableRuntimeLayer != nil {
+		if err := validateValidatedBuildReferenceV1(*record.PortableRuntimeLayer, "validated build portable runtime layer"); err != nil {
+			return err
+		}
+		if record.PortableRuntimeLayer.ImageReference == record.ImageReference {
+			return fmt.Errorf("validated build portable runtime layer duplicates the final image reference")
+		}
+	}
 	previous := ""
 	for index, pending := range record.PendingCleanup {
 		if err := validateValidatedBuildReferenceV1(pending, fmt.Sprintf("validated build pending cleanup %d", index)); err != nil {
@@ -91,12 +100,18 @@ func ValidateValidatedBuildV1(record ValidatedBuildV1) error {
 		if pending.ImageReference == record.ImageReference {
 			return fmt.Errorf("validated build pending cleanup %d duplicates the current image reference", index)
 		}
+		if record.PortableRuntimeLayer != nil && pending.ImageReference == record.PortableRuntimeLayer.ImageReference {
+			return fmt.Errorf("validated build pending cleanup %d duplicates the current portable runtime layer reference", index)
+		}
 		if index > 0 && previous >= pending.ImageReference {
 			return fmt.Errorf("validated build pending cleanup references must be unique and sorted")
 		}
 		previous = pending.ImageReference
 	}
 	if record.Discarded {
+		if record.PortableRuntimeLayer != nil {
+			return fmt.Errorf("discarded validated build cannot retain a portable runtime layer reference")
+		}
 		if len(record.PendingCleanup) != 0 {
 			return fmt.Errorf("discarded validated build cannot retain pending image references")
 		}

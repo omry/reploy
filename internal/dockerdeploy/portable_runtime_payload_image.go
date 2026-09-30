@@ -17,6 +17,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/probe"
@@ -36,9 +37,69 @@ type PortableRuntimePayloadImageV1 struct {
 var buildPortableRuntimePayloadLayerV1 = buildSourceBuilderLayerV1
 var inspectPortableRuntimePayloadLayerV1 = InspectBuiltImageCandidate
 var removePortableRuntimePayloadLayerV1 = RemoveBuiltImageCandidate
+var inspectPortableRuntimeLayerReferenceV1 = inspectPortableRuntimeLayerReference
 var requirePortableRuntimeDestinationsAbsentV1 = requirePortableRuntimeDestinationsAbsent
 var preparePortableRuntimeProbeWorkspaceV1 = PrepareProbeWorkspace
 var openPortableRuntimeProbeSessionV1 = OpenImageValidationSession
+
+func inspectPortableRuntimeLayerReference(
+	ctx context.Context,
+	reference string,
+	platform blueprint.Platform,
+) (InspectedImageCandidate, error) {
+	return inspectPortableRuntimeLayerReferenceWith(ctx, reference, platform, runDockerOutput, InspectBuiltImageCandidate)
+}
+
+func inspectPortableRuntimeLayerReferenceWith(
+	ctx context.Context,
+	reference string,
+	platform blueprint.Platform,
+	run dockerOutputRunner,
+	inspect func(context.Context, BuiltImageCandidate, blueprint.Platform) (InspectedImageCandidate, error),
+) (InspectedImageCandidate, error) {
+	if ctx == nil {
+		return InspectedImageCandidate{}, fmt.Errorf("inspect portable runtime layer reference requires a context")
+	}
+	if err := platform.Validate(); err != nil {
+		return InspectedImageCandidate{}, fmt.Errorf("inspect portable runtime layer reference platform: %w", err)
+	}
+	if err := ValidateEnvironmentPortableRuntimeLayerReferenceShape(reference); err != nil {
+		return InspectedImageCandidate{}, err
+	}
+	if run == nil || inspect == nil {
+		return InspectedImageCandidate{}, fmt.Errorf("inspect portable runtime layer reference requires complete backends")
+	}
+	readReference := func() (canonical.Digest, error) {
+		output, err := run(ctx, "image", "inspect", "--format", "{{.Id}}", reference)
+		if err != nil {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return "", contextErr
+			}
+			return "", fmt.Errorf("inspect portable runtime layer reference %q: %w", reference, err)
+		}
+		imageID := canonical.Digest(strings.TrimSpace(output))
+		if err := imageID.Validate(); err != nil {
+			return "", fmt.Errorf("inspect portable runtime layer reference config ID: %w", err)
+		}
+		return imageID, nil
+	}
+	imageID, err := readReference()
+	if err != nil {
+		return InspectedImageCandidate{}, err
+	}
+	image, err := inspect(ctx, BuiltImageCandidate{ImageID: imageID}, platform)
+	if err != nil {
+		return InspectedImageCandidate{}, err
+	}
+	currentID, err := readReference()
+	if err != nil {
+		return InspectedImageCandidate{}, err
+	}
+	if currentID != imageID {
+		return InspectedImageCandidate{}, fmt.Errorf("portable runtime layer reference %q changed during inspection", reference)
+	}
+	return image, nil
+}
 
 const portableRuntimeDestinationAncestorSymlinkCheckV1 = `for candidate in "$@"; do while [ "$candidate" != "/" ]; do test ! -L "$candidate" || exit 1; candidate="${candidate%/*}"; [ -n "$candidate" ] || candidate=/; done; done`
 const portableRuntimeDestinationAbsenceCheckV1 = `for candidate in "$@"; do test ! -e "$candidate" && test ! -L "$candidate" || exit 1; done`

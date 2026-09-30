@@ -26,20 +26,22 @@ type StagedDeploymentRemoveResultV1 struct {
 }
 
 type stagedDeploymentRemoveBackendV1 struct {
-	acquire          func(context.Context, string) (*deploy.OperationLock, error)
-	newStore         func(string) (providerstore.Store, error)
-	recoverPending   func(context.Context, *deploy.OperationLock, providerstore.Store, *deploy.EnvironmentGenerationState, string, string) (bool, error)
-	admit            func(context.Context, string, *deploy.OperationLock, ControlAdmissionInputV1) (AdmittedControlV1, error)
-	stopOwned        func(context.Context, *deploy.OperationLock, deploy.StateV1, string, RunOptions) error
-	discardValidated func(context.Context, *deploy.OperationLock, string, string) error
-	removeMarker     func(*deploy.OperationLock, string) error
-	releaseLease     func(*deploy.ControlLeaseV1) error
-	reserve          func(string) (string, error)
-	rename           func(string, string) error
-	unlock           func(*deploy.OperationLock) error
-	removeReference  func(context.Context, providers.RealizedImageV1, string, string, string) error
-	removeAll        func(string) error
-	complete         func(*deploy.OperationLock, string, *deploy.ControlLeaseV1) error
+	acquire                 func(context.Context, string) (*deploy.OperationLock, error)
+	newStore                func(string) (providerstore.Store, error)
+	recoverPending          func(context.Context, *deploy.OperationLock, providerstore.Store, *deploy.EnvironmentGenerationState, string, string) (bool, error)
+	admit                   func(context.Context, string, *deploy.OperationLock, ControlAdmissionInputV1) (AdmittedControlV1, error)
+	stopOwned               func(context.Context, *deploy.OperationLock, deploy.StateV1, string, RunOptions) error
+	discardValidated        func(context.Context, *deploy.OperationLock, string, string) error
+	removeMarker            func(*deploy.OperationLock, string) error
+	releaseLease            func(*deploy.ControlLeaseV1) error
+	reserve                 func(string) (string, error)
+	rename                  func(string, string) error
+	unlock                  func(*deploy.OperationLock) error
+	removeReference         func(context.Context, providers.RealizedImageV1, string, string, string) error
+	removePortableReference func(context.Context, providers.RealizedImageV1, string, string, string) error
+	createPortableReference func(context.Context, providers.RealizedImageV1, string, string, string) error
+	removeAll               func(string) error
+	complete                func(*deploy.OperationLock, string, *deploy.ControlLeaseV1) error
 }
 
 // RemoveStagedDeploymentV1 removes one complete staging directory and only
@@ -77,13 +79,15 @@ func RemoveStagedDeploymentV1(
 			}
 			return err
 		},
-		releaseLease:    func(lease *deploy.ControlLeaseV1) error { return lease.Release() },
-		reserve:         reserveStagedDeploymentTombstoneV1,
-		rename:          os.Rename,
-		unlock:          func(operation *deploy.OperationLock) error { return operation.Unlock() },
-		removeReference: RemoveEnvironmentGenerationReference,
-		removeAll:       os.RemoveAll,
-		complete:        CompleteControlAdmissionV1,
+		releaseLease:            func(lease *deploy.ControlLeaseV1) error { return lease.Release() },
+		reserve:                 reserveStagedDeploymentTombstoneV1,
+		rename:                  os.Rename,
+		unlock:                  func(operation *deploy.OperationLock) error { return operation.Unlock() },
+		removeReference:         RemoveEnvironmentGenerationReference,
+		removePortableReference: RemoveEnvironmentPortableRuntimeLayerReference,
+		createPortableReference: CreateEnvironmentPortableRuntimeLayerReference,
+		removeAll:               os.RemoveAll,
+		complete:                CompleteControlAdmissionV1,
 	})
 }
 
@@ -198,7 +202,7 @@ func removeStagedDeploymentV1(
 	}
 	result.Environment = environment
 
-	var image *providers.RealizedImageV1
+	var recordedLock *deploy.BuildLockV1
 	var reference string
 	if state.Current != nil {
 		lock, found, err := operation.ReadBuildLock(
@@ -221,9 +225,12 @@ func removeStagedDeploymentV1(
 		); err != nil {
 			return result, fmt.Errorf("validate staged build for removal: %w", err)
 		}
-		currentImage := lock.FinalImage
-		image = &currentImage
+		recordedLock = &lock
 		reference = state.Current.Reference
+		if err := validateRecordedGenerationReferenceCleanupV1(lock, backend.removeReference,
+			backend.removePortableReference, backend.createPortableReference); err != nil {
+			return result, fmt.Errorf("prepare staged reference removal: %w", err)
+		}
 	}
 	if err := backend.stopOwned(
 		ctx, operation, state, dir, input.RunOptions,
@@ -265,13 +272,16 @@ func removeStagedDeploymentV1(
 		operation = nil
 	}
 
-	if image != nil {
-		if err := backend.removeReference(
+	if recordedLock != nil {
+		if err := removeRecordedGenerationReferencesV1(
 			context.WithoutCancel(ctx),
-			*image,
+			*recordedLock,
 			reference,
 			environment,
 			dir,
+			backend.removeReference,
+			backend.removePortableReference,
+			backend.createPortableReference,
 		); err != nil {
 			restoreErr := backend.rename(tombstone, dir)
 			return result, errors.Join(

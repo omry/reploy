@@ -238,3 +238,101 @@ func TestRemoveLegacyEnvironmentGenerationReferenceRejectsAnotherDeploymentBefor
 		t.Fatalf("ownership failure made %d Docker calls", calls)
 	}
 }
+
+func TestPortableRuntimeLayerReferenceCreatesAndRemovesExactImage(t *testing.T) {
+	dir, references, image := generationReferenceFixture(t)
+	var calls [][]string
+	run := func(_ context.Context, args ...string) (string, error) {
+		calls = append(calls, append([]string{}, args...))
+		switch len(calls) {
+		case 1:
+			return "", nil
+		case 2:
+			return "", nil
+		case 3:
+			return string(image.ConfigDigest), nil
+		case 4:
+			return string(image.ConfigDigest), nil
+		default:
+			return "", nil
+		}
+	}
+	if err := createPortableRuntimeLayerReference(
+		context.Background(), image,
+		mustPortableGenerationReference(t, image, references.Generation, "demo", dir),
+		"demo", dir, false, run,
+	); err != nil {
+		t.Fatal(err)
+	}
+	portable := mustPortableGenerationReference(t, image, references.Generation, "demo", dir)
+	if err := removePortableRuntimeLayerReference(context.Background(), image, portable, "demo", dir, false, run); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(calls, [][]string{
+		{"image", "ls", "--quiet", "--no-trunc", portable},
+		{"image", "tag", string(image.Digest), portable},
+		{"image", "inspect", "--format", "{{.Id}}", portable},
+		{"image", "ls", "--quiet", "--no-trunc", portable},
+		{"image", "rm", "--force", portable},
+	}) {
+		t.Fatalf("Docker calls = %#v", calls)
+	}
+}
+
+func TestCreatePortableRuntimeLayerReferenceDoesNotTagAfterLookupFailure(t *testing.T) {
+	dir, references, image := generationReferenceFixture(t)
+	portable := mustPortableGenerationReference(t, image, references.Generation, "demo", dir)
+	lookupErr := errors.New("Docker daemon unavailable")
+	calls := 0
+	run := func(_ context.Context, args ...string) (string, error) {
+		calls++
+		if !reflect.DeepEqual(args, []string{"image", "ls", "--quiet", "--no-trunc", portable}) {
+			t.Fatalf("unexpected Docker call: %v", args)
+		}
+		return "", lookupErr
+	}
+	err := createPortableRuntimeLayerReference(t.Context(), image, portable, "demo", dir, false, run)
+	if !errors.Is(err, lookupErr) || calls != 1 {
+		t.Fatalf("lookup failure = %v; Docker calls = %d", err, calls)
+	}
+}
+
+func TestPortableRuntimeLayerDigestReferenceRemovesPersistedExactIdentity(t *testing.T) {
+	dir, _, image := generationReferenceFixture(t)
+	reference, err := NewEnvironmentPortableRuntimeLayerReference(image.ConfigDigest, "demo", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls [][]string
+	run := func(_ context.Context, args ...string) (string, error) {
+		calls = append(calls, append([]string{}, args...))
+		if len(calls) == 1 {
+			return string(image.ConfigDigest), nil
+		}
+		if len(calls) == 2 {
+			return "", nil
+		}
+		t.Fatalf("unexpected Docker call: %v", args)
+		return "", nil
+	}
+	if err := removePortableRuntimeLayerDigestReferenceByReference(
+		context.Background(), reference, "demo", dir, run,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(calls, [][]string{
+		{"image", "ls", "--quiet", "--no-trunc", reference},
+		{"image", "rm", "--force", reference},
+	}) {
+		t.Fatalf("Docker calls = %#v", calls)
+	}
+}
+
+func mustPortableGenerationReference(t *testing.T, image providers.RealizedImageV1, generation, environment, dir string) string {
+	t.Helper()
+	reference, err := NewEnvironmentPortableRuntimeLayerReferenceForGeneration(image.ConfigDigest, generation, environment, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reference
+}
