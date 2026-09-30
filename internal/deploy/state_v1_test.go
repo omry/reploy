@@ -3,10 +3,12 @@ package deploy
 import (
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/providers"
 )
 
 func TestStateV1CanonicalRoundTrip(t *testing.T) {
@@ -27,6 +29,37 @@ func TestStateV1CanonicalRoundTrip(t *testing.T) {
 	}
 	if _, err := DecodeStateV1(append([]byte(" "), content...)); err == nil || !strings.Contains(err.Error(), "canonical") {
 		t.Fatalf("noncanonical state error = %v", err)
+	}
+}
+
+func TestStagingStateRetainsRetiringGenerationUntilCleanup(t *testing.T) {
+	prior := *validPendingBuild(t).Old
+	state := StateV1{
+		Schema: StateSchemaV1, Blueprint: stateV1TestBlueprint(t), Platform: stateV1TestPlatform(t),
+		BlueprintSource: "blueprint: replacement\n", Overlay: EmptyRequestOverlayV1(),
+		Staging: &StagingStateV1{Schema: StagingStateSchemaV1, Retiring: &RetiringGenerationV1{
+			Environment: "old-owner", Generation: prior,
+			FinalImage: providers.RealizedImageV1{
+				Digest: prior.ImageDigest, ConfigDigest: pendingBuildTestDigest("5"), RootFSSubject: prior.RootFSSubject,
+			},
+		}},
+	}
+	content, err := EncodeStateV1(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeStateV1(content)
+	if err != nil || decoded.Staging == nil || decoded.Staging.Retiring == nil || !reflect.DeepEqual(decoded.Staging.Retiring.Generation, prior) {
+		t.Fatalf("retiring state round trip = %#v, err=%v", decoded, err)
+	}
+	state.Current = &prior
+	if _, err := EncodeStateV1(state); err == nil || !strings.Contains(err.Error(), "while another generation is current") {
+		t.Fatalf("current and retiring generation error = %v", err)
+	}
+	state.Current = nil
+	state.Staging.Retiring.FinalImage.Digest = pendingBuildTestDigest("7")
+	if _, err := EncodeStateV1(state); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("retiring image mismatch error = %v", err)
 	}
 }
 

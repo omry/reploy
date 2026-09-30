@@ -273,6 +273,12 @@ func runLockedProviderBuildV1(
 	}
 	validatedCandidate := ValidatedBuildCandidateV1{}
 	validatedCandidateFound := false
+	if err := recoverPendingValidatedBuildV1(
+		ctx, input.Operation, input.Store, document.Environment.ID, deploymentDir,
+		removeEnvironmentValidatedBuildReference,
+	); err != nil {
+		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("recover interrupted validated provider build: %w", err)
+	}
 	if !input.NoCache {
 		validatedCandidate, validatedCandidateFound, err = LoadValidatedBuildCandidate(
 			ctx, input.Operation, input.Store, document, state, rawPackageOverrides, deploymentDir, false, false,

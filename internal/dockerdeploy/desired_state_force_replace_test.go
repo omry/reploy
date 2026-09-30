@@ -44,6 +44,14 @@ func TestForceReplaceStagedDesiredStateStopsBuiltWorkloadAndRemovesGeneration(t 
 		recoverPending: func(context.Context, *deploy.OperationLock, providerstore.Store, *deploy.EnvironmentGenerationState, string, string) (bool, error) {
 			return false, nil
 		},
+		removeValidatedReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
+			t.Fatal("unexpected pending validated-build reference")
+			return nil
+		},
+		createPortableReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
+			t.Fatal("unexpected portable reference restore")
+			return nil
+		},
 		admit: func(_ context.Context, gotDir string, operation *deploy.OperationLock, input ControlAdmissionInputV1) (AdmittedControlV1, error) {
 			if gotDir != dir || input.Operation != deploy.ControlOperationStageV1 || input.Mode != ControlAdmissionForceV1 || input.GenerationReference != state.Current.Reference {
 				t.Fatalf("force admission = %q/%#v", gotDir, input)
@@ -126,6 +134,14 @@ func TestForceReplaceStagedDesiredStateKeepsOldReferenceWhenStateCommitFails(t *
 		recoverPending: func(context.Context, *deploy.OperationLock, providerstore.Store, *deploy.EnvironmentGenerationState, string, string) (bool, error) {
 			return false, nil
 		},
+		removeValidatedReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
+			t.Fatal("unexpected pending validated-build reference")
+			return nil
+		},
+		createPortableReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
+			t.Fatal("unexpected portable reference restore")
+			return nil
+		},
 		admit: func(_ context.Context, _ string, operation *deploy.OperationLock, _ ControlAdmissionInputV1) (AdmittedControlV1, error) {
 			return AdmittedControlV1{Operation: operation, Marker: deploy.ControlMarkerV1{ID: "control-0000000000000001"}}, nil
 		},
@@ -155,5 +171,293 @@ func TestForceReplaceStagedDesiredStateKeepsOldReferenceWhenStateCommitFails(t *
 	retained, found, readErr := locked.ReadStateV1()
 	if readErr != nil || !found || !reflect.DeepEqual(retained.Current, state.Current) {
 		t.Fatalf("retained state = %#v, found=%t, error=%v", retained, found, readErr)
+	}
+}
+
+func TestForceReplaceStagedDesiredStateRetainsCleanupIntentWhenReferenceRemovalFails(t *testing.T) {
+	dir, operation, store, _, state := currentBuildFixture(t, true)
+	oldDocument, _ := testSelectedPlatformDocumentV1(t)
+	oldDocument.Environment.ID = "demo"
+	state.Blueprint = testResolvedBlueprintV1(t, oldDocument)
+	state.BlueprintSource = "blueprint: old\n"
+	state.Staging = &deploy.StagingStateV1{Schema: deploy.StagingStateSchemaV1}
+	if err := operation.CommitStateV1(state.Current, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := operation.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	replacement, _ := testSelectedPlatformDocumentV1(t)
+	replacement.Environment.ID = "replacement"
+	cleanupFailure := errors.New("old reference removal failed")
+	commits := 0
+	_, err := forceReplaceStagedDesiredStateV1(t.Context(), ForceReplaceStagedDesiredStateInputV1{
+		DesiredState: DesiredStateStageInputV1{DeploymentDir: dir, Document: replacement, BlueprintSource: "blueprint: replacement\n"},
+	}, forceReplaceStagedDesiredStateBackendV1{
+		acquire:  deploy.AcquireOperationLock,
+		newStore: func(string) (providerstore.Store, error) { return store, nil },
+		recoverPending: func(context.Context, *deploy.OperationLock, providerstore.Store, *deploy.EnvironmentGenerationState, string, string) (bool, error) {
+			return false, nil
+		},
+		admit: func(_ context.Context, _ string, operation *deploy.OperationLock, _ ControlAdmissionInputV1) (AdmittedControlV1, error) {
+			return AdmittedControlV1{Operation: operation, Marker: deploy.ControlMarkerV1{ID: "control-0000000000000001"}}, nil
+		},
+		complete: func(operation *deploy.OperationLock, _ string, _ *deploy.ControlLeaseV1) error {
+			return operation.Unlock()
+		},
+		stopOwned: func(context.Context, *deploy.OperationLock, deploy.StateV1, string, RunOptions) error { return nil },
+		removeReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
+			return cleanupFailure
+		},
+		removeValidatedReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
+			t.Fatal("unexpected validated reference")
+			return nil
+		},
+		createPortableReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
+			t.Fatal("unexpected portable reference")
+			return nil
+		},
+		commit: func(operation *deploy.OperationLock, expected *deploy.EnvironmentGenerationState, candidate deploy.StateV1) error {
+			commits++
+			return operation.CommitStateV1(expected, candidate)
+		},
+		stageSame: func(context.Context, DesiredStateStageInputV1) (deploy.DesiredStateUpdateResult, error) {
+			t.Fatal("same-environment staging was called")
+			return deploy.DesiredStateUpdateResult{}, nil
+		},
+	})
+	if !errors.Is(err, cleanupFailure) || commits != 1 {
+		t.Fatalf("cleanup error=%v commits=%d", err, commits)
+	}
+	locked, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locked.Unlock()
+	retained, found, err := locked.ReadStateV1()
+	if err != nil || !found || retained.Current != nil || retained.Staging == nil || retained.Staging.Retiring == nil ||
+		retained.Staging.Retiring.Environment != "demo" ||
+		!reflect.DeepEqual(retained.Staging.Retiring.Generation, *state.Current) {
+		t.Fatalf("old generation cleanup intent was not retained: found=%t err=%v state=%#v", found, err, retained)
+	}
+	removed := 0
+	if _, err := recoverRetiringGenerationReferencesV1(t.Context(), locked, dir,
+		func(_ context.Context, image providers.RealizedImageV1, reference, environment, destination string) error {
+			if image != retained.Staging.Retiring.FinalImage || reference != state.Current.Reference || environment != "demo" || destination != dir {
+				t.Fatalf("retry removed wrong generation: %#v %q %q %q", image, reference, environment, destination)
+			}
+			removed++
+			return nil
+		}, nil,
+	); err != nil || removed != 1 {
+		t.Fatalf("retiring generation retry removed=%d err=%v", removed, err)
+	}
+	completed, found, err := locked.ReadStateV1()
+	if err != nil || !found || completed.Staging == nil || completed.Staging.Retiring != nil {
+		t.Fatalf("retiring generation intent remained: found=%t err=%v state=%#v", found, err, completed)
+	}
+}
+
+func TestRetiringGenerationCleanupResumesAfterInterruptedPortableRemoval(t *testing.T) {
+	dir, operation, _, lock, state := currentBuildFixture(t, true)
+	defer operation.Unlock()
+	replacement, _ := testSelectedPlatformDocumentV1(t)
+	replacement.Environment.ID = "replacement"
+	portable := providers.RealizedImageV1{
+		Digest: rendererDigest("c"), ConfigDigest: rendererDigest("d"), RootFSSubject: rendererDigest("e"),
+	}
+	staged := state
+	staged.Blueprint = testResolvedBlueprintV1(t, replacement)
+	staged.BlueprintSource = "blueprint: replacement\n"
+	staged.Current = nil
+	staged.Staging = &deploy.StagingStateV1{Schema: deploy.StagingStateSchemaV1, Retiring: &deploy.RetiringGenerationV1{
+		Environment: "demo", Generation: *state.Current, FinalImage: lock.FinalImage,
+		PortableRuntimeLayer: &portable,
+	}}
+	if err := operation.CommitStateV1(state.Current, staged); err != nil {
+		t.Fatal(err)
+	}
+	portableRemoved := 0
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != "interrupted" {
+				t.Fatalf("interruption = %v", recovered)
+			}
+		}()
+		_, _ = recoverRetiringGenerationReferencesV1(t.Context(), operation, dir,
+			func(context.Context, providers.RealizedImageV1, string, string, string) error {
+				t.Fatal("final alias removed before interruption")
+				return nil
+			},
+			func(_ context.Context, image providers.RealizedImageV1, reference, environment, destination string) error {
+				if image != portable || reference != state.Current.Reference || environment != "demo" || destination != dir {
+					t.Fatal("wrong portable alias removed")
+				}
+				portableRemoved++
+				panic("interrupted")
+			},
+		)
+	}()
+	retained, found, err := operation.ReadStateV1()
+	if err != nil || !found || retained.Staging == nil || retained.Staging.Retiring == nil {
+		t.Fatalf("interrupted cleanup lost durable intent: found=%t err=%v state=%#v", found, err, retained)
+	}
+	finalRemoved := 0
+	if _, err := recoverRetiringGenerationReferencesV1(t.Context(), operation, dir,
+		func(_ context.Context, image providers.RealizedImageV1, reference, environment, destination string) error {
+			if image != lock.FinalImage || reference != state.Current.Reference || environment != "demo" || destination != dir {
+				t.Fatal("wrong final alias removed")
+			}
+			finalRemoved++
+			return nil
+		},
+		func(_ context.Context, image providers.RealizedImageV1, reference, environment, destination string) error {
+			if image != portable || reference != state.Current.Reference || environment != "demo" || destination != dir {
+				t.Fatal("wrong portable alias retried")
+			}
+			portableRemoved++
+			return nil
+		},
+	); err != nil || portableRemoved != 2 || finalRemoved != 1 {
+		t.Fatalf("resumed cleanup portable=%d final=%d err=%v", portableRemoved, finalRemoved, err)
+	}
+	completed, found, err := operation.ReadStateV1()
+	if err != nil || !found || completed.Staging == nil || completed.Staging.Retiring != nil {
+		t.Fatalf("completed cleanup retained intent: found=%t err=%v state=%#v", found, err, completed)
+	}
+}
+
+func TestForceReplaceStagedDesiredStateRetiresOldEnvironmentValidationBeforeCommit(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		committed   bool
+		failCleanup bool
+	}{
+		{name: "pending"},
+		{name: "pending-cleanup-failure", failCleanup: true},
+		{name: "committed", committed: true},
+		{name: "committed-cleanup-failure", committed: true, failCleanup: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir, operation, store, lock, state := currentBuildFixture(t, true)
+			oldDocument, _ := testSelectedPlatformDocumentV1(t)
+			oldDocument.Environment.ID = "demo"
+			state.Blueprint = testResolvedBlueprintV1(t, oldDocument)
+			state.BlueprintSource = "blueprint: old\n"
+			state.Staging = &deploy.StagingStateV1{Schema: deploy.StagingStateSchemaV1}
+			if err := operation.CommitStateV1(state.Current, state); err != nil {
+				t.Fatal(err)
+			}
+			references := fixedPublicationReferences(t, dir, 0x72)
+			pending := deploy.PendingValidatedBuildV1{
+				Schema:          deploy.PendingValidatedBuildSchemaV1,
+				BuildLockDigest: state.Current.BuildLockDigest,
+				Final: deploy.ValidatedBuildReferenceV1{
+					Image: lock.FinalImage, ImageReference: references.Generation,
+				},
+			}
+			if test.committed {
+				inputs, err := ValidatedBuildInputs(oldDocument, state.Overlay,
+					deploy.EmptyPackageOverridesV1(oldDocument.Environment.ID), dir, state.Platform)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := operation.CommitValidatedBuildV1(deploy.ValidatedBuildV1{
+					Schema: deploy.ValidatedBuildSchemaV1, BlueprintDigest: inputs.BlueprintDigest,
+					OverlayDigest: inputs.OverlayDigest, PackageOverridesDigest: inputs.PackageOverridesDigest,
+					Platform: inputs.Platform, BuildLockDigest: state.Current.BuildLockDigest,
+					Image: lock.FinalImage, ImageReference: references.Generation,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := operation.WritePendingValidatedBuildV1(pending); err != nil {
+				t.Fatal(err)
+			}
+			if err := operation.Unlock(); err != nil {
+				t.Fatal(err)
+			}
+
+			replacement, _ := testSelectedPlatformDocumentV1(t)
+			replacement.Environment.ID = "replacement"
+			cleanupFailure := errors.New("pending reference cleanup failed")
+			effects := []string{}
+			_, err := forceReplaceStagedDesiredStateV1(t.Context(), ForceReplaceStagedDesiredStateInputV1{
+				DesiredState: DesiredStateStageInputV1{DeploymentDir: dir, Document: replacement, BlueprintSource: "blueprint: replacement\n"},
+			}, forceReplaceStagedDesiredStateBackendV1{
+				acquire:  deploy.AcquireOperationLock,
+				newStore: func(string) (providerstore.Store, error) { return store, nil },
+				recoverPending: func(context.Context, *deploy.OperationLock, providerstore.Store, *deploy.EnvironmentGenerationState, string, string) (bool, error) {
+					return false, nil
+				},
+				admit: func(_ context.Context, _ string, operation *deploy.OperationLock, _ ControlAdmissionInputV1) (AdmittedControlV1, error) {
+					return AdmittedControlV1{Operation: operation, Marker: deploy.ControlMarkerV1{ID: "control-0000000000000001"}}, nil
+				},
+				complete: func(operation *deploy.OperationLock, _ string, _ *deploy.ControlLeaseV1) error {
+					return operation.Unlock()
+				},
+				stopOwned:       func(context.Context, *deploy.OperationLock, deploy.StateV1, string, RunOptions) error { return nil },
+				removeReference: func(context.Context, providers.RealizedImageV1, string, string, string) error { return nil },
+				removeValidatedReference: func(_ context.Context, image providers.RealizedImageV1, reference, environment, gotDir string) error {
+					if image != lock.FinalImage || reference != references.Generation || environment != "demo" || gotDir != dir {
+						t.Fatalf("pending cleanup = %#v/%q/%q/%q", image, reference, environment, gotDir)
+					}
+					effects = append(effects, "recover-validation")
+					if test.failCleanup {
+						return cleanupFailure
+					}
+					return nil
+				},
+				createPortableReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
+					t.Fatal("unexpected portable reference restore")
+					return nil
+				},
+				commit: func(operation *deploy.OperationLock, expected *deploy.EnvironmentGenerationState, candidate deploy.StateV1) error {
+					effects = append(effects, "commit-state")
+					return operation.CommitStateV1(expected, candidate)
+				},
+				stageSame: func(context.Context, DesiredStateStageInputV1) (deploy.DesiredStateUpdateResult, error) {
+					t.Fatal("same-environment staging was called")
+					return deploy.DesiredStateUpdateResult{}, nil
+				},
+			})
+			if test.failCleanup && !errors.Is(err, cleanupFailure) || !test.failCleanup && err != nil {
+				t.Fatalf("force replacement error = %v", err)
+			}
+			wantEffects := []string{"recover-validation", "commit-state"}
+			if test.failCleanup {
+				wantEffects = []string{"recover-validation"}
+			}
+			if !reflect.DeepEqual(effects, wantEffects) {
+				t.Fatalf("effects = %#v, want %#v", effects, wantEffects)
+			}
+			locked, err := deploy.AcquireOperationLock(t.Context(), dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer locked.Unlock()
+			retained, _, _, err := readForceReplacementStateV1(locked)
+			if err != nil {
+				t.Fatal(err)
+			}
+			currentDocument, err := blueprint.DecodeResolvedDocumentV1(retained.Blueprint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantEnvironment := "replacement"
+			if test.failCleanup {
+				wantEnvironment = "demo"
+			}
+			if currentDocument.Environment.ID != wantEnvironment {
+				t.Fatalf("environment = %q, want %q", currentDocument.Environment.ID, wantEnvironment)
+			}
+			_, pendingFound, err := locked.ReadPendingValidatedBuildV1()
+			if err != nil || pendingFound != (!test.committed && test.failCleanup) {
+				t.Fatalf("pending journal found=%t err=%v", pendingFound, err)
+			}
+			_, candidateFound, err := locked.ReadValidatedBuildV1()
+			if err != nil || candidateFound != (test.committed && test.failCleanup) {
+				t.Fatalf("old validated candidate found=%t err=%v", candidateFound, err)
+			}
+		})
 	}
 }

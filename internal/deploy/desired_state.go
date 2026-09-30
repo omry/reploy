@@ -133,6 +133,9 @@ func setDesiredStateV1(
 	var generation *EnvironmentGenerationState
 	var deployment *DeploymentStateV1
 	if found {
+		if current.Staging != nil && current.Staging.Retiring != nil {
+			return DesiredStateUpdateResult{}, fmt.Errorf("staging has pending retired-generation cleanup; recover it before changing desired state")
+		}
 		currentDocument, decodeErr := blueprint.DecodeResolvedDocumentV1(current.Blueprint)
 		if decodeErr != nil {
 			return DesiredStateUpdateResult{}, fmt.Errorf("decode staged blueprint: %w", decodeErr)

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/providers"
 )
 
 func desiredStateTestPlatform(t *testing.T, value string) blueprint.Platform {
@@ -63,6 +64,48 @@ func TestSetDesiredStateV1CreatesUnbuiltDeployment(t *testing.T) {
 	}
 	if hasPOSIXPermissionBits() && info.Mode().Perm() != 0o600 {
 		t.Fatalf("state mode = %o", info.Mode().Perm())
+	}
+}
+
+func TestSetStagedDesiredStatePreservesRetiringGenerationCleanupAuthority(t *testing.T) {
+	dir := t.TempDir()
+	document := overlayTestDocument()
+	platform := desiredStateTestPlatform(t, "linux/amd64")
+	created, err := SetStagedDesiredStateV1(t.Context(), dir, document, platform,
+		overlayTestPackageValidator, "blueprint: original\n", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior := *validPendingBuild(t).Old
+	retained := created.State
+	retained.Staging.Retiring = &RetiringGenerationV1{
+		Environment: "old-owner", Generation: prior,
+		FinalImage: providers.RealizedImageV1{
+			Digest: prior.ImageDigest, ConfigDigest: pendingBuildTestDigest("5"), RootFSSubject: prior.RootFSSubject,
+		},
+	}
+	if err := operation.CommitStateV1(nil, retained); err != nil {
+		t.Fatal(err)
+	}
+	if err := operation.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetStagedDesiredStateV1(t.Context(), dir, document, platform,
+		overlayTestPackageValidator, "blueprint: changed\n", false); err == nil || !strings.Contains(err.Error(), "pending retired-generation cleanup") {
+		t.Fatalf("staging while cleanup is pending = %v", err)
+	}
+	locked, err := AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locked.Unlock()
+	after, found, err := locked.ReadStateV1()
+	if err != nil || !found || !reflect.DeepEqual(after, retained) {
+		t.Fatalf("retiring generation authority changed: found=%t err=%v state=%#v", found, err, after)
 	}
 }
 
