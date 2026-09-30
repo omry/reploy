@@ -17,6 +17,8 @@ type PendingPublicationRecovery struct {
 	SelectedLock   *deploy.BuildLockV1
 	SelectedDigest canonical.Digest
 	OldImage       *providers.RealizedImageV1
+	CandidateLock  *deploy.BuildLockV1
+	OldLock        *deploy.BuildLockV1
 }
 
 func RecoverPendingPublication(
@@ -65,7 +67,20 @@ func RecoverPendingPublication(
 	if err != nil {
 		return false, err
 	}
-	if err := executePendingPublicationRecovery(ctx, operation, store, plan, environment, deploymentDir, validateProfileOwner, validateBundleOwner, RecoverPendingImageReferences); err != nil {
+	if err := executePendingPublicationRecovery(ctx, operation, store, plan, environment, deploymentDir, validateProfileOwner, validateBundleOwner, func(
+		recoveryCtx context.Context,
+		recoveryPending deploy.PendingBuildV1,
+		decision deploy.PendingRecoveryDecision,
+		oldImage *providers.RealizedImageV1,
+		recoveryEnvironment string,
+		recoveryDeploymentDir string,
+	) error {
+		return RecoverPendingImageReferencesWithLocks(
+			recoveryCtx, recoveryPending, decision, oldImage,
+			plan.CandidateLock, plan.OldLock,
+			recoveryEnvironment, recoveryDeploymentDir,
+		)
+	}); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -108,6 +123,19 @@ func PreparePendingPublicationRecovery(
 		return PendingPublicationRecovery{}, fmt.Errorf("pending publication state conflict; recovery changed nothing")
 	}
 	plan := PendingPublicationRecovery{Pending: pending, Decision: decision}
+	// The portable generation alias is created only after the candidate lock is
+	// published. A pre-lock discard therefore has exact final-image reference
+	// authority in pending state and must remain recoverable without a lock.
+	candidateLockRequired := decision != deploy.PendingRecoveryDiscardCandidate ||
+		(pending.Phase != deploy.PendingBuildPhaseValidated && pending.Phase != deploy.PendingBuildPhaseGenerationCreated)
+	if candidateLockRequired {
+		candidateLock, err := loadOnce(pending.Candidate.BuildLockDigest)
+		if err != nil {
+			return PendingPublicationRecovery{}, fmt.Errorf("load candidate recovery build lock: %w", err)
+		}
+		candidateLockCopy := candidateLock
+		plan.CandidateLock = &candidateLockCopy
+	}
 	if pending.Old != nil {
 		oldLock, err := loadOnce(pending.Old.BuildLockDigest)
 		if err != nil {
@@ -118,6 +146,8 @@ func PreparePendingPublicationRecovery(
 		}
 		oldImage := oldLock.FinalImage
 		plan.OldImage = &oldImage
+		oldLockCopy := oldLock
+		plan.OldLock = &oldLockCopy
 	}
 	var selectedGeneration *deploy.EnvironmentGenerationState
 	switch decision {

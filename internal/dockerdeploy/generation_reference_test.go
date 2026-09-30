@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/omry/reploy/internal/canonical"
 )
 
 func TestEnvironmentImageReferencesAreDirectoryOwnedAndUnique(t *testing.T) {
@@ -31,6 +33,56 @@ func TestEnvironmentImageReferencesAreDirectoryOwnedAndUnique(t *testing.T) {
 	other := t.TempDir()
 	if err := ValidateEnvironmentImageReferences(references, "Demo App", other); err == nil || !strings.Contains(err.Error(), "not owned") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestPortableRuntimeLayerReferencesBindDeploymentAndExactDigest(t *testing.T) {
+	dir := t.TempDir()
+	digest := canonical.Digest("sha256:" + strings.Repeat("ab", 32))
+	references, err := newEnvironmentImageReferences("demo", dir, bytes.NewReader(bytes.Repeat([]byte{0x11}, environmentReferenceRandomBytes*2)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	provisional, err := NewEnvironmentPortableRuntimeLayerReference(digest, "demo", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation, err := NewEnvironmentPortableRuntimeLayerReferenceForGeneration(digest, references.Generation, "demo", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherReferences, err := newEnvironmentImageReferences("demo", dir, bytes.NewReader(bytes.Repeat([]byte{0x22}, environmentReferenceRandomBytes*2)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherGeneration, err := NewEnvironmentPortableRuntimeLayerReferenceForGeneration(digest, otherReferences.Generation, "demo", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provisional == generation {
+		t.Fatalf("provisional and generation references are equal: %q", provisional)
+	}
+	if generation == otherGeneration {
+		t.Fatalf("same-digest generation references collided: %q", generation)
+	}
+	if err := ValidateEnvironmentPortableRuntimeLayerDigestReference(provisional, "demo", dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateEnvironmentPortableRuntimeLayerReference(generation, "demo", dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateEnvironmentPortableRuntimeLayerReference(otherGeneration, "demo", dir); err != nil {
+		t.Fatal(err)
+	}
+	derived, err := portableRuntimeLayerReferenceFromGeneration(digest, references.Generation)
+	if err != nil || derived != generation {
+		t.Fatalf("derived generation reference = %q, error = %v, want %q", derived, err, generation)
+	}
+	if err := ValidateEnvironmentPortableRuntimeLayerReference(generation, "other", dir); err == nil || !strings.Contains(err.Error(), "not owned") {
+		t.Fatalf("cross-deployment reference validation error = %v", err)
+	}
+	if _, err := NewEnvironmentPortableRuntimeLayerReference(canonical.Digest("sha256:bad"), "demo", dir); err == nil {
+		t.Fatal("invalid portable image digest was accepted")
 	}
 }
 
