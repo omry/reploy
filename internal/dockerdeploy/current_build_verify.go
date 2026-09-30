@@ -53,8 +53,15 @@ type currentBuildVerificationBackendV1 struct {
 		providers.RequirementProfileOwnerValidator,
 		providers.ResolvedBundleOwnerValidator,
 	) ([]providerstore.StoreObjectRef, error)
-	inspectImage providerGraphImageInspector
+	inspectImage                         providerGraphImageInspector
+	inspectPortableRuntimeLayerReference func(context.Context, string, blueprint.Platform) (InspectedImageCandidate, error)
 }
+
+// These hooks keep the current-build verifier's offline portable-byte audit
+// independently testable while the ordinary path uses the locked-only
+// materializer and image inventory verifier.
+var materializePortableRuntimePayloadsForCurrentBuildV1 = MaterializePortableRuntimePayloadsLockedV1
+var verifyPortableRuntimeInventoryForCurrentBuildV1 = verifyPortableRuntimeInventoryV1
 
 // VerifyLoadedCurrentBuildV1 audits an already loaded current generation. It
 // fully hashes the provider-store closure, re-inspects every immutable image,
@@ -69,8 +76,9 @@ func VerifyLoadedCurrentBuildV1(
 		input.RunValidation = runner.Run
 	}
 	return verifyLoadedCurrentBuildV1(ctx, input, currentBuildVerificationBackendV1{
-		verifyClosure: deploy.BuildLockStoreClosure,
-		inspectImage:  InspectBuiltImageCandidate,
+		verifyClosure:                        deploy.BuildLockStoreClosure,
+		inspectImage:                         InspectBuiltImageCandidate,
+		inspectPortableRuntimeLayerReference: inspectPortableRuntimeLayerReferenceV1,
 	})
 }
 
@@ -135,6 +143,9 @@ func verifyLoadedCurrentBuildV1(
 		storedValidation,
 		input.RunValidation,
 		backend.inspectImage,
+		backend.inspectPortableRuntimeLayerReference,
+		input.Current.Generation.Reference,
+		input.Store,
 	)
 	if err != nil {
 		return CurrentBuildVerificationResultV1{}, err
@@ -213,6 +224,9 @@ func verifyLockedImagesV1(
 	storedValidation deploy.PrefixValidationV1,
 	run FullImageValidationRunner,
 	inspect providerGraphImageInspector,
+	portableReferenceVerifier func(context.Context, string, blueprint.Platform) (InspectedImageCandidate, error),
+	generationReference string,
+	store providerstore.Store,
 ) (int, error) {
 	base, err := inspect(
 		ctx,
@@ -310,6 +324,46 @@ func verifyLockedImagesV1(
 		}
 	}
 
+	if lock.PortableRuntimeLayer != nil {
+		portableLayer := lock.PortableRuntimeLayer
+		var portableImage InspectedImageCandidate
+		portableReference := ""
+		if portableReferenceVerifier != nil && generationReference != "" {
+			reference, referenceErr := portableRuntimeLayerReferenceFromGeneration(
+				portableLayer.Result.ConfigDigest, generationReference,
+			)
+			if referenceErr != nil {
+				return 0, fmt.Errorf("derive cached portable runtime layer reference: %w", referenceErr)
+			}
+			portableReference = reference
+			portableImage, err = portableReferenceVerifier(ctx, reference, lock.Platform)
+		} else {
+			portableImage, err = inspect(
+				ctx,
+				BuiltImageCandidate{ImageID: portableLayer.Result.ConfigDigest},
+				lock.Platform,
+			)
+		}
+		if err != nil {
+			return 0, currentBuildImageInspectionError(
+				"cached portable runtime layer image",
+				portableLayer.Result.ConfigDigest,
+				err,
+			)
+		}
+		if portableImage.Image != portableLayer.Result {
+			return 0, fmt.Errorf("cached portable runtime layer image no longer matches its locked identity")
+		}
+		if err := verifyLockedPortableRuntimeLayerWithReferenceV1(
+			ctx, store, lock, source.Image, portableImage,
+			portableReference, portableReferenceVerifier,
+		); err != nil {
+			return 0, err
+		}
+		source = portableImage
+		inspectedImages++
+	}
+
 	runtimeImage, err := inspect(
 		ctx,
 		BuiltImageCandidate{ImageID: lock.RuntimeLayer.Result.ConfigDigest},
@@ -366,6 +420,96 @@ func verifyLockedImagesV1(
 		return 0, fmt.Errorf("current final image no longer matches the locked image")
 	}
 	return inspectedImages + 1, nil
+}
+
+// The alias must still name the audited image after the byte and inventory
+// checks finish; checking it only before those checks leaves a stale-reference
+// window during current-build verification.
+func verifyLockedPortableRuntimeLayerWithReferenceV1(
+	ctx context.Context,
+	store providerstore.Store,
+	lock deploy.BuildLockV1,
+	upstream providers.RealizedImageV1,
+	image InspectedImageCandidate,
+	reference string,
+	inspectReference func(context.Context, string, blueprint.Platform) (InspectedImageCandidate, error),
+) error {
+	if err := verifyLockedPortableRuntimeLayerV1(ctx, store, lock, upstream, image); err != nil {
+		return err
+	}
+	if reference == "" {
+		return nil
+	}
+	if inspectReference == nil {
+		return fmt.Errorf("verify current portable runtime reference requires an inspector")
+	}
+	current, err := inspectReference(ctx, reference, lock.Platform)
+	if err != nil {
+		return currentBuildImageInspectionError(
+			"cached portable runtime layer reference after content audit",
+			lock.PortableRuntimeLayer.Result.ConfigDigest,
+			err,
+		)
+	}
+	if current.Image != image.Image {
+		return fmt.Errorf("cached portable runtime layer reference changed after content audit")
+	}
+	return nil
+}
+
+func verifyLockedPortableRuntimeLayerV1(
+	ctx context.Context,
+	store providerstore.Store,
+	lock deploy.BuildLockV1,
+	upstream providers.RealizedImageV1,
+	image InspectedImageCandidate,
+) (resultErr error) {
+	layer := lock.PortableRuntimeLayer
+	if layer == nil {
+		return fmt.Errorf("verify current portable runtime layer is missing")
+	}
+	if lock.PortableTools == nil {
+		return fmt.Errorf("verify current portable runtime layer has no selected portable lock")
+	}
+	if layer.Upstream != upstream {
+		return fmt.Errorf("cached portable runtime layer upstream does not match the final graph prefix")
+	}
+	transaction, err := deploy.PortableRuntimeLayerTransactionDigestV1(
+		*lock.PortableTools, layer.Upstream, layer.Result,
+	)
+	if err != nil {
+		return fmt.Errorf("verify current portable runtime layer transaction: %w", err)
+	}
+	if layer.TransactionDigest != transaction {
+		return fmt.Errorf("cached portable runtime layer transaction digest differs from the locked portable selection")
+	}
+	payloads, err := materializePortableRuntimePayloadsForCurrentBuildV1(ctx, store, *lock.PortableTools)
+	if err != nil {
+		return fmt.Errorf("verify current portable runtime selected bytes: %w", err)
+	}
+	if payloads == nil {
+		return fmt.Errorf("verify current portable runtime selected bytes returned no materialization")
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, payloads.Cleanup())
+	}()
+	if !reflect.DeepEqual(payloads.Lock, *lock.PortableTools) {
+		return fmt.Errorf("verify current portable runtime selected lock differs from the locked identity")
+	}
+	if err := payloads.validateAuthorityV1(); err != nil {
+		return fmt.Errorf("verify current portable runtime selected authority: %w", err)
+	}
+	if err := requirePortableRuntimeImageEnvironmentV1(image, payloads.Environment); err != nil {
+		return fmt.Errorf("verify current portable runtime environment: %w", err)
+	}
+	if len(payloads.sealedInventory) != 0 {
+		if err := verifyPortableRuntimeInventoryForCurrentBuildV1(
+			ctx, store, image, payloads.sealedInventory,
+		); err != nil {
+			return fmt.Errorf("verify current portable runtime selected image bytes: %w", err)
+		}
+	}
+	return nil
 }
 
 func currentBuildImageInspectionError(

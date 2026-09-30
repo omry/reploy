@@ -56,11 +56,12 @@ type providerBuildExecutionBackend struct {
 		providerstore.Store,
 		ProviderBuildCompletionInput,
 	) (ProviderBuildCompletionResult, error)
-	publishBuild          func(context.Context, *deploy.OperationLock, providerstore.Store, BuildPublicationInput) (deploy.StateV1, error)
-	publishValidated      func(context.Context, *deploy.OperationLock, providerstore.Store, string, string, deploy.BuildLockV1, ValidatedBuildInputsV1) (deploy.ValidatedBuildV1, error)
-	verifyReference       func(context.Context, providers.RealizedImageV1, string, string, string) error
-	retryValidatedCleanup func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (deploy.ValidatedBuildV1, bool, error)
-	discardValidated      func(context.Context, *deploy.OperationLock, string, string) error
+	publishBuild            func(context.Context, *deploy.OperationLock, providerstore.Store, BuildPublicationInput) (deploy.StateV1, error)
+	publishValidated        func(context.Context, *deploy.OperationLock, providerstore.Store, string, string, deploy.BuildLockV1, ValidatedBuildInputsV1) (deploy.ValidatedBuildV1, error)
+	verifyReference         func(context.Context, providers.RealizedImageV1, string, string, string) error
+	verifyPortableReference func(context.Context, deploy.BuildLockV1, deploy.ValidatedBuildV1, string, string) error
+	retryValidatedCleanup   func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (deploy.ValidatedBuildV1, bool, error)
+	discardValidated        func(context.Context, *deploy.OperationLock, string, string) error
 }
 
 // ExecuteLockedProviderBuildV1 consumes a preparation made under the same held
@@ -77,13 +78,14 @@ func ExecuteLockedProviderBuildV1(
 		input.RunValidation = runner.Run
 	}
 	return executeLockedProviderBuildV1(ctx, input, providerBuildExecutionBackend{
-		executeGraph:          ExecutePreparedPythonGraph,
-		prepareValidation:     PrepareProviderGraphValidation,
-		complete:              CompleteProviderBuild,
-		publishBuild:          PublishBuild,
-		publishValidated:      PublishValidatedBuild,
-		verifyReference:       VerifyEnvironmentGenerationReference,
-		retryValidatedCleanup: RetryValidatedBuildCleanup,
+		executeGraph:            ExecutePreparedPythonGraph,
+		prepareValidation:       PrepareProviderGraphValidation,
+		complete:                CompleteProviderBuild,
+		publishBuild:            PublishBuild,
+		publishValidated:        PublishValidatedBuild,
+		verifyReference:         VerifyEnvironmentGenerationReference,
+		verifyPortableReference: verifyValidatedBuildPortableReferenceV1,
+		retryValidatedCleanup:   RetryValidatedBuildCleanup,
 		discardValidated: func(ctx context.Context, operation *deploy.OperationLock, environment, deploymentDir string) error {
 			return DiscardValidatedBuild(ctx, operation, environment, deploymentDir, input.Progress)
 		},
@@ -131,6 +133,28 @@ func executeLockedProviderBuildV1(
 		if !reflect.DeepEqual(publicationLock, expectedPublicationLock) {
 			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("reused provider build publication lock changes validated build inputs")
 		}
+		verifyValidatedCandidateReferences := func(record deploy.ValidatedBuildV1) error {
+			if backend.verifyReference == nil {
+				return fmt.Errorf("reused validated build requires image verification")
+			}
+			if err := backend.verifyReference(
+				ctx, reused.Lock.FinalImage, record.ImageReference,
+				preparation.Environment, preparation.DeploymentDir,
+			); err != nil {
+				return fmt.Errorf("verify cached validated build: %w", err)
+			}
+			if reused.Lock.PortableRuntimeLayer != nil {
+				if backend.verifyPortableReference == nil {
+					return fmt.Errorf("reused validated build requires portable runtime reference verification")
+				}
+				if err := backend.verifyPortableReference(
+					ctx, reused.Lock, record, preparation.Environment, preparation.DeploymentDir,
+				); err != nil {
+					return fmt.Errorf("verify cached validated build: %w", err)
+				}
+			}
+			return nil
+		}
 		if input.ValidateChoices {
 			if preparation.ReusedCandidate {
 				if backend.verifyReference == nil {
@@ -153,11 +177,8 @@ func executeLockedProviderBuildV1(
 					}
 					record = retried
 				}
-				if err := backend.verifyReference(
-					ctx, reused.Lock.FinalImage, preparation.ValidatedCandidate.Record.ImageReference,
-					preparation.Environment, preparation.DeploymentDir,
-				); err != nil {
-					return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("verify cached validated build: %w", err)
+				if err := verifyValidatedCandidateReferences(record); err != nil {
+					return LockedProviderBuildExecutionResultV1{}, err
 				}
 				writeProviderBuildProgress(input.Progress, "validated choices using the cached image")
 				writeValidatedBuildCleanupWarning(input.Progress, record)
@@ -183,11 +204,8 @@ func executeLockedProviderBuildV1(
 			if backend.verifyReference == nil || backend.publishBuild == nil || backend.discardValidated == nil {
 				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("promote cached validated build requires a complete backend")
 			}
-			if err := backend.verifyReference(
-				ctx, reused.Lock.FinalImage, preparation.ValidatedCandidate.Record.ImageReference,
-				preparation.Environment, preparation.DeploymentDir,
-			); err != nil {
-				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("verify cached validated build: %w", err)
+			if err := verifyValidatedCandidateReferences(preparation.ValidatedCandidate.Record); err != nil {
+				return LockedProviderBuildExecutionResultV1{}, err
 			}
 			state, err := backend.publishBuild(ctx, preparation.Operation, preparation.Store, BuildPublicationInput{
 				Environment: preparation.Environment, DeploymentDir: preparation.DeploymentDir,

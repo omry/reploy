@@ -381,6 +381,281 @@ func TestCleanupFailedProviderBuildV1WithoutCurrentRemovesAllBuildObjects(t *tes
 	}
 }
 
+func TestCleanupFailedProviderBuildV1RetainsCurrentAndValidatedCandidate(t *testing.T) {
+	stubNoAbandonedBuildReferences(t)
+	dir, operation, store, current, state := currentBuildFixture(t, true)
+	defer operation.Unlock()
+	_, candidateDigest := commitValidatedCandidateForFailedCleanup(
+		t, operation, store, dir, state, current, "a", "b", "reploy/env/demo:validated-candidate",
+	)
+	superseded := validatedBuildStorageVariant(t, store, current, "7", "8")
+	supersededDigest, err := operation.PublishBuildLock(superseded, registry.ValidateRequirementProfileV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphan, err := store.Publish(t.Context(), "packages/orphan.whl", "wheel", strings.NewReader("orphan"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cleanupFailedProviderBuildV1(t.Context(), LockedProviderBuildPreparationV1{
+		Operation: operation, Store: store, Environment: "demo", DeploymentDir: dir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, digest := range []canonical.Digest{state.Current.BuildLockDigest, candidateDigest} {
+		lock, found, err := operation.ReadBuildLock(digest, registry.ValidateRequirementProfileV1)
+		if err != nil || !found {
+			t.Fatalf("retained lock %s found=%v err=%v", digest, found, err)
+		}
+		if _, err := deploy.BuildLockStoreClosure(
+			lock, store, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1,
+		); err != nil {
+			t.Fatalf("retained lock %s cannot replay its store closure: %v", digest, err)
+		}
+	}
+	if _, found, err := operation.ReadBuildLock(supersededDigest, registry.ValidateRequirementProfileV1); err != nil || found {
+		t.Fatalf("superseded lock found=%v err=%v", found, err)
+	}
+	orphanPath, err := store.BlobPath(orphan.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(orphanPath); !os.IsNotExist(err) {
+		t.Fatalf("unreachable orphan blob remains: %v", err)
+	}
+}
+
+func TestCleanupFailedProviderBuildV1RetainsCommittedCandidateAfterPendingRemovalError(t *testing.T) {
+	stubNoAbandonedBuildReferences(t)
+	dir, operation, store, current, state := currentBuildFixture(t, true)
+	defer operation.Unlock()
+	formerCurrentDigest := state.Current.BuildLockDigest
+	formerCurrent := *state.Current
+	state.Current = nil
+	if err := operation.CommitStateV1(&formerCurrent, state); err != nil {
+		t.Fatal(err)
+	}
+	refs := fixedPublicationReferences(t, dir, 0x63)
+	candidate, candidateDigest := commitValidatedCandidateForFailedCleanup(
+		t, operation, store, dir, state, current, "c", "d", refs.Generation,
+	)
+	pending := deploy.PendingValidatedBuildV1{
+		Schema:          deploy.PendingValidatedBuildSchemaV1,
+		BuildLockDigest: candidateDigest,
+		Final:           deploy.ValidatedBuildReferenceV1{Image: candidate.FinalImage, ImageReference: refs.Generation},
+	}
+	// This is the durable on-disk state after the candidate record was committed
+	// but removing its pending journal failed.
+	if err := operation.WritePendingValidatedBuildV1(pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupFailedProviderBuildV1(t.Context(), LockedProviderBuildPreparationV1{
+		Operation: operation, Store: store, Environment: "demo", DeploymentDir: dir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := operation.ReadPendingValidatedBuildV1(); err != nil || found {
+		t.Fatalf("committed pending journal found=%v err=%v", found, err)
+	}
+	lock, found, err := operation.ReadBuildLock(candidateDigest, registry.ValidateRequirementProfileV1)
+	if err != nil || !found {
+		t.Fatalf("validated candidate lock found=%v err=%v", found, err)
+	}
+	if _, err := deploy.BuildLockStoreClosure(
+		lock, store, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1,
+	); err != nil {
+		t.Fatalf("committed candidate cannot replay its store closure: %v", err)
+	}
+	if _, found, err := operation.ReadBuildLock(formerCurrentDigest, registry.ValidateRequirementProfileV1); err != nil || found {
+		t.Fatalf("unselected former current lock found=%v err=%v", found, err)
+	}
+}
+
+func TestCleanupFailedProviderBuildV1StopsWhenPendingValidatedRecoveryFails(t *testing.T) {
+	stubNoAbandonedBuildReferences(t)
+	dir, operation, store, current, state := currentBuildFixture(t, true)
+	defer operation.Unlock()
+	pendingReference := fixedPublicationReferences(t, dir, 0x64).Generation
+	pending := deploy.PendingValidatedBuildV1{
+		Schema:          deploy.PendingValidatedBuildSchemaV1,
+		BuildLockDigest: rendererDigest("f"), // publication has not written this lock yet
+		Final:           deploy.ValidatedBuildReferenceV1{Image: current.FinalImage, ImageReference: pendingReference},
+	}
+	if err := operation.WritePendingValidatedBuildV1(pending); err != nil {
+		t.Fatal(err)
+	}
+	orphan, err := store.Publish(t.Context(), "packages/pending-recovery.whl", "wheel", strings.NewReader("retain until recovery"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	removeFailure := errors.New("Docker unavailable")
+	previousDocker := runDockerOutput
+	t.Cleanup(func() { runDockerOutput = previousDocker })
+	runDockerOutput = func(context.Context, ...string) (string, error) {
+		return "", removeFailure
+	}
+
+	err = cleanupFailedProviderBuildV1(t.Context(), LockedProviderBuildPreparationV1{
+		Operation: operation, Store: store, Environment: "demo", DeploymentDir: dir,
+	})
+	if !errors.Is(err, removeFailure) {
+		t.Fatalf("cleanup error = %v, want pending recovery failure %v", err, removeFailure)
+	}
+	orphanPath, err := store.BlobPath(orphan.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(orphanPath); err != nil {
+		t.Fatalf("cleanup pruned the store after failed pending recovery: %v", err)
+	}
+	if _, found, err := operation.ReadBuildLock(state.Current.BuildLockDigest, registry.ValidateRequirementProfileV1); err != nil || !found {
+		t.Fatalf("cleanup removed current lock after failed pending recovery: found=%v err=%v", found, err)
+	}
+}
+
+func TestCleanupFailedProviderBuildV1RetainsValidatedCandidateDuringOrdinaryRecovery(t *testing.T) {
+	for _, noCurrent := range []bool{false, true} {
+		name := "with-current"
+		if noCurrent {
+			name = "without-current"
+		}
+		t.Run(name, func(t *testing.T) {
+			stubNoAbandonedBuildReferences(t)
+			dir, operation, store, current, state := currentBuildFixture(t, true)
+			defer operation.Unlock()
+			if noCurrent {
+				formerCurrent := *state.Current
+				state.Current = nil
+				if err := operation.CommitStateV1(&formerCurrent, state); err != nil {
+					t.Fatal(err)
+				}
+			}
+			validatedReferences := fixedPublicationReferences(t, dir, 0x64)
+			candidate, candidateDigest := commitValidatedCandidateForFailedCleanup(
+				t, operation, store, dir, state, current, "e", "f", validatedReferences.Generation,
+			)
+			closure, err := deploy.BuildLockStoreClosure(
+				candidate, store, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ordinaryReferences := fixedPublicationReferences(t, dir, 0x65)
+			pending := deploy.PendingBuildV1{
+				Schema: deploy.PendingBuildSchemaV1, Phase: deploy.PendingBuildPhaseValidated,
+				Old: state.Current,
+				Candidate: deploy.PendingCandidateV1{
+					TemporaryReference: ordinaryReferences.Temporary, GenerationReference: ordinaryReferences.Generation,
+					Image: candidate.FinalImage, BuildLockDigest: candidateDigest, StoreObjects: closure,
+				},
+				Cleanup: []deploy.CleanupItemV1{},
+			}
+			if err := operation.WritePendingBuild(pending); err != nil {
+				t.Fatal(err)
+			}
+			if err := operation.AdvancePendingBuildPhase(deploy.PendingBuildPhaseGenerationCreated); err != nil {
+				t.Fatal(err)
+			}
+			aliases := map[string]string{
+				ordinaryReferences.Temporary:   string(candidate.FinalImage.ConfigDigest),
+				ordinaryReferences.Generation:  string(candidate.FinalImage.ConfigDigest),
+				validatedReferences.Generation: string(candidate.FinalImage.ConfigDigest),
+			}
+			previousDocker := runDockerOutput
+			t.Cleanup(func() { runDockerOutput = previousDocker })
+			runDockerOutput = func(_ context.Context, args ...string) (string, error) {
+				switch {
+				case len(args) == 5 && args[0] == "image" && args[1] == "ls":
+					return aliases[args[4]], nil
+				case len(args) == 4 && args[0] == "image" && args[1] == "rm" && args[2] == "--force":
+					delete(aliases, args[3])
+					return "", nil
+				case len(args) == 5 && args[0] == "image" && args[1] == "inspect" && args[2] == "--format":
+					return aliases[args[4]], nil
+				default:
+					t.Fatalf("unexpected Docker recovery command: %v", args)
+					return "", nil
+				}
+			}
+
+			if err := cleanupFailedProviderBuildV1(t.Context(), LockedProviderBuildPreparationV1{
+				Operation: operation, Store: store, Environment: "demo", DeploymentDir: dir,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if aliases[validatedReferences.Generation] != string(candidate.FinalImage.ConfigDigest) {
+				t.Fatalf("validated alias was removed during ordinary recovery: aliases=%#v", aliases)
+			}
+			record, found, err := operation.ReadValidatedBuildV1()
+			if err != nil || !found || record.BuildLockDigest != candidateDigest {
+				t.Fatalf("validated record=%#v found=%v err=%v", record, found, err)
+			}
+			lock, found, err := operation.ReadBuildLock(candidateDigest, registry.ValidateRequirementProfileV1)
+			if err != nil || !found {
+				t.Fatalf("validated lock found=%v err=%v", found, err)
+			}
+			if _, err := deploy.BuildLockStoreClosure(
+				lock, store, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1,
+			); err != nil {
+				t.Fatalf("validated closure cannot be replayed: %v", err)
+			}
+			document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, found, err := LoadValidatedBuildCandidate(
+				t.Context(), operation, store, document, state,
+				deploy.EmptyPackageOverridesV1(document.Environment.ID), dir, true, true,
+			); err != nil || !found {
+				t.Fatalf("validated candidate replay found=%v err=%v", found, err)
+			}
+			if _, found, err := operation.ReadPendingBuild(); err != nil || found {
+				t.Fatalf("ordinary pending after cleanup found=%v err=%v", found, err)
+			}
+		})
+	}
+}
+
+func commitValidatedCandidateForFailedCleanup(
+	t *testing.T,
+	operation *deploy.OperationLock,
+	store providerstore.Store,
+	deploymentDir string,
+	state deploy.StateV1,
+	base deploy.BuildLockV1,
+	imageChar string,
+	configChar string,
+	imageReference string,
+) (deploy.BuildLockV1, canonical.Digest) {
+	t.Helper()
+	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs, err := ValidatedBuildInputs(
+		document, state.Overlay, deploy.EmptyPackageOverridesV1(document.Environment.ID), deploymentDir, state.Platform,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := validatedBuildStorageVariant(t, store, base, imageChar, configChar)
+	digest, err := operation.PublishBuildLock(candidate, registry.ValidateRequirementProfileV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := operation.CommitValidatedBuildV1(deploy.ValidatedBuildV1{
+		Schema:          deploy.ValidatedBuildSchemaV1,
+		BlueprintDigest: inputs.BlueprintDigest, OverlayDigest: inputs.OverlayDigest,
+		PackageOverridesDigest: inputs.PackageOverridesDigest, Platform: inputs.Platform,
+		BuildLockDigest: digest, Image: candidate.FinalImage, ImageReference: imageReference,
+		PendingStorageCleanup: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return candidate, digest
+}
+
 func operationCurrentDigest(t *testing.T, operation *deploy.OperationLock) canonical.Digest {
 	t.Helper()
 	state, found, err := operation.ReadStateV1()

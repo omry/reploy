@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -302,6 +303,61 @@ func TestExecuteLockedProviderBuildV1PromotesAnExactValidatedBuild(t *testing.T)
 	if !result.Reused || result.Validated || !reflect.DeepEqual(result.State, wantState) ||
 		!reflect.DeepEqual(order, []string{"verify", "publish", "discard"}) {
 		t.Fatalf("result/order = %#v/%#v", result, order)
+	}
+}
+
+func TestExecuteLockedProviderBuildV1RejectsMissingValidatedPortableReference(t *testing.T) {
+	for _, validateChoices := range []bool{true, false} {
+		t.Run(fmt.Sprintf("validate_choices_%t", validateChoices), func(t *testing.T) {
+			input, _, current, _, _ := providerBuildPreparationFixture(t)
+			lock := current.Lock
+			portableImage := providers.RealizedImageV1{
+				Digest: rendererDigest("a"), ConfigDigest: rendererDigest("b"), RootFSSubject: rendererDigest("c"),
+			}
+			lock.PortableRuntimeLayer = &deploy.PortableRuntimeLayerV1{Result: portableImage}
+			current.Lock = lock
+			record := deploy.ValidatedBuildV1{
+				ImageReference: current.Generation.Reference,
+				PortableRuntimeLayer: &deploy.ValidatedBuildReferenceV1{
+					Image: portableImage, ImageReference: "reploy/demo:p-missing",
+				},
+			}
+			candidate := ValidatedBuildCandidateV1{Record: record, Current: current}
+			verifiedFinal, verifiedPortable, published := 0, 0, 0
+			_, err := executeLockedProviderBuildV1(t.Context(), LockedProviderBuildExecutionInputV1{
+				SourceWheels: []providerstore.ArtifactDescriptor{}, LocalOverrides: []PythonLocalOverrideV1{},
+				ValidateChoices: validateChoices,
+				Preparation: LockedProviderBuildPreparationV1{
+					Operation: input.Operation, Store: input.Store,
+					Environment: "demo", DeploymentDir: input.DeploymentDir,
+					ReusableLock: &lock, PublicationLock: &lock,
+					Reused: true, ReusedCandidate: true, ValidatedCandidate: &candidate,
+				},
+			}, providerBuildExecutionBackend{
+				verifyReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
+					verifiedFinal++
+					return nil
+				},
+				verifyPortableReference: func(_ context.Context, gotLock deploy.BuildLockV1, gotRecord deploy.ValidatedBuildV1, _, _ string) error {
+					verifiedPortable++
+					if !reflect.DeepEqual(gotLock, lock) || !reflect.DeepEqual(gotRecord, record) {
+						t.Fatalf("portable verification input: lock=%#v record=%#v", gotLock, gotRecord)
+					}
+					return errors.New("portable alias missing")
+				},
+				publishBuild: func(context.Context, *deploy.OperationLock, providerstore.Store, BuildPublicationInput) (deploy.StateV1, error) {
+					published++
+					return deploy.StateV1{}, nil
+				},
+				discardValidated: func(context.Context, *deploy.OperationLock, string, string) error {
+					return nil
+				},
+			})
+			if err == nil || !strings.Contains(err.Error(), "portable alias missing") ||
+				verifiedFinal != 1 || verifiedPortable != 1 || published != 0 {
+				t.Fatalf("final=%d portable=%d published=%d error=%v", verifiedFinal, verifiedPortable, published, err)
+			}
+		})
 	}
 }
 

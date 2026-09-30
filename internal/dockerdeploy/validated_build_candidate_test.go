@@ -328,6 +328,10 @@ func TestPublishValidatedBuildRecordsCandidateWithoutChangingState(t *testing.T)
 				return EnvironmentImageReferences{Temporary: "temporary", Generation: "validated-reference"}, nil
 			},
 			createReference: func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error {
+				pending, found, err := operation.ReadPendingValidatedBuildV1()
+				if err != nil || !found || pending.Final.ImageReference != "validated-reference" {
+					t.Fatalf("candidate intent was not durable before tag creation: found=%v err=%v pending=%#v", found, err, pending)
+				}
 				created++
 				return nil
 			},
@@ -341,6 +345,9 @@ func TestPublishValidatedBuildRecordsCandidateWithoutChangingState(t *testing.T)
 	}
 	if created != 1 || record.ImageReference != "validated-reference" {
 		t.Fatalf("created=%d record=%#v", created, record)
+	}
+	if _, found, err := operation.ReadPendingValidatedBuildV1(); err != nil || found {
+		t.Fatalf("committed candidate retained intent: found=%v err=%v", found, err)
 	}
 	after, found, err := operation.ReadStateV1()
 	if err != nil || !found || !reflect.DeepEqual(after, state) {
@@ -398,18 +405,22 @@ func TestPublishValidatedBuildWrapsNewReferenceCleanupFailure(t *testing.T) {
 	}
 	cleanupFailure := errors.New("cleanup failed")
 	removed := false
+	references, err := NewEnvironmentImageReferences(document.Environment.ID, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = publishValidatedBuild(
 		t.Context(), operation, store, document.Environment.ID, dir, lock, inputs,
 		publishValidatedBuildBackendV1{
 			newReferences: func(string, string) (EnvironmentImageReferences, error) {
-				return EnvironmentImageReferences{Temporary: "temporary", Generation: "validated-reference"}, nil
+				return references, nil
 			},
 			createReference: func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error {
-				return os.Mkdir(filepath.Join(dir, ".reploy", "validated-build.json"), 0o700)
+				return errors.New("tag creation failed after mutation")
 			},
 			removeReference: func(_ context.Context, _ providers.RealizedImageV1, reference, _, _ string) error {
 				removed = true
-				if reference != "validated-reference" {
+				if reference != references.Generation {
 					t.Fatalf("removed reference = %q", reference)
 				}
 				return cleanupFailure
@@ -417,8 +428,121 @@ func TestPublishValidatedBuildWrapsNewReferenceCleanupFailure(t *testing.T) {
 		},
 	)
 	if !removed || !errors.Is(err, cleanupFailure) ||
-		!strings.Contains(err.Error(), "cleanup newly created validated image reference") {
+		!strings.Contains(err.Error(), "recover pending validated final image reference") {
 		t.Fatalf("removed=%v error=%v", removed, err)
+	}
+	if _, found, err := operation.ReadPendingValidatedBuildV1(); err != nil || !found {
+		t.Fatalf("failed cleanup lost pending intent: found=%v err=%v", found, err)
+	}
+}
+
+func TestRecoverPendingValidatedBuildPreservesPreviousCandidate(t *testing.T) {
+	dir, operation, store, lock, state := currentBuildFixture(t, true)
+	defer operation.Unlock()
+	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs, err := ValidatedBuildInputs(
+		document, state.Overlay, deploy.EmptyPackageOverridesV1(document.Environment.ID), dir, state.Platform,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldRefs := fixedPublicationReferences(t, dir, 0x51)
+	old := deploy.ValidatedBuildV1{
+		Schema: deploy.ValidatedBuildSchemaV1, BlueprintDigest: inputs.BlueprintDigest,
+		OverlayDigest: inputs.OverlayDigest, PackageOverridesDigest: inputs.PackageOverridesDigest,
+		Platform: inputs.Platform, BuildLockDigest: state.Current.BuildLockDigest,
+		Image: lock.FinalImage, ImageReference: oldRefs.Generation,
+	}
+	if err := operation.CommitValidatedBuildV1(old); err != nil {
+		t.Fatal(err)
+	}
+	newRefs := fixedPublicationReferences(t, dir, 0x52)
+	portableAlias, err := NewEnvironmentPortableRuntimeLayerReferenceForGeneration(
+		lock.FinalImage.ConfigDigest, newRefs.Generation, document.Environment.ID, dir,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockDigest, err := deploy.BuildLockDigestV1(lock, registry.ValidateRequirementProfileV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := deploy.PendingValidatedBuildV1{
+		Schema: deploy.PendingValidatedBuildSchemaV1, BuildLockDigest: lockDigest,
+		Final:    deploy.ValidatedBuildReferenceV1{Image: lock.FinalImage, ImageReference: newRefs.Generation},
+		Portable: &deploy.ValidatedBuildReferenceV1{Image: lock.FinalImage, ImageReference: portableAlias},
+	}
+	if err := operation.WritePendingValidatedBuildV1(pending); err != nil {
+		t.Fatal(err)
+	}
+	removed := []string{}
+	remove := func(_ context.Context, _ providers.RealizedImageV1, reference, _, _ string) error {
+		removed = append(removed, reference)
+		return nil
+	}
+	if err := recoverPendingValidatedBuildV1(t.Context(), operation, store, document.Environment.ID, dir, remove); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(removed, []string{portableAlias, newRefs.Generation}) {
+		t.Fatalf("interrupted candidate cleanup = %#v", removed)
+	}
+	if _, found, err := operation.ReadPendingValidatedBuildV1(); err != nil || found {
+		t.Fatalf("interrupted intent remains: found=%v err=%v", found, err)
+	}
+	preserved, found, err := operation.ReadValidatedBuildV1()
+	if err != nil || !found || !reflect.DeepEqual(preserved, old) {
+		t.Fatalf("previous candidate changed: found=%v err=%v record=%#v", found, err, preserved)
+	}
+	if err := operation.WritePendingValidatedBuildV1(pending); err != nil {
+		t.Fatal(err)
+	}
+	committed := old
+	committed.BuildLockDigest = pending.BuildLockDigest
+	committed.ImageReference = pending.Final.ImageReference
+	committed.PortableRuntimeLayer = pending.Portable
+	if err := operation.CommitValidatedBuildV1(committed); err != nil {
+		t.Fatal(err)
+	}
+	if err := recoverPendingValidatedBuildV1(t.Context(), operation, store, document.Environment.ID, dir, remove); err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 2 {
+		t.Fatalf("committed candidate aliases were removed: %#v", removed)
+	}
+}
+
+func TestRecoverPendingValidatedBuildRetainsFailedCleanupIntent(t *testing.T) {
+	dir, operation, store, lock, state := currentBuildFixture(t, true)
+	defer operation.Unlock()
+	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	references := fixedPublicationReferences(t, dir, 0x53)
+	lockDigest, err := deploy.BuildLockDigestV1(lock, registry.ValidateRequirementProfileV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := deploy.PendingValidatedBuildV1{
+		Schema: deploy.PendingValidatedBuildSchemaV1, BuildLockDigest: lockDigest,
+		Final: deploy.ValidatedBuildReferenceV1{Image: lock.FinalImage, ImageReference: references.Generation},
+	}
+	if err := operation.WritePendingValidatedBuildV1(pending); err != nil {
+		t.Fatal(err)
+	}
+	cleanupFailure := errors.New("Docker unavailable")
+	remove := func(context.Context, providers.RealizedImageV1, string, string, string) error {
+		return cleanupFailure
+	}
+	if err := recoverPendingValidatedBuildV1(t.Context(), operation, store, document.Environment.ID, dir, remove); !errors.Is(err, cleanupFailure) {
+		t.Fatalf("recovery error = %v", err)
+	}
+	loaded, found, err := operation.ReadPendingValidatedBuildV1()
+	if err != nil || !found || !reflect.DeepEqual(loaded, pending) {
+		t.Fatalf("failed cleanup lost intent: found=%v err=%v record=%#v", found, err, loaded)
 	}
 }
 
@@ -821,5 +945,265 @@ func TestDiscardValidatedBuildDoesNotDependOnBuildLockForCleanup(t *testing.T) {
 	}
 	if _, found, err := operation.ReadValidatedBuildV1(); err != nil || found {
 		t.Fatalf("validated build remained: found=%v err=%v", found, err)
+	}
+}
+
+func TestValidatedBuildRetainsAndCleansPortableRuntimeReference(t *testing.T) {
+	fixture := newPreparedPythonGraphReuseFixture(t)
+	dir := filepath.Dir(filepath.Dir(fixture.store.Root()))
+	lock := fixture.lock
+	document, platform := testSelectedPlatformDocumentV1(t)
+	lock.BlueprintDigest = testResolvedBlueprintDigestV1(t, document)
+	lock.Platform = platform
+	lock.PackageOverrides = deploy.EmptyPackageOverrideIntentV1(document.Environment.ID)
+	for _, node := range fixture.request.Plan.Nodes {
+		if node.ID == "base" {
+			var err error
+			lock.BasePlanDigest, err = providers.ProviderNodePlanDigest(node)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if author, ok := node.Request.Value["image"].(string); ok {
+				lock.Base.AuthorReference = author
+			}
+		}
+	}
+	document.Environment.Base.Image = lock.Base.AuthorReference
+	if err := document.Environment.RebuildProviderContributions(); err != nil {
+		t.Fatal(err)
+	}
+	lock.BlueprintDigest = testResolvedBlueprintDigestV1(t, document)
+	tools := buildLockAssemblyPortableToolsV1(t, fixture.store, fixture.request.Plan, fixture.request.NodeID)
+	lock.PortableTools = &tools
+	portableImage := providers.RealizedImageV1{
+		Digest: rendererDigest("c"), ConfigDigest: rendererDigest("d"), RootFSSubject: rendererDigest("e"),
+	}
+	transaction, err := deploy.PortableRuntimeLayerTransactionDigestV1(tools, lock.RuntimeLayer.Upstream, portableImage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.PortableRuntimeLayer = &deploy.PortableRuntimeLayerV1{
+		Schema: deploy.PortableRuntimeLayerSchemaV1, Upstream: lock.RuntimeLayer.Upstream,
+		Result: portableImage, TransactionDigest: transaction,
+	}
+	lock.RuntimeLayer.Upstream = portableImage
+	lock.RuntimeLayer.TransactionDigest, err = deploy.ApplicationRuntimeLayerTransactionDigestV1(
+		lock.RuntimeLayer.Verifier, lock.RuntimeLayer.Account, portableImage, platform,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyDigest, err := deploy.RuntimePolicyDigestV1(lock.RuntimePolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.ValidationRecord, err = deploy.PublishPrefixValidation(t.Context(), fixture.store, deploy.PrefixValidationV1{
+		Schema: deploy.PrefixValidationSchemaV1, SubjectRootFS: lock.FinalImage.RootFSSubject,
+		Profiles: []providers.ValidationEvidence{}, RuntimePolicy: policyDigest,
+		ExposedOutputs: []providers.ExecutableEvidence{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := deploy.ValidateBuildLockV1(lock, registry.ValidateRequirementProfileV1); err != nil {
+		t.Fatal(err)
+	}
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	inputs, err := ValidatedBuildInputs(
+		document, lock.Overlay, deploy.EmptyPackageOverridesV1(document.Environment.ID), dir, platform,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequence := byte(0x41)
+	created := []string{}
+	removed := []string{}
+	failedPortableCleanup := ""
+	backend := publishValidatedBuildBackendV1{
+		newReferences: func(string, string) (EnvironmentImageReferences, error) {
+			reference := fixedPublicationReferences(t, dir, sequence)
+			sequence++
+			return reference, nil
+		},
+		createReference: func(_ context.Context, _ providers.RealizedImageV1, refs EnvironmentImageReferences, _ EnvironmentReferenceKind, _, _ string) error {
+			created = append(created, refs.Generation)
+			return nil
+		},
+		createPortableReference: func(_ context.Context, image providers.RealizedImageV1, generation, environment, deploymentDir string) error {
+			if image != portableImage {
+				t.Fatalf("portable image = %#v", image)
+			}
+			lockDigest, err := deploy.BuildLockDigestV1(lock, registry.ValidateRequirementProfileV1)
+			if err != nil {
+				return err
+			}
+			if _, found, err := operation.ReadBuildLock(lockDigest, registry.ValidateRequirementProfileV1); err != nil || !found {
+				t.Fatalf("portable alias was created before its lock: found=%v err=%v", found, err)
+			}
+			pending, found, err := operation.ReadPendingValidatedBuildV1()
+			if err != nil || !found || pending.Portable == nil || pending.Portable.Image != image {
+				t.Fatalf("portable alias has no durable intent: found=%v err=%v pending=%#v", found, err, pending)
+			}
+			reference, err := NewEnvironmentPortableRuntimeLayerReferenceForGeneration(image.ConfigDigest, generation, environment, deploymentDir)
+			if err == nil {
+				created = append(created, reference)
+			}
+			return err
+		},
+		removeReference: func(_ context.Context, _ providers.RealizedImageV1, reference, _, _ string) error {
+			removed = append(removed, reference)
+			if reference == failedPortableCleanup {
+				return errors.New("portable alias cleanup interrupted")
+			}
+			return nil
+		},
+	}
+	first, err := publishValidatedBuild(t.Context(), operation, fixture.store, document.Environment.ID, dir, lock, inputs, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.PortableRuntimeLayer == nil || len(created) != 2 || created[1] != first.PortableRuntimeLayer.ImageReference {
+		t.Fatalf("first record=%#v created=%#v", first, created)
+	}
+	state := deploy.StateV1{Schema: deploy.StateSchemaV1, Blueprint: testResolvedBlueprintV1(t, document), Platform: platform, Overlay: lock.Overlay}
+	missingAlias := first
+	missingAlias.PortableRuntimeLayer = nil
+	if err := operation.CommitValidatedBuildV1(missingAlias); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := LoadValidatedBuildCandidate(t.Context(), operation, fixture.store, document, state,
+		deploy.EmptyPackageOverridesV1(document.Environment.ID), dir, false, false); err == nil || found {
+		t.Fatalf("candidate missing portable alias found=%v err=%v", found, err)
+	}
+	if err := operation.CommitValidatedBuildV1(first); err != nil {
+		t.Fatal(err)
+	}
+	failedPortableCleanup = first.PortableRuntimeLayer.ImageReference
+	second, err := publishValidatedBuild(t.Context(), operation, fixture.store, document.Environment.ID, dir, lock, inputs, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.PortableRuntimeLayer == nil || second.PortableRuntimeLayer.ImageReference == first.PortableRuntimeLayer.ImageReference ||
+		!reflect.DeepEqual(removed, []string{first.ImageReference, first.PortableRuntimeLayer.ImageReference}) ||
+		len(second.PendingCleanup) != 1 || second.PendingCleanup[0].ImageReference != first.PortableRuntimeLayer.ImageReference {
+		t.Fatalf("second record=%#v removed=%#v", second, removed)
+	}
+	failedPortableCleanup = ""
+	second, cleanupErrors := cleanupPendingValidatedBuildReferences(
+		t.Context(), operation, second, document.Environment.ID, dir, backend.removeReference,
+	)
+	if len(cleanupErrors) != 0 || len(second.PendingCleanup) != 0 || removed[2] != first.PortableRuntimeLayer.ImageReference {
+		t.Fatalf("retry record=%#v removed=%#v errors=%v", second, removed, cleanupErrors)
+	}
+	if _, found, err := LoadValidatedBuildCandidate(t.Context(), operation, fixture.store, document, state,
+		deploy.EmptyPackageOverridesV1(document.Environment.ID), dir, false, false); err != nil || !found {
+		t.Fatalf("portable validated candidate found=%v err=%v", found, err)
+	}
+	failedPortableCleanup = second.ImageReference
+	if _, err := discardValidatedBuild(t.Context(), operation, fixture.store, document.Environment.ID, dir, backend.removeReference); err == nil {
+		t.Fatal("discard unexpectedly succeeded after final-reference removal failed")
+	}
+	partial, found, err := operation.ReadValidatedBuildV1()
+	if err != nil || !found || partial.Discarded || partial.PortableRuntimeLayer == nil {
+		t.Fatalf("partially discarded candidate: found=%t record=%#v error=%v", found, partial, err)
+	}
+	previousInspect := inspectPortableRuntimeLayerReferenceV1
+	t.Cleanup(func() { inspectPortableRuntimeLayerReferenceV1 = previousInspect })
+	inspectPortableRuntimeLayerReferenceV1 = func(context.Context, string, blueprint.Platform) (InspectedImageCandidate, error) {
+		return InspectedImageCandidate{}, errors.New("portable alias missing after partial discard")
+	}
+	if err := verifyValidatedBuildPortableReferenceV1(t.Context(), lock, partial, document.Environment.ID, dir); err == nil ||
+		!strings.Contains(err.Error(), "portable alias missing after partial discard") {
+		t.Fatalf("partially discarded portable alias verification error = %v", err)
+	}
+	inspectPortableRuntimeLayerReferenceV1 = previousInspect
+	failedPortableCleanup = ""
+	if _, err := discardValidatedBuild(t.Context(), operation, fixture.store, document.Environment.ID, dir, backend.removeReference); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(removed[3:], []string{
+		second.PortableRuntimeLayer.ImageReference, second.ImageReference,
+		second.PortableRuntimeLayer.ImageReference, second.ImageReference,
+	}) {
+		t.Fatalf("discard removed=%#v", removed)
+	}
+}
+
+func TestRemoveValidatedPortableReferenceRejectsRecordDigestMismatchBeforeDocker(t *testing.T) {
+	dir := t.TempDir()
+	image := providers.RealizedImageV1{
+		Digest: rendererDigest("a"), ConfigDigest: rendererDigest("b"), RootFSSubject: rendererDigest("c"),
+	}
+	generation := fixedPublicationReferences(t, dir, 0x53).Generation
+	reference, err := NewEnvironmentPortableRuntimeLayerReferenceForGeneration(rendererDigest("d"), generation, "demo", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := removeEnvironmentValidatedBuildReference(t.Context(), image, reference, "demo", dir); err == nil ||
+		!strings.Contains(err.Error(), "does not match its recorded image") {
+		t.Fatalf("mismatched portable cleanup error = %v", err)
+	}
+}
+
+func TestVerifyValidatedBuildPortableReferenceRejectsMissingOrRetargetedAlias(t *testing.T) {
+	dir := t.TempDir()
+	platform := blueprint.Platform{OS: "linux", Architecture: "amd64", Canonical: "linux/amd64"}
+	image := providers.RealizedImageV1{
+		Digest: rendererDigest("a"), ConfigDigest: rendererDigest("b"), RootFSSubject: rendererDigest("c"),
+	}
+	generation := fixedPublicationReferences(t, dir, 0x54).Generation
+	alias, err := NewEnvironmentPortableRuntimeLayerReferenceForGeneration(image.ConfigDigest, generation, "demo", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock := deploy.BuildLockV1{
+		Platform:             platform,
+		PortableRuntimeLayer: &deploy.PortableRuntimeLayerV1{Result: image},
+	}
+	record := deploy.ValidatedBuildV1{
+		ImageReference: generation,
+		PortableRuntimeLayer: &deploy.ValidatedBuildReferenceV1{
+			Image: image, ImageReference: alias,
+		},
+	}
+	for _, tc := range []struct {
+		name string
+		mode string
+		want string
+	}{
+		{name: "stable"},
+		{name: "missing", mode: "missing", want: "portable alias missing"},
+		{name: "retargeted", mode: "retargeted", want: "no longer names its locked image"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			previous := inspectPortableRuntimeLayerReferenceV1
+			t.Cleanup(func() { inspectPortableRuntimeLayerReferenceV1 = previous })
+			inspections := 0
+			inspectPortableRuntimeLayerReferenceV1 = func(
+				_ context.Context, reference string, selected blueprint.Platform,
+			) (InspectedImageCandidate, error) {
+				inspections++
+				if reference != alias || selected != platform {
+					t.Fatalf("reference=%q platform=%#v", reference, selected)
+				}
+				if tc.mode == "missing" {
+					return InspectedImageCandidate{}, errors.New("portable alias missing")
+				}
+				observed := image
+				if tc.mode == "retargeted" {
+					observed.ConfigDigest = rendererDigest("d")
+				}
+				return InspectedImageCandidate{Image: observed}, nil
+			}
+			err := verifyValidatedBuildPortableReferenceV1(t.Context(), lock, record, "demo", dir)
+			if inspections != 1 || (tc.want == "" && err != nil) ||
+				(tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want))) {
+				t.Fatalf("inspections=%d error=%v", inspections, err)
+			}
+		})
 	}
 }

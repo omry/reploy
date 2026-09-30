@@ -16,9 +16,11 @@ import (
 )
 
 type providerUninstallPendingRemovalBackendV1 struct {
-	acquire         func(context.Context, string) (*deploy.OperationLock, error)
-	removeReference func(context.Context, providers.RealizedImageV1, string, string, string) error
-	finalize        func(string, string) error
+	acquire                 func(context.Context, string) (*deploy.OperationLock, error)
+	removeReference         func(context.Context, providers.RealizedImageV1, string, string, string) error
+	removePortableReference func(context.Context, providers.RealizedImageV1, string, string, string) error
+	createPortableReference func(context.Context, providers.RealizedImageV1, string, string, string) error
+	finalize                func(string, string) error
 }
 
 func retryPendingProviderUninstallRemovalV1(
@@ -31,9 +33,11 @@ func retryPendingProviderUninstallRemovalV1(
 		deploymentDir,
 		service,
 		providerUninstallPendingRemovalBackendV1{
-			acquire:         deploy.AcquireOperationLock,
-			removeReference: RemoveEnvironmentGenerationReference,
-			finalize:        finalizePendingProviderUninstallRemovalV1,
+			acquire:                 deploy.AcquireOperationLock,
+			removeReference:         RemoveEnvironmentGenerationReference,
+			removePortableReference: RemoveEnvironmentPortableRuntimeLayerReference,
+			createPortableReference: CreateEnvironmentPortableRuntimeLayerReference,
+			finalize:                finalizePendingProviderUninstallRemovalV1,
 		},
 	)
 }
@@ -124,16 +128,23 @@ func retryPendingProviderUninstallRemovalWithV1(
 	); err != nil {
 		return ProviderUninstallResultV1{}, true, fmt.Errorf("pending deployment current build: %w", err)
 	}
+	if err := validateRecordedGenerationReferenceCleanupV1(lock, backend.removeReference,
+		backend.removePortableReference, backend.createPortableReference); err != nil {
+		return ProviderUninstallResultV1{}, true, fmt.Errorf("prepare pending deployment reference removal: %w", err)
+	}
 	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
 	if err != nil {
 		return ProviderUninstallResultV1{}, true, fmt.Errorf("decode pending deployment blueprint: %w", err)
 	}
-	if err := backend.removeReference(
+	if err := removeRecordedGenerationReferencesV1(
 		context.WithoutCancel(ctx),
-		lock.FinalImage,
+		lock,
 		state.Current.Reference,
 		document.Environment.ID,
 		deploymentDir,
+		backend.removeReference,
+		backend.removePortableReference,
+		backend.createPortableReference,
 	); err != nil {
 		return ProviderUninstallResultV1{}, true, fmt.Errorf("remove pending deployment image reference: %w", err)
 	}
