@@ -753,6 +753,33 @@ func portableToolPythonRequirementIdentityV1(requirement string) (string, string
 	return distribution, sourceKind, err
 }
 
+// OrdinaryRequirementClaimV1 projects a canonical ordinary Python requirement
+// into the bounded package-root compatibility model without losing source
+// identity. A source without a provable wheel version has an empty Root; the
+// caller must not treat that as an unconstrained package requirement.
+type OrdinaryRequirementClaimV1 struct {
+	Distribution string
+	Root         string
+	SourceKind   string
+}
+
+func ProjectOrdinaryRequirementClaimV1(requirement string) (OrdinaryRequirementClaimV1, error) {
+	distribution, sourceKind, sourceRoot, err := portableToolPythonRequirementIdentityAndSourceRootV1(requirement)
+	if err != nil {
+		return OrdinaryRequirementClaimV1{}, err
+	}
+	if distribution == "" {
+		return OrdinaryRequirementClaimV1{}, fmt.Errorf("unverifiable %s Python package requirement cannot be proven distinct from selected portable wheels", sourceKind)
+	}
+	if sourceKind == "" {
+		sourceRoot, err = portableToolPythonCompatibilityRootV1(requirement)
+		if err != nil {
+			return OrdinaryRequirementClaimV1{}, err
+		}
+	}
+	return OrdinaryRequirementClaimV1{Distribution: distribution, Root: sourceRoot, SourceKind: sourceKind}, nil
+}
+
 func portableToolPythonRequirementIdentityAndSourceRootV1(requirement string) (string, string, string, error) {
 	value := strings.TrimSpace(requirement)
 	body := portableToolPythonRequirementBodyV1(value)
