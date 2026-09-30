@@ -20,6 +20,7 @@ type PreparedPythonNodeConfig struct {
 	PortableToolFreshPlan  *PortableToolPythonFreshPlanV1
 	PortableToolLockedPlan *PortableToolPythonLockedPlanV1
 	SourceBuilder          *SourceBuilderCoordinatorV1
+	portableAcquisitions   *portablePythonAcquisitionCollectorV1
 }
 
 type PreparedAPTNodeConfig struct {
@@ -137,6 +138,7 @@ func PreparePreparedPythonGraphBackend(
 				PortableToolFreshPlan:  config.PortableToolFreshPlan,
 				PortableToolLockedPlan: config.PortableToolLockedPlan,
 				SourceBuilder:          config.SourceBuilder,
+				portableAcquisitions:   config.portableAcquisitions,
 				Progress:               options.Progress,
 				ShowApplicationContext: showApplicationContext,
 				RunOptions:             options,

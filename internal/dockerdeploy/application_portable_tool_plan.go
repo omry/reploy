@@ -29,6 +29,7 @@ type ApplicationPortableToolPlanV1 struct {
 	Snapshot            toolcatalog.ImmutableOperationSnapshotV1
 	ProjectedComponents []providers.ResolvedComponentRequestV1
 	PythonProjection    pythonprovider.PortableToolPythonProjectionV1
+	sealed              *applicationPortablePythonSelectionSealV1
 }
 
 type PlanApplicationPortableToolsInputV1 struct {
@@ -136,10 +137,15 @@ func PlanApplicationPortableToolsV1(ctx context.Context, input PlanApplicationPo
 	if err != nil {
 		return nil, fmt.Errorf("preflight application portable provider DAG: %w", err)
 	}
-	return &ApplicationPortableToolPlanV1{
+	selected := &ApplicationPortableToolPlanV1{
 		Target: target, Plan: plan, DAG: dag, Closures: resolution.Closures,
 		Snapshot: resolution.Snapshot, ProjectedComponents: projected, PythonProjection: pythonProjection,
-	}, nil
+	}
+	selected.sealed, err = sealApplicationPortablePythonSelectionV1(selected, input.Base, input.FinalImageConfig)
+	if err != nil {
+		return nil, fmt.Errorf("seal application portable tool selection: %w", err)
+	}
+	return selected, nil
 }
 
 // A Python provider request constrains the interpreter independently of its

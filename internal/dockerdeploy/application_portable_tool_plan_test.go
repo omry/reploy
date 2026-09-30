@@ -159,6 +159,69 @@ func TestPlanApplicationPortableToolsV1RejectsUnsupportedSelectionBeforeAcquisit
 	}
 }
 
+func TestPlanApplicationPortableToolsV1SealsExecutionAuthority(t *testing.T) {
+	input := applicationPortableInputForTest(t, "[{tool: playwright, version: 1.61.0, binding: python, select: {browser: [chromium]}}]")
+	calls := 0
+	stubApplicationPortableTargetForTest(t, &calls)
+	selected, err := PlanApplicationPortableToolsV1(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.sealed == nil || selected.Snapshot.Digest == "" || selected.Target.VersionID != "12" {
+		t.Fatalf("missing complete preflight seal: %#v", selected)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	tests := []struct {
+		name   string
+		change func(*ApplicationPortableToolPlanV1, *PreparedPythonGraphExecutionInput)
+		want   string
+	}{
+		{"unchanged preflight", func(*ApplicationPortableToolPlanV1, *PreparedPythonGraphExecutionInput) {}, ""},
+		{"mutable public views cannot replace the seal", func(plan *ApplicationPortableToolPlanV1, _ *PreparedPythonGraphExecutionInput) {
+			plan.Plan.Schema = "forged-plan"
+			plan.DAG.Schema = "forged-dag"
+			plan.Closures = nil
+			plan.ProjectedComponents = nil
+			plan.PythonProjection.Schema = "forged-projection"
+		}, ""},
+		{"missing construction seal", func(plan *ApplicationPortableToolPlanV1, _ *PreparedPythonGraphExecutionInput) {
+			plan.sealed = nil
+		}, "sealed preflight selection"},
+		{"same-platform base replaced", func(_ *ApplicationPortableToolPlanV1, graph *PreparedPythonGraphExecutionInput) {
+			graph.BaseDescriptor.AuthorReference = "docker.io/library/ubuntu:24.04"
+		}, "execution base differs"},
+		{"image configuration changed", func(_ *ApplicationPortableToolPlanV1, graph *PreparedPythonGraphExecutionInput) {
+			graph.FinalImageConfig.Environment = append(graph.FinalImageConfig.Environment,
+				providers.EnvironmentVariable{Name: "ADDED_AFTER_PREFLIGHT", Value: "yes"})
+		}, "execution image config differs"},
+		{"target view changed", func(plan *ApplicationPortableToolPlanV1, _ *PreparedPythonGraphExecutionInput) {
+			plan.Target.VersionID = "13"
+		}, "target or operation snapshot differs"},
+		{"operation snapshot changed", func(plan *ApplicationPortableToolPlanV1, _ *PreparedPythonGraphExecutionInput) {
+			plan.Snapshot.CanonicalJSON = "{}"
+		}, "target or operation snapshot differs"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			plan := *selected
+			graph := PreparedPythonGraphExecutionInput{
+				Plan: selected.DAG.ProviderPlan, BaseDescriptor: input.Base,
+				FinalImageConfig: input.FinalImageConfig,
+			}
+			test.change(&plan, &graph)
+			_, err := ExecuteApplicationPortablePythonGraphV1(cancelled, &plan, graph)
+			if test.want == "" {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("unchanged sealed preflight did not reach graph boundary: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("preflight drift error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestPlanApplicationPortableToolsV1SelectsRuntimeAndProjectsOrdinaryClaims(t *testing.T) {
 	input := applicationPortableInputForTest(t, "[{tool: playwright, version: 1.61.0, binding: python, select: {browser: [chromium]}}]")
 	component := blueprint.ApplicationContributionID("web", blueprint.ContributionProviderPython)
