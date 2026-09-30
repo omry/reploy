@@ -13,16 +13,18 @@ import (
 )
 
 type providerUninstallRemoveDirBackendV1 struct {
-	newStore        func(string) (providerstore.Store, error)
-	load            func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (CurrentBuild, bool, error)
-	complete        func(*deploy.OperationLock, string, *deploy.ControlLeaseV1) error
-	removeMarker    func(*deploy.OperationLock, string) error
-	releaseLease    func(*deploy.ControlLeaseV1) error
-	reserve         func(string) (string, error)
-	rename          func(string, string) error
-	unlock          func(*deploy.OperationLock) error
-	removeReference func(context.Context, providers.RealizedImageV1, string, string, string) error
-	finalize        func(string, string) error
+	newStore                func(string) (providerstore.Store, error)
+	load                    func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (CurrentBuild, bool, error)
+	complete                func(*deploy.OperationLock, string, *deploy.ControlLeaseV1) error
+	removeMarker            func(*deploy.OperationLock, string) error
+	releaseLease            func(*deploy.ControlLeaseV1) error
+	reserve                 func(string) (string, error)
+	rename                  func(string, string) error
+	unlock                  func(*deploy.OperationLock) error
+	removeReference         func(context.Context, providers.RealizedImageV1, string, string, string) error
+	removePortableReference func(context.Context, providers.RealizedImageV1, string, string, string) error
+	createPortableReference func(context.Context, providers.RealizedImageV1, string, string, string) error
+	finalize                func(string, string) error
 }
 
 func removeProviderUninstallDeploymentV1(
@@ -44,12 +46,14 @@ func removeProviderUninstallDeploymentV1(
 			}
 			return err
 		},
-		releaseLease:    func(lease *deploy.ControlLeaseV1) error { return lease.Release() },
-		reserve:         reserveProviderUninstallTombstoneV1,
-		rename:          os.Rename,
-		unlock:          func(operation *deploy.OperationLock) error { return operation.Unlock() },
-		removeReference: RemoveEnvironmentGenerationReference,
-		finalize:        finalizePendingProviderUninstallRemovalV1,
+		releaseLease:            func(lease *deploy.ControlLeaseV1) error { return lease.Release() },
+		reserve:                 reserveProviderUninstallTombstoneV1,
+		rename:                  os.Rename,
+		unlock:                  func(operation *deploy.OperationLock) error { return operation.Unlock() },
+		removeReference:         RemoveEnvironmentGenerationReference,
+		removePortableReference: RemoveEnvironmentPortableRuntimeLayerReference,
+		createPortableReference: CreateEnvironmentPortableRuntimeLayerReference,
+		finalize:                finalizePendingProviderUninstallRemovalV1,
 	})
 }
 
@@ -107,6 +111,10 @@ func removeProviderUninstallDeploymentWithV1(
 	if !found || current.Generation.Reference != plan.GenerationReference {
 		return fmt.Errorf("installed generation changed before deployment removal")
 	}
+	if err := validateRecordedGenerationReferenceCleanupV1(current.Lock, backend.removeReference,
+		backend.removePortableReference, backend.createPortableReference); err != nil {
+		return fmt.Errorf("prepare deployment reference removal: %w", err)
+	}
 	tombstone, err := backend.reserve(plan.Installation.TargetDir)
 	if err != nil {
 		return fmt.Errorf("reserve deployment removal path: %w", err)
@@ -128,7 +136,8 @@ func removeProviderUninstallDeploymentWithV1(
 	}
 	operationHeld = false
 
-	if err := backend.removeReference(ctx, current.Lock.FinalImage, plan.GenerationReference, plan.Environment, plan.Installation.TargetDir); err != nil {
+	if err := removeRecordedGenerationReferencesV1(context.WithoutCancel(ctx), current.Lock, plan.GenerationReference, plan.Environment, plan.Installation.TargetDir,
+		backend.removeReference, backend.removePortableReference, backend.createPortableReference); err != nil {
 		restoreErr := backend.rename(tombstone, plan.Installation.TargetDir)
 		return errors.Join(fmt.Errorf("remove deployment image reference: %w", err), providerUninstallRestoreErrorV1(restoreErr))
 	}

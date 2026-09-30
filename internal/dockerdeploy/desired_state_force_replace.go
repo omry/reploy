@@ -19,16 +19,18 @@ type ForceReplaceStagedDesiredStateInputV1 struct {
 }
 
 type forceReplaceStagedDesiredStateBackendV1 struct {
-	acquire         func(context.Context, string) (*deploy.OperationLock, error)
-	newStore        func(string) (providerstore.Store, error)
-	recoverPending  func(context.Context, *deploy.OperationLock, providerstore.Store, *deploy.EnvironmentGenerationState, string, string) (bool, error)
-	admit           func(context.Context, string, *deploy.OperationLock, ControlAdmissionInputV1) (AdmittedControlV1, error)
-	complete        func(*deploy.OperationLock, string, *deploy.ControlLeaseV1) error
-	stopOwned       func(context.Context, *deploy.OperationLock, deploy.StateV1, string, RunOptions) error
-	removeReference func(context.Context, providers.RealizedImageV1, string, string, string) error
-	commit          func(*deploy.OperationLock, *deploy.EnvironmentGenerationState, deploy.StateV1) error
-	stageSame       func(context.Context, DesiredStateStageInputV1) (deploy.DesiredStateUpdateResult, error)
-	probeNative     func(context.Context) (blueprint.Platform, error)
+	acquire                 func(context.Context, string) (*deploy.OperationLock, error)
+	newStore                func(string) (providerstore.Store, error)
+	recoverPending          func(context.Context, *deploy.OperationLock, providerstore.Store, *deploy.EnvironmentGenerationState, string, string) (bool, error)
+	admit                   func(context.Context, string, *deploy.OperationLock, ControlAdmissionInputV1) (AdmittedControlV1, error)
+	complete                func(*deploy.OperationLock, string, *deploy.ControlLeaseV1) error
+	stopOwned               func(context.Context, *deploy.OperationLock, deploy.StateV1, string, RunOptions) error
+	removeReference         func(context.Context, providers.RealizedImageV1, string, string, string) error
+	removePortableReference func(context.Context, providers.RealizedImageV1, string, string, string) error
+	createPortableReference func(context.Context, providers.RealizedImageV1, string, string, string) error
+	commit                  func(*deploy.OperationLock, *deploy.EnvironmentGenerationState, deploy.StateV1) error
+	stageSame               func(context.Context, DesiredStateStageInputV1) (deploy.DesiredStateUpdateResult, error)
+	probeNative             func(context.Context) (blueprint.Platform, error)
 }
 
 // ForceReplaceStagedDesiredStateV1 replaces staging owned by another
@@ -45,10 +47,12 @@ func ForceReplaceStagedDesiredStateV1(ctx context.Context, input ForceReplaceSta
 				registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1,
 			)
 		},
-		admit:           AdmitControlOperationV1,
-		complete:        CompleteControlAdmissionV1,
-		stopOwned:       stopOwnedCurrentWorkloadV1,
-		removeReference: RemoveEnvironmentGenerationReference,
+		admit:                   AdmitControlOperationV1,
+		complete:                CompleteControlAdmissionV1,
+		stopOwned:               stopOwnedCurrentWorkloadV1,
+		removeReference:         RemoveEnvironmentGenerationReference,
+		removePortableReference: RemoveEnvironmentPortableRuntimeLayerReference,
+		createPortableReference: CreateEnvironmentPortableRuntimeLayerReference,
 		commit: func(operation *deploy.OperationLock, expected *deploy.EnvironmentGenerationState, state deploy.StateV1) error {
 			return operation.CommitStateV1(expected, state)
 		},
@@ -181,6 +185,10 @@ func forceReplaceStagedDesiredStateV1(
 			return result, fmt.Errorf("staged generation is missing its build record")
 		}
 		oldBuild = &loaded
+		if err := validateRecordedGenerationReferenceCleanupV1(loaded.Lock, backend.removeReference,
+			backend.removePortableReference, backend.createPortableReference); err != nil {
+			return result, fmt.Errorf("prepare force-replacement reference removal: %w", err)
+		}
 		if err := backend.stopOwned(ctx, operation, state, dir, input.RunOptions); err != nil {
 			return result, fmt.Errorf("stop staged workload before force replacement: %w", err)
 		}
@@ -205,7 +213,8 @@ func forceReplaceStagedDesiredStateV1(
 		return result, fmt.Errorf("write force-replacement staged state: %w", err)
 	}
 	if oldBuild != nil {
-		if err := backend.removeReference(ctx, oldBuild.Lock.FinalImage, oldBuild.Generation.Reference, oldEnvironment, dir); err != nil {
+		if err := removeRecordedGenerationReferencesV1(context.WithoutCancel(ctx), oldBuild.Lock, oldBuild.Generation.Reference, oldEnvironment, dir,
+			backend.removeReference, backend.removePortableReference, backend.createPortableReference); err != nil {
 			return deploy.DesiredStateUpdateResult{State: candidate, Changed: true}, fmt.Errorf("staging was replaced but the old image reference could not be removed: %w", err)
 		}
 	}
