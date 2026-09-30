@@ -201,6 +201,9 @@ func TestVerifyLockedImagesV1ExplainsMissingProviderLayer(t *testing.T) {
 				),
 			}
 		},
+		nil,
+		"",
+		providerstore.Store{},
 	)
 	var missing *CurrentBuildImageMissingErrorV1
 	if !errors.As(err, &missing) ||
@@ -357,6 +360,9 @@ func TestVerifyLockedImagesV1RerunsCumulativeLayerValidation(t *testing.T) {
 				return InspectedImageCandidate{}, errors.New("unexpected image")
 			}
 		},
+		nil,
+		"",
+		providerstore.Store{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -377,6 +383,173 @@ func TestVerifyLockedImagesV1RerunsCumulativeLayerValidation(t *testing.T) {
 			inspected,
 		)
 	}
+}
+
+func TestVerifyLockedPortableRuntimeLayerV1AuditsLockedImageAndBytes(t *testing.T) {
+	store, lock, image, payloads := currentPortableRuntimeVerificationFixtureV1(t)
+	previousMaterialize := materializePortableRuntimePayloadsForCurrentBuildV1
+	previousInventory := verifyPortableRuntimeInventoryForCurrentBuildV1
+	t.Cleanup(func() {
+		materializePortableRuntimePayloadsForCurrentBuildV1 = previousMaterialize
+		verifyPortableRuntimeInventoryForCurrentBuildV1 = previousInventory
+	})
+	materializePortableRuntimePayloadsForCurrentBuildV1 = func(
+		context.Context, providerstore.Store, providers.PortableToolLockV1,
+	) (*PortableRuntimePayloadsV1, error) {
+		return payloads, nil
+	}
+	verifiedInventory := false
+	verifyPortableRuntimeInventoryForCurrentBuildV1 = func(
+		context.Context, providerstore.Store, InspectedImageCandidate, []portableRuntimeInventoryEntryV1,
+	) error {
+		verifiedInventory = true
+		return nil
+	}
+	if err := verifyLockedPortableRuntimeLayerV1(
+		t.Context(), store, lock, lock.PortableRuntimeLayer.Upstream, image,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if !verifiedInventory {
+		t.Fatal("locked portable runtime inventory was not audited")
+	}
+}
+
+func TestVerifyLockedPortableRuntimeLayerV1RechecksReferenceAfterContentAudit(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		drift string
+		want  string
+	}{
+		{name: "stable"},
+		{name: "removed", drift: "removed", want: "after content audit"},
+		{name: "retargeted", drift: "retargeted", want: "changed after content audit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, lock, image, payloads := currentPortableRuntimeVerificationFixtureV1(t)
+			previousMaterialize := materializePortableRuntimePayloadsForCurrentBuildV1
+			previousInventory := verifyPortableRuntimeInventoryForCurrentBuildV1
+			t.Cleanup(func() {
+				materializePortableRuntimePayloadsForCurrentBuildV1 = previousMaterialize
+				verifyPortableRuntimeInventoryForCurrentBuildV1 = previousInventory
+			})
+			materializePortableRuntimePayloadsForCurrentBuildV1 = func(
+				context.Context, providerstore.Store, providers.PortableToolLockV1,
+			) (*PortableRuntimePayloadsV1, error) {
+				return payloads, nil
+			}
+			auditFinished := false
+			verifyPortableRuntimeInventoryForCurrentBuildV1 = func(
+				context.Context, providerstore.Store, InspectedImageCandidate, []portableRuntimeInventoryEntryV1,
+			) error {
+				auditFinished = true
+				return nil
+			}
+			inspections := 0
+			err := verifyLockedPortableRuntimeLayerWithReferenceV1(
+				t.Context(), store, lock, lock.PortableRuntimeLayer.Upstream, image,
+				"reploy/env/test:p-locked", func(context.Context, string, blueprint.Platform) (InspectedImageCandidate, error) {
+					inspections++
+					if !auditFinished {
+						t.Fatal("portable reference rechecked before content audit")
+					}
+					switch tc.drift {
+					case "removed":
+						return InspectedImageCandidate{}, errors.New("portable reference missing")
+					case "retargeted":
+						changed := image
+						changed.Image.ConfigDigest = rendererDigest("f")
+						return changed, nil
+					default:
+						return image, nil
+					}
+				},
+			)
+			if !auditFinished || inspections != 1 ||
+				(tc.want == "" && err != nil) ||
+				(tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want))) {
+				t.Fatalf("audited=%t inspections=%d error=%v", auditFinished, inspections, err)
+			}
+		})
+	}
+}
+
+func TestVerifyLockedPortableRuntimeLayerV1RejectsMissingLockedBytes(t *testing.T) {
+	store, lock, image, payloads := currentPortableRuntimeVerificationFixtureV1(t)
+	if err := payloads.Cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	previousMaterialize := materializePortableRuntimePayloadsForCurrentBuildV1
+	t.Cleanup(func() { materializePortableRuntimePayloadsForCurrentBuildV1 = previousMaterialize })
+	want := errors.New("open verified store artifact: selected runtime payload is missing")
+	materializePortableRuntimePayloadsForCurrentBuildV1 = func(
+		context.Context, providerstore.Store, providers.PortableToolLockV1,
+	) (*PortableRuntimePayloadsV1, error) {
+		return nil, want
+	}
+	err := verifyLockedPortableRuntimeLayerV1(
+		t.Context(), store, lock, lock.PortableRuntimeLayer.Upstream, image,
+	)
+	if !errors.Is(err, want) || !strings.Contains(err.Error(), "selected bytes") {
+		t.Fatalf("missing locked portable bytes error = %v", err)
+	}
+}
+
+func currentPortableRuntimeVerificationFixtureV1(t *testing.T) (
+	providerstore.Store, deploy.BuildLockV1, InspectedImageCandidate, *PortableRuntimePayloadsV1,
+) {
+	t.Helper()
+	fixture := newPortableToolPythonLockedTestFixture(t)
+	portableLock := providers.ClonePortableToolLockV1(fixture.lock)
+	environment := []providers.PortableToolEnvironmentVariableV1{}
+	for _, entry := range portableLock.Plan.PortableToolPlan.Tools {
+		if entry.Runtime == nil {
+			continue
+		}
+		environment = append(environment, entry.Runtime.Environment...)
+	}
+	payloads := &PortableRuntimePayloadsV1{
+		Lock: portableLock, authorityLock: providers.ClonePortableToolLockV1(portableLock),
+		Environment:          append([]providers.PortableToolEnvironmentVariableV1{}, environment...),
+		authorityEnvironment: append([]providers.PortableToolEnvironmentVariableV1{}, environment...),
+		sealedInventory: []portableRuntimeInventoryEntryV1{{
+			path: "/opt/reploy/tools/playwright", kind: providerstore.ArchiveEntryKindDirectory,
+		}},
+	}
+	upstreamDescriptor := testProbeImageDescriptor(t, "linux/amd64")
+	upstream, err := realizedImageFromDescriptor(upstreamDescriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultDescriptor := upstreamDescriptor
+	resultDescriptor.AuthorReference = string(rendererDigest("c"))
+	resultDescriptor.ImmutableReference = string(rendererDigest("c"))
+	resultDescriptor.ConfigDigest = rendererDigest("c")
+	resultDescriptor.RootFSDiffIDs = append(append([]canonical.Digest{}, upstreamDescriptor.RootFSDiffIDs...), rendererDigest("d"))
+	result, err := realizedImageFromDescriptor(resultDescriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := deploy.PortableRuntimeLayerTransactionDigestV1(fixture.lock, upstream, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock := deploy.BuildLockV1{
+		PortableTools: &fixture.lock,
+		PortableRuntimeLayer: &deploy.PortableRuntimeLayerV1{
+			Schema: deploy.PortableRuntimeLayerSchemaV1, Upstream: upstream,
+			Result: result, TransactionDigest: transaction,
+		},
+	}
+	configEnvironment := make([]deploy.ConfigEnvironmentVariable, 0, len(payloads.Environment))
+	for _, variable := range payloads.Environment {
+		configEnvironment = append(configEnvironment, deploy.ConfigEnvironmentVariable{Name: variable.Name, Value: variable.Value})
+	}
+	return fixture.store, lock, InspectedImageCandidate{
+		Descriptor: resultDescriptor,
+		Config:     deploy.BaseConfig{Environment: configEnvironment},
+		Image:      result,
+	}, payloads
 }
 
 func TestVerifyLockedRuntimeV1ResolvesEveryCommandAndTrigger(t *testing.T) {

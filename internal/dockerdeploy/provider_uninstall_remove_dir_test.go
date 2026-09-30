@@ -18,6 +18,8 @@ import (
 func TestRemoveProviderUninstallDeploymentTransfersLockThenDeletesTombstone(t *testing.T) {
 	dir := t.TempDir()
 	operation, _, current := installedBuildPublicationSourceFixtureAtDir(t, dir)
+	portableImage := current.Lock.FinalImage
+	current.Lock.PortableRuntimeLayer = &deploy.PortableRuntimeLayerV1{Result: portableImage}
 	installation := installedBuildPublicationInstallation(dir)
 	plan := providerUninstallPlanV1{
 		State: current.State, Installation: installation, Environment: "demo",
@@ -81,6 +83,17 @@ func TestRemoveProviderUninstallDeploymentTransfersLockThenDeletesTombstone(t *t
 			}
 			return nil
 		},
+		removePortableReference: func(_ context.Context, image providers.RealizedImageV1, reference string, environment string, root string) error {
+			order = append(order, "portable-reference")
+			if !reflect.DeepEqual(image, portableImage) || reference != current.Generation.Reference || environment != "demo" || root != dir {
+				t.Fatalf("portable cleanup identity: image=%#v reference=%q environment=%q root=%q", image, reference, environment, root)
+			}
+			return nil
+		},
+		createPortableReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
+			t.Fatal("successful cleanup restored portable reference")
+			return nil
+		},
 		finalize: func(root string, pending string) error {
 			if root != dir {
 				t.Fatalf("finalize root = %q", root)
@@ -94,7 +107,7 @@ func TestRemoveProviderUninstallDeploymentTransfersLockThenDeletesTombstone(t *t
 	}
 	want := []string{
 		"store", "load", "reserve", "marker", "lease", "rename:" + dir + "->" + tombstone,
-		"unlock", "reference", "remove:" + tombstone,
+		"unlock", "portable-reference", "reference", "remove:" + tombstone,
 	}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("removal order = %#v, want %#v", order, want)

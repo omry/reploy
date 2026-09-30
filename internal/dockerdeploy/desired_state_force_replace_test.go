@@ -44,6 +44,10 @@ func TestForceReplaceStagedDesiredStateStopsBuiltWorkloadAndRemovesGeneration(t 
 		recoverPending: func(context.Context, *deploy.OperationLock, providerstore.Store, *deploy.EnvironmentGenerationState, string, string) (bool, error) {
 			return false, nil
 		},
+		removeValidatedReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
+			t.Fatal("unexpected pending validated-build reference")
+			return nil
+		},
 		admit: func(_ context.Context, gotDir string, operation *deploy.OperationLock, input ControlAdmissionInputV1) (AdmittedControlV1, error) {
 			if gotDir != dir || input.Operation != deploy.ControlOperationStageV1 || input.Mode != ControlAdmissionForceV1 || input.GenerationReference != state.Current.Reference {
 				t.Fatalf("force admission = %q/%#v", gotDir, input)
@@ -126,6 +130,10 @@ func TestForceReplaceStagedDesiredStateKeepsOldReferenceWhenStateCommitFails(t *
 		recoverPending: func(context.Context, *deploy.OperationLock, providerstore.Store, *deploy.EnvironmentGenerationState, string, string) (bool, error) {
 			return false, nil
 		},
+		removeValidatedReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
+			t.Fatal("unexpected pending validated-build reference")
+			return nil
+		},
 		admit: func(_ context.Context, _ string, operation *deploy.OperationLock, _ ControlAdmissionInputV1) (AdmittedControlV1, error) {
 			return AdmittedControlV1{Operation: operation, Marker: deploy.ControlMarkerV1{ID: "control-0000000000000001"}}, nil
 		},
@@ -155,5 +163,113 @@ func TestForceReplaceStagedDesiredStateKeepsOldReferenceWhenStateCommitFails(t *
 	retained, found, readErr := locked.ReadStateV1()
 	if readErr != nil || !found || !reflect.DeepEqual(retained.Current, state.Current) {
 		t.Fatalf("retained state = %#v, found=%t, error=%v", retained, found, readErr)
+	}
+}
+
+func TestForceReplaceStagedDesiredStateRecoversOldEnvironmentValidationBeforeCommit(t *testing.T) {
+	for _, failCleanup := range []bool{false, true} {
+		name := "recovers"
+		if failCleanup {
+			name = "cleanup-failure"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir, operation, store, lock, state := currentBuildFixture(t, true)
+			oldDocument, _ := testSelectedPlatformDocumentV1(t)
+			oldDocument.Environment.ID = "demo"
+			state.Blueprint = testResolvedBlueprintV1(t, oldDocument)
+			state.BlueprintSource = "blueprint: old\n"
+			state.Staging = &deploy.StagingStateV1{Schema: deploy.StagingStateSchemaV1}
+			if err := operation.CommitStateV1(state.Current, state); err != nil {
+				t.Fatal(err)
+			}
+			references := fixedPublicationReferences(t, dir, 0x72)
+			pending := deploy.PendingValidatedBuildV1{
+				Schema:          deploy.PendingValidatedBuildSchemaV1,
+				BuildLockDigest: state.Current.BuildLockDigest,
+				Final: deploy.ValidatedBuildReferenceV1{
+					Image: lock.FinalImage, ImageReference: references.Generation,
+				},
+			}
+			if err := operation.WritePendingValidatedBuildV1(pending); err != nil {
+				t.Fatal(err)
+			}
+			if err := operation.Unlock(); err != nil {
+				t.Fatal(err)
+			}
+
+			replacement, _ := testSelectedPlatformDocumentV1(t)
+			replacement.Environment.ID = "replacement"
+			cleanupFailure := errors.New("pending reference cleanup failed")
+			effects := []string{}
+			_, err := forceReplaceStagedDesiredStateV1(t.Context(), ForceReplaceStagedDesiredStateInputV1{
+				DesiredState: DesiredStateStageInputV1{DeploymentDir: dir, Document: replacement, BlueprintSource: "blueprint: replacement\n"},
+			}, forceReplaceStagedDesiredStateBackendV1{
+				acquire:  deploy.AcquireOperationLock,
+				newStore: func(string) (providerstore.Store, error) { return store, nil },
+				recoverPending: func(context.Context, *deploy.OperationLock, providerstore.Store, *deploy.EnvironmentGenerationState, string, string) (bool, error) {
+					return false, nil
+				},
+				admit: func(_ context.Context, _ string, operation *deploy.OperationLock, _ ControlAdmissionInputV1) (AdmittedControlV1, error) {
+					return AdmittedControlV1{Operation: operation, Marker: deploy.ControlMarkerV1{ID: "control-0000000000000001"}}, nil
+				},
+				complete: func(operation *deploy.OperationLock, _ string, _ *deploy.ControlLeaseV1) error {
+					return operation.Unlock()
+				},
+				stopOwned:       func(context.Context, *deploy.OperationLock, deploy.StateV1, string, RunOptions) error { return nil },
+				removeReference: func(context.Context, providers.RealizedImageV1, string, string, string) error { return nil },
+				removeValidatedReference: func(_ context.Context, image providers.RealizedImageV1, reference, environment, gotDir string) error {
+					if image != lock.FinalImage || reference != references.Generation || environment != "demo" || gotDir != dir {
+						t.Fatalf("pending cleanup = %#v/%q/%q/%q", image, reference, environment, gotDir)
+					}
+					effects = append(effects, "recover-validation")
+					if failCleanup {
+						return cleanupFailure
+					}
+					return nil
+				},
+				commit: func(operation *deploy.OperationLock, expected *deploy.EnvironmentGenerationState, candidate deploy.StateV1) error {
+					effects = append(effects, "commit-state")
+					return operation.CommitStateV1(expected, candidate)
+				},
+				stageSame: func(context.Context, DesiredStateStageInputV1) (deploy.DesiredStateUpdateResult, error) {
+					t.Fatal("same-environment staging was called")
+					return deploy.DesiredStateUpdateResult{}, nil
+				},
+			})
+			if failCleanup && !errors.Is(err, cleanupFailure) || !failCleanup && err != nil {
+				t.Fatalf("force replacement error = %v", err)
+			}
+			wantEffects := []string{"recover-validation", "commit-state"}
+			if failCleanup {
+				wantEffects = []string{"recover-validation"}
+			}
+			if !reflect.DeepEqual(effects, wantEffects) {
+				t.Fatalf("effects = %#v, want %#v", effects, wantEffects)
+			}
+			locked, err := deploy.AcquireOperationLock(t.Context(), dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer locked.Unlock()
+			retained, _, _, err := readForceReplacementStateV1(locked)
+			if err != nil {
+				t.Fatal(err)
+			}
+			currentDocument, err := blueprint.DecodeResolvedDocumentV1(retained.Blueprint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantEnvironment := "replacement"
+			if failCleanup {
+				wantEnvironment = "demo"
+			}
+			if currentDocument.Environment.ID != wantEnvironment {
+				t.Fatalf("environment = %q, want %q", currentDocument.Environment.ID, wantEnvironment)
+			}
+			_, pendingFound, err := locked.ReadPendingValidatedBuildV1()
+			if err != nil || pendingFound != failCleanup {
+				t.Fatalf("pending journal found=%t err=%v", pendingFound, err)
+			}
+		})
 	}
 }
