@@ -97,6 +97,169 @@ func TestPublishBuildCommitsStateAndRemovesPendingLast(t *testing.T) {
 	}
 }
 
+func TestPublishBuildCreatesPortableReferenceOnlyAfterLockPublication(t *testing.T) {
+	fixture := newPreparedPythonGraphReuseFixture(t)
+	dir := filepath.Dir(filepath.Dir(fixture.store.Root()))
+	lock := fixture.lock
+	document, platform := testSelectedPlatformDocumentV1(t)
+	var err error
+	lock.BlueprintDigest = testResolvedBlueprintDigestV1(t, document)
+	lock.Platform = platform
+	for _, node := range fixture.request.Plan.Nodes {
+		if node.ID != "base" {
+			continue
+		}
+		lock.BasePlanDigest, err = providers.ProviderNodePlanDigest(node)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if authorReference, ok := node.Request.Value["image"].(string); ok {
+			lock.Base.AuthorReference = authorReference
+		}
+	}
+	portableTools := buildLockAssemblyPortableToolsV1(t, fixture.store, fixture.request.Plan, fixture.request.NodeID)
+	lock.PortableTools = &portableTools
+	portableImage := providers.RealizedImageV1{
+		Digest: rendererDigest("c"), ConfigDigest: rendererDigest("d"), RootFSSubject: rendererDigest("e"),
+	}
+	transaction, err := deploy.PortableRuntimeLayerTransactionDigestV1(
+		portableTools, lock.RuntimeLayer.Upstream, portableImage,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.PortableRuntimeLayer = &deploy.PortableRuntimeLayerV1{
+		Schema: deploy.PortableRuntimeLayerSchemaV1, Upstream: lock.RuntimeLayer.Upstream,
+		Result: portableImage, TransactionDigest: transaction,
+	}
+	lock.RuntimeLayer.Upstream = portableImage
+	lock.RuntimeLayer.TransactionDigest, err = deploy.ApplicationRuntimeLayerTransactionDigestV1(
+		lock.RuntimeLayer.Verifier, lock.RuntimeLayer.Account, portableImage, lock.Platform,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyDigest, err := deploy.RuntimePolicyDigestV1(lock.RuntimePolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.ValidationRecord, err = deploy.PublishPrefixValidation(t.Context(), fixture.store, deploy.PrefixValidationV1{
+		Schema: deploy.PrefixValidationSchemaV1, SubjectRootFS: lock.FinalImage.RootFSSubject,
+		Profiles: []providers.ValidationEvidence{}, RuntimePolicy: policyDigest,
+		ExposedOutputs: []providers.ExecutableEvidence{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := deploy.ValidateBuildLockV1(lock, registry.ValidateRequirementProfileV1); err != nil {
+		t.Fatal(err)
+	}
+	lockDigest, err := deploy.BuildLockDigestV1(lock, registry.ValidateRequirementProfileV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	installation := &deploy.DeploymentStateV1{
+		Schema: deploy.DeploymentStateSchemaV1, Installation: installedBuildPublicationInstallation(dir),
+	}
+	if err := operation.CommitStateV1(nil, deploy.StateV1{
+		Schema: deploy.StateSchemaV1, Blueprint: testResolvedBlueprintV1(t, document),
+		Platform: platform, Overlay: deploy.EmptyRequestOverlayV1(), Deployment: installation,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sequence := byte(0x40)
+	var createdPortableReferences []string
+	var createdPortableDigestReferences []string
+	createdPortable := false
+	backend := buildPublicationBackend{
+		newReferences: func(string, string) (EnvironmentImageReferences, error) {
+			references := fixedPublicationReferences(t, dir, sequence)
+			sequence++
+			return references, nil
+		},
+		createReference: func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error {
+			return nil
+		},
+		removeReference: func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error {
+			return nil
+		},
+		createPortableRuntimeLayerDigestReference: func(_ context.Context, image providers.RealizedImageV1, environment, deploymentDir string) error {
+			pending, found, err := operation.ReadPendingBuild()
+			if err != nil {
+				return err
+			}
+			if !found || pending.Phase != deploy.PendingBuildPhaseValidated {
+				return errors.New("portable digest reference was created without durable pending authority")
+			}
+			reference, err := NewEnvironmentPortableRuntimeLayerReference(image.ConfigDigest, environment, deploymentDir)
+			if err != nil {
+				return err
+			}
+			cleanupRecorded := false
+			for _, item := range pending.Cleanup {
+				if item.Kind == deploy.CleanupKindTemporaryImageReference && item.Identity == reference {
+					cleanupRecorded = true
+					break
+				}
+			}
+			if !cleanupRecorded {
+				return errors.New("portable digest reference was created without exact pending cleanup authority")
+			}
+			createdPortableDigestReferences = append(createdPortableDigestReferences, reference)
+			return nil
+		},
+		createPortableRuntimeLayerReference: func(_ context.Context, image providers.RealizedImageV1, generation, environment, deploymentDir string) error {
+			_, found, err := operation.ReadBuildLock(lockDigest, registry.ValidateRequirementProfileV1)
+			if err != nil {
+				return err
+			}
+			if !found {
+				return errors.New("portable reference was created before candidate lock publication")
+			}
+			reference, err := NewEnvironmentPortableRuntimeLayerReferenceForGeneration(
+				image.ConfigDigest, generation, environment, deploymentDir,
+			)
+			if err != nil {
+				return err
+			}
+			createdPortableReferences = append(createdPortableReferences, reference)
+			createdPortable = true
+			return nil
+		},
+		removePortableRuntimeLayerReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
+			return nil
+		},
+		removePortableRuntimeLayerDigestReference: func(context.Context, providers.RealizedImageV1, string, string) error {
+			return nil
+		},
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if _, err := publishBuild(t.Context(), operation, fixture.store, BuildPublicationInput{
+			Environment: "demo", DeploymentDir: dir, Document: document, Lock: lock,
+		}, backend); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !createdPortable || len(createdPortableReferences) != 2 || createdPortableReferences[0] == createdPortableReferences[1] ||
+		len(createdPortableDigestReferences) != 2 || createdPortableDigestReferences[0] != createdPortableDigestReferences[1] {
+		t.Fatalf("portable references = %#v, digest references = %#v, created = %v", createdPortableReferences, createdPortableDigestReferences, createdPortable)
+	}
+	backend.removePortableRuntimeLayerDigestReference = nil
+	if _, err := publishBuild(t.Context(), operation, fixture.store, BuildPublicationInput{
+		Environment: "demo", DeploymentDir: dir, Document: document, Lock: lock,
+	}, backend); err == nil || !strings.Contains(err.Error(), "complete portable runtime layer reference support") {
+		t.Fatalf("incomplete portable reference backend error = %v", err)
+	}
+	if _, found, err := operation.ReadPendingBuild(); err != nil || found {
+		t.Fatalf("incomplete backend wrote pending build: found=%t err=%v", found, err)
+	}
+}
+
 func TestPublishBuildLeavesRecoverablePendingBeforeCommit(t *testing.T) {
 	dir := t.TempDir()
 	store, lock := publicationLockFixture(t, dir, "7", "8", "9")

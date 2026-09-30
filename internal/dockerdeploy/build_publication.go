@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -22,9 +23,13 @@ type BuildPublicationInput struct {
 }
 
 type buildPublicationBackend struct {
-	newReferences   func(string, string) (EnvironmentImageReferences, error)
-	createReference func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error
-	removeReference func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error
+	newReferences                             func(string, string) (EnvironmentImageReferences, error)
+	createReference                           func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error
+	removeReference                           func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error
+	createPortableRuntimeLayerDigestReference func(context.Context, providers.RealizedImageV1, string, string) error
+	createPortableRuntimeLayerReference       func(context.Context, providers.RealizedImageV1, string, string, string) error
+	removePortableRuntimeLayerReference       func(context.Context, providers.RealizedImageV1, string, string, string) error
+	removePortableRuntimeLayerDigestReference func(context.Context, providers.RealizedImageV1, string, string) error
 }
 
 func PublishBuild(
@@ -37,6 +42,10 @@ func PublishBuild(
 		newReferences:   NewEnvironmentImageReferences,
 		createReference: CreateEnvironmentImageReference,
 		removeReference: RemoveEnvironmentImageReference,
+		createPortableRuntimeLayerDigestReference: CreateEnvironmentPortableRuntimeLayerDigestReference,
+		createPortableRuntimeLayerReference:       CreateEnvironmentPortableRuntimeLayerReference,
+		removePortableRuntimeLayerReference:       RemoveEnvironmentPortableRuntimeLayerReference,
+		removePortableRuntimeLayerDigestReference: RemoveEnvironmentPortableRuntimeLayerDigestReference,
 	})
 }
 
@@ -46,7 +55,7 @@ func publishBuild(
 	store providerstore.Store,
 	input BuildPublicationInput,
 	backend buildPublicationBackend,
-) (deploy.StateV1, error) {
+) (result deploy.StateV1, resultErr error) {
 	if ctx == nil {
 		return deploy.StateV1{}, fmt.Errorf("publish build requires a context")
 	}
@@ -58,6 +67,13 @@ func publishBuild(
 	}
 	if backend.newReferences == nil || backend.createReference == nil || backend.removeReference == nil {
 		return deploy.StateV1{}, fmt.Errorf("publish build requires a complete image-reference backend")
+	}
+	if input.Lock.PortableRuntimeLayer != nil &&
+		(backend.createPortableRuntimeLayerDigestReference == nil ||
+			backend.createPortableRuntimeLayerReference == nil ||
+			backend.removePortableRuntimeLayerReference == nil ||
+			backend.removePortableRuntimeLayerDigestReference == nil) {
+		return deploy.StateV1{}, fmt.Errorf("publish build requires complete portable runtime layer reference support")
 	}
 	if err := validatePublicationDeployment(operation, store, input.DeploymentDir); err != nil {
 		return deploy.StateV1{}, err
@@ -103,6 +119,7 @@ func publishBuild(
 	}
 	var old *deploy.EnvironmentGenerationState
 	var oldImage *providers.RealizedImageV1
+	var oldLock *deploy.BuildLockV1
 	priorProfileValidator := providers.RequirementProfileOwnerValidator(registry.ValidateRequirementProfileV1)
 	if input.NoCache {
 		priorProfileValidator = acceptProviderProfileOwnerForCutoverV1
@@ -111,14 +128,14 @@ func publishBuild(
 		old = state.Current
 	}
 	if old != nil {
-		oldLock, lockFound, err := operation.ReadBuildLock(old.BuildLockDigest, priorProfileValidator)
+		loadedOldLock, lockFound, err := operation.ReadBuildLock(old.BuildLockDigest, priorProfileValidator)
 		if err != nil {
 			return deploy.StateV1{}, err
 		}
 		if !lockFound {
 			return deploy.StateV1{}, fmt.Errorf("current generation build lock %s is missing", old.BuildLockDigest)
 		}
-		if err := validateGenerationBuildLock(*old, oldLock, priorProfileValidator); err != nil {
+		if err := validateGenerationBuildLock(*old, loadedOldLock, priorProfileValidator); err != nil {
 			return deploy.StateV1{}, fmt.Errorf("current generation: %w", err)
 		}
 		oldReferences := references
@@ -126,8 +143,14 @@ func publishBuild(
 		if err := ValidateEnvironmentImageReferences(oldReferences, input.Environment, input.DeploymentDir); err != nil {
 			return deploy.StateV1{}, fmt.Errorf("current generation reference: %w", err)
 		}
-		image := oldLock.FinalImage
+		image := loadedOldLock.FinalImage
 		oldImage = &image
+		oldLockCopy := loadedOldLock
+		oldLock = &oldLockCopy
+	}
+	if oldLock != nil && oldLock.PortableRuntimeLayer != nil &&
+		(backend.removePortableRuntimeLayerReference == nil || backend.removePortableRuntimeLayerDigestReference == nil) {
+		return deploy.StateV1{}, fmt.Errorf("publish build requires portable runtime layer cleanup support")
 	}
 
 	candidate := deploy.EnvironmentGenerationState{
@@ -143,8 +166,59 @@ func publishBuild(
 		},
 		Cleanup: publicationCleanupItems(references, old),
 	}
+	if input.Lock.PortableRuntimeLayer != nil {
+		portableReference, err := NewEnvironmentPortableRuntimeLayerReference(
+			input.Lock.PortableRuntimeLayer.Result.ConfigDigest, input.Environment, input.DeploymentDir,
+		)
+		if err != nil {
+			return deploy.StateV1{}, fmt.Errorf("candidate portable runtime layer reference: %w", err)
+		}
+		pending.Cleanup = append(pending.Cleanup, deploy.CleanupItemV1{
+			Kind: deploy.CleanupKindTemporaryImageReference, Identity: portableReference,
+		})
+	}
+	if old != nil && oldLock != nil && oldLock.PortableRuntimeLayer != nil {
+		portableReference, err := NewEnvironmentPortableRuntimeLayerReferenceForGeneration(
+			oldLock.PortableRuntimeLayer.Result.ConfigDigest, old.Reference,
+			input.Environment, input.DeploymentDir,
+		)
+		if err != nil {
+			return deploy.StateV1{}, fmt.Errorf("old portable runtime layer reference: %w", err)
+		}
+		pending.Cleanup = append(pending.Cleanup, deploy.CleanupItemV1{
+			Kind: deploy.CleanupKindGenerationReference, Identity: portableReference,
+		})
+	}
+	sort.Slice(pending.Cleanup, func(left int, right int) bool {
+		if pending.Cleanup[left].Kind != pending.Cleanup[right].Kind {
+			return pending.Cleanup[left].Kind < pending.Cleanup[right].Kind
+		}
+		return pending.Cleanup[left].Identity < pending.Cleanup[right].Identity
+	})
+	portableAliasCreated := false
+	publicationCommitted := false
+	defer func() {
+		if !portableAliasCreated || publicationCommitted || backend.removePortableRuntimeLayerReference == nil || input.Lock.PortableRuntimeLayer == nil {
+			return
+		}
+		cleanupErr := backend.removePortableRuntimeLayerReference(
+			context.WithoutCancel(ctx), input.Lock.PortableRuntimeLayer.Result,
+			references.Generation, input.Environment, input.DeploymentDir,
+		)
+		if cleanupErr != nil {
+			result = deploy.StateV1{}
+			resultErr = errors.Join(resultErr, fmt.Errorf("cleanup retained portable runtime layer reference: %w", cleanupErr))
+		}
+	}()
 	if err := operation.WritePendingBuild(pending); err != nil {
 		return deploy.StateV1{}, err
+	}
+	if input.Lock.PortableRuntimeLayer != nil {
+		if err := backend.createPortableRuntimeLayerDigestReference(
+			ctx, input.Lock.PortableRuntimeLayer.Result, input.Environment, input.DeploymentDir,
+		); err != nil {
+			return deploy.StateV1{}, err
+		}
 	}
 
 	if err := backend.createReference(ctx, input.Lock.FinalImage, references, EnvironmentReferenceTemporary, input.Environment, input.DeploymentDir); err != nil {
@@ -167,8 +241,17 @@ func publishBuild(
 	if err := operation.AdvancePendingBuildPhase(deploy.PendingBuildPhaseLockPublished); err != nil {
 		return deploy.StateV1{}, err
 	}
+	if input.Lock.PortableRuntimeLayer != nil {
+		if err := backend.createPortableRuntimeLayerReference(
+			ctx, input.Lock.PortableRuntimeLayer.Result, references.Generation,
+			input.Environment, input.DeploymentDir,
+		); err != nil {
+			return deploy.StateV1{}, err
+		}
+		portableAliasCreated = true
+	}
 
-	result := deploy.StateV1{
+	result = deploy.StateV1{
 		Schema: deploy.StateSchemaV1, Blueprint: blueprintPayload, BlueprintSource: state.BlueprintSource,
 		Platform: input.Lock.Platform, Overlay: input.Lock.Overlay, Current: &candidate,
 		Staging: state.Staging, Deployment: state.Deployment,
@@ -176,6 +259,7 @@ func publishBuild(
 	if err := operation.CommitStateV1(old, result); err != nil {
 		return deploy.StateV1{}, err
 	}
+	publicationCommitted = true
 	if err := operation.AdvancePendingBuildPhase(deploy.PendingBuildPhaseStateCommitted); err != nil {
 		return deploy.StateV1{}, err
 	}
@@ -189,9 +273,29 @@ func publishBuild(
 		if err := backend.removeReference(ctx, *oldImage, oldReferences, EnvironmentReferenceGeneration, input.Environment, input.DeploymentDir); err != nil {
 			return deploy.StateV1{}, err
 		}
+		if oldLock != nil && oldLock.PortableRuntimeLayer != nil {
+			if err := backend.removePortableRuntimeLayerReference(
+				ctx, oldLock.PortableRuntimeLayer.Result, old.Reference,
+				input.Environment, input.DeploymentDir,
+			); err != nil {
+				return deploy.StateV1{}, err
+			}
+			if err := backend.removePortableRuntimeLayerDigestReference(
+				ctx, oldLock.PortableRuntimeLayer.Result, input.Environment, input.DeploymentDir,
+			); err != nil {
+				return deploy.StateV1{}, err
+			}
+		}
 	}
 	if err := backend.removeReference(ctx, input.Lock.FinalImage, references, EnvironmentReferenceTemporary, input.Environment, input.DeploymentDir); err != nil {
 		return deploy.StateV1{}, err
+	}
+	if input.Lock.PortableRuntimeLayer != nil {
+		if err := backend.removePortableRuntimeLayerDigestReference(
+			ctx, input.Lock.PortableRuntimeLayer.Result, input.Environment, input.DeploymentDir,
+		); err != nil {
+			return deploy.StateV1{}, err
+		}
 	}
 	if err := operation.RemoveOtherBuildLocks(lockDigest, priorProfileValidator); err != nil {
 		return deploy.StateV1{}, err
