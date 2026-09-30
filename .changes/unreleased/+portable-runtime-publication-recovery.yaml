@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve selected portable runtime layers across interrupted application publication and validate retained images before reuse.

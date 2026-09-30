@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
@@ -17,6 +18,14 @@ type PendingPublicationRecovery struct {
 	SelectedLock   *deploy.BuildLockV1
 	SelectedDigest canonical.Digest
 	OldImage       *providers.RealizedImageV1
+	CandidateLock  *deploy.BuildLockV1
+	OldLock        *deploy.BuildLockV1
+	retainedRoots  []pendingPublicationRetainedRoot
+}
+
+type pendingPublicationRetainedRoot struct {
+	digest canonical.Digest
+	lock   deploy.BuildLockV1
 }
 
 func RecoverPendingPublication(
@@ -65,7 +74,26 @@ func RecoverPendingPublication(
 	if err != nil {
 		return false, err
 	}
-	if err := executePendingPublicationRecovery(ctx, operation, store, plan, environment, deploymentDir, validateProfileOwner, validateBundleOwner, RecoverPendingImageReferences); err != nil {
+	plan.retainedRoots, err = loadValidatedBuildRecoveryRoots(
+		operation, store, validateProfileOwner, validateBundleOwner,
+	)
+	if err != nil {
+		return false, fmt.Errorf("prepare validated build recovery roots: %w", err)
+	}
+	if err := executePendingPublicationRecovery(ctx, operation, store, plan, environment, deploymentDir, validateProfileOwner, validateBundleOwner, func(
+		recoveryCtx context.Context,
+		recoveryPending deploy.PendingBuildV1,
+		decision deploy.PendingRecoveryDecision,
+		oldImage *providers.RealizedImageV1,
+		recoveryEnvironment string,
+		recoveryDeploymentDir string,
+	) error {
+		return RecoverPendingImageReferencesWithLocks(
+			recoveryCtx, recoveryPending, decision, oldImage,
+			plan.CandidateLock, plan.OldLock,
+			recoveryEnvironment, recoveryDeploymentDir,
+		)
+	}); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -108,6 +136,19 @@ func PreparePendingPublicationRecovery(
 		return PendingPublicationRecovery{}, fmt.Errorf("pending publication state conflict; recovery changed nothing")
 	}
 	plan := PendingPublicationRecovery{Pending: pending, Decision: decision}
+	// The portable generation alias is created only after the candidate lock is
+	// published. A pre-lock discard therefore has exact final-image reference
+	// authority in pending state and must remain recoverable without a lock.
+	candidateLockRequired := decision != deploy.PendingRecoveryDiscardCandidate ||
+		(pending.Phase != deploy.PendingBuildPhaseValidated && pending.Phase != deploy.PendingBuildPhaseGenerationCreated)
+	if candidateLockRequired {
+		candidateLock, err := loadOnce(pending.Candidate.BuildLockDigest)
+		if err != nil {
+			return PendingPublicationRecovery{}, fmt.Errorf("load candidate recovery build lock: %w", err)
+		}
+		candidateLockCopy := candidateLock
+		plan.CandidateLock = &candidateLockCopy
+	}
 	if pending.Old != nil {
 		oldLock, err := loadOnce(pending.Old.BuildLockDigest)
 		if err != nil {
@@ -118,6 +159,8 @@ func PreparePendingPublicationRecovery(
 		}
 		oldImage := oldLock.FinalImage
 		plan.OldImage = &oldImage
+		oldLockCopy := oldLock
+		plan.OldLock = &oldLockCopy
 	}
 	var selectedGeneration *deploy.EnvironmentGenerationState
 	switch decision {
@@ -179,11 +222,28 @@ func executePendingPublicationRecovery(
 	if err := recoverReferences(ctx, plan.Pending, plan.Decision, plan.OldImage, environment, deploymentDir); err != nil {
 		return err
 	}
+	builds := make([]deploy.BuildLockV1, 0, 1+len(plan.retainedRoots))
+	digests := make([]canonical.Digest, 0, 1+len(plan.retainedRoots))
+	retained := make(map[canonical.Digest]struct{}, 1+len(plan.retainedRoots))
+	addRoot := func(digest canonical.Digest, lock deploy.BuildLockV1) {
+		if _, found := retained[digest]; found {
+			return
+		}
+		retained[digest] = struct{}{}
+		digests = append(digests, digest)
+		builds = append(builds, lock)
+	}
 	if plan.SelectedLock != nil {
-		if err := operation.RemoveOtherBuildLocks(plan.SelectedDigest, validateProfileOwner); err != nil {
+		addRoot(plan.SelectedDigest, *plan.SelectedLock)
+	}
+	for _, root := range plan.retainedRoots {
+		addRoot(root.digest, root.lock)
+	}
+	if len(builds) > 0 {
+		if err := operation.RemoveBuildLocksExcept(digests, validateProfileOwner); err != nil {
 			return err
 		}
-		if err := operation.RemoveUnreachableBuildObjects(store, *plan.SelectedLock, validateProfileOwner, validateBundleOwner); err != nil {
+		if err := operation.RemoveUnreachableBuildObjectsForBuilds(store, builds, validateProfileOwner, validateBundleOwner); err != nil {
 			return err
 		}
 	} else {
@@ -204,6 +264,72 @@ func executePendingPublicationRecovery(
 		return fmt.Errorf("clean abandoned provider store temporary entries: %w", err)
 	}
 	return operation.RemovePendingBuild()
+}
+
+// loadValidatedBuildRecoveryRoots keeps the committed validated candidate and
+// any already-published pending validated candidate available while ordinary
+// publication recovery prunes storage. A pending validated intent may be
+// written before its build lock is published, so a missing pending lock is
+// expected and contributes no storage root.
+func loadValidatedBuildRecoveryRoots(
+	operation *deploy.OperationLock,
+	store providerstore.Store,
+	validateProfileOwner providers.RequirementProfileOwnerValidator,
+	validateBundleOwner providers.ResolvedBundleOwnerValidator,
+) ([]pendingPublicationRetainedRoot, error) {
+	roots := make([]pendingPublicationRetainedRoot, 0, 2)
+	retained := make(map[canonical.Digest]struct{}, 2)
+	add := func(
+		digest canonical.Digest,
+		required bool,
+		image *providers.RealizedImageV1,
+		platform *blueprint.Platform,
+	) error {
+		if _, found := retained[digest]; found {
+			return nil
+		}
+		lock, found, err := operation.ReadBuildLock(digest, validateProfileOwner)
+		if err != nil {
+			return err
+		}
+		if !found {
+			if required {
+				return fmt.Errorf("validated build lock %s is missing during publication recovery", digest)
+			}
+			return nil
+		}
+		if image != nil && lock.FinalImage != *image {
+			return fmt.Errorf("validated build image does not match build lock %s during publication recovery", digest)
+		}
+		if platform != nil && lock.Platform != *platform {
+			return fmt.Errorf("validated build platform does not match build lock %s during publication recovery", digest)
+		}
+		if _, err := deploy.BuildLockStoreClosure(lock, store, validateProfileOwner, validateBundleOwner); err != nil {
+			return fmt.Errorf("validate retained build lock %s closure: %w", digest, err)
+		}
+		retained[digest] = struct{}{}
+		roots = append(roots, pendingPublicationRetainedRoot{digest: digest, lock: lock})
+		return nil
+	}
+	validated, found, err := operation.ReadValidatedBuildV1()
+	if err != nil {
+		return nil, err
+	}
+	if found && !validated.Discarded {
+		if err := add(validated.BuildLockDigest, true, &validated.Image, &validated.Platform); err != nil {
+			return nil, err
+		}
+	}
+	pending, found, err := operation.ReadPendingValidatedBuildV1()
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		if err := add(pending.BuildLockDigest, false, &pending.Final.Image, nil); err != nil {
+			return nil, err
+		}
+	}
+	return roots, nil
 }
 
 func validateGenerationBuildLock(generation deploy.EnvironmentGenerationState, lock deploy.BuildLockV1, validateProfileOwner providers.RequirementProfileOwnerValidator) error {

@@ -155,6 +155,24 @@ func portableToolReuseBuildLocksV1(t *testing.T) (deploy.BuildLockV1, providers.
 		}
 	}
 	current.PortableTools = &portableTools
+	portableImage := providers.RealizedImageV1{
+		Digest: rendererDigest("c"), ConfigDigest: rendererDigest("d"), RootFSSubject: rendererDigest("e"),
+	}
+	portableTransaction, err := deploy.PortableRuntimeLayerTransactionDigestV1(portableTools, current.RuntimeLayer.Upstream, portableImage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.PortableRuntimeLayer = &deploy.PortableRuntimeLayerV1{
+		Schema: deploy.PortableRuntimeLayerSchemaV1, Upstream: current.RuntimeLayer.Upstream,
+		Result: portableImage, TransactionDigest: portableTransaction,
+	}
+	current.RuntimeLayer.Upstream = portableImage
+	current.RuntimeLayer.TransactionDigest, err = deploy.ApplicationRuntimeLayerTransactionDigestV1(
+		current.RuntimeLayer.Verifier, current.RuntimeLayer.Account, portableImage, current.Platform,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := deploy.ValidateBuildLockV1(current, registry.ValidateRequirementProfileV1); err != nil {
 		t.Fatal(err)
 	}
