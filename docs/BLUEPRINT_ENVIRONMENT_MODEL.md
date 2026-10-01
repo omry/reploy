@@ -1713,16 +1713,23 @@ temporary reference. Runtime operations use the state-selected generation,
 never a mutable staging/deployed tag.
 
 The prior generation exists only as pending cutover cleanup state. After
-successful publication or recovery, each deployment retains exactly the
-generation named by current state. V1 keeps no rollback generation and exposes
-no image-generation rollback command.
+successful publication or recovery, each deployment retains at most one current
+generation and any independently retained validated trial owner. A successful
+trial does not replace current state; its exact references remain owned until
+promotion or retirement. Pending publication and cleanup records retain their
+exact ownership inventory until recovery finishes. V1 keeps no previous-current
+rollback generation and exposes no image-generation rollback command.
 
 Build locks use content-addressed filenames so the current and candidate locks
 can coexist during cutover. After successful publication or recovery, cleanup
-retains exactly the lock named by current state and its transitive local
-provider-store closure. A failed build removes candidate-only data and preserves
-the prior current lock and closure. The lock directory is not build history or
-a multi-generation artifact cache.
+retains the locks and transitive local provider-store closures required by every
+surviving current, retained validated trial, and pending publication or cleanup
+owner. A failed build removes only proven unowned candidate data and preserves
+those surviving owners and their roots. Equal digests may share stored content
+without merging independently owned references. This retained trial and recovery
+authority is not previous-current rollback history or a general multi-generation
+artifact cache. Explicit bundle clean and install's selected-current transfer
+keep their separate operation contracts.
 
 An install also gives the installed deployment its own provider artifacts. It
 first ensures that the staged source has a current build, or builds in the

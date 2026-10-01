@@ -1881,10 +1881,11 @@ filesystem state file cannot participate in one atomic transaction:
    operations use the generation named by state rather than a mutable phase
    alias.
 4. After the committed state is durable, remove the prior environment
-   generation and temporary reference, delete every non-current build lock and
-   provider-store object not reachable from the new current lock, then remove
-   the pending record last so recovery retains the complete cleanup inventory
-   until cleanup finishes.
+   generation and temporary reference only when no surviving owner needs them.
+   Retain locks and provider-store closures required by every surviving current,
+   independently retained validated trial, and pending publication or cleanup
+   owner; prune only proven unowned resources. Remove the pending record last so
+   recovery retains the complete cleanup inventory until cleanup finishes.
 
 Recovery runs under the same directory lock. It treats the atomically published
 deployment state as authoritative, preserves the generation reachable from
@@ -1894,10 +1895,13 @@ old state active and the candidate removable; a crash after it leaves the new
 state active and the old generation removable. Operations in another directory
 cannot change the generation pinned by this state.
 
-After successful recovery or publication cleanup, the directory retains only
-the environment generation named by current state. V1 keeps no previous
-environment generation for rollback and exposes no image-generation rollback
-command. Content-addressed provider-layer verification references are
+After successful recovery or publication cleanup, the directory retains at most
+one current environment generation and any independently retained validated
+trial owner. A successful trial does not replace current state; its exact
+references remain owned until promotion or retirement. Pending publication and
+cleanup records retain their exact ownership inventory until recovery finishes.
+V1 keeps no previous-current generation for rollback and exposes no
+image-generation rollback command. Content-addressed provider-layer verification references are
 machine-local cache anchors rather than environment generations; they may be
 shared by exact content. Ordinary environment cleanup and `reploy bundle clean`
 do not currently reclaim these Docker references; ownership-aware Docker cache
@@ -1905,13 +1909,16 @@ cleanup remains a separate lifecycle task.
 Docker may additionally retain underlying layers under its own build-cache and
 garbage-collection policies.
 
-The same cleanup leaves exactly one content-addressed build-lock file: the lock
-whose digest is named by current state. A build may temporarily add a candidate
-lock while the old lock remains current, but a failed build removes the
-candidate and preserves the old lock. Successful publication or recovery also
-removes provider-store objects not transitively referenced by the state-selected
-lock. The lock directory is therefore an atomic-cutover mechanism, not build
-history or a multi-generation cache.
+The same cleanup retains the content-addressed locks and transitive
+provider-store closures required by every surviving current, independently
+retained validated trial, and pending publication or cleanup owner. A build may
+temporarily add a candidate lock while the old lock remains current; failure
+removes only proven unowned candidate data and preserves surviving owners and
+their roots. Equal digests may share stored content without merging independent
+reference owners. These retained trial and recovery roots do not provide
+previous-current rollback history or a general multi-generation cache. Explicit
+bundle clean and install's selected-current transfer keep their separate
+operation contracts.
 
 Environment cleanup removes only that directory's references and never forcibly
 deletes physical images or invokes a global backend prune. Internal
@@ -2023,9 +2030,12 @@ instruction.
 
 The lock is stored as `.reploy/locks/sha256-<digest>.json`, and current state
 names that digest. The content-addressed filename lets the current and candidate
-locks coexist safely during publication. Outside an active or recoverable
-cutover, exactly one lock file remains, and its transitive provider-store
-closure is the deployment's complete retained provider cache.
+locks coexist safely during publication. Independently retained validated
+trials may also own locks without replacing current state. The retained provider
+cache is the union of transitive closures required by surviving current, trial,
+and pending publication or cleanup owners; only proven unowned locks and objects
+are pruned. Equal lock digests share stored content while their reference owners
+remain independent.
 
 The same directory's canonical `state-v1` stores the complete resolved
 blueprint, selected target platform, request overlay, and optional current
@@ -2565,10 +2575,12 @@ not public `type: apt` components.
   graceful down/restart `--wait`, the stop alias, lifecycle-hook ownership,
   generation-change cancellation, lock release after container creation, and
   reinstall stopping the old workload before live state or mount mutation.
-- Lock-retention tests proving current and candidate locks may coexist only
-  during publication or recovery; failed builds preserve the current lock and
-  closure; and successful publication or recovery leaves exactly the
-  state-selected lock plus its transitive provider-store closure.
+- Lock-retention tests proving publication and recovery preserve the union of
+  locks and transitive provider-store closures owned by surviving current,
+  independently retained validated trial, and pending publication or cleanup
+  records; failed builds remove only proven unowned candidate data; and equal
+  digests share storage without merging reference owners. Explicit bundle clean
+  and install's selected-current transfer retain their separate contracts.
 - Identity/record regression tests proving input keys and realized identities
   remain distinct, observations are reused only for an exact root-filesystem
   subject and profile, uncached builds always re-probe, changed records

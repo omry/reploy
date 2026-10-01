@@ -951,9 +951,10 @@ rejected before hashing. Stamps are not transferred between deployments, may be
 deleted safely, and follow their blob's reachability during local cleanup.
 
 There is no machine-wide provider store, mutable global reference index, or
-independent provider-artifact garbage collector. Publication and recovery use
-the state-selected build lock as the reachability root and remove every local
-store object not transitively referenced by it. Removing the deployment
+independent provider-artifact garbage collector. Publication and recovery retain
+the union of transitive store closures required by every surviving current,
+independently retained validated trial, and pending publication or cleanup owner;
+they prune only proven unowned objects. Removing the deployment
 directory removes all of its provider artifacts. `reploy bundle clean` removes
 this store for the selected deployment while holding that deployment's
 operation lock. Deleting the store does not affect an already built Docker
@@ -2451,8 +2452,10 @@ lock, final image, or
 validation labels; a changed blueprint/overlay/platform/runtime policy; or an
 image digest/rootfs mismatch yields `build.missing`, `build.stale`, or store
 corruption as appropriate. The final runtime admission gate never resolves or
-repairs the build; staged up, restart, and app perform their visible automatic
-build check before reaching that gate.
+repairs the build; staged up and restart perform their visible automatic build
+check before reaching that gate. Staged app requires an exact current build and
+rejects a missing or stale build without resolving, constructing, or publishing
+one.
 
 ## Local Files and State
 
@@ -2643,10 +2646,12 @@ retaining `Current`; the retained generation may therefore name a lock for the
 preceding desired inputs. Staging a new blueprint validates the retained overlay
 against that blueprint and fails without changing state rather than silently
 dropping incompatible options or direct packages. That is
-a normal stale build, not corruption. Staged build, up, restart, and app
-operations recompute exact reuse and publish a current build when needed.
-Staged stop may stop the recorded workload without repairing the build; staged
-shell, test, and observation operations tell the user to run `reploy build`.
+a normal stale build, not corruption. Staged build, up, and restart operations
+recompute exact reuse and publish a current build when needed. Staged app checks
+for an exact current build and rejects missing or stale state without resolving,
+constructing, or publishing a build. Staged stop may stop the recorded workload
+without repairing the build; staged shell, test, and observation operations tell
+the user to run `reploy build`.
 Installed runtime operations remain build-free and direct recovery through
 install. Successful publication replaces `Current` and brings all three values
 back into agreement.
@@ -2690,13 +2695,16 @@ store objects are unique and sorted by `(kind, digest)`. Cleanup kinds are
 raw command output. The pending record is recovery inventory and does not
 participate in a content identity.
 
-Each directory owns exactly one committed current generation. During
-publication or recovery, `pending-build.json` may temporarily name the old and
-candidate generations needed to finish or undo the cutover. After cleanup only
-the state-selected generation remains; v1 retains no rollback generation and
-has no image-generation rollback operation. Staging and installed directories
-own independent references even when both point to the same immutable image
-digest.
+Each directory owns at most one committed current generation and may separately
+own an independently retained validated trial. A successful trial does not
+replace current state; its exact references remain owned until promotion or
+retirement. During publication or recovery, `pending-build.json` may temporarily
+name the old and candidate generations needed to finish or undo the cutover;
+pending publication and cleanup records retain their exact inventory until
+recovery finishes. Normal cleanup preserves all surviving owners. V1 retains no
+previous-current rollback generation and has no image-generation rollback
+operation. Staging and installed directories own independent references even
+when both point to the same immutable image digest.
 
 Each file beneath `locks/` is immutable canonical `lock-v1` metadata for one
 exact local build. Its filename is its validated content digest. It contains
@@ -2705,12 +2713,15 @@ graph, bundle identities, transaction digests, validation evidence, resolved
 outputs, realized prefix digests, and final image digest. It contains no
 physical cache paths or credentials.
 
-Outside an active or recoverable publication, `locks/` contains exactly the one
-file named by `state.json`. During publication the current and candidate locks
-may coexist. A failed build removes the candidate and all newly published store
-objects not reachable from the current lock. After successful state cutover or
-recovery, cleanup removes every non-current lock and every provider-store object
-not transitively referenced by the state-selected lock.
+The retained locks and provider store are the union of roots required by every
+surviving current, independently retained validated trial, and pending
+publication or cleanup owner. During publication the current and candidate locks
+may coexist. A failed build removes only proven unowned candidate data and
+preserves surviving owners and their transitive provider-store closures. After
+successful state cutover or recovery, cleanup prunes only locks and objects
+outside that complete surviving-owner root set. Equal digests share stored
+content without merging independent reference owners. Explicit bundle clean and
+install's selected-current transfer keep their separate operation contracts.
 
 All state writes use temporary files on the same filesystem, fsync, atomic
 rename, and directory sync where supported. A platform-specific advisory lock
@@ -2753,17 +2764,19 @@ The publication protocol is:
 4. publish the immutable content-addressed build lock, then atomically replace
    directory state so it references that lock; state replacement is the commit
    point;
-5. remove the old generation and temporary reference, prune non-current locks
-   and provider-store objects not reachable from the new lock, then remove the
-   pending record.
+5. remove the old generation and temporary reference only when no surviving
+   owner needs them; retain the locks and transitive provider-store closures
+   required by every surviving current, retained validated trial, and pending
+   publication or cleanup owner; prune only proven unowned resources, then
+   remove the pending record last.
 
 The recoverable transitions are authoritative:
 
 | Observed state while holding `operation.lock` | Authoritative generation | Recovery action |
 | --- | --- | --- |
 | No pending record | `state.Current` | Remove abandoned build/finalization references derived from surviving store `tmp` workspaces, then remove abandoned `tmp` entries; perform no generation cutover |
-| Pending exists and state still equals `Old` | Old (or none) | Remove candidate generation/temp references, candidate lock, and objects unreachable from the old lock; restore no state fields; remove pending last |
-| Pending exists and state equals candidate lock/image | Candidate | Keep candidate generation, remove old/temp references and all non-current locks/objects, then remove pending |
+| Pending exists and state still equals `Old` | Old (or none) | Remove only proven unowned candidate references, lock, and objects outside all surviving current/trial/pending roots; preserve independently owned references; restore no state fields; remove pending last |
+| Pending exists and state equals candidate lock/image | Candidate | Keep candidate generation and all independently retained trial/pending roots; remove only unowned old/temp references, locks, and objects; remove pending last |
 | Pending exists and state matches neither old nor candidate | None can be inferred safely | Fail `publication.state_conflict` without deleting either generation or any referenced object |
 | State names a missing/malformed lock or image, or the image has missing/malformed fixed validation labels | State remains recorded but unusable | Fail corruption validation; do not guess another generation or retarget a tag |
 | The aggregate validation-record store object is missing but the committed lock, image, and fixed labels match | The state-selected image remains usable | Preserve the image and state; treat the record as a cache miss for the next build or install build phase |
@@ -2775,9 +2788,12 @@ temp-file, fsync, rename, and directory-sync protocol. Cleanup is idempotent;
 
 Recovery holds the same directory lock and preserves the generation named by
 committed state. It never retargets or removes another directory's references.
-After recovery completes, it removes every directory-owned generation not named
-by committed state, every non-current lock, and every provider-store object not
-reachable from the current lock, and then removes the pending record.
+Recovery also preserves independently retained validated trial owners and exact
+pending publication or cleanup inventories. It removes only directory-owned
+references, locks, and provider-store objects proven unowned by every surviving
+current, trial, and pending cleanup root, then removes the completed pending
+record last. Equal immutable digests may share storage while their exact
+reference owners remain independent.
 
 Environment cleanup removes only that directory's references. Removing the
 deployment directory, including `uninstall --remove-dir`, also removes its
