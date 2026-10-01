@@ -79,6 +79,9 @@ func verifyLoadedCurrentBuildV1(
 	input CurrentBuildVerificationInputV1,
 	backend currentBuildVerificationBackendV1,
 ) (CurrentBuildVerificationResultV1, error) {
+	if input.Current.Lock.PortableRuntimeLayer != nil {
+		return CurrentBuildVerificationResultV1{}, fmt.Errorf("portable final-image verification is not yet supported by this version")
+	}
 	if ctx == nil {
 		return CurrentBuildVerificationResultV1{}, fmt.Errorf("verify current build requires a context")
 	}
