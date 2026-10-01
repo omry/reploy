@@ -1,0 +1,2 @@
+kind: Docs
+body: Clarify that staged app commands require an exact current build and that normal publication and recovery preserve independently retained validated trial ownership alongside current builds.
