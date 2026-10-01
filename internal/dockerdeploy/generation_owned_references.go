@@ -13,10 +13,7 @@ import (
 
 // OwnedImageReferenceV1 is an exact pair retained by a generation owner or its
 // pending cleanup inventory. Its presence is not proof of build acceptance.
-type OwnedImageReferenceV1 struct {
-	Reference string                    `json:"reference"`
-	Image     providers.RealizedImageV1 `json:"image"`
-}
+type OwnedImageReferenceV1 = deploy.OwnedImageReferenceV1
 
 // ProjectEnvironmentOwnedReferencesV1 returns the primary pair first, followed
 // by the optional portable companion. The accepted lock is the only source of
@@ -26,10 +23,21 @@ func ProjectEnvironmentOwnedReferencesV1(
 	lock deploy.BuildLockV1,
 	environment, deploymentDir string,
 ) ([]OwnedImageReferenceV1, error) {
+	return projectEnvironmentOwnedReferencesV1(generation, lock, environment, deploymentDir, registry.ValidateRequirementProfileV1)
+}
+
+// Recovery can project a retained owner under the explicit no-cache policy.
+// New publication continues to use the strict public entry point above.
+func projectEnvironmentOwnedReferencesV1(
+	generation deploy.EnvironmentGenerationState,
+	lock deploy.BuildLockV1,
+	environment, deploymentDir string,
+	validateProfile providers.RequirementProfileOwnerValidator,
+) ([]OwnedImageReferenceV1, error) {
 	if err := validateOwnedGenerationScopeV1(generation, environment, deploymentDir); err != nil {
 		return nil, err
 	}
-	if err := validateGenerationBuildLock(generation, lock, registry.ValidateRequirementProfileV1); err != nil {
+	if err := validateGenerationBuildLock(generation, lock, validateProfile); err != nil {
 		return nil, fmt.Errorf("project owned references: %w", err)
 	}
 	if lock.PackageOverrides.EnvironmentID != environment {
